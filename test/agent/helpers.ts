@@ -86,7 +86,7 @@ export const createChatContext = (tmp: TmpRoot, overrides: Partial<ServiceContex
 export const seedDesign = async (
   tmp: TmpRoot,
   slug: string,
-  options: { kind?: 'canvas' | 'artifact'; comments?: Comment[]; screens?: { id: string; title: string }[]; title?: string; projectDirectory?: string | null } = {},
+  options: { kind?: 'canvas' | 'page'; comments?: Comment[]; screens?: { id: string; title: string }[]; title?: string; projectDirectory?: string | null } = {},
 ): Promise<void> => {
   const kind = options.kind ?? 'canvas';
   const { state, json } = createDesignDocument({

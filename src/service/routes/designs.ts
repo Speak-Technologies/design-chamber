@@ -1,4 +1,5 @@
-// WP1 — GET /designs, POST /designs, GET /designs/:slug, PATCH /designs/:slug, DELETE /designs/:slug (docs/SPEC.md §7, §9.3).
+// WP1 — GET /designs, POST /designs, GET /designs/:slug, PATCH /designs/:slug, DELETE /designs/:slug,
+// POST /loose/import (docs/SPEC.md §7, §9.3; documentation/specs/agent-guidance-and-pages.md §3.5).
 
 import type {
   CreateDesignBody,
@@ -6,6 +7,7 @@ import type {
   DeleteDesignResponse,
   DesignDetailResponse,
   DesignListResponse,
+  ImportLooseResponse,
   PatchDesignBody,
   PatchDesignResponse,
 } from '../../shared/api.ts';
@@ -22,6 +24,9 @@ import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
 import { projectDirectoryOf } from './chat.ts';
 
+/** Answer of route stubs whose lane has not landed yet (removed with the stub). */
+const NOT_BUILT_YET = 'This part of Design Chamber is not built yet.';
+
 const isBodyRecord = (body: unknown): body is Record<string, unknown> =>
   typeof body === 'object' && body !== null && !Array.isArray(body);
 
@@ -34,11 +39,12 @@ const optionalText = (value: unknown, max: number, label: string): string | null
   return value;
 };
 
-const isKind = (value: unknown): value is DesignKind => value === 'artifact' || value === 'canvas';
+/** Request input from our own same-version guests: the new names only (the `artifact` alias is for files on disk). */
+const isKind = (value: unknown): value is DesignKind => value === 'page' || value === 'canvas';
 
 const validateCreate = (ctx: ServiceContext, body: unknown): CreateDesignBody => {
   if (!isBodyRecord(body)) throw new ApiError('bad-request', 'The new-design request must be a JSON object.');
-  if (!isKind(body.kind)) throw new ApiError('bad-request', 'A design is either an "artifact" or a "canvas".');
+  if (!isKind(body.kind)) throw new ApiError('bad-request', 'A design is either a "page" or a "canvas".');
 
   const title = optionalText(body.title, TITLE_MAX, 'title');
   const brief = optionalText(body.brief, BRIEF_MAX, 'brief');
@@ -51,7 +57,7 @@ const validateCreate = (ctx: ServiceContext, body: unknown): CreateDesignBody =>
   const html = body.html;
   const uploadId = body.uploadId;
   if (body.kind === 'canvas' && (html !== undefined || uploadId !== undefined)) {
-    throw new ApiError('bad-request', 'A canvas starts as an empty folder — only artifacts take initial HTML.');
+    throw new ApiError('bad-request', 'A canvas starts as an empty folder; only pages take initial HTML.');
   }
   let initialHtml: string | undefined;
   if (typeof html === 'string') {
@@ -111,6 +117,7 @@ const validatePatch = (body: unknown): PatchDesignBody => {
  * - 'GET /designs/:slug'
  * - 'PATCH /designs/:slug'
  * - 'DELETE /designs/:slug'
+ * - 'POST /loose/import'
  * Every slug is validated by pattern and resolved through the containment function by the
  * store before any filesystem access.
  */
@@ -118,9 +125,15 @@ export function registerDesignsRoutes(router: Router, ctx: ServiceContext): void
   router.on('GET /designs', async ({ query }): Promise<DesignListResponse> => {
     const q = query.get('q') ?? undefined;
     const kindParam = query.get('kind') ?? undefined;
-    if (kindParam !== undefined && !isKind(kindParam)) throw new ApiError('bad-request', 'The kind filter is "artifact" or "canvas".');
+    if (kindParam !== undefined && !isKind(kindParam)) throw new ApiError('bad-request', 'The kind filter is "page" or "canvas".');
     const designs = await ctx.store.list({ ...(q !== undefined ? { q } : {}), ...(kindParam !== undefined ? { kind: kindParam } : {}) });
-    return { root: ctx.settings.root(), designs };
+    // Stub until task A4 (`listLooseHtml`): no loose files reported yet.
+    return { root: ctx.settings.root(), designs, loose: { files: [], total: 0 } };
+  });
+
+  // Stub until task A4 (`importLooseHtml`). Touches nothing on disk.
+  router.on('POST /loose/import', async (): Promise<ImportLooseResponse> => {
+    throw new ApiError('internal', NOT_BUILT_YET);
   });
 
   router.on('POST /designs', async ({ body }): Promise<CreateDesignResponse> => {

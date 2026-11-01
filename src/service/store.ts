@@ -168,8 +168,8 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
 
     const designText = await readFile(path.join(dir, DESIGN_JSON_FILE), 'utf8').catch(() => null);
     const entryStatus = await fileStatus(path.join(dir, ENTRY_FILE));
-    // §6.1: a folder without design.json but with index.html is an artifact.
-    const kind: DesignKind = state?.kind ?? (entryStatus.exists ? 'artifact' : 'canvas');
+    // §6.1: a folder without design.json but with index.html is a page.
+    const kind: DesignKind = state?.kind ?? (entryStatus.exists ? 'page' : 'canvas');
     const parsed = parseDesignJsonText(designText ?? '{}', { kind, fallbackTitle: slug, fallbackTime: folderTime });
     const warnings: DesignWarning[] =
       designText === null
@@ -180,14 +180,14 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     const design = applyServiceState(parsed.design, finalState);
 
     const files: DesignFiles = { screens: {} };
-    if (design.kind === 'artifact') files.entry = entryStatus;
+    if (design.kind === 'page') files.entry = entryStatus;
     for (const screen of design.screens) {
       // Containment per reference: screen files are resolved inside the design folder, so a
       // junction/symlink under the design cannot point the stat at foreign files.
       const file = await resolveInside(dir, screenFileOf(screen.id).split('/')).catch(() => null);
       files.screens[screen.id] = file === null ? { exists: false, size: 0, mtime: null } : await fileStatus(file);
     }
-    const pending = design.kind === 'artifact' ? !entryStatus.exists : !Object.values(files.screens).some((entry) => entry.exists);
+    const pending = design.kind === 'page' ? !entryStatus.exists : !Object.values(files.screens).some((entry) => entry.exists);
 
     return {
       record: { slug, path: dir, design, state: finalState, extra: parsed.extra, pending, files, warnings },
@@ -402,7 +402,7 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
         });
         await writeFileAtomic(stateFileOf(dir), serializeJson(state as unknown as JsonValue)); // Safe: ServiceState is plain JSON.
         await writeFileAtomic(path.join(dir, DESIGN_JSON_FILE), serializeJson(json));
-        if (input.kind === 'artifact' && typeof input.html === 'string') {
+        if (input.kind === 'page' && typeof input.html === 'string') {
           await writeFileAtomic(path.join(dir, ENTRY_FILE), input.html);
         }
         return readInternal(slug);

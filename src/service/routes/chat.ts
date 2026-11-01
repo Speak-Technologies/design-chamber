@@ -1,4 +1,4 @@
-// WP3 — POST /chip, POST /designs/:slug/prompt, POST /artifacts/from-message, DELETE /open-request (docs/SPEC.md §7, §10, §11),
+// WP3 — POST /chip, POST /designs/:slug/prompt, POST /pages/from-message, DELETE /open-request (docs/SPEC.md §7, §10, §11),
 // and the `onCreate` hook that writes `<design>/.chamber/RULES.md`.
 
 import { lstat, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 
 import { buildChip, titleFromBrief } from '../../shared/agent/chip.ts';
 import { noProject, type AgentContext, type AgentPreset, type ProjectRules } from '../../shared/agent/context.ts';
-import { deriveArtifactTitle, extractHtml } from '../../shared/agent/html-extract.ts';
+import { derivePageTitle, extractHtml } from '../../shared/agent/html-extract.ts';
 import { buildContinuePrompt, buildRevisionPrompt } from '../../shared/agent/revision-prompt.ts';
 import { buildRulesDoc } from '../../shared/agent/rules-doc.ts';
 import type { ChipResponse, FromMessageResponse, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse } from '../../shared/api.ts';
@@ -57,7 +57,7 @@ export const projectDirectoryOf = (value: unknown): string | null => {
 const parseChipBody = (body: unknown): { kind: DesignKind; brief: string; preset: string | null; projectDirectory: string | null } => {
   const record = bodyOf(body, 'the new design');
   const { kind } = record;
-  if (kind !== 'canvas' && kind !== 'artifact') throw new ApiError('bad-request', 'Say whether the design is a "canvas" or an "artifact".');
+  if (kind !== 'canvas' && kind !== 'page') throw new ApiError('bad-request', 'Say whether the design is a "canvas" or a "page".');
   const brief = (optionalText(record, 'brief', Number.MAX_SAFE_INTEGER, 'brief') ?? '').trim();
   if (brief.length > BRIEF_MAX) {
     throw new ApiError('invalid', `The brief is ${brief.length} characters; Design Chamber keeps ${BRIEF_MAX}. Shorten it, or send the extra detail in the chat after the command.`);
@@ -232,7 +232,7 @@ const selectComments = (all: readonly Comment[], ids: readonly string[] | null):
  * Registers:
  * - 'POST /chip'
  * - 'POST /designs/:slug/prompt'
- * - 'POST /artifacts/from-message'
+ * - 'POST /pages/from-message'
  * - 'DELETE /open-request'
  * and hooks design creation so every new design gets its `.chamber/RULES.md`.
  * Design folders come from `ctx.store` (slug pattern + containment, §9.1); the only path this
@@ -240,7 +240,7 @@ const selectComments = (all: readonly Comment[], ids: readonly string[] | null):
  */
 export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
   const instructions = createInstructions(ctx);
-  // One slot, taken exactly once: a newer "Open as artifact" replaces an untaken older one.
+  // One slot, taken exactly once: a newer "Open as page" replaces an untaken older one.
   let openRequest: { request: OpenRequest; at: number } | null = null;
 
   try {
@@ -304,14 +304,14 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
     return { text: prompt.text, commentIds: prompt.commentIds, omitted: prompt.omitted, chip };
   });
 
-  router.on('POST /artifacts/from-message', async ({ body }): Promise<FromMessageResponse> => {
+  router.on('POST /pages/from-message', async ({ body }): Promise<FromMessageResponse> => {
     const input = parseFromMessageBody(body);
     const messageText = ctx.uploads.take(input.uploadId);
     const html = extractHtml(messageText);
-    if (html === null) throw new ApiError('no-html', 'This message has no HTML code block to open as an artifact.');
+    if (html === null) throw new ApiError('no-html', 'This message has no HTML code block to open as a page.');
     const record = await ctx.store.create({
-      kind: 'artifact',
-      title: deriveArtifactTitle(messageText, html, input.sessionTitle),
+      kind: 'page',
+      title: derivePageTitle(messageText, html, input.sessionTitle),
       brief: '',
       preset: null,
       projectDirectory: input.directory,

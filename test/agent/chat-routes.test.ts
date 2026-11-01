@@ -76,12 +76,12 @@ describe('POST /chip', () => {
     const tmp = await useTmpRoot(t);
     const ctx = createChatContext(tmp);
     const { call } = await serveRoutes(t, ctx);
-    const reply = await call('/chip', { body: { kind: 'artifact', brief: '' } });
+    const reply = await call('/chip', { body: { kind: 'page', brief: '' } });
     assert.equal(reply.status, 200, JSON.stringify(reply.json));
     const { slug, chip } = reply.json as { slug: string; chip: DesignChip };
-    assert.equal(chip.title, 'New artifact');
-    assert.deepEqual(chip.data, { slug, kind: 'artifact' });
-    assert.ok(chip.text.includes('New artifact:'));
+    assert.equal(chip.title, 'New page');
+    assert.deepEqual(chip.data, { slug, kind: 'page' });
+    assert.ok(chip.text.includes('New page:'));
     assert.ok(chip.text.includes('Brief: none — ask the user what to design.'));
     assert.ok(chip.text.includes('No project folder is open in this chat'));
     assert.ok((await rulesOf(tmp, slug)).includes('### Layer 3 — style preset: none chosen'));
@@ -244,7 +244,7 @@ describe('POST /designs/:slug/prompt', () => {
 
   test('an artifact revision names index.html', async (t) => {
     const tmp = await useTmpRoot(t);
-    await seedDesign(tmp, 'page', { kind: 'artifact', comments: [comment('c_aaaa1', { screen: null })] });
+    await seedDesign(tmp, 'page', { kind: 'page', comments: [comment('c_aaaa1', { screen: null })] });
     const { call } = await serveRoutes(t, createChatContext(tmp));
     const reply = await call('/designs/page/prompt', { body: { purpose: 'revision' } });
     assert.ok((reply.json.text as string).includes('1. Artifact index.html @ Laptop 1280×800'));
@@ -281,7 +281,7 @@ describe('POST /designs/:slug/prompt', () => {
   });
 });
 
-describe('POST /artifacts/from-message', () => {
+describe('POST /pages/from-message', () => {
   const PAGE = '<!doctype html><html lang="en"><head><title>Tom &amp; Jerry</title></head><body><h1>Hi</h1></body></html>';
 
   test('creates an artifact from the longest HTML block, linked to the message session, and writes RULES.md via the hook', async (t) => {
@@ -290,11 +290,11 @@ describe('POST /artifacts/from-message', () => {
     const ctx = createChatContext(tmp);
     const { call } = await serveRoutes(t, ctx);
     const uploadId = ctx.seedUpload(`Here is the page:\n\n\`\`\`html\n<p>small</p>\n\`\`\`\n\n\`\`\`html\n${PAGE}\n\`\`\`\n`);
-    const reply = await call('/artifacts/from-message', { body: { uploadId, sessionId: 'ses_42', sessionTitle: 'My chat', messageId: 'msg_1', directory: projectDir } });
+    const reply = await call('/pages/from-message', { body: { uploadId, sessionId: 'ses_42', sessionTitle: 'My chat', messageId: 'msg_1', directory: projectDir } });
     assert.equal(reply.status, 200, JSON.stringify(reply.json));
     const slug = reply.json.slug as string;
     assert.deepEqual(ctx.creates[0], {
-      kind: 'artifact',
+      kind: 'page',
       title: 'Tom & Jerry',
       brief: '',
       preset: null,
@@ -305,7 +305,7 @@ describe('POST /artifacts/from-message', () => {
     assert.equal(await tmp.read(`${slug}/index.html`), PAGE);
     // The `onCreate` hook (registered by registerChatRoutes) wrote the instructions for this design.
     const rules = await rulesOf(tmp, slug);
-    assert.ok(rules.includes('(artifact)'));
+    assert.ok(rules.includes('(page)'));
     assert.ok(rules.includes('- `DESIGN.md` — design document'));
   });
 
@@ -314,8 +314,8 @@ describe('POST /artifacts/from-message', () => {
     const ctx = createChatContext(tmp);
     const { call } = await serveRoutes(t, ctx);
     const body = (id: string) => ({ uploadId: id, sessionId: 's', sessionTitle: 'Planning chat', messageId: 'm', directory: null });
-    await call('/artifacts/from-message', { body: body(ctx.seedUpload('## A pricing page\n```html\n<div>x</div>\n```')) });
-    await call('/artifacts/from-message', { body: body(ctx.seedUpload('```html\n<div>x</div>\n```')) });
+    await call('/pages/from-message', { body: body(ctx.seedUpload('## A pricing page\n```html\n<div>x</div>\n```')) });
+    await call('/pages/from-message', { body: body(ctx.seedUpload('```html\n<div>x</div>\n```')) });
     assert.deepEqual(ctx.creates.map((create) => create.title), ['A pricing page', 'Planning chat']);
   });
 
@@ -323,7 +323,7 @@ describe('POST /artifacts/from-message', () => {
     const tmp = await useTmpRoot(t);
     const ctx = createChatContext(tmp);
     const { call } = await serveRoutes(t, ctx);
-    const reply = await call('/artifacts/from-message', { body: { uploadId: ctx.seedUpload('Just words and `code`.'), sessionId: 's', sessionTitle: 't', messageId: 'm', directory: null } });
+    const reply = await call('/pages/from-message', { body: { uploadId: ctx.seedUpload('Just words and `code`.'), sessionId: 's', sessionTitle: 't', messageId: 'm', directory: null } });
     assertError(reply, 422, 'no-html');
     assert.equal(ctx.creates.length, 0);
   });
@@ -333,14 +333,14 @@ describe('POST /artifacts/from-message', () => {
     const ctx = createChatContext(tmp);
     const { call } = await serveRoutes(t, ctx);
     const body = (id: string, open?: boolean) => ({ uploadId: id, sessionId: 's', sessionTitle: 'Chat', messageId: 'm', directory: null, ...(open === undefined ? {} : { open }) });
-    await call('/artifacts/from-message', { body: body(ctx.seedUpload(`\`\`\`html\n${PAGE}\n\`\`\``)) });
+    await call('/pages/from-message', { body: body(ctx.seedUpload(`\`\`\`html\n${PAGE}\n\`\`\``)) });
     assert.deepEqual((await call('/open-request', { method: 'DELETE' })).json, { request: null }, 'no request without open');
-    const reply = await call('/artifacts/from-message', { body: body(ctx.seedUpload(`\`\`\`html\n${PAGE}\n\`\`\``), true) });
+    const reply = await call('/pages/from-message', { body: body(ctx.seedUpload(`\`\`\`html\n${PAGE}\n\`\`\``), true) });
     assert.equal(reply.json.title, 'Tom & Jerry');
     const taken = await call('/open-request', { method: 'DELETE' });
     assert.equal((taken.json.request as { slug: string }).slug, reply.json.slug);
     assert.deepEqual((await call('/open-request', { method: 'DELETE' })).json, { request: null }, 'taken once');
-    assertError(await call('/artifacts/from-message', { body: body(ctx.seedUpload('```html\n<p>x</p>\n```'), 'yes' as unknown as boolean) }), 400, 'bad-request');
+    assertError(await call('/pages/from-message', { body: body(ctx.seedUpload('```html\n<p>x</p>\n```'), 'yes' as unknown as boolean) }), 400, 'bad-request');
   });
 
   test('an unknown upload → 404; malformed bodies → 400', async (t) => {
@@ -348,13 +348,13 @@ describe('POST /artifacts/from-message', () => {
     const ctx = createChatContext(tmp);
     const { call } = await serveRoutes(t, ctx);
     const ok = { uploadId: 'u_0123456789abcdef', sessionId: 's', sessionTitle: 't', messageId: 'm', directory: null };
-    assertError(await call('/artifacts/from-message', { body: ok }), 404, 'not-found');
-    assertError(await call('/artifacts/from-message', { body: { ...ok, uploadId: '../x' } }), 400, 'bad-request');
-    assertError(await call('/artifacts/from-message', { body: { ...ok, sessionId: '' } }), 400, 'bad-request');
-    assertError(await call('/artifacts/from-message', { body: { ...ok, messageId: 7 } }), 400, 'bad-request');
-    assertError(await call('/artifacts/from-message', { body: { ...ok, sessionTitle: undefined } }), 400, 'bad-request');
-    assertError(await call('/artifacts/from-message', { body: { ...ok, directory: 'relative' } }), 400, 'bad-path');
-    assertError(await call('/artifacts/from-message', { body: 'text' }), 400, 'bad-request');
+    assertError(await call('/pages/from-message', { body: ok }), 404, 'not-found');
+    assertError(await call('/pages/from-message', { body: { ...ok, uploadId: '../x' } }), 400, 'bad-request');
+    assertError(await call('/pages/from-message', { body: { ...ok, sessionId: '' } }), 400, 'bad-request');
+    assertError(await call('/pages/from-message', { body: { ...ok, messageId: 7 } }), 400, 'bad-request');
+    assertError(await call('/pages/from-message', { body: { ...ok, sessionTitle: undefined } }), 400, 'bad-request');
+    assertError(await call('/pages/from-message', { body: { ...ok, directory: 'relative' } }), 400, 'bad-path');
+    assertError(await call('/pages/from-message', { body: 'text' }), 400, 'bad-request');
   });
 });
 
@@ -362,7 +362,7 @@ describe('auth and traversal on every route', () => {
   const routes = [
     { route: '/chip', body: { kind: 'canvas', brief: 'x' } },
     { route: '/designs/some-design/prompt', body: { purpose: 'continue' } },
-    { route: '/artifacts/from-message', body: { uploadId: 'u_0123456789abcdef', sessionId: 's', sessionTitle: 't', messageId: 'm', directory: null } },
+    { route: '/pages/from-message', body: { uploadId: 'u_0123456789abcdef', sessionId: 's', sessionTitle: 't', messageId: 'm', directory: null } },
   ];
 
   test('a missing or wrong bearer token is refused before anything runs', async (t) => {
@@ -443,6 +443,6 @@ describe('RULES.md writer and the onCreate hook', () => {
     const router = createRouter({ token: TOKEN, log: ctx.log });
     assert.doesNotThrow(() => registerChatRoutes(router, ctx));
     assert.ok(ctx.logs.some((line) => line.level === 'warn' && line.event === 'agent.rules-hook-unavailable'));
-    assert.deepEqual(router.registered().sort(), ['DELETE /open-request', 'POST /artifacts/from-message', 'POST /chip', 'POST /designs/:slug/prompt']);
+    assert.deepEqual(router.registered().sort(), ['DELETE /open-request', 'POST /chip', 'POST /designs/:slug/prompt', 'POST /pages/from-message']);
   });
 });

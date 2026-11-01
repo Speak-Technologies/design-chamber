@@ -17,7 +17,7 @@ import { toast } from '../components/actions.ts';
 
 export type ListViewOptions = {
   actions: ActionContext;
-  onNew: (kind: 'canvas' | 'artifact') => void;
+  onNew: (kind: 'canvas' | 'page') => void;
   onSettings: () => void;
   onOpen: (slug: string) => void;
 };
@@ -40,9 +40,9 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     newButton.el,
     () => [
       { id: 'canvas', label: 'Canvas…', hint: 'several screens' },
-      { id: 'artifact', label: 'Artifact…', hint: 'one HTML page' },
+      { id: 'page', label: 'Artifact…', hint: 'one HTML page' },
     ],
-    (id) => options.onNew(id === 'artifact' ? 'artifact' : 'canvas'),
+    (id) => options.onNew(id === 'page' ? 'page' : 'canvas'),
   );
   const settingsButton = iconBtn({ icon: 'settings', label: 'Settings', onClick: () => options.onSettings() });
   const head = h('header', { class: 'dc-rail-head' }, h('h1', { class: 'dc-rail-title' }, 'Designs'), h('span', { class: 'dc-spacer' }), newButton.el, settingsButton);

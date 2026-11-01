@@ -6,6 +6,7 @@ import {
   createDesignDocument,
   mergeServiceFields,
   normalizeDesign,
+  normalizeKind,
   normalizeServiceState,
   parseComment,
   parseDesignJsonText,
@@ -83,8 +84,8 @@ describe('normalizeDesign — valid input', () => {
     assert.equal(design.comments[0]?.body, 'Make this shorter');
   });
 
-  test('an artifact gets entry index.html and the Laptop default viewport', () => {
-    const { design, warnings } = normalizeDesign({ kind: 'artifact', title: 'Pricing' }, OPTS);
+  test('a page gets entry index.html and the Laptop default viewport', () => {
+    const { design, warnings } = normalizeDesign({ kind: 'page', title: 'Pricing' }, OPTS);
     assert.deepEqual(warnings, []);
     assert.equal(design.entry, 'index.html');
     assert.deepEqual(design.viewports, [VIEWPORT_LAPTOP]);
@@ -114,7 +115,7 @@ describe('normalizeDesign — unknown keys are kept', () => {
   });
 
   test('a "__proto__" key from JSON stays an own data key and does not touch prototypes', () => {
-    const parsed = parseDesignJsonText('{"kind":"artifact","title":"X","__proto__":{"polluted":true}}', OPTS);
+    const parsed = parseDesignJsonText('{"kind":"page","title":"X","__proto__":{"polluted":true}}', OPTS);
     assert.equal(Object.hasOwn(parsed.extra, '__proto__'), true);
     assert.equal(({} as Record<string, unknown>).polluted, undefined);
     assert.equal(Object.getPrototypeOf(parsed.extra), Object.prototype);
@@ -148,7 +149,7 @@ describe('normalizeDesign — invalid fields are dropped with warnings, never fa
   });
 
   test('viewport bounds are inclusive: 200×200 and 3840×4320 are valid', () => {
-    const raw = { kind: 'artifact', title: 'X', viewports: [{ id: 'min', width: 200, height: 200 }, { id: 'max', width: 3840, height: 4320 }] };
+    const raw = { kind: 'page', title: 'X', viewports: [{ id: 'min', width: 200, height: 200 }, { id: 'max', width: 3840, height: 4320 }] };
     const { design, warnings } = normalizeDesign(raw, OPTS);
     assert.deepEqual(warnings, []);
     assert.deepEqual(design.viewports.map((v) => v.id), ['min', 'max']);
@@ -206,8 +207,8 @@ describe('normalizeDesign — invalid fields are dropped with warnings, never fa
     assert.deepEqual(codes(warnings), ['too-many-screens']);
   });
 
-  test('an artifact ignores a screen list, and its entry cannot be changed', () => {
-    const { design, warnings } = normalizeDesign({ kind: 'artifact', title: 'X', entry: '../evil.html', screens: [{ id: 'a' }] }, OPTS);
+  test('a page ignores a screen list, and its entry cannot be changed', () => {
+    const { design, warnings } = normalizeDesign({ kind: 'page', title: 'X', entry: '../evil.html', screens: [{ id: 'a' }] }, OPTS);
     assert.equal(design.entry, 'index.html');
     assert.deepEqual(design.screens, []);
     assert.deepEqual(codes(warnings).sort(), ['invalid-entry', 'screens-ignored']);
@@ -247,14 +248,14 @@ describe('normalizeDesign — invalid fields are dropped with warnings, never fa
   });
 
   test('a title over 120 characters is dropped; one of exactly 120 is kept', () => {
-    assert.equal(normalizeDesign({ kind: 'artifact', title: 'x'.repeat(120) }, OPTS).design.title.length, 120);
-    const long = normalizeDesign({ kind: 'artifact', title: 'x'.repeat(121) }, OPTS);
+    assert.equal(normalizeDesign({ kind: 'page', title: 'x'.repeat(120) }, OPTS).design.title.length, 120);
+    const long = normalizeDesign({ kind: 'page', title: 'x'.repeat(121) }, OPTS);
     assert.equal(long.design.title, 'my-slug');
     assert.deepEqual(codes(long.warnings), ['invalid-title']);
   });
 
   test('a brief over 2000 characters is truncated with a warning', () => {
-    const { design, warnings } = normalizeDesign({ kind: 'artifact', title: 'X', brief: 'b'.repeat(2500) }, OPTS);
+    const { design, warnings } = normalizeDesign({ kind: 'page', title: 'X', brief: 'b'.repeat(2500) }, OPTS);
     assert.equal(design.brief.length, 2000);
     assert.deepEqual(codes(warnings), ['brief-truncated']);
   });
@@ -274,8 +275,8 @@ describe('normalizeDesign — invalid fields are dropped with warnings, never fa
     const inferred = normalizeDesign({ title: 'X', screens: [{ id: 'a' }] }, OPTS);
     assert.equal(inferred.design.kind, 'canvas');
     assert.deepEqual(codes(inferred.warnings), ['invalid-kind']);
-    assert.equal(normalizeDesign({ title: 'X', kind: 'poster' }, OPTS).design.kind, 'artifact');
-    const forced = normalizeDesign({ kind: 'artifact', title: 'X', screens: [{ id: 'a' }] }, { ...OPTS, kind: 'canvas' });
+    assert.equal(normalizeDesign({ title: 'X', kind: 'poster' }, OPTS).design.kind, 'page');
+    const forced = normalizeDesign({ kind: 'page', title: 'X', screens: [{ id: 'a' }] }, { ...OPTS, kind: 'canvas' });
     assert.equal(forced.design.kind, 'canvas');
     assert.deepEqual(forced.design.screens.map((s) => s.id), ['a']);
   });
@@ -297,7 +298,7 @@ describe('normalizeDesign — invalid fields are dropped with warnings, never fa
   });
 
   test('a UTF-8 BOM is tolerated', () => {
-    const parsed = parseDesignJsonText(`\uFEFF${JSON.stringify({ kind: 'artifact', title: 'Bom' })}`, OPTS);
+    const parsed = parseDesignJsonText(`\uFEFF${JSON.stringify({ kind: 'page', title: 'Bom' })}`, OPTS);
     assert.equal(parsed.design.title, 'Bom');
     assert.notEqual(parsed.raw, null);
   });
@@ -340,7 +341,7 @@ describe('service-owned fields (state.json authority, §6.3)', () => {
     const agentWrite: JsonObject = {
       title: 'Agent title',
       $custom: { keep: true },
-      kind: 'artifact',
+      kind: 'page',
       updated: T1,
       viewports: 'broken but the agent’s',
       sessionId: 'ses_forged',
@@ -378,9 +379,9 @@ describe('service-owned fields (state.json authority, §6.3)', () => {
   });
 
   test('createDesignDocument writes canonical order and reads back cleanly', () => {
-    const artifact = createDesignDocument({ kind: 'artifact', title: 'Pricing', brief: 'b', sessionId: null, projectDirectory: null, preset: null, now: T0 });
-    assert.deepEqual(Object.keys(artifact.json), ['version', 'kind', 'title', 'created', 'updated', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry', 'viewports', 'designSystem', 'comments']);
-    const reread = normalizeDesign(artifact.json, OPTS);
+    const page = createDesignDocument({ kind: 'page', title: 'Pricing', brief: 'b', sessionId: null, projectDirectory: null, preset: null, now: T0 });
+    assert.deepEqual(Object.keys(page.json), ['version', 'kind', 'title', 'created', 'updated', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry', 'viewports', 'designSystem', 'comments']);
+    const reread = normalizeDesign(page.json, OPTS);
     assert.deepEqual(reread.warnings, []);
     assert.equal(reread.design.entry, 'index.html');
     const canvas = createDesignDocument({ kind: 'canvas', title: 'Wall', brief: '', sessionId: 's', projectDirectory: 'C:\\p', preset: 'editorial', now: T0 });
@@ -407,5 +408,87 @@ describe('service-owned fields (state.json authority, §6.3)', () => {
 
   test('stripForVersion removes comments only', () => {
     assert.deepEqual(stripForVersion({ title: 'X', comments: [], other: 1 }), { title: 'X', other: 1 });
+  });
+});
+
+describe('the old "artifact" kind reads as page (alias, no rewrite on its own)', () => {
+  const pageState: ServiceState = {
+    version: 1,
+    kind: 'page',
+    created: T0,
+    brief: 'b',
+    sessionId: null,
+    projectDirectory: null,
+    preset: null,
+    entry: 'index.html',
+    comments: [],
+  };
+
+  test('normalizeKind maps artifact to page and refuses anything else', () => {
+    assert.equal(normalizeKind('page'), 'page');
+    assert.equal(normalizeKind('canvas'), 'canvas');
+    assert.equal(normalizeKind('artifact'), 'page');
+    for (const value of ['Page', 'ARTIFACT', '', 'x', null, undefined, 1, ['page'], { kind: 'page' }]) assert.equal(normalizeKind(value), null, String(value));
+  });
+
+  test('design.json with "kind": "artifact" reads as a page with no warning', () => {
+    const { design, warnings } = normalizeDesign({ kind: 'artifact', title: 'Old one' }, OPTS);
+    assert.deepEqual(warnings, []);
+    assert.equal(design.kind, 'page');
+    assert.equal(design.entry, 'index.html');
+    assert.deepEqual(design.viewports, [VIEWPORT_LAPTOP]);
+  });
+
+  test('state.json with "kind": "artifact" reads as a page', () => {
+    const state = normalizeServiceState({ ...pageState, kind: 'artifact', entry: 'index.html' });
+    assert.equal(state?.kind, 'page');
+    assert.equal(state?.entry, 'index.html');
+  });
+
+  test('"artifact" in design.json against a "page" state is not a difference; a real difference still is', () => {
+    const raw = mergeServiceFields({ title: 'X' }, pageState);
+    assert.equal(serviceFieldsDiffer({ ...raw, kind: 'artifact' }, pageState), false);
+    assert.equal(serviceFieldsDiffer({ ...raw, kind: 'canvas' }, pageState), true);
+    assert.equal(serviceFieldsDiffer({ ...raw, kind: 'nonsense' }, pageState), true);
+    assert.equal(serviceFieldsDiffer({ ...raw, kind: 'artifact' }, { ...pageState, kind: 'canvas', entry: null }), true);
+  });
+
+  test('the next real service write rewrites "artifact" as "page"', () => {
+    const merged = mergeServiceFields({ kind: 'artifact', title: 'X' }, pageState, { title: 'Renamed' });
+    assert.equal(merged.kind, 'page');
+  });
+});
+
+describe('provisional state (service-owned, never mirrored)', () => {
+  const base: ServiceState = {
+    version: 1,
+    kind: 'page',
+    created: T0,
+    brief: '',
+    sessionId: null,
+    projectDirectory: null,
+    preset: null,
+    entry: 'index.html',
+    comments: [],
+  };
+
+  test('"provisional": true survives normalizeServiceState; any other value is dropped', () => {
+    assert.equal(normalizeServiceState({ ...base, provisional: true })?.provisional, true);
+    for (const value of ['yes', 1, 'true', false, null, {}]) {
+      const state = normalizeServiceState({ ...base, provisional: value });
+      assert.notEqual(state, null);
+      assert.equal(Object.hasOwn(state ?? {}, 'provisional'), false, String(value));
+    }
+    assert.equal(Object.hasOwn(normalizeServiceState(base) ?? {}, 'provisional'), false);
+  });
+
+  test('mergeServiceFields never writes provisional, and it is never a merge trigger', () => {
+    const provisional: ServiceState = { ...base, provisional: true };
+    const merged = mergeServiceFields({ title: 'X' }, provisional);
+    assert.equal(Object.hasOwn(merged, 'provisional'), false);
+    assert.equal(serviceFieldsDiffer(merged, provisional), false);
+    assert.equal(serviceFieldsDiffer(merged, base), false);
+    const { design } = normalizeDesign(merged, OPTS);
+    assert.equal(Object.hasOwn(applyServiceState(design, provisional), 'provisional'), false);
   });
 });

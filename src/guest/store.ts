@@ -177,9 +177,9 @@ export const createStore = ({ client }: StoreDeps): Store => {
     set({ renderRevs });
   };
 
-  /** Every source of a design: the artifact (null) or each screen. */
+  /** Every source of a design: the page (null) or each screen. */
   const sourcesOf = (design: DesignJson): (string | null)[] =>
-    design.kind === 'artifact' ? [null] : design.screens.map((screen) => screen.id);
+    design.kind === 'page' ? [null] : design.screens.map((screen) => screen.id);
 
   const replaceComment = (slug: string, comment: Comment): void => {
     const open = state.open;

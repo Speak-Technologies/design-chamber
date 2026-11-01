@@ -12,7 +12,7 @@ import { clip, designFilePath, formatViewport, oneLine, VIEWPORT_DESKTOP, VIEWPO
 /** The two bundled rules files, exactly as read from `rules/`. */
 export type RulesDocFiles = { designRules: string; questions: string };
 
-const kindWord = (kind: DesignKind): string => (kind === 'canvas' ? 'canvas' : 'artifact');
+const kindWord = (kind: DesignKind): string => (kind === 'canvas' ? 'canvas' : 'page');
 
 /** A verbatim file between markers, so the agent sees where our text ends and the file begins. */
 const verbatim = (name: string, text: string): string[] => [`<!-- BEGIN ${name} (verbatim) -->`, text.endsWith('\n') ? text.slice(0, -1) : text, `<!-- END ${name} -->`];
@@ -198,7 +198,7 @@ const contractExample = (context: AgentContext): string =>
     '  "sessionId": null,',
     '  "projectDirectory": null,',
     '  "preset": null,',
-    ...(context.kind === 'artifact' ? ['  "entry": "index.html",'] : []),
+    ...(context.kind === 'page' ? ['  "entry": "index.html",'] : []),
     '  "viewports": [',
     `    ${viewportJson(VIEWPORT_LAPTOP)},`,
     `    ${viewportJson(VIEWPORT_PHONE)}`,
@@ -227,7 +227,7 @@ const contractSection = (context: AgentContext): string[] => [
   '| Key | Owner | Rule |',
   '|---|---|---|',
   '| `version` | extension | Always `1`. |',
-  '| `kind` | extension | `"canvas"` or `"artifact"`, fixed at creation. |',
+  '| `kind` | extension | `"canvas"` or `"page"`, fixed at creation. |',
   `| \`title\` | you | 1–${TITLE_MAX} characters. The user may rename it. |`,
   '| `created` | extension | Never change. |',
   '| `updated` | you | ISO-8601 UTC time. Set it on every change you make to the design. |',

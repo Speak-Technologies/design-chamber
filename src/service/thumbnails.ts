@@ -138,9 +138,9 @@ const parseThumbMeta = (text: string): ThumbMeta | null => {
   }
 };
 
-/** The file to capture: the artifact entry, or the first screen with a file (SPEC §9.5). */
+/** The file to capture: the page entry, or the first screen with a file (SPEC §9.5). */
 const captureSourceOf = (record: DesignRecord): string | null => {
-  if (record.design.kind === 'artifact') {
+  if (record.design.kind === 'page') {
     return record.files.entry?.exists ? ENTRY_FILE : null;
   }
   for (const screen of record.design.screens) {

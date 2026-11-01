@@ -126,7 +126,7 @@ test('layoutWall: per-screen viewport subsets leave cells empty; empty rows drop
     ],
   );
   const artifact = layoutWall([{ id: null, title: 'Launch' }], [LAPTOP]);
-  assert.equal(artifact.artboards[0]?.id, 'artifact@laptop');
+  assert.equal(artifact.artboards[0]?.id, 'page@laptop');
   assert.equal(layoutWall([], [LAPTOP]).bounds, null);
 });
 

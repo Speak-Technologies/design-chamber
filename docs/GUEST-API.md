@@ -23,7 +23,7 @@ const disconnect = store.connect(createChangeFeed(client));   // live refresh
 host.ready.subscribe((ctx) => { if (ctx) applyHostReady(ctx, document.documentElement); });
 flows.watchTurns();                                            // every visible frame
 flows.watchSessions(() => (store.getState().designs.data?.designs ?? []).map(({ slug, sessionId }) => ({ slug, sessionId })));
-flows.watchItems((target) => openDesign(target.slug), showError);   // chip click / Open as artifact
+flows.watchItems((target) => openDesign(target.slug), showError);   // chip click / Open as page
 if (surface === 'panel') flows.watchOutbox();                  // rail only (§10.4)
 ```
 
@@ -119,7 +119,7 @@ Types: `Camera { x, y, scale }` (screen = world × scale + (x, y)), `Point`, `Si
 `fitBox(box, viewport, { padding?, maxScale? = 1 })`, `fitAll(boxes, viewport, opts?)`,
 `focusArtboard(artboard, viewport, opts?)`, `artboardBox(artboard)` (label + frame),
 `layoutWall(screens, viewports, { gap? = 96, labelHeight? = 28 })`, `isBoxVisible(c, box, viewport, margin?)`
-(frame budget: margin `FRAME_UNLOAD_MARGIN`). Artifact: `layoutWall([{ id: null, title }], viewports)`.
+(frame budget: margin `FRAME_UNLOAD_MARGIN`). Page: `layoutWall([{ id: null, title }], viewports)`.
 
 ## `frame-doc.ts`
 
@@ -184,13 +184,13 @@ inside the frame (`null` clears).
 | `deliverOutbox(session?)` | `'delivered'│'composed'│'none'` |
 | `reconcile(snapshot, designs)` / `planReconciliation(snapshot, designs)` | links patched |
 | `snapshotTurn(sessionId)` | `POST /versions/turn`, deduped 2 s |
-| `openAsArtifact(item: GuestMessageItem)` | `{ slug }` or `null` (toast "No HTML code block in this message" already shown) |
+| `openAsPage(item: GuestMessageItem)` | `{ slug }` or `null` (toast "No HTML code block in this message" already shown) |
 | `handleItem(item)` | `{ kind: 'open-design', slug }` or `null` |
 | `watchTurns()`, `watchOutbox()`, `watchSessions(getDesigns)`, `watchItems(open, onError?)` | each returns its stop function |
 
 Toasts the flows show themselves: busy ("Agent is busy — revision placed in the composer") and
 no-HTML. Everything else is returned for the UI to present. Constants: `MESSAGES`,
-`PANEL_SURFACE_ID`, `OPEN_AS_ARTIFACT_ACTION`, `CHIP_ID_PREFIX`; helpers `toAttachRequest(chip)`,
+`PANEL_SURFACE_ID`, `OPEN_AS_PAGE_ACTION` (`'open-as-page'`), `CHIP_ID_PREFIX`; helpers `toAttachRequest(chip)`,
 `sameDirectory(a, b)`, `isHostError(e, code)`.
 
 ## `fake-services.ts` (dev/test only — never imported by a production entry)
@@ -198,11 +198,17 @@ no-HTML. Everything else is returned for the UI to present. Constants: `MESSAGES
 `createFakeServices(opts?) → { host: FakeHost; guestHost: GuestHost; client: ServiceClient; service: FakeService }`.
 Opts: `surface`, `directory`, `session`, `projects`, `knownSessions`, `renderChunkChars`, `empty`, `service`.
 Seed data: canvas `coffee-subscription` (2 screens × laptop/phone, 1 open comment, linked to
-`ses_fake_coffee`), artifact `launch-announcement`, pending canvas `onboarding-flow`.
+`ses_fake_coffee`), page `launch-announcement`, pending canvas `onboarding-flow`, and one loose
+root file `pricing-v2.html` (not with `empty`).
 
 `FakeService`: `handle(request)`, `designs`, `outbox`, `requests`, `emit(slug, kind, files?)`,
-`writeFile(slug, file, text)` (simulates the agent; emits `files`). Thumbnails answer
-`unavailable` (exercise the live mini-frame path).
+`writeFile(slug, file, text)` (simulates the agent; emits `files`), `writeLooseFile(name, text)`
+(simulates a loose html file in the root; emits `loose`). Thumbnails answer `unavailable`
+(exercise the live mini-frame path). `GET /designs` answers `loose` (newest first);
+`POST /loose/import` makes the file a page, drops it from `loose` and emits `loose` + `added`;
+`GET /settings` answers `agent` (guide `current`, skill `not-installed`); `POST /agent/skill`
+turns the skill `current`; `POST /designs/:slug/prompt` answers `purpose: 'offline'` with a short
+offline request.
 
 `FakeHost` (a `HostLike`): `emitReady(patch?)`, `setSession`, `setDirectory`, `setItem`,
 `emitLifecycle`, `emitSessions(projectId, records, state?)`, `calls`, `callsOf(method)`,
@@ -216,8 +222,8 @@ Seed data: canvas `coffee-subscription` (2 screens × laptop/phone, 1 open comme
    `bridge/links.ts`, `fake-services.ts`.
 2. **Render docs** are cached by render key inside `service-client.ts`, not in store state; the
    store exposes `renderRevs` (per source) so artboards know when to reload.
-3. **Open as artifact** does not run `extractHtml` in the guest (WP3's `html-extract.ts` is not on
-   this branch): it uploads the message and relies on `POST /artifacts/from-message` answering
+3. **Open as page** does not run `extractHtml` in the guest (WP3's `html-extract.ts` is not on
+   this branch): it uploads the message and relies on `POST /pages/from-message` answering
    422 `no-html` (same toast). Integration may add the client-side pre-check to save the upload.
 4. **One host connection**: `src/ui/main.ts` must use `getGuestHost()` instead of its own
    `connectHost()` (two connections in one frame would duplicate every host event).

@@ -29,6 +29,11 @@ versions, exports, thumbnails and agent instructions (see the other feature page
   with how many designs are still there, so the user can switch back.
 - A folder that is relative, a whole drive, the user's home folder (or a folder above it),
   `Documents` itself, or inside the extension itself is refused with a sentence saying why.
+- A design is a **page** (one `index.html`, shown full screen) or a **canvas** (several screens
+  side by side). Designs saved before pages got their name say `"kind": "artifact"` in their
+  files; they open as pages with no warning. The service does not rewrite them for the new name
+  alone: the next time it writes that design for a real reason (a comment, a rename, a chat link)
+  it writes `"page"`. Old versions that say `"artifact"` restore the same way.
 - Only folders that are designs count: a folder with `design.json`, `.chamber/state.json`,
   `index.html` or a `screens/` folder. Any other folder under the designs folder is the user's
   own — never listed, counted, snapshotted or written into.
@@ -67,12 +72,12 @@ everything for this design".
 
 ## Edge cases
 - If the service restarts, the panel's next poll sees a new run id and reloads everything.
-- A message too large for one request (an assistant message for "Open as artifact") is uploaded
+- A message too large for one request (an assistant message for "Open as page") is uploaded
   in pieces and joined by the service; unfinished uploads expire after 10 minutes.
 - The outbox (a revision waiting for the right chat to be selected) holds one message for
   10 minutes and is delivered exactly once.
-- "Open as artifact" leaves one open request (`DELETE /open-request` takes it, once; 2 minutes)
-  so the rail opens the new artifact.
+- "Open as page" leaves one open request (`DELETE /open-request` takes it, once; 2 minutes)
+  so the rail opens the new page.
 - A Designs folder that cannot be created or written is refused with a sentence chosen by the
   error code (missing drive, no permission, part of the path is a file, read-only or full drive,
   in use, path too long) — never the raw system message.

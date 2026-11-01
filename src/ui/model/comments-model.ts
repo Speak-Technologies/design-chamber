@@ -29,11 +29,11 @@ export const pinNumbers = (comments: readonly Comment[]): Map<string, number> =>
 export type CommentGroup = { key: string; title: string; comments: Comment[] };
 
 /** Drawer groups: one per screen in wall order, then comments whose screen no longer exists. Artifacts have one group. */
-export const groupComments = (comments: readonly Comment[], screens: readonly Screen[], artifactTitle: string): CommentGroup[] => {
+export const groupComments = (comments: readonly Comment[], screens: readonly Screen[], pageTitle: string): CommentGroup[] => {
   const groups: CommentGroup[] = [];
   const known = new Set<string>();
-  const artifact = comments.filter((comment) => comment.screen === null);
-  if (artifact.length > 0) groups.push({ key: 'artifact', title: artifactTitle, comments: artifact });
+  const onPage = comments.filter((comment) => comment.screen === null);
+  if (onPage.length > 0) groups.push({ key: 'page', title: pageTitle, comments: onPage });
   for (const screen of screens) {
     known.add(screen.id);
     const mine = comments.filter((comment) => comment.screen === screen.id);

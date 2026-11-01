@@ -26,12 +26,12 @@ export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): v
   const kindTabs = mountTabs(kindHost, {
     items: [
       { id: 'canvas', label: 'Canvas' },
-      { id: 'artifact', label: 'Artifact' },
+      { id: 'page', label: 'Artifact' },
     ],
     activeId: kind,
     trackBackground: true,
     onChange: (id) => {
-      kind = id === 'artifact' ? 'artifact' : 'canvas';
+      kind = id === 'page' ? 'page' : 'canvas';
       kindTabs.update({ activeId: kind });
       kindHint.textContent = kind === 'canvas' ? 'A wall of screens at several device sizes, with comments and versions.' : 'One HTML page you can export as a ZIP or a single file.';
       briefField.update({ placeholder: briefPlaceholder(kind) });

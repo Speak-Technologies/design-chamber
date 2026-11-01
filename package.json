@@ -1,7 +1,7 @@
 {
   "name": "design-chamber",
   "version": "0.1.0",
-  "description": "Design Chamber — design canvases and HTML artifacts written by your chat agent, rendered inside OpenChamber.",
+  "description": "Design Chamber: design canvases and pages written by your chat agent, rendered inside OpenChamber.",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -13,11 +13,11 @@
       "page": { "entry": "dist/panel/index.html", "title": "Design Chamber" },
       "background": { "entry": "dist/background/index.html" },
       "commands": [
-        { "name": "design", "description": "New design canvas: attach design rules, folder and contract" },
-        { "name": "artifact", "description": "New HTML artifact: attach design rules, folder and contract" }
+        { "name": "design", "description": "New canvas: several screens side by side" },
+        { "name": "page", "description": "New page: one HTML page shown full screen" }
       ],
       "actions": [
-        { "id": "open-as-artifact", "label": "Open as artifact", "icon": "palette", "where": "message", "roles": ["assistant"], "mode": "background" }
+        { "id": "open-as-page", "label": "Open as page", "icon": "palette", "where": "message", "roles": ["assistant"], "mode": "background" }
       ],
       "capabilities": ["prompt", "sessions"],
       "service": {

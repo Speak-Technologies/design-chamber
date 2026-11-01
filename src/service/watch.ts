@@ -83,8 +83,11 @@ export type WatcherOptions = {
 
 export type Watcher = {
   stop(): void;
-  /** Settles once the startup baseline is seeded; a folder created before then is part of it, not `added`. */
-  ready: Promise<void>;
+  /**
+   * Settles once the current root's baseline is seeded (at startup, and again after each root
+   * switch); a folder created before then is part of it, not `added`.
+   */
+  readonly ready: Promise<void>;
 };
 
 /** Pending debounced batch per slug (`ROOT_KEY` = a whole-root rescan). */
@@ -279,18 +282,20 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     fingerprints.clear();
     hub.emit({ slug: null, kind: 'root' });
     startFsWatch();
-    seedScan().catch((error) => log.warn('watch.seed-failed', { error: error instanceof Error ? error.message : String(error) }));
+    ready = seedScan().catch((error) => log.warn('watch.seed-failed', { error: error instanceof Error ? error.message : String(error) }));
   });
 
   startFsWatch();
-  const ready = seedScan().catch((error) => log.warn('watch.seed-failed', { error: error instanceof Error ? error.message : String(error) }));
+  let ready = seedScan().catch((error) => log.warn('watch.seed-failed', { error: error instanceof Error ? error.message : String(error) }));
   pollTimer = setInterval(() => {
     pollTick().catch((error) => log.warn('watch.poll-failed', { error: error instanceof Error ? error.message : String(error) }));
   }, pollMs);
   pollTimer.unref?.();
 
   return {
-    ready,
+    get ready() {
+      return ready;
+    },
     stop() {
       if (stopped) return;
       stopped = true;

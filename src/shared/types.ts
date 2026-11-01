@@ -9,7 +9,8 @@ export type JsonObject = { [key: string]: JsonValue };
 /** ISO-8601 timestamp string (`2026-10-26T18:00:00.000Z`). */
 export type IsoDate = string;
 
-export type DesignKind = 'artifact' | 'canvas';
+/** `page` = one `index.html` shown full screen; `canvas` = a wall of screens. Older files saying `artifact` read as `page` (`normalizeKind`). */
+export type DesignKind = 'page' | 'canvas';
 
 // ---- design.json [§6.2] ----
 
@@ -68,9 +69,9 @@ export type AnchorState = 'exact' | 'moved' | 'detached';
 export type Comment = {
   /** `COMMENT_ID_PATTERN`. */
   id: string;
-  /** Screen id on a canvas; `null` on an artifact. */
+  /** Screen id on a canvas; `null` on a page. */
   screen: string | null;
-  /** Viewport id the comment was made on. */
+  /** Viewport id the comment was made on; on a page also `PAGE_FILL_VIEWPORT_ID` (the Full-width view). */
   viewport: string;
   anchor: CommentAnchor;
   /** 1..`COMMENT_BODY_MAX`. */
@@ -98,11 +99,11 @@ export type DesignJson = {
   sessionId: string | null;
   projectDirectory: string | null;
   preset: string | null;
-  /** `index.html` for an artifact, `null` for a canvas. */
+  /** `index.html` for a page, `null` for a canvas. */
   entry: string | null;
   /** 1..`VIEWPORTS_MAX`, ids unique. */
   viewports: Viewport[];
-  /** Canvas: 0..`SCREENS_MAX` in wall row order. Artifact: always `[]`. */
+  /** Canvas: 0..`SCREENS_MAX` in wall row order. Page: always `[]`. */
   screens: Screen[];
   designSystem: DesignSystemStatus;
   comments: Comment[];
@@ -123,8 +124,13 @@ export type ServiceOwnedField =
 /** Fields the agent owns; read from design.json only [§6.3]. `title` is also written on a user rename. */
 export type AgentOwnedField = 'title' | 'updated' | 'viewports' | 'screens' | 'designSystem';
 
-/** `.chamber/state.json` — authoritative service-owned fields [§6.3]. */
-export type ServiceState = Pick<DesignJson, Exclude<ServiceOwnedField, 'version'>> & { version: 1 };
+/**
+ * `.chamber/state.json` — authoritative service-owned fields [§6.3].
+ * `provisional: true` marks a state seeded from files before the agent's design.json
+ * landed; it is adopted from design.json once that parses, and is never mirrored into
+ * design.json. Absent = final.
+ */
+export type ServiceState = Pick<DesignJson, Exclude<ServiceOwnedField, 'version'>> & { version: 1; provisional?: true };
 
 /** One problem found while reading agent-written data. Never fatal. */
 export type DesignWarning = {
@@ -185,11 +191,12 @@ export type BrowserSource = 'setting' | 'detected' | 'none';
 
 // ---- Change hub [§7, §9.4] ----
 
-export type ChangeKind = 'added' | 'removed' | 'design' | 'files' | 'thumb' | 'versions' | 'comments' | 'root';
+/** `loose`: the set of loose `.html`/`.htm` files directly in the root changed (slug `null`). */
+export type ChangeKind = 'added' | 'removed' | 'design' | 'files' | 'thumb' | 'versions' | 'comments' | 'root' | 'loose';
 
 export type ChangeEvent = {
   seq: number;
-  /** `null` for root-wide events (`root`). */
+  /** `null` for root-wide events (`root`, `loose`). */
   slug: string | null;
   kind: ChangeKind;
   /** Relative paths inside the design (`/` separators) for `files` events. */
@@ -219,10 +226,37 @@ export type DesignSummary = {
 export type FileStatus = { exists: boolean; size: number; mtime: IsoDate | null };
 
 export type DesignFiles = {
-  /** Artifact entry (`index.html`); absent on a canvas. */
+  /** Page entry (`index.html`); absent on a canvas. */
   entry?: FileStatus;
-  /** Canvas screen id → its file status. Empty on an artifact. */
+  /** Canvas screen id → its file status. Empty on a page. */
   screens: Record<string, FileStatus>;
+};
+
+/** A loose `.html`/`.htm` file directly in the designs root: not a design, offered for import. */
+export type LooseHtmlFile = { name: string; bytes: number; mtime: IsoDate };
+
+// ---- Agent discovery: guide and skill ----
+
+/** `<root>/AGENTS.md`, kept by the service while it is ours and unedited. */
+export type GuideState = 'current' | 'outdated' | 'edited' | 'foreign' | 'missing' | 'no-root' | 'failed';
+export type AgentGuideStatus = {
+  /** Absolute path of the guide file. */
+  path: string;
+  state: GuideState;
+  /** User-facing sentence, e.g. the reason for `failed`. */
+  message?: string;
+};
+
+/** The `design-chamber` OpenCode skill, installed only on the user's click. */
+export type SkillState = 'not-installed' | 'current' | 'outdated' | 'edited' | 'foreign' | 'unavailable';
+export type AgentSkillStatus = {
+  /** Absolute path of `SKILL.md` (real path of its folder when it exists). */
+  path: string;
+  state: SkillState;
+  /** Other `design-chamber/SKILL.md` copies OpenCode would also load. */
+  duplicates: string[];
+  /** User-facing sentence, e.g. the reason for `unavailable`. */
+  message?: string;
 };
 
 // ---- Chat linkage [§10] ----

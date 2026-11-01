@@ -1,4 +1,4 @@
-// One open design: the canvas wall (P2), the artifact viewer (P6) and the compact rail viewer
+// One open design: the canvas wall (P2), the page viewer (P6) and the compact rail viewer
 // (R2) are the same view with a different toolbar. It owns the toolbar, the wall, the comments
 // and versions drawers, and the notices (remote files, saved export, viewing an old version).
 
@@ -73,12 +73,12 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const bscope = createScope();
     let data = first;
     const design = (): DesignDetailResponse['design'] => data.design;
-    const artifact = first.design.kind === 'artifact';
+    const isPage = first.design.kind === 'page';
 
-    let mode: 'edit' | 'play' = artifact ? 'play' : 'edit';
+    let mode: 'edit' | 'play' = isPage ? 'play' : 'edit';
     let hidden = new Set(prefs.hidden.filter((id) => first.design.viewports.some((viewport) => viewport.id === id)));
     if (hidden.size >= first.design.viewports.length) hidden = new Set();
-    let artifactViewport: string = first.design.viewports[0]?.id ?? FILL;
+    let pageViewport: string = first.design.viewports[0]?.id ?? FILL;
     let showPins = false;
     let viewing: { id: string; compare: boolean } | null = null;
     let drawer: Drawer | null = null;
@@ -133,7 +133,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     stage.append(wall.el);
     wall.setMode(mode);
     wall.setShowPins(showPins);
-    wall.setHiddenViewports(artifact ? first.design.viewports.filter((viewport) => viewport.id !== artifactViewport).map((viewport) => viewport.id) : [...hidden]);
+    wall.setHiddenViewports(isPage ? first.design.viewports.filter((viewport) => viewport.id !== pageViewport).map((viewport) => viewport.id) : [...hidden]);
 
     // ---------------------------------------------------------------- toolbar controls
     const zoomOut = iconBtn({ icon: 'minus', label: 'Zoom out', size: 'sm', onClick: () => wall.zoomStep(1 / 1.25) });
@@ -159,10 +159,10 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       pinsToggle.set({ pressed: showPins });
       wall.setShowPins(showPins);
     } });
-    pinsToggle.el.hidden = mode !== 'play' || artifact;
+    pinsToggle.el.hidden = mode !== 'play' || isPage;
 
     const commentMode = btn({ label: 'Comment', variant: 'outline', size: 'sm', icon: 'cursor', pressed: false, title: 'Click an element to pin a comment to it', onClick: () => {
-      if (artifactViewport === FILL) {
+      if (pageViewport === FILL) {
         toast('info', 'Comments attach to a device size. Pick one of the sizes in the list first.');
         return;
       }
@@ -175,7 +175,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       wall.setMode(next);
       modeTabs.update({ activeId: next });
       commentMode.set({ pressed: next === 'edit' });
-      pinsToggle.el.hidden = next !== 'play' || artifact;
+      pinsToggle.el.hidden = next !== 'play' || isPage;
     };
 
     const chipHost = h('div', { class: 'dc-chips', role: 'group', 'aria-label': 'Device sizes shown' });
@@ -212,32 +212,32 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const viewportHost = h('div', { class: 'dc-viewport-select' });
     const viewportSelect = mountSelect(viewportHost, {
       label: undefined,
-      value: artifactViewport,
+      value: pageViewport,
       options: [],
       onChange: (id) => {
-        artifactViewport = id;
-        applyArtifactViewport();
+        pageViewport = id;
+        applyPageViewport();
       },
     });
     bscope.add(() => viewportSelect.dispose());
     let stageObserver: ResizeObserver | null = null;
-    const applyArtifactViewport = (): void => {
-      if (artifactViewport === FILL) {
+    const applyPageViewport = (): void => {
+      if (pageViewport === FILL) {
         const rect = stage.getBoundingClientRect();
         const synthetic: Viewport = { id: FILL, label: 'Fill', width: Math.max(280, Math.round(rect.width - 48)), height: Math.max(280, Math.round(rect.height - 48)) };
         wall.setViewportOverride(synthetic);
         if (mode === 'edit') setMode('play');
       } else {
         wall.setViewportOverride(null);
-        wall.setHiddenViewports(design().viewports.filter((viewport) => viewport.id !== artifactViewport).map((viewport) => viewport.id));
+        wall.setHiddenViewports(design().viewports.filter((viewport) => viewport.id !== pageViewport).map((viewport) => viewport.id));
       }
-      viewportSelect.update({ value: artifactViewport });
+      viewportSelect.update({ value: pageViewport });
       wall.fit();
     };
-    if (artifact) {
+    if (isPage) {
       stageObserver = new ResizeObserver(
         debounce(() => {
-          if (artifactViewport === FILL) applyArtifactViewport();
+          if (pageViewport === FILL) applyPageViewport();
         }, 150),
       );
       stageObserver.observe(stage);
@@ -246,7 +246,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const paintViewportOptions = (): void => {
       viewportSelect.update({
         options: [...design().viewports.map((viewport) => ({ id: viewport.id, label: viewport.label, hint: viewportSize(viewport) })), { id: FILL, label: 'Fill', hint: 'whole window' }],
-        value: artifactViewport,
+        value: pageViewport,
       });
     };
 
@@ -291,9 +291,9 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         return [
           { id: 'chat', label: 'Continue in chat' },
           { separator: true },
-          { id: 'zip', label: artifact ? 'Export ZIP' : 'Export ZIP' },
-          { id: 'html', label: artifact ? 'Export single-file HTML' : 'Export screen as HTML…' },
-          ...(artifact ? [{ id: 'copy-html', label: 'Copy HTML', disabled: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX, hint: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX ? 'too large' : undefined } satisfies MenuEntry] : []),
+          { id: 'zip', label: isPage ? 'Export ZIP' : 'Export ZIP' },
+          { id: 'html', label: isPage ? 'Export single-file HTML' : 'Export screen as HTML…' },
+          ...(isPage ? [{ id: 'copy-html', label: 'Copy HTML', disabled: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX, hint: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX ? 'too large' : undefined } satisfies MenuEntry] : []),
           { id: 'path', label: 'Copy path' },
           { id: 'reveal', label: 'Reveal in folder' },
           { separator: true },
@@ -304,7 +304,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
           { id: 'delete', label: 'Delete…', destructive: true },
         ];
       }
-      return artifact ? baseEntries() : [{ id: 'zip', label: 'Export ZIP' }, { id: 'html', label: 'Export screen as HTML…' }, { separator: true }, ...baseEntries()];
+      return isPage ? baseEntries() : [{ id: 'zip', label: 'Export ZIP' }, { id: 'html', label: 'Export screen as HTML…' }, { separator: true }, ...baseEntries()];
     };
 
     const onMore = (id: string): void => {
@@ -316,7 +316,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
           void doExport('zip');
           return;
         case 'html':
-          if (artifact) void doExport('html');
+          if (isPage) void doExport('html');
           else pickScreenThenExport(moreButton);
           return;
         case 'copy-html':
@@ -395,9 +395,9 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         'header',
         { class: 'dc-toolbar dc-toolbar-compact' },
         h('div', { class: 'dc-toolbar-row' }, iconBtn({ icon: 'back', label: 'Back to designs', onClick: options.onBack }), titleText, moreButton),
-        h('div', { class: 'dc-toolbar-row dc-toolbar-tools' }, artifact ? viewportHost : modeHost, artifact ? commentMode.el : null, h('span', { class: 'dc-spacer' }), zoomGroup),
+        h('div', { class: 'dc-toolbar-row dc-toolbar-tools' }, isPage ? viewportHost : modeHost, isPage ? commentMode.el : null, h('span', { class: 'dc-spacer' }), zoomGroup),
       );
-    } else if (artifact) {
+    } else if (isPage) {
       toolbar = h(
         'header',
         { class: 'dc-toolbar' },
@@ -528,7 +528,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
           onLocate: (id) => {
             if (compact) closeDrawer();
             if (viewing) leaveVersion();
-            if (artifact && mode !== 'edit') setMode('edit');
+            if (isPage && mode !== 'edit') setMode('edit');
             wall.focusComment(id);
           },
         });
@@ -565,7 +565,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const openCount = (): number => design().comments.filter((comment) => comment.status === 'open').length;
 
     const refreshHtmlSize = (): void => {
-      if (!artifact) return;
+      if (!isPage) return;
       void store.loadSource(slug).then(
         (source) => void (htmlChars = source.text.length),
         () => void (htmlChars = null),
@@ -584,9 +584,9 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       paintChips();
       paintViewportOptions();
       paintNotices();
-      if (!next.design.viewports.some((viewport) => viewport.id === artifactViewport) && artifactViewport !== FILL) {
-        artifactViewport = next.design.viewports[0]?.id ?? FILL;
-        if (artifact) applyArtifactViewport();
+      if (!next.design.viewports.some((viewport) => viewport.id === pageViewport) && pageViewport !== FILL) {
+        pageViewport = next.design.viewports[0]?.id ?? FILL;
+        if (isPage) applyPageViewport();
       }
     };
 
@@ -597,7 +597,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         if (state.renderRevs === revs) return;
         const previous = revs;
         revs = state.renderRevs;
-        const sources = artifact ? [null] : design().screens.map((screen) => screen.id);
+        const sources = isPage ? [null] : design().screens.map((screen) => screen.id);
         const changed = new Set(sources.filter((source) => revs[renderSourceKey(slug, source)] !== previous[renderSourceKey(slug, source)]));
         if (changed.size === 0) return;
         wall.reload(changed);
@@ -609,7 +609,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     replace(el, toolbar, notices, main, compact ? h('footer', { class: 'dc-hint' }, FULL_SCREEN_HINT) : null);
     apply(first);
     refreshHtmlSize();
-    if (artifact) {
+    if (isPage) {
       commentMode.set({ pressed: mode === 'edit' });
       paintViewportOptions();
     }

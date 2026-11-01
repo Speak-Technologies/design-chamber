@@ -121,8 +121,8 @@ describe('RULES.md assembly', () => {
       assert.ok(canvas.includes(`\`${key}\``), `contract table names ${key}`);
     }
     assert.ok(canvas.includes('"kind": "canvas"') && canvas.includes('"screens": ['));
-    const artifact = buildRulesDoc(baseContext({ kind: 'artifact' }), files);
-    assert.ok(artifact.includes('"kind": "artifact"') && artifact.includes('"entry": "index.html"'));
+    const artifact = buildRulesDoc(baseContext({ kind: 'page' }), files);
+    assert.ok(artifact.includes('"kind": "page"') && artifact.includes('"entry": "index.html"'));
     assert.ok(!artifact.includes('"screens": ['));
     const artifactHeader = artifact.split('## Precedence')[0] ?? '';
     assert.ok(artifactHeader.includes('the page —') && !artifactHeader.includes('one file per screen'));

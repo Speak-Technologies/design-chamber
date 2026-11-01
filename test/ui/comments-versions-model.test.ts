@@ -38,7 +38,7 @@ test('pinNumbers follow creation order, not array order, and break ties by array
 test('groupComments keeps wall order, puts artifact comments first and surfaces orphans', () => {
   const list = [comment('c_1', { screen: 'pricing' }), comment('c_2', { screen: 'home' }), comment('c_3', { screen: 'gone' }), comment('c_4', { screen: null })];
   const groups = groupComments(list, screens, 'Artifact');
-  assert.deepEqual(groups.map((g) => g.key), ['artifact', 'home', 'pricing', '__missing']);
+  assert.deepEqual(groups.map((g) => g.key), ['page', 'home', 'pricing', '__missing']);
   assert.deepEqual(groups.map((g) => g.comments.map((c) => c.id)), [['c_4'], ['c_2'], ['c_1'], ['c_3']]);
 });
 

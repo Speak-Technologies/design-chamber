@@ -13,7 +13,7 @@ import { createRenderService } from '../../../src/service/render-cache.ts';
 import { captureArgs, createThumbnailService, pngSize, thumbWorkParent, type ThumbnailServiceFull } from '../../../src/service/thumbnails.ts';
 import type { BrowserResolution } from '../../../src/service/chrome.ts';
 import type { ThumbnailResponse } from '../../../src/shared/api.ts';
-import { artifactDesign, RED_PNG_B64, sleep } from './harness.ts';
+import { pageDesign, RED_PNG_B64, sleep } from './harness.ts';
 
 const setup = async (t: TestContext, browser: () => BrowserResolution): Promise<{ tmp: TmpRoot; ctx: FakeContext; thumbs: ThumbnailServiceFull }> => {
   const tmp = await useTmpRoot(t);
@@ -51,7 +51,7 @@ const pollReady = async (thumbs: ThumbnailServiceFull, slug: string, timeoutMs =
 describe('thumbnails without a browser', () => {
   test('get, refresh and peek all answer unavailable', async (t) => {
     const { tmp, thumbs } = await setup(t, () => ({ path: null, source: 'none' }));
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
 
     const got = await thumbs.get('art');
     assert.equal(got.state, 'unavailable');
@@ -64,7 +64,7 @@ describe('thumbnails without a browser', () => {
 
   test('a browser that fails to launch produces failed with a message', async (t) => {
     const { tmp, thumbs } = await setup(t, () => ({ path: 'C:\\definitely-missing\\chrome-404.exe', source: 'setting' }));
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     const first = await thumbs.get('art');
     assert.equal(first.state, 'pending');
     await sleep(1000); // the spawn error resolves fast
@@ -80,7 +80,7 @@ describe('thumbnails without a browser', () => {
 
   test('peek reports ready from a thumbnail already on disk', async (t) => {
     const { tmp, thumbs } = await setup(t, () => ({ path: null, source: 'none' }));
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     await tmp.write('art/.thumb.png', Buffer.from(RED_PNG_B64, 'base64'));
     await tmp.write('art/.chamber/thumb.json', JSON.stringify({ key: 'abc123', createdAt: '2026-10-26T10:00:00.000Z', viewport: 'laptop', scheme: 'light' }));
     assert.deepEqual(thumbs.peek('art'), { state: 'ready', key: 'abc123' });
@@ -88,7 +88,7 @@ describe('thumbnails without a browser', () => {
 
   test('a thumbnail captured before the light scheme was forced (no scheme in its meta) is stale', async (t) => {
     const { tmp, thumbs } = await setup(t, () => ({ path: null, source: 'none' }));
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     await tmp.write('art/.thumb.png', Buffer.from(RED_PNG_B64, 'base64'));
     await tmp.write('art/.chamber/thumb.json', JSON.stringify({ key: 'abc123', createdAt: '2026-10-26T10:00:00.000Z', viewport: 'laptop' }));
     assert.notEqual(thumbs.peek('art').state, 'ready');
@@ -131,7 +131,7 @@ describe('thumbnails without a browser', () => {
       platform: 'linux',
       isRoot: () => false,
     });
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     const chamber = tmp.at('art/.chamber');
     await mkdir(path.join(chamber, 'dc-thumb-stale'), { recursive: true });
     const old = new Date(Date.now() - 60 * 60_000);
@@ -164,7 +164,7 @@ describe('thumbnails with the real browser', () => {
     const { tmp, ctx, thumbs } = await setup(t, () => ({ path: chrome, source: 'detected' }));
     await tmp.writeDesign(
       'art',
-      artifactDesign({
+      pageDesign({
         'index.html': '<!doctype html><html><body style="margin:0;background:#223344"><h1 style="color:#fff;font:48px sans-serif">thumb me</h1></body></html>',
       }),
     );
@@ -216,7 +216,7 @@ describe('thumbnails with the real browser', () => {
     const { tmp, thumbs } = await setup(t, () => ({ path: chrome, source: 'detected' }));
     await tmp.writeDesign(
       'art',
-      artifactDesign({
+      pageDesign({
         'index.html': '<!doctype html><html><head><style>html,body{margin:0;background:rgb(255,0,0)}@media (prefers-color-scheme: dark){html,body{background:rgb(0,0,255)}}</style></head><body></body></html>',
       }),
     );
@@ -256,7 +256,7 @@ describe('thumbnails with the real browser', () => {
     const chrome = chromeOrSkip(t);
     if (!chrome) return;
     const { tmp, thumbs } = await setup(t, () => ({ path: chrome, source: 'detected' }));
-    await tmp.writeDesign('pending', { 'design.json': { version: 1, kind: 'artifact', title: 'Pending', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z' } });
+    await tmp.writeDesign('pending', { 'design.json': { version: 1, kind: 'page', title: 'Pending', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z' } });
     const got = await thumbs.get('pending');
     assert.equal(got.state, 'unavailable');
     assert.ok(got.message?.includes('no HTML') || got.message?.includes('Nothing'), got.message);

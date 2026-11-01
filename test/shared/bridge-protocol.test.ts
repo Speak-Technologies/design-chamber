@@ -52,7 +52,7 @@ test('page → frame messages parse, and frame types are not accepted as page ty
   assert.equal(parseFrameMessage({ ...env, type: 'init-ack' }), null);
 });
 
-test('artboard ids combine screen (or artifact) and viewport', () => {
+test('artboard ids combine screen (or page) and viewport', () => {
   assert.equal(artboardIdOf('home', 'laptop'), 'home@laptop');
-  assert.equal(artboardIdOf(null, 'phone'), 'artifact@phone');
+  assert.equal(artboardIdOf(null, 'phone'), 'page@phone');
 });

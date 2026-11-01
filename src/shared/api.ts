@@ -7,6 +7,8 @@
 // `ApiErrorBody` with the status from `API_ERROR_STATUS`.
 
 import type {
+  AgentGuideStatus,
+  AgentSkillStatus,
   AnchorState,
   BrowserSource,
   Comment,
@@ -21,6 +23,7 @@ import type {
   ChangeEvent,
   ExportFormat,
   IsoDate,
+  LooseHtmlFile,
   Outbox,
   Preset,
   ThumbState,
@@ -81,7 +84,18 @@ export type SettingsResponse = {
   chrome: { path: string | null; source: BrowserSource };
   /** Where exports are written (`~/Downloads`, or `<root>/.exports` when missing). */
   downloadsDir: string;
+  /** Agent discovery: the `<root>/AGENTS.md` guide and the OpenCode skill, derived from disk on every read. */
+  agent: { guide: AgentGuideStatus; skill: AgentSkillStatus };
 };
+
+/** Install or update the `design-chamber` skill. No path is ever accepted: the target is fixed. */
+export type InstallSkillBody = { replaceEdited?: boolean };
+export type InstallSkillResponse = { skill: AgentSkillStatus };
+
+/** `name`: a loose `.html`/`.htm` file directly in the root, as listed by `GET /designs`. */
+export type ImportLooseBody = { name: string };
+/** `originalMovedTo`: where the original went in `.trash/`, or `null` when that move failed (both copies remain). */
+export type ImportLooseResponse = { slug: string; title: string; originalMovedTo: string | null };
 
 /** `null` resets a field to its default. 400 `bad-path` for a relative path, a filesystem root, a folder inside the extension package, or one that cannot be created. */
 export type PutSettingsBody = { root?: string | null; chromePath?: string | null };
@@ -105,7 +119,12 @@ export type ChangesResponse = {
 };
 
 export type DesignsQuery = { q?: string; kind?: DesignKind };
-export type DesignListResponse = { root: string; designs: DesignSummary[] };
+export type DesignListResponse = {
+  root: string;
+  designs: DesignSummary[];
+  /** Loose html files in the root: `files` ≤ `LOOSE_LIST_MAX`, newest first; `total` counts them all. */
+  loose: { files: LooseHtmlFile[]; total: number };
+};
 
 export type CreateDesignBody = {
   kind: DesignKind;
@@ -114,9 +133,9 @@ export type CreateDesignBody = {
   preset?: string | null;
   projectDirectory?: string | null;
   sessionId?: string | null;
-  /** Artifact only: initial `index.html`, ≤ `CREATE_INLINE_HTML_MAX`; larger HTML uses `uploadId`. */
+  /** Page only: initial `index.html`, ≤ `CREATE_INLINE_HTML_MAX`; larger HTML uses `uploadId`. */
   html?: string;
-  /** Artifact only: a completed upload holding the initial `index.html`. */
+  /** Page only: a completed upload holding the initial `index.html`. */
   uploadId?: string;
 };
 export type CreateDesignResponse = { slug: string; path: string; design: DesignJson };
@@ -223,7 +242,8 @@ export type ChipBody = {
 export type ChipResponse = { slug: string; chip: DesignChip };
 
 export type PromptBody = {
-  purpose: 'revision' | 'continue';
+  /** `offline`: ask the agent to make the design work offline; the service builds the text and the blocked-URL list. */
+  purpose: 'revision' | 'continue' | 'offline';
   commentIds?: string[];
   /** Revision only: how the page found each pinned element (from `anchoring.ts`), so the prompt can flag moved or missing elements. */
   anchorStates?: Record<string, AnchorState>;
@@ -282,6 +302,8 @@ export interface ApiRoutes {
   'GET /outbox': Route<NoQuery, undefined, OutboxResponse>;
   'PUT /outbox': Route<NoQuery, PutOutboxBody, OutboxResponse>;
   'DELETE /outbox': Route<NoQuery, undefined, OutboxResponse>;
+  'POST /agent/skill': Route<NoQuery, InstallSkillBody, InstallSkillResponse>;
+  'POST /loose/import': Route<NoQuery, ImportLooseBody, ImportLooseResponse>;
 
   // WP2 — rendering, versions, export, thumbnails
   'GET /designs/:slug/render': Route<RenderQuery, undefined, RenderMeta>;
@@ -301,7 +323,7 @@ export interface ApiRoutes {
   'GET /presets': Route<NoQuery, undefined, PresetsResponse>;
   'POST /chip': Route<NoQuery, ChipBody, ChipResponse>;
   'POST /designs/:slug/prompt': Route<NoQuery, PromptBody, PromptResponse>;
-  'POST /artifacts/from-message': Route<NoQuery, FromMessageBody, FromMessageResponse>;
+  'POST /pages/from-message': Route<NoQuery, FromMessageBody, FromMessageResponse>;
   'DELETE /open-request': Route<NoQuery, undefined, OpenRequestResponse>;
 }
 
@@ -342,6 +364,8 @@ export const ROUTE_OWNERS = {
   'GET /outbox': 'WP1',
   'PUT /outbox': 'WP1',
   'DELETE /outbox': 'WP1',
+  'POST /agent/skill': 'WP1',
+  'POST /loose/import': 'WP1',
   'GET /designs/:slug/render': 'WP2',
   'GET /designs/:slug/render/chunk': 'WP2',
   'GET /designs/:slug/source': 'WP2',
@@ -357,7 +381,7 @@ export const ROUTE_OWNERS = {
   'GET /presets': 'WP3',
   'POST /chip': 'WP3',
   'POST /designs/:slug/prompt': 'WP3',
-  'POST /artifacts/from-message': 'WP3',
+  'POST /pages/from-message': 'WP3',
   'DELETE /open-request': 'WP3',
 } as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3'>;
 

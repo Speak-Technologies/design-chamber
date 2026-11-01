@@ -16,7 +16,7 @@ import { designCountLabel } from '../model/settings-model.ts';
 
 export type LibraryOptions = {
   actions: ActionContext;
-  onNew: (kind: 'canvas' | 'artifact') => void;
+  onNew: (kind: 'canvas' | 'page') => void;
   onSettings: () => void;
   onOpen: (slug: string) => void;
 };
@@ -38,9 +38,9 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     newButton.el,
     () => [
       { id: 'canvas', label: 'Canvas…', hint: 'several screens' },
-      { id: 'artifact', label: 'Artifact…', hint: 'one HTML page' },
+      { id: 'page', label: 'Artifact…', hint: 'one HTML page' },
     ],
-    (id) => options.onNew(id === 'artifact' ? 'artifact' : 'canvas'),
+    (id) => options.onNew(id === 'page' ? 'page' : 'canvas'),
   );
   const settingsButton = btn({ label: 'Settings', variant: 'ghost', size: 'default', icon: 'settings', onClick: () => options.onSettings() });
 

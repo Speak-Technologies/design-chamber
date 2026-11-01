@@ -1,5 +1,5 @@
 // The chip core text (docs/SPEC.md §11.3): the compact message that rides on `/design`,
-// `/artifact` and "Continue in chat". The host caps chip text at 16 000 chars (F15) and the full
+// `/page` and "Continue in chat". The host caps chip text at 16 000 chars (F15) and the full
 // rules are far longer, so the core makes `<design>/.chamber/RULES.md` mandatory reading and
 // carries only what the agent needs before it opens that file.
 
@@ -14,7 +14,7 @@ export type ChipMode = 'new' | 'continue';
 const PATH_SHOWN_MAX = 100;
 const DIRECTORY_SHOWN_MAX = 260;
 
-const kindWord = (kind: DesignKind): string => (kind === 'canvas' ? 'canvas' : 'artifact');
+const kindWord = (kind: DesignKind): string => (kind === 'canvas' ? 'canvas' : 'page');
 
 /** A short design title from the user's brief: its first sentence, ≤ 60 chars on a word boundary. */
 export const titleFromBrief = (brief: string, kind: DesignKind): string => {
@@ -65,7 +65,7 @@ const viewportStep = (context: AgentContext, mode: ChipMode): string => {
 
 const stateLine = (context: AgentContext): string => {
   if (context.pending) return 'State: nothing written yet.';
-  if (context.kind === 'artifact') return 'State: index.html is written.';
+  if (context.kind === 'page') return 'State: index.html is written.';
   const ids = clip(context.screenIds.join(', '), 400);
   return `State: ${context.screenIds.length} screen${context.screenIds.length === 1 ? '' : 's'}${ids === '' ? '' : ` (${ids})`}.`;
 };

@@ -29,7 +29,7 @@ export const pinPoint = (rect: Rect, relative: RelPoint): Point => ({
   y: rect.y + clamp01(relative.y) * rect.h,
 });
 
-/** The comments drawn on one artboard (artifact: `screen` null). */
+/** The comments drawn on one artboard (page: `screen` null). */
 export const commentsForArtboard = (comments: readonly Comment[], screen: string | null, viewport: string): Comment[] =>
   comments.filter((comment) => comment.screen === screen && comment.viewport === viewport);
 

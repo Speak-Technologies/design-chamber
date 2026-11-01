@@ -3,13 +3,13 @@
 import type { DesignKind, DesignSummary } from '../../shared/types.ts';
 import { plural } from './format.ts';
 
-export type ListTab = 'all' | 'canvas' | 'artifact';
+export type ListTab = 'all' | 'canvas' | 'page';
 export type ListSort = 'updated' | 'created' | 'title';
 
 export const LIST_TABS: ReadonlyArray<{ id: ListTab; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'canvas', label: 'Canvases' },
-  { id: 'artifact', label: 'Artifacts' },
+  { id: 'page', label: 'Artifacts' },
 ];
 
 export const LIST_SORTS: ReadonlyArray<{ id: ListSort; label: string }> = [
@@ -37,7 +37,7 @@ export const tabCounts = (designs: readonly DesignSummary[], query: string): Rec
   return {
     all: searched.length,
     canvas: searched.filter((design) => design.kind === 'canvas').length,
-    artifact: searched.filter((design) => design.kind === 'artifact').length,
+    page: searched.filter((design) => design.kind === 'page').length,
   };
 };
 
@@ -50,7 +50,7 @@ export const sortDesigns = (designs: readonly DesignSummary[], sort: ListSort): 
 
 /** "Canvas · 3 screens" / "Artifact" — the kind line of a row, without the time. */
 export const kindSummary = (design: DesignSummary): string => {
-  if (design.kind === 'artifact') return 'Artifact';
+  if (design.kind === 'page') return 'Artifact';
   return `Canvas · ${plural(design.screenCount, 'screen')}`;
 };
 

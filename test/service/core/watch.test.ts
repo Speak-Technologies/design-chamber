@@ -200,6 +200,8 @@ describe('watcher events', () => {
 
     env.setRoot(env.tmp.at('root-b'));
     await env.waitForEvent((event) => event.slug === null && event.kind === 'root');
+    // Folders created after the new root's baseline are changes, not part of it.
+    await env.watcher.ready;
 
     await mkdir(env.tmp.at('root-b/new-design'), { recursive: true });
     await env.waitForEvent((event) => event.slug === 'new-design' && event.kind === 'added');

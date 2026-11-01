@@ -9,7 +9,7 @@ import type { RenderService } from '../../../src/service/context.ts';
 import { createFakeContext, type FakeContext } from '../../helpers/fake-context.ts';
 import { useTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
 import { ApiError } from '../../../src/service/http.ts';
-import { artifactDesign, canvasDesign, sleep } from './harness.ts';
+import { pageDesign, canvasDesign, sleep } from './harness.ts';
 
 const collect = async (renders: RenderService, slug: string, query: { screen?: string; version?: string } = {}) => {
   const meta = await renders.render(slug, query);
@@ -76,7 +76,7 @@ describe('resolveEntryFile', () => {
     const tmp = await useTmpRoot(t);
     const ctx = createFakeContext({ root: tmp.root });
     t.after(() => ctx.dispose());
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     const record = await ctx.store.get('art');
     assert.deepEqual(resolveEntryFile(record.design, record.files, undefined), { entryRel: 'index.html', screenId: null });
     assert.throws(() => resolveEntryFile(record.design, record.files, 'home'), ApiError);
@@ -102,7 +102,7 @@ describe('resolveEntryFile', () => {
 describe('render service', () => {
   test('bundles, keys and serves chunks; the key changes when a file changes', async (t) => {
     const { tmp, ctx, renders } = await setup(t);
-    await tmp.writeDesign('art', artifactDesign({ 'assets/pic.png': 'not really a png' }));
+    await tmp.writeDesign('art', pageDesign({ 'assets/pic.png': 'not really a png' }));
     await tmp.write(
       'art/index.html',
       '<!doctype html><html><head><title>Art</title></head><body><img src="assets/pic.png"><p>v1</p></body></html>',
@@ -130,7 +130,7 @@ describe('render service', () => {
 
   test('an asset-only change also changes the key (inputs include assets)', async (t) => {
     const { tmp, ctx, renders } = await setup(t);
-    await tmp.writeDesign('art', artifactDesign({ 'assets/data.css': 'body{color:red}' }));
+    await tmp.writeDesign('art', pageDesign({ 'assets/data.css': 'body{color:red}' }));
     await tmp.write('art/index.html', '<!doctype html><link rel="stylesheet" href="assets/data.css"><p>x</p>');
     const first = await collect(renders, 'art');
     await sleep(20); // mtime granularity guard
@@ -143,7 +143,7 @@ describe('render service', () => {
 
   test('a missing entry is 422 no-html; an unknown slug is 404; a bad slug is 400', async (t) => {
     const { tmp, renders } = await setup(t);
-    await tmp.writeDesign('empty', { 'design.json': { version: 1, kind: 'artifact', title: 'E', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z' } });
+    await tmp.writeDesign('empty', { 'design.json': { version: 1, kind: 'page', title: 'E', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z' } });
     await assert.rejects(renders.render('empty', {}), (error: unknown) => error instanceof ApiError && error.code === 'no-html');
     await assert.rejects(renders.render('nope', {}), (error: unknown) => error instanceof ApiError && error.code === 'not-found');
     await assert.rejects(renders.render('Bad Slug', {}), (error: unknown) => error instanceof ApiError && error.code === 'bad-slug');
@@ -151,7 +151,7 @@ describe('render service', () => {
 
   test('version renders show the snapshot even after the live files change', async (t) => {
     const { tmp, renders, versions } = await setup(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     await tmp.write('art/index.html', '<!doctype html><p>old text</p>');
     const v1 = await versions.create('art', 'manual');
     assert.ok(v1);
@@ -171,7 +171,7 @@ describe('render service', () => {
 
   test('chunk refuses out-of-range numbers and malformed keys', async (t) => {
     const { tmp, renders } = await setup(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     const meta = await renders.render('art', {});
     assert.equal(typeof renders.chunk(meta.key, 0), 'string');
     assert.throws(() => renders.chunk(meta.key, 1), (error: unknown) => error instanceof ApiError && error.code === 'bad-request');

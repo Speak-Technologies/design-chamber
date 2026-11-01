@@ -77,8 +77,8 @@ describe('chip core text', () => {
   });
 
   test('an artifact lists index.html, not screens', () => {
-    const text = buildChipText(baseContext({ kind: 'artifact' }), 'new');
-    assert.ok(text.includes('New artifact:'));
+    const text = buildChipText(baseContext({ kind: 'page' }), 'new');
+    assert.ok(text.includes('New page:'));
     assert.ok(text.includes('index.html (one self-contained page)'));
     assert.ok(!text.includes('screens/<id>.html'));
     assert.ok(text.includes('you own title, updated, viewports and designSystem'));
@@ -155,7 +155,7 @@ describe('chip core text', () => {
     assert.ok(text.includes('this design shows Laptop 1280×800, Phone 390×844'));
     assert.ok(text.includes("Brief (the user's words, original):"));
     assert.ok(buildChipText(baseContext(), 'continue').includes('State: nothing written yet.'));
-    assert.ok(buildChipText(baseContext({ kind: 'artifact', pending: false }), 'continue').includes('State: index.html is written.'));
+    assert.ok(buildChipText(baseContext({ kind: 'page', pending: false }), 'continue').includes('State: index.html is written.'));
   });
 });
 
@@ -182,7 +182,7 @@ describe('buildChip', () => {
 describe('titleFromBrief', () => {
   test('first sentence, capitalised, trailing punctuation dropped', () => {
     assert.equal(titleFromBrief('a pricing page for a coffee subscription. Three plans.', 'canvas'), 'A pricing page for a coffee subscription');
-    assert.equal(titleFromBrief('Landing page: hero, pricing, FAQ', 'artifact'), 'Landing page');
+    assert.equal(titleFromBrief('Landing page: hero, pricing, FAQ', 'page'), 'Landing page');
   });
 
   test('long first lines are cut on a word boundary at 60 characters', () => {
@@ -194,7 +194,7 @@ describe('titleFromBrief', () => {
   test('uses the first non-empty line and falls back by kind', () => {
     assert.equal(titleFromBrief('\n\n  Pricing page\nmore', 'canvas'), 'Pricing page');
     assert.equal(titleFromBrief('', 'canvas'), 'New canvas');
-    assert.equal(titleFromBrief('   ', 'artifact'), 'New artifact');
+    assert.equal(titleFromBrief('   ', 'page'), 'New page');
   });
 });
 
@@ -203,8 +203,8 @@ describe('golden samples (what the agent receives)', () => {
     await assertSnapshot('chip.new-canvas-project-preset.txt', buildChipText(baseContext({ project: BEANS, preset: { id: 'minimal-saas', name: 'Minimal SaaS', text: '' } }), 'new'));
   });
 
-  test('new artifact without a project', async () => {
-    await assertSnapshot('chip.new-artifact-no-project.txt', buildChipText(baseContext({ kind: 'artifact', title: 'Pricing page', folder: 'C:\\Users\\you\\Documents\\Designs\\pricing-page', brief: '' }), 'new'));
+  test('new page without a project', async () => {
+    await assertSnapshot('chip.new-page-no-project.txt', buildChipText(baseContext({ kind: 'page', title: 'Pricing page', folder: 'C:\\Users\\you\\Documents\\Designs\\pricing-page', brief: '' }), 'new'));
   });
 
   test('continue a canvas', async () => {

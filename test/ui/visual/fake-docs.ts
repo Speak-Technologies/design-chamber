@@ -78,7 +78,7 @@ export const coffeeCheckout = (): string =>
 </form></section>`,
   );
 
-export const pricingArtifact = (): string =>
+export const pricingPage = (): string =>
   base(
     SLATE,
     'Northwind pricing',
@@ -93,7 +93,7 @@ export const pricingArtifact = (): string =>
 </div></main>`,
   );
 
-export const invoiceArtifact = (): string =>
+export const invoicePage = (): string =>
   base(
     SAGE,
     'Invoice template',

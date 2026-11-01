@@ -54,7 +54,7 @@ describe('revision prompt format', () => {
   });
 
   test('artifact comment names index.html; an unknown viewport or screen falls back to its id', () => {
-    const artifact = buildRevisionPrompt(input([comment('c_aaaa1', { screen: null, viewport: 'phone' })], { kind: 'artifact', screens: [] })).text;
+    const artifact = buildRevisionPrompt(input([comment('c_aaaa1', { screen: null, viewport: 'phone' })], { kind: 'page', screens: [] })).text;
     assert.ok(artifact.includes('1. Artifact index.html @ Phone 390×844'));
     const stale = buildRevisionPrompt(input([comment('c_aaaa1', { screen: 'gone', viewport: 'old' })])).text;
     assert.ok(stale.includes('1. Screen "gone" (screens/gone.html) @ old'));
@@ -150,8 +150,8 @@ describe('continue prompt', () => {
     assert.ok(text.includes(`Resuming the canvas "Checkout redesign". Folder: ${FOLDER}. Rules: ${FOLDER}\\.chamber\\RULES.md`));
     assert.ok(text.includes('Do not change any file yet.'));
     assert.ok(text.includes('2 pinned comments are waiting'));
-    assert.ok(!buildContinuePrompt({ title: 't', kind: 'artifact', folder: FOLDER, openComments: 0 }).includes('pinned'));
-    assert.ok(buildContinuePrompt({ title: 't', kind: 'artifact', folder: FOLDER, openComments: 1 }).includes('1 pinned comment is waiting'));
+    assert.ok(!buildContinuePrompt({ title: 't', kind: 'page', folder: FOLDER, openComments: 0 }).includes('pinned'));
+    assert.ok(buildContinuePrompt({ title: 't', kind: 'page', folder: FOLDER, openComments: 1 }).includes('1 pinned comment is waiting'));
   });
 });
 

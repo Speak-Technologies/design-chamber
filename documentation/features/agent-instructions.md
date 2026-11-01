@@ -1,6 +1,6 @@
 # Agent instructions
 
-**What it does:** When the user starts a design (`/design`, `/artifact`, or "New" in the extension), Design Chamber attaches instructions to the chat so the user's own agent designs the way this product expects: it reads the project's own design rules first, asks the user when it is unsure, writes only inside the design's folder, and keeps `design.json` correct.
+**What it does:** When the user starts a design (`/design` for a canvas, `/page` for a page, or "New" in the extension), Design Chamber attaches instructions to the chat so the user's own agent designs the way this product expects: it reads the project's own design rules first, asks the user when it is unsure, writes only inside the design's folder, and keeps `design.json` correct.
 
 ## The two pieces
 - **The chip** — a short message (typically 2 000–3 000 characters; never more than 15 000) attached to the chat. It tells the agent, in numbered steps: read `<design folder>/.chamber/RULES.md` first; look for the active project's design rules; the order of precedence; which viewports to use; to ask 3–6 questions with recommended defaults when unsure; which files to write; who owns which `design.json` keys.
@@ -19,9 +19,9 @@ A chat that is not inside a project (or runs inside the Designs folder itself) h
 ## Revision requests ("send comments")
 One message with every comment: screen and viewport, the pinned element (selector, text, opening tag), and the user's words. When the page could not find a pin's element exactly in the current file it says so next to the element — "(moved — matched by text)" or "(not found in current file)" — so the agent knows the selector is stale. If the message would be too long for the host (16 000 characters) it shrinks in order — element tags first, then element text, then it sends only the first comments and the rest stay open for another send.
 
-## "Open as artifact"
-The longest HTML code block in an assistant message becomes an artifact (a block labelled `html` / `htm`, or any block that looks like a full page). A message with no HTML block answers "No HTML code block in this message" and creates nothing (the extension checks before uploading the message; the service checks again). The title comes from the page's `<title>`, else the message's first heading, else the chat's title.
-The action runs in the hidden background frame, so it works whether or not the rail is open: it saves the artifact, opens the Design Chamber rail on its viewer (the rail takes a one-time "open request" from the service on mount, or when the new design appears in an already open rail; it expires after 2 minutes) and confirms with a toast — *Saved as artifact "…"*. Where there is no side panel the toast says to open Design Chamber to see it.
+## "Open as page"
+The longest HTML code block in an assistant message becomes a page (a block labelled `html` / `htm`, or any block that looks like a full page). A message with no HTML block answers "No HTML code block in this message" and creates nothing (the extension checks before uploading the message; the service checks again). The title comes from the page's `<title>`, else the message's first heading, else the chat's title.
+The action runs in the hidden background frame, so it works whether or not the rail is open: it saves the page, opens the Design Chamber rail on its viewer (the rail takes a one-time "open request" from the service on mount, or when the new design appears in an already open rail; it expires after 2 minutes) and confirms with a toast: *Saved as page "…".* Where there is no side panel the toast adds "Open Design Chamber to see it."
 
 ## Rules and edge cases
 - The brief is limited to 2 000 characters; a longer one is refused with a sentence saying how long it was.

@@ -1,6 +1,9 @@
-// WP1 — GET /settings, PUT /settings (docs/SPEC.md §7, §9.2).
+// WP1 — GET /settings, PUT /settings, POST /agent/skill (docs/SPEC.md §7, §9.2;
+// documentation/specs/agent-guidance-and-pages.md §3.3, §3.4).
 
-import type { PreviousRoot, SettingsResponse } from '../../shared/api.ts';
+import path from 'node:path';
+
+import type { InstallSkillResponse, PreviousRoot, SettingsResponse } from '../../shared/api.ts';
 import { SETTINGS_PATH_MAX } from '../../shared/limits.ts';
 import { resolveBrowser } from '../chrome.ts';
 import type { ServiceContext } from '../context.ts';
@@ -9,6 +12,18 @@ import { countDesigns, exampleDesignsFolder, isDirectory, resolveDownloadsDir } 
 
 const isBodyRecord = (body: unknown): body is Record<string, unknown> =>
   typeof body === 'object' && body !== null && !Array.isArray(body);
+
+/** Answer of route stubs whose lane has not landed yet (removed with the stub). */
+const NOT_BUILT_YET = 'This part of Design Chamber is not built yet.';
+
+/**
+ * Stub until task A3 (`agent-setup.ts`): no guide or skill status yet. The guide path is
+ * display text only (nothing is read or written here).
+ */
+const agentStatusStub = (root: string): SettingsResponse['agent'] => ({
+  guide: { path: path.join(root, 'AGENTS.md'), state: 'failed', message: NOT_BUILT_YET },
+  skill: { path: '', state: 'unavailable', duplicates: [], message: NOT_BUILT_YET },
+});
 
 /** Assemble the §7 settings answer from the store (previousRoots carry live counts). */
 const buildSettingsResponse = async (ctx: ServiceContext): Promise<SettingsResponse> => {
@@ -27,6 +42,7 @@ const buildSettingsResponse = async (ctx: ServiceContext): Promise<SettingsRespo
     // The browser thumbnails will use: the user's setting when that file exists, else a detected install.
     chrome: resolveBrowser(file),
     downloadsDir: await resolveDownloadsDir(root, file.downloadsDir),
+    agent: agentStatusStub(root),
   };
 };
 
@@ -52,6 +68,7 @@ const validateChromePath = (raw: unknown): string | null | undefined => {
  * Registers:
  * - 'GET /settings'
  * - 'PUT /settings'
+ * - 'POST /agent/skill'
  */
 export function registerSettingsRoutes(router: Router, ctx: ServiceContext): void {
   router.on('GET /settings', async (): Promise<SettingsResponse> => buildSettingsResponse(ctx));
@@ -71,5 +88,10 @@ export function registerSettingsRoutes(router: Router, ctx: ServiceContext): voi
       ...(chromePath !== undefined ? { chromePath } : {}),
     });
     return buildSettingsResponse(ctx);
+  });
+
+  // Stub until task A3 (`installSkill`). Writes nothing.
+  router.on('POST /agent/skill', async (): Promise<InstallSkillResponse> => {
+    throw new ApiError('internal', NOT_BUILT_YET);
   });
 }

@@ -1,7 +1,7 @@
 // The WP1 HTTP surface end to end (docs/SPEC.md §7, §15.2): the real router with the real
 // WP1 modules behind it, called over loopback with a bearer exactly like the host proxy —
 // settings + previousRoots counts, designs CRUD, comments, the /changes long-poll, chunked
-// uploads reassembling 200 000 multi-byte chars into an artifact, the outbox slot, and the
+// uploads reassembling 200 000 multi-byte chars into a page, the outbox slot, and the
 // auth/validation refusals.
 
 import assert from 'node:assert/strict';
@@ -85,6 +85,8 @@ describe('route registration and auth', () => {
       ['/outbox', {}],
       ['/outbox', { method: 'PUT', body: {} }],
       ['/outbox', { method: 'DELETE' }],
+      ['/agent/skill', { method: 'POST', body: {} }],
+      ['/loose/import', { method: 'POST', body: { name: 'x.html' } }],
     ];
     for (const [pathname, init] of calls) {
       for (const token of [null, 'wrong'] as const) {
@@ -93,6 +95,35 @@ describe('route registration and auth', () => {
         assert.equal((await errorOf(answer)).error, 'unauthorized');
       }
     }
+  });
+});
+
+describe('agent guide/skill and loose html: contracts before their lanes land (A1 stubs)', () => {
+  test('GET /settings reports guide and skill status; GET /designs reports no loose files', async (t) => {
+    const core = await useServedCore(t);
+    const settings = await json<SettingsResponse>(await core.request('/settings'));
+    assert.equal(settings.agent.guide.path, path.join(core.root, 'AGENTS.md'));
+    assert.equal(settings.agent.guide.state, 'failed');
+    assert.equal(settings.agent.skill.state, 'unavailable');
+    assert.deepEqual(settings.agent.skill.duplicates, []);
+    const list = await json<DesignListResponse>(await core.request('/designs'));
+    assert.deepEqual(list.loose, { files: [], total: 0 });
+  });
+
+  test('POST /agent/skill and POST /loose/import answer a sentence and touch nothing, traversal names included', async (t) => {
+    const core = await useServedCore(t);
+    await core.tmp.write('outside.html', '<p>outside the root</p>');
+    for (const name of ['x.html', '../outside.html', '..\\outside.html', '%2e%2e%2foutside.html', path.join(core.tmp.at(''), 'outside.html')]) {
+      const answer = await core.request('/loose/import', { method: 'POST', body: { name } });
+      assert.equal(answer.status, 500, name);
+      assert.deepEqual(await errorOf(answer), { error: 'internal', message: 'This part of Design Chamber is not built yet.' });
+    }
+    assert.equal(await readFile(core.tmp.at('outside.html'), 'utf8'), '<p>outside the root</p>');
+    const skill = await core.request('/agent/skill', { method: 'POST', body: { replaceEdited: true } });
+    assert.equal(skill.status, 500);
+    assert.equal((await errorOf(skill)).error, 'internal');
+    const list = await json<DesignListResponse>(await core.request('/designs'));
+    assert.deepEqual(list.designs, []);
   });
 });
 
@@ -177,11 +208,11 @@ describe('designs CRUD over HTTP', () => {
   test('create, list, detail, rename, trash', async (t) => {
     const core = await useServedCore(t);
     const created = await json<CreateDesignResponse>(
-      await core.request('/designs', { method: 'POST', body: { kind: 'artifact', title: 'Hero page', html: '<!doctype html><h1>Hero</h1>', brief: 'A hero', sessionId: 'ses_x' } }),
+      await core.request('/designs', { method: 'POST', body: { kind: 'page', title: 'Hero page', html: '<!doctype html><h1>Hero</h1>', brief: 'A hero', sessionId: 'ses_x' } }),
     );
     assert.equal(created.slug, 'hero-page');
     assert.equal(created.path, path.join(core.root, 'hero-page'));
-    assert.equal(created.design.kind, 'artifact');
+    assert.equal(created.design.kind, 'page');
     assert.equal(created.design.sessionId, 'ses_x');
 
     const list = await json<DesignListResponse>(await core.request('/designs'));
@@ -211,8 +242,8 @@ describe('designs CRUD over HTTP', () => {
   test('filters: q matches title or slug, kind narrows', async (t) => {
     const core = await useServedCore(t);
     await core.request('/designs', { method: 'POST', body: { kind: 'canvas', title: 'Checkout wall' } });
-    await core.request('/designs', { method: 'POST', body: { kind: 'artifact', title: 'Checkout mail' } });
-    const byKind = await json<DesignListResponse>(await core.request('/designs', { query: { kind: 'artifact' } }));
+    await core.request('/designs', { method: 'POST', body: { kind: 'page', title: 'Checkout mail' } });
+    const byKind = await json<DesignListResponse>(await core.request('/designs', { query: { kind: 'page' } }));
     assert.deepEqual(byKind.designs.map((design) => design.slug), ['checkout-mail']);
     const byQ = await json<DesignListResponse>(await core.request('/designs', { query: { q: 'wall' } }));
     assert.deepEqual(byQ.designs.map((design) => design.slug), ['checkout-wall']);
@@ -226,10 +257,10 @@ describe('designs CRUD over HTTP', () => {
     assert.equal((await errorOf(await core.request('/designs', { method: 'POST', body: { kind: 'nope' } }))).error, 'bad-request');
     assert.equal((await core.request('/designs', { method: 'POST', body: 'x' })).status, 400);
     assert.equal((await errorOf(await core.request('/designs', { method: 'POST', body: { kind: 'canvas', html: '<h1>x</h1>' } }))).error, 'bad-request');
-    const huge = await core.request('/designs', { method: 'POST', body: { kind: 'artifact', html: 'x'.repeat(60_001) } });
+    const huge = await core.request('/designs', { method: 'POST', body: { kind: 'page', html: 'x'.repeat(60_001) } });
     assert.equal(huge.status, 413);
     assert.equal((await errorOf(huge)).error, 'too-large');
-    const missingUpload = await core.request('/designs', { method: 'POST', body: { kind: 'artifact', uploadId: 'u_doesnotexist00' } });
+    const missingUpload = await core.request('/designs', { method: 'POST', body: { kind: 'page', uploadId: 'u_doesnotexist00' } });
     assert.equal(missingUpload.status, 404);
     assert.equal((await errorOf(await core.request('/designs', { method: 'POST', body: { kind: 'canvas', preset: 'NOT A PRESET' } }))).error, 'bad-request');
   });
@@ -402,12 +433,12 @@ describe('uploads over HTTP', () => {
     }
 
     const design = await json<CreateDesignResponse>(
-      await core.request('/designs', { method: 'POST', body: { kind: 'artifact', title: 'Big upload', uploadId: created.uploadId } }),
+      await core.request('/designs', { method: 'POST', body: { kind: 'page', title: 'Big upload', uploadId: created.uploadId } }),
     );
     assert.equal(design.slug, 'big-upload');
     assert.equal(await readFile(path.join(design.path, 'index.html'), 'utf8'), text);
     // The upload is consumed: reusing it is a 404.
-    assert.equal((await core.request('/designs', { method: 'POST', body: { kind: 'artifact', uploadId: created.uploadId } })).status, 404);
+    assert.equal((await core.request('/designs', { method: 'POST', body: { kind: 'page', uploadId: created.uploadId } })).status, 404);
   });
 
   test('refusals: bad total, chunk out of order, oversized chunk, unknown upload', async (t) => {

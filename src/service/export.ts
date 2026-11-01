@@ -4,7 +4,7 @@
 // answers the path for the toast's "Show in folder" (reveal only accepts paths issued here).
 //
 //   ZIP:  `<slug>/` tree of every tracked file except design.json (internal)
-//   HTML: bundleDocument output WITHOUT the bridge — artifact index.html, or the chosen screen
+//   HTML: bundleDocument output WITHOUT the bridge — page index.html, or the chosen screen
 //
 // Names get ` (2)`, ` (3)`… on collision; writes are atomic (tmp + rename in the same folder).
 

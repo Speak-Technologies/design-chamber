@@ -19,7 +19,7 @@ import type {
 import { RENDER_CHUNK_MAX_BYTES } from '../../../src/shared/limits.ts';
 import { BRIDGE_PLACEHOLDER } from '../../../src/shared/bridge-protocol.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
-import { artifactDesign, canvasDesign, startWp2, type Wp2Service } from './harness.ts';
+import { pageDesign, canvasDesign, startWp2, type Wp2Service } from './harness.ts';
 import { readZip } from './zip-reader.ts';
 
 const chunksOf = async (svc: Wp2Service, slug: string, meta: RenderMeta): Promise<string> => {
@@ -36,7 +36,7 @@ const chunksOf = async (svc: Wp2Service, slug: string, meta: RenderMeta): Promis
 describe('WP2 routes over HTTP', () => {
   test('every WP2 route refuses a missing or wrong token with 401', async (t) => {
     const tmp = await useTmpRoot(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     const svc = await startWp2(t, { root: tmp.root });
     const probes: [string, { method?: string; body?: unknown }][] = [
       ['/designs/art/render', {}],
@@ -63,7 +63,7 @@ describe('WP2 routes over HTTP', () => {
 
   test('render + chunk round-trip a document byte-exact, with the bridge placeholder', async (t) => {
     const tmp = await useTmpRoot(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     const svc = await startWp2(t, { root: tmp.root });
     const meta = await svc.json<RenderMeta>('/designs/art/render');
     assert.ok(meta.key.match(/^[0-9a-f]{64}$/));
@@ -76,7 +76,7 @@ describe('WP2 routes over HTTP', () => {
 
   test('a >6 MB document is chunked and reassembles byte-exact (multi-byte payload)', async (t) => {
     const tmp = await useTmpRoot(t);
-    await tmp.writeDesign('big', artifactDesign());
+    await tmp.writeDesign('big', pageDesign());
     // 1.8 M emoji × 4 UTF-8 bytes ≈ 7.2 MB — the chunk boundary lands inside the emoji run,
     // so a splitter that breaks surrogate pairs would corrupt the reassembly.
     const payload = '🎨'.repeat(1_800_000);
@@ -102,7 +102,7 @@ describe('WP2 routes over HTTP', () => {
 
   test('chunk validation: malformed key 400, malformed n 400, evicted key 409 stale', async (t) => {
     const tmp = await useTmpRoot(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     const svc = await startWp2(t, { root: tmp.root });
     const meta = await svc.json<RenderMeta>('/designs/art/render');
 
@@ -125,7 +125,7 @@ describe('WP2 routes over HTTP', () => {
     const tmp = await useTmpRoot(t);
     await tmp.writeDesign('cv', canvasDesign());
     await tmp.writeDesign('noentry', {
-      'design.json': { version: 1, kind: 'artifact', title: 'No entry', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z' },
+      'design.json': { version: 1, kind: 'page', title: 'No entry', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z' },
     });
     const svc = await startWp2(t, { root: tmp.root });
 
@@ -174,8 +174,8 @@ describe('WP2 routes over HTTP', () => {
     const downloads = await useTmpRoot(t);
     await tmp.writeDesign(
       'art',
-      artifactDesign({
-        'design.json': { version: 1, kind: 'artifact', title: 'Test artifact', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z', sessionId: 'ses_http' },
+      pageDesign({
+        'design.json': { version: 1, kind: 'page', title: 'Test artifact', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z', sessionId: 'ses_http' },
       }),
     );
     const svc = await startWp2(t, { root: tmp.root, settings: { downloadsDir: downloads.root } });
@@ -219,7 +219,7 @@ describe('WP2 routes over HTTP', () => {
   test('export ZIP over HTTP: tracked files under <slug>/, no design.json; reveal accepts it', async (t) => {
     const tmp = await useTmpRoot(t);
     const downloads = await useTmpRoot(t);
-    await tmp.writeDesign('art', artifactDesign({ 'assets/pic.png': 'png-bytes', 'DESIGN.md': '# design' }));
+    await tmp.writeDesign('art', pageDesign({ 'assets/pic.png': 'png-bytes', 'DESIGN.md': '# design' }));
     await tmp.write('art/.chamber/state.json', '{}');
     await tmp.write('art/.thumb.png', 'nope');
     const svc = await startWp2(t, { root: tmp.root, settings: { downloadsDir: downloads.root } });
@@ -273,7 +273,7 @@ describe('WP2 routes over HTTP', () => {
 
   test('export falls back to <root>/.exports when the downloads dir cannot be created', async (t) => {
     const tmp = await useTmpRoot(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     // A FILE where the downloads dir should be → mkdir fails → fallback.
     const blocker = path.join(tmp.root, 'blocker');
     await writeFile(blocker, 'x');
@@ -284,7 +284,7 @@ describe('WP2 routes over HTTP', () => {
 
   test('thumbnail routes answer through a branded ctx.thumbnails service', async (t) => {
     const tmp = await useTmpRoot(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     // A branded fake proves the routes reuse an already-wired instance (the integration shape)
     // instead of creating a second one.
     const calls: string[] = [];

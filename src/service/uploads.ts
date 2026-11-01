@@ -1,6 +1,6 @@
 // Chunked text uploads, guest → service (docs/SPEC.md §7, §8.2). The host caps one
-// `serviceRequest` body at 64 000 chars (F7), so larger texts (a big artifact HTML, an
-// assistant message for "Open as artifact") arrive as ordered chunks of one upload:
+// `serviceRequest` body at 64 000 chars (F7), so larger texts (a big page HTML, an
+// assistant message for "Open as page") arrive as ordered chunks of one upload:
 // POST /uploads mints an id, PUT /uploads/:id/:index stores chunks strictly in order,
 // and the consumer `take`s the joined text exactly once. TTL 10 min, ≤ 8 open uploads.
 // Purely in-memory: an upload never touches disk, and a service restart drops it

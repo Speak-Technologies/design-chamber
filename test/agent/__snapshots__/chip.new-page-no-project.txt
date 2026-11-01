@@ -1,4 +1,4 @@
-[Design Chamber] New artifact: "Pricing page"
+[Design Chamber] New page: "Pricing page"
 Brief: none — ask the user what to design.
 Write ONLY inside this folder: C:\Users\you\Documents\Designs\pricing-page
 

@@ -49,7 +49,7 @@ const isFile = async (target: string): Promise<boolean> => {
 
 /**
  * A folder is a design (§6.1) when it holds design.json, the service's `.chamber/state.json`,
- * an artifact `index.html` or a `screens/` folder. Anything else under the root is the
+ * a page `index.html` or a `screens/` folder. Anything else under the root is the
  * user's own folder: never listed, reconciled, snapshotted or written into.
  */
 export const isDesignFolder = async (dir: string): Promise<boolean> =>

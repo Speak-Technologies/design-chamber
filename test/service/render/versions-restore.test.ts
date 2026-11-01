@@ -10,7 +10,7 @@ import { useTmpRoot } from '../../helpers/tmp-root.ts';
 import { ApiError } from '../../../src/service/http.ts';
 import { createVersionsService } from '../../../src/service/versions.ts';
 import { SNAPSHOT_FILES_MAX, VERSIONS_KEEP } from '../../../src/shared/limits.ts';
-import { artifactDesign } from './harness.ts';
+import { pageDesign } from './harness.ts';
 
 describe('version restore safety', () => {
   test('C1 — restoring the oldest version when the history is full restores it completely', async (t) => {
@@ -19,7 +19,7 @@ describe('version restore safety', () => {
     t.after(() => ctx.dispose());
     const versions = createVersionsService({ store: ctx.store, hub: ctx.hub, log: ctx.log, onDispose: ctx.onDispose, quietMs: 60_000 });
 
-    await tmp.writeDesign('art', artifactDesign({ 'index.html': '<p>oldest-unique</p>' }));
+    await tmp.writeDesign('art', pageDesign({ 'index.html': '<p>oldest-unique</p>' }));
     const oldest = await versions.create('art', 'manual');
     assert.ok(oldest);
     for (let n = 2; n <= VERSIONS_KEEP; n += 1) {
@@ -46,7 +46,7 @@ describe('version restore safety', () => {
     t.after(() => ctx.dispose());
     const versions = createVersionsService({ store: ctx.store, hub: ctx.hub, log: ctx.log, onDispose: ctx.onDispose, quietMs: 60_000 });
 
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     const v1 = await versions.create('art', 'manual');
     assert.ok(v1);
     // The agent later edits the page and adds more assets than a snapshot may hold.

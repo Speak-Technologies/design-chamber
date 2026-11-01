@@ -107,7 +107,7 @@ test('affectedSources: screen file → its screen, design.json → none, shared 
   assert.deepEqual(affectedSources(canvas, ['screens/home.html', 'screens/pricing.html', 'design.json']), ['home', 'pricing']);
   assert.deepEqual(affectedSources(canvas, ['design.json']), []);
   for (const shared of ['tokens.css', 'assets/logo.svg', 'DESIGN.md', 'screens/unknown.html']) assert.equal(affectedSources(canvas, [shared]), 'all', shared);
-  assert.equal(affectedSources({ kind: 'artifact', screens: [] }, ['index.html']), 'all');
+  assert.equal(affectedSources({ kind: 'page', screens: [] }, ['index.html']), 'all');
 });
 
 test('store: list, open, live refresh of only the affected artboards, comments and versions', async () => {

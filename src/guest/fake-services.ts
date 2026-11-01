@@ -27,8 +27,8 @@ import {
 } from '@openchamber/sdk';
 
 import { API_ERROR_STATUS, ROUTE_KEYS, splitRouteKey, type ApiErrorCode, type ChangesResponse, type OpenRequest, type RouteKey } from '../shared/api.ts';
-import { CHIP_PROVIDER_ID, type ChangeEvent, type ChangeKind, type Comment, type DesignJson, type DesignKind, type DesignSummary, type Outbox, type Preset, type VersionSummary, type Viewport } from '../shared/types.ts';
-import { CHANGES_RING_SIZE } from '../shared/limits.ts';
+import { CHIP_PROVIDER_ID, type AgentSkillStatus, type ChangeEvent, type ChangeKind, type Comment, type DesignJson, type DesignKind, type DesignSummary, type LooseHtmlFile, type Outbox, type Preset, type VersionSummary, type Viewport } from '../shared/types.ts';
+import { CHANGES_RING_SIZE, LOOSE_LIST_MAX } from '../shared/limits.ts';
 import { createGuestHost, type GuestHost, type HostLike } from './host.ts';
 import { createServiceClient, type ServiceClient } from './service-client.ts';
 
@@ -86,8 +86,8 @@ const baseDesign = (kind: DesignKind, title: string, minutes: number): DesignJso
   sessionId: null,
   projectDirectory: null,
   preset: null,
-  entry: kind === 'artifact' ? 'index.html' : null,
-  viewports: kind === 'artifact' ? [LAPTOP] : [LAPTOP, PHONE],
+  entry: kind === 'page' ? 'index.html' : null,
+  viewports: kind === 'page' ? [LAPTOP] : [LAPTOP, PHONE],
   screens: [],
   designSystem: { confirmed: false },
   comments: [],
@@ -125,7 +125,7 @@ const sampleDesigns = (): Map<string, FakeDesign> => {
   ];
   designs.set('coffee-subscription', { design: coffee, files: { ...SAMPLE_FILES['coffee-subscription'] }, versions: [] });
 
-  const launch = baseDesign('artifact', 'Launch announcement', 60);
+  const launch = baseDesign('page', 'Launch announcement', 60);
   designs.set('launch-announcement', { design: launch, files: { ...SAMPLE_FILES['launch-announcement'] }, versions: [] });
 
   const onboarding = baseDesign('canvas', 'Onboarding flow', 120);
@@ -217,6 +217,8 @@ export type FakeService = {
   emit(slug: string | null, kind: ChangeKind, files?: string[]): void;
   /** Simulate the agent writing a file. */
   writeFile(slug: string, file: string, text: string): void;
+  /** Simulate the agent saving a loose html file directly in the designs root (emits `loose`). */
+  writeLooseFile(name: string, text: string): void;
 };
 
 export const createFakeService = (options: FakeServiceOptions = {}): FakeService => {
@@ -232,6 +234,12 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
   let counter = 0;
   const outbox: { value: Outbox | null } = { value: null };
   const openRequest: { value: OpenRequest | null } = { value: null };
+  /** Loose html files in the fake root, by name. */
+  const loose = new Map<string, { text: string; mtime: string }>(
+    options.empty ? [] : [['pricing-v2.html', { text: page('Pricing v2', '<main><h1>Pricing v2</h1><p>Two plans, billed monthly.</p></main>'), mtime: iso(90) }]],
+  );
+  const skillPath = 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md';
+  let skill: AgentSkillStatus = { path: skillPath, state: 'not-installed', duplicates: [] };
 
   const emit = (slug: string | null, kind: ChangeKind, files?: string[]): void => {
     seq += 1;
@@ -247,7 +255,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
   };
 
   const pending = (entry: FakeDesign): boolean =>
-    entry.design.kind === 'artifact' ? !entry.files['index.html'] : !entry.design.screens.some((screen) => entry.files[screen.file]);
+    entry.design.kind === 'page' ? !entry.files['index.html'] : !entry.design.screens.some((screen) => entry.files[screen.file]);
 
   const summary = (slug: string, entry: FakeDesign): DesignSummary => ({
     slug,
@@ -287,7 +295,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
       id: `design:${slug}`,
       title: entry.design.title,
       url: `file:///C:/Users/you/Documents/Designs/${slug}`,
-      text: `[Design Chamber] ${entry.design.kind === 'canvas' ? 'New canvas' : 'New artifact'}: "${entry.design.title}"\nWrite ONLY inside: ${root}\\${slug}`,
+      text: `[Design Chamber] ${entry.design.kind === 'canvas' ? 'New canvas' : 'New page'}: "${entry.design.title}"\nWrite ONLY inside: ${root}\\${slug}`,
       data: { slug, kind: entry.design.kind },
     } as const;
   };
@@ -295,12 +303,21 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
   /** The fake keeps no file history: a version renders the current files. */
   const sourceOf = (slug: string, screen: string | undefined): string => {
     const entry = get(slug);
-    const file = entry.design.kind === 'artifact' ? 'index.html' : entry.design.screens.find((item) => item.id === screen)?.file;
+    const file = entry.design.kind === 'page' ? 'index.html' : entry.design.screens.find((item) => item.id === screen)?.file;
     if (!file) throw new FakeHttpError('not-found', 'That screen is not part of this design.');
     const text = entry.files[file];
     if (text === undefined) throw new FakeHttpError('not-found', `${file} is not written yet.`);
     return text;
   };
+
+  /** `GET /designs` `loose`: newest first, at most `LOOSE_LIST_MAX` names. */
+  const looseList = (): { files: LooseHtmlFile[]; total: number } => ({
+    files: [...loose.entries()]
+      .map(([name, file]) => ({ name, bytes: file.text.length, mtime: file.mtime }))
+      .sort((a, b) => b.mtime.localeCompare(a.mtime))
+      .slice(0, LOOSE_LIST_MAX),
+    total: loose.size,
+  });
 
   const route = async ({ key, params }: Matched, query: Record<string, string>, body: Record<string, unknown>): Promise<unknown> => {
     const slug = params.slug ?? '';
@@ -321,8 +338,12 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           rootExists: true,
           chrome: { path: null, source: 'none' },
           downloadsDir: 'C:\\Users\\you\\Downloads',
+          agent: { guide: { path: `${root}\\AGENTS.md`, state: 'current' }, skill },
         };
       }
+      case 'POST /agent/skill':
+        skill = { ...skill, state: 'current' };
+        return { skill };
       case 'GET /changes': {
         const since = Number(query.since ?? '0');
         const wait = Math.min(Number(query.wait ?? '0'), 15_000);
@@ -346,10 +367,20 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           .map(([name, entry]) => summary(name, entry))
           .filter((item) => (!query.kind || item.kind === query.kind) && (!query.q || item.title.toLowerCase().includes(query.q.toLowerCase())))
           .sort((a, b) => b.updated.localeCompare(a.updated));
-        return { root, designs: list };
+        return { root, designs: list, loose: looseList() };
+      }
+      case 'POST /loose/import': {
+        const name = String(body.name);
+        const file = loose.get(name);
+        if (!file) throw new FakeHttpError('not-found', 'That file is no longer in your designs folder.');
+        const title = /<title>([^<]*)<\/title>/i.exec(file.text)?.[1] ?? name.replace(/\.html?$/i, '');
+        const created = createDesign('page', title, '', {}, file.text);
+        loose.delete(name);
+        emit(null, 'loose');
+        return { slug: created, title, originalMovedTo: `${root}\\.trash\\${name.replace(/\.html?$/i, '')}-20261026180000.html` };
       }
       case 'POST /designs': {
-        const kind = body.kind === 'artifact' ? 'artifact' : 'canvas';
+        const kind = body.kind === 'page' ? 'page' : 'canvas';
         const created = createDesign(kind, typeof body.title === 'string' && body.title ? body.title : 'Untitled design', typeof body.brief === 'string' ? body.brief : '', {}, typeof body.html === 'string' ? body.html : undefined);
         return { slug: created, path: `${root}\\${created}`, design: get(created).design };
       }
@@ -362,7 +393,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           path: `${root}\\${slug}`,
           design: entry.design,
           pending: pending(entry),
-          files: entry.design.kind === 'artifact' ? { entry: fileStatus(entry.files['index.html']), screens } : { screens },
+          files: entry.design.kind === 'page' ? { entry: fileStatus(entry.files['index.html']), screens } : { screens },
           warnings: [],
         };
       }
@@ -536,9 +567,9 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
       case 'GET /presets':
         return { presets: PRESETS };
       case 'POST /chip': {
-        const kind = body.kind === 'artifact' ? 'artifact' : 'canvas';
+        const kind = body.kind === 'page' ? 'page' : 'canvas';
         const brief = typeof body.brief === 'string' ? body.brief : '';
-        const title = brief ? brief.slice(0, 60) : kind === 'artifact' ? 'Untitled artifact' : 'Untitled design';
+        const title = brief ? brief.slice(0, 60) : kind === 'page' ? 'Untitled page' : 'Untitled design';
         const created = createDesign(kind, title, brief, {
           projectDirectory: typeof body.projectDirectory === 'string' ? body.projectDirectory : null,
           preset: typeof body.preset === 'string' ? body.preset : null,
@@ -553,17 +584,19 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           body.purpose === 'revision'
             ? `[Design Chamber] Revise "${entry.design.title}" — ${comments.length} comment(s).\n` +
               comments.map((comment, index) => `${index + 1}. element: \`${comment.anchor.selector}\`\n   → ${comment.body}`).join('\n')
-            : `[Design Chamber] Let's continue "${entry.design.title}".`;
+            : body.purpose === 'offline'
+              ? `[Design Chamber] Make "${entry.design.title}" work offline: bundle remote files into assets/ or remove them.`
+              : `[Design Chamber] Let's continue "${entry.design.title}".`;
         return { text, commentIds: body.purpose === 'revision' ? comments.map((comment) => comment.id) : [], omitted: [], chip: chipOf(slug) };
       }
-      case 'POST /artifacts/from-message': {
+      case 'POST /pages/from-message': {
         const upload = uploads.get(String(body.uploadId));
         if (!upload) throw new FakeHttpError('not-found', 'The upload expired. Try again.');
         const text = upload.parts.join('');
         const html = /```html?\s*\n([\s\S]*?)```/i.exec(text)?.[1];
         if (!html) throw new FakeHttpError('no-html', 'No HTML code block in this message.');
-        const title = /<title>([^<]*)<\/title>/i.exec(html)?.[1] ?? String(body.sessionTitle || 'Artifact from chat');
-        const created = createDesign('artifact', title, '', { sessionId: String(body.sessionId) }, html);
+        const title = /<title>([^<]*)<\/title>/i.exec(html)?.[1] ?? String(body.sessionTitle || 'Page from chat');
+        const created = createDesign('page', title, '', { sessionId: String(body.sessionId) }, html);
         if (body.open === true) openRequest.value = { slug: created, created: new Date().toISOString() };
         return { slug: created, title };
       }
@@ -604,6 +637,10 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
       entry.files[file] = text;
       touch(entry);
       emit(slug, 'files', [file]);
+    },
+    writeLooseFile: (name, text) => {
+      loose.set(name, { text, mtime: new Date().toISOString() });
+      emit(null, 'loose');
     },
   };
 };

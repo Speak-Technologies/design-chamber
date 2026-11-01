@@ -7,7 +7,7 @@ import { createFakeContext, type FakeContext } from '../../helpers/fake-context.
 import { useTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
 import { createExportService, type ExportService } from '../../../src/service/export.ts';
 import { ApiError } from '../../../src/service/http.ts';
-import { artifactDesign, canvasDesign, redPng } from './harness.ts';
+import { pageDesign, canvasDesign, redPng } from './harness.ts';
 import { readZip } from './zip-reader.ts';
 
 const setup = async (t: TestContext): Promise<{ tmp: TmpRoot; downloads: string; ctx: FakeContext; exports: ExportService; issued: string[] }> => {
@@ -52,7 +52,7 @@ describe('export service', () => {
 
   test('collisions get " (2)", " (3)"… names', async (t) => {
     const { tmp, downloads, exports } = await setup(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     const first = await exports.export('art', { format: 'zip' });
     const second = await exports.export('art', { format: 'zip' });
     const third = await exports.export('art', { format: 'zip' });
@@ -78,10 +78,10 @@ describe('export service', () => {
   test('a design with nothing to export is refused with no-html, an unknown format with bad-request', async (t) => {
     const { tmp, exports } = await setup(t);
     // Only design.json exists → the tracked-minus-design.json set is empty.
-    await tmp.write('bare/design.json', { version: 1, kind: 'artifact', title: 'B', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z' });
+    await tmp.write('bare/design.json', { version: 1, kind: 'page', title: 'B', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z' });
     await assert.rejects(exports.export('bare', { format: 'zip' }), (error: unknown) => error instanceof ApiError && error.code === 'no-html');
     await assert.rejects(exports.export('bare', { format: 'html' }), (error: unknown) => error instanceof ApiError && error.code === 'no-html');
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     await assert.rejects(
       exports.export('art', { format: 'pdf' as unknown as 'zip' }),
       (error: unknown) => error instanceof ApiError && error.code === 'bad-request',
@@ -92,7 +92,7 @@ describe('export service', () => {
 
   test('no temporary files are left behind in the destination folder', async (t) => {
     const { tmp, downloads, exports } = await setup(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     await exports.export('art', { format: 'zip' });
     const left = await readdir(downloads);
     assert.deepEqual(left, ['art.zip']);

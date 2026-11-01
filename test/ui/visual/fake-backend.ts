@@ -14,7 +14,7 @@ import type {
   VersionSummary,
   Viewport,
 } from '../../../src/shared/types.ts';
-import { COFFEE, SAGE, SLATE, coffeeCheckout, coffeeHome, coffeePricing, invoiceArtifact, onboardingScreen, pricingArtifact, type Palette } from './fake-docs.ts';
+import { COFFEE, SAGE, SLATE, coffeeCheckout, coffeeHome, coffeePricing, invoicePage, onboardingScreen, pricingPage, type Palette } from './fake-docs.ts';
 import { ServiceError } from './service-error.ts';
 
 const MINUTE = 60_000;
@@ -47,8 +47,8 @@ const baseDesign = (over: Partial<DesignJson> & Pick<DesignJson, 'kind' | 'title
   sessionId: null,
   projectDirectory: 'C:\\Users\\you\\Documents\\GitHub\\ember-oak',
   preset: null,
-  entry: over.kind === 'artifact' ? 'index.html' : null,
-  viewports: over.kind === 'artifact' ? [LAPTOP] : [LAPTOP, PHONE],
+  entry: over.kind === 'page' ? 'index.html' : null,
+  viewports: over.kind === 'page' ? [LAPTOP] : [LAPTOP, PHONE],
   screens: [],
   designSystem: { confirmed: false },
   comments: [],
@@ -130,7 +130,7 @@ const seed = (): Map<string, Rec> => {
   });
   put('northwind-pricing', {
     design: baseDesign({
-      kind: 'artifact',
+      kind: 'page',
       title: 'Northwind pricing page',
       updated: ago(2 * HOUR),
       created: ago(DAY),
@@ -164,7 +164,7 @@ const seed = (): Map<string, Rec> => {
     dirty: false,
   });
   put('invoice-template', {
-    design: baseDesign({ kind: 'artifact', title: 'Invoice template', updated: ago(DAY + 3 * HOUR), created: ago(4 * DAY), sessionId: null }),
+    design: baseDesign({ kind: 'page', title: 'Invoice template', updated: ago(DAY + 3 * HOUR), created: ago(4 * DAY), sessionId: null }),
     palette: SAGE,
     thumb: 'unavailable',
     written: new Set(['index']),
@@ -191,7 +191,7 @@ const seed = (): Map<string, Rec> => {
     dirty: false,
   });
   put('launch-announcement', {
-    design: baseDesign({ kind: 'artifact', title: 'Launch announcement', updated: ago(9 * DAY), created: ago(10 * DAY), sessionId: null, comments: [] }),
+    design: baseDesign({ kind: 'page', title: 'Launch announcement', updated: ago(9 * DAY), created: ago(10 * DAY), sessionId: null, comments: [] }),
     palette: SAGE,
     thumb: 'ready',
     written: new Set(['index']),
@@ -318,9 +318,9 @@ export const createFakeBackend = (): FakeBackend => {
       html = screenId === 'pricing' ? coffeePricing() : screenId === 'checkout' ? coffeeCheckout() : coffeeHome();
       if (old) html = html.replace('Roasted this week.', 'Fresh coffee, monthly.').replace('Pick a rhythm', 'Choose a plan');
     } else if (slug === 'northwind-pricing' || slug === 'launch-announcement') {
-      html = pricingArtifact();
+      html = pricingPage();
     } else if (slug === 'invoice-template') {
-      html = invoiceArtifact();
+      html = invoicePage();
     } else {
       const found = rec.design.screens.find((s) => s.id === screenId);
       html = onboardingScreen(found?.title ?? 'Screen', `Step ${Math.max(1, rec.design.screens.findIndex((s) => s.id === screenId) + 1)} of ${rec.design.screens.length}`);
@@ -341,7 +341,7 @@ export const createFakeBackend = (): FakeBackend => {
       path: `${root}\\${slug}`,
       design: rec.design,
       pending: isPending(rec),
-      files: rec.design.kind === 'artifact' ? { entry: { exists: rec.written.has('index'), size: 22_000, mtime: rec.design.updated }, screens: {} } : { screens },
+      files: rec.design.kind === 'page' ? { entry: { exists: rec.written.has('index'), size: 22_000, mtime: rec.design.updated }, screens: {} } : { screens },
       warnings: [],
     };
   };
@@ -358,6 +358,10 @@ export const createFakeBackend = (): FakeBackend => {
       rootExists: true,
       chrome: chromePath ? { path: chromePath, source: 'detected' } : { path: null, source: 'none' },
       downloadsDir: 'C:\\Users\\you\\Downloads',
+      agent: {
+        guide: { path: `${root}\\AGENTS.md`, state: 'current' },
+        skill: { path: 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md', state: 'not-installed', duplicates: [] },
+      },
     }),
     'PUT /settings': ({ body }) => {
       if (body.root !== undefined) {
@@ -376,7 +380,7 @@ export const createFakeBackend = (): FakeBackend => {
     'GET /designs': ({ query }) => {
       let designs = rootVisible() ? [...db.entries()].map(([slug, rec]) => summary(slug, rec)) : [];
       if (query.q) designs = designs.filter((d) => d.title.toLowerCase().includes((query.q ?? '').toLowerCase()));
-      return { root, designs };
+      return { root, designs, loose: { files: [], total: 0 } };
     },
     'POST /designs': ({ body }) => {
       const slug = `${body.title ?? 'new-design'}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'design';
@@ -440,9 +444,9 @@ export const createFakeBackend = (): FakeBackend => {
     },
     'GET /designs/:slug/render': ({ params, query }) => {
       const rec = get(params.slug);
-      const id = query.screen ?? (rec.design.kind === 'artifact' ? 'index' : (rec.design.screens.find((s) => rec.written.has(s.id))?.id ?? 'index'));
+      const id = query.screen ?? (rec.design.kind === 'page' ? 'index' : (rec.design.screens.find((s) => rec.written.has(s.id))?.id ?? 'index'));
       if (!rec.written.has(id)) {
-        const file = rec.design.kind === 'artifact' ? 'index.html' : `screens/${id}.html`;
+        const file = rec.design.kind === 'page' ? 'index.html' : `screens/${id}.html`;
         throw new ServiceError('no-html', `${file} has not been written yet.`);
       }
       const html = docFor(params.slug ?? '', rec, id === 'index' ? undefined : id, query.version);

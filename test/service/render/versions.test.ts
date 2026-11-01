@@ -7,7 +7,7 @@ import { createFakeContext, type FakeContext } from '../../helpers/fake-context.
 import { useTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
 import { createVersionsService, EMPTY_TREE_HASH, isTracked, listTracked, type VersionsService } from '../../../src/service/versions.ts';
 import { ApiError } from '../../../src/service/http.ts';
-import { artifactDesign, sleep } from './harness.ts';
+import { pageDesign, sleep } from './harness.ts';
 
 const setup = async (t: TestContext, quietMs = 40): Promise<{ tmp: TmpRoot; ctx: FakeContext; versions: VersionsService }> => {
   const tmp = await useTmpRoot(t);
@@ -45,7 +45,7 @@ describe('tracked set', () => {
   test('listTracked walks the folder and skips the excluded trees', async (t) => {
     const tmp = await useTmpRoot(t);
     await tmp.writeDesign('art', {
-      ...artifactDesign(),
+      ...pageDesign(),
       'assets/pic.png': 'x',
       '.chamber/state.json': '{}',
       '.versions/index.json': '{}',
@@ -59,7 +59,7 @@ describe('tracked set', () => {
 describe('versions', () => {
   test('manual snapshot creates v1, dedupes an unchanged tree, and lists newest-first', async (t) => {
     const { tmp, versions } = await setup(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
 
     const first = await versions.create('art', 'manual');
     assert.ok(first);
@@ -96,10 +96,10 @@ describe('versions', () => {
   test('design.json is stored with comments removed and sessionId kept', async (t) => {
     const { tmp, versions } = await setup(t);
     await tmp.writeDesign('art', {
-      ...artifactDesign(),
+      ...pageDesign(),
       'design.json': {
         version: 1,
-        kind: 'artifact',
+        kind: 'page',
         title: 'T',
         created: '2026-10-26T10:00:00.000Z',
         updated: '2026-10-26T10:00:00.000Z',
@@ -119,7 +119,7 @@ describe('versions', () => {
 
   test('auto snapshot fires after the quiet period and is deduped when nothing changed', async (t) => {
     const { tmp, ctx, versions } = await setup(t, 40);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     await versions.create('art', 'manual'); // v1
 
     await tmp.write('art/index.html', '<p>agent wrote</p>');
@@ -140,8 +140,8 @@ describe('versions', () => {
   test('turn snapshot captures every design linked to the session and dedupes within the window', async (t) => {
     const { tmp, versions } = await setup(t);
     const design = (title: string, sessionId: string) => ({
-      ...artifactDesign(),
-      'design.json': { version: 1, kind: 'artifact', title, created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z', sessionId },
+      ...pageDesign(),
+      'design.json': { version: 1, kind: 'page', title, created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z', sessionId },
     });
     await tmp.writeDesign('one', design('One', 'ses_x'));
     await tmp.writeDesign('two', design('Two', 'ses_x'));
@@ -164,8 +164,8 @@ describe('versions', () => {
   test('a turn that ends after the quiet-period auto snapshot promotes that auto version to "turn"', async (t) => {
     const { tmp, ctx, versions } = await setup(t, 40);
     await tmp.writeDesign('art', {
-      ...artifactDesign(),
-      'design.json': { version: 1, kind: 'artifact', title: 'Art', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z', sessionId: 'ses_x' },
+      ...pageDesign(),
+      'design.json': { version: 1, kind: 'page', title: 'Art', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z', sessionId: 'ses_x' },
     });
     await versions.create('art', 'manual'); // v1
     await tmp.write('art/index.html', '<p>agent wrote</p>');
@@ -189,10 +189,10 @@ describe('versions', () => {
   test('restore writes the old tree back, deletes extra files, and records restore-point + restored', async (t) => {
     const { tmp, versions } = await setup(t);
     await tmp.writeDesign('art', {
-      ...artifactDesign(),
+      ...pageDesign(),
       'design.json': {
         version: 1,
-        kind: 'artifact',
+        kind: 'page',
         title: 'Original title',
         created: '2026-10-26T10:00:00.000Z',
         updated: '2026-10-26T10:00:00.000Z',
@@ -206,7 +206,7 @@ describe('versions', () => {
     await tmp.write('art/extra.txt', 'added later');
     await tmp.write(
       'art/design.json',
-      JSON.stringify({ version: 1, kind: 'artifact', title: 'Renamed by agent', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T11:00:00.000Z' }),
+      JSON.stringify({ version: 1, kind: 'page', title: 'Renamed by agent', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T11:00:00.000Z' }),
     );
     const v2 = await versions.create('art', 'manual');
     assert.ok(v2);
@@ -236,7 +236,7 @@ describe('versions', () => {
 
   test('restore keeps CURRENT comments and sessionId (never taken from the snapshot)', async (t) => {
     const { tmp, versions } = await setup(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     await versions.create('art', 'manual'); // v1: no session, no comments
 
     // WP1's state.json is the truth for service-owned fields; simulate a later link + comment.
@@ -244,7 +244,7 @@ describe('versions', () => {
       'art/.chamber/state.json',
       JSON.stringify({
         version: 1,
-        kind: 'artifact',
+        kind: 'page',
         created: '2026-10-26T10:00:00.000Z',
         brief: '',
         sessionId: 'ses_now',
@@ -272,7 +272,7 @@ describe('versions', () => {
 
   test('restoring the newest version is a no-op that still answers the version', async (t) => {
     const { tmp, versions } = await setup(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     const v1 = await versions.create('art', 'manual');
     assert.ok(v1);
     const result = await versions.restore('art', 'v1');
@@ -283,7 +283,7 @@ describe('versions', () => {
 
   test('diff against current and against another version', async (t) => {
     const { tmp, versions } = await setup(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     await versions.create('art', 'manual'); // v1
     await tmp.write('art/index.html', '<p>changed</p>');
     await tmp.write('art/added.txt', 'new');
@@ -328,7 +328,7 @@ describe('versions', () => {
 
   test('unknown ids and damaged versions are refused with user-facing errors', async (t) => {
     const { tmp, versions } = await setup(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     await versions.create('art', 'manual');
     await assert.rejects(versions.restore('art', 'v9'), ApiError);
     await assert.rejects(versions.diff('art', 'nope', 'current'), ApiError);
@@ -345,7 +345,7 @@ describe('versions', () => {
 
   test('a tampered index.json cannot make restore read or write outside the design folder', async (t) => {
     const { tmp, versions } = await setup(t);
-    await tmp.writeDesign('art', artifactDesign());
+    await tmp.writeDesign('art', pageDesign());
     const created = await versions.create('art', 'manual');
     assert.ok(created);
     const index = JSON.parse(await readFile(indexFile(tmp, 'art'), 'utf8')) as { versions: { files: Record<string, string> }[] };

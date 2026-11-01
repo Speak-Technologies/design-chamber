@@ -53,14 +53,14 @@ import type {
 } from './types.ts';
 
 export const DESIGN_SCHEMA = 'design-chamber/design@1';
-/** The artifact entry file; the agent may not change it. */
+/** The page entry file; the agent may not change it. */
 export const ENTRY_FILE = 'index.html';
 export const DESIGN_JSON_FILE = 'design.json';
 
 export const VIEWPORT_LAPTOP: Readonly<Viewport> = Object.freeze({ id: 'laptop', label: 'Laptop', width: 1280, height: 800 });
 export const VIEWPORT_PHONE: Readonly<Viewport> = Object.freeze({ id: 'phone', label: 'Phone', width: 390, height: 844 });
 
-/** Canvas: Laptop + Phone. Artifact: Laptop (BRIEF defaults, SPEC §6.2). Fresh copies. */
+/** Canvas: Laptop + Phone. Page: Laptop (BRIEF defaults, SPEC §6.2). Fresh copies. */
 export const defaultViewports = (kind: DesignKind): Viewport[] =>
   kind === 'canvas' ? [{ ...VIEWPORT_LAPTOP }, { ...VIEWPORT_PHONE }] : [{ ...VIEWPORT_LAPTOP }];
 
@@ -89,7 +89,15 @@ const isFiniteNum = (value: unknown): value is number =>
   typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= BRIDGE_COORD_MAX;
 const isIntIn = (value: unknown, min: number, max: number): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
-const isKind = (value: unknown): value is DesignKind => value === 'artifact' || value === 'canvas';
+/**
+ * The one place the old kind name lives: `"artifact"` (written before pages were renamed)
+ * reads as `"page"`. Anything else that is not a kind is `null`. The writer always writes `"page"`.
+ */
+export const normalizeKind = (value: unknown): DesignKind | null => {
+  if (value === 'page' || value === 'canvas') return value;
+  if (value === 'artifact') return 'page';
+  return null;
+};
 
 /** An ISO-8601-looking timestamp that `Date.parse` accepts. */
 export const isIsoDate = (value: unknown): value is IsoDate =>
@@ -246,9 +254,9 @@ const parseViewports = (raw: Rec, kind: DesignKind, warnings: Warnings): Viewpor
 
 const parseScreens = (raw: Rec, kind: DesignKind, viewports: Viewport[], warnings: Warnings): Screen[] => {
   if (!has(raw, 'screens')) return [];
-  if (kind === 'artifact') {
+  if (kind === 'page') {
     if (Array.isArray(raw.screens) && raw.screens.length > 0) {
-      warnings.add('screens-ignored', 'screens', 'This design is an artifact, so its screen list is ignored (it shows index.html).');
+      warnings.add('screens-ignored', 'screens', 'This design is a page, so its screen list is ignored (it shows index.html).');
     }
     return [];
   }
@@ -337,13 +345,14 @@ export const normalizeDesign = (raw: unknown, options: NormalizeOptions): Normal
   }
 
   let kind: DesignKind;
+  const recordKind = normalizeKind(record.kind);
   if (options.kind) {
     kind = options.kind;
-  } else if (isKind(record.kind)) {
-    kind = record.kind;
+  } else if (recordKind !== null) {
+    kind = recordKind;
   } else {
-    kind = Array.isArray(record.screens) && record.screens.length > 0 ? 'canvas' : 'artifact';
-    warnings.add('invalid-kind', 'kind', `design.json does not say whether this is an artifact or a canvas; it is shown as ${kind === 'canvas' ? 'a canvas' : 'an artifact'}.`);
+    kind = Array.isArray(record.screens) && record.screens.length > 0 ? 'canvas' : 'page';
+    warnings.add('invalid-kind', 'kind', `design.json does not say whether this is a page or a canvas; it is shown as a ${kind}.`);
   }
 
   let title = nonEmpty(record.title, TITLE_MAX);
@@ -376,10 +385,10 @@ export const normalizeDesign = (raw: unknown, options: NormalizeOptions): Normal
   }
 
   let entry: string | null = null;
-  if (kind === 'artifact') {
+  if (kind === 'page') {
     entry = ENTRY_FILE;
     if (has(record, 'entry') && record.entry !== ENTRY_FILE) {
-      warnings.add('invalid-entry', 'entry', `An artifact always shows ${ENTRY_FILE}; the entry in design.json is ignored.`);
+      warnings.add('invalid-entry', 'entry', `A page always shows ${ENTRY_FILE}; the entry in design.json is ignored.`);
     }
   }
 
@@ -445,7 +454,9 @@ export const parseDesignJsonText = (text: string, options: NormalizeOptions): Pa
 
 /** Read state.json content. `null` when it is unusable (the store then rebuilds state from design.json). */
 export const normalizeServiceState = (raw: unknown): ServiceState | null => {
-  if (!isRec(raw) || raw.version !== STATE_JSON_VERSION || !isKind(raw.kind) || !isIsoDate(raw.created)) return null;
+  if (!isRec(raw) || raw.version !== STATE_JSON_VERSION || !isIsoDate(raw.created)) return null;
+  const kind = normalizeKind(raw.kind);
+  if (kind === null) return null;
   const check = new Warnings();
   const brief = typeof raw.brief === 'string' ? raw.brief.slice(0, BRIEF_MAX) : '';
   const sessionId = optionalString(raw, 'sessionId', SESSION_ID_MAX, check, '');
@@ -453,17 +464,20 @@ export const normalizeServiceState = (raw: unknown): ServiceState | null => {
   const presetValue = optionalString(raw, 'preset', 60, check, '');
   const preset = presetValue !== null && PRESET_ID_PATTERN.test(presetValue) ? presetValue : null;
   const comments = parseComments(raw, check);
-  return {
+  const state: ServiceState = {
     version: 1,
-    kind: raw.kind,
+    kind,
     created: raw.created,
     brief,
     sessionId,
     projectDirectory,
     preset,
-    entry: raw.kind === 'artifact' ? ENTRY_FILE : null,
+    entry: kind === 'page' ? ENTRY_FILE : null,
     comments,
   };
+  // Only a literal `true` marks a provisional seed; any other value means final.
+  if (raw.provisional === true) state.provisional = true;
+  return state;
 };
 
 /** The service-owned fields of a normalised design (used to seed state.json for a folder that had none). */
@@ -475,7 +489,7 @@ export const serviceStateOf = (design: DesignJson): ServiceState => ({
   sessionId: design.sessionId,
   projectDirectory: design.projectDirectory,
   preset: design.preset,
-  entry: design.kind === 'artifact' ? ENTRY_FILE : null,
+  entry: design.kind === 'page' ? ENTRY_FILE : null,
   comments: design.comments,
 });
 
@@ -489,21 +503,32 @@ export const applyServiceState = (design: DesignJson, state: ServiceState): Desi
   sessionId: state.sessionId,
   projectDirectory: state.projectDirectory,
   preset: state.preset,
-  entry: state.kind === 'artifact' ? ENTRY_FILE : null,
+  entry: state.kind === 'page' ? ENTRY_FILE : null,
   comments: state.comments,
 });
 
 const stateValue = (state: ServiceState, key: ServiceOwnedField): JsonValue | undefined => {
-  if (key === 'entry') return state.kind === 'artifact' ? ENTRY_FILE : undefined;
+  if (key === 'entry') return state.kind === 'page' ? ENTRY_FILE : undefined;
   // Safe: every ServiceState field is plain JSON (strings, nulls, numbers, Comment objects).
   return state[key] as unknown as JsonValue;
 };
 
 const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
-/** True when design.json's mirror of any service-owned field differs from state.json (§6.3 merge trigger). */
+/** design.json's mirror of a service-owned field; `kind` goes through the alias so an old `"artifact"` matches `"page"`. */
+const rawValue = (raw: JsonObject, key: ServiceOwnedField): unknown => {
+  if (!has(raw, key)) return undefined;
+  if (key === 'kind') return normalizeKind(raw.kind) ?? raw.kind;
+  return raw[key];
+};
+
+/**
+ * True when design.json's mirror of any service-owned field differs from state.json (§6.3 merge trigger).
+ * The old `"artifact"` alias alone is not a difference, so it never triggers a write (it is rewritten
+ * as `"page"` on the next real service write).
+ */
 export const serviceFieldsDiffer = (raw: JsonObject, state: ServiceState): boolean =>
-  SERVICE_OWNED_FIELDS.some((key) => !sameJson(has(raw, key) ? raw[key] : undefined, stateValue(state, key)));
+  SERVICE_OWNED_FIELDS.some((key) => !sameJson(rawValue(raw, key), stateValue(state, key)));
 
 /** Agent-owned values the service itself writes: a user rename, and the `updated` bump on service writes. */
 export type ServiceWrite = { title?: string; updated?: IsoDate };
@@ -560,7 +585,7 @@ export const createDesignDocument = (input: NewDesignInput): { state: ServiceSta
     sessionId: input.sessionId,
     projectDirectory: input.projectDirectory,
     preset: input.preset,
-    entry: input.kind === 'artifact' ? ENTRY_FILE : null,
+    entry: input.kind === 'page' ? ENTRY_FILE : null,
     comments: [],
   };
   const agentPart: JsonObject = {

@@ -1,6 +1,6 @@
 // Chat linkage flows (docs/SPEC.md §10): slash-command chips, new design, continue in chat,
 // send comments (incl. the outbox for a session that is not selected), session
-// reconciliation, turn snapshots, "Open as artifact", and chip clicks.
+// reconciliation, turn snapshots, "Open as page", and chip clicks.
 //
 // Host constraints these flows are shaped by: `prompt` acts on the selected session only
 // (F13); `openSession` closes the page and throws NO_SESSION for an unknown id (F12);
@@ -30,7 +30,7 @@ import type { GuestHost } from './host.ts';
 import { isServiceError, type ServiceClient } from './service-client.ts';
 
 export const PANEL_SURFACE_ID = `plugin:${CHIP_PROVIDER_ID}`;
-export const OPEN_AS_ARTIFACT_ACTION = 'open-as-artifact';
+export const OPEN_AS_PAGE_ACTION = 'open-as-page';
 export const CHIP_ID_PREFIX = 'design:';
 
 export const MESSAGES = {
@@ -40,11 +40,11 @@ export const MESSAGES = {
   startFailed: "Couldn't start a chat for this design. It is in your Designs list; try Continue in chat.",
   sendFailed: "The revision didn't reach the chat. Your comments are still open; try again.",
   nothingToSend: 'There are no open comments to send.',
-  unknownCommand: 'Design Chamber knows /design and /artifact only.',
+  unknownCommand: 'Design Chamber knows /design and /page only.',
   noSessionSelected: 'Open a chat first, then try again.',
   markFailed: 'Sent — but the comments could not be marked as sent. Resolve them by hand so they are not sent again.',
-  savedArtifact: (title: string) => `Saved as artifact “${title}”.`,
-  savedArtifactClosed: (title: string) => `Saved as artifact “${title}” — open Design Chamber to see it.`,
+  savedPage: (title: string) => `Saved as page “${title}”.`,
+  savedPageClosed: (title: string) => `Saved as page “${title}”. Open Design Chamber to see it.`,
 } as const;
 
 export type FlowErrorCode = 'no-project' | 'start-failed' | 'send-failed' | 'nothing-to-send' | 'unknown-command' | 'no-session';
@@ -150,7 +150,7 @@ export type DeliverOutboxResult = 'delivered' | 'composed' | 'none';
 export type ItemTarget = { kind: 'open-design'; slug: string };
 
 export type Flows = {
-  /** Background frame: `/design <brief>` and `/artifact <brief>` → our chip. */
+  /** Background frame: `/design <brief>` and `/page <brief>` → our chip. */
   resolveSlashCommand(request: ResolveRequest): Promise<AttachIssueRequest>;
   newDesign(input: NewDesignInput): Promise<NewDesignResult>;
   continueInChat(slug: string): Promise<ContinueResult>;
@@ -166,17 +166,17 @@ export type Flows = {
   /** POST /versions/turn, deduped per session within TURN_SNAPSHOT_DEDUPE_MS. */
   snapshotTurn(sessionId: string): Promise<void>;
   /**
-   * Message action: the message's HTML block becomes an artifact; null when it has none (toast
+   * Message action: the message's HTML block becomes a page; null when it has none (toast
    * shown). `open` leaves an open request the rail takes (see `watchOpenRequests`).
    */
-  openAsArtifact(item: GuestMessageItem, options?: { open?: boolean }): Promise<{ slug: string; title: string } | null>;
+  openAsPage(item: GuestMessageItem, options?: { open?: boolean }): Promise<{ slug: string; title: string } | null>;
   /**
-   * Background frame (`onAction`): "Open as artifact" saves the artifact, opens the rail (which
+   * Background frame (`onAction`): "Open as page" saves the page, opens the rail (which
    * takes the open request and shows the viewer) and confirms with a host toast, so the user
    * sees the result whether or not the rail was open.
    */
   runAction(item: GuestActionItem): Promise<void>;
-  /** Chip click or "Open as artifact": what to open, or null. */
+  /** Chip click or "Open as page": what to open, or null. */
   handleItem(item: GuestItem | null): Promise<ItemTarget | null>;
 
   /** Turn snapshots from `onSessionLifecycle` (every visible frame). */
@@ -191,7 +191,7 @@ export type Flows = {
   /** Open what the surface was opened for (deduped: each chip/message once). */
   watchItems(open: (target: ItemTarget) => void, onError?: (error: unknown) => void): () => void;
   /**
-   * Rail panel only: take the open request left by "Open as artifact" on mount and whenever a
+   * Rail panel only: take the open request left by "Open as page" on mount and whenever a
    * design is added (the rail may already be open), and open it.
    */
   watchOpenRequests(onAdded: (listener: () => void) => () => void, open: (target: ItemTarget) => void): () => void;
@@ -284,7 +284,7 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
 
   const flows: Flows = {
     resolveSlashCommand: async ({ command, args }) => {
-      const kind: DesignKind | null = command === 'design' ? 'canvas' : command === 'artifact' ? 'artifact' : null;
+      const kind: DesignKind | null = command === 'design' ? 'canvas' : command === 'page' ? 'page' : null;
       if (!kind) throw new FlowError('unknown-command', MESSAGES.unknownCommand);
       const ready = host.ready.get();
       try {
@@ -431,7 +431,7 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       await client.call('POST /versions/turn', { body: { sessionId } });
     },
 
-    openAsArtifact: async (item, options = {}) => {
+    openAsPage: async (item, options = {}) => {
       // Early answer for the common case; the service's 422 below stays the authority.
       if (extractHtml(item.text) === null) {
         await toast('info', MESSAGES.noHtml);
@@ -440,7 +440,7 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       try {
         const uploadId = await client.upload(item.text);
         const body = { uploadId, sessionId: item.sessionId, sessionTitle: item.sessionTitle, messageId: item.messageId, directory: item.directory };
-        return await client.call('POST /artifacts/from-message', { body: options.open ? { ...body, open: true } : body });
+        return await client.call('POST /pages/from-message', { body: options.open ? { ...body, open: true } : body });
       } catch (error) {
         if (isServiceError(error, 'no-html')) {
           await toast('info', MESSAGES.noHtml);
@@ -451,8 +451,8 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
     },
 
     runAction: async (item) => {
-      if (!isGuestMessageItem(item) || item.action !== OPEN_AS_ARTIFACT_ACTION) return;
-      const created = await flows.openAsArtifact(item, { open: true });
+      if (!isGuestMessageItem(item) || item.action !== OPEN_AS_PAGE_ACTION) return;
+      const created = await flows.openAsPage(item, { open: true });
       if (!created) return;
       let opened = true;
       try {
@@ -461,7 +461,7 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
         // No side panel here (or the rail cannot open): the toast says where to find it.
         opened = false;
       }
-      await toast('success', opened ? MESSAGES.savedArtifact(created.title) : MESSAGES.savedArtifactClosed(created.title));
+      await toast('success', opened ? MESSAGES.savedPage(created.title) : MESSAGES.savedPageClosed(created.title));
     },
 
     handleItem: async (item) => {
@@ -471,8 +471,8 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
         const slug = typeof data === 'object' && data !== null && !Array.isArray(data) ? data.slug : undefined;
         return typeof slug === 'string' && SLUG_PATTERN.test(slug) ? { kind: 'open-design', slug } : null;
       }
-      if (isGuestMessageItem(item) && item.action === OPEN_AS_ARTIFACT_ACTION) {
-        const created = await flows.openAsArtifact(item);
+      if (isGuestMessageItem(item) && item.action === OPEN_AS_PAGE_ACTION) {
+        const created = await flows.openAsPage(item);
         return created ? { kind: 'open-design', slug: created.slug } : null;
       }
       return null;
@@ -541,7 +541,7 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
     },
 
     watchItems: (open, onError) => {
-      // Messages are handled once per frame (each run would create another artifact); a chip
+      // Messages are handled once per frame (each run would create another page); a chip
       // only when it differs from the last item, since snapshots replay the current item.
       const seenMessages = new Set<string>();
       let lastKey: string | null = null;

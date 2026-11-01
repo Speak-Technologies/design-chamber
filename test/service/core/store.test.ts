@@ -106,7 +106,7 @@ describe('create', () => {
 
   test('an artifact with inline html writes index.html and is not pending', async (t) => {
     const env = await makeEnv(t);
-    const record = await env.store.create({ kind: 'artifact', title: 'Landing', html: '<!doctype html><h1>Hi</h1>' });
+    const record = await env.store.create({ kind: 'page', title: 'Landing', html: '<!doctype html><h1>Hi</h1>' });
     assert.equal(record.pending, false);
     assert.equal(record.design.entry, 'index.html');
     assert.equal(await readFile(path.join(record.path, 'index.html'), 'utf8'), '<!doctype html><h1>Hi</h1>');
@@ -118,7 +118,7 @@ describe('create', () => {
     const fromBrief = await env.store.create({ kind: 'canvas', brief: 'A pricing page\nfor coffee' });
     assert.equal(fromBrief.design.title, 'A pricing page');
     assert.equal(fromBrief.slug, 'a-pricing-page');
-    const untitled = await env.store.create({ kind: 'artifact' });
+    const untitled = await env.store.create({ kind: 'page' });
     assert.equal(untitled.design.title, 'Untitled design');
     assert.equal(untitled.slug, 'untitled-design');
 
@@ -144,7 +144,7 @@ describe('create', () => {
   test('a brief longer than the cap is truncated, and sessionId/preset/project land in state', async (t) => {
     const env = await makeEnv(t);
     const record = await env.store.create({
-      kind: 'artifact',
+      kind: 'page',
       title: 'Meta',
       brief: 'x'.repeat(5000),
       sessionId: 'ses_123',
@@ -162,14 +162,14 @@ describe('get / read tolerance', () => {
   test('state.json wins over design.json for service-owned fields', async (t) => {
     const env = await makeEnv(t);
     await env.tmp.writeDesign('liar', {
-      'design.json': { version: 1, kind: 'artifact', title: 'Agent title', created: '2026-01-01T00:00:00.000Z', updated: '2026-01-02T00:00:00.000Z', sessionId: 'ses_lie', comments: [] },
-      '.chamber/state.json': seededState({ kind: 'artifact', sessionId: 'ses_truth', created: '2026-01-01T00:00:00.000Z' }),
+      'design.json': { version: 1, kind: 'page', title: 'Agent title', created: '2026-01-01T00:00:00.000Z', updated: '2026-01-02T00:00:00.000Z', sessionId: 'ses_lie', comments: [] },
+      '.chamber/state.json': seededState({ kind: 'page', sessionId: 'ses_truth', created: '2026-01-01T00:00:00.000Z' }),
       'index.html': '<h1>hi</h1>',
     });
     const record = await env.store.get('liar');
     assert.equal(record.design.sessionId, 'ses_truth');
     assert.equal(record.design.title, 'Agent title'); // agent-owned
-    assert.equal(record.design.kind, 'artifact');
+    assert.equal(record.design.kind, 'page');
     assert.equal(record.pending, false);
   });
 
@@ -177,7 +177,7 @@ describe('get / read tolerance', () => {
     const env = await makeEnv(t);
     await env.tmp.write('bare/index.html', '<h1>bare</h1>');
     const record = await env.store.get('bare');
-    assert.equal(record.design.kind, 'artifact');
+    assert.equal(record.design.kind, 'page');
     assert.equal(record.design.title, 'bare'); // slug fallback
     assert.ok(record.warnings.some((warning) => warning.code === 'no-design-json'));
     assert.equal(record.pending, false);
@@ -186,7 +186,7 @@ describe('get / read tolerance', () => {
   test('a corrupt design.json reads with defaults and is never fatal', async (t) => {
     const env = await makeEnv(t);
     await env.tmp.write('broken/design.json', '{{{');
-    await env.tmp.write('broken/.chamber/state.json', serializeJson(seededState({ kind: 'artifact' })));
+    await env.tmp.write('broken/.chamber/state.json', serializeJson(seededState({ kind: 'page' })));
     const record = await env.store.get('broken');
     assert.equal(record.design.title, 'broken');
     assert.ok(record.warnings.some((warning) => warning.code === 'invalid-json'));
@@ -247,7 +247,7 @@ describe('patch', () => {
 describe('comments (§6.2, service-owned)', () => {
   test('add lands in state.json and the design.json mirror, and fires "comments"', async (t) => {
     const env = await makeEnv(t);
-    const created = await env.store.create({ kind: 'artifact', title: 'Pins' });
+    const created = await env.store.create({ kind: 'page', title: 'Pins' });
     const comment = await env.store.addComment(created.slug, {
       screen: null,
       viewport: 'laptop',
@@ -308,10 +308,10 @@ describe('comments (§6.2, service-owned)', () => {
   test('a comment on a folder without design.json creates the minimal mirror (§6.1)', async (t) => {
     const env = await makeEnv(t);
     await env.tmp.write('bare2/index.html', '<h1>bare</h1>');
-    await env.tmp.write('bare2/.chamber/state.json', serializeJson(seededState({ kind: 'artifact', entry: 'index.html' })));
+    await env.tmp.write('bare2/.chamber/state.json', serializeJson(seededState({ kind: 'page', entry: 'index.html' })));
     const comment = await env.store.addComment('bare2', { screen: null, viewport: 'laptop', anchor: commentFixture('c_x').anchor, body: 'Hello' });
     const created = await readJson(env.tmp.at('bare2/design.json'));
-    assert.equal(created.kind, 'artifact');
+    assert.equal(created.kind, 'page');
     assert.equal(created.entry, 'index.html');
     assert.equal((created.comments as { id: string }[])[0]?.id, comment.id);
     assert.equal(created.title, 'bare2'); // the slug fallback title
@@ -440,7 +440,7 @@ describe('list', () => {
   test('skips dot folders and non-slug folders, filters by q/kind, and reports summaries', async (t) => {
     const env = await makeEnv(t);
     await env.store.create({ kind: 'canvas', title: 'Alpha wall' });
-    await env.store.create({ kind: 'artifact', title: 'Beta page', html: '<h1>b</h1>' });
+    await env.store.create({ kind: 'page', title: 'Beta page', html: '<h1>b</h1>' });
     await env.tmp.write('bare-artifact/index.html', '<h1>bare</h1>'); // no design.json
     await env.tmp.write('.trash/old-thing/design.json', '{}');
     await env.tmp.write('Not A Slug/design.json', '{}');
@@ -448,7 +448,7 @@ describe('list', () => {
     const all = await env.store.list();
     assert.deepEqual(all.map((entry) => entry.slug).sort(), ['alpha-wall', 'bare-artifact', 'beta-page']);
     const bare = all.find((entry) => entry.slug === 'bare-artifact');
-    assert.equal(bare?.kind, 'artifact');
+    assert.equal(bare?.kind, 'page');
     assert.equal(bare?.pending, false);
     assert.ok(bare?.warnings.some((warning) => warning.code === 'no-design-json'));
 

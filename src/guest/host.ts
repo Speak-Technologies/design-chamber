@@ -71,7 +71,7 @@ export type GuestHost = {
   readonly ready: Observable<HostReadyContext | null>;
   readonly session: Observable<SessionSnapshot | null>;
   readonly directory: Observable<string | null>;
-  /** The item this surface was opened for (our chip, or a message for "Open as artifact"). */
+  /** The item this surface was opened for (our chip, or a message for "Open as page"). */
   readonly item: Observable<GuestItem | null>;
   onLifecycle(listener: (event: SessionLifecycleEvent) => void): () => void;
   /** Resolves with the first ready snapshot. */

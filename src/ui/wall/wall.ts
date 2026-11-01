@@ -206,7 +206,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     const area = fitArea(size(), options.coveredRight?.() ?? 0);
     const padding = options.compact ? 16 : area.padding;
     const next = bounds.w > 0 && bounds.h > 0 ? fitBox({ x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h }, area, { padding }) : { ...DEFAULT_CAMERA };
-    return detail.design.kind === 'artifact' ? alignTop(next, layout.bounds, padding) : next;
+    return detail.design.kind === 'page' ? alignTop(next, layout.bounds, padding) : next;
   };
 
   const fit = (): void => {
@@ -241,7 +241,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
       if (!board.live) append(inner, icon('layers', 20), h('p', { class: 'dc-placeholder-title' }, 'Paused'), h('p', { class: 'dc-placeholder-sub' }, 'Off screen. Pan here to load it.'));
       else mountSpinner(inner, { label: 'Loading…' });
     } else if (state === 'loading') {
-      mountSpinner(inner, { label: `Loading ${board.art.screen?.title ?? 'artifact'}…` });
+      mountSpinner(inner, { label: `Loading ${board.art.screen?.title ?? 'page'}…` });
     } else if (state === 'missing') {
       append(
         inner,
@@ -404,7 +404,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
   const rebuildLayout = (): void => {
     const visible = override ? [override] : detail.design.viewports.filter((viewport) => !hidden.has(viewport.id));
     const { design } = detail;
-    const rows = design.kind === 'artifact' ? [{ id: null, title: design.title }] : design.screens.map((screen) => ({ id: screen.id, title: screen.title, ...(screen.viewports ? { viewports: screen.viewports } : {}) }));
+    const rows = design.kind === 'page' ? [{ id: null, title: design.title }] : design.screens.map((screen) => ({ id: screen.id, title: screen.title, ...(screen.viewports ? { viewports: screen.viewports } : {}) }));
     const wall = layoutWall(rows, visible);
     layout = {
       boards: wall.artboards.map((cell) => ({

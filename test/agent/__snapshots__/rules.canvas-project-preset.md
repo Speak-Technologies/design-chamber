@@ -105,7 +105,7 @@ Schema `design-chamber/design@1`. The extension and you both write this file, so
 | Key | Owner | Rule |
 |---|---|---|
 | `version` | extension | Always `1`. |
-| `kind` | extension | `"canvas"` or `"artifact"`, fixed at creation. |
+| `kind` | extension | `"canvas"` or `"page"`, fixed at creation. |
 | `title` | you | 1–120 characters. The user may rename it. |
 | `created` | extension | Never change. |
 | `updated` | you | ISO-8601 UTC time. Set it on every change you make to the design. |

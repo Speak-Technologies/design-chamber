@@ -22,20 +22,20 @@ const design = (over: Partial<DesignSummary> & Pick<DesignSummary, 'slug'>): Des
 
 const set = [
   design({ slug: 'coffee', title: 'Coffee subscription', updated: '2026-10-26T10:00:00.000Z', created: '2026-10-20T10:00:00.000Z' }),
-  design({ slug: 'invoice', title: 'Invoice template', kind: 'artifact', screenCount: 0, updated: '2026-10-25T10:00:00.000Z', created: '2026-10-25T09:00:00.000Z' }),
+  design({ slug: 'invoice', title: 'Invoice template', kind: 'page', screenCount: 0, updated: '2026-10-25T10:00:00.000Z', created: '2026-10-25T09:00:00.000Z' }),
   design({ slug: 'onboarding', title: 'Onboarding', pending: true, updated: '2026-10-27T10:00:00.000Z', created: '2026-10-10T10:00:00.000Z' }),
 ];
 
 test('filterDesigns narrows by tab and by a case-insensitive title or slug match', () => {
-  assert.deepEqual(filterDesigns(set, '', 'artifact').map((d) => d.slug), ['invoice']);
+  assert.deepEqual(filterDesigns(set, '', 'page').map((d) => d.slug), ['invoice']);
   assert.deepEqual(filterDesigns(set, 'COFFEE', 'all').map((d) => d.slug), ['coffee']);
   assert.deepEqual(filterDesigns(set, 'on', 'canvas').map((d) => d.slug), ['coffee', 'onboarding']);
   assert.deepEqual(filterDesigns(set, '  ', 'all'), set);
 });
 
 test('tabCounts follow the search so a tab never counts rows the search hides', () => {
-  assert.deepEqual(tabCounts(set, ''), { all: 3, canvas: 2, artifact: 1 });
-  assert.deepEqual(tabCounts(set, 'invoice'), { all: 1, canvas: 0, artifact: 1 });
+  assert.deepEqual(tabCounts(set, ''), { all: 3, canvas: 2, page: 1 });
+  assert.deepEqual(tabCounts(set, 'invoice'), { all: 1, canvas: 0, page: 1 });
 });
 
 test('sortDesigns orders by updated/created newest first and by title A–Z, without mutating the input', () => {
@@ -55,7 +55,7 @@ test('emptyKind tells "nothing written yet" from "the search hides everything"',
 test('kindSummary and rowAriaLabel use the glossary words and singular/plural correctly', () => {
   assert.equal(kindSummary(design({ slug: 'a', screenCount: 1 })), 'Canvas · 1 screen');
   assert.equal(kindSummary(design({ slug: 'a', screenCount: 3 })), 'Canvas · 3 screens');
-  assert.equal(kindSummary(design({ slug: 'a', kind: 'artifact' })), 'Artifact');
+  assert.equal(kindSummary(design({ slug: 'a', kind: 'page' })), 'Artifact');
   assert.equal(rowAriaLabel(design({ slug: 'a', title: 'A', pending: true, openComments: 2 })), 'A, Canvas · 3 screens, waiting for the agent, 2 open comments');
 });
 

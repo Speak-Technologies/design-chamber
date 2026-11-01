@@ -9,7 +9,7 @@ import { client, flows, host, store } from '../guest.ts';
 import { errorText, h } from './dom.ts';
 import { btn, confirmDialog, openSheet, type MenuEntry } from './kit.ts';
 
-export type DesignRef = { slug: string; title: string; kind: 'canvas' | 'artifact'; sessionId: string | null };
+export type DesignRef = { slug: string; title: string; kind: 'canvas' | 'page'; sessionId: string | null };
 
 export type ActionContext = {
   /** Element that sheets and dialogs mount into. */

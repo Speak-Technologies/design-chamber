@@ -64,5 +64,5 @@ test('M2 — folders the agent started (index.html only, screens/ only) and serv
 
   const listed = (await store.list()).map((summary) => summary.slug).sort();
   assert.deepEqual(listed, ['html-first', created.slug, 'screens-first'].sort());
-  assert.equal((await store.get('html-first')).design.kind, 'artifact');
+  assert.equal((await store.get('html-first')).design.kind, 'page');
 });
