@@ -1,6 +1,6 @@
 # Design Chamber
 
-**Design canvases and HTML artifacts, inside OpenChamber.** Ask your own chat agent for a
+**Design canvases and HTML pages, inside OpenChamber.** Ask your own chat agent for a
 design; it writes plain files to `~/Documents/Designs`; Design Chamber renders them live in a
 rail panel and a full-screen page — with a pannable multi-screen wall, element-anchored comment
 pins, version history and export.
@@ -15,7 +15,7 @@ pins, version history and export.
 - A **Claude-Design-style canvas**: an infinite wall where every screen of a design sits next
   to every device size you care about (Laptop, Phone, …) as live artboards. Edit mode to pin
   comments, Play mode to click through the prototype.
-- **Claude-artifacts-style HTML pages**: one self-contained page, rendered like a browser tab,
+- **Pages**: one self-contained HTML page shown full screen like a browser tab (no wall),
   exportable as a ZIP or a single HTML file.
 - **Inside OpenChamber.** No external browser window, no dev server. A rail panel lists your
   designs; a full-screen page opens them. Colours follow your OpenChamber theme, light or dark.
@@ -36,7 +36,7 @@ to, and `?` means I couldn't confirm it. Corrections welcome.
 | Where the files live | Your disk: `~/Documents/Designs/<slug>/` | In the conversation / your Claude account | In the product |
 | Multi-screen, multi-viewport canvas | ✅ screens × viewports wall, pan/zoom | — (one artifact) | ✅ multi-artboard canvas |
 | Click-through prototype | ✅ Play mode | partial (the page's own JS runs) | ✅ |
-| Element-anchored comments | ✅ pins on canvases **and** artifacts; send to chat as one revision request | — | ✅ pinned comments |
+| Element-anchored comments | ✅ pins on canvases **and** pages; send to chat as one revision request | — | ✅ pinned comments |
 | Versions | ✅ auto + after each agent turn; view, compare (split), restore | ✅ per-artifact version selector | ? |
 | Export | ZIP (HTML + assets) · single-file HTML | copy / download the code | PDF, image and others ? |
 | Design system / project rules | Reads your project's `DESIGN.md`, tokens, `AGENTS.md`/`CLAUDE.md` first; 10 style presets; per-design `DESIGN.md` + `tokens.css` | — | Hosted design-system artifact |
@@ -66,9 +66,9 @@ Chromium (for PNG thumbnails — without one, the library uses live previews).
    ```
    Your agent reads your project's design rules, may ask a few questions, then writes the
    files. The design appears in the panel and starts rendering the moment its first file lands.
-4. **Or just a page:** `/artifact a one-page repair-cost estimator widget`.
+4. **Or just a page:** `/page a one-page repair-cost estimator widget`.
 5. **Already have HTML in a chat?** On an assistant message that contains an HTML code block,
-   use the **⋯** menu → **Open as artifact**. It's saved into Designs and opens in the viewer.
+   use the **⋯** menu → **Open as page**. It's saved into Designs and opens in the viewer.
 6. **Go full screen:** the rail viewer is compact; for the full library and wall use OpenChamber's
    **sidebar → Extension pages → Design Chamber**. (Extensions can't open their own full-screen
    page from code, so the rail points you there.)
@@ -102,14 +102,23 @@ recommending **Laptop 1280×800 + Phone 390×844**. Each screen × viewport beco
 `minimal-saas`, `brutalist`, `warm-craft`, `data-dense-dashboard`, `playful`, `luxury`,
 `technical-mono`, `poster-print`, `nocturne`. Your project's own rules still outrank a preset.
 
-**Canvas or artifact?** A **canvas** is a wall of several screens (a flow, a responsive set, two
-directions) at one or more viewports. An **artifact** is one self-contained HTML page — a widget,
-a landing page, a card. Use `/design` for the first, `/artifact` for the second.
+**Canvas or page?** A **canvas** is an infinite wall of several screens (a flow, a responsive set,
+two directions) at one or more viewports, like Claude Design. A **page** is one self-contained HTML
+page shown full screen like a browser tab: a widget, a landing page, a card. Use `/design` for the
+first and `/page` for the second. A very tall page made of many board-like sections works better
+as a canvas with one screen per board.
+
+**When you forget the slash command.** `/design` and `/page` only run when they start the
+message. So agents can still find their way, Design Chamber keeps an `AGENTS.md` guide at the root
+of your designs folder (it never overwrites one you edited), and **Settings → Help your agent find
+your designs** can install a `design-chamber` skill for OpenCode (only when you click) or give you
+lines to paste into your own `AGENTS.md`. Loose `.html` files dropped straight into the designs
+folder show a banner offering to import them as pages.
 
 **Commenting with pins.** In **Edit** mode click any element, write a note, and a numbered pin
 is dropped on it (the element's selector and text travel with the comment, so it survives edits;
 if the element moved or vanished the pin shows dashed and is listed under *Detached*). Pins work
-on artifacts too. Open **Comments** and press **Send N comments to chat** — all of them go to the
+on pages too. Open **Comments** and press **Send N comments to chat** — all of them go to the
 design's linked chat as one revision request. Use **Play** to click through the prototype.
 
 **Versions.** A snapshot is saved automatically after a quiet period and after each agent turn.
@@ -117,7 +126,7 @@ In **Versions** you can **View** an old one, **Compare** it with the current des
 splits version | current, with the list of changed files), or **Restore** it — the current state
 is saved as a version first, so a restore is never destructive.
 
-**Exports.** From an artifact: **Export → Download ZIP** (HTML + assets) or **Download
+**Exports.** From a page: **Export → Download ZIP** (HTML + assets) or **Download
 single-file HTML** (assets inlined). From a canvas: **⋯ → Export ZIP / Export screen as HTML**.
 Files land in `~/Downloads` and a toast offers **Show in folder**. **Copy ▾** copies the HTML.
 
@@ -152,14 +161,14 @@ moved; earlier folders are listed with **Switch back**. **Use default** returns 
 
 | | |
 |---|---|
-| ![Library (dark theme): grid of design cards with thumbnails, kind badges and search, tabs and sort](docs/img/library-dark.png) | ![Rail panel in dark theme: list of three designs with thumbnails, search and All / Canvases / Artifacts tabs](docs/img/rail-list-dark.png) |
-| **Library** (full-screen page, light theme): thumbnail cards, search, All / Canvases / Artifacts, sort. | **Rail list** (320–480 px, dark): the same designs, compact. |
+| ![Library (dark theme): grid of design cards with thumbnails, kind badges and search, tabs and sort](docs/img/library-dark.png) | ![Rail panel in dark theme: list of three designs with thumbnails, search and All / Canvases / Pages tabs](docs/img/rail-list-dark.png) |
+| **Library** (full-screen page, light theme): thumbnail cards, search, All / Canvases / Pages, sort. | **Rail list** (320–480 px, dark): the same designs, compact. |
 | ![The wall in light theme with pins 1 and 2 on the Landing and Prices laptop artboards](docs/img/wall-light.png) | ![Rail viewer in light theme: the compact canvas wall with a dashed detached pin and the "Full screen: sidebar → Extension pages" hint](docs/img/rail-viewer-light.png) |
 | **The wall in Edit mode, light theme.** Screens are rows, viewports are columns; click an element to pin a comment. | **Compact viewer in the rail.** Same wall, fit to width; a dashed pin means its element moved. |
-| ![Versions: split compare of v16 against the current design with a divider on every artboard and a list of changed files](docs/img/versions-compare.png) | ![Artifact viewer with the Export menu open: Download ZIP (HTML + assets) and Download single-file HTML (assets inlined)](docs/img/artifact-export-menu.png) |
-| **Versions → Compare.** Each artboard splits version vs. current; changed files are listed; Restore saves the current state first. | **Artifact viewer + Export menu**: ZIP or single-file HTML; Comment mode, Versions, Copy, Continue in chat. |
-| ![An assistant message's ⋯ menu with Copy link, Save as image, Save as plan and Open as artifact](docs/img/open-as-artifact-action.png) | ![Settings sheet: Designs folder, earlier folders, browser for thumbnails and the copyable opencode.json permission snippet](docs/img/settings.png) |
-| **Open as artifact** on any assistant message with an HTML block. | **Settings**: designs folder, thumbnail browser, and the `opencode.json` snippet. |
+| ![Versions: split compare of v16 against the current design with a divider on every artboard and a list of changed files](docs/img/versions-compare.png) | ![Page viewer with the Export menu open: Download ZIP (HTML + assets) and Download single-file HTML (assets inlined)](docs/img/artifact-export-menu.png) |
+| **Versions → Compare.** Each artboard splits version vs. current; changed files are listed; Restore saves the current state first. | **Page viewer + Export menu**: ZIP or single-file HTML; Comment mode, Versions, Copy, Continue in chat. |
+| ![An assistant message's ⋯ menu with Copy link, Save as image, Save as plan and Open as page (older screenshot shows the previous name)](docs/img/open-as-artifact-action.png) | ![Settings sheet: Designs folder, earlier folders, browser for thumbnails and the copyable opencode.json permission snippet](docs/img/settings.png) |
+| **Open as page** on any assistant message with an HTML block. | **Settings**: designs folder, thumbnail browser, and the `opencode.json` snippet. |
 
 ## Keyboard shortcuts on the wall
 
@@ -181,9 +190,9 @@ moved; earlier folders are listed with **Switch back**. **Use default** returns 
 ```text
 ~/Documents/Designs/
 └── <slug>/                  one folder per design (slug: lowercase letters, digits, hyphens)
-    ├── design.json          kind ("artifact" | "canvas"), title, dates, linked chat,
+    ├── design.json          kind ("page" | "canvas"), title, dates, linked chat,
     │                        viewports, screens, comments
-    ├── index.html           artifact entry page
+    ├── index.html           page entry file
     ├── screens/<id>.html    canvas screens (one file per screen)
     ├── assets/              images, fonts, CSS, scripts the pages use (relative paths)
     ├── DESIGN.md            this design's design system, in words
@@ -203,22 +212,23 @@ moved; earlier folders are listed with **Switch back**. **Use default** returns 
 - **Agent-written HTML is untrusted.** It renders only in sandboxed iframes (never
   `allow-scripts` together with `allow-same-origin`), cut off from the host and from the token.
 - **Designs get no network.** Remote scripts, web fonts and remote images are blocked — that's
-  what the "N remote" badge and the artifact banner tell you. Local files and inline JS work.
+  what the "N remote" badge and the remote-files banner tell you (with an **Ask the agent** button). Local files and inline JS work.
 - Every path is resolved and checked to stay **inside the Designs folder** before use.
 - Nothing leaves your machine except what *your chat model* sees (your brief, comments you send,
   the files your agent reads). Design Chamber itself uploads nothing.
-- It never edits your OpenCode/OpenChamber config.
+- It never edits your OpenCode/OpenChamber config. The one write outside the designs folder is
+  the optional `design-chamber` skill, and only when you click **Install** in Settings.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| Cards show a live preview instead of a PNG thumbnail | No Chrome, Edge or Chromium was found. **Settings → Browser for thumbnails → Use a different browser** → paste the path → **Test and save**. |
+| Cards show a live preview instead of a PNG thumbnail (Settings says **Live previews**) | No Chrome, Edge or Chromium was found. **Settings → Browser for thumbnails → Use a different browser** → paste the path → **Test and save**. |
 | The agent asks permission every time it writes a file | Add the `external_directory` snippet from [Let the agent write to Designs](#let-the-agent-write-to-designs) to your `opencode.json`. |
 | An artboard says *screens/x.html not written yet* | `design.json` lists a screen the agent hasn't written (or has misnamed). It appears the moment the file lands; if not, ask the agent to finish or fix the screen file. |
 | A design looks unstyled / images or fonts missing, or a "N remote" badge appears | The page references a CDN, web font or remote image — blocked by design. Ask the agent to inline the CSS and put fonts and images in `assets/` with relative paths. |
 | My designs vanished | The Designs folder was changed. **Settings → Earlier folders → Switch back.** |
-| A design I created by hand isn't listed | A folder needs `design.json` (or at least an `index.html`, shown as an artifact with a warning). Hidden folders starting with `.` are ignored. |
+| A design I created by hand isn't listed | A folder needs `design.json` (or at least an `index.html`, shown as a page with a warning). Loose `.html` files in the root get an import banner instead. Hidden folders starting with `.` are ignored. |
 | Nothing happens after `/design` | Make sure the extension's permissions were approved and OpenChamber is ≥ 2.5.0; check **Settings → Extensions**. |
 
 More known limits: [`documentation/known-issues.md`](documentation/known-issues.md).

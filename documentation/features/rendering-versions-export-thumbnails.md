@@ -46,7 +46,7 @@ thumbnail; `design.json` without comments) as content-addressed objects:
 Because a guest frame cannot download files, the service writes them itself:
 - **ZIP** — the whole design folder (without `design.json`) under `<slug>/`;
 - **single-file HTML** — the bundled document with every asset inlined (no bridge marker),
-  for an artifact or one chosen canvas screen.
+  for a page or one chosen canvas screen.
 Files land in `~/Downloads` (or a configured downloads folder, falling back to
 `<designs root>/.exports` when it cannot be created), named `<slug>.zip` /
 `<slug>[-<screen>].html` with ` (2)`, ` (3)`… on collisions. **Show in folder** then opens the
