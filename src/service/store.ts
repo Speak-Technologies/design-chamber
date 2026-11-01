@@ -12,6 +12,13 @@
 // is restored. A design.json that fails to parse is NEVER written over (WP0 deviation 8);
 // a missing one is created on the first service-side mutation (§6.1).
 //
+// Take-over (§6.3 P1–P5, documentation/specs/agent-guidance-and-pages.md §3.2): an agent may
+// write the HTML before design.json. Then state.json is seeded `provisional` from the files
+// (P1), comments on it stay in state.json and no design.json is invented (P3), and when the
+// agent's design.json parses its values are adopted instead of overwritten (P2). A rename or
+// link claims the folder for the user and ends the provisional phase (P4). While nothing is
+// written and nobody commented, the agent may still switch the kind (P5).
+//
 // All writes are tmp+rename (`writeFileAtomic`); every path from a slug goes through
 // `resolveInside`; per-slug locks serialise read-modify-write cycles.
 
@@ -21,11 +28,13 @@ import path from 'node:path';
 
 import type { CreateCommentBody, PatchCommentBody, PatchDesignBody } from '../shared/api.ts';
 import {
+  adoptAgentFields,
   applyServiceState,
   createDesignDocument,
   DESIGN_JSON_FILE,
   ENTRY_FILE,
   mergeServiceFields,
+  normalizeKind,
   normalizeServiceState,
   parseDesignJsonText,
   screenFileOf,
@@ -76,10 +85,12 @@ const fileStatus = async (file: string): Promise<FileStatus> => {
 /** A design read from disk, including the raw file the mirror merge must preserve. */
 type InternalRead = {
   record: DesignRecord;
-  /** Parsed design.json object, or null when missing/unparseable. */
+  /** Parsed design.json object (`{}` when the file is missing), or null when unparseable. */
   raw: JsonObject | null;
   /** design.json text, or null when the file is missing. */
   designText: string | null;
+  /** design.json normalised on its own, before state.json's fields go on top (what adoption reads). */
+  agentDesign: DesignJson;
   /** False when state.json was missing or corrupt (state then comes from design.json). */
   stateFromDisk: boolean;
 };
@@ -170,7 +181,12 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     const entryStatus = await fileStatus(path.join(dir, ENTRY_FILE));
     // §6.1: a folder without design.json but with index.html is a page.
     const kind: DesignKind = state?.kind ?? (entryStatus.exists ? 'page' : 'canvas');
-    const parsed = parseDesignJsonText(designText ?? '{}', { kind, fallbackTitle: slug, fallbackTime: folderTime });
+    const options = { fallbackTitle: slug, fallbackTime: folderTime };
+    let parsed = parseDesignJsonText(designText ?? '{}', { ...options, kind });
+    // No state yet: the agent's own valid kind beats the file-based guess, so a page whose
+    // design.json lands before its index.html is adopted as a page, not turned into a canvas.
+    const agentKind = state === null && designText !== null && parsed.raw !== null ? normalizeKind(parsed.raw.kind) : null;
+    if (agentKind !== null && agentKind !== kind) parsed = parseDesignJsonText(designText ?? '{}', { ...options, kind: agentKind });
     const warnings: DesignWarning[] =
       designText === null
         ? [{ code: 'no-design-json', message: 'This design has no design.json yet — the agent may still write it.' }, ...parsed.warnings]
@@ -193,6 +209,7 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
       record: { slug, path: dir, design, state: finalState, extra: parsed.extra, pending, files, warnings },
       raw: parsed.raw,
       designText,
+      agentDesign: parsed.design,
       stateFromDisk: state !== null,
     };
   };
@@ -214,10 +231,17 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
    * otherwise — that is what keeps the watcher loop closed.
    */
   const writeStateAndMirror = async (slug: string, read: InternalRead, state: ServiceState, write: ServiceWrite | null): Promise<void> => {
-    const dir = read.record.path;
-    await writeFileAtomic(stateFileOf(dir), serializeJson(state as unknown as JsonValue)); // Safe: ServiceState is plain JSON.
+    await writeState(read.record.path, state);
+    await writeMirror(slug, read, state, write);
+  };
 
-    const designPath = path.join(dir, DESIGN_JSON_FILE);
+  const writeState = async (dir: string, state: ServiceState): Promise<void> => {
+    await writeFileAtomic(stateFileOf(dir), serializeJson(state as unknown as JsonValue)); // Safe: ServiceState is plain JSON.
+  };
+
+  /** The design.json half of `writeStateAndMirror` (state.json already written or unchanged). */
+  const writeMirror = async (slug: string, read: InternalRead, state: ServiceState, write: ServiceWrite | null): Promise<void> => {
+    const designPath = path.join(read.record.path, DESIGN_JSON_FILE);
     let text = read.designText;
     let raw = read.raw;
     // The agent may rewrite design.json at any moment: the mirror replaces the file only while
@@ -225,9 +249,10 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     for (let attempt = 0; attempt < MIRROR_ATTEMPTS; attempt += 1) {
       let bytes: string;
       if (text === null) {
-        // The file is missing: reconcile never invents one, but a service-side mutation
-        // writes the minimal design.json (§6.1).
-        if (write === null) return;
+        // The file is missing: reconcile never invents one, and neither does a mutation on a
+        // provisional design (P3: the agent's own design.json is on its way). Otherwise a
+        // service-side mutation writes the minimal design.json (§6.1).
+        if (write === null || state.provisional === true) return;
         bytes = serializeJson(mergeServiceFields(agentPartOf(read.record.design, write.updated ?? now().toISOString()), state, write));
       } else {
         if (raw === null) {
@@ -310,16 +335,48 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
         if (error instanceof ApiError && error.code === 'not-found') return;
         throw error;
       }
-      const dir = read.record.path;
-      let state = read.record.state;
-      if (!read.stateFromDisk) {
-        // state.json missing or corrupt → design.json is the only source: adopt its
-        // service-owned fields (comments included) and rebuild state.json.
-        state = serviceStateOf(read.record.design);
-        await writeFileAtomic(stateFileOf(dir), serializeJson(state as unknown as JsonValue)); // Safe: ServiceState is plain JSON.
-      }
-      await writeStateAndMirror(slug, { ...read, record: { ...read.record, state } }, state, null);
+      const state = resolveState(slug, read, true);
+      // state.json is rewritten only when it changes: two reconciles of an unchanged folder
+      // write nothing at all.
+      if (!read.stateFromDisk || state !== read.record.state) await writeState(read.record.path, state);
+      await writeMirror(slug, withState(read, state), state, null);
     });
+  };
+
+  const withState = (read: InternalRead, state: ServiceState): InternalRead =>
+    state === read.record.state ? read : { ...read, record: { ...read.record, state } };
+
+  /**
+   * The state the files on disk call for (§6.3, P1/P2/P5); `read.record.state` itself when
+   * nothing changes. `kindSwitch` (P5) runs on reconcile only: a comment or rename made on a
+   * page is built on that page.
+   */
+  const resolveState = (slug: string, read: InternalRead, kindSwitch: boolean): ServiceState => {
+    const { record } = read;
+    // The agent's design.json, when it exists and parses (`raw` is `{}` for a missing file).
+    const raw = read.designText === null ? null : read.raw;
+    if (!read.stateFromDisk) {
+      // state.json missing or corrupt. With a usable design.json that is the only source: adopt
+      // its service-owned fields (comments included). Without one (missing, or mid-write) the
+      // state is guessed from the files and stays provisional until the agent's file lands (P1).
+      const seeded = serviceStateOf(record.design);
+      return raw === null ? { ...seeded, provisional: true } : seeded;
+    }
+    if (raw === null || (record.state.provisional !== true && !kindSwitch)) return record.state;
+    const adopted = adoptAgentFields({ state: record.state, raw, normalized: read.agentDesign, pending: record.pending });
+    if (adopted === null) return record.state;
+    if (record.state.provisional === true) {
+      log.info('store.design-adopted', { slug, message: "The agent's design.json replaced the values guessed from its files." });
+    } else {
+      log.info('store.kind-switched', { slug, message: `The agent changed this design to a ${adopted.kind} before writing any screen.` });
+    }
+    return adopted;
+  };
+
+  /** A design read for a user mutation: provisional state seeded or adopted first (P1, P2). */
+  const readSettled = async (slug: string): Promise<InternalRead> => {
+    const read = await readInternal(slug);
+    return withState(read, resolveState(slug, read, false));
   };
 
   if (hub !== undefined) {
@@ -423,8 +480,10 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     async patch(slug, patchBody: PatchDesignBody) {
       const nowIso = now().toISOString();
       const read = await withLock(slug, async () => {
-        const current = await readInternal(slug);
-        let state = current.record.state;
+        const current = await readSettled(slug);
+        // P4: a rename or link claims a provisional folder for the user; from here on it is a
+        // normal design and the minimal design.json is written as for any other.
+        let state = finalOf(current.record.state);
         if (patchBody.sessionId !== undefined) state = { ...state, sessionId: patchBody.sessionId };
         if (patchBody.projectDirectory !== undefined) state = { ...state, projectDirectory: patchBody.projectDirectory };
         const write: ServiceWrite = { updated: nowIso };
@@ -455,7 +514,7 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     async addComment(slug, input: CreateCommentBody) {
       const nowIso = now().toISOString();
       const result = await withLock(slug, async () => {
-        const read = await readInternal(slug);
+        const read = await readSettled(slug);
         const state = read.record.state;
         if (state.comments.length >= COMMENTS_MAX) {
           throw new ApiError('conflict', `This design already carries ${COMMENTS_MAX} comments — resolve or delete some before adding more.`);
@@ -482,7 +541,7 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     async updateComment(slug, id, patchBody: PatchCommentBody) {
       const nowIso = now().toISOString();
       const result = await withLock(slug, async () => {
-        const read = await readInternal(slug);
+        const read = await readSettled(slug);
         const state = read.record.state;
         const index = state.comments.findIndex((comment) => comment.id === id);
         if (index === -1) throw new ApiError('not-found', 'That comment does not exist.');
@@ -503,7 +562,7 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     async deleteComment(slug, id) {
       const nowIso = now().toISOString();
       await withLock(slug, async () => {
-        const read = await readInternal(slug);
+        const read = await readSettled(slug);
         const state = read.record.state;
         const comments = state.comments.filter((comment) => comment.id !== id);
         if (comments.length === state.comments.length) throw new ApiError('not-found', 'That comment does not exist.');
@@ -515,7 +574,7 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     async markSent(slug, ids, version) {
       const nowIso = now().toISOString();
       const marked = await withLock(slug, async () => {
-        const read = await readInternal(slug);
+        const read = await readSettled(slug);
         const state = read.record.state;
         const wanted = new Set(ids);
         const found: Comment[] = [];
@@ -540,6 +599,14 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     reconcile,
   };
   return store;
+};
+
+/** The state without the provisional flag (P4). */
+const finalOf = (state: ServiceState): ServiceState => {
+  if (state.provisional !== true) return state;
+  const next: ServiceState = { ...state };
+  delete next.provisional;
+  return next;
 };
 
 const exists = async (target: string): Promise<boolean> => {

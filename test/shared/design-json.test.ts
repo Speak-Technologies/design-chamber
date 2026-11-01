@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
 import {
+  adoptAgentFields,
   applyServiceState,
   createDesignDocument,
   mergeServiceFields,
@@ -18,6 +19,7 @@ import {
   VIEWPORT_PHONE,
   type NormalizeOptions,
 } from '../../src/shared/design-json.ts';
+import { COMMENTS_MAX } from '../../src/shared/limits.ts';
 import type { JsonObject, ServiceState } from '../../src/shared/types.ts';
 
 const OPTS: NormalizeOptions = { fallbackTitle: 'my-slug', fallbackTime: '2026-01-01T00:00:00.000Z' };
@@ -490,5 +492,100 @@ describe('provisional state (service-owned, never mirrored)', () => {
     assert.equal(serviceFieldsDiffer(merged, base), false);
     const { design } = normalizeDesign(merged, OPTS);
     assert.equal(Object.hasOwn(applyServiceState(design, provisional), 'provisional'), false);
+  });
+});
+
+describe('adoptAgentFields (take-over without clobbering, §6.3 P2 and P5)', () => {
+  const seed: ServiceState = {
+    version: 1,
+    kind: 'page',
+    created: '2026-11-01T09:00:00.000Z',
+    brief: '',
+    sessionId: null,
+    projectDirectory: null,
+    preset: null,
+    entry: 'index.html',
+    comments: [],
+  };
+  const provisional: ServiceState = { ...seed, provisional: true };
+  // What the store passes: the agent's file normalised with the state's kind as authority.
+  const adopt = (state: ServiceState, raw: JsonObject, pending = false): ServiceState | null =>
+    adoptAgentFields({ state, raw, normalized: normalizeDesign(raw, { ...OPTS, kind: state.kind }).design, pending });
+
+  test('P2: a provisional state takes the agent\'s kind, created, brief, session, project and preset, and drops the flag', () => {
+    const raw: JsonObject = { kind: 'canvas', created: T0, brief: 'A calmer checkout', sessionId: 'ses_abc', projectDirectory: '/home/me/shop', preset: 'minimal-saas' };
+    const adopted = adopt(provisional, raw);
+    assert.deepEqual(adopted, {
+      version: 1,
+      kind: 'canvas',
+      created: T0,
+      brief: 'A calmer checkout',
+      sessionId: 'ses_abc',
+      projectDirectory: '/home/me/shop',
+      preset: 'minimal-saas',
+      entry: null,
+      comments: [],
+    });
+    assert.equal(Object.hasOwn(adopted ?? {}, 'provisional'), false);
+    // The merge that follows only adds missing keys: the agent's values are already the state's.
+    const merged = mergeServiceFields(raw, adopted ?? provisional);
+    for (const key of ['kind', 'created', 'brief', 'sessionId', 'projectDirectory', 'preset'] as const) assert.equal(merged[key], raw[key], key);
+  });
+
+  test('P2: "artifact" adopts as page; a missing or unknown kind keeps the normalised (file-based) kind', () => {
+    assert.equal(adopt(provisional, { kind: 'artifact' })?.kind, 'page');
+    assert.equal(adopt({ ...provisional, kind: 'canvas', entry: null }, { brief: 'x' })?.kind, 'canvas');
+    const unknown = adopt(provisional, { kind: 'poster' });
+    assert.equal(unknown?.kind, 'page');
+    assert.equal(unknown?.entry, 'index.html');
+  });
+
+  test('P2: invalid agent values become the normalised ones', () => {
+    const adopted = adopt(provisional, { kind: 'page', sessionId: 42, created: 'yesterday', brief: ['x'], preset: 'Not A Preset' });
+    assert.equal(adopted?.sessionId, null);
+    assert.equal(adopted?.created, OPTS.fallbackTime);
+    assert.equal(adopted?.brief, '');
+    assert.equal(adopted?.preset, null);
+  });
+
+  test('P2: comments are state\'s plus the agent file\'s new ids; state wins an id clash', () => {
+    const mine = parseComment(comment('c_shared', { body: 'Mine' }));
+    const ownOnly = parseComment(comment('c_state1'));
+    assert.ok(mine && ownOnly);
+    const state: ServiceState = { ...provisional, comments: [ownOnly, mine] };
+    const adopted = adopt(state, { kind: 'page', comments: [comment('c_shared', { body: 'Agent copy' }), comment('c_agent1')] });
+    assert.deepEqual(adopted?.comments.map((entry) => [entry.id, entry.body]), [
+      ['c_state1', 'Make this shorter'],
+      ['c_shared', 'Mine'],
+      ['c_agent1', 'Make this shorter'],
+    ]);
+  });
+
+  test(`P2: the merged comment list is capped at ${COMMENTS_MAX}, state's first`, () => {
+    const full = Array.from({ length: COMMENTS_MAX }, (_unused, index) => parseComment(comment(`c_s${String(index).padStart(4, '0')}`)));
+    const stateComments = full.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    const adopted = adopt({ ...provisional, comments: stateComments }, { kind: 'page', comments: [comment('c_extra')] });
+    assert.equal(adopted?.comments.length, COMMENTS_MAX);
+    assert.equal(adopted?.comments.some((entry) => entry.id === 'c_extra'), false);
+  });
+
+  test('P5: a final, pending, uncommented design adopts a new valid kind; entry follows', () => {
+    const switched = adopt(seed, { kind: 'canvas' }, true);
+    assert.equal(switched?.kind, 'canvas');
+    assert.equal(switched?.entry, null);
+    assert.equal(Object.hasOwn(switched ?? {}, 'provisional'), false);
+    const back = adopt({ ...seed, kind: 'canvas', entry: null }, { kind: 'page' }, true);
+    assert.equal(back?.entry, 'index.html');
+  });
+
+  test('P5: otherwise state wins (written files, comments, same kind, an alias or an unknown kind)', () => {
+    const pin = parseComment(comment('c_pin1'));
+    assert.ok(pin);
+    assert.equal(adopt(seed, { kind: 'canvas' }, false), null, 'not pending');
+    assert.equal(adopt({ ...seed, comments: [pin] }, { kind: 'canvas' }, true), null, 'has a comment');
+    assert.equal(adopt(seed, { kind: 'page' }, true), null, 'same kind');
+    assert.equal(adopt(seed, { kind: 'artifact' }, true), null, 'the alias is the same kind');
+    assert.equal(adopt(seed, { kind: 'poster' }, true), null, 'unknown kind');
+    assert.equal(adopt(seed, { brief: 'only a brief change' }, true), null, 'no kind');
   });
 });

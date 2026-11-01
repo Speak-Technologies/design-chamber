@@ -4,10 +4,12 @@
 // landing mid-merge is re-merged, never overwritten.
 
 import assert from 'node:assert/strict';
-import { readFile, rename, writeFile } from 'node:fs/promises';
-import { test } from 'node:test';
+import { randomUUID } from 'node:crypto';
+import { readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { test, type TestContext } from 'node:test';
 
-import type { Logger, SettingsStore } from '../../../src/service/context.ts';
+import { createChangeHub } from '../../../src/service/changes.ts';
+import type { ChangeHub, Logger, SettingsStore } from '../../../src/service/context.ts';
 import { createDesignStore } from '../../../src/service/store.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
 
@@ -66,4 +68,117 @@ test('M1 — an agent design.json write concurrent with a comment is never lost'
   // Every comment the service accepted is still in state.json (the truth).
   const state = await store.get(record.slug);
   assert.equal(state.design.comments.length, comments);
+});
+
+// ---- Take-over without clobbering (§6.3 P1, P2; documentation/specs/agent-guidance-and-pages.md §3.2) ----
+// The agent writes its HTML before design.json. The watcher sees the folder first, so the
+// service seeds state.json from the files; that seed must be provisional and give way to the
+// agent's design.json when it lands, never overwrite it.
+
+type TakeoverEnv = {
+  tmp: Awaited<ReturnType<typeof useTmpRoot>>;
+  hub: ChangeHub;
+  store: ReturnType<typeof createDesignStore>;
+  readJson(relative: string): Promise<Record<string, unknown>>;
+};
+
+const takeoverEnv = async (t: TestContext): Promise<TakeoverEnv> => {
+  const tmp = await useTmpRoot(t);
+  const log: Logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
+  const settings: SettingsStore = {
+    root: () => tmp.root,
+    defaultRoot: () => tmp.root,
+    read: () => ({ version: 1, root: tmp.root }),
+    update: async () => {
+      throw new Error('unused');
+    },
+    onRootChange: () => () => undefined,
+  };
+  const hub = createChangeHub(randomUUID());
+  const store = createDesignStore({ settings, log, hub });
+  return { tmp, hub, store, readJson: async (relative) => JSON.parse(await tmp.read(relative)) as Record<string, unknown> };
+};
+
+const missing = async (file: string): Promise<boolean> => stat(file).then(() => false, () => true);
+
+/** What a careful agent writes once it gets round to design.json (no version, no comments). */
+const agentDesignJson = {
+  kind: 'canvas',
+  title: 'Checkout',
+  brief: 'A calmer checkout for a coffee shop',
+  projectDirectory: '/home/me/projects/coffee',
+  viewports: [{ id: 'laptop', label: 'Laptop', width: 1280, height: 800 }],
+  screens: [{ id: 'home', title: 'Home', file: 'screens/home.html' }],
+};
+
+const assertAdopted = async (env: TakeoverEnv, slug: string): Promise<void> => {
+  const design = await env.readJson(`${slug}/design.json`);
+  // The agent's values, byte for byte, for every key it wrote.
+  for (const [key, value] of Object.entries(agentDesignJson)) assert.deepEqual(design[key], value, `design.json ${key}`);
+  // The merge only added the service keys the agent left out.
+  assert.equal(design.version, 1);
+  assert.deepEqual(design.comments, []);
+  const state = await env.readJson(`${slug}/.chamber/state.json`);
+  assert.equal(state.kind, 'canvas');
+  assert.equal(state.brief, agentDesignJson.brief);
+  assert.equal(state.projectDirectory, agentDesignJson.projectDirectory);
+  assert.equal(state.entry, null);
+  assert.equal(Object.hasOwn(state, 'provisional'), false, 'the provisional flag is gone once adopted');
+};
+
+test('P1 — a folder with only index.html gets a provisional state.json and no invented design.json', async (t) => {
+  const env = await takeoverEnv(t);
+  await env.tmp.write('early/index.html', '<h1>Early</h1>');
+  await env.store.reconcile('early');
+  const state = await env.readJson('early/.chamber/state.json');
+  assert.equal(state.provisional, true);
+  assert.equal(state.kind, 'page');
+  assert.equal(state.brief, '');
+  assert.ok(await missing(env.tmp.at('early/design.json')), 'reconcile must not create design.json');
+});
+
+test('P2 — the agent\'s design.json landing after the HTML is adopted, not overwritten', async (t) => {
+  const env = await takeoverEnv(t);
+  await env.tmp.write('early/index.html', '<h1>Early</h1>');
+  await env.store.reconcile('early');
+  await env.tmp.write('early/design.json', agentDesignJson);
+  await env.store.reconcile('early');
+  await assertAdopted(env, 'early');
+  const record = await env.store.get('early');
+  assert.equal(record.design.kind, 'canvas');
+  assert.equal(record.design.brief, agentDesignJson.brief);
+});
+
+test('P2 — a slow agent (HTML, a 2 s pause, then design.json) still keeps its values, driven by change events', async (t) => {
+  const env = await takeoverEnv(t);
+  const stateFile = env.tmp.at('slow/.chamber/state.json');
+  const waitForState = async (predicate: (state: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> => {
+    const deadline = Date.now() + 4000;
+    for (;;) {
+      const state = await readFile(stateFile, 'utf8').then((text) => JSON.parse(text) as Record<string, unknown>, () => null);
+      if (state !== null && predicate(state)) return state;
+      if (Date.now() > deadline) throw new Error(`state.json never matched; last seen ${JSON.stringify(state)}`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  };
+  await env.tmp.write('slow/index.html', '<h1>Slow</h1>');
+  env.hub.emit({ slug: 'slow', kind: 'added' }); // what the watcher reports for the new folder
+  await waitForState((state) => state.provisional === true);
+  await new Promise((resolve) => setTimeout(resolve, 2000)); // the agent thinks
+  await env.tmp.write('slow/design.json', agentDesignJson);
+  env.hub.emit({ slug: 'slow', kind: 'design' });
+  await waitForState((state) => !Object.hasOwn(state, 'provisional'));
+  await assertAdopted(env, 'slow');
+});
+
+test('P1 — a half-written design.json with no state seeds a provisional state; the finished file is adopted', async (t) => {
+  const env = await takeoverEnv(t);
+  await env.tmp.write('midway/index.html', '<h1>Midway</h1>');
+  await env.tmp.write('midway/design.json', '{"kind": "canvas", "brief": "A calmer');
+  await env.store.reconcile('midway');
+  assert.equal((await env.readJson('midway/.chamber/state.json')).provisional, true);
+  assert.equal(await env.tmp.read('midway/design.json'), '{"kind": "canvas", "brief": "A calmer', 'an unparseable file is never written over');
+  await env.tmp.write('midway/design.json', agentDesignJson);
+  await env.store.reconcile('midway');
+  await assertAdopted(env, 'midway');
 });

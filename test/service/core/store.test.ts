@@ -513,3 +513,140 @@ describe('write safety', () => {
     assert.ok(names.includes('design.json'));
   });
 });
+
+describe('take-over without clobbering (§6.3 P1–P5)', () => {
+  const anchor = commentFixture('c_x').anchor;
+  const exists = async (file: string): Promise<boolean> => stat(file).then(() => true, () => false);
+
+  /** A folder the agent started with its HTML; the watcher's reconcile seeded a provisional state. */
+  const provisionalPage = async (env: StoreEnv, slug: string): Promise<void> => {
+    await env.tmp.write(`${slug}/index.html`, '<h1>Early</h1>');
+    await env.store.reconcile(slug);
+    assert.equal((await readJson(env.tmp.at(`${slug}/.chamber/state.json`))).provisional, true);
+  };
+
+  test('P3 — a comment on a provisional design stays in state.json; adoption carries it into design.json', async (t) => {
+    const env = await makeEnv(t);
+    await provisionalPage(env, 'early');
+    const comment = await env.store.addComment('early', { screen: null, viewport: 'laptop', anchor, body: 'Bigger headline' });
+    const state = await readJson(env.tmp.at('early/.chamber/state.json'));
+    assert.equal(state.provisional, true, 'a comment does not end the provisional phase');
+    assert.deepEqual((state.comments as Comment[]).map((entry) => entry.id), [comment.id]);
+    assert.equal(await exists(env.tmp.at('early/design.json')), false, 'no design.json is invented for a comment');
+
+    await env.tmp.write('early/design.json', { kind: 'page', title: 'Early', brief: 'The agent brief' });
+    await env.store.reconcile('early');
+    const design = await readJson(env.tmp.at('early/design.json'));
+    assert.equal(design.brief, 'The agent brief');
+    assert.deepEqual((design.comments as Comment[]).map((entry) => entry.id), [comment.id]);
+    assert.equal(Object.hasOwn(await readJson(env.tmp.at('early/.chamber/state.json')), 'provisional'), false);
+  });
+
+  test('P2 — a comment id both files hold keeps state\'s copy; the agent file\'s other comments are added', async (t) => {
+    const env = await makeEnv(t);
+    await env.tmp.writeDesign('clash', {
+      'index.html': '<h1>Clash</h1>',
+      '.chamber/state.json': { ...seededState({ kind: 'page', entry: 'index.html', comments: [commentFixture('c_shared1', 'Mine')] }), provisional: true },
+      'design.json': { kind: 'page', title: 'Clash', comments: [commentFixture('c_shared1', 'Agent copy'), commentFixture('c_agent01', 'From the agent')] },
+    });
+    await env.store.reconcile('clash');
+    for (const file of ['clash/design.json', 'clash/.chamber/state.json']) {
+      const comments = (await readJson(env.tmp.at(file))).comments as Comment[];
+      assert.deepEqual(comments.map((entry) => [entry.id, entry.body]), [['c_shared1', 'Mine'], ['c_agent01', 'From the agent']], file);
+    }
+  });
+
+  test('P4 — renaming a provisional design writes the minimal design.json and clears the flag', async (t) => {
+    const env = await makeEnv(t);
+    await provisionalPage(env, 'early');
+    const patched = await env.store.patch('early', { title: 'Named by me' });
+    assert.equal(patched.design.title, 'Named by me');
+    const design = await readJson(env.tmp.at('early/design.json'));
+    assert.equal(design.title, 'Named by me');
+    assert.equal(design.kind, 'page');
+    assert.equal(Object.hasOwn(design, 'provisional'), false);
+    assert.equal(Object.hasOwn(await readJson(env.tmp.at('early/.chamber/state.json')), 'provisional'), false);
+    // From now on state wins as for any design: a later agent brief is re-merged to state's.
+    await env.tmp.write('early/design.json', { ...design, brief: 'Too late' });
+    await env.store.reconcile('early');
+    assert.equal((await readJson(env.tmp.at('early/design.json'))).brief, '');
+  });
+
+  test('P5 — a pending page nobody commented on becomes a canvas when the agent says so', async (t) => {
+    const env = await makeEnv(t);
+    const created = await env.store.create({ kind: 'page', title: 'Switch me' });
+    const designFile = path.join(created.path, 'design.json');
+    await writeFile(designFile, JSON.stringify({ ...(await readJson(designFile)), kind: 'canvas' }, null, 2), 'utf8');
+    await env.store.reconcile(created.slug);
+    const state = await readJson(path.join(created.path, '.chamber', 'state.json'));
+    assert.equal(state.kind, 'canvas');
+    assert.equal(state.entry, null);
+    const design = await readJson(designFile);
+    assert.equal(design.kind, 'canvas');
+    assert.equal(Object.hasOwn(design, 'entry'), false, 'a canvas has no entry');
+    assert.equal((await env.store.get(created.slug)).design.kind, 'canvas');
+  });
+
+  test('P5 — with a comment the page stays a page and design.json is re-merged', async (t) => {
+    const env = await makeEnv(t);
+    const created = await env.store.create({ kind: 'page', title: 'Commented' });
+    await env.store.addComment(created.slug, { screen: null, viewport: 'laptop', anchor, body: 'Keep this a page' });
+    const designFile = path.join(created.path, 'design.json');
+    await writeFile(designFile, JSON.stringify({ ...(await readJson(designFile)), kind: 'canvas' }, null, 2), 'utf8');
+    await env.store.reconcile(created.slug);
+    assert.equal((await readJson(path.join(created.path, '.chamber', 'state.json'))).kind, 'page');
+    assert.equal((await readJson(designFile)).kind, 'page');
+  });
+
+  test('P5 — once index.html is written the page stays a page', async (t) => {
+    const env = await makeEnv(t);
+    const created = await env.store.create({ kind: 'page', title: 'Written', html: '<h1>Done</h1>' });
+    const designFile = path.join(created.path, 'design.json');
+    await writeFile(designFile, JSON.stringify({ ...(await readJson(designFile)), kind: 'canvas' }, null, 2), 'utf8');
+    await env.store.reconcile(created.slug);
+    assert.equal((await readJson(path.join(created.path, '.chamber', 'state.json'))).kind, 'page');
+    assert.equal((await readJson(designFile)).kind, 'page');
+  });
+
+  test('§6.3 unchanged — a final design whose agent rewrites the brief is re-merged to state', async (t) => {
+    const env = await makeEnv(t);
+    const created = await env.store.create({ kind: 'canvas', title: 'Final', brief: 'The user brief' });
+    const designFile = path.join(created.path, 'design.json');
+    await writeFile(designFile, JSON.stringify({ ...(await readJson(designFile)), brief: 'The agent rewrote it' }, null, 2), 'utf8');
+    await env.store.reconcile(created.slug);
+    assert.equal((await readJson(designFile)).brief, 'The user brief');
+    assert.equal((await readJson(path.join(created.path, '.chamber', 'state.json'))).brief, 'The user brief');
+  });
+
+  test('design.json first (the guide\'s order) — a page whose index.html is not written yet stays a page', async (t) => {
+    const env = await makeEnv(t);
+    await env.tmp.write('ordered/design.json', { kind: 'page', title: 'Ordered', brief: 'Written first' });
+    await env.store.reconcile('ordered');
+    const state = await readJson(env.tmp.at('ordered/.chamber/state.json'));
+    assert.equal(state.kind, 'page');
+    assert.equal(Object.hasOwn(state, 'provisional'), false, 'a parsed design.json gives a final state');
+    const design = await readJson(env.tmp.at('ordered/design.json'));
+    assert.equal(design.kind, 'page');
+    assert.equal(design.brief, 'Written first');
+  });
+
+  test('no write loop — two reconciles in a row write neither file, provisional or adopted', async (t) => {
+    const env = await makeEnv(t);
+    await provisionalPage(env, 'quiet');
+    const stateFile = env.tmp.at('quiet/.chamber/state.json');
+    const designFile = env.tmp.at('quiet/design.json');
+    const mtimeOf = async (file: string): Promise<number | null> => stat(file).then((info) => info.mtimeMs, () => null);
+
+    const assertQuiet = async (): Promise<void> => {
+      await env.store.reconcile('quiet'); // settle anything the last write calls for
+      const before = [await mtimeOf(stateFile), await mtimeOf(designFile)];
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await env.store.reconcile('quiet');
+      await env.store.reconcile('quiet');
+      assert.deepEqual([await mtimeOf(stateFile), await mtimeOf(designFile)], before);
+    };
+    await assertQuiet(); // provisional, no design.json
+    await env.tmp.write('quiet/design.json', { kind: 'page', title: 'Quiet', brief: 'Adopted' });
+    await assertQuiet(); // adopted
+  });
+});

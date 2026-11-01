@@ -493,6 +493,53 @@ export const serviceStateOf = (design: DesignJson): ServiceState => ({
   comments: design.comments,
 });
 
+export type AdoptInput = {
+  /** state.json as read (it may carry `provisional: true`). */
+  state: ServiceState;
+  /** design.json as parsed. Only call this with a file that parsed to an object. */
+  raw: JsonObject;
+  /** The normalised view of `raw` (its kind is the state's, or the file-based guess). */
+  normalized: DesignJson;
+  /** No entry or screen file written yet (`DesignRecord.pending`). */
+  pending: boolean;
+};
+
+/**
+ * The state the agent's design.json calls for, or `null` to keep `state` (§6.3 P2, P5).
+ *
+ * P2 (adoption): a provisional state was seeded from files before design.json landed. Now that
+ * it parses, the agent's values win: kind (`normalizeKind(raw.kind)`, else the normalised kind),
+ * created, brief, sessionId, projectDirectory and preset from the normalised design (so an invalid
+ * agent value becomes the normalised one), comments = state's plus design.json's whose id state
+ * does not hold (state wins a clash). The flag is dropped.
+ *
+ * P5 (kind switch): a final state adopts design.json's valid kind only while nothing is written
+ * yet and nobody has commented; otherwise state wins as before.
+ */
+export const adoptAgentFields = ({ state, raw, normalized, pending }: AdoptInput): ServiceState | null => {
+  const agentKind = normalizeKind(raw.kind);
+  if (state.provisional === true) {
+    const kind = agentKind ?? normalized.kind;
+    const known = new Set(state.comments.map((comment) => comment.id));
+    const comments = [...state.comments, ...normalized.comments.filter((comment) => !known.has(comment.id))].slice(0, COMMENTS_MAX);
+    return {
+      version: 1,
+      kind,
+      created: normalized.created,
+      brief: normalized.brief,
+      sessionId: normalized.sessionId,
+      projectDirectory: normalized.projectDirectory,
+      preset: normalized.preset,
+      entry: kind === 'page' ? ENTRY_FILE : null,
+      comments,
+    };
+  }
+  if (pending && state.comments.length === 0 && agentKind !== null && agentKind !== state.kind) {
+    return { ...state, kind: agentKind, entry: agentKind === 'page' ? ENTRY_FILE : null };
+  }
+  return null;
+};
+
 /** The view the service answers: design.json's agent fields with state.json's service fields on top. */
 export const applyServiceState = (design: DesignJson, state: ServiceState): DesignJson => ({
   ...design,
