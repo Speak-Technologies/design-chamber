@@ -10,6 +10,7 @@ KI-2…KI-5 were fixed in the smoke fix round (2026-10-27); see `documentation/s
 KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes in app copy).
 
 
+<!-- entry format:
 ### KI-1 — short title
 🟣 Minor · found YYYY-MM-DD · `path/file.ext:line` · owner: agent-name
 **What:** the issue, one or two sentences
