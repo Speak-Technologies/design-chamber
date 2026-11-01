@@ -315,7 +315,7 @@ Settings tells the user to paste it into a project's `AGENTS.md` or the global
   `src/shared/agent/context.ts` (lane B) and fill it in `routes/chat.ts` `prepare` (lane A, A5).
 - `rules-doc.ts`: header names the designs root and the "never anywhere else" rule; contract table
   `kind` row: `"page"` or `"canvas"`, "fixed once you have written the first screen or index.html;
-  before that you may switch it"; file map "the page — index.html"; rendering section adds
+  before that you may switch it"; file map "the page: index.html"; rendering section adds
   "Remote files are blocked and listed back to you when the user sends comments."
 - `revision-prompt.ts`: `Page index.html @ <view>`; `fill` → "full-width view"; optional
   `external: { urls: string[]; more: number }` input appends:
