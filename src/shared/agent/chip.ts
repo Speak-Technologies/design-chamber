@@ -58,9 +58,23 @@ const viewportStep = (context: AgentContext, mode: ChipMode): string => {
   }
   const suggested = context.project.viewports;
   if (suggested.length > 0) {
-    return `Viewports — settle them before designing. The project's breakpoints (${breakpointList(context.project)}) suggest ${suggested.map(formatViewport).join(', ')}; use them unless the brief says otherwise, and ask if unsure. With no clear answer, use ${DEFAULT_VIEWPORTS}.`;
+    return `Viewports: settle them before designing. The project's breakpoints (${breakpointList(context.project)}) suggest ${suggested.map(formatViewport).join(', ')}; use them unless the brief says otherwise, and ask if unsure. With no clear answer, use ${DEFAULT_VIEWPORTS}.`;
   }
-  return `Viewports — settle them before designing. The project gave no breakpoints, so ask which to show unless the brief makes it obvious, and recommend ${DEFAULT_VIEWPORTS}.`;
+  return `Viewports: settle them before designing. The project gave no breakpoints, so ask which to show unless the brief makes it obvious, and recommend ${DEFAULT_VIEWPORTS}.`;
+};
+
+/** Where designs live: the agent that made one long file in the wrong place never saw this. */
+const rootLine = (context: AgentContext): string =>
+  `This is inside your designs folder (${clip(context.designsRoot, DIRECTORY_SHOWN_MAX)}, set in Design Chamber settings; the default is ~/Documents/Designs). Never save designs anywhere else, and never as a loose file.`;
+
+/** What the kind means on screen, and the page → canvas hint while the kind can still change. */
+const kindLine = (context: AgentContext): string => {
+  if (context.kind === 'canvas') {
+    return 'A canvas is an infinite wall of screens, each shown at every viewport side by side, like Claude Design. Write one file per screen; never put several screens or boards in one long page.';
+  }
+  const meaning = 'A page is one index.html shown full screen, like a browser tab.';
+  if (!context.pending) return `${meaning} If the user now wants several screens, suggest a new canvas with /design; this design stays a page.`;
+  return `${meaning} If the user wants several screens, or the page would be very tall with board-like sections, a canvas with one screen per board fits better: ask, and if they agree set "kind": "canvas" in design.json before you write any screen.`;
 };
 
 const stateLine = (context: AgentContext): string => {
@@ -72,8 +86,8 @@ const stateLine = (context: AgentContext): string => {
 
 const filesStep = (kind: DesignKind): string =>
   kind === 'canvas'
-    ? 'Files you write: design.json · screens/<id>.html (one self-contained, responsive file per screen) · tokens.css · DESIGN.md · assets/** (relative paths, no CDNs). Never touch .versions/, .chamber/ or .thumb.png.'
-    : 'Files you write: design.json · index.html (one self-contained page) · tokens.css · DESIGN.md · assets/** (relative paths, no CDNs). Never touch .versions/, .chamber/ or .thumb.png.';
+    ? 'Write design.json first, then the HTML. Files you write: design.json · screens/<id>.html (one self-contained, responsive file per screen) · tokens.css · DESIGN.md · assets/** (relative paths; no CDNs, Google Fonts or other web fonts). Never touch .versions/, .chamber/ or .thumb.png.'
+    : 'Write design.json first, then the HTML. Files you write: design.json · index.html (one self-contained page) · tokens.css · DESIGN.md · assets/** (relative paths; no CDNs, Google Fonts or other web fonts). Never touch .versions/, .chamber/ or .thumb.png.';
 
 /** The chip core text. Always ≤ `CHIP_TEXT_HARD_MAX` (the brief is clipped to `BRIEF_MAX`, every path is clipped). */
 export const buildChipText = (context: AgentContext, mode: ChipMode): string => {
@@ -81,19 +95,21 @@ export const buildChipText = (context: AgentContext, mode: ChipMode): string => 
   const brief = clip(context.brief.trim(), BRIEF_MAX);
   const lines = [
     `[Design Chamber] ${mode === 'new' ? 'New' : 'Continue'} ${kindWord(context.kind)}: "${title}"`,
-    brief === '' ? 'Brief: none — ask the user what to design.' : `Brief (the user's words${mode === 'new' ? '' : ', original'}):\n${brief}`,
+    brief === '' ? 'Brief: none. Ask the user what to design.' : `Brief (the user's words${mode === 'new' ? '' : ', original'}):\n${brief}`,
     ...(mode === 'continue' ? [stateLine(context)] : []),
     `Write ONLY inside this folder: ${context.folder}`,
+    rootLine(context),
+    kindLine(context),
     '',
     `1. FIRST read, in full: ${rulesPathOf(context.folder)}`,
-    '   It is part of this message — the complete design rules, the ask-when-unsure protocol and the design.json contract. Design nothing before you have read it.',
+    '   It is part of this message: the complete design rules, the ask-when-unsure protocol and the design.json contract. Design nothing before you have read it.',
     `2. THEN look for the active project's own design rules before designing: ${projectStep(context.project)}`,
-    `3. Precedence, highest first — never silently override a higher layer: the user's words in this chat · the project's design rules (step 2) · style preset (${context.preset ? context.preset.name : 'none chosen'}) · this design's DESIGN.md + tokens.css once confirmed · the built-in rules in RULES.md.`,
+    `3. Precedence, highest first. Never silently override a higher layer: the user's words in this chat · the project's design rules (step 2) · style preset (${context.preset ? context.preset.name : 'none chosen'}) · this design's DESIGN.md + tokens.css once confirmed · the built-in rules in RULES.md.`,
     `4. ${viewportStep(context, mode)}`,
     '5. Unsure about anything material? Ask first: ONE message with 3–6 short numbered questions, each with a bold recommended default, then wait for the answer. Do not ask what the project files already answer; skip the questions if the user said "go" or this is a small edit.',
     `6. ${filesStep(context.kind)}`,
-    `7. design.json: you own ${context.kind === 'canvas' ? 'title, updated, viewports, screens and designSystem' : 'title, updated, viewports and designSystem'} — keep every other key exactly as it is, and set "updated" (ISO time) whenever you change the design. Full contract in RULES.md.`,
-    'Your file tools may ask permission to write in the Designs folder because it is outside the project; that is expected.',
+    `7. design.json: you own ${context.kind === 'canvas' ? 'title, updated, viewports, screens and designSystem' : 'title, updated, viewports and designSystem'}. Keep every other key exactly as it is, and set "updated" (ISO time) whenever you change the design. Full contract in RULES.md.`,
+    'Your file tools may ask permission to write in your designs folder because it is outside the project; that is expected.',
   ];
   return lines.join('\n');
 };

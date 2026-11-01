@@ -175,6 +175,27 @@ test('store: an `added` event for the open design reloads every artboard of its 
   assert.equal(Object.keys(store.getState().renderRevs).length, screens.length);
 });
 
+test('store: a `loose` event refetches the list exactly once, and nothing else', async () => {
+  const service = createFakeService();
+  const client = createServiceClient({ serviceRequest: (request) => service.handle(request) });
+  const store = createStore({ client });
+  await store.openDesign('coffee-subscription');
+  const before = service.requests.length;
+  await store.applyChanges({
+    reset: false,
+    epoch: 'e',
+    seq: 2,
+    events: [
+      { seq: 1, slug: null, kind: 'loose' },
+      { seq: 2, slug: null, kind: 'loose' },
+    ],
+  });
+  const paths = service.requests.slice(before).map((request) => `${request.method} ${request.path}`);
+  assert.deepEqual(paths, ['GET /designs']);
+  assert.deepEqual(store.getState().renderRevs, {}, 'no artboard reloads');
+  assert.equal(store.getState().designs.status, 'ready');
+});
+
 test('store: errors land in state with the service sentence; mutations reject with it; reset refetches', async () => {
   const service = createFakeService();
   const client = createServiceClient({ serviceRequest: (request) => service.handle(request) });

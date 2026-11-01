@@ -398,6 +398,10 @@ export const createStore = ({ client }: StoreDeps): Store => {
             settings = true;
             list = true;
             break;
+          case 'loose':
+            // The loose .html files in the root changed: the list answer carries them (banner).
+            list = true;
+            break;
           case 'added':
             // Files written right after the folder appeared come as `added` alone (the service
             // coalesces them), so no `files` event will name them: reload every source.

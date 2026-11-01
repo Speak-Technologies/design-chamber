@@ -1,16 +1,18 @@
 // WP3 — POST /chip, POST /designs/:slug/prompt, POST /pages/from-message, DELETE /open-request (docs/SPEC.md §7, §10, §11),
-// and the `onCreate` hook that writes `<design>/.chamber/RULES.md`.
+// and the `onCreate` hook that writes `<design>/.chamber/RULES.md`. Revision and offline prompts
+// list the remote URLs the viewer blocks, taken from the bundler's static scan of the design's
+// files on disk; a design frame never supplies them (documentation/specs/agent-guidance-and-pages.md §3.6).
 
 import { lstat, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { buildChip, titleFromBrief } from '../../shared/agent/chip.ts';
-import { noProject, type AgentContext, type AgentPreset, type ProjectRules } from '../../shared/agent/context.ts';
+import { clip, noProject, type AgentContext, type AgentPreset, type ProjectRules } from '../../shared/agent/context.ts';
 import { derivePageTitle, extractHtml } from '../../shared/agent/html-extract.ts';
-import { buildContinuePrompt, buildRevisionPrompt } from '../../shared/agent/revision-prompt.ts';
+import { buildContinuePrompt, buildOfflinePrompt, buildRevisionPrompt, type ExternalList } from '../../shared/agent/revision-prompt.ts';
 import { buildRulesDoc } from '../../shared/agent/rules-doc.ts';
-import type { ChipResponse, FromMessageResponse, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse } from '../../shared/api.ts';
+import type { ChipResponse, FromMessageResponse, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse, RenderMeta, RenderQuery } from '../../shared/api.ts';
 import {
   BRIEF_MAX,
   COMMENT_ID_PATTERN,
@@ -19,6 +21,9 @@ import {
   OPEN_REQUEST_TTL_MS,
   PRESET_ID_PATTERN,
   PROJECT_DIRECTORY_MAX,
+  PROMPT_EXTERNAL_MAX,
+  PROMPT_EXTERNAL_SCAN_MS,
+  PROMPT_EXTERNAL_URL_MAX,
   SESSION_ID_MAX,
   UPLOAD_ID_PATTERN,
 } from '../../shared/limits.ts';
@@ -85,7 +90,9 @@ const parseAnchorStates = (value: unknown): Record<string, AnchorState> => {
 const parsePromptBody = (body: unknown): { purpose: PromptBody['purpose']; commentIds: string[] | null; anchorStates: Record<string, AnchorState> } => {
   const record = bodyOf(body, 'the prompt request');
   const { purpose, commentIds } = record;
-  if (purpose !== 'revision' && purpose !== 'continue') throw new ApiError('bad-request', 'The prompt purpose must be "revision" or "continue".');
+  if (purpose !== 'revision' && purpose !== 'continue' && purpose !== 'offline') {
+    throw new ApiError('bad-request', 'The prompt purpose must be "revision", "continue" or "offline".');
+  }
   const anchorStates = parseAnchorStates(record.anchorStates);
   if (commentIds === undefined) return { purpose, commentIds: null, anchorStates };
   const ids = Array.isArray(commentIds) ? commentIds.filter((id): id is string => typeof id === 'string' && COMMENT_ID_PATTERN.test(id)) : [];
@@ -209,6 +216,7 @@ const createInstructions = (ctx: ServiceContext): Instructions => {
         title: design.title,
         kind: design.kind,
         folder: record.path,
+        designsRoot: ctx.settings.root(),
         brief: design.brief,
         project,
         preset,
@@ -220,6 +228,76 @@ const createInstructions = (ctx: ServiceContext): Instructions => {
       return { context, text: buildRulesDoc(context, files) };
     },
   };
+};
+
+// ---- remote URLs the viewer blocks ----
+
+/**
+ * One remote reference from the bundler as a canonical URL, or `null` when it does not parse.
+ * Protocol-relative refs (`//fonts.googleapis.com/…`) are read as https, which is how a browser
+ * outside the sandbox would load them. `new URL` also drops tabs and newlines, so an entry can
+ * never add a line to the prompt.
+ */
+export const normalizeExternalUrl = (raw: string): string | null => {
+  const ref = raw.trim();
+  try {
+    return new URL(ref.startsWith('//') ? `https:${ref}` : ref).href;
+  } catch {
+    return null;
+  }
+};
+
+/** Dedupe, keep the first `PROMPT_EXTERNAL_MAX` (each cut to `PROMPT_EXTERNAL_URL_MAX`), count the rest. */
+export const capExternal = (raw: Iterable<string>): ExternalList => {
+  const seen = new Set<string>();
+  const urls: string[] = [];
+  let more = 0;
+  for (const entry of raw) {
+    const href = normalizeExternalUrl(entry);
+    if (href === null || seen.has(href)) continue;
+    seen.add(href);
+    if (urls.length < PROMPT_EXTERNAL_MAX) urls.push(clip(href, PROMPT_EXTERNAL_URL_MAX));
+    else more += 1;
+  }
+  return { urls, more };
+};
+
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/**
+ * The remote URLs a design's own files load, from the render bundler (`RenderMeta.external`).
+ * A page renders its entry; a canvas each screen whose file exists, one at a time, until
+ * `PROMPT_EXTERNAL_SCAN_MS` is spent. A screen that fails to render is skipped and logged: the
+ * list is advice for the agent, so a partial list is better than no request at all.
+ */
+export const collectExternal = async (ctx: Pick<ServiceContext, 'renders' | 'log'>, record: DesignRecord): Promise<ExternalList> => {
+  const { design, files } = record;
+  const targets: RenderQuery[] =
+    design.kind === 'page'
+      ? files.entry?.exists === true
+        ? [{}]
+        : []
+      : design.screens.filter((screen) => files.screens[screen.id]?.exists === true).map((screen) => ({ screen: screen.id }));
+  const started = Date.now();
+  const found: string[] = [];
+  for (const [index, query] of targets.entries()) {
+    const remaining = PROMPT_EXTERNAL_SCAN_MS - (Date.now() - started);
+    let meta: RenderMeta | null = null;
+    if (remaining > 0) {
+      try {
+        meta = await withDeadline<RenderMeta | null>(ctx.renders.render(record.slug, query), remaining, null);
+      } catch (error) {
+        ctx.log.warn('agent.external-scan-skipped', { slug: record.slug, screen: query.screen ?? null, error: errorText(error) });
+        continue;
+      }
+    }
+    if (meta === null) {
+      ctx.log.warn('agent.external-scan-timeout', { slug: record.slug, unscanned: targets.length - index });
+      break;
+    }
+    found.push(...meta.external);
+  }
+  return capExternal(found);
 };
 
 const selectComments = (all: readonly Comment[], ids: readonly string[] | null): Comment[] => {
@@ -292,14 +370,23 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
       return { text: buildContinuePrompt({ title: design.title, kind: design.kind, folder: record.path, openComments }), commentIds: [], omitted: [], chip };
     }
 
+    if (input.purpose === 'offline') {
+      const external = await collectExternal(ctx, record);
+      if (external.urls.length === 0) throw new ApiError('invalid', "This design doesn't load anything from the internet.");
+      return { text: buildOfflinePrompt({ title: design.title, kind: design.kind, folder: record.path, external }), commentIds: [], omitted: [], chip };
+    }
+
+    // Validate the comment choice before spending time on the scan.
+    const comments = selectComments(design.comments, input.commentIds);
     const prompt = buildRevisionPrompt({
       title: design.title,
       kind: design.kind,
       folder: record.path,
       screens: design.screens,
       viewports: design.viewports,
-      comments: selectComments(design.comments, input.commentIds),
+      comments,
       anchorStates: input.anchorStates,
+      external: await collectExternal(ctx, record),
     });
     return { text: prompt.text, commentIds: prompt.commentIds, omitted: prompt.omitted, chip };
   });

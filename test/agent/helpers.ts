@@ -24,6 +24,7 @@ export const baseContext = (overrides: Partial<AgentContext> = {}): AgentContext
   title: 'Pricing page for a coffee subscription',
   kind: 'canvas',
   folder: 'C:\\Users\\you\\Documents\\Designs\\pricing-page',
+  designsRoot: 'C:\\Users\\you\\Documents\\Designs',
   brief: 'A pricing page for a coffee subscription. Three plans, mobile first.',
   project: noProject('the chat has no project folder'),
   preset: null,

@@ -73,7 +73,7 @@ describe('derivePageTitle', () => {
   test('then the first <h1>, then the session title, then a constant', () => {
     assert.equal(derivePageTitle('text', '<main><h1 class="x">Big <em>news</em></h1></main>', 'Chat'), 'Big news');
     assert.equal(derivePageTitle('text', '<p>x</p>', 'My chat'), 'My chat');
-    assert.equal(derivePageTitle('text', '<p>x</p>', '  '), 'HTML artifact');
+    assert.equal(derivePageTitle('text', '<p>x</p>', '  '), 'HTML page');
   });
 
   test('is one line and at most 120 characters', () => {

@@ -107,5 +107,5 @@ export const derivePageTitle = (messageText: string, html: string, fallback: str
     const title = candidate === undefined || candidate === null ? null : fitTitle(stripTags(candidate));
     if (title !== null) return title;
   }
-  return fitTitle(fallback) ?? 'HTML artifact';
+  return fitTitle(fallback) ?? 'HTML page';
 };
