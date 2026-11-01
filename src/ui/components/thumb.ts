@@ -57,7 +57,7 @@ export const mountThumb = (summary: DesignSummary, aspect: 'rail' | 'card' = 'ra
 
   const showPending = (): void => {
     el.dataset.state = 'pending';
-    el.append(icon(current.kind === 'canvas' ? 'canvas' : 'artifact', aspect === 'card' ? 28 : 18));
+    el.append(icon(current.kind === 'canvas' ? 'canvas' : 'page', aspect === 'card' ? 28 : 18));
   };
 
   const showImage = (): void => {
@@ -91,7 +91,7 @@ export const mountThumb = (summary: DesignSummary, aspect: 'rail' | 'card' = 'ra
         client.loadRender(current.slug, null, null).then(
           ({ html }) => {
             if (disposed || mine !== token) return;
-            doc = createFrameDocument(html, { artboardId: 'thumb', file: current.kind === 'artifact' ? 'index.html' : 'thumb', mode: 'play' });
+            doc = createFrameDocument(html, { artboardId: 'thumb', file: current.kind === 'page' ? 'index.html' : 'thumb', mode: 'play' });
             const frame = h('iframe', { class: 'dc-thumb-frame', sandbox: '', tabindex: '-1', title: '', src: doc.url, loading: 'eager' });
             frame.style.width = `${vp.width}px`;
             frame.style.height = `${vp.height}px`;

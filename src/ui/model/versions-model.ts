@@ -48,7 +48,7 @@ export const changeLabel = (change: VersionFileChange): string => (change === 'a
 
 /** The banner while a version is open: "Viewing v12" or "Comparing v12 with current". */
 export const viewingBanner = (versionNumber: number, compare: boolean): string =>
-  compare ? `Comparing v${versionNumber} with the current design` : `Viewing v${versionNumber} — read only`;
+  compare ? `Comparing v${versionNumber} with the current design` : `Viewing v${versionNumber} (read only)`;
 
 export const restoreConfirmBody = (versionNumber: number): string =>
   `The design goes back to v${versionNumber}. Your current files are saved as a version first, so you can return to them.`;

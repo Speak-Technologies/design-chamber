@@ -192,6 +192,36 @@ describe('watcher events', () => {
     assert.deepEqual(added.files, ['notes.txt']);
   });
 
+  test('a design.json write whose own event never came is still reported with the next event in that folder', async (t) => {
+    // Windows' recursive watch and OneDrive can drop or coalesce events. When another event in
+    // the same folder flushes first, the flush moves the poll fingerprint past the design.json
+    // change; unless that flush reports it, the poll never sees it again and the design is
+    // never reconciled. The poll is off here, so only the flush can report it.
+    let emit: ((event: string, filename: string | null) => void) | null = null;
+    const scripted = ((_root: string, _options: unknown, listener: (event: string, filename: string | null) => void) => {
+      emit = listener;
+      const fake = { close() {}, on: () => fake, once: () => fake, emit: () => false, ref: () => fake, unref: () => fake };
+      return fake as unknown as FSWatcher;
+    }) as unknown as typeof import('node:fs').watch;
+    const env = await makeWatchEnv(t, { watchImpl: scripted, pollMs: 600_000 });
+    assert.ok(emit !== null, 'the watcher started the scripted watch');
+    // Safe: narrowed by the assert above; TypeScript cannot see the callback's assignment.
+    const fire = emit as (event: string, filename: string | null) => void;
+
+    await mkdir(env.tmp.at('dropped'), { recursive: true });
+    await writeFile(env.tmp.at('dropped/index.html'), '<h1>one</h1>', 'utf8');
+    fire('rename', 'dropped');
+    await env.waitForEvent((event) => event.slug === 'dropped' && event.kind === 'added', 2000);
+
+    await writeFile(env.tmp.at('dropped/design.json'), '{"kind":"page"}', 'utf8');
+    await writeFile(env.tmp.at('dropped/index.html'), '<h1>two</h1>', 'utf8');
+    fire('change', 'dropped/index.html'); // design.json's own event was dropped
+    const design = await env.waitForEvent((event) => event.slug === 'dropped' && event.kind === 'design', 2000);
+    const files = env.events.find((event) => event.slug === 'dropped' && event.kind === 'files');
+    assert.deepEqual(files?.files, ['index.html']);
+    assert.ok(design.seq > 0);
+  });
+
   test('a root switch emits "root", follows the new root and ignores the old one', async (t) => {
     const env = await makeWatchEnv(t, { pollMs: 600_000 });
     await mkdir(env.tmp.at('old-root-design'), { recursive: true });
@@ -200,6 +230,8 @@ describe('watcher events', () => {
 
     env.setRoot(env.tmp.at('root-b'));
     await env.waitForEvent((event) => event.slug === null && event.kind === 'root');
+    // Folders created after the new root's baseline are changes, not part of it.
+    await env.watcher.ready;
 
     await mkdir(env.tmp.at('root-b/new-design'), { recursive: true });
     await env.waitForEvent((event) => event.slug === 'new-design' && event.kind === 'added');
@@ -208,6 +240,62 @@ describe('watcher events', () => {
     await writeFile(env.tmp.at('old-root-design/index.html'), '<h1>ignored</h1>', 'utf8');
     await env.quietFor(400);
     assert.deepEqual(env.events.filter((event) => event.seq > mark && event.slug === 'old-root-design'), []);
+  });
+});
+
+describe('loose html files in the root (agent-guidance spec §3.5)', () => {
+  const looseEvents = (env: WatchEnv, after: number): ChangeEvent[] =>
+    env.events.filter((event) => event.seq > after && event.kind === 'loose');
+
+  test('adding and removing a root html file emits "loose" (fs.watch path); AGENTS.md, dot files and design folders do not', async (t) => {
+    const env = await makeWatchEnv(t, { pollMs: 600_000 });
+    await env.quietFor(150);
+
+    let mark = env.hub.seq();
+    await writeFile(env.tmp.at('stray.html'), '<p>stray</p>', 'utf8');
+    const added = await env.waitForEvent((event) => event.seq > mark && event.kind === 'loose');
+    assert.equal(added.slug, null);
+
+    mark = env.hub.seq();
+    await writeFile(env.tmp.at('AGENTS.md'), '# guide', 'utf8');
+    await writeFile(env.tmp.at('.hidden.html'), '<p>h</p>', 'utf8');
+    await mkdir(env.tmp.at('a-design'), { recursive: true });
+    await writeFile(env.tmp.at('a-design/index.html'), '<p>design</p>', 'utf8');
+    await env.waitForEvent((event) => event.seq > mark && event.slug === 'a-design' && event.kind === 'added');
+    await env.quietFor(400);
+    assert.deepEqual(looseEvents(env, mark), [], 'nothing changed the loose set');
+
+    mark = env.hub.seq();
+    await rm(env.tmp.at('stray.html'));
+    await env.waitForEvent((event) => event.seq > mark && event.kind === 'loose');
+  });
+
+  test('the poll backstop catches loose files when fs.watch is dead', async (t) => {
+    const env = await makeWatchEnv(t, { watchImpl: deadWatch, pollMs: 120 });
+    const mark = env.hub.seq();
+    await writeFile(env.tmp.at('polled.htm'), '<p>p</p>', 'utf8');
+    await env.waitForEvent((event) => event.seq > mark && event.kind === 'loose', 6000);
+    const second = env.hub.seq();
+    await writeFile(env.tmp.at('AGENTS.md'), '# guide', 'utf8');
+    await env.quietFor(500);
+    assert.deepEqual(looseEvents(env, second), [], 'AGENTS.md is not loose html');
+  });
+
+  test('files already there at start are the baseline, not a change', async (t) => {
+    const tmpEnv = await makeWatchEnv(t, { pollMs: 120, watchImpl: deadWatch });
+    // Restart the watcher over a root that already holds a loose file.
+    await writeFile(tmpEnv.tmp.at('before.html'), '<p>b</p>', 'utf8');
+    await tmpEnv.waitForEvent((event) => event.kind === 'loose', 6000);
+    tmpEnv.watcher.stop();
+
+    const hub = createChangeHub(randomUUID());
+    const events: ChangeEvent[] = [];
+    hub.subscribe((event) => events.push(event));
+    const fresh = startWatcher({ settings: tmpEnv.settings, hub, log: { info() {}, warn() {}, error() {} }, debounceMs: 50, pollMs: 120, watchImpl: deadWatch });
+    t.after(() => fresh.stop());
+    await fresh.ready;
+    await tmpEnv.quietFor(500);
+    assert.deepEqual(events.filter((event) => event.kind === 'loose'), []);
   });
 });
 

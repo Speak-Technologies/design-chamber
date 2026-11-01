@@ -104,7 +104,7 @@ export type RenderDoc = { meta: RenderMeta; html: string };
 
 export type ServiceClient = {
   call<K extends RouteKey>(key: K, ...args: CallArgs<K>): Promise<RouteResponse<K>>;
-  /** Full bundled document for an artifact (`screen` null) or a canvas screen, optionally at a version. */
+  /** Full bundled document for a page (`screen` null) or a canvas screen, optionally at a version. */
   loadRender(slug: string, screen?: string | null, version?: string | null): Promise<RenderDoc>;
   /** Uploads `text` in F7-safe chunks; resolves to the completed upload id. */
   upload(text: string): Promise<string>;

@@ -55,7 +55,7 @@ test('bridge init JSON cannot break out of its <script>; a bridge containing </s
 });
 
 test('createFrameDocument returns a revocable blob URL; nonce is random hex', async () => {
-  const doc = createFrameDocument('<html><head></head><body>hi</body></html>', { artboardId: 'artifact@laptop', file: 'index.html', mode: 'play' }, BRIDGE);
+  const doc = createFrameDocument('<html><head></head><body>hi</body></html>', { artboardId: 'page@laptop', file: 'index.html', mode: 'play' }, BRIDGE);
   assert.match(doc.url, /^blob:/);
   assert.match(doc.init.nonce, /^[0-9a-f]{24}$/);
   assert.deepEqual(doc.init.scroll, { x: 0, y: 0 });

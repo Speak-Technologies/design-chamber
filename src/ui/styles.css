@@ -823,8 +823,50 @@ body {
 .dc-chips [data-chip='off'] {
   opacity: 0.62;
 }
+/* Page "View" select: the caption sits beside the trigger, like the other toolbar controls. */
+.dc-viewport-select {
+  min-width: 0;
+}
 .dc-viewport-select .oc-sdk-select {
-  display: block;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--dc-s2);
+}
+.dc-viewport-select .oc-sdk-field-label {
+  flex: none;
+  color: var(--oc-muted);
+  font-weight: 500;
+}
+
+/* Remote-files banner: the blocked URLs, one per line, cut in the middle when long. */
+.dc-remote-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin: var(--dc-s1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.dc-remote-list li {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-remote-list .dc-path {
+  overflow-wrap: normal;
+  color: var(--oc-fg);
+}
+.dc-remote-more {
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+.dc-foot-note {
+  margin: 0 auto 0 0;
+  align-self: center;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
 }
 
 .dc-notices {
@@ -934,6 +976,18 @@ body {
 }
 .dc-wall[data-dense='true'] {
   background-image: none;
+}
+/* A page is a tab, not a wall: a plain backdrop with no grid that would suggest panning. */
+.dc-wall[data-presentation='page'] {
+  background-image: none;
+}
+/* At full width the frame covers the whole stage, so the focus ring is drawn on top of it. */
+.dc-wall[data-presentation='page']:focus-visible::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--oc-primary) 45%, transparent);
+  pointer-events: none;
 }
 .dc-wall:focus-visible {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--oc-primary) 45%, transparent);
@@ -1664,3 +1718,10 @@ body {
     transition: none;
   }
 }
+
+/* Rail settings sheet: never grow to fit a long code line (flex items default to min-width: auto). */
+.dc-sheet[data-variant='full'] .dc-sheet-panel { min-width: 0; }
+/* The AGENTS.md lines wrap instead of scrolling sideways. */
+.dc-code[data-wrap='true'] { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* In the rail, a two-button banner (loose files, remote files) puts its buttons on their own row under the text. */
+.dc-app[data-surface='panel'] .dc-banner[data-actions='stack'] .oc-sdk-banner-action { flex-basis: 100%; }

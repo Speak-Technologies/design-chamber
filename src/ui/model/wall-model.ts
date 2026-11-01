@@ -1,7 +1,8 @@
 // Pure wall geometry the UI adds on top of the guest camera: mapping between screen, world
 // and frame pixels, pin placement and clustering, label room, and focus rules.
 
-import type { Rect, RelPoint } from '../../shared/types.ts';
+import { PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.ts';
+import type { Comment, Rect, RelPoint, Viewport } from '../../shared/types.ts';
 
 export type CameraLike = { x: number; y: number; scale: number };
 export type BoardRect = { x: number; y: number; w: number; h: number };
@@ -73,6 +74,81 @@ export const liveBoards = <T extends { id: string; rect: BoardRect }>(
 
 /** The same zoom, with the content's top edge `padding` below the top of the surface instead of centred. */
 export const alignTop = (camera: CameraLike, bounds: BoardRect, padding: number): CameraLike => ({ ...camera, y: padding - bounds.y * camera.scale });
+
+// ---- Page viewer: one frame shown like a browser tab, no pan, no zoom ----
+
+/** Space between the viewer's edges and a fixed-width page frame, screen px. */
+export const PAGE_GUTTER = 24;
+export const PAGE_GUTTER_COMPACT = 16;
+/** The smallest scale a fixed-width frame shrinks to in a very narrow viewer. */
+const PAGE_MIN_SCALE = 0.05;
+
+/**
+ * Where the page frame sits and how big it is. Full width (`frameW` null): scale 1 and the
+ * frame is the stage. A viewport width: shrunk to fit the stage between gutters, never enlarged,
+ * centred, `gutter` from the top and running to the bottom edge (frame px, so it fills the height).
+ */
+export const pageCamera = (input: { stageW: number; stageH: number; frameW: number | null; gutter: number }): { camera: CameraLike; frameW: number; frameH: number } => {
+  const stageW = Math.max(1, Math.round(input.stageW));
+  const stageH = Math.max(1, Math.round(input.stageH));
+  if (input.frameW === null) return { camera: { x: 0, y: 0, scale: 1 }, frameW: stageW, frameH: stageH };
+  const frameW = Math.max(1, input.frameW);
+  const scale = Math.max(PAGE_MIN_SCALE, Math.min(1, (stageW - 2 * input.gutter) / frameW));
+  return {
+    camera: { x: (stageW - frameW * scale) / 2, y: input.gutter, scale },
+    frameW,
+    frameH: Math.max(1, Math.round((stageH - input.gutter) / scale)),
+  };
+};
+
+/** Every comment on a page, whatever view it was made in: pins are re-anchored per layout. */
+export const pageComments = (comments: readonly Comment[]): Comment[] => comments.filter((comment) => comment.screen === null);
+
+/** A stored page view that still exists: Full width, or one of the design's viewports. Anything else falls back to Full width. */
+export const resolvePageView = (stored: unknown, viewports: readonly Viewport[]): string =>
+  typeof stored === 'string' && (stored === PAGE_FILL_VIEWPORT_ID || viewports.some((viewport) => viewport.id === stored)) ? stored : PAGE_FILL_VIEWPORT_ID;
+
+/** The View select's choices: Full width first, then each viewport as "Laptop · 1280×800". */
+export const pageViewOptions = (viewports: readonly Viewport[]): Array<{ id: string; label: string }> => [
+  { id: PAGE_FILL_VIEWPORT_ID, label: 'Full width' },
+  ...viewports.map((viewport) => ({ id: viewport.id, label: `${viewport.label} · ${viewport.width}×${viewport.height}` })),
+];
+
+/** Short host + path for a blocked URL, middle-truncated to `max` characters; the full URL goes in a tooltip. */
+export const shortUrl = (url: string, max = 48): string => {
+  let text = url;
+  try {
+    const parsed = new URL(url);
+    text = `${parsed.host}${parsed.pathname === '/' ? '' : parsed.pathname}`;
+  } catch {
+    // Not a parseable URL: show it as written.
+  }
+  if (text.length <= max) return text;
+  const head = Math.ceil((max - 1) * 0.6);
+  return `${text.slice(0, head)}…${text.slice(text.length - (max - 1 - head))}`;
+};
+
+/** The remote-files banner: title, up to `shown` URLs, and how many more there are. */
+export const remoteNotice = (urls: readonly string[], kind: 'page' | 'canvas', shown = 5): { title: string; urls: string[]; more: number } => {
+  const count = urls.length;
+  const what = kind === 'page' ? 'page' : 'design';
+  return {
+    title: `This ${what} loads ${count === 1 ? '1 file' : `${count} files`} from the internet`,
+    urls: urls.slice(0, shown),
+    more: Math.max(0, count - shown),
+  };
+};
+
+/**
+ * Whether a hidden remote-files banner stays hidden. `hiddenWith` is the URL list on screen when
+ * the user pressed Hide (`null`: never hidden). It stays hidden while every blocked URL is one the
+ * user already saw, also when some were fixed; a URL it did not list is a new problem and shows it again.
+ */
+export const remoteBannerHidden = (urls: readonly string[], hiddenWith: readonly string[] | null): boolean => {
+  if (hiddenWith === null) return false;
+  const seen = new Set(hiddenWith);
+  return urls.every((url) => seen.has(url));
+};
 
 /** Keyboard pan step in screen pixels: bigger with Shift. */
 export const nudgeStep = (shift: boolean): number => (shift ? 240 : 60);

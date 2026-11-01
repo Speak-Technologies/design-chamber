@@ -73,8 +73,8 @@ export const startWp2 = async (t: TestContext, options: FakeContextOptions): Pro
 export const RED_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
 export const redPng = (): Uint8Array => Uint8Array.from(Buffer.from(RED_PNG_B64, 'base64'));
 
-export const artifactDesign = (files: Record<string, FileContent> = {}): Record<string, FileContent> => ({
-  'design.json': { version: 1, kind: 'artifact', title: 'Test artifact', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z' },
+export const pageDesign = (files: Record<string, FileContent> = {}): Record<string, FileContent> => ({
+  'design.json': { version: 1, kind: 'page', title: 'Test artifact', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z' },
   'index.html': '<!doctype html><html><head><title>Artifact</title></head><body><h1>hello</h1></body></html>',
   ...files,
 });

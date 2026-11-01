@@ -139,7 +139,7 @@ test('the built service runs a canvas design end to end', { timeout: 120_000 }, 
   assert.doesNotMatch(html, /(src|href)="\.\.\/assets\//);
 
   // 6. /chip creates a design with RULES.md and answers the chip text.
-  const chip = await callJson<ChipResponse>(service, '/chip', { method: 'POST', body: { kind: 'artifact', brief: 'A pricing page for a coffee subscription' } });
+  const chip = await callJson<ChipResponse>(service, '/chip', { method: 'POST', body: { kind: 'page', brief: 'A pricing page for a coffee subscription' } });
   assert.ok(chip.chip.text.includes('.chamber/RULES.md') || chip.chip.text.includes('.chamber\\RULES.md'));
   await access(path.join(root, chip.slug, '.chamber', 'RULES.md'));
 

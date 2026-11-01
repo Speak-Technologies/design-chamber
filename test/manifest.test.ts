@@ -18,8 +18,20 @@ test('the manifest parses with the SDK host parser', () => {
   assert.equal(contributes.panel.entry, 'dist/panel/index.html');
   assert.equal(contributes.background?.entry, 'dist/background/index.html');
   assert.equal(contributes.service?.entry, 'dist/service/main.js');
-  assert.deepEqual(contributes.commands?.map((command) => command.name), ['design', 'artifact']);
+  assert.deepEqual(contributes.commands?.map((command) => command.name), ['design', 'page']);
+  assert.deepEqual(contributes.actions?.map((action) => [action.id, action.label]), [['open-as-page', 'Open as page']]);
   assert.deepEqual(contributes.capabilities, ['prompt', 'sessions']);
+});
+
+test('command and action text is short and plain (≤ 80 characters, no em dashes)', () => {
+  const result = parseManifestJson(text);
+  if (!result.ok) return assert.fail(JSON.stringify(result));
+  const { contributes } = result.manifest;
+  const strings = [...(contributes.commands ?? []).map((command) => command.description ?? ''), ...(contributes.actions ?? []).map((action) => action.label)];
+  for (const value of strings) {
+    assert.ok(value.length <= 80, `too long: ${value}`);
+    assert.doesNotMatch(value, /—/, `em dash in: ${value}`);
+  }
 });
 
 test('the manifest never claims the browser role (it would fight Design Canvas)', () => {

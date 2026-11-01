@@ -1,4 +1,4 @@
-// "Open as artifact" (docs/SPEC.md §10.7): pull the HTML page out of an assistant message.
+// "Open as page" (docs/SPEC.md §10.7): pull the HTML page out of an assistant message.
 // `text` is the host's Markdown rendering of the message (F17), so code blocks are fenced.
 
 import { TITLE_MAX } from '../limits.ts';
@@ -94,10 +94,10 @@ const firstMarkdownHeading = (text: string): string | null => {
 };
 
 /**
- * Title of an artifact made from a message: the page's `<title>`, else the message's first
+ * Title of a page made from a message: the page's `<title>`, else the message's first
  * Markdown heading, else the page's first `<h1>`, else `fallback` (the session title).
  */
-export const deriveArtifactTitle = (messageText: string, html: string, fallback: string): string => {
+export const derivePageTitle = (messageText: string, html: string, fallback: string): string => {
   const candidates = [
     /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1],
     firstMarkdownHeading(messageText),
@@ -107,5 +107,5 @@ export const deriveArtifactTitle = (messageText: string, html: string, fallback:
     const title = candidate === undefined || candidate === null ? null : fitTitle(stripTags(candidate));
     if (title !== null) return title;
   }
-  return fitTitle(fallback) ?? 'HTML artifact';
+  return fitTitle(fallback) ?? 'HTML page';
 };

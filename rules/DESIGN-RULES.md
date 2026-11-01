@@ -84,14 +84,15 @@ Fix any of these before showing work.
 
 ## 5. File & technical rules
 
-Folder contract: `~/Documents/Designs/<slug>/` (the exact paths and `design.json` schema are given in the attached instructions — follow them literally).
+Folder contract: every design is its own folder inside the user's designs folder (default `~/Documents/Designs`, or the folder set in Design Chamber settings), never a loose file. The exact paths and the `design.json` schema are in the attached instructions; follow them literally.
 
-- **Artifact** (`kind: "artifact"`): one `index.html` renders a standard page. **Canvas** (`kind: "canvas"`): one `screens/<id>.html` per screen. Keep each screen **one self-contained file**; never stack variants in one file or hide alternates behind toggles.
+- **Page** (`kind: "page"`): one `index.html`, shown full screen like a browser tab. **Canvas** (`kind: "canvas"`): one `screens/<id>.html` per screen, shown side by side at every viewport. Use a canvas when the user says canvas or the work has several screens or boards; a very tall page made of board-like sections is better as a canvas with one screen per board. Keep each screen one self-contained file; never stack variants in one file or hide alternates behind toggles.
+- Write `design.json` before any HTML file.
 - Variants/options = separate sibling screens (`home-a`, `home-b`), each complete. "Responsive" = ONE responsive file per screen: the canvas renders every screen at every viewport listed in `design.json`, so never make per-viewport copies (`home-phone`) — use breakpoints inside the one file.
 - Every file starts `<!doctype html><html lang="…">` with `<meta charset="utf-8">`, `<meta name="viewport" content="width=device-width, initial-scale=1">` and a `<title>`.
-- Styles: `<link rel="stylesheet" href="../tokens.css">` (canvas screens) or `href="tokens.css"` (artifact in the same folder) first; then a `<style>` block using only tokens (`var(--space-4)`, `var(--accent)`). Never redefine token values in a screen; edit `tokens.css`.
+- Styles: `<link rel="stylesheet" href="../tokens.css">` (canvas screens) or `href="tokens.css"` (page, same folder) first; then a `<style>` block using only tokens (`var(--space-4)`, `var(--accent)`). Never redefine token values in a screen; edit `tokens.css`.
 - Local assets live in `assets/` and are referenced by **relative paths** (`assets/hero.jpg`, `../assets/hero.jpg`). Never absolute paths, `file://`, or drive letters.
-- **No external CDNs, web fonts, analytics or remote images** unless the user asks. Fonts: use the named face only if it is bundled in `assets/fonts/` (`@font-face`, `font-display: swap`) or is a stack with good local fallbacks; always end the stack with a generic family. Icons: inline SVG.
+- **No external CDNs, Google Fonts or other web fonts, analytics or remote images** unless the user asks. Fonts: use the named face only if it is bundled in `assets/fonts/` (`@font-face`, `font-display: swap`) or is a stack with good local fallbacks; always end the stack with a generic family. Icons: inline SVG.
 - Self-contained means it opens offline and exports to ZIP / single-file with nothing broken. Inline `<svg>` for illustrations; compress images; give `<img>` `width`/`height`.
 - Prototype links: plain `<a href="other-screen.html">` between sibling screens (same folder level). Interaction in Play mode is vanilla JS inside the file; no frameworks or bundlers, no build step.
 - Give meaningful elements stable hooks (`id`, `data-screen`, semantic class names) — comments are anchored to elements and travel with their selector.

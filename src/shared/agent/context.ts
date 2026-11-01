@@ -90,6 +90,8 @@ export type AgentContext = {
   kind: DesignKind;
   /** Absolute design folder. */
   folder: string;
+  /** Absolute designs root the folder sits in (the Design Chamber setting), shown so the agent saves nowhere else. */
+  designsRoot: string;
   /** The user's brief; empty when none. */
   brief: string;
   project: ProjectRules;

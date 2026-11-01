@@ -8,10 +8,10 @@
   (or restart OpenChamber).
 
 ## What's built
-Rail navigator + full-screen page; HTML artifacts (ZIP + single-file HTML export to `~/Downloads`);
+Rail navigator + full-screen page; HTML pages (ZIP + single-file HTML export to `~/Downloads`);
 design canvas wall (pan/zoom both axes, screens × viewports, Edit/Play, element-anchored pins,
-send comments to the linked chat, versions view/compare/restore); `/design`, `/artifact`, message
-action "Open as artifact"; project-first design rules + anti-slop rules + 10 presets; headless-browser
+send comments to the linked chat, versions view/compare/restore); `/design`, `/page`, message
+action "Open as page"; project-first design rules + anti-slop rules + 10 presets; headless-browser
 thumbnails; theme-following UI. See `README.md`, `docs/SPEC.md`, `docs/BRIEF.md`.
 
 ## Verification done

@@ -4,7 +4,7 @@ import { mountSelect, mountTabs, mountTextField } from '@openchamber/sdk/ui';
 
 import type { DesignKind } from '../../shared/types.ts';
 import { flows, host, store } from '../guest.ts';
-import { DESTINATIONS, briefPlaceholder, presetOptions, startLabel, validateBrief, type Destination } from '../model/new-model.ts';
+import { DESTINATIONS, briefPlaceholder, kindHint, presetOptions, startLabel, validateBrief, type Destination } from '../model/new-model.ts';
 import { errorText, h } from './dom.ts';
 import { btn, openSheet } from './kit.ts';
 import { toast } from './actions.ts';
@@ -26,20 +26,20 @@ export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): v
   const kindTabs = mountTabs(kindHost, {
     items: [
       { id: 'canvas', label: 'Canvas' },
-      { id: 'artifact', label: 'Artifact' },
+      { id: 'page', label: 'Page' },
     ],
     activeId: kind,
     trackBackground: true,
     onChange: (id) => {
-      kind = id === 'artifact' ? 'artifact' : 'canvas';
+      kind = id === 'page' ? 'page' : 'canvas';
       kindTabs.update({ activeId: kind });
-      kindHint.textContent = kind === 'canvas' ? 'A wall of screens at several device sizes, with comments and versions.' : 'One HTML page you can export as a ZIP or a single file.';
+      kindNote.textContent = kindHint(kind);
       briefField.update({ placeholder: briefPlaceholder(kind) });
       submit.set({ label: startLabel(kind) });
     },
   });
-  const kindHint = h('p', { class: 'oc-sdk-field-note' }, kind === 'canvas' ? 'A wall of screens at several device sizes, with comments and versions.' : 'One HTML page you can export as a ZIP or a single file.');
-  kindHost.append(kindHint);
+  const kindNote = h('p', { class: 'oc-sdk-field-note' }, kindHint(kind));
+  kindHost.append(kindNote);
 
   const briefHost = h('div');
   const briefField = mountTextField(briefHost, {
@@ -87,7 +87,7 @@ export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): v
   const paintDest = (): void => {
     const base = DESTINATIONS.find((entry) => entry.id === destination)?.hint ?? '';
     const noSession = destination === 'current-chat' && host.session() === null;
-    destHint.textContent = noSession ? 'No chat is open right now — choose New chat, or open one first.' : base;
+    destHint.textContent = noSession ? 'No chat is open right now. Choose New chat, or open one first.' : base;
   };
   paintDest();
 

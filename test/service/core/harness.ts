@@ -22,6 +22,7 @@ import { registerCommentsRoutes } from '../../../src/service/routes/comments.ts'
 import { registerDesignsRoutes } from '../../../src/service/routes/designs.ts';
 import { registerOutboxRoutes } from '../../../src/service/routes/outbox.ts';
 import { registerSettingsRoutes } from '../../../src/service/routes/settings.ts';
+import { createAgentSetup } from '../../../src/service/agent-setup.ts';
 import { registerUploadsRoutes } from '../../../src/service/routes/uploads.ts';
 import { startWatcher, type Watcher, type WatcherOptions } from '../../../src/service/watch.ts';
 import { useTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
@@ -124,7 +125,8 @@ export const serveCore = async (t: TestContext, core: Core): Promise<ServedCore>
   const log = captureLogger(core.logs);
   const router = createRouter({ token: TEST_TOKEN, log });
   registerHealthRoute(router, { version: core.ctx.version, epoch: core.ctx.epoch });
-  registerSettingsRoutes(router, core.ctx);
+  // Skill paths under the tmp home, never the real one (XDG_CONFIG_HOME unset on purpose).
+  registerSettingsRoutes(router, core.ctx, createAgentSetup({ log: core.ctx.log, settings: core.ctx.settings, env: {}, homeDir: core.homeDir }));
   registerChangesRoutes(router, core.ctx);
   registerDesignsRoutes(router, core.ctx);
   registerCommentsRoutes(router, core.ctx);

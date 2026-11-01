@@ -12,9 +12,13 @@ export const DESTINATIONS: ReadonlyArray<{ id: Destination; label: string; hint:
   { id: 'current-chat', label: 'Current chat', hint: 'Attaches the design to the chat you have open.' },
 ];
 
-export const startLabel = (kind: DesignKind): string => (kind === 'canvas' ? 'Start canvas' : 'Start artifact');
+/** The sentence under the Canvas | Page tabs. */
+export const kindHint = (kind: DesignKind): string =>
+  kind === 'canvas' ? 'A wall of screens at several device sizes, with comments and versions.' : 'One HTML page shown full screen, with comments and versions. Export it as a ZIP or a single file.';
 
-/** Brief is optional — the agent asks when it is empty — so only the length can be wrong. */
+export const startLabel = (kind: DesignKind): string => (kind === 'canvas' ? 'Start canvas' : 'Start page');
+
+/** Brief is optional (the agent asks when it is empty), so only the length can be wrong. */
 export const validateBrief = (brief: string): string | null => (brief.length > BRIEF_MAX ? `Keep the brief under ${BRIEF_MAX} characters.` : null);
 
 export const briefPlaceholder = (kind: DesignKind): string =>
@@ -22,6 +26,6 @@ export const briefPlaceholder = (kind: DesignKind): string =>
 
 /** Presets list with the "no preset" choice first. */
 export const presetOptions = (presets: ReadonlyArray<{ id: string; name: string; bestFor: string }>): Array<{ id: string; label: string; hint?: string }> => [
-  { id: '', label: 'None — let the agent propose' },
+  { id: '', label: 'None, let the agent suggest one' },
   ...presets.map((preset) => ({ id: preset.id, label: preset.name, hint: preset.bestFor })),
 ];

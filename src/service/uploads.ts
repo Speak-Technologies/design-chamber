@@ -1,6 +1,6 @@
 // Chunked text uploads, guest → service (docs/SPEC.md §7, §8.2). The host caps one
-// `serviceRequest` body at 64 000 chars (F7), so larger texts (a big artifact HTML, an
-// assistant message for "Open as artifact") arrive as ordered chunks of one upload:
+// `serviceRequest` body at 64 000 chars (F7), so larger texts (a big page HTML, an
+// assistant message for "Open as page") arrive as ordered chunks of one upload:
 // POST /uploads mints an id, PUT /uploads/:id/:index stores chunks strictly in order,
 // and the consumer `take`s the joined text exactly once. TTL 10 min, ≤ 8 open uploads.
 // Purely in-memory: an upload never touches disk, and a service restart drops it
@@ -44,7 +44,7 @@ export const createUploadStore = (options: UploadStoreOptions = {}): UploadStore
   const need = (id: string): Entry => {
     sweep();
     const entry = open.get(id);
-    if (entry === undefined) throw new ApiError('not-found', 'That upload does not exist or has expired — send the text again.');
+    if (entry === undefined) throw new ApiError('not-found', 'That upload is gone or has expired. Send the text again.');
     return entry;
   };
 
@@ -56,7 +56,7 @@ export const createUploadStore = (options: UploadStoreOptions = {}): UploadStore
         throw new ApiError('too-large', `That text is larger than the ${UPLOAD_TOTAL_MAX.toLocaleString('en-US')} characters Design Chamber accepts.`);
       }
       if (open.size >= UPLOADS_OPEN_MAX) {
-        throw new ApiError('conflict', 'Too many uploads are open right now — finish or wait a few minutes for the old ones to expire.');
+        throw new ApiError('conflict', 'Too many uploads are open right now. Finish one, or wait a few minutes for the old ones to expire.');
       }
       const id = newId();
       open.set(id, { id, total, chunks: [], received: 0, created: now() });

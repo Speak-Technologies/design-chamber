@@ -41,14 +41,14 @@ describe('RULES.md assembly', () => {
   test('holds every precedence layer in order, then viewports, contract, both rules files, rendering constraints', async () => {
     const doc = buildRulesDoc(baseContext({ project, preset: { id: 'test-preset', name: 'Test Preset', text: PRESET_TEXT } }), await realFiles());
     const markers = [
-      '# Design Chamber — instructions for',
+      '# Design Chamber instructions for',
       '## Do this, in this order',
       '## Precedence',
-      '### Layer 1 — the user\'s words in chat',
-      '### Layer 2 — the active project\'s design rules (look for these FIRST)',
-      '### Layer 3 — style preset: Test Preset',
-      '### Layer 4 — this design\'s own DESIGN.md + tokens.css, once confirmed',
-      '### Layer 5 — the built-in rules',
+      '### Layer 1: the user\'s words in chat',
+      '### Layer 2: the active project\'s design rules (look for these FIRST)',
+      '### Layer 3: style preset Test Preset',
+      '### Layer 4: this design\'s own DESIGN.md + tokens.css, once confirmed',
+      '### Layer 5: the built-in rules',
       '## Viewports',
       '## design.json contract',
       '<!-- BEGIN rules/DESIGN-RULES.md (verbatim) -->',
@@ -72,17 +72,17 @@ describe('RULES.md assembly', () => {
     const files = await realFiles();
     const withPreset = buildRulesDoc(baseContext({ preset: { id: 'test-preset', name: 'Test Preset', text: PRESET_TEXT } }), files);
     assert.ok(withPreset.includes(PRESET_TEXT));
-    assert.ok(withPreset.includes('### Layer 3 — style preset: Test Preset (`test-preset`)'));
+    assert.ok(withPreset.includes('### Layer 3: style preset Test Preset (`test-preset`)'));
     const minimal = await read('presets', 'minimal-saas.md');
     assert.ok(buildRulesDoc(baseContext({ preset: { id: 'minimal-saas', name: 'Minimal SaaS', text: minimal } }), files).includes(minimal), 'a real bundled preset');
-    assert.ok(buildRulesDoc(baseContext(), files).includes('### Layer 3 — style preset: none chosen'));
+    assert.ok(buildRulesDoc(baseContext(), files).includes('### Layer 3: style preset, none chosen'));
   });
 
   test('layer 2 lists the project sources, or explains why there are none', async () => {
     const files = await realFiles();
     const found = buildRulesDoc(baseContext({ project }), files);
-    assert.ok(found.includes('- `DESIGN.md` — design document'));
-    assert.ok(found.includes('- `AGENTS.md` — design sections: "Design system"'));
+    assert.ok(found.includes('- `DESIGN.md`: design document'));
+    assert.ok(found.includes('- `AGENTS.md`: design sections: "Design system"'));
     assert.ok(found.includes('… and 3 more not listed.'));
     assert.ok(found.includes('The scan stopped early'));
     assert.ok(found.includes('Discover the project\'s design rules first'));
@@ -114,26 +114,59 @@ describe('RULES.md assembly', () => {
     assert.ok(plain.includes('design.json lists now: Laptop 1280×800, Phone 390×844 (the extension\'s defaults until you change them).'));
   });
 
-  test('the design.json contract names every key, its owner and the artifact entry', async () => {
+  test('the design.json contract names every key, its owner and the page entry', async () => {
     const files = await realFiles();
     const canvas = buildRulesDoc(baseContext(), files);
     for (const key of ['version', 'kind', 'title', 'created', 'updated', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry', 'viewports', 'screens', 'designSystem', 'comments']) {
       assert.ok(canvas.includes(`\`${key}\``), `contract table names ${key}`);
     }
     assert.ok(canvas.includes('"kind": "canvas"') && canvas.includes('"screens": ['));
-    const artifact = buildRulesDoc(baseContext({ kind: 'artifact' }), files);
-    assert.ok(artifact.includes('"kind": "artifact"') && artifact.includes('"entry": "index.html"'));
-    assert.ok(!artifact.includes('"screens": ['));
-    const artifactHeader = artifact.split('## Precedence')[0] ?? '';
-    assert.ok(artifactHeader.includes('the page —') && !artifactHeader.includes('one file per screen'));
+    const page = buildRulesDoc(baseContext({ kind: 'page' }), files);
+    assert.ok(page.includes('"kind": "page"') && page.includes('"entry": "index.html"'));
+    assert.ok(!page.includes('"screens": ['));
+    const pageHeader = page.split('## Precedence')[0] ?? '';
+    assert.ok(pageHeader.includes('  - the page: C:\\Users\\you\\Documents\\Designs\\pricing-page\\index.html') && !pageHeader.includes('one file per screen'));
+    assert.ok(page.includes('| `entry` | extension | Page only: always `"index.html"`. |'));
+  });
+
+  test('the kind row: page or canvas, switchable only until the first HTML file is written', async () => {
+    const doc = buildRulesDoc(baseContext(), await realFiles());
+    assert.ok(
+      doc.includes(
+        '| `kind` | extension | `"page"` (one index.html shown full screen) or `"canvas"` (a wall of screens). Fixed once you have written the first screen or index.html; before that you may switch it, as long as the design has no comments yet. |',
+      ),
+    );
+    assert.ok(doc.includes('- Write design.json before any HTML file'));
+  });
+
+  test('header names the designs root, the "nowhere else" rule and what the kind means', async () => {
+    const files = await realFiles();
+    const canvas = buildRulesDoc(baseContext(), files);
+    const header = canvas.split('## Precedence')[0] ?? '';
+    assert.ok(header.includes('- Designs folder: C:\\Users\\you\\Documents\\Designs. The user set it in Design Chamber settings (the default is ~/Documents/Designs).'));
+    assert.ok(header.includes('Never save designs anywhere else, and never as a loose file.'));
+    assert.ok(header.includes('(canvas: a canvas is an infinite wall of screens, each shown at every viewport side by side, like Claude Design)'));
+    assert.ok(header.includes('5. Build only inside the folder above. Write design.json first, then the HTML.'));
+    const page = buildRulesDoc(baseContext({ kind: 'page' }), files).split('## Precedence')[0] ?? '';
+    assert.ok(page.includes('(page: a page is one index.html shown full screen, like a browser tab)'));
+  });
+
+  test('our own wording has no em dashes (the shipped rules files are quoted verbatim and checked separately)', async () => {
+    const stub = { designRules: 'rules\n', questions: 'questions\n' };
+    for (const kind of ['canvas', 'page'] as const) {
+      for (const context of [baseContext({ kind }), baseContext({ kind, project, preset: { id: 'test-preset', name: 'Test Preset', text: 'preset' }, brief: '' })]) {
+        assert.ok(!buildRulesDoc(context, stub).includes('\u2014'), kind);
+      }
+    }
   });
 
   test('header names the folder, the file map and the brief; rendering constraints cover the offline rules', async () => {
     const doc = buildRulesDoc(baseContext({ brief: 'Line one\nLine two' }), await realFiles());
-    assert.ok(doc.includes('Folder — write ONLY inside it: C:\\Users\\you\\Documents\\Designs\\pricing-page'));
-    assert.ok(doc.includes('design.json — C:\\Users\\you\\Documents\\Designs\\pricing-page\\design.json'));
+    assert.ok(doc.includes('Folder (write ONLY inside it): C:\\Users\\you\\Documents\\Designs\\pricing-page'));
+    assert.ok(doc.includes('design.json: C:\\Users\\you\\Documents\\Designs\\pricing-page\\design.json'));
     assert.ok(doc.includes('  > Line one\n  > Line two'));
-    assert.ok(doc.includes('no CDN scripts, web fonts, remote images or analytics'));
+    assert.ok(doc.includes('no CDN scripts, Google Fonts or other web fonts, remote images or analytics'));
+    assert.ok(doc.includes('Remote files are blocked and listed back to you when the user sends comments.'));
     assert.ok(doc.includes('data-dc-goto="<screenId>"'));
   });
 

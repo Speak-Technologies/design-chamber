@@ -1,5 +1,5 @@
-// Hidden background frame: answers the /design and /artifact slash commands (docs/SPEC.md
-// §8.1, §10.1) and runs the "Open as artifact" message action (§10.8). Both handlers are
+// Hidden background frame: answers the /design and /page slash commands (docs/SPEC.md
+// §8.1, §10.1) and runs the "Open as page" message action (§10.8). Both handlers are
 // registered synchronously after connecting (the host waits up to 20 s, F15); `POST /chip`
 // creates the pending design and returns the chip. A thrown error's message is what the host
 // shows the user.

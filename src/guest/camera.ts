@@ -124,7 +124,7 @@ export const focusArtboard = (artboard: WallArtboard, viewport: Size, options?: 
 
 // ---- Auto-grid layout ----
 
-/** A wall row: a canvas screen, or the artifact (`id: null`). */
+/** A wall row: a canvas screen, or the page (`id: null`). */
 export type WallScreen = { id: string | null; title: string; viewports?: readonly string[] };
 
 export type WallArtboard = {

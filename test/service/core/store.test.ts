@@ -16,6 +16,7 @@ import type { ChangeHub, Logger, SettingsStore } from '../../../src/service/cont
 import { COMMENTS_MAX } from '../../../src/shared/limits.ts';
 import { serializeJson } from '../../../src/shared/design-json.ts';
 import type { ChangeEvent, Comment, ServiceState } from '../../../src/shared/types.ts';
+import { refuseRenames } from '../../helpers/refuse-rename.ts';
 import { useTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
 import type { LogLine } from './harness.ts';
 
@@ -106,7 +107,7 @@ describe('create', () => {
 
   test('an artifact with inline html writes index.html and is not pending', async (t) => {
     const env = await makeEnv(t);
-    const record = await env.store.create({ kind: 'artifact', title: 'Landing', html: '<!doctype html><h1>Hi</h1>' });
+    const record = await env.store.create({ kind: 'page', title: 'Landing', html: '<!doctype html><h1>Hi</h1>' });
     assert.equal(record.pending, false);
     assert.equal(record.design.entry, 'index.html');
     assert.equal(await readFile(path.join(record.path, 'index.html'), 'utf8'), '<!doctype html><h1>Hi</h1>');
@@ -118,7 +119,7 @@ describe('create', () => {
     const fromBrief = await env.store.create({ kind: 'canvas', brief: 'A pricing page\nfor coffee' });
     assert.equal(fromBrief.design.title, 'A pricing page');
     assert.equal(fromBrief.slug, 'a-pricing-page');
-    const untitled = await env.store.create({ kind: 'artifact' });
+    const untitled = await env.store.create({ kind: 'page' });
     assert.equal(untitled.design.title, 'Untitled design');
     assert.equal(untitled.slug, 'untitled-design');
 
@@ -144,7 +145,7 @@ describe('create', () => {
   test('a brief longer than the cap is truncated, and sessionId/preset/project land in state', async (t) => {
     const env = await makeEnv(t);
     const record = await env.store.create({
-      kind: 'artifact',
+      kind: 'page',
       title: 'Meta',
       brief: 'x'.repeat(5000),
       sessionId: 'ses_123',
@@ -162,14 +163,14 @@ describe('get / read tolerance', () => {
   test('state.json wins over design.json for service-owned fields', async (t) => {
     const env = await makeEnv(t);
     await env.tmp.writeDesign('liar', {
-      'design.json': { version: 1, kind: 'artifact', title: 'Agent title', created: '2026-01-01T00:00:00.000Z', updated: '2026-01-02T00:00:00.000Z', sessionId: 'ses_lie', comments: [] },
-      '.chamber/state.json': seededState({ kind: 'artifact', sessionId: 'ses_truth', created: '2026-01-01T00:00:00.000Z' }),
+      'design.json': { version: 1, kind: 'page', title: 'Agent title', created: '2026-01-01T00:00:00.000Z', updated: '2026-01-02T00:00:00.000Z', sessionId: 'ses_lie', comments: [] },
+      '.chamber/state.json': seededState({ kind: 'page', sessionId: 'ses_truth', created: '2026-01-01T00:00:00.000Z' }),
       'index.html': '<h1>hi</h1>',
     });
     const record = await env.store.get('liar');
     assert.equal(record.design.sessionId, 'ses_truth');
     assert.equal(record.design.title, 'Agent title'); // agent-owned
-    assert.equal(record.design.kind, 'artifact');
+    assert.equal(record.design.kind, 'page');
     assert.equal(record.pending, false);
   });
 
@@ -177,7 +178,7 @@ describe('get / read tolerance', () => {
     const env = await makeEnv(t);
     await env.tmp.write('bare/index.html', '<h1>bare</h1>');
     const record = await env.store.get('bare');
-    assert.equal(record.design.kind, 'artifact');
+    assert.equal(record.design.kind, 'page');
     assert.equal(record.design.title, 'bare'); // slug fallback
     assert.ok(record.warnings.some((warning) => warning.code === 'no-design-json'));
     assert.equal(record.pending, false);
@@ -186,7 +187,7 @@ describe('get / read tolerance', () => {
   test('a corrupt design.json reads with defaults and is never fatal', async (t) => {
     const env = await makeEnv(t);
     await env.tmp.write('broken/design.json', '{{{');
-    await env.tmp.write('broken/.chamber/state.json', serializeJson(seededState({ kind: 'artifact' })));
+    await env.tmp.write('broken/.chamber/state.json', serializeJson(seededState({ kind: 'page' })));
     const record = await env.store.get('broken');
     assert.equal(record.design.title, 'broken');
     assert.ok(record.warnings.some((warning) => warning.code === 'invalid-json'));
@@ -247,7 +248,7 @@ describe('patch', () => {
 describe('comments (§6.2, service-owned)', () => {
   test('add lands in state.json and the design.json mirror, and fires "comments"', async (t) => {
     const env = await makeEnv(t);
-    const created = await env.store.create({ kind: 'artifact', title: 'Pins' });
+    const created = await env.store.create({ kind: 'page', title: 'Pins' });
     const comment = await env.store.addComment(created.slug, {
       screen: null,
       viewport: 'laptop',
@@ -308,10 +309,10 @@ describe('comments (§6.2, service-owned)', () => {
   test('a comment on a folder without design.json creates the minimal mirror (§6.1)', async (t) => {
     const env = await makeEnv(t);
     await env.tmp.write('bare2/index.html', '<h1>bare</h1>');
-    await env.tmp.write('bare2/.chamber/state.json', serializeJson(seededState({ kind: 'artifact', entry: 'index.html' })));
+    await env.tmp.write('bare2/.chamber/state.json', serializeJson(seededState({ kind: 'page', entry: 'index.html' })));
     const comment = await env.store.addComment('bare2', { screen: null, viewport: 'laptop', anchor: commentFixture('c_x').anchor, body: 'Hello' });
     const created = await readJson(env.tmp.at('bare2/design.json'));
-    assert.equal(created.kind, 'artifact');
+    assert.equal(created.kind, 'page');
     assert.equal(created.entry, 'index.html');
     assert.equal((created.comments as { id: string }[])[0]?.id, comment.id);
     assert.equal(created.title, 'bare2'); // the slug fallback title
@@ -440,7 +441,7 @@ describe('list', () => {
   test('skips dot folders and non-slug folders, filters by q/kind, and reports summaries', async (t) => {
     const env = await makeEnv(t);
     await env.store.create({ kind: 'canvas', title: 'Alpha wall' });
-    await env.store.create({ kind: 'artifact', title: 'Beta page', html: '<h1>b</h1>' });
+    await env.store.create({ kind: 'page', title: 'Beta page', html: '<h1>b</h1>' });
     await env.tmp.write('bare-artifact/index.html', '<h1>bare</h1>'); // no design.json
     await env.tmp.write('.trash/old-thing/design.json', '{}');
     await env.tmp.write('Not A Slug/design.json', '{}');
@@ -448,7 +449,7 @@ describe('list', () => {
     const all = await env.store.list();
     assert.deepEqual(all.map((entry) => entry.slug).sort(), ['alpha-wall', 'bare-artifact', 'beta-page']);
     const bare = all.find((entry) => entry.slug === 'bare-artifact');
-    assert.equal(bare?.kind, 'artifact');
+    assert.equal(bare?.kind, 'page');
     assert.equal(bare?.pending, false);
     assert.ok(bare?.warnings.some((warning) => warning.code === 'no-design-json'));
 
@@ -511,5 +512,160 @@ describe('write safety', () => {
     const names = await walk(created.path);
     assert.deepEqual(names.filter((name) => name.includes('.tmp-')), []);
     assert.ok(names.includes('design.json'));
+  });
+});
+
+describe('take-over without clobbering (§6.3 P1–P5)', () => {
+  const anchor = commentFixture('c_x').anchor;
+  const exists = async (file: string): Promise<boolean> => stat(file).then(() => true, () => false);
+
+  /** A folder the agent started with its HTML; the watcher's reconcile seeded a provisional state. */
+  const provisionalPage = async (env: StoreEnv, slug: string): Promise<void> => {
+    await env.tmp.write(`${slug}/index.html`, '<h1>Early</h1>');
+    await env.store.reconcile(slug);
+    assert.equal((await readJson(env.tmp.at(`${slug}/.chamber/state.json`))).provisional, true);
+  };
+
+  test('P3 — a comment on a provisional design stays in state.json; adoption carries it into design.json', async (t) => {
+    const env = await makeEnv(t);
+    await provisionalPage(env, 'early');
+    const comment = await env.store.addComment('early', { screen: null, viewport: 'laptop', anchor, body: 'Bigger headline' });
+    const state = await readJson(env.tmp.at('early/.chamber/state.json'));
+    assert.equal(state.provisional, true, 'a comment does not end the provisional phase');
+    assert.deepEqual((state.comments as Comment[]).map((entry) => entry.id), [comment.id]);
+    assert.equal(await exists(env.tmp.at('early/design.json')), false, 'no design.json is invented for a comment');
+
+    await env.tmp.write('early/design.json', { kind: 'page', title: 'Early', brief: 'The agent brief' });
+    await env.store.reconcile('early');
+    const design = await readJson(env.tmp.at('early/design.json'));
+    assert.equal(design.brief, 'The agent brief');
+    assert.deepEqual((design.comments as Comment[]).map((entry) => entry.id), [comment.id]);
+    assert.equal(Object.hasOwn(await readJson(env.tmp.at('early/.chamber/state.json')), 'provisional'), false);
+  });
+
+  test('P2 — a comment id both files hold keeps state\'s copy; the agent file\'s other comments are added', async (t) => {
+    const env = await makeEnv(t);
+    await env.tmp.writeDesign('clash', {
+      'index.html': '<h1>Clash</h1>',
+      '.chamber/state.json': { ...seededState({ kind: 'page', entry: 'index.html', comments: [commentFixture('c_shared1', 'Mine')] }), provisional: true },
+      'design.json': { kind: 'page', title: 'Clash', comments: [commentFixture('c_shared1', 'Agent copy'), commentFixture('c_agent01', 'From the agent')] },
+    });
+    await env.store.reconcile('clash');
+    for (const file of ['clash/design.json', 'clash/.chamber/state.json']) {
+      const comments = (await readJson(env.tmp.at(file))).comments as Comment[];
+      assert.deepEqual(comments.map((entry) => [entry.id, entry.body]), [['c_shared1', 'Mine'], ['c_agent01', 'From the agent']], file);
+    }
+  });
+
+  test('P4 — renaming a provisional design writes the minimal design.json and clears the flag', async (t) => {
+    const env = await makeEnv(t);
+    await provisionalPage(env, 'early');
+    const patched = await env.store.patch('early', { title: 'Named by me' });
+    assert.equal(patched.design.title, 'Named by me');
+    const design = await readJson(env.tmp.at('early/design.json'));
+    assert.equal(design.title, 'Named by me');
+    assert.equal(design.kind, 'page');
+    assert.equal(Object.hasOwn(design, 'provisional'), false);
+    assert.equal(Object.hasOwn(await readJson(env.tmp.at('early/.chamber/state.json')), 'provisional'), false);
+    // From now on state wins as for any design: a later agent brief is re-merged to state's.
+    await env.tmp.write('early/design.json', { ...design, brief: 'Too late' });
+    await env.store.reconcile('early');
+    assert.equal((await readJson(env.tmp.at('early/design.json'))).brief, '');
+  });
+
+  test('P5 — a pending page nobody commented on becomes a canvas when the agent says so', async (t) => {
+    const env = await makeEnv(t);
+    const created = await env.store.create({ kind: 'page', title: 'Switch me' });
+    const designFile = path.join(created.path, 'design.json');
+    await writeFile(designFile, JSON.stringify({ ...(await readJson(designFile)), kind: 'canvas' }, null, 2), 'utf8');
+    await env.store.reconcile(created.slug);
+    const state = await readJson(path.join(created.path, '.chamber', 'state.json'));
+    assert.equal(state.kind, 'canvas');
+    assert.equal(state.entry, null);
+    const design = await readJson(designFile);
+    assert.equal(design.kind, 'canvas');
+    assert.equal(Object.hasOwn(design, 'entry'), false, 'a canvas has no entry');
+    assert.equal((await env.store.get(created.slug)).design.kind, 'canvas');
+  });
+
+  test('P5 — with a comment the page stays a page and design.json is re-merged', async (t) => {
+    const env = await makeEnv(t);
+    const created = await env.store.create({ kind: 'page', title: 'Commented' });
+    await env.store.addComment(created.slug, { screen: null, viewport: 'laptop', anchor, body: 'Keep this a page' });
+    const designFile = path.join(created.path, 'design.json');
+    await writeFile(designFile, JSON.stringify({ ...(await readJson(designFile)), kind: 'canvas' }, null, 2), 'utf8');
+    await env.store.reconcile(created.slug);
+    assert.equal((await readJson(path.join(created.path, '.chamber', 'state.json'))).kind, 'page');
+    assert.equal((await readJson(designFile)).kind, 'page');
+  });
+
+  test('P5 — once index.html is written the page stays a page', async (t) => {
+    const env = await makeEnv(t);
+    const created = await env.store.create({ kind: 'page', title: 'Written', html: '<h1>Done</h1>' });
+    const designFile = path.join(created.path, 'design.json');
+    await writeFile(designFile, JSON.stringify({ ...(await readJson(designFile)), kind: 'canvas' }, null, 2), 'utf8');
+    await env.store.reconcile(created.slug);
+    assert.equal((await readJson(path.join(created.path, '.chamber', 'state.json'))).kind, 'page');
+    assert.equal((await readJson(designFile)).kind, 'page');
+  });
+
+  test('§6.3 unchanged — a final design whose agent rewrites the brief is re-merged to state', async (t) => {
+    const env = await makeEnv(t);
+    const created = await env.store.create({ kind: 'canvas', title: 'Final', brief: 'The user brief' });
+    const designFile = path.join(created.path, 'design.json');
+    await writeFile(designFile, JSON.stringify({ ...(await readJson(designFile)), brief: 'The agent rewrote it' }, null, 2), 'utf8');
+    await env.store.reconcile(created.slug);
+    assert.equal((await readJson(designFile)).brief, 'The user brief');
+    assert.equal((await readJson(path.join(created.path, '.chamber', 'state.json'))).brief, 'The user brief');
+  });
+
+  test('Windows lock — adoption lands although the first state.json rename is refused (a reader had it open)', async (t) => {
+    // The Q1 CI failure on windows-latest: the reconcile the design.json event starts renames
+    // state.json while something else is reading it (the panel's list refresh, the test's poll,
+    // an antivirus scan). One refused rename used to fail the whole reconcile, and nothing ran
+    // it again: the event was spent, so the design stayed provisional for good.
+    const env = await makeEnv(t);
+    await provisionalPage(env, 'locked');
+    await env.tmp.write('locked/design.json', { kind: 'canvas', title: 'Locked', brief: 'The agent brief' });
+    const stateFile = env.tmp.at('locked/.chamber/state.json');
+    refuseRenames(t, (destination, attempt) => destination === stateFile && attempt === 1);
+    await env.store.reconcile('locked');
+    const state = await readJson(stateFile);
+    assert.equal(Object.hasOwn(state, 'provisional'), false, 'adopted, not left provisional');
+    assert.equal(state.kind, 'canvas');
+    assert.equal(state.brief, 'The agent brief');
+    assert.equal((await readJson(env.tmp.at('locked/design.json'))).brief, 'The agent brief');
+  });
+
+  test('design.json first (the guide\'s order) — a page whose index.html is not written yet stays a page', async (t) => {
+    const env = await makeEnv(t);
+    await env.tmp.write('ordered/design.json', { kind: 'page', title: 'Ordered', brief: 'Written first' });
+    await env.store.reconcile('ordered');
+    const state = await readJson(env.tmp.at('ordered/.chamber/state.json'));
+    assert.equal(state.kind, 'page');
+    assert.equal(Object.hasOwn(state, 'provisional'), false, 'a parsed design.json gives a final state');
+    const design = await readJson(env.tmp.at('ordered/design.json'));
+    assert.equal(design.kind, 'page');
+    assert.equal(design.brief, 'Written first');
+  });
+
+  test('no write loop — two reconciles in a row write neither file, provisional or adopted', async (t) => {
+    const env = await makeEnv(t);
+    await provisionalPage(env, 'quiet');
+    const stateFile = env.tmp.at('quiet/.chamber/state.json');
+    const designFile = env.tmp.at('quiet/design.json');
+    const mtimeOf = async (file: string): Promise<number | null> => stat(file).then((info) => info.mtimeMs, () => null);
+
+    const assertQuiet = async (): Promise<void> => {
+      await env.store.reconcile('quiet'); // settle anything the last write calls for
+      const before = [await mtimeOf(stateFile), await mtimeOf(designFile)];
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await env.store.reconcile('quiet');
+      await env.store.reconcile('quiet');
+      assert.deepEqual([await mtimeOf(stateFile), await mtimeOf(designFile)], before);
+    };
+    await assertQuiet(); // provisional, no design.json
+    await env.tmp.write('quiet/design.json', { kind: 'page', title: 'Quiet', brief: 'Adopted' });
+    await assertQuiet(); // adopted
   });
 });

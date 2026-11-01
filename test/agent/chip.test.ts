@@ -76,12 +76,62 @@ describe('chip core text', () => {
     assert.ok(text.includes('Never touch .versions/, .chamber/ or .thumb.png.'));
   });
 
-  test('an artifact lists index.html, not screens', () => {
-    const text = buildChipText(baseContext({ kind: 'artifact' }), 'new');
-    assert.ok(text.includes('New artifact:'));
+  test('a page lists index.html, not screens', () => {
+    const text = buildChipText(baseContext({ kind: 'page' }), 'new');
+    assert.ok(text.includes('New page:'));
     assert.ok(text.includes('index.html (one self-contained page)'));
     assert.ok(!text.includes('screens/<id>.html'));
     assert.ok(text.includes('you own title, updated, viewports and designSystem'));
+  });
+
+  test('names the designs folder right after the design folder, and forbids saving anywhere else', () => {
+    for (const kind of ['canvas', 'page'] as const) {
+      for (const mode of ['new', 'continue'] as const) {
+        const context = baseContext({ kind });
+        const text = buildChipText(context, mode);
+        const rootLine = `This is inside your designs folder (${context.designsRoot}, set in Design Chamber settings; the default is ~/Documents/Designs). Never save designs anywhere else, and never as a loose file.`;
+        assert.ok(text.includes(`Write ONLY inside this folder: ${context.folder}\n${rootLine}\n`), `${kind} ${mode}`);
+      }
+    }
+  });
+
+  test('says what a page and a canvas are; the tall-page hint is on a page that can still switch, only', () => {
+    const hint = 'a canvas with one screen per board fits better: ask, and if they agree set "kind": "canvas" in design.json before you write any screen.';
+    const page = buildChipText(baseContext({ kind: 'page' }), 'new');
+    assert.ok(page.includes('A page is one index.html shown full screen, like a browser tab.'));
+    assert.ok(page.includes('If the user wants several screens, or the page would be very tall with board-like sections,'));
+    assert.ok(page.includes(hint));
+
+    const written = buildChipText(baseContext({ kind: 'page', pending: false }), 'continue');
+    assert.ok(written.includes('A page is one index.html shown full screen'));
+    assert.ok(!written.includes(hint), 'a written page can no longer switch kind');
+    assert.ok(written.includes('suggest a new canvas with /design'));
+
+    const canvas = buildChipText(baseContext({ kind: 'canvas' }), 'new');
+    assert.ok(canvas.includes('A canvas is an infinite wall of screens, each shown at every viewport side by side, like Claude Design.'));
+    assert.ok(!canvas.includes(hint));
+    assert.ok(!canvas.includes('A page is one index.html'));
+  });
+
+  test('step 6 says to write design.json first and bans Google Fonts', () => {
+    for (const kind of ['canvas', 'page'] as const) {
+      const text = buildChipText(baseContext({ kind }), 'new');
+      assert.ok(text.includes('6. Write design.json first, then the HTML.'), kind);
+      assert.ok(text.includes('no CDNs, Google Fonts or other web fonts'), kind);
+    }
+  });
+
+  test('has no em dashes in any mode or kind', () => {
+    for (const kind of ['canvas', 'page'] as const) {
+      for (const mode of ['new', 'continue'] as const) {
+        for (const brief of ['', 'A brief']) {
+          for (const project of [baseContext().project, BEANS]) {
+            const text = buildChipText(baseContext({ kind, brief, project, pending: mode === 'new' }), mode);
+            assert.ok(!text.includes('\u2014'), `${kind} ${mode} brief=${brief !== ''}`);
+          }
+        }
+      }
+    }
   });
 
   test('no project: says so and tells the agent to ask; defaults named', () => {
@@ -100,7 +150,7 @@ describe('chip core text', () => {
   });
 
   test('an empty brief tells the agent to ask what to design', () => {
-    assert.ok(buildChipText(baseContext({ brief: '  ' }), 'new').includes('Brief: none — ask the user what to design.'));
+    assert.ok(buildChipText(baseContext({ brief: '  ' }), 'new').includes('Brief: none. Ask the user what to design.'));
   });
 
   test('lists at most CHIP_PROJECT_PATHS_MAX project paths and counts the rest', () => {
@@ -117,6 +167,7 @@ describe('chip core text', () => {
       title: 'T'.repeat(300),
       brief: 'b'.repeat(BRIEF_MAX + 500),
       folder: `C:\\Users\\${'u'.repeat(40)}\\Documents\\Designs\\${'s'.repeat(63)}`,
+      designsRoot: `C:\\${'r'.repeat(1000)}`,
       project: scanned(Array.from({ length: 20 }, (_, i) => source(longPath(i))), {
         directory: `D:\\${'p'.repeat(400)}`,
         sourcesOmitted: 7,
@@ -155,7 +206,7 @@ describe('chip core text', () => {
     assert.ok(text.includes('this design shows Laptop 1280×800, Phone 390×844'));
     assert.ok(text.includes("Brief (the user's words, original):"));
     assert.ok(buildChipText(baseContext(), 'continue').includes('State: nothing written yet.'));
-    assert.ok(buildChipText(baseContext({ kind: 'artifact', pending: false }), 'continue').includes('State: index.html is written.'));
+    assert.ok(buildChipText(baseContext({ kind: 'page', pending: false }), 'continue').includes('State: index.html is written.'));
   });
 });
 
@@ -182,7 +233,7 @@ describe('buildChip', () => {
 describe('titleFromBrief', () => {
   test('first sentence, capitalised, trailing punctuation dropped', () => {
     assert.equal(titleFromBrief('a pricing page for a coffee subscription. Three plans.', 'canvas'), 'A pricing page for a coffee subscription');
-    assert.equal(titleFromBrief('Landing page: hero, pricing, FAQ', 'artifact'), 'Landing page');
+    assert.equal(titleFromBrief('Landing page: hero, pricing, FAQ', 'page'), 'Landing page');
   });
 
   test('long first lines are cut on a word boundary at 60 characters', () => {
@@ -194,7 +245,7 @@ describe('titleFromBrief', () => {
   test('uses the first non-empty line and falls back by kind', () => {
     assert.equal(titleFromBrief('\n\n  Pricing page\nmore', 'canvas'), 'Pricing page');
     assert.equal(titleFromBrief('', 'canvas'), 'New canvas');
-    assert.equal(titleFromBrief('   ', 'artifact'), 'New artifact');
+    assert.equal(titleFromBrief('   ', 'page'), 'New page');
   });
 });
 
@@ -203,8 +254,8 @@ describe('golden samples (what the agent receives)', () => {
     await assertSnapshot('chip.new-canvas-project-preset.txt', buildChipText(baseContext({ project: BEANS, preset: { id: 'minimal-saas', name: 'Minimal SaaS', text: '' } }), 'new'));
   });
 
-  test('new artifact without a project', async () => {
-    await assertSnapshot('chip.new-artifact-no-project.txt', buildChipText(baseContext({ kind: 'artifact', title: 'Pricing page', folder: 'C:\\Users\\you\\Documents\\Designs\\pricing-page', brief: '' }), 'new'));
+  test('new page without a project', async () => {
+    await assertSnapshot('chip.new-page-no-project.txt', buildChipText(baseContext({ kind: 'page', title: 'Pricing page', folder: 'C:\\Users\\you\\Documents\\Designs\\pricing-page', brief: '' }), 'new'));
   });
 
   test('continue a canvas', async () => {

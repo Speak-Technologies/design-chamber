@@ -24,7 +24,7 @@ export function registerUploadsRoutes(router: Router, ctx: ServiceContext): void
   });
 
   router.on('PUT /uploads/:id/:index', ({ params, body }): PutUploadChunkResponse => {
-    if (!UPLOAD_ID_PATTERN.test(params.id)) throw new ApiError('not-found', 'That upload does not exist or has expired — send the text again.');
+    if (!UPLOAD_ID_PATTERN.test(params.id)) throw new ApiError('not-found', 'That upload is gone or has expired. Send the text again.');
     const index = Number(params.index);
     if (!Number.isInteger(index) || index < 0) throw new ApiError('bad-request', 'The chunk number must be a whole number starting at 0.');
     if (!isBodyRecord(body) || typeof body.data !== 'string') throw new ApiError('bad-request', 'An upload chunk is { "data": "<text>" }.');
@@ -33,7 +33,7 @@ export function registerUploadsRoutes(router: Router, ctx: ServiceContext): void
       throw new ApiError('too-large', `One upload chunk must stay under ${UPLOAD_CHUNK_MAX_CHARS.toLocaleString('en-US')} characters.`);
     }
     if (Buffer.byteLength(data, 'utf8') > UPLOAD_CHUNK_MAX_BYTES) {
-      throw new ApiError('too-large', 'One upload chunk is too big in bytes — cut it smaller.');
+      throw new ApiError('too-large', 'One upload chunk is too big. Send it in smaller pieces.');
     }
     return ctx.uploads.put(params.id, index, data);
   });

@@ -34,7 +34,7 @@ const toasts = (s: Setup) => s.host.callsOf('toast').map(([request]) => (request
 
 // ---- §10.1 slash commands ----
 
-test('/design and /artifact resolve to our chip via POST /chip with the frame directory + session', async () => {
+test('/design and /page resolve to our chip via POST /chip with the frame directory + session', async () => {
   const s = setup({ surface: 'background', session: { id: 'ses_here', title: 'Here', busy: false } });
   const chip = await s.flows.resolveSlashCommand({ command: 'design', args: '  a pricing page  ' });
   assert.equal(chip.providerId, 'design-chamber');
@@ -42,8 +42,8 @@ test('/design and /artifact resolve to our chip via POST /chip with the frame di
   assert.deepEqual(chip.data, { slug: 'a-pricing-page', kind: 'canvas' });
   const body = JSON.parse(s.service.requests.at(-1)?.body ?? '{}');
   assert.deepEqual(body, { kind: 'canvas', brief: 'a pricing page', projectDirectory: 'C:\\Users\\you\\projects\\shop', sessionId: 'ses_here' });
-  const artifact = await s.flows.resolveSlashCommand({ command: 'artifact', args: '' });
-  assert.deepEqual(artifact.data, { slug: 'untitled-artifact', kind: 'artifact' });
+  const artifact = await s.flows.resolveSlashCommand({ command: 'page', args: '' });
+  assert.deepEqual(artifact.data, { slug: 'untitled-page', kind: 'page' });
   assert.equal(s.service.designs.get('a-pricing-page')?.design.sessionId, null, 'linking waits for reconciliation');
   await assert.rejects(s.flows.resolveSlashCommand({ command: 'deploy', args: '' }), FlowError);
 });
@@ -73,7 +73,7 @@ test('new design in a new chat: chip → startSession(open) → PATCH sessionId'
   assert.equal(s.service.designs.get(result.slug)?.design.sessionId, result.sessionId);
   assert.equal(s.service.designs.get(result.slug)?.design.preset, 'minimal-saas');
 
-  await s.flows.newDesign({ kind: 'artifact', brief: '   ', destination: 'new-chat' });
+  await s.flows.newDesign({ kind: 'page', brief: '   ', destination: 'new-chat' });
   assert.equal((s.host.callsOf('startSession')[1]?.[0] as StartSessionRequest).text, "Let's start this design.");
 });
 
@@ -99,7 +99,7 @@ test('new design in the current chat: attach + compose(append); the page closes'
   assert.equal(s.host.callsOf('startSession').length, 0);
 
   const rail = setup({ surface: 'panel', session: { id: 'ses_cur', title: 'Current', busy: false } });
-  await rail.flows.newDesign({ kind: 'artifact', brief: '', destination: 'current-chat' });
+  await rail.flows.newDesign({ kind: 'page', brief: '', destination: 'current-chat' });
   assert.equal(rail.host.callsOf('close').length, 0);
   assert.equal(rail.host.callsOf('compose').length, 0);
 });
@@ -156,7 +156,7 @@ test('send comments, branch 1: the linked session is selected and idle → sent 
   assert.deepEqual(result.commentIds, ['c_hero01']);
   const [prompt] = s.host.callsOf('prompt')[0] as [PromptRequest];
   assert.equal(prompt.send, true);
-  assert.match(prompt.text, /Revise "Coffee subscription" — 1 comment/);
+  assert.match(prompt.text, /Revise "Coffee subscription": 1 comment/);
   const comment = comments(s)[0];
   assert.equal(comment?.status, 'sent');
   assert.equal(comment?.sentVersion, s.service.designs.get(COFFEE)?.versions.at(-1)?.n);
@@ -417,7 +417,7 @@ test('turn snapshots: started → completed → POST /versions/turn, deduped per
 
 const message = (text: string): GuestMessageItem => ({
   kind: 'message',
-  action: 'open-as-artifact',
+  action: 'open-as-page',
   sessionId: 'ses_msg',
   sessionTitle: 'Landing ideas',
   directory: 'C:\\Users\\you\\projects\\shop',
@@ -429,10 +429,10 @@ const message = (text: string): GuestMessageItem => ({
 test('open as artifact: the HTML block becomes an artifact linked to the message session', async () => {
   const s = setup({ surface: 'panel' });
   const html = `<!doctype html><html><head><title>Hero idea</title></head><body>${'é😀'.repeat(40_000)}</body></html>`;
-  const created = await s.flows.openAsArtifact(message(`Here you go:\n\n\`\`\`html\n${html}\n\`\`\`\nEnjoy.`));
+  const created = await s.flows.openAsPage(message(`Here you go:\n\n\`\`\`html\n${html}\n\`\`\`\nEnjoy.`));
   assert.ok(created);
   const design = s.service.designs.get(created.slug);
-  assert.equal(design?.design.kind, 'artifact');
+  assert.equal(design?.design.kind, 'page');
   assert.equal(design?.design.sessionId, 'ses_msg');
   assert.equal(design?.design.title, 'Hero idea');
   assert.equal(design?.files['index.html'], `${html}\n`);
@@ -442,7 +442,7 @@ test('open as artifact: no HTML block → toast, nothing created, nothing upload
   const s = setup({ surface: 'panel' });
   const count = s.service.designs.size;
   const before = s.service.requests.length;
-  assert.equal(await s.flows.openAsArtifact(message('Just prose, and `inline <b>code</b>`.')), null);
+  assert.equal(await s.flows.openAsPage(message('Just prose, and `inline <b>code</b>`.')), null);
   assert.deepEqual(toasts(s), [MESSAGES.noHtml]);
   assert.equal(s.service.designs.size, count);
   assert.deepEqual(routes(s, before), [], 'answered in the guest, before any upload');
@@ -451,7 +451,7 @@ test('open as artifact: no HTML block → toast, nothing created, nothing upload
 test('open as artifact: the service 422 no-html stays the authority', async () => {
   const s = setup({ surface: 'panel' });
   // The guest finds a block the (stricter) fake service does not accept: the service's answer wins.
-  assert.equal(await s.flows.openAsArtifact(message('```\n<!doctype html><html><body>x</body></html>\n```')), null);
+  assert.equal(await s.flows.openAsPage(message('```\n<!doctype html><html><body>x</body></html>\n```')), null);
   assert.deepEqual(toasts(s), [MESSAGES.noHtml]);
 });
 
@@ -459,8 +459,8 @@ test('open as artifact (background action): saves, leaves an open request, opens
   const bg = setup({ surface: 'background' });
   await bg.flows.runAction(message('```html\n<html><title>Bike card</title></html>\n```'));
   assert.deepEqual(bg.host.callsOf('openSurface'), [['plugin:design-chamber']]);
-  assert.deepEqual(toasts(bg), [MESSAGES.savedArtifact('Bike card')]);
-  const body = JSON.parse(bg.service.requests.find((request) => request.path === '/artifacts/from-message')?.body ?? '{}');
+  assert.deepEqual(toasts(bg), [MESSAGES.savedPage('Bike card')]);
+  const body = JSON.parse(bg.service.requests.find((request) => request.path === '/pages/from-message')?.body ?? '{}');
   assert.equal(body.open, true);
 
   // The rail (same service) takes the request once, on mount, and opens the viewer.
@@ -489,7 +489,7 @@ test('open as artifact (background action): no side panel → the toast says whe
     throw new HostRequestError('UNSUPPORTED', 'This OpenChamber surface has no side panel.');
   };
   await s.flows.runAction(message('```html\n<html><title>Card</title></html>\n```'));
-  assert.deepEqual(toasts(s), [MESSAGES.savedArtifactClosed('Card')]);
+  assert.deepEqual(toasts(s), [MESSAGES.savedPageClosed('Card')]);
 
   const t = setup({ surface: 'background' });
   await t.flows.runAction(message('No code here.'));

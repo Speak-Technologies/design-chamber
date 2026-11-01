@@ -85,14 +85,14 @@ export const extractTitle = (html: string): string => {
   return decodeEntities((match[1] ?? '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()).slice(0, BRIDGE_TITLE_MAX);
 };
 
-/** The entry file a render/export shows: the artifact entry, or the (default: first existing) screen. */
+/** The entry file a render/export shows: the page entry, or the (default: first existing) screen. */
 export const resolveEntryFile = (
   design: DesignJson,
   files: DesignFiles,
   screen: string | undefined,
 ): { entryRel: string; screenId: string | null } => {
-  if (design.kind === 'artifact') {
-    if (screen !== undefined) throw new ApiError('not-found', 'This artifact is a single page; it has no screens.');
+  if (design.kind === 'page') {
+    if (screen !== undefined) throw new ApiError('not-found', 'This page is a single file; it has no screens.');
     return { entryRel: ENTRY_FILE, screenId: null };
   }
   if (screen !== undefined) {
@@ -104,7 +104,7 @@ export const resolveEntryFile = (
   }
   const existing = design.screens.find((candidate) => files.screens[candidate.id]?.exists);
   const pick = existing ?? design.screens[0];
-  if (!pick) throw new ApiError('no-html', 'This canvas has no screens yet — the agent has not written one.');
+  if (!pick) throw new ApiError('no-html', 'This canvas has no screens yet. The agent has not written one.');
   return { entryRel: screenFileOf(pick.id), screenId: pick.id };
 };
 
@@ -219,7 +219,7 @@ export const createRenderService = (deps: RenderDeps): BrandedRenderService => {
           });
           design = { ...record.design, ...parsed.design };
           const versionFiles: DesignFiles = { screens: {} };
-          if (design.kind === 'artifact') {
+          if (design.kind === 'page') {
             versionFiles.entry = { exists: versionEntry.files[ENTRY_FILE] !== undefined, size: 0, mtime: null };
           }
           for (const screen of design.screens) {

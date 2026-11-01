@@ -1,4 +1,4 @@
-// `/design` and `/artifact` end to end (docs/SPEC.md §10.1): the background frame's flow —
+// `/design` and `/page` end to end (docs/SPEC.md §10.1): the background frame's flow —
 // `createFlows(...).resolveSlashCommand` on the real guest service client — against the BUILT
 // service over HTTP with the bearer, the way the host proxies `serviceRequest`. The chip comes
 // back as the host's attach request, the pending design exists on disk with its brief, and
@@ -33,7 +33,7 @@ const httpTransport = (service: RunningService): ServiceTransport => ({
   },
 });
 
-test('/design and /artifact resolve to a chip through the real service client; the design and RULES.md are on disk', { timeout: 60_000 }, async (t) => {
+test('/design and /page resolve to a chip through the real service client; the design and RULES.md are on disk', { timeout: 60_000 }, async (t) => {
   if (!existsSync(BUILT_MAIN)) {
     t.skip('dist/service/main.js is missing — run `npm run build` (npm run check does) to test the built service.');
     return;
@@ -54,7 +54,7 @@ test('/design and /artifact resolve to a chip through the real service client; t
 
   for (const [command, args, kind, brief] of [
     ['design', '  A pricing page for a coffee club  ', 'canvas', 'A pricing page for a coffee club'],
-    ['artifact', 'Invoice template', 'artifact', 'Invoice template'],
+    ['page', 'Invoice template', 'page', 'Invoice template'],
   ] as const) {
     const attach = await flows.resolveSlashCommand({ command, args });
     assert.equal(attach.providerId, CHIP_PROVIDER_ID, command);

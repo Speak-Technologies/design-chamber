@@ -1,5 +1,6 @@
-// P1 — the page's library: toolbar (search, tabs, sort, New, settings) over a responsive grid
+// P1, the page's library: toolbar (search, tabs, sort, New, settings) over a responsive grid
 // of design cards with 16:10 thumbnails. Cards update live from change events without losing scroll.
+// Notices above the grid: a failed refresh, an earlier folder with designs, loose HTML files to import.
 
 import { mountBadge, mountBanner, mountEmpty, mountSearchField, mountSelect, mountTabs } from '@openchamber/sdk/ui';
 
@@ -8,6 +9,7 @@ import { designMenu, runDesignAction, toast, type ActionContext } from '../compo
 import { createScope, h } from '../components/dom.ts';
 import { icon } from '../components/icons.ts';
 import { attachMenu, btn, iconBtn } from '../components/kit.ts';
+import { mountLooseBanner } from '../components/loose-banner.ts';
 import { mountThumb, type ThumbHandle } from '../components/thumb.ts';
 import { host, store } from '../guest.ts';
 import { middlePath, plural, relativeTime } from '../model/format.ts';
@@ -16,7 +18,7 @@ import { designCountLabel } from '../model/settings-model.ts';
 
 export type LibraryOptions = {
   actions: ActionContext;
-  onNew: (kind: 'canvas' | 'artifact') => void;
+  onNew: (kind: 'canvas' | 'page') => void;
   onSettings: () => void;
   onOpen: (slug: string) => void;
 };
@@ -38,9 +40,9 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     newButton.el,
     () => [
       { id: 'canvas', label: 'Canvas…', hint: 'several screens' },
-      { id: 'artifact', label: 'Artifact…', hint: 'one HTML page' },
+      { id: 'page', label: 'Page…', hint: 'one HTML page' },
     ],
-    (id) => options.onNew(id === 'artifact' ? 'artifact' : 'canvas'),
+    (id) => options.onNew(id === 'page' ? 'page' : 'canvas'),
   );
   const settingsButton = btn({ label: 'Settings', variant: 'ghost', size: 'default', icon: 'settings', onClick: () => options.onSettings() });
 
@@ -73,6 +75,12 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     newButton.el,
   );
   const notices = h('div', { class: 'dc-library-notices' });
+  // Long-lived: repaints of the other notices never detach it, so focus and an import in flight survive.
+  const syncNotices = (): void => {
+    notices.hidden = ![...notices.children].some((child) => child instanceof HTMLElement && !child.hidden);
+  };
+  const looseBanner = mountLooseBanner({ sheetHost: options.actions.host, onOpen: options.onOpen, onPaint: syncNotices });
+  notices.append(looseBanner.el);
   const grid = h('ul', { class: 'dc-grid', role: 'list', 'aria-label': 'Designs' });
   const scroller = h('div', { class: 'dc-library-scroll' }, notices, grid);
   el.append(toolbar, scroller);
@@ -119,20 +127,22 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   const message = (...children: Array<Node>): HTMLElement => h('li', { class: 'dc-grid-message' }, ...children);
 
   const paintNotices = (): void => {
-    notices.replaceChildren();
+    for (const child of [...notices.children]) if (child !== looseBanner.el) child.remove();
     const state = store.getState();
     if (state.designs.status === 'error' && state.designs.data) {
       const wrap = h('div', { class: 'dc-banner' });
       mountBanner(wrap, { tone: 'warning', title: 'Couldn’t refresh the list', body: state.designs.error?.message ?? '', action: { label: 'Try again', onClick: () => void store.refreshDesigns() } });
-      notices.append(wrap);
+      looseBanner.el.before(wrap);
     }
     const first = state.settings.data?.previousRoots.find((root) => root.exists && root.designCount > 0);
     if (first) {
       const wrap = h('div', { class: 'dc-banner' });
       mountBanner(wrap, { tone: 'info', title: `${designCountLabel(first.designCount)} remain in your earlier folder`, body: middlePath(first.path), action: { label: 'Switch back', onClick: () => void switchBack(first.path) } });
       wrap.title = first.path;
-      notices.append(wrap);
+      looseBanner.el.before(wrap);
     }
+    looseBanner.update(state.designs.data?.loose ?? null);
+    syncNotices();
   };
 
   const paintGrid = (): void => {
@@ -157,7 +167,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     const kind = emptyKind(all, shown);
     if (kind === 'no-designs') {
       const wrap = h('div');
-      mountEmpty(wrap, { title: 'No designs yet', body: 'Type /design in any chat and describe what you want. Your agent writes the files and they show up here the moment they are saved.', action: { label: 'New canvas', onClick: () => options.onNew('canvas') } });
+      mountEmpty(wrap, { title: 'No designs yet', body: 'Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here the moment they are saved.', action: { label: 'New canvas', onClick: () => options.onNew('canvas') } });
       grid.append(message(wrap));
     } else if (kind === 'no-matches') {
       const wrap = h('div');
@@ -184,7 +194,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   scope.add(
     store.subscribe(() => {
       const state = store.getState();
-      const next = `${state.designs.status}:${JSON.stringify(state.designs.data?.designs ?? null)}:${state.designs.error?.message ?? ''}:${JSON.stringify(state.settings.data?.previousRoots ?? null)}`;
+      const next = `${state.designs.status}:${JSON.stringify(state.designs.data?.designs ?? null)}:${JSON.stringify(state.designs.data?.loose ?? null)}:${state.designs.error?.message ?? ''}:${JSON.stringify(state.settings.data?.previousRoots ?? null)}`;
       if (next === signature) return;
       signature = next;
       paintGrid();
@@ -204,6 +214,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     },
     dispose: () => {
       scope.dispose();
+      looseBanner.dispose();
       for (const handle of thumbs.values()) handle.dispose();
       thumbs.clear();
       search.dispose();

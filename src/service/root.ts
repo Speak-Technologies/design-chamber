@@ -49,7 +49,7 @@ const isFile = async (target: string): Promise<boolean> => {
 
 /**
  * A folder is a design (§6.1) when it holds design.json, the service's `.chamber/state.json`,
- * an artifact `index.html` or a `screens/` folder. Anything else under the root is the
+ * a page `index.html` or a `screens/` folder. Anything else under the root is the
  * user's own folder: never listed, reconciled, snapshotted or written into.
  */
 export const isDesignFolder = async (dir: string): Promise<boolean> =>
@@ -154,9 +154,10 @@ export type ValidateRootOptions = {
 };
 
 /**
- * Validate a user-chosen designs root. Order: invalid character (NUL) → not absolute (after
- * `~` expansion; a win32 drive-relative `C:foo` is not absolute) → filesystem root → inside
- * the extension package → not creatable/writable (mkdir -p, then a write+delete probe).
+ * Validate a user-chosen designs root. Order: invalid character (NUL or another control
+ * character) → not absolute (after `~` expansion; a win32 drive-relative `C:foo` is not
+ * absolute) → filesystem root → inside the extension package → not creatable/writable
+ * (mkdir -p, then a write+delete probe).
  */
 export const validateRootCandidate = async (raw: unknown, options: ValidateRootOptions): Promise<RootValidation> => {
   const homeDir = options.homeDir ?? os.homedir();
@@ -164,7 +165,8 @@ export const validateRootCandidate = async (raw: unknown, options: ValidateRootO
   const platform = host.platform ?? process.platform;
   if (typeof raw !== 'string') return { ok: false, message: 'The designs folder must be a path.' };
   const value = raw.trim();
-  if (value.includes('\0')) return { ok: false, message: 'The folder path contains an invalid character.' };
+  // NUL and every other control character: a newline in the root would reach the agent guide and skill text.
+  if (/[\u0000-\u001f\u007f]/.test(value)) return { ok: false, message: 'The folder path contains an invalid character.' };
   if (value.length > SETTINGS_PATH_MAX) return { ok: false, message: 'That folder path is too long.' };
   const expanded = expandHome(value, homeDir);
   if (expanded === '' || !path.isAbsolute(expanded)) {
@@ -172,7 +174,7 @@ export const validateRootCandidate = async (raw: unknown, options: ValidateRootO
   }
   const abs = path.resolve(expanded);
   if (path.parse(abs).root === abs) {
-    return { ok: false, message: 'A drive or filesystem root cannot hold your designs — pick a folder inside it.' };
+    return { ok: false, message: 'A drive or filesystem root cannot hold your designs. Pick a folder inside it.' };
   }
   // Every folder under the root is scanned and may become a design: the user's home (or a
   // folder holding it) and Documents itself (English or the XDG one) hold their own files.
@@ -182,7 +184,7 @@ export const validateRootCandidate = async (raw: unknown, options: ValidateRootO
     return { ok: false, message: `That folder holds your own files, so it cannot be your designs folder. Pick or create a folder just for designs, for example ${example}.` };
   }
   if (isInsideOrEqual(options.packageRoot, abs)) {
-    return { ok: false, message: 'That folder is inside the Design Chamber extension itself — pick a folder elsewhere.' };
+    return { ok: false, message: 'That folder is inside the Design Chamber extension itself. Pick a folder somewhere else.' };
   }
   try {
     await mkdir(abs, { recursive: true });

@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import type { DesignSummary } from '../../src/shared/types.ts';
-import { relativeTime, plural, folderName, middlePath, zoomPercent } from '../../src/ui/model/format.ts';
-import { emptyKind, filterDesigns, kindSummary, rowAriaLabel, sortDesigns, tabCounts } from '../../src/ui/model/list-model.ts';
+import { fileSize, relativeTime, plural, folderName, middlePath, zoomPercent } from '../../src/ui/model/format.ts';
+import { LIST_TABS, emptyKind, filterDesigns, kindLabel, kindSummary, rowAriaLabel, sortDesigns, tabCounts } from '../../src/ui/model/list-model.ts';
+import { kindHint, startLabel } from '../../src/ui/model/new-model.ts';
 
 const design = (over: Partial<DesignSummary> & Pick<DesignSummary, 'slug'>): DesignSummary => ({
   kind: 'canvas',
@@ -22,20 +23,20 @@ const design = (over: Partial<DesignSummary> & Pick<DesignSummary, 'slug'>): Des
 
 const set = [
   design({ slug: 'coffee', title: 'Coffee subscription', updated: '2026-10-26T10:00:00.000Z', created: '2026-10-20T10:00:00.000Z' }),
-  design({ slug: 'invoice', title: 'Invoice template', kind: 'artifact', screenCount: 0, updated: '2026-10-25T10:00:00.000Z', created: '2026-10-25T09:00:00.000Z' }),
+  design({ slug: 'invoice', title: 'Invoice template', kind: 'page', screenCount: 0, updated: '2026-10-25T10:00:00.000Z', created: '2026-10-25T09:00:00.000Z' }),
   design({ slug: 'onboarding', title: 'Onboarding', pending: true, updated: '2026-10-27T10:00:00.000Z', created: '2026-10-10T10:00:00.000Z' }),
 ];
 
 test('filterDesigns narrows by tab and by a case-insensitive title or slug match', () => {
-  assert.deepEqual(filterDesigns(set, '', 'artifact').map((d) => d.slug), ['invoice']);
+  assert.deepEqual(filterDesigns(set, '', 'page').map((d) => d.slug), ['invoice']);
   assert.deepEqual(filterDesigns(set, 'COFFEE', 'all').map((d) => d.slug), ['coffee']);
   assert.deepEqual(filterDesigns(set, 'on', 'canvas').map((d) => d.slug), ['coffee', 'onboarding']);
   assert.deepEqual(filterDesigns(set, '  ', 'all'), set);
 });
 
 test('tabCounts follow the search so a tab never counts rows the search hides', () => {
-  assert.deepEqual(tabCounts(set, ''), { all: 3, canvas: 2, artifact: 1 });
-  assert.deepEqual(tabCounts(set, 'invoice'), { all: 1, canvas: 0, artifact: 1 });
+  assert.deepEqual(tabCounts(set, ''), { all: 3, canvas: 2, page: 1 });
+  assert.deepEqual(tabCounts(set, 'invoice'), { all: 1, canvas: 0, page: 1 });
 });
 
 test('sortDesigns orders by updated/created newest first and by title A–Z, without mutating the input', () => {
@@ -55,8 +56,20 @@ test('emptyKind tells "nothing written yet" from "the search hides everything"',
 test('kindSummary and rowAriaLabel use the glossary words and singular/plural correctly', () => {
   assert.equal(kindSummary(design({ slug: 'a', screenCount: 1 })), 'Canvas · 1 screen');
   assert.equal(kindSummary(design({ slug: 'a', screenCount: 3 })), 'Canvas · 3 screens');
-  assert.equal(kindSummary(design({ slug: 'a', kind: 'artifact' })), 'Artifact');
+  assert.equal(kindSummary(design({ slug: 'a', kind: 'page' })), 'Page');
   assert.equal(rowAriaLabel(design({ slug: 'a', title: 'A', pending: true, openComments: 2 })), 'A, Canvas · 3 screens, waiting for the agent, 2 open comments');
+});
+
+test('the user sees "Page", never "artifact", in tabs, labels and the New dialog', () => {
+  assert.deepEqual(LIST_TABS.map((t) => t.label), ['All', 'Canvases', 'Pages']);
+  assert.equal(kindLabel('page'), 'Page');
+  assert.equal(kindLabel('canvas'), 'Canvas');
+  assert.equal(startLabel('page'), 'Start page');
+  assert.equal(startLabel('canvas'), 'Start canvas');
+  for (const text of [...LIST_TABS.map((t) => t.label), kindLabel('page'), startLabel('page'), kindHint('page'), kindHint('canvas')]) {
+    assert.doesNotMatch(text, /artifact/i, text);
+    assert.doesNotMatch(text, /\u2014/, text);
+  }
 });
 
 test('relativeTime is plain, locale-aware and tolerant of bad input', () => {
@@ -73,6 +86,10 @@ test('small format helpers', () => {
   assert.equal(plural(0, 'comment'), '0 comments');
   assert.equal(folderName('C:\\Users\\you\\Documents\\Designs\\'), 'Designs');
   assert.equal(zoomPercent(0.254), '25%');
+  assert.equal(fileSize(820, 'en'), '820 bytes');
+  assert.equal(fileSize(14_200, 'en'), '14 kB');
+  assert.equal(fileSize(1_420_000, 'en'), '1.4 MB');
+  assert.equal(fileSize(Number.NaN, 'en'), '0 bytes');
 });
 
 test('middlePath shortens a long folder path in the middle and keeps the last folder whole', () => {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import type { Comment, Screen, VersionSummary } from '../../src/shared/types.ts';
-import { countByStatus, groupComments, pinAriaLabel, pinGlyph, pinNumbers, sendState } from '../../src/ui/model/comments-model.ts';
+import { countByStatus, groupComments, pinAriaLabel, pinGlyph, pinNumbers, sendState, viewportOf } from '../../src/ui/model/comments-model.ts';
 import { reasonLabel, restoreConfirmBody, versionRows, viewingBanner } from '../../src/ui/model/versions-model.ts';
 
 const comment = (id: string, over: Partial<Comment> = {}): Comment => ({
@@ -38,7 +38,7 @@ test('pinNumbers follow creation order, not array order, and break ties by array
 test('groupComments keeps wall order, puts artifact comments first and surfaces orphans', () => {
   const list = [comment('c_1', { screen: 'pricing' }), comment('c_2', { screen: 'home' }), comment('c_3', { screen: 'gone' }), comment('c_4', { screen: null })];
   const groups = groupComments(list, screens, 'Artifact');
-  assert.deepEqual(groups.map((g) => g.key), ['artifact', 'home', 'pricing', '__missing']);
+  assert.deepEqual(groups.map((g) => g.key), ['page', 'home', 'pricing', '__missing']);
   assert.deepEqual(groups.map((g) => g.comments.map((c) => c.id)), [['c_4'], ['c_2'], ['c_1'], ['c_3']]);
 });
 
@@ -82,7 +82,15 @@ test('version copy uses the labels the spec names', () => {
   assert.equal(reasonLabel('turn'), 'After agent turn');
   assert.equal(reasonLabel('manual'), 'Saved manually');
   assert.equal(reasonLabel('restore-point'), 'Before restore');
-  assert.equal(viewingBanner(12, false), 'Viewing v12 — read only');
+  assert.equal(viewingBanner(12, false), 'Viewing v12 (read only)');
   assert.match(viewingBanner(12, true), /Comparing v12/);
   assert.match(restoreConfirmBody(7), /saved as a version first/);
+});
+
+test('viewportOf names a page comment made in Full width, and a real viewport of that id still wins', () => {
+  const laptop = { id: 'laptop', label: 'Laptop', width: 1280, height: 800 };
+  assert.equal(viewportOf([laptop], 'laptop'), 'Laptop 1280×800');
+  assert.equal(viewportOf([laptop], 'fill'), 'Full width');
+  assert.equal(viewportOf([{ id: 'fill', label: 'Wide', width: 1920, height: 1080 }], 'fill'), 'Wide 1920×1080');
+  assert.equal(viewportOf([laptop], 'gone'), 'gone');
 });

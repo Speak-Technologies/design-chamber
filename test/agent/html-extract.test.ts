@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { deriveArtifactTitle, extractHtml } from '../../src/shared/agent/html-extract.ts';
+import { derivePageTitle, extractHtml } from '../../src/shared/agent/html-extract.ts';
 
 const PAGE = '<!doctype html>\n<html lang="en"><head><title>Hello</title></head><body><h1>Hi</h1></body></html>';
 
@@ -57,28 +57,28 @@ describe('extractHtml', () => {
   });
 });
 
-describe('deriveArtifactTitle', () => {
+describe('derivePageTitle', () => {
   const message = (md: string, html = PAGE): [string, string] => [`${md}\n\n\`\`\`html\n${html}\n\`\`\``, html];
 
   test('prefers the page <title>, decoding entities', () => {
     const [text, html] = message('# Heading', '<html><head><title>Tom &amp; Jerry &#8212; fan page</title></head></html>');
-    assert.equal(deriveArtifactTitle(text, html, 'Chat'), 'Tom & Jerry — fan page');
+    assert.equal(derivePageTitle(text, html, 'Chat'), 'Tom & Jerry — fan page');
   });
 
   test('then the first Markdown heading of the message (not one inside a code block)', () => {
     const html = '<div>no title</div>';
-    assert.equal(deriveArtifactTitle(`\`\`\`sh\n# a shell comment\n\`\`\`\n## A pricing page\n\n\`\`\`html\n${html}\n\`\`\``, html, 'Chat'), 'A pricing page');
+    assert.equal(derivePageTitle(`\`\`\`sh\n# a shell comment\n\`\`\`\n## A pricing page\n\n\`\`\`html\n${html}\n\`\`\``, html, 'Chat'), 'A pricing page');
   });
 
   test('then the first <h1>, then the session title, then a constant', () => {
-    assert.equal(deriveArtifactTitle('text', '<main><h1 class="x">Big <em>news</em></h1></main>', 'Chat'), 'Big news');
-    assert.equal(deriveArtifactTitle('text', '<p>x</p>', 'My chat'), 'My chat');
-    assert.equal(deriveArtifactTitle('text', '<p>x</p>', '  '), 'HTML artifact');
+    assert.equal(derivePageTitle('text', '<main><h1 class="x">Big <em>news</em></h1></main>', 'Chat'), 'Big news');
+    assert.equal(derivePageTitle('text', '<p>x</p>', 'My chat'), 'My chat');
+    assert.equal(derivePageTitle('text', '<p>x</p>', '  '), 'HTML page');
   });
 
   test('is one line and at most 120 characters', () => {
     const long = `Line one\n${'x'.repeat(300)}`;
-    const title = deriveArtifactTitle('', `<title>${long}</title>`, 'Chat');
+    const title = derivePageTitle('', `<title>${long}</title>`, 'Chat');
     assert.ok(title.length <= 120 && !title.includes('\n'));
     assert.ok(title.endsWith('…'));
   });

@@ -123,15 +123,15 @@ const createStore = (settings: SettingsStore): DesignStore => {
     const state = stateText === null ? null : normalizeServiceState(JSON.parse(stateText));
     const designText = await readFile(path.join(folder, 'design.json'), 'utf8').catch(() => null);
     const hasEntry = (await fileStatus(path.join(folder, ENTRY_FILE))).exists;
-    const kind: DesignKind = state?.kind ?? (hasEntry ? 'artifact' : 'canvas');
+    const kind: DesignKind = state?.kind ?? (hasEntry ? 'page' : 'canvas');
     const parsed = parseDesignJsonText(designText ?? '{}', { kind, fallbackTitle: slug, fallbackTime: folderTime });
     const warnings = designText === null ? [{ code: 'no-design-json', message: 'This design has no design.json yet.' }, ...parsed.warnings] : parsed.warnings;
     const finalState = state ?? serviceStateOf(parsed.design);
     const design = applyServiceState(parsed.design, finalState);
     const files: DesignFiles = { screens: {} };
-    if (design.kind === 'artifact') files.entry = await fileStatus(path.join(folder, ENTRY_FILE));
+    if (design.kind === 'page') files.entry = await fileStatus(path.join(folder, ENTRY_FILE));
     for (const screen of design.screens) files.screens[screen.id] = await fileStatus(path.join(folder, ...screenFileOf(screen.id).split('/')));
-    const pending = design.kind === 'artifact' ? !files.entry?.exists : !Object.values(files.screens).some((file) => file.exists);
+    const pending = design.kind === 'page' ? !files.entry?.exists : !Object.values(files.screens).some((file) => file.exists);
     return { slug, path: folder, design, state: finalState, extra: parsed.extra, pending, files, warnings };
   };
 

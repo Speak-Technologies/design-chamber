@@ -23,25 +23,25 @@ Owner decisions (2026-10-26). Anything not listed here is open — ask, don't gu
 - Default root `~/Documents/Designs`; user can change it (persisted setting); existing
   designs are not silently moved.
 - One folder per item: `Designs/<slug>/` with `design.json`
-  (`kind: "artifact" | "canvas"`, title, created/updated, linked `sessionId`, viewports,
-  screen list, comments), `index.html` (artifact) or `screens/*.html` (canvas), `assets/`,
+  (`kind: "page" | "canvas"`; older `"artifact"` still reads as a page; title, created/updated, linked `sessionId`, viewports,
+  screen list, comments), `index.html` (page) or `screens/*.html` (canvas), `assets/`,
   `DESIGN.md` + `tokens.css` (per-design design system), `.versions/` (snapshots).
 
 ## Creation / editing
-- The chat agent writes the files. `/design <brief>` (and an "artifact" variant) in any chat
-  attaches: the design rules, the target folder, the design.json contract.
+- The chat agent writes the files. `/design <brief>` (canvas) and `/page <brief>` in any chat
+  attach: the design rules, the target folder, the design.json contract.
 - Extension watches the folder and refreshes live.
 - Each design remembers its chat session: "Continue in chat" reopens it; comments and
   revisions go to that session (new chat if none / gone).
-- Message action "Open as artifact": an assistant message with an HTML code block becomes an
-  artifact in Designs and opens in the viewer.
+- Message action "Open as page": an assistant message with an HTML code block becomes a
+  page in Designs and opens in the viewer.
 
 ## Views
 - **List**: thumbnail grid of designs (rail + page), headless-Chrome PNG thumbnails cached on
   change; fallback to live mini-iframe when Chrome is missing.
-- **Rail panel** for navigating artifacts and designs.
-- **HTML canvas (artifact)**: renders a standard HTML page with its local images, like a
-  browser. Export: **ZIP** (html + assets, like Claude Desktop artifact download) and
+- **Rail panel** for navigating pages and canvases.
+- **Page**: one HTML page shown full screen like a browser tab, with its local images (fills
+  the viewer; a viewport preset shows a fixed width without pan/zoom). Export: **ZIP** (html + assets, like Claude Desktop artifact download) and
   **single-file HTML** (assets inlined).
 - **Design canvas**: an infinite wall with horizontal + vertical scroll/pan and zoom showing
   multiple screens × multiple viewports as artboards.
@@ -65,14 +65,27 @@ Precedence, highest first:
 - Bundled style presets pickable at creation.
 
 ## Owner decisions on spec questions (2026-10-26)
-- Chips / "Open as artifact" open the compact viewer in the rail (extensions can't open their
+- Chips / "Open as page" open the compact viewer in the rail (extensions can't open their
   full-screen page from code); hint points to sidebar → Extension pages.
 - No Google Fonts / CDNs in designs; fonts bundled in `assets/`, system fallbacks.
 - Agent write permission: Settings shows a copyable `opencode.json` snippet; never edit the
   user's config.
 - Exports (ZIP, single-file HTML) go to `~/Downloads` with a "Show in folder" toast.
 - Delete moves a design to `<root>/.trash`.
-- Comment pins work on artifacts as well as canvases.
+- Comment pins work on pages as well as canvases.
+
+## Owner decisions (2026-11-01)
+- "Artifact" is renamed "Page" everywhere the user or an agent sees it.
+- Agents find Design Chamber without a slash command: the service keeps a guide at
+  `<root>/AGENTS.md` (never overwriting a file the user wrote or edited); Settings can install a
+  `design-chamber` skill into OpenCode's global skills folder, only when the user clicks; Settings
+  shows a copyable AGENTS.md snippet.
+- A folder the agent fills with HTML before design.json keeps the agent's design.json values.
+- Loose `.html` files in the designs folder are offered for import as pages; the original moves
+  to `.trash`.
+- Designs that load files from the internet show what was blocked, and sent comments include
+  that list.
+- Writes outside the designs folder: only the user-clicked skill install, to that one file.
 
 ## Process
 - Public GitHub repo, MIT, default branch `master` with branch protection (PR + 1 approval + CI; owner-only bypass). (Updated 2026-10-27; was local-only.)

@@ -4,10 +4,12 @@
 // against the actual filesystem when the platform allows creating one.
 
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, realpath as fsRealpath, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath as fsRealpath, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, test } from 'node:test';
+import { describe, test, type TestContext } from 'node:test';
+
+import { refuseRenames } from '../../helpers/refuse-rename.ts';
 
 import { ApiError } from '../../../src/service/http.ts';
 import { foldsCase, isInsideOrEqual, isStrictlyInside, resolveInside, samePath, writeFileAtomic, type ContainmentDeps } from '../../../src/service/paths.ts';
@@ -245,5 +247,44 @@ describe('writeFileAtomic', () => {
     assert.equal(await readFile(target, 'utf8'), '{"version":2}\n');
     const left = (await readdir(path.join(tmp, 'nested'))).filter((name) => name.includes('.tmp-'));
     assert.deepEqual(left, []);
+  });
+
+  const atomicTmp = async (t: TestContext): Promise<string> => {
+    const tmp = await fsRealpath(await mkdtemp(path.join(os.tmpdir(), 'dc-atomic-')));
+    t.after(() => rm(tmp, { recursive: true, force: true, maxRetries: 3 }));
+    return tmp;
+  };
+
+  for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
+    test(`a rename Windows refuses for a moment (${code}: a reader has the file open) is retried and lands`, async (t) => {
+      const tmp = await atomicTmp(t);
+      const target = path.join(tmp, 'state.json');
+      await writeFile(target, 'old\n');
+      const refusal = refuseRenames(t, (destination, attempt) => destination === target && attempt <= 2, code);
+      await writeFileAtomic(target, 'new\n');
+      assert.equal(await readFile(target, 'utf8'), 'new\n');
+      assert.equal(refusal.attempts.filter((entry) => entry === target).length, 3);
+      assert.deepEqual((await readdir(tmp)).filter((name) => name.includes('.tmp-')), []);
+    });
+  }
+
+  test('a rename that stays refused fails loudly after a bounded number of tries, the old file intact and no tmp left', async (t) => {
+    const tmp = await atomicTmp(t);
+    const target = path.join(tmp, 'state.json');
+    await writeFile(target, 'old\n');
+    const refusal = refuseRenames(t, (destination) => destination === target);
+    await assert.rejects(writeFileAtomic(target, 'new\n'), (error: NodeJS.ErrnoException) => error.code === 'EPERM');
+    const tries = refusal.attempts.filter((entry) => entry === target).length;
+    assert.equal(tries, 5, `tried ${tries} times`);
+    assert.equal(await readFile(target, 'utf8'), 'old\n');
+    assert.deepEqual((await readdir(tmp)).filter((name) => name.includes('.tmp-')), []);
+  });
+
+  test('any other rename failure is not retried', async (t) => {
+    const tmp = await atomicTmp(t);
+    const target = path.join(tmp, 'state.json');
+    const refusal = refuseRenames(t, (destination) => destination === target, 'EXDEV');
+    await assert.rejects(writeFileAtomic(target, 'new\n'), (error: NodeJS.ErrnoException) => error.code === 'EXDEV');
+    assert.equal(refusal.attempts.filter((entry) => entry === target).length, 1);
   });
 });

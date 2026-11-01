@@ -190,7 +190,7 @@ export const createRevealService = (deps: RevealDeps): RevealService => {
       deps.log.warn('reveal.no-file-manager', { tried: tried.join(', ') });
       throw new ApiError(
         'internal',
-        `Design Chamber could not open a file manager. The file is at ${resolved} — open it yourself, or install xdg-utils so "Show in folder" works.`,
+        `Design Chamber could not open a file manager. The file is at ${resolved}. Open it yourself, or install xdg-utils so "Show in folder" works.`,
       );
     },
   };

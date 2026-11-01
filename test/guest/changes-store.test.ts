@@ -107,7 +107,7 @@ test('affectedSources: screen file → its screen, design.json → none, shared 
   assert.deepEqual(affectedSources(canvas, ['screens/home.html', 'screens/pricing.html', 'design.json']), ['home', 'pricing']);
   assert.deepEqual(affectedSources(canvas, ['design.json']), []);
   for (const shared of ['tokens.css', 'assets/logo.svg', 'DESIGN.md', 'screens/unknown.html']) assert.equal(affectedSources(canvas, [shared]), 'all', shared);
-  assert.equal(affectedSources({ kind: 'artifact', screens: [] }, ['index.html']), 'all');
+  assert.equal(affectedSources({ kind: 'page', screens: [] }, ['index.html']), 'all');
 });
 
 test('store: list, open, live refresh of only the affected artboards, comments and versions', async () => {
@@ -173,6 +173,27 @@ test('store: an `added` event for the open design reloads every artboard of its 
   // `added` for another design only refreshes the list.
   await store.applyChanges({ reset: false, epoch: 'e', seq: 2, events: [{ seq: 2, slug: 'launch-announcement', kind: 'added' }] });
   assert.equal(Object.keys(store.getState().renderRevs).length, screens.length);
+});
+
+test('store: a `loose` event refetches the list exactly once, and nothing else', async () => {
+  const service = createFakeService();
+  const client = createServiceClient({ serviceRequest: (request) => service.handle(request) });
+  const store = createStore({ client });
+  await store.openDesign('coffee-subscription');
+  const before = service.requests.length;
+  await store.applyChanges({
+    reset: false,
+    epoch: 'e',
+    seq: 2,
+    events: [
+      { seq: 1, slug: null, kind: 'loose' },
+      { seq: 2, slug: null, kind: 'loose' },
+    ],
+  });
+  const paths = service.requests.slice(before).map((request) => `${request.method} ${request.path}`);
+  assert.deepEqual(paths, ['GET /designs']);
+  assert.deepEqual(store.getState().renderRevs, {}, 'no artboard reloads');
+  assert.equal(store.getState().designs.status, 'ready');
 });
 
 test('store: errors land in state with the service sentence; mutations reject with it; reset refetches', async () => {

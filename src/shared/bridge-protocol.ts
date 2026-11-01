@@ -86,8 +86,8 @@ export type BridgeKey = (typeof BRIDGE_KEYS)[number];
 export type PageToFrameType = PageToFrameMessage['type'];
 export type FrameToPageType = FrameToPageMessage['type'];
 
-/** Artboard id used by the wall and the bridge: `<screen id | "artifact">@<viewport id>`. */
-export const artboardIdOf = (screen: string | null, viewport: string): string => `${screen ?? 'artifact'}@${viewport}`;
+/** Artboard id used by the wall and the bridge: `<screen id | "page">@<viewport id>`. */
+export const artboardIdOf = (screen: string | null, viewport: string): string => `${screen ?? 'page'}@${viewport}`;
 
 // ---- Validation (pure; both ends use it) ----
 

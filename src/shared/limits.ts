@@ -117,7 +117,7 @@ export const CREATE_INLINE_HTML_MAX = 60_000;
 // ---- Outbox [§7, §10.4] ----
 
 export const OUTBOX_TTL_MS = 10 * 60_000;
-/** How long "Open as artifact" waits for the rail to take its open request. */
+/** How long "Open as page" waits for the rail to take its open request. */
 export const OPEN_REQUEST_TTL_MS = 2 * 60_000;
 
 // ---- Changes / watcher [§4.8, §9.4] ----
@@ -167,6 +167,8 @@ export const CAMERA_PAN_MAX = 1e6;
 export const WHEEL_ZOOM_RATE = 0.005;
 export const WALL_GAP = 96;
 export const ARTBOARD_LABEL_HEIGHT = 28;
+/** Viewport id of a page's Full-width view; comments made there record it as `Comment.viewport`. */
+export const PAGE_FILL_VIEWPORT_ID = 'fill';
 
 // ---- Bridge [§8.3] ----
 
@@ -206,6 +208,28 @@ export const REVISION_TEXT_MAX = HOST_TEXT_MAX;
 export const CHIP_PROJECT_PATHS_MAX = 6;
 /** Chip build budget, discovery included [§10.1]. */
 export const CHIP_BUILD_BUDGET_MS = 3000;
+/** Remote URLs listed in a revision or offline prompt, each at most this many characters. */
+export const PROMPT_EXTERNAL_MAX = 20;
+export const PROMPT_EXTERNAL_URL_MAX = 200;
+/** Time budget for rendering screens to collect their remote URLs. */
+export const PROMPT_EXTERNAL_SCAN_MS = 5000;
+
+// ---- Agent discovery: guide, skill, snippet ----
+
+export const GUIDE_TEXT_MAX = 8000;
+export const SKILL_TEXT_MAX = 6000;
+export const SKILL_DESCRIPTION_MAX = 1024;
+export const AGENTS_SNIPPET_MAX = 1000;
+
+// ---- Loose html files in the root ----
+
+/** Names returned by `GET /designs` `loose.files`. */
+export const LOOSE_LIST_MAX = 20;
+/** Root html entries `stat`ed per listing; the rest are only counted. */
+export const LOOSE_SCAN_MAX = 200;
+export const LOOSE_IMPORT_MAX_BYTES = 20 * 1024 * 1024;
+/** Bytes read from a loose file to find its `<title>`. */
+export const LOOSE_TITLE_SCAN_BYTES = 65_536;
 
 // ---- Project-rules discovery [§11.1] ----
 

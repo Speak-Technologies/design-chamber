@@ -29,7 +29,7 @@ const validateCreate = (body: unknown): CreateCommentBody => {
   if (!isBodyRecord(body)) throw new ApiError('bad-request', 'The comment must be a JSON object.');
   const { screen, viewport, body: text } = body;
   if (screen !== null && (typeof screen !== 'string' || !SCREEN_ID_PATTERN.test(screen))) {
-    throw new ApiError('bad-request', 'The comment belongs to a screen id (lowercase letters, digits and -), or null on an artifact.');
+    throw new ApiError('bad-request', 'The comment belongs to a screen id (lowercase letters, digits and -), or null on a page.');
   }
   if (typeof viewport !== 'string' || !VIEWPORT_ID_PATTERN.test(viewport)) {
     throw new ApiError('bad-request', 'The comment needs the viewport id it was made on.');

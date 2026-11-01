@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { API_ERROR_STATUS, isApiErrorCode, RAW_TEXT_ROUTES, ROUTE_KEYS, ROUTE_OWNERS, routePath, splitRouteKey } from '../../src/shared/api.ts';
 
 test('the route table lists every §7 route once, each with an owner lane', () => {
-  assert.equal(ROUTE_KEYS.length, 35);
+  assert.equal(ROUTE_KEYS.length, 37);
   assert.equal(new Set(ROUTE_KEYS).size, ROUTE_KEYS.length);
   for (const key of ROUTE_KEYS) {
     const { method, pattern } = splitRouteKey(key);

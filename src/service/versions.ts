@@ -353,7 +353,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
         if (options.required === true) {
           throw new ApiError(
             'invalid',
-            `This design is too large to keep a restore point (more than ${SNAPSHOT_FILES_MAX.toLocaleString('en-US')} files or ${Math.round(SNAPSHOT_BYTES_MAX / (1024 * 1024))} MB), so restoring now would lose your current files. Nothing was changed — remove files you no longer need, or copy the design folder somewhere safe, then try again.`,
+            `This design is too large to keep a restore point (more than ${SNAPSHOT_FILES_MAX.toLocaleString('en-US')} files or ${Math.round(SNAPSHOT_BYTES_MAX / (1024 * 1024))} MB), so restoring now would lose your current files. Nothing was changed. Remove files you no longer need, or copy the design folder somewhere safe, then try again.`,
           );
         }
         return null;

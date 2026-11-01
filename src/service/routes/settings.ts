@@ -1,7 +1,9 @@
-// WP1 — GET /settings, PUT /settings (docs/SPEC.md §7, §9.2).
+// WP1 — GET /settings, PUT /settings, POST /agent/skill (docs/SPEC.md §7, §9.2;
+// documentation/specs/agent-guidance-and-pages.md §3.3, §3.4).
 
-import type { PreviousRoot, SettingsResponse } from '../../shared/api.ts';
+import type { InstallSkillResponse, PreviousRoot, SettingsResponse } from '../../shared/api.ts';
 import { SETTINGS_PATH_MAX } from '../../shared/limits.ts';
+import type { AgentSetup } from '../agent-setup.ts';
 import { resolveBrowser } from '../chrome.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
@@ -10,8 +12,8 @@ import { countDesigns, exampleDesignsFolder, isDirectory, resolveDownloadsDir } 
 const isBodyRecord = (body: unknown): body is Record<string, unknown> =>
   typeof body === 'object' && body !== null && !Array.isArray(body);
 
-/** Assemble the §7 settings answer from the store (previousRoots carry live counts). */
-const buildSettingsResponse = async (ctx: ServiceContext): Promise<SettingsResponse> => {
+/** Assemble the §7 settings answer from the store (previousRoots carry live counts). Guide and skill state are read, never written, here. */
+const buildSettingsResponse = async (ctx: ServiceContext, agent: AgentSetup): Promise<SettingsResponse> => {
   const file = ctx.settings.read();
   const root = ctx.settings.root();
   const previousRoots: PreviousRoot[] = [];
@@ -27,6 +29,8 @@ const buildSettingsResponse = async (ctx: ServiceContext): Promise<SettingsRespo
     // The browser thumbnails will use: the user's setting when that file exists, else a detected install.
     chrome: resolveBrowser(file),
     downloadsDir: await resolveDownloadsDir(root, file.downloadsDir),
+    // A guide write queued by a root change (PUT just before) lands first, so the answer is current.
+    agent: { guide: await agent.idle().then(() => agent.guideStatus(root)), skill: await agent.skillStatus() },
   };
 };
 
@@ -37,6 +41,15 @@ const validateRoot = (raw: unknown): string | null | undefined => {
     throw new ApiError('bad-path', `The designs folder must be a full folder path (for example ${exampleDesignsFolder()}).`);
   }
   return raw;
+};
+
+/** `POST /agent/skill` body: an object whose only meaningful key is the optional boolean `replaceEdited`; other keys are ignored. No path is ever accepted. */
+const validateInstallSkill = (body: unknown): { replaceEdited: boolean } => {
+  if (body === undefined) return { replaceEdited: false };
+  if (!isBodyRecord(body)) throw new ApiError('bad-request', 'The skill request must be a JSON object.');
+  const raw = body.replaceEdited;
+  if (raw !== undefined && typeof raw !== 'boolean') throw new ApiError('bad-request', '"replaceEdited" must be true or false.');
+  return { replaceEdited: raw === true };
 };
 
 const validateChromePath = (raw: unknown): string | null | undefined => {
@@ -52,9 +65,10 @@ const validateChromePath = (raw: unknown): string | null | undefined => {
  * Registers:
  * - 'GET /settings'
  * - 'PUT /settings'
+ * - 'POST /agent/skill'
  */
-export function registerSettingsRoutes(router: Router, ctx: ServiceContext): void {
-  router.on('GET /settings', async (): Promise<SettingsResponse> => buildSettingsResponse(ctx));
+export function registerSettingsRoutes(router: Router, ctx: ServiceContext, agent: AgentSetup): void {
+  router.on('GET /settings', async (): Promise<SettingsResponse> => buildSettingsResponse(ctx, agent));
 
   router.on('PUT /settings', async ({ body }): Promise<SettingsResponse> => {
     if (body !== undefined && !isBodyRecord(body)) throw new ApiError('bad-request', 'The settings update must be a JSON object.');
@@ -70,6 +84,9 @@ export function registerSettingsRoutes(router: Router, ctx: ServiceContext): voi
       ...(root !== undefined ? { root } : {}),
       ...(chromePath !== undefined ? { chromePath } : {}),
     });
-    return buildSettingsResponse(ctx);
+    return buildSettingsResponse(ctx, agent);
   });
+
+  // The only write outside the designs root, and only from the user's click in Settings.
+  router.on('POST /agent/skill', async ({ body }): Promise<InstallSkillResponse> => ({ skill: await agent.installSkill(validateInstallSkill(body)) }));
 }

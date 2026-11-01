@@ -10,6 +10,10 @@
 // writes never echo back as agent changes (together with the byte-equal merge skip in
 // store.ts, that closes the watch loop).
 //
+// Loose HTML files directly in the root (agent-guidance spec §3.5) are not designs, but the
+// panel offers to import them: a root-level `*.html`/`*.htm` event schedules a root rescan, and
+// a change in the sorted list of loose names emits one `{ slug: null, kind: 'loose' }`.
+//
 // A root change (settings) restarts the watcher on the new root and emits one `root` event;
 // files are never moved (§9.2). A broken fs.watch degrades to poll-only and is retried; one
 // that cannot work on this root — recursive watching unsupported, or Linux's inotify watch
@@ -24,6 +28,7 @@ import path from 'node:path';
 import { WATCH_DEBOUNCE_MS, WATCH_POLL_MS } from '../shared/limits.ts';
 import type { ChangeHub, Logger, SettingsStore } from './context.ts';
 import { linuxRecursiveWatch } from './folder-watch.ts';
+import { isLooseHtmlName } from './loose.ts';
 import { isSlug } from './paths.ts';
 import { isDirectory } from './root.ts';
 
@@ -83,8 +88,11 @@ export type WatcherOptions = {
 
 export type Watcher = {
   stop(): void;
-  /** Settles once the startup baseline is seeded; a folder created before then is part of it, not `added`. */
-  ready: Promise<void>;
+  /**
+   * Settles once the current root's baseline is seeded (at startup, and again after each root
+   * switch); a folder created before then is part of it, not `added`.
+   */
+  readonly ready: Promise<void>;
 };
 
 /** Pending debounced batch per slug (`ROOT_KEY` = a whole-root rescan). */
@@ -113,6 +121,8 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
   /** Set by a permanent failure: poll-only until the root changes. */
   let pollOnly = false;
   let knownSlugs = new Set<string>();
+  /** Sorted loose html names in the root, `/`-joined (a name never holds a `/`). */
+  let knownLoose = '';
   const fingerprints = new Map<string, Fingerprint>();
   const pending = new Map<string, PendingEntry>();
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -138,24 +148,39 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     pending.set(key, entry);
   };
 
-  /** Fill knownSlugs/fingerprints WITHOUT emitting — used at startup and after a root switch. */
+  /** Fill knownSlugs/knownLoose/fingerprints WITHOUT emitting — used at startup and after a root switch. */
   const seedScan = async (): Promise<void> => {
     const root = currentRoot;
-    knownSlugs = await readSlugs(root);
+    const listing = await readRoot(root);
+    knownSlugs = listing.slugs;
+    knownLoose = listing.loose;
     for (const slug of knownSlugs) fingerprints.set(slug, await takeFingerprint(path.join(root, slug)));
   };
 
-  const readSlugs = async (root: string): Promise<Set<string>> => {
+  /** One readdir of the root: design folders, and the loose html files (regular files only, as `GET /designs` lists them). */
+  const readRoot = async (root: string): Promise<{ slugs: Set<string>; loose: string }> => {
     const entries = await readdir(root, { withFileTypes: true }).catch(() => null);
-    if (entries === null) return new Set();
-    return new Set(entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && isSlug(entry.name)).map((entry) => entry.name));
+    if (entries === null) return { slugs: new Set(), loose: '' };
+    return {
+      slugs: new Set(entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && isSlug(entry.name)).map((entry) => entry.name)),
+      loose: entries
+        .filter((entry) => entry.isFile() && isLooseHtmlName(entry.name))
+        .map((entry) => entry.name)
+        .sort()
+        .join('/'),
+    };
   };
 
-  /** Root-level diff: slugs that appeared or vanished since the last scan. */
+  /** Root-level diff: slugs that appeared or vanished since the last scan, and the loose html set. */
   const scanRoot = async (): Promise<void> => {
     if (stopped) return;
     const root = currentRoot;
-    const current = await readSlugs(root);
+    const listing = await readRoot(root);
+    const current = listing.slugs;
+    if (listing.loose !== knownLoose) {
+      knownLoose = listing.loose;
+      hub.emit({ slug: null, kind: 'loose' });
+    }
     for (const slug of knownSlugs) {
       if (current.has(slug)) continue;
       fingerprints.delete(slug);
@@ -183,7 +208,13 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
       hub.emit({ slug, kind: 'added' });
       return;
     }
-    fingerprints.set(slug, await takeFingerprint(dir));
+    const previous = fingerprints.get(slug);
+    const next = await takeFingerprint(dir);
+    fingerprints.set(slug, next);
+    // Windows' recursive watch and OneDrive drop or coalesce events: a change this batch did not
+    // name is reported with it, because the fingerprint just moved past it and the poll backstop
+    // would never see it again (a design.json left unreconciled, a design stuck provisional).
+    if (previous !== undefined) for (const key of diffFingerprints(previous, next)) files.add(key);
     const hasDesignJson = files.delete('design.json');
     const rest = [...files].sort();
     if (hasDesignJson) hub.emit({ slug, kind: 'design' });
@@ -200,7 +231,12 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     const relative = String(filename).replace(/\\/g, '/');
     const segments = relative.split('/').filter((segment) => segment.length > 0);
     const first = segments[0];
-    if (first === undefined || !isSlug(first) || first.startsWith('.')) return; // root-level files, .trash/.exports, non-designs
+    if (segments.length === 1 && first !== undefined && !first.startsWith('.') && /\.html?$/i.test(first)) {
+      // A loose html file in the root appeared, changed or vanished: the rescan decides whether the set changed.
+      schedule(ROOT_KEY, []);
+      return;
+    }
+    if (first === undefined || !isSlug(first) || first.startsWith('.')) return; // other root-level files, .trash/.exports, non-designs
     const rest = segments.slice(1);
     // .chamber/, .versions/, .thumb.png and the store's .tmp files are service-owned: ignored.
     if (rest.some((segment) => segment.startsWith('.'))) return;
@@ -276,21 +312,24 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     pollOnly = false;
     watchErrorLogged = false;
     knownSlugs = new Set();
+    knownLoose = '';
     fingerprints.clear();
     hub.emit({ slug: null, kind: 'root' });
     startFsWatch();
-    seedScan().catch((error) => log.warn('watch.seed-failed', { error: error instanceof Error ? error.message : String(error) }));
+    ready = seedScan().catch((error) => log.warn('watch.seed-failed', { error: error instanceof Error ? error.message : String(error) }));
   });
 
   startFsWatch();
-  const ready = seedScan().catch((error) => log.warn('watch.seed-failed', { error: error instanceof Error ? error.message : String(error) }));
+  let ready = seedScan().catch((error) => log.warn('watch.seed-failed', { error: error instanceof Error ? error.message : String(error) }));
   pollTimer = setInterval(() => {
     pollTick().catch((error) => log.warn('watch.poll-failed', { error: error instanceof Error ? error.message : String(error) }));
   }, pollMs);
   pollTimer.unref?.();
 
   return {
-    ready,
+    get ready() {
+      return ready;
+    },
     stop() {
       if (stopped) return;
       stopped = true;

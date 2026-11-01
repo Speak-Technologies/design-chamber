@@ -12,7 +12,7 @@ import { clip, designFilePath, formatViewport, oneLine, VIEWPORT_DESKTOP, VIEWPO
 /** The two bundled rules files, exactly as read from `rules/`. */
 export type RulesDocFiles = { designRules: string; questions: string };
 
-const kindWord = (kind: DesignKind): string => (kind === 'canvas' ? 'canvas' : 'artifact');
+const kindWord = (kind: DesignKind): string => (kind === 'canvas' ? 'canvas' : 'page');
 
 /** A verbatim file between markers, so the agent sees where our text ends and the file begins. */
 const verbatim = (name: string, text: string): string[] => [`<!-- BEGIN ${name} (verbatim) -->`, text.endsWith('\n') ? text.slice(0, -1) : text, `<!-- END ${name} -->`];
@@ -28,40 +28,46 @@ const breakpointText = (breakpoint: ProjectBreakpoint): string => {
 const fileMap = (context: AgentContext): string[] => {
   const at = (relative: string): string => designFilePath(context.folder, relative);
   return [
-    `  - design.json — ${at('design.json')}`,
-    context.kind === 'canvas' ? `  - one file per screen — ${at('screens/<id>.html')}` : `  - the page — ${at('index.html')}`,
-    `  - tokens.css — ${at('tokens.css')}`,
-    `  - DESIGN.md — ${at('DESIGN.md')}`,
-    `  - assets/ — ${at('assets')}`,
+    `  - design.json: ${at('design.json')}`,
+    context.kind === 'canvas' ? `  - one file per screen: ${at('screens/<id>.html')}` : `  - the page: ${at('index.html')}`,
+    `  - tokens.css: ${at('tokens.css')}`,
+    `  - DESIGN.md: ${at('DESIGN.md')}`,
+    `  - assets/: ${at('assets')}`,
     '  - Never touch: .versions/ (snapshots), .chamber/ (this file; the extension rewrites it), .thumb.png (thumbnail cache).',
   ];
 };
+
+const kindMeaning = (kind: DesignKind): string =>
+  kind === 'canvas'
+    ? 'a canvas is an infinite wall of screens, each shown at every viewport side by side, like Claude Design'
+    : 'a page is one index.html shown full screen, like a browser tab';
 
 const headerSection = (context: AgentContext): string[] => {
   const brief = clip(context.brief.trim(), BRIEF_MAX);
   const project = context.project;
   return [
-    `# Design Chamber — instructions for "${clip(oneLine(context.title), TITLE_MAX)}"`,
+    `# Design Chamber instructions for "${clip(oneLine(context.title), TITLE_MAX)}"`,
     '',
-    'This file is part of your instructions for this design. Read all of it before you design, and follow it on every later message about this design — not only the first.',
+    'This file is part of your instructions for this design. Read all of it before you design, and follow it on every later message about this design, not only the first.',
     '',
-    `- Design: "${clip(oneLine(context.title), TITLE_MAX)}" (${kindWord(context.kind)})`,
-    `- Folder — write ONLY inside it: ${context.folder}`,
+    `- Design: "${clip(oneLine(context.title), TITLE_MAX)}" (${kindWord(context.kind)}: ${kindMeaning(context.kind)})`,
+    `- Folder (write ONLY inside it): ${context.folder}`,
+    `- Designs folder: ${context.designsRoot}. The user set it in Design Chamber settings (the default is ~/Documents/Designs). Every design is its own folder in there. Never save designs anywhere else, and never as a loose file.`,
     '- Files:',
     ...fileMap(context),
-    ...(brief === '' ? ['- Brief: none — ask the user what to design.'] : ["- Brief (the user's words):", ...brief.split(/\r?\n/).map((line) => `  > ${line}`)]),
+    ...(brief === '' ? ['- Brief: none. Ask the user what to design.'] : ["- Brief (the user's words):", ...brief.split(/\r?\n/).map((line) => `  > ${line}`)]),
     project.directory === null
       ? '- Project folder: none open in this chat.'
       : `- Project folder (read it, never write design files into it): ${project.directory}`,
-    '- Your file tools may ask permission to write in the Designs folder, because it is outside the project. That is expected; the user can allow it.',
+    '- Your file tools may ask permission to write in your designs folder, because it is outside the project. That is expected; the user can allow it.',
     '',
     '## Do this, in this order',
     '',
     '1. Read this whole file. Read it again at the start of every new request about this design: it may have been refreshed.',
-    '2. Look for the active project\'s design rules FIRST (Precedence, layer 2). Tell the user what you found in 2–4 lines, citing files — or say "no project context".',
+    '2. Look for the active project\'s design rules FIRST (Precedence, layer 2). Tell the user what you found in 2–4 lines, citing files, or say "no project context".',
     '3. Settle the viewports (Viewports).',
     '4. If anything material is unclear, ask before you build: one message, then wait (Ask when unsure). Skip the questions only if the user said "go" or the request is a small edit.',
-    '5. Build only inside the folder above. Write DESIGN.md and tokens.css before the second screen. Update design.json in the same turn as the files it describes.',
+    '5. Build only inside the folder above. Write design.json first, then the HTML. Write DESIGN.md and tokens.css before the second screen. Update design.json in the same turn as the files it describes.',
     '6. Finish with the self-check at the end of Design rules. Your reply states what you built, which sources you followed, your assumptions, and at most one open question.',
   ];
 };
@@ -70,7 +76,7 @@ const headerSection = (context: AgentContext): string[] => {
 
 const projectLayer = (project: ProjectRules): string[] => {
   const intro = [
-    '### Layer 2 — the active project\'s design rules (look for these FIRST)',
+    '### Layer 2: the active project\'s design rules (look for these FIRST)',
     '',
   ];
   const discover = 'Also run the discovery in "Discover the project\'s design rules first" (Design rules, §2): this list can miss non-standard places. Copy the values you use into tokens.css with a comment naming the source file.';
@@ -97,9 +103,9 @@ const projectLayer = (project: ProjectRules): string[] => {
       }
       return [
         ...intro,
-        `Design Chamber found these in ${project.directory ?? 'the project'} (paths relative to it; read them yourself — you are working in that project):${stopped}`,
+        `Design Chamber found these in ${project.directory ?? 'the project'} (paths relative to it; read them yourself, since you are working in that project):${stopped}`,
         '',
-        ...project.sources.map((source) => `- \`${source.path}\` — ${source.why}`),
+        ...project.sources.map((source) => `- \`${source.path}\`: ${source.why}`),
         ...(project.sourcesOmitted > 0 ? [`- … and ${project.sourcesOmitted} more not listed.`] : []),
         '',
         discover,
@@ -112,13 +118,13 @@ const presetLayer = (context: AgentContext): string[] => {
   const { preset } = context;
   if (preset === null) {
     return [
-      '### Layer 3 — style preset: none chosen',
+      '### Layer 3: style preset, none chosen',
       '',
       'The user did not pick a preset. If layers 1–2 do not settle the look, propose 2–3 distinct named directions yourself in your questions (Ask when unsure, §5) instead of defaulting to one.',
     ];
   }
   return [
-    `### Layer 3 — style preset: ${preset.name} (\`${preset.id}\`)`,
+    `### Layer 3: style preset ${preset.name} (\`${preset.id}\`)`,
     '',
     'The user picked this preset when creating the design. Follow it unless layer 1 or 2 says otherwise. Its CSS block seeds this design\'s tokens.css and DESIGN.md. The preset, verbatim:',
     '',
@@ -133,7 +139,7 @@ const designSystemLayer = (context: AgentContext): string[] => {
     : hasDesignMd || hasTokensCss
       ? `not confirmed yet (${[hasDesignMd ? 'DESIGN.md exists' : 'no DESIGN.md', hasTokensCss ? 'tokens.css exists' : 'no tokens.css'].join(', ')}). Treat what is there as your own proposal: show the user the palette, type and spacing, and set \`designSystem.confirmed\` to true in design.json once they accept it. A file marked \`Status: placeholder\` holds scaffold defaults, not decisions.`
       : 'not written yet. Write DESIGN.md and tokens.css once, before the second screen, from layers 1–3; set `designSystem.confirmed` to true in design.json when the user accepts them.';
-  return ['### Layer 4 — this design\'s own DESIGN.md + tokens.css, once confirmed', '', `Status: ${status}`];
+  return ['### Layer 4: this design\'s own DESIGN.md + tokens.css, once confirmed', '', `Status: ${status}`];
 };
 
 const precedenceSection = (context: AgentContext): string[] => [
@@ -141,7 +147,7 @@ const precedenceSection = (context: AgentContext): string[] => [
   '',
   'Highest first. A higher layer always wins. Never silently override one; if a lower layer conflicts with a higher one, say so in one line. Inside the winning layer, do not invent colours, spacing or type values it already defines.',
   '',
-  '### Layer 1 — the user\'s words in chat',
+  '### Layer 1: the user\'s words in chat',
   '',
   'Always first. Never ask the user to repeat something they already said in this chat.',
   '',
@@ -151,7 +157,7 @@ const precedenceSection = (context: AgentContext): string[] => [
   '',
   ...designSystemLayer(context),
   '',
-  '### Layer 5 — the built-in rules',
+  '### Layer 5: the built-in rules',
   '',
   'The "Design rules" and "Ask when unsure" sections below: anti-slop, best practices, file rules and the self-check. They apply when nothing above settles a question.',
 ];
@@ -198,7 +204,7 @@ const contractExample = (context: AgentContext): string =>
     '  "sessionId": null,',
     '  "projectDirectory": null,',
     '  "preset": null,',
-    ...(context.kind === 'artifact' ? ['  "entry": "index.html",'] : []),
+    ...(context.kind === 'page' ? ['  "entry": "index.html",'] : []),
     '  "viewports": [',
     `    ${viewportJson(VIEWPORT_LAPTOP)},`,
     `    ${viewportJson(VIEWPORT_PHONE)}`,
@@ -227,19 +233,20 @@ const contractSection = (context: AgentContext): string[] => [
   '| Key | Owner | Rule |',
   '|---|---|---|',
   '| `version` | extension | Always `1`. |',
-  '| `kind` | extension | `"canvas"` or `"artifact"`, fixed at creation. |',
+  '| `kind` | extension | `"page"` (one index.html shown full screen) or `"canvas"` (a wall of screens). Fixed once you have written the first screen or index.html; before that you may switch it, as long as the design has no comments yet. |',
   `| \`title\` | you | 1–${TITLE_MAX} characters. The user may rename it. |`,
   '| `created` | extension | Never change. |',
   '| `updated` | you | ISO-8601 UTC time. Set it on every change you make to the design. |',
   '| `brief` | extension | The user\'s brief. Never change. |',
   '| `sessionId`, `projectDirectory`, `preset` | extension | Links to the chat, the project and the preset. Never change. |',
-  '| `entry` | extension | Artifact only: always `"index.html"`. |',
+  '| `entry` | extension | Page only: always `"index.html"`. |',
   `| \`viewports\` | you | 1–${VIEWPORTS_MAX} items \`{ id, label, width, height }\`; \`id\` letters, digits, \`-\`, \`_\`. |`,
   `| \`screens\` | you | Canvas only, 0–${SCREENS_MAX}, in the order they appear on the wall: \`{ id, title, file, viewports?, description? }\`. \`id\` is lower-case letters, digits and \`-\`; \`file\` is exactly \`screens/<id>.html\`; \`viewports\` is an optional subset of the viewport ids (default: all); \`description\` ≤ ${SCREEN_DESCRIPTION_MAX} characters. |`,
   '| `designSystem` | you | `{ "confirmed": false }`; set `true` once the user confirms DESIGN.md and tokens.css. |',
   '| `comments` | extension | The user\'s pinned comments. Never edit. |',
   '',
-  '- Keep every key you do not own — including keys you do not recognise — exactly as it is. The extension puts its keys back if you change them.',
+  '- Keep every key you do not own, including keys you do not recognise, exactly as it is. The extension puts its keys back if you change them.',
+  '- Write design.json before any HTML file, so the extension takes your title, kind and viewports from the start.',
   '- Write the whole file as valid JSON in one write. A half-written file shows as an error until you fix it.',
   '- Update `screens` / `viewports` / `updated` in the same turn you write the files they describe. A listed screen whose file is missing shows as "not written yet".',
 ];
@@ -251,7 +258,8 @@ const renderingSection = (): string[] => [
   '',
   'Design Chamber shows your files offline, inside a sandboxed frame. So:',
   '',
-  '- Everything works with no network: no CDN scripts, web fonts, remote images or analytics. Bundle fonts and images in `assets/`.',
+  '- Everything works with no network: no CDN scripts, Google Fonts or other web fonts, remote images or analytics. Bundle fonts and images in `assets/` (fonts in `assets/fonts/` with `@font-face`, and end every font stack with a generic family).',
+  '- Remote files are blocked and listed back to you when the user sends comments.',
   '- Reference local files statically with relative paths: `assets/hero.jpg` and `tokens.css` from index.html; `../assets/hero.jpg` and `../tokens.css` from `screens/*.html`. URLs built at runtime (`new Image().src = "assets/x.png"`), `fetch()` / XHR of local files and ES-module imports across files do not load.',
   '- Small inline `<script>` interactions work (clicks, tabs, toggles). There is no `top.location`, `window.open`, cookie/localStorage assumption or network call.',
   '- Link between screens with `<a href="other-screen.html">` (a sibling file in `screens/`) or `data-dc-goto="<screenId>"`. Links to `#anchors` work; an external https link asks the user before it opens.',

@@ -9,7 +9,7 @@ import { client, flows, host, store } from '../guest.ts';
 import { errorText, h } from './dom.ts';
 import { btn, confirmDialog, openSheet, type MenuEntry } from './kit.ts';
 
-export type DesignRef = { slug: string; title: string; kind: 'canvas' | 'artifact'; sessionId: string | null };
+export type DesignRef = { slug: string; title: string; kind: 'canvas' | 'page'; sessionId: string | null };
 
 export type ActionContext = {
   /** Element that sheets and dialogs mount into. */
@@ -64,7 +64,7 @@ export const copyPath = async (slug: string): Promise<void> => {
   try {
     const path = await folderOf(slug);
     if (await host.writeClipboard(path)) toast('success', 'Folder path copied.');
-    else toast('error', 'Couldn’t reach the clipboard. The path is in the notification — copy it from there.', path);
+    else toast('error', 'Couldn’t reach the clipboard. The path is in this notification, so copy it from there.', path);
   } catch (error) {
     toast('error', `Couldn’t read the folder path. ${errorText(error)}`);
   }

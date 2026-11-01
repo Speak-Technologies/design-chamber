@@ -6,7 +6,7 @@ import { createFakeContext } from '../../helpers/fake-context.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
 import { createRevealRegistry, createRevealService, linuxOpenerEnv, revealPlan } from '../../../src/service/reveal.ts';
 import { ApiError } from '../../../src/service/http.ts';
-import { artifactDesign } from './harness.ts';
+import { pageDesign } from './harness.ts';
 
 type SpawnCall = { command: string; args: string[] };
 
@@ -17,7 +17,7 @@ const setup = async (
   options: { succeeds?: (command: string) => boolean; env?: NodeJS.ProcessEnv } = {},
 ) => {
   const tmp = await useTmpRoot(t);
-  await tmp.writeDesign('art', artifactDesign());
+  await tmp.writeDesign('art', pageDesign());
   const ctx = createFakeContext({ root: tmp.root });
   t.after(() => ctx.dispose());
   const spawns: SpawnCall[] = [];

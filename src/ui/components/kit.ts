@@ -2,9 +2,9 @@
 // icon-triggered menus, sheets and confirm dialogs — built from the kit's own classes
 // (`oc-sdk-btn`, `oc-sdk-popup`, `oc-sdk-option`) so they look and focus like the kit's.
 
-import { mountBanner, mountSpinner, moveListSelection, navigationKey, type BannerProps, type ButtonSize, type ButtonVariant } from '@openchamber/sdk/ui';
+import { mountBanner, mountSpinner, moveListSelection, navigationKey, type BannerProps, type BannerTone, type ButtonSize, type ButtonVariant } from '@openchamber/sdk/ui';
 
-import { append, createScope, errorText, h, nextId, type Child } from './dom.ts';
+import { append, createScope, errorText, h, nextId, replace, type Child } from './dom.ts';
 import { icon, type IconName } from './icons.ts';
 
 // ---------------------------------------------------------------- buttons
@@ -22,23 +22,34 @@ export type BtnOptions = {
   pressed?: boolean;
 };
 
-export type BtnHandle = { el: HTMLButtonElement; set: (next: Partial<Pick<BtnOptions, 'label' | 'disabled' | 'loading' | 'pressed' | 'title'>>) => void };
+export type BtnHandle = { el: HTMLButtonElement; set: (next: Partial<Pick<BtnOptions, 'label' | 'icon' | 'disabled' | 'loading' | 'pressed' | 'title'>>) => void };
 
 export const btn = (options: BtnOptions): BtnHandle => {
   const state = { ...options };
   const el = h('button', { type: 'button', class: 'oc-sdk oc-sdk-btn', 'data-variant': options.variant ?? 'outline', 'data-size': options.size ?? 'sm' });
   const label = h('span', { class: 'dc-btn-label' });
   const ring = h('span', { class: 'oc-sdk-spinner-ring', 'aria-hidden': 'true' });
+  let glyph: SVGElement | null = options.icon ? icon(options.icon, 14) : null;
+  let glyphName = options.icon;
   const paint = (): void => {
+    if (state.icon !== glyphName) {
+      const next = state.icon ? icon(state.icon, 14) : null;
+      if (glyph && next) glyph.replaceWith(next);
+      else if (glyph) glyph.remove();
+      else if (next) label.before(next);
+      glyph = next;
+      glyphName = state.icon;
+    }
     label.textContent = state.label;
     el.disabled = Boolean(state.disabled) || Boolean(state.loading);
     el.dataset.loading = state.loading ? 'true' : 'false';
     el.setAttribute('aria-busy', state.loading ? 'true' : 'false');
     if (state.pressed !== undefined) el.setAttribute('aria-pressed', String(state.pressed));
     if (state.title) el.title = state.title;
+    else el.removeAttribute('title');
     ring.hidden = !state.loading;
   };
-  append(el, ring, options.icon ? icon(options.icon, 14) : null, label, options.chevron ? icon('chevron', 14) : null);
+  append(el, ring, glyph, label, options.chevron ? icon('chevron', 14) : null);
   el.addEventListener('click', (event) => {
     if (!state.disabled && !state.loading) state.onClick(event);
   });
@@ -185,6 +196,26 @@ export const banner = (props: BannerProps): HTMLElement => {
   const wrap = h('div', { class: 'dc-banner' });
   mountBanner(wrap, props);
   return wrap;
+};
+
+/**
+ * A kit banner whose action slot holds our own buttons (the kit offers one action; some banners
+ * need two). Returns the banner's nodes for the caller to place in its own wrapper.
+ */
+export const bannerWithActions = (tone: BannerTone, title: string, body: Child[], actions: HTMLElement[]): HTMLElement[] => {
+  const holder = h('div');
+  mountBanner(holder, { tone, title, body: ' ' });
+  const bodyEl = holder.querySelector<HTMLElement>('.oc-sdk-banner-body');
+  if (bodyEl) {
+    replace(bodyEl, ...body);
+    bodyEl.hidden = body.length === 0;
+  }
+  const slot = holder.querySelector<HTMLElement>('.oc-sdk-banner-action');
+  if (slot) {
+    slot.hidden = false;
+    slot.replaceChildren(h('div', { class: 'dc-row-actions' }, ...actions));
+  }
+  return [...holder.childNodes].filter((node): node is HTMLElement => node instanceof HTMLElement);
 };
 
 export const loadingRow = (label: string): HTMLElement => {
