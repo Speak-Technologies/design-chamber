@@ -16,6 +16,7 @@ import type { ChangeHub, Logger, SettingsStore } from '../../../src/service/cont
 import { COMMENTS_MAX } from '../../../src/shared/limits.ts';
 import { serializeJson } from '../../../src/shared/design-json.ts';
 import type { ChangeEvent, Comment, ServiceState } from '../../../src/shared/types.ts';
+import { refuseRenames } from '../../helpers/refuse-rename.ts';
 import { useTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
 import type { LogLine } from './harness.ts';
 
@@ -616,6 +617,24 @@ describe('take-over without clobbering (§6.3 P1–P5)', () => {
     await env.store.reconcile(created.slug);
     assert.equal((await readJson(designFile)).brief, 'The user brief');
     assert.equal((await readJson(path.join(created.path, '.chamber', 'state.json'))).brief, 'The user brief');
+  });
+
+  test('Windows lock — adoption lands although the first state.json rename is refused (a reader had it open)', async (t) => {
+    // The Q1 CI failure on windows-latest: the reconcile the design.json event starts renames
+    // state.json while something else is reading it (the panel's list refresh, the test's poll,
+    // an antivirus scan). One refused rename used to fail the whole reconcile, and nothing ran
+    // it again: the event was spent, so the design stayed provisional for good.
+    const env = await makeEnv(t);
+    await provisionalPage(env, 'locked');
+    await env.tmp.write('locked/design.json', { kind: 'canvas', title: 'Locked', brief: 'The agent brief' });
+    const stateFile = env.tmp.at('locked/.chamber/state.json');
+    refuseRenames(t, (destination, attempt) => destination === stateFile && attempt === 1);
+    await env.store.reconcile('locked');
+    const state = await readJson(stateFile);
+    assert.equal(Object.hasOwn(state, 'provisional'), false, 'adopted, not left provisional');
+    assert.equal(state.kind, 'canvas');
+    assert.equal(state.brief, 'The agent brief');
+    assert.equal((await readJson(env.tmp.at('locked/design.json'))).brief, 'The agent brief');
   });
 
   test('design.json first (the guide\'s order) — a page whose index.html is not written yet stays a page', async (t) => {

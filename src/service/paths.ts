@@ -14,6 +14,7 @@ import { readFileSync, renameSync } from 'node:fs';
 import { realpath as fsRealpath, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { PlatformPath } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { SLUG_BASE_MAX, SLUG_FALLBACK, SLUG_PATTERN } from '../shared/limits.ts';
 import { ApiError } from './http.ts';
@@ -194,9 +195,25 @@ export const uniqueSlug = async (base: string, isTaken: (slug: string) => Promis
 
 // ---- Atomic writes ----
 
+/** Rename tries before a Windows refusal is final: pauses of 40, 80, 120, 160 ms (400 ms in all). */
+const RENAME_ATTEMPTS = 5;
+const RENAME_RETRY_MS = 40;
+
+/** The codes Windows answers a rename with while another handle has the target open for a moment. */
+const isTransientRenameRefusal = (error: unknown): boolean => {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === 'EPERM' || code === 'EBUSY' || code === 'EACCES';
+};
+
 /**
  * Write a file via tmp + rename in its own folder (a partial write is never visible, and the
  * tmp name is dot-prefixed so the watcher ignores it — SPEC §9.4). Creates parent folders.
+ *
+ * Windows refuses to rename over a file another handle has open (EPERM/EBUSY/EACCES): a list
+ * refresh reading state.json, an agent or an antivirus scan. The rename is retried a few
+ * times, so that moment does not fail the caller — a failed watcher reconcile is not run again
+ * until the agent's next change, which would leave a design provisional. Replacing the file with
+ * the same bytes is idempotent, so the retry is safe; a refusal that outlasts it is thrown.
  */
 export const writeFileAtomic = async (file: string, data: string | Uint8Array): Promise<void> => {
   const dir = path.dirname(file);
@@ -204,7 +221,15 @@ export const writeFileAtomic = async (file: string, data: string | Uint8Array): 
   const tmp = path.join(dir, `.${path.basename(file)}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
   try {
     await writeFile(tmp, data);
-    await rename(tmp, file);
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await rename(tmp, file);
+        break;
+      } catch (error) {
+        if (attempt >= RENAME_ATTEMPTS || !isTransientRenameRefusal(error)) throw error;
+        await delay(RENAME_RETRY_MS * attempt);
+      }
+    }
   } catch (error) {
     await rm(tmp, { force: true }).catch(() => undefined);
     throw error;
@@ -238,8 +263,7 @@ export const replaceFileIfUnchanged = async (file: string, expected: string | nu
     } catch (error) {
       // Windows refuses to replace a file another process is reading this instant: not
       // replaced yet, the caller retries.
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') throw error;
+      if (!isTransientRenameRefusal(error)) throw error;
       await rm(tmp, { force: true });
       return false;
     }

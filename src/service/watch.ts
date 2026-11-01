@@ -208,7 +208,13 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
       hub.emit({ slug, kind: 'added' });
       return;
     }
-    fingerprints.set(slug, await takeFingerprint(dir));
+    const previous = fingerprints.get(slug);
+    const next = await takeFingerprint(dir);
+    fingerprints.set(slug, next);
+    // Windows' recursive watch and OneDrive drop or coalesce events: a change this batch did not
+    // name is reported with it, because the fingerprint just moved past it and the poll backstop
+    // would never see it again (a design.json left unreconciled, a design stuck provisional).
+    if (previous !== undefined) for (const key of diffFingerprints(previous, next)) files.add(key);
     const hasDesignJson = files.delete('design.json');
     const rest = [...files].sort();
     if (hasDesignJson) hub.emit({ slug, kind: 'design' });

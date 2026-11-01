@@ -192,6 +192,36 @@ describe('watcher events', () => {
     assert.deepEqual(added.files, ['notes.txt']);
   });
 
+  test('a design.json write whose own event never came is still reported with the next event in that folder', async (t) => {
+    // Windows' recursive watch and OneDrive can drop or coalesce events. When another event in
+    // the same folder flushes first, the flush moves the poll fingerprint past the design.json
+    // change; unless that flush reports it, the poll never sees it again and the design is
+    // never reconciled. The poll is off here, so only the flush can report it.
+    let emit: ((event: string, filename: string | null) => void) | null = null;
+    const scripted = ((_root: string, _options: unknown, listener: (event: string, filename: string | null) => void) => {
+      emit = listener;
+      const fake = { close() {}, on: () => fake, once: () => fake, emit: () => false, ref: () => fake, unref: () => fake };
+      return fake as unknown as FSWatcher;
+    }) as unknown as typeof import('node:fs').watch;
+    const env = await makeWatchEnv(t, { watchImpl: scripted, pollMs: 600_000 });
+    assert.ok(emit !== null, 'the watcher started the scripted watch');
+    // Safe: narrowed by the assert above; TypeScript cannot see the callback's assignment.
+    const fire = emit as (event: string, filename: string | null) => void;
+
+    await mkdir(env.tmp.at('dropped'), { recursive: true });
+    await writeFile(env.tmp.at('dropped/index.html'), '<h1>one</h1>', 'utf8');
+    fire('rename', 'dropped');
+    await env.waitForEvent((event) => event.slug === 'dropped' && event.kind === 'added', 2000);
+
+    await writeFile(env.tmp.at('dropped/design.json'), '{"kind":"page"}', 'utf8');
+    await writeFile(env.tmp.at('dropped/index.html'), '<h1>two</h1>', 'utf8');
+    fire('change', 'dropped/index.html'); // design.json's own event was dropped
+    const design = await env.waitForEvent((event) => event.slug === 'dropped' && event.kind === 'design', 2000);
+    const files = env.events.find((event) => event.slug === 'dropped' && event.kind === 'files');
+    assert.deepEqual(files?.files, ['index.html']);
+    assert.ok(design.seq > 0);
+  });
+
   test('a root switch emits "root", follows the new root and ignores the old one', async (t) => {
     const env = await makeWatchEnv(t, { pollMs: 600_000 });
     await mkdir(env.tmp.at('old-root-design'), { recursive: true });

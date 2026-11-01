@@ -127,7 +127,20 @@ that are not designs are not watched (their events are ignored anyway), keeping 
 count to roughly 1 + designs × (1 + screens/ + assets/ folders). If the watch cannot work on
 this root — `ENOSPC` (inotify limit), `ENOSYS`, `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` — the service
 logs `watch.poll-only` once (info) and stops retrying until the root changes; the poll keeps the
-list live within ~3 s. Nothing is shown to the user. To raise the Linux limit:
+list live within ~3 s. Nothing is shown to the user.
+
+Windows notes (from the Q1 CI flake on windows-latest, 2026-11-01):
+- `fs.rename` over a file another handle has open fails with `EPERM` (sometimes `EBUSY`/`EACCES`).
+  Node opens files with `FILE_SHARE_DELETE`, but `MoveFileExW(REPLACE_EXISTING)` still refuses
+  while the target is open. `writeFileAtomic` (`src/service/paths.ts`) retries that rename up to
+  5 times (40–160 ms apart). Without the retry, the reconcile that adopts an agent's `design.json`
+  failed when the panel's list refresh, or the test's own poll, was reading `state.json` at that
+  moment. The event that started it was already spent, so the design stayed provisional.
+- ReadDirectoryChangesW can drop or merge events. A flush reports every fingerprint change since
+  the last one, not only the files its events named. The poll compares against the fingerprint
+  the flush leaves behind, so a change that flush skipped would otherwise never be seen again.
+
+To raise the Linux limit:
 `sysctl fs.inotify.max_user_watches=524288` (Fedora/Ubuntu defaults are usually far higher on
 recent kernels).
 
