@@ -8,29 +8,38 @@ Screenshots are taken in the OpenChamber dark and light themes at 320 px and 480
 ## What's on it
 
 **Designs list (R1)** — [320 dark](img/rail-320-dark-1-list.png) · [480 light](img/rail-480-light-1-list.png)
-- Header: the title, **New ▾** (Canvas…, Artifact…) and Settings.
-- Search, and tabs **All / Canvases / Artifacts** with counts that follow the search.
+- Header: the title, **New ▾** (Canvas…, Page…) and Settings.
+- Search, and tabs **All / Canvases / Pages** with counts that follow the search.
 - One row per design, newest first: a 64×40 thumbnail (the cached screenshot, a live preview when no browser is installed, or a dashed glyph while the agent has not written anything), the title, "Canvas · 3 screens · 4 min. ago", and small marks: **Waiting for agent**, the number of open comments (pin icon) and a chat-link icon.
 - Row menu (⋯, shown on hover or focus): Open, Continue in chat, Reveal in folder, Rename, Delete… ([menu](img/rail-320-dark-2-row-menu.png)). Delete asks once and says it moves the design to `.trash` inside the Designs folder.
 - A notice when an earlier Designs folder still holds designs, with **Switch back**. Long folder paths are shortened in the middle (drive … last folders) with the full path as a tooltip.
-- Empty state: "No designs yet — type /design in any chat…" with **New canvas** ([empty](img/rail-320-dark-empty-3-empty.png)). A search that matches nothing says so and offers **Clear filters**.
+- **Loose HTML files** ([banner, 320 light](img/rail-320-light-1b-loose-banner.jpg) · [after import](img/rail-320-dark-1c-loose-imported.jpg) · [several files](img/rail-320-dark-1d-loose-review.jpg)): when an `.html` or `.htm` file sits straight in the designs folder (an agent saved it there instead of in a design folder), a notice says "1 HTML file here isn't a design yet.", names the file and offers **Import as page** and **Not now**. Import copies the file into a new page and moves the original to `.trash` in the designs folder; the button spins while it runs, then the notice reads "Imported “<title>” as a page." with **Open** and **Dismiss**. If the original couldn't be moved, it says so and the file stays listed. With several files the notice lists the first three names ("+ n more") and **Review** opens a dialog with one row per file (name, size, age) and an **Import** button that turns into **Open** once done; failures show the service's sentence on that row. **Not now** hides the notice until the set of files changes (remembered in `host.storage` as `loose-dismissed`).
+- Empty state: "No designs yet" ("Type /design or /page in any chat…") with **New canvas** ([empty](img/rail-320-dark-empty-3-empty.png)). A search that matches nothing says so and offers **Clear filters**.
 
-**New dialog** — [320 dark](img/rail-320-dark-3-new-dialog.png): Type (Canvas / Artifact), "What should it be?" (optional), Style preset, "Where should the agent work?" (New chat / Current chat), then one button, **Start canvas** / **Start artifact**. Errors appear above the buttons and the text stays.
+**New dialog** — [320 dark](img/rail-320-dark-3-new-dialog.png): Type (Canvas / Page), "What should it be?" (optional), Style preset, "Where should the agent work?" (New chat / Current chat), then one button, **Start canvas** / **Start page**. Errors appear above the buttons and the text stays.
 
-**Compact viewer (R2)** — [canvas](img/rail-320-dark-5-viewer-canvas.png) · [artifact](img/rail-320-dark-9-viewer-artifact.png)
+**Compact viewer (R2)** — [canvas](img/rail-320-dark-5-viewer-canvas.png) · [page, full width](img/rail-320-dark-10-viewer-page.jpg) · [page, laptop view](img/rail-480-light-10-viewer-page-laptop.jpg)
 - Back, the title, and a ⋯ menu: Continue in chat, Export ZIP, Export screen as HTML (or single-file HTML), Copy HTML / Copy path, Reveal in folder, Versions, Comments, Rename, Delete… ([menu](img/rail-320-dark-6-viewer-menu.png)).
-- A canvas shows the wall fitted to the rail with **Edit / Play** and zoom − % + **Fit**; at most 4 artboards are live, the rest say "Paused" until you pan to them. Labels, pins and folded pin counts behave as on the [full-screen wall](full-screen-page.md). An artifact shows the page at the chosen device size (list) with a **Comment** toggle.
+- A canvas shows the wall fitted to the rail with **Edit / Play** and zoom − % + **Fit**; at most 4 artboards are live, the rest say "Paused" until you pan to them. Labels, pins and folded pin counts behave as on the [full-screen wall](full-screen-page.md).
+- A page is shown like a browser tab, with no pan or zoom: row one is back, title, ⋯; row two is **View** (Full width, or a device size shrunk to fit the rail and centred) and **Comment**. At Full width the page reflows to the rail's width and scrolls inside its frame. Pins work in every view, as on the [full-screen page viewer](full-screen-page.md).
+- When the design loads files from the internet, a warning lists up to 5 of them with **Ask the agent to fix it** underneath (see the full-screen page viewer).
 - **Comments** ([sheet](img/rail-320-dark-7-comments.png)) and **Versions** ([sheet](img/rail-320-dark-8-versions.png)) open as full-height sheets inside the rail; choosing View/Compare/a comment closes the sheet so you can see the wall.
 - Footer hint: "Full screen: sidebar → Extension pages → Design Chamber" (an extension cannot open the page by itself).
 
-**Settings (R3)** — [320 dark](img/rail-320-dark-4-settings.png) · [bottom](img/rail-320-dark-4b-settings-bottom.png): Designs folder (Apply folder / Use default, validated inline), earlier folders (Switch back), the browser used for thumbnails (status, override, Test and save) and the copyable `opencode.json` snippet. The page shows the same content as a side sheet.
+**Settings (R3)** — [320 dark](img/rail-320-dark-4-settings.png) · [bottom](img/rail-320-dark-4b-settings-bottom.png) · [agent section, 320 dark](img/rail-320-dark-4c-settings-agent.jpg) · [skill installed, folder saved, 480 dark](img/rail-480-dark-4d-settings-skill-installed.jpg). The page shows the same content as a side sheet.
+- **Where designs live:** the folder field, validated inline. **Apply folder** stays disabled while the field names the current folder (a trailing `/` or `\` and, for Windows paths, letter case don't count as a change; its tooltip says to change the path first). After a successful change it reads **Saved** with a check for 2 seconds. **Use default** is disabled when the default is already in use.
+- **Earlier folders:** each with **Switch back**.
+- **Help your agent find your designs** (see [agent discovery](../features/agent-discovery.md)): the guide Design Chamber keeps at `<designs folder>/AGENTS.md`, in one sentence per state (kept up to date, left alone because you edited it, your own file, added once the folder exists, or the reason writing it failed); the OpenCode skill row with **Install skill**, **Update skill** (after a folder change) or **Replace skill…** (when you edited it; asks "Replace your edited skill with Design Chamber's version?" right there, with **Replace skill** and **Keep mine**), an **Installed** badge with its path when current, a sentence and no button when someone else's skill holds the name, and a **Duplicate** warning per extra copy OpenCode would also load. The button spins while it runs; errors show under it. Then the lines to paste into an `AGENTS.md`, with **Copy**.
+- **Browser for thumbnails:** status (**Detected automatically**, **Using your chosen browser**, or a neutral **Live previews**: "No Chrome, Edge or Chromium found, so thumbnails are live previews. Install one or set its path for image thumbnails."), an override path and **Test and save**.
+- **Let your agent write here:** the copyable `opencode.json` snippet.
 
 ## Behaviour by role
-There is one role: the OpenChamber user. Chat links (a design chip, "Open as artifact") open the viewer here. While the rail is open it also delivers a revision the full-screen page handed over for a chat that wasn't selected, once that chat is selected, and saves a version after each agent turn.
+There is one role: the OpenChamber user. Chat links (a design chip, "Open as page") open the viewer here. While the rail is open it also delivers a revision the full-screen page handed over for a chat that wasn't selected, once that chat is selected, and saves a version after each agent turn.
 
 ## Data
 **Reads:** the designs list, one design's detail, versions, settings, presets and thumbnails — all through the guest store (`GET /designs`, `/designs/:slug`, `/versions`, `/settings`, `/presets`, `/thumbnail`, `/render`).
-**Writes (through the service):** rename (`PATCH /designs/:slug`), delete (`DELETE`, moves to `.trash`), comments (create / edit / resolve / delete / mark sent), version snapshot and restore, export, reveal, settings.
+**Writes (through the service):** rename (`PATCH /designs/:slug`), delete (`DELETE`, moves to `.trash`), comments (create / edit / resolve / delete / mark sent), version snapshot and restore, export, reveal, settings, loose-file import (`POST /loose/import`), the OpenCode skill (`POST /agent/skill`, only from its button).
+**Stored in `host.storage`:** `loose-dismissed` (the file names you said Not now to).
 
 ## States & edge cases
 - **Loading:** skeleton rows in the list, a spinner row in sheets, scoped to what is loading — never a full-screen spinner.
@@ -44,4 +53,4 @@ There is one role: the OpenChamber user. Chat links (a design chip, "Open as art
 [Full-screen page](full-screen-page.md) · `docs/SPEC.md` §13.1
 
 ---
-*Last updated: 2026-10-27 — UI integration: runs on the guest core (`src/ui/guest.ts`); artboard labels and pin folding*
+*Last updated: 2026-11-01 — compact page viewer: View (Full width or a device size), no pan or zoom, pins in every view; remote-files banner; Pages rename in list, tabs and New; loose HTML import banner; Settings: Apply disabled until the folder changes, "Live previews", agent guide, skill and AGENTS.md lines*

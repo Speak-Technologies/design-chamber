@@ -60,16 +60,16 @@ export const host = {
   },
 };
 
-const SELF_CONTAINED_REQUEST =
-  'This design references files on the internet (scripts, styles, fonts or images), which are blocked inside Design Chamber. Make it self-contained: download or inline every remote file into assets/ (or inline it), and point to it with a relative path.';
-
 /**
- * §10.7 "Ask the agent to make it self-contained": puts the request in the linked chat's
- * composer (the user sends it), starting a linked chat first when there is none.
+ * §10.7 "Ask the agent to make it work offline": the service writes the request with the list of
+ * blocked URLs it found in the files (`purpose: 'offline'`), and it goes in the linked chat's
+ * composer (the user sends it), starting a linked chat first when there is none. The service
+ * answers 422 when nothing is blocked any more; that sentence reaches the caller before any chat opens.
  */
 export const askSelfContained = async (slug: string): Promise<void> => {
+  const { text } = await client.call('POST /designs/:slug/prompt', { params: { slug }, body: { purpose: 'offline' } });
   const { design } = await client.call('GET /designs/:slug', { params: { slug } });
   if (design.sessionId === null) await flows.continueInChat(slug);
   else if (guestHost.session.get()?.id !== design.sessionId) await guestHost.client.openSession(design.sessionId);
-  await guestHost.client.compose({ text: SELF_CONTAINED_REQUEST, mode: 'append' });
+  await guestHost.client.compose({ text, mode: 'append' });
 };

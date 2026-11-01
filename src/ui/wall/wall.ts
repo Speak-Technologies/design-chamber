@@ -1,22 +1,44 @@
 // The wall: an infinite pan/zoom surface of artboards (screens × viewports), each a sandboxed
-// design frame. Used by the full-screen canvas page (P2), the artifact viewer (P6) and the
-// compact rail viewer (R2). Camera math comes from the guest; this module owns the DOM, the
+// design frame. Used by the full-screen canvas page (P2), the page viewer (P6) and the compact
+// rail viewer (R2). Camera math comes from the guest; this module owns the DOM, the
 // pointer/keyboard input, hover outlines, pins, the comment composer and play-mode navigation.
+//
+// `presentation: 'page'` is the same machinery with one frame shown like a browser tab: no pan,
+// no zoom, no label row. The frame fills the stage (Full width) or sits at a viewport's width,
+// shrunk to fit and centred; the camera comes from `pageCamera`. Pins work the same way.
 
 import { mountSpinner } from '@openchamber/sdk/ui';
 
 import { anchorFromHit, anchorStatesOf, commentsForArtboard, docToFrame, isInFrameView, trackPins, type PinPlacement, type PinTracker } from '../../guest/anchoring.ts';
 import { DEFAULT_CAMERA, fitArea, fitBox, focusArtboard, layoutWall, panBy, wheelZoom, zoomAt, type Box, type Camera, type WallArtboard } from '../../guest/camera.ts';
 import type { CreateCommentBody, DesignDetailResponse, PatchCommentBody } from '../../shared/api.ts';
-import type { BridgeMode, FrameToPageMessage, HitElement } from '../../shared/bridge-protocol.ts';
-import { ARTBOARD_LABEL_HEIGHT, FRAME_UNLOAD_MARGIN, PAGE_LIVE_FRAMES_MAX, RAIL_LIVE_FRAMES_MAX, WALL_GAP } from '../../shared/limits.ts';
+import { artboardIdOf, type BridgeMode, type FrameToPageMessage, type HitElement } from '../../shared/bridge-protocol.ts';
+import { ARTBOARD_LABEL_HEIGHT, FRAME_UNLOAD_MARGIN, PAGE_FILL_VIEWPORT_ID, PAGE_LIVE_FRAMES_MAX, RAIL_LIVE_FRAMES_MAX, WALL_GAP } from '../../shared/limits.ts';
 import type { AnchorState, Comment, Screen, Viewport } from '../../shared/types.ts';
-import { append, createScope, h } from '../components/dom.ts';
+import { append, createScope, debounce, h } from '../components/dom.ts';
 import { icon } from '../components/icons.ts';
 import { btn, iconBtn } from '../components/kit.ts';
 import { artboardLabel, viewportLabel } from '../model/format.ts';
 import { pinAriaLabel, pinGlyph, pinNumbers } from '../model/comments-model.ts';
-import { PIN_FAN_SCALE, alignTop, boardAt, clusterPins, fanOut, frameToScreen, labelWidth, liveBoards, nudgeStep, pinFramePoint, screenToFrame, separatingScale, type PinSpot, type Point } from '../model/wall-model.ts';
+import {
+  PAGE_GUTTER,
+  PAGE_GUTTER_COMPACT,
+  PIN_FAN_SCALE,
+  boardAt,
+  clusterPins,
+  fanOut,
+  frameToScreen,
+  labelWidth,
+  liveBoards,
+  nudgeStep,
+  pageCamera,
+  pageComments,
+  pinFramePoint,
+  screenToFrame,
+  separatingScale,
+  type PinSpot,
+  type Point,
+} from '../model/wall-model.ts';
 import { createComposer, createThread, type CardHandle } from './comment-ui.ts';
 import { createFrameSlot, type FrameSlot } from './frame-slot.ts';
 
@@ -30,6 +52,10 @@ const toRect = (box: Box): Rect => ({ x: box.x, y: box.y, w: box.width, h: box.h
 export type WallOptions = {
   slug: string;
   compact: boolean;
+  /** `wall`: the pan/zoom canvas. `page`: one frame shown like a browser tab (a page design). */
+  presentation: 'wall' | 'page';
+  /** Page presentation: `PAGE_FILL_VIEWPORT_ID` (Full width) or a viewport id. */
+  initialPageView?: string;
   /** Screen px of the wall's right edge a drawer currently covers (laid over it on narrow pages). */
   coveredRight?: () => number;
   initialCamera: Camera | null;
@@ -50,8 +76,8 @@ export type WallHandle = {
   setDetail: (detail: DesignDetailResponse) => void;
   setMode: (mode: BridgeMode) => void;
   setHiddenViewports: (ids: readonly string[]) => void;
-  /** Artifact viewer "Fill": show one synthetic viewport instead of the design's own; comments are off while it is set. */
-  setViewportOverride: (viewport: Viewport | null) => void;
+  /** Page presentation: show Full width (`PAGE_FILL_VIEWPORT_ID`) or one viewport's width. */
+  setPageView: (id: string) => void;
   /** Ids of comments whose element was not found in the current document. */
   detachedIds: () => ReadonlySet<string>;
   /** Anchor state of every pin a loaded artboard has placed, for the revision prompt. */
@@ -61,7 +87,7 @@ export type WallHandle = {
   /** Show a saved version (read only); `compare` splits each artboard: version left, current right. */
   setVersion: (version: string | null, compare: boolean) => void;
   setShowPins: (show: boolean) => void;
-  /** Reload the artboards of these sources (screen ids; null = the artifact); all when omitted. Unwritten or failed artboards always retry. */
+  /** Reload the artboards of these sources (screen ids; null = the page); all when omitted. Unwritten or failed artboards always retry. */
   reload: (sources?: ReadonlySet<string | null>) => void;
   zoomStep: (factor: number) => void;
   zoomReset: () => void;
@@ -108,7 +134,9 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
   let detail = initialDetail;
   let mode: BridgeMode = 'edit';
   let hidden = new Set<string>();
-  let override: Viewport | null = null;
+  const pageMode = options.presentation === 'page';
+  let pageView: string = options.initialPageView ?? PAGE_FILL_VIEWPORT_ID;
+  const pageGutter = options.compact ? PAGE_GUTTER_COMPACT : PAGE_GUTTER;
   let version: string | null = null;
   let compare = false;
   let showPins = true;
@@ -139,9 +167,10 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
       class: 'dc-wall',
       tabindex: '0',
       role: 'application',
-      'aria-roledescription': 'canvas wall',
-      'aria-label': 'Design wall. Arrow keys pan, plus and minus zoom, Shift+1 fits everything. Hold Space and drag to pan.',
+      'aria-roledescription': pageMode ? 'page preview' : 'canvas wall',
+      'aria-label': pageMode ? 'Page preview. Arrow keys, Page Up and Page Down scroll the page.' : 'Design wall. Arrow keys pan, plus and minus zoom, Shift+1 fits everything. Hold Space and drag to pan.',
       'data-mode': mode,
+      'data-presentation': options.presentation,
     },
     world,
     labels,
@@ -157,7 +186,13 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
   const readOnly = (): boolean => version !== null;
   const comments = (): readonly Comment[] => detail.design.comments;
   const numbers = (): Map<string, number> => pinNumbers(comments());
-  const commentsOf = (art: Artboard): Comment[] => commentsForArtboard(comments(), art.screen?.id ?? null, art.viewport.id);
+  // A page shows every comment in every view: the bridge re-finds each element in the current layout.
+  const commentsOf = (art: Artboard): Comment[] => (pageMode ? pageComments(comments()) : commentsForArtboard(comments(), art.screen?.id ?? null, art.viewport.id));
+  /** The viewport a page view shows; null for Full width or a viewport the design no longer has. */
+  const pageViewport = (): Viewport | null => (pageView === PAGE_FILL_VIEWPORT_ID ? null : (detail.design.viewports.find((viewport) => viewport.id === pageView) ?? null));
+  /** Page presentation: the frame box and camera for the stage size, minus a drawer laid over its right side. */
+  const pageGeometry = (): ReturnType<typeof pageCamera> =>
+    pageCamera({ stageW: surfaceSize.w - (options.coveredRight?.() ?? 0), stageH: surfaceSize.h, frameW: pageViewport()?.width ?? null, gutter: pageGutter });
   /** A pin's diameter on screen (CSS `--dc-pin`); it stays the same at every zoom. */
   const pinSize = (): number => (options.compact ? 18 : 24);
   const size = (): { width: number; height: number } => ({ width: surfaceSize.w, height: surfaceSize.h });
@@ -186,7 +221,8 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     }
     options.onScale(camera.scale);
     clearTimeout(settleTimer);
-    settleTimer = setTimeout(() => options.onCameraSettled(camera), 400);
+    // A page's camera follows the stage size, so there is nothing to remember.
+    if (!pageMode) settleTimer = setTimeout(() => options.onCameraSettled(camera), 400);
     queueSync();
   };
 
@@ -200,13 +236,20 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     applyCamera();
   };
 
-  /** Fit everything; an artifact sits at the top of the wall like a page in a browser, not vertically centred. */
+  /** Fit everything on the wall; a page takes its fixed camera from the stage size. */
   const fitView = (): Camera => {
+    if (pageMode) return pageGeometry().camera;
     const { bounds } = layout;
     const area = fitArea(size(), options.coveredRight?.() ?? 0);
     const padding = options.compact ? 16 : area.padding;
-    const next = bounds.w > 0 && bounds.h > 0 ? fitBox({ x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h }, area, { padding }) : { ...DEFAULT_CAMERA };
-    return detail.design.kind === 'page' ? alignTop(next, layout.bounds, padding) : next;
+    return bounds.w > 0 && bounds.h > 0 ? fitBox({ x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h }, area, { padding }) : { ...DEFAULT_CAMERA };
+  };
+
+  /** Page presentation: size the frame and place it for the current stage and view. */
+  const layoutPage = (): void => {
+    rebuildLayout();
+    camera = fitView();
+    applyCamera();
   };
 
   const fit = (): void => {
@@ -219,6 +262,11 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
   // ---------------------------------------------------------------- boards
 
   const placeLabel = (board: Board): void => {
+    if (pageMode) {
+      // A page has no label row; its state shows in the placeholder and the view's notices.
+      board.label.hidden = true;
+      return;
+    }
     const { rect } = board.art;
     const x = camera.x + rect.x * camera.scale;
     const y = camera.y + rect.y * camera.scale;
@@ -309,7 +357,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     const main = createFrameSlot({
       slug: options.slug,
       artboardId: art.id,
-      title: `${art.screen?.title ?? detail.design.title} at ${viewportLabel(art.viewport)}`,
+      title: art.viewport.id === PAGE_FILL_VIEWPORT_ID && pageMode ? `${detail.design.title}, full width` : `${art.screen?.title ?? detail.design.title} at ${viewportLabel(art.viewport)}`,
       mode: () => (readOnly() ? 'play' : mode),
       scroll: () => self?.scroll ?? { x: 0, y: 0 },
       onState: () => {
@@ -401,21 +449,34 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     board.label.remove();
   };
 
+  /** The page's one frame: the chosen viewport's width (or the stage's), as tall as the stage. */
+  const pageLayout = (): WallLayout => {
+    const geometry = pageGeometry();
+    const chosen = pageViewport();
+    const viewport: Viewport = chosen ?? { id: PAGE_FILL_VIEWPORT_ID, label: 'Full width', width: geometry.frameW, height: geometry.frameH };
+    const frame = { x: 0, y: 0, width: geometry.frameW, height: geometry.frameH };
+    const cell: WallArtboard = { id: artboardIdOf(null, viewport.id), screen: null, screenTitle: detail.design.title, viewport, row: 0, col: 0, frame, label: { x: 0, y: 0, width: frame.width, height: 0 } };
+    return { boards: [{ id: cell.id, screen: null, viewport, rect: toRect(frame), cell }], bounds: toRect(frame) };
+  };
+
   const rebuildLayout = (): void => {
-    const visible = override ? [override] : detail.design.viewports.filter((viewport) => !hidden.has(viewport.id));
     const { design } = detail;
-    const rows = design.kind === 'page' ? [{ id: null, title: design.title }] : design.screens.map((screen) => ({ id: screen.id, title: screen.title, ...(screen.viewports ? { viewports: screen.viewports } : {}) }));
-    const wall = layoutWall(rows, visible);
-    layout = {
-      boards: wall.artboards.map((cell) => ({
-        id: cell.id,
-        screen: cell.screen === null ? null : (design.screens.find((screen) => screen.id === cell.screen) ?? null),
-        viewport: cell.viewport,
-        rect: toRect(cell.frame),
-        cell,
-      })),
-      bounds: wall.bounds ? toRect(wall.bounds) : { x: 0, y: 0, w: 0, h: 0 },
-    };
+    if (pageMode) layout = pageLayout();
+    else {
+      const visible = design.viewports.filter((viewport) => !hidden.has(viewport.id));
+      const rows = design.kind === 'page' ? [{ id: null, title: design.title }] : design.screens.map((screen) => ({ id: screen.id, title: screen.title, ...(screen.viewports ? { viewports: screen.viewports } : {}) }));
+      const wall = layoutWall(rows, visible);
+      layout = {
+        boards: wall.artboards.map((cell) => ({
+          id: cell.id,
+          screen: cell.screen === null ? null : (design.screens.find((screen) => screen.id === cell.screen) ?? null),
+          viewport: cell.viewport,
+          rect: toRect(cell.frame),
+          cell,
+        })),
+        bounds: wall.bounds ? toRect(wall.bounds) : { x: 0, y: 0, w: 0, h: 0 },
+      };
+    }
     const keep = new Set(layout.boards.map((art) => art.id));
     for (const [id, board] of boards) {
       if (!keep.has(id)) {
@@ -430,7 +491,8 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
         const resized = existing.art.rect.w !== art.rect.w || existing.art.rect.h !== art.rect.h;
         existing.art = art;
         sizeBoard(existing);
-        if (resized) void loadBoard(existing);
+        // A page frame just reflows at its new size, like a resized browser tab.
+        if (resized && !pageMode) void loadBoard(existing);
       } else boards.set(art.id, makeBoard(art));
     }
     for (const board of boards.values()) paint(board);
@@ -589,7 +651,8 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     for (const group of clusterPins(spots, camera.scale, pinSize())) {
       if (group.ids.length === 1) continue;
       const members = spots.filter((spot) => group.ids.includes(spot.id));
-      if (camera.scale >= PIN_FAN_SCALE) {
+      // A page cannot zoom in on a folded group, so its pins always fan out.
+      if (camera.scale >= PIN_FAN_SCALE || pageMode) {
         for (const spot of fanOut(group, camera.scale, pinSize())) {
           const pin = board.pins.get(spot.id);
           if (pin) placePin(pin, spot);
@@ -621,6 +684,10 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     }
   };
 
+  /** Which view a page comment was made in: "Full width" or the viewport's name. */
+  const pageWhere = (comment: Comment): string =>
+    comment.viewport === PAGE_FILL_VIEWPORT_ID ? 'Made at full width' : `Made at ${detail.design.viewports.find((viewport) => viewport.id === comment.viewport)?.label ?? comment.viewport} size`;
+
   const openThread = (board: Board, commentId: string): void => {
     const comment = comments().find((candidate) => candidate.id === commentId);
     if (!comment) return;
@@ -630,7 +697,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     const card = createThread({
       comment,
       number,
-      where: `${board.art.screen?.title ?? 'Artifact'} · ${board.art.viewport.label}`,
+      where: pageMode ? pageWhere(comment) : `${board.art.screen?.title ?? 'Page'} · ${board.art.viewport.label}`,
       anchorState,
       readOnly: readOnly(),
       onSave: async (body) => {
@@ -697,8 +764,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     if (!request || request.board !== board || request.frame.x !== message.x || request.frame.y !== message.y) return;
     if (request.purpose === 'click') {
       pendingHit = null;
-      if (override) options.onNotice('Comments attach to a device size. Pick one of the sizes in the list to comment.');
-      else if (message.element) openComposer(board, message.element, request.frame);
+      if (message.element) openComposer(board, message.element, request.frame);
       else options.onNotice('There is no element there to comment on.');
       return;
     }
@@ -756,6 +822,11 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
         options.onExternal(message.url);
         return;
       case 'wheel': {
+        if (pageMode) {
+          // No zoom on a page; a plain wheel scrolls the design, as in a browser tab.
+          if (!message.ctrl && mode === 'edit' && !readOnly()) board.main.post({ type: 'scroll-by', dx: message.deltaX, dy: message.deltaY });
+          return;
+        }
         const at = frameToScreen(camera, board.art.rect, { x: message.x, y: message.y });
         if (message.ctrl) setCamera(wheelZoom(camera, message.deltaY, at), true);
         // A plain wheel reaches us only from Edit mode: scroll the design, as over the wall.
@@ -791,6 +862,8 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
       closePopover();
       return true;
     }
+    // Zoom, fit and hold-to-pan belong to the wall; a page ignores them.
+    if (pageMode) return false;
     if (key === '+' || key === '=') zoomAtCentre(1.25);
     else if (key === '-' || key === '_') zoomAtCentre(1 / 1.25);
     else if (key === '0' && shift) zoomReset();
@@ -801,9 +874,44 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     return true;
   }
 
+  /** The page's frame once it has loaded; null before, or on the wall. */
+  const readyPageBoard = (): Board | null => {
+    if (!pageMode) return null;
+    const board = boards.values().next().value;
+    return board && board.main.state() === 'ready' ? board : null;
+  };
+
+  /** Page keys scroll the design like a browser tab: arrows, Page Up/Down, Home and End. */
+  const pageKey = (event: KeyboardEvent): boolean => {
+    if (event.key === 'Escape') return shortcut('Escape', false);
+    const board = readyPageBoard();
+    if (!board) return false;
+    const step = nudgeStep(event.shiftKey);
+    const screenful = Math.max(40, Math.round(board.art.rect.h * 0.9));
+    const moves: Record<string, Point> = {
+      ArrowUp: { x: 0, y: -step },
+      ArrowDown: { x: 0, y: step },
+      ArrowLeft: { x: -step, y: 0 },
+      ArrowRight: { x: step, y: 0 },
+      PageUp: { x: 0, y: -screenful },
+      PageDown: { x: 0, y: screenful },
+    };
+    const move = moves[event.key];
+    if (move) board.main.post({ type: 'scroll-by', dx: move.x, dy: move.y });
+    else if (event.key === 'Home') board.main.post({ type: 'scroll-to', x: 0, y: 0 });
+    // The frame clamps the scroll to the end of the document.
+    else if (event.key === 'End') board.main.post({ type: 'scroll-by', dx: 0, dy: 1e7 });
+    else return false;
+    return true;
+  };
+
   scope.listen<KeyboardEvent>(surface, 'keydown', (event) => {
     if (event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement) return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (pageMode) {
+      if (pageKey(event)) event.preventDefault();
+      return;
+    }
     const step = nudgeStep(event.shiftKey);
     const code = event.code;
     let handled = true;
@@ -832,6 +940,14 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     'wheel',
     (event) => {
       const at = local(event);
+      if (pageMode) {
+        // No zoom and no pan: a wheel over the frame scrolls the design, anywhere else does nothing.
+        event.preventDefault();
+        if (event.ctrlKey || event.metaKey) return;
+        const board = readyPageBoard();
+        if (board && boardAt(camera, [{ rect: board.art.rect }], at)) board.main.post({ type: 'scroll-by', dx: event.deltaX, dy: event.deltaY });
+        return;
+      }
       if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
         setCamera(wheelZoom(camera, event.deltaY, at), true);
@@ -856,6 +972,13 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     surface.focus({ preventScroll: true });
     const at = local(event);
     const board = boardAt(camera, [...boards.values()].map((entry) => ({ rect: entry.art.rect, board: entry })), at)?.board ?? null;
+    if (pageMode) {
+      // A page never pans: a press on the frame in Edit mode may become a comment, nothing else does anything.
+      if (event.button !== 0) return;
+      if (popover) closePopover();
+      downAt = board && mode === 'edit' && !readOnly() ? { point: at, board } : null;
+      return;
+    }
     const wantsPan = event.button === 1 || spaceDown || panTool || board === null || mode === 'play' || readOnly();
     if (event.button !== 0 && event.button !== 1) return;
     if (popover) closePopover();
@@ -875,7 +998,10 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
       panning.last = at;
       return;
     }
-    if (downAt && Math.hypot(at.x - downAt.point.x, at.y - downAt.point.y) > 4) {
+    if (downAt && pageMode && Math.hypot(at.x - downAt.point.x, at.y - downAt.point.y) > 4) {
+      // A drag on a page is not a click: no comment, and no pan either.
+      downAt = null;
+    } else if (downAt && Math.hypot(at.x - downAt.point.x, at.y - downAt.point.y) > 4) {
       // A drag that started on an artboard in Edit mode pans the wall instead of commenting.
       panning = { id: event.pointerId, last: downAt.point };
       downAt = null;
@@ -916,10 +1042,23 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
 
   // ---------------------------------------------------------------- lifecycle
 
+  // A page lays out at once on its first real size, then follows resizes after they settle.
+  let pageSized = false;
+  const layoutPageSoon = debounce(() => {
+    if (!disposed) layoutPage();
+  }, 100);
   const observer = new ResizeObserver(() => {
     const rect = surfaceRect();
     surfaceSize = { w: Math.round(rect.width), h: Math.round(rect.height) };
     if (surfaceSize.w === 0 || surfaceSize.h === 0) return;
+    if (pageMode) {
+      if (pageSized) layoutPageSoon();
+      else {
+        pageSized = true;
+        layoutPage();
+      }
+      return;
+    }
     if (!userMoved) camera = fitView();
     applyCamera();
   });
@@ -964,6 +1103,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
       }
     },
     setHiddenViewports: (ids) => {
+      if (pageMode) return;
       hidden = new Set(ids);
       rebuildLayout();
       if (!userMoved) camera = fitView();
@@ -981,11 +1121,12 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
         paintPins(board);
       }
     },
-    setViewportOverride: (next) => {
-      override = next;
-      rebuildLayout();
-      if (!userMoved && surfaceSize.w > 0) camera = fitView();
-      applyCamera();
+    setPageView: (id) => {
+      if (!pageMode || id === pageView) return;
+      pageView = id;
+      closePopover();
+      clearHover();
+      if (surfaceSize.w > 0) layoutPage();
     },
     externalRefs: () => [...new Set([...boards.values()].flatMap((board) => board.main.meta()?.external ?? []))],
     detachedIds: () => {
@@ -1005,18 +1146,40 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
         if (affected && board.live) void loadBoard(board);
       }
     },
-    zoomStep: zoomAtCentre,
-    zoomReset,
-    fit,
+    zoomStep: (factor) => {
+      if (!pageMode) zoomAtCentre(factor);
+    },
+    zoomReset: () => {
+      if (!pageMode) zoomReset();
+    },
+    fit: () => {
+      if (!pageMode) fit();
+      else if (surfaceSize.w > 0) layoutPage();
+    },
     refit: () => {
-      if (userMoved || surfaceSize.w === 0) return;
-      camera = fitView();
-      applyCamera();
+      if (surfaceSize.w === 0) return;
+      // A drawer opened or closed over the page: the frame makes room for it.
+      if (pageMode) layoutPage();
+      else if (!userMoved) {
+        camera = fitView();
+        applyCamera();
+      }
     },
     getCamera: () => camera,
     focusComment: (id) => {
       const comment = comments().find((candidate) => candidate.id === id);
       if (!comment) return;
+      if (pageMode) {
+        const page = boards.values().next().value;
+        if (!page) return;
+        // Scroll the pinned element to the upper third of the frame, then open its thread.
+        const placement = page.placements.find((entry) => entry.commentId === id);
+        if (placement && page.main.state() === 'ready') page.main.post({ type: 'scroll-to', x: page.scroll.x, y: Math.max(0, placement.point.y - page.art.rect.h / 3) });
+        setTimeout(() => {
+          if (!disposed && boards.get(page.art.id) === page) openThread(page, id);
+        }, 200);
+        return;
+      }
       const board = layout.boards.map((art) => boards.get(art.id)).find((candidate) => candidate && candidate.art.screen?.id === (comment.screen ?? undefined) && candidate.art.viewport.id === comment.viewport) ?? [...boards.values()].find((candidate) => comment.screen === null && candidate.art.viewport.id === comment.viewport);
       if (!board) return;
       setCamera(focusArtboard(board.art.cell, size(), { padding: options.compact ? 12 : 64 }), true);
