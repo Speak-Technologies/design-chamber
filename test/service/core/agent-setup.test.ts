@@ -255,7 +255,8 @@ describe('guide at <root>/AGENTS.md (§3.3)', () => {
     assert.deepEqual(await fingerprint(file), before);
   });
 
-  test('a root with a control character answers failed with a sentence and writes nothing', async (t) => {
+  // Windows cannot name a folder with a newline, so this root cannot exist there.
+  test('a root with a control character answers failed with a sentence and writes nothing', { skip: process.platform === 'win32' }, async (t) => {
     const { tmp, agent, settings } = await useFixture(t);
     const bad = tmp.at('bad\nroot');
     await mkdir(bad, { recursive: true });
