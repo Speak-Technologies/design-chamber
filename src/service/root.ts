@@ -154,9 +154,10 @@ export type ValidateRootOptions = {
 };
 
 /**
- * Validate a user-chosen designs root. Order: invalid character (NUL) → not absolute (after
- * `~` expansion; a win32 drive-relative `C:foo` is not absolute) → filesystem root → inside
- * the extension package → not creatable/writable (mkdir -p, then a write+delete probe).
+ * Validate a user-chosen designs root. Order: invalid character (NUL or another control
+ * character) → not absolute (after `~` expansion; a win32 drive-relative `C:foo` is not
+ * absolute) → filesystem root → inside the extension package → not creatable/writable
+ * (mkdir -p, then a write+delete probe).
  */
 export const validateRootCandidate = async (raw: unknown, options: ValidateRootOptions): Promise<RootValidation> => {
   const homeDir = options.homeDir ?? os.homedir();
@@ -164,7 +165,8 @@ export const validateRootCandidate = async (raw: unknown, options: ValidateRootO
   const platform = host.platform ?? process.platform;
   if (typeof raw !== 'string') return { ok: false, message: 'The designs folder must be a path.' };
   const value = raw.trim();
-  if (value.includes('\0')) return { ok: false, message: 'The folder path contains an invalid character.' };
+  // NUL and every other control character: a newline in the root would reach the agent guide and skill text.
+  if (/[\u0000-\u001f\u007f]/.test(value)) return { ok: false, message: 'The folder path contains an invalid character.' };
   if (value.length > SETTINGS_PATH_MAX) return { ok: false, message: 'That folder path is too long.' };
   const expanded = expandHome(value, homeDir);
   if (expanded === '' || !path.isAbsolute(expanded)) {

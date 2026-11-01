@@ -4,6 +4,7 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { createAgentSetup } from './agent-setup.ts';
 import { createChangeHub } from './changes.ts';
 import { unavailable, type Logger, type ServiceContext } from './context.ts';
 import { createRouter, registerHealthRoute, type Router } from './http.ts';
@@ -86,10 +87,24 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   const watcher = startWatcher({ settings, hub, log, ...options.watch });
   ctx.onDispose(() => watcher.stop());
 
+  // The guide at <root>/AGENTS.md: synced after the watcher's baseline, on root changes and on
+  // new designs. The skill is written only by POST /agent/skill (the user's click).
+  const agent = createAgentSetup({
+    log,
+    settings,
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.homeDir ? { homeDir: options.homeDir } : {}),
+  });
+  const stopAgent = agent.start({ hub, ready: watcher.ready });
+  ctx.onDispose(async () => {
+    stopAgent();
+    await agent.idle();
+  });
+
   const router = createRouter({ token: options.token, log });
   registerHealthRoute(router, { version: ctx.version, epoch: ctx.epoch });
   // WP1
-  registerSettingsRoutes(router, ctx);
+  registerSettingsRoutes(router, ctx, agent);
   registerChangesRoutes(router, ctx);
   registerDesignsRoutes(router, ctx);
   registerCommentsRoutes(router, ctx);
