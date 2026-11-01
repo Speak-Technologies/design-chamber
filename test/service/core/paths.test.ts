@@ -275,7 +275,7 @@ describe('writeFileAtomic', () => {
     const refusal = refuseRenames(t, (destination) => destination === target);
     await assert.rejects(writeFileAtomic(target, 'new\n'), (error: NodeJS.ErrnoException) => error.code === 'EPERM');
     const tries = refusal.attempts.filter((entry) => entry === target).length;
-    assert.ok(tries > 1 && tries <= 6, `tried ${tries} times`);
+    assert.equal(tries, 5, `tried ${tries} times`);
     assert.equal(await readFile(target, 'utf8'), 'old\n');
     assert.deepEqual((await readdir(tmp)).filter((name) => name.includes('.tmp-')), []);
   });

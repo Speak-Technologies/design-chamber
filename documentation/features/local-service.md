@@ -69,9 +69,9 @@ merging comments into it, the service re-merges from the agent's new file instea
 over it. If a notification goes missing (Windows and OneDrive can drop or merge them), the
 next notification from that design folder reports every change since the last one, so a
 `design.json` change is never skipped. On Windows, saving the service's own files waits a
-moment and tries again when another program has the file open for a moment (the panel reading
-it, an antivirus scan). Before this, one such clash could leave a design stuck on its guessed
-values. When a design folder appears and is
+moment and tries again (up to five times, under half a second) when another program has the
+file open briefly, such as the panel reading it or an antivirus scan, so a design never gets
+stuck on guessed values. When a design folder appears and is
 written to within a moment, the feed reports it once as *added* — the panel treats that as "load
 everything for this design".
 
