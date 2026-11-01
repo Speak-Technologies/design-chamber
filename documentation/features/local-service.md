@@ -70,6 +70,59 @@ over it. When a design folder appears and is
 written to within a moment, the feed reports it once as *added* — the panel treats that as "load
 everything for this design".
 
+## When the agent writes HTML before design.json
+The agent owns `design.json`; the service keeps its own copy of the service fields (kind, brief,
+linked chat, project folder, preset, created, comments) in `.chamber/state.json`, and that copy
+normally wins. An agent that writes `index.html` (or screen files) first used to lose its brief,
+project folder and kind: the service saw the folder, filled in defaults, then wrote those
+defaults over the agent's `design.json` when it arrived. Now:
+- **Folder seen before design.json.** When there is no `state.json` and `design.json` is missing
+  or only half written, the service guesses from the files (`index.html` means a page, anything
+  else a canvas) and marks that guess as provisional. The list shows the design with the usual
+  "no design.json yet" warning. Nothing is written into the agent's files.
+- **design.json lands.** As soon as it parses, the agent's values replace the guess: kind (an
+  unknown kind keeps the guess), created, brief, linked chat, project folder and preset. Values
+  the service cannot use, such as a linked chat id that is not text, become the normal fallback.
+  The service then only adds what the agent left out (`version`, `comments`, `entry` for a page);
+  it never changes a value the agent wrote correctly. It does not matter how long the agent
+  takes between the two files.
+- **Comments before design.json.** They are kept in `state.json` only, and no `design.json` is
+  made up for them. When the agent's file lands they are merged into it; if the agent's file
+  also has comments, the ones with new ids are added and the service's copy wins on a shared id.
+- **Renaming or linking a chat before design.json.** The user has claimed the folder: the
+  service writes a minimal `design.json` (as for any folder without one) and the provisional
+  phase ends. The defaults then stay, and a `design.json` the agent writes afterwards is merged
+  the normal way, with the service's fields winning.
+- **The agent writes design.json first** (what the instructions ask). The service takes its
+  values straight away, including its kind, even when `index.html` does not exist yet.
+- **Changing the kind.** While a design has no page or screen file yet and nobody has commented
+  on it, the agent may switch it between page and canvas in `design.json` and the service
+  follows. After the first file or the first comment the kind is fixed and the service puts it
+  back if the agent changes it.
+- An agent that never writes `design.json` leaves a design that still works: it is listed, opens,
+  and keeps its comments in `state.json`.
+
+## Loose HTML files in the designs folder
+Only folders are designs, so an HTML file an agent saved straight into the designs folder
+(`Designs/pricing.html`) never shows up as one. The service lists those files with the designs:
+plain `.html` and `.htm` files only (any letter case), never hidden files, folders, shortcuts
+(symlinks) or other files such as the `AGENTS.md` guide. The list holds the 20 newest names and
+a count of all of them; with hundreds of files, only the first 200 by name are checked for their
+date and size. The live feed reports a *loose* change when a file is added or removed.
+
+Importing one makes a new page from it: the file is copied byte for byte into a new page folder
+as `index.html`, titled from its `<title>` (or from the file name: `pricing-v2.html` becomes
+"Pricing v2"), and then the original is moved into `.trash/` as `<name>-<date and time>.html`
+(keeping its own `.html` or `.htm` ending), with `-2`, `-3`… if that name is taken. Nothing is deleted. The service only imports a file that
+is still in the designs folder, as a real file and not a shortcut, when the click arrives;
+anything else answers "That file is no longer in your designs folder." A second click while one
+import runs answers "That file is being imported already.", and files over 20 MB are refused with
+a sentence asking the user to move it by hand. If the copy fails, the half-made page goes to
+`.trash/` and the original stays where it was. If only the move to `.trash/` fails, the page is
+still made and the original stays in the folder (the user ends up with two copies, never none).
+Sibling files the HTML refers to (images, CSS) are not copied; the page's missing-files status
+shows them.
+
 ## Edge cases
 - If the service restarts, the panel's next poll sees a new run id and reloads everything.
 - A message too large for one request (an assistant message for "Open as page") is uploaded
@@ -90,5 +143,5 @@ everything for this design".
 ## Where it lives
 `src/service/compose.ts` (wiring), `src/service/main.ts` (process entry), `src/service/paths.ts`
 (containment and folder names), `settings.ts` / `root.ts`, `store.ts`, `watch.ts` / `changes.ts`,
-`uploads.ts`, `outbox.ts`, and the routes in `src/service/routes/`. Tests: `test/service/**`
+`uploads.ts`, `outbox.ts`, `loose.ts` (loose HTML files), and the routes in `src/service/routes/`. Tests: `test/service/**`
 (`test/service/integration/` runs the built service end to end).

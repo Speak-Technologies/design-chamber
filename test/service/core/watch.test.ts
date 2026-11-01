@@ -213,6 +213,62 @@ describe('watcher events', () => {
   });
 });
 
+describe('loose html files in the root (agent-guidance spec §3.5)', () => {
+  const looseEvents = (env: WatchEnv, after: number): ChangeEvent[] =>
+    env.events.filter((event) => event.seq > after && event.kind === 'loose');
+
+  test('adding and removing a root html file emits "loose" (fs.watch path); AGENTS.md, dot files and design folders do not', async (t) => {
+    const env = await makeWatchEnv(t, { pollMs: 600_000 });
+    await env.quietFor(150);
+
+    let mark = env.hub.seq();
+    await writeFile(env.tmp.at('stray.html'), '<p>stray</p>', 'utf8');
+    const added = await env.waitForEvent((event) => event.seq > mark && event.kind === 'loose');
+    assert.equal(added.slug, null);
+
+    mark = env.hub.seq();
+    await writeFile(env.tmp.at('AGENTS.md'), '# guide', 'utf8');
+    await writeFile(env.tmp.at('.hidden.html'), '<p>h</p>', 'utf8');
+    await mkdir(env.tmp.at('a-design'), { recursive: true });
+    await writeFile(env.tmp.at('a-design/index.html'), '<p>design</p>', 'utf8');
+    await env.waitForEvent((event) => event.seq > mark && event.slug === 'a-design' && event.kind === 'added');
+    await env.quietFor(400);
+    assert.deepEqual(looseEvents(env, mark), [], 'nothing changed the loose set');
+
+    mark = env.hub.seq();
+    await rm(env.tmp.at('stray.html'));
+    await env.waitForEvent((event) => event.seq > mark && event.kind === 'loose');
+  });
+
+  test('the poll backstop catches loose files when fs.watch is dead', async (t) => {
+    const env = await makeWatchEnv(t, { watchImpl: deadWatch, pollMs: 120 });
+    const mark = env.hub.seq();
+    await writeFile(env.tmp.at('polled.htm'), '<p>p</p>', 'utf8');
+    await env.waitForEvent((event) => event.seq > mark && event.kind === 'loose', 6000);
+    const second = env.hub.seq();
+    await writeFile(env.tmp.at('AGENTS.md'), '# guide', 'utf8');
+    await env.quietFor(500);
+    assert.deepEqual(looseEvents(env, second), [], 'AGENTS.md is not loose html');
+  });
+
+  test('files already there at start are the baseline, not a change', async (t) => {
+    const tmpEnv = await makeWatchEnv(t, { pollMs: 120, watchImpl: deadWatch });
+    // Restart the watcher over a root that already holds a loose file.
+    await writeFile(tmpEnv.tmp.at('before.html'), '<p>b</p>', 'utf8');
+    await tmpEnv.waitForEvent((event) => event.kind === 'loose', 6000);
+    tmpEnv.watcher.stop();
+
+    const hub = createChangeHub(randomUUID());
+    const events: ChangeEvent[] = [];
+    hub.subscribe((event) => events.push(event));
+    const fresh = startWatcher({ settings: tmpEnv.settings, hub, log: { info() {}, warn() {}, error() {} }, debounceMs: 50, pollMs: 120, watchImpl: deadWatch });
+    t.after(() => fresh.stop());
+    await fresh.ready;
+    await tmpEnv.quietFor(500);
+    assert.deepEqual(events.filter((event) => event.kind === 'loose'), []);
+  });
+});
+
 describe('fs.watch that cannot work here (Linux inotify limit, no recursive support)', () => {
   const failing = (code: string, how: 'throw' | 'emit') => {
     let calls = 0;

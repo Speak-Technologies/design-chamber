@@ -17,6 +17,7 @@ import type {
   DeleteDesignResponse,
   DesignDetailResponse,
   DesignListResponse,
+  InstallSkillResponse,
   MarkSentResponse,
   OkResponse,
   OutboxResponse,
@@ -103,8 +104,10 @@ describe('agent guide/skill and loose html: contracts before their lanes land (A
     const core = await useServedCore(t);
     const settings = await json<SettingsResponse>(await core.request('/settings'));
     assert.equal(settings.agent.guide.path, path.join(core.root, 'AGENTS.md'));
-    assert.equal(settings.agent.guide.state, 'failed');
-    assert.equal(settings.agent.skill.state, 'unavailable');
+    // A3 landed: the served core never starts the guide sync, and the skill home is the tmp one.
+    assert.equal(settings.agent.guide.state, 'missing');
+    assert.equal(settings.agent.skill.state, 'not-installed');
+    assert.equal(settings.agent.skill.path, path.join(core.homeDir, '.config', 'opencode', 'skills', 'design-chamber', 'SKILL.md'));
     assert.deepEqual(settings.agent.skill.duplicates, []);
     const list = await json<DesignListResponse>(await core.request('/designs'));
     assert.deepEqual(list.loose, { files: [], total: 0 });
@@ -112,16 +115,11 @@ describe('agent guide/skill and loose html: contracts before their lanes land (A
 
   test('POST /agent/skill and POST /loose/import answer a sentence and touch nothing, traversal names included', async (t) => {
     const core = await useServedCore(t);
-    await core.tmp.write('outside.html', '<p>outside the root</p>');
-    for (const name of ['x.html', '../outside.html', '..\\outside.html', '%2e%2e%2foutside.html', path.join(core.tmp.at(''), 'outside.html')]) {
-      const answer = await core.request('/loose/import', { method: 'POST', body: { name } });
-      assert.equal(answer.status, 500, name);
-      assert.deepEqual(await errorOf(answer), { error: 'internal', message: 'This part of Design Chamber is not built yet.' });
-    }
-    assert.equal(await readFile(core.tmp.at('outside.html'), 'utf8'), '<p>outside the root</p>');
+    // POST /loose/import is built (A4): its refusals live in loose.test.ts.
+    // POST /agent/skill is built (A3): it writes only the fixed skill file under the tmp home; full cases in agent-setup.test.ts and settings.test.ts.
     const skill = await core.request('/agent/skill', { method: 'POST', body: { replaceEdited: true } });
-    assert.equal(skill.status, 500);
-    assert.equal((await errorOf(skill)).error, 'internal');
+    assert.equal(skill.status, 200);
+    assert.equal((await json<InstallSkillResponse>(skill)).skill.state, 'current');
     const list = await json<DesignListResponse>(await core.request('/designs'));
     assert.deepEqual(list.designs, []);
   });

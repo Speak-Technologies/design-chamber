@@ -22,10 +22,8 @@ import {
 import type { DesignKind } from '../../shared/types.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
+import { createLooseImporter, listLooseHtml, type LooseList } from '../loose.ts';
 import { projectDirectoryOf } from './chat.ts';
-
-/** Answer of route stubs whose lane has not landed yet (removed with the stub). */
-const NOT_BUILT_YET = 'This part of Design Chamber is not built yet.';
 
 const isBodyRecord = (body: unknown): body is Record<string, unknown> =>
   typeof body === 'object' && body !== null && !Array.isArray(body);
@@ -122,18 +120,25 @@ const validatePatch = (body: unknown): PatchDesignBody => {
  * store before any filesystem access.
  */
 export function registerDesignsRoutes(router: Router, ctx: ServiceContext): void {
+  const looseImporter = createLooseImporter({ settings: ctx.settings, store: ctx.store, log: ctx.log });
+
   router.on('GET /designs', async ({ query }): Promise<DesignListResponse> => {
     const q = query.get('q') ?? undefined;
     const kindParam = query.get('kind') ?? undefined;
     if (kindParam !== undefined && !isKind(kindParam)) throw new ApiError('bad-request', 'The kind filter is "page" or "canvas".');
+    const root = ctx.settings.root();
     const designs = await ctx.store.list({ ...(q !== undefined ? { q } : {}), ...(kindParam !== undefined ? { kind: kindParam } : {}) });
-    // Stub until task A4 (`listLooseHtml`): no loose files reported yet.
-    return { root: ctx.settings.root(), designs, loose: { files: [], total: 0 } };
+    // The loose-file banner is a hint: if the root cannot be listed for it, the designs still show.
+    const loose = await listLooseHtml(root).catch((error: unknown): LooseList => {
+      ctx.log.warn('loose.list-failed', { error: error instanceof Error ? error.message : String(error) });
+      return { files: [], total: 0 };
+    });
+    return { root, designs, loose };
   });
 
-  // Stub until task A4 (`importLooseHtml`). Touches nothing on disk.
-  router.on('POST /loose/import', async (): Promise<ImportLooseResponse> => {
-    throw new ApiError('internal', NOT_BUILT_YET);
+  router.on('POST /loose/import', async ({ body }): Promise<ImportLooseResponse> => {
+    if (!isBodyRecord(body)) throw new ApiError('bad-request', 'The import request must be a JSON object.');
+    return looseImporter.importFile(body.name);
   });
 
   router.on('POST /designs', async ({ body }): Promise<CreateDesignResponse> => {
