@@ -34,6 +34,13 @@ export const artboardLabel = (screenTitle: string, viewport: Viewport): { name: 
 /** Camera scale → whole percent, as the toolbar shows it. */
 export const zoomPercent = (scale: number): string => `${Math.round(scale * 100)}%`;
 
+/** "820 bytes", "14 kB", "1.4 MB" in the host locale (1 kB = 1000 bytes, as file managers show it). */
+export const fileSize = (bytes: number, locale: string): string => {
+  const safe = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+  const [value, unit] = safe < 1000 ? [safe, 'byte'] : safe < 1_000_000 ? [safe / 1000, 'kilobyte'] : [safe / 1_000_000, 'megabyte'];
+  return new Intl.NumberFormat(locale, { style: 'unit', unit, unitDisplay: unit === 'byte' ? 'long' : 'short', maximumFractionDigits: value < 10 && unit !== 'byte' ? 1 : 0 }).format(value);
+};
+
 export const plural = (count: number, one: string, many: string = `${one}s`): string => `${count} ${count === 1 ? one : many}`;
 
 /** Last path segment of a folder, for compact labels ("Designs"). */

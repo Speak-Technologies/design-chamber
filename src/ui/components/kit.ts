@@ -22,23 +22,34 @@ export type BtnOptions = {
   pressed?: boolean;
 };
 
-export type BtnHandle = { el: HTMLButtonElement; set: (next: Partial<Pick<BtnOptions, 'label' | 'disabled' | 'loading' | 'pressed' | 'title'>>) => void };
+export type BtnHandle = { el: HTMLButtonElement; set: (next: Partial<Pick<BtnOptions, 'label' | 'icon' | 'disabled' | 'loading' | 'pressed' | 'title'>>) => void };
 
 export const btn = (options: BtnOptions): BtnHandle => {
   const state = { ...options };
   const el = h('button', { type: 'button', class: 'oc-sdk oc-sdk-btn', 'data-variant': options.variant ?? 'outline', 'data-size': options.size ?? 'sm' });
   const label = h('span', { class: 'dc-btn-label' });
   const ring = h('span', { class: 'oc-sdk-spinner-ring', 'aria-hidden': 'true' });
+  let glyph: SVGElement | null = options.icon ? icon(options.icon, 14) : null;
+  let glyphName = options.icon;
   const paint = (): void => {
+    if (state.icon !== glyphName) {
+      const next = state.icon ? icon(state.icon, 14) : null;
+      if (glyph && next) glyph.replaceWith(next);
+      else if (glyph) glyph.remove();
+      else if (next) label.before(next);
+      glyph = next;
+      glyphName = state.icon;
+    }
     label.textContent = state.label;
     el.disabled = Boolean(state.disabled) || Boolean(state.loading);
     el.dataset.loading = state.loading ? 'true' : 'false';
     el.setAttribute('aria-busy', state.loading ? 'true' : 'false');
     if (state.pressed !== undefined) el.setAttribute('aria-pressed', String(state.pressed));
     if (state.title) el.title = state.title;
+    else el.removeAttribute('title');
     ring.hidden = !state.loading;
   };
-  append(el, ring, options.icon ? icon(options.icon, 14) : null, label, options.chevron ? icon('chevron', 14) : null);
+  append(el, ring, glyph, label, options.chevron ? icon('chevron', 14) : null);
   el.addEventListener('click', (event) => {
     if (!state.disabled && !state.loading) state.onClick(event);
   });

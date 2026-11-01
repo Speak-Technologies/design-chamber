@@ -9,7 +9,7 @@ export type ListSort = 'updated' | 'created' | 'title';
 export const LIST_TABS: ReadonlyArray<{ id: ListTab; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'canvas', label: 'Canvases' },
-  { id: 'page', label: 'Artifacts' },
+  { id: 'page', label: 'Pages' },
 ];
 
 export const LIST_SORTS: ReadonlyArray<{ id: ListSort; label: string }> = [
@@ -18,7 +18,7 @@ export const LIST_SORTS: ReadonlyArray<{ id: ListSort; label: string }> = [
   { id: 'title', label: 'Title' },
 ];
 
-export const kindLabel = (kind: DesignKind): string => (kind === 'canvas' ? 'Canvas' : 'Artifact');
+export const kindLabel = (kind: DesignKind): string => (kind === 'canvas' ? 'Canvas' : 'Page');
 
 const matchesQuery = (design: DesignSummary, query: string): boolean => {
   const needle = query.trim().toLowerCase();
@@ -48,9 +48,9 @@ export const sortDesigns = (designs: readonly DesignSummary[], sort: ListSort): 
   return copy.sort((a, b) => Date.parse(b[key]) - Date.parse(a[key]));
 };
 
-/** "Canvas · 3 screens" / "Artifact" — the kind line of a row, without the time. */
+/** "Canvas · 3 screens" or "Page": the kind line of a row, without the time. */
 export const kindSummary = (design: DesignSummary): string => {
-  if (design.kind === 'page') return 'Artifact';
+  if (design.kind === 'page') return 'Page';
   return `Canvas · ${plural(design.screenCount, 'screen')}`;
 };
 

@@ -277,6 +277,9 @@ export const createFakeBackend = (): FakeBackend => {
   let root = DEFAULT_ROOT;
   const previous: SettingsResponse['previousRoots'] = [{ path: 'D:\\Old designs', exists: true, designCount: 3 }];
   let chromePath: string | null = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+  /** A page the agent saved straight into the root instead of a design folder: the loose-file banner offers to import it. */
+  const loose = new Map<string, { bytes: number; mtime: string }>([['pricing-v2.html', { bytes: 14_200, mtime: ago(2 * HOUR) }]]);
+  let skillState: 'not-installed' | 'current' = 'not-installed';
   const listeners = new Set<(event: ChangeEvent) => void>();
 
   const emit = (slug: string | null, kind: ChangeEvent['kind'], files?: string[]): void => {
@@ -360,7 +363,7 @@ export const createFakeBackend = (): FakeBackend => {
       downloadsDir: 'C:\\Users\\you\\Downloads',
       agent: {
         guide: { path: `${root}\\AGENTS.md`, state: 'current' },
-        skill: { path: 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md', state: 'not-installed', duplicates: [] },
+        skill: { path: 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md', state: skillState, duplicates: [] },
       },
     }),
     'PUT /settings': ({ body }) => {
@@ -380,7 +383,22 @@ export const createFakeBackend = (): FakeBackend => {
     'GET /designs': ({ query }) => {
       let designs = rootVisible() ? [...db.entries()].map(([slug, rec]) => summary(slug, rec)) : [];
       if (query.q) designs = designs.filter((d) => d.title.toLowerCase().includes((query.q ?? '').toLowerCase()));
-      return { root, designs, loose: { files: [], total: 0 } };
+      const files = rootVisible() ? [...loose.entries()].map(([name, file]) => ({ name, ...file })).sort((a, b) => b.mtime.localeCompare(a.mtime)) : [];
+      return { root, designs, loose: { files, total: files.length } };
+    },
+    'POST /loose/import': ({ body }) => {
+      if (!loose.delete(body.name)) throw new ServiceError('not-found', 'That file is no longer in your designs folder.');
+      const title = body.name.replace(/\.html?$/i, '').replace(/[-_]+/g, ' ').replace(/^./, (c) => c.toUpperCase());
+      const slug = body.name.replace(/\.html?$/i, '').toLowerCase();
+      const design = baseDesign({ kind: 'page', title, brief: '', created: new Date().toISOString(), updated: new Date().toISOString() });
+      db.set(slug, { design, palette: SLATE, thumb: 'pending', written: new Set(['index']), external: [], blocked: [], rev: 1, versions: [], dirty: false });
+      emit(slug, 'added');
+      emit(null, 'loose');
+      return { slug, title, originalMovedTo: `${root}\\.trash\\${slug}-20261101090000.html` };
+    },
+    'POST /agent/skill': () => {
+      skillState = 'current';
+      return { skill: { path: 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md', state: skillState, duplicates: [] } };
     },
     'POST /designs': ({ body }) => {
       const slug = `${body.title ?? 'new-design'}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'design';

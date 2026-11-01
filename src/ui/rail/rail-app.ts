@@ -1,5 +1,5 @@
 // The rail panel app (320–480 px): the list (R1), the compact viewer (R2) and settings (R3) as
-// views of one stack, plus the New dialog. Chat links ("Open as artifact", a chip click) open
+// views of one stack, plus the New dialog. Chat links ("Open as page", a chip click) open
 // the viewer here, because an extension cannot open the full-screen page from code.
 
 import { openNewDialog } from '../components/new-dialog.ts';
@@ -56,12 +56,12 @@ export const mountRail = (root: HTMLElement): void => {
   });
   app.append(list.el);
 
-  // A chip click or "Open as artifact" opens the viewer here.
+  // A chip click or "Open as page" opens the viewer here.
   flows.watchItems(
     (target) => openViewer(target.slug),
     (error) => toast('error', `Couldn’t open that design. ${errorText(error)}`),
   );
-  // "Open as artifact" runs in the background frame and leaves the new artifact for us to open.
+  // "Open as page" runs in the background frame and leaves the new page for us to open.
   flows.watchOpenRequests(
     (listener) => feed.subscribe((batch) => {
       if (batch.reset || batch.events.some((event) => event.kind === 'added')) listener();

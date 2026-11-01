@@ -1,6 +1,7 @@
 // View-model of the comments drawer (P3) and the pins on the wall.
 
 import type { Comment, CommentStatus, Screen, Viewport } from '../../shared/types.ts';
+import { PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.ts';
 import { viewportLabel } from './format.ts';
 
 export type CommentFilter = CommentStatus;
@@ -28,7 +29,7 @@ export const pinNumbers = (comments: readonly Comment[]): Map<string, number> =>
 
 export type CommentGroup = { key: string; title: string; comments: Comment[] };
 
-/** Drawer groups: one per screen in wall order, then comments whose screen no longer exists. Artifacts have one group. */
+/** Drawer groups: one per screen in wall order, then comments whose screen no longer exists. A page has one group, titled with the page's name. */
 export const groupComments = (comments: readonly Comment[], screens: readonly Screen[], pageTitle: string): CommentGroup[] => {
   const groups: CommentGroup[] = [];
   const known = new Set<string>();
@@ -50,19 +51,21 @@ export const countByStatus = (comments: readonly Comment[]): Record<CommentStatu
   resolved: comments.filter((comment) => comment.status === 'resolved').length,
 });
 
+/** Where a comment was made: "Laptop 1280×800", or "Full width" for a page's fill view (a design viewport of that id wins). */
 export const viewportOf = (viewports: readonly Viewport[], id: string): string => {
   const viewport = viewports.find((candidate) => candidate.id === id);
-  return viewport ? viewportLabel(viewport) : id;
+  if (viewport) return viewportLabel(viewport);
+  return id === PAGE_FILL_VIEWPORT_ID ? 'Full width' : id;
 };
 
 export type SendState = { enabled: boolean; label: string; reason: string | null };
 
-/** The drawer footer button: what it says, and — when disabled — why. */
+/** The drawer footer button: what it says, and why when it is disabled. */
 export const sendState = (comments: readonly Comment[], linked: boolean): SendState => {
   const open = comments.filter((comment) => comment.status === 'open').length;
-  if (open === 0) return { enabled: false, label: 'Send comments to chat', reason: 'Add a comment on the canvas first, or reopen a resolved one.' };
+  if (open === 0) return { enabled: false, label: 'Send comments to chat', reason: 'Add a comment first, or reopen a resolved one.' };
   const noun = open === 1 ? 'comment' : 'comments';
-  return { enabled: true, label: `Send ${open} ${noun} to chat`, reason: linked ? null : 'No chat is linked yet — a new chat will start.' };
+  return { enabled: true, label: `Send ${open} ${noun} to chat`, reason: linked ? null : 'No chat is linked yet, so a new chat will start.' };
 };
 
 /** Pin glyph: the number while the comment is live, a check once resolved. */

@@ -1,5 +1,6 @@
-// R1 — the rail's designs list: header (New, settings), search, tabs, thumbnail rows with
-// badges and a row menu, an empty state, and a notice when an earlier folder still holds designs.
+// R1, the rail's designs list: header (New, settings), search, tabs, thumbnail rows with
+// badges and a row menu, an empty state, a notice when an earlier folder still holds designs,
+// and the offer to import loose HTML files saved straight into the designs folder.
 
 import { mountBanner, mountEmpty, mountSearchField, mountTabs } from '@openchamber/sdk/ui';
 
@@ -8,6 +9,7 @@ import { runDesignAction, designMenu, type ActionContext } from '../components/a
 import { createScope, h } from '../components/dom.ts';
 import { icon } from '../components/icons.ts';
 import { attachMenu, btn, iconBtn } from '../components/kit.ts';
+import { mountLooseBanner } from '../components/loose-banner.ts';
 import { mountThumb, type ThumbHandle } from '../components/thumb.ts';
 import { host, store } from '../guest.ts';
 import { middlePath, relativeTime, plural } from '../model/format.ts';
@@ -40,7 +42,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     newButton.el,
     () => [
       { id: 'canvas', label: 'Canvas…', hint: 'several screens' },
-      { id: 'page', label: 'Artifact…', hint: 'one HTML page' },
+      { id: 'page', label: 'Page…', hint: 'one HTML page' },
     ],
     (id) => options.onNew(id === 'page' ? 'page' : 'canvas'),
   );
@@ -63,6 +65,12 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   const filters = h('div', { class: 'dc-rail-filters' }, searchHost, tabsHost);
 
   const notices = h('div', { class: 'dc-rail-notices' });
+  // Long-lived: repaints of the other notices never detach it, so focus and an import in flight survive.
+  const syncNotices = (): void => {
+    notices.hidden = ![...notices.children].some((child) => child instanceof HTMLElement && !child.hidden);
+  };
+  const looseBanner = mountLooseBanner({ sheetHost: options.actions.host, onOpen: options.onOpen, onPaint: syncNotices });
+  notices.append(looseBanner.el);
   const list = h('ul', { class: 'dc-rows', role: 'list', 'aria-label': 'Designs' });
   const scroller = h('div', { class: 'dc-rail-scroll' }, notices, list);
   el.append(head, filters, scroller);
@@ -101,12 +109,12 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     Array.from({ length: SKELETON_ROWS }, () => h('li', { class: 'dc-row dc-row-skeleton', 'aria-hidden': 'true' }, h('span', { class: 'dc-skel dc-skel-thumb' }), h('span', { class: 'dc-skel-lines' }, h('span', { class: 'dc-skel dc-skel-line' }), h('span', { class: 'dc-skel dc-skel-line dc-skel-short' }))));
 
   const paintNotices = (): void => {
-    notices.replaceChildren();
+    for (const child of [...notices.children]) if (child !== looseBanner.el) child.remove();
     const state = store.getState();
     if (state.designs.status === 'error' && state.designs.data) {
       const wrap = h('div', { class: 'dc-banner' });
       mountBanner(wrap, { tone: 'warning', title: 'Couldn’t refresh the list', body: state.designs.error?.message ?? '', action: { label: 'Try again', onClick: () => void store.refreshDesigns() } });
-      notices.append(wrap);
+      looseBanner.el.before(wrap);
     }
     const holders = state.settings.data?.previousRoots.filter((root) => root.exists && root.designCount > 0) ?? [];
     const first = holders[0];
@@ -114,8 +122,10 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
       const wrap = h('div', { class: 'dc-banner' });
       mountBanner(wrap, { tone: 'info', title: `${designCountLabel(first.designCount)} remain in your earlier folder`, body: middlePath(first.path), action: { label: 'Switch back', onClick: () => void switchBack(first.path) } });
       wrap.title = first.path;
-      notices.append(wrap);
+      looseBanner.el.before(wrap);
     }
+    looseBanner.update(state.designs.data?.loose ?? null);
+    syncNotices();
   };
 
   const paintList = (): void => {
@@ -139,7 +149,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     const kind = emptyKind(all, shown);
     if (kind === 'no-designs') {
       const wrap = h('div');
-      mountEmpty(wrap, { title: 'No designs yet', body: 'Type /design in any chat and describe what you want. Your agent writes the files and they show up here.', action: { label: 'New canvas', onClick: () => options.onNew('canvas') } });
+      mountEmpty(wrap, { title: 'No designs yet', body: 'Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here.', action: { label: 'New canvas', onClick: () => options.onNew('canvas') } });
       list.append(h('li', { class: 'dc-list-message' }, wrap));
     } else if (kind === 'no-matches') {
       const wrap = h('div');
@@ -162,7 +172,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   scope.add(
     store.subscribe(() => {
       const state = store.getState();
-      const next = `${state.designs.status}:${JSON.stringify(state.designs.data?.designs ?? null)}:${state.designs.error?.message ?? ''}:${JSON.stringify(state.settings.data?.previousRoots ?? null)}`;
+      const next = `${state.designs.status}:${JSON.stringify(state.designs.data?.designs ?? null)}:${JSON.stringify(state.designs.data?.loose ?? null)}:${state.designs.error?.message ?? ''}:${JSON.stringify(state.settings.data?.previousRoots ?? null)}`;
       if (next === signature) return;
       signature = next;
       paintList();
@@ -182,6 +192,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     },
     dispose: () => {
       scope.dispose();
+      looseBanner.dispose();
       for (const handle of thumbs.values()) handle.dispose();
       thumbs.clear();
       search.dispose();

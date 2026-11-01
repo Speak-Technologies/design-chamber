@@ -3,19 +3,35 @@ import { test } from 'node:test';
 
 import type { Screen } from '../../src/shared/types.ts';
 import { validateBrief, presetOptions } from '../../src/ui/model/new-model.ts';
-import { browserStatus, isAbsolutePath, permissionSnippet, validateRootInput } from '../../src/ui/model/settings-model.ts';
+import type { AgentSkillStatus, SkillState } from '../../src/shared/types.ts';
+import { browserStatus, duplicateSentences, guideSentence, isAbsolutePath, isSameRootInput, permissionSnippet, skillRow, validateRootInput } from '../../src/ui/model/settings-model.ts';
 import { artboardLabel } from '../../src/ui/model/format.ts';
 import { LABEL_TAIL_MAX, PIN_FAN_SCALE, alignTop, boardAt, clusterPins, fanOut, frameToScreen, labelWidth, liveBoards, pinFramePoint, screenToFrame, separatingScale } from '../../src/ui/model/wall-model.ts';
 
 test('validateRootInput rejects what the service would refuse, with a sentence that says what to do', () => {
-  const root = 'C:\\Users\\you\\Documents\\Designs';
-  assert.match(validateRootInput('   ', root) ?? '', /full path/);
-  assert.match(validateRootInput('Designs', root) ?? '', /full path/);
-  assert.match(validateRootInput('C:\\', root) ?? '', /not the drive itself/);
-  assert.match(validateRootInput(root, root) ?? '', /already/);
-  assert.equal(validateRootInput('D:\\Work\\Designs', root), null);
-  assert.equal(validateRootInput('/home/you/designs', root), null);
-  assert.equal(validateRootInput('\\\\nas\\share\\designs', root), null);
+  assert.match(validateRootInput('   ') ?? '', /full path/);
+  assert.match(validateRootInput('Designs') ?? '', /full path/);
+  assert.match(validateRootInput('C:\\') ?? '', /not the drive itself/);
+  assert.match(validateRootInput('C:\\Designs\nnext') ?? '', /character/);
+  assert.equal(validateRootInput('C:\\Users\\you\\Documents\\Designs'), null, 'the current folder is not an error: Apply is just disabled');
+  assert.equal(validateRootInput('D:\\Work\\Designs'), null);
+  assert.equal(validateRootInput('/home/you/designs'), null);
+  assert.equal(validateRootInput('\\\\nas\\share\\designs'), null);
+});
+
+test('isSameRootInput ignores whitespace, a trailing separator, and case on Windows paths only', () => {
+  const win = 'C:\\Users\\you\\Documents\\Designs';
+  assert.equal(isSameRootInput(win, win), true);
+  assert.equal(isSameRootInput(`  ${win}  `, win), true);
+  assert.equal(isSameRootInput(`${win}\\`, win), true);
+  assert.equal(isSameRootInput('c:\\users\\YOU\\documents\\designs', win), true);
+  assert.equal(isSameRootInput('C:/Users/you/Documents/Designs/', win), true);
+  assert.equal(isSameRootInput('D:\\Users\\you\\Documents\\Designs', win), false);
+  const posix = '/home/you/Designs';
+  assert.equal(isSameRootInput('/home/you/Designs/', posix), true);
+  assert.equal(isSameRootInput('/home/you/designs', posix), false, 'posix paths are case-sensitive');
+  assert.equal(isSameRootInput('/home/you/Designs/archive', posix), false);
+  assert.equal(isSameRootInput('/', '/'), true);
 });
 
 test('isAbsolutePath knows drive, UNC, posix and home paths', () => {
@@ -28,10 +44,76 @@ test('permissionSnippet is valid JSON with a forward-slash glob', () => {
   assert.deepEqual(parsed, { permission: { external_directory: { 'C:/Users/you/Documents/Designs/**': 'allow' } } });
 });
 
-test('browserStatus warns when no browser is found', () => {
-  assert.equal(browserStatus(null, 'none').tone, 'warning');
+test('browserStatus: no browser is neutral "Live previews", not a warning', () => {
+  assert.deepEqual(browserStatus(null, 'none'), {
+    tone: 'neutral',
+    title: 'Live previews',
+    detail: 'No Chrome, Edge or Chromium found, so thumbnails are live previews. Install one or set its path for image thumbnails.',
+  });
   assert.equal(browserStatus('C:\\chrome.exe', 'detected').tone, 'success');
   assert.match(browserStatus('C:\\chrome.exe', 'setting').title, /chosen/);
+});
+
+const SKILL_PATH = '/home/you/.config/opencode/skills/design-chamber/SKILL.md';
+const skill = (state: SkillState, over: Partial<AgentSkillStatus> = {}): AgentSkillStatus => ({ path: SKILL_PATH, state, duplicates: [], ...over });
+const flat = (parts: { before: string; path: string | null; after: string }): string => `${parts.before}${parts.path ?? ''}${parts.after}`;
+
+test('skillRow: every state has its button (or none) and its sentence', () => {
+  const notInstalled = skillRow(skill('not-installed'));
+  assert.deepEqual(notInstalled.action, { kind: 'install', label: 'Install skill' });
+  assert.equal(flat(notInstalled.sentence), `Adds a design-chamber skill to OpenCode at ${SKILL_PATH}, so any chat knows where designs go.`);
+  assert.equal(notInstalled.sentence.path, SKILL_PATH);
+
+  const outdated = skillRow(skill('outdated'));
+  assert.deepEqual(outdated.action, { kind: 'update', label: 'Update skill' });
+  assert.equal(flat(outdated.sentence), 'Your designs folder changed since you installed it.');
+
+  const current = skillRow(skill('current'));
+  assert.equal(current.action, null);
+  assert.equal(current.installed, true);
+  assert.equal(current.sentence.path, SKILL_PATH);
+
+  const edited = skillRow(skill('edited'));
+  assert.deepEqual(edited.action, { kind: 'replace', label: 'Replace skill…' });
+  assert.equal(edited.confirm, 'Replace your edited skill with Design Chamber’s version?', 'Replace asks first');
+
+  const foreign = skillRow(skill('foreign'));
+  assert.equal(foreign.action, null, 'someone else’s skill: text only');
+  assert.match(flat(foreign.sentence), /left it alone/);
+
+  const unavailable = skillRow(skill('unavailable', { message: 'Your home folder could not be found.' }));
+  assert.equal(unavailable.action, null);
+  assert.equal(flat(unavailable.sentence), 'Your home folder could not be found.');
+  assert.match(flat(skillRow(skill('unavailable')).sentence), /can’t be installed/);
+
+  for (const state of ['not-installed', 'outdated', 'current', 'edited', 'foreign'] as const) assert.equal(skillRow(skill(state)).confirm !== null, state === 'edited', state);
+});
+
+test('duplicateSentences warns once per extra copy', () => {
+  assert.deepEqual(duplicateSentences(skill('current')), []);
+  const two = duplicateSentences(skill('current', { duplicates: ['/home/you/.claude/skills/design-chamber/SKILL.md', '/home/you/.agents/skills/design-chamber/SKILL.md'] }));
+  assert.equal(two.length, 2);
+  assert.equal(flat(two[0] ?? { before: '', path: null, after: '' }), 'Another copy is at /home/you/.claude/skills/design-chamber/SKILL.md. OpenCode needs one copy, so remove the other.');
+});
+
+test('guideSentence covers every guide state', () => {
+  const path = 'C:\\Users\\you\\Documents\\Designs\\AGENTS.md';
+  assert.equal(flat(guideSentence({ path, state: 'current' })), `Design Chamber keeps a guide for agents at ${path}.`);
+  assert.equal(flat(guideSentence({ path, state: 'outdated' })), `Design Chamber keeps a guide for agents at ${path}.`);
+  assert.equal(flat(guideSentence({ path, state: 'edited' })), `You edited ${path}, so Design Chamber leaves it alone.`);
+  assert.equal(flat(guideSentence({ path, state: 'foreign' })), `${path} is your own file, so Design Chamber didn’t add a guide.`);
+  assert.equal(flat(guideSentence({ path, state: 'no-root' })), 'The guide is added once your designs folder exists.');
+  assert.equal(flat(guideSentence({ path, state: 'failed', message: 'Design Chamber can’t write to that folder.' })), 'Design Chamber can’t write to that folder.');
+  assert.match(flat(guideSentence({ path, state: 'missing' })), /next time it starts/);
+});
+
+test('settings copy has no em dashes', () => {
+  const texts = [
+    browserStatus(null, 'none').detail,
+    ...(['not-installed', 'outdated', 'current', 'edited', 'foreign', 'unavailable'] as const).map((state) => flat(skillRow(skill(state)).sentence)),
+    ...(['current', 'edited', 'foreign', 'missing', 'no-root', 'failed'] as const).map((state) => flat(guideSentence({ path: '/d/AGENTS.md', state }))),
+  ];
+  for (const text of texts) assert.doesNotMatch(text, /\u2014/, text);
 });
 
 test('new-design form helpers', () => {

@@ -64,7 +64,7 @@ export const copyPath = async (slug: string): Promise<void> => {
   try {
     const path = await folderOf(slug);
     if (await host.writeClipboard(path)) toast('success', 'Folder path copied.');
-    else toast('error', 'Couldn’t reach the clipboard. The path is in the notification — copy it from there.', path);
+    else toast('error', 'Couldn’t reach the clipboard. The path is in this notification, so copy it from there.', path);
   } catch (error) {
     toast('error', `Couldn’t read the folder path. ${errorText(error)}`);
   }

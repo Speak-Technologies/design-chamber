@@ -1,4 +1,4 @@
-// The full-screen page app: the library (P1) and one open design (canvas wall P2 / artifact
+// The full-screen page app: the library (P1) and one open design (canvas wall P2 / page
 // viewer P6) as views of one stack. Settings (P5) opens as a side sheet over either.
 
 import { openNewDialog } from '../components/new-dialog.ts';
