@@ -715,3 +715,15 @@ is, the banner would need a per-file "ignore" list instead.
       from opencode.ai/docs/skills.
 - [x] Threat model specific; every new route has the bearer check (router) and containment or a fixed path.
 - [x] Edge cases walked; failure paths designed; reuse named first; nothing speculative.
+
+## As built (2026-11-01)
+§14.2 is applied to `docs/SPEC.md` (audit entry "Agent guidance and pages"). Where the build
+differs from this design, the code and `docs/SPEC.md` win:
+- `store.ts`: with no state.json and a design.json that parses, the agent's valid `kind` wins
+  (final state, no flag). P5 runs on watcher reconcile only, never inside a user mutation.
+- `loose.ts`: the read goes through an `O_NOFOLLOW` handle with an `fstat` re-check and
+  `index.html` is written with `writeFileAtomic` (not `copyFile`); the trashed original keeps its
+  `.htm` or `.html` extension; a name that breaks the name rule answers 400 `bad-request`.
+- `routes/chat.ts`: protocol-relative URLs in the blocked list are read as `https:`.
+- UI: the page toolbar adds **Comments · n**; arrow keys scroll the page in page presentation; the
+  Replace skill confirm opens in place under the skill row instead of a dialog.
