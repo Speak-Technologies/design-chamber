@@ -61,9 +61,9 @@ Fill in the Result column (PASS / FAIL / NOT RUN) and a note. Screenshots help f
 | 10 | Let the agent apply the revision | Wall refreshes live; a version "After agent turn" appears |
 | 11 | Versions: View, Compare, Restore (confirm) | Files change back; comments kept; a "Restored" version is added |
 | 12 | Play mode: click an in-design link | Navigates inside the artboard; ↺ reset appears |
-| 13 | `/artifact a landing page` | Artifact viewer opens after the agent writes `index.html` |
-| 14 | On an assistant message with an html code block: ⋯ → Open as artifact | The rail opens the new artifact |
-| 15 | Artifact Export ▾ → ZIP, then single-file HTML | Downloads prompt (first time) → toast "Saved to ~/Downloads/<slug>.zip"; **Show in folder** reveals the file in Finder |
+| 13 | `/page a landing page` | The page opens full width after the agent writes `index.html` |
+| 14 | On an assistant message with an html code block: ⋯ → Open as page | The rail opens the new page |
+| 15 | Page Export ▾ → ZIP, then single-file HTML | Downloads prompt (first time) → toast "Saved to ~/Downloads/<slug>.zip"; **Show in folder** reveals the file in Finder |
 | 16 | Double-click the ZIP; open the HTML file in a browser offline (Wi-Fi off) | `<slug>/index.html` matches; the HTML renders with no network |
 | 17 | Canvas: Export ZIP and "Export screen as HTML…" | ZIP has DESIGN.md, screens/, tokens.css (no design.json, no .versions); the screen renders offline |
 | 18 | Copy ▾ → Copy HTML | "HTML copied." |
