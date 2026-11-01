@@ -1,7 +1,7 @@
 # Design Chamber — Agent Guide
 
 ## Product context
-- An OpenChamber desktop-app extension that renders Claude-Design-style design canvases and Claude-artifacts-style HTML canvases inside OpenChamber, from plain files the user's own chat agent writes to `~/Documents/Designs`. Not the external-Chrome-window design tool `openchamber-design-canvas` — rendering is in-app.
+- An OpenChamber desktop-app extension that renders Claude-Design-style design canvases and full-screen HTML pages inside OpenChamber, from plain files the user's own chat agent writes to `~/Documents/Designs`. Not the external-Chrome-window design tool `openchamber-design-canvas` — rendering is in-app.
 - Personas: **The OpenChamber user** (designer-developer who chats with an agent to produce designs and wants to see, comment on, version and export them without leaving OpenChamber). The user's chat agent is the author of every design file.
 - Sources of truth: `docs/BRIEF.md` (owner decisions — anything not listed there is open: ask, don't guess; edit only on the user's instruction) and `docs/SPEC.md` (technical spec: the authority for architecture and lanes; changes go through the architect).
 
@@ -81,8 +81,9 @@ together — same roster, same rules, same policy.
 ## Architecture
 Authority: `docs/SPEC.md`; this section is a summary.
 - Rail `panel` = navigator; full-screen `page` = viewer/canvas; both sandboxed-iframe guests of the OpenChamber extension host, fed by the extension's local Node `service` (loopback, bearer-authenticated).
-- Storage: one folder per item, `Designs/<slug>/` with `design.json` (`kind: "artifact" | "canvas"`, title, created/updated, linked `sessionId`, viewports, screens, comments), `index.html` (artifact) or `screens/*.html` (canvas), `assets/`, `DESIGN.md` + `tokens.css`, `.versions/`.
-- The chat agent writes the files; the service watches the folder and the UI refreshes live. `/design <brief>` and an artifact variant attach the design rules, target folder and `design.json` contract to any chat.
+- Storage: one folder per item, `Designs/<slug>/` with `design.json` (`kind: "page" | "canvas"`; old `"artifact"` reads as a page; title, created/updated, linked `sessionId`, viewports, screens, comments), `index.html` (page) or `screens/*.html` (canvas), `assets/`, `DESIGN.md` + `tokens.css`, `.versions/`.
+- The chat agent writes the files; the service watches the folder and the UI refreshes live. `/design <brief>` (canvas) and `/page <brief>` attach the design rules, target folder and `design.json` contract to any chat.
+- Agents without the slash command find Design Chamber through `<root>/AGENTS.md` (a guide the service keeps current, never over a user-edited file) and an optional `design-chamber` skill installed from Settings (spec: `documentation/specs/agent-guidance-and-pages.md`).
 - Thumbnails: headless-Chrome PNGs cached on change; fallback to a live mini-iframe when Chrome is missing.
 
 ## Business rules
@@ -91,7 +92,7 @@ Product decisions are in `docs/BRIEF.md`; anything not listed there is open.
 |---|---|
 | Design-rules precedence (highest first) | 1 the user's words in chat · 2 the active project's design rules (DESIGN.md, token/theme files, AGENTS.md / CLAUDE.md design sections, existing breakpoints) · 3 chosen bundled style preset · 4 per-design `DESIGN.md` + `tokens.css` once confirmed · 5 built-in anti-slop rules |
 | Default viewports | Laptop 1280×800, Phone 390×844 — derive from the project first; ask when unsure |
-| Artifact export | ZIP (html + assets) and single-file HTML (assets inlined) |
+| Page export | ZIP (html + assets) and single-file HTML (assets inlined) |
 | Design canvas | infinite wall, pan/zoom, multiple screens × viewports as artboards; Edit/Play modes; element-anchored comment pins (selector/snippet travels with the comment); "send comments" = one revision request to the linked chat; version snapshot per agent turn, compare/restore |
 | Linked chat | each design remembers its `sessionId`; "Continue in chat" reopens it; new chat if none/gone |
 
@@ -99,8 +100,8 @@ Product decisions are in `docs/BRIEF.md`; anything not listed there is open.
 - **Design direction:** native fidelity. The extension must look like part of OpenChamber in the rail panel (~320–480 px) and the full-screen page — host theme tokens and the `@openchamber/sdk/ui` kit, no palette or typeface of our own. Colours follow the active OpenChamber theme live.
 - Tokens: OpenChamber host theme tokens (`ready.theme.tokens`) and the `@openchamber/sdk/ui` kit look — never a raw hex or a one-off size (a design's own `tokens.css` is design content for the guest, not host chrome) · Colors: from the host theme · Type: from the host theme.
 - Breakpoints: n/a in the web sense; verify the rail-panel width (~320–480 px) and the full-screen page, light and dark.
-- Core flows (each has a step budget): browse the designs list → open an artifact and export ZIP/HTML · open a design canvas wall → pan/zoom · add a comment pin → send it to chat · restore a version · change the designs folder.
-- Glossary (one term per concept): **design** = an item folder; **artifact** = a single HTML page design; **canvas** = a multi-screen design wall; **screen** = one page of a canvas; **viewport** = a device size; **artboard** = a screen at a viewport; **pin** = an element-anchored comment; **version** = a snapshot.
+- Core flows (each has a step budget): browse the designs list → open a page and export ZIP/HTML · open a design canvas wall → pan/zoom · add a comment pin → send it to chat · restore a version · change the designs folder.
+- Glossary (one term per concept): **design** = an item folder; **page** = a single HTML page design shown full screen (formerly "artifact"); **canvas** = a multi-screen design wall; **screen** = one page of a canvas; **viewport** = a device size; **artboard** = a screen at a viewport; **pin** = an element-anchored comment; **version** = a snapshot.
 - Generic-looking UI is a defect here: the Design bar in the UI developers' agent files applies to every screen, whoever builds it. Load the `frontend-design` skill before UI work.
 
 ## Local service
