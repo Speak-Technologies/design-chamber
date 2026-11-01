@@ -163,7 +163,7 @@ export const createSettingsStore = async (options: SettingsStoreOptions): Promis
         } else {
           const value = patch.chromePath.trim();
           if (value === '' || value.includes('\0') || value.length > SETTINGS_PATH_MAX) {
-            throw new ApiError('bad-path', 'That browser path is not usable — give the full path to the browser executable.');
+            throw new ApiError('bad-path', 'That browser path does not work. Give the full path to the browser program.');
           }
           next.chromePath = value;
         }

@@ -171,6 +171,22 @@ test('P2 — a slow agent (HTML, a 2 s pause, then design.json) still keeps its 
   await assertAdopted(env, 'slow');
 });
 
+test('P2 — HTML first, then a design.json listing screens but no kind, is adopted as the canvas it describes (KI-6)', async (t) => {
+  const env = await takeoverEnv(t);
+  await env.tmp.write('nokind/index.html', '<h1>Early</h1>');
+  await env.store.reconcile('nokind');
+  assert.equal((await env.readJson('nokind/.chamber/state.json')).kind, 'page');
+  await env.tmp.write('nokind/design.json', { title: 'Checkout', screens: [{ id: 'home', title: 'Home', file: 'screens/home.html' }] });
+  await env.store.reconcile('nokind');
+  const state = await env.readJson('nokind/.chamber/state.json');
+  assert.equal(state.kind, 'canvas');
+  assert.equal(Object.hasOwn(state, 'provisional'), false);
+  const record = await env.store.get('nokind');
+  assert.equal(record.design.kind, 'canvas');
+  assert.deepEqual(record.design.screens.map((screen) => screen.id), ['home']);
+  assert.equal(record.warnings.some((warning) => warning.code === 'screens-ignored'), false, 'the screen list is not ignored');
+});
+
 test('P1 — a half-written design.json with no state seeds a provisional state; the finished file is adopted', async (t) => {
   const env = await takeoverEnv(t);
   await env.tmp.write('midway/index.html', '<h1>Midway</h1>');

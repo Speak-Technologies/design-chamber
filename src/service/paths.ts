@@ -189,7 +189,7 @@ export const uniqueSlug = async (base: string, isTaken: (slug: string) => Promis
     if (!isSlug(candidate)) break; // beyond the 63-char slug pattern
     if (!(await isTaken(candidate))) return candidate;
   }
-  throw new ApiError('conflict', 'Too many designs share this name — choose a different title.');
+  throw new ApiError('conflict', 'Too many designs share this name. Choose a different title.');
 };
 
 // ---- Atomic writes ----

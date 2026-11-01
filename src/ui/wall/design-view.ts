@@ -185,7 +185,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
           variant: 'outline',
           size: 'xs',
           pressed: on,
-          title: `${viewportLabel(viewport)} — ${on ? 'click to hide' : 'click to show'}`,
+          title: `${viewportLabel(viewport)}. ${on ? 'Click to hide' : 'Click to show'}`,
           onClick: () => {
             const next = new Set(hidden);
             if (on) {

@@ -670,7 +670,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
         class: 'dc-pin dc-pin-cluster',
         'data-status': statuses.has('open') ? 'open' : statuses.has('sent') ? 'sent' : 'resolved',
         'aria-label': `${group.ids.length} comments here (${labels}). Zoom in to see them.`,
-        title: `Comments ${labels} — click to zoom in`,
+        title: `Comments ${labels}. Click to zoom in`,
       }, String(group.ids.length));
       cluster.tabIndex = show ? 0 : -1;
       cluster.addEventListener('pointerdown', (event) => event.stopPropagation());

@@ -678,7 +678,7 @@ the project from `design.projectDirectory` (matched via `listProjects`) or the c
 ### 10.4 Send comments (one revision request)
 `POST /designs/:slug/prompt {purpose:"revision"}` → `{ text, commentIds }`. Then:
 1. If `ready.session?.id === design.sessionId`: `prompt({text, send: !busy})`; busy → compose +
-   toast "Agent is busy — revision placed in the composer".
+   toast "The agent is busy, so your revision is waiting in the composer."
 2. Else if `design.sessionId`: `PUT /outbox {…}`; `openSurface('plugin:design-chamber')` (ignore
    failure); `openSession(design.sessionId)` (closes the page, F12). The rail panel, on
    `onSession` where `session.id === outbox.sessionId`, takes the outbox (`DELETE /outbox` first,

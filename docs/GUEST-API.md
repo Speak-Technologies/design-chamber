@@ -188,7 +188,7 @@ inside the frame (`null` clears).
 | `handleItem(item)` | `{ kind: 'open-design', slug }` or `null` |
 | `watchTurns()`, `watchOutbox()`, `watchSessions(getDesigns)`, `watchItems(open, onError?)` | each returns its stop function |
 
-Toasts the flows show themselves: busy ("Agent is busy — revision placed in the composer") and
+Toasts the flows show themselves: busy ("The agent is busy, so your revision is waiting in the composer.") and
 no-HTML. Everything else is returned for the UI to present. Constants: `MESSAGES`,
 `PANEL_SURFACE_ID`, `OPEN_AS_PAGE_ACTION` (`'open-as-page'`), `CHIP_ID_PREFIX`; helpers `toAttachRequest(chip)`,
 `sameDirectory(a, b)`, `isHostError(e, code)`.

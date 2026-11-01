@@ -34,6 +34,7 @@ import {
   DESIGN_JSON_FILE,
   ENTRY_FILE,
   mergeServiceFields,
+  normalizeDesign,
   normalizeKind,
   normalizeServiceState,
   parseDesignJsonText,
@@ -106,7 +107,7 @@ const mintCommentId = (existing: ReadonlySet<string>): string => {
     if (!existing.has(id)) return id;
   }
   // Unreachable in practice: 10 collisions in a 2^48 id space means a broken RNG.
-  throw new ApiError('conflict', 'Could not mint a fresh comment id — please try again.');
+  throw new ApiError('conflict', 'The comment could not be saved. Please try again.');
 };
 
 export type DesignStoreOptions = {
@@ -189,11 +190,14 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     if (agentKind !== null && agentKind !== kind) parsed = parseDesignJsonText(designText ?? '{}', { ...options, kind: agentKind });
     const warnings: DesignWarning[] =
       designText === null
-        ? [{ code: 'no-design-json', message: 'This design has no design.json yet — the agent may still write it.' }, ...parsed.warnings]
+        ? [{ code: 'no-design-json', message: 'This design has no design.json yet. The agent may still be writing it.' }, ...parsed.warnings]
         : parsed.warnings;
 
     const finalState = state ?? serviceStateOf(parsed.design);
     const design = applyServiceState(parsed.design, finalState);
+    // P2 adopts the agent's own reading of design.json: a provisional kind is only a guess from
+    // the files, so it must not decide the kind of a design.json that lists screens but no kind.
+    const agentDesign = state?.provisional === true && designText !== null && parsed.raw !== null ? normalizeDesign(parsed.raw, options).design : parsed.design;
 
     const files: DesignFiles = { screens: {} };
     if (design.kind === 'page') files.entry = entryStatus;
@@ -209,7 +213,7 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
       record: { slug, path: dir, design, state: finalState, extra: parsed.extra, pending, files, warnings },
       raw: parsed.raw,
       designText,
-      agentDesign: parsed.design,
+      agentDesign,
       stateFromDisk: state !== null,
     };
   };
@@ -517,7 +521,7 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
         const read = await readSettled(slug);
         const state = read.record.state;
         if (state.comments.length >= COMMENTS_MAX) {
-          throw new ApiError('conflict', `This design already carries ${COMMENTS_MAX} comments — resolve or delete some before adding more.`);
+          throw new ApiError('conflict', `This design already carries ${COMMENTS_MAX} comments. Resolve or delete some before adding more.`);
         }
         const comment: Comment = {
           id: mintCommentId(new Set(state.comments.map((entry) => entry.id))),

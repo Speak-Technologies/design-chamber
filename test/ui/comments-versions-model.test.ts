@@ -82,7 +82,7 @@ test('version copy uses the labels the spec names', () => {
   assert.equal(reasonLabel('turn'), 'After agent turn');
   assert.equal(reasonLabel('manual'), 'Saved manually');
   assert.equal(reasonLabel('restore-point'), 'Before restore');
-  assert.equal(viewingBanner(12, false), 'Viewing v12 — read only');
+  assert.equal(viewingBanner(12, false), 'Viewing v12 (read only)');
   assert.match(viewingBanner(12, true), /Comparing v12/);
   assert.match(restoreConfirmBody(7), /saved as a version first/);
 });

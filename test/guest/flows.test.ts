@@ -156,7 +156,7 @@ test('send comments, branch 1: the linked session is selected and idle → sent 
   assert.deepEqual(result.commentIds, ['c_hero01']);
   const [prompt] = s.host.callsOf('prompt')[0] as [PromptRequest];
   assert.equal(prompt.send, true);
-  assert.match(prompt.text, /Revise "Coffee subscription" — 1 comment/);
+  assert.match(prompt.text, /Revise "Coffee subscription": 1 comment/);
   const comment = comments(s)[0];
   assert.equal(comment?.status, 'sent');
   assert.equal(comment?.sentVersion, s.service.designs.get(COFFEE)?.versions.at(-1)?.n);

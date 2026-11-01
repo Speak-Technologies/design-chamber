@@ -498,7 +498,7 @@ export type AdoptInput = {
   state: ServiceState;
   /** design.json as parsed. Only call this with a file that parsed to an object. */
   raw: JsonObject;
-  /** The normalised view of `raw` (its kind is the state's, or the file-based guess). */
+  /** The normalised view of `raw`. For a provisional state its kind is design.json's own (given, else inferred from `screens`); otherwise the state's. */
   normalized: DesignJson;
   /** No entry or screen file written yet (`DesignRecord.pending`). */
   pending: boolean;

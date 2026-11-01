@@ -104,7 +104,7 @@ export const resolveEntryFile = (
   }
   const existing = design.screens.find((candidate) => files.screens[candidate.id]?.exists);
   const pick = existing ?? design.screens[0];
-  if (!pick) throw new ApiError('no-html', 'This canvas has no screens yet — the agent has not written one.');
+  if (!pick) throw new ApiError('no-html', 'This canvas has no screens yet. The agent has not written one.');
   return { entryRel: screenFileOf(pick.id), screenId: pick.id };
 };
 

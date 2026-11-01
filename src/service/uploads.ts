@@ -44,7 +44,7 @@ export const createUploadStore = (options: UploadStoreOptions = {}): UploadStore
   const need = (id: string): Entry => {
     sweep();
     const entry = open.get(id);
-    if (entry === undefined) throw new ApiError('not-found', 'That upload does not exist or has expired — send the text again.');
+    if (entry === undefined) throw new ApiError('not-found', 'That upload is gone or has expired. Send the text again.');
     return entry;
   };
 
@@ -56,7 +56,7 @@ export const createUploadStore = (options: UploadStoreOptions = {}): UploadStore
         throw new ApiError('too-large', `That text is larger than the ${UPLOAD_TOTAL_MAX.toLocaleString('en-US')} characters Design Chamber accepts.`);
       }
       if (open.size >= UPLOADS_OPEN_MAX) {
-        throw new ApiError('conflict', 'Too many uploads are open right now — finish or wait a few minutes for the old ones to expire.');
+        throw new ApiError('conflict', 'Too many uploads are open right now. Finish one, or wait a few minutes for the old ones to expire.');
       }
       const id = newId();
       open.set(id, { id, total, chunks: [], received: 0, created: now() });

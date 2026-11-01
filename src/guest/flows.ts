@@ -35,14 +35,14 @@ export const CHIP_ID_PREFIX = 'design:';
 
 export const MESSAGES = {
   noProject: 'Open a project first, then try again.',
-  busy: 'Agent is busy — revision placed in the composer',
+  busy: 'The agent is busy, so your revision is waiting in the composer.',
   noHtml: 'No HTML code block in this message',
   startFailed: "Couldn't start a chat for this design. It is in your Designs list; try Continue in chat.",
   sendFailed: "The revision didn't reach the chat. Your comments are still open; try again.",
   nothingToSend: 'There are no open comments to send.',
   unknownCommand: 'Design Chamber knows /design and /page only.',
   noSessionSelected: 'Open a chat first, then try again.',
-  markFailed: 'Sent — but the comments could not be marked as sent. Resolve them by hand so they are not sent again.',
+  markFailed: 'Sent, but the comments could not be marked as sent. Resolve them by hand so they are not sent again.',
   savedPage: (title: string) => `Saved as page “${title}”.`,
   savedPageClosed: (title: string) => `Saved as page “${title}”. Open Design Chamber to see it.`,
 } as const;

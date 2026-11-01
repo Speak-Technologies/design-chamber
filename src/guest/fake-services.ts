@@ -520,7 +520,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
       }
       case 'GET /designs/:slug/thumbnail':
         get(slug);
-        return { state: 'unavailable', key: null, message: 'No Chrome or Edge found — showing live previews instead.' };
+        return { state: 'unavailable', key: null, message: 'No Chrome, Edge or Chromium browser was found; the list shows live previews instead.' };
       case 'POST /designs/:slug/thumbnail/refresh':
         get(slug);
         return { state: 'unavailable' };
@@ -582,7 +582,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
         const comments = entry.design.comments.filter((comment) => comment.status === 'open' && (!wanted || wanted.has(comment.id)));
         const text =
           body.purpose === 'revision'
-            ? `[Design Chamber] Revise "${entry.design.title}" — ${comments.length} comment(s).\n` +
+            ? `[Design Chamber] Revise "${entry.design.title}": ${comments.length} comment(s).\n` +
               comments.map((comment, index) => `${index + 1}. element: \`${comment.anchor.selector}\`\n   → ${comment.body}`).join('\n')
             : body.purpose === 'offline'
               ? `[Design Chamber] Make "${entry.design.title}" work offline: bundle remote files into assets/ or remove them.`

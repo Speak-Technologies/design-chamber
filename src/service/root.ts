@@ -174,7 +174,7 @@ export const validateRootCandidate = async (raw: unknown, options: ValidateRootO
   }
   const abs = path.resolve(expanded);
   if (path.parse(abs).root === abs) {
-    return { ok: false, message: 'A drive or filesystem root cannot hold your designs — pick a folder inside it.' };
+    return { ok: false, message: 'A drive or filesystem root cannot hold your designs. Pick a folder inside it.' };
   }
   // Every folder under the root is scanned and may become a design: the user's home (or a
   // folder holding it) and Documents itself (English or the XDG one) hold their own files.
@@ -184,7 +184,7 @@ export const validateRootCandidate = async (raw: unknown, options: ValidateRootO
     return { ok: false, message: `That folder holds your own files, so it cannot be your designs folder. Pick or create a folder just for designs, for example ${example}.` };
   }
   if (isInsideOrEqual(options.packageRoot, abs)) {
-    return { ok: false, message: 'That folder is inside the Design Chamber extension itself — pick a folder elsewhere.' };
+    return { ok: false, message: 'That folder is inside the Design Chamber extension itself. Pick a folder somewhere else.' };
   }
   try {
     await mkdir(abs, { recursive: true });
