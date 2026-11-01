@@ -13,7 +13,7 @@ import { useTmpRoot } from '../../helpers/tmp-root.ts';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const waitFor = async (seen: string[], predicate: (name: string) => boolean, label: string, timeoutMs = 4000): Promise<void> => {
+const waitFor = async (seen: string[], predicate: (name: string, index: number) => boolean, label: string, timeoutMs = 4000): Promise<void> => {
   const deadline = Date.now() + timeoutMs;
   while (!seen.some(predicate)) {
     if (Date.now() > deadline) throw new Error(`no event for ${label}; saw ${JSON.stringify(seen)}`);
@@ -44,7 +44,8 @@ describe('watchFolders', () => {
     await sleep(150);
     const mark = seen.length;
     await writeFile(tmp.at('neu/design.json'), '{"v":3}'); // the agent writes in place
-    await waitFor(seen.slice(mark), (name) => name === 'neu/design.json', 'an in-place write after a rename-over');
+    // Poll the live array from `mark` on: a `seen.slice(mark)` copy would miss an event that lands after it.
+    await waitFor(seen, (name, index) => index >= mark && name === 'neu/design.json', 'an in-place write after a rename-over');
 
     await rm(tmp.at('neu'), { recursive: true, force: true });
     await waitFor(seen, (name) => name === 'neu', 'the removed folder');
