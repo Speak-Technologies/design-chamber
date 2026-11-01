@@ -298,6 +298,18 @@ const railScenario = async (width, theme) => {
   await wallReady(p, 1);
   await p.settle(600);
   await p.shot(`${tag}-9-viewer-artifact`);
+
+  // Remote-files banner: Hide puts it away, and reopening the design keeps it hidden.
+  await p.waitFor('return !!doc.querySelector(".dc-remote")', 'remote banner');
+  await p.click('.dc-remote .oc-sdk-btn', { text: 'Hide' });
+  await p.waitFor('return !doc.querySelector(".dc-remote")', 'remote banner hidden');
+  await p.settle(300);
+  await p.shot(`${tag}-9b-viewer-remote-hidden`);
+  await p.click('.dc-toolbar-compact .dc-iconbtn[aria-label="Back to designs"]');
+  await p.click('.dc-row[data-slug="northwind-pricing"] .dc-row-main');
+  await wallReady(p, 1);
+  await p.settle(600);
+  check(!(await p.guest('return !!doc.querySelector(".dc-remote")')), `${tag}: remote banner stays hidden after reopening the design`);
   await p.close();
 };
 

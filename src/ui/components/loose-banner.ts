@@ -4,7 +4,7 @@
 // The element is long-lived: the list repaints move it, never rebuild it, so an import in flight
 // keeps its spinner.
 
-import { mountBanner, type BannerTone } from '@openchamber/sdk/ui';
+import type { BannerTone } from '@openchamber/sdk/ui';
 
 import type { ImportLooseResponse } from '../../shared/api.ts';
 import type { LooseHtmlFile } from '../../shared/types.ts';
@@ -13,7 +13,7 @@ import { fileSize, relativeTime } from '../model/format.ts';
 import { LOOSE_DISMISSED_KEY, importOutcome, looseBanner, looseKey, parseDismissed, unlistedNote, type LooseList } from '../model/loose-model.ts';
 import { toast } from './actions.ts';
 import { append, errorText, h } from './dom.ts';
-import { btn, openSheet } from './kit.ts';
+import { bannerWithActions, btn, openSheet } from './kit.ts';
 
 export type LooseBannerOptions = {
   /** Element the Review sheet mounts into. */
@@ -26,23 +26,6 @@ export type LooseBannerOptions = {
 export type LooseBannerHandle = { el: HTMLElement; update: (loose: LooseList | null) => void; dispose: () => void };
 
 const importLoose = (name: string): Promise<ImportLooseResponse> => client.call('POST /loose/import', { body: { name } });
-
-/** A kit banner whose action slot holds our own buttons (the kit offers one action; we need two). */
-const bannerWith = (tone: BannerTone, title: string, body: Array<Node | string>, actions: HTMLElement[]): HTMLElement[] => {
-  const holder = h('div');
-  mountBanner(holder, { tone, title, body: ' ' });
-  const bodyEl = holder.querySelector<HTMLElement>('.oc-sdk-banner-body');
-  if (bodyEl) {
-    bodyEl.replaceChildren(...body);
-    bodyEl.hidden = body.length === 0;
-  }
-  const slot = holder.querySelector<HTMLElement>('.oc-sdk-banner-action');
-  if (slot) {
-    slot.hidden = false;
-    slot.replaceChildren(h('div', { class: 'dc-row-actions' }, ...actions));
-  }
-  return [...holder.childNodes].filter((node): node is HTMLElement => node instanceof HTMLElement);
-};
 
 export const mountLooseBanner = (options: LooseBannerOptions): LooseBannerHandle => {
   // data-actions="stack": two buttons need their own row under the text in a narrow rail (styles.css rule).
@@ -77,7 +60,7 @@ export const mountLooseBanner = (options: LooseBannerOptions): LooseBannerHandle
         imported = null;
         paint();
       } });
-      el.replaceChildren(...bannerWith(done.tone, done.message, [], [open.el, close.el]));
+      el.replaceChildren(...bannerWithActions(done.tone, done.message, [], [open.el, close.el]));
       el.hidden = false;
       return;
     }
@@ -91,10 +74,10 @@ export const mountLooseBanner = (options: LooseBannerOptions): LooseBannerHandle
     if (model.mode === 'single') {
       const name = model.name;
       const action = btn({ label: 'Import as page', variant: 'outline', size: 'xs', loading: busy, onClick: () => void importOne(name) });
-      el.replaceChildren(...bannerWith('info', model.title, [h('code', { class: 'dc-chip-code' }, name), ` ${model.body}`], [action.el, notNow.el]));
+      el.replaceChildren(...bannerWithActions('info', model.title, [h('code', { class: 'dc-chip-code' }, name), ` ${model.body}`], [action.el, notNow.el]));
     } else {
       const review = btn({ label: 'Review', variant: 'outline', size: 'xs', onClick: () => openReview() });
-      el.replaceChildren(...bannerWith('info', model.title, [model.body], [review.el, notNow.el]));
+      el.replaceChildren(...bannerWithActions('info', model.title, [model.body], [review.el, notNow.el]));
     }
     el.hidden = false;
   };

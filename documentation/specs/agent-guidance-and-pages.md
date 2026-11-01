@@ -383,9 +383,11 @@ Shown above the list/grid when `loose.total > 0` and not dismissed. Info banner:
   original moves to .trash in your designs folder." action **Import as page**, secondary **Not now**.
 - n files: title "<n> HTML files here aren't designs yet." body first 3 names "+ n more"; action
   **Review** opens a sheet listing each file (name, size, relative time) with an **Import** button.
-- Import: button loading and disabled while running; success toast "Imported “<title>” as a page."
-  with an **Open** action; `originalMovedTo === null` → info toast "Imported. The original couldn't
-  be moved to .trash, so it's still in your designs folder."; errors show the service sentence.
+- Import: button loading and disabled while running. The result replaces the banner in place (not
+  a toast): a success banner "Imported “<title>” as a page." with **Open** and **Dismiss**;
+  `originalMovedTo === null` → an info banner "Imported. The original couldn't be moved to .trash,
+  so it's still in your designs folder." with the same two buttons. Errors are an error toast with
+  the service sentence. In the Review sheet each row's **Import** turns into **Open**.
 - **Not now** stores the sorted name list in `host.storage` key `loose-dismissed`; the banner comes
   back when the list changes.
 - Refresh on `loose`, `root` and `reset` change events (guest store, A5).
@@ -397,6 +399,10 @@ Shown above the list/grid when `loose.total > 0` and not dismissed. Info banner:
   `title`), "+ n more"; action **Ask the agent to fix it** → `askSelfContained` now calls
   `POST /designs/:slug/prompt { purpose: 'offline' }` and composes the returned `text` (same
   linked-chat routing as today). Canvas artboard "N remote" badges stay.
+- Secondary **Hide** (ghost) next to it: hides the banner for that design for the rest of the
+  session (in memory, by slug; reopening the design keeps it hidden). It comes back when a URL it
+  did not list is blocked (`remoteBannerHidden` in `wall-model.ts`); a shorter list (some fixed)
+  stays hidden. Focus returns to the wall. In the rail both buttons sit on their own row.
 - Comments drawer footer note when the design has blocked files: "The blocked files are listed in
   the request too." (the service adds them; no client data sent).
 
@@ -727,3 +733,5 @@ differs from this design, the code and `docs/SPEC.md` win:
 - `routes/chat.ts`: protocol-relative URLs in the blocked list are read as `https:`.
 - UI: the page toolbar adds **Comments · n**; arrow keys scroll the page in page presentation; the
   Replace skill confirm opens in place under the skill row instead of a dialog.
+- UI: the loose-file import result is a banner with **Open** and **Dismiss**, not a toast (§6.3);
+  the remote-files banner has **Hide** (§6.4).

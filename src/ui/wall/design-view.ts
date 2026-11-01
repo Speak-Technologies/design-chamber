@@ -2,21 +2,21 @@
 // (R2) are the same view with a different toolbar. It owns the toolbar, the wall, the comments
 // and versions drawers, and the notices (remote files, saved export, viewing an old version).
 
-import { mountBanner, mountSelect, mountTabs } from '@openchamber/sdk/ui';
+import { mountSelect, mountTabs } from '@openchamber/sdk/ui';
 
 import type { DesignDetailResponse } from '../../shared/api.ts';
 import { HOST_CLIPBOARD_MAX, PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.ts';
 import { confirmDelete, continueInChat, copyHtml, copyPath, exportDesign, renameDesign, renameDialog, reveal, revealDesign, toast, type ActionContext } from '../components/actions.ts';
 import { mountComments, type CommentsHandle } from '../components/comments-drawer.ts';
 import { createScope, debounce, errorText, h, replace } from '../components/dom.ts';
-import { attachMenu, banner, btn, confirmDialog, iconBtn, loadingRow, openMenu, openSheet, type MenuEntry, type SheetHandle } from '../components/kit.ts';
+import { attachMenu, banner, bannerWithActions, btn, confirmDialog, iconBtn, loadingRow, openMenu, openSheet, type BtnHandle, type MenuEntry, type SheetHandle } from '../components/kit.ts';
 import { confirmRestoreVersion, mountVersions, type VersionsHandle } from '../components/versions-drawer.ts';
 import type { Camera } from '../../guest/camera.ts';
 import { renderSourceKey } from '../../guest/store.ts';
 import { askSelfContained, host, isServiceError, store } from '../guest.ts';
 import { viewportLabel, viewportSize, zoomPercent } from '../model/format.ts';
 import { viewingBanner } from '../model/versions-model.ts';
-import { pageViewOptions, remoteNotice, resolvePageView, shortUrl } from '../model/wall-model.ts';
+import { pageViewOptions, remoteBannerHidden, remoteNotice, resolvePageView, shortUrl } from '../model/wall-model.ts';
 import { createWall, type WallHandle } from './wall.ts';
 
 export type DesignViewOptions = {
@@ -33,6 +33,12 @@ type Prefs = { hidden: string[]; camera: Camera | null; pageView: unknown };
 type Drawer = { kind: 'comments' | 'versions'; sheet: SheetHandle; handle: CommentsHandle | VersionsHandle };
 
 const FULL_SCREEN_HINT = 'Full screen: sidebar → Extension pages → Design Chamber';
+
+/**
+ * Remote-files banners the user hid, by design slug: the blocked URLs on screen at the time.
+ * Module scope, so it lasts while the extension runs (closing and reopening the design keeps it).
+ */
+const hiddenRemote = new Map<string, readonly string[]>();
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
@@ -403,12 +409,10 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     // "Ask the agent to fix it": one request at a time; the button is busy until it finishes,
     // also when the banner was repainted meanwhile.
     let asking = false;
+    let askButton: BtnHandle | null = null;
     const setAsking = (busy: boolean): void => {
       asking = busy;
-      const button = notices.querySelector<HTMLButtonElement>('.dc-remote .oc-sdk-banner-action button');
-      if (!button) return;
-      button.disabled = busy;
-      button.setAttribute('aria-busy', String(busy));
+      askButton?.set({ loading: busy });
     };
     const askOffline = async (): Promise<void> => {
       if (asking) return;
@@ -426,26 +430,25 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     /** Remote files the frames tried to load: the first few by host and path, the full URL on hover. */
     const remoteBanner = (urls: readonly string[]): HTMLElement => {
       const notice = remoteNotice(urls, isPage ? 'page' : 'canvas');
-      const wrap = h('div', { class: 'dc-banner dc-remote' });
-      mountBanner(wrap, {
-        tone: 'warning',
-        title: notice.title,
-        body: 'They’re blocked here because designs run offline:',
-        action: { label: 'Ask the agent to fix it', onClick: () => void askOffline() },
-      });
-      const button = wrap.querySelector<HTMLButtonElement>('.oc-sdk-banner-action button');
-      if (button && asking) {
-        button.disabled = true;
-        button.setAttribute('aria-busy', 'true');
-      }
+      askButton = btn({ label: 'Ask the agent to fix it', variant: 'outline', size: 'xs', loading: asking, onClick: () => void askOffline() });
+      const hide = btn({ label: 'Hide', variant: 'ghost', size: 'xs', title: 'Hide until another file is blocked', onClick: () => hideRemote(urls) });
       const list = h(
         'ul',
         { class: 'dc-remote-list' },
         ...notice.urls.map((url) => h('li', null, h('code', { class: 'dc-path', title: url }, shortUrl(url)))),
         notice.more > 0 ? h('li', { class: 'dc-remote-more' }, `+ ${notice.more} more`) : null,
       );
-      wrap.querySelector('.oc-sdk-banner-text')?.append(list);
+      // data-actions="stack": in the rail both buttons get their own row under the list (styles.css).
+      const wrap = h('div', { class: 'dc-banner dc-remote', 'data-actions': 'stack' });
+      wrap.append(...bannerWithActions('warning', notice.title, ['They’re blocked here because designs run offline:', list], [askButton.el, hide.el]));
       return wrap;
+    };
+
+    /** Hide the banner for this design until a file it did not list is blocked; focus goes back to the wall. */
+    const hideRemote = (urls: readonly string[]): void => {
+      hiddenRemote.set(slug, [...urls]);
+      paintNotices();
+      wall.focus();
     };
 
     /** The comments drawer says the blocked files travel with the request (the service adds them). */
@@ -463,15 +466,17 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const paintNotices = (): void => {
       const remote = wall.externalRefs();
       paintCommentsNote(remote.length > 0);
-      const key = JSON.stringify([viewing, viewing ? [] : remote, exported?.path ?? null]);
+      const showRemote = remote.length > 0 && !viewing && !remoteBannerHidden(remote, hiddenRemote.get(slug) ?? null);
+      const key = JSON.stringify([viewing, showRemote ? remote : [], exported?.path ?? null]);
       if (key === noticesKey) return;
       noticesKey = key;
       notices.replaceChildren();
+      askButton = null;
       if (viewing) {
         const row = versionsRow(viewing);
         notices.append(row);
       }
-      if (remote.length > 0 && !viewing) notices.append(remoteBanner(remote));
+      if (showRemote) notices.append(remoteBanner(remote));
       if (exported) {
         const { path } = exported;
         notices.append(banner({ tone: 'success', title: 'Export saved', body: path, action: { label: 'Show in folder', onClick: () => void reveal(path) } }));

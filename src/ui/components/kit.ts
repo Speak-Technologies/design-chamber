@@ -2,9 +2,9 @@
 // icon-triggered menus, sheets and confirm dialogs — built from the kit's own classes
 // (`oc-sdk-btn`, `oc-sdk-popup`, `oc-sdk-option`) so they look and focus like the kit's.
 
-import { mountBanner, mountSpinner, moveListSelection, navigationKey, type BannerProps, type ButtonSize, type ButtonVariant } from '@openchamber/sdk/ui';
+import { mountBanner, mountSpinner, moveListSelection, navigationKey, type BannerProps, type BannerTone, type ButtonSize, type ButtonVariant } from '@openchamber/sdk/ui';
 
-import { append, createScope, errorText, h, nextId, type Child } from './dom.ts';
+import { append, createScope, errorText, h, nextId, replace, type Child } from './dom.ts';
 import { icon, type IconName } from './icons.ts';
 
 // ---------------------------------------------------------------- buttons
@@ -196,6 +196,26 @@ export const banner = (props: BannerProps): HTMLElement => {
   const wrap = h('div', { class: 'dc-banner' });
   mountBanner(wrap, props);
   return wrap;
+};
+
+/**
+ * A kit banner whose action slot holds our own buttons (the kit offers one action; some banners
+ * need two). Returns the banner's nodes for the caller to place in its own wrapper.
+ */
+export const bannerWithActions = (tone: BannerTone, title: string, body: Child[], actions: HTMLElement[]): HTMLElement[] => {
+  const holder = h('div');
+  mountBanner(holder, { tone, title, body: ' ' });
+  const bodyEl = holder.querySelector<HTMLElement>('.oc-sdk-banner-body');
+  if (bodyEl) {
+    replace(bodyEl, ...body);
+    bodyEl.hidden = body.length === 0;
+  }
+  const slot = holder.querySelector<HTMLElement>('.oc-sdk-banner-action');
+  if (slot) {
+    slot.hidden = false;
+    slot.replaceChildren(h('div', { class: 'dc-row-actions' }, ...actions));
+  }
+  return [...holder.childNodes].filter((node): node is HTMLElement => node instanceof HTMLElement);
 };
 
 export const loadingRow = (label: string): HTMLElement => {

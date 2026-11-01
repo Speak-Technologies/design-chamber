@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import { PAGE_FILL_VIEWPORT_ID } from '../../src/shared/limits.ts';
 import type { Comment, Viewport } from '../../src/shared/types.ts';
-import { PAGE_GUTTER, PAGE_GUTTER_COMPACT, pageCamera, pageComments, pageViewOptions, remoteNotice, resolvePageView, shortUrl } from '../../src/ui/model/wall-model.ts';
+import { PAGE_GUTTER, PAGE_GUTTER_COMPACT, pageCamera, pageComments, pageViewOptions, remoteBannerHidden, remoteNotice, resolvePageView, shortUrl } from '../../src/ui/model/wall-model.ts';
 
 const LAPTOP: Viewport = { id: 'laptop', label: 'Laptop', width: 1280, height: 800 };
 const PHONE: Viewport = { id: 'phone', label: 'Phone', width: 390, height: 844 };
@@ -91,6 +91,18 @@ test('remoteNotice: up to five URLs and a count of the rest', () => {
   assert.equal(one.title, 'This design loads 1 file from the internet');
   assert.equal(one.more, 0);
   assert.ok(!`${many.title}${one.title}`.includes('—'));
+});
+
+test('remoteBannerHidden: stays hidden for the URLs the user saw, shows again for a new one', () => {
+  const fonts = 'https://fonts.googleapis.com/css2?family=Inter';
+  const tailwind = 'https://cdn.tailwindcss.com';
+  const chart = 'https://cdn.example.com/chart.js';
+  assert.equal(remoteBannerHidden([fonts], null), false, 'never hidden: shows');
+  assert.equal(remoteBannerHidden([fonts, tailwind], [fonts, tailwind]), true, 'same list: hidden');
+  assert.equal(remoteBannerHidden([tailwind, fonts], [fonts, tailwind]), true, 'order does not matter');
+  assert.equal(remoteBannerHidden([fonts], [fonts, tailwind]), true, 'one fixed: still hidden');
+  assert.equal(remoteBannerHidden([fonts, chart], [fonts, tailwind]), false, 'a new URL: shows again');
+  assert.equal(remoteBannerHidden([chart], [fonts]), false, 'a different list: shows again');
 });
 
 test('shortUrl: host and path, cut in the middle when long', () => {

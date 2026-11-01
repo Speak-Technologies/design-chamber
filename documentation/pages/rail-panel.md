@@ -22,7 +22,7 @@ Screenshots are taken in the OpenChamber dark and light themes at 320 px and 480
 - Back, the title, and a ⋯ menu: Continue in chat, Export ZIP, Export screen as HTML (or single-file HTML), Copy HTML / Copy path, Reveal in folder, Versions, Comments, Rename, Delete… ([menu](img/rail-320-dark-6-viewer-menu.png)).
 - A canvas shows the wall fitted to the rail with **Edit / Play** and zoom − % + **Fit**; at most 4 artboards are live, the rest say "Paused" until you pan to them. Labels, pins and folded pin counts behave as on the [full-screen wall](full-screen-page.md).
 - A page is shown like a browser tab, with no pan or zoom: row one is back, title, ⋯; row two is **View** (Full width, or a device size shrunk to fit the rail and centred) and **Comment**. At Full width the page reflows to the rail's width and scrolls inside its frame. Pins work in every view, as on the [full-screen page viewer](full-screen-page.md).
-- When the design loads files from the internet, a warning lists up to 5 of them with **Ask the agent to fix it** underneath (see the full-screen page viewer).
+- When the design loads files from the internet, a warning lists up to 5 of them with **Ask the agent to fix it** and **Hide** on their own row underneath. **Hide** gives the space back to the design until a new file is blocked (see the full-screen page viewer).
 - **Comments** ([sheet](img/rail-320-dark-7-comments.png)) and **Versions** ([sheet](img/rail-320-dark-8-versions.png)) open as full-height sheets inside the rail; choosing View/Compare/a comment closes the sheet so you can see the wall.
 - Footer hint: "Full screen: sidebar → Extension pages → Design Chamber" (an extension cannot open the page by itself).
 
@@ -53,4 +53,4 @@ There is one role: the OpenChamber user. Chat links (a design chip, "Open as pag
 [Full-screen page](full-screen-page.md) · `docs/SPEC.md` §13.1
 
 ---
-*Last updated: 2026-11-01 — compact page viewer: View (Full width or a device size), no pan or zoom, pins in every view; remote-files banner; Pages rename in list, tabs and New; loose HTML import banner; Settings: Apply disabled until the folder changes, "Live previews", agent guide, skill and AGENTS.md lines*
+*Last updated: 2026-11-01 — compact page viewer: View (Full width or a device size), no pan or zoom, pins in every view; remote-files banner with Hide; Pages rename in list, tabs and New; loose HTML import banner; Settings: Apply disabled until the folder changes, "Live previews", agent guide, skill and AGENTS.md lines*

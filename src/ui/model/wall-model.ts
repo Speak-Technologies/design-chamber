@@ -139,6 +139,17 @@ export const remoteNotice = (urls: readonly string[], kind: 'page' | 'canvas', s
   };
 };
 
+/**
+ * Whether a hidden remote-files banner stays hidden. `hiddenWith` is the URL list on screen when
+ * the user pressed Hide (`null`: never hidden). It stays hidden while every blocked URL is one the
+ * user already saw, also when some were fixed; a URL it did not list is a new problem and shows it again.
+ */
+export const remoteBannerHidden = (urls: readonly string[], hiddenWith: readonly string[] | null): boolean => {
+  if (hiddenWith === null) return false;
+  const seen = new Set(hiddenWith);
+  return urls.every((url) => seen.has(url));
+};
+
 /** Keyboard pan step in screen pixels: bigger with Shift. */
 export const nudgeStep = (shift: boolean): number => (shift ? 240 : 60);
 

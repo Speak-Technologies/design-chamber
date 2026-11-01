@@ -1723,5 +1723,5 @@ body {
 .dc-sheet[data-variant='full'] .dc-sheet-panel { min-width: 0; }
 /* The AGENTS.md lines wrap instead of scrolling sideways. */
 .dc-code[data-wrap='true'] { white-space: pre-wrap; overflow-wrap: anywhere; }
-/* In the rail, the loose-file banner's buttons get their own row under the text. */
+/* In the rail, a two-button banner (loose files, remote files) puts its buttons on their own row under the text. */
 .dc-app[data-surface='panel'] .dc-banner[data-actions='stack'] .oc-sdk-banner-action { flex-basis: 100%; }
