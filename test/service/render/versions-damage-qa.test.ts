@@ -271,6 +271,31 @@ describe('QA 0a: repeated damage against the five-copy cap', () => {
   });
 });
 
+describe('QA 0a: a reset under the five-file cap', () => {
+  test('a reset (note plus damaged index, two files) keeps the old objects through three later recoveries', async (t) => {
+    let clock = Date.parse('2026-11-01T12:00:00.000Z');
+    const { tmp, versions } = await setup(t, () => clock);
+    await seed(tmp, versions, 'art', 3);
+    const old = await allObjects(tmp, 'art');
+    clock += 60_000;
+    await writeFile(indexOf(tmp, 'art'), '{}'); // names nothing: only the orphans note protects the old objects
+    await rm(backupOf(tmp, 'art'));
+    await tmp.write('art/index.html', 'after reset');
+    assert.ok(await versions.create('art', 'manual'));
+    assert.equal((await damagedNames(tmp, 'art')).length, 2, 'the orphans note and the damaged index');
+    for (let k = 1; k <= 3; k += 1) {
+      clock += 60_000;
+      const text = await readFile(indexOf(tmp, 'art'), 'utf8');
+      await writeFile(indexOf(tmp, 'art'), text.slice(0, 50));
+      await tmp.write('art/index.html', `recovered ${k}`);
+      assert.ok(await versions.create('art', 'manual'));
+      assertKept(await allObjects(tmp, 'art'), old, `after recovery ${k}`);
+    }
+    // A fourth recovery fills the cap past both reset files' slots: from here the old objects'
+    // protection depends on which of the two same-second files is pruned (the owner's 5-file cap).
+  });
+});
+
 describe('QA 0a: restore without state.json', () => {
   test('restoring on an agent-made design keeps the comments and leaves the tree clean', async (t) => {
     const { tmp, versions } = await setup(t);
