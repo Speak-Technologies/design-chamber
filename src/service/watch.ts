@@ -44,7 +44,7 @@ import { isDirectory } from './root.ts';
 /** Top-level files whose mtime/size the poll backstop fingerprints (SPEC §9.4). */
 const TRACKED_TOP_FILES = ['design.json', 'index.html', 'DESIGN.md', 'tokens.css'] as const;
 
-/** Entries one fingerprint may add beyond the fixed set (extra top-level files, and everything walked under folders). */
+/** Entries the nested walk of one fingerprint may add (everything under the top-level folders); top-level files and folders are always keyed. */
 export const FINGERPRINT_ENTRIES_MAX = 256;
 /** Folder levels a fingerprint lists below the design folder (`assets/` is level 1). */
 const FINGERPRINT_DEPTH_MAX = 6;
@@ -85,26 +85,32 @@ export const takeFingerprint = async (dir: string, budget: number = FINGERPRINT_
   const assets = await stat(path.join(dir, 'assets')).catch(() => null);
   if (assets?.isDirectory()) fingerprint.set('assets/', `${assets.mtimeMs}:dir`);
 
-  let left = budget;
-  /** Spend one entry; false (and the marker for `topDir`) once the budget is gone. */
-  const spend = (topDir: string | null): boolean => {
-    if (left > 0) {
-      left -= 1;
-      return true;
-    }
-    fingerprint.set(topDir === null ? '…' : `${topDir}/…`, 'truncated');
-    return false;
-  };
-
+  // Every top-level file and folder is keyed first and outside the walk budget, so the cheap form
+  // (`nested` false) and the full one always agree on them. If the walk's budget gated these keys,
+  // a design past the cap would flip `fonts/` in and out between the two forms and read as changed.
   const top = (await readdir(dir, { withFileTypes: true }).catch(() => []))
     .filter((entry) => !entry.name.startsWith('.') && entry.name !== 'screens')
     .sort(byName);
   for (const entry of top) {
     if (!entry.isFile() || fingerprint.has(entry.name)) continue;
-    if (!spend(null)) return fingerprint;
     const info = await stat(path.join(dir, entry.name)).catch(() => null);
     if (info !== null) fingerprint.set(entry.name, fingerprintEntry(info) ?? '');
   }
+  const folders = top.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink()).sort((a, b) => (a.name === 'assets' ? -1 : b.name === 'assets' ? 1 : byName(a, b)));
+  // `assets/` already has its mtime key; the others get a presence key like a walked folder does.
+  for (const entry of folders) if (entry.name !== 'assets') fingerprint.set(`${entry.name}/`, 'dir');
+  if (!nested) return fingerprint;
+
+  let left = budget;
+  /** Spend one walk entry; false (and the `<topDir>/…` marker) once the budget is gone. */
+  const spend = (topDir: string): boolean => {
+    if (left > 0) {
+      left -= 1;
+      return true;
+    }
+    fingerprint.set(`${topDir}/…`, 'truncated');
+    return false;
+  };
 
   /** Depth-first, sorted. Answers false when the budget ran out (the caller stops everything). */
   const walk = async (absDir: string, relDir: string, topDir: string, depth: number): Promise<boolean> => {
@@ -125,14 +131,8 @@ export const takeFingerprint = async (dir: string, budget: number = FINGERPRINT_
     return true;
   };
 
-  const folders = top.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink()).sort((a, b) => (a.name === 'assets' ? -1 : b.name === 'assets' ? 1 : byName(a, b)));
   for (const entry of folders) {
-    // `assets/` already has its mtime key; the others get a presence key like a walked folder does.
-    if (entry.name !== 'assets') {
-      if (!spend(entry.name)) return fingerprint;
-      fingerprint.set(`${entry.name}/`, 'dir');
-    }
-    if (nested && !(await walk(path.join(dir, entry.name), entry.name, entry.name, 1))) return fingerprint;
+    if (!(await walk(path.join(dir, entry.name), entry.name, entry.name, 1))) return fingerprint;
   }
   return fingerprint;
 };

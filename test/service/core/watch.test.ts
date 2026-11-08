@@ -691,8 +691,8 @@ describe('rotating sweep while the live watcher is healthy (phase 0b)', () => {
   // one stops keying folders once the walk budget is spent. On a poll-only root a design with more
   // than 256 entries under assets/ and another top-level folder (fonts/) then flips between the two
   // forms and reports `fonts/` as changed on most ticks with nothing changed on disk: the open page
-  // reloads every few seconds and the 8 s auto-snapshot quiet period never ends. Remove `todo` once fixed.
-  test('poll-only root: a design whose walk hits the cap and that has another top-level folder reports nothing while nothing changes', { todo: 'QA 0b re-review: cheap vs full fingerprint disagree past the walk budget' }, async (t) => {
+  // reloads every few seconds and the 8 s auto-snapshot quiet period never ends.
+  test('poll-only root: a design whose walk hits the cap and that has another top-level folder reports nothing while nothing changes', async (t) => {
     const env = await makeWatchEnv(t, { watchImpl: unavailableWatch, pollMs: 600_000, sweepTicks: 10 });
     await makeDesigns(env, ['big', 'other-1', 'other-2']);
     for (let i = 0; i < FINGERPRINT_ENTRIES_MAX + 20; i += 1) await env.tmp.write(`big/assets/f-${String(i).padStart(3, '0')}.png`, 'x');
@@ -765,6 +765,19 @@ describe('takeFingerprint (capped, sorted walk)', () => {
     assert.ok(fingerprint.has('assets/l1/l2/l3/l4/l5/kept.txt'), 'level 6 entries are fingerprinted');
     assert.ok(!fingerprint.has('assets/l1/l2/l3/l4/l5/l6/too-deep.txt'), 'nothing below level 6');
     if (linked) assert.ok(![...fingerprint.keys()].some((key) => key.startsWith('assets/link')), 'a symlink is neither keyed nor walked');
+  });
+
+  test('past the walk cap the cheap and the full form still agree on every top-level file and folder', async (t) => {
+    const tmp = await useTmpRoot(t);
+    for (let i = 0; i < FINGERPRINT_ENTRIES_MAX + 20; i += 1) await tmp.write(`d/assets/f-${String(i).padStart(3, '0')}.png`, 'x');
+    await tmp.write('d/fonts/inter.woff2', 'font');
+    await tmp.write('d/zz-notes.txt', 'n');
+    const topLevel = (fingerprint: Fingerprint): string[] => [...fingerprint.keys()].filter((key) => !key.slice(0, -1).includes('/') && !key.endsWith('…')).sort();
+    const full = await takeFingerprint(tmp.at('d'));
+    const cheap = await takeFingerprint(tmp.at('d'), undefined, false);
+    assert.equal(full.get('assets/…'), 'truncated', 'the walk really did hit the cap');
+    assert.deepEqual(topLevel(cheap), topLevel(full));
+    assert.ok(topLevel(full).includes('fonts/') && topLevel(full).includes('zz-notes.txt'));
   });
 
   test('carryNested keeps the last walk\'s nested keys for folders that still exist and drops those of removed folders', () => {
