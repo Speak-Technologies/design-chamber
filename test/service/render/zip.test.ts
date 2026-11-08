@@ -1,13 +1,27 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, test } from 'node:test';
+import { describe, test, type TestContext } from 'node:test';
 import { randomBytes } from 'node:crypto';
 
-import { createZip, crc32, ZipError } from '../../../src/service/zip.ts';
+import { crc32, crc32Portable, writeZipFile, ZipError, type ZipSource } from '../../../src/service/zip.ts';
 import { readZip } from './zip-reader.ts';
+
+const entry = (name: string, data: Uint8Array): ZipSource => ({ name, read: async () => Buffer.from(data) });
+
+/** Write the sources with `writeZipFile` into a tmp folder (removed after the test) and answer the file's path. */
+const zipFile = async (t: TestContext, sources: readonly ZipSource[], options?: Parameters<typeof writeZipFile>[2]): Promise<string> => {
+  const work = await mkdtemp(path.join(os.tmpdir(), 'dc-zip-'));
+  t.after(() => rm(work, { recursive: true, force: true }));
+  const target = path.join(work, 'out.zip');
+  await writeZipFile(target, sources, options);
+  return target;
+};
+
+/** Convenience for the round-trip tests: the archive's bytes. */
+const zipBytes = async (t: TestContext, sources: readonly ZipSource[]): Promise<Buffer> => readFile(await zipFile(t, sources));
 
 describe('zip writer', () => {
   test('crc32 matches the published check value for "123456789"', () => {
@@ -16,13 +30,13 @@ describe('zip writer', () => {
     assert.equal(crc32(Buffer.alloc(0)) >>> 0, 0);
   });
 
-  test('round-trips text and binary entries through the reader (deflate + store, CRC verified)', () => {
+  test('round-trips text and binary entries through the reader (deflate + store, CRC verified)', async (t) => {
     const text = Buffer.from('<!doctype html><h1>hello ✓</h1>'.repeat(50), 'utf8'); // compressible → deflate
     const binary = randomBytes(5000); // incompressible → store
-    const zip = createZip([
-      { name: 'design/index.html', data: text },
-      { name: 'design/assets/noise.bin', data: binary },
-      { name: 'design/empty.txt', data: Buffer.alloc(0) },
+    const zip = await zipBytes(t, [
+      entry('design/index.html', text),
+      entry('design/assets/noise.bin', binary),
+      entry('design/empty.txt', Buffer.alloc(0)),
     ]);
     const entries = readZip(zip);
     assert.deepEqual(
@@ -37,18 +51,61 @@ describe('zip writer', () => {
     assert.equal(entries[1]?.method, 0);
   });
 
-  test('UTF-8 names survive the round trip (flag bit 11)', () => {
-    const zip = createZip([{ name: 'design/日本語 ✓.txt', data: Buffer.from('x', 'utf8') }]);
+  test('UTF-8 names survive the round trip (flag bit 11)', async (t) => {
+    const zip = await zipBytes(t, [entry('design/日本語 ✓.txt', Buffer.from('x', 'utf8'))]);
     assert.equal(readZip(zip)[0]?.name, 'design/日本語 ✓.txt');
   });
 
-  test('duplicate and empty names are refused', () => {
-    assert.throws(() => createZip([{ name: 'a.txt', data: Buffer.alloc(1) }, { name: 'a.txt', data: Buffer.alloc(1) }]), ZipError);
-    assert.throws(() => createZip([{ name: '', data: Buffer.alloc(1) }]), ZipError);
+  test('duplicate and empty names are refused', async (t) => {
+    await assert.rejects(zipFile(t, [entry('a.txt', Buffer.alloc(1)), entry('a.txt', Buffer.alloc(1))]), ZipError);
+    await assert.rejects(zipFile(t, [entry('', Buffer.alloc(1))]), ZipError);
   });
 
-  test('an empty archive is a valid ZIP with zero entries', () => {
-    assert.equal(readZip(createZip([])).length, 0);
+  test('an empty archive is a valid ZIP with zero entries', async (t) => {
+    assert.equal(readZip(await zipBytes(t, [])).length, 0);
+  });
+
+  test('a file that vanished (read answers null) is skipped, not an error', async (t) => {
+    const zip = readZip(await zipBytes(t, [{ name: 'gone.txt', read: async () => null }, entry('kept.txt', Buffer.from('k'))]));
+    assert.deepEqual(zip.map((e) => e.name), ['kept.txt']);
+  });
+
+  test('the target is never overwritten (open with wx)', async (t) => {
+    const target = await zipFile(t, [entry('a.txt', Buffer.from('first'))]);
+    await assert.rejects(writeZipFile(target, [entry('a.txt', Buffer.from('second'))]), { code: 'EEXIST' });
+    assert.equal(readZip(await readFile(target))[0]?.data.toString('utf8'), 'first');
+  });
+
+  test('crc32 (native when available) equals the portable table on the check value, 1 MiB of noise, and a running value across slices', () => {
+    assert.equal(crc32Portable(Buffer.from('123456789', 'utf8')), 0xcbf43926);
+    assert.equal(crc32(Buffer.from('123456789', 'utf8')), 0xcbf43926);
+    const noise = randomBytes(1024 * 1024);
+    assert.equal(crc32(noise), crc32Portable(noise));
+    // A running value: slices joined equal the whole, for both implementations.
+    const cut = 300_001;
+    const whole = crc32Portable(noise);
+    assert.equal(crc32Portable(noise.subarray(cut), crc32Portable(noise.subarray(0, cut))), whole);
+    assert.equal(crc32(noise.subarray(cut), crc32(noise.subarray(0, cut))), whole);
+  });
+
+  test('already-compressed extensions are stored without a deflate attempt; the same bytes under .txt are deflated', async (t) => {
+    const squashable = Buffer.alloc(64 * 1024, 7); // deflate would shrink this a lot
+    const zip = readZip(await zipBytes(t, [entry('a.PNG', squashable), entry('b.woff2', squashable), entry('c.txt', squashable)]));
+    assert.deepEqual(zip.map((e) => e.method), [0, 0, 8]);
+    assert.ok(zip.every((e) => e.data.equals(squashable)));
+  });
+
+  test('an entry over the size cap throws a ZipError naming the file; the partial file is the caller\'s to remove', async (t) => {
+    const work = await mkdtemp(path.join(os.tmpdir(), 'dc-zip-cap-'));
+    t.after(() => rm(work, { recursive: true, force: true }));
+    const target = path.join(work, 'big.zip');
+    await assert.rejects(
+      writeZipFile(target, [entry('d/ok.txt', Buffer.from('fine')), entry('d/huge.bin', Buffer.alloc(100))], { maxEntryBytes: 50 }),
+      (error: unknown) => error instanceof ZipError && error.message.includes('d/huge.bin') && error.message.includes('too large to put in a ZIP'),
+    );
+    // The writer closed its handle, so the caller (export.ts) can remove the partial file.
+    await rm(target, { force: true });
+    assert.deepEqual(await readdir(work), []);
   });
 
   // System-reader proof (SPEC §14 WP2: "ZIP opens with system unzip"): PowerShell's
@@ -56,15 +113,12 @@ describe('zip writer', () => {
   // macOS's tar — reads zip; GNU tar does not, so a machine with neither skips with a reason).
   test('the system extractor opens the archive with identical contents', async (t) => {
     const text = '<!doctype html><h1>system unzip ✓</h1>';
-    const zip = createZip([
-      { name: 'design/index.html', data: Buffer.from(text, 'utf8') },
-      { name: 'design/assets/notes.txt', data: Buffer.from('nested folder entry', 'utf8') },
+    const zipPath = await zipFile(t, [
+      entry('design/index.html', Buffer.from(text, 'utf8')),
+      entry('design/assets/notes.txt', Buffer.from('nested folder entry', 'utf8')),
     ]);
-    const work = await mkdtemp(path.join(os.tmpdir(), 'dc-zip-sys-'));
-    t.after(() => rm(work, { recursive: true, force: true }));
-    const zipPath = path.join(work, 'out.zip');
+    const work = path.dirname(zipPath);
     const outDir = path.join(work, 'out');
-    await writeFile(zipPath, zip);
 
     let result: { status: number | null; stderr: string };
     if (process.platform === 'win32') {
