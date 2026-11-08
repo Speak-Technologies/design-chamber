@@ -253,14 +253,16 @@ const loadIndex = async (designDir: string, log: Logger): Promise<LoadedIndex> =
     log.warn('versions.index-recovered', { design: designDir });
     return loaded({ ...backupParse.index, next }, 'recovered', 'recovered');
   }
+  // Every reset records the objects on disk: the damaged text may name none of them ({}, an empty
+  // file), so naming them is what keeps the old files, as the drawer's notice promises.
+  const orphans = await listObjectHashes(versionsDir).catch(fail);
   if (current.kind === 'missing') {
-    const orphans = await listObjectHashes(versionsDir).catch(fail);
     if (orphans.length === 0) return loaded(emptyIndex(), 'ok'); // a new design
     log.warn('versions.index-reset', { design: designDir, objects: orphans.length });
     return loaded(emptyIndex(), 'reset', 'reset', orphans);
   }
-  log.warn('versions.index-reset', { design: designDir });
-  return loaded(emptyIndex(Math.max(1, highestVersionNumber(damagedText) + 1)), 'reset', 'reset');
+  log.warn('versions.index-reset', { design: designDir, objects: orphans.length });
+  return loaded(emptyIndex(Math.max(1, highestVersionNumber(damagedText) + 1)), 'reset', 'reset', orphans);
 };
 
 const writeAtomic = async (target: string, bytes: Uint8Array | string): Promise<void> => {
@@ -278,19 +280,23 @@ type Env = { log: Logger; now: () => number };
 
 /**
  * Moves the damaged index.json to `index.damaged-…` (or writes a note when there is none), so
- * no write ever replaces bytes the service did not create. A Windows lock on the rename falls
- * back to a copy. Both failing aborts the commit before anything else is written.
+ * no write ever replaces bytes the service did not create. A reset also writes a note naming
+ * every stored object, because the damaged text may name none of them. A Windows lock on the
+ * rename falls back to a copy. Both failing aborts the commit before the index is written.
  */
 const setAsideDamaged = async (versionsDir: string, loaded: LoadedIndex, env: Env): Promise<void> => {
   const kind = loaded.setAside;
   if (kind === null) return;
   const source = path.join(versionsDir, INDEX_NAME);
-  const target = path.join(versionsDir, damagedFileName(new Date(env.now()), kind, randomBytes(2).toString('hex')));
+  const nameFor = (): string => path.join(versionsDir, damagedFileName(new Date(env.now()), kind, randomBytes(2).toString('hex')));
   try {
+    // The note first: a crash between the two leaves a note and a damaged index, both harmless.
+    if (kind === 'reset') await writeAtomic(nameFor(), `${JSON.stringify({ orphans: loaded.orphans ?? [] })}\n`);
+    const target = nameFor();
     await rename(source, target).catch(async (error: unknown) => {
       const code = errorCode(error);
       if (code === 'ENOENT') {
-        await writeAtomic(target, kind === 'reset' ? `${JSON.stringify({ orphans: loaded.orphans ?? [] })}\n` : '{}\n');
+        if (kind !== 'reset') await writeAtomic(target, '{}\n'); // nothing to move; the note marks the recovery
       } else if (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') {
         const copy = await readCapped(source);
         if (copy.kind !== 'bytes') throw error;
@@ -333,7 +339,15 @@ const putObject = async (versionsDir: string, hash: string, bytes: Buffer): Prom
  */
 const collectGarbage = async (designDir: string, versionsDir: string, index: VersionIndex, env: Env): Promise<void> => {
   const { log } = env;
-  const damaged = (await listDamaged(versionsDir).catch(() => [])).sort((a, b) => b.at - a.at || (a.name < b.name ? 1 : -1));
+  let listed: LoadedIndex['damaged'];
+  try {
+    listed = await listDamaged(versionsDir);
+  } catch (error) {
+    // Without the list there is no knowing what the damaged copies protect: delete nothing.
+    log.warn('versions.gc-skipped', { design: designDir, file: '.versions', error: messageOf(error) });
+    return;
+  }
+  const damaged = listed.sort((a, b) => b.at - a.at || (a.name < b.name ? 1 : -1));
   const kept: string[] = [];
   const now = env.now();
   for (const [position, item] of damaged.entries()) {

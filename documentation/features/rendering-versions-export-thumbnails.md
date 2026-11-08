@@ -51,7 +51,8 @@ A torn write, a stray edit by an agent or a sync tool, or a Windows file lock ca
   the damaged bytes move to `index.damaged-<time>-<id>-<kind>.json` in the same `.versions`
   folder. `kind` is `entries` (some entries were dropped), `recovered` (rebuilt from the backup)
   or `reset` (no usable backup, so the list starts again; new version numbers never reuse old ones).
-  A missing list next to stored files leaves a small note listing them.
+  Every reset also leaves a small note naming every stored file, so cleanup keeps them even when the
+  damaged text names none (an emptied or `{}` file).
 - **Nothing is deleted on a guess.** Cleanup keeps every stored file that the live list, the
   backup or any damaged copy still names (found by a plain text scan, so a half-written file
   still counts). If any of those cannot be read, that cleanup run is skipped.

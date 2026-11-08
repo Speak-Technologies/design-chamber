@@ -581,7 +581,7 @@ describe('version history survives a damaged index', () => {
     assert.ok(await versions.create('art', 'manual'));
     let objects = await allObjects(objectsDir(tmp, 'art'));
     for (const hash of protectedHashes) assert.ok(objects.includes(hash), 'still protected on day 29');
-    assert.equal((await damagedFiles(tmp, 'art')).length, 1);
+    assert.equal((await damagedFiles(tmp, 'art')).length, 2, 'the damaged index and the note naming every stored object');
 
     clock += 2 * 24 * 60 * 60 * 1000;
     await tmp.write('art/index.html', 'page 5');

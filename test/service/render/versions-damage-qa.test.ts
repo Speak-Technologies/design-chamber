@@ -291,10 +291,10 @@ describe('QA 0a: restore without state.json', () => {
   });
 });
 
-// ---- confirmed defects (QA FAIL findings). `todo` keeps the suite green; each fails today. ----
+// ---- defects found by QA, fixed ----
 
 describe('QA 0a: confirmed defects', () => {
-  test('F1: a ruined index that names no hash, with no backup, must not let GC delete the old objects', { todo: 'F1: reset from an unreadable index records no orphans' }, async (t) => {
+  test('F1: a ruined index that names no hash, with no backup, must not let GC delete the old objects', async (t) => {
     const { tmp, versions } = await setup(t);
     await seed(tmp, versions, 'art', 3);
     const before = await allObjects(tmp, 'art');
@@ -306,7 +306,7 @@ describe('QA 0a: confirmed defects', () => {
     assertKept(await allObjects(tmp, 'art'), before, 'reset from an unreadable index');
   });
 
-  test('F1b: a damaged backup behind a damaged index must not lose what only the backup named', { todo: 'F1: the damaged backup is overwritten and its hashes are not protected' }, async (t) => {
+  test('F1b: a damaged backup behind a damaged index must not lose what only the backup named', async (t) => {
     const { tmp, versions } = await setup(t);
     await seed(tmp, versions, 'art', 3);
     const before = await allObjects(tmp, 'art');
@@ -318,7 +318,7 @@ describe('QA 0a: confirmed defects', () => {
     assertKept(await allObjects(tmp, 'art'), before, 'both files damaged');
   });
 
-  test('F2: GC must skip, not guess, when listing the damaged copies fails', { todo: 'F2: collectGarbage swallows a readdir error on .versions' }, async (t) => {
+  test('F2: GC must skip, not guess, when listing the damaged copies fails', async (t) => {
     const { tmp, versions } = await setup(t);
     await seed(tmp, versions, 'art', 3);
     const before = await allObjects(tmp, 'art');
