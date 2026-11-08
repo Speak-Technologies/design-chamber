@@ -64,7 +64,15 @@ thumbnail, new versions, comments, or the folder switched. Its own bookkeeping f
 `.versions/`, the thumbnail) never show up as changes — also on OneDrive/network folders, where
 only the 3-second check sees changes. On Linux, if the system's file-watch limit is reached
 (or watching is unsupported), the service notes it once in its log and relies on the 3-second
-check alone; nothing is shown to the user. When the agent rewrites `design.json` while the service is
+check alone; nothing is shown to the user. While the live watcher is working, the 3-second check
+only looks at a tenth of the designs each time (a full pass takes about 30 seconds), so the
+backstop stays cheap with many designs; a change the watcher reports shows up within about a
+second as before, and one it silently dropped shows up within about 30 seconds. When the
+watcher is off or has just failed, the check looks at every design each time (changes show up
+within 3 seconds). The check notices edits to files inside nested folders (`assets/img/a.png`,
+files added in a subfolder) and to top-level files such as `styles.css`, by modification time
+and size; it looks at up to 256 such entries per design, in sorted order, and skips hidden
+folders and shortcuts (symlinks). When the agent rewrites `design.json` while the service is
 merging comments into it, the service re-merges from the agent's new file instead of writing
 over it. If a notification goes missing (Windows and OneDrive can drop or merge them), the
 next notification from that design folder reports every change since the last one, so a
