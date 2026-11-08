@@ -498,7 +498,7 @@ toast with "Show in folder".
    peaks at the largest single file, not the design.
 2. Exported archives open in the system extractor with identical contents. All existing export and zip tests pass.
 3. With a healthy watcher the poll fingerprints ~1/10 of the designs per tick. With none, or poll-only, it fingerprints all.
-4. Nested asset and top-level file edits are detected on poll-only folders within one poll tick.
+4. Top-level file edits are detected on poll-only folders within one poll tick. Nested asset edits show within about 30 s, because the nested walk rotates through the designs (owner decision, to keep the poll cheap with hundreds of designs).
 5. `npm run check` passes.
 
 ---
