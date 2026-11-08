@@ -11,7 +11,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { ExportBody, ExportResponse } from '../shared/api.ts';
@@ -20,6 +20,7 @@ import { ApiError } from './http.ts';
 import type { DesignRecord, DesignStore, Logger, SettingsStore } from './context.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource } from './bundle.ts';
 import { resolveEntryFile } from './render-cache.ts';
+import { renameWithRetry } from './paths.ts';
 import { folderErrorSentence } from './root.ts';
 import { userDir } from './user-dirs.ts';
 import { listTracked } from './versions.ts';
@@ -87,6 +88,7 @@ const zipRels = async (record: DesignRecord): Promise<string[]> => {
 const writeZipExport = async (slug: string, record: DesignRecord, rels: readonly string[], tmpPath: string, maxEntryBytes: number): Promise<number> => {
   const sources: ZipSource[] = rels.map((rel) => ({
     name: `${slug}/${rel}`,
+    label: rel,
     read: async () => {
       const file = path.join(record.path, ...rel.split('/'));
       const info = await stat(file).catch(() => null);
@@ -125,7 +127,7 @@ export const createExportService = (deps: ExportDeps): ExportService => {
     const tmp = `${target}.${randomBytes(6).toString('hex')}.tmp`;
     try {
       const bytes = await write(tmp);
-      await rename(tmp, target);
+      await renameWithRetry(tmp, target);
       return { target, bytes };
     } catch (error) {
       await rm(tmp, { force: true }).catch(() => undefined);

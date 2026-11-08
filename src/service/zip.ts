@@ -15,6 +15,8 @@ import zlib from 'node:zlib';
 /** One file of the archive. `name` uses `/` separators and is written as UTF-8. */
 export type ZipSource = {
   name: string;
+  /** What messages call the file when it differs from `name` (the design-relative path, not the archive path). */
+  label?: string;
   /** The file's bytes, or `null` when it vanished (the entry is skipped). */
   read: () => Promise<Buffer | null>;
 };
@@ -143,7 +145,7 @@ export const writeZipFile = async (
       seen.add(source.name);
       const data = await source.read();
       if (data === null) continue;
-      if (data.length > maxEntryBytes) throw new ZipError(entryTooLargeSentence(source.name, maxEntryBytes));
+      if (data.length > maxEntryBytes) throw new ZipError(entryTooLargeSentence(source.label ?? source.name, maxEntryBytes));
 
       const crc = await crc32Sliced(data);
       let payload: Buffer = data;

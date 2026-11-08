@@ -5,6 +5,7 @@ import { monitorEventLoopDelay } from 'node:perf_hooks';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
 
+import { refuseRenames } from '../../helpers/refuse-rename.ts';
 import { createFakeContext, type FakeContext } from '../../helpers/fake-context.ts';
 import { useTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
 import { createExportService, type ExportService } from '../../../src/service/export.ts';
@@ -119,12 +120,34 @@ describe('export service', () => {
     assert.notEqual(a.path, b.path);
   });
 
+  test('a final rename Windows refuses for a moment (antivirus on the fresh ZIP) is retried and the export lands', async (t) => {
+    const { tmp, downloads, exports } = await setup(t);
+    await tmp.writeDesign('art', pageDesign());
+    const target = path.join(downloads, 'art.zip');
+    const refusal = refuseRenames(t, (destination, attempt) => destination === target && attempt <= 2);
+    const result = await exports.export('art', { format: 'zip' });
+    assert.equal(result.path, target);
+    assert.equal(refusal.attempts.filter((entry) => entry === target).length, 3);
+    assert.deepEqual(readZip(await readFile(target)).map((entry) => entry.name), ['art/index.html']);
+    assert.deepEqual(await readdir(downloads), ['art.zip']);
+  });
+
+  test('a rename that stays refused ends as the existing bad-path sentence after five tries, with no temporary file and the name free again', async (t) => {
+    const { tmp, downloads, exports } = await setup(t);
+    await tmp.writeDesign('art', pageDesign());
+    const target = path.join(downloads, 'art.zip');
+    const refusal = refuseRenames(t, (destination) => destination === target);
+    await assert.rejects(exports.export('art', { format: 'zip' }), (error: unknown) => error instanceof ApiError && error.code === 'bad-path');
+    assert.equal(refusal.attempts.filter((entry) => entry === target).length, 5);
+    assert.deepEqual(await readdir(downloads), []);
+  });
+
   test('a file over the per-file cap fails the ZIP with a too-large sentence naming it; no temporary file is left and the name is free again', async (t) => {
     const { tmp, downloads, exports } = await setup(t, { zipMaxEntryBytes: 1000 });
     await tmp.writeDesign('art', pageDesign({ 'assets/big.bin': randomBytes(5000) }));
     await assert.rejects(
       exports.export('art', { format: 'zip' }),
-      (error: unknown) => error instanceof ApiError && error.code === 'too-large' && error.message.includes('assets/big.bin') && error.message.includes('too large to put in a ZIP'),
+      (error: unknown) => error instanceof ApiError && error.code === 'too-large' && error.message.startsWith('assets/big.bin is over') && error.message.includes('too large to put in a ZIP'),
     );
     assert.deepEqual(await readdir(downloads), []);
     // The failed export released its name: the next one (after the file is gone) gets the plain name.
