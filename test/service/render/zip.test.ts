@@ -108,9 +108,6 @@ describe('zip writer', () => {
     assert.deepEqual(await readdir(work), []);
   });
 
-  // System-reader proof (SPEC §14 WP2: "ZIP opens with system unzip"): PowerShell's
-  // Expand-Archive on Windows; Info-ZIP `unzip` on Linux/macOS, else `tar -xf` (bsdtar —
-  // macOS's tar — reads zip; GNU tar does not, so a machine with neither skips with a reason).
   test('the too-large sentence uses the entry\'s label (the design-relative path) when it has one', async (t) => {
     const work = await mkdtemp(path.join(os.tmpdir(), 'dc-zip-label-'));
     t.after(() => rm(work, { recursive: true, force: true }));
@@ -120,6 +117,9 @@ describe('zip writer', () => {
     );
   });
 
+  // System-reader proof (SPEC §14 WP2: "ZIP opens with system unzip"): PowerShell's
+  // Expand-Archive on Windows; Info-ZIP `unzip` on Linux/macOS, else `tar -xf` (bsdtar —
+  // macOS's tar — reads zip; GNU tar does not, so a machine with neither skips with a reason).
   test('the system extractor opens the archive with identical contents', async (t) => {
     const text = '<!doctype html><h1>system unzip ✓</h1>';
     const zipPath = await zipFile(t, [
