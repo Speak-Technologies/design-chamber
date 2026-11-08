@@ -71,7 +71,12 @@ different sections, so the second merge rebases cleanly.
 7. **An index from a newer Design Chamber** (`version` greater than 1) is left alone. Snapshots and restores
    for that design are refused with a sentence, and the list reports it.
 8. **Restore keeps the live comments**, using the store's resolved state (state.json when valid,
-   otherwise rebuilt from the live design.json). When that cannot be done safely, it refuses:
+   otherwise rebuilt from the live design.json; confirmed in the code). With a valid state.json the
+   version's design.json gets the full `mergeServiceFields` merge, as before. **With no state.json
+   only the live `comments` are grafted onto the version's design.json** (and the stored bytes are
+   written as they are when there are none): a full merge would append service fields the version
+   never had and change its tree hash, so every restore of an agent-made design would read as
+   dirty and add a version. When that cannot be done safely, it refuses:
    the version's design.json does not parse, state.json is not valid, and live comments exist.
    The refusal comes before anything is written. Why keep and not refuse outright: restore stays
    available in the common case (an agent-made design that has no state.json yet), and §6.4
@@ -86,10 +91,10 @@ different sections, so the second merge rebases cleanly.
 |---|---|---|---|
 | `index.json` | existing | unchanged schema `{version:1,next,versions}` | `commitIndex` |
 | `index.bak.json` | new | byte copy of the last committed `index.json` | `commitIndex`, after `index.json` |
-| `index.damaged-<YYYYMMDDTHHMMSSZ>-<rand4>-<kind>.json` | new | the damaged `index.json` bytes (renamed aside), or for `kind=reset` from a missing index, `{"orphans":["<sha256>",…]}` | `commitIndex` |
+| `index.damaged-<YYYYMMDDTHHMMSSZ>-<rand4>-<kind>.json` | new | the damaged `index.json` bytes (renamed aside). **Every `kind=reset` also writes a second file of this name pattern, `{"orphans":["<sha256>",…]}`, naming every object on disk**, because the damaged text may name none (`{}`, an empty file); a reset from a missing index writes only that note | `commitIndex` |
 
 `kind` ∈ `entries` (some entries dropped), `recovered` (rebuilt from the backup), `reset` (no
-usable backup). The name uses only `[0-9A-Za-z.-]`, which is safe on Windows. At most 5 damaged
+usable backup; the orphans note also protects what a damaged `index.bak.json`, which the new backup overwrites, named). The name uses only `[0-9A-Za-z.-]`, which is safe on Windows. At most 5 damaged
 files are kept (newest by stamp), each for `DAMAGED_KEEP_MS` = 30 days (Q1). Both pruned inside
 GC. Backward-readable: old designs have no `.bak` or damaged files and read exactly as before.
 `isTracked` already excludes `.versions/**`, so none of these files ever enter a snapshot or an export.
@@ -130,7 +135,8 @@ GC. Backward-readable: old designs have no `.bak` or damaged files and read exac
   4. Unreadable: read and parse `index.bak.json`. Usable (`ok`) gives `health recovered, setAside
      'recovered'`, index = backup with `next = max(bak.next, highestVersionNumber(damagedText)+1)`.
      A backup that is `unsupported` gives `unsupported`. If the backup is missing or unreadable:
-     `health reset, setAside 'reset'`, empty index with `next = max(1, highestVersionNumber(damagedText)+1)`.
+     `health reset, setAside 'reset'`, empty index with `next = max(1, highestVersionNumber(damagedText)+1)`,
+     and `orphans = [every object hash]` (as in step 5).
      Ids never repeat old ones (comments record `sentInVersion` numbers).
   5. `index.json` missing: a usable backup gives `recovered` (setAside `'recovered'`, nothing to
      move, a note is written instead). Otherwise, if any object exists under `objects/`:
@@ -140,7 +146,7 @@ GC. Backward-readable: old designs have no `.bak` or damaged files and read exac
 - `commitIndex(designDir, loaded: LoadedIndex, index: VersionIndex): Promise<void>`. **Chain
   only**, and every index write goes through it (the new-entry path at `:412` and the turn-promotion path at `:385`):
   1. `health === 'unsupported'` throws `ApiError('invalid', UNSUPPORTED)`.
-  2. If `setAside !== null`: when `index.json` exists, `rename` it to the damaged name. On
+  2. If `setAside !== null`: for `reset`, first write the orphans note. Then, when `index.json` exists, `rename` it to the damaged name. On
      `EPERM`/`EBUSY`/`EACCES` (Windows), fall back to reading its bytes and writing them atomically
      to the damaged name. When it does not exist, write the note (`{"orphans":[…]}` or `{}`) atomically.
      If both paths fail, throw `ApiError('internal', SET_ASIDE_FAILED)` and **write nothing else**.
@@ -150,7 +156,7 @@ GC. Backward-readable: old designs have no `.bak` or damaged files and read exac
 - `collectGarbage(designDir, index, log, now)` gains the protected set. Before deleting:
   read `index.bak.json` (ENOENT is fine) and every damaged file younger than `DAMAGED_KEEP_MS`
   and among the newest `DAMAGED_KEEP_MAX`, each capped at `INDEX_READ_MAX_BYTES`. Protected =
-  referenced ∪ `hashesMentioned` of each. **Any read error other than ENOENT, or an over-cap
+  referenced ∪ `hashesMentioned` of each. **Any read error other than ENOENT (listing `.versions` included), or an over-cap
   file, skips this whole GC run** (log `versions.gc-skipped`). Then delete expired or excess
   damaged files, then unreferenced objects as today. `now` comes from a new optional
   `VersionsDeps.now?: () => number` (test seam; default `Date.now`).
