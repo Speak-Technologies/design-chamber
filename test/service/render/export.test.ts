@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, truncate } from 'node:fs/promises';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
@@ -131,6 +131,21 @@ describe('export service', () => {
     await tmp.write('art/assets/big.bin', 'small');
     const ok = await exports.export('art', { format: 'zip' });
     assert.equal(path.basename(ok.path), 'art.zip');
+  });
+
+  // The size check before reading is what refuses a file too big for readFile (over 2 GiB):
+  // without it, readFile's ERR_FS_FILE_TOO_LARGE reads as "vanished" and the file is silently
+  // left out of a ZIP that reports success. A sparse file costs no disk space on Linux and macOS;
+  // NTFS would allocate it, so Windows skips.
+  test('a file too big to read (3 GB, sparse) refuses the ZIP with too-large instead of leaving the file out', { skip: process.platform === 'win32' ? 'NTFS does not make the file sparse' : false }, async (t) => {
+    const { tmp, downloads, exports } = await setup(t);
+    await tmp.writeDesign('art', pageDesign({ 'assets/huge.mov': 'x' }));
+    await truncate(tmp.at('art/assets/huge.mov'), 3 * 1024 * 1024 * 1024);
+    await assert.rejects(
+      exports.export('art', { format: 'zip' }),
+      (error: unknown) => error instanceof ApiError && error.code === 'too-large' && error.message.includes('assets/huge.mov'),
+    );
+    assert.deepEqual(await readdir(downloads), [], 'no archive and no temporary file');
   });
 
   test('★ a large ZIP export does not stall the event loop (no stall over 500 ms)', async (t) => {
