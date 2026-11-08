@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
 import { randomBytes } from 'node:crypto';
+import zlib from 'node:zlib';
 
 import { crc32, crc32Portable, writeZipFile, ZipError, type ZipSource } from '../../../src/service/zip.ts';
 import { readZip } from './zip-reader.ts';
@@ -115,6 +116,43 @@ describe('zip writer', () => {
       writeZipFile(path.join(work, 'a.zip'), [{ name: 'design/assets/x.bin', label: 'assets/x.bin', read: async () => Buffer.alloc(100) }], { maxEntryBytes: 50 }),
       (error: unknown) => error instanceof ZipError && error.message.startsWith('assets/x.bin is over') && !error.message.includes('design/'),
     );
+  });
+
+  // The CRC is computed in 8 MiB slices that continue a running value. A file over one slice is
+  // where a dropped running value (or a wrong boundary) would ship a bad CRC, so one entry of 9 MiB
+  // goes through writeZipFile with both CRC implementations: the native one, and the table fallback,
+  // reached by loading a second copy of the module while `zlib.crc32` is absent (as on an older runtime).
+  test('a 9 MiB entry round-trips with the right CRC across slices (native and table fallback)', async (t) => {
+    const big = randomBytes(9 * 1024 * 1024);
+    for (let i = 0; i < big.length; i += 1) big[i] = (big[i] ?? 0) % 7; // not uniform, and compressible: the deflate path
+    const reference = zlib.crc32(big);
+
+    const original = zlib.crc32;
+    // Safe: restored right after the fallback copy of the module has read it at load.
+    (zlib as { crc32?: unknown }).crc32 = undefined;
+    let fallback: typeof import('../../../src/service/zip.ts');
+    try {
+      const copy = new URL('../../../src/service/zip.ts', import.meta.url);
+      copy.search = '?crc32-fallback'; // a distinct specifier makes the loader evaluate the module again
+      fallback = (await import(copy.href)) as typeof import('../../../src/service/zip.ts');
+    } finally {
+      zlib.crc32 = original;
+    }
+
+    const work = await mkdtemp(path.join(os.tmpdir(), 'dc-zip-big-'));
+    t.after(() => rm(work, { recursive: true, force: true }));
+    for (const [label, write] of [['native', writeZipFile], ['table fallback', fallback.writeZipFile]] as const) {
+      const target = path.join(work, `${label.replace(' ', '-')}.zip`);
+      await write(target, [entry('d/big.bin', big)]);
+      const zip = await readFile(target);
+      assert.equal(zip.readUInt32LE(14), reference, `${label}: the CRC in the local header is the CRC of the whole file`);
+      const [only] = readZip(zip);
+      assert.ok(only?.data.equals(big), `${label}: the bytes survive`);
+      if (process.platform !== 'win32') {
+        const test = spawnSync('unzip', ['-tq', target], { encoding: 'utf8', timeout: 60_000 });
+        if (test.error === undefined) assert.equal(test.status, 0, `${label}: unzip -t: ${test.stdout}${test.stderr}`);
+      }
+    }
   });
 
   // System-reader proof (SPEC §14 WP2: "ZIP opens with system unzip"): PowerShell's
