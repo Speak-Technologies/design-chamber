@@ -39,8 +39,38 @@ thumbnail; `design.json` without comments) as content-addressed objects:
   too large for a snapshot (over 1 000 files or 100 MB) no restore point can be kept, so the
   restore is refused with a sentence saying so and nothing is changed.
 - the version list on disk (`.versions/index.json`) is treated as untrusted: an entry naming a
-  path outside the design folder (or an object that is not a content hash) makes the list
-  unreadable rather than letting a restore write anywhere else.
+  path outside the design folder (or an object that is not a content hash) is dropped on its own,
+  so a restore can never write anywhere else and the other versions stay in the list.
+
+### When the version list is damaged
+A torn write, a stray edit by an agent or a sync tool, or a Windows file lock can leave
+`index.json` unreadable. The service never lets that cost the history:
+- **One backup.** Every write of `index.json` is followed by a byte copy, `index.bak.json`. An
+  unreadable or missing `index.json` is rebuilt from it (the newest version may be missing).
+- **Damaged files are set aside, not overwritten.** Before the next save replaces `index.json`,
+  the damaged bytes move to `index.damaged-<time>-<id>-<kind>.json` in the same `.versions`
+  folder. `kind` is `entries` (some entries were dropped), `recovered` (rebuilt from the backup)
+  or `reset` (no usable backup, so the list starts again; new version numbers never reuse old ones).
+  A missing list next to stored files leaves a small note listing them.
+- **Nothing is deleted on a guess.** Cleanup keeps every stored file that the live list, the
+  backup or any damaged copy still names (found by a plain text scan, so a half-written file
+  still counts). If any of those cannot be read, that cleanup run is skipped.
+- **Kept for 30 days.** At most the newest 5 damaged files are kept, each for 30 days. After
+  that they are deleted, the notice goes away, and files only they named can be cleaned up.
+- **Read errors are errors.** A locked or unreadable `index.json` (not just a missing one) fails
+  the request with "could not read this design's version history right now"; nothing is written
+  and the next try works once the lock clears.
+- **A newer Design Chamber.** An index whose `version` is above 1 is left untouched. Saving and
+  restoring are refused with a sentence saying to update the extension, and the list shows a notice.
+- **`.versions` stays inside the design.** If `.versions` is a link pointing out of the design
+  folder, every read and write there is refused.
+- The list route reports a `history` state (`repaired`, `recovered`, `reset`, `unsupported`) while
+  a notice applies; the Versions drawer turns it into a banner. Listing only reads: the set-aside
+  happens on the next save or restore.
+- **Restore keeps live comments.** The current comments come from the store's resolved state
+  (state.json, or rebuilt from the live `design.json` when state.json is missing, as on an
+  agent-made design). If the version's `design.json` does not parse, there is no state.json and
+  comments exist, restore is refused ("Nothing was changed") before anything is written.
 
 ## Export
 Because a guest frame cannot download files, the service writes them itself:
