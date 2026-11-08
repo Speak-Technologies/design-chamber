@@ -656,6 +656,57 @@ describe('rotating sweep while the live watcher is healthy (phase 0b)', () => {
     assert.equal(maxActive, 1);
     release();
   });
+
+  test('a poll tick that throws releases the no-overlap guard: the timer-driven poll keeps running', async (t) => {
+    let calls = 0;
+    let throwNext = false;
+    let thrown = false;
+    const flaky = async (dir: string, options: { nested: boolean }): Promise<Fingerprint> => {
+      calls += 1;
+      if (throwNext) {
+        throwNext = false;
+        thrown = true;
+        throw new Error('EIO: the share went away for a moment');
+      }
+      return takeFingerprint(dir, undefined, options.nested);
+    };
+    const env = await makeWatchEnv(t, { watchImpl: unavailableWatch, pollMs: 15, sweepTicks: 1, fingerprint: flaky });
+    await makeDesigns(env, ['aa']);
+    await env.watcher.pollNow();
+    throwNext = true;
+    const deadline = Date.now() + 6000;
+    while (!thrown) {
+      if (Date.now() > deadline) throw new Error('the timer-driven poll never ran');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const after = calls;
+    while (calls === after) {
+      if (Date.now() > deadline) throw new Error('no poll tick ran after one threw: the guard stayed held');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(env.logs.some((line) => line.event === 'watch.poll-failed'), 'the failed tick was logged');
+  });
+
+  // QA finding (phase 0b re-review): the cheap fingerprint keys every top-level folder, but the full
+  // one stops keying folders once the walk budget is spent. On a poll-only root a design with more
+  // than 256 entries under assets/ and another top-level folder (fonts/) then flips between the two
+  // forms and reports `fonts/` as changed on most ticks with nothing changed on disk: the open page
+  // reloads every few seconds and the 8 s auto-snapshot quiet period never ends. Remove `todo` once fixed.
+  test('poll-only root: a design whose walk hits the cap and that has another top-level folder reports nothing while nothing changes', { todo: 'QA 0b re-review: cheap vs full fingerprint disagree past the walk budget' }, async (t) => {
+    const env = await makeWatchEnv(t, { watchImpl: unavailableWatch, pollMs: 600_000, sweepTicks: 10 });
+    await makeDesigns(env, ['big', 'other-1', 'other-2']);
+    for (let i = 0; i < FINGERPRINT_ENTRIES_MAX + 20; i += 1) await env.tmp.write(`big/assets/f-${String(i).padStart(3, '0')}.png`, 'x');
+    await env.tmp.write('big/fonts/inter.woff2', 'font');
+    await env.watcher.pollNow();
+    const settled = env.hub.seq();
+    for (let tick = 0; tick < 12; tick += 1) await env.watcher.pollNow();
+    await new Promise((resolve) => setTimeout(resolve, 300)); // let any scheduled flush (50 ms debounce) emit
+    assert.deepEqual(
+      env.events.filter((e) => e.seq > settled && e.slug === 'big').map((e) => [e.kind, e.files]),
+      [],
+      'nothing changed on disk, so nothing is reported',
+    );
+  });
 });
 
 describe('takeFingerprint (capped, sorted walk)', () => {
