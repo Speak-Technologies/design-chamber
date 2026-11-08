@@ -68,14 +68,16 @@ check alone; nothing is shown to the user. While the live watcher is working, th
 only looks at a tenth of the designs each time (a full pass takes about 30 seconds), so the
 backstop stays cheap with many designs; a change the watcher reports shows up within about a
 second as before, and one it silently dropped shows up within about 30 seconds. When the
-watcher is off, has just failed or cannot work on this folder (OneDrive, network shares), the
-check still looks at every design each time for edits to `design.json`, `index.html`, screens
-and top-level files (within 3 seconds), but walks the nested folders such as `assets/` for
-only a tenth of the designs each time, so edits to nested files show up within about 30
-seconds. That keeps the check cheap with hundreds of designs and files. A check never starts
-while the previous one is still running, which matters on slow network shares. The check notices edits to files inside nested folders (`assets/img/a.png`,
+live watcher is off (it cannot work on this folder, for example at the system's file-watch
+limit, or it has just failed), the check still looks at every design each time for edits to
+`design.json`, `index.html`, screens and top-level files (within 3 seconds), but walks the
+nested folders such as `assets/` for only a tenth of the designs each time, so edits to nested
+files show up within about 30 seconds. That keeps the check cheap with hundreds of designs and
+files. A check never starts while the previous one is still running, which matters on slow
+network shares.
+The check notices edits to files inside nested folders (`assets/img/a.png`,
 files added in a subfolder) and to top-level files such as `styles.css`, by modification time
-and size; it looks at up to 256 such entries per design, in sorted order, and skips hidden
+and size; it looks at up to 256 nested entries per design, in sorted order, and skips hidden
 folders and shortcuts (symlinks). When the agent rewrites `design.json` while the service is
 merging comments into it, the service re-merges from the agent's new file instead of writing
 over it. If a notification goes missing (Windows and OneDrive can drop or merge them), the
