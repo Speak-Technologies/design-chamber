@@ -16,8 +16,12 @@
 //
 // The 3 s poll is a backstop, not the main path. While the live watcher is healthy it
 // fingerprints only a rotating tenth of the designs per tick (a full pass in about 30 s, so a
-// change the watcher silently dropped on OneDrive/network still shows); with no watcher, or on
-// a poll-only root, every design is fingerprinted each tick (changes within 3 s).
+// change the watcher silently dropped on OneDrive/network still shows). With no watcher, or on
+// a poll-only root, every design gets the cheap fingerprint each tick (design.json, index.html,
+// screens, top-level files: changes within 3 s) and the nested walk of `assets/**` rotates
+// through the designs the same way (every design's nested files re-checked within about 30 s):
+// walking 300 files in each of 300 designs every 3 s cost over a second of CPU per tick.
+// A tick never starts while the previous one is still running (slow SMB shares).
 //
 // A root change (settings) restarts the watcher on the new root and emits one `root` event;
 // files are never moved (§9.2). A broken fs.watch degrades to poll-only and is retried; one
@@ -60,11 +64,13 @@ const byName = (a: { name: string }, b: { name: string }): number => (a.name < b
  * (`assets` first, then by name, names sorted per folder: readdir order differs by platform and an
  * unsorted walk would move the cap boundary and invent changes). Dot names and symlinks are
  * skipped, so a link to `/` cannot send the poll across the disk; once `budget` entries are used
- * the walk stops and a `<dir>/…` marker is recorded. The design folder's own mtime is not used:
+ * the walk stops and a `<dir>/…` marker is recorded. With `nested` false the walk is skipped
+ * (the cheap, per-tick form); `carryNested` fills those keys in from the last full one. The design
+ * folder's own mtime is not used:
  * the service's dot writes in it (`.thumb.png` publish, design.json tmp files) would read as
  * content changes.
  */
-export const takeFingerprint = async (dir: string, budget: number = FINGERPRINT_ENTRIES_MAX): Promise<Fingerprint> => {
+export const takeFingerprint = async (dir: string, budget: number = FINGERPRINT_ENTRIES_MAX, nested = true): Promise<Fingerprint> => {
   const fingerprint: Fingerprint = new Map();
   for (const name of TRACKED_TOP_FILES) {
     const info = await stat(path.join(dir, name)).catch(() => null);
@@ -126,9 +132,29 @@ export const takeFingerprint = async (dir: string, budget: number = FINGERPRINT_
       if (!spend(entry.name)) return fingerprint;
       fingerprint.set(`${entry.name}/`, 'dir');
     }
-    if (!(await walk(path.join(dir, entry.name), entry.name, entry.name, 1))) return fingerprint;
+    if (nested && !(await walk(path.join(dir, entry.name), entry.name, entry.name, 1))) return fingerprint;
   }
   return fingerprint;
+};
+
+/** A key from inside a folder (`assets/a.png`, `assets/img/`, `assets/…`), not a top-level one, `<top>/`, or `screens/*.html`. */
+const isNestedKey = (key: string): boolean => {
+  if (key.startsWith('screens/')) return false;
+  const segments = key.split('/');
+  return segments.length >= 3 || (segments.length === 2 && segments[1] !== '');
+};
+
+/**
+ * A cheap fingerprint plus the nested keys of the last full one, for the folders that still exist,
+ * so a tick that skipped the walk reports no change for files it did not look at.
+ */
+export const carryNested = (previous: Fingerprint | undefined, cheap: Fingerprint): Fingerprint => {
+  if (previous === undefined) return cheap;
+  const merged: Fingerprint = new Map(cheap);
+  for (const [key, value] of previous) {
+    if (isNestedKey(key) && cheap.has(`${key.slice(0, key.indexOf('/'))}/`)) merged.set(key, value);
+  }
+  return merged;
 };
 
 /**
@@ -164,8 +190,8 @@ export type WatcherOptions = {
   watchImpl?: typeof fsWatch;
   /** Ticks for the rotating sweep to cover every design while the live watcher is healthy. Default `SWEEP_TICKS` (10). */
   sweepTicks?: number;
-  /** Test seam; defaults to `takeFingerprint`. */
-  fingerprint?: (dir: string) => Promise<Fingerprint>;
+  /** Test seam; defaults to `takeFingerprint`. `nested: false` is the cheap per-tick form. */
+  fingerprint?: (dir: string, options: { nested: boolean }) => Promise<Fingerprint>;
 };
 
 export type Watcher = {
@@ -195,7 +221,7 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
   const debounceMs = options.debounceMs ?? WATCH_DEBOUNCE_MS;
   const pollMs = options.pollMs ?? WATCH_POLL_MS;
   const sweepTicks = Math.max(1, Math.floor(options.sweepTicks ?? SWEEP_TICKS));
-  const fingerprint = options.fingerprint ?? ((dir: string) => takeFingerprint(dir));
+  const fingerprint = options.fingerprint ?? ((dir: string, { nested }: { nested: boolean }) => takeFingerprint(dir, undefined, nested));
   // Linux: one plain watch per folder (folder-watch.ts) — Node's recursive watch there misses
   // writes to files that were replaced by rename.
   const watchImpl = options.watchImpl ?? (process.platform === 'linux' ? linuxRecursiveWatch : fsWatch);
@@ -242,7 +268,7 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     const listing = await readRoot(root);
     knownSlugs = listing.slugs;
     knownLoose = listing.loose;
-    for (const slug of knownSlugs) fingerprints.set(slug, await fingerprint(path.join(root, slug)));
+    for (const slug of knownSlugs) fingerprints.set(slug, await fingerprint(path.join(root, slug), { nested: true }));
   };
 
   /** One readdir of the root: design folders, and the loose html files (regular files only, as `GET /designs` lists them). */
@@ -276,7 +302,7 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     }
     for (const slug of current) {
       if (knownSlugs.has(slug)) continue;
-      fingerprints.set(slug, await fingerprint(path.join(root, slug)));
+      fingerprints.set(slug, await fingerprint(path.join(root, slug), { nested: true }));
       hub.emit({ slug, kind: 'added' });
     }
     knownSlugs = current;
@@ -292,12 +318,12 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     }
     if (!knownSlugs.has(slug)) {
       knownSlugs.add(slug);
-      fingerprints.set(slug, await fingerprint(dir));
+      fingerprints.set(slug, await fingerprint(dir, { nested: true }));
       hub.emit({ slug, kind: 'added' });
       return;
     }
     const previous = fingerprints.get(slug);
-    const next = await fingerprint(dir);
+    const next = await fingerprint(dir, { nested: true });
     fingerprints.set(slug, next);
     // Windows' recursive watch and OneDrive drop or coalesce events: a change this batch did not
     // name is reported with it, because the fingerprint just moved past it and the poll backstop
@@ -370,20 +396,20 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     const healthy = watcher !== null && !pollOnly;
     if (watcher === null && !pollOnly && (await isDirectory(currentRoot))) startFsWatch();
     await scanRoot();
-    // A healthy live watcher reports changes itself; the poll then only re-checks a rotating slice
-    // as the net under events the platform dropped. Without one (never started, died, poll-only
-    // root) every design is checked, as before.
+    // A healthy live watcher reports changes itself, so the poll only re-checks a rotating slice,
+    // fully, as the net under events the platform dropped. Without one (never started, died,
+    // poll-only root) every design gets the cheap fingerprint and the rotating slice also gets the
+    // nested walk: that walk is what costs, and every design still gets it within `sweepTicks` ticks.
     const sorted = [...knownSlugs].sort();
-    let slugs = sorted;
-    if (healthy) {
-      const swept = sweepSlice(sorted, sweepCursor, Math.ceil(sorted.length / sweepTicks));
-      slugs = swept.slice;
-      sweepCursor = swept.next;
-    }
-    for (const slug of slugs) {
+    const swept = sweepSlice(sorted, sweepCursor, Math.ceil(sorted.length / sweepTicks));
+    sweepCursor = swept.next;
+    const deep = new Set(swept.slice);
+    for (const slug of healthy ? swept.slice : sorted) {
       const dir = path.join(currentRoot, slug);
-      const next = await fingerprint(dir);
+      const nested = deep.has(slug);
       const previous = fingerprints.get(slug);
+      const taken = await fingerprint(dir, { nested });
+      const next = nested ? taken : carryNested(previous, taken);
       fingerprints.set(slug, next);
       if (previous === undefined) continue; // baseline seeded this tick
       const changed = diffFingerprints(previous, next);
@@ -423,8 +449,15 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
 
   startFsWatch();
   let ready = seedScan().catch((error) => log.warn('watch.seed-failed', { error: error instanceof Error ? error.message : String(error) }));
+  let tickRunning = false;
   pollTimer = setInterval(() => {
-    pollTick().catch((error) => log.warn('watch.poll-failed', { error: error instanceof Error ? error.message : String(error) }));
+    if (tickRunning) return; // a slow share: let the running tick finish instead of stacking another
+    tickRunning = true;
+    pollTick()
+      .catch((error) => log.warn('watch.poll-failed', { error: error instanceof Error ? error.message : String(error) }))
+      .finally(() => {
+        tickRunning = false;
+      });
   }, pollMs);
   pollTimer.unref?.();
 

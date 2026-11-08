@@ -12,7 +12,7 @@ import type { FSWatcher } from 'node:fs';
 
 import { createChangeHub } from '../../../src/service/changes.ts';
 import { createDesignStore } from '../../../src/service/store.ts';
-import { FINGERPRINT_ENTRIES_MAX, startWatcher, sweepSlice, takeFingerprint, type Fingerprint, type Watcher } from '../../../src/service/watch.ts';
+import { FINGERPRINT_ENTRIES_MAX, carryNested, startWatcher, sweepSlice, takeFingerprint, type Fingerprint, type Watcher } from '../../../src/service/watch.ts';
 import type { ChangeHub, Logger, SettingsStore } from '../../../src/service/context.ts';
 import { WATCH_POLL_MS } from '../../../src/shared/limits.ts';
 import type { ChangeEvent, ChangeKind } from '../../../src/shared/types.ts';
@@ -40,7 +40,7 @@ const makeWatchEnv = async (
     watchImpl?: typeof import('node:fs').watch;
     withStore?: boolean;
     sweepTicks?: number;
-    fingerprint?: (dir: string) => Promise<Fingerprint>;
+    fingerprint?: (dir: string, options: { nested: boolean }) => Promise<Fingerprint>;
   } = {},
 ): Promise<WatchEnv & { store?: ReturnType<typeof createDesignStore> }> => {
   const tmp = await useTmpRoot(t);
@@ -480,15 +480,22 @@ describe('rotating sweep while the live watcher is healthy (phase 0b)', () => {
     return { impl, calls: () => calls, fail: (error: Error) => errorListeners.at(-1)?.(error) };
   };
 
-  /** Counts fingerprint calls per design folder name. */
+  /** Counts fingerprint calls per design folder name: `counts` all of them, `deep` the ones that walked nested folders. */
   const counting = () => {
     const counts = new Map<string, number>();
+    const deep = new Map<string, number>();
     return {
       counts,
-      fingerprint: (dir: string): Promise<Fingerprint> => {
+      deep,
+      clear: () => {
+        counts.clear();
+        deep.clear();
+      },
+      fingerprint: (dir: string, options: { nested: boolean }): Promise<Fingerprint> => {
         const slug = path.basename(dir);
         counts.set(slug, (counts.get(slug) ?? 0) + 1);
-        return takeFingerprint(dir);
+        if (options.nested) deep.set(slug, (deep.get(slug) ?? 0) + 1);
+        return takeFingerprint(dir, undefined, options.nested);
       },
     };
   };
@@ -517,7 +524,7 @@ describe('rotating sweep while the live watcher is healthy (phase 0b)', () => {
     const slugs = Array.from({ length: 20 }, (_, i) => `design-${String(i).padStart(2, '0')}`);
     await makeDesigns(env, slugs);
     await env.watcher.pollNow(); // the silent watcher reported nothing: the poll finds the new folders
-    spy.counts.clear();
+    spy.clear();
 
     for (let tick = 0; tick < 10; tick += 1) await env.watcher.pollNow();
     assert.deepEqual([...spy.counts.keys()].sort(), slugs);
@@ -548,51 +555,106 @@ describe('rotating sweep while the live watcher is healthy (phase 0b)', () => {
 
     watch.fail(Object.assign(new Error('too many open files'), { code: 'EMFILE' }));
     await writeFile(env.tmp.at('cc/index.html'), '<h1>changed while the watcher was down, longer</h1>', 'utf8');
-    spy.counts.clear();
+    spy.clear();
     await env.watcher.pollNow();
-    assert.deepEqual([...spy.counts].sort(), [['aa', 1], ['bb', 1], ['cc', 1], ['dd', 1]], 'a full sweep, not a slice');
+    assert.deepEqual([...spy.counts].sort(), [['aa', 1], ['bb', 1], ['cc', 1], ['dd', 1]], 'every design looked at, not a slice');
     assert.equal(watch.calls(), 2, 'the poll tick restarted the watcher');
     await env.waitForEvent((e) => e.seq > mark && e.slug === 'cc' && e.kind === 'files', 6000);
 
-    spy.counts.clear();
+    spy.clear();
     await env.watcher.pollNow();
     assert.equal([...spy.counts.values()].reduce((a, b) => a + b, 0), 1, 'healthy again: one design per tick for four designs at sweepTicks 10');
   });
 
-  test('★ poll-only root (fs.watch unavailable): every poll fingerprints every design; nested asset edits, a new nested file and a top-level stylesheet edit are reported', async (t) => {
-    const unavailable = (() => {
-      throw Object.assign(new Error('ENOSPC: System limit for number of file watchers reached'), { code: 'ENOSPC' });
-    }) as unknown as typeof import('node:fs').watch;
+  const unavailableWatch = (() => {
+    throw Object.assign(new Error('ENOSPC: System limit for number of file watchers reached'), { code: 'ENOSPC' });
+  }) as unknown as typeof import('node:fs').watch;
+
+  test('★ poll-only root: every design gets the cheap check each tick and the nested walk rotates, so a pass over 20 designs walks each exactly once', async (t) => {
     const spy = counting();
-    const env = await makeWatchEnv(t, { watchImpl: unavailable, pollMs: 600_000, sweepTicks: 10, fingerprint: spy.fingerprint });
+    const env = await makeWatchEnv(t, { watchImpl: unavailableWatch, pollMs: 600_000, sweepTicks: 10, fingerprint: spy.fingerprint });
+    const slugs = Array.from({ length: 20 }, (_, i) => `design-${String(i).padStart(2, '0')}`);
+    await makeDesigns(env, slugs);
+    await env.watcher.pollNow();
+    spy.clear();
+
+    for (let tick = 0; tick < 10; tick += 1) await env.watcher.pollNow();
+    assert.deepEqual([...new Set(spy.counts.values())], [10], 'cheap check: every design on every tick');
+    assert.deepEqual([...spy.deep.keys()].sort(), slugs);
+    assert.deepEqual([...new Set(spy.deep.values())], [1], 'nested walk: each design once per pass of 10 ticks');
+  });
+
+  test('★ poll-only root: a top-level stylesheet edit shows on the next tick; nested asset edits and new nested files show within one pass', async (t) => {
+    const env = await makeWatchEnv(t, { watchImpl: unavailableWatch, pollMs: 600_000, sweepTicks: 10 });
     await makeDesigns(env, ['pp', 'qq', 'rr']);
     await env.tmp.write('pp/assets/img/a.png', 'AAAA');
     await env.tmp.write('pp/styles.css', 'body{}');
     await env.watcher.pollNow();
-    spy.counts.clear();
-    await env.watcher.pollNow();
-    assert.deepEqual([...spy.counts].sort(), [['pp', 1], ['qq', 1], ['rr', 1]], 'poll-only: no slicing');
+    const pass = async (): Promise<void> => {
+      for (let tick = 0; tick < 10; tick += 1) await env.watcher.pollNow();
+    };
+
+    let mark = env.hub.seq();
+    await writeFile(env.tmp.at('pp/styles.css'), 'body{margin:0}', 'utf8');
+    await env.watcher.pollNow(); // one tick, not a pass
+    const css = await env.waitForEvent((e) => e.seq > mark && e.slug === 'pp' && e.kind === 'files', 6000);
+    assert.deepEqual(css.files, ['styles.css']);
 
     // In-place rewrite: same size, new mtime. Nothing about the folder listing changes.
-    let mark = env.hub.seq();
+    mark = env.hub.seq();
     await writeFile(env.tmp.at('pp/assets/img/a.png'), 'BBBB');
     const later = new Date(Date.now() + 10_000);
     await utimes(env.tmp.at('pp/assets/img/a.png'), later, later);
-    await env.watcher.pollNow();
+    await pass();
     const rewrite = await env.waitForEvent((e) => e.seq > mark && e.slug === 'pp' && e.kind === 'files', 6000);
     assert.deepEqual(rewrite.files, ['assets/img/a.png']);
 
     mark = env.hub.seq();
     await env.tmp.write('pp/assets/img/deeper/b.png', 'new');
-    await env.watcher.pollNow();
+    await pass();
     const nested = await env.waitForEvent((e) => e.seq > mark && e.slug === 'pp' && e.kind === 'files', 6000);
     assert.ok((nested.files ?? []).includes('assets/img/deeper/b.png'), JSON.stringify(nested.files));
 
-    mark = env.hub.seq();
-    await writeFile(env.tmp.at('pp/styles.css'), 'body{margin:0}', 'utf8');
+    // Ticks that skipped the walk must not read as "the nested files vanished".
+    const settled = env.hub.seq();
+    await pass();
+    assert.deepEqual(env.events.filter((e) => e.seq > settled && e.slug === 'pp'), [], 'nothing changed, nothing reported');
+  });
+
+  test('a poll tick never starts while the previous one is still running (slow network share)', async (t) => {
+    let active = 0;
+    let maxActive = 0;
+    let started = 0;
+    let release: () => void = () => {};
+    let gate: Promise<void> | null = null;
+    const slow = async (dir: string, options: { nested: boolean }): Promise<Fingerprint> => {
+      if (gate !== null) {
+        started += 1;
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await gate;
+        active -= 1;
+      }
+      return takeFingerprint(dir, undefined, options.nested);
+    };
+    const env = await makeWatchEnv(t, { watchImpl: unavailableWatch, pollMs: 15, sweepTicks: 1, fingerprint: slow });
+    await makeDesigns(env, ['aa']);
     await env.watcher.pollNow();
-    const css = await env.waitForEvent((e) => e.seq > mark && e.slug === 'pp' && e.kind === 'files', 6000);
-    assert.deepEqual(css.files, ['styles.css']);
+
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const deadline = Date.now() + 6000;
+    while (started === 0) {
+      if (Date.now() > deadline) throw new Error('the timer-driven poll never started');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    // Proving a negative takes time: well over ten poll intervals, during which the first tick is held.
+    const heldUntil = Date.now() + 250;
+    while (Date.now() < heldUntil) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(started, 1, 'no second tick began while the first was running');
+    assert.equal(maxActive, 1);
+    release();
   });
 });
 
@@ -652,5 +714,28 @@ describe('takeFingerprint (capped, sorted walk)', () => {
     assert.ok(fingerprint.has('assets/l1/l2/l3/l4/l5/kept.txt'), 'level 6 entries are fingerprinted');
     assert.ok(!fingerprint.has('assets/l1/l2/l3/l4/l5/l6/too-deep.txt'), 'nothing below level 6');
     if (linked) assert.ok(![...fingerprint.keys()].some((key) => key.startsWith('assets/link')), 'a symlink is neither keyed nor walked');
+  });
+
+  test('carryNested keeps the last walk\'s nested keys for folders that still exist and drops those of removed folders', () => {
+    const previous: Fingerprint = new Map([
+      ['index.html', '1:1'],
+      ['assets/', '5:dir'],
+      ['assets/a.png', '2:2'],
+      ['assets/img/', 'dir'],
+      ['assets/…', 'truncated'],
+      ['fonts/', 'dir'],
+      ['fonts/x.woff2', '3:3'],
+      ['screens/home.html', '4:4'],
+    ]);
+    const cheap: Fingerprint = new Map([
+      ['index.html', '1:1'],
+      ['assets/', '6:dir'],
+      ['screens/home.html', '9:9'],
+    ]);
+    assert.deepEqual(
+      [...carryNested(previous, cheap)].sort(),
+      [['assets/', '6:dir'], ['assets/a.png', '2:2'], ['assets/img/', 'dir'], ['assets/…', 'truncated'], ['index.html', '1:1'], ['screens/home.html', '9:9']],
+    );
+    assert.equal(carryNested(undefined, cheap), cheap);
   });
 });
