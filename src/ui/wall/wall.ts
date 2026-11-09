@@ -30,10 +30,11 @@ import { createHitController } from './hit-controller.ts';
 import { createInputController, type InputController } from './input-controller.ts';
 import { createPinLayer } from './pin-layer.ts';
 import { createPopoverLayer } from './popover-layer.ts';
+import { createListeners } from '../model/listeners.ts';
 import { createWallContext, late } from './wall-context.ts';
-import type { Board, BoardLookup, WallOptions } from './wall-types.ts';
+import type { Board, BoardLookup, WallOptions, WallSelectionEvent } from './wall-types.ts';
 
-export type { WallOptions } from './wall-types.ts';
+export type { WallOptions, WallSelection, WallSelectionEvent } from './wall-types.ts';
 
 export type WallHandle = {
   el: HTMLElement;
@@ -62,6 +63,16 @@ export type WallHandle = {
   /** Bring a comment's pin into view and open its thread. */
   focusComment: (id: string) => void;
   focus: () => void;
+  /**
+   * Seam S4 (ask bar): the element selection changed (`selected`, `commented`, `cleared`). The
+   * listener list is live now; the events start firing when the ask branch fills in `popover-layer`.
+   * Returns the unsubscribe function.
+   */
+  onSelection: (listener: (event: WallSelectionEvent) => void) => () => void;
+  /** Seam S4: forget the selected element (the ask bar's chip was removed). */
+  clearSelection: () => void;
+  /** Seam S5 (build strip): highlight the boards of these sources (screen ids; null = the page); null clears. */
+  markRecent: (sources: ReadonlySet<string | null> | null) => void;
   dispose: () => void;
 };
 
@@ -77,7 +88,8 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
   const frameMessage = late<(board: Board, message: FrameToPageMessage) => void>('the frame message handler');
 
   const camera = createCameraController(ctx, hooks);
-  const popovers = createPopoverLayer(ctx, camera);
+  const selection = createListeners<[WallSelectionEvent]>();
+  const popovers = createPopoverLayer(ctx, camera, { emitSelection: selection.emit });
   const pins = createPinLayer(ctx, camera, popovers, boardLookup);
   const hit = createHitController(ctx, { camera, popovers, boards: boardLookup, isPanning: () => input().isPanning() });
   const boards = createBoardSet(ctx, { camera, pins, popovers, onFrameMessage: (board, message) => frameMessage()(board, message) });
@@ -209,6 +221,9 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
       }, 120);
     },
     focus: () => surface.focus({ preventScroll: true }),
+    onSelection: selection.add,
+    clearSelection: () => popovers.clearSelection(),
+    markRecent: (sources) => boards.markRecent(sources),
     dispose: () => {
       ctx.disposed = true;
       popovers.close();

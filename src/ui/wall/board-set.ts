@@ -46,6 +46,14 @@ export type BoardSet = BoardLookup & {
   paintLabel: (board: Board) => void;
   /** Position every label for the current camera. */
   placeLabels: () => void;
+  /**
+   * Seam S5 (Phase 1, build strip): the sources (screen ids; null = the page) whose boards the
+   * agent just wrote, or null for none. Today it only stores them; the build-strip branch makes
+   * `paintLabel` and `sizeBoard` set `data-recent="true"` on those boards and clear the rest.
+   */
+  markRecent: (sources: ReadonlySet<string | null> | null) => void;
+  /** The sources last passed to `markRecent`. */
+  recent: () => ReadonlySet<string | null> | null;
   /** Load or pause frames by the live budget on the next animation frame. */
   queueSync: () => void;
   dispose: () => void;
@@ -67,6 +75,7 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
   const boards = new Map<string, Board>();
   let layout: WallLayout = { boards: [], bounds: { x: 0, y: 0, w: 0, h: 0 } };
   let syncQueued = false;
+  let recent: ReadonlySet<string | null> | null = null;
 
   const values = (): IterableIterator<Board> => boards.values();
 
@@ -373,6 +382,10 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     placeLabels: () => {
       for (const board of boards.values()) placeLabel(board);
     },
+    markRecent: (sources) => {
+      recent = sources;
+    },
+    recent: () => recent,
     queueSync: () => {
       if (syncQueued) return;
       syncQueued = true;

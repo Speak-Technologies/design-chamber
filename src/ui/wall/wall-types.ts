@@ -3,7 +3,7 @@
 
 import type { PinPlacement, PinTracker } from '../../guest/anchoring.ts';
 import type { Camera, WallArtboard } from '../../guest/camera.ts';
-import type { CreateCommentBody, PatchCommentBody } from '../../shared/api.ts';
+import type { AskElement, CreateCommentBody, PatchCommentBody } from '../../shared/api.ts';
 import type { Screen, Viewport } from '../../shared/types.ts';
 import type { Point } from '../model/wall-model.ts';
 import type { CardHandle } from './comment-ui.ts';
@@ -35,7 +35,23 @@ export type WallOptions = {
   onNotice: (message: string) => void;
   /** Anchor resolution finished or a frame changed state: detached pins and remote references may have changed. */
   onStatus: () => void;
+  /**
+   * Seam S6 (Phase 1, send one pin): send one open comment to the chat, saving `body` first when it was edited.
+   * Nobody passes it yet; when set, `popover-layer.openThread` hands it to the thread card as `onSend`.
+   */
+  onSendComment?: (id: string, body: string) => Promise<void>;
 };
+
+/**
+ * Seam S4 (Phase 1, ask bar): the element the user clicked to comment on. `key` is
+ * `${artboardId}:${anchor.selector}`; `where` is the composer's own location label.
+ */
+export type WallSelection = { key: string; element: AskElement; tag: string; where: string };
+export type WallSelectionEvent =
+  | { type: 'selected'; selection: WallSelection }
+  /** A comment was added on the selected element (same `key`): the element has a comment now. */
+  | { type: 'commented'; key: string }
+  | { type: 'cleared' };
 
 export type Board = {
   art: Artboard;

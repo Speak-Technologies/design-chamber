@@ -1,6 +1,9 @@
 <!doctype html>
 <!-- Mock OpenChamber host for the visual harness (shoot.mjs): sends `ready` with the openchamber-dark
-     or -light theme tokens and answers toast / clipboard / storage / open-url, recording them. -->
+     or -light theme tokens and answers toast / clipboard / storage / open-url, recording them. It also
+     answers workspace reads and subscriptions (one project; sessions you set with __host.setActivity),
+     prompt (`sent`; `__host.failNext = 'prompt'` fails the next one), compose and open-session, and
+     records those payloads. Storage starts with the first-run tip dismissed unless the URL has ?tip=1. -->
 <html>
   <head>
     <meta charset="utf-8" />
@@ -27,13 +30,40 @@
         light: { background: '#fdfcfa', elevated: '#f3f2f0', foreground: '#44443d', muted: '#696960', subtle: '#f7f6f4', border: '#e5e1debf', hover: '#0000000a', selection: '#a9998f2b', focus: '#b3501755', primary: '#b35017', mutedSurface: '#f7f6f4', elevatedForeground: '#44443d', active: '#00000014', selectionForeground: '#44443d', primaryForeground: '#ffffff', primaryText: '#9a4310', successText: '#517734', warningText: '#886914', errorText: '#b7493f', infoText: '#2c6ebd', success: '#517734', warning: '#886914', error: '#b7493f', info: '#2c6ebd' },
       };
       const store = new Map();
-      window.__host = { toasts: [], clipboard: [], opened: [], setTheme: (next) => { mode = next; sendReady(); } };
+      // The rail's first-run tip is out of the way, so existing screenshots stay as they are; ?tip=1 shows it.
+      if (params.get('tip') !== '1') store.set('tip:full-screen', { dismissed: true, at: '2026-11-01T09:00:00.000Z' });
+      const DIRECTORY = 'C:\\Users\\you\\Documents\\GitHub\\ember-oak';
+      const PROJECT = { id: 'proj_ember', name: 'ember-oak', directory: DIRECTORY };
+      // Linked sessions the build strip and the ask bar can see: none until a scenario sets one.
+      const sessions = new Map();
+      // Open workspace subscriptions: subscriptionId -> query.
+      const subscriptions = new Map();
+      window.__host = {
+        toasts: [], clipboard: [], opened: [],
+        prompts: [], composes: [], sessionsOpened: [],
+        /** Set to 'prompt' to make the next prompt call fail once. */
+        failNext: null,
+        setTheme: (next) => { mode = next; sendReady(); },
+        /** Set a session's activity ('idle', 'running', 'retrying', 'waiting-permission', 'waiting-question') and outcome ('completed', 'failed' or null) and push it to every sessions subscription. */
+        setActivity: (sessionId, activity, outcome = null) => {
+          const now = Date.now();
+          const existing = sessions.get(sessionId);
+          sessions.set(sessionId, {
+            id: sessionId, title: existing ? existing.title : 'Pricing page', projectId: PROJECT.id, directory: DIRECTORY, parentId: null,
+            createdAt: existing ? existing.createdAt : now, updatedAt: now, archivedAt: null, worktree: null,
+            activity, outcome, items: [],
+          });
+          pushSessions();
+        },
+        /** Forget a session, as when the chat was deleted. */
+        removeSession: (sessionId) => { sessions.delete(sessionId); pushSessions(); },
+      };
       const g = document.getElementById('g');
       const send = (message) => g.contentWindow.postMessage({ channel: 'openchamber.sdk', v: 1, ...message }, '*');
       const ready = () => ({
         theme: { mode, tokens: { ...THEMES[mode], font: FONT, mono: MONO, radius: '0.5625rem' } },
         locale: 'en-US',
-        directory: 'C:\\Users\\you\\Documents\\GitHub\\ember-oak',
+        directory: DIRECTORY,
         session: { id: 'ses_current', title: 'Pricing page', busy: false },
         surface,
         connection: { connected: false, account: '' },
@@ -42,12 +72,23 @@
         features: { deviceStorage: true },
       });
       function sendReady() { send({ type: 'ready', payload: ready() }); }
+      const snapshotFor = (query) => {
+        if (query.kind === 'projects') return { kind: 'projects', state: 'ready', projects: [PROJECT] };
+        if (query.kind === 'worktrees') return { kind: 'worktrees', projectId: query.projectId, state: 'ready', worktrees: [] };
+        return { kind: 'sessions', projectId: query.projectId, state: 'ready', coverage: [{ directory: DIRECTORY, state: 'ready' }], sessions: query.projectId === PROJECT.id ? [...sessions.values()] : [] };
+      };
+      function pushSessions() {
+        for (const [subscriptionId, query] of subscriptions) {
+          if (query.kind === 'sessions') send({ type: 'workspace', payload: { subscriptionId, snapshot: snapshotFor(query) } });
+        }
+      }
       window.addEventListener('message', (event) => {
         if (event.source !== g.contentWindow) return;
         const m = event.data;
         if (!m || m.channel !== 'openchamber.sdk') return;
         if (m.type === 'hello') { sendReady(); return; }
         const ok = (payload) => send({ type: 'result', id: m.id, ok: true, payload });
+        const fail = (error) => send({ type: 'result', id: m.id, ok: false, error });
         if (m.type === 'toast') {
           window.__host.toasts.push(m.payload);
           const el = document.createElement('div');
@@ -64,7 +105,19 @@
           if (p.op === 'get') ok(store.has(p.key) ? { storage: true, op: 'get', found: true, value: store.get(p.key) } : { storage: true, op: 'get', found: false });
           else if (p.op === 'set') { store.set(p.key, p.value); ok({ storage: true, op: 'set' }); }
           else ok({ storage: true, op: p.op, keys: [...store.keys()] });
-        } else if (m.id) ok({});
+        } else if (m.type === 'workspace-read') ok(snapshotFor(m.payload));
+        else if (m.type === 'workspace-subscribe') {
+          subscriptions.set(m.payload.subscriptionId, m.payload.query);
+          ok({});
+          send({ type: 'workspace', payload: { subscriptionId: m.payload.subscriptionId, snapshot: snapshotFor(m.payload.query) } });
+        } else if (m.type === 'workspace-unsubscribe') { subscriptions.delete(m.payload.subscriptionId); if (m.id) ok({}); }
+        else if (m.type === 'prompt') {
+          window.__host.prompts.push(m.payload);
+          if (window.__host.failNext === 'prompt') { window.__host.failNext = null; fail('The chat is not available right now.'); }
+          else ok({ sent: 'sent' });
+        } else if (m.type === 'compose') { window.__host.composes.push(m.payload); ok({}); }
+        else if (m.type === 'open-session') { window.__host.sessionsOpened.push(m.payload.sessionId); ok({}); }
+        else if (m.id) ok({});
       });
       g.src = '/panel/index.html';
     </script>
