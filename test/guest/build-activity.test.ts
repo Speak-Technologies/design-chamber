@@ -122,6 +122,18 @@ test('writing works without a session (files-only) and then hides', () => {
   assert.equal(phase(track, T0 + WRITING_WINDOW_MS), 'hidden');
 });
 
+test('a save while the linked chat is idle is not the agent writing; files-only still shows it (KI-8)', () => {
+  const idle = run(sess(T0, 'idle'), files(T0 + SEC, ['screens/home.html']));
+  assert.equal(idle.turnSeen, false);
+  assert.equal(phase(idle, T0 + 2 * SEC), 'hidden');
+  assert.equal(nextDeadline(idle, T0 + 2 * SEC), null, 'nothing to wake for');
+  assert.equal(phase(run(sess(T0, 'none'), files(T0 + SEC, ['screens/home.html'])), T0 + 2 * SEC), 'writing');
+  assert.equal(phase(run(sess(T0, 'gone'), files(T0 + SEC, ['screens/home.html'])), T0 + 2 * SEC), 'writing');
+  // Once the chat starts a turn, files that land are the agent's again.
+  const started = run(sess(T0, 'idle'), files(T0 + SEC, ['a.html']), sess(T0 + 2 * SEC, 'running'), files(T0 + 3 * SEC, ['b.html']));
+  assert.equal(phase(started, T0 + 4 * SEC), 'writing');
+});
+
 test('an added event is "started writing" with no file name', () => {
   const track = run(files(T0, [], true));
   assert.equal(phase(track, T0 + 1), 'writing');
@@ -259,7 +271,7 @@ test('a Done that lingers is not disturbed by an unknown blip', () => {
 // ---- a user's restore is not the agent ----
 
 test('a restore: its file echo inside the quiet window is ignored; after it, the agent counts again', () => {
-  const track = run(sess(T0, 'idle'), { kind: 'restore', at: T0 + 10 * SEC }, files(T0 + 10 * SEC + 300, ['index.html']));
+  const track = run(sess(T0, 'none'), { kind: 'restore', at: T0 + 10 * SEC }, files(T0 + 10 * SEC + 300, ['index.html']));
   assert.equal(track.lastFile, null);
   assert.equal(phase(track, T0 + 11 * SEC), 'hidden');
   assert.equal(inRestoreQuiet(track, T0 + 10 * SEC + RESTORE_QUIET_MS - 1), true);

@@ -38,7 +38,7 @@ import { WATCH_DEBOUNCE_MS, WATCH_POLL_MS } from '../shared/limits.ts';
 import type { ChangeHub, Logger, SettingsStore } from './context.ts';
 import { linuxRecursiveWatch } from './folder-watch.ts';
 import { isLooseHtmlName } from './loose.ts';
-import { isSlug } from './paths.ts';
+import { isAtomicTempName, isSlug } from './paths.ts';
 import { isDirectory } from './root.ts';
 
 /** Top-level files whose mtime/size the poll backstop fingerprints (SPEC §9.4). */
@@ -95,7 +95,7 @@ export const takeFingerprint = async (dir: string, budget: number = FINGERPRINT_
   // (`nested` false) and the full one always agree on them. If the walk's budget gated these keys,
   // a design past the cap would flip `fonts/` in and out between the two forms and read as changed.
   const top = (await readdir(dir, { withFileTypes: true }).catch(() => []))
-    .filter((entry) => !entry.name.startsWith('.') && entry.name !== 'screens')
+    .filter((entry) => !entry.name.startsWith('.') && entry.name !== 'screens' && !isAtomicTempName(entry.name))
     .sort(byName);
   for (const entry of top) {
     if (!entry.isFile() || fingerprint.has(entry.name)) continue;
@@ -120,7 +120,7 @@ export const takeFingerprint = async (dir: string, budget: number = FINGERPRINT_
 
   /** Depth-first, sorted. Answers false when the budget ran out (the caller stops everything). */
   const walk = async (absDir: string, relDir: string, topDir: string, depth: number): Promise<boolean> => {
-    const entries = (await readdir(absDir, { withFileTypes: true }).catch(() => [])).filter((entry) => !entry.name.startsWith('.')).sort(byName);
+    const entries = (await readdir(absDir, { withFileTypes: true }).catch(() => [])).filter((entry) => !entry.name.startsWith('.') && !isAtomicTempName(entry.name)).sort(byName);
     for (const entry of entries) {
       const rel = `${relDir}/${entry.name}`;
       if (entry.isSymbolicLink()) continue;
@@ -366,6 +366,8 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     }
     // .chamber/, .versions/, .thumb.png and the store's .tmp files are service-owned: ignored.
     if (rest.some((segment) => segment.startsWith('.'))) return;
+    // An older build's undotted temp name (`index.html.2bba59ef828e.tmp`) is service-owned too.
+    if (isAtomicTempName(segments[segments.length - 1] ?? '')) return;
     schedule(first, rest.length > 0 ? [rest.join('/')] : []);
   };
 

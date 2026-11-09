@@ -72,5 +72,16 @@ export const askResultText = (outcome: AskOutcome): string => {
   }
 };
 
+/**
+ * The toast after "Ask the agent to fix it" (Checks badge, remote-files banner), by what `deliver` did.
+ * Null when the flow already told the user: a busy agent leaves the request in the composer with its own toast.
+ */
+export const askRequestToast = (outcome: AskOutcome): string | null => {
+  if (outcome === 'composed') return null;
+  // The service wrote this request, not the user: the ask bar's "your message" would be wrong.
+  if (outcome === 'new-session') return 'Started a new chat with the request.';
+  return askResultText(outcome);
+};
+
 /** Under the bar when a send fails; the message and the chip are still there. */
 export const askFailureText = (reason: string): string => `Couldn't send. ${reason.trim()} Your message is still here.`;

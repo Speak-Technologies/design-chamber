@@ -467,6 +467,68 @@ test('ask, no linked chat → a new linked chat; no project → the plain messag
   assert.equal(none.host.callsOf('startSession').length, 0);
 });
 
+// ---- "Ask the agent to fix it" (checks and offline) uses the same delivery as comments and the ask bar ----
+
+const checksText = (s: Setup): string => {
+  const text = s.service.designs.get(COFFEE)?.design.title;
+  return `[Design Chamber] Fix what the check found in "${text}".`;
+};
+
+test('askAgent, the linked chat is gone → one new linked chat carrying the checks text (no NO_SESSION error)', async () => {
+  const s = setup({ knownSessions: [], session: { id: 'ses_other', title: 'Other', busy: false } });
+  const result = await s.flows.askAgent(COFFEE, 'checks');
+  assert.equal(result.outcome, 'new-session');
+  assert.equal(s.service.outbox, null);
+  const starts = s.host.callsOf('startSession');
+  assert.equal(starts.length, 1);
+  const [request] = starts[0] as [StartSessionRequest];
+  assert.equal(request.text, checksText(s));
+  assert.equal(request.id, `design:${COFFEE}`);
+  assert.equal(s.service.designs.get(COFFEE)?.design.sessionId, result.sessionId);
+  assert.equal(composed(s).length, 0, 'nothing is appended on top of the new chat');
+});
+
+test('askAgent, no linked chat → exactly one message: the checks text, not "Resuming…" plus the checks text', async () => {
+  const s = setup();
+  const coffee = s.service.designs.get(COFFEE);
+  assert.ok(coffee);
+  coffee.design.sessionId = null;
+  const result = await s.flows.askAgent(COFFEE, 'offline');
+  assert.equal(result.outcome, 'new-session');
+  const starts = s.host.callsOf('startSession');
+  assert.equal(starts.length, 1);
+  assert.match(((starts[0] as [StartSessionRequest])[0].text ?? ''), /work offline/);
+  assert.equal(composed(s).length, 0);
+  assert.equal(s.host.callsOf('prompt').length, 0);
+  assert.equal(s.service.requests.filter((r) => r.path.endsWith('/prompt')).length, 1, 'the continue prompt is not asked for as well');
+});
+
+test('askAgent, the linked chat is selected and busy → appended to its composer; idle → sent; another chat → outbox', async () => {
+  const busy = setup({ session: { id: LINKED, title: 'Coffee', busy: true } });
+  assert.equal((await busy.flows.askAgent(COFFEE, 'checks')).outcome, 'composed');
+  assert.deepEqual(composed(busy).map((request) => [request.mode, request.text]), [['append', checksText(busy)]]);
+  assert.equal(busy.host.callsOf('prompt').length, 0);
+  assert.deepEqual(toasts(busy), [MESSAGES.busyAsk]);
+
+  const idle = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  assert.deepEqual(await idle.flows.askAgent(COFFEE, 'checks'), { outcome: 'sent', sessionId: LINKED });
+  assert.equal(idle.host.callsOf('prompt').length, 1);
+  assert.equal(composed(idle).length, 0);
+
+  const other = setup({ session: { id: 'ses_other', title: 'Other', busy: false } });
+  assert.deepEqual(await other.flows.askAgent(COFFEE, 'checks'), { outcome: 'outbox', sessionId: LINKED });
+  assert.equal(other.service.outbox?.text, checksText(other));
+  assert.deepEqual(other.service.outbox?.commentIds, []);
+  assert.deepEqual(other.host.callsOf('openSession'), [[LINKED]]);
+});
+
+test('askAgent: a service refusal (nothing to ask any more) reaches the caller before any chat is touched', async () => {
+  const s = setup({ session: { id: 'ses_other', title: 'Other', busy: false } });
+  s.service.designs.delete(COFFEE);
+  await assert.rejects(s.flows.askAgent(COFFEE, 'checks'));
+  assert.equal(s.host.callsOf('openSession').length + s.host.callsOf('startSession').length + s.host.callsOf('prompt').length, 0);
+});
+
 test('ask failures: nothing is marked, the error is the user-facing one, and the host is not tried after a service error', async () => {
   const noModel = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
   noModel.host.behavior.prompt = async () => ({ sent: 'no-model' });

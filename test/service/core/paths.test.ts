@@ -12,7 +12,7 @@ import { describe, test, type TestContext } from 'node:test';
 import { refuseRenames } from '../../helpers/refuse-rename.ts';
 
 import { ApiError } from '../../../src/service/http.ts';
-import { foldsCase, isInsideOrEqual, isStrictlyInside, resolveInside, samePath, writeFileAtomic, type ContainmentDeps } from '../../../src/service/paths.ts';
+import { atomicTempPath, foldsCase, isAtomicTempName, isInsideOrEqual, isStrictlyInside, resolveInside, samePath, writeFileAtomic, type ContainmentDeps } from '../../../src/service/paths.ts';
 
 /** A realpath that answers exactly the mapped paths and ENOENTs everything else. */
 const fakeRealpath = (existing: Record<string, string>): ContainmentDeps['realpath'] => {
@@ -286,5 +286,24 @@ describe('writeFileAtomic', () => {
     const refusal = refuseRenames(t, (destination) => destination === target, 'EXDEV');
     await assert.rejects(writeFileAtomic(target, 'new\n'), (error: NodeJS.ErrnoException) => error.code === 'EXDEV');
     assert.equal(refusal.attempts.filter((entry) => entry === target).length, 1);
+  });
+});
+
+describe('atomicTempPath', () => {
+  test('lands in the target\'s own folder, dot-prefixed, and is recognised as a service temp name', () => {
+    const target = path.join('/designs', 'demo', 'screens', 'home.html');
+    const tmp = atomicTempPath(target);
+    assert.equal(path.dirname(tmp), path.dirname(target));
+    assert.match(path.basename(tmp), /^\.home\.html\.[0-9a-f]{12}\.tmp$/);
+    assert.equal(isAtomicTempName(path.basename(tmp)), true);
+    assert.notEqual(atomicTempPath(target), tmp);
+  });
+
+  test('only the service\'s pattern counts as a temp name, dotted or not', () => {
+    assert.equal(isAtomicTempName('index.html.2bba59ef828e.tmp'), true);
+    assert.equal(isAtomicTempName('.index.html.2bba59ef828e.tmp'), true);
+    assert.equal(isAtomicTempName('index.html.tmp'), false);
+    assert.equal(isAtomicTempName('draft.2bba59.tmp'), false);
+    assert.equal(isAtomicTempName('draft.2bba59ef828e.tmp.html'), false);
   });
 });

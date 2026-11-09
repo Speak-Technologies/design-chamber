@@ -9,7 +9,6 @@
 // Names get ` (2)`, ` (3)`… on collision (also between exports running at the same time);
 // writes are atomic (tmp + rename in the same folder). The ZIP is written file by file as it goes.
 
-import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -20,7 +19,7 @@ import { ApiError } from './http.ts';
 import type { DesignRecord, DesignStore, Logger, SettingsStore } from './context.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource } from './bundle.ts';
 import { resolveEntryFile } from './render-cache.ts';
-import { renameWithRetry } from './paths.ts';
+import { atomicTempPath, renameWithRetry } from './paths.ts';
 import { folderErrorSentence } from './root.ts';
 import { userDir } from './user-dirs.ts';
 import { listTracked } from './versions.ts';
@@ -124,7 +123,7 @@ export const createExportService = (deps: ExportDeps): ExportService => {
     const target = uniqueTarget(dir, baseName, reserved);
     const key = reservationKey(target);
     reserved.add(key);
-    const tmp = `${target}.${randomBytes(6).toString('hex')}.tmp`;
+    const tmp = atomicTempPath(target);
     try {
       const bytes = await write(tmp);
       await renameWithRetry(tmp, target);

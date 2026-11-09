@@ -6,7 +6,7 @@
 import type { HostReadyContext, SessionSnapshot, ToastRequest } from '@openchamber/sdk';
 
 import { createChangeFeed, type ChangeFeed } from '../guest/changes.ts';
-import { createFlows, type Flows } from '../guest/flows.ts';
+import { createFlows, type AskOutcome, type Flows } from '../guest/flows.ts';
 import type { GuestHost } from '../guest/host.ts';
 import type { ServiceClient } from '../guest/service-client.ts';
 import { createStore, type Store } from '../guest/store.ts';
@@ -61,18 +61,13 @@ export const host = {
 };
 
 /**
- * A service-written request for the agent, put in the linked chat's composer (the user sends it),
- * starting a linked chat first when there is none. `offline` (§10.7) lists the blocked URLs found
- * in the files; `checks` lists the errors and warnings the Checks badge counts. The service answers
- * 422 when there is nothing to ask any more; that sentence reaches the caller before any chat opens.
+ * A service-written request for the agent (`offline` lists the blocked URLs found in the files;
+ * `checks` lists the errors and warnings the Checks badge counts). It goes by the same delivery as
+ * comments and the ask bar (`flows.askAgent`): the selected chat, the outbox, its composer when the
+ * agent is busy, or a new linked chat when there is none or it is gone. The service answers 422 when
+ * there is nothing to ask any more; that sentence reaches the caller before any chat opens.
  */
-export const askAgent = async (slug: string, purpose: 'offline' | 'checks'): Promise<void> => {
-  const { text } = await client.call('POST /designs/:slug/prompt', { params: { slug }, body: { purpose } });
-  const { design } = await client.call('GET /designs/:slug', { params: { slug } });
-  if (design.sessionId === null) await flows.continueInChat(slug);
-  else if (guestHost.session.get()?.id !== design.sessionId) await guestHost.client.openSession(design.sessionId);
-  await guestHost.client.compose({ text, mode: 'append' });
-};
+export const askAgent = async (slug: string, purpose: 'offline' | 'checks'): Promise<AskOutcome> => (await flows.askAgent(slug, purpose)).outcome;
 
 /** "Ask the agent to make it work offline" (the remote-files banner). */
-export const askSelfContained = (slug: string): Promise<void> => askAgent(slug, 'offline');
+export const askSelfContained = (slug: string): Promise<AskOutcome> => askAgent(slug, 'offline');

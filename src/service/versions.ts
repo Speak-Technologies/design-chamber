@@ -46,7 +46,7 @@ import type {
 import { ApiError } from './http.ts';
 import type { ChangeHub, DesignStore, Logger, ServiceContext } from './context.ts';
 import { RefBlocked, type FileSource } from './bundle.ts';
-import { resolveInside } from './paths.ts';
+import { atomicTempPath, resolveInside } from './paths.ts';
 import {
   CHAMBER_DIR,
   DAMAGED_KEEP_MAX,
@@ -266,7 +266,7 @@ const loadIndex = async (designDir: string, log: Logger): Promise<LoadedIndex> =
 };
 
 const writeAtomic = async (target: string, bytes: Uint8Array | string): Promise<void> => {
-  const tmp = `${target}.${randomBytes(6).toString('hex')}.tmp`;
+  const tmp = atomicTempPath(target);
   try {
     await writeFile(tmp, bytes);
     await rename(tmp, target);
