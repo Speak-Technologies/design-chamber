@@ -206,14 +206,31 @@ const isTransientRenameRefusal = (error: unknown): boolean => {
 };
 
 /**
+ * Rename `from` to `to`, retrying a few times when Windows refuses because another handle has
+ * the target (or the fresh source: an antivirus scan) open for a moment. A refusal that outlasts
+ * the retries, and any other error, is thrown.
+ */
+export const renameWithRetry = async (from: string, to: string): Promise<void> => {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      if (attempt >= RENAME_ATTEMPTS || !isTransientRenameRefusal(error)) throw error;
+      await delay(RENAME_RETRY_MS * attempt);
+    }
+  }
+};
+
+/**
  * Write a file via tmp + rename in its own folder (a partial write is never visible, and the
  * tmp name is dot-prefixed so the watcher ignores it — SPEC §9.4). Creates parent folders.
  *
  * Windows refuses to rename over a file another handle has open (EPERM/EBUSY/EACCES): a list
  * refresh reading state.json, an agent or an antivirus scan. The rename is retried a few
- * times, so that moment does not fail the caller — a failed watcher reconcile is not run again
- * until the agent's next change, which would leave a design provisional. Replacing the file with
- * the same bytes is idempotent, so the retry is safe; a refusal that outlasts it is thrown.
+ * times (`renameWithRetry`), so that moment does not fail the caller — a failed watcher reconcile
+ * is not run again until the agent's next change, which would leave a design provisional.
+ * Replacing the file with the same bytes is idempotent, so the retry is safe.
  */
 export const writeFileAtomic = async (file: string, data: string | Uint8Array): Promise<void> => {
   const dir = path.dirname(file);
@@ -221,15 +238,7 @@ export const writeFileAtomic = async (file: string, data: string | Uint8Array): 
   const tmp = path.join(dir, `.${path.basename(file)}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
   try {
     await writeFile(tmp, data);
-    for (let attempt = 1; ; attempt += 1) {
-      try {
-        await rename(tmp, file);
-        break;
-      } catch (error) {
-        if (attempt >= RENAME_ATTEMPTS || !isTransientRenameRefusal(error)) throw error;
-        await delay(RENAME_RETRY_MS * attempt);
-      }
-    }
+    await renameWithRetry(tmp, file);
   } catch (error) {
     await rm(tmp, { force: true }).catch(() => undefined);
     throw error;

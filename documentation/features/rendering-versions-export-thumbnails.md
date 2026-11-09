@@ -78,6 +78,12 @@ Because a guest frame cannot download files, the service writes them itself:
 - **ZIP** — the whole design folder (without `design.json`) under `<slug>/`;
 - **single-file HTML** — the bundled document with every asset inlined (no bridge marker),
   for a page or one chosen canvas screen.
+The ZIP is written to disk file by file as it goes, so a large design does not freeze the
+service (other requests, live updates and thumbnails keep running), and memory use is about
+the largest single file. Photos, video, fonts and other already-compressed files are stored
+as they are; everything else is compressed. A single file over **512 MB** is refused with a
+message naming it (move it out of the design folder and export again). Two exports started at
+the same moment get different names (`x.zip`, `x (2).zip`).
 Files land in `~/Downloads` (or a configured downloads folder, falling back to
 `<designs root>/.exports` when it cannot be created), named `<slug>.zip` /
 `<slug>[-<screen>].html` with ` (2)`, ` (3)`… on collisions. **Show in folder** then opens the

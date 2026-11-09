@@ -4,7 +4,7 @@
 // re-merged within 1 s, and the merge itself never loops.
 
 import assert from 'node:assert/strict';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
@@ -12,7 +12,7 @@ import type { FSWatcher } from 'node:fs';
 
 import { createChangeHub } from '../../../src/service/changes.ts';
 import { createDesignStore } from '../../../src/service/store.ts';
-import { startWatcher, type Watcher } from '../../../src/service/watch.ts';
+import { FINGERPRINT_ENTRIES_MAX, carryNested, startWatcher, sweepSlice, takeFingerprint, type Fingerprint, type Watcher } from '../../../src/service/watch.ts';
 import type { ChangeHub, Logger, SettingsStore } from '../../../src/service/context.ts';
 import { WATCH_POLL_MS } from '../../../src/shared/limits.ts';
 import type { ChangeEvent, ChangeKind } from '../../../src/shared/types.ts';
@@ -34,7 +34,14 @@ type WatchEnv = {
 
 const makeWatchEnv = async (
   t: TestContext,
-  options: { debounceMs?: number; pollMs?: number; watchImpl?: typeof import('node:fs').watch; withStore?: boolean } = {},
+  options: {
+    debounceMs?: number;
+    pollMs?: number;
+    watchImpl?: typeof import('node:fs').watch;
+    withStore?: boolean;
+    sweepTicks?: number;
+    fingerprint?: (dir: string, options: { nested: boolean }) => Promise<Fingerprint>;
+  } = {},
 ): Promise<WatchEnv & { store?: ReturnType<typeof createDesignStore> }> => {
   const tmp = await useTmpRoot(t);
   const logs: LogLine[] = [];
@@ -70,6 +77,8 @@ const makeWatchEnv = async (
     debounceMs: options.debounceMs ?? 50,
     pollMs: options.pollMs ?? WATCH_POLL_MS,
     ...(options.watchImpl ? { watchImpl: options.watchImpl } : {}),
+    ...(options.sweepTicks === undefined ? {} : { sweepTicks: options.sweepTicks }),
+    ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
   });
   t.after(() => watcher.stop());
   // Folders a test creates after this are changes, not part of the startup baseline.
@@ -446,5 +455,351 @@ describe('design.json merge under the watcher (§6.3, WP1 acceptance)', () => {
     assert.equal(still.mtimeMs, afterMerge.mtimeMs, 'design.json must not be rewritten again');
     assert.equal(await readFile(designFile, 'utf8'), merged);
     assert.equal(env.logs.filter((line) => line.event === 'store.design-json-remerged').length, 1, 'exactly one re-merge write, then silence');
+  });
+});
+
+describe('rotating sweep while the live watcher is healthy (phase 0b)', () => {
+  /** A watcher that stays alive and says nothing; `fail` makes the latest one report an error. */
+  const silentWatch = () => {
+    let calls = 0;
+    const errorListeners: Array<(error: Error) => void> = [];
+    const impl = (() => {
+      calls += 1;
+      const fake = {
+        close() {},
+        on(event: string, listener: (error: Error) => void) {
+          if (event === 'error') errorListeners.push(listener);
+          return fake;
+        },
+        once: () => fake,
+        ref: () => fake,
+        unref: () => fake,
+      };
+      return fake as unknown as FSWatcher;
+    }) as unknown as typeof import('node:fs').watch;
+    return { impl, calls: () => calls, fail: (error: Error) => errorListeners.at(-1)?.(error) };
+  };
+
+  /** Counts fingerprint calls per design folder name: `counts` all of them, `deep` the ones that walked nested folders. */
+  const counting = () => {
+    const counts = new Map<string, number>();
+    const deep = new Map<string, number>();
+    return {
+      counts,
+      deep,
+      clear: () => {
+        counts.clear();
+        deep.clear();
+      },
+      fingerprint: (dir: string, options: { nested: boolean }): Promise<Fingerprint> => {
+        const slug = path.basename(dir);
+        counts.set(slug, (counts.get(slug) ?? 0) + 1);
+        if (options.nested) deep.set(slug, (deep.get(slug) ?? 0) + 1);
+        return takeFingerprint(dir, undefined, options.nested);
+      },
+    };
+  };
+
+  const makeDesigns = async (env: WatchEnv, slugs: string[]): Promise<void> => {
+    for (const slug of slugs) {
+      await mkdir(env.tmp.at(slug), { recursive: true });
+      await writeFile(env.tmp.at(`${slug}/index.html`), `<h1>${slug}</h1>`, 'utf8');
+    }
+  };
+
+  test('sweepSlice walks the sorted list, wraps around, and copes with an empty list or a stale cursor', () => {
+    const list = ['a', 'b', 'c', 'd', 'e'];
+    assert.deepEqual(sweepSlice(list, 0, 2), { slice: ['a', 'b'], next: 2 });
+    assert.deepEqual(sweepSlice(list, 4, 2), { slice: ['e', 'a'], next: 1 });
+    assert.deepEqual(sweepSlice(list, 3, 9), { slice: ['d', 'e', 'a', 'b', 'c'], next: 3 }, 'never more than the list, each once');
+    assert.deepEqual(sweepSlice(list, 12, 1), { slice: ['c'], next: 3 }, 'a cursor past the end wraps');
+    assert.deepEqual(sweepSlice([], 7, 3), { slice: [], next: 0 });
+    assert.deepEqual(sweepSlice(list, 1, 0), { slice: [], next: 1 });
+  });
+
+  test('★ healthy watcher: 20 designs, sweepTicks 10 — after 10 polls every design was fingerprinted exactly once', async (t) => {
+    const watch = silentWatch();
+    const spy = counting();
+    const env = await makeWatchEnv(t, { watchImpl: watch.impl, pollMs: 600_000, sweepTicks: 10, fingerprint: spy.fingerprint });
+    const slugs = Array.from({ length: 20 }, (_, i) => `design-${String(i).padStart(2, '0')}`);
+    await makeDesigns(env, slugs);
+    await env.watcher.pollNow(); // the silent watcher reported nothing: the poll finds the new folders
+    spy.clear();
+
+    for (let tick = 0; tick < 10; tick += 1) await env.watcher.pollNow();
+    assert.deepEqual([...spy.counts.keys()].sort(), slugs);
+    assert.deepEqual([...new Set(spy.counts.values())], [1], `each design once, saw ${JSON.stringify([...spy.counts])}`);
+    assert.equal(watch.calls(), 1, 'the watcher was never restarted');
+  });
+
+  test('★ a healthy but silent watcher: an in-place edit is still reported by a later sweep (the deaf-watcher net)', async (t) => {
+    const watch = silentWatch();
+    const env = await makeWatchEnv(t, { watchImpl: watch.impl, pollMs: 600_000, sweepTicks: 3 });
+    await makeDesigns(env, ['aa', 'bb', 'cc']);
+    await env.watcher.pollNow();
+    const mark = env.hub.seq();
+
+    await writeFile(env.tmp.at('bb/index.html'), '<h1>bb, edited in place with a different length</h1>', 'utf8');
+    for (let tick = 0; tick < 3; tick += 1) await env.watcher.pollNow(); // one full pass over three designs
+    const event = await env.waitForEvent((e) => e.seq > mark && e.slug === 'bb' && e.kind === 'files', 6000);
+    assert.deepEqual(event.files, ['index.html']);
+  });
+
+  test('a watcher that errors: the next poll fingerprints every design, then the sweep rotates again', async (t) => {
+    const watch = silentWatch();
+    const spy = counting();
+    const env = await makeWatchEnv(t, { watchImpl: watch.impl, pollMs: 600_000, sweepTicks: 10, fingerprint: spy.fingerprint });
+    await makeDesigns(env, ['aa', 'bb', 'cc', 'dd']);
+    await env.watcher.pollNow();
+    const mark = env.hub.seq();
+
+    watch.fail(Object.assign(new Error('too many open files'), { code: 'EMFILE' }));
+    await writeFile(env.tmp.at('cc/index.html'), '<h1>changed while the watcher was down, longer</h1>', 'utf8');
+    spy.clear();
+    await env.watcher.pollNow();
+    assert.deepEqual([...spy.counts].sort(), [['aa', 1], ['bb', 1], ['cc', 1], ['dd', 1]], 'every design looked at, not a slice');
+    assert.equal(watch.calls(), 2, 'the poll tick restarted the watcher');
+    await env.waitForEvent((e) => e.seq > mark && e.slug === 'cc' && e.kind === 'files', 6000);
+
+    spy.clear();
+    await env.watcher.pollNow();
+    assert.equal([...spy.counts.values()].reduce((a, b) => a + b, 0), 1, 'healthy again: one design per tick for four designs at sweepTicks 10');
+  });
+
+  const unavailableWatch = (() => {
+    throw Object.assign(new Error('ENOSPC: System limit for number of file watchers reached'), { code: 'ENOSPC' });
+  }) as unknown as typeof import('node:fs').watch;
+
+  test('★ poll-only root: every design gets the cheap check each tick and the nested walk rotates, so a pass over 20 designs walks each exactly once', async (t) => {
+    const spy = counting();
+    const env = await makeWatchEnv(t, { watchImpl: unavailableWatch, pollMs: 600_000, sweepTicks: 10, fingerprint: spy.fingerprint });
+    const slugs = Array.from({ length: 20 }, (_, i) => `design-${String(i).padStart(2, '0')}`);
+    await makeDesigns(env, slugs);
+    await env.watcher.pollNow();
+    spy.clear();
+
+    for (let tick = 0; tick < 10; tick += 1) await env.watcher.pollNow();
+    assert.deepEqual([...new Set(spy.counts.values())], [10], 'cheap check: every design on every tick');
+    assert.deepEqual([...spy.deep.keys()].sort(), slugs);
+    assert.deepEqual([...new Set(spy.deep.values())], [1], 'nested walk: each design once per pass of 10 ticks');
+  });
+
+  test('★ poll-only root: a top-level stylesheet edit shows on the next tick; nested asset edits and new nested files show within one pass', async (t) => {
+    const env = await makeWatchEnv(t, { watchImpl: unavailableWatch, pollMs: 600_000, sweepTicks: 10 });
+    await makeDesigns(env, ['pp', 'qq', 'rr']);
+    await env.tmp.write('pp/assets/img/a.png', 'AAAA');
+    await env.tmp.write('pp/styles.css', 'body{}');
+    await env.watcher.pollNow();
+    const pass = async (): Promise<void> => {
+      for (let tick = 0; tick < 10; tick += 1) await env.watcher.pollNow();
+    };
+
+    let mark = env.hub.seq();
+    await writeFile(env.tmp.at('pp/styles.css'), 'body{margin:0}', 'utf8');
+    await env.watcher.pollNow(); // one tick, not a pass
+    const css = await env.waitForEvent((e) => e.seq > mark && e.slug === 'pp' && e.kind === 'files', 6000);
+    assert.deepEqual(css.files, ['styles.css']);
+
+    // In-place rewrite: same size, new mtime. Nothing about the folder listing changes.
+    mark = env.hub.seq();
+    await writeFile(env.tmp.at('pp/assets/img/a.png'), 'BBBB');
+    const later = new Date(Date.now() + 10_000);
+    await utimes(env.tmp.at('pp/assets/img/a.png'), later, later);
+    await pass();
+    const rewrite = await env.waitForEvent((e) => e.seq > mark && e.slug === 'pp' && e.kind === 'files', 6000);
+    assert.deepEqual(rewrite.files, ['assets/img/a.png']);
+
+    mark = env.hub.seq();
+    await env.tmp.write('pp/assets/img/deeper/b.png', 'new');
+    await pass();
+    const nested = await env.waitForEvent((e) => e.seq > mark && e.slug === 'pp' && e.kind === 'files', 6000);
+    assert.ok((nested.files ?? []).includes('assets/img/deeper/b.png'), JSON.stringify(nested.files));
+
+    // Ticks that skipped the walk must not read as "the nested files vanished".
+    const settled = env.hub.seq();
+    await pass();
+    assert.deepEqual(env.events.filter((e) => e.seq > settled && e.slug === 'pp'), [], 'nothing changed, nothing reported');
+  });
+
+  test('a poll tick never starts while the previous one is still running (slow network share)', async (t) => {
+    let active = 0;
+    let maxActive = 0;
+    let started = 0;
+    let release: () => void = () => {};
+    let gate: Promise<void> | null = null;
+    const slow = async (dir: string, options: { nested: boolean }): Promise<Fingerprint> => {
+      if (gate !== null) {
+        started += 1;
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await gate;
+        active -= 1;
+      }
+      return takeFingerprint(dir, undefined, options.nested);
+    };
+    const env = await makeWatchEnv(t, { watchImpl: unavailableWatch, pollMs: 15, sweepTicks: 1, fingerprint: slow });
+    await makeDesigns(env, ['aa']);
+    await env.watcher.pollNow();
+
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const deadline = Date.now() + 6000;
+    while (started === 0) {
+      if (Date.now() > deadline) throw new Error('the timer-driven poll never started');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    // Proving a negative takes time: well over ten poll intervals, during which the first tick is held.
+    const heldUntil = Date.now() + 250;
+    while (Date.now() < heldUntil) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(started, 1, 'no second tick began while the first was running');
+    assert.equal(maxActive, 1);
+    release();
+  });
+
+  test('a poll tick that throws releases the no-overlap guard: the timer-driven poll keeps running', async (t) => {
+    let calls = 0;
+    let throwNext = false;
+    let thrown = false;
+    const flaky = async (dir: string, options: { nested: boolean }): Promise<Fingerprint> => {
+      calls += 1;
+      if (throwNext) {
+        throwNext = false;
+        thrown = true;
+        throw new Error('EIO: the share went away for a moment');
+      }
+      return takeFingerprint(dir, undefined, options.nested);
+    };
+    const env = await makeWatchEnv(t, { watchImpl: unavailableWatch, pollMs: 15, sweepTicks: 1, fingerprint: flaky });
+    await makeDesigns(env, ['aa']);
+    await env.watcher.pollNow();
+    throwNext = true;
+    const deadline = Date.now() + 6000;
+    while (!thrown) {
+      if (Date.now() > deadline) throw new Error('the timer-driven poll never ran');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const after = calls;
+    while (calls === after) {
+      if (Date.now() > deadline) throw new Error('no poll tick ran after one threw: the guard stayed held');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(env.logs.some((line) => line.event === 'watch.poll-failed'), 'the failed tick was logged');
+  });
+
+  // QA finding (phase 0b re-review): the cheap fingerprint keys every top-level folder, but the full
+  // one stops keying folders once the walk budget is spent. On a poll-only root a design with more
+  // than 256 entries under assets/ and another top-level folder (fonts/) then flips between the two
+  // forms and reports `fonts/` as changed on most ticks with nothing changed on disk: the open page
+  // reloads every few seconds and the 8 s auto-snapshot quiet period never ends.
+  test('poll-only root: a design whose walk hits the cap and that has another top-level folder reports nothing while nothing changes', async (t) => {
+    const env = await makeWatchEnv(t, { watchImpl: unavailableWatch, pollMs: 600_000, sweepTicks: 10 });
+    await makeDesigns(env, ['big', 'other-1', 'other-2']);
+    for (let i = 0; i < FINGERPRINT_ENTRIES_MAX + 20; i += 1) await env.tmp.write(`big/assets/f-${String(i).padStart(3, '0')}.png`, 'x');
+    await env.tmp.write('big/fonts/inter.woff2', 'font');
+    await env.watcher.pollNow();
+    const settled = env.hub.seq();
+    for (let tick = 0; tick < 12; tick += 1) await env.watcher.pollNow();
+    await new Promise((resolve) => setTimeout(resolve, 300)); // let any scheduled flush (50 ms debounce) emit
+    assert.deepEqual(
+      env.events.filter((e) => e.seq > settled && e.slug === 'big').map((e) => [e.kind, e.files]),
+      [],
+      'nothing changed on disk, so nothing is reported',
+    );
+  });
+});
+
+describe('takeFingerprint (capped, sorted walk)', () => {
+  const walkedKeys = (fingerprint: Fingerprint, top: string): string[] =>
+    [...fingerprint.keys()].filter((key) => key.startsWith(`${top}/`) && key !== `${top}/` && key !== `${top}/…`);
+
+  test('the walk is capped at 256 entries plus a truncated marker, and the same two calls give the same map', async (t) => {
+    const tmp = await useTmpRoot(t);
+    for (let i = 0; i < 300; i += 1) await tmp.write(`d/assets/f-${String(i).padStart(3, '0')}.txt`, 'x');
+    const first = await takeFingerprint(tmp.at('d'));
+    const second = await takeFingerprint(tmp.at('d'));
+    assert.equal(FINGERPRINT_ENTRIES_MAX, 256);
+    assert.equal(walkedKeys(first, 'assets').length, 256);
+    assert.equal(first.get('assets/…'), 'truncated');
+    assert.deepEqual([...first], [...second], 'sorted walk: the cap boundary does not move');
+    assert.ok(first.has('assets/f-000.txt') && first.has('assets/f-255.txt') && !first.has('assets/f-256.txt'), 'the first 256 names in sorted order');
+  });
+
+  test('under the cap there is no marker; a smaller budget truncates sooner', async (t) => {
+    const tmp = await useTmpRoot(t);
+    for (let i = 0; i < 5; i += 1) await tmp.write(`d/assets/f-${i}.txt`, 'x');
+    assert.equal((await takeFingerprint(tmp.at('d'))).has('assets/…'), false);
+    const small = await takeFingerprint(tmp.at('d'), 3);
+    assert.equal(walkedKeys(small, 'assets').length, 3);
+    assert.equal(small.get('assets/…'), 'truncated');
+  });
+
+  test('nested files and folders are keyed by path; extra top-level files by mtime:size; other top-level folders are walked too', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await tmp.write('d/index.html', '<p>x</p>');
+    await tmp.write('d/styles.css', 'body{}');
+    await tmp.write('d/assets/img/a.png', 'png');
+    await tmp.write('d/fonts/inter.woff2', 'font');
+    const fingerprint = await takeFingerprint(tmp.at('d'));
+    const info = await stat(tmp.at('d/styles.css'));
+    assert.equal(fingerprint.get('styles.css'), `${info.mtimeMs}:${info.size}`);
+    assert.match(fingerprint.get('assets/img/a.png') ?? '', /^\d+(\.\d+)?:3$/);
+    assert.equal(fingerprint.get('assets/img/'), 'dir');
+    assert.match(fingerprint.get('assets/') ?? '', /:dir$/);
+    assert.equal(fingerprint.get('fonts/'), 'dir');
+    assert.ok(fingerprint.has('fonts/inter.woff2'));
+  });
+
+  test('dot names and symlinks are not followed, and the walk stops at six folder levels', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await tmp.write('d/assets/.hidden/secret.txt', 's');
+    await tmp.write('d/assets/l1/l2/l3/l4/l5/l6/too-deep.txt', 'x');
+    await tmp.write('d/assets/l1/l2/l3/l4/l5/kept.txt', 'x');
+    await tmp.write('outside/leak.txt', 'x');
+    let linked = true;
+    await symlink(tmp.at('outside'), tmp.at('d/assets/link'), 'dir').catch(() => {
+      linked = false; // Windows without the privilege: the dot and depth rules are still checked
+    });
+    const fingerprint = await takeFingerprint(tmp.at('d'));
+    assert.ok(![...fingerprint.keys()].some((key) => key.includes('.hidden')), 'dot folders skipped');
+    assert.ok(fingerprint.has('assets/l1/l2/l3/l4/l5/kept.txt'), 'level 6 entries are fingerprinted');
+    assert.ok(!fingerprint.has('assets/l1/l2/l3/l4/l5/l6/too-deep.txt'), 'nothing below level 6');
+    if (linked) assert.ok(![...fingerprint.keys()].some((key) => key.startsWith('assets/link')), 'a symlink is neither keyed nor walked');
+  });
+
+  test('past the walk cap the cheap and the full form still agree on every top-level file and folder', async (t) => {
+    const tmp = await useTmpRoot(t);
+    for (let i = 0; i < FINGERPRINT_ENTRIES_MAX + 20; i += 1) await tmp.write(`d/assets/f-${String(i).padStart(3, '0')}.png`, 'x');
+    await tmp.write('d/fonts/inter.woff2', 'font');
+    await tmp.write('d/zz-notes.txt', 'n');
+    const topLevel = (fingerprint: Fingerprint): string[] => [...fingerprint.keys()].filter((key) => !key.slice(0, -1).includes('/') && !key.endsWith('…')).sort();
+    const full = await takeFingerprint(tmp.at('d'));
+    const cheap = await takeFingerprint(tmp.at('d'), undefined, false);
+    assert.equal(full.get('assets/…'), 'truncated', 'the walk really did hit the cap');
+    assert.deepEqual(topLevel(cheap), topLevel(full));
+    assert.ok(topLevel(full).includes('fonts/') && topLevel(full).includes('zz-notes.txt'));
+  });
+
+  test('carryNested keeps the last walk\'s nested keys for folders that still exist and drops those of removed folders', () => {
+    const previous: Fingerprint = new Map([
+      ['index.html', '1:1'],
+      ['assets/', '5:dir'],
+      ['assets/a.png', '2:2'],
+      ['assets/img/', 'dir'],
+      ['assets/…', 'truncated'],
+      ['fonts/', 'dir'],
+      ['fonts/x.woff2', '3:3'],
+      ['screens/home.html', '4:4'],
+    ]);
+    const cheap: Fingerprint = new Map([
+      ['index.html', '1:1'],
+      ['assets/', '6:dir'],
+      ['screens/home.html', '9:9'],
+    ]);
+    assert.deepEqual(
+      [...carryNested(previous, cheap)].sort(),
+      [['assets/', '6:dir'], ['assets/a.png', '2:2'], ['assets/img/', 'dir'], ['assets/…', 'truncated'], ['index.html', '1:1'], ['screens/home.html', '9:9']],
+    );
+    assert.equal(carryNested(undefined, cheap), cheap);
   });
 });
