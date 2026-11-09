@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import type { Comment, Screen, VersionSummary } from '../../src/shared/types.ts';
 import { countByStatus, groupComments, pinAriaLabel, pinGlyph, pinNumbers, sendState, viewportOf } from '../../src/ui/model/comments-model.ts';
-import { historyNotice, reasonLabel, restoreConfirmBody, versionRows, viewingBanner } from '../../src/ui/model/versions-model.ts';
+import { historyNotice, reasonLabel, versionRows, viewingBanner } from '../../src/ui/model/versions-model.ts';
 
 const comment = (id: string, over: Partial<Comment> = {}): Comment => ({
   id,
@@ -84,7 +84,6 @@ test('version copy uses the labels the spec names', () => {
   assert.equal(reasonLabel('restore-point'), 'Before restore');
   assert.equal(viewingBanner(12, false), 'Viewing v12 (read only)');
   assert.match(viewingBanner(12, true), /Comparing v12/);
-  assert.match(restoreConfirmBody(7), /saved as a version first/);
 });
 
 test('viewportOf names a page comment made in Full width, and a real viewport of that id still wins', () => {

@@ -53,9 +53,6 @@ export const changeLabel = (change: VersionFileChange): string => (change === 'a
 export const viewingBanner = (versionNumber: number, compare: boolean): string =>
   compare ? `Comparing v${versionNumber} with the current design` : `Viewing v${versionNumber} (read only)`;
 
-export const restoreConfirmBody = (versionNumber: number): string =>
-  `The design goes back to v${versionNumber}. Your current files are saved as a version first, so you can return to them.`;
-
 /** The notice above the list when the service had to repair, recover or reset it, or a newer build wrote it. */
 export const historyNotice = (state: VersionHistoryState): { tone: BannerTone; title: string; body: string } => {
   switch (state) {

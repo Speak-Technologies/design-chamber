@@ -12,6 +12,7 @@ import { attachMenu, btn, iconBtn } from '../components/kit.ts';
 import { mountLooseBanner } from '../components/loose-banner.ts';
 import { mountThumb, type ThumbHandle } from '../components/thumb.ts';
 import { host, store } from '../guest.ts';
+import { dismissedTip, shouldShowTip, TIP_KEY } from '../model/findability-model.ts';
 import { middlePath, relativeTime, plural } from '../model/format.ts';
 import { LIST_TABS, emptyKind, filterDesigns, kindSummary, rowAriaLabel, sortDesigns, tabCounts, type ListTab } from '../model/list-model.ts';
 import { designCountLabel } from '../model/settings-model.ts';
@@ -64,6 +65,40 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   } });
   const filters = h('div', { class: 'dc-rail-filters' }, searchHost, tabsHost);
 
+  // First-run tip (feat/findability): where the full-screen page is. The rail cannot open it
+  // from code (an extension has no such API), so it points at the sidebar menu that does.
+  const tipHost = h('div', { class: 'dc-rail-tip', hidden: true });
+  let tipWanted: boolean | null = null;
+  let tipHidden = false;
+  const paintTip = (): void => {
+    const state = store.getState().designs;
+    const failed = state.status === 'error' && !state.data;
+    const show = tipWanted === true && !tipHidden && !failed;
+    tipHost.hidden = !show;
+    if (!show) {
+      tipHost.replaceChildren();
+      return;
+    }
+    if (tipHost.firstElementChild) return;
+    mountBanner(tipHost, {
+      tone: 'info',
+      title: 'Open Design Chamber full screen',
+      body: 'In the sidebar, open Extension pages and pick Design Chamber. Canvases get the whole window there.',
+      action: { label: 'Got it', onClick: dismissTip },
+    });
+  };
+  const dismissTip = (): void => {
+    tipHidden = true;
+    paintTip();
+    searchHost.querySelector<HTMLElement>('input')?.focus();
+    // A failed write is swallowed by the host wrapper: the tip stays gone for this session and returns next time.
+    void host.storage.set(TIP_KEY, dismissedTip(new Date()));
+  };
+  void host.storage.get(TIP_KEY).then((stored) => {
+    tipWanted = shouldShowTip(stored);
+    paintTip();
+  });
+
   const notices = h('div', { class: 'dc-rail-notices' });
   // Long-lived: repaints of the other notices never detach it, so focus and an import in flight survive.
   const syncNotices = (): void => {
@@ -73,7 +108,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   notices.append(looseBanner.el);
   const list = h('ul', { class: 'dc-rows', role: 'list', 'aria-label': 'Designs' });
   const scroller = h('div', { class: 'dc-rail-scroll' }, notices, list);
-  el.append(head, filters, scroller);
+  el.append(head, tipHost, filters, scroller);
 
   const switchBack = async (path: string): Promise<void> => {
     try {
@@ -133,6 +168,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     list.replaceChildren();
     for (const handle of [...thumbs.values()]) handle.el.remove();
     paintNotices();
+    paintTip();
     if ((state.status === 'idle' || state.status === 'loading') && !state.data) {
       list.append(...skeleton());
       return;

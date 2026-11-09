@@ -6,12 +6,12 @@ import { mountBadge } from '@openchamber/sdk/ui';
 import type { VersionDiffResponse } from '../../shared/api.ts';
 import { host, store } from '../guest.ts';
 import { relativeTime } from '../model/format.ts';
-import { changeLabel, historyNotice, restoreConfirmBody, versionRows, type VersionRow } from '../model/versions-model.ts';
+import { changeLabel, historyNotice, versionRows, type VersionRow } from '../model/versions-model.ts';
 import { toast } from './actions.ts';
 import { createScope, errorText, h } from './dom.ts';
-import { banner, btn, confirmDialog, loadingRow } from './kit.ts';
+import { banner, btn, loadingRow } from './kit.ts';
 
-export type VersionsHandle = { el: HTMLElement; refresh: () => void; dispose: () => void };
+export type VersionsHandle = { el: HTMLElement; refresh: () => void; /** Focus that version's Restore button, if it is listed and enabled. */ focusRestore: (id: string) => void; dispose: () => void };
 
 export type VersionsOptions = {
   slug: string;
@@ -20,27 +20,10 @@ export type VersionsOptions = {
   onView: (id: string) => void;
   onCompare: (id: string) => void;
   onBackToCurrent: () => void;
-  /** Seam S10: restore this version. The view owns the flow (confirmation, Undo); it reports its own errors and never rejects. */
+  /** The version being restored right now, or null: its Restore shows progress, the others are disabled. */
+  restoring: () => string | null;
+  /** Seam S10: restore this version. The view owns the flow (restore, then an Undo notice); it reports its own errors and never rejects. */
   onRestore: (version: { id: string; n: number }) => Promise<void>;
-};
-
-/** The restore confirmation the design view runs for a restore (the findability branch replaces it with restore plus Undo). */
-export const confirmRestoreVersion = (dialogHost: HTMLElement, slug: string, version: { id: string; n: number }, onRestored: () => void): void => {
-  confirmDialog(dialogHost, {
-    title: `Restore v${version.n}?`,
-    body: h('p', null, restoreConfirmBody(version.n)),
-    confirmLabel: `Restore v${version.n}`,
-    onConfirm: async () => {
-      try {
-        await store.restoreVersion(slug, version.id);
-      } catch (error) {
-        throw new Error(`Couldn’t restore. ${errorText(error)} Nothing was changed.`);
-      }
-      await store.refreshOpenDesign();
-      onRestored();
-      toast('success', `Restored v${version.n}. The previous state is saved as a version.`);
-    },
-  });
 };
 
 export const mountVersions = (options: VersionsOptions): VersionsHandle => {
@@ -80,8 +63,15 @@ export const mountVersions = (options: VersionsOptions): VersionsHandle => {
 
   const restore = (row: VersionRow): void => void options.onRestore({ id: row.id, n: row.n });
 
+  const restoreButton = (row: VersionRow, restoring: string | null): HTMLElement => {
+    const button = btn({ label: 'Restore', variant: 'ghost', size: 'xs', loading: restoring === row.id, disabled: restoring !== null && restoring !== row.id, onClick: () => restore(row) });
+    button.el.dataset.restore = row.id;
+    return button.el;
+  };
+
   const rowEl = (row: VersionRow, viewing: { id: string; compare: boolean } | null): HTMLElement => {
     const active = viewing?.id === row.id;
+    const restoring = options.restoring();
     const badge = h('span');
     if (row.current) mountBadge(badge, { label: 'Current', tone: 'success' });
     const actions = h(
@@ -89,7 +79,7 @@ export const mountVersions = (options: VersionsOptions): VersionsHandle => {
       { class: 'dc-version-actions' },
       btn({ label: active && !viewing?.compare ? 'Viewing' : 'View', variant: 'outline', size: 'xs', pressed: active && !viewing?.compare, onClick: () => { options.onView(row.id); void loadDiff(row.id); } }).el,
       btn({ label: active && viewing?.compare ? 'Comparing' : 'Compare', variant: 'outline', size: 'xs', icon: 'compare', pressed: active && viewing?.compare, onClick: () => { options.onCompare(row.id); void loadDiff(row.id); } }).el,
-      row.current ? null : btn({ label: 'Restore', variant: 'ghost', size: 'xs', onClick: () => restore(row) }).el,
+      row.current ? null : restoreButton(row, restoring),
     );
     const changed =
       active && diff && diff.id === row.id
@@ -151,6 +141,7 @@ export const mountVersions = (options: VersionsOptions): VersionsHandle => {
   return {
     el,
     refresh: paint,
+    focusRestore: (id) => el.querySelector<HTMLElement>(`[data-restore="${CSS.escape(id)}"]`)?.focus(),
     dispose: () => {
       scope.dispose();
       el.remove();

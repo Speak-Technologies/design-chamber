@@ -268,6 +268,8 @@ export type FakeBackend = {
   onChange: (listener: (event: ChangeEvent) => void) => () => void;
   /** Test hook: the agent finishes the pending onboarding design. */
   writePending: () => void;
+  /** Test hook: the next restore fails once with this message (the Undo error notice). */
+  failNextRestore: (message: string) => void;
 };
 
 export const createFakeBackend = (): FakeBackend => {
@@ -281,6 +283,7 @@ export const createFakeBackend = (): FakeBackend => {
   const loose = new Map<string, { bytes: number; mtime: string }>([['pricing-v2.html', { bytes: 14_200, mtime: ago(2 * HOUR) }]]);
   let skillState: 'not-installed' | 'current' = 'not-installed';
   const listeners = new Set<(event: ChangeEvent) => void>();
+  let restoreFailure: string | null = null;
 
   const emit = (slug: string | null, kind: ChangeEvent['kind'], files?: string[]): void => {
     seq += 1;
@@ -513,6 +516,11 @@ export const createFakeBackend = (): FakeBackend => {
       const rec = get(params.slug);
       const target = rec.versions.find((v) => v.id === params.vid);
       if (!target) throw new ServiceError('not-found', 'That version is no longer saved.');
+      if (restoreFailure !== null) {
+        const message = restoreFailure;
+        restoreFailure = null;
+        throw new ServiceError('internal', message);
+      }
       const n = (rec.versions[rec.versions.length - 1]?.n ?? 0) + 1;
       const point: VersionSummary = { id: `v${n}`, n, created: new Date().toISOString(), reason: 'restore-point', sessionId: null, treeHash: `tree${n}`, bytes: 30_000, fileCount: 8 };
       rec.versions.push(point);
@@ -567,6 +575,9 @@ export const createFakeBackend = (): FakeBackend => {
       return () => void listeners.delete(listener);
     },
     writePending,
+    failNextRestore: (message) => {
+      restoreFailure = message;
+    },
   };
 };
 

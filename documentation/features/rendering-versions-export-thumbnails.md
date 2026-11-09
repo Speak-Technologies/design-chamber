@@ -38,6 +38,12 @@ thumbnail; `design.json` without comments) as content-addressed objects:
   pruned by its own restore point, even when the history is full. When the current files are
   too large for a snapshot (over 1 000 files or 100 MB) no restore point can be kept, so the
   restore is refused with a sentence saying so and nothing is changed.
+- the answer to a restore also names `before`: the version that holds the state from just before
+  the restore (the restore point, or the newest version when the files already matched it).
+  **Restore with Undo:** the UI restores at once and offers **Undo** for 10 seconds, which is one
+  more restore of `before`. If `before` has the same tree as the restored files the notice says
+  "vN matches the current design" and offers no Undo. A service that sends no `before` still
+  restores; the UI then shows no Undo.
 - the version list on disk (`.versions/index.json`) is treated as untrusted: an entry naming a
   path outside the design folder (or an object that is not a content hash) is dropped on its own,
   so a restore can never write anywhere else and the other versions stay in the list.

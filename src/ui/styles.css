@@ -1793,4 +1793,27 @@ body {
 /* ===== end ask bar ===== */
 
 /* ===== Phase 1: findability (feat/findability) ===== */
+/* First-run tip under the rail header; the kit banner brings its own colours and wraps "Got it" under the text when narrow. */
+.dc-rail-tip {
+  padding: 0 var(--dc-s3) var(--dc-s2) var(--dc-s4);
+}
+/* Comments chip and Versions button beside the title in the rail viewer: 26 px controls, the title takes the rest. */
+.dc-compact-actions .dc-comments-chip {
+  height: 26px;
+  min-width: 26px;
+  padding: 0 var(--dc-s2);
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+.dc-compact-actions .dc-comments-chip .dc-btn-label:empty {
+  display: none;
+}
+.dc-compact-actions .dc-comments-chip[data-count='none'] {
+  padding: 0;
+  width: 26px;
+}
+/* The restore notice sets data-actions='stack' (rule above): in the rail its buttons sit on their own row. */
+.dc-restore-notice .dc-row-actions {
+  flex-wrap: wrap;
+}
 /* ===== end findability ===== */

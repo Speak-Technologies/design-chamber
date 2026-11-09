@@ -21,6 +21,8 @@ export type ViewSlots = {
   compactActions: HTMLElement;
 };
 
+export type DrawerKind = 'comments' | 'versions';
+
 export type ViewContext = {
   slug: string;
   surface: 'panel' | 'page';
@@ -34,6 +36,8 @@ export type ViewContext = {
   onViewing: (listener: () => void) => () => void;
   wall: WallHandle;
   slots: ViewSlots;
+  /** The Comments and Versions drawers (a full-screen sheet in the rail). `toggle` opens one, or closes it when it is the open one. */
+  drawers: { toggle: (kind: DrawerKind) => void; active: () => DrawerKind | null; onChange: (listener: () => void) => () => void };
   /** The aria-live notices region (also a seam: transient notices, S7). */
   notices: NoticesHandle;
   actions: ActionContext;

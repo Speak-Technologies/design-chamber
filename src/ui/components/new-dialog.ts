@@ -96,6 +96,7 @@ export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): v
   const submit = btn({
     label: startLabel(kind),
     variant: 'default',
+    emphasis: 'primary',
     onClick: () => {
       const problem = validateBrief(brief);
       if (problem !== null) {

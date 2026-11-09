@@ -207,7 +207,7 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
       disabled: rootBusy || unchanged(value),
       title: !rootSaved && unchanged(value) ? 'Change the path above to apply it.' : undefined,
     });
-    const apply = btn({ variant: 'default', loading: rootBusy, ...applyState(draft), onClick: () => void applyRoot(rootDraft ?? settings.root, settings) });
+    const apply = btn({ variant: 'default', emphasis: 'primary', loading: rootBusy, ...applyState(draft), onClick: () => void applyRoot(rootDraft ?? settings.root, settings) });
     const reset = btn({ label: 'Use default', variant: 'ghost', disabled: rootBusy || settings.root === settings.defaultRoot, title: settings.defaultRoot, onClick: () => void applyRoot(null, settings) });
     folderHost.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' && event.target instanceof HTMLInputElement) {
