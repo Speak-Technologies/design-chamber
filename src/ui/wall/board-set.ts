@@ -48,8 +48,8 @@ export type BoardSet = BoardLookup & {
   placeLabels: () => void;
   /**
    * Seam S5 (Phase 1, build strip): the sources (screen ids; null = the page) whose boards the
-   * agent just wrote, or null for none. Today it only stores them; the build-strip branch makes
-   * `paintLabel` and `sizeBoard` set `data-recent="true"` on those boards and clear the rest.
+   * agent just wrote, or null for none. `data-recent="true"` goes on those boards and comes off
+   * the rest; a board that stays lit restarts its fade.
    */
   markRecent: (sources: ReadonlySet<string | null> | null) => void;
   /** The sources last passed to `markRecent`. */
@@ -126,7 +126,14 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     board.root.dataset.state = board.live ? state : 'idle';
   };
 
+  /** `data-recent` on the board the agent just wrote (seam S5); the ring and its fade are styles.css. */
+  const paintRecent = (board: Board): void => {
+    if (recent !== null && recent.has(board.art.screen?.id ?? null)) board.root.dataset.recent = 'true';
+    else delete board.root.dataset.recent;
+  };
+
   const paintLabel = (board: Board): void => {
+    paintRecent(board);
     const { art } = board;
     const name = art.screen ? `${art.screen.title} · ${viewportLabel(art.viewport)}` : viewportLabel(art.viewport);
     const navigated = board.screenId !== (art.screen?.id ?? null);
@@ -384,6 +391,16 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     },
     markRecent: (sources) => {
       recent = sources;
+      for (const board of boards.values()) {
+        const wasLit = board.root.dataset.recent === 'true';
+        paintRecent(board);
+        if (wasLit && board.root.dataset.recent === 'true') {
+          // Written again while still lit: take the attribute off for a frame so the fade starts over.
+          delete board.root.dataset.recent;
+          void board.root.offsetWidth;
+          board.root.dataset.recent = 'true';
+        }
+      }
     },
     recent: () => recent,
     queueSync: () => {
