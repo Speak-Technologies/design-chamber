@@ -49,19 +49,23 @@ const SHORT_TEXT_MAX = 40;
 
 type Detail = 'full' | 'no-html' | 'short';
 
-const viewportLabel = (input: RevisionInput, id: string): string => {
+/** A design viewport's label, `full-width view` for the page-fill viewport, else the id as written. */
+export const viewportLabel = (viewports: readonly Viewport[], id: string): string => {
   // A design viewport that happens to be called `fill` keeps its own label.
-  const viewport = input.viewports.find((candidate) => candidate.id === id);
+  const viewport = viewports.find((candidate) => candidate.id === id);
   if (viewport) return formatViewport(viewport);
   return id === PAGE_FILL_VIEWPORT_ID ? 'full-width view' : id;
 };
 
-const location = (input: RevisionInput, comment: Comment): string => {
-  const at = viewportLabel(input, comment.viewport);
-  if (comment.screen === null) return `Page index.html @ ${at}`;
-  const screen = input.screens.find((candidate) => candidate.id === comment.screen);
-  return `Screen "${screen?.title ?? comment.screen}" (${screen?.file ?? `screens/${comment.screen}.html`}) @ ${at}`;
+/** Where an element lives, as the agent reads it: `Screen "Home" (screens/home.html) @ Laptop 1280×800`, or the page file. */
+export const locationLabel = (design: { screens: readonly Screen[]; viewports: readonly Viewport[] }, at: { screen: string | null; viewport: string }): string => {
+  const where = viewportLabel(design.viewports, at.viewport);
+  if (at.screen === null) return `Page index.html @ ${where}`;
+  const screen = design.screens.find((candidate) => candidate.id === at.screen);
+  return `Screen "${screen?.title ?? at.screen}" (${screen?.file ?? `screens/${at.screen}.html`}) @ ${where}`;
 };
+
+const location = (input: RevisionInput, comment: Comment): string => locationLabel(input, comment);
 
 const flag = (state: AnchorState | undefined): string => {
   if (state === 'moved') return ' (moved, matched by text)';

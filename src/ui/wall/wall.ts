@@ -125,6 +125,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
       }
       pins.paintAll();
       for (const board of boards.values()) boards.paintLabel(board);
+      popovers.refresh();
     },
     setMode: (next) => {
       if (next === ctx.mode) return;

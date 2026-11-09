@@ -10,6 +10,7 @@ import { confirmDelete, continueInChat, copyHtml, copyPath, exportDesign, rename
 import { mountComments, type CommentsHandle } from '../components/comments-drawer.ts';
 import { createScope, debounce, errorText, h, replace } from '../components/dom.ts';
 import { createNotices } from '../components/notices.ts';
+import { sendOneComment } from '../components/send-comments.ts';
 import { attachMenu, banner, bannerWithActions, btn, confirmDialog, iconBtn, loadingRow, openMenu, openSheet, type BtnHandle, type MenuEntry, type SheetHandle } from '../components/kit.ts';
 import { createRestoreFlow } from '../components/restore-flow.ts';
 import { mountVersions, type VersionsHandle } from '../components/versions-drawer.ts';
@@ -142,6 +143,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         deleteComment: async (id) => {
           await store.deleteComment(slug, id);
         },
+        // Seam S6: "Send this" on a thread card (checks the comment is still open, saves an edited text, sends it alone).
+        onSendComment: (id, body) => sendOneComment(slug, id, body, wall.anchorStates()),
         onExternal: (url) =>
           confirmDialog(options.actions.host, {
             title: 'Open this link in your browser?',

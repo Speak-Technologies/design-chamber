@@ -25,21 +25,32 @@ const isBodyRecord = (body: unknown): body is Record<string, unknown> =>
 
 const COMMENT_STATUSES: readonly CommentStatus[] = ['open', 'sent', 'resolved'];
 
-const validateCreate = (body: unknown): CreateCommentBody => {
-  if (!isBodyRecord(body)) throw new ApiError('bad-request', 'The comment must be a JSON object.');
-  const { screen, viewport, body: text } = body;
+/**
+ * Where a comment (or an ask) points: screen id or null, viewport id, and the element anchor.
+ * Shape only; whether the screen and viewport belong to the design is the caller's check.
+ */
+export const parseElement = (value: unknown): Omit<CreateCommentBody, 'body'> => {
+  if (!isBodyRecord(value)) throw new ApiError('bad-request', 'The element must be a JSON object.');
+  const { screen, viewport } = value;
   if (screen !== null && (typeof screen !== 'string' || !SCREEN_ID_PATTERN.test(screen))) {
     throw new ApiError('bad-request', 'The comment belongs to a screen id (lowercase letters, digits and -), or null on a page.');
   }
   if (typeof viewport !== 'string' || !VIEWPORT_ID_PATTERN.test(viewport)) {
     throw new ApiError('bad-request', 'The comment needs the viewport id it was made on.');
   }
-  const anchor = parseCommentAnchor(body.anchor);
+  const anchor = parseCommentAnchor(value.anchor);
   if (anchor === null) throw new ApiError('bad-request', 'The element anchor (selector, text, html, rect, point) is not valid.');
+  return { screen, viewport, anchor };
+};
+
+const validateCreate = (body: unknown): CreateCommentBody => {
+  if (!isBodyRecord(body)) throw new ApiError('bad-request', 'The comment must be a JSON object.');
+  const element = parseElement(body);
+  const text = body.body;
   if (typeof text !== 'string' || text.trim().length < 1 || text.length > COMMENT_BODY_MAX) {
     throw new ApiError('bad-request', `The comment text must be 1–${COMMENT_BODY_MAX} characters.`);
   }
-  return { screen, viewport, anchor, body: text };
+  return { ...element, body: text };
 };
 
 const validatePatch = (body: unknown): PatchCommentBody => {

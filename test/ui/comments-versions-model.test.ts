@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import type { Comment, Screen, VersionSummary } from '../../src/shared/types.ts';
-import { countByStatus, groupComments, pinAriaLabel, pinGlyph, pinNumbers, sendState, viewportOf } from '../../src/ui/model/comments-model.ts';
+import { countByStatus, groupComments, pinAriaLabel, pinGlyph, pinNumbers, sendResultCopy, sendState, sendThisProblem, viewportOf } from '../../src/ui/model/comments-model.ts';
 import { historyNotice, reasonLabel, versionRows, viewingBanner } from '../../src/ui/model/versions-model.ts';
 
 const comment = (id: string, over: Partial<Comment> = {}): Comment => ({
@@ -92,6 +92,31 @@ test('viewportOf names a page comment made in Full width, and a real viewport of
   assert.equal(viewportOf([laptop], 'fill'), 'Full width');
   assert.equal(viewportOf([{ id: 'fill', label: 'Wide', width: 1920, height: 1080 }], 'fill'), 'Wide 1920×1080');
   assert.equal(viewportOf([laptop], 'gone'), 'gone');
+});
+
+test('sendResultCopy: the batch copy is unchanged, one comment is named by its pin number', () => {
+  const base = { commentIds: ['a', 'b'], omitted: [] as string[] };
+  assert.deepEqual(sendResultCopy({ ...base, outcome: 'sent' }, null), { kind: 'success', message: '2 comments sent to the chat.' });
+  assert.deepEqual(sendResultCopy({ ...base, outcome: 'outbox' }, null), { kind: 'success', message: '2 comments sent to the chat.' });
+  assert.deepEqual(sendResultCopy({ ...base, outcome: 'new-session' }, null), { kind: 'success', message: 'Started a new chat with 2 comments.' });
+  assert.deepEqual(sendResultCopy({ ...base, outcome: 'sent', omitted: ['c'] }, null), { kind: 'info', message: '2 of 3 comments sent. Send again for the rest.' });
+  assert.equal(sendResultCopy({ ...base, outcome: 'composed' }, null), null, 'the flow already told the user the agent is busy');
+  assert.deepEqual(sendResultCopy({ commentIds: [], omitted: [], outcome: 'nothing' }, null), { kind: 'info', message: 'There are no open comments to send.' });
+  assert.equal(sendResultCopy({ ...base, outcome: 'sent', markFailed: true }, null)?.kind, 'info');
+  assert.match(sendResultCopy({ ...base, outcome: 'sent', markFailed: true }, null)?.message ?? '', /could not be marked as sent/);
+
+  const one = { commentIds: ['a'], omitted: [] as string[] };
+  assert.deepEqual(sendResultCopy({ ...one, outcome: 'sent' }, 3), { kind: 'success', message: 'Comment 3 sent to the chat.' });
+  assert.deepEqual(sendResultCopy({ ...one, outcome: 'new-session' }, 3), { kind: 'success', message: 'Started a new chat with comment 3.' });
+  assert.deepEqual(sendResultCopy({ ...one, outcome: 'sent' }, null), { kind: 'success', message: '1 comment sent to the chat.' });
+  assert.equal(sendResultCopy({ ...one, outcome: 'composed' }, 3), null);
+});
+
+test('sendThisProblem: only an open comment may be sent on its own; the card can be older than the comment', () => {
+  assert.equal(sendThisProblem(comment('c_a')), null);
+  assert.equal(sendThisProblem(comment('c_a', { status: 'sent' })), 'That comment was already sent to the chat.');
+  assert.equal(sendThisProblem(comment('c_a', { status: 'resolved' })), 'That comment is resolved, so it was not sent. Reopen it first.');
+  assert.equal(sendThisProblem(undefined), 'That comment is gone, so there is nothing to send.');
 });
 
 test('historyNotice has a calm, specific notice for every history state', () => {

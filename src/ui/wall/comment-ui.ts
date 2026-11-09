@@ -4,7 +4,7 @@
 import { mountBadge } from '@openchamber/sdk/ui';
 
 import { COMMENT_BODY_MAX } from '../../shared/limits.ts';
-import type { Comment } from '../../shared/types.ts';
+import type { Comment, CommentStatus } from '../../shared/types.ts';
 import { btn, iconBtn } from '../components/kit.ts';
 import { errorText, h } from '../components/dom.ts';
 import { statusLabel } from '../model/comments-model.ts';
@@ -18,7 +18,14 @@ const validateBody = (body: string): string | null => {
   return null;
 };
 
-export type CardHandle = { el: HTMLElement; focus: () => void };
+export type CardHandle = {
+  el: HTMLElement;
+  focus: () => void;
+  /** Thread card: the comment's status changed under it (sent from the list, resolved, reopened). */
+  setStatus?: (status: CommentStatus) => void;
+  /** Composer: it holds text the user typed. Closing it would lose that. */
+  hasDraft?: () => boolean;
+};
 
 export type ComposerOptions = {
   tag: string;
@@ -87,7 +94,7 @@ export const createComposer = (options: ComposerOptions): CardHandle => {
     failure,
     h('div', { class: 'dc-pop-foot' }, h('span', { class: 'dc-pop-hint' }, `${submitKey()} to add`), h('span', { class: 'dc-pop-actions' }, cancel.el, submit.el)),
   );
-  return { el, focus: () => area.focus() };
+  return { el, focus: () => area.focus(), hasDraft: () => area.value.trim() !== '' };
 };
 
 export type ThreadOptions = {
@@ -98,7 +105,7 @@ export type ThreadOptions = {
   anchorState: 'exact' | 'moved' | 'detached' | 'unknown';
   readOnly: boolean;
   onSave: (body: string) => Promise<void>;
-  /** Seam S6: send this comment alone. Not rendered yet; the send-one-pin branch adds the "Send this" button that calls it. */
+  /** Seam S6: send this comment alone (saving an edited body first). Shown as "Send this" on an open comment when set. */
   onSend?: (body: string) => Promise<void>;
   onStatus: (status: 'open' | 'resolved') => Promise<void>;
   onDelete: () => Promise<void>;
@@ -118,7 +125,13 @@ export const createThread = (options: ThreadOptions): CardHandle => {
   area.disabled = options.readOnly;
   const failure = h('p', { class: 'dc-form-error', role: 'alert', hidden: true });
   const badgeHost = h('span');
-  mountBadge(badgeHost, { label: statusLabel(comment.status), tone: comment.status === 'open' ? 'primary' : comment.status === 'sent' ? 'info' : 'neutral' });
+  // The card outlives status changes made elsewhere (the comments list), so everything that depends on it repaints from here.
+  let status: CommentStatus = comment.status;
+  const paintBadge = (): void => {
+    badgeHost.replaceChildren();
+    mountBadge(badgeHost, { label: statusLabel(status), tone: status === 'open' ? 'primary' : status === 'sent' ? 'info' : 'neutral' });
+  };
+  paintBadge();
 
   const guard = async (button: ReturnType<typeof btn>, action: () => Promise<void>): Promise<void> => {
     button.set({ loading: true });
@@ -156,13 +169,36 @@ export const createThread = (options: ThreadOptions): CardHandle => {
     }
   });
 
-  const resolved = comment.status === 'resolved';
+  const sendOne = options.onSend;
+  // Only an open comment can go to the chat on its own; the button is there to be shown or hidden as the status changes.
+  let sendThis: ReturnType<typeof btn> | null = null;
+  if (sendOne) {
+    const button = btn({
+      label: 'Send this',
+      variant: 'outline',
+      size: 'sm',
+      icon: 'send',
+      title: 'Send only this comment to the chat',
+      onClick: () => {
+        const problem = validateBody(area.value);
+        if (problem !== null) {
+          failure.textContent = problem;
+          failure.hidden = false;
+          return;
+        }
+        void guard(button, () => sendOne(area.value.trim()));
+      },
+    });
+    button.el.hidden = status !== 'open';
+    sendThis = button;
+  }
+
   const toggle = btn({
-    label: resolved ? 'Reopen' : 'Resolve',
+    label: status === 'resolved' ? 'Reopen' : 'Resolve',
     variant: 'outline',
     size: 'sm',
-    icon: resolved ? 'restore' : 'check',
-    onClick: () => void guard(toggle, () => options.onStatus(resolved ? 'open' : 'resolved')),
+    icon: status === 'resolved' ? 'restore' : 'check',
+    onClick: () => void guard(toggle, () => options.onStatus(status === 'resolved' ? 'open' : 'resolved')),
   });
 
   let armed = false;
@@ -200,7 +236,13 @@ export const createThread = (options: ThreadOptions): CardHandle => {
     note ? h('p', { class: 'dc-pop-note' }, note) : null,
     area,
     failure,
-    options.readOnly ? null : h('div', { class: 'dc-pop-foot' }, remove.el, h('span', { class: 'dc-pop-actions' }, toggle.el, save.el)),
+    options.readOnly ? null : h('div', { class: 'dc-pop-foot' }, remove.el, h('span', { class: 'dc-pop-actions' }, toggle.el, sendThis?.el, save.el)),
   );
-  return { el, focus: () => area.focus() };
+  const setStatus = (next: CommentStatus): void => {
+    status = next;
+    paintBadge();
+    toggle.set({ label: status === 'resolved' ? 'Reopen' : 'Resolve', icon: status === 'resolved' ? 'restore' : 'check' });
+    if (sendThis) sendThis.el.hidden = status !== 'open';
+  };
+  return { el, focus: () => area.focus(), setStatus };
 };

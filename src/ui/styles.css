@@ -1951,6 +1951,171 @@ body {
 /* ===== end build strip ===== */
 
 /* ===== Phase 1: ask bar (feat/ask-bar-send-pin) ===== */
+/* The prompt docked under the design (seam S3). One box holds the chip, the text and Send. */
+.dc-ask {
+  padding: var(--dc-s3) var(--dc-s4);
+  border-top: 1px solid var(--dc-hair);
+  background: var(--oc-bg);
+}
+.dc-ask[data-surface='panel'] {
+  padding: var(--dc-s2);
+}
+.dc-ask-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--dc-s2) var(--dc-s2) var(--dc-s2) var(--dc-s3);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--dc-r-lg);
+  background: var(--oc-elevated);
+  color: var(--oc-elevated-fg);
+}
+/* The box carries the focus ring, so the text field inside stays plain. */
+.dc-ask-box:focus-within {
+  border-color: color-mix(in srgb, var(--oc-primary) 70%, var(--oc-border));
+  box-shadow: var(--dc-ring);
+}
+.dc-ask .dc-ask-input.oc-sdk-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 0;
+  height: auto;
+  padding: var(--dc-s1) 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+  line-height: 1.45;
+  resize: none;
+  font-family: inherit;
+}
+.dc-ask .dc-ask-input.oc-sdk-input:focus,
+.dc-ask .dc-ask-input.oc-sdk-input:focus-visible {
+  border: 0;
+  box-shadow: none;
+  outline: none;
+}
+.dc-ask .dc-ask-input.oc-sdk-input:disabled {
+  cursor: not-allowed;
+}
+.dc-ask-chip {
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--dc-s2);
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--dc-s1) var(--dc-s1) var(--dc-s1) var(--dc-s2);
+  border-radius: var(--dc-r);
+  background: var(--oc-muted-surface);
+  font-size: 0.75rem;
+}
+.dc-ask-chip[hidden],
+.dc-ask-msg[hidden],
+.dc-ask-counter[hidden] {
+  display: none;
+}
+.dc-ask-chip .dc-chip-code {
+  flex: none;
+  white-space: nowrap;
+}
+.dc-ask-chip-text {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-ask-chip-where {
+  flex: none;
+  color: var(--oc-muted);
+}
+/* In the rail the place goes on its own line under the tag, text and remove button. */
+.dc-ask[data-surface='panel'] .dc-ask-chip {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.dc-ask[data-surface='panel'] .dc-ask-chip > .dc-iconbtn {
+  order: 2;
+}
+.dc-ask[data-surface='panel'] .dc-ask-chip-where {
+  order: 3;
+  flex-basis: 100%;
+  padding-bottom: var(--dc-s1);
+}
+.dc-ask-chip-text[hidden] {
+  display: none;
+}
+.dc-ask-msg {
+  padding-right: var(--dc-s2);
+}
+.dc-ask-status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--oc-fg);
+  font-size: 0.75rem;
+}
+.dc-ask-status[hidden],
+.dc-ask-target[hidden] {
+  display: none;
+}
+.dc-ask-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s3);
+  min-width: 0;
+}
+.dc-ask-target {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+.dc-ask-target[data-reason='viewing'],
+.dc-ask-target[data-reason='limit'] {
+  overflow: visible;
+  color: var(--oc-fg);
+  white-space: normal;
+}
+.dc-ask-target[data-reason='limit'] {
+  color: var(--oc-error-text);
+}
+/* "Delete, Resolve, Send this, Save" is one button more than the card was drawn for: let them wrap. */
+.dc-thread .dc-pop-foot,
+.dc-thread .dc-pop-actions {
+  flex-wrap: wrap;
+}
+.dc-ask-counter {
+  flex: none;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.dc-ask-foot > .oc-sdk-btn {
+  flex: none;
+  margin-left: auto;
+}
+/* In the rail the target line has no room: it stays for assistive tech and the tooltip, and only a reason shows. */
+.dc-ask[data-surface='panel'] .dc-ask-target[data-reason='none'] {
+  display: none;
+}
+.dc-ask-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 /* ===== end ask bar ===== */
 
 /* ===== Phase 1: findability (feat/findability) ===== */
