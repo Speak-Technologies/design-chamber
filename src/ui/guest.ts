@@ -61,15 +61,18 @@ export const host = {
 };
 
 /**
- * §10.7 "Ask the agent to make it work offline": the service writes the request with the list of
- * blocked URLs it found in the files (`purpose: 'offline'`), and it goes in the linked chat's
- * composer (the user sends it), starting a linked chat first when there is none. The service
- * answers 422 when nothing is blocked any more; that sentence reaches the caller before any chat opens.
+ * A service-written request for the agent, put in the linked chat's composer (the user sends it),
+ * starting a linked chat first when there is none. `offline` (§10.7) lists the blocked URLs found
+ * in the files; `checks` lists the errors and warnings the Checks badge counts. The service answers
+ * 422 when there is nothing to ask any more; that sentence reaches the caller before any chat opens.
  */
-export const askSelfContained = async (slug: string): Promise<void> => {
-  const { text } = await client.call('POST /designs/:slug/prompt', { params: { slug }, body: { purpose: 'offline' } });
+export const askAgent = async (slug: string, purpose: 'offline' | 'checks'): Promise<void> => {
+  const { text } = await client.call('POST /designs/:slug/prompt', { params: { slug }, body: { purpose } });
   const { design } = await client.call('GET /designs/:slug', { params: { slug } });
   if (design.sessionId === null) await flows.continueInChat(slug);
   else if (guestHost.session.get()?.id !== design.sessionId) await guestHost.client.openSession(design.sessionId);
   await guestHost.client.compose({ text, mode: 'append' });
 };
+
+/** "Ask the agent to make it work offline" (the remote-files banner). */
+export const askSelfContained = (slug: string): Promise<void> => askAgent(slug, 'offline');

@@ -769,6 +769,8 @@ body {
 }
 .dc-toolbar-compact {
   flex-direction: column;
+  /* Not `wrap` (inherited from .dc-toolbar): a wrapping column sizes its one line to the widest row's min-content, and a row with a nowrap title then spills past the rail. */
+  flex-wrap: nowrap;
   align-items: stretch;
   gap: var(--dc-s1);
   padding: var(--dc-s2) var(--dc-s2) var(--dc-s2) var(--dc-s2);
@@ -2143,3 +2145,295 @@ body {
   flex-wrap: wrap;
 }
 /* ===== end findability ===== */
+
+/* ===== Phase 1: checks badge (feat/checks-badge) ===== */
+/* The badge: the kit's badge look on a button. Full screen it sits at the right end of the header
+   status slot (S1), in the rail in the title row's compact actions (S8). */
+.dc-status-slot:has(> .dc-checks) {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--dc-s2);
+}
+.dc-checks {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+.dc-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.dc-checks-badge {
+  appearance: none;
+  gap: var(--dc-s1);
+  margin: 0;
+  padding: 3px 10px;
+  border: 0;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 18px;
+  cursor: pointer;
+  transition: box-shadow 120ms ease-out;
+}
+.dc-checks-badge:hover,
+.dc-checks-badge[aria-expanded='true'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 40%, transparent);
+}
+.dc-checks-badge:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-checks-badge:not([data-tone]) {
+  color: var(--oc-muted);
+}
+.dc-checks-badge[data-compact='true'] {
+  justify-content: center;
+  height: 26px;
+  min-width: 26px;
+  /* Tight on purpose: at 320 px the title row also holds back, Comments, Versions and the menu, and the title needs 120 px. */
+  gap: 2px;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.dc-compact-actions:has(> .dc-checks) {
+  gap: 2px;
+}
+.dc-toolbar-compact > .dc-toolbar-row:first-child:has(.dc-checks) {
+  gap: 2px;
+}
+.dc-checks-badge[data-compact='true']:has(> .dc-checks-label[hidden]) {
+  width: 26px;
+  padding: 0;
+}
+.dc-checks-glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+}
+.dc-checks-glyph svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2.5;
+}
+.dc-checks-ring {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+.dc-checks-label {
+  white-space: nowrap;
+}
+
+/* The popover under the badge (full screen). The rail uses the full sheet instead. */
+.dc-pop {
+  position: fixed;
+  z-index: 55;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--oc-sdk-float-edge);
+  border-radius: var(--dc-r-lg);
+  background: var(--oc-elevated);
+  color: var(--oc-elevated-fg);
+  box-shadow: var(--oc-sdk-float);
+  outline: none;
+}
+.dc-pop-head {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  padding: var(--dc-s2) var(--dc-s2) var(--dc-s1) var(--dc-s4);
+}
+.dc-pop-title {
+  flex: 1;
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.dc-pop-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--dc-s1) var(--dc-s4) var(--dc-s4);
+}
+.dc-pop-foot {
+  padding: var(--dc-s3) var(--dc-s4);
+  border-top: 1px solid var(--dc-hair);
+}
+.dc-pop-foot:empty,
+.dc-pop-foot[hidden] {
+  display: none;
+}
+
+/* The findings (popover body and sheet body). */
+.dc-checks-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  min-width: 0;
+}
+.dc-checks-panel:focus {
+  outline: none;
+}
+.dc-checks-summary {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.dc-checks-render {
+  margin: 0;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.dc-checks-render[data-tone='warn'] {
+  color: var(--oc-warning-text);
+}
+.dc-checks-render[data-tone='ok'] {
+  color: var(--oc-success-text);
+}
+.dc-checks-next {
+  margin: 0;
+  color: var(--oc-muted);
+}
+.dc-checks-notice:empty {
+  display: none;
+}
+.dc-checks-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s4);
+  min-width: 0;
+}
+.dc-checks-group {
+  min-width: 0;
+}
+.dc-checks-group-title {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  list-style: none;
+}
+.dc-checks-group-title::-webkit-details-marker {
+  display: none;
+}
+summary.dc-checks-group-title {
+  cursor: pointer;
+  border-radius: var(--dc-r);
+}
+summary.dc-checks-group-title::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease-out;
+}
+details[open] > summary.dc-checks-group-title::before {
+  transform: rotate(45deg);
+}
+summary.dc-checks-group-title:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-checks-group[data-tone='error'] > .dc-checks-group-title {
+  color: var(--oc-error-text);
+}
+.dc-checks-group[data-tone='warning'] > .dc-checks-group-title {
+  color: var(--oc-warning-text);
+}
+.dc-checks-group[data-tone='info'] > .dc-checks-group-title,
+.dc-checks-group[data-tone='muted'] > .dc-checks-group-title {
+  color: var(--oc-muted);
+}
+.dc-checks-list {
+  display: flex;
+  flex-direction: column;
+  margin: var(--dc-s1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.dc-checks-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--dc-s2) 0;
+  border-top: 1px solid var(--dc-hair);
+}
+.dc-checks-msg {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.dc-checks-group[data-tone='muted'] .dc-checks-msg {
+  color: var(--oc-muted);
+}
+.dc-checks-code {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--oc-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-checks-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dc-s2);
+  width: 100%;
+}
+.dc-app[data-surface='panel'] .dc-checks-actions .oc-sdk-btn {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+.dc-sheet-foot:has(> .dc-checks-actions[hidden]),
+.dc-pop-foot:has(> .dc-checks-actions[hidden]) {
+  display: none;
+}
+.dc-checks-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  padding-top: var(--dc-s1);
+}
+.dc-checks-skel {
+  display: block;
+  width: 100%;
+  height: 12px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--oc-muted-surface) 25%, var(--oc-hover) 50%, var(--oc-muted-surface) 75%);
+  background-size: 200% 100%;
+  animation: dc-shimmer 1.6s linear infinite;
+}
+.dc-checks-skel[data-w='short'] {
+  width: 40%;
+}
+.dc-checks-skel[data-w='mid'] {
+  width: 70%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dc-checks-skel {
+    animation: none;
+  }
+  .dc-checks-badge,
+  summary.dc-checks-group-title::before {
+    transition: none;
+  }
+}
+/* ===== end checks badge ===== */

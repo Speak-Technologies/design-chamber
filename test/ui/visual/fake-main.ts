@@ -17,10 +17,11 @@ const hybrid: HostLike = new Proxy(real, {
 const guestHost = createGuestHost(hybrid);
 startApp(guestHost, createServiceClient(fake));
 
-/** Hooks for shoot.mjs: the agent finishes the pending sample design, saves one file, or a design turns out to be older than it looked; the next restore fails once. */
-(window as unknown as { __dcFake?: Pick<typeof fake.backend, 'writePending' | 'writeFile' | 'ageDesign' | 'failNextRestore'> }).__dcFake = {
+/** Hooks for shoot.mjs: the agent finishes the pending sample design, saves one file, or a design turns out to be older than it looked; the next restore fails once; Checks badge states. */
+(window as unknown as { __dcFake?: Pick<typeof fake.backend, 'writePending' | 'writeFile' | 'ageDesign' | 'failNextRestore' | 'checks'> }).__dcFake = {
   writePending: fake.backend.writePending,
   writeFile: fake.backend.writeFile,
   ageDesign: fake.backend.ageDesign,
   failNextRestore: fake.backend.failNextRestore,
+  checks: fake.backend.checks,
 };
