@@ -22,7 +22,7 @@ import {
 } from '@openchamber/sdk';
 
 import { extractHtml } from '../shared/agent/html-extract.ts';
-import type { PromptBody } from '../shared/api.ts';
+import type { AskElement, PromptBody } from '../shared/api.ts';
 import type { AnchorState, DesignChip, DesignKind, Outbox } from '../shared/types.ts';
 import { CHIP_PROVIDER_ID } from '../shared/types.ts';
 import { OUTBOX_TTL_MS, SLUG_PATTERN, TURN_SNAPSHOT_DEDUPE_MS } from '../shared/limits.ts';
@@ -36,6 +36,7 @@ export const CHIP_ID_PREFIX = 'design:';
 export const MESSAGES = {
   noProject: 'Open a project first, then try again.',
   busy: 'The agent is busy, so your revision is waiting in the composer.',
+  busyAsk: 'The agent is busy, so your message is waiting in the composer.',
   noHtml: 'No HTML code block in this message',
   startFailed: "Couldn't start a chat for this design. It is in your Designs list; try Continue in chat.",
   sendFailed: "The revision didn't reach the chat. Your comments are still open; try again.",
@@ -144,6 +145,12 @@ export type SendCommentsOutcome = 'sent' | 'composed' | 'outbox' | 'new-session'
 /** `markFailed`: the chat got the revision but the comments are still `open` (KI-2) — never a send error. */
 export type SendCommentsResult = { outcome: SendCommentsOutcome; sessionId: string | null; commentIds: string[]; omitted: string[]; markFailed?: true };
 
+/** What the ask bar sends: the user's words and, when one is attached, the element they are about. */
+export type AskInput = { text: string; element?: AskElement | null };
+/** As `SendCommentsOutcome`, minus `nothing`: an ask always has something to send. */
+export type AskOutcome = 'sent' | 'composed' | 'outbox' | 'new-session';
+export type AskResult = { outcome: AskOutcome; sessionId: string | null };
+
 export type DeliverOutboxResult = 'delivered' | 'composed' | 'none';
 
 /** What the surface should show for the item it was opened with. */
@@ -159,6 +166,11 @@ export type Flows = {
    * the artboards' pin trackers (`anchorStatesOf`) so the prompt flags moved or missing elements.
    */
   sendComments(slug: string, commentIds?: string[], anchorStates?: Readonly<Record<string, AnchorState>>): Promise<SendCommentsResult>;
+  /**
+   * The ask bar: one message to the design's linked chat by the same delivery path as the
+   * comments (selected chat, outbox, or a new linked chat). Nothing is recorded on the design.
+   */
+  ask(slug: string, input: AskInput): Promise<AskResult>;
   /** Rail panel: deliver a waiting outbox to `session` when it is the one the outbox is for. */
   deliverOutbox(session?: SessionSnapshot | null): Promise<DeliverOutboxResult>;
   /** Patch every link `planReconciliation` finds; returns what was patched. */
@@ -250,21 +262,23 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
     }
   };
 
-  /** §10.4 step 1: prompt the selected session; busy → composer + toast. */
-  const promptSelected = async (session: SessionSnapshot, text: string): Promise<'sent' | 'composed'> => {
-    let result: PromptResult;
-    if (session.busy) {
-      await api.prompt({ text, send: false });
-      await toast('info', MESSAGES.busy);
+  /**
+   * §10.4 step 1: prompt the selected session; busy → appended to its composer + toast. Append,
+   * never replace: whatever the user was typing there stays.
+   */
+  const promptSelected = async (session: SessionSnapshot, text: string, busyMessage: string): Promise<'sent' | 'composed'> => {
+    const composeBusy = async (): Promise<'composed'> => {
+      await api.compose({ text, mode: 'append' });
+      await toast('info', busyMessage);
       return 'composed';
-    }
+    };
+    if (session.busy) return composeBusy();
+    let result: PromptResult;
     try {
       result = await api.prompt({ text, send: true });
     } catch (error) {
       if (!isHostError(error, 'SESSION_BUSY')) throw error;
-      await api.prompt({ text, send: false });
-      await toast('info', MESSAGES.busy);
-      return 'composed';
+      return composeBusy();
     }
     if (result.sent === 'sent') return 'sent';
     throw new FlowError('send-failed', MESSAGES.sendFailed);
@@ -280,6 +294,52 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
     if (result.sessionId === null) throw new FlowError('start-failed', MESSAGES.startFailed);
     await client.call('PATCH /designs/:slug', { params: { slug }, body: { sessionId: result.sessionId } });
     return result;
+  };
+
+  type Delivery = { outcome: AskOutcome; sessionId: string | null };
+
+  /**
+   * §10.4 steps 1 to 3, shared by the comments and the ask bar: the prompt goes to the linked
+   * chat when it is the selected one, via the outbox when it is another chat (the rail delivers
+   * after `openSession`), or into a new linked chat when there is none or it is gone.
+   */
+  const deliver = async (
+    slug: string,
+    prompt: { text: string; chip: DesignChip; commentIds: string[] },
+    design: { sessionId: string | null; projectDirectory: string | null },
+    version: number | null,
+    busyMessage: string,
+  ): Promise<Delivery> => {
+    // 1. The linked session is the selected one.
+    const selected = host.session.get();
+    if (design.sessionId && selected?.id === design.sessionId) {
+      return { outcome: await promptSelected(selected, prompt.text, busyMessage), sessionId: selected.id };
+    }
+
+    // 2. Linked but not selected: the rail delivers after openSession (which closes the page).
+    if (design.sessionId) {
+      await client.call('PUT /outbox', {
+        body: { sessionId: design.sessionId, slug, text: prompt.text, commentIds: prompt.commentIds, version },
+      });
+      try {
+        await api.openSurface(PANEL_SURFACE_ID);
+      } catch {
+        // The rail may already be open or unavailable here; openSession still selects the chat.
+      }
+      try {
+        await api.openSession(design.sessionId);
+        return { outcome: 'outbox', sessionId: design.sessionId };
+      } catch (error) {
+        if (!isHostError(error, 'NO_SESSION')) throw error;
+        // The session is gone: take the outbox back and fall through to a new chat.
+        await client.call('DELETE /outbox');
+      }
+    }
+
+    // 3. No session, or it is gone: a new chat with the message as its first one.
+    const result = await startLinkedSession(slug, prompt.chip, prompt.text, design.projectDirectory);
+    if (result.sent !== 'sent') throw new FlowError('send-failed', MESSAGES.sendFailed);
+    return { outcome: 'new-session', sessionId: result.sessionId };
   };
 
   const flows: Flows = {
@@ -345,45 +405,24 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       if (prompt.commentIds.length === 0) return { outcome: 'nothing', sessionId: null, commentIds: [], omitted: prompt.omitted };
       const { design } = await client.call('GET /designs/:slug', { params: { slug } });
       const version = await latestVersion(slug);
-      const done = (outcome: SendCommentsOutcome, sessionId: string | null, marked = true): SendCommentsResult => ({
-        outcome,
-        sessionId,
+      const delivery = await deliver(slug, prompt, design, version, MESSAGES.busy);
+      // Through the outbox the rail delivers, and marks the comments sent when it does.
+      const marked = delivery.outcome === 'outbox' ? true : await markSent(slug, prompt.commentIds, version);
+      return {
+        outcome: delivery.outcome,
+        sessionId: delivery.sessionId,
         commentIds: prompt.commentIds,
         omitted: prompt.omitted,
         ...(marked ? {} : { markFailed: true as const }),
-      });
+      };
+    },
 
-      // 1. The linked session is the selected one.
-      const selected = host.session.get();
-      if (design.sessionId && selected?.id === design.sessionId) {
-        const outcome = await promptSelected(selected, prompt.text);
-        return done(outcome, selected.id, await markSent(slug, prompt.commentIds, version));
-      }
-
-      // 2. Linked but not selected: the rail delivers after openSession (which closes the page).
-      if (design.sessionId) {
-        await client.call('PUT /outbox', {
-          body: { sessionId: design.sessionId, slug, text: prompt.text, commentIds: prompt.commentIds, version },
-        });
-        try {
-          await api.openSurface(PANEL_SURFACE_ID);
-        } catch {
-          // The rail may already be open or unavailable here; openSession still selects the chat.
-        }
-        try {
-          await api.openSession(design.sessionId);
-          return done('outbox', design.sessionId);
-        } catch (error) {
-          if (!isHostError(error, 'NO_SESSION')) throw error;
-          // The session is gone: take the outbox back and fall through to a new chat.
-          await client.call('DELETE /outbox');
-        }
-      }
-
-      // 3. No session, or it is gone: a new chat with the revision as its first message.
-      const result = await startLinkedSession(slug, prompt.chip, prompt.text, design.projectDirectory);
-      if (result.sent !== 'sent') throw new FlowError('send-failed', MESSAGES.sendFailed);
-      return done('new-session', result.sessionId, await markSent(slug, prompt.commentIds, version));
+    ask: async (slug, input) => {
+      const body: PromptBody = { purpose: 'ask', text: input.text };
+      if (input.element) body.element = input.element;
+      const prompt = await client.call('POST /designs/:slug/prompt', { params: { slug }, body });
+      const { design } = await client.call('GET /designs/:slug', { params: { slug } });
+      return deliver(slug, prompt, design, null, MESSAGES.busyAsk);
     },
 
     deliverOutbox: async (session = host.session.get()) => {
@@ -401,7 +440,8 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
           await client.call('PUT /outbox', { body: rest });
           return 'none';
         }
-        const outcome = await promptSelected(session, taken.text);
+        // An ask carries no comments; its busy notice says message, not revision.
+        const outcome = await promptSelected(session, taken.text, taken.commentIds.length === 0 ? MESSAGES.busyAsk : MESSAGES.busy);
         if (!(await markSent(taken.slug, taken.commentIds, taken.version))) await toast('info', MESSAGES.markFailed);
         return outcome === 'sent' ? 'delivered' : 'composed';
       } finally {

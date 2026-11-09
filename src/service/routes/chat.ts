@@ -7,19 +7,22 @@ import { lstat, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/pro
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { AskTooLongError, buildAskPrompt } from '../../shared/agent/ask-prompt.ts';
 import { buildChip, titleFromBrief } from '../../shared/agent/chip.ts';
 import { clip, noProject, type AgentContext, type AgentPreset, type ProjectRules } from '../../shared/agent/context.ts';
 import { derivePageTitle, extractHtml } from '../../shared/agent/html-extract.ts';
 import { buildChecksPrompt, buildContinuePrompt, buildOfflinePrompt, buildRevisionPrompt, type ExternalList } from '../../shared/agent/revision-prompt.ts';
 import { buildRulesDoc } from '../../shared/agent/rules-doc.ts';
 import { normalizeExternalUrl, sortFindings } from '../../shared/checks.ts';
-import type { ChipResponse, FromMessageResponse, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse, RenderMeta, RenderQuery } from '../../shared/api.ts';
+import type { AskElement, ChipResponse, FromMessageResponse, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse, RenderMeta, RenderQuery } from '../../shared/api.ts';
 import {
+  ASK_TEXT_MAX,
   BRIEF_MAX,
   COMMENT_ID_PATTERN,
   COMMENTS_MAX,
   DISCOVERY_TIME_MAX_MS,
   OPEN_REQUEST_TTL_MS,
+  PAGE_FILL_VIEWPORT_ID,
   PRESET_ID_PATTERN,
   PROJECT_DIRECTORY_MAX,
   PROMPT_EXTERNAL_MAX,
@@ -34,6 +37,7 @@ import { ensureChecksService } from '../check/service.ts';
 import { ensureLauncherService } from '../check/launcher.ts';
 import { discoverProjectRules, withDeadline } from '../discovery.ts';
 import { ApiError, type Router } from '../http.ts';
+import { parseElement } from './comments.ts';
 import { readPreset, readRulesDocs } from './presets.ts';
 
 // ---- request validation (every body here is untrusted) ----
@@ -90,17 +94,37 @@ const parseAnchorStates = (value: unknown): Record<string, AnchorState> => {
   return Object.fromEntries(entries) as Record<string, AnchorState>;
 };
 
-const parsePromptBody = (body: unknown): { purpose: PromptBody['purpose']; commentIds: string[] | null; anchorStates: Record<string, AnchorState> } => {
+type PromptInput = {
+  purpose: PromptBody['purpose'];
+  commentIds: string[] | null;
+  anchorStates: Record<string, AnchorState>;
+  /** Ask only: the user's words, trimmed (1 to `ASK_TEXT_MAX`). */
+  text: string;
+  /** Ask only: the attached element before it is checked against the design. */
+  element: AskElement | null;
+};
+
+const parsePromptBody = (body: unknown): PromptInput => {
   const record = bodyOf(body, 'the prompt request');
   const { purpose, commentIds } = record;
-  if (purpose !== 'revision' && purpose !== 'continue' && purpose !== 'offline' && purpose !== 'checks') {
-    throw new ApiError('bad-request', 'The prompt purpose must be "revision", "continue", "offline" or "checks".');
+  if (purpose !== 'revision' && purpose !== 'continue' && purpose !== 'offline' && purpose !== 'checks' && purpose !== 'ask') {
+    throw new ApiError('bad-request', 'The prompt purpose must be "revision", "continue", "offline", "checks" or "ask".');
+  }
+  if (purpose === 'ask') {
+    if (typeof record.text !== 'string' || record.text.trim() === '') throw new ApiError('bad-request', 'Write what you want the agent to do.');
+    const text = record.text.trim();
+    if (text.length > ASK_TEXT_MAX) {
+      throw new ApiError('invalid', `Your message is ${text.length - ASK_TEXT_MAX} characters over the limit of ${ASK_TEXT_MAX}. Shorten it and send again.`);
+    }
+    const element = record.element === undefined || record.element === null ? null : parseElement(record.element);
+    return { purpose, commentIds: null, anchorStates: {}, text, element };
   }
   const anchorStates = parseAnchorStates(record.anchorStates);
-  if (commentIds === undefined) return { purpose, commentIds: null, anchorStates };
+  const base: Omit<PromptInput, 'commentIds'> = { purpose, anchorStates, text: '', element: null };
+  if (commentIds === undefined) return { ...base, commentIds: null };
   const ids = Array.isArray(commentIds) ? commentIds.filter((id): id is string => typeof id === 'string' && COMMENT_ID_PATTERN.test(id)) : [];
   if (!Array.isArray(commentIds) || commentIds.length > COMMENTS_MAX || ids.length !== commentIds.length) throw new ApiError('bad-request', 'The comment list is not valid.');
-  return { purpose, commentIds: ids, anchorStates };
+  return { ...base, commentIds: ids };
 };
 
 const parseFromMessageBody = (body: unknown): { uploadId: string; sessionId: string; sessionTitle: string; directory: string | null; open: boolean } => {
@@ -369,6 +393,26 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
       return { text: buildOfflinePrompt({ title: design.title, kind: design.kind, folder: record.path, external }), commentIds: [], omitted: [], chip };
     }
 
+    if (input.purpose === 'ask') {
+      const { element } = input;
+      if (element !== null) {
+        if (element.screen !== null && !design.screens.some((screen) => screen.id === element.screen)) {
+          throw new ApiError('bad-request', 'That element is on a screen this design does not have.');
+        }
+        if (element.viewport !== PAGE_FILL_VIEWPORT_ID && !design.viewports.some((viewport) => viewport.id === element.viewport)) {
+          throw new ApiError('bad-request', 'That element was picked at a viewport this design does not have.');
+        }
+      }
+      try {
+        const { text } = buildAskPrompt({ title: design.title, kind: design.kind, folder: record.path, screens: design.screens, viewports: design.viewports, text: input.text, element });
+        return { text, commentIds: [], omitted: [], chip };
+      } catch (error) {
+        if (error instanceof AskTooLongError) {
+          throw new ApiError('invalid', `Your message is ${error.over} characters too long for the chat. Shorten it and send again.`);
+        }
+        throw error;
+      }
+    }
     if (input.purpose === 'checks') {
       // The findings the Checks badge counts, errors and warnings only: findings about files that changed since a render are not asked for.
       const checks = await ensureChecksService(ctx).forPrompt(record.slug);
