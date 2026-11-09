@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
 
@@ -9,11 +9,11 @@ import { createVersionsService, EMPTY_TREE_HASH, isTracked, listTracked, type Ve
 import { ApiError } from '../../../src/service/http.ts';
 import { pageDesign, sleep } from './harness.ts';
 
-const setup = async (t: TestContext, quietMs = 40): Promise<{ tmp: TmpRoot; ctx: FakeContext; versions: VersionsService }> => {
+const setup = async (t: TestContext, quietMs = 40, now?: () => number): Promise<{ tmp: TmpRoot; ctx: FakeContext; versions: VersionsService }> => {
   const tmp = await useTmpRoot(t);
   const ctx = createFakeContext({ root: tmp.root });
   t.after(() => ctx.dispose());
-  const versions = createVersionsService({ store: ctx.store, hub: ctx.hub, log: ctx.log, onDispose: ctx.onDispose, quietMs });
+  const versions = createVersionsService({ store: ctx.store, hub: ctx.hub, log: ctx.log, onDispose: ctx.onDispose, quietMs, ...(now ? { now } : {}) });
   return { tmp, ctx, versions };
 };
 
@@ -371,5 +371,251 @@ describe('versions', () => {
     assert.equal(list.currentTreeHash, EMPTY_TREE_HASH);
     assert.equal(list.dirty, false);
     assert.equal(list.versions.length, 0);
+  });
+});
+
+// ---- phase-0 0a: a damaged index never costs the history ----
+
+const versionsDirOf = (tmp: TmpRoot, slug: string): string => tmp.at(`${slug}/.versions`);
+
+const damagedFiles = async (tmp: TmpRoot, slug: string): Promise<string[]> =>
+  (await readdir(versionsDirOf(tmp, slug)).catch(() => [])).filter((name) => name.startsWith('index.damaged-')).sort();
+
+type RawIndex = { version: number; next: number; versions: { id: string; files: Record<string, string>; treeHash: string }[] };
+const readRawIndex = async (tmp: TmpRoot, slug: string): Promise<RawIndex> => JSON.parse(await readFile(indexFile(tmp, slug), 'utf8')) as RawIndex;
+
+/** n versions, each with its own index.html content ("page 1" … "page n"). */
+const seedVersions = async (tmp: TmpRoot, versions: VersionsService, slug: string, n: number): Promise<void> => {
+  await tmp.writeDesign(slug, pageDesign({ 'index.html': 'page 1' }));
+  for (let i = 1; i <= n; i += 1) {
+    if (i > 1) await tmp.write(`${slug}/index.html`, `page ${i}`);
+    assert.ok(await versions.create(slug, 'manual'), `version ${i}`);
+  }
+};
+
+describe('version history survives a damaged index', () => {
+  test('★ a truncated index is recovered from the backup, set aside, and costs no object', async (t) => {
+    const { tmp, versions } = await setup(t);
+    await seedVersions(tmp, versions, 'art', 5);
+    const objectsBefore = await allObjects(objectsDir(tmp, 'art'));
+    const original = await readFile(indexFile(tmp, 'art'), 'utf8');
+    const truncated = original.slice(0, Math.floor(original.length / 2));
+    await writeFile(indexFile(tmp, 'art'), truncated);
+
+    const before = await versions.list('art');
+    assert.equal(before.versions.length, 5, 'the backup restores the whole list');
+    assert.equal(before.history, 'recovered');
+    assert.equal(await readFile(indexFile(tmp, 'art'), 'utf8'), truncated, 'list only reads');
+    assert.deepEqual(await damagedFiles(tmp, 'art'), [], 'list sets nothing aside');
+
+    await tmp.write('art/index.html', 'page 6');
+    const created = await versions.create('art', 'manual');
+    assert.equal(created?.id, 'v6');
+
+    const objectsAfter = new Set(await allObjects(objectsDir(tmp, 'art')));
+    for (const hash of objectsBefore) assert.ok(objectsAfter.has(hash), `object ${hash} was kept`);
+    const aside = await damagedFiles(tmp, 'art');
+    assert.equal(aside.length, 1);
+    assert.match(aside[0] ?? '', /-recovered\.json$/);
+    assert.equal(await readFile(path.join(versionsDirOf(tmp, 'art'), aside[0] ?? ''), 'utf8'), truncated, 'the damaged copy holds the original bytes');
+    const after = await versions.list('art');
+    assert.equal(after.versions.length, 6);
+    assert.equal(after.history, 'recovered');
+  });
+
+  test('every index write also writes a byte-identical backup', async (t) => {
+    const { tmp, versions } = await setup(t);
+    await seedVersions(tmp, versions, 'art', 2);
+    assert.equal(await readFile(path.join(versionsDirOf(tmp, 'art'), 'index.bak.json'), 'utf8'), await readFile(indexFile(tmp, 'art'), 'utf8'));
+  });
+
+  test('★ one invalid entry is hidden, the others stay, and its objects survive the next snapshot', async (t) => {
+    const { tmp, versions } = await setup(t);
+    await seedVersions(tmp, versions, 'art', 5);
+    const index = await readRawIndex(tmp, 'art');
+    const victim = index.versions[2];
+    assert.ok(victim);
+    const victimHash = victim.files['index.html'];
+    assert.ok(victimHash);
+    victim.treeHash = 'not-a-hash';
+    const damagedBytes = `${JSON.stringify(index, null, 2)}\n`;
+    await writeFile(indexFile(tmp, 'art'), damagedBytes);
+
+    const before = await versions.list('art');
+    assert.deepEqual(before.versions.map((v) => v.id), ['v5', 'v4', 'v2', 'v1']);
+    assert.equal(before.history, 'repaired');
+    assert.equal(await readFile(indexFile(tmp, 'art'), 'utf8'), damagedBytes, 'list does not write');
+
+    await tmp.write('art/index.html', 'page 6');
+    assert.ok(await versions.create('art', 'manual'));
+    const objects = await allObjects(objectsDir(tmp, 'art'));
+    assert.ok(objects.includes(victimHash), 'the dropped entry keeps its file');
+    assert.match((await damagedFiles(tmp, 'art'))[0] ?? '', /-entries\.json$/);
+    const after = await versions.list('art');
+    assert.equal(after.versions.length, 5);
+    assert.equal(after.history, 'repaired');
+  });
+
+  test('★ no backup and a ruined index: history is reset, ids never repeat, old objects stay', async (t) => {
+    const { tmp, versions } = await setup(t);
+    await seedVersions(tmp, versions, 'art', 3);
+    const objectsBefore = await allObjects(objectsDir(tmp, 'art'));
+    const original = await readFile(indexFile(tmp, 'art'), 'utf8');
+    const ruined = original.slice(0, original.lastIndexOf('"bytes"') + 8); // names every hash and v3, then stops
+    await writeFile(indexFile(tmp, 'art'), ruined);
+    await rm(path.join(versionsDirOf(tmp, 'art'), 'index.bak.json'), { force: true });
+
+    assert.equal((await versions.list('art')).history, 'reset');
+    await tmp.write('art/index.html', 'page 4');
+    const created = await versions.create('art', 'manual');
+    assert.equal(created?.id, 'v4', 'the new id is above every id the damaged file names');
+    const objectsAfter = new Set(await allObjects(objectsDir(tmp, 'art')));
+    for (const hash of objectsBefore) assert.ok(objectsAfter.has(hash), `object ${hash} was kept`);
+    assert.match((await damagedFiles(tmp, 'art'))[0] ?? '', /-reset\.json$/);
+    const after = await versions.list('art');
+    assert.equal(after.history, 'reset');
+    assert.deepEqual(after.versions.map((v) => v.id), ['v4']);
+  });
+
+  test('a missing index next to stored objects is a reset with an orphans note', async (t) => {
+    const { tmp, versions } = await setup(t);
+    await seedVersions(tmp, versions, 'art', 2);
+    const objectsBefore = await allObjects(objectsDir(tmp, 'art'));
+    await rm(indexFile(tmp, 'art'), { force: true });
+    await rm(path.join(versionsDirOf(tmp, 'art'), 'index.bak.json'), { force: true });
+
+    assert.equal((await versions.list('art')).history, 'reset');
+    await tmp.write('art/index.html', 'page 3');
+    assert.ok(await versions.create('art', 'manual'));
+
+    const aside = await damagedFiles(tmp, 'art');
+    assert.equal(aside.length, 1);
+    const note = JSON.parse(await readFile(path.join(versionsDirOf(tmp, 'art'), aside[0] ?? ''), 'utf8')) as { orphans: string[] };
+    assert.deepEqual([...note.orphans].sort(), [...objectsBefore].sort());
+    const objectsAfter = new Set(await allObjects(objectsDir(tmp, 'art')));
+    for (const hash of objectsBefore) assert.ok(objectsAfter.has(hash), `object ${hash} was kept`);
+  });
+
+  test('a brand new design (no index, no objects) is healthy and has no notice', async (t) => {
+    const { tmp, versions } = await setup(t);
+    await tmp.writeDesign('art', pageDesign());
+    const list = await versions.list('art');
+    assert.equal(list.history, undefined);
+    assert.ok(await versions.create('art', 'manual'));
+    assert.deepEqual(await damagedFiles(tmp, 'art'), []);
+    assert.equal((await versions.list('art')).history, undefined);
+  });
+
+  test('★ an index from a newer build is refused and left byte for byte alone', async (t) => {
+    const { tmp, versions } = await setup(t);
+    await seedVersions(tmp, versions, 'art', 1);
+    const index = await readRawIndex(tmp, 'art');
+    index.version = 2;
+    const newer = `${JSON.stringify(index, null, 2)}\n`;
+    await writeFile(indexFile(tmp, 'art'), newer);
+    await tmp.write('art/index.html', 'page 2');
+
+    await assert.rejects(versions.create('art', 'manual'), (error: unknown) => {
+      assert.ok(error instanceof ApiError);
+      assert.equal(error.code, 'invalid');
+      assert.match(error.message, /newer version of Design Chamber/);
+      return true;
+    });
+    await assert.rejects(versions.restore('art', 'v1'), (error: unknown) => error instanceof ApiError && error.code === 'invalid');
+    assert.equal(await readFile(indexFile(tmp, 'art'), 'utf8'), newer);
+    assert.deepEqual(await damagedFiles(tmp, 'art'), []);
+    const list = await versions.list('art');
+    assert.equal(list.history, 'unsupported');
+    assert.deepEqual(list.versions, []);
+  });
+
+  test('an index.json that cannot be read (here: a folder) is an error, not an empty history', async (t) => {
+    const { tmp, versions } = await setup(t);
+    await seedVersions(tmp, versions, 'art', 2);
+    const objectsBefore = (await allObjects(objectsDir(tmp, 'art'))).sort();
+    await rm(indexFile(tmp, 'art'), { force: true });
+    await mkdir(indexFile(tmp, 'art'));
+    await tmp.write('art/index.html', 'page 3');
+
+    await assert.rejects(versions.list('art'), (error: unknown) => error instanceof ApiError && error.code === 'internal' && /could not read this design's version history/.test(error.message));
+    await assert.rejects(versions.create('art', 'manual'), (error: unknown) => error instanceof ApiError && error.code === 'internal');
+    assert.deepEqual((await allObjects(objectsDir(tmp, 'art'))).sort(), objectsBefore, 'nothing was stored or deleted');
+    assert.deepEqual(await damagedFiles(tmp, 'art'), []);
+    assert.ok((await stat(indexFile(tmp, 'art'))).isDirectory());
+  });
+
+  test('an unreadable backup stops garbage collection instead of guessing', async (t) => {
+    const { tmp, ctx, versions } = await setup(t);
+    await seedVersions(tmp, versions, 'art', 1);
+    const stray = 'ab'.padEnd(64, 'c');
+    await mkdir(path.join(objectsDir(tmp, 'art'), 'ab'), { recursive: true });
+    await writeFile(path.join(objectsDir(tmp, 'art'), 'ab', stray), 'orphan');
+    const backup = path.join(versionsDirOf(tmp, 'art'), 'index.bak.json');
+    await rm(backup, { force: true });
+    await mkdir(backup); // a folder where the backup should be: reading it fails with EISDIR
+
+    await tmp.write('art/index.html', 'page 2');
+    assert.ok(await versions.create('art', 'manual'));
+    assert.ok((await allObjects(objectsDir(tmp, 'art'))).includes(stray), 'GC skipped, the stray object is still there');
+    assert.ok(ctx.logs.some((line) => line.event === 'versions.gc-skipped'));
+  });
+
+  test('★ a damaged copy protects its objects for 30 days, then they are collected', async (t) => {
+    let clock = Date.parse('2026-11-01T12:00:00.000Z');
+    const { tmp, versions } = await setup(t, 40, () => clock);
+    await seedVersions(tmp, versions, 'art', 2);
+    const index = await readRawIndex(tmp, 'art');
+    const onlyInDamaged = index.versions.map((v) => v.files['index.html'] ?? '');
+    assert.equal(onlyInDamaged.length, 2);
+    const original = await readFile(indexFile(tmp, 'art'), 'utf8');
+    const ruined = original.slice(0, original.lastIndexOf('"bytes"') + 8); // ruined, still names its hashes
+    await writeFile(indexFile(tmp, 'art'), ruined);
+    await rm(path.join(versionsDirOf(tmp, 'art'), 'index.bak.json'), { force: true });
+    const protectedHashes = onlyInDamaged.filter((hash) => ruined.includes(hash));
+    assert.equal(protectedHashes.length, 2, 'both pages are named by the damaged copy');
+
+    await tmp.write('art/index.html', 'page 3');
+    assert.ok(await versions.create('art', 'manual'));
+    clock += 29 * 24 * 60 * 60 * 1000;
+    await tmp.write('art/index.html', 'page 4');
+    assert.ok(await versions.create('art', 'manual'));
+    let objects = await allObjects(objectsDir(tmp, 'art'));
+    for (const hash of protectedHashes) assert.ok(objects.includes(hash), 'still protected on day 29');
+    assert.equal((await damagedFiles(tmp, 'art')).length, 2, 'the damaged index and the note naming every stored object');
+
+    clock += 2 * 24 * 60 * 60 * 1000;
+    await tmp.write('art/index.html', 'page 5');
+    assert.ok(await versions.create('art', 'manual'));
+    objects = await allObjects(objectsDir(tmp, 'art'));
+    for (const hash of protectedHashes) assert.ok(!objects.includes(hash), 'collected on day 31');
+    assert.deepEqual(await damagedFiles(tmp, 'art'), [], 'the damaged copy is gone');
+    assert.equal((await versions.list('art')).history, undefined, 'and so is the notice');
+  });
+
+  test('only the newest five damaged copies are kept', async (t) => {
+    let clock = Date.parse('2026-11-01T12:00:00.000Z');
+    const { tmp, versions } = await setup(t, 40, () => clock);
+    await seedVersions(tmp, versions, 'art', 1);
+    for (let round = 1; round <= 7; round += 1) {
+      clock += 60_000;
+      await writeFile(indexFile(tmp, 'art'), `broken ${round}`);
+      await tmp.write('art/index.html', `round ${round}`);
+      assert.ok(await versions.create('art', 'manual'));
+    }
+    assert.equal((await damagedFiles(tmp, 'art')).length, 5);
+  });
+
+  test('a .versions folder that is a link out of the design is refused and nothing is written outside', async (t) => {
+    if (process.platform === 'win32') return t.skip('creating a symlink needs a privilege on Windows');
+    const { tmp, versions } = await setup(t);
+    await tmp.writeDesign('art', pageDesign());
+    const outside = tmp.at('elsewhere');
+    await mkdir(outside, { recursive: true });
+    await symlink(outside, versionsDirOf(tmp, 'art'), 'dir');
+
+    await assert.rejects(versions.create('art', 'manual'), (error: unknown) => error instanceof ApiError && error.code === 'bad-path');
+    await assert.rejects(versions.restore('art', 'v1'), (error: unknown) => error instanceof ApiError);
+    await assert.rejects(versions.list('art'), (error: unknown) => error instanceof ApiError && error.code === 'bad-path');
+    assert.deepEqual(await readdir(outside), [], 'nothing was created outside the design');
   });
 });

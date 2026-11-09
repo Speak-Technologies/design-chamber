@@ -1505,6 +1505,10 @@ body {
   min-height: 0;
   overflow: auto;
 }
+/* A notice or error above the list keeps the drawer's own gutter and a gap before the Save bar. */
+.dc-versions > .dc-banner {
+  padding: var(--dc-s3) var(--dc-s4);
+}
 .dc-versions-bar {
   display: flex;
   flex-wrap: wrap;

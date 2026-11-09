@@ -1,5 +1,8 @@
 // View-model of the versions drawer (P4).
 
+import type { BannerTone } from '@openchamber/sdk/ui';
+
+import type { VersionHistoryState } from '../../shared/api.ts';
 import type { VersionFileChange, VersionReason, VersionSummary } from '../../shared/types.ts';
 
 export const reasonLabel = (reason: VersionReason): string => {
@@ -52,3 +55,17 @@ export const viewingBanner = (versionNumber: number, compare: boolean): string =
 
 export const restoreConfirmBody = (versionNumber: number): string =>
   `The design goes back to v${versionNumber}. Your current files are saved as a version first, so you can return to them.`;
+
+/** The notice above the list when the service had to repair, recover or reset it, or a newer build wrote it. */
+export const historyNotice = (state: VersionHistoryState): { tone: BannerTone; title: string; body: string } => {
+  switch (state) {
+    case 'repaired':
+      return { tone: 'warning', title: 'Some versions could not be read', body: 'They are hidden from this list. Their saved files are kept in this design’s .versions folder.' };
+    case 'recovered':
+      return { tone: 'warning', title: 'Version list restored from its backup', body: 'The list was damaged and has been rebuilt. The newest version may be missing.' };
+    case 'reset':
+      return { tone: 'warning', title: 'Older versions could not be recovered', body: 'The version list was damaged and had no usable backup. New versions are saved as usual, and the old files are kept in this design’s .versions folder.' };
+    case 'unsupported':
+      return { tone: 'info', title: 'Saved by a newer Design Chamber', body: 'Update the extension to see, save or restore versions of this design.' };
+  }
+};

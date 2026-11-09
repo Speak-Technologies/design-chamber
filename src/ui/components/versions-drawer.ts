@@ -6,7 +6,7 @@ import { mountBadge } from '@openchamber/sdk/ui';
 import type { VersionDiffResponse } from '../../shared/api.ts';
 import { host, store } from '../guest.ts';
 import { relativeTime } from '../model/format.ts';
-import { changeLabel, restoreConfirmBody, versionRows, type VersionRow } from '../model/versions-model.ts';
+import { changeLabel, historyNotice, restoreConfirmBody, versionRows, type VersionRow } from '../model/versions-model.ts';
 import { toast } from './actions.ts';
 import { createScope, errorText, h } from './dom.ts';
 import { banner, btn, confirmDialog, loadingRow } from './kit.ts';
@@ -126,6 +126,13 @@ export const mountVersions = (options: VersionsOptions): VersionsHandle => {
       el.append(banner({ tone: 'error', title: 'Versions didn’t load', body: state.error?.message ?? 'The local service didn’t answer.', action: { label: 'Try again', onClick: () => void store.loadVersions(options.slug) } }));
       return;
     }
+    const { history } = state.data;
+    const notice = history ? banner(historyNotice(history)) : null;
+    if (notice && history === 'unsupported') {
+      // A newer build owns this history: no list, no "Save a version now", no empty state.
+      el.append(notice);
+      return;
+    }
     const { dirty } = state.data;
     const rows = versionRows(state.data.versions, dirty);
     const viewing = options.viewing();
@@ -137,7 +144,7 @@ export const mountVersions = (options: VersionsOptions): VersionsHandle => {
     const list = rows.length === 0 && !dirty
       ? h('div', { class: 'dc-empty' }, h('p', { class: 'dc-empty-title' }, 'No versions yet'), h('p', { class: 'dc-empty-body' }, 'A version is saved after each agent turn. You can also save one now.'))
       : h('ul', { class: 'dc-version-list' }, dirtyRow, ...rows.map((row) => rowEl(row, viewing)));
-    el.append(h('div', { class: 'dc-versions-bar' }, back?.el ?? null, save.el), list);
+    el.append(...(notice ? [notice] : []), h('div', { class: 'dc-versions-bar' }, back?.el ?? null, save.el), list);
   };
 
   scope.add(store.subscribe(paint));

@@ -168,6 +168,15 @@ test('P2 — a slow agent (HTML, a 2 s pause, then design.json) still keeps its 
   await env.tmp.write('slow/design.json', agentDesignJson);
   env.hub.emit({ slug: 'slow', kind: 'design' });
   await waitForState((state) => !Object.hasOwn(state, 'provisional'));
+  // state.json and the merged design.json are two writes; on a slow runner (Windows CI) the test can
+  // read design.json between them, so wait for the merge to land before checking every value.
+  const designFile = env.tmp.at('slow/design.json');
+  const deadline = Date.now() + 4000;
+  for (;;) {
+    const design = await readFile(designFile, 'utf8').then((text) => JSON.parse(text) as Record<string, unknown>, () => null);
+    if (design?.version === 1 || Date.now() > deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   await assertAdopted(env, 'slow');
 });
 

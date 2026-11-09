@@ -212,7 +212,9 @@ export type ThumbnailResponse = {
 };
 export type ThumbnailRefreshResponse = { state: ThumbState };
 
-export type VersionListResponse = { versions: VersionSummary[]; currentTreeHash: string; dirty: boolean };
+/** Set when the version list had to be repaired, recovered or reset, or was written by a newer build (phase-0 spec, 0a). */
+export type VersionHistoryState = 'repaired' | 'recovered' | 'reset' | 'unsupported';
+export type VersionListResponse = { versions: VersionSummary[]; currentTreeHash: string; dirty: boolean; history?: VersionHistoryState };
 export type CreateVersionBody = { reason: 'turn' | 'manual'; sessionId?: string | null; label?: string };
 /** `null` = nothing changed since the newest version. */
 export type CreateVersionResponse = { created: VersionSummary | null };

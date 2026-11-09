@@ -3,7 +3,7 @@ import { test } from 'node:test';
 
 import type { Comment, Screen, VersionSummary } from '../../src/shared/types.ts';
 import { countByStatus, groupComments, pinAriaLabel, pinGlyph, pinNumbers, sendState, viewportOf } from '../../src/ui/model/comments-model.ts';
-import { reasonLabel, restoreConfirmBody, versionRows, viewingBanner } from '../../src/ui/model/versions-model.ts';
+import { historyNotice, reasonLabel, restoreConfirmBody, versionRows, viewingBanner } from '../../src/ui/model/versions-model.ts';
 
 const comment = (id: string, over: Partial<Comment> = {}): Comment => ({
   id,
@@ -93,4 +93,18 @@ test('viewportOf names a page comment made in Full width, and a real viewport of
   assert.equal(viewportOf([laptop], 'fill'), 'Full width');
   assert.equal(viewportOf([{ id: 'fill', label: 'Wide', width: 1920, height: 1080 }], 'fill'), 'Wide 1920×1080');
   assert.equal(viewportOf([laptop], 'gone'), 'gone');
+});
+
+test('historyNotice has a calm, specific notice for every history state', () => {
+  const states = ['repaired', 'recovered', 'reset', 'unsupported'] as const;
+  assert.deepEqual(states.map((state) => historyNotice(state).tone), ['warning', 'warning', 'warning', 'info']);
+  assert.equal(historyNotice('repaired').title, 'Some versions could not be read');
+  assert.match(historyNotice('repaired').body, /hidden from this list/);
+  assert.equal(historyNotice('recovered').title, 'Version list restored from its backup');
+  assert.match(historyNotice('recovered').body, /newest version may be missing/);
+  assert.equal(historyNotice('reset').title, 'Older versions could not be recovered');
+  assert.match(historyNotice('reset').body, /old files are kept/);
+  assert.equal(historyNotice('unsupported').title, 'Saved by a newer Design Chamber');
+  assert.match(historyNotice('unsupported').body, /Update the extension/);
+  for (const state of states) assert.ok(!/[\u2014\u2013]/.test(historyNotice(state).title + historyNotice(state).body), `${state}: no dashes`);
 });

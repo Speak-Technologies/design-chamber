@@ -23,6 +23,7 @@ import {
   stripForVersion,
   DESIGN_JSON_FILE,
 } from '../shared/design-json.ts';
+import type { VersionHistoryState } from '../shared/api.ts';
 import {
   SHA256_PATTERN,
   SNAPSHOT_BYTES_MAX,
@@ -46,11 +47,27 @@ import { ApiError } from './http.ts';
 import type { ChangeHub, DesignStore, Logger, ServiceContext } from './context.ts';
 import { RefBlocked, type FileSource } from './bundle.ts';
 import { resolveInside } from './paths.ts';
+import {
+  CHAMBER_DIR,
+  DAMAGED_KEEP_MAX,
+  DAMAGED_KEEP_MS,
+  damagedFileName,
+  hashesMentioned,
+  highestVersionNumber,
+  historyStateOf,
+  INDEX_READ_MAX_BYTES,
+  isSafeRel,
+  isTracked,
+  parseDamagedFileName,
+  parseIndexText,
+  VERSIONS_DIR,
+  type DamageKind,
+  type IndexHealth,
+} from './versions-index.ts';
 
-export const VERSIONS_DIR = '.versions';
-const CHAMBER_DIR = '.chamber';
+export { isTracked, VERSIONS_DIR };
+
 const STATE_FILE = path.join(CHAMBER_DIR, 'state.json');
-const INDEX_FILE = path.join(VERSIONS_DIR, 'index.json');
 
 const sha256 = (bytes: Uint8Array | string): string => createHash('sha256').update(bytes).digest('hex');
 
@@ -58,14 +75,6 @@ const sha256 = (bytes: Uint8Array | string): string => createHash('sha256').upda
 export const EMPTY_TREE_HASH = sha256('');
 
 // ---- tracked set ----
-
-/** `.versions/**`, `.chamber/**`, `.thumb.png` (and its atomic-write temporaries) are never tracked. */
-export const isTracked = (rel: string): boolean => {
-  const segments = rel.split('/');
-  if (segments[0] === VERSIONS_DIR || segments[0] === CHAMBER_DIR) return false;
-  const base = segments[segments.length - 1] ?? '';
-  return base !== '.thumb.png' && !base.startsWith('.thumb.');
-};
 
 /**
  * Every tracked file under the design folder, `/`-separated and sorted.
@@ -133,88 +142,237 @@ export const computeTree = async (designDir: string): Promise<VersionTree> => {
 
 // ---- index and objects ----
 
-const objectPath = (designDir: string, hash: string): string => path.join(designDir, VERSIONS_DIR, 'objects', hash.slice(0, 2), hash);
+/** Shown to the user as the service `message` (phase-0 spec, 0a). */
+const READ_FAILED = "Design Chamber could not read this design's version history right now. Try again in a moment.";
+const UNSUPPORTED = "This design's version history was saved by a newer version of Design Chamber. Update the extension to save or restore versions here.";
+const SET_ASIDE_FAILED = 'Design Chamber could not set the damaged version list aside, so it saved nothing. Try again in a moment.';
+const RESTORE_WOULD_DROP_COMMENTS = "This version's design.json is damaged, so restoring it would lose your comments. Nothing was changed.";
 
-/** A design-relative `/` path with no step that could leave the folder (lexical; writes still go through `resolveInside`). */
-const isSafeRel = (rel: string): boolean =>
-  rel !== '' &&
-  !rel.includes('\u0000') &&
-  !rel.includes('\\') &&
-  !rel.startsWith('/') &&
-  !/^[A-Za-z]:/.test(rel) &&
-  rel.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+const INDEX_NAME = 'index.json';
+const BACKUP_NAME = 'index.bak.json';
 
-/** index.json lives in the agent-writable design folder: every path must be tracked and safe, every object a sha256. */
-const isFileMap = (value: unknown): value is Record<string, string> =>
-  typeof value === 'object' &&
-  value !== null &&
-  !Array.isArray(value) &&
-  Object.entries(value).every(([rel, hash]) => isSafeRel(rel) && isTracked(rel) && typeof hash === 'string' && SHA256_PATTERN.test(hash));
+const errorCode = (error: unknown): string | undefined => (error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined);
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-const isEntry = (value: unknown): value is VersionEntry => {
-  if (typeof value !== 'object' || value === null) return false;
-  const entry = value as Record<string, unknown>;
-  return (
-    typeof entry.id === 'string' &&
-    VERSION_ID_PATTERN.test(entry.id) &&
-    typeof entry.n === 'number' &&
-    typeof entry.created === 'string' &&
-    typeof entry.reason === 'string' &&
-    (entry.sessionId === null || typeof entry.sessionId === 'string') &&
-    typeof entry.treeHash === 'string' &&
-    SHA256_PATTERN.test(entry.treeHash) &&
-    isFileMap(entry.files) &&
-    typeof entry.bytes === 'number'
-  );
+/** The contained `.versions` folder: a `.versions` link that leaves the design is refused (`bad-path`). */
+const versionsDirOf = (designDir: string): Promise<string> => resolveInside(designDir, [VERSIONS_DIR]);
+
+const objectPath = (versionsDir: string, hash: string): string => path.join(versionsDir, 'objects', hash.slice(0, 2), hash);
+
+type CappedRead = { kind: 'missing' } | { kind: 'oversize' } | { kind: 'bytes'; bytes: Buffer };
+
+/** Reads a small regular file. ENOENT is `missing`; every other failure (EBUSY, EISDIR, EIO…) throws. */
+const readCapped = async (file: string): Promise<CappedRead> => {
+  const info = await stat(file).catch((error: unknown) => {
+    if (errorCode(error) === 'ENOENT') return null;
+    throw error;
+  });
+  if (info === null) return { kind: 'missing' };
+  if (!info.isFile()) throw new Error(`${path.basename(file)} is not a regular file`);
+  if (info.size > INDEX_READ_MAX_BYTES) return { kind: 'oversize' };
+  try {
+    return { kind: 'bytes', bytes: await readFile(file) };
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return { kind: 'missing' }; // removed between stat and read
+    throw error;
+  }
 };
 
-const readIndex = async (designDir: string, log: Logger): Promise<VersionIndex> => {
-  const text = await readFile(path.join(designDir, INDEX_FILE), 'utf8').catch(() => null);
-  if (text === null) return { version: 1, next: 1, versions: [] };
-  const parsed: unknown = parseJsonObject(text);
-  if (
-    typeof parsed === 'object' &&
-    parsed !== null &&
-    (parsed as JsonObject).version === 1 &&
-    Array.isArray((parsed as JsonObject).versions)
-  ) {
-    const raw = parsed as { next?: unknown; versions: unknown[] };
-    const versions = raw.versions.filter(isEntry);
-    if (versions.length === raw.versions.length) {
-      const next = typeof raw.next === 'number' && Number.isInteger(raw.next) ? raw.next : versions.reduce((max, entry) => Math.max(max, entry.n + 1), 1);
-      return { version: 1, next, versions };
+export type LoadedIndex = {
+  index: VersionIndex;
+  health: IndexHealth;
+  /** Set when the next commit must keep the old index.json aside first; cleared once it has. */
+  setAside: DamageKind | null;
+  /** `reset` from a missing index: every object found, written into the note. */
+  orphans: string[] | null;
+  damaged: { name: string; at: number; kind: DamageKind }[];
+};
+
+const emptyIndex = (next = 1): VersionIndex => ({ version: 1, next, versions: [] });
+
+const listObjectHashes = async (versionsDir: string): Promise<string[]> => {
+  const hashes: string[] = [];
+  const buckets = await readdir(path.join(versionsDir, 'objects'), { withFileTypes: true }).catch((error: unknown) => {
+    if (errorCode(error) === 'ENOENT') return [];
+    throw error;
+  });
+  for (const bucket of buckets) {
+    if (!bucket.isDirectory()) continue;
+    for (const name of await readdir(path.join(versionsDir, 'objects', bucket.name))) if (SHA256_PATTERN.test(name)) hashes.push(name);
+  }
+  return hashes;
+};
+
+const listDamaged = async (versionsDir: string): Promise<LoadedIndex['damaged']> => {
+  const names = await readdir(versionsDir).catch((error: unknown) => {
+    if (errorCode(error) === 'ENOENT') return [];
+    throw error;
+  });
+  const out: LoadedIndex['damaged'] = [];
+  for (const name of names) {
+    const parsed = parseDamagedFileName(name);
+    if (parsed !== null) out.push({ name, ...parsed });
+  }
+  return out;
+};
+
+/**
+ * Read-only: reports what is on disk and what the next commit must do about it. A missing index
+ * is a new design; a damaged one is repaired from the backup or reset, never silently emptied;
+ * a read error other than "missing" is an error, not an empty list.
+ */
+const loadIndex = async (designDir: string, log: Logger): Promise<LoadedIndex> => {
+  const versionsDir = await versionsDirOf(designDir);
+  const fail = (error: unknown): never => {
+    log.warn('versions.read-failed', { design: designDir, error: messageOf(error) });
+    throw new ApiError('internal', READ_FAILED);
+  };
+  const read = (name: string): Promise<CappedRead> => readCapped(path.join(versionsDir, name)).catch(fail);
+  const damaged = await listDamaged(versionsDir).catch(fail);
+  const loaded = (index: VersionIndex, health: IndexHealth, setAside: DamageKind | null = null, orphans: string[] | null = null): LoadedIndex => ({ index, health, setAside, orphans, damaged });
+
+  const current = await read(INDEX_NAME);
+  let damagedText = '';
+  if (current.kind === 'bytes') {
+    damagedText = current.bytes.toString('utf8');
+    const parsed = parseIndexText(damagedText);
+    if (parsed.kind === 'unsupported') return loaded(emptyIndex(), 'unsupported');
+    if (parsed.kind === 'ok') {
+      if (parsed.dropped === 0) return loaded(parsed.index, 'ok');
+      log.warn('versions.index-entries-dropped', { design: designDir, dropped: parsed.dropped });
+      return loaded(parsed.index, 'repaired', 'entries');
     }
   }
-  // Corrupt index: treated as absent (the objects stay; GC after the next prune reclaims them).
-  log.warn('versions.index-corrupt', { design: designDir });
-  return { version: 1, next: 1, versions: [] };
+  // index.json is missing, unreadable or too large to read: the backup is the way back.
+  const backup = await read(BACKUP_NAME);
+  const backupParse = backup.kind === 'bytes' ? parseIndexText(backup.bytes.toString('utf8')) : null;
+  if (backupParse?.kind === 'unsupported') return loaded(emptyIndex(), 'unsupported');
+  if (backupParse?.kind === 'ok') {
+    // Ids never repeat old ones (comments record `sentInVersion` numbers).
+    const next = Math.max(backupParse.index.next, highestVersionNumber(damagedText) + 1);
+    log.warn('versions.index-recovered', { design: designDir });
+    return loaded({ ...backupParse.index, next }, 'recovered', 'recovered');
+  }
+  // Every reset records the objects on disk: the damaged text may name none of them ({}, an empty
+  // file), so naming them is what keeps the old files, as the drawer's notice promises.
+  const orphans = await listObjectHashes(versionsDir).catch(fail);
+  if (current.kind === 'missing') {
+    if (orphans.length === 0) return loaded(emptyIndex(), 'ok'); // a new design
+    log.warn('versions.index-reset', { design: designDir, objects: orphans.length });
+    return loaded(emptyIndex(), 'reset', 'reset', orphans);
+  }
+  log.warn('versions.index-reset', { design: designDir, objects: orphans.length });
+  return loaded(emptyIndex(Math.max(1, highestVersionNumber(damagedText) + 1)), 'reset', 'reset', orphans);
 };
 
 const writeAtomic = async (target: string, bytes: Uint8Array | string): Promise<void> => {
   const tmp = `${target}.${randomBytes(6).toString('hex')}.tmp`;
-  await writeFile(tmp, bytes);
-  await rename(tmp, target);
+  try {
+    await writeFile(tmp, bytes);
+    await rename(tmp, target);
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
 };
 
-const writeIndex = async (designDir: string, index: VersionIndex): Promise<void> => {
-  const file = path.join(designDir, INDEX_FILE);
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeAtomic(file, serializeJson(index as unknown as JsonObject));
+type Env = { log: Logger; now: () => number };
+
+/**
+ * Moves the damaged index.json to `index.damaged-…` (or writes a note when there is none), so
+ * no write ever replaces bytes the service did not create. A reset also writes a note naming
+ * every stored object, because the damaged text may name none of them. A Windows lock on the
+ * rename falls back to a copy. Both failing aborts the commit before the index is written.
+ */
+const setAsideDamaged = async (versionsDir: string, loaded: LoadedIndex, env: Env): Promise<void> => {
+  const kind = loaded.setAside;
+  if (kind === null) return;
+  const source = path.join(versionsDir, INDEX_NAME);
+  const nameFor = (): string => path.join(versionsDir, damagedFileName(new Date(env.now()), kind, randomBytes(2).toString('hex')));
+  try {
+    // The note first: a crash between the two leaves a note and a damaged index, both harmless.
+    if (kind === 'reset') await writeAtomic(nameFor(), `${JSON.stringify({ orphans: loaded.orphans ?? [] })}\n`);
+    const target = nameFor();
+    await rename(source, target).catch(async (error: unknown) => {
+      const code = errorCode(error);
+      if (code === 'ENOENT') {
+        if (kind !== 'reset') await writeAtomic(target, '{}\n'); // nothing to move; the note marks the recovery
+      } else if (code === 'EPERM' || code === 'EBUSY' || code === 'EACCES') {
+        const copy = await readCapped(source);
+        if (copy.kind !== 'bytes') throw error;
+        await writeAtomic(target, copy.bytes);
+      } else {
+        throw error;
+      }
+    });
+  } catch (error) {
+    env.log.warn('versions.set-aside-failed', { design: path.dirname(versionsDir), error: messageOf(error) });
+    throw new ApiError('internal', SET_ASIDE_FAILED);
+  }
+  loaded.setAside = null; // a second commit in the same operation does not repeat it
 };
 
-const putObject = async (designDir: string, hash: string, bytes: Buffer): Promise<void> => {
-  const target = objectPath(designDir, hash);
+/** Chain only: every index write goes through here. Damaged bytes are set aside first, the backup follows the index. */
+const commitIndex = async (designDir: string, loaded: LoadedIndex, index: VersionIndex, env: Env): Promise<void> => {
+  if (loaded.health === 'unsupported') throw new ApiError('invalid', UNSUPPORTED);
+  const versionsDir = await versionsDirOf(designDir);
+  await mkdir(versionsDir, { recursive: true });
+  await setAsideDamaged(versionsDir, loaded, env);
+  const bytes = serializeJson(index as unknown as JsonObject); // Safe: VersionIndex is plain JSON.
+  await writeAtomic(path.join(versionsDir, INDEX_NAME), bytes);
+  await writeAtomic(path.join(versionsDir, BACKUP_NAME), bytes).catch((error: unknown) => env.log.warn('versions.backup-failed', { design: designDir, error: messageOf(error) }));
+};
+
+const putObject = async (versionsDir: string, hash: string, bytes: Buffer): Promise<void> => {
+  const target = objectPath(versionsDir, hash);
   const existing = await stat(target).catch(() => null);
   if (existing?.isFile()) return; // content-addressed and immutable
   await mkdir(path.dirname(target), { recursive: true });
   await writeAtomic(target, bytes);
 };
 
-/** Delete objects no version references any more (run after pruning, inside the slug's chain). */
-const collectGarbage = async (designDir: string, index: VersionIndex, log: Logger): Promise<void> => {
-  const referenced = new Set<string>();
-  for (const entry of index.versions) for (const hash of Object.values(entry.files)) referenced.add(hash);
-  const objectsDir = path.join(designDir, VERSIONS_DIR, 'objects');
+/**
+ * Delete objects nothing keeps any more (run after pruning, inside the slug's chain). "Kept" is
+ * the live index, the backup, and every damaged copy still within its time and count limit; the
+ * copies are scanned for hashes as plain text, so a truncated file still protects what it names.
+ * A kept file that cannot be read, or is too large to read, skips the run: nothing is deleted on a guess.
+ */
+const collectGarbage = async (designDir: string, versionsDir: string, index: VersionIndex, env: Env): Promise<void> => {
+  const { log } = env;
+  let listed: LoadedIndex['damaged'];
+  try {
+    listed = await listDamaged(versionsDir);
+  } catch (error) {
+    // Without the list there is no knowing what the damaged copies protect: delete nothing.
+    log.warn('versions.gc-skipped', { design: designDir, file: '.versions', error: messageOf(error) });
+    return;
+  }
+  const damaged = listed.sort((a, b) => b.at - a.at || (a.name < b.name ? 1 : -1));
+  const kept: string[] = [];
+  const now = env.now();
+  for (const [position, item] of damaged.entries()) {
+    if (position < DAMAGED_KEEP_MAX && now - item.at < DAMAGED_KEEP_MS) kept.push(item.name);
+    else await unlink(path.join(versionsDir, item.name)).catch((error: unknown) => log.warn('versions.gc-failed', { object: item.name, error: messageOf(error) }));
+  }
+
+  const protectedHashes = new Set<string>();
+  for (const entry of index.versions) for (const hash of Object.values(entry.files)) protectedHashes.add(hash);
+  for (const name of [BACKUP_NAME, ...kept]) {
+    let read: CappedRead;
+    try {
+      read = await readCapped(path.join(versionsDir, name));
+    } catch (error) {
+      log.warn('versions.gc-skipped', { design: designDir, file: name, error: messageOf(error) });
+      return;
+    }
+    if (read.kind === 'oversize') {
+      log.warn('versions.gc-skipped', { design: designDir, file: name, error: 'too large to scan' });
+      return;
+    }
+    if (read.kind === 'bytes') for (const hash of hashesMentioned(read.bytes.toString('utf8'))) protectedHashes.add(hash);
+  }
+
+  const objectsDir = path.join(versionsDir, 'objects');
   const buckets = await readdir(objectsDir, { withFileTypes: true }).catch(() => []);
   for (const bucket of buckets) {
     if (!bucket.isDirectory() || !/^[0-9a-f]{2}$/.test(bucket.name)) continue;
@@ -222,8 +380,8 @@ const collectGarbage = async (designDir: string, index: VersionIndex, log: Logge
     const names = await readdir(bucketDir).catch(() => []);
     for (const name of names) {
       if (!SHA256_PATTERN.test(name)) continue; // never delete a file we cannot identify
-      if (referenced.has(name)) continue;
-      await unlink(path.join(bucketDir, name)).catch((error: unknown) => log.warn('versions.gc-failed', { object: name, error: error instanceof Error ? error.message : String(error) }));
+      if (protectedHashes.has(name)) continue;
+      await unlink(path.join(bucketDir, name)).catch((error: unknown) => log.warn('versions.gc-failed', { object: name, error: messageOf(error) }));
     }
     const left = await readdir(bucketDir).catch(() => []);
     if (left.length === 0) await rm(bucketDir, { recursive: true, force: true });
@@ -249,7 +407,7 @@ export const createVersionFileSource = (designDir: string, files: Record<string,
     validateRel(rel);
     const hash = files[rel];
     if (hash === undefined || !SHA256_PATTERN.test(hash)) return null;
-    const bytes = await readFile(objectPath(designDir, hash)).catch(() => null);
+    const bytes = await readFile(objectPath(await versionsDirOf(designDir), hash)).catch(() => null);
     if (bytes === null) return null;
     return { bytes, size: bytes.length, mtimeMs: 0 };
   },
@@ -257,7 +415,7 @@ export const createVersionFileSource = (designDir: string, files: Record<string,
     validateRel(rel);
     const hash = files[rel];
     if (hash === undefined || !SHA256_PATTERN.test(hash)) return null;
-    const info = await stat(objectPath(designDir, hash)).catch(() => null);
+    const info = await stat(objectPath(await versionsDirOf(designDir), hash)).catch(() => null);
     return info === null ? null : { size: info.size, mtimeMs: info.mtimeMs };
   },
 });
@@ -269,7 +427,8 @@ export type SnapshotOptions = { sessionId?: string | null; label?: string };
 export type VersionsService = {
   /** Brand so `ensureVersionsService` recognises an already-wired instance. */
   __dcVersionsService?: true;
-  list(slug: string): Promise<{ versions: VersionSummary[]; currentTreeHash: string; dirty: boolean }>;
+  /** `history` is set when the version list was repaired, recovered, reset or written by a newer build. */
+  list(slug: string): Promise<{ versions: VersionSummary[]; currentTreeHash: string; dirty: boolean; history?: VersionHistoryState }>;
   /** `reason` is already validated ('turn' | 'manual'). `null` = nothing changed. */
   create(slug: string, reason: 'turn' | 'manual', options?: SnapshotOptions): Promise<VersionSummary | null>;
   snapshot(slug: string, reason: VersionReason, options?: SnapshotOptions): Promise<VersionEntry | null>;
@@ -289,11 +448,33 @@ export type VersionsDeps = {
   onDispose: (fn: () => void | Promise<void>) => void;
   /** Auto-snapshot quiet period; `VERSION_QUIET_MS` outside tests. */
   quietMs?: number;
+  /** Clock for damaged-copy names and expiry (test seam); `Date.now` outside tests. */
+  now?: () => number;
 };
 
 export const createVersionsService = (deps: VersionsDeps): VersionsService => {
   const { store, hub, log } = deps;
   const quietMs = deps.quietMs ?? VERSION_QUIET_MS;
+  const env: Env = { log, now: deps.now ?? Date.now };
+
+  // A newer build's index is logged once per design per run, not on every auto snapshot or turn.
+  const unsupportedLogged = new Set<string>();
+  const warnFailure = (event: string, slug: string, error: unknown): void => {
+    if (error instanceof ApiError && error.message === UNSUPPORTED) {
+      if (unsupportedLogged.has(slug)) return;
+      unsupportedLogged.add(slug);
+      log.warn('versions.unsupported', { slug });
+      return;
+    }
+    log.warn(event, { slug, error: messageOf(error) });
+  };
+
+  /** The index for a read that cannot continue on a newer build's index (diff, readTree, restore). */
+  const readableIndex = async (designDir: string): Promise<LoadedIndex> => {
+    const loaded = await loadIndex(designDir, log);
+    if (loaded.health === 'unsupported') throw new ApiError('invalid', UNSUPPORTED);
+    return loaded;
+  };
 
   // Per-slug mutation chain.
   const chains = new Map<string, Promise<unknown>>();
@@ -342,6 +523,10 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
     options: SnapshotOptions & { keep?: string; required?: boolean },
   ): Promise<VersionEntry | null> => {
     const designDir = await store.dir(slug);
+    // Before any object is written: a newer build's index, a read error or a link out of the
+    // design refuses the snapshot while nothing has changed on disk.
+    const loaded = await readableIndex(designDir);
+    const versionsDir = await versionsDirOf(designDir);
     // Two attempts: a file rewritten between hashing and storing its object would corrupt the
     // snapshot, so every object is hash-verified and the whole snapshot redone on a mismatch.
     let tree: VersionTree | null = null;
@@ -365,7 +550,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
           torn = true;
           break;
         }
-        await putObject(designDir, hash, content);
+        await putObject(versionsDir, hash, content);
       }
       if (!torn) break;
       treeCache.delete(slug);
@@ -373,7 +558,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
     }
     if (tree === null) throw new ApiError('conflict', 'The design changed while Design Chamber was saving it. Try again.');
 
-    const index = await readIndex(designDir, log);
+    const index = loaded.index;
     const latest = index.versions[index.versions.length - 1];
     if (latest && latest.treeHash === tree.treeHash) {
       // The quiet-period auto snapshot often lands before the turn ends with the same files:
@@ -382,7 +567,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
       if (reason !== 'turn' || latest.reason !== 'auto' || !recent) return null; // dedupe by tree hash
       latest.reason = 'turn';
       latest.sessionId = options.sessionId ?? latest.sessionId;
-      await writeIndex(designDir, index);
+      await commitIndex(designDir, loaded, index, env);
       hub.emit({ slug, kind: 'versions' });
       return latest;
     }
@@ -409,8 +594,8 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
       if (oldest === -1) break;
       index.versions.splice(oldest, 1);
     }
-    await writeIndex(designDir, index);
-    await collectGarbage(designDir, index, log);
+    await commitIndex(designDir, loaded, index, env);
+    await collectGarbage(designDir, versionsDir, index, env);
     treeCache.delete(slug);
     hub.emit({ slug, kind: 'versions' });
     return entry;
@@ -425,13 +610,40 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
   const restoreNow = async (slug: string, vid: string): Promise<{ restorePoint: VersionSummary | null; restored: VersionSummary }> => {
     if (!VERSION_ID_PATTERN.test(vid)) throw new ApiError('bad-request', 'That is not a version id.');
     const designDir = await store.dir(slug);
-    const index = await readIndex(designDir, log);
+    const { index } = await readableIndex(designDir);
+    const versionsDir = await versionsDirOf(designDir);
     const target = findEntry(index, vid);
 
     // Every object must exist before anything is written.
     for (const hash of Object.values(target.files)) {
-      const info = await stat(objectPath(designDir, hash)).catch(() => null);
+      const info = await stat(objectPath(versionsDir, hash)).catch(() => null);
       if (!info?.isFile()) throw new ApiError('invalid', 'This version is damaged (a stored file is gone) and cannot be restored.');
+    }
+
+    // Prepare design.json in memory, before the restore point and every write, so a refusal
+    // changes nothing. The store's state is the resolved one (state.json, or rebuilt from the
+    // live design.json when state.json is missing or damaged), so comments are never lost.
+    const liveState = (await store.get(slug)).state;
+    const stateOnDisk = (await readState(designDir)) !== null;
+    let designBytes: Buffer | null = null;
+    const designHash = target.files[DESIGN_JSON_FILE];
+    if (designHash !== undefined) {
+      const stored = await readFile(objectPath(versionsDir, designHash));
+      const parsed = parseJsonObject(stored.toString('utf8'));
+      if (parsed !== null) {
+        // Keep the CURRENT service-owned fields and comments (§6.4: restore never touches
+        // comments or sessionId). `updated` is not bumped: the tree hash must stay the
+        // version's, so no phantom "dirty" state after restore.
+        if (stateOnDisk) designBytes = Buffer.from(serializeJson(mergeServiceFields(parsed, liveState)), 'utf8');
+        // No state.json (an agent-made design): the live comments live only in design.json, so
+        // graft just those. A full merge would append fields the version never had and change its tree hash.
+        else if (liveState.comments.length > 0) designBytes = Buffer.from(serializeJson({ ...parsed, comments: mergeServiceFields({}, liveState).comments ?? [] }), 'utf8');
+        else designBytes = stored;
+      } else if (!stateOnDisk && liveState.comments.length > 0) {
+        throw new ApiError('invalid', RESTORE_WOULD_DROP_COMMENTS);
+      } else {
+        designBytes = stored; // state.json (if any) keeps the comments and the store re-mirrors them
+      }
     }
 
     const current = await treeOf(slug, designDir);
@@ -443,16 +655,8 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
       restorePoint = await snapshotNow(slug, 'restore-point', { keep: target.id, required: true });
     }
 
-    const state = await readState(designDir);
     for (const [rel, hash] of Object.entries(target.files)) {
-      let bytes = await readFile(objectPath(designDir, hash));
-      if (rel === DESIGN_JSON_FILE && state !== null) {
-        const parsed = parseJsonObject(bytes.toString('utf8'));
-        // Keep the CURRENT service-owned fields and comments (§6.4: restore never touches
-        // comments or sessionId). `updated` is not bumped: the tree hash must stay the
-        // version's, so no phantom "dirty" state after restore.
-        if (parsed !== null) bytes = Buffer.from(serializeJson(mergeServiceFields(parsed, state)), 'utf8');
-      }
+      const bytes = rel === DESIGN_JSON_FILE && designBytes !== null ? designBytes : await readFile(objectPath(versionsDir, hash));
       const destination = await resolveInside(designDir, rel.split('/'));
       await mkdir(path.dirname(destination), { recursive: true });
       await writeAtomic(destination, bytes);
@@ -469,9 +673,9 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
     // auto timer records it seconds later).
     const restored =
       (await snapshotNow(slug, 'restored', {}).catch((error: unknown) => {
-        log.warn('versions.restored-snapshot-failed', { slug, error: error instanceof Error ? error.message : String(error) });
+        log.warn('versions.restored-snapshot-failed', { slug, error: messageOf(error) });
         return null;
-      })) ?? (await readIndex(designDir, log)).versions.at(-1);
+      })) ?? (await loadIndex(designDir, log)).index.versions.at(-1);
     if (!restored) throw new ApiError('internal', 'The version was restored, but Design Chamber could not record the snapshot.');
     return { restorePoint: restorePoint ? toSummary(restorePoint) : null, restored: toSummary(restored) };
   };
@@ -495,7 +699,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
         void service.snapshot(slug, 'auto').catch((error: unknown) => {
           // A design removed mid-quiet-period is normal; anything else is worth a log line.
           if (error instanceof ApiError && error.code === 'not-found') return;
-          log.warn('versions.auto-failed', { slug, error: error instanceof Error ? error.message : String(error) });
+          warnFailure('versions.auto-failed', slug, error);
         });
       }, quietMs),
     );
@@ -523,14 +727,17 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
 
     async list(slug) {
       const designDir = await store.dir(slug);
-      const index = await readIndex(designDir, log);
+      const { index, health, damaged } = await loadIndex(designDir, log);
       const tree = await treeOf(slug, designDir);
       const latest = index.versions[index.versions.length - 1];
       const dirty = latest ? latest.treeHash !== tree.treeHash : tree.treeHash !== EMPTY_TREE_HASH;
+      // Expired copies stay on disk until the next snapshot's cleanup; they no longer count.
+      const history = historyStateOf(health, damaged.filter((item) => env.now() - item.at < DAMAGED_KEEP_MS));
       return {
         versions: [...index.versions].reverse().map(toSummary),
         currentTreeHash: tree.treeHash,
         dirty,
+        ...(history !== null ? { history } : {}),
       };
     },
 
@@ -547,7 +754,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
       for (const design of designs) {
         if (design.sessionId !== sessionId) continue;
         const entry = await service.snapshot(design.slug, 'turn', { sessionId }).catch((error: unknown) => {
-          log.warn('versions.turn-failed', { slug: design.slug, error: error instanceof Error ? error.message : String(error) });
+          warnFailure('versions.turn-failed', design.slug, error);
           return null;
         });
         if (entry) created.push({ slug: design.slug, id: entry.id });
@@ -560,7 +767,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
     async diff(slug, vid, against) {
       if (!VERSION_ID_PATTERN.test(vid)) throw new ApiError('bad-request', 'That is not a version id.');
       const designDir = await store.dir(slug);
-      const index = await readIndex(designDir, log);
+      const { index } = await readableIndex(designDir);
       const a = findEntry(index, vid).files;
       let b: Record<string, string>;
       if (against === 'current') b = (await treeOf(slug, designDir)).files;
@@ -585,7 +792,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
     async readTree(slug, vid) {
       if (!VERSION_ID_PATTERN.test(vid)) throw new ApiError('bad-request', 'That is not a version id.');
       const designDir = await store.dir(slug);
-      const index = await readIndex(designDir, log);
+      const { index } = await readableIndex(designDir);
       const entry = findEntry(index, vid);
       return { entry, source: createVersionFileSource(designDir, entry.files) };
     },
