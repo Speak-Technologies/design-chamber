@@ -97,8 +97,11 @@ const version = await until(async () => {
 void version;
 
 const problems = [];
+// Pages still open: a scenario that throws never reaches its own close(), and a leaked tab keeps its timers and
+// renderer running, which starves the pages of every later scenario (boards that never leave idle).
+const openPages = new Set();
 
-const openPage = async ({ width, height, surface, theme, label }) => {
+const openPage = async ({ width, height, surface, theme, label, query = '' }) => {
   const target = await (await fetch(`http://127.0.0.1:${debugPort}/json/new?about:blank`, { method: 'PUT' })).json();
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
@@ -128,8 +131,9 @@ const openPage = async ({ width, height, surface, theme, label }) => {
     });
   await send('Runtime.enable');
   await send('Page.enable');
+  await send('Page.bringToFront');
   await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
-  await send('Page.navigate', { url: `${base}/host.html?surface=${surface}&theme=${theme}` });
+  await send('Page.navigate', { url: `${base}/host.html?surface=${surface}&theme=${theme}${query}` });
 
   // Run `code` inside the guest document. `doc` and `win` are the guest's document and window.
   const guest = async (code) => {
@@ -208,10 +212,12 @@ const openPage = async ({ width, height, surface, theme, label }) => {
       console.log(`  saved ${path.relative(root, file)}`);
     },
     async close() {
+      openPages.delete(api);
       socket.close();
       await fetch(`http://127.0.0.1:${debugPort}/json/close/${target.id}`).catch(() => undefined);
     },
   };
+  openPages.add(api);
   await api.waitFor('return !!doc.querySelector(".dc-app")', 'the app to mount');
   return api;
 };
@@ -284,14 +290,14 @@ const railScenario = async (width, theme) => {
 
   await p.click('.dc-toolbar-compact .dc-iconbtn[aria-label="More actions"]');
   await p.shot(`${tag}-6-viewer-menu`);
-  await menuItem(p, 'Comments');
+  await p.key('Escape');
+  await p.click('.dc-toolbar-compact .dc-comments-chip');
   await p.waitFor('return !!doc.querySelector(".dc-comment")', 'comments');
   await p.settle(200);
   await p.shot(`${tag}-7-comments`);
   await p.key('Escape');
 
-  await p.click('.dc-toolbar-compact .dc-iconbtn[aria-label="More actions"]');
-  await menuItem(p, 'Versions');
+  await p.click('.dc-toolbar-compact .dc-versions-btn');
   await p.waitFor('return !!doc.querySelector(".dc-version")', 'versions');
   await p.settle(200);
   await p.shot(`${tag}-8-versions`);
@@ -551,6 +557,8 @@ try {
       failed = true;
       console.log(`  ✗ ${name} crashed: ${error.message}`);
       problems.push(`${name}: ${error.message}`);
+    } finally {
+      for (const page of [...openPages]) await page.close().catch(() => undefined);
     }
   }
 } finally {

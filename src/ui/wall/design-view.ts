@@ -11,7 +11,8 @@ import { mountComments, type CommentsHandle } from '../components/comments-drawe
 import { createScope, debounce, errorText, h, replace } from '../components/dom.ts';
 import { createNotices } from '../components/notices.ts';
 import { attachMenu, banner, bannerWithActions, btn, confirmDialog, iconBtn, loadingRow, openMenu, openSheet, type BtnHandle, type MenuEntry, type SheetHandle } from '../components/kit.ts';
-import { confirmRestoreVersion, mountVersions, type VersionsHandle } from '../components/versions-drawer.ts';
+import { createRestoreFlow } from '../components/restore-flow.ts';
+import { mountVersions, type VersionsHandle } from '../components/versions-drawer.ts';
 import type { Camera } from '../../guest/camera.ts';
 import { renderSourceKey } from '../../guest/store.ts';
 import { askSelfContained, host, isServiceError, store } from '../guest.ts';
@@ -23,7 +24,7 @@ import { pageViewOptions, remoteBannerHidden, remoteNotice, resolvePageView, sho
 import * as askBar from './feature-ask-bar.ts';
 import * as buildStrip from './feature-build-strip.ts';
 import * as findability from './feature-findability.ts';
-import type { FeatureMount, ViewContext } from './view-context.ts';
+import type { DrawerKind, FeatureMount, ViewContext } from './view-context.ts';
 import { createWall, type WallHandle } from './wall.ts';
 
 export type DesignViewOptions = {
@@ -37,7 +38,7 @@ export type DesignViewHandle = { el: HTMLElement; dispose: () => void };
 
 /** Per-design view settings in `host.storage` `view:<slug>`; `pageView` is checked against the design's viewports when it is used. */
 type Prefs = { hidden: string[]; camera: Camera | null; pageView: unknown };
-type Drawer = { kind: 'comments' | 'versions'; sheet: SheetHandle; handle: CommentsHandle | VersionsHandle };
+type Drawer = { kind: DrawerKind; sheet: SheetHandle; handle: CommentsHandle | VersionsHandle };
 
 const FULL_SCREEN_HINT = 'Full screen: sidebar → Extension pages → Design Chamber';
 /** How long the "Export saved" notice stays (it holds while the pointer or focus is on it). */
@@ -101,6 +102,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     // Seam S9: feature mounts hear about these.
     const detailListeners = createListeners();
     const viewingListeners = createListeners();
+    const drawerListeners = createListeners();
     let htmlChars: number | null = null;
 
     const savePrefs = debounce((camera: Camera | null) => {
@@ -279,7 +281,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const rename = (): void => renameDialog(options.actions.host, ref());
 
     const moreEntries = (): MenuEntry[] =>
-      viewerMenuEntries({ compact, isPage, openComments: openCount(), copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX });
+      viewerMenuEntries({ compact, isPage, copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX });
 
     const onMore = (id: string): void => {
       switch (id) {
@@ -301,12 +303,6 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
           return;
         case 'reveal':
           void revealDesign(slug);
-          return;
-        case 'versions':
-          toggleDrawer('versions');
-          return;
-        case 'comments':
-          toggleDrawer('comments');
           return;
         case 'rename':
           rename();
@@ -458,7 +454,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       const remote = wall.externalRefs();
       paintCommentsNote(remote.length > 0);
       const showRemote = remote.length > 0 && !viewing && !remoteBannerHidden(remote, hiddenRemote.get(slug) ?? null);
-      const key = JSON.stringify([viewing, showRemote ? remote : []]);
+      const key = JSON.stringify([viewing, showRemote ? remote : [], restoreFlow.busyId()]);
       if (key === noticesKey) return;
       noticesKey = key;
       askButton = null;
@@ -468,7 +464,9 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const versionsRow = (current: { id: string; compare: boolean }): HTMLElement => {
       const number = Number(current.id.slice(1));
       const compareBtn = btn({ label: current.compare ? `View v${number} only` : 'Compare with current', variant: 'outline', size: 'xs', icon: 'compare', onClick: () => viewVersion(current.id, !current.compare) });
-      const restoreBtn = btn({ label: 'Restore', variant: 'outline', size: 'xs', onClick: () => void restoreVersion({ id: current.id, n: number }) });
+      const restoring = restoreFlow.busyId();
+      const restoreBtn = btn({ label: 'Restore', variant: 'outline', size: 'xs', loading: restoring === current.id, disabled: restoring !== null && restoring !== current.id, onClick: () => void restoreVersion({ id: current.id, n: number }) });
+      restoreBtn.el.dataset.restore = current.id;
       const backBtn = btn({ label: 'Back to current', variant: 'default', size: 'xs', onClick: () => leaveVersion() });
       const listBtn = compact ? btn({ label: 'Versions', variant: 'ghost', size: 'xs', onClick: () => toggleDrawer('versions') }) : null;
       return h('div', { class: 'dc-viewing', role: 'status' }, icon_(), h('span', { class: 'dc-viewing-text' }, viewingBanner(number, current.compare)), h('span', { class: 'dc-viewing-actions' }, compareBtn.el, restoreBtn.el, listBtn?.el ?? null, backBtn.el));
@@ -477,13 +475,30 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const icon_ = (): HTMLElement => h('span', { class: 'dc-viewing-dot', 'aria-hidden': 'true' });
 
     /**
-     * Seam S10: where a restore starts, for the Versions list and the "Viewing" bar. Today it asks
-     * for confirmation and leaves version viewing when done; the findability branch replaces the
-     * body (restore, then an Undo notice). It reports its own errors and never rejects.
+     * Seam S10: where a restore starts, for the Versions list and the "Viewing" bar. It restores at
+     * once and offers Undo in the notices (components/restore-flow.ts); it reports its own errors and never rejects.
      */
-    const restoreVersion = async (version: { id: string; n: number }): Promise<void> => {
-      confirmRestoreVersion(options.actions.host, slug, version, () => leaveVersion());
-    };
+    const restoreFlow = createRestoreFlow({
+      slug,
+      notices,
+      onRestored: () => {
+        if (viewing) leaveVersion();
+        // The rail's Versions sheet covers the notice: close it so the Undo shows.
+        if (compact && drawer?.kind === 'versions') closeDrawer();
+      },
+      onBusy: () => {
+        (drawer?.kind === 'versions' ? (drawer.handle as VersionsHandle) : null)?.refresh();
+        paintNotices();
+      },
+      focusWall: () => wall.focus(),
+      // A failed restore repainted the button that had focus. In the rail the open Versions sheet is modal,
+      // so focus goes back to that sheet's button, never to the wall behind it.
+      onFailed: (version) => {
+        if (drawer?.kind === 'versions') (drawer.handle as VersionsHandle).focusRestore(version.id);
+        else el.querySelector<HTMLElement>(`.dc-viewing [data-restore="${CSS.escape(version.id)}"]`)?.focus();
+      },
+    });
+    const restoreVersion = restoreFlow.restore;
 
     const viewVersion = (id: string, compare: boolean): void => {
       viewing = { id, compare };
@@ -519,9 +534,10 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       versionsButton.set({ pressed: false });
       dock.hidden = true;
       wall.refit();
+      drawerListeners.emit();
     };
 
-    const toggleDrawer = (kind: 'comments' | 'versions'): void => {
+    const toggleDrawer = (kind: DrawerKind): void => {
       if (drawer?.kind === kind) {
         closeDrawer();
         return;
@@ -544,6 +560,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
             versionsButton.set({ pressed: false });
             dock.hidden = true;
             wall.refit();
+            drawerListeners.emit();
           }
         },
       });
@@ -575,6 +592,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
             if (compact) closeDrawer();
           },
           onBackToCurrent: () => leaveVersion(),
+          restoring: restoreFlow.busyId,
           onRestore: restoreVersion,
         });
         sheet.body.append(handle.el);
@@ -586,6 +604,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       wall.refit();
       commentsButton.set({ pressed: kind === 'comments' });
       versionsButton.set({ pressed: kind === 'versions' });
+      drawerListeners.emit();
     };
 
     // ---------------------------------------------------------------- data flow
@@ -653,6 +672,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       onViewing: viewingListeners.add,
       wall,
       slots,
+      drawers: { toggle: toggleDrawer, active: () => drawer?.kind ?? null, onChange: drawerListeners.add },
       notices,
       actions: options.actions,
       scope: bscope,
@@ -683,6 +703,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       apply,
       dispose: () => {
         for (const unmount of [...unmounts].reverse()) unmount();
+        restoreFlow.dispose();
         closeDrawer();
         notices.dispose();
         bscope.dispose();

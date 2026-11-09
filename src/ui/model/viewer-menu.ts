@@ -1,5 +1,6 @@
 // The viewer's "More actions" menu, defined in one place. The rail's compact header carries the
-// extra entries (continue, export, copy, versions, comments) because it has no room for buttons;
+// extra entries (continue, export, copy) because it has no room for buttons (Comments and Versions
+// sit beside the title instead);
 // the full-screen page shows those as toolbar buttons and keeps only the design-level entries here.
 
 import type { MenuEntry } from '../components/kit.ts';
@@ -8,8 +9,6 @@ export type ViewerMenuInput = {
   /** The rail viewer (compact header). */
   compact: boolean;
   isPage: boolean;
-  /** Open comments, shown in the "Comments (n)" entry. */
-  openComments: number;
   /** The page's HTML is over the clipboard cap, so "Copy HTML" is offered disabled. */
   copyHtmlTooLarge: boolean;
 };
@@ -32,9 +31,6 @@ export const viewerMenuEntries = (input: ViewerMenuInput): MenuEntry[] => {
       ...(input.isPage ? [{ id: 'copy-html', label: 'Copy HTML', disabled: input.copyHtmlTooLarge, hint: input.copyHtmlTooLarge ? 'too large' : undefined } satisfies MenuEntry] : []),
       copyPath,
       reveal,
-      { separator: true },
-      { id: 'versions', label: 'Versions' },
-      { id: 'comments', label: `Comments (${input.openComments})` },
       rename,
       { separator: true },
       remove,

@@ -17,5 +17,5 @@ const hybrid: HostLike = new Proxy(real, {
 const guestHost = createGuestHost(hybrid);
 startApp(guestHost, createServiceClient(fake));
 
-/** Hook for shoot.mjs: the agent finishes the pending sample design. */
-(window as unknown as { __dcFake?: { writePending: () => void } }).__dcFake = { writePending: fake.backend.writePending };
+/** Hooks for shoot.mjs: the agent finishes the pending sample design; the next restore fails once. */
+(window as unknown as { __dcFake?: { writePending: () => void; failNextRestore: (message: string) => void } }).__dcFake = { writePending: fake.backend.writePending, failNextRestore: fake.backend.failNextRestore };
