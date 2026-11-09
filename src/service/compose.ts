@@ -10,7 +10,9 @@ import { unavailable, type Logger, type ServiceContext } from './context.ts';
 import { createRouter, registerHealthRoute, type Router } from './http.ts';
 import { createOutboxStore } from './outbox.ts';
 import { ensureRenderService } from './render-cache.ts';
+import { ensureLauncherService } from './check/launcher.ts';
 import { registerChangesRoutes } from './routes/changes.ts';
+import { registerChecksRoutes } from './routes/checks.ts';
 import { registerChatRoutes } from './routes/chat.ts';
 import { registerCommentsRoutes } from './routes/comments.ts';
 import { registerDesignsRoutes } from './routes/designs.ts';
@@ -89,9 +91,12 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
 
   // The guide at <root>/AGENTS.md: synced after the watcher's baseline, on root changes and on
   // new designs. The skill is written only by POST /agent/skill (the user's click).
+  // The check launcher is written first: the guide and the skill quote its command.
+  const launcher = ensureLauncherService(ctx);
   const agent = createAgentSetup({
     log,
     settings,
+    checkCommand: (root) => launcher.commandFor(root, '<slug>'),
     ...(options.env ? { env: options.env } : {}),
     ...(options.homeDir ? { homeDir: options.homeDir } : {}),
   });
@@ -115,6 +120,7 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   registerVersionsRoutes(router, ctx);
   registerExportRoutes(router, ctx);
   registerThumbnailsRoutes(router, ctx);
+  registerChecksRoutes(router, ctx);
   // WP3 (registers the RULES.md `onCreate` hook on the real store)
   registerPresetsRoutes(router, ctx);
   registerChatRoutes(router, ctx);

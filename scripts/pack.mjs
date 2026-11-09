@@ -33,7 +33,7 @@ for (const required of INCLUDE) {
     throw new Error(`pack: ${required} is missing${required === 'dist' ? ' — run `npm run build` first' : ''}.`);
   }
 }
-for (const entry of ['dist/panel/main.js', 'dist/background/main.js', 'dist/service/main.js']) {
+for (const entry of ['dist/panel/main.js', 'dist/background/main.js', 'dist/service/main.js', 'dist/cli/dc.mjs']) {
   if (!(await exists(path.join(root, entry)))) throw new Error(`pack: ${entry} is missing — run \`npm run build\` first.`);
 }
 

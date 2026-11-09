@@ -104,11 +104,11 @@ Folder contract: every design is its own folder inside the user's designs folder
 
 - [ ] Precedence honoured; project rules found and named (or "no project context" stated).
 - [ ] Viewports chosen from the project, else asked/defaulted (Laptop 1280×800 + Phone 390×844) and listed in `design.json`.
-- [ ] Rendered at each viewport: no horizontal overflow, nothing clipped, no overlapping text.
+- [ ] Ran the check from your instructions: no errors left, and you looked at the PNGs at every viewport.
 - [ ] Only tokens used; scales (type, space, radius, shadow) consistent; no hardcoded off-scale values.
 - [ ] Contrast ≥ AA for text and UI; focus ring visible; labels, alt text, heading order correct.
 - [ ] States designed: empty, loading, error, hover, focus, disabled (as relevant).
 - [ ] No anti-slop item from §3 present; real copy; no fake proof presented as real.
-- [ ] All paths relative, no CDN/remote asset, files open offline; one file per screen.
+- [ ] One file per screen.
 - [ ] `DESIGN.md`, `tokens.css`, `design.json` match what you built.
 - [ ] Final reply states: what you built, which sources you followed, assumptions made, and any open question (max one).

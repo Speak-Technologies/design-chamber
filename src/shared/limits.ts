@@ -154,6 +154,33 @@ export const THUMB_TIMEOUT_MS = 20_000;
 export const THUMB_DEBOUNCE_MS = 2000;
 export const THUMB_CONCURRENCY = 1;
 
+// ---- Design checks (documentation/specs/agent-render-and-check.md) ----
+
+/** Artboards rendered per run; the rest are counted as skipped. */
+export const CHECK_ARTBOARDS_MAX = 24;
+/** PNG slices per artboard (one per viewport height, from the top). */
+export const CHECK_SLICES_MAX = 4;
+export const CHECK_ARTBOARD_TIMEOUT_MS = 12_000;
+export const CHECK_RUN_BUDGET_MS = 90_000;
+export const CHECK_STATIC_BUDGET_MS = 10_000;
+/** Findings kept per report. */
+export const CHECK_FINDINGS_MAX = 200;
+export const CHECK_FINDINGS_PER_CODE = 5;
+/** Findings the CLI prints before "and N more". */
+export const CHECK_TEXT_SHOWN = 30;
+export const CHECK_PROMPT_FINDINGS_MAX = 40;
+export const CHECK_DETAIL_MAX = 200;
+export const CHECK_SELECTOR_MAX = 300;
+/** A `check.json` larger than this is ignored. */
+export const CHECK_FILE_MAX_BYTES = 2_000_000;
+/** A superseded run folder survives this long, so a concurrent run keeps its PNGs. */
+export const CHECK_RUN_KEEP_MS = 120_000;
+export const CHECK_TEXT_ELEMENTS_MAX = 2000;
+/** `docHeight / viewport height` at or above this is a `screen-tall` warning. */
+export const CHECK_TALL_RATIO = 6;
+/** Hardcoded colours in one file before a `token-hardcoded` note. */
+export const CHECK_TOKEN_LITERALS_MIN = 3;
+
 // ---- Guest frames and wall [§8.2, §8.4] ----
 
 export const PAGE_LIVE_FRAMES_MAX = 12;

@@ -32,6 +32,7 @@ export const baseContext = (overrides: Partial<AgentContext> = {}): AgentContext
   screenIds: [],
   pending: true,
   designSystem: { confirmed: false, hasDesignMd: false, hasTokensCss: false },
+  checkCommand: null,
   ...overrides,
 });
 

@@ -4,6 +4,7 @@
 //   dist/panel/      index.html, styles.css, main.js  — panel + page guest (IIFE, browser)
 //   dist/background/ index.html, main.js              — slash-command resolver (IIFE, browser)
 //   dist/service/    main.js                          — local service (ESM, Node)
+//   dist/cli/        dc.mjs                           — the agent's `dc check` command (ESM, Node)
 //
 // The design-frame bridge is bundled first, in memory, and injected into the panel bundle
 // as the string constant `__DC_BRIDGE__` (src/guest/globals.d.ts).
@@ -33,6 +34,19 @@ if (/<\/script/i.test(bridge)) throw new Error('build: the bridge bundle contain
 // hit-testing, pins, scroll sync or link handling.
 if (Buffer.byteLength(bridge) < 1024) throw new Error(`build: the bridge bundle is only ${Buffer.byteLength(bridge)} bytes — is src/guest/bridge/bridge.ts the real bridge?`);
 
+// (1b) Design-check probe → in-memory IIFE string, run in headless Chrome by the check engine.
+const probeResult = await build({
+  ...browser,
+  entryPoints: [at('src', 'guest', 'probe', 'probe.ts')],
+  globalName: '__dcProbe',
+  write: false,
+  minify: true,
+});
+const probeFile = probeResult.outputFiles[0];
+if (!probeFile) throw new Error('build: the probe bundle produced no output.');
+const probe = probeFile.text;
+if (Buffer.byteLength(probe) < 1024) throw new Error(`build: the probe bundle is only ${Buffer.byteLength(probe)} bytes — is src/guest/probe/probe.ts the real probe?`);
+
 // (2) Panel + page guest.
 await build({ ...browser, entryPoints: [at('src', 'ui', 'main.ts')], outfile: at('dist', 'panel', 'main.js'), define: { __DC_BRIDGE__: JSON.stringify(bridge) } });
 if ((await readFile(at('dist', 'panel', 'main.js'), 'utf8')).includes('__DC_BRIDGE__')) {
@@ -42,18 +56,22 @@ if ((await readFile(at('dist', 'panel', 'main.js'), 'utf8')).includes('__DC_BRID
 // (3) Background guest.
 await build({ ...browser, entryPoints: [at('src', 'guest', 'background-main.ts')], outfile: at('dist', 'background', 'main.js') });
 
-// (4) Local service.
-await build({
+// (4) Local service, and (6) the check CLI: same options, both embed the probe as `__DC_PROBE__`.
+const node = {
   bundle: true,
   format: 'esm',
   platform: 'node',
   target: ['node20'],
   sourcemap: false,
   logLevel: 'warning',
-  entryPoints: [at('src', 'service', 'main.ts')],
-  outfile: at('dist', 'service', 'main.js'),
   banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
-});
+  define: { __DC_PROBE__: JSON.stringify(probe) },
+};
+await build({ ...node, entryPoints: [at('src', 'service', 'main.ts')], outfile: at('dist', 'service', 'main.js') });
+await build({ ...node, entryPoints: [at('src', 'cli', 'dc.ts')], outfile: at('dist', 'cli', 'dc.mjs') });
+for (const file of ['service/main.js', 'cli/dc.mjs']) {
+  if ((await readFile(at('dist', file), 'utf8')).includes('__DC_PROBE__')) throw new Error(`build: __DC_PROBE__ was not replaced in dist/${file}.`);
+}
 
 // (5) Static files.
 await copyFile(at('src', 'ui', 'index.html'), at('dist', 'panel', 'index.html'));
@@ -63,6 +81,6 @@ await writeFile(
   '<!doctype html>\n<html lang="en">\n  <head><meta charset="utf-8" /><title>Design Chamber background</title></head>\n  <body><script src="main.js"></script></body>\n</html>\n',
 );
 
-const outputs = ['panel/index.html', 'panel/styles.css', 'panel/main.js', 'background/index.html', 'background/main.js', 'service/main.js'];
+const outputs = ['panel/index.html', 'panel/styles.css', 'panel/main.js', 'background/index.html', 'background/main.js', 'service/main.js', 'cli/dc.mjs'];
 const sizes = await Promise.all(outputs.map(async (file) => `${file} ${((await stat(at('dist', file))).size / 1024).toFixed(1)} kB`));
 console.log(`built dist/ (bridge ${(Buffer.byteLength(bridge) / 1024).toFixed(1)} kB)\n  ${sizes.join('\n  ')}`);

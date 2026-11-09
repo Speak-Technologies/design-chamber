@@ -147,6 +147,11 @@ export type AgentSetupOptions = {
   env?: SkillEnv;
   homeDir?: string;
   platform?: NodeJS.Platform;
+  /**
+   * The design-check command with the literal `<slug>` for `root`, or `null` when no launcher is in
+   * place there. Asking may write the launcher (idempotent, inside `<root>/.chamber/bin/`). Absent = `null`.
+   */
+  checkCommand?: (root: string) => Promise<string | null>;
 };
 
 export type AgentSetup = {
@@ -202,7 +207,7 @@ export const createAgentSetup = (options: AgentSetupOptions): AgentSetup => {
       if (!(await isDirectory(root))) return { path: shown, state: 'no-root' };
       let expected: string;
       try {
-        expected = buildAgentGuide({ root, platform });
+        expected = buildAgentGuide({ root, platform, checkCommand: (await options.checkCommand?.(root)) ?? null });
       } catch {
         return { path: shown, state: 'failed', message: builderFailure('guide') };
       }
@@ -282,7 +287,7 @@ export const createAgentSetup = (options: AgentSetupOptions): AgentSetup => {
       const root = settings.root();
       let expected: string;
       try {
-        expected = buildSkillDoc({ root, guidePath: path.join(root, GUIDE_FILE) });
+        expected = buildSkillDoc({ root, guidePath: path.join(root, GUIDE_FILE), checkCommand: (await options.checkCommand?.(root)) ?? null });
       } catch {
         return { status: { path: shown, state: 'unavailable', duplicates, message: builderFailure('skill') }, onDisk: null, expected: null };
       }

@@ -16,4 +16,5 @@ fix the doc and note what drifted.
 | [The local service](features/local-service.md) | Designs folder and settings, folder names, containment, live change feed, pages and canvases (old "artifact" designs read as pages). | Rail panel, Full-screen page |
 | [Rendering, versions, export, thumbnails](features/rendering-versions-export-thumbnails.md) | What the local service does: self-contained renders, snapshots, downloads, previews. | Rail panel, Full-screen page |
 | [Agent instructions](features/agent-instructions.md) | The chip and RULES.md that steer the chat agent; revision requests; Open as page. | Rail panel, Full-screen page, chat |
+| [Design checks](features/design-checks.md) | The `dc check` command an agent runs before it says done: renders every screen offline, saves pictures, lists what to fix; the service's findings and routes. | Rail panel, Full-screen page, chat |
 | [Agent discovery](features/agent-discovery.md) | How an agent finds the designs folder without a slash command: the AGENTS.md guide, the design-chamber skill, the snippet; never overwrites the user's file. | Rail panel, Full-screen page (Settings) |

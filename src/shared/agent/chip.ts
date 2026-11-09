@@ -89,6 +89,13 @@ const filesStep = (kind: DesignKind): string =>
     ? 'Write design.json first, then the HTML. Files you write: design.json · screens/<id>.html (one self-contained, responsive file per screen) · tokens.css · DESIGN.md · assets/** (relative paths; no CDNs, Google Fonts or other web fonts). Never touch .versions/, .chamber/ or .thumb.png.'
     : 'Write design.json first, then the HTML. Files you write: design.json · index.html (one self-contained page) · tokens.css · DESIGN.md · assets/** (relative paths; no CDNs, Google Fonts or other web fonts). Never touch .versions/, .chamber/ or .thumb.png.';
 
+/**
+ * Step 8: run the check before saying done. A Windows command starts with a quote (`"<root>\\.chamber\\bin\\dc.cmd" check x`), which PowerShell
+ * only runs behind `&`, so that case says so.
+ */
+const checkStep = (command: string): string =>
+  `8. Before you say you are done, run ${command} . Fix every error it lists and open the PNGs it names to look at your work.${command.startsWith('"') ? ' (In PowerShell, put & in front.)' : ''}`;
+
 /** The chip core text. Always ≤ `CHIP_TEXT_HARD_MAX` (the brief is clipped to `BRIEF_MAX`, every path is clipped). */
 export const buildChipText = (context: AgentContext, mode: ChipMode): string => {
   const title = clip(oneLine(context.title), TITLE_MAX);
@@ -109,6 +116,7 @@ export const buildChipText = (context: AgentContext, mode: ChipMode): string => 
     '5. Unsure about anything material? Ask first: ONE message with 3–6 short numbered questions, each with a bold recommended default, then wait for the answer. Do not ask what the project files already answer; skip the questions if the user said "go" or this is a small edit.',
     `6. ${filesStep(context.kind)}`,
     `7. design.json: you own ${context.kind === 'canvas' ? 'title, updated, viewports, screens and designSystem' : 'title, updated, viewports and designSystem'}. Keep every other key exactly as it is, and set "updated" (ISO time) whenever you change the design. Full contract in RULES.md.`,
+    ...(context.checkCommand === null ? [] : [checkStep(context.checkCommand)]),
     'Your file tools may ask permission to write in your designs folder because it is outside the project; that is expected.',
   ];
   return lines.join('\n');

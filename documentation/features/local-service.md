@@ -60,7 +60,7 @@ Linux.
 The service watches the designs folder (with a 3-second check as a backstop, because OneDrive and
 network folders can miss notifications) and publishes a change feed the panel and page
 long-poll: a design added or removed, its `design.json` changed, its files changed, a new
-thumbnail, new versions, comments, or the folder switched. Its own bookkeeping files (`.chamber/`,
+thumbnail, new versions, comments, a finished design check (`.chamber/check.json`, the one `.chamber/` file that is reported), or the folder switched. Its own bookkeeping files (`.chamber/`,
 `.versions/`, the thumbnail) never show up as changes — also on OneDrive/network folders, where
 only the 3-second check sees changes. On Linux, if the system's file-watch limit is reached
 (or watching is unsupported), the service notes it once in its log and relies on the 3-second
@@ -158,6 +158,9 @@ shows them.
   macOS the privacy switch to turn on), not an empty list.
 - Platform details (which runtime runs the service, browser discovery, Snap/Flatpak, file
   managers for "Show in folder"): `docs/testing/PLATFORMS.md`.
+
+## Design checks
+Two routes: `GET /designs/:slug/checks` and `POST /designs/:slug/checks/run` (and `purpose: "checks"` on the prompt route). See [Design checks](design-checks.md). The service runs the static checks itself on every change and renders only on request, one design at a time.
 
 ## Where it lives
 `src/service/compose.ts` (wiring), `src/service/main.ts` (process entry), `src/service/paths.ts`
