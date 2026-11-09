@@ -17,6 +17,7 @@ import { mountVersions, type VersionsHandle } from '../components/versions-drawe
 import type { Camera } from '../../guest/camera.ts';
 import { renderSourceKey } from '../../guest/store.ts';
 import { askSelfContained, host, isServiceError, store } from '../guest.ts';
+import { askRequestToast } from '../model/ask-bar-model.ts';
 import { viewportLabel, viewportSize, zoomPercent } from '../model/format.ts';
 import { createListeners } from '../model/listeners.ts';
 import { viewerMenuEntries } from '../model/viewer-menu.ts';
@@ -409,8 +410,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       if (asking) return;
       setAsking(true);
       try {
-        await askSelfContained(slug);
-        toast('success', 'The request is in your chat. Send it when you’re ready.');
+        const said = askRequestToast(await askSelfContained(slug));
+        if (said !== null) toast('success', said);
       } catch (error) {
         toast('error', `Couldn’t ask the agent. ${errorText(error)}`);
       } finally {

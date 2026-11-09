@@ -9,6 +9,7 @@ import type {
   DesignJson,
   DesignKind,
   DesignSummary,
+  Outbox,
   Screen,
   ThumbState,
   VersionSummary,
@@ -363,6 +364,7 @@ export const createFakeBackend = (): FakeBackend => {
   type Req<K extends RouteKey> = { params: Record<string, string>; query: Record<string, string>; body: RouteBody<K> };
   type Handlers = { [K in RouteKey]?: (req: Req<K>) => RouteResponse<K> | Promise<RouteResponse<K>> };
 
+  let outbox: Outbox | null = null;
   const handlers: Handlers = {
     'GET /health': () => ({ ok: true, version: '0.1.0', epoch: 'dev' }),
     'GET /settings': () => ({
@@ -551,6 +553,17 @@ export const createFakeBackend = (): FakeBackend => {
         { id: 'playful-consumer', name: 'Playful consumer', bestFor: 'apps, onboarding' },
       ],
     }),
+    // The page hands a message for a chat that is not selected to the rail through the outbox.
+    'GET /outbox': () => ({ outbox }),
+    'PUT /outbox': ({ body }) => {
+      outbox = { ...body, created: new Date().toISOString() };
+      return { outbox };
+    },
+    'DELETE /outbox': () => {
+      const taken = outbox;
+      outbox = null;
+      return { outbox: taken };
+    },
     'POST /designs/:slug/prompt': ({ params, body }) => {
       const rec = get(params.slug);
       const chip: DesignChip = { providerId: CHIP_PROVIDER_ID, id: `design:${params.slug}`, title: rec.design.title, url: `file:///designs/${params.slug}`, text: 'Continue this design.', data: { slug: params.slug ?? '', kind: rec.design.kind } };
@@ -562,7 +575,10 @@ export const createFakeBackend = (): FakeBackend => {
         const lines = picked.map((candidate, index) => `${index + 1}. element: \`${candidate.anchor.selector}\`\n   → ${candidate.body}`);
         return { text: `[Design Chamber] Revise "${rec.design.title}": ${picked.length} comment${picked.length === 1 ? '' : 's'}.\n${lines.join('\n')}`, commentIds: picked.map((candidate) => candidate.id), omitted: [], chip };
       }
-      if (body.purpose !== 'ask') throw new ServiceError('internal', 'The UI shim answers revisions and asks only.');
+      // The service-written requests of "Ask the agent to fix it" (checks badge, remote-files banner).
+      if (body.purpose === 'checks') return { ...checks.prompt(params.slug ?? ''), commentIds: [], omitted: [], chip };
+      if (body.purpose === 'offline') return { text: `[Design Chamber] Make "${rec.design.title}" work offline: bundle remote files into assets/ or remove them.`, commentIds: [], omitted: [], chip };
+      if (body.purpose !== 'ask') throw new ServiceError('internal', 'The UI shim answers revisions, asks, checks and offline requests only.');
       const words = typeof body.text === 'string' ? body.text.trim() : '';
       if (words === '') throw new ServiceError('bad-request', 'Write what you want the agent to do.');
       const element = body.element;
@@ -586,10 +602,6 @@ export const createFakeBackend = (): FakeBackend => {
 
   const call: FakeBackend['call'] = async (key, args) => {
     await new Promise((resolve) => setTimeout(resolve, 60 + Math.random() * 120));
-    if (key === 'POST /designs/:slug/prompt' && (args.body as { purpose?: string } | undefined)?.purpose === 'checks') {
-      // Safe: this key's response is `{ text: string }`, which is what the checks fake answers.
-      return checks.prompt(args.params?.slug ?? '') as RouteResponse<typeof key>;
-    }
     const handler = handlers[key];
     if (!handler) throw new ServiceError('internal', `The fake service does not implement ${key}.`);
     // Safe: `handlers[key]` is typed per key; the generic key loses that link here, and the

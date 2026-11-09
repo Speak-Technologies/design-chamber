@@ -123,11 +123,14 @@ const scenario = async ({ openPage, check, listReady, wallReady, thumbsReady, sl
   );
   await p.shot(`${tag}-5-after-run`);
 
-  // Ask the agent to fix: the request goes to the chat composer, the panel closes
-  await p.host('window.__host.composes.length = 0');
+  // Ask the agent to fix: the shared delivery. The harness has another chat selected, so the request
+  // goes through the outbox and the linked chat is opened (the rail sends it); one message, not a composer append.
+  await p.host('window.__host.composes.length = 0; window.__host.sessionsOpened.length = 0; window.__host.toasts.length = 0');
   await p.click(`${panelSel} .dc-checks-actions .oc-sdk-btn`, { text: 'Ask the agent to fix' });
   await p.waitFor(`return !doc.querySelector('${panelSel} .dc-checks-panel')`, 'the findings to close after asking');
-  check(await p.host('window.__host.composes.some((c) => String(c.text).includes("[Design Chamber]"))'), `${tag}: the request reached the chat composer`);
+  check(await p.host('window.__host.sessionsOpened.includes("ses_coffee")'), `${tag}: the request went to the linked chat (opened through the outbox)`);
+  check(await p.host('window.__host.composes.length === 0'), `${tag}: nothing was appended to the composer on top of it`);
+  check(await p.host('JSON.stringify(window.__host.toasts.map((t) => t.message)) === JSON.stringify(["Opening the linked chat to send it."])'), `${tag}: one toast, saying the chat is opening`);
   await p.settle(300);
   await p.shot(`${tag}-6-asked`);
 

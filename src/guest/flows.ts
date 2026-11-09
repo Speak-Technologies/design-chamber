@@ -171,6 +171,13 @@ export type Flows = {
    * comments (selected chat, outbox, or a new linked chat). Nothing is recorded on the design.
    */
   ask(slug: string, input: AskInput): Promise<AskResult>;
+  /**
+   * A service-written request ("Ask the agent to fix it": the Checks badge, the remote-files
+   * banner) by the same delivery path as the ask bar: one message to the linked chat, in a new
+   * linked chat when there is none or it is gone. The service answers 422 when there is nothing
+   * to ask any more; that error reaches the caller before any chat is touched.
+   */
+  askAgent(slug: string, purpose: 'offline' | 'checks'): Promise<AskResult>;
   /** Rail panel: deliver a waiting outbox to `session` when it is the one the outbox is for. */
   deliverOutbox(session?: SessionSnapshot | null): Promise<DeliverOutboxResult>;
   /** Patch every link `planReconciliation` finds; returns what was patched. */
@@ -421,6 +428,12 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       const body: PromptBody = { purpose: 'ask', text: input.text };
       if (input.element) body.element = input.element;
       const prompt = await client.call('POST /designs/:slug/prompt', { params: { slug }, body });
+      const { design } = await client.call('GET /designs/:slug', { params: { slug } });
+      return deliver(slug, prompt, design, null, MESSAGES.busyAsk);
+    },
+
+    askAgent: async (slug, purpose) => {
+      const prompt = await client.call('POST /designs/:slug/prompt', { params: { slug }, body: { purpose } });
       const { design } = await client.call('GET /designs/:slug', { params: { slug } });
       return deliver(slug, prompt, design, null, MESSAGES.busyAsk);
     },

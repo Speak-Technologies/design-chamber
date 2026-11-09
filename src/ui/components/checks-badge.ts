@@ -7,6 +7,7 @@
 import type { ChecksResponse } from '../../shared/api.ts';
 import type { CheckFinding } from '../../shared/types.ts';
 import { askAgent, client, feed, host, isServiceError } from '../guest.ts';
+import { askRequestToast } from '../model/ask-bar-model.ts';
 import { badgeOf, panelOf, runResultOf, shouldRefetch, type CheckGroup, type PanelView } from '../model/checks-model.ts';
 import { toast } from './actions.ts';
 import { createScope, debounce, errorText, h, nextId } from './dom.ts';
@@ -286,8 +287,8 @@ export const mountChecksBadge = (options: ChecksBadgeOptions): ChecksBadgeHandle
     if (asking) return;
     asking = true;
     try {
-      await askAgent(slug, 'checks');
-      toast('success', 'The request is in your chat. Send it when you’re ready.');
+      const said = askRequestToast(await askAgent(slug, 'checks'));
+      if (said !== null) toast('success', said);
       closeSurface?.(false);
     } catch (failure) {
       // The panel stays open so nothing is lost; a 422 means the issues went away in the meantime.

@@ -7,6 +7,7 @@
 import type { VersionHistoryState } from '../shared/api.ts';
 import { SHA256_PATTERN, VERSION_ID_PATTERN, VERSION_INDEX_VERSION } from '../shared/limits.ts';
 import type { VersionEntry, VersionIndex } from '../shared/types.ts';
+import { isAtomicTempName } from './paths.ts';
 
 export const VERSIONS_DIR = '.versions';
 export const CHAMBER_DIR = '.chamber';
@@ -20,12 +21,12 @@ export const DAMAGED_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
 // ---- tracked set and path rules ----
 
-/** `.versions/**`, `.chamber/**`, `.thumb.png` (and its atomic-write temporaries) are never tracked. */
+/** `.versions/**`, `.chamber/**`, `.thumb.png` (and its atomic-write temporaries) and the service's own `<name>.<hex>.tmp` files are never tracked. */
 export const isTracked = (rel: string): boolean => {
   const segments = rel.split('/');
   if (segments[0] === VERSIONS_DIR || segments[0] === CHAMBER_DIR) return false;
   const base = segments[segments.length - 1] ?? '';
-  return base !== '.thumb.png' && !base.startsWith('.thumb.');
+  return base !== '.thumb.png' && !base.startsWith('.thumb.') && !isAtomicTempName(base);
 };
 
 /** A design-relative `/` path with no step that could leave the folder (lexical; writes still go through `resolveInside`). */

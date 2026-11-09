@@ -40,6 +40,9 @@ describe('tracked set', () => {
     assert.equal(isTracked('.thumb.png'), false);
     assert.equal(isTracked('.thumb.123.png'), false);
     assert.equal(isTracked('sub/.thumb.png'), false);
+    assert.equal(isTracked('.index.html.2bba59ef828e.tmp'), false);
+    assert.equal(isTracked('screens/home.html.2bba59ef828e.tmp'), false);
+    assert.equal(isTracked('notes.tmp'), true);
   });
 
   test('listTracked walks the folder and skips the excluded trees', async (t) => {

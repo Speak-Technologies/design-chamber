@@ -7,6 +7,7 @@ import {
   askFailureText,
   askKeyAction,
   askPlaceholder,
+  askRequestToast,
   askResultText,
   askSendState,
   askTarget,
@@ -149,6 +150,13 @@ describe('copy', () => {
     assert.equal(askResultText('composed'), 'The agent is busy, so your message is waiting in the composer.');
     assert.equal(askResultText('outbox'), 'Opening the linked chat to send it.');
     assert.equal(askResultText('new-session'), 'Started a new chat with your message.');
+  });
+
+  test('"Ask the agent to fix it" says each outcome once; a busy agent already got its own toast', () => {
+    assert.equal(askRequestToast('sent'), 'Sent to the chat.');
+    assert.equal(askRequestToast('composed'), null);
+    assert.equal(askRequestToast('outbox'), 'Opening the linked chat to send it.');
+    assert.equal(askRequestToast('new-session'), 'Started a new chat with the request.');
   });
 });
 

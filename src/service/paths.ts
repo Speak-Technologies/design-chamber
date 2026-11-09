@@ -10,6 +10,7 @@
 // `PathModule`, `realpath` and the platform are injectable so the win32 and darwin rules are
 // testable on any platform via `path.win32` / `path.posix` (SPEC §15.1).
 
+import { randomBytes } from 'node:crypto';
 import { readFileSync, renameSync } from 'node:fs';
 import { realpath as fsRealpath, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -221,6 +222,19 @@ export const renameWithRetry = async (from: string, to: string): Promise<void> =
     }
   }
 };
+
+/** `<name>.<12 hex>.tmp`, with or without the leading dot: the temp names of the service's atomic writers (older builds left no dot). */
+const ATOMIC_TEMP_PATTERN = /\.[0-9a-f]{12}\.tmp$/;
+
+/** True for a file name the service's atomic writers use for a half-written file: never a design file. */
+export const isAtomicTempName = (name: string): boolean => ATOMIC_TEMP_PATTERN.test(name);
+
+/**
+ * A temp path in the same folder as `target` (so the rename stays on one volume and is atomic),
+ * dot-prefixed so the watcher and the tracked-file rules skip it: `.index.html.2bba59ef828e.tmp`.
+ */
+export const atomicTempPath = (target: string): string =>
+  path.join(path.dirname(target), `.${path.basename(target)}.${randomBytes(6).toString('hex')}.tmp`);
 
 /**
  * Write a file via tmp + rename in its own folder (a partial write is never visible, and the

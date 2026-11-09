@@ -157,6 +157,8 @@ describe('watcher events', () => {
     await writeFile(env.tmp.at('demo/.versions/index.json'), '{}', 'utf8');
     await writeFile(env.tmp.at('demo/.thumb.png'), 'PNG', 'utf8');
     await writeFile(env.tmp.at('demo/.design.json.tmp-42-abc'), 'partial', 'utf8');
+    await writeFile(env.tmp.at('demo/.index.html.2bba59ef828e.tmp'), 'partial', 'utf8');
+    await writeFile(env.tmp.at('demo/index.html.2bba59ef828e.tmp'), 'partial', 'utf8'); // an older build's undotted temp name
     await mkdir(env.tmp.at('.trash/old-1'), { recursive: true });
     await writeFile(env.tmp.at('.trash/old-1/design.json'), '{}', 'utf8');
 
@@ -802,4 +804,21 @@ describe('takeFingerprint (capped, sorted walk)', () => {
     );
     assert.equal(carryNested(undefined, cheap), cheap);
   });
+});
+
+// Windows reports a change to the design folder itself, so the full fingerprint diff (not the
+// fs.watch filename filter) decides what is named: it must never key a service temp file.
+test('fingerprints never key a service temp name, at the top level or nested (cheap and full)', async (t) => {
+  const tmp = path.join((await import('node:os')).tmpdir(), `dc-fp-tmp-${randomUUID()}`);
+  t.after(() => rm(tmp, { recursive: true, force: true }));
+  await mkdir(path.join(tmp, 'assets', 'img'), { recursive: true });
+  await writeFile(path.join(tmp, 'index.html'), '<h1>hi</h1>', 'utf8');
+  await writeFile(path.join(tmp, 'index.html.2bba59ef828e.tmp'), 'partial', 'utf8');
+  await writeFile(path.join(tmp, 'assets', 'img', 'logo.png.0123456789ab.tmp'), 'partial', 'utf8');
+  await writeFile(path.join(tmp, 'assets', 'img', 'logo.png'), 'PNG', 'utf8');
+  for (const nested of [false, true]) {
+    const keys = [...(await takeFingerprint(tmp, FINGERPRINT_ENTRIES_MAX, nested)).keys()];
+    assert.ok(keys.includes('index.html'), `${nested ? 'full' : 'cheap'}: real files are keyed`);
+    assert.ok(!keys.some((key) => key.endsWith('.tmp')), `${nested ? 'full' : 'cheap'}: no temp name keyed: ${JSON.stringify(keys)}`);
+  }
 });

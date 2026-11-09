@@ -74,8 +74,11 @@ const base = `http://127.0.0.1:${server.address().port}`;
 // ---------------------------------------------------------------- chrome + CDP
 
 const profile = path.join(tmpdir(), `dc-visual-${process.pid}`);
-const debugPort = 9300 + Math.floor(Math.random() * 400);
-const chrome = spawn(chromePath, [`--remote-debugging-port=${debugPort}`, `--user-data-dir=${profile}`, '--headless=new', '--no-first-run', '--no-default-browser-check', '--hide-scrollbars', '--force-color-profile=srgb', '--disable-extensions', 'about:blank'], { stdio: 'ignore' });
+// Port 0 lets Chrome pick a free port itself (two runs never drive each other's browser); it reports the port in
+// `<profile>/DevToolsActivePort`, first line. A stale file from an earlier run that had this pid is removed first.
+const portFile = path.join(profile, 'DevToolsActivePort');
+rmSync(portFile, { force: true });
+const chrome = spawn(chromePath, [`--remote-debugging-port=0`, `--user-data-dir=${profile}`, '--headless=new', '--no-first-run', '--no-default-browser-check', '--hide-scrollbars', '--force-color-profile=srgb', '--disable-extensions', 'about:blank'], { stdio: 'ignore' });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const until = async (fn, what, timeout = 15000) => {
@@ -88,14 +91,21 @@ const until = async (fn, what, timeout = 15000) => {
   }
 };
 
-const version = await until(async () => {
+const debugPort = await until(() => {
+  try {
+    const port = Number(readFileSync(portFile, 'utf8').split('\n')[0]);
+    return Number.isInteger(port) && port > 0 ? port : null;
+  } catch {
+    return null; // Chrome has not written it yet
+  }
+}, 'Chrome to report its debugging port', 20000);
+await until(async () => {
   try {
     return await (await fetch(`http://127.0.0.1:${debugPort}/json/version`)).json();
   } catch {
     return null;
   }
 }, 'Chrome to start', 20000);
-void version;
 
 const problems = [];
 // Pages still open: a scenario that throws never reaches its own close(), and a leaked tab keeps its timers and

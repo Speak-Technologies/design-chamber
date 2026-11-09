@@ -144,6 +144,12 @@ const isLinkLost = (activity: LinkedActivity): boolean => activity === 'none' ||
 
 /** This frame watched a turn start and the chat is idle again: the turn is over. */
 const turnOver = (track: BuildTrack): boolean => track.turnSeen && track.activity === 'idle';
+/**
+ * A recent file is the agent "writing" unless the turn is over, or the linked chat is known to be idle
+ * (then the save is the user's own, or another tool's: files still count toward a turn, they just are not shown as the agent at work).
+ * Files-only mode (`none`, `gone`) and an `unknown` hold keep showing it.
+ */
+const showsWriting = (track: BuildTrack): boolean => track.lastFile !== null && !turnOver(track) && track.activity !== 'idle';
 
 const mergeFiles = (known: readonly string[], more: readonly string[]): string[] => [...new Set([...known, ...more])].slice(0, TURN_FILES_MAX);
 
@@ -224,7 +230,7 @@ export const phaseOf = (held: BuildTrack, now: number): BuildPhase => {
   if (track.activity === 'waiting-permission') return 'permission';
   if (turnOver(track) && track.outcome === 'failed' && !dismissed) return 'failed';
   // Once the turn is over the files are the turn's: they count in "Updated 3 files", they are not "Writing".
-  if (track.lastFile && !turnOver(track) && now - track.lastFile.at < WRITING_WINDOW_MS) return 'writing';
+  if (track.lastFile && showsWriting(track) && now - track.lastFile.at < WRITING_WINDOW_MS) return 'writing';
   if (track.activity === 'retrying') return 'retrying';
   if (track.activity === 'running') return 'working';
   if (turnOver(track) && track.outcome !== 'failed' && track.idleAt !== null && now - track.idleAt < DONE_LINGER_MS) return 'done';
@@ -238,7 +244,7 @@ export const nextDeadline = (held: BuildTrack, now: number): number | null => {
   const at: number[] = [];
   if (held.unknownSince !== null) at.push(held.unknownSince + UNKNOWN_HOLD_MS);
   if (track.feedDownSince !== null && track.visible) at.push(track.feedDownSince + FEED_DOWN_MS);
-  if (track.lastFile && !turnOver(track)) at.push(track.lastFile.at + WRITING_WINDOW_MS);
+  if (track.lastFile && showsWriting(track)) at.push(track.lastFile.at + WRITING_WINDOW_MS);
   if (isWorking(track.activity)) {
     const since = track.lastFile?.at ?? track.turnStartedAt;
     if (since !== null) at.push(since + QUIET_MS);

@@ -61,7 +61,7 @@ agent is OpenCode's default `build` agent. When a convention changes, update bot
 together — same roster, same rules, same policy.
 
 ## Dev commands
-- `npm run build` — `scripts/build.mjs` (esbuild): `dist/panel/` (panel + page guest, IIFE), `dist/background/` (slash-command guest, IIFE), `dist/service/main.js` (Node ESM). `dist/` is gitignored — build before a folder install.
+- `npm run build` — `scripts/build.mjs` (esbuild): `dist/panel/` (panel + page guest, IIFE), `dist/background/` (slash-command guest, IIFE), `dist/service/main.js` (Node ESM), `dist/cli/dc.mjs` (the agent's check command, Node ESM). `dist/` is gitignored — build before a folder install.
 - `npm run typecheck` — `tsc --noEmit`, strict.
 - `npm test` — `node --test --test-concurrency=1 "test/**/*.test.ts"` (Node ≥ 22.18 strips the types; one file: `node --test test/shared/design-json.test.ts`).
 - `npm run check` — typecheck + build + test.
@@ -85,6 +85,8 @@ Authority: `docs/SPEC.md`; this section is a summary.
 - The chat agent writes the files; the service watches the folder and the UI refreshes live. `/design <brief>` (canvas) and `/page <brief>` attach the design rules, target folder and `design.json` contract to any chat.
 - Agents without the slash command find Design Chamber through `<root>/AGENTS.md` (a guide the service keeps current, never over a user-edited file) and an optional `design-chamber` skill installed from Settings (spec: `documentation/specs/agent-guidance-and-pages.md`).
 - Thumbnails: headless-Chrome PNGs cached on change; fallback to a live mini-iframe when Chrome is missing.
+- Checks: the agent runs `dc check <slug>` through a launcher the service writes in `<root>/.chamber/bin/` (no token; renders every artboard offline in headless Chrome over a pipe, writes `.chamber/check.json` and PNGs); the viewer shows a Checks badge with "Ask the agent to fix" (`docs/SPEC.md` §9.9).
+- Review loop: a build strip shows what the linked agent is doing, an ask bar under the wall sends the user's words (optionally about one element) to the linked chat, pins can be sent one at a time, and a restore offers Undo instead of a confirm (`docs/SPEC.md` §13.3).
 
 ## Business rules
 Product decisions are in `docs/BRIEF.md`; anything not listed there is open.
