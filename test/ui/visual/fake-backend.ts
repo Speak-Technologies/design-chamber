@@ -268,6 +268,10 @@ export type FakeBackend = {
   onChange: (listener: (event: ChangeEvent) => void) => () => void;
   /** Test hook: the agent finishes the pending onboarding design. */
   writePending: () => void;
+  /** Test hook: the agent saves one file of a design (`files` event with that path). */
+  writeFile: (slug: string, path: string) => void;
+  /** Test hook: a design was created this long ago (milliseconds). */
+  ageDesign: (slug: string, ageMs: number) => void;
   /** Test hook: the next restore fails once with this message (the Undo error notice). */
   failNextRestore: (message: string) => void;
 };
@@ -568,6 +572,22 @@ export const createFakeBackend = (): FakeBackend => {
     emit('onboarding-flow', 'design');
   };
 
+  const writeFile = (slug: string, path: string): void => {
+    const rec = db.get(slug);
+    if (!rec) return;
+    const written = path === 'index.html' ? 'index' : rec.design.screens.find((screen) => screen.file === path)?.id;
+    if (written) rec.written.add(written);
+    touch(rec);
+    emit(slug, 'files', [path]);
+  };
+
+  const ageDesign = (slug: string, ageMs: number): void => {
+    const rec = db.get(slug);
+    if (!rec) return;
+    rec.design.created = ago(ageMs);
+    emit(slug, 'design');
+  };
+
   return {
     call,
     onChange: (listener) => {
@@ -575,6 +595,8 @@ export const createFakeBackend = (): FakeBackend => {
       return () => void listeners.delete(listener);
     },
     writePending,
+    writeFile,
+    ageDesign,
     failNextRestore: (message) => {
       restoreFailure = message;
     },

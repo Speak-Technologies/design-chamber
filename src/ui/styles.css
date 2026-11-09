@@ -1787,6 +1787,167 @@ body {
 .dc-app[data-surface='panel'] .dc-banner[data-actions='stack'] .oc-sdk-banner-action { flex-basis: 100%; }
 
 /* ===== Phase 1: build strip (feat/build-strip) ===== */
+/*
+ * What the linked agent is doing, as a pill at the top centre of the stage (the seam-S2 overlay),
+ * on the rail and on the full-screen page alike. It floats over the wall and never shifts it.
+ * The full-screen toolbar's status slot (S1) is not used: beside the title, the mode, size and
+ * zoom controls and the right-hand buttons it is left with about 66 px at 1400 px wide.
+ */
+.dc-build {
+  position: absolute;
+  top: var(--dc-s2);
+  right: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  width: fit-content;
+  min-width: 0;
+  /* 760px: a status line stops being a glance past about this width; the one size here with no scale step. */
+  max-width: min(760px, calc(100% - 2 * var(--dc-s4)));
+  height: var(--dc-s6);
+  margin-inline: auto;
+  padding: 0 var(--dc-s3);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--dc-r-lg);
+  background: var(--oc-elevated);
+  box-shadow: var(--oc-sdk-float);
+  color: var(--oc-elevated-fg);
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  pointer-events: auto;
+}
+/* Rail: shorter text, icon buttons, a little tighter. */
+.dc-build[data-compact='true'] {
+  /* One step over the 24px icon buttons it holds, so they sit inside the border. */
+  height: calc(var(--dc-s5) + var(--dc-s1));
+  max-width: calc(100% - 2 * var(--dc-s2));
+  padding: 0 var(--dc-s2);
+  gap: var(--dc-s1);
+  font-size: 0.75rem;
+}
+.dc-build-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.dc-build-dot {
+  flex: none;
+  width: var(--dc-s2);
+  height: var(--dc-s2);
+  border-radius: 9999px;
+  background: var(--oc-primary);
+}
+.dc-build[data-tone='success'] .dc-build-dot {
+  background: var(--oc-success);
+}
+.dc-build[data-tone='warning'] .dc-build-dot {
+  background: var(--oc-warning);
+}
+.dc-build[data-tone='error'] .dc-build-dot {
+  background: var(--oc-error);
+}
+/* The agent is busy: a slow pulse on the dot, the only motion in the strip. */
+.dc-build[data-tone='info'] .dc-build-dot {
+  animation: dc-build-pulse 2.4s ease-in-out infinite;
+}
+@keyframes dc-build-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--oc-primary) 50%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 var(--dc-s1) transparent;
+  }
+}
+.dc-build-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-build-elapsed {
+  flex: none;
+  font-family: var(--oc-mono);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--oc-muted);
+}
+/* The detail gives way first: it shrinks faster than the text, and goes on a narrow page. */
+.dc-build-detail {
+  flex: 0 4 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--oc-muted);
+}
+.dc-build-detail::before {
+  content: '·';
+  margin-right: var(--dc-s2);
+}
+.dc-build-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--dc-s1);
+}
+.dc-build[data-compact='true'] .dc-build-actions {
+  margin-right: calc(-1 * var(--dc-s1));
+}
+.dc-build[data-compact='true'] .dc-iconbtn {
+  width: var(--dc-s5);
+  height: var(--dc-s5);
+}
+/* 720px is the width below which the rest of the page already treats itself as narrow (the dock lies over the wall). */
+@media (max-width: 720px) {
+  .dc-build-detail {
+    display: none;
+  }
+}
+
+/* Nothing to say: out of the layout, but the live region stays in the page so the next phase is spoken. */
+.dc-build[data-phase='hidden'] {
+  width: 1px;
+  height: 1px;
+  max-width: none;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  clip-path: inset(50%);
+  pointer-events: none;
+}
+
+/* The board the agent just wrote: a ring in the accent that fades over RECENT_MS (6 s). The 2px ring is the weight of the wall's other board outlines, kept at 2px on screen by --dc-inv. */
+.dc-board[data-recent='true']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: 0 0 0 calc(2px * var(--dc-inv, 1)) color-mix(in srgb, var(--oc-primary) 60%, transparent);
+  animation: dc-recent-fade 6s ease-in forwards;
+}
+@keyframes dc-recent-fade {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-build[data-tone='info'] .dc-build-dot,
+  .dc-board[data-recent='true']::before {
+    animation: none;
+  }
+}
 /* ===== end build strip ===== */
 
 /* ===== Phase 1: ask bar (feat/ask-bar-send-pin) ===== */
