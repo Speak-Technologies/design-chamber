@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { HostRequestError, type GuestMessageItem, type GuestSessionRecord, type PromptRequest, type StartSessionRequest } from '@openchamber/sdk';
+import { HostRequestError, type ComposeRequest, type GuestMessageItem, type GuestSessionRecord, type PromptRequest, type StartSessionRequest } from '@openchamber/sdk';
 
 import { createFakeServices, createFakeService, type FakeServices } from '../../src/guest/fake-services.ts';
 import { createFlows, FlowError, MESSAGES, planReconciliation, sameDirectory, type Flows } from '../../src/guest/flows.ts';
@@ -30,6 +30,7 @@ const COFFEE = 'coffee-subscription';
 const LINKED = 'ses_fake_coffee';
 const comments = (s: Setup) => s.service.designs.get(COFFEE)?.design.comments ?? [];
 const routes = (s: Setup, from = 0) => s.service.requests.slice(from).map((request) => `${request.method} ${request.path}`);
+const composed = (s: Setup) => s.host.callsOf('compose').map(([request]) => request as ComposeRequest);
 const toasts = (s: Setup) => s.host.callsOf('toast').map(([request]) => (request as { message: string }).message);
 
 // ---- §10.1 slash commands ----
@@ -212,7 +213,9 @@ test('send comments, branch 1 busy: composed + toast, still marked sent; SESSION
   const s = setup({ session: { id: LINKED, title: 'Coffee', busy: true } });
   const result = await s.flows.sendComments(COFFEE);
   assert.equal(result.outcome, 'composed');
-  assert.deepEqual(s.host.callsOf('prompt').map(([request]) => (request as PromptRequest).send), [false]);
+  assert.equal(s.host.callsOf('prompt').length, 0, 'a busy chat is never sent to, and its draft is never replaced');
+  assert.deepEqual(composed(s).map((request) => request.mode), ['append']);
+  assert.match(composed(s)[0]?.text ?? '', /Revise "Coffee subscription"/);
   assert.deepEqual(toasts(s), [MESSAGES.busy]);
   assert.equal(comments(s)[0]?.status, 'sent');
 
@@ -222,7 +225,8 @@ test('send comments, branch 1 busy: composed + toast, still marked sent; SESSION
     return { sent: 'skipped' };
   };
   assert.equal((await race.flows.sendComments(COFFEE)).outcome, 'composed');
-  assert.deepEqual(race.host.callsOf('prompt').map(([request]) => (request as PromptRequest).send), [true, false]);
+  assert.deepEqual(race.host.callsOf('prompt').map(([request]) => (request as PromptRequest).send), [true]);
+  assert.deepEqual(composed(race).map((request) => request.mode), ['append']);
   assert.deepEqual(toasts(race), [MESSAGES.busy]);
 
   const failed = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
@@ -292,6 +296,8 @@ test('outbox delivery: an outbox older than 10 minutes is ignored; busy delivery
   const busy = setup({ service, surface: 'panel', session: { id: LINKED, title: 'Coffee', busy: true } }, () => Date.parse(created) + 60_000);
   assert.equal(await busy.flows.deliverOutbox({ id: LINKED, title: 'Coffee', busy: true }), 'composed');
   assert.deepEqual(toasts(busy), [MESSAGES.busy]);
+  assert.deepEqual(composed(busy), [{ text: 'Revise', mode: 'append' }]);
+  assert.equal(busy.host.callsOf('prompt').length, 0);
   assert.equal(service.outbox, null);
 });
 
@@ -320,6 +326,167 @@ test('send comments, branch 3: no linked session → new chat; nothing open → 
   const again = await s.flows.sendComments(COFFEE);
   assert.equal(again.outcome, 'nothing');
   assert.equal(s.host.callsOf('startSession').length, 1);
+});
+
+test('send comments: one id sends and marks only that comment', async () => {
+  const s = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  const coffee = s.service.designs.get(COFFEE);
+  assert.ok(coffee);
+  coffee.design.comments.push({ ...coffee.design.comments[0], id: 'c_second', body: 'Second pin' } as (typeof coffee.design.comments)[number]);
+  const result = await s.flows.sendComments(COFFEE, ['c_second']);
+  assert.equal(result.outcome, 'sent');
+  assert.deepEqual(result.commentIds, ['c_second']);
+  assert.deepEqual(coffee.design.comments.map((comment) => [comment.id, comment.status]), [['c_hero01', 'open'], ['c_second', 'sent']]);
+  const [prompt] = s.host.callsOf('prompt')[0] as [PromptRequest];
+  assert.match(prompt.text, /Second pin/);
+  assert.ok(!prompt.text.includes('Make the headline shorter and warmer.'), 'the other open comment is not in the message');
+});
+
+test('send comments: a named comment goes whatever its status, like the real service; an unknown id is refused', async () => {
+  const s = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  const coffee = s.service.designs.get(COFFEE);
+  assert.ok(coffee);
+  const [hero] = coffee.design.comments;
+  assert.ok(hero);
+  hero.status = 'sent';
+  const result = await s.flows.sendComments(COFFEE, [hero.id]);
+  assert.deepEqual(result.commentIds, [hero.id], 'the service does not filter named ids to open ones');
+  await assert.rejects(s.flows.sendComments(COFFEE, ['c_gone99']), /None of those comments exist any more/);
+});
+
+// ---- the ask bar ----
+
+const ASK = 'Make the headline bigger';
+const askBody = (s: Setup): Record<string, unknown> => {
+  const request = s.service.requests.filter((r) => r.path.endsWith('/prompt')).at(-1);
+  return JSON.parse(request?.body ?? '{}') as Record<string, unknown>;
+};
+const ELEMENT = {
+  screen: 'home',
+  viewport: 'laptop',
+  anchor: { selector: 'main > h1', text: 'Fresh coffee', html: '<h1>', rect: { x: 1, y: 2, w: 3, h: 4 }, point: { x: 0.5, y: 0.5 } },
+};
+
+test('ask, the linked chat is selected and idle → sent as is; no comment is touched', async () => {
+  const s = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  const result = await s.flows.ask(COFFEE, { text: ASK, element: ELEMENT });
+  assert.deepEqual(result, { outcome: 'sent', sessionId: LINKED });
+  assert.deepEqual(askBody(s), { purpose: 'ask', text: ASK, element: ELEMENT });
+  const [prompt] = s.host.callsOf('prompt')[0] as [PromptRequest];
+  assert.equal(prompt.send, true);
+  assert.match(prompt.text, /Request about the canvas "Coffee subscription"/);
+  assert.ok(prompt.text.includes(ASK));
+  assert.equal(comments(s)[0]?.status, 'open');
+  assert.ok(!routes(s).some((route) => route.includes('mark-sent')), 'an ask has no comments to mark');
+  assert.equal(toasts(s).length, 0);
+});
+
+test('ask without an element sends no element field', async () => {
+  const s = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  await s.flows.ask(COFFEE, { text: ASK });
+  assert.deepEqual(askBody(s), { purpose: 'ask', text: ASK });
+  await s.flows.ask(COFFEE, { text: ASK, element: null });
+  assert.deepEqual(askBody(s), { purpose: 'ask', text: ASK });
+});
+
+test('ask, the chat is busy → appended to the composer with the ask toast; a draft is never replaced', async () => {
+  const s = setup({ session: { id: LINKED, title: 'Coffee', busy: true } });
+  const result = await s.flows.ask(COFFEE, { text: ASK });
+  assert.deepEqual(result, { outcome: 'composed', sessionId: LINKED });
+  assert.equal(s.host.callsOf('prompt').length, 0);
+  assert.equal(composed(s).length, 1);
+  assert.equal(composed(s)[0]?.mode, 'append');
+  assert.ok(composed(s)[0]?.text.includes(ASK));
+  assert.deepEqual(toasts(s), [MESSAGES.busyAsk]);
+  assert.equal(MESSAGES.busyAsk, 'The agent is busy, so your message is waiting in the composer.');
+
+  const race = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  race.host.behavior.prompt = async () => {
+    throw new HostRequestError('SESSION_BUSY', 'busy');
+  };
+  assert.equal((await race.flows.ask(COFFEE, { text: ASK })).outcome, 'composed');
+  assert.deepEqual(composed(race).map((request) => request.mode), ['append']);
+  assert.deepEqual(toasts(race), [MESSAGES.busyAsk]);
+});
+
+test('ask, another chat is selected → outbox with no comments, rail opened, chat opened', async () => {
+  const s = setup({ session: { id: 'ses_other', title: 'Other', busy: false } });
+  const result = await s.flows.ask(COFFEE, { text: ASK });
+  assert.deepEqual(result, { outcome: 'outbox', sessionId: LINKED });
+  assert.equal(s.service.outbox?.sessionId, LINKED);
+  assert.deepEqual(s.service.outbox?.commentIds, []);
+  assert.equal(s.service.outbox?.version, null);
+  assert.ok(s.service.outbox?.text.includes(ASK));
+  assert.deepEqual(s.host.callsOf('openSession'), [[LINKED]]);
+  assert.equal(s.host.callsOf('prompt').length, 0);
+});
+
+test('ask outbox: the rail delivers it once; a busy chat gets the ask toast and an append', async () => {
+  const service = createFakeService();
+  const page = setup({ service, surface: 'page', session: { id: 'ses_other', title: 'Other', busy: false } });
+  await page.flows.ask(COFFEE, { text: ASK });
+  assert.ok(service.outbox);
+
+  const rail = setup({ service, surface: 'panel', session: { id: LINKED, title: 'Coffee', busy: true } });
+  assert.equal(await rail.flows.deliverOutbox({ id: LINKED, title: 'Coffee', busy: true }), 'composed');
+  assert.equal(service.outbox, null);
+  assert.deepEqual(toasts(rail), [MESSAGES.busyAsk]);
+  assert.ok(composed(rail)[0]?.text.includes(ASK));
+  assert.equal(composed(rail)[0]?.mode, 'append');
+  assert.ok(!routes(rail).some((route) => route.includes('mark-sent')), 'no comments, nothing to mark');
+});
+
+test('ask, the linked chat is gone → outbox taken back, a new linked chat starts with it', async () => {
+  const s = setup({ knownSessions: [], session: { id: 'ses_other', title: 'Other', busy: false } });
+  const result = await s.flows.ask(COFFEE, { text: ASK });
+  assert.equal(result.outcome, 'new-session');
+  assert.equal(s.service.outbox, null);
+  assert.ok(routes(s).includes('DELETE /outbox'));
+  const [request] = s.host.callsOf('startSession')[0] as [StartSessionRequest];
+  assert.ok(request.text?.includes(ASK));
+  assert.equal(request.id, `design:${COFFEE}`);
+  assert.equal(s.service.designs.get(COFFEE)?.design.sessionId, result.sessionId);
+});
+
+test('ask, no linked chat → a new linked chat; no project → the plain message, nothing sent', async () => {
+  const s = setup();
+  const coffee = s.service.designs.get(COFFEE);
+  assert.ok(coffee);
+  coffee.design.sessionId = null;
+  const result = await s.flows.ask(COFFEE, { text: ASK });
+  assert.equal(result.outcome, 'new-session');
+  assert.equal(s.host.callsOf('openSession').length, 0);
+  assert.equal(coffee.design.sessionId, result.sessionId);
+
+  const none = setup({ directory: null });
+  const design = none.service.designs.get(COFFEE);
+  assert.ok(design);
+  design.design.sessionId = null;
+  design.design.projectDirectory = null;
+  await assert.rejects(none.flows.ask(COFFEE, { text: ASK }), (error: unknown) => error instanceof FlowError && error.code === 'no-project' && error.message === MESSAGES.noProject);
+  assert.equal(none.host.callsOf('startSession').length, 0);
+});
+
+test('ask failures: nothing is marked, the error is the user-facing one, and the host is not tried after a service error', async () => {
+  const noModel = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  noModel.host.behavior.prompt = async () => ({ sent: 'no-model' });
+  await assert.rejects(noModel.flows.ask(COFFEE, { text: ASK }), (error: unknown) => error instanceof FlowError && error.code === 'send-failed');
+  assert.equal(comments(noModel)[0]?.status, 'open');
+
+  const startFailed = setup({ session: { id: 'ses_other', title: 'Other', busy: false }, knownSessions: [] });
+  startFailed.host.behavior.startSession = async () => ({ sessionId: null, sent: 'skipped', directory: 'C:\\Users\\you\\projects\\shop', worktree: { directory: 'C:\\Users\\you\\projects\\shop', name: 'shop', branch: 'main', status: 'missing' }, failure: 'session-create-failed' });
+  await assert.rejects(startFailed.flows.ask(COFFEE, { text: ASK }), (error: unknown) => error instanceof FlowError && error.code === 'start-failed');
+
+  const blank = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  await assert.rejects(blank.flows.ask(COFFEE, { text: '   ' }), /what you want the agent to do/);
+  assert.equal(blank.host.callsOf('prompt').length, 0);
+
+  const hostError = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  hostError.host.behavior.prompt = async () => {
+    throw new HostRequestError('DISABLED', 'paused');
+  };
+  await assert.rejects(hostError.flows.ask(COFFEE, { text: ASK }), /paused/);
+  assert.equal(composed(hostError).length, 0, 'only SESSION_BUSY falls back to the composer');
 });
 
 // ---- §10.5 reconciliation ----

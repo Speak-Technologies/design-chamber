@@ -2,7 +2,8 @@
 
 import type { Comment, CommentStatus, Screen, Viewport } from '../../shared/types.ts';
 import { PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.ts';
-import { viewportLabel } from './format.ts';
+import { MESSAGES, type SendCommentsResult } from '../../guest/flows.ts';
+import { plural, viewportLabel } from './format.ts';
 
 export type CommentFilter = CommentStatus;
 
@@ -75,4 +76,32 @@ export const pinGlyph = (comment: Comment, number: number): string => (comment.s
 export const pinAriaLabel = (comment: Comment, number: number): string => {
   const body = comment.body.length > 60 ? `${comment.body.slice(0, 57)}…` : comment.body;
   return `Comment ${number}: ${body} (${statusLabel(comment.status).toLowerCase()})`;
+};
+
+export type SendCopy = { kind: 'info' | 'success'; message: string };
+
+/**
+ * The toast after comments were sent, or null when the flow already told the user (a busy agent:
+ * the revision is in the composer). One comment is named by its pin number when that is known.
+ */
+export const sendResultCopy = (result: Pick<SendCommentsResult, 'outcome' | 'commentIds' | 'omitted' | 'markFailed'>, pinNumber: number | null): SendCopy | null => {
+  const sent = result.commentIds.length;
+  if (result.outcome === 'nothing') return { kind: 'info', message: 'There are no open comments to send.' };
+  if (result.markFailed) return { kind: 'info', message: MESSAGES.markFailed };
+  if (result.omitted.length > 0) return { kind: 'info', message: `${sent} of ${sent + result.omitted.length} comments sent. Send again for the rest.` };
+  const named = sent === 1 && pinNumber !== null;
+  if (result.outcome === 'new-session') return { kind: 'success', message: `Started a new chat with ${named ? `comment ${pinNumber}` : plural(sent, 'comment')}.` };
+  if (result.outcome === 'composed') return null;
+  return { kind: 'success', message: named ? `Comment ${pinNumber} sent to the chat.` : `${plural(sent, 'comment')} sent to the chat.` };
+};
+
+/**
+ * Why "Send this" must not send, or null when it may. A thread card can be older than its comment:
+ * the comment may have been sent from the list, resolved, or deleted since the card was built.
+ */
+export const sendThisProblem = (comment: Pick<Comment, 'status'> | undefined): string | null => {
+  if (comment === undefined) return 'That comment is gone, so there is nothing to send.';
+  if (comment.status === 'sent') return 'That comment was already sent to the chat.';
+  if (comment.status === 'resolved') return 'That comment is resolved, so it was not sent. Reopen it first.';
+  return null;
 };

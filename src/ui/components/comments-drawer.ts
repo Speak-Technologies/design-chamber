@@ -3,15 +3,13 @@
 
 import { mountTabs } from '@openchamber/sdk/ui';
 
-import type { Comment } from '../../shared/types.ts';
-import type { AnchorState } from '../../shared/types.ts';
-import { MESSAGES } from '../../guest/flows.ts';
-import { flows, store } from '../guest.ts';
+import type { AnchorState, Comment } from '../../shared/types.ts';
+import { store } from '../guest.ts';
 import { COMMENT_FILTERS, countByStatus, groupComments, pinNumbers, sendState, statusLabel, viewportOf, type CommentFilter } from '../model/comments-model.ts';
-import { plural } from '../model/format.ts';
 import { toast } from './actions.ts';
 import { createScope, errorText, h } from './dom.ts';
 import { banner, btn, iconBtn, loadingRow } from './kit.ts';
+import { isSending, onSendingChange, sendComments } from './send-comments.ts';
 
 export type CommentsHandle = { el: HTMLElement; refresh: () => void; dispose: () => void };
 
@@ -52,20 +50,21 @@ export const mountComments = (options: CommentsOptions): CommentsHandle => {
     sendError = null;
     paint();
     try {
-      const result = await flows.sendComments(options.slug, ids, options.anchorStates());
-      await store.refreshOpenDesign();
-      const sent = result.commentIds.length;
-      // `composed`: the flow already said the agent is busy and the revision waits in the composer.
-      if (result.outcome === 'nothing') toast('info', 'There are no open comments to send.');
-      else if (result.markFailed) toast('info', MESSAGES.markFailed);
-      else if (result.omitted.length > 0) toast('info', `${sent} of ${sent + result.omitted.length} comments sent. Send again for the rest.`);
-      else if (result.outcome === 'new-session') toast('success', `Started a new chat with ${plural(sent, 'comment')}.`);
-      else if (result.outcome !== 'composed') toast('success', `${plural(sent, 'comment')} sent to the chat.`);
+      await sendComments(options.slug, ids, options.anchorStates());
     } catch (error) {
       sendError = `Couldn’t send. ${errorText(error)} Your comments are still here.`;
     } finally {
       sending = false;
       paint();
+    }
+  };
+
+  /** One row's Send button: it sends that comment alone; a failure is a toast, since a row has no error slot. */
+  const sendOne = async (comment: Comment): Promise<void> => {
+    try {
+      await sendComments(options.slug, [comment.id], options.anchorStates());
+    } catch (error) {
+      toast('error', `Couldn’t send that comment. ${errorText(error)} It is still open.`);
     }
   };
 
@@ -80,6 +79,20 @@ export const mountComments = (options: CommentsOptions): CommentsHandle => {
         void updateStatus(comment, resolved ? 'open' : 'resolved');
       },
     });
+    // Only open comments can go out on their own; a sent comment has had its turn.
+    const sendNow = comment.status !== 'open'
+      ? null
+      : iconBtn({
+          icon: 'send',
+          label: `Send comment ${number} to chat`,
+          size: 'sm',
+          disabled: isSending(comment.id),
+          onClick: (event) => {
+            event.stopPropagation();
+            void sendOne(comment);
+          },
+        });
+    if (sendNow && isSending(comment.id)) sendNow.setAttribute('aria-busy', 'true');
     const main = h(
       'button',
       { type: 'button', class: 'dc-comment-main', 'aria-label': `Show comment ${number} on the wall` },
@@ -94,7 +107,7 @@ export const mountComments = (options: CommentsOptions): CommentsHandle => {
       ),
     );
     main.addEventListener('click', () => options.onLocate(comment.id));
-    return h('li', { class: 'dc-comment', 'data-detached': detachedHere ? 'true' : 'false' }, main, toggle);
+    return h('li', { class: 'dc-comment', 'data-detached': detachedHere ? 'true' : 'false' }, main, sendNow, toggle);
   };
 
   const paint = (): void => {
@@ -153,6 +166,7 @@ export const mountComments = (options: CommentsOptions): CommentsHandle => {
       label: state2.label,
       variant: 'default',
       size: 'default',
+      emphasis: 'primary',
       loading: sending,
       disabled: !state2.enabled,
       onClick: () =>
@@ -168,6 +182,8 @@ export const mountComments = (options: CommentsOptions): CommentsHandle => {
   };
 
   scope.add(store.subscribe(paint));
+  // A send started from a thread card also busies this comment's row.
+  scope.add(onSendingChange(paint));
   paint();
   return {
     el,

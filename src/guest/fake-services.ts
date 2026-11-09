@@ -588,8 +588,21 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
       }
       case 'POST /designs/:slug/prompt': {
         const entry = get(slug);
+        if (body.purpose === 'ask') {
+          const words = typeof body.text === 'string' ? body.text.trim() : '';
+          if (words === '') throw new FakeHttpError('bad-request', 'Write what you want the agent to do.');
+          const element = typeof body.element === 'object' && body.element !== null ? (body.element as { anchor?: { selector?: string } }) : null;
+          const lines = [
+            `[Design Chamber] Request about the ${entry.design.kind} "${entry.design.title}".`,
+            ...(element ? [`About this element: \`${element.anchor?.selector ?? ''}\``] : []),
+            words,
+          ];
+          return { text: lines.join('\n'), commentIds: [], omitted: [], chip: chipOf(slug) };
+        }
         const wanted = Array.isArray(body.commentIds) ? new Set(body.commentIds.map(String)) : null;
-        const comments = entry.design.comments.filter((comment) => comment.status === 'open' && (!wanted || wanted.has(comment.id)));
+        // Like the service: no ids means every open comment; named ids are sent whatever their status.
+        const comments = entry.design.comments.filter((comment) => (wanted ? wanted.has(comment.id) : comment.status === 'open'));
+        if (body.purpose === 'revision' && wanted && comments.length === 0) throw new FakeHttpError('invalid', 'None of those comments exist any more.');
         const text =
           body.purpose === 'revision'
             ? `[Design Chamber] Revise "${entry.design.title}": ${comments.length} comment(s).\n` +

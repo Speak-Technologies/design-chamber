@@ -43,6 +43,7 @@
         prompts: [], composes: [], sessionsOpened: [],
         /** Set to 'prompt' to make the next prompt call fail once. */
         failNext: null,
+        promptGate: null,
         setTheme: (next) => { mode = next; sendReady(); },
         /** Set a session's activity ('idle', 'running', 'retrying', 'waiting-permission', 'waiting-question') and outcome ('completed', 'failed' or null) and push it to every sessions subscription. */
         setActivity: (sessionId, activity, outcome = null) => {
@@ -64,7 +65,8 @@
         theme: { mode, tokens: { ...THEMES[mode], font: FONT, mono: MONO, radius: '0.5625rem' } },
         locale: 'en-US',
         directory: DIRECTORY,
-        session: { id: 'ses_current', title: 'Pricing page', busy: false },
+        // ?session=<id> selects a chat, so a design linked to it gets prompts directly.
+        session: { id: params.get('session') || 'ses_current', title: params.get('session') ? 'Coffee subscription chat' : 'Pricing page', busy: false },
         surface,
         connection: { connected: false, account: '' },
         settings: {},
@@ -113,8 +115,11 @@
         } else if (m.type === 'workspace-unsubscribe') { subscriptions.delete(m.payload.subscriptionId); if (m.id) ok({}); }
         else if (m.type === 'prompt') {
           window.__host.prompts.push(m.payload);
-          if (window.__host.failNext === 'prompt') { window.__host.failNext = null; fail('The chat is not available right now.'); }
-          else ok({ sent: 'sent' });
+          // __host.promptGate = a pending promise holds the answer, so a scenario can look at the sending state.
+          Promise.resolve(window.__host.promptGate).then(() => {
+            if (window.__host.failNext === 'prompt') { window.__host.failNext = null; fail('The chat is not available right now.'); }
+            else ok({ sent: 'sent' });
+          });
         } else if (m.type === 'compose') { window.__host.composes.push(m.payload); ok({}); }
         else if (m.type === 'open-session') { window.__host.sessionsOpened.push(m.payload.sessionId); ok({}); }
         else if (m.id) ok({});

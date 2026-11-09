@@ -15,6 +15,7 @@ import type {
   Viewport,
 } from '../../../src/shared/types.ts';
 import { COFFEE, SAGE, SLATE, coffeeCheckout, coffeeHome, coffeePricing, invoicePage, onboardingScreen, pricingPage, type Palette } from './fake-docs.ts';
+import { CHIP_PROVIDER_ID, type DesignChip } from '../../../src/shared/types.ts';
 import { ServiceError } from './service-error.ts';
 
 const MINUTE = 60_000;
@@ -547,8 +548,27 @@ export const createFakeBackend = (): FakeBackend => {
         { id: 'playful-consumer', name: 'Playful consumer', bestFor: 'apps, onboarding' },
       ],
     }),
-    'POST /designs/:slug/prompt': () => {
-      throw new ServiceError('internal', 'Not needed by the UI shim.');
+    'POST /designs/:slug/prompt': ({ params, body }) => {
+      const rec = get(params.slug);
+      const chip: DesignChip = { providerId: CHIP_PROVIDER_ID, id: `design:${params.slug}`, title: rec.design.title, url: `file:///designs/${params.slug}`, text: 'Continue this design.', data: { slug: params.slug ?? '', kind: rec.design.kind } };
+      if (body.purpose === 'revision') {
+        const wanted = body.commentIds ? new Set(body.commentIds) : null;
+        // Like the service: no ids means every open comment; named ids are sent whatever their status.
+        const picked = rec.design.comments.filter((candidate) => (wanted ? wanted.has(candidate.id) : candidate.status === 'open'));
+        if (picked.length === 0) throw new ServiceError('invalid', wanted ? 'None of those comments exist any more.' : 'There are no open comments to send.');
+        const lines = picked.map((candidate, index) => `${index + 1}. element: \`${candidate.anchor.selector}\`\n   → ${candidate.body}`);
+        return { text: `[Design Chamber] Revise "${rec.design.title}": ${picked.length} comment${picked.length === 1 ? '' : 's'}.\n${lines.join('\n')}`, commentIds: picked.map((candidate) => candidate.id), omitted: [], chip };
+      }
+      if (body.purpose !== 'ask') throw new ServiceError('internal', 'The UI shim answers revisions and asks only.');
+      const words = typeof body.text === 'string' ? body.text.trim() : '';
+      if (words === '') throw new ServiceError('bad-request', 'Write what you want the agent to do.');
+      const element = body.element;
+      const lines = [
+        `[Design Chamber] Request about the ${rec.design.kind} "${rec.design.title}".`,
+        ...(element ? [`About this element: \`${element.anchor.selector}\``] : []),
+        words,
+      ];
+      return { text: lines.join('\n'), commentIds: [], omitted: [], chip };
     },
   };
 

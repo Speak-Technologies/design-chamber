@@ -7,6 +7,7 @@ import type { HitElement } from '../../shared/bridge-protocol.ts';
 import { PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.ts';
 import type { Comment } from '../../shared/types.ts';
 import { h } from '../components/dom.ts';
+import { viewportOf } from '../model/comments-model.ts';
 import { frameToScreen, pinFramePoint, type Point } from '../model/wall-model.ts';
 import { createComposer, createThread, type CardHandle } from './comment-ui.ts';
 import type { CameraController } from './camera-controller.ts';
@@ -23,18 +24,17 @@ export type PopoverLayer = {
   current: () => Popover | null;
   /** Put a card in the overlay at a screen point, kept inside the wall. */
   placeCard: (card: HTMLElement, anchorScreen: Point, below: number) => void;
-  /**
-   * Seam S4: forget the selected element (the ask bar's chip was removed). A no-op until the ask
-   * branch fills it in: it closes an open composer and emits `cleared`.
-   */
+  /** Seam S4: forget the selected element (the ask bar's chip was removed): closes an open composer, unless it holds text the user typed. */
   clearSelection: () => void;
+  /** The comments changed: an open thread card follows its comment's status. */
+  refresh: () => void;
 };
 
 export type PopoverDeps = {
   /**
-   * Seam S4: announce a selection change to `WallHandle.onSelection` listeners. The ask branch calls
-   * it with `selected` in `openComposer`, `commented` after `createComment` resolves, and `cleared`
-   * from `close` when a composer was open. Nothing calls it yet.
+   * Seam S4: announce a selection change to `WallHandle.onSelection` listeners: `selected` in
+   * `openComposer`, `commented` after `createComment` resolves, `cleared` from `close` when a
+   * composer was open.
    */
   emitSelection: (event: WallSelectionEvent) => void;
 };
@@ -54,7 +54,7 @@ export const rectToBox = (board: Board, el: HTMLElement, rect: Rect): void => {
   el.style.height = `${rect.h}px`;
 };
 
-export const createPopoverLayer = (ctx: WallContext, camera: CameraController, _deps: PopoverDeps): PopoverLayer => {
+export const createPopoverLayer = (ctx: WallContext, camera: CameraController, deps: PopoverDeps): PopoverLayer => {
   const { options } = ctx;
   let popover: Popover | null = null;
 
@@ -66,6 +66,8 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, _
     current.board.selected.hidden = true;
     for (const pin of current.board.pins.values()) pin.removeAttribute('aria-expanded');
     document.querySelector('.dc-temp-pin')?.remove();
+    // A composer is a selection in progress; a thread is not.
+    if (current.commentId === null) deps.emitSelection({ type: 'cleared' });
   };
 
   const placeCard = (card: HTMLElement, anchorScreen: Point, below: number): void => {
@@ -106,8 +108,13 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, _
         await options.updateComment(commentId, { body });
         close();
       },
-      // Seam S6: the send-one-pin branch renders the button; the callback is only handed over when the view passed one.
-      onSend: sendComment ? (body) => sendComment(commentId, body) : undefined,
+      // Seam S6: the card shows "Send this" only when the view passed a sender.
+      onSend: sendComment
+        ? async (body) => {
+            await sendComment(commentId, body);
+            close();
+          }
+        : undefined,
       onStatus: async (status) => {
         await options.updateComment(commentId, { status });
         close();
@@ -137,25 +144,38 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, _
     temp.style.left = `${pinAt.x}px`;
     temp.style.top = `${pinAt.y}px`;
     board.overlay.append(temp);
+    const key = `${board.art.id}:${anchor.selector}`;
+    const target = { screen: board.art.screen?.id ?? null, viewport: board.art.viewport.id };
+    // The same place name the thread card shows, so the ask bar's chip reads like the composer.
+    const where = ctx.pageMode ? viewportOf(ctx.detail.design.viewports, target.viewport) : `${board.art.screen?.title ?? 'Page'} · ${board.art.viewport.label}`;
     const card = createComposer({
       tag: element.tag,
       snippet: element.text.length > 80 ? `${element.text.slice(0, 77)}…` : element.text,
       onCancel: () => close(),
       onSubmit: async (body) => {
-        await options.createComment({
-          screen: board.art.screen?.id ?? null,
-          viewport: board.art.viewport.id,
-          anchor,
-          body,
-        });
+        await options.createComment({ ...target, anchor, body });
+        deps.emitSelection({ type: 'commented', key });
         close();
       },
     });
     open(board, card, null);
+    deps.emitSelection({ type: 'selected', selection: { key, element: { ...target, anchor }, tag: element.tag, where } });
     const base = frameToScreen(camera.get(), board.art.rect, { x: element.rect.x - board.scroll.x, y: element.rect.y - board.scroll.y });
     placeCard(card.el, base, element.rect.h * camera.get().scale);
     card.focus();
   };
 
-  return { openThread, openComposer, close, current: () => popover, placeCard, clearSelection: () => undefined };
+  const clearSelection = (): void => {
+    // A half-written comment is the user's work; removing the chip must not throw it away.
+    if (popover?.commentId === null && popover.card.hasDraft?.() !== true) close();
+  };
+
+  const refresh = (): void => {
+    if (popover?.commentId == null) return;
+    const id = popover.commentId;
+    const comment = ctx.comments().find((candidate) => candidate.id === id);
+    if (comment) popover.card.setStatus?.(comment.status);
+  };
+
+  return { openThread, openComposer, close, current: () => popover, placeCard, clearSelection, refresh };
 };
