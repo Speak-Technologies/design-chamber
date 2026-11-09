@@ -15,17 +15,16 @@ export type VersionsHandle = { el: HTMLElement; refresh: () => void; dispose: ()
 
 export type VersionsOptions = {
   slug: string;
-  /** Element that dialogs mount into. */
-  dialogHost: HTMLElement;
   /** The version the wall shows, if any, and whether it is split against the current design. */
   viewing: () => { id: string; compare: boolean } | null;
   onView: (id: string) => void;
   onCompare: (id: string) => void;
   onBackToCurrent: () => void;
-  onRestored: () => void;
+  /** Seam S10: restore this version. The view owns the flow (confirmation, Undo); it reports its own errors and never rejects. */
+  onRestore: (version: { id: string; n: number }) => Promise<void>;
 };
 
-/** The restore confirmation, shared by the versions drawer and the "viewing a version" bar. */
+/** The restore confirmation the design view runs for a restore (the findability branch replaces it with restore plus Undo). */
 export const confirmRestoreVersion = (dialogHost: HTMLElement, slug: string, version: { id: string; n: number }, onRestored: () => void): void => {
   confirmDialog(dialogHost, {
     title: `Restore v${version.n}?`,
@@ -79,7 +78,7 @@ export const mountVersions = (options: VersionsOptions): VersionsHandle => {
     }
   };
 
-  const restore = (row: VersionRow): void => confirmRestoreVersion(options.dialogHost, options.slug, row, options.onRestored);
+  const restore = (row: VersionRow): void => void options.onRestore({ id: row.id, n: row.n });
 
   const rowEl = (row: VersionRow, viewing: { id: string; compare: boolean } | null): HTMLElement => {
     const active = viewing?.id === row.id;

@@ -434,7 +434,7 @@ export type VersionsService = {
   snapshot(slug: string, reason: VersionReason, options?: SnapshotOptions): Promise<VersionEntry | null>;
   turn(sessionId: string): Promise<{ slug: string; id: string }[]>;
   diff(slug: string, vid: string, against: string): Promise<{ files: { path: string; change: VersionFileChange }[] }>;
-  restore(slug: string, vid: string): Promise<{ restorePoint: VersionSummary | null; restored: VersionSummary }>;
+  restore(slug: string, vid: string): Promise<{ restorePoint: VersionSummary | null; restored: VersionSummary; before: VersionSummary }>;
   /** The snapshot's entry and a FileSource over its objects (the render service reads versions through it). */
   readTree(slug: string, vid: string): Promise<{ entry: VersionEntry; source: FileSource }>;
   /** True when an auto-snapshot timer is pending (tests). */
@@ -607,7 +607,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
     return entry;
   };
 
-  const restoreNow = async (slug: string, vid: string): Promise<{ restorePoint: VersionSummary | null; restored: VersionSummary }> => {
+  const restoreNow = async (slug: string, vid: string): Promise<{ restorePoint: VersionSummary | null; restored: VersionSummary; before: VersionSummary }> => {
     if (!VERSION_ID_PATTERN.test(vid)) throw new ApiError('bad-request', 'That is not a version id.');
     const designDir = await store.dir(slug);
     const { index } = await readableIndex(designDir);
@@ -677,7 +677,10 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
         return null;
       })) ?? (await loadIndex(designDir, log)).index.versions.at(-1);
     if (!restored) throw new ApiError('internal', 'The version was restored, but Design Chamber could not record the snapshot.');
-    return { restorePoint: restorePoint ? toSummary(restorePoint) : null, restored: toSummary(restored) };
+    // No restore point means the files already matched the newest version, which then holds the state from before.
+    const before = restorePoint ?? latest;
+    if (!before) throw new ApiError('internal', 'The version was restored, but Design Chamber could not find the state it replaced.');
+    return { restorePoint: restorePoint ? toSummary(restorePoint) : null, restored: toSummary(restored), before: toSummary(before) };
   };
 
   // Turn-snapshot dedupe across frames (§10.6): one run per session per TURN_SNAPSHOT_DEDUPE_MS.

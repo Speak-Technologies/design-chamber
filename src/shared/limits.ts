@@ -231,6 +231,8 @@ export const CHIP_TEXT_TARGET = 5000;
 export const CHIP_TEXT_HARD_MAX = 15_000;
 /** Revision prompt cap [§11.4]. */
 export const REVISION_TEXT_MAX = HOST_TEXT_MAX;
+/** What a user may type in the ask bar. The service adds the folder, rules path and element lines, which must still fit `HOST_TEXT_MAX`. */
+export const ASK_TEXT_MAX = 12_000;
 /** Project sources listed in the chip core [§11.3]. */
 export const CHIP_PROJECT_PATHS_MAX = 6;
 /** Chip build budget, discovery included [§10.1]. */

@@ -20,6 +20,8 @@ export type BtnOptions = {
   disabled?: boolean;
   loading?: boolean;
   pressed?: boolean;
+  /** `primary`: the one filled action of a view (`data-emphasis` on the kit button; styles.css). */
+  emphasis?: 'primary';
 };
 
 export type BtnHandle = { el: HTMLButtonElement; set: (next: Partial<Pick<BtnOptions, 'label' | 'icon' | 'disabled' | 'loading' | 'pressed' | 'title'>>) => void };
@@ -27,6 +29,7 @@ export type BtnHandle = { el: HTMLButtonElement; set: (next: Partial<Pick<BtnOpt
 export const btn = (options: BtnOptions): BtnHandle => {
   const state = { ...options };
   const el = h('button', { type: 'button', class: 'oc-sdk oc-sdk-btn', 'data-variant': options.variant ?? 'outline', 'data-size': options.size ?? 'sm' });
+  if (options.emphasis) el.dataset.emphasis = options.emphasis;
   const label = h('span', { class: 'dc-btn-label' });
   const ring = h('span', { class: 'oc-sdk-spinner-ring', 'aria-hidden': 'true' });
   let glyph: SVGElement | null = options.icon ? icon(options.icon, 14) : null;

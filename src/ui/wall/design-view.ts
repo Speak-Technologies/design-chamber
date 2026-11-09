@@ -9,14 +9,21 @@ import { HOST_CLIPBOARD_MAX, PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.t
 import { confirmDelete, continueInChat, copyHtml, copyPath, exportDesign, renameDesign, renameDialog, reveal, revealDesign, toast, type ActionContext } from '../components/actions.ts';
 import { mountComments, type CommentsHandle } from '../components/comments-drawer.ts';
 import { createScope, debounce, errorText, h, replace } from '../components/dom.ts';
+import { createNotices } from '../components/notices.ts';
 import { attachMenu, banner, bannerWithActions, btn, confirmDialog, iconBtn, loadingRow, openMenu, openSheet, type BtnHandle, type MenuEntry, type SheetHandle } from '../components/kit.ts';
 import { confirmRestoreVersion, mountVersions, type VersionsHandle } from '../components/versions-drawer.ts';
 import type { Camera } from '../../guest/camera.ts';
 import { renderSourceKey } from '../../guest/store.ts';
 import { askSelfContained, host, isServiceError, store } from '../guest.ts';
 import { viewportLabel, viewportSize, zoomPercent } from '../model/format.ts';
+import { createListeners } from '../model/listeners.ts';
+import { viewerMenuEntries } from '../model/viewer-menu.ts';
 import { viewingBanner } from '../model/versions-model.ts';
 import { pageViewOptions, remoteBannerHidden, remoteNotice, resolvePageView, shortUrl } from '../model/wall-model.ts';
+import * as askBar from './feature-ask-bar.ts';
+import * as buildStrip from './feature-build-strip.ts';
+import * as findability from './feature-findability.ts';
+import type { FeatureMount, ViewContext } from './view-context.ts';
 import { createWall, type WallHandle } from './wall.ts';
 
 export type DesignViewOptions = {
@@ -33,6 +40,8 @@ type Prefs = { hidden: string[]; camera: Camera | null; pageView: unknown };
 type Drawer = { kind: 'comments' | 'versions'; sheet: SheetHandle; handle: CommentsHandle | VersionsHandle };
 
 const FULL_SCREEN_HINT = 'Full screen: sidebar → Extension pages → Design Chamber';
+/** How long the "Export saved" notice stays (it holds while the pointer or focus is on it). */
+const EXPORT_NOTICE_MS = 15_000;
 
 /**
  * Remote-files banners the user hid, by design slug: the blocked URLs on screen at the time.
@@ -89,8 +98,10 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     let showPins = false;
     let viewing: { id: string; compare: boolean } | null = null;
     let drawer: Drawer | null = null;
+    // Seam S9: feature mounts hear about these.
+    const detailListeners = createListeners();
+    const viewingListeners = createListeners();
     let htmlChars: number | null = null;
-    let exported: { path: string; timer: ReturnType<typeof setTimeout> } | null = null;
 
     const savePrefs = debounce((camera: Camera | null) => {
       void host.storage.set(`view:${slug}`, { hidden: [...hidden], camera, pageView });
@@ -101,6 +112,13 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
 
     // ---------------------------------------------------------------- wall
     const stage = h('div', { class: 'dc-stage' });
+    // Seams S1 to S3 and S8: empty slots the Phase 1 features fill (styles.css keeps them out of the layout while empty).
+    const slots = {
+      statusSlot: h('div', { class: 'dc-status-slot' }),
+      overlay: h('div', { class: 'dc-stage-overlay' }),
+      bottomDock: h('div', { class: 'dc-bottom-dock' }),
+      compactActions: h('div', { class: 'dc-compact-actions' }),
+    };
     // Set once the drawers exist; on a narrow page the dock is laid over the wall (styles.css).
     let dockEl: HTMLElement | null = null;
     const wall: WallHandle = createWall(
@@ -139,7 +157,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       },
       first,
     );
-    stage.append(wall.el);
+    stage.append(wall.el, slots.overlay);
     wall.setMode(mode);
     wall.setShowPins(showPins);
     if (!isPage) wall.setHiddenViewports([...hidden]);
@@ -244,9 +262,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const doExport = async (format: 'zip' | 'html', screen?: string): Promise<void> => {
       const done = await exportDesign(slug, format, screen);
       if (!done) return;
-      if (exported) clearTimeout(exported.timer);
-      exported = { path: done.path, timer: setTimeout(() => { exported = null; paintNotices(); }, 15000) };
-      paintNotices();
+      const { path } = done;
+      notices.setTransient('export', banner({ tone: 'success', title: 'Export saved', body: path, action: { label: 'Show in folder', onClick: () => void reveal(path) } }), EXPORT_NOTICE_MS);
     };
 
     const pickScreenThenExport = (anchor: HTMLElement): void => {
@@ -261,34 +278,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const ref = () => ({ slug, title: design().title, kind: design().kind, sessionId: design().sessionId });
     const rename = (): void => renameDialog(options.actions.host, ref());
 
-    const baseEntries = (): MenuEntry[] => [
-      { id: 'reveal', label: 'Reveal in folder' },
-      { id: 'path', label: 'Copy path' },
-      { id: 'rename', label: 'Rename' },
-      { separator: true },
-      { id: 'delete', label: 'Delete…', destructive: true },
-    ];
-
-    const moreEntries = (): MenuEntry[] => {
-      if (compact) {
-        return [
-          { id: 'chat', label: 'Continue in chat' },
-          { separator: true },
-          { id: 'zip', label: isPage ? 'Export ZIP' : 'Export ZIP' },
-          { id: 'html', label: isPage ? 'Export single-file HTML' : 'Export screen as HTML…' },
-          ...(isPage ? [{ id: 'copy-html', label: 'Copy HTML', disabled: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX, hint: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX ? 'too large' : undefined } satisfies MenuEntry] : []),
-          { id: 'path', label: 'Copy path' },
-          { id: 'reveal', label: 'Reveal in folder' },
-          { separator: true },
-          { id: 'versions', label: 'Versions' },
-          { id: 'comments', label: `Comments (${openCount()})` },
-          { id: 'rename', label: 'Rename' },
-          { separator: true },
-          { id: 'delete', label: 'Delete…', destructive: true },
-        ];
-      }
-      return isPage ? baseEntries() : [{ id: 'zip', label: 'Export ZIP' }, { id: 'html', label: 'Export screen as HTML…' }, { separator: true }, ...baseEntries()];
-    };
+    const moreEntries = (): MenuEntry[] =>
+      viewerMenuEntries({ compact, isPage, openComments: openCount(), copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX });
 
     const onMore = (id: string): void => {
       switch (id) {
@@ -377,7 +368,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       toolbar = h(
         'header',
         { class: 'dc-toolbar dc-toolbar-compact' },
-        h('div', { class: 'dc-toolbar-row' }, iconBtn({ icon: 'back', label: 'Back to designs', onClick: options.onBack }), titleText, moreButton),
+        h('div', { class: 'dc-toolbar-row' }, iconBtn({ icon: 'back', label: 'Back to designs', onClick: options.onBack }), titleText, slots.compactActions, moreButton),
         // A page never pans or zooms, so its second row has no zoom group.
         isPage
           ? h('div', { class: 'dc-toolbar-row dc-toolbar-tools' }, viewportHost, commentMode.el)
@@ -389,7 +380,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         { class: 'dc-toolbar' },
         h('div', { class: 'dc-toolbar-group' }, back.el, titleInput),
         h('div', { class: 'dc-toolbar-group' }, viewportHost, commentMode.el),
-        h('span', { class: 'dc-spacer' }),
+        slots.statusSlot,
         h('div', { class: 'dc-toolbar-group' }, commentsButton.el, versionsButton.el, exportMenu.el, copyMenu.el, chatButton.el, moreButton),
       );
     } else {
@@ -398,13 +389,13 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         { class: 'dc-toolbar' },
         h('div', { class: 'dc-toolbar-group' }, back.el, titleInput),
         h('div', { class: 'dc-toolbar-group' }, modeHost, pinsToggle.el, chipHost, zoomGroup),
-        h('span', { class: 'dc-spacer' }),
+        slots.statusSlot,
         h('div', { class: 'dc-toolbar-group' }, commentsButton.el, versionsButton.el, chatButton.el, moreButton),
       );
     }
 
     // ---------------------------------------------------------------- notices
-    const notices = h('div', { class: 'dc-notices', 'aria-live': 'polite' });
+    const notices = createNotices();
 
     // "Ask the agent to fix it": one request at a time; the button is busy until it finishes,
     // also when the banner was repainted meanwhile.
@@ -467,38 +458,32 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       const remote = wall.externalRefs();
       paintCommentsNote(remote.length > 0);
       const showRemote = remote.length > 0 && !viewing && !remoteBannerHidden(remote, hiddenRemote.get(slug) ?? null);
-      const key = JSON.stringify([viewing, showRemote ? remote : [], exported?.path ?? null]);
+      const key = JSON.stringify([viewing, showRemote ? remote : []]);
       if (key === noticesKey) return;
       noticesKey = key;
-      notices.replaceChildren();
       askButton = null;
-      if (viewing) {
-        const row = versionsRow(viewing);
-        notices.append(row);
-      }
-      if (showRemote) notices.append(remoteBanner(remote));
-      if (exported) {
-        const { path } = exported;
-        notices.append(banner({ tone: 'success', title: 'Export saved', body: path, action: { label: 'Show in folder', onClick: () => void reveal(path) } }));
-      }
+      notices.setStatic([...(viewing ? [versionsRow(viewing)] : []), ...(showRemote ? [remoteBanner(remote)] : [])]);
     };
 
     const versionsRow = (current: { id: string; compare: boolean }): HTMLElement => {
       const number = Number(current.id.slice(1));
       const compareBtn = btn({ label: current.compare ? `View v${number} only` : 'Compare with current', variant: 'outline', size: 'xs', icon: 'compare', onClick: () => viewVersion(current.id, !current.compare) });
-      const restoreBtn = btn({
-        label: 'Restore',
-        variant: 'outline',
-        size: 'xs',
-        onClick: () =>
-          confirmRestoreVersion(options.actions.host, slug, { id: current.id, n: number }, () => leaveVersion()),
-      });
+      const restoreBtn = btn({ label: 'Restore', variant: 'outline', size: 'xs', onClick: () => void restoreVersion({ id: current.id, n: number }) });
       const backBtn = btn({ label: 'Back to current', variant: 'default', size: 'xs', onClick: () => leaveVersion() });
       const listBtn = compact ? btn({ label: 'Versions', variant: 'ghost', size: 'xs', onClick: () => toggleDrawer('versions') }) : null;
       return h('div', { class: 'dc-viewing', role: 'status' }, icon_(), h('span', { class: 'dc-viewing-text' }, viewingBanner(number, current.compare)), h('span', { class: 'dc-viewing-actions' }, compareBtn.el, restoreBtn.el, listBtn?.el ?? null, backBtn.el));
     };
 
     const icon_ = (): HTMLElement => h('span', { class: 'dc-viewing-dot', 'aria-hidden': 'true' });
+
+    /**
+     * Seam S10: where a restore starts, for the Versions list and the "Viewing" bar. Today it asks
+     * for confirmation and leaves version viewing when done; the findability branch replaces the
+     * body (restore, then an Undo notice). It reports its own errors and never rejects.
+     */
+    const restoreVersion = async (version: { id: string; n: number }): Promise<void> => {
+      confirmRestoreVersion(options.actions.host, slug, version, () => leaveVersion());
+    };
 
     const viewVersion = (id: string, compare: boolean): void => {
       viewing = { id, compare };
@@ -508,6 +493,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       commentMode.el.disabled = true;
       paintNotices();
       (drawer?.kind === 'versions' ? (drawer.handle as VersionsHandle) : null)?.refresh();
+      viewingListeners.emit();
     };
 
     const leaveVersion = (): void => {
@@ -518,6 +504,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       commentMode.el.disabled = false;
       paintNotices();
       (drawer?.kind === 'versions' ? (drawer.handle as VersionsHandle) : null)?.refresh();
+      viewingListeners.emit();
     };
 
     // ---------------------------------------------------------------- drawers
@@ -578,7 +565,6 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       } else {
         handle = mountVersions({
           slug,
-          dialogHost: options.actions.host,
           viewing: () => viewing,
           onView: (id) => {
             viewVersion(id, false);
@@ -589,8 +575,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
             if (compact) closeDrawer();
           },
           onBackToCurrent: () => leaveVersion(),
-          // The store reloads every artboard after a restore; leaving the version shows them.
-          onRestored: () => leaveVersion(),
+          onRestore: restoreVersion,
         });
         sheet.body.append(handle.el);
         void store.loadVersions(slug);
@@ -628,6 +613,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       paintNotices();
       // The agent removed the viewport this page was shown at: back to Full width.
       if (isPage && resolvePageView(pageView, next.design.viewports) !== pageView) showPageView(PAGE_FILL_VIEWPORT_ID);
+      detailListeners.emit();
     };
 
     // The store bumps a source's render revision when the agent changes its files.
@@ -645,8 +631,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       }),
     );
 
-    const main = h('div', { class: 'dc-design-main' }, stage, dock);
-    replace(el, toolbar, notices, main, compact ? h('footer', { class: 'dc-hint' }, FULL_SCREEN_HINT) : null);
+    const main = h('div', { class: 'dc-design-main' }, h('div', { class: 'dc-wall-col' }, stage, slots.bottomDock), dock);
+    replace(el, toolbar, notices.el, main, compact ? h('footer', { class: 'dc-hint' }, FULL_SCREEN_HINT) : null);
     apply(first);
     refreshHtmlSize();
     if (isPage) {
@@ -656,11 +642,49 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     wall.fit();
     queueMicrotask(() => wall.focus());
 
+    // Seam S9: the Phase 1 features mount once the wall exists, and unmount with the view.
+    const viewContext: ViewContext = {
+      slug,
+      surface: options.surface,
+      isPage,
+      detail: () => data,
+      onDetail: detailListeners.add,
+      viewing: () => viewing,
+      onViewing: viewingListeners.add,
+      wall,
+      slots,
+      notices,
+      actions: options.actions,
+      scope: bscope,
+    };
+    // One feature failing to mount or unmount must not take the viewer, or the others, down with it.
+    const mountFeature = (name: string, mount: FeatureMount): (() => void) => {
+      try {
+        const unmount = mount(viewContext);
+        return () => {
+          try {
+            unmount();
+          } catch (error) {
+            console.error(`design chamber: ${name} unmount failed`, error);
+          }
+        };
+      } catch (error) {
+        console.error(`design chamber: ${name} mount failed`, error);
+        return () => undefined;
+      }
+    };
+    const unmounts = [
+      mountFeature('build strip', buildStrip.mount),
+      mountFeature('ask bar', askBar.mount),
+      mountFeature('findability', findability.mount),
+    ];
+
     built = {
       apply,
       dispose: () => {
+        for (const unmount of [...unmounts].reverse()) unmount();
         closeDrawer();
-        if (exported) clearTimeout(exported.timer);
+        notices.dispose();
         bscope.dispose();
         wall.dispose();
       },

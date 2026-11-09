@@ -18,6 +18,10 @@ import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
 
+import * as askBar from './scenarios/ask-bar.mjs';
+import * as buildStrip from './scenarios/build-strip.mjs';
+import * as findability from './scenarios/findability.mjs';
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..', '..');
 const args = process.argv.slice(2);
@@ -522,6 +526,9 @@ const emptyAndErrors = async () => {
   await p.close();
 };
 
+// What the Phase 1 scenario modules (test/ui/visual/scenarios) use.
+const helpers = { openPage, check, listReady, thumbsReady, wallReady, menuItem, scaleLabel, sleep, outDir, root };
+
 const plan = [];
 for (const theme of ['dark', 'light']) {
   for (const width of [320, 480]) plan.push([`rail-${width}-${theme}`, () => railScenario(width, theme)]);
@@ -530,6 +537,9 @@ for (const theme of ['dark', 'light']) {
 plan.push(['rail-360-themeswitch', themeSwitch]);
 plan.push(['page-1400-dark-live', keyboardAndLive]);
 plan.push(['rail-320-dark-empty', emptyAndErrors]);
+plan.push(['build-strip', () => buildStrip.run(helpers)]);
+plan.push(['ask-bar', () => askBar.run(helpers)]);
+plan.push(['findability', () => findability.run(helpers)]);
 
 let failed = false;
 try {

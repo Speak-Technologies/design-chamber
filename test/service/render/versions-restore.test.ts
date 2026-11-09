@@ -150,4 +150,35 @@ describe('version restore safety', () => {
     const kept = JSON.parse(await readFile(tmp.at('art/.chamber/state.json'), 'utf8')) as { comments: { id: string }[] };
     assert.deepEqual(kept.comments.map((c) => c.id), ['c_aaaa'], 'state.json still has the comment');
   });
+
+  test('before names the state the restore replaced: the restore point when dirty, the newest version when clean', async (t) => {
+    const tmp = await useTmpRoot(t);
+    const ctx = createFakeContext({ root: tmp.root });
+    t.after(() => ctx.dispose());
+    const versions = createVersionsService({ store: ctx.store, hub: ctx.hub, log: ctx.log, onDispose: ctx.onDispose, quietMs: 60_000 });
+
+    await tmp.writeDesign('art', pageDesign({ 'index.html': '<p>one</p>' }));
+    const v1 = await versions.create('art', 'manual');
+    assert.ok(v1);
+    await tmp.write('art/index.html', '<p>two</p>');
+    const v2 = await versions.create('art', 'manual');
+    assert.ok(v2);
+
+    // Clean: the files match v2, so no restore point is made and v2 is what comes back with Undo.
+    const clean = await versions.restore('art', v1.id);
+    assert.equal(clean.restorePoint, null);
+    assert.equal(clean.before.id, v2.id);
+    assert.equal(clean.before.treeHash, v2.treeHash);
+
+    // Dirty: the unsaved work is kept as a restore point, and that is `before`.
+    await tmp.write('art/index.html', '<p>unsaved</p>');
+    const dirty = await versions.restore('art', v2.id);
+    assert.ok(dirty.restorePoint);
+    assert.equal(dirty.before.id, dirty.restorePoint.id);
+    assert.equal(dirty.before.reason, 'restore-point');
+
+    // Undo: restoring `before` brings the unsaved work back.
+    await versions.restore('art', dirty.before.id);
+    assert.equal(await readFile(tmp.at('art/index.html'), 'utf8'), '<p>unsaved</p>');
+  });
 });

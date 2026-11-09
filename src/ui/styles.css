@@ -203,6 +203,28 @@ body {
   background: var(--oc-selection);
 }
 
+/* One filled primary per view: `btn({ emphasis: 'primary' })`. The kit's own "default" variant is only a tint. */
+.dc-app .oc-sdk-btn[data-emphasis='primary'] {
+  background: var(--oc-primary);
+  background-image: none;
+  color: var(--oc-primary-fg);
+  border-color: var(--oc-primary);
+}
+.dc-app .oc-sdk-btn[data-emphasis='primary']:hover {
+  background: color-mix(in srgb, var(--oc-primary) 88%, var(--oc-fg));
+}
+.dc-app .oc-sdk-btn[data-emphasis='primary']:active {
+  background: color-mix(in srgb, var(--oc-primary) 80%, var(--oc-fg));
+}
+/* The plain focus ring would vanish on a filled primary: a gap in the page colour, then the ring. */
+.dc-app .oc-sdk-btn[data-emphasis='primary']:focus-visible {
+  box-shadow: 0 0 0 2px var(--oc-bg), 0 0 0 4px color-mix(in srgb, var(--oc-primary) 55%, transparent);
+}
+.dc-app .oc-sdk-btn[data-emphasis='primary'] .oc-sdk-spinner-ring {
+  border-color: color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+}
+
 .dc-app :is(.dc-iconbtn, .dc-row-main, .dc-card-main, .dc-pin, .dc-comment-main, .dc-title-input, .oc-sdk-btn):focus-visible {
   outline: none;
   box-shadow: var(--dc-ring);
@@ -914,10 +936,44 @@ body {
   min-width: 0;
   margin-top: var(--dc-s2);
 }
+.dc-wall-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
 .dc-stage {
   position: relative;
   flex: 1;
   min-width: 0;
+  min-height: 0;
+}
+/* Slots the Phase 1 features fill (seams S1 to S3, S8). Empty, they take no room and no gap. */
+.dc-status-slot {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* Over the wall, under popovers (z 5) and the narrow-page dock (z 10); children opt in to pointer events. */
+.dc-stage-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+.dc-bottom-dock {
+  flex: none;
+  min-width: 0;
+}
+.dc-compact-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--dc-s1);
+}
+.dc-bottom-dock:empty,
+.dc-compact-actions:empty {
+  display: none;
 }
 .dc-dock {
   display: flex;
@@ -1729,3 +1785,12 @@ body {
 .dc-code[data-wrap='true'] { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* In the rail, a two-button banner (loose files, remote files) puts its buttons on their own row under the text. */
 .dc-app[data-surface='panel'] .dc-banner[data-actions='stack'] .oc-sdk-banner-action { flex-basis: 100%; }
+
+/* ===== Phase 1: build strip (feat/build-strip) ===== */
+/* ===== end build strip ===== */
+
+/* ===== Phase 1: ask bar (feat/ask-bar-send-pin) ===== */
+/* ===== end ask bar ===== */
+
+/* ===== Phase 1: findability (feat/findability) ===== */
+/* ===== end findability ===== */

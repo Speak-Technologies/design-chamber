@@ -555,7 +555,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
         const restored = pushVersion(entry, 'restored', null);
         emit(slug, 'versions');
         emit(slug, 'files', Object.keys(entry.files));
-        return { restorePoint, restored };
+        return { restorePoint, restored, before: restorePoint };
       }
       case 'POST /designs/:slug/export': {
         get(slug);

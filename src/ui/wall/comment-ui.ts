@@ -98,6 +98,8 @@ export type ThreadOptions = {
   anchorState: 'exact' | 'moved' | 'detached' | 'unknown';
   readOnly: boolean;
   onSave: (body: string) => Promise<void>;
+  /** Seam S6: send this comment alone. Not rendered yet; the send-one-pin branch adds the "Send this" button that calls it. */
+  onSend?: (body: string) => Promise<void>;
   onStatus: (status: 'open' | 'resolved') => Promise<void>;
   onDelete: () => Promise<void>;
   onClose: () => void;
