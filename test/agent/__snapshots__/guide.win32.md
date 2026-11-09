@@ -1,4 +1,4 @@
-<!-- design-chamber:guide v1 sha256:2dc7f35bfc93712fc79de512d119ba99fe7ec5a05d4369424b713cad2a3c3199 -->
+<!-- design-chamber:guide v1 sha256:f007f46e381e02bc26b9c5c8102c52b863d206785aa0e53fc967b3b29d5b4ee9 -->
 # Designs folder (Design Chamber)
 
 This folder, `C:\Users\you\Documents\Designs`, is the user's designs folder for Design Chamber, the design viewer inside OpenChamber. The user sets it in Design Chamber settings (the default is `~/Documents/Designs`). Designs saved anywhere else do not show up.
@@ -84,7 +84,7 @@ When the user's message starts with `/design` or `/page`, follow the instruction
 - Contrast at least WCAG AA, a visible focus ring, a label on every input.
 - One responsive file per screen, never a copy per device.
 - Show loading, empty and error states wherever data appears.
-- Everything opens offline.
+- Before you say you are done, read your HTML once more for overflow, contrast, alt text and labels.
 
 When the user wants the full rules for a fresh design, suggest starting with `/design <brief>` for a canvas or `/page <brief>` for a page.
 

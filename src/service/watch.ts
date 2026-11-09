@@ -44,6 +44,9 @@ import { isDirectory } from './root.ts';
 /** Top-level files whose mtime/size the poll backstop fingerprints (SPEC §9.4). */
 const TRACKED_TOP_FILES = ['design.json', 'index.html', 'DESIGN.md', 'tokens.css'] as const;
 
+/** `<design>/.chamber/check.json`, written by the check CLI or the service's own run: a `checks` event, not a `files` one. */
+const CHECK_REPORT = '.chamber/check.json';
+
 /** Entries the nested walk of one fingerprint may add (everything under the top-level folders); top-level files and folders are always keyed. */
 export const FINGERPRINT_ENTRIES_MAX = 256;
 /** Folder levels a fingerprint lists below the design folder (`assets/` is level 1). */
@@ -82,6 +85,9 @@ export const takeFingerprint = async (dir: string, budget: number = FINGERPRINT_
     const info = await stat(path.join(screensDir, entry.name)).catch(() => null);
     if (info !== null) fingerprint.set(`screens/${entry.name}`, fingerprintEntry(info) ?? '');
   }
+  // The one `.chamber/` file that is news to the UI: a finished design check.
+  const checkReport = await stat(path.join(dir, CHECK_REPORT)).catch(() => null);
+  if (checkReport?.isFile()) fingerprint.set(CHECK_REPORT, fingerprintEntry(checkReport) ?? '');
   const assets = await stat(path.join(dir, 'assets')).catch(() => null);
   if (assets?.isDirectory()) fingerprint.set('assets/', `${assets.mtimeMs}:dir`);
 
@@ -330,9 +336,11 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     // would never see it again (a design.json left unreconciled, a design stuck provisional).
     if (previous !== undefined) for (const key of diffFingerprints(previous, next)) files.add(key);
     const hasDesignJson = files.delete('design.json');
+    const hasChecks = files.delete(CHECK_REPORT);
     const rest = [...files].sort();
     if (hasDesignJson) hub.emit({ slug, kind: 'design' });
     if (rest.length > 0) hub.emit({ slug, kind: 'files', files: rest });
+    if (hasChecks) hub.emit({ slug, kind: 'checks' });
   };
 
   const onWatchEvent = (filename: string | Buffer | null): void => {
@@ -352,6 +360,10 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     }
     if (first === undefined || !isSlug(first) || first.startsWith('.')) return; // other root-level files, .trash/.exports, non-designs
     const rest = segments.slice(1);
+    if (rest.length === 2 && rest.join('/') === CHECK_REPORT) {
+      schedule(first, [CHECK_REPORT]);
+      return;
+    }
     // .chamber/, .versions/, .thumb.png and the store's .tmp files are service-owned: ignored.
     if (rest.some((segment) => segment.startsWith('.'))) return;
     schedule(first, rest.length > 0 ? [rest.join('/')] : []);

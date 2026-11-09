@@ -79,7 +79,7 @@ const CANVAS_EXAMPLE = [
 ];
 
 /** At most 10 lines: the anti-slop and offline rules an agent without RULES.md still follows. */
-const RULES_DIGEST = [
+const rulesDigest = (checkCommand: string | null): string[] => [
   '- The user\'s words come first, then the project\'s own design rules (DESIGN.md, tokens, theme files), then these.',
   '- No default purple-to-blue gradients, no stock centred hero with three equal cards, no box around every section.',
   '- Pick a typeface on purpose, at most two families. Not Inter, Roboto or Arial by default.',
@@ -89,13 +89,20 @@ const RULES_DIGEST = [
   '- Contrast at least WCAG AA, a visible focus ring, a label on every input.',
   '- One responsive file per screen, never a copy per device.',
   '- Show loading, empty and error states wherever data appears.',
-  '- Everything opens offline.',
+  checkCommand === null
+    ? '- Before you say you are done, read your HTML once more for overflow, contrast, alt text and labels.'
+    : '- Before you say you are done, run the check below and fix every error.',
 ];
 
-export type AgentGuideInput = { root: string; platform: NodeJS.Platform };
+export type AgentGuideInput = {
+  root: string;
+  platform: NodeJS.Platform;
+  /** The check command with the literal `<slug>`, or `null` when the launcher is not in place. */
+  checkCommand?: string | null;
+};
 
 /** The guide at `<root>/AGENTS.md` (§4), marker on line 1 with its hash filled in. */
-export const buildAgentGuide = ({ root, platform }: AgentGuideInput): string => {
+export const buildAgentGuide = ({ root, platform, checkCommand = null }: AgentGuideInput): string => {
   assertRoot(root);
   const sep = platform === 'win32' ? '\\' : '/';
   const designFolder = joinWith(sep, root, '<slug>') + sep;
@@ -148,6 +155,14 @@ export const buildAgentGuide = ({ root, platform }: AgentGuideInput): string => 
     '- From `screens/`: `../assets/photo.png`, `../tokens.css`.',
     '- No absolute paths, no `file://`, no drive letters.',
     '',
+    ...(checkCommand === null
+      ? []
+      : [
+          '## Check your work',
+          '',
+          `Run ${code(checkCommand)} with the design's folder name. It renders the design, saves PNGs in the design's .chamber/check/ folder and lists what to fix. Exit code 0 means no errors.`,
+          '',
+        ]),
     '## Leave these alone',
     '',
     'Never touch `.versions/`, `.chamber/`, `.thumb.png` or `.trash/`. Design Chamber keeps versions, comments and thumbnails there.',
@@ -157,7 +172,7 @@ export const buildAgentGuide = ({ root, platform }: AgentGuideInput): string => 
     'When the user\'s message starts with `/design` or `/page`, follow the instructions attached to it and the design\'s `.chamber/RULES.md`. ' +
       'Without them, follow this file and these short rules:',
     '',
-    ...RULES_DIGEST,
+    ...rulesDigest(checkCommand),
     '',
     'When the user wants the full rules for a fresh design, suggest starting with `/design <brief>` for a canvas or `/page <brief>` for a page.',
     '',
@@ -185,10 +200,10 @@ export const buildRetiredGuide = ({ oldRoot, newRoot }: RetiredGuideInput): stri
   return capped(withOwnershipHash(lines.join('\n')), GUIDE_TEXT_MAX, 'guide');
 };
 
-export type SkillDocInput = { root: string; guidePath: string };
+export type SkillDocInput = { root: string; guidePath: string; checkCommand?: string | null };
 
 /** `SKILL.md` of the `design-chamber` OpenCode skill (§5.1). Paths sit in the body, never in the frontmatter. */
-export const buildSkillDoc = ({ root, guidePath }: SkillDocInput): string => {
+export const buildSkillDoc = ({ root, guidePath, checkCommand = null }: SkillDocInput): string => {
   assertRoot(root);
   assertRoot(guidePath, 'guide');
   const sep = separatorOf(root);
@@ -219,6 +234,7 @@ export const buildSkillDoc = ({ root, guidePath }: SkillDocInput): string => {
     '- Work offline: no CDNs, no Google Fonts or other web fonts, no remote images or scripts. Fonts go in `assets/fonts/` with `@font-face`, ' +
       'and every font stack ends with a generic family.',
     '- Relative paths only: `assets/x.png`, and `../tokens.css` from `screens/`.',
+    ...(checkCommand === null ? [] : [`- Before you say you are done, run ${code(checkCommand)} with the design's folder name, fix every error it lists and look at the PNGs it saves.`]),
     '- Never touch `.versions/`, `.chamber/`, `.thumb.png` or `.trash/`.',
     '',
     'If the user wants a fresh design with the full rules, suggest `/design <brief>` for a canvas or `/page <brief>` for a page.',

@@ -192,7 +192,7 @@ export type BrowserSource = 'setting' | 'detected' | 'none';
 // ---- Change hub [§7, §9.4] ----
 
 /** `loose`: the set of loose `.html`/`.htm` files directly in the root changed (slug `null`). */
-export type ChangeKind = 'added' | 'removed' | 'design' | 'files' | 'thumb' | 'versions' | 'comments' | 'root' | 'loose';
+export type ChangeKind = 'added' | 'removed' | 'design' | 'files' | 'thumb' | 'versions' | 'comments' | 'root' | 'loose' | 'checks';
 
 export type ChangeEvent = {
   seq: number;
@@ -257,6 +257,118 @@ export type AgentSkillStatus = {
   duplicates: string[];
   /** User-facing sentence, e.g. the reason for `unavailable`. */
   message?: string;
+};
+
+// ---- Design checks (documentation/specs/agent-render-and-check.md §2.2) ----
+
+/** Closed set: a finding on disk can only name one of these; its severity and sentence come from `src/shared/checks.ts`. */
+export type CheckCode =
+  // rendering
+  | 'overflow-x'
+  | 'text-clipped'
+  | 'text-overlap'
+  | 'contrast'
+  | 'img-alt'
+  | 'control-label'
+  | 'button-name'
+  | 'screen-tall'
+  | 'page-height'
+  | 'console-error'
+  | 'request-blocked'
+  | 'dialog-opened'
+  | 'render-failed'
+  | 'render-timeout'
+  | 'render-skipped'
+  | 'browser-missing'
+  // files
+  | 'design-json-missing'
+  | 'design-json-invalid'
+  | 'design-json-field'
+  | 'screen-file-missing'
+  | 'screen-unlisted'
+  | 'screen-per-viewport'
+  | 'entry-missing'
+  | 'ref-missing'
+  | 'ref-outside'
+  | 'remote-ref'
+  | 'module-import'
+  | 'doc-doctype'
+  | 'doc-lang'
+  | 'doc-viewport'
+  | 'doc-title'
+  | 'doc-charset'
+  | 'token-redefined'
+  | 'token-hardcoded'
+  | 'check-partial';
+
+export type CheckSeverity = 'error' | 'warning' | 'info';
+
+/** Numbers, or ids matching their patterns: the only values a message sentence is filled from. */
+export type CheckParams = {
+  px?: number;
+  width?: number;
+  ratio?: number;
+  min?: number;
+  count?: number;
+  max?: number;
+  field?: string;
+  base?: string;
+  /** `render-skipped` only: why the artboards were not rendered. */
+  reason?: 'limit' | 'budget' | 'failures';
+};
+
+/** A finding as `check.json` stores it. `detail` and `selector` are untrusted design text. */
+export type CheckFindingData = {
+  code: CheckCode;
+  /** Design-relative path with `/` separators. */
+  file: string | null;
+  screen: string | null;
+  viewport: string | null;
+  params?: CheckParams;
+  /** ≤ `CHECK_DETAIL_MAX`, one line, untrusted. */
+  detail?: string;
+  /** ≤ `CHECK_SELECTOR_MAX`, one line, untrusted. */
+  selector?: string;
+};
+
+/** What the service answers: the stored finding plus the severity and sentence it derives from `code`. */
+export type CheckFinding = CheckFindingData & { severity: CheckSeverity; message: string };
+
+export type CheckBrowser = 'chrome' | 'msedge' | 'chromium' | 'brave' | 'other';
+
+/** `done` = every planned artboard rendered; `partial` = some were skipped or failed; `unavailable` = no browser. */
+export type RenderCheckState = 'done' | 'partial' | 'unavailable' | 'failed';
+
+export type ArtboardCheck = {
+  /** Screen id on a canvas; `null` for a page. */
+  screen: string | null;
+  viewport: string;
+  width: number;
+  height: number;
+  docHeight: number;
+  /** `.chamber/check/r-<runId>/<name>.png`, design-relative. */
+  pngs: string[];
+  ok: boolean;
+  ms: number;
+};
+
+/** `<design>/.chamber/check.json` (schema `design-chamber/check@1`). */
+export type CheckReport = {
+  version: 1;
+  slug: string;
+  kind: DesignKind;
+  createdAt: IsoDate;
+  tool: 'cli' | 'service';
+  static: { findings: CheckFindingData[] };
+  render: {
+    state: RenderCheckState;
+    /** Basename class of the browser, never a path. */
+    browser: CheckBrowser | null;
+    keys: { design: string; entries: Record<string, string> };
+    artboards: ArtboardCheck[];
+    skipped: number;
+    findings: CheckFindingData[];
+  } | null;
 };
 
 // ---- Chat linkage [§10] ----

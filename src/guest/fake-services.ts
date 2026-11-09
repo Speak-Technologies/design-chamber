@@ -564,6 +564,16 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
       }
       case 'POST /reveal':
         return { ok: true };
+      case 'GET /designs/:slug/checks':
+        get(slug);
+        return {
+          static: { findings: [], partial: false, at: new Date().toISOString() },
+          render: { state: 'none', at: null, artboards: 0, skipped: 0, findings: [] },
+          counts: { errors: 0, warnings: 0, notes: 0 },
+          canRun: false,
+        };
+      case 'POST /designs/:slug/checks/run':
+        throw new FakeHttpError('invalid', 'The rendering check is not available in this preview.');
       case 'GET /presets':
         return { presets: PRESETS };
       case 'POST /chip': {
@@ -586,7 +596,9 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
               comments.map((comment, index) => `${index + 1}. element: \`${comment.anchor.selector}\`\n   → ${comment.body}`).join('\n')
             : body.purpose === 'offline'
               ? `[Design Chamber] Make "${entry.design.title}" work offline: bundle remote files into assets/ or remove them.`
-              : `[Design Chamber] Let's continue "${entry.design.title}".`;
+              : body.purpose === 'checks'
+                ? `[Design Chamber] Fix what the check found in "${entry.design.title}".`
+                : `[Design Chamber] Let's continue "${entry.design.title}".`;
         return { text, commentIds: body.purpose === 'revision' ? comments.map((comment) => comment.id) : [], omitted: [], chip: chipOf(slug) };
       }
       case 'POST /pages/from-message': {

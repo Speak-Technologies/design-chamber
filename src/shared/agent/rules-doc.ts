@@ -68,7 +68,7 @@ const headerSection = (context: AgentContext): string[] => {
     '3. Settle the viewports (Viewports).',
     '4. If anything material is unclear, ask before you build: one message, then wait (Ask when unsure). Skip the questions only if the user said "go" or the request is a small edit.',
     '5. Build only inside the folder above. Write design.json first, then the HTML. Write DESIGN.md and tokens.css before the second screen. Update design.json in the same turn as the files it describes.',
-    '6. Finish with the self-check at the end of Design rules. Your reply states what you built, which sources you followed, your assumptions, and at most one open question.',
+    '6. Before you say you are done, run the check in "Check your work" and fix every error. Your reply states what you built, which sources you followed, your assumptions, and at most one open question.',
   ];
 };
 
@@ -267,6 +267,24 @@ const renderingSection = (): string[] => [
   '- One responsive file per screen: the wall renders it at every viewport in design.json.',
 ];
 
+/** How the agent looks at its own work: the `dc check` command, or a read-through when the launcher is not in place. */
+const checkSection = (command: string | null): string[] =>
+  command === null
+    ? [
+        '## Check your work',
+        '',
+        "Design Chamber's check tool is not set up on this computer. Before you say you are done, read your HTML once more for overflow, contrast, alt text and labels.",
+      ]
+    : [
+        '## Check your work',
+        '',
+        'Run this after each change, before you say you are done:',
+        '',
+        `    ${command}`,
+        '',
+        "It renders every screen at every viewport in design.json, saves PNGs under .chamber/check/ and lists what it found: files that don't load, content wider than the viewport, cut-off or overlapping text, low contrast, images without alt text, fields without labels, script errors. Fix every error, open the PNGs to see the result, and run it again. Exit code 0 means no errors. If it says no browser was found, it still checks the files; say in your reply that the design was not rendered.",
+      ];
+
 /** The full RULES.md text for one design. */
 export const buildRulesDoc = (context: AgentContext, files: RulesDocFiles): string =>
   [
@@ -291,5 +309,7 @@ export const buildRulesDoc = (context: AgentContext, files: RulesDocFiles): stri
     ...verbatim('rules/QUESTIONS.md', files.questions),
     '',
     ...renderingSection(),
+    '',
+    ...checkSection(context.checkCommand),
     '',
   ].join('\n');

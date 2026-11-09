@@ -44,7 +44,7 @@ describe('revision prompt format', () => {
       text,
       [
         `[Design Chamber] Revise "Checkout redesign": 1 comment. Folder: ${FOLDER}. Rules: ${FOLDER}\\.chamber\\RULES.md`,
-        'Change only what the comments ask; keep everything else. Update design.json "updated". Reply per comment number.',
+        'Change only what the comments ask; keep everything else. Update design.json "updated". Run the check from RULES.md before you reply. Reply per comment number.',
         '1. Screen "Home" (screens/home.html) @ Laptop 1280×800',
         '   element: `main > section.hero > h1`',
         '   text: "Ship faster than ever before"  html: `<h1 class="hero-title">`',

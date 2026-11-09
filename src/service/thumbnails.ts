@@ -27,6 +27,7 @@ import type { ThumbnailRefreshResponse, ThumbnailResponse } from '../shared/api.
 import type { ThumbState, Viewport } from '../shared/types.ts';
 import { ApiError } from './http.ts';
 import type { ChangeHub, DesignRecord, DesignStore, Logger, RenderService, ServiceContext, SettingsStore, ThumbnailService } from './context.ts';
+import { OFFLINE_NETWORK_ARGS } from './check/cdp.ts';
 import { resolveBrowser as detectBrowser, type BrowserResolution } from './chrome.ts';
 import { ensureRenderService } from './render-cache.ts';
 
@@ -101,16 +102,16 @@ export const captureArgs = (input: CaptureArgsInput): string[] => [
   '--virtual-time-budget=1500',
   '--blink-settings=preferredColorScheme=1', // 1 = light (Blink's enum: 0 dark, 1 light)
   `--screenshot=${input.out}`,
-  '--host-resolver-rules=MAP * ~NOTFOUND',
+  ...OFFLINE_NETWORK_ARGS,
   input.url,
 ];
 
-/** Remove work folders a killed run left in `parent` (only `dc-thumb-*`, only old ones). */
-const removeStaleWorkDirs = async (parent: string): Promise<void> => {
+/** Remove work folders a killed run left in `parent` (only folders starting with `prefix`, only old ones). Shared with the check engine (`dc-check-`). */
+export const removeStaleWorkDirs = async (parent: string, prefix: string): Promise<void> => {
   const entries = await readdir(parent, { withFileTypes: true }).catch(() => []);
   const cutoff = Date.now() - STALE_WORK_MS;
   for (const entry of entries) {
-    if (!entry.isDirectory() || !entry.name.startsWith(WORK_PREFIX)) continue;
+    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
     const target = path.join(parent, entry.name);
     const info = await stat(target).catch(() => null);
     if (info !== null && info.mtimeMs < cutoff) await rm(target, { recursive: true, force: true }).catch(() => undefined);
@@ -251,7 +252,7 @@ export const createThumbnailService = (deps: ThumbnailDeps): ThumbnailServiceFul
     try {
       if (workParent !== tmp()) {
         await mkdir(workParent, { recursive: true });
-        await removeStaleWorkDirs(workParent);
+        await removeStaleWorkDirs(workParent, WORK_PREFIX);
       }
       work = await mkdtemp(path.join(workParent, WORK_PREFIX));
     } catch (error) {

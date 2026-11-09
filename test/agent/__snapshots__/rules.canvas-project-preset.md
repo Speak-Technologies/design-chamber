@@ -24,7 +24,7 @@ This file is part of your instructions for this design. Read all of it before yo
 3. Settle the viewports (Viewports).
 4. If anything material is unclear, ask before you build: one message, then wait (Ask when unsure). Skip the questions only if the user said "go" or the request is a small edit.
 5. Build only inside the folder above. Write design.json first, then the HTML. Write DESIGN.md and tokens.css before the second screen. Update design.json in the same turn as the files it describes.
-6. Finish with the self-check at the end of Design rules. Your reply states what you built, which sources you followed, your assumptions, and at most one open question.
+6. Before you say you are done, run the check in "Check your work" and fix every error. Your reply states what you built, which sources you followed, your assumptions, and at most one open question.
 
 ## Precedence
 
@@ -150,3 +150,7 @@ Design Chamber shows your files offline, inside a sandboxed frame. So:
 - Link between screens with `<a href="other-screen.html">` (a sibling file in `screens/`) or `data-dc-goto="<screenId>"`. Links to `#anchors` work; an external https link asks the user before it opens.
 - Give meaningful elements stable hooks (`id`, `data-screen`, semantic class names): comments are pinned to elements by selector and travel with it.
 - One responsive file per screen: the wall renders it at every viewport in design.json.
+
+## Check your work
+
+Design Chamber's check tool is not set up on this computer. Before you say you are done, read your HTML once more for overflow, contrast, alt text and labels.

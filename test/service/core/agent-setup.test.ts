@@ -16,6 +16,7 @@ import { composeService } from '../../../src/service/compose.ts';
 import type { Logger } from '../../../src/service/context.ts';
 import { ApiError } from '../../../src/service/http.ts';
 import { createSettingsStore } from '../../../src/service/settings.ts';
+import { checkCommandFor } from '../../../src/shared/agent/check-command.ts';
 import { buildAgentGuide, buildRetiredGuide, buildSkillDoc } from '../../../src/shared/agent/guide.ts';
 import type { ChangeEvent } from '../../../src/shared/types.ts';
 import { useTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
@@ -342,7 +343,10 @@ describe('guide at <root>/AGENTS.md (§3.3)', () => {
     t.after(() => service.dispose());
     const file = path.join(root, 'AGENTS.md');
     for (let waited = 0; waited < 5000 && !existsSync(file); waited += 25) await new Promise((resolve) => setTimeout(resolve, 25));
-    assert.equal(await readFile(file, 'utf8'), guideFor(root));
+    // With the CLI built the guide quotes the launcher command; without it (a checkout that was not built) the guide says to read the HTML again.
+    const built = existsSync(path.join(REPO_ROOT, 'dist', 'cli', 'dc.mjs'));
+    assert.equal(await readFile(file, 'utf8'), buildAgentGuide({ root, platform: process.platform, checkCommand: built ? checkCommandFor({ root, slug: '<slug>', platform: process.platform }) : null }));
+    assert.equal(existsSync(path.join(root, '.chamber', 'bin', 'dc')), built, 'the launcher is written with the guide, only when there is a CLI to launch');
     assert.equal(existsSync(tmp.at('home/.config/opencode')), false, 'starting never installs the skill');
   });
 });

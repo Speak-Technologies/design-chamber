@@ -11,6 +11,7 @@ import type {
   AgentSkillStatus,
   AnchorState,
   BrowserSource,
+  CheckFinding,
   Comment,
   CommentAnchor,
   CommentStatus,
@@ -244,8 +245,11 @@ export type ChipBody = {
 export type ChipResponse = { slug: string; chip: DesignChip };
 
 export type PromptBody = {
-  /** `offline`: ask the agent to make the design work offline; the service builds the text and the blocked-URL list. */
-  purpose: 'revision' | 'continue' | 'offline';
+  /**
+   * `offline`: ask the agent to make the design work offline; the service builds the text and the blocked-URL list.
+   * `checks`: ask the agent to fix the errors and warnings the design check counts; 422 `invalid` when there are none.
+   */
+  purpose: 'revision' | 'continue' | 'offline' | 'checks';
   commentIds?: string[];
   /** Revision only: how the page found each pinned element (from `anchoring.ts`), so the prompt can flag moved or missing elements. */
   anchorStates?: Record<string, AnchorState>;
@@ -273,6 +277,24 @@ export type FromMessageBody = {
 };
 /** 422 `no-html` when the message has no HTML code block. */
 export type FromMessageResponse = { slug: string; title: string };
+
+/**
+ * Design checks. `static` is computed by the service on every change; `render` comes from the last
+ * `.chamber/check.json` (written by the agent's CLI or by `POST .../checks/run`).
+ * `render.state`: `none` = never checked or unreadable file; `running` = a service run is under way;
+ * `unavailable` / `failed` = as stored; `fresh` = the files are unchanged since the run; else `stale`.
+ * `counts` cover static findings plus fresh render findings; stale render findings are listed but not counted.
+ */
+export type ChecksRenderState = 'none' | 'fresh' | 'stale' | 'running' | 'unavailable' | 'failed';
+export type ChecksResponse = {
+  static: { findings: CheckFinding[]; partial: boolean; at: IsoDate };
+  render: { state: ChecksRenderState; at: IsoDate | null; artboards: number; skipped: number; findings: CheckFinding[] };
+  counts: { errors: number; warnings: number; notes: number };
+  /** A browser resolves and no run is in progress. */
+  canRun: boolean;
+};
+/** The run is a background job; it ends with a `checks` change event. 409 `conflict` while another design is being checked. */
+export type ChecksRunResponse = { state: 'running' };
 
 /** A design the rail should open as soon as it is up; taken once, kept `OPEN_REQUEST_TTL_MS`. */
 export type OpenRequest = { slug: string; created: IsoDate };
@@ -320,6 +342,8 @@ export interface ApiRoutes {
   'POST /designs/:slug/versions/:vid/restore': Route<NoQuery, undefined, RestoreVersionResponse>;
   'POST /designs/:slug/export': Route<NoQuery, ExportBody, ExportResponse>;
   'POST /reveal': Route<NoQuery, RevealBody, OkResponse>;
+  'GET /designs/:slug/checks': Route<NoQuery, undefined, ChecksResponse>;
+  'POST /designs/:slug/checks/run': Route<NoQuery, Record<string, never>, ChecksRunResponse>;
 
   // WP3 — agent instructions
   'GET /presets': Route<NoQuery, undefined, PresetsResponse>;
@@ -380,6 +404,8 @@ export const ROUTE_OWNERS = {
   'POST /designs/:slug/versions/:vid/restore': 'WP2',
   'POST /designs/:slug/export': 'WP2',
   'POST /reveal': 'WP2',
+  'GET /designs/:slug/checks': 'WP2',
+  'POST /designs/:slug/checks/run': 'WP2',
   'GET /presets': 'WP3',
   'POST /chip': 'WP3',
   'POST /designs/:slug/prompt': 'WP3',

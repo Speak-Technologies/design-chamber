@@ -10,8 +10,9 @@ import { pathToFileURL } from 'node:url';
 import { buildChip, titleFromBrief } from '../../shared/agent/chip.ts';
 import { clip, noProject, type AgentContext, type AgentPreset, type ProjectRules } from '../../shared/agent/context.ts';
 import { derivePageTitle, extractHtml } from '../../shared/agent/html-extract.ts';
-import { buildContinuePrompt, buildOfflinePrompt, buildRevisionPrompt, type ExternalList } from '../../shared/agent/revision-prompt.ts';
+import { buildChecksPrompt, buildContinuePrompt, buildOfflinePrompt, buildRevisionPrompt, type ExternalList } from '../../shared/agent/revision-prompt.ts';
 import { buildRulesDoc } from '../../shared/agent/rules-doc.ts';
+import { normalizeExternalUrl, sortFindings } from '../../shared/checks.ts';
 import type { ChipResponse, FromMessageResponse, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse, RenderMeta, RenderQuery } from '../../shared/api.ts';
 import {
   BRIEF_MAX,
@@ -29,6 +30,8 @@ import {
 } from '../../shared/limits.ts';
 import type { AnchorState, Comment, DesignKind } from '../../shared/types.ts';
 import type { DesignRecord, ServiceContext } from '../context.ts';
+import { ensureChecksService } from '../check/service.ts';
+import { ensureLauncherService } from '../check/launcher.ts';
 import { discoverProjectRules, withDeadline } from '../discovery.ts';
 import { ApiError, type Router } from '../http.ts';
 import { readPreset, readRulesDocs } from './presets.ts';
@@ -90,8 +93,8 @@ const parseAnchorStates = (value: unknown): Record<string, AnchorState> => {
 const parsePromptBody = (body: unknown): { purpose: PromptBody['purpose']; commentIds: string[] | null; anchorStates: Record<string, AnchorState> } => {
   const record = bodyOf(body, 'the prompt request');
   const { purpose, commentIds } = record;
-  if (purpose !== 'revision' && purpose !== 'continue' && purpose !== 'offline') {
-    throw new ApiError('bad-request', 'The prompt purpose must be "revision", "continue" or "offline".');
+  if (purpose !== 'revision' && purpose !== 'continue' && purpose !== 'offline' && purpose !== 'checks') {
+    throw new ApiError('bad-request', 'The prompt purpose must be "revision", "continue", "offline" or "checks".');
   }
   const anchorStates = parseAnchorStates(record.anchorStates);
   if (commentIds === undefined) return { purpose, commentIds: null, anchorStates };
@@ -205,12 +208,13 @@ const createInstructions = (ctx: ServiceContext): Instructions => {
     discover,
     async prepare(record) {
       const { design } = record;
-      const [files, preset, project, hasDesignMd, hasTokensCss] = await Promise.all([
+      const [files, preset, project, hasDesignMd, hasTokensCss, checkCommand] = await Promise.all([
         readRulesDocs(ctx.packageRoot),
         loadPreset(design.preset),
         discover(design.projectDirectory),
         isFile(path.join(record.path, 'DESIGN.md')),
         isFile(path.join(record.path, 'tokens.css')),
+        ensureLauncherService(ctx).commandFor(ctx.settings.root(), record.slug),
       ]);
       const context: AgentContext = {
         title: design.title,
@@ -224,6 +228,7 @@ const createInstructions = (ctx: ServiceContext): Instructions => {
         screenIds: design.screens.map((screen) => screen.id),
         pending: record.pending,
         designSystem: { confirmed: design.designSystem.confirmed, hasDesignMd, hasTokensCss },
+        checkCommand,
       };
       return { context, text: buildRulesDoc(context, files) };
     },
@@ -232,20 +237,8 @@ const createInstructions = (ctx: ServiceContext): Instructions => {
 
 // ---- remote URLs the viewer blocks ----
 
-/**
- * One remote reference from the bundler as a canonical URL, or `null` when it does not parse.
- * Protocol-relative refs (`//fonts.googleapis.com/…`) are read as https, which is how a browser
- * outside the sandbox would load them. `new URL` also drops tabs and newlines, so an entry can
- * never add a line to the prompt.
- */
-export const normalizeExternalUrl = (raw: string): string | null => {
-  const ref = raw.trim();
-  try {
-    return new URL(ref.startsWith('//') ? `https:${ref}` : ref).href;
-  } catch {
-    return null;
-  }
-};
+// Lives in shared/checks.ts so the check CLI does not import routes; re-exported for the existing callers.
+export { normalizeExternalUrl };
 
 /** Dedupe, keep the first `PROMPT_EXTERNAL_MAX` (each cut to `PROMPT_EXTERNAL_URL_MAX`), count the rest. */
 export const capExternal = (raw: Iterable<string>): ExternalList => {
@@ -374,6 +367,22 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
       const external = await collectExternal(ctx, record);
       if (external.urls.length === 0) throw new ApiError('invalid', "This design doesn't load anything from the internet.");
       return { text: buildOfflinePrompt({ title: design.title, kind: design.kind, folder: record.path, external }), commentIds: [], omitted: [], chip };
+    }
+
+    if (input.purpose === 'checks') {
+      // The findings the Checks badge counts, errors and warnings only: findings about files that changed since a render are not asked for.
+      const checks = await ensureChecksService(ctx).forPrompt(record.slug);
+      const counted = checks.findings.filter((finding) => finding.severity !== 'info');
+      if (counted.length === 0) throw new ApiError('invalid', 'There is nothing to fix.');
+      const prompt = buildChecksPrompt({
+        title: design.title,
+        kind: design.kind,
+        folder: record.path,
+        findings: sortFindings(counted),
+        renderStale: checks.renderStale,
+        checkCommand: context.checkCommand,
+      });
+      return { text: prompt.text, commentIds: [], omitted: [], chip };
     }
 
     // Validate the comment choice before spending time on the scan.

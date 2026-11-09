@@ -103,6 +103,8 @@ export type AgentContext = {
   /** No entry/screen file exists yet. */
   pending: boolean;
   designSystem: { confirmed: boolean; hasDesignMd: boolean; hasTokensCss: boolean };
+  /** The command that checks this design (`checkCommandFor`), or `null` while the launcher is not in place: the copy then asks for a read-through instead. */
+  checkCommand: string | null;
 };
 
 // ---- Paths shown to the agent ----
