@@ -224,7 +224,12 @@ export type TurnSnapshotResponse = { created: { slug: string; id: string }[] };
 /** `against`: `current` (default) or a version id. */
 export type VersionDiffQuery = { against?: string };
 export type VersionDiffResponse = { files: { path: string; change: VersionFileChange }[] };
-export type RestoreVersionResponse = { restorePoint: VersionSummary | null; restored: VersionSummary };
+export type RestoreVersionResponse = {
+  restorePoint: VersionSummary | null;
+  restored: VersionSummary;
+  /** The version that holds the state from just before the restore: the restore point, or the newest version when the files already matched it. */
+  before: VersionSummary;
+};
 
 /** `screen`: canvas single-file export only; default the first screen. */
 export type ExportBody = { format: ExportFormat; screen?: string };
@@ -244,13 +249,21 @@ export type ChipBody = {
 };
 export type ChipResponse = { slug: string; chip: DesignChip };
 
+/** The element an ask is about: where it is, without a comment body. */
+export type AskElement = Omit<CreateCommentBody, 'body'>;
+
 export type PromptBody = {
   /**
    * `offline`: ask the agent to make the design work offline; the service builds the text and the blocked-URL list.
    * `checks`: ask the agent to fix the errors and warnings the design check counts; 422 `invalid` when there are none.
+   * `ask`: the user's own words, optionally about one element.
    */
-  purpose: 'revision' | 'continue' | 'offline' | 'checks';
+  purpose: 'revision' | 'continue' | 'offline' | 'checks' | 'ask';
   commentIds?: string[];
+  /** Ask only: what the user wants (1 to `ASK_TEXT_MAX` characters). */
+  text?: string;
+  /** Ask only: the element the question is about. */
+  element?: AskElement;
   /** Revision only: how the page found each pinned element (from `anchoring.ts`), so the prompt can flag moved or missing elements. */
   anchorStates?: Record<string, AnchorState>;
 };

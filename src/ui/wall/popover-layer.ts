@@ -11,7 +11,7 @@ import { frameToScreen, pinFramePoint, type Point } from '../model/wall-model.ts
 import { createComposer, createThread, type CardHandle } from './comment-ui.ts';
 import type { CameraController } from './camera-controller.ts';
 import type { WallContext } from './wall-context.ts';
-import type { Board, Popover, Rect } from './wall-types.ts';
+import type { Board, Popover, Rect, WallSelectionEvent } from './wall-types.ts';
 
 export type PopoverLayer = {
   /** Open the thread of a comment next to its pin (closes any open card first). */
@@ -23,6 +23,20 @@ export type PopoverLayer = {
   current: () => Popover | null;
   /** Put a card in the overlay at a screen point, kept inside the wall. */
   placeCard: (card: HTMLElement, anchorScreen: Point, below: number) => void;
+  /**
+   * Seam S4: forget the selected element (the ask bar's chip was removed). A no-op until the ask
+   * branch fills it in: it closes an open composer and emits `cleared`.
+   */
+  clearSelection: () => void;
+};
+
+export type PopoverDeps = {
+  /**
+   * Seam S4: announce a selection change to `WallHandle.onSelection` listeners. The ask branch calls
+   * it with `selected` in `openComposer`, `commented` after `createComment` resolves, and `cleared`
+   * from `close` when a composer was open. Nothing calls it yet.
+   */
+  emitSelection: (event: WallSelectionEvent) => void;
 };
 
 /** Where a comment's pin sits (frame px) and what its anchor resolved to, from the board's pin tracker. */
@@ -40,7 +54,7 @@ export const rectToBox = (board: Board, el: HTMLElement, rect: Rect): void => {
   el.style.height = `${rect.h}px`;
 };
 
-export const createPopoverLayer = (ctx: WallContext, camera: CameraController): PopoverLayer => {
+export const createPopoverLayer = (ctx: WallContext, camera: CameraController, _deps: PopoverDeps): PopoverLayer => {
   const { options } = ctx;
   let popover: Popover | null = null;
 
@@ -81,6 +95,7 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController): 
     close();
     const number = ctx.numbers().get(commentId) ?? 0;
     const { point, anchorState } = pinState(board, comment);
+    const sendComment = options.onSendComment;
     const card = createThread({
       comment,
       number,
@@ -91,6 +106,8 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController): 
         await options.updateComment(commentId, { body });
         close();
       },
+      // Seam S6: the send-one-pin branch renders the button; the callback is only handed over when the view passed one.
+      onSend: sendComment ? (body) => sendComment(commentId, body) : undefined,
       onStatus: async (status) => {
         await options.updateComment(commentId, { status });
         close();
@@ -140,5 +157,5 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController): 
     card.focus();
   };
 
-  return { openThread, openComposer, close, current: () => popover, placeCard };
+  return { openThread, openComposer, close, current: () => popover, placeCard, clearSelection: () => undefined };
 };

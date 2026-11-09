@@ -521,7 +521,7 @@ export const createFakeBackend = (): FakeBackend => {
       touch(rec);
       emit(params.slug ?? null, 'versions');
       emit(params.slug ?? null, 'files');
-      return { restorePoint: point, restored };
+      return { restorePoint: point, restored, before: point };
     },
     'POST /designs/:slug/export': ({ params, body }) => {
       get(params.slug);
