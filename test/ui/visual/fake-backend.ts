@@ -14,6 +14,7 @@ import type {
   VersionSummary,
   Viewport,
 } from '../../../src/shared/types.ts';
+import { createFakeChecks, type FakeChecks } from './fake-checks.ts';
 import { COFFEE, SAGE, SLATE, coffeeCheckout, coffeeHome, coffeePricing, invoicePage, onboardingScreen, pricingPage, type Palette } from './fake-docs.ts';
 import { CHIP_PROVIDER_ID, type DesignChip } from '../../../src/shared/types.ts';
 import { ServiceError } from './service-error.ts';
@@ -269,6 +270,8 @@ export type FakeBackend = {
   onChange: (listener: (event: ChangeEvent) => void) => () => void;
   /** Test hook: the agent finishes the pending onboarding design. */
   writePending: () => void;
+  /** Test hooks for the Checks badge states (fake-checks.ts). */
+  checks: FakeChecks['hooks'];
   /** Test hook: the agent saves one file of a design (`files` event with that path). */
   writeFile: (slug: string, path: string) => void;
   /** Test hook: a design was created this long ago (milliseconds). */
@@ -572,8 +575,21 @@ export const createFakeBackend = (): FakeBackend => {
     },
   };
 
+  const checks = createFakeChecks({
+    emit: (slug, kind) => emit(slug, kind),
+    info: (slug) => {
+      const rec = get(slug);
+      return { viewports: rec.design.viewports, unwritten: rec.design.screens.filter((s) => !rec.written.has(s.id)).map((s) => s.file) };
+    },
+  });
+  Object.assign(handlers, checks.handlers);
+
   const call: FakeBackend['call'] = async (key, args) => {
     await new Promise((resolve) => setTimeout(resolve, 60 + Math.random() * 120));
+    if (key === 'POST /designs/:slug/prompt' && (args.body as { purpose?: string } | undefined)?.purpose === 'checks') {
+      // Safe: this key's response is `{ text: string }`, which is what the checks fake answers.
+      return checks.prompt(args.params?.slug ?? '') as RouteResponse<typeof key>;
+    }
     const handler = handlers[key];
     if (!handler) throw new ServiceError('internal', `The fake service does not implement ${key}.`);
     // Safe: `handlers[key]` is typed per key; the generic key loses that link here, and the
@@ -615,6 +631,7 @@ export const createFakeBackend = (): FakeBackend => {
       return () => void listeners.delete(listener);
     },
     writePending,
+    checks: checks.hooks,
     writeFile,
     ageDesign,
     failNextRestore: (message) => {

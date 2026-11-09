@@ -2,7 +2,7 @@
 
 Before an agent says a design is done, it runs one command. Design Chamber renders every screen
 at every viewport, saves pictures, and lists what is wrong. The same findings feed the Checks
-badge in the viewer (a separate branch; this page covers the agent side and the service).
+badge in the viewer (the last section covers it).
 
 ## What the agent runs
 `<designs folder>/.chamber/bin/dc` (Windows: `dc.cmd`), a small launcher the service writes. The
@@ -96,3 +96,15 @@ browser pipe, render loop, output, launcher, service, target resolution, report 
 `src/shared/agent/check-command.ts`, `src/guest/probe/probe.ts` (the measuring script, built into
 the CLI and the service). Tests: `test/service/check/**`, `test/cli/**`, `test/agent/check-copy.test.ts`,
 `test/agent/checks-prompt-route.test.ts`, `test/shared/checks.test.ts`.
+
+## The Checks badge (the viewer side)
+Both viewers (the full-screen page, canvas and page designs, and the compact rail viewer) show a pill that says how the design stands, and open the findings. Screens: [full-screen page](../pages/full-screen-page.md) (P7) and [rail panel](../pages/rail-panel.md).
+
+- **Label.** `Checking` (first load, or a rendering check is running) · `No issues` · `1 issue` / `n issues` (errors plus warnings from `counts`; notes never count) · `Checks` (the service did not answer). Accessible name `Checks: <label>`. Red with errors, amber with only warnings, green for a pass, grey while unknown. Low contrast is an error, so it turns the badge red.
+- **In the rail** the badge is compact (shape and number, or a check mark, or a spinner; 26 px like its neighbours) and carries the words in its accessible name; the full-screen page shows the words.
+- **Green means verified.** A pass is green when the rendering was checked on the current files (`fresh`), when no browser exists to render with (`unavailable`, or `none` with `canRun: false`). Clean files whose rendering is `none` or `stale` show a grey `No issues` and the badge's description says "Rendering hasn't been checked yet." or "Rendering was checked before your latest changes."
+- **What is listed.** The service's sentences only (`message`), grouped Needs fixing, Worth a look, Notes, and a muted "From before your latest changes" for render findings that are not counted (`stale`, or the last check while one runs). Render findings count when `render.state` is `fresh`; for `unavailable` and `failed` the UI compares the service's `counts` with the listed findings, because the service counts those whenever their file keys still match. The `browser-missing` note is left out of the list (the rendering line says it) and out of the summary's note count. `detail` and `selector` are design text: set with `textContent` in a code element, never parsed.
+- **Actions.** **Ask the agent to fix** calls `POST /designs/:slug/prompt` with `purpose: 'checks'` (errors and warnings, owner decision Q4), puts the text in the linked chat's composer (new linked chat when there is none, same path as the offline banner) and closes the panel; a 422 "There is nothing to fix." shows as a toast and the badge refetches. **Check rendering** / **Check again** calls `POST /designs/:slug/checks/run` (Q2); the badge shows `Checking` from the click, the service's `checks` event ends it, and the start and the result are each announced once in the badge's live region ("Rendering check finished. 3 issues."; it is only written when its sentence changes). A 409 (another design is running) or a 422 (no browser) shows its sentence in a toast.
+- **Repaint in place.** A refresh updates the findings without rebuilding what a person can focus: the Notes and "From before…" disclosures keep focus and their open state, the error banner is rebuilt only when its text changes, and if the button that was pressed switches itself off while a check runs, focus moves to the dialog instead of falling to the page. The filled button is the next step (Ask when something is counted, otherwise Check rendering).
+- **Live updates.** `GET /designs/:slug/checks` on mount, on opening the panel, and 600 ms after a `files`, `design`, `checks` or `added` event for the design, a `root` event, or a feed reset. Only the newest answer is applied. While a check is running the badge also asks every 4 seconds, in case the feed is down. The last good answer stays on screen when a refresh fails.
+- **Where it lives.** `src/ui/wall/feature-checks.ts` (mounted by the design view as a Phase 1 feature: header status slot on the page, compact actions in the rail), `src/ui/components/checks-badge.ts` (badge, popover or sheet, actions), `src/ui/model/checks-model.ts` (labels, tones, groups, copy; pure), `openPopover` in `src/ui/components/kit.ts`, `askAgent` in `src/ui/guest.ts`. Tests: `test/ui/checks-model.test.ts`; visual scenario `test/ui/visual/scenarios/checks.mjs` with the fake service in `test/ui/visual/fake-checks.ts` (one sample design per state).

@@ -24,6 +24,7 @@ import { viewingBanner } from '../model/versions-model.ts';
 import { pageViewOptions, remoteBannerHidden, remoteNotice, resolvePageView, shortUrl } from '../model/wall-model.ts';
 import * as askBar from './feature-ask-bar.ts';
 import * as buildStrip from './feature-build-strip.ts';
+import * as checks from './feature-checks.ts';
 import * as findability from './feature-findability.ts';
 import type { DrawerKind, FeatureMount, ViewContext } from './view-context.ts';
 import { createWall, type WallHandle } from './wall.ts';
@@ -700,6 +701,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       mountFeature('build strip', buildStrip.mount),
       mountFeature('ask bar', askBar.mount),
       mountFeature('findability', findability.mount),
+      mountFeature('checks badge', checks.mount),
     ];
 
     built = {

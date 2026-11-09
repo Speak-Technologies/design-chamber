@@ -20,6 +20,7 @@ import { build } from 'esbuild';
 
 import * as askBar from './scenarios/ask-bar.mjs';
 import * as buildStrip from './scenarios/build-strip.mjs';
+import * as checks from './scenarios/checks.mjs';
 import * as findability from './scenarios/findability.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -546,6 +547,7 @@ plan.push(['rail-320-dark-empty', emptyAndErrors]);
 plan.push(['build-strip', () => buildStrip.run(helpers)]);
 plan.push(['ask-bar', () => askBar.run(helpers)]);
 plan.push(['findability', () => findability.run(helpers)]);
+plan.push(['checks', () => checks.run(helpers)]);
 
 let failed = false;
 try {

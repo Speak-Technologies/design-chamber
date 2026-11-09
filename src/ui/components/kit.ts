@@ -370,3 +370,106 @@ export const confirmDialog = (host: HTMLElement, options: ConfirmOptions): void 
   });
   sheet.foot.append(cancel.el, confirm.el);
 };
+
+// ---------------------------------------------------------------- anchored popover
+
+export type PopoverOptions = { title: string; onClose?: () => void };
+
+export type PopoverHandle = {
+  el: HTMLElement;
+  body: HTMLElement;
+  foot: HTMLElement;
+  close: (restoreFocus?: boolean) => void;
+};
+
+/** Widest the popover grows; on a narrower window it keeps an 8 px margin on both sides. */
+const POPOVER_WIDTH = 420;
+const POPOVER_MARGIN = 8;
+
+let openPopoverClose: (() => void) | null = null;
+
+/**
+ * A small dialog hung under `anchor`, right edge to right edge, for content that needs buttons and
+ * a scroll (a menu cannot hold those). One at a time. It takes focus, Tab stays inside, Escape and the
+ * close button give focus back to the anchor, a press outside just closes it. Mounted in `host` (the
+ * app root) so it uses the app's spacing variables and theme; positioned in the window with `fixed`.
+ */
+export const openPopover = (host: HTMLElement, anchor: HTMLElement, options: PopoverOptions): PopoverHandle => {
+  openPopoverClose?.();
+  const titleId = nextId('dc-pop-title');
+  const body = h('div', { class: 'dc-pop-body' });
+  const foot = h('div', { class: 'dc-pop-foot' });
+  const closeButton = h('button', { type: 'button', class: 'oc-sdk dc-iconbtn', 'aria-label': `Close ${options.title.toLowerCase()}`, title: 'Close' }, icon('close', 16));
+  const el = h(
+    'section',
+    { class: 'dc-pop', role: 'dialog', 'aria-labelledby': titleId, tabindex: '-1' },
+    h('header', { class: 'dc-pop-head' }, h('h2', { class: 'dc-pop-title', id: titleId }, options.title), closeButton),
+    body,
+    foot,
+  );
+
+  const place = (): void => {
+    const rect = anchor.getBoundingClientRect();
+    const width = Math.min(POPOVER_WIDTH, window.innerWidth - 2 * POPOVER_MARGIN);
+    const left = Math.min(Math.max(POPOVER_MARGIN, rect.right - width), window.innerWidth - POPOVER_MARGIN - width);
+    const top = Math.round(rect.bottom + 4);
+    el.style.width = `${width}px`;
+    el.style.left = `${Math.round(left)}px`;
+    el.style.top = `${top}px`;
+    el.style.maxHeight = `${Math.max(160, Math.min(window.innerHeight * 0.6, window.innerHeight - top - POPOVER_MARGIN))}px`;
+  };
+
+  let closed = false;
+  const close = (restoreFocus = true): void => {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener('pointerdown', onOutside, true);
+    document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('resize', place);
+    el.remove();
+    anchor.setAttribute('aria-expanded', 'false');
+    if (openPopoverClose === closeSelf) openPopoverClose = null;
+    options.onClose?.();
+    if (restoreFocus) anchor.focus();
+  };
+  const closeSelf = (): void => close(false);
+  const onOutside = (event: PointerEvent): void => {
+    if (event.target instanceof Node && (el.contains(event.target) || anchor.contains(event.target))) return;
+    close(false);
+  };
+  const onKey = (event: KeyboardEvent): void => {
+    if (event.key === 'Escape' && !event.defaultPrevented) {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const items = Array.from(el.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((node) => node.offsetParent !== null);
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (!first || !last) return;
+    const active = document.activeElement;
+    if (!(active instanceof Node) || !el.contains(active)) {
+      event.preventDefault();
+      first.focus();
+    } else if (event.shiftKey && (active === first || active === el)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+  closeButton.addEventListener('click', () => close());
+
+  host.append(el);
+  place();
+  document.addEventListener('pointerdown', onOutside, true);
+  document.addEventListener('keydown', onKey, true);
+  window.addEventListener('resize', place);
+  anchor.setAttribute('aria-haspopup', 'dialog');
+  anchor.setAttribute('aria-expanded', 'true');
+  openPopoverClose = closeSelf;
+  return { el, body, foot, close };
+};

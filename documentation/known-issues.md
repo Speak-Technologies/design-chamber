@@ -47,3 +47,12 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Why not fixed now:** the guest filters it; `versions.ts` and `watch.ts` are being rewritten on other branches, so the fix waits for the merge
 **Fix prompt:**
 > In `src/service/watch.ts`, ignore `*.tmp` names that match the store's atomic-write pattern (`<name>.<12 hex>.tmp`) the same way dot-prefixed temp files are ignored, or have `writeAtomic` in `src/service/versions.ts` name its temp files with a leading dot. Add a test in `test/service/core/restore-not-agent-write.test.ts`: after `versions.restore`, no event's `files` list holds a `.tmp` name. Then the `.tmp` filter in `agentFiles` (`src/guest/build-activity.ts`) can stay as a harmless guard. Run `npm run check`.
+
+### KI-11 — Checks: a focused group disclosure loses focus when a group above it goes away
+🟣 Minor · found 2026-11-08 · `src/ui/components/checks-badge.ts:40` · owner: ui-ux-developer
+**What:** `syncChildren` puts each wanted node in place with `insertBefore` before it removes stale children. When a group above a collapsed one disappears (for example "Needs fixing" empties after the agent fixes the errors), the Notes or "From before your latest changes" `<details>` is moved, and moving a focused node blurs it. Proven in Chrome: with groups `[errors, warnings, notes]` and focus on the Notes summary, syncing to `[warnings, notes]` left `document.activeElement` on `BODY`.
+**Who:** keyboard and screen-reader users of the Checks popover or sheet · **Seen:** visible (focus ring gone, screen reader loses its place)
+**Happens:** the findings are open with focus on a collapsed group, and a refresh removes a group above it · rare · **Effect:** focus drops out of the dialog; the next Tab brings it back to the first control
+**Why not fixed now:** the common refresh paths (a check running, files changing with the same groups) keep focus; this only happens when a whole group above the focused one disappears.
+**Fix prompt:**
+> In `src/ui/components/checks-badge.ts`, change `syncChildren` to first remove every child of `parent` that is not in `wanted`, then insert the wanted nodes that are out of place. That way a node that keeps its relative order is never moved. Add a visual assertion to `test/ui/visual/scenarios/checks.mjs`: focus the Notes summary on a design whose errors group then empties (add a fake-checks hook that clears the static errors and emits `checks`), and check that focus is still on that summary. Run `npm run check` and `node test/ui/visual/shoot.mjs checks --out /tmp/x`.

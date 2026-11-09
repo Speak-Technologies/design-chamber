@@ -161,7 +161,8 @@ export const run = async (helpers) => {
     await p.host('void (window.__host.promptGate = new Promise((resolve) => { window.__release = resolve; }))');
     await p.key('Enter', { focus: INPUT });
     await p.waitFor(`return doc.querySelector(${JSON.stringify(BAR)}).getAttribute('aria-busy') === 'true'`, 'the in-flight ask');
-    const other = [board.x + board.w * 0.8, board.y + board.h * 0.4];
+    // The first pick's composer is still open; in a narrow rail it covers the middle of the board, so aim above it.
+    const other = [board.x + board.w * 0.8, board.y + board.h * (board.w < 300 ? 0.08 : 0.4)];
     await p.clickAt(...other);
     await p.waitFor('return doc.querySelector(".dc-ask-chip-text")?.textContent !== ' + JSON.stringify(firstChip) + ' && !!doc.querySelector(".dc-composer")', 'the composer for the second element');
     await p.host('void (window.__release(), (window.__host.promptGate = null))');
