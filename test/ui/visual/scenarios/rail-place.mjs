@@ -21,7 +21,7 @@ const reloadFrame = async (p) => {
   await p.waitFor('return !!doc.querySelector(".dc-app")', 'the app to mount again');
 };
 
-const reload = async ({ openPage, check, listReady, wallReady }) => {
+const reload = async ({ openPage, check, checkSoon, listReady, wallReady }) => {
   const tag = 'rail-place-reload-360-dark';
   const p = await openPage({ width: 360, height: 700, surface: 'panel', theme: 'dark', label: tag });
   console.log(tag);
@@ -29,16 +29,14 @@ const reload = async ({ openPage, check, listReady, wallReady }) => {
   check(!(await inViewer(p)), `${tag}: it starts on the list when nothing was open`);
   await p.click('.dc-row[data-slug="northwind-pricing"] .dc-row-main');
   await wallReady(p, 1);
-  await p.settle(300);
-  check((await p.host('JSON.stringify(window.__host.storageGet("place:panel"))')) === '{"slug":"northwind-pricing"}', `${tag}: opening a design remembers it`);
+  await checkSoon(async () => (await p.host('JSON.stringify(window.__host.storageGet("place:panel"))')) === '{"slug":"northwind-pricing"}', `${tag}: opening a design remembers it`);
 
   await reloadFrame(p);
   await p.waitFor('return !!doc.querySelector(".dc-toolbar-compact .dc-title-text")', 'the design to reopen');
   check((await title(p)) !== null && (await inViewer(p)), `${tag}: a reload reopens the design that was open (${await title(p)})`);
 
   await p.click('.dc-toolbar-compact .dc-iconbtn[aria-label="Back to designs"]');
-  await p.settle(200);
-  check((await p.host('window.__host.storageGet("place:panel")')) === null, `${tag}: going back to the list forgets it`);
+  await checkSoon(async () => (await p.host('window.__host.storageGet("place:panel")')) === null, `${tag}: going back to the list forgets it`);
   await reloadFrame(p);
   await listReady(p);
   check(!(await inViewer(p)), `${tag}: a reload after going back stays on the list`);
@@ -66,7 +64,7 @@ const storedStates = async ({ openPage, check, listReady, wallReady }) => {
   await q.close();
 };
 
-const openRequests = async ({ openPage, check, wallReady }) => {
+const openRequests = async ({ openPage, check, checkSoon, wallReady }) => {
   const request = (slug, intent) => ({ 'DELETE /open-request': { status: 200, body: { request: { slug, intent, created: new Date().toISOString() } } } });
 
   const tag = 'rail-place-request-360-dark';
@@ -78,7 +76,7 @@ const openRequests = async ({ openPage, check, wallReady }) => {
   check((await title(p)) === 'Northwind pricing page', `${tag}: an open request wins over the remembered design (${await title(p)})`);
   check(await p.guest('return [...doc.querySelectorAll(".dc-toolbar-compact [aria-pressed=true]")].some((n) => (n.textContent || "").includes("Comment"))'), `${tag}: intent "comment" opens a page with Comment pressed`);
   await p.shot(tag);
-  check((await p.host('JSON.stringify(window.__host.storageGet("place:panel"))')) === '{"slug":"northwind-pricing"}', `${tag}: the requested design is the one remembered`);
+  await checkSoon(async () => (await p.host('JSON.stringify(window.__host.storageGet("place:panel"))')) === '{"slug":"northwind-pricing"}', `${tag}: the requested design is the one remembered`);
   await p.close();
 
   const view = 'rail-place-request-view-360-dark';

@@ -149,7 +149,7 @@ const stateShot = async (helpers, state, width, theme) => {
     check((await p.guest('return doc.querySelector(".ws-notice .oc-sdk-btn")?.textContent?.trim()')) === 'Try again', `${tag}: and offers Try again`);
     // Try again reads the service once more, which still fails here: the notice stays and the button works.
     await p.click('.ws-notice .oc-sdk-btn');
-    await p.settle(150);
+    await p.settle(500); // the retry has to land before "still up" means anything
     check(await p.guest('return !doc.querySelector(".ws-notice").hidden'), `${tag}: Try again leaves the notice up while the service still fails`);
   }
   await fits(helpers, p, tag);
@@ -191,7 +191,7 @@ const chatFolder = async ({ openPage, check }, width, theme) => {
 };
 
 const onFakeService = async (helpers, width, theme) => {
-  const { openPage, check } = helpers;
+  const { openPage, check, checkSoon } = helpers;
   const tag = `ws-live-${width}-${theme}`;
   const p = await openPage({ width, height: 380, surface: 'status', theme, label: tag, query: '&session=ses_coffee' });
   console.log(tag);
@@ -208,50 +208,46 @@ const onFakeService = async (helpers, width, theme) => {
   check(order.at(-1) === 'Show all 6 designs', `${tag}: the footer link comes last`);
 
   // Check: the line says "Checking" at once, then the result; a second press cannot double up.
-  await p.guest('win.__dcFake.checks.setRunMs(1600)');
+  await p.guest('win.__dcFake.checks.setRunMs(5000)');
   const northwind = '.ws-row[data-slug="northwind-pricing"]';
   const metaOf = (slug) => p.guest(`return doc.querySelector('.ws-row[data-slug="${slug}"] .ws-meta')?.textContent.trim() ?? ''`);
   check((await metaOf('northwind-pricing')).includes('No issues'), `${tag}: Northwind passes before the check`);
-  await p.click(`${northwind} button`, { text: 'Check' });
-  await p.waitFor(`return doc.querySelector('${northwind} .ws-meta')?.textContent.includes('Checking')`, 'the row to say Checking', 1500);
+  // A press the loaded browser dropped (or that landed on a row the frame was repainting) is repeated; a second press on a running check is a no-op.
+  const started = await p.retry(() => p.click(`${northwind} button`, { text: 'Check' }), async () => (await metaOf('northwind-pricing')).includes('Checking'), 'the row to say Checking', { wait: 3000 });
+  check(started, `${tag}: pressing Check puts "Checking" on the row`);
   check(await p.guest(`const b = doc.querySelector('${northwind} button'); return b.disabled && b.dataset.loading === 'true'`), `${tag}: Check shows progress and is off while it runs`);
   check(await p.guest(`const b = doc.querySelector('.ws-row[data-slug="coffee-subscription"] button'); return b.dataset.loading !== 'true'`), `${tag}: only the design being checked shows progress`);
   // Once the frame reloads after the press, the other rows' Check is off because a run is under way (QA: was a race).
   await p.waitFor(`const b = doc.querySelector('.ws-row[data-slug="coffee-subscription"] button'); return b.disabled`, 'other rows to wait for the run', 3000).catch(() => undefined);
   check(await p.guest(`return doc.querySelector('.ws-row[data-slug="coffee-subscription"] button').disabled`), `${tag}: another row's Check waits while a design is being checked`);
   await p.shot(`${tag}-checking`);
-  await p.waitFor(`return !doc.querySelector('${northwind} .ws-meta')?.textContent.includes('Checking')`, 'the check to finish', 6000);
+  await p.waitFor(`return !doc.querySelector('${northwind} .ws-meta')?.textContent.includes('Checking')`, 'the check to finish', 15000);
   check((await metaOf('northwind-pricing')).includes('No issues'), `${tag}: the line shows the result after the run ("${await metaOf('northwind-pricing')}")`);
   check(await p.guest(`return !doc.querySelector('${northwind} button').disabled`), `${tag}: Check is back when it ends`);
 
   // A press that loses the race: the service says 409 and the toast says what to do.
   await p.route('POST /designs/:slug/checks/run', { status: 409, body: { error: 'conflict', message: 'Another design is being checked. Try again in a moment.' } });
   await p.click(`.ws-row[data-slug="coffee-subscription"] button`, { text: 'Check' });
-  await p.settle(250);
-  check((await p.host('window.__host.toasts.map((t) => t.message)')).includes('Another design is being checked. Try again when it finishes.'), `${tag}: a 409 toasts "Another design is being checked. Try again when it finishes."`);
+  await checkSoon(async () => (await p.host('window.__host.toasts.map((t) => t.message)')).includes('Another design is being checked. Try again when it finishes.'), `${tag}: a 409 toasts "Another design is being checked. Try again when it finishes."`);
   await p.route('POST /designs/:slug/checks/run', null);
 
   // Open: the request, then the rail. A deleted design and a host with no rail say so.
   await p.click(`.ws-row[data-slug="coffee-subscription"] button`, { text: 'Open' });
-  await p.settle(250);
-  check((await p.host('JSON.stringify(window.__host.surfacesOpened)')) === '["plugin:design-chamber"]', `${tag}: Open opens the Design Chamber rail`);
+  await checkSoon(async () => (await p.host('JSON.stringify(window.__host.surfacesOpened)')) === '["plugin:design-chamber"]', `${tag}: Open opens the Design Chamber rail`);
   await p.route('POST /open-request', { status: 404, body: { error: 'not-found', message: 'That design is no longer in your Designs folder.' } });
   await p.click(`.ws-row[data-slug="coffee-subscription"] button`, { text: 'Open' });
-  await p.settle(250);
-  check((await p.host('window.__host.toasts.map((t) => t.message)')).includes('That design was deleted.'), `${tag}: Open on a deleted design toasts "That design was deleted."`);
+  await checkSoon(async () => (await p.host('window.__host.toasts.map((t) => t.message)')).includes('That design was deleted.'), `${tag}: Open on a deleted design toasts "That design was deleted."`);
   check((await p.host('window.__host.surfacesOpened.length')) === 1, `${tag}: and does not open the rail`);
   await p.route('POST /open-request', null);
   await p.host('window.__host.openSurfaceFails = "NO_DIRECTORY"');
   await p.click(`.ws-row[data-slug="coffee-subscription"] button`, { text: 'Open' });
-  await p.settle(250);
-  check((await p.host('window.__host.toasts.map((t) => t.message)')).includes('Open Design Chamber from the rail to see it.'), `${tag}: no rail here toasts "Open Design Chamber from the rail to see it."`);
+  await checkSoon(async () => (await p.host('window.__host.toasts.map((t) => t.message)')).includes('Open Design Chamber from the rail to see it.'), `${tag}: no rail here toasts "Open Design Chamber from the rail to see it."`);
   await p.host('window.__host.openSurfaceFails = null');
   const opened = await p.host('window.__host.surfacesOpened.length');
   // The harness's toasts sit over the bottom right of the page for 4 s; clear them so the click lands on the frame.
   await p.host("document.getElementById('toasts').replaceChildren()");
   await p.click('.ws-more button');
-  await p.settle(200);
-  check((await p.host('window.__host.surfacesOpened.length')) === opened + 1, `${tag}: "Show all" opens the rail list (${opened} opens before, then one more)`);
+  await checkSoon(async () => (await p.host('window.__host.surfacesOpened.length')) === opened + 1, `${tag}: "Show all" opens the rail list (${opened} opens before, then one more)`);
 
   // Live: the agent writes the first file of a waiting design and its line changes without a reload.
   const waiting = await metaOf('onboarding-flow');

@@ -18,7 +18,7 @@ const BAR = '.dc-ask';
 const INPUT = '.dc-ask-input';
 
 export const run = async (helpers) => {
-  const { openPage, check, listReady, thumbsReady, wallReady, menuItem, sleep } = helpers;
+  const { openPage, check, checkSoon, listReady, thumbsReady, wallReady, menuItem, sleep } = helpers;
   const only = process.env.DC_ASK_ONLY ? new RegExp(process.env.DC_ASK_ONLY) : null;
 
   for (const [kind, width, theme] of VARIANTS) {
@@ -92,13 +92,11 @@ export const run = async (helpers) => {
 
     // 4. counter, then over the limit
     await setValue('a'.repeat(10500));
-    await p.settle(150);
-    check(((await text('.dc-ask-counter')) ?? '').includes('/'), `${tag}: the counter shows from 10 000 characters`);
+    await checkSoon(async () => ((await text('.dc-ask-counter')) ?? '').includes('/'), `${tag}: the counter shows from 10 000 characters`);
     await p.shot(`${tag}-4-counter`);
     await setValue('a'.repeat(12100));
-    await p.settle(150);
-    check(((await text('.dc-ask-target')) ?? '').includes('over the limit') && (await visible('.dc-ask-target')), `${tag}: over the limit says, in view, by how many`);
-    check(await p.guest(`return doc.querySelector('.dc-ask .oc-sdk-btn').disabled`), `${tag}: Send is disabled over the limit`);
+    await checkSoon(async () => ((await text('.dc-ask-target')) ?? '').includes('over the limit') && (await visible('.dc-ask-target')), `${tag}: over the limit says, in view, by how many`);
+    await checkSoon(() => p.guest(`return doc.querySelector('.dc-ask .oc-sdk-btn').disabled`), `${tag}: Send is disabled over the limit`);
     await p.shot(`${tag}-4b-over`);
     await setValue('Make this headline shorter and warmer');
 
@@ -175,11 +173,10 @@ export const run = async (helpers) => {
     // Esc with a chip removes the chip; Esc without one hands the keyboard back to the wall.
     await p.clickAt(...pick);
     await p.waitFor('return !!doc.querySelector(".dc-ask-chip:not([hidden])")', 'the chip again');
-    await p.key('Escape', { focus: INPUT });
-    check(!(await visible('.dc-ask-chip')), `${tag}: Esc in the box removes the chip`);
-    check(!(await p.guest('return !!doc.querySelector(".dc-composer")')), `${tag}: removing the chip closes its composer`);
-    await p.key('Escape', { focus: INPUT });
-    check(await p.guest(`return doc.activeElement !== doc.querySelector(${JSON.stringify(INPUT)})`), `${tag}: Esc without a chip leaves the box`);
+    // A loaded browser sometimes drops the synthesized key, so a press that did nothing is repeated (retry); the assertions stay.
+    check(await p.retry(() => p.key('Escape', { focus: INPUT }), async () => !(await visible('.dc-ask-chip')), 'Esc to remove the chip'), `${tag}: Esc in the box removes the chip`);
+    await checkSoon(async () => !(await p.guest('return !!doc.querySelector(".dc-composer")')), `${tag}: removing the chip closes its composer`);
+    check(await p.retry(() => p.key('Escape', { focus: INPUT }), () => p.guest(`return doc.activeElement !== doc.querySelector(${JSON.stringify(INPUT)})`), 'Esc to leave the box'), `${tag}: Esc without a chip leaves the box`);
 
     // 7. an old version on show: asking is off
     if (rail) await p.click('.dc-compact-actions .dc-versions-btn');
@@ -187,13 +184,11 @@ export const run = async (helpers) => {
     await p.waitFor('return !!doc.querySelector(".dc-version")', 'the versions list');
     await p.click('.dc-version .oc-sdk-btn', { text: 'View', nth: 1 });
     await p.waitFor('return !!doc.querySelector(".dc-viewing")', 'the viewing banner');
-    await p.settle(500);
-    check(await p.guest(`return doc.querySelector(${JSON.stringify(INPUT)}).disabled`), `${tag}: the box is disabled while an old version is on show`);
-    check(((await text('.dc-ask-target')) ?? '') === 'Go back to the current design to ask the agent.' && (await visible('.dc-ask-target')), `${tag}: the bar says, in view, how to get back`);
+    await checkSoon(() => p.guest(`return doc.querySelector(${JSON.stringify(INPUT)}).disabled`), `${tag}: the box is disabled while an old version is on show`);
+    await checkSoon(async () => ((await text('.dc-ask-target')) ?? '') === 'Go back to the current design to ask the agent.' && (await visible('.dc-ask-target')), `${tag}: the bar says, in view, how to get back`);
     await p.shot(`${tag}-8-viewing`);
     await p.click('.dc-viewing .oc-sdk-btn', { text: 'Back to current' });
-    await p.settle(400);
-    check(!(await p.guest(`return doc.querySelector(${JSON.stringify(INPUT)}).disabled`)), `${tag}: the box is back on the current design`);
+    await checkSoon(async () => !(await p.guest(`return doc.querySelector(${JSON.stringify(INPUT)}).disabled`)), `${tag}: the box is back on the current design`);
     if (rail) await p.key('Escape');
     else await p.click('.dc-toolbar .oc-sdk-btn', { text: 'Versions' });
     await p.settle(300);
@@ -209,16 +204,13 @@ export const run = async (helpers) => {
     await p.waitFor('return !doc.querySelector(".dc-thread")', 'the thread card to close');
     const pinPrompts = (await prompts()).slice(beforePin);
     check(pinPrompts.length === 1 && /Revise ".*": 1 comment\b/.test(String(pinPrompts[0]?.text)), `${tag}: Send this sends that one comment`);
-    await p.settle(400);
-    check(await p.guest('return doc.querySelectorAll(".dc-thread").length === 0'), `${tag}: the card closed after sending`);
+    await checkSoon(() => p.guest('return doc.querySelectorAll(".dc-thread").length === 0'), `${tag}: the card closed after sending`);
 
     // 9. the drawer row's send button
     if (rail) await p.click('.dc-compact-actions .dc-comments-chip');
     else await p.click('.dc-toolbar .oc-sdk-btn', { text: 'Comments' });
     await p.waitFor('return !!doc.querySelector(".dc-comment")', 'the comments list');
-    await p.settle(300);
-    const rows = await p.guest('return doc.querySelectorAll(".dc-comment .dc-iconbtn[aria-label^=\\"Send comment\\"]").length');
-    check(rows > 0, `${tag}: open comments have a send button in the list (${rows})`);
+    await checkSoon(async () => (await p.guest('return doc.querySelectorAll(".dc-comment .dc-iconbtn[aria-label^=\\"Send comment\\"]").length')) > 0, `${tag}: open comments have a send button in the list`);
     check(await p.guest('const f = doc.querySelector(".dc-comments-foot .oc-sdk-btn"); return f?.dataset.emphasis === "primary"'), `${tag}: the footer button is the one filled primary`);
     await p.shot(`${tag}-10-drawer-row`);
     if (!rail) {
@@ -240,7 +232,8 @@ export const run = async (helpers) => {
     const beforeRow = (await prompts()).length;
     await p.click('.dc-comment .dc-iconbtn[aria-label^="Send comment"]');
     await p.waitFor(`return !doc.querySelector('.dc-comment .dc-iconbtn[aria-label^="Send comment"]') || true`, 'the row to update');
-    await p.settle(500);
+    await checkSoon(async () => (await prompts()).length >= beforeRow + 1, `${tag}: a row send went out`);
+    await p.settle(300); // a second send, if that bug came back, lands within this window
     check((await prompts()).length === beforeRow + 1, `${tag}: a row send is one message`);
     await p.shot(`${tag}-11-drawer-after`);
     await p.close();

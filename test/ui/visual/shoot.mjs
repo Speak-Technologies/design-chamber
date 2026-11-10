@@ -206,6 +206,18 @@ const openPage = async ({ width, height, surface, theme, label, query = '', rout
     async waitFor(code, what, timeout) {
       return until(() => guest(code).catch(() => null), what ?? code, timeout);
     },
+    /**
+     * Do `action`, then wait up to `wait` ms for `condition` (an async boolean) to hold; do it again, up to `attempts` times.
+     * For synthesized input a loaded browser drops or lands on a node that was just replaced (headless Chrome loses a key or a
+     * click about one run in three when two runs share the machine). Only for actions that are safe to repeat; true when it took.
+     */
+    async retry(action, condition, what, { attempts = 4, wait = 2000 } = {}) {
+      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        await action();
+        if (await until(async () => (await condition().catch(() => false)) || null, what, wait).then(() => true, () => false)) return true;
+      }
+      return false;
+    },
     async move(x, y) {
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
     },
@@ -215,7 +227,17 @@ const openPage = async ({ width, height, surface, theme, label, query = '', rout
       await mouse('mouseReleased', x, y);
     },
     async click(selector, opts = {}) {
-      const r = await until(() => rect(selector, opts.nth ?? 0, opts.text ?? null), `element ${selector}${opts.text ? ` "${opts.text}"` : ''}`);
+      let r = await until(() => rect(selector, opts.nth ?? 0, opts.text ?? null), `element ${selector}${opts.text ? ` "${opts.text}"` : ''}`);
+      // Click where the element has stopped: a list still filling in, a thumbnail changing a row's height or a sheet sliding in
+      // moves it between measuring and pressing, and the press then lands on its neighbour (a loaded run opened the wrong design).
+      for (let tries = 0; tries < 20; tries += 1) {
+        await sleep(40);
+        const again = await rect(selector, opts.nth ?? 0, opts.text ?? null);
+        if (again === null) continue;
+        const still = Math.abs(again.x - r.x) < 0.5 && Math.abs(again.y - r.y) < 0.5 && Math.abs(again.w - r.w) < 0.5 && Math.abs(again.h - r.h) < 0.5;
+        r = again;
+        if (still) break;
+      }
       await api.clickAt(r.x + (opts.dx ?? r.w / 2), r.y + (opts.dy ?? r.h / 2));
       await sleep(opts.wait ?? 120);
     },
@@ -274,11 +296,19 @@ const check = (condition, message) => {
   } else console.log(`  ✓ ${message}`);
 };
 
+// A check about a state the page is still reaching (a click just went in, a timer, a reload): it waits for the
+// condition up to `timeout`, so a loaded machine only makes it slower, never red. A negative check ("it is gone")
+// passes the moment the condition holds; a wrong state still fails once the time is up.
+const checkSoon = async (fn, message, timeout = 8000) => {
+  const held = await until(async () => (await fn().catch(() => false)) || null, message, timeout).then(() => true, () => false);
+  check(held, message);
+};
+
 const listReady = (p) => p.waitFor('return doc.querySelectorAll(".dc-row[data-slug], .dc-card[data-slug]").length >= 5', 'the list rows');
 const thumbsReady = (p) => p.waitFor('const t = [...doc.querySelectorAll(".dc-thumb")]; return t.length > 0 && t.every((n) => n.dataset.state !== "loading")', 'thumbnails', 20000).catch(() => undefined);
 const wallReady = (p, n = 1) =>
   p.waitFor(`return doc.querySelectorAll('.dc-board[data-state="ready"]').length >= ${n}`, 'artboards to render', 20000).catch(async (error) => {
-    console.log('  state:', await p.guest('return JSON.stringify({ app: doc.querySelector(".dc-app")?.innerHTML.slice(0, 300), sheets: [...doc.querySelectorAll(".dc-sheet")].map((n) => n.dataset.variant + ":" + n.querySelector(".dc-sheet-title")?.textContent), active: doc.activeElement?.outerHTML.slice(0, 120), boards: [...doc.querySelectorAll(".dc-board")].map((b) => b.dataset.state) })'));
+    console.log('  state:', await p.guest('return JSON.stringify({ title: doc.querySelector(".dc-title-text, .dc-title-input")?.textContent || doc.querySelector(".dc-title-input")?.value, app: doc.querySelector(".dc-app")?.innerHTML.slice(0, 300), sheets: [...doc.querySelectorAll(".dc-sheet")].map((n) => n.dataset.variant + ":" + n.querySelector(".dc-sheet-title")?.textContent), active: doc.activeElement?.outerHTML.slice(0, 120), boards: [...doc.querySelectorAll(".dc-board")].map((b) => b.dataset.state) })'));
     throw error;
   });
 const menuItem = (p, text) => p.click('.dc-popup [role="menuitem"]', { text });
@@ -298,12 +328,10 @@ const railScenario = async (width, theme) => {
   const rowCount = () => p.guest('return doc.querySelectorAll(".dc-row[data-slug]").length');
   const allRows = await rowCount();
   await p.click('.dc-tabs [role=tab]', { text: 'Canvases' });
-  await p.settle(150);
-  check((await selectedTab()) === 'canvas', `${tag}: clicking Canvases selects it`);
-  check(await p.guest('return [...doc.querySelectorAll(".dc-row[data-slug]")].every((n) => n.querySelector(".dc-row-meta")?.textContent.startsWith("Canvas"))'), `${tag}: Canvases lists only canvases`);
+  await checkSoon(async () => (await selectedTab()) === 'canvas', `${tag}: clicking Canvases selects it`);
+  await checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-row[data-slug]")].every((n) => n.querySelector(".dc-row-meta")?.textContent.startsWith("Canvas"))'), `${tag}: Canvases lists only canvases`);
   await p.click('.dc-tabs [role=tab]', { text: 'All' });
-  await p.settle(150);
-  check((await selectedTab()) === 'all' && (await rowCount()) === allRows, `${tag}: clicking All goes back to all designs`);
+  await checkSoon(async () => (await selectedTab()) === 'all' && (await rowCount()) === allRows, `${tag}: clicking All goes back to all designs`);
 
   await p.hover('.dc-row[data-slug="coffee-subscription"]');
   await p.click('.dc-row[data-slug="coffee-subscription"] .dc-iconbtn');
@@ -400,8 +428,7 @@ const pageScenario = async (width, theme) => {
   await p.settle(500);
   const home = await p.rect('.dc-board[data-board="home@laptop"]');
   await p.move(home.x + home.w * 0.2, home.y + home.h * 0.22);
-  await p.settle(400);
-  check(await p.guest('const h = doc.querySelector(".dc-board[data-board=\\"home@laptop\\"] .dc-hover"); return !!h && !h.hidden'), `${tag}: Edit mode outlines the element under the cursor`);
+  await checkSoon(() => p.guest('const h = doc.querySelector(".dc-board[data-board=\\"home@laptop\\"] .dc-hover"); return !!h && !h.hidden'), `${tag}: Edit mode outlines the element under the cursor`);
   await p.shot(`${tag}-3-hover`);
   await p.clickAt(home.x + home.w * 0.2, home.y + home.h * 0.22);
   await p.waitFor('return !!doc.querySelector(".dc-composer")', 'the comment composer');
@@ -410,8 +437,7 @@ const pageScenario = async (width, theme) => {
   await p.shot(`${tag}-4-composer`);
   await p.key('Enter', { ctrl: true });
   await p.waitFor('return !doc.querySelector(".dc-composer")', 'composer to close');
-  await p.settle(500);
-  check((await p.guest('return doc.querySelectorAll(".dc-board[data-board=\\"home@laptop\\"] .dc-pin:not(.dc-temp-pin)").length')) >= 3, `${tag}: the new comment appears as a pin`);
+  await checkSoon(async () => (await p.guest('return doc.querySelectorAll(".dc-board[data-board=\\"home@laptop\\"] .dc-pin:not(.dc-temp-pin)").length')) >= 3, `${tag}: the new comment appears as a pin`);
   await p.click('.dc-toolbar .oc-sdk-btn', { text: 'Fit' });
   await p.settle(400);
   await p.shot(`${tag}-5-pins`);
@@ -419,14 +445,12 @@ const pageScenario = async (width, theme) => {
   // zoomed far out, pins that would overlap fold into one count badge; a click zooms in on them.
   await p.guest('doc.querySelector(".dc-wall").focus()');
   for (let i = 0; i < 6; i += 1) await p.key('-', { focus: '.dc-wall' });
-  await p.settle(300);
-  check((await p.guest('return doc.querySelectorAll(".dc-pin-cluster").length')) > 0, `${tag}: overlapping pins fold into a count at ${await scaleLabel(p)}`);
+  await checkSoon(async () => (await p.guest('return doc.querySelectorAll(".dc-pin-cluster").length')) > 0, `${tag}: overlapping pins fold into a count when zoomed far out`);
   check(await p.guest('const pins = [...doc.querySelectorAll(".dc-board-overlay[data-pins=shown] .dc-pin")].filter((n) => !n.hidden).map((n) => n.getBoundingClientRect()); return pins.every((a, i) => pins.every((b, j) => i === j || Math.hypot(a.x - b.x, a.y - b.y) >= Math.min(a.width, b.width) - 1))'), `${tag}: no two visible pins overlap`);
   await p.shot(`${tag}-5b-pins-clustered`);
   const zoomedOut = await scaleLabel(p);
   await p.click('.dc-pin-cluster');
-  await p.settle(300);
-  check((await scaleLabel(p)) !== zoomedOut, `${tag}: clicking a count zooms in (${zoomedOut} → ${await scaleLabel(p)})`);
+  await checkSoon(async () => (await scaleLabel(p)) !== zoomedOut, `${tag}: clicking a count zooms in (from ${zoomedOut})`);
   await p.click('.dc-toolbar .oc-sdk-btn', { text: 'Fit' });
 
   // thread popover
@@ -473,8 +497,7 @@ const pageScenario = async (width, theme) => {
   await p.shot(`${tag}-11-artifact-export-menu`);
   await menuItem(p, 'Download ZIP');
   await p.waitFor('return !!doc.querySelector(".dc-notices .oc-sdk-banner")', 'export notice');
-  await p.settle(300);
-  check((await p.host('JSON.stringify(window.__host.toasts.map((t) => t.message))')).includes('Saved to'), `${tag}: export toast with the saved path`);
+  await checkSoon(async () => (await p.host('JSON.stringify(window.__host.toasts.map((t) => t.message))')).includes('Saved to'), `${tag}: export toast with the saved path`);
   await p.shot(`${tag}-12-artifact-exported`);
   await p.click('.dc-toolbar .oc-sdk-btn', { text: 'Library' });
 
@@ -546,9 +569,7 @@ const themeSwitch = async () => {
   await listReady(p);
   const dark = await p.guest('return getComputedStyle(doc.body).backgroundColor');
   await p.host('window.__host.setTheme("light")');
-  await p.settle(400);
-  const light = await p.guest('return getComputedStyle(doc.body).backgroundColor');
-  check(dark !== light, `${tag}: a theme switch repaints live (${dark} → ${light})`);
+  await checkSoon(async () => (await p.guest('return getComputedStyle(doc.body).backgroundColor')) !== dark, `${tag}: a theme switch repaints live (from ${dark})`);
   await p.close();
 };
 
@@ -561,9 +582,8 @@ const emptyAndErrors = async () => {
   await p.waitFor('return !!doc.querySelector(".dc-settings input")', 'settings');
   await p.type('.dc-settings input', 'relative/folder');
   await p.click('.dc-settings .oc-sdk-btn', { text: 'Apply folder' });
-  await p.settle(200);
+  await checkSoon(() => p.guest('return !!doc.querySelector(".dc-settings .oc-sdk-field-note")?.textContent?.includes("full path")'), `${tag}: invalid folder says what to do`);
   await p.shot(`${tag}-1-folder-invalid`);
-  check(await p.guest('return !!doc.querySelector(".dc-settings .oc-sdk-field-note")?.textContent?.includes("full path")'), `${tag}: invalid folder says what to do`);
   await p.type('.dc-settings input', 'D:\\Elsewhere\\Designs');
   await p.click('.dc-settings .oc-sdk-btn', { text: 'Apply folder' });
   await p.settle(900);
@@ -576,7 +596,7 @@ const emptyAndErrors = async () => {
 };
 
 // What the scenario modules (test/ui/visual/scenarios) use.
-const helpers = { openPage, check, listReady, thumbsReady, wallReady, menuItem, scaleLabel, sleep, outDir, root };
+const helpers = { openPage, check, checkSoon, listReady, thumbsReady, wallReady, menuItem, scaleLabel, sleep, outDir, root };
 
 const plan = [];
 for (const theme of ['dark', 'light']) {
