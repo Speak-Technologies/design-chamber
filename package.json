@@ -7,23 +7,65 @@
   "type": "module",
   "openchamber": {
     "apiVersion": 1,
-    "engines": { "openchamber": ">=2.5.0" },
+    "engines": {
+      "openchamber": ">=2.5.0"
+    },
     "contributes": {
-      "panel": { "id": "design-chamber", "name": "Design Chamber", "icon": "palette", "entry": "dist/panel/index.html" },
-      "page": { "entry": "dist/panel/index.html", "title": "Design Chamber" },
-      "background": { "entry": "dist/background/index.html" },
+      "panel": {
+        "id": "design-chamber",
+        "name": "Design Chamber",
+        "icon": "palette",
+        "entry": "dist/panel/index.html"
+      },
+      "page": {
+        "entry": "dist/panel/index.html",
+        "title": "Design Chamber"
+      },
+      "background": {
+        "entry": "dist/background/index.html"
+      },
       "commands": [
-        { "name": "design", "description": "New canvas: several screens side by side" },
-        { "name": "page", "description": "New page: one HTML page shown full screen" }
+        {
+          "name": "design",
+          "description": "New canvas: several screens side by side"
+        },
+        {
+          "name": "page",
+          "description": "New page: one HTML page shown full screen"
+        }
       ],
       "actions": [
-        { "id": "open-as-page", "label": "Open as page", "icon": "palette", "where": "message", "roles": ["assistant"], "mode": "background" }
+        {
+          "id": "open-as-page",
+          "label": "Open as page",
+          "icon": "palette",
+          "where": "message",
+          "roles": [
+            "assistant"
+          ],
+          "mode": "background"
+        }
       ],
-      "capabilities": ["prompt", "sessions"],
+      "capabilities": [
+        "prompt",
+        "sessions"
+      ],
       "service": {
         "entry": "dist/service/main.js",
         "runtime": "host",
-        "permissions": { "exec": ["chrome", "msedge", "chromium", "brave", "explorer", "open", "xdg-open", "gio", "gdbus"] }
+        "permissions": {
+          "exec": [
+            "chrome",
+            "msedge",
+            "chromium",
+            "brave",
+            "explorer",
+            "open",
+            "xdg-open",
+            "gio",
+            "gdbus"
+          ]
+        }
       }
     }
   },
@@ -35,7 +77,7 @@
     "pack": "node scripts/pack.mjs"
   },
   "devDependencies": {
-    "@openchamber/sdk": "2.5.2",
+    "@openchamber/sdk": "2.7.0",
     "@types/node": "^22.10.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.8.0"
