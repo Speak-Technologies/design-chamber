@@ -78,7 +78,7 @@ export function registerSettingsRoutes(router: Router, ctx: ServiceContext, agen
     return buildSettingsResponse(ctx, agent);
   });
 
-  // Seam stub: answers the older copy's status and deletes nothing. The agent-skill branch (U2)
-  // fills it: remove the copy only when it is ours and unedited, from the user's click in Settings.
-  router.on('DELETE /agent/skill', async (): Promise<RemoveSkillResponse> => ({ skill: await agent.skillStatus() }));
+  // The user's click on "Remove old copy" in Settings. The request carries nothing the handler
+  // reads: the target is the fixed skillTarget path, and it goes only when it is ours and unedited.
+  router.on('DELETE /agent/skill', async (): Promise<RemoveSkillResponse> => ({ skill: await agent.removeOldSkill() }));
 }

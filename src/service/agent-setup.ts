@@ -8,12 +8,15 @@
 // symlink or anything that is not a regular file is never written. The final compare + rename
 // is synchronous (`replaceFileIfUnchanged`), so a user edit that lands mid-write is kept.
 //
-// The skill file is read here, never written. Its path is fixed (`skillTarget`, no request
-// input); a symlinked leaf `design-chamber` folder or `SKILL.md` reads as foreign. Symlinks
-// above `skills/` are the user's own setup (a dotfiles repo) and are followed; Settings shows
-// the real path.
+// The skill file is never written. Its path is fixed (`skillTarget`, no request input); a
+// symlinked leaf `design-chamber` folder or `SKILL.md` reads as foreign. Symlinks above
+// `skills/` are the user's own setup (a dotfiles repo) and are followed; Settings shows the real
+// path. The one change the service makes there is `removeOldSkill` (DELETE /agent/skill, the
+// user's click): it deletes that file, then its folder if empty, only when the file's own marker
+// verifies (ours and unedited) and neither leaf is a symlink. The copies in ~/.claude and
+// ~/.agents are only ever read.
 
-import { readFileSync } from 'node:fs';
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync, readSync, rmdirSync, unlinkSync, type Stats } from 'node:fs';
 import { lstat, open, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,6 +25,7 @@ import { buildAgentGuide, buildRetiredGuide, buildSkillDoc, GUIDE_FILE, SKILL_NA
 import { findOwnershipMarker, ownershipHash } from '../shared/agent/ownership.ts';
 import type { AgentGuideStatus, AgentSkillStatus, ChangeEvent } from '../shared/types.ts';
 import type { ChangeHub, Logger, SettingsStore } from './context.ts';
+import { ApiError } from './http.ts';
 import { replaceFileIfUnchanged, resolveInside, type PathModule } from './paths.ts';
 import { folderErrorSentence, isDirectory } from './root.ts';
 
@@ -50,6 +54,16 @@ export const ownedFileState = (text: string | null, expected: string): OwnedFile
   if (marker.kind === 'none') return 'foreign';
   if (marker.kind === 'damaged' || marker.hex !== ownershipHash(text)) return 'edited';
   return text === expected ? 'current' : 'outdated';
+};
+
+/**
+ * An older skill copy judged by its own marker only: what this version would write does not
+ * matter for removal, so `ownedFileState` gets the text itself as the expected text (verified
+ * then reads `current`).
+ */
+export const oldSkillCopyState = (text: string): 'ours' | 'edited' | 'foreign' => {
+  const state = ownedFileState(text, text);
+  return state === 'current' || state === 'outdated' ? 'ours' : state === 'foreign' ? 'foreign' : 'edited';
 };
 
 // ---- Skill target (pure) ----
@@ -138,6 +152,88 @@ const realpathAsFarAsItExists = async (dir: string): Promise<string> => {
   }
 };
 
+// ---- Removing the old skill copy ----
+
+export type OldSkillRemoval = 'missing' | 'removed' | 'edited' | 'foreign';
+
+/** `lstat` that answers `null` for a path that is not there. */
+const lstatOrNull = (target: string): Stats | null => {
+  try {
+    return lstatSync(target);
+  } catch (error) {
+    if (codeOf(error) === 'ENOENT' || codeOf(error) === 'ENOTDIR') return null;
+    throw error;
+  }
+};
+
+const sameNode = (a: Stats, b: Stats): boolean => a.dev === b.dev && a.ino === b.ino;
+
+/**
+ * Delete `file` inside the leaf folder `dir` only when both are real (no symlink), the file is a
+ * regular file and its marker verifies. Synchronous from the first check to the unlink, so nothing
+ * else in this process runs in between. The file is opened without following a link (where the
+ * OS allows) and must be the same node `lstat` saw, and the folder is checked again right before
+ * the unlink, so a swap to a link between the checks reads as foreign. Throws on an I/O failure.
+ */
+export const removeOwnedSkillFileSync = (dir: string, file: string): OldSkillRemoval => {
+  const dirInfo = lstatOrNull(dir);
+  if (dirInfo === null) return 'missing';
+  if (dirInfo.isSymbolicLink() || !dirInfo.isDirectory()) return 'foreign';
+  const fileInfo = lstatOrNull(file);
+  if (fileInfo === null) return 'missing';
+  if (fileInfo.isSymbolicLink() || !fileInfo.isFile()) return 'foreign';
+
+  // O_NOFOLLOW is POSIX only; on Windows the node compare below catches a swapped link.
+  const fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  let text: string;
+  try {
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || !sameNode(opened, fileInfo)) return 'foreign';
+    // Our copies are a few kB; a bigger file is read only this far, which can never verify (edited).
+    const buffer = Buffer.alloc(Math.min(opened.size, OWNED_FILE_READ_MAX));
+    const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+    text = buffer.subarray(0, bytesRead).toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+  const state = oldSkillCopyState(text);
+  if (state !== 'ours') return state;
+
+  const dirNow = lstatSync(dir);
+  const fileNow = lstatSync(file);
+  if (dirNow.isSymbolicLink() || !sameNode(dirNow, dirInfo) || fileNow.isSymbolicLink() || !sameNode(fileNow, fileInfo)) return 'foreign';
+  unlinkSync(file);
+  return 'removed';
+};
+
+/** The leaf folder goes only when nothing else is in it; `rmdir` is never recursive and refuses a non-empty folder itself. */
+const removeFolderIfEmpty = (dir: string, log: Logger): void => {
+  try {
+    const info = lstatSync(dir);
+    if (info.isSymbolicLink() || !info.isDirectory()) return;
+    rmdirSync(dir);
+  } catch (error) {
+    const code = codeOf(error);
+    if (code === 'ENOTEMPTY' || code === 'EEXIST' || code === 'ENOENT') return;
+    log.warn('agent.old-skill-folder-kept', { path: dir, code: code ?? null });
+  }
+};
+
+const OLD_SKILL_EDITED = "That copy has your own edits, so it stays. Delete it yourself if you don't need it.";
+const OLD_SKILL_FOREIGN = "That skill isn't one Design Chamber wrote, so it stays.";
+
+const removalFailure = (error: unknown, file: string): string => {
+  switch (codeOf(error)) {
+    case 'EACCES':
+    case 'EPERM':
+      return `Design Chamber isn't allowed to delete ${file}. Delete it yourself if you don't need it.`;
+    case 'EBUSY':
+      return `${file} is in use by another program. Close it and try again.`;
+    default:
+      return `Design Chamber couldn't delete ${file}. Delete it yourself if you don't need it.`;
+  }
+};
+
 // ---- The module ----
 
 export type AgentSetupOptions = {
@@ -163,6 +259,12 @@ export type AgentSetup = {
   rootChanged(root: string, previous: string): Promise<void>;
   /** Read-only skill status (GET /settings). Never throws. */
   skillStatus(): Promise<AgentSkillStatus>;
+  /**
+   * DELETE /agent/skill: remove the copy an older version installed, only when it is ours and
+   * unedited. Answers the status afterwards (`not-installed` once gone, or when nothing was there);
+   * 409 `conflict` for an edited or foreign copy, 500 `internal` with a sentence on an I/O failure.
+   */
+  removeOldSkill(): Promise<AgentSkillStatus>;
   /** Start syncing: once now (after `ready`), on root changes, and on `added` events (debounced). Answers the stop function. */
   start(deps: { hub: Pick<ChangeHub, 'subscribe'>; ready: Promise<void>; debounceMs?: number }): () => void;
   /** Settles when every queued guide write has finished (tests and shutdown). */
@@ -316,6 +418,25 @@ export const createAgentSetup = (options: AgentSetupOptions): AgentSetup => {
       }, undefined),
 
     skillStatus: async () => (await classifySkill()).status,
+
+    async removeOldSkill() {
+      // The path Settings shows (a symlinked ~/.config/opencode resolved), for the failure sentence.
+      const shown = path.join(await realpathAsFarAsItExists(path.dirname(target.dir)), SKILL_NAME, 'SKILL.md');
+      let outcome: OldSkillRemoval;
+      try {
+        outcome = removeOwnedSkillFileSync(target.dir, target.file);
+      } catch (error) {
+        log.warn('agent.old-skill-remove-failed', { path: shown, code: codeOf(error) ?? null, error: errorText(error) });
+        throw new ApiError('internal', removalFailure(error, shown));
+      }
+      if (outcome === 'edited') throw new ApiError('conflict', OLD_SKILL_EDITED);
+      if (outcome === 'foreign') throw new ApiError('conflict', OLD_SKILL_FOREIGN);
+      if (outcome === 'removed') {
+        removeFolderIfEmpty(target.dir, log);
+        log.info('agent.old-skill-removed', { path: shown });
+      }
+      return (await classifySkill()).status;
+    },
 
     start({ hub, ready, debounceMs = GUIDE_SYNC_DEBOUNCE_MS }) {
       let stopped = false;
