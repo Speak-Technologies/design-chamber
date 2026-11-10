@@ -6,7 +6,54 @@ tools, the chat's Work Status, the `@` menu and the chat reply. Authority: `docs
 (architecture and lanes), `docs/BRIEF.md` (owner decisions), `AGENTS.md`. Format follows
 `documentation/specs/phase-1-review-loop.md` and `agent-render-and-check.md`.
 
-Status: design, not built. Branch `feat/sdk-2-7`. Nothing here is committed by the architect.
+Status: built (2026-11-10) on `feat/phase-1-5`. The design below is kept as written; where the
+code went another way, the list just below says so, and `docs/SPEC.md` describes the code.
+
+## As built (2026-11-10)
+
+Where the code departs from the plan below, checked against `feat/phase-1-5`:
+
+- **One PR.** PR 1 (`feat/sdk-2-7`) and the six sibling branches were merged into `feat/phase-1-5`,
+  which goes to `master` as one PR (owner's decision), not seven (§10).
+- **Checks say whether a browser exists.** `ChecksResponse` and `ChecksSummary` gain `browser: boolean`.
+  `canRun` means "a run can start now", which is also false while another design is being checked;
+  `verified()` in `model/checks-model.ts` reads `!browser` for a never-checked design, so a check
+  running elsewhere does not turn a badge green or read as "no browser" (§3.7, §U5.2).
+- **Which folder is a project.** A chat started with no project still has a `directory`: OpenChamber
+  keeps such chats in `~/.config/openchamber/chats/<date>/session-<uuid>`. So the status frame keeps the
+  host's `directory` only when `listProjects` lists it (`projectDirectoryOf`, compared with
+  `sameDirectory`), and `GET /status/designs` treats what it receives as the project; with a project, a
+  design that names none is left out unless it is this chat's (§U5.3).
+- **Work Status Check reasons.** Check is disabled with one of four sentences: nothing written yet, check
+  state not read, no browser, another design being checked. `browser` tells the last two apart. The
+  frame's timing limits (`STATUS_STARTING_GIVE_UP_MS`, `STATUS_INDEX_WAIT_MS`, `STATUS_CHECK_READ_MS`)
+  moved into `src/shared/limits.ts` (§U5.2, §3.6).
+- **DirectionPick layout.** Four options go two per row under 480 px, not 360 px; under 360 px every
+  pick wraps two per row (§U8.1).
+- **Keep your place** (§3.8) was built in PR 1.
+- **Linking from session events.** Linking is no longer guest reconciliation only. The service reads the
+  chips a chat carries from every session event (`src/service/session-links.ts`) and links a `/design`
+  or `/page` stub to that chat while the design has no chat yet, never moving it from one chat to
+  another. This is what links designs started in a chat with no project, which no guest's
+  `onSessions(projectId)` lists, and it works with no Design Chamber window open. A per-design marker in
+  the chip that gates the link is being added on `feat/sdk-2-7`, so a chip from a deleted design cannot
+  claim a new design with the same folder name. Still never linked by timing (§8, Q4).
+- **`openInRail`** takes the open request back on any `openSurface` failure, then answers `not-here` for
+  `NO_DIRECTORY` / `UNSUPPORTED` and rethrows the rest (§3.2).
+- **Claude Code harness (§12.3 step 3.6, the §2 NOT FOUND row).** Sessions run through the Claude Code
+  harness inside OpenChamber get the instructions note, the skill, the chat blocks and the
+  `design_check` tool, which they see as `mcp__openchamber__design_check` (seen live).
+- **Block syntax.** The host draws a block only from a fenced `openui-lang` block whose first line is
+  `root = Stack([...])`; a bare `root = DesignCard("slug")` shows "This block could not be drawn". The
+  instructions note spells the form out with an example for each block (§U2.2, §U7, §U8).
+- **Threat model residual (§6).** The runtime check guarantees which binary the tool runs, not which
+  script: `dist/cli/dc.mjs` sits in the extension folder, which the user can write, the same class as
+  `dist/service/main.js`, which OpenChamber already runs from there.
+- **KI-12, accepted.** The design index lags a new link by about 0.6 s, so a design linked at the very
+  end of a turn gets no turn version from that turn's event; the quiet-period auto version holds the
+  files (§U4).
+- **BRIEF lines (§13.1, Q8)** were pasted with one correction: "A design that no chat is linked to is
+  never linked automatically." became a line that matches the linking above.
 
 ---
 

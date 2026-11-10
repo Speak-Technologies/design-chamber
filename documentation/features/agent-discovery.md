@@ -26,7 +26,7 @@ All of it is plain text, written without em dashes.
 
 Size caps: the note 4 096 characters (OpenChamber's limit; a very long folder path loses the launcher clause first), guide 8 000, snippet 1 000. A designs folder path so long that a text would pass its cap, or one with a control character in it, is refused rather than written or sent.
 
-**Not verified yet:** whether the note, the skill and the `design_check` tool also reach chats run through the Claude Code harness inside OpenChamber (Phase 1.5 spec §12.3 step 3.6). Until that is checked, the guide and `/design` are what such a chat can rely on.
+**Chats run through the Claude Code harness** inside OpenChamber get all of it too (checked live on 2026-11-10, Phase 1.5 spec §12.3 step 3.6): the note, the `design-chamber` skill, the chat blocks and the `design_check` tool, which shows up there as `mcp__openchamber__design_check`. They need nothing extra.
 
 ## The ownership rule (never overwrite the user's file)
 The guide carries a marker with a hash of its own text on its first line (`<!-- design-chamber:guide v1 sha256:… -->`). Design Chamber only rewrites it while the marker is there and the hash still matches, meaning nobody changed it.

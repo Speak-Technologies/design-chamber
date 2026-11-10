@@ -2,17 +2,19 @@
 
 Status: v1 spec, 2026-10-26; updated 2026-11-01 for agent guidance and pages (§14, audit entry
 "Agent guidance and pages") and 2026-11-08 for Phase 0 and Phase 1 as built (§14, audit entry
-"Phase 0 and Phase 1"). Authority for architecture, contracts and lanes (see `AGENTS.md`).
+"Phase 0 and Phase 1") and 2026-11-10 for Phase 1.5 as built (§14, audit entry "Phase 1.5").
+Authority for architecture, contracts and lanes (see `AGENTS.md`).
 Product decisions live in `docs/BRIEF.md` and are not re-decided here. Every platform claim
 cites OpenChamber source at commit `0056bf6a9` (`~/Documents/GitHub/openchamber`, "OC:" below)
 or a spike in `spikes/` that was run on this machine (Windows 11, Chrome + Edge, Node 24.21).
 
-**2026-11-10: Phase 1.5 (OpenChamber SDK 2.7), planned.** Design:
-`documentation/specs/phase-1-5-sdk-2-7.md` ("P15" below, with its section numbers). Everything marked
-**Phase 1.5, planned** describes the agreed design, not code that exists yet; an "as built" pass
-replaces those marks when each branch merges (P15 T15). Unmarked text still describes what is built.
-SDK 2.7 facts (F24 on) cite the installed `node_modules/@openchamber/sdk` 2.7.0, because the
-OpenChamber source is not on the machine this pass was written on.
+**2026-11-10: Phase 1.5 (OpenChamber SDK 2.7), as built.** Design:
+`documentation/specs/phase-1-5-sdk-2-7.md` ("P15" below, with its section numbers; its "As built"
+section lists where the code departs from the plan). Text marked **Phase 1.5** describes code on
+`feat/phase-1-5` (PR 1 `feat/sdk-2-7` plus the six sibling branches, merged into one PR to `master`
+by the owner's decision), checked against that code in the as-built pass (P15 T15). SDK 2.7 facts
+(F24 on) cite the installed `node_modules/@openchamber/sdk` 2.7.0, because the OpenChamber source is
+not on the machine this pass was written on, or the live click-through in OpenChamber 2.7.0.
 
 ---
 
@@ -44,9 +46,10 @@ OpenChamber source is not on the machine this pass was written on.
 10. The review loop (§10.9, §13.3): a build strip that says what the linked agent is doing, an
     ask bar under the wall that sends the user's words (optionally about one element) to the
     linked chat, "Send this" for one pin, and restore with Undo instead of a confirm.
-11. **Phase 1.5, planned** (OpenChamber ≥ 2.7.0): reach the user where they already look. Every
-    agent gets short instructions and a built-in `design-chamber` skill (§11.6); OpenCode agents get a
-    `design_check` tool (§9.12); a version after every agent turn with no window open (§9.11); a
+11. **Phase 1.5** (OpenChamber ≥ 2.7.0): reach the user where they already look. Every
+    agent gets short instructions and a built-in `design-chamber` skill (§11.6); agents OpenChamber
+    runs get a `design_check` tool (§9.12; OpenCode through the plugin, and Claude Code harness
+    sessions see it too, F34); a version after every agent turn with no window open (§9.11); a
     Designs section in the chat's Work Status (§9.13, §13.4); designs in the composer's `@` menu
     (§9.14); a design card and a "pick a direction" block in agent replies (§13.4). Installable from
     the Git URL through a CI-built `release` branch (§5).
@@ -62,15 +65,14 @@ OpenChamber source is not on the machine this pass was written on.
 - No runtime `fetch()`/XHR of local files from inside a design, no ES-module graphs across files,
   no remote assets (CDN scripts, web fonts, remote images): the host CSP blocks them (§4.1).
 - No automatic move of designs when the root changes.
-- No writes to the user's OpenCode/OpenChamber config, except the user-clicked skill install
-  (§11.5), which writes one file and never touches opencode.json. **Phase 1.5, planned:** the skill
-  and the plugin ship in the manifest and reach OpenCode through OpenChamber's managed config (F30),
-  so the install is removed; the only remaining write in OpenCode's folder is deleting an older
-  copy we installed, on the user's click (§11.6).
+- No writes to the user's OpenCode/OpenChamber config. **Phase 1.5:** the skill and the plugin
+  ship in the manifest and reach OpenCode through OpenChamber's managed config (F30), so the
+  Settings skill install is gone; the only remaining change in OpenCode's folder is deleting an
+  older copy we installed, on the user's click (§11.6). opencode.json is never touched.
 - **Phase 1.5:** no `design_render` tool (the check already returns its PNGs), no app-drawn Work
   Status `source` (it cannot open the rail), no session-event `content` (no transcript grant), no
-  automatic linking of a design to a chat by timing, no live design HTML inside chat blocks, no
-  `dist/` on `master` (P15 §8).
+  linking of a design to a chat by timing (a design is linked only to the chat that carries its
+  chip, §10.5), no live design HTML inside chat blocks, no `dist/` on `master` (P15 §8).
 
 ---
 
@@ -116,8 +118,10 @@ SDK 2.7 facts for Phase 1.5 (verified in `node_modules/@openchamber/sdk` 2.7.0; 
 | F31 | Blocks: ≤ 4, description ≤ 120, args from a model (untrusted), `answerBlock` only from a click (≤ 2 000), `setHeight` ≤ 960; frame mounts when the block is finished and on screen. | `dist/manifest.d.ts:778-805`; `dist/contract.d.ts:76-83`; `dist/host.d.ts:59-65`; `API.md:307-309` |
 | F32 | `openSurface('plugin:<panel id>')` shows our rail panel and keeps an open one open (the page still cannot be opened, F11). | `dist/host.d.ts:105-110`; `DOCUMENTATION.md:38` |
 | F33 | OpenCode bundled with OpenChamber is a Bun binary at `<install>/resources/opencode-cli/opencode` (Linux seen; macOS and Windows layouts NOT FOUND — verify); `process.getBuiltinModule` works in it; it can spawn the OpenChamber binary with `ELECTRON_RUN_AS_NODE=1` to run `dist/cli/dc.mjs`. | run 2026-11-10 (opencode 2.2.6, Bun 1.4.4) |
-| F34 | Whether plugin tools, skills and instructions reach sessions run through the Claude Code harness. | NOT FOUND — verify (P15 §12.3 step 3.6) |
+| F34 | Sessions run through the Claude Code harness inside OpenChamber get the instructions note, the bundled skill, the chat blocks and the `design_check` tool, which they see as the MCP tool `mcp__openchamber__design_check`. | Live, OpenChamber 2.7.0 on Linux, 2026-11-10 (P15 §12.3 step 3.6); recorded in `documentation/features/agent-discovery.md` |
 | F35 | The host appends a scrollbar script to every served guest HTML; `theme.tokens` gains the `*Text` colours. No 2.5 → 2.7 change breaks the build (`npm run typecheck` passes on 2.7.0). | `DOCUMENTATION.md:40`; `API.md:106-110` |
+| F36 | The host draws a chat block only from a fenced `openui-lang` block whose first line is `root = Stack([...])`; a bare `root = DesignCard("slug")` shows "This block could not be drawn". The SDK docs give no syntax. | Live, 3 of 3 tries, 2026-11-10; `documentation/features/agent-instructions.md` |
+| F37 | A chat opened with no project lives in OpenChamber's own folder, `~/.config/openchamber/chats/<date>/session-<uuid>`. That folder is the frame's `directory` but not a project in `listProjects`, so `onSessions(projectId)` never lists such a chat. | Live, 2026-11-10 (Linux) |
 
 ---
 
@@ -168,7 +172,7 @@ Decisions:
   the service (no token), so `dist/cli/dc.mjs` reads the files and launches its own browser with
   the shell's own privileges, and answers with an exit code (§9.9).
 
-**Phase 1.5, planned** (P15 §0, §3). New pieces around the same service, none of which sees the token
+**Phase 1.5** (P15 §0, §3). New pieces around the same service, none of which sees the token
 except the service itself:
 - `dist/status/` (Work Status frame) and `dist/blocks/` (chat block frame, one entry for both blocks):
   small IIFE guests with the panel's sandbox and grants, talking to the service through
@@ -178,6 +182,7 @@ except the service itself:
 - `dist/skills/design-chamber/` (bundled skill) and the instructions text the service stores with
   `setInstructions` (§11.6).
 - The host posts session events, `@` searches and resolves straight to the service (§7, §9.11, §9.14).
+  Inside the service: the design index, the activity tracker and the chip linker (§9.10, §9.11, §10.5).
 
 ---
 
@@ -311,10 +316,11 @@ the rail and calls `openContextSurface`, which **toggles** (it closed an open ra
 message), so the hidden background frame handles the action itself (§10.7). There is no
 `/artifact` alias: the command was renamed `/page` outright (2026-11-01).
 
-### 5.1 Manifest and distribution, Phase 1.5, planned (P15 §U1)
+### 5.1 Manifest and distribution, Phase 1.5 (P15 §U1)
 
-The block above is the 2.5 manifest as built. Phase 1.5 keeps every key and `apiVersion: 1`, and adds
-them all in one release so users approve once:
+The block above is the 2.5 manifest. Phase 1.5 keeps every key and `apiVersion: 1`, and adds these
+(as built in `package.json`, all in one release so users approve once), plus the script
+`"guest-check": "node scripts/guest-check.mjs"`:
 
 ```
 engines.openchamber: ">=2.7.0"                       devDependencies "@openchamber/sdk": "2.7.0" (exact)
@@ -356,7 +362,8 @@ top of branch `release`, tags it `release-vX.Y.Z`, and attaches the `npm run pac
 Release. Install URLs: `https://github.com/Speak-Technologies/design-chamber#release` (latest) and
 `…#release-vX.Y.Z` (pinned); the README link is
 `openchamber://extensions/install?url=<encodeURIComponent of the latest URL>`. `release` is outside the
-`master` protection rule. Version `0.2.0` at release.
+`master` protection rule. Version `0.2.0` at release (the main agent bumps `package.json`; the branch
+still says `0.1.0` until then).
 
 ---
 
@@ -528,11 +535,12 @@ seam: `DC_SETTINGS_PATH` (tests only — host never passes custom env, F9).
 `{ "version":1, "root"?: string, "previousRoots"?: string[] (≤10, newest first),
 "chromePath"?: string, "downloadsDir"?: string }`. Corrupt → treated as absent + logged; atomic writes.
 
-### 6.6 Runtime record, Phase 1.5, planned (P15 §U3.3)
+### 6.6 Runtime record, Phase 1.5 (P15 §U3.3)
 `runtime.json` beside `settings.json` (same folder, `designChamberDataDir` in `src/shared/app-data.ts`,
 which `settingsFilePath` then uses): `{ "v": 1, "execPath": "<process.execPath>", "electron": boolean,
-"version": "<package version>", "updated": "<iso>" }`. Written atomically by the service at start, only
-when `execPath` or `version` changed. No secret. Read only by the plugin, which never trusts it alone
+"version": "<package version>", "updated": "<iso>" }`. Written atomically by the service at start
+(`src/service/runtime-record.ts`), only when `execPath`, `electron` or `version` changed; a failure
+logs `runtime-record.write-failed` and the service carries on. No secret. Read only by the plugin, which never trusts it alone
 (§9.12). The real service gets no `XDG_CONFIG_HOME` (F9), so on Linux both sides resolve
 `~/.config/design-chamber`; the plugin ignores OpenCode's own `XDG_CONFIG_HOME` to match.
 
@@ -567,7 +575,7 @@ Types for every route live in `src/shared/api.ts` (WP0).
 | `POST /uploads` | `{ total: number(≤ 2 000 000) }` | `{ uploadId }` (TTL 10 min, ≤ 8 open) | WP1 |
 | `PUT /uploads/:id/:index` | `{ data: string }` (each ≤ 60 000 chars stringified) | `{ received }` | WP1 |
 | `GET /outbox` / `PUT /outbox` / `DELETE /outbox` | PUT `{ sessionId, slug, text, commentIds, version }` | `{ outbox \| null }` (one slot, TTL 10 min, in memory) | WP1 |
-| `POST /agent/skill` | `{ replaceEdited?: boolean }` (anything else 400); no path in the request | `{ skill: AgentSkillStatus }`; 409 `conflict` when the skill is edited and `replaceEdited` is not true, or foreign; 500 `internal` with a folder sentence on a write failure. Called only from a user click (§11.5). **Phase 1.5, planned: removed** (route, `ROUTE_KEYS`, fakes, tests, Settings button) in favour of `DELETE /agent/skill` | WP1 |
+| `POST /agent/skill` | — | **Removed in Phase 1.5** (route, `ROUTE_KEYS`, fakes, tests, Settings button); the skill ships in the manifest and `DELETE /agent/skill` below removes an older installed copy (§11.6) | — |
 | `POST /loose/import` | `{ name }`: a loose `.html`/`.htm` file directly in the root | `{ slug, title, originalMovedTo: string\|null }`; 400 `bad-request` for a name that breaks the name rule; 404 `not-found` when it is not a regular file in a fresh listing; 409 `conflict` while the same name is importing; 413 `too-large` over 20 MB (§9.8) | WP1 |
 | `GET /designs/:slug/render?screen=<id>&version=<vid>` | — | `{ key, chunks, bytes, title, missing:string[], blocked:string[], external:string[], warnings }` (builds + caches; 413 `too-large` > 60 MB) | WP2 |
 | `GET /designs/:slug/render/chunk?key=&n=` | — | **raw text** chunk n (≤ 6 000 000 UTF-8 bytes); 409 `stale` if key evicted | WP2 |
@@ -581,29 +589,29 @@ Types for every route live in `src/shared/api.ts` (WP0).
 | `POST /designs/:slug/versions/:vid/restore` | — | `{ restorePoint: VersionEntry\|null, restored: VersionEntry, before: VersionEntry }` (`before` holds the state from just before the restore: the restore point, or the newest version when the files already matched it; Undo restores it, §13.2 P4) | WP2 |
 | `POST /designs/:slug/export` | `{ format:"zip"\|"html", screen?: id }` | `{ path, bytes, format }`; 413 `too-large` naming a file over 512 MB or an archive that would need zip64 | WP2 |
 | `POST /reveal` | `{ path }` (must be an export path issued this run, or a design folder) | `{ ok:true }` | WP2 |
-| `GET /designs/:slug/checks` | — | `{ static:{ findings: CheckFinding[], partial, at }, render:{ state:"none"\|"fresh"\|"stale"\|"running"\|"unavailable"\|"failed", at\|null, artboards, skipped, findings }, counts:{ errors, warnings, notes }, canRun }` (§9.9; static findings recomputed, render part read from `check.json`; finishes inside the handler budget, `partial` past 10 s) | WP2 |
+| `GET /designs/:slug/checks` | — | `{ static:{ findings: CheckFinding[], partial, at }, render:{ state:"none"\|"fresh"\|"stale"\|"running"\|"unavailable"\|"failed", at\|null, artboards, skipped, findings }, counts:{ errors, warnings, notes }, canRun, browser }` (§9.9; static findings recomputed, render part read from `check.json`; finishes inside the handler budget, `partial` past 10 s). `canRun` = a run can start now (a browser resolves and no service run is in progress, for any design); `browser` = a browser resolves, so a false `canRun` says which reason holds | WP2 |
 | `POST /designs/:slug/checks/run` | `{}` (anything else 400) | `{ state:"running" }` at once; the job ends with a `checks` event. 409 `conflict` while another design is being checked; 422 `invalid` when no browser is found | WP2 |
 | `GET /presets` | — | `{ presets:[{ id, name, bestFor }] }` (parsed from `rules/presets/*.md`) | WP3 |
 | `POST /chip` | `{ kind:"canvas"\|"page", brief, preset?, projectDirectory?, sessionId? }` (`sessionId` validated, not stored — §10.1) | `{ slug, chip: { providerId:"design-chamber", id:"design:<slug>", title, url, text, data:{ slug, kind } } }` — creates the design (pending) + RULES.md | WP3 |
 | `POST /designs/:slug/prompt` | `{ purpose:"revision"\|"continue"\|"offline"\|"checks"\|"ask", commentIds?, anchorStates?, text?, element? }` — `anchorStates` is optional `{ [commentId]: "exact"\|"moved"\|"detached" }` from the page\'s pin placement; `text` (1..`ASK_TEXT_MAX` 12 000 after trimming) and `element` (`AskElement` = `CreateCommentBody` without `body`; `screen` null or a design screen id, `viewport` a design viewport id or `fill`) are for `ask` only | `{ text, commentIds, omitted, chip }` — revision text ≤ 16 000 (§11.4); `chip` = context chip for `startSession`. `revision` and `offline` carry the service-computed blocked-URL list (§11.4); `offline` with nothing blocked → 422 `invalid`. `checks` builds the fix request from the counted findings (§11.4), 422 `invalid` "There is nothing to fix." when none. `ask` answers `commentIds: []`; 422 `invalid` with the over-by count when too long | WP3 |
 | `POST /pages/from-message` | `{ uploadId, sessionId, sessionTitle, messageId, directory, open?: boolean }` — `open:true` leaves an open request for the rail | `{ slug, title }` or 422 `no-html` | WP3 |
-| `DELETE /open-request` | — | `{ request: { slug, created } \| null }` — takes the single open-request slot exactly once; a newer request replaces an untaken older one; expires after `OPEN_REQUEST_TTL_MS` (2 min); in memory. **Phase 1.5, planned:** `request` gains `intent: "view" \| "comment"` | WP3 |
+| `DELETE /open-request` | — | `{ request: { slug, intent: "view" \| "comment", created } \| null }` — takes the single open-request slot exactly once; a newer request replaces an untaken older one; expires after `OPEN_REQUEST_TTL_MS` (2 min); in memory. `intent` is Phase 1.5 (§10.11); `POST /pages/from-message` leaves `view` | WP3 |
 
-**Phase 1.5, planned routes** (P15 §3.5; all typed in `src/shared/api.ts`, all behind the same bearer
-check and router; PR 1 registers a graceful stub for each so the route table stays complete):
+**Phase 1.5 routes** (P15 §3.5; all typed in `src/shared/api.ts`, all behind the same bearer
+check and router; PR 1 registered a graceful stub for each and the sibling branches filled them):
 
 | Method & path | Request | Response | Owner branch |
 |---|---|---|---|
 | `POST /open-request` | `{ slug, intent?: "view"\|"comment" }` | `{ ok:true }`; slug regex then store lookup (404 "That design is no longer in your Designs folder."); replaces the slot and emits an `open` change event (§10.11) | seams (PR 1), in `routes/chat.ts` |
-| `POST /session-events` | the SDK `GuestSessionEventRequest`, read with `readSessionEventRequest` | exactly `{ ok:true }` before any work; 400 for a body that is not a session event; an event type we did not ask for → `{ ok:true }`, dropped (§9.11) | `feat/turn-events` |
+| `POST /session-events` | the SDK `GuestSessionEventRequest`, read with `readSessionEventRequest` | exactly `{ ok:true }` before any work; 400 for a body that is not a session event; an event type we did not ask for, or a session id that is empty, over `SESSION_ID_MAX` or holds a control character → `{ ok:true }`, dropped. An accepted event is queued for the chip linker (§10.5) first, then for turn events (§9.11) | `feat/turn-events`; linking `feat/sdk-2-7` |
 | `POST /mentions/search` | `{ query, directory }` | `{ items: [{ id: slug, title ≤ 120, subtitle ≤ 120 }] }` ≤ 20, from memory only (§9.14) | `feat/design-mentions` |
 | `POST /mentions/resolve` | `{ id }` | `{ text }` ≤ 16 000; 400 for a non-slug, 404 when the design is gone | `feat/design-mentions` |
-| `GET /status/designs?directory=&session=` | — | `{ rows: StatusDesignRow[] (≤ 5), total }` (§9.13) | `feat/work-status` |
-| `DELETE /agent/skill` | — | `{ skill: AgentSkillStatus }`; deletes the fixed `skillTarget` file only when ours and unedited, never a symlinked leaf; 409 `conflict` for edited or foreign; 200 when nothing is there (§11.6) | `feat/agent-skill` |
+| `GET /status/designs?directory=&session=` | — | `{ rows: StatusDesignRow[] (≤ 5), total }` (§9.13). `directory` is sent by the frame only when it is a registered project (§13.4); an empty or missing value means "no project". Both values are only compared with the in-memory index, never used as paths. A cold index (`STATUS_INDEX_WAIT_MS`) or any failure answers `{ rows: [], total: 0 }` | `feat/work-status` |
+| `DELETE /agent/skill` | — | `{ skill: AgentSkillStatus }`; deletes the fixed `skillTarget` file only when ours and unedited, never a symlinked leaf; 409 `conflict` for edited or foreign; 500 `internal` with a sentence when the system refuses the delete; 200 when nothing is there (§11.6) | `feat/agent-skill` |
 
 `GET /changes` event kinds gain `open` (a frame asked the rail to open a design) and `activity` (a
 linked chat's agent state changed); guest stores treat both as no-ops for data. `DesignSummary` gains
-`projectDirectory: string | null` (Phase 1.5, planned).
+`projectDirectory: string | null` (Phase 1.5).
 
 `DesignSummary.pending` = no entry/screen file exists yet. Thumbnail `key` = sha256 of the render
 inputs; the guest caches thumbnails by key in memory.
@@ -618,7 +626,7 @@ inputs; the guest caches thumbnails by key in memory.
   `onResolve`.
 - `dist/background/index.html` → `dist/background/main.js` (src `src/guest/background-main.ts`):
   registers `host.onResolve` synchronously; calls `POST /chip`; returns the chip. No DOM.
-- **Phase 1.5, planned:** `dist/status/` (src `src/ui/status/main.ts`, `surface: 'status'`, §13.4) and
+- **Phase 1.5:** `dist/status/` (src `src/ui/status/main.ts`, `surface: 'status'`, §13.4) and
   `dist/blocks/` (src `src/ui/blocks/main.ts`, `surface: 'block'`, dispatches on `onBlock().name`,
   §13.4). Both reuse `getGuestHost`, `createServiceClient` and, for the status frame, the change feed;
   neither loads the wall. `HostLike` (`src/guest/host.ts`) gains `onBlock`, `answerBlock`, `setHeight`,
@@ -656,9 +664,9 @@ inputs; the guest caches thumbnails by key in memory.
   `deliver(slug, prompt, design, version, busyMessage)` carries every message to the linked chat
   (`sent` | `composed` | `outbox` | `new-session`); a busy chat gets `compose({ mode: 'append' })`,
   never a replacing `prompt({ send: false })`, so the user's draft survives.
-  **Phase 1.5, planned:** `openInRail({ client, host }, slug, intent)` (§10.11) and
-  `watchOpenRequests` also taking a request on `open` events; `sameDirectory` moves to
-  `src/shared/path-compare.ts` (§9.1).
+  **Phase 1.5:** `openInRail({ client, host }, slug, intent)` (§10.11) and
+  `watchOpenRequests` also taking a request on `open` events (`takesOpenRequest`); `sameDirectory`
+  moved to `src/shared/path-compare.ts` (§9.1).
 - `build-activity.ts`: what the linked agent is doing to one design (§13.3 build strip). A pure
   reducer (`reduceBuild`, `phaseOf`, `nextDeadline`) over file events, the linked session's
   `activity`/`outcome` from `onSessions`, the design detail and the feed status;
@@ -718,11 +726,13 @@ absolute). On win32 compare case-insensitively (`toLowerCase()` of both normalis
 for every path from a request, every reference the bundler resolves, every export/reveal path.
 `isStrictlyInside(root, target)` is the disk-free core (lexical, win32 case-insensitive); the
 bundler and version restore use these two, no other containment code exists.
-**Phase 1.5, planned:** the disk-free helpers (`foldsCase`, `samePath`, `isInsideOrEqual`,
-`isStrictlyInside`, and `sameDirectory` from `src/guest/flows.ts`) move to `src/shared/path-compare.ts`
-with the path module and platform as required parameters and no runtime Node import, so the plugin
-(§9.12) and the status rows (§9.13) can bundle them; `paths.ts` re-exports them with today's defaults,
-so its tests and callers do not change. Still one containment implementation.
+**Phase 1.5:** the disk-free helpers (`foldsCase`, `isEscaping`, `samePath`, `isInsideOrEqual`,
+`isStrictlyInside`, and `sameDirectory` from `src/guest/flows.ts`) live in `src/shared/path-compare.ts`
+with the path module and platform as required parameters (`sameDirectory(a, b)` takes neither: it
+compares host and design.json folders either slash, case-folded) and no runtime Node import, so the
+plugin (§9.12), the status rows (§9.13) and the status frame can bundle them; `paths.ts` re-exports
+them with the platform's defaults, so its tests and callers did not change. Still one containment
+implementation.
 `replaceFileIfUnchanged(file, expected, data)` — tmp write, then a synchronous compare + rename only
 while the file still holds `expected` (false otherwise; Windows `EPERM`/`EBUSY`/`EACCES` on the
 rename counts as "not yet"): the primitive of the design.json two-writer merge (§6.3, §9.3).
@@ -877,9 +887,11 @@ SettingsStore, store: DesignStore, hub: ChangeHub, renders, log }` interfaces. `
 `registerXRoutes(router, ctx)` from each lane's `routes/*.ts`. `packageRoot` = two levels above
 `dist/service/main.js` (`rules/` is read from there at runtime, so rules edits need no rebuild).
 `compose.ts` also builds the agent setup (§11.5) and the loose importer (§9.8).
-**Phase 1.5, planned:** `ServiceContext` gains `designIndex` (§9.10), `hostCalls` (§9.10) and
-`activity` (§9.11); `compose.ts` wires `createTurnEvents`, `startInstructions` and
-`writeRuntimeRecord` (each a stub in PR 1, filled by its branch) and registers the stub routes of §7.
+**Phase 1.5:** `ServiceContext` has `designIndex` (§9.10), `hostCalls` (§9.10) and
+`activity` (§9.11); `compose.ts` wires `createDesignIndex`, `createHostCalls`, `createActivityTracker`,
+`createTurnEvents`, `startInstructions` and `writeRuntimeRecord`, and registers the routes of §7.
+`routes/session-events.ts` builds the chip linker (`createSessionLinks`, §10.5) itself and drains it
+on dispose.
 
 ### 9.8 Loose HTML (`loose.ts`)
 An agent without the instructions may save a page straight into the root (`<root>/pricing.html`).
@@ -950,9 +962,12 @@ One engine, two callers: the agent's CLI and the service's on-demand run.
   the files, whatever the render's own state (a timed-out screen is real), and not while a new
   run is in progress; stale ones are returned but not counted. "Ask the agent to fix" uses the
   same counted findings (`forPrompt`), so badge and prompt agree. One job at a time across all
-  designs; killed on dispose.
+  designs; killed on dispose. The answer carries `canRun` (a run can start now) and, since the
+  Phase 1.5 QA fix, `browser` (a browser resolves): `canRun` is also false while another design is
+  being checked, so only `browser` says "no browser". `badgeOf` (`model/checks-model.ts`) counts a
+  `none` render as verified only when `!browser`, so a run elsewhere never turns a badge green.
 
-### 9.10 Design index and host calls, Phase 1.5, planned (P15 §3.1, §3.3)
+### 9.10 Design index and host calls, Phase 1.5 (P15 §3.1, §3.3)
 - **`design-index.ts`** `createDesignIndex({ store, hub, log })`: `all()` (last good `DesignSummary[]`,
   newest first), `get(slug)`, `bySession(id)`, `ready(timeoutMs)`. One `store.list()` at start, then a
   refresh `DESIGN_INDEX_REFRESH_MS` after `added|removed|design|comments|files|root` events, coalesced,
@@ -962,10 +977,12 @@ One engine, two callers: the agent's CLI and the service's on-demand run.
   'saved' | 'unavailable' | 'refused'`; no callback URL (tests, old hosts) → `unavailable`, logged once;
   a refusal logs its code only.
 
-### 9.11 Session events and turn snapshots, Phase 1.5, planned (P15 §U4)
+### 9.11 Session events and turn snapshots, Phase 1.5 (P15 §U4)
 `routes/session-events.ts`: read the body with `readSessionEventRequest` (400 on `null`); check the
 session id (1..`SESSION_ID_MAX`, printable) and the type (ours only, else `{ ok:true }` and drop);
-answer `{ ok:true }` **before** any work. Logs carry only the type and an 8-character session prefix.
+answer `{ ok:true }` **before** any work: the handler only queues, first to the chip linker (§10.5,
+so on `turn-started` a link lands before that turn's snapshot looks for it), then to turn events.
+Logs carry only the type, an 8-character session prefix and, when a design gets linked, its slug.
 `turn-events.ts` `createTurnEvents({ index, versions, activity, hub, log })`: one serial queue, at most
 `TURN_EVENT_QUEUE_MAX` pending, coalesced per session, oldest dropped with a warning. Per event: skip
 subagents (`parentId` set); `activity.record` (`turn-started` → working, `turn-finished` → done,
@@ -976,10 +993,15 @@ the event may itself have started the service after an idle stop. Loaded: slugs 
 (§9.5, idempotent, deduped). Timed out: call `versions.turn(sessionId)` anyway (it lists the store
 itself), so a cold start costs a disk walk, not a lost snapshot. Loaded and no slug: no disk access.
 Designs no chat is linked to get no turn version (quiet-period auto versions still apply).
+Known gap (KI-12, accepted): the index refreshes about 0.6 s (`WATCH_DEBOUNCE_MS` +
+`DESIGN_INDEX_REFRESH_MS`, plus the list) after a `design.json` change, so a design linked in the last
+moment of a turn is not yet in `bySession` when `turn-finished` arrives and that one turn gets no
+turn version from the event; the auto version still holds the files.
 
-### 9.12 The `design_check` tool, Phase 1.5, planned (P15 §U3)
+### 9.12 The `design_check` tool, Phase 1.5 (P15 §U3)
 Extends §9.9; the launcher and CLI stay as they are and remain the fallback for agents the plugin does
-not reach (F30, F34). `runtime-record.ts` writes `runtime.json` (§6.6). The plugin
+not reach (F30). Sessions run through the Claude Code harness inside OpenChamber do get the tool,
+as `mcp__openchamber__design_check` (F34). `runtime-record.ts` writes `runtime.json` (§6.6). The plugin
 (`src/plugin/index.ts` → `dist/plugin/`) default-exports `{ id: 'design-chamber', setup }` and adds one
 tool, `design_check` (`options: { codemode: false }`: about 150 tokens in every OpenCode session, so the
 agent finds it without searching; the instructions name it). Input `{ design, screens?, static? }`.
@@ -1003,17 +1025,25 @@ agent finds it without searching; the instructions name it). Input `{ design, sc
    exit 2 → "The check could not run: " + stderr ≤ `CHECK_TOOL_ERROR_TEXT_MAX`; never throws.
 The CLI finds the root from settings exactly as the service does, and re-contains the target (§9.9).
 
-### 9.13 Work Status rows, Phase 1.5, planned (P15 §U5.3)
+### 9.13 Work Status rows, Phase 1.5 (P15 §U5.3)
 `routes/status.ts` + `status-designs.ts`: pure `pickStatusDesigns(designs, { directory, sessionId,
-working, now, platform })`: designs linked to `session` first, then ones an agent is working on in the
+working, now })`: designs linked to `session` first, then ones an agent is working on in the
 project, then the project's designs (`projectDirectory`, `sameDirectory`) updated within
-`STATUS_RECENT_MS`; no directory → the last `STATUS_RECENT_MS` anywhere; ≤ `STATUS_ROWS_MAX` rows plus
-`total`. Row: `{ slug, title, kind, here, agent: 'writing'|'working'|'failed'|null, lastFile,
+`STATUS_RECENT_MS`; no directory → the same order with the project test dropped (anywhere); with a
+directory, a design whose `projectDirectory` is null is left out unless it is this chat's;
+≤ `STATUS_ROWS_MAX` rows plus `total`. **Which folder is a project** is decided in the frame, not the
+service: `projectDirectoryOf` (`model/status-model.ts`) keeps the host's `directory` only when it
+matches a registered project from `listProjects` (`sameDirectory`), because a chat with no project
+still has a `directory` (F37); a `listProjects` that fails or times out counts the folder as a project.
+Row: `{ slug, title, kind, here, agent: 'writing'|'working'|'failed'|null, lastFile,
 checks: ChecksSummary | null, pending, openComments }`. `checks` from `ensureChecksService(ctx).get`, at
-most one per row, in parallel; a slow or failing read gives `null`. `lastFile` from the module's own
-`hub.subscribe` (agent files only, `agentFiles`), empty at service start.
+most one per row, in parallel, each within `STATUS_CHECK_READ_MS`; a slow or failing read gives `null`,
+and a pending design gets `null` without a read. The index is waited for `STATUS_INDEX_WAIT_MS`; a cold
+index or any failure answers the empty list (Work Status is a glance, not a gate). `lastFile` from the
+module's own `hub.subscribe` (agent files only, `agentFiles`, with the restore quiet window), empty at
+service start.
 
-### 9.14 Mentions, Phase 1.5, planned (P15 §U6)
+### 9.14 Mentions, Phase 1.5 (P15 §U6)
 `routes/mentions.ts`, `mentions.ts`, `src/shared/agent/mention.ts`. Search answers from
 `designIndex.all()` only (query clipped to `MENTION_QUERY_MAX`, NFKC-lower-cased; a cold index waits
 `MENTION_INDEX_WAIT_MS`, then answers `[]`); `searchDesigns` ranks title prefix, slug prefix, contains,
@@ -1023,9 +1053,10 @@ slug regex, store lookup, then `buildMentionText` (≤ 16 000): the folder, file
 comments (labelled as the user's words, quotes as design text; oldest dropped first when over the cap,
 with a count), and the read time.
 
-### 9.15 Phase 1.5 limits, planned (P15 §3.6)
-All in `src/shared/limits.ts`, added in PR 1 so no sibling edits that file; SDK limits are imported,
-never copied (`SERVICE_INSTRUCTIONS_MAX`, `MENTIONS_ITEMS_MAX`, `MENTION_TITLE_MAX`, `MENTION_ID_MAX`,
+### 9.15 Phase 1.5 limits (P15 §3.6)
+All in `src/shared/limits.ts`, added in PR 1 so no sibling edited that file (the three Work Status
+timing limits below moved there later, with the `browser` fix on `feat/sdk-2-7`); the file stays
+import-free so the plugin can inline it. SDK limits are imported where they are used, never copied (`SERVICE_INSTRUCTIONS_MAX`, `MENTIONS_ITEMS_MAX`, `MENTION_TITLE_MAX`, `MENTION_ID_MAX`,
 `MENTION_TEXT_MAX`, `GUEST_BLOCK_HEIGHT_MAX`, `GUEST_BLOCK_ANSWER_MAX`, `GUEST_STATUS_SECTION_HEIGHT_MIN`/
 `_MAX`, `GUEST_BLOCK_DESCRIPTION_MAX`, `GUEST_MENTIONS_LABEL_MAX`).
 
@@ -1042,6 +1073,9 @@ never copied (`SERVICE_INSTRUCTIONS_MAX`, `MENTIONS_ITEMS_MAX`, `MENTION_TITLE_M
 | `CHECK_TOOL_TIMEOUT_MS` | 180 000 | `THUMB_RETRY_DELAYS_MS` | 2 000, 5 000, 10 000 |
 | `CHECK_TOOL_KILL_GRACE_MS` | 5 000 | `BLOCK_TITLE_MAX` / `BLOCK_SCREEN_TITLE_MAX` / `BLOCK_SCREENS_SHOWN` | 80 / 40 / 6 |
 | `CHECK_TOOL_STDOUT_MAX_BYTES` | 1 048 576 | `DIRECTION_QUESTION_MAX` / `DIRECTION_LABEL_MAX` / `DIRECTION_OPTIONS_MIN`..`_MAX` | 200 / 80 / 2..4 |
+| `STATUS_STARTING_GIVE_UP_MS` | 10 000 | `STATUS_INDEX_WAIT_MS` / `STATUS_CHECK_READ_MS` | 1 500 / 1 500 |
+
+`LINKED_CHIPS_MAX` (16, design chips read from one session event) lives in `src/service/session-links.ts`.
 
 ---
 
@@ -1054,7 +1088,8 @@ pathToFileURL(designPath)` (≤ 2 000, else `""`), `data = { slug, kind }`.
 `onResolve({command,args})` → `POST /chip { kind: command==="design"?"canvas":"page", brief:
 args, projectDirectory: ready.directory, sessionId: ready.session?.id }` → return `chip`. The
 service creates the design immediately (`pending`), so it appears in the list. `sessionId` is not
-written yet (the user may never send); linking happens by reconciliation (10.5). Errors are thrown
+written yet (the user may never send); the link comes later from the chip the chat carries (10.5:
+the service's chip linker from session events, and the guest reconciliation). Errors are thrown
 with the service's message (host shows it, F15). Budget: chip build < 3 s (discovery capped).
 
 ### 10.2 New design from the extension (rail/page "New" dialog)
@@ -1097,11 +1132,27 @@ filtered to the sent ids, and the result toast. "Send this" first re-checks the 
 status in the store (the card may be older than a send from the list, and the service sends a
 named comment whatever its status), saves an edited body, then sends. Open comments only.
 
-### 10.5 Session reconciliation (rail + page, on mount and on session snapshot changes)
-`listProjects` → project for the current directory → `onSessions(projectId)` (1 subscription).
-For each session record, items with `id` `design:<slug>`: if that design's `sessionId` is null, or
-its session is not in any loaded snapshot with `state:"ready"`, `PATCH sessionId` to the newest
-such session (by `updatedAt`). Uses F16.
+### 10.5 Linking a design to its chat
+The evidence is always the chip the user sent, never timing. Two paths, both idempotent:
+1. **Service, from session events (Phase 1.5, `src/service/session-links.ts`).** OpenChamber lists the
+   chips a chat carries in every session event's `linked` as `guest:design-chamber:design:<slug>`.
+   `chipSlugsOf` reads at most `LINKED_CHIPS_MAX` valid, unique slugs (`SLUG_PATTERN`); a subagent's
+   event (`parentId` set) is ignored. One worker drains a per-chat queue (latest event wins for its
+   chat, at most `TURN_EVENT_QUEUE_MAX` chats, oldest dropped with a warning). Per slug: a design the
+   index already shows linked costs no disk read; otherwise `store.get` (a chip that outlived its design
+   is skipped) and, only while the design's `sessionId` is still null, `store.patch({ sessionId })`.
+   It never moves a design from one chat to another. This is the path that links a `/design` or
+   `/page` stub started in a chat with no project (F37), and it works with no Design Chamber window
+   open. One failing design does not stop the others; the chat's next event tries again. **Being
+   added on `feat/sdk-2-7`:** a per-design marker carried in the chip gates the link, so a chip from a
+   deleted design cannot claim a new design that reuses its slug (QA regression
+   `test/service/core/session-links-stale-chip.test.ts`, marked todo until the fix lands).
+2. **Guest reconciliation (rail + page, on mount and on session snapshot changes).** `listProjects`
+   → project for the current directory → `onSessions(projectId)` (1 subscription). For each session
+   record, items with `id` `design:<slug>`: if that design's `sessionId` is null, or its session is
+   not in any loaded snapshot with `state:"ready"`, `PATCH sessionId` to the newest such session (by
+   `updatedAt`). Uses F16. It sees project chats only, and it is the path that repairs a link to a
+   chat that is gone.
 
 ### 10.6 Turn snapshots
 Two sources, both → `POST /versions/turn {sessionId}` (deduped per sessionId per 2 s across rail+page
@@ -1115,7 +1166,7 @@ via the service being idempotent on unchanged trees):
    previous snapshot gets its turn snapshot (`finishedTurns`, `watchSessions`).
 Quiet-period auto snapshots (§4.9) cover a turn snapshot that failed; a turn whose files an `auto`
 version already holds relabels it (§9.5).
-3. **Phase 1.5, planned:** session events (§9.11) take the same `versions.turn(sessionId)` in the
+3. **Phase 1.5:** session events (§9.11) take the same `versions.turn(sessionId)` in the
    service for every linked design, with no Design Chamber window open, for `turn-finished` and
    `turn-failed`. Sources 1 and 2 stay: all three are idempotent, and a frame catches a turn whose event
    the host dropped during its 30 s backoff (F26).
@@ -1161,25 +1212,29 @@ blocked for `offline`) comes from the first call, before any host call. The call
 is `askRequestToast(outcome)` (`src/ui/model/ask-bar-model.ts`): none for `composed`, whose busy
 toast already said it, else the same sentence as the ask bar.
 
-### 10.11 Open in the rail from Work Status and chat blocks, Phase 1.5, planned (P15 §3.2)
+### 10.11 Open in the rail from Work Status and chat blocks, Phase 1.5 (P15 §3.2)
 `openInRail({ client, host }, slug, intent)` in `flows.ts` (injected client and host, unit-tested):
-`POST /open-request { slug, intent }` → `host.openSurface(PANEL_SURFACE_ID)` (F32). 404 → `gone`;
-`NO_DIRECTORY` / `UNSUPPORTED` → `not-here`, and it then calls `DELETE /open-request` (failure ignored;
-the TTL covers it) so a stale request cannot pop open later. The rail takes the request on mount, on
+`POST /open-request { slug, intent }` → `host.openSurface(PANEL_SURFACE_ID)` (F32). 404 → `gone`.
+Any `openSurface` failure takes the request back with `DELETE /open-request` (failure ignored; the
+TTL covers it) so a stale request cannot pop open later; then `NO_DIRECTORY` / `UNSUPPORTED` answer
+`not-here` and any other error reaches the caller. The rail takes the request on mount, on
 `added` and on `open` events, and opens `mountDesignView({ …, startIn })`: `comment` starts in Edit
 mode with Comment pressed, `view` keeps today's default; a `comment` request for the design already
 open in the rail reaches it through `DesignViewHandle.startComment()` (switch to Edit, no remount).
 The full-screen page still cannot be opened from code (F11).
 
-### 10.12 Keep your place across reloads, Phase 1.5, planned (P15 §3.8)
+### 10.12 Keep your place across reloads, Phase 1.5 (P15 §3.8)
 The panel and page frames reload whenever the extension updates (folder edits, rebuilds, Git
 updates), and both used to start on the list. `src/ui/components/place-memory.ts` (`keepPlace`) keeps
-the open design's slug in `host.storage` under `place:panel` / `place:page` (one key per surface; instance
-scope, F21): `remember(slug)` when a design opens, `clear()` when the user goes back to the list. On
-start it reads the key once, waits for the designs list, and `decideRestore` (`src/ui/model/place-model.ts`,
-pure) says what to do: `open` when the slug is in the list, `drop` (clear the key, no message) when it
-is not, `skip` when a design is already open (an open request or the user's own choice wins) or the stored
-value is unreadable (`readPlace` checks `SLUG_PATTERN`; storage is untrusted). The decision is made once.
+the open design's slug in `host.storage` under `place:panel` / `place:page` as `{ slug }` (one key per
+surface; instance scope, F21): `remember(slug)` when a design opens, `clear()` (stores `null`) when the
+user goes back to the list. On start it reads the key once and `decideRestore`
+(`src/ui/model/place-model.ts`, pure) says what to do on every store change until it settles: `wait`
+until the designs list has loaded, `open` when the slug is in the list, `drop` (clear the key, no
+message) when it is not, `skip` when a design is already open (an open request or the user's own choice
+wins) or the stored value is unreadable (`readPlace` checks `SLUG_PATTERN`; storage is untrusted). The
+decision is made once; `remember` or `clear` before then settles it too. Wired in `rail-app.ts` and
+`page-app.ts`.
 
 ---
 
@@ -1305,8 +1360,10 @@ Design: `documentation/specs/agent-guidance-and-pages.md` §3.3, §3.4, §4, §5
   Settings, never throw. Deleting the guide brings it back; editing it stops all updates.
 - **Skill** `<cfg>/opencode/skills/design-chamber/SKILL.md`, `<cfg>` = `XDG_CONFIG_HOME` when set,
   absolute and NUL-free, else `<home>/.config`, on every OS (`skillTarget`, pure, posix and win32
-  tested). Written only by `POST /agent/skill` from a click in Settings (Phase 1.5: that route and the Install button are removed by PR 1; the skill ships in the manifest and Settings only removes an old copy, §11.6); never on start or root
-  change (a root change turns it `outdated` and the UI offers Update). Frontmatter `name:
+  tested). Before Phase 1.5 it was written only by `POST /agent/skill` from a click in Settings,
+  never on start or root change. **Phase 1.5:** that route and the Install button are gone; the skill
+  ships in the manifest and Settings only reports an older copy and removes it on a click (§11.6).
+  What follows describes the copy older versions wrote, which the status and removal still read. Frontmatter `name:
   design-chamber`, a description ≤ 1 024, `metadata` with `generator: design-chamber` and the hash.
   `foreign` is never written; `edited` only with `replaceEdited`. The leaf folder and `SKILL.md`
   must not be symlinks (symlinks above `skills/` are the user's own setup); tmp + rename with the
@@ -1322,14 +1379,18 @@ Design: `documentation/specs/agent-guidance-and-pages.md` §3.3, §3.4, §4, §5
   changes the hashes, so an unedited guide is rewritten at start and an installed skill shows
   `outdated`. The service asks the launcher for the command before writing either, so the
   launcher exists before any text names it.
-- **Phase 1.5, planned:** the guide stays (it is all an agent outside OpenChamber reads) and names
-  `design_check` first, the launcher second; the snippet stays; the skill install leaves (§11.6).
+- **Phase 1.5:** the guide stays (it is all an agent outside OpenChamber reads) and names
+  `design_check` first, the launcher second; the snippet stays; the skill install is gone (§11.6).
 
-### 11.6 Instructions and the bundled skill, Phase 1.5, planned (P15 §U2)
+### 11.6 Instructions and the bundled skill, Phase 1.5 (P15 §U2)
+Reach (F34): the note, the skill and the blocks reach OpenCode sessions and sessions run through the
+Claude Code harness inside OpenChamber alike.
 - **Instructions** (`src/shared/agent/instructions.ts` `buildInstructions({ root, platform,
   checkCommand })`, pure): a few plain lines: the designs folder, one folder per design, load the
   `design-chamber` skill first, page vs canvas, check with `design_check` or the launcher command,
-  `DesignCard` and `DirectionPick`, `/design` and `/page`. Root refused with a control character; ≤
+  `DesignCard` and `DirectionPick` (spelled out as a fenced `openui-lang` block whose first line is
+  `root = Stack([...])`, with one example each, because the host draws nothing else, F36), `/design`
+  and `/page`. Root refused with a control character; ≤
   `SERVICE_INSTRUCTIONS_MAX` (drops the command clause first, then throws). `src/service/instructions.ts`
   `startInstructions` sends it with `hostCalls.setInstructions` (directory `null`) after the watcher
   baseline and on every root change, skipping identical text, no retry loop. Gap accepted: nothing
@@ -1391,7 +1452,7 @@ rules/**      rules author (read-only for WPs)
 spikes/**     architect
 dist/         build output, gitignored
 
-Phase 1.5, planned (P15 §10; owner branch in brackets, "PR 1" = feat/sdk-2-7 seams):
+Phase 1.5 (P15 §10; branch that built it in brackets, "PR 1" = feat/sdk-2-7 seams):
 scripts/guest-check.mjs  .github/workflows/release.yml                 main agent [PR 1]
 src/shared/path-compare.ts                                             WP0 [PR 1]
 src/shared/app-data.ts                                                 [feat/check-tool]
@@ -1401,16 +1462,18 @@ src/service/design-index.ts host-calls.ts                              [PR 1]
 src/service/instructions.ts                                            [feat/agent-skill]
 src/service/runtime-record.ts                                          [feat/check-tool]
 src/service/turn-events.ts activity.ts routes/session-events.ts        [feat/turn-events]
+src/service/session-links.ts                                           [feat/sdk-2-7, after the siblings]
 src/service/status-designs.ts routes/status.ts                         [feat/work-status]
 src/service/mentions.ts routes/mentions.ts                             [feat/design-mentions]
 src/plugin/**                → dist/plugin/                            [feat/check-tool]
 src/ui/status/** model/status-model.ts → dist/status/                  [feat/work-status]
 src/ui/blocks/** model/block-args.ts model/block-view-model.ts → dist/blocks/   [feat/chat-blocks]
+src/ui/components/place-memory.ts model/place-model.ts                 [PR 1]
 dist/skills/design-chamber/  (built from rules/** by build step 10)
 test/plugin/** test/shared/app-data.test.ts test/package-tree.test.ts
 test/ui/visual/scenarios/{agent-skill,work-status,chat-blocks}.mjs     each its branch
 ```
-Every new stub file above is created in PR 1 so the sibling branches only fill bodies (P15 §10.1).
+Every new stub file above was created in PR 1 so the sibling branches only filled bodies (P15 §10.1).
 Build (`scripts/build.mjs`, esbuild ^0.24, as design-canvas `scripts/build.mjs`): (1) bundle
 `src/guest/bridge/bridge.ts` → IIFE string (`write:false`, minified; the build fails if it is < 1 kB,
 i.e. the WP0 placeholder, or if `__DC_BRIDGE__` is left unreplaced); (1b) bundle
@@ -1427,7 +1490,7 @@ each write inside their own marked block at its end. tsconfig: strict,
 `noUncheckedIndexedAccess`, `allowImportingTsExtensions`, `erasableSyntaxOnly`, `noEmit`,
 `moduleResolution: Bundler`, lib ES2022+DOM, `types:["node"]`; imports use explicit `.ts`.
 `declare const __DC_BRIDGE__: string` in `src/guest/globals.d.ts`.
-Phase 1.5, planned: build steps (7) to (10) and the guest check are in §5.1.
+Phase 1.5: build steps (7) to (10) and the guest check are in §5.1.
 
 ---
 
@@ -1475,10 +1538,11 @@ Escape and outside-click handling.
   "Saved" for 2 s after an apply; Use default, validation message), previous folders (Switch back),
   **Help your agent find your designs** (guide status line; skill row with Install / Update /
   "Installed" / Replace skill… whose confirm opens in place under the row, not as a dialog, plus a
-  duplicates warning; the AGENTS.md snippet with Copy; §11.5. **Phase 1.5, planned:** the skill row
-  becomes **Agent skill**, "Built in. Agents in OpenChamber can use it while Design Chamber is on.",
-  with **Remove old copy** only when an older copy of ours is installed, and a sentence plus Copy path
-  for an edited or foreign one; P15 §U2.5), Browser for thumbnails (detected
+  duplicates warning; the AGENTS.md snippet with Copy; §11.5. **Phase 1.5:** the skill row is
+  **Agent skill**, "Built in. Agents in OpenChamber can use it while Design Chamber is on.",
+  with **Remove old copy** (outline xs, no confirm) only when an older unedited copy of ours is
+  installed, and a sentence plus Copy path for an edited or foreign one
+  (`model/settings-model.ts`); P15 §U2.5), Browser for thumbnails (detected
   path, or a neutral "Live previews" status when none is found, override field, Test), Permissions tip: "OpenCode asks before your agent writes outside
   the project. To allow Designs once: add to opencode.json" + snippet + Copy
   (`{"permission":{"external_directory":{"<root>/**":"allow"}}}`), version.
@@ -1606,7 +1670,7 @@ Design: `documentation/specs/phase-1-review-loop.md`; wall split: `phase-0-found
   repainted in place so focus survives a refresh. Selectors and snippets render as code through
   `textContent`.
 
-### 13.4 Work Status section and chat blocks, Phase 1.5, planned (P15 §U5, §U7, §U8)
+### 13.4 Work Status section and chat blocks, Phase 1.5 (P15 §U5, §U7, §U8)
 Same rules as §13: kit components and `--oc-*` tokens only, every async action has a loading state and a
 sentence on failure, no em dashes in copy. **No new words for shared states:** the agent part comes from
 `pillText` (`model/build-strip-model.ts`, the rail pill's words, exported in PR 1) and every check line
@@ -1621,7 +1685,15 @@ reads the same in Work Status, the rail, the viewer and a chat card.
   type /design."), empty without ("No designs in the last 7 days. Ask the agent for one, or type
   /design."), starting / not responding with **Try again**, paused, Chrome missing (Check disabled),
   another check running (toast), deleted, rail not available here ("Open Design Chamber from the rail to
-  see it."). Refetch on the change feed (`added|removed|design|files|comments|checks|activity`, debounced
+  see it."). **Check** is busy while this row is checking, else disabled with a readable reason
+  (`checkButton` inside `statusRowView`, `model/status-model.ts`, in this order): pending → "There is nothing to check until the agent writes the first file."; no check
+  state read → "Checks aren't available for this design yet."; `!browser` → "Checks need Chrome, Edge
+  or Chromium."; `!canRun` → "Another design is being checked. Try again when it finishes." (the
+  `browser` field is what tells the last two apart, §9.9). "Starting" turns into "isn't responding"
+  after `STATUS_STARTING_GIVE_UP_MS`. **Project or not:** the frame sends `directory` only when
+  `projectDirectoryOf` finds it among `listProjects` (`sameDirectory`; §9.13, F37), so a chat with no
+  project gets "this chat's designs, then the last 7 days" and the 7-day empty copy. Refetch on the
+  change feed (`added|removed|design|files|comments|checks|activity|root` and a reset, debounced
   `STATUS_REFETCH_DEBOUNCE_MS`) and on session or directory change; no timer. `setHeight` after each paint.
   Tokens: `--oc-bg` (the panel colour in Work Status), `--oc-fg`, `--oc-muted`, `--oc-border`,
   `--oc-hover`, status colours.
@@ -1636,6 +1708,11 @@ reads the same in Work Status, the rail, the viewer and a chat card.
   marks the tile when `answered` starts with `^[A-D]: ` and the letter is in range, anything else is a
   note ("You answered with a note."). Invalid args: "This question has no options to pick from."
   Keyboard: a `role="group"` of buttons named by the question, arrows move, Enter/Space picks.
+  Layout (`blocks.css`): tiles side by side; under 360 px they wrap two a row, and four options go two
+  a row under 480 px (not only under 360 px as first planned), so each preview stays big enough to judge.
+- **Agent syntax** (F36): the host draws a block only from a fenced `openui-lang` block whose first line is
+  `root = Stack([...])`, for example `root = Stack([DesignCard("pricing-page")])`; the instructions note
+  spells this out (§11.6).
 - `parseBlockArgs` (`model/block-args.ts`, pure, tested first) validates every model-written argument
   before anything is drawn; all agent text goes in with `textContent`.
 
@@ -1843,12 +1920,40 @@ As built, against those designs:
   are wrapped in try/catch; `ViewContext` adds `drawers` and `notices`; the busy-chat path appends
   for comments too; "Send this" re-checks the comment's status first.
 
-### Phase 1.5 (2026-11-10), planned
-Design: `documentation/specs/phase-1-5-sdk-2-7.md` (tasks §11, branches §10). Owner answers
-2026-11-10: frame-drawn Work Status, `design_check` only, remove the old skill copy on click, each
-DirectionPick option is its own design, the tag-triggered `release` branch on
-`Speak-Technologies/design-chamber`, keep `<root>/AGENTS.md`; no automatic linking (main agent).
-The BRIEF wording (P15 §13.1) is pending and lands in T15.
+### Phase 1.5 (2026-11-10), as built
+Design: `documentation/specs/phase-1-5-sdk-2-7.md` (tasks §11, branches §10, "As built" at its top).
+Owner answers 2026-11-10: frame-drawn Work Status, `design_check` only, remove the old skill copy on
+click, each DirectionPick option is its own design, the tag-triggered `release` branch on
+`Speak-Technologies/design-chamber`, keep `<root>/AGENTS.md`; no linking by timing (main agent). The
+BRIEF lines (P15 §13.1, owner Q8) are applied, with the linking line corrected to what the code does.
+Sections above were corrected inline: §1, §2 (F34 answered, F36, F37 new), §3, §5.1, §6.6, §7, §8.1,
+§8.2, §9.1, §9.7, §9.9 to §9.15, §10.1, §10.5, §10.6, §10.11, §10.12, §11.5, §11.6, §12, §13.1, §13.4,
+§15, §16. As built, against that design:
+- **One PR.** PR 1 and the six siblings merged into `feat/phase-1-5`, one PR to `master` (owner's
+  decision), instead of seven PRs.
+- **Checks `browser` (QA drift).** `ChecksResponse` and `ChecksSummary` gain `browser: boolean`;
+  `canRun` means "a run can start now"; `verified()` in `checks-model.ts` reads `!browser`, so a check
+  of another design no longer reads as "no browser" (§7, §9.9, §13.4).
+- **Project or not (QA drift).** A chat with no project still has a `directory` (F37). The status frame
+  sends `directory` only when `listProjects` + `sameDirectory` say it is a project; the service treats
+  what it gets as the project and leaves out designs that name no project unless linked here (§9.13).
+- **Work Status Check reasons.** Four disabled reasons, told apart by `browser` and `canRun` (§13.4);
+  the timing limits moved to `limits.ts` (§9.15).
+- **DirectionPick layout.** Four options go two per row under 480 px, not 360 px (§13.4).
+- **Keep your place** (owner request during PR 1, §10.12): built in PR 1.
+- **Linking from session events.** Linking is no longer guest reconciliation only: the service links a
+  `/design` or `/page` stub to the chat that carries its chip, from session events, with or without a
+  project and with no window open (§10.5). A per-design marker in the chip that gates it is being added
+  on `feat/sdk-2-7`.
+- **`openInRail`.** Takes the request back on any `openSurface` failure, not only `NO_DIRECTORY` /
+  `UNSUPPORTED` (§10.11).
+- **Reach (F34).** The note, the skill, the blocks and `design_check` reach Claude Code harness sessions
+  inside OpenChamber; the tool shows there as `mcp__openchamber__design_check`.
+- **Block syntax (F36).** Blocks are drawn only from `root = Stack([...])` in an `openui-lang` fence; the
+  instructions note says so.
+- **KI-12 accepted.** The index lags a new link by about 0.6 s, so a design linked at the very end of a
+  turn misses that turn's event snapshot (§9.11).
+- **Threat model residual** added for `dist/cli/dc.mjs` (§16.1).
 
 **PR 1, `feat/sdk-2-7` → `master`:** U1 (manifest §5.1, build, guest check, CI, release workflow,
 README) and the seams: WP0 edits (`api.ts` §7 additions and the `POST /agent/skill` removal from
@@ -1874,8 +1979,9 @@ checks-model}.ts`, `src/ui/styles.css` outside a branch's own marked block,
 `test/service/core/{routes,settings,paths}.test.ts`, `test/service/integration/**`, `docs/SPEC.md`,
 `documentation/README.md`. The WP0 interface set grows by `src/shared/path-compare.ts`.
 
-**After the last sibling:** an as-built pass on this file, the BRIEF lines, `documentation/STATUS.md`
-and version `0.2.0` (T15); then the owner tags `v0.2.0`, which runs `release.yml`.
+**After the last sibling:** the as-built pass on this file, the BRIEF lines and `documentation/STATUS.md`
+(T15, done in this pass), and version `0.2.0` (main agent); then the owner tags `v0.2.0`, which runs
+`release.yml`.
 
 ---
 
@@ -1913,10 +2019,11 @@ tests use `chromeOrSkip()` (skip is reported, never silent).
 8. Rename Chrome path to nonsense → thumbnails fall back to live mini-frames.
 9. Settings → Help your agent find your designs: guide line shows `<root>/AGENTS.md`; Install
    skill writes the file shown; a loose `x.html` dropped in the root shows the banner and imports.
-   (Phase 1.5, planned: the Install step becomes "Remove old copy", P15 §12.3 step 2.3.)
+   (Phase 1.5: there is no Install step; the Agent skill row offers "Remove old copy" when an older
+   copy is installed, P15 §12.3 step 2.3.)
 Uninstall afterwards only if this run installed it.
 
-### 15.4 Phase 1.5, planned (P15 §12)
+### 15.4 Phase 1.5 (P15 §12)
 - **Unit, failing test first** for the risk logic: `parseToolInput`, `installRootOf` (Linux, macOS,
   Windows layouts and `null` cases), `validateRuntime` (`/tmp/x/node`, wrong name, outside the install,
   a symlink leaving it, win32 path module), `childEnv`; session events answer before work, the queue
@@ -1932,7 +2039,9 @@ Uninstall afterwards only if this run installed it.
 - **Click-through** in OpenChamber 2.7.0: P15 §12.3 steps 1 to 8 (approval dialog, instructions and
   skill in a new chat, `design_check` and a tampered `runtime.json`, a turn version with no window
   open including a turn longer than the idle stop, Work Status, `@`, both blocks); macOS and Windows
-  install layouts before release.
+  install layouts before release. Live findings so far (Linux): F34, F36 and F37.
+- **Linking:** `session-links` unit tests on `feat/sdk-2-7`, plus the QA regression
+  `test/service/core/session-links-stale-chip.test.ts` (todo until the per-design marker lands).
 
 ---
 
@@ -1959,11 +2068,13 @@ Uninstall afterwards only if this run installed it.
 | A damaged version index wipes history | set aside before any write, backup recovery, GC protection (§6.4) |
 | Phase 1.5: the plugin API differs on another OpenCode build | same shape as OpenChamber's own managed plugin and the SDK example; proven live before merge (P15 §12.3 step 3) |
 | Phase 1.5: macOS or Windows install layout differs from Linux | `installRootOf` unit-tested for the expected layouts; checked on real machines before release; a mismatch fails safe (launcher sentence) |
-| Phase 1.5: instructions, skill or tool missing in Claude Code harness sessions (F34) | the guide and `/design` remain; the finding is recorded in `documentation/features/agent-discovery.md` |
+| Phase 1.5: instructions, skill or tool missing in Claude Code harness sessions (F34) | resolved: all of them arrive there (seen live); recorded in `documentation/features/agent-discovery.md` |
+| Phase 1.5: a chip from a deleted design links a new design that reuses its slug | the per-design chip marker (being added on `feat/sdk-2-7`, §10.5); until then a design is still linked only to a chat that carries a chip with its slug |
+| Phase 1.5: a design linked at the very end of a turn misses that turn's event snapshot (KI-12) | the quiet-period auto version holds the files; an open frame's own turn snapshot still runs |
 | Phase 1.5: the service runs most of the day (session events start it) | idle cost checked in the click-through (P15 §12.3 step 4.4) |
 | Phase 1.5: a large seams PR touching WP0 files | no behaviour change beyond open requests and the removed install; every stub tested; QA at Opus medium |
 
-### 16.1 Phase 1.5 threat model, planned (P15 §6)
+### 16.1 Phase 1.5 threat model (P15 §6)
 - **Service routes.** Every new route sits behind the existing constant-time bearer check; slugs pass
   `SLUG_PATTERN` before any path is built and the store's `resolveInside` after; bodies keep the router's
   cap. The token stays in the service process: never in `runtime.json`, the skill, the instructions,
@@ -1972,13 +2083,22 @@ Uninstall afterwards only if this run installed it.
   OpenChamber binary that is strictly inside the install running OpenCode itself, so a tampered
   `runtime.json` (anything that can write the user's app-data folder) gets the tool to refuse rather than
   run a program of its choosing without a permission prompt. Residual: write access to the OpenChamber
-  install folder itself, which already means code execution for everything OpenChamber runs. Bare
+  install folder itself, which already means code execution for everything OpenChamber runs. A second
+  residual, same class: the runtime check guarantees which binary runs, not which script it runs.
+  `dist/cli/dc.mjs` sits in the extension folder (`{dataDir}/extensions/{id}` or a folder install),
+  which the user can write, so anything that can write there can change what the tool runs; that is the
+  same exposure as `dist/service/main.js`, which OpenChamber already runs from the same folder. Bare
   folder names only (the CLI re-contains), argv without a shell, `childEnv` allowlist so OpenCode's own
   secrets do not reach the child, output caps, timeout and abort.
 - **Tool and mention text to the model.** Check findings and mention text quote agent-written design
   content; both label it as data (same exposure as `dc check` today).
 - **Session events** from every project: identifiers only (no transcript grant), an in-memory lookup
   before any disk read, bounded queue and tracker, answer first, never log content.
+- **Linking from session events** (§10.5). The only input is the host's own list of chips the chat
+  carries; slugs pass `SLUG_PATTERN` and the store's containment; a design is linked only while it has
+  no chat and is never moved to another chat, so a crafted event cannot steal a linked design. Residual
+  until the per-design marker lands: a chat that still carries a deleted design's chip can claim a new,
+  unlinked design that reuses the slug.
 - **Status and block frames.** The panel's sandbox and grants (F1, F2, F29, F31); data drawn with
   `textContent`; images only as checked base64 `data:` URLs; no design HTML in a chat reply. Block
   arguments are model-written: `parseBlockArgs` first, reads only until a click, `answerBlock` only from a

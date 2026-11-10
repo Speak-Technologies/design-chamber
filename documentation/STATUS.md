@@ -1,37 +1,49 @@
-# Project status — 2026-10-27
+# Project status, 2026-11-10
 
 ## State
-- **v0.1 feature-complete on `master`**, published as a public GitHub repo (history squashed to one initial commit).
-- `npm run check`: typecheck clean, build OK, **561 tests — 560 pass, 0 fail, 1 skipped** (posix-only test on Windows).
-- Installed in OpenChamber from this folder, enabled, Designs folder = default `~/Documents/Designs` (empty).
-  After pulling or changing code: `npm run build`, then toggle the extension off/on in Settings → Extensions
-  (or restart OpenChamber).
+- **Phase 1.5 (OpenChamber SDK 2.7) is built on `feat/phase-1-5`**: PR 1 (`feat/sdk-2-7`) plus the six
+  sibling branches, merged into one branch that goes to `master` as one PR (owner's decision).
+- One fix is still landing on `feat/sdk-2-7` and is merged in later: a per-design marker in the chip that
+  gates linking from session events, so a chip from a deleted design cannot claim a new design with the
+  same folder name (`documentation/specs/phase-1-5-sdk-2-7.md`, "As built").
+- `npm run check` on `feat/phase-1-5`: see "Verification done".
+- Version is still `0.1.0` in `package.json`; it becomes `0.2.0` before the owner tags the release.
+- Needs OpenChamber 2.7.0 or later.
 
 ## What's built
-Rail navigator + full-screen page; HTML pages (ZIP + single-file HTML export to `~/Downloads`);
-design canvas wall (pan/zoom both axes, screens × viewports, Edit/Play, element-anchored pins,
-send comments to the linked chat, versions view/compare/restore); `/design`, `/page`, message
-action "Open as page"; project-first design rules + anti-slop rules + 10 presets; headless-browser
-thumbnails; theme-following UI. See `README.md`, `docs/SPEC.md`, `docs/BRIEF.md`.
+Everything from v0.1 (rail navigator, full-screen page, pages with ZIP and single-file HTML export,
+the canvas wall with pins, comments, versions, `/design`, `/page`, Open as page, design rules and
+presets, thumbnails, theme-following UI), Phase 0 and Phase 1 (design checks and `dc check`, the build
+strip, the ask bar, Send this, restore with Undo), and Phase 1.5:
+
+| Feature | Where the user sees it | Doc |
+|---|---|---|
+| Instructions note and built-in `design-chamber` skill, no Settings install | every chat; Settings Agent skill row (Remove old copy) | [Agent discovery](features/agent-discovery.md), [Agent instructions](features/agent-instructions.md) |
+| `design_check` agent tool (OpenCode plugin), launcher kept as fallback | the chat's tool card | [Design checks](features/design-checks.md) |
+| A version after every agent turn with no window open, from session events | Versions drawer | [Turn snapshots](features/turn-snapshots.md) |
+| Linking a `/design` or `/page` design to its chat from session events, with or without a project | Continue in chat, comments | `docs/SPEC.md` §10.5 |
+| Designs section in Work Status, with Check and Open | the chat's Work Status | [Work Status](features/work-status.md) |
+| `@` a design in the composer | the composer | [Design mentions](features/design-mentions.md) |
+| DesignCard and DirectionPick chat blocks | agent replies | [Chat blocks](features/chat-blocks.md) |
+| Keep your place across reloads | rail panel and page | `docs/SPEC.md` §10.12 |
+| Install from the Git URL through a CI-built `release` branch | Settings → Extensions, README | `README.md` |
 
 ## Verification done
-- Live click-through in OpenChamber on Windows: `documentation/smoke/REPORT.md` (22/24 pass, the
-  remaining items fixed in the fix round).
-- Independent code review: `documentation/reviews/2026-10-27-code-review.md` — 2 critical + 3 major
-  (data-safety), all fixed with regression tests; security boundaries held.
-- Linux: full suite in Debian and Fedora 44 containers (incl. Chromium e2e). macOS: not run yet.
-- `documentation/known-issues.md`: no open entries.
+- Per-branch QA for every sibling and for PR 1; QA drift fixed (`browser` on checks, which folder is a
+  project, Work Status Check reasons).
+- Live in OpenChamber 2.7.0 on Linux: chats run through the Claude Code harness get the note, the skill,
+  the blocks and `design_check` (as `mcp__openchamber__design_check`); blocks draw only from
+  `root = Stack([...])` in an `openui-lang` fence; chats with no project live in
+  `~/.config/openchamber/chats/<date>/session-<uuid>`.
+- Accepted minor issues: `documentation/known-issues.md` (KI-12: a design linked at the very end of a
+  turn misses that turn's event snapshot).
 
 ## Waiting on you
-1. **GitHub workflow**: `master` is protected — changes go through a branch + PR; CI (Ubuntu,
-   Windows, Fedora) must pass; 1 approval required, you merge via owner bypass. macOS is not in
-   CI: run `npm run check` on the Mac for macOS-affecting changes.
-2. **Hand tests**: `docs/testing/FEDORA.md` (dual boot) and `docs/testing/MACOS.md` (laptop) —
-   install, checklist, report template. Watch for the macOS "access Documents" prompt.
-3. **Claude Code agent files** (`.claude/agents/`) still pin `opus`/`sonnet`; OpenCode ones are
-   unpinned. Decide whether to unpin those too.
-
-## Housekeeping
-- Docker Desktop was started for the Linux container runs and is still running.
-- `package.json` exec list gained `brave`, `gio`, `gdbus` (Linux/macOS discovery/reveal) — shown
-  at install approval; OpenChamber may ask to re-approve.
+1. **The Phase 1.5 PR** from `feat/phase-1-5` to `master`, once the linking marker fix is merged in
+   (pushing and opening the PR wait for your go-ahead).
+2. **Release:** version `0.2.0`, then you tag `v0.2.0`, which runs `release.yml`. Exclude the `release`
+   branch from the `master` protection rule first, or the workflow's push is refused.
+3. **macOS and Windows:** `design_check` install layouts are covered by tests but not yet seen on a real
+   machine (`docs/SPEC.md` F33); check before the release. macOS is not in CI: run `npm run check` on the
+   Mac.
+4. **Hand tests:** `docs/testing/FEDORA.md` and `docs/testing/MACOS.md`.

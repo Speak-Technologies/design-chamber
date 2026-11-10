@@ -41,8 +41,9 @@ session). The chat shows each call as a card titled "Design check · <design>".
 - **Where it does not reach.** Only the OpenCode that OpenChamber starts loads the plugin. An
   OpenCode run in `restart` or `none` delivery needs **Add to global config** in OpenChamber's
   settings; a remote OpenCode, sessions in isolated spaces, terminal agents and agents opened outside
-  OpenChamber never get it. Whether sessions through the Claude Code harness inside OpenChamber get it
-  is not verified yet. All of them use the command below, which keeps working unchanged.
+  OpenChamber never get it. All of them use the command below, which keeps working unchanged.
+  Sessions run through the Claude Code harness inside OpenChamber do get the tool, as
+  `mcp__openchamber__design_check` (checked live on 2026-11-10).
 - **Verified.** On Linux with OpenChamber in `/opt/OpenChamber`, the built plugin, loaded by
   OpenCode's own runtime, rendered a design through `/opt/OpenChamber/openchamber`. The macOS
   (`OpenChamber.app/Contents/Resources/opencode-cli/opencode`) and Windows

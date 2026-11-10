@@ -9,7 +9,7 @@ Owner decisions (2026-10-26). Anything not listed here is open — ask, don't gu
 ## Platform
 - OpenChamber extension (SDK `apiVersion: 1`), source of OpenChamber at
   `~/Documents/GitHub/openchamber` (SDK: `packages/sdk/DOCUMENTATION.md`, `API.md`,
-  `GUEST_SERVICES.md`, `examples/`). Target OpenChamber >= 2.5.0.
+  `GUEST_SERVICES.md`, `examples/`). Target OpenChamber >= 2.7.0 (SDK 2.7.0, pinned).
 - New repo. Reuse proven pieces from `~/Documents/GitHub/openchamber-design-canvas`
   (v0.3.0, MIT, same owner) where they help: Chrome discovery, wall pan/zoom math,
   design-system precedence, prompt rules, presets, gates. Do not inherit its
@@ -85,7 +85,22 @@ Precedence, highest first:
   to `.trash`.
 - Designs that load files from the internet show what was blocked, and sent comments include
   that list.
-- Writes outside the designs folder: only the user-clicked skill install, to that one file.
+
+## Owner decisions (2026-11-10, Phase 1.5)
+- Design Chamber ships its `design-chamber` skill, its instructions and an OpenCode plugin with the
+  extension; they reach every agent OpenChamber runs while the extension is on. Settings no longer
+  installs a skill.
+- Writes outside the designs folder: Design Chamber's own settings folder (`settings.json`, and
+  `runtime.json`, which records where OpenChamber's runtime is so the check tool can run it); and,
+  only when the user clicks **Remove old copy**, deleting the skill copy an older version installed,
+  if it is ours and unedited.
+- The local service also starts when any chat's turn starts or ends, in any project, so that a
+  version is saved after every agent turn on a linked design with no Design Chamber window open. It
+  reads only which chat changed, never what was said.
+- Designs show in the chat's Work Status and in agent replies; Open there opens the rail viewer (the
+  full-screen page still cannot be opened from code).
+- A design is linked only to the chat it was started from (its /design or /page card in that chat),
+  never guessed from timing.
 
 ## Process
 - Public GitHub repo, MIT, default branch `master` with branch protection (PR + 1 approval + CI; owner-only bypass). (Updated 2026-10-27; was local-only.)
