@@ -49,7 +49,9 @@ const section = (title: string, description: string, ...children: Array<Node | n
 export const mountSettings = (container: HTMLElement): SettingsHandle => {
   const scope = createScope();
   const body = h('div', { class: 'dc-settings' });
-  container.append(body);
+  // Outside `body` on purpose: the view repaints often, and a live region that is rebuilt is not announced reliably.
+  const live = h('p', { class: 'dc-sr-only', role: 'status', 'aria-live': 'polite' });
+  container.append(body, live);
   let version = '';
   void client.call('GET /health').then(
     (health) => {
@@ -68,7 +70,10 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
   let rootSaved = false;
   let chromeBusy = false;
   let skillError: string | null = null;
-  const copied = { permissions: false, agents: false };
+  let skillBusy = false;
+  /** Where focus goes after the next repaint, because the control that had it was rebuilt. */
+  let skillFocus: 'action' | 'row' | null = null;
+  const copied = { permissions: false, agents: false, skill: false };
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const later = (fn: () => void, ms: number): void => {
     const timer = setTimeout(() => {
@@ -145,6 +150,28 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
     } else toast('error', 'Couldn’t reach the clipboard. Select the text and copy it by hand.');
   };
 
+  // The only way to remove the old copy. The service refuses anything that isn't ours and unedited
+  // (409 with a sentence), so there is nothing to confirm here: the built-in skill replaces it.
+  const removeOldCopy = async (): Promise<void> => {
+    if (skillBusy) return;
+    skillBusy = true;
+    skillError = null;
+    paint();
+    try {
+      await client.call('DELETE /agent/skill');
+      live.textContent = 'Old copy removed.';
+      toast('success', 'Old copy removed.');
+      await store.loadSettings();
+      skillFocus = 'row';
+    } catch (error) {
+      skillError = errorText(error);
+      skillFocus = 'action';
+    } finally {
+      skillBusy = false;
+      paint();
+    }
+  };
+
   const paint = (): void => {
     const state = store.getState().settings;
     body.replaceChildren();
@@ -215,14 +242,17 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
     const guide = h('div', { class: 'dc-field' }, h('span', { class: 'oc-sdk-field-label' }, 'Guide in your designs folder'), sentence(guideSentence(settings.agent.guide)));
 
     const row = skillRow(settings.agent.skill);
-    const skill = h('div', { class: 'dc-field' }, h('span', { class: 'oc-sdk-field-label' }, 'OpenCode skill'));
-    if (row.installed) {
-      const installed = h('span');
-      mountBadge(installed, { label: 'Installed', tone: 'success' });
-      append(skill, h('div', { class: 'dc-status-line' }, installed, sentence(row.sentence, true)));
-    } else skill.append(sentence(row.sentence));
-    // A read-only status: POST /agent/skill is gone (the skill ships inside the extension), so no button here.
-    // `feat/agent-skill` turns this into the "Agent skill" row (documentation/specs/phase-1-5-sdk-2-7.md §U2.5).
+    const skill = h('div', { class: 'dc-field', role: 'group', 'aria-label': 'Agent skill', tabindex: '-1', 'data-skill-row': '' }, h('span', { class: 'oc-sdk-field-label' }, 'Agent skill'), sentence(row.sentence));
+    if (row.control === 'remove-old-copy') {
+      const remove = btn({ label: 'Remove old copy', variant: 'outline', size: 'xs', loading: skillBusy, onClick: () => void removeOldCopy() });
+      remove.el.dataset.skillAction = '';
+      skill.append(h('div', { class: 'dc-row-actions' }, remove.el));
+    } else if (row.control === 'copy-path') {
+      const skillPath = settings.agent.skill.path;
+      const copyPath = btn({ label: copied.skill ? 'Copied' : 'Copy path', variant: 'outline', size: 'xs', icon: copied.skill ? 'check' : 'copy', onClick: () => void copySnippet(skillPath, 'skill') });
+      copyPath.el.setAttribute('aria-label', copied.skill ? 'Copied the path of the older copy' : 'Copy the path of the older copy');
+      skill.append(h('div', { class: 'dc-row-actions' }, copyPath.el));
+    }
     if (skillError !== null) skill.append(h('p', { class: 'dc-form-error', role: 'alert' }, skillError));
     for (const duplicate of duplicateSentences(settings.agent.skill)) {
       const badge = h('span');
@@ -295,6 +325,12 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
     );
 
     append(body, folder, previous, agents, browser, permissions, h('p', { class: 'dc-settings-foot' }, version ? `Design Chamber ${version.startsWith('v') ? version : `v${version}`}` : 'Design Chamber'));
+
+    // The remove button was rebuilt (and is gone once the copy is): put focus back where the user was.
+    if (skillFocus !== null) {
+      body.querySelector<HTMLElement>(skillFocus === 'action' ? '[data-skill-action]' : '[data-skill-row]')?.focus();
+      skillFocus = null;
+    }
   };
 
   // Repaint only when settings changed: other store traffic (the designs list) must not steal focus from a field being typed in.
@@ -316,6 +352,7 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
       body.remove();
+      live.remove();
     },
   };
 };

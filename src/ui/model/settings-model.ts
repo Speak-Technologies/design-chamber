@@ -91,30 +91,33 @@ export const guideSentence = (guide: AgentGuideStatus): PathSentence => {
   }
 };
 
+/** What the skill row offers: remove our unedited old copy, copy the path of one we leave alone, or nothing. */
+export type SkillControl = 'remove-old-copy' | 'copy-path' | null;
+
 export type SkillRow = {
-  /** "Installed" badge beside the path. */
-  installed: boolean;
   sentence: PathSentence;
+  control: SkillControl;
 };
 
 /**
- * The skill row for each state the service reports. A read-only status: Design Chamber no longer
- * installs a skill (it ships inside the extension), so no state offers a button here.
+ * The skill row for each state the service reports. The skill ships inside the extension, so the
+ * row says so first and only talks about an older installed copy when there is one: ours and
+ * unedited (`current`, `outdated`) can be removed from here; an edited or foreign one is left
+ * alone and only its path is offered.
  */
 export const skillRow = (skill: AgentSkillStatus): SkillRow => {
   switch (skill.state) {
     case 'not-installed':
-      return { installed: false, sentence: withPath('No skill is installed at ', skill.path, '.') };
-    case 'outdated':
-      return { installed: false, sentence: withPath('The skill at ', skill.path, ' was installed for an earlier designs folder.') };
+      return { sentence: plain('Built in. Agents in OpenChamber can use it while Design Chamber is on.'), control: null };
     case 'current':
-      return { installed: true, sentence: withPath('', skill.path, '') };
+    case 'outdated':
+      return { sentence: withPath('Built in. An older copy is also installed at ', skill.path, ', so agents may see the skill twice.'), control: 'remove-old-copy' };
     case 'edited':
-      return { installed: false, sentence: withPath('You edited the skill at ', skill.path, '. Design Chamber leaves it alone.') };
+      return { sentence: withPath('Built in. You edited the older copy at ', skill.path, ', so Design Chamber leaves it alone. Delete it if you don’t need it.'), control: 'copy-path' };
     case 'foreign':
-      return { installed: false, sentence: withPath('A different skill called design-chamber is at ', skill.path, ', so Design Chamber left it alone.') };
+      return { sentence: withPath('Built in. Another design-chamber skill is installed at ', skill.path, '.'), control: 'copy-path' };
     case 'unavailable':
-      return { installed: false, sentence: plain(skill.message ?? 'Design Chamber can’t look for the skill on this computer.') };
+      return { sentence: plain(`Built in. ${skill.message ?? 'Design Chamber can’t look for an older copy on this computer.'}`), control: null };
   }
 };
 
