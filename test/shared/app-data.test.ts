@@ -65,6 +65,7 @@ describe('the service and the plugin agree on where runtime.json is', () => {
 
   test('the DC_SETTINGS_PATH test seam moves the service record next to that settings file', () => {
     const file = runtimeRecordPath({ DC_SETTINGS_PATH: path.join(path.sep, 'tmp', 'x', 'settings.json') }, 'linux', '/home/you');
-    assert.equal(file, path.join(path.sep, 'tmp', 'x', 'runtime.json'));
+    // The service resolves the seam path, so on Windows it gains the current drive letter.
+    assert.equal(file, path.resolve(path.sep, 'tmp', 'x', 'runtime.json'));
   });
 });
