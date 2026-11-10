@@ -108,12 +108,13 @@ test('POST /session-events links a /page stub to a chat that has no project when
   const chatDirectory = '/home/you/.config/openchamber/chats/2026-11-10/session-e965d591-0c6e-4e85-bf68-025a4ed381dd';
   const chip = await call('/chip', { body: { kind: 'page', brief: 'tiny page about tea', projectDirectory: chatDirectory, sessionId: null } });
   assert.equal(chip.status, 200);
-  const { slug } = chip.json as { slug: string };
+  const { slug, chip: sent } = chip.json as { slug: string; chip: { id: string; url: string } };
+  // OpenChamber stores the chip the user sent as `guest:<providerId>:<chip id>`, with the chip's own url.
   const reply = await call('/session-events', {
     body: sessionEvent('turn-started', {
       session: { id: 'ses_chat_no_project', parentId: null },
       project: { directory: chatDirectory },
-      linked: [{ id: `guest:design-chamber:design:${slug}`, kind: 'guest', url: 'file:///x', identifier: `design:${slug}` }],
+      linked: [{ id: `guest:design-chamber:${sent.id}`, kind: 'guest', url: sent.url, identifier: sent.id }],
     }),
   });
   assert.deepEqual(reply, { status: 200, json: { ok: true } });

@@ -55,7 +55,7 @@ describe('POST /chip', () => {
     assert.equal(chip.providerId, 'design-chamber');
     assert.equal(chip.id, `design:${slug}`);
     assert.deepEqual(chip.data, { slug, kind: 'canvas' });
-    assert.equal(chip.url, pathToFileURL(folder).href);
+    assert.ok(chip.url.startsWith(`${pathToFileURL(folder).href}#dc-created=`), chip.url);
     assert.equal(chip.title, 'A pricing page for a coffee subscription');
     assert.ok(chip.text.length <= CHIP_TEXT_HARD_MAX);
     assert.ok(chip.text.includes(`Write ONLY inside this folder: ${folder}`));

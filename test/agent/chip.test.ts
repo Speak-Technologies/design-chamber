@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
-import { buildChip, buildChipText, titleFromBrief } from '../../src/shared/agent/chip.ts';
+import { buildChip, buildChipText, chipMarkerInUrl, chipMarkerOf, markChipUrl, titleFromBrief } from '../../src/shared/agent/chip.ts';
 import { rulesPathOf, type ProjectRules, type ProjectSource } from '../../src/shared/agent/context.ts';
 import { BRIEF_MAX, CHIP_PROJECT_PATHS_MAX, CHIP_TEXT_HARD_MAX, CHIP_TEXT_TARGET, HOST_ATTACH_ID_MAX, HOST_ATTACH_TITLE_MAX, HOST_ATTACH_URL_MAX, HOST_TEXT_MAX } from '../../src/shared/limits.ts';
 import { baseContext } from './helpers.ts';
@@ -211,22 +211,35 @@ describe('chip core text', () => {
 });
 
 describe('buildChip', () => {
-  test('identity, data and file URL follow the contract', () => {
+  const CREATED = '2026-11-10T11:58:12.741Z';
+
+  test('identity, data and file URL follow the contract; the URL carries the design marker', () => {
     const context = baseContext({ folder: 'C:\\Designs\\pricing-page' });
     const url = pathToFileURL(context.folder).href;
-    const chip = buildChip(context, { slug: 'pricing-page', mode: 'new', folderUrl: url });
+    const chip = buildChip(context, { slug: 'pricing-page', mode: 'new', folderUrl: url, created: CREATED });
     assert.equal(chip.providerId, 'design-chamber');
     assert.equal(chip.id, 'design:pricing-page');
     assert.deepEqual(chip.data, { slug: 'pricing-page', kind: 'canvas' });
-    assert.equal(chip.url, url);
+    assert.equal(chip.url, `${url}#dc-created=${Date.parse(CREATED).toString(36)}`);
+    assert.equal(chipMarkerInUrl(chip.url), chipMarkerOf(CREATED));
+    assert.equal(new URL(chip.url).pathname, new URL(url).pathname, 'the marker never changes the folder the URL names');
     assert.equal(chip.text, buildChipText(context, 'new'));
     assert.ok(chip.id.length <= HOST_ATTACH_ID_MAX);
   });
 
-  test('a file URL over the host cap is dropped; the title is capped', () => {
-    const chip = buildChip(baseContext({ title: 'T'.repeat(400) }), { slug: 's', mode: 'new', folderUrl: `file:///${'x'.repeat(HOST_ATTACH_URL_MAX)}` });
+  test('over the host cap: unmarked when only the marker is too much, dropped when the folder URL is; the title is capped', () => {
+    const nearCap = `file:///${'x'.repeat(HOST_ATTACH_URL_MAX - 'file:///'.length - 3)}`;
+    assert.equal(buildChip(baseContext(), { slug: 's', mode: 'new', folderUrl: nearCap, created: CREATED }).url, nearCap);
+    const chip = buildChip(baseContext({ title: 'T'.repeat(400) }), { slug: 's', mode: 'new', folderUrl: `file:///${'x'.repeat(HOST_ATTACH_URL_MAX)}`, created: CREATED });
     assert.equal(chip.url, '');
     assert.ok(chip.title.length <= HOST_ATTACH_TITLE_MAX);
+  });
+
+  test('markers: one per created time, none for a time that does not parse or a URL without one', () => {
+    assert.notEqual(chipMarkerOf(CREATED), chipMarkerOf('2026-11-10T11:58:12.742Z'));
+    assert.equal(chipMarkerOf('not a time'), null);
+    assert.equal(markChipUrl('file:///d', 'not a time'), 'file:///d');
+    for (const url of ['', 'file:///d', 'file:///d#dc-created=', 'file:///d#dc-created=AB', 'file:///d#dc-created=1#x', 'file:///d#other=1']) assert.equal(chipMarkerInUrl(url), null, url);
   });
 });
 
