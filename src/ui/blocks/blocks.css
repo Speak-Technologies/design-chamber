@@ -1,1 +1,410 @@
-/* Chat block frame styles (spec §U7, §U8). Placeholder; the chat-blocks branch fills this in. */
+/*
+ * Chat blocks (DesignCard, DirectionPick), drawn in an agent's reply.
+ *
+ * Native fidelity, as in src/ui/styles.css: every colour, the face and the radius come from the host
+ * theme (`--oc-*`, written by applyHostReady on each `ready`) and the SDK kit (`.oc-sdk-*`). No palette
+ * or face of our own. Spacing steps are the rail's --dc-s1..s4 (4, 8, 12, 16 px); type is in rem
+ * against the host root, on the rail's scale (0.75, 0.8125, 0.875, 0.9375rem).
+ *
+ * The frame is as tall as #root (main.ts reports it to the host), so html and body never take the
+ * frame's height and nothing scrolls inside it.
+ */
+
+:root {
+  --dc-s1: 4px;
+  --dc-s2: 8px;
+  --dc-s3: 12px;
+  --dc-s4: 16px;
+  --dc-r: calc(var(--oc-radius, 9px) - 2px);
+  --dc-r-lg: var(--oc-radius, 9px);
+  --dc-hair: color-mix(in srgb, var(--oc-border) 70%, transparent);
+  --dc-ring: 0 0 0 2px color-mix(in srgb, var(--oc-primary) 55%, transparent);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--oc-bg);
+  color: var(--oc-fg);
+  font-family: var(--oc-font);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+:where(p, h2) {
+  margin: 0;
+}
+
+.dcb-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ------------------------------------------------------------------ the block box */
+
+.dcb-block {
+  padding: var(--dc-s3);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--dc-r-lg);
+  background: var(--oc-bg);
+}
+
+/* ------------------------------------------------------------------ notices (one sentence) */
+
+.dcb-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+}
+
+.dcb-notice-icon {
+  display: inline-flex;
+  padding-top: 2px;
+  color: var(--oc-muted);
+}
+
+.dcb-notice-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--dc-s1);
+  min-width: 0;
+}
+
+.dcb-notice-text {
+  font-weight: 500;
+}
+
+.dcb-notice-detail {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+
+.dcb-notice-action {
+  margin-top: var(--dc-s1);
+}
+
+/* ------------------------------------------------------------------ previews */
+
+.dcb-preview {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 10;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--dc-hair);
+  border-radius: var(--dc-r);
+  background: var(--oc-muted-surface);
+  color: var(--oc-muted);
+}
+
+.dcb-preview img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
+}
+
+.dcb-preview-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--dc-s1);
+  padding: var(--dc-s2);
+  text-align: center;
+  font-size: 0.75rem;
+}
+
+.dcb-preview[data-state='missing'] {
+  color: var(--oc-warning-text);
+}
+
+/* ------------------------------------------------------------------ DesignCard */
+
+.dcb-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--dc-s3);
+}
+
+/* Wide enough for two columns: the preview beside the words, so the card stays short in the chat. */
+@media (min-width: 480px) {
+  .dcb-card {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    align-items: start;
+  }
+}
+
+.dcb-card-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+
+.dcb-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--dc-s2);
+  width: 100%;
+  min-width: 0;
+}
+
+.dcb-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dcb-kind {
+  flex: none;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+
+.dcb-card-line {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.dcb-checks {
+  display: inline-flex;
+}
+
+.dcb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dc-s2);
+  margin-top: var(--dc-s1);
+}
+
+.dcb-action {
+  display: inline-flex;
+}
+
+/* Open is the card's one filled action (as data-emphasis in src/ui/styles.css). Scoped under
+   .dcb-actions so it outranks the kit's own variant rules, which are injected after this file. */
+.dcb-actions .oc-sdk-btn[data-emphasis='primary'] {
+  background: var(--oc-primary);
+  background-image: none;
+  color: var(--oc-primary-fg);
+  border-color: var(--oc-primary);
+}
+.dcb-actions .oc-sdk-btn[data-emphasis='primary']:hover {
+  background: color-mix(in srgb, var(--oc-primary) 88%, var(--oc-fg));
+}
+.dcb-actions .oc-sdk-btn[data-emphasis='primary']:active {
+  background: color-mix(in srgb, var(--oc-primary) 80%, var(--oc-fg));
+}
+.dcb-actions .oc-sdk-btn[data-emphasis='primary']:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--oc-bg), 0 0 0 4px color-mix(in srgb, var(--oc-primary) 55%, transparent);
+}
+.dcb-actions .oc-sdk-btn[data-emphasis='primary'] .oc-sdk-spinner-ring {
+  border-color: color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+}
+
+/* Loading: soft bars where the words and buttons will be (a tint of the text colour, so they read on
+   any page colour). */
+.dcb-skel {
+  display: block;
+  height: 0.75rem;
+  border-radius: var(--dc-s1);
+  background: color-mix(in srgb, var(--oc-fg) 9%, transparent);
+}
+.dcb-skel[data-size='title'] {
+  width: 60%;
+  height: 1rem;
+}
+.dcb-skel[data-size='line'] {
+  width: 85%;
+}
+.dcb-skel[data-size='badge'] {
+  width: 25%;
+}
+.dcb-skel-actions {
+  display: flex;
+  gap: var(--dc-s2);
+  margin-top: var(--dc-s1);
+}
+.dcb-skel[data-size='button'] {
+  width: 4.5rem;
+  height: 1.75rem;
+  border-radius: var(--dc-r);
+}
+
+/* ------------------------------------------------------------------ DirectionPick */
+
+.dcb-pick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+}
+
+.dcb-question {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.dcb-tiles {
+  display: grid;
+  grid-template-columns: repeat(var(--dcb-count, 2), minmax(0, 1fr));
+  gap: var(--dc-s2);
+}
+
+/* The chat column is narrow: two tiles a row, so each preview stays big enough to judge. Four
+   tiles side by side need a wide column. */
+@media (max-width: 359px) {
+  .dcb-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 479px) {
+  .dcb-tiles[data-count='4'] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.dcb-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  min-width: 0;
+  padding: var(--dc-s2);
+  border: 1px solid var(--oc-border);
+  border-radius: var(--dc-r-lg);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition: background-color 120ms ease-out, border-color 120ms ease-out, opacity 120ms ease-out;
+}
+
+.dcb-tile:hover:not([aria-disabled='true']) {
+  background: var(--oc-hover);
+  border-color: color-mix(in srgb, var(--oc-primary) 45%, var(--oc-border));
+}
+
+.dcb-tile:active:not([aria-disabled='true']) {
+  background: var(--oc-active);
+}
+
+.dcb-tile:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+
+.dcb-tile[aria-disabled='true'] {
+  cursor: default;
+}
+
+.dcb-tile[aria-pressed='true'] {
+  background: var(--oc-selection);
+  border-color: var(--oc-primary);
+  color: var(--oc-selection-fg);
+}
+
+.dcb-tile[data-dimmed] {
+  opacity: 0.55;
+}
+
+.dcb-tile-preview {
+  position: relative;
+  display: block;
+}
+
+.dcb-tile-mark {
+  position: absolute;
+  top: var(--dc-s1);
+  right: var(--dc-s1);
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--oc-primary);
+  color: var(--oc-primary-fg);
+}
+
+.dcb-tile-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+
+.dcb-letter {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: var(--dc-s1);
+  background: var(--oc-muted-surface);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.dcb-tile[aria-pressed='true'] .dcb-letter {
+  background: var(--oc-primary);
+  color: var(--oc-primary-fg);
+}
+
+.dcb-tile-label {
+  flex: 1 1 auto;
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.dcb-tile-spin {
+  display: inline-flex;
+  flex: none;
+}
+
+.dcb-caption {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dcb-tile {
+    transition: none;
+  }
+}
