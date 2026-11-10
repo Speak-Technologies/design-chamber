@@ -1,4 +1,4 @@
-<!-- design-chamber:guide v1 sha256:539a7c103be462d0d1a788578057712bb522bd252e1ee6a7671604a8f587ed2d -->
+<!-- design-chamber:guide v1 sha256:9689f1d1414b59c604ce00f1c5b1f166c1483e7479a6bdd4cab70e59ec468055 -->
 # Designs folder (Design Chamber)
 
 This folder, `/home/you/Documents/Designs`, is the user's designs folder for Design Chamber, the design viewer inside OpenChamber. The user sets it in Design Chamber settings (the default is `~/Documents/Designs`). Designs saved anywhere else do not show up.
@@ -67,6 +67,11 @@ Set `updated` to the current time whenever you change the design. When design.js
 - From `screens/`: `../assets/photo.png`, `../tokens.css`.
 - No absolute paths, no `file://`, no drive letters.
 
+## Check your work
+
+Before you say a design is done, check it with the `design_check` tool and fix every error it lists. It renders the design, saves PNGs in the design's .chamber/check/ folder and lists what to fix.
+If you don't have that tool, read your HTML once more for overflow, contrast, alt text and labels.
+
 ## Leave these alone
 
 Never touch `.versions/`, `.chamber/`, `.thumb.png` or `.trash/`. Design Chamber keeps versions, comments and thumbnails there.
@@ -84,7 +89,7 @@ When the user's message starts with `/design` or `/page`, follow the instruction
 - Contrast at least WCAG AA, a visible focus ring, a label on every input.
 - One responsive file per screen, never a copy per device.
 - Show loading, empty and error states wherever data appears.
-- Before you say you are done, read your HTML once more for overflow, contrast, alt text and labels.
+- Before you say you are done, run the check below and fix every error.
 
 When the user wants the full rules for a fresh design, suggest starting with `/design <brief>` for a canvas or `/page <brief>` for a page.
 

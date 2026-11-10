@@ -4,7 +4,8 @@ import path from 'node:path';
 import { describe, test } from 'node:test';
 
 import { noProject, type ProjectRules } from '../../src/shared/agent/context.ts';
-import { buildRulesDoc } from '../../src/shared/agent/rules-doc.ts';
+import { CHECK_TOOL_NAME } from '../../src/shared/agent/guide.ts';
+import { buildRulesDoc, checkSection } from '../../src/shared/agent/rules-doc.ts';
 import { baseContext, REPO_RULES } from './helpers.ts';
 import { assertSnapshot } from './snapshot.ts';
 
@@ -168,6 +169,19 @@ describe('RULES.md assembly', () => {
     assert.ok(doc.includes('no CDN scripts, Google Fonts or other web fonts, remote images or analytics'));
     assert.ok(doc.includes('Remote files are blocked and listed back to you when the user sends comments.'));
     assert.ok(doc.includes('data-dc-goto="<screenId>"'));
+  });
+
+  test('the check section names design_check first, then the command, and RULES.md carries it as is (P15 §U2.4)', async () => {
+    const command = "sh '/home/you/Documents/Designs/.chamber/bin/dc' check pricing-page";
+    const withCommand = checkSection({ tool: CHECK_TOOL_NAME, command }).join('\n');
+    assert.ok(withCommand.indexOf('design_check') < withCommand.indexOf(command));
+    assert.ok(withCommand.includes('The command exits with 0 when there are no errors.'));
+    const none = checkSection({ tool: CHECK_TOOL_NAME, command: null }).join('\n');
+    assert.ok(none.includes("look for the check command in the Designs folder's AGENTS.md"));
+    assert.ok(!none.includes('exits with 0'), 'no exit code without a command');
+    const files = await realFiles();
+    assert.ok(buildRulesDoc(baseContext({ checkCommand: command }), files).includes(withCommand));
+    assert.ok(buildRulesDoc(baseContext({ checkCommand: null }), files).includes(none));
   });
 
   test('is deterministic: the same inputs give the same bytes (the service skips unchanged writes)', async () => {

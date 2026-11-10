@@ -1,8 +1,9 @@
 // What an agent reads when it has no `/design` or `/page` chip (documentation/specs/
-// agent-guidance-and-pages.md §4, §5): the guide the service keeps at `<root>/AGENTS.md`, the
-// `design-chamber` OpenCode skill the user can install from Settings, and the AGENTS.md
-// snippet Settings offers to copy. Pure and deterministic, no Node imports: the guest bundles
-// import this file for the snippet.
+// agent-guidance-and-pages.md §4, §5): the guide the service keeps at `<root>/AGENTS.md` (all an
+// agent outside OpenChamber reads), and the AGENTS.md snippet Settings offers to copy. Also the
+// SKILL.md older versions installed from Settings (`buildSkillDoc`), kept so the service can
+// recognise that copy; the skill that ships now is src/shared/agent/skill-doc.ts. Pure and
+// deterministic, no Node imports: the guest bundles import this file for the snippet.
 //
 // The root path is the only outside input. A root holding a control character (a newline
 // would start a new instruction line) is refused here as well as in `PUT /settings`.
@@ -16,6 +17,9 @@ export const SKILL_NAME = 'design-chamber';
 /** The guide's file name inside the designs root (D5). */
 export const GUIDE_FILE = 'AGENTS.md';
 
+/** The OpenCode tool Design Chamber's plugin adds (documentation/specs/phase-1-5-sdk-2-7.md §U3): named first wherever an agent is told to check its work. */
+export const CHECK_TOOL_NAME = 'design_check';
+
 export const SKILL_DESCRIPTION: string =
   'Use when the user asks for a design, mockup, wireframe, UI screen, landing page, prototype, HTML page or design canvas, ' +
   'or mentions the Designs folder, Design Chamber or a design studio. Explains where to save designs so Design Chamber ' +
@@ -24,13 +28,13 @@ export const SKILL_DESCRIPTION: string =
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
 
 /** Throws on a root no instruction text may carry. */
-const assertRoot = (root: string, label = 'designs folder'): void => {
+export const assertRoot = (root: string, label = 'designs folder'): void => {
   if (typeof root !== 'string' || root.trim() === '') throw new Error(`The ${label} path is empty.`);
   if (CONTROL_CHARACTER.test(root)) throw new Error(`The ${label} path contains a control character.`);
 };
 
 /** A builder never answers text over its cap: a root that long is refused, loudly. */
-const capped = (text: string, max: number, what: string): string => {
+export const capped = (text: string, max: number, what: string): string => {
   if (text.length > max) throw new Error(`The ${what} would be ${text.length} characters, over the ${max} limit: the designs folder path is too long.`);
   return text;
 };
@@ -39,13 +43,13 @@ const capped = (text: string, max: number, what: string): string => {
 const separatorOf = (anyPath: string): string => (/^[A-Za-z]:[\\/]|^\\\\/.test(anyPath) || (anyPath.includes('\\') && !anyPath.includes('/')) ? '\\' : '/');
 
 /** `root` joined with `parts` using `sep`, without doubling a trailing separator. */
-const joinWith = (sep: string, root: string, ...parts: string[]): string => {
+export const joinWith = (sep: string, root: string, ...parts: string[]): string => {
   const base = root.endsWith('/') || root.endsWith('\\') ? root.slice(0, -1) : root;
   return [base, ...parts].join(sep);
 };
 
 /** An inline code span that survives a backtick inside the value. */
-const code = (value: string): string => (value.includes('`') ? `\`\` ${value} \`\`` : `\`${value}\``);
+export const code = (value: string): string => (value.includes('`') ? `\`\` ${value} \`\`` : `\`${value}\``);
 
 const PAGE_EXAMPLE = [
   '```json',
@@ -79,7 +83,7 @@ const CANVAS_EXAMPLE = [
 ];
 
 /** At most 10 lines: the anti-slop and offline rules an agent without RULES.md still follows. */
-const rulesDigest = (checkCommand: string | null): string[] => [
+const rulesDigest = (): string[] => [
   '- The user\'s words come first, then the project\'s own design rules (DESIGN.md, tokens, theme files), then these.',
   '- No default purple-to-blue gradients, no stock centred hero with three equal cards, no box around every section.',
   '- Pick a typeface on purpose, at most two families. Not Inter, Roboto or Arial by default.',
@@ -89,9 +93,19 @@ const rulesDigest = (checkCommand: string | null): string[] => [
   '- Contrast at least WCAG AA, a visible focus ring, a label on every input.',
   '- One responsive file per screen, never a copy per device.',
   '- Show loading, empty and error states wherever data appears.',
+  '- Before you say you are done, run the check below and fix every error.',
+];
+
+/** The tool first; the launcher for agents without it (any agent outside OpenChamber); a read-through when neither is there. */
+const checkSectionLines = (checkCommand: string | null): string[] => [
+  '## Check your work',
+  '',
+  `Before you say a design is done, check it with the ${code(CHECK_TOOL_NAME)} tool and fix every error it lists. ` +
+    "It renders the design, saves PNGs in the design's .chamber/check/ folder and lists what to fix.",
   checkCommand === null
-    ? '- Before you say you are done, read your HTML once more for overflow, contrast, alt text and labels.'
-    : '- Before you say you are done, run the check below and fix every error.',
+    ? "If you don't have that tool, read your HTML once more for overflow, contrast, alt text and labels."
+    : `If you don't have that tool, run ${code(checkCommand)} with the design's folder name. Exit code 0 means no errors.`,
+  '',
 ];
 
 export type AgentGuideInput = {
@@ -155,14 +169,7 @@ export const buildAgentGuide = ({ root, platform, checkCommand = null }: AgentGu
     '- From `screens/`: `../assets/photo.png`, `../tokens.css`.',
     '- No absolute paths, no `file://`, no drive letters.',
     '',
-    ...(checkCommand === null
-      ? []
-      : [
-          '## Check your work',
-          '',
-          `Run ${code(checkCommand)} with the design's folder name. It renders the design, saves PNGs in the design's .chamber/check/ folder and lists what to fix. Exit code 0 means no errors.`,
-          '',
-        ]),
+    ...checkSectionLines(checkCommand),
     '## Leave these alone',
     '',
     'Never touch `.versions/`, `.chamber/`, `.thumb.png` or `.trash/`. Design Chamber keeps versions, comments and thumbnails there.',
@@ -172,7 +179,7 @@ export const buildAgentGuide = ({ root, platform, checkCommand = null }: AgentGu
     'When the user\'s message starts with `/design` or `/page`, follow the instructions attached to it and the design\'s `.chamber/RULES.md`. ' +
       'Without them, follow this file and these short rules:',
     '',
-    ...rulesDigest(checkCommand),
+    ...rulesDigest(),
     '',
     'When the user wants the full rules for a fresh design, suggest starting with `/design <brief>` for a canvas or `/page <brief>` for a page.',
     '',
@@ -202,7 +209,7 @@ export const buildRetiredGuide = ({ oldRoot, newRoot }: RetiredGuideInput): stri
 
 export type SkillDocInput = { root: string; guidePath: string; checkCommand?: string | null };
 
-/** `SKILL.md` of the `design-chamber` OpenCode skill (§5.1). Paths sit in the body, never in the frontmatter. */
+/** The `SKILL.md` older versions installed from Settings (§5.1), for the ownership check on that copy. Paths sit in the body, never in the frontmatter. */
 export const buildSkillDoc = ({ root, guidePath, checkCommand = null }: SkillDocInput): string => {
   assertRoot(root);
   assertRoot(guidePath, 'guide');
