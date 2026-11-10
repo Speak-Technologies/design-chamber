@@ -1305,7 +1305,7 @@ Design: `documentation/specs/agent-guidance-and-pages.md` §3.3, §3.4, §4, §5
   Settings, never throw. Deleting the guide brings it back; editing it stops all updates.
 - **Skill** `<cfg>/opencode/skills/design-chamber/SKILL.md`, `<cfg>` = `XDG_CONFIG_HOME` when set,
   absolute and NUL-free, else `<home>/.config`, on every OS (`skillTarget`, pure, posix and win32
-  tested). Written only by `POST /agent/skill` from a click in Settings; never on start or root
+  tested). Written only by `POST /agent/skill` from a click in Settings (Phase 1.5: that route and the Install button are removed by PR 1; the skill ships in the manifest and Settings only removes an old copy, §11.6); never on start or root
   change (a root change turns it `outdated` and the UI offers Update). Frontmatter `name:
   design-chamber`, a description ≤ 1 024, `metadata` with `generator: design-chamber` and the hash.
   `foreign` is never written; `edited` only with `replaceEdited`. The leaf folder and `SKILL.md`

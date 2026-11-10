@@ -53,6 +53,9 @@ Design Chamber makes *your* agent design *on your machine*, as files you own.
 **Requirements:** OpenChamber 2.7.0 or later · Windows, macOS or Linux · optional Chrome, Edge or
 Chromium (for PNG thumbnails; without one, the library uses live previews).
 
+**Before v0.2.0 is released**, use **From source** below: the one-click link and the Git URL
+install from the `release` branch, which the first tagged release creates.
+
 **One click:** [Install in OpenChamber](openchamber://extensions/install?url=https%3A%2F%2Fgithub.com%2FSpeak-Technologies%2Fdesign-chamber%23release).
 OpenChamber asks before it adds anything.
 
@@ -74,7 +77,8 @@ carries one.
 
 After the install, OpenChamber asks you to approve the permissions. Design Chamber runs a small
 local helper (the "service") that reads and writes your designs folder and launches the browser
-for thumbnails, and it adds instructions, a skill and a tool so your agent knows where designs go.
+for thumbnails. From v0.2.0 it also adds instructions, a skill and a tool so your agent knows where
+designs go.
 Until you approve, the new features stay off and everything from before keeps working.
 
 ## Quick start
@@ -130,8 +134,8 @@ as a canvas with one screen per board.
 **When you forget the slash command.** `/design` and `/page` only run when they start the
 message. So agents can still find their way, Design Chamber keeps an `AGENTS.md` guide at the root
 of your designs folder (it never overwrites one you edited), and **Settings → Help your agent find
-your designs** can install a `design-chamber` skill for OpenCode (only when you click) or give you
-lines to paste into your own `AGENTS.md`. Loose `.html` files dropped straight into the designs
+your designs** gives you lines to paste into your own `AGENTS.md`. Settings no longer installs a
+skill: from v0.2.0 the `design-chamber` skill ships with the extension. Loose `.html` files dropped straight into the designs
 folder show a banner offering to import them as pages.
 
 **Commenting with pins.** In **Edit** mode click any element, write a note, and a numbered pin
@@ -235,8 +239,9 @@ moved; earlier folders are listed with **Switch back**. **Use default** returns 
 - Every path is resolved and checked to stay **inside the Designs folder** before use.
 - Nothing leaves your machine except what *your chat model* sees (your brief, comments you send,
   the files your agent reads). Design Chamber itself uploads nothing.
-- It never edits your OpenCode/OpenChamber config. The one write outside the designs folder is
-  the optional `design-chamber` skill, and only when you click **Install** in Settings.
+- It never edits your OpenCode/OpenChamber config. Outside the designs folder it writes only its
+  own settings folder, and removes an old `design-chamber` skill copy from an earlier version only
+  when you click **Remove old copy** in Settings.
 
 ## Troubleshooting
 
