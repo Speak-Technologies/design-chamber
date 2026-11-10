@@ -11,7 +11,7 @@
 import { applyHostReady, mountSpinner } from '@openchamber/sdk/ui';
 
 import type { StatusDesignsQuery, StatusDesignsResponse } from '../../shared/api.ts';
-import { STATUS_REFETCH_DEBOUNCE_MS } from '../../shared/limits.ts';
+import { STATUS_REFETCH_DEBOUNCE_MS, STATUS_STARTING_GIVE_UP_MS } from '../../shared/limits.ts';
 import { createChangeFeed } from '../../guest/changes.ts';
 import { PANEL_SURFACE_ID, isHostError, openInRail } from '../../guest/flows.ts';
 import { getGuestHost } from '../../guest/host.ts';
@@ -20,7 +20,6 @@ import { debounce, errorText, h } from '../components/dom.ts';
 import { btn, type BtnHandle } from '../components/kit.ts';
 import {
   STATUS_COPY,
-  STATUS_STARTING_GIVE_UP_MS,
   shouldRefetchStatus,
   statusSectionOf,
   type StatusNotice,
@@ -174,7 +173,8 @@ const buildRow = (slug: string): RowNode => {
       el.dataset.tone = view.tone;
       el.dataset.here = view.here ? 'true' : 'false';
       title.textContent = view.title;
-      title.title = view.title;
+      // The name's own tooltip would hide the row's: keep the full title (it may be clipped) and add the checks sentence.
+      title.title = view.tooltip ? `${view.title}\n${view.tooltip}` : view.title;
       meta.textContent = view.meta;
       meta.hidden = view.meta === '';
       // The badge's own sentence when there is a check part; the line is also read in order, so this is a bonus.

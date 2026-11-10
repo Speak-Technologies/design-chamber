@@ -4,12 +4,10 @@
 // This file only decides which parts show, in what order, with which dot colour and which button state.
 
 import type { StatusDesignRow, StatusDesignsResponse } from '../../shared/api.ts';
+import { STATUS_STARTING_GIVE_UP_MS } from '../../shared/limits.ts';
 import { pillText } from './build-strip-model.ts';
 import { badgeOf, type BadgeTone } from './checks-model.ts';
 import { plural } from './format.ts';
-
-/** How long the service may stay unreachable before "starting" becomes "isn’t responding" (spec §U5.2). */
-export const STATUS_STARTING_GIVE_UP_MS = 10_000;
 
 /** Every sentence of the frame that is not built from a row; the frame draws these and nothing else of its own. */
 export const STATUS_COPY = {
@@ -54,8 +52,6 @@ export type StatusRowView = {
 export type StatusRowContext = {
   /** The person pressed Check on this row and the service has not yet said "running". */
   checking: boolean;
-  /** Another design's check is running, which is why no other design can start one. */
-  otherRunning: boolean;
 };
 
 const CHECK_TONE: Readonly<Record<BadgeTone, StatusTone>> = { success: 'success', warning: 'warning', error: 'error', neutral: 'muted' };
@@ -73,7 +69,9 @@ const checkButton = (row: StatusDesignRow, context: StatusRowContext): CheckButt
   if (context.checking || checks?.render.state === 'running') return { state: 'busy', reason: null };
   if (row.pending) return { state: 'disabled', reason: STATUS_COPY.checkNothingYet };
   if (checks === null) return { state: 'disabled', reason: STATUS_COPY.checkUnavailable };
-  if (!checks.canRun) return { state: 'disabled', reason: context.otherRunning ? STATUS_COPY.anotherCheck : STATUS_COPY.noBrowser };
+  // `canRun` is also false while a check of any design runs, one that may not be a row here: the service says which reason it is.
+  if (!checks.browser) return { state: 'disabled', reason: STATUS_COPY.noBrowser };
+  if (!checks.canRun) return { state: 'disabled', reason: STATUS_COPY.anotherCheck };
   return { state: 'ready', reason: null };
 };
 
@@ -145,11 +143,10 @@ export const statusSectionOf = (input: StatusSectionInput): StatusSectionView =>
     if (notice) return { ...base, kind: 'problem' };
     return { ...base, kind: 'empty', emptyText: input.hasProject ? STATUS_COPY.emptyProject : STATUS_COPY.emptyAnywhere };
   }
-  const otherRunning = data.rows.some((row) => row.checks?.render.state === 'running');
   return {
     ...base,
     kind: 'list',
-    rows: data.rows.map((row) => statusRowView(row, { checking: input.checking.has(row.slug), otherRunning })),
+    rows: data.rows.map((row) => statusRowView(row, { checking: input.checking.has(row.slug) })),
     more: data.total > data.rows.length ? `Show all ${data.total} designs` : null,
   };
 };

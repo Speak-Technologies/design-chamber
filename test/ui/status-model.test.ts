@@ -5,11 +5,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import type { ChecksRenderState, ChecksSummary, StatusDesignRow, StatusDesignsResponse } from '../../src/shared/api.ts';
+import { STATUS_STARTING_GIVE_UP_MS } from '../../src/shared/limits.ts';
 import { pillText } from '../../src/ui/model/build-strip-model.ts';
 import { badgeOf } from '../../src/ui/model/checks-model.ts';
 import {
   STATUS_COPY,
-  STATUS_STARTING_GIVE_UP_MS,
   statusRowView,
   shouldRefetchStatus,
   statusSectionOf,
@@ -17,10 +17,11 @@ import {
   type StatusSectionInput,
 } from '../../src/ui/model/status-model.ts';
 
-const summary = (state: ChecksRenderState, over: { errors?: number; warnings?: number; notes?: number; canRun?: boolean } = {}): ChecksSummary => ({
+const summary = (state: ChecksRenderState, over: { errors?: number; warnings?: number; notes?: number; canRun?: boolean; browser?: boolean } = {}): ChecksSummary => ({
   counts: { errors: over.errors ?? 0, warnings: over.warnings ?? 0, notes: over.notes ?? 0 },
   render: { state },
   canRun: over.canRun ?? true,
+  browser: over.browser ?? true,
 });
 
 const row = (over: Partial<StatusDesignRow> = {}): StatusDesignRow => ({
@@ -36,7 +37,7 @@ const row = (over: Partial<StatusDesignRow> = {}): StatusDesignRow => ({
   ...over,
 });
 
-const IDLE: StatusRowContext = { checking: false, otherRunning: false };
+const IDLE: StatusRowContext = { checking: false };
 
 // ---- agent part ----
 
@@ -86,9 +87,9 @@ for (const state of STATES) {
     ['1 error and 2 warnings', { errors: 1, warnings: 2 }],
     ['notes only', { notes: 3 }],
   ] as const) {
-    for (const canRun of [true, false]) {
-      test(`check part (${state}, ${name}, canRun ${canRun}) equals badgeOf`, () => {
-        const checks = summary(state, { ...counts, canRun });
+    for (const [canRun, browser] of [[true, true], [false, true], [false, false]] as const) {
+      test(`check part (${state}, ${name}, canRun ${canRun}, browser ${browser}) equals badgeOf`, () => {
+        const checks = summary(state, { ...counts, canRun, browser });
         const badge = badgeOf(checks, null, false);
         const view = statusRowView(row({ checks }), IDLE);
         assert.deepEqual(view.parts, [{ kind: 'check', text: badge.label }]);
@@ -121,7 +122,7 @@ test('check part: omitted when the checks were not read in time, or the design h
 });
 
 test('check part: a check the person just started reads "Checking" before the service says so', () => {
-  const view = statusRowView(row({ checks: summary('fresh', { warnings: 2 }) }), { checking: true, otherRunning: false });
+  const view = statusRowView(row({ checks: summary('fresh', { warnings: 2 }) }), { checking: true });
   assert.deepEqual(view.parts, [{ kind: 'check', text: badgeOf(summary('fresh', { warnings: 2 }), null, true).label }]);
   assert.equal(view.parts[0]?.text, 'Checking');
   assert.equal(view.tone, 'muted');
@@ -162,18 +163,26 @@ test('Check: ready when a check can run and none is running', () => {
 
 test('Check: busy while this design is checked, from the service or from a press', () => {
   assert.equal(statusRowView(row({ checks: summary('running', { canRun: false }) }), IDLE).check.state, 'busy');
-  assert.equal(statusRowView(row({ checks: summary('fresh') }), { checking: true, otherRunning: false }).check.state, 'busy');
+  assert.equal(statusRowView(row({ checks: summary('fresh') }), { checking: true }).check.state, 'busy');
 });
 
 test('Check: disabled with the Chrome reason when no browser was found', () => {
-  assert.deepEqual(statusRowView(row({ checks: summary('none', { canRun: false }) }), IDLE).check, { state: 'disabled', reason: 'Checks need Chrome, Edge or Chromium.' });
+  assert.deepEqual(statusRowView(row({ checks: summary('none', { canRun: false, browser: false }) }), IDLE).check, { state: 'disabled', reason: 'Checks need Chrome, Edge or Chromium.' });
 });
 
-test('Check: disabled with the "another design" reason while a different design is being checked', () => {
-  assert.deepEqual(statusRowView(row({ checks: summary('none', { canRun: false }) }), { checking: false, otherRunning: true }).check, {
+test('Check: disabled with the "another design" reason while any design is being checked, even one that is not a row here', () => {
+  // A check started from the viewer on a design outside the five rows: no row reads "running", but the service says canRun is false with a browser present.
+  assert.deepEqual(statusRowView(row({ checks: summary('fresh', { canRun: false }) }), IDLE).check, {
     state: 'disabled',
     reason: 'Another design is being checked. Try again when it finishes.',
   });
+});
+
+test('check part: a never-checked design stays muted while a check of another design runs, and green only with no browser', () => {
+  const elsewhere = statusRowView(row({ checks: summary('none', { canRun: false }) }), IDLE);
+  assert.equal(elsewhere.tone, 'muted');
+  assert.equal(elsewhere.tooltip, 'Checks: No issues in the files. Rendering hasn’t been checked yet.');
+  assert.equal(statusRowView(row({ checks: summary('none', { canRun: false, browser: false }) }), IDLE).tone, 'success');
 });
 
 test('Check: disabled with a reason when the checks were not read, or there is no file to check yet', () => {

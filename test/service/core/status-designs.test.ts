@@ -134,6 +134,7 @@ const checksResponse = (over: Partial<ChecksResponse['counts']> = {}, state: Che
   render: { state, at: null, artboards: 0, skipped: 0, findings: [] },
   counts: { errors: 0, warnings: 0, notes: 0, ...over },
   canRun: true,
+  browser: true,
 });
 
 type Rig = {
@@ -216,7 +217,7 @@ test('a row carries the counts, render state, comments and linked flag from memo
         here: true,
         agent: null,
         lastFile: null,
-        checks: { counts: { errors: 1, warnings: 2, notes: 0 }, render: { state: 'stale' }, canRun: true },
+        checks: { counts: { errors: 1, warnings: 2, notes: 0 }, render: { state: 'stale' }, canRun: true, browser: true },
         pending: false,
         openComments: 2,
       },

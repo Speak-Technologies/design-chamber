@@ -16,7 +16,7 @@
 const WIDTHS = [280, 400];
 const THEMES = ['dark', 'light'];
 
-const checks = (state, over = {}) => ({ counts: { errors: 0, warnings: 0, notes: 0, ...(over.counts ?? {}) }, render: { state }, canRun: over.canRun ?? true });
+const checks = (state, over = {}) => ({ counts: { errors: 0, warnings: 0, notes: 0, ...(over.counts ?? {}) }, render: { state }, canRun: over.canRun ?? true, browser: over.browser ?? true });
 const row = (slug, title, over = {}) => ({ slug, title, kind: 'page', here: false, agent: null, lastFile: null, checks: null, pending: false, openComments: 0, ...over });
 
 // Writing, issues and comments; working; failed; waiting for the first file (and a title too long for the line); a pass.
@@ -36,7 +36,7 @@ const LIST_B = {
   rows: [
     row('stale-pass', 'Stale pass', { checks: checks('stale') }),
     row('never-checked', 'Never checked', { checks: checks('none') }),
-    row('no-chrome', 'No Chrome here', { checks: checks('unavailable', { canRun: false }) }),
+    row('no-chrome', 'No Chrome here', { checks: checks('unavailable', { canRun: false, browser: false }) }),
     row('unread', 'Checks not read in time'),
     row('one-comment', 'Launch announcement', { checks: checks('fresh'), openComments: 1 }),
   ],
@@ -48,8 +48,10 @@ const LIST_C = {
   rows: [
     row('checking-now', 'Checking now', { checks: checks('running', { canRun: false }) }),
     row('has-to-wait', 'Has to wait', { checks: checks('none', { canRun: false }) }),
+    // A check started from the viewer on a design that is not a row here: nothing below reads "Checking".
+    row('passed-before', 'Passed before', { checks: checks('fresh', { canRun: false }) }),
   ],
-  total: 2,
+  total: 3,
 };
 
 const ok = (body) => ({ status: 200, body });
@@ -57,7 +59,7 @@ const STATES = [
   { id: 'loading', routes: { 'GET /status/designs': { status: 200, body: { rows: [], total: 0 }, delayMs: 120000 } }, ready: 'return !!doc.querySelector(".ws-loading") && !doc.querySelector(".ws-loading").hidden' },
   { id: 'list-a', routes: { 'GET /status/designs': ok(LIST_A) }, ready: 'return doc.querySelectorAll(".ws-row").length === 5' },
   { id: 'list-b', routes: { 'GET /status/designs': ok(LIST_B) }, ready: 'return doc.querySelectorAll(".ws-row").length === 5' },
-  { id: 'list-c', routes: { 'GET /status/designs': ok(LIST_C) }, ready: 'return doc.querySelectorAll(".ws-row").length === 2' },
+  { id: 'list-c', routes: { 'GET /status/designs': ok(LIST_C) }, ready: 'return doc.querySelectorAll(".ws-row").length === 3' },
   { id: 'empty-project', routes: { 'GET /status/designs': ok({ rows: [], total: 0 }) }, ready: 'return !!doc.querySelector(".ws-empty") && !doc.querySelector(".ws-empty").hidden' },
   { id: 'error', routes: { 'GET /status/designs': { status: 500, body: { error: 'internal', message: 'The local service didn’t answer.' } } }, ready: 'return !!doc.querySelector(".ws-notice") && !doc.querySelector(".ws-notice").hidden' },
 ];
@@ -115,6 +117,8 @@ const stateShot = async (helpers, state, width, theme) => {
     check((await text(p, '.ws-more'))[0] === 'Show all 12 designs', `${tag}: offers "Show all 12 designs"`);
     const title = await p.guest('const t = doc.querySelectorAll(".ws-title")[3]; return { clipped: t.scrollWidth > t.clientWidth, full: t.title }');
     check(title.clipped && title.full.startsWith('Habit tracker explorations'), `${tag}: a long title clips and keeps its full text as the tooltip`);
+    const named = await p.guest('return doc.querySelectorAll(".ws-title")[0].title');
+    check(named === 'Pricing page\nChecks: 3 issues', `${tag}: hovering the name also shows the checks sentence`);
     const disabled = await p.guest('return [...doc.querySelectorAll(".ws-row")].map((r) => r.querySelector("button").disabled).join(",")');
     check(disabled === 'false,false,false,true,false', `${tag}: Check is off only where there is no file yet (${disabled})`);
     check((await p.guest('return doc.querySelectorAll(".ws-row")[3].querySelector("button").title')) === 'There is nothing to check until the agent writes the first file.', `${tag}: the off Check says why`);
@@ -132,6 +136,9 @@ const stateShot = async (helpers, state, width, theme) => {
   if (state.id === 'list-c') {
     check((await p.guest('const b = doc.querySelectorAll(".ws-row")[0].querySelector("button"); return b.disabled && b.dataset.loading === "true"')), `${tag}: the running design's Check shows progress`);
     check((await p.guest('return doc.querySelectorAll(".ws-row")[1].querySelector("button").title')) === 'Another design is being checked. Try again when it finishes.', `${tag}: the other Check says why it waits`);
+    const tones = await p.guest('return [...doc.querySelectorAll(".ws-row")].map((n) => n.dataset.tone).join(",")');
+    check(tones === 'muted,muted,success', `${tag}: a never-checked design stays muted while another is checked, not a green pass (${tones})`);
+    check((await p.guest('return doc.querySelectorAll(".ws-row")[2].querySelector("button").title')) === 'Another design is being checked. Try again when it finishes.', `${tag}: a pass reads the same reason when the running design is not a row here`);
   }
   if (state.id === 'empty-project') {
     check((await text(p, '.ws-empty'))[0] === 'No designs for this project yet. Ask the agent for one, or type /design.', `${tag}: empty says what to do`);

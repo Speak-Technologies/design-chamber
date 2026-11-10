@@ -8,18 +8,11 @@
 import { basename } from 'node:path/posix';
 
 import type { ChecksResponse, StatusAgentState, StatusDesignRow, StatusDesignsQuery, StatusDesignsResponse } from '../shared/api.ts';
-import { STATUS_RECENT_MS, STATUS_ROWS_MAX, WRITING_WINDOW_MS } from '../shared/limits.ts';
+import { STATUS_CHECK_READ_MS, STATUS_INDEX_WAIT_MS, STATUS_RECENT_MS, STATUS_ROWS_MAX, WRITING_WINDOW_MS } from '../shared/limits.ts';
 import { sameDirectory } from '../shared/path-compare.ts';
 import type { DesignSummary } from '../shared/types.ts';
 import { RESTORE_QUIET_MS, agentFiles } from '../guest/build-activity.ts';
 import type { ServiceContext } from './context.ts';
-
-// ---- Timings (read only by this module and its tests) ----
-
-/** A cold design index is waited for this long; then the answer is an empty list, not an error. */
-export const STATUS_INDEX_WAIT_MS = 1500;
-/** One design's check state is read for this long; a slower read leaves that row without a check part. */
-export const STATUS_CHECK_READ_MS = 1500;
 
 // ---- Picking (pure) ----
 
@@ -157,7 +150,7 @@ export const createStatusDesigns = (ctx: StatusContext, deps: StatusDesignsDeps)
     // The row shows no check part for a design with nothing written yet.
     if (design.pending) return null;
     const read = await within(deps.checksFor(design.slug), checkReadMs);
-    return read === null ? null : { counts: read.counts, render: { state: read.render.state }, canRun: read.canRun };
+    return read === null ? null : { counts: read.counts, render: { state: read.render.state }, canRun: read.canRun, browser: read.browser };
   };
 
   return {
