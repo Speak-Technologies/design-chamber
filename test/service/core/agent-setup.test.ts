@@ -1,20 +1,20 @@
-// The agent guide at <root>/AGENTS.md and the user-clicked `design-chamber` skill
-// (documentation/specs/agent-guidance-and-pages.md §3.3, §3.4, §10, task A3).
+// The agent guide at <root>/AGENTS.md and the status of an older installed `design-chamber` skill
+// (documentation/specs/agent-guidance-and-pages.md §3.3, §3.4, §10, task A3;
+// documentation/specs/phase-1-5-sdk-2-7.md §U2.4).
 //
 // Ownership is the risk here: Design Chamber must never write over a file the user wrote or
-// edited, and the skill is the one write outside the designs root. Every skill test points the
-// home folder and XDG_CONFIG_HOME at a tmp folder: nothing here touches the real home.
+// edited. Every skill test points the home folder and XDG_CONFIG_HOME at a tmp folder: nothing
+// here touches the real home.
 
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { chmod, lstat, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
 
 import { createAgentSetup, ownedFileState, skillTarget, type AgentSetup } from '../../../src/service/agent-setup.ts';
 import { composeService } from '../../../src/service/compose.ts';
 import type { Logger } from '../../../src/service/context.ts';
-import { ApiError } from '../../../src/service/http.ts';
 import { createSettingsStore } from '../../../src/service/settings.ts';
 import { checkCommandFor } from '../../../src/shared/agent/check-command.ts';
 import { buildAgentGuide, buildRetiredGuide, buildSkillDoc } from '../../../src/shared/agent/guide.ts';
@@ -78,15 +78,6 @@ const useFixture = async (t: TestContext, options: { xdg?: string; makeRoot?: bo
 const guideFor = (root: string): string => buildAgentGuide({ root, platform: process.platform });
 const skillFor = (root: string): string => buildSkillDoc({ root, guidePath: path.join(root, 'AGENTS.md') });
 const skillFileOf = (home: string): string => path.join(home, '.config', 'opencode', 'skills', 'design-chamber', 'SKILL.md');
-
-const rejectsWith = async (promise: Promise<unknown>, code: string, message?: RegExp): Promise<void> => {
-  await assert.rejects(promise, (error: unknown) => {
-    assert.ok(error instanceof ApiError, `expected an ApiError, got ${String(error)}`);
-    assert.equal(error.code, code);
-    if (message) assert.match(error.message, message);
-    return true;
-  });
-};
 
 const canSymlink = async (t: TestContext, tmp: TmpRoot): Promise<boolean> => {
   try {
@@ -351,29 +342,27 @@ describe('guide at <root>/AGENTS.md (§3.3)', () => {
   });
 });
 
-// ---- The skill ----
+// ---- The skill (read-only status of an older installed copy) ----
+// The skill now ships inside the extension (documentation/specs/phase-1-5-sdk-2-7.md §U2.4); the
+// service only classifies a copy a user installed from Settings before, and never writes it.
+// `writeOld` stands in for that earlier install.
 
-describe('skill install (§3.4): only on request, never over the user\'s file', () => {
-  test('not-installed → install → current; a second install writes nothing', async (t) => {
+describe('older installed skill: status only, never written', () => {
+  test('not-installed, then current for an unedited copy of ours; reading writes nothing', async (t) => {
     const { root, home, agent } = await useFixture(t);
     const file = skillFileOf(home);
     assert.deepEqual(await agent.skillStatus(), { path: file, state: 'not-installed', duplicates: [] });
     assert.equal(existsSync(path.join(home, '.config')), false, 'status is read-only');
-
-    const installed = await agent.installSkill({ replaceEdited: false });
-    assert.deepEqual(installed, { path: file, state: 'current', duplicates: [] });
-    assert.equal(await readFile(file, 'utf8'), skillFor(root));
-    await utimes(file, OLD, OLD);
+    await writeOld(file, skillFor(root));
     const before = await fingerprint(file);
-    assert.equal((await agent.installSkill({ replaceEdited: false })).state, 'current');
+    assert.deepEqual(await agent.skillStatus(), { path: file, state: 'current', duplicates: [] });
     assert.deepEqual(await fingerprint(file), before);
   });
 
-  test('a root change turns it outdated (never rewritten on its own); install brings it current', async (t) => {
-    const { tmp, home, agent, settings } = await useFixture(t);
-    await agent.installSkill({ replaceEdited: false });
+  test('a root change turns our copy outdated and never rewrites it', async (t) => {
+    const { tmp, root, home, agent, settings } = await useFixture(t);
     const file = skillFileOf(home);
-    await utimes(file, OLD, OLD);
+    await writeOld(file, skillFor(root));
     const before = await fingerprint(file);
     const next = tmp.at('next');
     await mkdir(next);
@@ -381,36 +370,22 @@ describe('skill install (§3.4): only on request, never over the user\'s file', 
     await agent.idle();
     assert.equal((await agent.skillStatus()).state, 'outdated');
     assert.deepEqual(await fingerprint(file), before, 'a root change does not touch the skill');
-    assert.equal((await agent.installSkill({ replaceEdited: false })).state, 'current');
-    assert.equal(await readFile(file, 'utf8'), skillFor(next));
   });
 
-  test('edited → 409 → replaceEdited:true → current', async (t) => {
+  test('an edited copy reads as edited; a copy without our marker as foreign; bytes unchanged', async (t) => {
     const { root, home, agent } = await useFixture(t);
-    await agent.installSkill({ replaceEdited: false });
     const file = skillFileOf(home);
     await writeOld(file, skillFor(root).replace('Work offline', 'Work offline, my way'));
-    const before = await fingerprint(file);
+    let before = await fingerprint(file);
     assert.equal((await agent.skillStatus()).state, 'edited');
-    await rejectsWith(agent.installSkill({ replaceEdited: false }), 'conflict', /You changed this skill/);
     assert.deepEqual(await fingerprint(file), before);
-    assert.equal((await agent.installSkill({ replaceEdited: true })).state, 'current');
-    assert.equal(await readFile(file, 'utf8'), skillFor(root));
-  });
-
-  test('foreign → 409 even with replaceEdited, bytes unchanged', async (t) => {
-    const { home, agent } = await useFixture(t);
-    const file = skillFileOf(home);
     await writeOld(file, '---\nname: design-chamber\ndescription: my own skill\n---\nMine.\n');
-    const before = await fingerprint(file);
+    before = await fingerprint(file);
     assert.equal((await agent.skillStatus()).state, 'foreign');
-    for (const replaceEdited of [false, true]) {
-      await rejectsWith(agent.installSkill({ replaceEdited }), 'conflict', /A different skill called design-chamber is already at .*left it alone/);
-    }
     assert.deepEqual(await fingerprint(file), before);
   });
 
-  test('a symlinked design-chamber folder is foreign; nothing is written through it', async (t) => {
+  test('a symlinked design-chamber folder is foreign', async (t) => {
     const { tmp, home, agent } = await useFixture(t);
     if (!(await canSymlink(t, tmp))) return;
     const elsewhere = tmp.at('elsewhere');
@@ -418,11 +393,10 @@ describe('skill install (§3.4): only on request, never over the user\'s file', 
     await mkdir(path.join(home, '.config', 'opencode', 'skills'), { recursive: true });
     await symlink(elsewhere, path.join(home, '.config', 'opencode', 'skills', 'design-chamber'), 'dir');
     assert.equal((await agent.skillStatus()).state, 'foreign');
-    await rejectsWith(agent.installSkill({ replaceEdited: true }), 'conflict');
     assert.equal(existsSync(path.join(elsewhere, 'SKILL.md')), false);
   });
 
-  test('a symlinked SKILL.md is foreign and left alone', async (t) => {
+  test('a symlinked SKILL.md is foreign, even when it points at our own text', async (t) => {
     const { tmp, root, home, agent } = await useFixture(t);
     if (!(await canSymlink(t, tmp))) return;
     const real = tmp.at('real-skill.md');
@@ -431,23 +405,22 @@ describe('skill install (§3.4): only on request, never over the user\'s file', 
     await symlink(real, skillFileOf(home));
     const before = await fingerprint(real);
     assert.equal((await agent.skillStatus()).state, 'foreign');
-    await rejectsWith(agent.installSkill({ replaceEdited: true }), 'conflict');
     assert.deepEqual(await fingerprint(real), before);
   });
 
-  test('a symlinked opencode folder above skills/ is the user\'s setup: install works, path is the real one', async (t) => {
-    const { tmp, root, home, agent } = await useFixture(t);
+  test("a symlinked opencode folder above skills/ is the user's setup: the real path is shown", async (t) => {
+    const { tmp, root, agent, home } = await useFixture(t);
     if (!(await canSymlink(t, tmp))) return;
     const dotfiles = tmp.at('dotfiles/opencode');
     await mkdir(dotfiles, { recursive: true });
     await mkdir(path.join(home, '.config'), { recursive: true });
     await symlink(dotfiles, path.join(home, '.config', 'opencode'), 'dir');
     const realFile = path.join(dotfiles, 'skills', 'design-chamber', 'SKILL.md');
-    assert.equal((await agent.skillStatus()).path, realFile, 'the real path is shown before the install');
-    const installed = await agent.installSkill({ replaceEdited: false });
-    assert.equal(installed.state, 'current');
-    assert.equal(installed.path, realFile);
-    assert.equal(await readFile(realFile, 'utf8'), skillFor(root));
+    assert.equal((await agent.skillStatus()).path, realFile, 'the real path is shown with no copy');
+    await writeOld(realFile, skillFor(root));
+    const status = await agent.skillStatus();
+    assert.equal(status.state, 'current');
+    assert.equal(status.path, realFile);
   });
 
   test('copies in ~/.claude/skills and ~/.agents/skills are listed, never written', async (t) => {
@@ -456,15 +429,15 @@ describe('skill install (§3.4): only on request, never over the user\'s file', 
     await writeOld(claude, 'other copy');
     const before = await fingerprint(claude);
     assert.deepEqual((await agent.skillStatus()).duplicates, [claude]);
-    const installed = await agent.installSkill({ replaceEdited: false });
-    assert.deepEqual(installed.duplicates, [claude]);
     assert.deepEqual(await fingerprint(claude), before);
     assert.equal(existsSync(path.join(home, '.agents')), false);
 
     // A ~/.agents/skills that is a link to OpenCode's own skills folder is the same file, not a duplicate.
     if (!(await canSymlink(t, tmp))) return;
+    await mkdir(path.join(home, '.config', 'opencode', 'skills'), { recursive: true });
     await mkdir(path.join(home, '.agents'), { recursive: true });
     await symlink(path.join(home, '.config', 'opencode', 'skills'), path.join(home, '.agents', 'skills'), 'dir');
+    await writeOld(skillFileOf(home), 'ours or not, one file');
     assert.deepEqual((await agent.skillStatus()).duplicates, [claude]);
   });
 
@@ -472,30 +445,16 @@ describe('skill install (§3.4): only on request, never over the user\'s file', 
     const tmp = await useTmpRoot(t, 'dc-agent-');
     const xdg = tmp.at('xdg');
     const { home, agent } = await useFixture(t, { xdg });
-    const installed = await agent.installSkill({ replaceEdited: false });
-    assert.equal(installed.path, path.join(xdg, 'opencode', 'skills', 'design-chamber', 'SKILL.md'));
+    assert.equal((await agent.skillStatus()).path, path.join(xdg, 'opencode', 'skills', 'design-chamber', 'SKILL.md'));
     assert.equal(existsSync(path.join(home, '.config')), false);
   });
 
-  test('a root with a control character: unavailable with a sentence, install refused, nothing written', async (t) => {
+  test('a root with a control character: unavailable with a sentence, nothing written', async (t) => {
     const { tmp, home, agent, settings } = await useFixture(t);
     settings.move(tmp.at('bad\troot'));
     const status = await agent.skillStatus();
     assert.equal(status.state, 'unavailable');
     assert.match(status.message ?? '', /unusual character/);
-    await rejectsWith(agent.installSkill({ replaceEdited: false }), 'internal');
     assert.equal(existsSync(path.join(home, '.config')), false);
-  });
-
-  test('an unwritable skills folder answers a sentence, not raw Node text', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async (t) => {
-    const { home, agent } = await useFixture(t);
-    const skills = path.join(home, '.config', 'opencode', 'skills');
-    await mkdir(skills, { recursive: true });
-    await chmod(skills, 0o500);
-    try {
-      await rejectsWith(agent.installSkill({ replaceEdited: false }), 'internal', /not allowed to write/);
-    } finally {
-      await chmod(skills, 0o700);
-    }
   });
 });

@@ -24,6 +24,7 @@ import {
   type SettingsStore,
   type UploadStore,
 } from '../../src/service/context.ts';
+import { createActivityTracker } from '../../src/service/activity.ts';
 import { ApiError } from '../../src/service/http.ts';
 
 export type LogLine = { level: 'info' | 'warn' | 'error'; event: string; fields?: Readonly<Record<string, unknown>> };
@@ -154,6 +155,7 @@ const createStore = (settings: SettingsStore): DesignStore => {
           screenCount: record.design.screens.length,
           viewports: record.design.viewports,
           sessionId: record.design.sessionId,
+          projectDirectory: record.design.projectDirectory,
           openComments: record.design.comments.filter((comment) => comment.status === 'open').length,
           thumb: { state: 'unavailable', key: null },
           warnings: record.warnings,
@@ -236,6 +238,9 @@ export const createFakeContext = (options: FakeContextOptions): FakeContext => {
     outbox,
     renders: unavailable('fake renders — pass it in overrides'),
     thumbnails: { peek: () => ({ state: 'unavailable', key: null }) },
+    designIndex: unavailable('fake design index, pass it in overrides'),
+    hostCalls: unavailable('fake host calls, pass it in overrides'),
+    activity: createActivityTracker(),
     onDispose: (fn) => void disposers.push(fn),
   };
 

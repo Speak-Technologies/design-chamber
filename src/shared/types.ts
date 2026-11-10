@@ -191,8 +191,13 @@ export type BrowserSource = 'setting' | 'detected' | 'none';
 
 // ---- Change hub [§7, §9.4] ----
 
-/** `loose`: the set of loose `.html`/`.htm` files directly in the root changed (slug `null`). */
-export type ChangeKind = 'added' | 'removed' | 'design' | 'files' | 'thumb' | 'versions' | 'comments' | 'root' | 'loose' | 'checks';
+/**
+ * `loose`: the set of loose `.html`/`.htm` files directly in the root changed (slug `null`).
+ * `open`: a status or block frame asked the rail to open this design (`POST /open-request`).
+ * `activity`: the linked agent's turn state for this design changed (session events).
+ * Neither changes design data.
+ */
+export type ChangeKind = 'added' | 'removed' | 'design' | 'files' | 'thumb' | 'versions' | 'comments' | 'root' | 'loose' | 'checks' | 'open' | 'activity';
 
 export type ChangeEvent = {
   seq: number;
@@ -218,6 +223,8 @@ export type DesignSummary = {
   screenCount: number;
   viewports: Viewport[];
   sessionId: string | null;
+  /** The project the design was made for (design.json `projectDirectory`); Work Status and mentions filter on it. */
+  projectDirectory: string | null;
   openComments: number;
   thumb: { state: ThumbState; key: string | null };
   warnings: DesignWarning[];

@@ -1,19 +1,20 @@
 // How agents find Design Chamber without a slash command (documentation/specs/
 // agent-guidance-and-pages.md §3.3, §3.4): the guide the service keeps at `<root>/AGENTS.md`,
-// and the `design-chamber` OpenCode skill the user installs from Settings.
+// and the status of an older `design-chamber` OpenCode skill a user installed from Settings
+// before the skill shipped inside the extension (documentation/specs/phase-1-5-sdk-2-7.md §U2.4).
 //
 // Ownership (D6): both files carry a marker with a content hash (src/shared/agent/ownership.ts).
 // The service rewrites only its own unedited file. A file without the marker, an edited one, a
 // symlink or anything that is not a regular file is never written. The final compare + rename
 // is synchronous (`replaceFileIfUnchanged`), so a user edit that lands mid-write is kept.
 //
-// The skill is the one write outside the designs root. Its path is fixed (`skillTarget`, no
-// request input), it happens only from `POST /agent/skill` (the user's click), and the leaf
-// `design-chamber` folder and `SKILL.md` must not be symlinks. Symlinks above `skills/` are the
-// user's own setup (a dotfiles repo) and are followed; Settings shows the real path.
+// The skill file is read here, never written. Its path is fixed (`skillTarget`, no request
+// input); a symlinked leaf `design-chamber` folder or `SKILL.md` reads as foreign. Symlinks
+// above `skills/` are the user's own setup (a dotfiles repo) and are followed; Settings shows
+// the real path.
 
 import { readFileSync } from 'node:fs';
-import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
+import { lstat, open, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -21,7 +22,6 @@ import { buildAgentGuide, buildRetiredGuide, buildSkillDoc, GUIDE_FILE, SKILL_NA
 import { findOwnershipMarker, ownershipHash } from '../shared/agent/ownership.ts';
 import type { AgentGuideStatus, AgentSkillStatus, ChangeEvent } from '../shared/types.ts';
 import type { ChangeHub, Logger, SettingsStore } from './context.ts';
-import { ApiError } from './http.ts';
 import { replaceFileIfUnchanged, resolveInside, type PathModule } from './paths.ts';
 import { folderErrorSentence, isDirectory } from './root.ts';
 
@@ -163,8 +163,6 @@ export type AgentSetup = {
   rootChanged(root: string, previous: string): Promise<void>;
   /** Read-only skill status (GET /settings). Never throws. */
   skillStatus(): Promise<AgentSkillStatus>;
-  /** Install or update the skill. Only `POST /agent/skill` calls this. 409 for foreign/edited, 500 on a write failure. */
-  installSkill(options: { replaceEdited: boolean }): Promise<AgentSkillStatus>;
   /** Start syncing: once now (after `ready`), on root changes, and on `added` events (debounced). Answers the stop function. */
   start(deps: { hub: Pick<ChangeHub, 'subscribe'>; ready: Promise<void>; debounceMs?: number }): () => void;
   /** Settles when every queued guide write has finished (tests and shutdown). */
@@ -270,7 +268,7 @@ export const createAgentSetup = (options: AgentSetupOptions): AgentSetup => {
     return found;
   };
 
-  /** The skill's state plus what `installSkill` needs: the text on disk and the text to write. */
+  /** The skill's state plus the text on disk and the text Design Chamber would have written (for the ownership check). */
   const classifySkill = async (): Promise<{ status: AgentSkillStatus; onDisk: string | null; expected: string | null }> => {
     let shown = target.file;
     let duplicates: string[] = [];
@@ -318,39 +316,6 @@ export const createAgentSetup = (options: AgentSetupOptions): AgentSetup => {
       }, undefined),
 
     skillStatus: async () => (await classifySkill()).status,
-
-    async installSkill({ replaceEdited }) {
-      const { status, onDisk, expected } = await classifySkill();
-      if (status.state === 'foreign') {
-        throw new ApiError('conflict', `A different skill called design-chamber is already at ${status.path}, so Design Chamber left it alone.`);
-      }
-      if (status.state === 'edited' && !replaceEdited) {
-        throw new ApiError('conflict', 'You changed this skill. Replace it with Design Chamber\'s version?');
-      }
-      if (status.state === 'unavailable' || expected === null) {
-        throw new ApiError('internal', status.message ?? 'Design Chamber could not read OpenCode\'s skills folder.');
-      }
-      if (status.state === 'current') return status;
-
-      try {
-        await mkdir(target.dir, { recursive: true });
-        // Symlinks above skills/ are the user's own setup; the leaf folder itself must be real.
-        const dirInfo = await lstat(target.dir);
-        if (dirInfo.isSymbolicLink() || !dirInfo.isDirectory()) {
-          throw new ApiError('conflict', `A different skill called design-chamber is already at ${status.path}, so Design Chamber left it alone.`);
-        }
-        if (!(await replaceOwnedFile(target.file, onDisk, expected))) {
-          throw new ApiError('conflict', 'The skill file changed while Design Chamber was writing it. Try again.');
-        }
-      } catch (error) {
-        if (error instanceof ApiError) throw error;
-        log.warn('agent.skill-install-failed', { code: codeOf(error) ?? null, error: errorText(error) });
-        throw new ApiError('internal', folderErrorSentence(error, target.dir, { platform, homeDir }));
-      }
-      const fresh = (await classifySkill()).status;
-      log.info('agent.skill-installed', { path: fresh.path, was: status.state });
-      return fresh;
-    },
 
     start({ hub, ready, debounceMs = GUIDE_SYNC_DEBOUNCE_MS }) {
       let stopped = false;

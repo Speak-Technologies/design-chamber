@@ -18,3 +18,7 @@ fix the doc and note what drifted.
 | [Agent instructions](features/agent-instructions.md) | The chip and RULES.md that steer the chat agent; revision requests; Open as page. | Rail panel, Full-screen page, chat |
 | [Design checks](features/design-checks.md) | The `dc check` command an agent runs before it says done: renders every screen offline, saves pictures, lists what to fix; the service's findings and routes. | Rail panel, Full-screen page, chat |
 | [Agent discovery](features/agent-discovery.md) | How an agent finds the designs folder without a slash command: the AGENTS.md guide, the design-chamber skill, the snippet; never overwrites the user's file. | Rail panel, Full-screen page (Settings) |
+| [Turn snapshots](features/turn-snapshots.md) (Phase 1.5, being written) | A version after every agent turn on a linked design, from OpenChamber's session events, with no Design Chamber window open. | Full-screen page (Versions) |
+| [Work Status](features/work-status.md) (Phase 1.5, being written) | Recent designs in the chat's Work Status: what the agent is writing, check results, Check and Open. | Work Status, Rail panel |
+| [Design mentions](features/design-mentions.md) (Phase 1.5, being written) | `@` a design in the composer to give the agent its folder, rules and open comments. | Chat composer |
+| [Chat blocks](features/chat-blocks.md) (Phase 1.5, being written) | A design card in the agent's reply, and a pick between design directions. | Chat, Rail panel |

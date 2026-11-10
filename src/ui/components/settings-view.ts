@@ -147,25 +147,6 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
     } else toast('error', 'Couldn’t reach the clipboard. Select the text and copy it by hand.');
   };
 
-  /** Only ever from a click: the one write outside the designs folder. */
-  const installSkill = async (replaceEdited: boolean, updating: boolean): Promise<void> => {
-    skillBusy = true;
-    skillError = null;
-    skillConfirming = false;
-    paint();
-    try {
-      await client.call('POST /agent/skill', { body: replaceEdited ? { replaceEdited: true } : {} });
-      toast('success', updating ? 'Skill updated. New chats use the new folder.' : 'Skill installed. New chats in OpenCode can find your designs.');
-    } catch (error) {
-      skillError = errorText(error);
-    } finally {
-      skillBusy = false;
-      // The answer or the failure may mean the file changed under us (edited, someone else's): show what is there now.
-      await store.loadSettings();
-      paint();
-    }
-  };
-
   const paint = (): void => {
     const state = store.getState().settings;
     body.replaceChildren();
@@ -242,25 +223,8 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
       mountBadge(installed, { label: 'Installed', tone: 'success' });
       append(skill, h('div', { class: 'dc-status-line' }, installed, sentence(row.sentence, true)));
     } else skill.append(sentence(row.sentence));
-    const action = row.action;
-    if (action && skillConfirming && row.confirm !== null) {
-      const replace = btn({ label: 'Replace skill', variant: 'destructive', size: 'xs', loading: skillBusy, onClick: () => void installSkill(true, false) });
-      const keep = btn({ label: 'Keep mine', variant: 'ghost', size: 'xs', disabled: skillBusy, onClick: () => {
-        skillConfirming = false;
-        paint();
-      } });
-      append(skill, h('p', { class: 'dc-settings-p', role: 'alert' }, row.confirm), h('div', { class: 'dc-row-actions' }, replace.el, keep.el));
-      queueMicrotask(() => keep.el.focus());
-    } else if (action) {
-      const press = btn({ label: action.label, variant: 'outline', size: 'sm', loading: skillBusy, onClick: () => {
-        if (action.kind === 'replace') {
-          skillConfirming = true;
-          skillError = null;
-          paint();
-        } else void installSkill(false, action.kind === 'update');
-      } });
-      append(skill, h('div', { class: 'dc-row-actions' }, press.el));
-    }
+    // POST /agent/skill is gone (the skill ships inside the extension): no install button here.
+    // T2b finishes this row (documentation/specs/phase-1-5-sdk-2-7.md §10.1, §U2.5).
     if (skillError !== null) skill.append(h('p', { class: 'dc-form-error', role: 'alert' }, skillError));
     for (const duplicate of duplicateSentences(settings.agent.skill)) {
       const badge = h('span');

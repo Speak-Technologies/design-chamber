@@ -9,15 +9,16 @@
 import type { GuestSessionActivity, GuestSessionsSnapshot } from '@openchamber/sdk';
 
 import type { DesignDetailResponse } from '../shared/api.ts';
+import { WRITING_WINDOW_MS } from '../shared/limits.ts';
+import { sameDirectory } from '../shared/path-compare.ts';
 import type { ChangeEvent } from '../shared/types.ts';
 import type { ChangeFeed, FeedStatus } from './changes.ts';
-import { sameDirectory } from './flows.ts';
 import type { GuestHost } from './host.ts';
 
 // ---- Timings (read only by this module, its tests and the strip's copy) ----
 
-/** A file landed less than this long ago: the agent is writing right now. */
-export const WRITING_WINDOW_MS = 15_000;
+/** A file landed less than this long ago: the agent is writing right now (in limits.ts, so Work Status says the same). */
+export { WRITING_WINDOW_MS };
 /** Working this long with nothing saved: the strip says so. */
 export const QUIET_MS = 120_000;
 /** How long "Done" stays after the turn ends. */

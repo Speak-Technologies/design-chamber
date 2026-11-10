@@ -14,14 +14,20 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync, renameSync } from 'node:fs';
 import { realpath as fsRealpath, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { PlatformPath } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { SLUG_BASE_MAX, SLUG_FALLBACK, SLUG_PATTERN } from '../shared/limits.ts';
+import {
+  foldsCase as sharedFoldsCase,
+  isEscaping,
+  isInsideOrEqual as sharedIsInsideOrEqual,
+  isStrictlyInside as sharedIsStrictlyInside,
+  samePath as sharedSamePath,
+  type PathModule,
+} from '../shared/path-compare.ts';
 import { ApiError } from './http.ts';
 
-/** The subset of a node:path flavour this module uses (`path`, `path.win32` or `path.posix`). */
-export type PathModule = Pick<PlatformPath, 'resolve' | 'relative' | 'isAbsolute' | 'join' | 'dirname' | 'basename' | 'parse' | 'sep'>;
+export type { PathModule };
 
 export type ContainmentDeps = {
   /** Path flavour; defaults to the platform's `node:path`. */
@@ -36,50 +42,27 @@ export type ContainmentDeps = {
 
 const badPath = (message: string): ApiError => new ApiError('bad-path', message);
 
-/**
- * Whether path comparisons ignore case: the win32 flavour always (NTFS), and darwin, whose
- * default APFS/HFS+ volumes are case-insensitive — `/Users/me/documents` IS `~/Documents`
- * there, so an exact comparison would let a re-cased path slip past "inside home" and
- * "same root" checks. Linux filesystems are case-sensitive: exact. (A darwin user on an
- * opt-in case-sensitive volume gets the folded rule: a symlink to a sibling whose name
- * differs from the root only by case would count as inside — accepted, see
- * docs/testing/PLATFORMS.md.)
- */
-export const foldsCase = (p: PathModule = path, platform: NodeJS.Platform = process.platform): boolean => p.sep === '\\' || platform === 'darwin';
+// The lexical rules live in src/shared/path-compare.ts (one implementation, also bundled into
+// frames and the OpenCode plugin); here they get this platform's `node:path` and
+// `process.platform` as defaults.
 
-/** True when a `path.relative` result means "outside": a leading `..` or an absolute path. */
-const isEscaping = (relative: string, p: PathModule): boolean =>
-  relative === '..' || relative.startsWith(`..${p.sep}`) || p.isAbsolute(relative);
-
-/** `path.relative` of two resolved paths under the platform's case rule. */
-const relativeFolded = (from: string, to: string, p: PathModule, platform: NodeJS.Platform): string => {
-  const left = p.resolve(from);
-  const right = p.resolve(to);
-  return foldsCase(p, platform) ? p.relative(left.toLowerCase(), right.toLowerCase()) : p.relative(left, right);
-};
+/** Whether path comparisons ignore case (see `src/shared/path-compare.ts`). */
+export const foldsCase = (p: PathModule = path, platform: NodeJS.Platform = process.platform): boolean => sharedFoldsCase(p, platform);
 
 /** Cross-platform absolute-dir equality for one path flavour (case rule per `foldsCase`). */
-export const samePath = (a: string, b: string, p: PathModule = path, platform: NodeJS.Platform = process.platform): boolean => {
-  const left = p.resolve(a);
-  const right = p.resolve(b);
-  return foldsCase(p, platform) ? left.toLowerCase() === right.toLowerCase() : left === right;
-};
+export const samePath = (a: string, b: string, p: PathModule = path, platform: NodeJS.Platform = process.platform): boolean => sharedSamePath(a, b, p, platform);
 
 /** True when `dir` is `root` itself or a descendant of it (lexical, flavour-aware). */
-export const isInsideOrEqual = (root: string, dir: string, p: PathModule = path, platform: NodeJS.Platform = process.platform): boolean => {
-  const relative = relativeFolded(root, dir, p, platform);
-  return relative === '' || !isEscaping(relative, p);
-};
+export const isInsideOrEqual = (root: string, dir: string, p: PathModule = path, platform: NodeJS.Platform = process.platform): boolean =>
+  sharedIsInsideOrEqual(root, dir, p, platform);
 
 /**
  * True when `target` is strictly below `base` (lexical, flavour-aware; case rule per
  * `foldsCase`). The disk-free core of `resolveInside`, for callers that only classify a path
  * (the bundler's reference classifier); anything that reads or writes uses `resolveInside`.
  */
-export const isStrictlyInside = (base: string, target: string, p: PathModule = path, platform: NodeJS.Platform = process.platform): boolean => {
-  const relative = relativeFolded(base, target, p, platform);
-  return relative !== '' && !isEscaping(relative, p);
-};
+export const isStrictlyInside = (base: string, target: string, p: PathModule = path, platform: NodeJS.Platform = process.platform): boolean =>
+  sharedIsStrictlyInside(base, target, p, platform);
 
 const defaultRealpath = (target: string): Promise<string> => fsRealpath(target);
 

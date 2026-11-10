@@ -302,6 +302,7 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     screenCount: record.design.screens.length,
     viewports: record.design.viewports,
     sessionId: record.design.sessionId,
+    projectDirectory: record.design.projectDirectory,
     openComments: record.design.comments.filter((comment) => comment.status === 'open').length,
     thumb: thumbOf(record.slug),
     warnings: record.warnings,

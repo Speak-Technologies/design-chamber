@@ -611,7 +611,7 @@ describe('RULES.md writer and the onCreate hook', () => {
     const router = createRouter({ token: TOKEN, log: ctx.log });
     assert.doesNotThrow(() => registerChatRoutes(router, ctx));
     assert.ok(ctx.logs.some((line) => line.level === 'warn' && line.event === 'agent.rules-hook-unavailable'));
-    assert.deepEqual(router.registered().sort(), ['DELETE /open-request', 'POST /chip', 'POST /designs/:slug/prompt', 'POST /pages/from-message']);
+    assert.deepEqual(router.registered().sort(), ['DELETE /open-request', 'POST /chip', 'POST /designs/:slug/prompt', 'POST /open-request', 'POST /pages/from-message']);
   });
 });
 

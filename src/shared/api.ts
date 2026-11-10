@@ -6,6 +6,8 @@
 // strings (F7); every request carries the bearer token (the host adds it); errors are
 // `ApiErrorBody` with the status from `API_ERROR_STATUS`.
 
+import type { GuestSessionEventRequest, GuestSessionEventResult, MentionsResolveRequest, MentionsResolveResult, MentionsSearchRequest, MentionsSearchResult } from '@openchamber/sdk';
+
 import type {
   AgentGuideStatus,
   AgentSkillStatus,
@@ -89,9 +91,12 @@ export type SettingsResponse = {
   agent: { guide: AgentGuideStatus; skill: AgentSkillStatus };
 };
 
-/** Install or update the `design-chamber` skill. No path is ever accepted: the target is fixed. */
-export type InstallSkillBody = { replaceEdited?: boolean };
-export type InstallSkillResponse = { skill: AgentSkillStatus };
+/**
+ * `DELETE /agent/skill`: remove the older copy of the `design-chamber` skill a user installed from
+ * Settings before the skill was built in, when it is ours and unedited. No path is ever accepted:
+ * the target is fixed. Answers the copy's status afterwards (`not-installed` once it is gone).
+ */
+export type RemoveSkillResponse = { skill: AgentSkillStatus };
 
 /** `name`: a loose `.html`/`.htm` file directly in the root, as listed by `GET /designs`. */
 export type ImportLooseBody = { name: string };
@@ -309,9 +314,49 @@ export type ChecksResponse = {
 /** The run is a background job; it ends with a `checks` change event. 409 `conflict` while another design is being checked. */
 export type ChecksRunResponse = { state: 'running' };
 
+/** How the rail opens a requested design: `comment` starts in Edit mode with Comment pressed. */
+export type OpenIntent = 'view' | 'comment';
 /** A design the rail should open as soon as it is up; taken once, kept `OPEN_REQUEST_TTL_MS`. */
-export type OpenRequest = { slug: string; created: IsoDate };
+export type OpenRequest = { slug: string; intent: OpenIntent; created: IsoDate };
 export type OpenRequestResponse = { request: OpenRequest | null };
+/** `POST /open-request` (a Work Status row or a chat block): `intent` defaults to `view`. */
+export type OpenRequestBody = { slug: string; intent?: OpenIntent };
+
+/** As much of a `ChecksResponse` as a badge needs; a whole `ChecksResponse` fits it. */
+export type ChecksSummary = { counts: ChecksResponse['counts']; render: { state: ChecksRenderState }; canRun: boolean };
+
+// ---- Phase 1.5 (documentation/specs/phase-1-5-sdk-2-7.md §3.5) ----
+
+/** `POST /session-events`: the host's own wire format, read with the SDK's `readSessionEventRequest`. */
+export type SessionEventsBody = GuestSessionEventRequest;
+/** Exactly `{ ok: true }` once the event is taken; the host reads nothing else. */
+export type SessionEventsResponse = GuestSessionEventResult;
+
+export type MentionsSearchBody = MentionsSearchRequest;
+export type MentionsSearchResponse = MentionsSearchResult;
+export type MentionsResolveBody = MentionsResolveRequest;
+export type MentionsResolveResponse = MentionsResolveResult;
+
+/** `GET /status/designs`: the frame's project folder and chat, both optional. */
+export type StatusDesignsQuery = { directory?: string; session?: string };
+/** The linked agent's state as the rail pill words it (`writing` only with a recent agent file). */
+export type StatusAgentState = 'writing' | 'working' | 'failed';
+export type StatusDesignRow = {
+  slug: string;
+  title: string;
+  kind: DesignKind;
+  /** Linked to the chat the frame is in. */
+  here: boolean;
+  agent: StatusAgentState | null;
+  /** Base name of the last file the agent wrote, only with `writing`. */
+  lastFile: string | null;
+  /** `null` when the check state was not read in time: the row shows no check part. */
+  checks: ChecksSummary | null;
+  pending: boolean;
+  openComments: number;
+};
+/** `rows` ≤ `STATUS_ROWS_MAX`; `total` counts every design that matched. */
+export type StatusDesignsResponse = { rows: StatusDesignRow[]; total: number };
 
 // ---- The route table ----
 
@@ -339,7 +384,7 @@ export interface ApiRoutes {
   'GET /outbox': Route<NoQuery, undefined, OutboxResponse>;
   'PUT /outbox': Route<NoQuery, PutOutboxBody, OutboxResponse>;
   'DELETE /outbox': Route<NoQuery, undefined, OutboxResponse>;
-  'POST /agent/skill': Route<NoQuery, InstallSkillBody, InstallSkillResponse>;
+  'DELETE /agent/skill': Route<NoQuery, undefined, RemoveSkillResponse>;
   'POST /loose/import': Route<NoQuery, ImportLooseBody, ImportLooseResponse>;
 
   // WP2 — rendering, versions, export, thumbnails
@@ -364,6 +409,13 @@ export interface ApiRoutes {
   'POST /designs/:slug/prompt': Route<NoQuery, PromptBody, PromptResponse>;
   'POST /pages/from-message': Route<NoQuery, FromMessageBody, FromMessageResponse>;
   'DELETE /open-request': Route<NoQuery, undefined, OpenRequestResponse>;
+  'POST /open-request': Route<NoQuery, OpenRequestBody, OkResponse>;
+
+  // Phase 1.5: host-called routes (session events, the `@` menu) and Work Status
+  'POST /session-events': Route<NoQuery, SessionEventsBody, SessionEventsResponse>;
+  'POST /mentions/search': Route<NoQuery, MentionsSearchBody, MentionsSearchResponse>;
+  'POST /mentions/resolve': Route<NoQuery, MentionsResolveBody, MentionsResolveResponse>;
+  'GET /status/designs': Route<StatusDesignsQuery, undefined, StatusDesignsResponse>;
 }
 
 export type RouteKey = keyof ApiRoutes;
@@ -383,7 +435,10 @@ export type RouteQuery<K extends RouteKey> = ApiRoutes[K]['query'];
 export type RouteBody<K extends RouteKey> = ApiRoutes[K]['body'];
 export type RouteResponse<K extends RouteKey> = ApiRoutes[K]['response'];
 
-/** Lane that implements each route. Exhaustive by type: adding a route without an owner fails typecheck. */
+/**
+ * Lane that implements each route. Exhaustive by type: adding a route without an owner fails typecheck.
+ * `U2` to `U6`: the Phase 1.5 sibling branch that fills the route (documentation/specs/phase-1-5-sdk-2-7.md §10.2).
+ */
 export const ROUTE_OWNERS = {
   'GET /health': 'WP0',
   'GET /settings': 'WP1',
@@ -403,7 +458,7 @@ export const ROUTE_OWNERS = {
   'GET /outbox': 'WP1',
   'PUT /outbox': 'WP1',
   'DELETE /outbox': 'WP1',
-  'POST /agent/skill': 'WP1',
+  'DELETE /agent/skill': 'U2',
   'POST /loose/import': 'WP1',
   'GET /designs/:slug/render': 'WP2',
   'GET /designs/:slug/render/chunk': 'WP2',
@@ -424,7 +479,12 @@ export const ROUTE_OWNERS = {
   'POST /designs/:slug/prompt': 'WP3',
   'POST /pages/from-message': 'WP3',
   'DELETE /open-request': 'WP3',
-} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3'>;
+  'POST /open-request': 'WP3',
+  'POST /session-events': 'U4',
+  'POST /mentions/search': 'U6',
+  'POST /mentions/resolve': 'U6',
+  'GET /status/designs': 'U5',
+} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6'>;
 
 export const ROUTE_KEYS = Object.keys(ROUTE_OWNERS) as RouteKey[];
 

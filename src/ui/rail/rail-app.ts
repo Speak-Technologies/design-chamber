@@ -61,11 +61,6 @@ export const mountRail = (root: HTMLElement): void => {
     (target) => openViewer(target.slug),
     (error) => toast('error', `Couldn’t open that design. ${errorText(error)}`),
   );
-  // "Open as page" runs in the background frame and leaves the new page for us to open.
-  flows.watchOpenRequests(
-    (listener) => feed.subscribe((batch) => {
-      if (batch.reset || batch.events.some((event) => event.kind === 'added')) listener();
-    }),
-    (target) => openViewer(target.slug),
-  );
+  // "Open as page" (background frame), a Work Status row or a chat block leaves a design for us to open.
+  flows.watchOpenRequests((listener) => feed.subscribe(listener), (target) => openViewer(target.slug));
 };

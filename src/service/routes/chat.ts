@@ -1,4 +1,5 @@
-// WP3 — POST /chip, POST /designs/:slug/prompt, POST /pages/from-message, DELETE /open-request (docs/SPEC.md §7, §10, §11),
+// WP3 — POST /chip, POST /designs/:slug/prompt, POST /pages/from-message, POST and DELETE /open-request
+// (docs/SPEC.md §7, §10, §11; documentation/specs/phase-1-5-sdk-2-7.md §3.2),
 // and the `onCreate` hook that writes `<design>/.chamber/RULES.md`. Revision and offline prompts
 // list the remote URLs the viewer blocks, taken from the bundler's static scan of the design's
 // files on disk; a design frame never supplies them (documentation/specs/agent-guidance-and-pages.md §3.6).
@@ -14,7 +15,7 @@ import { derivePageTitle, extractHtml } from '../../shared/agent/html-extract.ts
 import { buildChecksPrompt, buildContinuePrompt, buildOfflinePrompt, buildRevisionPrompt, type ExternalList } from '../../shared/agent/revision-prompt.ts';
 import { buildRulesDoc } from '../../shared/agent/rules-doc.ts';
 import { normalizeExternalUrl, sortFindings } from '../../shared/checks.ts';
-import type { AskElement, ChipResponse, FromMessageResponse, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse, RenderMeta, RenderQuery } from '../../shared/api.ts';
+import type { AskElement, ChipResponse, FromMessageResponse, OkResponse, OpenIntent, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse, RenderMeta, RenderQuery } from '../../shared/api.ts';
 import {
   ASK_TEXT_MAX,
   BRIEF_MAX,
@@ -29,6 +30,7 @@ import {
   PROMPT_EXTERNAL_SCAN_MS,
   PROMPT_EXTERNAL_URL_MAX,
   SESSION_ID_MAX,
+  SLUG_PATTERN,
   UPLOAD_ID_PATTERN,
 } from '../../shared/limits.ts';
 import type { AnchorState, Comment, DesignKind } from '../../shared/types.ts';
@@ -136,6 +138,18 @@ const parseFromMessageBody = (body: unknown): { uploadId: string; sessionId: str
   if (typeof sessionTitle !== 'string' || sessionTitle.length > 1000) throw new ApiError('bad-request', 'The chat title is not valid.');
   if (record.open !== undefined && typeof record.open !== 'boolean') throw new ApiError('bad-request', 'open must be true or false.');
   return { uploadId, sessionId, sessionTitle, directory: projectDirectoryOf(record.directory), open: record.open === true };
+};
+
+/**
+ * `POST /open-request` body. The slug is checked against `SLUG_PATTERN` here, before any path is
+ * built from it; the store then resolves it under the root (containment) and says whether it exists.
+ */
+export const parseOpenRequestBody = (body: unknown): { slug: string; intent: OpenIntent } => {
+  const record = bodyOf(body, 'the open request');
+  const { slug, intent } = record;
+  if (typeof slug !== 'string' || !SLUG_PATTERN.test(slug)) throw new ApiError('bad-slug', 'That is not a design folder name.');
+  if (intent !== undefined && intent !== 'view' && intent !== 'comment') throw new ApiError('bad-request', 'The intent must be "view" or "comment".');
+  return { slug, intent: intent ?? 'view' };
 };
 
 // ---- RULES.md on disk ----
@@ -328,6 +342,7 @@ const selectComments = (all: readonly Comment[], ids: readonly string[] | null):
  * - 'POST /chip'
  * - 'POST /designs/:slug/prompt'
  * - 'POST /pages/from-message'
+ * - 'POST /open-request'
  * - 'DELETE /open-request'
  * and hooks design creation so every new design gets its `.chamber/RULES.md`.
  * Design folders come from `ctx.store` (slug pattern + containment, §9.1); the only path this
@@ -335,8 +350,12 @@ const selectComments = (all: readonly Comment[], ids: readonly string[] | null):
  */
 export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
   const instructions = createInstructions(ctx);
-  // One slot, taken exactly once: a newer "Open as page" replaces an untaken older one.
+  // One slot, taken exactly once: a newer request ("Open as page", a Work Status row, a chat block)
+  // replaces an untaken older one.
   let openRequest: { request: OpenRequest; at: number } | null = null;
+  const leaveOpenRequest = (slug: string, intent: OpenIntent): void => {
+    openRequest = { request: { slug, intent, created: new Date().toISOString() }, at: Date.now() };
+  };
 
   try {
     ctx.onDispose(
@@ -459,8 +478,23 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
       html,
     });
     // The background action opens the rail next; the rail takes this on mount or on `added`.
-    if (input.open) openRequest = { request: { slug: record.slug, created: new Date().toISOString() }, at: Date.now() };
+    if (input.open) leaveOpenRequest(record.slug, 'view');
     return { slug: record.slug, title: record.design.title };
+  });
+
+  // A Work Status row or a chat block: open an existing design in the rail. The `open` event
+  // reaches a rail that is already up; one opened next takes the request on mount.
+  router.on('POST /open-request', async ({ body }): Promise<OkResponse> => {
+    const { slug, intent } = parseOpenRequestBody(body);
+    try {
+      await ctx.store.dir(slug);
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'not-found') throw new ApiError('not-found', 'That design is no longer in your Designs folder.');
+      throw error;
+    }
+    leaveOpenRequest(slug, intent);
+    ctx.hub.emit({ slug, kind: 'open' });
+    return { ok: true };
   });
 
   router.on('DELETE /open-request', (): OpenRequestResponse => {
