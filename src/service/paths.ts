@@ -221,7 +221,8 @@ export const atomicTempPath = (target: string): string =>
 
 /**
  * Write a file via tmp + rename in its own folder (a partial write is never visible, and the
- * tmp name is dot-prefixed so the watcher ignores it — SPEC §9.4). Creates parent folders.
+ * tmp name is dot-prefixed so the watcher ignores it — SPEC §9.4). Creates parent folders
+ * unless `createDirs` is false.
  *
  * Windows refuses to rename over a file another handle has open (EPERM/EBUSY/EACCES): a list
  * refresh reading state.json, an agent or an antivirus scan. The rename is retried a few
@@ -229,9 +230,11 @@ export const atomicTempPath = (target: string): string =>
  * is not run again until the agent's next change, which would leave a design provisional.
  * Replacing the file with the same bytes is idempotent, so the retry is safe.
  */
-export const writeFileAtomic = async (file: string, data: string | Uint8Array): Promise<void> => {
+export const writeFileAtomic = async (file: string, data: string | Uint8Array, options: { createDirs?: boolean } = {}): Promise<void> => {
   const dir = path.dirname(file);
-  await mkdir(dir, { recursive: true });
+  // `createDirs: false` is for a writer into a folder somebody else may delete meanwhile (a design the user
+  // removed): a missing folder then fails with ENOENT instead of being recreated as a partial design.
+  if (options.createDirs !== false) await mkdir(dir, { recursive: true });
   const tmp = path.join(dir, `.${path.basename(file)}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`);
   try {
     await writeFile(tmp, data);

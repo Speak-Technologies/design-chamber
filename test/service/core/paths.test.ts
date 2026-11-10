@@ -249,6 +249,17 @@ describe('writeFileAtomic', () => {
     assert.deepEqual(left, []);
   });
 
+  test('createDirs: false never makes the parent: a folder deleted meanwhile stays deleted and nothing is left', async (t) => {
+    const tmp = await fsRealpath(await mkdtemp(path.join(os.tmpdir(), 'dc-atomic-')));
+    t.after(() => rm(tmp, { recursive: true, force: true, maxRetries: 3 }));
+    const gone = path.join(tmp, 'deleted-design', '.chamber', 'state.json');
+    await assert.rejects(writeFileAtomic(gone, '{}\n', { createDirs: false }), (error: NodeJS.ErrnoException) => error.code === 'ENOENT');
+    assert.deepEqual(await readdir(tmp), []);
+    await mkdir(path.dirname(gone), { recursive: true });
+    await writeFileAtomic(gone, '{}\n', { createDirs: false });
+    assert.equal(await readFile(gone, 'utf8'), '{}\n');
+  });
+
   const atomicTmp = async (t: TestContext): Promise<string> => {
     const tmp = await fsRealpath(await mkdtemp(path.join(os.tmpdir(), 'dc-atomic-')));
     t.after(() => rm(tmp, { recursive: true, force: true, maxRetries: 3 }));

@@ -240,8 +240,26 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     await writeMirror(slug, read, state, write);
   };
 
+  /**
+   * A design the user deleted outside the app (Finder, a script) while a reconcile or a mutation was in
+   * flight must stay deleted: this may create `.chamber/`, never the design folder itself, or the delete
+   * comes back as a folder holding only state.json. Gone = `not-found` (reconcile treats it as nothing to do).
+   */
   const writeState = async (dir: string, state: ServiceState): Promise<void> => {
-    await writeFileAtomic(stateFileOf(dir), serializeJson(state as unknown as JsonValue)); // Safe: ServiceState is plain JSON.
+    const gone = (): ApiError => new ApiError('not-found', 'That design does not exist.');
+    try {
+      await mkdir(path.join(dir, '.chamber')); // not recursive: fails with ENOENT when the design folder is gone
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') throw gone();
+      if (code !== 'EEXIST') throw error;
+    }
+    try {
+      await writeFileAtomic(stateFileOf(dir), serializeJson(state as unknown as JsonValue), { createDirs: false }); // Safe: ServiceState is plain JSON.
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw gone();
+      throw error;
+    }
   };
 
   /** The design.json half of `writeStateAndMirror` (state.json already written or unchanged). */
@@ -342,10 +360,16 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
         throw error;
       }
       const state = resolveState(slug, read, true);
-      // state.json is rewritten only when it changes: two reconciles of an unchanged folder
-      // write nothing at all.
-      if (!read.stateFromDisk || state !== read.record.state) await writeState(read.record.path, state);
-      await writeMirror(slug, withState(read, state), state, null);
+      try {
+        // state.json is rewritten only when it changes: two reconciles of an unchanged folder
+        // write nothing at all.
+        if (!read.stateFromDisk || state !== read.record.state) await writeState(read.record.path, state);
+        await writeMirror(slug, withState(read, state), state, null);
+      } catch (error) {
+        // The folder was deleted after it was read: nothing to merge, and nothing is written back.
+        if (error instanceof ApiError && error.code === 'not-found') return;
+        throw error;
+      }
     });
   };
 
