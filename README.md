@@ -240,7 +240,7 @@ moved; earlier folders are listed with **Switch back**. **Use default** returns 
 - Nothing leaves your machine except what *your chat model* sees (your brief, comments you send,
   the files your agent reads). Design Chamber itself uploads nothing.
 - It never edits your OpenCode/OpenChamber config. Outside the designs folder it writes only its
-  own settings folder, and removes an old `design-chamber` skill copy from an earlier version only
+  own settings folder. From v0.2.0 it can also remove an old `design-chamber` skill copy, only
   when you click **Remove old copy** in Settings.
 
 ## Troubleshooting
