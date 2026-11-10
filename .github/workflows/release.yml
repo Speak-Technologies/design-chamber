@@ -61,6 +61,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # A re-run after a partial success: the branch and tag are already out, so go on to the GitHub Release.
+          if [ -n "$(git ls-remote --tags origin "refs/tags/release-v$VERSION")" ]; then
+            echo "release-v$VERSION is already published; skipping the branch and tag."
+            exit 0
+          fi
           source_sha=$(git rev-parse HEAD)
           worktree="$RUNNER_TEMP/release-worktree"
           if git fetch --no-tags origin release:refs/remotes/origin/release; then
@@ -81,6 +86,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "The GitHub Release $TAG already exists."
+            exit 0
+          fi
           gh release create "$TAG" "design-chamber-$VERSION.zip" \
             --title "Design Chamber $VERSION" \
             --generate-notes \
