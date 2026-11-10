@@ -18,6 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { PutSettingsBody } from '../shared/api.ts';
+import { designChamberDataDir } from '../shared/app-data.ts';
 import { PREVIOUS_ROOTS_MAX, SETTINGS_FILE_VERSION, SETTINGS_PATH_MAX } from '../shared/limits.ts';
 import type { SettingsFile } from '../shared/types.ts';
 import type { Logger, SettingsStore } from './context.ts';
@@ -39,15 +40,9 @@ export const settingsFilePath = (
 ): string => {
   const override = env.DC_SETTINGS_PATH;
   if (typeof override === 'string' && override.trim() !== '') return path.resolve(override.trim());
-  if (platform === 'win32') {
-    const appData = env.APPDATA && env.APPDATA.trim() !== '' ? env.APPDATA : path.join(homeDir, 'AppData', 'Roaming');
-    return path.join(appData, 'Design Chamber', 'settings.json');
-  }
-  if (platform === 'darwin') {
-    return path.join(homeDir, 'Library', 'Application Support', 'Design Chamber', 'settings.json');
-  }
-  const xdg = env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.trim() !== '' ? env.XDG_CONFIG_HOME : path.join(homeDir, '.config');
-  return path.join(xdg, 'design-chamber', 'settings.json');
+  // The folder rule is shared with the OpenCode plugin, which reads runtime.json from it.
+  const dir = designChamberDataDir({ platform, homeDir, appData: env.APPDATA, xdgConfigHome: env.XDG_CONFIG_HOME, join: path.join });
+  return path.join(dir, 'settings.json');
 };
 
 /** Keep only well-typed fields; anything else in the file is dropped. */
