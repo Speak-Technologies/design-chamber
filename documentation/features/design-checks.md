@@ -1,10 +1,55 @@
 # Design checks (the agent looks at its own work)
 
-Before an agent says a design is done, it runs one command. Design Chamber renders every screen
-at every viewport, saves pictures, and lists what is wrong. The same findings feed the Checks
-badge in the viewer (the last section covers it).
+Before an agent says a design is done, it checks it. Design Chamber renders every screen
+at every viewport, saves pictures, and lists what is wrong. Agents in OpenChamber get a tool for
+this, `design_check`; every other agent runs a command. Both run the same check and print the same
+text. The same findings feed the Checks badge in the viewer (the last section covers it).
 
-## What the agent runs
+## The `design_check` tool (agents in OpenChamber)
+Design Chamber ships an OpenCode plugin (`dist/plugin/`, package name `design-chamber-tools`) that
+adds one tool, `design_check`, to every OpenCode session OpenChamber starts while the extension is on.
+The agent sees it in its tool list without searching (`codemode: false`, about 150 tokens per
+session). The chat shows each call as a card titled "Design check · <design>".
+
+- **Input.** `design`: the design folder name, such as `pricing-page` (a bare name only: `../x`,
+  `/abs/path`, `C:\x` and `a/b` are refused with "That is not a design folder name..."). `screens`:
+  canvas screen ids to check (a list, or text like `"home,faq"`), at most 16. `static`: files only,
+  no browser.
+- **Answer.** Exactly what `dc check` prints: the result line, the PNG paths to look at, the
+  findings. Exit 0 or 1 answer that text; when the check cannot run the answer is "The check could
+  not run: " and the CLI's own sentence. After 3 minutes the check is stopped and the answer
+  suggests checking one screen. Stopping the agent stops the check.
+- **How it runs.** The plugin starts `dist/cli/dc.mjs` from the same package as a child process,
+  with OpenChamber's own runtime (`ELECTRON_RUN_AS_NODE=1`), no shell, and a short list of
+  environment variables (PATH, HOME, temp, locale, and the Windows system ones). OpenCode's secrets
+  (its server password, tool tokens, provider keys) never reach it. Output is capped at 1 MB. The
+  plugin never talks to the service and never sees its token.
+- **The runtime record.** The service writes `runtime.json` next to `settings.json`
+  (Linux `~/.config/design-chamber/`, macOS `~/Library/Application Support/Design Chamber/`,
+  Windows `%APPDATA%\Design Chamber\`) when it starts, and rewrites it only when the runtime path or
+  the version changed: `{ v, execPath, electron, version, updated }`, no secret. The plugin trusts
+  it only as far as it can check it: the program must be named `openchamber` (any case, `.exe`
+  allowed), be a real file once links are followed, and sit inside the OpenChamber install that runs
+  this OpenCode (found from OpenCode's own path, `<install>/resources/opencode-cli/opencode`).
+  Anything else, such as a record edited to point at `/tmp/x/node`, is refused and nothing runs.
+- **When it says no.** No `runtime.json` yet (the service has never run on this computer): "Design
+  Chamber hasn't set up its check tool yet. Open the Design Chamber panel once, then try again." A
+  record that does not check out, or an OpenCode that is not inside an OpenChamber install (one
+  installed on its own, `openchamber serve` on a system Node): "The design_check tool can't run in
+  this setup. Run the check command from the AGENTS.md file in the Designs folder instead." Neither
+  names a path.
+- **Where it does not reach.** Only the OpenCode that OpenChamber starts loads the plugin. An
+  OpenCode run in `restart` or `none` delivery needs **Add to global config** in OpenChamber's
+  settings; a remote OpenCode, sessions in isolated spaces, terminal agents and agents opened outside
+  OpenChamber never get it. Whether sessions through the Claude Code harness inside OpenChamber get it
+  is not verified yet. All of them use the command below, which keeps working unchanged.
+- **Verified.** On Linux with OpenChamber in `/opt/OpenChamber`, the built plugin, loaded by
+  OpenCode's own runtime, rendered a design through `/opt/OpenChamber/openchamber`. The macOS
+  (`OpenChamber.app/Contents/Resources/opencode-cli/opencode`) and Windows
+  (`OpenChamber\resources\opencode-cli\opencode.exe`) layouts are covered by tests but not yet seen on
+  a real machine; if they differ, the tool refuses and the agent falls back to the command.
+
+## What the agent runs without the tool
 `<designs folder>/.chamber/bin/dc` (Windows: `dc.cmd`), a small launcher the service writes. The
 chip, RULES.md, the guide and the skill quote the exact command for this computer:
 
@@ -94,8 +139,12 @@ opacity). Overlap and cut-off text are heuristics, so they are warnings.
 browser pipe, render loop, output, launcher, service, target resolution, report text),
 `src/service/routes/checks.ts`, `src/shared/checks.ts` (finding table and `check.json` validation),
 `src/shared/agent/check-command.ts`, `src/guest/probe/probe.ts` (the measuring script, built into
-the CLI and the service). Tests: `test/service/check/**`, `test/cli/**`, `test/agent/check-copy.test.ts`,
-`test/agent/checks-prompt-route.test.ts`, `test/shared/checks.test.ts`.
+the CLI and the service). The tool: `src/plugin/index.ts` (entry, built-ins from
+`process.getBuiltinModule`) and `src/plugin/check-tool.ts` (input, install root, record check, child
+env, run, answer; pure parts exported), `src/service/runtime-record.ts`, `src/shared/app-data.ts`
+(the app-data folder both sides use). Tests: `test/service/check/**`, `test/cli/**`, `test/agent/check-copy.test.ts`,
+`test/agent/checks-prompt-route.test.ts`, `test/shared/checks.test.ts`, `test/plugin/**`,
+`test/shared/app-data.test.ts`, `test/service/core/runtime-record.test.ts`.
 
 ## The Checks badge (the viewer side)
 Both viewers (the full-screen page, canvas and page designs, and the compact rail viewer) show a pill that says how the design stands, and open the findings. Screens: [full-screen page](../pages/full-screen-page.md) (P7) and [rail panel](../pages/rail-panel.md).
