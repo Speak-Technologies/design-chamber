@@ -60,7 +60,7 @@ The action runs in the hidden background frame, so it works whether or not the r
 - The brief is limited to 2 000 characters; a longer one is refused with a sentence saying how long it was.
 - If the bundled `rules/` folder is missing, creating a chip fails with "Reinstall the extension" rather than sending a chip that points at a file that does not exist.
 - If `RULES.md` cannot be refreshed when sending a revision (a file lock), the earlier copy stays and the message still goes out.
-- The chat id typed into a `/design` command is not stored with the design: the link to a chat is made once the user actually sends a message (reconciliation).
+- The chat id typed into a `/design` command is not stored with the design: the link to a chat is made once the user actually sends a message. Two things make it, both from the chip being on that chat, never from timing: the rail and page look at the sessions of the open project (reconciliation), and the service looks at the chips OpenChamber lists on each chat's turn events. The second one is what links a design started in a chat with no project (OpenChamber's "Chat" group), which the rail cannot see, and it works with no Design Chamber window open. A design that already has a chat is never moved to another one this way.
 - Nothing in `.chamber/` is ever versioned, exported or edited by the agent.
 
 ## Where it lives
