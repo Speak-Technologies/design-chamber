@@ -71,6 +71,7 @@ export const run = async (helpers) => {
     for (const width of WIDTHS) {
       for (const state of STATES) await stateShot(helpers, state, width, theme);
       await noProject(helpers, width, theme);
+      await chatFolder(helpers, width, theme);
     }
   }
   await onFakeService(helpers, 400, 'dark');
@@ -167,6 +168,25 @@ const noProject = async ({ openPage, check }, width, theme) => {
   check((await text(p, '.ws-empty'))[0] === 'No designs in the last 7 days. Ask the agent for one, or type /design.', `${tag}: says "last 7 days" without a project`);
   await p.settle(250);
   await p.shot(tag);
+  await p.close();
+};
+
+// A chat opened without a project is in its own folder under OpenChamber's config, which is not a registered
+// project (the host's listProjects knows only ember-oak). The fake service drops designs whose project differs
+// from a `directory` it is sent, so rows appearing here prove the frame left the folder out of the query.
+const chatFolder = async ({ openPage, check }, width, theme) => {
+  const tag = `ws-chat-folder-${width}-${theme}`;
+  const p = await openPage({ width, height: 380, surface: 'status', theme, label: tag, query: '&session=ses_coffee' });
+  console.log(tag);
+  await p.waitFor('return doc.querySelectorAll(".ws-row").length >= 5', 'the rows for the project');
+  await p.host('send({ type: "ready", payload: { ...ready(), directory: "/home/sam/.config/openchamber/chats/2026-11-10/session-0a1b2c3d" } })');
+  await p.waitFor('return doc.querySelectorAll(".ws-row").length >= 5', 'the rows for a chat with no project');
+  check((await p.guest('return doc.querySelector(".ws-row").dataset.here')) === 'true', `${tag}: this chat's design still comes first`);
+  await p.settle(250);
+  await p.shot(tag);
+  // Back to a registered project: the filter applies again, so the ember-oak designs are still all there.
+  await p.host('send({ type: "ready", payload: { ...ready() } })');
+  await p.waitFor('return doc.querySelectorAll(".ws-row").length >= 5', 'the rows for the project again');
   await p.close();
 };
 

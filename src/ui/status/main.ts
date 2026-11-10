@@ -20,6 +20,7 @@ import { debounce, errorText, h } from '../components/dom.ts';
 import { btn, type BtnHandle } from '../components/kit.ts';
 import {
   STATUS_COPY,
+  projectDirectoryOf,
   shouldRefetchStatus,
   statusSectionOf,
   type StatusNotice,
@@ -45,7 +46,11 @@ let failure: { code: string; message: string } | null = null;
 let failingSince: number | null = null;
 let giveUpTimer: ReturnType<typeof setTimeout> | undefined;
 let hasProject = true;
+/** The folder the host says this chat is in; a chat without a project is in its own folder, which is not a project. */
 let directory: string | null = null;
+/** `directory` when it is a registered project, else null (the list then spans this chat and the last 7 days). */
+let projectDirectory: string | null = null;
+let resolveSeq = 0;
 let sessionId: string | null = null;
 let ready = false;
 let latest = 0;
@@ -53,7 +58,7 @@ let latest = 0;
 const checking = new Set<string>();
 
 const queryOf = (): StatusDesignsQuery => ({
-  ...(directory === null ? {} : { directory }),
+  ...(projectDirectory === null ? {} : { directory: projectDirectory }),
   ...(sessionId === null ? {} : { session: sessionId }),
 });
 
@@ -68,6 +73,36 @@ const toast = (kind: 'info' | 'error', message: string): void => {
 const isRailUnavailable = (error: unknown): boolean => isHostError(error, 'NO_DIRECTORY') || isHostError(error, 'UNSUPPORTED');
 
 // ---------------------------------------------------------------- reading
+
+/** Longest wait for the host's project list; past it the folder is taken for a project, as it was before the list was asked. */
+const PROJECTS_WAIT_MS = 3000;
+
+const readProjects = async (): Promise<ReadonlyArray<{ directory: string }> | null> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('The host did not answer listProjects in time.')), PROJECTS_WAIT_MS);
+    });
+    return (await Promise.race([guestHost.client.listProjects(), timeout])).projects;
+  } catch (error) {
+    console.warn('Design Chamber: listProjects failed, treating the folder as a project', error);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/** Decide whether the host's folder is a project, then read the list for it. Redone whenever the folder changes. */
+const resolveProject = async (): Promise<void> => {
+  resolveSeq += 1;
+  const mine = resolveSeq;
+  const projects = directory === null ? [] : await readProjects();
+  if (mine !== resolveSeq) return;
+  projectDirectory = projectDirectoryOf(directory, projects);
+  hasProject = projectDirectory !== null;
+  paint();
+  await load();
+};
 
 const load = async (): Promise<void> => {
   latest += 1;
@@ -282,7 +317,6 @@ guestHost.ready.subscribe((context) => {
   // Every ready snapshot, theme switches included: the host's tokens are the only palette.
   applyHostReady(context, document.documentElement);
   document.documentElement.lang = context.locale;
-  hasProject = context.directory !== null;
   if (ready) return;
   ready = true;
   directory = context.directory;
@@ -290,16 +324,15 @@ guestHost.ready.subscribe((context) => {
   sizeObserver = new ResizeObserver(reportHeight);
   sizeObserver.observe(frame);
   paint();
-  void load();
+  void resolveProject();
 });
 
 guestHost.directory.subscribe((next) => {
-  hasProject = next !== null;
   if (!ready || next === directory) return;
   directory = next;
   data = null;
   paint();
-  void load();
+  void resolveProject();
 });
 
 guestHost.session.subscribe((next) => {

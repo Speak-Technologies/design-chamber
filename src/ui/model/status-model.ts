@@ -5,6 +5,7 @@
 
 import type { StatusDesignRow, StatusDesignsResponse } from '../../shared/api.ts';
 import { STATUS_STARTING_GIVE_UP_MS } from '../../shared/limits.ts';
+import { sameDirectory } from '../../shared/path-compare.ts';
 import { pillText } from './build-strip-model.ts';
 import { badgeOf, type BadgeTone } from './checks-model.ts';
 import { plural } from './format.ts';
@@ -149,6 +150,20 @@ export const statusSectionOf = (input: StatusSectionInput): StatusSectionView =>
     rows: data.rows.map((row) => statusRowView(row, { checking: input.checking.has(row.slug) })),
     more: data.total > data.rows.length ? `Show all ${data.total} designs` : null,
   };
+};
+
+// ---- which folder is a project ----
+
+/**
+ * The folder to treat as the chat's project, or null when there is none. The host's `directory` is also set in
+ * a chat opened without a project (that chat's own folder under OpenChamber's config), so a folder only counts
+ * when it is one of the registered `projects`; otherwise the list is "this chat's designs, then the last 7 days".
+ * `projects` is null when the list could not be read: then the folder counts, as before.
+ */
+export const projectDirectoryOf = (directory: string | null, projects: ReadonlyArray<{ directory: string }> | null): string | null => {
+  if (directory === null) return null;
+  if (projects === null) return directory;
+  return projects.some((project) => sameDirectory(project.directory, directory)) ? directory : null;
 };
 
 // ---- live updates ----

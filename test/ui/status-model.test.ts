@@ -10,6 +10,7 @@ import { pillText } from '../../src/ui/model/build-strip-model.ts';
 import { badgeOf } from '../../src/ui/model/checks-model.ts';
 import {
   STATUS_COPY,
+  projectDirectoryOf,
   statusRowView,
   shouldRefetchStatus,
   statusSectionOf,
@@ -296,4 +297,27 @@ test('refetch: not for thumbnails, versions, loose files or open requests', () =
   }
   assert.equal(shouldRefetchStatus({ reset: false, events: [] }), false);
   assert.equal(shouldRefetchStatus({ reset: false, events: [{ kind: 'thumb' }, { kind: 'checks' }] }), true);
+});
+
+// ---- which folder is a project ----
+
+const PROJECTS = [{ directory: '/home/sam/Documents/GitHub/ember-oak' }, { directory: 'C:\\Users\\you\\shop' }];
+
+test('project: a registered project folder is the project, whatever the slashes and case on Windows', () => {
+  assert.equal(projectDirectoryOf('/home/sam/Documents/GitHub/ember-oak/', PROJECTS), '/home/sam/Documents/GitHub/ember-oak/');
+  assert.equal(projectDirectoryOf('c:/users/YOU/shop', PROJECTS), 'c:/users/YOU/shop');
+});
+
+test('project: a no-project chat’s own folder is not a project, so the list falls back to this chat and the last 7 days', () => {
+  assert.equal(projectDirectoryOf('/home/sam/.config/openchamber/chats/2026-11-10/session-0a1b2c', PROJECTS), null);
+});
+
+test('project: no folder at all, or an empty project list, is not a project', () => {
+  assert.equal(projectDirectoryOf(null, PROJECTS), null);
+  assert.equal(projectDirectoryOf('/home/sam/work', []), null);
+});
+
+test('project: when the project list could not be read, the folder counts as a project, as before', () => {
+  assert.equal(projectDirectoryOf('/home/sam/work', null), '/home/sam/work');
+  assert.equal(projectDirectoryOf(null, null), null);
 });
