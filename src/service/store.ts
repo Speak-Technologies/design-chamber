@@ -246,19 +246,22 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
    * comes back as a folder holding only state.json. Gone = `not-found` (reconcile treats it as nothing to do).
    */
   const writeState = async (dir: string, state: ServiceState): Promise<void> => {
-    const gone = (): ApiError => new ApiError('not-found', 'That design does not exist.');
+    // ENOENT means "gone" only when the design folder itself is missing. Windows also answers ENOENT
+    // for a write under a `.chamber` that is a file, which is a broken design, not a deleted one.
+    const goneOr = async (error: unknown): Promise<unknown> => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return error;
+      const folderLeft = await stat(dir).then((s) => s.isDirectory(), () => false);
+      return folderLeft ? error : new ApiError('not-found', 'That design does not exist.');
+    };
     try {
       await mkdir(path.join(dir, '.chamber')); // not recursive: fails with ENOENT when the design folder is gone
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT') throw gone();
-      if (code !== 'EEXIST') throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw await goneOr(error);
     }
     try {
       await writeFileAtomic(stateFileOf(dir), serializeJson(state as unknown as JsonValue), { createDirs: false }); // Safe: ServiceState is plain JSON.
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw gone();
-      throw error;
+      throw await goneOr(error);
     }
   };
 
