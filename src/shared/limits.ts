@@ -310,6 +310,12 @@ export const STATUS_ROWS_MAX = 5;
 export const STATUS_RECENT_MS = 7 * 86_400_000;
 /** The status frame refetches this long after the last change event [U5]. */
 export const STATUS_REFETCH_DEBOUNCE_MS = 250;
+/** How long the service may stay unreachable before "starting" becomes "isn’t responding" [U5]. */
+export const STATUS_STARTING_GIVE_UP_MS = 10_000;
+/** A cold design index is waited for this long; then Work Status answers an empty list, not an error [U5]. */
+export const STATUS_INDEX_WAIT_MS = 1500;
+/** One design's check state is read for this long; a slower read leaves that row without a check part [U5]. */
+export const STATUS_CHECK_READ_MS = 1500;
 /** Base64 text accepted into a thumbnail `data:` URL in a chat block [U7, U8]. */
 export const THUMB_DATA_TEXT_MAX = 4_194_304;
 /** A pending thumbnail in a chat block is asked again after these delays [U7, U8]. */

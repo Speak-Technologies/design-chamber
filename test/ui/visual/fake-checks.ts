@@ -91,7 +91,9 @@ export const createFakeChecks = (deps: Deps): FakeChecks => {
       static: { findings: staticFindings, partial: false, at: ago(1000) },
       render: { state, at: report?.at ?? null, artboards: report?.artboards ?? 0, skipped: 0, findings: renderFindings },
       counts: countFindings(counted),
-      canRun: !isRunning && slug !== 'habit-tracker',
+      // Like the service: a run anywhere blocks a new one; `habit-tracker` stands for a machine with no browser.
+      canRun: running.size === 0 && slug !== 'habit-tracker',
+      browser: slug !== 'habit-tracker',
     };
   };
 
@@ -117,8 +119,8 @@ export const createFakeChecks = (deps: Deps): FakeChecks => {
     },
     summary: (slug) => {
       try {
-        const { counts, render, canRun } = build(slug);
-        return { counts, render: { state: render.state }, canRun };
+        const { counts, render, canRun, browser } = build(slug);
+        return { counts, render: { state: render.state }, canRun, browser };
       } catch {
         return null;
       }

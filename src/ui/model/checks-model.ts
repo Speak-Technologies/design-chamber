@@ -42,12 +42,13 @@ export const rendersCounted = (response: ChecksResponse): boolean => {
 
 /**
  * A pass is green only when nothing more can be learned about the design: the rendering was
- * checked on the current files, no browser exists to check it with, or there is none to try.
- * Otherwise "No issues" would say more than we know, so it stays neutral and the label says what is missing.
+ * checked on the current files, or no browser exists to check it with. `canRun` is not that
+ * question: it is also false while a check of another design runs, and then this design's
+ * rendering is still unknown. Otherwise "No issues" would say more than we know, so it stays neutral and the label says what is missing.
  */
 const verified = (summary: ChecksSummary): boolean => {
   const { state } = summary.render;
-  return state === 'fresh' || state === 'unavailable' || (state === 'none' && !summary.canRun);
+  return state === 'fresh' || state === 'unavailable' || (state === 'none' && !summary.browser);
 };
 
 export const badgeOf = (summary: ChecksSummary | null, error: string | null, running: boolean): BadgeView => {

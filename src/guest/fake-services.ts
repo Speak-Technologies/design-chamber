@@ -554,7 +554,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           here: session !== '' && entry.design.sessionId === session,
           agent: null,
           lastFile: null,
-          checks: { counts: { errors: 0, warnings: 0, notes: 0 }, render: { state: 'none' }, canRun: false },
+          checks: { counts: { errors: 0, warnings: 0, notes: 0 }, render: { state: 'none' }, canRun: false, browser: false },
           pending: pending(entry),
           openComments: entry.design.comments.filter((comment) => comment.status === 'open').length,
         }));
@@ -640,6 +640,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           render: { state: 'none', at: null, artboards: 0, skipped: 0, findings: [] },
           counts: { errors: 0, warnings: 0, notes: 0 },
           canRun: false,
+          browser: false,
         };
       case 'POST /designs/:slug/checks/run':
         throw new FakeHttpError('invalid', 'The rendering check is not available in this preview.');

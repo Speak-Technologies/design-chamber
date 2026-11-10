@@ -310,6 +310,8 @@ export type ChecksResponse = {
   counts: { errors: number; warnings: number; notes: number };
   /** A browser resolves and no run is in progress. */
   canRun: boolean;
+  /** A browser resolves. Says why `canRun` is false: no browser (`false`) or a run under way (`true`). */
+  browser: boolean;
 };
 /** The run is a background job; it ends with a `checks` change event. 409 `conflict` while another design is being checked. */
 export type ChecksRunResponse = { state: 'running' };
@@ -323,7 +325,7 @@ export type OpenRequestResponse = { request: OpenRequest | null };
 export type OpenRequestBody = { slug: string; intent?: OpenIntent };
 
 /** As much of a `ChecksResponse` as a badge needs; a whole `ChecksResponse` fits it. */
-export type ChecksSummary = { counts: ChecksResponse['counts']; render: { state: ChecksRenderState }; canRun: boolean };
+export type ChecksSummary = { counts: ChecksResponse['counts']; render: { state: ChecksRenderState }; canRun: boolean; browser: boolean };
 
 // ---- Phase 1.5 (documentation/specs/phase-1-5-sdk-2-7.md §3.5) ----
 

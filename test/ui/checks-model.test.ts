@@ -14,6 +14,8 @@ type Over = {
   render?: ReturnType<typeof finding>[];
   state?: ChecksRenderState;
   canRun?: boolean;
+  /** A browser was found; defaults to true. */
+  browser?: boolean;
   artboards?: number;
   at?: string | null;
   /** Counted findings; defaults to the static ones plus the render ones when the state is `fresh`. */
@@ -30,6 +32,7 @@ const response = (over: Over = {}): ChecksResponse => {
     render: { state, at: over.at === undefined ? '2026-11-08T11:56:00.000Z' : over.at, artboards: over.artboards ?? 2, skipped: 0, findings: render },
     counts: countFindings(counted),
     canRun: over.canRun ?? true,
+    browser: over.browser ?? true,
   };
 };
 
@@ -84,7 +87,8 @@ test('a refresh that failed keeps the last good count on the badge', () => {
 test('a pass is green only when nothing more can be learned; otherwise it is neutral and says what is missing', () => {
   assert.equal(badgeOf(response({ state: 'fresh' }), null, false).tone, 'success');
   assert.equal(badgeOf(response({ state: 'unavailable' }), null, false).tone, 'success');
-  assert.equal(badgeOf(response({ state: 'none', canRun: false }), null, false).tone, 'success');
+  assert.equal(badgeOf(response({ state: 'none', canRun: false, browser: false }), null, false).tone, 'success', 'no browser: nothing to check with');
+  assert.equal(badgeOf(response({ state: 'none', canRun: false, browser: true }), null, false).tone, 'neutral', 'a run elsewhere is not a missing browser');
   const never = badgeOf(response({ state: 'none' }), null, false);
   assert.equal(never.tone, 'neutral');
   assert.equal(never.label, 'No issues');
@@ -95,14 +99,15 @@ test('a pass is green only when nothing more can be learned; otherwise it is neu
   assert.equal(badgeOf(response({ state: 'failed' }), null, false).tone, 'neutral');
 });
 
-test('badgeOf and issueCount take a ChecksSummary: a Work Status row carries only counts, render state and canRun', () => {
-  const summary = (over: Partial<ChecksSummary> = {}): ChecksSummary => ({ counts: { errors: 0, warnings: 0, notes: 0 }, render: { state: 'fresh' }, canRun: true, ...over });
+test('badgeOf and issueCount take a ChecksSummary: a Work Status row carries only counts, render state, canRun and browser', () => {
+  const summary = (over: Partial<ChecksSummary> = {}): ChecksSummary => ({ counts: { errors: 0, warnings: 0, notes: 0 }, render: { state: 'fresh' }, canRun: true, browser: true, ...over });
   assert.equal(issueCount(summary({ counts: { errors: 1, warnings: 2, notes: 5 } })), 3, 'notes never count');
   assert.deepEqual(badgeOf(summary({ counts: { errors: 1, warnings: 0, notes: 0 } }), null, false), badgeOf(response({ static: [ERR] }), null, false), 'same words and tone as the full response');
   assert.equal(badgeOf(summary({ counts: { errors: 0, warnings: 2, notes: 0 } }), null, false).tone, 'warning');
   assert.equal(badgeOf(summary(), null, false).tone, 'success');
   assert.equal(badgeOf(summary({ render: { state: 'none' } }), null, false).tone, 'neutral', 'rendering never checked and it can run');
-  assert.equal(badgeOf(summary({ render: { state: 'none' }, canRun: false }), null, false).tone, 'success');
+  assert.equal(badgeOf(summary({ render: { state: 'none' }, canRun: false, browser: false }), null, false).tone, 'success', 'no browser');
+  assert.equal(badgeOf(summary({ render: { state: 'none' }, canRun: false, browser: true }), null, false).tone, 'neutral', 'another design is being checked: still not known');
   assert.match(badgeOf(summary({ render: { state: 'stale' } }), null, false).ariaLabel, /checked before your latest changes/);
   assert.equal(badgeOf(summary({ render: { state: 'running' } }), null, false).label, 'Checking');
   // A full response still fits where a summary is asked for.
