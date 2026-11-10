@@ -476,6 +476,8 @@ describe('runDesignCheck', () => {
     assert.ok(spawned);
     assert.deepEqual((spawned as FakeChild).killed, ['SIGTERM', 'SIGKILL']);
     assert.equal(result.metadata.designChamber.exit, 2);
+    // The abort, not the 1 s timeout, must be what stopped it: a timeout answers a different sentence.
+    assert.match(result.content, /stopped before it finished/);
   });
 
   test('an abort before the start runs nothing', async (t) => {
