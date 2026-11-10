@@ -8,14 +8,15 @@ import { BRIEF_MAX, SCREEN_DESCRIPTION_MAX, SCREENS_MAX, TITLE_MAX, VIEWPORT_HEI
 import { VIEWPORT_LAPTOP, VIEWPORT_PHONE } from '../design-json.ts';
 import type { DesignKind, Viewport } from '../types.ts';
 import { clip, designFilePath, formatViewport, oneLine, VIEWPORT_DESKTOP, VIEWPORT_TABLET, type AgentContext, type ProjectBreakpoint, type ProjectRules } from './context.ts';
+import { CHECK_TOOL_NAME } from './guide.ts';
 
 /** The two bundled rules files, exactly as read from `rules/`. */
 export type RulesDocFiles = { designRules: string; questions: string };
 
 const kindWord = (kind: DesignKind): string => (kind === 'canvas' ? 'canvas' : 'page');
 
-/** A verbatim file between markers, so the agent sees where our text ends and the file begins. */
-const verbatim = (name: string, text: string): string[] => [`<!-- BEGIN ${name} (verbatim) -->`, text.endsWith('\n') ? text.slice(0, -1) : text, `<!-- END ${name} -->`];
+/** A verbatim file between markers, so the agent sees where our text ends and the file begins. Shared with the bundled skill. */
+export const verbatim = (name: string, text: string): string[] => [`<!-- BEGIN ${name} (verbatim) -->`, text.endsWith('\n') ? text.slice(0, -1) : text, `<!-- END ${name} -->`];
 
 const breakpointText = (breakpoint: ProjectBreakpoint): string => {
   const direction = breakpoint.directions.length === 2 ? 'min/max-width' : `${breakpoint.directions[0] ?? 'min'}-width`;
@@ -253,7 +254,8 @@ const contractSection = (context: AgentContext): string[] => [
 
 // ---- rendering constraints ----
 
-const renderingSection = (): string[] => [
+/** The offline rules. Context-free, so the bundled skill carries the same text. */
+export const renderingSection = (): string[] => [
   '## Rendering constraints',
   '',
   'Design Chamber shows your files offline, inside a sandboxed frame. So:',
@@ -267,23 +269,25 @@ const renderingSection = (): string[] => [
   '- One responsive file per screen: the wall renders it at every viewport in design.json.',
 ];
 
-/** How the agent looks at its own work: the `dc check` command, or a read-through when the launcher is not in place. */
-const checkSection = (command: string | null): string[] =>
-  command === null
+export type CheckSectionInput = {
+  /** The agent tool named first (`design_check`). */
+  tool: typeof CHECK_TOOL_NAME;
+  /** The launcher command, or `null` when it is not in place here (and always in the bundled skill, which holds no path). */
+  command: string | null;
+};
+
+/** How the agent looks at its own work: the tool first, the launcher command when the tool is missing. Shared with the bundled skill. */
+export const checkSection = ({ tool, command }: CheckSectionInput): string[] => [
+  '## Check your work',
+  '',
+  ...(command === null
     ? [
-        '## Check your work',
-        '',
-        "Design Chamber's check tool is not set up on this computer. Before you say you are done, read your HTML once more for overflow, contrast, alt text and labels.",
+        `Check the design with the ${tool} tool after each change, before you say you are done. If you don't have that tool, look for the check command in the Designs folder's AGENTS.md and run it with the design's folder name. If there is none, read your HTML once more for overflow, contrast, alt text and labels.`,
       ]
-    : [
-        '## Check your work',
-        '',
-        'Run this after each change, before you say you are done:',
-        '',
-        `    ${command}`,
-        '',
-        "It renders every screen at every viewport in design.json, saves PNGs under .chamber/check/ and lists what it found: files that don't load, content wider than the viewport, cut-off or overlapping text, low contrast, images without alt text, fields without labels, script errors. Fix every error, open the PNGs to see the result, and run it again. Exit code 0 means no errors. If it says no browser was found, it still checks the files; say in your reply that the design was not rendered.",
-      ];
+    : [`Check the design with the ${tool} tool after each change, before you say you are done. If you don't have that tool, run:`, '', `    ${command}`]),
+  '',
+  `The check renders every screen at every viewport in design.json, saves PNGs in the design's .chamber/check/ folder and lists what it found: files that don't load, content wider than the viewport, cut-off or overlapping text, low contrast, images without alt text, fields without labels, script errors. Fix every error, open the PNGs to see the result, and check again.${command === null ? '' : ' The command exits with 0 when there are no errors.'} If the check says no browser was found, it still checks the files; say in your reply that the design was not rendered.`,
+];
 
 /** The full RULES.md text for one design. */
 export const buildRulesDoc = (context: AgentContext, files: RulesDocFiles): string =>
@@ -310,6 +314,6 @@ export const buildRulesDoc = (context: AgentContext, files: RulesDocFiles): stri
     '',
     ...renderingSection(),
     '',
-    ...checkSection(context.checkCommand),
+    ...checkSection({ tool: CHECK_TOOL_NAME, command: context.checkCommand }),
     '',
   ].join('\n');

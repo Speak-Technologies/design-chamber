@@ -58,25 +58,35 @@ const SKILL_PATH = '/home/you/.config/opencode/skills/design-chamber/SKILL.md';
 const skill = (state: SkillState, over: Partial<AgentSkillStatus> = {}): AgentSkillStatus => ({ path: SKILL_PATH, state, duplicates: [], ...over });
 const flat = (parts: { before: string; path: string | null; after: string }): string => `${parts.before}${parts.path ?? ''}${parts.after}`;
 
-test('skillRow: a read-only status per state, none of them telling you to install or replace anything', () => {
-  const notInstalled = skillRow(skill('not-installed'));
-  assert.equal(flat(notInstalled.sentence), `No skill is installed at ${SKILL_PATH}.`);
-  assert.equal(notInstalled.sentence.path, SKILL_PATH);
-  assert.equal(notInstalled.installed, false);
+test('skillRow: built in first, then what to do about an older installed copy', () => {
+  const none = skillRow(skill('not-installed'));
+  assert.equal(flat(none.sentence), 'Built in. Agents in OpenChamber can use it while Design Chamber is on.');
+  assert.equal(none.sentence.path, null);
+  assert.equal(none.control, null);
 
-  assert.equal(flat(skillRow(skill('outdated')).sentence), `The skill at ${SKILL_PATH} was installed for an earlier designs folder.`);
+  // Ours and unedited, for this folder or an earlier one: removable from Settings.
+  for (const state of ['current', 'outdated'] as const) {
+    const row = skillRow(skill(state));
+    assert.equal(flat(row.sentence), `Built in. An older copy is also installed at ${SKILL_PATH}, so agents may see the skill twice.`, state);
+    assert.equal(row.sentence.path, SKILL_PATH, state);
+    assert.equal(row.control, 'remove-old-copy', state);
+  }
 
-  const current = skillRow(skill('current'));
-  assert.equal(current.installed, true);
-  assert.equal(current.sentence.path, SKILL_PATH);
+  // Edited or someone else's: never removed by us, so only the path is offered.
+  const edited = skillRow(skill('edited'));
+  assert.equal(flat(edited.sentence), `Built in. You edited the older copy at ${SKILL_PATH}, so Design Chamber leaves it alone. Delete it if you don’t need it.`);
+  assert.equal(edited.control, 'copy-path');
+  const foreign = skillRow(skill('foreign'));
+  assert.equal(flat(foreign.sentence), `Built in. Another design-chamber skill is installed at ${SKILL_PATH}.`);
+  assert.equal(foreign.control, 'copy-path');
 
-  assert.equal(flat(skillRow(skill('edited')).sentence), `You edited the skill at ${SKILL_PATH}. Design Chamber leaves it alone.`);
-  assert.match(flat(skillRow(skill('foreign')).sentence), /left it alone/);
+  // The service could not look: say so as written, offer nothing.
+  const unavailable = skillRow(skill('unavailable', { message: 'Your home folder could not be found.' }));
+  assert.equal(flat(unavailable.sentence), 'Built in. Your home folder could not be found.');
+  assert.equal(unavailable.control, null);
+  assert.match(flat(skillRow(skill('unavailable')).sentence), /can’t look for an older copy/);
 
-  assert.equal(flat(skillRow(skill('unavailable', { message: 'Your home folder could not be found.' })).sentence), 'Your home folder could not be found.');
-  assert.match(flat(skillRow(skill('unavailable')).sentence), /can’t look for the skill/);
-
-  // The Install button is gone (POST /agent/skill was removed): no state may still word itself as something to click.
+  // No state may still word itself as something to install.
   for (const state of ['not-installed', 'outdated', 'current', 'edited', 'foreign', 'unavailable'] as const) {
     assert.doesNotMatch(flat(skillRow(skill(state)).sentence), /\b(Install skill|Update skill|Replace skill|Adds a)\b/, state);
   }

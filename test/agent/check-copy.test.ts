@@ -44,18 +44,18 @@ describe('chip', () => {
 });
 
 describe('RULES.md', () => {
-  test('a "Check your work" section follows Rendering constraints and quotes the command', async () => {
+  test('a "Check your work" section follows Rendering constraints, names design_check first and quotes the command', async () => {
     const doc = buildRulesDoc(baseContext({ checkCommand: POSIX }), await realFiles());
     assert.ok(doc.indexOf('## Rendering constraints') < doc.indexOf('## Check your work'));
-    assert.ok(doc.includes(`Run this after each change, before you say you are done:\n\n    ${POSIX}\n`));
+    assert.ok(doc.includes(`Check the design with the design_check tool after each change, before you say you are done. If you don't have that tool, run:\n\n    ${POSIX}\n`));
     assert.ok(doc.includes('6. Before you say you are done, run the check in "Check your work" and fix every error.'));
-    assert.ok(doc.includes('Exit code 0 means no errors. If it says no browser was found, it still checks the files; say in your reply that the design was not rendered.'));
+    assert.ok(doc.includes('The command exits with 0 when there are no errors. If the check says no browser was found, it still checks the files; say in your reply that the design was not rendered.'));
   });
 
-  test('with no launcher the section asks for a read-through instead', async () => {
+  test('with no launcher the section names the tool, then the guide, then a read-through', async () => {
     const doc = buildRulesDoc(baseContext({ checkCommand: null }), await realFiles());
-    assert.ok(doc.includes("Design Chamber's check tool is not set up on this computer. Before you say you are done, read your HTML once more for overflow, contrast, alt text and labels."));
-    assert.ok(!doc.includes('Run this after each change'));
+    assert.ok(doc.includes("Check the design with the design_check tool after each change, before you say you are done. If you don't have that tool, look for the check command in the Designs folder's AGENTS.md and run it with the design's folder name. If there is none, read your HTML once more for overflow, contrast, alt text and labels."));
+    assert.ok(!doc.includes("If you don't have that tool, run:"));
   });
 
   test('the shipped design rules point at the check, not at hand-measuring', async () => {
@@ -74,19 +74,25 @@ describe('guide and skill', () => {
   const root = '/home/you/Documents/Designs';
   const command = checkCommandFor({ root, slug: '<slug>', platform: 'linux' });
 
-  test('the guide gets a section before "Leave these alone" and the digest points at it', () => {
+  test('the guide gets a section before "Leave these alone": design_check first, the command second; the digest points at it', () => {
     const guide = buildAgentGuide({ root, platform: 'linux', checkCommand: command });
-    assert.ok(guide.includes(`## Check your work\n\nRun \`${command}\` with the design's folder name. It renders the design, saves PNGs in the design's .chamber/check/ folder and lists what to fix. Exit code 0 means no errors.\n`));
+    assert.ok(
+      guide.includes(
+        "## Check your work\n\nBefore you say a design is done, check it with the `design_check` tool and fix every error it lists. It renders the design, saves PNGs in the design's .chamber/check/ folder and lists what to fix.\n" +
+          `If you don't have that tool, run \`${command}\` with the design's folder name. Exit code 0 means no errors.\n`,
+      ),
+    );
     assert.ok(guide.indexOf('## Check your work') < guide.indexOf('## Leave these alone'));
     assert.ok(guide.includes('- Before you say you are done, run the check below and fix every error.'));
     assert.ok(!guide.includes('- Everything opens offline.'));
     assert.ok(guide.length <= GUIDE_TEXT_MAX);
   });
 
-  test('without a launcher the guide has no section and the digest asks for a read-through', () => {
+  test('without a launcher the guide still names design_check and falls back to a read-through', () => {
     const guide = buildAgentGuide({ root, platform: 'linux' });
-    assert.ok(!guide.includes('## Check your work'));
-    assert.ok(guide.includes('- Before you say you are done, read your HTML once more for overflow, contrast, alt text and labels.'));
+    assert.ok(guide.includes('check it with the `design_check` tool'));
+    assert.ok(guide.includes("If you don't have that tool, read your HTML once more for overflow, contrast, alt text and labels."));
+    assert.ok(!guide.includes('.chamber/bin/dc'));
   });
 
   test('the skill gets one bullet after the relative-paths bullet', () => {
