@@ -195,7 +195,10 @@ const onFakeService = async (helpers, width, theme) => {
   await p.click(`${northwind} button`, { text: 'Check' });
   await p.waitFor(`return doc.querySelector('${northwind} .ws-meta')?.textContent.includes('Checking')`, 'the row to say Checking', 1500);
   check(await p.guest(`const b = doc.querySelector('${northwind} button'); return b.disabled && b.dataset.loading === 'true'`), `${tag}: Check shows progress and is off while it runs`);
-  check(await p.guest(`const b = doc.querySelector('.ws-row[data-slug="coffee-subscription"] button'); return !b.disabled && b.dataset.loading !== 'true'`), `${tag}: only the design being checked shows progress`);
+  check(await p.guest(`const b = doc.querySelector('.ws-row[data-slug="coffee-subscription"] button'); return b.dataset.loading !== 'true'`), `${tag}: only the design being checked shows progress`);
+  // Once the frame reloads after the press, the other rows' Check is off because a run is under way (QA: was a race).
+  await p.waitFor(`const b = doc.querySelector('.ws-row[data-slug="coffee-subscription"] button'); return b.disabled`, 'other rows to wait for the run', 3000).catch(() => undefined);
+  check(await p.guest(`return doc.querySelector('.ws-row[data-slug="coffee-subscription"] button').disabled`), `${tag}: another row's Check waits while a design is being checked`);
   await p.shot(`${tag}-checking`);
   await p.waitFor(`return !doc.querySelector('${northwind} .ws-meta')?.textContent.includes('Checking')`, 'the check to finish', 6000);
   check((await metaOf('northwind-pricing')).includes('No issues'), `${tag}: the line shows the result after the run ("${await metaOf('northwind-pricing')}")`);
