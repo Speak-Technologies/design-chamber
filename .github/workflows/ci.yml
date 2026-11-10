@@ -1,5 +1,5 @@
-# Gates for every merge into master: typecheck + build + tests via `npm run check` on Ubuntu,
-# Windows and Fedora. Node 22.x (≥ 22.18 strips TypeScript natively for node:test).
+# Gates for every merge into master: typecheck + build + tests via `npm run check`, then the
+# OpenChamber SDK's own package check (`npm run guest-check`), on Ubuntu, Windows and Fedora. Node 22.x (≥ 22.18 strips TypeScript natively for node:test).
 # macOS is not run here (10x runner cost): run `npm run check` on a Mac before merging
 # macOS-affecting changes (docs/testing/MACOS.md).
 # Browser, thumbnail and e2e tests run everywhere: Chrome is preinstalled on the ubuntu and
@@ -41,6 +41,8 @@ jobs:
         run: node --input-type=module -e "import { resolveBrowser } from './src/service/chrome.ts'; console.log(JSON.stringify(resolveBrowser({})));"
       - run: npm ci
       - run: npm run check
+      # The SDK's own checker: manifest, pages, scripts and the service entry. Needs the build above.
+      - run: npm run guest-check
 
   fedora:
     name: check (fedora:latest)
@@ -75,3 +77,5 @@ jobs:
         run: su ci -c "npm ci"
       - name: npm run check (as ci)
         run: su ci -c "npm run check"
+      - name: guest-check (as ci)
+        run: su ci -c "npm run guest-check"

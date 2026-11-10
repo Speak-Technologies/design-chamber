@@ -8,7 +8,7 @@
   "openchamber": {
     "apiVersion": 1,
     "engines": {
-      "openchamber": ">=2.5.0"
+      "openchamber": ">=2.7.0"
     },
     "contributes": {
       "panel": {
@@ -66,7 +66,59 @@
             "gdbus"
           ]
         }
-      }
+      },
+      "statusSection": {
+        "entry": "dist/status/index.html",
+        "title": "Designs",
+        "height": 120,
+        "defaultExpanded": true,
+        "requiresProject": false
+      },
+      "sessionEvents": {
+        "events": [
+          "turn-started",
+          "turn-finished",
+          "turn-failed"
+        ]
+      },
+      "instructions": true,
+      "skills": "dist/skills",
+      "opencodePlugin": "dist/plugin",
+      "mentions": {
+        "label": "Designs"
+      },
+      "tools": [
+        {
+          "match": "design_check",
+          "name": "Design check",
+          "icon": "palette",
+          "title": "Design check · {input.design}",
+          "output": "text"
+        }
+      ],
+      "blocks": [
+        {
+          "name": "DesignCard",
+          "description": "Card for a design you finished in the Designs folder: preview, screens, checks. slug: the design folder name",
+          "args": [
+            "slug"
+          ],
+          "entry": "dist/blocks/index.html",
+          "height": 232
+        },
+        {
+          "name": "DirectionPick",
+          "description": "Ask which of 2 to 4 design directions to keep. question; options and slugs: lists split by |, in the same order",
+          "args": [
+            "question",
+            "options",
+            "slugs"
+          ],
+          "entry": "dist/blocks/index.html",
+          "height": 264,
+          "answers": true
+        }
+      ]
     }
   },
   "scripts": {
@@ -74,7 +126,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test --test-concurrency=1 \"test/**/*.test.ts\"",
     "check": "npm run typecheck && npm run build && npm test",
-    "pack": "node scripts/pack.mjs"
+    "pack": "node scripts/pack.mjs",
+    "guest-check": "node scripts/guest-check.mjs"
   },
   "devDependencies": {
     "@openchamber/sdk": "2.7.0",
