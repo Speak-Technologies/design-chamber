@@ -34,7 +34,7 @@ const compose = (root: string, platform: NodeJS.Platform, checkCommand: string |
     `- When the user asks for a design, mockup, UI screen, landing page or prototype, save it there in its own folder, ${code(joinWith(sep, root, '<slug>') + sep)}, never as a loose file. Load the ${SKILL_NAME} skill first: it has the design rules and the design.json format.`,
     '- A page is one index.html. A canvas is several screens/<id>.html files listed in design.json.',
     checkLine(checkCommand, platform),
-    '- When a design is ready, show it with a DesignCard block. To let the user choose between directions you made, ask with DirectionPick.',
+    `- When a design is ready, show it with a DesignCard block. To let the user choose between directions you made, ask with DirectionPick. Write each in a fenced openui-lang code block whose first line is root = Stack([...]), for example ${code('root = Stack([DesignCard("<slug>")])')} or ${code('root = Stack([DirectionPick("Which direction?", "Bold|Calm", "pricing-a|pricing-b")])')}. A root without Stack([...]) is not drawn.`,
     '- The user can type /design or /page to start a design with the project\'s rules attached.',
   ].join('\n');
 };

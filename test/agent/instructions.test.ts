@@ -68,6 +68,18 @@ describe('buildInstructions (§U2.2)', () => {
     }
   });
 
+  test('gives the exact block syntax: a fenced openui-lang block whose first line is root = Stack([...])', () => {
+    for (const platform of ['linux', 'win32'] as const) {
+      const root = platform === 'win32' ? WIN_ROOT : POSIX_ROOT;
+      const text = buildInstructions({ root, platform, checkCommand: null });
+      assert.ok(text.includes('root = Stack([DesignCard('), 'DesignCard example');
+      assert.ok(text.includes('root = Stack([DirectionPick('), 'DirectionPick example');
+      assert.ok(text.includes('openui-lang'), 'names the fence');
+      assert.ok(text.includes('Stack(['), 'a bare root = DesignCard(...) is the failure this prevents');
+      assert.doesNotMatch(text, /root = (?:DesignCard|DirectionPick)\(/, 'no example without the Stack wrapper');
+    }
+  });
+
   test('no launcher: the tool alone; Windows: native separators and the PowerShell hint', () => {
     const none = buildInstructions({ root: POSIX_ROOT, platform: 'linux', checkCommand: null });
     assert.ok(none.includes('check it with the design_check tool.'));
