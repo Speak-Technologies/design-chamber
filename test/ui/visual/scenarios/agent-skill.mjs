@@ -87,10 +87,10 @@ export const run = async ({ openPage, check, sleep }) => {
 
     // ---- the service says no: the message as written, the button stays
     await showState({ state: 'current' });
-    await p.route('DELETE /agent/skill', { status: 500, body: { error: 'internal', message: 'Design Chamber couldn’t remove the old copy. Check that you can write to that folder, then try again.' } });
+    await p.route('DELETE /agent/skill', { status: 500, body: { error: 'internal', message: "Design Chamber isn't allowed to delete C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md. Delete it yourself if you don't need it." } });
     await p.click(ACTION);
     await p.waitFor(`return !!doc.querySelector('${ROW} .dc-form-error')`, 'the failure message');
-    check((await p.guest(`return doc.querySelector('${ROW} .dc-form-error').textContent`)) === 'Design Chamber couldn’t remove the old copy. Check that you can write to that folder, then try again.', `${tag}: a failed remove shows the service's message as written`);
+    check((await p.guest(`return doc.querySelector('${ROW} .dc-form-error').textContent`)) === "Design Chamber isn't allowed to delete C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md. Delete it yourself if you don't need it.", `${tag}: a failed remove shows the service's message as written`);
     check(await p.guest(`return doc.querySelector('${ROW} .dc-form-error').getAttribute('role') === 'alert'`), `${tag}: the failure is announced (role alert)`);
     check(await p.guest(`const b = doc.querySelector('${ACTION}'); return !!b && !b.disabled && b.dataset.loading === 'false'`), `${tag}: Remove old copy is usable again after a failure`);
     check(await p.guest(`return doc.activeElement === doc.querySelector('${ACTION}')`), `${tag}: focus is back on Remove old copy`);
@@ -99,9 +99,9 @@ export const run = async ({ openPage, check, sleep }) => {
     await p.shot(`${tag}-3-failed`);
 
     // a 409: the copy was edited after Settings loaded
-    await p.route('DELETE /agent/skill', { status: 409, body: { error: 'conflict', message: 'You edited that skill, so Design Chamber left it alone. Delete it yourself if you don’t need it.' } });
+    await p.route('DELETE /agent/skill', { status: 409, body: { error: 'conflict', message: "That copy has your own edits, so it stays. Delete it yourself if you don't need it." } });
     await p.click(ACTION);
-    await p.waitFor(`return doc.querySelector('${ROW} .dc-form-error')?.textContent.startsWith('You edited that skill')`, 'the conflict message');
+    await p.waitFor(`return doc.querySelector('${ROW} .dc-form-error')?.textContent.startsWith('That copy has your own edits')`, 'the conflict message');
     check(await p.guest(`return doc.querySelectorAll('${ROW} .dc-form-error').length === 1`), `${tag}: the new message replaces the old one`);
     await p.shot(`${tag}-4-conflict`);
 
