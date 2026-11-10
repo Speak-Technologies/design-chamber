@@ -67,9 +67,7 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
   let rootBusy = false;
   let rootSaved = false;
   let chromeBusy = false;
-  let skillBusy = false;
   let skillError: string | null = null;
-  let skillConfirming = false;
   const copied = { permissions: false, agents: false };
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const later = (fn: () => void, ms: number): void => {
@@ -213,7 +211,7 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
       previous = section('Earlier folders', 'Designs in these folders were left in place. Switch back to see them again.', h('ul', { class: 'dc-prev-list' }, ...rows));
     }
 
-    // Agent discovery: the guide the service keeps, the skill a click installs, the snippet to paste.
+    // Agent discovery: the guide the service keeps, the skill's status, the snippet to paste.
     const guide = h('div', { class: 'dc-field' }, h('span', { class: 'oc-sdk-field-label' }, 'Guide in your designs folder'), sentence(guideSentence(settings.agent.guide)));
 
     const row = skillRow(settings.agent.skill);
@@ -223,8 +221,8 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
       mountBadge(installed, { label: 'Installed', tone: 'success' });
       append(skill, h('div', { class: 'dc-status-line' }, installed, sentence(row.sentence, true)));
     } else skill.append(sentence(row.sentence));
-    // POST /agent/skill is gone (the skill ships inside the extension): no install button here.
-    // T2b finishes this row (documentation/specs/phase-1-5-sdk-2-7.md §10.1, §U2.5).
+    // A read-only status: POST /agent/skill is gone (the skill ships inside the extension), so no button here.
+    // `feat/agent-skill` turns this into the "Agent skill" row (documentation/specs/phase-1-5-sdk-2-7.md §U2.5).
     if (skillError !== null) skill.append(h('p', { class: 'dc-form-error', role: 'alert' }, skillError));
     for (const duplicate of duplicateSentences(settings.agent.skill)) {
       const badge = h('span');

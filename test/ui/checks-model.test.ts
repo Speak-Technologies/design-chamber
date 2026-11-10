@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import type { ChecksRenderState, ChecksResponse } from '../../src/shared/api.ts';
+import type { ChecksRenderState, ChecksResponse, ChecksSummary } from '../../src/shared/api.ts';
 import { countFindings, withMessage } from '../../src/shared/checks.ts';
 import type { CheckFindingData } from '../../src/shared/types.ts';
 import { badgeOf, groupsOf, issueCount, panelOf, renderLineOf, rendersCounted, runResultOf, shouldRefetch } from '../../src/ui/model/checks-model.ts';
@@ -93,6 +93,21 @@ test('a pass is green only when nothing more can be learned; otherwise it is neu
   assert.equal(stale.tone, 'neutral');
   assert.match(stale.ariaLabel, /checked before your latest changes/);
   assert.equal(badgeOf(response({ state: 'failed' }), null, false).tone, 'neutral');
+});
+
+test('badgeOf and issueCount take a ChecksSummary: a Work Status row carries only counts, render state and canRun', () => {
+  const summary = (over: Partial<ChecksSummary> = {}): ChecksSummary => ({ counts: { errors: 0, warnings: 0, notes: 0 }, render: { state: 'fresh' }, canRun: true, ...over });
+  assert.equal(issueCount(summary({ counts: { errors: 1, warnings: 2, notes: 5 } })), 3, 'notes never count');
+  assert.deepEqual(badgeOf(summary({ counts: { errors: 1, warnings: 0, notes: 0 } }), null, false), badgeOf(response({ static: [ERR] }), null, false), 'same words and tone as the full response');
+  assert.equal(badgeOf(summary({ counts: { errors: 0, warnings: 2, notes: 0 } }), null, false).tone, 'warning');
+  assert.equal(badgeOf(summary(), null, false).tone, 'success');
+  assert.equal(badgeOf(summary({ render: { state: 'none' } }), null, false).tone, 'neutral', 'rendering never checked and it can run');
+  assert.equal(badgeOf(summary({ render: { state: 'none' }, canRun: false }), null, false).tone, 'success');
+  assert.match(badgeOf(summary({ render: { state: 'stale' } }), null, false).ariaLabel, /checked before your latest changes/);
+  assert.equal(badgeOf(summary({ render: { state: 'running' } }), null, false).label, 'Checking');
+  // A full response still fits where a summary is asked for.
+  const full: ChecksSummary = response({ static: [WARN] });
+  assert.equal(badgeOf(full, null, false).label, '1 issue');
 });
 
 // ---- counted render findings ----

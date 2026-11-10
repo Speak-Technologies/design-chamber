@@ -2,7 +2,7 @@
 // Pure: no DOM, no host calls. Every finding sentence comes from the service (which takes it from
 // `src/shared/checks.ts`); this file only decides what to count, group and say around them.
 
-import type { ChecksResponse } from '../../shared/api.ts';
+import type { ChecksResponse, ChecksSummary } from '../../shared/api.ts';
 import { sortFindings } from '../../shared/checks.ts';
 import type { CheckFinding } from '../../shared/types.ts';
 import { plural, relativeTime } from './format.ts';
@@ -19,8 +19,11 @@ export type BadgeView = {
   count: number;
 };
 
-/** Errors and warnings, the number the badge shows. Notes never count. */
-export const issueCount = (response: ChecksResponse): number => response.counts.errors + response.counts.warnings;
+/**
+ * Errors and warnings, the number the badge shows. Notes never count. Takes a `ChecksSummary`
+ * (a full `ChecksResponse` fits), so a Work Status row or a card can carry just that much.
+ */
+export const issueCount = (summary: ChecksSummary): number => summary.counts.errors + summary.counts.warnings;
 
 /**
  * Whether the render findings in the response are counted. The service counts them when the files
@@ -42,30 +45,30 @@ export const rendersCounted = (response: ChecksResponse): boolean => {
  * checked on the current files, no browser exists to check it with, or there is none to try.
  * Otherwise "No issues" would say more than we know, so it stays neutral and the label says what is missing.
  */
-const verified = (response: ChecksResponse): boolean => {
-  const { state } = response.render;
-  return state === 'fresh' || state === 'unavailable' || (state === 'none' && !response.canRun);
+const verified = (summary: ChecksSummary): boolean => {
+  const { state } = summary.render;
+  return state === 'fresh' || state === 'unavailable' || (state === 'none' && !summary.canRun);
 };
 
-export const badgeOf = (response: ChecksResponse | null, error: string | null, running: boolean): BadgeView => {
-  if (response === null) {
+export const badgeOf = (summary: ChecksSummary | null, error: string | null, running: boolean): BadgeView => {
+  if (summary === null) {
     if (error !== null) return { label: 'Checks', tone: 'neutral', ariaLabel: 'Checks: didn’t load', count: 0 };
     return { label: 'Checking', tone: 'neutral', ariaLabel: 'Checks: Checking', count: 0 };
   }
-  if (running || response.render.state === 'running') return { label: 'Checking', tone: 'neutral', ariaLabel: 'Checks: Checking the rendering', count: 0 };
-  const issues = issueCount(response);
+  if (running || summary.render.state === 'running') return { label: 'Checking', tone: 'neutral', ariaLabel: 'Checks: Checking the rendering', count: 0 };
+  const issues = issueCount(summary);
   if (issues > 0) {
     const label = plural(issues, 'issue');
-    return { label, tone: response.counts.errors > 0 ? 'error' : 'warning', ariaLabel: `Checks: ${label}`, count: issues };
+    return { label, tone: summary.counts.errors > 0 ? 'error' : 'warning', ariaLabel: `Checks: ${label}`, count: issues };
   }
-  if (verified(response)) return { label: 'No issues', tone: 'success', ariaLabel: 'Checks: No issues', count: 0 };
+  if (verified(summary)) return { label: 'No issues', tone: 'success', ariaLabel: 'Checks: No issues', count: 0 };
   // Files are fine, rendering is not known: say so where the colour cannot.
-  return { label: 'No issues', tone: 'neutral', ariaLabel: `Checks: No issues in the files. ${renderStatement(response)}`, count: 0 };
+  return { label: 'No issues', tone: 'neutral', ariaLabel: `Checks: No issues in the files. ${renderStatement(summary)}`, count: 0 };
 };
 
 /** The state of the rendering check without the time, for the badge's description. */
-const renderStatement = (response: ChecksResponse): string =>
-  response.render.state === 'stale' ? 'Rendering was checked before your latest changes.' : 'Rendering hasn’t been checked yet.';
+const renderStatement = (summary: ChecksSummary): string =>
+  summary.render.state === 'stale' ? 'Rendering was checked before your latest changes.' : 'Rendering hasn’t been checked yet.';
 
 // ---- the rendering line ----
 

@@ -460,7 +460,7 @@ export const createFakeBackend = (): FakeBackend => {
         here: session !== '' && rec.design.sessionId === session,
         agent: null,
         lastFile: null,
-        checks: { counts: { errors: 0, warnings: 0, notes: 0 }, render: { state: 'none' }, canRun: chromePath !== null },
+        checks: checks.summary(slug),
         pending: isPending(rec),
         openComments: rec.design.comments.filter((c) => c.status === 'open').length,
       }));

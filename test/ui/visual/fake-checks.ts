@@ -8,7 +8,7 @@
 //   launch-announcement   page    passes; the only design a "service error" can be switched on for
 // Sentences come from the real table in src/shared/checks.ts, so the screenshots show the shipped copy.
 
-import type { ChecksRenderState, ChecksResponse, ChecksRunResponse } from '../../../src/shared/api.ts';
+import type { ChecksRenderState, ChecksResponse, ChecksRunResponse, ChecksSummary } from '../../../src/shared/api.ts';
 import { countFindings, sortFindings, withMessage } from '../../../src/shared/checks.ts';
 import type { ChangeEvent, CheckFinding, CheckFindingData, Viewport } from '../../../src/shared/types.ts';
 import { ServiceError } from './service-error.ts';
@@ -44,6 +44,8 @@ export type FakeChecks = {
     'GET /designs/:slug/checks': (req: { params: Record<string, string> }) => ChecksResponse;
     'POST /designs/:slug/checks/run': (req: { params: Record<string, string> }) => ChecksRunResponse;
   };
+  /** The design's checks as a Work Status row carries them (`GET /status/designs`), or `null` when the fake service would fail; it does not count as a `GET /designs/:slug/checks`. */
+  summary: (slug: string) => ChecksSummary | null;
   prompt: (slug: string) => { text: string };
   /** Test hooks (shoot.mjs reaches them through `window.__dcFake.checks`). */
   hooks: { setRunMs: (ms: number) => void; setFail: (on: boolean) => void; /** A `checks` change event for the design, as if the agent's CLI had just written a report. */ touch: (slug: string) => void; /** How many times the checks of a design were asked for. */ gets: (slug: string) => number };
@@ -112,6 +114,14 @@ export const createFakeChecks = (deps: Deps): FakeChecks => {
         }, runMs);
         return { state: 'running' };
       },
+    },
+    summary: (slug) => {
+      try {
+        const { counts, render, canRun } = build(slug);
+        return { counts, render: { state: render.state }, canRun };
+      } catch {
+        return null;
+      }
     },
     prompt: (slug) => {
       const info = deps.info(slug);

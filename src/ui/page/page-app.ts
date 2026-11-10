@@ -5,6 +5,7 @@ import { openNewDialog } from '../components/new-dialog.ts';
 import { toast, type ActionContext } from '../components/actions.ts';
 import { errorText, h } from '../components/dom.ts';
 import { openSheet } from '../components/kit.ts';
+import { keepPlace } from '../components/place-memory.ts';
 import { mountSettings, type SettingsHandle } from '../components/settings-view.ts';
 import { flows } from '../guest.ts';
 import { mountDesignView, type DesignViewHandle } from '../wall/design-view.ts';
@@ -21,6 +22,7 @@ export const mountPage = (root: HTMLElement): void => {
     open?.handle.dispose();
     open = null;
     library.el.hidden = false;
+    place.clear();
     if (slug) library.focusCard(slug);
   };
 
@@ -29,9 +31,13 @@ export const mountPage = (root: HTMLElement): void => {
     open?.handle.dispose();
     const handle = mountDesignView({ slug, surface: 'page', actions, onBack: closeDesign });
     open = { slug, handle };
+    place.remember(slug);
     library.el.hidden = true;
     app.append(handle.el);
   };
+
+  // The frame reloads when the extension updates; reopen the design that was open (the user's own choice wins).
+  const place = keepPlace({ surface: 'page', isOpen: () => open !== null, open: openDesign });
 
   const actions: ActionContext = {
     host: app,

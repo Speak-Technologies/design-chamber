@@ -8,20 +8,26 @@
 //
 // `filter` is a regex tested against "<kind>-<width>-<theme>" (e.g. `rail-320`, `page.*light`).
 // Exit code 1 when a guest console error or an assertion fails.
+//
+// Frames: the host page (host.html) mounts `?surface=` panel, page, status (dist/status) or block
+// (dist/blocks). The status and block frames run their real entry points (src/ui/status/main.ts,
+// src/ui/blocks/main.ts) bundled with `fake-sdk.ts`, so the fake service sits behind them too.
+// `?entry=probe` loads a tiny probe frame instead (probe-frame.ts), for checking the harness itself.
+//
+// Adding a scenario: drop `scenarios/<feature>.mjs` exporting `run(helpers)`; every file there runs
+// (name = the file name, which `filter` matches). To show a state the fake backend has no sample for,
+// give `openPage` `routes` (answers from the first request: `{ 'GET /status/designs': { status: 200,
+// body: {...} } }`) or call `page.route(key, override)` later; neither touches fake-backend.ts. A block
+// frame's call goes in `block`, or `page.setBlock(call)` later.
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { build } from 'esbuild';
-
-import * as askBar from './scenarios/ask-bar.mjs';
-import * as buildStrip from './scenarios/build-strip.mjs';
-import * as checks from './scenarios/checks.mjs';
-import * as findability from './scenarios/findability.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..', '..');
@@ -44,7 +50,22 @@ if (!chromePath) throw new Error('No Chrome or Edge found; set DC_TEST_CHROME.')
 
 const browser = { bundle: true, format: 'iife', platform: 'browser', target: ['es2020'], write: false, logLevel: 'warning', legalComments: 'none' };
 const bridge = (await build({ ...browser, entryPoints: [path.join(root, 'src', 'guest', 'bridge', 'bridge.ts')], minify: true })).outputFiles[0].text;
-const harnessJs = (await build({ ...browser, entryPoints: [path.join(here, 'fake-main.ts')], define: { __DC_BRIDGE__: JSON.stringify(bridge) } })).outputFiles[0].text;
+const define = { __DC_BRIDGE__: JSON.stringify(bridge) };
+const harnessJs = (await build({ ...browser, entryPoints: [path.join(here, 'fake-main.ts')], define })).outputFiles[0].text;
+
+// A frame's real entry point, with `@openchamber/sdk` swapped for fake-sdk.ts (the real SDK with
+// `connectHost` backed by the fake service). Only the exact package name is swapped, never `/ui`.
+const fakeSdkPath = path.join(here, 'fake-sdk.ts');
+const fakeSdk = {
+  name: 'fake-connect-host',
+  setup: (b) => b.onResolve({ filter: /^@openchamber\/sdk$/ }, (args) => (args.importer === fakeSdkPath ? undefined : { path: fakeSdkPath })),
+};
+const frameJs = async (entry) => (await build({ ...browser, entryPoints: [entry], define, plugins: [fakeSdk] })).outputFiles[0].text;
+const frames = {
+  '/status/main.js': await frameJs(path.join(root, 'src', 'ui', 'status', 'main.ts')),
+  '/blocks/main.js': await frameJs(path.join(root, 'src', 'ui', 'blocks', 'main.ts')),
+  '/probe/main.js': await frameJs(path.join(here, 'probe-frame.ts')),
+};
 
 // ---------------------------------------------------------------- static server
 
@@ -52,12 +73,14 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://x');
   let file;
-  if (url.pathname === '/panel/main.js') {
-    response.writeHead(200, { 'content-type': MIME['.js'], 'cache-control': 'no-store' }).end(harnessJs);
+  const script = url.pathname === '/panel/main.js' ? harnessJs : frames[url.pathname];
+  if (script !== undefined) {
+    response.writeHead(200, { 'content-type': MIME['.js'], 'cache-control': 'no-store' }).end(script);
     return;
   }
   if (url.pathname === '/host.html') file = path.join(here, 'host.html');
-  else if (url.pathname.startsWith('/panel/')) file = path.join(root, 'dist', url.pathname);
+  else if (url.pathname === '/probe/index.html') file = path.join(here, 'probe.html');
+  else if (/^\/(panel|status|blocks)\//.test(url.pathname)) file = path.join(root, 'dist', url.pathname);
   else {
     response.writeHead(404).end();
     return;
@@ -112,7 +135,10 @@ const problems = [];
 // renderer running, which starves the pages of every later scenario (boards that never leave idle).
 const openPages = new Set();
 
-const openPage = async ({ width, height, surface, theme, label, query = '' }) => {
+// `routes`: route answers in place from the first request (see the header). `storage`: values the
+// host's storage starts with. `block`: the call a block frame draws. `entry: 'probe'`: the harness probe frame. `mount`: the selector that says the frame drew.
+const openPage = async ({ width, height, surface, theme, label, query = '', routes = null, block = null, entry = null, mount = null, storage = null }) => {
+  const extra = `${storage ? `&storage=${encodeURIComponent(JSON.stringify(storage))}` : ''}${routes ? `&routes=${encodeURIComponent(JSON.stringify(routes))}` : ''}${block ? `&block=${encodeURIComponent(JSON.stringify(block))}` : ''}${entry ? `&entry=${entry}` : ''}`;
   const target = await (await fetch(`http://127.0.0.1:${debugPort}/json/new?about:blank`, { method: 'PUT' })).json();
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
@@ -144,7 +170,7 @@ const openPage = async ({ width, height, surface, theme, label, query = '' }) =>
   await send('Page.enable');
   await send('Page.bringToFront');
   await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
-  await send('Page.navigate', { url: `${base}/host.html?surface=${surface}&theme=${theme}${query}` });
+  await send('Page.navigate', { url: `${base}/host.html?surface=${surface}&theme=${theme}${query}${extra}` });
 
   // Run `code` inside the guest document. `doc` and `win` are the guest's document and window.
   const guest = async (code) => {
@@ -216,6 +242,11 @@ const openPage = async ({ width, height, surface, theme, label, query = '' }) =>
       await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX, deltaY, modifiers: ctrl ? 2 : 0 });
       await sleep(120);
     },
+    /** Answer a route yourself from now on (`override` per `RouteOverride` in fake-transport.ts); `null` goes back to the fake backend. */
+    route: (key, override) => host(`window.frames[0].__dcFake.route(${JSON.stringify(key)}, ${JSON.stringify(override)})`),
+    clearRoutes: () => host('window.frames[0].__dcFake.clearRoutes()'),
+    /** A block frame's new call (or `null`), as the host sends it. */
+    setBlock: (call) => host(`window.__host.setBlock(${JSON.stringify(call)})`),
     async shot(name) {
       const { data } = await send('Page.captureScreenshot', { format: 'png' });
       const file = path.join(outDir, `${name}.png`);
@@ -229,7 +260,8 @@ const openPage = async ({ width, height, surface, theme, label, query = '' }) =>
     },
   };
   openPages.add(api);
-  await api.waitFor('return !!doc.querySelector(".dc-app")', 'the app to mount');
+  const mounted = mount ?? (surface === 'status' || surface === 'block' ? '#root' : '.dc-app');
+  await api.waitFor(`return !!doc.querySelector(${JSON.stringify(mounted)})`, 'the app to mount');
   return api;
 };
 
@@ -543,7 +575,7 @@ const emptyAndErrors = async () => {
   await p.close();
 };
 
-// What the Phase 1 scenario modules (test/ui/visual/scenarios) use.
+// What the scenario modules (test/ui/visual/scenarios) use.
 const helpers = { openPage, check, listReady, thumbsReady, wallReady, menuItem, scaleLabel, sleep, outDir, root };
 
 const plan = [];
@@ -554,10 +586,12 @@ for (const theme of ['dark', 'light']) {
 plan.push(['rail-360-themeswitch', themeSwitch]);
 plan.push(['page-1400-dark-live', keyboardAndLive]);
 plan.push(['rail-320-dark-empty', emptyAndErrors]);
-plan.push(['build-strip', () => buildStrip.run(helpers)]);
-plan.push(['ask-bar', () => askBar.run(helpers)]);
-plan.push(['findability', () => findability.run(helpers)]);
-plan.push(['checks', () => checks.run(helpers)]);
+// Every scenarios/*.mjs runs, so a feature branch adds a file and edits nothing here.
+const scenarioDir = path.join(here, 'scenarios');
+for (const file of readdirSync(scenarioDir).filter((name) => name.endsWith('.mjs')).sort()) {
+  const scenario = await import(pathToFileURL(path.join(scenarioDir, file)).href);
+  plan.push([path.basename(file, '.mjs'), () => scenario.run(helpers)]);
+}
 
 let failed = false;
 try {

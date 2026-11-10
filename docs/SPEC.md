@@ -1167,8 +1167,19 @@ toast already said it, else the same sentence as the ask bar.
 `NO_DIRECTORY` / `UNSUPPORTED` → `not-here`, and it then calls `DELETE /open-request` (failure ignored;
 the TTL covers it) so a stale request cannot pop open later. The rail takes the request on mount, on
 `added` and on `open` events, and opens `mountDesignView({ …, startIn })`: `comment` starts in Edit
-mode with Comment pressed, `view` keeps today's default. The full-screen page still cannot be opened
-from code (F11).
+mode with Comment pressed, `view` keeps today's default; a `comment` request for the design already
+open in the rail reaches it through `DesignViewHandle.startComment()` (switch to Edit, no remount).
+The full-screen page still cannot be opened from code (F11).
+
+### 10.12 Keep your place across reloads, Phase 1.5, planned (P15 §3.8)
+The panel and page frames reload whenever the extension updates (folder edits, rebuilds, Git
+updates), and both used to start on the list. `src/ui/components/place-memory.ts` (`keepPlace`) keeps
+the open design's slug in `host.storage` under `place:panel` / `place:page` (one key per surface; instance
+scope, F21): `remember(slug)` when a design opens, `clear()` when the user goes back to the list. On
+start it reads the key once, waits for the designs list, and `decideRestore` (`src/ui/model/place-model.ts`,
+pure) says what to do: `open` when the slug is in the list, `drop` (clear the key, no message) when it
+is not, `skip` when a design is already open (an open request or the user's own choice wins) or the stored
+value is unreadable (`readPlace` checks `SLUG_PATTERN`; storage is untrusted). The decision is made once.
 
 ---
 
@@ -1368,9 +1379,13 @@ src/ui/**     (index.html, main.ts, app.ts, guest.ts, styles.css, rail/**, page/
                 design-view.ts (toolbar, drawers, notices, seams), view-context.ts (§13.3),
                 feature-{build-strip,ask-bar,findability,checks}.ts (feature mounts)
   src/ui/model/ pure view models: wall-model, wall-input (keys, wheel, pointer decisions),
-                build-strip-model, ask-bar-model, checks-model, findability-model, viewer-menu, …
+                build-strip-model, ask-bar-model, checks-model, findability-model, viewer-menu,
+                place-model (what to reopen after a reload; §10.12; wiring in components/place-memory.ts), …
 test/shared/** test/service/** test/guest/** test/agent/** test/cli/** test/e2e/**   each WP its own subfolder
-test/ui/**    pure view-model tests; test/ui/visual/ screenshot harness (shoot.mjs, scenarios/*.mjs)
+test/ui/**    pure view-model tests; test/ui/visual/ screenshot harness (shoot.mjs, scenarios/*.mjs: every
+              file there runs, so a branch adds one and edits no shared file; host.html mounts the panel,
+              page, Work Status (`status`) and chat block (`block`) frames; fake-host.ts / fake-sdk.ts put the
+              fake service behind a frame's real entry; route answers per scenario via `routes` / `page.route`)
 test/helpers/** (fake-context, tmp-root, chrome-or-skip, service-process, probe-source, refuse-rename)  WP0
 rules/**      rules author (read-only for WPs)
 spikes/**     architect
@@ -1855,7 +1870,7 @@ path-compare}.ts`, `src/service/{main,http,context,compose,paths,design-index,ho
 `src/service/routes/chat.ts`, `src/guest/{host,flows,store,build-activity,fake-services}.ts`,
 `src/ui/rail/rail-app.ts`, `src/ui/wall/design-view.ts`, `src/ui/model/{build-strip-model,
 checks-model}.ts`, `src/ui/styles.css` outside a branch's own marked block,
-`test/ui/visual/{fake-backend,fake-main,fake-transport,shoot}.*`,
+`test/ui/visual/{fake-backend,fake-main,fake-transport,fake-host,fake-sdk,probe-frame,shoot,host}.*`,
 `test/service/core/{routes,settings,paths}.test.ts`, `test/service/integration/**`, `docs/SPEC.md`,
 `documentation/README.md`. The WP0 interface set grows by `src/shared/path-compare.ts`.
 

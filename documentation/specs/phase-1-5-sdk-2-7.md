@@ -242,6 +242,34 @@ Imported from the SDK, not redefined: `SERVICE_INSTRUCTIONS_MAX` (4 096), `MENTI
   and the visual harness host (`test/ui/visual/fake-main.ts`, `fake-transport.ts`) implement them (a block
   call can be injected; `answerBlock` records the text and refuses without a pending click flag).
 
+### 3.8 Keep your place across reloads (added 2026-11-10 at the owner's request; ui-ux)
+
+The owner reported that after a few minutes Design Chamber sends them from the design they are viewing
+back to the list. Cause: the panel and page frames reload whenever the extension updates (folder edits,
+rebuilds, Git updates), and the rail starts on the list because nothing remembers what was open.
+
+- **What is kept.** The open design's slug, in `host.storage` (instance scope, as `view:<slug>` and the
+  first-run tip key are), under `place:panel` for the rail and `place:page` for the full-screen page, so a
+  design opened in one never reopens in the other. A stored value is `{ slug }`; "was the viewer open"
+  is the same fact (a slug is stored exactly while a design is open), so there is no second field.
+  Going back to the list stores `null`. A deleted design (the viewer's "This design is gone", or
+  `onRemoved`) goes back through the same path, so it clears too.
+- **Restore.** On start the surface reads its key once, waits for the designs list, and reopens the design
+  when the list still has it; its camera, hidden sizes and page view already restore from `view:<slug>`.
+  A slug that is no longer in the list falls back to the list with no message and the key is cleared. The
+  decision is made once. A stored value that is not `{ slug }` with a valid slug (`SLUG_PATTERN`) is ignored.
+- **Who wins.** A pending open request (`openInRail`, `watchOpenRequests`) wins over the remembered design,
+  and so does a design the user opens before the surface has finished starting: whichever opens first stops
+  the restore, and becomes the remembered one.
+- **Not kept.** Drawers, sheets, the New dialog, search and the tab. Only the design.
+- **Code.** `src/ui/model/place-model.ts` (pure: `placeKey`, `storedPlace`, `readPlace`, `decideRestore`),
+  `src/ui/components/place-memory.ts` (`keepPlace`, the wiring), called by `src/ui/rail/rail-app.ts` and
+  `src/ui/page/page-app.ts`. Tests: `test/ui/place-memory.test.ts` (remember, clear on back, restore when
+  present, ignore when gone, open request wins) and the `rail-place` visual scenario, which reloads the
+  frame the way an extension update does. No service or API change.
+- **Not an answer to the cause.** This hides the reload; it does not stop it. If the reloads themselves
+  are too frequent, that is the host's (OpenChamber's) behaviour and a separate question.
+
 ---
 
 ## U1. Move to SDK 2.7

@@ -91,38 +91,30 @@ export const guideSentence = (guide: AgentGuideStatus): PathSentence => {
   }
 };
 
-export type SkillAction = { kind: 'install' | 'update' | 'replace'; label: string };
-
 export type SkillRow = {
-  /** The button, or null when there is nothing to click (installed, someone else's skill, unavailable). */
-  action: SkillAction | null;
   /** "Installed" badge beside the path. */
   installed: boolean;
   sentence: PathSentence;
-  /** Asked inline before Replace overwrites the user's edits. */
-  confirm: string | null;
 };
 
-/** The skill row for each state the service reports. */
+/**
+ * The skill row for each state the service reports. A read-only status: Design Chamber no longer
+ * installs a skill (it ships inside the extension), so no state offers a button here.
+ */
 export const skillRow = (skill: AgentSkillStatus): SkillRow => {
   switch (skill.state) {
     case 'not-installed':
-      return { action: { kind: 'install', label: 'Install skill' }, installed: false, confirm: null, sentence: withPath('Adds a design-chamber skill to OpenCode at ', skill.path, ', so any chat knows where designs go.') };
+      return { installed: false, sentence: withPath('No skill is installed at ', skill.path, '.') };
     case 'outdated':
-      return { action: { kind: 'update', label: 'Update skill' }, installed: false, confirm: null, sentence: plain('Your designs folder changed since you installed it.') };
+      return { installed: false, sentence: withPath('The skill at ', skill.path, ' was installed for an earlier designs folder.') };
     case 'current':
-      return { action: null, installed: true, confirm: null, sentence: withPath('', skill.path, '') };
+      return { installed: true, sentence: withPath('', skill.path, '') };
     case 'edited':
-      return {
-        action: { kind: 'replace', label: 'Replace skill…' },
-        installed: false,
-        confirm: 'Replace your edited skill with Design Chamber’s version?',
-        sentence: withPath('You edited the skill at ', skill.path, '. Design Chamber won’t update it unless you replace it.'),
-      };
+      return { installed: false, sentence: withPath('You edited the skill at ', skill.path, '. Design Chamber leaves it alone.') };
     case 'foreign':
-      return { action: null, installed: false, confirm: null, sentence: withPath('A different skill called design-chamber is already at ', skill.path, ', so Design Chamber left it alone.') };
+      return { installed: false, sentence: withPath('A different skill called design-chamber is at ', skill.path, ', so Design Chamber left it alone.') };
     case 'unavailable':
-      return { action: null, installed: false, confirm: null, sentence: plain(skill.message ?? 'The skill can’t be installed on this computer.') };
+      return { installed: false, sentence: plain(skill.message ?? 'Design Chamber can’t look for the skill on this computer.') };
   }
 };
 

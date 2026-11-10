@@ -43,6 +43,24 @@ const basename = (path: string): string => path.split('/').filter((part) => part
 const FULL_PATH_MAX = 48;
 const NAME_MAX = 24;
 
+/**
+ * The rail pill's words for the four phases a Work Status row can show. `file` is the path (or just
+ * the name) of the file being written, used by `writing` only. `buildView` takes its pill text from
+ * here, so a status row says exactly what the rail pill says.
+ */
+export const pillText = (phase: 'writing' | 'working' | 'failed' | 'done', file: string | null): string => {
+  switch (phase) {
+    case 'writing':
+      return file ? `Writing ${middlePath(basename(file), NAME_MAX)}` : 'Writing';
+    case 'working':
+      return 'Agent is working';
+    case 'failed':
+      return 'Agent stopped';
+    case 'done':
+      return 'Done';
+  }
+};
+
 const HIDDEN: BuildView = { phase: 'hidden', text: '', pill: '', detail: null, elapsed: null, title: null, tone: 'info', actions: [], announce: null };
 
 type Copy = { text: string; pill: string; tone: BuildTone; actions?: BuildAction[]; detail?: string | null; title?: string | null; elapsed?: boolean };
@@ -72,12 +90,12 @@ export const buildView = (track: BuildTrack, now: number, locale = 'en'): BuildV
     case 'permission':
       return view(phase, track, now, { text: 'The agent needs your OK in the chat', pill: 'Agent needs your OK', tone: 'warning', actions: ['open-chat'] });
     case 'failed':
-      return view(phase, track, now, { text: 'The agent stopped with an error', pill: 'Agent stopped', tone: 'error', actions: ['open-chat', 'dismiss'] });
+      return view(phase, track, now, { text: 'The agent stopped with an error', pill: pillText('failed', null), tone: 'error', actions: ['open-chat', 'dismiss'] });
     case 'writing': {
       const path = last?.path ?? null;
       return view(phase, track, now, {
         text: path ? `Writing ${middlePath(path, FULL_PATH_MAX)}` : 'The agent is writing',
-        pill: path ? `Writing ${middlePath(basename(path), NAME_MAX)}` : 'Writing',
+        pill: pillText('writing', path),
         detail: track.isCanvas && track.screensTotal > 1 ? `${track.screensWritten} of ${track.screensTotal} screens written` : null,
         title: path,
         tone: 'info',
@@ -94,13 +112,13 @@ export const buildView = (track: BuildTrack, now: number, locale = 'en'): BuildV
         const when = relativeTime(new Date(last.at).toISOString(), now, locale);
         detail = last.path ? `Last saved ${middlePath(basename(last.path), NAME_MAX)} ${when}` : `Last saved ${when}`;
       }
-      return view(phase, track, now, { text: 'The agent is working', pill: 'Agent is working', detail, tone: 'info', elapsed: true });
+      return view(phase, track, now, { text: 'The agent is working', pill: pillText('working', null), detail, tone: 'info', elapsed: true });
     }
     case 'done': {
       const count = track.turnFiles.length;
       return view(phase, track, now, {
         text: count > 0 ? `Done. Updated ${plural(count, 'file')}` : 'Done. No files changed',
-        pill: 'Done',
+        pill: pillText('done', null),
         tone: 'success',
         actions: count > 0 ? [] : ['open-chat'],
       });
