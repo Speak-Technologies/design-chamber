@@ -120,8 +120,11 @@ Once when it opens, then on the change feed (a long-poll the frame shares the ru
 no timer polls anything): a `reset`, or an event of kind `added`, `removed`, `design`, `files`, `comments`,
 `checks`, `activity` or `root`, debounced 250 ms. Also when the chat or the project folder changes, and
 when the feed comes back after an outage. The only timer is a one-off 10 s deadline that turns "starting"
-into "isn't responding". The frame passes the project folder exactly as the host gives it, and the chat id,
-so this chat's design is listed first.
+into "isn't responding". The frame passes the chat id, so this chat's design is listed first, and the folder
+the host gives it only when that folder is one of the projects OpenChamber knows (`listProjects`, compared like
+every other folder path). A chat opened without a project is in its own folder under OpenChamber's config, which
+is not a project: the folder is left out and the section reads as "no project" (this chat's designs, then the
+last 7 days anywhere). If the project list can't be read within 3 s, the folder is taken for a project.
 
 ### Size and look
 
