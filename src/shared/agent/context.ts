@@ -126,8 +126,8 @@ export const rulesPathOf = (folder: string): string => joinFolder(folder, '.cham
 /** Cut to `max` characters, ending in `…` when something was dropped. */
 export const clip = (text: string, max: number): string => (text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`);
 
-/** Collapse every run of whitespace (newlines included) to one space. */
-export const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
+/** Collapse every run of whitespace (newlines included) to one space. `\s` misses NEL (U+0085), which `indentContinuation` treats as a break. */
+export const oneLine = (text: string): string => text.replace(/[\s\u0085]+/g, ' ').trim();
 
 /**
  * Every line after the first indented, so text that keeps its line breaks (a comment body) can
