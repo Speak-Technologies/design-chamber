@@ -267,6 +267,11 @@ describe('toolResult', () => {
     assert.equal(long.content.length, 'The check could not run: '.length + CHECK_TOOL_ERROR_TEXT_MAX);
   });
 
+  test('a CLI sentence that already says it could not run is not prefixed twice (QA T7)', () => {
+    const result = toolResult({ kind: 'exit', code: 2, stdout: '', stderr: 'The check could not run: Chrome crashed.\n', stdoutCut: false });
+    assert.equal(result.content, 'The check could not run: Chrome crashed.');
+  });
+
   test('a crash, a kill, a timeout and a spawn error each get a sentence and exit 2', () => {
     assert.equal(toolResult({ kind: 'exit', code: 134, stdout: '', stderr: '', stdoutCut: false }).metadata.designChamber.exit, 2);
     assert.match(toolResult({ kind: 'exit', code: null, stdout: '', stderr: '', stdoutCut: false }).content, /stopped before it finished/);

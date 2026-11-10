@@ -354,7 +354,9 @@ export const toolResult = (outcome: ChildOutcome): ToolAnswer => {
     return answer(`${outcome.stdout}${note}`, outcome.code);
   }
   if (outcome.code === null) return answer(STOPPED_SENTENCE, 2);
-  const sentence = outcome.stderr.trim().slice(0, CHECK_TOOL_ERROR_TEXT_MAX);
+  // The CLI's own crash path already starts with the same words; don't say them twice.
+  const raw = outcome.stderr.trim();
+  const sentence = (raw.startsWith(COULD_NOT_RUN) ? raw.slice(COULD_NOT_RUN.length) : raw).slice(0, CHECK_TOOL_ERROR_TEXT_MAX);
   return answer(`${COULD_NOT_RUN}${sentence === '' ? `it stopped with exit code ${outcome.code}.` : sentence}`, 2);
 };
 
