@@ -270,3 +270,62 @@ export const DISCOVERY_SOURCES_MAX = 20;
 export const DISCOVERY_BREAKPOINTS_MAX = 4;
 /** Custom properties in one `:root{}` block that make a CSS file a token source. */
 export const DISCOVERY_ROOT_VARS_MIN = 5;
+
+// ---- Phase 1.5: SDK 2.7 (documentation/specs/phase-1-5-sdk-2-7.md §3.6) ----
+// SDK limits (SERVICE_INSTRUCTIONS_MAX, MENTIONS_ITEMS_MAX, GUEST_BLOCK_*, ...) are imported from
+// `@openchamber/sdk` where they are used, never copied here: this file stays import-free so the
+// OpenCode plugin can inline it.
+
+/** The design index refreshes this long after a change event (coalesced) [§3.1]. */
+export const DESIGN_INDEX_REFRESH_MS = 300;
+/** A turn event waits this long for a cold design index before falling back to a store walk [U4]. */
+export const DESIGN_INDEX_TURN_WAIT_MS = 5000;
+/** A mention search waits this long for a cold design index [U6]. */
+export const MENTION_INDEX_WAIT_MS = 1500;
+/** Characters of an `@` query kept [U6]. */
+export const MENTION_QUERY_MAX = 200;
+/** Turn events waiting for work; the oldest is dropped past this [U4]. */
+export const TURN_EVENT_QUEUE_MAX = 64;
+/** Sessions the activity tracker remembers [U4]. */
+export const ACTIVITY_SESSIONS_MAX = 500;
+/** A `working` session with no event this long reads as unknown [U4]. */
+export const ACTIVITY_WORKING_EXPIRY_MS = 30 * 60_000;
+/** A file landed less than this long ago: the agent is writing right now (build strip, Work Status). */
+export const WRITING_WINDOW_MS = 15_000;
+/** The `design_check` tool stops its child after this long [U3]. */
+export const CHECK_TOOL_TIMEOUT_MS = 180_000;
+/** SIGTERM, then SIGKILL after this long [U3]. */
+export const CHECK_TOOL_KILL_GRACE_MS = 5000;
+export const CHECK_TOOL_STDOUT_MAX_BYTES = 1_048_576;
+export const CHECK_TOOL_STDERR_MAX_BYTES = 65_536;
+/** Characters of the "could not run" sentence the tool answers with [U3]. */
+export const CHECK_TOOL_ERROR_TEXT_MAX = 2000;
+/** Screen ids one `design_check` call may name [U3]. */
+export const CHECK_TOOL_SCREENS_MAX = 16;
+/** Characters of `runtime.json` `execPath` [U3]. */
+export const RUNTIME_PATH_MAX = 4096;
+/** Rows in the Work Status section, and the most check reads per answer [U5]. */
+export const STATUS_ROWS_MAX = 5;
+/** Without a project, Work Status lists designs updated this recently [U5]. */
+export const STATUS_RECENT_MS = 7 * 86_400_000;
+/** The status frame refetches this long after the last change event [U5]. */
+export const STATUS_REFETCH_DEBOUNCE_MS = 250;
+/** How long the service may stay unreachable before "starting" becomes "isn’t responding" [U5]. */
+export const STATUS_STARTING_GIVE_UP_MS = 10_000;
+/** A cold design index is waited for this long; then Work Status answers an empty list, not an error [U5]. */
+export const STATUS_INDEX_WAIT_MS = 1500;
+/** One design's check state is read for this long; a slower read leaves that row without a check part [U5]. */
+export const STATUS_CHECK_READ_MS = 1500;
+/** Base64 text accepted into a thumbnail `data:` URL in a chat block [U7, U8]. */
+export const THUMB_DATA_TEXT_MAX = 4_194_304;
+/** A pending thumbnail in a chat block is asked again after these delays [U7, U8]. */
+export const THUMB_RETRY_DELAYS_MS: readonly number[] = [2000, 5000, 10_000];
+export const BLOCK_TITLE_MAX = 80;
+export const BLOCK_SCREEN_TITLE_MAX = 40;
+/** Screens a design card lists before "+N more" [U7]. */
+export const BLOCK_SCREENS_SHOWN = 6;
+export const DIRECTION_QUESTION_MAX = 200;
+export const DIRECTION_LABEL_MAX = 80;
+/** Options a direction pick needs, and allows [U8]. */
+export const DIRECTION_OPTIONS_MIN = 2;
+export const DIRECTION_OPTIONS_MAX = 4;

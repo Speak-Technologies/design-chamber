@@ -436,6 +436,11 @@ export const createStore = ({ client }: StoreDeps): Store => {
           case 'versions':
             if (event.slug && state.versions?.slug === event.slug) versions = true;
             break;
+          case 'open':
+          case 'activity':
+            // No design data changed: the rail takes open requests itself (flows.watchOpenRequests),
+            // and agent activity is read by the frames that show it.
+            break;
         }
       }
 

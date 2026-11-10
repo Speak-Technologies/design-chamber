@@ -1,27 +1,15 @@
 // Visual harness entry (shoot.mjs bundles it in place of src/ui/main.ts): the real UI on the
 // real guest core, talking to the mock host page for theme, toasts, clipboard and storage, with
-// service requests answered in memory by the fake backend. Never part of a production bundle.
+// service requests answered in memory by the fake backend (fake-host.ts). Never part of a production bundle.
+// The Work Status and chat block frames run their own real entry points instead (fake-sdk.ts).
 
 import { connectHost } from '@openchamber/sdk';
 
-import { createGuestHost, type HostLike } from '../../../src/guest/host.ts';
+import { createGuestHost } from '../../../src/guest/host.ts';
 import { createServiceClient } from '../../../src/guest/service-client.ts';
 import { startApp } from '../../../src/ui/app.ts';
-import { createFakeTransport } from './fake-transport.ts';
+import { installFakeHost } from './fake-host.ts';
 
-const real = connectHost();
-const fake = createFakeTransport();
-const hybrid: HostLike = new Proxy(real, {
-  get: (target, key, receiver) => (key === 'serviceRequest' ? fake.serviceRequest : Reflect.get(target, key, receiver)),
-});
+const hybrid = installFakeHost(connectHost());
 const guestHost = createGuestHost(hybrid);
-startApp(guestHost, createServiceClient(fake));
-
-/** Hooks for shoot.mjs: the agent finishes the pending sample design, saves one file, or a design turns out to be older than it looked; the next restore fails once; Checks badge states. */
-(window as unknown as { __dcFake?: Pick<typeof fake.backend, 'writePending' | 'writeFile' | 'ageDesign' | 'failNextRestore' | 'checks'> }).__dcFake = {
-  writePending: fake.backend.writePending,
-  writeFile: fake.backend.writeFile,
-  ageDesign: fake.backend.ageDesign,
-  failNextRestore: fake.backend.failNextRestore,
-  checks: fake.backend.checks,
-};
+startApp(guestHost, createServiceClient(hybrid));

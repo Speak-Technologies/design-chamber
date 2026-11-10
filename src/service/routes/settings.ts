@@ -1,7 +1,7 @@
-// WP1 — GET /settings, PUT /settings, POST /agent/skill (docs/SPEC.md §7, §9.2;
-// documentation/specs/agent-guidance-and-pages.md §3.3, §3.4).
+// WP1 — GET /settings, PUT /settings (docs/SPEC.md §7, §9.2; documentation/specs/agent-guidance-and-pages.md
+// §3.3), and DELETE /agent/skill (documentation/specs/phase-1-5-sdk-2-7.md §U2.4).
 
-import type { InstallSkillResponse, PreviousRoot, SettingsResponse } from '../../shared/api.ts';
+import type { PreviousRoot, RemoveSkillResponse, SettingsResponse } from '../../shared/api.ts';
 import { SETTINGS_PATH_MAX } from '../../shared/limits.ts';
 import type { AgentSetup } from '../agent-setup.ts';
 import { resolveBrowser } from '../chrome.ts';
@@ -43,15 +43,6 @@ const validateRoot = (raw: unknown): string | null | undefined => {
   return raw;
 };
 
-/** `POST /agent/skill` body: an object whose only meaningful key is the optional boolean `replaceEdited`; other keys are ignored. No path is ever accepted. */
-const validateInstallSkill = (body: unknown): { replaceEdited: boolean } => {
-  if (body === undefined) return { replaceEdited: false };
-  if (!isBodyRecord(body)) throw new ApiError('bad-request', 'The skill request must be a JSON object.');
-  const raw = body.replaceEdited;
-  if (raw !== undefined && typeof raw !== 'boolean') throw new ApiError('bad-request', '"replaceEdited" must be true or false.');
-  return { replaceEdited: raw === true };
-};
-
 const validateChromePath = (raw: unknown): string | null | undefined => {
   if (raw === undefined) return undefined;
   if (raw === null) return null;
@@ -65,7 +56,7 @@ const validateChromePath = (raw: unknown): string | null | undefined => {
  * Registers:
  * - 'GET /settings'
  * - 'PUT /settings'
- * - 'POST /agent/skill'
+ * - 'DELETE /agent/skill'
  */
 export function registerSettingsRoutes(router: Router, ctx: ServiceContext, agent: AgentSetup): void {
   router.on('GET /settings', async (): Promise<SettingsResponse> => buildSettingsResponse(ctx, agent));
@@ -87,6 +78,7 @@ export function registerSettingsRoutes(router: Router, ctx: ServiceContext, agen
     return buildSettingsResponse(ctx, agent);
   });
 
-  // The only write outside the designs root, and only from the user's click in Settings.
-  router.on('POST /agent/skill', async ({ body }): Promise<InstallSkillResponse> => ({ skill: await agent.installSkill(validateInstallSkill(body)) }));
+  // The user's click on "Remove old copy" in Settings. The request carries nothing the handler
+  // reads: the target is the fixed skillTarget path, and it goes only when it is ours and unedited.
+  router.on('DELETE /agent/skill', async (): Promise<RemoveSkillResponse> => ({ skill: await agent.removeOldSkill() }));
 }

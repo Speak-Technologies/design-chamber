@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { crc32, deflateRawSync } from 'node:zlib';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// The same list is the install tree .github/workflows/release.yml commits to the `release` branch
+// (test/package-tree.test.ts keeps the two equal).
 const INCLUDE = ['package.json', 'dist', 'rules', 'LICENSE', 'README.md'];
 
 // Desktop cruft a macOS or Windows checkout may hold; never part of the extension.

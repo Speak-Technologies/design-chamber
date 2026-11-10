@@ -132,6 +132,17 @@ describe('buildAgentGuide (§4)', () => {
     assert.ok(bullets.length > 0 && bullets.length <= 10, `${bullets.length} digest lines`);
   });
 
+  test('names design_check first and the launcher second, and still carries its ownership marker (P15 §U2.6 5)', () => {
+    const command = "sh '/home/you/Documents/Designs/.chamber/bin/dc' check <slug>";
+    for (const guide of [buildAgentGuide({ root: POSIX_ROOT, platform: 'linux', checkCommand: command }), buildAgentGuide({ root: POSIX_ROOT, platform: 'linux' })]) {
+      assert.ok(guide.includes('`design_check`'));
+      assert.equal(findOwnershipMarker(guide).kind, 'valid');
+      assert.ok(ownershipVerifies(guide));
+    }
+    const withCommand = buildAgentGuide({ root: POSIX_ROOT, platform: 'linux', checkCommand: command });
+    assert.ok(withCommand.indexOf('`design_check`') < withCommand.indexOf(command), 'the tool comes before the launcher');
+  });
+
   test('retired guide points at the new root and is still ours', () => {
     const retired = buildRetiredGuide({ oldRoot: POSIX_ROOT, newRoot: '/data/designs' });
     assert.ok(retired.includes('Design Chamber now saves designs in `/data/designs`.'));

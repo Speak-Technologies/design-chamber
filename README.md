@@ -6,7 +6,7 @@ rail panel and a full-screen page — with a pannable multi-screen wall, element
 pins, version history and export.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![OpenChamber](https://img.shields.io/badge/openchamber-%E2%89%A5%202.5.0-4b5563)](package.json)
+[![OpenChamber](https://img.shields.io/badge/openchamber-%E2%89%A5%202.7.0-4b5563)](#install)
 
 ![A Design Chamber canvas wall in OpenChamber's dark theme: two screens (Landing, Prices) at Laptop 1280×800 and Phone 390×844 as artboards, two numbered comment pins on the page, and the Comments drawer with a "Send 2 comments to chat" button](docs/img/hero-wall-pins.png)
 
@@ -48,31 +48,54 @@ to, and `?` means I couldn't confirm it. Corrections welcome.
 The difference in one sentence: Claude Design and artifacts generate *on Anthropic's surface*;
 Design Chamber makes *your* agent design *on your machine*, as files you own.
 
+## Install
+
+**Requirements:** OpenChamber 2.7.0 or later · Windows, macOS or Linux · optional Chrome, Edge or
+Chromium (for PNG thumbnails; without one, the library uses live previews).
+
+**Before v0.2.0 is released**, use **From source** below: the one-click link and the Git URL
+install from the `release` branch, which the first tagged release creates.
+
+**One click:** [Install in OpenChamber](openchamber://extensions/install?url=https%3A%2F%2Fgithub.com%2FSpeak-Technologies%2Fdesign-chamber%23release).
+OpenChamber asks before it adds anything.
+
+**By hand:** open **Settings → Extensions → Add from Git** and paste
+
+```text
+https://github.com/Speak-Technologies/design-chamber#release
+```
+
+GitHub may not turn the one-click link into a button, so the line above always works. The
+`release` branch holds the built extension from the latest release. To stay on one version, use
+`#release-v0.2.0` (swap in the version you want) instead of `#release`. Settings → Extensions
+offers **Update** when a newer release is out.
+
+**From source** (to change the code): `npm install && npm run build`, then add the repo folder in
+**Settings → Extensions**. `dist/` is gitignored, so build first. `npm run build && npm run pack`
+makes `design-chamber-<version>.zip` if you would rather install that; each GitHub release also
+carries one.
+
+After the install, OpenChamber asks you to approve the permissions. Design Chamber runs a small
+local helper (the "service") that reads and writes your designs folder and launches the browser
+for thumbnails. From v0.2.0 it also adds instructions, a skill and a tool so your agent knows where
+designs go.
+Until you approve, the new features stay off and everything from before keeps working.
+
 ## Quick start
 
-**Requirements:** OpenChamber ≥ 2.5.0 · Windows, macOS or Linux · optional Chrome, Edge or
-Chromium (for PNG thumbnails — without one, the library uses live previews).
-
-1. **Install.** In OpenChamber open **Settings → Extensions** and add this folder:
-   - *From source:* `npm install && npm run build`, then add the repo folder. (`dist/` is
-     gitignored, so build first.)
-   - *From a release zip:* `npm run build && npm run pack` makes `design-chamber-<version>.zip`
-     if you'd rather install that.
-2. **Approve the permissions** the extension asks for — it runs a small local helper (the
-   "service") that reads and writes your designs folder and launches the browser for thumbnails.
-3. **Start a design.** In any chat type:
+1. **Start a design.** In any chat type:
    ```
    /design a landing page and price list for a volunteer bike co-op, laptop + phone
    ```
    Your agent reads your project's design rules, may ask a few questions, then writes the
    files. The design appears in the panel and starts rendering the moment its first file lands.
-4. **Or just a page:** `/page a one-page repair-cost estimator widget`.
-5. **Already have HTML in a chat?** On an assistant message that contains an HTML code block,
+2. **Or just a page:** `/page a one-page repair-cost estimator widget`.
+3. **Already have HTML in a chat?** On an assistant message that contains an HTML code block,
    use the **⋯** menu → **Open as page**. It's saved into Designs and opens in the viewer.
-6. **Go full screen:** the rail viewer is compact; for the full library and wall use OpenChamber's
+4. **Go full screen:** the rail viewer is compact; for the full library and wall use OpenChamber's
    **sidebar → Extension pages → Design Chamber**. (Extensions can't open their own full-screen
    page from code, so the rail points you there.)
-7. **One-time permission setting** so your agent can write outside the project without asking
+5. **One-time permission setting** so your agent can write outside the project without asking
    each time — see [Let the agent write to Designs](#let-the-agent-write-to-designs).
 
 ## Using it well
@@ -111,8 +134,8 @@ as a canvas with one screen per board.
 **When you forget the slash command.** `/design` and `/page` only run when they start the
 message. So agents can still find their way, Design Chamber keeps an `AGENTS.md` guide at the root
 of your designs folder (it never overwrites one you edited), and **Settings → Help your agent find
-your designs** can install a `design-chamber` skill for OpenCode (only when you click) or give you
-lines to paste into your own `AGENTS.md`. Loose `.html` files dropped straight into the designs
+your designs** gives you lines to paste into your own `AGENTS.md`. Settings no longer installs a
+skill: from v0.2.0 the `design-chamber` skill ships with the extension. Loose `.html` files dropped straight into the designs
 folder show a banner offering to import them as pages.
 
 **Commenting with pins.** In **Edit** mode click any element, write a note, and a numbered pin
@@ -216,8 +239,9 @@ moved; earlier folders are listed with **Switch back**. **Use default** returns 
 - Every path is resolved and checked to stay **inside the Designs folder** before use.
 - Nothing leaves your machine except what *your chat model* sees (your brief, comments you send,
   the files your agent reads). Design Chamber itself uploads nothing.
-- It never edits your OpenCode/OpenChamber config. The one write outside the designs folder is
-  the optional `design-chamber` skill, and only when you click **Install** in Settings.
+- It never edits your OpenCode/OpenChamber config. Outside the designs folder it writes only its
+  own settings folder. From v0.2.0 it can also remove an old `design-chamber` skill copy, only
+  when you click **Remove old copy** in Settings.
 
 ## Troubleshooting
 
@@ -229,7 +253,7 @@ moved; earlier folders are listed with **Switch back**. **Use default** returns 
 | A design looks unstyled / images or fonts missing, or a "N remote" badge appears | The page references a CDN, web font or remote image — blocked by design. Ask the agent to inline the CSS and put fonts and images in `assets/` with relative paths. |
 | My designs vanished | The Designs folder was changed. **Settings → Earlier folders → Switch back.** |
 | A design I created by hand isn't listed | A folder needs `design.json` (or at least an `index.html`, shown as a page with a warning). Loose `.html` files in the root get an import banner instead. Hidden folders starting with `.` are ignored. |
-| Nothing happens after `/design` | Make sure the extension's permissions were approved and OpenChamber is ≥ 2.5.0; check **Settings → Extensions**. |
+| Nothing happens after `/design` | Make sure the extension's permissions were approved and OpenChamber is 2.7.0 or later; check **Settings → Extensions**. |
 
 More known limits: [`documentation/known-issues.md`](documentation/known-issues.md).
 
@@ -241,6 +265,7 @@ npm run build       # dist/panel + dist/background (IIFE guests) and dist/servic
 npm run typecheck   # tsc --noEmit, strict
 npm test            # 513 tests (node:test, Node ≥ 22.18)
 npm run check       # typecheck + build + test — all three must pass before any change is done
+npm run guest-check # OpenChamber's own package check on the built extension (build first)
 npm run pack        # release zip: design-chamber-<version>.zip (build first)
 ```
 

@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
 
@@ -390,6 +391,34 @@ describe('two-writer merge (§6.3)', () => {
     const env = await makeEnv(t);
     await env.store.reconcile('gone-slug');
     assert.equal(env.logs.filter((line) => line.level === 'error').length, 0);
+  });
+
+  // The real race: a design deleted outside the app while the watcher's reconcile is in flight. The reconcile
+  // has read the folder (state.json already gone or unreadable) and then seeds a state; that write must not
+  // bring the folder back as a partial design. The folder is removed from inside the read, so it is exact.
+  test('a design deleted while it is being reconciled stays deleted', async (t) => {
+    const env = await makeEnv(t);
+    const dir = path.join(env.tmp.root, 'vanishing');
+    await env.tmp.write('vanishing/design.json', { version: 1, kind: 'canvas', title: 'Vanishing' });
+    await env.tmp.write('vanishing/.chamber/state.json', 'not json at all');
+    const log: Logger = {
+      info: () => undefined,
+      error: () => undefined,
+      warn: (event) => {
+        if (event === 'store.state-unparseable') rmSync(dir, { recursive: true, force: true });
+      },
+    };
+    const store = createDesignStore({ settings: env.settings, log, hub: env.hub });
+    await store.reconcile('vanishing'); // quiet: nothing to merge any more
+    assert.equal(await stat(dir).then(() => true, () => false), false, 'the folder came back');
+  });
+
+  test('a mutation on a design deleted before the call is a 404 and writes nothing (the read-then-delete race is in store-vanish.test.ts)', async (t) => {
+    const env = await makeEnv(t);
+    const created = await env.store.create({ kind: 'canvas', title: 'Doomed' });
+    await rm(created.path, { recursive: true, force: true });
+    await assert.rejects(env.store.patch(created.slug, { title: 'Too late' }), (error: unknown) => error instanceof ApiError && error.code === 'not-found');
+    assert.equal(await stat(created.path).then(() => true, () => false), false, 'the folder came back');
   });
 });
 

@@ -1,30 +1,124 @@
 {
   "name": "design-chamber",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Design Chamber: design canvases and pages written by your chat agent, rendered inside OpenChamber.",
   "license": "MIT",
   "private": true,
   "type": "module",
   "openchamber": {
     "apiVersion": 1,
-    "engines": { "openchamber": ">=2.5.0" },
+    "engines": {
+      "openchamber": ">=2.7.0"
+    },
     "contributes": {
-      "panel": { "id": "design-chamber", "name": "Design Chamber", "icon": "palette", "entry": "dist/panel/index.html" },
-      "page": { "entry": "dist/panel/index.html", "title": "Design Chamber" },
-      "background": { "entry": "dist/background/index.html" },
+      "panel": {
+        "id": "design-chamber",
+        "name": "Design Chamber",
+        "icon": "palette",
+        "entry": "dist/panel/index.html"
+      },
+      "page": {
+        "entry": "dist/panel/index.html",
+        "title": "Design Chamber"
+      },
+      "background": {
+        "entry": "dist/background/index.html"
+      },
       "commands": [
-        { "name": "design", "description": "New canvas: several screens side by side" },
-        { "name": "page", "description": "New page: one HTML page shown full screen" }
+        {
+          "name": "design",
+          "description": "New canvas: several screens side by side"
+        },
+        {
+          "name": "page",
+          "description": "New page: one HTML page shown full screen"
+        }
       ],
       "actions": [
-        { "id": "open-as-page", "label": "Open as page", "icon": "palette", "where": "message", "roles": ["assistant"], "mode": "background" }
+        {
+          "id": "open-as-page",
+          "label": "Open as page",
+          "icon": "palette",
+          "where": "message",
+          "roles": [
+            "assistant"
+          ],
+          "mode": "background"
+        }
       ],
-      "capabilities": ["prompt", "sessions"],
+      "capabilities": [
+        "prompt",
+        "sessions"
+      ],
       "service": {
         "entry": "dist/service/main.js",
         "runtime": "host",
-        "permissions": { "exec": ["chrome", "msedge", "chromium", "brave", "explorer", "open", "xdg-open", "gio", "gdbus"] }
-      }
+        "permissions": {
+          "exec": [
+            "chrome",
+            "msedge",
+            "chromium",
+            "brave",
+            "explorer",
+            "open",
+            "xdg-open",
+            "gio",
+            "gdbus"
+          ]
+        }
+      },
+      "statusSection": {
+        "entry": "dist/status/index.html",
+        "title": "Designs",
+        "height": 120,
+        "defaultExpanded": true,
+        "requiresProject": false
+      },
+      "sessionEvents": {
+        "events": [
+          "turn-started",
+          "turn-finished",
+          "turn-failed"
+        ]
+      },
+      "instructions": true,
+      "skills": "dist/skills",
+      "opencodePlugin": "dist/plugin",
+      "mentions": {
+        "label": "Designs"
+      },
+      "tools": [
+        {
+          "match": "design_check",
+          "name": "Design check",
+          "icon": "palette",
+          "title": "Design check · {input.design}",
+          "output": "text"
+        }
+      ],
+      "blocks": [
+        {
+          "name": "DesignCard",
+          "description": "Card for a design you finished in the Designs folder: preview, screens, checks. slug: the design folder name",
+          "args": [
+            "slug"
+          ],
+          "entry": "dist/blocks/index.html",
+          "height": 232
+        },
+        {
+          "name": "DirectionPick",
+          "description": "Ask which of 2 to 4 design directions to keep. question; options and slugs: lists split by |, in the same order",
+          "args": [
+            "question",
+            "options",
+            "slugs"
+          ],
+          "entry": "dist/blocks/index.html",
+          "height": 264,
+          "answers": true
+        }
+      ]
     }
   },
   "scripts": {
@@ -32,10 +126,11 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test --test-concurrency=1 \"test/**/*.test.ts\"",
     "check": "npm run typecheck && npm run build && npm test",
-    "pack": "node scripts/pack.mjs"
+    "pack": "node scripts/pack.mjs",
+    "guest-check": "node scripts/guest-check.mjs"
   },
   "devDependencies": {
-    "@openchamber/sdk": "2.5.2",
+    "@openchamber/sdk": "2.7.0",
     "@types/node": "^22.10.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.8.0"

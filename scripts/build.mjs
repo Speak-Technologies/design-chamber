@@ -5,11 +5,15 @@
 //   dist/background/ index.html, main.js              — slash-command resolver (IIFE, browser)
 //   dist/service/    main.js                          — local service (ESM, Node)
 //   dist/cli/        dc.mjs                           — the agent's `dc check` command (ESM, Node)
+//   dist/plugin/     index.js, package.json           — the OpenCode plugin (ESM, imports nothing)
+//   dist/status/     index.html, status.css, main.js  — Work Status frame (IIFE, browser)
+//   dist/blocks/     index.html, blocks.css, main.js  — chat block frame (IIFE, browser)
+//   dist/skills/     design-chamber/SKILL.md, presets/<id>.md — the bundled agent skill
 //
 // The design-frame bridge is bundled first, in memory, and injected into the panel bundle
 // as the string constant `__DC_BRIDGE__` (src/guest/globals.d.ts).
 import { build } from 'esbuild';
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,6 +26,10 @@ const browser = { bundle: true, format: 'iife', platform: 'browser', target: ['e
 await rm(dist, { recursive: true, force: true });
 await mkdir(at('dist', 'panel'), { recursive: true });
 await mkdir(at('dist', 'background'), { recursive: true });
+await mkdir(at('dist', 'plugin'), { recursive: true });
+await mkdir(at('dist', 'status'), { recursive: true });
+await mkdir(at('dist', 'blocks'), { recursive: true });
+await mkdir(at('dist', 'skills', 'design-chamber', 'presets'), { recursive: true });
 
 // (1) Bridge → in-memory IIFE string.
 const bridgeResult = await build({ ...browser, entryPoints: [at('src', 'guest', 'bridge', 'bridge.ts')], write: false, minify: true });
@@ -81,6 +89,63 @@ await writeFile(
   '<!doctype html>\n<html lang="en">\n  <head><meta charset="utf-8" /><title>Design Chamber background</title></head>\n  <body><script src="main.js"></script></body>\n</html>\n',
 );
 
-const outputs = ['panel/index.html', 'panel/styles.css', 'panel/main.js', 'background/index.html', 'background/main.js', 'service/main.js', 'cli/dc.mjs'];
+// (7) OpenCode plugin: one ESM file that imports nothing. OpenCode loads it with a bare
+// import() where no node_modules exist, so any import, dynamic import or require fails there.
+// Node built-ins are reached through process.getBuiltinModule inside the plugin's own code.
+await build({
+  bundle: true,
+  format: 'esm',
+  platform: 'neutral',
+  target: ['es2022'],
+  sourcemap: false,
+  logLevel: 'warning',
+  legalComments: 'none',
+  entryPoints: [at('src', 'plugin', 'index.ts')],
+  outfile: at('dist', 'plugin', 'index.js'),
+});
+const pluginCode = await readFile(at('dist', 'plugin', 'index.js'), 'utf8');
+if (/^\s*import[\s{*]|\bimport\s*\(|\brequire\s*\(/m.test(pluginCode)) {
+  throw new Error('build: dist/plugin/index.js imports something. The plugin must import nothing: reach Node built-ins through process.getBuiltinModule.');
+}
+const { version } = JSON.parse(await readFile(at('package.json'), 'utf8'));
+await writeFile(
+  at('dist', 'plugin', 'package.json'),
+  `${JSON.stringify({ name: 'design-chamber-tools', version, private: true, type: 'module', exports: { '.': './index.js' } }, null, 2)}\n`,
+);
+
+// (8) Work Status frame and (9) chat block frame: browser IIFE plus their own small CSS, so they
+// never touch the panel's styles.css.
+await build({ ...browser, entryPoints: [at('src', 'ui', 'status', 'main.ts')], outfile: at('dist', 'status', 'main.js') });
+await copyFile(at('src', 'ui', 'status', 'index.html'), at('dist', 'status', 'index.html'));
+await copyFile(at('src', 'ui', 'status', 'status.css'), at('dist', 'status', 'status.css'));
+await build({ ...browser, entryPoints: [at('src', 'ui', 'blocks', 'main.ts')], outfile: at('dist', 'blocks', 'main.js') });
+await copyFile(at('src', 'ui', 'blocks', 'index.html'), at('dist', 'blocks', 'index.html'));
+await copyFile(at('src', 'ui', 'blocks', 'blocks.css'), at('dist', 'blocks', 'blocks.css'));
+
+// (10) Bundled skill. skill-doc.ts and presets.ts are pure TypeScript with no Node imports, so
+// Node (>= 22.18) loads them directly by stripping the types; nothing is bundled twice.
+const { buildBundledSkill } = await import('../src/shared/agent/skill-doc.ts');
+const { parsePreset } = await import('../src/shared/agent/presets.ts');
+const presetFiles = (await readdir(at('rules', 'presets'))).filter((name) => name.endsWith('.md')).sort();
+const presets = [];
+for (const name of presetFiles) {
+  const id = name.slice(0, -'.md'.length);
+  const text = await readFile(at('rules', 'presets', name), 'utf8');
+  const preset = parsePreset(id, text);
+  if (!preset) throw new Error(`build: rules/presets/${name} is not a valid preset (a "# Name" heading and an "**id:** ${id} · **best for:** ..." line).`);
+  presets.push({ id: preset.id, title: preset.name });
+  await writeFile(at('dist', 'skills', 'design-chamber', 'presets', name), text);
+}
+const skill = buildBundledSkill({
+  designRules: await readFile(at('rules', 'DESIGN-RULES.md'), 'utf8'),
+  questions: await readFile(at('rules', 'QUESTIONS.md'), 'utf8'),
+  presets,
+});
+if (!/^---\r?\nname: design-chamber\r?\n/.test(skill)) {
+  throw new Error('build: dist/skills/design-chamber/SKILL.md must start with a frontmatter line "name: design-chamber".');
+}
+await writeFile(at('dist', 'skills', 'design-chamber', 'SKILL.md'), skill);
+
+const outputs = ['panel/index.html', 'panel/styles.css', 'panel/main.js', 'background/index.html', 'background/main.js', 'service/main.js', 'cli/dc.mjs', 'plugin/index.js', 'status/main.js', 'blocks/main.js', 'skills/design-chamber/SKILL.md'];
 const sizes = await Promise.all(outputs.map(async (file) => `${file} ${((await stat(at('dist', file))).size / 1024).toFixed(1)} kB`));
 console.log(`built dist/ (bridge ${(Buffer.byteLength(bridge) / 1024).toFixed(1)} kB)\n  ${sizes.join('\n  ')}`);

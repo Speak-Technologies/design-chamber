@@ -13,7 +13,7 @@ export const run = async (helpers) => {
   }
 };
 
-const scenario = async ({ openPage, check, listReady, wallReady, thumbsReady, sleep }, { surface, width, theme }) => {
+const scenario = async ({ openPage, check, checkSoon, listReady, wallReady, thumbsReady, sleep }, { surface, width, theme }) => {
   const rail = surface === 'panel';
   const tag = `checks-${rail ? 'rail' : 'page'}-${width}-${theme}`;
   const p = await openPage({ width, height: rail ? 780 : 900, surface, theme, label: tag });
@@ -116,9 +116,8 @@ const scenario = async ({ openPage, check, listReady, wallReady, thumbsReady, sl
   await sleep(1500);
   const said = await p.guest('return win.__said');
   check(JSON.stringify(said) === JSON.stringify(['Checking the rendering…', 'Rendering check finished. 5 issues.']), `${tag}: a run is announced twice, start and end, and nothing else (${JSON.stringify(said)})`);
-  await p.settle(250);
-  check(
-    (await p.guest(`return [...doc.querySelectorAll('${panelSel} .dc-checks-group-title')].map((n) => n.textContent.trim()).join('|')`)) === 'Needs fixing · 4|Worth a look · 1|Notes · 1',
+  await checkSoon(
+    async () => (await p.guest(`return [...doc.querySelectorAll('${panelSel} .dc-checks-group-title')].map((n) => n.textContent.trim()).join('|')`)) === 'Needs fixing · 4|Worth a look · 1|Notes · 1',
     `${tag}: after the run the new findings are counted and the old group is gone`,
   );
   await p.shot(`${tag}-5-after-run`);
@@ -128,10 +127,9 @@ const scenario = async ({ openPage, check, listReady, wallReady, thumbsReady, sl
   await p.host('window.__host.composes.length = 0; window.__host.sessionsOpened.length = 0; window.__host.toasts.length = 0');
   await p.click(`${panelSel} .dc-checks-actions .oc-sdk-btn`, { text: 'Ask the agent to fix' });
   await p.waitFor(`return !doc.querySelector('${panelSel} .dc-checks-panel')`, 'the findings to close after asking');
-  check(await p.host('window.__host.sessionsOpened.includes("ses_coffee")'), `${tag}: the request went to the linked chat (opened through the outbox)`);
+  await checkSoon(() => p.host('window.__host.sessionsOpened.includes("ses_coffee")'), `${tag}: the request went to the linked chat (opened through the outbox)`);
+  await checkSoon(() => p.host('JSON.stringify(window.__host.toasts.map((t) => t.message)) === JSON.stringify(["Opening the linked chat to send it."])'), `${tag}: one toast, saying the chat is opening`);
   check(await p.host('window.__host.composes.length === 0'), `${tag}: nothing was appended to the composer on top of it`);
-  check(await p.host('JSON.stringify(window.__host.toasts.map((t) => t.message)) === JSON.stringify(["Opening the linked chat to send it."])'), `${tag}: one toast, saying the chat is opening`);
-  await p.settle(300);
   await p.shot(`${tag}-6-asked`);
 
   // an old version on show hides the badge
@@ -141,11 +139,9 @@ const scenario = async ({ openPage, check, listReady, wallReady, thumbsReady, sl
   await p.waitFor('return !!doc.querySelector(".dc-version")', 'versions');
   await p.click('.dc-version .oc-sdk-btn', { text: 'Compare', nth: 2 });
   await p.waitFor('return !!doc.querySelector(".dc-viewing")', 'the viewing banner');
-  await p.settle(300);
-  check(await p.guest(`const b = doc.querySelector('${BADGE}'); return !b || b.closest('.dc-checks').hidden`), `${tag}: the badge is hidden while an old version is on show`);
+  await checkSoon(() => p.guest(`const b = doc.querySelector('${BADGE}'); return !b || b.closest('.dc-checks').hidden`), `${tag}: the badge is hidden while an old version is on show`);
   await p.click('.dc-viewing .oc-sdk-btn', { text: 'Back to current' });
-  await p.settle(300);
-  check(await p.guest(`const b = doc.querySelector('${BADGE}'); return !!b && !b.closest('.dc-checks').hidden`), `${tag}: the badge is back on the current design`);
+  await checkSoon(() => p.guest(`const b = doc.querySelector('${BADGE}'); return !!b && !b.closest('.dc-checks').hidden`), `${tag}: the badge is back on the current design`);
   await back();
 
   // ---- a page that passes with the rendering checked

@@ -88,6 +88,9 @@ export type DesignFilter = { q?: string; kind?: DesignKind };
 /** `POST /designs` input after validation; `html` already joined from an upload when one was used. */
 export type CreateDesignInput = Omit<CreateDesignBody, 'uploadId'>;
 
+/** `linked`: done · `has-chat`: it already had a chat (never moved) · `other-design`: the chip was made for an earlier design with this slug. */
+export type LinkIfUnlinkedOutcome = 'linked' | 'has-chat' | 'other-design';
+
 export type DesignStore = {
   /** Absolute folder of an existing design. Throws `bad-slug` (pattern or containment) or `not-found`. */
   dir(slug: string): Promise<string>;
@@ -96,6 +99,12 @@ export type DesignStore = {
   /** Unique slug from the title, folder, state.json, design.json, optional index.html; then runs `onCreate` hooks. */
   create(input: CreateDesignInput): Promise<DesignRecord>;
   patch(slug: string, patch: PatchDesignBody): Promise<DesignRecord>;
+  /**
+   * Link a design to a chat that carries its chip, under the design's lock: only when it has no chat
+   * yet and its created time gives `marker` (`chipMarkerOf`), so a chip of an earlier design with the
+   * same slug never claims it. Throws `bad-slug` or `not-found` like `get`.
+   */
+  linkIfUnlinked(slug: string, sessionId: string, marker: string): Promise<LinkIfUnlinkedOutcome>;
   /** Moves the folder to `.trash/`; answers the new absolute path. */
   trash(slug: string): Promise<string>;
   addComment(slug: string, input: CreateCommentBody): Promise<Comment>;
@@ -152,6 +161,41 @@ export type ThumbnailService = {
   peek(slug: string): { state: ThumbState; key: string | null };
 };
 
+// ---- Phase 1.5: design index, host calls, agent activity (documentation/specs/phase-1-5-sdk-2-7.md §3.1, §3.3, §3.4) ----
+
+/** In-memory design summaries kept current from the change hub, so host-called routes answer without walking the root. */
+export type DesignIndex = {
+  /** The last good list, newest `updated` first (empty before the first load). */
+  all(): readonly DesignSummary[];
+  get(slug: string): DesignSummary | null;
+  /** Slugs whose `sessionId` is this session. */
+  bySession(sessionId: string): readonly string[];
+  /** `true` once the first list has loaded; `false` when `timeoutMs` passes first. */
+  ready(timeoutMs: number): Promise<boolean>;
+  /** Stop listening; settles once a list in flight has finished. */
+  dispose(): Promise<void>;
+};
+
+/** Calls from the service to OpenChamber (`createServiceHost`). Never throws; the token stays in this process. */
+export type HostCalls = {
+  /** The agent instructions for every session (directory `null`). `unavailable`: no host callback here (tests, an old host, the host did not answer); `refused`: the host said no. */
+  setInstructions(text: string): Promise<'saved' | 'unavailable' | 'refused'>;
+};
+
+/** The three session events Design Chamber subscribes to (manifest `contributes.sessionEvents`). */
+export type TurnEventType = 'turn-started' | 'turn-finished' | 'turn-failed';
+
+export type SessionActivity = { sessionId: string; state: 'working' | 'done' | 'failed'; at: number; directory: string | null };
+
+/** What each linked agent is doing, from session events. */
+export type ActivityTracker = {
+  record(event: { sessionId: string; type: TurnEventType; at: number; directory: string | null }): void;
+  /** `null` when unknown (never seen, or `working` past its expiry). */
+  of(sessionId: string): SessionActivity | null;
+  /** Sessions working right now. */
+  working(): readonly SessionActivity[];
+};
+
 // ---- The context ----
 
 export type ServiceContext = {
@@ -169,6 +213,9 @@ export type ServiceContext = {
   outbox: OutboxStore;
   renders: RenderService;
   thumbnails: ThumbnailService;
+  designIndex: DesignIndex;
+  hostCalls: HostCalls;
+  activity: ActivityTracker;
   /** Register teardown (watchers, timers, child processes); run on shutdown in reverse order. */
   onDispose(fn: () => void | Promise<void>): void;
 };

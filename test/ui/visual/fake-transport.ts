@@ -31,7 +31,20 @@ const matchRoute = (method: string, path: string): Matched | null => {
 
 const json = (status: number, body: unknown): GuestRequestResult => ({ status, body: JSON.stringify(body) });
 
-export type FakeTransport = { serviceRequest(request: GuestRequest): Promise<GuestRequestResult>; backend: FakeBackend };
+/**
+ * A scenario's own answer for one route, so a feature branch can show a state (an empty list, a long
+ * list, a 500) without editing `fake-backend.ts`. `body` is JSON-encoded; a string is sent as is
+ * (for the raw-text routes). `delayMs` holds the answer, to look at a loading state.
+ */
+export type RouteOverride = { status?: number; body?: unknown; delayMs?: number };
+
+export type RouteOverrides = {
+  /** Answer `key` with `override` from now on; `null` goes back to the fake backend. */
+  set(key: RouteKey, override: RouteOverride | null): void;
+  clear(): void;
+};
+
+export type FakeTransport = { serviceRequest(request: GuestRequest): Promise<GuestRequestResult>; backend: FakeBackend; routes: RouteOverrides };
 
 export const createFakeTransport = (): FakeTransport => {
   const backend = createFakeBackend();
@@ -64,10 +77,22 @@ export const createFakeTransport = (): FakeTransport => {
     return json(200, { epoch, seq, reset: false, events: events.filter((event) => event.seq > since) });
   };
 
+  const overrides = new Map<RouteKey, RouteOverride>();
+  const routes: RouteOverrides = {
+    set: (key, override) => void (override === null ? overrides.delete(key) : overrides.set(key, override)),
+    clear: () => overrides.clear(),
+  };
+
   const serviceRequest = async (request: GuestRequest): Promise<GuestRequestResult> => {
     const matched = matchRoute(request.method, request.path);
     if (!matched) return json(404, { error: 'not-found', message: 'Unknown route.' });
     const query = request.query ?? {};
+    const override = overrides.get(matched.key);
+    if (override) {
+      if (override.delayMs) await new Promise((resolve) => setTimeout(resolve, override.delayMs));
+      const body = override.body ?? {};
+      return { status: override.status ?? 200, body: typeof body === 'string' ? body : JSON.stringify(body) };
+    }
     switch (matched.key) {
       case 'GET /changes':
         return changes(query);
@@ -91,5 +116,5 @@ export const createFakeTransport = (): FakeTransport => {
     }
   };
 
-  return { serviceRequest, backend };
+  return { serviceRequest, backend, routes };
 };

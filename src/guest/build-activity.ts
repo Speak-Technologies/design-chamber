@@ -9,15 +9,17 @@
 import type { GuestSessionActivity, GuestSessionsSnapshot } from '@openchamber/sdk';
 
 import type { DesignDetailResponse } from '../shared/api.ts';
+import { RESTORE_QUIET_MS, agentFiles } from '../shared/build-activity.ts';
+import { WRITING_WINDOW_MS } from '../shared/limits.ts';
+import { sameDirectory } from '../shared/path-compare.ts';
 import type { ChangeEvent } from '../shared/types.ts';
 import type { ChangeFeed, FeedStatus } from './changes.ts';
-import { sameDirectory } from './flows.ts';
 import type { GuestHost } from './host.ts';
 
 // ---- Timings (read only by this module, its tests and the strip's copy) ----
 
-/** A file landed less than this long ago: the agent is writing right now. */
-export const WRITING_WINDOW_MS = 15_000;
+/** A file landed less than this long ago: the agent is writing right now (in limits.ts, so Work Status says the same). */
+export { WRITING_WINDOW_MS };
 /** Working this long with nothing saved: the strip says so. */
 export const QUIET_MS = 120_000;
 /** How long "Done" stays after the turn ends. */
@@ -28,12 +30,8 @@ export const PENDING_STALL_MS = 180_000;
 export const FEED_DOWN_MS = 5_000;
 /** How long the board the agent just wrote stays highlighted. */
 export const RECENT_MS = 6_000;
-/**
- * After a user's restore (a `files` event with no list) the folder watcher re-reports every file
- * the restore wrote, a debounce later and in batches. Listed file events inside this window are
- * the restore's echo, not the agent writing.
- */
-export const RESTORE_QUIET_MS = 3_000;
+/** The restore echo window; defined in shared so the service uses the same number. */
+export { RESTORE_QUIET_MS };
 /** A host that reports `unknown` activity mid-turn (a reconnect) is believed to be where it was for this long. */
 export const UNKNOWN_HOLD_MS = 30_000;
 /** Distinct files remembered for one turn ("Updated 3 files"). */
@@ -106,12 +104,7 @@ export const initialTrack = (now: number): BuildTrack => ({
 
 // ---- Files ----
 
-const SERVICE_FOLDERS = ['.versions/', '.chamber/', '.trash/'];
-
-/** Paths the agent wrote, from a `files` event's list: the service's own folders, design.json and temp files (`index.html.2bba59ef828e.tmp`, mid-write) are not the agent's output. A display filter, not a security check. */
-export const agentFiles = (files: readonly string[]): string[] => [
-  ...new Set(files.filter((file) => file !== 'design.json' && !file.endsWith('.tmp') && !SERVICE_FOLDERS.some((folder) => file.startsWith(folder)))),
-];
+export { agentFiles };
 
 /**
  * What one feed batch says about the agent writing this design. A `files` event with no list is

@@ -89,6 +89,9 @@ export const createCore = async (t: TestContext, options: CoreOptions = {}): Pro
     outbox: createOutboxStore(),
     renders: unavailable('renders (WP2)'),
     thumbnails: { peek: () => ({ state: 'unavailable', key: null }) },
+    designIndex: unavailable('design index (not in the WP1 core)'),
+    hostCalls: unavailable('host calls (not in the WP1 core)'),
+    activity: unavailable('activity (not in the WP1 core)'),
     onDispose: (fn) => void disposers.push(fn),
   };
 

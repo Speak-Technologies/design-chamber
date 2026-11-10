@@ -8,7 +8,7 @@
 //   launch-announcement   page    passes; the only design a "service error" can be switched on for
 // Sentences come from the real table in src/shared/checks.ts, so the screenshots show the shipped copy.
 
-import type { ChecksRenderState, ChecksResponse, ChecksRunResponse } from '../../../src/shared/api.ts';
+import type { ChecksRenderState, ChecksResponse, ChecksRunResponse, ChecksSummary } from '../../../src/shared/api.ts';
 import { countFindings, sortFindings, withMessage } from '../../../src/shared/checks.ts';
 import type { ChangeEvent, CheckFinding, CheckFindingData, Viewport } from '../../../src/shared/types.ts';
 import { ServiceError } from './service-error.ts';
@@ -44,6 +44,8 @@ export type FakeChecks = {
     'GET /designs/:slug/checks': (req: { params: Record<string, string> }) => ChecksResponse;
     'POST /designs/:slug/checks/run': (req: { params: Record<string, string> }) => ChecksRunResponse;
   };
+  /** The design's checks as a Work Status row carries them (`GET /status/designs`), or `null` when the fake service would fail; it does not count as a `GET /designs/:slug/checks`. */
+  summary: (slug: string) => ChecksSummary | null;
   prompt: (slug: string) => { text: string };
   /** Test hooks (shoot.mjs reaches them through `window.__dcFake.checks`). */
   hooks: { setRunMs: (ms: number) => void; setFail: (on: boolean) => void; /** A `checks` change event for the design, as if the agent's CLI had just written a report. */ touch: (slug: string) => void; /** How many times the checks of a design were asked for. */ gets: (slug: string) => number };
@@ -89,7 +91,9 @@ export const createFakeChecks = (deps: Deps): FakeChecks => {
       static: { findings: staticFindings, partial: false, at: ago(1000) },
       render: { state, at: report?.at ?? null, artboards: report?.artboards ?? 0, skipped: 0, findings: renderFindings },
       counts: countFindings(counted),
-      canRun: !isRunning && slug !== 'habit-tracker',
+      // Like the service: a run anywhere blocks a new one; `habit-tracker` stands for a machine with no browser.
+      canRun: running.size === 0 && slug !== 'habit-tracker',
+      browser: slug !== 'habit-tracker',
     };
   };
 
@@ -112,6 +116,14 @@ export const createFakeChecks = (deps: Deps): FakeChecks => {
         }, runMs);
         return { state: 'running' };
       },
+    },
+    summary: (slug) => {
+      try {
+        const { counts, render, canRun, browser } = build(slug);
+        return { counts, render: { state: render.state }, canRun, browser };
+      } catch {
+        return null;
+      }
     },
     prompt: (slug) => {
       const info = deps.info(slug);

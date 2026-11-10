@@ -159,6 +159,7 @@ export const createChecksService = (ctx: ServiceContext, deps: ChecksDeps = {}):
     // after an edit the old ones are listed, not counted.
     const countedRender = fresh && !running ? renderFindings : [];
     const counted = [...staticFindings, ...countedRender];
+    const hasBrowser = browser().path !== null;
     const response: ChecksResponse = {
       static: { findings: staticFindings, partial: memo.run.partial, at: memo.at },
       render: {
@@ -169,7 +170,8 @@ export const createChecksService = (ctx: ServiceContext, deps: ChecksDeps = {}):
         findings: renderFindings,
       },
       counts: countFindings(counted),
-      canRun: job === null && browser().path !== null,
+      canRun: job === null && hasBrowser,
+      browser: hasBrowser,
     };
     return { response, counted, renderStale: render !== null && !fresh && !running };
   };

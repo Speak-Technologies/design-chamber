@@ -35,9 +35,20 @@ export type DesignViewOptions = {
   surface: 'panel' | 'page';
   actions: ActionContext;
   onBack: () => void;
+  /**
+   * How the design opens. `comment` (a Work Status "Comment" or a chat block) starts in Edit with
+   * Comment pressed, so the next click pins a comment; `view` keeps the default (pages open in Play,
+   * canvases in Edit).
+   */
+  startIn?: 'view' | 'comment';
 };
 
-export type DesignViewHandle = { el: HTMLElement; dispose: () => void };
+export type DesignViewHandle = {
+  el: HTMLElement;
+  /** Switch to Edit with Comment pressed: the design is already open and a "Comment" request arrived for it. */
+  startComment: () => void;
+  dispose: () => void;
+};
 
 /** Per-design view settings in `host.storage` `view:<slug>`; `pageView` is checked against the design's viewports when it is used. */
 type Prefs = { hidden: string[]; camera: Camera | null; pageView: unknown };
@@ -71,7 +82,9 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
   let built: Built | null = null;
   let building = false;
 
-  type Built = { apply: (data: DesignDetailResponse) => void; dispose: () => void };
+  type Built = { apply: (data: DesignDetailResponse) => void; startComment: () => void; dispose: () => void };
+  // Set by `startIn: 'comment'`, or by `startComment` while the design is still loading.
+  let wantComment = options.startIn === 'comment';
 
   const stateOf = () => {
     const open = store.getState().open;
@@ -94,7 +107,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const design = (): DesignDetailResponse['design'] => data.design;
     const isPage = first.design.kind === 'page';
 
-    let mode: 'edit' | 'play' = isPage ? 'play' : 'edit';
+    let mode: 'edit' | 'play' = isPage && !wantComment ? 'play' : 'edit';
     let hidden = new Set(prefs.hidden.filter((id) => first.design.viewports.some((viewport) => viewport.id === id)));
     if (hidden.size >= first.design.viewports.length) hidden = new Set();
     // A page opens the way it was last viewed; Full width when that view is gone.
@@ -707,6 +720,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
 
     built = {
       apply,
+      startComment: () => setMode('edit'),
       dispose: () => {
         for (const unmount of [...unmounts].reverse()) unmount();
         restoreFlow.dispose();
@@ -756,6 +770,10 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
 
   return {
     el,
+    startComment: () => {
+      if (built) built.startComment();
+      else wantComment = true;
+    },
     dispose: () => {
       disposed = true;
       scope.dispose();

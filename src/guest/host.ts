@@ -36,6 +36,10 @@ export type HostLike = Pick<
   | 'writeClipboard'
   | 'close'
   | 'storage'
+  // Phase 1.5 frames: a chat block reads its call and answers from a click; status and block frames size themselves.
+  | 'onBlock'
+  | 'answerBlock'
+  | 'setHeight'
 >;
 
 /** A value that changes over time. `subscribe` calls the listener now and on every change. */

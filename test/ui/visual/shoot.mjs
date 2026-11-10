@@ -8,20 +8,26 @@
 //
 // `filter` is a regex tested against "<kind>-<width>-<theme>" (e.g. `rail-320`, `page.*light`).
 // Exit code 1 when a guest console error or an assertion fails.
+//
+// Frames: the host page (host.html) mounts `?surface=` panel, page, status (dist/status) or block
+// (dist/blocks). The status and block frames run their real entry points (src/ui/status/main.ts,
+// src/ui/blocks/main.ts) bundled with `fake-sdk.ts`, so the fake service sits behind them too.
+// `?entry=probe` loads a tiny probe frame instead (probe-frame.ts), for checking the harness itself.
+//
+// Adding a scenario: drop `scenarios/<feature>.mjs` exporting `run(helpers)`; every file there runs
+// (name = the file name, which `filter` matches). To show a state the fake backend has no sample for,
+// give `openPage` `routes` (answers from the first request: `{ 'GET /status/designs': { status: 200,
+// body: {...} } }`) or call `page.route(key, override)` later; neither touches fake-backend.ts. A block
+// frame's call goes in `block`, or `page.setBlock(call)` later.
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { build } from 'esbuild';
-
-import * as askBar from './scenarios/ask-bar.mjs';
-import * as buildStrip from './scenarios/build-strip.mjs';
-import * as checks from './scenarios/checks.mjs';
-import * as findability from './scenarios/findability.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..', '..');
@@ -44,7 +50,22 @@ if (!chromePath) throw new Error('No Chrome or Edge found; set DC_TEST_CHROME.')
 
 const browser = { bundle: true, format: 'iife', platform: 'browser', target: ['es2020'], write: false, logLevel: 'warning', legalComments: 'none' };
 const bridge = (await build({ ...browser, entryPoints: [path.join(root, 'src', 'guest', 'bridge', 'bridge.ts')], minify: true })).outputFiles[0].text;
-const harnessJs = (await build({ ...browser, entryPoints: [path.join(here, 'fake-main.ts')], define: { __DC_BRIDGE__: JSON.stringify(bridge) } })).outputFiles[0].text;
+const define = { __DC_BRIDGE__: JSON.stringify(bridge) };
+const harnessJs = (await build({ ...browser, entryPoints: [path.join(here, 'fake-main.ts')], define })).outputFiles[0].text;
+
+// A frame's real entry point, with `@openchamber/sdk` swapped for fake-sdk.ts (the real SDK with
+// `connectHost` backed by the fake service). Only the exact package name is swapped, never `/ui`.
+const fakeSdkPath = path.join(here, 'fake-sdk.ts');
+const fakeSdk = {
+  name: 'fake-connect-host',
+  setup: (b) => b.onResolve({ filter: /^@openchamber\/sdk$/ }, (args) => (args.importer === fakeSdkPath ? undefined : { path: fakeSdkPath })),
+};
+const frameJs = async (entry) => (await build({ ...browser, entryPoints: [entry], define, plugins: [fakeSdk] })).outputFiles[0].text;
+const frames = {
+  '/status/main.js': await frameJs(path.join(root, 'src', 'ui', 'status', 'main.ts')),
+  '/blocks/main.js': await frameJs(path.join(root, 'src', 'ui', 'blocks', 'main.ts')),
+  '/probe/main.js': await frameJs(path.join(here, 'probe-frame.ts')),
+};
 
 // ---------------------------------------------------------------- static server
 
@@ -52,12 +73,14 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://x');
   let file;
-  if (url.pathname === '/panel/main.js') {
-    response.writeHead(200, { 'content-type': MIME['.js'], 'cache-control': 'no-store' }).end(harnessJs);
+  const script = url.pathname === '/panel/main.js' ? harnessJs : frames[url.pathname];
+  if (script !== undefined) {
+    response.writeHead(200, { 'content-type': MIME['.js'], 'cache-control': 'no-store' }).end(script);
     return;
   }
   if (url.pathname === '/host.html') file = path.join(here, 'host.html');
-  else if (url.pathname.startsWith('/panel/')) file = path.join(root, 'dist', url.pathname);
+  else if (url.pathname === '/probe/index.html') file = path.join(here, 'probe.html');
+  else if (/^\/(panel|status|blocks)\//.test(url.pathname)) file = path.join(root, 'dist', url.pathname);
   else {
     response.writeHead(404).end();
     return;
@@ -112,7 +135,10 @@ const problems = [];
 // renderer running, which starves the pages of every later scenario (boards that never leave idle).
 const openPages = new Set();
 
-const openPage = async ({ width, height, surface, theme, label, query = '' }) => {
+// `routes`: route answers in place from the first request (see the header). `storage`: values the
+// host's storage starts with. `block`: the call a block frame draws. `entry: 'probe'`: the harness probe frame. `mount`: the selector that says the frame drew.
+const openPage = async ({ width, height, surface, theme, label, query = '', routes = null, block = null, entry = null, mount = null, storage = null }) => {
+  const extra = `${storage ? `&storage=${encodeURIComponent(JSON.stringify(storage))}` : ''}${routes ? `&routes=${encodeURIComponent(JSON.stringify(routes))}` : ''}${block ? `&block=${encodeURIComponent(JSON.stringify(block))}` : ''}${entry ? `&entry=${entry}` : ''}`;
   const target = await (await fetch(`http://127.0.0.1:${debugPort}/json/new?about:blank`, { method: 'PUT' })).json();
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
@@ -144,7 +170,7 @@ const openPage = async ({ width, height, surface, theme, label, query = '' }) =>
   await send('Page.enable');
   await send('Page.bringToFront');
   await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
-  await send('Page.navigate', { url: `${base}/host.html?surface=${surface}&theme=${theme}${query}` });
+  await send('Page.navigate', { url: `${base}/host.html?surface=${surface}&theme=${theme}${query}${extra}` });
 
   // Run `code` inside the guest document. `doc` and `win` are the guest's document and window.
   const guest = async (code) => {
@@ -180,6 +206,18 @@ const openPage = async ({ width, height, surface, theme, label, query = '' }) =>
     async waitFor(code, what, timeout) {
       return until(() => guest(code).catch(() => null), what ?? code, timeout);
     },
+    /**
+     * Do `action`, then wait up to `wait` ms for `condition` (an async boolean) to hold; do it again, up to `attempts` times.
+     * For synthesized input a loaded browser drops or lands on a node that was just replaced (headless Chrome loses a key or a
+     * click about one run in three when two runs share the machine). Only for actions that are safe to repeat; true when it took.
+     */
+    async retry(action, condition, what, { attempts = 4, wait = 2000 } = {}) {
+      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        await action();
+        if (await until(async () => (await condition().catch(() => false)) || null, what, wait).then(() => true, () => false)) return true;
+      }
+      return false;
+    },
     async move(x, y) {
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
     },
@@ -189,7 +227,17 @@ const openPage = async ({ width, height, surface, theme, label, query = '' }) =>
       await mouse('mouseReleased', x, y);
     },
     async click(selector, opts = {}) {
-      const r = await until(() => rect(selector, opts.nth ?? 0, opts.text ?? null), `element ${selector}${opts.text ? ` "${opts.text}"` : ''}`);
+      let r = await until(() => rect(selector, opts.nth ?? 0, opts.text ?? null), `element ${selector}${opts.text ? ` "${opts.text}"` : ''}`);
+      // Click where the element has stopped: a list still filling in, a thumbnail changing a row's height or a sheet sliding in
+      // moves it between measuring and pressing, and the press then lands on its neighbour (a loaded run opened the wrong design).
+      for (let tries = 0; tries < 20; tries += 1) {
+        await sleep(40);
+        const again = await rect(selector, opts.nth ?? 0, opts.text ?? null);
+        if (again === null) continue;
+        const still = Math.abs(again.x - r.x) < 0.5 && Math.abs(again.y - r.y) < 0.5 && Math.abs(again.w - r.w) < 0.5 && Math.abs(again.h - r.h) < 0.5;
+        r = again;
+        if (still) break;
+      }
       await api.clickAt(r.x + (opts.dx ?? r.w / 2), r.y + (opts.dy ?? r.h / 2));
       await sleep(opts.wait ?? 120);
     },
@@ -216,6 +264,11 @@ const openPage = async ({ width, height, surface, theme, label, query = '' }) =>
       await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX, deltaY, modifiers: ctrl ? 2 : 0 });
       await sleep(120);
     },
+    /** Answer a route yourself from now on (`override` per `RouteOverride` in fake-transport.ts); `null` goes back to the fake backend. */
+    route: (key, override) => host(`window.frames[0].__dcFake.route(${JSON.stringify(key)}, ${JSON.stringify(override)})`),
+    clearRoutes: () => host('window.frames[0].__dcFake.clearRoutes()'),
+    /** A block frame's new call (or `null`), as the host sends it. */
+    setBlock: (call) => host(`window.__host.setBlock(${JSON.stringify(call)})`),
     async shot(name) {
       const { data } = await send('Page.captureScreenshot', { format: 'png' });
       const file = path.join(outDir, `${name}.png`);
@@ -229,7 +282,8 @@ const openPage = async ({ width, height, surface, theme, label, query = '' }) =>
     },
   };
   openPages.add(api);
-  await api.waitFor('return !!doc.querySelector(".dc-app")', 'the app to mount');
+  const mounted = mount ?? (surface === 'status' || surface === 'block' ? '#root' : '.dc-app');
+  await api.waitFor(`return !!doc.querySelector(${JSON.stringify(mounted)})`, 'the app to mount');
   return api;
 };
 
@@ -242,11 +296,19 @@ const check = (condition, message) => {
   } else console.log(`  ✓ ${message}`);
 };
 
+// A check about a state the page is still reaching (a click just went in, a timer, a reload): it waits for the
+// condition up to `timeout`, so a loaded machine only makes it slower, never red. A negative check ("it is gone")
+// passes the moment the condition holds; a wrong state still fails once the time is up.
+const checkSoon = async (fn, message, timeout = 8000) => {
+  const held = await until(async () => (await fn().catch(() => false)) || null, message, timeout).then(() => true, () => false);
+  check(held, message);
+};
+
 const listReady = (p) => p.waitFor('return doc.querySelectorAll(".dc-row[data-slug], .dc-card[data-slug]").length >= 5', 'the list rows');
 const thumbsReady = (p) => p.waitFor('const t = [...doc.querySelectorAll(".dc-thumb")]; return t.length > 0 && t.every((n) => n.dataset.state !== "loading")', 'thumbnails', 20000).catch(() => undefined);
 const wallReady = (p, n = 1) =>
   p.waitFor(`return doc.querySelectorAll('.dc-board[data-state="ready"]').length >= ${n}`, 'artboards to render', 20000).catch(async (error) => {
-    console.log('  state:', await p.guest('return JSON.stringify({ app: doc.querySelector(".dc-app")?.innerHTML.slice(0, 300), sheets: [...doc.querySelectorAll(".dc-sheet")].map((n) => n.dataset.variant + ":" + n.querySelector(".dc-sheet-title")?.textContent), active: doc.activeElement?.outerHTML.slice(0, 120), boards: [...doc.querySelectorAll(".dc-board")].map((b) => b.dataset.state) })'));
+    console.log('  state:', await p.guest('return JSON.stringify({ title: doc.querySelector(".dc-title-text, .dc-title-input")?.textContent || doc.querySelector(".dc-title-input")?.value, app: doc.querySelector(".dc-app")?.innerHTML.slice(0, 300), sheets: [...doc.querySelectorAll(".dc-sheet")].map((n) => n.dataset.variant + ":" + n.querySelector(".dc-sheet-title")?.textContent), active: doc.activeElement?.outerHTML.slice(0, 120), boards: [...doc.querySelectorAll(".dc-board")].map((b) => b.dataset.state) })'));
     throw error;
   });
 const menuItem = (p, text) => p.click('.dc-popup [role="menuitem"]', { text });
@@ -266,12 +328,10 @@ const railScenario = async (width, theme) => {
   const rowCount = () => p.guest('return doc.querySelectorAll(".dc-row[data-slug]").length');
   const allRows = await rowCount();
   await p.click('.dc-tabs [role=tab]', { text: 'Canvases' });
-  await p.settle(150);
-  check((await selectedTab()) === 'canvas', `${tag}: clicking Canvases selects it`);
-  check(await p.guest('return [...doc.querySelectorAll(".dc-row[data-slug]")].every((n) => n.querySelector(".dc-row-meta")?.textContent.startsWith("Canvas"))'), `${tag}: Canvases lists only canvases`);
+  await checkSoon(async () => (await selectedTab()) === 'canvas', `${tag}: clicking Canvases selects it`);
+  await checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-row[data-slug]")].every((n) => n.querySelector(".dc-row-meta")?.textContent.startsWith("Canvas"))'), `${tag}: Canvases lists only canvases`);
   await p.click('.dc-tabs [role=tab]', { text: 'All' });
-  await p.settle(150);
-  check((await selectedTab()) === 'all' && (await rowCount()) === allRows, `${tag}: clicking All goes back to all designs`);
+  await checkSoon(async () => (await selectedTab()) === 'all' && (await rowCount()) === allRows, `${tag}: clicking All goes back to all designs`);
 
   await p.hover('.dc-row[data-slug="coffee-subscription"]');
   await p.click('.dc-row[data-slug="coffee-subscription"] .dc-iconbtn');
@@ -368,8 +428,7 @@ const pageScenario = async (width, theme) => {
   await p.settle(500);
   const home = await p.rect('.dc-board[data-board="home@laptop"]');
   await p.move(home.x + home.w * 0.2, home.y + home.h * 0.22);
-  await p.settle(400);
-  check(await p.guest('const h = doc.querySelector(".dc-board[data-board=\\"home@laptop\\"] .dc-hover"); return !!h && !h.hidden'), `${tag}: Edit mode outlines the element under the cursor`);
+  await checkSoon(() => p.guest('const h = doc.querySelector(".dc-board[data-board=\\"home@laptop\\"] .dc-hover"); return !!h && !h.hidden'), `${tag}: Edit mode outlines the element under the cursor`);
   await p.shot(`${tag}-3-hover`);
   await p.clickAt(home.x + home.w * 0.2, home.y + home.h * 0.22);
   await p.waitFor('return !!doc.querySelector(".dc-composer")', 'the comment composer');
@@ -378,8 +437,7 @@ const pageScenario = async (width, theme) => {
   await p.shot(`${tag}-4-composer`);
   await p.key('Enter', { ctrl: true });
   await p.waitFor('return !doc.querySelector(".dc-composer")', 'composer to close');
-  await p.settle(500);
-  check((await p.guest('return doc.querySelectorAll(".dc-board[data-board=\\"home@laptop\\"] .dc-pin:not(.dc-temp-pin)").length')) >= 3, `${tag}: the new comment appears as a pin`);
+  await checkSoon(async () => (await p.guest('return doc.querySelectorAll(".dc-board[data-board=\\"home@laptop\\"] .dc-pin:not(.dc-temp-pin)").length')) >= 3, `${tag}: the new comment appears as a pin`);
   await p.click('.dc-toolbar .oc-sdk-btn', { text: 'Fit' });
   await p.settle(400);
   await p.shot(`${tag}-5-pins`);
@@ -387,14 +445,12 @@ const pageScenario = async (width, theme) => {
   // zoomed far out, pins that would overlap fold into one count badge; a click zooms in on them.
   await p.guest('doc.querySelector(".dc-wall").focus()');
   for (let i = 0; i < 6; i += 1) await p.key('-', { focus: '.dc-wall' });
-  await p.settle(300);
-  check((await p.guest('return doc.querySelectorAll(".dc-pin-cluster").length')) > 0, `${tag}: overlapping pins fold into a count at ${await scaleLabel(p)}`);
+  await checkSoon(async () => (await p.guest('return doc.querySelectorAll(".dc-pin-cluster").length')) > 0, `${tag}: overlapping pins fold into a count when zoomed far out`);
   check(await p.guest('const pins = [...doc.querySelectorAll(".dc-board-overlay[data-pins=shown] .dc-pin")].filter((n) => !n.hidden).map((n) => n.getBoundingClientRect()); return pins.every((a, i) => pins.every((b, j) => i === j || Math.hypot(a.x - b.x, a.y - b.y) >= Math.min(a.width, b.width) - 1))'), `${tag}: no two visible pins overlap`);
   await p.shot(`${tag}-5b-pins-clustered`);
   const zoomedOut = await scaleLabel(p);
   await p.click('.dc-pin-cluster');
-  await p.settle(300);
-  check((await scaleLabel(p)) !== zoomedOut, `${tag}: clicking a count zooms in (${zoomedOut} → ${await scaleLabel(p)})`);
+  await checkSoon(async () => (await scaleLabel(p)) !== zoomedOut, `${tag}: clicking a count zooms in (from ${zoomedOut})`);
   await p.click('.dc-toolbar .oc-sdk-btn', { text: 'Fit' });
 
   // thread popover
@@ -441,8 +497,7 @@ const pageScenario = async (width, theme) => {
   await p.shot(`${tag}-11-artifact-export-menu`);
   await menuItem(p, 'Download ZIP');
   await p.waitFor('return !!doc.querySelector(".dc-notices .oc-sdk-banner")', 'export notice');
-  await p.settle(300);
-  check((await p.host('JSON.stringify(window.__host.toasts.map((t) => t.message))')).includes('Saved to'), `${tag}: export toast with the saved path`);
+  await checkSoon(async () => (await p.host('JSON.stringify(window.__host.toasts.map((t) => t.message))')).includes('Saved to'), `${tag}: export toast with the saved path`);
   await p.shot(`${tag}-12-artifact-exported`);
   await p.click('.dc-toolbar .oc-sdk-btn', { text: 'Library' });
 
@@ -514,9 +569,7 @@ const themeSwitch = async () => {
   await listReady(p);
   const dark = await p.guest('return getComputedStyle(doc.body).backgroundColor');
   await p.host('window.__host.setTheme("light")');
-  await p.settle(400);
-  const light = await p.guest('return getComputedStyle(doc.body).backgroundColor');
-  check(dark !== light, `${tag}: a theme switch repaints live (${dark} → ${light})`);
+  await checkSoon(async () => (await p.guest('return getComputedStyle(doc.body).backgroundColor')) !== dark, `${tag}: a theme switch repaints live (from ${dark})`);
   await p.close();
 };
 
@@ -529,9 +582,8 @@ const emptyAndErrors = async () => {
   await p.waitFor('return !!doc.querySelector(".dc-settings input")', 'settings');
   await p.type('.dc-settings input', 'relative/folder');
   await p.click('.dc-settings .oc-sdk-btn', { text: 'Apply folder' });
-  await p.settle(200);
+  await checkSoon(() => p.guest('return !!doc.querySelector(".dc-settings .oc-sdk-field-note")?.textContent?.includes("full path")'), `${tag}: invalid folder says what to do`);
   await p.shot(`${tag}-1-folder-invalid`);
-  check(await p.guest('return !!doc.querySelector(".dc-settings .oc-sdk-field-note")?.textContent?.includes("full path")'), `${tag}: invalid folder says what to do`);
   await p.type('.dc-settings input', 'D:\\Elsewhere\\Designs');
   await p.click('.dc-settings .oc-sdk-btn', { text: 'Apply folder' });
   await p.settle(900);
@@ -543,8 +595,8 @@ const emptyAndErrors = async () => {
   await p.close();
 };
 
-// What the Phase 1 scenario modules (test/ui/visual/scenarios) use.
-const helpers = { openPage, check, listReady, thumbsReady, wallReady, menuItem, scaleLabel, sleep, outDir, root };
+// What the scenario modules (test/ui/visual/scenarios) use.
+const helpers = { openPage, check, checkSoon, listReady, thumbsReady, wallReady, menuItem, scaleLabel, sleep, outDir, root };
 
 const plan = [];
 for (const theme of ['dark', 'light']) {
@@ -554,10 +606,12 @@ for (const theme of ['dark', 'light']) {
 plan.push(['rail-360-themeswitch', themeSwitch]);
 plan.push(['page-1400-dark-live', keyboardAndLive]);
 plan.push(['rail-320-dark-empty', emptyAndErrors]);
-plan.push(['build-strip', () => buildStrip.run(helpers)]);
-plan.push(['ask-bar', () => askBar.run(helpers)]);
-plan.push(['findability', () => findability.run(helpers)]);
-plan.push(['checks', () => checks.run(helpers)]);
+// Every scenarios/*.mjs runs, so a feature branch adds a file and edits nothing here.
+const scenarioDir = path.join(here, 'scenarios');
+for (const file of readdirSync(scenarioDir).filter((name) => name.endsWith('.mjs')).sort()) {
+  const scenario = await import(pathToFileURL(path.join(scenarioDir, file)).href);
+  plan.push([path.basename(file, '.mjs'), () => scenario.run(helpers)]);
+}
 
 let failed = false;
 try {

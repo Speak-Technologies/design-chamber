@@ -58,9 +58,11 @@ Screenshots: `documentation/pages/img/page-1400-<theme>-*.png` (1400 px wide, da
 ## Behaviour by role
 One role: the OpenChamber user. "Continue in chat" reopens the linked chat, or starts a new one. A design chip or "Open as page" that targets this page opens that design.
 
+**Keeps your place.** The page's frame reloads whenever the extension updates, which used to drop you back on the library. Opening a design now stores its slug in `host.storage` under `place:page` and going back to the library clears it; on start the page reopens that design if it is still in the list (a design that is gone, or a design you open before the page has finished starting, falls back to the library or wins, quietly). Same code and rules as the [rail](rail-panel.md#keeps-your-place); the rail has its own key, `place:panel`.
+
 ## Data
 **Reads:** as the [rail](rail-panel.md), plus renders of each screen/viewport and version (`GET /designs/:slug/render`). The build strip also reads the change feed and, from the host, the projects and the sessions of the design's project (`listProjects`, `onSessions`; read only).
-**Writes:** comments, rename, delete (to `.trash`), versions (snapshot, restore), exports (to Downloads), settings, loose-file import (`POST /loose/import`), the OpenCode skill (`POST /agent/skill`, only from its button). Per-design view settings (hidden sizes and camera for a canvas, `pageView` for a page) are saved with `host.storage` under `view:<slug>`. A comment made on a page records its view in `viewport` (`fill` for Full width). "Ask the agent to fix it" calls `POST /designs/:slug/prompt` with `purpose: 'offline'`. The ask bar calls it with `purpose: 'ask'` (the words and an optional element); one comment is sent with `purpose: 'revision'` and that comment's id. The Checks badge reads `GET /designs/:slug/checks`, starts a rendering check with `POST /designs/:slug/checks/run` and asks the agent with `POST /designs/:slug/prompt` and `purpose: 'checks'`.
+**Writes:** comments, rename, delete (to `.trash`), versions (snapshot, restore), exports (to Downloads), settings, loose-file import (`POST /loose/import`). Per-design view settings (hidden sizes and camera for a canvas, `pageView` for a page) are saved with `host.storage` under `view:<slug>`; the open design under `place:page`. A comment made on a page records its view in `viewport` (`fill` for Full width). "Ask the agent to fix it" calls `POST /designs/:slug/prompt` with `purpose: 'offline'`. The ask bar calls it with `purpose: 'ask'` (the words and an optional element); one comment is sent with `purpose: 'revision'` and that comment's id. The Checks badge reads `GET /designs/:slug/checks`, starts a rendering check with `POST /designs/:slug/checks/run` and asks the agent with `POST /designs/:slug/prompt` and `purpose: 'checks'`.
 
 ## States & edge cases
 - Every data view has loading (skeletons / scoped spinners), empty (says what goes here and how to add it), error (the service's sentence + Try again, input kept) and success states.
@@ -73,4 +75,4 @@ One role: the OpenChamber user. "Continue in chat" reopens the linked chat, or s
 [Rail panel](rail-panel.md) · `docs/SPEC.md` §13.2
 
 ---
-*Last updated: 2026-11-08: ask bar, Send this, build strip, restore with Undo, Checks badge (P7).*
+*Last updated: 2026-11-10: keeps your place across reloads (`place:page`). Before that, 2026-11-08: ask bar, Send this, build strip, restore with Undo, Checks badge (P7).*

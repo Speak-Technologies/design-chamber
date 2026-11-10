@@ -1,6 +1,7 @@
 // Chat linkage flows (docs/SPEC.md §10): slash-command chips, new design, continue in chat,
 // send comments (incl. the outbox for a session that is not selected), session
-// reconciliation, turn snapshots, "Open as page", and chip clicks.
+// reconciliation, turn snapshots, "Open as page", chip clicks, and opening a design in the rail
+// from a Work Status row or a chat block (documentation/specs/phase-1-5-sdk-2-7.md §3.2).
 //
 // Host constraints these flows are shaped by: `prompt` acts on the selected session only
 // (F13); `openSession` closes the page and throws NO_SESSION for an unknown id (F12);
@@ -22,11 +23,13 @@ import {
 } from '@openchamber/sdk';
 
 import { extractHtml } from '../shared/agent/html-extract.ts';
-import type { AskElement, PromptBody } from '../shared/api.ts';
+import type { AskElement, OpenIntent, PromptBody } from '../shared/api.ts';
 import type { AnchorState, DesignChip, DesignKind, Outbox } from '../shared/types.ts';
 import { CHIP_PROVIDER_ID } from '../shared/types.ts';
 import { OUTBOX_TTL_MS, SLUG_PATTERN, TURN_SNAPSHOT_DEDUPE_MS } from '../shared/limits.ts';
-import type { GuestHost } from './host.ts';
+import { sameDirectory } from '../shared/path-compare.ts';
+import type { ChangeBatch } from './changes.ts';
+import type { GuestHost, HostLike } from './host.ts';
 import { isServiceError, type ServiceClient } from './service-client.ts';
 
 export const PANEL_SURFACE_ID = `plugin:${CHIP_PROVIDER_ID}`;
@@ -71,15 +74,6 @@ export const toAttachRequest = (chip: DesignChip): AttachIssueRequest => ({
   text: chip.text,
   data: { slug: chip.data.slug, kind: chip.data.kind },
 });
-
-/** Folder paths from the host and from design.json, compared the way the OS would. */
-export const sameDirectory = (a: string, b: string): boolean => {
-  const norm = (value: string): string => value.replace(/\\/g, '/').replace(/\/+$/, '');
-  const left = norm(a);
-  const right = norm(b);
-  const windows = /^[A-Za-z]:\//.test(left) || /^[A-Za-z]:\//.test(right);
-  return windows ? left.toLowerCase() === right.toLowerCase() : left === right;
-};
 
 // ---- §10.5 reconciliation, pure ----
 
@@ -153,8 +147,46 @@ export type AskResult = { outcome: AskOutcome; sessionId: string | null };
 
 export type DeliverOutboxResult = 'delivered' | 'composed' | 'none';
 
-/** What the surface should show for the item it was opened with. */
-export type ItemTarget = { kind: 'open-design'; slug: string };
+/** What the surface should show for the item it was opened with. `intent` comes with an open request (§3.2); absent = `view`. */
+export type ItemTarget = { kind: 'open-design'; slug: string; intent?: OpenIntent };
+
+/** Change batches after which the rail looks for an open request: a reset, a new design (`added`), or an `open` request. */
+export const takesOpenRequest = (batch: ChangeBatch): boolean => batch.reset || batch.events.some((event) => event.kind === 'added' || event.kind === 'open');
+
+/** `opened`: the rail is on screen and will open it · `not-here`: this OpenChamber window has no rail to show · `gone`: the design is no longer in the folder. */
+export type OpenInRailOutcome = 'opened' | 'not-here' | 'gone';
+
+/**
+ * Open an existing design in the rail panel from a Work Status row or a chat block: leave an open
+ * request, then show the panel, which takes it (on mount, or on the `open` event when it is
+ * already up). Where the panel cannot open, the request is taken back, so it cannot pop the design
+ * open the next time the user opens the rail for something else (a failed take-back is ignored: the
+ * request expires after `OPEN_REQUEST_TTL_MS`). Other errors reach the caller.
+ */
+export const openInRail = async (
+  deps: { client: ServiceClient; host: Pick<HostLike, 'openSurface'> },
+  slug: string,
+  intent: OpenIntent,
+): Promise<OpenInRailOutcome> => {
+  try {
+    await deps.client.call('POST /open-request', { body: { slug, intent } });
+  } catch (error) {
+    if (isServiceError(error, 'not-found')) return 'gone';
+    throw error;
+  }
+  try {
+    await deps.host.openSurface(PANEL_SURFACE_ID);
+    return 'opened';
+  } catch (error) {
+    try {
+      await deps.client.call('DELETE /open-request');
+    } catch {
+      // The request expires on its own after OPEN_REQUEST_TTL_MS.
+    }
+    if (isHostError(error, 'NO_DIRECTORY') || isHostError(error, 'UNSUPPORTED')) return 'not-here';
+    throw error;
+  }
+};
 
 export type Flows = {
   /** Background frame: `/design <brief>` and `/page <brief>` → our chip. */
@@ -210,10 +242,11 @@ export type Flows = {
   /** Open what the surface was opened for (deduped: each chip/message once). */
   watchItems(open: (target: ItemTarget) => void, onError?: (error: unknown) => void): () => void;
   /**
-   * Rail panel only: take the open request left by "Open as page" on mount and whenever a
-   * design is added (the rail may already be open), and open it.
+   * Rail panel only: take the open request left by "Open as page", a Work Status row or a chat
+   * block on mount and after every batch `takesOpenRequest` accepts (the rail may already be
+   * open), and open it with its intent. `subscribe` is the change feed's.
    */
-  watchOpenRequests(onAdded: (listener: () => void) => () => void, open: (target: ItemTarget) => void): () => void;
+  watchOpenRequests(subscribe: (listener: (batch: ChangeBatch) => void) => () => void, open: (target: ItemTarget) => void): () => void;
 };
 
 export type FlowDeps = { host: GuestHost; client: ServiceClient; now?: () => number };
@@ -616,12 +649,14 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       });
     },
 
-    watchOpenRequests: (onAdded, open) => {
+    watchOpenRequests: (subscribe, open) => {
       let stopped = false;
       const take = (): void => {
         client.call('DELETE /open-request').then(
           ({ request }) => {
-            if (request && !stopped && SLUG_PATTERN.test(request.slug)) open({ kind: 'open-design', slug: request.slug });
+            if (request && !stopped && SLUG_PATTERN.test(request.slug)) {
+              open({ kind: 'open-design', slug: request.slug, intent: request.intent === 'comment' ? 'comment' : 'view' });
+            }
           },
           () => {
             // The design is in the list either way; a lost open request only skips the jump.
@@ -629,7 +664,9 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
         );
       };
       take();
-      const unsubscribe = onAdded(take);
+      const unsubscribe = subscribe((batch) => {
+        if (takesOpenRequest(batch)) take();
+      });
       return () => {
         stopped = true;
         unsubscribe();

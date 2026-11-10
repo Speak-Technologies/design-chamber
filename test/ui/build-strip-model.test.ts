@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { QUIET_MS, initialTrack, reduceBuild, type BuildInput, type BuildTrack, type LinkedActivity } from '../../src/guest/build-activity.ts';
-import { buildView, formatElapsed } from '../../src/ui/model/build-strip-model.ts';
+import { buildView, formatElapsed, pillText } from '../../src/ui/model/build-strip-model.ts';
 
 const T0 = 1_700_000_000_000;
 const SEC = 1000;
@@ -193,4 +193,38 @@ test('announce changes when the phase or the file changes', () => {
   const two = reduceBuild(one, files(T0 + SEC, ['screens/b.html']));
   assert.notEqual(buildView(one, T0 + 2 * SEC).announce, buildView(two, T0 + 2 * SEC).announce);
   assert.notEqual(buildView(one, T0 + 2 * SEC).announce, buildView(one, T0 + 60 * SEC).announce);
+});
+
+// ---- pillText: the words a Work Status row shares with the rail pill ----
+
+test('pillText says exactly what buildView shows in the rail pill', () => {
+  const writing = buildView(run(sess(T0, 'running'), files(T0 + 10 * SEC, ['screens/pricing.html'])), T0 + 11 * SEC);
+  assert.equal(writing.phase, 'writing');
+  assert.equal(pillText('writing', 'screens/pricing.html'), writing.pill);
+  assert.equal(pillText('writing', 'pricing.html'), writing.pill, 'a bare name reads the same as its path');
+
+  const nameless = buildView(run(files(T0, [], true)), T0 + SEC);
+  assert.equal(pillText('writing', null), nameless.pill);
+
+  const long = `assets/${'a-very-long-file-name-'.repeat(3)}hero.png`;
+  assert.equal(pillText('writing', long), buildView(run(sess(T0, 'running'), files(T0, [long])), T0 + SEC).pill, 'long names are cut the same way');
+
+  const working = buildView(run(sess(T0, 'running')), T0 + 42 * SEC);
+  assert.equal(working.phase, 'working');
+  assert.equal(pillText('working', null), working.pill);
+
+  const failed = buildView(run(sess(T0, 'running'), sess(T0 + 5 * SEC, 'idle', 'failed')), T0 + 6 * SEC);
+  assert.equal(failed.phase, 'failed');
+  assert.equal(pillText('failed', null), failed.pill);
+
+  const done = buildView(run(sess(T0, 'running'), files(T0 + SEC, ['index.html']), sess(T0 + 20 * SEC, 'idle', 'completed')), T0 + 21 * SEC);
+  assert.equal(done.phase, 'done');
+  assert.equal(pillText('done', null), done.pill);
+});
+
+test('pillText words: the four phases a status row shows', () => {
+  assert.deepEqual(
+    [pillText('writing', 'screens/pricing.html'), pillText('writing', null), pillText('working', null), pillText('failed', null), pillText('done', null)],
+    ['Writing pricing.html', 'Writing', 'Agent is working', 'Agent stopped', 'Done'],
+  );
 });

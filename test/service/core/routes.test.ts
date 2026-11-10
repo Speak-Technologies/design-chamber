@@ -17,12 +17,12 @@ import type {
   DeleteDesignResponse,
   DesignDetailResponse,
   DesignListResponse,
-  InstallSkillResponse,
   MarkSentResponse,
   OkResponse,
   OutboxResponse,
   PatchDesignResponse,
   PutUploadChunkResponse,
+  RemoveSkillResponse,
   SettingsResponse,
 } from '../../../src/shared/api.ts';
 import { ROUTE_KEYS, ROUTE_OWNERS } from '../../../src/shared/api.ts';
@@ -86,7 +86,7 @@ describe('route registration and auth', () => {
       ['/outbox', {}],
       ['/outbox', { method: 'PUT', body: {} }],
       ['/outbox', { method: 'DELETE' }],
-      ['/agent/skill', { method: 'POST', body: {} }],
+      ['/agent/skill', { method: 'DELETE' }],
       ['/loose/import', { method: 'POST', body: { name: 'x.html' } }],
     ];
     for (const [pathname, init] of calls) {
@@ -113,13 +113,14 @@ describe('agent guide/skill and loose html: contracts before their lanes land (A
     assert.deepEqual(list.loose, { files: [], total: 0 });
   });
 
-  test('POST /agent/skill and POST /loose/import answer a sentence and touch nothing, traversal names included', async (t) => {
+  test('POST /agent/skill is gone (the skill ships inside the extension); DELETE /agent/skill with no old copy answers its status', async (t) => {
     const core = await useServedCore(t);
     // POST /loose/import is built (A4): its refusals live in loose.test.ts.
-    // POST /agent/skill is built (A3): it writes only the fixed skill file under the tmp home; full cases in agent-setup.test.ts and settings.test.ts.
-    const skill = await core.request('/agent/skill', { method: 'POST', body: { replaceEdited: true } });
-    assert.equal(skill.status, 200);
-    assert.equal((await json<InstallSkillResponse>(skill)).skill.state, 'current');
+    const install = await core.request('/agent/skill', { method: 'POST', body: { replaceEdited: true } });
+    assert.equal(install.status, 404);
+    const removed = await core.request('/agent/skill', { method: 'DELETE' });
+    assert.equal(removed.status, 200);
+    assert.equal((await json<RemoveSkillResponse>(removed)).skill.state, 'not-installed');
     const list = await json<DesignListResponse>(await core.request('/designs'));
     assert.deepEqual(list.designs, []);
   });

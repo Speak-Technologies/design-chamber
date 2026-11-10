@@ -15,6 +15,7 @@ const design = (over: Partial<DesignSummary> & Pick<DesignSummary, 'slug'>): Des
   screenCount: 3,
   viewports: [],
   sessionId: null,
+  projectDirectory: null,
   openComments: 0,
   thumb: { state: 'ready', key: null },
   warnings: [],

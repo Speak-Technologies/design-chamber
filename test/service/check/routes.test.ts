@@ -144,6 +144,7 @@ test('a design with no check.json: static findings only, render none, counts fro
   assert.ok(answer.counts.warnings >= 4);
   assert.equal(answer.static.partial, false);
   assert.equal(answer.canRun, true);
+  assert.equal(answer.browser, true);
 });
 
 test('a clean design with a fresh render: findings counted; after an edit the render is stale and not counted', async (t) => {
@@ -272,6 +273,8 @@ test('POST run twice for one slug is one job; another slug gets 409; the job end
   assert.equal(during.render.state, 'running');
   assert.equal(during.canRun, false);
   assert.equal((await h.json<ChecksResponse>('/designs/other/checks')).canRun, false);
+  assert.equal(during.browser, true, 'a run under way is not a missing browser');
+  assert.equal((await h.json<ChecksResponse>('/designs/other/checks')).browser, true);
   release();
   for (let waited = 0; waited < 2000 && (await h.json<ChecksResponse>('/designs/demo/checks')).render.state === 'running'; waited += 20) await new Promise((resolve) => setTimeout(resolve, 20));
   assert.notEqual((await h.json<ChecksResponse>('/designs/demo/checks')).render.state, 'running');
@@ -287,6 +290,7 @@ test('no browser: 422 with a plain sentence, and canRun is false', async (t) => 
   assert.equal(response.status, 422);
   assert.equal(((await response.json()) as { message: string }).message, "No Chrome, Edge or Chromium browser was found, so Design Chamber can't render this design.");
   assert.equal((await h.json<ChecksResponse>('/designs/demo/checks')).canRun, false);
+  assert.equal((await h.json<ChecksResponse>('/designs/demo/checks')).browser, false);
 });
 
 test('a failed job is logged, ends the running state and still emits the closing event', async (t) => {

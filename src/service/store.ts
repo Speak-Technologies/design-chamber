@@ -62,7 +62,8 @@ import type {
   ServiceState,
   ThumbState,
 } from '../shared/types.ts';
-import type { ChangeHub, DesignRecord, DesignStore, Logger, SettingsStore, ThumbnailService } from './context.ts';
+import { chipMarkerOf } from '../shared/agent/chip.ts';
+import type { ChangeHub, DesignRecord, DesignStore, LinkIfUnlinkedOutcome, Logger, SettingsStore, ThumbnailService } from './context.ts';
 import { ApiError } from './http.ts';
 import { assertSlug, isSlug, replaceFileIfUnchanged, resolveInside, slugify, uniqueSlug, writeFileAtomic } from './paths.ts';
 import { folderErrorSentence, isDesignFolder, isDirectory } from './root.ts';
@@ -239,8 +240,29 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     await writeMirror(slug, read, state, write);
   };
 
+  /**
+   * A design the user deleted outside the app (Finder, a script) while a reconcile or a mutation was in
+   * flight must stay deleted: this may create `.chamber/`, never the design folder itself, or the delete
+   * comes back as a folder holding only state.json. Gone = `not-found` (reconcile treats it as nothing to do).
+   */
   const writeState = async (dir: string, state: ServiceState): Promise<void> => {
-    await writeFileAtomic(stateFileOf(dir), serializeJson(state as unknown as JsonValue)); // Safe: ServiceState is plain JSON.
+    // ENOENT means "gone" only when the design folder itself is missing. Windows also answers ENOENT
+    // for a write under a `.chamber` that is a file, which is a broken design, not a deleted one.
+    const goneOr = async (error: unknown): Promise<unknown> => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return error;
+      const folderLeft = await stat(dir).then((s) => s.isDirectory(), () => false);
+      return folderLeft ? error : new ApiError('not-found', 'That design does not exist.');
+    };
+    try {
+      await mkdir(path.join(dir, '.chamber')); // not recursive: fails with ENOENT when the design folder is gone
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw await goneOr(error);
+    }
+    try {
+      await writeFileAtomic(stateFileOf(dir), serializeJson(state as unknown as JsonValue), { createDirs: false }); // Safe: ServiceState is plain JSON.
+    } catch (error) {
+      throw await goneOr(error);
+    }
   };
 
   /** The design.json half of `writeStateAndMirror` (state.json already written or unchanged). */
@@ -302,6 +324,7 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     screenCount: record.design.screens.length,
     viewports: record.design.viewports,
     sessionId: record.design.sessionId,
+    projectDirectory: record.design.projectDirectory,
     openComments: record.design.comments.filter((comment) => comment.status === 'open').length,
     thumb: thumbOf(record.slug),
     warnings: record.warnings,
@@ -340,10 +363,16 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
         throw error;
       }
       const state = resolveState(slug, read, true);
-      // state.json is rewritten only when it changes: two reconciles of an unchanged folder
-      // write nothing at all.
-      if (!read.stateFromDisk || state !== read.record.state) await writeState(read.record.path, state);
-      await writeMirror(slug, withState(read, state), state, null);
+      try {
+        // state.json is rewritten only when it changes: two reconciles of an unchanged folder
+        // write nothing at all.
+        if (!read.stateFromDisk || state !== read.record.state) await writeState(read.record.path, state);
+        await writeMirror(slug, withState(read, state), state, null);
+      } catch (error) {
+        // The folder was deleted after it was read: nothing to merge, and nothing is written back.
+        if (error instanceof ApiError && error.code === 'not-found') return;
+        throw error;
+      }
     });
   };
 
@@ -497,6 +526,21 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
       });
       hub?.emit({ slug, kind: 'design' });
       return read.record;
+    },
+
+    async linkIfUnlinked(slug, sessionId, marker) {
+      const nowIso = now().toISOString();
+      const outcome = await withLock(slug, async (): Promise<LinkIfUnlinkedOutcome> => {
+        const current = await readSettled(slug);
+        const { state } = current.record;
+        if (state.sessionId !== null) return 'has-chat';
+        if (chipMarkerOf(state.created) !== marker) return 'other-design';
+        // As a PATCH of `sessionId` does, a link claims a provisional folder (P4).
+        await writeStateAndMirror(slug, current, { ...finalOf(state), sessionId }, { updated: nowIso });
+        return 'linked';
+      });
+      if (outcome === 'linked') hub?.emit({ slug, kind: 'design' });
+      return outcome;
     },
 
     async trash(slug) {

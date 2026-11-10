@@ -91,38 +91,33 @@ export const guideSentence = (guide: AgentGuideStatus): PathSentence => {
   }
 };
 
-export type SkillAction = { kind: 'install' | 'update' | 'replace'; label: string };
+/** What the skill row offers: remove our unedited old copy, copy the path of one we leave alone, or nothing. */
+export type SkillControl = 'remove-old-copy' | 'copy-path' | null;
 
 export type SkillRow = {
-  /** The button, or null when there is nothing to click (installed, someone else's skill, unavailable). */
-  action: SkillAction | null;
-  /** "Installed" badge beside the path. */
-  installed: boolean;
   sentence: PathSentence;
-  /** Asked inline before Replace overwrites the user's edits. */
-  confirm: string | null;
+  control: SkillControl;
 };
 
-/** The skill row for each state the service reports. */
+/**
+ * The skill row for each state the service reports. The skill ships inside the extension, so the
+ * row says so first and only talks about an older installed copy when there is one: ours and
+ * unedited (`current`, `outdated`) can be removed from here; an edited or foreign one is left
+ * alone and only its path is offered.
+ */
 export const skillRow = (skill: AgentSkillStatus): SkillRow => {
   switch (skill.state) {
     case 'not-installed':
-      return { action: { kind: 'install', label: 'Install skill' }, installed: false, confirm: null, sentence: withPath('Adds a design-chamber skill to OpenCode at ', skill.path, ', so any chat knows where designs go.') };
-    case 'outdated':
-      return { action: { kind: 'update', label: 'Update skill' }, installed: false, confirm: null, sentence: plain('Your designs folder changed since you installed it.') };
+      return { sentence: plain('Built in. Agents in OpenChamber can use it while Design Chamber is on.'), control: null };
     case 'current':
-      return { action: null, installed: true, confirm: null, sentence: withPath('', skill.path, '') };
+    case 'outdated':
+      return { sentence: withPath('Built in. An older copy is also installed at ', skill.path, ', so agents may see the skill twice.'), control: 'remove-old-copy' };
     case 'edited':
-      return {
-        action: { kind: 'replace', label: 'Replace skill…' },
-        installed: false,
-        confirm: 'Replace your edited skill with Design Chamber’s version?',
-        sentence: withPath('You edited the skill at ', skill.path, '. Design Chamber won’t update it unless you replace it.'),
-      };
+      return { sentence: withPath('Built in. You edited the older copy at ', skill.path, ', so Design Chamber leaves it alone. Delete it if you don’t need it.'), control: 'copy-path' };
     case 'foreign':
-      return { action: null, installed: false, confirm: null, sentence: withPath('A different skill called design-chamber is already at ', skill.path, ', so Design Chamber left it alone.') };
+      return { sentence: withPath('Built in. Another design-chamber skill is installed at ', skill.path, '.'), control: 'copy-path' };
     case 'unavailable':
-      return { action: null, installed: false, confirm: null, sentence: plain(skill.message ?? 'The skill can’t be installed on this computer.') };
+      return { sentence: plain(`Built in. ${skill.message ?? 'Design Chamber can’t look for an older copy on this computer.'}`), control: null };
   }
 };
 

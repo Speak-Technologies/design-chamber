@@ -9,6 +9,7 @@
 
 import {
   HostRequestError,
+  type GuestBlockCall,
   type GuestItem,
   type GuestProject,
   type GuestRequest,
@@ -26,9 +27,10 @@ import {
   type StartSessionResult,
 } from '@openchamber/sdk';
 
-import { API_ERROR_STATUS, ROUTE_KEYS, splitRouteKey, type ApiErrorCode, type ChangesResponse, type OpenRequest, type RouteKey } from '../shared/api.ts';
+import { API_ERROR_STATUS, ROUTE_KEYS, splitRouteKey, type ApiErrorCode, type ChangesResponse, type OpenRequest, type RouteKey, type StatusDesignRow } from '../shared/api.ts';
 import { CHIP_PROVIDER_ID, type AgentSkillStatus, type ChangeEvent, type ChangeKind, type Comment, type DesignJson, type DesignKind, type DesignSummary, type LooseHtmlFile, type Outbox, type Preset, type VersionSummary, type Viewport } from '../shared/types.ts';
-import { CHANGES_RING_SIZE, LOOSE_LIST_MAX } from '../shared/limits.ts';
+import { CHANGES_RING_SIZE, LOOSE_LIST_MAX, SLUG_PATTERN, STATUS_ROWS_MAX } from '../shared/limits.ts';
+import { sameDirectory } from '../shared/path-compare.ts';
 import { createGuestHost, type GuestHost, type HostLike } from './host.ts';
 import { createServiceClient, type ServiceClient } from './service-client.ts';
 
@@ -267,10 +269,22 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
     screenCount: entry.design.screens.length,
     viewports: entry.design.viewports,
     sessionId: entry.design.sessionId,
+    projectDirectory: entry.design.projectDirectory,
     openComments: entry.design.comments.filter((comment) => comment.status === 'open').length,
     thumb: { state: 'unavailable', key: null },
     warnings: [],
   });
+
+  /** "Canvas · 2 screens · 1 open comment" or "Page · Laptop 1280×800", as the service words it (U6). */
+  const mentionSubtitle = (entry: FakeDesign): string => {
+    const open = entry.design.comments.filter((comment) => comment.status === 'open').length;
+    const parts =
+      entry.design.kind === 'canvas'
+        ? ['Canvas', `${entry.design.screens.length} screen${entry.design.screens.length === 1 ? '' : 's'}`]
+        : ['Page', ...entry.design.viewports.slice(0, 1).map((viewport) => `${viewport.label} ${viewport.width}×${viewport.height}`)];
+    if (open > 0) parts.push(`${open} open comment${open === 1 ? '' : 's'}`);
+    return parts.join(' · ');
+  };
 
   const fileStatus = (text: string | undefined) => ({ exists: text !== undefined, size: text?.length ?? 0, mtime: text === undefined ? null : iso(20) });
 
@@ -341,8 +355,11 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           agent: { guide: { path: `${root}\\AGENTS.md`, state: 'current' }, skill },
         };
       }
-      case 'POST /agent/skill':
-        skill = { ...skill, state: 'current' };
+      case 'DELETE /agent/skill':
+        // Like the service: only an unedited copy of ours is removed; edited and foreign copies stay.
+        if (skill.state === 'edited') throw new FakeHttpError('conflict', "That copy has your own edits, so it stays. Delete it yourself if you don't need it.");
+        if (skill.state === 'foreign') throw new FakeHttpError('conflict', "That skill isn't one Design Chamber wrote, so it stays.");
+        skill = { ...skill, state: 'not-installed' };
         return { skill };
       case 'GET /changes': {
         const since = Number(query.since ?? '0');
@@ -491,6 +508,58 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
         openRequest.value = null;
         return { request: taken };
       }
+      case 'POST /open-request': {
+        const wanted = typeof body.slug === 'string' ? body.slug : '';
+        if (!SLUG_PATTERN.test(wanted)) throw new FakeHttpError('bad-slug', 'That is not a design folder name.');
+        if (!designs.has(wanted)) throw new FakeHttpError('not-found', 'That design is no longer in your Designs folder.');
+        openRequest.value = { slug: wanted, intent: body.intent === 'comment' ? 'comment' : 'view', created: new Date().toISOString() };
+        emit(wanted, 'open');
+        return { ok: true };
+      }
+      case 'POST /session-events':
+        return { ok: true };
+      case 'POST /mentions/search': {
+        const wanted = typeof body.query === 'string' ? body.query.trim().toLowerCase() : '';
+        const items = [...designs.entries()]
+          .filter(([name, entry]) => wanted === '' || name.includes(wanted) || entry.design.title.toLowerCase().includes(wanted))
+          .sort(([, a], [, b]) => b.design.updated.localeCompare(a.design.updated))
+          .slice(0, 20)
+          .map(([name, entry]) => ({ id: name, title: entry.design.title, subtitle: mentionSubtitle(entry) }));
+        return { items };
+      }
+      case 'POST /mentions/resolve': {
+        const id = typeof body.id === 'string' ? body.id : '';
+        if (!SLUG_PATTERN.test(id)) throw new FakeHttpError('bad-request', 'That is not a design folder name.');
+        const entry = designs.get(id);
+        if (!entry) throw new FakeHttpError('not-found', 'That design is no longer in your Designs folder.');
+        const open = entry.design.comments.filter((comment) => comment.status === 'open');
+        return {
+          text: [
+            `Design "${entry.design.title}" (${entry.design.kind}) from Design Chamber. Its folder: ${root}\\${id}`,
+            `Open comments from the user: ${open.length === 0 ? 'none' : open.map((comment) => comment.body).join(' / ')}`,
+            'Edit the files in that folder. Do not touch .versions/ or .chamber/.',
+          ].join('\n'),
+        };
+      }
+      case 'GET /status/designs': {
+        const directory = query.directory ?? '';
+        const session = query.session ?? '';
+        const matched = [...designs.entries()]
+          .filter(([, entry]) => directory === '' || (entry.design.projectDirectory !== null && sameDirectory(entry.design.projectDirectory, directory)))
+          .sort(([, a], [, b]) => Number(b.design.sessionId === session && session !== '') - Number(a.design.sessionId === session && session !== '') || b.design.updated.localeCompare(a.design.updated));
+        const rows: StatusDesignRow[] = matched.slice(0, STATUS_ROWS_MAX).map(([name, entry]) => ({
+          slug: name,
+          title: entry.design.title,
+          kind: entry.design.kind,
+          here: session !== '' && entry.design.sessionId === session,
+          agent: null,
+          lastFile: null,
+          checks: { counts: { errors: 0, warnings: 0, notes: 0 }, render: { state: 'none' }, canRun: false, browser: false },
+          pending: pending(entry),
+          openComments: entry.design.comments.filter((comment) => comment.status === 'open').length,
+        }));
+        return { rows, total: matched.length };
+      }
       case 'GET /designs/:slug/render': {
         const html = sourceOf(slug, query.screen);
         const renderKey = fakeHash(`${slug}|${query.screen ?? ''}|${query.version ?? ''}|${html}`);
@@ -571,6 +640,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           render: { state: 'none', at: null, artboards: 0, skipped: 0, findings: [] },
           counts: { errors: 0, warnings: 0, notes: 0 },
           canRun: false,
+          browser: false,
         };
       case 'POST /designs/:slug/checks/run':
         throw new FakeHttpError('invalid', 'The rendering check is not available in this preview.');
@@ -622,7 +692,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
         if (!html) throw new FakeHttpError('no-html', 'No HTML code block in this message.');
         const title = /<title>([^<]*)<\/title>/i.exec(html)?.[1] ?? String(body.sessionTitle || 'Page from chat');
         const created = createDesign('page', title, '', { sessionId: String(body.sessionId) }, html);
-        if (body.open === true) openRequest.value = { slug: created, created: new Date().toISOString() };
+        if (body.open === true) openRequest.value = { slug: created, intent: 'view', created: new Date().toISOString() };
         return { slug: created, title };
       }
     }
@@ -740,6 +810,15 @@ export type FakeHost = HostLike & {
   resolver(): Parameters<HostLike['onResolve']>[0] | null;
   /** The handler the guest registered with `onAction`. */
   actionHandler(): Parameters<HostLike['onAction']>[0] | null;
+  /** A block frame: the call it draws (replayed to `onBlock` listeners, as the host does). */
+  emitBlock(call: GuestBlockCall): void;
+  /**
+   * Stand-in for the host's click rule: `answerBlock` is refused (`DENIED`) unless this is true,
+   * and a block takes one answer. A test sets it right before the click it simulates.
+   */
+  blockClick: boolean;
+  /** What the frame answered the block with; `null` before that. */
+  readonly blockAnswer: string | null;
 };
 
 export const createFakeHost = (options: FakeHostOptions = {}): FakeHost => {
@@ -764,12 +843,15 @@ export const createFakeHost = (options: FakeHostOptions = {}): FakeHost => {
   const storage = new Map<string, JsonValue>();
   let resolver: Parameters<HostLike['onResolve']>[0] | null = null;
   let actionHandler: Parameters<HostLike['onAction']>[0] | null = null;
+  let block: GuestBlockCall | null = null;
+  let blockAnswer: string | null = null;
 
   const readyListeners = new Set<(ctx: HostReadyContext) => void>();
   const sessionListeners = new Set<(session: SessionSnapshot | null) => void>();
   const directoryListeners = new Set<(directory: string | null) => void>();
   const itemListeners = new Set<(item: GuestItem | null) => void>();
   const lifecycleListeners = new Set<(event: SessionLifecycleEvent) => void>();
+  const blockListeners = new Set<(call: GuestBlockCall) => void>();
   const sessionsListeners = new Map<string, Set<(snapshot: GuestSessionsSnapshot) => void>>();
   const sessionsSnapshots = new Map<string, GuestSessionsSnapshot>();
 
@@ -796,6 +878,20 @@ export const createFakeHost = (options: FakeHostOptions = {}): FakeHost => {
     onDirectory: (listener) => listen(directoryListeners, listener, () => context.directory),
     onItem: (listener) => listen(itemListeners, listener, () => item),
     onSessionLifecycle: (listener) => listen(lifecycleListeners, listener, null),
+    onBlock: (listener) => {
+      blockListeners.add(listener);
+      if (block !== null) listener(block);
+      return () => void blockListeners.delete(listener);
+    },
+    answerBlock: async (text) => {
+      record('answerBlock', text);
+      if (!fake.blockClick) throw new HostRequestError('DENIED', 'A block answers only from a click.');
+      if (blockAnswer !== null) throw new HostRequestError('HOST_REJECTED', 'This block already has its answer.');
+      fake.blockClick = false;
+      blockAnswer = text;
+      if (block !== null) block = { ...block, answered: text };
+    },
+    setHeight: async (height) => record('setHeight', height),
     onResolve: (handler) => {
       resolver = handler;
       return () => {
@@ -891,6 +987,15 @@ export const createFakeHost = (options: FakeHostOptions = {}): FakeHost => {
     },
     resolver: () => resolver,
     actionHandler: () => actionHandler,
+    emitBlock: (call) => {
+      block = call;
+      blockAnswer = call.answered;
+      for (const listener of [...blockListeners]) listener(call);
+    },
+    blockClick: false,
+    get blockAnswer() {
+      return blockAnswer;
+    },
   };
   return fake;
 };

@@ -5,11 +5,15 @@ import { test } from 'node:test';
 import { HostRequestError, type ComposeRequest, type GuestMessageItem, type GuestSessionRecord, type PromptRequest, type StartSessionRequest } from '@openchamber/sdk';
 
 import { createFakeServices, createFakeService, type FakeServices } from '../../src/guest/fake-services.ts';
-import { createFlows, FlowError, MESSAGES, planReconciliation, sameDirectory, type Flows } from '../../src/guest/flows.ts';
+import type { ChangeBatch } from '../../src/guest/changes.ts';
+import { createFlows, FlowError, MESSAGES, openInRail, planReconciliation, takesOpenRequest, type Flows, type ItemTarget } from '../../src/guest/flows.ts';
+import type { ChangeKind } from '../../src/shared/types.ts';
+import { sameDirectory } from '../../src/shared/path-compare.ts';
 import { createGuestHost } from '../../src/guest/host.ts';
 import { createServiceClient } from '../../src/guest/service-client.ts';
 
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+const batchOf = (...kinds: ChangeKind[]): ChangeBatch => ({ reset: false, epoch: 'e', seq: kinds.length, events: kinds.map((kind, index) => ({ seq: index + 1, slug: 'x', kind })) });
 const until = async (check: () => boolean, label: string): Promise<void> => {
   for (let i = 0; i < 200; i += 1) {
     if (check()) return;
@@ -695,19 +699,19 @@ test('open as artifact (background action): saves, leaves an open request, opens
   // The rail (same service) takes the request once, on mount, and opens the viewer.
   const rail = createFlows({ host: createFakeServices({ service: bg.service, surface: 'panel' }).guestHost, client: bg.client });
   const opened: string[] = [];
-  let added: (() => void) | null = null;
+  let feed: ((batch: ChangeBatch) => void) | null = null;
   const stop = rail.watchOpenRequests((listener) => {
-    added = listener;
-    return () => (added = null);
+    feed = listener;
+    return () => (feed = null);
   }, (target) => opened.push(target.slug));
   await until(() => opened.length === 1, 'rail opened the artifact');
   assert.equal(bg.service.designs.get(opened[0] ?? '')?.design.title, 'Bike card');
   // Already open: an `added` change makes it look again; a taken request never opens twice.
-  (added as (() => void) | null)?.();
+  (feed as ((batch: ChangeBatch) => void) | null)?.(batchOf('added'));
   await tick();
   assert.equal(opened.length, 1);
   await bg.flows.runAction({ ...message('```html\n<html><title>Second card</title></html>\n```'), messageId: 'msg_2' });
-  (added as (() => void) | null)?.();
+  (feed as ((batch: ChangeBatch) => void) | null)?.(batchOf('added'));
   await until(() => opened.length === 2, 'second artifact opened in the open rail');
   stop();
 });
@@ -764,4 +768,82 @@ test('host wrapper: observables replay, whenReady resolves on the first snapshot
   fakes.host.setSession({ id: 's2', title: 'Two', busy: true });
   assert.deepEqual(seen, ['s1', 's2']);
   host.dispose();
+});
+
+// ---- Phase 1.5 §3.2: open requests from Work Status and chat blocks ----
+
+test('takesOpenRequest: on reset, `added` and `open`; never on other kinds', () => {
+  assert.equal(takesOpenRequest({ ...batchOf(), reset: true }), true);
+  assert.equal(takesOpenRequest(batchOf('added')), true);
+  assert.equal(takesOpenRequest(batchOf('files', 'open')), true);
+  for (const kind of ['files', 'design', 'comments', 'thumb', 'versions', 'checks', 'activity', 'root', 'loose', 'removed'] as const) {
+    assert.equal(takesOpenRequest(batchOf(kind)), false, kind);
+  }
+});
+
+test('the open rail takes a request on an `open` event, with its intent; other events do not take it', async () => {
+  const status = setup({ surface: 'panel' });
+  const opened: ItemTarget[] = [];
+  let feed: ((batch: ChangeBatch) => void) | null = null;
+  const stop = status.flows.watchOpenRequests((listener) => {
+    feed = listener;
+    return () => (feed = null);
+  }, (target) => opened.push(target));
+  await tick();
+  assert.deepEqual(opened, [], 'nothing waiting on mount');
+
+  // A Work Status row (another frame, same service) asks for a design with the comment intent.
+  assert.equal(await openInRail({ client: status.client, host: status.host }, COFFEE, 'comment'), 'opened');
+  const deletesBefore = routes(status).filter((route) => route === 'DELETE /open-request').length;
+  (feed as ((batch: ChangeBatch) => void) | null)?.(batchOf('files', 'thumb'));
+  await tick();
+  assert.equal(routes(status).filter((route) => route === 'DELETE /open-request').length, deletesBefore, 'a files event does not take the request');
+  (feed as ((batch: ChangeBatch) => void) | null)?.(batchOf('open'));
+  await until(() => opened.length === 1, 'rail opened on the open event');
+  assert.deepEqual(opened, [{ kind: 'open-design', slug: COFFEE, intent: 'comment' }]);
+  stop();
+});
+
+test('openInRail: request then openSurface on the rail panel → opened', async () => {
+  const s = setup({ surface: 'panel' });
+  assert.equal(await openInRail({ client: s.client, host: s.host }, COFFEE, 'view'), 'opened');
+  assert.deepEqual(routes(s), ['POST /open-request']);
+  assert.deepEqual(JSON.parse(s.service.requests[0]?.body ?? '{}'), { slug: COFFEE, intent: 'view' });
+  assert.deepEqual(s.host.callsOf('openSurface'), [['plugin:design-chamber']]);
+});
+
+test('openInRail: a design that is gone → gone, and the rail is not opened', async () => {
+  const s = setup({ surface: 'panel' });
+  assert.equal(await openInRail({ client: s.client, host: s.host }, 'no-such-design', 'view'), 'gone');
+  assert.deepEqual(s.host.callsOf('openSurface'), []);
+});
+
+test('openInRail: NO_DIRECTORY and UNSUPPORTED → not-here, and the request is cleared so it cannot pop up later', async () => {
+  for (const code of ['NO_DIRECTORY', 'UNSUPPORTED'] as const) {
+    const s = setup({ surface: 'panel' });
+    s.host.behavior.openSurface = async () => {
+      throw new HostRequestError(code, 'No side panel here.');
+    };
+    assert.equal(await openInRail({ client: s.client, host: s.host }, COFFEE, 'comment'), 'not-here', code);
+    assert.deepEqual(routes(s), ['POST /open-request', 'DELETE /open-request'], code);
+    assert.deepEqual(await s.client.call('DELETE /open-request'), { request: null }, `${code}: nothing left to take`);
+  }
+});
+
+test('openInRail: a failing clean-up DELETE still answers not-here; another host error is thrown after the clean-up', async () => {
+  const s = setup({ surface: 'panel' });
+  s.host.behavior.openSurface = async () => {
+    throw new HostRequestError('UNSUPPORTED', 'No side panel here.');
+  };
+  const handle = s.service.handle;
+  s.host.serviceRequest = async (request) =>
+    request.method === 'DELETE' && request.path === '/open-request' ? { status: 500, body: JSON.stringify({ error: 'internal', message: 'down' }) } : handle(request);
+  assert.equal(await openInRail({ client: createServiceClient(s.host), host: s.host }, COFFEE, 'view'), 'not-here');
+
+  const t = setup({ surface: 'panel' });
+  t.host.behavior.openSurface = async () => {
+    throw new HostRequestError('DISABLED', 'The extension is paused.');
+  };
+  await assert.rejects(openInRail({ client: t.client, host: t.host }, COFFEE, 'view'), (error: unknown) => error instanceof HostRequestError && error.code === 'DISABLED');
+  assert.deepEqual(routes(t), ['POST /open-request', 'DELETE /open-request']);
 });

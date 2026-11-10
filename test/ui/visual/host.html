@@ -3,7 +3,16 @@
      or -light theme tokens and answers toast / clipboard / storage / open-url, recording them. It also
      answers workspace reads and subscriptions (one project; sessions you set with __host.setActivity),
      prompt (`sent`; `__host.failNext = 'prompt'` fails the next one), compose and open-session, and
-     records those payloads. Storage starts with the first-run tip dismissed unless the URL has ?tip=1. -->
+     records those payloads. Storage starts with the first-run tip dismissed unless the URL has ?tip=1.
+     Surfaces (?surface=): panel, page, status (Work Status section, framed at the manifest's 120 px) and
+     block (a chat block, framed at its manifest height). A block frame gets its call from
+     ?block=<json> ({"name":"DesignCard","args":{"slug":"coffee-subscription"}}) or __host.setBlock(call);
+     `block-answer` is refused unless __host.blockClick is true (the host's click rule), once per block,
+     and recorded in __host.blockAnswers; `resize` is recorded in __host.heights and sizes the frame;
+     `open-surface` is recorded in __host.surfacesOpened and fails with __host.openSurfaceFails
+     ('NO_DIRECTORY' or 'UNSUPPORTED') when that is set. ?entry=probe loads the harness probe frame instead
+     of the surface's real entry. The page's query is passed on to the frame (it reads ?routes=).
+     ?storage=<json> seeds storage ({"place:panel":{"slug":"northwind-pricing"}}); __host.storageGet(key) reads it. -->
 <html>
   <head>
     <meta charset="utf-8" />
@@ -11,6 +20,8 @@
     <style>
       html, body { margin: 0; height: 100%; overflow: hidden; }
       iframe { border: 0; width: 100%; height: 100%; display: block; }
+      /* Status and block frames are as tall as they ask to be (resize), like the host's own frames. */
+      body[data-surface="status"] iframe, body[data-surface="block"] iframe { height: 120px; }
       #toasts { position: fixed; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px; z-index: 9; font: 12px system-ui, sans-serif; }
       .toast { padding: 8px 12px; border-radius: 8px; max-width: 360px; box-shadow: 0 6px 20px rgb(0 0 0 / .35); }
     </style>
@@ -21,6 +32,14 @@
     <script>
       const params = new URLSearchParams(location.search);
       const surface = params.get('surface') || 'panel';
+      document.body.dataset.surface = surface;
+      // Manifest heights (package.json) and the host's clamps (SDK: status 24..320, block 0..960).
+      const BLOCK_HEIGHTS = { DesignCard: 232, DirectionPick: 264 };
+      const readBlock = () => {
+        try { const call = JSON.parse(params.get('block') || 'null'); return call ? { name: call.name, args: call.args || {}, answered: call.answered ?? null } : null; } catch { return null; }
+      };
+      let block = surface === 'block' ? readBlock() : null;
+      const clampHeight = (height) => (surface === 'status' ? Math.min(320, Math.max(24, height)) : Math.min(960, Math.max(0, height)));
       let mode = params.get('theme') === 'light' ? 'light' : 'dark';
       const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif";
       const MONO = "'Cascadia Mono', Consolas, 'SF Mono', monospace";
@@ -32,6 +51,7 @@
       const store = new Map();
       // The rail's first-run tip is out of the way, so existing screenshots stay as they are; ?tip=1 shows it.
       if (params.get('tip') !== '1') store.set('tip:full-screen', { dismissed: true, at: '2026-11-01T09:00:00.000Z' });
+      try { for (const [key, value] of Object.entries(JSON.parse(params.get('storage') || '{}'))) store.set(key, value); } catch { /* a bad seed is the scenario's typo; storage stays as it was */ }
       const DIRECTORY = 'C:\\Users\\you\\Documents\\GitHub\\ember-oak';
       const PROJECT = { id: 'proj_ember', name: 'ember-oak', directory: DIRECTORY };
       // Linked sessions the build strip and the ask bar can see: none until a scenario sets one.
@@ -41,6 +61,14 @@
       window.__host = {
         toasts: [], clipboard: [], opened: [],
         prompts: [], composes: [], sessionsOpened: [],
+        heights: [], blockAnswers: [], surfacesOpened: [],
+        storageGet: (key) => (store.has(key) ? store.get(key) : undefined),
+        /** Set true right before the click a scenario simulates: `block-answer` is refused (DENIED) without it, as the host does. */
+        blockClick: false,
+        /** 'NO_DIRECTORY' or 'UNSUPPORTED': the next open-surface calls fail with it. */
+        openSurfaceFails: null,
+        /** Replace the block call of a block frame, as the host does when a block's arguments change. */
+        setBlock: (call) => { block = call ? { name: call.name, args: call.args || {}, answered: call.answered ?? null } : null; sendReady(); },
         /** Set to 'prompt' to make the next prompt call fail once. */
         failNext: null,
         promptGate: null,
@@ -71,9 +99,10 @@
         connection: { connected: false, account: '' },
         settings: {},
         item: null,
+        ...(block ? { block } : {}),
         features: { deviceStorage: true },
       });
-      function sendReady() { send({ type: 'ready', payload: ready() }); }
+      function sendReady() { document.body.style.background = THEMES[mode].background; send({ type: 'ready', payload: ready() }); }
       const snapshotFor = (query) => {
         if (query.kind === 'projects') return { kind: 'projects', state: 'ready', projects: [PROJECT] };
         if (query.kind === 'worktrees') return { kind: 'worktrees', projectId: query.projectId, state: 'ready', worktrees: [] };
@@ -90,7 +119,7 @@
         if (!m || m.channel !== 'openchamber.sdk') return;
         if (m.type === 'hello') { sendReady(); return; }
         const ok = (payload) => send({ type: 'result', id: m.id, ok: true, payload });
-        const fail = (error) => send({ type: 'result', id: m.id, ok: false, error });
+        const fail = (error, code = 'HOST_REJECTED') => send({ type: 'result', id: m.id, ok: false, error, code });
         if (m.type === 'toast') {
           window.__host.toasts.push(m.payload);
           const el = document.createElement('div');
@@ -102,6 +131,24 @@
           ok({});
         } else if (m.type === 'clipboard-write') { window.__host.clipboard.push(m.payload.text); ok({}); }
         else if (m.type === 'open-url') { window.__host.opened.push(m.payload.url); ok({}); }
+        else if (m.type === 'open-surface') {
+          window.__host.surfacesOpened.push(m.payload.surfaceId);
+          if (window.__host.openSurfaceFails) fail('That surface can’t be opened here.', window.__host.openSurfaceFails); else ok({});
+        } else if (m.type === 'resize') {
+          const height = clampHeight(m.payload.height);
+          window.__host.heights.push(height);
+          if (surface === 'status' || surface === 'block') g.style.height = `${height}px`;
+          ok({});
+        } else if (m.type === 'block-answer') {
+          if (!window.__host.blockClick) fail('A block answers only from a click.', 'DENIED');
+          else if (block && block.answered !== null) fail('This block already has its answer.', 'HOST_REJECTED');
+          else {
+            window.__host.blockClick = false;
+            window.__host.blockAnswers.push(m.payload.text);
+            if (block) block = { ...block, answered: m.payload.text };
+            ok({});
+          }
+        }
         else if (m.type === 'storage') {
           const p = m.payload;
           if (p.op === 'get') ok(store.has(p.key) ? { storage: true, op: 'get', found: true, value: store.get(p.key) } : { storage: true, op: 'get', found: false });
@@ -124,7 +171,10 @@
         else if (m.type === 'open-session') { window.__host.sessionsOpened.push(m.payload.sessionId); ok({}); }
         else if (m.id) ok({});
       });
-      g.src = '/panel/index.html';
+      if (surface === 'status') g.style.height = '120px';
+      if (surface === 'block') g.style.height = `${BLOCK_HEIGHTS[(block && block.name) || ''] || 232}px`;
+      const ENTRIES = { panel: '/panel/index.html', page: '/panel/index.html', status: '/status/index.html', block: '/blocks/index.html' };
+      g.src = (params.get('entry') === 'probe' ? '/probe/index.html' : ENTRIES[surface] || '/panel/index.html') + location.search;
     </script>
   </body>
 </html>

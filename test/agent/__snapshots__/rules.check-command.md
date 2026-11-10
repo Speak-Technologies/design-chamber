@@ -138,8 +138,8 @@ Design Chamber shows your files offline, inside a sandboxed frame. So:
 
 ## Check your work
 
-Run this after each change, before you say you are done:
+Check the design with the design_check tool after each change, before you say you are done. If you don't have that tool, run:
 
     sh '/home/you/Documents/Designs/.chamber/bin/dc' check pricing-page
 
-It renders every screen at every viewport in design.json, saves PNGs under .chamber/check/ and lists what it found: files that don't load, content wider than the viewport, cut-off or overlapping text, low contrast, images without alt text, fields without labels, script errors. Fix every error, open the PNGs to see the result, and run it again. Exit code 0 means no errors. If it says no browser was found, it still checks the files; say in your reply that the design was not rendered.
+The check renders every screen at every viewport in design.json, saves PNGs in the design's .chamber/check/ folder and lists what it found: files that don't load, content wider than the viewport, cut-off or overlapping text, low contrast, images without alt text, fields without labels, script errors. Fix every error, open the PNGs to see the result, and check again. The command exits with 0 when there are no errors. If the check says no browser was found, it still checks the files; say in your reply that the design was not rendered.

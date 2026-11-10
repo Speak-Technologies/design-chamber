@@ -1,0 +1,96 @@
+# Release: runs only when the owner pushes a tag `v<version>` (for example v0.2.0).
+#
+# It builds the install tree and commits it on top of the `release` branch, tags that commit
+# `release-v<version>`, and attaches the zip to a GitHub Release. People install from the branch
+# or the tag (Settings → Extensions → Add from Git, `<repo URL>#release` or `#release-v<version>`)
+# because OpenChamber never builds: the files it loads must be committed. `master` never holds
+# `dist/`. The `release-v*` tag does not start this workflow again: it does not match `v*`.
+#
+# `release` must not be covered by the `master` branch protection rule, or the push is refused.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - name: Tag must match the version in package.json
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "v$version" ]; then
+            echo "The tag is $TAG but package.json says version $version. Tag it v$version, or change the version first." >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm run check
+      - run: npm run guest-check
+      - name: Zip
+        run: npm run pack
+      - name: Assemble the install tree
+        run: |
+          tree="$RUNNER_TEMP/release-tree"
+          mkdir -p "$tree"
+          # Same list as INCLUDE in scripts/pack.mjs (test/package-tree.test.ts keeps them equal).
+          for item in package.json dist rules LICENSE README.md; do
+            cp -R "$item" "$tree/"
+          done
+          ls -A "$tree"
+      - name: Publish the release branch and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # A re-run after a partial success: the branch and tag are already out, so go on to the GitHub Release.
+          if [ -n "$(git ls-remote --tags origin "refs/tags/release-v$VERSION")" ]; then
+            echo "release-v$VERSION is already published; skipping the branch and tag."
+            exit 0
+          fi
+          source_sha=$(git rev-parse HEAD)
+          worktree="$RUNNER_TEMP/release-worktree"
+          if git fetch --no-tags origin release:refs/remotes/origin/release; then
+            git worktree add -B release "$worktree" origin/release
+          else
+            # First release: start the branch with no history from master.
+            git worktree add --detach "$worktree"
+            git -C "$worktree" checkout --orphan release
+          fi
+          git -C "$worktree" rm -rf --quiet --ignore-unmatch .
+          cp -R "$RUNNER_TEMP/release-tree/." "$worktree/"
+          git -C "$worktree" add -A
+          git -C "$worktree" commit --allow-empty -m "Release v$VERSION (from $source_sha)"
+          git -C "$worktree" tag "release-v$VERSION"
+          git -C "$worktree" push origin "HEAD:refs/heads/release" "refs/tags/release-v$VERSION"
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "The GitHub Release $TAG already exists."
+            exit 0
+          fi
+          gh release create "$TAG" "design-chamber-$VERSION.zip" \
+            --title "Design Chamber $VERSION" \
+            --generate-notes \
+            --notes "Install: Settings → Extensions → Add from Git, then paste https://github.com/${GITHUB_REPOSITORY}#release (or #release-v$VERSION to stay on this version). Needs OpenChamber 2.7.0 or later."

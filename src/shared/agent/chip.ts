@@ -122,12 +122,41 @@ export const buildChipText = (context: AgentContext, mode: ChipMode): string => 
   return lines.join('\n');
 };
 
-/** The attach chip for a design: `id = design:<slug>`, `url` = the folder's file URL (`''` when over the host cap). */
-export const buildChip = (context: AgentContext, input: { slug: string; mode: ChipMode; folderUrl: string }): DesignChip => ({
-  providerId: CHIP_PROVIDER_ID,
-  id: `design:${input.slug}`,
-  title: clip(oneLine(context.title), HOST_ATTACH_TITLE_MAX),
-  url: input.folderUrl.length <= HOST_ATTACH_URL_MAX ? input.folderUrl : '',
-  text: buildChipText(context, input.mode),
-  data: { slug: input.slug, kind: context.kind },
-});
+// The chip marker: which design a chip was made for, not just which slug. A slug is free again once
+// its design is deleted, while a chip stays on its chat for good, so the service links a design only
+// to a chat whose chip carries that design's own created time (src/service/session-links.ts). It
+// rides in the URL fragment because the URL is the only field of ours OpenChamber passes to the
+// service with a chat's linked items; a fragment is not part of the folder path the URL names.
+const CHIP_MARKER_KEY = 'dc-created';
+const CHIP_MARKER_PATTERN = /#dc-created=([0-9a-z]{1,12})$/;
+
+/** A design's marker: its created time in milliseconds, base 36. `null` for a time that does not parse. */
+export const chipMarkerOf = (created: string): string | null => {
+  const at = Date.parse(created);
+  return Number.isFinite(at) && at >= 0 ? at.toString(36) : null;
+};
+
+/** The folder URL with the design's marker; unmarked when `created` does not parse. */
+export const markChipUrl = (folderUrl: string, created: string): string => {
+  const marker = chipMarkerOf(created);
+  return marker === null ? folderUrl : `${folderUrl}#${CHIP_MARKER_KEY}=${marker}`;
+};
+
+/** The marker in a chip URL, or `null` (a chip from a build before markers, or no URL). */
+export const chipMarkerInUrl = (url: string): string | null => CHIP_MARKER_PATTERN.exec(url)?.[1] ?? null;
+
+/**
+ * The attach chip for a design: `id = design:<slug>`; `url` = the folder's file URL with the design's
+ * marker, unmarked when the marked one is over the host cap, `''` when even the folder URL is.
+ */
+export const buildChip = (context: AgentContext, input: { slug: string; mode: ChipMode; folderUrl: string; created: string }): DesignChip => {
+  const marked = markChipUrl(input.folderUrl, input.created);
+  return {
+    providerId: CHIP_PROVIDER_ID,
+    id: `design:${input.slug}`,
+    title: clip(oneLine(context.title), HOST_ATTACH_TITLE_MAX),
+    url: marked.length <= HOST_ATTACH_URL_MAX ? marked : input.folderUrl.length <= HOST_ATTACH_URL_MAX ? input.folderUrl : '',
+    text: buildChipText(context, input.mode),
+    data: { slug: input.slug, kind: context.kind },
+  };
+};

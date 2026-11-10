@@ -55,7 +55,7 @@ describe('POST /chip', () => {
     assert.equal(chip.providerId, 'design-chamber');
     assert.equal(chip.id, `design:${slug}`);
     assert.deepEqual(chip.data, { slug, kind: 'canvas' });
-    assert.equal(chip.url, pathToFileURL(folder).href);
+    assert.ok(chip.url.startsWith(`${pathToFileURL(folder).href}#dc-created=`), chip.url);
     assert.equal(chip.title, 'A pricing page for a coffee subscription');
     assert.ok(chip.text.length <= CHIP_TEXT_HARD_MAX);
     assert.ok(chip.text.includes(`Write ONLY inside this folder: ${folder}`));
@@ -611,7 +611,7 @@ describe('RULES.md writer and the onCreate hook', () => {
     const router = createRouter({ token: TOKEN, log: ctx.log });
     assert.doesNotThrow(() => registerChatRoutes(router, ctx));
     assert.ok(ctx.logs.some((line) => line.level === 'warn' && line.event === 'agent.rules-hook-unavailable'));
-    assert.deepEqual(router.registered().sort(), ['DELETE /open-request', 'POST /chip', 'POST /designs/:slug/prompt', 'POST /pages/from-message']);
+    assert.deepEqual(router.registered().sort(), ['DELETE /open-request', 'POST /chip', 'POST /designs/:slug/prompt', 'POST /open-request', 'POST /pages/from-message']);
   });
 });
 

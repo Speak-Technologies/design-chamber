@@ -153,4 +153,6 @@ Design Chamber shows your files offline, inside a sandboxed frame. So:
 
 ## Check your work
 
-Design Chamber's check tool is not set up on this computer. Before you say you are done, read your HTML once more for overflow, contrast, alt text and labels.
+Check the design with the design_check tool after each change, before you say you are done. If you don't have that tool, look for the check command in the Designs folder's AGENTS.md and run it with the design's folder name. If there is none, read your HTML once more for overflow, contrast, alt text and labels.
+
+The check renders every screen at every viewport in design.json, saves PNGs in the design's .chamber/check/ folder and lists what it found: files that don't load, content wider than the viewport, cut-off or overlapping text, low contrast, images without alt text, fields without labels, script errors. Fix every error, open the PNGs to see the result, and check again. If the check says no browser was found, it still checks the files; say in your reply that the design was not rendered.

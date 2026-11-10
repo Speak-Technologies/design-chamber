@@ -2,7 +2,8 @@
 // `ApiRoutes`, so the real UI and guest core can be screenshot-tested without OpenChamber.
 // `fake-transport.ts` puts it behind the host's `serviceRequest`. Sample designs, comments, versions and thumbnails; every mutation emits a change event.
 
-import type { ApiRoutes, RouteBody, RouteKey, RouteResponse, SettingsResponse } from '../../../src/shared/api.ts';
+import type { ApiRoutes, OpenRequest, RouteBody, RouteKey, RouteResponse, SettingsResponse, StatusDesignRow } from '../../../src/shared/api.ts';
+import { STATUS_ROWS_MAX } from '../../../src/shared/limits.ts';
 import type {
   ChangeEvent,
   Comment,
@@ -320,6 +321,7 @@ export const createFakeBackend = (): FakeBackend => {
     screenCount: rec.design.screens.length,
     viewports: rec.design.viewports,
     sessionId: rec.design.sessionId,
+    projectDirectory: rec.design.projectDirectory,
     openComments: rec.design.comments.filter((c) => c.status === 'open').length,
     thumb: { state: rec.thumb, key: rec.thumb === 'ready' ? `${slug}:${rec.rev}` : null },
     warnings: [],
@@ -365,6 +367,7 @@ export const createFakeBackend = (): FakeBackend => {
   type Handlers = { [K in RouteKey]?: (req: Req<K>) => RouteResponse<K> | Promise<RouteResponse<K>> };
 
   let outbox: Outbox | null = null;
+  let openRequest: OpenRequest | null = null;
   const handlers: Handlers = {
     'GET /health': () => ({ ok: true, version: '0.1.0', epoch: 'dev' }),
     'GET /settings': () => ({
@@ -409,9 +412,59 @@ export const createFakeBackend = (): FakeBackend => {
       emit(null, 'loose');
       return { slug, title, originalMovedTo: `${root}\\.trash\\${slug}-20261101090000.html` };
     },
-    'POST /agent/skill': () => {
-      skillState = 'current';
+    // An older copy installed from Settings: only an unedited copy of ours is removed.
+    'DELETE /agent/skill': () => {
+      skillState = 'not-installed';
       return { skill: { path: 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md', state: skillState, duplicates: [] } };
+    },
+    // A Work Status row or a chat block asks the rail to open a design; the rail takes it once.
+    'POST /open-request': ({ body }) => {
+      get(body.slug);
+      openRequest = { slug: body.slug, intent: body.intent ?? 'view', created: new Date().toISOString() };
+      emit(body.slug, 'open');
+      return { ok: true };
+    },
+    'DELETE /open-request': () => {
+      const taken = openRequest;
+      openRequest = null;
+      return { request: taken };
+    },
+    'POST /session-events': () => ({ ok: true }),
+    'POST /mentions/search': ({ body }) => {
+      const wanted = body.query.trim().toLowerCase();
+      const items = [...db.entries()]
+        .filter(([slug, rec]) => wanted === '' || slug.includes(wanted) || rec.design.title.toLowerCase().includes(wanted))
+        .sort(([, a], [, b]) => b.design.updated.localeCompare(a.design.updated))
+        .slice(0, 20)
+        .map(([slug, rec]) => {
+          const open = rec.design.comments.filter((c) => c.status === 'open').length;
+          const kind = rec.design.kind === 'canvas' ? `Canvas · ${rec.design.screens.length} screen${rec.design.screens.length === 1 ? '' : 's'}` : 'Page';
+          return { id: slug, title: rec.design.title, subtitle: open > 0 ? `${kind} · ${open} open comment${open === 1 ? '' : 's'}` : kind };
+        });
+      return { items };
+    },
+    'POST /mentions/resolve': ({ body }) => {
+      const rec = get(body.id);
+      return { text: `Design "${rec.design.title}" (${rec.design.kind}) from Design Chamber. Its folder: ${root}\\${body.id}` };
+    },
+    // Work Status: this chat's designs first, then the newest; checks as the badge would read them.
+    'GET /status/designs': ({ query }) => {
+      const session = query.session ?? '';
+      const matched = (rootVisible() ? [...db.entries()] : [])
+        .filter(([, rec]) => !query.directory || rec.design.projectDirectory === null || rec.design.projectDirectory.toLowerCase() === query.directory.toLowerCase())
+        .sort(([, a], [, b]) => Number(session !== '' && b.design.sessionId === session) - Number(session !== '' && a.design.sessionId === session) || b.design.updated.localeCompare(a.design.updated));
+      const rows: StatusDesignRow[] = matched.slice(0, STATUS_ROWS_MAX).map(([slug, rec]) => ({
+        slug,
+        title: rec.design.title,
+        kind: rec.design.kind,
+        here: session !== '' && rec.design.sessionId === session,
+        agent: null,
+        lastFile: null,
+        checks: checks.summary(slug),
+        pending: isPending(rec),
+        openComments: rec.design.comments.filter((c) => c.status === 'open').length,
+      }));
+      return { rows, total: matched.length };
     },
     'POST /designs': ({ body }) => {
       const slug = `${body.title ?? 'new-design'}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'design';

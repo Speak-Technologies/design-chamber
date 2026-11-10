@@ -1,0 +1,220 @@
+/*
+ * Work Status frame (docs/SPEC.md §13.4). Native fidelity: colours, the type face and the radius come from
+ * the host theme (`--oc-*`, written by applyHostReady on each `ready`) and the SDK kit's own classes
+ * (`.oc-sdk-btn`, `.oc-sdk-spinner`). No palette or face of our own. The section sits on the Work Status
+ * panel colour, so the background is `--oc-bg`.
+ *
+ * Type is in rem against the host root (0.875rem = the kit's body size). Spacing steps are 4, 8 and 12 px.
+ */
+
+.ws-frame {
+  --ws-s1: 4px;
+  --ws-s2: 8px;
+  --ws-s3: 12px;
+  --ws-ring: 0 0 0 2px color-mix(in srgb, var(--oc-primary) 55%, transparent);
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--oc-bg);
+  color: var(--oc-fg);
+  font-family: var(--oc-font);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.ws-frame {
+  /* Rows go narrow in a narrow Work Status: they lay themselves out against the frame, not the window. */
+  container-type: inline-size;
+  padding: var(--ws-s1) var(--ws-s2) var(--ws-s2);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.ws-frame :where(p, ul) {
+  margin: 0;
+  padding: 0;
+}
+
+/* ------------------------------------------------------------------ rows */
+
+.ws-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+}
+
+.ws-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  column-gap: var(--ws-s2);
+  align-items: start;
+  padding: var(--ws-s1) var(--ws-s2);
+  border-radius: calc(var(--oc-radius, 9px) - 2px);
+}
+
+.ws-row:hover {
+  background: var(--oc-hover);
+}
+
+.ws-dot {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--oc-muted);
+  opacity: 0.55;
+}
+
+.ws-row[data-tone='info'] .ws-dot {
+  background: var(--oc-info);
+  opacity: 1;
+}
+.ws-row[data-tone='success'] .ws-dot {
+  background: var(--oc-success);
+  opacity: 1;
+}
+.ws-row[data-tone='warning'] .ws-dot {
+  background: var(--oc-warning);
+  opacity: 1;
+}
+.ws-row[data-tone='error'] .ws-dot {
+  background: var(--oc-error);
+  opacity: 1;
+}
+
+/* The agent is working on this one: the dot breathes, so a glance tells live from settled. */
+.ws-row[data-tone='info'] .ws-dot {
+  animation: ws-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes ws-breathe {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.ws-title {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.ws-meta {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.ws-actions {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  align-self: center;
+  display: flex;
+  gap: var(--ws-s1);
+}
+
+/* In a narrow Work Status the line under the title takes the full width and the buttons stay on the title's row. */
+@container (max-width: 340px) {
+  .ws-row {
+    grid-template-columns: 8px minmax(0, 1fr) auto;
+  }
+  .ws-actions {
+    grid-row: 1;
+  }
+  .ws-meta {
+    grid-column: 2 / -1;
+  }
+}
+
+/* Read by a screen reader only: why a button is off. */
+.ws-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ states */
+
+.ws-loading,
+.ws-notice,
+.ws-empty {
+  padding: var(--ws-s2);
+}
+
+.ws-loading {
+  display: flex;
+}
+
+.ws-empty,
+.ws-notice-text {
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.ws-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ws-s1) var(--ws-s2);
+}
+
+.ws-notice[data-kind='error'] .ws-notice-text,
+.ws-notice[data-kind='unresponsive'] .ws-notice-text {
+  color: var(--oc-error-text);
+}
+
+.ws-more {
+  padding: var(--ws-s1) 0 0;
+}
+
+/* ------------------------------------------------------------------ buttons and focus */
+
+.ws-frame button {
+  font: inherit;
+  color: inherit;
+}
+
+.ws-frame .dc-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws-frame .oc-sdk-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ws-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-row[data-tone='info'] .ws-dot {
+    animation: none;
+  }
+}
