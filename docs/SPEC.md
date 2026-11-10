@@ -269,7 +269,7 @@ Node ≥ 22.18 type stripping (`.ts` imports, erasable syntax only).
 ```json
 {
   "name": "design-chamber",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Design Chamber: design canvases and pages written by your chat agent, rendered inside OpenChamber.",
   "license": "MIT",
   "private": true,
@@ -362,8 +362,7 @@ top of branch `release`, tags it `release-vX.Y.Z`, and attaches the `npm run pac
 Release. Install URLs: `https://github.com/Speak-Technologies/design-chamber#release` (latest) and
 `…#release-vX.Y.Z` (pinned); the README link is
 `openchamber://extensions/install?url=<encodeURIComponent of the latest URL>`. `release` is outside the
-`master` protection rule. Version `0.2.0` at release (the main agent bumps `package.json`; the branch
-still says `0.1.0` until then).
+`master` protection rule. Version `0.2.0` (set in `package.json` on `feat/phase-1-5`); the owner's `v0.2.0` tag runs the release.
 
 ---
 
@@ -1943,8 +1942,9 @@ Sections above were corrected inline: §1, §2 (F34 answered, F36, F37 new), §3
 - **Keep your place** (owner request during PR 1, §10.12): built in PR 1.
 - **Linking from session events.** Linking is no longer guest reconciliation only: the service links a
   `/design` or `/page` stub to the chat that carries its chip, from session events, with or without a
-  project and with no window open (§10.5). A per-design marker in the chip that gates it is being added
-  on `feat/sdk-2-7`.
+  project and with no window open (§10.5). The chip url carries a per-design marker (`#dc-created=`, the
+  design's created time) and `store.linkIfUnlinked` links only a design with no chat whose marker matches,
+  under the design's lock; a chip without a marker links nothing.
 - **`openInRail`.** Takes the request back on any `openSurface` failure, not only `NO_DIRECTORY` /
   `UNSUPPORTED` (§10.11).
 - **Reach (F34).** The note, the skill, the blocks and `design_check` reach Claude Code harness sessions
@@ -2069,7 +2069,7 @@ Uninstall afterwards only if this run installed it.
 | Phase 1.5: the plugin API differs on another OpenCode build | same shape as OpenChamber's own managed plugin and the SDK example; proven live before merge (P15 §12.3 step 3) |
 | Phase 1.5: macOS or Windows install layout differs from Linux | `installRootOf` unit-tested for the expected layouts; checked on real machines before release; a mismatch fails safe (launcher sentence) |
 | Phase 1.5: instructions, skill or tool missing in Claude Code harness sessions (F34) | resolved: all of them arrive there (seen live); recorded in `documentation/features/agent-discovery.md` |
-| Phase 1.5: a chip from a deleted design links a new design that reuses its slug | the per-design chip marker (being added on `feat/sdk-2-7`, §10.5); until then a design is still linked only to a chat that carries a chip with its slug |
+| Phase 1.5: a chip from a deleted design links a new design that reuses its slug | the per-design chip marker (§10.5): the service links only when the marker matches; the rail's reconciliation still matches by slug (KI-13) |
 | Phase 1.5: a design linked at the very end of a turn misses that turn's event snapshot (KI-12) | the quiet-period auto version holds the files; an open frame's own turn snapshot still runs |
 | Phase 1.5: the service runs most of the day (session events start it) | idle cost checked in the click-through (P15 §12.3 step 4.4) |
 | Phase 1.5: a large seams PR touching WP0 files | no behaviour change beyond open requests and the removed install; every stub tested; QA at Opus medium |

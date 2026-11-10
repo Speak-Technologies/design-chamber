@@ -79,4 +79,5 @@ On a click: `POST /open-request` then the rail opens (and `DELETE /open-request`
 
 `test/ui/block-args.test.ts`, `test/ui/blocks-model.test.ts`, and the visual scenario
 `test/ui/visual/scenarios/chat-blocks.mjs` (every state above at 360 and 640 px, light and dark,
-plus a theme switch). Not yet checked in a live OpenChamber chat: §12.3 steps 7 and 8 of the spec.
+plus a theme switch). Checked live in OpenChamber 2.7.0 on 2026-11-10: both cards draw from `root = Stack([...])`, Open and
+Comment open the rail, a tile pick answers the agent, and a note alone answers and survives a reload.

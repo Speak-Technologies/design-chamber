@@ -14,24 +14,31 @@ import type { SessionEventsResponse } from '../../shared/api.ts';
 import { SESSION_ID_MAX } from '../../shared/limits.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
-import { createSessionLinks } from '../session-links.ts';
+import { createSessionLinks, type SessionLinks } from '../session-links.ts';
 import { isTurnEventType, type TurnEvents } from '../turn-events.ts';
 
 /** Printable, no control characters, 1 to `SESSION_ID_MAX` characters. */
 const isSessionId = (value: string): boolean => value.length >= 1 && value.length <= SESSION_ID_MAX && !/[\u0000-\u001f\u007f]/.test(value);
 
-/**
- * Registers:
- * - 'POST /session-events'
- */
-export function registerSessionEventsRoutes(router: Router, ctx: ServiceContext, turnEvents: TurnEvents): void {
-  // A chat that carries a design's chip gets the design linked, project or not (session-links.ts).
+/** The context's linker, stopped with the service (shutdown waits for a link write in flight). */
+export const sessionLinksOf = (ctx: ServiceContext): SessionLinks => {
   const links = createSessionLinks({ store: ctx.store, index: ctx.designIndex, log: ctx.log });
   ctx.onDispose(async () => {
     links.dispose();
-    await links.idle(); // a link write in flight finishes before shutdown goes on
+    await links.idle();
   });
+  return links;
+};
 
+/**
+ * Registers:
+ * - 'POST /session-events'
+ *
+ * `links` defaults to the context's linker (a chat that carries a design's chip gets the design
+ * linked, project or not, session-links.ts); only that default reads `ctx`, so a test can pass its
+ * own linker with an empty context.
+ */
+export function registerSessionEventsRoutes(router: Router, ctx: ServiceContext, turnEvents: TurnEvents, links: Pick<SessionLinks, 'take'> = sessionLinksOf(ctx)): void {
   router.on('POST /session-events', ({ body }): SessionEventsResponse => {
     // The router already parsed the JSON; the SDK reader takes the text.
     const request = body === undefined ? null : readSessionEventRequest(JSON.stringify(body));
@@ -39,6 +46,7 @@ export function registerSessionEventsRoutes(router: Router, ctx: ServiceContext,
     const { event } = request;
     if (!isTurnEventType(event.type) || !isSessionId(event.session.id)) return { ok: true };
     // Linking first: on `turn-started` it lands before the turn ends, so that turn's snapshot finds it.
+    // `take` never throws (it checks every item and logs its own failures), so the turn always reaches its queue.
     links.take(event);
     turnEvents.take({ ...event, type: event.type });
     return { ok: true };

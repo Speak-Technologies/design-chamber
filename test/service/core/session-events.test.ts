@@ -44,8 +44,8 @@ const indexOf = (ready: (timeoutMs: number) => Promise<boolean>, links: Record<s
 /** Serve only this route over loopback, as the host proxy calls it. */
 const serve = async (t: TestContext, turnEvents: TurnEvents) => {
   const router = createRouter({ token: TOKEN, log: silent });
-  // The route reads nothing from the context; the queue it hands events to is what the test watches.
-  registerSessionEventsRoutes(router, {} as ServiceContext, turnEvents);
+  // An injected no-op linker keeps the route off the context; the turn queue is what the test watches.
+  registerSessionEventsRoutes(router, {} as ServiceContext, turnEvents, { take: () => undefined });
   const server = createServiceServer(router);
   await listenLoopback(server, 0);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));

@@ -36,8 +36,8 @@ Where the code departs from the plan below, checked against `feat/phase-1-5`:
   or `/page` stub to that chat while the design has no chat yet, never moving it from one chat to
   another. This is what links designs started in a chat with no project, which no guest's
   `onSessions(projectId)` lists, and it works with no Design Chamber window open. A per-design marker in
-  the chip that gates the link is being added on `feat/sdk-2-7`, so a chip from a deleted design cannot
-  claim a new design with the same folder name. Still never linked by timing (§8, Q4).
+  the chip url (`#dc-created=`) gates the link, checked under the design's lock, so a chip from a deleted
+  design cannot claim a new design with the same folder name (the rail's own reconciliation still can: KI-13). Still never linked by timing (§8, Q4).
 - **`openInRail`** takes the open request back on any `openSurface` failure, then answers `not-here` for
   `NO_DIRECTORY` / `UNSUPPORTED` and rethrows the rest (§3.2).
 - **Claude Code harness (§12.3 step 3.6, the §2 NOT FOUND row).** Sessions run through the Claude Code

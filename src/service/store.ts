@@ -62,7 +62,8 @@ import type {
   ServiceState,
   ThumbState,
 } from '../shared/types.ts';
-import type { ChangeHub, DesignRecord, DesignStore, Logger, SettingsStore, ThumbnailService } from './context.ts';
+import { chipMarkerOf } from '../shared/agent/chip.ts';
+import type { ChangeHub, DesignRecord, DesignStore, LinkIfUnlinkedOutcome, Logger, SettingsStore, ThumbnailService } from './context.ts';
 import { ApiError } from './http.ts';
 import { assertSlug, isSlug, replaceFileIfUnchanged, resolveInside, slugify, uniqueSlug, writeFileAtomic } from './paths.ts';
 import { folderErrorSentence, isDesignFolder, isDirectory } from './root.ts';
@@ -498,6 +499,21 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
       });
       hub?.emit({ slug, kind: 'design' });
       return read.record;
+    },
+
+    async linkIfUnlinked(slug, sessionId, marker) {
+      const nowIso = now().toISOString();
+      const outcome = await withLock(slug, async (): Promise<LinkIfUnlinkedOutcome> => {
+        const current = await readSettled(slug);
+        const { state } = current.record;
+        if (state.sessionId !== null) return 'has-chat';
+        if (chipMarkerOf(state.created) !== marker) return 'other-design';
+        // As a PATCH of `sessionId` does, a link claims a provisional folder (P4).
+        await writeStateAndMirror(slug, current, { ...finalOf(state), sessionId }, { updated: nowIso });
+        return 'linked';
+      });
+      if (outcome === 'linked') hub?.emit({ slug, kind: 'design' });
+      return outcome;
     },
 
     async trash(slug) {

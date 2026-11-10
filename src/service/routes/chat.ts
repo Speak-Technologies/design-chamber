@@ -385,7 +385,7 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
     // The chip makes RULES.md mandatory reading, so a failure to write it is a failure of the chip.
     const { context, text } = await instructions.prepare(record);
     await writeRulesFile(record.path, text);
-    return { slug: record.slug, chip: buildChip(context, { slug: record.slug, mode: 'new', folderUrl: pathToFileURL(record.path).href }) };
+    return { slug: record.slug, chip: buildChip(context, { slug: record.slug, mode: 'new', folderUrl: pathToFileURL(record.path).href, created: record.state.created }) };
   });
 
   router.on('POST /designs/:slug/prompt', async ({ params, body }): Promise<PromptResponse> => {
@@ -398,7 +398,7 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
       // A refresh that fails (a file lock) leaves the earlier RULES.md in place; the message can still go out.
       ctx.log.warn('agent.rules-refresh-failed', { slug: record.slug, error: error instanceof Error ? error.message : String(error) });
     }
-    const chip = buildChip(context, { slug: record.slug, mode: 'continue', folderUrl: pathToFileURL(record.path).href });
+    const chip = buildChip(context, { slug: record.slug, mode: 'continue', folderUrl: pathToFileURL(record.path).href, created: record.state.created });
     const { design } = record;
 
     if (input.purpose === 'continue') {

@@ -88,6 +88,9 @@ export type DesignFilter = { q?: string; kind?: DesignKind };
 /** `POST /designs` input after validation; `html` already joined from an upload when one was used. */
 export type CreateDesignInput = Omit<CreateDesignBody, 'uploadId'>;
 
+/** `linked`: done · `has-chat`: it already had a chat (never moved) · `other-design`: the chip was made for an earlier design with this slug. */
+export type LinkIfUnlinkedOutcome = 'linked' | 'has-chat' | 'other-design';
+
 export type DesignStore = {
   /** Absolute folder of an existing design. Throws `bad-slug` (pattern or containment) or `not-found`. */
   dir(slug: string): Promise<string>;
@@ -96,6 +99,12 @@ export type DesignStore = {
   /** Unique slug from the title, folder, state.json, design.json, optional index.html; then runs `onCreate` hooks. */
   create(input: CreateDesignInput): Promise<DesignRecord>;
   patch(slug: string, patch: PatchDesignBody): Promise<DesignRecord>;
+  /**
+   * Link a design to a chat that carries its chip, under the design's lock: only when it has no chat
+   * yet and its created time gives `marker` (`chipMarkerOf`), so a chip of an earlier design with the
+   * same slug never claims it. Throws `bad-slug` or `not-found` like `get`.
+   */
+  linkIfUnlinked(slug: string, sessionId: string, marker: string): Promise<LinkIfUnlinkedOutcome>;
   /** Moves the folder to `.trash/`; answers the new absolute path. */
   trash(slug: string): Promise<string>;
   addComment(slug: string, input: CreateCommentBody): Promise<Comment>;

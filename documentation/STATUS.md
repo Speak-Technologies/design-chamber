@@ -7,7 +7,7 @@
   gates linking from session events, so a chip from a deleted design cannot claim a new design with the
   same folder name (`documentation/specs/phase-1-5-sdk-2-7.md`, "As built").
 - `npm run check` on `feat/phase-1-5`: see "Verification done".
-- Version is still `0.1.0` in `package.json`; it becomes `0.2.0` before the owner tags the release.
+- Version is `0.2.0` in `package.json`; the owner's `v0.2.0` tag runs the release workflow.
 - Needs OpenChamber 2.7.0 or later.
 
 ## What's built
