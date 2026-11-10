@@ -8,10 +8,10 @@
 import { basename } from 'node:path/posix';
 
 import type { ChecksResponse, StatusAgentState, StatusDesignRow, StatusDesignsQuery, StatusDesignsResponse } from '../shared/api.ts';
+import { RESTORE_QUIET_MS, agentFiles } from '../shared/build-activity.ts';
 import { STATUS_CHECK_READ_MS, STATUS_INDEX_WAIT_MS, STATUS_RECENT_MS, STATUS_ROWS_MAX, WRITING_WINDOW_MS } from '../shared/limits.ts';
 import { sameDirectory } from '../shared/path-compare.ts';
 import type { DesignSummary } from '../shared/types.ts';
-import { RESTORE_QUIET_MS, agentFiles } from '../guest/build-activity.ts';
 import type { ServiceContext } from './context.ts';
 
 // ---- Picking (pure) ----
