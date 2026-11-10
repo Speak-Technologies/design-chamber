@@ -156,6 +156,7 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
     if (skillBusy) return;
     skillBusy = true;
     skillError = null;
+    live.textContent = ''; // so a second removal later is announced again, not seen as the same text
     paint();
     try {
       await client.call('DELETE /agent/skill');
