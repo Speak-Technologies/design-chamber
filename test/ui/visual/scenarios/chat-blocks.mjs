@@ -77,8 +77,14 @@ const designCard = async ({ openPage, check }, width, theme) => {
   // Where the rail cannot open (no project, or a host without it): a sentence, and the card stays.
   await p.host('window.__host.openSurfaceFails = "NO_DIRECTORY"');
   await p.click('.dcb-actions button', { text: 'Open' });
-  await p.settle(200);
-  check((await p.host('JSON.stringify(window.__host.toasts.map((t) => t.message))')).includes('Open Design Chamber from the rail to see it.'), `${base}: the rail not here says so`);
+  // The toast lands after the open-request take-back, so wait for it rather than a fixed settle (was flaky).
+  let toastSeen = false;
+  for (let i = 0; i < 30 && !toastSeen; i += 1) {
+    toastSeen = (await p.host('JSON.stringify(window.__host.toasts.map((t) => t.message))')).includes('Open Design Chamber from the rail to see it.');
+    if (!toastSeen) await p.settle(100);
+  }
+  check(toastSeen, `${base}: the rail not here says so`);
+  await p.waitFor('return !!doc.querySelector(".dcb-card[data-state=ready]") && !doc.querySelector(".dcb-actions button[aria-busy=true]")', 'the card ready again', 3000).catch(() => undefined);
   check(await p.guest('return !!doc.querySelector(".dcb-card[data-state=ready]") && !doc.querySelector(".dcb-actions button[aria-busy=true]")'), `${base}: the card stays, buttons ready again`);
   await p.shot(`${base}-3-not-here`);
   await p.close();
