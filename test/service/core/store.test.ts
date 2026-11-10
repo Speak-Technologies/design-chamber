@@ -413,7 +413,7 @@ describe('two-writer merge (§6.3)', () => {
     assert.equal(await stat(dir).then(() => true, () => false), false, 'the folder came back');
   });
 
-  test('a mutation on a design that was deleted meanwhile is a 404 and writes nothing', async (t) => {
+  test('a mutation on a design deleted before the call is a 404 and writes nothing (the read-then-delete race is in store-vanish.test.ts)', async (t) => {
     const env = await makeEnv(t);
     const created = await env.store.create({ kind: 'canvas', title: 'Doomed' });
     await rm(created.path, { recursive: true, force: true });
