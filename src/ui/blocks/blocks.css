@@ -17,7 +17,6 @@
   --dc-s4: 16px;
   --dc-r: calc(var(--oc-radius, 9px) - 2px);
   --dc-r-lg: var(--oc-radius, 9px);
-  --dc-hair: color-mix(in srgb, var(--oc-border) 70%, transparent);
   --dc-ring: 0 0 0 2px color-mix(in srgb, var(--oc-primary) 55%, transparent);
 }
 
@@ -111,7 +110,7 @@ body {
   aspect-ratio: 16 / 10;
   width: 100%;
   overflow: hidden;
-  border: 1px solid var(--dc-hair);
+  border: 1px solid var(--oc-border);
   border-radius: var(--dc-r);
   background: var(--oc-muted-surface);
   color: var(--oc-muted);

@@ -20,7 +20,7 @@ export type CardRead =
 /** The design and its checks, in parallel. A checks read that fails only hides the badge. */
 export const readCard = async (client: CardClient, slug: string): Promise<CardRead> => {
   const checks = client.call('GET /designs/:slug/checks', { params: { slug } }).then(
-    (answer): ChecksSummary => ({ counts: answer.counts, render: { state: answer.render.state }, canRun: answer.canRun }),
+    (answer): ChecksSummary => ({ counts: answer.counts, render: { state: answer.render.state }, canRun: answer.canRun, browser: answer.browser }),
     () => null,
   );
   try {

@@ -106,7 +106,7 @@ const design = (over: Partial<DesignJson> = {}): DesignJson => ({
   ...over,
 });
 const detail = (over: Partial<DesignJson> = {}): DesignDetailResponse => ({ slug: 'pricing', path: '/d/pricing', design: design(over), pending: false, files: { screens: {} }, warnings: [] });
-const summary = (errors: number, warnings: number, state: ChecksSummary['render']['state'], canRun = true): ChecksSummary => ({ counts: { errors, warnings, notes: 0 }, render: { state }, canRun });
+const summary = (errors: number, warnings: number, state: ChecksSummary['render']['state'], canRun = true, browser = true): ChecksSummary => ({ counts: { errors, warnings, notes: 0 }, render: { state }, canRun, browser });
 
 test('cardView: a canvas lists its screens', () => {
   const view = cardView(detail(), null);
@@ -150,6 +150,16 @@ test('cardView: the check badge is the viewer badge, for every rendering state',
   assert.equal(cardView(detail(), summary(0, 0, 'stale')).badge?.tone, 'neutral');
 });
 
+test('cardView: a never-checked design reads muted while another design runs, green only with no browser', () => {
+  // canRun is false because another design's run is in progress; a browser exists, so the rendering is just unchecked.
+  const busyElsewhere = cardView(detail(), summary(0, 0, 'none', false, true)).badge;
+  assert.equal(busyElsewhere?.label, 'No issues');
+  assert.equal(busyElsewhere?.tone, 'neutral');
+  assert.match(busyElsewhere?.ariaLabel ?? '', /hasn’t been checked yet/);
+  // No browser at all: nothing could ever be checked, so the files verdict stands.
+  assert.equal(cardView(detail(), summary(0, 0, 'none', false, false)).badge?.tone, 'success');
+});
+
 // ---------------------------------------------------------------- readCard: reads only
 
 type Recorded = { key: string; slug: string | undefined };
@@ -170,6 +180,13 @@ test('readCard: reads the design and its checks, nothing else', async () => {
   assert.equal(read.state, 'ready');
   assert.deepEqual(client.calls.map((c) => c.key).sort(), ['GET /designs/:slug', 'GET /designs/:slug/checks']);
   assert.ok(client.calls.every((c) => c.key.startsWith('GET ') && c.slug === 'pricing'), 'no POST, PUT or DELETE before a click');
+});
+
+test('readCard: the checks summary carries the real browser flag, not a guess from canRun', async () => {
+  for (const [canRun, browser] of [[false, true], [false, false], [true, true]] as const) {
+    const read = await readCard(fakeClient({ checks: () => summary(0, 0, 'none', canRun, browser) }), 'pricing');
+    assert.equal(read.state === 'ready' ? read.checks?.browser : undefined, browser, `canRun ${canRun}`);
+  }
 });
 
 test('readCard: a 404 is a design that is gone; a checks failure only hides the badge', async () => {
