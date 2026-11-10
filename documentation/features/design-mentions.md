@@ -24,7 +24,7 @@ In order:
 7. The open comments, oldest first: where it is (screen and viewport), the element, the quoted text, and the user's words. Sent and resolved comments are not included.
 8. "Edit the files in that folder. Do not touch .versions/ or .chamber/." and the read time.
 
-The whole text is at most 16 000 characters, the host's limit. Over that, the oldest open comments are dropped first and one line says how many are left ("and 3 more open comments in Design Chamber."). The title, selector, quoted text and comment bodies are flattened to one line where they sit in a sentence, so a design file cannot start a new line that reads like an instruction.
+The whole text is at most 16 000 characters, the host's limit. Over that, the oldest open comments are dropped first and one line says how many are left ("and 3 more open comments in Design Chamber."). The title, screen titles and files, viewport labels, selector and quoted text are flattened to one line where they sit in a sentence, so a design file cannot start a new line that reads like an instruction. A comment body keeps its line breaks, but every line after the first is indented, so it cannot start an unindented line either. The same flattening applies to the "send comments" and "ask the agent" messages, which share the location line.
 
 ## Rules the service enforces
 - **Search never reads the disk.** It answers from the in-memory design list the service keeps current. If that list has not loaded yet (the first keystroke right after the service starts), it waits up to 1.5 seconds, then answers with nothing; the next keystroke works.

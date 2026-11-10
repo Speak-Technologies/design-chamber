@@ -73,8 +73,9 @@ export const noProject = (note: string, directory: string | null = null): Projec
 export const VIEWPORT_TABLET: Readonly<Viewport> = Object.freeze({ id: 'tablet', label: 'Tablet', width: 768, height: 1024 });
 export const VIEWPORT_DESKTOP: Readonly<Viewport> = Object.freeze({ id: 'desktop', label: 'Desktop', width: 1440, height: 900 });
 
+/** The label comes from design.json (untrusted), so it is flattened: a line break in it must not start a line of its own. */
 export const formatViewport = (viewport: Pick<Viewport, 'label' | 'width' | 'height'>): string =>
-  `${viewport.label} ${viewport.width}×${viewport.height}`;
+  `${oneLine(viewport.label)} ${viewport.width}×${viewport.height}`;
 
 // ---- What a builder needs to know about one design ----
 
@@ -127,6 +128,16 @@ export const clip = (text: string, max: number): string => (text.length <= max ?
 
 /** Collapse every run of whitespace (newlines included) to one space. */
 export const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * Every line after the first indented, so text that keeps its line breaks (a comment body) can
+ * never start an unindented line. Splits on every break a reader may honour, not just `\n`.
+ */
+export const indentContinuation = (text: string, indent: string): string =>
+  text
+    .split(/\r\n|[\n\r\u2028\u2029\u0085\v\f]/)
+    .map((line, index) => (index === 0 ? line : `${indent}${line}`))
+    .join('\n');
 
 /** Markdown inline code that survives backticks inside `text`. */
 export const codeSpan = (text: string): string => {

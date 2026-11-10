@@ -9,7 +9,7 @@
 import { COMMENT_BODY_MAX, HOST_TEXT_MAX, MENTION_QUERY_MAX } from '../limits.ts';
 import { sameDirectory } from '../path-compare.ts';
 import type { Comment, DesignFiles, DesignJson, DesignSummary } from '../types.ts';
-import { clip, codeSpan, formatViewport, oneLine, rulesPathOf } from './context.ts';
+import { clip, codeSpan, formatViewport, indentContinuation, oneLine, rulesPathOf } from './context.ts';
 import { locationLabel } from './revision-prompt.ts';
 
 // ---- Search ----
@@ -131,7 +131,7 @@ const filesLine = (input: MentionInput): string => {
   if (design.kind === 'page') {
     if (files.entry?.exists === true) names.push('index.html');
   } else {
-    for (const screen of design.screens) if (files.screens[screen.id]?.exists === true) names.push(screen.file);
+    for (const screen of design.screens) if (files.screens[screen.id]?.exists === true) names.push(oneLine(screen.file));
   }
   if (input.hasTokensCss) names.push('tokens.css');
   if (input.hasDesignMd) names.push('DESIGN.md');
@@ -141,10 +141,7 @@ const filesLine = (input: MentionInput): string => {
 /** One open comment as the agent reads it: where, the element, the quoted text, then the user's words. */
 const commentLines = (design: DesignJson, comment: Comment, number: number): string => {
   const { anchor } = comment;
-  const body = clip(comment.body.trim(), COMMENT_BODY_MAX)
-    .split(/\r?\n/)
-    .map((line, index) => (index === 0 ? line : `   ${line}`))
-    .join('\n');
+  const body = indentContinuation(clip(comment.body.trim(), COMMENT_BODY_MAX), '   ');
   const quoted = oneLine(anchor.text);
   return [
     `${number}. ${locationLabel(design, comment)}`,

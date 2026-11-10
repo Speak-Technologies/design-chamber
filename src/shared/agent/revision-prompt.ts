@@ -7,7 +7,7 @@
 
 import { CHECK_PROMPT_FINDINGS_MAX, PAGE_FILL_VIEWPORT_ID, REVISION_TEXT_MAX } from '../limits.ts';
 import type { AnchorState, Comment, DesignKind, Screen, Viewport } from '../types.ts';
-import { clip, codeSpan, formatViewport, rulesPathOf } from './context.ts';
+import { clip, codeSpan, formatViewport, indentContinuation, oneLine, rulesPathOf } from './context.ts';
 
 /**
  * Remote URLs the viewer blocks, from the service's static scan of the design's own files (never
@@ -54,7 +54,7 @@ export const viewportLabel = (viewports: readonly Viewport[], id: string): strin
   // A design viewport that happens to be called `fill` keeps its own label.
   const viewport = viewports.find((candidate) => candidate.id === id);
   if (viewport) return formatViewport(viewport);
-  return id === PAGE_FILL_VIEWPORT_ID ? 'full-width view' : id;
+  return id === PAGE_FILL_VIEWPORT_ID ? 'full-width view' : oneLine(id);
 };
 
 /** Where an element lives, as the agent reads it: `Screen "Home" (screens/home.html) @ Laptop 1280×800`, or the page file. */
@@ -62,7 +62,9 @@ export const locationLabel = (design: { screens: readonly Screen[]; viewports: r
   const where = viewportLabel(design.viewports, at.viewport);
   if (at.screen === null) return `Page index.html @ ${where}`;
   const screen = design.screens.find((candidate) => candidate.id === at.screen);
-  return `Screen "${screen?.title ?? at.screen}" (${screen?.file ?? `screens/${at.screen}.html`}) @ ${where}`;
+  // Titles and files come from design.json (untrusted): one line, and no quote that could close the one around the title.
+  const title = oneLine(screen?.title ?? at.screen).replace(/"/g, "'");
+  return `Screen "${title}" (${oneLine(screen?.file ?? `screens/${at.screen}.html`)}) @ ${where}`;
 };
 
 const location = (input: RevisionInput, comment: Comment): string => locationLabel(input, comment);
@@ -80,10 +82,7 @@ const renderComment = (input: RevisionInput, comment: Comment, number: number, d
     ...(text === '' ? [] : [`text: "${text.replace(/\s+/g, ' ')}"`]),
     ...(detail === 'full' && anchor.html !== '' ? [`html: ${codeSpan(anchor.html)}`] : []),
   ];
-  const body = clip(comment.body.trim(), bodyMax)
-    .split(/\r?\n/)
-    .map((line, index) => (index === 0 ? line : `   ${line}`))
-    .join('\n');
+  const body = indentContinuation(clip(comment.body.trim(), bodyMax), '   ');
   return [
     `${number}. ${location(input, comment)}`,
     `   element: ${codeSpan(anchor.selector)}${flag(input.anchorStates?.[comment.id])}`,
