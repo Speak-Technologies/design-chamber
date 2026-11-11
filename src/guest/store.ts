@@ -11,6 +11,8 @@ import type {
   DesignDetailResponse,
   DesignListResponse,
   DesignsQuery,
+  EditRequest,
+  EditResponse,
   ExportBody,
   ExportResponse,
   PatchCommentBody,
@@ -21,6 +23,8 @@ import type {
   SettingsResponse,
   SourceResponse,
   ThumbnailResponse,
+  TokensResponse,
+  UndoEditResponse,
   VersionDiffResponse,
   VersionListResponse,
 } from '../shared/api.ts';
@@ -115,6 +119,17 @@ export type Store = {
   snapshotVersion(slug: string, label?: string): Promise<VersionSummary | null>;
   restoreVersion(slug: string, versionId: string): Promise<RestoreVersionResponse>;
   diffVersion(slug: string, versionId: string, against?: string): Promise<VersionDiffResponse>;
+
+  /**
+   * Hand edits (Phase 2 §2.7). The service writes the files and emits the user's own change
+   * events (`origin: "user"`), which drive the artboard reloads on every surface; these methods
+   * bump nothing themselves. Errors reject with the service's `ServiceError` sentence.
+   */
+  applyEdit(slug: string, request: EditRequest): Promise<EditResponse>;
+  undoEdit(slug: string, id: string): Promise<UndoEditResponse>;
+  loadTokens(slug: string): Promise<TokensResponse>;
+  /** Clears the hand-edit ledger up to `upTo` once a message carrying it reached the chat. */
+  clearHandEdits(slug: string, upTo: number): Promise<void>;
 
   loadRender(slug: string, screen: string | null, version?: string | null): Promise<RenderDoc>;
   loadThumbnail(slug: string): Promise<ThumbnailResponse | null>;
@@ -342,6 +357,17 @@ export const createStore = ({ client }: StoreDeps): Store => {
       mutate(() =>
         client.call('GET /designs/:slug/versions/:vid/diff', { params: { slug, vid: versionId }, query: against ? { against } : {} }),
       ),
+
+    applyEdit: (slug, request) => mutate(() => client.call('POST /designs/:slug/edits', { params: { slug }, body: request })),
+
+    undoEdit: (slug, id) => mutate(() => client.call('POST /designs/:slug/edits/:id/undo', { params: { slug, id }, body: {} })),
+
+    loadTokens: (slug) => mutate(() => client.call('GET /designs/:slug/tokens', { params: { slug } })),
+
+    clearHandEdits: (slug, upTo) =>
+      mutate(async () => {
+        await client.call('POST /designs/:slug/hand-edits/clear', { params: { slug }, body: { upTo } });
+      }),
 
     loadRender: (slug, screen, version = null) => mutate(() => client.loadRender(slug, screen, version)),
 

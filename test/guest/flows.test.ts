@@ -847,3 +847,134 @@ test('openInRail: a failing clean-up DELETE still answers not-here; another host
   await assert.rejects(openInRail({ client: t.client, host: t.host }, COFFEE, 'view'), (error: unknown) => error instanceof HostRequestError && error.code === 'DISABLED');
   assert.deepEqual(routes(t), ['POST /open-request', 'DELETE /open-request']);
 });
+
+// ---- Phase 2 §7.3: the hand-edit ledger clears after each delivery outcome ----
+
+/** One hand edit through the fake's edit route, so the design's ledger holds a real entry. */
+const seedHandEdit = async (s: Setup): Promise<void> => {
+  const source = await s.client.call('GET /designs/:slug/source', { params: { slug: COFFEE }, query: { screen: 'home' } });
+  await s.client.call('POST /designs/:slug/edits', {
+    params: { slug: COFFEE },
+    body: {
+      op: 'text',
+      screen: 'home',
+      base: source.sha256,
+      target: { tag: 'h1', id: null, text: 'Fresh roasts, every other Monday', sameIndex: 0, sameCount: 1 },
+      before: 'Fresh roasts, every other Monday',
+      after: 'Fresh roasts, every Monday',
+    },
+  });
+};
+
+const ledgerOf = (s: Setup) => s.service.designs.get(COFFEE)?.edits.ledger ?? [];
+const clearRoute = `POST /designs/${COFFEE}/hand-edits/clear`;
+const clearBodies = (s: Setup, from = 0): unknown[] =>
+  s.service.requests.slice(from).filter((request) => `${request.method} ${request.path}` === clearRoute).map((request) => JSON.parse(request.body ?? '{}'));
+
+test('send comments: a delivered revision clears the ledger up to the seq the prompt carried', async () => {
+  const s = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  await seedHandEdit(s);
+  const seq = ledgerOf(s).at(-1)?.seq;
+  assert.ok(seq !== undefined, 'the edit left a ledger entry');
+  const before = s.service.requests.length;
+  const result = await s.flows.sendComments(COFFEE);
+  assert.equal(result.outcome, 'sent');
+  assert.deepEqual(clearBodies(s, before), [{ upTo: seq }], 'one clear, with the prompt\'s upTo');
+  assert.deepEqual(ledgerOf(s), [], 'the entries are gone');
+  const [prompt] = s.host.callsOf('prompt')[0] as [PromptRequest];
+  assert.match(prompt.text, /Hand edits since my last message/, 'the message carried the block');
+  assert.match(prompt.text, /Fresh roasts, every Monday/);
+});
+
+test('the ledger clears after every outcome: composed, outbox and new-session too', async () => {
+  const cases: { name: string; options: Parameters<typeof createFakeServices>[0]; outcome: 'composed' | 'outbox' | 'new-session'; unlink?: boolean }[] = [
+    { name: 'composed', options: { session: { id: LINKED, title: 'Coffee', busy: true } }, outcome: 'composed' },
+    { name: 'outbox', options: { session: { id: 'ses_other', title: 'Other', busy: false } }, outcome: 'outbox' },
+    { name: 'new-session', options: {}, outcome: 'new-session', unlink: true },
+  ];
+  for (const c of cases) {
+    const s = setup(c.options);
+    if (c.unlink) {
+      const coffee = s.service.designs.get(COFFEE);
+      assert.ok(coffee);
+      coffee.design.sessionId = null;
+    }
+    await seedHandEdit(s);
+    const seq = ledgerOf(s).at(-1)?.seq;
+    const result = await s.flows.sendComments(COFFEE);
+    assert.equal(result.outcome, c.outcome, c.name);
+    assert.deepEqual(clearBodies(s), [{ upTo: seq }], c.name);
+    assert.deepEqual(ledgerOf(s), [], c.name);
+  }
+});
+
+test('ask and askAgent clear through the same deliver path; continue in chat never clears', async () => {
+  const ask = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  await seedHandEdit(ask);
+  await ask.flows.ask(COFFEE, { text: ASK });
+  assert.equal(clearBodies(ask).length, 1, 'ask');
+  assert.deepEqual(ledgerOf(ask), []);
+
+  const fix = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  await seedHandEdit(fix);
+  await fix.flows.askAgent(COFFEE, 'checks');
+  assert.equal(clearBodies(fix).length, 1, 'askAgent');
+
+  const cont = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  await seedHandEdit(cont);
+  await cont.flows.continueInChat(COFFEE);
+  assert.deepEqual(clearBodies(cont), [], 'a continue message carries no hand-edit block');
+  assert.equal(ledgerOf(cont).length, 1);
+});
+
+test('a failed delivery clears nothing; a failing clear never fails the send', async (t) => {
+  const failed = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  await seedHandEdit(failed);
+  failed.host.behavior.prompt = async () => ({ sent: 'no-model' });
+  await assert.rejects(failed.flows.sendComments(COFFEE), FlowError);
+  assert.deepEqual(clearBodies(failed), [], 'nothing reached the chat');
+  assert.equal(ledgerOf(failed).length, 1, 'the lines stay for the next message');
+
+  const clearDown = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  await seedHandEdit(clearDown);
+  const warn = t.mock.method(console, 'warn', () => undefined);
+  const original = clearDown.service.handle;
+  clearDown.service.handle = async (request) =>
+    request.path.endsWith('/hand-edits/clear') ? { status: 500, body: JSON.stringify({ error: 'internal', message: 'down' }) } : original(request);
+  const result = await clearDown.flows.sendComments(COFFEE);
+  assert.equal(result.outcome, 'sent', 'the chat got the revision; the clear is best-effort');
+  assert.equal(ledgerOf(clearDown).length, 1, 'the same lines may repeat, which is harmless');
+  assert.equal(warn.mock.callCount(), 1, 'the failure is logged');
+});
+
+test('no hand edits: no clear call; nothing to send: the ledger stays', async () => {
+  const plain = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  await plain.flows.sendComments(COFFEE);
+  assert.deepEqual(clearBodies(plain), [], 'handEdits null: nothing to clear');
+
+  const nothing = setup({ session: { id: LINKED, title: 'Coffee', busy: false } });
+  await seedHandEdit(nothing);
+  const coffee = nothing.service.designs.get(COFFEE);
+  assert.ok(coffee);
+  coffee.design.comments = [];
+  const result = await nothing.flows.sendComments(COFFEE);
+  assert.equal(result.outcome, 'nothing');
+  assert.deepEqual(clearBodies(nothing), []);
+  assert.equal(ledgerOf(nothing).length, 1);
+});
+
+test('the outbox outcome clears once on the page; the rail\'s delivery does not clear again', async () => {
+  const service = createFakeService();
+  const page = setup({ service, surface: 'page', session: { id: 'ses_other', title: 'Other', busy: false } });
+  await seedHandEdit(page);
+  await page.flows.sendComments(COFFEE);
+  assert.deepEqual(ledgerOf(page), [], 'the message reached the queue: cleared');
+
+  const rail = setup({ service, surface: 'panel', session: { id: LINKED, title: 'Coffee', busy: false } });
+  const before = service.requests.length;
+  assert.equal(await rail.flows.deliverOutbox({ id: LINKED, title: 'Coffee', busy: false }), 'delivered');
+  assert.ok(
+    !service.requests.slice(before).some((request) => request.path.includes('hand-edits/clear')),
+    'the rail has no upTo to clear with; the page already did',
+  );
+});
