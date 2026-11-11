@@ -148,6 +148,14 @@ a pipe (no debugging port is opened), killed when the run ends, and limited to 1
 screen and 90 seconds per run. A screen that hangs, crashes or reloads forever is a finding;
 the next screen still renders. Renders use the light scheme, as the wall does.
 
+**Empty, unsaved storage.** Checks run with empty page storage. Every artboard gets a fresh
+stand-in for `localStorage` and `sessionStorage`, installed before the design's own scripts, so a
+design that saves ticks, toggles or filters renders without a script error. Nothing a screen
+writes is kept, and nothing carries over to the next artboard: each one starts empty, and the
+design's saved page data is never read into a check. Thumbnails render with the browser's own
+empty storage in the throwaway profile, and the small live preview in the designs list runs no
+scripts at all.
+
 ## Limits
 24 artboards per run (the rest are counted as not rendered; the note says so and how to check them: `--screen <id>`), a 90-second run budget, or three failures in a row (each stop has its own note), 4 pictures per artboard, 200 findings
 per report (5 per kind per screen), 60 HTML files in the static check. Contrast is skipped where the
@@ -181,7 +189,8 @@ opacity). Overlap and cut-off text are heuristics, so they are warnings.
 browser pipe, render loop, output, launcher, service, target resolution, report text),
 `src/service/routes/checks.ts`, `src/shared/checks.ts` (finding table and `check.json` validation),
 `src/shared/agent/check-command.ts`, `src/guest/probe/probe.ts` (the measuring script, built into
-the CLI and the service). The tool: `src/plugin/index.ts` (entry, built-ins from
+the CLI and the service), `src/guest/bridge/storage-shim-entry.ts` (the empty-storage stand-in,
+built into the CLI and the service and installed before any design script). The tool: `src/plugin/index.ts` (entry, built-ins from
 `process.getBuiltinModule`) and `src/plugin/check-tool.ts` (input, install root, record check, child
 env, run, answer; pure parts exported), `src/service/runtime-record.ts`, `src/shared/app-data.ts`
 (the app-data folder both sides use). Tests: `test/service/check/**`, `test/cli/**`, `test/agent/check-copy.test.ts`,

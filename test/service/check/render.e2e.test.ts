@@ -13,7 +13,12 @@ import { CheckInterrupted, runCheck, type RunCheckResult } from '../../../src/se
 import { PNG_SIGNATURE_BYTES } from './png.ts';
 import { chromeOrSkip } from '../../helpers/chrome-or-skip.ts';
 import { probeSource } from '../../helpers/probe-source.ts';
+import { storageShimSource } from '../../helpers/storage-shim-source.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
+
+// The build embeds the storage stand-in as `__DC_STORAGE_SHIM__` (scripts/build.mjs step 1c);
+// node:test runs the sources unbundled, so hand the render loop the same bytes the build would.
+(globalThis as Record<string, unknown>).__DC_STORAGE_SHIM__ = await storageShimSource();
 
 const head = (title: string): string => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>body{margin:0;font:16px/1.5 sans-serif;color:#111;background:#fff}</style>`;
 const page = (title: string, body: string, extraHead = ''): string => `${head(title)}${extraHead}</head><body>${body}</body></html>`;
@@ -97,19 +102,21 @@ test('measures overflow, contrast, alt text, labels and names, and saves real PN
   assert.deepEqual((await readdir(path.join(dir, '.chamber'))).filter((name) => name.startsWith('dc-check-')), [], 'the throwaway profile is removed');
 });
 
-test('a sandboxed script behaves as in the wall: localStorage and errors are console-errors', async (t) => {
+test('the storage stand-in: localStorage works, every artboard starts empty, and real script errors are still found', async (t) => {
   const { result } = await run(
     t,
     {
-      'screens/ls.html': page('ls', '<p>storage</p><script>localStorage.setItem("a","b")</script>'),
+      'screens/ls-write.html': page('ls-write', '<p>write</p><script>localStorage.setItem("tick","1"); sessionStorage.setItem("temp","1"); if (localStorage.getItem("tick") !== "1") console.error("localStorage write did not stick"); if (sessionStorage.getItem("temp") !== "1") console.error("sessionStorage write did not stick");</script>'),
+      'screens/ls-read.html': page('ls-read', '<p>read</p><script>if (localStorage.length !== 0) console.error("localStorage not empty: " + localStorage.length); if (localStorage.getItem("tick") !== null) console.error("a write reached the next artboard"); if (sessionStorage.length !== 0) console.error("sessionStorage not empty");</script>'),
       'screens/boom.html': page('boom', '<p>boom</p><script>setTimeout(function(){ throw new Error("deliberate failure") }, 10)</script>'),
       'screens/quiet.html': page('quiet', '<p>quiet</p><script>var n = 1 + 1;</script>'),
     },
-    ['ls', 'boom', 'quiet'],
+    ['ls-write', 'ls-read', 'boom', 'quiet'],
   );
-  const ls = result.report.render?.findings.find((finding) => finding.code === 'console-error' && finding.screen === 'ls');
-  assert.ok(ls, 'localStorage in an opaque origin throws');
-  assert.match(ls.detail ?? '', /localStorage|storage|SecurityError/i);
+  assert.equal(result.report.render?.state, 'done');
+  assert.ok(result.report.render?.artboards.every((artboard) => artboard.ok), 'every artboard rendered');
+  assert.ok(!codes(result, 'ls-write').includes('console-error'), 'a design that uses localStorage renders without a script error');
+  assert.ok(!codes(result, 'ls-read').includes('console-error'), 'every artboard starts empty; a write never reaches the next one');
   assert.match(result.report.render?.findings.find((finding) => finding.code === 'console-error' && finding.screen === 'boom')?.detail ?? '', /deliberate failure/);
   assert.ok(!codes(result, 'quiet').includes('console-error'));
 });
