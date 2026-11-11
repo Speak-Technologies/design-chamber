@@ -36,6 +36,8 @@ export type EditNotice = {
   undo: (editId: string) => Promise<void>;
   /** The keyboard Undo was refused (an old version is on show): `sentence` says so for a few seconds. The edit stays undoable. */
   refused: (sentence: string) => void;
+  /** A hand edit was refused or failed: `title` says what did not happen, `message` is the service's sentence. Stays until dismissed. */
+  failed: (title: string, message: string) => void;
   dispose: () => void;
 };
 
@@ -59,21 +61,26 @@ export const createEditNotice = (options: EditNoticeOptions): EditNotice => {
       options.focusWall();
     } catch (error) {
       if (disposed) return;
-      const dismiss = btn({
-        label: 'Dismiss',
-        variant: 'ghost',
-        size: 'xs',
-        onClick: () => {
-          notices.setTransient('edit', null);
-          options.focusWall();
-        },
-      });
-      const wrap = h('div', { class: 'dc-banner dc-edit-notice', 'data-actions': 'stack' });
-      wrap.append(...bannerWithActions('error', 'Couldn’t undo that edit', [errorText(error)], [dismiss.el]));
-      // No timer: the sentence stays until it is dismissed. The Undo that had focus is gone, so Dismiss takes it.
-      notices.setTransient('edit', wrap);
-      dismiss.el.focus();
+      // The Undo that had focus is gone, so Dismiss takes it.
+      showError('Couldn’t undo that edit', errorText(error)).focus();
     }
+  };
+
+  /** An error notice with no timer: the sentence stays until it is dismissed. Returns its Dismiss button. */
+  const showError = (title: string, message: string): HTMLElement => {
+    const dismiss = btn({
+      label: 'Dismiss',
+      variant: 'ghost',
+      size: 'xs',
+      onClick: () => {
+        notices.setTransient('edit', null);
+        options.focusWall();
+      },
+    });
+    const wrap = h('div', { class: 'dc-banner dc-edit-notice', 'data-actions': 'stack' });
+    wrap.append(...bannerWithActions('error', title, [message], [dismiss.el]));
+    notices.setTransient('edit', wrap);
+    return dismiss.el;
   };
 
   return {
@@ -113,6 +120,7 @@ export const createEditNotice = (options: EditNoticeOptions): EditNotice => {
       notices.setTransient('edit', banner({ tone: 'warning', title: sentence }), UNDONE_NOTICE_MS);
       keepFocus();
     },
+    failed: (title, message) => void showError(title, message),
     dispose: () => {
       disposed = true;
       offViewing?.();

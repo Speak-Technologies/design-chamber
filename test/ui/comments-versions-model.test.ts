@@ -38,8 +38,24 @@ test('pinNumbers follow creation order, not array order, and break ties by array
 test('groupComments keeps wall order, puts artifact comments first and surfaces orphans', () => {
   const list = [comment('c_1', { screen: 'pricing' }), comment('c_2', { screen: 'home' }), comment('c_3', { screen: 'gone' }), comment('c_4', { screen: null })];
   const groups = groupComments(list, screens, 'Artifact');
-  assert.deepEqual(groups.map((g) => g.key), ['page', 'home', 'pricing', '__missing']);
+  assert.deepEqual(groups.map((g) => g.key), ['page', 'home', 'pricing', '__removed:gone']);
   assert.deepEqual(groups.map((g) => g.comments.map((c) => c.id)), [['c_4'], ['c_2'], ['c_1'], ['c_3']]);
+});
+
+test('comments on a screen that was moved to trash group under "<id> · Screen removed", one group per removed screen, after the listed ones', () => {
+  const list = [
+    comment('c_1', { screen: 'checkout' }),
+    comment('c_2', { screen: 'home' }),
+    comment('c_3', { screen: 'old-pricing' }),
+    comment('c_4', { screen: 'checkout' }),
+  ];
+  const groups = groupComments(list, screens, 'Tidepool');
+  assert.deepEqual(groups.map((g) => g.title), ['Home', 'checkout · Screen removed', 'old-pricing · Screen removed']);
+  assert.deepEqual(groups.map((g) => g.removed ?? false), [false, true, true]);
+  assert.deepEqual(groups[1]?.comments.map((c) => c.id), ['c_1', 'c_4']);
+  // Undo puts the screen back: its comments are in a normal group again, with nothing left over.
+  const restored = groupComments(list, [...screens, { id: 'checkout', title: 'Checkout', file: 'screens/checkout.html' }], 'Tidepool');
+  assert.deepEqual(restored.map((g) => g.title), ['Home', 'Checkout', 'old-pricing · Screen removed']);
 });
 
 test('sendState says why it is disabled and counts only open comments', () => {

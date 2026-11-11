@@ -28,6 +28,7 @@ import * as buildStrip from './feature-build-strip.ts';
 import * as checks from './feature-checks.ts';
 import * as editText from './feature-edit-text.ts';
 import * as findability from './feature-findability.ts';
+import * as screens from './feature-screens.ts';
 import type { DrawerKind, FeatureMount, ViewContext } from './view-context.ts';
 import { createWall, type WallHandle } from './wall.ts';
 
@@ -719,6 +720,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       mountFeature('checks badge', checks.mount),
       // After the build strip and the ask bar: it reads the strip's phase and hands the ask bar an element.
       mountFeature('edit text', editText.mount),
+      // Also after the build strip (it reads the strip's phase for the menu's hint) and after Edit text (they share one undo slot).
+      mountFeature('screens', screens.mount),
     ];
 
     built = {

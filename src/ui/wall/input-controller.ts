@@ -11,6 +11,7 @@ import type { BoardSet } from './board-set.ts';
 import type { CameraController } from './camera-controller.ts';
 import type { HitController } from './hit-controller.ts';
 import type { PopoverLayer } from './popover-layer.ts';
+import type { ReorderController } from './reorder-controller.ts';
 import type { WallContext } from './wall-context.ts';
 import type { Board } from './wall-types.ts';
 
@@ -28,6 +29,8 @@ export type InputDeps = {
   hit: HitController;
   /** Ctrl/⌘+Z on the wall: the edit feature decides whether there is anything to undo. */
   onUndoEdit: () => void;
+  /** A screen label dragged into a new place (full-screen page, Edit mode); the press starts here, the controller does the rest. */
+  reorder: Pick<ReorderController, 'begin' | 'active'>;
 };
 
 export const createInputController = (ctx: WallContext, deps: InputDeps): InputController => {
@@ -154,6 +157,11 @@ export const createInputController = (ctx: WallContext, deps: InputDeps): InputC
   );
 
   scope.listen<PointerEvent>(surface, 'pointerdown', (event) => {
+    // The "+ Screen" board is a button on the wall: a press is a click, and a drag that starts on it pans like any empty wall.
+    if (event.target instanceof Element && event.target.closest('.dc-ghost-add')) {
+      if (event.button === 0 && !ctx.readOnly()) downAt = { point: ctx.local(event), board: null };
+      return;
+    }
     if (event.target instanceof Element && event.target.closest('.dc-pop, .dc-label, .dc-pin, .dc-seltoolbar, .dc-editor')) return;
     // The text editor is open: it handles a press outside itself (click-away), the wall does nothing.
     if (ctx.editing) return;
@@ -172,6 +180,11 @@ export const createInputController = (ctx: WallContext, deps: InputDeps): InputC
   });
 
   scope.listen<PointerEvent>(surface, 'pointermove', (event) => {
+    // A screen is being dragged by its label: the wall has no hover outline or comment for the pointer meanwhile.
+    if (deps.reorder.active()) {
+      hit.clearHover();
+      return;
+    }
     const at = ctx.local(event);
     hit.setPointer(at);
     if (panning && panning.id === event.pointerId) {
@@ -222,6 +235,23 @@ export const createInputController = (ctx: WallContext, deps: InputDeps): InputC
     const at = ctx.local(event);
     const board = boards.at(at);
     if (board) hit.requestHit(board, screenToFrame(camera.get(), board.art.rect, at), 'edit');
+  });
+
+  // A press on a row's first label may become a drag (the full-screen page's reorder). Buttons and status chips
+  // in the label keep their own presses; a press that does not move is a click, so the double-click below still works.
+  scope.listen<PointerEvent>(ctx.labels, 'pointerdown', (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const label = target?.closest<HTMLElement>('.dc-label');
+    if (!label) return;
+    // A control inside the label (the ⋯ button, a status chip) keeps its press. The wall itself is focusable, so look only inside the label.
+    const control = target?.closest('button, [tabindex]');
+    if (control && control !== label && label.contains(control)) return;
+    for (const board of boards.values()) {
+      if (board.label === label) {
+        deps.reorder.begin(board, event);
+        return;
+      }
+    }
   });
 
   scope.listen<MouseEvent>(ctx.labels, 'dblclick', (event) => {

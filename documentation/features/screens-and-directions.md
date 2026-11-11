@@ -4,7 +4,27 @@
 
 Why it exists: these are mechanical changes. Waiting a chat turn for "put Checkout before Pricing" is slow, and the agent may get the list wrong. The agent still owns the list: its next write of `design.json` wins.
 
-Status: the service side is built (T4). The menus, drag, the "+ Screen" ghost board and the direction row on the wall (U3, U4) are not built yet, so these edits are reachable only through the service route for now.
+Status: the service side (T4) and the wall's screen controls (U3: the screen menu, drag reorder, the "+ Screen" board) are built. The direction row and **Keep this one** on the wall (U4) are not built yet, so keeping a direction is reachable only through the service route for now.
+
+## On the wall (what the user sees)
+Canvas only (a page has no screens). Same on the [full-screen page](../pages/full-screen-page.md) and in the [rail](../pages/rail-panel.md); drag is the one difference.
+
+**The ⋯ menu.** Edit mode puts a ⋯ button at the end of the first label of every screen row (one per row, not per device size; "Actions for screen Pricing"). Play mode hides it. Entries, text only: **Duplicate**, **Move up**, **Move down**, **Move to trash**, a divider, **Try 3 directions…**. An entry that cannot run says why in a second, muted line inside the entry, so nobody has to guess:
+- Move up on the first screen: "This is the first screen."; Move down on the last: "This is the last screen."
+- Duplicate on a screen the agent has not written yet: "Nothing to copy until the agent writes this screen."
+- An old version on show: every entry, "You're viewing an old version."
+- No `design.json` yet, one that does not parse, or a `screens` value that is not a list: every entry, with the sentence from "Who owns the screen list" below.
+- At 40 screens Duplicate is off, and Try 3 directions needs two free slots, so it is off at 39 as well. These two carry no line of their own: one sentence at the bottom of the menu says it once, "A canvas holds up to 40 screens."
+- While the linked agent is working, a line at the top says "The agent is working on this design. It may write over your edit." (the same hint as the text editor).
+A disabled entry that explains itself can still be reached with the arrow keys (so a keyboard or screen-reader user hears the reason); Enter, Space and a click do nothing and the menu stays open. Esc closes the menu and focus goes back to the ⋯ button.
+
+**Move up / Move down** work everywhere, with the keyboard too. **Dragging** is the full-screen page only: press a screen's first label and move; a chip with the screen's name follows the pointer and a line between rows shows where it will land (nothing shows over its own place); letting go saves, **Esc** cancels and sends nothing. The wheel keeps panning during a drag. A click without movement is not a drag, so a double-click on the label still focuses the screen. While a request runs the ⋯ buttons are off and the row it is about shows a small spinner.
+
+**After an action** a notice under the toolbar (a live region, so a screen reader hears it) says what happened with **Undo** for 10 seconds: "Moved Pricing to the end", "Duplicated Home", "Moved Pricing to trash". The wall re-lays out at once, and when the moved or copied row is outside the visible part the camera pans the least it takes to show it (zoom is not changed). Ctrl/⌘+Z undoes the last hand edit of the view, whether it was a text edit or a screen action (one slot for both, so one key press never undoes two). A refusal is an error notice that stays until dismissed ("Couldn’t move Checkout" and the service's sentence); a stale list refreshes the wall so the next try works.
+
+**Comments on a screen that is gone** stay in the Comments drawer under "<id> · Screen removed" (muted, after the listed screens, one group per removed screen). They have no pin on the wall, so their row cannot "show" one; they can still be resolved or sent. Undo brings them back under the screen.
+
+**"+ Screen".** In Edit mode, on a live design with room, a dashed board "+ Screen" sits after the last row. It is a button: click it and a small box asks "What should the new screen show?" with the line that says where the message goes ("Goes to the linked chat", "Goes to “<chat>”", "Starts a new chat"), **Cancel** and **Ask the agent** (the one filled button). Ctrl/⌘+Enter also sends; Esc cancels. Nothing is written by Design Chamber: it is the ask flow, one message to the linked chat that names the canvas and the screen it should follow ("Add a new screen to the canvas "Tidepool site" after "Checkout": <your words>. Write it as screens/<id>.html and add it to design.json. The canvas has room for 5 more screens."). An empty box is allowed (the agent chooses); the box counts the characters left once 200 remain ("180 left") and says "12 over" past the limit, where the button turns off. While it sends the words are read-only and the button spins; a failure puts "Couldn't send. <why> Your message is still here." under the box, keeps the words and turns the button back on. The board is hidden in Play mode, on an old version and at 40 screens. The new screen appears on the wall when the agent writes it. **Try 3 directions…** opens the same box ("What should the directions explore? (optional)") and sends the directions request; the direction row it produces is U4's.
 
 ## Who owns the screen list
 - The list (`screens` in `design.json`) belongs to the agent. Design Chamber writes it only when the user acts, and never copies it into its own state file, so nothing restores an old list over the agent's.
@@ -39,7 +59,12 @@ Duplicate, trash and keep touch several files. All checks run before the first c
 ## What the agent is told
 Each action adds one entry to the hand-edit record: the move (or the new order), the copy and its file, the trashed screen and its file, or the kept direction's letter and name. Titles are quoted as one line, 80 characters at most.
 
-## Where it lives
+## Where it lives (wall)
+- `src/ui/model/screens-model.ts` and `menu-model.ts`: what the menu offers and why an entry is off, whether the board shows, orders, drop target, the box's room and counter, the pan that keeps a row in view (pure; `test/ui/screens-model.test.ts`, `test/ui/menu-model.test.ts`).
+- `src/ui/wall/feature-screens.ts` (requests and notices), `reorder-controller.ts` (the drag), `board-set.ts` (the ⋯ button, the "+ Screen" board), `src/ui/components/ask-popover.ts` (the box), `kit.ts` (a menu row's `reason`, the menu's top and bottom notes), `feature-undo.ts` (the one undo slot).
+- Screenshots: `test/ui/visual/scenarios/screens.mjs`.
+
+## Where it lives (service)
 - `src/shared/screen-ops.ts`: the pure list planning (listed entries, reorder, free copy ids, the copy entry, removal, describing a move) and the sentences.
 - `src/service/edits/ops-screens.ts`: the four ops: reads, stamp and file checks, the steps.
 - `src/service/store.ts`: `writeScreens` (the stamp-checked list write, sharing the design.json retry loop with the mirror) and `moveComments`.

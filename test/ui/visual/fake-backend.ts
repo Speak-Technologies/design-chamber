@@ -2,8 +2,9 @@
 // `ApiRoutes`, so the real UI and guest core can be screenshot-tested without OpenChamber.
 // `fake-transport.ts` puts it behind the host's `serviceRequest`. Sample designs, comments, versions and thumbnails; every mutation emits a change event.
 
-import type { ApiRoutes, OpenRequest, RouteBody, RouteKey, RouteResponse, SettingsResponse, StatusDesignRow } from '../../../src/shared/api.ts';
-import { STATUS_ROWS_MAX } from '../../../src/shared/limits.ts';
+import type { ApiRoutes, EditRequest, OpenRequest, RouteBody, RouteKey, RouteResponse, SettingsResponse, StatusDesignRow } from '../../../src/shared/api.ts';
+import { SCREENS_MAX, STATUS_ROWS_MAX } from '../../../src/shared/limits.ts';
+import { copyTitle, describeMove, freeCopyId, SCREEN_LIST_STALE_MESSAGE } from '../../../src/shared/screen-ops.ts';
 import type {
   ChangeEvent,
   Comment,
@@ -279,6 +280,9 @@ export type FakeBackend = {
   writeFile: (slug: string, path: string) => void;
   /** Test hook: a design was created this long ago (milliseconds). */
   ageDesign: (slug: string, ageMs: number) => void;
+  /** Test hook (screens): a canvas grows to `count` screens (written ones named "Extra n"), or the file of one screen goes missing. */
+  padScreens: (slug: string, count: number) => void;
+  unwriteScreen: (slug: string, id: string) => void;
   /** Test hook: the next restore fails once with this message (the Undo error notice). */
   failNextRestore: (message: string) => void;
 };
@@ -364,6 +368,48 @@ export const createFakeBackend = (): FakeBackend => {
       screensStamp: `screens:${rec.design.screens.map((s) => s.id).join(',')}`,
       designJson: 'ok',
     };
+  };
+
+  // ---- Phase 2: screen edits, in memory ----
+  const stampOf = (rec: Rec): string => `screens:${rec.design.screens.map((s) => s.id).join(',')}`;
+  const undos = new Map<string, { screens: Screen[]; written: Set<string> }>();
+  let editSeq = 0;
+
+  const screenEdit = (slug: string, rec: Rec, request: Extract<EditRequest, { op: 'reorder' | 'duplicate' | 'trash-screen' }>): RouteResponse<'POST /designs/:slug/edits'> => {
+    if (request.screens !== stampOf(rec)) throw new ServiceError('stale', SCREEN_LIST_STALE_MESSAGE);
+    const before = { screens: structuredClone(rec.design.screens), written: new Set(rec.written) };
+    const titleOf = (id: string): string => before.screens.find((entry) => entry.id === id)?.title ?? id;
+    const ids = before.screens.map((entry) => entry.id);
+    let label = '';
+    let created: { id: string; title: string } | undefined;
+    if (request.op === 'reorder') {
+      const byId = new Map(rec.design.screens.map((entry) => [entry.id, entry] as const));
+      const next = request.order.map((id) => byId.get(id));
+      if (next.length !== ids.length || next.some((entry) => entry === undefined)) throw new ServiceError('bad-request', 'That order does not match the screens.');
+      rec.design.screens = next.filter((entry): entry is Screen => entry !== undefined);
+      const move = describeMove(ids, request.order);
+      label = move === null ? 'Screens reordered' : move.above === null ? `Moved ${titleOf(move.moved)} to the end` : `Moved ${titleOf(move.moved)} above ${titleOf(move.above)}`;
+    } else if (request.op === 'duplicate') {
+      if (rec.design.screens.length >= SCREENS_MAX) throw new ServiceError('invalid', 'A canvas holds up to 40 screens.');
+      const copyId = freeCopyId(request.id, new Set(ids));
+      const index = ids.indexOf(request.id);
+      if (copyId === null || index < 0) throw new ServiceError('invalid', 'That screen cannot be copied.');
+      const title = copyTitle(titleOf(request.id));
+      rec.design.screens.splice(index + 1, 0, screen(copyId, title));
+      rec.written.add(copyId);
+      created = { id: copyId, title };
+      label = `Duplicated ${titleOf(request.id)}`;
+    } else {
+      rec.design.screens = rec.design.screens.filter((entry) => entry.id !== request.id);
+      rec.written.delete(request.id);
+      label = `Moved ${titleOf(request.id)} to trash`;
+    }
+    editSeq += 1;
+    const id = `e_fake${String(editSeq).padStart(4, '0')}`;
+    undos.set(id, before);
+    touch(rec);
+    emit(slug, 'design');
+    return { edit: { id, label, files: [], undoable: true }, version: null, coalesced: false, stamps: { screens: stampOf(rec) }, ...(created ? { created } : {}) };
   };
 
   type Req<K extends RouteKey> = { params: Record<string, string>; query: Record<string, string>; body: RouteBody<K> };
@@ -645,14 +691,22 @@ export const createFakeBackend = (): FakeBackend => {
       ];
       return { text: lines.join('\n'), commentIds: [], omitted: [], chip, handEdits: null };
     },
-    // Phase 2 seam stubs: the same sentences the service answers until T2b/T8 land.
-    'POST /designs/:slug/edits': ({ params }) => {
-      get(params.slug);
+    // Phase 2: the screen actions are answered in memory (a scenario can still override the route); the other ops keep the "not built yet" answer.
+    'POST /designs/:slug/edits': ({ params, body }) => {
+      const rec = get(params.slug);
+      if (body.op === 'reorder' || body.op === 'duplicate' || body.op === 'trash-screen') return screenEdit(params.slug ?? '', rec, body);
       throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
     },
     'POST /designs/:slug/edits/:id/undo': ({ params }) => {
-      get(params.slug);
-      throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
+      const rec = get(params.slug);
+      const undo = undos.get(params.id ?? '');
+      if (!undo) throw new ServiceError('not-found', "This edit can't be undone any more.");
+      undos.delete(params.id ?? '');
+      rec.design.screens = undo.screens;
+      rec.written = undo.written;
+      touch(rec);
+      emit(params.slug ?? null, 'design');
+      return { files: [], stamps: { screens: stampOf(rec) }, version: null };
     },
     'GET /designs/:slug/tokens': ({ params }) => {
       get(params.slug);
@@ -714,6 +768,25 @@ export const createFakeBackend = (): FakeBackend => {
     emit(slug, 'files', [path]);
   };
 
+  const padScreens = (slug: string, count: number): void => {
+    const rec = db.get(slug);
+    if (!rec) return;
+    for (let n = rec.design.screens.length + 1; n <= count; n += 1) {
+      rec.design.screens.push(screen(`extra-${n}`, `Extra ${n}`));
+      rec.written.add(`extra-${n}`);
+    }
+    touch(rec);
+    emit(slug, 'design');
+  };
+
+  const unwriteScreen = (slug: string, id: string): void => {
+    const rec = db.get(slug);
+    if (!rec) return;
+    rec.written.delete(id);
+    touch(rec);
+    emit(slug, 'files', [`screens/${id}.html`]);
+  };
+
   const ageDesign = (slug: string, ageMs: number): void => {
     const rec = db.get(slug);
     if (!rec) return;
@@ -731,6 +804,8 @@ export const createFakeBackend = (): FakeBackend => {
     checks: checks.hooks,
     writeFile,
     ageDesign,
+    padScreens,
+    unwriteScreen,
     failNextRestore: (message) => {
       restoreFailure = message;
     },

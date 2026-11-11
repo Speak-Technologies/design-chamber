@@ -33,13 +33,16 @@ import { createInputController, type InputController } from './input-controller.
 import { createPickLayer } from './pick-layer.ts';
 import { createPinLayer } from './pin-layer.ts';
 import { createPopoverLayer } from './popover-layer.ts';
+import { createReorderController } from './reorder-controller.ts';
 import { createListeners } from '../model/listeners.ts';
+import { panBy } from '../../guest/camera.ts';
+import { revealPan } from '../model/screens-model.ts';
 import { feed, store } from '../guest.ts';
 import { createWallContext, late } from './wall-context.ts';
-import type { Rect, Board, BoardLookup, WallOptions, WallPick, WallSelectionEvent } from './wall-types.ts';
+import type { Rect, Board, BoardLookup, ScreenMenuPress, ScreenMove, WallOptions, WallPick, WallSelectionEvent } from './wall-types.ts';
 import type { PickCheck } from '../model/edit-text-model.ts';
 
-export type { WallOptions, WallPick, WallSelection, WallSelectionEvent } from './wall-types.ts';
+export type { ScreenMenuPress, ScreenMove, WallOptions, WallPick, WallSelection, WallSelectionEvent } from './wall-types.ts';
 
 export type WallHandle = {
   el: HTMLElement;
@@ -107,6 +110,17 @@ export type WallHandle = {
   setEditing: (editing: boolean) => void;
   /** Seam S5 (build strip): highlight the boards of these sources (screen ids; null = the page); null clears. */
   markRecent: (sources: ReadonlySet<string | null> | null) => void;
+  /**
+   * Screen management (Phase 2 §5.4), read-only seams like `onPick`: the wall reports a press on a screen's ⋯ button, on the
+   * "+ Screen" board, and a label dropped in a new place; the screens feature turns them into requests.
+   */
+  onScreenMenu: (listener: (press: ScreenMenuPress) => void) => () => void;
+  onGhost: (listener: (anchor: HTMLElement) => void) => () => void;
+  onReorder: (listener: (move: ScreenMove) => void) => () => void;
+  /** A screen action is running: the ⋯ buttons and dragging are off, and the screen it is about (if any) shows progress. */
+  setScreensBusy: (busy: { id: string | null } | null) => void;
+  /** Pan the least that shows a screen's whole row (a moved or copied one); no zoom change. */
+  revealScreen: (id: string) => void;
   dispose: () => void;
 };
 
@@ -134,10 +148,21 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     dropSources: sources.clear,
   });
   const undoEdit = createListeners();
+  const screenMenu = createListeners<[ScreenMenuPress]>();
+  const ghostPress = createListeners<[HTMLElement]>();
+  const reorders = createListeners<[ScreenMove]>();
   const pins = createPinLayer(ctx, camera, popovers, boardLookup);
   const hit = createHitController(ctx, { camera, popovers, picks, boards: boardLookup, isPanning: () => input().isPanning() });
-  const boards = createBoardSet(ctx, { camera, pins, popovers, onFrameMessage: (board, message) => frameMessage()(board, message) });
+  const boards = createBoardSet(ctx, {
+    camera,
+    pins,
+    popovers,
+    onFrameMessage: (board, message) => frameMessage()(board, message),
+    onScreenMenu: screenMenu.emit,
+    onGhost: ghostPress.emit,
+  });
   boardLookup.bind(boards);
+  const reorder = createReorderController(ctx, { camera, boards, onDrop: reorders.emit });
   hooks.bind({
     closePopover: () => {
       popovers.close();
@@ -150,7 +175,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     scaleChanged: pins.scaleChanged,
     queueSync: boards.queueSync,
   });
-  const inputController = createInputController(ctx, { camera, boards, popovers, hit, onUndoEdit: undoEdit.emit });
+  const inputController = createInputController(ctx, { camera, boards, popovers, hit, onUndoEdit: undoEdit.emit, reorder });
   input.bind(inputController);
   // The handler reads sources through the view's cache and can reach nothing that writes (E1, see frame-messages.ts).
   frameMessage.bind(
@@ -190,6 +215,8 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
         board.main.post({ type: 'set-mode', mode: ctx.frameMode() });
         pins.paint(board);
       }
+      // The "+ Screen" board and the screens' ⋯ buttons are Edit mode's (the camera stays where it is).
+      boards.rebuild();
     },
     setHiddenViewports: (ids) => {
       if (pageMode) return;
@@ -209,6 +236,8 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
         if (board.live) void boards.load(board);
         pins.paint(board);
       }
+      // An old version has no "+ Screen" board, and its screen menus say so.
+      boards.rebuild();
     },
     setPageView: (id) => {
       if (!pageMode || id === ctx.pageView) return;
@@ -295,8 +324,28 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     },
     clearSelection: () => popovers.clearSelection(),
     markRecent: (sources) => boards.markRecent(sources),
+    onScreenMenu: screenMenu.add,
+    onGhost: ghostPress.add,
+    onReorder: reorders.add,
+    setScreensBusy: (busy) => {
+      ctx.screensBusy = busy;
+      for (const board of boards.values()) boards.paintLabel(board);
+    },
+    revealScreen: (id) => {
+      const box = boards.rowBox(id);
+      if (!box || ctx.surfaceSize.w === 0) return;
+      const current = camera.get();
+      const covered = camera.coveredInsets();
+      const pan = revealPan(
+        { x: current.x + box.x * current.scale, y: current.y + box.y * current.scale, w: box.w * current.scale, h: box.h * current.scale },
+        { w: ctx.surfaceSize.w - covered.right, h: ctx.surfaceSize.h - covered.bottom },
+        options.compact ? 12 : 32,
+      );
+      if (pan.dx !== 0 || pan.dy !== 0) camera.set(panBy(current, pan.dx, pan.dy), true);
+    },
     dispose: () => {
       ctx.disposed = true;
+      reorder.dispose();
       popovers.close();
       picks.dispose();
       camera.dispose();

@@ -22,9 +22,9 @@ import {
   toolbarName,
   type PickCheck,
 } from '../model/edit-text-model.ts';
-import { nextUndoSlot } from '../model/wall-input.ts';
 import { askBarFor } from './feature-ask-bar.ts';
 import { buildActivityFor } from './feature-build-strip.ts';
+import { undoSlotFor } from './feature-undo.ts';
 import { createSelectionToolbar, type SelectionToolbar, type ToolbarAction } from './selection-toolbar.ts';
 import { createTextEditor, type TextEditor } from './text-editor.ts';
 import type { FeatureMount } from './view-context.ts';
@@ -43,7 +43,8 @@ export const mount: FeatureMount = (ctx) => {
   const { wall, slug } = ctx;
   const rail = ctx.surface === 'panel';
   let open: Open = { kind: 'none' };
-  let undoSlot: string | null = null;
+  // One slot for every hand edit of this view, the screen actions' included (feature-undo.ts).
+  const undoSlot = undoSlotFor(wall);
   let disposed = false;
 
   const notice = createEditNotice({
@@ -51,9 +52,7 @@ export const mount: FeatureMount = (ctx) => {
     undo: async (editId) => {
       await store.undoEdit(slug, editId);
     },
-    onNoticeUndo: (editId) => {
-      undoSlot = nextUndoSlot(undoSlot, { type: 'notice-undo', id: editId }).slot;
-    },
+    onNoticeUndo: undoSlot.noticeUndo,
     focusWall: () => wall.focus(),
     viewing: () => ctx.viewing() !== null,
     onViewing: ctx.onViewing,
@@ -220,7 +219,7 @@ export const mount: FeatureMount = (ctx) => {
         after: decision.after,
       });
       if (disposed) return;
-      if (response.edit.undoable) undoSlot = nextUndoSlot(undoSlot, { type: 'edited', id: response.edit.id }).slot;
+      if (response.edit.undoable) undoSlot.edited(response.edit.id);
       closeEditor();
       notice.saved(response.edit);
       wall.focus();
@@ -307,10 +306,9 @@ export const mount: FeatureMount = (ctx) => {
 
   const offUndoKey = wall.onUndoEdit(() => {
     // E12: with an old version on show the slot refuses (and keeps the edit); the notice says why.
-    const next = nextUndoSlot(undoSlot, { type: 'undo-key' }, ctx.viewing() !== null);
-    undoSlot = next.slot;
-    if (next.refusal !== null) notice.refused(next.refusal);
-    else if (next.undo !== null) void notice.undo(next.undo);
+    const { undo, refusal } = undoSlot.key(ctx.viewing() !== null);
+    if (refusal !== null) notice.refused(refusal);
+    else if (undo !== null) void notice.undo(undo);
   });
 
   // An old version on show: nothing here may write. The toolbar goes; an editor with unsaved words stays, with Save off and the reason.

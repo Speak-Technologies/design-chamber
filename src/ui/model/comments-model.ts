@@ -28,9 +28,16 @@ export const pinNumbers = (comments: readonly Comment[]): Map<string, number> =>
   return numbers;
 };
 
-export type CommentGroup = { key: string; title: string; comments: Comment[] };
+/** `removed`: the screen is not in the design any more (moved to trash, or dropped by the agent); its pins are not drawn. */
+export type CommentGroup = { key: string; title: string; comments: Comment[]; removed?: true };
 
-/** Drawer groups: one per screen in wall order, then comments whose screen no longer exists. A page has one group, titled with the page's name. */
+/** The title of a group of comments on a screen that is gone: its id, since the title went with the entry. */
+export const removedGroupTitle = (screenId: string): string => `${screenId} · Screen removed`;
+
+/**
+ * Drawer groups: one per screen in wall order, then one per screen that is gone (in the order its comments first
+ * appear), each "<id> · Screen removed". A page has one group, titled with the page's name.
+ */
 export const groupComments = (comments: readonly Comment[], screens: readonly Screen[], pageTitle: string): CommentGroup[] => {
   const groups: CommentGroup[] = [];
   const known = new Set<string>();
@@ -41,8 +48,14 @@ export const groupComments = (comments: readonly Comment[], screens: readonly Sc
     const mine = comments.filter((comment) => comment.screen === screen.id);
     if (mine.length > 0) groups.push({ key: screen.id, title: screen.title, comments: mine });
   }
-  const orphans = comments.filter((comment) => comment.screen !== null && !known.has(comment.screen));
-  if (orphans.length > 0) groups.push({ key: '__missing', title: 'Screens that no longer exist', comments: orphans });
+  const gone = new Map<string, Comment[]>();
+  for (const comment of comments) {
+    if (comment.screen === null || known.has(comment.screen)) continue;
+    const list = gone.get(comment.screen);
+    if (list) list.push(comment);
+    else gone.set(comment.screen, [comment]);
+  }
+  for (const [screen, list] of gone) groups.push({ key: `__removed:${screen}`, title: removedGroupTitle(screen), comments: list, removed: true });
   return groups;
 };
 

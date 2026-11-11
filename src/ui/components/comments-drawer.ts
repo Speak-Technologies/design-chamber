@@ -68,7 +68,7 @@ export const mountComments = (options: CommentsOptions): CommentsHandle => {
     }
   };
 
-  const item = (comment: Comment, number: number, detachedHere: boolean, design: { viewports: Parameters<typeof viewportOf>[0] }): HTMLElement => {
+  const item = (comment: Comment, number: number, detachedHere: boolean, design: { viewports: Parameters<typeof viewportOf>[0] }, removed = false): HTMLElement => {
     const resolved = comment.status === 'resolved';
     const toggle = iconBtn({
       icon: resolved ? 'restore' : 'check',
@@ -93,9 +93,15 @@ export const mountComments = (options: CommentsOptions): CommentsHandle => {
           },
         });
     if (sendNow && isSending(comment.id)) sendNow.setAttribute('aria-busy', 'true');
+    // A comment on a screen that is gone has no pin to show; it is kept (and can still be sent or resolved).
     const main = h(
       'button',
-      { type: 'button', class: 'dc-comment-main', 'aria-label': `Show comment ${number} on the wall` },
+      {
+        type: 'button',
+        class: 'dc-comment-main',
+        'aria-label': removed ? `Comment ${number}, on a screen that was removed` : `Show comment ${number} on the wall`,
+        disabled: removed,
+      },
       h('span', { class: 'dc-pin-badge', 'data-status': comment.status, 'aria-hidden': 'true' }, resolved ? '✓' : String(number)),
       h(
         'span',
@@ -107,7 +113,7 @@ export const mountComments = (options: CommentsOptions): CommentsHandle => {
       ),
     );
     main.addEventListener('click', () => options.onLocate(comment.id));
-    return h('li', { class: 'dc-comment', 'data-detached': detachedHere ? 'true' : 'false' }, main, sendNow, toggle);
+    return h('li', { class: 'dc-comment', 'data-detached': detachedHere ? 'true' : 'false', 'data-removed': removed ? 'true' : null }, main, sendNow, toggle);
   };
 
   const paint = (): void => {
@@ -150,8 +156,14 @@ export const mountComments = (options: CommentsOptions): CommentsHandle => {
       const lost = shown.filter((comment) => missing.has(comment.id));
       const placed = shown.filter((comment) => !missing.has(comment.id));
       for (const group of groupComments(placed, design.screens, design.title)) {
+        const removed = group.removed === true;
         list.append(
-          h('section', { class: 'dc-comment-group' }, h('h3', { class: 'dc-group-title' }, group.title, h('span', { class: 'dc-muted' }, String(group.comments.length))), h('ul', { class: 'dc-comment-items' }, ...group.comments.map((comment) => item(comment, numbers.get(comment.id) ?? 0, false, design)))),
+          h(
+            'section',
+            { class: 'dc-comment-group', 'data-removed': removed ? 'true' : null },
+            h('h3', { class: 'dc-group-title' }, group.title, h('span', { class: 'dc-muted' }, String(group.comments.length))),
+            h('ul', { class: 'dc-comment-items' }, ...group.comments.map((comment) => item(comment, numbers.get(comment.id) ?? 0, false, design, removed))),
+          ),
         );
       }
       if (lost.length > 0) {

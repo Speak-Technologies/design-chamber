@@ -15,7 +15,8 @@ export type Rect = { x: number; y: number; w: number; h: number };
 
 /** One artboard as the wall draws it: the guest layout cell plus its screen and frame rect. */
 export type Artboard = { id: string; screen: Screen | null; viewport: Viewport; rect: Rect; cell: WallArtboard };
-export type WallLayout = { boards: Artboard[]; bounds: Rect };
+/** `ghost`: the "+ Screen" board's box in world px, or null while it is not shown (Play, an old version, the cap, a page). */
+export type WallLayout = { boards: Artboard[]; ghost: Rect | null; bounds: Rect };
 
 export type WallOptions = {
   slug: string;
@@ -84,6 +85,8 @@ export type Board = {
   label: HTMLElement;
   labelText: HTMLElement;
   labelStatus: HTMLElement;
+  /** The ⋯ button of the screen menu: shown on a canvas row's first label in Edit mode (board-set decides). */
+  menu: HTMLButtonElement;
   main: FrameSlot;
   compare: FrameSlot | null;
   /** Screen the frame currently shows; differs from `art.screen` after play-mode navigation. */
@@ -96,6 +99,12 @@ export type Board = {
   clusters: HTMLButtonElement[];
   live: boolean;
 };
+
+/** The user opened a screen's ⋯ menu; the screens feature draws it (the wall only reports the press). */
+export type ScreenMenuPress = { screenId: string; anchor: HTMLElement };
+
+/** A screen dropped into a new place by dragging its label: the whole new order, ids as the design lists them. */
+export type ScreenMove = { id: string; order: string[] };
 
 /** What the controllers built before the board set need from it (a narrow view, so they do not import it). */
 export type BoardLookup = {

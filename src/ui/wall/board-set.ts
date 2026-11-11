@@ -17,12 +17,13 @@ import { icon } from '../components/icons.ts';
 import { btn, iconBtn } from '../components/kit.ts';
 import { artboardLabel, viewportLabel } from '../model/format.ts';
 import { boardAt, labelWidth, liveBoards, type Point } from '../model/wall-model.ts';
+import { GHOST_HEIGHT, ghostVisible, type DragRow } from '../model/screens-model.ts';
 import type { CameraController } from './camera-controller.ts';
 import { createFrameSlot, type FrameSlot } from './frame-slot.ts';
 import type { PinLayer } from './pin-layer.ts';
 import type { PopoverLayer } from './popover-layer.ts';
 import type { WallContext } from './wall-context.ts';
-import type { Artboard, Board, BoardLookup, Rect, WallLayout } from './wall-types.ts';
+import type { Artboard, Board, BoardLookup, Rect, ScreenMenuPress, WallLayout } from './wall-types.ts';
 
 export type { Artboard, Board } from './wall-types.ts';
 
@@ -34,6 +35,12 @@ export type BoardSet = BoardLookup & {
   forComment: (comment: Comment) => Board | undefined;
   /** The bounds of everything on the wall, world px. */
   bounds: () => Rect;
+  /** Screen rows in list order, world px: each one's label top and lowest frame edge (what a drag drops between). */
+  rows: () => DragRow[];
+  /** One screen's whole row (labels and frames), world px, or null when it has no board. */
+  rowBox: (screenId: string) => Rect | null;
+  /** Whether this board is the first (left-most shown) of its screen's row: the one that carries the ⋯ menu and the drag. */
+  isFirstOfRow: (board: Board) => boolean;
   /** Recompute the layout: add, resize and remove boards to match the design (or the page's stage). */
   rebuild: () => void;
   /** Load the board's frame (and its compare frame) for the version on show. Does nothing for a paused board. */
@@ -65,7 +72,14 @@ export type BoardSetDeps = {
   popovers: PopoverLayer;
   /** A frame sent a message; the wall's message handler decides what it means. */
   onFrameMessage: (board: Board, message: FrameToPageMessage) => void;
+  /** The ⋯ button of a screen's label was pressed. */
+  onScreenMenu: (press: ScreenMenuPress) => void;
+  /** The "+ Screen" board was pressed. */
+  onGhost: (anchor: HTMLElement) => void;
 };
+
+/** Smallest gap above a row (screen px) that still shows its label. */
+const LABEL_GAP_MIN = 18;
 
 const toRect = (box: Box): Rect => ({ x: box.x, y: box.y, w: box.width, h: box.height });
 
@@ -73,11 +87,19 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
   const { options, pageMode } = ctx;
   const { camera, pins, popovers } = deps;
   const boards = new Map<string, Board>();
-  let layout: WallLayout = { boards: [], bounds: { x: 0, y: 0, w: 0, h: 0 } };
+  let layout: WallLayout = { boards: [], ghost: null, bounds: { x: 0, y: 0, w: 0, h: 0 } };
   let syncQueued = false;
   let recent: ReadonlySet<string | null> | null = null;
+  /** The "+ Screen" board: made when first needed, taken off the wall (not destroyed) while it is hidden. */
+  let ghost: { root: HTMLElement; button: HTMLButtonElement } | null = null;
 
   const values = (): IterableIterator<Board> => boards.values();
+
+  /** A canvas screen's row can have several viewports; the first shown carries the row's menu and drag (§5.4). */
+  const isFirstOfRow = (board: Board): boolean => {
+    const id = board.art.screen?.id;
+    return id !== undefined && !layout.boards.some((other) => other.screen?.id === id && other.cell.col < board.art.cell.col);
+  };
 
   // ---------------------------------------------------------------- painting
 
@@ -96,8 +118,9 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     board.label.style.transform = `translate(${x}px, ${y - 26}px)`;
     // Never past the wall's right edge, so a long label ends in an ellipsis rather than a cut.
     board.label.style.width = `${Math.max(0, Math.min(labelWidth(rect, next, current.scale), Math.max(width, ctx.surfaceSize.w - x - 8)))}px`;
-    // Labels sit in the gap above their row; below a 24 px gap only the top row keeps one.
-    board.label.hidden = width < 32 || (board.art.cell.row > 0 && (ARTBOARD_LABEL_HEIGHT + WALL_GAP) * current.scale < 24);
+    // Labels sit in the gap above their row; below an 18 px gap only the top row keeps one. A label now carries the screen's
+    // ⋯ menu and its drag, so it holds on down to where a rail 320 px wide fits three screens (about 20 px), its text still in the gap.
+    board.label.hidden = width < 32 || (board.art.cell.row > 0 && (ARTBOARD_LABEL_HEIGHT + WALL_GAP) * current.scale < LABEL_GAP_MIN);
   };
 
   const paintPlaceholder = (board: Board): void => {
@@ -164,6 +187,31 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
       );
     }
     if (ctx.version !== null) append(board.labelStatus, h('span', { class: 'dc-status', 'data-tone': 'info' }, ctx.compare ? `v${ctx.version.slice(1)} | current` : ctx.version));
+    // A screen action in flight: the row it is about says so (the ⋯ buttons are off for the moment).
+    if (ctx.screensBusy !== null && ctx.screensBusy.id !== null && ctx.screensBusy.id === art.screen?.id) {
+      append(board.labelStatus, h('span', { class: 'dc-status dc-status-spin', role: 'status', 'aria-label': 'Working on this screen' }));
+    }
+    paintLabelMenu(board);
+  };
+
+  /**
+   * The screen menu's button and the drag handle of a row's first label. Edit mode on a canvas only (Play uses the
+   * design like a prototype). On an old version the button stays, with every entry off and the reason inside it.
+   * Dragging is the full-screen page only: labels in the rail's fit-all view are too small to hit (10-6).
+   */
+  const paintLabelMenu = (board: Board): void => {
+    const screen = board.art.screen;
+    const shows = !pageMode && screen !== null && ctx.detail.design.kind === 'canvas' && ctx.mode === 'edit' && isFirstOfRow(board);
+    board.menu.hidden = !shows;
+    // aria-disabled, not `disabled`: the button that just had focus keeps it while the request runs.
+    if (ctx.screensBusy !== null) board.menu.setAttribute('aria-disabled', 'true');
+    else board.menu.removeAttribute('aria-disabled');
+    if (screen !== null) {
+      const name = `Actions for screen ${screen.title}`;
+      board.menu.setAttribute('aria-label', name);
+      board.menu.title = name;
+    }
+    board.label.dataset.draggable = shows && !options.compact && !ctx.readOnly() && ctx.screensBusy === null ? 'true' : 'false';
   };
 
   const paint = (board: Board): void => {
@@ -189,14 +237,25 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
   const makeBoard = (art: Artboard): Board => {
     const labelText = h('span', { class: 'dc-label-text' });
     const labelStatus = h('span', { class: 'dc-label-status' });
-    const label = h('div', { class: 'dc-label' }, labelText, labelStatus);
+    let self: Board | null = null;
+    const menu = iconBtn({
+      icon: 'more',
+      label: 'Actions for screen',
+      size: 'sm',
+      onClick: () => {
+        const screenId = self?.art.screen?.id;
+        if (screenId !== undefined && !ctx.disposed && ctx.screensBusy === null) deps.onScreenMenu({ screenId, anchor: menu });
+      },
+    });
+    menu.classList.add('dc-label-menu');
+    menu.hidden = true;
+    const label = h('div', { class: 'dc-label' }, labelText, labelStatus, menu);
     const placeholder = h('div', { class: 'dc-placeholder' });
     const hoverTag = h('span', { class: 'dc-hover-tag' });
     const hover = h('div', { class: 'dc-hover', hidden: true }, hoverTag);
     const selected = h('div', { class: 'dc-selected', hidden: true });
     const overlayLayer = h('div', { class: 'dc-board-overlay' }, hover, selected);
     const root = h('div', { class: 'dc-board', 'data-board': art.id });
-    let self: Board | null = null;
     const main = createFrameSlot({
       slug: options.slug,
       artboardId: art.id,
@@ -222,6 +281,7 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
       label,
       labelText,
       labelStatus,
+      menu,
       main,
       compare: null,
       screenId: art.screen?.id ?? null,
@@ -288,7 +348,36 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     const viewport: Viewport = chosen ?? { id: PAGE_FILL_VIEWPORT_ID, label: 'Full width', width: geometry.frameW, height: geometry.frameH };
     const frame = { x: 0, y: 0, width: geometry.frameW, height: geometry.frameH };
     const cell: WallArtboard = { id: artboardIdOf(null, viewport.id), screen: null, screenTitle: ctx.detail.design.title, viewport, row: 0, col: 0, frame, label: { x: 0, y: 0, width: frame.width, height: 0 } };
-    return { boards: [{ id: cell.id, screen: null, viewport, rect: toRect(frame), cell }], bounds: toRect(frame) };
+    return { boards: [{ id: cell.id, screen: null, viewport, rect: toRect(frame), cell }], ghost: null, bounds: toRect(frame) };
+  };
+
+  /** The "+ Screen" board: a dashed cell after the last row. Made on first use; it carries no frame. */
+  const ghostBoard = (): { root: HTMLElement; button: HTMLButtonElement } => {
+    if (ghost) return ghost;
+    const button = h('button', { type: 'button', class: 'dc-ghost-add', 'aria-label': 'Add a screen' }, h('span', null, icon('plus', 14), 'Screen'));
+    button.addEventListener('click', () => {
+      if (!ctx.disposed) deps.onGhost(button);
+    });
+    const root = h('div', { class: 'dc-board dc-ghost', 'data-ghost': 'true' }, button);
+    ghost = { root, button };
+    return ghost;
+  };
+
+  /** Show the ghost board in `box`, or take it off the wall (a focused button that goes hands the keyboard back to the wall). */
+  const placeGhost = (box: Rect | null): void => {
+    if (box === null) {
+      if (ghost && ghost.root.isConnected) {
+        const hadFocus = ghost.root.contains(document.activeElement);
+        ghost.root.remove();
+        if (hadFocus) ctx.surface.focus({ preventScroll: true });
+      }
+      return;
+    }
+    const { root } = ghostBoard();
+    if (!root.isConnected) ctx.world.append(root);
+    root.style.transform = `translate(${box.x}px, ${box.y}px)`;
+    root.style.width = `${box.w}px`;
+    root.style.height = `${box.h}px`;
   };
 
   const rebuild = (): void => {
@@ -297,7 +386,9 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     else {
       const visible = design.viewports.filter((viewport) => !ctx.hidden.has(viewport.id));
       const rows = design.kind === 'page' ? [{ id: null, title: design.title }] : design.screens.map((screen) => ({ id: screen.id, title: screen.title, ...(screen.viewports ? { viewports: screen.viewports } : {}) }));
-      const wall = layoutWall(rows, visible);
+      const first = visible[0];
+      const showGhost = first !== undefined && ghostVisible({ kind: design.kind, mode: ctx.mode, viewing: ctx.readOnly(), count: design.screens.length });
+      const wall = layoutWall(rows, visible, showGhost ? { ghost: { width: first.width, height: GHOST_HEIGHT } } : {});
       layout = {
         boards: wall.artboards.map((cell) => ({
           id: cell.id,
@@ -306,9 +397,11 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
           rect: toRect(cell.frame),
           cell,
         })),
+        ghost: wall.ghost ? toRect(wall.ghost.box) : null,
         bounds: wall.bounds ? toRect(wall.bounds) : { x: 0, y: 0, w: 0, h: 0 },
       };
     }
+    placeGhost(layout.ghost);
     const keep = new Set(layout.boards.map((art) => art.id));
     for (const [id, board] of boards) {
       if (!keep.has(id)) {
@@ -381,6 +474,23 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
       layout.boards.map((art) => boards.get(art.id)).find((candidate) => candidate && candidate.art.screen?.id === (comment.screen ?? undefined) && candidate.art.viewport.id === comment.viewport) ??
       [...boards.values()].find((candidate) => comment.screen === null && candidate.art.viewport.id === comment.viewport),
     bounds: () => layout.bounds,
+    rows: () => {
+      const rows: DragRow[] = [];
+      for (const screen of ctx.screens()) {
+        const own = layout.boards.filter((art) => art.screen?.id === screen.id);
+        if (own.length === 0) continue;
+        rows.push({ id: screen.id, top: Math.min(...own.map((art) => art.cell.label.y)), bottom: Math.max(...own.map((art) => art.rect.y + art.rect.h)) });
+      }
+      return rows;
+    },
+    rowBox: (screenId) => {
+      const own = layout.boards.filter((art) => art.screen?.id === screenId);
+      if (own.length === 0) return null;
+      const left = Math.min(...own.map((art) => art.rect.x));
+      const top = Math.min(...own.map((art) => art.cell.label.y));
+      return { x: left, y: top, w: Math.max(...own.map((art) => art.rect.x + art.rect.w)) - left, h: Math.max(...own.map((art) => art.rect.y + art.rect.h)) - top };
+    },
+    isFirstOfRow,
     rebuild,
     load,
     reset,
@@ -411,6 +521,8 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     dispose: () => {
       for (const board of boards.values()) disposeBoard(board);
       boards.clear();
+      ghost?.root.remove();
+      ghost = null;
     },
   };
 };

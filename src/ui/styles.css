@@ -2629,3 +2629,183 @@ summary.dc-checks-group-title:focus-visible {
   flex-wrap: wrap;
 }
 /* ===== end edit text ===== */
+
+/* ===== Phase 2: screens (U3) ===== */
+
+/* ---- The kit menu: a reason inside a disabled option, and notes at the top and the foot ---- */
+/* The option that explains itself wraps: its label on the first line, the reason on the next, full width. */
+.oc-sdk-option[data-reason='true'] {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+/* aria-disabled (not the native attribute, so the arrow keys still reach it): the title dims, the reason keeps its contrast. */
+.oc-sdk-option[aria-disabled='true'] {
+  cursor: default;
+}
+.oc-sdk-option[aria-disabled='true'] .oc-sdk-option-label {
+  opacity: 0.5;
+}
+.dc-menu-reason {
+  flex: 0 0 100%;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  /* A reason is a sentence: it wraps, it is never cut. */
+  white-space: normal;
+}
+.dc-menu-note {
+  margin: 0;
+  max-width: 252px;
+  padding: 4px 8px;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  white-space: normal;
+}
+.dc-menu-note[data-tone='warning'] {
+  color: var(--dc-warning-text);
+}
+
+/* ---- A screen's label: the ⋯ button, and the grab cursor where the full-screen page can drag ---- */
+.dc-label-menu {
+  /* The label is 22 px tall and clips: a button that fits it, with its focus ring drawn inside. */
+  flex: none;
+  width: 22px;
+  height: 22px;
+}
+.dc-label-menu:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--oc-primary) 55%, transparent);
+}
+.dc-label-menu[aria-disabled='true'] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.dc-label[data-draggable='true'] .dc-label-text {
+  cursor: grab;
+}
+.dc-wall[data-reordering='true'],
+.dc-wall[data-reordering='true'] .dc-label-text {
+  cursor: grabbing;
+}
+.dc-board[data-dragging='true'],
+.dc-label[data-dragging='true'] {
+  opacity: 0.45;
+}
+
+/* ---- "+ Screen": a dashed cell after the last row (world px; sizes in --dc-inv so it reads the same at every zoom) ---- */
+.dc-board[data-ghost='true'] {
+  background: transparent;
+  box-shadow: none;
+}
+.dc-ghost-add {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  /* The host's --oc-border alone is near invisible on the dotted wall, so the dash steps toward --oc-muted. */
+  border: calc(1px * var(--dc-inv, 1)) dashed color-mix(in srgb, var(--oc-muted) 55%, transparent);
+  border-radius: calc(var(--dc-r-lg) * var(--dc-inv, 1));
+  background: transparent;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease-out, color 120ms ease-out;
+}
+.dc-ghost-add > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transform: scale(var(--dc-inv, 1));
+}
+.dc-ghost-add:hover {
+  background: var(--oc-hover);
+  color: var(--oc-fg);
+}
+.dc-ghost-add:focus-visible {
+  outline: none;
+  color: var(--oc-fg);
+  box-shadow: 0 0 0 calc(2px * var(--dc-inv, 1)) color-mix(in srgb, var(--oc-primary) 55%, transparent);
+}
+
+/* ---- Dragging a screen (full-screen page): the line between rows, and the chip that follows the pointer ---- */
+.dc-drop {
+  position: absolute;
+  z-index: 5;
+  height: calc(2px * var(--dc-inv, 1));
+  margin-top: calc(-1px * var(--dc-inv, 1));
+  border-radius: 9999px;
+  background: var(--oc-primary);
+  pointer-events: none;
+}
+.dc-drop::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: calc(-4px * var(--dc-inv, 1));
+  width: calc(8px * var(--dc-inv, 1));
+  height: calc(8px * var(--dc-inv, 1));
+  margin-top: calc(-4px * var(--dc-inv, 1));
+  border-radius: 50%;
+  background: var(--oc-primary);
+}
+.dc-drag-chip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--oc-sdk-float-edge);
+  border-radius: var(--dc-r);
+  background: var(--oc-elevated);
+  color: var(--oc-elevated-fg);
+  box-shadow: var(--oc-sdk-float);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.dc-drag-chip span {
+  color: var(--oc-muted);
+}
+
+/* ---- The box that asks for a new screen (and Try 3 directions) ---- */
+.dc-pop.dc-ask-pop .dc-pop-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  padding-bottom: var(--dc-s2);
+}
+.dc-pop.dc-ask-pop .dc-pop-foot {
+  justify-content: flex-end;
+  padding-top: 0;
+  border-top: 0;
+}
+.dc-ask-pop-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--dc-s3);
+}
+.dc-pop-count {
+  flex: none;
+  color: var(--oc-muted);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+.dc-pop-count[data-state='over'] {
+  color: var(--dc-error-text);
+}
+
+/* ---- Comments on a screen that was moved to trash ---- */
+.dc-comment-group[data-removed='true'] .dc-group-title {
+  color: var(--oc-muted);
+}
+.dc-comment-main:disabled {
+  cursor: default;
+}
+/* ===== end screens ===== */
