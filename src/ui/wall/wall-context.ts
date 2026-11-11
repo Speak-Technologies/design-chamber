@@ -38,6 +38,8 @@ export type WallContext = {
   /** Split each artboard: the saved version left, the current design right. */
   compare: boolean;
   showPins: boolean;
+  /** The inline text editor is open: the wall ignores presses and hover until it closes (the editor handles click-away itself). */
+  editing: boolean;
   disposed: boolean;
   /** The surface's size in CSS px; the camera controller keeps it current. */
   surfaceSize: { w: number; h: number };
@@ -98,6 +100,7 @@ export const createWallContext = (options: WallOptions, initialDetail: DesignDet
     version: null,
     compare: false,
     showPins: true,
+    editing: false,
     disposed: false,
     surfaceSize: { w: 0, h: 0 },
 

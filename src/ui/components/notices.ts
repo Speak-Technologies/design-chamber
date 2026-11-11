@@ -7,8 +7,8 @@ import { h } from './dom.ts';
 import { createHoldableTimer, type HoldableTimer } from '../model/holdable-timer.ts';
 
 /** What a transient notice reports; each id holds at most one notice. Shown in this order. */
-export type TransientId = 'export' | 'restore';
-const TRANSIENT_ORDER: readonly TransientId[] = ['export', 'restore'];
+export type TransientId = 'export' | 'restore' | 'edit' | 'tweaks' | 'page-data';
+const TRANSIENT_ORDER: readonly TransientId[] = ['export', 'restore', 'edit', 'tweaks', 'page-data'];
 
 export type NoticesHandle = {
   /** The region element: put it in the view. */

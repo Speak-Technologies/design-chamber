@@ -4,7 +4,9 @@
 import type { PinPlacement, PinTracker } from '../../guest/anchoring.ts';
 import type { Camera, WallArtboard } from '../../guest/camera.ts';
 import type { AskElement, CreateCommentBody, PatchCommentBody } from '../../shared/api.ts';
+import type { HitElement } from '../../shared/bridge-protocol.ts';
 import type { Screen, Viewport } from '../../shared/types.ts';
+import type { PickCheck } from '../model/edit-text-model.ts';
 import type { Point } from '../model/wall-model.ts';
 import type { CardHandle } from './comment-ui.ts';
 import type { FrameSlot } from './frame-slot.ts';
@@ -52,6 +54,24 @@ export type WallSelectionEvent =
   /** A comment was added on the selected element (same `key`): the element has a comment now. */
   | { type: 'commented'; key: string }
   | { type: 'cleared' };
+
+/**
+ * Phase 2 (Edit text): an element the user picked in Edit mode, with what the frame and the file say
+ * about editing it. `check` settles once both answered (it never rejects); `purpose` is `edit` for a
+ * double-click. Only the wall creates picks; the edit feature reads them and never writes through the wall.
+ */
+export type WallPick = {
+  id: number;
+  purpose: 'click' | 'edit';
+  selection: WallSelection;
+  board: Board;
+  element: HitElement;
+  /** Where the user clicked, in frame px (the probe is asked at the same point). */
+  framePoint: Point;
+  /** The screen the element is in (null on a page). */
+  screen: string | null;
+  check: Promise<PickCheck>;
+};
 
 export type Board = {
   art: Artboard;

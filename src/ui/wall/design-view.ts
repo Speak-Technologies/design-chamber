@@ -26,6 +26,7 @@ import { pageViewOptions, remoteBannerHidden, remoteNotice, resolvePageView, sho
 import * as askBar from './feature-ask-bar.ts';
 import * as buildStrip from './feature-build-strip.ts';
 import * as checks from './feature-checks.ts';
+import * as editText from './feature-edit-text.ts';
 import * as findability from './feature-findability.ts';
 import type { DrawerKind, FeatureMount, ViewContext } from './view-context.ts';
 import { createWall, type WallHandle } from './wall.ts';
@@ -716,6 +717,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       mountFeature('ask bar', askBar.mount),
       mountFeature('findability', findability.mount),
       mountFeature('checks badge', checks.mount),
+      // After the build strip and the ask bar: it reads the strip's phase and hands the ask bar an element.
+      mountFeature('edit text', editText.mount),
     ];
 
     built = {

@@ -184,3 +184,67 @@ test('frameModeOf: a saved version is always Play', () => {
   assert.equal(frameModeOf('edit', true), 'play');
   assert.equal(frameModeOf('play', true), 'play');
 });
+
+// ---- Phase 2: Ctrl/⌘+Z and the one undo slot (technical design §2.7) ----
+
+import { isUndoEditKey, nextUndoSlot } from '../../src/ui/model/wall-input.ts';
+
+const undoKey = (over: { key?: string; shift?: boolean; ctrl?: boolean; meta?: boolean; alt?: boolean; inField?: boolean } = {}) =>
+  isUndoEditKey({ key: 'z', shift: false, ctrl: true, meta: false, alt: false, inField: false, ...over });
+
+test('undo-edit: Ctrl or ⌘ with Z, no Shift or Alt, outside a field', () => {
+  assert.equal(undoKey(), true);
+  assert.equal(undoKey({ ctrl: false, meta: true }), true);
+  assert.equal(undoKey({ key: 'Z' }), true);
+  assert.equal(undoKey({ ctrl: false }), false, 'a plain z is not the shortcut');
+  assert.equal(undoKey({ shift: true }), false, 'Ctrl+Shift+Z is redo, which the wall does not have');
+  assert.equal(undoKey({ alt: true }), false);
+  assert.equal(undoKey({ inField: true }), false, 'a field keeps its own undo');
+  assert.equal(undoKey({ key: 'y' }), false);
+});
+
+test('wallKeyAction answers undo-edit on the wall and on a page, and nothing else changes with the new inputs', () => {
+  const base = { code: 'KeyZ', shift: false, ctrl: true };
+  assert.deepEqual(wallKeyAction({ ...base, key: 'z', pageMode: false }), { type: 'undo-edit' });
+  assert.deepEqual(wallKeyAction({ ...base, key: 'z', pageMode: true }), { type: 'undo-edit' });
+  assert.equal(wallKeyAction({ ...base, key: 'z', pageMode: false, inField: true }), null);
+  assert.deepEqual(wallKeyAction({ key: '+', code: '', shift: false, pageMode: false }), { type: 'zoom', factor: 1.25 });
+});
+
+test('nextUndoSlot: an edit fills the slot, Ctrl+Z sends that undo and empties it, a second Ctrl+Z does nothing', () => {
+  let slot: string | null = null;
+  slot = nextUndoSlot(slot, { type: 'edited', id: 'e_one' }).slot;
+  assert.equal(slot, 'e_one');
+  const first = nextUndoSlot(slot, { type: 'undo-key' });
+  assert.deepEqual(first, { slot: null, undo: 'e_one' });
+  assert.deepEqual(nextUndoSlot(first.slot, { type: 'undo-key' }), { slot: null, undo: null });
+});
+
+test('nextUndoSlot: two edits then Ctrl+Z twice undoes only the second, never reaching further back', () => {
+  let slot: string | null = null;
+  slot = nextUndoSlot(slot, { type: 'edited', id: 'e_one' }).slot;
+  slot = nextUndoSlot(slot, { type: 'edited', id: 'e_two' }).slot;
+  const first = nextUndoSlot(slot, { type: 'undo-key' });
+  const second = nextUndoSlot(first.slot, { type: 'undo-key' });
+  assert.equal(first.undo, 'e_two');
+  assert.equal(second.undo, null);
+});
+
+test('nextUndoSlot: Undo pressed on the edit’s own notice empties the slot, so Ctrl+Z then does nothing', () => {
+  const slot = nextUndoSlot(null, { type: 'edited', id: 'e_one' }).slot;
+  const afterNotice = nextUndoSlot(slot, { type: 'notice-undo', id: 'e_one' });
+  assert.deepEqual(afterNotice, { slot: null, undo: null });
+  assert.equal(nextUndoSlot(afterNotice.slot, { type: 'undo-key' }).undo, null);
+});
+
+test('nextUndoSlot: Undo on an older notice leaves the newer edit in the slot', () => {
+  const slot = nextUndoSlot(null, { type: 'edited', id: 'e_two' }).slot;
+  assert.equal(nextUndoSlot(slot, { type: 'notice-undo', id: 'e_one' }).slot, 'e_two');
+});
+
+test('nextUndoSlot: the key empties the slot whatever the service answers (a refused undo is not tried again)', () => {
+  // The reducer has already returned the id and an empty slot before the request goes out; the answer never reaches it.
+  const slot = nextUndoSlot(null, { type: 'edited', id: 'e_one' }).slot;
+  const sent = nextUndoSlot(slot, { type: 'undo-key' });
+  assert.equal(sent.slot, null);
+});

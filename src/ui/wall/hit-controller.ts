@@ -1,11 +1,13 @@
-// Hover outlines and click-to-comment. Both ask the frame "what element is at this point?"
-// (`hit-test`) and act on the answer: a hover paints the outline, a click opens the composer.
-// One request is in flight at a time; the answer is matched to it by artboard and point.
+// Hover outlines, click-to-comment and double-click-to-edit. All ask the frame "what element is at
+// this point?" (`hit-test`) and act on the answer: a hover paints the outline, a click opens the
+// composer, and both a click and a double-click start a pick (the toolbar's Edit text check, in
+// pick-layer.ts). One request is in flight at a time; the answer is matched to it by artboard and point.
 
 import type { FrameToPageMessage } from '../../shared/bridge-protocol.ts';
 import { hitMatches } from '../model/wall-input.ts';
 import { screenToFrame, type Point } from '../model/wall-model.ts';
 import type { CameraController } from './camera-controller.ts';
+import type { PickLayer } from './pick-layer.ts';
 import { rectToBox, type PopoverLayer } from './popover-layer.ts';
 import type { Late, WallContext } from './wall-context.ts';
 import type { Board, BoardLookup } from './wall-types.ts';
@@ -13,7 +15,8 @@ import type { Board, BoardLookup } from './wall-types.ts';
 /** The fastest the hover asks a frame, ms: a moving pointer would otherwise flood it. */
 const HOVER_MIN_INTERVAL = 40;
 
-export type HitPurpose = 'hover' | 'click';
+/** `edit`: a double-click, which opens the text editor directly when the element allows it. */
+export type HitPurpose = 'hover' | 'click' | 'edit';
 
 export type HitController = {
   /** Ask a loaded frame what is at a frame point; ignored while the frame is not ready. */
@@ -31,13 +34,14 @@ export type HitController = {
 export type HitDeps = {
   camera: CameraController;
   popovers: PopoverLayer;
+  picks: PickLayer;
   boards: Late<BoardLookup>;
   /** The hover pauses while the user pans the wall. */
   isPanning: () => boolean;
 };
 
 export const createHitController = (ctx: WallContext, deps: HitDeps): HitController => {
-  const { camera, popovers, boards } = deps;
+  const { camera, popovers, picks, boards } = deps;
   let pointer: Point | null = null;
   let hoverTimer = 0;
   let lastHitAt = 0;
@@ -55,8 +59,16 @@ export const createHitController = (ctx: WallContext, deps: HitDeps): HitControl
     if (!request || !hitMatches(request, board, message.x, message.y)) return;
     if (request.purpose === 'click') {
       pendingHit = null;
-      if (message.element) popovers.openComposer(board, message.element, request.frame);
-      else ctx.options.onNotice('There is no element there to comment on.');
+      if (message.element) {
+        const selection = popovers.openComposer(board, message.element, request.frame);
+        picks.begin(board, message.element, request.frame, selection, 'click');
+      } else ctx.options.onNotice('There is no element there to comment on.');
+      return;
+    }
+    if (request.purpose === 'edit') {
+      pendingHit = null;
+      // The click that came first already told the user when there is nothing there.
+      if (message.element) picks.begin(board, message.element, request.frame, popovers.selectionFor(board, message.element, request.frame), 'edit');
       return;
     }
     if (hoveredBoard !== board || popovers.current()) return;
@@ -78,7 +90,7 @@ export const createHitController = (ctx: WallContext, deps: HitDeps): HitControl
     if (hoverTimer) return;
     hoverTimer = requestAnimationFrame(() => {
       hoverTimer = 0;
-      if (!pointer || ctx.mode !== 'edit' || ctx.readOnly() || popovers.current() || deps.isPanning()) return;
+      if (!pointer || ctx.mode !== 'edit' || ctx.readOnly() || ctx.editing || popovers.current() || deps.isPanning()) return;
       const now = performance.now();
       if (now - lastHitAt < HOVER_MIN_INTERVAL) return scheduleHover();
       lastHitAt = now;

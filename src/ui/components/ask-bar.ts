@@ -39,6 +39,10 @@ export type AskBarHandle = {
   /** Show or remove the chip. Does not call `onChipRemoved`: the caller is reacting to the wall. */
   setSelection: (selection: WallSelection | null) => void;
   selection: () => WallSelection | null;
+  /** Put words in the box (the text editor hands over what the user typed) and keep them; `focus` moves the caret to the end. */
+  setText: (text: string) => void;
+  /** Move the keyboard into the box. */
+  focus: () => void;
   setLink: (link: AskLink) => void;
   /** An old version is on show: the agent edits the current files, so asking is off. */
   setViewing: (viewing: boolean) => void;
@@ -211,6 +215,17 @@ export const createAskBar = (options: AskBarOptions): AskBarHandle => {
       paint();
     },
     selection: () => selection,
+    setText: (text) => {
+      area.value = text;
+      showFailure(null);
+      showStatus('');
+      fit();
+      paint();
+    },
+    focus: () => {
+      area.focus();
+      area.setSelectionRange(area.value.length, area.value.length);
+    },
     setLink: (next) => {
       link = next;
       paint();

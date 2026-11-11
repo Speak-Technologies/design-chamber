@@ -14,12 +14,14 @@
 //   popover-layer.ts      the open composer or thread card
 //   pin-layer.ts          pins and count badges
 //   hit-controller.ts     hover outlines and click-to-comment hit tests
+//   pick-layer.ts         a picked element: what the frame and the file say about editing its text
 //   board-set.ts          artboards: layout, frames, placeholders, labels (status), live budget
 //   frame-messages.ts     what a message from a design frame does
 //   input-controller.ts   keyboard, wheel, pointer; decisions come from ../model/wall-input.ts
 
 import type { Camera } from '../../guest/camera.ts';
 import { anchorStatesOf } from '../../guest/anchoring.ts';
+import { createSourceCache } from '../../guest/source-cache.ts';
 import type { DesignDetailResponse } from '../../shared/api.ts';
 import type { AnchorState } from '../../shared/types.ts';
 import type { BridgeMode, FrameToPageMessage } from '../../shared/bridge-protocol.ts';
@@ -28,16 +30,23 @@ import { createCameraController, type CameraHooks } from './camera-controller.ts
 import { createFrameMessageHandler } from './frame-messages.ts';
 import { createHitController } from './hit-controller.ts';
 import { createInputController, type InputController } from './input-controller.ts';
+import { createPickLayer } from './pick-layer.ts';
 import { createPinLayer } from './pin-layer.ts';
 import { createPopoverLayer } from './popover-layer.ts';
 import { createListeners } from '../model/listeners.ts';
+import { feed, store } from '../guest.ts';
 import { createWallContext, late } from './wall-context.ts';
-import type { Board, BoardLookup, WallOptions, WallSelectionEvent } from './wall-types.ts';
+import type { Rect, Board, BoardLookup, WallOptions, WallPick, WallSelectionEvent } from './wall-types.ts';
+import type { PickCheck } from '../model/edit-text-model.ts';
 
-export type { WallOptions, WallSelection, WallSelectionEvent } from './wall-types.ts';
+export type { WallOptions, WallPick, WallSelection, WallSelectionEvent } from './wall-types.ts';
 
 export type WallHandle = {
   el: HTMLElement;
+  /** The layer over the wall where cards float (surface px); the edit feature puts its toolbar and editor here. */
+  overlay: HTMLElement;
+  /** The surface's size in CSS px. */
+  size: () => { width: number; height: number };
   setDetail: (detail: DesignDetailResponse) => void;
   setMode: (mode: BridgeMode) => void;
   setHiddenViewports: (ids: readonly string[]) => void;
@@ -71,6 +80,31 @@ export type WallHandle = {
   onSelection: (listener: (event: WallSelectionEvent) => void) => () => void;
   /** Seam S4: forget the selected element (the ask bar's chip was removed). */
   clearSelection: () => void;
+  /**
+   * Edit text (Phase 2 §3.5), read-only seams: an element was picked (click, or double-click for `edit`).
+   * The wall asks the frame and reads the file; nothing here writes.
+   */
+  onPick: (listener: (pick: WallPick) => void) => () => void;
+  /** The camera or a frame's scroll moved: anchored chrome follows (or closes). */
+  onMoved: (listener: () => void) => () => void;
+  /** Ctrl/⌘+Z was pressed on the wall. */
+  onUndoEdit: (listener: () => void) => () => void;
+  /** The picked element's box in surface px at the current camera. */
+  pickBox: (pick: WallPick) => Rect;
+  /** Ask the frame and the file again at the pick's point (after a stale refusal). */
+  recheckPick: (pick: WallPick) => Promise<PickCheck>;
+  /** Outline the picked element, or hide the outline with `null`. */
+  ringPick: (pick: WallPick | null) => void;
+  /** Open the comment composer for a pick, or focus it when it is already open. */
+  openComment: (pick: WallPick) => void;
+  /** The open comment card, if any (the toolbar sits next to it). */
+  cardEl: () => HTMLElement | null;
+  /** Close the open comment card unless it holds text the user typed. */
+  closeEmptyCard: () => void;
+  /** Close the open card whatever it holds. */
+  closeCard: () => void;
+  /** The inline editor opened or closed: while it is open the wall ignores presses and hover. */
+  setEditing: (editing: boolean) => void;
   /** Seam S5 (build strip): highlight the boards of these sources (screen ids; null = the page); null clears. */
   markRecent: (sources: ReadonlySet<string | null> | null) => void;
   dispose: () => void;
@@ -90,12 +124,25 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
   const camera = createCameraController(ctx, hooks);
   const selection = createListeners<[WallSelectionEvent]>();
   const popovers = createPopoverLayer(ctx, camera, { emitSelection: selection.emit });
+  // The source behind an Edit text check: one fetch per selection burst, dropped when the file changes (guest/source-cache.ts).
+  const sources = createSourceCache({ load: (slug, screen) => store.loadSource(slug, screen) });
+  ctx.scope.add(feed.subscribe((batch) => sources.applyChanges(batch)));
+  ctx.scope.add(sources.clear);
+  const picks = createPickLayer(ctx, {
+    camera,
+    warm: (screen) => void sources.get(options.slug, screen).catch(() => undefined),
+    dropSources: sources.clear,
+  });
+  const undoEdit = createListeners();
   const pins = createPinLayer(ctx, camera, popovers, boardLookup);
-  const hit = createHitController(ctx, { camera, popovers, boards: boardLookup, isPanning: () => input().isPanning() });
+  const hit = createHitController(ctx, { camera, popovers, picks, boards: boardLookup, isPanning: () => input().isPanning() });
   const boards = createBoardSet(ctx, { camera, pins, popovers, onFrameMessage: (board, message) => frameMessage()(board, message) });
   boardLookup.bind(boards);
   hooks.bind({
-    closePopover: popovers.close,
+    closePopover: () => {
+      popovers.close();
+      picks.notifyMoved();
+    },
     clearHover: hit.clearHover,
     bounds: boards.bounds,
     rebuildLayout: boards.rebuild,
@@ -103,15 +150,20 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     scaleChanged: pins.scaleChanged,
     queueSync: boards.queueSync,
   });
-  const inputController = createInputController(ctx, { camera, boards, popovers, hit });
+  const inputController = createInputController(ctx, { camera, boards, popovers, hit, onUndoEdit: undoEdit.emit });
   input.bind(inputController);
-  frameMessage.bind(createFrameMessageHandler(ctx, { camera, hit, popovers, load: boards.load, shortcut: inputController.shortcut }));
+  // The handler reads sources through the view's cache and can reach nothing that writes (E1, see frame-messages.ts).
+  frameMessage.bind(
+    createFrameMessageHandler(ctx, { camera, hit, popovers, picks, load: boards.load, shortcut: inputController.shortcut }, { loadSource: (slug, screen) => sources.get(slug, screen ?? null) }),
+  );
 
   boards.rebuild();
   camera.apply();
 
   return {
     el: surface,
+    overlay: ctx.overlay,
+    size: ctx.size,
     setDetail: (next) => {
       const structureChanged =
         JSON.stringify(next.design.screens) !== JSON.stringify(ctx.detail.design.screens) ||
@@ -223,11 +275,30 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     },
     focus: () => surface.focus({ preventScroll: true }),
     onSelection: selection.add,
+    onPick: picks.onPick,
+    onMoved: picks.onMoved,
+    onUndoEdit: undoEdit.add,
+    pickBox: picks.box,
+    recheckPick: picks.recheck,
+    ringPick: picks.ring,
+    openComment: (pick) => {
+      const open = popovers.current();
+      if (open?.commentId === null) open.card.focus();
+      else popovers.openComposer(pick.board, pick.element, pick.framePoint);
+    },
+    cardEl: () => popovers.current()?.card.el ?? null,
+    closeEmptyCard: () => popovers.clearSelection(),
+    closeCard: () => popovers.close(),
+    setEditing: (editing) => {
+      ctx.editing = editing;
+      if (editing) hit.clearHover();
+    },
     clearSelection: () => popovers.clearSelection(),
     markRecent: (sources) => boards.markRecent(sources),
     dispose: () => {
       ctx.disposed = true;
       popovers.close();
+      picks.dispose();
       camera.dispose();
       hit.dispose();
       ctx.scope.dispose();

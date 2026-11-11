@@ -1,9 +1,14 @@
 // Phase 1 feature mount (seam S9): the docked ask bar. It fills the bottom dock (S3), listens to
 // the wall's element selection (S4) for the chip, and sends through `flows.ask`.
 
-import { createAskBar } from '../components/ask-bar.ts';
+import { createAskBar, type AskBarHandle } from '../components/ask-bar.ts';
 import { flows, guestHost } from '../guest.ts';
 import type { FeatureMount } from './view-context.ts';
+import type { WallHandle } from './wall.ts';
+
+/** The bar each open view mounted, so a sibling feature (Edit text's "Ask agent") can hand it an element and words. */
+const bars = new WeakMap<WallHandle, AskBarHandle>();
+export const askBarFor = (wall: WallHandle): AskBarHandle | undefined => bars.get(wall);
 
 export const mount: FeatureMount = (ctx) => {
   const bar = createAskBar({
@@ -51,8 +56,10 @@ export const mount: FeatureMount = (ctx) => {
   syncLink();
   syncViewing();
   ctx.slots.bottomDock.append(bar.el);
+  bars.set(ctx.wall, bar);
 
   return () => {
+    bars.delete(ctx.wall);
     offSelection();
     modeWatch.disconnect();
     offDetail();

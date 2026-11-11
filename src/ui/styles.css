@@ -24,6 +24,31 @@
   --dc-ring: 0 0 0 2px color-mix(in srgb, var(--oc-primary) 55%, transparent);
 }
 
+/*
+ * Tone text that holds 4.5:1 on its own 10 to 15% tint (Phase 2 §4.6.2). The host's warning, success and error
+ * text measure about 4.4:1 there in the light theme; stepping 25% toward the foreground keeps the hue and
+ * lands near 5.2:1 (light) and above 7:1 (dark). Both are color-mix of live host variables, so a theme
+ * switch repaints them with no script. On :root so a menu or toast mounted on the body gets them too.
+ */
+:root {
+  --dc-warning-text: color-mix(in srgb, var(--oc-warning-text) 75%, var(--oc-fg));
+  --dc-success-text: color-mix(in srgb, var(--oc-success-text) 75%, var(--oc-fg));
+  --dc-error-text: color-mix(in srgb, var(--oc-error-text) 75%, var(--oc-fg));
+}
+/* The kit's banner titles and badges read --oc-sdk-tone-text (kit style.js: .oc-sdk-banner-title, .oc-sdk-badge[data-tone]). */
+.dc-app .oc-sdk[data-tone='warning'],
+.dc-app .oc-sdk [data-tone='warning'] {
+  --oc-sdk-tone-text: var(--dc-warning-text);
+}
+.dc-app .oc-sdk[data-tone='success'],
+.dc-app .oc-sdk [data-tone='success'] {
+  --oc-sdk-tone-text: var(--dc-success-text);
+}
+.dc-app .oc-sdk[data-tone='error'],
+.dc-app .oc-sdk [data-tone='error'] {
+  --oc-sdk-tone-text: var(--dc-error-text);
+}
+
 html,
 body {
   margin: 0;
@@ -117,7 +142,7 @@ body {
 }
 .dc-form-error {
   margin: 0;
-  color: var(--oc-error-text);
+  color: var(--dc-error-text);
   font-size: 0.8125rem;
 }
 
@@ -585,7 +610,7 @@ body {
   background: transparent;
 }
 .dc-flag[data-tone='warning'] {
-  color: var(--oc-warning-text);
+  color: var(--dc-warning-text);
   background: color-mix(in srgb, var(--oc-warning) 16%, transparent);
 }
 .dc-flag[data-tone='warning']::before {
@@ -1324,11 +1349,11 @@ body {
 }
 .dc-status[data-tone='warning'] {
   background: color-mix(in srgb, var(--oc-warning) 16%, transparent);
-  color: var(--oc-warning-text);
+  color: var(--dc-warning-text);
 }
 .dc-status[data-tone='error'] {
   background: color-mix(in srgb, var(--oc-error) 16%, transparent);
-  color: var(--oc-error-text);
+  color: var(--dc-error-text);
 }
 .dc-status[data-tone='info'] {
   background: color-mix(in srgb, var(--oc-info) 16%, transparent);
@@ -1392,7 +1417,7 @@ body {
 }
 .dc-pop-note {
   margin: 0;
-  color: var(--oc-warning-text);
+  color: var(--dc-warning-text);
   font-size: 0.75rem;
 }
 .dc-textarea {
@@ -1535,7 +1560,7 @@ body {
   overflow-wrap: anywhere;
 }
 .dc-comment-note {
-  color: var(--oc-warning-text);
+  color: var(--dc-warning-text);
   font-size: 0.75rem;
 }
 .dc-comment > .dc-iconbtn {
@@ -1641,13 +1666,13 @@ body {
   font-weight: 600;
 }
 .dc-diff-kind[data-change='added'] {
-  color: var(--oc-success-text);
+  color: var(--dc-success-text);
 }
 .dc-diff-kind[data-change='removed'] {
-  color: var(--oc-error-text);
+  color: var(--dc-error-text);
 }
 .dc-diff-kind[data-change='modified'] {
-  color: var(--oc-warning-text);
+  color: var(--dc-warning-text);
 }
 
 /* ------------------------------------------------------------------ settings */
@@ -2089,7 +2114,7 @@ body {
   white-space: normal;
 }
 .dc-ask-target[data-reason='limit'] {
-  color: var(--oc-error-text);
+  color: var(--dc-error-text);
 }
 /* "Delete, Resolve, Send this, Save" is one button more than the card was drawn for: let them wrap. */
 .dc-thread .dc-pop-foot,
@@ -2234,8 +2259,9 @@ body {
   white-space: nowrap;
 }
 
+/* Scoped to the Checks popover: the comment box and thread cards are `.dc-pop` too and keep their own rules (they float in the wall, absolutely placed). */
 /* The popover under the badge (full screen). The rail uses the full sheet instead. */
-.dc-pop {
+.dc-pop:not(.dc-composer, .dc-thread) {
   position: fixed;
   z-index: 55;
   display: flex;
@@ -2249,30 +2275,30 @@ body {
   box-shadow: var(--oc-sdk-float);
   outline: none;
 }
-.dc-pop-head {
+.dc-pop:not(.dc-composer, .dc-thread) .dc-pop-head {
   display: flex;
   align-items: center;
   gap: var(--dc-s2);
   padding: var(--dc-s2) var(--dc-s2) var(--dc-s1) var(--dc-s4);
 }
-.dc-pop-title {
+.dc-pop:not(.dc-composer, .dc-thread) .dc-pop-title {
   flex: 1;
   margin: 0;
   font-size: 0.9375rem;
   font-weight: 600;
 }
-.dc-pop-body {
+.dc-pop:not(.dc-composer, .dc-thread) .dc-pop-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   padding: var(--dc-s1) var(--dc-s4) var(--dc-s4);
 }
-.dc-pop-foot {
+.dc-pop:not(.dc-composer, .dc-thread) .dc-pop-foot {
   padding: var(--dc-s3) var(--dc-s4);
   border-top: 1px solid var(--dc-hair);
 }
-.dc-pop-foot:empty,
-.dc-pop-foot[hidden] {
+.dc-pop:not(.dc-composer, .dc-thread) .dc-pop-foot:empty,
+.dc-pop:not(.dc-composer, .dc-thread) .dc-pop-foot[hidden] {
   display: none;
 }
 
@@ -2298,10 +2324,10 @@ body {
   font-size: 0.8125rem;
 }
 .dc-checks-render[data-tone='warn'] {
-  color: var(--oc-warning-text);
+  color: var(--dc-warning-text);
 }
 .dc-checks-render[data-tone='ok'] {
-  color: var(--oc-success-text);
+  color: var(--dc-success-text);
 }
 .dc-checks-next {
   margin: 0;
@@ -2353,10 +2379,10 @@ summary.dc-checks-group-title:focus-visible {
   box-shadow: var(--dc-ring);
 }
 .dc-checks-group[data-tone='error'] > .dc-checks-group-title {
-  color: var(--oc-error-text);
+  color: var(--dc-error-text);
 }
 .dc-checks-group[data-tone='warning'] > .dc-checks-group-title {
-  color: var(--oc-warning-text);
+  color: var(--dc-warning-text);
 }
 .dc-checks-group[data-tone='info'] > .dc-checks-group-title,
 .dc-checks-group[data-tone='muted'] > .dc-checks-group-title {
@@ -2437,3 +2463,169 @@ summary.dc-checks-group-title:focus-visible {
   }
 }
 /* ===== end checks badge ===== */
+
+/* ===== Phase 2: edit text (U1) ===== */
+/* The selection toolbar floats over the element in the wall's overlay, the inline editor over the element it edits.
+   Both are host chrome at the card look of the comment box: --oc-elevated, the kit's float shadow, the host radius. */
+.dc-seltoolbar,
+.dc-editor {
+  position: absolute;
+  z-index: 6;
+  border: 1px solid var(--oc-sdk-float-edge);
+  border-radius: var(--dc-r-lg);
+  background: var(--oc-elevated);
+  color: var(--oc-elevated-fg);
+  box-shadow: var(--oc-sdk-float);
+  pointer-events: auto;
+  cursor: default;
+}
+.dc-seltoolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  padding: var(--dc-s1);
+  font-size: 0.75rem;
+}
+.dc-seltoolbar-row {
+  display: flex;
+  gap: 2px;
+}
+.dc-seltoolbar .oc-sdk-btn {
+  height: 26px;
+}
+.dc-seltoolbar .oc-sdk-btn[data-current='true'] {
+  background: var(--oc-hover);
+}
+.dc-seltoolbar .oc-sdk-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+/* Not usable, but still reachable: the reason under the buttons is its description. */
+.dc-seltoolbar .oc-sdk-btn[aria-disabled='true'] {
+  opacity: 0.55;
+}
+.dc-seltoolbar .oc-sdk-btn[aria-disabled='true']:hover {
+  background: transparent;
+}
+.dc-seltoolbar-reason {
+  max-width: 260px;
+  margin: 0;
+  padding: var(--dc-s1) 6px;
+  overflow: hidden;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+/* A narrow stage: icons only; the labels stay as each button's aria-label and tooltip. */
+.dc-seltoolbar[data-labels='false'] .dc-btn-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.dc-seltoolbar[data-labels='false'] .oc-sdk-btn {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+}
+
+.dc-editor {
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  max-width: calc(100% - 16px);
+  padding: var(--dc-s3);
+  font-family: var(--oc-font);
+  font-size: 0.875rem;
+  line-height: 1.45;
+  user-select: text;
+}
+.dc-editor-agent,
+.dc-editor-line {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+.dc-editor-agent,
+.dc-editor-line[data-tone='warning'] {
+  color: var(--dc-warning-text);
+}
+.dc-editor-line[data-tone='plain'],
+.dc-editor-note {
+  color: var(--oc-muted);
+}
+.dc-editor-note {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+/* The words being edited: the host's body size at any wall zoom (the editor is screen-space chrome). */
+.dc-editor-input {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  padding: 8px 10px;
+  resize: none;
+  overflow-y: auto;
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+.dc-editor-input::selection {
+  background: var(--oc-selection);
+  color: inherit;
+}
+.dc-editor-input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--oc-primary) 70%, var(--oc-border));
+  box-shadow: var(--dc-ring);
+}
+.dc-editor-ways {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dc-s2);
+}
+.dc-editor-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--dc-s2);
+}
+.dc-editor-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--dc-s3);
+  min-width: 0;
+}
+.dc-editor-count {
+  color: var(--oc-muted);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+.dc-editor-count[data-state='over'] {
+  color: var(--dc-error-text);
+}
+.dc-editor-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+/* The edit notice stacks its Undo under the text in the rail, like the restore notice. */
+.dc-edit-notice .dc-row-actions {
+  flex-wrap: wrap;
+}
+/* ===== end edit text ===== */

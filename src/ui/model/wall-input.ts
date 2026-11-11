@@ -14,7 +14,9 @@ export type WallKeyAction =
   | { type: 'pan'; dx: number; dy: number }
   | { type: 'toggle-pan-tool' }
   | { type: 'space-down' }
-  | { type: 'escape' };
+  | { type: 'escape' }
+  /** Ctrl/⌘+Z: undo the one hand edit this view made last (`nextUndoSlot`). */
+  | { type: 'undo-edit' };
 
 const ZOOM_KEY_FACTOR = 1.25;
 
@@ -40,8 +42,9 @@ export const shortcutAction = (input: { key: string; shift: boolean; pageMode: b
  * Shift+1 match by `code` so they work on every keyboard layout; arrows pan by `nudgeStep`;
  * `h` (any case) toggles the pan tool; the rest is the shared shortcut table.
  */
-export const wallKeyAction = (input: { key: string; code: string; shift: boolean; pageMode: boolean }): WallKeyAction | null => {
+export const wallKeyAction = (input: { key: string; code: string; shift: boolean; pageMode: boolean; ctrl?: boolean; meta?: boolean; alt?: boolean; inField?: boolean }): WallKeyAction | null => {
   const { key, code, shift } = input;
+  if (isUndoEditKey({ key, shift, ctrl: input.ctrl ?? false, meta: input.meta ?? false, alt: input.alt ?? false, inField: input.inField ?? false })) return { type: 'undo-edit' };
   if (input.pageMode) return shortcutAction(input);
   const step = nudgeStep(shift);
   if (code === 'Digit0' && shift) return { type: 'zoom-reset' };
@@ -54,6 +57,13 @@ export const wallKeyAction = (input: { key: string; code: string; shift: boolean
   if (key === ' ' || key === '+' || key === '=' || key === '-' || key === 'Escape') return shortcutAction(input);
   return null;
 };
+
+/**
+ * Ctrl or ⌘ with Z, no Shift or Alt, and focus not in a field (a field keeps its own undo).
+ * Only the wall's own keydown asks: a key forwarded from a frame carries no modifiers.
+ */
+export const isUndoEditKey = (input: { key: string; shift: boolean; ctrl: boolean; meta: boolean; alt: boolean; inField: boolean }): boolean =>
+  !input.inField && (input.ctrl || input.meta) && !input.shift && !input.alt && input.key.toLowerCase() === 'z';
 
 /** What a key does on a page: scroll the design like a browser tab, or close the open card. */
 export type PageKeyAction = { type: 'scroll-by'; dx: number; dy: number } | { type: 'scroll-to'; x: number; y: number } | { type: 'escape' };
@@ -167,3 +177,29 @@ export const hitMatches = <B>(pending: { board: B; frame: Point } | null, board:
 
 /** The mode a frame is told to run in: a saved version is always read only (Play). */
 export const frameModeOf = (mode: BridgeMode, readOnly: boolean): BridgeMode => (readOnly ? 'play' : mode);
+
+/** What happened to the view's one undo slot (§2.7). */
+export type UndoSlotEvent =
+  /** A hand edit made by this view went through (`id` is the edit's id). */
+  | { type: 'edited'; id: string }
+  /** Ctrl/⌘+Z on the wall. */
+  | { type: 'undo-key' }
+  /** Undo was pressed on the notice of edit `id`. */
+  | { type: 'notice-undo'; id: string };
+
+/**
+ * One slot, the id of the last hand edit this mount made. A new edit replaces it; the key sends
+ * that undo and empties the slot whatever the answer; Undo on the slot's own notice empties it too;
+ * with an empty slot the key does nothing, so it never reaches further back. An edit made on the
+ * other surface never reaches this reducer. `undo` is the edit id to send, or null.
+ */
+export const nextUndoSlot = (slot: string | null, event: UndoSlotEvent): { slot: string | null; undo: string | null } => {
+  switch (event.type) {
+    case 'edited':
+      return { slot: event.id, undo: null };
+    case 'undo-key':
+      return { slot: null, undo: slot };
+    case 'notice-undo':
+      return { slot: slot === event.id ? null : slot, undo: null };
+  }
+};

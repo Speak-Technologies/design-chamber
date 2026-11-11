@@ -53,6 +53,8 @@ OpenChamber reloads the rail's frame whenever the extension updates (a folder ed
 - **Nothing remembered, or something unreadable in storage:** the list, as before.
 It remembers the design only, not a drawer, a sheet or the New dialog. The [full-screen page](full-screen-page.md) does the same under its own key, `place:page`, so a design opened in the rail never reopens in the page. Pure decision: `src/ui/model/place-model.ts`; wiring: `src/ui/components/place-memory.ts`.
 
+**Edit text** works in the rail the same way as on the [full-screen page](full-screen-page.md): the toolbar floats above the picked element (icons only under 300 px wide), and the editor card is at least 240 px wide and at most the rail's width minus 16 px, pinned to the left margin at the element's top edge. The notice with **Undo** stacks its button under the text. Verified at 320 and 480 px, light and dark. Details: [Edit on the canvas](../features/edit-on-canvas.md#editing-text-what-the-user-sees-full-screen-and-rail).
+
 ## States & edge cases
 - **Loading:** skeleton rows in the list, a spinner row in sheets, scoped to what is loading — never a full-screen spinner.
 - **Error:** a banner with the service's sentence and **Try again**; stale rows stay on screen when a refresh fails ("Couldn't refresh the list").
