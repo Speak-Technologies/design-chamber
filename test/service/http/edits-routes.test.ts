@@ -1,15 +1,16 @@
 // The four hand-edit routes on the real service process, called the way the host proxy calls
 // them (Phase 2 technical design §2.2, §17 "Route rejections"): bearer, slug, edit id, body
-// bounds and the user's sentences, before any op runs. The op modules are stubs until T3 to T5,
-// so a well-formed edit answers "not built yet" and nothing is written.
+// bounds and the user's sentences, before any op runs. The text op is real (T3); the tokens
+// reader is a stub until T5, so it answers "not built yet" and nothing is written.
 
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
 
-import type { ApiErrorBody, SourceResponse } from '../../../src/shared/api.ts';
+import type { ApiErrorBody, EditResponse, SourceResponse } from '../../../src/shared/api.ts';
 import { useServiceProcess, type RunningService } from '../../helpers/service-process.ts';
 
 const GONE = 'That design is no longer in your Designs folder.';
@@ -38,10 +39,10 @@ const start = async (t: TestContext): Promise<Rig> => {
 
 const errorOf = async (response: Response): Promise<ApiErrorBody> => (await response.json()) as ApiErrorBody;
 
-const textEdit = (screen: unknown = 'pricing') => ({
+const textEdit = (screen: unknown = 'pricing', base: string = SHA) => ({
   op: 'text',
   screen,
-  base: SHA,
+  base,
   target: { tag: 'h1', id: null, text: 'Pricing', sameIndex: 0, sameCount: 1 },
   before: 'Pricing',
   after: 'Plans',
@@ -94,11 +95,11 @@ describe('hand-edit routes on the real service', () => {
     }
   });
 
-  test('the op stubs and the tokens reader answer "not built yet"; an unknown undo id is 404; nothing is written', async (t) => {
+  test('a text edit with a stale base is 409; the tokens reader answers "not built yet"; an unknown undo id is 404; nothing is written', async (t) => {
     const { service, root } = await start(t);
     const edit = await service.request('/designs/demo/edits', { method: 'POST', body: textEdit() });
-    assert.equal(edit.status, 500);
-    assert.deepEqual(await errorOf(edit), { error: 'internal', message: NOT_BUILT });
+    assert.equal(edit.status, 409);
+    assert.deepEqual(await errorOf(edit), { error: 'stale', message: 'This file changed while you were editing. Nothing was saved.' });
     const tokens = await service.request('/designs/demo/tokens');
     assert.equal(tokens.status, 500);
     assert.equal((await errorOf(tokens)).message, NOT_BUILT);
@@ -106,6 +107,17 @@ describe('hand-edit routes on the real service', () => {
     assert.equal(undo.status, 404);
     assert.deepEqual(await errorOf(undo), { error: 'not-found', message: "This edit can't be undone any more." });
     assert.equal(await readFile(path.join(root, 'demo', 'screens', 'pricing.html'), 'utf8'), '<h1>Pricing</h1>');
+  });
+
+  test('a text edit with the base the page read is written and answers the notice label', async (t) => {
+    const { service, root } = await start(t);
+    const base = createHash('sha256').update('<h1>Pricing</h1>').digest('hex');
+    const edit = await service.request('/designs/demo/edits', { method: 'POST', body: textEdit('pricing', base) });
+    assert.equal(edit.status, 200);
+    const answer = (await edit.json()) as EditResponse;
+    assert.equal(answer.edit.label, 'Text updated in Pricing');
+    assert.deepEqual(answer.edit.files, ['screens/pricing.html']);
+    assert.equal(await readFile(path.join(root, 'demo', 'screens', 'pricing.html'), 'utf8'), '<h1>Plans</h1>');
   });
 
   test('GET /source reports a screen file that is a link inside the design, or under a linked folder, as link: true', async (t) => {

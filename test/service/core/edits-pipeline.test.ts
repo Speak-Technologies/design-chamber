@@ -273,10 +273,10 @@ describe('apply: version first, smallest change, the user event', () => {
     assert.deepEqual(await versionsOf(rig.tmp, 'art'), []);
   });
 
+  // The real text op (T3) is tested in edits-text.test.ts.
   test('the shipped op stubs answer "not built yet" and write nothing', async (t) => {
     const rig = await setup(t);
     await rig.tmp.writeDesign('art', pageDesign({ 'index.html': ORIGINAL }));
-    await assert.rejects(editText(rig, 'Ship faster', 'x'), rejectsWith('internal', 'This part of Design Chamber (edits) is not built yet.'));
     await assert.rejects(rig.edits.readTokens('art'), rejectsWith('internal', 'This part of Design Chamber (edits) is not built yet.'));
     assert.equal(await rig.tmp.read('art/index.html'), ORIGINAL);
   });
