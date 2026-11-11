@@ -2,7 +2,10 @@
 
 Architect, 2026-11-11, branch `feat/phase-2`. Status: **revised after review** (second architect: APPROVE
 WITH FIXES; every should-fix, nit and FYI answered in place, product decisions on coalescing, single-slot
-Ctrl/⌘+Z and Clear folded in), ready for the main agent's task breakdown. Requirements input: `documentation/specs/phase-2-edit-on-canvas.md`
+Ctrl/⌘+Z and Clear folded in), then **updated after the owner's mockup approval** (rail Tweaks as a bottom
+sheet, rail direction rows as a 2×2 grid, and the mockup review's spec-level findings: the disabled reason inside
+the menu option, text-only menus, the app-wide contrast step, one dominant primary, the missing state boards,
+feature 19 on canvases), ready for the main agent's task breakdown. Requirements input: `documentation/specs/phase-2-edit-on-canvas.md`
 ("PS" below, with its section and rule numbers: E1 to E12, 08-1 to 08-6, 09-1 to 09-7, 10-1 to 10-6, 11-1 to
 11-5, 19-1 to 19-7, Q5). Owner decisions: `docs/BRIEF.md` "Owner decisions (2026-11-11, Phase 2)". Until the
 `docs/SPEC.md` update in §15 lands, `docs/SPEC.md` stays the authority; where this design changes it, §15
@@ -441,7 +444,9 @@ service (built through `ensureEditService`) must share one registry.
 - **Agent-working hint (E11)**: one muted line "The agent is working on this design. It may write over your
   edit." shown in the text editor, the Tweaks panel footer and at the top of the screen label menu while the
   build strip's phase (from `watchBuildActivity`) is `working`, `writing` or `retrying`. Colour
-  `--oc-warning-text`, size of the kit's small text.
+  `--dc-warning-text` (the stepped token, §4.6.2), size of the kit's small text. Placement per surface: the text
+  editor's first line (§3.5); the Tweaks footer, above Reset/Save (§4.6, the rail sheet's pinned footer); the
+  screen row menu's `lead` line (§5.4). The state boards draw each placement on rail and page.
 - **Viewing a version (E12)**: every control that writes is disabled with the reason "You're viewing an old
   version." (`ctx.viewing() !== null`), in both surfaces.
 
@@ -727,7 +732,8 @@ wall's selection seam:
   - Keys: Enter (not during IME composition, same `composing` test as the ask bar) saves; Shift+Enter does
     nothing (no line breaks, 08-4); Esc cancels; paste replaces `\r\n|\r|\n` with a space before insertion.
   - Click away (pointer down outside the card): unchanged text → close; changed → stay open, show "Press Enter
-    to save or Esc to discard." in `--oc-warning-text`, move focus back to the textarea.
+    to save or Esc to discard." in `--dc-warning-text` (§4.6.2) under the textarea, replacing the key hint
+    until the next keystroke, and move focus back to the textarea.
   - Saving: textarea `readonly`, Save shows the kit spinner, `aria-busy="true"`; success → editor and
     toolbar close, notice "Text updated in <title>" with **Undo**; refusal → the §2.8 sentence in
     `--oc-error-text` under the textarea, text kept; stale → the sentence plus **Reload and try again**
@@ -737,7 +743,9 @@ wall's selection seam:
     file's text of that element changed, shows "The file now says: “<new text>”" muted above the textarea);
     when it is gone, the reason sentence replaces the hint and **Ask agent** appears in the card (the typed
     text goes into the ask bar's textarea with the element chip).
-  - Over 5 000 characters typed: Save disabled, counter "5 000 characters at most" in `--oc-error-text`.
+  - Character counter: hidden under 4 500 characters; from 4 500 a muted "4 812 / 5 000" at the right of the
+    hint line (`aria-live="polite"`, announced at 4 500 and 5 000 only); over 5 000 Save is disabled and the
+    counter reads "5 000 characters at most" in `--oc-error-text`. Text past the limit is kept, never cut.
   - Agent-working hint (§2.7) as the first line of the card.
 - **Source cache** (`src/guest/source-cache.ts`, new, fullstack): `GET /source` answers per (slug, screen),
   dropped on any `files` event naming that file, on `design` events, on `reset` and when the view closes; at
@@ -753,7 +761,11 @@ States per surface:
 | Not editable | Edit text aria-disabled + reason line | same; reason line wraps to 2 lines max, then "…" with the full text in the tooltip |
 | Editing | editor over the element, toolbar hidden | editor card full width minus 16 px, pinned under the element's top edge |
 | Saving | readonly + spinner | same |
+| Click away with changes | editor stays, "Press Enter to save or Esc to discard." line, focus back in the textarea | same |
+| Near / over the limit | counter from 4 500; over 5 000 Save disabled, error counter | same; the counter wraps under the hint below 300 px |
+| Agent working | hint as the card's first line, editing still allowed | same |
 | Refused | sentence, text kept, Reload and try again for stale | same |
+| Stale, element gone after reload | reason sentence in place of the hint, **Ask agent** in the card | same |
 | Saved | notice with Undo for 10 s, artboards reload in place | same |
 | Viewing a version | toolbar shows only Comment disabled and Edit text disabled "You're viewing an old version." (the composer does not open, as today) | same |
 
@@ -921,7 +933,8 @@ A user-origin event from this same view's own save does not raise the banner (th
 
 Theme tokens: panel `--oc-bg`, `--oc-fg`, `--oc-border`; labels `--oc-fg`, values `--oc-mono` in `--oc-muted`
 with tabular numerals; range input `accent-color: var(--oc-primary)`, track `--oc-border`, focus `--dc-ring`;
-disabled rows `--oc-muted`; dot `--oc-warning`; banners kit `mountBanner` (`warning`, `info`). New icon `tune`
+disabled rows `--oc-muted`; dot `--oc-warning`; the "Unsaved" badge text `--dc-warning-text` (the stepped
+token, §4.6.2); banners kit `mountBanner` (`warning`, `info`). New icon `tune`
 (three sliders) added to `src/ui/components/icons.ts` in the same inline-SVG style.
 
 | Where | Page (full screen) | Rail |
@@ -929,10 +942,11 @@ disabled rows `--oc-muted`; dot `--oc-warning`; banners kit `mountBanner` (`warn
 | Entry | toolbar button **Tweaks** (`tune` icon + label) between Comments and Versions, `aria-pressed` while open; a 6 px dot when unsaved (`aria-label` "Tweaks, unsaved changes") | compact action icon button (`tune`) in S8 before Versions, same dot and label |
 | Shown when | the design has ≥ 1 valid knob | same |
 | No knobs | ⋯ menu **Ask for tweaks** → ask bar text "Add tweaks for this design (accent hue, density, type scale, radius)." focused, not sent | same |
-| Panel | right drawer 360 px; `DrawerKind` gains `'tweaks'`; opening it closes Comments or Versions like today | full-height sheet like Comments |
+| Panel | right drawer 360 px; `DrawerKind` gains `'tweaks'`; opening it closes Comments or Versions like today | **non-modal bottom sheet**, at most 50% of the rail height, the wall visible and live above it (owner decision, PS §4); full-height below about 560 px of rail height; opening it closes Comments or Versions like today, which stay full-height (§4.6.1) |
 | Rows | label · value with unit · native `input type=range` (min, max, step; `aria-valuetext` "210" or "8 px") or a `mountTabs` segmented choice | same, full width |
 | Keys | arrows step, Page Up/Down step × 10, Home/End ends (native range behaviour; the controller clamps and rounds to step) | same |
-| Footer | **Reset** (ghost), **Save** (filled primary, `btn({ emphasis: 'primary' })`), agent-working hint | same |
+| Footer | **Reset** (ghost), **Save** (filled primary, `btn({ emphasis: 'primary' })`), agent-working hint | same, pinned in the sheet's footer (`SheetHandle.foot`) while the rows scroll in its body |
+| One primary | while the panel is open, the ask bar's **Send** drops to the outline look so Save is the one filled primary on screen (polish, review #10); it stays enabled and keeps its keyboard path; back to filled when the panel closes | same |
 
 States: loading ("Reading tokens.css" `loadingRow`) · **load failed** (`GET /tokens` failed: service down,
 host timeout, a 500; the `loadingRow` is replaced by "Couldn't read tokens.css. <message>" in
@@ -953,6 +967,67 @@ a dialog built with `openSheet(host, { variant: 'dialog' })` (`confirmDialog` ha
 **Discard**, **Keep editing** (Esc). Save failing keeps the dialog open with the sentence. Closing only the
 panel keeps values pending (dot stays). Model: `src/ui/model/tweaks-model.ts` (row view, labels, dirty, leave
 decision), pure.
+
+#### 4.6.1 The rail bottom sheet (owner decision, PS §4; U2)
+
+Today the rail opens Comments and Versions with `openSheet(options.actions.host, { variant: 'full' })`
+(`src/ui/wall/design-view.ts:570`), which is modal (`role="dialog"`, Tab trapped, `kit.ts:286-330`) and covers
+the whole rail (`.dc-sheet { position: absolute; inset: 0 }`, `src/ui/styles.css:245`). That would hide the
+preview, so Tweaks gets a new variant instead of a new component:
+
+- **Kit** (`src/ui/components/kit.ts`, U2): `SheetVariant` (`:232`) gains `'bottom'`. It is **non-modal** like
+  `'dock'`: `role="region"`, no `aria-modal`, no scrim, not on `modalStack`, so Tab is not trapped and the wall
+  stays usable. Esc closes it when focus is inside the sheet (the existing non-modal keydown path, `kit.ts`
+  `if (!modal)`); in addition the Tweaks feature closes it on Esc pressed on the wall surface when no popover,
+  composer or editor is open (the wall's own Esc handling runs first; the feature only acts on an unhandled
+  Esc). Focus moves into the sheet on open (existing microtask) and back to the Tweaks button on close.
+  `SheetHandle` gains nothing.
+- **Styles** (`src/ui/styles.css`, U2's block): `.dc-sheet[data-variant='bottom']` is `inset: auto 0 0 0`
+  (pinned to the bottom of the rail host, so the area above receives pointer events), panel
+  `max-height: var(--dc-sheet-max)`, where the feature sets `--dc-sheet-max` to half the host's
+  `clientHeight` in px on open and from a ResizeObserver on the host (a percentage of an auto-height wrapper
+  does not resolve), `border-top: 1px solid var(--oc-border)`,
+  `box-shadow: var(--oc-sdk-float)`, radius `var(--dc-r-lg) var(--dc-r-lg) 0 0`, background `--oc-bg`. The
+  body scrolls (`.dc-sheet-body` already does); the head and the foot (Reset, Save, agent-working hint) stay
+  pinned. The header is the sheet's own: title "Tweaks", the unsaved badge, the close button (no drag
+  handle; the height is content-sized up to the cap).
+- **Fallback**: at open, `host.clientHeight < 560` → the rail uses `'full'` as today (modal, full height). The
+  variant is chosen at open only; resizing the rail while the sheet is open keeps the variant (the 50% cap
+  still holds, the body scrolls). Model: `tweaksSheetVariant(hostHeight)` in `tweaks-model.ts` (pure, tested
+  at 559, 560 and 900).
+- **The wall above stays live**: pan, zoom, Fit, the selection toolbar and pins keep working in the visible
+  part. Fit uses the visible stage: the wall's covered insets gain a bottom value. `CameraController`'s
+  `coveredInsets` answers `bottom: 0` today (`src/ui/wall/camera-controller.ts:64`); `WallOptions` gains
+  `coveredBottom?: () => number` next to `coveredRight` (`src/ui/wall/wall-types.ts:26`), and design-view passes
+  the bottom sheet's `offsetHeight` while it is open (0 otherwise). Open, close and a sheet resize
+  (ResizeObserver on the panel) call `wall.refit()`, which refits only when the user has not moved the camera,
+  as for the dock today.
+- **Unchanged**: the unsaved dot on the S8 Tweaks button, the "Unsaved" badge, the leave-with-unsaved dialog
+  (still `variant: 'dialog'`, modal, over everything), the drawer exclusivity (`toggleDrawer`; Tweaks closes
+  Comments or Versions and back). Comments and Versions keep `'full'` on the rail.
+- **Visual scenarios** (`scenarios/tweaks.mjs`): rail 320 × 900 and 480 × 900 (bottom sheet, wall visible,
+  Fit inside the visible part), rail 320 × 540 (full-height fallback), each in light and dark, with the states
+  ready, unsaved, saving, save refused, stale banner, load failed, and the leave dialog over the bottom sheet.
+
+#### 4.6.2 Tone text contrast, app-wide (review #9; U1 lands it, every later task uses it)
+
+The host's `--oc-warning-text` and `--oc-success-text` on a 10% tone tint (the kit banner background, our
+notices and badges) measure about 4.4:1 in the light theme, under AA for small text; stepping the text 20 to 30%
+toward `--oc-fg` gives about 5:1 and keeps the hue. The defect is already in Phase 1 chrome (`.dc-banner` via
+the kit banner title, the restore notice, the versions "Unsaved changes" row, checks render tone
+`styles.css:2301-2304`, diff kinds `:1644-1650`), so the fix is one app-wide pass, not Phase 2 only:
+
+- `.dc-app` (`src/ui/styles.css:14`) gains `--dc-warning-text: color-mix(in srgb, var(--oc-warning-text) 75%,
+  var(--oc-fg))` and `--dc-success-text` the same way (`--oc-error-text` too only if it measures under 4.5:1 on
+  its tint; U1 measures light and dark and records the ratios in its report).
+- Every `color: var(--oc-warning-text)` / `var(--oc-success-text)` in `styles.css` that sits on a tint or the
+  plain background becomes the `--dc-` token; kit banners inside `.dc-app` get it by overriding the kit's
+  `--oc-sdk-tone-text` (the variable the banner title reads) per tone, with the tone selector verified in
+  `node_modules/@openchamber/sdk/dist/ui/banner.js`.
+- Theme switch: both tokens are `color-mix` of live host variables, so they follow the theme with no script.
+- Phase 2 text that this design names `--oc-warning-text` (the agent-working hint §2.7, the click-away line
+  §3.5) uses `--dc-warning-text`; error lines keep `--oc-error-text` unless U1's measurement says otherwise. The pass sits in U1's own marked block plus in-place edits of the listed rules; U1 names every
+  changed rule in its report. Visual check: the existing Phase 1 scenarios plus U1's, light and dark.
 
 ### 4.7 The broken-knob check finding (09-7; lands after C1)
 
@@ -1067,19 +1142,43 @@ var(--oc-border)`, background transparent over `--oc-muted-surface`, text and ic
 `--oc-sdk-float`.
 
 - **Row menu**: a `more` icon button (`aria-label` "Actions for screen Home") at the right end of the row's
-  first label (one per row, not per viewport). Entries: **Duplicate** (`copy`), **Move up**, **Move down**,
-  **Move to trash** (`trash`), separator, **Try 3 directions…** (`layers`, §6). Disabled reasons: Move up on the
-  first row "This is the first screen.", Move down on the last "This is the last screen.", Duplicate at 40 "A
-  canvas holds up to 40 screens." and on a missing file "Nothing to copy until the agent writes this screen.",
-  every entry on a provisional or unreadable design.json with that sentence, every entry while viewing a version.
-  Hidden in Play mode. Same on rail and page; rail menus open as the kit menu anchored to the button.
+  first label (one per row, not per viewport). Entries, **text only** (the kit `MenuEntry` has no icon slot, and
+  none is added; review #6): **Duplicate**, **Move up**, **Move down**, **Move to trash**, separator, **Try 3
+  directions…** (§6). Disabled reasons: Move up on the first row "This is the first screen.", Move down on the
+  last "This is the last screen.", Duplicate on a missing file "Nothing to copy until the agent writes this
+  screen.", every entry on a provisional or unreadable design.json with that sentence, every entry while viewing
+  a version. Hidden in Play mode. Same on rail and page; rail menus open as the kit menu anchored to the button.
+- **Where a reason shows (review #1)**: inside the disabled option, as a second muted line under its label, never
+  as a note under another row. Kit change (U3, `src/ui/components/kit.ts`): `MenuEntry`'s action variant
+  (`kit.ts:82`) gains `reason?: string`. `openMenu` renders a row that has a `reason` as `aria-disabled="true"`
+  instead of the native `disabled` (so arrow keys still reach it and a screen reader reads it), with the reason
+  in a `<span class="dc-menu-reason">` (id `${uid}-${id}-reason`, `--oc-muted`, the kit's small text, wraps,
+  no ellipsis) that the row names through `aria-describedby`; Enter, Space and click on it do nothing and keep
+  the menu open. Mechanics: the SDK's `moveListSelection` skips items with `disabled` (`navigation.js`), so the
+  kit passes it `{ id, disabled: disabled && !reason }` per entry, and `pick` returns early for any entry whose
+  `disabled` is true; the initial active row stays the first enabled one. `disabled` without `reason` behaves as today (native disabled, skipped). The row with a reason
+  is a two-line block: `.oc-sdk-option` gets `flex-wrap: wrap` for that row only (`data-reason="true"`), the
+  reason taking the full width. Existing callers pass no `reason`, so every current menu is unchanged.
+- **Menu notes** (U3, same kit change): `openMenu` and `attachMenu` take an optional last argument
+  `notes?: { lead?: string; foot?: string }`, drawn as muted, non-interactive lines (`role="presentation"` rows,
+  `.dc-menu-note`) at the top and bottom of the popup, referenced from the popup's `aria-describedby`. `lead`
+  carries the agent-working hint (§2.7). `foot` is used for one sentence only: "A canvas holds up to 40
+  screens." when the cap disables Duplicate (40 screens) or Try 3 directions (fewer than 2 free); those two
+  entries are then disabled without their own `reason` text and point their `aria-describedby` at the foot
+  line, so the cap is said once per menu.
 - **Ghost board "+ Screen"** (page and rail): after the last row, Edit mode, live design, under 40 screens; a
   button filling the ghost cell, label "+ Screen", `plus` icon. Click → `openPopover` (`kit.ts:397`) with
   "What should the new screen show?" (`textarea`, 3 rows), the ask bar's target line ("Goes to the linked chat"
   / "Goes to “<chat>”" / "Starts a new chat"), **Ask the agent** (filled primary), Esc cancels. Sending:
   readonly + spinner; success → popover closes, toast per `askRequestToast(outcome)`
-  (`src/ui/model/ask-bar-model.ts`); failure → "Couldn't send. <message> Your message is still here." At 40
-  screens the ghost is hidden and the last row's menu shows "A canvas holds up to 40 screens." as a muted line.
+  (`src/ui/model/ask-bar-model.ts`); failure → "Couldn't send. <message> Your message is still here." (text
+  kept, **Ask the agent** enabled again). The textarea counts down from the room left after the preface
+  (`ASK_TEXT_MAX` minus `newScreenAsk`'s fixed text): hidden until 200 characters remain, then a muted "180
+  left"; at 0 the button is disabled and the counter turns `--oc-error-text`. At 40 screens the ghost is hidden
+  and every row menu carries the cap foot note above.
+- **State boards (U3 visual scenarios)**: row menu with a reason inside an option, the cap foot note, the
+  agent-working lead; the ghost board idle, popover open, sending, failed (text kept); drag with the drop
+  indicator (page); each on rail 320/480 and page 1400, light and dark.
 - **Drag reorder** (page only, 10-6): pointer down on a row's first label in Edit mode, then `isDrag`
   (`wall-input.ts`) → a drag ghost of the label follows the pointer; the drop indicator sits between rows; Esc
   cancels (nothing sent); drop → reorder op with the new order; the wall re-lays out at once from the answer's
@@ -1161,8 +1260,25 @@ later is still never overwritten).
 ### 6.3 Layout and frontend (11)
 
 `layoutWall` (camera.ts) takes rows as a union: a screen row (today) or a **direction row** `{ group: { of,
-members }, viewport }`: cells left to right Current then members in letter order, each at the chosen viewport,
-one row; a member with its own `viewports` subset that excludes the chosen one still shows (directions are
+members }, viewport }`: cells Current then members in letter order, each at the chosen viewport. How the cells
+flow is a layout option, so one pure function serves both surfaces (owner decision, PS §6):
+
+- `LayoutOptions` (`camera.ts:150`) gains `directionColumns?: number` (default: unlimited). The page passes
+  nothing: **one row**, left to right (Current, A, B, C/D), as before. The rail passes `2`: the group is a
+  **2×2 grid** (Current, A on the first line; B, C on the second; a fourth member D starts a third line,
+  left-aligned; 2 cells make one line, 3 cells leave the second line's right cell empty). Cell width is the
+  chosen viewport's width, line height = label + that viewport's height, `gap` between lines and cells as
+  between screen rows. All cells of one group keep `row` = the group's row index; a new `WallArtboard.line`
+  (0-based, 0 on every screen row) and `col` (0..columns−1) place them, so the row header, Keep and pins
+  address cells as before. The y cursor advances by the group's total height.
+- `board-set.ts` (`rebuild`, `:296-310`, U4) builds the row list with `directionGroups` and passes
+  `directionColumns: options.compact ? 2 : undefined` (`WallOptions.compact`, `wall-types.ts:20`, true on the
+  rail). Fit already uses `layout.bounds`, so the whole grid fits the rail stage.
+- T11c owns the `camera.ts` change and its tests: 1, 2, 3 and 4 members at columns 2 and unlimited; bounds;
+  ids `artboardIdOf(screenId, viewportId)` unchanged; today's layouts byte-for-byte unchanged when no group is
+  passed.
+
+A member with its own `viewports` subset that excludes the chosen one still shows (directions are
 compared at one size). Member screens never get rows of their own. Artboard ids stay `artboardIdOf(screenId,
 viewportId)`, so pins, budget, reloads and anchoring work unchanged. The viewport defaults to the first of
 `of`'s viewports; the choice is kept per design in `host.storage` `view:<slug>` as `directionViewport: { [of]:
@@ -1170,14 +1286,15 @@ viewportId }` (unknown id → first).
 
 | Where | Page | Rail |
 |---|---|---|
-| Row header | "<Title> · 3 directions" (`--oc-fg`, the label style) + a small `mountSelect` "Show at" with the original's viewports | the same text; the viewport choice is a radio group in the row's ⋯ menu ("Show at: Laptop") |
+| Layout | one row: Current, A, B, C/D (`directionColumns` unset) | 2×2 grid: Current, A / B, C (`directionColumns: 2`), all visible at once after Fit |
+| Row header | "<Title> · 3 directions" (`--oc-fg`, the label style) + a small `mountSelect` "Show at" (visible label, `aria-label` "Show directions at") with the original's viewports | the same text and the **same "Show at" select, drawn in the header** (owner decision; the mockup omitted it): on its own line under the title when the header is narrower than title + select, size `xs`; not moved into the ⋯ menu |
 | Board labels | "Current · Laptop 1280×800", "A · Bold", "B · Editorial" (agent names via `textContent`) | same, clipped with the full name in the tooltip |
 | Keep this one | outline `xs` button in each written board's label (`check` icon), Current included | each board label's ⋯ menu item **Keep this one** |
 | Not written yet | the existing "screens/x.html not written yet" board; Keep disabled "Not written yet" | same |
 | Keeping | the pressed button spins; every other Keep and the row's menu disabled | same |
 | Done | normal row again; notice with Undo | same |
 | Refused | the §2.8 sentence as an error notice; the wall refreshes on stale | same |
-| Viewing a version | Keep hidden; the row still shows as a row | same |
+| Viewing a version | Keep hidden; the group keeps its row layout | Keep hidden; the group keeps its grid layout |
 
 **Try 3 directions…** (row menu, 11-1): disabled "This screen already has directions. Keep one first." when the
 row is a group root, "This is a direction of <Title>. Keep one first." for a member (members have no row anyway;
@@ -1200,7 +1317,11 @@ changed (or it appeared) → stale. Links from other screens to `screens/home-b.
 trashed file: Play mode shows the existing "Not a screen of this design" toast; the agent fixes on request.
 A group whose root the user trashes: the members' marks become orphans on the next read (normal rows, warning).
 Reorder with a group: the group moves with its root's entry (members' entries are not rows; their list position
-does not matter). Duplicate on a group root: the copy has no members (marks name the original id).
+does not matter). Duplicate on a group root: the copy has no members (marks name the original id). The same
+design open on the rail and the page: the rail draws the grid and the page the row from the same layout function;
+the "Show at" choice lives in `host.storage` `view:<slug>`, read when each view opens (a change on one surface
+reaches the other on its next open, not live). A phone viewport chosen in the rail grid: two narrow cells per
+line, Fit makes them readable; a laptop viewport: Fit zooms out further, the grid still shows all four.
 
 ---
 
@@ -1273,6 +1394,13 @@ their own later write, which the owner accepted (10-4); the version before each 
 ---
 
 ## 8. Pages that remember their state (feature 19)
+
+**Scope: every design kind, pages and canvases alike** (PS §7, BRIEF "one store per design, shared by all its
+screens and viewports"). A canvas has one `page-state.json` and one controller per surface; every live artboard
+of every screen and viewport is seeded from, writes to and is synced through that one map, so a tick in
+"Home · Laptop" shows in "Home · Phone" and in "Checkout" when it reads the same key. Nothing in §8.1 to §8.6
+is keyed by screen or viewport; the frame-to-design rule (§8.7) is the only scoping. Visual and e2e coverage
+(U5, Q4) include a two-screen canvas.
 
 ### 8.1 Data changes: `<design>/.chamber/page-state.json`
 
@@ -1835,6 +1963,8 @@ which go to the linked chat in the next message by owner decision Q5). Logs neve
 | A Clear followed by a service restart inside another surface's 1 s flush window brings those few keys back | Low | the gen from the old epoch cannot be judged (§8.2); needs a restart in a one-second window |
 | The tweak preview shows a value in contexts (`@media`, `[data-theme]`) that Save will not change | Low | the row's note says so (§4.4) |
 | A filesystem without hard links (FAT/exFAT, some shares) falls back to check-then-rename for creates and moves | Low | microsecond window, same residual as the design.json merge; ids are fresh names nobody else writes |
+| The non-modal rail bottom sheet and the wall both want Esc, and focus can leave the sheet for the wall | Low | the wall's own Esc (popover, composer, editor, selection) runs first; the sheet closes only on an unhandled Esc (§4.6.1); the unsaved dot and the leave dialog keep values safe either way |
+| The app-wide contrast pass changes Phase 1 colours | Low | one token pair, `color-mix` of host variables; Phase 1 visual scenarios re-run light and dark in U1; ratios recorded |
 
 ---
 
@@ -1865,7 +1995,7 @@ which go to the linked chat in the next message by owner decision Q5). Logs neve
 | new §10.13 | Keep this one; DirectionPick stays folder-based |
 | §11.2, §11.4, §11.6 | the new RULES.md rows and lines (§9 here); the hand-edit block in the revision, ask, checks and offline prompts |
 | §12 | the new files and their lanes (§16 here) |
-| §13.2 P2, P6, §13.1 R2, §13.3 | toolbar, editor, Tweaks button and panel, row menus, ghost board, drag, direction rows, Clear saved page data, the new notice ids, `DrawerKind 'tweaks'` |
+| §13.2 P2, P6, §13.1 R2, §13.3 | toolbar, editor, Tweaks button and panel (rail: non-modal bottom sheet, `SheetVariant 'bottom'`), row menus (text only, reasons inside options), ghost board, drag, direction rows (rail: 2×2 grid), Clear saved page data, the new notice ids, `DrawerKind 'tweaks'`, the `--dc-warning-text` / `--dc-success-text` tone tokens |
 | §14 | a "Phase 2" entry with the work packages and, after the build, the as-built deviations |
 | §15 | the Phase 2 test plan (§17 here) |
 | §16, §16.1 | the risks (§14 here) and a Phase 2 threat model (§11 here) |
@@ -1911,7 +2041,7 @@ against the realpath only turns the test red); `npm run check` green.
 | **T7a** Rules text | rules author | S | `rules/DESIGN-RULES.md` | §9.1 verbatim | none |
 | **T8\*** Page state service | fullstack (Opus) | M | `src/shared/page-state.ts` (new, incl. `isOlderClear`), `src/service/page-state.ts` (new), `src/service/routes/page-state.ts` (after T0), `test/service/core/page-state.test.ts`, `test/shared/page-state.test.ts` | §8.1, §8.2: cap, coalescing (fake clock), flush on dispose, removed design not re-created, hostile files, link refused (lexical, through `resolvePlainTarget`), never logged (log spy); a PATCH with a gen older than a Clear → 409 and nothing applied, a gen from another epoch accepted | `documentation/features/saved-page-data.md` (new) |
 | **T9\*** Bridge additions | fullstack (Opus) | M | `src/guest/bridge/{bridge,storage-shim,edit-probe}.ts`, `src/guest/frame-doc.ts`, `test/guest/bridge-pure.test.ts`, `test/e2e/{bridge.test.ts,bridge-page.ts}` | §3.1, §4.4, §8.3 in the real sandboxed blob frame under the guest CSP: stand-in, quota, batch per task with last-value-per-key and **splitting of an oversized batch** (20 000 keys set in one loop all arrive, no message over either cap), sync, preview set and cleared, probe counts; readInit rejects bad `tokens`/`storage` | none |
-| **T11c** Wall layout | fullstack | S | `src/guest/camera.ts`, `test/guest/camera.test.ts` | ghost row and direction rows (§5.3, §6.3); today's layouts unchanged | none |
+| **T11c** Wall layout | fullstack | S | `src/guest/camera.ts`, `test/guest/camera.test.ts` | ghost row and direction rows (§5.3, §6.3), incl. `directionColumns` (unset = one row for the page, `2` = the rail's 2×2 grid; 1 to 4 members), `WallArtboard.line`; today's layouts unchanged | none |
 
 ### Group B
 
@@ -1931,11 +2061,11 @@ against the realpath only turns the test red); `npm run check` green.
 
 | Task | After | Effort | Files | Acceptance | Docs |
 |---|---|---|---|---|---|
-| **U1** Edit text UI | T3, T9, T11a | M | `src/ui/wall/{selection-toolbar,text-editor,feature-edit-text}.ts` (new), `src/ui/wall/{wall,input-controller,hit-controller,popover-layer,frame-messages}.ts`, `src/ui/components/{ask-bar,notices}.ts`, `src/ui/model/{wall-input,edit-text-model}.ts`, `src/ui/styles.css` (own block), `test/ui/edit-text-model.test.ts`, `test/ui/wall-input-model.test.ts`, `test/ui/visual/scenarios/edit-text.mjs` | §3.5 every state on rail 320 and 480 px and page 1400 px, light and dark; keyboard path; `createFrameMessageHandler` takes its store as a parameter (so Q1's E1 replay test can inject a fake); single-slot Ctrl/⌘+Z (`nextUndoSlot` model test, §2.7); `link` disabled reason | `documentation/pages/full-screen-page.md`, `documentation/pages/rail-panel.md`, `edit-on-canvas.md` |
-| **U2** Tweaks UI | T5, T11b, U1 | M | `src/ui/wall/feature-tweaks.ts` (new), `src/ui/components/tweaks-panel.ts` (new), `src/ui/components/icons.ts` (`tune`), `src/ui/wall/{wall,frame-slot,design-view}.ts` (preview seam; frame-slot gets both `tokens` and `storage` init getters), **`src/ui/wall/view-context.ts`** (`DrawerKind` + `'tweaks'`, `:24`), `src/ui/rail/rail-app.ts`, `src/ui/page/page-app.ts` (leave guard), `src/ui/model/{tweaks-model,viewer-menu}.ts`, styles block, tests, `scenarios/tweaks.mjs` | §4.4 to §4.6; 100 ms preview; unsaved survives a reload; leave dialog; load-failed row with Try again; the `alsoSet` preview note | both page docs, `tweaks.md` |
-| **U3** Screens UI | T4, T11c, U1 | M | `src/ui/wall/{board-set,feature-screens,reorder-controller}.ts`, `src/ui/wall/input-controller.ts` (drag start), `src/ui/components/comments-drawer.ts`, `src/ui/model/screens-model.ts`, styles block, tests, `scenarios/screens.mjs` | §5.4; drag page only; keyboard moves; announcements; ghost and its popover | both page docs, `screens-and-directions.md` |
-| **U4** Directions UI | T4, U3 | S | `src/ui/wall/{board-set,feature-directions}.ts`, `src/ui/model/directions-model.ts`, styles block, tests, `scenarios/directions.mjs` | §6.3 table on both surfaces | both page docs, `screens-and-directions.md` |
-| **U5** Page data UI | T11b, U2 | S | `src/ui/wall/feature-page-state.ts` (new), `src/ui/wall/frame-messages.ts` (route `storage-batch`; after U1), `src/ui/model/{page-state-model,viewer-menu}.ts` (after U2), tests, `scenarios/page-data.mjs` | §8.6; once-per-session notices; Clear confirm; version view empty | both page docs, `saved-page-data.md` |
+| **U1** Edit text UI | T3, T9, T11a | M | `src/ui/wall/{selection-toolbar,text-editor,feature-edit-text}.ts` (new), `src/ui/wall/{wall,input-controller,hit-controller,popover-layer,frame-messages}.ts`, `src/ui/components/{ask-bar,notices}.ts`, `src/ui/model/{wall-input,edit-text-model}.ts`, `src/ui/styles.css` (own block, plus the app-wide contrast pass of §4.6.2 in place: `--dc-warning-text`, `--dc-success-text`, every existing rule that used the raw tone text, the kit banner override), `test/ui/edit-text-model.test.ts`, `test/ui/wall-input-model.test.ts`, `test/ui/visual/scenarios/edit-text.mjs` | §3.5 every state on rail 320 and 480 px and page 1400 px, light and dark, including the state boards added after the mockup review (click-away line, character counter, agent-working hint, refused, stale with Reload, element gone after reload); §4.6.2 ratios measured and ≥ 4.5:1 for the stepped tokens on their tints in light and dark, the changed rules listed in the report, Phase 1 scenarios still pass; keyboard path; `createFrameMessageHandler` takes its store as a parameter (so Q1's E1 replay test can inject a fake); single-slot Ctrl/⌘+Z (`nextUndoSlot` model test, §2.7); `link` disabled reason | `documentation/pages/full-screen-page.md`, `documentation/pages/rail-panel.md`, `edit-on-canvas.md` |
+| **U2** Tweaks UI | T5, T11b, U1 | M | `src/ui/wall/feature-tweaks.ts` (new), `src/ui/components/tweaks-panel.ts` (new), `src/ui/components/icons.ts` (`tune`), `src/ui/components/kit.ts` (`SheetVariant` `'bottom'`, non-modal, §4.6.1; before U3), `src/ui/components/ask-bar.ts` (a quiet Send look while a drawer primary shows, §4.6; after U1), `src/ui/wall/{wall,frame-slot,design-view}.ts` (preview seam; frame-slot gets both `tokens` and `storage` init getters; design-view opens Tweaks as the rail bottom sheet and passes `coveredBottom`), `src/ui/wall/{wall-types,camera-controller}.ts` (`coveredBottom`, the bottom inset in `coveredInsets`), **`src/ui/wall/view-context.ts`** (`DrawerKind` + `'tweaks'`, `:24`), `src/ui/rail/rail-app.ts`, `src/ui/page/page-app.ts` (leave guard), `src/ui/model/{tweaks-model,viewer-menu}.ts`, styles block, tests, `scenarios/tweaks.mjs` | §4.4 to §4.6.1; 100 ms preview; unsaved survives a reload; leave dialog; load-failed row with Try again; the `alsoSet` preview note; rail bottom sheet ≤ 50% of the rail with the wall pannable and Fit inside the visible part, Reset/Save pinned, Esc closes, full-height below 560 px (`tweaksSheetVariant` model test), Comments/Versions still full-height; Send quiet while the panel is open; the §4.6.1 scenario list | both page docs, `tweaks.md` |
+| **U3** Screens UI | T4, T11c, U1 | M | `src/ui/wall/{board-set,feature-screens,reorder-controller}.ts`, `src/ui/wall/input-controller.ts` (drag start), `src/ui/components/comments-drawer.ts`, `src/ui/components/kit.ts` (`MenuEntry.reason`, menu `notes`, §5.4; after U2), `src/ui/model/menu-model.ts` (new, pure: `menuRowState(entry)` → `{ navDisabled, inert, nativeDisabled, describedBy }`, which `openMenu` uses) and `test/ui/menu-model.test.ts` (new; `test/ui/**` holds pure view-model tests only, so the DOM rendering is covered by the screens scenario: reason row reachable by arrows and inert, `aria-describedby` to its reason or to the cap foot note, an entry without `reason` unchanged), `src/ui/model/screens-model.ts`, styles block, tests, `scenarios/screens.mjs` | §5.4; text-only menus; each disabled reason inside its option; the cap said once as the foot note; drag page only; keyboard moves; announcements; ghost and its popover (sending, failed, counter); the §5.4 state boards | both page docs, `screens-and-directions.md` |
+| **U4** Directions UI | T4, U3 | S | `src/ui/wall/{board-set,feature-directions}.ts`, `src/ui/model/directions-model.ts`, styles block, tests, `scenarios/directions.mjs` | §6.3 table on both surfaces: one row on the page, 2×2 grid on the rail (`directionColumns: 2` from `board-set.ts`), "Show at" drawn in the header on both; 2, 3 and 4 directions | both page docs, `screens-and-directions.md` |
+| **U5** Page data UI | T11b, U2 | S | `src/ui/wall/feature-page-state.ts` (new), `src/ui/wall/frame-messages.ts` (route `storage-batch`; after U1), `src/ui/model/{page-state-model,viewer-menu}.ts` (after U2), tests, `scenarios/page-data.mjs` | §8.6; once-per-session notices; Clear confirm; version view empty; one store across a two-screen, two-viewport canvas (§8 scope) | both page docs, `saved-page-data.md` |
 
 ### Group D (verification)
 
@@ -1944,7 +2074,7 @@ against the realpath only turns the test red); `npm run check` green.
 | **Q1** qa-tester (Opus medium) | T2a, T2b, T3, U1 | 07 + 08: E1 to E12, §17 tests can fail (mutation), live click-through on Linux; **writes the E1 replay risk test `test/ui/e1-frame-replay.test.ts`** (every frame message type, forged and valid, through `createFrameMessageHandler` with a fake store → zero edit calls; mutation: wiring one message to `applyEdit` turns it red) |
 | **Q2** qa-tester | T5, T5b, U2 | 09 |
 | **Q3** qa-tester (Opus medium) | T4, U3, U4 | 10 + 11 |
-| **Q4** qa-tester (Opus medium) | T8, T9, T10, U5 | 19, incl. §8.8 Linux Electron |
+| **Q4** qa-tester (Opus medium) | T8, T9, T10, U5 | 19 on a page and on a canvas (a write in one screen's artboard reaches the other screens and viewports), incl. §8.8 Linux Electron |
 | **Q5** qa-tester | all | whole phase, `documentation/README.md` index and `documentation/STATUS.md` updated by the main agent, then the SPEC update (§15) by the architect |
 
 Parallel at a glance: after T0, {T1, T2a, T7a, T8, T9, T11c} run together; T2b after T2a; then {T3, T4, T5,
@@ -1954,8 +2084,10 @@ listed. Shared files and their order: `paths.ts` T0 → T2a; `store.ts` T0 → T
 `edits/ops-text.ts` T2b (stub) → T3; `edits/ops-screens.ts` T2b (stub) → T4; `edits/ops-tokens.ts` T2b (stub) →
 T5; `edits/pipeline.ts` T2b only (the op map is fixed there, so T3 to T5 never edit it); `fake-services.ts`
 T0 → T11a; `service-client.ts` T11b only; `wall.ts` U1 → U2; `input-controller.ts` U1 → U3;
-`frame-messages.ts` U1 → U5; `board-set.ts` U3 → U4; `viewer-menu.ts` U2 → U5; `view-context.ts` U2 only;
-`design-view.ts` U2 only; `styles.css` each task in its own marked block; `rules-doc.ts`, `chip.ts`, `guide.ts`
+`frame-messages.ts` U1 → U5; `board-set.ts` U3 → U4; `kit.ts` U2 → U3 (U3 rebases its menu change on U2's sheet
+variant); `ask-bar.ts` U1 → U2; `camera-controller.ts` and `wall-types.ts` U2 only; `viewer-menu.ts` U2 → U5; `view-context.ts` U2 only;
+`design-view.ts` U2 only; `styles.css` each task in its own marked block, except U1's §4.6.2 contrast pass,
+which edits existing rules in place and lands first (U2 to U5 use the `--dc-` tone tokens); `rules-doc.ts`, `chip.ts`, `guide.ts`
 T7b only; `test/service/core/paths.test.ts` T0 → T2a; `test/ui/wall-input-model.test.ts` U1 only;
 `test/ui/e1-frame-replay.test.ts` Q1 only.
 
