@@ -51,6 +51,16 @@ export const run = async (helpers) => {
       await p.wheel(home0.x + home0.w / 2, home0.y + home0.h / 2, 0, -130, { ctrl: true });
       await p.settle(500);
     }
+    if (rail) {
+      // The rail keeps only 4 frames live and fits all six artboards in view, so the budget picks the 4 nearest the centre. With the
+      // "+ Screen" board under the last row (Phase 2) the centre sits low and Home is the one left paused ("Pan here to load it").
+      // Do what that line says: wheel over the paused board (a plain wheel pans it there) until Home is the nearest to the centre.
+      const wall = await p.rect('.dc-wall');
+      const paused = await p.rect('.dc-board[data-board="home@laptop"]');
+      await p.wheel(paused.x + paused.w / 2, paused.y + paused.h / 2, 0, paused.y + paused.h / 2 - (wall.y + wall.h / 2));
+      await p.waitFor('return doc.querySelector(\'.dc-board[data-board="home@laptop"]\')?.dataset.state === "ready"', 'Home to load after panning to it', 20000);
+      await p.settle(500);
+    }
     let board = await p.rect('.dc-board[data-board="home@laptop"]');
 
     // Click a grid of points over the board until the toolbar names an element whose label matches `want`.
