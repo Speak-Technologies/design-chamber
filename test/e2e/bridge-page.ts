@@ -6,13 +6,35 @@
 import { trackPins } from '../../src/guest/anchoring.ts';
 import { createFrameChannel } from '../../src/guest/frame-channel.ts';
 import { ARTBOARD_SANDBOX, createFrameDocument } from '../../src/guest/frame-doc.ts';
-import type { FrameToPageMessage } from '../../src/shared/bridge-protocol.ts';
+import type { FrameToPageMessage, StorageInit } from '../../src/shared/bridge-protocol.ts';
+import { PAGE_STATE_MAX_CHARS } from '../../src/shared/limits.ts';
 import type { Comment } from '../../src/shared/types.ts';
 
 // The design: no <head> (the bridge must create one), fixed geometry, links of every kind, and
-// a test hook (the design's own script) that performs clicks/keys/wheel on request.
+// a test hook (the design's own script) that performs clicks/keys/wheel on request. Phase 2: a
+// first script that reads storage and the preview while the page is still parsing, :root
+// tokens the preview must beat, same-text list items and an rtl paragraph for the edit probe.
 const DESIGN = `<!doctype html>
 <html><body style="margin:0;font:16px/1.2 sans-serif">
+<script>
+  window.__early = (function () {
+    var r = {};
+    try {
+      r.seed = localStorage.getItem('theme');
+      r.same = localStorage === window.localStorage && self.localStorage === globalThis.localStorage;
+      r.inWindow = 'localStorage' in window;
+      var d = Object.getOwnPropertyDescriptor(window, 'localStorage');
+      r.desc = d ? [d.configurable, d.enumerable, d.writable, typeof d.get] : null;
+    } catch (e) { r.error = e.name; }
+    r.accent = document.documentElement.style.getPropertyValue('--accent');
+    return r;
+  })();
+</script>
+<style>:root { --accent: rgb(0, 0, 0); } h1 { color: var(--accent); }</style>
+<ul style="position:absolute;left:700px;top:100px;width:200px;margin:0;padding:0;list-style:none">
+  <li style="height:20px">Same words</li><li style="height:20px">Other words</li><li style="height:20px">Same   words</li>
+</ul>
+<p id="ar" dir="rtl" style="position:absolute;left:700px;top:200px;width:200px;height:20px;margin:0">مرحبا بكم</p>
 <h1 class="hero-title is-active" style="position:absolute;left:50px;top:100px;width:400px;height:60px;margin:0">Fresh roasts, every other Monday</h1>
 <main style="position:absolute;left:0;top:300px;width:600px">
   <section><p class="lead">This paragraph text moved somewhere else entirely</p></section>
@@ -45,6 +67,29 @@ const DESIGN = `<!doctype html>
     if (d.action === 'overlay') { var o = document.querySelector('[data-dc-overlay]'); report(o ? o.getAttribute('style') : null); }
     if (d.action === 'escape-top') { var res; try { res = Boolean(parent.parent.document); } catch (e) { res = 'denied'; } report(res); }
     if (d.action === 'state') { report({ scrollY: scrollY, title: document.title, head: document.head.firstElementChild && document.head.firstElementChild.hasAttribute('data-dc-bridge'), dc: typeof window.__DC }); }
+    if (d.action === 'early') report(window.__early);
+    if (d.action === 'tokens') {
+      var html = document.documentElement.style;
+      report({ accent: html.getPropertyValue('--accent'), gap: html.getPropertyValue('--gap'), h1: getComputedStyle(document.querySelector('h1')).color });
+    }
+    if (d.action === 'storage-api') {
+      var s = localStorage, out = {};
+      s.setItem('a', 1); out.a = s.getItem('a');
+      s.b = 'named'; out.b = s.getItem('b'); out.named = s.theme;
+      out.keys = Object.keys(s).join(','); out.length = s.length; out.key0 = s.key(0); out.key9 = s.key(9);
+      s.removeItem('a'); delete s.b; out.afterRemove = s.length;
+      s.setItem('getItem', 'x'); out.getItemFn = typeof s.getItem; out.getItemValue = s.getItem('getItem'); s.removeItem('getItem');
+      try { s.setItem('q', new Array(d.cap + 2).join('x')); out.quota = 'no throw'; } catch (e) { out.quota = [e.name, e instanceof DOMException, s.getItem('q'), s.length]; }
+      sessionStorage.setItem('s', 'v'); out.session = sessionStorage.getItem('s');
+      try { indexedDB.open('x'); out.idb = 'opened'; } catch (e) { out.idb = e.name; }
+      out.instance = s instanceof Storage;
+      report(out);
+    }
+    if (d.action === 'storage-burst') { for (var i = 0; i < 20000; i++) localStorage.setItem('tick', String(i)); report(localStorage.getItem('tick')); }
+    if (d.action === 'storage-loop') { localStorage.clear(); for (var j = 0; j < 20000; j++) localStorage.setItem('k' + j, '1'); report(localStorage.length); }
+    if (d.action === 'storage-prep') { localStorage.clear(); localStorage.setItem('k1', 'x'); report(localStorage.length); }
+    if (d.action === 'storage-split') { localStorage.removeItem('k1'); localStorage.setItem('k2', new Array(d.cap - 1).join('x')); report(localStorage.length); }
+    if (d.action === 'storage-read') { report({ synced: localStorage.getItem('synced'), k2: localStorage.getItem('k2'), length: localStorage.length }); }
   });
 </script>
 </body></html>`;
@@ -56,7 +101,16 @@ const run = async (): Promise<void> => {
   const iframe = document.createElement('iframe');
   iframe.setAttribute('sandbox', ARTBOARD_SANDBOX);
   iframe.style.cssText = 'width:1280px;height:800px;border:0';
-  const frameDoc = createFrameDocument(DESIGN, { artboardId: 'home@laptop', file: 'screens/home.html', mode: 'edit' });
+  const frameDoc = createFrameDocument(DESIGN, {
+    artboardId: 'home@laptop',
+    file: 'screens/home.html',
+    mode: 'edit',
+    tokens: [
+      { name: '--accent', value: 'rgb(10, 20, 30)' },
+      { name: '--gap', value: '8px' },
+    ],
+    storage: { persist: true, items: [['theme', 'dark'], ['count', '3']] },
+  });
   const nonce = frameDoc.init.nonce;
   const channel = createFrameChannel({ artboardId: 'home@laptop', nonce, frame: iframe });
   // Created before the frame loads, as the wall does, so it sees `ready`.
@@ -124,6 +178,17 @@ const run = async (): Promise<void> => {
   results.hit = hit?.element ?? 'none';
   channel.send({ type: 'hit-test', x: 900, y: 50 });
   results.hitEmpty = (await next('hit', (m) => m.x === 900))?.element ?? null;
+
+  // Edit probe: counts, id, direction, document rect; nothing under the point → null.
+  const probeAt = async (x: number, y: number): Promise<unknown> => {
+    channel.send({ type: 'edit-probe', x, y });
+    const answer = await next('edit-probe-result', (m) => m.x === x && m.y === y);
+    return answer ? answer.probe : 'none';
+  };
+  results.probeTitle = await probeAt(250, 130);
+  results.probeTwin = await probeAt(750, 150);
+  results.probeRtl = await probeAt(750, 210);
+  results.probeEmpty = await probeAt(900, 50);
 
   // Anchors: exact, moved (text), detached; via the real page-side tracker.
   const selector = hit?.element?.selector ?? '';
@@ -224,6 +289,68 @@ const run = async (): Promise<void> => {
   // The bridge only obeys its parent: a scroll-to the design posts to itself is ignored.
   results.selfPost = await act({ action: 'self-post', message: { dc: 1, type: 'scroll-to', artboardId: 'home@laptop', nonce, x: 0, y: 7 } });
   results.escapeTop = await act({ action: 'escape-top' });
+
+  // Tweak preview: in place before the design's first script; set, replaced and cleared live.
+  results.early = await act({ action: 'early' });
+  results.tokensInit = await act({ action: 'tokens' });
+  channel.send({ type: 'set-tokens', vars: [{ name: '--accent', value: 'rgb(200, 100, 50)' }] });
+  await sleep(100);
+  results.tokensSet = await act({ action: 'tokens' });
+  channel.send({ type: 'set-tokens', vars: [] });
+  await sleep(100);
+  results.tokensCleared = await act({ action: 'tokens' });
+
+  // Storage stand-in: the Storage surface, quota, batches per task, splitting, sync.
+  type Batch = { clear: boolean; n: number; chars: number; changes?: [string, string | null][] };
+  const withBatches = async (action: Record<string, unknown>): Promise<{ result: unknown; batches: Batch[] }> => {
+    const from = inbox.length;
+    const result = await act(action);
+    await sleep(300);
+    const batches = inbox.slice(from).flatMap((m): Batch[] => {
+      if (m.type !== 'storage-batch') return [];
+      const chars = m.changes.reduce((sum, [key, value]) => sum + key.length + (value?.length ?? 0), 0);
+      const small = m.changes.length <= 5 && chars <= 200;
+      return [{ clear: m.clear, n: m.changes.length, chars, ...(small ? { changes: m.changes } : {}) }];
+    });
+    return { result, batches };
+  };
+  results.storageApi = await withBatches({ action: 'storage-api', cap: PAGE_STATE_MAX_CHARS });
+  results.storageBurst = await withBatches({ action: 'storage-burst' });
+  results.storageLoop = await withBatches({ action: 'storage-loop' });
+  results.storagePrep = await withBatches({ action: 'storage-prep' });
+  results.storageSplit = await withBatches({ action: 'storage-split', cap: PAGE_STATE_MAX_CHARS });
+  const syncFrom = inbox.length;
+  channel.send({ type: 'storage-sync', clear: false, changes: [['synced', 'yes'], ['k2', null]] });
+  await sleep(100);
+  results.storageSynced = await act({ action: 'storage-read' });
+  await sleep(200);
+  results.storageSyncPostedBack = inbox.slice(syncFrom).some((m) => m.type === 'storage-batch');
+
+  // A malformed storage seed: the design runs with empty, unsaved storage (and no throws).
+  const mini = document.createElement('iframe');
+  mini.setAttribute('sandbox', ARTBOARD_SANDBOX);
+  const miniHtml = `<script>var r = {}; try { r.k = localStorage.getItem('k'); localStorage.setItem('n', '1'); r.n = localStorage.getItem('n'); } catch (e) { r.error = e.name; } parent.postMessage({ test: 'mini', r: r }, '*');</script>`;
+  // Safe: deliberately the wrong shape (a number value), to prove the bridge rejects it.
+  const badStorage = { persist: true, items: [['k', 1]] } as unknown as StorageInit;
+  const miniDoc = createFrameDocument(miniHtml, { artboardId: 'mini@laptop', file: 'screens/mini.html', mode: 'play', storage: badStorage });
+  const miniChannel = createFrameChannel({ artboardId: 'mini@laptop', nonce: miniDoc.init.nonce, frame: mini });
+  let miniBatches = 0;
+  miniChannel.subscribe((m) => {
+    if (m.type === 'storage-batch') miniBatches += 1;
+  });
+  const miniReport = new Promise<unknown>((resolve) => {
+    addEventListener('message', (event) => {
+      if (event.source === mini.contentWindow && event.data?.test === 'mini') resolve(event.data.r);
+    });
+    setTimeout(() => resolve('timeout'), 2000);
+  });
+  mini.src = miniDoc.url;
+  document.body.append(mini);
+  results.miniStorage = await miniReport;
+  await sleep(300);
+  results.miniBatches = miniBatches;
+  miniChannel.dispose();
+  miniDoc.revoke();
   results.finalState = await act({ action: 'state' });
   results.inboxTypes = [...new Set(inbox.map((m) => m.type))].sort();
   frameDoc.revoke();

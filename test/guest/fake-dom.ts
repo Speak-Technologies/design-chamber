@@ -127,6 +127,12 @@ export class FakeDocument {
     const chain = parseSelector(selector);
     return [this.documentElement, ...this.documentElement.descendants()].filter((element) => matches(element, chain));
   }
+
+  /** Document order, matched like an HTML document: HTML tags case-insensitively. */
+  getElementsByTagName(tag: string): FakeElement[] {
+    const wanted = tag.toLowerCase();
+    return [this.documentElement, ...this.documentElement.descendants()].filter((element) => tag === '*' || element.tagName.toLowerCase() === wanted);
+  }
 }
 
 export const fakeDocument = (body: FakeElement): FakeDocument => new FakeDocument(h('html', {}, h('head'), body));
