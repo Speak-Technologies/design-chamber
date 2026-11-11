@@ -398,7 +398,7 @@ export type EditRequest =
 export type EditStamps = { file?: string; tokens?: string; screens?: string };
 
 export type EditResponse = {
-  edit: { id: string; label: string; files: string[]; undoable: boolean };
+  edit: { id: string; label: string; detail?: string; files: string[]; undoable: boolean };
   /** The "Before your edits" / "Before keeping a direction" version, or null when coalesced or deduped. */
   version: VersionSummary | null;
   coalesced: boolean;

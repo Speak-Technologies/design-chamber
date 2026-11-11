@@ -651,7 +651,7 @@ export const createEditService = (deps: EditServiceDeps): EditService => {
               }
             }
             const response: Omit<EditResponse, 'version' | 'coalesced'> = {
-              edit: { id: editId, label: plan.label, files: [...run.files].sort(), undoable },
+              edit: { id: editId, label: plan.label, ...(plan.detail ? { detail: plan.detail } : {}), files: [...run.files].sort(), undoable },
               stamps: run.stamps,
               ...(plan.created ? { created: plan.created } : {}),
             };

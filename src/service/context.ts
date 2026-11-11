@@ -129,7 +129,7 @@ export type DesignStore = {
    */
   writeScreens(slug: string, expectStamp: string, mutate: (raw: JsonValue | undefined) => JsonValue[], hooks?: WriteHooks): Promise<{ stamp: string; bytes: Uint8Array }>;
   /** Move comments between screens under the store lock (Phase 2 §6.2); `bytes` is the design.json mirror written, or null when it was skipped. */
-  moveComments(slug: string, moves: { from: string; to: string }[], hooks?: WriteHooks): Promise<{ moved: { id: string; from: string; to: string }[]; bytes: Uint8Array | null }>;
+  moveComments(slug: string, moves: { from: string; to: string; ids?: string[] }[], hooks?: WriteHooks): Promise<{ moved: { id: string; from: string; to: string }[]; bytes: Uint8Array | null }>;
   /** WP3 registers one hook that writes `.chamber/RULES.md`. A failing hook is logged, never undoes the create. */
   onCreate(hook: (record: DesignRecord) => Promise<void>): () => void;
 };
