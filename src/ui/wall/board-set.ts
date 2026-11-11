@@ -246,7 +246,7 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     board.placeholder.dataset.state = board.live ? state : 'idle';
     const inner = h('div', { class: 'dc-placeholder-inner' });
     if (!board.live || state === 'idle') {
-      if (!board.live) append(inner, icon('layers', 20), h('p', { class: 'dc-placeholder-title' }, 'Paused'), h('p', { class: 'dc-placeholder-sub' }, 'Off screen. Pan here to load it.'));
+      if (!board.live) append(inner, icon('layers', 20), h('p', { class: 'dc-placeholder-title' }, 'Paused'), h('p', { class: 'dc-placeholder-sub' }, 'Not loaded. Pan here to load it.'));
       else mountSpinner(inner, { label: 'Loading…' });
     } else if (state === 'loading') {
       mountSpinner(inner, { label: `Loading ${board.art.screen?.title ?? 'page'}…` });
@@ -681,7 +681,9 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     // The part of the wall a drawer or the rail's Tweaks sheet leaves in view: its centre is where the budget aims, so the boards the user sees stay live.
     const covered = camera.coveredInsets();
     const shown = { w: Math.max(0, ctx.surfaceSize.w - covered.right), h: Math.max(0, ctx.surfaceSize.h - covered.bottom) };
-    const live = new Set(liveBoards([...boards.values()].map((board) => ({ id: board.art.id, rect: board.art.rect })), camera.get(), shown, ctx.liveBudget, FRAME_UNLOAD_MARGIN).map((entry) => entry.id));
+    // In screen order (the layout's), not the map's insertion order: a tie for the last live slot goes to the earlier screen.
+    const ordered = layout.boards.flatMap((art) => boards.get(art.id) ?? []);
+    const live = new Set(liveBoards(ordered.map((board) => ({ id: board.art.id, rect: board.art.rect })), camera.get(), shown, ctx.liveBudget, FRAME_UNLOAD_MARGIN).map((entry) => entry.id));
     for (const board of boards.values()) {
       const shouldLive = live.has(board.art.id);
       if (shouldLive && !board.live) {

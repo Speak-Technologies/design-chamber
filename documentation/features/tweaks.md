@@ -4,7 +4,7 @@
 
 Why it exists: trying a warmer accent or tighter spacing should not need a chat round trip, and the saved value should live in the design's own tokens, so exports and the agent both see it.
 
-Status: the service half (T5: reading each knob from `tokens.css`, saving through the hand-edit pipeline), the live preview in the frames and the panel on the wall and in the rail (U2) are built. The check finding for a broken knob (T5b) is not built yet.
+Status: built. The service half (T5: reading each knob from `tokens.css`, saving through the hand-edit pipeline), the live preview in the frames, the panel on the wall and in the rail (U2) and the check finding for a broken knob (T5b, see [Design checks](design-checks.md)) are all in.
 
 ## Knobs (written by the agent in design.json)
 A design lists its knobs under `tweaks` in `design.json`. There are two kinds:

@@ -371,6 +371,28 @@ test("the view's own save echo does not raise the banner", async () => {
   assert.equal(r.controller.getState().stale, false);
 });
 
+test('a knob moved while the save is still reading the file back is not stale against the save’s own write', async () => {
+  const r = rig();
+  await r.controller.load();
+  r.controller.setValue('--radius', 10);
+  // The read-back after the write is held open, so the user can move a knob before it answers.
+  const gate: { answer: (() => void) | null } = { answer: null };
+  r.fake.handlers.getTokens = () =>
+    new Promise<TokensResponse>((resolve) => {
+      gate.answer = () => resolve(r.fake.state.tokens);
+    });
+  const saving = r.controller.save();
+  await tick();
+  assert.ok(gate.answer, 'the save is waiting on its read-back');
+  r.controller.setValue('--density', '1.2');
+  gate.answer();
+  await saving;
+  const state = r.controller.getState();
+  assert.equal(state.stale, false, 'the new file is the one this view just wrote, not an agent rewrite');
+  assert.equal(state.dirty, true, 'the knob moved meanwhile is still pending');
+  assert.deepEqual(r.controller.preview(), [{ name: '--density', value: '1.2' }]);
+});
+
 // ---- design gone ----
 
 test('a gone design keeps the pending values for display and writes nothing', async () => {

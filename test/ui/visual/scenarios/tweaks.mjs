@@ -1,5 +1,5 @@
-// Visual scenario for the Tweaks panel (Phase 2 feature 09, U2): page 1400 and rail 320 and 480, dark and light, plus the
-// rail at 540 px tall (the full-height fallback). Per variant, on the coffee canvas (five knobs: three sliders, a choice and
+// Visual scenario for the Tweaks panel (Phase 2 feature 09, U2): page 1400 and rail 320 and 480 (780 and 900 tall), dark and
+// light, plus the rail at 540 px tall (the full-height fallback). Per variant, on the coffee canvas (five knobs: three sliders, a choice and
 // a formula the panel cannot tune; one slider is also set for a narrow screen): the Tweaks button and its place; the panel
 // (a side dock on the page, a non-modal bottom sheet of at most half the rail on the rail, the wall live above it); the
 // rows, the broken knob's reason and the also-set note; moving a knob (the dot, "Unsaved", Send going quiet so Save is the
@@ -16,6 +16,10 @@ const VARIANTS = [
   ['rail', 320, 780, 'light'],
   ['rail', 480, 780, 'dark'],
   ['rail', 480, 780, 'light'],
+  ['rail', 320, 900, 'dark'],
+  ['rail', 320, 900, 'light'],
+  ['rail', 480, 900, 'dark'],
+  ['rail', 480, 900, 'light'],
   ['rail', 320, 540, 'dark'],
   ['rail', 320, 540, 'light'],
 ];
@@ -30,7 +34,7 @@ export const run = async (helpers) => {
   for (const [kind, width, height, theme] of VARIANTS) {
     const rail = kind === 'rail';
     const short = height < 560;
-    const tag = `${kind}-${width}${short ? 'x' + height : ''}-${theme}-tweaks`;
+    const tag = `${kind}-${width}${rail && height !== 780 ? 'x' + height : ''}-${theme}-tweaks`;
     if (only && !only.test(tag)) continue;
     console.log(tag);
     const p = await openPage({ width, height, surface: rail ? 'panel' : 'page', theme, label: tag });
@@ -236,11 +240,13 @@ export const run = async (helpers) => {
     await checkSoon(async () => !(await visible('.dc-tweaks-banner')), `${tag}: Discard my tweaks closes it`);
     check(!(await p.guest(`return doc.querySelector(${q(BUTTON)}).classList.contains('dc-dotmark')`)), `${tag}: and drops the unsaved values`);
 
-    // 6. leaving with unsaved values: the three-button question
+    // 6. leaving with unsaved values: the three-button question, asked over the panel when it is open (the full-height rail
+    // sheet covers the back button, so that one is shut first)
     await nudge('--accent-h', 'ArrowRight', 3);
-    await closePanel();
+    if (short) await closePanel();
     await back();
     await checkSoon(() => visible('.dc-sheet[data-variant="dialog"]'), `${tag}: leaving with unsaved values asks`);
+    if (!short) check(await sheetOpen(), `${tag}: the panel is still open under the question`);
     check((await text('.dc-sheet[data-variant="dialog"] .dc-sheet-title')) === 'Save your tweaks?', `${tag}: "Save your tweaks?"`);
     check((await p.guest(`return [...doc.querySelectorAll('.dc-sheet[data-variant="dialog"] .dc-sheet-foot .oc-sdk-btn')].map((n) => n.textContent.trim()).join('|')`)) === 'Keep editing|Discard|Save', `${tag}: Keep editing, Discard, Save`);
     check((await p.guest(`return doc.querySelector('.dc-sheet[data-variant="dialog"] .oc-sdk-btn[data-emphasis="primary"]')?.textContent.trim()`)) === 'Save', `${tag}: Save is the primary`);
@@ -248,6 +254,7 @@ export const run = async (helpers) => {
     await p.key('Escape', { focus: '.dc-sheet[data-variant="dialog"] .dc-sheet-panel' });
     await checkSoon(async () => !(await visible('.dc-sheet[data-variant="dialog"]')), `${tag}: Escape is Keep editing`);
     check(await visible('.dc-tweaks-btn'), `${tag}: the design is still open`);
+    if (!short) check(await sheetOpen(), `${tag}: Keep editing leaves the panel open`);
     await back();
     await checkSoon(() => visible('.dc-sheet[data-variant="dialog"]'), `${tag}: back asks again`);
     await p.click('.dc-sheet[data-variant="dialog"] .oc-sdk-btn', { text: 'Discard' });
@@ -281,6 +288,12 @@ export const run = async (helpers) => {
     await openPanel();
     check((await text('.dc-tweaks-banners .oc-sdk-banner-title')) === "You're viewing an old version.", `${tag}: the panel says so`);
     check(await p.guest(`return [...doc.querySelectorAll('.dc-knob input[type=range]')].every((n) => n.disabled) && doc.querySelector(${q(SAVE)}).disabled`), `${tag}: the rows and Save are off`);
+    // A choice row that is off is announced as off, like the sliders (not `inert`, which would hide its options from a screen reader)
+    check(
+      await p.guest(`const group = doc.querySelector('${ROW('--density')} .dc-knob-choice'); return group.getAttribute('aria-disabled') === 'true' && !group.inert && [...group.querySelectorAll('[role=tab]')].every((tab) => tab.disabled)`),
+      `${tag}: the choice row is announced as disabled, not inert`,
+    );
+    check(await p.guest(`const slider = doc.querySelector('${ROW('--heading-scale')} input'); return slider.disabled && slider.getAttribute('aria-describedby') === doc.querySelector('${ROW('--heading-scale')} .dc-knob-reason').id`), `${tag}: a disabled slider is tied to its reason line`);
     await p.shot(`${tag}-9-viewing`);
     await closePanel();
     await p.click('.dc-viewing .oc-sdk-btn', { text: 'Back to current' });

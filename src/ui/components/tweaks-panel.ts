@@ -113,7 +113,7 @@ export const mountTweaksPanel = (options: TweaksPanelOptions): TweaksPanelHandle
     const value = h('span', { class: 'dc-knob-value' });
     const notes = h('div', { class: 'dc-knob-notes' });
     const reasonText = h('span');
-    const reason = h('p', { class: 'dc-knob-reason', hidden: true }, icon('warning', 14), reasonText);
+    const reason = h('p', { class: 'dc-knob-reason', id: `${id}-reason`, hidden: true }, icon('warning', 14), reasonText);
     const onChoice = { current: (_id: string): void => undefined };
     let input: HTMLInputElement | null = null;
     let tabs: TabsHandle | null = null;
@@ -161,9 +161,16 @@ export const mountTweaksPanel = (options: TweaksPanelOptions): TweaksPanelHandle
     }
     if (view.tabs && view.tabsHost && row.choice) {
       view.tabs.update({ activeId: row.choice.active });
-      view.tabsHost.inert = row.disabled;
+      // Announced as disabled, like the slider (not `inert`, which would take the options out of the accessibility tree). The kit
+      // repaints its tab buttons on every update, so the flag goes on after it.
+      view.tabsHost.setAttribute('aria-disabled', String(row.disabled));
       view.tabsHost.dataset.disabled = String(row.disabled);
+      for (const tab of view.tabsHost.querySelectorAll<HTMLButtonElement>('[role="tab"]')) tab.disabled = row.disabled;
     }
+    // The control says why it is off: the reason line is read with it.
+    const control = view.input ?? view.tabsHost;
+    if (row.reason !== null) control?.setAttribute('aria-describedby', view.reason.id);
+    else control?.removeAttribute('aria-describedby');
     const key = row.notes.join('\n');
     if (key !== view.notesKey) {
       view.notesKey = key;

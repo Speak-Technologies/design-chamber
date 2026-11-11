@@ -2997,8 +2997,8 @@ summary.dc-checks-group-title:focus-visible {
 .dc-knob[data-disabled='true'] .dc-knob-label {
   color: var(--oc-muted);
 }
-.dc-knob[data-disabled='true'] input[type='range'],
-.dc-knob[data-disabled='true'] .dc-knob-choice {
+/* A disabled choice's tab buttons are dimmed by the kit itself (button:disabled); dimming the group too would square it. */
+.dc-knob[data-disabled='true'] input[type='range'] {
   opacity: 0.5;
 }
 .dc-knob-reason {
