@@ -1,4 +1,4 @@
-<!-- design-chamber:guide v1 sha256:41d3b6f043a51a09b5cdf47a9d939d4bf589a380b90ea6034225ad424d721cee -->
+<!-- design-chamber:guide v1 sha256:4fc0fd4112cf927320236c443df9e9cf31c77cfbeec77e60fc76c43aed6b42dd -->
 # Designs folder (Design Chamber)
 
 This folder, `C:\Users\you\Documents\Designs`, is the user's designs folder for Design Chamber, the design viewer inside OpenChamber. The user sets it in Design Chamber settings (the default is `~/Documents/Designs`). Designs saved anywhere else do not show up.
@@ -54,7 +54,7 @@ design.json for a canvas:
 }
 ```
 
-Set `updated` to the current time whenever you change the design. When design.json already exists, change only `title`, `updated`, `viewports`, `screens` and `designSystem`, and keep every other key as it is.
+Set `updated` to the current time whenever you change the design. When design.json already exists, change only `title`, `updated`, `viewports`, `screens`, `designSystem` and `tweaks`, and keep every other key as it is.
 
 ## Works offline
 

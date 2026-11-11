@@ -118,7 +118,7 @@ describe('RULES.md assembly', () => {
   test('the design.json contract names every key, its owner and the page entry', async () => {
     const files = await realFiles();
     const canvas = buildRulesDoc(baseContext(), files);
-    for (const key of ['version', 'kind', 'title', 'created', 'updated', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry', 'viewports', 'screens', 'designSystem', 'comments']) {
+    for (const key of ['version', 'kind', 'title', 'created', 'updated', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry', 'viewports', 'screens', 'designSystem', 'tweaks', 'comments']) {
       assert.ok(canvas.includes(`\`${key}\``), `contract table names ${key}`);
     }
     assert.ok(canvas.includes('"kind": "canvas"') && canvas.includes('"screens": ['));
@@ -128,6 +128,27 @@ describe('RULES.md assembly', () => {
     const pageHeader = page.split('## Precedence')[0] ?? '';
     assert.ok(pageHeader.includes('  - the page: C:\\Users\\you\\Documents\\Designs\\pricing-page\\index.html') && !pageHeader.includes('one file per screen'));
     assert.ok(page.includes('| `entry` | extension | Page only: always `"index.html"`. |'));
+  });
+
+  test('the contract names tweaks, direction marks and the re-read rule (Phase 2)', async () => {
+    const files = await realFiles();
+    const canvas = buildRulesDoc(baseContext(), files);
+    assert.ok(canvas.includes('| `tweaks` | you | Optional, up to 12 knobs for the Tweaks panel.'));
+    assert.ok(canvas.includes('"tweaks": [ { "var": "--accent-h", "label": "Accent hue", "kind": "number", "min": 0, "max": 360, "step": 1, "unit": "" } ],'));
+    assert.ok(canvas.includes('A direction of another screen carries `"direction": { "of": "home", "letter": "A", "name": "Bold" }` (2 to 4 directions per screen, letters A to D, name up to 40 characters; never on the original).'));
+    assert.ok(canvas.includes('Design Chamber also writes this list when the user reorders, duplicates, trashes or keeps a screen, so read design.json again right before you write it.'));
+    assert.ok(canvas.includes("- The user's hand edits (text, tweaks, the screen list) land in your files directly. Re-read a file before you change it."));
+    const page = buildRulesDoc(baseContext({ kind: 'page' }), files);
+    assert.ok(page.includes('"tweaks": ['), 'a page can offer tweaks too');
+    assert.ok(page.includes('| `tweaks` | you |'));
+  });
+
+  test('rendering constraints: localStorage is kept per design, sessionStorage per reload, no IndexedDB (Phase 2)', async () => {
+    const doc = buildRulesDoc(baseContext(), await realFiles());
+    assert.ok(doc.includes('`localStorage` works and is kept per design (up to 1 MB), so saved ticks and filters survive a reload'));
+    assert.ok(doc.includes('`sessionStorage` lasts until the screen reloads'));
+    assert.ok(doc.includes('There is no `top.location`, `window.open`, cookie, IndexedDB or network call.'));
+    assert.ok(!doc.includes('cookie/localStorage assumption'), 'the old no-localStorage wording is gone');
   });
 
   test('the kind row: page or canvas, switchable only until the first HTML file is written', async () => {

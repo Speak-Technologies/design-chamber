@@ -156,7 +156,7 @@ export const buildAgentGuide = ({ root, platform, checkCommand = null }: AgentGu
     ...CANVAS_EXAMPLE,
     '',
     'Set `updated` to the current time whenever you change the design. When design.json already exists, change only ' +
-      '`title`, `updated`, `viewports`, `screens` and `designSystem`, and keep every other key as it is.',
+      '`title`, `updated`, `viewports`, `screens`, `designSystem` and `tweaks`, and keep every other key as it is.',
     '',
     '## Works offline',
     '',

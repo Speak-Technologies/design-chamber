@@ -63,7 +63,7 @@ describe('chip core text', () => {
       at('Viewports'),
       at('Unsure about anything material? Ask first'),
       at('Files you write'),
-      at('design.json: you own title, updated, viewports, screens and designSystem'),
+      at('design.json: you own title, updated, viewports, screens, designSystem and tweaks'),
     ];
     assert.deepEqual(order, [...order].sort((a, b) => a - b));
 
@@ -81,7 +81,7 @@ describe('chip core text', () => {
     assert.ok(text.includes('New page:'));
     assert.ok(text.includes('index.html (one self-contained page)'));
     assert.ok(!text.includes('screens/<id>.html'));
-    assert.ok(text.includes('you own title, updated, viewports and designSystem'));
+    assert.ok(text.includes('you own title, updated, viewports, designSystem and tweaks'));
   });
 
   test('names the designs folder right after the design folder, and forbids saving anywhere else', () => {
