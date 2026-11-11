@@ -27,7 +27,7 @@ import { PAGE_STATE_CACHE_MAX_BYTES, PAGE_STATE_FILE_MAX_BYTES, PAGE_STATE_MAX_C
 import { applyPageStateDelta, formatGen, isOlderClear, parsePageStateFile, serializePageStateFile, type PageStateDelta } from '../shared/page-state.ts';
 import type { ChangeHub, DesignStore, Logger, ServiceContext } from './context.ts';
 import { ApiError } from './http.ts';
-import { resolvePlainTarget, writeFileAtomic } from './paths.ts';
+import { assertSlug, resolvePlainTarget, writeFileAtomic } from './paths.ts';
 import { folderErrorSentence } from './root.ts';
 
 /** Where the data lives inside a design folder. */
@@ -380,11 +380,15 @@ export const createPageStateService = (deps: PageStateDeps): PageStateService =>
     },
 
     async clear(slug) {
-      const dir = await pageStateDirOf(store, slug);
-      // Counted before anything waits, so a PATCH made before this Clear is refused from now on.
-      clears.set(slug, (clears.get(slug) ?? 0) + 1);
-      const gen = genOf(slug);
-      await chained(slug, async () => {
+      assertSlug(slug);
+      // The Clear takes its place on the slug's chain synchronously, before anything waits, and looks
+      // the folder up inside it: a PATCH asked after this Clear joins the chain behind it (its own
+      // folder lookup comes first), so it is checked against the counted Clear even when its lookup
+      // answers before this one's. A design that is gone answers 404 without counting a Clear.
+      const gen = await chained(slug, async (): Promise<string> => {
+        const dir = await pageStateDirOf(store, slug);
+        clears.set(slug, (clears.get(slug) ?? 0) + 1);
+        const counted = genOf(slug);
         const previous = entries.get(slug);
         if (previous) {
           cancelWrite(previous);
@@ -401,13 +405,13 @@ export const createPageStateService = (deps: PageStateDeps): PageStateService =>
             throw new ApiError('invalid', PAGE_STATE_LINK_SENTENCE);
           }
           // `.chamber` is a plain file: there is no saved data to remove.
-          if (errorCode(error) === 'ENOTDIR') return;
+          if (errorCode(error) === 'ENOTDIR') return counted;
           throw new ApiError('internal', folderErrorSentence(error, dir));
         }
         try {
           await unlink(file);
         } catch (error) {
-          if (isMissing(error)) return;
+          if (isMissing(error)) return counted;
           // Could not remove it (a Windows lock): replace it with no data instead, so it never comes back.
           fresh.dirty = true;
           await writeNow(fresh);
@@ -417,6 +421,7 @@ export const createPageStateService = (deps: PageStateDeps): PageStateService =>
             throw new ApiError('internal', folderErrorSentence(failure, dir));
           }
         }
+        return counted;
       });
       hub.emit({ slug, kind: 'page-state' });
       return { ok: true, gen };

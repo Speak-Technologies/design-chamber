@@ -122,7 +122,7 @@ test('a write made while the stale PATCH is in flight is dropped with it, not sa
   assert.deepEqual([...service.state.items], [], 'the cleared checklist came back');
 });
 
-test('a write made while the 409 refetch is outstanding is not saved over the Clear', { todo: 'Q4: handleStaleClear drops dirty before the GET, not after it' }, async () => {
+test('a write made while the 409 refetch is outstanding is not saved over the Clear', async () => {
   const { service, controller, advance } = rig();
   await controller.load();
   const releasePatch = service.holdPatches();

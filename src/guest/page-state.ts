@@ -240,11 +240,15 @@ export const createPageStateController = (deps: PageStateControllerDeps): PageSt
     gen = answer.gen;
   };
 
-  /** A Clear elsewhere won: drop every dirty key, refetch, reload the frames with the fetched data. */
-  const handleStaleClear = async (): Promise<void> => {
+  const dropDirty = (): void => {
     dirty.clear();
     dirtyClear = false;
     cancelFlushTimer();
+  };
+
+  /** A Clear elsewhere won: drop every dirty key, refetch, reload the frames with the fetched data. */
+  const handleStaleClear = async (): Promise<void> => {
+    dropDirty();
     try {
       const answer = await client.call('GET /designs/:slug/page-state', { params: { slug } });
       adopt(answer);
@@ -253,6 +257,11 @@ export const createPageStateController = (deps: PageStateControllerDeps): PageSt
       persist = false;
       noticeOnce('unsaved', PAGE_STATE_UNSAVED_SENTENCE);
     }
+    // Again after the GET: a frame that has not reloaded yet can write while it is out (a design that
+    // saves its whole list under one key), and that write, made before the Clear was seen, would
+    // otherwise go out with the new gen and bring the cleared data back. The reload below reseeds
+    // every frame from the fetched data.
+    dropDirty();
     reloadFrames();
     noticeOnce('cleared-elsewhere', PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE);
   };
