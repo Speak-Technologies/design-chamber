@@ -214,6 +214,39 @@ export const run = async (helpers) => {
     await p.clickAt(board.x + board.w * 0.3, board.y + board.h * 0.5);
     await p.settle(300);
     check(!(await visible(TOOLBAR)) && !(await visible(EDITOR)), `${tag}: no toolbar or editor opens on a saved version`);
+
+    // 5b. E12: a save still in flight when an old version is opened ends in a notice made WHILE the old version is on show.
+    // Its Undo must start off with the reason, never send anything, and come back once the current design is back.
+    await p.click('.dc-viewing .oc-sdk-btn', { text: 'Back to current' });
+    await checkSoon(async () => !(await visible('.dc-viewing')), `${tag}: Back to current leaves the old version`);
+    await pickWhere(/^Actions for (p|h3|h2|a) '/);
+    await checkSoon(async () => (await attr(`${TOOLBAR} [data-action=edit]`, 'aria-disabled')) === null && !(await p.guest(`return doc.querySelector('${TOOLBAR} [data-action=edit]').disabled`)), `${tag}: Edit text usable for the in-flight run`);
+    await p.click(`${TOOLBAR} [data-action=edit]`);
+    await p.waitFor(`return !!doc.querySelector(${JSON.stringify(EDITOR)})`, 'the editor for the in-flight save');
+    await p.type(AREA, `${original} in flight`);
+    await p.route('POST /designs/:slug/edits', { delayMs: 5000, body: SAVED });
+    await p.route('POST /designs/:slug/edits/:id/undo', { body: { files: ['screens/home.html'], stamps: {}, version: null } });
+    await p.key('Enter', { focus: AREA });
+    // The versions list may still be open from step 5: only toggle it when it is not.
+    if (!(await p.guest('return !!doc.querySelector(".dc-version")'))) {
+      if (rail) await p.click('.dc-compact-actions .dc-versions-btn');
+      else await p.click('.dc-toolbar .oc-sdk-btn', { text: 'Versions' });
+    }
+    await p.waitFor('return !!doc.querySelector(".dc-version")', 'the versions list during the save');
+    await p.click('.dc-version .oc-sdk-btn', { text: 'View', nth: 1 });
+    await p.waitFor('return !!doc.querySelector(".dc-viewing")', 'the viewing banner during the save');
+    await p.waitFor('return !!doc.querySelector(".dc-edit-notice")', 'the notice of the save that finished', 15000);
+    const undoOff = () => p.guest('const b = [...doc.querySelectorAll(".dc-edit-notice .oc-sdk-btn")].find((n) => n.textContent.trim() === "Undo"); return !!b && b.disabled');
+    check(await undoOff(), `${tag}: a notice made while an old version is on show starts with Undo off`);
+    check(((await text('.dc-edit-notice .oc-sdk-banner-body')) ?? '') === "You're viewing an old version.", `${tag}: and says why`);
+    check(await visible('.dc-edit-notice .oc-sdk-banner-body'), `${tag}: the reason is visible`);
+    await p.shot(`${tag}-9-undo-off`);
+    // A forced click (past the disabled state) still sends nothing: the notice stays as it was.
+    await p.guest('const b = [...doc.querySelectorAll(".dc-edit-notice .oc-sdk-btn")].find((n) => n.textContent.trim() === "Undo"); b.disabled = false; b.click(); b.disabled = true;');
+    await p.settle(400);
+    check(((await text('.dc-notices .oc-sdk-banner-title')) ?? '') === 'Text updated in Home', `${tag}: a forced click on the off Undo does nothing`);
+    await p.click('.dc-viewing .oc-sdk-btn', { text: 'Back to current' });
+    await checkSoon(async () => !(await undoOff()) && !(await visible('.dc-edit-notice .oc-sdk-banner-body')), `${tag}: back on the current design Undo is on again and the reason is gone`);
     await p.close();
 
     // 6. a page design (one frame like a browser tab, Comment mode on): the same toolbar, flipped below near the top edge

@@ -87,6 +87,7 @@ export const createEditNotice = (options: EditNoticeOptions): EditNotice => {
     saved: (edit) => {
       const wrap = h('div', { class: 'dc-banner dc-edit-notice', 'data-actions': 'stack' });
       const buttons: HTMLElement[] = [];
+      let sync = (): void => {};
       if (edit.undoable) {
         const undoButton = btn({
           label: 'Undo',
@@ -94,6 +95,8 @@ export const createEditNotice = (options: EditNoticeOptions): EditNotice => {
           size: 'xs',
           title: 'Undo this edit',
           onClick: () => {
+            // E12, second line of defence: a click that got past the disabled state still sends nothing.
+            if (options.viewing()) return;
             options.onNoticeUndo(edit.id);
             void run(edit.id, undoButton);
           },
@@ -101,7 +104,7 @@ export const createEditNotice = (options: EditNoticeOptions): EditNotice => {
         buttons.push(undoButton.el);
         // E12: an old version on show turns Undo off and says why (the keyboard is refused in the wall's undo decision).
         offViewing?.();
-        const sync = (): void => {
+        sync = (): void => {
           const viewing = options.viewing();
           undoButton.set({ disabled: viewing, title: viewing ? UNDO_VIEWING_TEXT : 'Undo this edit' });
           const body = wrap.querySelector<HTMLElement>('.oc-sdk-banner-body');
@@ -109,9 +112,12 @@ export const createEditNotice = (options: EditNoticeOptions): EditNotice => {
           body.textContent = viewing ? UNDO_VIEWING_TEXT : '';
           body.hidden = !viewing;
         };
-        offViewing = options.onViewing(sync);
+        offViewing = options.onViewing(() => sync());
       }
       wrap.append(...bannerWithActions('success', edit.label, [], buttons));
+      // The notice can be made while an old version is already on show (a save that was in flight): start in that state.
+      // The banner body exists only after the append above.
+      sync();
       notices.setTransient('edit', wrap, USER_EDIT_NOTICE_MS);
       keepFocus();
     },
