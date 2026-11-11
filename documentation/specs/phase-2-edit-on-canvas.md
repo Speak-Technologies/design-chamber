@@ -27,9 +27,9 @@ first because it sends agents after problems that are not there.
 | 07 | Edit authority and patch route (rules every user edit follows) | L, spec first | none | §2 |
 | 08 | Edit text in place, selection toolbar | M | 07 | §3 |
 | 09 | Tweaks panel | M | follows the 07 user-edit rules, needs no HTML patching | §4 |
-| 10 | Screen management | M | owner decision Q1 | §5 |
-| 11 | Variations you can pick from (canvas half) | M | 07, 10, owner decision Q2 | §6 |
-| 19 | Pages that remember their state | M, spec first | owner decision Q3 | §7 |
+| 10 | Screen management | M | 07 (shared screen list, Q1 decided) | §5 |
+| 11 | Variations you can pick from (canvas half) | M | 07, 10 (Q2 decided) | §6 |
+| 19 | Pages that remember their state | M, spec first | none (Q3 decided) | §7 |
 
 **Recommended build order.**
 1. **C1** at once (S, no dependency, the review's "start here").
@@ -43,7 +43,9 @@ first because it sends agents after problems that are not there.
 §2.3: saved only from a click or key press in Design Chamber's own controls, a version first, refused
 when the file changed since the user's view of it, the smallest possible change, Undo, and the build
 strip does not read the user's own write as the agent's. 19 is not a user edit of design files: it never
-touches the design's files or versions.
+touches the design's files or versions. The agent is told about hand edits (Q5, decided): the next
+message to the linked chat starts with a short list of what changed by hand since the last one; nothing
+is sent on its own.
 
 **Contract changes the phase brings** (each goes through the main agent: they touch the WP0 interface
 files, `docs/SPEC.md` §14): `design.json` gains tweak knobs (09) and direction marks (11); who writes
@@ -307,7 +309,7 @@ offers **Edit text**, **Comment** and **Ask agent**.
 | 08-3 | The editor shows the text at a readable size whatever the wall zoom | The wall opens at about 26%; editing 4 px text is not possible | 2026-11-11 |
 | 08-4 | Enter saves, Esc cancels, line breaks are not allowed (pasted line breaks become spaces) | Plain text in HTML collapses line breaks; a `<br>` would be markup | 2026-11-11 |
 | 08-5 | Play mode never edits; double-click there belongs to the design | Play is the design's own interaction | 2026-11-11 |
-| 08-6 | Click behaviour: see Q4 (default: a click keeps opening the comment box as today, with the toolbar above it) | Keeps the comment flow's step budget | pending |
+| 08-6 | Click behaviour: a click keeps opening the comment box as today, with the toolbar above it; double-click on text goes straight to editing (Q4, owner accepted 2026-11-11) | Keeps the comment flow's step budget | 2026-11-11 |
 
 ### Acceptance Criteria
 - [ ] In Edit mode (canvas) or Comment mode (page), a click on an element shows the selection toolbar
@@ -514,7 +516,7 @@ for a new screen; the user drags screens into order, duplicates one, or moves on
 | 10-1 | "+ Screen" sends a request to the linked chat (the ask flow); Design Chamber writes no screen file for it | The agent writes every design file; an empty board would be a blank, broken screen | 2026-11-11 |
 | 10-2 | Duplicate, reorder and Move to trash are done by Design Chamber itself, through the 07 rules | Mechanical, instant, undoable; no reason to wait on a turn | 2026-11-11 |
 | 10-3 | Move to trash saves a version first, moves the file to the designs folder's trash, and shows Undo; no confirm | Same rule as design delete (BRIEF) and the Usability bar | 2026-11-11 |
-| 10-4 | Who may write `screens[]`: see Q1 (default: shared, with stale refusal) | `docs/SPEC.md` §6.3 makes it agent-owned today | pending |
+| 10-4 | The screen list is shared: Design Chamber writes `screens[]` only for the user's actions, version first, stale refusal; the agent stays free to rewrite it and its later write wins (Q1, owner accepted 2026-11-11) | `docs/SPEC.md` §6.3 made it agent-owned; the owner chose the shared list over app-side order | 2026-11-11 |
 | 10-5 | Canvas only; pages have no screens | Kind rule | 2026-11-11 |
 | 10-6 | Menu actions on both surfaces; drag reorder on the full-screen page only (keyboard Move up/down everywhere) | Labels in the rail's fit-all view are too small to drag | 2026-11-11 |
 
@@ -623,7 +625,7 @@ first. The chat half shipped in Phase 1.5 as the DirectionPick block (verified: 
 | 11-2 | Canvas only | Page directions are separate design folders, already picked with DirectionPick (Phase 1.5 Q5) | 2026-11-11 |
 | 11-3 | Keep this one goes through the 07 rules with its own version label "Before keeping a direction" and Undo | Owner direction ("with a version saved first") | 2026-11-11 |
 | 11-4 | 2 to 4 directions per screen, like DirectionPick | One rule for both halves | 2026-11-11 |
-| 11-5 | What a direction is on the wall, and how a chat pick relates: see Q2 | Phase 1.5 decided DirectionPick options are design folders; a row of screens is new | pending |
+| 11-5 | Directions are screens in the same canvas, marked by the agent as directions of one screen; the row shows Current, A, B, C at one viewport; Keep this one on the wall is the picker; DirectionPick stays for folder directions and the agent may still ask in chat and act on the answer itself (Q2, owner accepted 2026-11-11) | One canvas row needs screens; folder directions keep the Phase 1.5 block | 2026-11-11 |
 
 ### Acceptance Criteria (with the Q2 default)
 - [ ] The screen ⋯ menu has **Try 3 directions…**: a box "What should the directions explore?
@@ -719,7 +721,7 @@ exported, never versioned. "Clear saved page data" resets it.
 | 19-4 | `sessionStorage` gets an in-memory stand-in for the frame's life, never saved | Scripts that touch it should not throw | 2026-11-11 |
 | 19-5 | Clear saved page data asks first | It is not versioned, so it cannot be undone | 2026-11-11 |
 | 19-6 | Saved data survives agent edits and version restores; it goes with the folder on delete (to trash) and on export it is left out | Like a real site's storage; restore never touches `.chamber/` (§6.4) | 2026-11-11 |
-| 19-7 | Scope and size cap: see Q3 (default: one store per design, shared by all its screens, viewports and both surfaces; 1 MB per design) | Not settled by BRIEF or SPEC | pending |
+| 19-7 | One store per design, shared by all its screens, viewports and both surfaces; capped at 1 MB per design with a one-time notice when a design goes over (Q3, owner accepted 2026-11-11) | The owner chose the recommended scope and cap | 2026-11-11 |
 
 ### Acceptance Criteria (with the Q3 default)
 - [ ] In a design that saves a checkbox state to `localStorage` and reads it on load, ticking a box and
@@ -836,7 +838,16 @@ versioned, not exported, deleted with the folder (to trash) or by Clear.
 - Streaming agent edits into live boards.
 - Folding auto-saves in the versions list (review finding, separate item).
 
-### Questions for the user
+### Questions for the user — answered 2026-11-11
+
+The owner accepted all five recommended defaults in one round (recorded in the decision rows
+08-6, 10-4, 11-5, 19-7 above, and in Q5 below). The questions as asked:
+
+**Q5 decision (owner accepted):** the agent IS told about hand edits. The next message Design
+Chamber sends to the linked chat (comments, ask, fix) starts with a short list of what the user
+changed by hand since the last one, for example "You changed the Home headline, moved Checkout
+above Pricing, saved tweaks: accent hue 210 to 250". Nothing is sent on its own, and the
+instructions also tell agents to re-read a file before editing it.
 1. **Who may change a canvas's screen list (10, 11)?** `docs/SPEC.md` §6.3 says the agent owns
    `screens[]`, but reorder, duplicate, trash and Keep this one must change it. **Recommended: make the
    list shared. Design Chamber writes it only for your actions, saves a version first, and refuses if
