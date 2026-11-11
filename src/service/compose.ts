@@ -115,7 +115,7 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   ctx.renders = ensureRenderService(ctx);
   ctx.thumbnails = ensureThumbnailService(ctx);
 
-  const watcher = startWatcher({ settings, hub, log, ...options.watch });
+  const watcher = startWatcher({ settings, hub, log, selfWrites, ...options.watch });
   ctx.onDispose(() => watcher.stop());
 
   // The guide at <root>/AGENTS.md: synced after the watcher's baseline, on root changes and on

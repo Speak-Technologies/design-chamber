@@ -131,6 +131,8 @@ export const createStatusDesigns = (ctx: StatusContext, deps: StatusDesignsDeps)
       return;
     }
     if (event.kind !== 'files') return;
+    // The user's own hand edit (Phase 2 §2.6): not the agent writing.
+    if (event.origin === 'user') return;
     const at = now();
     // A `files` event with no list is a user's restore; the watcher then re-reports what the restore wrote.
     if (event.files === undefined) {

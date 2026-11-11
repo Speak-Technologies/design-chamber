@@ -10,9 +10,9 @@
 // `PathModule`, `realpath` and the platform are injectable so the win32 and darwin rules are
 // testable on any platform via `path.win32` / `path.posix` (SPEC §15.1).
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync, renameSync } from 'node:fs';
-import { lstat as fsLstat, realpath as fsRealpath, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { link as fsLink, lstat as fsLstat, realpath as fsRealpath, unlink as fsUnlink, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -340,4 +340,121 @@ export const replaceFileIfUnchanged = async (file: string, expected: string | nu
     await rm(tmp, { force: true }).catch(() => undefined);
     throw error;
   }
+};
+
+// ---- Hand-edit write primitives (Phase 2 §2.5) ----
+
+const sha256Of = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+
+/**
+ * The bytes generalisation of `replaceFileIfUnchanged`, for hand edits racing the agent (who
+ * takes no lock): replace `file` with `data` only while its current bytes hash to `expectedSha`
+ * (`null` = the file must be absent). The sha256 is of the raw bytes, so a BOM or an invalid
+ * byte the UTF-8 decoder would hide still counts as a change. The temp is written first; the
+ * read, the compare and the rename then run synchronously, so the window another writer can slip
+ * into is the rename itself.
+ *
+ * `changed` when the bytes differ (nothing written); `busy` when Windows refuses the read or the
+ * rename because another handle has the file open (EPERM/EBUSY/EACCES; nothing written, the
+ * caller retries). No temp is left behind on any answer; every other error is thrown.
+ */
+export const replaceFileIfHashUnchanged = async (file: string, expectedSha: string | null, data: Uint8Array): Promise<'replaced' | 'changed' | 'busy'> => {
+  const tmp = atomicTempPath(file);
+  try {
+    await writeFile(tmp, data);
+    let current: Buffer | null;
+    try {
+      current = readFileSync(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') current = null;
+      else if (isTransientRenameRefusal(error)) {
+        await rm(tmp, { force: true });
+        return 'busy';
+      } else throw error;
+    }
+    if ((current === null ? null : sha256Of(current)) !== expectedSha) {
+      await rm(tmp, { force: true });
+      return 'changed';
+    }
+    try {
+      renameSync(tmp, file);
+    } catch (error) {
+      if (!isTransientRenameRefusal(error)) throw error;
+      await rm(tmp, { force: true });
+      return 'busy';
+    }
+    return 'replaced';
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+};
+
+/** `link` codes that mean "this filesystem has no hard links here" (FAT/exFAT, some shares, another volume). */
+const NO_HARD_LINK_CODES = new Set(['EPERM', 'ENOTSUP', 'ENOSYS', 'EXDEV']);
+
+/** The filesystem calls `moveNoReplace` makes; injectable so locks and link-less drives are testable. */
+export type MoveDeps = {
+  link?: (existing: string, created: string) => Promise<void>;
+  unlink?: (target: string) => Promise<void>;
+  lstat?: (target: string) => Promise<unknown>;
+};
+
+/**
+ * Move `from` to `to` without ever replacing a file at `to` (a plain `rename` replaces it, on
+ * POSIX and through libuv on Windows, so a check-then-rename would lose a file that appears in
+ * between). A hard link publishes the file atomically and fails with EEXIST when `to` exists
+ * (`exists`, nothing touched); then the old name is removed. A hard link keeps the inode, so the
+ * file keeps its mtime and the wall's file stamps.
+ *
+ * When the old name cannot be removed because Windows has it locked, the new link is removed
+ * again and the answer is `busy`: the file is never left at both names. A source that vanished
+ * between the link and the unlink leaves the only copy at `to` (`moved`).
+ *
+ * Without hard links (`link` answers EPERM, ENOTSUP, ENOSYS or EXDEV) the fallback checks that
+ * `to` is absent, then renames (riding out short Windows locks; one that outlasts them is
+ * `busy`). Its residual race is a file appearing in that microsecond window, the same as the
+ * design.json merge's. The caller checks the source's size, mtime or hash first; any other error
+ * is thrown.
+ */
+export const moveNoReplace = async (from: string, to: string, deps: MoveDeps = {}): Promise<'moved' | 'exists' | 'busy'> => {
+  const link = deps.link ?? fsLink;
+  const unlink = deps.unlink ?? fsUnlink;
+  const lstat = deps.lstat ?? fsLstat;
+  const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoException | null)?.code;
+
+  try {
+    await link(from, to);
+  } catch (error) {
+    if (codeOf(error) === 'EEXIST') return 'exists';
+    if (!NO_HARD_LINK_CODES.has(codeOf(error) ?? '')) throw error;
+    return moveByRename(from, to, lstat);
+  }
+  try {
+    await unlink(from);
+  } catch (error) {
+    // Someone else removed the source meanwhile: the bytes now live only at `to`, so keep them.
+    if (codeOf(error) === 'ENOENT') return 'moved';
+    // Never at both names: take the new link back before answering.
+    await unlink(to);
+    if (isTransientRenameRefusal(error)) return 'busy';
+    throw error;
+  }
+  return 'moved';
+};
+
+const moveByRename = async (from: string, to: string, lstat: (target: string) => Promise<unknown>): Promise<'moved' | 'exists' | 'busy'> => {
+  try {
+    await lstat(to);
+    return 'exists';
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  try {
+    await renameWithRetry(from, to);
+  } catch (error) {
+    if (isTransientRenameRefusal(error)) return 'busy';
+    throw error;
+  }
+  return 'moved';
 };

@@ -274,6 +274,17 @@ test('a removed design forgets its last file, and a root change forgets all of t
   assert.deepEqual(await byAgent(), { a: 'working', b: 'working' });
 });
 
+test('the user\'s own hand edit (origin "user") is never the agent writing; the agent\'s next write is', async () => {
+  const r = rig([summary('d', { sessionId: 's' })]);
+  r.activity.set('s', working('s'));
+  for (const listener of [...r.listeners]) listener({ seq: 90, slug: 'd', kind: 'files', files: ['screens/home.html'], origin: 'user' });
+  const afterEdit = (await r.status.answer({})).rows[0];
+  assert.equal(afterEdit?.agent, 'working');
+  assert.equal(afterEdit?.lastFile, null);
+  r.emit('d', 'files', ['screens/pricing.html']);
+  assert.equal((await r.status.answer({})).rows[0]?.lastFile, 'pricing.html');
+});
+
 test('events for other kinds and root-wide events without a slug are ignored', async () => {
   const r = rig([summary('d', { sessionId: 's' })]);
   r.activity.set('s', working('s'));
