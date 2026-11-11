@@ -47,6 +47,16 @@ touches the design's files or versions. The agent is told about hand edits (Q5, 
 message to the linked chat starts with a short list of what changed by hand since the last one; nothing
 is sent on its own.
 
+**Two wording clarifications confirmed by the main agent (2026-11-11), matching the architect's
+defaults (technical design §19):**
+- The screen-list stale rule (10-4) reads "the agent changed `design.json`" as "the agent changed the
+  screen list or a screen file this action touches". A change to the title, `updated`, viewports or
+  comments does not refuse a screen action (else adding a comment would block a reorder until reload).
+  This matches §5's own acceptance criteria ("The screen list changed while you were working").
+- One new disabled-reason sentence for text the scanner can't place with certainty (implied end tags,
+  unknown entities): "Design Chamber can't find this text in the file exactly. Ask the agent to change
+  it." Added to §3 above; it follows E2's "refuse rather than guess".
+
 **Contract changes the phase brings** (each goes through the main agent: they touch the WP0 interface
 files, `docs/SPEC.md` §14): `design.json` gains tweak knobs (09) and direction marks (11); who writes
 `screens[]` changes (10, Q1); versions gain user-edit reasons; the agent instructions and `rules/**`
@@ -320,6 +330,8 @@ offers **Edit text**, **Comment** and **Ask agent**.
       "This text is made by the page's script. Ask the agent to change it." (text not found in the
       source) · "This has formatting inside. Ask the agent to change it." (child elements) ·
       "This text appears more than once and the exact one can't be found. Ask the agent to change it." ·
+      "Design Chamber can't find this text in the file exactly. Ask the agent to change it." (the scanner
+      can't place it with certainty: implied end tags, unknown entities) ·
       "You're viewing an old version." · "This file is too large to edit here."
 - [ ] **Comment** opens today's comment composer on the element (Phase 1 behaviour unchanged).
 - [ ] **Ask agent** puts the element in the ask bar's chip (S4) and moves focus to the ask bar.
