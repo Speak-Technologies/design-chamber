@@ -22,3 +22,4 @@ fix the doc and note what drifted.
 | [Work Status](features/work-status.md) | Recent designs in the chat's Work Status: what the agent is writing, check results, Check and Open. | Work Status, Rail panel |
 | [Design mentions](features/design-mentions.md) | `@` a design in the composer to give the agent its folder, rules and open comments. | Chat composer |
 | [Chat blocks](features/chat-blocks.md) | A design card in the agent's reply, and a pick between design directions. | Chat, Rail panel |
+| [Edit on the canvas](features/edit-on-canvas.md) | The rules every hand edit follows: only the user writes, a version first, refused when the file changed, smallest change, Undo, and what the agent is told. | Rail panel, Full-screen page |
