@@ -445,17 +445,15 @@ describe('Phase 2 route stubs (T0): bearer, slug and body bounds before the lane
     }
   });
 
-  test('with the bearer, every route still stubbed answers the "not built yet" sentence', async (t) => {
+  test('with the bearer, GET /tokens answers the knob states (a new design: no tokens.css, no knobs)', async (t) => {
     const core = await useServedCore(t);
     await core.request('/designs', { method: 'POST', body: { kind: 'canvas', title: 'Demo' } });
-    // The edit routes are real since T2b (test/service/http/edits-routes.test.ts) and page-state
-    // lands with T8 (its own route tests); GET /tokens still reaches the readTokens stub until T5.
+    // The edit routes are real since T2b (test/service/http/edits-routes.test.ts), page-state
+    // since T8 (its own route tests), and the tokens reader since T5 (edits-tokens.test.ts).
     for (const [pathname, init] of calls.filter(([pathname]) => pathname.endsWith('/tokens'))) {
       const answer = await core.request(pathname, init);
-      assert.equal(answer.status, 500, `${init.method ?? 'GET'} ${pathname}`);
-      const body = await errorOf(answer);
-      assert.equal(body.error, 'internal');
-      assert.match(body.message, /not built yet/, pathname);
+      assert.equal(answer.status, 200, `${init.method ?? 'GET'} ${pathname}`);
+      assert.deepEqual(await answer.json(), { exists: false, editable: false, sha256: null, knobs: [] });
     }
   });
 

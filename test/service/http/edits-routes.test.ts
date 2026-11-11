@@ -1,7 +1,7 @@
 // The four hand-edit routes on the real service process, called the way the host proxy calls
 // them (Phase 2 technical design §2.2, §17 "Route rejections"): bearer, slug, edit id, body
-// bounds and the user's sentences, before any op runs. The text op is real (T3); the tokens
-// reader is a stub until T5, so it answers "not built yet" and nothing is written.
+// bounds and the user's sentences, before any op runs. The text op (T3) and the tokens op and
+// reader (T5) are real; their byte-level behaviour is tested in test/service/core.
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -14,7 +14,6 @@ import type { ApiErrorBody, EditResponse, SourceResponse } from '../../../src/sh
 import { useServiceProcess, type RunningService } from '../../helpers/service-process.ts';
 
 const GONE = 'That design is no longer in your Designs folder.';
-const NOT_BUILT = 'This part of Design Chamber (edits) is not built yet.';
 const SHA = 'a'.repeat(64);
 
 type Rig = { service: RunningService; root: string; outside: string };
@@ -95,14 +94,21 @@ describe('hand-edit routes on the real service', () => {
     }
   });
 
-  test('a text edit with a stale base is 409; the tokens reader answers "not built yet"; an unknown undo id is 404; nothing is written', async (t) => {
+  test('a text edit with a stale base is 409; the tokens reader answers no file; an unknown undo id is 404; nothing is written', async (t) => {
     const { service, root } = await start(t);
     const edit = await service.request('/designs/demo/edits', { method: 'POST', body: textEdit() });
     assert.equal(edit.status, 409);
     assert.deepEqual(await errorOf(edit), { error: 'stale', message: 'This file changed while you were editing. Nothing was saved.' });
     const tokens = await service.request('/designs/demo/tokens');
-    assert.equal(tokens.status, 500);
-    assert.equal((await errorOf(tokens)).message, NOT_BUILT);
+    assert.equal(tokens.status, 200);
+    assert.deepEqual(await tokens.json(), { exists: false, editable: false, sha256: null, knobs: [] });
+    // A tokens save for a var design.json does not declare: the changed-knob refusal, nothing written.
+    await writeFile(path.join(root, 'demo', 'tokens.css'), ':root { --radius: 8px; }');
+    const tokensBase = createHash('sha256').update(':root { --radius: 8px; }').digest('hex');
+    const save = await service.request('/designs/demo/edits', { method: 'POST', body: { op: 'tokens', base: tokensBase, values: [{ var: '--radius', value: 10 }] } });
+    assert.equal(save.status, 409);
+    assert.deepEqual(await errorOf(save), { error: 'stale', message: 'The tweaks in design.json changed while you were working. Nothing was saved.' });
+    assert.equal(await readFile(path.join(root, 'demo', 'tokens.css'), 'utf8'), ':root { --radius: 8px; }');
     const undo = await service.request('/designs/demo/edits/e_abcdefgh1234/undo', { method: 'POST', body: {} });
     assert.equal(undo.status, 404);
     assert.deepEqual(await errorOf(undo), { error: 'not-found', message: "This edit can't be undone any more." });

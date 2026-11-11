@@ -4,7 +4,7 @@
 
 Why it exists: a typo should not need a chat round trip, but the agent writes the same files, and the design's own scripts must never be able to write to disk. The rules below keep the user's edit, the agent's work and the user's machine safe at the same time.
 
-Status: the pipeline, Undo, the hand-edit record and the four routes are built (T2b). The edits themselves are added one by one: text is built (T3, see "Editing text" below); screens and directions (T4) and tweaks (T5) follow. Until each lands, its request answers "This part of Design Chamber (edits) is not built yet." and nothing is written. The editor on the wall (U1) is not built yet, so text edits are reachable only through the service route for now.
+Status: the pipeline, Undo, the hand-edit record and the four routes are built (T2b). The edits themselves are added one by one: text is built (T3, see "Editing text" below); screens and directions are built (T4, see [Screens and directions](screens-and-directions.md)); tweaks are built (T5, see [Tweaks](tweaks.md)). Until each lands, its request answers "This part of Design Chamber (edits) is not built yet." and nothing is written. The editor on the wall (U1) is not built yet, so text edits are reachable only through the service route for now.
 
 ## The rules (E1 to E12)
 1. **Only the user starts a write.** A hand edit starts from a click or key press on Design Chamber's own controls. Nothing a design's page sends can start, change or aim a write: the design frame only says what was clicked.

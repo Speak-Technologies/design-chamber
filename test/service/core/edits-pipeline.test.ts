@@ -273,11 +273,13 @@ describe('apply: version first, smallest change, the user event', () => {
     assert.deepEqual(await versionsOf(rig.tmp, 'art'), []);
   });
 
-  // The real text op (T3) is tested in edits-text.test.ts.
-  test('the shipped op stubs answer "not built yet" and write nothing', async (t) => {
+  // The real ops are tested in edits-text.test.ts (T3), edits-screens.test.ts (T4) and
+  // edits-tokens.test.ts (T5, with the tokens reader).
+  test('the shipped tokens reader answers through the service and writes nothing', async (t) => {
     const rig = await setup(t);
     await rig.tmp.writeDesign('art', pageDesign({ 'index.html': ORIGINAL }));
-    await assert.rejects(rig.edits.readTokens('art'), rejectsWith('internal', 'This part of Design Chamber (edits) is not built yet.'));
+    assert.deepEqual(await rig.edits.readTokens('art'), { exists: false, editable: false, sha256: null, knobs: [] });
+    await assert.rejects(rig.edits.readTokens('gone'), rejectsWith('not-found', GONE_MESSAGE));
     assert.equal(await rig.tmp.read('art/index.html'), ORIGINAL);
   });
 });
