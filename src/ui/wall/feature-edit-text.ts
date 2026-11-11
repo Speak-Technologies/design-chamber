@@ -55,6 +55,8 @@ export const mount: FeatureMount = (ctx) => {
       undoSlot = nextUndoSlot(undoSlot, { type: 'notice-undo', id: editId }).slot;
     },
     focusWall: () => wall.focus(),
+    viewing: () => ctx.viewing() !== null,
+    onViewing: ctx.onViewing,
   });
 
   const agentWorking = (): boolean => {
@@ -304,9 +306,11 @@ export const mount: FeatureMount = (ctx) => {
   document.addEventListener('pointerdown', onPointerDown, true);
 
   const offUndoKey = wall.onUndoEdit(() => {
-    const next = nextUndoSlot(undoSlot, { type: 'undo-key' });
+    // E12: with an old version on show the slot refuses (and keeps the edit); the notice says why.
+    const next = nextUndoSlot(undoSlot, { type: 'undo-key' }, ctx.viewing() !== null);
     undoSlot = next.slot;
-    if (next.undo !== null) void notice.undo(next.undo);
+    if (next.refusal !== null) notice.refused(next.refusal);
+    else if (next.undo !== null) void notice.undo(next.undo);
   });
 
   // An old version on show: nothing here may write. The toolbar goes; an editor with unsaved words stays, with Save off and the reason.

@@ -187,7 +187,7 @@ test('frameModeOf: a saved version is always Play', () => {
 
 // ---- Phase 2: Ctrl/⌘+Z and the one undo slot (technical design §2.7) ----
 
-import { isUndoEditKey, nextUndoSlot } from '../../src/ui/model/wall-input.ts';
+import { UNDO_VIEWING_TEXT, isUndoEditKey, nextUndoSlot } from '../../src/ui/model/wall-input.ts';
 
 const undoKey = (over: { key?: string; shift?: boolean; ctrl?: boolean; meta?: boolean; alt?: boolean; inField?: boolean } = {}) =>
   isUndoEditKey({ key: 'z', shift: false, ctrl: true, meta: false, alt: false, inField: false, ...over });
@@ -216,8 +216,8 @@ test('nextUndoSlot: an edit fills the slot, Ctrl+Z sends that undo and empties i
   slot = nextUndoSlot(slot, { type: 'edited', id: 'e_one' }).slot;
   assert.equal(slot, 'e_one');
   const first = nextUndoSlot(slot, { type: 'undo-key' });
-  assert.deepEqual(first, { slot: null, undo: 'e_one' });
-  assert.deepEqual(nextUndoSlot(first.slot, { type: 'undo-key' }), { slot: null, undo: null });
+  assert.deepEqual(first, { slot: null, undo: 'e_one', refusal: null });
+  assert.deepEqual(nextUndoSlot(first.slot, { type: 'undo-key' }), { slot: null, undo: null, refusal: null });
 });
 
 test('nextUndoSlot: two edits then Ctrl+Z twice undoes only the second, never reaching further back', () => {
@@ -233,7 +233,7 @@ test('nextUndoSlot: two edits then Ctrl+Z twice undoes only the second, never re
 test('nextUndoSlot: Undo pressed on the edit’s own notice empties the slot, so Ctrl+Z then does nothing', () => {
   const slot = nextUndoSlot(null, { type: 'edited', id: 'e_one' }).slot;
   const afterNotice = nextUndoSlot(slot, { type: 'notice-undo', id: 'e_one' });
-  assert.deepEqual(afterNotice, { slot: null, undo: null });
+  assert.deepEqual(afterNotice, { slot: null, undo: null, refusal: null });
   assert.equal(nextUndoSlot(afterNotice.slot, { type: 'undo-key' }).undo, null);
 });
 
@@ -247,4 +247,25 @@ test('nextUndoSlot: the key empties the slot whatever the service answers (a ref
   const slot = nextUndoSlot(null, { type: 'edited', id: 'e_one' }).slot;
   const sent = nextUndoSlot(slot, { type: 'undo-key' });
   assert.equal(sent.slot, null);
+});
+
+// E12: nothing that writes works while an old version is on show, Undo included.
+
+test('nextUndoSlot E12: Ctrl+Z while viewing sends nothing, keeps the slot and says why', () => {
+  const slot = nextUndoSlot(null, { type: 'edited', id: 'e_one' }).slot;
+  const refused = nextUndoSlot(slot, { type: 'undo-key' }, true);
+  assert.deepEqual(refused, { slot: 'e_one', undo: null, refusal: "You're viewing an old version." });
+  assert.equal(refused.refusal, UNDO_VIEWING_TEXT);
+  // Back on the current design the same edit can still be undone, once.
+  assert.deepEqual(nextUndoSlot(refused.slot, { type: 'undo-key' }, false), { slot: null, undo: 'e_one', refusal: null });
+});
+
+test('nextUndoSlot E12: Undo on the notice while viewing is refused and leaves the slot alone', () => {
+  const slot = nextUndoSlot(null, { type: 'edited', id: 'e_one' }).slot;
+  assert.deepEqual(nextUndoSlot(slot, { type: 'notice-undo', id: 'e_one' }, true), { slot: 'e_one', undo: null, refusal: UNDO_VIEWING_TEXT });
+});
+
+test('nextUndoSlot E12: refused with an empty slot still says why, and recording an edit is never refused', () => {
+  assert.equal(nextUndoSlot(null, { type: 'undo-key' }, true).refusal, UNDO_VIEWING_TEXT);
+  assert.deepEqual(nextUndoSlot('e_old', { type: 'edited', id: 'e_new' }, true), { slot: 'e_new', undo: null, refusal: null });
 });

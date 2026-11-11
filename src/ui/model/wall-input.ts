@@ -187,19 +187,31 @@ export type UndoSlotEvent =
   /** Undo was pressed on the notice of edit `id`. */
   | { type: 'notice-undo'; id: string };
 
+/** E12: what an Undo refused because an old version is on show says. */
+export const UNDO_VIEWING_TEXT = "You're viewing an old version.";
+
 /**
  * One slot, the id of the last hand edit this mount made. A new edit replaces it; the key sends
  * that undo and empties the slot whatever the answer; Undo on the slot's own notice empties it too;
  * with an empty slot the key does nothing, so it never reaches further back. An edit made on the
  * other surface never reaches this reducer. `undo` is the edit id to send, or null.
+ *
+ * E12: while an old version is on show (`viewing`) an undo would change the current design behind the
+ * user's back, so both undo events are refused: nothing is sent, the slot is kept (Undo works again once
+ * the current design is back) and `refusal` carries the sentence to show. Recording an edit is not
+ * an undo and always goes through.
  */
-export const nextUndoSlot = (slot: string | null, event: UndoSlotEvent): { slot: string | null; undo: string | null } => {
+export const nextUndoSlot = (
+  slot: string | null,
+  event: UndoSlotEvent,
+  viewing = false,
+): { slot: string | null; undo: string | null; refusal: string | null } => {
+  if (event.type === 'edited') return { slot: event.id, undo: null, refusal: null };
+  if (viewing) return { slot, undo: null, refusal: UNDO_VIEWING_TEXT };
   switch (event.type) {
-    case 'edited':
-      return { slot: event.id, undo: null };
     case 'undo-key':
-      return { slot: null, undo: slot };
+      return { slot: null, undo: slot, refusal: null };
     case 'notice-undo':
-      return { slot: slot === event.id ? null : slot, undo: null };
+      return { slot: slot === event.id ? null : slot, undo: null, refusal: null };
   }
 };

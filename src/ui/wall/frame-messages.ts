@@ -53,6 +53,9 @@ export const createFrameMessageHandler = (ctx: WallContext, deps: FrameMessageDe
         picks.onProbeResult(board, message, (screen) => store.loadSource(ctx.options.slug, screen));
         return;
       case 'navigate': {
+        // E1/E2: only Play mode follows a link. In Edit mode the board keeps the screen the user sees, so a
+        // pick (and the file it reads and writes) can never be pointed elsewhere by a design script or a forged message.
+        if (ctx.frameMode() !== 'play') return;
         const target = ctx.screens().find((candidate) => candidate.file === message.href);
         if (!target) {
           options.onNotice('That link doesn’t lead to a screen of this design.');

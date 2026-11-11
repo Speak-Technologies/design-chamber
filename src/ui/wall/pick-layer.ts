@@ -57,7 +57,8 @@ export const createPickLayer = (ctx: WallContext, deps: PickDeps): PickLayer => 
   let seq = 0;
   let ringed: Board | null = null;
 
-  const screenOf = (board: Board): string | null => board.art.screen?.id ?? null;
+  // The screen the board shows, not the one it was laid out for: the edit must write the file the user is looking at.
+  const screenOf = (board: Board): string | null => board.screenId;
 
   /** One probe in flight for this point; settles to a check when the frame and the file have both answered, or the frame does not. */
   const ask = (board: Board, point: Point, screen: string | null): Promise<PickCheck> =>

@@ -94,7 +94,7 @@ afterEach(() => {
   for (const rig of rigs.splice(0)) rig.dispose();
 });
 
-const makeRig = (over: { readOnly?: boolean; pageMode?: boolean } = {}): Rig => {
+const makeRig = (over: { readOnly?: boolean; pageMode?: boolean; frameMode?: 'edit' | 'play' } = {}): Rig => {
   const posted: unknown[] = [];
   const keys: Array<{ key: string; shift: boolean }> = [];
   const notices: string[] = [];
@@ -109,7 +109,7 @@ const makeRig = (over: { readOnly?: boolean; pageMode?: boolean } = {}): Rig => 
     mode: 'edit',
     editing: false,
     readOnly: () => over.readOnly ?? false,
-    frameMode: () => 'edit',
+    frameMode: () => over.frameMode ?? 'edit',
     screens: () => [
       { id: 'home', file: 'screens/home.html', title: 'Home' },
       { id: 'checkout', file: 'screens/checkout.html', title: 'Checkout' },
@@ -350,24 +350,43 @@ describe('E1: a frame message never writes', () => {
   });
 });
 
-// QA finding (Q1, 2026-11-11): a `navigate` from a frame in Edit mode moves the board to another
-// screen, but a pick still reads and writes the artboard's own screen. Marked todo so the suite stays
-// green until the owner fixes it; drop `todo` then and this must pass.
+// QA finding (Q1, 2026-11-11), fixed: a design frame cannot move the board to another screen in Edit mode, and a
+// pick reads and writes the screen the board shows, so an edit always lands in the file the user sees.
 describe('E1/E2: a frame cannot redirect which file an edit reads', () => {
-  test('after a navigate in Edit mode, the pick reads the screen the board shows (or the board does not move)', { todo: 'QA Q1 finding: frame-messages.ts navigate ignores the mode; pick-layer screenOf uses art.screen' }, async () => {
-    const rig = makeRig();
-    // A design script clicks a link to Checkout (or a hostile frame posts it) while the wall is in Edit mode.
-    rig.handle({ ...env('navigate'), href: 'screens/checkout.html', hash: '' });
-    assert.equal(rig.board.screenId, 'checkout');
+  const pickAndRead = async (rig: Rig): Promise<unknown[] | undefined> => {
     rig.hit.requestHit(rig.board, { x: 50, y: 30 }, 'edit');
     rig.handle({ ...env('hit'), x: 50, y: 30, element: ELEMENT });
     rig.handle({ ...env('edit-probe-result'), x: 50, y: 30, probe: PROBE });
     await rig.pickEvents[0]?.check;
     await flush();
-    const read = rig.calls.find((call) => call.name === 'loadSource');
-    assert.deepEqual(read?.args, ['pricing', rig.board.screenId]);
+    return rig.calls.find((call) => call.name === 'loadSource')?.args;
+  };
+
+  test('a navigate in Edit mode is ignored: the board keeps its screen and the pick reads it', async () => {
+    const rig = makeRig();
+    // A design script clicks a link to Checkout (or a hostile frame posts it) while the wall is in Edit mode.
+    rig.handle({ ...env('navigate'), href: 'screens/checkout.html', hash: '' });
+    assert.equal(rig.board.screenId, 'home');
+    assert.equal(rig.loads, 0, 'the frame was not reloaded');
+    assert.deepEqual(await pickAndRead(rig), ['pricing', 'home']);
+    assert.equal(rig.pickEvents[0]?.screen, 'home');
   });
 
+  test('a navigate in Play mode moves the board, and a pick made afterwards reads the screen it now shows', async () => {
+    const rig = makeRig({ frameMode: 'play' });
+    rig.handle({ ...env('navigate'), href: 'screens/checkout.html', hash: '' });
+    assert.equal(rig.board.screenId, 'checkout');
+    assert.equal(rig.loads, 1);
+    assert.deepEqual(await pickAndRead(rig), ['pricing', 'checkout']);
+    assert.equal(rig.pickEvents[0]?.screen, 'checkout');
+    assert.deepEqual(writes(rig.calls), []);
+  });
+
+  test('on a saved version (always Play) a navigate still follows the link, read only', () => {
+    const rig = makeRig({ readOnly: true, frameMode: 'play' });
+    rig.handle({ ...env('navigate'), href: 'screens/checkout.html', hash: '' });
+    assert.equal(rig.board.screenId, 'checkout');
+  });
 });
 
 // ---- helpers ----
