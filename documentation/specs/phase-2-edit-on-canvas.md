@@ -190,9 +190,12 @@ view of it. Features 08 and 11 write through it; 09 and 10 follow the same rules
       frame's report only names the clicked element. When the page cannot locate that element's text in
       the source with certainty, the edit is refused before any write (08 gives the sentences).
 - [ ] **E3 Version first.** Before any hand edit writes, the design's current files are kept as a version
-      (reason label "Before your edit"), unless the newest version already holds exactly these files. If
-      that version cannot be saved (over the caps, a damaged history from a newer build), nothing is
-      written and the user sees "Couldn't save a version first, so nothing was changed. <reason>".
+      (reason label "Before your edits"), unless the newest version already holds exactly these files.
+      A burst of quick hand edits (within 60 s, with no other writer in between) shares one "Before your
+      edits" version holding the state before the burst; the intermediate states are reached by Undo
+      (E9), not as separate Versions entries. If that version cannot be saved (over the caps, a damaged
+      history from a newer build), nothing is written and the user sees "Couldn't save a version first,
+      so nothing was changed. <reason>".
 - [ ] **E4 Stale refusal.** When the target file changed on disk since the page read it (agent, another
       Design Chamber window, any program), nothing is written. The user sees "This file changed while you
       were editing. Nothing was saved." with **Reload and try again**; whatever they typed stays in the
@@ -211,9 +214,9 @@ view of it. Features 08 and 11 write through it; 09 and 10 follow the same rules
 - [ ] **E9 Undo.** A transient notice (S7, 10 s, paused on hover or focus) names what changed (for
       example "Text updated in Home") with **Undo**. Undo puts back exactly the bytes from before the edit,
       through the same rules (E3 to E5): if the file changed again since, Undo is refused with "This
-      file changed after your edit, so it can't be undone here. Restore the version 'Before your edit'
+      file changed after your edit, so it can't be undone here. Restore the version 'Before your edits'
       from Versions." Ctrl/⌘+Z in the viewer, outside any text field, does the same for the latest hand
-      edit of this session.
+      edit of this session (one slot: after an undo it does nothing until a new edit is made).
 - [ ] **E10 Not the agent.** The build strip never shows a hand edit as "Writing <file>", and the
       "Done. Updated N files" message never counts it (same idea as the restore quiet window).
 - [ ] **E11 Allowed while the agent works**, with a one-line hint while the linked agent is working on
@@ -256,7 +259,7 @@ view of it. Features 08 and 11 write through it; 09 and 10 follow the same rules
   program is using this file. Close it and try again."
 - Many quick edits: each saves a version unless the newest one already matches (E3). With the 100-version
   cap, a long run of hand edits pushes old versions out (see Open Questions).
-- Version pruning never removes the "Before your edit" version that an Undo on screen still points to,
+- Version pruning never removes the "Before your edits" version that an Undo on screen still points to,
   while that notice is up.
 - The service restarts between edit and Undo: Undo still works while the notice is up if the file is
   unchanged; otherwise the refusal sentence.
@@ -272,8 +275,8 @@ view of it. Features 08 and 11 write through it; 09 and 10 follow the same rules
   typed text (E6); path tricks (E7); a symlinked screen file (E7); racing the agent (E4).
 - **Sensitive data:** the user's typed text and the design files; nothing is logged beyond the file name
   and outcome; no text in logs.
-- **Audit trail:** every hand edit leaves a "Before your edit" version, so the Versions drawer shows
-  each state before a hand change.
+- **Audit trail:** hand edits leave a "Before your edits" version (one per burst, E3), so the Versions
+  drawer shows the state before each burst of hand changes; Undo steps back through the burst itself.
 
 ### Sandbox, Filesystem & Theme Impact
 - **Sandbox/CSP:** unchanged. Frames stay `allow-scripts` only, never `allow-same-origin`. The editor
@@ -288,7 +291,7 @@ view of it. Features 08 and 11 write through it; 09 and 10 follow the same rules
 ### Data Requirements
 - Per write: design, target file, what the page read (to detect a change), the edit, and who (always
   "user"). Kept only as the version before the write and the Undo notice's memory; nothing new on disk.
-- Versions gain user-edit reasons with plain labels ("Before your edit", 11 adds "Before keeping a
+- Versions gain user-edit reasons with plain labels ("Before your edits", 11 adds "Before keeping a
   direction").
 
 ### Out of Scope
@@ -419,7 +422,7 @@ writes only those values into `tokens.css`. No HTML is rewritten.
 |---|---|---|---|
 | 09-1 | Two knob kinds: a number slider (min, max, step, unit) and a choice among 2 to 6 named values | Covers hue, density, scale and radius; anything more is the agent's job | 2026-11-11 |
 | 09-2 | At most 12 knobs per design; each names one variable defined in `tokens.css` `:root` | A panel, not a properties editor | 2026-11-11 |
-| 09-3 | Preview never writes; only **Save** writes, through the 07 rules (version "Before your edit", stale refusal, smallest change, Undo) | Owner direction plus the user-edit rules | 2026-11-11 |
+| 09-3 | Preview never writes; only **Save** writes, through the 07 rules (version "Before your edits", stale refusal, smallest change, Undo) | Owner direction plus the user-edit rules | 2026-11-11 |
 | 09-4 | Preview updates artboards without reloading them, keeping scroll and Play state | The review: full reloads block smooth tweak previews | 2026-11-11 |
 | 09-5 | Unsaved tweaks are never lost silently: closing the panel keeps them pending; leaving the design asks Save / Discard / Keep editing | Usability floor: input is not lost | 2026-11-11 |
 | 09-6 | Saving tweaks does not by itself mark the design system confirmed | Confirming is the user's word in chat (precedence rule 4) | 2026-11-11 |
@@ -888,10 +891,10 @@ instructions also tell agents to re-read a file before editing it.
    editing it.** Alternative: rely on the re-read instruction alone.
 
 ### Open Questions (for the architect unless noted)
-- **Version noise from hand edits (07 E3).** One version per hand edit can push old history out of the
-  100-version cap during a long editing session. Options: coalesce hand edits within a short window into
-  one "Before your edits" version, or exempt user-edit versions from counting until pruning. Recommend
-  coalescing; the owner may want a say if it changes the versions list.
+- **Version noise from hand edits (07 E3). RESOLVED 2026-11-11: coalescing accepted.** A burst of hand
+  edits within 60 s (no other writer in between) shares one "Before your edits" version holding the state
+  before the burst; intermediate states are reached by Undo, not as separate Versions entries. Nothing is
+  lost (the pre-burst state is always versioned, Undo steps back through the burst). Recorded in E3/E9.
 - **Locating text in the source (07 E2, 08).** How certain "the exact one" must be (duplicate text,
   whitespace, entities) is the architect's call; the user-facing rule is: refuse rather than guess.
 - **Storage stand-in on every platform (19).** The spike ran in Chromium; confirm in OpenChamber's
