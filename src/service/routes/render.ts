@@ -1,12 +1,13 @@
 // WP2 — GET /designs/:slug/render, GET /designs/:slug/render/chunk, GET /designs/:slug/source (docs/SPEC.md §7, §9.5).
 
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 import { SHA256_PATTERN, SCREEN_ID_PATTERN, SOURCE_TEXT_MAX } from '../../shared/limits.ts';
 import type { RenderChunkResponse, SourceResponse } from '../../shared/api.ts';
 import { ApiError, type Router } from '../http.ts';
 import type { ServiceContext } from '../context.ts';
-import { resolveInside } from '../paths.ts';
+import { isPlainTarget, resolveInside } from '../paths.ts';
 import { ensureRenderService } from '../render-cache.ts';
 import { resolveEntryFile } from '../render-cache.ts';
 
@@ -53,6 +54,14 @@ export function registerRenderRoutes(router: Router, ctx: ServiceContext): void 
     if (text.length > SOURCE_TEXT_MAX) {
       throw new ApiError('too-large', 'This document is too large to copy out of Design Chamber.');
     }
-    return { text, bytes: bytes.length };
+    return {
+      text,
+      bytes: bytes.length,
+      // Phase 2 §2.2: the stamp a text edit carries, the UTF-8 round-trip, and whether the
+      // file (or a folder on its way) is a link — judged on the lexical path, not the realpath.
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      utf8: Buffer.from(text, 'utf8').equals(bytes),
+      link: !(await isPlainTarget(record.path, entryRel.split('/'))),
+    };
   });
 }

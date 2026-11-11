@@ -55,6 +55,7 @@ const baseDesign = (over: Partial<DesignJson> & Pick<DesignJson, 'kind' | 'title
   viewports: over.kind === 'page' ? [LAPTOP] : [LAPTOP, PHONE],
   screens: [],
   designSystem: { confirmed: false },
+  tweaks: [],
   comments: [],
   ...over,
 });
@@ -360,6 +361,8 @@ export const createFakeBackend = (): FakeBackend => {
       pending: isPending(rec),
       files: rec.design.kind === 'page' ? { entry: { exists: rec.written.has('index'), size: 22_000, mtime: rec.design.updated }, screens: {} } : { screens },
       warnings: [],
+      screensStamp: `screens:${rec.design.screens.map((s) => s.id).join(',')}`,
+      designJson: 'ok',
     };
   };
 
@@ -545,7 +548,7 @@ export const createFakeBackend = (): FakeBackend => {
     'GET /designs/:slug/source': ({ params, query }) => {
       const rec = get(params.slug);
       const text = docFor(params.slug ?? '', rec, query.screen, undefined);
-      return { text, bytes: text.length };
+      return { text, bytes: text.length, sha256: `src:${text.length}`, utf8: true, link: false };
     },
     'GET /designs/:slug/thumbnail': ({ params }) => {
       const rec = get(params.slug);
@@ -626,11 +629,11 @@ export const createFakeBackend = (): FakeBackend => {
         const picked = rec.design.comments.filter((candidate) => (wanted ? wanted.has(candidate.id) : candidate.status === 'open'));
         if (picked.length === 0) throw new ServiceError('invalid', wanted ? 'None of those comments exist any more.' : 'There are no open comments to send.');
         const lines = picked.map((candidate, index) => `${index + 1}. element: \`${candidate.anchor.selector}\`\n   → ${candidate.body}`);
-        return { text: `[Design Chamber] Revise "${rec.design.title}": ${picked.length} comment${picked.length === 1 ? '' : 's'}.\n${lines.join('\n')}`, commentIds: picked.map((candidate) => candidate.id), omitted: [], chip };
+        return { text: `[Design Chamber] Revise "${rec.design.title}": ${picked.length} comment${picked.length === 1 ? '' : 's'}.\n${lines.join('\n')}`, commentIds: picked.map((candidate) => candidate.id), omitted: [], chip, handEdits: null };
       }
       // The service-written requests of "Ask the agent to fix it" (checks badge, remote-files banner).
-      if (body.purpose === 'checks') return { ...checks.prompt(params.slug ?? ''), commentIds: [], omitted: [], chip };
-      if (body.purpose === 'offline') return { text: `[Design Chamber] Make "${rec.design.title}" work offline: bundle remote files into assets/ or remove them.`, commentIds: [], omitted: [], chip };
+      if (body.purpose === 'checks') return { ...checks.prompt(params.slug ?? ''), commentIds: [], omitted: [], chip, handEdits: null };
+      if (body.purpose === 'offline') return { text: `[Design Chamber] Make "${rec.design.title}" work offline: bundle remote files into assets/ or remove them.`, commentIds: [], omitted: [], chip, handEdits: null };
       if (body.purpose !== 'ask') throw new ServiceError('internal', 'The UI shim answers revisions, asks, checks and offline requests only.');
       const words = typeof body.text === 'string' ? body.text.trim() : '';
       if (words === '') throw new ServiceError('bad-request', 'Write what you want the agent to do.');
@@ -640,7 +643,36 @@ export const createFakeBackend = (): FakeBackend => {
         ...(element ? [`About this element: \`${element.anchor.selector}\``] : []),
         words,
       ];
-      return { text: lines.join('\n'), commentIds: [], omitted: [], chip };
+      return { text: lines.join('\n'), commentIds: [], omitted: [], chip, handEdits: null };
+    },
+    // Phase 2 seam stubs: the same sentences the service answers until T2b/T8 land.
+    'POST /designs/:slug/edits': ({ params }) => {
+      get(params.slug);
+      throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
+    },
+    'POST /designs/:slug/edits/:id/undo': ({ params }) => {
+      get(params.slug);
+      throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
+    },
+    'GET /designs/:slug/tokens': ({ params }) => {
+      get(params.slug);
+      throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
+    },
+    'POST /designs/:slug/hand-edits/clear': ({ params }) => {
+      get(params.slug);
+      throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
+    },
+    'GET /designs/:slug/page-state': ({ params }) => {
+      get(params.slug);
+      throw new ServiceError('internal', 'This part of Design Chamber (page-state) is not built yet.');
+    },
+    'PATCH /designs/:slug/page-state': ({ params }) => {
+      get(params.slug);
+      throw new ServiceError('internal', 'This part of Design Chamber (page-state) is not built yet.');
+    },
+    'DELETE /designs/:slug/page-state': ({ params }) => {
+      get(params.slug);
+      throw new ServiceError('internal', 'This part of Design Chamber (page-state) is not built yet.');
     },
   };
 

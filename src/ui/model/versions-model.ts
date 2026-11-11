@@ -17,6 +17,10 @@ export const reasonLabel = (reason: VersionReason): string => {
       return 'Before restore';
     case 'restored':
       return 'Restored';
+    case 'user-edit':
+      return 'Before your edits';
+    case 'keep-direction':
+      return 'Before keeping a direction';
   }
 };
 

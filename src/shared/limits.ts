@@ -329,3 +329,70 @@ export const DIRECTION_LABEL_MAX = 80;
 /** Options a direction pick needs, and allows [U8]. */
 export const DIRECTION_OPTIONS_MIN = 2;
 export const DIRECTION_OPTIONS_MAX = 4;
+
+// ---- Phase 2: edit on the canvas (documentation/specs/phase-2-technical.md §10.3) ----
+
+/** A hand-edit id as the service mints it (`e_…`), kept in `.chamber/edits.json`. */
+export const EDIT_ID_PATTERN = /^e_[a-z0-9]{8,24}$/;
+/** Characters of element text one hand edit may replace [§3.4]. */
+export const TEXT_EDIT_MAX = 5000;
+/** Characters of an element id the edit probe reports [§3.1]. */
+export const EDIT_PROBE_ID_MAX = 200;
+/** Elements the edit probe scans for same-text candidates before it stops counting [§3.1]. */
+export const EDIT_PROBE_SCAN_MAX = 5000;
+/** Hand edits within this window, with no other writer between, share one "Before your edits" version [§2.4]. */
+export const USER_EDIT_COALESCE_MS = 60_000;
+/** Undo records kept per design [§2.1]. */
+export const USER_UNDO_KEEP = 10;
+/** An undo record older than this is gone [§2.1]. */
+export const USER_UNDO_TTL_MS = 30 * 60_000;
+/** How long the edit notice with Undo stays [§2.7]. */
+export const USER_EDIT_NOTICE_MS = 10_000;
+/** Self-write entries remembered (least recently recorded dropped first) [§2.6]. */
+export const SELF_WRITES_MAX = 1024;
+/** `.chamber/edits.json` larger than this reads as empty [§2.1]. */
+export const EDITS_FILE_MAX_BYTES = 262_144;
+/** Hand-edit ledger entries kept; the rest are counted in `dropped` [§7.1]. */
+export const HAND_EDITS_LEDGER_MAX = 30;
+/** Characters of a quoted before/after/title in a ledger entry [§2.1]. */
+export const HAND_EDIT_QUOTE_MAX = 80;
+/** Characters of one rendered ledger line [§7.2]. */
+export const HAND_EDIT_LINE_MAX = 240;
+/** Characters of the whole hand-edit block in a message [§7.2]. */
+export const HAND_EDITS_BLOCK_MAX = 1500;
+
+/** Tweaks knobs per design [§4.1]. */
+export const TWEAKS_MAX = 12;
+export const TWEAK_LABEL_MAX = 40;
+/** A CSS custom property name a knob may name. */
+export const TWEAK_VAR_PATTERN = /^--[A-Za-z0-9_-]{1,64}$/;
+/** A number knob's unit: lower-case letters or %, possibly empty. */
+export const TWEAK_UNIT_PATTERN = /^[a-z%]{0,6}$/;
+/** Absolute bound of a number knob's min and max. */
+export const TWEAK_NUMBER_ABS_MAX = 1_000_000;
+export const TWEAK_CHOICES_MIN = 2;
+export const TWEAK_CHOICES_MAX = 6;
+export const TWEAK_CHOICE_LABEL_MAX = 30;
+/** A choice value: plain text that cannot break out of a CSS declaration (no `; { } < > \ *`). */
+export const TWEAK_CHOICE_VALUE_PATTERN = /^[A-Za-z0-9 #%.,()+\-'"/]{1,80}$/;
+/** A live preview value: the same plain shape, up to 100 characters (plus balanced quotes, §4.2). */
+export const TOKEN_PREVIEW_VALUE_PATTERN = /^[A-Za-z0-9 #%.,()+\-'"/]{1,100}$/;
+/** `tokens.css` larger than this is not editable [§4.2]. */
+export const TOKENS_CSS_MAX_BYTES = 1_000_000;
+/** Characters of a direction mark's name [§6.1]. */
+export const DIRECTION_NAME_MAX = 40;
+
+/** Saved page data per design, in UTF-16 code units of keys plus values (owner 19-7). */
+export const PAGE_STATE_MAX_CHARS = 1_048_576;
+/** `.chamber/page-state.json` larger than this reads as empty (room for JSON escaping) [§8.1]. */
+export const PAGE_STATE_FILE_MAX_BYTES = 8_388_608;
+/** Changes in one PATCH or one storage batch [§8.2, §8.3]. */
+export const PAGE_STATE_CHANGES_MAX = 10_000;
+/** At most one disk write per design per this many ms [§8.2]. */
+export const PAGE_STATE_WRITE_MIN_MS = 1000;
+/** At most one PATCH per surface per this many ms [§8.4]. */
+export const PAGE_STATE_FLUSH_MS = 1000;
+/** Characters of keys plus values in one storage batch (= PAGE_STATE_MAX_CHARS) [§8.3]. */
+export const PAGE_STATE_BATCH_MAX_CHARS = PAGE_STATE_MAX_CHARS;
+/** In-memory page-state cache across designs (least recently used dropped after a flush) [§8.2]. */
+export const PAGE_STATE_CACHE_MAX_BYTES = 33_554_432;

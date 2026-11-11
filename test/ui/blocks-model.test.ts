@@ -102,10 +102,11 @@ const design = (over: Partial<DesignJson> = {}): DesignJson => ({
   ],
   screens: [screen('welcome', 'Welcome'), screen('plans', 'Plans'), screen('checkout', 'Checkout')],
   designSystem: { confirmed: false },
+  tweaks: [],
   comments: [],
   ...over,
 });
-const detail = (over: Partial<DesignJson> = {}): DesignDetailResponse => ({ slug: 'pricing', path: '/d/pricing', design: design(over), pending: false, files: { screens: {} }, warnings: [] });
+const detail = (over: Partial<DesignJson> = {}): DesignDetailResponse => ({ slug: 'pricing', path: '/d/pricing', design: design(over), pending: false, files: { screens: {} }, warnings: [], screensStamp: null, designJson: 'ok' });
 const summary = (errors: number, warnings: number, state: ChecksSummary['render']['state'], canRun = true, browser = true): ChecksSummary => ({ counts: { errors, warnings, notes: 0 }, render: { state }, canRun, browser });
 
 test('cardView: a canvas lists its screens', () => {

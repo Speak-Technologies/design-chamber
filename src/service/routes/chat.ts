@@ -403,13 +403,14 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
 
     if (input.purpose === 'continue') {
       const openComments = design.comments.filter((comment) => comment.status === 'open').length;
-      return { text: buildContinuePrompt({ title: design.title, kind: design.kind, folder: record.path, openComments }), commentIds: [], omitted: [], chip };
+      // handEdits stays null until T6 builds the ledger block (§7.3).
+      return { text: buildContinuePrompt({ title: design.title, kind: design.kind, folder: record.path, openComments }), commentIds: [], omitted: [], chip, handEdits: null };
     }
 
     if (input.purpose === 'offline') {
       const external = await collectExternal(ctx, record);
       if (external.urls.length === 0) throw new ApiError('invalid', "This design doesn't load anything from the internet.");
-      return { text: buildOfflinePrompt({ title: design.title, kind: design.kind, folder: record.path, external }), commentIds: [], omitted: [], chip };
+      return { text: buildOfflinePrompt({ title: design.title, kind: design.kind, folder: record.path, external }), commentIds: [], omitted: [], chip, handEdits: null };
     }
 
     if (input.purpose === 'ask') {
@@ -424,7 +425,7 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
       }
       try {
         const { text } = buildAskPrompt({ title: design.title, kind: design.kind, folder: record.path, screens: design.screens, viewports: design.viewports, text: input.text, element });
-        return { text, commentIds: [], omitted: [], chip };
+        return { text, commentIds: [], omitted: [], chip, handEdits: null };
       } catch (error) {
         if (error instanceof AskTooLongError) {
           throw new ApiError('invalid', `Your message is ${error.over} characters too long for the chat. Shorten it and send again.`);
@@ -445,7 +446,7 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
         renderStale: checks.renderStale,
         checkCommand: context.checkCommand,
       });
-      return { text: prompt.text, commentIds: [], omitted: [], chip };
+      return { text: prompt.text, commentIds: [], omitted: [], chip, handEdits: null };
     }
 
     // Validate the comment choice before spending time on the scan.
@@ -460,7 +461,7 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
       anchorStates: input.anchorStates,
       external: await collectExternal(ctx, record),
     });
-    return { text: prompt.text, commentIds: prompt.commentIds, omitted: prompt.omitted, chip };
+    return { text: prompt.text, commentIds: prompt.commentIds, omitted: prompt.omitted, chip, handEdits: null };
   });
 
   router.on('POST /pages/from-message', async ({ body }): Promise<FromMessageResponse> => {

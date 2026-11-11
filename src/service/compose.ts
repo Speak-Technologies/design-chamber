@@ -20,9 +20,11 @@ import { registerChecksRoutes } from './routes/checks.ts';
 import { registerChatRoutes } from './routes/chat.ts';
 import { registerCommentsRoutes } from './routes/comments.ts';
 import { registerDesignsRoutes } from './routes/designs.ts';
+import { registerEditRoutes } from './routes/edits.ts';
 import { registerExportRoutes } from './routes/export.ts';
 import { registerMentionsRoutes } from './routes/mentions.ts';
 import { registerOutboxRoutes } from './routes/outbox.ts';
+import { registerPageStateRoutes } from './routes/page-state.ts';
 import { registerPresetsRoutes } from './routes/presets.ts';
 import { registerRenderRoutes } from './routes/render.ts';
 import { registerSessionEventsRoutes } from './routes/session-events.ts';
@@ -32,6 +34,7 @@ import { registerThumbnailsRoutes } from './routes/thumbnails.ts';
 import { registerUploadsRoutes } from './routes/uploads.ts';
 import { registerVersionsRoutes } from './routes/versions.ts';
 import { writeRuntimeRecord } from './runtime-record.ts';
+import { createSelfWrites } from './self-writes.ts';
 import { createSettingsStore, type SettingsEnv } from './settings.ts';
 import { createDesignStore } from './store.ts';
 import { ensureThumbnailService } from './thumbnails.ts';
@@ -74,6 +77,12 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   });
   const epoch = randomUUID();
   const hub = createChangeHub(epoch);
+  // One registry shared by the watcher's echo filter and the edit service (Phase 2 §2.6).
+  const selfWrites = createSelfWrites();
+  settings.onRootChange(() => selfWrites.clear());
+  hub.subscribe((event) => {
+    if (event.kind === 'removed' && event.slug !== null) selfWrites.forgetDesign(event.slug);
+  });
   // The store reads list thumb states from the thumbnail service, which itself needs the store:
   // the store asks through the context, which holds the real service before any request runs.
   const store = createDesignStore({ settings, log, hub, thumbnails: { peek: (slug) => ctx.thumbnails.peek(slug) } });
@@ -95,6 +104,7 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
     designIndex,
     hostCalls: createHostCalls({ env: options.env ?? process.env, log }),
     activity: createActivityTracker(),
+    selfWrites,
     onDispose: (fn) => {
       disposers.push(fn);
     },
@@ -169,6 +179,9 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   registerSessionEventsRoutes(router, ctx, turnEvents);
   registerMentionsRoutes(router, ctx);
   registerStatusRoutes(router, ctx);
+  // Phase 2: seam stubs until T2b (edits) and T8 (page-state) fill them (§10.7).
+  registerEditRoutes(router, ctx);
+  registerPageStateRoutes(router, ctx);
 
   let disposed = false;
   return {

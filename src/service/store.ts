@@ -22,7 +22,7 @@
 // All writes are tmp+rename (`writeFileAtomic`); every path from a slug goes through
 // `resolveInside`; per-slug locks serialise read-modify-write cycles.
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, stat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -70,6 +70,14 @@ import { folderErrorSentence, isDesignFolder, isDirectory } from './root.ts';
 
 /** `.chamber/state.json` — the service-owned truth (§6.3). */
 const stateFileOf = (dir: string): string => path.join(dir, '.chamber', 'state.json');
+
+/**
+ * The screen list's stamp (Phase 2 §5.1): sha256 of the RAW `screens` value, not the normalised
+ * one, so even an invalid entry the wall does not show counts as part of the list. A comment,
+ * the title or `updated` changing does not move it.
+ */
+export const screensStampOf = (raw: JsonObject): string =>
+  createHash('sha256').update(JSON.stringify(raw.screens ?? null), 'utf8').digest('hex');
 
 /** Mirror writes retried (with a growing pause) after an agent write or a Windows file lock; then left to reconcile. */
 const MIRROR_ATTEMPTS = 5;
@@ -210,8 +218,12 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     }
     const pending = design.kind === 'page' ? !entryStatus.exists : !Object.values(files.screens).some((entry) => entry.exists);
 
+    // Phase 2 §5.1: the screen-list stamp and the design.json health the detail answer carries.
+    const designJson: DesignRecord['designJson'] = designText === null ? 'missing' : parsed.raw === null ? 'invalid' : 'ok';
+    const screensStamp = designText === null || parsed.raw === null ? null : screensStampOf(parsed.raw);
+
     return {
-      record: { slug, path: dir, design, state: finalState, extra: parsed.extra, pending, files, warnings },
+      record: { slug, path: dir, design, state: finalState, extra: parsed.extra, pending, files, warnings, screensStamp, designJson },
       raw: parsed.raw,
       designText,
       agentDesign,
@@ -642,6 +654,15 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     onCreate(hook) {
       hooks.add(hook);
       return () => hooks.delete(hook);
+    },
+
+    // Phase 2 T4 fills these (the shared merge-and-retry loop, §5.1); until then every call
+    // answers the same sentence as the edit route stubs, never a false success.
+    async writeScreens() {
+      throw new ApiError('internal', 'This part of Design Chamber (edits) is not built yet.');
+    },
+    async moveComments() {
+      throw new ApiError('internal', 'This part of Design Chamber (edits) is not built yet.');
     },
 
     reconcile,

@@ -483,11 +483,14 @@ const detailOf = (over: { sessionId?: string | null; projectDirectory?: string |
     viewports: [{ id: 'laptop', label: 'Laptop', width: 1280, height: 800 }],
     screens: (over.screens ?? ['home', 'pricing']).map((id) => ({ id, title: id, file: `screens/${id}.html` })),
     designSystem: { confirmed: false },
+    tweaks: [],
     comments: [],
   },
   pending: over.pending ?? false,
   files: { screens: Object.fromEntries((over.screens ?? ['home', 'pricing']).map((id, index) => [id, { exists: index === 0, size: 100, mtime: null }])) },
   warnings: [],
+  screensStamp: 'stamp',
+  designJson: 'ok',
 });
 
 const record = (id: string, activity: GuestSessionRecord['activity'], outcome: GuestSessionRecord['outcome'] = null): GuestSessionRecord => ({

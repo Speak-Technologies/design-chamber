@@ -12,7 +12,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { readFileSync, renameSync } from 'node:fs';
-import { realpath as fsRealpath, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat as fsLstat, realpath as fsRealpath, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -129,6 +129,65 @@ export const resolveInside = async (root: string, segments: readonly string[], d
   const realRelative = caseInsensitive ? p.relative(realRoot.toLowerCase(), realTarget.toLowerCase()) : p.relative(realRoot, realTarget);
   if (isEscaping(realRelative, p)) throw badPath('That path leaves the designs folder, so Design Chamber refuses it.');
   return realTarget;
+};
+
+// ---- Plain writable targets (Phase 2 §2.3) ----
+
+/** The sentence every link refusal answers with, at the write and in the page's disabled reason. */
+export const LINK_SENTENCE = "This file is a link, so Design Chamber can't edit it here. Ask the agent instead.";
+
+/** The part of `fs.Stats` the plain-target check needs; injectable for tests. */
+export type PlainStat = { isFile(): boolean };
+
+export type PlainTargetDeps = ContainmentDeps & {
+  /** Does not follow the final link; defaults to `fs.promises.lstat`. */
+  lstat?: (target: string) => Promise<PlainStat>;
+};
+
+const defaultLstat = (target: string): Promise<PlainStat> => fsLstat(target);
+
+/**
+ * Resolve a file the service may write: containment first (`resolveInside`, which refuses
+ * links out and answers the realpath), then the realpath compared with the lexical path —
+ * that comparison is what catches a link **inside** the design (a leaf link, or a folder on
+ * the way), whose realpath stays inside and whose target an `lstat` of the realpath would
+ * see as a regular file. A link is refused even when it points inside, because a rename
+ * would replace the link, not its target. Finally an `lstat` of the lexical path: a folder,
+ * FIFO or device is not editable; an absent leaf is allowed only with `allowAbsent` (a
+ * create, a move destination), and any other filesystem error propagates to the caller.
+ * Answers the lexical path — what the name says, no link followed.
+ */
+export const resolvePlainTarget = async (
+  base: string,
+  segments: readonly string[],
+  options: { allowAbsent?: boolean } = {},
+  deps: PlainTargetDeps = {},
+): Promise<string> => {
+  const p = deps.path ?? path;
+  const platform = deps.platform ?? process.platform;
+  const real = await resolveInside(base, segments, deps);
+  const lexical = p.resolve(base, ...segments);
+  if (!samePath(real, lexical, p, platform)) throw new ApiError('invalid', LINK_SENTENCE);
+  const lstat = deps.lstat ?? defaultLstat;
+  let info: PlainStat;
+  try {
+    info = await lstat(lexical);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && options.allowAbsent === true) return lexical;
+    throw error;
+  }
+  if (!info.isFile()) throw new ApiError('invalid', LINK_SENTENCE);
+  return lexical;
+};
+
+/** `resolvePlainTarget` succeeded, as a boolean — `GET /source`'s `link` field (Phase 2 §2.2). */
+export const isPlainTarget = async (base: string, segments: readonly string[], deps: PlainTargetDeps = {}): Promise<boolean> => {
+  try {
+    await resolvePlainTarget(base, segments, {}, deps);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 // ---- Slugs (§6.1, §9.1) ----

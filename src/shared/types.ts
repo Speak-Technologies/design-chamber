@@ -36,7 +36,21 @@ export type Screen = {
   viewports?: string[];
   /** ≤ `SCREEN_DESCRIPTION_MAX`. */
   description?: string;
+  /** Marks this screen as a direction of another screen (Phase 2 §6.1); absent on a normal screen. */
+  direction?: DirectionMark;
 };
+
+/** A direction's letter within its group: four letters cap a group at 4 directions. */
+export type DirectionLetter = 'A' | 'B' | 'C' | 'D';
+
+/** Agent-written mark on a screen entry: this screen is direction `letter` of screen `of` (Phase 2 §6.1). */
+export type DirectionMark = { of: string; letter: DirectionLetter; name: string };
+
+/** A number knob: a slider over one custom property in tokens.css (Phase 2 §4.1). */
+export type TweakNumber = { var: string; label: string; kind: 'number'; min: number; max: number; step: number; unit: string };
+/** A choice knob: 2 to 6 named plain values for one custom property (Phase 2 §4.1). */
+export type TweakChoice = { var: string; label: string; kind: 'choice'; options: { label: string; value: string }[] };
+export type Tweak = TweakNumber | TweakChoice;
 
 export type DesignSystemStatus = {
   /** The agent sets true once the user confirmed DESIGN.md / tokens.css. */
@@ -106,6 +120,8 @@ export type DesignJson = {
   /** Canvas: 0..`SCREENS_MAX` in wall row order. Page: always `[]`. */
   screens: Screen[];
   designSystem: DesignSystemStatus;
+  /** Tweaks knobs for the panel (Phase 2 §4.1); `[]` when absent. */
+  tweaks: Tweak[];
   comments: Comment[];
 };
 
@@ -121,8 +137,12 @@ export type ServiceOwnedField =
   | 'entry'
   | 'comments';
 
-/** Fields the agent owns; read from design.json only [§6.3]. `title` is also written on a user rename. */
-export type AgentOwnedField = 'title' | 'updated' | 'viewports' | 'screens' | 'designSystem';
+/**
+ * Fields the agent owns; read from design.json only [§6.3]. `title` is also written on a user
+ * rename; `screens` is shared — the service writes it for the user's screen actions and the
+ * agent's later write wins (Phase 2 §5.1).
+ */
+export type AgentOwnedField = 'title' | 'updated' | 'viewports' | 'screens' | 'designSystem' | 'tweaks';
 
 /**
  * `.chamber/state.json` — authoritative service-owned fields [§6.3].
@@ -144,8 +164,8 @@ export type DesignWarning = {
 
 // ---- .versions/ [§6.4] ----
 
-/** `manual` is the user's "Snapshot now" (SPEC §14 "WP0 deviations"). */
-export type VersionReason = 'auto' | 'turn' | 'manual' | 'restore-point' | 'restored';
+/** `manual` is the user's "Snapshot now" (SPEC §14 "WP0 deviations"); `user-edit` and `keep-direction` are the hand-edit versions (Phase 2 §2.1). */
+export type VersionReason = 'auto' | 'turn' | 'manual' | 'restore-point' | 'restored' | 'user-edit' | 'keep-direction';
 
 export type VersionEntry = {
   /** `v<n>`. */
@@ -175,6 +195,25 @@ export type VersionIndex = {
 
 export type VersionFileChange = 'added' | 'removed' | 'modified';
 
+// ---- Hand edits (Phase 2 §2.1, `.chamber/edits.json` ledger) ----
+
+/** Fields the pipeline adds to every ledger entry; `seq` is monotonic per design and survives clears. */
+export type HandEditBase = { seq: number; at: IsoDate; editId: string };
+
+/**
+ * One hand edit as the ledger stores it: structured fields only, rendered to text at prompt
+ * time (Phase 2 §7), so nothing that writes the design folder can inject lines into a message.
+ */
+export type HandEdit = HandEditBase & (
+  | { kind: 'text'; file: string; screen: string | null; before: string; after: string }
+  | { kind: 'tweaks'; changes: { label: string; before: string; after: string }[] }
+  | { kind: 'reorder'; moved: string; above: string | null }      // exactly one screen moved
+  | { kind: 'reorder-many'; order: string[] }                     // several moved at once (≤ 40 titles)
+  | { kind: 'duplicate'; screen: string; copy: string; file: string }
+  | { kind: 'trash'; screen: string; file: string }
+  | { kind: 'keep'; screen: string; letter: DirectionLetter | null; name: string | null }
+  | { kind: 'undo'; of: string });
+
 // ---- Settings [§6.5] ----
 
 /** The service-owned settings file. Every key but `version` optional. */
@@ -195,9 +234,10 @@ export type BrowserSource = 'setting' | 'detected' | 'none';
  * `loose`: the set of loose `.html`/`.htm` files directly in the root changed (slug `null`).
  * `open`: a status or block frame asked the rail to open this design (`POST /open-request`).
  * `activity`: the linked agent's turn state for this design changed (session events).
- * Neither changes design data.
+ * `page-state`: the design's saved page data changed (Phase 2 §8.2; no data in the event).
+ * None of these but `page-state` changes design data.
  */
-export type ChangeKind = 'added' | 'removed' | 'design' | 'files' | 'thumb' | 'versions' | 'comments' | 'root' | 'loose' | 'checks' | 'open' | 'activity';
+export type ChangeKind = 'added' | 'removed' | 'design' | 'files' | 'thumb' | 'versions' | 'comments' | 'root' | 'loose' | 'checks' | 'open' | 'activity' | 'page-state';
 
 export type ChangeEvent = {
   seq: number;
@@ -206,6 +246,8 @@ export type ChangeEvent = {
   kind: ChangeKind;
   /** Relative paths inside the design (`/` separators) for `files` events. */
   files?: string[];
+  /** Set only on events the edit pipeline emits for the user's own writes (Phase 2 §2.6); absent on watcher events. */
+  origin?: 'user';
 };
 
 // ---- Summaries and records [§7] ----

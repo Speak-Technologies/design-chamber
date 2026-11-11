@@ -92,6 +92,7 @@ const baseDesign = (kind: DesignKind, title: string, minutes: number): DesignJso
   viewports: kind === 'page' ? [LAPTOP] : [LAPTOP, PHONE],
   screens: [],
   designSystem: { confirmed: false },
+  tweaks: [],
   comments: [],
 });
 
@@ -412,6 +413,8 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           pending: pending(entry),
           files: entry.design.kind === 'page' ? { entry: fileStatus(entry.files['index.html']), screens } : { screens },
           warnings: [],
+          screensStamp: fakeHash(JSON.stringify(entry.design.screens)),
+          designJson: 'ok',
         };
       }
       case 'PATCH /designs/:slug': {
@@ -585,7 +588,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
       }
       case 'GET /designs/:slug/source': {
         const text = sourceOf(slug, query.screen);
-        return { text, bytes: text.length };
+        return { text, bytes: text.length, sha256: fakeHash(text), utf8: true, link: false };
       }
       case 'GET /designs/:slug/thumbnail':
         get(slug);
@@ -667,7 +670,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
             ...(element ? [`About this element: \`${element.anchor?.selector ?? ''}\``] : []),
             words,
           ];
-          return { text: lines.join('\n'), commentIds: [], omitted: [], chip: chipOf(slug) };
+          return { text: lines.join('\n'), commentIds: [], omitted: [], chip: chipOf(slug), handEdits: null };
         }
         const wanted = Array.isArray(body.commentIds) ? new Set(body.commentIds.map(String)) : null;
         // Like the service: no ids means every open comment; named ids are sent whatever their status.
@@ -682,7 +685,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
               : body.purpose === 'checks'
                 ? `[Design Chamber] Fix what the check found in "${entry.design.title}".`
                 : `[Design Chamber] Let's continue "${entry.design.title}".`;
-        return { text, commentIds: body.purpose === 'revision' ? comments.map((comment) => comment.id) : [], omitted: [], chip: chipOf(slug) };
+        return { text, commentIds: body.purpose === 'revision' ? comments.map((comment) => comment.id) : [], omitted: [], chip: chipOf(slug), handEdits: null };
       }
       case 'POST /pages/from-message': {
         const upload = uploads.get(String(body.uploadId));
@@ -695,6 +698,18 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
         if (body.open === true) openRequest.value = { slug: created, intent: 'view', created: new Date().toISOString() };
         return { slug: created, title };
       }
+      // Phase 2 seam stubs: the same sentences the service answers until T2b/T8/T11a land.
+      case 'POST /designs/:slug/edits':
+      case 'POST /designs/:slug/edits/:id/undo':
+      case 'GET /designs/:slug/tokens':
+      case 'POST /designs/:slug/hand-edits/clear':
+        get(slug);
+        throw new FakeHttpError('internal', 'This part of Design Chamber (edits) is not built yet.');
+      case 'GET /designs/:slug/page-state':
+      case 'PATCH /designs/:slug/page-state':
+      case 'DELETE /designs/:slug/page-state':
+        get(slug);
+        throw new FakeHttpError('internal', 'This part of Design Chamber (page-state) is not built yet.');
     }
   };
 

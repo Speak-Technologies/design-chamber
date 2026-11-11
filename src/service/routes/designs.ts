@@ -155,6 +155,8 @@ export function registerDesignsRoutes(router: Router, ctx: ServiceContext): void
       pending: record.pending,
       files: record.files,
       warnings: record.warnings,
+      screensStamp: record.screensStamp,
+      designJson: record.designJson,
     };
   });
 

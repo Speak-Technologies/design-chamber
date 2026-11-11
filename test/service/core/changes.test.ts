@@ -147,3 +147,32 @@ describe('subscribe', () => {
     assert.deepEqual(seen.map((event) => event.slug), ['a']);
   });
 });
+
+describe('origin (Phase 2 §2.6): the user\'s own writes are marked', () => {
+  test('an event emitted with origin "user" carries it to waitFor and to subscribers', async () => {
+    const hub = createChangeHub(EPOCH);
+    const seen: ChangeEvent[] = [];
+    hub.subscribe((event) => seen.push(event));
+    const emitted = hub.emit({ slug: 'a', kind: 'files', files: ['index.html'], origin: 'user' });
+    assert.equal(emitted.origin, 'user');
+    assert.equal(seen[0]?.origin, 'user');
+    const answer = await hub.waitFor(0, EPOCH, 0);
+    assert.equal(answer.events[0]?.origin, 'user');
+    assert.deepEqual(answer.events[0]?.files, ['index.html']);
+  });
+
+  test('an event without origin has no origin key (watcher events stay unmarked)', async () => {
+    const hub = createChangeHub(EPOCH);
+    const emitted = hub.emit({ slug: 'a', kind: 'files', files: ['index.html'] });
+    assert.equal(Object.hasOwn(emitted, 'origin'), false);
+    const answer = await hub.waitFor(0, EPOCH, 0);
+    assert.equal(Object.hasOwn(answer.events[0] ?? {}, 'origin'), false);
+  });
+
+  test('a design event can carry origin too (the pipeline emits both kinds)', async () => {
+    const hub = createChangeHub(EPOCH);
+    const emitted = hub.emit({ slug: 'a', kind: 'design', origin: 'user' });
+    assert.equal(emitted.origin, 'user');
+    assert.equal(emitted.kind, 'design');
+  });
+});

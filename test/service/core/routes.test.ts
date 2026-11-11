@@ -27,6 +27,7 @@ import type {
 } from '../../../src/shared/api.ts';
 import { ROUTE_KEYS, ROUTE_OWNERS } from '../../../src/shared/api.ts';
 import { resolveBrowser } from '../../../src/service/chrome.ts';
+import { ApiError } from '../../../src/service/http.ts';
 import { REPO_ROOT, useServedCore } from './harness.ts';
 
 const json = async <T>(answer: Response): Promise<T> => {
@@ -405,6 +406,102 @@ describe('GET /changes long-poll', () => {
     assert.equal((await core.request('/health')).status, 200);
     const after = await core.request('/changes', { query: { since: String(first.seq), epoch: first.epoch, wait: '0' } });
     assert.equal(after.status, 200);
+  });
+
+  test('an event emitted with origin "user" reaches GET /changes with it; watcher events have no origin key (Phase 2 §2.6)', async (t) => {
+    const core = await useServedCore(t);
+    const first = await json<ChangesResponse>(await core.request('/changes', { query: { since: '0', epoch: '' } }));
+    // The edit pipeline emits its own events directly; the watcher emits without origin.
+    core.ctx.hub.emit({ slug: 'demo', kind: 'files', files: ['index.html'], origin: 'user' });
+    core.ctx.hub.emit({ slug: 'demo', kind: 'files', files: ['screens/home.html'] });
+    const answer = await json<ChangesResponse>(await core.request('/changes', { query: { since: String(first.seq), epoch: first.epoch, wait: '0' } }));
+    assert.equal(answer.reset, false);
+    assert.equal(answer.events.length, 2);
+    assert.equal(answer.events[0]?.origin, 'user');
+    assert.deepEqual(answer.events[0]?.files, ['index.html']);
+    assert.equal(Object.hasOwn(answer.events[1] ?? {}, 'origin'), false);
+  });
+});
+
+describe('Phase 2 route stubs (T0): bearer, slug and body bounds before the lanes land', () => {
+  const calls: [string, { method?: string; body?: unknown }][] = [
+    ['/designs/demo/edits', { method: 'POST', body: { op: 'text' } }],
+    ['/designs/demo/edits/e_abcdefgh1234/undo', { method: 'POST', body: {} }],
+    ['/designs/demo/tokens', {}],
+    ['/designs/demo/hand-edits/clear', { method: 'POST', body: { upTo: 1 } }],
+    ['/designs/demo/page-state', {}],
+    ['/designs/demo/page-state', { method: 'PATCH', body: { gen: 'e:0', changes: [] } }],
+    ['/designs/demo/page-state', { method: 'DELETE' }],
+  ];
+
+  test('every new route refuses a missing or wrong token with 401', async (t) => {
+    const core = await useServedCore(t);
+    for (const [pathname, init] of calls) {
+      for (const token of [null, 'wrong'] as const) {
+        const answer = await core.request(pathname, { ...init, token });
+        assert.equal(answer.status, 401, `${init.method ?? 'GET'} ${pathname} token=${String(token)}`);
+        assert.equal((await errorOf(answer)).error, 'unauthorized');
+      }
+    }
+  });
+
+  test('with the bearer, every new route answers the "not built yet" sentence', async (t) => {
+    const core = await useServedCore(t);
+    await core.request('/designs', { method: 'POST', body: { kind: 'canvas', title: 'Demo' } });
+    for (const [pathname, init] of calls) {
+      const answer = await core.request(pathname, init);
+      assert.equal(answer.status, 500, `${init.method ?? 'GET'} ${pathname}`);
+      const body = await errorOf(answer);
+      assert.equal(body.error, 'internal');
+      assert.match(body.message, /not built yet/, pathname);
+    }
+  });
+
+  test('the slug is validated before the stub: bad pattern 400, unknown design 404', async (t) => {
+    const core = await useServedCore(t);
+    for (const [pathname, init] of calls) {
+      const bad = pathname.replace('/demo/', '/BAD SLUG/');
+      const badAnswer = await core.request(bad, init);
+      assert.equal(badAnswer.status, 400, bad);
+      assert.equal((await errorOf(badAnswer)).error, 'bad-slug');
+      const gone = pathname.replace('/demo/', '/no-such-design/');
+      const goneAnswer = await core.request(gone, init);
+      assert.equal(goneAnswer.status, 404, gone);
+      assert.equal((await errorOf(goneAnswer)).error, 'not-found');
+    }
+  });
+
+  test('the undo route validates the edit id pattern', async (t) => {
+    const core = await useServedCore(t);
+    await core.request('/designs', { method: 'POST', body: { kind: 'canvas', title: 'Demo' } });
+    const answer = await core.request('/designs/demo/edits/not-an-id/undo', { method: 'POST', body: {} });
+    assert.equal(answer.status, 400);
+    assert.equal((await errorOf(answer)).error, 'bad-request');
+  });
+
+  test('a body over the router cap is 413 on every new route that takes one', async (t) => {
+    const core = await useServedCore(t);
+    const huge = { op: 'text', filler: 'x'.repeat(81_000) };
+    for (const pathname of ['/designs/demo/edits', '/designs/demo/edits/e_abcdefgh1234/undo', '/designs/demo/hand-edits/clear', '/designs/demo/page-state']) {
+      const method = pathname.endsWith('/page-state') ? 'PATCH' : 'POST';
+      const answer = await core.request(pathname, { method, body: huge });
+      assert.equal(answer.status, 413, `${method} ${pathname}`);
+      assert.equal((await errorOf(answer)).error, 'too-large');
+    }
+  });
+
+  test('the store writeScreens and moveComments stubs answer the same sentence, never a false success', async (t) => {
+    const core = await useServedCore(t);
+    await core.request('/designs', { method: 'POST', body: { kind: 'canvas', title: 'Demo' } });
+    for (const call of [
+      () => core.store.writeScreens('demo', 'stamp', () => []),
+      () => core.store.moveComments('demo', [{ from: 'home', to: 'pricing' }]),
+    ]) {
+      await assert.rejects(
+        call(),
+        (error: unknown) => error instanceof ApiError && error.code === 'internal' && /not built yet/.test(error.message),
+      );
+    }
   });
 });
 
