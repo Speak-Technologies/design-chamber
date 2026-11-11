@@ -97,11 +97,28 @@ covers text it never touches. Three rules keep the warning honest:
   Nobody sees that text, so none of the three can be a visual defect. The accessibility checks
   (alt text, labels, button names) still apply, and hidden text can be the fix for them.
 - What paints is still judged: a `visibility: visible` child inside a `visibility: hidden` parent,
-  and visible text marked `aria-hidden`, count as seen. Scrolling never hides text: content below
-  or beside a scroll box paints once scrolled, and the check scrolls the whole document, so it is
-  judged. Only `overflow: hidden` and `overflow: clip` cut text, each on its own axis, and
-  positioned text is cut only by the boxes that contain it: a dropdown positioned out of a clipped
-  card is still judged.
+  and visible text marked `aria-hidden`, count as seen.
+
+Where text paints and whether anyone can see it are two separate questions, and scrolling only
+changes the first:
+
+- Scrolling never hides text. Text further down or further along a scroll box (`overflow: auto` or
+  `scroll` with content past its edge) keeps its contrast verdict, because the user scrolls to it.
+- For overlap, text counts where it paints now. Text scrolled out of a box never overlaps text
+  outside the box (a long list in a fixed-height panel does not "overlap" the paragraph under the
+  panel). Two texts in the same scroll box are compared inside it, so an overlap the user scrolls
+  to is still found.
+- The page itself always scrolls, and the check scrolls it: the root never cuts text, whatever
+  overflow `html` has, and neither does a `body` whose overflow goes to the viewport.
+- Text is cut for good only by a box that never shows what sticks out of it: `overflow: hidden` or
+  `clip`, each on its own axis, and an `auto` or `scroll` box with nothing to scroll to. A text's
+  own box counts too (a second line under a fixed height, text pushed out with `text-indent`).
+  Text cut away completely is hidden.
+- Positioned text is cut only by the boxes that contain it: a dropdown positioned out of a clipped
+  card is still judged. Fixed text scrolls with a box that is moved with `transform`, `translate`,
+  `rotate` or `scale`, and otherwise stays on the first screen.
+- Boxes that overflow does not apply to cut nothing: inline boxes, `display: contents` and table
+  rows. A scaled box cuts at the size it paints, not at its layout size.
 
 Real overlaps are still found: a caption positioned over a heading, items pulled onto each other by
 negative margins, text moved over a sibling by a transform. The 30% share rule, the fixed/sticky

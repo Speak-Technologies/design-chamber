@@ -172,3 +172,59 @@ test('a long document of wrapping texts gives no false overlaps, and a planted l
   assert.equal(found.length, 1, 'the one real line-pair overlap inside intersecting rects is found');
   assert.equal(found[0]?.detail, 'Paragraph 1500 / Paragraph 1501');
 });
+
+test('text scrolled out of a scroll box never overlaps text outside it, and still overlaps text in the same box', () => {
+  // A 100px-tall scroll list at y 0-100 with a footer right under it. Rows 5 and 6 are laid out
+  // at y 120-160, where the footer paints, but they are scrolled out of the list: no painted lines.
+  const footer = text({ selector: 'p.footer', text: 'Footer', rect: { x: 0, y: 110, w: 300, h: 20 }, lines: [{ x: 0, y: 110, w: 300, h: 20 }] });
+  const row = text({ selector: 'li.five', text: 'Row five', rect: { x: 40, y: 120, w: 300, h: 20 }, lines: [], inScroll: { box: 0, lines: [{ x: 40, y: 120, w: 300, h: 20 }] } });
+  assert.equal(overlapShare(footer.rect, row.rect) >= 0.3, true, 'the geometry alone would call it an overlap');
+  assert.deepEqual(overlaps({ ...emptyProbe(), texts: [footer, row] }), [], 'the row paints nothing now, so it does not fall back to its merged box');
+  // The same row without a scroll box is an older shape with no line boxes: judged on its merged box.
+  const { inScroll: _inScroll, ...oldShape } = row;
+  assert.equal(overlaps({ ...emptyProbe(), texts: [footer, oldShape] }).length, 1, 'the old shape still falls back to the merged box');
+  // Two rows cut by the same scroll box are compared inside it: an overlap the user scrolls to.
+  const badge = text({ selector: 'li.five > span', text: 'Badge', rect: { x: 100, y: 125, w: 300, h: 20 }, lines: [], inScroll: { box: 0, lines: [{ x: 100, y: 125, w: 300, h: 20 }] } });
+  const inBox = overlaps({ ...emptyProbe(), texts: [footer, row, badge] });
+  assert.equal(inBox.length, 1);
+  assert.equal(inBox[0]?.detail, 'Row five / Badge');
+  // Cut by different scroll boxes: only what paints now counts, and neither paints.
+  assert.deepEqual(overlaps({ ...emptyProbe(), texts: [row, { ...badge, inScroll: { box: 1, lines: badge.inScroll?.lines ?? [] } }] }), []);
+  // A row half in view keeps its painted part for texts outside the box.
+  const half = text({ selector: 'li.four', text: 'Row four', rect: { x: 40, y: 95, w: 300, h: 20 }, lines: [{ x: 40, y: 95, w: 300, h: 5 }], inScroll: { box: 0, lines: [{ x: 40, y: 95, w: 300, h: 20 }] } });
+  assert.deepEqual(overlaps({ ...emptyProbe(), texts: [footer, half] }), [], 'the part under the list edge never reaches the footer');
+  // Scrolling is not hiding: the scrolled-out row keeps its contrast verdict.
+  assert.ok(codes({ ...emptyProbe(), texts: [{ ...row, color: 'rgb(204, 204, 204)', bgChain: ['rgb(255, 255, 255)'] }] }).includes('contrast'));
+});
+
+test('sanitizeProbe validates the scroll box of a text: a whole number in range and capped line boxes', () => {
+  const longLines = Array.from({ length: 400 }, (_, i) => ({ x: 0, y: i * 20, w: 100, h: 20 }));
+  const withScroll = (inScroll: unknown): Record<string, unknown> => ({ ...text({ selector: 'p' }), inScroll });
+  const raw: Record<string, unknown> = {
+    ...emptyProbe(),
+    texts: [
+      withScroll({ box: 3, lines: [{ x: 0, y: 0, w: 100, h: 20 }, { x: 'far', y: 0, w: 100, h: 20 }, null, { x: 0, y: 20, w: -5, h: 20 }], extra: 'dropped' }),
+      withScroll({ box: 0, lines: longLines }),
+      withScroll({ box: 2, lines: 'nope' }),
+      withScroll({ box: -1, lines: [] }),
+      withScroll({ box: 1.5, lines: [] }),
+      withScroll({ box: '0', lines: [] }),
+      withScroll({ box: CHECK_TEXT_ELEMENTS_MAX, lines: [] }),
+      withScroll({ box: Number.NaN, lines: [] }),
+      withScroll([0, []]),
+      withScroll('0'),
+      withScroll(null),
+    ],
+  };
+  const clean = sanitizeProbe(raw);
+  assert.ok(clean);
+  assert.equal(clean.texts.length, 11, 'a bad scroll box never drops the text');
+  assert.deepEqual(clean.texts[0]?.inScroll, { box: 3, lines: [{ x: 0, y: 0, w: 100, h: 20 }] }, 'only well-formed boxes and known keys survive');
+  assert.equal(clean.texts[1]?.inScroll?.lines.length, 100, 'line boxes inside the scroll box are capped');
+  assert.deepEqual(clean.texts[2]?.inScroll, { box: 2, lines: [] });
+  for (const index of [3, 4, 5, 6, 7, 8, 9, 10]) {
+    const entry: ProbeText | undefined = clean.texts[index];
+    assert.ok(entry);
+    assert.equal('inScroll' in entry, false, `entry ${index}: a malformed scroll box is dropped, so the text is judged on what it paints`);
+  }
+});

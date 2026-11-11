@@ -71,6 +71,7 @@ const unionRect = (lines: ProbeRect[]): ProbeRect => {
 
 /** Cut each line box to a clipping box, per axis; a line under 1px in either axis paints nothing. */
 const clipLines = (lines: ProbeRect[], box: ProbeRect, clipX: boolean, clipY: boolean): ProbeRect[] => {
+  if (!clipX && !clipY) return lines;
   const out: ProbeRect[] = [];
   for (const line of lines) {
     const x = clipX ? Math.max(line.x, box.x) : line.x;
@@ -84,18 +85,38 @@ const clipLines = (lines: ProbeRect[], box: ProbeRect, clipX: boolean, clipY: bo
   return out;
 };
 
+/** Whether a line reaches more than 1px out of a box on a checked axis (the tolerance `clipsContent` uses). */
+const sticksOut = (line: ProbeRect, box: ProbeRect, checkX: boolean, checkY: boolean): boolean =>
+  (checkX && (line.x < box.x - 1 || line.x + line.w > box.x + box.w + 1)) || (checkY && (line.y < box.y - 1 || line.y + line.h > box.y + box.h + 1));
+
+/**
+ * Where a line can show once its scroll box is scrolled: anywhere along the box on the scrolling
+ * axis. A box with no size on that axis shows nothing.
+ */
+const spreadLines = (lines: ProbeRect[], box: ProbeRect, spreadX: boolean, spreadY: boolean): ProbeRect[] => {
+  if (!spreadX && !spreadY) return lines;
+  const out: ProbeRect[] = [];
+  for (const line of lines) {
+    const spread: ProbeRect = { x: spreadX ? box.x : line.x, y: spreadY ? box.y : line.y, w: spreadX ? box.w : line.w, h: spreadY ? box.h : line.h };
+    if (spread.w >= 1 && spread.h >= 1) out.push(spread);
+  }
+  return out;
+};
+
 /**
  * Whether an element establishes a containing block for positioned descendants. Verified in
- * Chrome: a non-static position contains `absolute`; transform, perspective, filter,
- * backdrop-filter, a matching `will-change`, and layout/paint `contain` contain both `absolute`
- * and `fixed`. `display: contents` generates no box and contains nothing.
+ * Chrome: a non-static position contains `absolute`; transform, the separate translate, rotate
+ * and scale properties, perspective, filter, backdrop-filter, a `will-change` naming one of
+ * them, and layout/paint `contain` contain both `absolute` and `fixed`. `display: contents`
+ * generates no box and contains nothing.
  */
 const establishesContainingBlock = (element: Element, position: 'absolute' | 'fixed'): boolean => {
   const style = getComputedStyle(element);
   if (style.display === 'contents') return false;
   if (position === 'absolute' && style.position !== 'static') return true;
   if (style.transform !== 'none' || style.perspective !== 'none' || style.filter !== 'none' || style.backdropFilter !== 'none') return true;
-  if (/transform|perspective|filter/.test(style.willChange)) return true;
+  if (style.translate !== 'none' || style.rotate !== 'none' || style.scale !== 'none') return true;
+  if (/transform|translate|rotate|scale|perspective|filter/.test(style.willChange)) return true;
   if (/paint|layout|strict|content/.test(style.contain)) return true;
   return false;
 };
@@ -118,46 +139,111 @@ const bodyOverflowPropagates = (node: Element): boolean => {
   return root.overflowX === 'visible' && root.overflowY === 'visible';
 };
 
+/** How one box treats what sticks out of it, per axis. */
+type Clipping = {
+  /** The padding box overflow clips to (`paddingBoxOf`). */
+  box: ProbeRect;
+  /** What sticks out never shows: `hidden`/`clip`, or `auto`/`scroll` with nothing to scroll to. */
+  cutX: boolean;
+  cutY: boolean;
+  /** What sticks out shows once the box is scrolled: `auto`/`scroll` with content past its edge. */
+  scrollX: boolean;
+  scrollY: boolean;
+};
+
 /**
- * The line boxes left after clipping ancestors cut them; empty means nothing paints. Only boxes
- * that really clip cut a line: `hidden`/`clip` on an axis, never `auto`/`scroll` (their content
- * paints once scrolled, and the check scrolls the whole document), never the root (its client box
- * is one emulated screen tall), and never a box outside the text's containing-block chain.
+ * Boxes overflow does not apply to, verified in Chrome: a non-replaced inline box and a
+ * `display: contents` box (no box at all; both have an empty client box, so clipping to it would
+ * hide everything inside), and table rows and row groups (they have a client box and still clip
+ * nothing).
  */
-const paintedLines = (element: Element, lines: ProbeRect[]): ProbeRect[] => {
-  const style = getComputedStyle(element);
-  // Fixed text the viewport contains never scrolls into view: only what is on screen paints it.
-  // A transformed/filtered ancestor contains it instead, and the walk below clips it there.
+const OVERFLOW_IGNORED = new Set(['inline', 'contents', 'table-row', 'table-row-group', 'table-header-group', 'table-footer-group']);
+
+/**
+ * The padding box overflow clips to, in document space. Client sizes are layout pixels and the
+ * rect is what paints, so under a `scale` they are brought to the rect's size (a zoomed card
+ * would otherwise cut text that shows, a shrunk mock screen would keep text it cuts).
+ */
+const paddingBoxOf = (node: Element): ProbeRect => {
+  const rect = node.getBoundingClientRect();
+  const scaleX = node instanceof HTMLElement && node.offsetWidth > 0 ? rect.width / node.offsetWidth : 1;
+  const scaleY = node instanceof HTMLElement && node.offsetHeight > 0 ? rect.height / node.offsetHeight : 1;
+  return { x: rect.left + node.clientLeft * scaleX + window.scrollX, y: rect.top + node.clientTop * scaleY + window.scrollY, w: node.clientWidth * scaleX, h: node.clientHeight * scaleY };
+};
+
+/**
+ * The clipping a box applies, or null when it applies none: overflow visible; the root and a
+ * propagating body (their overflow belongs to the viewport, which the check scrolls, and the
+ * root's client box is one emulated screen tall); a box overflow does not apply to.
+ */
+const clippingOf = (node: Element, style: CSSStyleDeclaration): Clipping | null => {
+  if (style.overflowX === 'visible' && style.overflowY === 'visible') return null;
+  if (node === document.documentElement || bodyOverflowPropagates(node)) return null;
+  if (OVERFLOW_IGNORED.has(style.display)) return null;
+  const scrollable = (overflow: string): boolean => overflow === 'auto' || overflow === 'scroll';
+  // The same 1px tolerance as `clipsContent`: a box with nothing to scroll to cuts like `hidden`.
+  const scrollX = scrollable(style.overflowX) && node.scrollWidth > node.clientWidth + 1;
+  const scrollY = scrollable(style.overflowY) && node.scrollHeight > node.clientHeight + 1;
+  return { box: paddingBoxOf(node), cutX: style.overflowX !== 'visible' && !scrollX, cutY: style.overflowY !== 'visible' && !scrollY, scrollX, scrollY };
+};
+
+type PaintedText = {
+  /** The line boxes that paint now: cut by every clipping box, scroll boxes where they are scrolled to. */
+  lines: ProbeRect[];
+  /**
+   * Whether any of the text can show at all. Scrolling never takes this away: text scrolled out
+   * of a box is still seen once the box is scrolled. False is text parked outside a box that
+   * never shows what sticks out of it, the screen-reader-only idiom.
+   */
+  reachable: boolean;
+  /** The innermost scroll box that cuts the text now, and the text's lines inside it before that cut. */
+  scrolled: { box: Element; lines: ProbeRect[] } | null;
+};
+
+/**
+ * What a text's clipping boxes leave of its line boxes. Two answers come out of one walk and must
+ * stay apart: where the text paints now (for overlap) and whether it can be seen at all (for
+ * hidden). The boxes are the text's own box and its containing-block chain: a box does not clip
+ * positioned text whose containing block sits outside it (a dropdown or badge escaping a
+ * clipped card).
+ */
+const paintedText = (element: Element, style: CSSStyleDeclaration, lines: ProbeRect[]): PaintedText => {
+  const out: PaintedText = { lines, reachable: true, scrolled: null };
+  // Where the text can show once every scroll box around it is scrolled.
+  let reach = lines;
+  const clipBy = (node: Element, clipping: Clipping | null): void => {
+    if (clipping === null) return;
+    const { box, cutX, cutY, scrollX, scrollY } = clipping;
+    const kept = clipLines(out.lines, box, cutX, cutY);
+    if (out.scrolled === null && kept.some((line) => sticksOut(line, box, scrollX, scrollY))) out.scrolled = { box: node, lines: kept };
+    out.lines = clipLines(kept, box, scrollX, scrollY);
+    // Past a scroll box, the boxes further out cut the scroll box, not the text it scrolls.
+    reach = spreadLines(clipLines(reach, box, cutX, cutY), box, scrollX, scrollY);
+  };
+  clipBy(element, clippingOf(element, style));
   if (style.position === 'fixed' && fixedContainingBlock(element) === null) {
-    return clipLines(lines, { x: window.scrollX, y: window.scrollY, w: innerWidth, h: innerHeight }, true, true);
-  }
-  let painted = lines;
-  let node: Element = element;
-  let position = style.position;
-  for (;;) {
-    // The next ancestor that can clip this text. Positioned text is clipped only by its
-    // containing-block chain: a static overflow box does not clip text whose containing block
-    // sits outside it (a dropdown or badge escaping a clipped card).
-    let parent: Element | null = node.parentElement;
-    if (position === 'absolute' || position === 'fixed') {
-      while (parent !== null && !establishesContainingBlock(parent, position)) parent = parent.parentElement;
+    // Fixed text the viewport contains never scrolls into view: only what is on screen paints it.
+    // A transformed/filtered ancestor contains it instead, and the walk below clips it there.
+    const screen: ProbeRect = { x: window.scrollX, y: window.scrollY, w: innerWidth, h: innerHeight };
+    out.lines = clipLines(out.lines, screen, true, true);
+    reach = clipLines(reach, screen, true, true);
+  } else {
+    let node: Element = element;
+    let position = style.position;
+    while (out.lines.length > 0 || reach.length > 0) {
+      let parent: Element | null = node.parentElement;
+      if (position === 'absolute' || position === 'fixed') {
+        while (parent !== null && !establishesContainingBlock(parent, position)) parent = parent.parentElement;
+      }
+      if (parent === null) break;
+      const parentStyle = getComputedStyle(parent);
+      clipBy(parent, clippingOf(parent, parentStyle));
+      node = parent;
+      position = parentStyle.position;
     }
-    if (parent === null || parent === document.documentElement) break;
-    const parentStyle = getComputedStyle(parent);
-    const clipX = parentStyle.overflowX === 'hidden' || parentStyle.overflowX === 'clip';
-    const clipY = parentStyle.overflowY === 'hidden' || parentStyle.overflowY === 'clip';
-    // overflow does not apply to non-replaced inline boxes (clientWidth 0), and a propagating
-    // body does not clip; both would hide text that paints.
-    if ((clipX || clipY) && parentStyle.display !== 'inline' && !bodyOverflowPropagates(parent)) {
-      const box = parent.getBoundingClientRect();
-      const clip: ProbeRect = { x: box.left + parent.clientLeft + window.scrollX, y: box.top + parent.clientTop + window.scrollY, w: parent.clientWidth, h: parent.clientHeight };
-      painted = clipLines(painted, clip, clipX, clipY);
-      if (painted.length === 0) return painted;
-    }
-    node = parent;
-    position = parentStyle.position;
   }
-  return painted;
+  out.reachable = reach.length > 0;
+  return out;
 };
 
 /** A `clip: rect(...)` with no area (rect(0 0 0 0), rect(1px, 1px, 1px, 1px)): nothing paints. */
@@ -195,8 +281,8 @@ const insetClipsAll = (clipPath: string, box: DOMRect): boolean => {
 };
 
 /** Visually hidden text (screen-reader-only patterns): no visual verdict applies to it. */
-const visuallyHidden = (element: Element, style: CSSStyleDeclaration, painted: ProbeRect[]): boolean => {
-  if (painted.length === 0) return true; // clipped away entirely by an ancestor
+const visuallyHidden = (element: Element, style: CSSStyleDeclaration, reachable: boolean): boolean => {
+  if (!reachable) return true; // parked outside a box that never shows it
   for (let node: Element | null = element; node; node = node.parentElement) {
     if (Number.parseFloat(getComputedStyle(node).opacity) === 0) return true;
   }
@@ -258,21 +344,30 @@ const textsOf = (max: number): ProbeText[] => {
     else byParent.set(parent, [text]);
   }
   const entries: { element: Element; text: ProbeText }[] = [];
+  // Scroll boxes by number: texts cut by the same box are compared inside it.
+  const scrollBoxes = new Map<Element, number>();
+  const scrollBoxId = (box: Element): number => {
+    const known = scrollBoxes.get(box);
+    if (known !== undefined) return known;
+    scrollBoxes.set(box, scrollBoxes.size);
+    return scrollBoxes.size - 1;
+  };
   for (const [element, nodes] of byParent) {
     if (!visible(element)) continue;
     const lines = textLines(nodes);
     if (lines.length === 0) continue;
     const rect = unionRect(lines);
     const style = getComputedStyle(element);
-    const painted = paintedLines(element, lines);
+    const painted = paintedText(element, style, lines);
     entries.push({
       element,
       text: {
         selector: selectorOf(element),
         text: nodes.map((node) => node.data).join(' ').replace(/\s+/g, ' ').trim().slice(0, TEXT_SHOWN),
         rect,
-        lines: painted,
-        hidden: visuallyHidden(element, style, painted),
+        lines: painted.lines,
+        ...(painted.scrolled === null ? {} : { inScroll: { box: scrollBoxId(painted.scrolled.box), lines: painted.scrolled.lines } }),
+        hidden: visuallyHidden(element, style, painted.reachable),
         color: style.color,
         bgChain: backgroundChain(element, rect),
         fontPx: Number.parseFloat(style.fontSize) || 0,

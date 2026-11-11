@@ -21,9 +21,11 @@ export type ProbeText = {
   text: string;
   /** Document-space box around all of the element's own text (the union of `lines`). */
   rect: ProbeRect;
-  /** The boxes the text actually paints, one per line fragment, trimmed to what clipping ancestors let through. Empty or absent: fall back to `rect` (older shapes). */
+  /** The boxes the text paints now, one per line fragment, trimmed to what its clipping boxes let through (scroll boxes where they are scrolled to). Empty or absent without `inScroll`: fall back to `rect` (older shapes). */
   lines?: ProbeRect[];
-  /** Visually hidden (screen-reader-only patterns): sits out every visual verdict, not the accessibility lists. */
+  /** Set when a scroll box cuts the text now: the innermost such box (a number shared by every text it cuts) and the text's line boxes inside it before that cut. Two texts in the same box are compared on these, so an overlap the user scrolls to is still found; `lines` may then be empty (scrolled out of view). */
+  inScroll?: { box: number; lines: ProbeRect[] };
+  /** Visually hidden (screen-reader-only patterns): sits out every visual verdict, not the accessibility lists. Never set by scrolling: text scrolled out of a box is seen once the box is scrolled. */
   hidden?: boolean;
   /** Positions in `texts` of this element's ancestors that have their own text entry: one flow, never an overlap. */
   ancestors?: number[];
@@ -81,6 +83,24 @@ const parseRect = (value: unknown): ProbeRect | null => {
   return x === null || y === null || w === null || h === null ? null : { x, y, w, h };
 };
 
+const parseLines = (value: unknown): ProbeRect[] => {
+  const lines: ProbeRect[] = [];
+  if (!Array.isArray(value)) return lines;
+  for (const entry of value.slice(0, TEXT_LINES_MAX)) {
+    const line = parseRect(entry);
+    if (line !== null) lines.push(line);
+  }
+  return lines;
+};
+
+/** A scroll box is named by a whole number below the text cap (at most one box per measured text). */
+const parseInScroll = (value: unknown): ProbeText['inScroll'] => {
+  if (!isRec(value)) return undefined;
+  const box = value.box;
+  if (typeof box !== 'number' || !Number.isInteger(box) || box < 0 || box >= CHECK_TEXT_ELEMENTS_MAX) return undefined;
+  return { box, lines: parseLines(value.lines) };
+};
+
 const parseText = (value: unknown): ProbeText | null => {
   if (!isRec(value)) return null;
   const selector = selectorOf(value.selector);
@@ -89,13 +109,7 @@ const parseText = (value: unknown): ProbeText | null => {
   const weight = finite(value.weight, 0, 1000);
   if (selector === null || rect === null || fontPx === null || weight === null || typeof value.color !== 'string') return null;
   const bgChain = Array.isArray(value.bgChain) && value.bgChain.every((entry) => typeof entry === 'string') ? (value.bgChain.slice(0, 40) as string[]) : null;
-  const lines: ProbeRect[] = [];
-  if (Array.isArray(value.lines)) {
-    for (const entry of value.lines.slice(0, TEXT_LINES_MAX)) {
-      const line = parseRect(entry);
-      if (line !== null) lines.push(line);
-    }
-  }
+  const inScroll = parseInScroll(value.inScroll);
   const ancestors: number[] = [];
   if (Array.isArray(value.ancestors)) {
     for (const entry of value.ancestors.slice(0, TEXT_ANCESTORS_MAX)) {
@@ -106,7 +120,8 @@ const parseText = (value: unknown): ProbeText | null => {
     selector,
     text: typeof value.text === 'string' ? cleanDetail(value.text, TEXT_SHOWN_MAX) : '',
     rect,
-    lines,
+    lines: parseLines(value.lines),
+    ...(inScroll === undefined ? {} : { inScroll }),
     hidden: value.hidden === true,
     ancestors,
     color: value.color.slice(0, 120),
@@ -234,13 +249,28 @@ const contrastFindings = (probe: ProbeResult, artboard: ArtboardInfo): CheckFind
   return out;
 };
 
-/** The boxes a text actually paints: its per-line boxes, or the merged box for older shapes. */
-const lineBoxesOf = (text: ProbeText): ProbeRect[] => (text.lines !== undefined && text.lines.length > 0 ? text.lines : [text.rect]);
+/**
+ * The boxes a text paints now. With no line boxes, a text its scroll box cuts is scrolled out of
+ * view and paints nothing; without a scroll box it is an older shape, judged on its merged box.
+ */
+const paintedBoxesOf = (text: ProbeText): ProbeRect[] => {
+  if (text.lines !== undefined && text.lines.length > 0) return text.lines;
+  return text.inScroll === undefined ? [text.rect] : [];
+};
 
-/** Two texts overlap when any pair of their painted line boxes does, by the share rule. */
+/**
+ * The boxes two texts are compared on. Texts cut by the same scroll box: their boxes inside it
+ * (what scrolling it shows). Any other pair: what paints now, so text scrolled out of a box never
+ * overlaps text outside the box.
+ */
+const comparedBoxes = (a: ProbeText, b: ProbeText): [ProbeRect[], ProbeRect[]] =>
+  a.inScroll !== undefined && b.inScroll !== undefined && a.inScroll.box === b.inScroll.box ? [a.inScroll.lines, b.inScroll.lines] : [paintedBoxesOf(a), paintedBoxesOf(b)];
+
+/** Two texts overlap when any pair of their compared line boxes does, by the share rule. */
 const linesOverlap = (a: ProbeText, b: ProbeText): boolean => {
-  for (const lineA of lineBoxesOf(a)) {
-    for (const lineB of lineBoxesOf(b)) {
+  const [linesA, linesB] = comparedBoxes(a, b);
+  for (const lineA of linesA) {
+    for (const lineB of linesB) {
       if (overlapShare(lineA, lineB) >= OVERLAP_MIN_SHARE) return true;
     }
   }
@@ -249,9 +279,9 @@ const linesOverlap = (a: ProbeText, b: ProbeText): boolean => {
 
 /**
  * Cheap necessary condition for any line pair to overlap: a text's `rect` encloses every line box
- * it paints (the union of its lines before clipping), so disjoint rects can hold no overlapping
- * pair. Skipping those pairs first keeps the verdict off the texts² × lines² path on long
- * documents of wrapping text.
+ * it has, painted or inside its scroll box (the union of its lines before clipping), so disjoint
+ * rects can hold no overlapping pair. Skipping those pairs first keeps the verdict off the
+ * texts² × lines² path on long documents of wrapping text.
  */
 const rectsIntersect = (a: ProbeRect, b: ProbeRect): boolean =>
   a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;

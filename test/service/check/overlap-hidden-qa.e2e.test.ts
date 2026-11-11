@@ -1,8 +1,9 @@
 // QA regressions for C1 (cc70d6c), against a real browser (skipped, never silent, when none is
 // installed). Text a user sees once they scroll must still be judged: "visually hidden" is the
-// screen-reader-only patterns only. Clipping follows the browser: hidden/clip axes clip, scroll
-// containers and the root do not, and positioned text is clipped only by its containing-block
-// chain (the cases below were QA findings 1 and 2, fixed in the follow-up round).
+// screen-reader-only patterns only. Scroll boxes and the root never hide text (scroll boxes only
+// decide where it paints now, see overlap-clip-qa2.e2e.test.ts), hidden/clip axes do, and
+// positioned text is clipped only by its containing-block chain (the cases below were QA
+// findings 1 and 2, fixed in the follow-up round).
 
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
