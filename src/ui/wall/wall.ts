@@ -24,10 +24,11 @@ import { anchorStatesOf } from '../../guest/anchoring.ts';
 import { createSourceCache } from '../../guest/source-cache.ts';
 import type { DesignDetailResponse } from '../../shared/api.ts';
 import type { AnchorState } from '../../shared/types.ts';
-import type { BridgeMode, FrameToPageMessage } from '../../shared/bridge-protocol.ts';
+import type { BridgeMode, FrameToPageMessage, TokenVar } from '../../shared/bridge-protocol.ts';
 import { createBoardSet } from './board-set.ts';
 import { createCameraController, type CameraHooks } from './camera-controller.ts';
 import { createFrameMessageHandler } from './frame-messages.ts';
+import { setSlotTokens, slotTokens } from './frame-slot.ts';
 import { createHitController } from './hit-controller.ts';
 import { createInputController, type InputController } from './input-controller.ts';
 import { createPickLayer } from './pick-layer.ts';
@@ -108,6 +109,11 @@ export type WallHandle = {
   closeCard: () => void;
   /** The inline editor opened or closed: while it is open the wall ignores presses and hover. */
   setEditing: (editing: boolean) => void;
+  /**
+   * Tweaks preview (Phase 2 §4.4): wear these custom properties on every frame, on top of tokens.css, without a reload;
+   * `[]` clears. Posts once per animation frame however fast a slider moves; a frame that loads later reads it too.
+   */
+  setTokenPreview: (vars: readonly TokenVar[]) => void;
   /** Seam S5 (build strip): highlight the boards of these sources (screen ids; null = the page); null clears. */
   markRecent: (sources: ReadonlySet<string | null> | null) => void;
   /**
@@ -184,6 +190,8 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
 
   boards.rebuild();
   camera.apply();
+
+  let previewFrame = 0;
 
   return {
     el: surface,
@@ -324,6 +332,16 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     },
     clearSelection: () => popovers.clearSelection(),
     markRecent: (sources) => boards.markRecent(sources),
+    setTokenPreview: (vars) => {
+      setSlotTokens(options.slug, vars);
+      if (previewFrame !== 0) return;
+      previewFrame = requestAnimationFrame(() => {
+        previewFrame = 0;
+        if (ctx.disposed) return;
+        const latest = [...slotTokens(options.slug)];
+        for (const board of boards.values()) board.main.post({ type: 'set-tokens', vars: latest });
+      });
+    },
     onScreenMenu: screenMenu.add,
     onGhost: ghostPress.add,
     onReorder: reorders.add,
@@ -345,6 +363,8 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     },
     dispose: () => {
       ctx.disposed = true;
+      cancelAnimationFrame(previewFrame);
+      setSlotTokens(options.slug, []);
       reorder.dispose();
       popovers.close();
       picks.dispose();

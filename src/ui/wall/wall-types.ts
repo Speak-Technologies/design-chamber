@@ -27,6 +27,8 @@ export type WallOptions = {
   initialPageView?: string;
   /** Screen px of the wall's right edge a drawer currently covers (laid over it on narrow pages). */
   coveredRight?: () => number;
+  /** Screen px of the wall's bottom edge something covers: the rail's Tweaks sheet, which leaves the wall live above it. */
+  coveredBottom?: () => number;
   initialCamera: Camera | null;
   onScale: (scale: number) => void;
   onCameraSettled: (camera: Camera) => void;

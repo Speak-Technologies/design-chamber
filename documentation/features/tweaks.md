@@ -4,7 +4,7 @@
 
 Why it exists: trying a warmer accent or tighter spacing should not need a chat round trip, and the saved value should live in the design's own tokens, so exports and the agent both see it.
 
-Status: the service half is built (T5): reading each knob's value from `tokens.css` (`GET /designs/<slug>/tokens`) and saving values through the hand-edit pipeline. The Tweaks panel on the wall (U2), the live preview inside the frames (T9, T11b) and the check finding for a broken knob (T5b) are not built yet, so saving is reachable only through the service route for now.
+Status: the service half (T5: reading each knob from `tokens.css`, saving through the hand-edit pipeline), the live preview in the frames and the panel on the wall and in the rail (U2) are built. The check finding for a broken knob (T5b) is not built yet.
 
 ## Knobs (written by the agent in design.json)
 A design lists its knobs under `tweaks` in `design.json`. There are two kinds:
@@ -42,6 +42,23 @@ Save follows every rule in [Edit on the canvas](edit-on-canvas.md): a version "B
 7. **design.json is not touched.** Saving tweaks never marks the design system as confirmed; that stays the user's word in chat.
 
 The notice reads "Tweaks saved to tokens.css" with Undo. If every value was already in the file, nothing is written and the notice adds "tokens.css already had these values." Undo puts back exactly the bytes from before, as long as `tokens.css` is still as the save left it.
+
+## The panel: what the user sees
+Opening the panel is one click on **Tweaks** (the toolbar on the full-screen page, the header icon in the rail). The button only exists when the design lists at least one valid knob; with none, the ⋯ menu offers **Ask for tweaks**, which puts "Add tweaks for this design (accent hue, density, type scale, radius)." in the ask bar and sends nothing.
+
+- **Where:** a 360 px panel beside the wall on the full-screen page; a non-modal bottom sheet of at most half the rail in the rail, with the wall live above it (full height when the rail is shorter than 560 px when it opens). Opening it closes Comments or Versions and the other way round.
+- **Rows:** the knob's label, its value with the unit, and a slider (arrow keys one step, Page Up/Down ten steps, Home/End the ends) or a segmented choice. A knob that cannot be tuned is dimmed with its reason from the table above; one whose variable is also set in a media query or theme rule says so and adds that the preview shows the value everywhere while a save changes only the default.
+- **Preview:** moving a knob changes every open artboard within a frame, without reloading it: scroll position, Play state and camera stay. Artboards that are off screen pick the values up when they load. Exports, thumbnails and checks never see the preview.
+- **Unsaved:** a dot on the button, "Unsaved" next to the title, **Save** (the one filled button on screen; the ask bar's **Send** drops to an outline while the panel is open) and **Reset** on. With nothing to save both are off and the foot says "Nothing to save yet." Values survive closing the panel and a reload of the extension frame (kept in the host's storage).
+- **Save:** progress on the button while it writes, then the notice "Tweaks saved to tokens.css" with **Undo**. A refused save keeps every value and says why under them ("Couldn't save your tweaks. <why> Your values are still here."). **Reset** goes back to the file's values and writes nothing.
+- **When tokens.css cannot be read:** "Couldn't read tokens.css. <why>" with **Try again**; every knob and both buttons are off; values left unsaved are kept and shown.
+- **When the agent rewrites tokens.css under your values:** "tokens.css changed since you started. Your values are still shown." with **Apply to the new file** and **Discard my tweaks**. The preview stays on top of the new file; Save is off until you choose. Knobs that no longer exist in the new file are named and left out of Apply.
+- **Leaving with unsaved values** (back, another design): "Save your tweaks?" with **Keep editing** (also Esc), **Discard** and **Save**; a failed save keeps the dialog open with the sentence.
+- **An old version on show:** the panel is read only with "You're viewing an old version." and nothing previews.
+- **The agent is working:** the foot says "The agent is working on this design. It may write over your edit."
+- **The design is gone:** "That design is no longer in your Designs folder. Your unsaved values were:" with one selectable line per knob; nothing is written.
+
+Screenshots: `test/ui/visual/scenarios/tweaks.mjs`.
 
 ## What the agent is told
 The hand-edit record notes each changed knob's label with its old and new value (80 characters at most each). The agent hears about it in the user's next message, as for every hand edit.

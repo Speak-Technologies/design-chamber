@@ -24,7 +24,7 @@ export type CameraHooks = {
   queueSync: () => void;
 };
 
-/** Screen px of the wall that something covers: a drawer on the right today, an ask bar below in Phase 1. */
+/** Screen px of the wall that something covers: a drawer on the right, the rail's Tweaks sheet below. */
 export type CoveredInsets = { right: number; bottom: number };
 
 export type CameraController = {
@@ -63,7 +63,7 @@ export const createCameraController = (ctx: WallContext, hooks: Late<CameraHooks
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
   const pageGutter = options.compact ? PAGE_GUTTER_COMPACT : PAGE_GUTTER;
 
-  const coveredInsets = (): CoveredInsets => ({ right: options.coveredRight?.() ?? 0, bottom: 0 });
+  const coveredInsets = (): CoveredInsets => ({ right: options.coveredRight?.() ?? 0, bottom: options.coveredBottom?.() ?? 0 });
 
   const pageGeometry = (): ReturnType<typeof pageCamera> => {
     const insets = coveredInsets();

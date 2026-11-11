@@ -50,3 +50,14 @@ test('Delete is the only destructive entry, last', () => {
   assert.equal(destructive.length, 1);
   assert.equal(entries.at(-1), destructive[0]);
 });
+
+test('a design with no tweaks gets "Ask for tweaks": first on the page, right after the chat link in the rail', () => {
+  assert.deepEqual(shape({ askForTweaks: true }), ['ask-tweaks', '-', 'zip', 'html', '-', 'reveal', 'path', 'rename', '-', 'delete']);
+  assert.deepEqual(shape({ isPage: true, askForTweaks: true }), ['ask-tweaks', '-', 'reveal', 'path', 'rename', '-', 'delete']);
+  assert.deepEqual(shape({ compact: true, askForTweaks: true }), ['chat', 'ask-tweaks', '-', 'zip', 'html', 'path', 'reveal', 'rename', '-', 'delete']);
+  assert.equal(find(entriesOf({ askForTweaks: true }), 'ask-tweaks')?.label, 'Ask for tweaks');
+});
+
+test('a design that has tweaks, or an old version on show, does not offer it', () => {
+  for (const input of [{}, { askForTweaks: false }, { compact: true }, { isPage: true }]) assert.equal(find(entriesOf(input), 'ask-tweaks'), undefined);
+});

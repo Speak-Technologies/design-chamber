@@ -13,7 +13,7 @@ import { ROUTE_KEYS, type RouteKey } from '../../../src/shared/api.ts';
 import type { HostLike } from '../../../src/guest/host.ts';
 import { createFakeTransport, type FakeTransport, type RouteOverride } from './fake-transport.ts';
 
-export type FakeHooks = Pick<FakeTransport['backend'], 'writePending' | 'writeFile' | 'ageDesign' | 'padScreens' | 'unwriteScreen' | 'failNextRestore' | 'checks'> & {
+export type FakeHooks = Pick<FakeTransport['backend'], 'writePending' | 'writeFile' | 'ageDesign' | 'padScreens' | 'unwriteScreen' | 'failNextRestore' | 'touchTokens' | 'checks'> & {
   route: FakeTransport['routes']['set'];
   clearRoutes: FakeTransport['routes']['clear'];
 };
@@ -49,6 +49,7 @@ export const installFakeHost = <T extends HostLike>(real: T): T => {
     padScreens: fake.backend.padScreens,
     unwriteScreen: fake.backend.unwriteScreen,
     failNextRestore: fake.backend.failNextRestore,
+    touchTokens: fake.backend.touchTokens,
     checks: fake.backend.checks,
     route: fake.routes.set,
     clearRoutes: fake.routes.clear,

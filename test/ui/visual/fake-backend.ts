@@ -18,6 +18,7 @@ import type {
   Viewport,
 } from '../../../src/shared/types.ts';
 import { createFakeChecks, type FakeChecks } from './fake-checks.ts';
+import { createFakeTokens, type FakeTokens } from './fake-tokens.ts';
 import { COFFEE, SAGE, SLATE, coffeeCheckout, coffeeHome, coffeePricing, invoicePage, onboardingScreen, pricingPage, type Palette } from './fake-docs.ts';
 import { CHIP_PROVIDER_ID, type DesignChip } from '../../../src/shared/types.ts';
 import { ServiceError } from './service-error.ts';
@@ -108,6 +109,23 @@ const seed = (): Map<string, Rec> => {
       sessionId: 'ses_coffee',
       brief: 'A pricing page for a coffee subscription, laptop and phone',
       screens: [screen('home', 'Home'), screen('pricing', 'Pricing'), screen('checkout', 'Checkout')],
+      // Tweaks (feature 09): five knobs; fake-tokens.ts holds the file they read from.
+      tweaks: [
+        { var: '--accent-h', label: 'Accent hue', kind: 'number', min: 0, max: 360, step: 1, unit: '' },
+        { var: '--radius', label: 'Corner radius', kind: 'number', min: 0, max: 24, step: 2, unit: 'px' },
+        { var: '--space', label: 'Section spacing', kind: 'number', min: 24, max: 120, step: 4, unit: 'px' },
+        {
+          var: '--density',
+          label: 'Density',
+          kind: 'choice',
+          options: [
+            { label: 'Compact', value: '0.85' },
+            { label: 'Comfortable', value: '1' },
+            { label: 'Roomy', value: '1.2' },
+          ],
+        },
+        { var: '--heading-scale', label: 'Heading size', kind: 'number', min: 1, max: 2, step: 0.05, unit: '' },
+      ],
       comments: [
         comment('c_a1', { screen: 'home', body: 'Make the headline shorter — it wraps to three lines on phone.' }),
         comment('c_a2', {
@@ -285,6 +303,8 @@ export type FakeBackend = {
   unwriteScreen: (slug: string, id: string) => void;
   /** Test hook: the next restore fails once with this message (the Undo error notice). */
   failNextRestore: (message: string) => void;
+  /** Test hook (tweaks): the agent rewrote tokens.css (a new sha and a `files` event). */
+  touchTokens: (slug: string) => void;
 };
 
 export const createFakeBackend = (): FakeBackend => {
@@ -374,6 +394,7 @@ export const createFakeBackend = (): FakeBackend => {
   const stampOf = (rec: Rec): string => `screens:${rec.design.screens.map((s) => s.id).join(',')}`;
   const undos = new Map<string, { screens: Screen[]; written: Set<string> }>();
   let editSeq = 0;
+  const tokens: FakeTokens = createFakeTokens({ emit: (slug, files) => emit(slug, 'files', files) });
 
   const screenEdit = (slug: string, rec: Rec, request: Extract<EditRequest, { op: 'reorder' | 'duplicate' | 'trash-screen' }>): RouteResponse<'POST /designs/:slug/edits'> => {
     if (request.screens !== stampOf(rec)) throw new ServiceError('stale', SCREEN_LIST_STALE_MESSAGE);
@@ -695,10 +716,12 @@ export const createFakeBackend = (): FakeBackend => {
     'POST /designs/:slug/edits': ({ params, body }) => {
       const rec = get(params.slug);
       if (body.op === 'reorder' || body.op === 'duplicate' || body.op === 'trash-screen') return screenEdit(params.slug ?? '', rec, body);
+      if (body.op === 'tokens') return tokens.edit(params.slug ?? '', body.base, body.values, rec.design.tweaks);
       throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
     },
     'POST /designs/:slug/edits/:id/undo': ({ params }) => {
       const rec = get(params.slug);
+      if (tokens.hasUndo(params.id ?? '')) return tokens.undo(params.slug ?? '', params.id ?? '');
       const undo = undos.get(params.id ?? '');
       if (!undo) throw new ServiceError('not-found', "This edit can't be undone any more.");
       undos.delete(params.id ?? '');
@@ -709,8 +732,9 @@ export const createFakeBackend = (): FakeBackend => {
       return { files: [], stamps: { screens: stampOf(rec) }, version: null };
     },
     'GET /designs/:slug/tokens': ({ params }) => {
-      get(params.slug);
-      throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
+      const rec = get(params.slug);
+      // A design with tweaks and no tokens.css in the harness reads as "no file".
+      return tokens.read(params.slug ?? '', rec.design.tweaks) ?? { exists: false, editable: false, sha256: null, knobs: rec.design.tweaks.map((tweak) => ({ var: tweak.var, state: 'no-file', value: null, fileUnit: null, alsoSet: [] })) };
     },
     'POST /designs/:slug/hand-edits/clear': ({ params }) => {
       get(params.slug);
@@ -809,6 +833,7 @@ export const createFakeBackend = (): FakeBackend => {
     failNextRestore: (message) => {
       restoreFailure = message;
     },
+    touchTokens: (slug) => tokens.touch(slug),
   };
 };
 

@@ -256,7 +256,7 @@ const openPage = async ({ width, height, surface, theme, label, query = '', rout
       if (focus) await guest(`doc.querySelector(${JSON.stringify(focus)}).focus()`);
       const modifiers = (shift ? 8 : 0) | (ctrl ? 2 : 0);
       const text = key.length === 1 ? key : undefined;
-      await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, modifiers, text, windowsVirtualKeyCode: key.length === 1 ? key.toUpperCase().charCodeAt(0) : { Escape: 27, Enter: 13, ArrowRight: 39, ArrowLeft: 37, ArrowDown: 40, ArrowUp: 38, Tab: 9 }[key] });
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, modifiers, text, windowsVirtualKeyCode: key.length === 1 ? key.toUpperCase().charCodeAt(0) : { Escape: 27, Enter: 13, ArrowRight: 39, ArrowLeft: 37, ArrowDown: 40, ArrowUp: 38, Tab: 9, PageUp: 33, PageDown: 34, End: 35, Home: 36 }[key] });
       await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, modifiers });
       await sleep(80);
     },

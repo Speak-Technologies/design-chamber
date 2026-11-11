@@ -442,7 +442,10 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
   const syncLive = (): void => {
     syncQueued = false;
     if (ctx.disposed || ctx.surfaceSize.w === 0) return;
-    const live = new Set(liveBoards([...boards.values()].map((board) => ({ id: board.art.id, rect: board.art.rect })), camera.get(), ctx.surfaceSize, ctx.liveBudget, FRAME_UNLOAD_MARGIN).map((entry) => entry.id));
+    // The part of the wall a drawer or the rail's Tweaks sheet leaves in view: its centre is where the budget aims, so the boards the user sees stay live.
+    const covered = camera.coveredInsets();
+    const shown = { w: Math.max(0, ctx.surfaceSize.w - covered.right), h: Math.max(0, ctx.surfaceSize.h - covered.bottom) };
+    const live = new Set(liveBoards([...boards.values()].map((board) => ({ id: board.art.id, rect: board.art.rect })), camera.get(), shown, ctx.liveBudget, FRAME_UNLOAD_MARGIN).map((entry) => entry.id));
     for (const board of boards.values()) {
       const shouldLive = live.has(board.art.id);
       if (shouldLive && !board.live) {

@@ -9,9 +9,22 @@
 import { createFrameChannel, type FrameChannel, type PageMessageBody } from '../../guest/frame-channel.ts';
 import { ARTBOARD_SANDBOX, createFrameDocument, type FrameDocument } from '../../guest/frame-doc.ts';
 import type { RenderMeta } from '../../shared/api.ts';
-import type { BridgeMode, FrameToPageMessage } from '../../shared/bridge-protocol.ts';
+import type { BridgeMode, FrameToPageMessage, TokenVar } from '../../shared/bridge-protocol.ts';
 import { h } from '../components/dom.ts';
 import { client, isServiceError } from '../guest.ts';
+
+/**
+ * The Tweaks preview on show, by design (Phase 2 §4.4): the inline custom properties every frame of that design wears
+ * on top of its tokens.css. A frame that loads or reloads reads it for its first paint (`BridgeInit.tokens`), and a frame
+ * that turns `ready` is sent it again, so a slider moved while a frame was loading is not lost. The wall's
+ * `setTokenPreview` is the only writer; it clears the entry on dispose.
+ */
+const tokenPreviews = new Map<string, readonly TokenVar[]>();
+export const setSlotTokens = (slug: string, vars: readonly TokenVar[]): void => {
+  if (vars.length === 0) tokenPreviews.delete(slug);
+  else tokenPreviews.set(slug, vars);
+};
+export const slotTokens = (slug: string): readonly TokenVar[] => tokenPreviews.get(slug) ?? [];
 
 export type SlotState = 'idle' | 'loading' | 'ready' | 'missing' | 'error';
 
@@ -95,11 +108,17 @@ export const createFrameSlot = (options: SlotOptions): FrameSlot => {
         if (mine !== token) return;
         meta = rendered.meta;
         drop();
-        doc = createFrameDocument(rendered.html, { artboardId: options.artboardId, file, mode: options.mode(), scroll: options.scroll() });
+        const tokens = [...slotTokens(options.slug)];
+        doc = createFrameDocument(rendered.html, { artboardId: options.artboardId, file, mode: options.mode(), scroll: options.scroll(), ...(tokens.length > 0 ? { tokens } : {}) });
         // The channel exists before the document loads, so the bridge's first `ready` is answered.
         const next = createFrameChannel({ artboardId: options.artboardId, nonce: doc.init.nonce, frame: iframe });
         next.subscribe((message) => {
           // The slot turns `ready` when the bridge reports `ready`; until then the frame is still painting.
+          if (message.type === 'ready') {
+            // The preview may have moved while this document loaded: say where it stands now.
+            const now = slotTokens(options.slug);
+            if (now.length > 0) next.send({ type: 'set-tokens', vars: [...now] });
+          }
           if (message.type === 'ready' && state === 'loading') setState('ready');
           for (const listener of [...listeners]) listener(message);
         });

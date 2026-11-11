@@ -285,7 +285,11 @@ export const loadingRow = (label: string): HTMLElement => {
 
 // ---------------------------------------------------------------- sheets and dialogs
 
-export type SheetVariant = 'full' | 'side' | 'dialog' | 'dock';
+/**
+ * `dock` and `bottom` are non-modal: no scrim, no focus trap, the wall behind stays usable. `bottom` is the rail's
+ * Tweaks sheet, pinned to the bottom of its host and at most half as tall (styles.css), so the wall shows live above it.
+ */
+export type SheetVariant = 'full' | 'side' | 'dialog' | 'dock' | 'bottom';
 
 export type SheetOptions = { title: string; variant: SheetVariant; onClose?: () => void; subtitle?: string };
 
@@ -336,13 +340,14 @@ const installModalKeys = (): void => {
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 /**
- * A panel over (`full`, `side`, `dialog`) or inside (`dock`) `host`. Modal variants trap Tab, close on
- * Escape and on a scrim click, and give focus back to what opened them.
+ * A panel over (`full`, `side`, `dialog`, `bottom`) or inside (`dock`) `host`. Modal variants trap Tab, close on
+ * Escape and on a scrim click, and give focus back to what opened them; the non-modal ones (`dock`, `bottom`)
+ * close on Escape while focus is inside, and their opener gives focus back itself.
  */
 export const openSheet = (host: HTMLElement, options: SheetOptions): SheetHandle => {
   const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const titleId = nextId('dc-sheet-title');
-  const modal = options.variant !== 'dock';
+  const modal = options.variant !== 'dock' && options.variant !== 'bottom';
   const title = h('h2', { class: 'dc-sheet-title', id: titleId }, options.title);
   const close = h('button', { type: 'button', class: 'oc-sdk dc-iconbtn', 'aria-label': `Close ${options.title.toLowerCase()}`, title: 'Close' }, icon('close', 16));
   const body = h('div', { class: 'dc-sheet-body' });

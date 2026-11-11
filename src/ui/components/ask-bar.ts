@@ -46,6 +46,8 @@ export type AskBarHandle = {
   setLink: (link: AskLink) => void;
   /** An old version is on show: the agent edits the current files, so asking is off. */
   setViewing: (viewing: boolean) => void;
+  /** Another filled primary is on screen (the Tweaks panel's Save): Send drops to the outline look and keeps working. */
+  setQuiet: (quiet: boolean) => void;
   dispose: () => void;
 };
 
@@ -233,6 +235,11 @@ export const createAskBar = (options: AskBarOptions): AskBarHandle => {
     setViewing: (next) => {
       viewing = next;
       paint();
+    },
+    setQuiet: (quiet) => {
+      if (quiet) delete send.el.dataset.emphasis;
+      else send.el.dataset.emphasis = 'primary';
+      send.el.dataset.variant = quiet ? 'outline' : 'default';
     },
     dispose: () => {
       clearTimeout(statusTimer);

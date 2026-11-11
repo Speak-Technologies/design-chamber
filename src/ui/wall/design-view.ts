@@ -11,7 +11,8 @@ import { mountComments, type CommentsHandle } from '../components/comments-drawe
 import { createScope, debounce, errorText, h, replace } from '../components/dom.ts';
 import { createNotices } from '../components/notices.ts';
 import { sendOneComment } from '../components/send-comments.ts';
-import { attachMenu, banner, bannerWithActions, btn, confirmDialog, iconBtn, loadingRow, openMenu, openSheet, type BtnHandle, type MenuEntry, type SheetHandle } from '../components/kit.ts';
+import { trackBottomSheet } from '../components/bottom-sheet.ts';
+import { attachMenu, banner, bannerWithActions, btn, confirmDialog, iconBtn, loadingRow, openMenu, openSheet, type BtnHandle, type MenuEntry, type SheetHandle, type SheetVariant } from '../components/kit.ts';
 import { createRestoreFlow } from '../components/restore-flow.ts';
 import { mountVersions, type VersionsHandle } from '../components/versions-drawer.ts';
 import type { Camera } from '../../guest/camera.ts';
@@ -20,16 +21,19 @@ import { askSelfContained, host, isServiceError, store } from '../guest.ts';
 import { askRequestToast } from '../model/ask-bar-model.ts';
 import { viewportLabel, viewportSize, zoomPercent } from '../model/format.ts';
 import { createListeners } from '../model/listeners.ts';
+import { ASK_FOR_TWEAKS_TEXT, TWEAKS_SUBTITLE, TWEAKS_TITLE, tweaksSheetVariant } from '../model/tweaks-model.ts';
 import { viewerMenuEntries } from '../model/viewer-menu.ts';
 import { viewingBanner } from '../model/versions-model.ts';
 import { pageViewOptions, remoteBannerHidden, remoteNotice, resolvePageView, shortUrl } from '../model/wall-model.ts';
 import * as askBar from './feature-ask-bar.ts';
+import { askBarFor } from './feature-ask-bar.ts';
 import * as buildStrip from './feature-build-strip.ts';
 import * as checks from './feature-checks.ts';
 import * as editText from './feature-edit-text.ts';
 import * as findability from './feature-findability.ts';
 import * as screens from './feature-screens.ts';
-import type { DrawerKind, FeatureMount, ViewContext } from './view-context.ts';
+import * as tweaks from './feature-tweaks.ts';
+import type { DrawerContent, DrawerKind, FeatureMount, ViewContext } from './view-context.ts';
 import { createWall, type WallHandle } from './wall.ts';
 
 export type DesignViewOptions = {
@@ -49,12 +53,17 @@ export type DesignViewHandle = {
   el: HTMLElement;
   /** Switch to Edit with Comment pressed: the design is already open and a "Comment" request arrived for it. */
   startComment: () => void;
+  /**
+   * The user is about to leave this design (back to the list, or another design). Resolves false when a guard keeps them
+   * here (unsaved tweaks: "Save your tweaks?" and they chose Keep editing). Nothing is disposed either way.
+   */
+  beforeLeave: () => Promise<boolean>;
   dispose: () => void;
 };
 
 /** Per-design view settings in `host.storage` `view:<slug>`; `pageView` is checked against the design's viewports when it is used. */
 type Prefs = { hidden: string[]; camera: Camera | null; pageView: unknown };
-type Drawer = { kind: DrawerKind; sheet: SheetHandle; handle: CommentsHandle | VersionsHandle };
+type Drawer = { kind: DrawerKind; sheet: SheetHandle; handle: CommentsHandle | VersionsHandle | DrawerContent; stop: (() => void) | null };
 
 const FULL_SCREEN_HINT = 'Full screen: sidebar → Extension pages → Design Chamber';
 /** How long the "Export saved" notice stays (it holds while the pointer or focus is on it). */
@@ -84,7 +93,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
   let built: Built | null = null;
   let building = false;
 
-  type Built = { apply: (data: DesignDetailResponse) => void; startComment: () => void; dispose: () => void };
+  type Built = { apply: (data: DesignDetailResponse) => void; startComment: () => void; beforeLeave: () => Promise<boolean>; dispose: () => void };
   // Set by `startIn: 'comment'`, or by `startComment` while the design is still loading.
   let wantComment = options.startIn === 'comment';
 
@@ -138,6 +147,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       overlay: h('div', { class: 'dc-stage-overlay' }),
       bottomDock: h('div', { class: 'dc-bottom-dock' }),
       compactActions: h('div', { class: 'dc-compact-actions' }),
+      tweaksSlot: h('span', { class: 'dc-tweaks-slot' }),
     };
     // Set once the drawers exist; on a narrow page the dock is laid over the wall (styles.css).
     let dockEl: HTMLElement | null = null;
@@ -148,6 +158,12 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         presentation: isPage ? 'page' : 'wall',
         initialPageView: pageView,
         coveredRight: () => (dockEl && !dockEl.hidden && getComputedStyle(dockEl).position === 'absolute' ? dockEl.offsetWidth : 0),
+        // The rail's Tweaks sheet sits over the bottom of the view; what it covers of the wall is where the sheet's top meets the stage.
+        coveredBottom: () => {
+          if (drawer?.sheet.el.dataset.variant !== 'bottom') return 0;
+          const panel = drawer.sheet.el.querySelector('.dc-sheet-panel');
+          return panel ? Math.max(0, stage.getBoundingClientRect().bottom - panel.getBoundingClientRect().top) : 0;
+        },
         initialCamera: isPage ? null : prefs.camera,
         onScale: (next) => zoomLabel.set({ label: zoomPercent(next) }),
         onCameraSettled: (camera) => savePrefs(camera),
@@ -301,13 +317,20 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const rename = (): void => renameDialog(options.actions.host, ref());
 
     const moreEntries = (): MenuEntry[] =>
-      viewerMenuEntries({ compact, isPage, copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX });
+      viewerMenuEntries({ compact, isPage, copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX, askForTweaks: design().tweaks.length === 0 && viewing === null });
 
     const onMore = (id: string): void => {
       switch (id) {
         case 'chat':
           void continueInChat(slug);
           return;
+        case 'ask-tweaks': {
+          // Words for the ask bar, not sent: the user adds what they want and presses Send.
+          const bar = askBarFor(wall);
+          bar?.setText(ASK_FOR_TWEAKS_TEXT);
+          bar?.focus();
+          return;
+        }
         case 'zip':
           void doExport('zip');
           return;
@@ -397,7 +420,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         h('div', { class: 'dc-toolbar-group' }, back.el, titleInput),
         h('div', { class: 'dc-toolbar-group' }, viewportHost, commentMode.el),
         slots.statusSlot,
-        h('div', { class: 'dc-toolbar-group' }, commentsButton.el, versionsButton.el, exportMenu.el, copyMenu.el, chatButton.el, moreButton),
+        h('div', { class: 'dc-toolbar-group' }, commentsButton.el, slots.tweaksSlot, versionsButton.el, exportMenu.el, copyMenu.el, chatButton.el, moreButton),
       );
     } else {
       toolbar = h(
@@ -406,7 +429,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         h('div', { class: 'dc-toolbar-group' }, back.el, titleInput),
         h('div', { class: 'dc-toolbar-group' }, modeHost, pinsToggle.el, chipHost, zoomGroup),
         slots.statusSlot,
-        h('div', { class: 'dc-toolbar-group' }, commentsButton.el, versionsButton.el, chatButton.el, moreButton),
+        h('div', { class: 'dc-toolbar-group' }, commentsButton.el, slots.tweaksSlot, versionsButton.el, chatButton.el, moreButton),
       );
     }
 
@@ -545,10 +568,17 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     // ---------------------------------------------------------------- drawers
     const dock = h('aside', { class: 'dc-dock', hidden: true });
     dockEl = dock;
+    /** What the open drawer holds goes with it: its content, and the bottom sheet's height watch. */
+    const release = (current: Drawer): void => {
+      current.handle.dispose();
+      current.stop?.();
+    };
+    // Tweaks fills its own sheet (feature-tweaks.ts registers the filler); the view only opens it.
+    let tweaksFill: ((sheet: SheetHandle) => DrawerContent) | null = null;
     const closeDrawer = (): void => {
       const current = drawer;
       drawer = null;
-      current?.handle.dispose();
+      if (current) release(current);
       current?.sheet.close();
       commentsButton.set({ pressed: false });
       versionsButton.set({ pressed: false });
@@ -562,19 +592,23 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         closeDrawer();
         return;
       }
+      if (kind === 'tweaks' && !tweaksFill) return;
       if (drawer) {
         const previous = drawer;
         drawer = null;
-        previous.handle.dispose();
+        release(previous);
         previous.sheet.close();
       }
-      const title = kind === 'comments' ? 'Comments' : 'Versions';
+      const title = kind === 'comments' ? 'Comments' : kind === 'versions' ? 'Versions' : TWEAKS_TITLE;
+      // The rail's Tweaks is a bottom sheet with the wall live above it when the rail is tall enough; Comments and Versions stay full height.
+      const variant: SheetVariant = !compact ? 'dock' : kind === 'tweaks' ? tweaksSheetVariant(options.actions.host.clientHeight) : 'full';
       const sheet = openSheet(compact ? options.actions.host : dock, {
         title,
-        variant: compact ? 'full' : 'dock',
+        variant,
+        ...(kind === 'tweaks' ? { subtitle: TWEAKS_SUBTITLE } : {}),
         onClose: () => {
           if (drawer?.sheet === sheet) {
-            drawer.handle.dispose();
+            release(drawer);
             drawer = null;
             commentsButton.set({ pressed: false });
             versionsButton.set({ pressed: false });
@@ -584,9 +618,11 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
           }
         },
       });
-      let handle: CommentsHandle | VersionsHandle;
-      if (kind === 'comments') {
-        handle = mountComments({
+      let handle: CommentsHandle | VersionsHandle | DrawerContent;
+      if (kind === 'tweaks') {
+        handle = (tweaksFill ?? ((): DrawerContent => ({ dispose: () => undefined })))(sheet);
+      } else if (kind === 'comments') {
+        const comments = mountComments({
           slug,
           detached: () => wall.detachedIds(),
           anchorStates: () => wall.anchorStates(),
@@ -597,10 +633,11 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
             wall.focusComment(id);
           },
         });
-        sheet.body.append(handle.el);
+        sheet.body.append(comments.el);
+        handle = comments;
         void store.refreshOpenDesign();
       } else {
-        handle = mountVersions({
+        const versions = mountVersions({
           slug,
           viewing: () => viewing,
           onView: (id) => {
@@ -615,12 +652,14 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
           restoring: restoreFlow.busyId,
           onRestore: restoreVersion,
         });
-        sheet.body.append(handle.el);
+        sheet.body.append(versions.el);
+        handle = versions;
         void store.loadVersions(slug);
       }
-      drawer = { kind, sheet, handle };
+      drawer = { kind, sheet, handle, stop: variant === 'bottom' ? trackBottomSheet(options.actions.host, sheet, () => wall.refit()) : null };
       paintCommentsNote(wall.externalRefs().length > 0);
-      dock.hidden = false;
+      // The bottom sheet lives in the rail's own host and leaves the wall live above it: an empty dock beside the wall would squeeze it.
+      dock.hidden = variant === 'bottom';
       wall.refit();
       commentsButton.set({ pressed: kind === 'comments' });
       versionsButton.set({ pressed: kind === 'versions' });
@@ -681,6 +720,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     wall.fit();
     queueMicrotask(() => wall.focus());
 
+    // Features that must be asked before the user leaves this design (unsaved tweaks).
+    const leaveGuards: Array<() => Promise<boolean>> = [];
     // Seam S9: the Phase 1 features mount once the wall exists, and unmount with the view.
     const viewContext: ViewContext = {
       slug,
@@ -692,7 +733,28 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       onViewing: viewingListeners.add,
       wall,
       slots,
-      drawers: { toggle: toggleDrawer, active: () => drawer?.kind ?? null, onChange: drawerListeners.add },
+      drawers: {
+        toggle: toggleDrawer,
+        active: () => drawer?.kind ?? null,
+        onChange: drawerListeners.add,
+        register: (_kind, fill) => {
+          tweaksFill = fill;
+          return () => {
+            if (tweaksFill !== fill) return;
+            tweaksFill = null;
+            if (drawer?.kind === 'tweaks') closeDrawer();
+          };
+        },
+        close: closeDrawer,
+        isBottomSheet: () => drawer?.sheet.el.dataset.variant === 'bottom',
+      },
+      onBeforeLeave: (guard) => {
+        leaveGuards.push(guard);
+        return () => {
+          const at = leaveGuards.indexOf(guard);
+          if (at >= 0) leaveGuards.splice(at, 1);
+        };
+      },
       notices,
       actions: options.actions,
       scope: bscope,
@@ -722,11 +784,17 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       mountFeature('edit text', editText.mount),
       // Also after the build strip (it reads the strip's phase for the menu's hint) and after Edit text (they share one undo slot).
       mountFeature('screens', screens.mount),
+      // After the build strip (its phase is the panel's agent-working hint), the ask bar (Send goes quiet while the panel is open) and Edit text (they share one undo slot).
+      mountFeature('tweaks', tweaks.mount),
     ];
 
     built = {
       apply,
       startComment: () => setMode('edit'),
+      beforeLeave: async () => {
+        for (const guard of [...leaveGuards]) if (!(await guard())) return false;
+        return true;
+      },
       dispose: () => {
         for (const unmount of [...unmounts].reverse()) unmount();
         restoreFlow.dispose();
@@ -780,6 +848,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       if (built) built.startComment();
       else wantComment = true;
     },
+    beforeLeave: () => (built ? built.beforeLeave() : Promise.resolve(true)),
     dispose: () => {
       disposed = true;
       scope.dispose();

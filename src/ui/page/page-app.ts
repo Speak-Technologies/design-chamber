@@ -26,14 +26,35 @@ export const mountPage = (root: HTMLElement): void => {
     if (slug) library.focusCard(slug);
   };
 
-  const openDesign = (slug: string): void => {
-    if (open?.slug === slug) return;
+  const showDesign = (slug: string): void => {
     open?.handle.dispose();
-    const handle = mountDesignView({ slug, surface: 'page', actions, onBack: closeDesign });
+    const handle = mountDesignView({ slug, surface: 'page', actions, onBack: leaveDesign });
     open = { slug, handle };
     place.remember(slug);
     library.el.hidden = true;
     app.append(handle.el);
+  };
+
+  /** Back to the library; unsaved tweaks ask first ("Save your tweaks?"), and Keep editing stays here. */
+  const leaveDesign = (): void => {
+    const current = open;
+    if (!current) return;
+    void current.handle.beforeLeave().then((leave) => {
+      if (leave && open === current) closeDesign();
+    });
+  };
+
+  const openDesign = (slug: string): void => {
+    if (open?.slug === slug) return;
+    // Another design replaces the open one: the same question as going back.
+    const current = open;
+    if (current) {
+      void current.handle.beforeLeave().then((leave) => {
+        if (leave && open === current) showDesign(slug);
+      });
+      return;
+    }
+    showDesign(slug);
   };
 
   // The frame reloads when the extension updates; reopen the design that was open (the user's own choice wins).

@@ -2809,3 +2809,221 @@ summary.dc-checks-group-title:focus-visible {
   cursor: default;
 }
 /* ===== end screens ===== */
+
+/* ===== Phase 2: tweaks (U2) ===== */
+
+/* The page toolbar's slot between Comments and Versions: it adds no box of its own, only the button inside. */
+.dc-tweaks-slot {
+  display: contents;
+}
+.dc-tweaks-slot:empty {
+  display: none;
+}
+
+/* A 6 px dot on the Tweaks button while values are unsaved; the button's name says so too (aria-label), and the panel shows "Unsaved". */
+.dc-dotmark {
+  position: relative;
+}
+.dc-dotmark::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--oc-warning);
+  box-shadow: 0 0 0 2px var(--oc-bg);
+}
+.oc-sdk-btn.dc-dotmark::after {
+  top: -2px;
+  right: -2px;
+}
+
+/*
+ * The rail's Tweaks sheet: non-modal, pinned to the bottom of the rail and at most half as tall (the view sets
+ * --dc-sheet-max in px from the host's height), so the wall above it stays live for the preview. The sheet element
+ * itself lets pointer events through; only its panel takes them.
+ */
+.dc-sheet[data-variant='bottom'] {
+  inset: auto 0 0 0;
+  pointer-events: none;
+}
+.dc-sheet[data-variant='bottom'] .dc-sheet-panel {
+  flex: 1;
+  min-width: 0;
+  max-height: var(--dc-sheet-max, 50%);
+  pointer-events: auto;
+  border-top: 1px solid var(--oc-border);
+  border-radius: var(--dc-r-lg) var(--dc-r-lg) 0 0;
+  background: var(--oc-bg);
+  box-shadow: var(--oc-sdk-float);
+}
+.dc-sheet[data-variant='bottom'] .dc-sheet-head {
+  padding: var(--dc-s2) var(--dc-s2) 0 var(--dc-s4);
+}
+
+/* Body and foot of the panel, in the dock (page) and the bottom sheet (rail). The body scrolls; the foot stays. */
+.dc-sheet[data-variant] .dc-sheet-body.dc-tweaks-body {
+  gap: var(--dc-s4);
+  padding: var(--dc-s2) var(--dc-s4) var(--dc-s4);
+  scrollbar-width: thin;
+}
+.dc-sheet[data-variant='bottom'] .dc-sheet-body.dc-tweaks-body {
+  gap: var(--dc-s3);
+}
+.dc-tweaks-body > * {
+  flex: none;
+}
+.dc-sheet-foot.dc-tweaks-foot {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: var(--dc-s2);
+}
+.dc-sheet[data-variant='bottom'] .dc-sheet-foot.dc-tweaks-foot {
+  padding: var(--dc-s2) var(--dc-s4) var(--dc-s3);
+}
+.dc-tweaks-foot .dc-sheet-foot-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--dc-s2);
+}
+.dc-tweaks-badge {
+  margin-left: var(--dc-s1);
+  font-weight: 400;
+  vertical-align: 1px;
+}
+
+.dc-tweaks-banners {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+}
+.dc-tweaks-banners:empty {
+  display: none;
+}
+
+.dc-tweaks-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+}
+.dc-tweaks-error {
+  margin: 0;
+  color: var(--dc-error-text);
+  font-size: 0.8125rem;
+}
+.dc-tweaks-kept {
+  margin: 0;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.dc-tweaks-lost {
+  margin: var(--dc-s1) 0 0;
+  padding-left: var(--dc-s4);
+  user-select: text;
+}
+
+/* One knob: its name and value on a line, the control under it, then the muted notes and the reason it is off. */
+.dc-tweaks-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dc-sheet[data-variant='bottom'] .dc-tweaks-rows {
+  gap: var(--dc-s3);
+}
+.dc-knob {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.dc-knob-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--dc-s2);
+}
+.dc-knob-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+.dc-knob-value {
+  color: var(--oc-muted);
+  font-family: var(--oc-mono);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.dc-knob[data-changed='true'] .dc-knob-value {
+  color: var(--oc-fg);
+}
+.dc-knob input[type='range'] {
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--oc-primary);
+}
+.dc-knob input[type='range']:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+  border-radius: 9999px;
+}
+.dc-knob-choice .oc-sdk-tabs {
+  display: flex;
+  width: 100%;
+}
+.dc-knob-choice .oc-sdk-tab {
+  flex: 1;
+}
+.dc-knob-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+}
+.dc-knob-notes:empty {
+  display: none;
+}
+.dc-knob-note {
+  margin: 0;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+.dc-knob[data-disabled='true'] .dc-knob-label {
+  color: var(--oc-muted);
+}
+.dc-knob[data-disabled='true'] input[type='range'],
+.dc-knob[data-disabled='true'] .dc-knob-choice {
+  opacity: 0.5;
+}
+.dc-knob-reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  color: var(--dc-warning-text);
+  font-size: 0.75rem;
+}
+.dc-knob-reason svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* The foot's one note: a refused save, the agent at work, or what is missing for Save. */
+.dc-tweaks-note {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--oc-muted);
+}
+.dc-tweaks-note[data-tone='warning'] {
+  color: var(--dc-warning-text);
+}
+.dc-tweaks-note[data-tone='error'] {
+  color: var(--dc-error-text);
+}
+/* ===== end tweaks ===== */

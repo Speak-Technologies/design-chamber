@@ -17,11 +17,11 @@ nav{display:flex;align-items:center;justify-content:space-between;padding:22px 5
 nav b{font-family:Georgia,serif;font-size:22px;letter-spacing:-.02em}
 nav ul{display:flex;gap:28px;list-style:none;margin:0;padding:0}
 nav a{color:inherit;text-decoration:none}
-.btn{display:inline-block;background:${p.accent};color:#fff;padding:13px 24px;border-radius:999px;font:600 14px 'Segoe UI',system-ui,sans-serif;text-decoration:none;border:0;cursor:pointer}
+.btn{display:inline-block;background:${p === COFFEE ? 'hsl(var(--accent-h,17) 62% 43%)' : p.accent};color:#fff;padding:13px 24px;border-radius:999px;font:600 14px 'Segoe UI',system-ui,sans-serif;text-decoration:none;border:0;cursor:pointer}
 .btn.ghost{background:transparent;color:${p.ink};border:1.5px solid ${p.ink}}
 section{padding:56px}
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
-.card{background:${p.card};border-radius:18px;padding:28px;border:1px solid ${p.soft}}
+.card{background:${p.card};border-radius:var(--radius,18px);padding:28px;border:1px solid ${p.soft}}
 @media (max-width:640px){nav{padding:16px 20px}nav ul{display:none}section{padding:32px 20px}.grid{grid-template-columns:1fr}h1{font-size:38px!important}}
 ${extra}
 </style></head><body>${body}</body></html>`;

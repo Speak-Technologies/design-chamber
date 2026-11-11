@@ -38,6 +38,8 @@ const ICONS = {
   send: ['M22 2 11 13', 'M22 2l-7 20-4-9-9-4z'],
   pin: ['M12 21s-7-5.2-7-11a7 7 0 1 1 14 0c0 5.8-7 11-7 11z', 'M12 7.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z'],
   layers: ['m12 3 9 5-9 5-9-5z', 'm3 13 9 5 9-5'],
+  // Three sliders with their knobs: the Tweaks button.
+  tune: ['M4 21v-7', 'M4 10V3', 'M12 21v-9', 'M12 8V3', 'M20 21v-5', 'M20 12V3', 'M2 14h4', 'M10 8h4', 'M18 16h4'],
 } as const satisfies Record<string, readonly string[]>;
 
 export type IconName = keyof typeof ICONS;
