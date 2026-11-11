@@ -53,12 +53,12 @@ describe('ask prompt format', () => {
     );
   });
 
-  test('page element names index.html; the fill viewport reads as the full-width view; unknown ids fall back to themselves', () => {
+  test('page element names index.html; the fill viewport reads as the full-width view; a removed screen says so', () => {
     const page = buildAskPrompt(input({ kind: 'page', screens: [], element: { screen: null, viewport: 'fill', anchor: anchor() } })).text;
     assert.ok(page.startsWith('[Design Chamber] Request about the page "Coffee shop".'));
     assert.ok(page.includes('About this element: Page index.html @ full-width view'));
     const stale = buildAskPrompt(input({ element: { screen: 'gone', viewport: 'old', anchor: anchor() } })).text;
-    assert.ok(stale.includes('About this element: Screen "gone" (screens/gone.html) @ old'));
+    assert.ok(stale.includes('About this element: Screen "gone" (removed from the canvas) @ old'));
   });
 
   test('a design viewport that is itself called fill keeps its own label', () => {

@@ -11,6 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { AskTooLongError, buildAskPrompt } from '../../shared/agent/ask-prompt.ts';
 import { buildChip, titleFromBrief } from '../../shared/agent/chip.ts';
 import { clip, noProject, type AgentContext, type AgentPreset, type ProjectRules } from '../../shared/agent/context.ts';
+import { buildHandEditsBlock, type HandEditsBlock } from '../../shared/agent/hand-edits.ts';
 import { derivePageTitle, extractHtml } from '../../shared/agent/html-extract.ts';
 import { buildChecksPrompt, buildContinuePrompt, buildOfflinePrompt, buildRevisionPrompt, type ExternalList } from '../../shared/agent/revision-prompt.ts';
 import { buildRulesDoc } from '../../shared/agent/rules-doc.ts';
@@ -29,6 +30,7 @@ import {
   PROMPT_EXTERNAL_MAX,
   PROMPT_EXTERNAL_SCAN_MS,
   PROMPT_EXTERNAL_URL_MAX,
+  REVISION_TEXT_MAX,
   SESSION_ID_MAX,
   SLUG_PATTERN,
   UPLOAD_ID_PATTERN,
@@ -38,6 +40,7 @@ import type { DesignRecord, ServiceContext } from '../context.ts';
 import { ensureChecksService } from '../check/service.ts';
 import { ensureLauncherService } from '../check/launcher.ts';
 import { discoverProjectRules, withDeadline } from '../discovery.ts';
+import { ensureEditService } from '../edits/pipeline.ts';
 import { ApiError, type Router } from '../http.ts';
 import { parseElement } from './comments.ts';
 import { readPreset, readRulesDocs } from './presets.ts';
@@ -337,6 +340,14 @@ const selectComments = (all: readonly Comment[], ids: readonly string[] | null):
   return picked;
 };
 
+// ---- the hand-edit block (Phase 2 §7.3) ----
+
+/** The block goes first, then a blank line, then the message; the budget leaves room for both. */
+const BLOCK_SEPARATOR = '\n\n';
+const budgetFor = (block: HandEditsBlock | null): number => REVISION_TEXT_MAX - (block === null ? 0 : block.text.length + BLOCK_SEPARATOR.length);
+const withBlock = (block: HandEditsBlock | null, text: string): string => (block === null ? text : block.text + BLOCK_SEPARATOR + text);
+const handEditsOf = (block: HandEditsBlock | null): PromptResponse['handEdits'] => (block === null ? null : { upTo: block.upTo, count: block.count });
+
 /**
  * Registers:
  * - 'POST /chip'
@@ -403,14 +414,21 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
 
     if (input.purpose === 'continue') {
       const openComments = design.comments.filter((comment) => comment.status === 'open').length;
-      // handEdits stays null until T6 builds the ledger block (§7.3).
+      // No hand-edit block on a resume: nothing is asked, so nothing is cleared (§7.3).
       return { text: buildContinuePrompt({ title: design.title, kind: design.kind, folder: record.path, openComments }), commentIds: [], omitted: [], chip, handEdits: null };
     }
+
+    // The user's hand edits since the last message ride along on every other purpose (§7.3).
+    // A read only: the edits file is replaced atomically, and a damaged one reads as empty.
+    const edits = await ensureEditService(ctx).editsFile.read(record.slug, record.path);
+    const block = buildHandEditsBlock(edits.ledger, edits.dropped);
+    const compactBlock = (): HandEditsBlock | null => buildHandEditsBlock(edits.ledger, edits.dropped, { compact: true });
 
     if (input.purpose === 'offline') {
       const external = await collectExternal(ctx, record);
       if (external.urls.length === 0) throw new ApiError('invalid', "This design doesn't load anything from the internet.");
-      return { text: buildOfflinePrompt({ title: design.title, kind: design.kind, folder: record.path, external }), commentIds: [], omitted: [], chip, handEdits: null };
+      const text = buildOfflinePrompt({ title: design.title, kind: design.kind, folder: record.path, external, maxChars: budgetFor(block) });
+      return { text: withBlock(block, text), commentIds: [], omitted: [], chip, handEdits: handEditsOf(block) };
     }
 
     if (input.purpose === 'ask') {
@@ -423,35 +441,47 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
           throw new ApiError('bad-request', 'That element was picked at a viewport this design does not have.');
         }
       }
-      try {
-        const { text } = buildAskPrompt({ title: design.title, kind: design.kind, folder: record.path, screens: design.screens, viewports: design.viewports, text: input.text, element });
-        return { text, commentIds: [], omitted: [], chip, handEdits: null };
-      } catch (error) {
-        if (error instanceof AskTooLongError) {
-          throw new ApiError('invalid', `Your message is ${error.over} characters too long for the chat. Shorten it and send again.`);
+      // The words are never cut: the element detail goes first (the builder's ladder), then the
+      // block shrinks to its compact form, then the block goes and the ledger stays for next time.
+      const attempts: (HandEditsBlock | null)[] = block === null ? [null] : [block, compactBlock(), null];
+      let over = 0;
+      for (const use of attempts) {
+        try {
+          const { text } = buildAskPrompt({ title: design.title, kind: design.kind, folder: record.path, screens: design.screens, viewports: design.viewports, text: input.text, element, maxChars: budgetFor(use) });
+          return { text: withBlock(use, text), commentIds: [], omitted: [], chip, handEdits: handEditsOf(use) };
+        } catch (error) {
+          if (!(error instanceof AskTooLongError)) throw error;
+          over = error.over;
         }
-        throw error;
       }
+      throw new ApiError('invalid', `Your message is ${over} characters too long for the chat. Shorten it and send again.`);
     }
     if (input.purpose === 'checks') {
       // The findings the Checks badge counts, errors and warnings only: findings about files that changed since a render are not asked for.
       const checks = await ensureChecksService(ctx).forPrompt(record.slug);
       const counted = checks.findings.filter((finding) => finding.severity !== 'info');
       if (counted.length === 0) throw new ApiError('invalid', 'There is nothing to fix.');
-      const prompt = buildChecksPrompt({
+      const base = {
         title: design.title,
         kind: design.kind,
         folder: record.path,
         findings: sortFindings(counted),
         renderStale: checks.renderStale,
         checkCommand: context.checkCommand,
-      });
-      return { text: prompt.text, commentIds: [], omitted: [], chip, handEdits: null };
+      };
+      let prompt = buildChecksPrompt({ ...base, maxChars: budgetFor(block) });
+      let used = block;
+      if (block !== null && prompt.omitted > 0) {
+        // Findings had to go: give them the room back with the compact block, once.
+        used = compactBlock();
+        prompt = buildChecksPrompt({ ...base, maxChars: budgetFor(used) });
+      }
+      return { text: withBlock(used, prompt.text), commentIds: [], omitted: [], chip, handEdits: handEditsOf(used) };
     }
 
     // Validate the comment choice before spending time on the scan.
     const comments = selectComments(design.comments, input.commentIds);
-    const prompt = buildRevisionPrompt({
+    const base = {
       title: design.title,
       kind: design.kind,
       folder: record.path,
@@ -460,8 +490,15 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
       comments,
       anchorStates: input.anchorStates,
       external: await collectExternal(ctx, record),
-    });
-    return { text: prompt.text, commentIds: prompt.commentIds, omitted: prompt.omitted, chip, handEdits: null };
+    };
+    let prompt = buildRevisionPrompt({ ...base, maxChars: budgetFor(block) });
+    let used = block;
+    if (block !== null && prompt.level >= 2) {
+      // Anchor text had to be shortened: try once more with the compact block before comments go.
+      used = compactBlock();
+      prompt = buildRevisionPrompt({ ...base, maxChars: budgetFor(used) });
+    }
+    return { text: withBlock(used, prompt.text), commentIds: prompt.commentIds, omitted: prompt.omitted, chip, handEdits: handEditsOf(used) };
   });
 
   router.on('POST /pages/from-message', async ({ body }): Promise<FromMessageResponse> => {

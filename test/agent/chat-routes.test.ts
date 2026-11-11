@@ -5,10 +5,14 @@ import { describe, test, type TestContext } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
 import { rulesPathOf } from '../../src/shared/agent/context.ts';
-import { ASK_TEXT_MAX, BRIEF_MAX, CHIP_TEXT_HARD_MAX, PROMPT_EXTERNAL_MAX, PROMPT_EXTERNAL_URL_MAX, REVISION_TEXT_MAX } from '../../src/shared/limits.ts';
+import { buildHandEditsBlock } from '../../src/shared/agent/hand-edits.ts';
+import { buildRevisionPrompt } from '../../src/shared/agent/revision-prompt.ts';
+import { ASK_TEXT_MAX, BRIEF_MAX, CHIP_TEXT_HARD_MAX, HAND_EDITS_BLOCK_MAX, PROMPT_EXTERNAL_MAX, PROMPT_EXTERNAL_URL_MAX, REVISION_TEXT_MAX } from '../../src/shared/limits.ts';
 import type { RenderMeta, RenderQuery } from '../../src/shared/api.ts';
-import type { DesignChip } from '../../src/shared/types.ts';
+import type { DesignChip, HandEdit } from '../../src/shared/types.ts';
 import { unavailable, type DesignStore, type RenderService } from '../../src/service/context.ts';
+import { ensureEditService } from '../../src/service/edits/pipeline.ts';
+import type { HandEditBody } from '../../src/service/edits/op-module.ts';
 import { createRouter } from '../../src/service/http.ts';
 import { createRenderService } from '../../src/service/render-cache.ts';
 import { capExternal, normalizeExternalUrl, registerChatRoutes, writeRulesFile } from '../../src/service/routes/chat.ts';
@@ -807,5 +811,241 @@ describe('remote URL normalisation (pure)', () => {
     const cut = capExternal([`https://c.example/${'x'.repeat(500)}`]).urls[0] ?? '';
     assert.equal(cut.length, PROMPT_EXTERNAL_URL_MAX);
     assert.ok(cut.endsWith('…'));
+  });
+});
+
+describe('hand edits in the next message (Phase 2 §7)', () => {
+  const hand = (seq: number, body: HandEditBody): HandEdit => ({ seq, at: '2026-11-11T10:00:00.000Z', editId: `e_${String(seq).padStart(8, '0')}`, ...body });
+  const seedLedger = (tmp: TmpRoot, slug: string, entries: HandEdit[], dropped = 0): Promise<string> =>
+    tmp.write(`${slug}/.chamber/edits.json`, { v: 1, seq: entries.at(-1)?.seq ?? 0, ledger: entries, dropped, undo: [] });
+  const textEdits = (count: number): HandEdit[] =>
+    Array.from({ length: count }, (_, i) => hand(i + 1, { kind: 'text', file: `screens/s${i}.html`, screen: `Screen ${i}`, before: 'b'.repeat(80), after: 'a'.repeat(80) }));
+  const BLOCK_HEADER = 'Hand edits since my last message.';
+
+  test('revision: the block goes first, a blank line, then the message; handEdits carries upTo and count', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await seedDesign(tmp, 'd', { comments: [comment('c_aaaa1')] });
+    await seedLedger(tmp, 'd', [
+      hand(1, { kind: 'text', file: 'screens/home.html', screen: 'Home', before: 'Ship faster', after: 'Ship it faster' }),
+      hand(2, { kind: 'reorder', moved: 'Checkout', above: 'Pricing' }),
+    ]);
+    const ctx = createChatContext(tmp);
+    const { call } = await serveRoutes(t, ctx);
+    const reply = await call('/designs/d/prompt', { body: { purpose: 'revision' } });
+    assert.equal(reply.status, 200, JSON.stringify(reply.json));
+    const text = reply.json.text as string;
+    const file = await ensureEditService(ctx).editsFile.read('d', tmp.at('d'));
+    const block = buildHandEditsBlock(file.ledger, file.dropped);
+    assert.notEqual(block, null);
+    assert.ok(text.startsWith(`${block?.text ?? ''}\n\n[Design Chamber] Revise "Checkout redesign"`), text.slice(0, 200));
+    assert.ok(text.includes('1. Screen "Home" (screens/home.html)'));
+    assert.ok(text.length <= REVISION_TEXT_MAX);
+    assert.deepEqual(reply.json.handEdits, { upTo: 2, count: 2 });
+    assert.deepEqual(reply.json.commentIds, ['c_aaaa1']);
+  });
+
+  test('ask: the block rides along and the words stay whole', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await seedDesign(tmp, 'd');
+    await seedLedger(tmp, 'd', [hand(3, { kind: 'tweaks', changes: [{ label: 'Accent hue', before: '210', after: '250' }] })]);
+    const { call } = await serveRoutes(t, createChatContext(tmp));
+    const reply = await call('/designs/d/prompt', { body: { purpose: 'ask', text: 'Warmer colours please' } });
+    assert.equal(reply.status, 200, JSON.stringify(reply.json));
+    const text = reply.json.text as string;
+    assert.ok(text.startsWith(BLOCK_HEADER));
+    assert.ok(text.includes('\n\n[Design Chamber] Request about the canvas "Checkout redesign".'));
+    assert.ok(text.includes('Warmer colours please'));
+    assert.deepEqual(reply.json.handEdits, { upTo: 3, count: 1 });
+  });
+
+  test('checks: the block rides along on the fix request', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await seedDesign(tmp, 'd', { screens: [{ id: 'home', title: 'Home' }, { id: 'gone', title: 'Gone' }] });
+    await tmp.write('d/screens/home.html', '<html><head></head><body><img src="https://cdn.example.com/a.png"></body></html>');
+    await seedLedger(tmp, 'd', [hand(1, { kind: 'trash', screen: 'Old', file: 'screens/old.html' })]);
+    const { call } = await serveRoutes(t, createChatContext(tmp));
+    const reply = await call('/designs/d/prompt', { body: { purpose: 'checks' } });
+    assert.equal(reply.status, 200, JSON.stringify(reply.json));
+    const text = reply.json.text as string;
+    assert.ok(text.startsWith(BLOCK_HEADER));
+    assert.ok(text.includes('\n\n[Design Chamber] Fix what the check found in the canvas "Checkout redesign".'));
+    assert.ok(text.includes('screens/gone.html is listed in design.json but does not exist.'));
+    assert.deepEqual(reply.json.handEdits, { upTo: 1, count: 1 });
+  });
+
+  test('offline: the block rides along on the work-offline request', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await seedDesign(tmp, 'p', { kind: 'page' });
+    await tmp.write('p/index.html', '<!doctype html><html><head><title>P</title></head><body><p>Hi</p></body></html>');
+    await seedLedger(tmp, 'p', [hand(2, { kind: 'text', file: 'index.html', screen: null, before: 'Old', after: 'New' })]);
+    const ctx = createChatContext(tmp);
+    ctx.renders = {
+      render: async (): Promise<RenderMeta> => ({ key: 'k', chunks: 1, bytes: 1, title: 't', missing: [], blocked: [], external: ['https://fonts.example.com/a.css'], warnings: [] }),
+      chunk: () => '',
+    };
+    const { call } = await serveRoutes(t, ctx);
+    const reply = await call('/designs/p/prompt', { body: { purpose: 'offline' } });
+    assert.equal(reply.status, 200, JSON.stringify(reply.json));
+    const text = reply.json.text as string;
+    assert.ok(text.startsWith(BLOCK_HEADER));
+    assert.ok(text.includes('\n\n[Design Chamber] Make the page "Checkout redesign" work offline.'));
+    assert.ok(text.includes('- `https://fonts.example.com/a.css`'));
+    assert.deepEqual(reply.json.handEdits, { upTo: 2, count: 1 });
+  });
+
+  test('continue carries no block even with a full ledger', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await seedDesign(tmp, 'd', { comments: [comment('c_aaaa1')] });
+    await seedLedger(tmp, 'd', textEdits(3));
+    const { call } = await serveRoutes(t, createChatContext(tmp));
+    const reply = await call('/designs/d/prompt', { body: { purpose: 'continue' } });
+    assert.equal(reply.status, 200);
+    assert.ok(!(reply.json.text as string).includes(BLOCK_HEADER));
+    assert.equal(reply.json.handEdits, null);
+  });
+
+  test('an empty or damaged ledger changes nothing', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await seedDesign(tmp, 'd', { comments: [comment('c_aaaa1')] });
+    const { call } = await serveRoutes(t, createChatContext(tmp));
+    const bare = await call('/designs/d/prompt', { body: { purpose: 'revision' } });
+    assert.equal(bare.status, 200);
+    assert.equal(bare.json.handEdits, null);
+    assert.ok((bare.json.text as string).startsWith('[Design Chamber] Revise'));
+    await tmp.write('d/.chamber/edits.json', '{"v": 1, "ledger": [ {"kind": "text", "free": "text"} ], "seq": "no" }');
+    const damaged = await call('/designs/d/prompt', { body: { purpose: 'revision' } });
+    assert.equal(damaged.status, 200, JSON.stringify(damaged.json));
+    assert.equal(damaged.json.handEdits, null);
+    assert.equal(damaged.json.text, bare.json.text);
+  });
+
+  test('revision at the cap: the compact block takes over and more comments fit', async (t) => {
+    const tmp = await useTmpRoot(t);
+    const many = Array.from({ length: 12 }, (_, i) => comment(`c_many${i}`, { body: `${i}: ${'w'.repeat(1900)}` }));
+    await seedDesign(tmp, 'd', { comments: many });
+    const ledger = textEdits(30);
+    await seedLedger(tmp, 'd', ledger, 4);
+    const ctx = createChatContext(tmp);
+    const { call } = await serveRoutes(t, ctx);
+    const reply = await call('/designs/d/prompt', { body: { purpose: 'revision' } });
+    assert.equal(reply.status, 200, JSON.stringify(reply.json));
+    const text = reply.json.text as string;
+    assert.ok(text.startsWith('I made 34 hand edits in Design Chamber since my last message'), text.slice(0, 120));
+    assert.ok(text.length <= REVISION_TEXT_MAX);
+    assert.deepEqual(reply.json.handEdits, { upTo: 30, count: 34 });
+    // More comments fit than the full block would have allowed at its smaller budget.
+    const full = buildHandEditsBlock(ledger, 4);
+    assert.notEqual(full, null);
+    assert.ok((full?.text.length ?? 0) <= HAND_EDITS_BLOCK_MAX);
+    const design = (await ctx.store.get('d')).design;
+    const control = buildRevisionPrompt({
+      title: design.title,
+      kind: design.kind,
+      folder: tmp.at('d'),
+      screens: design.screens,
+      viewports: design.viewports,
+      comments: many,
+      maxChars: REVISION_TEXT_MAX - (full?.text.length ?? 0) - 2,
+    });
+    const sent = reply.json.commentIds as string[];
+    assert.ok(sent.length > control.commentIds.length, `${sent.length} sent with compact vs ${control.commentIds.length} with the full block`);
+    assert.deepEqual([...sent, ...(reply.json.omitted as string[])], many.map((c) => c.id));
+  });
+
+  test('the longest ask with the biggest element and a full ledger still fits, every word whole', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await seedDesign(tmp, 'd');
+    await seedLedger(tmp, 'd', textEdits(30));
+    const { call } = await serveRoutes(t, createChatContext(tmp));
+    const element = {
+      screen: 'home',
+      viewport: 'laptop',
+      anchor: { selector: 's'.repeat(1000), text: 't'.repeat(120), html: 'h'.repeat(200), rect: { x: 1, y: 2, w: 3, h: 4 }, point: { x: 0.5, y: 0.5 } },
+    };
+    const reply = await call('/designs/d/prompt', { body: { purpose: 'ask', text: 'w'.repeat(ASK_TEXT_MAX), element } });
+    assert.equal(reply.status, 200, JSON.stringify(reply.json));
+    const text = reply.json.text as string;
+    assert.ok(text.length <= REVISION_TEXT_MAX);
+    assert.ok(text.includes('w'.repeat(ASK_TEXT_MAX)), 'the words are whole');
+    assert.ok(text.startsWith(BLOCK_HEADER), 'the block goes first');
+    assert.ok(text.includes('About this element'), 'with a normal folder path even the full element fits');
+    assert.deepEqual(reply.json.handEdits, { upTo: 30, count: 30 });
+  });
+
+  // A 2 000 character folder path is the only way to push a message the 12 000 cap accepts past the host cap.
+  test('when no block fits an ask, the message goes without one and the ledger stays', { skip: process.platform === 'win32' ? 'Windows cannot hold a 2 000 character path' : false }, async (t) => {
+    const base = await useTmpRoot(t);
+    const deep = path.join(base.root, ...Array.from({ length: 8 }, () => 'd'.repeat(250)));
+    await mkdir(deep, { recursive: true });
+    const relative = (file: string): string => path.relative(base.root, path.join(deep, ...file.split('/'))).split(path.sep).join('/');
+    const tmp: TmpRoot = { ...base, root: deep, at: (file) => path.join(deep, ...file.split('/')), write: (file, content) => base.write(relative(file), content), read: (file) => base.read(relative(file)) };
+    await seedDesign(tmp, 'd');
+    const ledger = textEdits(30);
+    await seedLedger(tmp, 'd', ledger);
+    // A second design without a ledger measures the bare overhead at the same folder depth
+    // (a one-character slug like 'd', so the two header paths are the same length).
+    await seedDesign(tmp, 'e');
+    const { call } = await serveRoutes(t, createChatContext(tmp));
+    const overhead = ((await call('/designs/e/prompt', { body: { purpose: 'ask', text: 'x' } })).json.text as string).length - 1;
+    const full = buildHandEditsBlock(ledger, 0);
+    const compact = buildHandEditsBlock(ledger, 0, { compact: true });
+    assert.notEqual(full, null);
+    assert.notEqual(compact, null);
+    const roomNoBlock = REVISION_TEXT_MAX - overhead;
+    const roomCompact = REVISION_TEXT_MAX - overhead - (compact?.text.length ?? 0) - 2;
+    const roomFull = REVISION_TEXT_MAX - overhead - (full?.text.length ?? 0) - 2;
+    assert.ok(roomFull > 0 && roomFull < roomCompact && roomCompact < roomNoBlock && roomNoBlock < ASK_TEXT_MAX, `rooms ${roomFull}/${roomCompact}/${roomNoBlock}`);
+
+    // Fits with the compact block, not with the full one.
+    const mid = await call('/designs/d/prompt', { body: { purpose: 'ask', text: 'w'.repeat(roomCompact - 10) } });
+    assert.equal(mid.status, 200, JSON.stringify(mid.json));
+    assert.ok((mid.json.text as string).startsWith('I made 30 hand edits'), (mid.json.text as string).slice(0, 80));
+    assert.ok((mid.json.text as string).includes('w'.repeat(roomCompact - 10)));
+    assert.deepEqual(mid.json.handEdits, { upTo: 30, count: 30 });
+
+    // The boundary is exact: the block, the blank line and the message add up to the host cap, not one over.
+    const edge = await call('/designs/d/prompt', { body: { purpose: 'ask', text: 'w'.repeat(roomCompact) } });
+    assert.equal(edge.status, 200, JSON.stringify(edge.json));
+    assert.equal((edge.json.text as string).length, REVISION_TEXT_MAX);
+    assert.deepEqual(edge.json.handEdits, { upTo: 30, count: 30 });
+    const over = await call('/designs/d/prompt', { body: { purpose: 'ask', text: 'w'.repeat(roomCompact + 1) } });
+    assert.equal(over.status, 200, JSON.stringify(over.json));
+    assert.ok((over.json.text as string).length <= REVISION_TEXT_MAX);
+    assert.equal(over.json.handEdits, null, 'one character too many for the compact block: it is left out');
+
+    // Fits only without a block: the words go whole, the ledger is untouched.
+    const before = await tmp.read('d/.chamber/edits.json');
+    const bare = await call('/designs/d/prompt', { body: { purpose: 'ask', text: 'w'.repeat(roomNoBlock) } });
+    assert.equal(bare.status, 200, JSON.stringify(bare.json));
+    assert.ok((bare.json.text as string).startsWith('[Design Chamber] Request'));
+    assert.ok((bare.json.text as string).includes('w'.repeat(roomNoBlock)));
+    assert.equal(bare.json.handEdits, null);
+    assert.equal(await tmp.read('d/.chamber/edits.json'), before, 'nothing was cleared');
+
+    // The words alone do not fit: the same refusal as today, counted against the host cap.
+    const long = await call('/designs/d/prompt', { body: { purpose: 'ask', text: 'w'.repeat(roomNoBlock + 3) } });
+    assertError(long, 422, 'invalid');
+    assert.match(long.json.message as string, /3 characters too long for the chat/);
+  });
+
+  test('the guest clears up to upTo: the next message carries only what is left', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await seedDesign(tmp, 'd', { comments: [comment('c_aaaa1')] });
+    await seedLedger(tmp, 'd', textEdits(5));
+    const ctx = createChatContext(tmp);
+    const { call } = await serveRoutes(t, ctx);
+    const first = await call('/designs/d/prompt', { body: { purpose: 'revision' } });
+    assert.deepEqual(first.json.handEdits, { upTo: 5, count: 5 });
+    await ensureEditService(ctx).clearHandEdits('d', 3);
+    const second = await call('/designs/d/prompt', { body: { purpose: 'revision' } });
+    assert.equal(second.status, 200);
+    assert.deepEqual(second.json.handEdits, { upTo: 5, count: 2 });
+    const text = second.json.text as string;
+    assert.ok(!text.includes('screens/s0.html'), 'cleared entries are gone');
+    assert.ok(text.includes('screens/s3.html') && text.includes('screens/s4.html'));
+    await ensureEditService(ctx).clearHandEdits('d', 5);
+    const third = await call('/designs/d/prompt', { body: { purpose: 'revision' } });
+    assert.equal(third.json.handEdits, null);
+    assert.ok(!(third.json.text as string).includes(BLOCK_HEADER));
   });
 });
