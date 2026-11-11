@@ -33,6 +33,7 @@ import * as checks from './feature-checks.ts';
 import * as directions from './feature-directions.ts';
 import * as editText from './feature-edit-text.ts';
 import * as findability from './feature-findability.ts';
+import { createPageData } from './feature-page-state.ts';
 import * as screens from './feature-screens.ts';
 import * as tweaks from './feature-tweaks.ts';
 import type { DrawerContent, DrawerKind, FeatureMount, ViewContext } from './view-context.ts';
@@ -160,6 +161,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     };
     // Set once the drawers exist; on a narrow page the dock is laid over the wall (styles.css).
     let dockEl: HTMLElement | null = null;
+    // Saved page data (feature 19) is registered before the wall exists, so no live frame is made before its data is read.
+    const pageData = createPageData({ slug, wall: () => wall, dialogHost: options.actions.host, title: () => design().title, viewing: () => viewing !== null });
     const wall: WallHandle = createWall(
       {
         slug,
@@ -332,7 +335,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const rename = (): void => renameDialog(options.actions.host, ref());
 
     const moreEntries = (): MenuEntry[] =>
-      viewerMenuEntries({ compact, isPage, copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX, askForTweaks: design().tweaks.length === 0 && viewing === null });
+      viewerMenuEntries({ compact, isPage, copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX, askForTweaks: design().tweaks.length === 0 && viewing === null, pageData: pageData.entry() });
 
     const onMore = (id: string): void => {
       switch (id) {
@@ -355,6 +358,9 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
           return;
         case 'copy-html':
           void copyHtml(slug);
+          return;
+        case 'page-data':
+          pageData.confirmClear();
           return;
         case 'path':
           void copyPath(slug);
@@ -804,6 +810,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       mountFeature('directions', directions.mount),
       // After the build strip (its phase is the panel's agent-working hint), the ask bar (Send goes quiet while the panel is open) and Edit text (they share one undo slot).
       mountFeature('tweaks', tweaks.mount),
+      // Last: the notices it shows land after the ones the other features raise (their order is fixed by the notices region).
+      mountFeature('saved page data', pageData.mount),
     ];
 
     built = {
@@ -815,6 +823,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       },
       dispose: () => {
         for (const unmount of [...unmounts].reverse()) unmount();
+        pageData.dispose();
         restoreFlow.dispose();
         closeDrawer();
         notices.dispose();

@@ -3,9 +3,8 @@
 A design that saves ticks, toggles or filters with `localStorage` keeps them across reloads inside
 Design Chamber, the way it would on a real website. The frame the design runs in is sandboxed and
 has no real storage, so Design Chamber gives it a stand-in and keeps the data itself, in the design's
-own folder. This page describes the service side: where the data lives, the rules it follows, and
-what the three routes answer. The frame stand-in and the viewer side (the notices, the menu entry)
-are separate parts of the same feature.
+own folder. This page describes where the data lives, the rules the service follows, what the three
+routes answer, and what the viewer shows about it (the menu entry, the confirm and the notices).
 
 ## Where it lives
 - One store per design: `<design>/.chamber/page-state.json`. Every screen and viewport of a canvas,
@@ -70,3 +69,31 @@ viewer can show its notice. That next save also retries the write.
 The service keeps a design's data in memory once it is used, drops it after 10 idle minutes once it
 is saved, and keeps at most 32 MB across all designs (the least recently used saved design goes
 first). Unsaved data is never dropped.
+
+## What the viewer shows
+The rail and the full-screen page behave the same way, for pages and canvases alike.
+
+- **What a frame is given.** A frame that shows the current design gets the saved data when it is
+  made, and waits for it (two seconds at most). A frame that shows an old version, the old half of a
+  Compare, a thumbnail or a check render starts empty and saves nothing, so an old version never
+  touches the data of the current design. When one frame writes, the other frames of the same
+  design, on every screen and size, pick the change up without reloading.
+- **Clear saved page data** is in the ⋯ menu, just before **Rename** (so after **Copy path**). It is
+  there only while the design has saved data, and it is off, with "Not while viewing a version"
+  under it, while an old version is on show.
+- **The confirm** reads "Clear saved page data for <design title>?", "Ticks, toggles and filters
+  this design saved will be reset. This can't be undone.", with **Cancel** and a red **Clear**. Cancel
+  does nothing. **Clear** shows progress, then closes the dialog, reloads every frame of the design
+  with empty data and shows "Saved page data cleared." for five seconds. If the service can't do it,
+  the dialog stays open and says "Couldn't clear the saved page data." followed by the reason; nothing
+  is cleared and Clear can be pressed again.
+- **Notices** appear above the design (a warning for the first two), stay ten seconds (longer while
+  the pointer or keyboard focus is on them), and each shows once per time the design is opened:
+  - "This design tried to save more than 1 MB of page data. The extra wasn't saved."
+  - "Page data can't be saved right now." with "Changes last until you close this design." under
+    it. This shows when the saved data couldn't be read as the design opened, or after three failed
+    saves in a row. The design still works, but nothing it saves outlasts the view.
+  - "Saved page data was cleared." when another window cleared the data; the frames reload with
+    what is saved now, and this window's unsaved changes are dropped.
+- **Known gap.** A frame that is still loading when another frame saves has the data from the moment
+  it started loading; it does not hear that one change. It matches again the next time it loads.

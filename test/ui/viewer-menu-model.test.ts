@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 
 import type { MenuEntry } from '../../src/ui/components/kit.ts';
 import { viewerMenuEntries, type ViewerMenuInput } from '../../src/ui/model/viewer-menu.ts';
@@ -60,4 +60,28 @@ test('a design with no tweaks gets "Ask for tweaks": first on the page, right af
 
 test('a design that has tweaks, or an old version on show, does not offer it', () => {
   for (const input of [{}, { askForTweaks: false }, { compact: true }, { isPage: true }]) assert.equal(find(entriesOf(input), 'ask-tweaks'), undefined);
+});
+
+describe('Clear saved page data', () => {
+  test('is left out unless the design has saved data', () => {
+    for (const compact of [false, true]) for (const isPage of [false, true]) assert.equal(find(entriesOf({ compact, isPage }), 'page-data'), undefined);
+    assert.equal(find(entriesOf({ pageData: 'hidden' }), 'page-data'), undefined);
+  });
+
+  test('sits just before Rename, after Copy path, on the page and the canvas, in the rail and full screen', () => {
+    assert.deepEqual(shape({ isPage: true, pageData: 'enabled' }), ['reveal', 'path', 'page-data', 'rename', '-', 'delete']);
+    assert.deepEqual(shape({ pageData: 'enabled' }), ['zip', 'html', '-', 'reveal', 'path', 'page-data', 'rename', '-', 'delete']);
+    assert.deepEqual(shape({ compact: true, isPage: true, pageData: 'enabled' }), ['chat', '-', 'zip', 'html', 'copy-html', 'path', 'reveal', 'page-data', 'rename', '-', 'delete']);
+    assert.deepEqual(shape({ compact: true, pageData: 'enabled' }), ['chat', '-', 'zip', 'html', 'path', 'reveal', 'page-data', 'rename', '-', 'delete']);
+  });
+
+  test('is a plain, enabled entry normally, and off with its reason while an old version is on show', () => {
+    assert.deepEqual(find(entriesOf({ pageData: 'enabled' }), 'page-data'), { id: 'page-data', label: 'Clear saved page data' });
+    assert.deepEqual(find(entriesOf({ pageData: 'disabled' }), 'page-data'), { id: 'page-data', label: 'Clear saved page data', disabled: true, reason: 'Not while viewing a version' });
+  });
+
+  test('is not destructive in the menu (the confirm carries the weight); Delete stays the only destructive entry', () => {
+    const entries = entriesOf({ compact: true, pageData: 'enabled' });
+    assert.equal(entries.filter((entry) => 'destructive' in entry && entry.destructive).length, 1);
+  });
 });

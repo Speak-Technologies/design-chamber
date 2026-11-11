@@ -23,4 +23,5 @@ fix the doc and note what drifted.
 | [Design mentions](features/design-mentions.md) | `@` a design in the composer to give the agent its folder, rules and open comments. | Chat composer |
 | [Chat blocks](features/chat-blocks.md) | A design card in the agent's reply, and a pick between design directions. | Chat, Rail panel |
 | [Edit on the canvas](features/edit-on-canvas.md) | The rules every hand edit follows: only the user writes, a version first, refused when the file changed, smallest change, Undo, and what the agent is told. | Rail panel, Full-screen page |
+| [Saved page data](features/saved-page-data.md) | Designs that remember ticks, toggles and filters (`localStorage`, 1 MB per design, shared by every screen): where it lives, what Clear does, the notices. | Rail panel, Full-screen page |
 | [Tweaks](features/tweaks.md) | Knobs the agent declares in design.json, read from and saved into tokens.css: which declaration a knob uses, why one can't be tuned, what Save writes. | Rail panel, Full-screen page |

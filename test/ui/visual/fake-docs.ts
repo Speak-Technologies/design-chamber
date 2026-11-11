@@ -26,6 +26,13 @@ section{padding:56px}
 ${extra}
 </style></head><body>${body}</body></html>`;
 
+/**
+ * A small control a design might keep (feature 19, saved page data): one checkbox whose state is kept in `localStorage` under `paid`,
+ * pinned to the bottom-left of the frame so a scenario knows where to press it. Every screen that has it reads the same key.
+ */
+const savedTick = (): string => `<label id="dc-demo" class="sans" style="position:fixed;left:16px;bottom:16px;z-index:5;display:flex;gap:10px;align-items:center;padding:10px 14px;background:#fff;color:#18202f;border:1px solid #c9d1de;border-radius:10px;font:600 14px 'Segoe UI',system-ui,sans-serif;cursor:pointer"><input id="dc-demo-box" type="checkbox" style="width:20px;height:20px;margin:0"><span id="dc-demo-text">Mark as paid</span></label>
+<script>(function(){var box=document.getElementById('dc-demo-box'),text=document.getElementById('dc-demo-text');function paint(){var on=localStorage.getItem('paid')==='1';box.checked=on;text.textContent=on?'Paid (kept for next time)':'Mark as paid';}paint();box.addEventListener('change',function(){try{localStorage.setItem('paid',box.checked?'1':'0');}catch(e){text.textContent='Could not keep this';return;}paint();});})();</script>`;
+
 const nav = (name: string, here: string): string => `<nav><b>${name}</b><ul>
 <li><a href="home.html"${here === 'home' ? ' style="font-weight:700"' : ''}>Roasts</a></li>
 <li><a href="pricing.html"${here === 'pricing' ? ' style="font-weight:700"' : ''}>Plans</a></li>
@@ -115,7 +122,7 @@ export const coffeeCheckout = (): string =>
  <label>Delivery address<br><input style="width:100%;padding:12px;border-radius:10px;border:1px solid ${COFFEE.soft};font:inherit" placeholder="Street, city"></label>
  <label>Grind<br><select style="width:100%;padding:12px;border-radius:10px;border:1px solid ${COFFEE.soft};font:inherit"><option>Whole bean</option><option>Filter</option><option>Espresso</option></select></label>
  <button class="btn" type="button">Start my subscription — $26 / month</button>
-</form></section>`,
+</form></section>${savedTick()}`,
   );
 
 export const pricingPage = (): string =>
@@ -143,7 +150,7 @@ export const invoicePage = (): string =>
 <table style="width:100%;border-collapse:collapse;font-size:15px"><tr style="text-align:left;color:#5b6b5d"><th style="padding:8px 0">Description</th><th>Qty</th><th style="text-align:right">Amount</th></tr>
 <tr><td style="padding:12px 0;border-top:1px solid ${SAGE.soft}">Design sprint, week 1</td><td>1</td><td style="text-align:right">$4,800.00</td></tr>
 <tr><td style="padding:12px 0;border-top:1px solid ${SAGE.soft}">Prototype handoff</td><td>1</td><td style="text-align:right">$1,200.00</td></tr></table>
-<p style="text-align:right;font-size:22px;font-weight:700;margin-top:28px">Total $6,000.00</p></main>`,
+<p style="text-align:right;font-size:22px;font-weight:700;margin-top:28px">Total $6,000.00</p></main>${savedTick()}`,
   );
 
 export const onboardingScreen = (title: string, step: string): string =>

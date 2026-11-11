@@ -86,6 +86,8 @@ type Rig = {
   hit: HitController;
   pickEvents: WallPick[];
   calls: Call[];
+  /** The `storage-batch` messages the handler forwarded to the saved-page-data controller (feature 19). */
+  storage: Array<{ board: Board; batch: { clear: boolean; changes: Array<[string, string | null]> } }>;
   dispose: () => void;
 };
 
@@ -94,7 +96,7 @@ afterEach(() => {
   for (const rig of rigs.splice(0)) rig.dispose();
 });
 
-const makeRig = (over: { readOnly?: boolean; pageMode?: boolean; frameMode?: 'edit' | 'play' } = {}): Rig => {
+const makeRig = (over: { readOnly?: boolean; pageMode?: boolean; frameMode?: 'edit' | 'play'; version?: string | null; compare?: boolean } = {}): Rig => {
   const posted: unknown[] = [];
   const keys: Array<{ key: string; shift: boolean }> = [];
   const notices: string[] = [];
@@ -102,11 +104,14 @@ const makeRig = (over: { readOnly?: boolean; pageMode?: boolean; frameMode?: 'ed
   let loads = 0;
   const { store, calls } = recordingStore();
   let cam = { x: 0, y: 0, scale: 1 };
+  const storage: Rig['storage'] = [];
 
   const ctx = {
     options: { slug: 'pricing', onNotice: (text: string) => notices.push(text), onExternal: (url: string) => externals.push(url) },
     pageMode: over.pageMode ?? false,
     mode: 'edit',
+    version: over.version ?? null,
+    compare: over.compare ?? false,
     editing: false,
     readOnly: () => over.readOnly ?? false,
     frameMode: () => over.frameMode ?? 'edit',
@@ -160,6 +165,7 @@ const makeRig = (over: { readOnly?: boolean; pageMode?: boolean; frameMode?: 'ed
         keys.push({ key, shift });
         return shortcutAction({ key, shift, pageMode: ctx.pageMode }) !== null;
       },
+      storage: (storageBoard, batch) => storage.push({ board: storageBoard, batch }),
     },
     store,
   );
@@ -178,6 +184,7 @@ const makeRig = (over: { readOnly?: boolean; pageMode?: boolean; frameMode?: 'ed
     hit,
     pickEvents,
     calls,
+    storage,
     dispose: () => {
       offPick();
       picks.dispose();
@@ -413,3 +420,29 @@ const shuffle = <T>(items: readonly T[], seed: number): T[] => {
 
 const isKeyShape = (raw: unknown): raw is Extract<FrameToPageMessage, { type: 'key' }> =>
   typeof raw === 'object' && raw !== null && (raw as { type?: unknown }).type === 'key';
+
+describe('feature 19: a frame that writes localStorage', () => {
+  const batch = { ...env('storage-batch'), clear: false, changes: [['done', '[1,2]']] } as Extract<FrameToPageMessage, { type: 'storage-batch' }>;
+
+  test('a batch from a board that shows the live design reaches the controller, and starts no store call', async () => {
+    const rig = makeRig();
+    rig.handle(batch);
+    await flush();
+    assert.equal(rig.storage.length, 1);
+    assert.equal(rig.storage[0]?.board, rig.board);
+    assert.deepEqual(rig.storage[0]?.batch, { clear: false, changes: [['done', '[1,2]']] });
+    assert.deepEqual(rig.calls, []);
+  });
+
+  test('a batch is dropped while an old version is on show, even from a forged frame', () => {
+    const rig = makeRig({ version: 'v3' });
+    rig.handle(batch);
+    assert.deepEqual(rig.storage, []);
+  });
+
+  test('in Compare the main frame still shows the current design, so its batch counts', () => {
+    const rig = makeRig({ version: 'v3', compare: true });
+    rig.handle(batch);
+    assert.equal(rig.storage.length, 1);
+  });
+});

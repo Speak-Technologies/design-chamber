@@ -2,12 +2,16 @@
 // the frame channel (`guest/frame-channel.ts`: source window, artboard id and nonce checked);
 // this module only decides what each one means for the wall.
 //
+// Saved page data: a `storage-batch` is forwarded only from a board whose main frame shows the live design. A frame on an old
+// version runs with empty, unsaved storage and never posts one, and a forged one from it is dropped here as well.
+//
 // E1 (Phase 2): no message from a frame ever starts a write. The one thing a message can make this
 // module read is a source file (the answer to `edit-probe`), through a store that is narrowed to
 // `loadSource` by its type; the hand edit itself is made by the edit feature after a click on Save.
 
 import { panBy, wheelZoom } from '../../guest/camera.ts';
 import type { Store } from '../../guest/store.ts';
+import type { StorageBatch } from '../../guest/bridge/storage-shim.ts';
 import type { FrameToPageMessage } from '../../shared/bridge-protocol.ts';
 import { frameWheelRoute } from '../model/wall-input.ts';
 import { frameToScreen } from '../model/wall-model.ts';
@@ -27,6 +31,8 @@ export type FrameMessageDeps = {
   load: (board: Board) => Promise<void>;
   /** A key a frame forwarded; returns whether the wall used it. */
   shortcut: (key: string, shift: boolean) => boolean;
+  /** A write to `localStorage` from a frame that shows the live design (saved page data, feature 19). */
+  storage: (board: Board, batch: StorageBatch) => void;
 };
 
 /** What the handler may do with the store: read a source. Nothing that writes (E1). */
@@ -66,6 +72,10 @@ export const createFrameMessageHandler = (ctx: WallContext, deps: FrameMessageDe
         void deps.load(board);
         return;
       }
+      case 'storage-batch':
+        if (ctx.version !== null && !ctx.compare) return; // the main frame shows an old version
+        deps.storage(board, { clear: message.clear, changes: message.changes });
+        return;
       case 'open-external':
         options.onExternal(message.url);
         return;

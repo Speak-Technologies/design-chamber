@@ -18,6 +18,7 @@ import type {
   Viewport,
 } from '../../../src/shared/types.ts';
 import { createFakeChecks, type FakeChecks } from './fake-checks.ts';
+import { createFakePageState, type FakePageState } from './fake-page-state.ts';
 import { createFakeTokens, type FakeTokens } from './fake-tokens.ts';
 import { COFFEE, SAGE, SLATE, coffeeCheckout, coffeeDirection, coffeeHome, coffeePricing, invoicePage, onboardingScreen, pricingPage, type Palette } from './fake-docs.ts';
 import { CHIP_PROVIDER_ID, type DesignChip } from '../../../src/shared/types.ts';
@@ -309,6 +310,8 @@ export type FakeBackend = {
   failNextRestore: (message: string) => void;
   /** Test hook (tweaks): the agent rewrote tokens.css (a new sha and a `files` event). */
   touchTokens: (slug: string) => void;
+  /** Test hooks (saved page data): seed it, play another surface clearing it, count the accepted writes (fake-page-state.ts). */
+  pageState: FakePageState['hooks'];
 };
 
 export const createFakeBackend = (): FakeBackend => {
@@ -401,6 +404,7 @@ export const createFakeBackend = (): FakeBackend => {
   const stampOf = (rec: Rec): string => `screens:${rec.design.screens.map((s) => s.id).join(',')}`;
   const undos = new Map<string, { screens: Screen[]; written: Set<string>; comments: Comment[]; content: Map<string, string> | undefined }>();
   let editSeq = 0;
+  const pageState: FakePageState = createFakePageState({ emit: (slug, kind) => emit(slug, kind), exists: (slug) => void get(slug) });
   const tokens: FakeTokens = createFakeTokens({ emit: (slug, files) => emit(slug, 'files', files) });
 
   const screenEdit = (slug: string, rec: Rec, request: Extract<EditRequest, { op: 'reorder' | 'duplicate' | 'trash-screen' | 'keep-direction' }>): RouteResponse<'POST /designs/:slug/edits'> => {
@@ -770,18 +774,8 @@ export const createFakeBackend = (): FakeBackend => {
       get(params.slug);
       throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
     },
-    'GET /designs/:slug/page-state': ({ params }) => {
-      get(params.slug);
-      throw new ServiceError('internal', 'This part of Design Chamber (page-state) is not built yet.');
-    },
-    'PATCH /designs/:slug/page-state': ({ params }) => {
-      get(params.slug);
-      throw new ServiceError('internal', 'This part of Design Chamber (page-state) is not built yet.');
-    },
-    'DELETE /designs/:slug/page-state': ({ params }) => {
-      get(params.slug);
-      throw new ServiceError('internal', 'This part of Design Chamber (page-state) is not built yet.');
-    },
+    // Saved page data (feature 19): in memory, in fake-page-state.ts.
+    ...pageState.handlers,
   };
 
   const checks = createFakeChecks({
@@ -882,6 +876,7 @@ export const createFakeBackend = (): FakeBackend => {
       restoreFailure = message;
     },
     touchTokens: (slug) => tokens.touch(slug),
+    pageState: pageState.hooks,
   };
 };
 

@@ -21,6 +21,7 @@
 
 import type { Camera } from '../../guest/camera.ts';
 import { anchorStatesOf } from '../../guest/anchoring.ts';
+import type { StorageBatch } from '../../guest/bridge/storage-shim.ts';
 import { createSourceCache } from '../../guest/source-cache.ts';
 import type { DesignDetailResponse } from '../../shared/api.ts';
 import type { AnchorState } from '../../shared/types.ts';
@@ -28,7 +29,7 @@ import type { BridgeMode, FrameToPageMessage, TokenVar } from '../../shared/brid
 import { createBoardSet } from './board-set.ts';
 import { createCameraController, type CameraHooks } from './camera-controller.ts';
 import { createFrameMessageHandler } from './frame-messages.ts';
-import { setSlotTokens, slotTokens } from './frame-slot.ts';
+import { setSlotTokens, slotTokens } from '../model/slot-seed.ts';
 import { createHitController } from './hit-controller.ts';
 import { createInputController, type InputController } from './input-controller.ts';
 import { createPickLayer } from './pick-layer.ts';
@@ -114,6 +115,13 @@ export type WallHandle = {
    * `[]` clears. Posts once per animation frame however fast a slider moves; a frame that loads later reads it too.
    */
   setTokenPreview: (vars: readonly TokenVar[]) => void;
+  /**
+   * Saved page data (Phase 2 §8.4): a frame that shows the live design wrote to its `localStorage`. The listener gets the board's id and the
+   * batch; the saved-page-data controller keeps the one store. Nothing from an old version's frame arrives here.
+   */
+  onStorageBatch: (listener: (boardId: string, batch: StorageBatch) => void) => () => void;
+  /** Push accepted changes to the live design's other ready frames (`storage-sync`); the writer's own board is skipped. */
+  syncStorage: (batch: StorageBatch, exceptBoardId: string | null) => void;
   /** Seam S5 (build strip): highlight the boards of these sources (screen ids; null = the page); null clears. */
   markRecent: (sources: ReadonlySet<string | null> | null) => void;
   /**
@@ -157,6 +165,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
   const screenMenu = createListeners<[ScreenMenuPress]>();
   const ghostPress = createListeners<[HTMLElement]>();
   const reorders = createListeners<[ScreenMove]>();
+  const storageBatches = createListeners<[string, StorageBatch]>();
   const pins = createPinLayer(ctx, camera, popovers, boardLookup);
   const hit = createHitController(ctx, { camera, popovers, picks, boards: boardLookup, isPanning: () => input().isPanning() });
   const boards = createBoardSet(ctx, {
@@ -185,7 +194,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
   input.bind(inputController);
   // The handler reads sources through the view's cache and can reach nothing that writes (E1, see frame-messages.ts).
   frameMessage.bind(
-    createFrameMessageHandler(ctx, { camera, hit, popovers, picks, load: boards.load, shortcut: inputController.shortcut }, { loadSource: (slug, screen) => sources.get(slug, screen ?? null) }),
+    createFrameMessageHandler(ctx, { camera, hit, popovers, picks, load: boards.load, shortcut: inputController.shortcut, storage: (board, batch) => storageBatches.emit(board.art.id, batch) }, { loadSource: (slug, screen) => sources.get(slug, screen ?? null) }),
   );
 
   boards.rebuild();
@@ -341,6 +350,14 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
         const latest = [...slotTokens(options.slug)];
         for (const board of boards.values()) board.main.post({ type: 'set-tokens', vars: latest });
       });
+    },
+    onStorageBatch: storageBatches.add,
+    syncStorage: (batch, exceptBoardId) => {
+      // A frame that is still loading was seeded when its document was made; one on an old version has storage of its own.
+      if (ctx.version !== null && !ctx.compare) return;
+      for (const board of boards.values()) {
+        if (board.art.id !== exceptBoardId && board.main.state() === 'ready') board.main.post({ type: 'storage-sync', clear: batch.clear, changes: batch.changes });
+      }
     },
     onScreenMenu: screenMenu.add,
     onGhost: ghostPress.add,
