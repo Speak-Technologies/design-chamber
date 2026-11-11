@@ -97,8 +97,11 @@ covers text it never touches. Three rules keep the warning honest:
   Nobody sees that text, so none of the three can be a visual defect. The accessibility checks
   (alt text, labels, button names) still apply, and hidden text can be the fix for them.
 - What paints is still judged: a `visibility: visible` child inside a `visibility: hidden` parent,
-  and visible text marked `aria-hidden`, count as seen. Text in a scrolling or clipping box is
-  judged only where it paints.
+  and visible text marked `aria-hidden`, count as seen. Scrolling never hides text: content below
+  or beside a scroll box paints once scrolled, and the check scrolls the whole document, so it is
+  judged. Only `overflow: hidden` and `overflow: clip` cut text, each on its own axis, and
+  positioned text is cut only by the boxes that contain it: a dropdown positioned out of a clipped
+  card is still judged.
 
 Real overlaps are still found: a caption positioned over a heading, items pulled onto each other by
 negative margins, text moved over a sibling by a transform. The 30% share rule, the fixed/sticky

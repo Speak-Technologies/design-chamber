@@ -247,6 +247,15 @@ const linesOverlap = (a: ProbeText, b: ProbeText): boolean => {
   return false;
 };
 
+/**
+ * Cheap necessary condition for any line pair to overlap: a text's `rect` encloses every line box
+ * it paints (the union of its lines before clipping), so disjoint rects can hold no overlapping
+ * pair. Skipping those pairs first keeps the verdict off the texts² × lines² path on long
+ * documents of wrapping text.
+ */
+const rectsIntersect = (a: ProbeRect, b: ProbeRect): boolean =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
 const overlapFindings = (probe: ProbeResult, artboard: ArtboardInfo): CheckFindingData[] => {
   // Indices stay the positions in probe.texts: ancestor links name those, not this filtered list.
   const boxes = probe.texts
@@ -258,7 +267,7 @@ const overlapFindings = (probe: ProbeResult, artboard: ArtboardInfo): CheckFindi
     if (a === undefined) continue;
     for (let j = i + 1; j < boxes.length; j += 1) {
       const b = boxes[j];
-      if (b === undefined || !linesOverlap(a.text, b.text)) continue;
+      if (b === undefined || !rectsIntersect(a.text.rect, b.text.rect) || !linesOverlap(a.text, b.text)) continue;
       // A text and text in its own ancestor or descendant are one flow, whatever the geometry.
       if ((a.text.ancestors ?? []).includes(b.index) || (b.text.ancestors ?? []).includes(a.index)) continue;
       out.push({ ...base('text-overlap', artboard), detail: cleanDetail(`${a.text.text} / ${b.text.text}`, 160), selector: a.text.selector });

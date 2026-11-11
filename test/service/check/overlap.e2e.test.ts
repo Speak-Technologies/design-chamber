@@ -117,7 +117,13 @@ test('an inline element that wraps over several lines does not overlap its parag
       'screens/wrapped.html': page(
         'wrapped',
         '<p style="width:220px;">Before <code style="background:#eee; padding:2px 4px; overflow-wrap:anywhere;">a-long-inline-code-that-wraps-over-several-lines</code> after it.</p>' +
-          '<p style="width:220px;"><span>Short sibling</span> <span style="background:#eee; padding:2px 4px;">a sibling span that wraps onto two lines</span></p>',
+          '<p style="width:220px;"><span>Short sibling</span> <span style="background:#eee; padding:2px 4px;">a sibling span that wraps onto two lines</span></p>' +
+          // The sibling sits under the wrapped span's merged box but clear of every painted line:
+          // one merged box per element (the pre-fix shape) reports a false overlap here.
+          '<p style="position:relative; width:300px; margin:20px; line-height:24px;">' +
+          '<span style="background:#eee; padding:2px 4px;">a long inline span that wraps over two lines of text</span>' +
+          '<span style="position:absolute; left:230px; top:24px; white-space:nowrap;">sibling text</span>' +
+          '</p>',
       ),
     },
     ['wrapped'],
@@ -174,7 +180,9 @@ test('text in a clipping container is judged only where it paints', async (t) =>
         'scroll',
         '<div style="position:relative; overflow:hidden; width:200px; margin:20px;">' +
           '<p style="white-space:nowrap; margin:0;">Long text that runs past the clipping box to the right</p>' +
-          '<p style="position:absolute; left:300px; top:10px; margin:0;">Over the clipped part</p>' +
+          // nowrap keeps this one line fully past the clip edge: with one merged box per element
+          // (the pre-fix shape) it falsely overlaps the long text's full-width box.
+          '<p style="position:absolute; left:210px; top:10px; margin:0; white-space:nowrap;">Over the clipped part</p>' +
           '<p style="position:absolute; left:50px; top:10px; margin:0;">Over the visible part</p>' +
           '</div>',
       ),

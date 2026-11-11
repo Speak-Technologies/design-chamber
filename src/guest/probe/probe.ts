@@ -69,26 +69,93 @@ const unionRect = (lines: ProbeRect[]): ProbeRect => {
   return { x: left, y: top, w: right - left, h: bottom - top };
 };
 
-const intersectRect = (a: ProbeRect, b: ProbeRect): ProbeRect | null => {
-  const x = Math.max(a.x, b.x);
-  const y = Math.max(a.y, b.y);
-  const w = Math.min(a.x + a.w, b.x + b.w) - x;
-  const h = Math.min(a.y + a.h, b.y + b.h) - y;
-  return w >= 1 && h >= 1 ? { x, y, w, h } : null;
+/** Cut each line box to a clipping box, per axis; a line under 1px in either axis paints nothing. */
+const clipLines = (lines: ProbeRect[], box: ProbeRect, clipX: boolean, clipY: boolean): ProbeRect[] => {
+  const out: ProbeRect[] = [];
+  for (const line of lines) {
+    const x = clipX ? Math.max(line.x, box.x) : line.x;
+    const y = clipY ? Math.max(line.y, box.y) : line.y;
+    const right = clipX ? Math.min(line.x + line.w, box.x + box.w) : line.x + line.w;
+    const bottom = clipY ? Math.min(line.y + line.h, box.y + box.h) : line.y + line.h;
+    const w = right - x;
+    const h = bottom - y;
+    if (w >= 1 && h >= 1) out.push({ x, y, w, h });
+  }
+  return out;
 };
 
-/** The line boxes left after clipping ancestors cut them; empty means nothing paints. */
+/**
+ * Whether an element establishes a containing block for positioned descendants. Verified in
+ * Chrome: a non-static position contains `absolute`; transform, perspective, filter,
+ * backdrop-filter, a matching `will-change`, and layout/paint `contain` contain both `absolute`
+ * and `fixed`. `display: contents` generates no box and contains nothing.
+ */
+const establishesContainingBlock = (element: Element, position: 'absolute' | 'fixed'): boolean => {
+  const style = getComputedStyle(element);
+  if (style.display === 'contents') return false;
+  if (position === 'absolute' && style.position !== 'static') return true;
+  if (style.transform !== 'none' || style.perspective !== 'none' || style.filter !== 'none' || style.backdropFilter !== 'none') return true;
+  if (/transform|perspective|filter/.test(style.willChange)) return true;
+  if (/paint|layout|strict|content/.test(style.contain)) return true;
+  return false;
+};
+
+/** The nearest ancestor that contains a fixed element, or null when the viewport contains it. */
+const fixedContainingBlock = (element: Element): Element | null => {
+  for (let node: Element | null = element.parentElement; node !== null; node = node.parentElement) {
+    if (establishesContainingBlock(node, 'fixed')) return node;
+  }
+  return null;
+};
+
+/**
+ * The body's overflow propagates to the viewport when the root is visible in both axes; the body
+ * box then has used overflow visible and does not clip (verified in Chrome).
+ */
+const bodyOverflowPropagates = (node: Element): boolean => {
+  if (node !== document.body) return false;
+  const root = getComputedStyle(document.documentElement);
+  return root.overflowX === 'visible' && root.overflowY === 'visible';
+};
+
+/**
+ * The line boxes left after clipping ancestors cut them; empty means nothing paints. Only boxes
+ * that really clip cut a line: `hidden`/`clip` on an axis, never `auto`/`scroll` (their content
+ * paints once scrolled, and the check scrolls the whole document), never the root (its client box
+ * is one emulated screen tall), and never a box outside the text's containing-block chain.
+ */
 const paintedLines = (element: Element, lines: ProbeRect[]): ProbeRect[] => {
-  // Fixed text escapes its ancestors' overflow clipping.
-  if (getComputedStyle(element).position === 'fixed') return lines;
+  const style = getComputedStyle(element);
+  // Fixed text the viewport contains never scrolls into view: only what is on screen paints it.
+  // A transformed/filtered ancestor contains it instead, and the walk below clips it there.
+  if (style.position === 'fixed' && fixedContainingBlock(element) === null) {
+    return clipLines(lines, { x: window.scrollX, y: window.scrollY, w: innerWidth, h: innerHeight }, true, true);
+  }
   let painted = lines;
-  for (let node: Element | null = element.parentElement; node; node = node.parentElement) {
-    const style = getComputedStyle(node);
-    if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
-    const box = node.getBoundingClientRect();
-    const clip: ProbeRect = { x: box.left + node.clientLeft + window.scrollX, y: box.top + node.clientTop + window.scrollY, w: node.clientWidth, h: node.clientHeight };
-    painted = painted.map((line) => intersectRect(line, clip)).filter((line): line is ProbeRect => line !== null);
-    if (painted.length === 0) break;
+  let node: Element = element;
+  let position = style.position;
+  for (;;) {
+    // The next ancestor that can clip this text. Positioned text is clipped only by its
+    // containing-block chain: a static overflow box does not clip text whose containing block
+    // sits outside it (a dropdown or badge escaping a clipped card).
+    let parent: Element | null = node.parentElement;
+    if (position === 'absolute' || position === 'fixed') {
+      while (parent !== null && !establishesContainingBlock(parent, position)) parent = parent.parentElement;
+    }
+    if (parent === null || parent === document.documentElement) break;
+    const parentStyle = getComputedStyle(parent);
+    const clipX = parentStyle.overflowX === 'hidden' || parentStyle.overflowX === 'clip';
+    const clipY = parentStyle.overflowY === 'hidden' || parentStyle.overflowY === 'clip';
+    // overflow does not apply to non-replaced inline boxes (clientWidth 0), and a propagating
+    // body does not clip; both would hide text that paints.
+    if ((clipX || clipY) && parentStyle.display !== 'inline' && !bodyOverflowPropagates(parent)) {
+      const box = parent.getBoundingClientRect();
+      const clip: ProbeRect = { x: box.left + parent.clientLeft + window.scrollX, y: box.top + parent.clientTop + window.scrollY, w: parent.clientWidth, h: parent.clientHeight };
+      painted = clipLines(painted, clip, clipX, clipY);
+      if (painted.length === 0) return painted;
+    }
+    node = parent;
+    position = parentStyle.position;
   }
   return painted;
 };

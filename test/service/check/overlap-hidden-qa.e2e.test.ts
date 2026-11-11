@@ -1,7 +1,8 @@
 // QA regressions for C1 (cc70d6c), against a real browser (skipped, never silent, when none is
 // installed). Text a user sees once they scroll must still be judged: "visually hidden" is the
-// screen-reader-only patterns only. The cases marked todo reproduce open QA findings; drop the
-// todo flag when the probe is fixed.
+// screen-reader-only patterns only. Clipping follows the browser: hidden/clip axes clip, scroll
+// containers and the root do not, and positioned text is clipped only by its containing-block
+// chain (the cases below were QA findings 1 and 2, fixed in the follow-up round).
 
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
@@ -74,21 +75,68 @@ test('opacity:0 text that would overlap a heading sits out the overlap verdict',
 
 const lowBelowFold = '<p style="margin:1500px 20px 0; color:#ccc;">Low contrast below the fold</p><p style="margin:0 20px 40px;">filler</p>';
 
-test('text below the first screen is judged when html has overflow-x:hidden', { todo: 'QA C1 finding 1: root clip uses the viewport height' }, async (t) => {
+test('text below the first screen is judged when html has overflow-x:hidden', async (t) => {
   const result = await run(t, { htmlx: doc('html{overflow-x:hidden}', lowBelowFold) });
   assert.ok(codesOn(result, 'htmlx').includes('contrast'));
 });
 
-test('text further down a scroll box is judged for contrast', { todo: 'QA C1 finding 1: scroll containers count as hard clips' }, async (t) => {
+test('text further down a scroll box is judged for contrast', async (t) => {
   const result = await run(t, {
     scrollbox: doc('', '<div style="height:100px; overflow-y:auto; margin:20px;"><p style="margin:300px 0 0; color:#ccc;">Low contrast further down a scroll box</p></div>'),
   });
   assert.ok(codesOn(result, 'scrollbox').includes('contrast'));
 });
 
-test('absolute text that escapes a static clipping box is judged', { todo: 'QA C1 finding 2: clip walk ignores the containing block' }, async (t) => {
+test('absolute text that escapes a static clipping box is judged', async (t) => {
   const result = await run(t, {
     escape: doc('', '<div style="position:relative; margin:20px;"><div style="overflow:hidden; height:20px; width:200px;"><span style="position:absolute; left:0; top:60px; color:#ccc;">Escapes a static clipping box</span></div></div>'),
   });
   assert.ok(codesOn(result, 'escape').includes('contrast'));
+});
+
+test('text in a sideways-scrolling table is judged for contrast', async (t) => {
+  const result = await run(t, {
+    sideway: doc(
+      '',
+      '<div style="overflow-x:auto; width:300px; margin:20px;"><table style="width:900px; border-collapse:collapse;"><tbody><tr>' +
+        '<td style="width:400px; padding:8px;">First cell</td>' +
+        '<td style="padding:8px; color:#ccc;">Low contrast cell scrolled out to the right</td>' +
+        '</tr></tbody></table></div>',
+    ),
+  });
+  assert.ok(codesOn(result, 'sideway').includes('contrast'));
+});
+
+test('overflow-x:clip with overflow-y:visible clips only the x axis', async (t) => {
+  // Chrome keeps overflow-y visible here (clip does not force the other axis to auto). Text below
+  // the box paints; text to the right of it does not. Distinct colours keep the two findings apart.
+  const result = await run(t, {
+    clipx: doc(
+      '',
+      '<div style="position:relative; overflow-x:clip; overflow-y:visible; width:200px; height:50px; margin:20px;">' +
+        '<p style="position:absolute; left:250px; top:0; margin:0; color:#ccc;">Right of the clip box</p>' +
+        '<p style="position:absolute; left:0; top:100px; margin:0; color:#ddd;">Below the clip box</p>' +
+        '</div>',
+    ),
+  });
+  const contrast = (result.report.render?.findings ?? []).filter((finding) => finding.screen === 'clipx' && finding.code === 'contrast');
+  assert.deepEqual(contrast.map((finding) => finding.detail), ['Below the clip box'], 'only the text on the unclipped axis is judged');
+});
+
+test('fixed-position text is judged where it paints and hidden where it does not', async (t) => {
+  const result = await run(t, {
+    fixed: doc(
+      '',
+      // On-screen fixed text: judged. Distinct colours keep the findings apart (one per colour pair).
+      '<p style="position:fixed; left:20px; top:20px; margin:0; color:#ccc;">On screen fixed low contrast</p>' +
+        // Parked off-screen: the viewport contains it and it never scrolls into view, so it is hidden.
+        '<p style="position:fixed; left:-9999px; top:20px; margin:0; color:#ddd;">Off screen fixed low contrast</p>' +
+        // Contained by a transformed ancestor and clipped by its overflow:hidden: hidden.
+        '<div style="transform:translateX(0); overflow:hidden; width:200px; height:100px; margin:20px;">' +
+        '<p style="position:fixed; left:300px; top:50px; margin:0; color:#bbc;">Fixed inside a transformed clipping box</p>' +
+        '</div>',
+    ),
+  });
+  const contrast = (result.report.render?.findings ?? []).filter((finding) => finding.screen === 'fixed' && finding.code === 'contrast');
+  assert.deepEqual(contrast.map((finding) => finding.detail), ['On screen fixed low contrast'], 'only the fixed text that paints is judged');
 });

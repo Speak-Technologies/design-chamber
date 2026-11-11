@@ -149,3 +149,26 @@ test('sanitizeProbe caps the new fields and remaps ancestor indices when an entr
   child.lines = [child.rect];
   assert.deepEqual(overlaps({ ...emptyProbe(), texts: clean.texts }), [], 'the remapped link still exempts the pair');
 });
+
+test('a long document of wrapping texts gives no false overlaps, and a planted line overlap is still found', () => {
+  // 2000 texts x 30 line boxes, stacked like a long document. The verdict must stay exact at that
+  // size; the cost of the pair walk is measured outside the suite, not asserted on a clock.
+  const texts: ProbeText[] = [];
+  let y = 0;
+  for (let i = 0; i < CHECK_TEXT_ELEMENTS_MAX; i += 1) {
+    const lines = Array.from({ length: 30 }, (_, l) => ({ x: 0, y: y + l * 20, w: 600, h: 18 }));
+    texts.push(text({ selector: `p.t${i}`, text: `Paragraph ${i}`, rect: { x: 0, y, w: 600, h: 600 }, lines }));
+    y += 610;
+  }
+  assert.deepEqual(overlaps({ ...emptyProbe(), texts, scrollHeight: y }), [], 'no false overlaps at the text cap');
+  // Pull one text up over its predecessor so exactly one line pair partially overlaps (25px of a
+  // 20px line step: 13px shared of 18px, over the 30% rule, neither line holding the other).
+  const planted = texts.map((entry, i) =>
+    i === 1501
+      ? { ...entry, rect: { ...entry.rect, y: entry.rect.y - 25 }, lines: entry.lines?.map((line) => ({ ...line, y: line.y - 25 })) }
+      : entry,
+  );
+  const found = overlaps({ ...emptyProbe(), texts: planted, scrollHeight: y });
+  assert.equal(found.length, 1, 'the one real line-pair overlap inside intersecting rects is found');
+  assert.equal(found[0]?.detail, 'Paragraph 1500 / Paragraph 1501');
+});
