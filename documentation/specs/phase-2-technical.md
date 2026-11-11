@@ -1,7 +1,8 @@
 # Phase 2 · Edit on the canvas: technical design
 
-Architect, 2026-11-11, branch `feat/phase-2`. Status: **proposed**, for review by a second architect, then
-the main agent's task breakdown. Requirements input: `documentation/specs/phase-2-edit-on-canvas.md`
+Architect, 2026-11-11, branch `feat/phase-2`. Status: **revised after review** (second architect: APPROVE
+WITH FIXES; every should-fix, nit and FYI answered in place, product decisions on coalescing, single-slot
+Ctrl/⌘+Z and Clear folded in), ready for the main agent's task breakdown. Requirements input: `documentation/specs/phase-2-edit-on-canvas.md`
 ("PS" below, with its section and rule numbers: E1 to E12, 08-1 to 08-6, 09-1 to 09-7, 10-1 to 10-6, 11-1 to
 11-5, 19-1 to 19-7, Q5). Owner decisions: `docs/BRIEF.md` "Owner decisions (2026-11-11, Phase 2)". Until the
 `docs/SPEC.md` update in §15 lands, `docs/SPEC.md` stays the authority; where this design changes it, §15
@@ -21,9 +22,9 @@ nothing here edits those files, and the one check-engine change (§4.7, `tweak-b
 | AD-1 | **One write route**, `POST /designs/:slug/edits`, with an `op` union (`text`, `tokens`, `reorder`, `duplicate`, `trash-screen`, `keep-direction`), and one pipeline in `src/service/edits/` that every hand edit runs through. Undo is `POST /designs/:slug/edits/:id/undo`. | One place enforces E3 to E10 for all four features; a route per feature would repeat the version, stale, echo, undo and ledger steps four times. |
 | AD-2 | **The service computes the bytes it writes.** The page sends what the user saw (the file's sha256, a locator, the text the editor started with, the new text); the service re-locates in the same bytes (equal hash, so the same answer), escapes, splices and re-verifies the result. The page runs the same pure locator only to fill the editor and the disabled reasons. | E2 holds (the source decides, never the DOM) and E6 is enforced at the write itself, so a page bug cannot inject markup. Sending offsets would make the page's arithmetic part of the trust boundary. |
 | AD-3 | **Serialization reuses what exists.** Every hand edit runs inside the versions service's per-slug chain (`chained` in `src/service/versions.ts`), extended with `userEdit`; screen-list writes also take the store's per-slug lock (`withLock` in `src/service/store.ts`). Against the agent (who takes no lock) every write is a compare-and-swap at the rename: `replaceFileIfHashUnchanged`, the bytes generalisation of `replaceFileIfUnchanged` (`src/service/paths.ts:254`). | No new lock system. Snapshots, restores and hand edits of one design already serialize on that chain; the CAS primitive is the one the design.json two-writer merge already trusts. |
-| AD-4 | **Version coalescing:** the "Before your edit" snapshot is skipped when the design's tracked tree is exactly the tree this service's previous hand edit left, and that edit was less than `USER_EDIT_COALESCE_MS` (60 s) ago. Otherwise a snapshot is taken (and the existing tree-hash dedupe still applies). | A burst of ten text fixes costs one "Before your edit" version plus the quiet-period auto version after it, instead of ten; nothing from before the burst is ever missing from Versions. |
+| AD-4 | **Version coalescing** (product decision, PS E3 resolved): the "Before your edits" snapshot is skipped when the design's tracked tree is exactly the tree this service's previous hand edit left (computed from what that edit wrote, never re-read from disk, §2.4), and that edit was less than `USER_EDIT_COALESCE_MS` (60 s) ago. Otherwise a snapshot is taken (and the existing tree-hash dedupe still applies). One burst of hand edits shares one version holding the pre-burst state; the states inside the burst are reached by Undo, not as Versions entries. | A burst of ten text fixes costs one "Before your edits" version plus the quiet-period auto version after it, instead of ten; nothing from before the burst, and nothing any other writer left, is ever missing from Versions. |
 | AD-5 | **Undo is a recorded reverse operation**, not a version restore: splices with the removed bytes, the previous `screens` value, and file moves, each guarded by the sha256 of what this edit left. Kept in `.chamber/edits.json`, so it survives a service restart. | Exact bytes (E9), no restore-point noise in Versions, works with coalescing (the state between two coalesced edits is in no version). |
-| AD-6 | **The service announces its own writes** with `origin: "user"` on the change event, and the watcher drops the echo of a file whose bytes still equal what the service wrote in the last 5 s (`self-writes.ts`). | E10 without a time-only heuristic: the restore quiet window (`RESTORE_QUIET_MS`) would also hide an agent write that lands inside it; a hash compare cannot. |
+| AD-6 | **The service announces its own writes** with `origin: "user"` on the change event (carried through `ChangeHub.emit`, `src/service/changes.ts`), and the watcher drops the echo of a file whose current bytes equal the last bytes the service itself wrote there (`self-writes.ts`; no time limit, the entry lives until the watcher sees other bytes). | E10 without a time-only heuristic: the restore quiet window (`RESTORE_QUIET_MS`) would also hide an agent write that lands inside it, and any TTL is beaten by Windows' doubled rename events and the slow poll backstop; a hash compare is neither. |
 | AD-7 | **Hand-edit ledger** = structured entries in `.chamber/edits.json`, rendered to text only when `POST /designs/:slug/prompt` builds a message; the guest clears entries up to `upTo` once the message reached the chat. | Stored free text would let anything that writes the design folder inject lines into the user's prompt; structured, validated fields cannot. |
 | AD-8 | **Stale tokens:** text and tokens use the sha256 of the bytes the page read (`GET /source`, `GET /tokens`); screen actions use `screensStamp` = sha256 of the raw `screens` value in design.json, plus each touched screen file's size and mtime from the detail the wall shows. | "The agent changed design.json" is read as "changed the screen list": a comment the user added, the title or `updated` must not refuse a reorder. File stamps match what the wall renders (render keys are built from size and mtime too). |
 | AD-9 | **Tweak preview** is a new page-to-frame message `set-tokens`, applied by the bridge as inline custom properties on `<html>`; the same values ride in `window.__DC` for frames that load later. | No reload (09-4), unloaded artboards (§8.4 budget) come back with the preview, and nothing new can flow from the frame. |
@@ -54,6 +55,17 @@ nothing here edits those files, and the one check-engine change (§4.7, `tweak-b
 | The kit has no slider; Edit/Play uses `mountTabs`; `confirmDialog` has one confirm and Cancel; the icon set has `pencil`, `comment`, `chat`, `plus`, `more`, `copy`, `trash`, `layers`, `check`, `reset`, `chevron`, no sliders glyph. | `node_modules/@openchamber/sdk/dist/ui/`; `src/ui/wall/design-view.ts:192`; `src/ui/components/kit.ts:348`; `src/ui/components/icons.ts` |
 | Transient notices have ids `export` and `restore` only. | `src/ui/components/notices.ts:10` |
 | Check `params.field` accepts `--accent-h` (`/^[A-Za-z0-9_.[\]-]{1,80}$/`). | `src/shared/checks.ts:193` |
+| `ChangeHub.emit` takes only `{ slug, kind, files? }` and rebuilds the event, so any other field is dropped today. | `src/service/changes.ts:39-41`; interface `src/service/context.ts:125` |
+| `resolveInside` answers the **realpath** of the target (deepest existing ancestor), so an `lstat` on its answer never sees a link. | `src/service/paths.ts:90-133` |
+| The design.json mirror gives up after `MIRROR_ATTEMPTS` (5) lost races with only `log.warn('store.design-json-busy')` and returns normally. | `src/service/store.ts:75`, `:274-304` |
+| `snapshotNow({ required: true })` throws `ApiError('invalid')` worded for restore when over the caps, `ApiError('invalid', UNSUPPORTED)` for a newer build's index, and `ApiError('conflict')` when the snapshot stays torn after two attempts. | `src/service/versions.ts:147`, `:473-477`, `:520-559` |
+| `computeTree` hashes design.json as `serializeJson(stripForVersion(parsed))` (verbatim when unparseable); `treeOf` caches on a size+mtime fingerprint and otherwise re-hashes every tracked file. | `src/service/versions.ts:119-139`, `:491-505` |
+| The live mini-frame thumbnail uses `sandbox: ''`: no script runs in it at all. | `src/ui/components/thumb.ts:94-95` |
+| The router caps a request at `SERVICE_REQUEST_BODY_MAX_BYTES` (80 000 UTF-8 bytes); uploads split so each chunk is ≤ 60 000 JSON-escaped chars and ≤ 75 000 bytes. | `src/shared/limits.ts:91-93`, `:107-111`; `src/guest/service-client.ts:145-178` |
+| The owned-field lists agents read omit `tweaks`: the chip step 7, the guide's design.json paragraph, the bundled skill's workflow line. | `src/shared/agent/chip.ts:118`; `src/shared/agent/guide.ts:158-159`; `src/shared/agent/skill-doc.ts:35` |
+| The guide at `<root>/AGENTS.md` is rewritten whenever its expected text changes and the file on disk is still ours and unedited (`outdated` → replace); no version marker is involved. `buildSkillDoc` (`guide.ts:212-245`) only classifies an old installed skill copy for removal. | `src/service/agent-setup.ts:304-336`, `:374-400`; `src/shared/agent/ownership.ts:16` |
+| `DrawerKind` is `'comments' \| 'versions'` in the view context. | `src/ui/wall/view-context.ts:24` |
+| `test/shared/api.test.ts` asserts 44 routes. | `test/shared/api.test.ts:8` |
 
 ---
 
@@ -74,14 +86,23 @@ because `.chamber/**` is excluded by `isTracked` and the export, §6.1, §6.4). 
 }
 ```
 
-- Written with `writeFileAtomic(resolveInside(dir, ['.chamber', 'edits.json']), …, { createDirs: false })`
-  after the same `.chamber` folder check `store.writeState` does (a non-recursive `mkdir`, so a deleted
-  design is never re-created). `.chamber` must be a real folder (`lstat`, not a link), as `check/output.ts`
-  requires for `check.json`.
-- Read: `lstat` regular file, ≤ `EDITS_FILE_MAX_BYTES` (256 KiB), JSON, then `parseEditsFile` (pure, in
+- Path: `resolvePlainTarget(dir, ['.chamber', 'edits.json'], { allowAbsent: true })` (§2.3; refuses a
+  `.chamber` folder or an `edits.json` that is a link, judged on the lexical path), then
+  `writeFileAtomic(…, { createDirs: false })` after the same `.chamber` folder check `store.writeState` does
+  (a non-recursive `mkdir`, so a deleted design is never re-created).
+- Read: regular file, ≤ `EDITS_FILE_MAX_BYTES` (256 KiB), JSON, then `parseEditsFile` (pure, in
   `src/service/edits/file.ts`) keeps only entries that validate (below); anything else reads as an empty
-  file (`log.warn('edits.file-unreadable', { slug })`, never the content). The next write replaces it.
-- Written only inside the design's versions chain (§2.4), so there is one writer per design.
+  file (`log.warn('edits.file-unreadable', { slug })`, never the content). The next write replaces it. A
+  link answers as an empty file and every write refuses (logged `edits.file-link`).
+- **One writer per design: the edits-file queue.** `createEditsFile({ log, now })` in
+  `src/service/edits/file.ts` exposes `read(slug, dir)` (no queue: the file is replaced atomically, a read
+  sees a whole old or new file) and `update(slug, dir, mutate: (file: EditsFile) => EditsFile)`, a per-slug
+  promise chain (the `chained` pattern of `src/service/versions.ts:481-490`, its own map). **Every
+  read-modify-write of edits.json goes through `update`**, which re-reads the file inside the queue, so no
+  caller ever writes a copy it read earlier: the pipeline's append of an UndoRecord and HandEdit (inside
+  `userEdit`'s apply), undo's removal of its record and ledger entry, the expiry prune, and
+  `POST /hand-edits/clear`. Lock order is always versions chain → edits queue, never the reverse (the clear
+  route takes only the queue), so the two cannot deadlock, and a clear never waits behind a snapshot.
 
 `HandEdit` (types.ts, §8.1), structured so the prompt text is built from validated fields at prompt time:
 
@@ -121,10 +142,10 @@ Field rules (`parseHandEdit`): titles, labels and names one line, ≤ `HAND_EDIT
 fits). `to` paths of `move` steps are root-relative only for the trash (`.trash/…`), design-relative
 otherwise; `parseEditsFile` accepts only these shapes: design-relative `index.html`, `tokens.css`,
 `screens/<id>.html`; root-relative `.trash/<slug>.<screenId>-<yyyymmddhhmmss>[-n].html` whose `<slug>` is this
-design's own slug. Every path is resolved with `resolveInside` again at undo time.
+design's own slug. Every path is resolved with `resolvePlainTarget` (§2.3) again at undo time.
 
-**Version reasons** (types.ts): `'user-edit'` (label "Before your edit") and `'keep-direction'` ("Before
-keeping a direction"). No `label` field is used for them; `reasonLabel` maps them. Old designs have neither;
+**Version reasons** (types.ts): `'user-edit'` (label "Before your edits", plural: one version per burst,
+AD-4) and `'keep-direction'` ("Before keeping a direction"). No `label` field is used for them; `reasonLabel` maps them. Old designs have neither;
 an older build lists them with the raw reason text (cosmetic, §14).
 
 **No other new files.** The coalescing state and the self-write registry are memory only (§2.4, §2.6).
@@ -144,10 +165,12 @@ an edit is refused). No route takes a path: targets are named by screen id, op n
 | `POST /designs/:slug/edits` | `EditRequest` (§10.2): one op | `EditResponse { edit: { id, label, files, undoable }, version: VersionSummary \| null, coalesced: boolean, stamps: { file?, tokens?, screens? }, created?: { id, title } }` | 400 malformed op · 404 gone · 409 `stale` (per-op sentence, §2.8) · 409 `conflict` (Windows lock) · 413 `too-large` · 422 `invalid` (cannot place, not UTF-8, version first failed, design.json unreadable) · 500 `internal` (disk, `folderErrorSentence`) |
 | `POST /designs/:slug/edits/:id/undo` | `{}` (anything else 400) | `UndoEditResponse { files, stamps, version }` | `:id` must match `EDIT_ID_PATTERN` (400); unknown or expired → 404 "This edit can't be undone any more."; stale → 409 with the E9 sentence |
 | `GET /designs/:slug/tokens` | — | `TokensResponse` (§4.2) | read only |
-| `POST /designs/:slug/hand-edits/clear` | `{ upTo: number }` (positive integer ≤ current `seq`) | `{ ok: true }` | removes ledger entries with `seq ≤ upTo`; idempotent |
+| `POST /designs/:slug/hand-edits/clear` | `{ upTo: number }` (positive integer ≤ current `seq`) | `{ ok: true }` | removes ledger entries with `seq ≤ upTo` through `editsFile.update` (§2.1); idempotent |
 
-`GET /designs/:slug/source` gains `sha256` (of the raw bytes) and `utf8` (`Buffer.from(text, 'utf8')` equals
-the bytes); existing callers ignore both. `GET /designs/:slug` gains `screensStamp: string | null` and
+`GET /designs/:slug/source` gains `sha256` (of the raw bytes), `utf8` (`Buffer.from(text, 'utf8')` equals
+the bytes) and `link` (`isPlainTarget(designDir, segments)` from §2.3 is false: the file or a folder on its
+way is a link, so the page disables **Edit text** before the user types, §3.3); existing callers ignore all
+three. `GET /designs/:slug` gains `screensStamp: string | null` and
 `designJson: 'ok' | 'missing' | 'invalid'` (§5.2).
 
 ### 2.3 Writable set (07-7) and containment (E7)
@@ -164,11 +187,35 @@ refuses anything else:
 | `trash-screen` | `design.json` | `screens/<id>.html` |
 | `keep-direction` | `screens/<of>.html` (by rename), `design.json`, comments in state.json | the group's other screen files |
 
-Each path is split on `/` and resolved with `resolveInside(record.path, segments)` (§9.1; symlinks and
-junctions leading out are refused there). The target is then `lstat`ed: it must be a regular file (or
-absent, for a create or a move destination); a symlink is refused with "This file is a link, so Design
-Chamber can't edit it here. Ask the agent instead." even when it points inside the design, because a rename
-would replace the link, not its target. The trash folder is `resolveInside(settings.root(), ['.trash'])`,
+Each path is split on `/` and resolved with **`resolvePlainTarget(base, segments, { allowAbsent })`**, new
+in `src/service/paths.ts` beside `resolveInside` (over the same `ContainmentDeps` plus an optional `lstat`
+dep, so it is tested with fake `realpath`/`lstat` and both path flavours; the comparison is the existing
+`samePath`, `src/service/paths.ts:53`, with the same case rule `resolveInside` uses):
+
+```
+resolvePlainTarget(base, segments, { allowAbsent }):
+  real    = resolveInside(base, segments)            // containment; answers the realpath (§1), links out refused
+  lexical = path.resolve(base, ...segments)          // what the name says, no link followed
+  if !samePath(real, lexical, p, platform)           // case rule of foldsCase, as resolveInside
+      → throw ApiError('invalid', LINK_SENTENCE)      // the leaf or any folder on the way is a link or junction
+  info = lstat(lexical)                              // ENOENT → allowed only when allowAbsent (a create, a move destination)
+  if info exists and !info.isFile() → throw ApiError('invalid', LINK_SENTENCE)   // a folder, FIFO or device is not editable
+  return lexical
+isPlainTarget(base, segments) = resolvePlainTarget(…) succeeded, as a boolean (for GET /source's `link`)
+```
+
+`LINK_SENTENCE` = "This file is a link, so Design Chamber can't edit it here. Ask the agent instead." The
+comparison is what catches a link **inside** the design (`screens/home.html → ../index.html`, or a `screens`
+folder that is a link): `resolveInside` alone accepts those, because their realpath stays inside, and an
+`lstat` of its answer would see the link's target, a regular file. A link is refused even when it points
+inside the design, because a rename would replace the link, not its target. `base` is the design's
+`record.path` (already a realpath, so a design folder reached through the root's own realpath compares
+equal). The same function guards `.chamber/`, `edits.json` (§2.1) and `page-state.json` (§8.1). Tests
+(`test/service/core/paths.test.ts`, failing first): a leaf link inside the design → refused; a link parent
+folder inside the design → refused; a link out → refused by `resolveInside`; a regular file → its lexical
+path; an absent leaf with and without `allowAbsent`; win32 flavour with a realpath differing only in case →
+accepted, differing by a junction → refused; a directory at the leaf → refused. The trash folder is
+`resolveInside(settings.root(), ['.trash'])`,
 created with `mkdir` (recursive) only there, as `store.trash` does. `assets/**`, `DESIGN.md`, `.chamber/**`
 (except the service's own files), `.versions/**` and anything outside the design are unreachable because no
 op names them.
@@ -177,7 +224,32 @@ op names them.
 
 `createEditService({ store, versions, hub, selfWrites, settings, log, now })` in
 `src/service/edits/pipeline.ts`, reached through `ensureEditService(ctx)` (the WeakMap pattern of
-`ensureVersionsService`, `src/service/versions.ts:812-819`). One call:
+`ensureVersionsService`, `src/service/versions.ts:812-819`). It takes `ops?: OpModules` (default: the real
+map below), so the pipeline is tested with a fake op before any real op exists.
+
+**Op modules (one interface, one file per feature).** The pipeline dispatches on `request.op` through a fixed
+map built in `pipeline.ts`: `text → ops-text.ts`, `tokens → ops-tokens.ts`, `reorder | duplicate |
+trash-screen | keep-direction → ops-screens.ts`. Each module exports one `OpModule` (types in
+`src/service/edits/op-module.ts`, new, created with the pipeline):
+
+```ts
+type OpInput<R> = { slug: string; record: DesignRecord; dir: string; request: R; store: DesignStore;
+                    trashDir: () => Promise<string>; now: () => Date };
+type PlannedStep =                                     // executed by the pipeline, never by the module
+  | { kind: 'write';   rel: string; expectSha: string; bytes: Uint8Array; undo: UndoStep }
+  | { kind: 'create';  rel: string; bytes: Uint8Array; undo: UndoStep }
+  | { kind: 'move';    from: Place; to: Place; expect: { sha: string } | FileStamp; undo: UndoStep }  // Place = design-relative or `.trash/…`
+  | { kind: 'screens'; expectStamp: string; mutate: (raw: JsonValue | undefined) => JsonValue[]; undo: (afterStamp: string) => UndoStep }
+  | { kind: 'comments'; moves: { from: string; to: string }[]; undo: (moved: { id: string; from: string; to: string }[]) => UndoStep };
+type HandEditBody = DistributiveOmit<HandEdit, keyof HandEditBase>;   // the pipeline adds seq, at, editId
+type OpPlan = { label: string; detail?: string; steps: PlannedStep[]; ledger: HandEditBody; created?: { id: string; title: string } };
+type OpModule<R extends EditRequest = EditRequest> = { plan(input: OpInput<R>): Promise<OpPlan> };  // reads, stale checks, verifies; writes nothing
+// ops-tokens.ts also exports readTokens(record, dir): Promise<TokensResponse> for GET /tokens.
+```
+
+T2b creates all three op files as **stubs** against this interface (`plan` and `readTokens` throw
+`ApiError('internal', 'This part of Design Chamber (edits) is not built yet.')`), already wired in the map and
+in `GET /tokens`; T3, T4 and T5 each replace only their own file (§16), so no two tasks edit the dispatch.
 
 ```
 apply(slug, request):
@@ -185,27 +257,31 @@ apply(slug, request):
   record = store.get(slug)                           → 404 gone
   return versions.userEdit(slug, reasonOf(op), {     // per-slug chain (AD-3)
     precheck: async () => {                          // before any version is taken
-      read current bytes of each target (lstat regular, ≤ caps)   → 413 / 422 / symlink sentence
-      stale check against the request's stamps                     → 409 stale, nothing written, no version
-      plan = opModule.plan(current, request)                        → 422 when it cannot place the edit
-      verify(plan)  (re-scan the result, §3.4)                      → 422, nothing written
+      plan = ops[request.op].plan({ … })              // reads every target through resolvePlainTarget (≤ caps),
+                                                     // stale check against the request's stamps, plans, verifies (§3.4)
+                                                     // → 413 / 422 / link sentence / 409 stale; nothing written, no version
       return plan
     },
-    apply: async (plan) => {                         // after the version
-      for each step: selfWrites.record(slug, rel, newSha | null)   (before the rename; dropped again if the step fails)
-                     write (CAS per file against the hash read in precheck, §2.5)
+    apply: async (plan, preTree) => {                // after the version; preTree = the tree userEdit read (below)
+      written = []                                   // [rel, bytes | null] for every tracked file this edit left
+      for each step in order:
+        selfWrites.record(slug, rel, sha256(bytes) | null) right before its rename (§2.6; writeScreens and
+          moveComments call the pipeline's beforeRename hook for design.json, §5.1)
+        execute (CAS per file against the hash read in precheck, §2.5; moves and creates by moveNoReplace, §2.5)
+        push [rel, bytes | null] to written
       on a failure, roll back the steps done (§2.9)
-      hub.emit({ slug, kind: 'files', files, origin: 'user' })  and/or  { kind: 'design', origin: 'user' }
-      edits file: append UndoRecord and HandEdit (ledger), prune by count and age
+      hub.emit({ slug, kind: 'files', files, origin: 'user' })  and/or  hub.emit({ slug, kind: 'design', origin: 'user' })
+      editsFile.update(slug, dir, f => appendUndoAndLedger(f, record, entry), prune by count and age)   // §2.1 queue
         (a failure here is logged; the edit stands and the answer says undoable: false, so the notice has no Undo)
-      return EditResponse
+      return { response: EditResponse, written }
     },
   })
 ```
 
 Undo (`undo(slug, id)`) runs through the same `userEdit` with reason `user-edit` (so it is coalesced or versioned
-like any hand edit): precheck = the record's guards (hashes, stamps, absent destinations), apply = the reverse
-steps, then the record is removed and the ledger updated (§7.1).
+like any hand edit): precheck = read the record (`editsFile.read`) and check its guards (hashes, stamps, absent
+destinations), apply = the reverse steps, then `editsFile.update` removes the record and updates the ledger
+(§7.1). A second undo of the same id, queued behind the first in the chain, finds no record → 404.
 
 `versions.userEdit(slug, reason, { precheck, apply })` is the one new method on `VersionsService`
 (`src/service/versions.ts`), running inside `chained(slug, …)`:
@@ -213,25 +289,49 @@ steps, then the record is removed and the ledger updated (§7.1).
 ```
 userEdit(slug, reason, { precheck, apply }):
   plan = precheck()                                           // throws: nothing written, no version
-  tree = treeOf(slug, dir)
+  tree = treeOf(slug, dir)                                    // preTree: the tree this edit starts from
   last = coalesce.get(slug)                                   // memory: { afterTree, at }
   if reason == 'user-edit' and last and now - last.at ≤ USER_EDIT_COALESCE_MS and last.afterTree == tree.treeHash:
       version = null; coalesced = true                        // AD-4
   else:
-      version = snapshotNow(slug, reason, { required: true }) ?? newest entry   // null = deduped: newest holds these files
-      on throw: rethrow as 422 "Couldn't save a version first, so nothing was changed. <reason sentence>" (§2.8)
-  result = apply(plan)                                        // a CAS loss here throws stale: the version stays (it holds the current files, harmless)
-  treeCache.delete(slug); coalesce.set(slug, { afterTree: treeOf(slug, dir).treeHash, at: now })
-  return { version, coalesced, result }
+      try version = snapshotNow(slug, reason, { required: true }) ?? newest entry   // null = deduped: newest holds these files
+      catch SnapshotRefusedError e → map e.refusal to its §2.8 row (422, or 409 stale for 'torn'); nothing written
+      (any other error propagates: 500 with the folder sentence)
+  { response, written } = apply(plan, tree)                   // a CAS loss here throws stale: the version stays (it holds the current files, harmless)
+  treeCache.delete(slug)
+  if reason == 'user-edit':
+      coalesce.set(slug, { afterTree: treeHashOf(swap(tree.files, written)), at: now })
+  else coalesce.delete(slug)                                  // keep-direction: the next hand edit takes its own version
+  return { version, coalesced, response }
+
+swap(files, written):  copy of files; for each [rel, bytes] in written with isTracked(rel):
+  bytes == null → delete rel; else files[rel] = trackedHashOf(rel, bytes)
 ```
 
-- `keep-direction` never coalesces (its own reason, always a version or the dedupe).
+- **`afterTree` is never re-read from disk.** It is the pre-apply tree with only the hashes of what this edit
+  wrote swapped in, so an agent write that lands between the apply and the next edit (to any file, target or
+  not) makes the next edit's tree differ from `afterTree`, and that edit takes its own "Before your edits"
+  version, which holds the agent's state. Two pure helpers are exported from `src/service/versions.ts` and
+  used by `computeTree` itself, so the formulas cannot drift: `trackedHashOf(rel, bytes)` (design.json through
+  `parseJsonObject` + `stripForVersion` + `serializeJson`, verbatim when unparseable; every other file its
+  sha256) and `treeHashOf(files)` (the `rel\0hash\n` lines in `computeTree`'s order). A write by another program
+  to a non-target file between `treeOf` and the apply is missing from `afterTree` too, so it also forces a
+  version (safe side).
+- **Typed snapshot refusals.** `snapshotNow` throws `SnapshotRefusedError extends ApiError` (exported from
+  `src/service/versions.ts`) with `refusal: 'too-large' | 'unsupported' | 'unreadable' | 'torn'`: `too-large`
+  at the caps (`:536-543`), `unsupported` from `readableIndex` (`:475`), `unreadable` for the index read and
+  link-out refusals taken before any object is written (`:527-529`), `torn` after the two attempts (`:559`).
+  Code and message stay exactly as today (`invalid` / `conflict` and the restore wording), so the restore
+  route and its tests are unchanged; only `userEdit` reads `refusal`.
+- `keep-direction` never coalesces (its own reason, always a version or the dedupe) and clears `coalesce`.
 - The quiet-period auto snapshot still runs after a hand edit (the user event schedules it,
   `src/service/versions.ts:710-722`), so Versions gets an "Auto-saved" state after the burst. The coalesce
   check compares trees, so the auto version does not break a burst.
 - A restore, an agent write or another program changes the tree, so the next hand edit takes a new
-  "Before your edit" version. Service restart forgets `coalesce`: the next edit takes a version (safe side).
-- **Pruning** (100 versions) needs no new rule: Undo does not use versions (AD-5), and a "Before your edit"
+  "Before your edits" version. Service restart forgets `coalesce`: the next edit takes a version (safe side).
+- Inside a burst, each edit still has its own undo record (§2.1, up to `USER_UNDO_KEEP`), so Undo steps back
+  through the burst; Versions holds the state before it (product decision, PS E3/E9).
+- **Pruning** (100 versions) needs no new rule: Undo does not use versions (AD-5), and a "Before your edits"
   version is pruned only after 100 newer versions, which coalescing makes impossible inside one notice's 10 s.
   The E9 refusal sentence points at Versions; if that version has since been pruned, Versions still holds
   every later state.
@@ -251,8 +351,25 @@ New in `src/service/paths.ts`, beside `replaceFileIfUnchanged`:
   was compared with, so the agent's write between the stamp check and the rename is caught; the remaining
   window is the synchronous compare-and-rename itself (same residual as the design.json merge, §14).
 
-Moves use `renameWithRetry` after an `lstat` that the source still has the recorded size and mtime (and,
-for undo, the recorded sha256) and the destination is absent; a destination that appeared is `stale`.
+**Creates and moves never overwrite: `moveNoReplace(from, to): Promise<'moved' | 'exists' | 'busy'>`**, new
+in `src/service/paths.ts`. A check-then-`rename` is not enough: `rename` replaces an existing destination on
+POSIX and through libuv on Windows, so a file that appears between the check and the rename would be lost.
+- First an `lstat` that the source still has the recorded size and mtime (and, for undo, the recorded
+  sha256); else `stale`.
+- Then `link(from, to)` (a hard link: atomic, fails with `EEXIST` when `to` exists → `'exists'`, answered as
+  `stale`), then `unlink(from)`. When the `unlink` fails (a Windows lock: EPERM/EBUSY/EACCES), the new link
+  is removed again (`unlink(to)`) and the answer is `'busy'` (the pipeline's retry, then the conflict
+  sentence); the file is never left at both names.
+- **Fallback** when the filesystem has no hard links (`link` answers `EPERM`, `ENOTSUP`, `ENOSYS` or
+  `EXDEV`, e.g. FAT/exFAT drives, some network shares, a trash on another volume): `lstat(to)` must be
+  ENOENT, then `renameWithRetry(from, to)` (which already rides out Windows locks). The residual race (a file appearing in that
+  microsecond window) is the same as today's design.json merge (§14).
+- A **create** (duplicate) writes a dot-first temp in the destination folder and publishes it with
+  `moveNoReplace(temp, dest)`; `'exists'` removes the temp and answers stale.
+- Hard links keep the inode, so the moved file keeps its mtime and the wall's file stamps match what it
+  rendered. Tests in `test/service/core/paths.test.ts`: destination appears before the call → `exists`,
+  nothing overwritten; source locked for unlink (fake `unlink`) → `busy` with only the source left; `link`
+  answering `ENOTSUP` → fallback path.
 
 Two hand edits at once (rail and page, or two quick clicks): both enter the per-slug chain; the second sees
 the first's result, its stamp no longer matches, and it is refused as stale (or, for the same window, it
@@ -260,17 +377,34 @@ carries the stamp the first answer returned, §2.10). Never a mixed file.
 
 ### 2.6 Telling the user's writes from the agent's (E10)
 
-New `src/service/self-writes.ts`, `createSelfWrites({ now })`:
-- `record(slug, rel, sha256 | null)`: remembers that the service just left `rel` with these bytes (`null` =
-  removed or moved away), for `SELF_WRITE_ECHO_MS` (5 s); at most 256 entries, oldest dropped.
-- `isEcho(slug, rel, dir): Promise<boolean>`: true when an unexpired entry exists and the file's current bytes
-  hash to it (or it is absent for `null`); the entry is consumed. Files over `SOURCE_TEXT_MAX` bytes are
-  never recorded (no edit writes them).
+New `src/service/self-writes.ts`, `createSelfWrites()` (no clock: nothing expires by time):
+- `record(slug, rel, sha256 | null, size | null)`: remembers the **last** bytes the service itself left at
+  `rel` (`null` = removed or moved away); one entry per `(slug, rel)`, a later record replaces it; at most
+  `SELF_WRITES_MAX` (1 024) entries, least recently recorded dropped first. Files over `SOURCE_TEXT_MAX`
+  bytes are never recorded (no edit writes them).
+- `isEcho(slug, rel, dir): Promise<boolean>`: true when an entry exists and the file **now** matches it:
+  absent for `null`; for a hash, first the size from `stat` (a different size is not an echo, no read), then
+  the sha256 of the current bytes. The entry is **not consumed** and has **no time limit**, so Windows
+  reporting one rename as two events in separate debounce flushes, and the OneDrive/network poll backstop
+  seeing the change ~30 s later, both still read as the echo.
+- `forget(slug, rel)`: called by the watcher when `isEcho` answered false for that file: the file has moved
+  past the service's write, so a later write by anyone that happens to restore the user's bytes is shown
+  (without this, agent writes B, then A again, the second would be hidden and the wall would keep B).
+- `forgetDesign(slug)` on `removed`, and `clear()` on a root change.
 
-`src/service/watch.ts` `flushSlug` (`:317-344`) filters its batch through `selfWrites.isEcho` before
-emitting: a `design.json` that is an echo emits no `design` event; listed files that are echoes are dropped
-from the `files` event (no event when none remain). The pipeline emits the user's own events directly after
-the write (no 250 ms debounce, so E8's 2 s holds with room), with `origin: "user"`.
+`src/service/watch.ts` `flushSlug` (`:317-344`) filters its batch (the listed files plus the fingerprint
+additions) through `selfWrites.isEcho` before emitting: a `design.json` that is an echo emits no `design`
+event; listed files that are echoes are dropped from the `files` event (no event when none remain). An agent
+writing exactly the bytes the user's edit left changes nothing on screen, so hiding that event loses nothing.
+The pipeline emits the user's own events directly after the write (no 250 ms debounce, so E8's 2 s holds with
+room), with `origin: "user"`.
+
+**`origin` through the hub (WP0).** `ChangeHub.emit` gains `origin?: 'user'` in its input
+(`src/service/context.ts:125`), and `createChangeHub` copies it into the event it builds
+(`src/service/changes.ts:39-41`, `...(input.origin ? { origin: input.origin } : {})`), so the ring, every
+in-process listener and `GET /changes` carry it. Tests: `test/service/core/changes.test.ts` (an emitted
+`origin: 'user'` is in `waitFor`'s events and in a subscriber's event; an event without it has no `origin`
+key), `test/service/core/routes.test.ts` (`GET /changes` answers the field).
 
 Consumers of `origin`:
 - `src/guest/build-activity.ts` `batchAgentFiles` ignores events with `origin: "user"` (no "Writing …", not
@@ -280,7 +414,7 @@ Consumers of `origin`:
   (they must: the files changed).
 - The store's design.json reconcile subscriber runs on the user `design` event and finds nothing to merge.
 
-`ServiceContext` gains `selfWrites` (WP0, §8.6) because the watcher (built in `compose.ts`) and the edit
+`ServiceContext` gains `selfWrites` (WP0, §10.6) because the watcher (built in `compose.ts`) and the edit
 service (built through `ensureEditService`) must share one registry.
 
 ### 2.7 Frontend (shared by 08 to 11)
@@ -294,9 +428,16 @@ service (built through `ensureEditService`) must share one registry.
   existing restore notice pattern (`components/restore-flow.ts`): title (the edit's `label`), optional
   second line, **Undo** (outline xs). Undo loading → "Undone" (5 s, no undo of the undo) or the refusal
   sentence as an error notice with no retry (the refusal is final) until dismissed.
-- **Ctrl/⌘+Z**: `wallKeyAction` (`src/ui/model/wall-input.ts`) gains `undo-edit` for `z` with Ctrl or Meta,
-  without Shift, when focus is not in an input, textarea or contenteditable; the view undoes the latest edit
-  id this view mount made and has not undone. Nothing happens when there is none (no beep, no notice).
+- **Ctrl/⌘+Z, one slot** (product decision, PS E9): `wallKeyAction` (`src/ui/model/wall-input.ts`) gains
+  `undo-edit` for `z` with Ctrl or Meta, without Shift, when focus is not in an input, textarea or
+  contenteditable. The view keeps a single **undo slot**, `editId | null`, through a pure reducer
+  `nextUndoSlot(slot, event)` in the same file: a successful hand edit made by this view mount sets it to that
+  edit's id (replacing the previous one); `undo-edit` with a slot sends that undo and empties the slot
+  whatever the answer; Undo pressed on that edit's notice empties it too; an edit made on the other surface
+  never sets it. With an empty slot, Ctrl/⌘+Z does nothing (no beep, no notice) until a new edit is made: it
+  never reaches further back. Model test in `test/ui/wall-input-model.test.ts`: edit → slot set; Ctrl+Z →
+  undo sent, slot empty; Ctrl+Z again → no action; two edits then Ctrl+Z twice → only the second is undone;
+  notice Undo then Ctrl+Z → no action; a refused undo still empties the slot.
 - **Agent-working hint (E11)**: one muted line "The agent is working on this design. It may write over your
   edit." shown in the text editor, the Tweaks panel footer and at the top of the screen label menu while the
   build strip's phase (from `watchBuildActivity`) is `working`, `writing` or `retrying`. Colour
@@ -313,11 +454,13 @@ service (built through `ensureEditService`) must share one registry.
 | Screen list changed | 409 `stale` | The screen list changed while you were working. Nothing was changed. | n/a | the wall refreshes; act again |
 | tokens.css changed | 409 `stale` | tokens.css changed since you started. Your values are still shown. | yes | **Apply to the new file** / **Discard my tweaks** |
 | A tweak definition changed | 409 `stale` | The tweaks in design.json changed while you were working. Nothing was saved. | yes | panel reloads its knobs, values kept where the knob still exists |
-| Undo after a later change | 409 `stale` | This file changed after your edit, so it can't be undone here. Restore the version 'Before your edit' from Versions. | n/a | Versions drawer |
+| Undo after a later change | 409 `stale` | This file changed after your edit, so it can't be undone here. Restore the version 'Before your edits' from Versions. | n/a | Versions drawer |
 | Undo record gone (30 min, pruned, file damaged) | 404 | This edit can't be undone any more. | n/a | Versions drawer |
-| Version first failed: over the snapshot caps | 422 | Couldn't save a version first, so nothing was changed. This design is too large to keep a version (more than 1,000 files or 100 MB). | yes | remove files, or ask the agent |
-| Version first failed: newer build's history | 422 | Couldn't save a version first, so nothing was changed. This design's versions were saved by a newer Design Chamber. | yes | update the extension |
-| Version first failed: history unreadable | 422 | Couldn't save a version first, so nothing was changed. Design Chamber could not read this design's version history right now. | yes | try again |
+| Version first failed: over the snapshot caps (`refusal: 'too-large'`) | 422 | Couldn't save a version first, so nothing was changed. This design is too large to keep a version (more than 1,000 files or 100 MB). | yes | remove files, or ask the agent |
+| Version first failed: newer build's history (`'unsupported'`) | 422 | Couldn't save a version first, so nothing was changed. This design's versions were saved by a newer Design Chamber. | yes | update the extension |
+| Version first failed: history unreadable (`'unreadable'`) | 422 | Couldn't save a version first, so nothing was changed. Design Chamber could not read this design's version history right now. | yes | try again |
+| Version first failed: the design kept changing while it was saved (`'torn'`, the agent is writing) | 409 `stale` | the op's own stale sentence from the rows above (text: "This file changed while you were editing. Nothing was saved."; screens, tokens, tweaks likewise) | yes | the same way back as that stale row |
+| design.json kept changing or stayed locked through `writeScreens`' 5 attempts | 409 `conflict` | Another program is using this file. Close it and try again. | n/a | retry; a multi-step op is rolled back first (§2.9) |
 | File over `SOURCE_TEXT_MAX` (2 000 000 chars) | 413 | This file is too large to edit here. Ask the agent instead. | yes | **Ask agent** |
 | Element text over `TEXT_EDIT_MAX` (5 000) | 413 | That's too long to edit here. Ask the agent instead. | yes | **Ask agent** |
 | Not valid UTF-8 | 422 | This file isn't plain UTF-8 text, so it can't be edited here. Ask the agent instead. | yes | **Ask agent** |
@@ -327,8 +470,8 @@ service (built through `ensureEditService`) must share one registry.
 | No design.json yet (provisional) | 422 | This design has no design.json yet, so its screens can't be changed here. | n/a | wait for the agent |
 | Windows lock after retries | 409 `conflict` | Another program is using this file. Close it and try again. | yes | close the program, retry |
 | Disk full, permission, read-only | 500 | the `folderErrorSentence` for the code (`src/service/root.ts`) | yes | free space / fix permissions |
-| Multi-step op failed half way and rolled back | 500 | Something went wrong, so nothing was changed. | n/a | try again |
-| Multi-step op failed and the rollback failed too | 500 | Something went wrong part way. The version '<Before your edit \| Before keeping a direction>' holds everything as it was; restore it from Versions. | n/a | Versions drawer |
+| Multi-step op failed half way and rolled back | 500 (or the step's own 409) | Something went wrong, so nothing was changed. (When the failing step was a 409 `stale` or `conflict`, its own sentence instead, since nothing changed.) | n/a | try again |
+| Multi-step op failed and the rollback failed too | 500 | Something went wrong part way. The version '<Before your edits \| Before keeping a direction>' holds everything as it was; restore it from Versions. | n/a | Versions drawer |
 | Service not reachable / host timeout | (host) | Couldn't save your change. <message> Your text is still here. | yes | retry |
 
 Every 409/413/422 is answered before any byte of a design file is written (the version may already exist,
@@ -342,7 +485,8 @@ knob values or comment bodies.
    absent, trash names free, design.json parses and the stamp matches);
 2. applies the steps in a fixed order, recording each done step in memory;
 3. on a failure, undoes the done steps in reverse (each a rename or the previous `screens` value), then
-   answers "Something went wrong, so nothing was changed.";
+   answers "Something went wrong, so nothing was changed." (or the failing step's own sentence when it was a
+   409 `stale`/`conflict`, such as `writeScreens` giving up after its 5th attempt, §5.1);
 4. if a rollback step fails too, it stops, logs `edits.rollback-failed` (slug, op, step kind), and answers
    the "Something went wrong part way" sentence. The version taken first holds the whole prior state.
 
@@ -443,15 +587,26 @@ tokenizer in the style of `bundle.ts`:
   (pops to it). It does **not** implement the HTML insertion modes; instead, an element is a candidate only
   when its end tag is explicit and matches (implied end tags, such as `<li>One<li>Two`, make it uneditable
   with the "can't find this text exactly" reason).
+- **Self-closing:** a `/>` closes the element only inside `svg` or `math` (foreign content) or on a void
+  element; on any other HTML element (`<div/>`, `<p/>`) it is ignored, as browsers ignore it, so the element
+  stays open and, lacking a matching explicit end tag where the scanner expects one, is not a candidate.
+- **Comments:** a comment (or CDATA, processing instruction) inside an element's `inner` sets `hasComment`,
+  and `decodeText` never includes a comment's text. A comment changes the source text without changing the
+  DOM text, so such an element is reason `formatted` (it has something inside besides the words), never
+  `not-in-source`.
 - `decodeText(raw, from, to) → { text, map }`: decodes character references with the per-character raw offset
-  map. Decoded: `&#NN;`, `&#xHH;` (valid code points only; 0 and surrogates are U+FFFD, as browsers do) and
+  map. Decoded: `&#NN;`, `&#xHH;` (valid code points only; 0 and surrogates are U+FFFD, as browsers do; the
+  range `&#128;` to `&#159;` (`&#x80;` to `&#x9F;`), which browsers map to Windows-1252 characters, makes the
+  text **undecodable** rather than guessing the table) and
   the named set `amp lt gt quot apos nbsp copy reg trade hellip mdash ndash lsquo rsquo ldquo rdquo laquo
   raquo bull middot times divide deg plusmn euro pound yen cent sect para shy` (with `;`). An `&` followed by an
   ASCII letter or `#` that is not one of these, or a reference without its `;`, makes the text **undecodable**
   (the element is not a candidate); an `&` followed by anything else is a literal `&`.
 - `editorTextOf(decoded) → { text, map }`: runs of ASCII whitespace (`[\t\n\f\r ]+`) collapse to one space and
-  the ends are trimmed; U+00A0 and other Unicode spaces stay as they are, so a non-breaking space survives an
-  edit. `map` gives each editor character its decoded range.
+  the ends are trimmed of **ASCII whitespace only** (never `String.prototype.trim()`, which also strips U+00A0
+  and the other Unicode spaces); U+00A0 and other Unicode spaces stay as they are, so a non-breaking space
+  survives an edit. `map` gives each editor character its decoded range. `normalizeText` comparisons with the
+  DOM text (below) keep their existing behaviour; only the editor text and the splice use this rule.
 - `locateTextTarget(scan, target: EditTarget) → { element } | { reason }`:
 
 ```
@@ -492,9 +647,12 @@ whitespace layout and entities do not cause false "made by the page's script" re
 | `unclear` | Design Chamber can't find this text in the file exactly. Ask the agent to change it. |
 | `inert` (svg, template, title, attribute text) | Ask the agent to change it. |
 | `no-file` (screen not written yet) | Nothing to edit until the agent writes this screen. |
+| `link` (`SourceResponse.link`, §2.2) | This file is a link, so Design Chamber can't edit it here. Ask the agent instead. |
 | `loading-failed` (source or probe failed) | Couldn't read this file. <message> |
 
-Order of evaluation: `viewing`, `no-file`, `file-too-large`, `not-utf8`, then the locator's reason.
+Order of evaluation: `viewing`, `no-file`, `link`, `file-too-large`, `not-utf8`, then the locator's reason.
+So a linked file is refused before the user types, not at Save; the service still refuses it at the write
+(§2.3) whatever the page said.
 `unclear` is new copy beyond PS §3 (implied end tags, an unknown entity); flagged in the report for product
 review, not an open question.
 
@@ -682,15 +840,22 @@ design.json has no `tweaks` key). Old designs have none and read as `[]`.
 | `ok` | number: value matches `^-?(\d+\.?\d*\|\.\d+)([a-z%]*)$` and its unit equals the knob's; choice: any plain value | value shown |
 | `value` | choice only: a plain value that is not one of the options | "tokens.css sets another value: <v>" (no option pressed; choosing one replaces it) |
 | `missing` | no top-level `:root` declaration of the var | tokens.css has no --name. |
-| `formula` | the value holds `(` (number knob), `var(`, `calc(` or any other function, or `!important` | This value is a formula. Ask the agent to change it. |
+| `formula` | the value holds `(` (number knob), `var(`, `calc(` or any other function, `!important`, or a comment anywhere inside the value range (`--r: 8px /* base */;`: a splice of `valueRaw` would keep or eat the comment, so it is not editable) | This value is a formula. Ask the agent to change it. |
 | `unit` | number with a unit different from the knob's | tokens.css sets --name in rem, but this tweak uses px. Ask the agent to fix it. |
 | `no-file` | no tokens.css | This design has no tokens.css. |
 
 `alsoSet: string[]` lists the contexts of the var's other declarations (preludes or selectors, at most 3),
 shown as "Also set for <context>; only the default changes."
 
+The scanner's `valueRaw` stops at the first `/*` outside a string, so a trailing comment is outside the
+range; a comment that starts inside the value text (before its last non-space character) is what makes the
+row `formula`. Choice values (and preview values) must also have **balanced quotes**: an even count of `'`
+and of `"` (`isBalancedQuotes`, pure, in `tokens-css.ts`), checked in `parseTweaks` (an unbalanced option makes
+the knob invalid with the choice warning) and in the `set-tokens` validator; an unbalanced quote would open a
+string that swallows the declarations after it.
+
 `GET /designs/:slug/tokens` answers `TokensResponse` (§8.2); tokens.css is
-read through `resolveInside(dir, ['tokens.css'])`, `lstat` regular (a link answers `exists: true, editable: false`),
+read through `resolvePlainTarget(dir, ['tokens.css'], { allowAbsent: true })` (a link answers `exists: true, editable: false`),
 ≤ `TOKENS_CSS_MAX_BYTES` (1 000 000), UTF-8 round-trip. A file that fails any of these answers
 `editable: false` and the panel disables every knob with "tokens.css can't be edited here. Ask the agent
 instead." (`TokensResponse = { exists, editable, sha256, knobs }`; `sha256` null when the file is missing.)
@@ -722,6 +887,12 @@ Request `{ op: 'tokens', base, values: [{ var, value }] }` (≤ 12 entries, each
   earlier that is not in the new list; `vars: []` clears the preview. Inline style on `<html>` beats every
   normal `:root` declaration, media queries included; an `!important` declaration in tokens.css would not be
   beaten, which is why `!important` reads as `formula` (no knob for it).
+- The preview is therefore **stronger than the save** for a knob whose var is also set elsewhere (`alsoSet`
+  non-empty: a `@media (prefers-color-scheme: dark)` block, a `[data-theme=dark]` rule): the inline value
+  wins there too, while Save changes only the top-level `:root` declaration. Such a row shows, under the
+  "Also set for…" line, the muted note "The preview shows this value everywhere; saved, it applies only where
+  tokens.css doesn't set it again." Not building a context-exact preview: it would need per-rule injection
+  into the design's stylesheet, a far larger surface for a rare case.
 - `BridgeInit.tokens?: TokenVar[]` carries the current preview for a frame that loads or reloads (budget
   unload §8.4, an agent write, a Play navigation); the bridge applies it before the first paint (it runs first
   in `<head>`), and the page also re-sends `set-tokens` on that board's `ready` (covers the order of a reload
@@ -763,7 +934,11 @@ disabled rows `--oc-muted`; dot `--oc-warning`; banners kit `mountBanner` (`warn
 | Keys | arrows step, Page Up/Down step × 10, Home/End ends (native range behaviour; the controller clamps and rounds to step) | same |
 | Footer | **Reset** (ghost), **Save** (filled primary, `btn({ emphasis: 'primary' })`), agent-working hint | same |
 
-States: loading ("Reading tokens.css" `loadingRow`) · ready · unsaved (badge "Unsaved", dot) · saving (Save
+States: loading ("Reading tokens.css" `loadingRow`) · **load failed** (`GET /tokens` failed: service down,
+host timeout, a 500; the `loadingRow` is replaced by "Couldn't read tokens.css. <message>" in
+`--oc-error-text` with **Try again** (outline xs, refetches, back to loading); every knob row and Save/Reset
+disabled; pending values restored from `host.storage` are kept (not previewed, never deleted) until a load
+succeeds; the entry button and its dot stay; a later `files`/`design` event retries on its own) · ready · unsaved (badge "Unsaved", dot) · saving (Save
 spinner, rows disabled) · saved (notice "Tweaks saved to tokens.css" with **Undo**, `TransientId 'tweaks'`) ·
 save refused (sentence under the footer in `--oc-error-text`, values kept) · service down ("Couldn't save your
 tweaks. <message> Your values are still here.") · stale (banner, §4.5) · broken knob (row disabled with its
@@ -814,14 +989,26 @@ A page design: same panel (tokens.css sits beside `index.html`).
 - The service writes `screens` only from a user action, as an agent-field write in the same family as a user
   rename (`ServiceWrite.title`): `ServiceWrite` gains `screens?: JsonValue[]`, which `mergeServiceFields`
   places in the key's existing position (or in canonical order when absent), together with `updated: now`.
-- New store method `writeScreens(slug, expectStamp, mutate)` (`DesignStore`, WP0 interface): under the store's
-  per-slug lock, read design.json; refuse when it is missing (provisional, "This design has no design.json
-  yet…") or does not parse ("design.json can't be read right now. Ask the agent to fix it."); compute
-  `screensStampOf(raw)`; mismatch → stale; `next = mutate(raw.screens)`; state.json is not written (no
-  service field changes), only the mirror, via `replaceFileIfUnchanged`, re-reading on a lost race up to the existing 5
-  attempts and re-checking the stamp each time (a changed stamp is stale, an unchanged one re-applies);
-  returns the new stamp. Comments, `kind` and every service field go through the normal merge, so a screen
-  write can never drop a comment.
+- New store method `writeScreens(slug, expectStamp, mutate, hooks?)` (`DesignStore`, WP0 interface): under
+  the store's per-slug lock, read design.json; refuse when it is missing (provisional, "This design has no
+  design.json yet…") or does not parse ("design.json can't be read right now. Ask the agent to fix it.");
+  compute `screensStampOf(raw)`; mismatch → stale; `next = mutate(raw.screens)`; state.json is not written
+  (no service field changes), only design.json, via `replaceFileIfUnchanged`, re-reading on a lost race up to
+  `MIRROR_ATTEMPTS` (5) and re-checking the stamp each time (a changed stamp is stale, an unchanged one
+  re-applies). **Unlike the background mirror (`store.ts:302-304`, which only logs `design-json-busy` and
+  returns), a user write that loses the 5th attempt throws `ApiError('conflict', 'Another program is using
+  this file. Close it and try again.')`**, so a reorder never answers success while nothing was written; a
+  multi-step op rolls back on it (§2.9). It shares the merge-and-retry loop with the mirror (one loop, a
+  `onGiveUp: 'log' | 'throw'` choice), not a copy.
+- `hooks.beforeRename(bytes: Uint8Array)` is called with the exact bytes right before each rename attempt
+  (the pipeline records the self-write there, §2.6, so the echo is known before the watcher can see the file;
+  a lost attempt is followed by a new call with the new bytes). It answers `{ stamp, bytes }`: the new
+  `screensStamp` and the bytes written, from which the pipeline computes the tracked hash for `afterTree`
+  (§2.4). Comments, `kind` and every service field go through the normal merge, so a screen write can never
+  drop a comment.
+- `moveComments(slug, moves, hooks?)` takes the same hook and answers `{ moved, bytes }` (`bytes` the
+  design.json mirror it wrote, or `null` when the mirror was skipped); its state.json write is under
+  `.chamber/`, untracked and unwatched, so it needs no self-write entry.
 - `screensStampOf(raw)` = sha256 of `JSON.stringify(raw.screens ?? null)` (raw value, not normalised, so even an
   invalid entry the wall does not show counts as part of the list). `DesignRecord` and `GET /designs/:slug`
   carry it as `screensStamp` (`null` when design.json is missing or unparseable), plus `designJson: 'ok' |
@@ -842,16 +1029,17 @@ A page design: same panel (tokens.css sits beside `index.html`).
   the agent writes this screen."). `freeCopyId(id, taken)` with `taken` = listed ids ∪ every `screens/*.html`
   name on disk: `<id>-copy`, then `<id>-copy-2`, `-3`, …; when the candidate would break `SCREEN_ID_PATTERN`
   (over 41 chars), the base is cut so `<base>-copy[-n]` fits and trailing `-` are trimmed. Steps: read the source
-  bytes; write them to a dot-first temp in `screens/`; rename to `screens/<newId>.html` only while it is absent
-  (sync existence check + `renameSync`, as the CAS); then `writeScreens` inserting, right after the original,
+  bytes; write them to a dot-first temp in `screens/`; publish it as `screens/<newId>.html` with
+  `moveNoReplace` (§2.5: a hard link fails if the name appeared; never overwrites); then `writeScreens` inserting, right after the original,
   a clone of the original's raw entry with `id`, `file` and `title` replaced and `direction` removed: title
   `<Title> copy` (cut so it stays ≤ `TITLE_MAX`); `viewports` and `description` kept. Undo steps: `create`
   (the copy goes to `.trash`, never a hard delete) and `screens`. Comments stay on the original. Notice
   "Duplicated Home" with Undo; `created: { id, title }` in the answer so the camera can bring the copy into view.
 - **Move to trash** `{ op: 'trash-screen', screens: stamp, id, file: FileStamp | null }`: when the file exists it
-  is renamed to `<root>/.trash/<slug>.<id>-<yyyymmddhhmmss>[-n].html` (the dot cannot occur in a slug or a
+  is moved with `moveNoReplace` to `<root>/.trash/<slug>.<id>-<yyyymmddhhmmss>[-n].html` (the dot cannot occur in a slug or a
   screen id, so the name never clashes with a trashed design folder `<slug>-<stamp>/` or a loose original
-  `<stem>-<stamp>.html` from another slug; `-n` counts up until free, never overwrites); then `writeScreens`
+  `<stem>-<stamp>.html` from another slug; for a trash destination `'exists'` means "try the next `-n`", up to
+  `-99`, then 409 `conflict`; never overwrites); then `writeScreens`
   removing the entry. Undo: `move` back (destination must still be absent) and `screens`. The last screen may
   go: the wall shows its empty state plus "+ Screen". Comments are not touched; the Comments drawer groups
   comments whose `screen` is not in the list under "<id> · Screen removed". Notice "Moved Pricing to trash".
@@ -954,7 +1142,7 @@ has `null` and must still be absent); `keep`'s file exists; trash names free.
 Steps (version first with reason `keep-direction`, never coalesced):
 1. Each member other than `keep` whose file exists → `move` to `.trash/<slug>.<memberId>-<stamp>[-n].html`.
 2. When `keep` ≠ `of`: `screens/<of>.html` (if it exists) → `move` to the trash; then `screens/<keep>.html` →
-   `move` to `screens/<of>.html` (a rename, so B's bytes land unchanged in the original's place, keeping its id,
+   `move` to `screens/<of>.html` (every move here is `moveNoReplace`, §2.5, so B's bytes land unchanged in the original's place, keeping its id,
    title, list position and the links other screens make to `screens/<of>.html`).
 3. `writeScreens`: remove every member entry; the `of` entry stays as it is (it carries no mark).
 4. When `keep` ≠ `of`: new store method `moveComments(slug, [{ from: keep, to: of }])` (under the store lock,
@@ -966,7 +1154,9 @@ Steps (version first with reason `keep-direction`, never coalesced):
    Ledger `{ kind: 'keep', screen, letter, name }`.
 
 Undo checks, before any change: the screens stamp equals `afterStamp`; `screens/<of>.html` hashes to what was
-moved there; every trash file still exists and hashes to its recorded sha; every move destination is absent.
+moved there; every trash file still exists and hashes to its recorded sha; every move destination is absent
+(checked first for a clear refusal; the moves themselves are `moveNoReplace`, so a destination that appears
+later is still never overwritten).
 
 ### 6.3 Layout and frontend (11)
 
@@ -1094,7 +1284,8 @@ their own later write, which the owner accepted (10-4); the version before each 
   plain data.
 - Cap (owner 19-7): the sum of key and value lengths in UTF-16 code units ≤ `PAGE_STATE_MAX_CHARS` (1 048 576),
   counted like browsers count storage.
-- Read: `resolveInside(dir, ['.chamber', 'page-state.json'])`, `lstat` regular file (a link reads as empty),
+- Read: `resolvePlainTarget(dir, ['.chamber', 'page-state.json'], { allowAbsent: true })` (§2.3; a link, or a
+  `.chamber` that is a link, reads as empty and every write refuses), regular file,
   ≤ `PAGE_STATE_FILE_MAX_BYTES` (8 MiB, room for JSON escaping), then `parsePageStateFile` (pure,
   `src/shared/page-state.ts`): `v === 1`, `items` an array of `[string, string]`, keys unique (first wins), total
   ≤ the cap. Anything else reads as no data (`damaged: true` in the answer, logged as
@@ -1112,9 +1303,18 @@ routes in `src/service/routes/page-state.ts`, each behind the bearer check, slug
 
 | Method & path | Request | Response |
 |---|---|---|
-| `GET /designs/:slug/page-state` | — | `{ items: [string, string][], chars, damaged?: true }` (≤ 1 MiB of text plus JSON, under the 7.5 MB answer cap) |
-| `PATCH /designs/:slug/page-state` | `{ clear?: boolean, changes?: [string, string \| null][] }` (≤ `PAGE_STATE_CHANGES_MAX` 10 000 entries) or `{ uploadId }` holding that JSON (for a delta over 60 000 chars) | `{ chars }`; 413 `too-large` "This design tried to save more than 1 MB of page data. The extra wasn't saved." and nothing of this delta applied; 400 malformed |
-| `DELETE /designs/:slug/page-state` | — | `{ ok: true }` (removes the file; nothing to trash, it is not a design file) |
+| `GET /designs/:slug/page-state` | — | `{ items: [string, string][], chars, gen, damaged?: true }` (≤ 1 MiB of text plus JSON, under the 7.5 MB answer cap) |
+| `PATCH /designs/:slug/page-state` | `{ gen, clear?: boolean, changes?: [string, string \| null][] }` (≤ `PAGE_STATE_CHANGES_MAX` 10 000 entries) or `{ gen, uploadId }` holding that JSON (when the body does not fit one request, §8.4) | `{ chars, gen }`; 409 `stale` when `gen` is older than a Clear (below), nothing applied; 413 `too-large` "This design tried to save more than 1 MB of page data. The extra wasn't saved." and nothing of this delta applied; 400 malformed (a missing `gen` included) |
+| `DELETE /designs/:slug/page-state` | — | `{ ok: true, gen }` (removes the file; nothing to trash, it is not a design file) |
+
+**Clear never comes back (product decision: no resurrection).** The service keeps a per-design clear counter
+in memory (`clears: Map<slug, number>`, separate from the data cache so it is never evicted with it; dropped
+on `removed` and a root change) and answers it as `gen = "<ctx.epoch>:<n>"` (`n` = clears so far). `DELETE`
+increments `n`. A `PATCH` whose `gen` has the current epoch and a smaller `n` was made before a Clear, so its
+changes are dirty keys from a surface that has not yet seen the Clear: it answers 409 `stale` and applies
+nothing. A `gen` from another epoch (the service restarted since that surface loaded) is accepted: the
+counter cannot say, and the only loss is a Clear followed by a restart within the other surface's 1 s
+flush window (§14). `isOlderClear(gen, current)` is pure, in `src/shared/page-state.ts`, with its tests.
 
 - Memory: one `Map` per design touched (loaded on first use), dropped 10 minutes after its last use once flushed,
   and at most `PAGE_STATE_CACHE_MAX_BYTES` (32 MiB) in all (least recently used dropped after a flush).
@@ -1143,9 +1343,15 @@ the first child of `<head>`, `src/guest/frame-doc.ts:54-73`):
   proxy traps; method names are not shadowed by items.
 - Cap: a `setItem` that would take this frame's view over `PAGE_STATE_MAX_CHARS` throws a `DOMException` named
   `QuotaExceededError` and changes nothing (the design's own error handling runs, PS 19).
-- Persisting (`localStorage` only, `persist: true` only): each change is queued and one
-  `storage-batch { clear, changes }` per task is posted to `window.parent` (`queueMicrotask`), so a frame removed
-  later loses nothing that was already set. `sessionStorage` never posts.
+- Persisting (`localStorage` only, `persist: true` only): changes are queued per task in a `Map<key, string |
+  null>` (a later change to a key replaces the earlier one, so a loop of 20 000 `setItem` on one key posts one
+  entry) plus a `clear` flag (`clear()` sets it and empties the queued map); at the task's end
+  (`queueMicrotask`) the queue is posted to `window.parent` as one or more `storage-batch { clear, changes }`
+  messages, split so each holds ≤ `PAGE_STATE_CHANGES_MAX` (10 000) entries **and** ≤ `PAGE_STATE_BATCH_MAX_CHARS`
+  (= `PAGE_STATE_MAX_CHARS`, 1 048 576) characters of keys plus values; only the first carries `clear: true`;
+  posted in order in the same task. A single entry always fits (the quota already caps one value), so no
+  honest batch is ever rejected. A frame removed later loses nothing that was already set. `sessionStorage`
+  never posts.
 - Page → frame `storage-sync { clear, changes }` updates the `Map` without firing `storage` events (19 says no
   live events) and without posting back.
 - Known differences, stated in the rules (§9) only as "works like localStorage for string values":
@@ -1156,9 +1362,12 @@ the first child of `<head>`, `src/guest/frame-doc.ts:54-73`):
 
 `createPageStateController({ client, slug, onNotice })`, one per open live design per surface:
 - `load()`: `GET page-state` before the design's frames are created (frame slots wait for it, at most 2 s);
-  on failure the view runs with `persist: false` and empty data, and shows once "Page data can't be saved right
-  now. Changes last until you close this design." (a partial seed with `persist: true` could let a design's
-  `clear()` wipe data it never saw).
+  on failure **or on the 2 s timeout** (the timeout is a failure, not a wait) the view runs with
+  `persist: false` and empty data, and shows once "Page data can't be saved right now. Changes last until you
+  close this design." (a partial seed with `persist: true` could let a design's `clear()` wipe data it never
+  saw). An answer that arrives after the timeout is ignored for this view (the frames are already running
+  unsaved; switching them to saved mid-session would merge two states); reopening the design loads again.
+  The controller keeps the `gen` it loaded.
 - `init(): StorageInit` for every new live frame of the design: `{ persist: true, items: <current map> }`.
 - `apply(board, batch)` from `frame-messages.ts`, only for a board whose main frame shows the live design (never a
   version, never the compare half, never a thumbnail): updates the design's map, checks the cap against the
@@ -1166,15 +1375,29 @@ the first child of `<head>`, `src/guest/frame-doc.ts:54-73`):
   view session "This design tried to save more than 1 MB of page data. The extra wasn't saved."; forwards the
   accepted changes to the design's other live frames as `storage-sync`; marks them dirty.
 - Flush: at most one `PATCH` per `PAGE_STATE_FLUSH_MS` (1 000 ms), plus at once on `visibilitychange` to hidden,
-  on closing the design and on dispose; a delta over `PAGE_STATE_INLINE_MAX_CHARS` (60 000) goes through
-  `client.upload` (`src/guest/service-client.ts:288`); a delta over `UPLOAD_TOTAL_MAX` is split by keys into
-  several `PATCH`es, and a single value too large for one upload is refused like the cap. A failed `PATCH`
-  keeps the changes dirty, retries with the next flush (an idempotent "set these keys"), and after 3 failures
-  shows the "can't be saved right now" notice once.
-- On a `page-state` change event for this slug (another surface wrote, or Clear ran): refetch, debounced 500 ms,
-  and push the difference to live frames as `storage-sync`, except keys still dirty here.
-- **Clear saved page data**: `DELETE`, then every live frame of the design reloads with empty data (the reload
-  path that a `files` event uses), notice "Saved page data cleared."
+  on closing the design and on dispose. **Inline or upload is decided by bytes, not characters:** the body is
+  serialised (`JSON.stringify({ gen, clear, changes })`) and sent inline only when it fits one request by the
+  rule the upload chunks already use, ≤ `UPLOAD_CHUNK_MAX_CHARS` (60 000) characters **and**
+  ≤ `UPLOAD_CHUNK_MAX_BYTES` (75 000) UTF-8 bytes, under the router's 80 000-byte cap (`fitsOneRequest(json)`,
+  new, exported from `src/guest/service-client.ts` beside `splitUploadChunks`, reusing its `utf8Length`).
+  Otherwise the JSON goes through `client.upload` (`src/guest/service-client.ts:288`) and the PATCH is
+  `{ gen, uploadId }`. So a 60 000-character delta of CJK text or emoji (≥ 180 kB in UTF-8) is uploaded, never
+  answered 413. A delta of more than `PAGE_STATE_CHANGES_MAX` keys, or over `UPLOAD_TOTAL_MAX`, is split by
+  keys into several `PATCH`es (the `clear` only on the first), and a single value too large for one upload is
+  refused like the cap. A failed `PATCH` keeps the changes dirty, retries with the next flush (an idempotent
+  "set these keys"), and after 3 failures shows the "can't be saved right now" notice once.
+- **A Clear elsewhere wins over dirty keys here** (no resurrection). A `PATCH` answered 409 `stale` (its `gen`
+  predates a Clear) drops every dirty key, refetches, adopts the new `gen` and reloads the design's live frames
+  with the fetched data (the reload path that a `files` event uses), with the notice "Saved page data was
+  cleared." (`page-data` id, once per view session).
+- On a `page-state` change event for this slug (another surface wrote, or Clear ran): refetch, debounced 500 ms.
+  When the answer's `gen` shows a newer Clear (`isOlderClear(mine, theirs)`), drop every dirty key and reload
+  the live frames with the fetched data, same notice; otherwise push the difference to live frames as
+  `storage-sync`, except keys still dirty here.
+- **Clear saved page data**: cancel the pending flush and drop this surface's dirty keys, wait for an in-flight
+  `PATCH` to settle, then `DELETE`; adopt the answer's `gen`; every live frame of the design reloads with empty
+  data, notice "Saved page data cleared." The other surface either sees the event first (above) or has its
+  next flush refused as stale (above); either way its unflushed keys are dropped, never written back.
 
 ### 8.5 Check renders and thumbnails (AD-12)
 
@@ -1186,7 +1409,8 @@ the first child of `<head>`, `src/guest/frame-doc.ts:54-73`):
   changes from "localStorage throws" to "localStorage works, is empty in every artboard, and a write does not
   reach the next artboard".
 - Thumbnails stay plain `file://` renders in a throwaway profile (§4.4): native storage, empty, discarded.
-- The live mini-frame thumbnail (`thumb.ts:94`) passes no storage init, so it gets the empty unsaved stand-in.
+- The live mini-frame thumbnail (`thumb.ts:94-95`) is `sandbox=""`: no script runs in it at all, neither the
+  bridge (so no stand-in) nor the design's own scripts, so storage is never touched there. Nothing changes.
 
 ### 8.6 Frontend (19)
 
@@ -1275,6 +1499,31 @@ DirectionPick." (skill) becomes:
 - `screen-asks.ts` (new): the two ask texts in §5.2 and §6.3.
 - `hand-edits.ts` (new): §7.2.
 
+### 9.5 The owned-field lists (`tweaks` added)
+
+Every text that tells an agent which design.json fields it may change must name `tweaks`, or an agent that
+follows it never writes knobs (feature 09 would never appear). Exact replacements:
+
+| File | Today | Becomes |
+|---|---|---|
+| `src/shared/agent/chip.ts:118` (step 7) | canvas `title, updated, viewports, screens and designSystem`; page `title, updated, viewports and designSystem` | canvas `title, updated, viewports, screens, designSystem and tweaks`; page `title, updated, viewports, designSystem and tweaks` |
+| `src/shared/agent/guide.ts:158-159` (`buildAgentGuide`, the guide at `<root>/AGENTS.md`) | ``change only `title`, `updated`, `viewports`, `screens` and `designSystem`, and keep every other key as it is.`` | ``change only `title`, `updated`, `viewports`, `screens`, `designSystem` and `tweaks`, and keep every other key as it is.`` |
+| `src/shared/agent/skill-doc.ts:35` (the bundled skill) | `In an existing design.json change only title, updated, viewports, screens and designSystem, and keep every other key as it is.` | `In an existing design.json change only title, updated, viewports, screens, designSystem and tweaks, and keep every other key as it is.` |
+
+- **No guide version bump.** The service rewrites `<root>/AGENTS.md` whenever the text `buildAgentGuide`
+  produces differs from the file and the file is still ours and unedited (`outdated` → replace,
+  `src/service/agent-setup.ts:322-334`), on the next start or root change. Bumping the marker's `v1`
+  (`ownership.ts:16`) would instead make every installed guide unrecognised. A guide the user edited is left
+  alone, as today.
+- **`guide.ts:239-240` stays as it is.** It is inside `buildSkillDoc`, which reproduces the SKILL.md that
+  older versions installed so the service can recognise that copy and offer to remove it
+  (`agent-setup.ts:374-400`); the service never writes it any more, so changing it reaches no agent, and
+  keeping it byte-identical keeps the recognition test meaningful.
+- Snapshots regenerated in the same task (T7b): `test/agent/__snapshots__/{chip.continue-canvas,
+  chip.new-canvas-project-preset, chip.new-page-no-project}.txt`, `guide.{posix,win32}.md`,
+  `skill.bundled.md`, plus the three from §9.2. Chip text stays ≤ its caps (`CHIP_TEXT_HARD_MAX`), asserted by
+  the existing chip tests.
+
 ---
 
 ## 10. WP0 contract changes (exact; the main agent applies them and notifies every lane)
@@ -1327,10 +1576,11 @@ export type TweakState = { var: string; state: 'ok' | 'value' | 'missing' | 'for
 export type TokensResponse = { exists: boolean; editable: boolean; sha256: string | null; knobs: TweakState[] };
 export type HandEditsClearBody = { upTo: number };
 export type PageStateItems = [string, string][];
-export type PageStateResponse = { items: PageStateItems; chars: number; damaged?: true };
-export type PageStatePatchBody = { clear?: boolean; changes?: [string, string | null][] } | { uploadId: string };
-export type PageStatePatchResponse = { chars: number };
-// SourceResponse:        + sha256: string; utf8: boolean
+export type PageStateResponse = { items: PageStateItems; chars: number; gen: string; damaged?: true };
+export type PageStatePatchBody = { gen: string; clear?: boolean; changes?: [string, string | null][] } | { gen: string; uploadId: string };
+export type PageStatePatchResponse = { chars: number; gen: string };
+export type PageStateClearResponse = { ok: true; gen: string };
+// SourceResponse:        + sha256: string; utf8: boolean; link: boolean
 // DesignDetailResponse:  + screensStamp: string | null; designJson: 'ok' | 'missing' | 'invalid'
 // PromptResponse:        + handEdits: { upTo: number; count: number } | null
 // ApiRoutes + ROUTE_OWNERS ('P2' added to the owner union):
@@ -1340,10 +1590,13 @@ export type PageStatePatchResponse = { chars: number };
 //   'POST /designs/:slug/hand-edits/clear'      Route<NoQuery, HandEditsClearBody, OkResponse>
 //   'GET /designs/:slug/page-state'             Route<NoQuery, undefined, PageStateResponse>
 //   'PATCH /designs/:slug/page-state'           Route<NoQuery, PageStatePatchBody, PageStatePatchResponse>
-//   'DELETE /designs/:slug/page-state'          Route<NoQuery, undefined, OkResponse>
+//   'DELETE /designs/:slug/page-state'          Route<NoQuery, undefined, PageStateClearResponse>
 ```
 
 `keep-direction` `files` is a list, not a record, so no request key is ever an object property name.
+`gen` is opaque to the page except through `isOlderClear` (§8.2); the service validates it as a string ≤ 120
+chars of the form `<epoch>:<n>`, `n` a non-negative integer (400 otherwise). Seven new routes: 44 → 51, so
+`test/shared/api.test.ts:8` changes to `51` in T0.
 
 ### 10.3 `src/shared/limits.ts`
 
@@ -1357,17 +1610,19 @@ export type PageStatePatchResponse = { chars: number };
 | `USER_UNDO_KEEP` | 10 | `TWEAK_CHOICES_MIN` / `_MAX` | 2 / 6 |
 | `USER_UNDO_TTL_MS` | 30 min | `TWEAK_CHOICE_LABEL_MAX` | 30 |
 | `USER_EDIT_NOTICE_MS` | 10 000 | `TWEAK_CHOICE_VALUE_PATTERN` | `/^[A-Za-z0-9 #%.,()+\-'"/]{1,80}$/` |
-| `SELF_WRITE_ECHO_MS` | 5 000 | `TOKEN_PREVIEW_VALUE_PATTERN` | `/^[A-Za-z0-9 #%.,()+\-'"/]{1,100}$/` |
+| `SELF_WRITES_MAX` | 1 024 | `TOKEN_PREVIEW_VALUE_PATTERN` | `/^[A-Za-z0-9 #%.,()+\-'"/]{1,100}$/` (plus balanced quotes, §4.2) |
 | `EDITS_FILE_MAX_BYTES` | 262 144 | `TOKENS_CSS_MAX_BYTES` | 1 000 000 |
 | `HAND_EDITS_LEDGER_MAX` | 30 | `DIRECTION_NAME_MAX` | 40 |
 | `HAND_EDIT_QUOTE_MAX` | 80 | `PAGE_STATE_MAX_CHARS` | 1 048 576 |
 | `HAND_EDIT_LINE_MAX` | 240 | `PAGE_STATE_FILE_MAX_BYTES` | 8 388 608 |
 | `HAND_EDITS_BLOCK_MAX` | 1 500 | `PAGE_STATE_CHANGES_MAX` | 10 000 |
 | `PAGE_STATE_WRITE_MIN_MS` | 1 000 | `PAGE_STATE_FLUSH_MS` | 1 000 |
-| `PAGE_STATE_INLINE_MAX_CHARS` | 60 000 | `PAGE_STATE_CACHE_MAX_BYTES` | 33 554 432 |
+| `PAGE_STATE_BATCH_MAX_CHARS` | 1 048 576 (= `PAGE_STATE_MAX_CHARS`) | `PAGE_STATE_CACHE_MAX_BYTES` | 33 554 432 |
 
-`SCREENS_MAX`, `SOURCE_TEXT_MAX`, `DIRECTION_OPTIONS_MAX`, `UPLOAD_TOTAL_MAX`, `REVISION_TEXT_MAX`, `ASK_TEXT_MAX`
-are reused, not repeated. The file stays import-free.
+`SCREENS_MAX`, `SOURCE_TEXT_MAX`, `DIRECTION_OPTIONS_MAX`, `UPLOAD_TOTAL_MAX`, `UPLOAD_CHUNK_MAX_CHARS`,
+`UPLOAD_CHUNK_MAX_BYTES`, `REVISION_TEXT_MAX`, `ASK_TEXT_MAX` are reused, not repeated (the inline-or-upload
+rule for page data is the upload chunk rule, §8.4, so there is no page-data inline constant). The file stays
+import-free.
 
 ### 10.4 `src/shared/bridge-protocol.ts`
 
@@ -1389,9 +1644,11 @@ export type EditProbe = { tag: string; id: string | null; leaf: boolean; text: s
 Validators (both directions, in the same tables):
 - `edit-probe`: `isNum(x) && isNum(y)`.
 - `set-tokens`: `vars` list ≤ `TWEAKS_MAX`, each `name` matches `TWEAK_VAR_PATTERN`, `value` matches
-  `TOKEN_PREVIEW_VALUE_PATTERN`.
+  `TOKEN_PREVIEW_VALUE_PATTERN` and has balanced quotes.
 - `storage-sync`, `storage-batch`: `clear` boolean; `changes` list ≤ `PAGE_STATE_CHANGES_MAX`, each a 2-tuple of a
-  string ≤ `PAGE_STATE_MAX_CHARS` and a string ≤ `PAGE_STATE_MAX_CHARS` or `null`.
+  string and a string or `null`, and the **sum of all key and value lengths in the message**
+  ≤ `PAGE_STATE_BATCH_MAX_CHARS` (counted while validating, stopping at the first excess). The shim splits to
+  fit both caps (§8.3), so a rejected batch means a hostile or broken frame.
 - `edit-probe-result`: point numbers; `probe` null or: `tag` id ≤ `BRIDGE_TAG_MAX`, `id` null or string 1..
   `EDIT_PROBE_ID_MAX`, booleans, `text` ≤ `TEXT_EDIT_MAX + 1`, `sameIndex`/`sameCount` integers with
   `0 ≤ sameCount ≤ EDIT_PROBE_SCAN_MAX` and (`sameCount === 0` or `0 ≤ sameIndex < sameCount`), `dir` one of two,
@@ -1411,10 +1668,30 @@ design.json (no `tweaks`, no marks) normalising exactly as before.
 ### 10.6 `src/service/context.ts`
 
 - `DesignRecord` + `screensStamp: string | null`, `designJson: 'ok' | 'missing' | 'invalid'`.
-- `DesignStore` + `writeScreens(slug, expectStamp: string, mutate: (raw: JsonValue | undefined) => JsonValue[]): Promise<{ stamp: string }>`
-  and `moveComments(slug, moves: { from: string; to: string }[]): Promise<{ id: string; from: string; to: string }[]>`.
-- `ServiceContext` + `selfWrites: SelfWrites` (`{ record(slug, rel, sha256 | null): void; isEcho(slug, rel, dir): Promise<boolean> }`).
+- `type WriteHooks = { beforeRename?: (bytes: Uint8Array) => void }`.
+- `DesignStore` + `writeScreens(slug, expectStamp: string, mutate: (raw: JsonValue | undefined) => JsonValue[], hooks?: WriteHooks): Promise<{ stamp: string; bytes: Uint8Array }>`
+  (throws 409 `conflict` after the 5th lost attempt, §5.1)
+  and `moveComments(slug, moves: { from: string; to: string }[], hooks?: WriteHooks): Promise<{ moved: { id: string; from: string; to: string }[]; bytes: Uint8Array | null }>`.
+- `ChangeHub.emit(event: { slug: string | null; kind: ChangeKind; files?: string[]; origin?: 'user' }): ChangeEvent`
+  (`:125`), and `src/service/changes.ts:39-41` copies `origin` into the event it builds (§2.6). `changes.ts` is
+  not a WP0 interface file, but it implements this one, so it changes in T0 with it.
+- `ServiceContext` + `selfWrites: SelfWrites` (`{ record(slug, rel, sha256 | null, size | null): void;
+  isEcho(slug, rel, dir): Promise<boolean>; forget(slug, rel): void; forgetDesign(slug): void; clear(): void }`, §2.6).
 - `test/helpers/fake-context.ts` gains fakes for the three (WP0 helper).
+
+### 10.6a Contracts outside the WP0 files that several tasks rely on
+
+Not WP0 (one owning task each), listed so every lane builds against the same shape:
+
+| Contract | File | Owner | Used by |
+|---|---|---|---|
+| `SnapshotRefusedError` (`refusal: 'too-large' \| 'unsupported' \| 'unreadable' \| 'torn'`), `trackedHashOf(rel, bytes)`, `treeHashOf(files)`, `VersionsService.userEdit` (§2.4) | `src/service/versions.ts` | T2a | T2b |
+| `resolvePlainTarget`, `isPlainTarget` (§2.3) | `src/service/paths.ts` | T0 | T2a, T2b, T3, T4, T5, T8 |
+| `replaceFileIfHashUnchanged`, `moveNoReplace` (§2.5) | `src/service/paths.ts` | T2a | T2b, T3, T4, T5 |
+| `OpModule`, `OpInput`, `OpPlan`, `PlannedStep` (§2.4) and the three op stubs | `src/service/edits/op-module.ts`, `ops-{text,screens,tokens}.ts` | T2b | T3, T4, T5 |
+| `createEditsFile` (`read`, `update`, §2.1) | `src/service/edits/file.ts` | T2b | T6 (`read` in `chat.ts`) |
+| `fitsOneRequest(json)` (§8.4) | `src/guest/service-client.ts` | T11b | — |
+| `DrawerKind` + `'tweaks'` | `src/ui/wall/view-context.ts:24` | U2 | U2 |
 
 ### 10.7 Exhaustive tables that must change in the same commit
 
@@ -1443,8 +1720,9 @@ Design Chamber (edits) is not built yet." until their tasks land (the Phase 1.5 
 All seven routes: the constant-time bearer check (`http.ts`, 401 without), the router's 80 kB body cap (413), `slug`
 by `SLUG_PATTERN` then `resolveInside(root, [slug])` + `isDesignFolder` through `store.dir` / `store.get` (400
 `bad-slug`, 404), no path in any body (screen ids by `SCREEN_ID_PATTERN`, edit ids by `EDIT_ID_PATTERN`, vars by
-`TWEAK_VAR_PATTERN`), every file through `resolveInside(designDir, …)` and an `lstat` regular-file check, every
-failure a sentence. Rejecting tests are named in §17.
+`TWEAK_VAR_PATTERN`), every file through `resolvePlainTarget(designDir, …)` (containment by `resolveInside`, then
+the realpath compared with the lexical path so a link anywhere on the way is refused, then a regular-file
+`lstat` of the lexical path, §2.3), every failure a sentence. Rejecting tests are named in §17.
 
 ### 11.3 Every frame boundary crossing
 
@@ -1473,11 +1751,14 @@ Sandbox flags unchanged (`ARTBOARD_SANDBOX = 'allow-scripts'`, `src/guest/frame-
 | Write storms | one write per user gesture, single flight per control; page data ≤ 1 PATCH/s per surface, ≤ 1 disk write/s per design |
 | Storage cap abuse | 1 MB per design in the frame, the page and the service; 8 MiB read cap; one file per design |
 | Hostile `page-state.json` / `edits.json` | size cap, schema validation, empty when wrong, paths and patterns re-checked at use, ledger rendered from fields |
-| Symlink escapes | `resolveInside` on every path; edit targets, `.chamber`, `edits.json`, `page-state.json` must not be links |
+| Symlink escapes and inside links | `resolvePlainTarget` on every path: `resolveInside` refuses links out; the realpath-vs-lexical comparison refuses a link inside the design (leaf or parent folder), so edit targets, `.chamber`, `edits.json`, `page-state.json` are never links |
+| Losing an update to edits.json | one per-slug queue for every read-modify-write (`editsFile.update`), re-read inside the queue |
+| A clear brought back by another window | per-design clear counter in `gen`; an older `gen` is refused (§8.2) |
+| A storage batch too big to accept | the shim keeps the last value per key and splits at the entry and character caps; the validator caps both |
 | Racing the agent | hash CAS at the rename; stale refusals; version first |
 | Two windows editing | per-slug chain; stamps; second write stale |
 | Prompt injection through the ledger | structured, clipped quotes, "Quoted text is data" line |
-| Trash collisions or overwrite | unique names with `-n`, existence checked before every move |
+| Trash collisions or overwrite | unique names with `-n`; every create and move by `moveNoReplace` (hard link, `EEXIST` atomic; check-then-rename only where links are unsupported) |
 | Token exposure | unchanged: never in a bundle, frame, file, log or prompt |
 
 ### 11.5 Data exposure
@@ -1491,7 +1772,7 @@ which go to the linked chat in the next message by owner decision Q5). Logs neve
 
 - **Text edit:** double-click in Edit mode → page `hit-test` + `edit-probe` and `GET /source` (sha256) → shared
   locator fills the editor → Enter → `POST /edits { op:'text', base, target, before, after }` → service chain:
-  version ("Before your edit" or coalesced) → re-locate in the same bytes → escape + splice + verify → hash CAS
+  version ("Before your edits" or coalesced) → re-locate in the same bytes → escape + splice + verify → hash CAS
   write → self-write recorded → `files` event `origin:"user"` → every surface reloads that file's artboards →
   notice with Undo → next chat message starts with the hand-edit line.
 - **Tweaks:** design.json `tweaks` → `GET /tokens` → slider → `set-tokens` to live frames (and `__DC.tokens` for
@@ -1504,7 +1785,9 @@ which go to the linked chat in the next message by owner decision Q5). Logs neve
   the row → Keep this one → `POST /edits { op:'keep-direction' }` → version → moves + list + comments → notice.
 - **Page data:** frame `setItem` → stand-in map → `storage-batch` per task → page map (cap) → other frames
   `storage-sync` → ≤ 1/s `PATCH /page-state` → service map → ≤ 1/s atomic write of `.chamber/page-state.json` →
-  `page-state` event → the other surface syncs; on load `GET /page-state` → `__DC.storage` → stand-in seeded.
+  `page-state` event → the other surface syncs; on load `GET /page-state` (with `gen`) → `__DC.storage` →
+  stand-in seeded; Clear → `DELETE` (new `gen`) → frames reload empty; an older `gen`'s PATCH is refused, so
+  nothing comes back.
 
 ---
 
@@ -1525,7 +1808,9 @@ which go to the linked chat in the next message by owner decision Q5). Logs neve
 | Folding auto-saves in the versions list | PS out of scope (separate review item) |
 | Moving, resizing, attributes, images, colour pickers, presets, per-screen knobs, renames from the wall | PS out of scope |
 | DirectionPick pointing at canvas screens | owner 11-5 |
-| A redo stack or a multi-level Ctrl+Z | PS out of scope |
+| A redo stack or a multi-level Ctrl+Z | PS out of scope; product decision: one slot (§2.7) |
+| A context-exact tweak preview (per-rule injection) | rare case, large surface; the row says the preview is wider than the save (§4.4) |
+| A per-file hash cache for `computeTree` | not needed for typical designs; named as the fix if the risk in §14 shows up |
 | Server-side "viewing a version" refusal | the service has no view state; the UI disables (E12), and a write from a stale UI is caught by the stamps |
 
 ---
@@ -1546,6 +1831,10 @@ which go to the linked chat in the next message by owner decision Q5). Logs neve
 | design.json is reformatted to two-space JSON by a screen action | Low | same as any comment add today (AD-13); values intact |
 | Version count grows with hand edits | Low | coalescing (AD-4) plus dedupe; 100-version cap unchanged |
 | Large `GET /source` on every selection | Low | per-view source cache, invalidated by events |
+| Every hand edit changes the tree fingerprint, so `treeOf` (`versions.ts:491-505`) re-hashes every tracked file in the chain; near the 100 MB snapshot cap on a slow or network disk this can pass the host's 20 s request timeout while the write still lands | Low | the user sees "Couldn't save your change…", refetches, and finds the edit applied (the stale refusal stops a double apply, §2.10); typical designs are a few MB. Fix when seen: cache each file's hash by size+mtime inside `computeTree` (not built now, §13) |
+| A Clear followed by a service restart inside another surface's 1 s flush window brings those few keys back | Low | the gen from the old epoch cannot be judged (§8.2); needs a restart in a one-second window |
+| The tweak preview shows a value in contexts (`@media`, `[data-theme]`) that Save will not change | Low | the row's note says so (§4.4) |
+| A filesystem without hard links (FAT/exFAT, some shares) falls back to check-then-rename for creates and moves | Low | microsecond window, same residual as the design.json merge; ids are fresh names nobody else writes |
 
 ---
 
@@ -1566,8 +1855,8 @@ which go to the linked chat in the next message by owner decision Q5). Logs neve
 | §8.2 | new guest modules `page-state.ts`, `tweaks.ts`, `source-cache.ts`; `build-activity` ignores `origin:"user"`; `flows.deliver` clears the ledger |
 | §8.3 | the five messages, `BridgeInit.tokens` / `.storage`, the stand-in |
 | §8.4 | frames seeded with preview and storage after a budget reload |
-| §9.1 | `replaceFileIfHashUnchanged` |
-| §9.4 | the echo filter (`self-writes.ts`) |
+| §9.1 | `replaceFileIfHashUnchanged`, `moveNoReplace`, `resolvePlainTarget` (no links inside the design for service writes) |
+| §9.4 | the echo filter (`self-writes.ts`, last-bytes rule, no TTL); `origin` through `ChangeHub.emit` |
 | §9.5 | `versions.userEdit`; check render installs the stand-in |
 | §9.9 | `tweak-broken` |
 | new §9.16 | the edit pipeline (§2 here, condensed) |
@@ -1595,14 +1884,21 @@ writes or sandbox).
 
 ### T0 · Contracts and stubs (High | M) · main agent (or one fullstack builder it assigns) · blocks everything
 **Files:** `src/shared/{types,api,limits,bridge-protocol,design-json}.ts`, `src/shared/checks.ts` (the
-`tweak-broken` entry), `src/service/context.ts`, `src/service/self-writes.ts` (new, real, small),
-`src/service/store.ts` (fill `screensStamp` / `designJson`; `writeScreens` and `moveComments` stubs answering 500
-"not built yet"), `src/service/routes/{edits,page-state}.ts` (stubs), `src/service/compose.ts` (register stubs,
-build `selfWrites`), `src/ui/model/versions-model.ts` (two labels), `src/guest/fake-services.ts`,
-`test/ui/visual/fake-backend.*`, `test/helpers/fake-context.ts`, `test/shared/{design-json,bridge-protocol,api}.test.ts`,
-`test/service/core/self-writes.test.ts` (new).
+`tweak-broken` entry), `src/service/context.ts` (incl. `ChangeHub.emit` + `origin`), **`src/service/changes.ts`**
+(copy `origin` into the event), `src/service/self-writes.ts` (new, real, small: §2.6 last-bytes rule),
+`src/service/paths.ts` (`resolvePlainTarget`, `isPlainTarget` only, §2.3: a pure risk function T2a, T2b, T3, T4,
+T5 and T8 all need, so it lands first), `src/service/store.ts` (fill `screensStamp` / `designJson`;
+`writeScreens` and `moveComments` stubs answering 500 "not built yet"), `src/service/routes/{edits,page-state}.ts`
+(stubs), `src/service/compose.ts` (register stubs, build `selfWrites`), `src/ui/model/versions-model.ts` (two
+labels, "Before your edits" and "Before keeping a direction"), `src/guest/fake-services.ts`,
+`test/ui/visual/fake-backend.*`, `test/helpers/fake-context.ts`, `test/shared/{design-json,bridge-protocol,api}.test.ts`
+(`api.test.ts:8` 44 → 51), `test/service/core/{self-writes,changes,paths}.test.ts` (`self-writes` new; the
+`origin` and `resolvePlainTarget` cases), `test/service/core/routes.test.ts` (`GET /changes` carries `origin`).
 **Acceptance:** §10 exactly; old design.json fixtures normalise as before; every new route answers 401 without the
-bearer and a sentence with it; validators reject each malformed shape in §10.4; `npm run check` green.
+bearer and a sentence with it; validators reject each malformed shape in §10.4 (including an over-cap
+character total); an event emitted with `origin: 'user'` reaches `GET /changes` with it; `resolvePlainTarget`
+refuses an inside leaf link and an inside parent-folder link, judged on the lexical path (mutation: comparing
+against the realpath only turns the test red); `npm run check` green.
 **Docs:** none (no user-facing change).
 
 ### Group A (parallel after T0)
@@ -1610,23 +1906,24 @@ bearer and a sentence with it; validators reject each malformed shape in §10.4;
 | Task | Agent | Effort | Files | Acceptance | Docs |
 |---|---|---|---|---|---|
 | **T1** Source scanner and locator | fullstack | M | `src/shared/source-edit.ts` (new), `test/shared/source-edit.test.ts` (new), fixtures under `test/fixtures/source-edit/` (CRLF, BOM, entities, comments, implied end tags, RTL, duplicates) | §3.2 to §3.4 pure functions; every reason code reachable; splice leaves bytes outside the range identical; `</p><script>` escapes; surrogate pairs never split; mutation: removing the escape or the explicit-end-tag rule turns a test red | none |
-| **T2\*** Edit pipeline core | fullstack (Opus) | M | `src/service/paths.ts` (`replaceFileIfHashUnchanged`), `src/service/versions.ts` (`userEdit`, coalescing), `src/service/edits/{pipeline,file,trash}.ts` (new), `src/service/routes/edits.ts` (dispatch, undo, hand-edits clear, `GET /tokens` calling `ops-tokens`), `src/service/watch.ts` (echo filter), `src/service/status-designs.ts` (`origin`), `src/service/routes/render.ts` (`sha256`, `utf8`), `test/service/core/{edits-pipeline,paths-cas,versions-user-edit,watch-echo}.test.ts`, `test/service/http/edits-routes.test.ts` | §2 end to end with a fake op: version first, stale, CAS (with `test/helpers/refuse-rename.ts` for Windows busy), rollback, echo dropped and an agent write after it not dropped, undo survives a new service instance, ledger append/clear, coalescing and its resets | `documentation/features/edit-on-canvas.md` (new: the user-edit rules in plain words) |
+| **T2a\*** Write primitives, versions, echo | fullstack (Opus) | M | `src/service/paths.ts` (`replaceFileIfHashUnchanged`, `moveNoReplace`; after T0), `src/service/versions.ts` (`userEdit`, coalescing with the swapped `afterTree`, `SnapshotRefusedError`, `trackedHashOf`, `treeHashOf` used by `computeTree`), `src/service/watch.ts` (echo filter, `forget`), `src/service/status-designs.ts` (`origin`), `test/service/core/{paths-cas,versions-user-edit,watch-echo}.test.ts` | §2.4 to §2.6: CAS (`changed`, `busy` with `test/helpers/refuse-rename.ts`), `moveNoReplace` never overwrites (`exists`, `busy`, fallback); coalescing and its resets, **an agent write between an edit's apply and the next edit forces a version**; each refusal maps to its typed `refusal` (restore route answers unchanged); echo dropped on a doubled event and on a poll 30 s later, an agent write after it not dropped, B-then-A shown | none |
+| **T2b\*** Edit pipeline and routes | fullstack (Opus) | M | after T2a: `src/service/edits/{pipeline,file,trash,op-module}.ts` (new), `src/service/edits/ops-{text,screens,tokens}.ts` (new, **stubs** against `OpModule`, §2.4), `src/service/routes/edits.ts` (dispatch, undo, hand-edits clear, `GET /tokens` calling the `readTokens` stub; after T0), `src/service/routes/render.ts` (`sha256`, `utf8`, `link`), `test/service/core/{edits-pipeline,edits-file}.test.ts`, `test/service/http/edits-routes.test.ts` | §2 end to end with a fake op (`createEditService({ ops })`): version first, stale, rollback (a 409 step keeps its sentence), undo survives a new service instance, ledger append/clear, **concurrent clear + edit keeps both the UndoRecord and the cleared ledger**, a second undo of one id → 404; the stubs answer the "not built yet" 500 | `documentation/features/edit-on-canvas.md` (new: the user-edit rules in plain words) |
 | **T7a** Rules text | rules author | S | `rules/DESIGN-RULES.md` | §9.1 verbatim | none |
-| **T8\*** Page state service | fullstack (Opus) | M | `src/shared/page-state.ts` (new), `src/service/page-state.ts` (new), `src/service/routes/page-state.ts`, `test/service/core/page-state.test.ts`, `test/shared/page-state.test.ts` | §8.1, §8.2: cap, coalescing (fake clock), flush on dispose, removed design not re-created, hostile files, link refused, never logged (log spy) | `documentation/features/saved-page-data.md` (new) |
-| **T9\*** Bridge additions | fullstack (Opus) | M | `src/guest/bridge/{bridge,storage-shim,edit-probe}.ts`, `src/guest/frame-doc.ts`, `test/guest/bridge-pure.test.ts`, `test/e2e/{bridge.test.ts,bridge-page.ts}` | §3.1, §4.4, §8.3 in the real sandboxed blob frame under the guest CSP: stand-in, quota, batch per task, sync, preview set and cleared, probe counts; readInit rejects bad `tokens`/`storage` | none |
+| **T8\*** Page state service | fullstack (Opus) | M | `src/shared/page-state.ts` (new, incl. `isOlderClear`), `src/service/page-state.ts` (new), `src/service/routes/page-state.ts` (after T0), `test/service/core/page-state.test.ts`, `test/shared/page-state.test.ts` | §8.1, §8.2: cap, coalescing (fake clock), flush on dispose, removed design not re-created, hostile files, link refused (lexical, through `resolvePlainTarget`), never logged (log spy); a PATCH with a gen older than a Clear → 409 and nothing applied, a gen from another epoch accepted | `documentation/features/saved-page-data.md` (new) |
+| **T9\*** Bridge additions | fullstack (Opus) | M | `src/guest/bridge/{bridge,storage-shim,edit-probe}.ts`, `src/guest/frame-doc.ts`, `test/guest/bridge-pure.test.ts`, `test/e2e/{bridge.test.ts,bridge-page.ts}` | §3.1, §4.4, §8.3 in the real sandboxed blob frame under the guest CSP: stand-in, quota, batch per task with last-value-per-key and **splitting of an oversized batch** (20 000 keys set in one loop all arrive, no message over either cap), sync, preview set and cleared, probe counts; readInit rejects bad `tokens`/`storage` | none |
 | **T11c** Wall layout | fullstack | S | `src/guest/camera.ts`, `test/guest/camera.test.ts` | ghost row and direction rows (§5.3, §6.3); today's layouts unchanged | none |
 
 ### Group B
 
 | Task | Agent | After | Effort | Files | Acceptance | Docs |
 |---|---|---|---|---|---|---|
-| **T3\*** Text op | fullstack (Opus) | T1, T2 | S | `src/service/edits/ops-text.ts`, `test/service/core/edits-text.test.ts` | §3.4 and its undo; E5 fixtures byte-exact; E6; stale; not UTF-8; symlink; too large | `edit-on-canvas.md` (text section) |
-| **T4\*** Screen ops | fullstack (Opus) | T2 | M | `src/shared/screen-ops.ts` (new), `src/service/store.ts` (`writeScreens`, `moveComments`), `src/service/edits/ops-screens.ts`, `test/shared/screen-ops.test.ts`, `test/service/core/edits-screens.test.ts` | §5.1, §5.2, §6.2: stamps, raw order kept, free ids, trash names, undo of each, keep with comments, rollback mid-way, provisional refused, comments never dropped | `documentation/features/screens-and-directions.md` (new) |
-| **T5** Tokens | fullstack | T2 | M | `src/shared/tokens-css.ts` (new), `src/service/edits/ops-tokens.ts`, `test/shared/tokens-css.test.ts`, `test/service/core/edits-tokens.test.ts` | §4.2, §4.3: last `:root` wins, media context, `!important`, units, formatting, byte-exact splices, stale knobs | `documentation/features/tweaks.md` (new) |
-| **T6** Hand edits in prompts | fullstack | T2 | M | `src/shared/agent/{hand-edits,screen-asks}.ts` (new), `src/shared/agent/{ask-prompt,revision-prompt}.ts` (`maxChars`, removed-screen label), `src/service/routes/chat.ts`, `test/agent/{hand-edits,screen-asks}.test.ts`, `test/agent/{ask-prompt,revision-prompt,chat-routes}.test.ts` | §7.2, §7.3: block caps, compact fallback, ask never cut, `handEdits` in the answer, no em dash (the copy test) | `documentation/features/agent-instructions.md` (hand-edit block) |
-| **T7b** Agent instruction code | fullstack | T7a | S | `src/shared/agent/{rules-doc,instructions,skill-doc}.ts`, `test/agent/__snapshots__/*`, `test/agent/{rules-doc,instructions,skill-doc}.test.ts` | §9.2, §9.3; instructions ≤ 4 096 | `agent-instructions.md` |
-| **T11a** Guest plumbing | fullstack | T2 | S | `src/guest/{store,flows,build-activity,source-cache}.ts`, `src/guest/fake-services.ts` (real fake answers), `test/guest/{flows,build-activity,changes-store}.test.ts` | store methods; ledger clear after each outcome; `origin:"user"` never "Writing"; source cache invalidation | none |
-| **T11b** Guest controllers | fullstack | T8, T9, T11a | M | `src/guest/{page-state,tweaks}.ts` (new), `test/guest/{page-state,tweaks}.test.ts` | §8.4, §4.4, §4.5 with a fake client and fake clock | none |
+| **T3\*** Text op | fullstack (Opus) | T1, T2b | S | `src/service/edits/ops-text.ts` (replaces the stub; nothing else), `test/service/core/edits-text.test.ts` | §3.4 and its undo; E5 fixtures byte-exact; E6; stale; not UTF-8; link (inside leaf and inside folder); too large | `edit-on-canvas.md` (text section) |
+| **T4\*** Screen ops | fullstack (Opus) | T2b | M | `src/shared/screen-ops.ts` (new), `src/service/store.ts` (`writeScreens`, `moveComments` with the hook and the shared retry loop; after T0), `src/service/edits/ops-screens.ts` (replaces the stub), `test/shared/screen-ops.test.ts`, `test/service/core/edits-screens.test.ts` | §5.1, §5.2, §6.2: stamps, raw order kept, free ids, trash names, undo of each, keep with comments, rollback mid-way, provisional refused, comments never dropped; **`writeScreens` losing all 5 attempts → 409 conflict, nothing claimed written**, the `beforeRename` hook sees the exact bytes | `documentation/features/screens-and-directions.md` (new) |
+| **T5\*** Tokens | fullstack (Opus) | T2b | M | `src/shared/tokens-css.ts` (new), `src/service/edits/ops-tokens.ts` (replaces the stub, incl. `readTokens`), `test/shared/tokens-css.test.ts`, `test/service/core/edits-tokens.test.ts` | §4.2, §4.3: last `:root` wins, media context, `!important`, a comment inside a value → `formula`, unbalanced quotes refused, units, formatting, byte-exact splices, stale knobs; writes tokens.css through the CAS | `documentation/features/tweaks.md` (new) |
+| **T6** Hand edits in prompts | fullstack | T2b | M | `src/shared/agent/{hand-edits,screen-asks}.ts` (new), `src/shared/agent/{ask-prompt,revision-prompt}.ts` (`maxChars`, removed-screen label), `src/service/routes/chat.ts`, `test/agent/{hand-edits,screen-asks}.test.ts`, `test/agent/{ask-prompt,revision-prompt,chat-routes}.test.ts` | §7.2, §7.3: block caps, compact fallback, ask never cut, `handEdits` in the answer, no em dash (the copy test) | `documentation/features/agent-instructions.md` (hand-edit block) |
+| **T7b** Agent instruction code | fullstack | T7a | S | `src/shared/agent/{rules-doc,instructions,skill-doc,chip,guide}.ts` (`guide.ts`: `buildAgentGuide` only, §9.5), `test/agent/__snapshots__/*`, `test/agent/{rules-doc,instructions,skill-doc,chip,guide}.test.ts` | §9.2, §9.3, §9.5; instructions ≤ 4 096; every owned-field list names `tweaks`; `buildSkillDoc` output byte-identical | `agent-instructions.md` |
+| **T11a** Guest plumbing | fullstack | T2b | S | `src/guest/{store,flows,build-activity,source-cache}.ts`, `src/guest/fake-services.ts` (real fake answers), `test/guest/{flows,build-activity,changes-store}.test.ts` | store methods; ledger clear after each outcome; `origin:"user"` never "Writing"; source cache invalidation | none |
+| **T11b** Guest controllers | fullstack | T8, T9, T11a | M | `src/guest/{page-state,tweaks}.ts` (new), `src/guest/service-client.ts` (`fitsOneRequest`), `test/guest/{page-state,tweaks,service-client}.test.ts` | §8.4, §4.4, §4.5 with a fake client and fake clock: **a 60 000-char CJK or emoji delta goes by upload, an ASCII one inline, none answered 413** (also against the real service in `test/service/integration/page-state-inline.test.ts`, new); load timeout = unsaved, late answer ignored; Clear on one controller drops the other's dirty keys (stale PATCH path and event path) | none |
 | **T10** Check stand-in | fullstack | T9, C1 merged | S | `src/service/check/render.ts` (and `cdp.ts` if the command helper lives there), `test/service/check/render.e2e.test.ts`; main agent: `scripts/build.mjs` step (1c) `__DC_STORAGE_SHIM__`, its `declare` | §8.5; the e2e expectation flipped | `design-checks.md` (storage in checks) |
 | **T5b** Broken-knob finding | fullstack | T5, C1 merged | S | `src/service/check/static.ts`, `test/service/check/static.test.ts` | §4.7; CLI, tool and badge agree | `design-checks.md` |
 
@@ -1634,8 +1931,8 @@ bearer and a sentence with it; validators reject each malformed shape in §10.4;
 
 | Task | After | Effort | Files | Acceptance | Docs |
 |---|---|---|---|---|---|
-| **U1** Edit text UI | T3, T9, T11a | M | `src/ui/wall/{selection-toolbar,text-editor,feature-edit-text}.ts` (new), `src/ui/wall/{wall,input-controller,hit-controller,popover-layer,frame-messages}.ts`, `src/ui/components/{ask-bar,notices}.ts`, `src/ui/model/{wall-input,edit-text-model}.ts`, `src/ui/styles.css` (own block), `test/ui/edit-text-model.test.ts`, `test/ui/wall-input-model.test.ts`, `test/ui/visual/scenarios/edit-text.mjs` | §3.5 every state on rail 320 and 480 px and page 1400 px, light and dark; keyboard path; E1 replay test; Ctrl/⌘+Z | `documentation/pages/full-screen-page.md`, `documentation/pages/rail-panel.md`, `edit-on-canvas.md` |
-| **U2** Tweaks UI | T5, T11b, U1 | M | `src/ui/wall/feature-tweaks.ts` (new), `src/ui/components/tweaks-panel.ts` (new), `src/ui/components/icons.ts` (`tune`), `src/ui/wall/{wall,frame-slot,design-view}.ts` (preview seam; frame-slot gets both `tokens` and `storage` init getters), `src/ui/rail/rail-app.ts`, `src/ui/page/page-app.ts` (leave guard), `src/ui/model/{tweaks-model,viewer-menu}.ts`, styles block, tests, `scenarios/tweaks.mjs` | §4.4 to §4.6; 100 ms preview; unsaved survives a reload; leave dialog | both page docs, `tweaks.md` |
+| **U1** Edit text UI | T3, T9, T11a | M | `src/ui/wall/{selection-toolbar,text-editor,feature-edit-text}.ts` (new), `src/ui/wall/{wall,input-controller,hit-controller,popover-layer,frame-messages}.ts`, `src/ui/components/{ask-bar,notices}.ts`, `src/ui/model/{wall-input,edit-text-model}.ts`, `src/ui/styles.css` (own block), `test/ui/edit-text-model.test.ts`, `test/ui/wall-input-model.test.ts`, `test/ui/visual/scenarios/edit-text.mjs` | §3.5 every state on rail 320 and 480 px and page 1400 px, light and dark; keyboard path; `createFrameMessageHandler` takes its store as a parameter (so Q1's E1 replay test can inject a fake); single-slot Ctrl/⌘+Z (`nextUndoSlot` model test, §2.7); `link` disabled reason | `documentation/pages/full-screen-page.md`, `documentation/pages/rail-panel.md`, `edit-on-canvas.md` |
+| **U2** Tweaks UI | T5, T11b, U1 | M | `src/ui/wall/feature-tweaks.ts` (new), `src/ui/components/tweaks-panel.ts` (new), `src/ui/components/icons.ts` (`tune`), `src/ui/wall/{wall,frame-slot,design-view}.ts` (preview seam; frame-slot gets both `tokens` and `storage` init getters), **`src/ui/wall/view-context.ts`** (`DrawerKind` + `'tweaks'`, `:24`), `src/ui/rail/rail-app.ts`, `src/ui/page/page-app.ts` (leave guard), `src/ui/model/{tweaks-model,viewer-menu}.ts`, styles block, tests, `scenarios/tweaks.mjs` | §4.4 to §4.6; 100 ms preview; unsaved survives a reload; leave dialog; load-failed row with Try again; the `alsoSet` preview note | both page docs, `tweaks.md` |
 | **U3** Screens UI | T4, T11c, U1 | M | `src/ui/wall/{board-set,feature-screens,reorder-controller}.ts`, `src/ui/wall/input-controller.ts` (drag start), `src/ui/components/comments-drawer.ts`, `src/ui/model/screens-model.ts`, styles block, tests, `scenarios/screens.mjs` | §5.4; drag page only; keyboard moves; announcements; ghost and its popover | both page docs, `screens-and-directions.md` |
 | **U4** Directions UI | T4, U3 | S | `src/ui/wall/{board-set,feature-directions}.ts`, `src/ui/model/directions-model.ts`, styles block, tests, `scenarios/directions.mjs` | §6.3 table on both surfaces | both page docs, `screens-and-directions.md` |
 | **U5** Page data UI | T11b, U2 | S | `src/ui/wall/feature-page-state.ts` (new), `src/ui/wall/frame-messages.ts` (route `storage-batch`; after U1), `src/ui/model/{page-state-model,viewer-menu}.ts` (after U2), tests, `scenarios/page-data.mjs` | §8.6; once-per-session notices; Clear confirm; version view empty | both page docs, `saved-page-data.md` |
@@ -1644,17 +1941,23 @@ bearer and a sentence with it; validators reject each malformed shape in §10.4;
 
 | Task | After | Scope |
 |---|---|---|
-| **Q1** qa-tester (Opus medium) | T2, T3, U1 | 07 + 08: E1 to E12, §17 tests can fail (mutation), live click-through on Linux |
+| **Q1** qa-tester (Opus medium) | T2a, T2b, T3, U1 | 07 + 08: E1 to E12, §17 tests can fail (mutation), live click-through on Linux; **writes the E1 replay risk test `test/ui/e1-frame-replay.test.ts`** (every frame message type, forged and valid, through `createFrameMessageHandler` with a fake store → zero edit calls; mutation: wiring one message to `applyEdit` turns it red) |
 | **Q2** qa-tester | T5, T5b, U2 | 09 |
 | **Q3** qa-tester (Opus medium) | T4, U3, U4 | 10 + 11 |
 | **Q4** qa-tester (Opus medium) | T8, T9, T10, U5 | 19, incl. §8.8 Linux Electron |
 | **Q5** qa-tester | all | whole phase, `documentation/README.md` index and `documentation/STATUS.md` updated by the main agent, then the SPEC update (§15) by the architect |
 
-Parallel at a glance: after T0, {T1, T2, T7a, T8, T9, T11c} run together; then {T3, T4, T5, T6, T7b, T11a}; then
-{T11b, T10, T5b} and {U1}; then {U2, U3}; then {U4, U5}. Shared files and their order: `store.ts` T0 → T4;
-`routes/edits.ts` T0 → T2; `versions.ts` T2 only; `fake-services.ts` T0 → T11a; `wall.ts` U1 → U2;
-`input-controller.ts` U1 → U3; `frame-messages.ts` U1 → U5; `board-set.ts` U3 → U4; `viewer-menu.ts` U2 → U5;
-`design-view.ts` U2 only; `styles.css` each task in its own marked block; `rules-doc.ts` T7b only.
+Parallel at a glance: after T0, {T1, T2a, T7a, T8, T9, T11c} run together; T2b after T2a; then {T3, T4, T5,
+T6, T7b, T11a} (T7b only needs T7a); then {T11b, T10, T5b} and {U1}; then {U2, U3}; then {U4, U5}; Q1 to Q5 as
+listed. Shared files and their order: `paths.ts` T0 → T2a; `store.ts` T0 → T4; `routes/edits.ts` T0 → T2b;
+`routes/page-state.ts` T0 → T8; `versions.ts` T2a only; `watch.ts` T2a only; `changes.ts` T0 only;
+`edits/ops-text.ts` T2b (stub) → T3; `edits/ops-screens.ts` T2b (stub) → T4; `edits/ops-tokens.ts` T2b (stub) →
+T5; `edits/pipeline.ts` T2b only (the op map is fixed there, so T3 to T5 never edit it); `fake-services.ts`
+T0 → T11a; `service-client.ts` T11b only; `wall.ts` U1 → U2; `input-controller.ts` U1 → U3;
+`frame-messages.ts` U1 → U5; `board-set.ts` U3 → U4; `viewer-menu.ts` U2 → U5; `view-context.ts` U2 only;
+`design-view.ts` U2 only; `styles.css` each task in its own marked block; `rules-doc.ts`, `chip.ts`, `guide.ts`
+T7b only; `test/service/core/paths.test.ts` T0 → T2a; `test/ui/wall-input-model.test.ts` U1 only;
+`test/ui/e1-frame-replay.test.ts` Q1 only.
 
 ---
 
@@ -1664,20 +1967,48 @@ Parallel at a glance: after T0, {T1, T2, T7a, T8, T9, T11c} run together; then {
 real service via `test/helpers/service-process.ts`): each of the seven routes → 401 without the bearer, 400 for a
 slug failing the pattern, 404 for an unknown slug with the gone sentence, 413 for a body over 80 kB; edits → 400
 for an unknown `op`, for `screen: "../x"`, for an `id` failing `EDIT_ID_PATTERN`; a `screens/home.html` symlink
-to a file outside the design → refused, and to a file inside → refused with the link sentence; a `.chamber` that
-is a link → `page-state` reads empty and writes refuse.
+to a file outside the design → refused, and to a file inside → refused with the link sentence (judged on the
+lexical path: the test asserts the refusal even though the realpath is a regular file inside the design), a
+`screens` folder that is a link to another folder inside the design → refused the same way, and `GET /source`
+answers `link: true` for both; a `.chamber` that is a link → `page-state` reads empty and writes refuse, and
+`edits.json` writes refuse; `PATCH /page-state` without `gen` → 400.
+
+**Hub and changes feed:** `GET /changes` answers `origin: "user"` on the events the pipeline emits and no
+`origin` key on watcher events (`test/service/core/{changes,routes}.test.ts`, T0).
 
 **Pure, failing test first** (risk logic): `source-edit` (all §3.2 to §3.4), `tokens-css`, `screen-ops`
 (`reorderRaw` with invalid entries, `freeCopyId` at the 41-char edge, `describeMove`), `page-state` parse and
 delta, `hand-edits` (caps, compact, quote escaping), `design-json` tweaks and marks, bridge-protocol validators,
-`edit-probe` counts over a fake `El`, `storage-shim` over a fake window (Proxy traps, quota, batching),
-`replaceFileIfHashUnchanged` (`changed`, `busy` via `refuse-rename.ts`), `self-writes` (TTL, consume, hash).
-Each risk test is mutation-checked: change one rule, watch it go red, change it back.
+`edit-probe` counts over a fake `El`, `storage-shim` over a fake window (Proxy traps, quota, last value per key,
+**an oversized batch split at both caps with `clear` only on the first**), `replaceFileIfHashUnchanged` (`changed`,
+`busy` via `refuse-rename.ts`), `moveNoReplace` (`exists` never overwrites, `busy` leaves only the source,
+fallback), `resolvePlainTarget` (§2.3 list), `self-writes` (no TTL: a second event for the same bytes is still an
+echo; other bytes → not an echo and the entry forgotten; B-then-A → A shown; size short-circuit),
+`trackedHashOf`/`treeHashOf` equal `computeTree`'s, `isOlderClear`, `fitsOneRequest` (ASCII inline, CJK and emoji
+of the same length uploaded), `nextUndoSlot` (single slot, §2.7). Each risk test is mutation-checked: change one
+rule, watch it go red, change it back.
 
 **Service integration:** a scripted agent writing a screen file (atomic and non-atomic) between the page's read
 and Save → stale, nothing written; writing it right after Save → the build strip input sees the agent's event
 (not dropped as an echo); two concurrent `POST /edits` → one applied, one stale; a hand edit then
 `POST /versions/turn` → both states in Versions; restart between edit and undo → undo works.
+- **Coalescing with an agent write between** (`versions-user-edit.test.ts`, T2a): edit 1 → "Before your edits";
+  the agent writes another file; edit 2 within 60 s → a second "Before your edits" version that holds the
+  agent's file (mutation: computing `afterTree` from a fresh `treeOf` turns it red). Without the agent write,
+  edit 2 coalesces.
+- **Concurrent clear + edit** (`edits-file.test.ts`, T2b): a `hand-edits/clear` and a `POST /edits` started
+  together, both orders forced with a gated fake → the UndoRecord and the new ledger entry exist and the cleared
+  entries stay cleared.
+- **Keep-direction undo after restart** (`edits-screens.test.ts`, T4): keep B, stop the service, start a new
+  instance on the same root, Undo → B, A, C and the original back in place, comments moved back, the screen
+  list as before.
+- **Non-ASCII inline PATCH** (`page-state-inline.test.ts`, T11b): 60 000 chars of CJK and of emoji go through
+  the controller to the real service and persist; no 413.
+- **Clear wins** (`page-state.test.ts`, T8; controller side in T11b): surface B holds dirty keys, A clears,
+  B's next PATCH → 409, B reloads empty, the keys are not on disk.
+- **Typed snapshot refusals** (`versions-user-edit.test.ts`): too large, newer build's index, torn (a fake file
+  rewritten mid-snapshot) each answer their §2.8 sentence; `POST /designs/:slug/versions/:vid/restore` answers
+  exactly as before.
 
 **E2E (headless Chrome, `chromeOrSkip`):** the bridge harness for the stand-in, preview and probe (§8.8 list);
 the check render with the stand-in.
@@ -1696,7 +2027,11 @@ three directions, keep B, Undo; a checklist design keeps its ticks across a relo
 - **Concurrency and partial writes while the watcher fires:** the agent's half-written file has a different
   hash → stale; the watcher's debounce never merges the user's event with the agent's (the user event is emitted
   directly and the echo is dropped by hash only); a design.json mid-write does not parse → screen actions refused
-  with the "can't be read right now" sentence, never written over (WP0 deviation 8 holds).
+  with the "can't be read right now" sentence, never written over (WP0 deviation 8 holds). An agent write
+  between two hand edits forces a new version (the swapped `afterTree`, §2.4). edits.json has one writer queue,
+  so a clear racing an edit loses nothing (§2.1). design.json that keeps changing through `writeScreens`' 5
+  attempts answers the conflict sentence, never a false success (§5.1). Windows' doubled rename events and the
+  slow poll backstop still read as the echo (§2.6).
 - **Retries and idempotency:** §2.10; page data PATCH is "set these keys", safe to retry; clear is idempotent.
 - **Empty, error, loading:** each feature's state table (§3.5, §4.6, §5.4, §6.3, §8.6).
 - **Missing or changed designs folder:** every route resolves the slug under the current root → gone sentence;
@@ -1705,31 +2040,41 @@ three directions, keep B, Undo; a checklist design keeps its ticks across a relo
   content and unaffected.
 - **Malformed or huge design.json:** knobs and marks dropped with warnings; a huge one is read as today; screen
   actions need it to parse.
-- **Headless Chrome missing:** thumbnails fall back to the live mini-frame, which gets the empty unsaved stand-in;
-  checks report `browser-missing` as today; the broken-knob finding is static and still runs.
+- **Headless Chrome missing:** thumbnails fall back to the live mini-frame, which is `sandbox=""` and runs no
+  script, so storage is not involved; checks report `browser-missing` as today; the broken-knob finding is
+  static and still runs.
 - **Service restart:** undo records and the ledger are on disk; coalescing and self-write memory reset (one extra
-  version at worst, one echo shown as the agent at worst within 5 s); pending page data flushed on a clean stop,
-  ≤ 1 s lost on a crash; the guests' change feed resets and refetches.
+  version at worst; a watcher event for the user's last write that the old process had not flushed yet is shown
+  as the agent's, once); the page-data clear counter resets (a clear followed by a restart inside another
+  surface's 1 s flush window is the only case that brings keys back, §14); pending page data flushed on a clean
+  stop, ≤ 1 s lost on a crash; the guests' change feed resets and refetches.
 - **Windows:** backslashes never reach a request (ids only); drive letters and UNC refused by `resolveInside`;
   case-insensitive disk safe (lower-case ids and slugs; trash names checked for existence); file locks → retry
   then the conflict sentence; CRLF and BOM preserved by splices; rename over an existing file never relied on for
-  moves (destinations checked absent).
+  moves (`moveNoReplace`: a hard link that fails on an existing name; NTFS supports it, FAT/exFAT falls back
+  to check-then-rename).
 - **Version caps:** over 1 000 files or 100 MB → the version-first refusal, nothing written; 100-version prune
   unchanged; coalescing limits growth.
 - **Viewing a version or comparing:** writes disabled (E12); frames run with empty unsaved storage and no preview.
 - **Rail and page open on one design:** both get the user events and reload; page data syncs through the
-  `page-state` event; tweaks are per surface, a save on one shows the stale banner on the other.
+  `page-state` event; a Clear on one drops the other's unflushed keys (§8.4); tweaks are per surface, a save on
+  one shows the stale banner on the other; Ctrl/⌘+Z on each surface undoes only that surface's own last edit.
 
 ---
 
 ## 19. Open questions
 
-None that block building. Two notes for the product specialist to confirm in review (both have a default here):
-1. **AD-8 reading of the owner's rule.** "Refuses when the agent changed `design.json` since the wall loaded it" is
-   built as "changed the screen list (or a touched screen file)". A change to the title, `updated`, viewports or
-   comments does not refuse a screen action. Default: as designed.
-2. **One new disabled-reason sentence** for implied end tags and unknown entities: "Design Chamber can't find this
-   text in the file exactly. Ask the agent to change it." Default: as designed.
+None. Product notes, all settled:
+1. **AD-8 reading of the owner's rule. Confirmed.** "Refuses when the agent changed `design.json` since the wall
+   loaded it" is built as "changed the screen list (or a touched screen file)". A change to the title, `updated`,
+   viewports or comments does not refuse a screen action.
+2. **One new disabled-reason sentence. Confirmed.** For implied end tags, unknown entities and the Windows-1252
+   character references: "Design Chamber can't find this text in the file exactly. Ask the agent to change it."
+3. **Version coalescing (PS E3). Resolved 2026-11-11: accepted.** A burst of hand edits within 60 s, with no
+   other writer in between, shares one version labelled "Before your edits" holding the state before the burst;
+   the states inside it are reached by Undo, not as separate Versions entries. The E9 refusal reads "Restore the
+   version 'Before your edits' from Versions." Ctrl/⌘+Z is one slot (§2.7). Clear saved page data drops another
+   surface's unflushed keys rather than letting them come back (§8.2, §8.4).
 
 ---
 
@@ -1744,4 +2089,4 @@ None that block building. Two notes for the product specialist to confirm in rev
 - [x] Reuse named first (chain, store lock, CAS primitive, notices, kit, ask flow, uploads); Not building listed.
 - [x] Ambiguities in Open Questions with defaults; the five owner decisions not re-opened.
 
-Architecture Complete → main agent (task breakdown) | → fullstack-developer (T1 to T11, T5b, T10), ui-ux-developer (U1 to U5), rules author (T7a), qa-tester (Q1 to Q5)
+Architecture Complete → main agent (task breakdown) | → fullstack-developer (T1, T2a, T2b, T3 to T11c, T5b, T10), ui-ux-developer (U1 to U5), rules author (T7a), qa-tester (Q1 to Q5)
