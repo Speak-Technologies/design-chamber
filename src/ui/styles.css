@@ -3027,3 +3027,90 @@ summary.dc-checks-group-title:focus-visible {
   color: var(--dc-error-text);
 }
 /* ===== end tweaks ===== */
+
+/* ===== Phase 2: directions (U4) ===== */
+
+/* ---- A direction row's header: "Pricing · 3 directions", Show at, and the row's ⋯. It lives in the labels layer (screen px), above the first label. ---- */
+.dc-label.dc-direction-head {
+  /* Not the 22 px strip of a board's label: it grows when the title and the select no longer fit one line (the rail). */
+  height: auto;
+  min-height: 28px;
+  flex-wrap: wrap;
+  align-content: flex-end;
+  column-gap: var(--dc-s3);
+  row-gap: 2px;
+  overflow: visible;
+  white-space: nowrap;
+}
+.dc-direction-line {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s1);
+  min-width: 0;
+  max-width: 100%;
+}
+.dc-direction-title {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--oc-fg);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.dc-direction-select {
+  flex: none;
+}
+.dc-direction-select .oc-sdk-select {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--dc-s2);
+}
+.dc-direction-select .oc-sdk-field-label {
+  flex: none;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+/* ---- "Keep this one" in a board's label (the full-screen page): an outline button at the label's end, a notch smaller than the toolbar's ---- */
+.dc-label-keep {
+  flex: none;
+  height: 22px;
+  margin-left: auto;
+  padding-inline: var(--dc-s2);
+  gap: 4px;
+  background: var(--oc-bg);
+  font-size: 0.75rem;
+}
+.dc-label-keep[disabled] {
+  /* Off for a reason the label says next to it ("Not written yet"): the button only dims. */
+  opacity: 0.5;
+}
+.dc-label-keep:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--oc-primary) 55%, transparent);
+}
+/* A direction board's name is a letter or "Current": it keeps its room, and the agent's short name and the size give way first. */
+.dc-label[data-direction='true'] .dc-label-name {
+  max-width: none;
+}
+/* In a narrow label the chips (blocked files, the version on show) give way before the name does. */
+.dc-label[data-direction='true'] .dc-label-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+/* Zoomed far out there is no room for a second line: the title and its ⋯ stay, Show at waits for the zoom. */
+.dc-direction-head[data-tight='true'] .dc-direction-select {
+  display: none;
+}
+
+/* A chip with words (blocked files) ends in an ellipsis rather than a cut letter. */
+.dc-label[data-direction='true'] .dc-status[tabindex] {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* ===== end directions ===== */

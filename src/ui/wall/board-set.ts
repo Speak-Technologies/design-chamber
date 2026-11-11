@@ -4,17 +4,38 @@
 //
 // `paintLabel` is the one place an artboard's status (loading, not written, blocked files, the
 // saved version on show) is rendered.
+//
+// Phase 2 directions (§6.3): screens the agent marked as directions of another screen draw as one row,
+// Current first, all at one viewport, under a header ("Pricing · 3 directions", Show at, ⋯). The page
+// keeps them on one line, the rail lays them out as a 2×2 grid (`directionColumns`). Each written board
+// carries "Keep this one" (a button on the page, a ⋯ menu item on the rail); the press is only reported.
 
-import { mountSpinner } from '@openchamber/sdk/ui';
+import { mountSelect, mountSpinner, type SelectHandle } from '@openchamber/sdk/ui';
 
 import { trackPins } from '../../guest/anchoring.ts';
 import { layoutWall, type Box, type WallArtboard } from '../../guest/camera.ts';
 import { artboardIdOf, type FrameToPageMessage } from '../../shared/bridge-protocol.ts';
 import { ARTBOARD_LABEL_HEIGHT, FRAME_UNLOAD_MARGIN, PAGE_FILL_VIEWPORT_ID, WALL_GAP } from '../../shared/limits.ts';
-import type { Comment, Viewport } from '../../shared/types.ts';
+import type { Comment, Screen, Viewport } from '../../shared/types.ts';
 import { append, h } from '../components/dom.ts';
 import { icon } from '../components/icons.ts';
-import { btn, iconBtn } from '../components/kit.ts';
+import { btn, iconBtn, openMenu } from '../components/kit.ts';
+import {
+  boardLabel,
+  DIRECTION_HEAD_ROOM,
+  DIRECTION_HEAD_ROOM_RAIL,
+  DIRECTION_LINE_ROOM,
+  directionColumns,
+  keepLabel,
+  keepState,
+  planDirections,
+  rowTitle,
+  spaceDirectionRows,
+  wallRows,
+  type DirectionPlan,
+  type DirectionRowPlan,
+  type KeepState,
+} from '../model/directions-model.ts';
 import { artboardLabel, viewportLabel } from '../model/format.ts';
 import { boardAt, labelWidth, liveBoards, type Point } from '../model/wall-model.ts';
 import { GHOST_HEIGHT, ghostVisible, type DragRow } from '../model/screens-model.ts';
@@ -41,6 +62,8 @@ export type BoardSet = BoardLookup & {
   rowBox: (screenId: string) => Rect | null;
   /** Whether this board is the first (left-most shown) of its screen's row: the one that carries the ⋯ menu and the drag. */
   isFirstOfRow: (board: Board) => boolean;
+  /** A screen and, when it is a direction row's original, its directions: every screen that moves with its row. */
+  rowScreenIds: (screenId: string) => Set<string>;
   /** Recompute the layout: add, resize and remove boards to match the design (or the page's stage). */
   rebuild: () => void;
   /** Load the board's frame (and its compare frame) for the version on show. Does nothing for a paused board. */
@@ -81,6 +104,14 @@ export type BoardSetDeps = {
 /** Smallest gap above a row (screen px) that still shows its label. */
 const LABEL_GAP_MIN = 18;
 
+/** A direction row's header: its title, "Show at" and the row's ⋯ menu. It lives in the labels layer, so it keeps one size at every zoom. */
+type DirectionHead = { root: HTMLElement; title: HTMLElement; selectHost: HTMLElement; select: SelectHandle; menu: HTMLButtonElement };
+
+/** Screen px between a header's foot and the label strip under it. */
+const HEAD_GAP = 6;
+/** Screen px the label strip sits above its frame (see `placeLabel`). */
+const LABEL_LIFT = 26;
+
 const toRect = (box: Box): Rect => ({ x: box.x, y: box.y, w: box.width, h: box.height });
 
 export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet => {
@@ -93,12 +124,57 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
   /** The "+ Screen" board: made when first needed, taken off the wall (not destroyed) while it is hidden. */
   let ghost: { root: HTMLElement; button: HTMLButtonElement } | null = null;
 
+  /** The direction rows of the screen list as last laid out, and each row's header strip (world px) by its original's id. */
+  let plan: DirectionPlan = { rows: new Map(), memberOf: new Map() };
+  let heads = new Map<string, Rect>();
+  const headEls = new Map<string, DirectionHead>();
+
   const values = (): IterableIterator<Board> => boards.values();
 
-  /** A canvas screen's row can have several viewports; the first shown carries the row's menu and drag (§5.4). */
+  /** The row a board belongs to (Current or one of its directions), or null on an ordinary screen. */
+  const directionOf = (board: Board): { row: DirectionRowPlan; current: boolean } | null => {
+    const id = board.art.screen?.id;
+    if (id === undefined) return null;
+    const row = plan.rows.get(id) ?? plan.rows.get(plan.memberOf.get(id) ?? '');
+    return row === undefined ? null : { row, current: row.root.id === id };
+  };
+
+  /** A canvas screen's row can have several viewports; the first shown carries the row's menu and drag (§5.4). A direction row's first is Current. */
   const isFirstOfRow = (board: Board): boolean => {
     const id = board.art.screen?.id;
-    return id !== undefined && !layout.boards.some((other) => other.screen?.id === id && other.cell.col < board.art.cell.col);
+    if (id === undefined) return false;
+    if (plan.memberOf.has(id)) return false;
+    if (plan.rows.has(id)) return true;
+    return !layout.boards.some((other) => other.screen?.id === id && other.cell.col < board.art.cell.col);
+  };
+
+  /** A screen id and, for a row's original, its directions: everything that moves with it. */
+  const rowScreenIds = (screenId: string): Set<string> => new Set([screenId, ...(plan.rows.get(screenId)?.members.map((member) => member.id) ?? [])]);
+
+  /** Whether "Keep this one" is on offer on this board, and why not when it is off. */
+  const keepStateOf = (board: Board): KeepState => {
+    const id = board.art.screen?.id ?? '';
+    const detail = ctx.detail;
+    return keepState({
+      viewing: ctx.readOnly(),
+      designJson: detail.designJson,
+      listInvalid: detail.warnings.some((warning) => warning.code === 'invalid-screens'),
+      editing: ctx.mode === 'edit',
+      busy: ctx.screensBusy !== null,
+      written: detail.files.screens[id]?.exists === true,
+    });
+  };
+
+  const pressKeep = (board: Board): void => {
+    const row = directionOf(board)?.row;
+    const keep = board.art.screen?.id;
+    if (row !== undefined && keep !== undefined && !ctx.disposed && ctx.screensBusy === null) options.onKeepDirection?.({ of: row.root.id, keep });
+  };
+
+  /** The rail's ⋯ on a direction board: one entry, off with its reason inside it when the board cannot be kept. */
+  const openKeepMenu = (board: Board): void => {
+    const state = keepStateOf(board);
+    openMenu(board.menu, [{ id: 'keep', label: 'Keep this one', disabled: state.disabled, ...(state.reason !== null ? { reason: state.reason } : {}) }], () => pressKeep(board));
   };
 
   // ---------------------------------------------------------------- painting
@@ -115,12 +191,52 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     const y = current.y + rect.y * current.scale;
     const width = rect.w * current.scale;
     const next = layout.boards.reduce<number | null>((nearest, other) => (other.rect.x > rect.x && (nearest === null || other.rect.x < nearest) ? other.rect.x : nearest), null);
-    board.label.style.transform = `translate(${x}px, ${y - 26}px)`;
+    board.label.style.transform = `translate(${x}px, ${y - LABEL_LIFT}px)`;
     // Never past the wall's right edge, so a long label ends in an ellipsis rather than a cut.
     board.label.style.width = `${Math.max(0, Math.min(labelWidth(rect, next, current.scale), Math.max(width, ctx.surfaceSize.w - x - 8)))}px`;
     // Labels sit in the gap above their row; below an 18 px gap only the top row keeps one. A label now carries the screen's
     // ⋯ menu and its drag, so it holds on down to where a rail 320 px wide fits three screens (about 20 px), its text still in the gap.
-    board.label.hidden = width < 32 || (board.art.cell.row > 0 && (ARTBOARD_LABEL_HEIGHT + WALL_GAP) * current.scale < LABEL_GAP_MIN);
+    // A direction row's boards always keep theirs: the wall reserves room for them (`spaceDirectionRows`) and Keep lives there.
+    const direction = directionOf(board);
+    const line = board.art.cell.line ?? 0;
+    // A direction row's own room above it (its header) or between its lines counts as gap, so its labels hold longer than a plain row's.
+    const room = direction === null ? 0 : line > 0 ? DIRECTION_LINE_ROOM : (heads.get(direction.row.root.id)?.h ?? 0);
+    const crowded = (board.art.cell.row > 0 || line > 0) && (ARTBOARD_LABEL_HEIGHT + WALL_GAP + room) * current.scale < LABEL_GAP_MIN;
+    board.label.hidden = width < 32 || crowded;
+  };
+
+  /** A direction row's header sits just above its Current board's label strip, at one size whatever the zoom. */
+  const placeHead = (rootId: string, head: DirectionHead): void => {
+    const row = plan.rows.get(rootId);
+    const current = row === undefined ? undefined : boards.get(artboardIdOf(rootId, row.viewport.id));
+    if (current === undefined) {
+      head.root.hidden = true;
+      return;
+    }
+    // Shown first: a hidden element has no height to measure.
+    head.root.hidden = false;
+    delete head.root.dataset.tight;
+    const view = camera.get();
+    const x = view.x + current.art.rect.x * view.scale;
+    // Its width first (a narrow rail wraps the select under the title), then its height for where its foot sits.
+    head.root.style.maxWidth = `${Math.max(0, ctx.surfaceSize.w - x - 8)}px`;
+    // The gap above the label strip, on screen: the header may only use that. Zoomed far out it gives up Show at first (zoom in to
+    // use it), and below one line it goes altogether.
+    const above = heads.get(rootId);
+    const room = above === undefined ? Infinity : (current.art.rect.y - (above.y - WALL_GAP)) * view.scale - LABEL_LIFT - HEAD_GAP;
+    if (head.root.offsetHeight > room) head.root.dataset.tight = 'true';
+    if (head.root.offsetHeight > room) {
+      head.root.hidden = true;
+      return;
+    }
+    const y = view.y + current.art.rect.y * view.scale - LABEL_LIFT - head.root.offsetHeight - HEAD_GAP;
+    // left/top, not a transform: the select's popup opens inside the header, and a transformed ancestor would become its fixed-position origin.
+    head.root.style.left = `${x}px`;
+    head.root.style.top = `${y}px`;
+  };
+
+  const placeHeads = (): void => {
+    for (const [rootId, head] of headEls) placeHead(rootId, head);
   };
 
   const paintPlaceholder = (board: Board): void => {
@@ -161,13 +277,15 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     const name = art.screen ? `${art.screen.title} · ${viewportLabel(art.viewport)}` : viewportLabel(art.viewport);
     const navigated = board.screenId !== (art.screen?.id ?? null);
     const shown = navigated ? (ctx.screens().find((s) => s.id === board.screenId)?.title ?? board.screenId ?? '') : (art.screen?.title ?? ctx.detail.design.title);
-    const text = artboardLabel(shown, art.viewport);
+    // A direction row's boards are named "Current" and "A · Bold" (until play mode walks the frame to another screen).
+    const text = directionOf(board) !== null && !navigated && art.screen ? boardLabel(art.screen, art.viewport) : artboardLabel(shown, art.viewport);
     board.labelText.replaceChildren(h('span', { class: 'dc-label-name' }, text.name), h('span', { class: 'dc-label-sep', 'aria-hidden': 'true' }, '·'), h('span', { class: 'dc-label-dims' }, text.detail));
     board.labelText.title = text.full;
     board.labelStatus.replaceChildren();
     const state = board.main.state();
     if (state === 'loading' && board.live) append(board.labelStatus, h('span', { class: 'dc-status dc-status-spin', role: 'status', 'aria-label': 'Loading' }));
-    if (state === 'missing') append(board.labelStatus, h('span', { class: 'dc-status', 'data-tone': 'warning' }, 'Not written yet'));
+    // A direction's board says so in its own placeholder and in Keep's reason; the label keeps its room for the name and Keep.
+    if (state === 'missing' && directionOf(board) === null) append(board.labelStatus, h('span', { class: 'dc-status', 'data-tone': 'warning' }, 'Not written yet'));
     if (state === 'error') append(board.labelStatus, h('span', { class: 'dc-status', 'data-tone': 'error' }, 'Didn’t load'));
     const meta = board.main.meta();
     const problems = meta ? [...meta.blocked, ...meta.missing] : [];
@@ -194,6 +312,41 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     paintLabelMenu(board);
   };
 
+  /** The row's ⋯ (the same screen menu a normal row has) sits in the header, not in a label: Edit mode on a canvas only. */
+  const paintHeadMenu = (head: DirectionHead, row: DirectionRowPlan): void => {
+    head.menu.hidden = !(ctx.detail.design.kind === 'canvas' && ctx.mode === 'edit');
+    const name = `Actions for screen ${row.root.title}`;
+    head.menu.setAttribute('aria-label', name);
+    head.menu.title = name;
+    if (ctx.screensBusy !== null) head.menu.setAttribute('aria-disabled', 'true');
+    else head.menu.removeAttribute('aria-disabled');
+  };
+
+  /**
+   * A direction row's board: "Keep this one" as a button in the label on the full-screen page, as the ⋯ menu's one entry on the
+   * rail (its labels are too small for a button). Off with its reason when the board is not written yet; hidden while an old
+   * version is on show and in Play. Only the original's label can be dragged (the group moves with its row).
+   */
+  const paintDirectionLabel = (board: Board, screen: Screen, direction: { row: DirectionRowPlan; current: boolean }): void => {
+    const state = keepStateOf(board);
+    const busy = ctx.screensBusy;
+    const onPage = !options.compact;
+    const name = keepLabel(screen, direction.row.root.title);
+    board.keep.el.hidden = !(state.shown && onPage);
+    board.keep.set({ disabled: state.disabled, loading: busy !== null && busy.id === screen.id, title: state.reason ?? '' });
+    board.keep.el.setAttribute('aria-label', state.reason !== null ? `${name}. ${state.reason}` : name);
+    board.menu.hidden = !(state.shown && !onPage);
+    const menuName = `Actions for ${boardLabel(screen, board.art.viewport).full}`;
+    board.menu.setAttribute('aria-label', menuName);
+    board.menu.title = menuName;
+    if (busy !== null) board.menu.setAttribute('aria-disabled', 'true');
+    else board.menu.removeAttribute('aria-disabled');
+    board.label.dataset.direction = 'true';
+    board.label.dataset.draggable = direction.current && onPage && state.shown && !ctx.readOnly() && busy === null ? 'true' : 'false';
+    const head = headEls.get(direction.row.root.id);
+    if (direction.current && head) paintHeadMenu(head, direction.row);
+  };
+
   /**
    * The screen menu's button and the drag handle of a row's first label. Edit mode on a canvas only (Play uses the
    * design like a prototype). On an old version the button stays, with every entry off and the reason inside it.
@@ -201,6 +354,13 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
    */
   const paintLabelMenu = (board: Board): void => {
     const screen = board.art.screen;
+    const direction = directionOf(board);
+    if (direction !== null && screen !== null && !pageMode) {
+      paintDirectionLabel(board, screen, direction);
+      return;
+    }
+    board.keep.el.hidden = true;
+    delete board.label.dataset.direction;
     const shows = !pageMode && screen !== null && ctx.detail.design.kind === 'canvas' && ctx.mode === 'edit' && isFirstOfRow(board);
     board.menu.hidden = !shows;
     // aria-disabled, not `disabled`: the button that just had focus keeps it while the request runs.
@@ -244,12 +404,18 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
       size: 'sm',
       onClick: () => {
         const screenId = self?.art.screen?.id;
-        if (screenId !== undefined && !ctx.disposed && ctx.screensBusy === null) deps.onScreenMenu({ screenId, anchor: menu });
+        if (screenId === undefined || ctx.disposed || ctx.screensBusy !== null) return;
+        // On a direction row's board the ⋯ holds Keep this one; the row's own screen menu is in its header.
+        if (self && directionOf(self) !== null) openKeepMenu(self);
+        else deps.onScreenMenu({ screenId, anchor: menu });
       },
     });
     menu.classList.add('dc-label-menu');
     menu.hidden = true;
-    const label = h('div', { class: 'dc-label' }, labelText, labelStatus, menu);
+    const keep = btn({ label: 'Keep this one', variant: 'outline', size: 'xs', icon: 'check', onClick: () => void (self && pressKeep(self)) });
+    keep.el.classList.add('dc-label-keep');
+    keep.el.hidden = true;
+    const label = h('div', { class: 'dc-label' }, labelText, labelStatus, keep.el, menu);
     const placeholder = h('div', { class: 'dc-placeholder' });
     const hoverTag = h('span', { class: 'dc-hover-tag' });
     const hover = h('div', { class: 'dc-hover', hidden: true }, hoverTag);
@@ -282,6 +448,7 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
       labelText,
       labelStatus,
       menu,
+      keep,
       main,
       compare: null,
       screenId: art.screen?.id ?? null,
@@ -380,15 +547,82 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     root.style.height = `${box.h}px`;
   };
 
+  // ---------------------------------------------------------------- direction headers
+
+  const makeHead = (rootId: string): DirectionHead => {
+    const title = h('span', { class: 'dc-direction-title' });
+    const selectHost = h('div', { class: 'dc-direction-select' });
+    const menu = iconBtn({
+      icon: 'more',
+      label: 'Actions for screen',
+      size: 'sm',
+      onClick: () => {
+        if (!ctx.disposed && ctx.screensBusy === null) deps.onScreenMenu({ screenId: rootId, anchor: menu });
+      },
+    });
+    menu.classList.add('dc-label-menu');
+    // `dc-label`: a press on the header is not a press on the wall (no pan, no comment), like a press on any label.
+    // The row's ⋯ stays with its title; a narrow header wraps Show at onto a line of its own.
+    const root = h('div', { class: 'dc-label dc-direction-head', 'data-direction-head': rootId }, h('span', { class: 'dc-direction-line' }, title, menu), selectHost);
+    const select = mountSelect(selectHost, {
+      label: 'Show at',
+      value: null,
+      options: [],
+      onChange: (id) => {
+        // The choice is saved per design by the view; the row is laid out again at that size and fitted, since the size changed a lot.
+        options.onDirectionViewport?.(rootId, id);
+        rebuild();
+        camera.fit();
+      },
+    });
+    ctx.labels.append(root);
+    return { root, title, selectHost, select, menu };
+  };
+
+  const paintHead = (head: DirectionHead, row: DirectionRowPlan): void => {
+    head.title.textContent = rowTitle(row.root.title, row.members.length);
+    head.title.title = head.title.textContent;
+    // One viewport to choose from is no choice: the select goes (the row's boards say which size they are).
+    head.selectHost.hidden = row.options.length < 2;
+    head.select.update({ value: row.viewport.id, options: row.options.map((viewport) => ({ id: viewport.id, label: viewport.label })) });
+    paintHeadMenu(head, row);
+  };
+
+  const syncHeads = (): void => {
+    for (const [rootId, head] of headEls) {
+      if (plan.rows.has(rootId)) continue;
+      head.select.dispose();
+      head.root.remove();
+      headEls.delete(rootId);
+    }
+    for (const row of plan.rows.values()) {
+      let head = headEls.get(row.root.id);
+      if (head === undefined) {
+        head = makeHead(row.root.id);
+        headEls.set(row.root.id, head);
+      }
+      paintHead(head, row);
+    }
+  };
+
   const rebuild = (): void => {
     const { design } = ctx.detail;
-    if (pageMode) layout = pageLayout();
-    else {
+    if (pageMode) {
+      layout = pageLayout();
+      plan = { rows: new Map(), memberOf: new Map() };
+      heads = new Map();
+    } else {
       const visible = design.viewports.filter((viewport) => !ctx.hidden.has(viewport.id));
-      const rows = design.kind === 'page' ? [{ id: null, title: design.title }] : design.screens.map((screen) => ({ id: screen.id, title: screen.title, ...(screen.viewports ? { viewports: screen.viewports } : {}) }));
+      plan = design.kind === 'page' ? { rows: new Map(), memberOf: new Map() } : planDirections(design.screens, design.viewports, (of) => options.directionViewport?.(of));
+      const rows = design.kind === 'page' ? [{ id: null, title: design.title }] : wallRows(design.screens, plan);
       const first = visible[0];
       const showGhost = first !== undefined && ghostVisible({ kind: design.kind, mode: ctx.mode, viewing: ctx.readOnly(), count: design.screens.length });
-      const wall = layoutWall(rows, visible, showGhost ? { ghost: { width: first.width, height: GHOST_HEIGHT } } : {});
+      const columns = directionColumns(options.compact);
+      const placed = layoutWall(rows, visible, { ...(showGhost ? { ghost: { width: first.width, height: GHOST_HEIGHT } } : {}), ...(columns !== undefined ? { directionColumns: columns } : {}) });
+      // Room above each direction row for its header, and between the lines of the rail's grid.
+      const spaced = spaceDirectionRows(placed, plan, options.compact ? DIRECTION_HEAD_ROOM_RAIL : DIRECTION_HEAD_ROOM);
+      const wall = spaced.layout;
+      heads = new Map([...spaced.heads].map(([id, box]) => [id, toRect(box)] as const));
       layout = {
         boards: wall.artboards.map((cell) => ({
           id: cell.id,
@@ -420,7 +654,9 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
         if (resized && !pageMode) void load(existing);
       } else boards.set(art.id, makeBoard(art));
     }
+    syncHeads();
     for (const board of boards.values()) paint(board);
+    placeHeads();
   };
 
   // ---------------------------------------------------------------- loading
@@ -480,19 +716,27 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     rows: () => {
       const rows: DragRow[] = [];
       for (const screen of ctx.screens()) {
-        const own = layout.boards.filter((art) => art.screen?.id === screen.id);
+        // A direction is not a row of its own: it moves with its original.
+        if (plan.memberOf.has(screen.id)) continue;
+        const ids = rowScreenIds(screen.id);
+        const own = layout.boards.filter((art) => art.screen !== null && ids.has(art.screen.id));
         if (own.length === 0) continue;
-        rows.push({ id: screen.id, top: Math.min(...own.map((art) => art.cell.label.y)), bottom: Math.max(...own.map((art) => art.rect.y + art.rect.h)) });
+        // A direction row's header is part of the row: a line dropped above it sits above the header.
+        const head = heads.get(screen.id);
+        rows.push({ id: screen.id, top: Math.min(...own.map((art) => art.cell.label.y), ...(head ? [head.y] : [])), bottom: Math.max(...own.map((art) => art.rect.y + art.rect.h)) });
       }
       return rows;
     },
     rowBox: (screenId) => {
-      const own = layout.boards.filter((art) => art.screen?.id === screenId);
+      const ids = rowScreenIds(screenId);
+      const own = layout.boards.filter((art) => art.screen !== null && ids.has(art.screen.id));
       if (own.length === 0) return null;
       const left = Math.min(...own.map((art) => art.rect.x));
-      const top = Math.min(...own.map((art) => art.cell.label.y));
+      const head = heads.get(screenId);
+      const top = Math.min(...own.map((art) => art.cell.label.y), ...(head ? [head.y] : []));
       return { x: left, y: top, w: Math.max(...own.map((art) => art.rect.x + art.rect.w)) - left, h: Math.max(...own.map((art) => art.rect.y + art.rect.h)) - top };
     },
+    rowScreenIds,
     isFirstOfRow,
     rebuild,
     load,
@@ -501,6 +745,7 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     paintLabel,
     placeLabels: () => {
       for (const board of boards.values()) placeLabel(board);
+      placeHeads();
     },
     markRecent: (sources) => {
       recent = sources;
@@ -524,6 +769,11 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
     dispose: () => {
       for (const board of boards.values()) disposeBoard(board);
       boards.clear();
+      for (const head of headEls.values()) {
+        head.select.dispose();
+        head.root.remove();
+      }
+      headEls.clear();
       ghost?.root.remove();
       ghost = null;
     },

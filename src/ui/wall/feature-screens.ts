@@ -23,6 +23,7 @@ import { openMenu } from '../components/kit.ts';
 import { flows, guestHost, store } from '../guest.ts';
 import { askRequestToast, askTarget } from '../model/ask-bar-model.ts';
 import { agentIsWorking } from '../model/edit-text-model.ts';
+import { directionsOffReason, moveRowToGap, planDirections, type DirectionPlan } from '../model/directions-model.ts';
 import { directionsRoom, newScreenRoom, screenMenu, shiftOrder, type ScreenGate } from '../model/screens-model.ts';
 import { buildActivityFor } from './feature-build-strip.ts';
 import { undoSlotFor } from './feature-undo.ts';
@@ -115,8 +116,25 @@ export const mount: FeatureMount = (ctx) => {
     void run(move.id, { request: { op: 'reorder', screens: stamp, order: move.order }, failTitle, reveal: () => move.id });
   };
 
+  /** The direction rows of the current list: a direction is not a row of its own (§6.3), so a row's neighbours skip them. */
+  const directionPlan = (): DirectionPlan => {
+    const { design } = ctx.detail();
+    return planDirections(design.screens, design.viewports, () => undefined);
+  };
+
   const shift = (id: string, direction: 'up' | 'down'): void => {
-    const order = shiftOrder(ctx.detail().design.screens.map((screen) => screen.id), id, direction);
+    const { screens } = ctx.detail().design;
+    const ids = screens.map((screen) => screen.id);
+    const plan = directionPlan();
+    let order: string[] | null;
+    if (plan.rows.size === 0) order = shiftOrder(ids, id, direction);
+    else {
+      // A row that has directions takes them along, and a move passes over other rows' directions.
+      const rowIds = ids.filter((one) => !plan.memberOf.has(one));
+      const at = rowIds.indexOf(id);
+      const moving = new Set([id, ...(plan.rows.get(id)?.members.map((member) => member.id) ?? [])]);
+      order = at < 0 ? null : moveRowToGap(ids, rowIds, id, moving, direction === 'up' ? at - 1 : at + 2);
+    }
     if (order !== null) reorder({ id, order }, `Couldn’t move ${titleOf(id)}`);
   };
 
@@ -201,7 +219,18 @@ export const mount: FeatureMount = (ctx) => {
     const screens = detail.design.screens;
     const index = screens.findIndex((screen) => screen.id === screenId);
     if (index < 0) return;
-    const menu = screenMenu({ ...gate(), index, count: screens.length, hasFile: detail.files.screens[screenId]?.exists === true, agentWorking: agentWorking() });
+    const plan = directionPlan();
+    const rowIds = screens.filter((screen) => !plan.memberOf.has(screen.id)).map((screen) => screen.id);
+    const menu = screenMenu({
+      ...gate(),
+      index,
+      count: screens.length,
+      rowIndex: rowIds.indexOf(screenId),
+      rowCount: rowIds.length,
+      hasFile: detail.files.screens[screenId]?.exists === true,
+      agentWorking: agentWorking(),
+      directionsOff: directionsOffReason(screenId, plan, titleOf),
+    });
     openMenu(
       anchor,
       menu.items,

@@ -20,6 +20,7 @@ import { renderSourceKey } from '../../guest/store.ts';
 import { askSelfContained, host, isServiceError, store } from '../guest.ts';
 import { askRequestToast } from '../model/ask-bar-model.ts';
 import { viewportLabel, viewportSize, zoomPercent } from '../model/format.ts';
+import { readDirectionViewports } from '../model/directions-model.ts';
 import { createListeners } from '../model/listeners.ts';
 import { ASK_FOR_TWEAKS_TEXT, TWEAKS_SUBTITLE, TWEAKS_TITLE, tweaksSheetVariant } from '../model/tweaks-model.ts';
 import { viewerMenuEntries } from '../model/viewer-menu.ts';
@@ -29,11 +30,13 @@ import * as askBar from './feature-ask-bar.ts';
 import { askBarFor } from './feature-ask-bar.ts';
 import * as buildStrip from './feature-build-strip.ts';
 import * as checks from './feature-checks.ts';
+import * as directions from './feature-directions.ts';
 import * as editText from './feature-edit-text.ts';
 import * as findability from './feature-findability.ts';
 import * as screens from './feature-screens.ts';
 import * as tweaks from './feature-tweaks.ts';
 import type { DrawerContent, DrawerKind, FeatureMount, ViewContext } from './view-context.ts';
+import type { DirectionKeepPress } from './wall-types.ts';
 import { createWall, type WallHandle } from './wall.ts';
 
 export type DesignViewOptions = {
@@ -61,8 +64,11 @@ export type DesignViewHandle = {
   dispose: () => void;
 };
 
-/** Per-design view settings in `host.storage` `view:<slug>`; `pageView` is checked against the design's viewports when it is used. */
-type Prefs = { hidden: string[]; camera: Camera | null; pageView: unknown };
+/**
+ * Per-design view settings in `host.storage` `view:<slug>`; `pageView` is checked against the design's viewports when it is used.
+ * `directionViewport` is the size each direction row is shown at, by its original's screen id (an unknown id shows the first size).
+ */
+type Prefs = { hidden: string[]; camera: Camera | null; pageView: unknown; directionViewport: Record<string, string> };
 type Drawer = { kind: DrawerKind; sheet: SheetHandle; handle: CommentsHandle | VersionsHandle | DrawerContent; stop: (() => void) | null };
 
 const FULL_SCREEN_HINT = 'Full screen: sidebar → Extension pages → Design Chamber';
@@ -78,10 +84,10 @@ const hiddenRemote = new Map<string, readonly string[]>();
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
 const readPrefs = (raw: unknown): Prefs => {
-  if (!isRecord(raw)) return { hidden: [], camera: null, pageView: null };
+  if (!isRecord(raw)) return { hidden: [], camera: null, pageView: null, directionViewport: {} };
   const hidden = Array.isArray(raw.hidden) ? raw.hidden.filter((entry): entry is string => typeof entry === 'string') : [];
   const camera = isRecord(raw.camera) && typeof raw.camera.x === 'number' && typeof raw.camera.y === 'number' && typeof raw.camera.scale === 'number' ? { x: raw.camera.x, y: raw.camera.y, scale: raw.camera.scale } : null;
-  return { hidden, camera, pageView: raw.pageView };
+  return { hidden, camera, pageView: raw.pageView, directionViewport: readDirectionViewports(raw.directionViewport) };
 };
 
 export const mountDesignView = (options: DesignViewOptions): DesignViewHandle => {
@@ -132,9 +138,12 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const drawerListeners = createListeners();
     let htmlChars: number | null = null;
 
+    let directionViewport = prefs.directionViewport;
     const savePrefs = debounce((camera: Camera | null) => {
-      void host.storage.set(`view:${slug}`, { hidden: [...hidden], camera, pageView });
+      void host.storage.set(`view:${slug}`, { hidden: [...hidden], camera, pageView, directionViewport });
     }, 500);
+    // "Keep this one" presses from the wall's direction rows go to the directions feature (seam S9).
+    const keepListeners = createListeners<[DirectionKeepPress]>();
 
     const zoomLabel = btn({ label: '100%', variant: 'ghost', size: 'xs', title: 'Reset zoom to 100%', onClick: () => wall.zoomReset() });
     zoomLabel.el.classList.add('dc-zoom-label');
@@ -165,6 +174,12 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
           return panel ? Math.max(0, stage.getBoundingClientRect().bottom - panel.getBoundingClientRect().top) : 0;
         },
         initialCamera: isPage ? null : prefs.camera,
+        directionViewport: (of) => directionViewport[of],
+        onDirectionViewport: (of, viewportId) => {
+          directionViewport = { ...directionViewport, [of]: viewportId };
+          savePrefs(wall.getCamera());
+        },
+        onKeepDirection: keepListeners.emit,
         onScale: (next) => zoomLabel.set({ label: zoomPercent(next) }),
         onCameraSettled: (camera) => savePrefs(camera),
         createComment: async (body) => {
@@ -748,6 +763,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         close: closeDrawer,
         isBottomSheet: () => drawer?.sheet.el.dataset.variant === 'bottom',
       },
+      onKeepDirection: keepListeners.add,
       onBeforeLeave: (guard) => {
         leaveGuards.push(guard);
         return () => {
@@ -784,6 +800,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       mountFeature('edit text', editText.mount),
       // Also after the build strip (it reads the strip's phase for the menu's hint) and after Edit text (they share one undo slot).
       mountFeature('screens', screens.mount),
+      // Also after Edit text (one undo slot), and after the screens feature: both write through the same notices.
+      mountFeature('directions', directions.mount),
       // After the build strip (its phase is the panel's agent-working hint), the ask bar (Send goes quiet while the panel is open) and Edit text (they share one undo slot).
       mountFeature('tweaks', tweaks.mount),
     ];

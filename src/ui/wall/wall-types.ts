@@ -6,6 +6,7 @@ import type { Camera, WallArtboard } from '../../guest/camera.ts';
 import type { AskElement, CreateCommentBody, PatchCommentBody } from '../../shared/api.ts';
 import type { HitElement } from '../../shared/bridge-protocol.ts';
 import type { Screen, Viewport } from '../../shared/types.ts';
+import type { BtnHandle } from '../components/kit.ts';
 import type { PickCheck } from '../model/edit-text-model.ts';
 import type { Point } from '../model/wall-model.ts';
 import type { CardHandle } from './comment-ui.ts';
@@ -45,7 +46,18 @@ export type WallOptions = {
    * Nobody passes it yet; when set, `popover-layer.openThread` hands it to the thread card as `onSend`.
    */
   onSendComment?: (id: string, body: string) => Promise<void>;
+  /**
+   * Phase 2 directions (§6.3): the viewport id a direction row is shown at, by its original's screen id (undefined → the first of the
+   * original's viewports), and the "Show at" select changing it. The view keeps the choice in `host.storage` `view:<slug>`.
+   */
+  directionViewport?: (of: string) => string | undefined;
+  onDirectionViewport?: (of: string, viewportId: string) => void;
+  /** "Keep this one" was pressed on a direction row's board (the directions feature turns it into one request). */
+  onKeepDirection?: (press: DirectionKeepPress) => void;
 };
+
+/** A press on "Keep this one": `of` is the row's original, `keep` the board's screen (`of` itself for Current). */
+export type DirectionKeepPress = { of: string; keep: string };
 
 /**
  * Seam S4 (Phase 1, ask bar): the element the user clicked to comment on. `key` is
@@ -89,6 +101,8 @@ export type Board = {
   labelStatus: HTMLElement;
   /** The ⋯ button of the screen menu: shown on a canvas row's first label in Edit mode (board-set decides). */
   menu: HTMLButtonElement;
+  /** "Keep this one" on a direction row's board (the full-screen page; the rail has it in the ⋯ menu). Hidden on every other board. */
+  keep: BtnHandle;
   main: FrameSlot;
   compare: FrameSlot | null;
   /** Screen the frame currently shows; differs from `art.screen` after play-mode navigation. */

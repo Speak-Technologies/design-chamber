@@ -64,6 +64,46 @@ export const coffeePricing = (): string =>
 </div></section>`,
   );
 
+/** The Pricing screen as an agent's direction would write it: A bold and dark, B editorial, C as cards (letter D falls back to C). */
+export const coffeeDirection = (letter: string): string => {
+  if (letter === 'A') {
+    const night: Palette = { bg: '#1c1510', ink: '#f3e8da', accent: '#e08a5c', soft: '#3a2c20', card: '#261c14' };
+    return base(
+      night,
+      'Ember & Oak — Plans (bold)',
+      `${nav('Ember &amp; Oak', 'pricing')}
+<section style="padding-bottom:8px"><p class="sans" style="text-transform:uppercase;letter-spacing:.18em;font-size:12px;color:${night.accent};margin:0 0 14px">Plans</p><h1 style="font-size:84px;max-width:11em">Pick a rhythm. Skip any month.</h1></section>
+<section style="display:grid;grid-template-columns:repeat(3,1fr);gap:0;border-top:1px solid ${night.accent}">
+ <div style="padding:28px 28px 28px 0"><p class="sans" style="margin:0;color:${night.accent}">Weekend</p><h2 style="font-size:96px;margin:6px 0">$14</h2><p class="sans">One 250 g bag a month.</p></div>
+ <div style="padding:28px"><p class="sans" style="margin:0;color:${night.accent}">Everyday</p><h2 style="font-size:96px;margin:6px 0">$26</h2><p class="sans">Two bags, two origins.</p></div>
+ <div style="padding:28px 0 28px 28px"><p class="sans" style="margin:0;color:${night.accent}">Office</p><h2 style="font-size:96px;margin:6px 0">$68</h2><p class="sans">Four 500 g bags, whole bean.</p></div>
+</section>`,
+      `h1,h2{font-weight:800!important}`,
+    );
+  }
+  if (letter === 'B') {
+    return base(
+      COFFEE,
+      'Ember & Oak — Plans (editorial)',
+      `${nav('Ember &amp; Oak', 'pricing')}
+<section style="max-width:760px;margin:0 auto;padding-bottom:12px"><p class="sans" style="font-size:13px;color:${COFFEE.accent};margin:0 0 10px">The plans, plainly</p><h1 style="font-size:58px;font-style:italic;font-weight:400">Three ways to get your coffee.</h1></section>
+<section style="max-width:760px;margin:0 auto;padding-top:8px">
+ <div style="display:flex;justify-content:space-between;align-items:baseline;padding:20px 0;border-top:1px solid ${COFFEE.ink}"><div><h3 style="font-size:28px">Weekend</h3><p class="sans" style="margin:4px 0 0">One 250 g bag, roasted fresh.</p></div><span style="font-size:36px">$14</span></div>
+ <div style="display:flex;justify-content:space-between;align-items:baseline;padding:20px 0;border-top:1px solid ${COFFEE.soft}"><div><h3 style="font-size:28px">Everyday</h3><p class="sans" style="margin:4px 0 0">Two bags, two origins.</p></div><span style="font-size:36px">$26</span></div>
+ <div style="display:flex;justify-content:space-between;align-items:baseline;padding:20px 0;border-top:1px solid ${COFFEE.soft}"><div><h3 style="font-size:28px">Office</h3><p class="sans" style="margin:4px 0 0">Four 500 g bags, whole bean.</p></div><span style="font-size:36px">$68</span></div>
+</section>`,
+    );
+  }
+  const cards = ['Weekend|$14|One bag', 'Everyday|$26|Two bags', 'Office|$68|Four bags'].map((entry) => entry.split('|'));
+  return base(
+    COFFEE,
+    'Ember & Oak — Plans (cards)',
+    `${nav('Ember &amp; Oak', 'pricing')}
+<section style="text-align:center;padding-bottom:8px"><h1 style="font-size:46px">Find your plan</h1></section>
+<section><div class="grid">${cards.map(([name, price, line]) => `<div class="card" style="text-align:center"><p class="sans" style="margin:0;font-weight:600">${name}</p><h2 style="font-size:56px;margin:12px 0">${price}</h2><p>${line}</p><a class="btn" href="checkout.html">Choose ${name}</a></div>`).join('')}</div></section>`,
+  );
+};
+
 export const coffeeCheckout = (): string =>
   base(
     COFFEE,

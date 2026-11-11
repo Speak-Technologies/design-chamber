@@ -9,6 +9,7 @@ import type { Scope } from '../components/dom.ts';
 import type { SheetHandle } from '../components/kit.ts';
 import type { NoticesHandle } from '../components/notices.ts';
 import type { WallHandle } from './wall.ts';
+import type { DirectionKeepPress } from './wall-types.ts';
 
 /** Empty, always-present elements the view lays out for features to fill. */
 export type ViewSlots = {
@@ -61,6 +62,8 @@ export type ViewContext = {
    * Returns the function that removes the guard.
    */
   onBeforeLeave: (guard: () => Promise<boolean>) => () => void;
+  /** "Keep this one" was pressed on a direction row's board (Phase 2 §6.3). Returns the unsubscribe function. */
+  onKeepDirection: (listener: (press: DirectionKeepPress) => void) => () => void;
   /** The aria-live notices region (also a seam: transient notices, S7). */
   notices: NoticesHandle;
   actions: ActionContext;

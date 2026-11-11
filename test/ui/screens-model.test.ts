@@ -218,3 +218,27 @@ test('Ask the agent is on while the words fit and no request is running; surroun
   assert.equal(askNoteBox({ typed: 'hello', room: 100, sending: true }).canSend, false);
   assert.equal(askNoteBox({ typed: `  ${'a'.repeat(100)}  `, room: 100, sending: false }).canSend, true);
 });
+
+// ---- directions (Phase 2 feature 11) ----
+
+test('Try 3 directions says why inside the option when the screen already has directions, or is one', () => {
+  const has = entry(menuOf({ directionsOff: 'This screen already has directions. Keep one first.' }), 'directions');
+  assert.equal(has.disabled, true);
+  assert.equal(has.reason, 'This screen already has directions. Keep one first.');
+  assert.equal(entry(menuOf({ directionsOff: null }), 'directions').disabled, undefined, 'on offer when nothing is said against it');
+});
+
+test('a direction is not a row: Move up and Move down read the screen\'s place among the rows, the cap still counts every screen', () => {
+  // Five screens, the last two are directions of the third: the third is the last row.
+  const last = menuOf({ index: 2, count: 5, rowIndex: 2, rowCount: 3 });
+  assert.equal(entry(last, 'down').disabled, true);
+  assert.equal(entry(last, 'down').reason, 'This is the last screen.');
+  assert.equal(entry(menuOf({ index: 2, count: 5 }), 'down').disabled, undefined, 'without the row numbers the list is the rows');
+  const capped = menuOf({ index: 0, count: 40, rowIndex: 0, rowCount: 30 });
+  assert.equal(entry(capped, 'duplicate').explainedBy, 'foot');
+});
+
+test('an old version still wins over the directions reason', () => {
+  const viewing = entry(menuOf({ viewing: true, directionsOff: 'This screen already has directions. Keep one first.' }), 'directions');
+  assert.equal(viewing.reason, "You're viewing an old version.");
+});

@@ -8,7 +8,8 @@
 // past the threshold is a click, so the label's double-click (focus this artboard) still works.
 
 import { h } from '../components/dom.ts';
-import { dropTarget, moveToGap, type DropTarget } from '../model/screens-model.ts';
+import { moveRowToGap } from '../model/directions-model.ts';
+import { dropTarget, type DropTarget } from '../model/screens-model.ts';
 import { isDrag } from '../model/wall-input.ts';
 import { screenToWorld, type Point } from '../model/wall-model.ts';
 import type { BoardSet } from './board-set.ts';
@@ -65,8 +66,9 @@ export const createReorderController = (ctx: WallContext, deps: ReorderDeps): Re
   };
 
   const markDragging = (id: string, on: boolean): void => {
+    const moving = deps.boards.rowScreenIds(id);
     for (const board of deps.boards.values()) {
-      if (board.art.screen?.id !== id) continue;
+      if (board.art.screen === null || !moving.has(board.art.screen.id)) continue;
       for (const part of [board.root, board.label]) {
         if (on) part.dataset.dragging = 'true';
         else delete part.dataset.dragging;
@@ -80,9 +82,12 @@ export const createReorderController = (ctx: WallContext, deps: ReorderDeps): Re
     const target = current.target;
     current.cleanup();
     if (!drop || target === null || target.noop) return;
-    const order = moveToGap(
+    // A direction is not a row of its own: it travels with its original, and the gap counts the rows the wall shows.
+    const order = moveRowToGap(
       ctx.screens().map((screen) => screen.id),
+      deps.boards.rows().map((row) => row.id),
       current.id,
+      deps.boards.rowScreenIds(current.id),
       target.gap,
     );
     if (order !== null) deps.onDrop({ id: current.id, order });

@@ -49,6 +49,14 @@ export type ScreenMenuInput = ScreenGate & {
   hasFile: boolean;
   /** The build strip says the linked agent is working. */
   agentWorking: boolean;
+  /**
+   * The screen's place among the wall's rows and their number, when they differ from `index` and `count` (a direction is not a
+   * row of its own, so a row's neighbours skip them). Move up and Move down read these; the cap still counts every screen.
+   */
+  rowIndex?: number;
+  rowCount?: number;
+  /** Why Try 3 directions is off for this screen (it has directions, or is one), or null/absent when it is on offer (`directionsOffReason`). */
+  directionsOff?: string | null;
 };
 
 export type ScreenMenuId = 'duplicate' | 'up' | 'down' | 'trash' | 'directions';
@@ -72,10 +80,12 @@ export const screenMenu = (input: ScreenMenuInput): ScreenMenu => {
   const free = Math.max(0, SCREENS_MAX - input.count);
 
   const duplicate: Gate = block !== null ? off(block) : !input.hasFile ? off(NO_FILE_REASON) : free === 0 ? capped : {};
-  const up: Gate = block !== null ? off(block) : input.index <= 0 ? off(FIRST_SCREEN_REASON) : {};
-  const down: Gate = block !== null ? off(block) : input.index >= input.count - 1 ? off(LAST_SCREEN_REASON) : {};
+  const rowIndex = input.rowIndex ?? input.index;
+  const rowCount = input.rowCount ?? input.count;
+  const up: Gate = block !== null ? off(block) : rowIndex <= 0 ? off(FIRST_SCREEN_REASON) : {};
+  const down: Gate = block !== null ? off(block) : rowIndex >= rowCount - 1 ? off(LAST_SCREEN_REASON) : {};
   const trash: Gate = block !== null ? off(block) : {};
-  const directions: Gate = block !== null ? off(block) : free < DIRECTIONS_MIN_FREE ? capped : {};
+  const directions: Gate = block !== null ? off(block) : input.directionsOff ? off(input.directionsOff) : free < DIRECTIONS_MIN_FREE ? capped : {};
 
   const items: MenuEntry[] = [
     { id: 'duplicate', label: 'Duplicate', ...duplicate },
