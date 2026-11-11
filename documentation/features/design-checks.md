@@ -83,6 +83,27 @@ Severity and wording come from the finding code only (one table, `src/shared/che
 Static checks (the files) run on every change. Rendering runs when the agent runs the command, or
 when the user asks (`POST /designs/:slug/checks/run`, one design at a time).
 
+## What counts as overlapping text
+Overlap is judged on the boxes text actually paints, one line at a time, not on one big box around
+all of an element's text. An inline element that wraps over several lines no longer looks like it
+covers text it never touches. Three rules keep the warning honest:
+
+- Text never counts as overlapping text in its own ancestor or descendant. Inline `code`, `b`, `a`
+  or a padded `span` inside a paragraph, list item or table cell is part of the same flow, whatever
+  the boxes do.
+- Visually hidden text sits out every visual verdict: overlap, cut-off text and contrast. The usual
+  screen-reader-only patterns count as hidden: a 1×1 px box with `overflow: hidden`, a zero-area
+  `clip` rect, `clip-path: inset(50%)`, text parked fully outside a clipping box, and `opacity: 0`.
+  Nobody sees that text, so none of the three can be a visual defect. The accessibility checks
+  (alt text, labels, button names) still apply, and hidden text can be the fix for them.
+- What paints is still judged: a `visibility: visible` child inside a `visibility: hidden` parent,
+  and visible text marked `aria-hidden`, count as seen. Text in a scrolling or clipping box is
+  judged only where it paints.
+
+Real overlaps are still found: a caption positioned over a heading, items pulled onto each other by
+negative margins, text moved over a sibling by a transform. The 30% share rule, the fixed/sticky
+exemption and the per-kind cap are unchanged.
+
 ## Where results live
 - `<design>/.chamber/check.json`: the report (schema `design-chamber/check@1`), written atomically
   after the pictures. It records which files it was based on, so the service can say whether the

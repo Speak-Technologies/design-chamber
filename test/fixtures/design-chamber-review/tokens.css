@@ -1,0 +1,81 @@
+/* Design Chamber review tokens. Source: this design (see DESIGN.md). */
+:root {
+  color-scheme: light dark;
+
+  /* neutrals: one warm ramp */
+  --paper: #f6f3ec;
+  --paper-2: #efeadf;
+  --paper-3: #e4ddce;
+  --line: #d6cdbb;
+  --ink-3: #6f675a;
+  --ink-2: #4a4439;
+  --ink: #1f1c17;
+
+  /* accent */
+  --accent: #0d6b62;
+  --accent-soft: #d7ebe7;
+
+  /* severity: meaning only */
+  --high: #b3261e;
+  --high-soft: #f6dcd8;
+  --med: #8a5a00;
+  --med-soft: #f3e6c8;
+  --low: #4f5b66;
+  --low-soft: #e2e5e8;
+  --good: #1f6e43;
+  --good-soft: #d9ecdf;
+
+  /* type */
+  --font-display: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+  --font-body: Seravek, "Gill Sans Nova", Ubuntu, Calibri, "DejaVu Sans", "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+  --text-xs: 13px;
+  --text-s: 14px;
+  --text-m: 16px;
+  --text-l: 20px;
+  --text-xl: 25px;
+  --text-2xl: 31px;
+  --text-3xl: 39px;
+  --text-4xl: 49px;
+
+  /* spacing: 4/8 rhythm */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+
+  /* shape */
+  --radius-s: 4px;
+  --radius-m: 8px;
+  --measure: 68ch;
+  --page-max: 1200px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #171511;
+    --paper-2: #201d18;
+    --paper-3: #2b2720;
+    --line: #3a352c;
+    --ink-3: #a39a89;
+    --ink-2: #c9c0ae;
+    --ink: #efe9dd;
+
+    --accent: #5fc4b6;
+    --accent-soft: #1b3531;
+
+    --high: #f08a80;
+    --high-soft: #3d1f1c;
+    --med: #e2b55a;
+    --med-soft: #372b14;
+    --low: #a9b4be;
+    --low-soft: #262b30;
+    --good: #7cc99b;
+    --good-soft: #1b3324;
+  }
+}

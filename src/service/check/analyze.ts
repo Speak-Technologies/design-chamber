@@ -19,8 +19,14 @@ export type ProbeText = {
   selector: string;
   /** First 80 characters of the element's own text. */
   text: string;
-  /** Document-space box of the element's own text. */
+  /** Document-space box around all of the element's own text (the union of `lines`). */
   rect: ProbeRect;
+  /** The boxes the text actually paints, one per line fragment, trimmed to what clipping ancestors let through. Empty or absent: fall back to `rect` (older shapes). */
+  lines?: ProbeRect[];
+  /** Visually hidden (screen-reader-only patterns): sits out every visual verdict, not the accessibility lists. */
+  hidden?: boolean;
+  /** Positions in `texts` of this element's ancestors that have their own text entry: one flow, never an overlap. */
+  ancestors?: number[];
   /** Computed `color`. */
   color: string;
   /** Computed `background-color` of the element and its ancestors up to the first opaque one; `null` when it cannot be known (image, filter, blend, opacity < 1). */
@@ -53,6 +59,10 @@ export type ProbeResult = {
 const WIDE_MAX = 20;
 const SELECTORS_MAX = 50;
 const TEXT_SHOWN_MAX = 80;
+/** Line boxes kept per text; the probe caps its answer at the same number (src/guest/probe/probe.ts). */
+const TEXT_LINES_MAX = 100;
+/** Ancestor links kept per text; deeper chains lose the exemption, never gain a wrong one. */
+const TEXT_ANCESTORS_MAX = 64;
 
 const isRec = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const finite = (value: unknown, min = -1e7, max = 1e7): number | null => (typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max ? value : null);
@@ -79,10 +89,26 @@ const parseText = (value: unknown): ProbeText | null => {
   const weight = finite(value.weight, 0, 1000);
   if (selector === null || rect === null || fontPx === null || weight === null || typeof value.color !== 'string') return null;
   const bgChain = Array.isArray(value.bgChain) && value.bgChain.every((entry) => typeof entry === 'string') ? (value.bgChain.slice(0, 40) as string[]) : null;
+  const lines: ProbeRect[] = [];
+  if (Array.isArray(value.lines)) {
+    for (const entry of value.lines.slice(0, TEXT_LINES_MAX)) {
+      const line = parseRect(entry);
+      if (line !== null) lines.push(line);
+    }
+  }
+  const ancestors: number[] = [];
+  if (Array.isArray(value.ancestors)) {
+    for (const entry of value.ancestors.slice(0, TEXT_ANCESTORS_MAX)) {
+      if (typeof entry === 'number' && Number.isInteger(entry) && entry >= 0 && entry < CHECK_TEXT_ELEMENTS_MAX) ancestors.push(entry);
+    }
+  }
   return {
     selector,
     text: typeof value.text === 'string' ? cleanDetail(value.text, TEXT_SHOWN_MAX) : '',
     rect,
+    lines,
+    hidden: value.hidden === true,
+    ancestors,
     color: value.color.slice(0, 120),
     bgChain: bgChain === null ? null : bgChain.map((entry) => entry.slice(0, 120)),
     fontPx,
@@ -113,9 +139,17 @@ export const sanitizeProbe = (value: unknown): ProbeResult | null => {
   }
   const texts: ProbeText[] = [];
   if (Array.isArray(value.texts)) {
-    for (const entry of value.texts.slice(0, CHECK_TEXT_ELEMENTS_MAX)) {
+    // Ancestor links are positions in the answer as the probe sent it. Entries that fail
+    // validation are dropped, so the links are remapped to the positions that survived.
+    const parsed: { raw: number; text: ProbeText }[] = [];
+    for (const [raw, entry] of value.texts.slice(0, CHECK_TEXT_ELEMENTS_MAX).entries()) {
       const text = parseText(entry);
-      if (text !== null) texts.push(text);
+      if (text !== null) parsed.push({ raw, text });
+    }
+    const position = new Map(parsed.map((entry, index) => [entry.raw, index]));
+    for (const [index, { text }] of parsed.entries()) {
+      const ancestors = [...new Set((text.ancestors ?? []).map((raw) => position.get(raw)).filter((link): link is number => link !== undefined && link !== index))];
+      texts.push({ ...text, ancestors });
     }
   }
   return {
@@ -174,7 +208,7 @@ const contrastFindings = (probe: ProbeResult, artboard: ArtboardInfo): CheckFind
   const seen = new Set<string>();
   const out: CheckFindingData[] = [];
   for (const text of probe.texts) {
-    if (text.bgChain === null || text.disabled || text.text.trim() === '') continue;
+    if (text.hidden || text.bgChain === null || text.disabled || text.text.trim() === '') continue;
     const fg = parseCssColor(text.color);
     if (fg === null || fg.a <= 0) continue;
     const chain: Rgba[] = [];
@@ -200,16 +234,34 @@ const contrastFindings = (probe: ProbeResult, artboard: ArtboardInfo): CheckFind
   return out;
 };
 
+/** The boxes a text actually paints: its per-line boxes, or the merged box for older shapes. */
+const lineBoxesOf = (text: ProbeText): ProbeRect[] => (text.lines !== undefined && text.lines.length > 0 ? text.lines : [text.rect]);
+
+/** Two texts overlap when any pair of their painted line boxes does, by the share rule. */
+const linesOverlap = (a: ProbeText, b: ProbeText): boolean => {
+  for (const lineA of lineBoxesOf(a)) {
+    for (const lineB of lineBoxesOf(b)) {
+      if (overlapShare(lineA, lineB) >= OVERLAP_MIN_SHARE) return true;
+    }
+  }
+  return false;
+};
+
 const overlapFindings = (probe: ProbeResult, artboard: ArtboardInfo): CheckFindingData[] => {
-  const boxes = probe.texts.filter((text) => !text.fixed && text.rect.w > 1 && text.rect.h > 1 && text.text.trim() !== '');
+  // Indices stay the positions in probe.texts: ancestor links name those, not this filtered list.
+  const boxes = probe.texts
+    .map((text, index) => ({ text, index }))
+    .filter(({ text }) => !text.hidden && !text.fixed && text.rect.w > 1 && text.rect.h > 1 && text.text.trim() !== '');
   const out: CheckFindingData[] = [];
   for (let i = 0; i < boxes.length && out.length < CHECK_FINDINGS_PER_CODE; i += 1) {
     const a = boxes[i];
     if (a === undefined) continue;
     for (let j = i + 1; j < boxes.length; j += 1) {
       const b = boxes[j];
-      if (b === undefined || overlapShare(a.rect, b.rect) < OVERLAP_MIN_SHARE) continue;
-      out.push({ ...base('text-overlap', artboard), detail: cleanDetail(`${a.text} / ${b.text}`, 160), selector: a.selector });
+      if (b === undefined || !linesOverlap(a.text, b.text)) continue;
+      // A text and text in its own ancestor or descendant are one flow, whatever the geometry.
+      if ((a.text.ancestors ?? []).includes(b.index) || (b.text.ancestors ?? []).includes(a.index)) continue;
+      out.push({ ...base('text-overlap', artboard), detail: cleanDetail(`${a.text.text} / ${b.text.text}`, 160), selector: a.text.selector });
       break;
     }
   }
@@ -240,7 +292,7 @@ export const analyzeProbe = (probe: ProbeResult, artboard: ArtboardInfo): CheckF
   }
 
   for (const text of probe.texts) {
-    if (text.clipped && !text.ellipsis && text.text.trim() !== '') {
+    if (!text.hidden && text.clipped && !text.ellipsis && text.text.trim() !== '') {
       findings.push({ ...base('text-clipped', artboard), detail: cleanDetail(text.text, 120), selector: text.selector });
     }
   }

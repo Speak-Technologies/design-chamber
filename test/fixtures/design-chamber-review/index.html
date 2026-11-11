@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design Chamber review: the good, the bad, the ugly</title>
+<link rel="stylesheet" href="tokens.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: var(--text-m);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-s); }
+  code, .path { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-2); overflow-wrap: anywhere; }
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 700; text-wrap: balance; margin: 0; }
+  p { margin: 0; text-wrap: pretty; }
+  ul, ol { margin: 0; padding: 0; list-style: none; }
+
+  .layout {
+    max-width: var(--page-max);
+    margin: 0 auto;
+    padding: 0 var(--space-5) var(--space-9);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-7);
+  }
+  @media (min-width: 1024px) {
+    .layout { grid-template-columns: 200px minmax(0, 1fr); gap: var(--space-8); padding: 0 var(--space-7) var(--space-9); }
+  }
+
+  /* masthead */
+  .masthead { grid-column: 1 / -1; padding: var(--space-8) 0 var(--space-6); border-bottom: 2px solid var(--ink); }
+  .kicker { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-3); letter-spacing: 0.02em; }
+  .masthead h1 { font-size: clamp(var(--text-3xl), 6vw, 64px); line-height: 1.05; margin-top: var(--space-4); max-width: 18ch; }
+  .dek { font-size: var(--text-l); color: var(--ink-2); max-width: 60ch; margin-top: var(--space-5); line-height: 1.5; }
+  .verdict {
+    margin-top: var(--space-6);
+    display: grid;
+    gap: var(--space-4);
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    border-top: 1px solid var(--line);
+    padding-top: var(--space-5);
+  }
+  .stat .n { font-family: var(--font-display); font-size: var(--text-2xl); font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .stat .l { font-size: var(--text-s); color: var(--ink-3); margin-top: var(--space-1); }
+  .stat.alert .n { color: var(--high); }
+
+  /* nav */
+  nav.toc { display: none; }
+  @media (min-width: 1024px) {
+    nav.toc { display: block; position: sticky; top: var(--space-6); align-self: start; }
+  }
+  .toc p { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-3); margin-bottom: var(--space-3); }
+  .toc a { display: block; padding: var(--space-1) 0 var(--space-1) var(--space-3); color: var(--ink-2); text-decoration: none; font-size: var(--text-s); border-left: 2px solid var(--line); }
+  .toc a:hover { color: var(--ink); }
+  .toc a[aria-current="true"] { color: var(--accent); border-left-color: var(--accent); }
+
+  main { min-width: 0; display: grid; gap: var(--space-9); }
+
+  section > header { margin-bottom: var(--space-6); max-width: var(--measure); }
+  section > header .kicker { display: block; margin-bottom: var(--space-2); }
+  section > header h2 { font-size: var(--text-3xl); line-height: 1.1; }
+  section > header p { margin-top: var(--space-3); color: var(--ink-2); }
+
+  /* good list */
+  .good { display: grid; gap: var(--space-6) var(--space-7); grid-template-columns: minmax(0, 1fr); counter-reset: good; }
+  @media (min-width: 720px) { .good { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .good li { counter-increment: good; padding-top: var(--space-3); border-top: 1px solid var(--line); }
+  .good h3 { font-size: var(--text-l); line-height: 1.25; display: flex; gap: var(--space-3); align-items: baseline; }
+  .good h3::before { content: counter(good, decimal-leading-zero); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--good); font-weight: 400; }
+  .good p { margin-top: var(--space-2); color: var(--ink-2); font-size: var(--text-s); }
+  .good .path { display: block; margin-top: var(--space-2); }
+
+  /* filter */
+  .filter { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4); }
+  .filter button {
+    font: inherit; font-size: var(--text-s);
+    min-height: 36px; padding: 0 var(--space-4);
+    border-radius: var(--radius-m); border: 1px solid var(--line);
+    background: transparent; color: var(--ink-2); cursor: pointer;
+  }
+  .filter button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .filter button .c { font-variant-numeric: tabular-nums; opacity: 0.7; margin-left: var(--space-1); }
+
+  /* tables */
+  .table-wrap { overflow-x: auto; border-top: 2px solid var(--ink); }
+  table { width: 100%; border-collapse: collapse; font-size: var(--text-s); }
+  th { text-align: left; font-weight: 600; font-size: var(--text-xs); color: var(--ink-3); padding: var(--space-3) var(--space-3) var(--space-3) 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: var(--space-4) var(--space-3) var(--space-4) 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td .title { font-weight: 600; color: var(--ink); display: block; }
+  td .detail { color: var(--ink-2); display: block; margin-top: var(--space-1); }
+  td.fix { color: var(--ink-2); min-width: 200px; }
+  tr[hidden] { display: none; }
+  @media (max-width: 719px) {
+    .stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    .stack tr { display: grid; grid-template-columns: auto 1fr; gap: var(--space-2) var(--space-3); padding: var(--space-4) 0; border-bottom: 1px solid var(--line); }
+    .stack tr[hidden] { display: none; }
+    .stack td { display: block; padding: 0; border: 0; min-width: 0; }
+    .stack td:nth-child(n+3) { grid-column: 1 / -1; }
+    .stack td.fix { min-width: 0; }
+    .stack td.fix::before, .stack td[data-label]::before { content: attr(data-label); display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-3); margin-bottom: var(--space-1); }
+    .stack td.area { align-self: center; }
+    .cmp tr { grid-template-columns: 1fr auto; }
+    .cmp td:nth-child(2), .cmp td:nth-child(3) { grid-column: 1 / -1; }
+    .cmp td:nth-child(4) { grid-row: 1; grid-column: 2; }
+  }
+
+  .sev { display: inline-block; font-family: var(--font-mono); font-size: var(--text-xs); padding: 2px var(--space-2); border-radius: var(--radius-s); white-space: nowrap; }
+  .sev.high { background: var(--high-soft); color: var(--high); }
+  .sev.med { background: var(--med-soft); color: var(--med); }
+  .sev.low { background: var(--low-soft); color: var(--low); }
+  .area { font-size: var(--text-xs); color: var(--ink-3); white-space: nowrap; }
+
+  /* ugly */
+  .ugly { display: grid; gap: var(--space-7); }
+  .ugly article { display: grid; gap: var(--space-4); grid-template-columns: minmax(0, 1fr); padding-top: var(--space-5); border-top: 2px solid var(--high); }
+  @media (min-width: 900px) { .ugly article { grid-template-columns: minmax(0, 5fr) minmax(0, 4fr); gap: var(--space-7); } }
+  .ugly h3 { font-size: var(--text-2xl); line-height: 1.15; }
+  .ugly .lede { margin-top: var(--space-3); color: var(--ink-2); max-width: 54ch; }
+  .ugly dl { margin: 0; display: grid; gap: var(--space-3); font-size: var(--text-s); align-content: start; }
+  .ugly dt { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-3); }
+  .ugly dd { margin: 0 0 var(--space-2); color: var(--ink-2); }
+
+  /* comparison */
+  .mark { font-weight: 600; white-space: nowrap; }
+  .mark.ahead { color: var(--good); }
+  .mark.par { color: var(--ink-3); }
+  .mark.gap { color: var(--high); }
+  .mark.part { color: var(--med); }
+  .source { margin-top: var(--space-3); font-size: var(--text-xs); color: var(--ink-3); }
+
+  /* roadmap */
+  .phases { display: grid; gap: var(--space-8); }
+  .phase > .ph { display: grid; gap: var(--space-2); margin-bottom: var(--space-5); max-width: var(--measure); }
+  .phase .ph .kicker { color: var(--accent); display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+  .phase-status { font-family: var(--font-mono); font-size: var(--text-xs); padding: 2px var(--space-2); border-radius: var(--radius-s); background: var(--good-soft); color: var(--good); }
+  .phase-status.new { background: var(--accent-soft); color: var(--accent); }
+  .fixed { display: inline-block; font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 400; padding: 0 var(--space-1); border-radius: var(--radius-s); background: var(--good-soft); color: var(--good); margin-left: var(--space-2); white-space: nowrap; vertical-align: middle; }
+  .fixed.partly { background: var(--med-soft); color: var(--med); }
+  .fixed.new-bug { background: var(--high-soft); color: var(--high); }
+  tr.done .title, tr.done .detail, tr.done td.fix { opacity: 0.6; }
+  .ugly article.done { border-top-color: var(--good); }
+  .phase.built .features { opacity: 0.72; }
+  .tag { display: inline-block; font-family: var(--font-mono); font-size: var(--text-xs); padding: 0 var(--space-1); border-radius: var(--radius-s); background: var(--accent-soft); color: var(--accent); margin-right: var(--space-1); white-space: nowrap; }
+  .phase .ph .decision { font-size: var(--text-s); color: var(--ink-2); border-left: 2px solid var(--med); padding-left: var(--space-3); }
+  .phase .ph h3 { font-size: var(--text-2xl); line-height: 1.15; }
+  .phase .ph p { color: var(--ink-2); }
+  .features { display: grid; gap: 0; border-top: 1px solid var(--ink); }
+  .feature { display: grid; gap: var(--space-2) var(--space-5); padding: var(--space-4) 0; border-bottom: 1px solid var(--line); grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 900px) { .feature { grid-template-columns: 40px minmax(0, 2fr) minmax(0, 3fr) 96px; align-items: baseline; } }
+  .feature .num { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-3); }
+  .feature h4 { margin: 0; font-size: var(--text-m); font-weight: 600; }
+  .feature .why { font-size: var(--text-s); color: var(--ink-2); }
+  .feature .why b { color: var(--ink); font-weight: 600; }
+  .effort { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ink-3); }
+  .effort b { display: inline-block; min-width: 24px; text-align: center; padding: 2px var(--space-1); border-radius: var(--radius-s); background: var(--paper-3); color: var(--ink); font-weight: 600; }
+
+  /* start here */
+  .start { background: var(--paper-2); border-radius: var(--radius-m); padding: var(--space-6); display: grid; gap: var(--space-5); }
+  @media (min-width: 900px) { .start { padding: var(--space-7); } }
+  .start ol { counter-reset: s; display: grid; gap: var(--space-4); max-width: var(--measure); }
+  .start ol li { counter-increment: s; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: var(--space-3); }
+  .start ol li::before { content: counter(s); font-family: var(--font-display); font-size: var(--text-xl); color: var(--accent); line-height: 1.1; }
+  .start ol li span { color: var(--ink-2); }
+  .start ol li b { color: var(--ink); }
+
+  footer { font-size: var(--text-xs); color: var(--ink-3); border-top: 1px solid var(--line); padding-top: var(--space-5); display: grid; gap: var(--space-2); max-width: var(--measure); }
+</style>
+</head>
+<body>
+<div class="layout">
+
+  <header class="masthead">
+    <span class="kicker">Review · 8 November 2026 · design-chamber v0.1.0 · master @ 0afcb34 · updated 10 November 2026 · PRs #6 to #15 merged</span>
+    <h1>Design Chamber, reviewed</h1>
+    <p class="dek">A careful, secure viewer for designs your agent writes. To work like Claude Design it needs three things it doesn't have yet: a way for the agent to see its own work, edits on the canvas, and ways out to code, PDF and slides.</p>
+    <div class="verdict" role="list">
+      <div class="stat" role="listitem"><div class="n">728 / 730</div><div class="l">tests pass, 2 skipped, 0 fail</div></div>
+      <div class="stat" role="listitem"><div class="n">Clean</div><div class="l">strict typecheck</div></div>
+      <div class="stat" role="listitem"><div class="n">8 · 22 · 5</div><div class="l">good · bad · ugly</div></div>
+      <div class="stat alert" role="listitem"><div class="n">1</div><div class="l">data-loss bug to fix first</div></div>
+      <div class="stat" role="listitem"><div class="n">29</div><div class="l">roadmap items in 5 phases, 9 merged</div></div>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Sections">
+    <p>On this page</p>
+    <a href="#good">The good</a>
+    <a href="#bad">The bad</a>
+    <a href="#ugly">The ugly</a>
+    <a href="#compare">Next to Claude Design</a>
+    <a href="#roadmap">Roadmap</a>
+    <a href="#start">Where to start</a>
+  </nav>
+
+  <main>
+
+    <!-- GOOD -->
+    <section id="good" aria-labelledby="good-h">
+      <header>
+        <span class="kicker">01</span>
+        <h2 id="good-h">The good</h2>
+        <p>The foundations are better than most early tools. Security, data safety and the comment loop are done with real care, and the design rules read like a senior designer wrote them.</p>
+      </header>
+      <ol class="good">
+        <li>
+          <h3>The sandbox holds</h3>
+          <p>Agent HTML runs in iframes with <code>allow-scripts</code> only, never with same-origin. Every message is checked against the exact frame, artboard id and nonce. No <code>innerHTML</code> anywhere in the UI.</p>
+          <span class="path">frame-doc.ts:12 · frame-channel.ts:22 · http.ts:152</span>
+        </li>
+        <li>
+          <h3>Path containment done properly, Windows included</h3>
+          <p>Paths are first checked as text, then the real path of the deepest folder that exists is compared to the real root, ignoring case on Windows and macOS. One function, mutation tested.</p>
+          <span class="path">paths.ts:113-148</span>
+        </li>
+        <li>
+          <h3>Two writers, no clobbering</h3>
+          <p>The agent and the service both write <code>design.json</code>. A compare-and-swap rename plus a bounded re-merge keeps both sets of fields.</p>
+          <span class="path">paths.ts:245 · store.ts:247</span>
+        </li>
+        <li>
+          <h3>The comment loop is the best part</h3>
+          <p>Pins carry the selector, text and opening tag. Moved or missing elements are flagged to the agent. The revision prompt trims itself to fit the 16k limit, and blocked remote files ride along with it.</p>
+          <span class="path">revision-prompt.ts:66-163</span>
+        </li>
+        <li>
+          <h3>Versions Claude Design doesn't have</h3>
+          <p>Content-addressed snapshots, split compare per artboard, and a restore that saves the current state first. Claude Design's own help page says it has no version history yet.</p>
+          <span class="path">versions.ts:347-464</span>
+        </li>
+        <li>
+          <h3>Design rules with teeth</h3>
+          <p>Anti-slop items are written as testable defects, there's a five-layer precedence that puts the project first, and one round of questions with bold defaults and a "say go" escape.</p>
+          <span class="path">rules/DESIGN-RULES.md:32 · rules/QUESTIONS.md</span>
+        </li>
+        <li>
+          <h3>Looks native to OpenChamber</h3>
+          <p>It uses the host theme tokens in light and dark. The wall reads clearly: screens are rows, viewports are columns, and every board is labelled with its size.</p>
+          <span class="path">docs/img/hero-wall-pins.png</span>
+        </li>
+        <li>
+          <h3>Honest states, bounded inputs</h3>
+          <p>"Not written yet" boards, a waiting chip, and inline folder errors. Uploads, discovery, bundling and thumbnails all have caps and timeouts.</p>
+          <span class="path">uploads.ts:52 · discovery.ts:48 · bundle.ts:295</span>
+        </li>
+      </ol>
+    </section>
+
+    <!-- BAD -->
+    <section id="bad" aria-labelledby="bad-h">
+      <header>
+        <span class="kicker">02</span>
+        <h2 id="bad-h">The bad</h2>
+        <p>Real problems, ranked. Each one names who hits it and how. The data-loss bug and the font finding were checked against the source. Rows marked <span class="fixed">Fixed</span> are on master since PRs #6 to #15 merged; <span class="fixed partly">Partly</span> means a PR helped but the problem is not gone. One new bug, found after the merge, is at the top.</p>
+      </header>
+      <div class="filter" role="group" aria-label="Filter by severity">
+        <button type="button" data-filter="all" aria-pressed="true">All<span class="c">22</span></button>
+        <button type="button" data-filter="high" aria-pressed="false">High<span class="c">3</span></button>
+        <button type="button" data-filter="med" aria-pressed="false">Medium<span class="c">12</span></button>
+        <button type="button" data-filter="low" aria-pressed="false">Low<span class="c">7</span></button>
+      </div>
+      <div class="table-wrap">
+        <table class="stack">
+          <thead>
+            <tr><th scope="col">Severity</th><th scope="col">Area</th><th scope="col">Finding</th><th scope="col">Fix</th></tr>
+          </thead>
+          <tbody id="bad-rows">
+            <tr data-sev="med">
+              <td><span class="sev med">Medium</span></td><td class="area">Agent</td>
+              <td><span class="title">The check reports text overlaps that aren't there<span class="fixed new-bug">New · found 10 Nov</span></span><span class="detail">Found by running <code>dc check</code> on this page after the merge: 10 "two pieces of text overlap" warnings, while the PNGs show none. The check decides whether one text sits inside another from box geometry, so an inline <code>code</code> or <code>b</code> with padding, or one that wraps across lines, pokes out of its paragraph's box and counts as an overlap. A table header clipped for screen readers keeps its full box and is flagged too. Agents chase problems that do not exist, and the Checks badge shows issues on a clean design. <code>check/analyze.ts:162-164, 203-217</code></span></td>
+              <td class="fix" data-label="Fix">Skip pairs where one element is an ancestor of the other in the DOM (not just in geometry), skip visually hidden elements, and add both cases as tests.</td>
+            </tr>
+            <tr data-sev="high" class="done">
+              <td><span class="sev high">High</span></td><td class="area">Data</td>
+              <td><span class="title">A corrupt version index wipes the whole history<span class="fixed">Fixed · #6</span></span><span class="detail">A bad <code>.versions/index.json</code> is read as empty. The next auto snapshot writes a one-entry index, and garbage collection then deletes every object it no longer sees. A torn write or a stricter future schema loses weeks of versions within seconds. <code>versions.ts:171-191, 413</code></span></td>
+              <td class="fix" data-label="Fix">Set the bad index aside, skip GC for that design until it's repaired, and drop only the entries that fail.</td>
+            </tr>
+            <tr data-sev="high">
+              <td><span class="sev high">High</span></td><td class="area">UX</td>
+              <td><span class="title">The real workspace is hard to find<span class="fixed partly">Partly · #11</span></span><span class="detail">The full-screen library and wall are only reachable from sidebar → Extension pages, hinted by a grey footer line in the rail. #11 added a first-run tip; U5 (Work Status) would finish the job.</span></td>
+              <td class="fix" data-label="Fix">A first-run tip card in the rail that shows the sidebar icon, plus a persistent "Open full screen" hint where the viewer gets cramped.</td>
+            </tr>
+            <tr data-sev="high" class="done">
+              <td><span class="sev high">High</span></td><td class="area">UX</td>
+              <td><span class="title">The review loop hides in the rail's ⋯ menu<span class="fixed">Fixed · #11</span></span><span class="detail">At 320 px, Comments, Versions and Send live behind the overflow menu, so the core loop is invisible where most people start.</span></td>
+              <td class="fix" data-label="Fix">A Comments chip with its count in the viewer header; the rest as an icon row.</td>
+            </tr>
+            <tr data-sev="med" class="done">
+              <td><span class="sev med">Medium</span></td><td class="area">Performance</td>
+              <td><span class="title">ZIP export freezes the service<span class="fixed">Fixed · #7</span></span><span class="detail">Synchronous CRC-32 loop and <code>deflateRawSync</code> level 9 over the whole tree in memory. A large design stalls live refresh, change feeds and thumbnails for seconds. <code>zip.ts:35, 74</code></span></td>
+              <td class="fix" data-label="Fix">Async deflate, streamed to disk.</td>
+            </tr>
+            <tr data-sev="med" class="done">
+              <td><span class="sev med">Medium</span></td><td class="area">Performance</td>
+              <td><span class="title">Every design is re-checked every 3 seconds<span class="fixed">Fixed · #7</span></span><span class="detail">The poll backstop fingerprints all designs even while the file watcher is healthy. With a few hundred designs on a synced drive this is a constant disk and battery cost. <code>watch.ts:278</code></span></td>
+              <td class="fix" data-label="Fix">Only poll the root listing while the watcher is alive.</td>
+            </tr>
+            <tr data-sev="med" class="done">
+              <td><span class="sev med">Medium</span></td><td class="area">Correctness</td>
+              <td><span class="title">Poll-only folders miss nested asset edits<span class="fixed">Fixed · #7</span></span><span class="detail">On network or synced drives, or when inotify runs out, changing <code>assets/img/logo.png</code> fires no refresh and leaves a stale thumbnail. <code>watch.ts:49-68</code></span></td>
+              <td class="fix" data-label="Fix">Fingerprint every file under <code>assets/</code> up to a cap.</td>
+            </tr>
+            <tr data-sev="med">
+              <td><span class="sev med">Medium</span></td><td class="area">UX</td>
+              <td><span class="title">CDN pages arrive unstyled</span><span class="detail">Tailwind-from-CDN is the most common thing agents write. It's blocked, the page renders bare under a banner, and fixing it takes two clicks plus a Send in chat.</span></td>
+              <td class="fix" data-label="Fix">One "Fix and send" action, and collapse the banner to a chip.</td>
+            </tr>
+            <tr data-sev="med" class="done">
+              <td><span class="sev med">Medium</span></td><td class="area">UX</td>
+              <td><span class="title">Primary buttons look disabled<span class="fixed">Fixed · #11</span></span><span class="detail">"Send 2 comments to chat", "Start canvas" and "Apply folder" are tinted outlines on near-black.</span></td>
+              <td class="fix" data-label="Fix">A filled accent for the one primary action per view.</td>
+            </tr>
+            <tr data-sev="med" class="done">
+              <td><span class="sev med">Medium</span></td><td class="area">UX</td>
+              <td><span class="title">Restore asks for confirmation it doesn't need<span class="fixed">Fixed · #11</span></span><span class="detail">Restore already saves the current state first, so it can be undone. The project's own Usability bar counts a confirm on a reversible action as a defect. <code>versions-drawer.ts:29</code></span></td>
+              <td class="fix" data-label="Fix">Restore at once and show an Undo toast.</td>
+            </tr>
+            <tr data-sev="med">
+              <td><span class="sev med">Medium</span></td><td class="area">UX</td>
+              <td><span class="title">The versions list is noisy and blind</span><span class="detail">About 35 auto-saves in two hours, as text-only rows with three buttons each. The first row's buttons sit under the drawer header.</span></td>
+              <td class="fix" data-label="Fix">Fold auto-saves together, add thumbnails, allow named versions.</td>
+            </tr>
+            <tr data-sev="med">
+              <td><span class="sev med">Medium</span></td><td class="area">UX</td>
+              <td><span class="title">The wall opens too small to read</span><span class="detail">The default zoom is about 26%, and focusing one artboard is a hidden double-click on its label. Pins sit on top of the text they're about.</span></td>
+              <td class="fix" data-label="Fix">A visible Focus button on each label, a floor on Fit, and pins anchored to the element's corner.</td>
+            </tr>
+            <tr data-sev="med">
+              <td><span class="sev med">Medium</span></td><td class="area">Agent</td>
+              <td><span class="title">Rules are heavy on one path and thin on the other<span class="fixed partly">Partly · #9</span></span><span class="detail">With a preset, the chip plus RULES.md comes to about 18k characters, re-read on every request. An agent that only finds the root AGENTS.md gets a ten-line digest and almost none of the craft guidance. #9 swapped the blind self-check for the check command; U2 (built-in skill) fixes the thin path.</span></td>
+              <td class="fix" data-label="Fix">Tiered rules: a short core every time, sections loaded when needed.</td>
+            </tr>
+            <tr data-sev="med">
+              <td><span class="sev med">Medium</span></td><td class="area">Agent</td>
+              <td><span class="title">Presets name fonts that never load</span><span class="detail">Fraunces, IBM Plex, Geist, Jost and others head the preset stacks, but they aren't bundled and web fonts are blocked. The fallback always wins, so every preset looks more alike than intended. <code>rules/presets/*.md</code></span></td>
+              <td class="fix" data-label="Fix">Bundle a few OFL fonts the presets can copy into <code>assets/fonts/</code>, or name only local faces.</td>
+            </tr>
+            <tr data-sev="med" class="done">
+              <td><span class="sev med">Medium</span></td><td class="area">Code health</td>
+              <td><span class="title">One 1,200-line closure runs the wall<span class="fixed">Fixed · #8</span></span><span class="detail"><code>wall.ts</code> holds about 20 mutable variables, and its input, pin and popover logic has no direct tests. <code>styles.css</code> is 1,727 lines, and test-only <code>fake-services.ts</code> (882 lines) lives in <code>src/</code>.</span></td>
+              <td class="fix" data-label="Fix">Split into camera, pin and popover controllers before any canvas editing lands.</td>
+            </tr>
+            <tr data-sev="low">
+              <td><span class="sev low">Low</span></td><td class="area">UX</td>
+              <td><span class="title">Settings lead with plumbing</span><span class="detail">Folder, browser path and a JSON snippet come first. Nothing says whether the agent can actually write.</span></td>
+              <td class="fix" data-label="Fix">A health checklist at the top, details under Advanced.</td>
+            </tr>
+            <tr data-sev="low">
+              <td><span class="sev low">Low</span></td><td class="area">UX</td>
+              <td><span class="title">Pin numbers jump, selectors show raw</span><span class="detail">Pins read 3, 4, 6, then 5, and the drawer shows <code>h1:nth-of-type(1)</code>.</span></td>
+              <td class="fix" data-label="Fix">Number in creation order; show a friendly element name with the selector on hover.</td>
+            </tr>
+            <tr data-sev="low" class="done">
+              <td><span class="sev low">Low</span></td><td class="area">Data</td>
+              <td><span class="title">Restore can drop comments<span class="fixed">Fixed · #6</span></span><span class="detail">If <code>.chamber/state.json</code> is unreadable at restore time, the snapshot's comment-less <code>design.json</code> is written as is. <code>versions.ts:446</code></span></td>
+              <td class="fix" data-label="Fix">Refuse the restore, or keep the live comments.</td>
+            </tr>
+            <tr data-sev="low">
+              <td><span class="sev low">Low</span></td><td class="area">Data</td>
+              <td><span class="title">Two quick settings saves can lose one</span><span class="detail">Overlapping <code>PUT /settings</code> calls copy the old state before an await. <code>settings.ts:138</code></span></td>
+              <td class="fix" data-label="Fix">Queue updates one after another.</td>
+            </tr>
+            <tr data-sev="low">
+              <td><span class="sev low">Low</span></td><td class="area">Security</td>
+              <td><span class="title">Thumbnails skip the bundle<span class="fixed partly">Partly · #9</span></span><span class="detail">Headless Chrome loads the raw file over <code>file://</code>, so design scripts run outside the CSP (network is still off) and the thumbnail can differ from the in-app view. <code>thumbnails.ts:269</code> #9 gave thumbnails the same offline network flags as the check; they still load the raw file.</span></td>
+              <td class="fix" data-label="Fix">Capture the bundled document instead.</td>
+            </tr>
+            <tr data-sev="low">
+              <td><span class="sev low">Low</span></td><td class="area">Docs</td>
+              <td><span class="title">README screenshots still say "Artifacts"</span><span class="detail">The gallery shows the old name, so a new user's first look is out of date.</span></td>
+              <td class="fix" data-label="Fix">Re-shoot the gallery.</td>
+            </tr>
+            <tr data-sev="low">
+              <td><span class="sev low">Low</span></td><td class="area">Accessibility</td>
+              <td><span class="title">Async results aren't announced<span class="fixed partly">Partly · #11, #12, #14</span></span><span class="detail">One <code>aria-live</code> region in the whole UI, while send, export and import all finish later. Mono labels at 11 px on dark.</span></td>
+              <td class="fix" data-label="Fix">A shared status region for toasts; raise label sizes.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- UGLY -->
+    <section id="ugly" aria-labelledby="ugly-h">
+      <header>
+        <span class="kicker">03</span>
+        <h2 id="ugly-h">The ugly</h2>
+        <p>Not bugs. These are structural gaps, and they decide whether this stays a viewer or becomes a design tool.</p>
+      </header>
+      <div class="ugly">
+        <article class="done">
+          <div>
+            <h3>The agent designs blind<span class="fixed">Fixed · #9</span></h3>
+            <p class="lede">The rules ask the agent to confirm "no horizontal overflow, nothing clipped" at every viewport, but it never sees a render. Overflow, clashing fonts, 3.9:1 contrast: the user finds every one, and each costs a chat round trip. Meanwhile the service already renders every screen headlessly to find blocked URLs, then throws the image away.</p>
+          </div>
+          <dl>
+            <dt>Evidence</dt><dd>DESIGN-RULES.md:107 self-check · chat.ts:283-299 headless render</dd>
+            <dt>Blocks</dt><dd>Self-correction, design-system conformance checks, accessibility audits</dd>
+          </dl>
+        </article>
+        <article>
+          <div>
+            <h3>It's a gallery, not a canvas</h3>
+            <p class="lede">You can't add, reorder, duplicate or delete a screen. You can't fix a typo, nudge spacing or swap a colour. Every change goes through chat. In Claude Design you drag, resize and align, and there's a properties panel and a toolbar that floats over your selection.</p>
+          </div>
+          <dl>
+            <dt>Evidence</dt><dd>wall.ts has Edit (comment) and Play modes only</dd>
+            <dt>Blocks</dt><dd>Quick fixes, tweaks, variations you can pick from</dd>
+          </dl>
+        </article>
+        <article>
+          <div>
+            <h3>Two walls stand in front of direct editing</h3>
+            <p class="lede">A design's own scripts share a realm with the bridge, so any design can read the nonce and forge messages. That's harmless while messages are hints, but writes can't come from there. And the bundler rewrites HTML with no source positions, so an edit made in the preview has nowhere to be written back to.</p>
+          </div>
+          <dl>
+            <dt>Evidence</dt><dd>bridge.ts:1-9 · bundle.ts (lossy tokenizer, base64 inlining)</dd>
+            <dt>Needs</dt><dd>Page-side edit authority and a position-preserving patch route, designed by the architect first</dd>
+          </dl>
+        </article>
+        <article class="done">
+          <div>
+            <h3>Generation looks dead<span class="fixed">Fixed · #12</span></h3>
+            <p class="lede">After <code>/design</code> or Send, the wall shows dim "not written yet" boards and nothing else. There's no sign the agent is working, which file it's on, or whether it's stuck asking a question in another tab.</p>
+          </div>
+          <dl>
+            <dt>Evidence</dt><dd>18-rail-waiting-for-agent-dark.png · page-1400-dark-live-1-not-written.png</dd>
+            <dt>Blocks</dt><dd>The "watch it build" feel that makes Claude Design feel alive</dd>
+          </dl>
+        </article>
+        <article>
+          <div>
+            <h3>Every save reloads the whole board</h3>
+            <p class="lede">Watch, 250 ms debounce, full re-bundle, new blob, full iframe reload. Fine for file saves. It will thrash if updates ever stream in, and the scroll position and Play state reset each time.</p>
+          </div>
+          <dl>
+            <dt>Evidence</dt><dd>wall.ts:1142-1148 · frame-slot.ts:88-115</dd>
+            <dt>Blocks</dt><dd>Live streaming, smooth tweak previews</dd>
+          </dl>
+        </article>
+      </div>
+    </section>
+
+    <!-- COMPARE -->
+    <section id="compare" aria-labelledby="compare-h">
+      <header>
+        <span class="kicker">04</span>
+        <h2 id="compare-h">Next to Claude Design</h2>
+        <p>Where Design Chamber stands against Anthropic's tool, feature by feature. It's already ahead on versions, privacy and model choice. It's furthest behind on editing and export.</p>
+      </header>
+      <div class="table-wrap">
+        <table class="stack cmp">
+          <thead><tr><th scope="col">Capability</th><th scope="col">Claude Design</th><th scope="col">Design Chamber today</th><th scope="col">Status</th></tr></thead>
+          <tbody>
+            <tr><td><span class="title">Generate from chat</span></td><td data-label="Claude Design">Any chat, Claude Code, Artifacts tab</td><td data-label="Design Chamber today"><code>/design</code>, <code>/page</code>, any model, any chat</td><td><span class="mark ahead">Ahead</span></td></tr>
+            <tr><td><span class="title">Clarifying questions</span></td><td data-label="Claude Design">Asks when needed</td><td data-label="Design Chamber today">One round, bold defaults, "go" to skip</td><td><span class="mark par">Even</span></td></tr>
+            <tr><td><span class="title">Multi-artboard canvas</span></td><td data-label="Claude Design">Artboards with layers</td><td data-label="Design Chamber today">Screens × viewports wall, pan and zoom</td><td><span class="mark par">Even</span></td></tr>
+            <tr><td><span class="title">Inline comments</span></td><td data-label="Claude Design">Click to comment; a known issue drops them</td><td data-label="Design Chamber today">Anchored pins, batch send, survive edits</td><td><span class="mark ahead">Ahead</span></td></tr>
+            <tr><td><span class="title">Version history</span></td><td data-label="Claude Design">"Doesn't have version history yet"</td><td data-label="Design Chamber today">Auto snapshots, compare, restore</td><td><span class="mark ahead">Ahead</span></td></tr>
+            <tr><td><span class="title">Runs locally, files you own</span></td><td data-label="Claude Design">Hosted</td><td data-label="Design Chamber today">Plain folders, loopback only</td><td><span class="mark ahead">Ahead</span></td></tr>
+            <tr><td><span class="title">Direct canvas edits</span></td><td data-label="Claude Design">Drag, resize, align, text, properties panel, layers</td><td data-label="Design Chamber today">None</td><td><span class="mark gap">Gap</span></td></tr>
+            <tr><td><span class="title">Tweaks (generated sliders)</span></td><td data-label="Claude Design">Claude adds knobs for spacing, colour, layout</td><td data-label="Design Chamber today">None</td><td><span class="mark gap">Gap</span></td></tr>
+            <tr><td><span class="title">Design system import and self-check</span></td><td data-label="Claude Design">From a repo, files or <code>/design-sync</code>; checks output against it</td><td data-label="Design Chamber today">Finds the project's rule files and tells the agent where to look. No extraction, no check</td><td><span class="mark part">Partial</span></td></tr>
+            <tr><td><span class="title">Reference context</span></td><td data-label="Claude Design">Screenshots, decks, docs, codebase, web capture</td><td data-label="Design Chamber today">The agent can read the project; no way to drop a screenshot into a design</td><td><span class="mark part">Partial</span></td></tr>
+            <tr><td><span class="title">Variations</span></td><td data-label="Claude Design">"Show me 2 or 3 layouts"</td><td data-label="Design Chamber today">Rules make sibling screens; no pick or promote</td><td><span class="mark part">Partial</span></td></tr>
+            <tr><td><span class="title">Accessibility review</span></td><td data-label="Claude Design">On request</td><td data-label="Design Chamber today">Rules demand it; nothing measures it</td><td><span class="mark part">Partial</span></td></tr>
+            <tr><td><span class="title">Export</span></td><td data-label="Claude Design">ZIP, PDF, PPTX, Google Slides, HTML, 15 tool connectors</td><td data-label="Design Chamber today">ZIP, single-file HTML</td><td><span class="mark gap">Gap</span></td></tr>
+            <tr><td><span class="title">Handoff to code</span></td><td data-label="Claude Design">To a local coding agent or Claude Code on the web</td><td data-label="Design Chamber today">Files are local already; no handoff bundle or prompt</td><td><span class="mark part">Partial</span></td></tr>
+            <tr><td><span class="title">Slides and present mode</span></td><td data-label="Claude Design">Decks, one-pagers</td><td data-label="Design Chamber today">None</td><td><span class="mark gap">Gap</span></td></tr>
+            <tr><td><span class="title">Share and collaborate</span></td><td data-label="Claude Design">View, comment, edit links</td><td data-label="Design Chamber today">Local only, by design</td><td><span class="mark par">Out of scope</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="source">Source for Claude Design: Claude Help Center, <a href="https://support.claude.com/en/articles/14604416-get-started-with-claude-design">"Get started with Claude Design"</a>, fetched 8 Nov 2026. The tweaks panel comes from the launch coverage.</p>
+    </section>
+
+    <!-- ROADMAP -->
+    <section id="roadmap" aria-labelledby="roadmap-h">
+      <header>
+        <span class="kicker">05</span>
+        <h2 id="roadmap-h">Roadmap to a full agent design tool</h2>
+        <p>Thirty items in five phases. Phases 0 and 1 are merged into master (PRs #6 to #15, merged 10 November). A new platform phase moves Design Chamber to OpenChamber SDK 2.7, which adds places an extension can show up that did not exist when it was built. Several of them replace workarounds we wrote ourselves. Effort: S under a day, M a few days, L a week or more.</p>
+      </header>
+      <div class="phases">
+
+        <div class="phase built">
+          <div class="ph">
+            <span class="kicker">Phase 0 · fix first <span class="phase-status">Merged · PRs #6, #7, #8</span></span>
+            <h3>Make the base safe to build on</h3>
+            <p>Small fixes, done before any new surface depends on them.</p>
+          </div>
+          <div class="features">
+            <div class="feature"><span class="num">0a<br>#6</span><h4>Version index quarantine</h4><p class="why">Set a corrupt index aside and stop GC, so a torn write can't erase history.</p><span class="effort"><b>S</b></span></div>
+            <div class="feature"><span class="num">0b<br>#7</span><h4>Async ZIP, quieter watcher</h4><p class="why">Streamed export; poll only the root while <code>fs.watch</code> is healthy; fingerprint nested assets.</p><span class="effort"><b>M</b></span></div>
+            <div class="feature"><span class="num">0c<br>#8</span><h4>Split <code>wall.ts</code></h4><p class="why">Camera, pin and popover controllers with tests. Canvas editing will land here, so it has to be workable.</p><span class="effort"><b>M</b></span></div>
+          </div>
+        </div>
+
+        <div class="phase built">
+          <div class="ph">
+            <span class="kicker">Phase 1 · close the loop <span class="phase-status">Merged · PRs #9 to #15</span></span>
+            <h3>Give the agent eyes, and show it working</h3>
+            <p>The biggest quality jump for the least work. Most of the machinery already exists.</p>
+          </div>
+          <div class="features">
+            <div class="feature"><span class="num">01<br>#9</span><h4>Render tool for the agent</h4><p class="why">A command or MCP tool the agent calls to get a PNG of each screen at each viewport, plus console errors, overflow and contrast notes. <b>It looks before it says done.</b></p><span class="effort"><b>M</b> reuses Chrome</span></div>
+            <div class="feature"><span class="num">02<br>#9, #14</span><h4>Design lint</h4><p class="why">Schema, screens against files on disk, broken links, remote refs, off-token values, contrast. The agent runs it, and the wall shows a "Checks" badge.</p><span class="effort"><b>M</b></span></div>
+            <div class="feature"><span class="num">03<br>#12</span><h4>Live build strip</h4><p class="why">"Agent is writing screens/pricing.html", with boards filling in as files land. Driven by file events and the session's status.</p><span class="effort"><b>M</b></span></div>
+            <div class="feature"><span class="num">04<br>#13</span><h4>Ask bar on the canvas</h4><p class="why">A prompt docked under the wall and page that sends to the linked chat, with the selected element attached as a chip.</p><span class="effort"><b>S</b></span></div>
+            <div class="feature"><span class="num">05<br>#13</span><h4>Send one pin now</h4><p class="why">"Send this" on a single pin, for when one comment shouldn't wait for the batch.</p><span class="effort"><b>S</b></span></div>
+            <div class="feature"><span class="num">06<br>#11</span><h4>Findability pass</h4><p class="why">First-run tip for the full-screen page, Comments chip in the rail, filled primary buttons, restore with Undo.</p><span class="effort"><b>S</b></span></div>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="ph">
+            <span class="kicker">Phase 1.5 · platform upgrade <span class="phase-status new">New · OpenChamber SDK 2.7</span></span>
+            <h3>Show up where the user already is</h3>
+            <p>Design Chamber targets SDK 2.5. The OpenChamber you run now ships 2.7, and its extension guide says a panel on its own is the weakest place for a feature: nobody opens it. 2.7 lets an extension reach the chat, the <code>@</code> menu, Work Status and the agent directly. U1 comes first; the rest can run in parallel after it.</p>
+            <p class="decision"><b>Two owner decisions first.</b> Requiring OpenChamber 2.7 or later drops anyone on 2.5 or 2.6 until they update. A skill shipped in the manifest reaches every agent while the extension is on, which is wider than the BRIEF rule that the only write outside the designs folder is a skill you click to install.</p>
+          </div>
+          <div class="features">
+            <div class="feature"><span class="num">U1</span><h4>Move to SDK 2.7</h4><p class="why">Bump <code>@openchamber/sdk</code> to 2.7.0 and the engine to 2.7 or later. Run <code>openchamber-guest-check</code> in CI so a broken package never ships. Commit the built files so the extension installs from its Git URL, and add a one-click install link to the README.</p><span class="effort"><b>S</b> first</span></div>
+            <div class="feature"><span class="num">U2</span><h4>Built-in skill and instructions</h4><p class="why">Ship the design rules as a <code>skills</code> folder and set short <code>instructions</code> naming the designs folder. Every agent learns about Design Chamber without <code>/design</code>, the root <code>AGENTS.md</code> guide or the Install button in Settings. <b>Fixes "rules are thin on the other path".</b></p><span class="effort"><b>M</b></span></div>
+            <div class="feature"><span class="num">U3</span><h4>Check as a real agent tool</h4><p class="why">An <code>opencodePlugin</code> gives the agent <code>design_check</code> and <code>design_render</code> tools that return findings and image paths. No launcher script in <code>.chamber/bin</code>, no shell quoting on Windows, and the agent sees it in its tool list instead of having to remember a command.</p><span class="effort"><b>M</b></span></div>
+            <div class="feature"><span class="num">U4</span><h4>A snapshot after every turn</h4><p class="why"><code>sessionEvents</code> (<code>turn-finished</code>, <code>turn-failed</code>) reach the service with no window open. Today the per-turn version is only taken while a Design Chamber page is open, so turns made with the panel closed have no snapshot of their own.</p><span class="effort"><b>S</b></span></div>
+            <div class="feature"><span class="num">U5</span><h4>Designs in Work Status</h4><p class="why">A <code>statusSection</code> in the chat's Work Status: "Pricing page · agent writing pricing.html · 3 issues", with Open and Check buttons on each line. Drawn by the app and polled only while it is on screen. <b>Answers "the real workspace is hard to find".</b></p><span class="effort"><b>S</b></span></div>
+            <div class="feature"><span class="num">U6</span><h4><code>@</code> a design</h4><p class="why"><code>mentions</code> lists your designs in the <code>@</code> menu beside files. Picking one attaches its folder, its rules and its open comments to the message, so any chat can revise a design without a slash command.</p><span class="effort"><b>S</b></span></div>
+            <div class="feature"><span class="num">U7</span><h4>Design card in the reply</h4><p class="why">A chat <code>blocks</code> component the agent draws when it finishes: the thumbnail, the screen list and the check result, with Open and Comment buttons. The work shows up in the chat where you are reading, not only in a panel.</p><span class="effort"><b>M</b></span></div>
+            <div class="feature"><span class="num">U8</span><h4>Pick a direction in chat</h4><p class="why">A block with <code>answers</code>: the agent asks "Which direction?" with A, B and C thumbnails, and your click is the answer, with a note field for conditions. The chat half of Variations (11); "Keep this one" on the wall stays the canvas half.</p><span class="effort"><b>M</b></span></div>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="ph">
+            <span class="kicker">Phase 2 · edit on the canvas</span>
+            <h3>From gallery to canvas</h3>
+            <p>Feature 07 is a spec for the architect before any code. Features 08 and 11 depend on it. Features 09, 10 and 19 don't.</p>
+          </div>
+          <div class="features">
+            <div class="feature"><span class="num">07</span><h4>Edit authority and patch route</h4><p class="why">The page owns edits and the frame only reports what was clicked. A service route patches the source HTML in place, snapshots before writing, and refuses if the agent changed the file meanwhile.</p><span class="effort"><b>L</b> spec first</span></div>
+            <div class="feature"><span class="num">08</span><h4>Edit text in place</h4><p class="why">Double-click text to edit it. A small toolbar over the selection offers Edit text, Comment and Ask agent.</p><span class="effort"><b>M</b> after 07</span></div>
+            <div class="feature"><span class="num">09</span><h4>Tweaks panel</h4><p class="why">The agent declares knobs in <code>design.json</code> mapped to variables in <code>tokens.css</code>: accent hue, density, type scale, radius. Sliders preview live and write <code>tokens.css</code> on Save. No HTML rewriting needed.</p><span class="effort"><b>M</b></span></div>
+            <div class="feature"><span class="num">10</span><h4>Screen management</h4><p class="why">A "+ Screen" ghost board that opens a prompt. Drag to reorder, duplicate, and move to trash. The <code>design.json</code> ownership rules need a decision first.</p><span class="effort"><b>M</b></span></div>
+            <div class="feature"><span class="num">11</span><h4>Variations you can pick from</h4><p class="why">"Try 3 directions" puts A, B and C side by side in one row. "Keep this one" promotes it and trashes the rest, with a version saved first. <span class="tag">SDK 2.7</span>The agent can ask which one in chat with the U8 block.</p><span class="effort"><b>M</b></span></div>
+            <div class="feature"><span class="num">19</span><h4>Pages that remember their state</h4><p class="why"><span class="tag">Requested 10 Nov · exploring</span>Ticks, toggles and filters a design saves with <code>localStorage</code> survive a reload. The frame is sandboxed without <code>allow-same-origin</code>, so storage throws today. The bridge swaps in a stand-in <code>localStorage</code> (spiked: Chromium lets a script replace it in an opaque-origin frame), and the service keeps the data in <code>.chamber/page-state.json</code>, capped and never exported or versioned. Adds "Clear saved page data" to the design menu. <b>First use: the checklists in sam-fde-career-path.</b></p><span class="effort"><b>M</b> spec first</span></div>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="ph">
+            <span class="kicker">Phase 3 · systems and ways out</span>
+            <h3>Design systems in, code and slides out</h3>
+            <p>What turns single designs into a working practice.</p>
+          </div>
+          <div class="features">
+            <div class="feature"><span class="num">12</span><h4><code>/design-sync</code></h4><p class="why">Extract the actual values (palette, type, radii, spacing, breakpoints, components) from a project into a shared system folder that later designs reuse. Needs a project tier above single designs. <span class="tag">SDK 2.7</span><code>instructions</code> per project directory tell every session which system to use.</p><span class="effort"><b>L</b></span></div>
+            <div class="feature"><span class="num">13</span><h4>Design system board</h4><p class="why"><code>tokens.css</code> and <code>DESIGN.md</code> drawn as swatches, a type ramp and sample components, with "Ask the agent to change this". <span class="tag">SDK 2.7</span>The same board can be a <code>fileEditors</code> view, so opening <code>tokens.css</code> in Files shows the swatches.</p><span class="effort"><b>S</b></span></div>
+            <div class="feature"><span class="num">14</span><h4>PNG and PDF export</h4><p class="why">Per artboard or the whole wall, through the Chrome that already makes thumbnails.</p><span class="effort"><b>S</b></span></div>
+            <div class="feature"><span class="num">15</span><h4>Present mode and PPTX</h4><p class="why">Full-screen Play with arrow keys between screens. Deck-style canvases export to PPTX, one screen per slide.</p><span class="effort"><b>S</b> / <b>L</b></span></div>
+            <div class="feature"><span class="num">16</span><h4>Handoff to a coding chat</h4><p class="why">A bundle with <code>tokens.json</code>, a component inventory, copy, interaction notes and assets, plus a ready prompt. "Send to coding chat" opens a session in the target project. <span class="tag">SDK 2.7</span><code>sessionControl</code> lets the service start that session itself, with no window open.</p><span class="effort"><b>M</b></span></div>
+            <div class="feature"><span class="num">17</span><h4>Reference drops</h4><p class="why">Drop screenshots, logos or a deck into a design's <code>references/</code> folder, and the agent is told to read them. Optional URL capture through headless Chrome. <span class="tag">SDK 2.7</span>An <code>attach</code> dialog on the chat's <code>+</code> menu adds a reference to the design from where you are typing.</p><span class="effort"><b>M</b></span></div>
+            <div class="feature"><span class="num">18</span><h4>Example designs for agents</h4><p class="why">Two or three small, well-made designs bundled as references. Agents copy structure from examples far more reliably than from rules.</p><span class="effort"><b>S</b></span></div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- START -->
+    <section id="start" aria-labelledby="start-h">
+      <header>
+        <span class="kicker">06</span>
+        <h2 id="start-h">Where to start</h2>
+      </header>
+      <div class="start">
+        <ol>
+          <li><span><b>Fix the false overlap warnings in the check.</b> It is the only new bug, it is small, and until it is fixed the check sends agents after problems that are not there.</span></li>
+          <li><span><b>Decide the two Phase 1.5 questions</b> (minimum OpenChamber version, built-in skill), then do U1. Everything else in Phase 1.5 sits on it.</span></li>
+          <li><span><b>Run U2, U3 and U4 together.</b> They delete workarounds (the AGENTS.md guide, the launcher script, panel-only snapshots) rather than add surface, so the code gets smaller as the product gets better.</span></li>
+          <li><span><b>Then U5 and U6, and the tweaks panel (09).</b> Work Status and the <code>@</code> menu fix findability for good; tweaks is the first real edit on the canvas and needs no patch route.</span></li>
+          <li><span><b>Meanwhile, have the architect spec edit authority and the patch route (07).</b> The rest of Phase 2 waits on that spec.</span></li>
+        </ol>
+      </div>
+    </section>
+
+    <footer>
+      <p>How this was made: four read-only reviews in parallel (code and security, UX from the smoke screenshots, agent rules, Claude Design research), merged and spot-checked against the source. Gates were run at master @ 0afcb34: typecheck clean, 730 tests, 728 pass, 2 skipped. No repository files were changed.</p>
+      <p>Line numbers refer to <code>src/</code> at that commit.</p>
+      <p>Updated again 10 November 2026: PRs #6 to #15 are merged into master; fixed and partly fixed findings are marked, and one new bug from running the check on this page is added.</p>
+      <p>Earlier on 10 November 2026: Phases 0 and 1 marked as built (PRs #6 to #15, all approved, CI green). Phase 1.5 and the SDK 2.7 notes come from OpenChamber's extension-building guide for SDK 2.7, checked against Design Chamber's current manifest and its SDK 2.5.2 reference.</p>
+      <p>Later on 10 November 2026: feature 19 (pages that remember their state) added as an owner request, being explored.</p>
+    </footer>
+
+  </main>
+</div>
+
+<script>
+  (function () {
+    var buttons = document.querySelectorAll('.filter button');
+    var rows = document.querySelectorAll('#bad-rows tr');
+    buttons.forEach(function (button) {
+      button.addEventListener('click', function () {
+        var value = button.getAttribute('data-filter');
+        buttons.forEach(function (b) { b.setAttribute('aria-pressed', String(b === button)); });
+        rows.forEach(function (row) {
+          row.hidden = value !== 'all' && row.getAttribute('data-sev') !== value;
+        });
+      });
+    });
+
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+    var sections = links.map(function (link) { return document.querySelector(link.getAttribute('href')); });
+    if ('IntersectionObserver' in window) {
+      var observer = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (!entry.isIntersecting) return;
+          links.forEach(function (link) {
+            link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + entry.target.id));
+          });
+        });
+      }, { rootMargin: '-20% 0px -70% 0px' });
+      sections.forEach(function (section) { if (section) observer.observe(section); });
+    }
+  })();
+</script>
+</body>
+</html>
