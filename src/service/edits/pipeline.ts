@@ -499,9 +499,15 @@ export const createEditService = (deps: EditServiceDeps): EditService => {
         return;
       }
       case 'comments': {
-        // WP0's moveComments moves by screen pair: the reverse of each pair that moved.
-        const pairs = new Map<string, { from: string; to: string }>();
-        for (const move of step.moves) pairs.set(`${move.to}\0${move.from}`, { from: move.to, to: move.from });
+        // The reverse of each pair that moved, limited to the comment ids that moved: a comment
+        // that was already on the destination before the edit stays there.
+        const pairs = new Map<string, { from: string; to: string; ids: string[] }>();
+        for (const move of step.moves) {
+          const key = `${move.to}\0${move.from}`;
+          const pair = pairs.get(key);
+          if (pair === undefined) pairs.set(key, { from: move.to, to: move.from, ids: [move.id] });
+          else pair.ids.push(move.id);
+        }
         if (pairs.size === 0) return;
         const result = await store.moveComments(run.slug, [...pairs.values()], run.hooks);
         if (result.bytes !== null) {

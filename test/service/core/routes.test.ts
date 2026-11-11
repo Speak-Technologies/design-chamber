@@ -492,18 +492,17 @@ describe('Phase 2 route stubs (T0): bearer, slug and body bounds before the lane
     }
   });
 
-  test('the store writeScreens and moveComments stubs answer the same sentence, never a false success', async (t) => {
+  test('the store writeScreens and moveComments (T4) never answer a false success', async (t) => {
     const core = await useServedCore(t);
     await core.request('/designs', { method: 'POST', body: { kind: 'canvas', title: 'Demo' } });
-    for (const call of [
-      () => core.store.writeScreens('demo', 'stamp', () => []),
-      () => core.store.moveComments('demo', [{ from: 'home', to: 'pricing' }]),
-    ]) {
-      await assert.rejects(
-        call(),
-        (error: unknown) => error instanceof ApiError && error.code === 'internal' && /not built yet/.test(error.message),
-      );
-    }
+    const before = await readFile(path.join(core.root, 'demo', 'design.json'), 'utf8');
+    await assert.rejects(
+      core.store.writeScreens('demo', 'stamp', () => []),
+      (error: unknown) => error instanceof ApiError && error.code === 'stale',
+      'a stamp that is not the list on disk writes nothing',
+    );
+    assert.deepEqual(await core.store.moveComments('demo', [{ from: 'home', to: 'pricing' }]), { moved: [], bytes: null }, 'nothing to move claims nothing');
+    assert.equal(await readFile(path.join(core.root, 'demo', 'design.json'), 'utf8'), before);
   });
 });
 
