@@ -445,10 +445,11 @@ describe('Phase 2 route stubs (T0): bearer, slug and body bounds before the lane
     }
   });
 
-  test('with the bearer, every new route answers the "not built yet" sentence', async (t) => {
+  test('with the bearer, every route still stubbed answers the "not built yet" sentence', async (t) => {
     const core = await useServedCore(t);
     await core.request('/designs', { method: 'POST', body: { kind: 'canvas', title: 'Demo' } });
-    for (const [pathname, init] of calls) {
+    // page-state is real since T8 (test/service/http/page-state-routes.test.ts).
+    for (const [pathname, init] of calls.filter(([pathname]) => !pathname.endsWith('/page-state'))) {
       const answer = await core.request(pathname, init);
       assert.equal(answer.status, 500, `${init.method ?? 'GET'} ${pathname}`);
       const body = await errorOf(answer);
