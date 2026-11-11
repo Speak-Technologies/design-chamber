@@ -83,3 +83,12 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Why not fixed now:** the way forward is the same; copy-level
 **Fix prompt:**
 > In `src/shared/source-edit.ts` `locateTextTarget`, remember when a candidate with the right tag and text was skipped only because it is `foreign` or `inert`, and answer `{ reason: 'inert' }` when no other match exists. Add `'inert'` to `EditReason` and `REASON_TEXT` in `src/ui/model/edit-text-model.ts` with the §3.3 sentence "Ask the agent to change it." and to `ASK_AGENT_REASONS`. Tests: `test/shared/source-edit.test.ts` (SVG `<text>Q3</text>` and `<template><p>x</p></template>` answer `inert`, a script-made text still `not-in-source`) and `test/ui/edit-text-model.test.ts` (the sentence). Run `npm run check`.
+
+### KI-21 — Screen reorder: the notice can name the screen you did not drag
+🟣 Minor · found 2026-11-12 (live click-through) · `src/shared/screen-ops.ts:76` (`describeMove`), notice built at `src/service/edits/ops-screens.ts:160` · owner: fullstack-developer
+**What:** an adjacent swap reads as either screen moving, and `describeMove` names the one first in the old order. On a canvas whose list holds directions (`home, pricing, about, home-b, home-c`), dragging About above Pricing shows "Moved Pricing above Home B": the wrong screen, and a neighbour (a direction of Home) that the wall shows inside another row.
+**Who:** end user · **Seen:** visible: the notice after a drag reorder, next to Undo
+**Happens:** drag a screen label one place up or down on the full-screen page · common (every one-place move) · **Effect:** the notice contradicts what the user just did; the order and Undo are correct
+**Why not fixed now:** copy only, the move itself is right; the unit test pins the current naming for a two-screen swap
+**Fix prompt:**
+> Let the reorder request carry the screen the user dragged (`moved`) and the id it now sits above (the next screen in the row order the wall shows, skipping direction siblings), and use them for the label and ledger in `planReorder` (`src/service/edits/ops-screens.ts`); keep `describeMove` as the fallback when the client sends neither. Update `src/shared/api.ts`, the wall's reorder call (`src/ui/wall/reorder-controller.ts`) and the fake service/backend. Tests: `test/shared/screen-ops.test.ts` and `test/service/edits/*`: a one-place move names the dragged screen, and a move past a direction group names a visible neighbour. Run `npm run check`.
