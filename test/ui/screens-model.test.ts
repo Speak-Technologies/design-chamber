@@ -238,6 +238,17 @@ test('a direction is not a row: Move up and Move down read the screen\'s place a
   assert.equal(entry(capped, 'duplicate').explainedBy, 'foot');
 });
 
+test('Move up reads the row place, not the list place: directions listed before their original leave it the first row (Q3)', () => {
+  // design.json lists home-a and home-b (directions of home) before home: home is list index 2 but the first row on the wall.
+  const first = menuOf({ index: 2, count: 4, rowIndex: 0, rowCount: 2 });
+  assert.equal(entry(first, 'up').disabled, true);
+  assert.equal(entry(first, 'up').reason, 'This is the first screen.');
+  // pricing after them is list index 3 but row 1 of 2: Move up on, Move down off.
+  const second = menuOf({ index: 3, count: 4, rowIndex: 1, rowCount: 2 });
+  assert.equal(entry(second, 'up').disabled, undefined);
+  assert.equal(entry(second, 'down').reason, 'This is the last screen.');
+});
+
 test('an old version still wins over the directions reason', () => {
   const viewing = entry(menuOf({ viewing: true, directionsOff: 'This screen already has directions. Keep one first.' }), 'directions');
   assert.equal(viewing.reason, "You're viewing an old version.");
