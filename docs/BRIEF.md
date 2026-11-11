@@ -118,6 +118,12 @@ Precedence, highest first:
 - The agent is told about hand edits: the next message Design Chamber sends to the linked chat
   (comments, ask, fix) starts with a short list of what the user changed by hand since the last one.
   Nothing is sent on its own; the instructions also tell agents to re-read a file before editing it.
+- On the rail, Tweaks opens as a non-modal bottom sheet (up to 50% of the rail height) so the wall stays
+  visible for live preview; Reset/Save pinned in the footer; full-height fallback below about 560 px of
+  rail height. Comments and Versions stay full-height. (Owner approved the mockup direction 2026-11-11.)
+- On the rail, a direction row wraps to a 2×2 grid so Current, A, B and C are visible at once; the page
+  keeps the single row. The row's "Show at" viewport switch is drawn on both surfaces. (Owner approved
+  2026-11-11.)
 
 ## Process
 - Public GitHub repo, MIT, default branch `master` with branch protection (PR + 1 approval + CI; owner-only bypass). (Updated 2026-10-27; was local-only.)

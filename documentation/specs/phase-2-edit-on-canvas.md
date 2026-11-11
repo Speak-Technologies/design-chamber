@@ -430,8 +430,10 @@ writes only those values into `tokens.css`. No HTML is rewritten.
 
 ### Acceptance Criteria
 - [ ] A **Tweaks** button shows in the viewer (page toolbar and rail compact actions) when the design
-      declares at least one valid knob; it opens a panel (page: side panel; rail: full-height sheet like
-      Comments).
+      declares at least one valid knob; it opens a panel (page: side panel; rail: a non-modal bottom
+      sheet up to 50% of the rail height, so the wall stays visible above for live preview; Reset/Save
+      pinned in the footer; falls back to full-height below about 560 px of rail height. Comments and
+      Versions stay full-height).
 - [ ] With no knobs, the ⋯ menu has **Ask for tweaks**, which puts "Add tweaks for this design (accent
       hue, density, type scale, radius)." in the ask bar for the user to send or edit.
 - [ ] Each knob shows its label, current value with unit, and a slider (or a segmented choice); arrow
@@ -647,10 +649,11 @@ first. The chat half shipped in Phase 1.5 as the DirectionPick block (verified: 
       (optional)" with **Ask the agent**; it goes to the linked chat through the ask flow, naming the
       screen. Disabled while that screen already has directions ("This screen already has directions.
       Keep one first.").
-- [ ] Screens the agent marks as directions of a screen show in one row: the current screen first
-      (labelled "Current"), then A, B, C (D) with the agent's short name, all at one viewport (the first
-      of the screen's viewports, with a viewport switch on the row). The row label reads "<Title> · 3
-      directions".
+- [ ] Screens the agent marks as directions of a screen show in one row on the page: the current screen
+      first (labelled "Current"), then A, B, C (D) with the agent's short name, all at one viewport (the
+      first of the screen's viewports, with a "Show at" viewport switch on the row, drawn on both
+      surfaces). On the rail the row wraps to a 2×2 grid so all directions are visible at once. The row
+      label reads "<Title> · 3 directions".
 - [ ] A direction not written yet shows the "not written yet" board; **Keep this one** is disabled on it.
 - [ ] Each written board in the row, Current included, has **Keep this one**.
 - [ ] Keep this one on B: version first ("Before keeping a direction"); B's content becomes the screen
