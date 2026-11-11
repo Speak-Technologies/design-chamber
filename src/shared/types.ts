@@ -348,6 +348,7 @@ export type CheckCode =
   | 'doc-charset'
   | 'token-redefined'
   | 'token-hardcoded'
+  | 'tweak-broken'
   | 'check-partial';
 
 export type CheckSeverity = 'error' | 'warning' | 'info';
@@ -364,6 +365,8 @@ export type CheckParams = {
   base?: string;
   /** `render-skipped` only: why the artboards were not rendered. */
   reason?: 'limit' | 'budget' | 'failures';
+  /** `tweak-broken` only: why the knob cannot be tuned (Phase 2 technical design §4.7). */
+  tweak?: 'missing' | 'formula' | 'unit' | 'no-tokens';
 };
 
 /** A finding as `check.json` stores it. `detail` and `selector` are untrusted design text. */

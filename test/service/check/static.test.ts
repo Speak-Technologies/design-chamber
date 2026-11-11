@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { symlink } from 'node:fs/promises';
 import { test } from 'node:test';
 
-import { docHygiene, entryKeyOf, runStaticChecks, screenSetFindings, tokenFindings } from '../../../src/service/check/static.ts';
+import { docHygiene, entryKeyOf, runStaticChecks, screenSetFindings, tokenFindings, tweakFindings } from '../../../src/service/check/static.ts';
 import { parseDesignJsonText } from '../../../src/shared/design-json.ts';
+import type { Tweak } from '../../../src/shared/types.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
 
 const GOOD = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Home</title></head><body><p>Hi</p></body></html>';
@@ -145,4 +146,98 @@ test('a linked screens folder lists nothing, so its file names never reach a fin
   const run = await runStaticChecks(dir, 10_000);
   assert.deepEqual(run.entries, []);
   assert.ok(!JSON.stringify(run.findings).includes('private-notes'));
+});
+
+// ---- broken knobs (Phase 2 §4.7) ----
+
+const KNOB_RADIUS: Tweak = { var: '--radius', label: 'Corner radius', kind: 'number', min: 0, max: 24, step: 2, unit: 'px' };
+const KNOB_HUE: Tweak = { var: '--accent-h', label: 'Accent hue', kind: 'number', min: 0, max: 360, step: 1, unit: '' };
+const KNOB_DENSITY: Tweak = { var: '--density', label: 'Density', kind: 'choice', options: [{ label: 'Compact', value: '0.85' }, { label: 'Comfortable', value: '1' }] };
+const ALL_KNOBS: Tweak[] = [KNOB_RADIUS, KNOB_HUE, KNOB_DENSITY];
+const GOOD_TOKENS = ':root{--radius:8px;--accent-h:210;--density:1}';
+const brokenOf = (findings: { code: string; params?: { tweak?: string; field?: string } }[]): { tweak: string | undefined; field: string | undefined }[] =>
+  findings.filter((finding) => finding.code === 'tweak-broken').map((finding) => ({ tweak: finding.params?.tweak, field: finding.params?.field }));
+
+test('tweakFindings: knobs the file serves produce nothing, including a choice value outside the options', () => {
+  assert.deepEqual(tweakFindings({ tweaks: ALL_KNOBS, tokensCss: GOOD_TOKENS }), []);
+  assert.deepEqual(tweakFindings({ tweaks: ALL_KNOBS, tokensCss: ':root{--radius:8px;--accent-h:210;--density:1.2}' }), []);
+  assert.deepEqual(tweakFindings({ tweaks: [], tokensCss: GOOD_TOKENS }), []);
+  assert.deepEqual(tweakFindings({ tweaks: [], tokensCss: null }), []);
+});
+
+test('tweakFindings: a missing variable and a formula are named; a unit mismatch is named', () => {
+  assert.deepEqual(brokenOf(tweakFindings({ tweaks: ALL_KNOBS, tokensCss: ':root{--radius:8px;--density:1}' })), [{ tweak: 'missing', field: '--accent-h' }]);
+  assert.deepEqual(brokenOf(tweakFindings({ tweaks: ALL_KNOBS, tokensCss: ':root{--radius:calc(4px * 2);--accent-h:210;--density:1}' })), [{ tweak: 'formula', field: '--radius' }]);
+  assert.deepEqual(brokenOf(tweakFindings({ tweaks: ALL_KNOBS, tokensCss: ':root{--radius:var(--base);--accent-h:210;--density:1}' })), [{ tweak: 'formula', field: '--radius' }]);
+  assert.deepEqual(brokenOf(tweakFindings({ tweaks: ALL_KNOBS, tokensCss: ':root{--radius: 8px /* base */;--accent-h:210;--density:1}' })), [{ tweak: 'formula', field: '--radius' }]);
+  assert.deepEqual(brokenOf(tweakFindings({ tweaks: ALL_KNOBS, tokensCss: ':root{--radius:8px !important;--accent-h:210;--density:1}' })), [{ tweak: 'formula', field: '--radius' }]);
+  assert.deepEqual(brokenOf(tweakFindings({ tweaks: ALL_KNOBS, tokensCss: ':root{--radius:0.5rem;--accent-h:210;--density:1}' })), [{ tweak: 'unit', field: '--radius' }]);
+  assert.deepEqual(brokenOf(tweakFindings({ tweaks: [KNOB_DENSITY], tokensCss: ':root{--density:rgb(1 2 3)}' })), [{ tweak: 'formula', field: '--density' }]);
+});
+
+test('tweakFindings: only a top-level :root declaration serves a knob; the last one wins', () => {
+  assert.deepEqual(brokenOf(tweakFindings({ tweaks: [KNOB_RADIUS], tokensCss: '@media (min-width: 1px){:root{--radius:8px}}' })), [{ tweak: 'missing', field: '--radius' }]);
+  assert.deepEqual(tweakFindings({ tweaks: [KNOB_RADIUS], tokensCss: ':root{--radius:4px} :root{--radius:8px}' }), []);
+  assert.deepEqual(brokenOf(tweakFindings({ tweaks: [KNOB_RADIUS], tokensCss: ':root{--radius:8px} :root{--radius:calc(4px * 2)}' })), [{ tweak: 'formula', field: '--radius' }]);
+});
+
+test('tweakFindings: no tokens.css is one design-level finding, however many knobs there are', () => {
+  const findings = tweakFindings({ tweaks: ALL_KNOBS, tokensCss: null });
+  assert.deepEqual(findings, [{ code: 'tweak-broken', file: 'design.json', screen: null, viewport: null, params: { tweak: 'no-tokens' } }]);
+});
+
+test('tweakFindings: several broken knobs each get their own finding', () => {
+  const findings = tweakFindings({ tweaks: ALL_KNOBS, tokensCss: ':root{--density:1}' });
+  assert.deepEqual(brokenOf(findings), [{ tweak: 'missing', field: '--radius' }, { tweak: 'missing', field: '--accent-h' }]);
+  for (const finding of findings) {
+    assert.equal(finding.file, 'design.json');
+    assert.equal(finding.screen, null);
+    assert.equal(finding.viewport, null);
+  }
+});
+
+test('runStaticChecks: broken knobs are reported against design.json, valid ones stay silent', async (t) => {
+  const tmp = await useTmpRoot(t);
+  const dir = await tmp.writeDesign('tweaks', {
+    'design.json': designJson({ tweaks: ALL_KNOBS }),
+    'tokens.css': ':root{--radius:calc(4px * 2);--density:1}',
+    'screens/home.html': GOOD,
+  });
+  const run = await runStaticChecks(dir, 10_000);
+  assert.deepEqual(brokenOf(run.findings), [{ tweak: 'formula', field: '--radius' }, { tweak: 'missing', field: '--accent-h' }]);
+  const clean = await runStaticChecks(await tmp.writeDesign('tweaks-ok', { 'design.json': designJson({ tweaks: ALL_KNOBS }), 'tokens.css': GOOD_TOKENS, 'screens/home.html': GOOD }), 10_000);
+  assert.deepEqual(clean.findings, []);
+});
+
+test('runStaticChecks: a page design reports broken knobs the same way', async (t) => {
+  const tmp = await useTmpRoot(t);
+  const dir = await tmp.writeDesign('tweak-page', { 'design.json': designJson({ kind: 'page', screens: [], tweaks: [KNOB_HUE] }), 'tokens.css': ':root{--other:1}', 'index.html': GOOD });
+  const run = await runStaticChecks(dir, 10_000);
+  assert.deepEqual(brokenOf(run.findings), [{ tweak: 'missing', field: '--accent-h' }]);
+});
+
+test('runStaticChecks: tweaks without tokens.css is one finding; no tweaks never reports one', async (t) => {
+  const tmp = await useTmpRoot(t);
+  const noFile = await runStaticChecks(await tmp.writeDesign('no-tokens', { 'design.json': designJson({ tweaks: ALL_KNOBS }), 'screens/home.html': GOOD }), 10_000);
+  assert.deepEqual(brokenOf(noFile.findings), [{ tweak: 'no-tokens', field: undefined }]);
+  const noKnobs = await runStaticChecks(await tmp.writeDesign('no-knobs', { 'design.json': designJson(), 'screens/home.html': GOOD }), 10_000);
+  assert.deepEqual(brokenOf(noKnobs.findings), []);
+  const oldDesign = await runStaticChecks(await tmp.writeDesign('old', { 'design.json': designJson(), 'tokens.css': GOOD_TOKENS, 'screens/home.html': GOOD }), 10_000);
+  assert.deepEqual(oldDesign.findings, []);
+});
+
+test('runStaticChecks: an invalid knob definition is a design.json warning, not a broken-knob finding', async (t) => {
+  const tmp = await useTmpRoot(t);
+  const dir = await tmp.writeDesign('bad-knob', { 'design.json': designJson({ tweaks: [{ var: '--x', label: 'X', kind: 'slider' }] }), 'tokens.css': GOOD_TOKENS, 'screens/home.html': GOOD });
+  const run = await runStaticChecks(dir, 10_000);
+  assert.deepEqual(brokenOf(run.findings), []);
+  assert.ok(run.findings.some((finding) => finding.code === 'design-json-field' && finding.params?.field === 'tweaks[0]'));
+});
+
+test('runStaticChecks: the per-code cap keeps at most five broken-knob findings', async (t) => {
+  const tmp = await useTmpRoot(t);
+  const knobs: Tweak[] = Array.from({ length: 7 }, (_, index) => ({ var: `--k${index}`, label: `Knob ${index}`, kind: 'number', min: 0, max: 10, step: 1, unit: '' }));
+  const dir = await tmp.writeDesign('many-broken', { 'design.json': designJson({ tweaks: knobs }), 'tokens.css': ':root{--other:1}', 'screens/home.html': GOOD });
+  const run = await runStaticChecks(dir, 10_000);
+  assert.equal(run.findings.filter((finding) => finding.code === 'tweak-broken').length, 5);
 });

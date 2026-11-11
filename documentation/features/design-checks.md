@@ -77,8 +77,28 @@ Severity and wording come from the finding code only (one table, `src/shared/che
 | Kind | Findings |
 |---|---|
 | Errors | a screen listed in design.json with no file · a missing `index.html` · links to missing files, files outside the folder, or the internet · content wider than the viewport · low text contrast (AA: 4.5:1, 3:1 for large text) · an image without `alt` · a form field without a label · a button or link without a name · a script error · a request to the internet that was blocked · a screen that could not be rendered |
-| Warnings | tokens redefined in a screen that `tokens.css` already defines · `design.json` fields that were ignored · a screen file design.json does not list · a device copy of a screen (`home-phone` next to `home`) · a script import that cannot load · no doctype, `lang`, viewport meta or `<title>` · cut-off or overlapping text · a screen six or more viewports tall · a screen that took too long |
+| Warnings | tokens redefined in a screen that `tokens.css` already defines · `design.json` fields that were ignored · a screen file design.json does not list · a device copy of a screen (`home-phone` next to `home`) · a script import that cannot load · no doctype, `lang`, viewport meta or `<title>` · cut-off or overlapping text · a screen six or more viewports tall · a screen that took too long · a tweak knob `tokens.css` cannot serve (see below) |
 | Notes | no charset · hardcoded colours although `tokens.css` defines colours · the page opened an alert · screens not rendered because of the limit · no browser found · the page height |
+
+## Broken tweak knobs
+When `design.json` declares tweaks (the knobs in the Tweaks panel), the static check reads
+`tokens.css` the same way the panel does and warns about every knob the panel could not tune. Each
+warning names the variable and points at `design.json`:
+
+- **Missing:** "the tweak for --accent-h names a variable tokens.css does not define." (Only a
+  declaration directly in a top-level `:root` counts; one inside `@media` does not, and when
+  `:root` sets the variable twice the last one counts.)
+- **Formula:** "the tweak for --radius points at a formula in tokens.css (calc() or var()), so it
+  can't be tuned." This also covers a value with a comment, `!important` or a colour function.
+- **Unit:** "the tweak for --radius uses a different unit than tokens.css." (The knob says `px`,
+  the file says `rem`.)
+- **No tokens.css:** one warning, "design.json declares tweaks, but the design has no tokens.css.",
+  however many knobs there are.
+
+A choice knob whose file value is not one of its options still tunes, so it is not reported. A
+design with no tweaks never gets this warning, and a knob definition that is itself invalid is
+reported as an ignored `design.json` field, as before. The five-per-kind cap applies. The CLI, the
+`design_check` tool and the Checks badge all show these warnings, because they share one engine.
 
 Static checks (the files) run on every change. Rendering runs when the agent runs the command, or
 when the user asks (`POST /designs/:slug/checks/run`, one design at a time).

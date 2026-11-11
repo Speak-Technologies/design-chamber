@@ -227,3 +227,35 @@ test('a forged render-skipped reason is dropped, so it falls back to the limit w
   (base.render as Record<string, unknown>).findings = [{ code: 'render-skipped', file: null, screen: null, viewport: null, params: { count: 2, max: 24, reason: 'budget' } }];
   assert.equal(parseCheckReport(base)?.render?.findings[0]?.params?.reason, 'budget');
 });
+
+test('tweak-broken: a warning whose sentences follow the spec copy exactly (Phase 2 §4.7)', () => {
+  assert.equal(severityOf('tweak-broken'), 'warning');
+  const f = (params: CheckFindingData['params']): CheckFindingData => ({ code: 'tweak-broken', file: 'design.json', screen: null, viewport: null, params });
+  assert.equal(findingMessage(f({ tweak: 'missing', field: '--accent-h' })), 'design.json: the tweak for --accent-h names a variable tokens.css does not define.');
+  assert.equal(findingMessage(f({ tweak: 'formula', field: '--radius' })), "design.json: the tweak for --radius points at a formula in tokens.css (calc() or var()), so it can't be tuned.");
+  assert.equal(findingMessage(f({ tweak: 'unit', field: '--radius' })), 'design.json: the tweak for --radius uses a different unit than tokens.css.');
+  assert.equal(findingMessage(f({ tweak: 'no-tokens' })), 'design.json declares tweaks, but the design has no tokens.css.');
+  assert.equal(findingMessage(f(undefined)), 'design.json declares tweaks, but the design has no tokens.css.');
+});
+
+test('tweak-broken params survive check.json parsing; a forged reason or field is dropped', () => {
+  const base = goodReport();
+  base.static = {
+    findings: [
+      { code: 'tweak-broken', file: 'design.json', screen: null, viewport: null, params: { tweak: 'missing', field: '--accent-h' } },
+      { code: 'tweak-broken', file: 'design.json', screen: null, viewport: null, params: { tweak: 'no-tokens' } },
+      { code: 'tweak-broken', file: 'design.json', screen: null, viewport: null, params: { tweak: 'because I said so', field: '--radius' } },
+      { code: 'tweak-broken', file: 'design.json', screen: null, viewport: null, params: { tweak: 'formula', field: 'a b' } },
+    ],
+  };
+  const findings = parseCheckReport(base)?.static.findings;
+  assert.ok(findings);
+  const first = findings[0];
+  assert.ok(first);
+  assert.deepEqual(first.params, { tweak: 'missing', field: '--accent-h' });
+  assert.deepEqual(findings[1]?.params, { tweak: 'no-tokens' });
+  assert.deepEqual(findings[2]?.params, { field: '--radius' });
+  assert.deepEqual(findings[3]?.params, { tweak: 'formula' });
+  assert.equal('severity' in first, false);
+  assert.equal(withMessage(first).message, 'design.json: the tweak for --accent-h names a variable tokens.css does not define.');
+});
