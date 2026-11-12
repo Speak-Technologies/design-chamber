@@ -179,7 +179,7 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   registerSessionEventsRoutes(router, ctx, turnEvents);
   registerMentionsRoutes(router, ctx);
   registerStatusRoutes(router, ctx);
-  // Phase 2: seam stubs until T2b (edits) and T8 (page-state) fill them (§10.7).
+  // Phase 2: hand edits (the edit pipeline) and saved page data (per-design page state).
   registerEditRoutes(router, ctx);
   registerPageStateRoutes(router, ctx);
 

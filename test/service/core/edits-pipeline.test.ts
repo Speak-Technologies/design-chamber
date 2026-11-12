@@ -9,11 +9,11 @@ import { mkdir, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
 
-import type { EditResponse, FileStamp } from '../../../src/shared/api.ts';
+import type { EditRequest, EditResponse, FileStamp } from '../../../src/shared/api.ts';
 import type { JsonObject, JsonValue, VersionEntry } from '../../../src/shared/types.ts';
 import type { DesignStore } from '../../../src/service/context.ts';
 import { createEditsFile, type EditsFileStore } from '../../../src/service/edits/file.ts';
-import type { OpModule, OpModules, RequestOf } from '../../../src/service/edits/op-module.ts';
+import type { OpModule, OpModules, PlannedStep, RequestOf } from '../../../src/service/edits/op-module.ts';
 import {
   createEditService,
   DEFAULT_OPS,
@@ -21,6 +21,7 @@ import {
   partWayMessage,
   ROLLED_BACK_MESSAGE,
   STALE_MESSAGES,
+  stepAllowed,
   UNDO_GONE_MESSAGE,
   UNDO_STALE_MESSAGE,
   type EditService,
@@ -128,6 +129,53 @@ const fakeTrash = (stamp: string): OpModule<RequestOf<'trash-screen'>> => ({
   },
 });
 
+/** One move of `screens/home.html` to `to`, with the source's real hash: only the writable-set gate stops it. */
+const fakeMove = <K extends 'trash-screen' | 'keep-direction'>(to: string): OpModule<RequestOf<K>> => ({
+  async plan({ dir }) {
+    const from = 'screens/home.html';
+    const sha = sha256(await readFile(path.join(dir, ...from.split('/'))));
+    return {
+      label: 'A move the gate must refuse',
+      steps: [{ kind: 'move', from, to, expect: { sha }, undo: { kind: 'move', from, to, sha } }],
+      ledger: { kind: 'trash', screen: 'Home', file: from },
+    };
+  },
+});
+
+/** A create of `rel` with fresh bytes: only the writable-set gate keeps them off the disk. */
+const fakeCreate = (rel: string): OpModule<RequestOf<'duplicate'>> => ({
+  async plan() {
+    const bytes = Buffer.from('<h1>the copy</h1>');
+    return {
+      label: 'A create the gate must refuse',
+      steps: [{ kind: 'create', rel, bytes, undo: { kind: 'create', file: rel, sha: sha256(bytes) } }],
+      ledger: { kind: 'duplicate', screen: 'Home', copy: 'Home copy', file: rel },
+    };
+  },
+});
+
+/** The text op planning a screen-list step (only the four screen ops may plan one). */
+const fakeTextScreens: OpModule<RequestOf<'text'>> = {
+  async plan() {
+    return {
+      label: 'A list write the gate must refuse',
+      steps: [{ kind: 'screens', expectStamp: 'a'.repeat(64), mutate: () => [], undo: (afterStamp) => ({ kind: 'screens', before: [], afterStamp }) }],
+      ledger: { kind: 'text', file: 'index.html', screen: null, before: 'x', after: 'y' },
+    };
+  },
+};
+
+/** Duplicate planning a comments step (only keep-direction may move comments). */
+const fakeDuplicateComments: OpModule<RequestOf<'duplicate'>> = {
+  async plan() {
+    return {
+      label: 'A comment move the gate must refuse',
+      steps: [{ kind: 'comments', moves: [{ from: 'home', to: 'checkout' }], undo: () => ({ kind: 'comments', moves: [] }) }],
+      ledger: { kind: 'duplicate', screen: 'Home', copy: 'Home copy', file: 'screens/home-copy.html' },
+    };
+  },
+};
+
 type ScreensBehaviour = { beforeWrite?: () => Promise<void> };
 
 /** The store with a real-enough `writeScreens` (T4 builds the real one): stamp check, mutate, hook, write. */
@@ -213,6 +261,27 @@ const rejectsWith = (code: string, message: string) => (error: unknown): boolean
   assert.equal(error.code, code);
   assert.equal(error.message, message);
   return true;
+};
+
+/** Every file under the root as rel → sha256, so a stray write anywhere shows up. */
+const treeOf = async (root: string): Promise<Map<string, string>> => {
+  const files = new Map<string, string>();
+  const walk = async (dir: string, prefix: string): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) await walk(path.join(dir, entry.name), rel);
+      else if (entry.isFile()) files.set(rel, sha256(await readFile(path.join(dir, entry.name))));
+    }
+  };
+  await walk(root, '');
+  return files;
+};
+
+/** What a refused plan leaves behind: no version, the disk exactly as it was, the refusal logged. */
+const assertRefusedPlan = async (rig: Rig, slug: string, before: Map<string, string>): Promise<void> => {
+  assert.deepEqual(await versionsOf(rig.tmp, slug), [], 'no version was taken');
+  assert.deepEqual(await treeOf(rig.tmp.root), before, 'nothing on disk changed');
+  assert.ok(rig.ctx.logs.some((line) => line.event === 'edits.plan-refused'));
 };
 
 const ORIGINAL = '<!doctype html>\r\n<!-- keep -->\r\n<h1>Ship faster</h1>\r\n';
@@ -304,6 +373,174 @@ describe('the writable set and links (E7, 07-7)', () => {
     await symlink(rig.tmp.at('art/other.html'), rig.tmp.at('art/index.html'));
     await assert.rejects(editText(rig, 'Ship faster', 'x'), rejectsWith('invalid', LINK_SENTENCE));
     assert.equal(await rig.tmp.read('art/other.html'), ORIGINAL);
+  });
+
+  test('a trash-screen move into the trash place of another design is refused before the version', async (t) => {
+    const rig = await setup(t, { ops: { 'trash-screen': fakeMove<'trash-screen'>('.trash/other.home-20260101000000.html') } });
+    await rig.tmp.writeDesign('wall', canvasDesign());
+    await rig.tmp.write('.trash/other.home-20260101000000.html', 'the screen of another design');
+    const before = await treeOf(rig.tmp.root);
+    await assert.rejects(
+      rig.edits.apply('wall', { op: 'trash-screen', screens: (await rig.ctx.store.get('wall')).screensStamp, id: 'home', file: null }),
+      rejectsWith('internal', ROLLED_BACK_MESSAGE),
+    );
+    await assertRefusedPlan(rig, 'wall', before);
+  });
+
+  test('a trash-screen move onto a listed screen is refused before the version', async (t) => {
+    const rig = await setup(t, { ops: { 'trash-screen': fakeMove<'trash-screen'>('screens/checkout.html') } });
+    await rig.tmp.writeDesign('wall', canvasDesign());
+    const before = await treeOf(rig.tmp.root);
+    await assert.rejects(
+      rig.edits.apply('wall', { op: 'trash-screen', screens: (await rig.ctx.store.get('wall')).screensStamp, id: 'home', file: null }),
+      rejectsWith('internal', ROLLED_BACK_MESSAGE),
+    );
+    await assertRefusedPlan(rig, 'wall', before);
+  });
+
+  for (const to of ['tokens.css', 'index.html']) {
+    test(`a keep-direction move to ${to} is refused before the version`, async (t) => {
+      const rig = await setup(t, { ops: { 'keep-direction': fakeMove<'keep-direction'>(to) } });
+      await rig.tmp.writeDesign('wall', canvasDesign({ 'tokens.css': ':root { --accent: rebeccapurple; }' }));
+      const before = await treeOf(rig.tmp.root);
+      await assert.rejects(
+        rig.edits.apply('wall', {
+          op: 'keep-direction',
+          screens: (await rig.ctx.store.get('wall')).screensStamp,
+          of: 'checkout',
+          keep: 'home',
+          files: [{ id: 'home', file: null }, { id: 'checkout', file: null }],
+        }),
+        rejectsWith('internal', ROLLED_BACK_MESSAGE),
+      );
+      await assertRefusedPlan(rig, 'wall', before);
+    });
+  }
+
+  test('a duplicate create over an already listed screen is refused before the version', async (t) => {
+    const rig = await setup(t, { ops: { duplicate: fakeCreate('screens/home.html') } });
+    await rig.tmp.writeDesign('wall', canvasDesign());
+    const before = await treeOf(rig.tmp.root);
+    await assert.rejects(
+      rig.edits.apply('wall', { op: 'duplicate', screens: (await rig.ctx.store.get('wall')).screensStamp, id: 'home', file: await stampOf(rig.tmp, 'wall/screens/home.html') }),
+      rejectsWith('internal', ROLLED_BACK_MESSAGE),
+    );
+    await assertRefusedPlan(rig, 'wall', before);
+  });
+
+  test('a duplicate create on a page design is refused before the version', async (t) => {
+    const rig = await setup(t, { ops: { duplicate: fakeCreate('screens/home-copy.html') } });
+    await rig.tmp.writeDesign('art', pageDesign({ 'index.html': ORIGINAL }));
+    const before = await treeOf(rig.tmp.root);
+    await assert.rejects(
+      rig.edits.apply('art', { op: 'duplicate', screens: (await rig.ctx.store.get('art')).screensStamp, id: 'home', file: await stampOf(rig.tmp, 'art/index.html') }),
+      rejectsWith('internal', ROLLED_BACK_MESSAGE),
+    );
+    await assertRefusedPlan(rig, 'art', before);
+  });
+
+  test('a screens step planned by the text op is refused before the version', async (t) => {
+    const rig = await setup(t, { ops: { text: fakeTextScreens } });
+    await rig.tmp.writeDesign('wall', canvasDesign());
+    const before = await treeOf(rig.tmp.root);
+    const base = sha256(await rig.tmp.read('wall/screens/home.html'));
+    await assert.rejects(rig.edits.apply('wall', textRequest(base, 'home', 'x', 'home')), rejectsWith('internal', ROLLED_BACK_MESSAGE));
+    await assertRefusedPlan(rig, 'wall', before);
+  });
+
+  test('a comments step planned by duplicate is refused before the version', async (t) => {
+    const rig = await setup(t, { ops: { duplicate: fakeDuplicateComments } });
+    await rig.tmp.writeDesign('wall', canvasDesign());
+    const before = await treeOf(rig.tmp.root);
+    await assert.rejects(
+      rig.edits.apply('wall', { op: 'duplicate', screens: (await rig.ctx.store.get('wall')).screensStamp, id: 'home', file: await stampOf(rig.tmp, 'wall/screens/home.html') }),
+      rejectsWith('internal', ROLLED_BACK_MESSAGE),
+    );
+    await assertRefusedPlan(rig, 'wall', before);
+  });
+
+  test('stepAllowed answers the whole (op, kind, step) table (07-7)', async (t) => {
+    const rig = await setup(t);
+    await rig.tmp.writeDesign('wall', canvasDesign({ 'tokens.css': ':root { --accent: rebeccapurple; }' }));
+    await rig.tmp.writeDesign('art', pageDesign({ 'index.html': ORIGINAL }));
+    const canvas = await rig.ctx.store.get('wall');
+    const page = await rig.ctx.store.get('art');
+    const sha = 'a'.repeat(64);
+    const write = (rel: string): PlannedStep => ({ kind: 'write', rel, expectSha: sha, bytes: Buffer.from('x'), undo: { kind: 'splice', file: rel, start: 0, inserted: 1, removed: '', afterSha: sha, beforeSha: sha } });
+    const create = (rel: string): PlannedStep => ({ kind: 'create', rel, bytes: Buffer.from('x'), undo: { kind: 'create', file: rel, sha } });
+    const move = (from: string, to: string): PlannedStep => ({ kind: 'move', from, to, expect: { sha }, undo: { kind: 'move', from, to, sha } });
+    const screens: PlannedStep = { kind: 'screens', expectStamp: sha, mutate: () => [], undo: (afterStamp) => ({ kind: 'screens', before: [], afterStamp }) };
+    const comments: PlannedStep = { kind: 'comments', moves: [{ from: 'home', to: 'checkout' }], undo: () => ({ kind: 'comments', moves: [] }) };
+    const ownTrash = '.trash/wall.home-20260101000000.html';
+    const otherTrash = '.trash/other.home-20260101000000.html';
+    type Row = { op: EditRequest['op']; on: 'canvas' | 'page'; step: PlannedStep; allowed: boolean; why: string };
+    const rows: Row[] = [
+      // write: text owns the entry (page) or a listed screen (canvas); tokens owns tokens.css; nobody else writes bytes.
+      { op: 'text', on: 'canvas', step: write('index.html'), allowed: false, why: 'the entry of a canvas' },
+      { op: 'text', on: 'canvas', step: write('screens/home.html'), allowed: true, why: 'a listed screen' },
+      { op: 'text', on: 'canvas', step: write('screens/ghost.html'), allowed: false, why: 'an unlisted screen' },
+      { op: 'text', on: 'canvas', step: write('tokens.css'), allowed: false, why: 'tokens belong to the tokens op' },
+      { op: 'tokens', on: 'canvas', step: write('tokens.css'), allowed: true, why: 'its own file' },
+      { op: 'tokens', on: 'canvas', step: write('index.html'), allowed: false, why: 'the entry' },
+      { op: 'tokens', on: 'canvas', step: write('screens/home.html'), allowed: false, why: 'a screen' },
+      { op: 'reorder', on: 'canvas', step: write('screens/home.html'), allowed: false, why: 'screen ops never write bytes' },
+      { op: 'duplicate', on: 'canvas', step: write('screens/home.html'), allowed: false, why: 'screen ops never write bytes' },
+      { op: 'trash-screen', on: 'canvas', step: write('screens/home.html'), allowed: false, why: 'screen ops never write bytes' },
+      { op: 'keep-direction', on: 'canvas', step: write('screens/home.html'), allowed: false, why: 'screen ops never write bytes' },
+      { op: 'text', on: 'page', step: write('index.html'), allowed: true, why: 'the entry of a page' },
+      { op: 'text', on: 'page', step: write('screens/home.html'), allowed: false, why: 'a page has no screens' },
+      { op: 'tokens', on: 'page', step: write('tokens.css'), allowed: true, why: 'its own file' },
+      { op: 'tokens', on: 'page', step: write('index.html'), allowed: false, why: 'the entry' },
+      // create: duplicate only, on a canvas, a screen file not already listed.
+      { op: 'duplicate', on: 'canvas', step: create('screens/fresh.html'), allowed: true, why: 'a new screen' },
+      { op: 'duplicate', on: 'canvas', step: create('screens/home.html'), allowed: false, why: 'already listed' },
+      { op: 'duplicate', on: 'canvas', step: create('index.html'), allowed: false, why: 'not a screen file' },
+      { op: 'duplicate', on: 'canvas', step: create('tokens.css'), allowed: false, why: 'not a screen file' },
+      { op: 'text', on: 'canvas', step: create('screens/fresh.html'), allowed: false, why: 'only duplicate creates' },
+      { op: 'tokens', on: 'canvas', step: create('screens/fresh.html'), allowed: false, why: 'only duplicate creates' },
+      { op: 'reorder', on: 'canvas', step: create('screens/fresh.html'), allowed: false, why: 'only duplicate creates' },
+      { op: 'trash-screen', on: 'canvas', step: create('screens/fresh.html'), allowed: false, why: 'only duplicate creates' },
+      { op: 'keep-direction', on: 'canvas', step: create('screens/fresh.html'), allowed: false, why: 'only duplicate creates' },
+      { op: 'duplicate', on: 'page', step: create('screens/fresh.html'), allowed: false, why: 'a page has no screens' },
+      // move: from a listed screen on a canvas; trash-screen to its own trash only, keep-direction also onto a listed screen.
+      { op: 'trash-screen', on: 'canvas', step: move('screens/home.html', ownTrash), allowed: true, why: 'its own trash' },
+      { op: 'trash-screen', on: 'canvas', step: move('screens/home.html', otherTrash), allowed: false, why: 'the trash of another design' },
+      { op: 'trash-screen', on: 'canvas', step: move('screens/home.html', 'screens/checkout.html'), allowed: false, why: 'a listed screen' },
+      { op: 'trash-screen', on: 'canvas', step: move('screens/home.html', 'tokens.css'), allowed: false, why: 'not a trash place' },
+      { op: 'keep-direction', on: 'canvas', step: move('screens/home.html', ownTrash), allowed: true, why: 'its own trash' },
+      { op: 'keep-direction', on: 'canvas', step: move('screens/home.html', 'screens/checkout.html'), allowed: true, why: 'a listed screen' },
+      { op: 'keep-direction', on: 'canvas', step: move('screens/home.html', 'tokens.css'), allowed: false, why: 'neither trash nor a listed screen' },
+      { op: 'keep-direction', on: 'canvas', step: move('screens/home.html', 'index.html'), allowed: false, why: 'neither trash nor a listed screen' },
+      { op: 'keep-direction', on: 'canvas', step: move('screens/home.html', 'screens/ghost.html'), allowed: false, why: 'an unlisted screen' },
+      { op: 'trash-screen', on: 'canvas', step: move('screens/ghost.html', ownTrash), allowed: false, why: 'the source is not listed' },
+      { op: 'keep-direction', on: 'canvas', step: move('tokens.css', ownTrash), allowed: false, why: 'the source is not a screen' },
+      { op: 'reorder', on: 'canvas', step: move('screens/home.html', ownTrash), allowed: false, why: 'reorder never moves files' },
+      { op: 'duplicate', on: 'canvas', step: move('screens/home.html', ownTrash), allowed: false, why: 'duplicate never moves files' },
+      { op: 'text', on: 'canvas', step: move('screens/home.html', ownTrash), allowed: false, why: 'text never moves files' },
+      { op: 'tokens', on: 'canvas', step: move('screens/home.html', ownTrash), allowed: false, why: 'tokens never moves files' },
+      { op: 'trash-screen', on: 'page', step: move('screens/home.html', '.trash/art.home-20260101000000.html'), allowed: false, why: 'a page has no screens' },
+      // screens: the four screen ops on a canvas only.
+      { op: 'reorder', on: 'canvas', step: screens, allowed: true, why: 'a screen op' },
+      { op: 'duplicate', on: 'canvas', step: screens, allowed: true, why: 'a screen op' },
+      { op: 'trash-screen', on: 'canvas', step: screens, allowed: true, why: 'a screen op' },
+      { op: 'keep-direction', on: 'canvas', step: screens, allowed: true, why: 'a screen op' },
+      { op: 'text', on: 'canvas', step: screens, allowed: false, why: 'not a screen op' },
+      { op: 'tokens', on: 'canvas', step: screens, allowed: false, why: 'not a screen op' },
+      { op: 'reorder', on: 'page', step: screens, allowed: false, why: 'a page has no screen list' },
+      { op: 'keep-direction', on: 'page', step: screens, allowed: false, why: 'a page has no screen list' },
+      // comments: keep-direction on a canvas only.
+      { op: 'keep-direction', on: 'canvas', step: comments, allowed: true, why: 'the only op that moves comments' },
+      { op: 'text', on: 'canvas', step: comments, allowed: false, why: 'not keep-direction' },
+      { op: 'tokens', on: 'canvas', step: comments, allowed: false, why: 'not keep-direction' },
+      { op: 'reorder', on: 'canvas', step: comments, allowed: false, why: 'not keep-direction' },
+      { op: 'duplicate', on: 'canvas', step: comments, allowed: false, why: 'not keep-direction' },
+      { op: 'trash-screen', on: 'canvas', step: comments, allowed: false, why: 'not keep-direction' },
+      { op: 'keep-direction', on: 'page', step: comments, allowed: false, why: 'a page has no screens' },
+    ];
+    for (const row of rows) {
+      const record = row.on === 'canvas' ? canvas : page;
+      assert.equal(stepAllowed(row.op, record, record.slug, row.step), row.allowed, `${row.op} ${row.step.kind} (${row.why}) on ${row.on}`);
+    }
   });
 });
 
