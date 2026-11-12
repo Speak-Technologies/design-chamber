@@ -152,7 +152,8 @@ const planReorder = async ({ record, dir, request }: OpInput<RequestOf<'reorder'
   if (reorderRaw(list.raw, request.order) === null) throw badRequest();
   if (request.order.every((id, index) => list.ids[index] === id)) throw new ApiError('invalid', SAME_ORDER_MESSAGE);
   const step = screensStep(request.screens, list.raw, (raw) => reorderRaw(raw, request.order));
-  const move = describeMove(list.ids, request.order);
+  // The groups are the wall's rows: the notice names the dragged row and a shown neighbour, never a direction hidden in a row.
+  const move = describeMove(list.ids, request.order, directionGroups(record.design.screens));
   const title = (id: string): string => quoted(list.titleOf(id));
   if (move === null) {
     return { label: 'Screens reordered', steps: [step], ledger: { kind: 'reorder-many', order: request.order.map(title) } };

@@ -83,6 +83,37 @@ describe('describeMove', () => {
   });
 });
 
+describe('describeMove with direction rows (KI-21)', () => {
+  // The wall shows Home with Home B and Home C inside its row, then Pricing, then About.
+  const groups = [{ of: 'home', members: [{ id: 'home-b' }, { id: 'home-c' }] }];
+  const before = ['home', 'pricing', 'about', 'home-b', 'home-c'];
+
+  test('a one-place drag names the dragged screen and the shown row it lands above', () => {
+    assert.deepEqual(describeMove(before, ['home', 'about', 'pricing', 'home-b', 'home-c'], groups), { moved: 'about', above: 'pricing' });
+  });
+
+  test('a swap with a direction row names the plain row when the directions did not travel with it', () => {
+    assert.deepEqual(describeMove(before, ['pricing', 'home', 'about', 'home-b', 'home-c'], groups), { moved: 'pricing', above: 'home' });
+  });
+
+  test('a row that travels with its directions to the end reads as to the end, not above its own direction', () => {
+    assert.deepEqual(describeMove(before, ['pricing', 'about', 'home', 'home-b', 'home-c'], groups), { moved: 'home', above: null });
+  });
+
+  test('a move past a direction group names the shown row it lands above', () => {
+    assert.deepEqual(describeMove(before, ['about', 'home', 'pricing', 'home-b', 'home-c'], groups), { moved: 'about', above: 'home' });
+  });
+
+  test('without the groups the old naming is kept (the fake services send none)', () => {
+    assert.deepEqual(describeMove(before, ['home', 'about', 'pricing', 'home-b', 'home-c']), { moved: 'pricing', above: 'home-b' });
+  });
+
+  test('when no candidate fits a row move, the first candidate in the old order is named as before', () => {
+    const hidden = [{ of: 'x', members: [{ id: 'a' }, { id: 'c' }] }];
+    assert.deepEqual(describeMove(['a', 'b', 'c'], ['b', 'a', 'c'], hidden), { moved: 'a', above: 'c' });
+  });
+});
+
 describe('freeCopyId', () => {
   test('<id>-copy, then -copy-2, -copy-3…', () => {
     assert.equal(freeCopyId('home', new Set(['home'])), 'home-copy');

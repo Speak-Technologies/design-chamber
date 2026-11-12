@@ -159,6 +159,32 @@ describe('reorder', () => {
     assert.equal((await versionsOf(rig)).length, versions);
   });
 
+  test('on a canvas with directions the notice names the dragged screen and the shown row it lands above (KI-21)', async (t) => {
+    const rig = await setup(t);
+    await writeCanvas(
+      rig,
+      {
+        ...CANVAS_JSON,
+        screens: [
+          { id: 'home', title: 'Home' },
+          { id: 'pricing', title: 'Pricing' },
+          { id: 'about', title: 'About' },
+          { id: 'home-b', title: 'Home B', direction: { of: 'home', letter: 'B', name: 'Bold' } },
+          { id: 'home-c', title: 'Home C', direction: { of: 'home', letter: 'C', name: 'Quiet' } },
+        ],
+      },
+      { 'screens/about.html': html('about'), 'screens/home-b.html': html('B'), 'screens/home-c.html': html('C') },
+    );
+    // The wall shows Home (with B and C inside its row), Pricing, About; drag About above Pricing.
+    const answer = await rig.edits.apply('shop', { op: 'reorder', screens: await stampNow(rig), order: ['home', 'about', 'pricing', 'home-b', 'home-c'] });
+    assert.equal(answer.edit.label, 'Moved About above Pricing');
+    assert.deepEqual(((await rawOf(rig)).screens as JsonObject[]).map((entry) => entry.id), ['home', 'about', 'pricing', 'home-b', 'home-c']);
+
+    // The Home row travels with its directions to the end: the notice skips them.
+    const toEnd = await rig.edits.apply('shop', { op: 'reorder', screens: await stampNow(rig), order: ['about', 'pricing', 'home', 'home-b', 'home-c'] });
+    assert.equal(toEnd.edit.label, 'Moved Home to the end');
+  });
+
   test('an order that is not exactly the listed ids is 400; the same order is refused', async (t) => {
     const rig = await setup(t);
     await writeCanvas(rig);

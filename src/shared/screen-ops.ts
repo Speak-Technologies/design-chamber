@@ -68,22 +68,42 @@ export const reorderRaw = (raw: readonly JsonValue[], order: readonly string[]):
   return next;
 };
 
+/** The direction groups as `directionGroups` answers them: a row's original and the members hidden inside it. */
+export type MoveDirectionGroups = readonly { of: string; members: readonly { id: string }[] }[];
+
 /**
- * The notice's view of a reorder: when exactly one screen moved, which one and the screen it now
- * sits above (`null` = it is last). Null when several moved or nothing did. An adjacent swap reads
- * as either screen moving; the one first in the old order is named.
+ * The notice's view of a reorder: when exactly one screen moved, which one and the shown screen it
+ * now sits above (`null` = it is last). Null when several moved or nothing did.
+ *
+ * The wall drags whole rows: a row's directions travel right after it, and it lands in a gap between
+ * shown rows, never inside another row's directions. With `groups`, a candidate that breaks either
+ * rule is not the dragged row, and `above` skips the candidate's own directions. An adjacent swap of
+ * two plain rows still reads as either moving; the one first in the old order is named. Without
+ * `groups`, or when no candidate fits a row move, the first candidate in the old order is named too.
  */
-export const describeMove = (before: readonly string[], after: readonly string[]): { moved: string; above: string | null } | null => {
+export const describeMove = (
+  before: readonly string[],
+  after: readonly string[],
+  groups: MoveDirectionGroups = [],
+): { moved: string; above: string | null } | null => {
   if (before.length !== after.length || before.every((id, index) => after[index] === id)) return null;
+  const membersOf = new Map(groups.map((group) => [group.of, group.members.map((member) => member.id)] as const));
+  const hidden = new Set(groups.flatMap((group) => group.members.map((member) => member.id)));
+  let fallback: { moved: string; above: string | null } | null = null;
   for (const candidate of before) {
     const rest = (list: readonly string[]): string[] => list.filter((id) => id !== candidate);
     const a = rest(before);
     const b = rest(after);
     if (a.length !== b.length || !a.every((id, index) => b[index] === id)) continue;
     const at = after.indexOf(candidate);
-    return { moved: candidate, above: after[at + 1] ?? null };
+    fallback ??= { moved: candidate, above: after[at + 1] ?? null };
+    const members = membersOf.get(candidate) ?? [];
+    const block = after.slice(at + 1, at + 1 + members.length);
+    const above = after[at + 1 + members.length] ?? null;
+    const travelsTogether = block.length === members.length && members.every((id) => block.includes(id));
+    if (travelsTogether && (above === null || !hidden.has(above))) return { moved: candidate, above };
   }
-  return null;
+  return fallback;
 };
 
 // ---- duplicate ----
