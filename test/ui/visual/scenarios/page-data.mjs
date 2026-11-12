@@ -66,6 +66,14 @@ export const run = async (helpers) => {
       await p.key('Escape');
       await checkSoon(async () => !(await visible(MENU)), `${tag}: the menu closes`);
     };
+    const frameDoc = () => p.guest(`return doc.querySelector('.dc-frame')?.getAttribute('src') ?? null`);
+    const boardState = () => p.guest(`return doc.querySelector('.dc-board')?.dataset.state ?? null`);
+    // The checkbox the design shows is drawn by the frame's own script: once it exists and a round trip through the frame's
+    // layout has finished, the frame is the live document and its storage shim is listening.
+    const liveFrameAnswers = async () => {
+      await p.waitFor(`const f = doc.querySelector('.dc-frame'); return !!f && f.offsetWidth > 0 && f.getBoundingClientRect().height > 0 && !!f.getAttribute('src')`, 'the live frame to be laid out', 10000);
+      await sleep(400);
+    };
     // The control the design keeps pinned bottom-left of its frame; the frame is scaled on a narrow rail.
     const pressTick = async () => {
       const spot = await p.guest(`const f = doc.querySelector('.dc-frame'); const r = f.getBoundingClientRect(); const s = r.width / f.offsetWidth; return { x: r.left + 70 * s, y: r.bottom - 38 * s }`);
@@ -146,12 +154,20 @@ export const run = async (helpers) => {
     await p.shot(`${tag}-5-version-menu`);
     await closeMenu();
     check((await saved(PAGE)) === 1, `${tag}: the live data is untouched`);
+    const versionDoc = await frameDoc();
     await p.click('.dc-viewing .oc-sdk-btn', { text: 'Back to current' });
     await checkSoon(async () => !(await visible('.dc-viewing')), `${tag}: back on the current design`);
 
     // 8. the service refuses a write: over the cap
     await p.route('PATCH /designs/:slug/page-state', { status: 413, body: { error: 'too-large', message: "This design tried to save more than 1 MB of page data. The extra wasn't saved." } });
-    await wallReady(p, 1);
+    // A board is "ready" before the live frame has reloaded (the old version's frame still counts), and a tick pressed inside
+    // that frame never reaches the service (a version's frame holds no saved data and posts no write). So wait for a new
+    // document (a new blob address) in a ready board, and then for the live frame itself to answer the page.
+    await checkSoon(async () => {
+      const now = await frameDoc();
+      return now !== null && now !== versionDoc && (await boardState()) === 'ready';
+    }, `${tag}: the live frame reloaded`, 15000);
+    await liveFrameAnswers();
     await pressTick();
     await pressTick();
     await checkSoon(async () => (await noticeTitles()).includes("This design tried to save more than 1 MB of page data. The extra wasn't saved."), `${tag}: the cap notice shows`, 9000);
