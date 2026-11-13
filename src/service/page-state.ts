@@ -117,7 +117,10 @@ type Entry = {
   /** A write nobody waited for failed with this error; the next PATCH answers it once and retries the write. */
   failure: unknown;
   lastUsed: number;
-  /** Dropped by a `removed` event or a root change: queued work on it is skipped. */
+  /**
+   * Set only by a `removed` event or a Clear: queued work on it is skipped. A root change forgets
+   * the entry without setting this, so its pending change is still written to its old folder.
+   */
   dropped: boolean;
 };
 
