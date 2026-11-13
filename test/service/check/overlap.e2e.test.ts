@@ -178,12 +178,15 @@ test('text in a clipping container is judged only where it paints', async (t) =>
     {
       'screens/scroll.html': page(
         'scroll',
-        '<div style="position:relative; overflow:hidden; width:200px; margin:20px;">' +
+        // Two lines tall: in a box exactly one line tall, the visible part's clipped box can sit
+        // inside the long line's box within the 1px tolerance (fonts with tall line boxes, such as
+        // Fedora's Noto Sans), which the share rule reads as nesting, not an overlap.
+        '<div style="position:relative; overflow:hidden; width:200px; height:48px; margin:20px;">' +
           '<p style="white-space:nowrap; margin:0;">Long text that runs past the clipping box to the right</p>' +
           // nowrap keeps this one line fully past the clip edge: with one merged box per element
           // (the pre-fix shape) it falsely overlaps the long text's full-width box.
-          '<p style="position:absolute; left:210px; top:10px; margin:0; white-space:nowrap;">Over the clipped part</p>' +
-          '<p style="position:absolute; left:50px; top:10px; margin:0;">Over the visible part</p>' +
+          '<p style="position:absolute; left:210px; top:4px; margin:0; white-space:nowrap;">Over the clipped part</p>' +
+          '<p style="position:absolute; left:50px; top:4px; margin:0;">Over the visible part</p>' +
           '</div>',
       ),
     },
