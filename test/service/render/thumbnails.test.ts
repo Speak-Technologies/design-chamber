@@ -103,6 +103,7 @@ describe('thumbnails without a browser', () => {
     }
     assert.equal(linuxRoot[0], '--headless=new');
     assert.ok(linuxRoot.includes('--host-resolver-rules=MAP * ~NOTFOUND'), 'still offline');
+    assert.ok(captureArgs({ ...input, platform: 'darwin', isRoot: false }).includes('--use-mock-keychain'), 'no Keychain prompt on macOS');
     assert.equal(linuxRoot.at(-1), 'file:///d/index.html');
   });
 
