@@ -224,7 +224,7 @@ describe('validateRootCandidate (§7 PUT /settings refusals)', () => {
     await mkdir(path.join(homeDir, 'Documents'), { recursive: true });
     const check = (raw: string) => validateRootCandidate(raw, { packageRoot: REPO_ROOT, homeDir });
     for (const refused of [homeDir, '~', tmp.at('users'), path.join(homeDir, 'Documents'), path.join(homeDir, 'documents')]) {
-      if (refused.endsWith('documents') && process.platform !== 'win32') continue; // case-insensitive on win32 only
+      if (refused.endsWith('documents') && process.platform === 'linux') continue; // case-insensitive on win32 and darwin, exact on Linux
       const result = await check(refused);
       assert.equal(result.ok, false, refused);
       assert.match(result.ok === false ? result.message : '', /holds your own files/);

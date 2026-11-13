@@ -42,6 +42,7 @@ import { ensureLauncherService } from '../check/launcher.ts';
 import { discoverProjectRules, withDeadline } from '../discovery.ts';
 import { ensureEditService } from '../edits/pipeline.ts';
 import { ApiError, type Router } from '../http.ts';
+import { foldsCase } from '../paths.ts';
 import { parseElement } from './comments.ts';
 import { readPreset, readRulesDocs } from './presets.ts';
 
@@ -221,7 +222,7 @@ const createInstructions = (ctx: ServiceContext): Instructions => {
 
   const discover = (directory: string | null): Promise<ProjectRules> => {
     if (directory === null) return Promise.resolve(noProject('no project folder was given'));
-    const key = process.platform === 'win32' ? directory.toLowerCase() : directory;
+    const key = foldsCase() ? directory.toLowerCase() : directory;
     const cached = scans.get(key);
     if (cached && Date.now() - cached.at < DISCOVERY_CACHE_MS) return cached.result;
     const result = withDeadline(

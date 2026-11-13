@@ -11,7 +11,7 @@ import path from 'node:path';
 
 import { checkCommandFor, shQuote } from '../../shared/agent/check-command.ts';
 import type { Logger, ServiceContext } from '../context.ts';
-import { resolveInside, writeFileAtomic } from '../paths.ts';
+import { foldsCase, resolveInside, writeFileAtomic } from '../paths.ts';
 import { ensureNormalFolder } from './output.ts';
 
 export const LAUNCHER_MARKER = 'design-chamber:launcher v1';
@@ -137,8 +137,10 @@ export const createLauncherService = (deps: LauncherDeps): LauncherService => {
   const platform = deps.platform ?? process.platform;
   const execPath = deps.execPath ?? process.execPath;
   const synced = new Map<string, Promise<LauncherStatus>>();
+  const caseFolds = foldsCase(platform === 'win32' ? path.win32 : path.posix, platform);
+  const keyOf = (root: string): string => (caseFolds ? root.toLowerCase() : root);
   const ensure = (root: string): Promise<LauncherStatus> => {
-    const key = platform === 'win32' ? root.toLowerCase() : root;
+    const key = keyOf(root);
     const known = synced.get(key);
     if (known !== undefined) return known;
     const run = syncLaunchers({ execPath, cliPath: deps.cliPath, root, log: deps.log, platform });
@@ -153,7 +155,7 @@ export const createLauncherService = (deps: LauncherDeps): LauncherService => {
     },
     forget(root) {
       if (root === undefined) synced.clear();
-      else synced.delete(platform === 'win32' ? root.toLowerCase() : root);
+      else synced.delete(keyOf(root));
     },
   };
 };
