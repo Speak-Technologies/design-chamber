@@ -1,6 +1,6 @@
 {
   "name": "design-chamber",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Design Chamber: design canvases and pages written by your chat agent, rendered inside OpenChamber.",
   "license": "MIT",
   "private": true,

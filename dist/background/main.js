@@ -1525,6 +1525,7 @@
   var LOOSE_IMPORT_MAX_BYTES = 20 * 1024 * 1024;
   var ACTIVITY_WORKING_EXPIRY_MS = 30 * 6e4;
   var STATUS_RECENT_MS = 7 * 864e5;
+  var USER_UNDO_TTL_MS = 30 * 6e4;
 
   // src/shared/agent/context.ts
   var VIEWPORT_TABLET = Object.freeze({ id: "tablet", label: "Tablet", width: 768, height: 1024 });
@@ -1643,7 +1644,14 @@
     "POST /session-events": "U4",
     "POST /mentions/search": "U6",
     "POST /mentions/resolve": "U6",
-    "GET /status/designs": "U5"
+    "GET /status/designs": "U5",
+    "POST /designs/:slug/edits": "P2",
+    "POST /designs/:slug/edits/:id/undo": "P2",
+    "GET /designs/:slug/tokens": "P2",
+    "POST /designs/:slug/hand-edits/clear": "P2",
+    "GET /designs/:slug/page-state": "P2",
+    "PATCH /designs/:slug/page-state": "P2",
+    "DELETE /designs/:slug/page-state": "P2"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
   var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set(["GET /designs/:slug/render/chunk"]);
@@ -1989,7 +1997,7 @@
       await client.call("PATCH /designs/:slug", { params: { slug }, body: { sessionId: result.sessionId } });
       return result;
     };
-    const deliver = async (slug, prompt, design, version, busyMessage) => {
+    const deliverOnce = async (slug, prompt, design, version, busyMessage) => {
       const selected = host2.session.get();
       if (design.sessionId && selected?.id === design.sessionId) {
         return { outcome: await promptSelected(selected, prompt.text, busyMessage), sessionId: selected.id };
@@ -2013,6 +2021,17 @@
       const result = await startLinkedSession(slug, prompt.chip, prompt.text, design.projectDirectory);
       if (result.sent !== "sent") throw new FlowError("send-failed", MESSAGES.sendFailed);
       return { outcome: "new-session", sessionId: result.sessionId };
+    };
+    const deliver = async (slug, prompt, design, version, busyMessage) => {
+      const delivery = await deliverOnce(slug, prompt, design, version, busyMessage);
+      if (prompt.handEdits) {
+        try {
+          await client.call("POST /designs/:slug/hand-edits/clear", { params: { slug }, body: { upTo: prompt.handEdits.upTo } });
+        } catch (error) {
+          console.warn("Design Chamber: the hand-edit ledger could not be cleared after the message was delivered", error);
+        }
+      }
+      return delivery;
     };
     const flows2 = {
       resolveSlashCommand: async ({ command, args }) => {

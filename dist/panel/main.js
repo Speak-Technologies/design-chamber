@@ -280,7 +280,7 @@
   var clampBranch = (value) => value?.trim().slice(0, GUEST_ATTACH_BRANCH_MAX) ?? "";
   var clampAttachRequest = (request) => {
     const id = request.id.trim().slice(0, GUEST_ATTACH_ID_MAX);
-    const title = request.title.trim().slice(0, GUEST_ATTACH_TITLE_MAX);
+    const title2 = request.title.trim().slice(0, GUEST_ATTACH_TITLE_MAX);
     const url = request.url.trim().slice(0, GUEST_ATTACH_URL_MAX);
     const text = request.text?.trim().slice(0, GUEST_ATTACH_TEXT_MAX);
     const author = request.author?.trim().slice(0, GUEST_ATTACH_AUTHOR_MAX);
@@ -288,7 +288,7 @@
     const next = {
       providerId: request.providerId.trim(),
       id,
-      title: title || id,
+      title: title2 || id,
       url,
       kind
     };
@@ -1566,7 +1566,14 @@
     "POST /session-events": "U4",
     "POST /mentions/search": "U6",
     "POST /mentions/resolve": "U6",
-    "GET /status/designs": "U5"
+    "GET /status/designs": "U5",
+    "POST /designs/:slug/edits": "P2",
+    "POST /designs/:slug/edits/:id/undo": "P2",
+    "GET /designs/:slug/tokens": "P2",
+    "POST /designs/:slug/hand-edits/clear": "P2",
+    "GET /designs/:slug/page-state": "P2",
+    "PATCH /designs/:slug/page-state": "P2",
+    "DELETE /designs/:slug/page-state": "P2"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
   var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set(["GET /designs/:slug/render/chunk"]);
@@ -1585,7 +1592,9 @@
 
   // src/shared/limits.ts
   var SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+  var TITLE_MAX = 120;
   var BRIEF_MAX = 2e3;
+  var SCREENS_MAX = 40;
   var COMMENT_BODY_MAX = 2e3;
   var ANCHOR_TEXT_MAX = 120;
   var ANCHOR_HTML_MAX = 200;
@@ -1608,6 +1617,7 @@
   var RENDER_CACHE_MAX_BYTES = 256 * 1024 * 1024;
   var GUEST_RENDER_CACHE_MAX_BYTES = 64 * 1024 * 1024;
   var RENDER_CHUNK_CONCURRENCY = 3;
+  var SOURCE_TEXT_MAX = 2e6;
   var CHECK_RUN_BUDGET_MS = 9e4;
   var PAGE_LIVE_FRAMES_MAX = 12;
   var RAIL_LIVE_FRAMES_MAX = 4;
@@ -1633,6 +1643,17 @@
   var ACTIVITY_WORKING_EXPIRY_MS = 30 * 6e4;
   var WRITING_WINDOW_MS = 15e3;
   var STATUS_RECENT_MS = 7 * 864e5;
+  var TEXT_EDIT_MAX = 5e3;
+  var EDIT_PROBE_ID_MAX = 200;
+  var EDIT_PROBE_SCAN_MAX = 5e3;
+  var USER_UNDO_TTL_MS = 30 * 6e4;
+  var USER_EDIT_NOTICE_MS = 1e4;
+  var TWEAK_VAR_PATTERN = /^--[A-Za-z0-9_-]{1,64}$/;
+  var TOKEN_PREVIEW_VALUE_PATTERN = /^[A-Za-z0-9 #%.,()+\-'"/]{1,100}$/;
+  var PAGE_STATE_MAX_CHARS = 1048576;
+  var PAGE_STATE_CHANGES_MAX = 1e4;
+  var PAGE_STATE_FLUSH_MS = 1e3;
+  var PAGE_STATE_BATCH_MAX_CHARS = PAGE_STATE_MAX_CHARS;
 
   // src/guest/service-client.ts
   var ServiceError = class extends Error {
@@ -1724,6 +1745,7 @@
     if (index > start) chunks.push(text.slice(start));
     return chunks;
   };
+  var fitsOneRequest = (json) => json.length <= UPLOAD_CHUNK_MAX_CHARS && utf8Length(json) <= UPLOAD_CHUNK_MAX_BYTES;
   var mapLimit = async (items, limit, run) => {
     const out = new Array(items.length);
     let next = 0;
@@ -2829,14 +2851,14 @@ ${GUEST_UI_LOOK_CSS}`;
     ensureStyle(UI_CSS);
     let props = initial;
     const shell = el("div", "oc-sdk oc-sdk-empty");
-    const title = el("h2", "oc-sdk-empty-title");
+    const title2 = el("h2", "oc-sdk-empty-title");
     const body = el("p", "oc-sdk-empty-body");
     const slot = el("div", "oc-sdk-empty-action");
-    shell.append(title, body, slot);
+    shell.append(title2, body, slot);
     root.append(shell);
     let action = null;
     const paint = () => {
-      setText(title, props.title);
+      setText(title2, props.title);
       setText(body, props.body);
       body.hidden = !props.body;
       slot.hidden = !props.action;
@@ -2901,17 +2923,17 @@ ${GUEST_UI_LOOK_CSS}`;
     let props = initial;
     const node = el("div", "oc-sdk oc-sdk-banner");
     const text = el("div", "oc-sdk-banner-text");
-    const title = el("div", "oc-sdk-banner-title");
+    const title2 = el("div", "oc-sdk-banner-title");
     const body = el("div", "oc-sdk-banner-body");
     const slot = el("div", "oc-sdk-banner-action");
-    text.append(title, body);
+    text.append(title2, body);
     node.append(text, slot);
     root.append(node);
     let action = null;
     const paint = () => {
       node.dataset.tone = props.tone;
       node.setAttribute("role", props.tone === "error" || props.tone === "warning" ? "alert" : "status");
-      setText(title, props.title);
+      setText(title2, props.title);
       setText(body, props.body);
       body.hidden = !props.body;
       slot.hidden = !props.action;
@@ -3041,6 +3063,8 @@ ${GUEST_UI_LOOK_CSS}`;
   // src/shared/agent/context.ts
   var VIEWPORT_TABLET = Object.freeze({ id: "tablet", label: "Tablet", width: 768, height: 1024 });
   var VIEWPORT_DESKTOP = Object.freeze({ id: "desktop", label: "Desktop", width: 1440, height: 900 });
+  var clip = (text, max) => text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1)).trimEnd()}\u2026`;
+  var oneLine = (text) => text.replace(/[\s\u0085]+/g, " ").trim();
 
   // src/shared/agent/html-extract.ts
   var parseOpen = (line) => {
@@ -3111,8 +3135,8 @@ ${GUEST_UI_LOOK_CSS}`;
     unknownCommand: "Design Chamber knows /design and /page only.",
     noSessionSelected: "Open a chat first, then try again.",
     markFailed: "Sent, but the comments could not be marked as sent. Resolve them by hand so they are not sent again.",
-    savedPage: (title) => `Saved as page \u201C${title}\u201D.`,
-    savedPageClosed: (title) => `Saved as page \u201C${title}\u201D. Open Design Chamber to see it.`
+    savedPage: (title2) => `Saved as page \u201C${title2}\u201D.`,
+    savedPageClosed: (title2) => `Saved as page \u201C${title2}\u201D. Open Design Chamber to see it.`
   };
   var FlowError = class extends Error {
     constructor(code, message) {
@@ -3220,7 +3244,7 @@ ${GUEST_UI_LOOK_CSS}`;
       await client2.call("PATCH /designs/:slug", { params: { slug }, body: { sessionId: result.sessionId } });
       return result;
     };
-    const deliver = async (slug, prompt, design, version, busyMessage) => {
+    const deliverOnce = async (slug, prompt, design, version, busyMessage) => {
       const selected = host2.session.get();
       if (design.sessionId && selected?.id === design.sessionId) {
         return { outcome: await promptSelected(selected, prompt.text, busyMessage), sessionId: selected.id };
@@ -3244,6 +3268,17 @@ ${GUEST_UI_LOOK_CSS}`;
       const result = await startLinkedSession(slug, prompt.chip, prompt.text, design.projectDirectory);
       if (result.sent !== "sent") throw new FlowError("send-failed", MESSAGES.sendFailed);
       return { outcome: "new-session", sessionId: result.sessionId };
+    };
+    const deliver = async (slug, prompt, design, version, busyMessage) => {
+      const delivery = await deliverOnce(slug, prompt, design, version, busyMessage);
+      if (prompt.handEdits) {
+        try {
+          await client2.call("POST /designs/:slug/hand-edits/clear", { params: { slug }, body: { upTo: prompt.handEdits.upTo } });
+        } catch (error) {
+          console.warn("Design Chamber: the hand-edit ledger could not be cleared after the message was delivered", error);
+        }
+      }
+      return delivery;
     };
     const flows2 = {
       resolveSlashCommand: async ({ command, args }) => {
@@ -3638,7 +3673,7 @@ ${GUEST_UI_LOOK_CSS}`;
           () => client2.call("GET /designs/:slug", { params: { slug } })
         );
       },
-      renameDesign: (slug, title) => store2.patchDesign(slug, { title }),
+      renameDesign: (slug, title2) => store2.patchDesign(slug, { title: title2 }),
       patchDesign: (slug, body) => mutate(async () => {
         const { design } = await client2.call("PATCH /designs/:slug", { params: { slug }, body });
         const open = state.open;
@@ -3703,6 +3738,12 @@ ${GUEST_UI_LOOK_CSS}`;
       diffVersion: (slug, versionId, against) => mutate(
         () => client2.call("GET /designs/:slug/versions/:vid/diff", { params: { slug, vid: versionId }, query: against ? { against } : {} })
       ),
+      applyEdit: (slug, request) => mutate(() => client2.call("POST /designs/:slug/edits", { params: { slug }, body: request })),
+      undoEdit: (slug, id) => mutate(() => client2.call("POST /designs/:slug/edits/:id/undo", { params: { slug, id }, body: {} })),
+      loadTokens: (slug) => mutate(() => client2.call("GET /designs/:slug/tokens", { params: { slug } })),
+      clearHandEdits: (slug, upTo) => mutate(async () => {
+        await client2.call("POST /designs/:slug/hand-edits/clear", { params: { slug }, body: { upTo } });
+      }),
       loadRender: (slug, screen, version = null) => mutate(() => client2.loadRender(slug, screen, version)),
       loadThumbnail: async (slug) => {
         const summary = state.designs.data?.designs.find((entry) => entry.slug === slug);
@@ -3932,6 +3973,14 @@ ${GUEST_UI_LOOK_CSS}`;
   var uid = 0;
   var nextId2 = (prefix) => `${prefix}-${uid += 1}`;
 
+  // src/ui/model/menu-model.ts
+  var menuRowState = (entry, ids) => {
+    if (entry.disabled !== true) return { navDisabled: false, inert: false, nativeDisabled: false, showsReason: false, describedBy: null };
+    const reason = entry.reason !== void 0 && entry.reason !== "";
+    if (reason) return { navDisabled: false, inert: true, nativeDisabled: false, showsReason: true, describedBy: ids.reason };
+    return { navDisabled: true, inert: true, nativeDisabled: true, showsReason: false, describedBy: entry.explainedBy === "foot" ? ids.foot : null };
+  };
+
   // src/ui/components/icons.ts
   var SVG_NS2 = "http://www.w3.org/2000/svg";
   var ICONS = {
@@ -3968,7 +4017,9 @@ ${GUEST_UI_LOOK_CSS}`;
     warning: ["M12 3 2 20h20z", "M12 10v4", "M12 17h.01"],
     send: ["M22 2 11 13", "M22 2l-7 20-4-9-9-4z"],
     pin: ["M12 21s-7-5.2-7-11a7 7 0 1 1 14 0c0 5.8-7 11-7 11z", "M12 7.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"],
-    layers: ["m12 3 9 5-9 5-9-5z", "m3 13 9 5 9-5"]
+    layers: ["m12 3 9 5-9 5-9-5z", "m3 13 9 5 9-5"],
+    // Three sliders with their knobs: the Tweaks button.
+    tune: ["M4 21v-7", "M4 10V3", "M12 21v-9", "M12 8V3", "M20 21v-5", "M20 12V3", "M2 14h4", "M10 8h4", "M18 16h4"]
   };
   var icon2 = (name, size = 16) => {
     const svg = document.createElementNS(SVG_NS2, "svg");
@@ -4040,12 +4091,14 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var actionsOf = (items) => items.filter((item) => "id" in item);
   var openMenuClose = null;
-  var openMenu = (anchor, items, onSelect) => {
+  var openMenu = (anchor, items, onSelect, notes = {}) => {
     openMenuClose?.();
     const uid2 = nextId2("dc-menu");
     const popup = h("div", { class: "oc-sdk oc-sdk-popup dc-popup", role: "menu", tabindex: "-1", "aria-label": anchor.getAttribute("aria-label") ?? void 0 });
     let activeId = null;
     const rows = /* @__PURE__ */ new Map();
+    const states = /* @__PURE__ */ new Map();
+    const ids = { foot: notes.foot ? `${uid2}-foot` : null };
     const setActive = (id) => {
       activeId = id;
       for (const [rowId, row2] of rows) row2.dataset.active = rowId === id ? "true" : "false";
@@ -4073,30 +4126,51 @@ ${GUEST_UI_LOOK_CSS}`;
       close(false);
     };
     const pick = (id) => {
+      if (states.get(id)?.inert) return;
       close();
       onSelect(id);
     };
+    const note = (kind, text) => h("div", { class: "dc-menu-note", role: "presentation", "data-kind": kind, "data-tone": kind === "lead" ? "warning" : null, id: `${uid2}-${kind}` }, text);
+    if (notes.lead) popup.append(note("lead", notes.lead), h("div", { class: "oc-sdk-separator", "data-labeled": "false" }));
     for (const item of items) {
       if (!("id" in item)) {
         popup.append(h("div", { class: "oc-sdk-separator", "data-labeled": "false" }));
         continue;
       }
+      const state = menuRowState(item, { reason: `${uid2}-${item.id}-reason`, foot: ids.foot });
+      states.set(item.id, state);
       const row = h(
         "button",
-        { type: "button", role: "menuitem", tabindex: "-1", id: `${uid2}-${item.id}`, class: "oc-sdk-option", "data-destructive": item.destructive ? "true" : "false", disabled: item.disabled },
+        {
+          type: "button",
+          role: "menuitem",
+          tabindex: "-1",
+          id: `${uid2}-${item.id}`,
+          class: "oc-sdk-option",
+          "data-destructive": item.destructive ? "true" : "false",
+          "data-reason": state.showsReason ? "true" : null,
+          "aria-disabled": state.inert ? "true" : null,
+          "aria-describedby": state.describedBy,
+          disabled: state.nativeDisabled
+        },
         h("span", { class: "oc-sdk-option-label" }, item.label),
-        item.hint ? h("span", { class: "oc-sdk-option-hint" }, item.hint) : null
+        item.hint ? h("span", { class: "oc-sdk-option-hint" }, item.hint) : null,
+        state.showsReason ? h("span", { class: "dc-menu-reason", id: `${uid2}-${item.id}-reason` }, item.reason) : null
       );
       row.addEventListener("pointerenter", () => setActive(item.id));
       row.addEventListener("click", () => pick(item.id));
       rows.set(item.id, row);
       popup.append(row);
     }
+    if (notes.foot) popup.append(h("div", { class: "oc-sdk-separator", "data-labeled": "false" }), note("foot", notes.foot));
+    const describedBy = [notes.lead ? `${uid2}-lead` : null, notes.foot ? `${uid2}-foot` : null].filter((id) => id !== null);
+    if (describedBy.length > 0) popup.setAttribute("aria-describedby", describedBy.join(" "));
+    const navItems = () => actionsOf(items).map((item) => ({ id: item.id, disabled: states.get(item.id)?.navDisabled ?? false }));
     popup.addEventListener("keydown", (event) => {
       const step = navigationKey(event);
       if (step) {
         event.preventDefault();
-        setActive(moveListSelection(actionsOf(items), activeId, step));
+        setActive(moveListSelection(navItems(), activeId, step));
       } else if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         if (activeId) pick(activeId);
@@ -4121,11 +4195,11 @@ ${GUEST_UI_LOOK_CSS}`;
     anchor.setAttribute("aria-haspopup", "menu");
     anchor.setAttribute("aria-expanded", "true");
     openMenuClose = close;
-    setActive(actionsOf(items).find((item) => !item.disabled)?.id ?? null);
+    setActive((actionsOf(items).find((item) => !item.disabled) ?? actionsOf(items).find((item) => states.get(item.id)?.showsReason))?.id ?? null);
     popup.focus();
     return close;
   };
-  var attachMenu = (trigger, items, onSelect) => {
+  var attachMenu = (trigger, items, onSelect, notes) => {
     let close = null;
     trigger.addEventListener("click", () => {
       if (trigger.getAttribute("aria-expanded") === "true") {
@@ -4133,7 +4207,7 @@ ${GUEST_UI_LOOK_CSS}`;
         close = null;
         return;
       }
-      close = openMenu(trigger, items(), onSelect);
+      close = openMenu(trigger, items(), onSelect, notes?.());
     });
   };
   var banner = (props) => {
@@ -4141,9 +4215,9 @@ ${GUEST_UI_LOOK_CSS}`;
     mountBanner(wrap, props);
     return wrap;
   };
-  var bannerWithActions = (tone2, title, body, actions) => {
+  var bannerWithActions = (tone2, title2, body, actions) => {
     const holder = h("div");
-    mountBanner(holder, { tone: tone2, title, body: " " });
+    mountBanner(holder, { tone: tone2, title: title2, body: " " });
     const bodyEl = holder.querySelector(".oc-sdk-banner-body");
     if (bodyEl) {
       replace(bodyEl, ...body);
@@ -4197,15 +4271,15 @@ ${GUEST_UI_LOOK_CSS}`;
   var openSheet = (host2, options) => {
     const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const titleId = nextId2("dc-sheet-title");
-    const modal = options.variant !== "dock";
-    const title = h("h2", { class: "dc-sheet-title", id: titleId }, options.title);
+    const modal = options.variant !== "dock" && options.variant !== "bottom";
+    const title2 = h("h2", { class: "dc-sheet-title", id: titleId }, options.title);
     const close = h("button", { type: "button", class: "oc-sdk dc-iconbtn", "aria-label": `Close ${options.title.toLowerCase()}`, title: "Close" }, icon2("close", 16));
     const body = h("div", { class: "dc-sheet-body" });
     const foot = h("div", { class: "dc-sheet-foot" });
     const panel = h(
       "section",
       { class: "dc-sheet-panel", role: modal ? "dialog" : "region", "aria-modal": modal ? "true" : null, "aria-labelledby": titleId, tabindex: "-1" },
-      h("header", { class: "dc-sheet-head" }, h("div", { class: "dc-sheet-heading" }, title, options.subtitle ? h("p", { class: "dc-sheet-sub" }, options.subtitle) : null), close),
+      h("header", { class: "dc-sheet-head" }, h("div", { class: "dc-sheet-heading" }, title2, options.subtitle ? h("p", { class: "dc-sheet-sub" }, options.subtitle) : null), close),
       body,
       foot
     );
@@ -4241,7 +4315,7 @@ ${GUEST_UI_LOOK_CSS}`;
       const first = body.querySelector("input,textarea,select,button");
       (first ?? panel).focus({ preventScroll: true });
     });
-    return { el: el2, body, foot, setTitle: (next) => void (title.textContent = next), close: dismiss };
+    return { el: el2, body, foot, setTitle: (next) => void (title2.textContent = next), close: dismiss };
   };
   var confirmDialog = (host2, options) => {
     const sheet = openSheet(host2, { title: options.title, variant: "dialog" });
@@ -4289,10 +4363,18 @@ ${GUEST_UI_LOOK_CSS}`;
       const width = Math.min(POPOVER_WIDTH, window.innerWidth - 2 * POPOVER_MARGIN);
       const left = Math.min(Math.max(POPOVER_MARGIN, rect.right - width), window.innerWidth - POPOVER_MARGIN - width);
       const top = Math.round(rect.bottom + 4);
+      const below = window.innerHeight - top - POPOVER_MARGIN;
       el2.style.width = `${width}px`;
       el2.style.left = `${Math.round(left)}px`;
       el2.style.top = `${top}px`;
-      el2.style.maxHeight = `${Math.max(160, Math.min(window.innerHeight * 0.6, window.innerHeight - top - POPOVER_MARGIN))}px`;
+      el2.style.bottom = "";
+      el2.style.maxHeight = `${Math.max(160, Math.min(window.innerHeight * 0.6, below))}px`;
+      const above = rect.top - 4 - POPOVER_MARGIN;
+      if (el2.offsetHeight > below && above > below) {
+        el2.style.maxHeight = `${Math.max(160, Math.min(window.innerHeight * 0.6, above))}px`;
+        el2.style.top = "auto";
+        el2.style.bottom = `${Math.round(window.innerHeight - rect.top + 4)}px`;
+      }
     };
     let closed = false;
     const close = (restoreFocus = true) => {
@@ -4345,7 +4427,7 @@ ${GUEST_UI_LOOK_CSS}`;
     anchor.setAttribute("aria-haspopup", "dialog");
     anchor.setAttribute("aria-expanded", "true");
     openPopoverClose = closeSelf;
-    return { el: el2, body, foot, close };
+    return { el: el2, body, foot, close, reposition: place };
   };
 
   // src/ui/components/actions.ts
@@ -4414,8 +4496,8 @@ ${GUEST_UI_LOOK_CSS}`;
       return null;
     }
   };
-  var renameDesign = async (slug, title) => {
-    const next = title.trim();
+  var renameDesign = async (slug, title2) => {
+    const next = title2.trim();
     if (next === "") throw new Error("A design needs a name.");
     if (next.length > 120) throw new Error("Keep the name under 120 characters.");
     await store.renameDesign(slug, next);
@@ -4874,7 +4956,7 @@ ${GUEST_UI_LOOK_CSS}`;
       return null;
     }
   };
-  var section = (title, description, ...children) => h("section", { class: "dc-settings-section" }, h("h3", { class: "dc-settings-h" }, title), h("p", { class: "dc-settings-p" }, description), ...children);
+  var section = (title2, description, ...children) => h("section", { class: "dc-settings-section" }, h("h3", { class: "dc-settings-h" }, title2), h("p", { class: "dc-settings-p" }, description), ...children);
   var mountSettings = (container) => {
     const scope = createScope();
     const body = h("div", { class: "dc-settings" });
@@ -5170,6 +5252,7 @@ ${GUEST_UI_LOOK_CSS}`;
     ordered.forEach(({ comment }, position) => numbers.set(comment.id, position + 1));
     return numbers;
   };
+  var removedGroupTitle = (screenId) => `${screenId} \xB7 Screen removed`;
   var groupComments = (comments, screens, pageTitle) => {
     const groups = [];
     const known = /* @__PURE__ */ new Set();
@@ -5180,8 +5263,14 @@ ${GUEST_UI_LOOK_CSS}`;
       const mine = comments.filter((comment) => comment.screen === screen.id);
       if (mine.length > 0) groups.push({ key: screen.id, title: screen.title, comments: mine });
     }
-    const orphans = comments.filter((comment) => comment.screen !== null && !known.has(comment.screen));
-    if (orphans.length > 0) groups.push({ key: "__missing", title: "Screens that no longer exist", comments: orphans });
+    const gone = /* @__PURE__ */ new Map();
+    for (const comment of comments) {
+      if (comment.screen === null || known.has(comment.screen)) continue;
+      const list = gone.get(comment.screen);
+      if (list) list.push(comment);
+      else gone.set(comment.screen, [comment]);
+    }
+    for (const [screen, list] of gone) groups.push({ key: `__removed:${screen}`, title: removedGroupTitle(screen), comments: list, removed: true });
     return groups;
   };
   var countByStatus = (comments) => ({
@@ -5318,7 +5407,7 @@ ${GUEST_UI_LOOK_CSS}`;
         toast("error", `Couldn\u2019t send that comment. ${errorText2(error)} It is still open.`);
       }
     };
-    const item = (comment, number, detachedHere, design) => {
+    const item = (comment, number, detachedHere, design, removed = false) => {
       const resolved = comment.status === "resolved";
       const toggle = iconBtn({
         icon: resolved ? "restore" : "check",
@@ -5342,7 +5431,12 @@ ${GUEST_UI_LOOK_CSS}`;
       if (sendNow && isSending(comment.id)) sendNow.setAttribute("aria-busy", "true");
       const main = h(
         "button",
-        { type: "button", class: "dc-comment-main", "aria-label": `Show comment ${number} on the wall` },
+        {
+          type: "button",
+          class: "dc-comment-main",
+          "aria-label": removed ? `Comment ${number}, on a screen that was removed` : `Show comment ${number} on the wall`,
+          disabled: removed
+        },
         h("span", { class: "dc-pin-badge", "data-status": comment.status, "aria-hidden": "true" }, resolved ? "\u2713" : String(number)),
         h(
           "span",
@@ -5354,7 +5448,7 @@ ${GUEST_UI_LOOK_CSS}`;
         )
       );
       main.addEventListener("click", () => options.onLocate(comment.id));
-      return h("li", { class: "dc-comment", "data-detached": detachedHere ? "true" : "false" }, main, sendNow, toggle);
+      return h("li", { class: "dc-comment", "data-detached": detachedHere ? "true" : "false", "data-removed": removed ? "true" : null }, main, sendNow, toggle);
     };
     const paint = () => {
       const state = detail();
@@ -5394,8 +5488,14 @@ ${GUEST_UI_LOOK_CSS}`;
         const lost = shown.filter((comment) => missing.has(comment.id));
         const placed = shown.filter((comment) => !missing.has(comment.id));
         for (const group of groupComments(placed, design.screens, design.title)) {
+          const removed = group.removed === true;
           list.append(
-            h("section", { class: "dc-comment-group" }, h("h3", { class: "dc-group-title" }, group.title, h("span", { class: "dc-muted" }, String(group.comments.length))), h("ul", { class: "dc-comment-items" }, ...group.comments.map((comment) => item(comment, numbers.get(comment.id) ?? 0, false, design))))
+            h(
+              "section",
+              { class: "dc-comment-group", "data-removed": removed ? "true" : null },
+              h("h3", { class: "dc-group-title" }, group.title, h("span", { class: "dc-muted" }, String(group.comments.length))),
+              h("ul", { class: "dc-comment-items" }, ...group.comments.map((comment) => item(comment, numbers.get(comment.id) ?? 0, false, design, removed)))
+            )
           );
         }
         if (lost.length > 0) {
@@ -5482,7 +5582,7 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/ui/components/notices.ts
-  var TRANSIENT_ORDER = ["export", "restore"];
+  var TRANSIENT_ORDER = ["export", "restore", "edit", "tweaks", "page-data"];
   var createNotices = () => {
     const el2 = h("div", { class: "dc-notices", "aria-live": "polite" });
     let statics = [];
@@ -5535,6 +5635,655 @@ ${GUEST_UI_LOOK_CSS}`;
         for (const id of [...transients.keys()]) drop(id);
       }
     };
+  };
+
+  // src/shared/tokens-css.ts
+  var isBalancedQuotes = (value) => {
+    let single = 0;
+    let double = 0;
+    for (const char of value) {
+      if (char === "'") single += 1;
+      else if (char === '"') double += 1;
+    }
+    return single % 2 === 0 && double % 2 === 0;
+  };
+  var unitWords = (unit) => unit === "" ? "no unit" : unit;
+  var tweakStateSentence = (state, tweak) => {
+    switch (state.state) {
+      case "ok":
+      case "value":
+        return null;
+      case "missing":
+        return `tokens.css has no ${tweak.var}.`;
+      case "formula":
+        return "This value is a formula. Ask the agent to change it.";
+      case "unit": {
+        const fileUnit = state.fileUnit ?? "";
+        const knobUnit = tweak.kind === "number" ? tweak.unit : "";
+        const file = fileUnit === "" ? `sets ${tweak.var} without a unit` : `sets ${tweak.var} in ${fileUnit}`;
+        return `tokens.css ${file}, but this tweak uses ${unitWords(knobUnit)}. Ask the agent to fix it.`;
+      }
+      case "no-file":
+        return "This design has no tokens.css.";
+    }
+  };
+  var stepDecimals = (step) => {
+    const fraction = String(step).split(".")[1];
+    return fraction === void 0 ? 0 : Math.min(fraction.length, 4);
+  };
+  var formatTweakNumber = (value, step) => {
+    const decimals = stepDecimals(step);
+    const factor = 10 ** decimals;
+    let text = (Math.round(value * factor) / factor).toFixed(decimals);
+    if (text.includes(".")) text = text.replace(/0+$/, "").replace(/\.$/, "");
+    return text === "-0" ? "0" : text;
+  };
+  var tweakNumberText = (value, tweak) => `${formatTweakNumber(value, tweak.step)}${tweak.unit}`;
+
+  // src/shared/source-edit.ts
+  var isAsciiWs = (code) => code === 32 || code === 9 || code === 10 || code === 12 || code === 13;
+  var isAsciiLetter = (code) => code >= 65 && code <= 90 || code >= 97 && code <= 122;
+  var isAsciiLetterOrDigit = (code) => isAsciiLetter(code) || code >= 48 && code <= 57;
+  var isDigit = (code) => code >= 48 && code <= 57;
+  var isHexDigit = (code) => isDigit(code) || code >= 65 && code <= 70 || code >= 97 && code <= 102;
+  var NAMED_REFS = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    nbsp: "\xA0",
+    copy: "\xA9",
+    reg: "\xAE",
+    // The mdash value is decode data (the character &mdash; names), not copy; written as a code
+    // point so the KI-7 copy guard, which reads every string literal, stays unbroken.
+    trade: "\u2122",
+    hellip: "\u2026",
+    mdash: String.fromCharCode(8212),
+    ndash: "\u2013",
+    lsquo: "\u2018",
+    rsquo: "\u2019",
+    ldquo: "\u201C",
+    rdquo: "\u201D",
+    laquo: "\xAB",
+    raquo: "\xBB",
+    bull: "\u2022",
+    middot: "\xB7",
+    times: "\xD7",
+    divide: "\xF7",
+    deg: "\xB0",
+    plusmn: "\xB1",
+    euro: "\u20AC",
+    pound: "\xA3",
+    yen: "\xA5",
+    cent: "\xA2",
+    sect: "\xA7",
+    para: "\xB6",
+    shy: "\xAD"
+  };
+  var commentLikeEnd = (raw, at, to) => {
+    if (raw.startsWith("<!--", at)) {
+      const end = raw.indexOf("-->", at + 4);
+      return end === -1 || end + 3 > to ? to : end + 3;
+    }
+    if (raw.startsWith("<![CDATA[", at)) {
+      const end = raw.indexOf("]]>", at + 9);
+      return end === -1 || end + 3 > to ? to : end + 3;
+    }
+    const gt = raw.indexOf(">", at);
+    return gt === -1 || gt + 1 > to ? to : gt + 1;
+  };
+  var tagLikeEnd = (raw, at, to) => {
+    let i = at + 1;
+    let quote = "";
+    while (i < to) {
+      const c = raw.charAt(i);
+      if (quote !== "") {
+        if (c === quote) quote = "";
+      } else if (c === '"' || c === "'") {
+        quote = c;
+      } else if (c === ">") {
+        return i + 1;
+      }
+      i += 1;
+    }
+    return to;
+  };
+  var decodeReferences = (raw, from, to, skipMarkup) => {
+    let text = "";
+    const map = [];
+    let i = from;
+    while (i < to) {
+      if (skipMarkup && raw.charAt(i) === "<") {
+        if (raw.startsWith("<!--", i) || raw.startsWith("<![CDATA[", i) || raw.startsWith("<?", i) || raw.startsWith("<!", i)) {
+          i = commentLikeEnd(raw, i, to);
+          continue;
+        }
+        if (raw.startsWith("</", i) || isAsciiLetter(raw.charCodeAt(i + 1))) {
+          i = tagLikeEnd(raw, i, to);
+          continue;
+        }
+      }
+      if (raw.charAt(i) !== "&") {
+        text += raw.charAt(i);
+        map.push([i, i + 1]);
+        i += 1;
+        continue;
+      }
+      const next = i + 1 < to ? raw.charCodeAt(i + 1) : NaN;
+      if (!isAsciiLetter(next) && next !== 35) {
+        text += "&";
+        map.push([i, i + 1]);
+        i += 1;
+        continue;
+      }
+      if (next === 35) {
+        let j2 = i + 2;
+        const hex = raw.charAt(j2) === "x" || raw.charAt(j2) === "X";
+        if (hex) j2 += 1;
+        const digitsStart = j2;
+        while (j2 < to && (hex ? isHexDigit(raw.charCodeAt(j2)) : isDigit(raw.charCodeAt(j2)))) j2 += 1;
+        if (j2 === digitsStart || j2 >= to || raw.charAt(j2) !== ";") return null;
+        const value2 = parseInt(raw.slice(digitsStart, j2), hex ? 16 : 10);
+        if (value2 >= 128 && value2 <= 159) return null;
+        const char = value2 === 0 || value2 > 1114111 || value2 >= 55296 && value2 <= 57343 ? "\uFFFD" : String.fromCodePoint(value2);
+        const ref = [i, j2 + 1];
+        for (let k = 0; k < char.length; k += 1) map.push(ref);
+        text += char;
+        i = j2 + 1;
+        continue;
+      }
+      let j = i + 1;
+      while (j < to && isAsciiLetterOrDigit(raw.charCodeAt(j))) j += 1;
+      if (j >= to || raw.charAt(j) !== ";") return null;
+      const value = NAMED_REFS[raw.slice(i + 1, j)];
+      if (value === void 0) return null;
+      text += value;
+      map.push([i, j + 1]);
+      i = j + 1;
+    }
+    return { text, map };
+  };
+  var decodeText = (raw, from, to) => decodeReferences(raw, from, to, true);
+  var decodeAttrValue = (raw) => {
+    const decoded = decodeReferences(raw, 0, raw.length, false);
+    return decoded === null ? null : decoded.text;
+  };
+  var editorTextOf = (decoded) => {
+    const { text } = decoded;
+    const len = text.length;
+    let out = "";
+    const outMap = [];
+    let i = 0;
+    while (i < len && isAsciiWs(text.charCodeAt(i))) i += 1;
+    while (i < len) {
+      if (isAsciiWs(text.charCodeAt(i))) {
+        const start = i;
+        while (i < len && isAsciiWs(text.charCodeAt(i))) i += 1;
+        if (i < len) {
+          out += " ";
+          outMap.push([start, i]);
+        }
+      } else {
+        out += text.charAt(i);
+        outMap.push([i, i + 1]);
+        i += 1;
+      }
+    }
+    return { text: out, map: outMap };
+  };
+  var normalizeText = (text) => text.replace(/\s+/g, " ").trim();
+  var VOID_TAGS = /* @__PURE__ */ new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+  var RAW_TEXT_TAGS = /* @__PURE__ */ new Set(["script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "plaintext", "noscript"]);
+  var INERT_ANCESTORS = /* @__PURE__ */ new Set(["template", "noscript", "head"]);
+  var FOREIGN_ROOTS = /* @__PURE__ */ new Set(["svg", "math"]);
+  var parseStartTag = (text, lt) => {
+    const nameMatch = /^[A-Za-z][^\s/>]*/.exec(text.slice(lt + 1, lt + 128));
+    if (!nameMatch) return null;
+    const tag = nameMatch[0].toLowerCase();
+    const len = text.length;
+    let i = lt + 1 + nameMatch[0].length;
+    let selfClosing = false;
+    let idRaw = null;
+    for (; ; ) {
+      while (i < len && isAsciiWs(text.charCodeAt(i))) i += 1;
+      const c = text.charAt(i);
+      if (i >= len) return { tag, end: len, selfClosing: false, idRaw };
+      if (c === ">") {
+        i += 1;
+        break;
+      }
+      if (c === "/" && text.charAt(i + 1) === ">") {
+        selfClosing = true;
+        i += 2;
+        break;
+      }
+      if (c === "/") {
+        i += 1;
+        continue;
+      }
+      const attrStart = i;
+      while (i < len && !isAsciiWs(text.charCodeAt(i)) && text.charAt(i) !== "=" && text.charAt(i) !== ">" && !(text.charAt(i) === "/" && text.charAt(i + 1) === ">")) i += 1;
+      const attrName = text.slice(attrStart, i);
+      if (attrName === "") {
+        i += 1;
+        continue;
+      }
+      let j = i;
+      while (j < len && isAsciiWs(text.charCodeAt(j))) j += 1;
+      let value = null;
+      if (text.charAt(j) === "=") {
+        j += 1;
+        while (j < len && isAsciiWs(text.charCodeAt(j))) j += 1;
+        const quote = text.charAt(j);
+        if (quote === '"' || quote === "'") {
+          const close = text.indexOf(quote, j + 1);
+          value = text.slice(j + 1, close === -1 ? len : close);
+          i = close === -1 ? len : close + 1;
+        } else {
+          const valueStart = j;
+          while (j < len && !isAsciiWs(text.charCodeAt(j)) && text.charAt(j) !== ">") j += 1;
+          value = text.slice(valueStart, j);
+          i = j;
+        }
+      } else {
+        i = attrStart + attrName.length;
+      }
+      if (attrName.toLowerCase() === "id" && idRaw === null) idRaw = value ?? "";
+    }
+    return { tag, end: i, selfClosing, idRaw };
+  };
+  var findRawTextEnd = (text, from, tag) => {
+    const re = new RegExp(`</${tag}(?=[\\s>/]|$)`, "gi");
+    re.lastIndex = from;
+    const match = re.exec(text);
+    return match ? match.index : text.length;
+  };
+  var scanHtml = (text) => {
+    const elements = [];
+    const stack = [];
+    const len = text.length;
+    let pos = 0;
+    const markComment = () => {
+      for (const idx of stack) {
+        const open = elements[idx];
+        if (open) open.hasComment = true;
+      }
+    };
+    while (pos < len) {
+      const lt = text.indexOf("<", pos);
+      if (lt === -1) break;
+      pos = lt;
+      if (text.startsWith("<!--", lt)) {
+        const end2 = text.indexOf("-->", lt + 4);
+        pos = end2 === -1 ? len : end2 + 3;
+        markComment();
+        continue;
+      }
+      if (text.startsWith("<![CDATA[", lt)) {
+        const end2 = text.indexOf("]]>", lt + 9);
+        pos = end2 === -1 ? len : end2 + 3;
+        markComment();
+        continue;
+      }
+      if (text.startsWith("<!", lt) || text.startsWith("<?", lt)) {
+        const gt = text.indexOf(">", lt);
+        pos = gt === -1 ? len : gt + 1;
+        if (!/^<!doctype/i.test(text.slice(lt, lt + 10))) markComment();
+        continue;
+      }
+      if (text.startsWith("</", lt)) {
+        const nameMatch = /^<\/([A-Za-z][^\s/>]*)/.exec(text.slice(lt, lt + 128));
+        const gt = text.indexOf(">", lt);
+        const stop = gt === -1 ? len : gt + 1;
+        pos = stop;
+        if (!nameMatch) continue;
+        const name = (nameMatch[1] ?? "").toLowerCase();
+        if (VOID_TAGS.has(name)) continue;
+        let at = -1;
+        for (let k = stack.length - 1; k >= 0; k -= 1) {
+          const open = elements[stack[k] ?? -1];
+          if (open && open.tag === name) {
+            at = k;
+            break;
+          }
+        }
+        if (at === -1) continue;
+        while (stack.length > at + 1) {
+          const idx3 = stack.pop();
+          const closed = idx3 === void 0 ? void 0 : elements[idx3];
+          if (closed) closed.inner = [closed.startTag[1], lt];
+        }
+        const idx2 = stack.pop();
+        const el3 = idx2 === void 0 ? void 0 : elements[idx2];
+        if (el3) {
+          el3.endTag = [lt, stop];
+          el3.inner = [el3.startTag[1], lt];
+        }
+        continue;
+      }
+      const parsed = parseStartTag(text, lt);
+      if (parsed === null) {
+        pos = lt + 1;
+        continue;
+      }
+      const { tag, end, selfClosing, idRaw } = parsed;
+      pos = end;
+      const parent = stack.length > 0 ? stack[stack.length - 1] ?? -1 : -1;
+      const parentEl = parent === -1 ? void 0 : elements[parent];
+      const foreign = parentEl !== void 0 && parentEl.foreign || FOREIGN_ROOTS.has(tag);
+      const inert = parentEl !== void 0 && (parentEl.inert || INERT_ANCESTORS.has(parentEl.tag)) || RAW_TEXT_TAGS.has(tag) || tag === "template";
+      const idDecoded = idRaw === null ? null : decodeAttrValue(idRaw);
+      const el2 = {
+        tag,
+        startTag: [lt, end],
+        inner: [end, end],
+        endTag: null,
+        id: idRaw === null ? null : { raw: idRaw, decoded: idDecoded },
+        parent,
+        childElements: [],
+        hasComment: false,
+        foreign,
+        inert
+      };
+      const idx = elements.length;
+      elements.push(el2);
+      if (parentEl) parentEl.childElements.push(idx);
+      if (VOID_TAGS.has(tag)) continue;
+      if (RAW_TEXT_TAGS.has(tag)) {
+        const contentEnd = tag === "plaintext" ? len : findRawTextEnd(text, end, tag);
+        el2.inner = [end, contentEnd];
+        if (contentEnd < len) {
+          const gt = text.indexOf(">", contentEnd);
+          const stop = gt === -1 ? len : gt + 1;
+          el2.endTag = [contentEnd, stop];
+          pos = stop;
+        } else {
+          pos = len;
+        }
+        continue;
+      }
+      if (selfClosing && foreign) continue;
+      stack.push(idx);
+    }
+    for (const idx of stack) {
+      const el2 = elements[idx];
+      if (el2) el2.inner = [el2.startTag[1], len];
+    }
+    return { text, elements };
+  };
+  var locateTextTarget = (scan, target) => {
+    if (!target.leaf) return { reason: "formatted" };
+    if (target.truncated) return { reason: "too-long" };
+    const matches = [];
+    let anyUndecodable = false;
+    for (const e of scan.elements) {
+      if (e.tag !== target.tag || e.foreign || e.inert) continue;
+      if (target.id === null) {
+        if (e.id !== null) continue;
+      } else {
+        if (e.id === null) continue;
+        if (e.id.decoded === null) {
+          anyUndecodable = true;
+          continue;
+        }
+        if (e.id.decoded !== target.id) continue;
+      }
+      if (e.inner[1] - e.inner[0] < target.text.length) continue;
+      const decoded = decodeText(scan.text, e.inner[0], e.inner[1]);
+      if (decoded === null) {
+        anyUndecodable = true;
+        continue;
+      }
+      if (normalizeText(decoded.text) === target.text) matches.push(e);
+    }
+    if (matches.length === 0) return { reason: anyUndecodable ? "unclear" : "not-in-source" };
+    const leaves = matches.filter((e) => e.childElements.length === 0 && !e.hasComment && e.endTag !== null);
+    if (leaves.length === 0) {
+      const anyFormatted = matches.some((e) => e.childElements.length > 0 || e.hasComment);
+      return { reason: anyFormatted ? "formatted" : "unclear" };
+    }
+    const only = leaves.length === 1 ? leaves[0] : void 0;
+    if (only) return { element: only };
+    if (target.sameCount > 0 && leaves.length === target.sameCount) {
+      const picked = leaves[target.sameIndex];
+      if (picked) return { element: picked };
+    }
+    return { reason: "ambiguous" };
+  };
+  var sourceFileReason = (input) => {
+    if (input.link) return "link";
+    if (input.charLength > SOURCE_TEXT_MAX) return "file-too-large";
+    if (!input.utf8) return "not-utf8";
+    return null;
+  };
+
+  // src/ui/model/edit-text-model.ts
+  var REASON_TEXT = {
+    "not-in-source": "This text is made by the page's script. Ask the agent to change it.",
+    formatted: "This has formatting inside. Ask the agent to change it.",
+    ambiguous: "This text appears more than once and the exact one can't be found. Ask the agent to change it.",
+    viewing: "You're viewing an old version.",
+    "file-too-large": "This file is too large to edit here.",
+    "too-long": "That's too long to edit here. Ask the agent instead.",
+    "not-utf8": "This file isn't plain UTF-8 text, so it can't be edited here. Ask the agent instead.",
+    unclear: "Design Chamber can't find this text in the file exactly. Ask the agent to change it.",
+    "no-file": "Nothing to edit until the agent writes this screen.",
+    link: "This file is a link, so Design Chamber can't edit it here. Ask the agent instead."
+  };
+  var reasonSentence = (reason, detail) => reason === "loading-failed" ? `Couldn't read this file. ${detail ?? "Try clicking the element again."}`.trim() : REASON_TEXT[reason];
+  var refuse = (reason, detail) => detail === void 0 ? { editable: false, reason } : { editable: false, reason, detail };
+  var checkPick = (input) => {
+    if (input.viewing) return refuse("viewing");
+    const { source, probe } = input;
+    if (!source.ok) return source.kind === "no-file" ? refuse("no-file") : refuse("loading-failed", source.message);
+    const file = sourceFileReason({ link: source.source.link, charLength: source.source.text.length, utf8: source.source.utf8 });
+    if (file !== null) return refuse(file);
+    if (probe === null) return refuse("loading-failed", "The design didn't answer. Click the element again.");
+    const target = { tag: probe.tag, id: probe.id, text: probe.text, sameIndex: probe.sameIndex, sameCount: probe.sameCount };
+    const located = locateTextTarget(scanHtml(source.source.text), { ...target, leaf: probe.leaf, truncated: probe.truncated });
+    if ("reason" in located) return refuse(located.reason);
+    const decoded = decodeText(source.source.text, located.element.inner[0], located.element.inner[1]);
+    if (decoded === null) return refuse("unclear");
+    return { editable: true, base: source.source.sha256, target, before: editorTextOf(decoded).text, dir: probe.dir };
+  };
+  var CONTROL_CHARS = /[\u0000-\u0008\u000b\u000e-\u001f\u007f]/g;
+  var normalizeTyped = (typed) => typed.replace(CONTROL_CHARS, "").replace(/[\t\n\f\r ]+/g, " ").replace(/^ | $/g, "");
+  var saveDecision = (before, typed) => {
+    const after = normalizeTyped(typed);
+    if (after === before) return { kind: "unchanged" };
+    if (after.length > TEXT_EDIT_MAX) return { kind: "too-long", length: after.length };
+    return { kind: "save", after };
+  };
+  var hasChange = (before, typed) => normalizeTyped(typed) !== before;
+  var COUNTER_NEAR = 4500;
+  var counterState = (length) => length > TEXT_EDIT_MAX ? "over" : length >= COUNTER_NEAR ? "near" : "none";
+  var counterText = (length, state) => state === "over" ? `${TEXT_EDIT_MAX.toLocaleString()} characters at most` : `${length.toLocaleString()} / ${TEXT_EDIT_MAX.toLocaleString()}`;
+  var counterAnnouncement = (previous, next) => {
+    if (next === previous) return null;
+    if (next === "near") return previous === "none" ? "Close to the limit of 5,000 characters." : null;
+    if (next === "over") return "Over the limit of 5,000 characters. Shorten the text to save.";
+    return null;
+  };
+  var KEY_HINT = "Enter to save \xB7 Esc to cancel";
+  var CLICK_AWAY_LINE = "Press Enter to save or Esc to discard.";
+  var AGENT_WORKING_LINE = "The agent is working on this design. It may write over your edit.";
+  var STALE_TEXT = "This file changed while you were editing. Nothing was saved.";
+  var agentIsWorking = (phase) => phase === "working" || phase === "writing" || phase === "retrying";
+  var toolbarName = (tag, text) => {
+    const flat = text.replace(/\s+/g, " ").trim();
+    const clipped = flat.length > 40 ? `${flat.slice(0, 39).trimEnd()}\u2026` : flat;
+    return clipped === "" ? `Actions for ${tag}` : `Actions for ${tag} '${clipped}'`;
+  };
+  var UNDONE_TEXT = "Undone";
+  var SERVICE_SENTENCE_CODES = /* @__PURE__ */ new Set(["bad-request", "bad-path", "bad-slug", "not-found", "conflict", "stale", "too-large", "no-html", "invalid", "internal"]);
+  var refusalOf = (error) => {
+    if (error.code === "stale") return { text: STALE_TEXT, stale: true, askAgent: false };
+    if (SERVICE_SENTENCE_CODES.has(error.code)) {
+      const fileRefusal = error.status === 413 || error.status === 422 || error.code === "too-large" || error.code === "invalid";
+      const keeps = error.code === "internal" || error.code === "conflict";
+      return { text: keeps ? `${error.message} Your text is still here.` : error.message, stale: false, askAgent: fileRefusal };
+    }
+    return { text: `Couldn't save your change. ${error.message} Your text is still here.`, stale: false, askAgent: false };
+  };
+  var reloadOutcome = (previousBefore, check) => {
+    if (!check.editable) return { kind: "gone", sentence: reasonSentence(check.reason, check.detail) };
+    return { kind: "ready", check, fileNowSays: check.before === previousBefore ? null : check.before };
+  };
+  var TOOLBAR_ICONS_BELOW = 300;
+  var toolbarLabels = (stageWidth) => stageWidth >= TOOLBAR_ICONS_BELOW;
+  var EDGE = 8;
+  var GAP = 6;
+  var FLIP_WITHIN = 48;
+  var clamp = (value, low, high) => Math.max(low, Math.min(value, Math.max(low, high)));
+  var placeToolbar = (box, size, stage) => {
+    const below = box.y < Math.max(FLIP_WITHIN, size.h + GAP + EDGE);
+    const top = below ? box.y + box.h + GAP : box.y - size.h - GAP;
+    return { left: clamp(box.x, EDGE, stage.w - size.w - EDGE), top: clamp(top, EDGE, stage.h - size.h - EDGE), below };
+  };
+  var editorWidth = (input) => input.surface === "page" ? clamp(Math.round(input.boxWidth), 260, 480) : Math.min(input.stageWidth - 2 * EDGE, Math.max(240, Math.round(input.boxWidth)));
+  var placeEditor = (box, size, stage, surface) => ({
+    left: surface === "rail" ? EDGE : clamp(box.x, EDGE, stage.w - size.w - EDGE),
+    top: clamp(box.y, EDGE, stage.h - size.h - EDGE)
+  });
+  var answerSource = async (read) => {
+    try {
+      return { ok: true, source: await read() };
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+      const message = error instanceof Error && error.message !== "" ? error.message : "Try clicking the element again.";
+      return code === "no-html" || code === "not-found" ? { ok: false, kind: "no-file", message } : { ok: false, kind: "failed", message };
+    }
+  };
+
+  // src/ui/model/tweaks-model.ts
+  var TWEAKS_TITLE = "Tweaks";
+  var TWEAKS_SUBTITLE = "Change a value to preview it. Save writes the values to tokens.css.";
+  var UNSAVED_BADGE = "Unsaved";
+  var TWEAKS_VIEWING_TEXT = "You're viewing an old version.";
+  var ASK_FOR_TWEAKS_LABEL = "Ask for tweaks";
+  var ASK_FOR_TWEAKS_TEXT = "Add tweaks for this design (accent hue, density, type scale, radius).";
+  var TOKENS_LOADING_TEXT = "Reading tokens.css\u2026";
+  var NOTHING_TO_SAVE_TEXT = "Nothing to save yet.";
+  var NO_TOKENS_TEXT = "This design has no tokens.css.";
+  var TOKENS_READ_ONLY_TEXT = "tokens.css can't be edited here. Ask the agent instead.";
+  var VALUES_KEPT_TEXT = "Your unsaved values are kept.";
+  var DESIGN_GONE_TEXT = "That design is no longer in your Designs folder. Your unsaved values were:";
+  var PREVIEW_NOTE = "The preview shows this value everywhere; saved, it applies only where tokens.css doesn't set it again.";
+  var STALE_TITLE = "tokens.css changed since you started.";
+  var STALE_BODY = "Your values are still shown.";
+  var STALE_SAVE_TITLE = "Choose Apply to the new file or Discard my tweaks first.";
+  var LEAVE_TITLE = "Save your tweaks?";
+  var LEAVE_BODY = "Your tweak values aren't saved to tokens.css yet.";
+  var readFailedText = (message) => `Couldn't read tokens.css. ${message}`;
+  var saveFailedText = (error) => error.code === "stale" || error.code === "not-found" ? error.message : `Couldn't save your tweaks. ${error.message} Your values are still here.`;
+  var tweaksButtonLabel = (dirty) => dirty ? "Tweaks, unsaved changes" : "Tweaks";
+  var TWEAKS_SHEET_MIN_HOST_HEIGHT = 560;
+  var tweaksSheetVariant = (hostHeight) => hostHeight < TWEAKS_SHEET_MIN_HOST_HEIGHT ? "full" : "bottom";
+  var bottomSheetMax = (hostHeight) => Math.max(0, Math.floor(hostHeight / 2));
+  var panelMode = (state) => {
+    if (state.gone || state.saveError?.code === "not-found") return "gone";
+    if (state.status === "error") return "error";
+    if (state.tokens === null) return "loading";
+    return "rows";
+  };
+  var panelBanners = (state, tweaks, context) => {
+    const banners = [];
+    if (context.viewing) banners.push({ kind: "viewing", title: TWEAKS_VIEWING_TEXT });
+    if (state.tokens !== null && !state.tokens.exists) banners.push({ kind: "no-tokens", title: NO_TOKENS_TEXT });
+    else if (state.tokens !== null && !state.tokens.editable) banners.push({ kind: "not-editable", title: TOKENS_READ_ONLY_TEXT });
+    if (state.stale) {
+      const labelOf = (name) => tweaks.find((knob) => knob.var === name)?.label ?? name;
+      const left = state.staleExcluded.map(labelOf);
+      banners.push({ kind: "stale", title: STALE_TITLE, body: left.length === 0 ? STALE_BODY : `${STALE_BODY} ${left.join(", ")} can't be applied to the new file and will be left out.` });
+    }
+    return banners;
+  };
+  var NO_VALUE = "\u2013";
+  var numberText = (value, tweak) => `${formatTweakNumber(value, tweak.step)}${tweak.unit === "" ? "" : ` ${tweak.unit}`}`;
+  var alsoSetNote = (contexts) => `Also set for ${contexts.join(", ")}; only the default changes.`;
+  var knobRow = (tweak, file, state, locked, fileProblem) => {
+    const pending = state.pending.get(tweak.var);
+    const fileValue = file?.value ?? null;
+    const brokenState = file !== void 0 && file.state !== "ok" && file.state !== "value";
+    const reason = !fileProblem && brokenState && file ? tweakStateSentence(file, tweak) : null;
+    const disabled = locked || brokenState;
+    const changed = pending !== void 0;
+    const notes = [];
+    if (file && file.alsoSet.length > 0 && !brokenState) notes.push(alsoSetNote(file.alsoSet), PREVIEW_NOTE);
+    if (tweak.kind === "number") {
+      const current2 = typeof pending === "number" ? pending : typeof fileValue === "number" ? fileValue : null;
+      return {
+        var: tweak.var,
+        label: tweak.label,
+        kind: "number",
+        disabled,
+        reason,
+        changed,
+        valueText: current2 === null ? NO_VALUE : numberText(current2, tweak),
+        number: { min: tweak.min, max: tweak.max, step: tweak.step, value: current2 ?? (tweak.min + tweak.max) / 2 },
+        choice: null,
+        notes
+      };
+    }
+    const current = typeof pending === "string" ? pending : typeof fileValue === "string" ? fileValue : null;
+    const options = tweak.options.map((option) => ({ id: option.value, label: option.label }));
+    const match = options.find((option) => option.id === current);
+    if (current !== null && match === void 0 && file?.state === "value" && !changed) notes.unshift(`tokens.css sets another value: ${current}`);
+    return {
+      var: tweak.var,
+      label: tweak.label,
+      kind: "choice",
+      disabled,
+      reason,
+      changed,
+      valueText: match?.label ?? (current ?? NO_VALUE),
+      number: null,
+      choice: { options, active: match?.id ?? "" },
+      notes
+    };
+  };
+  var knobRows = (tweaks, state, context) => {
+    const tokens = state.tokens;
+    const fileProblem = tokens === null || !tokens.exists || !tokens.editable;
+    const locked = context.viewing || state.status !== "ready" || state.gone || fileProblem;
+    return tweaks.map((tweak) => knobRow(tweak, tokens?.knobs.find((knob) => knob.var === tweak.var), state, locked, fileProblem));
+  };
+  var unsavedLines = (tweaks, state) => tweaks.flatMap((tweak) => {
+    const value = state.pending.get(tweak.var);
+    if (value === void 0) return [];
+    if (tweak.kind === "number") return [`${tweak.label}: ${typeof value === "number" ? numberText(value, tweak) : String(value)}`];
+    return [`${tweak.label}: ${tweak.options.find((option) => option.value === value)?.label ?? String(value)}`];
+  });
+  var footView = (state, context) => {
+    const saving = state.status === "saving";
+    const ready = state.status === "ready" && !state.gone && state.tokens !== null;
+    let saveTitle = null;
+    if (context.viewing) saveTitle = TWEAKS_VIEWING_TEXT;
+    else if (state.stale) saveTitle = STALE_SAVE_TITLE;
+    else if (ready && !state.dirty) saveTitle = NOTHING_TO_SAVE_TEXT;
+    const saveDisabled = context.viewing || !ready || !state.dirty || state.stale;
+    const resetDisabled = context.viewing || !ready || !state.dirty;
+    let note = null;
+    if (state.saveError && state.saveError.code !== "not-found" && !(state.saveError.code === "stale" && state.stale)) note = { tone: "error", text: saveFailedText(state.saveError) };
+    else if (context.agentWorking) note = { tone: "warning", text: AGENT_WORKING_LINE };
+    else if (ready && !state.dirty && !context.viewing) note = { tone: "muted", text: NOTHING_TO_SAVE_TEXT };
+    return { resetDisabled, saveDisabled, saving, saveTitle: saveDisabled ? saveTitle : null, note };
+  };
+  var leaveDecision = (state) => state.dirty && !state.gone ? "ask" : "leave";
+
+  // src/ui/components/bottom-sheet.ts
+  var trackBottomSheet = (host2, sheet, onResize) => {
+    const panel = sheet.el.querySelector(".dc-sheet-panel");
+    const setMax = () => sheet.el.style.setProperty("--dc-sheet-max", `${bottomSheetMax(host2.clientHeight)}px`);
+    setMax();
+    const observer = new ResizeObserver(() => {
+      setMax();
+      onResize();
+    });
+    observer.observe(host2);
+    if (panel) observer.observe(panel);
+    return () => observer.disconnect();
   };
 
   // src/ui/model/findability-model.ts
@@ -5625,14 +6374,14 @@ ${GUEST_UI_LOOK_CSS}`;
   var createRestoreFlow = (options) => {
     const { slug, notices } = options;
     let noticeButtons = [];
-    const showNotice = (tone2, title, body, buttons, ttlMs) => {
+    const showNotice = (tone2, title2, body, buttons, ttlMs) => {
       noticeButtons = buttons;
       if (buttons.length === 0) {
-        notices.setTransient("restore", banner({ tone: tone2, title, body }), ttlMs);
+        notices.setTransient("restore", banner({ tone: tone2, title: title2, body }), ttlMs);
         return;
       }
       const wrap = h("div", { class: "dc-banner dc-restore-notice", "data-actions": "stack" });
-      wrap.append(...bannerWithActions(tone2, title, [body], buttons.map((button2) => button2.el)));
+      wrap.append(...bannerWithActions(tone2, title2, [body], buttons.map((button2) => button2.el)));
       notices.setTransient("restore", wrap, ttlMs);
     };
     const keepFocus = () => {
@@ -5703,6 +6452,10 @@ ${GUEST_UI_LOOK_CSS}`;
         return "Before restore";
       case "restored":
         return "Restored";
+      case "user-edit":
+        return "Before your edits";
+      case "keep-direction":
+        return "Before keeping a direction";
     }
   };
   var versionRows = (versions, dirty) => {
@@ -5874,8 +6627,8 @@ ${GUEST_UI_LOOK_CSS}`;
   var askPlaceholder = (link) => link === "linked" ? "Ask the agent to change something" : "Ask the agent. This starts a new chat.";
   var askTarget = (link) => {
     if (link.sessionId === null) return "Starts a new chat";
-    const title = oneLine2(link.selectedTitle ?? "");
-    if (link.selectedId === link.sessionId && title !== "") return `Goes to \u201C${clip2(title, CHAT_TITLE_MAX)}\u201D`;
+    const title2 = oneLine2(link.selectedTitle ?? "");
+    if (link.selectedId === link.sessionId && title2 !== "") return `Goes to \u201C${clip2(title2, CHAT_TITLE_MAX)}\u201D`;
     return "Goes to the linked chat";
   };
   var askResultText = (outcome) => {
@@ -5897,28 +6650,855 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var askFailureText = (reason) => `Couldn't send. ${reason.trim()} Your message is still here.`;
 
+  // src/shared/bridge-protocol.ts
+  var BRIDGE_PROTOCOL_VERSION = 1;
+  var BRIDGE_PLACEHOLDER = "<!--dc-bridge-->";
+  var BRIDGE_KEYS = ["Escape", " ", "+", "=", "-", "0", "1"];
+  var artboardIdOf = (screen, viewport) => `${screen ?? "page"}@${viewport}`;
+  var isRec = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+  var isStr = (value, max) => typeof value === "string" && value.length <= max;
+  var isId = (value, max) => isStr(value, max) && value.length > 0;
+  var isNum = (value) => typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= BRIDGE_COORD_MAX;
+  var isSize = (value) => isNum(value) && value >= 0;
+  var isBool = (value) => typeof value === "boolean";
+  var isRect = (value) => isRec(value) && isNum(value.x) && isNum(value.y) && isSize(value.w) && isSize(value.h);
+  var isKey = (value) => BRIDGE_KEYS.includes(value);
+  var isList = (value, max, item) => Array.isArray(value) && value.length <= max && value.every(item);
+  var isAnchorResult = (value) => isRec(value) && isId(value.id, BRIDGE_ARTBOARD_ID_MAX) && isBool(value.found) && isBool(value.exact) && (value.rect === null || isRect(value.rect));
+  var isHitElement = (value) => isRec(value) && isStr(value.selector, ANCHOR_SELECTOR_MAX) && isStr(value.text, ANCHOR_TEXT_MAX) && isStr(value.html, ANCHOR_HTML_MAX) && isRect(value.rect) && isId(value.tag, BRIDGE_TAG_MAX);
+  var isInt = (value) => typeof value === "number" && Number.isInteger(value);
+  var isStorageChanges = (value) => {
+    if (!Array.isArray(value) || value.length > PAGE_STATE_CHANGES_MAX) return false;
+    let chars = 0;
+    for (const entry of value) {
+      if (!Array.isArray(entry) || entry.length !== 2) return false;
+      const key = entry[0];
+      const item = entry[1];
+      if (typeof key !== "string" || item !== null && typeof item !== "string") return false;
+      chars += key.length + (item === null ? 0 : item.length);
+      if (chars > PAGE_STATE_BATCH_MAX_CHARS) return false;
+    }
+    return true;
+  };
+  var isEditProbe = (value) => isRec(value) && isId(value.tag, BRIDGE_TAG_MAX) && (value.id === null || isId(value.id, EDIT_PROBE_ID_MAX)) && isBool(value.leaf) && isStr(value.text, TEXT_EDIT_MAX + 1) && isBool(value.truncated) && isInt(value.sameIndex) && value.sameIndex >= 0 && isInt(value.sameCount) && value.sameCount >= 0 && value.sameCount <= EDIT_PROBE_SCAN_MAX && (value.sameCount === 0 || value.sameIndex < value.sameCount) && (value.dir === "ltr" || value.dir === "rtl") && isRect(value.rect);
+  var hasEnvelope = (value) => value.dc === BRIDGE_PROTOCOL_VERSION && isId(value.artboardId, BRIDGE_ARTBOARD_ID_MAX) && isId(value.nonce, BRIDGE_NONCE_MAX);
+  var FRAME_TO_PAGE = {
+    ready: (m) => isSize(m.docWidth) && isSize(m.docHeight) && isStr(m.title, BRIDGE_TITLE_MAX),
+    size: (m) => isSize(m.docWidth) && isSize(m.docHeight),
+    scroll: (m) => isNum(m.x) && isNum(m.y),
+    hit: (m) => isNum(m.x) && isNum(m.y) && (m.element === null || isHitElement(m.element)),
+    anchors: (m) => isList(m.results, BRIDGE_ANCHORS_MAX, isAnchorResult),
+    navigate: (m) => isId(m.href, BRIDGE_URL_MAX) && isStr(m.hash, BRIDGE_URL_MAX) && (m.hash === "" || m.hash.startsWith("#")),
+    "open-external": (m) => isId(m.url, BRIDGE_URL_MAX) && /^https?:\/\//i.test(m.url),
+    wheel: (m) => isNum(m.deltaX) && isNum(m.deltaY) && isNum(m.x) && isNum(m.y) && isBool(m.ctrl),
+    key: (m) => isKey(m.key) && isBool(m.ctrl) && isBool(m.meta) && isBool(m.shift),
+    "edit-probe-result": (m) => isNum(m.x) && isNum(m.y) && (m.probe === null || isEditProbe(m.probe)),
+    "storage-batch": (m) => isBool(m.clear) && isStorageChanges(m.changes)
+  };
+  var parseWith = (table, data) => {
+    if (!isRec(data) || !hasEnvelope(data) || typeof data.type !== "string") return null;
+    if (!Object.hasOwn(table, data.type)) return null;
+    const check = table[data.type];
+    return check !== void 0 && check(data) ? data : null;
+  };
+  var parseFrameMessage = (data) => parseWith(FRAME_TO_PAGE, data);
+
+  // src/guest/camera.ts
+  var DEFAULT_CAMERA = Object.freeze({ x: 0, y: 0, scale: 1 });
+  var FIT_PADDING = 48;
+  var FIT_MIN_WIDTH = 240;
+  var clamp2 = (value, min, max) => Math.min(max, Math.max(min, value));
+  var clampScale = (scale) => Number.isFinite(scale) ? clamp2(scale, CAMERA_SCALE_MIN, CAMERA_SCALE_MAX) : DEFAULT_CAMERA.scale;
+  var clampCamera = (camera) => ({
+    x: Number.isFinite(camera.x) ? clamp2(camera.x, -CAMERA_PAN_MAX, CAMERA_PAN_MAX) : 0,
+    y: Number.isFinite(camera.y) ? clamp2(camera.y, -CAMERA_PAN_MAX, CAMERA_PAN_MAX) : 0,
+    scale: clampScale(camera.scale)
+  });
+  var screenToWorld = (camera, point) => ({
+    x: (point.x - camera.x) / camera.scale,
+    y: (point.y - camera.y) / camera.scale
+  });
+  var zoomAt = (camera, scale, point) => {
+    const next = clampScale(scale);
+    const world = screenToWorld(camera, point);
+    return clampCamera({ x: point.x - world.x * next, y: point.y - world.y * next, scale: next });
+  };
+  var wheelZoom = (camera, deltaY, point) => Number.isFinite(deltaY) ? zoomAt(camera, camera.scale * Math.exp(-deltaY * WHEEL_ZOOM_RATE), point) : camera;
+  var panBy = (camera, dx, dy) => Number.isFinite(dx) && Number.isFinite(dy) ? clampCamera({ ...camera, x: camera.x + dx, y: camera.y + dy }) : camera;
+  var unionBoxes = (boxes) => {
+    if (boxes.length === 0) return null;
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const box of boxes) {
+      left = Math.min(left, box.x);
+      top = Math.min(top, box.y);
+      right = Math.max(right, box.x + box.width);
+      bottom = Math.max(bottom, box.y + box.height);
+    }
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  };
+  var fitBox = (box, viewport, options = {}) => {
+    const padding = options.padding ?? FIT_PADDING;
+    const maxScale = options.maxScale ?? 1;
+    const availableWidth = Math.max(1, viewport.width - padding * 2);
+    const availableHeight = Math.max(1, viewport.height - padding * 2);
+    const fit = Math.min(availableWidth / Math.max(1, box.width), availableHeight / Math.max(1, box.height));
+    const scale = clampScale(Math.min(maxScale, fit));
+    return clampCamera({
+      x: viewport.width / 2 - (box.x + box.width / 2) * scale,
+      y: viewport.height / 2 - (box.y + box.height / 2) * scale,
+      scale
+    });
+  };
+  var fitArea = (wall, coveredRight, minWidth = FIT_MIN_WIDTH) => {
+    const visible = wall.width - Math.max(0, coveredRight);
+    const width = visible >= minWidth ? visible : wall.width;
+    return { width, height: wall.height, padding: width < 480 ? 24 : 56 };
+  };
+  var focusArtboard = (artboard, viewport, options) => fitBox(artboardBox(artboard), viewport, options);
+  var artboardBox = (artboard) => ({
+    x: artboard.label.x,
+    y: artboard.label.y,
+    width: artboard.frame.width,
+    height: artboard.label.height + artboard.frame.height
+  });
+  var layoutWall = (rows, viewports, options = {}) => {
+    const gap = options.gap ?? WALL_GAP;
+    const labelHeight = options.labelHeight ?? ARTBOARD_LABEL_HEIGHT;
+    const columns = options.directionColumns === void 0 || !Number.isFinite(options.directionColumns) ? Infinity : Math.max(1, Math.floor(options.directionColumns));
+    const columnX = [];
+    let x = 0;
+    for (const viewport of viewports) {
+      columnX.push(x);
+      x += viewport.width + gap;
+    }
+    const artboards = [];
+    let y = 0;
+    let row = 0;
+    for (const entry of rows) {
+      if ("group" in entry) {
+        const { viewport } = entry;
+        const cells2 = [entry.group.of, ...entry.group.members];
+        const lineHeight = labelHeight + viewport.height;
+        cells2.forEach((cell, index) => {
+          const line = Math.floor(index / columns);
+          const col = index % columns;
+          const left = col * (viewport.width + gap);
+          const top = y + line * (lineHeight + gap);
+          artboards.push({
+            id: artboardIdOf(cell.id, viewport.id),
+            screen: cell.id,
+            screenTitle: cell.title,
+            viewport,
+            row,
+            col,
+            line,
+            label: { x: left, y: top, width: viewport.width, height: labelHeight },
+            frame: { x: left, y: top + labelHeight, width: viewport.width, height: viewport.height }
+          });
+        });
+        const lines = Math.floor((cells2.length - 1) / columns) + 1;
+        y += lines * (lineHeight + gap);
+        row += 1;
+        continue;
+      }
+      const screen = entry;
+      const shown = new Set(screen.viewports ?? viewports.map((viewport) => viewport.id));
+      const cells = viewports.map((viewport, col) => ({ viewport, col })).filter(({ viewport }) => shown.has(viewport.id));
+      if (cells.length === 0) continue;
+      const rowHeight = Math.max(...cells.map(({ viewport }) => viewport.height));
+      for (const { viewport, col } of cells) {
+        const left = columnX[col] ?? 0;
+        artboards.push({
+          id: artboardIdOf(screen.id, viewport.id),
+          screen: screen.id,
+          screenTitle: screen.title,
+          viewport,
+          row,
+          col,
+          line: 0,
+          label: { x: left, y, width: viewport.width, height: labelHeight },
+          frame: { x: left, y: y + labelHeight, width: viewport.width, height: viewport.height }
+        });
+      }
+      y += labelHeight + rowHeight + gap;
+      row += 1;
+    }
+    const ghost = options.ghost === void 0 ? void 0 : {
+      kind: "ghost",
+      row,
+      box: { x: 0, y, width: options.ghost.width, height: options.ghost.height }
+    };
+    const boxes = artboards.map(artboardBox);
+    if (ghost !== void 0) boxes.push(ghost.box);
+    const bounds = unionBoxes(boxes);
+    return ghost === void 0 ? { artboards, bounds } : { artboards, ghost, bounds };
+  };
+
+  // src/shared/design-json.ts
+  var ENTRY_FILE = "index.html";
+  var VIEWPORT_LAPTOP = Object.freeze({ id: "laptop", label: "Laptop", width: 1280, height: 800 });
+  var VIEWPORT_PHONE = Object.freeze({ id: "phone", label: "Phone", width: 390, height: 844 });
+  var CANONICAL_ORDER = [
+    "version",
+    "kind",
+    "title",
+    "created",
+    "updated",
+    "brief",
+    "sessionId",
+    "projectDirectory",
+    "preset",
+    "entry",
+    "viewports",
+    "screens",
+    "designSystem",
+    "tweaks",
+    "comments"
+  ];
+  var KNOWN_FIELDS = new Set(CANONICAL_ORDER);
+  var screenFileOf = (screenId) => `screens/${screenId}.html`;
+  var directionGroups = (screens) => {
+    const groups = /* @__PURE__ */ new Map();
+    for (const screen of screens) {
+      if (screen.direction === void 0) continue;
+      const members = groups.get(screen.direction.of);
+      if (members === void 0) groups.set(screen.direction.of, [screen]);
+      else members.push(screen);
+    }
+    return [...groups.entries()].map(([of, members]) => ({
+      of,
+      members: [...members].sort((a, b) => (a.direction?.letter ?? "").localeCompare(b.direction?.letter ?? ""))
+    }));
+  };
+
+  // src/shared/screen-ops.ts
+  var NO_DESIGN_JSON_MESSAGE = "This design has no design.json yet, so its screens can't be changed here.";
+  var DESIGN_JSON_UNREADABLE_MESSAGE = "design.json can't be read right now. Ask the agent to fix it.";
+  var SCREEN_LIST_UNREADABLE_MESSAGE = "The screen list in design.json can't be read. Ask the agent to fix it.";
+  var SCREENS_CAP_MESSAGE = `A canvas holds up to ${SCREENS_MAX} screens.`;
+
+  // src/shared/agent/screen-asks.ts
+  var title = (text) => `"${clip(oneLine(text), TITLE_MAX).replace(/"/g, "'")}"`;
+  var roomLine = (free) => `The canvas has room for ${free} more screen${free === 1 ? "" : "s"}.`;
+  var newScreenAsk = (input) => {
+    const after = input.after === null ? "" : ` after ${title(input.after)}`;
+    const note = input.note.trim() === "" ? null : input.note;
+    const period = note === null || !/[.!?…]$/.test(note.trimEnd()) ? "." : "";
+    return [
+      `Add a new screen to the canvas ${title(input.title)}${after}${note === null ? "" : `: ${note}`}${period}`,
+      "Write it as screens/<id>.html and add it to design.json.",
+      roomLine(input.free)
+    ].join("\n");
+  };
+  var directionsAsk = (input) => {
+    const id = oneLine(input.id).replace(/"/g, "'");
+    return [
+      `Make 3 different directions for the screen ${title(input.title)} (screens/${id}.html).`,
+      `Write each as its own screen (${id}-a, ${id}-b, ${id}-c) and mark it in design.json as a direction of "${id}", as RULES.md describes.`,
+      `Leave "${id}" as it is.`,
+      roomLine(input.free),
+      ...input.note.trim() === "" ? [] : [`What to explore: ${input.note}`]
+    ].join("\n");
+  };
+
+  // src/ui/model/screens-model.ts
+  var VIEWING_REASON = "You're viewing an old version.";
+  var FIRST_SCREEN_REASON = "This is the first screen.";
+  var LAST_SCREEN_REASON = "This is the last screen.";
+  var NO_FILE_REASON = "Nothing to copy until the agent writes this screen.";
+  var screensBlock = (gate) => {
+    if (gate.viewing) return VIEWING_REASON;
+    if (gate.designJson === "missing") return NO_DESIGN_JSON_MESSAGE;
+    if (gate.designJson === "invalid") return DESIGN_JSON_UNREADABLE_MESSAGE;
+    if (gate.listInvalid) return SCREEN_LIST_UNREADABLE_MESSAGE;
+    return null;
+  };
+  var DIRECTIONS_MIN_FREE = 2;
+  var screenMenu = (input) => {
+    const block = screensBlock(input);
+    const off = (reason) => ({ disabled: true, reason });
+    const capped2 = { disabled: true, explainedBy: "foot" };
+    const free = Math.max(0, SCREENS_MAX - input.count);
+    const duplicate = block !== null ? off(block) : !input.hasFile ? off(NO_FILE_REASON) : free === 0 ? capped2 : {};
+    const rowIndex = input.rowIndex ?? input.index;
+    const rowCount = input.rowCount ?? input.count;
+    const up = block !== null ? off(block) : rowIndex <= 0 ? off(FIRST_SCREEN_REASON) : {};
+    const down = block !== null ? off(block) : rowIndex >= rowCount - 1 ? off(LAST_SCREEN_REASON) : {};
+    const trash = block !== null ? off(block) : {};
+    const directions = block !== null ? off(block) : input.directionsOff ? off(input.directionsOff) : free < DIRECTIONS_MIN_FREE ? capped2 : {};
+    const items = [
+      { id: "duplicate", label: "Duplicate", ...duplicate },
+      { id: "up", label: "Move up", ...up },
+      { id: "down", label: "Move down", ...down },
+      { id: "trash", label: "Move to trash", ...trash },
+      { separator: true },
+      { id: "directions", label: "Try 3 directions\u2026", ...directions }
+    ];
+    const explainsCap = items.some((item) => "id" in item && item.explainedBy === "foot");
+    return { items, notes: { ...input.agentWorking ? { lead: AGENT_WORKING_LINE } : {}, ...explainsCap ? { foot: SCREENS_CAP_MESSAGE } : {} } };
+  };
+  var ghostVisible = (input) => input.kind === "canvas" && input.mode === "edit" && !input.viewing && input.count < SCREENS_MAX;
+  var GHOST_HEIGHT = 240;
+  var shiftOrder = (order, id, direction) => {
+    const at = order.indexOf(id);
+    const to = direction === "up" ? at - 1 : at + 1;
+    if (at < 0 || to < 0 || to >= order.length) return null;
+    const next = [...order];
+    const other = next[to];
+    const self = next[at];
+    if (other === void 0 || self === void 0) return null;
+    next[to] = self;
+    next[at] = other;
+    return next;
+  };
+  var dropTarget = (rows, worldY, movedId, edge = 24) => {
+    const first = rows[0];
+    const last = rows[rows.length - 1];
+    if (first === void 0 || last === void 0) return null;
+    let gap = 0;
+    for (const row of rows) {
+      if (worldY > (row.top + row.bottom) / 2) gap += 1;
+    }
+    const before = rows[gap - 1];
+    const after = rows[gap];
+    const y = before !== void 0 && after !== void 0 ? (before.bottom + after.top) / 2 : after !== void 0 ? first.top - edge : last.bottom + edge;
+    const at = rows.findIndex((row) => row.id === movedId);
+    return { gap, y, noop: at < 0 || gap === at || gap === at + 1 };
+  };
+  var revealPan = (box, stage, margin) => {
+    const axis = (start, size, room) => {
+      if (size + 2 * margin > room) return margin - start;
+      if (start < margin) return margin - start;
+      if (start + size > room - margin) return room - margin - (start + size);
+      return 0;
+    };
+    return { dx: axis(box.x, box.w, stage.w), dy: axis(box.y, box.h, stage.h) };
+  };
+  var ASK_NOTE_COUNTER_FROM = 200;
+  var newScreenRoom = (input) => {
+    const withOne = newScreenAsk({ ...input, note: "x" }).length;
+    return Math.max(0, ASK_TEXT_MAX - (withOne - 1));
+  };
+  var directionsRoom = (input) => Math.max(0, ASK_TEXT_MAX - (directionsAsk({ ...input, note: "x" }).length - 1));
+  var askNoteBox = (input) => {
+    const left = input.room - input.typed.trim().length;
+    const over = left < 0;
+    const counter = over ? `${(-left).toLocaleString()} over` : left <= ASK_NOTE_COUNTER_FROM ? `${left.toLocaleString()} left` : null;
+    return { left, counter, over, canSend: !over && !input.sending };
+  };
+
+  // src/ui/model/directions-model.ts
+  var rowViewports = (root, viewports) => {
+    const own = root.viewports === void 0 ? viewports : viewports.filter((viewport) => root.viewports?.includes(viewport.id));
+    return own.length > 0 ? [...own] : [...viewports];
+  };
+  var pickViewport = (options, chosen) => options.find((viewport) => viewport.id === chosen) ?? options[0] ?? null;
+  var planDirections = (screens, viewports, chosen) => {
+    const plan = { rows: /* @__PURE__ */ new Map(), memberOf: /* @__PURE__ */ new Map() };
+    const byId = new Map(screens.map((screen) => [screen.id, screen]));
+    for (const group of directionGroups(screens)) {
+      const root = byId.get(group.of);
+      if (root === void 0) continue;
+      const options = rowViewports(root, viewports);
+      const viewport = pickViewport(options, chosen(group.of));
+      if (viewport === null) continue;
+      plan.rows.set(root.id, { root, members: group.members, viewport, options });
+      for (const member of group.members) plan.memberOf.set(member.id, root.id);
+    }
+    return plan;
+  };
+  var wallScreen = (screen) => ({ id: screen.id, title: screen.title, ...screen.viewports ? { viewports: screen.viewports } : {} });
+  var wallRows = (screens, plan) => {
+    const rows = [];
+    for (const screen of screens) {
+      if (plan.memberOf.has(screen.id)) continue;
+      const row = plan.rows.get(screen.id);
+      rows.push(row === void 0 ? wallScreen(screen) : { group: { of: wallScreen(row.root), members: row.members.map(wallScreen) }, viewport: row.viewport });
+    }
+    return rows;
+  };
+  var directionColumns = (compact) => compact ? 2 : void 0;
+  var rowTitle = (title2, count) => `${title2} \xB7 ${count} ${count === 1 ? "direction" : "directions"}`;
+  var boardLabel = (screen, viewport) => {
+    if (screen.direction === void 0) {
+      const detail = `${viewport.label} ${viewport.width}\xD7${viewport.height}`;
+      return { name: "Current", detail, full: `Current \xB7 ${detail}` };
+    }
+    const { letter, name } = screen.direction;
+    return { name: letter, detail: name, full: `${letter} \xB7 ${name}` };
+  };
+  var keepLabel = (screen, originalTitle) => screen.direction === void 0 ? `Keep this one: the current ${originalTitle}` : `Keep this one: direction ${screen.direction.letter}, ${screen.direction.name}`;
+  var KEEP_NOT_WRITTEN_REASON = "Not written yet.";
+  var keepState = (input) => {
+    if (input.viewing || !input.editing) return { shown: false, disabled: true, reason: null };
+    const block = screensBlock(input);
+    if (block !== null) return { shown: true, disabled: true, reason: block };
+    if (!input.written) return { shown: true, disabled: true, reason: KEEP_NOT_WRITTEN_REASON };
+    return { shown: true, disabled: input.busy, reason: null };
+  };
+  var directionsOffReason = (screenId, plan, titleOf) => {
+    if (plan.rows.has(screenId)) return "This screen already has directions. Keep one first.";
+    const original = plan.memberOf.get(screenId);
+    return original === void 0 ? null : `This is a direction of ${titleOf(original)}. Keep one first.`;
+  };
+  var stampOfFile = (status) => status !== void 0 && status.exists ? { size: status.size, mtime: status.mtime } : null;
+  var keepRequest = (input) => ({
+    op: "keep-direction",
+    screens: input.stamp,
+    of: input.row.root.id,
+    keep: input.keep,
+    files: [input.row.root, ...input.row.members].map((screen) => ({ id: screen.id, file: stampOfFile(input.files[screen.id]) }))
+  });
+  var keptNotice = (edit) => ({
+    id: edit.id,
+    label: edit.detail ? `${edit.label}. ${edit.detail}` : edit.label,
+    undoable: edit.undoable
+  });
+  var moveRowToGap = (order, rowIds, movedId, moving, gap) => {
+    const at = rowIds.indexOf(movedId);
+    if (at < 0 || gap < 0 || gap > rowIds.length || gap === at || gap === at + 1) return null;
+    const rest = order.filter((id) => !moving.has(id));
+    const taken = order.filter((id) => moving.has(id) && id !== movedId);
+    const below = rowIds.slice(gap).find((id) => id !== movedId);
+    const index = below === void 0 ? rest.length : rest.indexOf(below);
+    if (index < 0 || !order.includes(movedId)) return null;
+    const next = [...rest.slice(0, index), movedId, ...taken, ...rest.slice(index)];
+    return next.every((id, position) => id === order[position]) ? null : next;
+  };
+  var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+  var readDirectionViewports = (raw) => {
+    if (!isRecord(raw)) return {};
+    const out = {};
+    for (const [of, id] of Object.entries(raw)) if (typeof id === "string") out[of] = id;
+    return out;
+  };
+  var DIRECTION_HEAD_ROOM = 360;
+  var DIRECTION_HEAD_ROOM_RAIL = 780;
+  var DIRECTION_LINE_ROOM = 160;
+  var shiftBox = (box, dy) => ({ ...box, y: box.y + dy });
+  var spaceDirectionRows = (layout, plan, headRoom = DIRECTION_HEAD_ROOM, lineRoom = DIRECTION_LINE_ROOM) => {
+    if (plan.rows.size === 0) return { layout, heads: /* @__PURE__ */ new Map() };
+    const isDirection = (cell) => cell.screen !== null && (plan.rows.has(cell.screen) || plan.memberOf.has(cell.screen));
+    const lines = /* @__PURE__ */ new Map();
+    for (const cell of layout.artboards) if (isDirection(cell)) lines.set(cell.row, Math.max(lines.get(cell.row) ?? 1, (cell.line ?? 0) + 1));
+    const before = (row) => {
+      let total = 0;
+      for (const [directionRow, count] of lines) if (directionRow < row) total += headRoom + (count - 1) * lineRoom;
+      return total;
+    };
+    const heads = /* @__PURE__ */ new Map();
+    const artboards = layout.artboards.map((cell) => {
+      const dy = isDirection(cell) ? before(cell.row) + headRoom + (cell.line ?? 0) * lineRoom : before(cell.row);
+      if (dy === 0) return cell;
+      return { ...cell, label: shiftBox(cell.label, dy), frame: shiftBox(cell.frame, dy) };
+    });
+    for (const cell of artboards) {
+      if (cell.screen === null || !plan.rows.has(cell.screen)) continue;
+      heads.set(cell.screen, { x: cell.label.x, y: cell.label.y - headRoom, width: cell.label.width, height: headRoom });
+    }
+    const ghost = layout.ghost === void 0 ? void 0 : { ...layout.ghost, box: shiftBox(layout.ghost.box, before(layout.ghost.row)) };
+    const boxes = [...artboards.map(artboardBox), ...heads.values(), ...ghost ? [ghost.box] : []];
+    const bounds = unionBoxes(boxes);
+    return { layout: { artboards, ...ghost ? { ghost } : {}, bounds }, heads };
+  };
+
+  // src/shared/page-state.ts
+  var pageStateChars = (items) => {
+    let chars = 0;
+    for (const [key, value] of items) chars += key.length + value.length;
+    return chars;
+  };
+  var PAGE_STATE_GEN_MAX = 120;
+  var GEN_PATTERN = /^([A-Za-z0-9_-]{1,100}):(0|[1-9][0-9]{0,15})$/;
+  var parseGen = (gen) => {
+    if (typeof gen !== "string" || gen.length > PAGE_STATE_GEN_MAX) return null;
+    const match = GEN_PATTERN.exec(gen);
+    if (match === null) return null;
+    const clears = Number(match[2]);
+    if (!Number.isSafeInteger(clears)) return null;
+    return { epoch: match[1], clears };
+  };
+  var isOlderClear = (gen, current) => {
+    const mine = parseGen(gen);
+    const theirs = parseGen(current);
+    if (mine === null || theirs === null) return false;
+    return mine.epoch === theirs.epoch && mine.clears < theirs.clears;
+  };
+
+  // src/guest/page-state.ts
+  var PAGE_STATE_LOAD_TIMEOUT_MS = 2e3;
+  var PAGE_STATE_REFETCH_DEBOUNCE_MS = 500;
+  var PAGE_STATE_FAIL_NOTICE = 3;
+  var PAGE_STATE_UNSAVED_SENTENCE = "Page data can't be saved right now. Changes last until you close this design.";
+  var PAGE_STATE_CAP_SENTENCE = "This design tried to save more than 1 MB of page data. The extra wasn't saved.";
+  var PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE = "Saved page data was cleared.";
+  var defaultSchedule = (run, ms) => {
+    const timer = setTimeout(run, ms);
+    return () => clearTimeout(timer);
+  };
+  var documentVisibility2 = () => {
+    if (typeof document === "undefined") return null;
+    return {
+      hidden: () => document.hidden,
+      onChange: (listener) => {
+        document.addEventListener("visibilitychange", listener);
+        return () => document.removeEventListener("visibilitychange", listener);
+      }
+    };
+  };
+  var splitPageStateDelta = (gen, clear, changes2) => {
+    const dropped = [];
+    const groups = [];
+    let current = [];
+    let length = JSON.stringify({ gen, clear, changes: [] }).length;
+    const close = () => {
+      if (current.length > 0) groups.push(current);
+      current = [];
+      length = JSON.stringify({ gen, clear: false, changes: [] }).length;
+    };
+    for (const change of changes2) {
+      const cost = JSON.stringify(change).length + (current.length === 0 ? 0 : 1);
+      if (current.length === 0 && length + cost > UPLOAD_TOTAL_MAX) {
+        dropped.push(change);
+        continue;
+      }
+      if (current.length > 0 && (current.length >= PAGE_STATE_CHANGES_MAX || length + cost > UPLOAD_TOTAL_MAX)) close();
+      current.push(change);
+      length += cost;
+    }
+    close();
+    if (groups.length === 0) return { deltas: clear ? [{ clear, changes: [] }] : [], dropped };
+    return { deltas: groups.map((group, index) => ({ clear: clear && index === 0, changes: group })), dropped };
+  };
+  var pageStateDiff = (before, after, dirty) => {
+    const changes2 = [];
+    for (const [key, value] of after) {
+      if (dirty.has(key)) continue;
+      if (before.get(key) !== value) changes2.push([key, value]);
+    }
+    for (const key of before.keys()) {
+      if (dirty.has(key) || after.has(key)) continue;
+      changes2.push([key, null]);
+    }
+    return changes2;
+  };
+  var sizeOf = (key, value) => key.length + (value === null ? 0 : value.length);
+  var createPageStateController = (deps) => {
+    const { client: client2, slug, onNotice, syncFrames, reloadFrames } = deps;
+    const now = deps.now ?? Date.now;
+    const schedule = deps.schedule ?? defaultSchedule;
+    const visibility = deps.visibility === void 0 ? documentVisibility2() : deps.visibility;
+    const loadTimeoutMs = deps.loadTimeoutMs ?? PAGE_STATE_LOAD_TIMEOUT_MS;
+    let items = /* @__PURE__ */ new Map();
+    let chars = 0;
+    let gen = "";
+    let persist = false;
+    let disposed = false;
+    let dirty = /* @__PURE__ */ new Map();
+    let dirtyClear = false;
+    let failures = 0;
+    let lastFlushAt = null;
+    let flushTimer = null;
+    let inflight = null;
+    let clearing = false;
+    let refetchTimer = null;
+    let unwatchVisibility = null;
+    const shown = /* @__PURE__ */ new Set();
+    const noticeOnce = (kind, message) => {
+      if (shown.has(kind)) return;
+      shown.add(kind);
+      onNotice({ id: "page-data", kind, message });
+    };
+    const adopt = (answer) => {
+      items = new Map(answer.items);
+      chars = answer.chars;
+      gen = answer.gen;
+    };
+    const load = () => new Promise((resolve) => {
+      let settled2 = false;
+      let cancelTimeout = null;
+      const finish = (answer) => {
+        if (settled2 || disposed) return;
+        settled2 = true;
+        cancelTimeout?.();
+        if (answer) {
+          adopt(answer);
+          persist = true;
+        } else {
+          items = /* @__PURE__ */ new Map();
+          chars = 0;
+          persist = false;
+          noticeOnce("unsaved", PAGE_STATE_UNSAVED_SENTENCE);
+        }
+        resolve();
+      };
+      cancelTimeout = schedule(() => finish(null), loadTimeoutMs);
+      client2.call("GET /designs/:slug/page-state", { params: { slug } }).then((answer) => finish(answer)).catch(() => finish(null));
+    });
+    const cancelFlushTimer = () => {
+      flushTimer?.();
+      flushTimer = null;
+    };
+    const scheduleFlush = () => {
+      if (flushTimer !== null || disposed || !persist) return;
+      const wait = lastFlushAt === null ? 0 : Math.max(0, lastFlushAt + PAGE_STATE_FLUSH_MS - now());
+      flushTimer = schedule(() => {
+        flushTimer = null;
+        void runFlush();
+      }, wait);
+    };
+    const sendDelta = async (delta) => {
+      const json = JSON.stringify({ gen, ...delta });
+      let body;
+      if (fitsOneRequest(json)) body = { gen, ...delta };
+      else {
+        const uploadId = await client2.upload(json);
+        body = { gen, uploadId };
+      }
+      const answer = await client2.call("PATCH /designs/:slug/page-state", { params: { slug }, body });
+      gen = answer.gen;
+    };
+    const dropDirty = () => {
+      dirty.clear();
+      dirtyClear = false;
+      cancelFlushTimer();
+    };
+    const handleStaleClear = async () => {
+      dropDirty();
+      try {
+        const answer = await client2.call("GET /designs/:slug/page-state", { params: { slug } });
+        adopt(answer);
+        persist = true;
+      } catch {
+        persist = false;
+        noticeOnce("unsaved", PAGE_STATE_UNSAVED_SENTENCE);
+      }
+      dropDirty();
+      reloadFrames();
+      noticeOnce("cleared-elsewhere", PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE);
+    };
+    const runFlush = async () => {
+      if (inflight) return;
+      if (disposed || !persist || dirty.size === 0 && !dirtyClear) return;
+      const clear2 = dirtyClear;
+      const changes2 = [...dirty];
+      dirty = /* @__PURE__ */ new Map();
+      dirtyClear = false;
+      lastFlushAt = now();
+      const { deltas, dropped } = splitPageStateDelta(gen, clear2, changes2);
+      if (dropped.length > 0) noticeOnce("cap", PAGE_STATE_CAP_SENTENCE);
+      const task = (async () => {
+        for (const delta of deltas) await sendDelta(delta);
+      })();
+      inflight = task;
+      try {
+        await task;
+        failures = 0;
+      } catch (error) {
+        if (isServiceError(error, "stale")) {
+          await handleStaleClear();
+        } else if (isServiceError(error, "too-large")) {
+          noticeOnce("cap", PAGE_STATE_CAP_SENTENCE);
+        } else if (!clearing) {
+          dirtyClear = dirtyClear || clear2;
+          for (const [key, value] of changes2) if (!dirty.has(key)) dirty.set(key, value);
+          failures += 1;
+          if (failures >= PAGE_STATE_FAIL_NOTICE) noticeOnce("unsaved", PAGE_STATE_UNSAVED_SENTENCE);
+        }
+      } finally {
+        inflight = null;
+      }
+      if (dirty.size > 0 || dirtyClear) scheduleFlush();
+    };
+    const flush = async () => {
+      cancelFlushTimer();
+      if (inflight) await inflight.catch(() => void 0);
+      await runFlush();
+    };
+    const apply = (board, batch) => {
+      if (disposed || !persist) return;
+      if (batch.clear) {
+        items.clear();
+        chars = 0;
+        dirty.clear();
+        dirtyClear = true;
+      }
+      const accepted = [];
+      let capped2 = false;
+      for (const [key, value] of batch.changes) {
+        const old = items.get(key);
+        const before = old === void 0 ? 0 : sizeOf(key, old);
+        const next = chars + sizeOf(key, value) - before;
+        if (next > PAGE_STATE_MAX_CHARS) {
+          capped2 = true;
+          continue;
+        }
+        if (value === null) items.delete(key);
+        else items.set(key, value);
+        chars = next;
+        dirty.set(key, value);
+        accepted.push([key, value]);
+      }
+      if (capped2) noticeOnce("cap", PAGE_STATE_CAP_SENTENCE);
+      if (batch.clear || accepted.length > 0) syncFrames({ clear: batch.clear, changes: accepted }, board);
+      scheduleFlush();
+    };
+    const refetch = async () => {
+      if (disposed) return;
+      let answer;
+      try {
+        answer = await client2.call("GET /designs/:slug/page-state", { params: { slug } });
+      } catch {
+        return;
+      }
+      if (disposed) return;
+      if (isOlderClear(gen, answer.gen)) {
+        dirty.clear();
+        dirtyClear = false;
+        cancelFlushTimer();
+        adopt(answer);
+        persist = true;
+        reloadFrames();
+        noticeOnce("cleared-elsewhere", PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE);
+        return;
+      }
+      gen = answer.gen;
+      if (dirtyClear) return;
+      const before = items;
+      const fetched = new Map(answer.items);
+      const changes2 = pageStateDiff(before, fetched, dirty);
+      items = fetched;
+      for (const [key, value] of dirty) {
+        if (value === null) items.delete(key);
+        else items.set(key, value);
+      }
+      chars = pageStateChars(items);
+      if (changes2.length > 0) syncFrames({ clear: false, changes: changes2 }, null);
+    };
+    const scheduleRefetch = () => {
+      refetchTimer?.();
+      refetchTimer = schedule(() => {
+        refetchTimer = null;
+        void refetch();
+      }, PAGE_STATE_REFETCH_DEBOUNCE_MS);
+    };
+    const applyChanges = (batch) => {
+      if (disposed) return;
+      if (batch.reset) {
+        scheduleRefetch();
+        return;
+      }
+      for (const event of batch.events) {
+        if (event.kind === "page-state" && event.slug === slug) {
+          scheduleRefetch();
+          return;
+        }
+      }
+    };
+    const clear = async () => {
+      cancelFlushTimer();
+      clearing = true;
+      try {
+        if (inflight) await inflight.catch(() => void 0);
+        dirty.clear();
+        dirtyClear = false;
+        const answer = await client2.call("DELETE /designs/:slug/page-state", { params: { slug } });
+        gen = answer.gen;
+        items.clear();
+        chars = 0;
+        reloadFrames();
+        return answer;
+      } finally {
+        clearing = false;
+      }
+    };
+    if (visibility) {
+      unwatchVisibility = visibility.onChange(() => {
+        if (visibility.hidden()) void flush();
+      });
+    }
+    return {
+      load,
+      init: () => ({ persist, items: [...items] }),
+      apply,
+      applyChanges,
+      flush,
+      clear,
+      chars: () => chars,
+      persisting: () => persist,
+      dispose: async () => {
+        if (disposed) return;
+        await flush();
+        disposed = true;
+        cancelFlushTimer();
+        refetchTimer?.();
+        refetchTimer = null;
+        unwatchVisibility?.();
+        unwatchVisibility = null;
+      }
+    };
+  };
+
+  // src/ui/model/page-state-model.ts
+  var PAGE_DATA_CLEAR_LABEL = "Clear saved page data";
+  var pageDataEntry = (input) => {
+    if (!input.persisting || input.chars <= 0) return "hidden";
+    return input.viewing ? "disabled" : "enabled";
+  };
+  var PAGE_DATA_DISABLED_REASON = "Not while viewing a version";
+  var clearDialogTitle = (designTitle) => `Clear saved page data for ${designTitle}?`;
+  var CLEAR_DIALOG_BODY = "Ticks, toggles and filters this design saved will be reset. This can't be undone.";
+  var CLEAR_DIALOG_CONFIRM = "Clear";
+  var clearFailureText = (reason) => `Couldn\u2019t clear the saved page data. ${reason}`;
+  var BACKGROUND_MS = 1e4;
+  var CLEARED_MS = 5e3;
+  var UNSAVED_TITLE = "Page data can't be saved right now.";
+  var UNSAVED_BODY = "Changes last until you close this design.";
+  var CLEARED_SENTENCE = "Saved page data cleared.";
+  var pageDataNotice = (kind) => {
+    switch (kind) {
+      case "unsaved":
+        return { tone: "warning", title: UNSAVED_TITLE, body: UNSAVED_BODY, ttlMs: BACKGROUND_MS };
+      case "cap":
+        return { tone: "warning", title: PAGE_STATE_CAP_SENTENCE, ttlMs: BACKGROUND_MS };
+      case "cleared-elsewhere":
+        return { tone: "info", title: PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE, ttlMs: BACKGROUND_MS };
+      case "cleared":
+        return { tone: "success", title: CLEARED_SENTENCE, ttlMs: CLEARED_MS };
+    }
+  };
+
   // src/ui/model/viewer-menu.ts
   var reveal2 = { id: "reveal", label: "Reveal in folder" };
   var copyPath2 = { id: "path", label: "Copy path" };
   var rename = { id: "rename", label: "Rename" };
   var remove = { id: "delete", label: "Delete\u2026", destructive: true };
-  var baseEntries = () => [reveal2, copyPath2, rename, { separator: true }, remove];
+  var askTweaks = { id: "ask-tweaks", label: ASK_FOR_TWEAKS_LABEL };
+  var clearPageData = (state) => state === "enabled" || state === "disabled" ? [{ id: "page-data", label: PAGE_DATA_CLEAR_LABEL, ...state === "disabled" ? { disabled: true, reason: PAGE_DATA_DISABLED_REASON } : {} }] : [];
+  var baseEntries = (pageData) => [reveal2, copyPath2, ...clearPageData(pageData), rename, { separator: true }, remove];
   var viewerMenuEntries = (input) => {
+    const ask = input.askForTweaks ? [askTweaks] : [];
     if (input.compact) {
       return [
         { id: "chat", label: "Continue in chat" },
+        ...ask,
         { separator: true },
         { id: "zip", label: "Export ZIP" },
         { id: "html", label: input.isPage ? "Export single-file HTML" : "Export screen as HTML\u2026" },
         ...input.isPage ? [{ id: "copy-html", label: "Copy HTML", disabled: input.copyHtmlTooLarge, hint: input.copyHtmlTooLarge ? "too large" : void 0 }] : [],
         copyPath2,
         reveal2,
+        ...clearPageData(input.pageData),
         rename,
         { separator: true },
         remove
       ];
     }
-    return input.isPage ? baseEntries() : [{ id: "zip", label: "Export ZIP" }, { id: "html", label: "Export screen as HTML\u2026" }, { separator: true }, ...baseEntries()];
+    const rest = input.isPage ? baseEntries(input.pageData) : [{ id: "zip", label: "Export ZIP" }, { id: "html", label: "Export screen as HTML\u2026" }, { separator: true }, ...baseEntries(input.pageData)];
+    return input.askForTweaks ? [askTweaks, { separator: true }, ...rest] : rest;
   };
 
   // src/ui/model/wall-model.ts
@@ -5931,12 +7511,12 @@ ${GUEST_UI_LOOK_CSS}`;
     y: camera.y + (board.y + frame.y) * camera.scale
   });
   var contains = (board, world) => world.x >= board.x && world.y >= board.y && world.x <= board.x + board.w && world.y <= board.y + board.h;
-  var screenToWorld = (camera, screen) => ({
+  var screenToWorld2 = (camera, screen) => ({
     x: (screen.x - camera.x) / camera.scale,
     y: (screen.y - camera.y) / camera.scale
   });
   var boardAt = (camera, boards, screen) => {
-    const world = screenToWorld(camera, screen);
+    const world = screenToWorld2(camera, screen);
     for (let index = boards.length - 1; index >= 0; index -= 1) {
       const board = boards[index];
       if (board && contains(board.rect, world)) return board;
@@ -5959,7 +7539,7 @@ ${GUEST_UI_LOOK_CSS}`;
       const sw = board.rect.w * camera.scale;
       const sh = board.rect.h * camera.scale;
       const on = sx + sw >= left && sx <= right && sy + sh >= top && sy <= bottom;
-      const distance = Math.hypot(sx + sw / 2 - centre.x, sy + sh / 2 - centre.y);
+      const distance = Math.round(Math.hypot(sx + sw / 2 - centre.x, sy + sh / 2 - centre.y));
       return { board, on, distance };
     }).filter((entry) => entry.on).sort((a, b) => a.distance - b.distance);
     return visible.slice(0, Math.max(1, budget)).map((entry) => entry.board);
@@ -6193,6 +7773,17 @@ ${GUEST_UI_LOOK_CSS}`;
         paint();
       },
       selection: () => selection2,
+      setText: (text) => {
+        area.value = text;
+        showFailure(null);
+        showStatus("");
+        fit();
+        paint();
+      },
+      focus: () => {
+        area.focus();
+        area.setSelectionRange(area.value.length, area.value.length);
+      },
       setLink: (next) => {
         link = next;
         paint();
@@ -6200,6 +7791,11 @@ ${GUEST_UI_LOOK_CSS}`;
       setViewing: (next) => {
         viewing = next;
         paint();
+      },
+      setQuiet: (quiet) => {
+        if (quiet) delete send.el.dataset.emphasis;
+        else send.el.dataset.emphasis = "primary";
+        send.el.dataset.variant = quiet ? "outline" : "default";
       },
       dispose: () => {
         clearTimeout(statusTimer);
@@ -6209,6 +7805,8 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/ui/wall/feature-ask-bar.ts
+  var bars = /* @__PURE__ */ new WeakMap();
+  var askBarFor = (wall) => bars.get(wall);
   var mount = (ctx) => {
     const bar = createAskBar({
       surface: ctx.surface,
@@ -6246,7 +7844,9 @@ ${GUEST_UI_LOOK_CSS}`;
     syncLink();
     syncViewing();
     ctx.slots.bottomDock.append(bar.el);
+    bars.set(ctx.wall, bar);
     return () => {
+      bars.delete(ctx.wall);
       offSelection();
       modeWatch.disconnect();
       offDetail();
@@ -6296,6 +7896,7 @@ ${GUEST_UI_LOOK_CSS}`;
     let restored = false;
     for (const event of events) {
       if (event.slug !== slug) continue;
+      if (event.origin === "user") continue;
       if (event.kind === "added") created = true;
       else if (event.kind === "files") {
         if (event.files) files.push(...event.files);
@@ -6663,11 +8264,14 @@ ${GUEST_UI_LOOK_CSS}`;
 
   // src/ui/wall/feature-build-strip.ts
   var REPAINT_MS = 1e3;
+  var watchers = /* @__PURE__ */ new WeakMap();
+  var buildActivityFor = (wall) => watchers.get(wall);
   var sameSet = (a, b) => a === b || a !== null && b !== null && a.size === b.size && [...a].every((value) => b.has(value));
   var mount2 = (ctx) => {
     const compact = ctx.surface === "panel";
     ctx.slots.overlay.parentElement?.prepend(ctx.slots.overlay);
     const watcher = watchBuildActivity({ host: guestHost, feed, slug: ctx.slug, detail: ctx.detail, onDetail: ctx.onDetail });
+    watchers.set(ctx.wall, watcher);
     const strip = mountBuildStrip(ctx.slots.overlay, {
       compact,
       onOpenChat: () => void continueInChat(ctx.slug),
@@ -6722,6 +8326,7 @@ ${GUEST_UI_LOOK_CSS}`;
       if (recentFiles.length > 0) setLit(sourcesOf());
     });
     return () => {
+      watchers.delete(ctx.wall);
       unfeed();
       undetail();
       unwatch();
@@ -6786,6 +8391,16 @@ ${GUEST_UI_LOOK_CSS}`;
     "token-hardcoded": {
       severity: "info",
       sentence: (f) => `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although tokens.css defines colours.`
+    },
+    "tweak-broken": {
+      severity: "warning",
+      sentence: (f) => {
+        const field2 = f.params?.field ?? "?";
+        if (f.params?.tweak === "missing") return `design.json: the tweak for ${field2} names a variable tokens.css does not define.`;
+        if (f.params?.tweak === "formula") return `design.json: the tweak for ${field2} points at a formula in tokens.css (calc() or var()), so it can't be tuned.`;
+        if (f.params?.tweak === "unit") return `design.json: the tweak for ${field2} uses a different unit than tokens.css.`;
+        return "design.json declares tweaks, but the design has no tokens.css.";
+      }
     },
     "check-partial": { severity: "info", sentence: () => "Some files were not checked in time." }
   };
@@ -6863,8 +8478,8 @@ ${GUEST_UI_LOOK_CSS}`;
     add({ id: "warnings", title: GROUP_TITLES.warnings, tone: "warning", collapsed: false }, current.filter((finding) => finding.severity === "warning"));
     add({ id: "notes", title: GROUP_TITLES.notes, tone: "info", collapsed: true }, current.filter((finding) => finding.severity === "info"));
     if (!counted) {
-      const title = response.render.state === "running" ? GROUP_TITLES.running : GROUP_TITLES.stale;
-      add({ id: "earlier", title, tone: "muted", collapsed: true }, sortFindings(render));
+      const title2 = response.render.state === "running" ? GROUP_TITLES.running : GROUP_TITLES.stale;
+      add({ id: "earlier", title: title2, tone: "muted", collapsed: true }, sortFindings(render));
     }
     return groups;
   };
@@ -6961,14 +8576,14 @@ ${GUEST_UI_LOOK_CSS}`;
     const createGroup = (entry) => {
       const list = h("ul", { class: "dc-checks-list" });
       if (!entry.collapsed) {
-        const title2 = h("h3", { class: "dc-checks-group-title" });
-        return { el: h("section", { class: "dc-checks-group" }, title2, list), title: title2, list, collapsed: false, signature: "" };
+        const title3 = h("h3", { class: "dc-checks-group-title" });
+        return { el: h("section", { class: "dc-checks-group" }, title3, list), title: title3, list, collapsed: false, signature: "" };
       }
-      const title = h("summary", { class: "dc-checks-group-title" });
-      const details = h("details", { class: "dc-checks-group" }, title, list);
+      const title2 = h("summary", { class: "dc-checks-group-title" });
+      const details = h("details", { class: "dc-checks-group" }, title2, list);
       details.open = opened.has(entry.id);
       details.addEventListener("toggle", () => void (details.open ? opened.add(entry.id) : opened.delete(entry.id)));
-      return { el: details, title, list, collapsed: true, signature: "" };
+      return { el: details, title: title2, list, collapsed: true, signature: "" };
     };
     const groupNode = (entry) => {
       let node = nodes.get(entry.id);
@@ -7216,8 +8831,795 @@ ${view2.error.message}` : "";
     };
   };
 
-  // src/ui/wall/feature-findability.ts
+  // src/ui/model/wall-input.ts
+  var ZOOM_KEY_FACTOR = 1.25;
+  var shortcutAction = (input) => {
+    const { key, shift } = input;
+    if (key === "Escape") return { type: "escape" };
+    if (input.pageMode) return null;
+    if (key === "+" || key === "=") return { type: "zoom", factor: ZOOM_KEY_FACTOR };
+    if (key === "-" || key === "_") return { type: "zoom", factor: 1 / ZOOM_KEY_FACTOR };
+    if (key === "0" && shift) return { type: "zoom-reset" };
+    if (key === "1" && shift) return { type: "fit" };
+    if (key === " ") return { type: "space-down" };
+    return null;
+  };
+  var wallKeyAction = (input) => {
+    const { key, code, shift } = input;
+    if (isUndoEditKey({ key, shift, ctrl: input.ctrl ?? false, meta: input.meta ?? false, alt: input.alt ?? false, inField: input.inField ?? false })) return { type: "undo-edit" };
+    if (input.pageMode) return shortcutAction(input);
+    const step = nudgeStep(shift);
+    if (code === "Digit0" && shift) return { type: "zoom-reset" };
+    if (code === "Digit1" && shift) return { type: "fit" };
+    if (key === "ArrowLeft") return { type: "pan", dx: step, dy: 0 };
+    if (key === "ArrowRight") return { type: "pan", dx: -step, dy: 0 };
+    if (key === "ArrowUp") return { type: "pan", dx: 0, dy: step };
+    if (key === "ArrowDown") return { type: "pan", dx: 0, dy: -step };
+    if (key.toLowerCase() === "h") return { type: "toggle-pan-tool" };
+    if (key === " " || key === "+" || key === "=" || key === "-" || key === "Escape") return shortcutAction(input);
+    return null;
+  };
+  var isUndoEditKey = (input) => !input.inField && (input.ctrl || input.meta) && !input.shift && !input.alt && input.key.toLowerCase() === "z";
+  var pageKeyAction = (input) => {
+    const step = nudgeStep(input.shift);
+    const screenful = Math.max(40, Math.round(input.frameHeight * 0.9));
+    switch (input.key) {
+      case "Escape":
+        return { type: "escape" };
+      case "ArrowUp":
+        return { type: "scroll-by", dx: 0, dy: -step };
+      case "ArrowDown":
+        return { type: "scroll-by", dx: 0, dy: step };
+      case "ArrowLeft":
+        return { type: "scroll-by", dx: -step, dy: 0 };
+      case "ArrowRight":
+        return { type: "scroll-by", dx: step, dy: 0 };
+      case "PageUp":
+        return { type: "scroll-by", dx: 0, dy: -screenful };
+      case "PageDown":
+        return { type: "scroll-by", dx: 0, dy: screenful };
+      case "Home":
+        return { type: "scroll-to", x: 0, y: 0 };
+      case "End":
+        return { type: "scroll-by", dx: 0, dy: 1e7 };
+      default:
+        return null;
+    }
+  };
+  var wheelRoute = (input) => {
+    if (input.pageMode) return !input.ctrlOrMeta && input.overReadyBoard ? "scroll-frame" : "none";
+    if (input.ctrlOrMeta) return "zoom";
+    if (input.mode === "edit" && !input.readOnly && input.overReadyBoard && !input.spaceDown && !input.panTool) return "scroll-frame";
+    return "pan";
+  };
+  var frameWheelRoute = (input) => {
+    const scrolls = input.mode === "edit" && !input.readOnly;
+    if (input.pageMode) return !input.ctrl && scrolls ? "scroll-frame" : "none";
+    if (input.ctrl) return "zoom";
+    return scrolls ? "scroll-frame" : "pan";
+  };
+  var pointerDownAction = (input) => {
+    if (input.pageMode) {
+      if (input.button !== 0) return "ignore";
+      return input.onBoard && input.mode === "edit" && !input.readOnly ? "press" : "dismiss";
+    }
+    const wantsPan = input.button === 1 || input.spaceDown || input.panTool || !input.onBoard || input.mode === "play" || input.readOnly;
+    if (input.button !== 0 && input.button !== 1) return "ignore";
+    return wantsPan ? "pan" : "press";
+  };
+  var DRAG_THRESHOLD_PX = 4;
+  var isDrag = (from, to) => Math.hypot(to.x - from.x, to.y - from.y) > DRAG_THRESHOLD_PX;
+  var hitMatches = (pending, board, x, y) => pending !== null && pending.board === board && pending.frame.x === x && pending.frame.y === y;
+  var frameModeOf = (mode, readOnly) => readOnly ? "play" : mode;
+  var UNDO_VIEWING_TEXT = "You're viewing an old version.";
+  var nextUndoSlot = (slot, event, viewing = false) => {
+    if (event.type === "edited") return { slot: event.id, undo: null, refusal: null };
+    if (viewing) return { slot, undo: null, refusal: UNDO_VIEWING_TEXT };
+    switch (event.type) {
+      case "undo-key":
+        return { slot: null, undo: slot, refusal: null };
+      case "notice-undo":
+        return { slot: slot === event.id ? null : slot, undo: null, refusal: null };
+    }
+  };
+
+  // src/ui/components/edit-notice.ts
+  var UNDONE_NOTICE_MS = 5e3;
+  var createEditNotice = (options) => {
+    const { notices } = options;
+    let disposed = false;
+    let offViewing = null;
+    const keepFocus = () => {
+      const active2 = document.activeElement;
+      if (!active2 || active2 === document.body) options.focusWall();
+    };
+    const run = async (editId, spinner) => {
+      spinner?.set({ loading: true });
+      try {
+        await options.undo(editId);
+        if (disposed) return;
+        notices.setTransient("edit", banner({ tone: "success", title: UNDONE_TEXT }), UNDONE_NOTICE_MS);
+        options.focusWall();
+      } catch (error) {
+        if (disposed) return;
+        showError("Couldn\u2019t undo that edit", errorText2(error)).focus();
+      }
+    };
+    const showError = (title2, message) => {
+      const dismiss = btn({
+        label: "Dismiss",
+        variant: "ghost",
+        size: "xs",
+        onClick: () => {
+          notices.setTransient("edit", null);
+          options.focusWall();
+        }
+      });
+      const wrap = h("div", { class: "dc-banner dc-edit-notice", "data-actions": "stack" });
+      wrap.append(...bannerWithActions("error", title2, [message], [dismiss.el]));
+      notices.setTransient("edit", wrap);
+      return dismiss.el;
+    };
+    return {
+      saved: (edit) => {
+        const wrap = h("div", { class: "dc-banner dc-edit-notice", "data-actions": "stack" });
+        const buttons = [];
+        let sync = () => {
+        };
+        if (edit.undoable) {
+          const undoButton = btn({
+            label: "Undo",
+            variant: "outline",
+            size: "xs",
+            title: "Undo this edit",
+            onClick: () => {
+              if (options.viewing()) return;
+              options.onNoticeUndo(edit.id);
+              void run(edit.id, undoButton);
+            }
+          });
+          buttons.push(undoButton.el);
+          offViewing?.();
+          sync = () => {
+            const viewing = options.viewing();
+            undoButton.set({ disabled: viewing, title: viewing ? UNDO_VIEWING_TEXT : "Undo this edit" });
+            const body = wrap.querySelector(".oc-sdk-banner-body");
+            if (!body) return;
+            body.textContent = viewing ? UNDO_VIEWING_TEXT : "";
+            body.hidden = !viewing;
+          };
+          offViewing = options.onViewing(() => sync());
+        }
+        wrap.append(...bannerWithActions("success", edit.label, [], buttons));
+        sync();
+        notices.setTransient("edit", wrap, USER_EDIT_NOTICE_MS);
+        keepFocus();
+      },
+      undo: (editId) => run(editId, null),
+      refused: (sentence2) => {
+        notices.setTransient("edit", banner({ tone: "warning", title: sentence2 }), UNDONE_NOTICE_MS);
+        keepFocus();
+      },
+      failed: (title2, message) => void showError(title2, message),
+      dispose: () => {
+        disposed = true;
+        offViewing?.();
+      }
+    };
+  };
+
+  // src/ui/wall/feature-undo.ts
+  var slots = /* @__PURE__ */ new WeakMap();
+  var undoSlotFor = (wall) => {
+    const found = slots.get(wall);
+    if (found) return found;
+    let slot = null;
+    const created = {
+      edited: (id) => {
+        slot = nextUndoSlot(slot, { type: "edited", id }).slot;
+      },
+      noticeUndo: (id) => {
+        slot = nextUndoSlot(slot, { type: "notice-undo", id }).slot;
+      },
+      key: (viewing) => {
+        const next = nextUndoSlot(slot, { type: "undo-key" }, viewing);
+        slot = next.slot;
+        return { undo: next.undo, refusal: next.refusal };
+      }
+    };
+    slots.set(wall, created);
+    return created;
+  };
+
+  // src/ui/wall/feature-directions.ts
+  var ROW_CHANGED_MESSAGE = "The directions changed while you were looking. Nothing was changed.";
   var mount4 = (ctx) => {
+    if (ctx.isPage) return () => void 0;
+    const { wall, slug } = ctx;
+    let disposed = false;
+    const undoSlot = undoSlotFor(wall);
+    const notice = createEditNotice({
+      notices: ctx.notices,
+      undo: async (editId) => {
+        await store.undoEdit(slug, editId);
+      },
+      onNoticeUndo: undoSlot.noticeUndo,
+      focusWall: () => wall.focus(),
+      viewing: () => ctx.viewing() !== null,
+      onViewing: ctx.onViewing
+    });
+    const refresh = async () => {
+      try {
+        await store.refreshOpenDesign();
+      } catch {
+      }
+    };
+    const keep = async (press) => {
+      if (ctx.viewing() !== null) return;
+      const detail = ctx.detail();
+      const row = planDirections(detail.design.screens, detail.design.viewports, () => void 0).rows.get(press.of);
+      const kept = row === void 0 ? void 0 : [row.root, ...row.members].find((screen) => screen.id === press.keep);
+      const failTitle = kept?.direction ? `Couldn\u2019t keep direction ${kept.direction.letter}` : "Couldn\u2019t keep the current screen";
+      if (detail.screensStamp === null) {
+        notice.failed(failTitle, NO_DESIGN_JSON_MESSAGE);
+        return;
+      }
+      if (row === void 0 || kept === void 0) {
+        notice.failed(failTitle, ROW_CHANGED_MESSAGE);
+        void refresh();
+        return;
+      }
+      wall.setScreensBusy({ id: press.keep });
+      try {
+        const response = await store.applyEdit(slug, keepRequest({ stamp: detail.screensStamp, row, keep: press.keep, files: detail.files.screens }));
+        if (disposed) return;
+        if (response.edit.undoable) undoSlot.edited(response.edit.id);
+        notice.saved(keptNotice(response.edit));
+        await refresh();
+        if (!disposed) wall.focus();
+      } catch (error) {
+        if (disposed) return;
+        notice.failed(failTitle, errorText2(error));
+        void refresh();
+      } finally {
+        if (!disposed) wall.setScreensBusy(null);
+      }
+    };
+    const offKeep = ctx.onKeepDirection((press) => void keep(press));
+    return () => {
+      disposed = true;
+      offKeep();
+      notice.dispose();
+    };
+  };
+
+  // src/ui/wall/selection-toolbar.ts
+  var createSelectionToolbar = (options) => {
+    const reasonId = nextId2("dc-seltoolbar-reason");
+    const reason = h("p", { class: "dc-seltoolbar-reason", id: reasonId, hidden: true });
+    let edit = { kind: "checking" };
+    const make = (action, label, icon3) => {
+      const handle = btn({
+        label,
+        variant: "ghost",
+        size: "xs",
+        icon: icon3,
+        title: label,
+        onClick: () => {
+          if (action === "edit" && edit.kind !== "ready") return;
+          options.onAction(action);
+        }
+      });
+      handle.el.setAttribute("aria-label", label);
+      handle.el.dataset.action = action;
+      handle.el.tabIndex = -1;
+      return { action, label, icon: icon3, handle };
+    };
+    const items = [make("edit", "Edit text", "pencil"), make("comment", "Comment", "comment"), make("ask", "Ask agent", "chat")];
+    const [editItem, commentItem] = items;
+    if (commentItem) commentItem.handle.el.dataset.current = "true";
+    const row = h("div", { class: "dc-seltoolbar-row", role: "toolbar", "aria-label": options.name, "aria-orientation": "horizontal" }, ...items.map((item) => item.handle.el));
+    const el2 = h("div", { class: "dc-seltoolbar", "data-labels": String(options.labels) }, row, reason);
+    let current = 0;
+    const setCurrent = (index, focus) => {
+      current = (index + items.length) % items.length;
+      items.forEach((item, at) => {
+        item.handle.el.tabIndex = at === current ? 0 : -1;
+      });
+      if (focus) items[current]?.handle.el.focus();
+    };
+    setCurrent(0, false);
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowRight") setCurrent(current + 1, true);
+      else if (event.key === "ArrowLeft") setCurrent(current - 1, true);
+      else if (event.key === "Home") setCurrent(0, true);
+      else if (event.key === "End") setCurrent(items.length - 1, true);
+      else if (event.key === "Escape") options.onEscape();
+      else return;
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    row.addEventListener("focusin", (event) => {
+      const at = items.findIndex((item) => item.handle.el === event.target);
+      if (at >= 0 && at !== current) setCurrent(at, false);
+    });
+    const setEdit = (state) => {
+      edit = state;
+      const button2 = editItem?.handle.el;
+      if (!editItem || !button2) return;
+      editItem.handle.set({ loading: state.kind === "checking" });
+      if (state.kind === "disabled") {
+        button2.setAttribute("aria-disabled", "true");
+        button2.setAttribute("aria-describedby", reasonId);
+        button2.title = state.reason;
+        reason.textContent = state.reason;
+        reason.title = state.reason;
+        reason.hidden = false;
+      } else {
+        button2.removeAttribute("aria-disabled");
+        button2.removeAttribute("aria-describedby");
+        button2.title = editItem.label;
+        reason.textContent = "";
+        reason.hidden = true;
+      }
+      el2.dataset.edit = state.kind;
+    };
+    setEdit(edit);
+    const setLabels = (labels) => {
+      el2.dataset.labels = String(labels);
+    };
+    return {
+      el: el2,
+      setEdit,
+      setLabels,
+      focus: () => items[current]?.handle.el.focus(),
+      dispose: () => el2.remove()
+    };
+  };
+
+  // src/ui/wall/text-editor.ts
+  var MAX_ROWS2 = 8;
+  var createTextEditor = (options) => {
+    const ids = { hint: nextId2("dc-editor-hint"), line: nextId2("dc-editor-line") };
+    let saving = false;
+    let reloading = false;
+    let gone = false;
+    let viewing = false;
+    let counter = "none";
+    let reminding = false;
+    const agent = h("p", { class: "dc-editor-agent", hidden: !options.agentWorking }, AGENT_WORKING_LINE);
+    const nowSays = h("p", { class: "dc-editor-note", hidden: true });
+    const area = h("textarea", {
+      class: "oc-sdk oc-sdk-input dc-editor-input",
+      rows: 1,
+      dir: options.dir,
+      "aria-label": options.label,
+      "aria-describedby": `${ids.hint} ${ids.line}`,
+      spellcheck: true
+    });
+    area.value = options.initial;
+    const line = h("p", { class: "dc-editor-line", id: ids.line, role: "status", hidden: true });
+    const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+    const reload = btn({ label: "Reload and try again", variant: "outline", size: "xs", onClick: () => options.onReload() });
+    const ask = btn({ label: "Ask agent", variant: "outline", size: "xs", icon: "chat", onClick: () => options.onAskAgent() });
+    ask.el.hidden = true;
+    reload.el.hidden = true;
+    const ways = h("div", { class: "dc-editor-ways", hidden: true }, reload.el, ask.el);
+    const hint = h("span", { class: "dc-pop-hint", id: ids.hint }, KEY_HINT);
+    const count = h("span", { class: "dc-editor-count", "aria-hidden": "true", hidden: true });
+    const announce = h("span", { class: "dc-editor-sr", "aria-live": "polite" });
+    const save = btn({ label: "Save", variant: "default", size: "sm", onClick: () => options.onSave() });
+    const el2 = h(
+      "div",
+      { class: "dc-editor", role: "group", "aria-label": "Edit text", style: `width:${options.width}px` },
+      agent,
+      nowSays,
+      area,
+      line,
+      failure,
+      ways,
+      h("div", { class: "dc-editor-foot" }, h("span", { class: "dc-editor-meta" }, hint, count), save.el),
+      announce
+    );
+    const fit = () => {
+      area.style.height = "";
+      if (!area.isConnected) return;
+      const style = getComputedStyle(area);
+      const sum = (...values) => values.reduce((total, value) => total + (Number.parseFloat(value) || 0), 0);
+      const borders = sum(style.borderTopWidth, style.borderBottomWidth);
+      const rowHeight = Number.parseFloat(style.lineHeight);
+      const limit = Number.isFinite(rowHeight) ? rowHeight * MAX_ROWS2 + borders + sum(style.paddingTop, style.paddingBottom) : Number.POSITIVE_INFINITY;
+      area.style.height = `${Math.min(area.scrollHeight + borders, limit)}px`;
+    };
+    const showLine = (text) => {
+      line.hidden = text === null;
+      line.textContent = text ?? "";
+      line.dataset.tone = text === CLICK_AWAY_LINE ? "warning" : "plain";
+    };
+    const paint = () => {
+      const length = area.value.length;
+      const next = counterState(length);
+      count.hidden = next === "none";
+      count.textContent = next === "none" ? "" : counterText(length, next);
+      count.dataset.state = next;
+      const said = counterAnnouncement(counter, next);
+      if (said !== null) announce.textContent = said;
+      counter = next;
+      area.readOnly = saving;
+      el2.setAttribute("aria-busy", String(saving));
+      save.set({ loading: saving, disabled: next === "over" || gone || viewing });
+      reload.set({ disabled: saving || reloading, loading: reloading });
+      ask.set({ disabled: saving || reloading });
+      hint.hidden = gone;
+      agent.hidden = !options.agentWorking;
+      if (gone) return;
+      if (viewing) showLine(reasonSentence("viewing"));
+      else if (!reminding) showLine(null);
+    };
+    const showWays = (withReload, withAsk) => {
+      reload.el.hidden = !withReload;
+      ask.el.hidden = !withAsk;
+      ways.hidden = !withReload && !withAsk;
+    };
+    const setLine = (text) => {
+      reminding = text === CLICK_AWAY_LINE;
+      showLine(text);
+    };
+    area.addEventListener("input", () => {
+      if (reminding) setLine(null);
+      failure.hidden = true;
+      area.removeAttribute("aria-invalid");
+      showWays(false, gone);
+      fit();
+      paint();
+    });
+    area.addEventListener("keydown", (event) => {
+      const composing = event.isComposing || event.keyCode === 229;
+      if (composing) return;
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (!event.shiftKey && !saving) options.onSave();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!saving) options.onCancel();
+      }
+    });
+    area.addEventListener("paste", (event) => {
+      const pasted = event.clipboardData?.getData("text");
+      if (pasted === void 0 || !/[\r\n]/.test(pasted)) return;
+      event.preventDefault();
+      area.setRangeText(pasted.replace(/\r\n|\r|\n/g, " "), area.selectionStart, area.selectionEnd, "end");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    paint();
+    return {
+      el: el2,
+      value: () => area.value,
+      focus: () => {
+        fit();
+        area.focus();
+        area.select();
+      },
+      setWidth: (width) => {
+        el2.style.width = `${width}px`;
+        fit();
+      },
+      setSaving: (next) => {
+        saving = next;
+        if (next) failure.hidden = true;
+        paint();
+      },
+      setRefusal: (refusal) => {
+        failure.hidden = refusal === null;
+        failure.textContent = refusal?.text ?? "";
+        area.setAttribute("aria-invalid", String(refusal !== null));
+        showWays(refusal?.stale === true, gone || refusal?.askAgent === true);
+        paint();
+      },
+      remindClickAway: () => {
+        setLine(CLICK_AWAY_LINE);
+        area.focus();
+        setTimeout(() => {
+          if (area.isConnected && reminding) area.focus();
+        }, 0);
+      },
+      setFileNowSays: (text) => {
+        nowSays.hidden = text === null;
+        nowSays.textContent = text === null ? "" : `The file now says: \u201C${text}\u201D`;
+      },
+      setGone: (sentence2) => {
+        gone = sentence2 !== null;
+        setLine(sentence2);
+        failure.hidden = true;
+        showWays(false, gone);
+        paint();
+      },
+      setReloading: (next) => {
+        reloading = next;
+        paint();
+      },
+      setAgentWorking: (working) => {
+        options.agentWorking = working;
+        paint();
+      },
+      setViewing: (next) => {
+        viewing = next;
+        if (!next) showLine(null);
+        paint();
+      },
+      dispose: () => el2.remove()
+    };
+  };
+
+  // src/ui/wall/feature-edit-text.ts
+  var CARD_GAP = 8;
+  var mount5 = (ctx) => {
+    const { wall, slug } = ctx;
+    const rail = ctx.surface === "panel";
+    let open = { kind: "none" };
+    const undoSlot = undoSlotFor(wall);
+    let disposed = false;
+    const notice = createEditNotice({
+      notices: ctx.notices,
+      undo: async (editId) => {
+        await store.undoEdit(slug, editId);
+      },
+      onNoticeUndo: undoSlot.noticeUndo,
+      focusWall: () => wall.focus(),
+      viewing: () => ctx.viewing() !== null,
+      onViewing: ctx.onViewing
+    });
+    const agentWorking = () => {
+      const watcher2 = buildActivityFor(wall);
+      return watcher2 !== void 0 && agentIsWorking(phaseOf(watcher2.get(), Date.now()));
+    };
+    const placeToolbarFor = (current) => {
+      const el2 = current.toolbar.el;
+      const stage = wall.size();
+      const box = wall.pickBox(current.pick);
+      const place = placeToolbar(box, { w: el2.offsetWidth, h: el2.offsetHeight }, { w: stage.width, h: stage.height });
+      el2.style.left = `${Math.round(place.left)}px`;
+      el2.style.top = `${Math.round(place.top)}px`;
+      el2.dataset.below = String(place.below);
+      const card = wall.cardEl();
+      if (place.below && card) card.style.top = `${Math.round(Math.max(Number.parseFloat(card.style.top) || 0, place.top + el2.offsetHeight + CARD_GAP))}px`;
+    };
+    const closeToolbar = () => {
+      if (open.kind !== "toolbar") return;
+      open.toolbar.dispose();
+      open = { kind: "none" };
+    };
+    const applyCheck = (current, check) => {
+      current.check = check;
+      current.toolbar.setEdit(check.editable ? { kind: "ready" } : { kind: "disabled", reason: reasonSentence(check.reason, check.detail) });
+      placeToolbarFor(current);
+    };
+    const onAction = (action) => {
+      if (open.kind !== "toolbar") return;
+      const { pick, check } = open;
+      if (action === "edit") {
+        if (check?.editable) openEditor(pick, check);
+        return;
+      }
+      if (action === "comment") {
+        wall.openComment(pick);
+        return;
+      }
+      const bar = askBarFor(wall);
+      closeToolbar();
+      wall.closeEmptyCard();
+      if (bar) {
+        bar.setSelection(pick.selection);
+        bar.focus();
+      }
+    };
+    const leave = () => {
+      wall.closeCard();
+      closeToolbar();
+      wall.focus();
+    };
+    const showToolbar = (pick) => {
+      if (open.kind === "toolbar" && open.pick.selection.key === pick.selection.key) {
+        open.pick = pick;
+        open.toolbar.setEdit({ kind: "checking" });
+        placeToolbarFor(open);
+        return;
+      }
+      closeToolbar();
+      const toolbar = createSelectionToolbar({
+        name: toolbarName(pick.element.tag, pick.element.text),
+        labels: toolbarLabels(wall.size().width),
+        onAction,
+        onEscape: leave
+      });
+      wall.overlay.prepend(toolbar.el);
+      open = { kind: "toolbar", pick, toolbar, check: null };
+      placeToolbarFor(open);
+    };
+    const placeEditorFor = (current) => {
+      const el2 = current.editor.el;
+      const stage = wall.size();
+      const box = wall.pickBox(current.pick);
+      current.editor.setWidth(editorWidth({ surface: rail ? "rail" : "page", boxWidth: box.w, stageWidth: stage.width }));
+      const place = placeEditor(box, { w: el2.offsetWidth, h: el2.offsetHeight }, { w: stage.width, h: stage.height }, rail ? "rail" : "page");
+      el2.style.left = `${Math.round(place.left)}px`;
+      el2.style.top = `${Math.round(place.top)}px`;
+    };
+    const closeEditor = () => {
+      if (open.kind !== "editor") return;
+      const current = open;
+      open = { kind: "none" };
+      current.resize.disconnect();
+      current.editor.dispose();
+      wall.setEditing(false);
+      wall.ringPick(null);
+    };
+    const openEditor = (pick, check) => {
+      closeToolbar();
+      closeEditor();
+      wall.closeEmptyCard();
+      const stage = wall.size();
+      const box = wall.pickBox(pick);
+      const editor = createTextEditor({
+        initial: check.before,
+        dir: check.dir,
+        label: `Text of the ${pick.element.tag}`,
+        width: editorWidth({ surface: rail ? "rail" : "page", boxWidth: box.w, stageWidth: stage.width }),
+        agentWorking: agentWorking(),
+        onSave: () => void save(),
+        onCancel: () => {
+          closeEditor();
+          wall.focus();
+        },
+        onReload: () => void reload(),
+        onAskAgent: () => askAgent2()
+      });
+      const resize = new ResizeObserver(() => {
+        if (open.kind === "editor" && open.editor === editor) placeEditorFor(open);
+      });
+      wall.overlay.append(editor.el);
+      open = { kind: "editor", pick, editor, check, saving: false, resize };
+      resize.observe(editor.el);
+      placeEditorFor(open);
+      wall.setEditing(true);
+      wall.ringPick(pick);
+      if (ctx.viewing() !== null) editor.setViewing(true);
+      editor.focus();
+    };
+    const save = async () => {
+      if (open.kind !== "editor" || open.saving || ctx.viewing() !== null) return;
+      const current = open;
+      const decision = saveDecision(current.check.before, current.editor.value());
+      if (decision.kind === "unchanged") {
+        closeEditor();
+        wall.focus();
+        return;
+      }
+      if (decision.kind === "too-long") return;
+      current.saving = true;
+      current.editor.setSaving(true);
+      try {
+        const response = await store.applyEdit(slug, {
+          op: "text",
+          screen: current.pick.screen,
+          base: current.check.base,
+          target: current.check.target,
+          before: current.check.before,
+          after: decision.after
+        });
+        if (disposed) return;
+        if (response.edit.undoable) undoSlot.edited(response.edit.id);
+        closeEditor();
+        notice.saved(response.edit);
+        wall.focus();
+      } catch (error) {
+        if (disposed || open.kind !== "editor" || open !== current) return;
+        current.saving = false;
+        current.editor.setSaving(false);
+        current.editor.setRefusal(refusalOf(describe(error)));
+        current.editor.focus();
+      }
+    };
+    const reload = async () => {
+      if (open.kind !== "editor" || open.saving) return;
+      const current = open;
+      current.editor.setReloading(true);
+      const next = await wall.recheckPick(current.pick);
+      if (disposed || open !== current) return;
+      current.editor.setReloading(false);
+      const outcome = reloadOutcome(current.check.before, next);
+      if (outcome.kind === "ready") {
+        current.check = outcome.check;
+        current.editor.setRefusal(null);
+        current.editor.setFileNowSays(outcome.fileNowSays);
+      } else {
+        current.editor.setGone(outcome.sentence);
+      }
+    };
+    const askAgent2 = () => {
+      if (open.kind !== "editor") return;
+      const { pick, editor } = open;
+      const bar = askBarFor(wall);
+      const typed = editor.value();
+      closeEditor();
+      if (!bar) {
+        wall.focus();
+        return;
+      }
+      bar.setSelection(pick.selection);
+      bar.setText(typed);
+      bar.focus();
+    };
+    const offPick = wall.onPick((pick) => {
+      if (open.kind === "editor") return;
+      showToolbar(pick);
+      const shown = open;
+      if (shown.kind !== "toolbar") return;
+      void pick.check.then((check) => {
+        if (disposed || open !== shown || shown.pick !== pick) return;
+        applyCheck(shown, check);
+        if (pick.purpose === "edit" && check.editable) openEditor(pick, check);
+      });
+    });
+    const offSelection = wall.onSelection((event) => {
+      if (event.type === "cleared") closeToolbar();
+    });
+    const offMoved = wall.onMoved(() => {
+      closeToolbar();
+      if (open.kind === "editor") placeEditorFor(open);
+    });
+    const onPointerDown = (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (open.kind === "toolbar" && !target?.closest(".dc-seltoolbar, .dc-composer")) closeToolbar();
+      if (open.kind !== "editor" || open.saving || target?.closest(".dc-editor")) return;
+      if (hasChange(open.check.before, open.editor.value())) open.editor.remindClickAway();
+      else closeEditor();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    const offUndoKey = wall.onUndoEdit(() => {
+      const { undo, refusal } = undoSlot.key(ctx.viewing() !== null);
+      if (refusal !== null) notice.refused(refusal);
+      else if (undo !== null) void notice.undo(undo);
+    });
+    const offViewing = ctx.onViewing(() => {
+      const viewing = ctx.viewing() !== null;
+      if (open.kind === "toolbar" && viewing) closeToolbar();
+      if (open.kind !== "editor") return;
+      if (viewing && !hasChange(open.check.before, open.editor.value())) {
+        closeEditor();
+        return;
+      }
+      open.editor.setViewing(viewing);
+    });
+    const watcher = buildActivityFor(wall);
+    const offWatch = watcher?.subscribe(() => {
+      if (open.kind === "editor") open.editor.setAgentWorking(agentWorking());
+    });
+    return () => {
+      disposed = true;
+      offPick();
+      offSelection();
+      offMoved();
+      offUndoKey();
+      offViewing();
+      offWatch?.();
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      closeToolbar();
+      closeEditor();
+      notice.dispose();
+    };
+  };
+  var describe = (error) => {
+    if (typeof error === "object" && error !== null && "code" in error && "message" in error) {
+      const status = "status" in error && typeof error.status === "number" ? error.status : null;
+      return { code: String(error.code), message: String(error.message), status };
+    }
+    return { code: "REQUEST_FAILED", message: error instanceof Error ? error.message : "Try again.", status: null };
+  };
+
+  // src/ui/wall/feature-findability.ts
+  var mount6 = (ctx) => {
     if (ctx.surface !== "panel") return () => void 0;
     const chip = btn({ label: "", icon: "comment", variant: "outline", size: "xs", pressed: false, onClick: () => ctx.drawers.toggle("comments") });
     chip.el.classList.add("dc-comments-chip");
@@ -7238,6 +9640,1047 @@ ${view2.error.message}` : "";
       for (const stop of stops) stop();
       chip.el.remove();
       versions.remove();
+    };
+  };
+
+  // src/ui/model/slot-seed.ts
+  var tokenPreviews = /* @__PURE__ */ new Map();
+  var setSlotTokens = (slug, vars) => {
+    if (vars.length === 0) tokenPreviews.delete(slug);
+    else tokenPreviews.set(slug, vars);
+  };
+  var slotTokens = (slug) => tokenPreviews.get(slug) ?? [];
+  var storages = /* @__PURE__ */ new Map();
+  var setSlotStorage = (slug, source) => {
+    storages.set(slug, source);
+    return () => {
+      if (storages.get(slug) === source) storages.delete(slug);
+    };
+  };
+  var slotStorage = (slug) => storages.get(slug);
+  var onReadyMessages = (slug) => [{ type: "set-tokens", vars: [...slotTokens(slug)] }];
+
+  // src/ui/wall/feature-page-state.ts
+  var createPageData = (options) => {
+    const { slug } = options;
+    let notices = null;
+    const waiting = [];
+    let disposed = false;
+    const show = (kind) => {
+      if (!notices) {
+        waiting.push(kind);
+        return;
+      }
+      const notice = pageDataNotice(kind);
+      notices.setTransient("page-data", banner({ tone: notice.tone, title: notice.title, ...notice.body ? { body: notice.body } : {} }), notice.ttlMs);
+    };
+    const controller = createPageStateController({
+      client,
+      slug,
+      onNotice: (notice) => show(notice.kind),
+      syncFrames: (batch, exceptBoard) => options.wall().syncStorage(batch, exceptBoard),
+      // Every live frame comes back through the frame slot, which reads the controller's data again (empty after a Clear).
+      reloadFrames: () => options.wall().reload()
+    });
+    const forget = setSlotStorage(slug, { ready: controller.load(), init: controller.init });
+    const confirmClear = () => {
+      if (options.viewing()) return;
+      confirmDialog(options.dialogHost, {
+        title: clearDialogTitle(options.title()),
+        body: h("p", null, CLEAR_DIALOG_BODY),
+        confirmLabel: CLEAR_DIALOG_CONFIRM,
+        destructive: true,
+        onConfirm: async () => {
+          try {
+            await controller.clear();
+          } catch (error) {
+            throw new Error(clearFailureText(errorText2(error)));
+          }
+          show("cleared");
+        }
+      });
+    };
+    return {
+      entry: () => pageDataEntry({ chars: controller.chars(), persisting: controller.persisting(), viewing: options.viewing() }),
+      confirmClear,
+      mount: (ctx) => {
+        notices = ctx.notices;
+        for (const kind of waiting.splice(0)) show(kind);
+        const stops = [ctx.wall.onStorageBatch((boardId, batch) => controller.apply(boardId, batch)), feed.subscribe((batch) => controller.applyChanges(batch))];
+        return () => {
+          for (const stop of stops) stop();
+          notices = null;
+        };
+      },
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        forget();
+        void controller.dispose();
+      }
+    };
+  };
+
+  // src/ui/components/ask-popover.ts
+  var openAskPopover = (options) => {
+    const ids = { hint: nextId2("dc-ask-pop-hint"), count: nextId2("dc-ask-pop-count") };
+    let sending = false;
+    let closed = false;
+    const popover = openPopover(options.host, options.anchor, {
+      title: options.title,
+      onClose: () => {
+        closed = true;
+        options.onClose?.();
+      }
+    });
+    const area = h("textarea", {
+      class: "oc-sdk oc-sdk-input dc-textarea",
+      rows: 3,
+      "aria-label": options.title,
+      "aria-describedby": `${ids.hint} ${ids.count}`,
+      "aria-keyshortcuts": "Control+Enter Meta+Enter",
+      placeholder: options.placeholder,
+      spellcheck: true
+    });
+    const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+    const hint = h("p", { class: "dc-pop-hint", id: ids.hint }, options.target);
+    const counter = h("span", { class: "dc-pop-count", id: ids.count });
+    const cancel = btn({ label: "Cancel", variant: "ghost", size: "sm", onClick: () => popover.close() });
+    const send = btn({ label: "Ask the agent", variant: "default", size: "sm", emphasis: "primary", onClick: () => void submit() });
+    popover.el.classList.add("dc-ask-pop");
+    popover.body.append(area, failure, h("div", { class: "dc-ask-pop-meta" }, hint, counter));
+    popover.foot.append(h("span", { class: "dc-pop-actions" }, cancel.el, send.el));
+    popover.reposition();
+    const paint = () => {
+      const box = askNoteBox({ typed: area.value, room: options.room, sending });
+      area.readOnly = sending;
+      popover.el.setAttribute("aria-busy", String(sending));
+      send.set({ disabled: !box.canSend, loading: sending });
+      counter.textContent = box.counter ?? "";
+      counter.dataset.state = box.over ? "over" : "ok";
+      counter.hidden = box.counter === null;
+      area.title = box.over ? "Shorten it to send." : "";
+    };
+    const submit = async () => {
+      if (sending || !askNoteBox({ typed: area.value, room: options.room, sending }).canSend) return;
+      sending = true;
+      failure.hidden = true;
+      paint();
+      try {
+        const outcome = await options.send(area.value.trim());
+        sending = false;
+        popover.close();
+        options.onSent(outcome);
+      } catch (error) {
+        sending = false;
+        if (closed) {
+          toast("error", askFailureText(errorText2(error)));
+          return;
+        }
+        failure.textContent = askFailureText(errorText2(error));
+        failure.hidden = false;
+        paint();
+        popover.reposition();
+        area.focus();
+      }
+    };
+    area.addEventListener("input", () => {
+      failure.hidden = true;
+      paint();
+    });
+    area.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+        event.preventDefault();
+        void submit();
+      }
+    });
+    paint();
+    area.focus();
+    return popover;
+  };
+
+  // src/ui/wall/feature-screens.ts
+  var stampOf = (status) => status !== void 0 && status.exists ? { size: status.size, mtime: status.mtime } : null;
+  var NEW_SCREEN_TITLE = "What should the new screen show?";
+  var DIRECTIONS_TITLE = "What should the directions explore? (optional)";
+  var mount7 = (ctx) => {
+    if (ctx.isPage) return () => void 0;
+    const { wall, slug } = ctx;
+    let disposed = false;
+    let askBox = null;
+    const undoSlot = undoSlotFor(wall);
+    const notice = createEditNotice({
+      notices: ctx.notices,
+      undo: async (editId) => {
+        await store.undoEdit(slug, editId);
+      },
+      onNoticeUndo: undoSlot.noticeUndo,
+      focusWall: () => wall.focus(),
+      viewing: () => ctx.viewing() !== null,
+      onViewing: ctx.onViewing
+    });
+    const agentWorking = () => {
+      const watcher = buildActivityFor(wall);
+      return watcher !== void 0 && agentIsWorking(phaseOf(watcher.get(), Date.now()));
+    };
+    const gate = () => {
+      const detail = ctx.detail();
+      return { viewing: ctx.viewing() !== null, designJson: detail.designJson, listInvalid: detail.warnings.some((warning) => warning.code === "invalid-screens") };
+    };
+    const refresh = async () => {
+      try {
+        await store.refreshOpenDesign();
+      } catch {
+      }
+    };
+    const run = async (screenId, action) => {
+      if (ctx.viewing() !== null) return;
+      wall.setScreensBusy({ id: screenId });
+      try {
+        const response = await store.applyEdit(slug, action.request);
+        if (disposed) return;
+        if (response.edit.undoable) undoSlot.edited(response.edit.id);
+        notice.saved(response.edit);
+        await refresh();
+        if (disposed) return;
+        const reveal3 = action.reveal(response);
+        if (reveal3 === null) wall.focus();
+        else wall.revealScreen(reveal3);
+      } catch (error) {
+        if (disposed) return;
+        notice.failed(action.failTitle, errorText2(error));
+        void refresh();
+      } finally {
+        if (!disposed) wall.setScreensBusy(null);
+      }
+    };
+    const stampOrNotice = (failTitle) => {
+      const stamp = ctx.detail().screensStamp;
+      if (stamp === null) notice.failed(failTitle, NO_DESIGN_JSON_MESSAGE);
+      return stamp;
+    };
+    const titleOf = (id) => ctx.detail().design.screens.find((screen) => screen.id === id)?.title ?? id;
+    const reorder = (move, failTitle) => {
+      const stamp = stampOrNotice(failTitle);
+      if (stamp === null) return;
+      void run(move.id, { request: { op: "reorder", screens: stamp, order: move.order }, failTitle, reveal: () => move.id });
+    };
+    const directionPlan = () => {
+      const { design } = ctx.detail();
+      return planDirections(design.screens, design.viewports, () => void 0);
+    };
+    const shift = (id, direction) => {
+      const { screens } = ctx.detail().design;
+      const ids = screens.map((screen) => screen.id);
+      const plan = directionPlan();
+      let order;
+      if (plan.rows.size === 0) order = shiftOrder(ids, id, direction);
+      else {
+        const rowIds = ids.filter((one) => !plan.memberOf.has(one));
+        const at = rowIds.indexOf(id);
+        const moving = /* @__PURE__ */ new Set([id, ...plan.rows.get(id)?.members.map((member) => member.id) ?? []]);
+        order = at < 0 ? null : moveRowToGap(ids, rowIds, id, moving, direction === "up" ? at - 1 : at + 2);
+      }
+      if (order !== null) reorder({ id, order }, `Couldn\u2019t move ${titleOf(id)}`);
+    };
+    const duplicate = (id) => {
+      const failTitle = `Couldn\u2019t duplicate ${titleOf(id)}`;
+      const stamp = stampOrNotice(failTitle);
+      const file = stampOf(ctx.detail().files.screens[id]);
+      if (stamp === null) return;
+      if (file === null) {
+        notice.failed(failTitle, "Nothing to copy until the agent writes this screen.");
+        return;
+      }
+      void run(id, { request: { op: "duplicate", screens: stamp, id, file }, failTitle, reveal: (response) => response.created?.id ?? id });
+    };
+    const trash = (id) => {
+      const failTitle = `Couldn\u2019t move ${titleOf(id)} to trash`;
+      const stamp = stampOrNotice(failTitle);
+      if (stamp === null) return;
+      void run(id, { request: { op: "trash-screen", screens: stamp, id, file: stampOf(ctx.detail().files.screens[id]) }, failTitle, reveal: () => null });
+    };
+    const target = () => {
+      const session = guestHost.session.get();
+      return askTarget({ sessionId: ctx.detail().design.sessionId, selectedId: session?.id ?? null, selectedTitle: session?.title ?? null });
+    };
+    const closeAskBox = () => {
+      askBox?.close();
+      askBox = null;
+    };
+    const sent = (outcome) => {
+      const said = askRequestToast(outcome);
+      if (said !== null) toast("success", said);
+    };
+    const askForScreen = (anchor) => {
+      closeAskBox();
+      const facts = () => {
+        const { design } = ctx.detail();
+        const last = design.screens[design.screens.length - 1];
+        return { title: design.title, after: last?.title ?? null, free: Math.max(0, SCREENS_MAX - design.screens.length) };
+      };
+      const box = openAskPopover({
+        host: ctx.actions.host,
+        anchor,
+        title: NEW_SCREEN_TITLE,
+        placeholder: "For example, a thank-you page after checkout.",
+        room: newScreenRoom(facts()),
+        target: target(),
+        send: async (note) => (await flows.ask(slug, { text: newScreenAsk({ ...facts(), note }) })).outcome,
+        onSent: sent,
+        onClose: () => void (askBox = null)
+      });
+      askBox = box;
+    };
+    const askForDirections = (id, anchor) => {
+      closeAskBox();
+      const facts = () => ({ title: titleOf(id), id, free: Math.max(0, SCREENS_MAX - ctx.detail().design.screens.length) });
+      askBox = openAskPopover({
+        host: ctx.actions.host,
+        anchor,
+        title: DIRECTIONS_TITLE,
+        placeholder: "For example, one denser, one with more imagery.",
+        room: directionsRoom(facts()),
+        target: target(),
+        send: async (note) => (await flows.ask(slug, { text: directionsAsk({ ...facts(), note }) })).outcome,
+        onSent: sent,
+        onClose: () => void (askBox = null)
+      });
+    };
+    const offMenu = wall.onScreenMenu(({ screenId, anchor }) => {
+      const detail = ctx.detail();
+      const screens = detail.design.screens;
+      const index = screens.findIndex((screen) => screen.id === screenId);
+      if (index < 0) return;
+      const plan = directionPlan();
+      const rowIds = screens.filter((screen) => !plan.memberOf.has(screen.id)).map((screen) => screen.id);
+      const menu = screenMenu({
+        ...gate(),
+        index,
+        count: screens.length,
+        rowIndex: rowIds.indexOf(screenId),
+        rowCount: rowIds.length,
+        hasFile: detail.files.screens[screenId]?.exists === true,
+        agentWorking: agentWorking(),
+        directionsOff: directionsOffReason(screenId, plan, titleOf)
+      });
+      openMenu(
+        anchor,
+        menu.items,
+        (id) => {
+          if (id === "duplicate") duplicate(screenId);
+          else if (id === "up" || id === "down") shift(screenId, id);
+          else if (id === "trash") trash(screenId);
+          else if (id === "directions") askForDirections(screenId, anchor);
+        },
+        menu.notes
+      );
+    });
+    const offGhost = wall.onGhost((anchor) => askForScreen(anchor));
+    const offReorder = wall.onReorder((move) => reorder(move, `Couldn\u2019t move ${titleOf(move.id)}`));
+    const offViewing = ctx.onViewing(() => {
+      if (ctx.viewing() !== null) closeAskBox();
+    });
+    return () => {
+      disposed = true;
+      offMenu();
+      offGhost();
+      offReorder();
+      offViewing();
+      closeAskBox();
+      notice.dispose();
+    };
+  };
+
+  // src/guest/tweaks.ts
+  var TWEAKS_MIRROR_DEBOUNCE_MS = 300;
+  var TWEAKS_REFETCH_DEBOUNCE_MS = 300;
+  var TWEAKS_SAVED_SENTENCE = "Tweaks saved to tokens.css";
+  var tweaksMirrorKey = (slug) => `tweaks:${slug}`;
+  var defaultSchedule2 = (run, ms) => {
+    const timer = setTimeout(run, ms);
+    return () => clearTimeout(timer);
+  };
+  var readStoredTweaks = (value) => {
+    if (typeof value !== "object" || value === null) return null;
+    const record = value;
+    const sha256 = typeof record.sha256 === "string" || record.sha256 === null ? record.sha256 : null;
+    if (!Array.isArray(record.values)) return null;
+    const values = [];
+    for (const entry of record.values) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const item = entry;
+      if (typeof item.var !== "string" || typeof item.value !== "number" && typeof item.value !== "string") continue;
+      values.push({ var: item.var, value: item.value });
+    }
+    return { sha256, values };
+  };
+  var clampStep = (value, min, max, step) => {
+    const stepped = Math.round((value - min) / step) * step + min;
+    return Math.min(max, Math.max(min, stepped));
+  };
+  var createTweaksController = (deps) => {
+    const { client: client2, slug, tweaks, storage, onPreview, onNotice } = deps;
+    const now = deps.now ?? Date.now;
+    const schedule = deps.schedule ?? defaultSchedule2;
+    const mirrorKey = tweaksMirrorKey(slug);
+    let status = "loading";
+    let tokens = null;
+    let loadError = null;
+    let saveError = null;
+    let pending = /* @__PURE__ */ new Map();
+    let baseSha = null;
+    let stale = false;
+    let staleExcluded = [];
+    let gone = false;
+    let disposed = false;
+    let mirrorTimer = null;
+    let refetchTimer = null;
+    const listeners = /* @__PURE__ */ new Set();
+    const getState = () => ({
+      status,
+      tokens,
+      loadError,
+      pending,
+      dirty: pending.size > 0,
+      stale,
+      staleExcluded,
+      gone,
+      saveError
+    });
+    const notify = () => {
+      for (const listener of [...listeners]) listener(getState());
+    };
+    const knobOf = (varName) => tweaks().find((knob) => knob.var === varName);
+    const stateOf2 = (varName) => tokens?.knobs.find((knob) => knob.var === varName)?.state;
+    const editable = (varName) => {
+      const state = stateOf2(varName);
+      return state === "ok" || state === "value";
+    };
+    const preview = () => {
+      const vars = [];
+      for (const [name, value] of pending) {
+        const knob = knobOf(name);
+        if (!knob) continue;
+        const text = knob.kind === "number" ? typeof value === "number" ? tweakNumberText(value, knob) : null : typeof value === "string" ? value : null;
+        if (text === null) continue;
+        if (!TWEAK_VAR_PATTERN.test(name) || !TOKEN_PREVIEW_VALUE_PATTERN.test(text) || !isBalancedQuotes(text)) continue;
+        vars.push({ name, value: text });
+      }
+      return vars;
+    };
+    const writeMirror = async () => {
+      if (disposed || gone) return;
+      const values = [...pending].map(([varName, value]) => ({ var: varName, value }));
+      const entry = { sha256: baseSha, values, at: now() };
+      try {
+        await storage.set(mirrorKey, entry);
+      } catch {
+      }
+    };
+    const scheduleMirror = () => {
+      mirrorTimer?.();
+      mirrorTimer = schedule(() => {
+        mirrorTimer = null;
+        void writeMirror();
+      }, TWEAKS_MIRROR_DEBOUNCE_MS);
+    };
+    const deleteMirror = () => {
+      mirrorTimer?.();
+      mirrorTimer = null;
+      void storage.delete(mirrorKey).catch(() => void 0);
+    };
+    const restorePending = async () => {
+      pending = /* @__PURE__ */ new Map();
+      let stored;
+      try {
+        stored = await storage.get(mirrorKey);
+      } catch {
+        return;
+      }
+      const entry = readStoredTweaks(stored);
+      if (!entry) return;
+      for (const { var: varName, value } of entry.values) {
+        if (knobOf(varName)) pending.set(varName, value);
+      }
+      baseSha = entry.sha256;
+    };
+    const computeStaleExcluded = () => {
+      if (!stale || !tokens) {
+        staleExcluded = [];
+        return;
+      }
+      staleExcluded = [...pending.keys()].filter((varName) => !editable(varName));
+    };
+    const adoptTokens = (answer) => {
+      tokens = answer;
+      gone = false;
+      if (pending.size > 0 && answer.sha256 !== baseSha) stale = true;
+      else {
+        baseSha = answer.sha256;
+        stale = false;
+      }
+      computeStaleExcluded();
+    };
+    const load = async () => {
+      status = "loading";
+      loadError = null;
+      saveError = null;
+      notify();
+      await restorePending();
+      try {
+        const answer = await client2.call("GET /designs/:slug/tokens", { params: { slug } });
+        adoptTokens(answer);
+        status = "ready";
+        notify();
+        onPreview(preview());
+      } catch (error) {
+        const serviceError = toServiceError(error);
+        if (serviceError.code === "not-found") {
+          gone = true;
+          status = "ready";
+          notify();
+          return;
+        }
+        loadError = serviceError;
+        status = "error";
+        notify();
+      }
+    };
+    const refetch = async () => {
+      if (disposed || status === "loading" || status === "saving") return;
+      try {
+        const answer = await client2.call("GET /designs/:slug/tokens", { params: { slug } });
+        adoptTokens(answer);
+        if (status === "error") {
+          status = "ready";
+          loadError = null;
+        }
+        notify();
+        if (pending.size > 0) onPreview(preview());
+      } catch (error) {
+        if (isServiceError(error, "not-found")) {
+          gone = true;
+          notify();
+        }
+      }
+    };
+    const scheduleRefetch = () => {
+      refetchTimer?.();
+      refetchTimer = schedule(() => {
+        refetchTimer = null;
+        void refetch();
+      }, TWEAKS_REFETCH_DEBOUNCE_MS);
+    };
+    const applyChanges = (batch) => {
+      if (disposed) return;
+      if (batch.reset) {
+        scheduleRefetch();
+        return;
+      }
+      for (const event of batch.events) {
+        if (event.slug !== slug) continue;
+        if (event.kind === "design") {
+          scheduleRefetch();
+          return;
+        }
+        if (event.kind === "files" && (event.files === void 0 || event.files.includes("tokens.css"))) {
+          scheduleRefetch();
+          return;
+        }
+      }
+    };
+    const setValue = (varName, value) => {
+      if (disposed || gone || !editable(varName)) return;
+      const knob = knobOf(varName);
+      if (!knob) return;
+      let next;
+      if (knob.kind === "number") {
+        if (typeof value !== "number" || !Number.isFinite(value)) return;
+        next = clampStep(value, knob.min, knob.max, knob.step);
+      } else {
+        if (typeof value !== "string" || !knob.options.some((option) => option.value === value)) return;
+        next = value;
+      }
+      const fileValue = tokens?.knobs.find((entry) => entry.var === varName)?.value ?? null;
+      if (fileValue !== null && fileValue === next) pending.delete(varName);
+      else pending.set(varName, next);
+      if (pending.size === 0) deleteMirror();
+      else scheduleMirror();
+      onPreview(preview());
+      notify();
+    };
+    const clearPending = () => {
+      pending = /* @__PURE__ */ new Map();
+      stale = false;
+      staleExcluded = [];
+      baseSha = tokens?.sha256 ?? null;
+      deleteMirror();
+      onPreview([]);
+      notify();
+    };
+    const commitTokens = async (base, values) => {
+      status = "saving";
+      saveError = null;
+      notify();
+      try {
+        const answer = await client2.call("POST /designs/:slug/edits", { params: { slug }, body: { op: "tokens", base, values } });
+        baseSha = answer.stamps.tokens ?? baseSha;
+        pending = /* @__PURE__ */ new Map();
+        stale = false;
+        staleExcluded = [];
+        deleteMirror();
+        onPreview([]);
+        status = "ready";
+        notify();
+        await refetch();
+        onNotice?.({ id: "tweaks", message: TWEAKS_SAVED_SENTENCE });
+        return answer;
+      } catch (error) {
+        const serviceError = toServiceError(error);
+        saveError = serviceError;
+        status = "ready";
+        notify();
+        if (serviceError.code === "stale") await refetch();
+        throw serviceError;
+      }
+    };
+    const save = () => {
+      const values = [...pending].map(([varName, value]) => ({ var: varName, value }));
+      return commitTokens(baseSha ?? "", values);
+    };
+    const applyToNewFile = () => {
+      const values = [...pending].filter(([varName]) => editable(varName)).map(([varName, value]) => ({ var: varName, value }));
+      return commitTokens(tokens?.sha256 ?? "", values);
+    };
+    return {
+      load,
+      retry: load,
+      getState,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      setValue,
+      preview,
+      reset: clearPending,
+      save,
+      applyToNewFile,
+      discard: clearPending,
+      applyChanges,
+      dispose: () => {
+        disposed = true;
+        mirrorTimer?.();
+        mirrorTimer = null;
+        refetchTimer?.();
+        refetchTimer = null;
+        listeners.clear();
+      }
+    };
+  };
+
+  // src/ui/components/tweaks-panel.ts
+  var mountTweaksPanel = (options) => {
+    const { sheet, controller } = options;
+    const scope = createScope();
+    const prefix = nextId2("dc-tweaks");
+    const title2 = sheet.el.querySelector(".dc-sheet-title");
+    let badge = null;
+    let badgeHost = null;
+    if (title2) {
+      badgeHost = h("span", { class: "dc-tweaks-badge", hidden: true });
+      badge = mountBadge(badgeHost, { label: UNSAVED_BADGE, tone: "warning" });
+      title2.append(" ", badgeHost);
+    }
+    const bannersEl = h("div", { class: "dc-tweaks-banners" });
+    const loadingEl = h("div", { class: "dc-tweaks-loading" }, loadingRow(TOKENS_LOADING_TEXT));
+    const failedEl = h("div", { class: "dc-tweaks-failed" });
+    const goneEl = h("div", { class: "dc-tweaks-gone" });
+    const rowsEl = h("ul", { class: "dc-tweaks-rows", "aria-label": "Tweak controls" });
+    sheet.body.classList.add("dc-tweaks-body");
+    sheet.body.append(bannersEl, loadingEl, failedEl, goneEl, rowsEl);
+    const noteEl = h("p", { class: "dc-tweaks-note", hidden: true });
+    const reset = btn({ label: "Reset", variant: "ghost", icon: "reset", onClick: () => controller.reset() });
+    const save = btn({ label: "Save", variant: "default", emphasis: "primary", icon: "check", onClick: () => options.onSave() });
+    sheet.foot.classList.add("dc-tweaks-foot");
+    sheet.foot.append(noteEl, h("div", { class: "dc-sheet-foot-row" }, reset.el, save.el));
+    let rows = [];
+    let rowsKey = "";
+    let bannersKey = "";
+    let failedKey = "";
+    let goneKey = "";
+    const buildRow = (tweak) => {
+      const id = `${prefix}-${tweak.var.slice(2)}`;
+      const value = h("span", { class: "dc-knob-value" });
+      const notes = h("div", { class: "dc-knob-notes" });
+      const reasonText = h("span");
+      const reason = h("p", { class: "dc-knob-reason", id: `${id}-reason`, hidden: true }, icon2("warning", 14), reasonText);
+      const onChoice = { current: (_id) => void 0 };
+      let input = null;
+      let tabs = null;
+      let tabsHost = null;
+      let head;
+      let control;
+      if (tweak.kind === "number") {
+        head = h("div", { class: "dc-knob-head" }, h("label", { class: "dc-knob-label", for: id }, tweak.label), value);
+        input = h("input", { id, type: "range", min: tweak.min, max: tweak.max, step: tweak.step });
+        const slider = input;
+        slider.addEventListener("input", () => controller.setValue(tweak.var, Number(slider.value)));
+        slider.addEventListener("keydown", (event) => {
+          if (event.key !== "PageUp" && event.key !== "PageDown") return;
+          event.preventDefault();
+          controller.setValue(tweak.var, Number(slider.value) + (event.key === "PageUp" ? 10 : -10) * tweak.step);
+        });
+        control = slider;
+      } else {
+        head = h("div", { class: "dc-knob-head" }, h("span", { class: "dc-knob-label", id: `${id}-label` }, tweak.label), value);
+        tabsHost = h("div", { class: "dc-knob-choice", role: "group", "aria-labelledby": `${id}-label` });
+        tabs = mountTabs(tabsHost, {
+          items: tweak.options.map((option) => ({ id: option.value, label: option.label })),
+          activeId: "",
+          trackBackground: true,
+          onChange: (next) => onChoice.current(next)
+        });
+        onChoice.current = (next) => controller.setValue(tweak.var, next);
+        control = tabsHost;
+      }
+      const li = h("li", { class: "dc-knob", "data-knob": tweak.var }, head, control, notes, reason);
+      return { var: tweak.var, li, value, input, tabs, tabsHost, notes, notesKey: "", reason, reasonText, onChoice };
+    };
+    const paintRow = (view2, row) => {
+      view2.value.textContent = row.valueText;
+      view2.li.dataset.changed = String(row.changed);
+      view2.li.dataset.broken = String(row.reason !== null);
+      view2.li.dataset.disabled = String(row.disabled);
+      if (view2.input && row.number) {
+        const text = String(row.number.value);
+        if (view2.input.value !== text) view2.input.value = text;
+        view2.input.disabled = row.disabled;
+        view2.input.setAttribute("aria-valuetext", row.valueText);
+      }
+      if (view2.tabs && view2.tabsHost && row.choice) {
+        view2.tabs.update({ activeId: row.choice.active });
+        view2.tabsHost.setAttribute("aria-disabled", String(row.disabled));
+        view2.tabsHost.dataset.disabled = String(row.disabled);
+        for (const tab of view2.tabsHost.querySelectorAll('[role="tab"]')) tab.disabled = row.disabled;
+      }
+      const control = view2.input ?? view2.tabsHost;
+      if (row.reason !== null) control?.setAttribute("aria-describedby", view2.reason.id);
+      else control?.removeAttribute("aria-describedby");
+      const key = row.notes.join("\n");
+      if (key !== view2.notesKey) {
+        view2.notesKey = key;
+        view2.notes.replaceChildren(...row.notes.map((note) => h("p", { class: "dc-knob-note" }, note)));
+      }
+      view2.reason.hidden = row.reason === null;
+      view2.reasonText.textContent = row.reason ?? "";
+    };
+    const paintRows = (state, tweaks, viewing) => {
+      const key = JSON.stringify(tweaks);
+      if (key !== rowsKey) {
+        rowsKey = key;
+        for (const view2 of rows) view2.tabs?.dispose();
+        rows = tweaks.map(buildRow);
+        rowsEl.replaceChildren(...rows.map((view2) => view2.li));
+      }
+      const model = knobRows(tweaks, state, { viewing });
+      model.forEach((row, index) => {
+        const view2 = rows[index];
+        if (view2) paintRow(view2, row);
+      });
+    };
+    const bannerNode = (entry, state) => {
+      if (entry.kind === "stale") {
+        const apply = btn({ label: "Apply to the new file", variant: "outline", size: "xs", disabled: state.status === "saving", onClick: () => options.onApply() });
+        const discard = btn({ label: "Discard my tweaks", variant: "ghost", size: "xs", disabled: state.status === "saving", onClick: () => controller.discard() });
+        const wrap = h("div", { class: "dc-banner dc-tweaks-banner", "data-actions": "stack" });
+        wrap.append(...bannerWithActions("warning", entry.title, [entry.body], [apply.el, discard.el]));
+        return wrap;
+      }
+      return banner({ tone: entry.kind === "viewing" ? "info" : "warning", title: entry.title });
+    };
+    const paintBanners = (state, tweaks, viewing) => {
+      const entries = panelBanners(state, tweaks, { viewing });
+      const key = JSON.stringify([entries, state.status === "saving"]);
+      if (key === bannersKey) return;
+      bannersKey = key;
+      bannersEl.replaceChildren(...entries.map((entry) => bannerNode(entry, state)));
+    };
+    const paintFailed = (state) => {
+      const failed = state.status === "error" && state.loadError !== null && !state.gone;
+      failedEl.hidden = !failed;
+      if (!failed || !state.loadError) {
+        failedKey = "";
+        return;
+      }
+      const message = readFailedText(state.loadError.message);
+      const key = `${message}|${state.pending.size > 0}`;
+      if (key === failedKey) return;
+      failedKey = key;
+      const retry = btn({ label: "Try again", variant: "outline", size: "xs", onClick: () => void controller.retry() });
+      replace(failedEl, h("p", { class: "dc-tweaks-error", role: "alert" }, message), state.pending.size > 0 ? h("p", { class: "dc-tweaks-kept" }, VALUES_KEPT_TEXT) : null, retry.el);
+    };
+    const paintGone = (state, tweaks) => {
+      const lines = unsavedLines(tweaks, state);
+      const key = lines.join("\n");
+      if (key === goneKey && goneEl.childElementCount > 0) return;
+      goneKey = key;
+      const list = h("ul", { class: "dc-tweaks-lost" }, ...lines.map((line) => h("li", null, line)));
+      const wrap = h("div", { class: "dc-banner dc-tweaks-banner" });
+      wrap.append(...bannerWithActions("warning", DESIGN_GONE_TEXT, lines.length === 0 ? [] : [list], []));
+      replace(goneEl, wrap);
+    };
+    const paintFoot = (state, viewing) => {
+      const view2 = footView(state, { viewing, agentWorking: options.agentWorking() });
+      reset.set({ disabled: view2.resetDisabled });
+      save.set({ disabled: view2.saveDisabled, loading: view2.saving, title: view2.saveTitle ?? "" });
+      noteEl.hidden = view2.note === null;
+      noteEl.textContent = view2.note?.text ?? "";
+      noteEl.dataset.tone = view2.note?.tone ?? "muted";
+      noteEl.setAttribute("role", view2.note?.tone === "error" ? "alert" : "status");
+    };
+    const paint = () => {
+      const state = controller.getState();
+      const tweaks = options.tweaks();
+      const viewing = options.viewing();
+      const mode = panelMode(state);
+      const hadFocus = sheet.body.contains(document.activeElement) || sheet.foot.contains(document.activeElement);
+      if (badgeHost) badgeHost.hidden = !state.dirty;
+      paintBanners(state, tweaks, viewing);
+      loadingEl.hidden = mode !== "loading";
+      goneEl.hidden = mode !== "gone";
+      if (mode === "gone") paintGone(state, tweaks);
+      paintFailed(state);
+      rowsEl.hidden = mode === "gone" || mode === "loading";
+      if (!rowsEl.hidden) paintRows(state, tweaks, viewing);
+      paintFoot(state, viewing);
+      if (hadFocus && !(sheet.body.contains(document.activeElement) || sheet.foot.contains(document.activeElement))) sheet.el.querySelector(".dc-sheet-panel")?.focus({ preventScroll: true });
+    };
+    scope.add(controller.subscribe(paint));
+    paint();
+    return {
+      refresh: paint,
+      dispose: () => {
+        scope.dispose();
+        for (const view2 of rows) view2.tabs?.dispose();
+        badge?.dispose();
+        rows = [];
+      }
+    };
+  };
+  var askToSaveTweaks = (options) => new Promise((resolve) => {
+    let answered = false;
+    const settle = (leave) => {
+      if (answered) return;
+      answered = true;
+      resolve(leave);
+    };
+    const sheet = openSheet(options.host, { title: LEAVE_TITLE, variant: "dialog", onClose: () => settle(false) });
+    const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+    sheet.body.append(h("div", { class: "dc-confirm-body" }, h("p", null, LEAVE_BODY)), failure);
+    const keep = btn({ label: "Keep editing", variant: "ghost", onClick: () => sheet.close() });
+    const discard = btn({
+      label: "Discard",
+      variant: "destructive",
+      onClick: () => {
+        options.discard();
+        settle(true);
+        sheet.close();
+      }
+    });
+    const save = btn({
+      label: "Save",
+      variant: "default",
+      emphasis: "primary",
+      icon: "check",
+      onClick: () => {
+        failure.hidden = true;
+        save.set({ loading: true });
+        keep.set({ disabled: true });
+        discard.set({ disabled: true });
+        options.save().then(
+          () => {
+            settle(true);
+            sheet.close();
+          },
+          (error) => {
+            failure.textContent = typeof error === "object" && error !== null && "code" in error && "message" in error ? saveFailedText({ code: String(error.code), message: String(error.message) }) : errorText2(error);
+            failure.hidden = false;
+            save.set({ loading: false });
+            keep.set({ disabled: false });
+            discard.set({ disabled: false });
+          }
+        );
+      }
+    });
+    sheet.foot.append(keep.el, discard.el, save.el);
+  });
+
+  // src/ui/wall/feature-tweaks.ts
+  var mirrorStorage = {
+    get: (key) => guestHost.client.storage.get(key),
+    set: (key, value) => guestHost.client.storage.set(key, value),
+    delete: (key) => guestHost.client.storage.delete(key)
+  };
+  var mount8 = (ctx) => {
+    const { wall, slug } = ctx;
+    const rail = ctx.surface === "panel";
+    let disposed = false;
+    let controller = null;
+    let panel = null;
+    const stops = [];
+    const undoSlot = undoSlotFor(wall);
+    const notice = createEditNotice({
+      notices: ctx.notices,
+      undo: async (editId) => {
+        await store.undoEdit(slug, editId);
+      },
+      onNoticeUndo: undoSlot.noticeUndo,
+      focusWall: () => wall.focus(),
+      viewing: () => ctx.viewing() !== null,
+      onViewing: ctx.onViewing
+    });
+    const knobs = () => ctx.detail().design.tweaks;
+    const hasKnobs = () => knobs().length > 0;
+    const agentWorking = () => {
+      const watcher2 = buildActivityFor(wall);
+      return watcher2 !== void 0 && agentIsWorking(phaseOf(watcher2.get(), Date.now()));
+    };
+    let pageButton = null;
+    let railButton = null;
+    const buttonEl = () => pageButton?.el ?? railButton;
+    const toggle = () => {
+      if (!hasKnobs()) return;
+      ctx.drawers.toggle("tweaks");
+    };
+    if (rail) {
+      railButton = iconBtn({ icon: "tune", label: "Tweaks", pressed: false, onClick: toggle });
+      railButton.classList.add("dc-tweaks-btn");
+      const versions = ctx.slots.compactActions.querySelector(".dc-versions-btn");
+      ctx.slots.compactActions.insertBefore(railButton, versions);
+    } else {
+      pageButton = btn({ label: "Tweaks", variant: "outline", size: "sm", icon: "tune", pressed: false, onClick: toggle });
+      pageButton.el.classList.add("dc-tweaks-btn");
+      ctx.slots.tweaksSlot.append(pageButton.el);
+    }
+    const paintButton = () => {
+      const el2 = buttonEl();
+      if (!el2) return;
+      const dirty = controller?.getState().dirty === true;
+      const open = ctx.drawers.active() === "tweaks";
+      const label = tweaksButtonLabel(dirty);
+      el2.hidden = !hasKnobs();
+      el2.classList.toggle("dc-dotmark", dirty);
+      el2.setAttribute("aria-pressed", String(open));
+      if (rail) {
+        el2.setAttribute("aria-label", label);
+        el2.title = label;
+      } else if (dirty) el2.setAttribute("aria-label", label);
+      else el2.removeAttribute("aria-label");
+    };
+    const applyPreview = () => {
+      wall.setTokenPreview(controller && ctx.viewing() === null ? controller.preview() : []);
+    };
+    const ensureController = () => {
+      if (controller) return controller;
+      const created = createTweaksController({
+        client,
+        slug,
+        tweaks: knobs,
+        storage: mirrorStorage,
+        onPreview: applyPreview
+      });
+      controller = created;
+      stops.push(created.subscribe(() => paintButton()), feed.subscribe((batch) => created.applyChanges(batch)), created.dispose);
+      void created.load();
+      return created;
+    };
+    const commit = async (run) => {
+      const current = controller;
+      if (!current || ctx.viewing() !== null) return;
+      try {
+        const response = await run(current);
+        if (disposed) return;
+        if (response.edit.undoable) undoSlot.edited(response.edit.id);
+        notice.saved(response.edit);
+        if (rail && ctx.drawers.active() === "tweaks" && !ctx.drawers.isBottomSheet()) ctx.drawers.close();
+      } catch {
+      }
+    };
+    const unregister = ctx.drawers.register("tweaks", (sheet) => {
+      const current = ensureController();
+      const opened = mountTweaksPanel({
+        sheet,
+        controller: current,
+        tweaks: knobs,
+        viewing: () => ctx.viewing() !== null,
+        agentWorking,
+        onSave: () => void commit((c) => c.save()),
+        onApply: () => void commit((c) => c.applyToNewFile())
+      });
+      panel = opened;
+      return {
+        dispose: () => {
+          opened.dispose();
+          if (panel === opened) panel = null;
+        }
+      };
+    });
+    let wasOpen = false;
+    const syncDrawer = () => {
+      const open = ctx.drawers.active() === "tweaks";
+      askBarFor(wall)?.setQuiet(open);
+      paintButton();
+      if (wasOpen && !open && (document.activeElement === document.body || document.activeElement === null)) buttonEl()?.focus({ preventScroll: true });
+      wasOpen = open;
+    };
+    const syncDetail = () => {
+      if (hasKnobs()) ensureController();
+      else if (controller) {
+        controller.discard();
+        if (ctx.drawers.active() === "tweaks") ctx.drawers.close();
+      }
+      paintButton();
+      panel?.refresh();
+    };
+    const syncViewing = () => {
+      applyPreview();
+      panel?.refresh();
+    };
+    const onWallKey = (event) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (ctx.drawers.active() !== "tweaks" || !ctx.drawers.isBottomSheet()) return;
+      event.preventDefault();
+      ctx.drawers.close();
+    };
+    wall.el.addEventListener("keydown", onWallKey);
+    const offGuard = ctx.onBeforeLeave(async () => {
+      const current = controller;
+      if (!current || leaveDecision(current.getState()) === "leave") return true;
+      return askToSaveTweaks({
+        host: ctx.actions.host,
+        save: async () => {
+          await current.save();
+        },
+        discard: () => current.discard()
+      });
+    });
+    const watcher = buildActivityFor(wall);
+    const offWatch = watcher?.subscribe(() => panel?.refresh());
+    stops.push(ctx.drawers.onChange(syncDrawer), ctx.onDetail(syncDetail), ctx.onViewing(syncViewing));
+    if (hasKnobs()) ensureController();
+    paintButton();
+    return () => {
+      disposed = true;
+      wall.el.removeEventListener("keydown", onWallKey);
+      offGuard();
+      offWatch?.();
+      unregister();
+      for (const stop of stops.splice(0).reverse()) stop();
+      controller = null;
+      panel = null;
+      notice.dispose();
+      buttonEl()?.remove();
     };
   };
 
@@ -7358,137 +10801,98 @@ ${view2.error.message}` : "";
     };
   };
 
-  // src/shared/bridge-protocol.ts
-  var BRIDGE_PROTOCOL_VERSION = 1;
-  var BRIDGE_PLACEHOLDER = "<!--dc-bridge-->";
-  var BRIDGE_KEYS = ["Escape", " ", "+", "=", "-", "0", "1"];
-  var artboardIdOf = (screen, viewport) => `${screen ?? "page"}@${viewport}`;
-  var isRec = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-  var isStr = (value, max) => typeof value === "string" && value.length <= max;
-  var isId = (value, max) => isStr(value, max) && value.length > 0;
-  var isNum = (value) => typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= BRIDGE_COORD_MAX;
-  var isSize = (value) => isNum(value) && value >= 0;
-  var isBool = (value) => typeof value === "boolean";
-  var isRect = (value) => isRec(value) && isNum(value.x) && isNum(value.y) && isSize(value.w) && isSize(value.h);
-  var isKey = (value) => BRIDGE_KEYS.includes(value);
-  var isList = (value, max, item) => Array.isArray(value) && value.length <= max && value.every(item);
-  var isAnchorResult = (value) => isRec(value) && isId(value.id, BRIDGE_ARTBOARD_ID_MAX) && isBool(value.found) && isBool(value.exact) && (value.rect === null || isRect(value.rect));
-  var isHitElement = (value) => isRec(value) && isStr(value.selector, ANCHOR_SELECTOR_MAX) && isStr(value.text, ANCHOR_TEXT_MAX) && isStr(value.html, ANCHOR_HTML_MAX) && isRect(value.rect) && isId(value.tag, BRIDGE_TAG_MAX);
-  var hasEnvelope = (value) => value.dc === BRIDGE_PROTOCOL_VERSION && isId(value.artboardId, BRIDGE_ARTBOARD_ID_MAX) && isId(value.nonce, BRIDGE_NONCE_MAX);
-  var FRAME_TO_PAGE = {
-    ready: (m) => isSize(m.docWidth) && isSize(m.docHeight) && isStr(m.title, BRIDGE_TITLE_MAX),
-    size: (m) => isSize(m.docWidth) && isSize(m.docHeight),
-    scroll: (m) => isNum(m.x) && isNum(m.y),
-    hit: (m) => isNum(m.x) && isNum(m.y) && (m.element === null || isHitElement(m.element)),
-    anchors: (m) => isList(m.results, BRIDGE_ANCHORS_MAX, isAnchorResult),
-    navigate: (m) => isId(m.href, BRIDGE_URL_MAX) && isStr(m.hash, BRIDGE_URL_MAX) && (m.hash === "" || m.hash.startsWith("#")),
-    "open-external": (m) => isId(m.url, BRIDGE_URL_MAX) && /^https?:\/\//i.test(m.url),
-    wheel: (m) => isNum(m.deltaX) && isNum(m.deltaY) && isNum(m.x) && isNum(m.y) && isBool(m.ctrl),
-    key: (m) => isKey(m.key) && isBool(m.ctrl) && isBool(m.meta) && isBool(m.shift)
+  // src/guest/source-cache.ts
+  var SOURCE_CACHE_MAX_ENTRIES = 4;
+  var keyOf2 = (slug, screen) => `${slug}\0${screen ?? ""}`;
+  var parseKey = (key) => {
+    const sep = key.indexOf("\0");
+    const screen = key.slice(sep + 1);
+    return { slug: key.slice(0, sep), screen: screen === "" ? null : screen };
   };
-  var parseWith = (table, data) => {
-    if (!isRec(data) || !hasEnvelope(data) || typeof data.type !== "string") return null;
-    if (!Object.hasOwn(table, data.type)) return null;
-    const check = table[data.type];
-    return check !== void 0 && check(data) ? data : null;
-  };
-  var parseFrameMessage = (data) => parseWith(FRAME_TO_PAGE, data);
-
-  // src/guest/camera.ts
-  var DEFAULT_CAMERA = Object.freeze({ x: 0, y: 0, scale: 1 });
-  var FIT_PADDING = 48;
-  var FIT_MIN_WIDTH = 240;
-  var clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-  var clampScale = (scale) => Number.isFinite(scale) ? clamp(scale, CAMERA_SCALE_MIN, CAMERA_SCALE_MAX) : DEFAULT_CAMERA.scale;
-  var clampCamera = (camera) => ({
-    x: Number.isFinite(camera.x) ? clamp(camera.x, -CAMERA_PAN_MAX, CAMERA_PAN_MAX) : 0,
-    y: Number.isFinite(camera.y) ? clamp(camera.y, -CAMERA_PAN_MAX, CAMERA_PAN_MAX) : 0,
-    scale: clampScale(camera.scale)
-  });
-  var screenToWorld2 = (camera, point) => ({
-    x: (point.x - camera.x) / camera.scale,
-    y: (point.y - camera.y) / camera.scale
-  });
-  var zoomAt = (camera, scale, point) => {
-    const next = clampScale(scale);
-    const world = screenToWorld2(camera, point);
-    return clampCamera({ x: point.x - world.x * next, y: point.y - world.y * next, scale: next });
-  };
-  var wheelZoom = (camera, deltaY, point) => Number.isFinite(deltaY) ? zoomAt(camera, camera.scale * Math.exp(-deltaY * WHEEL_ZOOM_RATE), point) : camera;
-  var panBy = (camera, dx, dy) => Number.isFinite(dx) && Number.isFinite(dy) ? clampCamera({ ...camera, x: camera.x + dx, y: camera.y + dy }) : camera;
-  var unionBoxes = (boxes) => {
-    if (boxes.length === 0) return null;
-    let left = Infinity;
-    let top = Infinity;
-    let right = -Infinity;
-    let bottom = -Infinity;
-    for (const box of boxes) {
-      left = Math.min(left, box.x);
-      top = Math.min(top, box.y);
-      right = Math.max(right, box.x + box.width);
-      bottom = Math.max(bottom, box.y + box.height);
-    }
-    return { x: left, y: top, width: right - left, height: bottom - top };
-  };
-  var fitBox = (box, viewport, options = {}) => {
-    const padding = options.padding ?? FIT_PADDING;
-    const maxScale = options.maxScale ?? 1;
-    const availableWidth = Math.max(1, viewport.width - padding * 2);
-    const availableHeight = Math.max(1, viewport.height - padding * 2);
-    const fit = Math.min(availableWidth / Math.max(1, box.width), availableHeight / Math.max(1, box.height));
-    const scale = clampScale(Math.min(maxScale, fit));
-    return clampCamera({
-      x: viewport.width / 2 - (box.x + box.width / 2) * scale,
-      y: viewport.height / 2 - (box.y + box.height / 2) * scale,
-      scale
-    });
-  };
-  var fitArea = (wall, coveredRight, minWidth = FIT_MIN_WIDTH) => {
-    const visible = wall.width - Math.max(0, coveredRight);
-    const width = visible >= minWidth ? visible : wall.width;
-    return { width, height: wall.height, padding: width < 480 ? 24 : 56 };
-  };
-  var focusArtboard = (artboard, viewport, options) => fitBox(artboardBox(artboard), viewport, options);
-  var artboardBox = (artboard) => ({
-    x: artboard.label.x,
-    y: artboard.label.y,
-    width: artboard.frame.width,
-    height: artboard.label.height + artboard.frame.height
-  });
-  var layoutWall = (screens, viewports, options = {}) => {
-    const gap = options.gap ?? WALL_GAP;
-    const labelHeight = options.labelHeight ?? ARTBOARD_LABEL_HEIGHT;
-    const columnX = [];
-    let x = 0;
-    for (const viewport of viewports) {
-      columnX.push(x);
-      x += viewport.width + gap;
-    }
-    const artboards = [];
-    let y = 0;
-    let row = 0;
-    for (const screen of screens) {
-      const shown = new Set(screen.viewports ?? viewports.map((viewport) => viewport.id));
-      const cells = viewports.map((viewport, col) => ({ viewport, col })).filter(({ viewport }) => shown.has(viewport.id));
-      if (cells.length === 0) continue;
-      const rowHeight = Math.max(...cells.map(({ viewport }) => viewport.height));
-      for (const { viewport, col } of cells) {
-        const left = columnX[col] ?? 0;
-        artboards.push({
-          id: artboardIdOf(screen.id, viewport.id),
-          screen: screen.id,
-          screenTitle: screen.title,
-          viewport,
-          row,
-          col,
-          label: { x: left, y, width: viewport.width, height: labelHeight },
-          frame: { x: left, y: y + labelHeight, width: viewport.width, height: viewport.height }
-        });
+  var fileOf2 = (screen) => screen === null ? ENTRY_FILE : screenFileOf(screen);
+  var createSourceCache = ({ load, maxEntries = SOURCE_CACHE_MAX_ENTRIES }) => {
+    const cache = /* @__PURE__ */ new Map();
+    const inflight = /* @__PURE__ */ new Map();
+    const epochs = /* @__PURE__ */ new Map();
+    const bumpEpoch = (key) => {
+      epochs.set(key, (epochs.get(key) ?? 0) + 1);
+    };
+    const invalidate = (matches) => {
+      const keys = /* @__PURE__ */ new Set([...cache.keys(), ...inflight.keys()]);
+      for (const key of keys) {
+        const { slug, screen } = parseKey(key);
+        if (!matches(slug, screen)) continue;
+        cache.delete(key);
+        bumpEpoch(key);
       }
-      y += labelHeight + rowHeight + gap;
-      row += 1;
-    }
-    return { artboards, bounds: unionBoxes(artboards.map(artboardBox)) };
+    };
+    const get = (slug, screen = null) => {
+      const key = keyOf2(slug, screen);
+      const cached = cache.get(key);
+      if (cached) {
+        cache.delete(key);
+        cache.set(key, cached);
+        return Promise.resolve(cached);
+      }
+      const running = inflight.get(key);
+      if (running) return running;
+      const epoch = epochs.get(key) ?? 0;
+      const task = (async () => {
+        const response = await load(slug, screen);
+        if ((epochs.get(key) ?? 0) === epoch) {
+          cache.set(key, response);
+          while (cache.size > maxEntries) {
+            const oldest = cache.keys().next();
+            if (oldest.done) break;
+            cache.delete(oldest.value);
+          }
+        }
+        return response;
+      })().finally(() => {
+        inflight.delete(key);
+      });
+      inflight.set(key, task);
+      return task;
+    };
+    const applyChanges = (batch) => {
+      if (batch.reset) {
+        invalidate(() => true);
+        return;
+      }
+      for (const event of batch.events) {
+        switch (event.kind) {
+          case "root":
+            invalidate(() => true);
+            break;
+          case "files": {
+            const slug = event.slug;
+            if (slug === null) break;
+            const files = event.files;
+            if (!files) {
+              invalidate((s) => s === slug);
+            } else {
+              const named = new Set(files);
+              invalidate((s, screen) => s === slug && named.has(fileOf2(screen)));
+            }
+            break;
+          }
+          case "design":
+          case "added":
+          case "removed": {
+            const slug = event.slug;
+            if (slug !== null) invalidate((s) => s === slug);
+            break;
+          }
+          default:
+            break;
+        }
+      }
+    };
+    return {
+      get,
+      applyChanges,
+      clear: () => invalidate(() => true)
+    };
   };
 
   // src/guest/frame-channel.ts
@@ -7531,7 +10935,7 @@ ${view2.error.message}` : "";
 
   // src/guest/frame-doc.ts
   var ARTBOARD_SANDBOX = "allow-scripts";
-  var bundledBridge = () => true ? '"use strict";(()=>{var k=/^[a-z0-9][a-z0-9-]{0,40}$/;var f=1;var U=["Escape"," ","+","=","-","0","1"];var G=t=>typeof t=="object"&&t!==null&&!Array.isArray(t),x=(t,e)=>typeof t=="string"&&t.length<=e,y=(t,e)=>x(t,e)&&t.length>0,u=t=>typeof t=="number"&&Number.isFinite(t)&&Math.abs(t)<=1e7;var nt=t=>t==="edit"||t==="play";var rt=(t,e,r)=>Array.isArray(t)&&t.length<=e&&t.every(r),st=t=>G(t)&&y(t.id,100)&&x(t.selector,1e3)&&x(t.text,120)&&x(t.html,200);var ct=t=>t.dc===f&&y(t.artboardId,100)&&y(t.nonce,64),lt={"init-ack":()=>!0,"set-mode":t=>nt(t.mode),"hit-test":t=>u(t.x)&&u(t.y),"resolve-anchors":t=>rt(t.anchors,500,st),"scroll-by":t=>u(t.dx)&&u(t.dy),"scroll-to":t=>u(t.x)&&u(t.y),highlight:t=>t.selector===null||x(t.selector,1e3)};var _t=(t,e)=>{if(!G(e)||!ct(e)||typeof e.type!="string"||!Object.hasOwn(t,e.type))return null;let r=t[e.type];return r!==void 0&&r(e)?e:null};var K=t=>_t(lt,t);var Et=["data-testid","data-screen","data-dc-id"],at=/^(is-|has-|js-|active|hover|focus)/,Y=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,pt=3,A=t=>t.tagName===t.tagName.toUpperCase()?t.tagName.toLowerCase():t.tagName,v=t=>t.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),F=t=>t===""?null:Y.test(t)?`#${t}`:`[id="${v(t)}"]`,Tt=(t,e)=>{try{return t.querySelectorAll(e)}catch{return null}},R=(t,e,r)=>{let n=Tt(t,e);return n!==null&&n.length===1&&n[0]===r},dt=t=>{let e=[];for(let r=0;r<t.classList.length&&e.length<pt;r+=1){let n=t.classList[r];n!==void 0&&Y.test(n)&&!at.test(n)&&e.push(n)}return e},At=t=>{let e=t.parentElement;if(!e)return null;let r=0,n=0;for(let c=0;c<e.children.length;c+=1){let i=e.children[c];!i||i.tagName!==t.tagName||(n+=1,i===t&&(r=n))}return n>1?r:null},ut=t=>{let e=A(t);if(e==="html"||e==="body")return e;let r=dt(t).map(c=>`.${c}`).join(""),n=At(t);return`${e}${r}${n===null?"":`:nth-of-type(${n})`}`},X=t=>{let e=[...t];for(;e.join(" > ").length>1e3&&e.length>1;)e.shift();return e.join(" > ").slice(0,1e3)},V=(t,e)=>{let r=A(t);if(r==="html"||r==="body"||r==="head")return r;let n=F(t.id);if(n&&R(e,n,t))return n;for(let a of Et){let T=t.getAttribute(a);if(T===null||T==="")continue;let l=`[${a}="${v(T)}"]`;if(R(e,l,t))return l}let c=[],i=t;for(let a=0;i&&a<6;a+=1){c.unshift(ut(i));let T=c.join(" > ");if(R(e,T,t))return X(c);let l=i.parentElement;if(!l)break;let E=F(l.id);if(E&&R(e,E,l)){let p=[E,...c];if(R(e,p.join(" > "),t))return X(p)}i=l}return X(c)};var St=5e3,Rt=/^[A-Za-z][A-Za-z0-9-]*$/,L=t=>t.replace(/\\s+/g," ").trim(),z=t=>L(t.textContent??"").slice(0,120),Mt=t=>t.replace(/&/g,"&amp;").replace(/"/g,"&quot;"),Q=t=>{let e=`<${A(t)}`;for(let r=0;r<t.attributes.length;r+=1){let n=t.attributes[r];n&&(e+=n.value===""?` ${n.name}`:` ${n.name}="${Mt(n.value)}"`)}return e+=">",e.length<=200?e:`${e.slice(0,198)}\\u2026>`},gt=t=>{let e=/^<([A-Za-z][A-Za-z0-9:-]*)/.exec(t.trim());return e?.[1]?e[1].toLowerCase():null},W=(t,e)=>e===null||A(t).toLowerCase()===e,$=(t,e)=>{try{return t.querySelectorAll(e)}catch{return[]}},Z=(t,e)=>{let r={found:!1,exact:!1,element:null},n=gt(e.html);if(e.selector!==""){let l=$(t,e.selector);for(let E=0;E<l.length;E+=1){let p=l[E];if(p&&W(p,n))return{found:!0,exact:!0,element:p}}}let c=L(e.text);if(c.length<12)return r;let i=$(t,n!==null&&Rt.test(n)?n:"*"),a=null,T=1/0;for(let l=0;l<i.length&&l<St;l+=1){let E=i[l];if(!E||!W(E,n))continue;let p=L(E.textContent??"");p.startsWith(c)&&p.length<=T&&(a=E,T=p.length)}return a?{found:!0,exact:!1,element:a}:r};var j="https://design.invalid",D=t=>{try{return decodeURIComponent(t)}catch{return t}},q=(t,e)=>{let r=t.trim();if(r==="")return{kind:"blocked",reason:"empty link"};if(r.startsWith("#"))return{kind:"fragment",id:D(r.slice(1))};let n;try{n=new URL(r,`${j}/${e}`)}catch{return{kind:"blocked",reason:"malformed link"}}if(n.origin===j){let c=D(n.pathname.replace(/^\\/+/,""));return c===e||c===""?n.hash?{kind:"fragment",id:D(n.hash.slice(1))}:{kind:"blocked",reason:"same page"}:/\\.html?$/i.test(c)?c.length>2e3||n.hash.length>2e3?{kind:"blocked",reason:"link too long"}:{kind:"navigate",href:c,hash:n.hash}:{kind:"blocked",reason:"not a page of this design"}}return(n.protocol==="https:"||n.protocol==="http:")&&n.href.length<=2e3?{kind:"external",url:n.href}:{kind:"blocked",reason:`${n.protocol} links do not open from a design`}},J=t=>k.test(t)?{kind:"navigate",href:`screens/${t}.html`,hash:""}:{kind:"blocked",reason:"unknown screen id"};var It=16,Ot=5,mt=300,yt=t=>{if(typeof t!="object"||t===null)return null;let e=t,r=e.scroll;return typeof e.artboardId=="string"&&e.artboardId.length>0&&e.artboardId.length<=100&&typeof e.nonce=="string"&&e.nonce.length>0&&e.nonce.length<=64&&typeof e.file=="string"&&(e.mode==="edit"||e.mode==="play")&&typeof r=="object"&&r!==null&&Number.isFinite(r.x)&&Number.isFinite(r.y)?e:null},Nt=t=>t instanceof Element?!!t.closest(\'input, textarea, select, [contenteditable=""], [contenteditable="true"]\'):!1,Ct=t=>{let e=t.mode,r=!1,n=window.parent;if(n===window)return;let c=o=>{n.postMessage({...o,dc:f,artboardId:t.artboardId,nonce:t.nonce},"*")},i=()=>{let o=document.documentElement,s=document.body;return{docWidth:Math.max(o.scrollWidth,s?s.scrollWidth:0),docHeight:Math.max(o.scrollHeight,s?s.scrollHeight:0)}},a=o=>{let s=o.getBoundingClientRect();return{x:s.left+window.scrollX,y:s.top+window.scrollY,w:Math.max(0,s.width),h:Math.max(0,s.height)}},T=o=>({selector:V(o,document),text:z(o),html:Q(o),rect:a(o),tag:A(o).slice(0,64)||"element"}),l=null,E=o=>{let s=null;if(o)try{s=document.querySelector(o)}catch{s=null}if(!s){l?.remove(),l=null;return}l||(l=document.createElement("div"),l.setAttribute("data-dc-overlay",""),l.setAttribute("aria-hidden","true"));let _=a(s);l.setAttribute("style",`position:absolute;left:${_.x}px;top:${_.y}px;width:${_.w}px;height:${_.h}px;outline:2px solid Highlight;outline-offset:1px;pointer-events:none;z-index:2147483647;margin:0;padding:0;border:0;background:transparent;`),l.isConnected||document.documentElement.append(l)},p=o=>{switch(o.type){case"init-ack":r=!0;return;case"set-mode":e=o.mode;return;case"hit-test":{let s=document.elementFromPoint(o.x,o.y),_=s&&s!==document.documentElement&&s!==document.body&&!s.hasAttribute("data-dc-overlay");c({type:"hit",x:o.x,y:o.y,element:_?T(s):null});return}case"resolve-anchors":{let s=o.anchors.map(_=>{let d=Z(document,_);return{id:_.id,found:d.found,exact:d.exact,rect:d.element?a(d.element):null}});c({type:"anchors",results:s});return}case"scroll-by":window.scrollBy(o.dx,o.dy);return;case"scroll-to":window.scrollTo(o.x,o.y);return;case"highlight":E(o.selector);return}};window.addEventListener("message",o=>{if(o.source!==n)return;let s=K(o.data);!s||s.artboardId!==t.artboardId||s.nonce!==t.nonce||p(s)});let H=()=>c({type:"ready",...i(),title:document.title.slice(0,200)}),O=null,b="",M=()=>{O===null&&(O=setTimeout(()=>{O=null;let o=i(),s=`${o.docWidth}x${o.docHeight}`;s!==b&&(b=s,c({type:"size",...o}))},100))},m=!1;window.addEventListener("scroll",()=>{m||(m=!0,requestAnimationFrame(()=>{m=!1,c({type:"scroll",x:window.scrollX,y:window.scrollY})}))},{passive:!0});let B=()=>{(t.scroll.x!==0||t.scroll.y!==0)&&window.scrollTo(t.scroll.x,t.scroll.y),H();let o=0,s=setInterval(()=>{o+=1,r||o>Ot?clearInterval(s):H()},mt);if(typeof ResizeObserver=="function"){let _=new ResizeObserver(M);_.observe(document.documentElement),document.body&&_.observe(document.body)}typeof MutationObserver=="function"&&new MutationObserver(M).observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,characterData:!0}),M()};document.readyState==="loading"?document.addEventListener("DOMContentLoaded",B,{once:!0}):B(),window.addEventListener("load",()=>{(t.scroll.x!==0||t.scroll.y!==0)&&window.scrollTo(t.scroll.x,t.scroll.y),M()});let P=o=>{switch(o.kind){case"fragment":{if(o.id===""){window.scrollTo(0,0);return}(document.getElementById(o.id)??document.getElementsByName(o.id)[0]??null)?.scrollIntoView();return}case"navigate":c({type:"navigate",href:o.href,hash:o.hash});return;case"external":c({type:"open-external",url:o.url});return;case"blocked":return}};document.addEventListener("click",o=>{let _=(o.target instanceof Element?o.target:null)?.closest("a[href], area[href], [data-dc-goto]")??null;if(!_)return;o.preventDefault();let d=_.getAttribute("data-dc-goto");if(d!==null){P(J(d));return}P(q(_.getAttribute("href")??"",t.file))},!0),document.addEventListener("submit",o=>o.preventDefault(),!0),window.addEventListener("wheel",o=>{let s=o.ctrlKey||o.metaKey;if(!s&&e!=="edit")return;o.preventDefault();let _=o.deltaMode===1?It:o.deltaMode===2?window.innerHeight:1;c({type:"wheel",deltaX:o.deltaX*_,deltaY:o.deltaY*_,x:o.clientX,y:o.clientY,ctrl:s})},{passive:!1,capture:!0}),window.addEventListener("keydown",o=>{Nt(o.target)||U.includes(o.key)&&c({type:"key",key:o.key,ctrl:o.ctrlKey,meta:o.metaKey,shift:o.shiftKey})},!0)},tt=yt(window.__DC);tt&&Ct(tt);})();\n' : "";
+  var bundledBridge = () => true ? '"use strict";(()=>{var ee=/^[a-z0-9][a-z0-9-]{0,40}$/;var L=5e3,V=200,$=5e3;var lt=30*6e4;var te=12;var ne=/^--[A-Za-z0-9_-]{1,64}$/;var oe=/^[A-Za-z0-9 #%.,()+\\-\'"/]{1,100}$/;var D=1048576;var P=1e4;var w=D;var re=e=>{let t=0,r=0;for(let n of e)n==="\'"?t+=1:n===\'"\'&&(r+=1);return t%2===0&&r%2===0};var k=1;var ie=["Escape"," ","+","=","-","0","1"];var Q=e=>typeof e=="object"&&e!==null&&!Array.isArray(e),O=(e,t)=>typeof e=="string"&&e.length<=t,F=(e,t)=>O(e,t)&&e.length>0,b=e=>typeof e=="number"&&Number.isFinite(e)&&Math.abs(e)<=1e7;var Oe=e=>typeof e=="boolean",Ne=e=>e==="edit"||e==="play";var se=(e,t,r)=>Array.isArray(e)&&e.length<=t&&e.every(r),ke=e=>Q(e)&&F(e.id,100)&&O(e.selector,1e3)&&O(e.text,120)&&O(e.html,200);var Xe=e=>Q(e)&&typeof e.name=="string"&&ne.test(e.name)&&typeof e.value=="string"&&oe.test(e.value)&&re(e.value),Le=e=>{if(!Array.isArray(e)||e.length>P)return!1;let t=0;for(let r of e){if(!Array.isArray(r)||r.length!==2)return!1;let n=r[0],s=r[1];if(typeof n!="string"||s!==null&&typeof s!="string"||(t+=n.length+(s===null?0:s.length),t>w))return!1}return!0};var De=e=>e.dc===k&&F(e.artboardId,100)&&F(e.nonce,64),Pe={"init-ack":()=>!0,"set-mode":e=>Ne(e.mode),"hit-test":e=>b(e.x)&&b(e.y),"resolve-anchors":e=>se(e.anchors,500,ke),"scroll-by":e=>b(e.dx)&&b(e.dy),"scroll-to":e=>b(e.x)&&b(e.y),highlight:e=>e.selector===null||O(e.selector,1e3),"edit-probe":e=>b(e.x)&&b(e.y),"set-tokens":e=>se(e.vars,te,Xe),"storage-sync":e=>Oe(e.clear)&&Le(e.changes)};var we=(e,t)=>{if(!Q(t)||!De(t)||typeof t.type!="string"||!Object.hasOwn(e,t.type))return null;let r=e[t.type];return r!==void 0&&r(t)?t:null};var v=e=>we(Pe,e);var Be=["data-testid","data-screen","data-dc-id"],Ue=/^(is-|has-|js-|active|hover|focus)/,ue=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,ve=3,R=e=>e.tagName===e.tagName.toUpperCase()?e.tagName.toLowerCase():e.tagName,_e=e=>e.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),ae=e=>e===""?null:ue.test(e)?`#${e}`:`[id="${_e(e)}"]`,Ge=(e,t)=>{try{return e.querySelectorAll(t)}catch{return null}},X=(e,t,r)=>{let n=Ge(e,t);return n!==null&&n.length===1&&n[0]===r},Ke=e=>{let t=[];for(let r=0;r<e.classList.length&&t.length<ve;r+=1){let n=e.classList[r];n!==void 0&&ue.test(n)&&!Ue.test(n)&&t.push(n)}return t},We=e=>{let t=e.parentElement;if(!t)return null;let r=0,n=0;for(let s=0;s<t.children.length;s+=1){let l=t.children[s];!l||l.tagName!==e.tagName||(n+=1,l===e&&(r=n))}return n>1?r:null},Ve=e=>{let t=R(e);if(t==="html"||t==="body")return t;let r=Ke(e).map(s=>`.${s}`).join(""),n=We(e);return`${t}${r}${n===null?"":`:nth-of-type(${n})`}`},j=e=>{let t=[...e];for(;t.join(" > ").length>1e3&&t.length>1;)t.shift();return t.join(" > ").slice(0,1e3)},Ee=(e,t)=>{let r=R(e);if(r==="html"||r==="body"||r==="head")return r;let n=ae(e.id);if(n&&X(t,n,e))return n;for(let _ of Be){let E=e.getAttribute(_);if(E===null||E==="")continue;let d=`[${_}="${_e(E)}"]`;if(X(t,d,e))return d}let s=[],l=e;for(let _=0;l&&_<6;_+=1){s.unshift(Ve(l));let E=s.join(" > ");if(X(t,E,e))return j(s);let d=l.parentElement;if(!d)break;let u=ae(d.id);if(u&&X(t,u,d)){let p=[u,...s];if(X(t,p.join(" > "),e))return j(p)}l=d}return j(s)};var Fe=5e3,Ye=/^[A-Za-z][A-Za-z0-9-]*$/,I=e=>e.replace(/\\s+/g," ").trim(),ge=e=>I(e.textContent??"").slice(0,120),ze=e=>e.replace(/&/g,"&amp;").replace(/"/g,"&quot;"),Te=e=>{let t=`<${R(e)}`;for(let r=0;r<e.attributes.length;r+=1){let n=e.attributes[r];n&&(t+=n.value===""?` ${n.name}`:` ${n.name}="${ze(n.value)}"`)}return t+=">",t.length<=200?t:`${t.slice(0,198)}\\u2026>`},Qe=e=>{let t=/^<([A-Za-z][A-Za-z0-9:-]*)/.exec(e.trim());return t?.[1]?t[1].toLowerCase():null},de=(e,t)=>t===null||R(e).toLowerCase()===t,pe=(e,t)=>{try{return e.querySelectorAll(t)}catch{return[]}},Ae=(e,t)=>{let r={found:!1,exact:!1,element:null},n=Qe(t.html);if(t.selector!==""){let d=pe(e,t.selector);for(let u=0;u<d.length;u+=1){let p=d[u];if(p&&de(p,n))return{found:!0,exact:!0,element:p}}}let s=I(t.text);if(s.length<12)return r;let l=pe(e,n!==null&&Ye.test(n)?n:"*"),_=null,E=1/0;for(let d=0;d<l.length&&d<Fe;d+=1){let u=l[d];if(!u||!de(u,n))continue;let p=I(u.textContent??"");p.startsWith(s)&&p.length<=E&&(_=u,E=p.length)}return _?{found:!0,exact:!1,element:_}:r};var je=new Set(["svg","math","template"]),Ze=e=>{for(let t=e;t;t=t.parentElement)if(je.has(R(t).toLowerCase()))return!0;return!1},fe=e=>e.getAttribute("data-dc-overlay")!==null,xe=(e,t,r=$)=>{if(fe(e))return null;let n=R(e),s=n.toLowerCase();if(s===""||s.length>64)return null;let l=e.getAttribute("id");if(l!==null&&(l===""||l.length>V))return null;let _=I(e.textContent??""),E=_.length>L,d=e.children.length===0,u={tag:s,id:l,leaf:d,text:E?_.slice(0,L+1):_,truncated:E,sameIndex:0,sameCount:0},p=A=>A.children.length===0&&A.getAttribute("id")===l&&!fe(A)&&!Ze(A)&&I(A.textContent??"")===_;if(!d||!p(e))return u;let h=t.getElementsByTagName(n);if(h.length>r)return u;let M=-1,f=0;for(let A=0;A<h.length;A+=1){let m=h[A];!m||!p(m)||(m===e&&(M=f),f+=1)}return M===-1?u:{...u,sameIndex:M,sameCount:f}};var y=(e,t)=>e.length+(t===null?0:t.length),he=e=>{if(typeof e!="object"||e===null)return;let t=e;if(typeof t.persist!="boolean"||!Array.isArray(t.items))return;let r=new Set,n=[],s=0;for(let l of t.items){if(!Array.isArray(l)||l.length!==2)return;let _=l[0],E=l[1];if(typeof _!="string"||typeof E!="string"||(s+=y(_,E),s>D))return;r.has(_)||(r.add(_),n.push([_,E]))}return{persist:t.persist,items:n}},qe=(e,t,r={changes:P,chars:w})=>{let n=[],s=[],l=0,_=()=>{n.push({clear:e&&n.length===0,changes:s}),s=[],l=0};for(let E of t){let d=y(E[0],E[1]);s.length>0&&(s.length>=r.changes||l+d>r.chars)&&_(),s.push(E),l+=d}return(s.length>0||e&&n.length===0)&&_(),n},G=e=>`${e}`,K=(e,t,r)=>{if(t.length<r)throw new TypeError(`Failed to execute \'${e}\' on \'Storage\': ${r} argument${r===1?"":"s"} required, but only ${t.length} present.`)},me=(e,t,r)=>{let n=new Map,s=0;for(let[i,c]of e)n.has(i)||(n.set(i,c),s+=y(i,c));let l=null,_=(i,c)=>{let T=n.get(i);s+=y(i,c)-(T===void 0?0:y(i,T)),T===void 0&&(l=null),n.set(i,c)},E=i=>{let c=n.get(i);c!==void 0&&(s-=y(i,c),n.delete(i),l=null)},d=(...i)=>(K("getItem",i,1),n.get(G(i[0]))??null),u=(...i)=>{K("setItem",i,2);let c=G(i[0]),T=G(i[1]),S=n.get(c);if(S===T)return;if(s+y(c,T)-(S===void 0?0:y(c,S))>D)throw t(c);_(c,T),r?.set(c,T)},p=(...i)=>{K("removeItem",i,1);let c=G(i[0]);n.has(c)&&(E(c),r?.set(c,null))},h=()=>{n.size!==0&&(n.clear(),s=0,l=null,r?.clear())},M=(...i)=>{K("key",i,1);let c=Number(i[0])>>>0;return l??(l=[...n.keys()]),l[c]??null},f=Object.create(Object.prototype,{getItem:{value:d,enumerable:!0,configurable:!0,writable:!0},setItem:{value:u,enumerable:!0,configurable:!0,writable:!0},removeItem:{value:p,enumerable:!0,configurable:!0,writable:!0},clear:{value:h,enumerable:!0,configurable:!0,writable:!0},key:{value:M,enumerable:!0,configurable:!0,writable:!0},length:{get:()=>n.size,enumerable:!0,configurable:!0},[Symbol.toStringTag]:{value:"Storage",configurable:!0}}),A=Object.create(f),m=i=>typeof i=="string"&&n.has(i)&&!(i in A);return{storage:new Proxy(A,{get:(i,c,T)=>m(c)?n.get(c):Reflect.get(i,c,T),set:(i,c,T)=>typeof c!="string"?Reflect.set(i,c,T):(u(c,T),!0),has:(i,c)=>typeof c=="string"&&n.has(c)||Reflect.has(i,c),deleteProperty:(i,c)=>m(c)?(p(c),!0):Reflect.deleteProperty(i,c),ownKeys:i=>[...[...n.keys()].filter(c=>!(c in i)),...Reflect.ownKeys(i)],getOwnPropertyDescriptor:(i,c)=>m(c)?{value:n.get(c),writable:!0,enumerable:!0,configurable:!0}:Reflect.getOwnPropertyDescriptor(i,c),defineProperty:(i,c,T)=>typeof c!="string"?Reflect.defineProperty(i,c,T):"get"in T||"set"in T?!1:(u(c,T.value),!0),preventExtensions:()=>!1}),apply:(i,c)=>{i&&(n.clear(),s=0,l=null);for(let[T,S]of c)S===null?E(T):_(T,S)}}},Z=(e,t,r)=>{let n=e.DOMException??globalThis.DOMException,s=e.queueMicrotask?.bind(e)??(u=>void Promise.resolve().then(u)),l=u=>new n(`Failed to execute \'setItem\' on \'Storage\': Setting the value of \'${u}\' exceeded the quota.`,"QuotaExceededError"),_=null;if(t?.persist){let u=new Map,p=!1,h=!1,M=()=>{h=!1;let A=[...u],m=p;u=new Map,p=!1;for(let C of qe(m,A))r(C)},f=()=>{h||(h=!0,s(M))};_={set:(A,m)=>{u.delete(A),u.set(A,m),f()},clear:()=>{u.clear(),p=!0,f()}}}let E=me(t?.items??[],l,_),d=me([],l,null);for(let[u,p]of[["localStorage",E],["sessionStorage",d]])try{Object.defineProperty(e,u,{value:p.storage,configurable:!0,enumerable:!0,writable:!1})}catch{}return{sync:(u,p)=>E.apply(u,p)}};var Je=(e,t,r)=>{if(e===void 0)return;let n=v({dc:k,type:"set-tokens",artboardId:t,nonce:r,vars:e});return n?.type==="set-tokens"?n.vars:void 0},Se=e=>{if(typeof e!="object"||e===null)return null;let t=e,{artboardId:r,nonce:n,file:s,mode:l,scroll:_}=t;if(typeof r!="string"||r.length===0||r.length>100||typeof n!="string"||n.length===0||n.length>64||typeof s!="string"||l!=="edit"&&l!=="play"||typeof _!="object"||_===null)return null;let{x:E,y:d}=_;if(typeof E!="number"||typeof d!="number"||!Number.isFinite(E)||!Number.isFinite(d))return null;let u=Je(t.tokens,r,n),p=he(t.storage);return{artboardId:r,file:s,mode:l,scroll:{x:E,y:d},nonce:n,...u?{tokens:u}:{},...p?{storage:p}:{}}};var Re="https://design.invalid",q=e=>{try{return decodeURIComponent(e)}catch{return e}},Me=(e,t)=>{let r=e.trim();if(r==="")return{kind:"blocked",reason:"empty link"};if(r.startsWith("#"))return{kind:"fragment",id:q(r.slice(1))};let n;try{n=new URL(r,`${Re}/${t}`)}catch{return{kind:"blocked",reason:"malformed link"}}if(n.origin===Re){let s=q(n.pathname.replace(/^\\/+/,""));return s===t||s===""?n.hash?{kind:"fragment",id:q(n.hash.slice(1))}:{kind:"blocked",reason:"same page"}:/\\.html?$/i.test(s)?s.length>2e3||n.hash.length>2e3?{kind:"blocked",reason:"link too long"}:{kind:"navigate",href:s,hash:n.hash}:{kind:"blocked",reason:"not a page of this design"}}return(n.protocol==="https:"||n.protocol==="http:")&&n.href.length<=2e3?{kind:"external",url:n.href}:{kind:"blocked",reason:`${n.protocol} links do not open from a design`}},be=e=>ee.test(e)?{kind:"navigate",href:`screens/${e}.html`,hash:""}:{kind:"blocked",reason:"unknown screen id"};var tt=16,nt=5,ot=300,rt=e=>e instanceof Element?!!e.closest(\'input, textarea, select, [contenteditable=""], [contenteditable="true"]\'):!1,st=e=>{let t=e.mode,r=!1,n=window.parent,s=n!==window,l=o=>{n.postMessage({...o,dc:k,artboardId:e.artboardId,nonce:e.nonce},"*")},_=Z(window,s?e.storage:void 0,o=>l({type:"storage-batch",...o})),E=[],d=o=>{let a=document.documentElement.style,g=new Set(o.map(x=>x.name));for(let x of E)g.has(x)||a.removeProperty(x);for(let x of o)a.setProperty(x.name,x.value);E=[...g]};if(e.tokens&&d(e.tokens),!s)return;let u=()=>{let o=document.documentElement,a=document.body;return{docWidth:Math.max(o.scrollWidth,a?a.scrollWidth:0),docHeight:Math.max(o.scrollHeight,a?a.scrollHeight:0)}},p=o=>{let a=o.getBoundingClientRect();return{x:a.left+window.scrollX,y:a.top+window.scrollY,w:Math.max(0,a.width),h:Math.max(0,a.height)}},h=(o,a)=>{let g=document.elementFromPoint(o,a);return g&&g!==document.documentElement&&g!==document.body&&!g.hasAttribute("data-dc-overlay")?g:null},M=o=>({selector:Ee(o,document),text:ge(o),html:Te(o),rect:p(o),tag:R(o).slice(0,64)||"element"}),f=null,A=o=>{let a=null;if(o)try{a=document.querySelector(o)}catch{a=null}if(!a){f?.remove(),f=null;return}f||(f=document.createElement("div"),f.setAttribute("data-dc-overlay",""),f.setAttribute("aria-hidden","true"));let g=p(a);f.setAttribute("style",`position:absolute;left:${g.x}px;top:${g.y}px;width:${g.w}px;height:${g.h}px;outline:2px solid Highlight;outline-offset:1px;pointer-events:none;z-index:2147483647;margin:0;padding:0;border:0;background:transparent;`),f.isConnected||document.documentElement.append(f)},m=o=>{switch(o.type){case"init-ack":r=!0;return;case"set-mode":t=o.mode;return;case"hit-test":{let a=h(o.x,o.y);l({type:"hit",x:o.x,y:o.y,element:a?M(a):null});return}case"edit-probe":{let a=h(o.x,o.y),g=a?xe(a,document):null,x=a&&g?{...g,dir:getComputedStyle(a).direction==="rtl"?"rtl":"ltr",rect:p(a)}:null;l({type:"edit-probe-result",x:o.x,y:o.y,probe:x});return}case"set-tokens":d(o.vars);return;case"storage-sync":_.sync(o.clear,o.changes);return;case"resolve-anchors":{let a=o.anchors.map(g=>{let x=Ae(document,g);return{id:g.id,found:x.found,exact:x.exact,rect:x.element?p(x.element):null}});l({type:"anchors",results:a});return}case"scroll-by":window.scrollBy(o.dx,o.dy);return;case"scroll-to":window.scrollTo(o.x,o.y);return;case"highlight":A(o.selector);return}};window.addEventListener("message",o=>{if(o.source!==n)return;let a=v(o.data);!a||a.artboardId!==e.artboardId||a.nonce!==e.nonce||m(a)});let C=()=>l({type:"ready",...u(),title:document.title.slice(0,200)}),i=null,c="",T=()=>{i===null&&(i=setTimeout(()=>{i=null;let o=u(),a=`${o.docWidth}x${o.docHeight}`;a!==c&&(c=a,l({type:"size",...o}))},100))},S=!1;window.addEventListener("scroll",()=>{S||(S=!0,requestAnimationFrame(()=>{S=!1,l({type:"scroll",x:window.scrollX,y:window.scrollY})}))},{passive:!0});let W=()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),C();let o=0,a=setInterval(()=>{o+=1,r||o>nt?clearInterval(a):C()},ot);if(typeof ResizeObserver=="function"){let g=new ResizeObserver(T);g.observe(document.documentElement),document.body&&g.observe(document.body)}typeof MutationObserver=="function"&&new MutationObserver(T).observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,characterData:!0}),T()};document.readyState==="loading"?document.addEventListener("DOMContentLoaded",W,{once:!0}):W(),window.addEventListener("load",()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),T()});let J=o=>{switch(o.kind){case"fragment":{if(o.id===""){window.scrollTo(0,0);return}(document.getElementById(o.id)??document.getElementsByName(o.id)[0]??null)?.scrollIntoView();return}case"navigate":l({type:"navigate",href:o.href,hash:o.hash});return;case"external":l({type:"open-external",url:o.url});return;case"blocked":return}};document.addEventListener("click",o=>{let g=(o.target instanceof Element?o.target:null)?.closest("a[href], area[href], [data-dc-goto]")??null;if(!g)return;o.preventDefault();let x=g.getAttribute("data-dc-goto");if(x!==null){J(be(x));return}J(Me(g.getAttribute("href")??"",e.file))},!0),document.addEventListener("submit",o=>o.preventDefault(),!0),window.addEventListener("wheel",o=>{let a=o.ctrlKey||o.metaKey;if(!a&&t!=="edit")return;o.preventDefault();let g=o.deltaMode===1?tt:o.deltaMode===2?window.innerHeight:1;l({type:"wheel",deltaX:o.deltaX*g,deltaY:o.deltaY*g,x:o.clientX,y:o.clientY,ctrl:a})},{passive:!1,capture:!0}),window.addEventListener("keydown",o=>{rt(o.target)||ie.includes(o.key)&&l({type:"key",key:o.key,ctrl:o.ctrlKey,meta:o.metaKey,shift:o.shiftKey})},!0)},ye=Se(window.__DC);ye?st(ye):Z(window,void 0,()=>{});})();\n' : "";
   var newNonce = () => {
     const bytes = new Uint8Array(12);
     globalThis.crypto.getRandomValues(bytes);
@@ -7542,7 +10946,9 @@ ${view2.error.message}` : "";
     file: init.file,
     mode: init.mode,
     scroll: init.scroll ?? { x: 0, y: 0 },
-    nonce: init.nonce ?? newNonce()
+    nonce: init.nonce ?? newNonce(),
+    ...init.tokens ? { tokens: init.tokens } : {},
+    ...init.storage ? { storage: init.storage } : {}
   });
   var scriptJson = (value) => JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
   var bridgeScriptTag = (init, bridge) => {
@@ -7641,13 +11047,19 @@ ${bridge}
         error = null;
         setState("loading");
         try {
-          const rendered = await client.loadRender(options.slug, screenId, version);
+          const saved = version === null ? slotStorage(options.slug) : void 0;
+          const [rendered] = await Promise.all([client.loadRender(options.slug, screenId, version), saved?.ready]);
           if (mine !== token) return;
           meta = rendered.meta;
           drop();
-          doc = createFrameDocument(rendered.html, { artboardId: options.artboardId, file, mode: options.mode(), scroll: options.scroll() });
+          const tokens = [...slotTokens(options.slug)];
+          const storage = saved?.init();
+          doc = createFrameDocument(rendered.html, { artboardId: options.artboardId, file, mode: options.mode(), scroll: options.scroll(), ...tokens.length > 0 ? { tokens } : {}, ...storage ? { storage } : {} });
           const next = createFrameChannel({ artboardId: options.artboardId, nonce: doc.init.nonce, frame: iframe });
           next.subscribe((message) => {
+            if (message.type === "ready") {
+              for (const reply of onReadyMessages(options.slug)) next.send(reply);
+            }
             if (message.type === "ready" && state === "loading") setState("ready");
             for (const listener of [...listeners]) listener(message);
           });
@@ -7677,15 +11089,57 @@ ${bridge}
   };
 
   // src/ui/wall/board-set.ts
+  var LABEL_GAP_MIN = 18;
+  var HEAD_GAP = 6;
+  var LABEL_LIFT = 26;
   var toRect = (box) => ({ x: box.x, y: box.y, w: box.width, h: box.height });
   var createBoardSet = (ctx, deps) => {
     const { options, pageMode } = ctx;
     const { camera, pins, popovers } = deps;
     const boards = /* @__PURE__ */ new Map();
-    let layout = { boards: [], bounds: { x: 0, y: 0, w: 0, h: 0 } };
+    let layout = { boards: [], ghost: null, bounds: { x: 0, y: 0, w: 0, h: 0 } };
     let syncQueued = false;
     let recent = null;
+    let ghost = null;
+    let plan = { rows: /* @__PURE__ */ new Map(), memberOf: /* @__PURE__ */ new Map() };
+    let heads = /* @__PURE__ */ new Map();
+    const headEls = /* @__PURE__ */ new Map();
     const values = () => boards.values();
+    const directionOf = (board) => {
+      const id = board.art.screen?.id;
+      if (id === void 0) return null;
+      const row = plan.rows.get(id) ?? plan.rows.get(plan.memberOf.get(id) ?? "");
+      return row === void 0 ? null : { row, current: row.root.id === id };
+    };
+    const isFirstOfRow = (board) => {
+      const id = board.art.screen?.id;
+      if (id === void 0) return false;
+      if (plan.memberOf.has(id)) return false;
+      if (plan.rows.has(id)) return true;
+      return !layout.boards.some((other) => other.screen?.id === id && other.cell.col < board.art.cell.col);
+    };
+    const rowScreenIds = (screenId) => /* @__PURE__ */ new Set([screenId, ...plan.rows.get(screenId)?.members.map((member) => member.id) ?? []]);
+    const keepStateOf = (board) => {
+      const id = board.art.screen?.id ?? "";
+      const detail = ctx.detail;
+      return keepState({
+        viewing: ctx.readOnly(),
+        designJson: detail.designJson,
+        listInvalid: detail.warnings.some((warning) => warning.code === "invalid-screens"),
+        editing: ctx.mode === "edit",
+        busy: ctx.screensBusy !== null,
+        written: detail.files.screens[id]?.exists === true
+      });
+    };
+    const pressKeep = (board) => {
+      const row = directionOf(board)?.row;
+      const keep = board.art.screen?.id;
+      if (row !== void 0 && keep !== void 0 && !ctx.disposed && ctx.screensBusy === null) options.onKeepDirection?.({ of: row.root.id, keep });
+    };
+    const openKeepMenu = (board) => {
+      const state = keepStateOf(board);
+      openMenu(board.menu, [{ id: "keep", label: "Keep this one", disabled: state.disabled, ...state.reason !== null ? { reason: state.reason } : {} }], () => pressKeep(board));
+    };
     const placeLabel = (board) => {
       if (pageMode) {
         board.label.hidden = true;
@@ -7697,9 +11151,39 @@ ${bridge}
       const y = current.y + rect.y * current.scale;
       const width = rect.w * current.scale;
       const next = layout.boards.reduce((nearest, other) => other.rect.x > rect.x && (nearest === null || other.rect.x < nearest) ? other.rect.x : nearest, null);
-      board.label.style.transform = `translate(${x}px, ${y - 26}px)`;
+      board.label.style.transform = `translate(${x}px, ${y - LABEL_LIFT}px)`;
       board.label.style.width = `${Math.max(0, Math.min(labelWidth(rect, next, current.scale), Math.max(width, ctx.surfaceSize.w - x - 8)))}px`;
-      board.label.hidden = width < 32 || board.art.cell.row > 0 && (ARTBOARD_LABEL_HEIGHT + WALL_GAP) * current.scale < 24;
+      const direction = directionOf(board);
+      const line = board.art.cell.line ?? 0;
+      const room = direction === null ? 0 : line > 0 ? DIRECTION_LINE_ROOM : heads.get(direction.row.root.id)?.h ?? 0;
+      const crowded = (board.art.cell.row > 0 || line > 0) && (ARTBOARD_LABEL_HEIGHT + WALL_GAP + room) * current.scale < LABEL_GAP_MIN;
+      board.label.hidden = width < 32 || crowded;
+    };
+    const placeHead = (rootId, head) => {
+      const row = plan.rows.get(rootId);
+      const current = row === void 0 ? void 0 : boards.get(artboardIdOf(rootId, row.viewport.id));
+      if (current === void 0) {
+        head.root.hidden = true;
+        return;
+      }
+      head.root.hidden = false;
+      delete head.root.dataset.tight;
+      const view2 = camera.get();
+      const x = view2.x + current.art.rect.x * view2.scale;
+      head.root.style.maxWidth = `${Math.max(0, ctx.surfaceSize.w - x - 8)}px`;
+      const above = heads.get(rootId);
+      const room = above === void 0 ? Infinity : (current.art.rect.y - (above.y - WALL_GAP)) * view2.scale - LABEL_LIFT - HEAD_GAP;
+      if (head.root.offsetHeight > room) head.root.dataset.tight = "true";
+      if (head.root.offsetHeight > room) {
+        head.root.hidden = true;
+        return;
+      }
+      const y = view2.y + current.art.rect.y * view2.scale - LABEL_LIFT - head.root.offsetHeight - HEAD_GAP;
+      head.root.style.left = `${x}px`;
+      head.root.style.top = `${y}px`;
+    };
+    const placeHeads = () => {
+      for (const [rootId, head] of headEls) placeHead(rootId, head);
     };
     const paintPlaceholder = (board) => {
       const state = board.main.state();
@@ -7708,7 +11192,7 @@ ${bridge}
       board.placeholder.dataset.state = board.live ? state : "idle";
       const inner = h("div", { class: "dc-placeholder-inner" });
       if (!board.live || state === "idle") {
-        if (!board.live) append(inner, icon2("layers", 20), h("p", { class: "dc-placeholder-title" }, "Paused"), h("p", { class: "dc-placeholder-sub" }, "Off screen. Pan here to load it."));
+        if (!board.live) append(inner, icon2("layers", 20), h("p", { class: "dc-placeholder-title" }, "Paused"), h("p", { class: "dc-placeholder-sub" }, "Not loaded. Pan here to load it."));
         else mountSpinner(inner, { label: "Loading\u2026" });
       } else if (state === "loading") {
         mountSpinner(inner, { label: `Loading ${board.art.screen?.title ?? "page"}\u2026` });
@@ -7736,13 +11220,13 @@ ${bridge}
       const name = art.screen ? `${art.screen.title} \xB7 ${viewportLabel(art.viewport)}` : viewportLabel(art.viewport);
       const navigated = board.screenId !== (art.screen?.id ?? null);
       const shown = navigated ? ctx.screens().find((s) => s.id === board.screenId)?.title ?? board.screenId ?? "" : art.screen?.title ?? ctx.detail.design.title;
-      const text = artboardLabel(shown, art.viewport);
+      const text = directionOf(board) !== null && !navigated && art.screen ? boardLabel(art.screen, art.viewport) : artboardLabel(shown, art.viewport);
       board.labelText.replaceChildren(h("span", { class: "dc-label-name" }, text.name), h("span", { class: "dc-label-sep", "aria-hidden": "true" }, "\xB7"), h("span", { class: "dc-label-dims" }, text.detail));
       board.labelText.title = text.full;
       board.labelStatus.replaceChildren();
       const state = board.main.state();
       if (state === "loading" && board.live) append(board.labelStatus, h("span", { class: "dc-status dc-status-spin", role: "status", "aria-label": "Loading" }));
-      if (state === "missing") append(board.labelStatus, h("span", { class: "dc-status", "data-tone": "warning" }, "Not written yet"));
+      if (state === "missing" && directionOf(board) === null) append(board.labelStatus, h("span", { class: "dc-status", "data-tone": "warning" }, "Not written yet"));
       if (state === "error") append(board.labelStatus, h("span", { class: "dc-status", "data-tone": "error" }, "Didn\u2019t load"));
       const meta = board.main.meta();
       const problems = meta ? [...meta.blocked, ...meta.missing] : [];
@@ -7764,6 +11248,57 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         );
       }
       if (ctx.version !== null) append(board.labelStatus, h("span", { class: "dc-status", "data-tone": "info" }, ctx.compare ? `v${ctx.version.slice(1)} | current` : ctx.version));
+      if (ctx.screensBusy !== null && ctx.screensBusy.id !== null && ctx.screensBusy.id === art.screen?.id) {
+        append(board.labelStatus, h("span", { class: "dc-status dc-status-spin", role: "status", "aria-label": "Working on this screen" }));
+      }
+      paintLabelMenu(board);
+    };
+    const paintHeadMenu = (head, row) => {
+      head.menu.hidden = !(ctx.detail.design.kind === "canvas" && ctx.mode === "edit");
+      const name = `Actions for screen ${row.root.title}`;
+      head.menu.setAttribute("aria-label", name);
+      head.menu.title = name;
+      if (ctx.screensBusy !== null) head.menu.setAttribute("aria-disabled", "true");
+      else head.menu.removeAttribute("aria-disabled");
+    };
+    const paintDirectionLabel = (board, screen, direction) => {
+      const state = keepStateOf(board);
+      const busy = ctx.screensBusy;
+      const onPage = !options.compact;
+      const name = keepLabel(screen, direction.row.root.title);
+      board.keep.el.hidden = !(state.shown && onPage);
+      board.keep.set({ disabled: state.disabled, loading: busy !== null && busy.id === screen.id, title: state.reason ?? "" });
+      board.keep.el.setAttribute("aria-label", state.reason !== null ? `${name}. ${state.reason}` : name);
+      board.menu.hidden = !(state.shown && !onPage);
+      const menuName = `Actions for ${boardLabel(screen, board.art.viewport).full}`;
+      board.menu.setAttribute("aria-label", menuName);
+      board.menu.title = menuName;
+      if (busy !== null) board.menu.setAttribute("aria-disabled", "true");
+      else board.menu.removeAttribute("aria-disabled");
+      board.label.dataset.direction = "true";
+      board.label.dataset.draggable = direction.current && onPage && state.shown && !ctx.readOnly() && busy === null ? "true" : "false";
+      const head = headEls.get(direction.row.root.id);
+      if (direction.current && head) paintHeadMenu(head, direction.row);
+    };
+    const paintLabelMenu = (board) => {
+      const screen = board.art.screen;
+      const direction = directionOf(board);
+      if (direction !== null && screen !== null && !pageMode) {
+        paintDirectionLabel(board, screen, direction);
+        return;
+      }
+      board.keep.el.hidden = true;
+      delete board.label.dataset.direction;
+      const shows = !pageMode && screen !== null && ctx.detail.design.kind === "canvas" && ctx.mode === "edit" && isFirstOfRow(board);
+      board.menu.hidden = !shows;
+      if (ctx.screensBusy !== null) board.menu.setAttribute("aria-disabled", "true");
+      else board.menu.removeAttribute("aria-disabled");
+      if (screen !== null) {
+        const name = `Actions for screen ${screen.title}`;
+        board.menu.setAttribute("aria-label", name);
+        board.menu.title = name;
+      }
+      board.label.dataset.draggable = shows && !options.compact && !ctx.readOnly() && ctx.screensBusy === null ? "true" : "false";
     };
     const paint = (board) => {
       paintPlaceholder(board);
@@ -7784,14 +11319,30 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const makeBoard = (art) => {
       const labelText = h("span", { class: "dc-label-text" });
       const labelStatus = h("span", { class: "dc-label-status" });
-      const label = h("div", { class: "dc-label" }, labelText, labelStatus);
+      let self = null;
+      const menu = iconBtn({
+        icon: "more",
+        label: "Actions for screen",
+        size: "sm",
+        onClick: () => {
+          const screenId = self?.art.screen?.id;
+          if (screenId === void 0 || ctx.disposed || ctx.screensBusy !== null) return;
+          if (self && directionOf(self) !== null) openKeepMenu(self);
+          else deps.onScreenMenu({ screenId, anchor: menu });
+        }
+      });
+      menu.classList.add("dc-label-menu");
+      menu.hidden = true;
+      const keep = btn({ label: "Keep this one", variant: "outline", size: "xs", icon: "check", onClick: () => void (self && pressKeep(self)) });
+      keep.el.classList.add("dc-label-keep");
+      keep.el.hidden = true;
+      const label = h("div", { class: "dc-label" }, labelText, labelStatus, keep.el, menu);
       const placeholder = h("div", { class: "dc-placeholder" });
       const hoverTag = h("span", { class: "dc-hover-tag" });
       const hover2 = h("div", { class: "dc-hover", hidden: true }, hoverTag);
       const selected = h("div", { class: "dc-selected", hidden: true });
       const overlayLayer = h("div", { class: "dc-board-overlay" }, hover2, selected);
       const root = h("div", { class: "dc-board", "data-board": art.id });
-      let self = null;
       const main = createFrameSlot({
         slug: options.slug,
         artboardId: art.id,
@@ -7817,6 +11368,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         label,
         labelText,
         labelStatus,
+        menu,
+        keep,
         main,
         compare: null,
         screenId: art.screen?.id ?? null,
@@ -7876,15 +11429,99 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const viewport = chosen ?? { id: PAGE_FILL_VIEWPORT_ID, label: "Full width", width: geometry.frameW, height: geometry.frameH };
       const frame = { x: 0, y: 0, width: geometry.frameW, height: geometry.frameH };
       const cell = { id: artboardIdOf(null, viewport.id), screen: null, screenTitle: ctx.detail.design.title, viewport, row: 0, col: 0, frame, label: { x: 0, y: 0, width: frame.width, height: 0 } };
-      return { boards: [{ id: cell.id, screen: null, viewport, rect: toRect(frame), cell }], bounds: toRect(frame) };
+      return { boards: [{ id: cell.id, screen: null, viewport, rect: toRect(frame), cell }], ghost: null, bounds: toRect(frame) };
+    };
+    const ghostBoard = () => {
+      if (ghost) return ghost;
+      const button2 = h("button", { type: "button", class: "dc-ghost-add", "aria-label": "Add a screen" }, h("span", null, icon2("plus", 14), "Screen"));
+      button2.addEventListener("click", () => {
+        if (!ctx.disposed) deps.onGhost(button2);
+      });
+      const root = h("div", { class: "dc-board dc-ghost", "data-ghost": "true" }, button2);
+      ghost = { root, button: button2 };
+      return ghost;
+    };
+    const placeGhost = (box) => {
+      if (box === null) {
+        if (ghost && ghost.root.isConnected) {
+          const hadFocus = ghost.root.contains(document.activeElement);
+          ghost.root.remove();
+          if (hadFocus) ctx.surface.focus({ preventScroll: true });
+        }
+        return;
+      }
+      const { root } = ghostBoard();
+      if (!root.isConnected) ctx.world.append(root);
+      root.style.transform = `translate(${box.x}px, ${box.y}px)`;
+      root.style.width = `${box.w}px`;
+      root.style.height = `${box.h}px`;
+    };
+    const makeHead = (rootId) => {
+      const title2 = h("span", { class: "dc-direction-title" });
+      const selectHost = h("div", { class: "dc-direction-select" });
+      const menu = iconBtn({
+        icon: "more",
+        label: "Actions for screen",
+        size: "sm",
+        onClick: () => {
+          if (!ctx.disposed && ctx.screensBusy === null) deps.onScreenMenu({ screenId: rootId, anchor: menu });
+        }
+      });
+      menu.classList.add("dc-label-menu");
+      const root = h("div", { class: "dc-label dc-direction-head", "data-direction-head": rootId }, h("span", { class: "dc-direction-line" }, title2, menu), selectHost);
+      const select = mountSelect(selectHost, {
+        label: "Show at",
+        value: null,
+        options: [],
+        onChange: (id) => {
+          options.onDirectionViewport?.(rootId, id);
+          rebuild();
+          camera.fit();
+        }
+      });
+      ctx.labels.append(root);
+      return { root, title: title2, selectHost, select, menu };
+    };
+    const paintHead = (head, row) => {
+      head.title.textContent = rowTitle(row.root.title, row.members.length);
+      head.title.title = head.title.textContent;
+      head.selectHost.hidden = row.options.length < 2;
+      head.select.update({ value: row.viewport.id, options: row.options.map((viewport) => ({ id: viewport.id, label: viewport.label })) });
+      paintHeadMenu(head, row);
+    };
+    const syncHeads = () => {
+      for (const [rootId, head] of headEls) {
+        if (plan.rows.has(rootId)) continue;
+        head.select.dispose();
+        head.root.remove();
+        headEls.delete(rootId);
+      }
+      for (const row of plan.rows.values()) {
+        let head = headEls.get(row.root.id);
+        if (head === void 0) {
+          head = makeHead(row.root.id);
+          headEls.set(row.root.id, head);
+        }
+        paintHead(head, row);
+      }
     };
     const rebuild = () => {
       const { design } = ctx.detail;
-      if (pageMode) layout = pageLayout();
-      else {
+      if (pageMode) {
+        layout = pageLayout();
+        plan = { rows: /* @__PURE__ */ new Map(), memberOf: /* @__PURE__ */ new Map() };
+        heads = /* @__PURE__ */ new Map();
+      } else {
         const visible = design.viewports.filter((viewport) => !ctx.hidden.has(viewport.id));
-        const rows = design.kind === "page" ? [{ id: null, title: design.title }] : design.screens.map((screen) => ({ id: screen.id, title: screen.title, ...screen.viewports ? { viewports: screen.viewports } : {} }));
-        const wall = layoutWall(rows, visible);
+        plan = design.kind === "page" ? { rows: /* @__PURE__ */ new Map(), memberOf: /* @__PURE__ */ new Map() } : planDirections(design.screens, design.viewports, (of) => options.directionViewport?.(of));
+        const rows = design.kind === "page" ? [{ id: null, title: design.title }] : wallRows(design.screens, plan);
+        const first = visible[0];
+        const showGhost = first !== void 0 && ghostVisible({ kind: design.kind, mode: ctx.mode, viewing: ctx.readOnly(), count: design.screens.length });
+        const columns = directionColumns(options.compact);
+        const placed = layoutWall(rows, visible, { ...showGhost ? { ghost: { width: first.width, height: GHOST_HEIGHT } } : {}, ...columns !== void 0 ? { directionColumns: columns } : {} });
+        const spaced = spaceDirectionRows(placed, plan, options.compact ? DIRECTION_HEAD_ROOM_RAIL : DIRECTION_HEAD_ROOM);
+        const wall = spaced.layout;
+        heads = new Map([...spaced.heads].map(([id, box]) => [id, toRect(box)]));
         layout = {
           boards: wall.artboards.map((cell) => ({
             id: cell.id,
@@ -7893,9 +11530,11 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
             rect: toRect(cell.frame),
             cell
           })),
+          ghost: wall.ghost ? toRect(wall.ghost.box) : null,
           bounds: wall.bounds ? toRect(wall.bounds) : { x: 0, y: 0, w: 0, h: 0 }
         };
       }
+      placeGhost(layout.ghost);
       const keep = new Set(layout.boards.map((art) => art.id));
       for (const [id, board] of boards) {
         if (!keep.has(id)) {
@@ -7913,7 +11552,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           if (resized && !pageMode) void load(existing);
         } else boards.set(art.id, makeBoard(art));
       }
+      syncHeads();
       for (const board of boards.values()) paint(board);
+      placeHeads();
     };
     async function load(board) {
       if (!board.live) return;
@@ -7930,7 +11571,10 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const syncLive = () => {
       syncQueued = false;
       if (ctx.disposed || ctx.surfaceSize.w === 0) return;
-      const live = new Set(liveBoards([...boards.values()].map((board) => ({ id: board.art.id, rect: board.art.rect })), camera.get(), ctx.surfaceSize, ctx.liveBudget, FRAME_UNLOAD_MARGIN).map((entry) => entry.id));
+      const covered = camera.coveredInsets();
+      const shown = { w: Math.max(0, ctx.surfaceSize.w - covered.right), h: Math.max(0, ctx.surfaceSize.h - covered.bottom) };
+      const ordered = layout.boards.flatMap((art) => boards.get(art.id) ?? []);
+      const live = new Set(liveBoards(ordered.map((board) => ({ id: board.art.id, rect: board.art.rect })), camera.get(), shown, ctx.liveBudget, FRAME_UNLOAD_MARGIN).map((entry) => entry.id));
       for (const board of boards.values()) {
         const shouldLive = live.has(board.art.id);
         if (shouldLive && !board.live) {
@@ -7958,6 +11602,29 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       first: () => boards.values().next().value,
       forComment: (comment) => layout.boards.map((art) => boards.get(art.id)).find((candidate) => candidate && candidate.art.screen?.id === (comment.screen ?? void 0) && candidate.art.viewport.id === comment.viewport) ?? [...boards.values()].find((candidate) => comment.screen === null && candidate.art.viewport.id === comment.viewport),
       bounds: () => layout.bounds,
+      rows: () => {
+        const rows = [];
+        for (const screen of ctx.screens()) {
+          if (plan.memberOf.has(screen.id)) continue;
+          const ids = rowScreenIds(screen.id);
+          const own = layout.boards.filter((art) => art.screen !== null && ids.has(art.screen.id));
+          if (own.length === 0) continue;
+          const head = heads.get(screen.id);
+          rows.push({ id: screen.id, top: Math.min(...own.map((art) => art.cell.label.y), ...head ? [head.y] : []), bottom: Math.max(...own.map((art) => art.rect.y + art.rect.h)) });
+        }
+        return rows;
+      },
+      rowBox: (screenId) => {
+        const ids = rowScreenIds(screenId);
+        const own = layout.boards.filter((art) => art.screen !== null && ids.has(art.screen.id));
+        if (own.length === 0) return null;
+        const left = Math.min(...own.map((art) => art.rect.x));
+        const head = heads.get(screenId);
+        const top = Math.min(...own.map((art) => art.cell.label.y), ...head ? [head.y] : []);
+        return { x: left, y: top, w: Math.max(...own.map((art) => art.rect.x + art.rect.w)) - left, h: Math.max(...own.map((art) => art.rect.y + art.rect.h)) - top };
+      },
+      rowScreenIds,
+      isFirstOfRow,
       rebuild,
       load,
       reset,
@@ -7965,6 +11632,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       paintLabel,
       placeLabels: () => {
         for (const board of boards.values()) placeLabel(board);
+        placeHeads();
       },
       markRecent: (sources) => {
         recent = sources;
@@ -7987,11 +11655,19 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       dispose: () => {
         for (const board of boards.values()) disposeBoard(board);
         boards.clear();
+        for (const head of headEls.values()) {
+          head.select.dispose();
+          head.root.remove();
+        }
+        headEls.clear();
+        ghost?.root.remove();
+        ghost = null;
       }
     };
   };
 
   // src/ui/wall/camera-controller.ts
+  var TOP_LABEL_ROOM = 28;
   var SETTLE_MS = 400;
   var PAGE_RELAYOUT_MS = 100;
   var createCameraController = (ctx, hooks) => {
@@ -8000,7 +11676,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     let userMoved = options.initialCamera !== null;
     let settleTimer;
     const pageGutter = options.compact ? PAGE_GUTTER_COMPACT : PAGE_GUTTER;
-    const coveredInsets = () => ({ right: options.coveredRight?.() ?? 0, bottom: 0 });
+    const coveredInsets = () => ({ right: options.coveredRight?.() ?? 0, bottom: options.coveredBottom?.() ?? 0 });
     const pageGeometry = () => {
       const insets = coveredInsets();
       return pageCamera({ stageW: ctx.surfaceSize.w - insets.right, stageH: ctx.surfaceSize.h - insets.bottom, frameW: ctx.pageViewport()?.width ?? null, gutter: pageGutter });
@@ -8036,7 +11712,10 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const insets = coveredInsets();
       const area = fitArea({ width: ctx.surfaceSize.w, height: ctx.surfaceSize.h - insets.bottom }, insets.right);
       const padding = options.compact ? 16 : area.padding;
-      return bounds.w > 0 && bounds.h > 0 ? fitBox({ x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h }, area, { padding }) : { ...DEFAULT_CAMERA };
+      if (!(bounds.w > 0 && bounds.h > 0)) return { ...DEFAULT_CAMERA };
+      const labelRoom = Math.max(0, TOP_LABEL_ROOM - padding);
+      const fitted = fitBox({ x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h }, { width: area.width, height: area.height - labelRoom }, { padding });
+      return labelRoom === 0 ? fitted : { ...fitted, y: fitted.y + labelRoom };
     };
     const layoutPage = () => {
       hooks().rebuildLayout();
@@ -8091,88 +11770,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
   };
 
-  // src/ui/model/wall-input.ts
-  var ZOOM_KEY_FACTOR = 1.25;
-  var shortcutAction = (input) => {
-    const { key, shift } = input;
-    if (key === "Escape") return { type: "escape" };
-    if (input.pageMode) return null;
-    if (key === "+" || key === "=") return { type: "zoom", factor: ZOOM_KEY_FACTOR };
-    if (key === "-" || key === "_") return { type: "zoom", factor: 1 / ZOOM_KEY_FACTOR };
-    if (key === "0" && shift) return { type: "zoom-reset" };
-    if (key === "1" && shift) return { type: "fit" };
-    if (key === " ") return { type: "space-down" };
-    return null;
-  };
-  var wallKeyAction = (input) => {
-    const { key, code, shift } = input;
-    if (input.pageMode) return shortcutAction(input);
-    const step = nudgeStep(shift);
-    if (code === "Digit0" && shift) return { type: "zoom-reset" };
-    if (code === "Digit1" && shift) return { type: "fit" };
-    if (key === "ArrowLeft") return { type: "pan", dx: step, dy: 0 };
-    if (key === "ArrowRight") return { type: "pan", dx: -step, dy: 0 };
-    if (key === "ArrowUp") return { type: "pan", dx: 0, dy: step };
-    if (key === "ArrowDown") return { type: "pan", dx: 0, dy: -step };
-    if (key.toLowerCase() === "h") return { type: "toggle-pan-tool" };
-    if (key === " " || key === "+" || key === "=" || key === "-" || key === "Escape") return shortcutAction(input);
-    return null;
-  };
-  var pageKeyAction = (input) => {
-    const step = nudgeStep(input.shift);
-    const screenful = Math.max(40, Math.round(input.frameHeight * 0.9));
-    switch (input.key) {
-      case "Escape":
-        return { type: "escape" };
-      case "ArrowUp":
-        return { type: "scroll-by", dx: 0, dy: -step };
-      case "ArrowDown":
-        return { type: "scroll-by", dx: 0, dy: step };
-      case "ArrowLeft":
-        return { type: "scroll-by", dx: -step, dy: 0 };
-      case "ArrowRight":
-        return { type: "scroll-by", dx: step, dy: 0 };
-      case "PageUp":
-        return { type: "scroll-by", dx: 0, dy: -screenful };
-      case "PageDown":
-        return { type: "scroll-by", dx: 0, dy: screenful };
-      case "Home":
-        return { type: "scroll-to", x: 0, y: 0 };
-      case "End":
-        return { type: "scroll-by", dx: 0, dy: 1e7 };
-      default:
-        return null;
-    }
-  };
-  var wheelRoute = (input) => {
-    if (input.pageMode) return !input.ctrlOrMeta && input.overReadyBoard ? "scroll-frame" : "none";
-    if (input.ctrlOrMeta) return "zoom";
-    if (input.mode === "edit" && !input.readOnly && input.overReadyBoard && !input.spaceDown && !input.panTool) return "scroll-frame";
-    return "pan";
-  };
-  var frameWheelRoute = (input) => {
-    const scrolls = input.mode === "edit" && !input.readOnly;
-    if (input.pageMode) return !input.ctrl && scrolls ? "scroll-frame" : "none";
-    if (input.ctrl) return "zoom";
-    return scrolls ? "scroll-frame" : "pan";
-  };
-  var pointerDownAction = (input) => {
-    if (input.pageMode) {
-      if (input.button !== 0) return "ignore";
-      return input.onBoard && input.mode === "edit" && !input.readOnly ? "press" : "dismiss";
-    }
-    const wantsPan = input.button === 1 || input.spaceDown || input.panTool || !input.onBoard || input.mode === "play" || input.readOnly;
-    if (input.button !== 0 && input.button !== 1) return "ignore";
-    return wantsPan ? "pan" : "press";
-  };
-  var DRAG_THRESHOLD_PX = 4;
-  var isDrag = (from, to) => Math.hypot(to.x - from.x, to.y - from.y) > DRAG_THRESHOLD_PX;
-  var hitMatches = (pending, board, x, y) => pending !== null && pending.board === board && pending.frame.x === x && pending.frame.y === y;
-  var frameModeOf = (mode, readOnly) => readOnly ? "play" : mode;
-
   // src/ui/wall/frame-messages.ts
-  var createFrameMessageHandler = (ctx, deps) => {
-    const { camera, hit, popovers } = deps;
+  var createFrameMessageHandler = (ctx, deps, store2) => {
+    const { camera, hit, popovers, picks } = deps;
     const { options } = ctx;
     return (board, message) => {
       switch (message.type) {
@@ -8181,11 +11781,16 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           return;
         case "scroll":
           if (popovers.current()?.board === board) popovers.close();
+          picks.notifyMoved();
           return;
         case "hit":
           hit.onHit(board, message);
           return;
+        case "edit-probe-result":
+          picks.onProbeResult(board, message, (screen) => store2.loadSource(ctx.options.slug, screen));
+          return;
         case "navigate": {
+          if (ctx.frameMode() !== "play") return;
           const target = ctx.screens().find((candidate) => candidate.file === message.href);
           if (!target) {
             options.onNotice("That link doesn\u2019t lead to a screen of this design.");
@@ -8196,6 +11801,10 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           void deps.load(board);
           return;
         }
+        case "storage-batch":
+          if (ctx.version !== null && !ctx.compare) return;
+          deps.storage(board, { clear: message.clear, changes: message.changes });
+          return;
         case "open-external":
           options.onExternal(message.url);
           return;
@@ -8485,9 +12094,16 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       board.pins.get(commentId)?.setAttribute("aria-expanded", "true");
       card.focus();
     };
+    const selectionFor = (board, element, framePoint) => {
+      const anchor = anchorFromHit(element, framePoint, board.scroll);
+      const target = { screen: board.art.screen?.id ?? null, viewport: board.art.viewport.id };
+      const where = ctx.pageMode ? viewportOf(ctx.detail.design.viewports, target.viewport) : `${board.art.screen?.title ?? "Page"} \xB7 ${board.art.viewport.label}`;
+      return { key: `${board.art.id}:${anchor.selector}`, element: { ...target, anchor }, tag: element.tag, where };
+    };
     const openComposer = (board, element, framePoint) => {
       close();
-      const anchor = anchorFromHit(element, framePoint, board.scroll);
+      const selection2 = selectionFor(board, element, framePoint);
+      const { anchor, ...target } = selection2.element;
       const { point } = anchor;
       rectToBox(board, board.selected, element.rect);
       board.selected.hidden = false;
@@ -8497,24 +12113,22 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       temp.style.left = `${pinAt.x}px`;
       temp.style.top = `${pinAt.y}px`;
       board.overlay.append(temp);
-      const key = `${board.art.id}:${anchor.selector}`;
-      const target = { screen: board.art.screen?.id ?? null, viewport: board.art.viewport.id };
-      const where = ctx.pageMode ? viewportOf(ctx.detail.design.viewports, target.viewport) : `${board.art.screen?.title ?? "Page"} \xB7 ${board.art.viewport.label}`;
       const card = createComposer({
         tag: element.tag,
         snippet: element.text.length > 80 ? `${element.text.slice(0, 77)}\u2026` : element.text,
         onCancel: () => close(),
         onSubmit: async (body) => {
           await options.createComment({ ...target, anchor, body });
-          deps.emitSelection({ type: "commented", key });
+          deps.emitSelection({ type: "commented", key: selection2.key });
           close();
         }
       });
       open(board, card, null);
-      deps.emitSelection({ type: "selected", selection: { key, element: { ...target, anchor }, tag: element.tag, where } });
+      deps.emitSelection({ type: "selected", selection: selection2 });
       const base = frameToScreen(camera.get(), board.art.rect, { x: element.rect.x - board.scroll.x, y: element.rect.y - board.scroll.y });
       placeCard(card.el, base, element.rect.h * camera.get().scale);
       card.focus();
+      return selection2;
     };
     const clearSelection = () => {
       if (popover?.commentId === null && popover.card.hasDraft?.() !== true) close();
@@ -8525,13 +12139,13 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const comment = ctx.comments().find((candidate) => candidate.id === id);
       if (comment) popover.card.setStatus?.(comment.status);
     };
-    return { openThread, openComposer, close, current: () => popover, placeCard, clearSelection, refresh };
+    return { openThread, openComposer, selectionFor, close, current: () => popover, placeCard, clearSelection, refresh };
   };
 
   // src/ui/wall/hit-controller.ts
   var HOVER_MIN_INTERVAL = 40;
   var createHitController = (ctx, deps) => {
-    const { camera, popovers, boards } = deps;
+    const { camera, popovers, picks, boards } = deps;
     let pointer = null;
     let hoverTimer = 0;
     let lastHitAt = 0;
@@ -8547,8 +12161,15 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       if (!request || !hitMatches(request, board, message.x, message.y)) return;
       if (request.purpose === "click") {
         pendingHit = null;
-        if (message.element) popovers.openComposer(board, message.element, request.frame);
-        else ctx.options.onNotice("There is no element there to comment on.");
+        if (message.element) {
+          const selection2 = popovers.openComposer(board, message.element, request.frame);
+          picks.begin(board, message.element, request.frame, selection2, "click");
+        } else ctx.options.onNotice("There is no element there to comment on.");
+        return;
+      }
+      if (request.purpose === "edit") {
+        pendingHit = null;
+        if (message.element) picks.begin(board, message.element, request.frame, popovers.selectionFor(board, message.element, request.frame), "edit");
         return;
       }
       if (hoveredBoard !== board || popovers.current()) return;
@@ -8568,7 +12189,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       if (hoverTimer) return;
       hoverTimer = requestAnimationFrame(() => {
         hoverTimer = 0;
-        if (!pointer || ctx.mode !== "edit" || ctx.readOnly() || popovers.current() || deps.isPanning()) return;
+        if (!pointer || ctx.mode !== "edit" || ctx.readOnly() || ctx.editing || popovers.current() || deps.isPanning()) return;
         const now = performance.now();
         if (now - lastHitAt < HOVER_MIN_INTERVAL) return scheduleHover();
         lastHitAt = now;
@@ -8626,6 +12247,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         case "space-down":
           spaceDown = true;
           return true;
+        case "undo-edit":
+          deps.onUndoEdit();
+          return true;
       }
     };
     const shortcut = (key, shift) => {
@@ -8650,8 +12274,13 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       return true;
     };
     scope.listen(surface, "keydown", (event) => {
-      if (event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const inField = event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement || event.target instanceof HTMLElement && event.target.isContentEditable;
+      if (inField) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        const undo = wallKeyAction({ key: event.key, code: event.code, shift: event.shiftKey, pageMode, ctrl: event.ctrlKey, meta: event.metaKey, alt: event.altKey, inField });
+        if (undo?.type === "undo-edit" && run(undo)) event.preventDefault();
+        return;
+      }
       if (pageMode) {
         if (pageKey(event)) event.preventDefault();
         return;
@@ -8691,7 +12320,12 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       { passive: false }
     );
     scope.listen(surface, "pointerdown", (event) => {
-      if (event.target instanceof Element && event.target.closest(".dc-pop, .dc-label, .dc-pin")) return;
+      if (event.target instanceof Element && event.target.closest(".dc-ghost-add")) {
+        if (event.button === 0 && !ctx.readOnly()) downAt = { point: ctx.local(event), board: null };
+        return;
+      }
+      if (event.target instanceof Element && event.target.closest(".dc-pop, .dc-label, .dc-pin, .dc-seltoolbar, .dc-editor")) return;
+      if (ctx.editing) return;
       surface.focus({ preventScroll: true });
       const at = ctx.local(event);
       const board = boards.at(at);
@@ -8706,6 +12340,10 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       } else downAt = action === "press" ? { point: at, board } : null;
     });
     scope.listen(surface, "pointermove", (event) => {
+      if (deps.reorder.active()) {
+        hit.clearHover();
+        return;
+      }
       const at = ctx.local(event);
       hit.setPointer(at);
       if (panning && panning.id === event.pointerId) {
@@ -8745,6 +12383,26 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       hit.setPointer(null);
       hit.clearHover();
     });
+    scope.listen(surface, "dblclick", (event) => {
+      if (ctx.mode !== "edit" || ctx.readOnly() || ctx.editing) return;
+      if (event.target instanceof Element && event.target.closest(".dc-pop, .dc-label, .dc-pin, .dc-seltoolbar, .dc-editor")) return;
+      const at = ctx.local(event);
+      const board = boards.at(at);
+      if (board) hit.requestHit(board, screenToFrame(camera.get(), board.art.rect, at), "edit");
+    });
+    scope.listen(ctx.labels, "pointerdown", (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const label = target?.closest(".dc-label");
+      if (!label) return;
+      const control = target?.closest("button, [tabindex]");
+      if (control && control !== label && label.contains(control)) return;
+      for (const board of boards.values()) {
+        if (board.label === label) {
+          deps.reorder.begin(board, event);
+          return;
+        }
+      }
+    });
     scope.listen(ctx.labels, "dblclick", (event) => {
       const target = event.target instanceof Element ? event.target.closest(".dc-label") : null;
       if (!target) return;
@@ -8753,6 +12411,80 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       }
     });
     return { shortcut, isPanning: () => panning !== null };
+  };
+
+  // src/ui/wall/pick-layer.ts
+  var PROBE_TIMEOUT_MS = 4e3;
+  var createPickLayer = (ctx, deps) => {
+    const { camera } = deps;
+    const picks = createListeners();
+    const moved = createListeners();
+    const pending = /* @__PURE__ */ new Set();
+    let seq = 0;
+    let ringed = null;
+    const screenOf = (board) => board.screenId;
+    const ask = (board, point, screen) => new Promise((resolve) => {
+      let done = false;
+      const entry = {
+        board,
+        point,
+        finish: (probe, read) => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          pending.delete(entry);
+          if (probe === null || read === null) {
+            resolve(checkPick({ viewing: ctx.readOnly(), probe: null, source: { ok: false, kind: "failed", message: "The design didn\u2019t answer. Click the element again." } }));
+            return;
+          }
+          void answerSource(() => read(screen)).then((source) => resolve(checkPick({ viewing: ctx.readOnly(), probe, source })));
+        }
+      };
+      const timer = setTimeout(() => entry.finish(null, null), PROBE_TIMEOUT_MS);
+      pending.add(entry);
+      board.main.post({ type: "edit-probe", x: point.x, y: point.y });
+    });
+    const box = (pick) => {
+      const { board, element } = pick;
+      const view2 = camera.get();
+      const at = frameToScreen(view2, board.art.rect, { x: element.rect.x - board.scroll.x, y: element.rect.y - board.scroll.y });
+      return { x: at.x, y: at.y, w: element.rect.w * view2.scale, h: element.rect.h * view2.scale };
+    };
+    return {
+      begin: (board, element, framePoint, selection2, purpose) => {
+        seq += 1;
+        const screen = screenOf(board);
+        deps.warm(screen);
+        const pick = { id: seq, purpose, selection: selection2, board, element, framePoint, screen, check: ask(board, framePoint, screen) };
+        picks.emit(pick);
+        return pick;
+      },
+      onProbeResult: (board, message, read) => {
+        for (const entry of [...pending]) {
+          if (entry.board === board && entry.point.x === message.x && entry.point.y === message.y) entry.finish(message.probe, read);
+        }
+      },
+      recheck: (pick) => {
+        deps.dropSources();
+        return ask(pick.board, pick.framePoint, pick.screen);
+      },
+      box,
+      ring: (pick) => {
+        if (ringed) ringed.selected.hidden = true;
+        ringed = null;
+        if (!pick) return;
+        rectToBox(pick.board, pick.board.selected, pick.element.rect);
+        pick.board.selected.hidden = false;
+        ringed = pick.board;
+      },
+      onPick: picks.add,
+      onMoved: moved.add,
+      notifyMoved: () => moved.emit(),
+      dispose: () => {
+        for (const entry of [...pending]) entry.finish(null, null);
+        if (ringed) ringed.selected.hidden = true;
+      }
+    };
   };
 
   // src/ui/wall/pin-layer.ts
@@ -8863,6 +12595,122 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
   };
 
+  // src/ui/wall/reorder-controller.ts
+  var createReorderController = (ctx, deps) => {
+    let press = null;
+    const allowed = () => !ctx.pageMode && !ctx.options.compact && ctx.mode === "edit" && !ctx.readOnly() && ctx.screensBusy === null && !ctx.editing;
+    const place = (current, at) => {
+      if (current.chip) current.chip.style.transform = `translate(${Math.round(at.x + 14)}px, ${Math.round(at.y + 10)}px)`;
+      const world = screenToWorld2(deps.camera.get(), at);
+      current.target = dropTarget(deps.boards.rows(), world.y, current.id);
+      const { line, target } = current;
+      if (!line) return;
+      line.hidden = target === null || target.noop;
+      if (target === null) return;
+      const bounds = deps.boards.bounds();
+      line.style.left = `${bounds.x}px`;
+      line.style.width = `${bounds.w}px`;
+      line.style.top = `${target.y}px`;
+    };
+    const markDragging = (id, on) => {
+      const moving = deps.boards.rowScreenIds(id);
+      for (const board of deps.boards.values()) {
+        if (board.art.screen === null || !moving.has(board.art.screen.id)) continue;
+        for (const part of [board.root, board.label]) {
+          if (on) part.dataset.dragging = "true";
+          else delete part.dataset.dragging;
+        }
+      }
+    };
+    const finish = (current, drop) => {
+      if (press !== current) return;
+      press = null;
+      const target = current.target;
+      current.cleanup();
+      if (!drop || target === null || target.noop) return;
+      const order = moveRowToGap(
+        ctx.screens().map((screen) => screen.id),
+        deps.boards.rows().map((row) => row.id),
+        current.id,
+        deps.boards.rowScreenIds(current.id),
+        target.gap
+      );
+      if (order !== null) deps.onDrop({ id: current.id, order });
+    };
+    const startDrag = (current, board) => {
+      const screen = board.art.screen;
+      current.chip = h("div", { class: "dc-drag-chip", "aria-hidden": "true" }, h("strong", null, screen?.title ?? ""), h("span", null, board.art.viewport.label));
+      current.line = h("div", { class: "dc-drop", "aria-hidden": "true", hidden: true });
+      ctx.overlay.append(current.chip);
+      ctx.world.append(current.line);
+      ctx.surface.dataset.reordering = "true";
+      markDragging(current.id, true);
+    };
+    const begin = (board, event) => {
+      const screen = board.art.screen;
+      if (press || screen === null || event.button !== 0 || !allowed() || !deps.boards.isFirstOfRow(board)) return;
+      const label = board.label;
+      const from = ctx.local(event);
+      const current = { id: screen.id, pointerId: event.pointerId, from, at: from, chip: null, line: null, target: null, cleanup: () => void 0 };
+      let dragging = false;
+      const onMove = (move) => {
+        if (move.pointerId !== current.pointerId) return;
+        const at = ctx.local(move);
+        current.at = at;
+        if (!dragging) {
+          if (!isDrag(current.from, at)) return;
+          dragging = true;
+          startDrag(current, board);
+        }
+        place(current, at);
+      };
+      const onUp = (up) => {
+        if (up.pointerId === current.pointerId) finish(current, dragging);
+      };
+      const onCancel = () => finish(current, false);
+      const onKey = (key) => {
+        if (key.key !== "Escape" || !dragging) return;
+        key.preventDefault();
+        key.stopPropagation();
+        finish(current, false);
+      };
+      const onWheel = () => {
+        if (dragging) place(current, current.at);
+      };
+      label.addEventListener("pointermove", onMove);
+      label.addEventListener("pointerup", onUp);
+      label.addEventListener("pointercancel", onCancel);
+      label.addEventListener("lostpointercapture", onCancel);
+      document.addEventListener("keydown", onKey, true);
+      ctx.surface.addEventListener("wheel", onWheel);
+      try {
+        label.setPointerCapture(event.pointerId);
+      } catch {
+      }
+      current.cleanup = () => {
+        label.removeEventListener("pointermove", onMove);
+        label.removeEventListener("pointerup", onUp);
+        label.removeEventListener("pointercancel", onCancel);
+        label.removeEventListener("lostpointercapture", onCancel);
+        document.removeEventListener("keydown", onKey, true);
+        ctx.surface.removeEventListener("wheel", onWheel);
+        if (label.hasPointerCapture(current.pointerId)) label.releasePointerCapture(current.pointerId);
+        current.chip?.remove();
+        current.line?.remove();
+        delete ctx.surface.dataset.reordering;
+        markDragging(current.id, false);
+      };
+      press = current;
+    };
+    return {
+      begin,
+      active: () => press !== null && press.chip !== null,
+      dispose: () => {
+        if (press) finish(press, false);
+      }
+    };
+  };
+
   // src/ui/wall/wall-context.ts
   var createWallContext = (options, initialDetail) => {
     const pageMode = options.presentation === "page";
@@ -8901,6 +12749,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       version: null,
       compare: false,
       showPins: true,
+      editing: false,
+      screensBusy: null,
       disposed: false,
       surfaceSize: { w: 0, h: 0 },
       readOnly: () => ctx.version !== null,
@@ -8946,12 +12796,36 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const camera = createCameraController(ctx, hooks);
     const selection2 = createListeners();
     const popovers = createPopoverLayer(ctx, camera, { emitSelection: selection2.emit });
+    const sources = createSourceCache({ load: (slug, screen) => store.loadSource(slug, screen) });
+    ctx.scope.add(feed.subscribe((batch) => sources.applyChanges(batch)));
+    ctx.scope.add(sources.clear);
+    const picks = createPickLayer(ctx, {
+      camera,
+      warm: (screen) => void sources.get(options.slug, screen).catch(() => void 0),
+      dropSources: sources.clear
+    });
+    const undoEdit = createListeners();
+    const screenMenu2 = createListeners();
+    const ghostPress = createListeners();
+    const reorders = createListeners();
+    const storageBatches = createListeners();
     const pins = createPinLayer(ctx, camera, popovers, boardLookup);
-    const hit = createHitController(ctx, { camera, popovers, boards: boardLookup, isPanning: () => input().isPanning() });
-    const boards = createBoardSet(ctx, { camera, pins, popovers, onFrameMessage: (board, message) => frameMessage()(board, message) });
+    const hit = createHitController(ctx, { camera, popovers, picks, boards: boardLookup, isPanning: () => input().isPanning() });
+    const boards = createBoardSet(ctx, {
+      camera,
+      pins,
+      popovers,
+      onFrameMessage: (board, message) => frameMessage()(board, message),
+      onScreenMenu: screenMenu2.emit,
+      onGhost: ghostPress.emit
+    });
     boardLookup.bind(boards);
+    const reorder = createReorderController(ctx, { camera, boards, onDrop: reorders.emit });
     hooks.bind({
-      closePopover: popovers.close,
+      closePopover: () => {
+        popovers.close();
+        picks.notifyMoved();
+      },
       clearHover: hit.clearHover,
       bounds: boards.bounds,
       rebuildLayout: boards.rebuild,
@@ -8959,13 +12833,18 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       scaleChanged: pins.scaleChanged,
       queueSync: boards.queueSync
     });
-    const inputController = createInputController(ctx, { camera, boards, popovers, hit });
+    const inputController = createInputController(ctx, { camera, boards, popovers, hit, onUndoEdit: undoEdit.emit, reorder });
     input.bind(inputController);
-    frameMessage.bind(createFrameMessageHandler(ctx, { camera, hit, popovers, load: boards.load, shortcut: inputController.shortcut }));
+    frameMessage.bind(
+      createFrameMessageHandler(ctx, { camera, hit, popovers, picks, load: boards.load, shortcut: inputController.shortcut, storage: (board, batch) => storageBatches.emit(board.art.id, batch) }, { loadSource: (slug, screen) => sources.get(slug, screen ?? null) })
+    );
     boards.rebuild();
     camera.apply();
+    let previewFrame = 0;
     return {
       el: surface,
+      overlay: ctx.overlay,
+      size: ctx.size,
       setDetail: (next) => {
         const structureChanged = JSON.stringify(next.design.screens) !== JSON.stringify(ctx.detail.design.screens) || JSON.stringify(next.design.viewports) !== JSON.stringify(ctx.detail.design.viewports) || next.design.kind !== ctx.detail.design.kind;
         ctx.detail = next;
@@ -8989,6 +12868,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           board.main.post({ type: "set-mode", mode: ctx.frameMode() });
           pins.paint(board);
         }
+        boards.rebuild();
       },
       setHiddenViewports: (ids) => {
         if (pageMode) return;
@@ -9008,6 +12888,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           if (board.live) void boards.load(board);
           pins.paint(board);
         }
+        boards.rebuild();
       },
       setPageView: (id) => {
         if (!pageMode || id === ctx.pageView) return;
@@ -9029,10 +12910,10 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         ctx.showPins = show;
         for (const board of boards.values()) pins.paint(board);
       },
-      reload: (sources) => {
+      reload: (sources2) => {
         for (const board of boards.values()) {
           const state = board.main.state();
-          const affected = sources === void 0 || sources.has(board.art.screen?.id ?? null) || state === "missing" || state === "error";
+          const affected = sources2 === void 0 || sources2.has(board.art.screen?.id ?? null) || state === "missing" || state === "error";
           if (affected && board.live) void boards.load(board);
         }
       },
@@ -9074,11 +12955,69 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       },
       focus: () => surface.focus({ preventScroll: true }),
       onSelection: selection2.add,
+      onPick: picks.onPick,
+      onMoved: picks.onMoved,
+      onUndoEdit: undoEdit.add,
+      pickBox: picks.box,
+      recheckPick: picks.recheck,
+      ringPick: picks.ring,
+      openComment: (pick) => {
+        const open = popovers.current();
+        if (open?.commentId === null) open.card.focus();
+        else popovers.openComposer(pick.board, pick.element, pick.framePoint);
+      },
+      cardEl: () => popovers.current()?.card.el ?? null,
+      closeEmptyCard: () => popovers.clearSelection(),
+      closeCard: () => popovers.close(),
+      setEditing: (editing) => {
+        ctx.editing = editing;
+        if (editing) hit.clearHover();
+      },
       clearSelection: () => popovers.clearSelection(),
-      markRecent: (sources) => boards.markRecent(sources),
+      markRecent: (sources2) => boards.markRecent(sources2),
+      setTokenPreview: (vars) => {
+        setSlotTokens(options.slug, vars);
+        if (previewFrame !== 0) return;
+        previewFrame = requestAnimationFrame(() => {
+          previewFrame = 0;
+          if (ctx.disposed) return;
+          const latest = [...slotTokens(options.slug)];
+          for (const board of boards.values()) board.main.post({ type: "set-tokens", vars: latest });
+        });
+      },
+      onStorageBatch: storageBatches.add,
+      syncStorage: (batch, exceptBoardId) => {
+        if (ctx.version !== null && !ctx.compare) return;
+        for (const board of boards.values()) {
+          if (board.art.id !== exceptBoardId && board.main.state() === "ready") board.main.post({ type: "storage-sync", clear: batch.clear, changes: batch.changes });
+        }
+      },
+      onScreenMenu: screenMenu2.add,
+      onGhost: ghostPress.add,
+      onReorder: reorders.add,
+      setScreensBusy: (busy) => {
+        ctx.screensBusy = busy;
+        for (const board of boards.values()) boards.paintLabel(board);
+      },
+      revealScreen: (id) => {
+        const box = boards.rowBox(id);
+        if (!box || ctx.surfaceSize.w === 0) return;
+        const current = camera.get();
+        const covered = camera.coveredInsets();
+        const pan = revealPan(
+          { x: current.x + box.x * current.scale, y: current.y + box.y * current.scale, w: box.w * current.scale, h: box.h * current.scale },
+          { w: ctx.surfaceSize.w - covered.right, h: ctx.surfaceSize.h - covered.bottom },
+          options.compact ? 12 : 32
+        );
+        if (pan.dx !== 0 || pan.dy !== 0) camera.set(panBy(current, pan.dx, pan.dy), true);
+      },
       dispose: () => {
         ctx.disposed = true;
+        cancelAnimationFrame(previewFrame);
+        setSlotTokens(options.slug, []);
+        reorder.dispose();
         popovers.close();
+        picks.dispose();
         camera.dispose();
         hit.dispose();
         ctx.scope.dispose();
@@ -9092,12 +13031,12 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   var FULL_SCREEN_HINT = "Full screen: sidebar \u2192 Extension pages \u2192 Design Chamber";
   var EXPORT_NOTICE_MS = 15e3;
   var hiddenRemote = /* @__PURE__ */ new Map();
-  var isRecord = (value) => typeof value === "object" && value !== null;
+  var isRecord2 = (value) => typeof value === "object" && value !== null;
   var readPrefs = (raw) => {
-    if (!isRecord(raw)) return { hidden: [], camera: null, pageView: null };
+    if (!isRecord2(raw)) return { hidden: [], camera: null, pageView: null, directionViewport: {} };
     const hidden = Array.isArray(raw.hidden) ? raw.hidden.filter((entry) => typeof entry === "string") : [];
-    const camera = isRecord(raw.camera) && typeof raw.camera.x === "number" && typeof raw.camera.y === "number" && typeof raw.camera.scale === "number" ? { x: raw.camera.x, y: raw.camera.y, scale: raw.camera.scale } : null;
-    return { hidden, camera, pageView: raw.pageView };
+    const camera = isRecord2(raw.camera) && typeof raw.camera.x === "number" && typeof raw.camera.y === "number" && typeof raw.camera.scale === "number" ? { x: raw.camera.x, y: raw.camera.y, scale: raw.camera.scale } : null;
+    return { hidden, camera, pageView: raw.pageView, directionViewport: readDirectionViewports(raw.directionViewport) };
   };
   var mountDesignView = (options) => {
     const { slug } = options;
@@ -9136,19 +13075,23 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const viewingListeners = createListeners();
       const drawerListeners = createListeners();
       let htmlChars = null;
+      let directionViewport = prefs.directionViewport;
       const savePrefs = debounce((camera) => {
-        void host.storage.set(`view:${slug}`, { hidden: [...hidden], camera, pageView });
+        void host.storage.set(`view:${slug}`, { hidden: [...hidden], camera, pageView, directionViewport });
       }, 500);
+      const keepListeners = createListeners();
       const zoomLabel = btn({ label: "100%", variant: "ghost", size: "xs", title: "Reset zoom to 100%", onClick: () => wall.zoomReset() });
       zoomLabel.el.classList.add("dc-zoom-label");
       const stage = h("div", { class: "dc-stage" });
-      const slots = {
+      const slots2 = {
         statusSlot: h("div", { class: "dc-status-slot" }),
         overlay: h("div", { class: "dc-stage-overlay" }),
         bottomDock: h("div", { class: "dc-bottom-dock" }),
-        compactActions: h("div", { class: "dc-compact-actions" })
+        compactActions: h("div", { class: "dc-compact-actions" }),
+        tweaksSlot: h("span", { class: "dc-tweaks-slot" })
       };
       let dockEl = null;
+      const pageData = createPageData({ slug, wall: () => wall, dialogHost: options.actions.host, title: () => design().title, viewing: () => viewing !== null });
       const wall = createWall(
         {
           slug,
@@ -9156,7 +13099,19 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           presentation: isPage ? "page" : "wall",
           initialPageView: pageView,
           coveredRight: () => dockEl && !dockEl.hidden && getComputedStyle(dockEl).position === "absolute" ? dockEl.offsetWidth : 0,
+          // The rail's Tweaks sheet sits over the bottom of the view; what it covers of the wall is where the sheet's top meets the stage.
+          coveredBottom: () => {
+            if (drawer?.sheet.el.dataset.variant !== "bottom") return 0;
+            const panel = drawer.sheet.el.querySelector(".dc-sheet-panel");
+            return panel ? Math.max(0, stage.getBoundingClientRect().bottom - panel.getBoundingClientRect().top) : 0;
+          },
           initialCamera: isPage ? null : prefs.camera,
+          directionViewport: (of) => directionViewport[of],
+          onDirectionViewport: (of, viewportId) => {
+            directionViewport = { ...directionViewport, [of]: viewportId };
+            savePrefs(wall.getCamera());
+          },
+          onKeepDirection: keepListeners.emit,
           onScale: (next) => zoomLabel.set({ label: zoomPercent(next) }),
           onCameraSettled: (camera) => savePrefs(camera),
           createComment: async (body) => {
@@ -9186,7 +13141,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         },
         first
       );
-      stage.append(wall.el, slots.overlay);
+      stage.append(wall.el, slots2.overlay);
       wall.setMode(mode);
       wall.setShowPins(showPins);
       if (!isPage) wall.setHiddenViewports([...hidden]);
@@ -9292,12 +13247,18 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       };
       const ref = () => ({ slug, title: design().title, kind: design().kind, sessionId: design().sessionId });
       const rename2 = () => renameDialog(options.actions.host, ref());
-      const moreEntries = () => viewerMenuEntries({ compact, isPage, copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX });
+      const moreEntries = () => viewerMenuEntries({ compact, isPage, copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX, askForTweaks: design().tweaks.length === 0 && viewing === null, pageData: pageData.entry() });
       const onMore = (id) => {
         switch (id) {
           case "chat":
             void continueInChat(slug);
             return;
+          case "ask-tweaks": {
+            const bar = askBarFor(wall);
+            bar?.setText(ASK_FOR_TWEAKS_TEXT);
+            bar?.focus();
+            return;
+          }
           case "zip":
             void doExport("zip");
             return;
@@ -9307,6 +13268,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
             return;
           case "copy-html":
             void copyHtml(slug);
+            return;
+          case "page-data":
+            pageData.confirmClear();
             return;
           case "path":
             void copyPath(slug);
@@ -9369,7 +13333,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         toolbar = h(
           "header",
           { class: "dc-toolbar dc-toolbar-compact" },
-          h("div", { class: "dc-toolbar-row" }, iconBtn({ icon: "back", label: "Back to designs", onClick: options.onBack }), titleText, slots.compactActions, moreButton),
+          h("div", { class: "dc-toolbar-row" }, iconBtn({ icon: "back", label: "Back to designs", onClick: options.onBack }), titleText, slots2.compactActions, moreButton),
           // A page never pans or zooms, so its second row has no zoom group.
           isPage ? h("div", { class: "dc-toolbar-row dc-toolbar-tools" }, viewportHost, commentMode.el) : h("div", { class: "dc-toolbar-row dc-toolbar-tools" }, modeHost, h("span", { class: "dc-spacer" }), zoomGroup)
         );
@@ -9379,8 +13343,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           { class: "dc-toolbar" },
           h("div", { class: "dc-toolbar-group" }, back.el, titleInput),
           h("div", { class: "dc-toolbar-group" }, viewportHost, commentMode.el),
-          slots.statusSlot,
-          h("div", { class: "dc-toolbar-group" }, commentsButton.el, versionsButton.el, exportMenu.el, copyMenu.el, chatButton.el, moreButton)
+          slots2.statusSlot,
+          h("div", { class: "dc-toolbar-group" }, commentsButton.el, slots2.tweaksSlot, versionsButton.el, exportMenu.el, copyMenu.el, chatButton.el, moreButton)
         );
       } else {
         toolbar = h(
@@ -9388,8 +13352,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           { class: "dc-toolbar" },
           h("div", { class: "dc-toolbar-group" }, back.el, titleInput),
           h("div", { class: "dc-toolbar-group" }, modeHost, pinsToggle.el, chipHost, zoomGroup),
-          slots.statusSlot,
-          h("div", { class: "dc-toolbar-group" }, commentsButton.el, versionsButton.el, chatButton.el, moreButton)
+          slots2.statusSlot,
+          h("div", { class: "dc-toolbar-group" }, commentsButton.el, slots2.tweaksSlot, versionsButton.el, chatButton.el, moreButton)
         );
       }
       const notices = createNotices();
@@ -9501,10 +13465,15 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       };
       const dock = h("aside", { class: "dc-dock", hidden: true });
       dockEl = dock;
+      const release = (current) => {
+        current.handle.dispose();
+        current.stop?.();
+      };
+      let tweaksFill = null;
       const closeDrawer = () => {
         const current = drawer;
         drawer = null;
-        current?.handle.dispose();
+        if (current) release(current);
         current?.sheet.close();
         commentsButton.set({ pressed: false });
         versionsButton.set({ pressed: false });
@@ -9517,19 +13486,22 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           closeDrawer();
           return;
         }
+        if (kind === "tweaks" && !tweaksFill) return;
         if (drawer) {
           const previous = drawer;
           drawer = null;
-          previous.handle.dispose();
+          release(previous);
           previous.sheet.close();
         }
-        const title = kind === "comments" ? "Comments" : "Versions";
+        const title2 = kind === "comments" ? "Comments" : kind === "versions" ? "Versions" : TWEAKS_TITLE;
+        const variant = !compact ? "dock" : kind === "tweaks" ? tweaksSheetVariant(options.actions.host.clientHeight) : "full";
         const sheet = openSheet(compact ? options.actions.host : dock, {
-          title,
-          variant: compact ? "full" : "dock",
+          title: title2,
+          variant,
+          ...kind === "tweaks" ? { subtitle: TWEAKS_SUBTITLE } : {},
           onClose: () => {
             if (drawer?.sheet === sheet) {
-              drawer.handle.dispose();
+              release(drawer);
               drawer = null;
               commentsButton.set({ pressed: false });
               versionsButton.set({ pressed: false });
@@ -9540,8 +13512,10 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           }
         });
         let handle;
-        if (kind === "comments") {
-          handle = mountComments({
+        if (kind === "tweaks") {
+          handle = (tweaksFill ?? (() => ({ dispose: () => void 0 })))(sheet);
+        } else if (kind === "comments") {
+          const comments = mountComments({
             slug,
             detached: () => wall.detachedIds(),
             anchorStates: () => wall.anchorStates(),
@@ -9552,10 +13526,11 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
               wall.focusComment(id);
             }
           });
-          sheet.body.append(handle.el);
+          sheet.body.append(comments.el);
+          handle = comments;
           void store.refreshOpenDesign();
         } else {
-          handle = mountVersions({
+          const versions = mountVersions({
             slug,
             viewing: () => viewing,
             onView: (id) => {
@@ -9570,12 +13545,13 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
             restoring: restoreFlow.busyId,
             onRestore: restoreVersion
           });
-          sheet.body.append(handle.el);
+          sheet.body.append(versions.el);
+          handle = versions;
           void store.loadVersions(slug);
         }
-        drawer = { kind, sheet, handle };
+        drawer = { kind, sheet, handle, stop: variant === "bottom" ? trackBottomSheet(options.actions.host, sheet, () => wall.refit()) : null };
         paintCommentsNote(wall.externalRefs().length > 0);
-        dock.hidden = false;
+        dock.hidden = variant === "bottom";
         wall.refit();
         commentsButton.set({ pressed: kind === "comments" });
         versionsButton.set({ pressed: kind === "versions" });
@@ -9617,7 +13593,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           refreshHtmlSizeSoon();
         })
       );
-      const main = h("div", { class: "dc-design-main" }, h("div", { class: "dc-wall-col" }, stage, slots.bottomDock), dock);
+      const main = h("div", { class: "dc-design-main" }, h("div", { class: "dc-wall-col" }, stage, slots2.bottomDock), dock);
       replace(el2, toolbar, notices.el, main, compact ? h("footer", { class: "dc-hint" }, FULL_SCREEN_HINT) : null);
       apply(first);
       refreshHtmlSize();
@@ -9627,6 +13603,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       }
       wall.fit();
       queueMicrotask(() => wall.focus());
+      const leaveGuards = [];
       const viewContext = {
         slug,
         surface: options.surface,
@@ -9636,15 +13613,37 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         viewing: () => viewing,
         onViewing: viewingListeners.add,
         wall,
-        slots,
-        drawers: { toggle: toggleDrawer, active: () => drawer?.kind ?? null, onChange: drawerListeners.add },
+        slots: slots2,
+        drawers: {
+          toggle: toggleDrawer,
+          active: () => drawer?.kind ?? null,
+          onChange: drawerListeners.add,
+          register: (_kind, fill) => {
+            tweaksFill = fill;
+            return () => {
+              if (tweaksFill !== fill) return;
+              tweaksFill = null;
+              if (drawer?.kind === "tweaks") closeDrawer();
+            };
+          },
+          close: closeDrawer,
+          isBottomSheet: () => drawer?.sheet.el.dataset.variant === "bottom"
+        },
+        onKeepDirection: keepListeners.add,
+        onBeforeLeave: (guard) => {
+          leaveGuards.push(guard);
+          return () => {
+            const at = leaveGuards.indexOf(guard);
+            if (at >= 0) leaveGuards.splice(at, 1);
+          };
+        },
         notices,
         actions: options.actions,
         scope: bscope
       };
-      const mountFeature = (name, mount5) => {
+      const mountFeature = (name, mount9) => {
         try {
-          const unmount = mount5(viewContext);
+          const unmount = mount9(viewContext);
           return () => {
             try {
               unmount();
@@ -9660,14 +13659,29 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const unmounts = [
         mountFeature("build strip", mount2),
         mountFeature("ask bar", mount),
-        mountFeature("findability", mount4),
-        mountFeature("checks badge", mount3)
+        mountFeature("findability", mount6),
+        mountFeature("checks badge", mount3),
+        // After the build strip and the ask bar: it reads the strip's phase and hands the ask bar an element.
+        mountFeature("edit text", mount5),
+        // Also after the build strip (it reads the strip's phase for the menu's hint) and after Edit text (they share one undo slot).
+        mountFeature("screens", mount7),
+        // Also after Edit text (one undo slot), and after the screens feature: both write through the same notices.
+        mountFeature("directions", mount4),
+        // After the build strip (its phase is the panel's agent-working hint), the ask bar (Send goes quiet while the panel is open) and Edit text (they share one undo slot).
+        mountFeature("tweaks", mount8),
+        // Last: the notices it shows land after the ones the other features raise (their order is fixed by the notices region).
+        mountFeature("saved page data", pageData.mount)
       ];
       built = {
         apply,
         startComment: () => setMode("edit"),
+        beforeLeave: async () => {
+          for (const guard of [...leaveGuards]) if (!await guard()) return false;
+          return true;
+        },
         dispose: () => {
           for (const unmount of [...unmounts].reverse()) unmount();
+          pageData.dispose();
           restoreFlow.dispose();
           closeDrawer();
           notices.dispose();
@@ -9714,6 +13728,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         if (built) built.startComment();
         else wantComment = true;
       },
+      beforeLeave: () => built ? built.beforeLeave() : Promise.resolve(true),
       dispose: () => {
         disposed = true;
         scope.dispose();
@@ -10267,14 +14282,31 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       place.clear();
       if (slug) library.focusCard(slug);
     };
-    const openDesign = (slug) => {
-      if (open?.slug === slug) return;
+    const showDesign = (slug) => {
       open?.handle.dispose();
-      const handle = mountDesignView({ slug, surface: "page", actions, onBack: closeDesign });
+      const handle = mountDesignView({ slug, surface: "page", actions, onBack: leaveDesign });
       open = { slug, handle };
       place.remember(slug);
       library.el.hidden = true;
       app.append(handle.el);
+    };
+    const leaveDesign = () => {
+      const current = open;
+      if (!current) return;
+      void current.handle.beforeLeave().then((leave) => {
+        if (leave && open === current) closeDesign();
+      });
+    };
+    const openDesign = (slug) => {
+      if (open?.slug === slug) return;
+      const current = open;
+      if (current) {
+        void current.handle.beforeLeave().then((leave) => {
+          if (leave && open === current) showDesign(slug);
+        });
+        return;
+      }
+      showDesign(slug);
     };
     const place = keepPlace({ surface: "page", isOpen: () => open !== null, open: openDesign });
     const actions = {
@@ -10511,17 +14543,34 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       place.clear();
       if (slug) list.focusRow(slug);
     };
+    const showViewer = (slug, options) => {
+      viewer?.handle.dispose();
+      const handle = mountDesignView({ slug, surface: "panel", actions, onBack: leaveViewer, startIn: options.startIn });
+      viewer = { slug, handle };
+      place.remember(slug);
+      list.el.hidden = true;
+      app.append(handle.el);
+    };
+    const leaveViewer = () => {
+      const current = viewer;
+      if (!current) return;
+      void current.handle.beforeLeave().then((leave) => {
+        if (leave && viewer === current) closeViewer();
+      });
+    };
     const openViewer = (slug, options = {}) => {
       if (viewer?.slug === slug) {
         if (options.startIn === "comment") viewer.handle.startComment();
         return;
       }
-      viewer?.handle.dispose();
-      const handle = mountDesignView({ slug, surface: "panel", actions, onBack: closeViewer, startIn: options.startIn });
-      viewer = { slug, handle };
-      place.remember(slug);
-      list.el.hidden = true;
-      app.append(handle.el);
+      const current = viewer;
+      if (current) {
+        void current.handle.beforeLeave().then((leave) => {
+          if (leave && viewer === current) showViewer(slug, options);
+        });
+        return;
+      }
+      showViewer(slug, options);
     };
     const place = keepPlace({ surface: "panel", isOpen: () => viewer !== null, open: (slug) => openViewer(slug) });
     const actions = {

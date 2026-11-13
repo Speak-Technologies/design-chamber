@@ -28,6 +28,7 @@ var CHECK_TOOL_ERROR_TEXT_MAX = 2e3;
 var CHECK_TOOL_SCREENS_MAX = 16;
 var RUNTIME_PATH_MAX = 4096;
 var STATUS_RECENT_MS = 7 * 864e5;
+var USER_UNDO_TTL_MS = 30 * 6e4;
 
 // src/shared/path-compare.ts
 var foldsCase = (p, platform) => p.sep === "\\" || platform === "darwin";

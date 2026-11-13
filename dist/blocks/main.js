@@ -2098,7 +2098,14 @@ ${GUEST_UI_LOOK_CSS}`;
     "POST /session-events": "U4",
     "POST /mentions/search": "U6",
     "POST /mentions/resolve": "U6",
-    "GET /status/designs": "U5"
+    "GET /status/designs": "U5",
+    "POST /designs/:slug/edits": "P2",
+    "POST /designs/:slug/edits/:id/undo": "P2",
+    "GET /designs/:slug/tokens": "P2",
+    "POST /designs/:slug/hand-edits/clear": "P2",
+    "GET /designs/:slug/page-state": "P2",
+    "PATCH /designs/:slug/page-state": "P2",
+    "DELETE /designs/:slug/page-state": "P2"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
   var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set(["GET /designs/:slug/render/chunk"]);
@@ -2142,6 +2149,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var DIRECTION_LABEL_MAX = 80;
   var DIRECTION_OPTIONS_MIN = 2;
   var DIRECTION_OPTIONS_MAX = 4;
+  var USER_UNDO_TTL_MS = 30 * 6e4;
 
   // src/guest/service-client.ts
   var ServiceError = class extends Error {
@@ -2449,7 +2457,9 @@ ${GUEST_UI_LOOK_CSS}`;
     warning: ["M12 3 2 20h20z", "M12 10v4", "M12 17h.01"],
     send: ["M22 2 11 13", "M22 2l-7 20-4-9-9-4z"],
     pin: ["M12 21s-7-5.2-7-11a7 7 0 1 1 14 0c0 5.8-7 11-7 11z", "M12 7.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"],
-    layers: ["m12 3 9 5-9 5-9-5z", "m3 13 9 5 9-5"]
+    layers: ["m12 3 9 5-9 5-9-5z", "m3 13 9 5 9-5"],
+    // Three sliders with their knobs: the Tweaks button.
+    tune: ["M4 21v-7", "M4 10V3", "M12 21v-9", "M12 8V3", "M20 21v-5", "M20 12V3", "M2 14h4", "M10 8h4", "M18 16h4"]
   };
   var icon2 = (name, size = 16) => {
     const svg = document.createElementNS(SVG_NS, "svg");
@@ -2567,6 +2577,16 @@ ${GUEST_UI_LOOK_CSS}`;
     "token-hardcoded": {
       severity: "info",
       sentence: (f) => `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although tokens.css defines colours.`
+    },
+    "tweak-broken": {
+      severity: "warning",
+      sentence: (f) => {
+        const field2 = f.params?.field ?? "?";
+        if (f.params?.tweak === "missing") return `design.json: the tweak for ${field2} names a variable tokens.css does not define.`;
+        if (f.params?.tweak === "formula") return `design.json: the tweak for ${field2} points at a formula in tokens.css (calc() or var()), so it can't be tuned.`;
+        if (f.params?.tweak === "unit") return `design.json: the tweak for ${field2} uses a different unit than tokens.css.`;
+        return "design.json declares tweaks, but the design has no tokens.css.";
+      }
     },
     "check-partial": { severity: "info", sentence: () => "Some files were not checked in time." }
   };

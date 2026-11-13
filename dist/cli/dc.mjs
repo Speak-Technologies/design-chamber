@@ -66,10 +66,226 @@ var BRIDGE_COORD_MAX = 1e7;
 var LOOSE_IMPORT_MAX_BYTES = 20 * 1024 * 1024;
 var ACTIVITY_WORKING_EXPIRY_MS = 30 * 6e4;
 var STATUS_RECENT_MS = 7 * 864e5;
+var USER_UNDO_TTL_MS = 30 * 6e4;
+var TWEAKS_MAX = 12;
+var TWEAK_LABEL_MAX = 40;
+var TWEAK_VAR_PATTERN = /^--[A-Za-z0-9_-]{1,64}$/;
+var TWEAK_UNIT_PATTERN = /^[a-z%]{0,6}$/;
+var TWEAK_NUMBER_ABS_MAX = 1e6;
+var TWEAK_CHOICES_MIN = 2;
+var TWEAK_CHOICES_MAX = 6;
+var TWEAK_CHOICE_LABEL_MAX = 30;
+var TWEAK_CHOICE_VALUE_PATTERN = /^[A-Za-z0-9 #%.,()+\-'"/]{1,80}$/;
+var DIRECTION_NAME_MAX = 40;
 
 // src/service/bundle.ts
 import { readFile, stat } from "node:fs/promises";
 import path2 from "node:path";
+
+// src/shared/tokens-css.ts
+var isBalancedQuotes = (value) => {
+  let single = 0;
+  let double = 0;
+  for (const char of value) {
+    if (char === "'") single += 1;
+    else if (char === '"') double += 1;
+  }
+  return single % 2 === 0 && double % 2 === 0;
+};
+var TOKEN_CONTEXT_MAX = 60;
+var isSpace = (code) => code === 32 || code === 9 || code === 10 || code === 13 || code === 12;
+var isNameChar = (code) => code >= 48 && code <= 57 || code >= 65 && code <= 90 || code >= 97 && code <= 122 || code === 45 || code === 95 || code >= 128;
+var commentEnd = (css, at) => {
+  const close = css.indexOf("*/", at + 2);
+  return close === -1 ? css.length : close + 2;
+};
+var stringEnd = (css, at) => {
+  const quote = css.charCodeAt(at);
+  for (let i = at + 1; i < css.length; i += 1) {
+    const code = css.charCodeAt(i);
+    if (code === quote) return { end: i + 1, ok: true };
+    if (code === 92) i += 1;
+    else if (code === 10 || code === 13 || code === 12) return { end: i, ok: false };
+  }
+  return { end: css.length, ok: false };
+};
+var unquotedUrlEnd = (css, at) => {
+  if (css.slice(at, at + 4).toLowerCase() !== "url(" || at > 0 && isNameChar(css.charCodeAt(at - 1))) return null;
+  let i = at + 4;
+  while (i < css.length && isSpace(css.charCodeAt(i))) i += 1;
+  const first = css.charCodeAt(i);
+  if (first === 34 || first === 39) return null;
+  let ok = true;
+  for (; i < css.length; i += 1) {
+    const code = css.charCodeAt(i);
+    if (code === 41) return { end: i + 1, ok };
+    if (code === 92) i += 1;
+    else if (code === 34 || code === 39 || code === 40) ok = false;
+  }
+  return { end: css.length, ok: false };
+};
+var normalizePrelude = (text) => {
+  let out2 = "";
+  for (let i = 0; i < text.length; ) {
+    if (text.startsWith("/*", i)) {
+      i = commentEnd(text, i);
+      out2 += " ";
+    } else {
+      out2 += text[i];
+      i += 1;
+    }
+  }
+  return out2.replace(/[\s﻿]+/g, " ").trim();
+};
+var clipLabel = (text) => text.length <= TOKEN_CONTEXT_MAX ? text : `${text.slice(0, TOKEN_CONTEXT_MAX - 1).trimEnd()}\u2026`;
+var contextOf = (stack) => {
+  const [only] = stack;
+  if (stack.length === 1 && only !== void 0 && !only.atRule && only.prelude.toLowerCase() === ":root") return { kind: "root" };
+  const atRules = stack.filter((block) => block.atRule).map((block) => block.prelude);
+  const label = atRules.length > 0 ? atRules.join(" ") : stack.map((block) => block.prelude).join(" ");
+  return { kind: "other", label: clipLabel(label) };
+};
+var isImportantAt = (css, at) => {
+  let i = at + 1;
+  for (; ; ) {
+    while (i < css.length && isSpace(css.charCodeAt(i))) i += 1;
+    if (!css.startsWith("/*", i)) break;
+    i = commentEnd(css, i);
+  }
+  return css.slice(i, i + 9).toLowerCase() === "important" && !isNameChar(css.charCodeAt(i + 9));
+};
+var scanTokens = (css) => {
+  const out2 = [];
+  const stack = [];
+  let i = css.charCodeAt(0) === 65279 ? 1 : 0;
+  let segStart = i;
+  let colonAt = null;
+  let custom = false;
+  let importantAt = null;
+  let firstComment = null;
+  let comment = false;
+  let broken = false;
+  const brackets = [];
+  const resetSegment = (at) => {
+    segStart = at;
+    colonAt = null;
+    custom = false;
+    importantAt = null;
+    firstComment = null;
+    comment = false;
+    broken = false;
+    brackets.length = 0;
+  };
+  const endSegment = (at) => {
+    if (custom && colonAt !== null && stack.length > 0) {
+      let from = colonAt + 1;
+      while (from < at && isSpace(css.charCodeAt(from))) from += 1;
+      let to = Math.min(at, importantAt ?? at, firstComment ?? at);
+      while (to > from && isSpace(css.charCodeAt(to - 1))) to -= 1;
+      out2.push({
+        name: normalizePrelude(css.slice(segStart, colonAt)),
+        from,
+        to: Math.max(from, to),
+        important: importantAt !== null,
+        comment,
+        broken: broken || brackets.length > 0,
+        context: contextOf(stack)
+      });
+    }
+    resetSegment(at + 1);
+  };
+  while (i < css.length) {
+    const code = css.charCodeAt(i);
+    if (code === 47 && css.charCodeAt(i + 1) === 42) {
+      if (colonAt !== null) {
+        comment = true;
+        if (brackets.length === 0) firstComment ??= i;
+      }
+      i = commentEnd(css, i);
+      continue;
+    }
+    if (code === 34 || code === 39) {
+      const string = stringEnd(css, i);
+      if (!string.ok) broken = true;
+      i = string.end;
+      continue;
+    }
+    if (code === 117 || code === 85) {
+      const url = unquotedUrlEnd(css, i);
+      if (url !== null) {
+        if (!url.ok) broken = true;
+        i = url.end;
+        continue;
+      }
+    }
+    const open = brackets.at(-1);
+    if (open !== void 0) {
+      if (code === 40 || code === 91 || code === 123) brackets.push(code === 40 ? 41 : code === 91 ? 93 : 125);
+      else if (code === open) brackets.pop();
+      i += 1;
+      continue;
+    }
+    if (code === 40) brackets.push(41);
+    else if (code === 91) brackets.push(93);
+    else if (code === 58 && colonAt === null && stack.length > 0) {
+      colonAt = i;
+      custom = /^--\S+$/.test(normalizePrelude(css.slice(segStart, i)));
+    } else if (code === 33 && custom && colonAt !== null && importantAt === null && isImportantAt(css, i)) {
+      importantAt = i;
+    } else if (code === 123) {
+      if (custom && colonAt !== null) brackets.push(125);
+      else {
+        const prelude = normalizePrelude(css.slice(segStart, i));
+        stack.push({ prelude, atRule: prelude.startsWith("@") });
+        resetSegment(i + 1);
+      }
+    } else if (code === 125) {
+      if (stack.length > 0) {
+        endSegment(i);
+        stack.pop();
+      } else resetSegment(i + 1);
+    } else if (code === 59) {
+      if (stack.length > 0) endSegment(i);
+      else if (css.slice(segStart, i).trimStart().startsWith("@")) resetSegment(i + 1);
+    }
+    i += 1;
+  }
+  endSegment(css.length);
+  return out2;
+};
+var NUMBER_VALUE = /^(-?(?:\d+\.?\d*|\.\d+))([a-z%]*)$/;
+var isPlainChoiceValue = (value) => TWEAK_CHOICE_VALUE_PATTERN.test(value) && isBalancedQuotes(value) && !value.includes("(");
+var ALSO_SET_MAX = 3;
+var readKnob = (css, declarations, tweak) => {
+  const base2 = { var: tweak.var, value: null, fileUnit: null };
+  if (css === null) return { state: { ...base2, state: "no-file", alsoSet: [] }, declaration: null, text: null };
+  const mine = declarations.filter((declaration2) => declaration2.name === tweak.var);
+  const alsoSet = [];
+  for (const declaration2 of mine) {
+    if (declaration2.context.kind === "other" && !alsoSet.includes(declaration2.context.label) && alsoSet.length < ALSO_SET_MAX) alsoSet.push(declaration2.context.label);
+  }
+  const declaration = mine.filter((one) => one.context.kind === "root").at(-1) ?? null;
+  if (declaration === null) return { state: { ...base2, state: "missing", alsoSet }, declaration: null, text: null };
+  const text = css.slice(declaration.from, declaration.to);
+  const formula = { state: { ...base2, state: "formula", alsoSet }, declaration, text };
+  if (declaration.important || declaration.comment || declaration.broken) return formula;
+  if (tweak.kind === "number") {
+    const match = NUMBER_VALUE.exec(text);
+    const digits = match?.[1];
+    const unit = match?.[2];
+    if (digits === void 0 || unit === void 0) return formula;
+    const value = Number(digits);
+    return { state: { var: tweak.var, state: unit === tweak.unit ? "ok" : "unit", value, fileUnit: unit, alsoSet }, declaration, text };
+  }
+  if (tweak.options.some((option) => option.value === text)) return { state: { ...base2, state: "ok", value: text, alsoSet }, declaration, text };
+  if (isPlainChoiceValue(text)) return { state: { ...base2, state: "value", value: text, alsoSet }, declaration, text };
+  return formula;
+};
+var readKnobs = (css, tweaks) => {
+  const declarations = css === null ? [] : scanTokens(css);
+  return tweaks.map((tweak) => readKnob(css, declarations, tweak));
+};
+var readTweakValues = (css, tweaks) => readKnobs(css, tweaks).map((read) => read.state);
 
 // src/shared/bridge-protocol.ts
 var BRIDGE_PLACEHOLDER = "<!--dc-bridge-->";
@@ -132,7 +348,14 @@ var ROUTE_OWNERS = {
   "POST /session-events": "U4",
   "POST /mentions/search": "U6",
   "POST /mentions/resolve": "U6",
-  "GET /status/designs": "U5"
+  "GET /status/designs": "U5",
+  "POST /designs/:slug/edits": "P2",
+  "POST /designs/:slug/edits/:id/undo": "P2",
+  "GET /designs/:slug/tokens": "P2",
+  "POST /designs/:slug/hand-edits/clear": "P2",
+  "GET /designs/:slug/page-state": "P2",
+  "PATCH /designs/:slug/page-state": "P2",
+  "DELETE /designs/:slug/page-state": "P2"
 };
 var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
 
@@ -149,7 +372,7 @@ var ApiError = class extends Error {
 };
 
 // src/service/paths.ts
-import { realpath as fsRealpath, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { link as fsLink, lstat as fsLstat, realpath as fsRealpath, unlink as fsUnlink, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -842,6 +1065,7 @@ var CANONICAL_ORDER = [
   "viewports",
   "screens",
   "designSystem",
+  "tweaks",
   "comments"
 ];
 var KNOWN_FIELDS = new Set(CANONICAL_ORDER);
@@ -957,7 +1181,55 @@ var parseScreen = (value, index, viewportIds, warnings) => {
       warnings.add("invalid-screen-description", `${field}.description`, `Screen "${id}" has a description over ${SCREEN_DESCRIPTION_MAX} characters; it is not shown.`);
     }
   }
+  if (has(value, "direction")) {
+    const mark = parseDirectionMark(value.direction, id);
+    if (mark === null) {
+      warnings.add("invalid-direction", `${field}.direction`, `Screen "${id}" has a direction mark Design Chamber can't read, so it shows as a normal screen.`);
+    } else {
+      screen.direction = mark;
+    }
+  }
   return screen;
+};
+var DIRECTION_LETTERS = ["A", "B", "C", "D"];
+var parseDirectionMark = (value, ownId) => {
+  if (!isRec(value)) return null;
+  if (typeof value.of !== "string" || !SCREEN_ID_PATTERN.test(value.of) || value.of === ownId) return null;
+  if (!DIRECTION_LETTERS.includes(value.letter)) return null;
+  const name = nonEmpty(value.name, DIRECTION_NAME_MAX);
+  if (name === null) return null;
+  return { of: value.of, letter: value.letter, name };
+};
+var validateDirections = (rawById, screens, warnings) => {
+  const listed = new Set(screens.map((screen) => screen.id));
+  const letters = /* @__PURE__ */ new Map();
+  for (const screen of screens) {
+    const mark = screen.direction;
+    if (mark === void 0) continue;
+    const raw = rawById.get(screen.id);
+    const field = raw === void 0 ? "screens.direction" : `screens[${raw.index}].direction`;
+    const drop = (code, message) => {
+      warnings.add(code, field, message);
+      delete screen.direction;
+    };
+    if (!listed.has(mark.of)) {
+      drop("direction-orphan", `Screen "${screen.id}" is marked as a direction of "${mark.of}", which is not a screen here, so it shows as a normal screen.`);
+      continue;
+    }
+    const ofRaw = rawById.get(mark.of);
+    if (ofRaw !== void 0 && has(ofRaw.entry, "direction")) {
+      drop("direction-chain", `Screen "${screen.id}" is marked as a direction of "${mark.of}", which is itself a direction, so it shows as a normal screen.`);
+      continue;
+    }
+    const taken = letters.get(mark.of);
+    const owner = taken?.get(mark.letter);
+    if (owner !== void 0) {
+      drop("direction-letter-taken", `Screen "${screen.id}" uses direction letter ${mark.letter}, which "${owner}" already has, so it shows as a normal screen.`);
+      continue;
+    }
+    if (taken === void 0) letters.set(mark.of, /* @__PURE__ */ new Map([[mark.letter, screen.id]]));
+    else taken.set(mark.letter, screen.id);
+  }
 };
 var parseViewports = (raw, kind, warnings) => {
   if (!has(raw, "viewports")) return defaultViewports(kind);
@@ -1002,6 +1274,7 @@ var parseScreens = (raw, kind, viewports, warnings) => {
   const viewportIds = new Set(viewports.map((v) => v.id));
   const result = [];
   const seen = /* @__PURE__ */ new Set();
+  const rawById = /* @__PURE__ */ new Map();
   raw.screens.forEach((entry, index) => {
     const screen = parseScreen(entry, index, viewportIds, warnings);
     if (!screen) return;
@@ -1011,10 +1284,83 @@ var parseScreens = (raw, kind, viewports, warnings) => {
     }
     seen.add(screen.id);
     result.push(screen);
+    rawById.set(screen.id, { entry, index });
   });
   if (result.length > SCREENS_MAX) {
     warnings.add("too-many-screens", "screens", `Only the first ${SCREENS_MAX} screens are shown.`);
     result.length = SCREENS_MAX;
+  }
+  validateDirections(rawById, result, warnings);
+  return result;
+};
+var CHOICE_REASON = "a choice needs 2 to 6 options with distinct plain values";
+var invalidTweak = (warnings, index, reason) => {
+  warnings.add("invalid-tweak", `tweaks[${index}]`, `Tweak ${index + 1} in design.json is not usable (${reason}), so it is not shown.`);
+  return null;
+};
+var parseTweakNumber = (value, index, warnings, base2) => {
+  const { min, max, step } = value;
+  if (!isFiniteNum(min) || !isFiniteNum(max) || Math.abs(min) > TWEAK_NUMBER_ABS_MAX || Math.abs(max) > TWEAK_NUMBER_ABS_MAX || min >= max) {
+    return invalidTweak(warnings, index, "min must be below max");
+  }
+  if (typeof step !== "number" || !Number.isFinite(step) || step <= 0 || step > max - min || !/^\d+(\.\d{1,4})?$/.test(String(step))) {
+    return invalidTweak(warnings, index, "step must be above 0 and fit the range");
+  }
+  const unit = value.unit === void 0 ? "" : value.unit;
+  if (typeof unit !== "string" || !TWEAK_UNIT_PATTERN.test(unit)) {
+    return invalidTweak(warnings, index, "the unit must be letters or %");
+  }
+  return { ...base2, kind: "number", min, max, step, unit };
+};
+var parseTweakChoice = (value, index, warnings, base2) => {
+  if (!Array.isArray(value.options) || value.options.length < TWEAK_CHOICES_MIN || value.options.length > TWEAK_CHOICES_MAX) {
+    return invalidTweak(warnings, index, CHOICE_REASON);
+  }
+  const options = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const option of value.options) {
+    if (!isRec(option)) return invalidTweak(warnings, index, CHOICE_REASON);
+    const label = nonEmpty(option.label, TWEAK_CHOICE_LABEL_MAX);
+    if (label === null || typeof option.value !== "string" || !TWEAK_CHOICE_VALUE_PATTERN.test(option.value) || !isBalancedQuotes(option.value) || seen.has(option.value)) {
+      return invalidTweak(warnings, index, CHOICE_REASON);
+    }
+    seen.add(option.value);
+    options.push({ label, value: option.value });
+  }
+  return { ...base2, kind: "choice", options };
+};
+var parseTweak = (value, index, warnings) => {
+  if (!isRec(value) || typeof value.var !== "string" || !TWEAK_VAR_PATTERN.test(value.var)) {
+    return invalidTweak(warnings, index, "it needs a var like --accent");
+  }
+  const label = nonEmpty(value.label, TWEAK_LABEL_MAX);
+  if (label === null) return invalidTweak(warnings, index, `its label must be 1 to ${TWEAK_LABEL_MAX} characters`);
+  const base2 = { var: value.var, label };
+  if (value.kind === "number") return parseTweakNumber(value, index, warnings, base2);
+  if (value.kind === "choice") return parseTweakChoice(value, index, warnings, base2);
+  return invalidTweak(warnings, index, 'its kind must be "number" or "choice"');
+};
+var parseTweaks = (raw, warnings) => {
+  if (!has(raw, "tweaks")) return [];
+  if (!Array.isArray(raw.tweaks)) {
+    warnings.add("invalid-tweaks", "tweaks", "The tweak list is not a list, so no tweaks are shown.");
+    return [];
+  }
+  const result = [];
+  const seen = /* @__PURE__ */ new Set();
+  raw.tweaks.forEach((entry, index) => {
+    const tweak = parseTweak(entry, index, warnings);
+    if (tweak === null) return;
+    if (seen.has(tweak.var)) {
+      warnings.add("duplicate-tweak", `tweaks[${index}]`, `Two tweaks use ${tweak.var}; only the first is shown.`);
+      return;
+    }
+    seen.add(tweak.var);
+    result.push(tweak);
+  });
+  if (result.length > TWEAKS_MAX) {
+    warnings.add("too-many-tweaks", "tweaks", `Only the first ${TWEAKS_MAX} tweaks are shown.`);
+    result.length = TWEAKS_MAX;
   }
   return result;
 };
@@ -1105,6 +1451,7 @@ var normalizeDesign = (raw, options) => {
     if (isRec(value) && typeof value.confirmed === "boolean") designSystem = { confirmed: value.confirmed };
     else warnings.add("invalid-design-system", "designSystem", 'designSystem must be { "confirmed": true | false }; it is treated as not confirmed.');
   }
+  const tweaks = parseTweaks(record, warnings);
   const comments = parseComments(record, warnings);
   const extra = Object.fromEntries(
     // Safe: `record` came from JSON.parse (or is {}), so every value is JSON.
@@ -1125,6 +1472,7 @@ var normalizeDesign = (raw, options) => {
       viewports,
       screens,
       designSystem,
+      tweaks,
       comments
     },
     extra,
@@ -1556,6 +1904,16 @@ var RULES = {
     severity: "info",
     sentence: (f) => `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although tokens.css defines colours.`
   },
+  "tweak-broken": {
+    severity: "warning",
+    sentence: (f) => {
+      const field = f.params?.field ?? "?";
+      if (f.params?.tweak === "missing") return `design.json: the tweak for ${field} names a variable tokens.css does not define.`;
+      if (f.params?.tweak === "formula") return `design.json: the tweak for ${field} points at a formula in tokens.css (calc() or var()), so it can't be tuned.`;
+      if (f.params?.tweak === "unit") return `design.json: the tweak for ${field} uses a different unit than tokens.css.`;
+      return "design.json declares tweaks, but the design has no tokens.css.";
+    }
+  },
   "check-partial": { severity: "info", sentence: () => "Some files were not checked in time." }
 };
 var CHECK_CODES = Object.freeze(Object.keys(RULES));
@@ -1701,6 +2059,8 @@ var minContrastFor = (fontPx, weight) => fontPx >= 24 || fontPx >= 19 && weight 
 var WIDE_MAX = 20;
 var SELECTORS_MAX = 50;
 var TEXT_SHOWN_MAX = 80;
+var TEXT_LINES_MAX = 100;
+var TEXT_ANCESTORS_MAX = 64;
 var isRec2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 var finite = (value, min = -1e7, max = 1e7) => typeof value === "number" && Number.isFinite(value) && value >= min && value <= max ? value : null;
 var selectorOf = (value) => typeof value === "string" && value !== "" ? cleanDetail(value, CHECK_SELECTOR_MAX) : null;
@@ -1713,6 +2073,21 @@ var parseRect2 = (value) => {
   const h = finite(value.h, 0);
   return x === null || y === null || w === null || h === null ? null : { x, y, w, h };
 };
+var parseLines = (value) => {
+  const lines = [];
+  if (!Array.isArray(value)) return lines;
+  for (const entry of value.slice(0, TEXT_LINES_MAX)) {
+    const line = parseRect2(entry);
+    if (line !== null) lines.push(line);
+  }
+  return lines;
+};
+var parseInScroll = (value) => {
+  if (!isRec2(value)) return void 0;
+  const box = value.box;
+  if (typeof box !== "number" || !Number.isInteger(box) || box < 0 || box >= CHECK_TEXT_ELEMENTS_MAX) return void 0;
+  return { box, lines: parseLines(value.lines) };
+};
 var parseText = (value) => {
   if (!isRec2(value)) return null;
   const selector = selectorOf(value.selector);
@@ -1721,10 +2096,21 @@ var parseText = (value) => {
   const weight = finite(value.weight, 0, 1e3);
   if (selector === null || rect === null || fontPx === null || weight === null || typeof value.color !== "string") return null;
   const bgChain = Array.isArray(value.bgChain) && value.bgChain.every((entry) => typeof entry === "string") ? value.bgChain.slice(0, 40) : null;
+  const inScroll = parseInScroll(value.inScroll);
+  const ancestors = [];
+  if (Array.isArray(value.ancestors)) {
+    for (const entry of value.ancestors.slice(0, TEXT_ANCESTORS_MAX)) {
+      if (typeof entry === "number" && Number.isInteger(entry) && entry >= 0 && entry < CHECK_TEXT_ELEMENTS_MAX) ancestors.push(entry);
+    }
+  }
   return {
     selector,
     text: typeof value.text === "string" ? cleanDetail(value.text, TEXT_SHOWN_MAX) : "",
     rect,
+    lines: parseLines(value.lines),
+    ...inScroll === void 0 ? {} : { inScroll },
+    hidden: value.hidden === true,
+    ancestors,
     color: value.color.slice(0, 120),
     bgChain: bgChain === null ? null : bgChain.map((entry) => entry.slice(0, 120)),
     fontPx,
@@ -1753,9 +2139,15 @@ var sanitizeProbe = (value) => {
   }
   const texts = [];
   if (Array.isArray(value.texts)) {
-    for (const entry of value.texts.slice(0, CHECK_TEXT_ELEMENTS_MAX)) {
+    const parsed = [];
+    for (const [raw, entry] of value.texts.slice(0, CHECK_TEXT_ELEMENTS_MAX).entries()) {
       const text = parseText(entry);
-      if (text !== null) texts.push(text);
+      if (text !== null) parsed.push({ raw, text });
+    }
+    const position = new Map(parsed.map((entry, index) => [entry.raw, index]));
+    for (const [index, { text }] of parsed.entries()) {
+      const ancestors = [...new Set((text.ancestors ?? []).map((raw) => position.get(raw)).filter((link) => link !== void 0 && link !== index))];
+      texts.push({ ...text, ancestors });
     }
   }
   return {
@@ -1789,7 +2181,7 @@ var contrastFindings = (probe, artboard) => {
   const seen = /* @__PURE__ */ new Set();
   const out2 = [];
   for (const text of probe.texts) {
-    if (text.bgChain === null || text.disabled || text.text.trim() === "") continue;
+    if (text.hidden || text.bgChain === null || text.disabled || text.text.trim() === "") continue;
     const fg = parseCssColor(text.color);
     if (fg === null || fg.a <= 0) continue;
     const chain = [];
@@ -1813,16 +2205,32 @@ var contrastFindings = (probe, artboard) => {
   }
   return out2;
 };
+var paintedBoxesOf = (text) => {
+  if (text.lines !== void 0 && text.lines.length > 0) return text.lines;
+  return text.inScroll === void 0 ? [text.rect] : [];
+};
+var comparedBoxes = (a, b) => a.inScroll !== void 0 && b.inScroll !== void 0 && a.inScroll.box === b.inScroll.box ? [a.inScroll.lines, b.inScroll.lines] : [paintedBoxesOf(a), paintedBoxesOf(b)];
+var linesOverlap = (a, b) => {
+  const [linesA, linesB] = comparedBoxes(a, b);
+  for (const lineA of linesA) {
+    for (const lineB of linesB) {
+      if (overlapShare(lineA, lineB) >= OVERLAP_MIN_SHARE) return true;
+    }
+  }
+  return false;
+};
+var rectsIntersect = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 var overlapFindings = (probe, artboard) => {
-  const boxes = probe.texts.filter((text) => !text.fixed && text.rect.w > 1 && text.rect.h > 1 && text.text.trim() !== "");
+  const boxes = probe.texts.map((text, index) => ({ text, index })).filter(({ text }) => !text.hidden && !text.fixed && text.rect.w > 1 && text.rect.h > 1 && text.text.trim() !== "");
   const out2 = [];
   for (let i = 0; i < boxes.length && out2.length < CHECK_FINDINGS_PER_CODE; i += 1) {
     const a = boxes[i];
     if (a === void 0) continue;
     for (let j = i + 1; j < boxes.length; j += 1) {
       const b = boxes[j];
-      if (b === void 0 || overlapShare(a.rect, b.rect) < OVERLAP_MIN_SHARE) continue;
-      out2.push({ ...base("text-overlap", artboard), detail: cleanDetail(`${a.text} / ${b.text}`, 160), selector: a.selector });
+      if (b === void 0 || !rectsIntersect(a.text.rect, b.text.rect) || !linesOverlap(a.text, b.text)) continue;
+      if ((a.text.ancestors ?? []).includes(b.index) || (b.text.ancestors ?? []).includes(a.index)) continue;
+      out2.push({ ...base("text-overlap", artboard), detail: cleanDetail(`${a.text.text} / ${b.text.text}`, 160), selector: a.text.selector });
       break;
     }
   }
@@ -1847,7 +2255,7 @@ var analyzeProbe = (probe, artboard) => {
     findings.push({ ...base("overflow-x", artboard), params: { px: Math.round(probe.scrollWidth), width: artboard.width }, ...widest ? { selector: widest.selector } : {} });
   }
   for (const text of probe.texts) {
-    if (text.clipped && !text.ellipsis && text.text.trim() !== "") {
+    if (!text.hidden && text.clipped && !text.ellipsis && text.text.trim() !== "") {
       findings.push({ ...base("text-clipped", artboard), detail: cleanDetail(text.text, 120), selector: text.selector });
     }
   }
@@ -1887,6 +2295,8 @@ var openPage = async (session, serving) => {
   await page.send("Log.enable");
   await page.send("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
   await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
+  const storageShim = true ? '"use strict";(()=>{var d=30*6e4;var u=1048576;var D=1e4;var g=u;var I=(r,c)=>r.length+(c===null?0:c.length);var P=(r,c,T={changes:D,chars:g})=>{let o=[],E=[],s=0,p=()=>{o.push({clear:r&&o.length===0,changes:E}),E=[],s=0};for(let S of c){let R=I(S[0],S[1]);E.length>0&&(E.length>=T.changes||s+R>T.chars)&&p(),E.push(S),s+=R}return(E.length>0||r&&o.length===0)&&p(),o},l=r=>`${r}`,N=(r,c,T)=>{if(c.length<T)throw new TypeError(`Failed to execute \'${r}\' on \'Storage\': ${T} argument${T===1?"":"s"} required, but only ${c.length} present.`)},H=(r,c,T)=>{let o=new Map,E=0;for(let[e,t]of r)o.has(e)||(o.set(e,t),E+=I(e,t));let s=null,p=(e,t)=>{let _=o.get(e);E+=I(e,t)-(_===void 0?0:I(e,_)),_===void 0&&(s=null),o.set(e,t)},S=e=>{let t=o.get(e);t!==void 0&&(E-=I(e,t),o.delete(e),s=null)},R=(...e)=>(N("getItem",e,1),o.get(l(e[0]))??null),n=(...e)=>{N("setItem",e,2);let t=l(e[0]),_=l(e[1]),O=o.get(t);if(O===_)return;if(E+I(t,_)-(O===void 0?0:I(t,O))>u)throw c(t);p(t,_),T?.set(t,_)},A=(...e)=>{N("removeItem",e,1);let t=l(e[0]);o.has(t)&&(S(t),T?.set(t,null))},a=()=>{o.size!==0&&(o.clear(),E=0,s=null,T?.clear())},i=(...e)=>{N("key",e,1);let t=Number(e[0])>>>0;return s??(s=[...o.keys()]),s[t]??null},C=Object.create(Object.prototype,{getItem:{value:R,enumerable:!0,configurable:!0,writable:!0},setItem:{value:n,enumerable:!0,configurable:!0,writable:!0},removeItem:{value:A,enumerable:!0,configurable:!0,writable:!0},clear:{value:a,enumerable:!0,configurable:!0,writable:!0},key:{value:i,enumerable:!0,configurable:!0,writable:!0},length:{get:()=>o.size,enumerable:!0,configurable:!0},[Symbol.toStringTag]:{value:"Storage",configurable:!0}}),M=Object.create(C),x=e=>typeof e=="string"&&o.has(e)&&!(e in M);return{storage:new Proxy(M,{get:(e,t,_)=>x(t)?o.get(t):Reflect.get(e,t,_),set:(e,t,_)=>typeof t!="string"?Reflect.set(e,t,_):(n(t,_),!0),has:(e,t)=>typeof t=="string"&&o.has(t)||Reflect.has(e,t),deleteProperty:(e,t)=>x(t)?(A(t),!0):Reflect.deleteProperty(e,t),ownKeys:e=>[...[...o.keys()].filter(t=>!(t in e)),...Reflect.ownKeys(e)],getOwnPropertyDescriptor:(e,t)=>x(t)?{value:o.get(t),writable:!0,enumerable:!0,configurable:!0}:Reflect.getOwnPropertyDescriptor(e,t),defineProperty:(e,t,_)=>typeof t!="string"?Reflect.defineProperty(e,t,_):"get"in _||"set"in _?!1:(n(t,_.value),!0),preventExtensions:()=>!1}),apply:(e,t)=>{e&&(o.clear(),E=0,s=null);for(let[_,O]of t)O===null?S(_):p(_,O)}}},L=(r,c,T)=>{let o=r.DOMException??globalThis.DOMException,E=r.queueMicrotask?.bind(r)??(n=>void Promise.resolve().then(n)),s=n=>new o(`Failed to execute \'setItem\' on \'Storage\': Setting the value of \'${n}\' exceeded the quota.`,"QuotaExceededError"),p=null;if(c?.persist){let n=new Map,A=!1,a=!1,i=()=>{a=!1;let M=[...n],x=A;n=new Map,A=!1;for(let X of P(x,M))T(X)},C=()=>{a||(a=!0,E(i))};p={set:(M,x)=>{n.delete(M),n.set(M,x),C()},clear:()=>{n.clear(),A=!0,C()}}}let S=H(c?.items??[],s,p),R=H([],s,null);for(let[n,A]of[["localStorage",S],["sessionStorage",R]])try{Object.defineProperty(r,n,{value:A.storage,configurable:!0,enumerable:!0,writable:!1})}catch{}return{sync:(n,A)=>S.apply(n,A)}};L(window,void 0,()=>{});})();\n' : "";
+  if (storageShim !== "") await page.send("Page.addScriptToEvaluateOnNewDocument", { source: storageShim });
   session.on("Fetch.requestPaused", (event) => {
     if (event.sessionId !== sessionId) return;
     const requestId = String(event.params.requestId);
@@ -2216,6 +2626,19 @@ var tokenFindings = (input) => {
   }
   return { redefined: [...redefined], literals, tokensHaveColors };
 };
+var tweakFindings = (input) => {
+  const { tweaks, tokensCss } = input;
+  if (tweaks.length === 0) return [];
+  const where = { file: DESIGN_JSON_FILE, screen: null, viewport: null };
+  if (tokensCss === null) return [{ code: "tweak-broken", ...where, params: { tweak: "no-tokens" } }];
+  const out2 = [];
+  for (const state of readTweakValues(tokensCss, tweaks)) {
+    if (state.state === "missing" || state.state === "formula" || state.state === "unit") {
+      out2.push({ code: "tweak-broken", ...where, params: { tweak: state.state, field: state.var } });
+    }
+  }
+  return out2;
+};
 var VIEWPORT_SUFFIX = /^(.+)-(phone|mobile|tablet|desktop|laptop)$/;
 var screenSetFindings = (input) => {
   const { design } = input;
@@ -2291,6 +2714,7 @@ var runStaticChecks = async (designDir, budgetMs, clock = Date.now) => {
   ];
   const tokensFile = await source.read("tokens.css").catch(() => null);
   const tokensCss = tokensFile === null ? null : tokensFile.bytes.subarray(0, TOKENS_BYTES).toString("utf8");
+  findings.push(...tweakFindings({ tweaks: design.tweaks, tokensCss }));
   const keys = { design: sha2562(designFile?.bytes ?? ""), entries: {} };
   let partial = false;
   for (const entry of entries) {
@@ -2817,7 +3241,7 @@ var main = async () => {
       staticOnly: command.staticOnly,
       tool: "cli",
       browserPath: browser.path,
-      probeSource: true ? '"use strict";var __dcProbe=(()=>{var i=Object.defineProperty;var d=Object.getOwnPropertyDescriptor;var g=Object.getOwnPropertyNames;var L=Object.prototype.hasOwnProperty;var m=(t,e)=>{for(var o in e)i(t,o,{get:e[o],enumerable:!0})},H=(t,e,o,n)=>{if(e&&typeof e=="object"||typeof e=="function")for(let r of g(e))!L.call(t,r)&&r!==o&&i(t,r,{get:()=>e[r],enumerable:!(n=d(e,r))||n.enumerable});return t};var f=t=>H(i({},"__esModule",{value:!0}),t);var et={};m(et,{collect:()=>tt});var P=["data-testid","data-screen","data-dc-id"],h=/^(is-|has-|js-|active|hover|focus)/,R=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,b=3,u=t=>t.tagName===t.tagName.toUpperCase()?t.tagName.toLowerCase():t.tagName,O=t=>t.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),I=t=>t===""?null:R.test(t)?`#${t}`:`[id="${O(t)}"]`,U=(t,e)=>{try{return t.querySelectorAll(e)}catch{return null}},T=(t,e,o)=>{let n=U(t,e);return n!==null&&n.length===1&&n[0]===o},B=t=>{let e=[];for(let o=0;o<t.classList.length&&e.length<b;o+=1){let n=t.classList[o];n!==void 0&&R.test(n)&&!h.test(n)&&e.push(n)}return e},y=t=>{let e=t.parentElement;if(!e)return null;let o=0,n=0;for(let r=0;r<e.children.length;r+=1){let s=e.children[r];!s||s.tagName!==t.tagName||(n+=1,s===t&&(o=n))}return n>1?o:null},G=t=>{let e=u(t);if(e==="html"||e==="body")return e;let o=B(t).map(r=>`.${r}`).join(""),n=y(t);return`${e}${o}${n===null?"":`:nth-of-type(${n})`}`},A=t=>{let e=[...t];for(;e.join(" > ").length>1e3&&e.length>1;)e.shift();return e.join(" > ").slice(0,1e3)},C=(t,e)=>{let o=u(t);if(o==="html"||o==="body"||o==="head")return o;let n=I(t.id);if(n&&T(e,n,t))return n;for(let c of P){let _=t.getAttribute(c);if(_===null||_==="")continue;let E=`[${c}="${O(_)}"]`;if(T(e,E,t))return E}let r=[],s=t;for(let c=0;s&&c<6;c+=1){r.unshift(G(s));let _=r.join(" > ");if(T(e,_,t))return A(r);let E=s.parentElement;if(!E)break;let l=I(E.id);if(l&&T(e,l,E)){let a=[l,...r];if(T(e,a.join(" > "),t))return A(a)}s=E}return A(r)};var V=new Set(["SCRIPT","STYLE","NOSCRIPT","TEMPLATE","TITLE","HEAD","OPTION","TEXTAREA"]),W=new Set(["IMG","VIDEO","CANVAS","PICTURE","SVG","IFRAME","OBJECT","EMBED"]),Y=new Set(["hidden","submit","button","reset","image"]),N=20,w=5e3,F=80,p=t=>C(t,document),k=t=>{let e=/^rgba?\\(([^)]*)\\)$/.exec(t.trim());if(!e)return!1;let o=e[1]??"";if(o.includes("/"))return/\\/\\s*1(\\.0*)?\\s*$|\\/\\s*100%/.test(o);let n=o.split(",").map(r=>r.trim());return n.length===3||n.length===4&&Number.parseFloat(n[3]??"1")>=1},x=t=>{let e=getComputedStyle(t);return e.display!=="none"&&e.visibility!=="hidden"&&t.getClientRects().length>0},$=t=>{let e=1/0,o=1/0,n=-1/0,r=-1/0,s=document.createRange();for(let c of t){s.selectNodeContents(c);let _=s.getBoundingClientRect();_.width<1||_.height<1||(e=Math.min(e,_.left),o=Math.min(o,_.top),n=Math.max(n,_.right),r=Math.max(r,_.bottom))}return Number.isFinite(e)?{x:e+window.scrollX,y:o+window.scrollY,w:n-e,h:r-o}:null},z=(t,e)=>{let o=[];for(let s=t;s;s=s.parentElement){let c=getComputedStyle(s);if(c.backgroundImage!=="none"||c.filter!=="none"||c.mixBlendMode!=="normal"||Number.parseFloat(c.opacity)<1)return null;if(o.push(c.backgroundColor),k(c.backgroundColor))break}let n=e.x-window.scrollX+e.w/2,r=e.y-window.scrollY+e.h/2;if(n>=0&&r>=0&&n<=innerWidth&&r<=innerHeight){let s=document.elementsFromPoint(n,r),c=s.findIndex(_=>_===t||t.contains(_));for(let _ of c<0?[]:s.slice(c+1))if(!_.contains(t)&&(W.has(_.tagName.toUpperCase())||getComputedStyle(_).backgroundImage!=="none"))return null}return o},v=t=>{for(let e=t;e;e=e.parentElement){let o=getComputedStyle(e).position;if(o==="fixed"||o==="sticky")return!0}return!1},Q=(t,e)=>{let o=n=>n==="hidden"||n==="clip";return!o(e.overflowX)&&!o(e.overflowY)?!1:t.scrollWidth>t.clientWidth+1||t.scrollHeight>t.clientHeight+1},j=t=>{let e=new Map,o=document.createTreeWalker(document.body??document.documentElement,NodeFilter.SHOW_TEXT);for(let r=o.nextNode();r&&e.size<t;r=o.nextNode()){let s=r,c=s.parentElement;if(!c||V.has(c.tagName.toUpperCase())||s.data.trim()==="")continue;let _=e.get(c);_?_.push(s):e.set(c,[s])}let n=[];for(let[r,s]of e){if(!x(r))continue;let c=$(s);if(c===null)continue;let _=getComputedStyle(r);n.push({selector:p(r),text:s.map(E=>E.data).join(" ").replace(/\\s+/g," ").trim().slice(0,F),rect:c,color:_.color,bgChain:z(r,c),fontPx:Number.parseFloat(_.fontSize)||0,weight:Number.parseInt(_.fontWeight,10)||400,fixed:v(r),disabled:r.closest(\':disabled, [aria-disabled="true"]\')!==null,clipped:Q(r,_),ellipsis:_.textOverflow.includes("ellipsis")||_.getPropertyValue("-webkit-line-clamp")!==""&&_.getPropertyValue("-webkit-line-clamp")!=="none"})}return n},q=()=>{let t=[],e=document.body?document.body.querySelectorAll("*"):[];for(let o=0;o<e.length&&o<w;o+=1){let n=e[o];if(!n)continue;let r=n.getBoundingClientRect().right+window.scrollX;if(r<=innerWidth+1||!x(n))continue;let s=!1,c=0;for(let _=n.parentElement;_&&_!==document.body&&_!==document.documentElement;_=_.parentElement){c+=1;let E=getComputedStyle(_);(E.overflowX!=="visible"||E.position==="fixed")&&(s=!0)}s||t.push({element:n,depth:c,right:r})}return t.sort((o,n)=>n.depth-o.depth||n.right-o.right).slice(0,N).map(o=>({selector:p(o.element),right:Math.round(o.right)}))},X=t=>(t??"").split(/\\s+/).map(e=>e===""?"":document.getElementById(e)?.textContent??"").join(" ").trim(),Z=t=>(t.getAttribute("aria-label")??"").trim()!==""||X(t.getAttribute("aria-labelledby"))!==""||(t.getAttribute("title")??"").trim()!==""||(t.textContent??"").trim()!==""||t.querySelector(\'img[alt]:not([alt=""]), svg title, [aria-label]\')!==null,J=t=>(t.getAttribute("aria-label")??"").trim()!==""||X(t.getAttribute("aria-labelledby"))!==""||(t.getAttribute("title")??"").trim()!==""?!0:Array.from(t.labels??[]).some(e=>(e.textContent??"").trim()!==""),S=(t,e)=>{let o=[];for(let n of Array.from(document.querySelectorAll(t))){if(o.length>=N)break;x(n)&&e(n)&&o.push(p(n))}return o},tt=(t={})=>{let e=document.scrollingElement??document.documentElement;return{scrollWidth:e.scrollWidth,scrollHeight:e.scrollHeight,innerWidth,innerHeight,wide:q(),texts:j(t.maxTexts??2e3),imgsNoAlt:S("img",o=>!o.hasAttribute("alt")&&!["presentation","none"].includes(o.getAttribute("role")??"")&&o.getAttribute("aria-hidden")!=="true"),unlabeled:S("input, select, textarea",o=>{let n=(o.getAttribute("type")??"").toLowerCase();return!Y.has(n)&&!J(o)}),nameless:S(\'button, a[href], [role="button"]\',o=>!Z(o))}};return f(et);})();\n' : "",
+      probeSource: true ? '"use strict";var __dcProbe=(()=>{var u=Object.defineProperty;var H=Object.getOwnPropertyDescriptor;var D=Object.getOwnPropertyNames;var U=Object.prototype.hasOwnProperty;var B=(e,t)=>{for(var o in t)u(e,o,{get:t[o],enumerable:!0})},y=(e,t,o,n)=>{if(t&&typeof t=="object"||typeof t=="function")for(let r of D(t))!U.call(e,r)&&r!==o&&u(e,r,{get:()=>t[r],enumerable:!(n=H(t,r))||n.enumerable});return e};var w=e=>y(u({},"__esModule",{value:!0}),e);var It={};B(It,{collect:()=>Ct});var ft=30*6e4;var K=["data-testid","data-screen","data-dc-id"],W=/^(is-|has-|js-|active|hover|focus)/,f=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,Y=3,N=e=>e.tagName===e.tagName.toUpperCase()?e.tagName.toLowerCase():e.tagName,d=e=>e.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),O=e=>e===""?null:f.test(e)?`#${e}`:`[id="${d(e)}"]`,V=(e,t)=>{try{return e.querySelectorAll(t)}catch{return null}},a=(e,t,o)=>{let n=V(e,t);return n!==null&&n.length===1&&n[0]===o},F=e=>{let t=[];for(let o=0;o<e.classList.length&&t.length<Y;o+=1){let n=e.classList[o];n!==void 0&&f.test(n)&&!W.test(n)&&t.push(n)}return t},v=e=>{let t=e.parentElement;if(!t)return null;let o=0,n=0;for(let r=0;r<t.children.length;r+=1){let s=t.children[r];!s||s.tagName!==e.tagName||(n+=1,s===e&&(o=n))}return n>1?o:null},k=e=>{let t=N(e);if(t==="html"||t==="body")return t;let o=F(e).map(r=>`.${r}`).join(""),n=v(e);return`${t}${o}${n===null?"":`:nth-of-type(${n})`}`},x=e=>{let t=[...e];for(;t.join(" > ").length>1e3&&t.length>1;)t.shift();return t.join(" > ").slice(0,1e3)},m=(e,t)=>{let o=N(e);if(o==="html"||o==="body"||o==="head")return o;let n=O(e.id);if(n&&a(t,n,e))return n;for(let l of K){let c=e.getAttribute(l);if(c===null||c==="")continue;let _=`[${l}="${d(c)}"]`;if(a(t,_,e))return _}let r=[],s=e;for(let l=0;s&&l<6;l+=1){r.unshift(k(s));let c=r.join(" > ");if(a(t,c,e))return x(r);let _=s.parentElement;if(!_)break;let E=O(_.id);if(E&&a(t,E,_)){let T=[E,...r];if(a(t,T.join(" > "),e))return x(T)}s=_}return x(r)};var z=new Set(["SCRIPT","STYLE","NOSCRIPT","TEMPLATE","TITLE","HEAD","OPTION","TEXTAREA"]),Z=new Set(["IMG","VIDEO","CANVAS","PICTURE","SVG","IFRAME","OBJECT","EMBED"]),Q=new Set(["hidden","submit","button","reset","image"]),g=20,j=5e3,q=80,X=100,J=64,R=e=>m(e,document),tt=e=>{let t=/^rgba?\\(([^)]*)\\)$/.exec(e.trim());if(!t)return!1;let o=t[1]??"";if(o.includes("/"))return/\\/\\s*1(\\.0*)?\\s*$|\\/\\s*100%/.test(o);let n=o.split(",").map(r=>r.trim());return n.length===3||n.length===4&&Number.parseFloat(n[3]??"1")>=1},C=e=>{let t=getComputedStyle(e);return t.display!=="none"&&t.visibility!=="hidden"&&e.getClientRects().length>0},et=e=>{let t=[],o=document.createRange();for(let n of e){if(t.length>=X)break;o.selectNodeContents(n);for(let r of Array.from(o.getClientRects()))if(!(r.width<1||r.height<1)&&(t.push({x:r.left+window.scrollX,y:r.top+window.scrollY,w:r.width,h:r.height}),t.length>=X))break}return t},ot=e=>{let t=1/0,o=1/0,n=-1/0,r=-1/0;for(let s of e)t=Math.min(t,s.x),o=Math.min(o,s.y),n=Math.max(n,s.x+s.w),r=Math.max(r,s.y+s.h);return{x:t,y:o,w:n-t,h:r-o}},S=(e,t,o,n)=>{if(!o&&!n)return e;let r=[];for(let s of e){let l=o?Math.max(s.x,t.x):s.x,c=n?Math.max(s.y,t.y):s.y,_=o?Math.min(s.x+s.w,t.x+t.w):s.x+s.w,E=n?Math.min(s.y+s.h,t.y+t.h):s.y+s.h,T=_-l,i=E-c;T>=1&&i>=1&&r.push({x:l,y:c,w:T,h:i})}return r},nt=(e,t,o,n)=>o&&(e.x<t.x-1||e.x+e.w>t.x+t.w+1)||n&&(e.y<t.y-1||e.y+e.h>t.y+t.h+1),rt=(e,t,o,n)=>{if(!o&&!n)return e;let r=[];for(let s of e){let l={x:o?t.x:s.x,y:n?t.y:s.y,w:o?t.w:s.w,h:n?t.h:s.h};l.w>=1&&l.h>=1&&r.push(l)}return r},b=(e,t)=>{let o=getComputedStyle(e);return o.display==="contents"?!1:!!(t==="absolute"&&o.position!=="static"||o.transform!=="none"||o.perspective!=="none"||o.filter!=="none"||o.backdropFilter!=="none"||o.translate!=="none"||o.rotate!=="none"||o.scale!=="none"||/transform|translate|rotate|scale|perspective|filter/.test(o.willChange)||/paint|layout|strict|content/.test(o.contain))},st=e=>{for(let t=e.parentElement;t!==null;t=t.parentElement)if(b(t,"fixed"))return t;return null},ct=e=>{if(e!==document.body)return!1;let t=getComputedStyle(document.documentElement);return t.overflowX==="visible"&&t.overflowY==="visible"},_t=new Set(["inline","contents","table-row","table-row-group","table-header-group","table-footer-group"]),lt=e=>{let t=e.getBoundingClientRect(),o=e instanceof HTMLElement&&e.offsetWidth>0?t.width/e.offsetWidth:1,n=e instanceof HTMLElement&&e.offsetHeight>0?t.height/e.offsetHeight:1;return{x:t.left+e.clientLeft*o+window.scrollX,y:t.top+e.clientTop*n+window.scrollY,w:e.clientWidth*o,h:e.clientHeight*n}},h=(e,t)=>{if(t.overflowX==="visible"&&t.overflowY==="visible"||e===document.documentElement||ct(e)||_t.has(t.display))return null;let o=s=>s==="auto"||s==="scroll",n=o(t.overflowX)&&e.scrollWidth>e.clientWidth+1,r=o(t.overflowY)&&e.scrollHeight>e.clientHeight+1;return{box:lt(e),cutX:t.overflowX!=="visible"&&!n,cutY:t.overflowY!=="visible"&&!r,scrollX:n,scrollY:r}},Et=(e,t,o)=>{let n={lines:o,reachable:!0,scrolled:null},r=o,s=(l,c)=>{if(c===null)return;let{box:_,cutX:E,cutY:T,scrollX:i,scrollY:p}=c,A=S(n.lines,_,E,T);n.scrolled===null&&A.some(P=>nt(P,_,i,p))&&(n.scrolled={box:l,lines:A}),n.lines=S(A,_,i,p),r=rt(S(r,_,E,T),_,i,p)};if(s(e,h(e,t)),t.position==="fixed"&&st(e)===null){let l={x:window.scrollX,y:window.scrollY,w:innerWidth,h:innerHeight};n.lines=S(n.lines,l,!0,!0),r=S(r,l,!0,!0)}else{let l=e,c=t.position;for(;n.lines.length>0||r.length>0;){let _=l.parentElement;if(c==="absolute"||c==="fixed")for(;_!==null&&!b(_,c);)_=_.parentElement;if(_===null)break;let E=getComputedStyle(_);s(_,h(_,E)),l=_,c=E.position}}return n.reachable=r.length>0,n},it=e=>{let t=/^rect\\(([^)]*)\\)$/.exec(e.trim());if(!t)return!1;let o=(t[1]??"").split(/[\\s,]+/).filter(c=>c!=="").map(c=>Number.parseFloat(c));if(o.length!==4||o.some(c=>!Number.isFinite(c)))return!1;let n=o[0]??0,r=o[1]??0,s=o[2]??0,l=o[3]??0;return s<=n||r<=l},Tt=(e,t)=>{let o=/^inset\\(([^)]*)\\)$/.exec(e.trim());if(!o)return!1;let n=(o[1]??"").trim().split(/\\s+/).filter(E=>E!=="");if(n.length===0||n.length>4)return!1;let r=(E,T)=>{if(E===void 0)return null;let i=/^(-?[\\d.]+)(px|%)$/.exec(E);if(!i)return null;let p=Number.parseFloat(i[1]??"");return i[2]==="%"?p/100*T:p},s=r(n[0],t.height),l=r(n[1]??n[0],t.width),c=r(n[2]??n[0],t.height),_=r(n[3]??n[1]??n[0],t.width);return s===null||l===null||c===null||_===null?!1:s+c>=t.height||_+l>=t.width},pt=(e,t,o)=>{if(!o)return!0;for(let s=e;s;s=s.parentElement)if(Number.parseFloat(getComputedStyle(s).opacity)===0)return!0;if((t.position==="absolute"||t.position==="fixed")&&it(t.clip))return!0;let n=e.getBoundingClientRect();if(Tt(t.clipPath,n))return!0;let r=t.overflowX==="hidden"||t.overflowX==="clip"||t.overflowY==="hidden"||t.overflowY==="clip";return n.width<=1&&n.height<=1&&r},At=(e,t)=>{let o=[];for(let s=e;s;s=s.parentElement){let l=getComputedStyle(s);if(l.backgroundImage!=="none"||l.filter!=="none"||l.mixBlendMode!=="normal"||Number.parseFloat(l.opacity)<1)return null;if(o.push(l.backgroundColor),tt(l.backgroundColor))break}let n=t.x-window.scrollX+t.w/2,r=t.y-window.scrollY+t.h/2;if(n>=0&&r>=0&&n<=innerWidth&&r<=innerHeight){let s=document.elementsFromPoint(n,r),l=s.findIndex(c=>c===e||e.contains(c));for(let c of l<0?[]:s.slice(l+1))if(!c.contains(e)&&(Z.has(c.tagName.toUpperCase())||getComputedStyle(c).backgroundImage!=="none"))return null}return o},at=e=>{for(let t=e;t;t=t.parentElement){let o=getComputedStyle(t).position;if(o==="fixed"||o==="sticky")return!0}return!1},St=(e,t)=>{let o=n=>n==="hidden"||n==="clip";return!o(t.overflowX)&&!o(t.overflowY)?!1:e.scrollWidth>e.clientWidth+1||e.scrollHeight>e.clientHeight+1},ut=e=>{let t=new Map,o=document.createTreeWalker(document.body??document.documentElement,NodeFilter.SHOW_TEXT);for(let c=o.nextNode();c&&t.size<e;c=o.nextNode()){let _=c,E=_.parentElement;if(!E||z.has(E.tagName.toUpperCase())||_.data.trim()==="")continue;let T=t.get(E);T?T.push(_):t.set(E,[_])}let n=[],r=new Map,s=c=>{let _=r.get(c);return _!==void 0?_:(r.set(c,r.size),r.size-1)};for(let[c,_]of t){if(!C(c))continue;let E=et(_);if(E.length===0)continue;let T=ot(E),i=getComputedStyle(c),p=Et(c,i,E);n.push({element:c,text:{selector:R(c),text:_.map(A=>A.data).join(" ").replace(/\\s+/g," ").trim().slice(0,q),rect:T,lines:p.lines,...p.scrolled===null?{}:{inScroll:{box:s(p.scrolled.box),lines:p.scrolled.lines}},hidden:pt(c,i,p.reachable),color:i.color,bgChain:At(c,T),fontPx:Number.parseFloat(i.fontSize)||0,weight:Number.parseInt(i.fontWeight,10)||400,fixed:at(c),disabled:c.closest(\':disabled, [aria-disabled="true"]\')!==null,clipped:St(c,i),ellipsis:i.textOverflow.includes("ellipsis")||i.getPropertyValue("-webkit-line-clamp")!==""&&i.getPropertyValue("-webkit-line-clamp")!=="none",ancestors:[]}})}let l=new Map(n.map((c,_)=>[c.element,_]));return n.map(({element:c,text:_})=>{let E=[];for(let T=c.parentElement;T&&E.length<J;T=T.parentElement){let i=l.get(T);i!==void 0&&E.push(i)}return{..._,ancestors:E}})},xt=()=>{let e=[],t=document.body?document.body.querySelectorAll("*"):[];for(let o=0;o<t.length&&o<j;o+=1){let n=t[o];if(!n)continue;let r=n.getBoundingClientRect().right+window.scrollX;if(r<=innerWidth+1||!C(n))continue;let s=!1,l=0;for(let c=n.parentElement;c&&c!==document.body&&c!==document.documentElement;c=c.parentElement){l+=1;let _=getComputedStyle(c);(_.overflowX!=="visible"||_.position==="fixed")&&(s=!0)}s||e.push({element:n,depth:l,right:r})}return e.sort((o,n)=>n.depth-o.depth||n.right-o.right).slice(0,g).map(o=>({selector:R(o.element),right:Math.round(o.right)}))},L=e=>(e??"").split(/\\s+/).map(t=>t===""?"":document.getElementById(t)?.textContent??"").join(" ").trim(),Mt=e=>(e.getAttribute("aria-label")??"").trim()!==""||L(e.getAttribute("aria-labelledby"))!==""||(e.getAttribute("title")??"").trim()!==""||(e.textContent??"").trim()!==""||e.querySelector(\'img[alt]:not([alt=""]), svg title, [aria-label]\')!==null,Rt=e=>(e.getAttribute("aria-label")??"").trim()!==""||L(e.getAttribute("aria-labelledby"))!==""||(e.getAttribute("title")??"").trim()!==""?!0:Array.from(e.labels??[]).some(t=>(t.textContent??"").trim()!==""),M=(e,t)=>{let o=[];for(let n of Array.from(document.querySelectorAll(e))){if(o.length>=g)break;C(n)&&t(n)&&o.push(R(n))}return o},Ct=(e={})=>{let t=document.scrollingElement??document.documentElement;return{scrollWidth:t.scrollWidth,scrollHeight:t.scrollHeight,innerWidth,innerHeight,wide:xt(),texts:ut(e.maxTexts??2e3),imgsNoAlt:M("img",o=>!o.hasAttribute("alt")&&!["presentation","none"].includes(o.getAttribute("role")??"")&&o.getAttribute("aria-hidden")!=="true"),unlabeled:M("input, select, textarea",o=>{let n=(o.getAttribute("type")??"").toLowerCase();return!Q.has(n)&&!Rt(o)}),nameless:M(\'button, a[href], [role="button"]\',o=>!Mt(o))}};return w(It);})();\n' : "",
       platform: process.platform,
       isRoot: process.getuid?.() === 0,
       now: () => /* @__PURE__ */ new Date(),
