@@ -210,6 +210,13 @@ const DISCOVERY_CACHE_MAX = 8;
 /** The scan's own cap plus a second of slack, inside the chip's 3 s build budget. */
 const DISCOVERY_DEADLINE_MS = DISCOVERY_TIME_MAX_MS + 1000;
 
+/**
+ * The discovery cache key for a project folder: folded on case-insensitive filesystems (Windows,
+ * macOS, per `foldsCase`), so `/Users/me/App` and `/users/me/app` share one scan; exact on Linux.
+ */
+export const discoveryKeyOf = (directory: string, platform: NodeJS.Platform = process.platform): string =>
+  foldsCase(platform === 'win32' ? path.win32 : path.posix, platform) ? directory.toLowerCase() : directory;
+
 type Instructions = {
   /** The agent context and RULES.md text for a design, from disk. Throws when `rules/` is unreadable. */
   prepare(record: DesignRecord): Promise<{ context: AgentContext; text: string }>;
@@ -222,7 +229,7 @@ const createInstructions = (ctx: ServiceContext): Instructions => {
 
   const discover = (directory: string | null): Promise<ProjectRules> => {
     if (directory === null) return Promise.resolve(noProject('no project folder was given'));
-    const key = foldsCase() ? directory.toLowerCase() : directory;
+    const key = discoveryKeyOf(directory);
     const cached = scans.get(key);
     if (cached && Date.now() - cached.at < DISCOVERY_CACHE_MS) return cached.result;
     const result = withDeadline(

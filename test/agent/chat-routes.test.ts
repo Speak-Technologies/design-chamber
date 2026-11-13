@@ -15,7 +15,7 @@ import { ensureEditService } from '../../src/service/edits/pipeline.ts';
 import type { HandEditBody } from '../../src/service/edits/op-module.ts';
 import { createRouter } from '../../src/service/http.ts';
 import { createRenderService } from '../../src/service/render-cache.ts';
-import { capExternal, normalizeExternalUrl, registerChatRoutes, writeRulesFile } from '../../src/service/routes/chat.ts';
+import { capExternal, discoveryKeyOf, normalizeExternalUrl, registerChatRoutes, writeRulesFile } from '../../src/service/routes/chat.ts';
 import { ensureVersionsService } from '../../src/service/versions.ts';
 import { createFakeContext } from '../helpers/fake-context.ts';
 import { useTmpRoot, type TmpRoot } from '../helpers/tmp-root.ts';
@@ -31,6 +31,18 @@ const makeProject = async (tmp: TmpRoot): Promise<string> => {
   await writeFile(path.join(dir, 'tailwind.config.ts'), "export default { theme: { screens: { sm: '640px', lg: '1024px' } } }");
   return dir;
 };
+
+describe('project discovery cache key', () => {
+  test('macOS and Windows fold case, so a re-cased project folder shares one scan', () => {
+    assert.equal(discoveryKeyOf('/Users/Me/App', 'darwin'), discoveryKeyOf('/users/me/app', 'darwin'));
+    assert.equal(discoveryKeyOf('C:\\Users\\Me\\App', 'win32'), discoveryKeyOf('c:\\users\\me\\app', 'win32'));
+  });
+
+  test('Linux keeps case: two folders that differ only by case are two scans', () => {
+    assert.notEqual(discoveryKeyOf('/home/me/App', 'linux'), discoveryKeyOf('/home/me/app', 'linux'));
+    assert.equal(discoveryKeyOf('/home/me/App', 'linux'), '/home/me/App');
+  });
+});
 
 describe('POST /chip', () => {
   test('creates a pending design, writes RULES.md, and answers the chip', async (t) => {
