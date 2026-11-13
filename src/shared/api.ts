@@ -154,6 +154,9 @@ export type DesignDetailResponse = {
   pending: boolean;
   files: DesignFiles;
   warnings: DesignWarning[];
+  /** sha256 of the raw `screens` value in design.json; null when design.json is missing or unparseable (Phase 2 §5.1). */
+  screensStamp: string | null;
+  designJson: 'ok' | 'missing' | 'invalid';
 };
 
 /** `title` writes design.json's title (a user rename). */
@@ -204,7 +207,16 @@ export type RenderChunkQuery = { key: string; n: string };
 export type RenderChunkResponse = string;
 
 export type SourceQuery = { screen?: string };
-export type SourceResponse = { text: string; bytes: number };
+export type SourceResponse = {
+  text: string;
+  bytes: number;
+  /** sha256 of the raw bytes: the stamp a text edit carries as `base` (Phase 2 §2.2). */
+  sha256: string;
+  /** The bytes round-trip through UTF-8 (`Buffer.from(text, 'utf8')` equals them). */
+  utf8: boolean;
+  /** The file or a folder on its way is a link, so the page disables Edit text before the user types. */
+  link: boolean;
+};
 
 export type ThumbnailResponse = {
   state: ThumbState;
@@ -281,6 +293,8 @@ export type PromptResponse = {
   omitted: string[];
   /** Context chip for `startSession`. */
   chip: DesignChip;
+  /** The hand-edit block this message carries, for the guest's ledger clear; null when none (Phase 2 §7.3). */
+  handEdits: { upTo: number; count: number } | null;
 };
 
 export type FromMessageBody = {
@@ -360,6 +374,56 @@ export type StatusDesignRow = {
 /** `rows` ≤ `STATUS_ROWS_MAX`; `total` counts every design that matched. */
 export type StatusDesignsResponse = { rows: StatusDesignRow[]; total: number };
 
+// ---- Phase 2: edit on the canvas (documentation/specs/phase-2-technical.md §10.2) ----
+
+/** A screen file's size and mtime as the wall shows them (render keys are built from the same). */
+export type FileStamp = { size: number; mtime: IsoDate | null };
+
+/** Where a text edit goes: the clicked element's locator, never offsets (the service re-locates in the bytes). */
+export type EditTarget = { tag: string; id: string | null; text: string; sameIndex: number; sameCount: number };
+
+/** One knob's new value: a number for a number knob, an option value for a choice knob. */
+export type TweakValue = { var: string; value: number | string };
+
+/** One hand edit per request; the service computes the bytes it writes (AD-1, AD-2). */
+export type EditRequest =
+  | { op: 'text'; screen: string | null; base: string; target: EditTarget; before: string; after: string }
+  | { op: 'tokens'; base: string; values: TweakValue[] }
+  | { op: 'reorder'; screens: string; order: string[] }
+  | { op: 'duplicate'; screens: string; id: string; file: FileStamp }
+  | { op: 'trash-screen'; screens: string; id: string; file: FileStamp | null }
+  | { op: 'keep-direction'; screens: string; of: string; keep: string; files: { id: string; file: FileStamp | null }[] };
+
+/** The stamps the edit left, for the next action on the same view without a refetch. */
+export type EditStamps = { file?: string; tokens?: string; screens?: string };
+
+export type EditResponse = {
+  edit: { id: string; label: string; detail?: string; files: string[]; undoable: boolean };
+  /** The "Before your edits" / "Before keeping a direction" version, or null when coalesced or deduped. */
+  version: VersionSummary | null;
+  coalesced: boolean;
+  stamps: EditStamps;
+  /** Duplicate only: the copy, so the camera can bring it into view. */
+  created?: { id: string; title: string };
+};
+
+export type UndoEditResponse = { files: string[]; stamps: EditStamps; version: VersionSummary | null };
+
+/** One knob's state in the current tokens.css (§4.2). */
+export type TweakState = { var: string; state: 'ok' | 'value' | 'missing' | 'formula' | 'unit' | 'no-file'; value: number | string | null; fileUnit: string | null; alsoSet: string[] };
+export type TokensResponse = { exists: boolean; editable: boolean; sha256: string | null; knobs: TweakState[] };
+
+/** Removes ledger entries with `seq ≤ upTo` once the message reached the chat; idempotent. */
+export type HandEditsClearBody = { upTo: number };
+
+/** Saved page data: pairs, not an object, so key order is insertion order and any key is plain data (§8.1). */
+export type PageStateItems = [string, string][];
+export type PageStateResponse = { items: PageStateItems; chars: number; gen: string; damaged?: true };
+/** `gen` is opaque to the page except through `isOlderClear`; a PATCH older than a Clear is refused (§8.2). */
+export type PageStatePatchBody = { gen: string; clear?: boolean; changes?: [string, string | null][] } | { gen: string; uploadId: string };
+export type PageStatePatchResponse = { chars: number; gen: string };
+export type PageStateClearResponse = { ok: true; gen: string };
+
 // ---- The route table ----
 
 type Route<Query, Body, Response> = { query: Query; body: Body; response: Response };
@@ -418,6 +482,15 @@ export interface ApiRoutes {
   'POST /mentions/search': Route<NoQuery, MentionsSearchBody, MentionsSearchResponse>;
   'POST /mentions/resolve': Route<NoQuery, MentionsResolveBody, MentionsResolveResponse>;
   'GET /status/designs': Route<StatusDesignsQuery, undefined, StatusDesignsResponse>;
+
+  // Phase 2: edit on the canvas (documentation/specs/phase-2-technical.md §2.2, §8.2)
+  'POST /designs/:slug/edits': Route<NoQuery, EditRequest, EditResponse>;
+  'POST /designs/:slug/edits/:id/undo': Route<NoQuery, Record<string, never>, UndoEditResponse>;
+  'GET /designs/:slug/tokens': Route<NoQuery, undefined, TokensResponse>;
+  'POST /designs/:slug/hand-edits/clear': Route<NoQuery, HandEditsClearBody, OkResponse>;
+  'GET /designs/:slug/page-state': Route<NoQuery, undefined, PageStateResponse>;
+  'PATCH /designs/:slug/page-state': Route<NoQuery, PageStatePatchBody, PageStatePatchResponse>;
+  'DELETE /designs/:slug/page-state': Route<NoQuery, undefined, PageStateClearResponse>;
 }
 
 export type RouteKey = keyof ApiRoutes;
@@ -440,6 +513,7 @@ export type RouteResponse<K extends RouteKey> = ApiRoutes[K]['response'];
 /**
  * Lane that implements each route. Exhaustive by type: adding a route without an owner fails typecheck.
  * `U2` to `U6`: the Phase 1.5 sibling branch that fills the route (documentation/specs/phase-1-5-sdk-2-7.md §10.2).
+ * `P2`: the Phase 2 task that fills the route (documentation/specs/phase-2-technical.md §16).
  */
 export const ROUTE_OWNERS = {
   'GET /health': 'WP0',
@@ -486,7 +560,14 @@ export const ROUTE_OWNERS = {
   'POST /mentions/search': 'U6',
   'POST /mentions/resolve': 'U6',
   'GET /status/designs': 'U5',
-} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6'>;
+  'POST /designs/:slug/edits': 'P2',
+  'POST /designs/:slug/edits/:id/undo': 'P2',
+  'GET /designs/:slug/tokens': 'P2',
+  'POST /designs/:slug/hand-edits/clear': 'P2',
+  'GET /designs/:slug/page-state': 'P2',
+  'PATCH /designs/:slug/page-state': 'P2',
+  'DELETE /designs/:slug/page-state': 'P2',
+} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2'>;
 
 export const ROUTE_KEYS = Object.keys(ROUTE_OWNERS) as RouteKey[];
 

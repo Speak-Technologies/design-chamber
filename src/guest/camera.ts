@@ -1,5 +1,5 @@
 // Pure wall math (docs/SPEC.md §8.2): camera transforms, zoom around a point, fit, and the
-// auto-grid layout (rows = screens, columns = viewports). Ported in spirit from
+// auto-grid layout (rows = screens or direction groups, columns = viewports). Ported in spirit from
 // design-canvas `viewer-client/src/canvas-controller.js` (zoomTo / wheel zoom / pan), rewritten
 // as plain functions over an explicit camera so the page and tests share one implementation.
 //
@@ -127,6 +127,19 @@ export const focusArtboard = (artboard: WallArtboard, viewport: Size, options?: 
 /** A wall row: a canvas screen, or the page (`id: null`). */
 export type WallScreen = { id: string | null; title: string; viewports?: readonly string[] };
 
+/**
+ * A direction group shown as one row (Phase 2 §6.3): Current (the root screen `of`) first, then
+ * `members` in letter order (`directionGroups` sorts them), every cell at `viewport`. A member's
+ * own viewport subset is ignored: directions are compared at one size.
+ */
+export type WallDirectionRow = {
+  group: { of: WallScreen; members: readonly WallScreen[] };
+  viewport: Viewport;
+};
+
+/** What `layoutWall` lays out: a screen row, or a direction group in the root screen's place. */
+export type WallRow = WallScreen | WallDirectionRow;
+
 export type WallArtboard = {
   /** `artboardIdOf(screen, viewport.id)`. */
   id: string;
@@ -135,19 +148,50 @@ export type WallArtboard = {
   viewport: Viewport;
   row: number;
   col: number;
+  /**
+   * 0-based line within the row: 0 on every screen row, the grid line on a direction row laid
+   * out with `directionColumns`. `layoutWall` always sets it; absent (the page cell built in
+   * board-set) reads as 0.
+   */
+  line?: number;
   /** The design frame, world px, at the viewport's size. */
   frame: Box;
   /** The label strip above the frame ("Home · Laptop 1280×800"). */
   label: Box;
 };
 
+/**
+ * The "+ Screen" ghost row (Phase 2 §5.3): a button cell the wall draws, not a design frame.
+ * It sits after the last row in the first column, at the size the caller passed (the UI uses
+ * the first viewport's width × 240 px).
+ */
+export type WallGhost = {
+  kind: 'ghost';
+  /** The row index after the last screen or direction row. */
+  row: number;
+  /** World px; `x` is always the first column (0). */
+  box: Box;
+};
+
 export type WallLayout = {
   artboards: WallArtboard[];
-  /** Union of every frame and label; null when there is nothing to show. */
+  /** Present only when `options.ghost` was passed. */
+  ghost?: WallGhost;
+  /** Union of every frame, label and the ghost box; null when there is nothing to show. */
   bounds: Box | null;
 };
 
-export type LayoutOptions = { gap?: number; labelHeight?: number };
+export type LayoutOptions = {
+  gap?: number;
+  labelHeight?: number;
+  /**
+   * Cells per line for direction rows: unset keeps them on one row (the page); the rail passes
+   * 2 for its 2×2 grid. A finite value below 1 clamps to one cell per line.
+   */
+  directionColumns?: number;
+  /** Size of the "+ Screen" ghost row after the last row; absent draws no ghost. */
+  ghost?: Size;
+};
 
 export const artboardBox = (artboard: WallArtboard): Box => ({
   x: artboard.label.x,
@@ -157,13 +201,21 @@ export const artboardBox = (artboard: WallArtboard): Box => ({
 });
 
 /**
- * Rows = screens (in order), columns = viewports (in order). Column width = the widest
- * viewport in that column; row height = label + the tallest viewport that row shows. A screen's
- * optional `viewports` subset leaves its other cells empty; a row with no cell is dropped.
+ * Rows = screens or direction groups (in order), columns = viewports (in order). Column width =
+ * the widest viewport in that column; row height = label + the tallest viewport that row shows.
+ * A screen's optional `viewports` subset leaves its other cells empty; a row with no cell is
+ * dropped. A direction group lays its cells out at its own viewport, one row by default or a
+ * grid of `directionColumns` cells per line, and takes one row index whatever its line count.
+ * `options.ghost` adds the "+ Screen" cell after the last row. Without either, the layout is
+ * exactly the screen grid.
  */
-export const layoutWall = (screens: readonly WallScreen[], viewports: readonly Viewport[], options: LayoutOptions = {}): WallLayout => {
+export const layoutWall = (rows: readonly WallRow[], viewports: readonly Viewport[], options: LayoutOptions = {}): WallLayout => {
   const gap = options.gap ?? WALL_GAP;
   const labelHeight = options.labelHeight ?? ARTBOARD_LABEL_HEIGHT;
+  // Unset (or not a finite number) keeps the page's single row; below 1 clamps to one cell per line.
+  const columns = options.directionColumns === undefined || !Number.isFinite(options.directionColumns)
+    ? Infinity
+    : Math.max(1, Math.floor(options.directionColumns));
 
   const columnX: number[] = [];
   let x = 0;
@@ -175,7 +227,34 @@ export const layoutWall = (screens: readonly WallScreen[], viewports: readonly V
   const artboards: WallArtboard[] = [];
   let y = 0;
   let row = 0;
-  for (const screen of screens) {
+  for (const entry of rows) {
+    if ('group' in entry) {
+      const { viewport } = entry;
+      const cells = [entry.group.of, ...entry.group.members];
+      const lineHeight = labelHeight + viewport.height;
+      cells.forEach((cell, index) => {
+        const line = Math.floor(index / columns);
+        const col = index % columns;
+        const left = col * (viewport.width + gap);
+        const top = y + line * (lineHeight + gap);
+        artboards.push({
+          id: artboardIdOf(cell.id, viewport.id),
+          screen: cell.id,
+          screenTitle: cell.title,
+          viewport,
+          row,
+          col,
+          line,
+          label: { x: left, y: top, width: viewport.width, height: labelHeight },
+          frame: { x: left, y: top + labelHeight, width: viewport.width, height: viewport.height },
+        });
+      });
+      const lines = Math.floor((cells.length - 1) / columns) + 1;
+      y += lines * (lineHeight + gap);
+      row += 1;
+      continue;
+    }
+    const screen = entry;
     const shown = new Set(screen.viewports ?? viewports.map((viewport) => viewport.id));
     const cells = viewports.map((viewport, col) => ({ viewport, col })).filter(({ viewport }) => shown.has(viewport.id));
     if (cells.length === 0) continue;
@@ -189,6 +268,7 @@ export const layoutWall = (screens: readonly WallScreen[], viewports: readonly V
         viewport,
         row,
         col,
+        line: 0,
         label: { x: left, y, width: viewport.width, height: labelHeight },
         frame: { x: left, y: y + labelHeight, width: viewport.width, height: viewport.height },
       });
@@ -197,7 +277,15 @@ export const layoutWall = (screens: readonly WallScreen[], viewports: readonly V
     row += 1;
   }
 
-  return { artboards, bounds: unionBoxes(artboards.map(artboardBox)) };
+  const ghost: WallGhost | undefined = options.ghost === undefined ? undefined : {
+    kind: 'ghost',
+    row,
+    box: { x: 0, y, width: options.ghost.width, height: options.ghost.height },
+  };
+  const boxes = artboards.map(artboardBox);
+  if (ghost !== undefined) boxes.push(ghost.box);
+  const bounds = unionBoxes(boxes);
+  return ghost === undefined ? { artboards, bounds } : { artboards, ghost, bounds };
 };
 
 /** Whether a world box is on screen, with `margin` × the viewport size around it (frame budget, §8.4). */

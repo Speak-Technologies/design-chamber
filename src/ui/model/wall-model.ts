@@ -44,7 +44,11 @@ export const pinFramePoint = (rect: Rect, point: RelPoint, scroll: Point): Point
   y: rect.y + rect.h * point.y - scroll.y,
 });
 
-/** Artboards the live-frame budget keeps loaded: those nearest the wall's centre, among the visible ones. */
+/**
+ * Artboards the live-frame budget keeps loaded: those nearest the wall's centre, among the visible ones. Distances count
+ * to the whole screen pixel and a tie goes to the board earlier in `boards` (the caller passes screen order; the sort is stable), so floating
+ * point noise between two boards the same distance from the centre cannot leave the first screen paused.
+ */
 export const liveBoards = <T extends { id: string; rect: BoardRect }>(
   boards: readonly T[],
   camera: CameraLike,
@@ -64,10 +68,11 @@ export const liveBoards = <T extends { id: string; rect: BoardRect }>(
       const sw = board.rect.w * camera.scale;
       const sh = board.rect.h * camera.scale;
       const on = sx + sw >= left && sx <= right && sy + sh >= top && sy <= bottom;
-      const distance = Math.hypot(sx + sw / 2 - centre.x, sy + sh / 2 - centre.y);
+      const distance = Math.round(Math.hypot(sx + sw / 2 - centre.x, sy + sh / 2 - centre.y));
       return { board, on, distance };
     })
     .filter((entry) => entry.on)
+    // Stable: equal (rounded) distances keep the order `boards` came in.
     .sort((a, b) => a.distance - b.distance);
   return visible.slice(0, Math.max(1, budget)).map((entry) => entry.board);
 };

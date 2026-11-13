@@ -22,7 +22,7 @@
 // All writes are tmp+rename (`writeFileAtomic`); every path from a slug goes through
 // `resolveInside`; per-slug locks serialise read-modify-write cycles.
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, stat } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -63,6 +63,7 @@ import type {
   ThumbState,
 } from '../shared/types.ts';
 import { chipMarkerOf } from '../shared/agent/chip.ts';
+import { DESIGN_JSON_UNREADABLE_MESSAGE, NO_DESIGN_JSON_MESSAGE, PAGE_HAS_NO_SCREENS_MESSAGE, SCREEN_LIST_STALE_MESSAGE } from '../shared/screen-ops.ts';
 import type { ChangeHub, DesignRecord, DesignStore, LinkIfUnlinkedOutcome, Logger, SettingsStore, ThumbnailService } from './context.ts';
 import { ApiError } from './http.ts';
 import { assertSlug, isSlug, replaceFileIfUnchanged, resolveInside, slugify, uniqueSlug, writeFileAtomic } from './paths.ts';
@@ -71,9 +72,33 @@ import { folderErrorSentence, isDesignFolder, isDirectory } from './root.ts';
 /** `.chamber/state.json` — the service-owned truth (§6.3). */
 const stateFileOf = (dir: string): string => path.join(dir, '.chamber', 'state.json');
 
-/** Mirror writes retried (with a growing pause) after an agent write or a Windows file lock; then left to reconcile. */
+/**
+ * The screen list's stamp (Phase 2 §5.1): sha256 of the RAW `screens` value, not the normalised
+ * one, so even an invalid entry the wall does not show counts as part of the list. A comment,
+ * the title or `updated` changing does not move it.
+ */
+export const screensStampOf = (raw: JsonObject): string =>
+  createHash('sha256').update(JSON.stringify(raw.screens ?? null), 'utf8').digest('hex');
+
+/**
+ * design.json writes retried (with a growing pause) after an agent write or a Windows file lock.
+ * Then the background mirror is left to reconcile; a user's screen write answers 409 (Phase 2 §5.1).
+ */
 const MIRROR_ATTEMPTS = 5;
 const MIRROR_RETRY_MS = 25;
+
+/** A user write that lost every attempt (§2.8): nothing was written, so the user may simply retry. */
+export const DESIGN_JSON_BUSY_MESSAGE = 'Another program is using this file. Close it and try again.';
+
+/** What one design.json attempt writes, from the text and parse it starts from; null leaves the file alone. */
+type DesignJsonAttempt = (text: string | null, raw: JsonObject | null) => string | null;
+
+type DesignJsonWriteOptions = {
+  /** `log` for the background mirror (reconcile merges later); `throw` for a user's write, which must never answer success unwritten. */
+  onGiveUp: 'log' | 'throw';
+  /** Called with the exact bytes right before each rename attempt (the edit pipeline's self-write record). */
+  beforeRename?: (bytes: Uint8Array) => void;
+};
 
 const fileStatus = async (file: string): Promise<FileStatus> => {
   try {
@@ -210,8 +235,12 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     }
     const pending = design.kind === 'page' ? !entryStatus.exists : !Object.values(files.screens).some((entry) => entry.exists);
 
+    // Phase 2 §5.1: the screen-list stamp and the design.json health the detail answer carries.
+    const designJson: DesignRecord['designJson'] = designText === null ? 'missing' : parsed.raw === null ? 'invalid' : 'ok';
+    const screensStamp = designText === null || parsed.raw === null ? null : screensStampOf(parsed.raw);
+
     return {
-      record: { slug, path: dir, design, state: finalState, extra: parsed.extra, pending, files, warnings },
+      record: { slug, path: dir, design, state: finalState, extra: parsed.extra, pending, files, warnings, screensStamp, designJson },
       raw: parsed.raw,
       designText,
       agentDesign,
@@ -235,9 +264,15 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
    * rewrite only when a service-owned field actually differs, and never normalise formatting
    * otherwise — that is what keeps the watcher loop closed.
    */
-  const writeStateAndMirror = async (slug: string, read: InternalRead, state: ServiceState, write: ServiceWrite | null): Promise<void> => {
+  const writeStateAndMirror = async (
+    slug: string,
+    read: InternalRead,
+    state: ServiceState,
+    write: ServiceWrite | null,
+    beforeRename?: (bytes: Uint8Array) => void,
+  ): Promise<Uint8Array | null> => {
     await writeState(read.record.path, state);
-    await writeMirror(slug, read, state, write);
+    return writeMirror(slug, read, state, write, beforeRename);
   };
 
   /**
@@ -265,43 +300,69 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     }
   };
 
-  /** The design.json half of `writeStateAndMirror` (state.json already written or unchanged). */
-  const writeMirror = async (slug: string, read: InternalRead, state: ServiceState, write: ServiceWrite | null): Promise<void> => {
+  /**
+   * The one merge-and-retry loop every design.json write goes through (the mirror and the user's
+   * screen writes). The agent may rewrite design.json at any moment: the file is replaced only
+   * while it still holds the text the attempt was computed from; otherwise the attempt runs again
+   * from the fresh text. Answers the bytes written, or null when an attempt left the file alone.
+   */
+  const replaceDesignJson = async (slug: string, read: InternalRead, attempt: DesignJsonAttempt, options: DesignJsonWriteOptions): Promise<Uint8Array | null> => {
     const designPath = path.join(read.record.path, DESIGN_JSON_FILE);
     let text = read.designText;
     let raw = read.raw;
-    // The agent may rewrite design.json at any moment: the mirror replaces the file only while
-    // it still holds the text it was merged from; otherwise it re-merges from the fresh text.
-    for (let attempt = 0; attempt < MIRROR_ATTEMPTS; attempt += 1) {
-      let bytes: string;
-      if (text === null) {
-        // The file is missing: reconcile never invents one, and neither does a mutation on a
-        // provisional design (P3: the agent's own design.json is on its way). Otherwise a
-        // service-side mutation writes the minimal design.json (§6.1).
-        if (write === null || state.provisional === true) return;
-        bytes = serializeJson(mergeServiceFields(agentPartOf(read.record.design, write.updated ?? now().toISOString()), state, write));
-      } else {
-        if (raw === null) {
-          // Unparseable: the agent may be mid-write. Never write over it (WP0 deviation 8);
-          // state.json keeps the truth and the next watcher event retries.
-          log.warn('store.design-json-unparseable', { slug, message: 'design.json is not valid JSON; the service left it alone.' });
-          return;
-        }
-        if (write === null && !serviceFieldsDiffer(raw, state)) return;
-        bytes = serializeJson(mergeServiceFields(raw, state, write ?? {}));
-        if (bytes === text) return; // equal bytes → skip → no watch loop
-      }
-      if (await replaceFileIfUnchanged(designPath, text, bytes)) {
-        if (write === null) log.info('store.design-json-remerged', { slug, message: 'Service-owned fields were restored into design.json.' });
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, MIRROR_RETRY_MS * (attempt + 1)));
+    for (let tries = 0; tries < MIRROR_ATTEMPTS; tries += 1) {
+      const next = attempt(text, raw);
+      if (next === null) return null;
+      const bytes = Buffer.from(next, 'utf8');
+      options.beforeRename?.(bytes);
+      if (await replaceFileIfUnchanged(designPath, text, next)) return bytes;
+      await new Promise((resolve) => setTimeout(resolve, MIRROR_RETRY_MS * (tries + 1)));
       text = await readFile(designPath, 'utf8').catch(() => null);
       raw = text === null ? null : parseDesignJsonText(text, { kind: read.record.design.kind, fallbackTitle: slug, fallbackTime: read.record.design.created }).raw;
+    }
+    if (options.onGiveUp === 'throw') {
+      log.warn('store.design-json-busy', { slug, message: 'design.json kept changing or stayed locked; the user write was refused.' });
+      throw new ApiError('conflict', DESIGN_JSON_BUSY_MESSAGE);
     }
     // Still changing: the agent's file stays as it is; state.json holds the truth and the
     // watcher's reconcile merges it once the agent is done.
     log.warn('store.design-json-busy', { slug, message: 'design.json kept changing or stayed locked; the mirror is merged on the next change.' });
+    return null;
+  };
+
+  /** The design.json half of `writeStateAndMirror` (state.json already written or unchanged). */
+  const writeMirror = async (
+    slug: string,
+    read: InternalRead,
+    state: ServiceState,
+    write: ServiceWrite | null,
+    beforeRename?: (bytes: Uint8Array) => void,
+  ): Promise<Uint8Array | null> => {
+    const written = await replaceDesignJson(
+      slug,
+      read,
+      (text, raw) => {
+        if (text === null) {
+          // The file is missing: reconcile never invents one, and neither does a mutation on a
+          // provisional design (P3: the agent's own design.json is on its way). Otherwise a
+          // service-side mutation writes the minimal design.json (§6.1).
+          if (write === null || state.provisional === true) return null;
+          return serializeJson(mergeServiceFields(agentPartOf(read.record.design, write.updated ?? now().toISOString()), state, write));
+        }
+        if (raw === null) {
+          // Unparseable: the agent may be mid-write. Never write over it (WP0 deviation 8);
+          // state.json keeps the truth and the next watcher event retries.
+          log.warn('store.design-json-unparseable', { slug, message: 'design.json is not valid JSON; the service left it alone.' });
+          return null;
+        }
+        if (write === null && !serviceFieldsDiffer(raw, state)) return null;
+        const bytes = serializeJson(mergeServiceFields(raw, state, write ?? {}));
+        return bytes === text ? null : bytes; // equal bytes → skip → no watch loop
+      },
+      { onGiveUp: 'log', ...(beforeRename ? { beforeRename } : {}) },
+    );
+    if (written !== null && write === null) log.info('store.design-json-remerged', { slug, message: 'Service-owned fields were restored into design.json.' });
+    return written;
   };
 
   const thumbOf = (slug: string): { state: ThumbState; key: string | null } => {
@@ -642,6 +703,66 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     onCreate(hook) {
       hooks.add(hook);
       return () => hooks.delete(hook);
+    },
+
+    // Phase 2 §5.1: the screen list is an agent field the service writes only for a user's
+    // screen action, through the same merge as the mirror (comments, kind and every service
+    // field re-merged from state.json, so a screen write never drops a comment). state.json is
+    // written only when a provisional design.json is being adopted on this read (P2).
+    async writeScreens(slug, expectStamp, mutate, writeHooks) {
+      const nowIso = now().toISOString();
+      return withLock(slug, async () => {
+        const disk = await readInternal(slug);
+        if (disk.designText === null) throw new ApiError('invalid', NO_DESIGN_JSON_MESSAGE);
+        if (disk.raw === null) throw new ApiError('invalid', DESIGN_JSON_UNREADABLE_MESSAGE);
+        const state = resolveState(slug, disk, false);
+        const read = withState(disk, state);
+        if (state.kind !== 'canvas') throw new ApiError('invalid', PAGE_HAS_NO_SCREENS_MESSAGE);
+        if (!disk.stateFromDisk || state !== disk.record.state) await writeState(read.record.path, state);
+        /** The stamp of the attempt that was written (each attempt recomputes it). */
+        const last: { stamp: string | null } = { stamp: null };
+        const bytes = await replaceDesignJson(
+          slug,
+          read,
+          (text, raw) => {
+            // Every attempt re-checks the stamp: a list the agent changed meanwhile is stale, an
+            // unchanged one re-applies to the fresh file.
+            if (text === null) throw new ApiError('invalid', NO_DESIGN_JSON_MESSAGE);
+            if (raw === null) throw new ApiError('invalid', DESIGN_JSON_UNREADABLE_MESSAGE);
+            if (screensStampOf(raw) !== expectStamp) throw new ApiError('stale', SCREEN_LIST_STALE_MESSAGE);
+            const merged = mergeServiceFields(raw, state, { screens: mutate(raw.screens), updated: nowIso });
+            last.stamp = screensStampOf(merged);
+            return serializeJson(merged);
+          },
+          { onGiveUp: 'throw', ...(writeHooks?.beforeRename ? { beforeRename: writeHooks.beforeRename } : {}) },
+        );
+        // Unreachable: the attempt never answers null and a give-up throws; kept so a future change cannot claim a write.
+        if (bytes === null || last.stamp === null) throw new ApiError('conflict', DESIGN_JSON_BUSY_MESSAGE);
+        return { stamp: last.stamp, bytes };
+      });
+    },
+
+    // Phase 2 §6.2: comments moved between screens (keep-direction and its undo). `ids` limits a
+    // move to those comments, so an undo moves back exactly what the keep moved. Through the
+    // normal state.json + mirror write; `bytes` is the mirror written, or null when it was skipped.
+    async moveComments(slug, moves, writeHooks) {
+      const nowIso = now().toISOString();
+      const result = await withLock(slug, async () => {
+        const read = await readSettled(slug);
+        const { state } = read.record;
+        const moved: { id: string; from: string; to: string }[] = [];
+        const comments = state.comments.map((comment) => {
+          const move = moves.find((one) => one.from === comment.screen && (one.ids === undefined || one.ids.includes(comment.id)));
+          if (move === undefined || move.to === move.from) return comment;
+          moved.push({ id: comment.id, from: move.from, to: move.to });
+          return { ...comment, screen: move.to };
+        });
+        if (moved.length === 0) return { moved, bytes: null };
+        const bytes = await writeStateAndMirror(slug, read, { ...state, comments }, { updated: nowIso }, writeHooks?.beforeRename);
+        return { moved, bytes };
+      });
+      if (result.moved.length > 0) hub?.emit({ slug, kind: 'comments', origin: 'user' });
+      return result;
     },
 
     reconcile,

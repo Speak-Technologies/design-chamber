@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { HostRequestError, type GuestRequest, type GuestRequestResult } from '@openchamber/sdk';
 
 import { createFakeService } from '../../src/guest/fake-services.ts';
-import { createServiceClient, ServiceError, splitUploadChunks, utf8Length, type ServiceTransport } from '../../src/guest/service-client.ts';
+import { createServiceClient, fitsOneRequest, ServiceError, splitUploadChunks, utf8Length, type ServiceTransport } from '../../src/guest/service-client.ts';
 import { HOST_REQUEST_BODY_MAX_CHARS, SERVICE_REQUEST_BODY_MAX_BYTES, UPLOAD_CHUNK_MAX_BYTES, UPLOAD_CHUNK_MAX_CHARS } from '../../src/shared/limits.ts';
 
 const json = (status: number, body: unknown): GuestRequestResult => ({ status, body: JSON.stringify(body) });
@@ -151,6 +151,33 @@ test('splitUploadChunks: every chunk within F7 limits for multi-byte text, pairs
   assert.ok(emoji.length >= 3, `${emoji.length} chunks`);
   assert.deepEqual(splitUploadChunks(''), []);
   assert.equal(utf8Length('aé漢😀'), 1 + 2 + 3 + 4);
+});
+
+test('fitsOneRequest: ASCII inline, CJK and emoji of the same length uploaded (the byte rule)', () => {
+  // Same character count, different UTF-8 bytes: only the byte budget separates them.
+  const ascii = 'a'.repeat(40_000);
+  const cjk = '漢'.repeat(40_000);
+  const emoji = '😀'.repeat(20_000); // 2 UTF-16 units each → 40 000 chars
+  assert.equal(ascii.length, cjk.length);
+  assert.equal(ascii.length, emoji.length);
+  assert.equal(fitsOneRequest(ascii), true, 'ASCII fits both budgets');
+  assert.equal(fitsOneRequest(cjk), false, 'CJK blows the byte budget at the same char count');
+  assert.equal(fitsOneRequest(emoji), false, 'emoji blow the byte budget at the same char count');
+
+  // The character budget still applies on its own (ASCII over 60 000 chars).
+  assert.equal(fitsOneRequest('a'.repeat(60_000)), true, 'exactly 60 000 chars fits');
+  assert.equal(fitsOneRequest('a'.repeat(60_001)), false, 'one char over the char budget');
+
+  // The byte budget boundary (é is two bytes): 37 500 chars = 75 000 bytes.
+  assert.equal(fitsOneRequest('é'.repeat(37_500)), true, 'exactly 75 000 bytes fits');
+  assert.equal(fitsOneRequest('é'.repeat(37_501)), false, 'one byte over the byte budget');
+
+  // Anything that fits is safely under the host char cap and the router byte cap.
+  for (const text of [ascii, 'a'.repeat(60_000), 'é'.repeat(37_500)]) {
+    assert.ok(text.length <= HOST_REQUEST_BODY_MAX_CHARS);
+    assert.ok(utf8Length(text) <= SERVICE_REQUEST_BODY_MAX_BYTES);
+  }
+  assert.equal(fitsOneRequest(''), true);
 });
 
 test('upload: creates the upload with total = UTF-16 length and PUTs chunks in order', async () => {

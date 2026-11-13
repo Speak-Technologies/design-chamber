@@ -2,8 +2,9 @@
 // `ApiRoutes`, so the real UI and guest core can be screenshot-tested without OpenChamber.
 // `fake-transport.ts` puts it behind the host's `serviceRequest`. Sample designs, comments, versions and thumbnails; every mutation emits a change event.
 
-import type { ApiRoutes, OpenRequest, RouteBody, RouteKey, RouteResponse, SettingsResponse, StatusDesignRow } from '../../../src/shared/api.ts';
-import { STATUS_ROWS_MAX } from '../../../src/shared/limits.ts';
+import type { ApiRoutes, EditRequest, OpenRequest, RouteBody, RouteKey, RouteResponse, SettingsResponse, StatusDesignRow } from '../../../src/shared/api.ts';
+import { SCREENS_MAX, STATUS_ROWS_MAX } from '../../../src/shared/limits.ts';
+import { copyTitle, describeMove, directionGroups, freeCopyId, SCREEN_LIST_STALE_MESSAGE } from '../../../src/shared/screen-ops.ts';
 import type {
   ChangeEvent,
   Comment,
@@ -17,7 +18,9 @@ import type {
   Viewport,
 } from '../../../src/shared/types.ts';
 import { createFakeChecks, type FakeChecks } from './fake-checks.ts';
-import { COFFEE, SAGE, SLATE, coffeeCheckout, coffeeHome, coffeePricing, invoicePage, onboardingScreen, pricingPage, type Palette } from './fake-docs.ts';
+import { createFakePageState, type FakePageState } from './fake-page-state.ts';
+import { createFakeTokens, type FakeTokens } from './fake-tokens.ts';
+import { COFFEE, SAGE, SLATE, coffeeCheckout, coffeeDirection, coffeeHome, coffeePricing, invoicePage, onboardingScreen, pricingPage, type Palette } from './fake-docs.ts';
 import { CHIP_PROVIDER_ID, type DesignChip } from '../../../src/shared/types.ts';
 import { ServiceError } from './service-error.ts';
 
@@ -39,6 +42,8 @@ type Rec = {
   rev: number;
   versions: VersionSummary[];
   dirty: boolean;
+  /** Keep this one (Phase 2): a screen that now shows another screen's content (the kept direction's, in the original's place). */
+  content?: Map<string, string>;
 };
 
 const screen = (id: string, title: string): Screen => ({ id, title, file: `screens/${id}.html` });
@@ -55,6 +60,7 @@ const baseDesign = (over: Partial<DesignJson> & Pick<DesignJson, 'kind' | 'title
   viewports: over.kind === 'page' ? [LAPTOP] : [LAPTOP, PHONE],
   screens: [],
   designSystem: { confirmed: false },
+  tweaks: [],
   comments: [],
   ...over,
 });
@@ -106,6 +112,23 @@ const seed = (): Map<string, Rec> => {
       sessionId: 'ses_coffee',
       brief: 'A pricing page for a coffee subscription, laptop and phone',
       screens: [screen('home', 'Home'), screen('pricing', 'Pricing'), screen('checkout', 'Checkout')],
+      // Tweaks (feature 09): five knobs; fake-tokens.ts holds the file they read from.
+      tweaks: [
+        { var: '--accent-h', label: 'Accent hue', kind: 'number', min: 0, max: 360, step: 1, unit: '' },
+        { var: '--radius', label: 'Corner radius', kind: 'number', min: 0, max: 24, step: 2, unit: 'px' },
+        { var: '--space', label: 'Section spacing', kind: 'number', min: 24, max: 120, step: 4, unit: 'px' },
+        {
+          var: '--density',
+          label: 'Density',
+          kind: 'choice',
+          options: [
+            { label: 'Compact', value: '0.85' },
+            { label: 'Comfortable', value: '1' },
+            { label: 'Roomy', value: '1.2' },
+          ],
+        },
+        { var: '--heading-scale', label: 'Heading size', kind: 'number', min: 1, max: 2, step: 0.05, unit: '' },
+      ],
       comments: [
         comment('c_a1', { screen: 'home', body: 'Make the headline shorter — it wraps to three lines on phone.' }),
         comment('c_a2', {
@@ -278,8 +301,17 @@ export type FakeBackend = {
   writeFile: (slug: string, path: string) => void;
   /** Test hook: a design was created this long ago (milliseconds). */
   ageDesign: (slug: string, ageMs: number) => void;
+  /** Test hook (screens): a canvas grows to `count` screens (written ones named "Extra n"), or the file of one screen goes missing. */
+  padScreens: (slug: string, count: number) => void;
+  unwriteScreen: (slug: string, id: string) => void;
+  /** Test hook (directions): the agent marks `count` screens (<of>-a, -b, …) as directions of `of`; the first `written` of them have a file. */
+  addDirections: (slug: string, of: string, count: number, written: number) => void;
   /** Test hook: the next restore fails once with this message (the Undo error notice). */
   failNextRestore: (message: string) => void;
+  /** Test hook (tweaks): the agent rewrote tokens.css (a new sha and a `files` event). */
+  touchTokens: (slug: string) => void;
+  /** Test hooks (saved page data): seed it, play another surface clearing it, count the accepted writes (fake-page-state.ts). */
+  pageState: FakePageState['hooks'];
 };
 
 export const createFakeBackend = (): FakeBackend => {
@@ -332,7 +364,10 @@ export const createFakeBackend = (): FakeBackend => {
     const old = versionId !== undefined && versionId !== latest;
     let html: string;
     if (slug === 'coffee-subscription') {
-      html = screenId === 'pricing' ? coffeePricing() : screenId === 'checkout' ? coffeeCheckout() : coffeeHome();
+      const shown = (screenId === undefined ? undefined : rec.content?.get(screenId)) ?? screenId;
+      // A kept direction's content sits in the original's place as `dir:<letter>` (its own screen is gone).
+      const letter = shown?.startsWith('dir:') ? shown.slice(4) : rec.design.screens.find((s) => s.id === shown)?.direction?.letter;
+      html = letter ? coffeeDirection(letter) : shown === 'pricing' ? coffeePricing() : shown === 'checkout' ? coffeeCheckout() : coffeeHome();
       if (old) html = html.replace('Roasted this week.', 'Fresh coffee, monthly.').replace('Pick a rhythm', 'Choose a plan');
     } else if (slug === 'northwind-pricing' || slug === 'launch-announcement') {
       html = pricingPage();
@@ -360,7 +395,73 @@ export const createFakeBackend = (): FakeBackend => {
       pending: isPending(rec),
       files: rec.design.kind === 'page' ? { entry: { exists: rec.written.has('index'), size: 22_000, mtime: rec.design.updated }, screens: {} } : { screens },
       warnings: [],
+      screensStamp: `screens:${rec.design.screens.map((s) => s.id).join(',')}`,
+      designJson: 'ok',
     };
+  };
+
+  // ---- Phase 2: screen edits, in memory ----
+  const stampOf = (rec: Rec): string => `screens:${rec.design.screens.map((s) => s.id).join(',')}`;
+  const undos = new Map<string, { screens: Screen[]; written: Set<string>; comments: Comment[]; content: Map<string, string> | undefined }>();
+  let editSeq = 0;
+  const pageState: FakePageState = createFakePageState({ emit: (slug, kind) => emit(slug, kind), exists: (slug) => void get(slug) });
+  const tokens: FakeTokens = createFakeTokens({ emit: (slug, files) => emit(slug, 'files', files) });
+
+  const screenEdit = (slug: string, rec: Rec, request: Extract<EditRequest, { op: 'reorder' | 'duplicate' | 'trash-screen' | 'keep-direction' }>): RouteResponse<'POST /designs/:slug/edits'> => {
+    if (request.screens !== stampOf(rec)) throw new ServiceError('stale', SCREEN_LIST_STALE_MESSAGE);
+    const before = { screens: structuredClone(rec.design.screens), written: new Set(rec.written), comments: structuredClone(rec.design.comments), content: rec.content ? new Map(rec.content) : undefined };
+    const titleOf = (id: string): string => before.screens.find((entry) => entry.id === id)?.title ?? id;
+    const ids = before.screens.map((entry) => entry.id);
+    let label = '';
+    let detailText: string | undefined;
+    let created: { id: string; title: string } | undefined;
+    if (request.op === 'keep-direction') {
+      // The service's rules in memory: the group must still be one, every file as the wall saw it, the kept board written.
+      const group = directionGroups(rec.design.screens).find((one) => one.of === request.of);
+      if (group === undefined) throw new ServiceError('invalid', SCREEN_LIST_STALE_MESSAGE);
+      for (const entry of request.files) if ((entry.file === null) === rec.written.has(entry.id)) throw new ServiceError('stale', SCREEN_LIST_STALE_MESSAGE);
+      if (!rec.written.has(request.keep)) throw new ServiceError('invalid', 'Not written yet.');
+      const mark = group.members.find((one) => one.id === request.keep)?.direction;
+      const content = new Map(rec.content ?? []);
+      if (request.keep !== request.of) {
+        content.set(request.of, content.get(request.keep) ?? `dir:${mark?.letter ?? ''}`);
+        rec.design.comments = rec.design.comments.map((entry) => (entry.screen === request.keep ? { ...entry, screen: request.of } : entry));
+      }
+      rec.content = content;
+      for (const one of group.members) {
+        rec.design.screens = rec.design.screens.filter((entry) => entry.id !== one.id);
+        rec.written.delete(one.id);
+      }
+      label = mark === undefined ? `Kept the current ${titleOf(request.of)}` : `Kept ${mark.letter} for ${titleOf(request.of)}`;
+      detailText = mark === undefined ? 'The directions are in the trash.' : 'The others are in the trash.';
+    } else if (request.op === 'reorder') {
+      const byId = new Map(rec.design.screens.map((entry) => [entry.id, entry] as const));
+      const next = request.order.map((id) => byId.get(id));
+      if (next.length !== ids.length || next.some((entry) => entry === undefined)) throw new ServiceError('bad-request', 'That order does not match the screens.');
+      rec.design.screens = next.filter((entry): entry is Screen => entry !== undefined);
+      const move = describeMove(ids, request.order);
+      label = move === null ? 'Screens reordered' : move.above === null ? `Moved ${titleOf(move.moved)} to the end` : `Moved ${titleOf(move.moved)} above ${titleOf(move.above)}`;
+    } else if (request.op === 'duplicate') {
+      if (rec.design.screens.length >= SCREENS_MAX) throw new ServiceError('invalid', 'A canvas holds up to 40 screens.');
+      const copyId = freeCopyId(request.id, new Set(ids));
+      const index = ids.indexOf(request.id);
+      if (copyId === null || index < 0) throw new ServiceError('invalid', 'That screen cannot be copied.');
+      const title = copyTitle(titleOf(request.id));
+      rec.design.screens.splice(index + 1, 0, screen(copyId, title));
+      rec.written.add(copyId);
+      created = { id: copyId, title };
+      label = `Duplicated ${titleOf(request.id)}`;
+    } else {
+      rec.design.screens = rec.design.screens.filter((entry) => entry.id !== request.id);
+      rec.written.delete(request.id);
+      label = `Moved ${titleOf(request.id)} to trash`;
+    }
+    editSeq += 1;
+    const id = `e_fake${String(editSeq).padStart(4, '0')}`;
+    undos.set(id, before);
+    touch(rec);
+    emit(slug, 'design');
+    return { edit: { id, label, ...(detailText ? { detail: detailText } : {}), files: [], undoable: true }, version: null, coalesced: false, stamps: { screens: stampOf(rec) }, ...(created ? { created } : {}) };
   };
 
   type Req<K extends RouteKey> = { params: Record<string, string>; query: Record<string, string>; body: RouteBody<K> };
@@ -545,7 +646,7 @@ export const createFakeBackend = (): FakeBackend => {
     'GET /designs/:slug/source': ({ params, query }) => {
       const rec = get(params.slug);
       const text = docFor(params.slug ?? '', rec, query.screen, undefined);
-      return { text, bytes: text.length };
+      return { text, bytes: text.length, sha256: `src:${text.length}`, utf8: true, link: false };
     },
     'GET /designs/:slug/thumbnail': ({ params }) => {
       const rec = get(params.slug);
@@ -626,11 +727,11 @@ export const createFakeBackend = (): FakeBackend => {
         const picked = rec.design.comments.filter((candidate) => (wanted ? wanted.has(candidate.id) : candidate.status === 'open'));
         if (picked.length === 0) throw new ServiceError('invalid', wanted ? 'None of those comments exist any more.' : 'There are no open comments to send.');
         const lines = picked.map((candidate, index) => `${index + 1}. element: \`${candidate.anchor.selector}\`\n   → ${candidate.body}`);
-        return { text: `[Design Chamber] Revise "${rec.design.title}": ${picked.length} comment${picked.length === 1 ? '' : 's'}.\n${lines.join('\n')}`, commentIds: picked.map((candidate) => candidate.id), omitted: [], chip };
+        return { text: `[Design Chamber] Revise "${rec.design.title}": ${picked.length} comment${picked.length === 1 ? '' : 's'}.\n${lines.join('\n')}`, commentIds: picked.map((candidate) => candidate.id), omitted: [], chip, handEdits: null };
       }
       // The service-written requests of "Ask the agent to fix it" (checks badge, remote-files banner).
-      if (body.purpose === 'checks') return { ...checks.prompt(params.slug ?? ''), commentIds: [], omitted: [], chip };
-      if (body.purpose === 'offline') return { text: `[Design Chamber] Make "${rec.design.title}" work offline: bundle remote files into assets/ or remove them.`, commentIds: [], omitted: [], chip };
+      if (body.purpose === 'checks') return { ...checks.prompt(params.slug ?? ''), commentIds: [], omitted: [], chip, handEdits: null };
+      if (body.purpose === 'offline') return { text: `[Design Chamber] Make "${rec.design.title}" work offline: bundle remote files into assets/ or remove them.`, commentIds: [], omitted: [], chip, handEdits: null };
       if (body.purpose !== 'ask') throw new ServiceError('internal', 'The UI shim answers revisions, asks, checks and offline requests only.');
       const words = typeof body.text === 'string' ? body.text.trim() : '';
       if (words === '') throw new ServiceError('bad-request', 'Write what you want the agent to do.');
@@ -640,8 +741,41 @@ export const createFakeBackend = (): FakeBackend => {
         ...(element ? [`About this element: \`${element.anchor.selector}\``] : []),
         words,
       ];
-      return { text: lines.join('\n'), commentIds: [], omitted: [], chip };
+      return { text: lines.join('\n'), commentIds: [], omitted: [], chip, handEdits: null };
     },
+    // Phase 2: the screen actions are answered in memory (a scenario can still override the route); the other ops keep the "not built yet" answer.
+    'POST /designs/:slug/edits': ({ params, body }) => {
+      const rec = get(params.slug);
+      if (body.op === 'reorder' || body.op === 'duplicate' || body.op === 'trash-screen' || body.op === 'keep-direction') return screenEdit(params.slug ?? '', rec, body);
+      if (body.op === 'tokens') return tokens.edit(params.slug ?? '', body.base, body.values, rec.design.tweaks);
+      throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
+    },
+    'POST /designs/:slug/edits/:id/undo': ({ params }) => {
+      const rec = get(params.slug);
+      if (tokens.hasUndo(params.id ?? '')) return tokens.undo(params.slug ?? '', params.id ?? '');
+      const undo = undos.get(params.id ?? '');
+      if (!undo) throw new ServiceError('not-found', "This edit can't be undone any more.");
+      undos.delete(params.id ?? '');
+      rec.design.screens = undo.screens;
+      rec.written = undo.written;
+      rec.design.comments = undo.comments;
+      if (undo.content) rec.content = undo.content;
+      else delete rec.content;
+      touch(rec);
+      emit(params.slug ?? null, 'design');
+      return { files: [], stamps: { screens: stampOf(rec) }, version: null };
+    },
+    'GET /designs/:slug/tokens': ({ params }) => {
+      const rec = get(params.slug);
+      // A design with tweaks and no tokens.css in the harness reads as "no file".
+      return tokens.read(params.slug ?? '', rec.design.tweaks) ?? { exists: false, editable: false, sha256: null, knobs: rec.design.tweaks.map((tweak) => ({ var: tweak.var, state: 'no-file', value: null, fileUnit: null, alsoSet: [] })) };
+    },
+    'POST /designs/:slug/hand-edits/clear': ({ params }) => {
+      get(params.slug);
+      throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
+    },
+    // Saved page data (feature 19): in memory, in fake-page-state.ts.
+    ...pageState.handlers,
   };
 
   const checks = createFakeChecks({
@@ -682,6 +816,42 @@ export const createFakeBackend = (): FakeBackend => {
     emit(slug, 'files', [path]);
   };
 
+  const padScreens = (slug: string, count: number): void => {
+    const rec = db.get(slug);
+    if (!rec) return;
+    for (let n = rec.design.screens.length + 1; n <= count; n += 1) {
+      rec.design.screens.push(screen(`extra-${n}`, `Extra ${n}`));
+      rec.written.add(`extra-${n}`);
+    }
+    touch(rec);
+    emit(slug, 'design');
+  };
+
+  const unwriteScreen = (slug: string, id: string): void => {
+    const rec = db.get(slug);
+    if (!rec) return;
+    rec.written.delete(id);
+    touch(rec);
+    emit(slug, 'files', [`screens/${id}.html`]);
+  };
+
+  const NAMES = ['Bold', 'Editorial', 'Cards', 'Quiet'] as const;
+  const LETTERS = ['A', 'B', 'C', 'D'] as const;
+  const addDirections = (slug: string, of: string, count: number, written: number): void => {
+    const rec = db.get(slug);
+    const original = rec?.design.screens.find((entry) => entry.id === of);
+    if (!rec || !original) return;
+    for (let n = 0; n < Math.min(count, LETTERS.length); n += 1) {
+      const letter = LETTERS[n] ?? 'A';
+      const id = `${of}-${letter.toLowerCase()}`;
+      if (rec.design.screens.some((entry) => entry.id === id)) continue;
+      rec.design.screens.push({ ...screen(id, `${original.title}, ${(NAMES[n] ?? '').toLowerCase()}`), direction: { of, letter, name: NAMES[n] ?? letter } });
+      if (n < written) rec.written.add(id);
+    }
+    touch(rec);
+    emit(slug, 'design');
+  };
+
   const ageDesign = (slug: string, ageMs: number): void => {
     const rec = db.get(slug);
     if (!rec) return;
@@ -699,9 +869,14 @@ export const createFakeBackend = (): FakeBackend => {
     checks: checks.hooks,
     writeFile,
     ageDesign,
+    padScreens,
+    unwriteScreen,
+    addDirections,
     failNextRestore: (message) => {
       restoreFailure = message;
     },
+    touchTokens: (slug) => tokens.touch(slug),
+    pageState: pageState.hooks,
   };
 };
 

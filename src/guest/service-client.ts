@@ -178,6 +178,16 @@ export const splitUploadChunks = (text: string, maxChars: number = UPLOAD_CHUNK_
   return chunks;
 };
 
+/**
+ * Whether a serialized request body fits one inline request (Phase 2 §8.4): the same rule the
+ * upload chunks use — ≤ `UPLOAD_CHUNK_MAX_CHARS` characters **and** ≤ `UPLOAD_CHUNK_MAX_BYTES`
+ * UTF-8 bytes, both under the router's 80 000-byte cap. A multi-byte delta (CJK, emoji) can fit
+ * the character budget and still blow the byte budget, so both are checked; anything that fails
+ * goes through `upload` instead, never answered 413.
+ */
+export const fitsOneRequest = (json: string): boolean =>
+  json.length <= UPLOAD_CHUNK_MAX_CHARS && utf8Length(json) <= UPLOAD_CHUNK_MAX_BYTES;
+
 // ---- Concurrency helper ----
 
 const mapLimit = async <T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> => {

@@ -133,6 +133,7 @@ const design = (over: Partial<DesignJson> = {}): DesignJson => ({
     { id: 'todo', title: 'Todo', file: 'screens/todo.html' },
   ],
   designSystem: { confirmed: false },
+  tweaks: [],
   comments: [],
   ...over,
 });

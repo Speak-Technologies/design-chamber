@@ -6,7 +6,7 @@
 // scripts); a blob document's relative URLs fail closed. The frame that loads it must be
 // `sandbox="allow-scripts"` only — never with `allow-same-origin` (see `ARTBOARD_SANDBOX`).
 
-import { BRIDGE_PLACEHOLDER, type BridgeInit, type BridgeMode } from '../shared/bridge-protocol.ts';
+import { BRIDGE_PLACEHOLDER, type BridgeInit, type BridgeMode, type StorageInit, type TokenVar } from '../shared/bridge-protocol.ts';
 
 /** The only sandbox value an artboard frame may carry. */
 export const ARTBOARD_SANDBOX = 'allow-scripts';
@@ -21,7 +21,17 @@ export const newNonce = (): string => {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
-export type FrameInit = { artboardId: string; file: string; mode: BridgeMode; scroll?: { x: number; y: number }; nonce?: string };
+export type FrameInit = {
+  artboardId: string;
+  file: string;
+  mode: BridgeMode;
+  scroll?: { x: number; y: number };
+  nonce?: string;
+  /** The current tweak preview, applied before the first paint (Phase 2 §4.4). */
+  tokens?: TokenVar[];
+  /** The design's saved page data; only the live viewer passes it (Phase 2 §8.3). Omitted: empty, unsaved. */
+  storage?: StorageInit;
+};
 
 export const bridgeInitOf = (init: FrameInit): BridgeInit => ({
   artboardId: init.artboardId,
@@ -29,6 +39,8 @@ export const bridgeInitOf = (init: FrameInit): BridgeInit => ({
   mode: init.mode,
   scroll: init.scroll ?? { x: 0, y: 0 },
   nonce: init.nonce ?? newNonce(),
+  ...(init.tokens ? { tokens: init.tokens } : {}),
+  ...(init.storage ? { storage: init.storage } : {}),
 });
 
 /** JSON that is safe inside a `<script>` element: no `<` at all, so no `</script` or `<!--`. */

@@ -22,8 +22,9 @@ page swaps it for its small helper script (hover/click picking, pins, scroll, li
 loading the document into a sandboxed frame. Exports never contain the marker. Viewing an old **version** renders the snapshot's files.
 
 ## Versions
-The service snapshots the design folder (everything except `.versions/`, `.chamber/` and the
-thumbnail; `design.json` without comments) as content-addressed objects:
+The service snapshots the design folder (everything except `.versions/`, `.chamber/`, the
+thumbnail and the macOS Finder files `.DS_Store` and `._*`; `design.json` without comments) as
+content-addressed objects:
 - automatically 8 s after the files go quiet, immediately when an agent turn completes (the
   selected chat's, or a linked chat's that is not selected — seen in the project's sessions list
   while any Design Chamber frame is open),
@@ -37,7 +38,9 @@ thumbnail; `design.json` without comments) as content-addressed objects:
   the linked chat session are never touched by a restore. The version being restored is never
   pruned by its own restore point, even when the history is full. When the current files are
   too large for a snapshot (over 1 000 files or 100 MB) no restore point can be kept, so the
-  restore is refused with a sentence saying so and nothing is changed.
+  restore is refused with a sentence saying so and nothing is changed. On Windows and macOS, where
+  file names ignore letter case, a file whose name changed only in case since the version
+  (`logo.png` now, `Logo.png` then) is the same file: the restore writes the old bytes and keeps it.
 - the answer to a restore also names `before`: the version that holds the state from just before
   the restore (the restore point, or the newest version when the files already matched it).
   **Restore with Undo:** the UI restores at once and offers **Undo** for 10 seconds, which is one
@@ -81,7 +84,7 @@ A torn write, a stray edit by an agent or a sync tool, or a Windows file lock ca
 
 ## Export
 Because a guest frame cannot download files, the service writes them itself:
-- **ZIP** — the whole design folder (without `design.json`) under `<slug>/`;
+- **ZIP** — the whole design folder (without `design.json` or the macOS Finder files) under `<slug>/`;
 - **single-file HTML** — the bundled document with every asset inlined (no bridge marker),
   for a page or one chosen canvas screen.
 The ZIP is written to disk file by file as it goes, so a large design does not freeze the

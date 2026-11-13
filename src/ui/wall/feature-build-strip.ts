@@ -4,15 +4,20 @@
 // full-screen page), and lights the board the agent just wrote. A 1 s repaint runs only while an elapsed time is showing and
 // the document is visible; otherwise the watcher's own deadline timer is all there is.
 
-import { RECENT_MS, batchAgentFiles, inRestoreQuiet, watchBuildActivity } from '../../guest/build-activity.ts';
+import { RECENT_MS, batchAgentFiles, inRestoreQuiet, watchBuildActivity, type BuildActivity } from '../../guest/build-activity.ts';
 import { affectedSources } from '../../guest/store.ts';
 import { continueInChat } from '../components/actions.ts';
 import { mountBuildStrip } from '../components/build-strip.ts';
 import { feed, guestHost, host } from '../guest.ts';
 import { buildView } from '../model/build-strip-model.ts';
 import type { FeatureMount } from './view-context.ts';
+import type { WallHandle } from './wall.ts';
 
 const REPAINT_MS = 1000;
+
+/** The watcher each open view mounted, so a sibling feature (Edit text's agent-working hint) reads the same phase the strip shows. */
+const watchers = new WeakMap<WallHandle, BuildActivity>();
+export const buildActivityFor = (wall: WallHandle): BuildActivity | undefined => watchers.get(wall);
 
 const sameSet = (a: ReadonlySet<string | null> | null, b: ReadonlySet<string | null> | null): boolean =>
   a === b || (a !== null && b !== null && a.size === b.size && [...a].every((value) => b.has(value)));
@@ -26,6 +31,7 @@ export const mount: FeatureMount = (ctx) => {
   ctx.slots.overlay.parentElement?.prepend(ctx.slots.overlay);
 
   const watcher = watchBuildActivity({ host: guestHost, feed, slug: ctx.slug, detail: ctx.detail, onDetail: ctx.onDetail });
+  watchers.set(ctx.wall, watcher);
   const strip = mountBuildStrip(ctx.slots.overlay, {
     compact,
     onOpenChat: () => void continueInChat(ctx.slug),
@@ -95,6 +101,7 @@ export const mount: FeatureMount = (ctx) => {
   });
 
   return () => {
+    watchers.delete(ctx.wall);
     unfeed();
     undetail();
     unwatch();

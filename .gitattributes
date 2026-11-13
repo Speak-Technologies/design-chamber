@@ -1,3 +1,5 @@
 * text=auto eol=lf
 *.png binary
 *.zip binary
+# Byte-exact test data (CRLF, BOM): line-ending normalization must never touch it.
+test/fixtures/source-edit/** -text

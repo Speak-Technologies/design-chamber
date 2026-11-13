@@ -80,6 +80,14 @@ describe('buildInstructions (§U2.2)', () => {
     }
   });
 
+  test('directions: separate folders use DirectionPick; directions of one canvas screen are marked in design.json (Phase 2)', () => {
+    for (const platform of ['linux', 'win32'] as const) {
+      const text = buildInstructions({ root: platform === 'win32' ? WIN_ROOT : POSIX_ROOT, platform, checkCommand: null });
+      assert.ok(text.includes('To let the user pick between directions you made as separate design folders, ask with DirectionPick.'));
+      assert.ok(text.includes('Directions of one canvas screen are screens you mark in design.json instead; the user keeps one on the wall.'));
+    }
+  });
+
   test('no launcher: the tool alone; Windows: native separators and the PowerShell hint', () => {
     const none = buildInstructions({ root: POSIX_ROOT, platform: 'linux', checkCommand: null });
     assert.ok(none.includes('check it with the design_check tool.'));

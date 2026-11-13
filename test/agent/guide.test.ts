@@ -118,6 +118,13 @@ describe('buildAgentGuide (§4)', () => {
     assert.match(guide, /"kind": "canvas"/);
   });
 
+  test('the owned-field list names tweaks (Phase 2)', () => {
+    for (const [root, platform] of [[POSIX_ROOT, 'linux'], [WIN_ROOT, 'win32']] as const) {
+      const guide = buildAgentGuide({ root, platform });
+      assert.ok(guide.includes('change only `title`, `updated`, `viewports`, `screens`, `designSystem` and `tweaks`, and keep every other key as it is.'));
+    }
+  });
+
   test('win32 uses native separators for folder paths', () => {
     const guide = buildAgentGuide({ root: WIN_ROOT, platform: 'win32' });
     assert.ok(guide.includes(`${WIN_ROOT}\\<slug>\\`));
@@ -183,6 +190,13 @@ describe('buildSkillDoc (§5.1, §5.2)', () => {
     assert.match(fields.get('metadata.sha256') ?? '', /^"[0-9a-f]{64}"$/);
     const frontmatter = /^---\n[\s\S]*?\n---\n/.exec(doc)?.[0] ?? '';
     assert.ok(!frontmatter.includes(POSIX_ROOT), 'the root never sits in YAML');
+  });
+
+  test('the retired copy stays pre-Phase-2: it is matched byte for byte to recognise an installed skill for removal', () => {
+    for (const doc of [buildSkillDoc({ root: POSIX_ROOT, guidePath: POSIX_GUIDE }), buildSkillDoc({ root: WIN_ROOT, guidePath: WIN_GUIDE })]) {
+      assert.ok(doc.includes('change only `title`, `updated`, `viewports`, `screens` and `designSystem`.'));
+      assert.ok(!doc.includes('tweaks'), 'the old installed copy never names tweaks');
+    }
   });
 
   test('body: reads the guide first and repeats points 2 to 6', () => {

@@ -102,6 +102,10 @@ const profile = path.join(tmpdir(), `dc-visual-${process.pid}`);
 const portFile = path.join(profile, 'DevToolsActivePort');
 rmSync(portFile, { force: true });
 const chrome = spawn(chromePath, [`--remote-debugging-port=0`, `--user-data-dir=${profile}`, '--headless=new', '--no-first-run', '--no-default-browser-check', '--hide-scrollbars', '--force-color-profile=srgb', '--disable-extensions', 'about:blank'], { stdio: 'ignore' });
+// However the run ends (a crash while Chrome starts, Ctrl+C, the normal path), the browser must not outlive it: a headless Chrome
+// left running keeps this process's event loop alive (the child handle) and leaks a browser per run.
+process.on('exit', () => chrome.kill('SIGKILL'));
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => process.exit(130));
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const until = async (fn, what, timeout = 15000) => {
@@ -256,7 +260,7 @@ const openPage = async ({ width, height, surface, theme, label, query = '', rout
       if (focus) await guest(`doc.querySelector(${JSON.stringify(focus)}).focus()`);
       const modifiers = (shift ? 8 : 0) | (ctrl ? 2 : 0);
       const text = key.length === 1 ? key : undefined;
-      await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, modifiers, text, windowsVirtualKeyCode: key.length === 1 ? key.toUpperCase().charCodeAt(0) : { Escape: 27, Enter: 13, ArrowRight: 39, ArrowLeft: 37, ArrowDown: 40, ArrowUp: 38, Tab: 9 }[key] });
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, modifiers, text, windowsVirtualKeyCode: key.length === 1 ? key.toUpperCase().charCodeAt(0) : { Escape: 27, Enter: 13, ArrowRight: 39, ArrowLeft: 37, ArrowDown: 40, ArrowUp: 38, Tab: 9, PageUp: 33, PageDown: 34, End: 35, Home: 36 }[key] });
       await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, modifiers });
       await sleep(80);
     },
@@ -628,9 +632,14 @@ try {
     }
   }
 } finally {
+  // Ask Chrome to quit, give it a moment, then kill it; do not wait on the event loop to drain (an open DevTools socket or a
+  // kept-alive connection can hold it open, which is how a finished run once hung until a timeout killed it).
+  const gone = new Promise((resolve) => chrome.once('exit', resolve));
   chrome.kill();
   server.close();
-  await sleep(300);
+  server.closeAllConnections();
+  await Promise.race([gone, sleep(3000)]);
+  chrome.kill('SIGKILL');
   try {
     rmSync(profile, { recursive: true, force: true });
   } catch {
@@ -644,3 +653,5 @@ if (problems.length > 0) {
 }
 if (failed) process.exit(1);
 console.log('\nall visual checks passed');
+// Exit explicitly: a stray handle must not keep a finished run alive.
+process.exit(0);

@@ -102,6 +102,29 @@ Precedence, highest first:
 - A design is linked only to the chat it was started from (its /design or /page card in that chat),
   never guessed from timing.
 
+## Owner decisions (2026-11-11, Phase 2)
+- The canvas screen list (`design.json` `screens[]`) is shared: Design Chamber writes it only for
+  the user's own actions (reorder, duplicate, trash, keep a direction), saves a version first and
+  refuses when the agent changed `design.json` since the wall loaded it. The agent stays free to
+  rewrite the list; its later write wins.
+- Variations on the wall are screens in the same canvas, marked by the agent as directions of one
+  screen. The row shows Current, A, B, C at one viewport; "Keep this one" on the wall is the picker.
+  DirectionPick in chat stays for separate-folder directions; the agent may still ask in chat and act
+  on the answer itself.
+- Saved page data (feature 19): one store per design, shared by all its screens and viewports on the
+  rail and the page, capped at 1 MB per design, with a one-time notice when a design goes over.
+- In Edit mode a click still opens the comment box as today, with the selection toolbar (Edit text,
+  Comment, Ask agent) above the element; a double-click on text goes straight to editing.
+- The agent is told about hand edits: the next message Design Chamber sends to the linked chat
+  (comments, ask, fix) starts with a short list of what the user changed by hand since the last one.
+  Nothing is sent on its own; the instructions also tell agents to re-read a file before editing it.
+- On the rail, Tweaks opens as a non-modal bottom sheet (up to 50% of the rail height) so the wall stays
+  visible for live preview; Reset/Save pinned in the footer; full-height fallback below about 560 px of
+  rail height. Comments and Versions stay full-height. (Owner approved the mockup direction 2026-11-11.)
+- On the rail, a direction row wraps to a 2×2 grid so Current, A, B and C are visible at once; the page
+  keeps the single row. The row's "Show at" viewport switch is drawn on both surfaces. (Owner approved
+  2026-11-11.)
+
 ## Process
 - Public GitHub repo, MIT, default branch `master` with branch protection (PR + 1 approval + CI; owner-only bypass). (Updated 2026-10-27; was local-only.)
 - Agents may folder-install into the user's running OpenChamber for smoke tests.

@@ -153,6 +153,7 @@
           const p = m.payload;
           if (p.op === 'get') ok(store.has(p.key) ? { storage: true, op: 'get', found: true, value: store.get(p.key) } : { storage: true, op: 'get', found: false });
           else if (p.op === 'set') { store.set(p.key, p.value); ok({ storage: true, op: 'set' }); }
+          else if (p.op === 'delete') { store.delete(p.key); ok({ storage: true, op: 'delete' }); }
           else ok({ storage: true, op: p.op, keys: [...store.keys()] });
         } else if (m.type === 'workspace-read') ok(snapshotFor(m.payload));
         else if (m.type === 'workspace-subscribe') {

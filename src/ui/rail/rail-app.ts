@@ -27,18 +27,39 @@ export const mountRail = (root: HTMLElement): void => {
     if (slug) list.focusRow(slug);
   };
 
+  const showViewer = (slug: string, options: { startIn?: 'view' | 'comment' }): void => {
+    viewer?.handle.dispose();
+    const handle = mountDesignView({ slug, surface: 'panel', actions, onBack: leaveViewer, startIn: options.startIn });
+    viewer = { slug, handle };
+    place.remember(slug);
+    list.el.hidden = true;
+    app.append(handle.el);
+  };
+
+  /** Back to the list; unsaved tweaks ask first ("Save your tweaks?"), and Keep editing stays here. */
+  const leaveViewer = (): void => {
+    const current = viewer;
+    if (!current) return;
+    void current.handle.beforeLeave().then((leave) => {
+      if (leave && viewer === current) closeViewer();
+    });
+  };
+
   /** `startIn: 'comment'` comes with an open request (Work Status, a chat block); it also reaches a design that is already open. */
   const openViewer = (slug: string, options: { startIn?: 'view' | 'comment' } = {}): void => {
     if (viewer?.slug === slug) {
       if (options.startIn === 'comment') viewer.handle.startComment();
       return;
     }
-    viewer?.handle.dispose();
-    const handle = mountDesignView({ slug, surface: 'panel', actions, onBack: closeViewer, startIn: options.startIn });
-    viewer = { slug, handle };
-    place.remember(slug);
-    list.el.hidden = true;
-    app.append(handle.el);
+    // Another design replaces the open one: the same question as going back.
+    const current = viewer;
+    if (current) {
+      void current.handle.beforeLeave().then((leave) => {
+        if (leave && viewer === current) showViewer(slug, options);
+      });
+      return;
+    }
+    showViewer(slug, options);
   };
 
   // The frame reloads when the extension updates; reopen the design that was open (an open request or the user's own choice wins).

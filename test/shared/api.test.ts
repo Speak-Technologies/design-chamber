@@ -4,8 +4,9 @@ import { test } from 'node:test';
 import { API_ERROR_STATUS, isApiErrorCode, RAW_TEXT_ROUTES, ROUTE_KEYS, ROUTE_OWNERS, routePath, splitRouteKey } from '../../src/shared/api.ts';
 
 test('the route table lists every §7 route once, each with an owner lane', () => {
-  // 39 routes of Phase 1, minus POST /agent/skill, plus the six of Phase 1.5 (documentation/specs/phase-1-5-sdk-2-7.md §3.5).
-  assert.equal(ROUTE_KEYS.length, 44);
+  // 39 routes of Phase 1, minus POST /agent/skill, plus the six of Phase 1.5 and the seven of
+  // Phase 2 (documentation/specs/phase-2-technical.md §10.2).
+  assert.equal(ROUTE_KEYS.length, 51);
   assert.equal(new Set(ROUTE_KEYS).size, ROUTE_KEYS.length);
   for (const key of ROUTE_KEYS) {
     const { method, pattern } = splitRouteKey(key);

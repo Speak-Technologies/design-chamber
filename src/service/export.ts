@@ -19,7 +19,7 @@ import { ApiError } from './http.ts';
 import type { DesignRecord, DesignStore, Logger, SettingsStore } from './context.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource } from './bundle.ts';
 import { resolveEntryFile } from './render-cache.ts';
-import { atomicTempPath, renameWithRetry } from './paths.ts';
+import { atomicTempPath, foldsCase, renameWithRetry } from './paths.ts';
 import { folderErrorSentence } from './root.ts';
 import { userDir } from './user-dirs.ts';
 import { listTracked } from './versions.ts';
@@ -61,7 +61,7 @@ const destinationDir = async (deps: ExportDeps): Promise<string> => {
 };
 
 /** Case-insensitive disks (Windows, macOS) must treat `A.zip` and `a.zip` as one name. */
-const reservationKey = (target: string): string => (process.platform === 'win32' || process.platform === 'darwin' ? target.toLowerCase() : target);
+const reservationKey = (target: string): string => (foldsCase() ? target.toLowerCase() : target);
 
 /** First free name in `dir`: not on disk and not reserved by an export that is still writing. */
 const uniqueTarget = (dir: string, baseName: string, reserved: ReadonlySet<string>): string => {

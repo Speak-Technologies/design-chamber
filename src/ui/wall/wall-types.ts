@@ -4,7 +4,10 @@
 import type { PinPlacement, PinTracker } from '../../guest/anchoring.ts';
 import type { Camera, WallArtboard } from '../../guest/camera.ts';
 import type { AskElement, CreateCommentBody, PatchCommentBody } from '../../shared/api.ts';
+import type { HitElement } from '../../shared/bridge-protocol.ts';
 import type { Screen, Viewport } from '../../shared/types.ts';
+import type { BtnHandle } from '../components/kit.ts';
+import type { PickCheck } from '../model/edit-text-model.ts';
 import type { Point } from '../model/wall-model.ts';
 import type { CardHandle } from './comment-ui.ts';
 import type { FrameSlot } from './frame-slot.ts';
@@ -13,7 +16,8 @@ export type Rect = { x: number; y: number; w: number; h: number };
 
 /** One artboard as the wall draws it: the guest layout cell plus its screen and frame rect. */
 export type Artboard = { id: string; screen: Screen | null; viewport: Viewport; rect: Rect; cell: WallArtboard };
-export type WallLayout = { boards: Artboard[]; bounds: Rect };
+/** `ghost`: the "+ Screen" board's box in world px, or null while it is not shown (Play, an old version, the cap, a page). */
+export type WallLayout = { boards: Artboard[]; ghost: Rect | null; bounds: Rect };
 
 export type WallOptions = {
   slug: string;
@@ -24,6 +28,8 @@ export type WallOptions = {
   initialPageView?: string;
   /** Screen px of the wall's right edge a drawer currently covers (laid over it on narrow pages). */
   coveredRight?: () => number;
+  /** Screen px of the wall's bottom edge something covers: the rail's Tweaks sheet, which leaves the wall live above it. */
+  coveredBottom?: () => number;
   initialCamera: Camera | null;
   onScale: (scale: number) => void;
   onCameraSettled: (camera: Camera) => void;
@@ -40,7 +46,18 @@ export type WallOptions = {
    * Nobody passes it yet; when set, `popover-layer.openThread` hands it to the thread card as `onSend`.
    */
   onSendComment?: (id: string, body: string) => Promise<void>;
+  /**
+   * Phase 2 directions (§6.3): the viewport id a direction row is shown at, by its original's screen id (undefined → the first of the
+   * original's viewports), and the "Show at" select changing it. The view keeps the choice in `host.storage` `view:<slug>`.
+   */
+  directionViewport?: (of: string) => string | undefined;
+  onDirectionViewport?: (of: string, viewportId: string) => void;
+  /** "Keep this one" was pressed on a direction row's board (the directions feature turns it into one request). */
+  onKeepDirection?: (press: DirectionKeepPress) => void;
 };
+
+/** A press on "Keep this one": `of` is the row's original, `keep` the board's screen (`of` itself for Current). */
+export type DirectionKeepPress = { of: string; keep: string };
 
 /**
  * Seam S4 (Phase 1, ask bar): the element the user clicked to comment on. `key` is
@@ -53,6 +70,24 @@ export type WallSelectionEvent =
   | { type: 'commented'; key: string }
   | { type: 'cleared' };
 
+/**
+ * Phase 2 (Edit text): an element the user picked in Edit mode, with what the frame and the file say
+ * about editing it. `check` settles once both answered (it never rejects); `purpose` is `edit` for a
+ * double-click. Only the wall creates picks; the edit feature reads them and never writes through the wall.
+ */
+export type WallPick = {
+  id: number;
+  purpose: 'click' | 'edit';
+  selection: WallSelection;
+  board: Board;
+  element: HitElement;
+  /** Where the user clicked, in frame px (the probe is asked at the same point). */
+  framePoint: Point;
+  /** The screen the element is in (null on a page). */
+  screen: string | null;
+  check: Promise<PickCheck>;
+};
+
 export type Board = {
   art: Artboard;
   root: HTMLElement;
@@ -64,6 +99,10 @@ export type Board = {
   label: HTMLElement;
   labelText: HTMLElement;
   labelStatus: HTMLElement;
+  /** The ⋯ button of the screen menu: shown on a canvas row's first label in Edit mode (board-set decides). */
+  menu: HTMLButtonElement;
+  /** "Keep this one" on a direction row's board (the full-screen page; the rail has it in the ⋯ menu). Hidden on every other board. */
+  keep: BtnHandle;
   main: FrameSlot;
   compare: FrameSlot | null;
   /** Screen the frame currently shows; differs from `art.screen` after play-mode navigation. */
@@ -76,6 +115,12 @@ export type Board = {
   clusters: HTMLButtonElement[];
   live: boolean;
 };
+
+/** The user opened a screen's ⋯ menu; the screens feature draws it (the wall only reports the press). */
+export type ScreenMenuPress = { screenId: string; anchor: HTMLElement };
+
+/** A screen dropped into a new place by dragging its label: the whole new order, ids as the design lists them. */
+export type ScreenMove = { id: string; order: string[] };
 
 /** What the controllers built before the board set need from it (a narrow view, so they do not import it). */
 export type BoardLookup = {

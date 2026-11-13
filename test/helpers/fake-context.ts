@@ -26,6 +26,8 @@ import {
 } from '../../src/service/context.ts';
 import { createActivityTracker } from '../../src/service/activity.ts';
 import { ApiError } from '../../src/service/http.ts';
+import { createSelfWrites } from '../../src/service/self-writes.ts';
+import { screensStampOf } from '../../src/service/store.ts';
 
 export type LogLine = { level: 'info' | 'warn' | 'error'; event: string; fields?: Readonly<Record<string, unknown>> };
 
@@ -80,7 +82,13 @@ const createHub = (epoch: string, events: ChangeEvent[]): ChangeHub => {
     seq: () => seq,
     emit(input) {
       seq += 1;
-      const event: ChangeEvent = { seq, slug: input.slug, kind: input.kind, ...(input.files ? { files: input.files } : {}) };
+      const event: ChangeEvent = {
+        seq,
+        slug: input.slug,
+        kind: input.kind,
+        ...(input.files ? { files: input.files } : {}),
+        ...(input.origin ? { origin: input.origin } : {}),
+      };
       events.push(event);
       for (const listener of [...listeners]) listener(event);
       return event;
@@ -133,7 +141,9 @@ const createStore = (settings: SettingsStore): DesignStore => {
     if (design.kind === 'page') files.entry = await fileStatus(path.join(folder, ENTRY_FILE));
     for (const screen of design.screens) files.screens[screen.id] = await fileStatus(path.join(folder, ...screenFileOf(screen.id).split('/')));
     const pending = design.kind === 'page' ? !files.entry?.exists : !Object.values(files.screens).some((file) => file.exists);
-    return { slug, path: folder, design, state: finalState, extra: parsed.extra, pending, files, warnings };
+    const designJson: DesignRecord['designJson'] = designText === null ? 'missing' : parsed.raw === null ? 'invalid' : 'ok';
+    const screensStamp = designText === null || parsed.raw === null ? null : screensStampOf(parsed.raw);
+    return { slug, path: folder, design, state: finalState, extra: parsed.extra, pending, files, warnings, screensStamp, designJson };
   };
 
   return partial<DesignStore>('fake store — pass it in overrides', {
@@ -241,6 +251,7 @@ export const createFakeContext = (options: FakeContextOptions): FakeContext => {
     designIndex: unavailable('fake design index, pass it in overrides'),
     hostCalls: unavailable('fake host calls, pass it in overrides'),
     activity: createActivityTracker(),
+    selfWrites: createSelfWrites(),
     onDispose: (fn) => void disposers.push(fn),
   };
 

@@ -12,7 +12,7 @@ import { describe, test, type TestContext } from 'node:test';
 import { refuseRenames } from '../../helpers/refuse-rename.ts';
 
 import { ApiError } from '../../../src/service/http.ts';
-import { atomicTempPath, foldsCase, isAtomicTempName, isInsideOrEqual, isStrictlyInside, resolveInside, samePath, writeFileAtomic, type ContainmentDeps } from '../../../src/service/paths.ts';
+import { atomicTempPath, foldsCase, isAtomicTempName, isInsideOrEqual, isPlainTarget, isStrictlyInside, LINK_SENTENCE, resolveInside, resolvePlainTarget, samePath, writeFileAtomic, type ContainmentDeps, type PathModule, type PlainTargetDeps } from '../../../src/service/paths.ts';
 
 /** A realpath that answers exactly the mapped paths and ENOENTs everything else. */
 const fakeRealpath = (existing: Record<string, string>): ContainmentDeps['realpath'] => {
@@ -316,5 +316,218 @@ describe('atomicTempPath', () => {
     assert.equal(isAtomicTempName('index.html.tmp'), false);
     assert.equal(isAtomicTempName('draft.2bba59.tmp'), false);
     assert.equal(isAtomicTempName('draft.2bba59ef828e.tmp.html'), false);
+  });
+});
+
+// ---- resolvePlainTarget / isPlainTarget (Phase 2 §2.3): the writable-set guard ----
+
+/** A fake lstat: 'file' answers a regular file, anything else a non-file; unmapped paths ENOENT. */
+const fakeLstat = (stats: Record<string, 'file' | 'dir' | 'link'>): PlainTargetDeps['lstat'] => {
+  return async (target: string) => {
+    const kind = stats[target];
+    if (kind === undefined) throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${target}'`), { code: 'ENOENT' });
+    return { isFile: () => kind === 'file' };
+  };
+};
+
+const rejectsLink = async (promise: Promise<string>, label: string): Promise<void> => {
+  await assert.rejects(
+    promise,
+    (error: unknown) => error instanceof ApiError && error.code === 'invalid' && error.message === LINK_SENTENCE,
+    `expected the link sentence for ${label}`,
+  );
+};
+
+describe('resolvePlainTarget — fake deps, both path flavours', () => {
+  const WIN_BASE = 'C:\\Designs\\demo';
+  const POSIX_BASE = '/data/designs/demo';
+
+  test('a regular file answers its LEXICAL path (what the name says)', async () => {
+    const win: PlainTargetDeps = {
+      path: path.win32,
+      realpath: fakeRealpath({ [WIN_BASE]: WIN_BASE }),
+      lstat: fakeLstat({ [`${WIN_BASE}\\index.html`]: 'file' }),
+    };
+    assert.equal(await resolvePlainTarget(WIN_BASE, ['index.html'], {}, win), `${WIN_BASE}\\index.html`);
+    const posix: PlainTargetDeps = {
+      path: path.posix,
+      platform: 'linux',
+      realpath: fakeRealpath({ [POSIX_BASE]: POSIX_BASE }),
+      lstat: fakeLstat({ [`${POSIX_BASE}/screens/home.html`]: 'file' }),
+    };
+    assert.equal(await resolvePlainTarget(POSIX_BASE, ['screens', 'home.html'], {}, posix), `${POSIX_BASE}/screens/home.html`);
+  });
+
+  test('a leaf link INSIDE the design is refused, judged on the lexical path', async () => {
+    // screens/home.html → ../index.html: the realpath stays inside, and an lstat of the
+    // realpath would see a regular file. The lexical comparison is what refuses it.
+    const lexical = `${POSIX_BASE}/screens/home.html`;
+    const deps: PlainTargetDeps = {
+      path: path.posix,
+      platform: 'linux',
+      realpath: fakeRealpath({ [POSIX_BASE]: POSIX_BASE, [lexical]: `${POSIX_BASE}/index.html` }),
+      // Even if the final component claims to be a regular file, the link is refused.
+      lstat: fakeLstat({ [lexical]: 'file' }),
+    };
+    await rejectsLink(resolvePlainTarget(POSIX_BASE, ['screens', 'home.html'], {}, deps), 'inside leaf link');
+    assert.equal(await isPlainTarget(POSIX_BASE, ['screens', 'home.html'], deps), false);
+  });
+
+  test('a parent-folder link INSIDE the design is refused (lstat of the leaf sees a regular file)', async () => {
+    // screens → real-screens: the leaf's lstat through the link sees a regular file, so only
+    // the realpath-vs-lexical comparison catches this. MUTATION: skipping that comparison
+    // (comparing the realpath with itself) turns this test red.
+    const lexical = `${POSIX_BASE}/screens/home.html`;
+    const deps: PlainTargetDeps = {
+      path: path.posix,
+      platform: 'linux',
+      realpath: fakeRealpath({ [POSIX_BASE]: POSIX_BASE, [`${POSIX_BASE}/screens`]: `${POSIX_BASE}/real-screens` }),
+      lstat: fakeLstat({ [lexical]: 'file' }),
+    };
+    await rejectsLink(resolvePlainTarget(POSIX_BASE, ['screens', 'home.html'], {}, deps), 'inside parent link');
+    assert.equal(await isPlainTarget(POSIX_BASE, ['screens', 'home.html'], deps), false);
+  });
+
+  test('a link OUT of the design is refused by resolveInside (bad-path)', async () => {
+    const deps: PlainTargetDeps = {
+      path: path.posix,
+      platform: 'linux',
+      realpath: fakeRealpath({ [POSIX_BASE]: POSIX_BASE, [`${POSIX_BASE}/escape`]: '/outside' }),
+      lstat: fakeLstat({}),
+    };
+    await rejectsBadPath(resolvePlainTarget(POSIX_BASE, ['escape', 'f.html'], {}, deps), 'link out');
+    assert.equal(await isPlainTarget(POSIX_BASE, ['escape', 'f.html'], deps), false);
+  });
+
+  test('an absent leaf: allowed with allowAbsent (a create, a move destination), refused without', async () => {
+    const deps: PlainTargetDeps = {
+      path: path.posix,
+      platform: 'linux',
+      realpath: fakeRealpath({ [POSIX_BASE]: POSIX_BASE }),
+      lstat: fakeLstat({}),
+    };
+    assert.equal(await resolvePlainTarget(POSIX_BASE, ['screens', 'new.html'], { allowAbsent: true }, deps), `${POSIX_BASE}/screens/new.html`);
+    await assert.rejects(
+      resolvePlainTarget(POSIX_BASE, ['screens', 'new.html'], {}, deps),
+      (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT',
+    );
+    assert.equal(await isPlainTarget(POSIX_BASE, ['screens', 'new.html'], deps), false);
+  });
+
+  test('a directory (or FIFO/device) at the leaf is refused', async () => {
+    const deps: PlainTargetDeps = {
+      path: path.posix,
+      platform: 'linux',
+      realpath: fakeRealpath({ [POSIX_BASE]: POSIX_BASE }),
+      lstat: fakeLstat({ [`${POSIX_BASE}/screens`]: 'dir' }),
+    };
+    await rejectsLink(resolvePlainTarget(POSIX_BASE, ['screens'], {}, deps), 'directory leaf');
+  });
+
+  test('win32: a realpath differing only in CASE is accepted (the foldsCase rule)', async () => {
+    const deps: PlainTargetDeps = {
+      path: path.win32,
+      realpath: fakeRealpath({ 'C:\\Designs': 'C:\\Designs', [WIN_BASE]: 'C:\\DESIGNS\\DEMO' }),
+      lstat: fakeLstat({ [`${WIN_BASE}\\index.html`]: 'file' }),
+    };
+    assert.equal(await resolvePlainTarget(WIN_BASE, ['index.html'], {}, deps), `${WIN_BASE}\\index.html`);
+  });
+
+  test('win32: a realpath differing by a JUNCTION is refused even inside the design', async () => {
+    const deps: PlainTargetDeps = {
+      path: path.win32,
+      realpath: fakeRealpath({ [WIN_BASE]: WIN_BASE, [`${WIN_BASE}\\screens`]: `${WIN_BASE}\\real-screens` }),
+      lstat: fakeLstat({ [`${WIN_BASE}\\screens\\home.html`]: 'file' }),
+    };
+    await rejectsLink(resolvePlainTarget(WIN_BASE, ['screens', 'home.html'], {}, deps), 'win32 junction');
+  });
+
+  test('the lexical refusals of resolveInside still apply (dot-dot, absolute, NUL)', async () => {
+    const deps: PlainTargetDeps = {
+      path: path.posix,
+      platform: 'linux',
+      realpath: fakeRealpath({ [POSIX_BASE]: POSIX_BASE }),
+      lstat: fakeLstat({}),
+    };
+    await rejectsBadPath(resolvePlainTarget(POSIX_BASE, ['..', 'other'], { allowAbsent: true }, deps), 'dot-dot');
+    await rejectsBadPath(resolvePlainTarget(POSIX_BASE, ['/etc/passwd'], {}, deps), 'absolute');
+    await rejectsBadPath(resolvePlainTarget(POSIX_BASE, ['a\0b'], {}, deps), 'NUL');
+  });
+});
+
+describe('resolvePlainTarget — the real filesystem', () => {
+  const setup = async (t: TestContext): Promise<{ dir: string; tmp: string }> => {
+    const tmp = await fsRealpath(await mkdtemp(path.join(os.tmpdir(), 'dc-plain-')));
+    t.after(() => rm(tmp, { recursive: true, force: true, maxRetries: 3 }));
+    const dir = path.join(tmp, 'demo');
+    await mkdir(path.join(dir, 'screens'), { recursive: true });
+    await writeFile(path.join(dir, 'index.html'), '<h1>Hi</h1>');
+    await writeFile(path.join(dir, 'screens', 'home.html'), '<p>Home</p>');
+    return { dir, tmp };
+  };
+
+  const linkOrSkip = async (t: TestContext, target: string, link: string, type: 'file' | 'dir'): Promise<boolean> => {
+    try {
+      await symlink(target, link, process.platform === 'win32' && type === 'dir' ? 'junction' : type);
+      return true;
+    } catch (error) {
+      t.skip(`symlinks unavailable on this platform/account: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  };
+
+  test('a regular file answers its lexical path; a directory leaf is refused', async (t) => {
+    const { dir } = await setup(t);
+    assert.equal(await resolvePlainTarget(dir, ['screens', 'home.html']), path.join(dir, 'screens', 'home.html'));
+    assert.equal(await isPlainTarget(dir, ['screens', 'home.html']), true);
+    await rejectsLink(resolvePlainTarget(dir, ['screens']), 'directory leaf');
+  });
+
+  test('a leaf symlink pointing INSIDE the design is refused', async (t) => {
+    const { dir } = await setup(t);
+    const link = path.join(dir, 'screens', 'linked.html');
+    if (!(await linkOrSkip(t, path.join(dir, 'index.html'), link, 'file'))) return;
+    await rejectsLink(resolvePlainTarget(dir, ['screens', 'linked.html']), 'real inside leaf link');
+    assert.equal(await isPlainTarget(dir, ['screens', 'linked.html']), false);
+  });
+
+  test('a parent-folder symlink pointing INSIDE the design is refused', async (t) => {
+    const { dir } = await setup(t);
+    await mkdir(path.join(dir, 'real-screens'));
+    await writeFile(path.join(dir, 'real-screens', 'home.html'), '<p>Real</p>');
+    await rm(path.join(dir, 'screens'), { recursive: true });
+    if (!(await linkOrSkip(t, path.join(dir, 'real-screens'), path.join(dir, 'screens'), 'dir'))) return;
+    // The leaf through the link is a regular file; only the lexical comparison refuses it.
+    await rejectsLink(resolvePlainTarget(dir, ['screens', 'home.html']), 'real inside parent link');
+    assert.equal(await isPlainTarget(dir, ['screens', 'home.html']), false);
+  });
+
+  test('a symlink pointing OUT of the design is refused by containment', async (t) => {
+    const { dir, tmp } = await setup(t);
+    const outside = path.join(tmp, 'outside.html');
+    await writeFile(outside, 'secret');
+    const link = path.join(dir, 'screens', 'out.html');
+    if (!(await linkOrSkip(t, outside, link, 'file'))) return;
+    await rejectsBadPath(resolvePlainTarget(dir, ['screens', 'out.html']), 'real link out');
+  });
+
+  test('absent leaves: allowAbsent answers the path; without it the read refuses', async (t) => {
+    const { dir } = await setup(t);
+    assert.equal(await resolvePlainTarget(dir, ['screens', 'copy.html'], { allowAbsent: true }), path.join(dir, 'screens', 'copy.html'));
+    await assert.rejects(resolvePlainTarget(dir, ['screens', 'copy.html']), (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT');
+  });
+
+  test('.chamber, edits.json and page-state.json go through the same guard', async (t) => {
+    const { dir } = await setup(t);
+    await mkdir(path.join(dir, '.chamber'));
+    assert.equal(await resolvePlainTarget(dir, ['.chamber', 'edits.json'], { allowAbsent: true }), path.join(dir, '.chamber', 'edits.json'));
+    assert.equal(await resolvePlainTarget(dir, ['.chamber', 'page-state.json'], { allowAbsent: true }), path.join(dir, '.chamber', 'page-state.json'));
+    // A .chamber that is a link is refused even though its realpath stays inside.
+    await rm(path.join(dir, '.chamber'), { recursive: true });
+    await mkdir(path.join(dir, 'real-chamber'));
+    if (!(await linkOrSkip(t, path.join(dir, 'real-chamber'), path.join(dir, '.chamber'), 'dir'))) return;
+    await rejectsLink(resolvePlainTarget(dir, ['.chamber', 'edits.json'], { allowAbsent: true }), 'linked .chamber');
+    await rejectsLink(resolvePlainTarget(dir, ['.chamber', 'page-state.json'], { allowAbsent: true }), 'linked .chamber (page-state)');
+    assert.equal(await isPlainTarget(dir, ['.chamber', 'edits.json']), false);
   });
 });

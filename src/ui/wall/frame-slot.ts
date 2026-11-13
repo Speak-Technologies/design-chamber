@@ -12,6 +12,10 @@ import type { RenderMeta } from '../../shared/api.ts';
 import type { BridgeMode, FrameToPageMessage } from '../../shared/bridge-protocol.ts';
 import { h } from '../components/dom.ts';
 import { client, isServiceError } from '../guest.ts';
+import { onReadyMessages, slotStorage, slotTokens } from '../model/slot-seed.ts';
+
+// The Tweaks preview and the saved page data a frame is seeded with live in `model/slot-seed.ts` (by design slug): a frame reads
+// them when its document is made, and the preview again when it turns `ready`, so a slider moved while a frame was loading is not lost.
 
 export type SlotState = 'idle' | 'loading' | 'ready' | 'missing' | 'error';
 
@@ -91,15 +95,24 @@ export const createFrameSlot = (options: SlotOptions): FrameSlot => {
       error = null;
       setState('loading');
       try {
-        const rendered = await client.loadRender(options.slug, screenId, version);
+        // Only a frame that shows the live design gets the design's saved page data, and it waits for it (the controller
+        // answers within 2 s either way). An old version, a compare half and every other frame run with empty, unsaved storage.
+        const saved = version === null ? slotStorage(options.slug) : undefined;
+        const [rendered] = await Promise.all([client.loadRender(options.slug, screenId, version), saved?.ready]);
         if (mine !== token) return;
         meta = rendered.meta;
         drop();
-        doc = createFrameDocument(rendered.html, { artboardId: options.artboardId, file, mode: options.mode(), scroll: options.scroll() });
+        const tokens = [...slotTokens(options.slug)];
+        const storage = saved?.init();
+        doc = createFrameDocument(rendered.html, { artboardId: options.artboardId, file, mode: options.mode(), scroll: options.scroll(), ...(tokens.length > 0 ? { tokens } : {}), ...(storage ? { storage } : {}) });
         // The channel exists before the document loads, so the bridge's first `ready` is answered.
         const next = createFrameChannel({ artboardId: options.artboardId, nonce: doc.init.nonce, frame: iframe });
         next.subscribe((message) => {
           // The slot turns `ready` when the bridge reports `ready`; until then the frame is still painting.
+          if (message.type === 'ready') {
+            // The preview may have moved while this document loaded: say where it stands now, also when it is empty (KI-20).
+            for (const reply of onReadyMessages(options.slug)) next.send(reply);
+          }
           if (message.type === 'ready' && state === 'loading') setState('ready');
           for (const listener of [...listeners]) listener(message);
         });

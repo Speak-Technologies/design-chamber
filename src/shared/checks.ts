@@ -90,6 +90,17 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
     severity: 'info',
     sentence: (f) => `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although tokens.css defines colours.`,
   },
+  'tweak-broken': {
+    severity: 'warning',
+    sentence: (f) => {
+      const field = f.params?.field ?? '?';
+      if (f.params?.tweak === 'missing') return `design.json: the tweak for ${field} names a variable tokens.css does not define.`;
+      if (f.params?.tweak === 'formula') return `design.json: the tweak for ${field} points at a formula in tokens.css (calc() or var()), so it can't be tuned.`;
+      if (f.params?.tweak === 'unit') return `design.json: the tweak for ${field} uses a different unit than tokens.css.`;
+      // `no-tokens`, and the fallback when a stored finding carries no reason: the one sentence that needs no params.
+      return 'design.json declares tweaks, but the design has no tokens.css.';
+    },
+  },
   'check-partial': { severity: 'info', sentence: () => 'Some files were not checked in time.' },
 };
 
@@ -214,6 +225,7 @@ const parseParams = (value: unknown): CheckParams | undefined => {
   if (typeof value.field === 'string' && FIELD_PATTERN.test(value.field)) out.field = value.field;
   if (typeof value.base === 'string' && SCREEN_ID_PATTERN.test(value.base)) out.base = value.base;
   if (value.reason === 'limit' || value.reason === 'budget' || value.reason === 'failures') out.reason = value.reason;
+  if (value.tweak === 'missing' || value.tweak === 'formula' || value.tweak === 'unit' || value.tweak === 'no-tokens') out.tweak = value.tweak;
   return Object.keys(out).length > 0 ? out : undefined;
 };
 

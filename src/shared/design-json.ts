@@ -16,6 +16,7 @@ import {
   COMMENT_ID_PATTERN,
   COMMENTS_MAX,
   DESIGN_JSON_VERSION,
+  DIRECTION_NAME_MAX,
   PRESET_ID_PATTERN,
   PROJECT_DIRECTORY_MAX,
   SCREEN_DESCRIPTION_MAX,
@@ -24,6 +25,15 @@ import {
   SESSION_ID_MAX,
   STATE_JSON_VERSION,
   TITLE_MAX,
+  TWEAK_CHOICE_LABEL_MAX,
+  TWEAK_CHOICE_VALUE_PATTERN,
+  TWEAK_CHOICES_MAX,
+  TWEAK_CHOICES_MIN,
+  TWEAK_LABEL_MAX,
+  TWEAK_NUMBER_ABS_MAX,
+  TWEAK_UNIT_PATTERN,
+  TWEAK_VAR_PATTERN,
+  TWEAKS_MAX,
   VIEWPORT_HEIGHT_MAX,
   VIEWPORT_HEIGHT_MIN,
   VIEWPORT_ID_PATTERN,
@@ -32,6 +42,7 @@ import {
   VIEWPORT_WIDTH_MIN,
   VIEWPORTS_MAX,
 } from './limits.ts';
+import { isBalancedQuotes } from './tokens-css.ts';
 import type {
   AgentOwnedField,
   Comment,
@@ -41,6 +52,8 @@ import type {
   DesignKind,
   DesignSystemStatus,
   DesignWarning,
+  DirectionLetter,
+  DirectionMark,
   IsoDate,
   JsonObject,
   JsonValue,
@@ -49,6 +62,9 @@ import type {
   Screen,
   ServiceOwnedField,
   ServiceState,
+  Tweak,
+  TweakChoice,
+  TweakNumber,
   Viewport,
 } from './types.ts';
 
@@ -67,12 +83,12 @@ export const defaultViewports = (kind: DesignKind): Viewport[] =>
 export const SERVICE_OWNED_FIELDS: readonly ServiceOwnedField[] = [
   'version', 'kind', 'created', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry', 'comments',
 ];
-export const AGENT_OWNED_FIELDS: readonly AgentOwnedField[] = ['title', 'updated', 'viewports', 'screens', 'designSystem'];
+export const AGENT_OWNED_FIELDS: readonly AgentOwnedField[] = ['title', 'updated', 'viewports', 'screens', 'designSystem', 'tweaks'];
 
 /** Canonical key order for files the service creates. */
 const CANONICAL_ORDER: readonly (keyof DesignJson)[] = [
   'version', 'kind', 'title', 'created', 'updated', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry',
-  'viewports', 'screens', 'designSystem', 'comments',
+  'viewports', 'screens', 'designSystem', 'tweaks', 'comments',
 ];
 const KNOWN_FIELDS: ReadonlySet<string> = new Set<string>(CANONICAL_ORDER);
 const COMMENT_STATUSES: readonly CommentStatus[] = ['open', 'sent', 'resolved'];
@@ -220,7 +236,86 @@ const parseScreen = (value: unknown, index: number, viewportIds: ReadonlySet<str
       warnings.add('invalid-screen-description', `${field}.description`, `Screen "${id}" has a description over ${SCREEN_DESCRIPTION_MAX} characters; it is not shown.`);
     }
   }
+  if (has(value, 'direction')) {
+    const mark = parseDirectionMark(value.direction, id);
+    if (mark === null) {
+      warnings.add('invalid-direction', `${field}.direction`, `Screen "${id}" has a direction mark Design Chamber can't read, so it shows as a normal screen.`);
+    } else {
+      screen.direction = mark;
+    }
+  }
   return screen;
+};
+
+// ---- Direction marks (Phase 2 §6.1) ----
+
+const DIRECTION_LETTERS: readonly DirectionLetter[] = ['A', 'B', 'C', 'D'];
+
+/** The mark's own shape: `of` a screen id (never itself), a letter A to D, a name 1..40. */
+const parseDirectionMark = (value: unknown, ownId: string): DirectionMark | null => {
+  if (!isRec(value)) return null;
+  if (typeof value.of !== 'string' || !SCREEN_ID_PATTERN.test(value.of) || value.of === ownId) return null;
+  if (!DIRECTION_LETTERS.includes(value.letter as DirectionLetter)) return null;
+  const name = nonEmpty(value.name, DIRECTION_NAME_MAX);
+  if (name === null) return null;
+  // Safe: membership in DIRECTION_LETTERS was checked just above.
+  return { of: value.of, letter: value.letter as DirectionLetter, name };
+};
+
+/**
+ * The list-wide mark rules, after the screens are parsed: `of` must be a listed screen, must
+ * carry no direction key of its own as written (which makes cycles and chains impossible
+ * without a graph walk), and each letter is used once per group, first in list order winning.
+ * A broken mark is dropped and the screen shows as a normal row.
+ */
+const validateDirections = (rawById: ReadonlyMap<string, { entry: Rec; index: number }>, screens: Screen[], warnings: Warnings): void => {
+  const listed = new Set(screens.map((screen) => screen.id));
+  const letters = new Map<string, Map<DirectionLetter, string>>();
+  for (const screen of screens) {
+    const mark = screen.direction;
+    if (mark === undefined) continue;
+    const raw = rawById.get(screen.id);
+    const field = raw === undefined ? 'screens.direction' : `screens[${raw.index}].direction`;
+    const drop = (code: string, message: string): void => {
+      warnings.add(code, field, message);
+      delete screen.direction;
+    };
+    if (!listed.has(mark.of)) {
+      drop('direction-orphan', `Screen "${screen.id}" is marked as a direction of "${mark.of}", which is not a screen here, so it shows as a normal screen.`);
+      continue;
+    }
+    const ofRaw = rawById.get(mark.of);
+    if (ofRaw !== undefined && has(ofRaw.entry, 'direction')) {
+      drop('direction-chain', `Screen "${screen.id}" is marked as a direction of "${mark.of}", which is itself a direction, so it shows as a normal screen.`);
+      continue;
+    }
+    const taken = letters.get(mark.of);
+    const owner = taken?.get(mark.letter);
+    if (owner !== undefined) {
+      drop('direction-letter-taken', `Screen "${screen.id}" uses direction letter ${mark.letter}, which "${owner}" already has, so it shows as a normal screen.`);
+      continue;
+    }
+    if (taken === undefined) letters.set(mark.of, new Map([[mark.letter, screen.id]]));
+    else taken.set(mark.letter, screen.id);
+  }
+};
+
+/**
+ * The direction groups of a normalised screen list: one per root screen with at least one
+ * valid member, members in letter order (Phase 2 §6.1). Roots are not members of their group.
+ */
+export const directionGroups = (screens: readonly Screen[]): { of: string; members: Screen[] }[] => {
+  const groups = new Map<string, Screen[]>();
+  for (const screen of screens) {
+    if (screen.direction === undefined) continue;
+    const members = groups.get(screen.direction.of);
+    if (members === undefined) groups.set(screen.direction.of, [screen]);
+    else members.push(screen);
+  }
+  return [...groups.entries()].map(([of, members]) => ({
+    of,
+    members: [...members].sort((a, b) => (a.direction?.letter ?? '').localeCompare(b.direction?.letter ?? '')),
+  }));
 };
 
 const parseViewports = (raw: Rec, kind: DesignKind, warnings: Warnings): Viewport[] => {
@@ -267,6 +362,8 @@ const parseScreens = (raw: Rec, kind: DesignKind, viewports: Viewport[], warning
   const viewportIds = new Set(viewports.map((v) => v.id));
   const result: Screen[] = [];
   const seen = new Set<string>();
+  /** The raw entry each listed screen came from, for the direction rules ("as written", §6.1). */
+  const rawById = new Map<string, { entry: Rec; index: number }>();
   raw.screens.forEach((entry, index) => {
     const screen = parseScreen(entry, index, viewportIds, warnings);
     if (!screen) return;
@@ -276,10 +373,104 @@ const parseScreens = (raw: Rec, kind: DesignKind, viewports: Viewport[], warning
     }
     seen.add(screen.id);
     result.push(screen);
+    // Safe: parseScreen answered a screen, so this entry is a record with a valid id.
+    rawById.set(screen.id, { entry: entry as Rec, index });
   });
   if (result.length > SCREENS_MAX) {
     warnings.add('too-many-screens', 'screens', `Only the first ${SCREENS_MAX} screens are shown.`);
     result.length = SCREENS_MAX;
+  }
+  validateDirections(rawById, result, warnings);
+  return result;
+};
+
+// ---- Tweaks knobs (Phase 2 §4.1; agent values are untrusted, dropped with a warning, never fatal) ----
+
+const CHOICE_REASON = 'a choice needs 2 to 6 options with distinct plain values';
+
+const invalidTweak = (warnings: Warnings, index: number, reason: string): null => {
+  warnings.add('invalid-tweak', `tweaks[${index}]`, `Tweak ${index + 1} in design.json is not usable (${reason}), so it is not shown.`);
+  return null;
+};
+
+const parseTweakNumber = (value: Rec, index: number, warnings: Warnings, base: { var: string; label: string }): TweakNumber | null => {
+  const { min, max, step } = value;
+  if (
+    !isFiniteNum(min) || !isFiniteNum(max) ||
+    Math.abs(min) > TWEAK_NUMBER_ABS_MAX || Math.abs(max) > TWEAK_NUMBER_ABS_MAX ||
+    min >= max
+  ) {
+    return invalidTweak(warnings, index, 'min must be below max');
+  }
+  // At most 4 decimals: the string form of a positive number shows them (an exponent means more).
+  if (typeof step !== 'number' || !Number.isFinite(step) || step <= 0 || step > max - min || !/^\d+(\.\d{1,4})?$/.test(String(step))) {
+    return invalidTweak(warnings, index, 'step must be above 0 and fit the range');
+  }
+  const unit = value.unit === undefined ? '' : value.unit;
+  if (typeof unit !== 'string' || !TWEAK_UNIT_PATTERN.test(unit)) {
+    return invalidTweak(warnings, index, 'the unit must be letters or %');
+  }
+  return { ...base, kind: 'number', min, max, step, unit };
+};
+
+const parseTweakChoice = (value: Rec, index: number, warnings: Warnings, base: { var: string; label: string }): TweakChoice | null => {
+  if (!Array.isArray(value.options) || value.options.length < TWEAK_CHOICES_MIN || value.options.length > TWEAK_CHOICES_MAX) {
+    return invalidTweak(warnings, index, CHOICE_REASON);
+  }
+  const options: { label: string; value: string }[] = [];
+  const seen = new Set<string>();
+  for (const option of value.options) {
+    if (!isRec(option)) return invalidTweak(warnings, index, CHOICE_REASON);
+    const label = nonEmpty(option.label, TWEAK_CHOICE_LABEL_MAX);
+    if (
+      label === null ||
+      typeof option.value !== 'string' ||
+      !TWEAK_CHOICE_VALUE_PATTERN.test(option.value) ||
+      !isBalancedQuotes(option.value) ||
+      seen.has(option.value)
+    ) {
+      return invalidTweak(warnings, index, CHOICE_REASON);
+    }
+    seen.add(option.value);
+    options.push({ label, value: option.value });
+  }
+  return { ...base, kind: 'choice', options };
+};
+
+const parseTweak = (value: unknown, index: number, warnings: Warnings): Tweak | null => {
+  if (!isRec(value) || typeof value.var !== 'string' || !TWEAK_VAR_PATTERN.test(value.var)) {
+    return invalidTweak(warnings, index, 'it needs a var like --accent');
+  }
+  const label = nonEmpty(value.label, TWEAK_LABEL_MAX);
+  if (label === null) return invalidTweak(warnings, index, `its label must be 1 to ${TWEAK_LABEL_MAX} characters`);
+  const base = { var: value.var, label };
+  if (value.kind === 'number') return parseTweakNumber(value, index, warnings, base);
+  if (value.kind === 'choice') return parseTweakChoice(value, index, warnings, base);
+  return invalidTweak(warnings, index, 'its kind must be "number" or "choice"');
+};
+
+/** The knob list: invalid knobs dropped one by one, duplicate vars keep the first, at most `TWEAKS_MAX`. */
+const parseTweaks = (raw: Rec, warnings: Warnings): Tweak[] => {
+  if (!has(raw, 'tweaks')) return [];
+  if (!Array.isArray(raw.tweaks)) {
+    warnings.add('invalid-tweaks', 'tweaks', 'The tweak list is not a list, so no tweaks are shown.');
+    return [];
+  }
+  const result: Tweak[] = [];
+  const seen = new Set<string>();
+  raw.tweaks.forEach((entry, index) => {
+    const tweak = parseTweak(entry, index, warnings);
+    if (tweak === null) return;
+    if (seen.has(tweak.var)) {
+      warnings.add('duplicate-tweak', `tweaks[${index}]`, `Two tweaks use ${tweak.var}; only the first is shown.`);
+      return;
+    }
+    seen.add(tweak.var);
+    result.push(tweak);
+  });
+  if (result.length > TWEAKS_MAX) {
+    warnings.add('too-many-tweaks', 'tweaks', `Only the first ${TWEAKS_MAX} tweaks are shown.`);
+    result.length = TWEAKS_MAX;
   }
   return result;
 };
@@ -402,6 +593,7 @@ export const normalizeDesign = (raw: unknown, options: NormalizeOptions): Normal
     else warnings.add('invalid-design-system', 'designSystem', 'designSystem must be { "confirmed": true | false }; it is treated as not confirmed.');
   }
 
+  const tweaks = parseTweaks(record, warnings);
   const comments = parseComments(record, warnings);
 
   const extra: JsonObject = Object.fromEntries(
@@ -424,6 +616,7 @@ export const normalizeDesign = (raw: unknown, options: NormalizeOptions): Normal
       viewports,
       screens,
       designSystem,
+      tweaks,
       comments,
     },
     extra,
@@ -577,8 +770,12 @@ const rawValue = (raw: JsonObject, key: ServiceOwnedField): unknown => {
 export const serviceFieldsDiffer = (raw: JsonObject, state: ServiceState): boolean =>
   SERVICE_OWNED_FIELDS.some((key) => !sameJson(rawValue(raw, key), stateValue(state, key)));
 
-/** Agent-owned values the service itself writes: a user rename, and the `updated` bump on service writes. */
-export type ServiceWrite = { title?: string; updated?: IsoDate };
+/**
+ * Agent-owned values the service itself writes: a user rename, the `updated` bump on service
+ * writes, and the screen list for the user's screen actions (Phase 2 §5.1; the agent's later
+ * write of the list still wins).
+ */
+export type ServiceWrite = { title?: string; updated?: IsoDate; screens?: JsonValue[] };
 
 /**
  * design.json with state.json's service-owned fields merged into the agent's raw object.
@@ -590,6 +787,7 @@ export const mergeServiceFields = (raw: JsonObject, state: ServiceState, write: 
   for (const key of SERVICE_OWNED_FIELDS) replacements.set(key, stateValue(state, key));
   if (write.title !== undefined) replacements.set('title', write.title);
   if (write.updated !== undefined) replacements.set('updated', write.updated);
+  if (write.screens !== undefined) replacements.set('screens', write.screens);
 
   const entries: [string, JsonValue][] = [];
   for (const [key, value] of Object.entries(raw)) {

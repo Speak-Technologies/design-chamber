@@ -77,11 +77,72 @@ Severity and wording come from the finding code only (one table, `src/shared/che
 | Kind | Findings |
 |---|---|
 | Errors | a screen listed in design.json with no file · a missing `index.html` · links to missing files, files outside the folder, or the internet · content wider than the viewport · low text contrast (AA: 4.5:1, 3:1 for large text) · an image without `alt` · a form field without a label · a button or link without a name · a script error · a request to the internet that was blocked · a screen that could not be rendered |
-| Warnings | tokens redefined in a screen that `tokens.css` already defines · `design.json` fields that were ignored · a screen file design.json does not list · a device copy of a screen (`home-phone` next to `home`) · a script import that cannot load · no doctype, `lang`, viewport meta or `<title>` · cut-off or overlapping text · a screen six or more viewports tall · a screen that took too long |
+| Warnings | tokens redefined in a screen that `tokens.css` already defines · `design.json` fields that were ignored · a screen file design.json does not list · a device copy of a screen (`home-phone` next to `home`) · a script import that cannot load · no doctype, `lang`, viewport meta or `<title>` · cut-off or overlapping text · a screen six or more viewports tall · a screen that took too long · a tweak knob `tokens.css` cannot serve (see below) |
 | Notes | no charset · hardcoded colours although `tokens.css` defines colours · the page opened an alert · screens not rendered because of the limit · no browser found · the page height |
+
+## Broken tweak knobs
+When `design.json` declares tweaks (the knobs in the Tweaks panel), the static check reads
+`tokens.css` the same way the panel does and warns about every knob the panel could not tune. Each
+warning names the variable and points at `design.json`:
+
+- **Missing:** "the tweak for --accent-h names a variable tokens.css does not define." (Only a
+  declaration directly in a top-level `:root` counts; one inside `@media` does not, and when
+  `:root` sets the variable twice the last one counts.)
+- **Formula:** "the tweak for --radius points at a formula in tokens.css (calc() or var()), so it
+  can't be tuned." This also covers a value with a comment, `!important` or a colour function.
+- **Unit:** "the tweak for --radius uses a different unit than tokens.css." (The knob says `px`,
+  the file says `rem`.)
+- **No tokens.css:** one warning, "design.json declares tweaks, but the design has no tokens.css.",
+  however many knobs there are.
+
+A choice knob whose file value is not one of its options still tunes, so it is not reported. A
+design with no tweaks never gets this warning, and a knob definition that is itself invalid is
+reported as an ignored `design.json` field, as before. The five-per-kind cap applies. The CLI, the
+`design_check` tool and the Checks badge all show these warnings, because they share one engine.
 
 Static checks (the files) run on every change. Rendering runs when the agent runs the command, or
 when the user asks (`POST /designs/:slug/checks/run`, one design at a time).
+
+## What counts as overlapping text
+Overlap is judged on the boxes text actually paints, one line at a time, not on one big box around
+all of an element's text. An inline element that wraps over several lines no longer looks like it
+covers text it never touches. Three rules keep the warning honest:
+
+- Text never counts as overlapping text in its own ancestor or descendant. Inline `code`, `b`, `a`
+  or a padded `span` inside a paragraph, list item or table cell is part of the same flow, whatever
+  the boxes do.
+- Visually hidden text sits out every visual verdict: overlap, cut-off text and contrast. The usual
+  screen-reader-only patterns count as hidden: a 1×1 px box with `overflow: hidden`, a zero-area
+  `clip` rect, `clip-path: inset(50%)`, text parked fully outside a clipping box, and `opacity: 0`.
+  Nobody sees that text, so none of the three can be a visual defect. The accessibility checks
+  (alt text, labels, button names) still apply, and hidden text can be the fix for them.
+- What paints is still judged: a `visibility: visible` child inside a `visibility: hidden` parent,
+  and visible text marked `aria-hidden`, count as seen.
+
+Where text paints and whether anyone can see it are two separate questions, and scrolling only
+changes the first:
+
+- Scrolling never hides text. Text further down or further along a scroll box (`overflow: auto` or
+  `scroll` with content past its edge) keeps its contrast verdict, because the user scrolls to it.
+- For overlap, text counts where it paints now. Text scrolled out of a box never overlaps text
+  outside the box (a long list in a fixed-height panel does not "overlap" the paragraph under the
+  panel). Two texts in the same scroll box are compared inside it, so an overlap the user scrolls
+  to is still found.
+- The page itself always scrolls, and the check scrolls it: the root never cuts text, whatever
+  overflow `html` has, and neither does a `body` whose overflow goes to the viewport.
+- Text is cut for good only by a box that never shows what sticks out of it: `overflow: hidden` or
+  `clip`, each on its own axis, and an `auto` or `scroll` box with nothing to scroll to. A text's
+  own box counts too (a second line under a fixed height, text pushed out with `text-indent`).
+  Text cut away completely is hidden.
+- Positioned text is cut only by the boxes that contain it: a dropdown positioned out of a clipped
+  card is still judged. Fixed text scrolls with a box that is moved with `transform`, `translate`,
+  `rotate` or `scale`, and otherwise stays on the first screen.
+- Boxes that overflow does not apply to cut nothing: inline boxes, `display: contents` and table
+  rows. A scaled box cuts at the size it paints, not at its layout size.
+
+Real overlaps are still found: a caption positioned over a heading, items pulled onto each other by
+negative margins, text moved over a sibling by a transform. The 30% share rule, the fixed/sticky
+exemption and the per-kind cap are unchanged.
 
 ## Where results live
 - `<design>/.chamber/check.json`: the report (schema `design-chamber/check@1`), written atomically
@@ -106,6 +167,14 @@ uses the same flags. The browser is driven over
 a pipe (no debugging port is opened), killed when the run ends, and limited to 12 seconds per
 screen and 90 seconds per run. A screen that hangs, crashes or reloads forever is a finding;
 the next screen still renders. Renders use the light scheme, as the wall does.
+
+**Empty, unsaved storage.** Checks run with empty page storage. Every artboard gets a fresh
+stand-in for `localStorage` and `sessionStorage`, installed before the design's own scripts, so a
+design that saves ticks, toggles or filters renders without a script error. Nothing a screen
+writes is kept, and nothing carries over to the next artboard: each one starts empty, and the
+design's saved page data is never read into a check. Thumbnails render with the browser's own
+empty storage in the throwaway profile, and the small live preview in the designs list runs no
+scripts at all.
 
 ## Limits
 24 artboards per run (the rest are counted as not rendered; the note says so and how to check them: `--screen <id>`), a 90-second run budget, or three failures in a row (each stop has its own note), 4 pictures per artboard, 200 findings
@@ -140,7 +209,8 @@ opacity). Overlap and cut-off text are heuristics, so they are warnings.
 browser pipe, render loop, output, launcher, service, target resolution, report text),
 `src/service/routes/checks.ts`, `src/shared/checks.ts` (finding table and `check.json` validation),
 `src/shared/agent/check-command.ts`, `src/guest/probe/probe.ts` (the measuring script, built into
-the CLI and the service). The tool: `src/plugin/index.ts` (entry, built-ins from
+the CLI and the service), `src/guest/bridge/storage-shim-entry.ts` (the empty-storage stand-in,
+built into the CLI and the service and installed before any design script). The tool: `src/plugin/index.ts` (entry, built-ins from
 `process.getBuiltinModule`) and `src/plugin/check-tool.ts` (input, install root, record check, child
 env, run, answer; pure parts exported), `src/service/runtime-record.ts`, `src/shared/app-data.ts`
 (the app-data folder both sides use). Tests: `test/service/check/**`, `test/cli/**`, `test/agent/check-copy.test.ts`,

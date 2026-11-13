@@ -38,6 +38,10 @@ export type WallContext = {
   /** Split each artboard: the saved version left, the current design right. */
   compare: boolean;
   showPins: boolean;
+  /** The inline text editor is open: the wall ignores presses and hover until it closes (the editor handles click-away itself). */
+  editing: boolean;
+  /** A screen action is running (Phase 2 §5.4): no new menu, no drag; `id` is the screen it is about (its label shows progress). */
+  screensBusy: { id: string | null } | null;
   disposed: boolean;
   /** The surface's size in CSS px; the camera controller keeps it current. */
   surfaceSize: { w: number; h: number };
@@ -98,6 +102,8 @@ export const createWallContext = (options: WallOptions, initialDetail: DesignDet
     version: null,
     compare: false,
     showPins: true,
+    editing: false,
+    screensBusy: null,
     disposed: false,
     surfaceSize: { w: 0, h: 0 },
 

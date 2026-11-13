@@ -23,7 +23,7 @@ import {
 } from '@openchamber/sdk';
 
 import { extractHtml } from '../shared/agent/html-extract.ts';
-import type { AskElement, OpenIntent, PromptBody } from '../shared/api.ts';
+import type { AskElement, OpenIntent, PromptBody, PromptResponse } from '../shared/api.ts';
 import type { AnchorState, DesignChip, DesignKind, Outbox } from '../shared/types.ts';
 import { CHIP_PROVIDER_ID } from '../shared/types.ts';
 import { OUTBOX_TTL_MS, SLUG_PATTERN, TURN_SNAPSHOT_DEDUPE_MS } from '../shared/limits.ts';
@@ -338,14 +338,17 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
 
   type Delivery = { outcome: AskOutcome; sessionId: string | null };
 
+  /** The prompt as `deliver` needs it: the message, its chip, and the hand-edit block it carries (Phase 2 §7.3). */
+  type DeliverPrompt = Pick<PromptResponse, 'text' | 'chip' | 'commentIds' | 'handEdits'>;
+
   /**
    * §10.4 steps 1 to 3, shared by the comments and the ask bar: the prompt goes to the linked
    * chat when it is the selected one, via the outbox when it is another chat (the rail delivers
    * after `openSession`), or into a new linked chat when there is none or it is gone.
    */
-  const deliver = async (
+  const deliverOnce = async (
     slug: string,
-    prompt: { text: string; chip: DesignChip; commentIds: string[] },
+    prompt: DeliverPrompt,
     design: { sessionId: string | null; projectDirectory: string | null },
     version: number | null,
     busyMessage: string,
@@ -380,6 +383,31 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
     const result = await startLinkedSession(slug, prompt.chip, prompt.text, design.projectDirectory);
     if (result.sent !== 'sent') throw new FlowError('send-failed', MESSAGES.sendFailed);
     return { outcome: 'new-session', sessionId: result.sessionId };
+  };
+
+  /**
+   * The one delivery path (comments, ask bar, "Ask the agent to fix"). After the message reaches
+   * the chat or its outbox queue, the hand-edit lines it carried are cleared from the ledger
+   * (Phase 2 §7.3), so they are not repeated in the next message. A failed delivery clears
+   * nothing (`deliverOnce` threw); a failed clear is logged and ignored — the same lines may
+   * repeat next time, which is harmless.
+   */
+  const deliver = async (
+    slug: string,
+    prompt: DeliverPrompt,
+    design: { sessionId: string | null; projectDirectory: string | null },
+    version: number | null,
+    busyMessage: string,
+  ): Promise<Delivery> => {
+    const delivery = await deliverOnce(slug, prompt, design, version, busyMessage);
+    if (prompt.handEdits) {
+      try {
+        await client.call('POST /designs/:slug/hand-edits/clear', { params: { slug }, body: { upTo: prompt.handEdits.upTo } });
+      } catch (error) {
+        console.warn('Design Chamber: the hand-edit ledger could not be cleared after the message was delivered', error);
+      }
+    }
+    return delivery;
   };
 
   const flows: Flows = {

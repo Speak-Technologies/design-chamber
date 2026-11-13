@@ -82,6 +82,13 @@ const openPage = async (session: CdpSession, serving: { current: Serving | null 
   await page.send('Log.enable');
   await page.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
   await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
+  // The storage stand-in (Phase 2 technical design §8.5): every artboard runs with empty, unsaved
+  // localStorage/sessionStorage, in place before any design script so a design that legitimately
+  // uses storage renders instead of failing with a console error. Registered once per page: it runs
+  // on every new document, so each artboard starts empty and nothing carries over. The build always
+  // embeds it; an unbundled run without it keeps the browser's own (throwing) storage.
+  const storageShim = typeof __DC_STORAGE_SHIM__ === 'string' ? __DC_STORAGE_SHIM__ : '';
+  if (storageShim !== '') await page.send('Page.addScriptToEvaluateOnNewDocument', { source: storageShim });
   session.on('Fetch.requestPaused', (event) => {
     if (event.sessionId !== sessionId) return;
     const requestId = String(event.params.requestId);

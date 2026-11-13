@@ -10,7 +10,8 @@ import path from 'node:path';
 import { DESIGN_JSON_FILE, ENTRY_FILE, normalizeKind, parseDesignJsonText } from '../../shared/design-json.ts';
 import { CHECK_DETAIL_MAX, CHECK_FINDINGS_MAX, CHECK_TOKEN_LITERALS_MIN, SCREEN_ID_PATTERN } from '../../shared/limits.ts';
 import { cleanDetail, normalizeExternalUrl } from '../../shared/checks.ts';
-import type { CheckCode, CheckFindingData, DesignJson, DesignKind } from '../../shared/types.ts';
+import { readTweakValues } from '../../shared/tokens-css.ts';
+import type { CheckCode, CheckFindingData, DesignJson, DesignKind, Tweak } from '../../shared/types.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource, type BundleInput } from '../bundle.ts';
 import { capPerCode } from './analyze.ts';
 
@@ -88,6 +89,29 @@ export const tokenFindings = (input: { tokensCss: string; html: string }): Token
     for (const match of bare.matchAll(COLOR_LITERAL)) literals.push(match[0]);
   }
   return { redefined: [...redefined], literals, tokensHaveColors };
+};
+
+// ---- broken knobs (Phase 2 technical design §4.7) ----
+
+/**
+ * Knobs tokens.css cannot serve, read with the same reader the Tweaks panel uses: one finding
+ * per knob whose variable is missing from the top-level `:root`, whose value is a formula, or
+ * whose unit differs; one design-level finding when tweaks are declared but there is no
+ * tokens.css. A choice value outside the options is still tunable, so it is not broken.
+ */
+export const tweakFindings = (input: { tweaks: readonly Tweak[]; tokensCss: string | null }): CheckFindingData[] => {
+  const { tweaks, tokensCss } = input;
+  if (tweaks.length === 0) return [];
+  const where = { file: DESIGN_JSON_FILE, screen: null, viewport: null };
+  if (tokensCss === null) return [{ code: 'tweak-broken', ...where, params: { tweak: 'no-tokens' } }];
+  const out: CheckFindingData[] = [];
+  for (const state of readTweakValues(tokensCss, tweaks)) {
+    // `ok` and `value` are tunable; `no-file` cannot happen here (tokensCss is not null).
+    if (state.state === 'missing' || state.state === 'formula' || state.state === 'unit') {
+      out.push({ code: 'tweak-broken', ...where, params: { tweak: state.state, field: state.var } });
+    }
+  }
+  return out;
 };
 
 // ---- screen set ----
@@ -210,6 +234,7 @@ export const runStaticChecks = async (designDir: string, budgetMs: number, clock
 
   const tokensFile = await source.read('tokens.css').catch(() => null);
   const tokensCss = tokensFile === null ? null : tokensFile.bytes.subarray(0, TOKENS_BYTES).toString('utf8');
+  findings.push(...tweakFindings({ tweaks: design.tweaks, tokensCss }));
 
   const keys: StaticRun['keys'] = { design: sha256(designFile?.bytes ?? ''), entries: {} };
   let partial = false;

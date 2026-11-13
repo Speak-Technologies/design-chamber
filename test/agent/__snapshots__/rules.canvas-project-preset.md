@@ -99,6 +99,7 @@ Schema `design-chamber/design@1`. The extension and you both write this file, so
     { "id": "home", "title": "Home", "file": "screens/home.html", "viewports": ["laptop", "phone"], "description": "Landing page" }
   ],
   "designSystem": { "confirmed": false },
+  "tweaks": [ { "var": "--accent-h", "label": "Accent hue", "kind": "number", "min": 0, "max": 360, "step": 1, "unit": "" } ],
   "comments": []
 }
 ```
@@ -114,13 +115,15 @@ Schema `design-chamber/design@1`. The extension and you both write this file, so
 | `sessionId`, `projectDirectory`, `preset` | extension | Links to the chat, the project and the preset. Never change. |
 | `entry` | extension | Page only: always `"index.html"`. |
 | `viewports` | you | 1–8 items `{ id, label, width, height }`; `id` letters, digits, `-`, `_`. |
-| `screens` | you | Canvas only, 0–40, in the order they appear on the wall: `{ id, title, file, viewports?, description? }`. `id` is lower-case letters, digits and `-`; `file` is exactly `screens/<id>.html`; `viewports` is an optional subset of the viewport ids (default: all); `description` ≤ 500 characters. |
+| `screens` | you | Canvas only, 0–40, in the order they appear on the wall: `{ id, title, file, viewports?, description? }`. `id` is lower-case letters, digits and `-`; `file` is exactly `screens/<id>.html`; `viewports` is an optional subset of the viewport ids (default: all); `description` ≤ 500 characters. A direction of another screen carries `"direction": { "of": "home", "letter": "A", "name": "Bold" }` (2 to 4 directions per screen, letters A to D, name up to 40 characters; never on the original). Design Chamber also writes this list when the user reorders, duplicates, trashes or keeps a screen, so read design.json again right before you write it. |
 | `designSystem` | you | `{ "confirmed": false }`; set `true` once the user confirms DESIGN.md and tokens.css. |
+| `tweaks` | you | Optional, up to 12 knobs for the Tweaks panel. A number knob: `{ "var", "label", "kind": "number", "min", "max", "step", "unit" }`; a choice knob: `{ "var", "label", "kind": "choice", "options": [{ "label", "value" }] }` with 2 to 6 options. `var` must be set with a plain value in the `:root` block of tokens.css, in the knob's unit. When the user saves, Design Chamber writes only those values into tokens.css. |
 | `comments` | extension | The user's pinned comments. Never edit. |
 
 - Keep every key you do not own, including keys you do not recognise, exactly as it is. The extension puts its keys back if you change them.
 - Write design.json before any HTML file, so the extension takes your title, kind and viewports from the start.
 - Write the whole file as valid JSON in one write. A half-written file shows as an error until you fix it.
+- The user's hand edits (text, tweaks, the screen list) land in your files directly. Re-read a file before you change it.
 - Update `screens` / `viewports` / `updated` in the same turn you write the files they describe. A listed screen whose file is missing shows as "not written yet".
 
 ## Design rules
@@ -146,7 +149,7 @@ Design Chamber shows your files offline, inside a sandboxed frame. So:
 - Everything works with no network: no CDN scripts, Google Fonts or other web fonts, remote images or analytics. Bundle fonts and images in `assets/` (fonts in `assets/fonts/` with `@font-face`, and end every font stack with a generic family).
 - Remote files are blocked and listed back to you when the user sends comments.
 - Reference local files statically with relative paths: `assets/hero.jpg` and `tokens.css` from index.html; `../assets/hero.jpg` and `../tokens.css` from `screens/*.html`. URLs built at runtime (`new Image().src = "assets/x.png"`), `fetch()` / XHR of local files and ES-module imports across files do not load.
-- Small inline `<script>` interactions work (clicks, tabs, toggles). There is no `top.location`, `window.open`, cookie/localStorage assumption or network call.
+- Small inline `<script>` interactions work (clicks, tabs, toggles). `localStorage` works and is kept per design (up to 1 MB), so saved ticks and filters survive a reload; `sessionStorage` lasts until the screen reloads. There is no `top.location`, `window.open`, cookie, IndexedDB or network call.
 - Link between screens with `<a href="other-screen.html">` (a sibling file in `screens/`) or `data-dc-goto="<screenId>"`. Links to `#anchors` work; an external https link asks the user before it opens.
 - Give meaningful elements stable hooks (`id`, `data-screen`, semantic class names): comments are pinned to elements by selector and travel with it.
 - One responsive file per screen: the wall renders it at every viewport in design.json.

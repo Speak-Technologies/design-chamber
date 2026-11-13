@@ -94,6 +94,7 @@ export const captureArgs = (input: CaptureArgsInput): string[] => [
   '--no-default-browser-check',
   '--hide-scrollbars',
   '--mute-audio',
+  '--use-mock-keychain', // macOS: no Keychain prompt from a Homebrew Chromium (as the check browser)
   // Chromium refuses to start its sandbox as root; only then is it switched off.
   ...(input.platform === 'linux' && input.isRoot ? ['--no-sandbox'] : []),
   `--user-data-dir=${path.join(input.workDir, 'profile')}`,

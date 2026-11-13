@@ -24,7 +24,7 @@ export type CameraHooks = {
   queueSync: () => void;
 };
 
-/** Screen px of the wall that something covers: a drawer on the right today, an ask bar below in Phase 1. */
+/** Screen px of the wall that something covers: a drawer on the right, the rail's Tweaks sheet below. */
 export type CoveredInsets = { right: number; bottom: number };
 
 export type CameraController = {
@@ -51,6 +51,8 @@ export type CameraController = {
   dispose: () => void;
 };
 
+/** Screen px over the first row's frame that its label needs (22 px tall, 4 px above the frame). */
+const TOP_LABEL_ROOM = 28;
 const SETTLE_MS = 400;
 const PAGE_RELAYOUT_MS = 100;
 
@@ -61,7 +63,7 @@ export const createCameraController = (ctx: WallContext, hooks: Late<CameraHooks
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
   const pageGutter = options.compact ? PAGE_GUTTER_COMPACT : PAGE_GUTTER;
 
-  const coveredInsets = (): CoveredInsets => ({ right: options.coveredRight?.() ?? 0, bottom: 0 });
+  const coveredInsets = (): CoveredInsets => ({ right: options.coveredRight?.() ?? 0, bottom: options.coveredBottom?.() ?? 0 });
 
   const pageGeometry = (): ReturnType<typeof pageCamera> => {
     const insets = coveredInsets();
@@ -103,7 +105,12 @@ export const createCameraController = (ctx: WallContext, hooks: Late<CameraHooks
     const insets = coveredInsets();
     const area = fitArea({ width: ctx.surfaceSize.w, height: ctx.surfaceSize.h - insets.bottom }, insets.right);
     const padding = options.compact ? 16 : area.padding;
-    return bounds.w > 0 && bounds.h > 0 ? fitBox({ x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h }, area, { padding }) : { ...DEFAULT_CAMERA };
+    if (!(bounds.w > 0 && bounds.h > 0)) return { ...DEFAULT_CAMERA };
+    // The first row's label is 22 px tall and sits above its frame at any zoom, so it needs about 26 px over the frame; the
+    // rail's 16 px padding would clip the screen's ⋯ button. Make room at the top only (the width is what the rail is short of).
+    const labelRoom = Math.max(0, TOP_LABEL_ROOM - padding);
+    const fitted = fitBox({ x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h }, { width: area.width, height: area.height - labelRoom }, { padding });
+    return labelRoom === 0 ? fitted : { ...fitted, y: fitted.y + labelRoom };
   };
 
   const layoutPage = (): void => {

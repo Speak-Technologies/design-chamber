@@ -3,9 +3,9 @@
 //   .versions/index.json          { version:1, next, versions:[VersionEntry…] }  newest last
 //   .versions/objects/<aa>/<sha>  raw file bytes, content-addressed
 //
-// Tracked set: every file under the design folder except `.versions/**`, `.chamber/**` and
-// `.thumb.png`; `design.json` is stored with `comments` removed (comments live in state.json,
-// which versions never touch). Snapshots: auto after a quiet period, on an agent turn, manual,
+// Tracked set: every file under the design folder except `.versions/**`, `.chamber/**`,
+// `.thumb.png` and macOS litter (`.DS_Store`, `._*`); `design.json` is stored with `comments`
+// removed (comments live in state.json, which versions never touch). Snapshots: auto after a quiet period, on an agent turn, manual,
 // and around restore (restore-point → write files → restored). Dedupe by tree hash; keep the
 // newest VERSIONS_KEEP versions and GC unreferenced objects after pruning.
 //
@@ -30,6 +30,7 @@ import {
   SNAPSHOT_FILES_MAX,
   TURN_PROMOTE_AUTO_MS,
   TURN_SNAPSHOT_DEDUPE_MS,
+  USER_EDIT_COALESCE_MS,
   VERSION_ID_PATTERN,
   VERSION_LABEL_MAX,
   VERSIONS_KEEP,
@@ -46,7 +47,7 @@ import type {
 import { ApiError } from './http.ts';
 import type { ChangeHub, DesignStore, Logger, ServiceContext } from './context.ts';
 import { RefBlocked, type FileSource } from './bundle.ts';
-import { atomicTempPath, resolveInside } from './paths.ts';
+import { atomicTempPath, foldsCase, resolveInside } from './paths.ts';
 import {
   CHAMBER_DIR,
   DAMAGED_KEEP_MAX,
@@ -60,6 +61,7 @@ import {
   isTracked,
   parseDamagedFileName,
   parseIndexText,
+  relsToRemoveOnRestore,
   VERSIONS_DIR,
   type DamageKind,
   type IndexHealth,
@@ -115,29 +117,50 @@ const parseJsonObject = (text: string): JsonObject | null => {
   }
 };
 
+/**
+ * The bytes a version stores for a tracked file: design.json without its comments, re-serialised
+ * (verbatim when it does not parse: an agent mid-write); every other file as it is.
+ */
+const storedBytesOf = (rel: string, raw: Buffer): Buffer => {
+  if (rel !== DESIGN_JSON_FILE) return raw;
+  const parsed = parseJsonObject(raw.toString('utf8'));
+  return parsed === null ? raw : Buffer.from(serializeJson(stripForVersion(parsed)), 'utf8');
+};
+
+const asBuffer = (bytes: Uint8Array): Buffer => (Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+
+/**
+ * The hash a version records for a tracked file with these bytes: the sha256 of `storedBytesOf`,
+ * which `computeTree` hashes too, so a hand edit's `afterTree` (§2.4) is built with exactly the
+ * formula a later tree read uses.
+ */
+export const trackedHashOf = (rel: string, bytes: Uint8Array): string => sha256(storedBytesOf(rel, asBuffer(bytes)));
+
+/** The tree hash of a tracked rel → hash map: `rel\0hash\n` lines in `listTracked`'s sorted order. */
+export const treeHashOf = (files: Readonly<Record<string, string>>): string =>
+  sha256(
+    Object.keys(files)
+      .sort()
+      .map((rel) => `${rel}\u0000${files[rel] ?? ''}\n`)
+      .join(''),
+  );
+
 /** Hash (and prepare the stored bytes of) every tracked file. */
 export const computeTree = async (designDir: string): Promise<VersionTree> => {
   const rels = await listTracked(designDir);
   const files: Record<string, string> = {};
   const transformed = new Map<string, Buffer>();
   let bytes = 0;
-  const lines: string[] = [];
   for (const rel of rels) {
     const raw = await readFile(path.join(designDir, ...rel.split('/'))).catch(() => null);
     if (raw === null) continue; // vanished mid-walk: not part of the tree
-    let content = raw;
-    if (rel === DESIGN_JSON_FILE) {
-      const parsed = parseJsonObject(raw.toString('utf8'));
-      if (parsed !== null) content = Buffer.from(serializeJson(stripForVersion(parsed)), 'utf8');
-      // Unparseable design.json (agent mid-write): stored verbatim, never transformed.
-      transformed.set(rel, content);
-    }
-    const hash = sha256(content);
-    files[rel] = hash;
+    const content = storedBytesOf(rel, raw);
+    // design.json is always kept as its stored bytes, transformed or not (snapshots write them).
+    if (rel === DESIGN_JSON_FILE) transformed.set(rel, content);
+    files[rel] = sha256(content); // = trackedHashOf(rel, raw), without parsing design.json twice
     bytes += content.length;
-    lines.push(`${rel}\u0000${hash}\n`);
   }
-  return { files, transformed, bytes, treeHash: sha256(lines.join('')) };
+  return { files, transformed, bytes, treeHash: treeHashOf(files) };
 };
 
 // ---- index and objects ----
@@ -150,6 +173,44 @@ const RESTORE_WOULD_DROP_COMMENTS = "This version's design.json is damaged, so r
 
 const INDEX_NAME = 'index.json';
 const BACKUP_NAME = 'index.bak.json';
+
+/** Why a snapshot was refused before anything was written (Phase 2 §2.4). */
+export type SnapshotRefusal = 'too-large' | 'unsupported' | 'unreadable' | 'torn';
+
+/**
+ * A snapshot refusal, typed. Code and message are exactly what each refusal has always answered
+ * (restore wording included), so the restore route and its tests are unchanged; only `userEdit`
+ * reads `refusal`, to answer a hand edit with its own sentence (§2.8).
+ */
+export class SnapshotRefusedError extends ApiError {
+  readonly refusal: SnapshotRefusal;
+
+  constructor(code: ApiError['code'], message: string, refusal: SnapshotRefusal) {
+    super(code, message);
+    this.refusal = refusal;
+  }
+}
+
+/** The prefix of every "version first" refusal a hand edit answers (§2.8). */
+const VERSION_FIRST_FAILED = "Couldn't save a version first, so nothing was changed.";
+
+/** The hand edit's answer for a refused "Before your edits" version; `torn` is the op's own stale sentence. */
+const userEditRefusal = (error: SnapshotRefusedError, staleMessage: string): ApiError => {
+  switch (error.refusal) {
+    case 'too-large':
+      return new ApiError(
+        'invalid',
+        `${VERSION_FIRST_FAILED} This design is too large to keep a version (more than ${SNAPSHOT_FILES_MAX.toLocaleString('en-US')} files or ${Math.round(SNAPSHOT_BYTES_MAX / (1024 * 1024))} MB).`,
+      );
+    case 'unsupported':
+      return new ApiError('invalid', `${VERSION_FIRST_FAILED} This design's versions were saved by a newer Design Chamber.`);
+    case 'unreadable':
+      return new ApiError('invalid', `${VERSION_FIRST_FAILED} Design Chamber could not read this design's version history right now.`);
+    case 'torn':
+      // The agent is writing: the same refusal as a stale file, with the same way back.
+      return new ApiError('stale', staleMessage);
+  }
+};
 
 const errorCode = (error: unknown): string | undefined => (error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined);
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -424,6 +485,28 @@ export const createVersionFileSource = (designDir: string, files: Record<string,
 
 export type SnapshotOptions = { sessionId?: string | null; label?: string };
 
+/** The version reasons a hand edit takes (Phase 2 §2.1). */
+export type UserEditReason = Extract<VersionReason, 'user-edit' | 'keep-direction'>;
+
+/** A design-relative file a hand edit left: its new bytes, or `null` when it removed or moved it away. */
+export type WrittenFile = readonly [rel: string, bytes: Uint8Array | null];
+
+export type UserEditSteps<P, R> = {
+  /** The op's stale sentence, answered when the version cannot be saved because the design keeps changing (§2.8 `torn`). */
+  staleMessage: string;
+  /** Reads, stale checks and plans; writes nothing. A throw here takes no version. */
+  precheck: () => Promise<P>;
+  /** Runs after the version; `preTree` is the tree the edit started from. Reports every file it left. */
+  apply: (plan: P, preTree: VersionTree) => Promise<{ response: R; written: readonly WrittenFile[] }>;
+};
+
+export type UserEditResult<R> = {
+  /** The "Before your edits" version (or the newest one, when it already held these files); `null` when coalesced. */
+  version: VersionEntry | null;
+  coalesced: boolean;
+  response: R;
+};
+
 export type VersionsService = {
   /** Brand so `ensureVersionsService` recognises an already-wired instance. */
   __dcVersionsService?: true;
@@ -437,6 +520,11 @@ export type VersionsService = {
   restore(slug: string, vid: string): Promise<{ restorePoint: VersionSummary | null; restored: VersionSummary; before: VersionSummary }>;
   /** The snapshot's entry and a FileSource over its objects (the render service reads versions through it). */
   readTree(slug: string, vid: string): Promise<{ entry: VersionEntry; source: FileSource }>;
+  /**
+   * One hand edit on the slug's chain (Phase 2 §2.4): `precheck`, then a version first (skipped
+   * when coalesced, AD-4), then `apply`. A refused version answers its §2.8 sentence and writes nothing.
+   */
+  userEdit<P, R>(slug: string, reason: UserEditReason, steps: UserEditSteps<P, R>): Promise<UserEditResult<R>>;
   /** True when an auto-snapshot timer is pending (tests). */
   autoPending(slug: string): boolean;
 };
@@ -472,8 +560,22 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
   /** The index for a read that cannot continue on a newer build's index (diff, readTree, restore). */
   const readableIndex = async (designDir: string): Promise<LoadedIndex> => {
     const loaded = await loadIndex(designDir, log);
-    if (loaded.health === 'unsupported') throw new ApiError('invalid', UNSUPPORTED);
+    if (loaded.health === 'unsupported') throw new SnapshotRefusedError('invalid', UNSUPPORTED, 'unsupported');
     return loaded;
+  };
+
+  /**
+   * The index and the contained `.versions` folder for a snapshot, before any object is written:
+   * a read error or a `.versions` link out of the design is the `unreadable` refusal (same code
+   * and message as before). A raw filesystem error is not a refusal and propagates.
+   */
+  const snapshotIndex = async (designDir: string): Promise<{ loaded: LoadedIndex; versionsDir: string }> => {
+    try {
+      return { loaded: await readableIndex(designDir), versionsDir: await versionsDirOf(designDir) };
+    } catch (error) {
+      if (error instanceof ApiError && !(error instanceof SnapshotRefusedError)) throw new SnapshotRefusedError(error.code, error.message, 'unreadable');
+      throw error;
+    }
   };
 
   // Per-slug mutation chain.
@@ -525,8 +627,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
     const designDir = await store.dir(slug);
     // Before any object is written: a newer build's index, a read error or a link out of the
     // design refuses the snapshot while nothing has changed on disk.
-    const loaded = await readableIndex(designDir);
-    const versionsDir = await versionsDirOf(designDir);
+    const { loaded, versionsDir } = await snapshotIndex(designDir);
     // Two attempts: a file rewritten between hashing and storing its object would corrupt the
     // snapshot, so every object is hash-verified and the whole snapshot redone on a mismatch.
     let tree: VersionTree | null = null;
@@ -536,9 +637,10 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
       if (fileCount > SNAPSHOT_FILES_MAX || tree.bytes > SNAPSHOT_BYTES_MAX) {
         log.warn('versions.snapshot-skipped', { slug, reason, fileCount, bytes: tree.bytes });
         if (options.required === true) {
-          throw new ApiError(
+          throw new SnapshotRefusedError(
             'invalid',
             `This design is too large to keep a restore point (more than ${SNAPSHOT_FILES_MAX.toLocaleString('en-US')} files or ${Math.round(SNAPSHOT_BYTES_MAX / (1024 * 1024))} MB), so restoring now would lose your current files. Nothing was changed. Remove files you no longer need, or copy the design folder somewhere safe, then try again.`,
+            'too-large',
           );
         }
         return null;
@@ -556,7 +658,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
       treeCache.delete(slug);
       tree = null;
     }
-    if (tree === null) throw new ApiError('conflict', 'The design changed while Design Chamber was saving it. Try again.');
+    if (tree === null) throw new SnapshotRefusedError('conflict', 'The design changed while Design Chamber was saving it. Try again.', 'torn');
 
     const index = loaded.index;
     const latest = index.versions[index.versions.length - 1];
@@ -662,8 +764,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
       await writeAtomic(destination, bytes);
     }
     // Delete tracked files the version does not have (restore removes what was added since).
-    for (const rel of Object.keys(current.files)) {
-      if (target.files[rel] !== undefined) continue;
+    for (const rel of relsToRemoveOnRestore(Object.keys(current.files), Object.keys(target.files), foldsCase())) {
       await rm(await resolveInside(designDir, rel.split('/')), { force: true });
     }
     treeCache.delete(slug);
@@ -681,6 +782,55 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
     const before = restorePoint ?? latest;
     if (!before) throw new ApiError('internal', 'The version was restored, but Design Chamber could not find the state it replaced.');
     return { restorePoint: restorePoint ? toSummary(restorePoint) : null, restored: toSummary(restored), before: toSummary(before) };
+  };
+
+  // Hand-edit coalescing (Phase 2 §2.4, AD-4), memory only: the tree the slug's last hand edit
+  // left and when. A restart forgets it, so the next edit takes a version (the safe side).
+  const coalesce = new Map<string, { afterTree: string; at: number }>();
+
+  const userEditNow = async <P, R>(slug: string, reason: UserEditReason, steps: UserEditSteps<P, R>): Promise<UserEditResult<R>> => {
+    const plan = await steps.precheck();
+    const designDir = await store.dir(slug);
+    const tree = await treeOf(slug, designDir);
+    const last = coalesce.get(slug);
+    let version: VersionEntry | null = null;
+    let coalesced = false;
+    if (reason === 'user-edit' && last !== undefined && env.now() - last.at <= USER_EDIT_COALESCE_MS && last.afterTree === tree.treeHash) {
+      coalesced = true;
+    } else {
+      try {
+        version = (await snapshotNow(slug, reason, { required: true })) ?? (await loadIndex(designDir, log)).index.versions.at(-1) ?? null;
+      } catch (error) {
+        if (error instanceof SnapshotRefusedError) throw userEditRefusal(error, steps.staleMessage);
+        throw error;
+      }
+    }
+    let applied: Awaited<ReturnType<UserEditSteps<P, R>['apply']>>;
+    try {
+      applied = await steps.apply(plan, tree);
+    } catch (error) {
+      // The version taken stays (it holds the files as they were). What the failed apply left is
+      // unknown, so the next hand edit must not coalesce with it.
+      treeCache.delete(slug);
+      coalesce.delete(slug);
+      throw error;
+    }
+    treeCache.delete(slug);
+    if (reason === 'user-edit') {
+      // Never re-read from disk: the pre-apply tree with only this edit's writes swapped in, so a
+      // write by anyone else after `treeOf` (the agent, to any file) makes the next edit's tree
+      // differ, and that edit takes its own version holding it.
+      const files: Record<string, string> = { ...tree.files };
+      for (const [rel, bytes] of applied.written) {
+        if (!isTracked(rel)) continue;
+        if (bytes === null) delete files[rel];
+        else files[rel] = trackedHashOf(rel, bytes);
+      }
+      coalesce.set(slug, { afterTree: treeHashOf(files), at: env.now() });
+    } else {
+      coalesce.delete(slug); // keep-direction: the next hand edit takes its own version
+    }
+    return { version, coalesced, response: applied.response };
   };
 
   // Turn-snapshot dedupe across frames (§10.6): one run per session per TURN_SNAPSHOT_DEDUPE_MS.
@@ -711,6 +861,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
     if (event.kind === 'root') {
       for (const slug of [...autoTimers.keys()]) cancelAuto(slug);
       treeCache.clear();
+      coalesce.clear();
       return;
     }
     if (event.slug === null) return;
@@ -718,6 +869,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
     else if (event.kind === 'removed') {
       cancelAuto(event.slug);
       treeCache.delete(event.slug);
+      coalesce.delete(event.slug);
     }
   });
   deps.onDispose(() => {
@@ -799,6 +951,8 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
       const entry = findEntry(index, vid);
       return { entry, source: createVersionFileSource(designDir, entry.files) };
     },
+
+    userEdit: (slug, reason, steps) => chained(slug, () => userEditNow(slug, reason, steps)),
 
     autoPending: (slug) => autoTimers.has(slug),
   };

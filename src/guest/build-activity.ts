@@ -110,6 +110,9 @@ export { agentFiles };
  * What one feed batch says about the agent writing this design. A `files` event with no list is
  * what a user's restore emits: `restored` is true and the batch's file lists are dropped (they
  * are the restore's own writes). An `added` event counts as "started writing" with no file name.
+ * Events the edit pipeline emits for the user's own hand edits (`origin: "user"`) are never the
+ * agent: no "Writing …", no count in "Done. Updated N files" (Phase 2 E10). The store still
+ * reloads the affected artboards from them.
  */
 export const batchAgentFiles = (events: readonly ChangeEvent[], slug: string): { files: string[]; created: boolean; restored: boolean } => {
   const files: string[] = [];
@@ -117,6 +120,7 @@ export const batchAgentFiles = (events: readonly ChangeEvent[], slug: string): {
   let restored = false;
   for (const event of events) {
     if (event.slug !== slug) continue;
+    if (event.origin === 'user') continue;
     if (event.kind === 'added') created = true;
     else if (event.kind === 'files') {
       if (event.files) files.push(...event.files);

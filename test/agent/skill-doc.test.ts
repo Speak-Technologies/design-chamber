@@ -61,6 +61,13 @@ describe('buildBundledSkill (§U2.4)', () => {
     assert.ok(!skill.includes('.chamber/bin/dc'));
   });
 
+  test('the workflow names tweaks among the owned keys and the two kinds of directions (Phase 2)', async () => {
+    const skill = buildBundledSkill(await realInput());
+    assert.ok(skill.includes('In an existing design.json change only title, updated, viewports, screens, designSystem and tweaks, and keep every other key as it is.'));
+    assert.ok(skill.includes('To let the user pick between directions you made as separate design folders, ask with DirectionPick.'));
+    assert.ok(skill.includes('Directions of one canvas screen are screens you mark in design.json instead; the user keeps one on the wall.'));
+  });
+
   test('no absolute path, no path from this machine', async () => {
     const skill = buildBundledSkill(await realInput());
     assert.doesNotMatch(skill, /\/home\/|\/Users\/|[A-Za-z]:\\|\\\\[A-Za-z]/);

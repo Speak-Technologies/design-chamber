@@ -3,8 +3,10 @@
 //
 // It runs inside the untrusted design frame, in the same realm as the design's own scripts:
 // it holds no secret and can do nothing the design could not do itself. It only answers the
-// page's questions (hit-test, anchors), reports sizes and scroll, scrolls on request, and turns
-// link clicks into navigate / open-external requests. It posts to `window.parent` only, and
+// page's questions (hit-test, anchors, edit probe), reports sizes and scroll, scrolls on
+// request, and turns link clicks into navigate / open-external requests. Phase 2: before
+// anything else it installs the storage stand-in (`storage-shim.ts`), and it applies the tweak
+// preview as inline custom properties on `<html>`. It posts to `window.parent` only, and
 // accepts only messages from `window.parent` that pass `parsePageMessage` with its own
 // artboard id and nonce.
 
@@ -19,12 +21,16 @@ import {
   type FrameToPageMessage,
   type HitElement,
   type PageToFrameMessage,
+  type TokenVar,
 } from '../../shared/bridge-protocol.ts';
-import { BRIDGE_ARTBOARD_ID_MAX, BRIDGE_NONCE_MAX, BRIDGE_SIZE_THROTTLE_MS, BRIDGE_TITLE_MAX } from '../../shared/limits.ts';
+import { BRIDGE_SIZE_THROTTLE_MS, BRIDGE_TITLE_MAX } from '../../shared/limits.ts';
 import type { Rect } from '../../shared/types.ts';
 import { elementText, openingTag, resolveAnchor } from './anchor.ts';
+import { editProbeOf } from './edit-probe.ts';
+import { readInit } from './init.ts';
 import { classifyGoto, classifyLink, type LinkAction } from './links.ts';
 import { buildSelector, tagNameOf } from './selector.ts';
+import { installStorage } from './storage-shim.ts';
 
 type FrameMessageBody = FrameToPageMessage extends infer M ? (M extends unknown ? Omit<M, 'dc' | 'artboardId' | 'nonce'> : never) : never;
 
@@ -32,27 +38,6 @@ type FrameMessageBody = FrameToPageMessage extends infer M ? (M extends unknown 
 const LINE_PX = 16;
 const READY_RESENDS = 5;
 const READY_RESEND_MS = 300;
-
-const readInit = (value: unknown): BridgeInit | null => {
-  if (typeof value !== 'object' || value === null) return null;
-  const init = value as Partial<BridgeInit>;
-  const scroll = init.scroll;
-  const ok =
-    typeof init.artboardId === 'string' &&
-    init.artboardId.length > 0 &&
-    init.artboardId.length <= BRIDGE_ARTBOARD_ID_MAX &&
-    typeof init.nonce === 'string' &&
-    init.nonce.length > 0 &&
-    init.nonce.length <= BRIDGE_NONCE_MAX &&
-    typeof init.file === 'string' &&
-    (init.mode === 'edit' || init.mode === 'play') &&
-    typeof scroll === 'object' &&
-    scroll !== null &&
-    Number.isFinite(scroll.x) &&
-    Number.isFinite(scroll.y);
-  // Safe: every field was checked just above.
-  return ok ? (init as BridgeInit) : null;
-};
 
 const isEditable = (target: EventTarget | null): boolean => {
   if (!(target instanceof Element)) return false;
@@ -64,11 +49,28 @@ const start = (init: BridgeInit): void => {
   let mode: BridgeMode = init.mode;
   let acknowledged = false;
   const parentWindow = window.parent;
-  if (parentWindow === window) return;
+  const framed = parentWindow !== window;
 
   const post = (body: FrameMessageBody): void => {
     parentWindow.postMessage({ ...body, dc: BRIDGE_PROTOCOL_VERSION, artboardId: init.artboardId, nonce: init.nonce }, '*');
   };
+
+  // ---- Storage stand-in: first, so it is in place before any design script runs ----
+  const storage = installStorage(window, framed ? init.storage : undefined, (batch) => post({ type: 'storage-batch', ...batch }));
+
+  // ---- Tweak preview: inline custom properties on <html>, which beat every normal :root rule ----
+  let previewed: readonly string[] = [];
+  const setTokens = (vars: readonly TokenVar[]): void => {
+    const style = document.documentElement.style;
+    const names = new Set(vars.map((entry) => entry.name));
+    for (const name of previewed) if (!names.has(name)) style.removeProperty(name);
+    for (const entry of vars) style.setProperty(entry.name, entry.value);
+    previewed = [...names];
+  };
+  // The bridge runs first in <head>, so the preview is there before the first paint.
+  if (init.tokens) setTokens(init.tokens);
+
+  if (!framed) return;
 
   const docSize = (): { docWidth: number; docHeight: number } => {
     const root = document.documentElement;
@@ -83,6 +85,12 @@ const start = (init: BridgeInit): void => {
   const docRect = (element: Element): Rect => {
     const box = element.getBoundingClientRect();
     return { x: box.left + window.scrollX, y: box.top + window.scrollY, w: Math.max(0, box.width), h: Math.max(0, box.height) };
+  };
+
+  /** Hit-test and edit-probe targets: not the document itself, not our overlay. */
+  const usableAt = (x: number, y: number): Element | null => {
+    const element = document.elementFromPoint(x, y);
+    return element && element !== document.documentElement && element !== document.body && !element.hasAttribute('data-dc-overlay') ? element : null;
   };
 
   const describe = (element: Element): HitElement => ({
@@ -133,11 +141,23 @@ const start = (init: BridgeInit): void => {
         mode = message.mode;
         return;
       case 'hit-test': {
-        const element = document.elementFromPoint(message.x, message.y);
-        const usable = element && element !== document.documentElement && element !== document.body && !element.hasAttribute('data-dc-overlay');
-        post({ type: 'hit', x: message.x, y: message.y, element: usable ? describe(element) : null });
+        const element = usableAt(message.x, message.y);
+        post({ type: 'hit', x: message.x, y: message.y, element: element ? describe(element) : null });
         return;
       }
+      case 'edit-probe': {
+        const element = usableAt(message.x, message.y);
+        const counts = element ? editProbeOf(element, document) : null;
+        const probe = element && counts ? { ...counts, dir: getComputedStyle(element).direction === 'rtl' ? ('rtl' as const) : ('ltr' as const), rect: docRect(element) } : null;
+        post({ type: 'edit-probe-result', x: message.x, y: message.y, probe });
+        return;
+      }
+      case 'set-tokens':
+        setTokens(message.vars);
+        return;
+      case 'storage-sync':
+        storage.sync(message.clear, message.changes);
+        return;
       case 'resolve-anchors': {
         const results: AnchorResult[] = message.anchors.map((anchor) => {
           const match = resolveAnchor(document, anchor);
@@ -293,4 +313,6 @@ const start = (init: BridgeInit): void => {
 };
 
 const init = readInit((window as Window & { __DC?: unknown }).__DC);
+// Without a valid init the design still gets working (empty, unsaved) storage instead of throws.
 if (init) start(init);
+else installStorage(window, undefined, () => undefined);

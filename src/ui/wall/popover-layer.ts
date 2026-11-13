@@ -12,13 +12,15 @@ import { frameToScreen, pinFramePoint, type Point } from '../model/wall-model.ts
 import { createComposer, createThread, type CardHandle } from './comment-ui.ts';
 import type { CameraController } from './camera-controller.ts';
 import type { WallContext } from './wall-context.ts';
-import type { Board, Popover, Rect, WallSelectionEvent } from './wall-types.ts';
+import type { Board, Popover, Rect, WallSelection, WallSelectionEvent } from './wall-types.ts';
 
 export type PopoverLayer = {
   /** Open the thread of a comment next to its pin (closes any open card first). */
   openThread: (board: Board, commentId: string) => void;
-  /** Open the composer for a clicked element. */
-  openComposer: (board: Board, element: HitElement, framePoint: Point) => void;
+  /** Open the composer for a clicked element; returns the selection it announced. */
+  openComposer: (board: Board, element: HitElement, framePoint: Point) => WallSelection;
+  /** What a click on this element selects (key, where it is, the anchor the comment would carry), without opening anything. */
+  selectionFor: (board: Board, element: HitElement, framePoint: Point) => WallSelection;
   close: () => void;
   /** The open card, if any. */
   current: () => Popover | null;
@@ -132,9 +134,18 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     card.focus();
   };
 
-  const openComposer = (board: Board, element: HitElement, framePoint: Point): void => {
-    close();
+  const selectionFor = (board: Board, element: HitElement, framePoint: Point): WallSelection => {
     const anchor = anchorFromHit(element, framePoint, board.scroll);
+    const target = { screen: board.art.screen?.id ?? null, viewport: board.art.viewport.id };
+    // The same place name the thread card shows, so the ask bar's chip reads like the composer.
+    const where = ctx.pageMode ? viewportOf(ctx.detail.design.viewports, target.viewport) : `${board.art.screen?.title ?? 'Page'} · ${board.art.viewport.label}`;
+    return { key: `${board.art.id}:${anchor.selector}`, element: { ...target, anchor }, tag: element.tag, where };
+  };
+
+  const openComposer = (board: Board, element: HitElement, framePoint: Point): WallSelection => {
+    close();
+    const selection = selectionFor(board, element, framePoint);
+    const { anchor, ...target } = selection.element;
     const { point } = anchor;
     rectToBox(board, board.selected, element.rect);
     board.selected.hidden = false;
@@ -144,25 +155,22 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     temp.style.left = `${pinAt.x}px`;
     temp.style.top = `${pinAt.y}px`;
     board.overlay.append(temp);
-    const key = `${board.art.id}:${anchor.selector}`;
-    const target = { screen: board.art.screen?.id ?? null, viewport: board.art.viewport.id };
-    // The same place name the thread card shows, so the ask bar's chip reads like the composer.
-    const where = ctx.pageMode ? viewportOf(ctx.detail.design.viewports, target.viewport) : `${board.art.screen?.title ?? 'Page'} · ${board.art.viewport.label}`;
     const card = createComposer({
       tag: element.tag,
       snippet: element.text.length > 80 ? `${element.text.slice(0, 77)}…` : element.text,
       onCancel: () => close(),
       onSubmit: async (body) => {
         await options.createComment({ ...target, anchor, body });
-        deps.emitSelection({ type: 'commented', key });
+        deps.emitSelection({ type: 'commented', key: selection.key });
         close();
       },
     });
     open(board, card, null);
-    deps.emitSelection({ type: 'selected', selection: { key, element: { ...target, anchor }, tag: element.tag, where } });
+    deps.emitSelection({ type: 'selected', selection });
     const base = frameToScreen(camera.get(), board.art.rect, { x: element.rect.x - board.scroll.x, y: element.rect.y - board.scroll.y });
     placeCard(card.el, base, element.rect.h * camera.get().scale);
     card.focus();
+    return selection;
   };
 
   const clearSelection = (): void => {
@@ -177,5 +185,5 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     if (comment) popover.card.setStatus?.(comment.status);
   };
 
-  return { openThread, openComposer, close, current: () => popover, placeCard, clearSelection, refresh };
+  return { openThread, openComposer, selectionFor, close, current: () => popover, placeCard, clearSelection, refresh };
 };

@@ -24,6 +24,7 @@ import type {
   DesignSummary,
   DesignWarning,
   JsonObject,
+  JsonValue,
   Outbox,
   ServiceState,
   SettingsFile,
@@ -81,6 +82,9 @@ export type DesignRecord = {
   pending: boolean;
   files: DesignFiles;
   warnings: DesignWarning[];
+  /** sha256 of the raw `screens` value in design.json; null when design.json is missing or unparseable (Phase 2 §5.1). */
+  screensStamp: string | null;
+  designJson: 'ok' | 'missing' | 'invalid';
 };
 
 export type DesignFilter = { q?: string; kind?: DesignKind };
@@ -90,6 +94,12 @@ export type CreateDesignInput = Omit<CreateDesignBody, 'uploadId'>;
 
 /** `linked`: done · `has-chat`: it already had a chat (never moved) · `other-design`: the chip was made for an earlier design with this slug. */
 export type LinkIfUnlinkedOutcome = 'linked' | 'has-chat' | 'other-design';
+
+/**
+ * A hook called with the exact bytes right before each rename attempt of a user write, so the
+ * self-write registry knows the echo before the watcher can see the file (Phase 2 §5.1).
+ */
+export type WriteHooks = { beforeRename?: (bytes: Uint8Array) => void };
 
 export type DesignStore = {
   /** Absolute folder of an existing design. Throws `bad-slug` (pattern or containment) or `not-found`. */
@@ -111,6 +121,15 @@ export type DesignStore = {
   updateComment(slug: string, id: string, patch: PatchCommentBody): Promise<Comment>;
   deleteComment(slug: string, id: string): Promise<void>;
   markSent(slug: string, ids: string[], version: number | null): Promise<Comment[]>;
+  /**
+   * The user's screen-list write (Phase 2 §5.1): under the per-slug lock, refuse a missing or
+   * unparseable design.json and a stamp mismatch, apply `mutate` to the raw `screens` value and
+   * merge it into design.json. Throws 409 `conflict` after the 5th lost attempt (never a false
+   * success); answers the new stamp and the bytes written.
+   */
+  writeScreens(slug: string, expectStamp: string, mutate: (raw: JsonValue | undefined) => JsonValue[], hooks?: WriteHooks): Promise<{ stamp: string; bytes: Uint8Array }>;
+  /** Move comments between screens under the store lock (Phase 2 §6.2); `bytes` is the design.json mirror written, or null when it was skipped. */
+  moveComments(slug: string, moves: { from: string; to: string; ids?: string[] }[], hooks?: WriteHooks): Promise<{ moved: { id: string; from: string; to: string }[]; bytes: Uint8Array | null }>;
   /** WP3 registers one hook that writes `.chamber/RULES.md`. A failing hook is logged, never undoes the create. */
   onCreate(hook: (record: DesignRecord) => Promise<void>): () => void;
 };
@@ -122,7 +141,7 @@ export type ChangeHub = {
   readonly epoch: string;
   /** Highest seq emitted so far (0 before any event). */
   seq(): number;
-  emit(event: { slug: string | null; kind: ChangeKind; files?: string[] }): ChangeEvent;
+  emit(event: { slug: string | null; kind: ChangeKind; files?: string[]; origin?: 'user' }): ChangeEvent;
   /** Events after `since`, or `reset` when `epoch` differs or `since` left the ring. Resolves early on the next event, at `waitMs` (≤ `CHANGES_WAIT_MAX_MS`), or when `signal` aborts. */
   waitFor(since: number, epoch: string, waitMs: number, signal?: AbortSignal): Promise<ChangesResponse>;
   /** In-process listeners (render cache, thumbnails, versions, design.json merge). */
@@ -196,6 +215,26 @@ export type ActivityTracker = {
   working(): readonly SessionActivity[];
 };
 
+// ---- Phase 2: self-writes (§2.6) ----
+
+/**
+ * The last bytes the service itself left at each `(slug, rel)`, so the watcher can drop the
+ * echo of the user's own writes without a time heuristic. Entries are never consumed and never
+ * expire; a file over `SOURCE_TEXT_MAX` bytes is never recorded.
+ */
+export type SelfWrites = {
+  /** Remember the last bytes the service left at `rel` (`null` = removed or moved away). */
+  record(slug: string, rel: string, sha256: string | null, size: number | null): void;
+  /** True when an entry exists and the file now matches it (absent for `null`, else size then sha256). */
+  isEcho(slug: string, rel: string, dir: string): Promise<boolean>;
+  /** The watcher calls this when `isEcho` answered false: the file moved past the service's write. */
+  forget(slug: string, rel: string): void;
+  /** Drop every entry of a design (on `removed`). */
+  forgetDesign(slug: string): void;
+  /** Drop everything (on a root change). */
+  clear(): void;
+};
+
 // ---- The context ----
 
 export type ServiceContext = {
@@ -216,6 +255,8 @@ export type ServiceContext = {
   designIndex: DesignIndex;
   hostCalls: HostCalls;
   activity: ActivityTracker;
+  /** Shared by the watcher (echo filter) and the edit service (records its writes); one registry per process. */
+  selfWrites: SelfWrites;
   /** Register teardown (watchers, timers, child processes); run on shutdown in reverse order. */
   onDispose(fn: () => void | Promise<void>): void;
 };

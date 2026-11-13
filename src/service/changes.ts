@@ -36,9 +36,15 @@ export const createChangeHub = (epoch: string, options: ChangeHubOptions = {}): 
   return {
     epoch,
     seq: () => seq,
-    emit(input: { slug: string | null; kind: ChangeKind; files?: string[] }): ChangeEvent {
+    emit(input: { slug: string | null; kind: ChangeKind; files?: string[]; origin?: 'user' }): ChangeEvent {
       seq += 1;
-      const event: ChangeEvent = { seq, slug: input.slug, kind: input.kind, ...(input.files ? { files: input.files } : {}) };
+      const event: ChangeEvent = {
+        seq,
+        slug: input.slug,
+        kind: input.kind,
+        ...(input.files ? { files: input.files } : {}),
+        ...(input.origin ? { origin: input.origin } : {}),
+      };
       ring.push(event);
       if (ring.length > ringSize) ring.splice(0, ring.length - ringSize);
       for (const listener of [...listeners]) listener(event);

@@ -4,7 +4,7 @@ import { mkdir, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { LAUNCHER_MARKER, buildLaunchers, createLauncherService, isOurLauncher, quoteCmd, quoteSh, syncLaunchers } from '../../../src/service/check/launcher.ts';
+import { LAUNCHER_MARKER, buildLaunchers, createLauncherService, isOurLauncher, quoteCmd, quoteSh, syncLaunchers, type LauncherService } from '../../../src/service/check/launcher.ts';
 import { createLogger } from '../../../src/service/context.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
 
@@ -107,6 +107,38 @@ test('the sh launcher really runs the CLI with the baked-in root, even with a sp
   assert.equal(await syncLaunchers({ execPath: process.execPath, cliPath: cli, root, log: quiet, platform: 'linux' }), 'written');
   const out = execFileSync('sh', [path.join(root, '.chamber', 'bin', 'dc'), 'check', 'signup-flow', '--static'], { encoding: 'utf8' });
   assert.deepEqual(JSON.parse(out), { args: ['--root', root, 'check', 'signup-flow', '--static'], electron: '1' });
+});
+
+/** A launcher service whose syncs are counted; the CLI path does not exist, so nothing is written. */
+const countingService = (platform: NodeJS.Platform): { service: LauncherService; syncs: () => number } => {
+  let count = 0;
+  const log = createLogger((line) => {
+    if (line.includes('check.launcher-cli-missing')) count += 1;
+  });
+  return { service: createLauncherService({ log, execPath: '/bin/x', cliPath: path.join(path.sep, 'no-such-dir', 'dc.mjs'), platform }), syncs: () => count };
+};
+
+test('on macOS the launcher cache folds case: a re-cased root is the same root', async () => {
+  const { service, syncs } = countingService('darwin');
+  const first = service.ensure('/X/Designs');
+  assert.equal(service.ensure('/x/designs'), first, 'the same memoised sync');
+  assert.equal(await first, 'unavailable');
+  assert.equal(syncs(), 1);
+  service.forget('/x/designs');
+  await service.ensure('/X/Designs');
+  assert.equal(syncs(), 2, 'forget with other letter case dropped the entry, so the next ensure syncs again');
+});
+
+test('on Linux the launcher cache keeps case: two roots that differ only by case sync separately', async () => {
+  const { service, syncs } = countingService('linux');
+  const first = service.ensure('/X/Designs');
+  const second = service.ensure('/x/designs');
+  assert.notEqual(second, first);
+  await Promise.all([first, second]);
+  assert.equal(syncs(), 2);
+  service.forget('/x/designs');
+  assert.equal(service.ensure('/X/Designs'), first, 'forgetting the other case leaves this root memoised');
+  assert.equal(syncs(), 2);
 });
 
 test('the service answers the exact command once the launcher is in place', async (t) => {

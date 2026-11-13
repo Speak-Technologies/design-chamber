@@ -45,6 +45,15 @@ describe('tracked set', () => {
     assert.equal(isTracked('notes.tmp'), true);
   });
 
+  test('macOS litter (.DS_Store and AppleDouble ._ files) is not tracked, at any depth', () => {
+    assert.equal(isTracked('.DS_Store'), false);
+    assert.equal(isTracked('assets/.DS_Store'), false);
+    assert.equal(isTracked('._index.html'), false);
+    assert.equal(isTracked('assets/._logo.png'), false);
+    assert.equal(isTracked('assets/logo._v2.png'), true);
+    assert.equal(isTracked('DS_Store.txt'), true);
+  });
+
   test('listTracked walks the folder and skips the excluded trees', async (t) => {
     const tmp = await useTmpRoot(t);
     await tmp.writeDesign('art', {
@@ -53,6 +62,8 @@ describe('tracked set', () => {
       '.chamber/state.json': '{}',
       '.versions/index.json': '{}',
       '.thumb.png': 'x',
+      '.DS_Store': 'x',
+      'assets/._pic.png': 'x',
     });
     const rels = await listTracked(tmp.at('art'));
     assert.deepEqual(rels, ['assets/pic.png', 'design.json', 'index.html']);
@@ -236,6 +247,28 @@ describe('versions', () => {
     );
     assert.equal(list.versions[0]?.treeHash, v1.treeHash, 'the restored snapshot has the v1 tree hash');
   });
+
+  test(
+    'restore on a case-insensitive filesystem keeps a file whose name changed only in letter case, with the version bytes',
+    { skip: process.platform === 'linux' ? 'needs a case-insensitive filesystem (Windows NTFS, macOS APFS)' : false },
+    async (t) => {
+      const { tmp, versions } = await setup(t);
+      await tmp.writeDesign('art', { ...pageDesign(), 'assets/Logo.png': 'version bytes' });
+      const v1 = await versions.create('art', 'manual');
+      assert.ok(v1);
+      assert.ok(v1.fileCount >= 3);
+
+      // The agent re-saves the asset under a lower-case name with new bytes.
+      await rm(tmp.at('art/assets/Logo.png'));
+      await writeFile(tmp.at('art/assets/logo.png'), 'live bytes');
+      assert.ok(await versions.create('art', 'manual'));
+
+      await versions.restore('art', 'v1');
+      assert.equal(await readFile(tmp.at('art/assets/Logo.png'), 'utf8').catch(() => null), 'version bytes', 'the restored file is still there');
+      assert.equal((await readdir(tmp.at('art/assets'))).length, 1, 'one file, not two');
+      assert.equal((await versions.list('art')).dirty, false);
+    },
+  );
 
   test('restore keeps CURRENT comments and sessionId (never taken from the snapshot)', async (t) => {
     const { tmp, versions } = await setup(t);

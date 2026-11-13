@@ -176,6 +176,20 @@ test('liveBoards keeps the boards nearest the centre within the budget and drops
   assert.deepEqual(liveBoards(boards, cam, surface, 1, 0.5).map((b) => b.id), ['mid']);
 });
 
+test('liveBoards: a tie for the last live slot goes to the earlier screen, also when float noise splits the distances', () => {
+  // Home and Pricing sit either side of the centre, 150 px away; Pricing is a hair nearer (a pan or a zoom leaves such noise).
+  const cam = { x: 0, y: 0, scale: 1 };
+  const surface = { w: 400, h: 200 };
+  const home = { id: 'home', rect: { x: 0, y: 50, w: 100, h: 100 } };
+  const pricing = { id: 'pricing', rect: { x: 300 - 1e-7, y: 50, w: 100, h: 100 } };
+  assert.ok(Math.hypot(50 - 200, 0) > Math.hypot(300 - 1e-7 + 50 - 200, 0), 'the earlier board is the farther by float noise');
+  assert.deepEqual(liveBoards([home, pricing], cam, surface, 1, 0.5).map((b) => b.id), ['home']);
+  assert.deepEqual(liveBoards([pricing, home], cam, surface, 1, 0.5).map((b) => b.id), ['pricing'], 'the order given is the order of preference');
+  // A real difference still wins over the order.
+  const closer = { id: 'closer', rect: { x: 150, y: 50, w: 100, h: 100 } };
+  assert.deepEqual(liveBoards([home, closer], cam, surface, 1, 0.5).map((b) => b.id), ['closer']);
+});
+
 test('clusterPins folds pins closer than a pin width on screen, anchored on the first; zooming in separates them', () => {
   const pins = [
     { id: 'a', x: 100, y: 100 },

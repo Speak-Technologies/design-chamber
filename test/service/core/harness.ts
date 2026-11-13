@@ -14,13 +14,16 @@ import { createChangeHub } from '../../../src/service/changes.ts';
 import { unavailable, type Logger } from '../../../src/service/context.ts';
 import { createDesignStore, type DesignStoreWithReconcile } from '../../../src/service/store.ts';
 import { createOutboxStore } from '../../../src/service/outbox.ts';
+import { createSelfWrites } from '../../../src/service/self-writes.ts';
 import { createSettingsStore } from '../../../src/service/settings.ts';
 import { createUploadStore } from '../../../src/service/uploads.ts';
 import { createRouter, createServiceServer, listenLoopback, registerHealthRoute, type Router } from '../../../src/service/http.ts';
 import { registerChangesRoutes } from '../../../src/service/routes/changes.ts';
 import { registerCommentsRoutes } from '../../../src/service/routes/comments.ts';
 import { registerDesignsRoutes } from '../../../src/service/routes/designs.ts';
+import { registerEditRoutes } from '../../../src/service/routes/edits.ts';
 import { registerOutboxRoutes } from '../../../src/service/routes/outbox.ts';
+import { registerPageStateRoutes } from '../../../src/service/routes/page-state.ts';
 import { registerSettingsRoutes } from '../../../src/service/routes/settings.ts';
 import { createAgentSetup } from '../../../src/service/agent-setup.ts';
 import { registerUploadsRoutes } from '../../../src/service/routes/uploads.ts';
@@ -92,6 +95,7 @@ export const createCore = async (t: TestContext, options: CoreOptions = {}): Pro
     designIndex: unavailable('design index (not in the WP1 core)'),
     hostCalls: unavailable('host calls (not in the WP1 core)'),
     activity: unavailable('activity (not in the WP1 core)'),
+    selfWrites: createSelfWrites(),
     onDispose: (fn) => void disposers.push(fn),
   };
 
@@ -135,6 +139,9 @@ export const serveCore = async (t: TestContext, core: Core): Promise<ServedCore>
   registerCommentsRoutes(router, core.ctx);
   registerUploadsRoutes(router, core.ctx);
   registerOutboxRoutes(router, core.ctx);
+  // Phase 2 seam stubs, as compose.ts registers them (T0): their refusals are core tests too.
+  registerEditRoutes(router, core.ctx);
+  registerPageStateRoutes(router, core.ctx);
 
   const server = createServiceServer(router);
   await listenLoopback(server, 0);

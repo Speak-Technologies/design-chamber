@@ -66,6 +66,20 @@ test('createFrameDocument returns a revocable blob URL; nonce is random hex', as
   assert.equal(bridgeInitOf({ ...INIT }).nonce, INIT.nonce);
 });
 
+test('bridgeInitOf carries the tweak preview and saved page data; values cannot break out of the bridge <script>', () => {
+  const tokens = [{ name: '--accent-h', value: '210' }];
+  const storage = { persist: true, items: [['note', '</script><script>parent.x=1</script><!--'], ['line', 'a\u2028b']] as [string, string][] };
+  const init = bridgeInitOf({ artboardId: 'home@laptop', file: 'screens/home.html', mode: 'edit', nonce: 'n', tokens, storage });
+  assert.deepEqual([init.tokens, init.storage], [tokens, storage]);
+  const bare = bridgeInitOf({ artboardId: 'home@laptop', file: 'screens/home.html', mode: 'edit', nonce: 'n' });
+  assert.ok(!('tokens' in bare) && !('storage' in bare), 'omitted means empty and unsaved, not an empty seed');
+  const html = injectBridge('<html><head></head></html>', init, BRIDGE);
+  assert.equal(html.match(/<\/script/gi)?.length, 1, 'only the bridge tag closes a script');
+  assert.ok(!html.includes('<!--') && !html.includes('\u2028'));
+  const json = /window\.__DC=(.*?);\n/s.exec(html)?.[1] ?? '';
+  assert.deepEqual(JSON.parse(json), init, 'the seed arrives exactly');
+});
+
 // ---- frame-channel: message validation ----
 
 const frameWindow = { postMessage: () => undefined };

@@ -93,6 +93,51 @@ test('batchAgentFiles: this slug only; a files event without a list is ignored; 
   );
 });
 
+// ---- Phase 2 E10: the user's hand edits are not the agent ----
+
+test('batchAgentFiles: an origin "user" event is never the agent — no files, no restore, no started', () => {
+  const user: ChangeEvent = { seq: 1, slug: 'a', kind: 'files', files: ['screens/home.html'], origin: 'user' };
+  assert.deepEqual(batchAgentFiles([user], 'a'), { files: [], created: false, restored: false });
+  // A mixed batch keeps only the agent's own writes.
+  assert.deepEqual(
+    batchAgentFiles([user, { seq: 2, slug: 'a', kind: 'files', files: ['screens/pricing.html'] }], 'a'),
+    { files: ['screens/pricing.html'], created: false, restored: false },
+  );
+  // A list-less user event is not a restore, and a user `added` is not the agent starting.
+  assert.deepEqual(batchAgentFiles([{ seq: 3, slug: 'a', kind: 'files', origin: 'user' }], 'a'), { files: [], created: false, restored: false });
+  assert.deepEqual(batchAgentFiles([{ seq: 4, slug: 'a', kind: 'added', origin: 'user' }], 'a'), { files: [], created: false, restored: false });
+  assert.deepEqual(batchAgentFiles([{ seq: 5, slug: 'a', kind: 'design', origin: 'user' }], 'a'), { files: [], created: false, restored: false });
+});
+
+test('wiring: a hand edit never shows as "Writing" and never counts in "Done. Updated N files" (E10)', async (t) => {
+  const r = rig(t);
+  await flush();
+  r.host.emitSessions('proj_shop', [record('ses_a', 'running')]);
+  r.clock.t = T0 + SEC;
+  // The edit pipeline's own event for the user's write.
+  r.feed.emit({ events: [{ seq: 1, slug: 'coffee', kind: 'files', files: ['screens/home.html'], origin: 'user' }] });
+  assert.equal(r.watcher.get().lastFile, null);
+  assert.deepEqual(r.watcher.get().turnFiles, []);
+  assert.equal(phaseOf(r.watcher.get(), T0 + SEC), 'working', 'not writing');
+  // The agent writes next: that one counts.
+  r.clock.t = T0 + 2 * SEC;
+  r.feed.emit({ events: [{ seq: 2, slug: 'coffee', kind: 'files', files: ['screens/pricing.html'] }] });
+  assert.equal(phaseOf(r.watcher.get(), T0 + 2 * SEC), 'writing');
+  r.clock.t = T0 + 3 * SEC;
+  r.host.emitSessions('proj_shop', [record('ses_a', 'idle', 'completed')]);
+  assert.deepEqual(r.watcher.get().turnFiles, ['screens/pricing.html'], 'the hand edit is not in the Done count');
+  assert.equal(phaseOf(r.watcher.get(), T0 + 3 * SEC), 'done');
+});
+
+test('wiring: a hand edit is not "Writing" even in files-only mode, and does not clear a dismissal', async (t) => {
+  const r = rig(t, { detail: detailOf({ sessionId: null }) });
+  await flush();
+  r.clock.t = T0 + SEC;
+  r.feed.emit({ events: [{ seq: 1, slug: 'coffee', kind: 'files', files: ['index.html'], origin: 'user' }] });
+  assert.equal(phaseOf(r.watcher.get(), T0 + SEC), 'hidden');
+  assert.equal(r.watcher.get().lastFile, null);
+});
+
 // ---- phases, one per row of the table ----
 
 test('a fresh track shows nothing', () => {
@@ -483,11 +528,14 @@ const detailOf = (over: { sessionId?: string | null; projectDirectory?: string |
     viewports: [{ id: 'laptop', label: 'Laptop', width: 1280, height: 800 }],
     screens: (over.screens ?? ['home', 'pricing']).map((id) => ({ id, title: id, file: `screens/${id}.html` })),
     designSystem: { confirmed: false },
+    tweaks: [],
     comments: [],
   },
   pending: over.pending ?? false,
   files: { screens: Object.fromEntries((over.screens ?? ['home', 'pricing']).map((id, index) => [id, { exists: index === 0, size: 100, mtime: null }])) },
   warnings: [],
+  screensStamp: 'stamp',
+  designJson: 'ok',
 });
 
 const record = (id: string, activity: GuestSessionRecord['activity'], outcome: GuestSessionRecord['outcome'] = null): GuestSessionRecord => ({

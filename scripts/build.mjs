@@ -55,6 +55,14 @@ if (!probeFile) throw new Error('build: the probe bundle produced no output.');
 const probe = probeFile.text;
 if (Buffer.byteLength(probe) < 1024) throw new Error(`build: the probe bundle is only ${Buffer.byteLength(probe)} bytes — is src/guest/probe/probe.ts the real probe?`);
 
+// (1c) Storage stand-in for the check browser → in-memory IIFE string, installed before page
+// scripts so a design that uses localStorage renders empty and unsaved instead of throwing.
+const storageShimResult = await build({ ...browser, entryPoints: [at('src', 'guest', 'bridge', 'storage-shim-entry.ts')], write: false, minify: true });
+const storageShimFile = storageShimResult.outputFiles[0];
+if (!storageShimFile) throw new Error('build: the storage shim bundle produced no output.');
+const storageShim = storageShimFile.text;
+if (Buffer.byteLength(storageShim) < 512) throw new Error(`build: the storage shim bundle is only ${Buffer.byteLength(storageShim)} bytes — is src/guest/bridge/storage-shim-entry.ts real?`);
+
 // (2) Panel + page guest.
 await build({ ...browser, entryPoints: [at('src', 'ui', 'main.ts')], outfile: at('dist', 'panel', 'main.js'), define: { __DC_BRIDGE__: JSON.stringify(bridge) } });
 if ((await readFile(at('dist', 'panel', 'main.js'), 'utf8')).includes('__DC_BRIDGE__')) {
@@ -73,12 +81,14 @@ const node = {
   sourcemap: false,
   logLevel: 'warning',
   banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
-  define: { __DC_PROBE__: JSON.stringify(probe) },
+  define: { __DC_PROBE__: JSON.stringify(probe), __DC_STORAGE_SHIM__: JSON.stringify(storageShim) },
 };
 await build({ ...node, entryPoints: [at('src', 'service', 'main.ts')], outfile: at('dist', 'service', 'main.js') });
 await build({ ...node, entryPoints: [at('src', 'cli', 'dc.ts')], outfile: at('dist', 'cli', 'dc.mjs') });
 for (const file of ['service/main.js', 'cli/dc.mjs']) {
-  if ((await readFile(at('dist', file), 'utf8')).includes('__DC_PROBE__')) throw new Error(`build: __DC_PROBE__ was not replaced in dist/${file}.`);
+  const text = await readFile(at('dist', file), 'utf8');
+  if (text.includes('__DC_PROBE__')) throw new Error(`build: __DC_PROBE__ was not replaced in dist/${file}.`);
+  if (text.includes('__DC_STORAGE_SHIM__')) throw new Error(`build: __DC_STORAGE_SHIM__ was not replaced in dist/${file}.`);
 }
 
 // (5) Static files.

@@ -115,7 +115,7 @@ export const buildChipText = (context: AgentContext, mode: ChipMode): string => 
     `4. ${viewportStep(context, mode)}`,
     '5. Unsure about anything material? Ask first: ONE message with 3–6 short numbered questions, each with a bold recommended default, then wait for the answer. Do not ask what the project files already answer; skip the questions if the user said "go" or this is a small edit.',
     `6. ${filesStep(context.kind)}`,
-    `7. design.json: you own ${context.kind === 'canvas' ? 'title, updated, viewports, screens and designSystem' : 'title, updated, viewports and designSystem'}. Keep every other key exactly as it is, and set "updated" (ISO time) whenever you change the design. Full contract in RULES.md.`,
+    `7. design.json: you own ${context.kind === 'canvas' ? 'title, updated, viewports, screens, designSystem and tweaks' : 'title, updated, viewports, designSystem and tweaks'}. Keep every other key exactly as it is, and set "updated" (ISO time) whenever you change the design. Full contract in RULES.md.`,
     ...(context.checkCommand === null ? [] : [checkStep(context.checkCommand)]),
     'Your file tools may ask permission to write in your designs folder because it is outside the project; that is expected.',
   ];

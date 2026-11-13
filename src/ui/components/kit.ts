@@ -4,6 +4,7 @@
 
 import { mountBanner, mountSpinner, moveListSelection, navigationKey, type BannerProps, type BannerTone, type ButtonSize, type ButtonVariant } from '@openchamber/sdk/ui';
 
+import { menuRowState, type MenuRowState } from '../model/menu-model.ts';
 import { append, createScope, errorText, h, nextId, replace, type Child } from './dom.ts';
 import { icon, type IconName } from './icons.ts';
 
@@ -79,7 +80,30 @@ export const iconBtn = (options: IconBtnOptions): HTMLButtonElement => {
 
 // ---------------------------------------------------------------- menus
 
-export type MenuEntry = { id: string; label: string; hint?: string; destructive?: boolean; disabled?: boolean } | { separator: true };
+export type MenuEntry =
+  | {
+      id: string;
+      label: string;
+      hint?: string;
+      destructive?: boolean;
+      disabled?: boolean;
+      /**
+       * With `disabled`: why, as a second muted line inside the option. The row stays reachable by the arrow keys
+       * and does nothing on Enter, Space or click (`model/menu-model.ts`). Without a reason a disabled row is native and skipped.
+       */
+      reason?: string;
+      /** A disabled row without a reason of its own that the menu's foot note explains (`MenuNotes.foot`). */
+      explainedBy?: 'foot';
+    }
+  | { separator: true };
+
+/** Muted, non-interactive lines at the top and the bottom of a menu. */
+export type MenuNotes = {
+  /** The top line, in the warning tone: the agent is working on this design, so a hand edit may be written over. */
+  lead?: string;
+  /** The bottom line: one sentence that explains several disabled rows (the screen cap). */
+  foot?: string;
+};
 
 type ActionEntry = Extract<MenuEntry, { id: string }>;
 const actionsOf = (items: readonly MenuEntry[]): ActionEntry[] => items.filter((item): item is ActionEntry => 'id' in item);
@@ -87,12 +111,14 @@ const actionsOf = (items: readonly MenuEntry[]): ActionEntry[] => items.filter((
 let openMenuClose: (() => void) | null = null;
 
 /** Opens a menu under `anchor`. Returns its closer. One menu at a time. */
-export const openMenu = (anchor: HTMLElement, items: readonly MenuEntry[], onSelect: (id: string) => void): (() => void) => {
+export const openMenu = (anchor: HTMLElement, items: readonly MenuEntry[], onSelect: (id: string) => void, notes: MenuNotes = {}): (() => void) => {
   openMenuClose?.();
   const uid = nextId('dc-menu');
   const popup = h('div', { class: 'oc-sdk oc-sdk-popup dc-popup', role: 'menu', tabindex: '-1', 'aria-label': anchor.getAttribute('aria-label') ?? undefined });
   let activeId: string | null = null;
   const rows = new Map<string, HTMLButtonElement>();
+  const states = new Map<string, MenuRowState>();
+  const ids = { foot: notes.foot ? `${uid}-foot` : null };
 
   const setActive = (id: string | null): void => {
     activeId = id;
@@ -122,32 +148,58 @@ export const openMenu = (anchor: HTMLElement, items: readonly MenuEntry[], onSel
     close(false);
   };
   const pick = (id: string): void => {
+    // A row that explains why it is off does nothing and leaves the menu open.
+    if (states.get(id)?.inert) return;
     close();
     onSelect(id);
   };
+
+  const note = (kind: 'lead' | 'foot', text: string): HTMLElement =>
+    h('div', { class: 'dc-menu-note', role: 'presentation', 'data-kind': kind, 'data-tone': kind === 'lead' ? 'warning' : null, id: `${uid}-${kind}` }, text);
+  if (notes.lead) popup.append(note('lead', notes.lead), h('div', { class: 'oc-sdk-separator', 'data-labeled': 'false' }));
 
   for (const item of items) {
     if (!('id' in item)) {
       popup.append(h('div', { class: 'oc-sdk-separator', 'data-labeled': 'false' }));
       continue;
     }
+    const state = menuRowState(item, { reason: `${uid}-${item.id}-reason`, foot: ids.foot });
+    states.set(item.id, state);
     const row = h(
       'button',
-      { type: 'button', role: 'menuitem', tabindex: '-1', id: `${uid}-${item.id}`, class: 'oc-sdk-option', 'data-destructive': item.destructive ? 'true' : 'false', disabled: item.disabled },
+      {
+        type: 'button',
+        role: 'menuitem',
+        tabindex: '-1',
+        id: `${uid}-${item.id}`,
+        class: 'oc-sdk-option',
+        'data-destructive': item.destructive ? 'true' : 'false',
+        'data-reason': state.showsReason ? 'true' : null,
+        'aria-disabled': state.inert ? 'true' : null,
+        'aria-describedby': state.describedBy,
+        disabled: state.nativeDisabled,
+      },
       h('span', { class: 'oc-sdk-option-label' }, item.label),
       item.hint ? h('span', { class: 'oc-sdk-option-hint' }, item.hint) : null,
+      state.showsReason ? h('span', { class: 'dc-menu-reason', id: `${uid}-${item.id}-reason` }, item.reason) : null,
     );
     row.addEventListener('pointerenter', () => setActive(item.id));
     row.addEventListener('click', () => pick(item.id));
     rows.set(item.id, row);
     popup.append(row);
   }
+  if (notes.foot) popup.append(h('div', { class: 'oc-sdk-separator', 'data-labeled': 'false' }), note('foot', notes.foot));
+  const describedBy = [notes.lead ? `${uid}-lead` : null, notes.foot ? `${uid}-foot` : null].filter((id): id is string => id !== null);
+  if (describedBy.length > 0) popup.setAttribute('aria-describedby', describedBy.join(' '));
+
+  /** The SDK skips `disabled` items: a row with a reason is reachable, so it goes in as enabled. */
+  const navItems = (): { id: string; disabled: boolean }[] => actionsOf(items).map((item) => ({ id: item.id, disabled: states.get(item.id)?.navDisabled ?? false }));
 
   popup.addEventListener('keydown', (event) => {
     const step = navigationKey(event);
     if (step) {
       event.preventDefault();
-      setActive(moveListSelection(actionsOf(items), activeId, step));
+      setActive(moveListSelection(navItems(), activeId, step));
     } else if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       if (activeId) pick(activeId);
@@ -174,13 +226,17 @@ export const openMenu = (anchor: HTMLElement, items: readonly MenuEntry[], onSel
   anchor.setAttribute('aria-haspopup', 'menu');
   anchor.setAttribute('aria-expanded', 'true');
   openMenuClose = close;
-  setActive(actionsOf(items).find((item) => !item.disabled)?.id ?? null);
+  // The first live row is the starting point; when every row is off, the first that says why (so something is read out).
+  setActive((actionsOf(items).find((item) => !item.disabled) ?? actionsOf(items).find((item) => states.get(item.id)?.showsReason))?.id ?? null);
   popup.focus();
   return close;
 };
 
-/** Attach a menu to a trigger: click toggles. `items` is read at open time so it can depend on current state. */
-export const attachMenu = (trigger: HTMLElement, items: () => readonly MenuEntry[], onSelect: (id: string) => void): void => {
+/**
+ * Attach a menu to a trigger: click toggles. `items` (and `notes`) are read at open time so they can depend on
+ * current state.
+ */
+export const attachMenu = (trigger: HTMLElement, items: () => readonly MenuEntry[], onSelect: (id: string) => void, notes?: () => MenuNotes): void => {
   let close: (() => void) | null = null;
   trigger.addEventListener('click', () => {
     if (trigger.getAttribute('aria-expanded') === 'true') {
@@ -188,7 +244,7 @@ export const attachMenu = (trigger: HTMLElement, items: () => readonly MenuEntry
       close = null;
       return;
     }
-    close = openMenu(trigger, items(), onSelect);
+    close = openMenu(trigger, items(), onSelect, notes?.());
   });
 };
 
@@ -229,7 +285,11 @@ export const loadingRow = (label: string): HTMLElement => {
 
 // ---------------------------------------------------------------- sheets and dialogs
 
-export type SheetVariant = 'full' | 'side' | 'dialog' | 'dock';
+/**
+ * `dock` and `bottom` are non-modal: no scrim, no focus trap, the wall behind stays usable. `bottom` is the rail's
+ * Tweaks sheet, pinned to the bottom of its host and at most half as tall (styles.css), so the wall shows live above it.
+ */
+export type SheetVariant = 'full' | 'side' | 'dialog' | 'dock' | 'bottom';
 
 export type SheetOptions = { title: string; variant: SheetVariant; onClose?: () => void; subtitle?: string };
 
@@ -280,13 +340,14 @@ const installModalKeys = (): void => {
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 /**
- * A panel over (`full`, `side`, `dialog`) or inside (`dock`) `host`. Modal variants trap Tab, close on
- * Escape and on a scrim click, and give focus back to what opened them.
+ * A panel over (`full`, `side`, `dialog`, `bottom`) or inside (`dock`) `host`. Modal variants trap Tab, close on
+ * Escape and on a scrim click, and give focus back to what opened them; the non-modal ones (`dock`, `bottom`)
+ * close on Escape while focus is inside, and their opener gives focus back itself.
  */
 export const openSheet = (host: HTMLElement, options: SheetOptions): SheetHandle => {
   const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const titleId = nextId('dc-sheet-title');
-  const modal = options.variant !== 'dock';
+  const modal = options.variant !== 'dock' && options.variant !== 'bottom';
   const title = h('h2', { class: 'dc-sheet-title', id: titleId }, options.title);
   const close = h('button', { type: 'button', class: 'oc-sdk dc-iconbtn', 'aria-label': `Close ${options.title.toLowerCase()}`, title: 'Close' }, icon('close', 16));
   const body = h('div', { class: 'dc-sheet-body' });
@@ -380,6 +441,8 @@ export type PopoverHandle = {
   body: HTMLElement;
   foot: HTMLElement;
   close: (restoreFocus?: boolean) => void;
+  /** Place it again under (or over) its anchor: after the content changed size (the box opens before its content is in). */
+  reposition: () => void;
 };
 
 /** Widest the popover grows; on a narrower window it keeps an 8 px margin on both sides. */
@@ -413,10 +476,20 @@ export const openPopover = (host: HTMLElement, anchor: HTMLElement, options: Pop
     const width = Math.min(POPOVER_WIDTH, window.innerWidth - 2 * POPOVER_MARGIN);
     const left = Math.min(Math.max(POPOVER_MARGIN, rect.right - width), window.innerWidth - POPOVER_MARGIN - width);
     const top = Math.round(rect.bottom + 4);
+    const below = window.innerHeight - top - POPOVER_MARGIN;
     el.style.width = `${width}px`;
     el.style.left = `${Math.round(left)}px`;
     el.style.top = `${top}px`;
-    el.style.maxHeight = `${Math.max(160, Math.min(window.innerHeight * 0.6, window.innerHeight - top - POPOVER_MARGIN))}px`;
+    el.style.bottom = '';
+    el.style.maxHeight = `${Math.max(160, Math.min(window.innerHeight * 0.6, below))}px`;
+    // An anchor near the bottom of the window (the "+ Screen" board): open upwards when that is where the room is,
+    // hung from its bottom edge so a line that appears later (an error) grows upwards, not over the anchor.
+    const above = rect.top - 4 - POPOVER_MARGIN;
+    if (el.offsetHeight > below && above > below) {
+      el.style.maxHeight = `${Math.max(160, Math.min(window.innerHeight * 0.6, above))}px`;
+      el.style.top = 'auto';
+      el.style.bottom = `${Math.round(window.innerHeight - rect.top + 4)}px`;
+    }
   };
 
   let closed = false;
@@ -471,5 +544,5 @@ export const openPopover = (host: HTMLElement, anchor: HTMLElement, options: Pop
   anchor.setAttribute('aria-haspopup', 'dialog');
   anchor.setAttribute('aria-expanded', 'true');
   openPopoverClose = closeSelf;
-  return { el, body, foot, close };
+  return { el, body, foot, close, reposition: place };
 };

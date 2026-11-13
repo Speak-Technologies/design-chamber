@@ -144,6 +144,12 @@ test('bridge e2e: real bridge in a sandboxed blob frame under the guest CSP', { 
   assert.deepEqual(r.hit.rect, { x: 50, y: 100, w: 400, h: 60 });
   assert.equal(r.hitEmpty, null, 'body/html are not commentable');
 
+  // Edit probe (Phase 2 §3.1): counts among same-text leaves, id, direction, document rect.
+  assert.deepEqual(r.probeTitle, { tag: 'h1', id: null, leaf: true, text: 'Fresh roasts, every other Monday', truncated: false, sameIndex: 0, sameCount: 1, dir: 'ltr', rect: { x: 50, y: 100, w: 400, h: 60 } });
+  assert.deepEqual(r.probeTwin, { tag: 'li', id: null, leaf: true, text: 'Same words', truncated: false, sameIndex: 1, sameCount: 2, dir: 'ltr', rect: { x: 700, y: 140, w: 200, h: 20 } });
+  assert.deepEqual(pick(r.probeRtl, ['tag', 'id', 'dir', 'sameCount']), { tag: 'p', id: 'ar', dir: 'rtl', sameCount: 1 });
+  assert.equal(r.probeEmpty, null);
+
   // Anchors resolved in the frame and placed by the page-side tracker.
   const pins = r.pins as { commentId: string; state: string; rect: { y: number } }[];
   assert.deepEqual(
@@ -187,8 +193,48 @@ test('bridge e2e: real bridge in a sandboxed blob frame under the guest CSP', { 
   assert.equal(r.foreignSource, 'none');
   assert.notEqual(r.selfPost, 7, 'the bridge ignores messages that are not from its parent');
   assert.equal(r.escapeTop, 'denied');
-  assert.deepEqual(r.inboxTypes, ['anchors', 'hit', 'key', 'navigate', 'open-external', 'ready', 'scroll', 'size', 'wheel']);
+  assert.deepEqual(r.inboxTypes, ['anchors', 'edit-probe-result', 'hit', 'key', 'navigate', 'open-external', 'ready', 'scroll', 'size', 'storage-batch', 'wheel']);
+
+  // Storage stand-in (Phase 2 §8.3, §1 re-proved): installed before the design's first script,
+  // reached by bare, window., self. and globalThis. access, seeded from window.__DC.
+  assert.deepEqual(r.early, { seed: 'dark', same: true, inWindow: true, desc: [true, true, false, 'undefined'], accent: 'rgb(10, 20, 30)' });
+  const api = r.storageApi as { result: Record<string, unknown>; batches: unknown[] };
+  assert.deepEqual(api.result, {
+    a: '1',
+    b: 'named',
+    named: 'dark',
+    keys: 'theme,count,a,b',
+    length: 4,
+    key0: 'theme',
+    key9: null,
+    afterRemove: 2,
+    getItemFn: 'function',
+    getItemValue: 'x',
+    quota: ['QuotaExceededError', true, null, 2],
+    session: 'v',
+    idb: 'SecurityError',
+    instance: false,
+  });
+  // One batch for the task, last value per key; sessionStorage and the refused write never leave.
+  assert.deepEqual(api.batches, [{ clear: false, n: 3, chars: 9, changes: [['a', null], ['b', null], ['getItem', null]] }]);
+  assert.deepEqual(r.storageBurst, { result: '19999', batches: [{ clear: false, n: 1, chars: 9, changes: [['tick', '19999']] }] });
+  // 20 000 keys in one loop all arrive (every batch passed the page's validator), clear only first.
+  assert.deepEqual(r.storageLoop, { result: 20_000, batches: [{ clear: true, n: 10_000, chars: 58_890 }, { clear: false, n: 10_000, chars: 70_000 }] });
+  // Over the character cap in one task: split in two, each within the cap.
+  assert.deepEqual(pick(r.storageSplit, ['result']), { result: 1 });
+  assert.deepEqual((r.storageSplit as { batches: Batch[] }).batches.map((b) => [b.clear, b.n, b.chars]), [[false, 1, 2], [false, 1, 1_048_576]]);
+  assert.deepEqual(r.storageSynced, { synced: 'yes', k2: null, length: 1 });
+  assert.equal(r.storageSyncPostedBack, false, 'storage-sync never posts back');
+  assert.deepEqual(r.miniStorage, { k: null, n: '1' }, 'a malformed seed runs empty, without throws');
+  assert.equal(r.miniBatches, 0, 'and unsaved');
+
+  // Tweak preview (Phase 2 §4.4): from window.__DC before first paint, then set and cleared live.
+  assert.deepEqual(r.tokensInit, { accent: 'rgb(10, 20, 30)', gap: '8px', h1: 'rgb(10, 20, 30)' });
+  assert.deepEqual(r.tokensSet, { accent: 'rgb(200, 100, 50)', gap: '', h1: 'rgb(200, 100, 50)' }, 'a var left out of the new list is removed');
+  assert.deepEqual(r.tokensCleared, { accent: '', gap: '', h1: 'rgb(0, 0, 0)' }, 'vars: [] gives the design its own :root value back');
 });
+
+type Batch = { clear: boolean; n: number; chars: number };
 
 const pick = (value: unknown, keys: string[]): Record<string, unknown> | unknown => {
   if (typeof value !== 'object' || value === null) return value;

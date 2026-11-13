@@ -21,12 +21,35 @@ export const DAMAGED_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
 // ---- tracked set and path rules ----
 
-/** `.versions/**`, `.chamber/**`, `.thumb.png` (and its atomic-write temporaries) and the service's own `<name>.<hex>.tmp` files are never tracked. */
-export const isTracked = (rel: string): boolean => {
+/** Finder's `.DS_Store` and AppleDouble `._<name>` files: macOS litter, not design content. */
+export const isMacMetadata = (base: string): boolean => base === '.DS_Store' || base.startsWith('._');
+
+/**
+ * What a stored version may name: everything but `.versions/**`, `.chamber/**`, `.thumb.png` (and
+ * its atomic-write temporaries) and the service's own `<name>.<hex>.tmp` files. Wider than
+ * `isTracked` on purpose: a version saved before macOS litter was left out may list a
+ * `.DS_Store`, and that entry must still read as whole instead of being dropped as damaged.
+ */
+const isStorable = (rel: string): boolean => {
   const segments = rel.split('/');
   if (segments[0] === VERSIONS_DIR || segments[0] === CHAMBER_DIR) return false;
   const base = segments[segments.length - 1] ?? '';
   return base !== '.thumb.png' && !base.startsWith('.thumb.') && !isAtomicTempName(base);
+};
+
+/** The files versions and exports carry: every storable file except macOS litter (`isMacMetadata`). */
+export const isTracked = (rel: string): boolean => isStorable(rel) && !isMacMetadata(rel.slice(rel.lastIndexOf('/') + 1));
+
+/**
+ * The current files a restore deletes: those the version does not list. On a case-folding
+ * filesystem (`foldsCase`) a name the version lists in other letter case is the same file the
+ * restore just wrote, so it stays (deleting `assets/logo.png` there would delete `assets/Logo.png`).
+ */
+export const relsToRemoveOnRestore = (current: Iterable<string>, target: Iterable<string>, caseFolds: boolean): string[] => {
+  const fold = (rel: string): string => (caseFolds ? rel.toLowerCase() : rel);
+  const kept = new Set<string>();
+  for (const rel of target) kept.add(fold(rel));
+  return [...current].filter((rel) => !kept.has(fold(rel)));
 };
 
 /** A design-relative `/` path with no step that could leave the folder (lexical; writes still go through `resolveInside`). */
@@ -38,12 +61,12 @@ export const isSafeRel = (rel: string): boolean =>
   !/^[A-Za-z]:/.test(rel) &&
   rel.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 
-/** Every path must be tracked and safe, every object a sha256. */
+/** Every path must be storable and safe, every object a sha256. */
 export const isFileMap = (value: unknown): value is Record<string, string> =>
   typeof value === 'object' &&
   value !== null &&
   !Array.isArray(value) &&
-  Object.entries(value).every(([rel, hash]) => isSafeRel(rel) && isTracked(rel) && typeof hash === 'string' && SHA256_PATTERN.test(hash));
+  Object.entries(value).every(([rel, hash]) => isSafeRel(rel) && isStorable(rel) && typeof hash === 'string' && SHA256_PATTERN.test(hash));
 
 export const isEntry = (value: unknown): value is VersionEntry => {
   if (typeof value !== 'object' || value === null) return false;

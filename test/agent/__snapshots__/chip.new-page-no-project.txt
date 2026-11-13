@@ -11,5 +11,5 @@ A page is one index.html shown full screen, like a browser tab. If the user want
 4. Viewports: settle them before designing. The project gave no breakpoints, so ask which to show unless the brief makes it obvious, and recommend Laptop 1280×800 + Phone 390×844.
 5. Unsure about anything material? Ask first: ONE message with 3–6 short numbered questions, each with a bold recommended default, then wait for the answer. Do not ask what the project files already answer; skip the questions if the user said "go" or this is a small edit.
 6. Write design.json first, then the HTML. Files you write: design.json · index.html (one self-contained page) · tokens.css · DESIGN.md · assets/** (relative paths; no CDNs, Google Fonts or other web fonts). Never touch .versions/, .chamber/ or .thumb.png.
-7. design.json: you own title, updated, viewports and designSystem. Keep every other key exactly as it is, and set "updated" (ISO time) whenever you change the design. Full contract in RULES.md.
+7. design.json: you own title, updated, viewports, designSystem and tweaks. Keep every other key exactly as it is, and set "updated" (ISO time) whenever you change the design. Full contract in RULES.md.
 Your file tools may ask permission to write in your designs folder because it is outside the project; that is expected.

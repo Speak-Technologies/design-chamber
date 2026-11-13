@@ -8,7 +8,9 @@
 // Ignored: every dot-path — root-level `.trash`/`.exports`, per-design `.chamber/`,
 // `.versions/`, `.thumb.png` and the store's dot-prefixed tmp files — so the service's own
 // writes never echo back as agent changes (together with the byte-equal merge skip in
-// store.ts, that closes the watch loop).
+// store.ts, that closes the watch loop). Hand edits write real design files, so those are told
+// apart by bytes instead: a file now holding exactly what the service last wrote there is the
+// edit's echo and is dropped from the batch (`selfWrites`, Phase 2 §2.6).
 //
 // Loose HTML files directly in the root (agent-guidance spec §3.5) are not designs, but the
 // panel offers to import them: a root-level `*.html`/`*.htm` event schedules a root rescan, and
@@ -35,7 +37,7 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { WATCH_DEBOUNCE_MS, WATCH_POLL_MS } from '../shared/limits.ts';
-import type { ChangeHub, Logger, SettingsStore } from './context.ts';
+import type { ChangeHub, Logger, SelfWrites, SettingsStore } from './context.ts';
 import { linuxRecursiveWatch } from './folder-watch.ts';
 import { isLooseHtmlName } from './loose.ts';
 import { isAtomicTempName, isSlug } from './paths.ts';
@@ -198,6 +200,11 @@ export type WatcherOptions = {
   sweepTicks?: number;
   /** Test seam; defaults to `takeFingerprint`. `nested: false` is the cheap per-tick form. */
   fingerprint?: (dir: string, options: { nested: boolean }) => Promise<Fingerprint>;
+  /**
+   * The service's own writes (Phase 2 §2.6): a file whose current bytes are the ones the service
+   * left there is the echo of a hand edit and is not reported. Without it every change is reported.
+   */
+  selfWrites?: SelfWrites;
 };
 
 export type Watcher = {
@@ -314,6 +321,23 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     knownSlugs = current;
   };
 
+  /**
+   * E10: remove from the batch every file that now holds exactly the bytes the service itself
+   * left there (the user's own write, already announced with `origin: "user"`). The entry is not
+   * consumed, so a doubled Windows event or the poll backstop reading it later is dropped too. A
+   * file holding other bytes is the agent's: kept, and its entry forgotten, so a later write that
+   * happens to restore the user's bytes (B, then A again) is still shown.
+   */
+  const dropEchoes = async (slug: string, dir: string, files: Set<string>): Promise<void> => {
+    const selfWrites = options.selfWrites;
+    if (selfWrites === undefined) return;
+    for (const rel of [...files]) {
+      if (rel === CHECK_REPORT) continue; // the check CLI's report, never a hand edit
+      if (await selfWrites.isEcho(slug, rel, dir)) files.delete(rel);
+      else selfWrites.forget(slug, rel);
+    }
+  };
+
   const flushSlug = async (slug: string, files: Set<string>): Promise<void> => {
     if (stopped) return;
     const dir = path.join(currentRoot, slug); // slug passed isSlug at schedule time or came from readSlugs
@@ -335,6 +359,7 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     // name is reported with it, because the fingerprint just moved past it and the poll backstop
     // would never see it again (a design.json left unreconciled, a design stuck provisional).
     if (previous !== undefined) for (const key of diffFingerprints(previous, next)) files.add(key);
+    await dropEchoes(slug, dir, files);
     const hasDesignJson = files.delete('design.json');
     const hasChecks = files.delete(CHECK_REPORT);
     const rest = [...files].sort();

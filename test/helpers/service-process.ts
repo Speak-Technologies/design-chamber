@@ -32,7 +32,12 @@ export type RunningService = {
   request(pathname: string, init?: ServiceRequest): Promise<Response>;
   /** Everything the process wrote to stderr/stdout so far. */
   output(): string;
-  stop(): Promise<void>;
+  /**
+   * End the process and wait for it to exit. SIGTERM by default (a clean shutdown on POSIX);
+   * `SIGKILL` ends it at once with no handler run (TerminateProcess on Windows, where every
+   * signal is that hard kill).
+   */
+  stop(signal?: NodeJS.Signals): Promise<void>;
 };
 
 const freePort = (): Promise<number> =>
@@ -86,8 +91,8 @@ export const startServiceProcess = async (env: Record<string, string> = {}, main
     });
   };
 
-  const stop = async (): Promise<void> => {
-    if (!exited) child.kill();
+  const stop = async (signal: NodeJS.Signals = 'SIGTERM'): Promise<void> => {
+    if (!exited) child.kill(signal);
     await exit;
     await isolated?.cleanup();
   };
