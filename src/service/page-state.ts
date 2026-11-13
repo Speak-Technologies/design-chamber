@@ -49,9 +49,10 @@ export const PAGE_STATE_LINK_SENTENCE = "This design's .chamber folder or its pa
 /** One-shot timer seam: answers a cancel function. Tests pass a fake clock. */
 export type Schedule = (run: () => void, ms: number) => () => void;
 
+// Not unref'd: a PATCH's answer waits for this write, so the write holds the event loop until it
+// lands. Shutdown cancels it through `dispose` (which writes at once).
 const defaultSchedule: Schedule = (run, ms) => {
   const timer = setTimeout(run, ms);
-  timer.unref();
   return () => clearTimeout(timer);
 };
 
