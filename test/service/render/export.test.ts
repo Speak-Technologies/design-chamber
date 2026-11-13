@@ -24,7 +24,7 @@ const setup = async (t: TestContext, extra: { zipMaxEntryBytes?: number } = {}):
 };
 
 describe('export service', () => {
-  test('ZIP keeps the folder tree, excludes design.json/.chamber/.versions/.thumb.png', async (t) => {
+  test('ZIP keeps the folder tree, excludes design.json/.chamber/.versions/.thumb.png and macOS litter', async (t) => {
     const { tmp, downloads, exports, issued } = await setup(t);
     await tmp.writeDesign(
       'cv',
@@ -36,6 +36,8 @@ describe('export service', () => {
         '.chamber/state.json': '{}',
         '.versions/index.json': '{}',
         '.thumb.png': 'nope',
+        '.DS_Store': 'finder',
+        'assets/._pic.png': 'appledouble',
       }),
     );
     const result = await exports.export('cv', { format: 'zip' });

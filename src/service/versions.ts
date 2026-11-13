@@ -3,9 +3,9 @@
 //   .versions/index.json          { version:1, next, versions:[VersionEntry…] }  newest last
 //   .versions/objects/<aa>/<sha>  raw file bytes, content-addressed
 //
-// Tracked set: every file under the design folder except `.versions/**`, `.chamber/**` and
-// `.thumb.png`; `design.json` is stored with `comments` removed (comments live in state.json,
-// which versions never touch). Snapshots: auto after a quiet period, on an agent turn, manual,
+// Tracked set: every file under the design folder except `.versions/**`, `.chamber/**`,
+// `.thumb.png` and macOS litter (`.DS_Store`, `._*`); `design.json` is stored with `comments`
+// removed (comments live in state.json, which versions never touch). Snapshots: auto after a quiet period, on an agent turn, manual,
 // and around restore (restore-point → write files → restored). Dedupe by tree hash; keep the
 // newest VERSIONS_KEEP versions and GC unreferenced objects after pruning.
 //
@@ -47,7 +47,7 @@ import type {
 import { ApiError } from './http.ts';
 import type { ChangeHub, DesignStore, Logger, ServiceContext } from './context.ts';
 import { RefBlocked, type FileSource } from './bundle.ts';
-import { atomicTempPath, resolveInside } from './paths.ts';
+import { atomicTempPath, foldsCase, resolveInside } from './paths.ts';
 import {
   CHAMBER_DIR,
   DAMAGED_KEEP_MAX,
@@ -61,6 +61,7 @@ import {
   isTracked,
   parseDamagedFileName,
   parseIndexText,
+  relsToRemoveOnRestore,
   VERSIONS_DIR,
   type DamageKind,
   type IndexHealth,
@@ -763,8 +764,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
       await writeAtomic(destination, bytes);
     }
     // Delete tracked files the version does not have (restore removes what was added since).
-    for (const rel of Object.keys(current.files)) {
-      if (target.files[rel] !== undefined) continue;
+    for (const rel of relsToRemoveOnRestore(Object.keys(current.files), Object.keys(target.files), foldsCase())) {
       await rm(await resolveInside(designDir, rel.split('/')), { force: true });
     }
     treeCache.delete(slug);

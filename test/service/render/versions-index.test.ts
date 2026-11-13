@@ -14,6 +14,7 @@ import {
   INDEX_READ_MAX_BYTES,
   parseDamagedFileName,
   parseIndexText,
+  relsToRemoveOnRestore,
   type DamageKind,
 } from '../../../src/service/versions-index.ts';
 
@@ -61,6 +62,15 @@ describe('parseIndexText', () => {
     assert.equal(parsed.index.versions.length, 1);
   });
 
+  test('an entry saved before macOS litter was left out still reads whole (a .DS_Store in its files is kept)', () => {
+    const older = { ...entry(1), files: { 'index.html': hex('a'), '.DS_Store': hex('c'), 'assets/._logo.png': hex('d') } };
+    const parsed = parseIndexText(indexText([older]));
+    assert.equal(parsed.kind, 'ok');
+    if (parsed.kind !== 'ok') return;
+    assert.equal(parsed.dropped, 0);
+    assert.deepEqual(Object.keys(parsed.index.versions[0]?.files ?? {}).sort(), ['.DS_Store', 'assets/._logo.png', 'index.html']);
+  });
+
   test('garbage, truncated JSON and non-objects are unreadable', () => {
     assert.deepEqual(parseIndexText('not json at all'), { kind: 'unreadable' });
     assert.deepEqual(parseIndexText(indexText([entry(1), entry(2)]).slice(0, 60)), { kind: 'unreadable' });
@@ -96,6 +106,22 @@ describe('parseIndexText', () => {
     assert.equal(raised.kind === 'ok' && raised.index.next, 5);
     const empty = parseIndexText(indexText([], { next: -3 }));
     assert.equal(empty.kind === 'ok' && empty.index.next, 1);
+  });
+});
+
+describe('relsToRemoveOnRestore', () => {
+  test('current files the version does not list are removed; the ones it lists stay', () => {
+    assert.deepEqual(relsToRemoveOnRestore(['index.html', 'extra.txt', 'assets/a.png'], ['index.html', 'assets/a.png'], false), ['extra.txt']);
+  });
+
+  test('on a case-folding filesystem a name the version lists in other letter case is the same file and stays', () => {
+    const current = ['assets/logo.png', 'Screens/home.html', 'extra.txt'];
+    const target = ['assets/Logo.png', 'screens/home.html'];
+    assert.deepEqual(relsToRemoveOnRestore(current, target, true), ['extra.txt']);
+  });
+
+  test('on a case-sensitive filesystem a re-cased name is a different file and is removed', () => {
+    assert.deepEqual(relsToRemoveOnRestore(['assets/logo.png'], ['assets/Logo.png'], false), ['assets/logo.png']);
   });
 });
 
