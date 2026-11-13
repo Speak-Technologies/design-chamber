@@ -1403,11 +1403,14 @@ structured `HandEdit` entries (`text`, `tweaks`, `reorder`, `reorder-many`, `dup
   frame (quota error), the page (the design-wide map) and the service (413, nothing of that delta applied).
 - **Memory and disk**: one map per touched design, dropped 10 minutes after its last use once flushed, all
   maps ≤ `PAGE_STATE_CACHE_MAX_BYTES` (32 MiB, least recently used dropped after a flush). `PATCH` applies
-  `clear` then `changes` in order, checks the cap, answers, and schedules at most one disk write per design
-  per `PAGE_STATE_WRITE_MIN_MS` (1 s); last write wins across windows. After `PATCH` or `DELETE` it emits
-  `{ slug, kind: 'page-state' }`. Shutdown flushes every pending write; `removed` drops it; a root change
-  flushes to the old paths and clears the cache. A disk failure is logged with its code and the next
-  `PATCH` answers 500 with the folder sentence; the memory copy stays.
+  `clear` then `changes` in order, checks the cap, schedules at most one disk write per design per
+  `PAGE_STATE_WRITE_MIN_MS` (1 s), and answers once the write carrying its change landed (never from memory
+  alone: the host's SIGTERM is a hard kill on Windows, so no shutdown flush runs there); last write wins
+  across windows. After `PATCH` or `DELETE` it emits `{ slug, kind: 'page-state' }`. Shutdown flushes every
+  pending write; `removed` drops it (its waiting PATCHes answer 404); a Clear answers the PATCHes still
+  waiting; a root change flushes to the old paths and clears the cache. A disk failure is logged with its
+  code and the PATCHes waiting for that write answer 500 with the folder sentence (a failed write nobody
+  waited for is answered by the next `PATCH`); the memory copy stays.
 - **Clear never comes back.** A per-design clear counter (in memory, not evicted with the data) is answered
   as `gen = "<epoch>:<n>"`; `DELETE` bumps `n`. A `PATCH` with the current epoch and a smaller `n` was made
   before a Clear: 409 `stale`, nothing applied. A `gen` from another epoch is accepted (residual §16.2).

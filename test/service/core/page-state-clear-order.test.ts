@@ -10,11 +10,9 @@ import { describe, test } from 'node:test';
 
 import { formatGen } from '../../../src/shared/page-state.ts';
 import { ApiError } from '../../../src/service/http.ts';
-import { createPageStateService, type Schedule } from '../../../src/service/page-state.ts';
+import { createPageStateService } from '../../../src/service/page-state.ts';
 import { createFakeContext } from '../../helpers/fake-context.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
-
-const noTimers: Schedule = () => () => undefined;
 
 describe('page-state: a Clear is ordered by when it was asked, not by when its lookup answered', () => {
   // Lookups 2 and 3 belong to the Clear and the late PATCH, in whichever order the service issues
@@ -35,7 +33,7 @@ describe('page-state: a Clear is ordered by when it was asked, not by when its l
           return dir;
         },
       };
-      const service = createPageStateService({ store, hub: ctx.hub, log: ctx.log, schedule: noTimers });
+      const service = createPageStateService({ store, hub: ctx.hub, log: ctx.log });
       t.after(() => service.dispose());
 
       const gen = formatGen(ctx.epoch, 0);

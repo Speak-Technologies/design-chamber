@@ -2,6 +2,11 @@
 // design at `<design>/.chamber/page-state.json`, kept in memory once touched, capped at 1 MB of
 // keys plus values, written at most once per second per design, flushed on shutdown.
 //
+// A PATCH is answered once the write carrying its change is on disk, never before. The host stops
+// a service with SIGTERM, which on Windows ends the process at once (no handler runs, no flush), so
+// memory alone is never reported as saved: an unanswered PATCH stays dirty in the page, which sends
+// it again to the restarted service.
+//
 // Safety rules this module holds:
 // - Every path goes through `resolvePlainTarget` from the design folder (containment, then the
 //   realpath compared with the lexical path), so a `.chamber` or a `page-state.json` that is a
@@ -63,13 +68,33 @@ export type PageStateDeps = {
 
 export type PageStateService = {
   read(slug: string): Promise<PageStateResponse>;
-  /** Apply a validated delta made at `gen`. 409 `stale` before a newer Clear, 413 over the cap; nothing applied on either. */
+  /**
+   * Apply a validated delta made at `gen`, answered once the write carrying it is on disk (or a later
+   * Clear made it moot). 409 `stale` before a newer Clear, 413 over the cap; nothing applied on
+   * either. A write that fails answers the folder or link sentence; memory keeps the change.
+   */
   patch(slug: string, gen: string, delta: PageStateDelta): Promise<PageStatePatchResponse>;
   clear(slug: string): Promise<PageStateClearResponse>;
   /** Write every pending change now (shutdown, root change). Never throws. */
   flush(): Promise<void>;
   /** Flush, then stop listening. */
   dispose(): Promise<void>;
+};
+
+/** The PATCHes waiting for the memory copy to reach the disk; the write that carries it settles them. */
+type Landing = { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void };
+
+const createLanding = (): Landing => {
+  let resolve: () => void = () => undefined;
+  let reject: (error: unknown) => void = () => undefined;
+  const promise = new Promise<void>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  // Every waiter awaits `promise` itself; this branch only keeps a refusal nobody awaits yet from
+  // counting as an unhandled rejection.
+  promise.catch(() => undefined);
+  return { promise, resolve, reject };
 };
 
 type Entry = {
@@ -86,7 +111,9 @@ type Entry = {
   /** When the last write began (ms), for the once-a-second rule. */
   lastWriteAt: number | null;
   cancelTimer: (() => void) | null;
-  /** The last write failed with this error; the next PATCH answers it once and retries the write. */
+  /** The PATCHes whose changes are in memory and not yet on disk; null when none waits. */
+  landing: Landing | null;
+  /** A write nobody waited for failed with this error; the next PATCH answers it once and retries the write. */
   failure: unknown;
   lastUsed: number;
   /** Dropped by a `removed` event or a root change: queued work on it is skipped. */
@@ -169,6 +196,7 @@ export const createPageStateService = (deps: PageStateDeps): PageStateService =>
     dirty: false,
     lastWriteAt: null,
     cancelTimer: null,
+    landing: null,
     failure: null,
     lastUsed: now(),
     dropped: false,
@@ -267,9 +295,21 @@ export const createPageStateService = (deps: PageStateDeps): PageStateService =>
     }
   };
 
-  /** Write the entry's memory copy if it is newer than the file (inside the slug's chain). */
+  /**
+   * Write the entry's memory copy if it is newer than the file (inside the slug's chain), and settle
+   * the PATCHes waiting for it: answered when it landed, refused with the sentence when it did not.
+   */
   const writeNow = async (entry: Entry): Promise<void> => {
-    if (entry.dropped || !entry.dirty || entry.linked) return;
+    const landing = entry.landing;
+    entry.landing = null;
+    if (entry.dropped || !entry.dirty) {
+      landing?.resolve();
+      return;
+    }
+    if (entry.linked) {
+      landing?.reject(new ApiError('invalid', PAGE_STATE_LINK_SENTENCE));
+      return;
+    }
     entry.dirty = false;
     entry.lastWriteAt = now();
     const text = serializePageStateFile(entry.items, new Date(now()).toISOString());
@@ -278,15 +318,19 @@ export const createPageStateService = (deps: PageStateDeps): PageStateService =>
       await writeFileAtomic(file, text, { createDirs: false });
       entry.failure = null;
       entry.damaged = false;
+      landing?.resolve();
     } catch (error) {
       if (isLinkRefusal(error)) {
         entry.linked = true;
         log.warn('page-state.write-refused', { slug: entry.slug, reason: 'link' });
+        landing?.reject(new ApiError('invalid', PAGE_STATE_LINK_SENTENCE));
         return;
       }
-      // Memory stays the newer copy; the next PATCH reports this and tries again.
+      // Memory stays the newer copy. The waiting PATCHes answer the folder sentence (the page keeps
+      // those keys and sends them again); a write nobody waited for is reported by the next PATCH.
       entry.dirty = true;
-      entry.failure = error;
+      if (landing) landing.reject(new ApiError('internal', folderErrorSentence(error, entry.dir)));
+      else entry.failure = error;
       log.warn('page-state.write-failed', { slug: entry.slug, code: errorCode(error) });
     }
   };
@@ -306,6 +350,16 @@ export const createPageStateService = (deps: PageStateDeps): PageStateService =>
     entry.cancelTimer = null;
   };
 
+  /** Forget an entry's pending write for good; the PATCHes waiting on it get `outcome`. */
+  const dropEntry = (entry: Entry, outcome: ApiError | null): void => {
+    cancelWrite(entry);
+    entry.dropped = true;
+    const landing = entry.landing;
+    entry.landing = null;
+    if (outcome === null) landing?.resolve();
+    else landing?.reject(outcome);
+  };
+
   const flush = async (): Promise<void> => {
     const pending = [...entries.values()].filter((entry) => entry.dirty || entry.cancelTimer !== null);
     await Promise.all(
@@ -323,8 +377,7 @@ export const createPageStateService = (deps: PageStateDeps): PageStateService =>
       // The folder went to the trash: its pending write is dropped, never re-creating it.
       const entry = entries.get(event.slug);
       if (entry) {
-        cancelWrite(entry);
-        entry.dropped = true;
+        dropEntry(entry, new ApiError('not-found', PAGE_STATE_GONE_SENTENCE));
         entries.delete(event.slug);
       }
       clears.delete(event.slug);
@@ -336,7 +389,7 @@ export const createPageStateService = (deps: PageStateDeps): PageStateService =>
       clears.clear();
       for (const entry of old) {
         cancelWrite(entry);
-        if (entry.dirty) void chained(entry.slug, () => writeNow(entry));
+        if (entry.dirty || entry.landing !== null) void chained(entry.slug, () => writeNow(entry));
       }
     }
   });
@@ -354,7 +407,7 @@ export const createPageStateService = (deps: PageStateDeps): PageStateService =>
     async patch(slug, gen, delta) {
       const dir = await pageStateDirOf(store, slug);
       sweep();
-      return chained(slug, async (): Promise<PageStatePatchResponse> => {
+      const { answer, landed } = await chained(slug, async (): Promise<{ answer: PageStatePatchResponse; landed: Promise<void> | null }> => {
         const entry = await entryFor(slug, dir);
         // Checked inside the chain, right before anything is applied: a Clear counted while this
         // waited behind a write or a load is seen.
@@ -372,11 +425,21 @@ export const createPageStateService = (deps: PageStateDeps): PageStateService =>
           entry.chars = outcome.chars;
           entry.damaged = false;
           entry.dirty = true;
-          scheduleWrite(entry);
           hub.emit({ slug, kind: 'page-state' });
         }
-        return { chars: entry.chars, gen: genOf(slug) };
+        // Dirty also when this delta changed nothing: a resend after a failed write waits for the
+        // retry, never answering "saved" while the file is older than memory.
+        let landed: Promise<void> | null = null;
+        if (entry.dirty) {
+          scheduleWrite(entry);
+          entry.landing ??= createLanding();
+          landed = entry.landing.promise;
+        }
+        return { answer: { chars: entry.chars, gen: genOf(slug) }, landed };
       });
+      // Awaited outside the chain: the write runs on it.
+      await landed;
+      return answer;
     },
 
     async clear(slug) {
@@ -389,11 +452,9 @@ export const createPageStateService = (deps: PageStateDeps): PageStateService =>
         const dir = await pageStateDirOf(store, slug);
         clears.set(slug, (clears.get(slug) ?? 0) + 1);
         const counted = genOf(slug);
+        // The PATCHes still waiting were made before this Clear: what they saved is cleared, not lost.
         const previous = entries.get(slug);
-        if (previous) {
-          cancelWrite(previous);
-          previous.dropped = true;
-        }
+        if (previous) dropEntry(previous, null);
         const fresh = empty(slug, dir);
         entries.set(slug, fresh);
         let file: string;

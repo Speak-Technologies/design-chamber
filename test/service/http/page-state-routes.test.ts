@@ -138,15 +138,18 @@ describe('page-state routes: refusals before anything is read or written', () =>
 });
 
 describe('page-state routes: the data', () => {
-  test('save, read back, survive a restart; flushed on shutdown even when the write was not due', async (t) => {
+  test('save, read back, survive a restart; a PATCH is answered only once its change is on disk', async (t) => {
     const { service, root, settings } = await start(t);
     const { gen } = await read(service);
     let answer = await patch(service, { gen, changes: [['checklist:done', '[1,3]'], ['theme', 'dark']] });
     assert.equal(answer.status, 200);
     assert.deepEqual((await answer.json()) as PageStatePatchResponse, { chars: 'checklist:done[1,3]themedark'.length, gen });
-    // The second write is coalesced (due a second after the first); stopping now must flush it.
+    assert.deepEqual(await onDisk(root), [['checklist:done', '[1,3]'], ['theme', 'dark']]);
+    // The second write is coalesced (due a second after the first) and the answer waits for it: the
+    // host's stop is a hard kill on Windows, so nothing answered may live only in memory.
     answer = await patch(service, { gen, changes: [['checklist:done', '[1,3,4]']] });
     assert.equal(answer.status, 200);
+    assert.deepEqual(await onDisk(root), [['checklist:done', '[1,3,4]'], ['theme', 'dark']], 'on disk when answered');
     await service.stop();
     assert.deepEqual(await onDisk(root), [['checklist:done', '[1,3,4]'], ['theme', 'dark']]);
 
@@ -196,14 +199,17 @@ describe('page-state routes: the data', () => {
   test('over 1 MB: 413 with the cap sentence, nothing of that delta applied', async (t) => {
     const { service } = await start(t);
     const { gen } = await read(service);
-    // Fill to just under the cap through uploads-free chunks of 40 000 characters.
+    // Fill to just under the cap through uploads-free chunks of 40 000 characters, sent together so
+    // they share the coalesced writes (each answer waits for its write).
     const chunk = 'x'.repeat(40_000);
     let chars = 0;
+    const fills: Promise<Response>[] = [];
     for (let n = 0; chars + 40_005 <= PAGE_STATE_MAX_CHARS; n += 1) {
       const key = `k${String(n).padStart(4, '0')}`;
-      assert.equal((await patch(service, { gen, changes: [[key, chunk]] })).status, 200);
+      fills.push(patch(service, { gen, changes: [[key, chunk]] }));
       chars += key.length + chunk.length;
     }
+    for (const filled of await Promise.all(fills)) assert.equal(filled.status, 200);
     // Exactly to the cap is still saved.
     const room = PAGE_STATE_MAX_CHARS - chars;
     assert.equal((await patch(service, { gen, changes: [['last', 'y'.repeat(room - 4)]] })).status, 200);

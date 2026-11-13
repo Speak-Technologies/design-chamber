@@ -1,7 +1,8 @@
 // Saved page data, service side (Phase 2 technical design §8.1, §8.2; feature 19): one store per
 // design at .chamber/page-state.json, the 1 MB cap, at most one disk write per second per design
-// (fake clock), flush on dispose, no re-created design after a removal, hostile files reading as
-// empty, links refused on the lexical path, Clear never coming back, and nothing personal logged.
+// (fake clock), a PATCH answered only once its change is on disk, flush on dispose, no re-created
+// design after a removal, hostile files reading as empty, links refused on the lexical path, Clear
+// never coming back, and nothing personal logged.
 
 import assert from 'node:assert/strict';
 import { chmod, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
@@ -14,6 +15,7 @@ import { ApiError } from '../../../src/service/http.ts';
 import {
   createPageStateService,
   PAGE_STATE_CAP_SENTENCE,
+  PAGE_STATE_GONE_SENTENCE,
   PAGE_STATE_IDLE_MS,
   PAGE_STATE_LINK_SENTENCE,
   PAGE_STATE_STALE_SENTENCE,
@@ -23,13 +25,23 @@ import {
 import { createFakeContext, type FakeContext } from '../../helpers/fake-context.ts';
 import { useTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
 
-/** A clock the test moves by hand; timers run when it passes their time. */
+/**
+ * A clock the test moves by hand: a timer due now runs on its own (as `setTimeout(0)` does), a
+ * later one when the clock passes its time.
+ */
 const fakeClock = (start = 1_000_000) => {
   let at = start;
   const timers: { due: number; run: () => void; cancelled: boolean }[] = [];
   const schedule: Schedule = (run, ms) => {
     const timer = { due: at + ms, run, cancelled: false };
     timers.push(timer);
+    if (ms <= 0) {
+      setImmediate(() => {
+        if (timer.cancelled) return;
+        timer.cancelled = true;
+        timer.run();
+      });
+    }
     return () => {
       timer.cancelled = true;
     };
@@ -82,6 +94,28 @@ const settled = async (service: PageStateService, slug = 'demo'): Promise<void> 
   await service.read(slug);
 };
 
+/** Let the service's file calls and chained tasks run until `done()` holds. */
+const until = async (done: () => boolean, what: string): Promise<void> => {
+  const deadline = Date.now() + 5000;
+  while (!done() && Date.now() < deadline) await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(done(), `never happened: ${what}`);
+};
+
+/** How many changes the service applied so far (each one announces itself). */
+const applied = (ctx: FakeContext): number => ctx.events.filter((event) => event.kind === 'page-state').length;
+
+type Tracked<T> = { promise: Promise<T>; settled: () => boolean };
+
+/** Whether a promise has settled yet, without waiting for it. */
+const tracked = <T>(promise: Promise<T>): Tracked<T> => {
+  let done = false;
+  promise.then(
+    () => (done = true),
+    () => (done = true),
+  );
+  return { promise, settled: () => done };
+};
+
 const rejectsWith = (promise: Promise<unknown>, code: string, message?: string | RegExp): Promise<void> =>
   assert.rejects(promise, (error: unknown) => {
     assert.ok(error instanceof ApiError, String(error));
@@ -108,15 +142,11 @@ describe('page-state: read and write', () => {
     assert.equal(await exists(path.join(dir, '.chamber')), false);
   });
 
-  test('a PATCH answers before the disk write, then the file holds the pairs in order', async (t) => {
-    const { service, ctx, clock, fileOf } = await setup(t);
+  test('a PATCH is answered once the file holds the pairs, in order', async (t) => {
+    const { service, ctx, fileOf } = await setup(t);
     const answer = await service.patch('demo', formatGen(ctx.epoch, 0), set(['checklist:done', '[1,3,4]'], ['theme', 'dark']));
     assert.deepEqual(answer, { chars: 'checklist:done[1,3,4]themedark'.length, gen: formatGen(ctx.epoch, 0) });
-    assert.equal(await onDisk(fileOf()), null, 'not written yet: the answer came first');
-
-    clock.advance(0);
-    await settled(service);
-    assert.deepEqual(await onDisk(fileOf()), [['checklist:done', '[1,3,4]'], ['theme', 'dark']]);
+    assert.deepEqual(await onDisk(fileOf()), [['checklist:done', '[1,3,4]'], ['theme', 'dark']], 'on disk when answered');
     assert.deepEqual((await service.read('demo')).items, [['checklist:done', '[1,3,4]'], ['theme', 'dark']]);
     // The event says only which design: no keys, no values.
     const events = ctx.events.filter((event) => event.kind === 'page-state');
@@ -177,7 +207,11 @@ describe('page-state: the 1 MB cap (keys and values together)', () => {
     const { service, ctx, clock, fileOf } = await setup(t);
     const gen = formatGen(ctx.epoch, 0);
     await service.patch('demo', gen, set(['keep', 'me']));
-    const full = await service.patch('demo', gen, set(['big', 'x'.repeat(PAGE_STATE_MAX_CHARS - 6 - 3)]));
+    // Within a second of the first write: answered when the clock reaches the next one.
+    const filling = service.patch('demo', gen, set(['big', 'x'.repeat(PAGE_STATE_MAX_CHARS - 6 - 3)]));
+    await until(() => applied(ctx) === 2, 'the big value applied');
+    clock.advance(PAGE_STATE_WRITE_MIN_MS);
+    const full = await filling;
     assert.equal(full.chars, PAGE_STATE_MAX_CHARS);
 
     await rejectsWith(service.patch('demo', gen, set(['keep', null], ['k', 'v'.repeat(10)])), 'too-large', PAGE_STATE_CAP_SENTENCE);
@@ -201,16 +235,19 @@ describe('page-state: at most one disk write per second per design', () => {
     assert.deepEqual(await onDisk(fileOf()), [['n', '0']]);
 
     // A design writing on every animation frame for most of a second.
+    const answers: Tracked<unknown>[] = [];
     for (let frame = 1; frame <= 50; frame += 1) {
-      await service.patch('demo', gen, set(['n', String(frame)]));
+      answers.push(tracked(service.patch('demo', gen, set(['n', String(frame)]))));
+      await until(() => applied(ctx) === 1 + frame, `frame ${frame} applied`);
       clock.advance(16);
     }
     await settled(service);
     assert.deepEqual(await onDisk(fileOf()), [['n', '0']], 'nothing written before the second is up');
+    assert.equal(answers.filter((answer) => answer.settled()).length, 0, 'no PATCH answered before its change is on disk');
     assert.equal(clock.created(), 2, 'one write for the first PATCH, one coalesced write for the other fifty');
 
     clock.advance(PAGE_STATE_WRITE_MIN_MS - 50 * 16);
-    await settled(service);
+    await Promise.all(answers.map((answer) => answer.promise));
     assert.deepEqual(await onDisk(fileOf()), [['n', '50']]);
     assert.equal(clock.created(), 2);
   });
@@ -219,45 +256,47 @@ describe('page-state: at most one disk write per second per design', () => {
     const { service, ctx, clock, fileOf } = await setup(t);
     const gen = formatGen(ctx.epoch, 0);
     await service.patch('demo', gen, set(['a', '1']));
-    clock.advance(0);
-    await settled(service);
     clock.advance(PAGE_STATE_WRITE_MIN_MS * 5);
     await service.patch('demo', gen, set(['a', '2']));
-    clock.advance(0);
-    await settled(service);
     assert.deepEqual(await onDisk(fileOf()), [['a', '2']]);
-    await service.patch('demo', gen, set(['a', '3']));
+    const third = tracked(service.patch('demo', gen, set(['a', '3'])));
+    await until(() => applied(ctx) === 3, 'the third change applied');
     clock.advance(PAGE_STATE_WRITE_MIN_MS - 1);
     await settled(service);
     assert.deepEqual(await onDisk(fileOf()), [['a', '2']]);
+    assert.equal(third.settled(), false, 'not answered while its change is only in memory');
     clock.advance(1);
-    await settled(service);
+    await third.promise;
     assert.deepEqual(await onDisk(fileOf()), [['a', '3']]);
   });
 
-  test('dispose flushes a write that was not due yet', async (t) => {
+  test('dispose flushes a write that was not due yet, and its PATCH is answered then', async (t) => {
     const { service, ctx, clock, fileOf } = await setup(t);
     const gen = formatGen(ctx.epoch, 0);
     await service.patch('demo', gen, set(['a', '1']));
-    clock.advance(0);
-    await settled(service);
-    await service.patch('demo', gen, set(['a', 'last before close']));
+    const last = tracked(service.patch('demo', gen, set(['a', 'last before close'])));
+    await until(() => applied(ctx) === 2, 'the last change applied');
+    assert.equal(last.settled(), false);
     await service.dispose();
+    await last.promise;
     assert.deepEqual(await onDisk(fileOf()), [['a', 'last before close']]);
     assert.equal(clock.pending(), 0, 'the timer was cancelled');
   });
 
   test('a root change flushes to the old folder and forgets the cache', async (t) => {
-    const { service, ctx, clock, fileOf } = await setup(t);
+    const { service, ctx, fileOf } = await setup(t);
     const gen = formatGen(ctx.epoch, 0);
     await service.patch('demo', gen, set(['a', '1']));
-    clock.advance(0);
-    await settled(service);
-    await service.patch('demo', gen, set(['a', '2']));
+    const beforeClear = service.patch('demo', gen, set(['a', '2']));
+    await until(() => applied(ctx) === 2, 'the second change applied');
     await service.clear('demo');
-    await service.patch('demo', formatGen(ctx.epoch, 1), set(['a', 'pending']));
+    await beforeClear; // made before the Clear: answered by it, nothing to write
+    await service.patch('demo', formatGen(ctx.epoch, 1), set(['a', 'written']));
+    const pending = service.patch('demo', formatGen(ctx.epoch, 1), set(['a', 'pending']));
+    await until(() => applied(ctx) === 5, 'the pending change applied');
     ctx.hub.emit({ slug: null, kind: 'root' });
     await service.flush();
+    await pending;
     assert.deepEqual(await onDisk(fileOf()), [['a', 'pending']]);
     assert.equal((await service.read('demo')).gen, formatGen(ctx.epoch, 0), 'the clear counter is dropped with the root');
   });
@@ -268,11 +307,11 @@ describe('page-state: a removed design is never re-created', () => {
     const { service, ctx, clock, tmp } = await setup(t);
     const gen = formatGen(ctx.epoch, 0);
     await service.patch('demo', gen, set(['a', '1']));
-    clock.advance(0);
-    await settled(service);
-    await service.patch('demo', gen, set(['a', '2']));
+    const second = service.patch('demo', gen, set(['a', '2']));
+    await until(() => applied(ctx) === 2, 'the second change applied');
     await rm(tmp.at('demo'), { recursive: true });
     ctx.hub.emit({ slug: 'demo', kind: 'removed' });
+    await rejectsWith(second, 'not-found', PAGE_STATE_GONE_SENTENCE);
     clock.advance(PAGE_STATE_WRITE_MIN_MS);
     await service.flush();
     assert.equal(await exists(tmp.at('demo')), false);
@@ -281,9 +320,13 @@ describe('page-state: a removed design is never re-created', () => {
 
   test('a folder deleted before the event arrives: the write fails, nothing is created, only the code is logged', async (t) => {
     const { service, ctx, clock, tmp } = await setup(t);
-    await service.patch('demo', formatGen(ctx.epoch, 0), set(['private', 'career notes']));
+    const gen = formatGen(ctx.epoch, 0);
+    await service.patch('demo', gen, set(['private', 'career notes']));
+    const second = service.patch('demo', gen, set(['private', 'more career notes']));
+    await until(() => applied(ctx) === 2, 'the second change applied');
     await rm(tmp.at('demo'), { recursive: true });
-    clock.advance(0);
+    clock.advance(PAGE_STATE_WRITE_MIN_MS);
+    await rejectsWith(second, 'internal');
     await service.flush();
     assert.equal(await exists(tmp.at('demo')), false);
     const failed = ctx.logs.find((line) => line.event === 'page-state.write-failed');
@@ -376,12 +419,11 @@ describe('page-state: links are refused on the lexical path', () => {
   });
 
   test('a .chamber that is a dangling link: the write refuses as a link and nothing is created at its target', async (t) => {
-    const { service, ctx, clock, dir } = await setup(t);
+    const { service, ctx, dir } = await setup(t);
     const target = path.join(dir, 'not-there');
     if (!(await linkOrSkip(t, target, path.join(dir, '.chamber'), 'dir'))) return;
-    await service.patch('demo', formatGen(ctx.epoch, 0), set(['a', '1']));
-    clock.advance(0);
-    await settled(service);
+    // The link only shows at the write, and the PATCH waiting for it answers the refusal.
+    await rejectsWith(service.patch('demo', formatGen(ctx.epoch, 0), set(['a', '1'])), 'invalid', PAGE_STATE_LINK_SENTENCE);
     assert.equal(await exists(target), false);
     assert.deepEqual(ctx.logs.find((line) => line.event === 'page-state.write-refused')?.fields, { slug: 'demo', reason: 'link' });
     await rejectsWith(service.patch('demo', formatGen(ctx.epoch, 0), set(['a', '2'])), 'invalid', PAGE_STATE_LINK_SENTENCE);
@@ -390,13 +432,13 @@ describe('page-state: links are refused on the lexical path', () => {
   test('a .chamber swapped for a link after the data loaded: the next write refuses and writes nothing there', async (t) => {
     const { service, ctx, clock, tmp, dir } = await setup(t);
     await service.patch('demo', formatGen(ctx.epoch, 0), set(['a', '1']));
-    clock.advance(0);
-    await settled(service);
     await rm(path.join(dir, '.chamber'), { recursive: true });
     await mkdir(path.join(dir, 'elsewhere'));
     if (!(await linkOrSkip(t, path.join(dir, 'elsewhere'), path.join(dir, '.chamber'), 'dir'))) return;
-    await service.patch('demo', formatGen(ctx.epoch, 0), set(['a', '2']));
+    const second = service.patch('demo', formatGen(ctx.epoch, 0), set(['a', '2']));
+    await until(() => applied(ctx) === 2, 'the second change applied');
     clock.advance(PAGE_STATE_WRITE_MIN_MS);
+    await rejectsWith(second, 'invalid', PAGE_STATE_LINK_SENTENCE);
     await service.flush();
     assert.equal(await exists(tmp.at('demo/elsewhere/page-state.json')), false);
     await rejectsWith(service.patch('demo', formatGen(ctx.epoch, 0), set(['a', '3'])), 'invalid', PAGE_STATE_LINK_SENTENCE);
@@ -430,10 +472,10 @@ describe('page-state: Clear never comes back', () => {
     const { service, ctx, clock, fileOf } = await setup(t);
     const gen = formatGen(ctx.epoch, 0);
     await service.patch('demo', gen, set(['a', '1']));
-    clock.advance(0);
-    await settled(service);
-    await service.patch('demo', gen, set(['a', '2']));
+    const due = service.patch('demo', gen, set(['a', '2']));
+    await until(() => applied(ctx) === 2, 'the second change applied');
     await service.clear('demo');
+    await due; // answered by the Clear: what it saved is cleared, not lost
     clock.advance(PAGE_STATE_WRITE_MIN_MS);
     await service.flush();
     assert.equal(await onDisk(fileOf()), null);
@@ -480,35 +522,69 @@ describe('page-state: memory', () => {
   });
 
   test('over the byte bound, the least recently used clean entry is dropped first; a dirty one never', async (t) => {
-    const { service, ctx, tmp } = await setup(t, { cacheMaxBytes: 100 });
+    const { service, ctx, clock, tmp } = await setup(t, { cacheMaxBytes: 100 });
     await tmp.writeDesign('other', DESIGN);
     await tmp.write('other/.chamber/page-state.json', JSON.stringify({ v: 1, items: [['k', 'o'.repeat(40)]] }));
-    // demo is dirty (its write is not due on the fake clock) and bigger than the bound on its own.
-    await service.patch('demo', formatGen(ctx.epoch, 0), set(['k', 'd'.repeat(60)]));
+    // demo is dirty (its second write is not due on the fake clock) and bigger than the bound on its own.
+    await service.patch('demo', formatGen(ctx.epoch, 0), set(['k', 'first']));
+    const dirty = service.patch('demo', formatGen(ctx.epoch, 0), set(['k', 'd'.repeat(60)]));
+    await until(() => applied(ctx) === 2, 'the big change applied');
     await service.read('other');
     await tmp.write('other/.chamber/page-state.json', JSON.stringify({ v: 1, items: [['k', 'changed on disk']] }));
     await service.read('demo');
     assert.deepEqual((await service.read('other')).items, [['k', 'changed on disk']], 'other was evicted and reloaded');
     assert.equal((await service.read('demo')).items[0]?.[1], 'd'.repeat(60), 'the dirty entry stayed');
+    clock.advance(PAGE_STATE_WRITE_MIN_MS);
+    await dirty;
   });
 });
 
 describe('page-state: disk failures', () => {
-  test('a failed write keeps the memory copy, the next PATCH answers the folder sentence, then it recovers', { skip: process.platform === 'win32' || process.getuid?.() === 0 ? 'needs POSIX permissions as a normal user' : false }, async (t) => {
+  test('a failed write keeps the memory copy, its PATCH answers the folder sentence, and a resend writes it', { skip: process.platform === 'win32' || process.getuid?.() === 0 ? 'needs POSIX permissions as a normal user' : false }, async (t) => {
     const { service, ctx, clock, fileOf, dir } = await setup(t);
     const gen = formatGen(ctx.epoch, 0);
     await service.patch('demo', gen, set(['a', '1']));
-    clock.advance(0);
-    await settled(service);
+    /** Answer a PATCH whose write is a second away (each attempt counts as the last write). */
+    const nextWrite = async (delta: PageStateDelta): Promise<unknown> => {
+      const answer = tracked(service.patch('demo', gen, delta));
+      await until(() => answer.settled() || clock.pending() > 0, 'the write scheduled');
+      clock.advance(PAGE_STATE_WRITE_MIN_MS);
+      return answer.promise;
+    };
     const chamber = path.join(dir, '.chamber');
     await chmod(chamber, 0o500);
     try {
-      await service.patch('demo', gen, set(['a', '2']));
-      clock.advance(PAGE_STATE_WRITE_MIN_MS);
-      await settled(service);
+      await rejectsWith(nextWrite(set(['a', '2'])), 'internal', /not allowed to write/);
       assert.deepEqual(ctx.logs.find((line) => line.event === 'page-state.write-failed')?.fields, { slug: 'demo', code: 'EACCES' });
       assert.deepEqual((await service.read('demo')).items, [['a', '2']], 'the memory copy stays');
+      assert.deepEqual(await onDisk(fileOf()), [['a', '1']]);
 
+      // The page resends the same keys: nothing changes in memory, and the answer still waits for
+      // a write, which fails again while the folder is read-only.
+      await rejectsWith(nextWrite(set(['a', '2'])), 'internal', /not allowed to write/);
+    } finally {
+      await chmod(chamber, 0o700);
+    }
+    assert.deepEqual(await nextWrite(set(['a', '2'])), { chars: 2, gen });
+    assert.deepEqual(await onDisk(fileOf()), [['a', '2']], 'the resend wrote the memory copy');
+    await nextWrite(set(['a', '3']));
+    assert.deepEqual(await onDisk(fileOf()), [['a', '3']]);
+  });
+
+  test('a write nobody waits for that fails is answered by the next PATCH, which applies nothing and retries', { skip: process.platform === 'win32' || process.getuid?.() === 0 ? 'needs POSIX permissions as a normal user' : false }, async (t) => {
+    const { service, ctx, clock, fileOf, dir } = await setup(t);
+    const gen = formatGen(ctx.epoch, 0);
+    await service.patch('demo', gen, set(['a', '1']));
+    const chamber = path.join(dir, '.chamber');
+    await chmod(chamber, 0o500);
+    try {
+      const pending = service.patch('demo', gen, set(['a', '2']));
+      await until(() => applied(ctx) === 2, 'the second change applied');
+      clock.advance(PAGE_STATE_WRITE_MIN_MS);
+      await rejectsWith(pending, 'internal', /not allowed to write/);
+      // Now the memory copy is newer than the file and nobody waits: a flush (shutdown, root
+      // change) fails with nobody to tell, so the next PATCH tells.
+      await service.flush();
       await rejectsWith(service.patch('demo', gen, set(['a', '3'])), 'internal', /not allowed to write/);
       assert.deepEqual((await service.read('demo')).items, [['a', '2']], 'nothing of the refused PATCH applied');
     } finally {
@@ -517,8 +593,6 @@ describe('page-state: disk failures', () => {
     clock.advance(PAGE_STATE_WRITE_MIN_MS);
     await settled(service);
     assert.deepEqual(await onDisk(fileOf()), [['a', '2']], 'the retry wrote the memory copy');
-    await service.patch('demo', gen, set(['a', '3']));
-    assert.deepEqual((await service.read('demo')).items, [['a', '3']]);
   });
 });
 
@@ -533,8 +607,11 @@ describe('page-state: never logged', () => {
     await service.clear('demo');
     await service.patch('demo', formatGen(ctx.epoch, 0), set([SECRET, SECRET])).catch(() => undefined);
     await service.patch('demo', formatGen(ctx.epoch, 1), set([SECRET, SECRET]));
+    const failing = service.patch('demo', formatGen(ctx.epoch, 1), set([SECRET, `${SECRET}-2`]));
+    await until(() => clock.pending() > 0, 'the last write scheduled');
     await rm(tmp.at('demo'), { recursive: true });
-    clock.advance(0);
+    clock.advance(PAGE_STATE_WRITE_MIN_MS);
+    await failing.catch(() => undefined);
     await service.flush();
 
     assert.ok(ctx.logs.length >= 2, 'the unreadable file and the failed write were logged');

@@ -8,16 +8,14 @@ import { test } from 'node:test';
 
 import { formatGen } from '../../../src/shared/page-state.ts';
 import { ApiError } from '../../../src/service/http.ts';
-import { createPageStateService, type Schedule } from '../../../src/service/page-state.ts';
+import { createPageStateService } from '../../../src/service/page-state.ts';
 import { createFakeContext } from '../../helpers/fake-context.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
-
-const noTimers: Schedule = () => () => undefined;
 
 test('a Clear on a design that is not there answers not-found and does not count', async (t) => {
   const tmp = await useTmpRoot(t);
   const ctx = createFakeContext({ root: tmp.root });
-  const service = createPageStateService({ store: ctx.store, hub: ctx.hub, log: ctx.log, schedule: noTimers });
+  const service = createPageStateService({ store: ctx.store, hub: ctx.hub, log: ctx.log });
   t.after(() => service.dispose());
 
   await assert.rejects(service.clear('ghost'), (error: unknown) => error instanceof ApiError && error.code === 'not-found');

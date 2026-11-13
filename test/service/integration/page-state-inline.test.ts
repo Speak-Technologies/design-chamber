@@ -5,7 +5,7 @@
 // this proves the service actually accepts what the controller sends.
 
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
@@ -63,7 +63,7 @@ const read = async (service: RunningService): Promise<PageStateResponse> => {
 };
 
 test('a 60 000-char CJK or emoji delta goes by upload and persists; ASCII inline; none answered 413', async (t) => {
-  const { service, settings } = await start(t);
+  const { service, root, settings } = await start(t);
   const { client, uploads } = clientOver(service);
   const notices: PageStateNotice[] = [];
   const controller = createPageStateController({
@@ -104,6 +104,11 @@ test('a 60 000-char CJK or emoji delta goes by upload and persists; ASCII inline
   assert.equal(items.get('cjk'), cjk);
   assert.equal(items.get('emoji'), emoji);
   assert.equal(held.chars, 'ascii'.length + ascii.length + 'cjk'.length + cjk.length + 'emoji'.length + emoji.length);
+
+  // On disk once the flushes were answered, before any stop: the host's stop is a hard kill on
+  // Windows, so a shutdown flush cannot be relied on.
+  const file = JSON.parse(await readFile(path.join(root, 'demo', '.chamber', 'page-state.json'), 'utf8')) as { items: [string, string][] };
+  assert.deepEqual(file.items, [['ascii', ascii], ['cjk', cjk], ['emoji', emoji]]);
 
   // Persisted to disk: a restart reads the same data back.
   await service.stop();

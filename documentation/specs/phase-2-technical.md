@@ -1448,7 +1448,8 @@ flush window (§14). `isOlderClear(gen, current)` is pure, in `src/shared/page-s
   and at most `PAGE_STATE_CACHE_MAX_BYTES` (32 MiB) in all (least recently used dropped after a flush).
 - `PATCH` applies `clear` first, then `changes` in order (`null` removes), checks the cap on the result, and on
   success schedules the disk write: at most one per design per `PAGE_STATE_WRITE_MIN_MS` (1 000 ms); a write that
-  is due later is coalesced. Last write wins across windows (19 edge case). Answers before the disk write.
+  is due later is coalesced. Last write wins across windows (19 edge case). Answers once that write landed
+  (amended after Windows CI: the host's SIGTERM is a hard kill there, so an answer from memory could be lost).
 - `DELETE` cancels a pending write, unlinks the file (ENOENT is fine), clears the cache entry.
 - After a successful `PATCH` or `DELETE` the service emits `{ slug, kind: 'page-state' }` (no data in the
   event; the watcher ignores `.chamber/` anyway).
@@ -2179,7 +2180,7 @@ three directions, keep B, Undo; a checklist design keeps its ticks across a relo
   version at worst; a watcher event for the user's last write that the old process had not flushed yet is shown
   as the agent's, once); the page-data clear counter resets (a clear followed by a restart inside another
   surface's 1 s flush window is the only case that brings keys back, §14); pending page data flushed on a clean
-  stop, ≤ 1 s lost on a crash; the guests' change feed resets and refetches.
+  stop; a crash (or any Windows stop) loses only saves not yet answered, which the page still holds and resends; the guests' change feed resets and refetches.
 - **Windows:** backslashes never reach a request (ids only); drive letters and UNC refused by `resolveInside`;
   case-insensitive disk safe (lower-case ids and slugs; trash names checked for existence); file locks → retry
   then the conflict sentence; CRLF and BOM preserved by splices; rename over an existing file never relied on for

@@ -23,8 +23,12 @@ routes answer, and what the viewer shows about it (the menu entry, the confirm a
   applied, and earlier data stays as it was. The answer says "This design tried to save more than
   1 MB of page data. The extra wasn't saved."
 - **At most one disk write per second per design.** A design that saves on every animation frame
-  still costs one write a second; the newest data always wins. The service answers a save before
-  it reaches the disk, and writes everything still waiting when it shuts down.
+  still costs one write a second; the newest data always wins. The service answers a save only once
+  it is on disk (saves that arrive within the same second share one write, so an answer can take up
+  to a second). It never answers from memory alone: OpenChamber stops a service with a signal that
+  on Windows ends the process at once, with no chance to write. A save that was never answered stays
+  unsaved in the viewer, which sends it again once the service is back. On a clean stop (macOS,
+  Linux) the service also writes everything still waiting.
 - **Atomic writes.** The file is written to a temporary name and renamed, so a half-written file is
   never seen.
 - **A removed design is never brought back.** If a design folder is deleted while a write is
@@ -62,8 +66,10 @@ folder.
 | `DELETE /designs/:slug/page-state` | Clears the data | `{ ok: true, gen }` |
 
 When the disk refuses a write (a full drive, no permission), the memory copy is kept, the problem
-is logged with its error code, and the next save answers with a sentence about the folder so the
-viewer can show its notice. That next save also retries the write.
+is logged with its error code, and the saves waiting for that write answer with a sentence about the
+folder so the viewer can show its notice. The viewer keeps those changes and sends them again, and
+that resend retries the write. A write nobody was waiting for (on shutdown) that fails is reported
+by the next save instead.
 
 ## Memory
 The service keeps a design's data in memory once it is used, drops it after 10 idle minutes once it
