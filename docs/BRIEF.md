@@ -155,6 +155,22 @@ Precedence, highest first:
   "Review update" and never updates by itself. The design's own token changes stay as overrides on top of
   a newer system, each with "Reset to system".
 
+### Building systems like Claude (added 2026-11-19)
+- A system lives either in the internal Design Chamber store or in the project repo with a generated
+  living page, chosen per system (like Claude's "Repo + living page"). Copy-on-link feeds designs either way.
+- A `/design-system` slash command plus a building skill (a different name, since the host drops a command
+  whose name a skill already uses) run a Claude-style interview: where it lives, fix-vs-describe, coverage,
+  dark mode, then the token calls (status colours, greys, typography, who can open the living page).
+- "Fix tokens, then document": the agent reconciles the project's token code to the agreed system after a
+  reviewed diff the user approves, in its normal coding role, then writes the docs and living page. The
+  service stays read-only on project repos: it generates the living-page HTML and re-scans, but never writes
+  the repo. The agent writes the repo (tokens and living page).
+- Coverage spans four areas: Foundations, Components, Patterns & voice, Brand & marketing.
+- The living page is one self-contained HTML file (no scripts, no remote refs) the agent commits to the repo;
+  the skill advises placement and access (dev builds only vs public). Hosting and access are the repo's
+  concern, not Design Chamber's.
+- Folded into Phase 2.5 as one on-par release (not a separate phase).
+
 ## Process
 - Public GitHub repo, MIT, default branch `master` with branch protection (PR + 1 approval + CI; owner-only bypass). (Updated 2026-10-27; was local-only.)
 - Agents may folder-install into the user's running OpenChamber for smoke tests.
