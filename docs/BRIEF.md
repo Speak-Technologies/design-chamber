@@ -6,6 +6,15 @@ as plain files by the user's own chat agent.
 
 Owner decisions (2026-10-26). Anything not listed here is open — ask, don't guess.
 
+## North star (owner endorsed 2026-11-19)
+Design Chamber is growing from a design tool into a full artifact manager, with designs as the
+first artifact type. Every artifact is a folder with a contract (`design.json`), rendered in the
+same sandboxed viewer, versioned, checked, and steered by the same agent instructions. Design
+systems, projects, and the ways out (export, present, handoff) all reuse those same primitives, so
+the foundation does not change, it generalizes. The design canvas stays the heart of it, now one
+view over a broader library. The whole lifecycle lives here: make it, systematize it, organize it
+by project, review it, and ship it out, with the agent as the author and the user as the editor.
+
 ## Platform
 - OpenChamber extension (SDK `apiVersion: 1`), source of OpenChamber at
   `~/Documents/GitHub/openchamber` (SDK: `packages/sdk/DOCUMENTATION.md`, `API.md`,
