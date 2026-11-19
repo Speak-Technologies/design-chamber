@@ -103,9 +103,19 @@ test('every Phase 2.5 route with a path parameter refuses an encoded separator (
   }
 });
 
+// Routes a task has built since T0; their own tests cover their answers (folders: test/service/core/folders*.test.ts).
+const BUILT: ReadonlySet<RouteKey> = new Set<RouteKey>([
+  'GET /folders',
+  'POST /folders',
+  'PATCH /folders/:folderId',
+  'DELETE /folders/:folderId',
+  'POST /folders/:folderId/undelete',
+  'POST /folders/:folderId/designs',
+]);
+
 test('with the token, every stub answers 500 with the not-built sentence and nothing else', async (t) => {
   const { call } = await serve(t);
-  for (const key of P25) {
+  for (const key of P25.filter((candidate) => !BUILT.has(candidate))) {
     const answer = await call(key, sample);
     assert.equal(answer.status, 500, key);
     assert.deepEqual(await answer.json(), { error: 'internal', message: SYSTEMS_NOT_BUILT_MESSAGE }, key);

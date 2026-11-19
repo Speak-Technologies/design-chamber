@@ -24,6 +24,7 @@ import { registerDesignsRoutes } from './routes/designs.ts';
 import { registerEditRoutes } from './routes/edits.ts';
 import { registerExportRoutes } from './routes/export.ts';
 import { registerFoldersRoutes } from './routes/folders.ts';
+import { ensureFoldersService } from './folders.ts';
 import { registerMentionsRoutes } from './routes/mentions.ts';
 import { registerOutboxRoutes } from './routes/outbox.ts';
 import { registerPageStateRoutes } from './routes/page-state.ts';
@@ -125,6 +126,8 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   // snapshots from the first content event on, and the routes share these same instances.
   ctx.renders = ensureRenderService(ctx);
   ctx.thumbnails = ensureThumbnailService(ctx);
+  // Eager, so a removed design leaves the folder registry from the first event on (Phase 2.5 §5.8).
+  ensureFoldersService(ctx);
 
   const watcher = startWatcher({ settings, hub, log, selfWrites, ...options.watch });
   ctx.onDispose(() => watcher.stop());

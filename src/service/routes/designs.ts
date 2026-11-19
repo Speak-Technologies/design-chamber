@@ -22,6 +22,7 @@ import {
 import type { DesignKind } from '../../shared/types.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
+import { createProjectFolderStats } from '../folders.ts';
 import { createLooseImporter, listLooseHtml, type LooseList } from '../loose.ts';
 import { projectDirectoryOf } from './chat.ts';
 
@@ -121,6 +122,7 @@ const validatePatch = (body: unknown): PatchDesignBody => {
  */
 export function registerDesignsRoutes(router: Router, ctx: ServiceContext): void {
   const looseImporter = createLooseImporter({ settings: ctx.settings, store: ctx.store, log: ctx.log });
+  const projectFolders = createProjectFolderStats();
 
   router.on('GET /designs', async ({ query }): Promise<DesignListResponse> => {
     const q = query.get('q') ?? undefined;
@@ -133,7 +135,7 @@ export function registerDesignsRoutes(router: Router, ctx: ServiceContext): void
       ctx.log.warn('loose.list-failed', { error: error instanceof Error ? error.message : String(error) });
       return { files: [], total: 0 };
     });
-    return { root, designs, loose };
+    return { root, designs, loose, projectFolders: await projectFolders(designs) };
   });
 
   router.on('POST /loose/import', async ({ body }): Promise<ImportLooseResponse> => {
