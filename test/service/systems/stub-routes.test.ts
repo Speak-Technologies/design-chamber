@@ -118,6 +118,10 @@ const BUILT: ReadonlySet<RouteKey> = new Set<RouteKey>([
   // T5: test/service/systems/assets-routes.test.ts.
   'POST /systems/:id/assets',
   'POST /systems/:id/assets/from-folder',
+  // T3: test/service/systems/system-edits-routes.test.ts (re-sync stays a stub until T4/T13).
+  'POST /systems/:id/edits',
+  'POST /systems/:id/edits/:eid/undo',
+  'POST /systems/:id/hand-edits/clear',
   'GET /folders',
   'POST /folders',
   'PATCH /folders/:folderId',

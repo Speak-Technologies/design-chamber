@@ -12,10 +12,8 @@
 // One writer per design: `update` runs on a per-slug promise chain and re-reads the file inside
 // it, so no caller ever writes a copy it read earlier (the pipeline's append, undo's removal, the
 // expiry prune, the hand-edits clear). Lock order is the versions chain, then this queue; the
-// clear route takes only the queue.
-
-import { mkdir, readFile, stat } from 'node:fs/promises';
-import path from 'node:path';
+// clear route takes only the queue. The queue itself is `queue-file.ts` (shared with a design
+// system's ledger, Phase 2.5 §5.3).
 
 import {
   COMMENT_ID_PATTERN,
@@ -38,8 +36,8 @@ import type { DirectionLetter, HandEdit, IsoDate, JsonValue } from '../../shared
 import { clip, oneLine } from '../../shared/agent/context.ts';
 import type { Logger } from '../context.ts';
 import { ApiError } from '../http.ts';
-import { LINK_SENTENCE, resolvePlainTarget, writeFileAtomic } from '../paths.ts';
 import type { HandEditBody } from './op-module.ts';
+import { createQueueFile, type QueueFileStore } from './queue-file.ts';
 import { isOwnTrashPlace } from './trash.ts';
 
 // ---- shapes ----
@@ -281,26 +279,36 @@ export const parseEditsFile = (value: unknown, slug: string): { file: EditsFile;
 
 // ---- updates (pure) ----
 
-const ageOk = (record: UndoRecord, nowMs: number): boolean => {
+/** The ledger file of any folder: a design's (`EditsFile`) or a design system's (Phase 2.5 §5.3), which differ in their undo records. */
+export type LedgerFile<R extends { id: string; at: IsoDate }> = { v: 1; seq: number; ledger: HandEdit[]; dropped: number; undo: R[] };
+
+const ageOk = (record: { at: IsoDate }, nowMs: number): boolean => {
   const at = Date.parse(record.at);
   return nowMs - at <= USER_UNDO_TTL_MS && at - nowMs <= USER_UNDO_TTL_MS;
 };
 
 /** Undo records past `USER_UNDO_TTL_MS` (or from a far future clock) dropped, then the newest `USER_UNDO_KEEP` kept. */
-export const pruneUndo = (file: EditsFile, nowMs: number): EditsFile => {
+export const pruneUndo = <R extends { id: string; at: IsoDate }, F extends LedgerFile<R>>(file: F, nowMs: number): F => {
   const undo = file.undo.filter((record) => ageOk(record, nowMs)).slice(-USER_UNDO_KEEP);
   return undo.length === file.undo.length ? file : { ...file, undo };
 };
 
 /** The undo record with this id while it is still usable, or null. */
-export const findUndo = (file: EditsFile, id: string, nowMs: number): UndoRecord | null =>
+export const findUndo = <R extends { id: string; at: IsoDate }>(file: LedgerFile<R>, id: string, nowMs: number): R | null =>
   file.undo.find((record) => record.id === id && ageOk(record, nowMs)) ?? null;
 
-/** A ledger entry appended with the next seq; the oldest entries over the cap counted in `dropped`. */
-const appendLedger = (file: EditsFile, entry: Readonly<Obj> | null): { file: EditsFile; seq: number | null } => {
+/**
+ * A ledger entry appended with the next seq; the oldest entries over the cap counted in `dropped`.
+ * `parse` validates the entry (the design ledger's kinds by default); one that does not validate adds nothing.
+ */
+export const appendLedger = <F extends LedgerFile<{ id: string; at: IsoDate }>>(
+  file: F,
+  entry: Readonly<Obj> | null,
+  parse: (value: unknown) => HandEdit | null = parseHandEdit,
+): { file: F; seq: number | null } => {
   if (entry === null) return { file, seq: null };
   const seq = file.seq + 1;
-  const hand = parseHandEdit({ ...entry, seq });
+  const hand = parse({ ...entry, seq });
   if (hand === null) return { file, seq: null };
   const ledger = [...file.ledger, hand];
   const over = Math.max(0, ledger.length - HAND_EDITS_LEDGER_MAX);
@@ -339,7 +347,7 @@ export const CLEAR_RANGE_MESSAGE = 'That hand-edit position is not one Design Ch
  * Remove ledger entries with `seq ≤ upTo` (idempotent). The dropped count goes too once the
  * oldest kept entry is cleared, since every message that carried it also carried that count.
  */
-export const clearLedger = (file: EditsFile, upTo: number): EditsFile => {
+export const clearLedger = <F extends LedgerFile<{ id: string; at: IsoDate }>>(file: F, upTo: number): F => {
   if (!Number.isSafeInteger(upTo) || upTo < 1 || upTo > file.seq) throw new ApiError('bad-request', CLEAR_RANGE_MESSAGE);
   const first = file.ledger[0];
   const ledger = file.ledger.filter((entry) => entry.seq > upTo);
@@ -348,108 +356,31 @@ export const clearLedger = (file: EditsFile, upTo: number): EditsFile => {
   return { ...file, ledger, dropped };
 };
 
-/** The file text as written: oldest undo records dropped until it fits `EDITS_FILE_MAX_BYTES` (so it always reads back). */
-export const serializeEditsFile = (file: EditsFile): { text: string; file: EditsFile } => {
+/** The file text as written: oldest undo records dropped until it fits `maxBytes` (so it always reads back). */
+export const serializeEditsFile = <F extends LedgerFile<{ id: string; at: IsoDate }>>(file: F, maxBytes: number = EDITS_FILE_MAX_BYTES): { text: string; file: F } => {
   let current = file;
   for (;;) {
     const text = `${JSON.stringify(current, null, 2)}\n`;
-    if (Buffer.byteLength(text, 'utf8') <= EDITS_FILE_MAX_BYTES || current.undo.length === 0) return { text, file: current };
+    if (Buffer.byteLength(text, 'utf8') <= maxBytes || current.undo.length === 0) return { text, file: current };
     current = { ...current, undo: current.undo.slice(1) };
   }
 };
 
-// ---- the queue ----
+// ---- the queue (the per-key file queue of `queue-file.ts`) ----
 
-export type EditsFileStore = {
-  /** The validated file (empty when absent, damaged, too large or a link). No queue: the file is replaced atomically. */
-  read(slug: string, dir: string): Promise<EditsFile>;
-  /** Read-modify-write on the slug's queue; `mutate` sees the file as it is inside the queue. Answers the file as written. */
-  update(slug: string, dir: string, mutate: (file: EditsFile) => EditsFile): Promise<EditsFile>;
-};
+export type EditsFileStore = QueueFileStore<EditsFile>;
 
 export type EditsFileDeps = { log: Logger };
 
-const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoException | null)?.code;
-
-export const createEditsFile = (deps: EditsFileDeps): EditsFileStore => {
-  const { log } = deps;
-  const chains = new Map<string, Promise<unknown>>();
-  const chained = <T>(slug: string, fn: () => Promise<T>): Promise<T> => {
-    const previous = chains.get(slug) ?? Promise.resolve();
-    const run = previous.then(fn, fn);
-    const settled = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    chains.set(slug, settled);
-    void settled.then(() => {
-      if (chains.get(slug) === settled) chains.delete(slug);
-    });
-    return run;
-  };
-
-  /** The lexical edits.json path, or null when `.chamber` or the file is a link (or not a regular file). */
-  const targetOf = async (slug: string, dir: string): Promise<string | null> => {
-    try {
-      return await resolvePlainTarget(dir, EDITS_FILE_SEGMENTS, { allowAbsent: true });
-    } catch (error) {
-      if (!(error instanceof ApiError)) throw error;
-      log.warn('edits.file-link', { slug });
-      return null;
-    }
-  };
-
-  const read = async (slug: string, dir: string): Promise<EditsFile> => {
-    let target: string | null;
-    try {
-      target = await targetOf(slug, dir);
-    } catch (error) {
-      log.warn('edits.file-unreadable', { slug, code: codeOf(error) ?? 'error' });
-      return emptyEditsFile();
-    }
-    if (target === null) return emptyEditsFile();
-    try {
-      const info = await stat(target);
-      if (info.size > EDITS_FILE_MAX_BYTES) {
-        log.warn('edits.file-unreadable', { slug, code: 'too-large' });
-        return emptyEditsFile();
-      }
-      const parsed = parseEditsFile(JSON.parse(await readFile(target, 'utf8')) as unknown, slug);
-      if (parsed.damaged > 0) log.warn('edits.file-unreadable', { slug, code: 'entries-dropped', dropped: parsed.damaged });
-      return parsed.file;
-    } catch (error) {
-      if (codeOf(error) === 'ENOENT') return emptyEditsFile();
-      log.warn('edits.file-unreadable', { slug, code: codeOf(error) ?? 'not-json' });
-      return emptyEditsFile();
-    }
-  };
-
-  const write = async (slug: string, dir: string, text: string): Promise<void> => {
-    try {
-      // Not recursive: a design folder removed meanwhile is never re-created.
-      await mkdir(path.join(dir, '.chamber'));
-    } catch (error) {
-      if (codeOf(error) !== 'EEXIST') {
-        const folderLeft = await stat(dir).then((info) => info.isDirectory(), () => false);
-        throw folderLeft ? error : new ApiError('not-found', 'That design is no longer in your Designs folder.');
-      }
-    }
-    // Resolved after the mkdir, so a `.chamber` link that was already there is refused, never written through.
-    const target = await targetOf(slug, dir);
-    if (target === null) throw new ApiError('invalid', LINK_SENTENCE);
-    await writeFileAtomic(target, text, { createDirs: false });
-  };
-
-  return {
-    read,
-    update: (slug, dir, mutate) =>
-      chained(slug, async () => {
-        const current = await read(slug, dir);
-        const next = mutate(current);
-        if (next === current) return current;
-        const { text, file } = serializeEditsFile(next);
-        await write(slug, dir, text);
-        return file;
-      }),
-  };
-};
+export const createEditsFile = (deps: EditsFileDeps): EditsFileStore =>
+  createQueueFile<EditsFile>({
+    log: deps.log,
+    segments: EDITS_FILE_SEGMENTS,
+    maxBytes: EDITS_FILE_MAX_BYTES,
+    empty: emptyEditsFile,
+    parse: parseEditsFile,
+    serialize: serializeEditsFile,
+    goneMessage: 'That design is no longer in your Designs folder.',
+    logPrefix: 'edits',
+    keyField: 'slug',
+  });
