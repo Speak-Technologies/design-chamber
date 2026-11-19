@@ -25,6 +25,14 @@
 // walking 300 files in each of 300 designs every 3 s cost over a second of CPU per tick.
 // A tick never starts while the previous one is still running (slow SMB shares).
 //
+// Design systems (Phase 2.5 AD-1, technical design §5.1) live in `<root>/_systems/<id>/`. `_systems`
+// fails the slug pattern, so the design branch never sees it; a branch of its own mirrors the
+// design one: `added` / `removed` per system folder (a real folder, not a link, whose name passes
+// SYSTEM_ID_PATTERN), `files` for content changes and `checks` for `.chamber/check.json`, all as
+// `{ slug: null, kind: 'system', system, systemChange }` events. Its echo filter uses the
+// self-writes key `_systems/<id>` (never a slug, so the two cannot collide), and the poll sweeps
+// systems in the same rotating slice, after the designs.
+//
 // A root change (settings) restarts the watcher on the new root and emits one `root` event;
 // files are never moved (§9.2). A broken fs.watch degrades to poll-only and is retried; one
 // that cannot work on this root — recursive watching unsupported, or Linux's inotify watch
@@ -33,10 +41,12 @@
 // the service and never reaches the user.
 
 import { watch as fsWatch, type FSWatcher } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { lstat, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import { WATCH_DEBOUNCE_MS, WATCH_POLL_MS } from '../shared/limits.ts';
+import { SYSTEM_ID_PATTERN, WATCH_DEBOUNCE_MS, WATCH_POLL_MS } from '../shared/limits.ts';
+import { SYSTEMS_DIR } from '../shared/system-json.ts';
+import type { SystemChangeKind } from '../shared/types.ts';
 import type { ChangeHub, Logger, SelfWrites, SettingsStore } from './context.ts';
 import { linuxRecursiveWatch } from './folder-watch.ts';
 import { isLooseHtmlName } from './loose.ts';
@@ -223,6 +233,26 @@ type PendingEntry = { files: Set<string>; timer: ReturnType<typeof setTimeout> }
 
 const ROOT_KEY = '\0root';
 
+/** Pending and fingerprint keys of systems: NUL never occurs in a slug, so no design key collides. */
+const SYSTEM_KEY_PREFIX = '\0system/';
+const systemKey = (id: string): string => `${SYSTEM_KEY_PREFIX}${id}`;
+const systemIdOf = (key: string): string | null => (key.startsWith(SYSTEM_KEY_PREFIX) ? key.slice(SYSTEM_KEY_PREFIX.length) : null);
+
+/** The self-writes key of a system's files (§5.1): `_systems/<id>`. */
+export const systemSelfWritesKey = (id: string): string => `${SYSTEMS_DIR}/${id}`;
+
+const isSystemId = (name: string): boolean => SYSTEM_ID_PATTERN.test(name);
+
+/** A real folder, not a link: what makes `_systems` and `_systems/<id>` count (§2.1). */
+const isRealDirectory = async (target: string): Promise<boolean> => {
+  try {
+    const info = await lstat(target);
+    return info.isDirectory() && !info.isSymbolicLink();
+  } catch {
+    return false;
+  }
+};
+
 /** fs.watch failures that a retry cannot fix while the root stays the same. */
 const PERMANENT_WATCH_FAILURES = new Set(['ENOSPC', 'ENOSYS', 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM']);
 
@@ -246,6 +276,8 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
   /** Set by a permanent failure: poll-only until the root changes. */
   let pollOnly = false;
   let knownSlugs = new Set<string>();
+  /** System ids under `_systems` (the systems branch). */
+  let knownSystems = new Set<string>();
   /** Sorted loose html names in the root, `/`-joined (a name never holds a `/`). */
   let knownLoose = '';
   const fingerprints = new Map<string, Fingerprint>();
@@ -266,7 +298,8 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
       timer: setTimeout(() => {
         pending.delete(key);
         const batch = new Set(entry.files);
-        const run = key === ROOT_KEY ? scanRoot() : flushSlug(key, batch);
+        const systemId = systemIdOf(key);
+        const run = key === ROOT_KEY ? scanRoot() : systemId !== null ? flushSystem(systemId, batch) : flushSlug(key, batch);
         run.catch((error) => log.warn('watch.flush-failed', { key, error: error instanceof Error ? error.message : String(error) }));
       }, debounceMs),
     };
@@ -281,14 +314,28 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     const listing = await readRoot(root);
     knownSlugs = listing.slugs;
     knownLoose = listing.loose;
+    knownSystems = listing.systems;
     for (const slug of knownSlugs) fingerprints.set(slug, await fingerprint(path.join(root, slug), { nested: true }));
+    for (const id of knownSystems) fingerprints.set(systemKey(id), await fingerprint(systemDirOf(root, id), { nested: true }));
   };
 
-  /** One readdir of the root: design folders, and the loose html files (regular files only, as `GET /designs` lists them). */
-  const readRoot = async (root: string): Promise<{ slugs: Set<string>; loose: string }> => {
+  const systemDirOf = (root: string, id: string): string => path.join(root, SYSTEMS_DIR, id); // id passed SYSTEM_ID_PATTERN
+
+  /** The system folders under `<root>/_systems` (absent, a file or a link → none). */
+  const readSystems = async (root: string): Promise<Set<string>> => {
+    const systemsDir = path.join(root, SYSTEMS_DIR);
+    if (!(await isRealDirectory(systemsDir))) return new Set();
+    const entries = await readdir(systemsDir, { withFileTypes: true }).catch(() => []);
+    // A Dirent of a link is never isDirectory(), so a linked system folder is not a system.
+    return new Set(entries.filter((entry) => entry.isDirectory() && isSystemId(entry.name)).map((entry) => entry.name));
+  };
+
+  /** One readdir of the root: design folders, the loose html files (regular files only, as `GET /designs` lists them), and the systems. */
+  const readRoot = async (root: string): Promise<{ slugs: Set<string>; loose: string; systems: Set<string> }> => {
     const entries = await readdir(root, { withFileTypes: true }).catch(() => null);
-    if (entries === null) return { slugs: new Set(), loose: '' };
+    if (entries === null) return { slugs: new Set(), loose: '', systems: new Set() };
     return {
+      systems: await readSystems(root),
       slugs: new Set(entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && isSlug(entry.name)).map((entry) => entry.name)),
       loose: entries
         .filter((entry) => entry.isFile() && isLooseHtmlName(entry.name))
@@ -319,6 +366,21 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
       hub.emit({ slug, kind: 'added' });
     }
     knownSlugs = current;
+    for (const id of knownSystems) {
+      if (listing.systems.has(id)) continue;
+      fingerprints.delete(systemKey(id));
+      emitSystem(id, 'removed');
+    }
+    for (const id of listing.systems) {
+      if (knownSystems.has(id)) continue;
+      fingerprints.set(systemKey(id), await fingerprint(systemDirOf(root, id), { nested: true }));
+      emitSystem(id, 'added');
+    }
+    knownSystems = listing.systems;
+  };
+
+  const emitSystem = (id: string, systemChange: SystemChangeKind, files?: string[]): void => {
+    hub.emit({ slug: null, kind: 'system', system: id, systemChange, ...(files !== undefined ? { files } : {}) });
   };
 
   /**
@@ -328,13 +390,13 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
    * file holding other bytes is the agent's: kept, and its entry forgotten, so a later write that
    * happens to restore the user's bytes (B, then A again) is still shown.
    */
-  const dropEchoes = async (slug: string, dir: string, files: Set<string>): Promise<void> => {
+  const dropEchoes = async (owner: string, dir: string, files: Set<string>): Promise<void> => {
     const selfWrites = options.selfWrites;
     if (selfWrites === undefined) return;
     for (const rel of [...files]) {
       if (rel === CHECK_REPORT) continue; // the check CLI's report, never a hand edit
-      if (await selfWrites.isEcho(slug, rel, dir)) files.delete(rel);
-      else selfWrites.forget(slug, rel);
+      if (await selfWrites.isEcho(owner, rel, dir)) files.delete(rel);
+      else selfWrites.forget(owner, rel);
     }
   };
 
@@ -368,6 +430,53 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     if (hasChecks) hub.emit({ slug, kind: 'checks' });
   };
 
+  /** `flushSlug` for a system folder (§5.1): `added` / `removed`, then `files` and `checks` changes. */
+  const flushSystem = async (id: string, files: Set<string>): Promise<void> => {
+    if (stopped) return;
+    const key = systemKey(id);
+    const dir = systemDirOf(currentRoot, id);
+    if (!isSystemId(id) || !(await isRealDirectory(path.join(currentRoot, SYSTEMS_DIR))) || !(await isRealDirectory(dir))) {
+      fingerprints.delete(key);
+      if (knownSystems.delete(id)) emitSystem(id, 'removed');
+      return;
+    }
+    if (!knownSystems.has(id)) {
+      knownSystems.add(id);
+      fingerprints.set(key, await fingerprint(dir, { nested: true }));
+      emitSystem(id, 'added');
+      return;
+    }
+    const previous = fingerprints.get(key);
+    const next = await fingerprint(dir, { nested: true });
+    fingerprints.set(key, next);
+    if (previous !== undefined) for (const changed of diffFingerprints(previous, next)) files.add(changed);
+    await dropEchoes(systemSelfWritesKey(id), dir, files);
+    const hasChecks = files.delete(CHECK_REPORT);
+    const rest = [...files].sort();
+    if (rest.length > 0) emitSystem(id, 'files', rest);
+    if (hasChecks) emitSystem(id, 'checks');
+  };
+
+  /** A watch event under `_systems` (`segments[0]` is `_systems`). */
+  const onSystemEvent = (segments: readonly string[]): void => {
+    const id = segments[1];
+    if (id === undefined) {
+      // `_systems` itself appeared, vanished or was replaced: the root rescan sorts it out.
+      schedule(ROOT_KEY, []);
+      return;
+    }
+    if (id.startsWith('.') || !isSystemId(id)) return; // not a system folder
+    const rest = segments.slice(2);
+    if (rest.length === 2 && rest.join('/') === CHECK_REPORT) {
+      schedule(systemKey(id), [CHECK_REPORT]);
+      return;
+    }
+    // .chamber/ and .versions/ are service-owned, as in a design.
+    if (rest.some((segment) => segment.startsWith('.'))) return;
+    if (isAtomicTempName(segments[segments.length - 1] ?? '')) return;
+    schedule(systemKey(id), rest.length > 0 ? [rest.join('/')] : []);
+  };
+
   const onWatchEvent = (filename: string | Buffer | null): void => {
     if (stopped) return;
     if (filename === null) {
@@ -381,6 +490,10 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     if (segments.length === 1 && first !== undefined && !first.startsWith('.') && /\.html?$/i.test(first)) {
       // A loose html file in the root appeared, changed or vanished: the rescan decides whether the set changed.
       schedule(ROOT_KEY, []);
+      return;
+    }
+    if (first === SYSTEMS_DIR) {
+      onSystemEvent(segments);
       return;
     }
     if (first === undefined || !isSlug(first) || first.startsWith('.')) return; // other root-level files, .trash/.exports, non-designs
@@ -439,20 +552,22 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     // fully, as the net under events the platform dropped. Without one (never started, died,
     // poll-only root) every design gets the cheap fingerprint and the rotating slice also gets the
     // nested walk: that walk is what costs, and every design still gets it within `sweepTicks` ticks.
-    const sorted = [...knownSlugs].sort();
+    // Designs first, then systems (their keys start with NUL, so they never mix with slugs).
+    const sorted = [...[...knownSlugs].sort(), ...[...knownSystems].sort().map(systemKey)];
     const swept = sweepSlice(sorted, sweepCursor, Math.ceil(sorted.length / sweepTicks));
     sweepCursor = swept.next;
     const deep = new Set(swept.slice);
-    for (const slug of healthy ? swept.slice : sorted) {
-      const dir = path.join(currentRoot, slug);
-      const nested = deep.has(slug);
-      const previous = fingerprints.get(slug);
+    for (const key of healthy ? swept.slice : sorted) {
+      const systemId = systemIdOf(key);
+      const dir = systemId === null ? path.join(currentRoot, key) : systemDirOf(currentRoot, systemId);
+      const nested = deep.has(key);
+      const previous = fingerprints.get(key);
       const taken = await fingerprint(dir, { nested });
       const next = nested ? taken : carryNested(previous, taken);
-      fingerprints.set(slug, next);
+      fingerprints.set(key, next);
       if (previous === undefined) continue; // baseline seeded this tick
       const changed = diffFingerprints(previous, next);
-      if (changed.length > 0) schedule(slug, changed);
+      if (changed.length > 0) schedule(key, changed);
     }
   };
 
@@ -478,6 +593,7 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     pollOnly = false;
     watchErrorLogged = false;
     knownSlugs = new Set();
+    knownSystems = new Set();
     knownLoose = '';
     fingerprints.clear();
     sweepCursor = 0;

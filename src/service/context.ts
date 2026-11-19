@@ -28,6 +28,7 @@ import type {
   Outbox,
   ServiceState,
   SettingsFile,
+  SystemChangeKind,
   ThumbState,
 } from '../shared/types.ts';
 import { ApiError } from './http.ts';
@@ -136,12 +137,16 @@ export type DesignStore = {
 
 // ---- WP1: change hub (§9.4) ----
 
+/** What a module hands the hub; the hub adds `seq`. */
+export type ChangeEmit = { slug: string | null; kind: ChangeKind; files?: string[]; origin?: 'user'; system?: string; systemChange?: SystemChangeKind };
+
 export type ChangeHub = {
   /** Same as `ServiceContext.epoch`. */
   readonly epoch: string;
   /** Highest seq emitted so far (0 before any event). */
   seq(): number;
-  emit(event: { slug: string | null; kind: ChangeKind; files?: string[]; origin?: 'user' }): ChangeEvent;
+  /** `system` and `systemChange` travel on `system` events only (Phase 2.5 §3.4). */
+  emit(event: ChangeEmit): ChangeEvent;
   /** Events after `since`, or `reset` when `epoch` differs or `since` left the ring. Resolves early on the next event, at `waitMs` (≤ `CHANGES_WAIT_MAX_MS`), or when `signal` aborts. */
   waitFor(since: number, epoch: string, waitMs: number, signal?: AbortSignal): Promise<ChangesResponse>;
   /** In-process listeners (render cache, thumbnails, versions, design.json merge). */

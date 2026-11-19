@@ -49,6 +49,7 @@ import { writeRuntimeRecord } from './runtime-record.ts';
 import { createSelfWrites } from './self-writes.ts';
 import { createSettingsStore, type SettingsEnv } from './settings.ts';
 import { createDesignStore } from './store.ts';
+import { ensureSystemStore } from './systems/store.ts';
 import { ensureThumbnailService } from './thumbnails.ts';
 import { createTurnEvents } from './turn-events.ts';
 import { createUploadStore } from './uploads.ts';
@@ -126,6 +127,9 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   // snapshots from the first content event on, and the routes share these same instances.
   ctx.renders = ensureRenderService(ctx);
   ctx.thumbnails = ensureThumbnailService(ctx);
+  // Eager, so the systems index loads and agent changes to a system count towards a new revision
+  // from the first event on (Phase 2.5 §5.1, AD-13).
+  ensureSystemStore(ctx);
   // Eager, so a removed design leaves the folder registry from the first event on (Phase 2.5 §5.8).
   ensureFoldersService(ctx);
 

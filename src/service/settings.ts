@@ -19,12 +19,12 @@ import path from 'node:path';
 
 import type { PutSettingsBody } from '../shared/api.ts';
 import { designChamberDataDir } from '../shared/app-data.ts';
-import { PREVIOUS_ROOTS_MAX, SETTINGS_FILE_VERSION, SETTINGS_PATH_MAX } from '../shared/limits.ts';
-import type { SettingsFile } from '../shared/types.ts';
+import { PREVIOUS_ROOTS_MAX, SETTINGS_FILE_VERSION, SETTINGS_PATH_MAX, SYSTEM_ID_PATTERN, SYSTEM_NAME_MAX, SYSTEM_PINS_MAX } from '../shared/limits.ts';
+import type { SettingsFile, SystemDefaultSetting, SystemPinSetting } from '../shared/types.ts';
 import type { Logger, SettingsStore } from './context.ts';
 import { ApiError } from './http.ts';
 import { defaultDesignsRoot, sameRoot, validateRootCandidate } from './root.ts';
-import { writeFileAtomic } from './paths.ts';
+import { samePath, writeFileAtomic } from './paths.ts';
 
 export type SettingsEnv = {
   DC_SETTINGS_PATH?: string;
@@ -45,6 +45,48 @@ export const settingsFilePath = (
   return path.join(dir, 'settings.json');
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** A system named in settings (Phase 2.5 §2.9): the id pattern and a 1..60 character name without control characters. */
+const systemRef = (id: unknown, name: unknown): { id: string; name: string } | null =>
+  typeof id === 'string' && SYSTEM_ID_PATTERN.test(id) && typeof name === 'string' && name.trim() !== '' && name.length <= SYSTEM_NAME_MAX && !/[\u0000-\u001f\u007f]/.test(name)
+    ? { id, name }
+    : null;
+
+/** The default design system (§2.9); null when the value is not one of the three shapes (absent = ask). */
+export const normalizeSystemDefault = (raw: unknown): SystemDefaultSetting | null => {
+  if (!isRecord(raw)) return null;
+  if (raw.choice === 'ask') return { choice: 'ask' };
+  if (raw.choice === 'none') return { choice: 'none' };
+  if (raw.choice !== 'system') return null;
+  const ref = systemRef(raw.id, raw.name);
+  return ref === null ? null : { choice: 'system', ...ref };
+};
+
+/**
+ * Project pins (§2.9): valid entries only (an absolute directory of at most 4 096 characters without a
+ * control character; `system` pins name a system), at most `SYSTEM_PINS_MAX`; a second pin for the same
+ * directory (either slash, case-folded where the platform folds) is dropped.
+ */
+export const normalizeSystemPins = (raw: unknown, platform: NodeJS.Platform = process.platform): SystemPinSetting[] => {
+  if (!Array.isArray(raw)) return [];
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const pins: SystemPinSetting[] = [];
+  for (const entry of raw) {
+    if (pins.length >= SYSTEM_PINS_MAX) break;
+    if (!isRecord(entry)) continue;
+    const { directory, choice } = entry;
+    if (typeof directory !== 'string' || directory.length > SETTINGS_PATH_MAX || /[\u0000-\u001f\u007f]/.test(directory) || !p.isAbsolute(directory)) continue;
+    if (pins.some((pin) => samePath(pin.directory, directory, p, platform))) continue;
+    if (choice === 'default' || choice === 'none') pins.push({ directory, choice });
+    else if (choice === 'system') {
+      const ref = systemRef(entry.id, entry.name);
+      if (ref !== null) pins.push({ directory, choice, ...ref });
+    }
+  }
+  return pins;
+};
+
 /** Keep only well-typed fields; anything else in the file is dropped. */
 export const normalizeSettings = (raw: unknown): SettingsFile => {
   const out: SettingsFile = { version: SETTINGS_FILE_VERSION };
@@ -62,6 +104,11 @@ export const normalizeSettings = (raw: unknown): SettingsFile => {
     const roots = value.previousRoots.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '');
     if (roots.length > 0) out.previousRoots = roots.slice(0, PREVIOUS_ROOTS_MAX);
   }
+  const systemDefault = normalizeSystemDefault(value.systemDefault);
+  // Absent means ask (§2.9), so an explicit ask is not stored.
+  if (systemDefault !== null && systemDefault.choice !== 'ask') out.systemDefault = systemDefault;
+  const systemPins = normalizeSystemPins(value.systemPins);
+  if (systemPins.length > 0) out.systemPins = systemPins;
   return out;
 };
 
@@ -163,6 +210,11 @@ export const createSettingsStore = async (options: SettingsStoreOptions): Promis
           next.chromePath = value;
         }
       }
+
+      // Phase 2.5 §2.9: the default system and the pins arrive validated as a whole; normalizeSettings
+      // keeps the valid parts. Deleting a system clears what names it through this same door (§5.1).
+      if (patch.systemDefault !== undefined) next.systemDefault = patch.systemDefault;
+      if (patch.systemPins !== undefined) next.systemPins = patch.systemPins;
 
       try {
         await writeSettingsFile(file, next);

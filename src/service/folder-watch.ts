@@ -9,8 +9,9 @@
 //
 // Shape: the same call signature and `FSWatcher` surface watch.ts uses (`close`, `on('error')`),
 // filenames `/`-joined relative to the root. Dot folders (`.chamber/`, `.versions/`, `.trash/`)
-// and, at the top level, folders that are not design names are not descended into — watch.ts
-// ignores events there anyway — which also keeps the inotify watch count small. A folder that
+// and, at the top level, folders that are neither design names nor `_systems` (the design
+// systems, Phase 2.5 AD-1) are not descended into — watch.ts ignores events there anyway —
+// which also keeps the inotify watch count small. A folder that
 // appears is watched and its existing entries are reported, so files written before its watch
 // existed are not missed. A sub-folder watch that cannot be created (ENOSPC: inotify limit)
 // is reported as an `error` on the whole watcher, so watch.ts falls back to polling.
@@ -20,6 +21,7 @@ import { watch as fsWatch, type FSWatcher } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { SYSTEMS_DIR } from '../shared/system-json.ts';
 import { isSlug } from './paths.ts';
 
 type Listener = (event: string, filename: string | null) => void;
@@ -29,7 +31,7 @@ const shouldDescend = (rel: string): boolean => {
   const parts = rel.split('/');
   const name = parts[parts.length - 1] ?? '';
   if (name.startsWith('.')) return false;
-  return parts.length > 1 || isSlug(name);
+  return parts.length > 1 || isSlug(name) || name === SYSTEMS_DIR;
 };
 
 export type FolderWatchOptions = { persistent?: boolean };

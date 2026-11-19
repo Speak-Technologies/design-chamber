@@ -88,6 +88,8 @@ const createHub = (epoch: string, events: ChangeEvent[]): ChangeHub => {
         kind: input.kind,
         ...(input.files ? { files: input.files } : {}),
         ...(input.origin ? { origin: input.origin } : {}),
+        ...(input.system !== undefined ? { system: input.system } : {}),
+        ...(input.systemChange !== undefined ? { systemChange: input.systemChange } : {}),
       };
       events.push(event);
       for (const listener of [...listeners]) listener(event);
@@ -204,6 +206,14 @@ export const createFakeContext = (options: FakeContextOptions): FakeContext => {
       if (patch.chromePath !== undefined) {
         if (patch.chromePath === null) delete next.chromePath;
         else next.chromePath = patch.chromePath;
+      }
+      if (patch.systemDefault !== undefined) {
+        if (patch.systemDefault.choice === 'ask') delete next.systemDefault;
+        else next.systemDefault = patch.systemDefault;
+      }
+      if (patch.systemPins !== undefined) {
+        if (patch.systemPins.length === 0) delete next.systemPins;
+        else next.systemPins = patch.systemPins;
       }
       file = next;
       if (settings.root() !== previous) for (const listener of rootListeners) listener(settings.root(), previous);

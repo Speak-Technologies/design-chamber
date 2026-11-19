@@ -28,7 +28,8 @@ const P25 = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'P25');
 const serve = async (t: TestContext) => {
   const quiet: Logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
   const router = createRouter({ token: TOKEN, log: quiet });
-  // Safe: the T0 stubs never read the context; a task that fills a route brings its own test context.
+  // Safe: no route reads the context at registration and the stubs never read it; the built routes
+  // are only called here without a token or with a refused path parameter (rejected before the handler).
   const ctx = {} as ServiceContext;
   for (const register of [
     registerSystemsRoutes,
@@ -103,8 +104,14 @@ test('every Phase 2.5 route with a path parameter refuses an encoded separator (
   }
 });
 
-// Routes a task has built since T0; their own tests cover their answers (folders: test/service/core/folders*.test.ts).
+// Routes a task has built since T0; their own tests cover their answers (folders: test/service/core/folders*.test.ts;
+// systems, T1: test/service/systems/systems-routes.test.ts).
 const BUILT: ReadonlySet<RouteKey> = new Set<RouteKey>([
+  'GET /systems',
+  'POST /systems',
+  'GET /systems/:id',
+  'PATCH /systems/:id',
+  'DELETE /systems/:id',
   'GET /folders',
   'POST /folders',
   'PATCH /folders/:folderId',
