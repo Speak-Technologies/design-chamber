@@ -24,6 +24,7 @@ import {
   type TokenVar,
 } from '../../shared/bridge-protocol.ts';
 import { BRIDGE_SIZE_THROTTLE_MS, BRIDGE_TITLE_MAX } from '../../shared/limits.ts';
+import { isBoardEntryKey } from '../../shared/system-board.ts';
 import type { Rect } from '../../shared/types.ts';
 import { elementText, openingTag, resolveAnchor } from './anchor.ts';
 import { editProbeOf } from './edit-probe.ts';
@@ -93,7 +94,14 @@ const start = (init: BridgeInit): void => {
     return element && element !== document.documentElement && element !== document.body && !element.hasAttribute('data-dc-overlay') ? element : null;
   };
 
+  /** Phase 2.5 §4.2: the closest `data-dc-entry` when it is a board entry key (advisory; the page looks it up). */
+  const entryOf = (element: Element): string | null => {
+    const value = element.closest('[data-dc-entry]')?.getAttribute('data-dc-entry') ?? null;
+    return value !== null && isBoardEntryKey(value) ? value : null;
+  };
+
   const describe = (element: Element): HitElement => ({
+    entry: entryOf(element),
     selector: buildSelector(element, document),
     text: elementText(element),
     html: openingTag(element),
