@@ -130,6 +130,13 @@ export type SystemStore = {
   index(): readonly SystemSummary[];
   /** Run `fn` on the system's chain (its lock): revision bumps, and later edits and restores. */
   withLock<T>(id: string, fn: () => Promise<T>): Promise<T>;
+  /** state.json as read now (provisional when missing or damaged); 404 sentence when the system is gone. */
+  readState(id: string): Promise<SystemState>;
+  /**
+   * Inside `withLock(id)` only (it takes no lock itself, so it never waits on its own chain): read
+   * state.json, apply `mutate` and write the result atomically with `updated` set; `null` writes nothing.
+   */
+  updateStateLocked(id: string, mutate: (state: SystemState) => SystemState | null): Promise<void>;
   /** Bump the revision now when the content tree changed (a user's save, re-sync or restore landed). */
   settleRevision(id: string): Promise<void>;
   /** Settings notices queued by deletes, answered once (`GET /settings`). */
@@ -838,6 +845,14 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     trash,
     index: () => summaries,
     withLock,
+    async readState(id) {
+      return (await readStateOf(await dir(id), id)).state;
+    },
+    async updateStateLocked(id, mutate) {
+      const systemDir = await dir(id);
+      const next = mutate((await readStateOf(systemDir, id)).state);
+      if (next !== null) await writeStateOf(systemDir, { ...next, updated: now().toISOString() });
+    },
     settleRevision,
     takeNotices: () => notices.splice(0, notices.length),
     async dispose() {

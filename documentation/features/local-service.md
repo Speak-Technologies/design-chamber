@@ -145,7 +145,9 @@ shows them.
 ## Edge cases
 - If the service restarts, the panel's next poll sees a new run id and reloads everything.
 - A message too large for one request (an assistant message for "Open as page") is uploaded
-  in pieces and joined by the service; unfinished uploads expire after 10 minutes.
+  in pieces and joined by the service; unfinished uploads expire after 10 minutes. A brand file
+  for a design system is uploaded the same way as base64 and decoded piece by piece (at most two
+  at once, 21 MB each; see [Design system brand files](design-system-brand-files.md)).
 - The outbox (a revision waiting for the right chat to be selected) holds one message for
   10 minutes and is delivered exactly once.
 - "Open as page" leaves one open request (`DELETE /open-request` takes it, once; 2 minutes)

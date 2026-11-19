@@ -1,6 +1,7 @@
-// WP1 — POST /uploads, PUT /uploads/:id/:index (docs/SPEC.md §7): the chunked-text door for
-// payloads bigger than one host serviceRequest (F7). Chunk bounds are enforced here (chars
-// after JSON.stringify and UTF-8 bytes) so the host transport limits can never be exceeded.
+// WP1 — POST /uploads, PUT /uploads/:id/:index (docs/SPEC.md §7): the chunked door for payloads
+// bigger than one host serviceRequest (F7), text or (Phase 2.5 §5.6) a base64 file. Chunk bounds
+// are enforced here (chars after JSON.stringify and UTF-8 bytes) so the host transport limits can
+// never be exceeded; the store checks and decodes base64 chunks.
 
 import type { CreateUploadResponse, PutUploadChunkResponse } from '../../shared/api.ts';
 import { UPLOAD_CHUNK_MAX_BYTES, UPLOAD_CHUNK_MAX_CHARS, UPLOAD_ID_PATTERN } from '../../shared/limits.ts';
@@ -20,7 +21,9 @@ export function registerUploadsRoutes(router: Router, ctx: ServiceContext): void
     if (!isBodyRecord(body) || !Number.isInteger(body.total)) {
       throw new ApiError('bad-request', 'Announce the upload with { "total": <character count> }.');
     }
-    return { uploadId: ctx.uploads.create(body.total as number) }; // Safe: isInteger checked above.
+    const encoding = body.encoding ?? 'text';
+    if (encoding !== 'text' && encoding !== 'base64') throw new ApiError('bad-request', 'An upload is sent as "text" or "base64".');
+    return { uploadId: ctx.uploads.create(body.total as number, encoding) }; // Safe: isInteger checked above.
   });
 
   router.on('PUT /uploads/:id/:index', ({ params, body }): PutUploadChunkResponse => {
