@@ -170,6 +170,16 @@ Precedence, highest first:
   the skill advises placement and access (dev builds only vs public). Hosting and access are the repo's
   concern, not Design Chamber's.
 - Folded into Phase 2.5 as one on-par release (not a separate phase).
+- Describe-only with a repo + living-page home never modifies the app's existing code, but the agent still
+  creates the new system files, docs and living page after the same reviewed-diff approval; the code keeps its
+  values and the gap shows as an informational finding.
+- Hand edits on a repo-backed system: the panel shows values and notes read-only ("lives in <repo>; change
+  them there, or ask the agent here"). The ask bar and Needs work send the change to the system's chat (the
+  agent proposes a diff); review, Mark ready, rename and delete stay Design Chamber actions. E1-E12 hold via
+  the diff gate.
+- A living-page refresh: the user's explicit "Ask the agent to update it" is the approval to commit the one
+  regenerated file (the agent commits only it and says so). Any other repo write, and every token-code change,
+  needs a fresh reviewed diff.
 
 ## Process
 - Public GitHub repo, MIT, default branch `master` with branch protection (PR + 1 approval + CI; owner-only bypass). (Updated 2026-10-27; was local-only.)

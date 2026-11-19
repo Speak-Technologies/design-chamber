@@ -1421,9 +1421,13 @@ own token changes stay as overrides on a newer system, each with "Reset to syste
    of the new system, the update sheet lists them, and each has **Reset to system**. The alternative is that
    updating replaces them, with the version from before as the way back.
 
-### Questions for the user, round 2 (building systems like Claude, added 2026-11-19)
-The five above are resolved and not re-opened. These three are new, ordered by importance; each has a bold
-recommended default.
+### Questions for the user, round 2 — RESOLVED 2026-11-19 (owner accepted all three recommendations)
+Recorded in `docs/BRIEF.md` "Building systems like Claude": (1) describe-only never modifies the app's existing
+code but the agent still creates the new system files, docs and living page after the same reviewed-diff
+approval (the gap is an informational finding); (2) repo-backed hand edits are a read-only panel + ask the agent
+(the ask bar / Needs work send a diff proposal to the system's chat; review, Mark ready, rename, delete stay
+Design Chamber actions); (3) "Ask the agent to update it" is the approval to commit the one regenerated living
+page, while any other repo write and every token-code change needs a fresh reviewed diff. The questions as asked:
 1. **What does "describe only, never touch the repo" mean when the home is Repo + living page (S8)?** The
    option says never touch the repo, but the repo home's system files, docs and living page are new files in
    the repo. **Recommended: describe-only never modifies the app's existing code, but the agent still creates
