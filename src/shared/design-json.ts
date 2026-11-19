@@ -34,6 +34,8 @@ import {
   TWEAK_UNIT_PATTERN,
   TWEAK_VAR_PATTERN,
   TWEAKS_MAX,
+  SYSTEM_CHOICE_VALUE_MAX,
+  SYSTEM_ID_PATTERN,
   VIEWPORT_HEIGHT_MAX,
   VIEWPORT_HEIGHT_MIN,
   VIEWPORT_ID_PATTERN,
@@ -62,6 +64,7 @@ import type {
   Screen,
   ServiceOwnedField,
   ServiceState,
+  SystemChoiceProblem,
   Tweak,
   TweakChoice,
   TweakNumber,
@@ -83,12 +86,12 @@ export const defaultViewports = (kind: DesignKind): Viewport[] =>
 export const SERVICE_OWNED_FIELDS: readonly ServiceOwnedField[] = [
   'version', 'kind', 'created', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry', 'comments',
 ];
-export const AGENT_OWNED_FIELDS: readonly AgentOwnedField[] = ['title', 'updated', 'viewports', 'screens', 'designSystem', 'tweaks'];
+export const AGENT_OWNED_FIELDS: readonly AgentOwnedField[] = ['title', 'updated', 'viewports', 'screens', 'designSystem', 'tweaks', 'systemChoice'];
 
-/** Canonical key order for files the service creates. */
+/** Canonical key order for files the service creates. `systemChoice` (Phase 2.5 §2.7) follows `tweaks`. */
 const CANONICAL_ORDER: readonly (keyof DesignJson)[] = [
   'version', 'kind', 'title', 'created', 'updated', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry',
-  'viewports', 'screens', 'designSystem', 'tweaks', 'comments',
+  'viewports', 'screens', 'designSystem', 'tweaks', 'systemChoice', 'comments',
 ];
 const KNOWN_FIELDS: ReadonlySet<string> = new Set<string>(CANONICAL_ORDER);
 const COMMENT_STATUSES: readonly CommentStatus[] = ['open', 'sent', 'resolved'];
@@ -507,6 +510,19 @@ const optionalString = (raw: Rec, key: string, max: number, warnings: Warnings, 
   return null;
 };
 
+/**
+ * The agent's recorded design-system answer (Phase 2.5 §2.7): a system id (`SYSTEM_ID_PATTERN`)
+ * or `"none"`. Anything else is dropped with `invalid-system-choice`. The service only reads it;
+ * linking is its own decision (AD-6), so this never grants anything.
+ */
+const parseSystemChoice = (raw: Rec, warnings: Warnings): string | null => {
+  if (!has(raw, 'systemChoice')) return null;
+  const value = raw.systemChoice;
+  if (typeof value === 'string' && (value === 'none' || SYSTEM_ID_PATTERN.test(value))) return value;
+  warnings.add('invalid-system-choice', 'systemChoice', 'systemChoice must be a design system id or "none"; it was ignored.');
+  return null;
+};
+
 // ---- normalise ----
 
 export type NormalizeOptions = {
@@ -594,6 +610,7 @@ export const normalizeDesign = (raw: unknown, options: NormalizeOptions): Normal
   }
 
   const tweaks = parseTweaks(record, warnings);
+  const systemChoice = parseSystemChoice(record, warnings);
   const comments = parseComments(record, warnings);
 
   const extra: JsonObject = Object.fromEntries(
@@ -617,6 +634,8 @@ export const normalizeDesign = (raw: unknown, options: NormalizeOptions): Normal
       screens,
       designSystem,
       tweaks,
+      // Absent stays absent, so a design without the key normalises exactly as before.
+      ...(systemChoice !== null ? { systemChoice } : {}),
       comments,
     },
     extra,
@@ -645,6 +664,8 @@ export const parseDesignJsonText = (text: string, options: NormalizeOptions): Pa
 
 // ---- .chamber/state.json [§6.3] ----
 
+const SYSTEM_CHOICE_PROBLEM_REASONS: readonly SystemChoiceProblem['reason'][] = ['unknown', 'draft', 'being-changed', 'too-large', 'failed'];
+
 /** Read state.json content. `null` when it is unusable (the store then rebuilds state from design.json). */
 export const normalizeServiceState = (raw: unknown): ServiceState | null => {
   if (!isRec(raw) || raw.version !== STATE_JSON_VERSION || !isIsoDate(raw.created)) return null;
@@ -670,6 +691,16 @@ export const normalizeServiceState = (raw: unknown): ServiceState | null => {
   };
   // Only a literal `true` marks a provisional seed; any other value means final.
   if (raw.provisional === true) state.provisional = true;
+  // Phase 2.5 §2.7: service-owned system fields; an unusable value is dropped, never fatal.
+  if (raw.systemDecision === 'ask' || raw.systemDecision === 'none' || raw.systemDecision === 'system') state.systemDecision = raw.systemDecision;
+  if (typeof raw.systemChoiceSeen === 'string' && (raw.systemChoiceSeen === 'none' || SYSTEM_ID_PATTERN.test(raw.systemChoiceSeen))) {
+    state.systemChoiceSeen = raw.systemChoiceSeen;
+  }
+  const problem = raw.systemChoiceProblem;
+  if (isRec(problem) && typeof problem.value === 'string' && SYSTEM_CHOICE_PROBLEM_REASONS.some((reason) => reason === problem.reason)) {
+    // Safe: `reason` was just matched against the closed list.
+    state.systemChoiceProblem = { value: problem.value.slice(0, SYSTEM_CHOICE_VALUE_MAX), reason: problem.reason as SystemChoiceProblem['reason'] };
+  }
   return state;
 };
 

@@ -17,6 +17,9 @@ import type {
   Comment,
   CommentAnchor,
   CommentStatus,
+  BuildChipData,
+  Chip,
+  CopyRecord,
   DesignChip,
   DesignFiles,
   DesignJson,
@@ -26,10 +29,24 @@ import type {
   ChangeEvent,
   ExportFormat,
   IsoDate,
+  LivingPageView,
   LooseHtmlFile,
   Outbox,
   Preset,
+  ProposalView,
+  RepoResyncReview,
+  ReviewState,
+  SystemChoiceProblem,
+  SystemChoiceView,
+  SystemChipData,
+  SystemDefaultSetting,
+  SystemDetail,
+  SystemPinSetting,
+  SystemPinView,
+  SystemSection,
+  SystemSummary,
   ThumbState,
+  TokenSection,
   VersionFileChange,
   VersionSummary,
 } from './types.ts';
@@ -47,6 +64,7 @@ export type ApiErrorCode =
   | 'too-large'
   | 'no-html'
   | 'invalid'
+  | 'read-only'
   | 'internal';
 
 export const API_ERROR_STATUS: Readonly<Record<ApiErrorCode, number>> = {
@@ -60,6 +78,7 @@ export const API_ERROR_STATUS: Readonly<Record<ApiErrorCode, number>> = {
   'too-large': 413,
   'no-html': 422,
   invalid: 422,
+  'read-only': 422,
   internal: 500,
 };
 
@@ -89,6 +108,12 @@ export type SettingsResponse = {
   downloadsDir: string;
   /** Agent discovery: the `<root>/AGENTS.md` guide and the OpenCode skill, derived from disk on every read. */
   agent: { guide: AgentGuideStatus; skill: AgentSkillStatus };
+  /**
+   * Phase 2.5 §3.4: the default system and project pins, each resolved against this root, and the
+   * one-time notices of a deleted system ("Acme was deleted, so it is no longer your default.").
+   * Optional until T9 fills it.
+   */
+  systems?: { default: SystemChoiceView; pins: SystemPinView[]; notices: string[] };
 };
 
 /**
@@ -104,7 +129,14 @@ export type ImportLooseBody = { name: string };
 export type ImportLooseResponse = { slug: string; title: string; originalMovedTo: string | null };
 
 /** `null` resets a field to its default. 400 `bad-path` for a relative path, a filesystem root, a folder inside the extension package, or one that cannot be created. */
-export type PutSettingsBody = { root?: string | null; chromePath?: string | null };
+export type PutSettingsBody = {
+  root?: string | null;
+  chromePath?: string | null;
+  /** Phase 2.5 §3.4: the default system choice. */
+  systemDefault?: SystemDefaultSetting;
+  /** Phase 2.5 §3.4: the whole pin list (≤ `SYSTEM_PINS_MAX`). */
+  systemPins?: SystemPinSetting[];
+};
 
 export type ChangesQuery = {
   /** Last `seq` the client has seen; `0` on the first call. */
@@ -130,6 +162,11 @@ export type DesignListResponse = {
   designs: DesignSummary[];
   /** Loose html files in the root: `files` ≤ `LOOSE_LIST_MAX`, newest first; `total` counts them all. */
   loose: { files: LooseHtmlFile[]; total: number };
+  /**
+   * Phase 2.5 §3.2 (G1): ≤ 100 distinct `projectDirectory` values of the listed designs, each
+   * `stat`ed (cached 60 s) so the list can say "Folder not found". Optional until G-a fills it.
+   */
+  projectFolders?: { directory: string; exists: boolean }[];
 };
 
 export type CreateDesignBody = {
@@ -173,15 +210,19 @@ export type OkResponse = { ok: true };
 export type MarkSentBody = { ids: string[]; version: number | null };
 export type MarkSentResponse = { comments: Comment[] };
 
-/** `total` = length (UTF-16 code units) of the whole text, ≤ `UPLOAD_TOTAL_MAX`. TTL `UPLOAD_TTL_MS`, ≤ `UPLOADS_OPEN_MAX` open. */
-export type CreateUploadBody = { total: number };
+/** `total` = length (UTF-16 code units) of the whole text, ≤ `UPLOAD_TOTAL_MAX`. TTL `UPLOAD_TTL_MS`, ≤ `UPLOADS_OPEN_MAX` open. `encoding: "base64"` carries binary (Phase 2.5 §5.6): total ≤ `BINARY_UPLOAD_TOTAL_MAX`, ≤ `BINARY_UPLOADS_OPEN_MAX` open. */
+export type CreateUploadBody = { total: number; encoding?: 'text' | 'base64' };
 export type CreateUploadResponse = { uploadId: string };
 /** Chunk `:index` (0-based, in order); `data` ≤ `UPLOAD_CHUNK_MAX_CHARS` after `JSON.stringify`. */
 export type PutUploadChunkBody = { data: string };
 /** `received` = characters stored so far; `complete` once it equals `total`. */
 export type PutUploadChunkResponse = { received: number; complete: boolean };
 
-export type PutOutboxBody = { sessionId: string; slug: string; text: string; commentIds: string[]; version: number | null };
+/**
+ * Phase 2.5 §3.4: `system` names a system's chat delivery (T9). The spec makes `slug` nullable
+ * with exactly one of the two set; until T9 the slug stays required, so design deliveries are unchanged.
+ */
+export type PutOutboxBody = { sessionId: string; slug: string; system?: string; text: string; commentIds: string[]; version: number | null };
 /** GET reads the slot, PUT replaces it, DELETE takes it (answers what was there, then clears — exactly-once delivery). */
 export type OutboxResponse = { outbox: Outbox | null };
 
@@ -252,8 +293,13 @@ export type RestoreVersionResponse = {
 export type ExportBody = { format: ExportFormat; screen?: string };
 export type ExportResponse = { path: string; bytes: number; format: ExportFormat };
 
-/** `path` must be an export path issued this run, or a design folder. */
-export type RevealBody = { path: string };
+/**
+ * `path` must be an export path issued this run, or a design folder. The system form
+ * (Phase 2.5 §3.5) takes no path: the service derives it from the system's recorded home
+ * (`folder` = the system folder, `repo` = the repo's system folder, `living-page` = the
+ * committed page's folder, selected).
+ */
+export type RevealBody = { path: string } | { system: string; target: 'folder' | 'repo' | 'living-page' };
 
 export type PresetsResponse = { presets: Preset[] };
 
@@ -263,6 +309,8 @@ export type ChipBody = {
   preset?: string | null;
   projectDirectory?: string | null;
   sessionId?: string | null;
+  /** The New dialog's explicit design-system choice (Phase 2.5 §3.2): an id, `"none"` or `"ask"`. */
+  system?: string;
 };
 export type ChipResponse = { slug: string; chip: DesignChip };
 
@@ -274,8 +322,10 @@ export type PromptBody = {
    * `offline`: ask the agent to make the design work offline; the service builds the text and the blocked-URL list.
    * `checks`: ask the agent to fix the errors and warnings the design check counts; 422 `invalid` when there are none.
    * `ask`: the user's own words, optionally about one element.
+   * `restyle` / `system-update` (Phase 2.5 §8.5): the design's system changed or was updated; `before` names
+   * the version holding the previous copy, and the service reads the names from the copies, never the request.
    */
-  purpose: 'revision' | 'continue' | 'offline' | 'checks' | 'ask';
+  purpose: 'revision' | 'continue' | 'offline' | 'checks' | 'ask' | 'restyle' | 'system-update';
   commentIds?: string[];
   /** Ask only: what the user wants (1 to `ASK_TEXT_MAX` characters). */
   text?: string;
@@ -283,6 +333,8 @@ export type PromptBody = {
   element?: AskElement;
   /** Revision only: how the page found each pinned element (from `anchoring.ts`), so the prompt can flag moved or missing elements. */
   anchorStates?: Record<string, AnchorState>;
+  /** Restyle / system-update only: the version id taken before the link or update. */
+  before?: string;
 };
 export type PromptResponse = {
   /** Revision: ≤ `REVISION_TEXT_MAX`. Continue: a short resume message. */
@@ -392,7 +444,9 @@ export type EditRequest =
   | { op: 'reorder'; screens: string; order: string[] }
   | { op: 'duplicate'; screens: string; id: string; file: FileStamp }
   | { op: 'trash-screen'; screens: string; id: string; file: FileStamp | null }
-  | { op: 'keep-direction'; screens: string; of: string; keep: string; files: { id: string; file: FileStamp | null }[] };
+  | { op: 'keep-direction'; screens: string; of: string; keep: string; files: { id: string; file: FileStamp | null }[] }
+  /** Phase 2.5 §6.4 "Reset to system": remove these overrides (≤ 200 names) from the design's tokens.css. */
+  | { op: 'token-reset'; base: string; names: string[] };
 
 /** The stamps the edit left, for the next action on the same view without a refetch. */
 export type EditStamps = { file?: string; tokens?: string; screens?: string };
@@ -423,6 +477,249 @@ export type PageStateResponse = { items: PageStateItems; chars: number; gen: str
 export type PageStatePatchBody = { gen: string; clear?: boolean; changes?: [string, string | null][] } | { gen: string; uploadId: string };
 export type PageStatePatchResponse = { chars: number; gen: string };
 export type PageStateClearResponse = { ok: true; gen: string };
+
+// ---- Phase 2.5: design systems (documentation/specs/phase-2-5-technical.md §3, §6, §7) ----
+
+/** One token edit of a system hand edit or re-sync (§6.1); values pass `validateTokenValue`. */
+export type TokenEdit =
+  | { kind: 'set'; name: string; mode: 'light' | 'dark'; value: string }
+  | { kind: 'add'; name: string; mode: 'light' | 'dark'; value: string }
+  | { kind: 'remove'; name: string; mode: 'light' | 'dark' | 'both' };
+
+/** Where a metadata change goes in system.json (§6.2, §2.11); `['tokens', name]` with null removes the metadata. */
+export type MetaPath =
+  | ['tokens', string, 'note' | 'group' | 'section' | 'breakpoint']
+  | ['type', string, 'family' | 'size' | 'weight' | 'lineHeight' | 'letterSpacing' | 'case' | 'note' | 'name']
+  | ['components', string, 'note' | 'purpose']
+  | ['fonts', string, 'family' | 'weight' | 'style']
+  | ['logos', string, 'variant' | 'note']
+  | ['patterns', string, 'title' | 'note' | 'kind']
+  | ['brand', string, 'title' | 'note' | 'kind']
+  | ['tokens', string];
+
+export type MetaChange = { at: MetaPath; value: string | number | boolean | null };
+
+/** The text files a system save may write (§6.2, §2.11): the overview and existing entry bodies. */
+export type SystemTextFile = 'OVERVIEW.md' | `notes/${string}.md` | `patterns/${string}.md` | `brand/${string}.md`;
+
+/**
+ * `save` carries the user's edits with stamps (null = the file was absent); `resync` is built
+ * server-side from the scan job's memory (§6.3), never from guest values: the request names
+ * token names and asset paths only.
+ */
+export type SystemEditRequest =
+  | {
+      op: 'save';
+      stamps: { tokens?: string | null; systemJson?: string | null; texts?: Record<string, string | null> };
+      tokens?: TokenEdit[];
+      meta?: MetaChange[];
+      texts?: { file: SystemTextFile; text: string }[];
+    }
+  | { op: 'resync'; scanId: string; stamp: string; changes: string[]; add: string[]; remove: string[]; useCode: string[]; assets: string[] };
+
+/** The stamps a system edit left, for the next action without a refetch. */
+export type SystemEditStamps = { tokens?: string; systemJson?: string; texts?: Record<string, string> };
+
+export type SystemEditResponse = {
+  edit: { id: string; label: string; detail?: string; files: string[]; undoable: boolean };
+  version: VersionSummary | null;
+  coalesced: boolean;
+  stamps: SystemEditStamps;
+};
+
+export type SystemUndoEditResponse = { files: string[]; stamps: SystemEditStamps; version: VersionSummary | null };
+
+/** What a code scan found (§7.1); the values stay in the job's memory, only counts and paths travel. */
+export type ScanSummary = {
+  directory: string;
+  counts: Record<TokenSection, number> & { fonts: number; logos: number };
+  files: { path: string; found: number }[];
+  skipped: { path: string; reason: string }[];
+  assets: { path: string; kind: 'font' | 'logo'; bytes: number; family?: string; weight?: number; style?: string }[];
+  /** Paths and a reason for the agent, never contents (Tailwind configs, JS themes, …). */
+  forAgent: { path: string; why: string }[];
+  refused: number;
+  partial: boolean;
+};
+
+/** The internal-home re-sync review (§7.3): provenance-based, with conflicts and ticks. */
+export type CodeResyncReview = {
+  kind: 'code';
+  changed: { name: string; mode: 'light' | 'dark'; from: string; to: string }[];
+  conflicts: { name: string; mode: 'light' | 'dark'; mine: string; code: string }[];
+  added: string[];
+  removed: string[];
+  assets: { path: string; kind: 'font' | 'logo' }[];
+  partial: boolean;
+};
+
+/** A scan's review: the code flavour for an internal home, the repo flavour for a repo-backed one (§7.4). */
+export type ResyncReview = CodeResyncReview | RepoResyncReview;
+
+export type SystemListResponse = { systems: SystemSummary[]; total: number; max: number };
+
+export type CreateSystemBody = {
+  name: string;
+  code?: { scanId: string; assets: string[] };
+  description?: { text: string; preset: string | null };
+  brand?: true;
+};
+export type CreateSystemResponse = { id: string; system: SystemDetail };
+
+/** One of the five patches; `livingPage` is repo home only (rev 3, AD-32), else 422. */
+export type PatchSystemBody =
+  | { name: string }
+  | { status: 'draft' | 'ready' }
+  | { review: { section: SystemSection; state: ReviewState; note?: string } }
+  | { sessionId: string | null }
+  | { livingPage: { embedFonts: boolean } };
+export type PatchSystemResponse = { system: SystemSummary; readyNote?: { unreviewed: number } };
+
+/** `repoUntouched: true` on a repo-backed system: only `_systems/<id>` was trashed (§3.5). */
+export type DeleteSystemResponse = { trashedTo: string; clearedSettings: { default: boolean; pins: number }; repoUntouched?: true };
+
+export type AddSystemAssetBody = { uploadId: string; name: string; kind: 'font' | 'logo' | 'source' };
+export type AddSystemAssetResponse = { asset: { file: string; kind: 'font' | 'logo' | 'source'; bytes: number }; refused: null };
+export type AssetsFromFolderBody = { directory: string };
+export type AssetsFromFolderResponse = { added: { file: string; kind: 'font' | 'logo' | 'source' }[]; refused: { name: string; reason: string }[] };
+
+/** The board render: a version (default live) and a colour scheme (default light). */
+export type SystemBoardQuery = { version?: string; scheme?: 'light' | 'dark' };
+
+export type SystemPromptPurpose =
+  | 'make' | 'ask' | 'review' | 'resync-notes' | 'checks' | 'continue'
+  | 'living-page' | 'reconcile' | 'build-continue';
+export type SystemPromptBody = {
+  purpose: SystemPromptPurpose;
+  /** Ask only: the user's words. */
+  text?: string;
+  /** Ask only: the board entry the question is about (`BOARD_ENTRY_PATTERN`). */
+  entry?: string;
+  /** Review only: the section marked needs-work. */
+  section?: SystemSection;
+  /** Resync-notes / checks: the version to compare against. */
+  before?: string;
+};
+export type SystemPromptResponse = { text: string; chip: Chip<SystemChipData>; handEdits: { upTo: number; count: number } | null };
+
+/** Static system findings only (§10.3, §10.4); no browser runs for a system check. */
+export type SystemChecksResponse = { findings: CheckFinding[]; counts: { errors: number; warnings: number; notes: number }; at: IsoDate };
+
+export type CreateSystemScanBody = { directory: string; systemId?: string };
+export type CreateSystemScanResponse = { scanId: string };
+export type SystemScanResponse =
+  | { state: 'running'; seen: number }
+  | { state: 'done'; summary: ScanSummary; review?: ResyncReview }
+  | { state: 'failed' | 'cancelled' | 'root-changed'; message: string };
+
+/**
+ * Internal home: the ticked lists (§6.3). Repo-backed: `{ scanId, stamp }` only, all or nothing
+ * (§7.4); `stamp` is the snapshot's treeHash at scan time, or `"none"` for the first read (rev 3 recovery).
+ */
+export type SystemResyncBody = {
+  scanId: string;
+  stamp: string;
+  changes?: string[];
+  add?: string[];
+  remove?: string[];
+  useCode?: string[];
+  assets?: string[];
+};
+/** Repo re-sync has no Undo (rev 3, AD-33): `edit.undoable` is false and no undo record is written. */
+export type SystemResyncResponse = SystemEditResponse & {
+  counts: { changed: number; added: number; removed: number };
+  directoryChanged?: boolean;
+};
+
+// ---- Phase 2.5: a design's system (§3.2, §2.7) ----
+
+/** What the design shows about its system (§2.7 `designSystemStatus`). */
+export type DesignSystemViewStatus =
+  | { state: 'linked'; id: string; name: string; linkState: 'ok' | 'draft' | 'deleted' }
+  | { state: 'invalid' }
+  | { state: 'none' }
+  | { state: 'ask' }
+  | { state: 'unset' };
+
+/** COPY.json as the route answers it: the record without its file map. */
+export type CopyRecordView = Omit<CopyRecord, 'files'> & { fileCount: number };
+
+/** A declaration in the design's own tokens.css whose name the copy defines (§2.6). */
+export type Override = { name: string; value: string; systemValue: string };
+
+export type DesignSystemView = {
+  status: DesignSystemViewStatus;
+  link: CopyRecordView | null;
+  systemRevision: number | null;
+  updateAvailable: boolean;
+  copy: { complete: boolean; missing: string[]; drift: string[]; invalid: boolean };
+  overrides: Override[];
+  ownTokens: number;
+  choiceProblem: SystemChoiceProblem | null;
+  /** sha256(COPY.json bytes or "") + ":" + sha256(design tokens.css bytes or ""). */
+  stamp: string;
+};
+
+/** `to`: a system id or `none`. */
+export type SystemPreviewQuery = { to: string };
+export type SystemPreviewResponse = {
+  fromRevision: number | null;
+  toRevision: number | null;
+  tokens: {
+    changed: { name: string; from: string; to: string }[];
+    added: string[];
+    removed: string[];
+    totals: { changed: number; added: number; removed: number };
+  };
+  components: { changed: string[]; added: string[]; removed: string[]; totals: { changed: number; added: number; removed: number } };
+  overrides: string[];
+  ownTokens: number;
+  bytes: number;
+  stamp: string;
+};
+
+export type DesignSystemActionBody =
+  | { action: 'set'; to: string; stamp: string }
+  | { action: 'update'; toRevision: number; stamp: string };
+export type DesignSystemActionResponse = {
+  before: VersionSummary | null;
+  status: DesignSystemViewStatus;
+  notice: 'linked' | 'switched' | 'removed' | 'updated' | 'unchanged';
+};
+
+// ---- Phase 2.5: folders (§3.3, G1) ----
+
+/** A folder as the list answers it: live members only. */
+export type FolderView = { id: string; name: string; created: IsoDate; slugs: string[] };
+export type FolderListResponse = { folders: FolderView[]; damaged?: true };
+export type CreateFolderBody = { name: string };
+export type PatchFolderBody = { name: string };
+export type FolderResponse = { folder: FolderView };
+export type DeleteFolderResponse = { ok: true; designs: number };
+/** Set semantics, idempotent; unknown slugs are skipped silently. Each list ≤ 200. */
+export type FolderDesignsBody = { add?: string[]; remove?: string[] };
+
+// ---- Phase 2.5 S8: build tickets, the living page, stops (§3.5) ----
+
+export type SystemChipBody = { brief: string; projectDirectory: string | null; sessionId: string | null };
+export type SystemChipResponse = { ticket: string; chip: Chip<BuildChipData> };
+
+/** rev 3: `waiting` carries the project's label (never the path); `made` carries the name. */
+export type SystemBuildTicketResponse =
+  | { state: 'waiting'; project: { label: string } | null }
+  | { state: 'made'; id: string; name: string }
+  | { state: 'expired' };
+
+export type LivingPageRenderQuery = { which: 'staged' | 'preview'; scheme?: 'light' | 'dark' };
+
+export type StopBuildBody = { proposalId: string | null };
+export type StopBuildResponse = { undoId: string; until: IsoDate };
+export type UndoStopResponse = { id: string };
+
+/** GET /systems/:id/proposals/:proposalId (rev 3). */
+export type ProposalResponse = ProposalView;
+/** GET /systems/:id/living-page. */
+export type LivingPageResponse = LivingPageView;
 
 // ---- The route table ----
 
@@ -491,6 +788,48 @@ export interface ApiRoutes {
   'GET /designs/:slug/page-state': Route<NoQuery, undefined, PageStateResponse>;
   'PATCH /designs/:slug/page-state': Route<NoQuery, PageStatePatchBody, PageStatePatchResponse>;
   'DELETE /designs/:slug/page-state': Route<NoQuery, undefined, PageStateClearResponse>;
+
+  // Phase 2.5: design systems (documentation/specs/phase-2-5-technical.md §3)
+  'GET /systems': Route<NoQuery, undefined, SystemListResponse>;
+  'POST /systems': Route<NoQuery, CreateSystemBody, CreateSystemResponse>;
+  'GET /systems/:id': Route<NoQuery, undefined, SystemDetail>;
+  'PATCH /systems/:id': Route<NoQuery, PatchSystemBody, PatchSystemResponse>;
+  'DELETE /systems/:id': Route<NoQuery, undefined, DeleteSystemResponse>;
+  'POST /systems/:id/edits': Route<NoQuery, SystemEditRequest, SystemEditResponse>;
+  'POST /systems/:id/edits/:eid/undo': Route<NoQuery, Record<string, never>, SystemUndoEditResponse>;
+  'POST /systems/:id/hand-edits/clear': Route<NoQuery, HandEditsClearBody, OkResponse>;
+  'POST /systems/:id/assets': Route<NoQuery, AddSystemAssetBody, AddSystemAssetResponse>;
+  'POST /systems/:id/assets/from-folder': Route<NoQuery, AssetsFromFolderBody, AssetsFromFolderResponse>;
+  'GET /systems/:id/board': Route<SystemBoardQuery, undefined, RenderMeta>;
+  'GET /systems/:id/board/chunk': Route<RenderChunkQuery, undefined, RenderChunkResponse>;
+  'GET /systems/:id/versions': Route<NoQuery, undefined, VersionListResponse>;
+  'GET /systems/:id/versions/:vid/diff': Route<VersionDiffQuery, undefined, VersionDiffResponse>;
+  'POST /systems/:id/versions/:vid/restore': Route<NoQuery, undefined, RestoreVersionResponse>;
+  'POST /systems/:id/prompt': Route<NoQuery, SystemPromptBody, SystemPromptResponse>;
+  'GET /systems/:id/checks': Route<NoQuery, undefined, SystemChecksResponse>;
+  'POST /system-scans': Route<NoQuery, CreateSystemScanBody, CreateSystemScanResponse>;
+  'GET /system-scans/:scanId': Route<NoQuery, undefined, SystemScanResponse>;
+  'DELETE /system-scans/:scanId': Route<NoQuery, undefined, OkResponse>;
+  'POST /systems/:id/resync': Route<NoQuery, SystemResyncBody, SystemResyncResponse>;
+  'GET /designs/:slug/system': Route<NoQuery, undefined, DesignSystemView>;
+  'GET /designs/:slug/system/preview': Route<SystemPreviewQuery, undefined, SystemPreviewResponse>;
+  'POST /designs/:slug/system': Route<NoQuery, DesignSystemActionBody, DesignSystemActionResponse>;
+  'GET /folders': Route<NoQuery, undefined, FolderListResponse>;
+  'POST /folders': Route<NoQuery, CreateFolderBody, FolderResponse>;
+  'PATCH /folders/:folderId': Route<NoQuery, PatchFolderBody, FolderResponse>;
+  'DELETE /folders/:folderId': Route<NoQuery, undefined, DeleteFolderResponse>;
+  'POST /folders/:folderId/undelete': Route<NoQuery, Record<string, never>, FolderResponse>;
+  'POST /folders/:folderId/designs': Route<NoQuery, FolderDesignsBody, FolderResponse>;
+  // Phase 2.5 S8 (§3.5)
+  'POST /systems/chip': Route<NoQuery, SystemChipBody, SystemChipResponse>;
+  'GET /system-builds/:ticket': Route<NoQuery, undefined, SystemBuildTicketResponse>;
+  'GET /systems/:id/living-page': Route<NoQuery, undefined, LivingPageResponse>;
+  // Phase 2.5 rev 3 (§3.5)
+  'GET /systems/:id/proposals/:proposalId': Route<NoQuery, undefined, ProposalResponse>;
+  'GET /systems/:id/living-page/render': Route<LivingPageRenderQuery, undefined, RenderMeta>;
+  'GET /systems/:id/living-page/render/chunk': Route<RenderChunkQuery, undefined, RenderChunkResponse>;
+  'POST /systems/:id/build/stop': Route<NoQuery, StopBuildBody, StopBuildResponse>;
+  'POST /system-stops/:undoId/undo': Route<NoQuery, Record<string, never>, UndoStopResponse>;
 }
 
 export type RouteKey = keyof ApiRoutes;
@@ -514,6 +853,7 @@ export type RouteResponse<K extends RouteKey> = ApiRoutes[K]['response'];
  * Lane that implements each route. Exhaustive by type: adding a route without an owner fails typecheck.
  * `U2` to `U6`: the Phase 1.5 sibling branch that fills the route (documentation/specs/phase-1-5-sdk-2-7.md §10.2).
  * `P2`: the Phase 2 task that fills the route (documentation/specs/phase-2-technical.md §16).
+ * `P25`: the Phase 2.5 task that fills the route (documentation/specs/phase-2-5-technical.md §18).
  */
 export const ROUTE_OWNERS = {
   'GET /health': 'WP0',
@@ -567,12 +907,54 @@ export const ROUTE_OWNERS = {
   'GET /designs/:slug/page-state': 'P2',
   'PATCH /designs/:slug/page-state': 'P2',
   'DELETE /designs/:slug/page-state': 'P2',
-} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2'>;
+  'GET /systems': 'P25',
+  'POST /systems': 'P25',
+  'GET /systems/:id': 'P25',
+  'PATCH /systems/:id': 'P25',
+  'DELETE /systems/:id': 'P25',
+  'POST /systems/:id/edits': 'P25',
+  'POST /systems/:id/edits/:eid/undo': 'P25',
+  'POST /systems/:id/hand-edits/clear': 'P25',
+  'POST /systems/:id/assets': 'P25',
+  'POST /systems/:id/assets/from-folder': 'P25',
+  'GET /systems/:id/board': 'P25',
+  'GET /systems/:id/board/chunk': 'P25',
+  'GET /systems/:id/versions': 'P25',
+  'GET /systems/:id/versions/:vid/diff': 'P25',
+  'POST /systems/:id/versions/:vid/restore': 'P25',
+  'POST /systems/:id/prompt': 'P25',
+  'GET /systems/:id/checks': 'P25',
+  'POST /system-scans': 'P25',
+  'GET /system-scans/:scanId': 'P25',
+  'DELETE /system-scans/:scanId': 'P25',
+  'POST /systems/:id/resync': 'P25',
+  'GET /designs/:slug/system': 'P25',
+  'GET /designs/:slug/system/preview': 'P25',
+  'POST /designs/:slug/system': 'P25',
+  'GET /folders': 'P25',
+  'POST /folders': 'P25',
+  'PATCH /folders/:folderId': 'P25',
+  'DELETE /folders/:folderId': 'P25',
+  'POST /folders/:folderId/undelete': 'P25',
+  'POST /folders/:folderId/designs': 'P25',
+  'POST /systems/chip': 'P25',
+  'GET /system-builds/:ticket': 'P25',
+  'GET /systems/:id/living-page': 'P25',
+  'GET /systems/:id/proposals/:proposalId': 'P25',
+  'GET /systems/:id/living-page/render': 'P25',
+  'GET /systems/:id/living-page/render/chunk': 'P25',
+  'POST /systems/:id/build/stop': 'P25',
+  'POST /system-stops/:undoId/undo': 'P25',
+} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2' | 'P25'>;
 
 export const ROUTE_KEYS = Object.keys(ROUTE_OWNERS) as RouteKey[];
 
 /** Routes whose 200 answer is raw text, not JSON. */
-export const RAW_TEXT_ROUTES: ReadonlySet<RouteKey> = new Set<RouteKey>(['GET /designs/:slug/render/chunk']);
+export const RAW_TEXT_ROUTES: ReadonlySet<RouteKey> = new Set<RouteKey>([
+  'GET /designs/:slug/render/chunk',
+  'GET /systems/:id/board/chunk',
+  'GET /systems/:id/living-page/render/chunk',
+]);
 
 export const splitRouteKey = <K extends RouteKey>(key: K): { method: RouteMethod<K>; pattern: RoutePattern<K> } => {
   const space = key.indexOf(' ');

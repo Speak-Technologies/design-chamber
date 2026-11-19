@@ -942,3 +942,83 @@ describe('Phase 2 contract compatibility', () => {
     assert.deepEqual(untouched.screens, [{ id: 'a' }]);
   });
 });
+
+describe('systemChoice (Phase 2.5 §2.7, AD-6)', () => {
+  const MESSAGE = 'systemChoice must be a design system id or "none"; it was ignored.';
+
+  test('a system id or "none" is read as the agent wrote it, never as an unknown key', () => {
+    for (const value of ['acme', 'shop-2', 'none', 'a'.repeat(63)]) {
+      const { design, extra, warnings } = normalizeDesign({ ...validCanvas(), systemChoice: value }, OPTS);
+      assert.equal(design.systemChoice, value);
+      assert.deepEqual(warnings, []);
+      assert.equal(Object.hasOwn(extra, 'systemChoice'), false);
+    }
+  });
+
+  test('anything else is dropped with invalid-system-choice, never fatal', () => {
+    for (const value of ['Acme', '_systems', '-acme', '', 'a'.repeat(64), '../acme', 'acme/x', 'None', 5, true, null, { id: 'acme' }, ['acme']]) {
+      const { design, extra, warnings } = normalizeDesign({ ...validCanvas(), systemChoice: value }, OPTS);
+      assert.equal(Object.hasOwn(design, 'systemChoice'), false, JSON.stringify(value));
+      assert.equal(Object.hasOwn(extra, 'systemChoice'), false, JSON.stringify(value));
+      assert.deepEqual(warnings, [{ code: 'invalid-system-choice', field: 'systemChoice', message: MESSAGE }], JSON.stringify(value));
+      // The rest of the design still reads.
+      assert.equal(design.title, 'Checkout redesign');
+    }
+  });
+
+  test('it is agent-owned: a service write keeps it in place and never adds or forges it', () => {
+    const state = serviceStateOf(normalizeDesign(validCanvas(), OPTS).design);
+    const raw: JsonObject = { title: 'X', systemChoice: 'acme', $custom: 1 };
+    const merged = mergeServiceFields(raw, state);
+    assert.equal(merged.systemChoice, 'acme');
+    assert.deepEqual(Object.keys(merged).slice(0, 3), ['title', 'systemChoice', '$custom']);
+    assert.equal(serviceFieldsDiffer({ ...mergeServiceFields(validCanvas(), state), systemChoice: 'acme' }, state), false);
+    assert.equal(Object.hasOwn(mergeServiceFields(validCanvas(), state), 'systemChoice'), false);
+    const created = createDesignDocument({ kind: 'page', title: 'P', brief: '', sessionId: null, projectDirectory: null, preset: null, now: T0 });
+    assert.equal(Object.hasOwn(created.json, 'systemChoice'), false);
+  });
+
+  test('an old design.json reads exactly as before and a service write leaves its bytes identical', () => {
+    const before = serializeJson(validCanvas());
+    const parsed = parseDesignJsonText(before, OPTS);
+    assert.deepEqual(parsed.warnings, []);
+    assert.equal(Object.hasOwn(parsed.design, 'systemChoice'), false);
+    assert.deepEqual(Object.keys(parsed.design), [
+      'version', 'kind', 'title', 'created', 'updated', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry',
+      'viewports', 'screens', 'designSystem', 'tweaks', 'comments',
+    ]);
+    if (parsed.raw === null) return assert.fail('the fixture is a JSON object');
+    const state = serviceStateOf(parsed.design);
+    assert.equal(serviceFieldsDiffer(parsed.raw, state), false);
+    assert.equal(serializeJson(mergeServiceFields(parsed.raw, state)), before);
+    // A page with the old "artifact" kind too.
+    const { screens: _screens, ...pageFields } = validCanvas();
+    const artifact = serializeJson({ ...pageFields, kind: 'artifact' });
+    const page = parseDesignJsonText(artifact, OPTS);
+    assert.equal(Object.hasOwn(page.design, 'systemChoice'), false);
+  });
+
+  test('state.json keeps the service-owned system fields and drops unusable ones', () => {
+    const base = { version: 1, kind: 'canvas', created: T0, brief: '', comments: [] };
+    const kept = normalizeServiceState({
+      ...base,
+      systemDecision: 'system',
+      systemChoiceSeen: 'acme',
+      systemChoiceProblem: { value: `x${'y'.repeat(100)}`, reason: 'draft' },
+    });
+    assert.equal(kept?.systemDecision, 'system');
+    assert.equal(kept?.systemChoiceSeen, 'acme');
+    assert.deepEqual(kept?.systemChoiceProblem, { value: `x${'y'.repeat(79)}`, reason: 'draft' });
+    const dropped = normalizeServiceState({
+      ...base,
+      systemDecision: 'maybe',
+      systemChoiceSeen: 'Acme',
+      systemChoiceProblem: { value: 'acme', reason: 'nope' },
+    });
+    assert.ok(dropped);
+    for (const key of ['systemDecision', 'systemChoiceSeen', 'systemChoiceProblem']) assert.equal(Object.hasOwn(dropped, key), false, key);
+    // Old state.json files have none of the three keys and read exactly as before.
+    const old = normalizeServiceState(base);
+    assert.deepEqual(old && Object.keys(old), ['version', 'kind', 'created', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry', 'comments']);
+  });
+});

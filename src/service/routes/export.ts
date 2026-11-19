@@ -1,6 +1,6 @@
 // WP2 — POST /designs/:slug/export, POST /reveal (docs/SPEC.md §7, §4.3, §9.5).
 
-import type { ExportBody, ExportResponse, OkResponse, RevealBody } from '../../shared/api.ts';
+import type { ExportBody, ExportResponse, OkResponse } from '../../shared/api.ts';
 import { ApiError, type Router } from '../http.ts';
 import type { ServiceContext } from '../context.ts';
 import { createExportService, type ExportService } from '../export.ts';
@@ -41,7 +41,10 @@ export function registerExportRoutes(router: Router, ctx: ServiceContext): void 
   });
 
   router.on('POST /reveal', async ({ body }): Promise<OkResponse> => {
-    const input = (body ?? {}) as Partial<RevealBody>;
+    // Safe: untrusted JSON, every field is checked below before use.
+    const input = (body ?? {}) as { path?: unknown; system?: unknown };
+    // Phase 2.5 §3.5: the system form takes no path; T12b resolves it from the system's home.
+    if (input.system !== undefined && input.path === undefined) throw new ApiError('internal', 'This part of Design Chamber (design systems) is not built yet.');
     if (typeof input.path !== 'string') throw new ApiError('bad-path', 'That is not a path Design Chamber can open.');
     await lane.reveal.reveal(input.path);
     return { ok: true };

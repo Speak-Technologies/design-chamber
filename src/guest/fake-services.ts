@@ -745,6 +745,17 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
         return e.letter === null ? `- Kept the current ${e.screen}; its directions are in the trash` : `- Kept direction ${e.letter} "${e.name}" for ${e.screen}; the other directions are in the trash`;
       case 'undo':
         return `- Undid: ${e.of}`;
+      // Phase 2.5: a system's ledger; a design's fake never records these.
+      case 'system-token':
+        return `- Changed ${e.name} (${e.mode}) in tokens.css: "${e.before}" to "${e.after}"`;
+      case 'system-token-add':
+        return `- Added ${e.name} to tokens.css`;
+      case 'system-token-remove':
+        return `- Removed ${e.name} from tokens.css`;
+      case 'system-meta':
+        return `- Changed ${e.what} in system.json`;
+      case 'system-text':
+        return `- Edited ${e.file}`;
     }
   };
 

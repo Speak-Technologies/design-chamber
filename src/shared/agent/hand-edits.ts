@@ -65,6 +65,17 @@ const lineOf = (entry: HandEdit, quoteMax: number): string => {
         : `- Kept direction ${entry.letter}${entry.name === null ? '' : ` ${q(entry.name)}`} for ${bare(entry.screen)}; the other directions are in the trash`;
     case 'undo':
       return `- Undid: ${bare(entry.of)}`;
+    // Phase 2.5 §6.2: a system's own ledger (its tokens.css, system.json and text files).
+    case 'system-token':
+      return `- Changed ${bare(entry.name)} (${entry.mode}) in tokens.css: ${q(entry.before)} to ${q(entry.after)}`;
+    case 'system-token-add':
+      return `- Added ${bare(entry.name)} to tokens.css`;
+    case 'system-token-remove':
+      return `- Removed ${bare(entry.name)} from tokens.css`;
+    case 'system-meta':
+      return `- Changed ${bare(entry.what)} in system.json`;
+    case 'system-text':
+      return `- Edited ${safe(entry.file, HAND_EDIT_QUOTE_MAX)}`;
   }
 };
 
@@ -93,7 +104,13 @@ const filesOf = (entries: readonly HandEdit[]): string[] => {
           ? ['tokens.css']
           : entry.kind === 'reorder' || entry.kind === 'reorder-many' || entry.kind === 'keep'
             ? ['design.json']
-            : [];
+            : entry.kind === 'system-token' || entry.kind === 'system-token-add' || entry.kind === 'system-token-remove'
+              ? ['tokens.css']
+              : entry.kind === 'system-meta'
+                ? ['system.json']
+                : entry.kind === 'system-text'
+                  ? [entry.file]
+                  : [];
     for (const file of named) if (!files.includes(file)) files.push(file);
   }
   return files;

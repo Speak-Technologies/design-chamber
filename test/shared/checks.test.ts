@@ -259,3 +259,122 @@ test('tweak-broken params survive check.json parsing; a forged reason or field i
   assert.equal('severity' in first, false);
   assert.equal(withMessage(first).message, 'design.json: the tweak for --accent-h names a variable tokens.css does not define.');
 });
+
+// ---- Phase 2.5 (documentation/specs/phase-2-5-technical.md §10) ----
+
+const systemFinding = (code: CheckFindingData['code'], params: CheckFindingData['params'] = {}): CheckFindingData => ({ code, file: null, screen: null, viewport: null, params });
+
+test('Phase 2.5: every system code is in the closed table, with the spec severity', () => {
+  const expected: Record<string, 'error' | 'warning' | 'info'> = {
+    'system-drift': 'warning',
+    'system-copy-missing': 'warning',
+    'system-copy-invalid': 'warning',
+    'system-choice': 'warning',
+    'system-unreadable': 'error',
+    'system-entry-invalid': 'warning',
+    'system-value-invalid': 'error',
+    'system-font-missing': 'error',
+    'system-overview-empty': 'warning',
+    'system-overview-long': 'warning',
+    'system-note-long': 'warning',
+    'system-example-remote': 'error',
+    'system-token-undefined': 'warning',
+    'system-token-cap': 'warning',
+    'system-living-missing': 'warning',
+    'system-living-stale': 'warning',
+    'system-living-changed': 'warning',
+    'system-living-unsafe': 'error',
+    'system-living-failed': 'warning',
+    'system-repo-unreadable': 'error',
+    'system-snapshot-changed': 'warning',
+    'system-code-drift': 'warning',
+    'system-code-differs': 'warning',
+    'system-build-invalid': 'warning',
+    'system-coverage-empty': 'warning',
+    'system-living-reformatted': 'info',
+    'system-living-secret': 'error',
+    'system-landed-differs': 'warning',
+    'system-proposal-invalid': 'warning',
+  };
+  for (const [code, severity] of Object.entries(expected)) {
+    assert.ok(isCheckCode(code), code);
+    assert.equal(severityOf(code as CheckFindingData['code']), severity, code);
+  }
+  assert.equal(CHECK_CODES.filter((code) => code.startsWith('system-')).length, Object.keys(expected).length);
+});
+
+test('Phase 2.5: a secret on a dev-only living page is a warning; public or unknown access is an error', () => {
+  assert.equal(severityOf('system-living-secret', { access: 'dev' }), 'warning');
+  assert.equal(severityOf('system-living-secret', { access: 'public' }), 'error');
+  assert.equal(severityOf('system-living-secret'), 'error');
+  // Only this code reads `access`: it never lowers another code.
+  assert.equal(severityOf('system-living-unsafe', { access: 'dev' }), 'error');
+  assert.equal(withMessage(systemFinding('system-living-secret', { access: 'dev', kind: 'aws-key', count: 1 })).severity, 'warning');
+});
+
+test('Phase 2.5: system sentences follow the spec copy', () => {
+  const m = (code: CheckFindingData['code'], params: CheckFindingData['params'] = {}): string => findingMessage(systemFinding(code, params));
+  assert.equal(
+    m('system-drift', { system: 'Acme', count: 3, revision: 6 }),
+    "This design's copy of Acme was changed: 3 tokens differ from revision 6. Put them back, or keep them as this design's own overrides.",
+  );
+  assert.equal(m('system-copy-missing', { system: 'Acme', count: 2 }), "This design's copy of Acme is missing 2 files.");
+  assert.equal(m('system-copy-invalid'), "system/COPY.json can't be read, so Design Chamber can't tell which system this design uses.");
+  assert.equal(m('system-choice', { value: 'x', choice: 'unknown' }), 'design.json asks for the design system "x", which isn\'t a Ready system in this Designs folder.');
+  assert.equal(m('system-choice', { value: 'x', choice: 'draft' }), 'design.json asks for the design system "x", which isn\'t ready yet.');
+  assert.equal(m('system-living-missing', { system: 'Acme', repo: 'shop' }), 'Acme lives in shop but has no living page yet.');
+  assert.equal(m('system-living-stale', { system: 'Acme', from: 5, revision: 7 }), 'The living page was generated from revision 5; Acme is at revision 7.');
+  assert.equal(m('system-living-unsafe'), "The living page has markup Design Chamber didn't generate and can't check as safe.");
+  assert.equal(m('system-living-failed', { failed: 'secret' }), "Design Chamber couldn't generate the living page: it would show something shaped like a secret.");
+  assert.equal(m('system-repo-unreadable', { repo: 'shop' }), "Design Chamber can't read shop's design system folder. Choose another folder on the system page.");
+  assert.equal(m('system-snapshot-changed', { system: 'Acme', repo: 'shop' }), "Acme's snapshot was changed outside Design Chamber. Re-sync to read shop again.");
+  assert.equal(m('system-code-drift', { system: 'Acme', count: 3 }), 'In CSS variables and token JSON, 3 tokens differ from Acme. Ask the agent to reconcile.');
+  assert.match(m('system-code-differs', { system: 'Acme', count: 12, unread: 2 }), /^In CSS variables and token JSON, 12 tokens still differ from what Acme describes\. Design Chamber can't read 2 token files/);
+  assert.equal(m('system-coverage-empty', { system: 'Acme', area: 'patterns' }), 'Acme covers Patterns & voice but has nothing there yet.');
+  assert.equal(m('system-living-reformatted'), 'The living page may have been reformatted since it was generated. Its values are current.');
+  assert.equal(
+    m('system-living-secret', { kind: 'aws-key', count: 1 }),
+    'The living page shows something shaped like a secret (an AWS key). Remove it from the system.',
+  );
+  assert.equal(m('system-landed-differs', { repo: 'shop', count: 2 }), 'What landed in shop differs from the proposal you approved in 2 files.');
+  assert.equal(m('system-landed-differs', { repo: 'shop', part: 'docs' }), 'The agent says it applied docs, but Design Chamber found none in shop.');
+  assert.match(m('system-build-invalid', { build: 'repo-outside-project' }), /^BUILD\.json can't be used: The repo must be the project this chat is in, or a folder inside it\. To use a folder above it/);
+  assert.equal(m('system-proposal-invalid', { proposal: 'describe-change' }), "PROPOSAL.json can't be used: Describe only never changes the app's code.");
+  assert.equal(
+    findingMessage({ code: 'token-redefined', file: 'screens/home.html', screen: 'home', viewport: null, params: { system: 'Acme', count: 3 } }),
+    "screens/home.html redefines 3 tokens from the design system Acme. Use the system's values, or ask the user to change the system.",
+  );
+});
+
+test('Phase 2.5: system params survive parsing only as closed enums or cleaned names', () => {
+  const report = goodReport();
+  const params = {
+    system: 'Acme\nDesign',
+    repo: 'shop',
+    area: 'patterns',
+    kind: 'aws-key',
+    access: 'dev',
+    part: 'docs',
+    choice: 'draft',
+    failed: 'secret',
+    build: 'home-changed',
+    proposal: 'preview-secret',
+    revision: 7,
+    from: 5,
+    unread: 2,
+  };
+  (report.static as { findings: unknown[] }).findings = [{ code: 'system-living-secret', file: null, screen: null, viewport: null, params }];
+  const parsed = parseCheckReport(report);
+  const kept = parsed?.static.findings[0]?.params;
+  assert.ok(kept);
+  assert.equal(kept.system?.includes('\n'), false, 'names are one line');
+  assert.deepEqual({ ...kept, system: undefined }, { ...params, system: undefined });
+
+  const forged = { area: 'everything', kind: 'password', access: 'admin', part: 'repo', choice: 'yes', failed: 'boom', build: 'free text', proposal: '<b>', system: '', repo: 42 };
+  (report.static as { findings: unknown[] }).findings = [{ code: 'system-living-secret', file: null, screen: null, viewport: null, params: forged }];
+  const dropped = parseCheckReport(report)?.static.findings[0];
+  assert.ok(dropped);
+  assert.equal(dropped.params, undefined, 'every forged param is dropped');
+  // A forged `access` can't lower the severity: without it the secret is an error.
+  assert.equal(withMessage(dropped).severity, 'error');
+});

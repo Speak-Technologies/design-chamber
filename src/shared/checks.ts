@@ -14,10 +14,13 @@ import {
   SCREEN_ID_PATTERN,
   SHA256_PATTERN,
   SLUG_PATTERN,
+  SYSTEM_CHOICE_VALUE_MAX,
+  SYSTEM_NAME_MAX,
   VIEWPORT_ID_PATTERN,
 } from './limits.ts';
 import type {
   ArtboardCheck,
+  BuildProblemReason,
   CheckBrowser,
   CheckCode,
   CheckFinding,
@@ -25,7 +28,11 @@ import type {
   CheckParams,
   CheckReport,
   CheckSeverity,
+  ProposalPartName,
+  ProposalProblemReason,
   RenderCheckState,
+  SecretShapeKind,
+  SystemArea,
   Viewport,
 } from './types.ts';
 
@@ -43,6 +50,80 @@ const skippedSentence = (f: CheckFindingData): string => {
   if (f.params?.reason === 'budget') return `${what} (the run took longer than ${Math.round(CHECK_RUN_BUDGET_MS / 1000)} seconds).`;
   if (f.params?.reason === 'failures') return `${what} (the browser failed three times in a row).`;
   return `${what} (the limit is ${num(f.params?.max)} per run). Use --screen <id> to check the rest.`;
+};
+
+// ---- Phase 2.5: design systems (documentation/specs/phase-2-5-technical.md §10) ----
+
+/** The system's name as the finding carries it; the fallback keeps old reports readable. */
+const systemNameOf = (f: CheckFindingData): string => f.params?.system ?? 'the design system';
+/** The repo folder's base name ("shop" in the spec's examples). */
+const repoNameOf = (f: CheckFindingData): string => f.params?.repo ?? 'the repo';
+
+const AREA_LABELS: Readonly<Record<SystemArea, string>> = {
+  foundations: 'Foundations',
+  components: 'Components',
+  patterns: 'Patterns & voice',
+  brand: 'Brand & marketing',
+};
+
+const SECRET_KIND_LABELS: Readonly<Record<SecretShapeKind, string>> = {
+  'aws-key': 'an AWS key',
+  'github-token': 'a GitHub token',
+  'openai-style-key': 'an OpenAI-style key',
+  'slack-token': 'a Slack token',
+  'google-key': 'a Google key',
+  'private-key': 'a private key',
+};
+
+/** Why the living page could not be generated (§5.11's problem enum, rev 3 adds secret and no-snapshot). */
+const LIVING_FAILED_REASONS: Readonly<Record<NonNullable<CheckParams['failed']>, string>> = {
+  'too-large': 'it would be too large.',
+  bundle: "a file couldn't be embedded.",
+  unsafe: "it didn't pass the safety check.",
+  'no-snapshot': "the repo hasn't been read yet.",
+  secret: 'it would show something shaped like a secret.',
+};
+
+/** §5.9's closed adoption reasons; the finding names one, never free text. */
+const BUILD_PROBLEM_SENTENCES: Readonly<Record<BuildProblemReason, (f: CheckFindingData) => string>> = {
+  unreadable: () => "BUILD.json isn't valid JSON.",
+  'ticket-unknown': () => 'This design system was started from a chat Design Chamber no longer knows. Start it again with /design-system.',
+  'ticket-needed': () => "A system that lives in a repo needs a build ticket. Start it with /design-system in the project's chat.",
+  'repo-outside-project': () =>
+    'The repo must be the project this chat is in, or a folder inside it. To use a folder above it, such as the root of a monorepo, open a chat in that folder and run /design-system there.',
+  'repo-overlap': () => 'Another design system already uses this repo folder or living-page path.',
+  'living-page-exists': (f) => `The living-page path already exists in ${repoNameOf(f)} and isn't this system's living page. Pick another path.`,
+  'code-outside-project': () => 'The code folder must be the project this chat is in, or a folder inside it.',
+  'home-changed': (f) => `${systemNameOf(f)} already has files in ${repoNameOf(f)}, so its home can't change. Make a new system to move it.`,
+  'ticket-changed': () => 'BUILD.json names another build. Keep the ticket this system started with.',
+  'applied-unknown-proposal': (f) => `The agent says it applied a proposal you didn't approve here. Check ${repoNameOf(f)}'s history.`,
+};
+
+/** §5.14's closed proposal problems; the first one's sentence completes the finding. */
+const PROPOSAL_PROBLEM_SENTENCES: Readonly<Record<ProposalProblemReason, string>> = {
+  'not-adopted': 'the system has not been adopted from a build yet.',
+  round: 'the interview is not finished; a proposal needs round two or done.',
+  'path-outside': 'a system file lies outside the system folder.',
+  'living-page-path': "the living-page file is not the build's living-page path.",
+  'create-exists': 'a file the proposal creates already exists in the repo. The proposal must change it, not create it.',
+  'from-missing': 'a proposed file is missing from proposal/.',
+  'describe-change': "Describe only never changes the app's code.",
+  'internal-parts': "an internal system's proposal can only hold token fixes.",
+  'none-fixes': 'a build with no code to fix cannot hold token fixes.',
+  rewritten: 'this proposal changed after it was shown. Ask the agent for a new one.',
+  unreadable: "PROPOSAL.json isn't valid JSON.",
+  // §5.14 step 4: problems of the preview generated from proposal/.
+  'preview-too-large': 'the living page it proposes would be too large.',
+  'preview-unsafe': "the living page it proposes didn't pass the safety check.",
+  'preview-secret': 'the living page it proposes shows something shaped like a secret. Remove it before you approve.',
+};
+
+/** The drift sentences name what was compared (rev 3, §5.12); unread files follow when the scan listed any. */
+const driftScope = (f: CheckFindingData, core: string): string => {
+  const base = `In CSS variables and token JSON, ${core}`;
+  const unread = f.params?.unread ?? 0;
+  if (unread <= 0) return base;
+  return `${base} Design Chamber can't read ${num(unread)} token ${unread === 1 ? 'file' : 'files'}, so differences there aren't counted.`;
 };
 
 /** `<file> @ <Label> <w>×<h>` is built by `whereOf`; the table only places it in a sentence. */
@@ -85,10 +166,19 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
   'doc-viewport': { severity: 'warning', sentence: (f) => `${fileOf(f)} has no viewport meta tag.` },
   'doc-title': { severity: 'warning', sentence: (f) => `${fileOf(f)} has no <title>.` },
   'doc-charset': { severity: 'info', sentence: (f) => `${fileOf(f)} does not declare its charset.` },
-  'token-redefined': { severity: 'warning', sentence: (f) => `${fileOf(f)} redefines ${num(f.params?.count)} tokens from tokens.css. Change them in tokens.css.` },
+  'token-redefined': {
+    severity: 'warning',
+    sentence: (f) =>
+      f.params?.system !== undefined
+        ? `${fileOf(f)} redefines ${num(f.params?.count)} tokens from the design system ${f.params.system}. Use the system's values, or ask the user to change the system.`
+        : `${fileOf(f)} redefines ${num(f.params?.count)} tokens from tokens.css. Change them in tokens.css.`,
+  },
   'token-hardcoded': {
     severity: 'info',
-    sentence: (f) => `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although tokens.css defines colours.`,
+    sentence: (f) =>
+      f.params?.system !== undefined
+        ? `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although the design system ${f.params.system} defines colours. Use its tokens.`
+        : `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although tokens.css defines colours.`,
   },
   'tweak-broken': {
     severity: 'warning',
@@ -102,14 +192,158 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
     },
   },
   'check-partial': { severity: 'info', sentence: () => 'Some files were not checked in time.' },
+  // Phase 2.5 §10.1: a design against its linked system.
+  'system-drift': {
+    severity: 'warning',
+    sentence: (f) =>
+      `This design's copy of ${systemNameOf(f)} was changed: ${num(f.params?.count)} tokens differ from revision ${num(f.params?.revision)}. Put them back, or keep them as this design's own overrides.`,
+  },
+  'system-copy-missing': {
+    severity: 'warning',
+    sentence: (f) => `This design's copy of ${systemNameOf(f)} is missing ${num(f.params?.count)} files.`,
+  },
+  'system-copy-invalid': {
+    severity: 'warning',
+    sentence: () => "system/COPY.json can't be read, so Design Chamber can't tell which system this design uses.",
+  },
+  'system-choice': {
+    severity: 'warning',
+    sentence: (f) =>
+      f.params?.choice === 'draft'
+        ? `design.json asks for the design system "${f.params?.value ?? '?'}", which isn't ready yet.`
+        : `design.json asks for the design system "${f.params?.value ?? '?'}", which isn't a Ready system in this Designs folder.`,
+  },
+  // Phase 2.5 §10.3: checking a system.
+  'system-unreadable': {
+    severity: 'error',
+    sentence: () => "Design Chamber can't read this design system. system.json isn't valid JSON.",
+  },
+  'system-entry-invalid': {
+    severity: 'warning',
+    sentence: () => "system.json has entries Design Chamber can't read.",
+  },
+  'system-value-invalid': {
+    severity: 'error',
+    sentence: () => "tokens.css holds a value that isn't valid for its section.",
+  },
+  'system-font-missing': {
+    severity: 'error',
+    sentence: (f) => `${fileOf(f)} is listed as a font but is missing or can't be used.`,
+  },
+  'system-overview-empty': { severity: 'warning', sentence: () => 'The system has no overview yet.' },
+  'system-overview-long': {
+    severity: 'warning',
+    sentence: () => 'Keep the overview under 4 000 characters. Move detail into a note.',
+  },
+  'system-note-long': {
+    severity: 'warning',
+    sentence: () => 'A note is over 20 000 characters. Shorten it or split it.',
+  },
+  'system-example-remote': {
+    severity: 'error',
+    sentence: (f) => `${fileOf(f)} loads files from the internet, which the living page can't use.`,
+  },
+  'system-token-undefined': {
+    severity: 'warning',
+    sentence: () => "A component names a token the system doesn't define.",
+  },
+  'system-token-cap': {
+    severity: 'warning',
+    sentence: () => "Design systems hold up to 2 000 tokens. The rest weren't read.",
+  },
+  // Phase 2.5 §10.4: the repo-backed system (S8, with the rev 3 wording).
+  'system-living-missing': {
+    severity: 'warning',
+    sentence: (f) => `${systemNameOf(f)} lives in ${repoNameOf(f)} but has no living page yet.`,
+  },
+  'system-living-stale': {
+    severity: 'warning',
+    sentence: (f) => `The living page was generated from revision ${num(f.params?.from)}; ${systemNameOf(f)} is at revision ${num(f.params?.revision)}.`,
+  },
+  'system-living-changed': {
+    severity: 'warning',
+    sentence: () => 'The living page in the repo differs from the one Design Chamber generated.',
+  },
+  'system-living-unsafe': {
+    severity: 'error',
+    sentence: () => "The living page has markup Design Chamber didn't generate and can't check as safe.",
+  },
+  'system-living-failed': {
+    severity: 'warning',
+    sentence: (f) => `Design Chamber couldn't generate the living page: ${LIVING_FAILED_REASONS[f.params?.failed ?? 'too-large']}`,
+  },
+  'system-repo-unreadable': {
+    severity: 'error',
+    sentence: (f) => `Design Chamber can't read ${repoNameOf(f)}'s design system folder. Choose another folder on the system page.`,
+  },
+  'system-snapshot-changed': {
+    severity: 'warning',
+    sentence: (f) => `${systemNameOf(f)}'s snapshot was changed outside Design Chamber. Re-sync to read ${repoNameOf(f)} again.`,
+  },
+  'system-code-drift': {
+    severity: 'warning',
+    sentence: (f) => driftScope(f, `${num(f.params?.count)} tokens differ from ${systemNameOf(f)}. Ask the agent to reconcile.`),
+  },
+  'system-code-differs': {
+    severity: 'warning',
+    sentence: (f) => driftScope(f, `${num(f.params?.count)} tokens still differ from what ${systemNameOf(f)} describes.`),
+  },
+  'system-build-invalid': {
+    severity: 'warning',
+    sentence: (f) => {
+      const reason = f.params?.build;
+      const sentence = reason !== undefined ? BUILD_PROBLEM_SENTENCES[reason](f) : 'Ask the agent to fix it.';
+      return `BUILD.json can't be used: ${sentence}`;
+    },
+  },
+  'system-coverage-empty': {
+    severity: 'warning',
+    sentence: (f) => `${systemNameOf(f)} covers ${AREA_LABELS[f.params?.area ?? 'foundations']} but has nothing there yet.`,
+  },
+  // Phase 2.5 rev 3 (§10.4).
+  'system-living-reformatted': {
+    severity: 'info',
+    sentence: () => 'The living page may have been reformatted since it was generated. Its values are current.',
+  },
+  'system-living-secret': {
+    // Error unless the page is dev-only; `severityOf` reads the validated `access` param.
+    severity: 'error',
+    sentence: (f) => {
+      const count = Math.max(1, Math.round(f.params?.count ?? 1));
+      const label = SECRET_KIND_LABELS[f.params?.kind ?? 'aws-key'];
+      const what = count === 1 ? `something shaped like a secret (${label})` : `${num(count)} things shaped like secrets (${label})`;
+      return `The living page shows ${what}. Remove ${count === 1 ? 'it' : 'them'} from the system.`;
+    },
+  },
+  'system-landed-differs': {
+    severity: 'warning',
+    sentence: (f) =>
+      f.params?.part !== undefined
+        ? `The agent says it applied ${f.params.part}, but Design Chamber found none in ${repoNameOf(f)}.`
+        : `What landed in ${repoNameOf(f)} differs from the proposal you approved in ${num(f.params?.count)} files.`,
+  },
+  'system-proposal-invalid': {
+    severity: 'warning',
+    sentence: (f) => {
+      const reason = f.params?.proposal;
+      return `PROPOSAL.json can't be used: ${reason !== undefined ? PROPOSAL_PROBLEM_SENTENCES[reason] : 'ask the agent to fix it.'}`;
+    },
+  },
 };
 
 export const CHECK_CODES: readonly CheckCode[] = Object.freeze(Object.keys(RULES) as CheckCode[]);
 
 export const isCheckCode = (value: unknown): value is CheckCode => typeof value === 'string' && Object.hasOwn(RULES, value);
 
-/** The severity of a code. Only this table decides it. */
-export const severityOf = (code: CheckCode): CheckSeverity => RULES[code].severity;
+/**
+ * The severity of a code. Only this table decides it, from the code and validated params
+ * alone: `system-living-secret` is a warning on a dev-only page, an error otherwise
+ * (rev 3 §10.4). A forged report can still never choose its own severity.
+ */
+export const severityOf = (code: CheckCode, params?: CheckParams): CheckSeverity => {
+  if (code === 'system-living-secret' && params?.access === 'dev') return 'warning';
+  return RULES[code].severity;
+};
 
 /** Codes whose sentence starts with the artboard (`file @ Label w×h`) rather than a bare file. */
 const ARTBOARD_CODES: ReadonlySet<CheckCode> = new Set<CheckCode>([
@@ -144,7 +378,7 @@ export const findingMessage = (finding: CheckFindingData, viewports: readonly Pi
 /** A stored finding with the severity and sentence the service derives from its code. */
 export const withMessage = (finding: CheckFindingData, viewports: readonly Pick<Viewport, 'id' | 'label' | 'width' | 'height'>[] = []): CheckFinding => ({
   ...finding,
-  severity: severityOf(finding.code),
+  severity: severityOf(finding.code, finding.params),
   message: findingMessage(finding, viewports),
 });
 
@@ -213,7 +447,32 @@ const PNGS_MAX = 4;
 const ENTRIES_MAX = 200;
 const PX_MAX = 1_000_000;
 
-const PARAM_NUMBERS = ['px', 'width', 'ratio', 'min', 'count', 'max'] as const;
+const PARAM_NUMBERS = ['px', 'width', 'ratio', 'min', 'count', 'max', 'revision', 'from', 'unread'] as const;
+
+const AREAS: readonly SystemArea[] = ['foundations', 'components', 'patterns', 'brand'];
+const SECRET_KINDS: readonly SecretShapeKind[] = ['aws-key', 'github-token', 'openai-style-key', 'slack-token', 'google-key', 'private-key'];
+const PART_NAMES: readonly ProposalPartName[] = ['system-files', 'token-fixes', 'docs', 'living-page'];
+const BUILD_REASONS: readonly BuildProblemReason[] = [
+  'unreadable', 'ticket-unknown', 'ticket-needed', 'repo-outside-project', 'repo-overlap',
+  'living-page-exists', 'code-outside-project', 'home-changed', 'ticket-changed', 'applied-unknown-proposal',
+];
+const PROPOSAL_REASONS: readonly ProposalProblemReason[] = [
+  'not-adopted', 'round', 'path-outside', 'living-page-path', 'create-exists', 'from-missing',
+  'describe-change', 'internal-parts', 'none-fixes', 'rewritten', 'unreadable',
+  'preview-too-large', 'preview-unsafe', 'preview-secret',
+];
+const LIVING_FAILED: readonly NonNullable<CheckParams['failed']>[] = ['too-large', 'bundle', 'unsafe', 'no-snapshot', 'secret'];
+
+/** One of a closed enum, else null: a forged param never reaches a sentence. */
+const oneOf = <T extends string>(value: unknown, options: readonly T[]): T | null =>
+  typeof value === 'string' && (options as readonly string[]).includes(value) ? (value as T) : null;
+
+/** A name the sentence quotes: one line, clipped, never empty. */
+const nameParam = (value: unknown, max: number): string | null => {
+  if (typeof value !== 'string') return null;
+  const cleaned = cleanDetail(value, max);
+  return cleaned === '' ? null : cleaned;
+};
 
 const parseParams = (value: unknown): CheckParams | undefined => {
   if (!isRec(value)) return undefined;
@@ -226,6 +485,27 @@ const parseParams = (value: unknown): CheckParams | undefined => {
   if (typeof value.base === 'string' && SCREEN_ID_PATTERN.test(value.base)) out.base = value.base;
   if (value.reason === 'limit' || value.reason === 'budget' || value.reason === 'failures') out.reason = value.reason;
   if (value.tweak === 'missing' || value.tweak === 'formula' || value.tweak === 'unit' || value.tweak === 'no-tokens') out.tweak = value.tweak;
+  // Phase 2.5: names are cleaned and clipped; every other new param is a closed enum (§10).
+  const system = nameParam(value.system, SYSTEM_NAME_MAX);
+  if (system !== null) out.system = system;
+  const repo = nameParam(value.repo, SYSTEM_NAME_MAX);
+  if (repo !== null) out.repo = repo;
+  const choiceValue = nameParam(value.value, SYSTEM_CHOICE_VALUE_MAX);
+  if (choiceValue !== null) out.value = choiceValue;
+  const area = oneOf(value.area, AREAS);
+  if (area !== null) out.area = area;
+  const kind = oneOf(value.kind, SECRET_KINDS);
+  if (kind !== null) out.kind = kind;
+  if (value.access === 'dev' || value.access === 'public') out.access = value.access;
+  const part = oneOf(value.part, PART_NAMES);
+  if (part !== null) out.part = part;
+  if (value.choice === 'unknown' || value.choice === 'draft') out.choice = value.choice;
+  const failed = oneOf(value.failed, LIVING_FAILED);
+  if (failed !== null) out.failed = failed;
+  const build = oneOf(value.build, BUILD_REASONS);
+  if (build !== null) out.build = build;
+  const proposal = oneOf(value.proposal, PROPOSAL_REASONS);
+  if (proposal !== null) out.proposal = proposal;
   return Object.keys(out).length > 0 ? out : undefined;
 };
 

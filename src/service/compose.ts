@@ -19,9 +19,11 @@ import { registerChangesRoutes } from './routes/changes.ts';
 import { registerChecksRoutes } from './routes/checks.ts';
 import { registerChatRoutes } from './routes/chat.ts';
 import { registerCommentsRoutes } from './routes/comments.ts';
+import { registerDesignSystemRoutes } from './routes/design-system.ts';
 import { registerDesignsRoutes } from './routes/designs.ts';
 import { registerEditRoutes } from './routes/edits.ts';
 import { registerExportRoutes } from './routes/export.ts';
+import { registerFoldersRoutes } from './routes/folders.ts';
 import { registerMentionsRoutes } from './routes/mentions.ts';
 import { registerOutboxRoutes } from './routes/outbox.ts';
 import { registerPageStateRoutes } from './routes/page-state.ts';
@@ -30,6 +32,15 @@ import { registerRenderRoutes } from './routes/render.ts';
 import { registerSessionEventsRoutes } from './routes/session-events.ts';
 import { registerSettingsRoutes } from './routes/settings.ts';
 import { registerStatusRoutes } from './routes/status.ts';
+import { registerSystemAssetRoutes } from './routes/system-assets.ts';
+import { registerSystemBoardRoutes } from './routes/system-board.ts';
+import { registerSystemBuildRoutes } from './routes/system-build.ts';
+import { registerSystemChatRoutes } from './routes/system-chat.ts';
+import { registerSystemChecksRoutes } from './routes/system-checks.ts';
+import { registerSystemEditRoutes } from './routes/system-edits.ts';
+import { registerSystemScanRoutes } from './routes/system-scans.ts';
+import { registerSystemVersionsRoutes } from './routes/system-versions.ts';
+import { registerSystemsRoutes } from './routes/systems.ts';
 import { registerThumbnailsRoutes } from './routes/thumbnails.ts';
 import { registerUploadsRoutes } from './routes/uploads.ts';
 import { registerVersionsRoutes } from './routes/versions.ts';
@@ -182,6 +193,19 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   // Phase 2: hand edits (the edit pipeline) and saved page data (per-design page state).
   registerEditRoutes(router, ctx);
   registerPageStateRoutes(router, ctx);
+  // Phase 2.5: design systems and folders (documentation/specs/phase-2-5-technical.md §3); T0 stubs
+  // answer "not built yet" until each task replaces its file's registrations.
+  registerSystemsRoutes(router, ctx);
+  registerSystemVersionsRoutes(router, ctx);
+  registerSystemEditRoutes(router, ctx);
+  registerSystemScanRoutes(router, ctx);
+  registerSystemAssetRoutes(router, ctx);
+  registerSystemBoardRoutes(router, ctx);
+  registerSystemChatRoutes(router, ctx);
+  registerSystemChecksRoutes(router, ctx);
+  registerDesignSystemRoutes(router, ctx);
+  registerFoldersRoutes(router, ctx);
+  registerSystemBuildRoutes(router, ctx);
 
   let disposed = false;
   return {

@@ -24,10 +24,11 @@ import {
   PAGE_STATE_BATCH_MAX_CHARS,
   PAGE_STATE_CHANGES_MAX,
   TEXT_EDIT_MAX,
+  TOKEN_PREVIEW_NAME_PATTERN,
   TOKEN_PREVIEW_VALUE_PATTERN,
-  TWEAK_VAR_PATTERN,
-  TWEAKS_MAX,
+  TOKEN_PREVIEW_VARS_MAX,
 } from './limits.ts';
+import { isBoardEntryKey } from './system-board.ts';
 import { isBalancedQuotes } from './tokens-css.ts';
 import type { Rect } from './types.ts';
 
@@ -90,7 +91,19 @@ export type PageToFrameMessage =
 
 // ---- Frame → page ----
 
-export type HitElement = { selector: string; text: string; html: string; rect: Rect; tag: string };
+export type HitElement = {
+  selector: string;
+  text: string;
+  html: string;
+  rect: Rect;
+  tag: string;
+  /**
+   * The `data-dc-entry` attribute of the closest ancestor that has one, when it matches
+   * `BOARD_ENTRY_PATTERN`, else null (Phase 2.5 §4.2). Advisory: only the board view reads it;
+   * a design frame's entry is ignored everywhere else.
+   */
+  entry?: string | null;
+};
 export type AnchorResult = { id: string; found: boolean; rect: Rect | null; exact: boolean };
 
 /** What the bridge reports about the element under an edit-probe point (Phase 2 §3.1); advisory, never a write. */
@@ -181,7 +194,9 @@ const isHitElement = (value: unknown): value is HitElement =>
   isStr(value.text, ANCHOR_TEXT_MAX) &&
   isStr(value.html, ANCHOR_HTML_MAX) &&
   isRect(value.rect) &&
-  isId(value.tag, BRIDGE_TAG_MAX);
+  isId(value.tag, BRIDGE_TAG_MAX) &&
+  // Phase 2.5 §4.2: optional; null or a board entry key, nothing else.
+  (value.entry === undefined || value.entry === null || (typeof value.entry === 'string' && isBoardEntryKey(value.entry)));
 
 const isInt = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value);
 
@@ -189,7 +204,7 @@ const isInt = (value: unknown): value is number => typeof value === 'number' && 
 const isTokenVar = (value: unknown): value is TokenVar =>
   isRec(value) &&
   typeof value.name === 'string' &&
-  TWEAK_VAR_PATTERN.test(value.name) &&
+  TOKEN_PREVIEW_NAME_PATTERN.test(value.name) &&
   typeof value.value === 'string' &&
   TOKEN_PREVIEW_VALUE_PATTERN.test(value.value) &&
   isBalancedQuotes(value.value);
@@ -243,7 +258,7 @@ const PAGE_TO_FRAME: Record<PageToFrameType, (m: Rec) => boolean> = {
   'scroll-to': (m) => isNum(m.x) && isNum(m.y),
   highlight: (m) => m.selector === null || isStr(m.selector, ANCHOR_SELECTOR_MAX),
   'edit-probe': (m) => isNum(m.x) && isNum(m.y),
-  'set-tokens': (m) => isList(m.vars, TWEAKS_MAX, isTokenVar),
+  'set-tokens': (m) => isList(m.vars, TOKEN_PREVIEW_VARS_MAX, isTokenVar),
   'storage-sync': (m) => isBool(m.clear) && isStorageChanges(m.changes),
 };
 

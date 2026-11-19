@@ -48,6 +48,7 @@ import type { OpInput, OpModules, OpPlan, PlannedStep } from './op-module.ts';
 import { screensOp } from './ops-screens.ts';
 import { textOp } from './ops-text.ts';
 import { readTokens, tokensOp } from './ops-tokens.ts';
+import { tokensResetOp } from './ops-tokens-reset.ts';
 import { ensureTrashDir, isOwnTrashPlace, nextTrashPlace, trashPlaceOf, trashStampOf, TRASH_PREFIX } from './trash.ts';
 
 // ---- the fixed op map (T3, T4, T5 replace only their module, never this table) ----
@@ -59,6 +60,8 @@ export const DEFAULT_OPS: OpModules = {
   duplicate: screensOp,
   'trash-screen': screensOp,
   'keep-direction': screensOp,
+  // Phase 2.5 §6.4 "Reset to system" (T7).
+  'token-reset': tokensResetOp,
 };
 
 // ---- sentences (§2.8) ----
@@ -81,6 +84,7 @@ export const STALE_MESSAGES: Readonly<Record<EditRequest['op'], string>> = {
   duplicate: SCREEN_LIST_STALE,
   'trash-screen': SCREEN_LIST_STALE,
   'keep-direction': SCREEN_LIST_STALE,
+  'token-reset': 'This override changed since you opened the update. Reload and try again.',
 };
 
 const VERSION_LABELS: Readonly<Record<UserEditReason, string>> = { 'user-edit': 'Before your edits', 'keep-direction': 'Before keeping a direction' };
@@ -611,6 +615,8 @@ export const createEditService = (deps: EditServiceDeps): EditService => {
         return ops['trash-screen'].plan({ ...base, request });
       case 'keep-direction':
         return ops['keep-direction'].plan({ ...base, request });
+      case 'token-reset':
+        return ops['token-reset'].plan({ ...base, request });
     }
   };
 
