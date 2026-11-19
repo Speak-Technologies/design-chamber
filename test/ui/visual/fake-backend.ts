@@ -17,6 +17,7 @@ import type {
   VersionSummary,
   Viewport,
 } from '../../../src/shared/types.ts';
+import { createFakeFolders, type FakeFolders } from './fake-folders.ts';
 import { createFakeChecks, type FakeChecks } from './fake-checks.ts';
 import { createFakePageState, type FakePageState } from './fake-page-state.ts';
 import { createFakeTokens, type FakeTokens } from './fake-tokens.ts';
@@ -312,6 +313,11 @@ export type FakeBackend = {
   touchTokens: (slug: string) => void;
   /** Test hooks (saved page data): seed it, play another surface clearing it, count the accepted writes (fake-page-state.ts). */
   pageState: FakePageState['hooks'];
+  /** Test hooks (Phase 2.5 G1): seed folders, fail their load, play another window (fake-folders.ts). */
+  folders: FakeFolders['hooks'];
+  /** Test hook (G1): which project folder a design was made for (`null`: none), and which project folders are gone from disk. */
+  setProject: (slug: string, directory: string | null) => void;
+  setMissingProjects: (directories: string[]) => void;
 };
 
 export const createFakeBackend = (): FakeBackend => {
@@ -464,6 +470,9 @@ export const createFakeBackend = (): FakeBackend => {
     return { edit: { id, label, ...(detailText ? { detail: detailText } : {}), files: [], undoable: true }, version: null, coalesced: false, stamps: { screens: stampOf(rec) }, ...(created ? { created } : {}) };
   };
 
+  const missingProjects = new Set<string>();
+  const folderBook: FakeFolders = createFakeFolders({ emit: (slug, kind) => emit(slug, kind), exists: (slug) => db.has(slug) });
+
   type Req<K extends RouteKey> = { params: Record<string, string>; query: Record<string, string>; body: RouteBody<K> };
   type Handlers = { [K in RouteKey]?: (req: Req<K>) => RouteResponse<K> | Promise<RouteResponse<K>> };
 
@@ -501,7 +510,8 @@ export const createFakeBackend = (): FakeBackend => {
       let designs = rootVisible() ? [...db.entries()].map(([slug, rec]) => summary(slug, rec)) : [];
       if (query.q) designs = designs.filter((d) => d.title.toLowerCase().includes((query.q ?? '').toLowerCase()));
       const files = rootVisible() ? [...loose.entries()].map(([name, file]) => ({ name, ...file })).sort((a, b) => b.mtime.localeCompare(a.mtime)) : [];
-      return { root, designs, loose: { files, total: files.length } };
+      const directories = [...new Set(designs.map((d) => d.projectDirectory).filter((d): d is string => d !== null))];
+      return { root, designs, loose: { files, total: files.length }, projectFolders: directories.map((directory) => ({ directory, exists: !missingProjects.has(directory) })) };
     },
     'POST /loose/import': ({ body }) => {
       if (!loose.delete(body.name)) throw new ServiceError('not-found', 'That file is no longer in your designs folder.');
@@ -776,6 +786,7 @@ export const createFakeBackend = (): FakeBackend => {
     },
     // Saved page data (feature 19): in memory, in fake-page-state.ts.
     ...pageState.handlers,
+    ...folderBook.handlers,
   };
 
   const checks = createFakeChecks({
@@ -877,6 +888,18 @@ export const createFakeBackend = (): FakeBackend => {
     },
     touchTokens: (slug) => tokens.touch(slug),
     pageState: pageState.hooks,
+    folders: folderBook.hooks,
+    setProject: (slug, directory) => {
+      const rec = db.get(slug);
+      if (!rec) return;
+      rec.design.projectDirectory = directory;
+      emit(slug, 'design');
+    },
+    setMissingProjects: (directories) => {
+      missingProjects.clear();
+      for (const directory of directories) missingProjects.add(directory);
+      emit(null, 'root');
+    },
   };
 };
 

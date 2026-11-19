@@ -9,6 +9,8 @@ fix the doc and note what drifted.
 |---|---|---|
 | [Rail panel](pages/rail-panel.md) | the Design Chamber icon in OpenChamber's rail (`panel` surface) | The navigator in OpenChamber's rail: browse designs, compact viewer, settings. |
 | [Full-screen page](pages/full-screen-page.md) | OpenChamber sidebar → Extension pages → Design Chamber (`page` surface) | The library, the canvas wall and the page viewer. |
+| [Library: projects and folders](pages/library.md) | the page's designs list | The sidebar that groups designs by project and by your own folders, drag to add, delete with Undo. |
+| [Rail: projects and folders](pages/rail.md) | the rail's designs list | The Show select with the same groups, Add to folder and folder actions. |
 
 ## Features
 | Feature | One-liner | Pages involved |

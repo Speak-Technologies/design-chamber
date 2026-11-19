@@ -250,7 +250,7 @@ body {
   border-top-color: currentColor;
 }
 
-.dc-app :is(.dc-iconbtn, .dc-row-main, .dc-card-main, .dc-pin, .dc-comment-main, .dc-title-input, .oc-sdk-btn):focus-visible {
+.dc-app :is(.dc-iconbtn, .dc-row-main, .dc-card-main, .dc-side-main, .dc-pin, .dc-comment-main, .dc-title-input, .oc-sdk-btn):focus-visible {
   outline: none;
   box-shadow: var(--dc-ring);
 }
@@ -3114,3 +3114,287 @@ summary.dc-checks-group-title:focus-visible {
   text-overflow: ellipsis;
 }
 /* ===== end directions ===== */
+
+/* ===== Phase 2.5: projects and folders (G1) ===== */
+/* The page library's sidebar, the cards' project line, the rail's Show select and the Add to folder dialog.
+   Host tokens only; the selected row says so with a weight and a bar, never with colour alone. */
+
+.dc-library-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.dc-library-body > .dc-library-scroll {
+  flex: 1;
+  min-width: 0;
+}
+.dc-page-scope {
+  color: var(--oc-muted);
+  font-weight: 500;
+}
+.dc-page-scope::before {
+  content: '/';
+  margin: 0 var(--dc-s2);
+}
+.dc-library-bar > .dc-iconbtn[aria-label='Projects and folders'] {
+  margin-left: calc(var(--dc-s1) * -1);
+}
+
+.dc-side {
+  flex: none;
+  width: 232px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--dc-s1) var(--dc-s2) var(--dc-s5) var(--dc-s4);
+  border-right: 1px solid var(--dc-hair);
+  background: var(--oc-bg);
+}
+.dc-library-body[data-sidebar='closed'] > .dc-side {
+  display: none;
+}
+/* Under 900 px the sidebar floats over the grid instead of squeezing it. */
+.dc-library-body[data-narrow='true'][data-sidebar='open'] > .dc-side {
+  position: absolute;
+  z-index: 30;
+  inset: 0 auto 0 0;
+  border-right-color: var(--oc-border);
+  box-shadow: var(--oc-sdk-float);
+}
+.dc-side-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+}
+.dc-side-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dc-side-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--dc-s2);
+  min-height: 28px;
+  margin-top: var(--dc-s4);
+}
+.dc-side-title {
+  margin: 0;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.dc-side-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: var(--dc-r);
+  transition: background 120ms ease-out;
+}
+.dc-side-row:hover,
+.dc-side-row:focus-within {
+  background: var(--oc-hover);
+}
+.dc-side-row[data-selected='true'] {
+  background: color-mix(in srgb, var(--oc-primary) 10%, transparent);
+}
+.dc-side-row[data-selected='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--oc-primary);
+}
+.dc-side-row[data-selected='true'] .dc-side-main {
+  font-weight: 600;
+}
+.dc-side-row[data-drop='over'] {
+  background: color-mix(in srgb, var(--oc-primary) 16%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--oc-primary) 55%, transparent);
+}
+.dc-side-main {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: var(--dc-s2);
+  min-width: 0;
+  padding: 6px var(--dc-s2);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-side-main > svg {
+  flex: none;
+  color: var(--oc-muted);
+}
+.dc-side-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-side-count {
+  flex: none;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.dc-side-warn {
+  display: inline-flex;
+  flex: none;
+  color: var(--dc-warning-text);
+}
+.dc-side-row > .dc-iconbtn {
+  position: absolute;
+  right: 2px;
+  opacity: 0;
+}
+/* The folder menu button takes the count's place while the row is hovered or focused, so the counts line up. */
+.dc-side-row:has(> .dc-iconbtn):is(:hover, :focus-within) .dc-side-count {
+  visibility: hidden;
+}
+.dc-side-row:hover > .dc-iconbtn,
+.dc-side-row:focus-within > .dc-iconbtn,
+.dc-side-row > .dc-iconbtn[aria-expanded='true'] {
+  opacity: 1;
+}
+.dc-side-row-edit {
+  padding: 2px 0;
+}
+.dc-side-create-slot {
+  margin: 2px 0 var(--dc-s1);
+}
+.dc-side-create {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--dc-s1);
+  min-width: 0;
+}
+.dc-side-input {
+  height: 28px;
+  font-size: 0.8125rem;
+}
+.dc-side-hint {
+  margin: var(--dc-s1) var(--dc-s2) 0;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.dc-side-note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  padding: var(--dc-s1) var(--dc-s2);
+}
+.dc-side-skeleton {
+  padding: 8px var(--dc-s2);
+}
+
+.dc-card[data-dragging='true'] {
+  opacity: 0.5;
+}
+.dc-card-project,
+.dc-row-project {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+.dc-card-project > svg,
+.dc-row-project > svg {
+  flex: none;
+}
+.dc-card-project-name,
+.dc-row-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-library-undo {
+  padding: 0 var(--dc-s5);
+}
+.dc-rail-undo {
+  padding: 0 var(--dc-s2);
+}
+.dc-undo-notice:not(:empty) {
+  padding-bottom: var(--dc-s2);
+}
+
+/* Rail: one Show select above the tabs. */
+.dc-rail-show {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+}
+.dc-rail-show-select {
+  flex: 1;
+  min-width: 0;
+}
+.dc-rail-show-select .oc-sdk-select,
+.dc-rail-show-select .oc-sdk-trigger {
+  width: 100%;
+  align-self: stretch;
+}
+.dc-rail-folders-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--dc-s2);
+}
+
+/* Add to folder dialog. */
+.dc-folder-pick {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  max-height: 40vh;
+  overflow: auto;
+}
+.dc-folder-pick-message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+}
+.dc-folder-pick-skeleton {
+  padding: var(--dc-s1) 0;
+}
+.dc-folder-new {
+  margin-top: var(--dc-s3);
+}
+.dc-folder-new-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--dc-s2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-side-row {
+    transition: none;
+  }
+}
+/* ===== end projects and folders ===== */

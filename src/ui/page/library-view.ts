@@ -5,16 +5,46 @@
 import { mountBadge, mountBanner, mountEmpty, mountSearchField, mountSelect, mountTabs } from '@openchamber/sdk/ui';
 
 import type { DesignSummary } from '../../shared/types.ts';
-import { designMenu, runDesignAction, toast, type ActionContext } from '../components/actions.ts';
+import { toast, type ActionContext } from '../components/actions.ts';
 import { createScope, h } from '../components/dom.ts';
+import { addToFolder, deleteFolder, DESIGN_DRAG_TYPE, listDesignMenu, mountUndoNotice, runListAction, type FolderRef } from '../components/folder-actions.ts';
+import { folders as foldersStore, type FoldersState } from '../components/folders-store.ts';
 import { icon } from '../components/icons.ts';
 import { attachMenu, btn, iconBtn } from '../components/kit.ts';
 import { mountLooseBanner } from '../components/loose-banner.ts';
 import { mountThumb, type ThumbHandle } from '../components/thumb.ts';
-import { host, store } from '../guest.ts';
+import { guestHost, host, store } from '../guest.ts';
 import { middlePath, plural, relativeTime } from '../model/format.ts';
-import { LIST_SORTS, LIST_TABS, emptyKind, filterDesigns, kindLabel, rowAriaLabel, sortDesigns, tabCounts, type ListSort, type ListTab } from '../model/list-model.ts';
+import {
+  ALL_SCOPE,
+  LIST_SORTS,
+  LIST_TABS,
+  cardProjectLine,
+  emptyKind,
+  filterDesigns,
+  folderEmptyBody,
+  folderNameProblem,
+  kindLabel,
+  noMatchesSentence,
+  projectGroups,
+  resolveScope,
+  rowAriaLabel,
+  scopeCounts,
+  scopeDesigns,
+  scopeFromId,
+  scopeLabel,
+  scopeStorageKey,
+  scopeToId,
+  sortDesigns,
+  tabCounts,
+  type ListScope,
+  type ListSort,
+  type ListTab,
+  type ProjectGroup,
+  type ProjectInfo,
+} from '../model/list-model.ts';
 import { designCountLabel } from '../model/settings-model.ts';
+import { mountSidebar } from './library-sidebar.ts';
 
 export type LibraryOptions = {
   actions: ActionContext;
@@ -26,12 +56,23 @@ export type LibraryOptions = {
 export type LibraryHandle = { el: HTMLElement; focusCard: (slug: string) => void; dispose: () => void };
 
 const SKELETON_CARDS = 8;
+/** Under this page width the sidebar starts closed and floats over the grid when opened. */
+const SIDEBAR_MIN_PAGE_WIDTH = 900;
 
 export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   const scope = createScope();
   let query = '';
   let tab: ListTab = 'all';
   let sort: ListSort = 'updated';
+  /** The remembered view; the one actually shown is `resolveScope` of it (a project or folder that is gone reads as All designs). */
+  let chosen: ListScope = ALL_SCOPE;
+  let projects: ProjectInfo[] = [];
+  /** What the open card menus and the card lines need, refreshed on every paint. */
+  let view: { scope: ListScope; groups: readonly ProjectGroup[]; root: string; folder: FolderRef | null } = { scope: ALL_SCOPE, groups: [], root: '', folder: null };
+  /** null follows the page width (open from 900 px); the sidebar button sets it. */
+  let sidebarWanted: boolean | null = null;
+  let narrow = false;
+  const folderStore = foldersStore();
   const thumbs = new Map<string, ThumbHandle>();
   const el = h('div', { class: 'dc-library' });
 
@@ -65,10 +106,13 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     paintGrid();
   } });
 
+  const sidebarToggle = iconBtn({ icon: 'sidebar', label: 'Projects and folders', pressed: true, onClick: () => toggleSidebar() });
+  const scopeName = h('span', { class: 'dc-page-scope', hidden: true });
   const toolbar = h(
     'header',
     { class: 'dc-library-bar' },
-    h('h1', { class: 'dc-page-title' }, 'Designs'),
+    sidebarToggle,
+    h('h1', { class: 'dc-page-title' }, 'Designs', scopeName),
     h('div', { class: 'dc-library-controls' }, searchHost, tabsHost, sortHost),
     h('span', { class: 'dc-spacer' }),
     settingsButton.el,
@@ -81,9 +125,74 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   };
   const looseBanner = mountLooseBanner({ sheetHost: options.actions.host, onOpen: options.onOpen, onPaint: syncNotices });
   notices.append(looseBanner.el);
+  const undo = mountUndoNotice();
+  const undoHost = h('div', { class: 'dc-library-undo' }, undo.el);
   const grid = h('ul', { class: 'dc-grid', role: 'list', 'aria-label': 'Designs' });
-  const scroller = h('div', { class: 'dc-library-scroll' }, notices, grid);
-  el.append(toolbar, scroller);
+  const scroller = h('div', { class: 'dc-library-scroll' }, undoHost, notices, grid);
+  const sidebar = mountSidebar({
+    onSelect: (next) => {
+      setScope(next);
+      if (narrow) setSidebar(false);
+    },
+    onDrop: (folder, slug) => {
+      const design = store.getState().designs.data?.designs.find((entry) => entry.slug === slug);
+      if (design) void addToFolder(folder, { slug, title: design.title });
+    },
+    onRetryFolders: () => void folderStore.load(),
+    onCreate: async (name) => {
+      const folder = await folderStore.create(name);
+      toast('success', `Made folder ${folder.name}.`);
+    },
+    onRename: async (folder, name) => void (await folderStore.rename(folder.id, name)),
+    onDelete: (folder) => {
+      // The view falls back to All designs while the folder is gone, and returns to it with Undo.
+      void deleteFolder({ id: folder.id, name: folder.name }, undo);
+    },
+    validate: (name, ignoreId) => folderNameProblem(name, folderStore.get().folders, ignoreId),
+  });
+  const body = h('div', { class: 'dc-library-body' }, sidebar.el, scroller);
+  el.append(toolbar, body);
+
+  const sidebarOpen = (): boolean => sidebarWanted ?? !narrow;
+  const paintSidebarState = (): void => {
+    const open = sidebarOpen();
+    body.dataset.sidebar = open ? 'open' : 'closed';
+    body.dataset.narrow = narrow ? 'true' : 'false';
+    sidebarToggle.setAttribute('aria-pressed', String(open));
+    sidebarToggle.setAttribute('aria-expanded', String(open));
+    sidebar.el.inert = !open;
+  };
+  const setSidebar = (open: boolean): void => {
+    sidebarWanted = open;
+    paintSidebarState();
+  };
+  const toggleSidebar = (): void => {
+    setSidebar(!sidebarOpen());
+    if (sidebarOpen()) sidebar.focusSelected();
+  };
+  const sizeWatcher = new ResizeObserver((entries) => {
+    const width = entries[0]?.contentRect.width ?? 0;
+    const next = width > 0 && width < SIDEBAR_MIN_PAGE_WIDTH;
+    if (next === narrow) return;
+    narrow = next;
+    paintSidebarState();
+  });
+  sizeWatcher.observe(el);
+  scope.add(() => sizeWatcher.disconnect());
+  // Escape closes the sidebar when it floats over the grid.
+  sidebar.el.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && narrow && sidebarOpen() && !event.defaultPrevented) {
+      event.preventDefault();
+      setSidebar(false);
+      sidebarToggle.focus();
+    }
+  });
+
+  const setScope = (next: ListScope): void => {
+    chosen = next;
+    void host.storage.set(scopeStorageKey('page'), scopeToId(next));
+    paintGrid();
+  };
 
   const switchBack = async (path: string): Promise<void> => {
     try {
@@ -101,6 +210,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
       thumb = mountThumb(design, 'card');
       thumbs.set(design.slug, thumb);
     }
+    const line = cardProjectLine(design, view.scope, view.groups, view.root);
     const kindBadge = h('span');
     mountBadge(kindBadge, { label: kindLabel(design.kind), tone: 'neutral' });
     const locale = host.snapshot()?.locale ?? 'en';
@@ -111,14 +221,31 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
       'button',
       { type: 'button', class: 'dc-card-main', 'aria-label': rowAriaLabel(design) },
       h('span', { class: 'dc-card-thumb' }, thumb.el, design.pending ? h('span', { class: 'dc-card-overlay' }, h('span', { class: 'dc-flag', 'data-tone': 'warning' }, 'Waiting for agent')) : null),
-      h('span', { class: 'dc-card-body' }, h('span', { class: 'dc-card-title' }, design.title), h('span', { class: 'dc-card-meta' }, kindBadge, h('span', { class: 'dc-muted' }, relativeTime(design.updated, Date.now(), locale)), indicators)),
+      h(
+        'span',
+        { class: 'dc-card-body' },
+        h('span', { class: 'dc-card-title' }, design.title),
+        line ? h('span', { class: 'dc-card-project', title: line.title }, icon('layers', 12), h('span', { class: 'dc-card-project-name' }, line.label)) : null,
+        h('span', { class: 'dc-card-meta' }, kindBadge, h('span', { class: 'dc-muted' }, relativeTime(design.updated, Date.now(), locale)), indicators),
+      ),
     );
     main.addEventListener('click', () => options.onOpen(design.slug));
     const more = iconBtn({ icon: 'more', label: `Actions for ${design.title}`, size: 'sm', onClick: () => undefined });
     more.classList.add('dc-card-more');
     const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
-    attachMenu(more, () => designMenu({ includeOpen: true }), (id) => runDesignAction(id, ref, options.actions));
-    return h('li', { class: 'dc-card', 'data-slug': design.slug, 'data-pending': design.pending ? 'true' : 'false' }, main, more);
+    attachMenu(more, () => listDesignMenu(view.folder), (id) => runListAction(id, ref, options.actions, view.folder));
+    const item = h('li', { class: 'dc-card', 'data-slug': design.slug, 'data-pending': design.pending ? 'true' : 'false', draggable: 'true' }, main, more);
+    // Drag a card onto a folder in the sidebar to add it. Add to folder… in the menu does the same with a click.
+    item.addEventListener('dragstart', (event) => {
+      if (!event.dataTransfer) return;
+      event.dataTransfer.setData(DESIGN_DRAG_TYPE, design.slug);
+      event.dataTransfer.effectAllowed = 'copy';
+      item.dataset.dragging = 'true';
+    });
+    item.addEventListener('dragend', () => {
+      delete item.dataset.dragging;
+    });
+    return item;
   };
 
   const skeletons = (): HTMLElement[] =>
@@ -161,17 +288,41 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
       return;
     }
     const all = state.data.designs;
-    const shown = sortDesigns(filterDesigns(all, query, tab), sort);
-    const counts = tabCounts(all, query);
-    tabsHandle.update({ items: LIST_TABS.map(({ id, label }) => ({ id, label, count: counts[id] })) });
+    const root = state.data.root;
+    const foldersState: FoldersState = folderStore.get();
+    const folderList = foldersState.status === 'error' ? [] : foldersState.folders;
+    const groups = projectGroups(all, projects, root, state.data.projectFolders);
+    const foldersPending = chosen.kind === 'folder' && (foldersState.status === 'idle' || foldersState.status === 'loading') && foldersState.folders.length === 0;
+    const effective = foldersPending ? chosen : resolveScope(chosen, groups, folderList);
+    const folder = effective.kind === 'folder' ? folderList.find((entry) => entry.id === effective.id) ?? null : null;
+    view = { scope: effective, groups, root, folder: folder ? { id: folder.id, name: folder.name } : null };
+    const counts4 = scopeCounts(all, folderList, root);
+    sidebar.paint({ scope: effective, counts: counts4, groups, folders: folderList, foldersStatus: foldersState.status === 'error' ? 'error' : foldersState.status === 'ready' ? 'ready' : 'loading', foldersError: foldersState.error });
+    paintSidebarState();
+    const label = scopeLabel(effective, groups, folderList);
+    scopeName.hidden = label === null;
+    scopeName.textContent = label ?? '';
+    if (foldersPending) {
+      grid.append(...skeletons());
+      scroller.scrollTop = previousScroll;
+      return;
+    }
+    const scoped = scopeDesigns(all, effective, folderList, root);
+    const shown = sortDesigns(filterDesigns(scoped, query, tab), sort);
+    const counts = tabCounts(scoped, query);
+    tabsHandle.update({ items: LIST_TABS.map(({ id, label: tabLabel }) => ({ id, label: tabLabel, count: counts[id] })) });
     const kind = emptyKind(all, shown);
-    if (kind === 'no-designs') {
+    if (kind !== 'none' && kind !== 'no-designs' && scoped.length === 0 && folder) {
+      const wrap = h('div');
+      mountEmpty(wrap, { title: `No designs in ${folder.name} yet`, body: folderEmptyBody(true), action: { label: 'Show all designs', onClick: () => setScope(ALL_SCOPE) } });
+      grid.append(message(wrap));
+    } else if (kind === 'no-designs') {
       const wrap = h('div');
       mountEmpty(wrap, { title: 'No designs yet', body: 'Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here the moment they are saved.', action: { label: 'New canvas', onClick: () => options.onNew('canvas') } });
       grid.append(message(wrap));
     } else if (kind === 'no-matches') {
       const wrap = h('div');
-      mountEmpty(wrap, { title: query.trim() !== '' ? `No designs match “${query.trim()}”` : 'Nothing in this tab yet', body: 'Try another word, or look in All.', action: { label: 'Clear filters', onClick: () => {
+      mountEmpty(wrap, { title: query.trim() !== '' ? noMatchesSentence(label, query) : label !== null ? `Nothing in ${label} for this tab yet` : 'Nothing in this tab yet', body: label !== null ? 'Try another word, look in All, or show all designs.' : 'Try another word, or look in All.', action: { label: 'Clear filters', onClick: () => {
         query = '';
         tab = 'all';
         search.update({ value: '' });
@@ -194,7 +345,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   scope.add(
     store.subscribe(() => {
       const state = store.getState();
-      const next = `${state.designs.status}:${JSON.stringify(state.designs.data?.designs ?? null)}:${JSON.stringify(state.designs.data?.loose ?? null)}:${state.designs.error?.message ?? ''}:${JSON.stringify(state.settings.data?.previousRoots ?? null)}`;
+      const next = `${state.designs.status}:${state.designs.data?.root ?? ''}:${JSON.stringify(state.designs.data?.projectFolders ?? null)}:${JSON.stringify(state.designs.data?.designs ?? null)}:${JSON.stringify(state.designs.data?.loose ?? null)}:${state.designs.error?.message ?? ''}:${JSON.stringify(state.settings.data?.previousRoots ?? null)}`;
       if (next === signature) return;
       signature = next;
       paintGrid();
@@ -202,6 +353,20 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   );
   const minute = setInterval(paintGrid, 60_000);
   scope.add(() => clearInterval(minute));
+  scope.add(folderStore.subscribe(paintGrid));
+
+  // The remembered view and the host's project names arrive after the first paint; a failure of either only costs the memory or the nicer name.
+  void host.storage.get(scopeStorageKey('page')).then((stored) => {
+    chosen = scopeFromId(stored);
+    paintGrid();
+  });
+  void guestHost.client.listProjects().then(
+    (answer) => {
+      projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
+      paintGrid();
+    },
+    (error: unknown) => console.warn('Design Chamber: the project names could not be read; folders show their own names', error),
+  );
 
   void store.refreshDesigns();
   void store.loadSettings();
@@ -220,6 +385,8 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
       search.dispose();
       tabsHandle.dispose();
       sortSelect.dispose();
+      sidebar.dispose();
+      undo.dispose();
       el.remove();
     },
   };

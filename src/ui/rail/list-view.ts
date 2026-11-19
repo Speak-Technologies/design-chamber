@@ -2,19 +2,46 @@
 // badges and a row menu, an empty state, a notice when an earlier folder still holds designs,
 // and the offer to import loose HTML files saved straight into the designs folder.
 
-import { mountBanner, mountEmpty, mountSearchField, mountTabs } from '@openchamber/sdk/ui';
+import { mountBanner, mountEmpty, mountSearchField, mountSelect, mountTabs } from '@openchamber/sdk/ui';
 
 import type { DesignSummary } from '../../shared/types.ts';
-import { runDesignAction, designMenu, type ActionContext } from '../components/actions.ts';
+import { type ActionContext } from '../components/actions.ts';
 import { createScope, h } from '../components/dom.ts';
+import { deleteFolder, listDesignMenu, mountUndoNotice, openRenameFolder, runListAction, type FolderRef } from '../components/folder-actions.ts';
+import { folders as foldersStore, type FoldersState } from '../components/folders-store.ts';
 import { icon } from '../components/icons.ts';
 import { attachMenu, btn, iconBtn } from '../components/kit.ts';
 import { mountLooseBanner } from '../components/loose-banner.ts';
 import { mountThumb, type ThumbHandle } from '../components/thumb.ts';
-import { host, store } from '../guest.ts';
+import { guestHost, host, store } from '../guest.ts';
 import { dismissedTip, shouldShowTip, TIP_KEY } from '../model/findability-model.ts';
 import { middlePath, relativeTime, plural } from '../model/format.ts';
-import { LIST_TABS, emptyKind, filterDesigns, kindSummary, rowAriaLabel, sortDesigns, tabCounts, type ListTab } from '../model/list-model.ts';
+import {
+  ALL_SCOPE,
+  LIST_TABS,
+  cardProjectLine,
+  emptyKind,
+  filterDesigns,
+  folderEmptyBody,
+  kindSummary,
+  noMatchesSentence,
+  projectGroups,
+  resolveScope,
+  rowAriaLabel,
+  scopeCounts,
+  scopeDesigns,
+  scopeFromId,
+  scopeLabel,
+  scopeOptions,
+  scopeStorageKey,
+  scopeToId,
+  sortDesigns,
+  tabCounts,
+  type ListScope,
+  type ListTab,
+  type ProjectGroup,
+  type ProjectInfo,
+} from '../model/list-model.ts';
 import { designCountLabel } from '../model/settings-model.ts';
 import { toast } from '../components/actions.ts';
 
@@ -33,6 +60,11 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   const scope = createScope();
   let query = '';
   let tab: ListTab = 'all';
+  /** The remembered view; the one shown is `resolveScope` of it (a project or folder that is gone reads as All designs). */
+  let chosen: ListScope = ALL_SCOPE;
+  let projects: ProjectInfo[] = [];
+  let view: { scope: ListScope; groups: readonly ProjectGroup[]; root: string; folder: FolderRef | null } = { scope: ALL_SCOPE, groups: [], root: '', folder: null };
+  const folderStore = foldersStore();
   const thumbs = new Map<string, ThumbHandle>();
 
   const el = h('div', { class: 'dc-list-view' });
@@ -63,7 +95,31 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     tabsHandle.update({ activeId: tab });
     paintList();
   } });
-  const filters = h('div', { class: 'dc-rail-filters' }, searchHost, tabsHost);
+  // Show: the same groups as the page's sidebar (all, each project, No project, each folder) in one select.
+  const showHost = h('div', { class: 'dc-rail-show-select' });
+  const showSelect = mountSelect(showHost, { value: 'all', options: [{ id: 'all', label: 'All designs' }], onChange: (id) => setScope(scopeFromId(id)) });
+  const showTrigger = showHost.querySelector('button');
+  const folderMore = iconBtn({ icon: 'more', label: 'Folder actions', size: 'md', onClick: () => undefined });
+  folderMore.hidden = true;
+  attachMenu(
+    folderMore,
+    () => [
+      { id: 'rename', label: 'Rename folder' },
+      { separator: true },
+      { id: 'delete', label: 'Delete folder', destructive: true },
+    ],
+    (id) => {
+      const folder = view.folder;
+      if (!folder) return;
+      if (id === 'rename') openRenameFolder(options.actions.host, folder);
+      // The view falls back to All designs while the folder is gone, and returns to it with Undo.
+      else void deleteFolder(folder, undo);
+    },
+  );
+  const showRow = h('div', { class: 'dc-rail-show' }, h('span', { class: 'dc-sort-label', 'aria-hidden': 'true' }, 'Show'), showHost, folderMore);
+  // Folders that can't be read: projects still work, and the way out sits next to the select.
+  const foldersNote = h('div', { class: 'dc-rail-folders-note', hidden: true }, h('p', { class: 'dc-form-error' }, 'Folders couldn’t load. Try again.'), btn({ label: 'Try again', variant: 'outline', size: 'xs', onClick: () => void folderStore.load() }).el);
+  const filters = h('div', { class: 'dc-rail-filters' }, searchHost, showRow, foldersNote, tabsHost);
 
   // First-run tip (feat/findability): where the full-screen page is. The rail cannot open it
   // from code (an extension has no such API), so it points at the sidebar menu that does.
@@ -106,8 +162,9 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   };
   const looseBanner = mountLooseBanner({ sheetHost: options.actions.host, onOpen: options.onOpen, onPaint: syncNotices });
   notices.append(looseBanner.el);
+  const undo = mountUndoNotice();
   const list = h('ul', { class: 'dc-rows', role: 'list', 'aria-label': 'Designs' });
-  const scroller = h('div', { class: 'dc-rail-scroll' }, notices, list);
+  const scroller = h('div', { class: 'dc-rail-scroll' }, h('div', { class: 'dc-rail-undo' }, undo.el), notices, list);
   el.append(head, tipHost, filters, scroller);
 
   const switchBack = async (path: string): Promise<void> => {
@@ -127,16 +184,17 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
       thumbs.set(design.slug, thumb);
     }
     const locale = host.snapshot()?.locale ?? 'en';
+    const line = cardProjectLine(design, view.scope, view.groups, view.root);
     const meta = h('span', { class: 'dc-row-meta' }, `${kindSummary(design)} · ${relativeTime(design.updated, Date.now(), locale)}`);
     const flags = h('span', { class: 'dc-row-flags' });
     if (design.pending) flags.append(h('span', { class: 'dc-flag', 'data-tone': 'warning' }, 'Waiting for agent'));
     if (design.openComments > 0) flags.append(h('span', { class: 'dc-flag', title: plural(design.openComments, 'open comment') }, icon('pin', 12), String(design.openComments)));
     if (design.sessionId) flags.append(h('span', { class: 'dc-flag dc-flag-icon', title: 'Linked to a chat', role: 'img', 'aria-label': 'Linked to a chat' }, icon('chat', 12)));
-    const main = h('button', { type: 'button', class: 'dc-row-main', 'aria-label': rowAriaLabel(design) }, thumb.el, h('span', { class: 'dc-row-text' }, h('span', { class: 'dc-row-title' }, design.title), meta, flags.childElementCount > 0 ? flags : null));
+    const main = h('button', { type: 'button', class: 'dc-row-main', 'aria-label': rowAriaLabel(design) }, thumb.el, h('span', { class: 'dc-row-text' }, h('span', { class: 'dc-row-title' }, design.title), meta, line ? h('span', { class: 'dc-row-project', title: line.title }, icon('layers', 12), h('span', { class: 'dc-row-project-name' }, line.label)) : null, flags.childElementCount > 0 ? flags : null));
     main.addEventListener('click', () => options.onOpen(design.slug));
     const more = iconBtn({ icon: 'more', label: `Actions for ${design.title}`, size: 'sm', onClick: () => undefined });
     const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
-    attachMenu(more, () => designMenu({ includeOpen: true }), (id) => runDesignAction(id, ref, options.actions));
+    attachMenu(more, () => listDesignMenu(view.folder), (id) => runListAction(id, ref, options.actions, view.folder));
     return h('li', { class: 'dc-row', 'data-pending': design.pending ? 'true' : 'false', 'data-slug': design.slug }, main, more);
   };
 
@@ -163,6 +221,24 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     syncNotices();
   };
 
+  const paintShow = (scope: ListScope, groups: readonly ProjectGroup[], folderList: FoldersState['folders'], counts: ReturnType<typeof scopeCounts>, foldersState: FoldersState): void => {
+    const entries = scopeOptions(groups, counts, folderList);
+    showSelect.update({ value: scopeToId(scope), options: entries.map(({ id, label, hint }) => ({ id, label, hint })) });
+    const current = entries.find((entry) => entry.id === scopeToId(scope));
+    // The kit names its trigger by the (hidden) caption; "Show" with the current choice is what a screen reader should hear.
+    showTrigger?.removeAttribute('aria-labelledby');
+    showTrigger?.setAttribute('aria-label', `Show: ${current?.label ?? 'All designs'}`);
+    folderMore.hidden = view.folder === null;
+    showRow.dataset.folders = foldersState.status === 'error' ? 'error' : 'ok';
+    foldersNote.hidden = foldersState.status !== 'error';
+  };
+
+  const setScope = (next: ListScope): void => {
+    chosen = next;
+    void host.storage.set(scopeStorageKey('panel'), scopeToId(next));
+    paintList();
+  };
+
   const paintList = (): void => {
     const state = store.getState().designs;
     list.replaceChildren();
@@ -180,16 +256,36 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
       return;
     }
     const all = state.data.designs;
-    const shown = sortDesigns(filterDesigns(all, query, tab), 'updated');
-    tabsHandle.update({ items: LIST_TABS.map(({ id, label }) => ({ id, label, count: tabCounts(all, query)[id] })) });
+    const root = state.data.root;
+    const foldersState: FoldersState = folderStore.get();
+    const folderList = foldersState.status === 'error' ? [] : foldersState.folders;
+    const groups = projectGroups(all, projects, root, state.data.projectFolders);
+    const foldersPending = chosen.kind === 'folder' && (foldersState.status === 'idle' || foldersState.status === 'loading') && foldersState.folders.length === 0;
+    const effective = foldersPending ? chosen : resolveScope(chosen, groups, folderList);
+    const folder = effective.kind === 'folder' ? folderList.find((entry) => entry.id === effective.id) ?? null : null;
+    view = { scope: effective, groups, root, folder: folder ? { id: folder.id, name: folder.name } : null };
+    paintShow(effective, groups, folderList, scopeCounts(all, folderList, root), foldersState);
+    if (foldersPending) {
+      list.append(...skeleton());
+      return;
+    }
+    const label = scopeLabel(effective, groups, folderList);
+    const scoped = scopeDesigns(all, effective, folderList, root);
+    const shown = sortDesigns(filterDesigns(scoped, query, tab), 'updated');
+    const tabTotals = tabCounts(scoped, query);
+    tabsHandle.update({ items: LIST_TABS.map(({ id, label: tabLabel }) => ({ id, label: tabLabel, count: tabTotals[id] })) });
     const kind = emptyKind(all, shown);
-    if (kind === 'no-designs') {
+    if (kind !== 'none' && kind !== 'no-designs' && scoped.length === 0 && folder) {
+      const wrap = h('div');
+      mountEmpty(wrap, { title: `No designs in ${folder.name} yet`, body: folderEmptyBody(false), action: { label: 'Show all designs', onClick: () => setScope(ALL_SCOPE) } });
+      list.append(h('li', { class: 'dc-list-message' }, wrap));
+    } else if (kind === 'no-designs') {
       const wrap = h('div');
       mountEmpty(wrap, { title: 'No designs yet', body: 'Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here.', action: { label: 'New canvas', onClick: () => options.onNew('canvas') } });
       list.append(h('li', { class: 'dc-list-message' }, wrap));
     } else if (kind === 'no-matches') {
       const wrap = h('div');
-      mountEmpty(wrap, { title: query.trim() !== '' ? `No designs match “${query.trim()}”` : 'Nothing in this tab yet', body: 'Try another word, or look in All.', action: { label: 'Clear filters', onClick: () => { query = ''; tab = 'all'; search.update({ value: '' }); tabsHandle.update({ activeId: 'all' }); paintList(); } } });
+      mountEmpty(wrap, { title: query.trim() !== '' ? noMatchesSentence(label, query) : label !== null ? `Nothing in ${label} for this tab yet` : 'Nothing in this tab yet', body: label !== null ? 'Try another word, look in All, or show all designs.' : 'Try another word, or look in All.', action: { label: 'Clear filters', onClick: () => { query = ''; tab = 'all'; search.update({ value: '' }); tabsHandle.update({ activeId: 'all' }); paintList(); } } });
       list.append(h('li', { class: 'dc-list-message' }, wrap));
     } else {
       list.append(...shown.map(rowFor));
@@ -208,7 +304,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   scope.add(
     store.subscribe(() => {
       const state = store.getState();
-      const next = `${state.designs.status}:${JSON.stringify(state.designs.data?.designs ?? null)}:${JSON.stringify(state.designs.data?.loose ?? null)}:${state.designs.error?.message ?? ''}:${JSON.stringify(state.settings.data?.previousRoots ?? null)}`;
+      const next = `${state.designs.status}:${state.designs.data?.root ?? ''}:${JSON.stringify(state.designs.data?.projectFolders ?? null)}:${JSON.stringify(state.designs.data?.designs ?? null)}:${JSON.stringify(state.designs.data?.loose ?? null)}:${state.designs.error?.message ?? ''}:${JSON.stringify(state.settings.data?.previousRoots ?? null)}`;
       if (next === signature) return;
       signature = next;
       paintList();
@@ -216,6 +312,20 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   );
   const minute = setInterval(paintList, 60_000);
   scope.add(() => clearInterval(minute));
+  scope.add(folderStore.subscribe(paintList));
+
+  // The remembered view and the host's project names arrive after the first paint; a failure of either only costs the memory or the nicer name.
+  void host.storage.get(scopeStorageKey('panel')).then((stored) => {
+    chosen = scopeFromId(stored);
+    paintList();
+  });
+  void guestHost.client.listProjects().then(
+    (answer) => {
+      projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
+      paintList();
+    },
+    (error: unknown) => console.warn('Design Chamber: the project names could not be read; folders show their own names', error),
+  );
 
   void store.refreshDesigns();
   void store.loadSettings();
@@ -233,6 +343,8 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
       thumbs.clear();
       search.dispose();
       tabsHandle.dispose();
+      showSelect.dispose();
+      undo.dispose();
       el.remove();
     },
   };
