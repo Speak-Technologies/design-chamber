@@ -888,7 +888,12 @@ display time and are not stored.
 - Remote sync (GitHub), organisation sharing, publishing systems.
 - Moving systems or folders between designs folders.
 
-### Questions for the user
+### Questions for the user — RESOLVED 2026-11-19 (owner accepted all five recommendations)
+Recorded in `docs/BRIEF.md` "Owner decisions (2026-11-19, Phase 2.5)": (1) split extraction — service parses
+CSS vars/token JSON, agent writes overview/notes/components/unparseable; (2) precedence user words > design's
+system > project files (uncovered) > preset only if no system > built-in, preset picker hides with a system;
+(3) one system per design; (4) a design may sit in several folders (tags shown as folders); (5) the design's
+own token changes stay as overrides on a newer system, each with "Reset to system". The questions as asked:
 1. **Who reads values out of the code (S2-4)?** Recommended: Design Chamber reads the CSS custom properties
    and token JSON files it can parse with certainty (fast, exact, and re-sync can compare them), and the
    agent writes the overview, usage notes, component inventory and anything Design Chamber can't parse, like

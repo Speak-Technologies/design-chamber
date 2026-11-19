@@ -125,6 +125,27 @@ Precedence, highest first:
   keeps the single row. The row's "Show at" viewport switch is drawn on both surfaces. (Owner approved
   2026-11-11.)
 
+## Owner decisions (2026-11-19, Phase 2.5)
+- Design systems and project grouping live inside Design Chamber (not a separate extension).
+- A new design picks its system: the project's pinned system, else the user's global default, else the
+  agent asks which. A per-design explicit choice always wins.
+- Components are tokens + styles + a component inventory with usage notes; no running project builds or
+  real-component import in this phase.
+- Designs group by project automatically AND by manual folders; a design may sit in several folders
+  (folders behave like tags). Grouping never moves a design's folder on disk.
+- Systems are created by extracting from a project's code (repo left unchanged), uploading brand
+  files/fonts, and manual on-page editing; re-sync updates values but keeps notes/overview/fonts/assets.
+- Extraction is split: Design Chamber parses CSS variables and token JSON it can read with certainty; the
+  agent writes the overview, usage notes, components and anything unparseable.
+- Rules order with a linked system: the user's words, then the design's system, then the project's files
+  for whatever the system doesn't cover, then the preset only when no system is linked, then the built-in
+  rules. The preset picker hides when a system is chosen. (Supersedes the Phase 0 precedence for designs
+  with a linked system.)
+- One system per design this phase (two systems' tokens clash by name).
+- Each design keeps its own copy of the system (copy-on-link); when the system changes the design shows
+  "Review update" and never updates by itself. The design's own token changes stay as overrides on top of
+  a newer system, each with "Reset to system".
+
 ## Process
 - Public GitHub repo, MIT, default branch `master` with branch protection (PR + 1 approval + CI; owner-only bypass). (Updated 2026-10-27; was local-only.)
 - Agents may folder-install into the user's running OpenChamber for smoke tests.
