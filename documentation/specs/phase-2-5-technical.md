@@ -233,6 +233,70 @@ To verify in spikes before the UI tasks (each has a designed fallback):
   (§8.12) applies to it, which never treats words that ask for any change as approval; (5) as designed; (6) the
   build chip's rail view stays the only in-app view, and the agent asks in plain text (the skill says: "If the
   block can't be shown, ask the same questions in text.").
+  - **SP-4 result (2026-11-19, static: installed SDK 2.7.0 + the shipped host bundle in
+    `/opt/OpenChamber/resources/web-dist/assets/`; NOT run live).** A live run needs a chat model to write a
+    `SystemAsk` block, so no probe was driven; the items marked **LIVE-CHECK** are the ones a first manual
+    folder-install must confirm (one throwaway stub, one chat). No production code changed.
+    1. **Round trip: PASS (static).** `guestHost.client.answerBlock(text)` → `host.js:694` posts
+       `block-answer` with `text.trim().slice(0, 2000)`; the host handler (`useAppFontEffects-*.js`, case
+       `"block-answer"`) calls the frame's `answer`, rejecting with `HOST_REJECTED` otherwise. The host-side gate
+       is stricter than the docs say: it rejects when `navigator.userActivation` exists and is **not active**,
+       or when `document.activeElement` is not the block's iframe, or when the block cannot answer ("Only a
+       block in the chat can answer the agent."). So `answerBlock` must run **synchronously inside the click**
+       (as `createPicker.pick` already does, `block-data.ts:60`: the answer is called before any `await`);
+       never fetch, then answer. Transient activation also expires (~5 s in Chromium), so the Approve text is
+       built from state already in memory. The text reaches the agent as the answer to the block, starting its
+       next turn (SDK `API.md:309`); `answered` replays after a reload (`contract.d.ts:79`, `onBlock` "again
+       once answered"). **LIVE-CHECK:** the exact wrapper text the agent sees around our string.
+    2. **One form, one answer: PASS by construction.** Nothing limits a block's DOM; `answerBlock` takes one
+       string (≤ 2 000, one per block). Radios and checkboxes are plain state in the frame; the single submit
+       builds one line-based answer. Budget: four radio groups + a coverage group + a note fits in 2 000 chars
+       only if encoded compactly (ids, not labels); the diff answer encodes per-part toggles as ids too. Do not
+       lean on the host's own note field: its text is a separate "note" per answer on the host side (the host
+       keeps `notes` apart from the pick), and whether it is appended to an `answerBlock` string is **LIVE-CHECK**.
+       Put our own note textarea inside the block and include it in the one answer.
+    3. **Internal scroll under 960 px: PASS, with one required CSS change.** The host frame is
+       `oc-box w-full overflow-hidden` with an explicit pixel height clamped to `[min, 960]` (`UiBlock-*.js`,
+       `Yt`); it pins nothing over the composer, so a sticky in-frame footer is the block's own. But today
+       `blocks.css:29-33` sets `html, body { overflow: hidden }` and `main.ts:42-46` reports the height of
+       `#root`, so content past 960 px would be **clipped, not scrolled**. SystemAsk must therefore render as a
+       flex column with `max-height: 960px` (`GUEST_BLOCK_HEIGHT_MAX`), a `min-height: 0; overflow: auto` body
+       (the file list) and a non-scrolling footer. The observer then reports ≤ 960 and the footer is always
+       visible. DesignCard and DirectionPick are untouched (they never exceed it). **LIVE-CHECK:** 320 px width.
+    4. **Note-only answer: the host passes it through as the answer (PASS per SDK), distinguishable by prefix.**
+       "A note alone also answers, with `answered` holding its text" (`API.md:309`). So a note-only answer is
+       an answer with no block marker. Every answer our block builds starts with a fixed machine prefix, e.g.
+       `SYSTEMASK v1 <kind> <proposalId|ticket> APPROVE|CHANGES|DECLINE|ROUND1|ROUND2 …`; anything not starting
+       with it is a free note (or typed words). `answeredOption`-style parsing (`block-view-model.ts:21-30`)
+       already treats "no prefix" as `'note'`; reuse that shape. **"A note alone is never approval" is
+       enforced by the skill and by the service's proposal-bound check (AD-27), not by the host**: the host
+       gives no signal beyond the text. The skill rule: only a line with the prefix, `APPROVE` and the **current**
+       proposal id is approval; a note is changes requested. **LIVE-CHECK:** the agent cannot tell a note from a
+       typed chat message by the host's channel, only by the missing prefix (fallback 4 already covers this).
+    5. **Hosts that can't take an answer: PASS.** `answerBlock` rejects `HOST_REJECTED` ("This block cannot take
+       an answer." by default, VS Code and relays included), and `DirectionPick` already turns that into a toast
+       (`direction-pick.ts:54`, `REFUSED_TEXT`). SystemAsk: on rejection keep every choice, show "Reply in the
+       chat to answer." and give a **Copy my answer** button (writes the same line the click would have sent,
+       via `host.writeClipboard`, from a click) so the typed reply is one paste. The block is read-only on those hosts.
+    6. **Block in a Build-with-the-agent session: PASS (static), LIVE-CHECK once.** Blocks are drawn by the
+       host's chat renderer for any session; they carry no knowledge of how the session started. The chip's
+       `startSession` (`flows.ts:436`) creates a normal session, so `UiBlock` mounts the frame with the panel's
+       grants and `answer` goes to that session. Same-origin state is not shared, so the block gets everything
+       from its args and the service. The skill still says: if the block cannot show, ask in text.
+    7. **Reading a proposal from the block: PASS.** `main.ts:22-23` already builds
+       `createServiceClient(guestHost.client)` for blocks; `design-card.ts` reads `GET /designs/:slug` that way,
+       with the bearer added by the host (`serviceRequest`), never in the frame. `GET /systems/:id/proposals/:proposalId`
+       is typed in `api.ts:828`. Limits: response ≤ `GUEST_REQUEST_RESPONSE_MAX` (8 000 000) and request timeout
+       20 s (`contract.js:39-40`), against `SYSTEM_PROPOSAL_MAX_BYTES` 524 288, so a full proposal fits.
+       The read happens on mount (reads only, before any click, per U7 rules); per-part toggles are local state
+       and encode into the answer as part ids. Approve is built from the proposal already loaded and its `id`
+       (so a stale click cannot approve a newer proposal); the 5 args (`kind`, `ticket`, `systemId`,
+       `proposalId`, `calls`) are untrusted and go through `parseBlockArgs` (add a `SystemAsk` branch).
+    **No fallback needs to be switched on.** Two designed fallbacks stay as written: (3) is not needed because
+    the flex column works, but the "footer above the list" layout remains the plan B if a host clips the frame;
+    (4) is the live skill rule above. Extra spec requirements this spike adds for U8: the `max-height` flex
+    layout, no `await` before `answerBlock`, a self-contained note inside the answer, the prefix grammar, and
+    the **Copy my answer** fallback.
 
 ---
 
