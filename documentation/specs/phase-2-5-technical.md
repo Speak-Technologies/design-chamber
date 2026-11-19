@@ -3408,6 +3408,10 @@ page, light and dark). Docs: `documentation/pages/design-systems.md`, `features/
 
 ### Spikes (before T5 and T8 finish): SP-1 (ui-ux, Sonnet), SP-2 (fullstack, Sonnet), results noted here. SP-3 (S8) after T15. SP-4 (rev 3) after T0, before U8 finishes.
 
+**SP-2 result: ADDITIVE.** Per-directory text is added to the global text, not instead of it, so project pins stand alone and the §1 fallback is not needed.
+Evidence: host source `createGuestInstructions` in the installed OpenChamber (`/opt/OpenChamber/resources/app.asar`, `lib/guests/instructions.js`). `set(guestId, directory, text)` stores one entry per key (`'*'` for `null`, else `path.resolve(directory)`), and `forDirectory` joins the `'*'` text plus every entry whose key is the session directory or a folder above it, global first and narrowest last, with `\n\n`. `createGuestAgentContext.instructionText` then prefixes it with "From the extension <name>:". Each key is capped at `SERVICE_INSTRUCTIONS_MAX` 4096 separately. A new `set` for one key replaces only that key; empty text deletes it. Docs agree: `GUEST_SERVICES.md:202`, `service-host.d.ts:261`. Read from source, not run live (no fake-host probe needed).
+T8 consequence: write each project's pin text with `setInstructions(projectDir, text)` (the `HostCalls` wrapper must stop hardcoding `null`) and leave the global text untouched. Key by the exact project directory the chat opens in, and use the same resolved path on every write and removal (empty text removes). A pin on a parent folder also reaches chats opened in sub-folders, so write only at project roots. Each project text gets its own 4096 cap.
+
 ### Group D · QA (qa-tester, **Opus** for A/B tasks)
 `test/ui/e1-frame-replay.test.ts` extended to the board handler; route refusal matrix for all 30 routes;
 containment tests (system id `..`, `C:\`, UNC, links in `_systems/<id>` and in `<slug>/system`); a live smoke
