@@ -82,6 +82,25 @@ A torn write, a stray edit by an agent or a sync tool, or a Windows file lock ca
   agent-made design). If the version's `design.json` does not parse, there is no state.json and
   comments exist, restore is refused ("Nothing was changed") before anything is written.
 
+### Design system history (Phase 2.5)
+A design system (`_systems/<id>/`) keeps its history the same way, with the same code: the same
+tracked set (everything but `.versions/` and `.chamber/`), the same caps (1 000 files, 100 MB, the
+newest 100 versions), cleanup, damaged-list handling and restore. The differences:
+- Sentences say "design system" instead of "design" ("could not read this design system's version
+  history right now").
+- Auto snapshots follow the system's own change events (`system` events with `files` or `added`),
+  never a design's. Version events go out as `system` events with `systemChange: "versions"`.
+- A system has no `design.json`, so a restore writes every file back exactly as stored; there are no
+  comments to keep. The restore never touches `.chamber/` (state, edits ledger, checks).
+- Snapshots and restores wait for the system's lock, so they never overlap a revision bump. Once a
+  restore lands, the revision is bumped when the files moved away from the last revision, and the
+  changed sections read Not reviewed again.
+- Extra reasons: `resync` ("Before re-sync") and `repo-read` ("Before reading" the project repo) for systems;
+  `system-change` and `system-update` for a design whose copy of a system is set or updated.
+- Routes: `GET /systems/:id/versions`, `GET /systems/:id/versions/:vid/diff`,
+  `POST /systems/:id/versions/:vid/restore`, answered like the design ones. A system kept in a
+  project repo will refuse Restore (only View and Compare); that refusal is not built yet.
+
 ## Export
 Because a guest frame cannot download files, the service writes them itself:
 - **ZIP** — the whole design folder (without `design.json` or the macOS Finder files) under `<slug>/`;

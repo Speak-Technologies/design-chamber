@@ -105,13 +105,19 @@ test('every Phase 2.5 route with a path parameter refuses an encoded separator (
 });
 
 // Routes a task has built since T0; their own tests cover their answers (folders: test/service/core/folders*.test.ts;
-// systems, T1: test/service/systems/systems-routes.test.ts).
+// systems, T1: test/service/systems/systems-routes.test.ts; system versions, T2: test/service/systems/versions.test.ts).
 const BUILT: ReadonlySet<RouteKey> = new Set<RouteKey>([
+  'GET /systems/:id/versions',
+  'GET /systems/:id/versions/:vid/diff',
+  'POST /systems/:id/versions/:vid/restore',
   'GET /systems',
   'POST /systems',
   'GET /systems/:id',
   'PATCH /systems/:id',
   'DELETE /systems/:id',
+  // T5: test/service/systems/assets-routes.test.ts.
+  'POST /systems/:id/assets',
+  'POST /systems/:id/assets/from-folder',
   'GET /folders',
   'POST /folders',
   'PATCH /folders/:folderId',

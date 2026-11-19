@@ -50,6 +50,7 @@ import { createSelfWrites } from './self-writes.ts';
 import { createSettingsStore, type SettingsEnv } from './settings.ts';
 import { createDesignStore } from './store.ts';
 import { ensureSystemStore } from './systems/store.ts';
+import { ensureSystemVersions } from './systems/versions.ts';
 import { ensureThumbnailService } from './thumbnails.ts';
 import { createTurnEvents } from './turn-events.ts';
 import { createUploadStore } from './uploads.ts';
@@ -130,6 +131,8 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   // Eager, so the systems index loads and agent changes to a system count towards a new revision
   // from the first event on (Phase 2.5 §5.1, AD-13).
   ensureSystemStore(ctx);
+  // Eager, so a system's quiet-period snapshots start from the first content event (Phase 2.5 §5.2, AD-3).
+  ensureSystemVersions(ctx);
   // Eager, so a removed design leaves the folder registry from the first event on (Phase 2.5 §5.8).
   ensureFoldersService(ctx);
 
