@@ -2657,8 +2657,9 @@ facts are verified by spikes with designed fallbacks (SP-1 file picker and drop 
 per-directory instructions alongside the global text, §1). One presentation choice is made here and can be
 overruled cheaply: tokens no section fits show as "Other tokens" at the end of Sizes (§2.4).
 
-**S8 (revision 2).** Everything is designed; nothing waits on these. Two places where the design departs from
-an RS acceptance line, for the owner to confirm or overrule (each is cheap to change):
+**S8 (revision 2) — RESOLVED 2026-11-19 (owner confirmed both recommended defaults).** Recorded in
+`docs/BRIEF.md` "Building systems like Claude": re-sync is all or nothing (Q-S8-1), and the Draft appears after
+round one of the interview (Q-S8-2). The design stands as written. The two departures as designed:
 
 - **Q-S8-1 · Ticks in the repo-backed re-sync sheet.** RS S8 says New is ticked and "No longer in the code" is
   unticked with "tick to remove". **Recommended (designed): all or nothing**, because the snapshot is a read of

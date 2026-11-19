@@ -180,6 +180,10 @@ Precedence, highest first:
 - A living-page refresh: the user's explicit "Ask the agent to update it" is the approval to commit the one
   regenerated file (the agent commits only it and says so). Any other repo write, and every token-code change,
   needs a fresh reviewed diff.
+- Re-syncing a repo-backed system applies the whole read (new tokens and removals together), all or nothing;
+  holding back part would leave Design Chamber showing values the repo no longer has.
+- A new system first appears as a Draft after round one of the interview (so the chip resolves and round two
+  has scan.json); the repo is not written until the diff is approved.
 
 ## Process
 - Public GitHub repo, MIT, default branch `master` with branch protection (PR + 1 approval + CI; owner-only bypass). (Updated 2026-10-27; was local-only.)
