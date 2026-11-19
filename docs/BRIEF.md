@@ -184,6 +184,11 @@ Precedence, highest first:
   holding back part would leave Design Chamber showing values the repo no longer has.
 - A new system first appears as a Draft after round one of the interview (so the chip resolves and round two
   has scan.json); the repo is not written until the diff is approved.
+- The interview and diff ship as extension-rendered chat blocks (one SystemAsk block with a kind argument)
+  with Approve/Decline buttons; the diff is read from a proposal file, approval is bound to the proposal id
+  (no stale approvals), and a note alone is never approval (a typed reply always works).
+- Living-page component examples are rendered to PNG by the headless-Chrome thumbnail pipeline and embedded
+  as data:image, so no agent-written markup ever reaches the unsandboxed page.
 
 ## Process
 - Public GitHub repo, MIT, default branch `master` with branch protection (PR + 1 approval + CI; owner-only bypass). (Updated 2026-10-27; was local-only.)
