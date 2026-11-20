@@ -2,7 +2,7 @@
 // `data-dc-entry` value's shape is defined. The board generator writes the keys, the bridge
 // reads the attribute (advisory), the page selects entries and the prompt route validates them.
 //
-// T11 adds the patterns/brand sections; their keys already parse here. Pure: no Node imports.
+// Logos, pattern and brand entries belong to their S8 sections (§2.11). Pure: no Node imports.
 
 import { BOARD_ENTRY_MAX, SYSTEM_ENTRY_ID_PATTERN, SYSTEM_TOKEN_NAME_PATTERN } from './limits.ts';
 import type { SystemDetail, SystemSection } from './types.ts';
@@ -55,7 +55,8 @@ export const sectionOfEntry = (key: BoardEntryKey, detail: SystemDetail): System
     case 'font':
       return Number(key.key) < detail.fonts.length ? 'typography' : null;
     case 'logo':
-      return Number(key.key) < detail.logos.length ? 'assets' : null;
+      // Logos show under Brand & marketing (§2.11); Assets keeps fonts and source files.
+      return Number(key.key) < detail.logos.length ? 'brand' : null;
     case 'component':
       return detail.components.some((component) => component.id === key.key) ? 'components' : null;
     case 'overview':

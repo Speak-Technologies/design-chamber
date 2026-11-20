@@ -162,6 +162,93 @@ describe('coveredAreas', () => {
   });
 });
 
+describe('coverage areas in the detail (S8, AD-22)', () => {
+  // A system written before S8: none of coverage, patterns, brand.
+  const OLD_JSON = {
+    version: 1,
+    tokens: { '--brand-500': { section: 'colours', group: 'brand', note: 'Primary.' } },
+    type: [{ id: 'body', name: 'Body', size: '16px' }],
+    logos: [{ file: 'assets/logos/a.svg', variant: 'mark' }],
+    notes: [{ id: 'history', title: 'History' }],
+  };
+  const oldSource = (json: Record<string, unknown>): SystemDetailSource =>
+    source({
+      systemJson: JSON.stringify(json),
+      tokensCss: ':root {\n  --brand-500: #111111;\n}\n',
+      texts: { 'notes/history.md': 'Why.' },
+      files: [{ rel: 'assets/logos/a.svg', bytes: 3 }],
+    });
+
+  test('a system without coverage, patterns or brand reads exactly as one listing all four areas and empty lists', () => {
+    const old = buildSystemDetail(oldSource(OLD_JSON), RULES);
+    const explicit = buildSystemDetail(oldSource({ ...OLD_JSON, coverage: ['foundations', 'components', 'patterns', 'brand'], patterns: [], brand: [] }), RULES);
+    assert.deepEqual(old.coverage, ['foundations', 'components', 'patterns', 'brand']);
+    assert.deepEqual(old.patterns, []);
+    assert.deepEqual(old.brand, []);
+    assert.deepEqual(old.problems, []);
+    // Everything but the system.json stamp (its bytes differ) is the same, byte for byte.
+    const strip = (detail: ReturnType<typeof buildSystemDetail>) => JSON.stringify({ ...detail, stamps: { ...detail.stamps, systemJson: null } });
+    assert.equal(strip(old), strip(explicit));
+    assert.deepEqual(sectionFingerprints(old), sectionFingerprints(explicit));
+  });
+
+  test('invalid coverage is dropped with a problem and all four areas show', () => {
+    for (const coverage of [[], ['typography'], ['brand', 'brand'], 'brand', ['foundations', 'components', 'patterns', 'brand', 'extra']]) {
+      const detail = buildSystemDetail(source({ systemJson: JSON.stringify({ coverage }) }), RULES);
+      assert.deepEqual(detail.coverage, ['foundations', 'components', 'patterns', 'brand'], JSON.stringify(coverage));
+      assert.deepEqual(detail.problems, [{ entry: 'coverage', message: "coverage in system.json can't be read, so all four areas are shown." }]);
+    }
+  });
+
+  test('patterns and brand hold up to 100 entries each; the rest are problems', () => {
+    const many = (prefix: string, kind: string) => Array.from({ length: 101 }, (_, k) => ({ id: `${prefix}-${k}`, kind, title: `Entry ${k}` }));
+    const detail = buildSystemDetail(source({ systemJson: JSON.stringify({ patterns: many('p', 'layout'), brand: many('b', 'imagery') }) }), RULES);
+    assert.equal(detail.patterns.length, 100);
+    assert.equal(detail.brand.length, 100);
+    assert.deepEqual(detail.problems.map((problem) => problem.entry), ['patterns.p-100', 'brand.b-100']);
+  });
+
+  test('entry rules: unique id, kind from its list (absent is other), title 1..80, note up to 500', () => {
+    const systemJson = JSON.stringify({
+      patterns: [
+        { id: 'a', title: 'No kind' },
+        { id: 'a', kind: 'layout', title: 'Duplicate' },
+        { id: 'b', kind: 'marketing', title: 'Brand kind in patterns' },
+        { id: 'c', kind: 'voice', title: '' },
+        { id: 'd', kind: 'voice', title: 'Long note', note: 'x'.repeat(501) },
+        { id: 'Bad', kind: 'voice', title: 'Bad id' },
+      ],
+      brand: [{ id: 'logo-use', kind: 'logo-use', title: 'Clear space' }],
+    });
+    const detail = buildSystemDetail(source({ systemJson }), RULES);
+    assert.deepEqual(detail.patterns.map((entry) => [entry.id, entry.kind]), [['a', 'other']]);
+    assert.deepEqual(detail.brand.map((entry) => entry.id), ['logo-use']);
+    assert.equal(detail.problems.length, 5);
+  });
+
+  test('fingerprints per section: a pattern body moves patterns only; a brand entry or a logo moves brand only; a font moves assets only', () => {
+    const json = { patterns: [{ id: 'voice', kind: 'voice', title: 'Voice' }], brand: [{ id: 'hero', kind: 'marketing', title: 'Heroes' }], logos: [{ file: 'assets/logos/a.svg' }], fonts: [{ file: 'assets/fonts/a.woff2', family: 'A', weight: 400 }] };
+    const files = [{ rel: 'assets/logos/a.svg', bytes: 3 }, { rel: 'assets/fonts/a.woff2', bytes: 3 }];
+    const of = (overrides: Partial<SystemDetailSource>, hashes: Record<string, string> = {}) =>
+      sectionFingerprints(buildSystemDetail(source({ systemJson: JSON.stringify(json), files, texts: { 'patterns/voice.md': 'Plain.' }, ...overrides }), RULES), hashes);
+    const changed = (one: Record<string, string>, two: Record<string, string>) => SYSTEM_SECTIONS.filter((section) => one[section] !== two[section]);
+    const base = of({});
+    assert.deepEqual(changed(base, of({ texts: { 'patterns/voice.md': 'Short.' } })), ['patterns']);
+    assert.deepEqual(changed(base, of({ texts: { 'patterns/voice.md': 'Plain.', 'brand/hero.md': 'Daylight.' } })), ['brand']);
+    assert.deepEqual(changed(base, of({ systemJson: JSON.stringify({ ...json, brand: [{ id: 'hero', kind: 'imagery', title: 'Heroes' }] }) })), ['brand']);
+    assert.deepEqual(changed(base, of({}, { 'assets/fonts/a.woff2': '1'.repeat(64) })), ['assets']);
+  });
+
+  test('Ready with a change only in an uncovered section still has changes to review only where fingerprints moved', () => {
+    const json = { coverage: ['foundations'], patterns: [{ id: 'voice', kind: 'voice', title: 'Voice' }] };
+    const before = sectionFingerprints(buildSystemDetail(source({ systemJson: JSON.stringify(json) }), RULES));
+    const ready = state({ status: 'ready', readyFingerprints: before });
+    const after = sectionFingerprints(buildSystemDetail(source({ systemJson: JSON.stringify(json), texts: { 'patterns/voice.md': 'New.' } }), RULES));
+    assert.deepEqual(SYSTEM_SECTIONS.filter((section) => before[section] !== after[section]), ['patterns']);
+    assert.equal(deriveReview(ready, after).changesToReview, true);
+  });
+});
+
 describe('buildSystemDetail', () => {
   const css = [
     ':root {',

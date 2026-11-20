@@ -375,6 +375,50 @@ describe('undo (E9)', () => {
   });
 });
 
+describe('patterns and brand entries (S8, §2.11)', () => {
+  const withEntries = async (rig: Rig): Promise<void> => {
+    const json = JSON.parse(SYSTEM_JSON) as Record<string, unknown>;
+    json.patterns = [{ id: 'voice', kind: 'voice', title: 'Voice', note: 'Plain.' }];
+    json.brand = [{ id: 'hero', kind: 'marketing', title: 'Heroes' }];
+    await rig.tmp.write(`_systems/${rig.id}/system.json`, `${JSON.stringify(json, null, 2)}\n`);
+  };
+
+  test('title, note and kind of a pattern or brand entry change through meta; a kind off its list is refused', async (t) => {
+    const rig = await setup(t);
+    await withEntries(rig);
+    const answer = await save(rig, {
+      meta: [
+        { at: ['patterns', 'voice', 'title'], value: 'Voice and tone' },
+        { at: ['patterns', 'voice', 'kind'], value: 'do-dont' },
+        { at: ['brand', 'hero', 'note'], value: 'One photo.' },
+      ],
+    });
+    const json = JSON.parse(await rig.file('system.json')) as { patterns: unknown[]; brand: unknown[]; agentKey: unknown };
+    assert.deepEqual(json.patterns, [{ id: 'voice', kind: 'do-dont', title: 'Voice and tone', note: 'Plain.' }]);
+    assert.deepEqual(json.brand, [{ id: 'hero', kind: 'marketing', title: 'Heroes', note: 'One photo.' }]);
+    assert.deepEqual(json.agentKey, { kept: true });
+    assert.equal(answer.edit.undoable, true);
+    const detail = await rig.systems.detail(rig.id);
+    assert.equal(detail.patterns[0]?.title, 'Voice and tone');
+    await rejectsWith(save(rig, { meta: [{ at: ['brand', 'hero', 'kind'], value: 'voice' }] }), 'invalid', /Choose a kind: marketing, imagery, logo-use, other/);
+  });
+
+  test('a body file is created for a listed entry and undone to the trash; never for an unlisted one', async (t) => {
+    const rig = await setup(t);
+    await withEntries(rig);
+    const hostile = '</p><script>alert(1)</script>';
+    const answer = await save(rig, { stamps: { texts: { 'patterns/voice.md': null, 'brand/hero.md': null } }, texts: [{ file: 'patterns/voice.md', text: hostile }, { file: 'brand/hero.md', text: 'Daylight.' }] });
+    assert.equal(await rig.file('patterns/voice.md'), hostile);
+    assert.equal(await rig.file('brand/hero.md'), 'Daylight.');
+    assert.equal((await rig.systems.detail(rig.id)).patterns[0]?.text, hostile);
+    await rejectsWith(save(rig, { stamps: { texts: { 'brand/ghost.md': null } }, texts: [{ file: 'brand/ghost.md', text: 'x' }] }), 'stale');
+    await assert.rejects(readFile(rig.tmp.at(`_systems/${rig.id}/brand/ghost.md`)));
+    await rig.edits.undo(rig.id, answer.edit.id);
+    await assert.rejects(readFile(rig.tmp.at(`_systems/${rig.id}/patterns/voice.md`)));
+    await assert.rejects(readFile(rig.tmp.at(`_systems/${rig.id}/brand/hero.md`)));
+  });
+});
+
 describe('review and revision', () => {
   test("the user's own save keeps the section reviewed; the agent's change does not", async (t) => {
     const rig = await setup(t);

@@ -7,7 +7,8 @@
 // appends that block), a `remove` cuts declarations out. Every other byte stays as it was (E5), and
 // `verifyTokenEdit` rescans the result to prove it before anything is written.
 //
-// The existing Tweaks planner (`tokensOp`) is not changed. T11 adds the patterns/brand meta paths.
+// The existing Tweaks planner (`tokensOp`) is not changed. The patterns/brand meta paths are
+// validated and applied in `systems/edit-meta.ts` (§2.11).
 
 import type { TokenEdit } from './api.ts';
 import { SYSTEM_TOKEN_NAME_PATTERN, SYSTEM_TOKEN_VALUE_MAX, SYSTEM_UNDO_TEXT_MAX, TEXT_EDIT_MAX, TOKEN_PREVIEW_VALUE_PATTERN } from './limits.ts';

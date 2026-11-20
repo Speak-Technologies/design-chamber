@@ -205,11 +205,12 @@ test('entry keys: build, parse, sections and the custom property names', () => {
   assert.equal(section('type:body'), 'typography');
   assert.equal(section('font:0'), 'typography');
   assert.equal(section('font:1'), null);
-  assert.equal(section('logo:0'), 'assets');
+  assert.equal(section('logo:0'), 'brand');
   assert.equal(section('component:button'), 'components');
   assert.equal(section('note:voice'), 'overview');
   assert.equal(section('overview'), 'overview');
   assert.equal(section('pattern:x'), null);
+  assert.equal(section('brand:x'), null);
 
   assert.equal(darkVarOf('--brand'), '--dc-dark-brand');
   assert.notEqual(darkVarOf('---brand'), darkVarOf('--brand'));
