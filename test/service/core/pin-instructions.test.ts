@@ -4,7 +4,7 @@
 // to its chat; a finished turn snapshots the systems linked to it.
 
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -20,6 +20,10 @@ import { createSessionLinks, systemChipsOf } from '../../../src/service/session-
 import { createTurnEvents } from '../../../src/service/turn-events.ts';
 
 const ROOT = '/home/you/Documents/Designs';
+// The pin sync resolves each pin's directory (Windows reads '/code/shop' as 'D:\\code\\shop'), so
+// what reaches the host and the record is the resolved form on every platform.
+const SHOP = path.resolve('/code/shop');
+const BLOG = path.resolve('/code/blog');
 const quiet: Logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
 const settle = async (): Promise<void> => {
   for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
@@ -109,8 +113,8 @@ test('desiredPinTexts: system and default pins to Ready systems; none, drafts, g
     designsRoot: ROOT,
   });
   assert.deepEqual([...desired.entries()], [
-    ['/code/shop', buildPinInstruction('Shop renamed')],
-    ['/code/blog', buildPinInstruction('Acme')],
+    [SHOP, buildPinInstruction('Shop renamed')],
+    [BLOG, buildPinInstruction('Acme')],
   ]);
 });
 
@@ -126,7 +130,9 @@ test('pin sync: add, change, remove across restarts; the global note is untouche
   const one = run(file, state, first.host);
   await eventually(async () => assert.equal(await recordSize(file), 1));
   one.stop();
-  assert.deepEqual(pinCalls(first.calls), [['/code/shop', buildPinInstruction('Shop')]]);
+  assert.deepEqual(pinCalls(first.calls), [[SHOP, buildPinInstruction('Shop')]]);
+  const firstHash = parsePinRecord(await readFile(file, 'utf8')).get(SHOP);
+  assert.notEqual(firstHash, undefined, 'the pin is recorded under its resolved directory');
   assert.ok(first.calls.some(([directory]) => directory === null), 'the global note is still sent, with null');
 
   // Run 2 (a restart): nothing changed, nothing resent.
@@ -140,12 +146,13 @@ test('pin sync: add, change, remove across restarts; the global note is untouche
   state.systems = [row('shop', 'Shop 2')];
   two.systemEvent('shop');
   two.systemEvent('shop');
-  await eventually(() => assert.deepEqual(pinCalls(second.calls), [['/code/shop', buildPinInstruction('Shop 2')]]));
+  await eventually(() => assert.deepEqual(pinCalls(second.calls), [[SHOP, buildPinInstruction('Shop 2')]]));
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(pinCalls(second.calls).length, 1, 'coalesced into one send');
   await eventually(async () => {
     const saved = parsePinRecord(await readFile(file, 'utf8'));
-    assert.notEqual(saved.get('/code/shop'), parsePinRecord(null).get('/code/shop'));
+    const renamed = saved.get(SHOP);
+    assert.ok(renamed !== undefined && renamed !== firstHash, 'the renamed text replaced the recorded hash');
   });
   two.stop();
 
@@ -154,14 +161,14 @@ test('pin sync: add, change, remove across restarts; the global note is untouche
   third.host.answer = 'refused';
   state.settings = { systemPins: [] };
   const three = run(file, state, third.host);
-  await eventually(() => assert.deepEqual(pinCalls(third.calls), [['/code/shop', '']]));
+  await eventually(() => assert.deepEqual(pinCalls(third.calls), [[SHOP, '']]));
   await settle();
   assert.equal(await recordSize(file), 1, 'a refused removal is not recorded');
   // The next trigger (a settings change) tries again and removes it.
   third.host.answer = 'saved';
   three.settingsChanged();
   await eventually(async () => assert.equal(await recordSize(file), 0));
-  assert.deepEqual(pinCalls(third.calls), [['/code/shop', ''], ['/code/shop', '']]);
+  assert.deepEqual(pinCalls(third.calls), [[SHOP, ''], [SHOP, '']]);
   three.stop();
 });
 
@@ -299,7 +306,11 @@ test('the recommended system and breakpoints (§8.1)', () => {
 test('agentSystemOf reads the copy, the decision and the systems (real files)', async (t) => {
   const { agentSystemOf } = await import('../../../src/service/agent-system.ts');
   const { mkdir } = await import('node:fs/promises');
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'dc-agent-system-'));
+  // The service hands agentSystemOf realpaths (a design's path comes from resolveInside, a system's
+  // folder is built under realpath(root)), and resolvePlainTarget refuses a base whose realpath
+  // differs. The temp folder is not one everywhere: Windows answers the 8.3 name 'RUNNER~1',
+  // macOS '/var' (a link to '/private/var'). So the fixture uses its realpath, as the service does.
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'dc-agent-system-')));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const design = path.join(dir, 'pricing');
   await mkdir(path.join(design, 'system'), { recursive: true });

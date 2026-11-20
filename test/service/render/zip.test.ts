@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
@@ -164,18 +164,32 @@ describe('zip writer', () => {
       entry('design/index.html', Buffer.from(text, 'utf8')),
       entry('design/assets/notes.txt', Buffer.from('nested folder entry', 'utf8')),
     ]);
-    const work = path.dirname(zipPath);
+    // The realpath: Windows' temp folder carries an 8.3 short name ('RUNNER~1'), which a reader may
+    // expand to the long one while checking that each entry stays inside the destination.
+    const work = await realpath(path.dirname(zipPath));
     const outDir = path.join(work, 'out');
+    let output = '';
 
     let result: { status: number | null; stderr: string };
     if (process.platform === 'win32') {
-      const ps = spawnSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${outDir}' -Force`],
-        { encoding: 'utf8', timeout: 60_000 },
-      );
+      const literal = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+      // Stop on any error (a non-terminating one would otherwise exit 0 with nothing extracted);
+      // exit 3 only when the cmdlet does not exist, the one case that skips.
+      const script = [
+        "$ErrorActionPreference = 'Stop'",
+        '$cmd = Get-Command Expand-Archive -ErrorAction SilentlyContinue',
+        'if ($null -eq $cmd) { exit 3 }',
+        '"Expand-Archive from $($cmd.Module.Name) $($cmd.Module.Version) on PowerShell $($PSVersionTable.PSVersion)"',
+        `Expand-Archive -LiteralPath ${literal(path.join(work, path.basename(zipPath)))} -DestinationPath ${literal(outDir)} -Force`,
+        'exit 0',
+      ].join('; ');
+      // Without the parent's PSModulePath: CI runs under PowerShell 7, whose module folders would
+      // otherwise come first and lend Windows PowerShell a different Archive module than its own.
+      const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'psmodulepath'));
+      const ps = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', timeout: 60_000, env });
+      if (ps.error !== undefined || ps.status === 3) return t.skip(`Expand-Archive unavailable on this machine: ${(ps.error?.message ?? ps.stderr ?? '').slice(0, 200)}`);
       result = { status: ps.status, stderr: ps.stderr ?? '' };
-      if (ps.status !== 0) return t.skip(`Expand-Archive unavailable on this machine: ${ps.stderr?.slice(0, 200)}`);
+      output = ps.stdout ?? '';
     } else {
       await mkdir(outDir, { recursive: true });
       const unzip = spawnSync('unzip', ['-q', '-o', zipPath, '-d', outDir], { encoding: 'utf8', timeout: 60_000 });
@@ -187,11 +201,17 @@ describe('zip writer', () => {
         if (tar.status !== 0) return t.skip(`No system unzip reader available (no unzip; tar cannot read zip): ${tar.stderr?.slice(0, 200)}`);
       }
     }
-    assert.equal(result.status, 0, result.stderr);
-    const extractDir = outDir;
-    const extracted = await readFile(path.join(extractDir, 'design', 'index.html'), 'utf8');
-    assert.equal(extracted, text);
-    const nested = await readFile(path.join(extractDir, 'design', 'assets', 'notes.txt'), 'utf8');
-    assert.equal(nested, 'nested folder entry');
+    assert.equal(result.status, 0, `${output}${result.stderr}`);
+    /** The extracted file's text; a missing one fails with what the reader did write, to tell why. */
+    const extractedText = async (...segments: string[]): Promise<string> => {
+      try {
+        return await readFile(path.join(outDir, ...segments), 'utf8');
+      } catch (error) {
+        const found = await readdir(outDir, { recursive: true }).catch((listError: unknown) => [`(cannot list: ${String(listError)})`]);
+        assert.fail(`${segments.join('/')} was not extracted (${String(error)}). The reader wrote: ${JSON.stringify(found)}. ${output}${result.stderr}`);
+      }
+    };
+    assert.equal(await extractedText('design', 'index.html'), text);
+    assert.equal(await extractedText('design', 'assets', 'notes.txt'), 'nested folder entry');
   });
 });
