@@ -23,6 +23,9 @@ const scenario = async ({ openPage, check, checkSoon, listReady, wallReady, thum
   console.log(tag);
   await listReady(p);
   await thumbsReady(p);
+  // Harbor is at revision 4; this design copied it at 3, with two overrides, so it has an update.
+  await p.host(`${FAKE}.designSystem.link(${JSON.stringify(SLUG)}, 'harbor', { revision: 3, overrides: [{ name: '--color-accent', value: '#b4532a', systemValue: '#3a6ea5' }, { name: '--radius-md', value: '2px', systemValue: '8px' }] })`);
+  await checkSoon(async () => (await p.guest(`return doc.querySelector('[data-slug="${SLUG}"]')?.textContent ?? ''`)).includes('System updated'), `${tag}: the list picks up the new link`);
 
   const panelSel = rail ? '.dc-sheet[data-variant="full"]' : '.dc-pop';
   const updateSel = rail ? '.dc-sheet[data-variant="full"]' : '.dc-sheet[data-variant="side"]';

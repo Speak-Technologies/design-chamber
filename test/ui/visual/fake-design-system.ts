@@ -192,14 +192,8 @@ export const createFakeDesignSystem = (deps: {
     });
   };
 
-  // Harbor (revision 4): coffee-subscription copied it at 3, with two overrides, so it has an update.
-  seedLink('coffee-subscription', 'harbor', {
-    revision: 3,
-    overrides: [
-      { name: '--color-accent', value: '#b4532a', systemValue: '#3a6ea5' },
-      { name: '--radius-md', value: '2px', systemValue: '8px' },
-    ],
-  });
+  // Nothing is waiting by default, so the other scenarios see no update banner; design-system-chip.mjs links Harbor at revision 3 (hooks.link).
+  seedLink('coffee-subscription', 'tidepool');
   seedLink('northwind-pricing', 'tidepool');
   states.set('invoice-template', { kind: 'none' });
   states.set('launch-announcement', { kind: 'ask' });
