@@ -67,4 +67,4 @@ shop. Change the values there, or ask the agent here." before anything is read o
 ## Routes
 `POST /systems/:id/edits`, `POST /systems/:id/edits/:eid/undo` and `POST /systems/:id/hand-edits/clear`,
 each behind the service token, with the system id checked before any path is built. Re-sync
-(`POST /systems/:id/resync`) is a separate flow and is not built yet.
+(`POST /systems/:id/resync`) is a separate flow: [Design system re-sync](design-system-resync.md).

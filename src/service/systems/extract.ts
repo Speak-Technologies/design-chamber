@@ -1,6 +1,7 @@
 // The Code scan (documentation/specs/phase-2-5-technical.md §7.1 to §7.3, AD-23): a bounded, read-only
 // job over a project folder the user picked, the seed of a new system made from it (§7.2), and the
-// re-sync review of an internal-home system (§7.3). The repo flavour and the S8 purposes are T13's.
+// re-sync review of an internal-home system (§7.3; its apply is `systems/edits.ts` op `resync`, §6.3).
+// The repo flavour and the S8 purposes are T13's.
 //
 // Safety: the folder passes `validateScanFolder` (absolute, not a drive root, outside the Designs
 // folder, compared as realpaths) and is walked from its realpath with discovery's walker under the
@@ -30,7 +31,7 @@ import {
   SCANS_RUNNING_MAX,
   SYSTEM_ID_PATTERN,
 } from '../../shared/limits.ts';
-import { safeAssetName } from '../../shared/system-json.ts';
+import { resyncStampOf, safeAssetName } from '../../shared/system-json.ts';
 import type { SystemState } from '../../shared/types.ts';
 import type { ServiceContext } from '../context.ts';
 import { bySpot, walk, withDeadline } from '../discovery.ts';
@@ -70,6 +71,9 @@ export const SCAN_GONE_MESSAGE = 'That scan is no longer available. Scan the fol
 export const SCANS_BUSY_MESSAGE = 'Two scans are already running. Wait for one to finish, then try again.';
 export const SCAN_CANCELLED_MESSAGE = 'The scan was stopped.';
 export const SCAN_ROOT_CHANGED_MESSAGE = 'Your Designs folder changed, so the scan stopped. Scan again.';
+/** A re-sync apply whose scan was made under another designs root (RS S4 "Changed folder"). */
+export const RESYNC_ROOT_CHANGED_MESSAGE = 'Your Designs folder changed. Nothing was changed.';
+export const SCAN_OTHER_SYSTEM_MESSAGE = 'That scan was made for another design system. Scan again.';
 const scanFailedMessage = (directory: string): string => `Design Chamber couldn't finish reading ${directory}. Try again.`;
 
 const SKIP_TOO_LARGE = "It's larger than 1 MB, so it wasn't read.";
@@ -324,8 +328,13 @@ type Job = {
   message: string;
   result: ScanResult | null;
   review: CodeResyncReview | undefined;
+  /** The system's re-sync stamp when the review was made (§6.3), null for a scan without a system. */
+  stamp: string | null;
   settled: Promise<void>;
 };
+
+/** A done re-sync scan, for the apply (§6.3): the values, the root it ran under and the stamp its review was made against. */
+export type ResyncSource = { result: ScanResult; root: string; stamp: string };
 
 export type ScanJobs = {
   start(input: CreateSystemScanBody): Promise<{ scanId: string }>;
@@ -333,6 +342,11 @@ export type ScanJobs = {
   cancel(scanId: string): void;
   /** A done job's result under the current root (for making a system from it); 404/409 sentence otherwise. */
   result(scanId: string): ScanResult;
+  /**
+   * A done re-sync scan of `systemId` under the current root (§6.3): 404 when it expired, 409 while it
+   * runs, when it was made for another system, or under another Designs folder.
+   */
+  resyncSource(scanId: string, systemId: string): ResyncSource;
   /** Resolves once the job has finished, whatever its end (tests and the create flow). */
   settled(scanId: string): Promise<void>;
   dispose(): void;
@@ -386,11 +400,14 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
   });
 
   /** §7.3: the review of an internal-home system against what the scan found. */
-  const reviewFor = async (systemId: string, result: ScanResult): Promise<CodeResyncReview> => {
+  const reviewFor = async (systemId: string, result: ScanResult): Promise<{ review: CodeResyncReview; stamp: string }> => {
     const store = ensureSystemStore(ctx);
     const state = await store.readState(systemId);
     const detail = await store.detail(systemId);
-    return resyncReview(detail, state.provenance, { tokens: result.tokens, scanned: result.scanned, assets: result.assets, partial: result.summary.partial });
+    return {
+      review: resyncReview(detail, state.provenance, { tokens: result.tokens, scanned: result.scanned, assets: result.assets, partial: result.summary.partial }),
+      stamp: resyncStampOf(detail.stamps),
+    };
   };
 
   const run = async (job: Job): Promise<void> => {
@@ -407,10 +424,11 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
           job.seen = seen;
         },
       });
-      const review = job.systemId === null ? undefined : await reviewFor(job.systemId, result);
+      const reviewed = job.systemId === null ? null : await reviewFor(job.systemId, result);
       if (job.state !== 'running') return; // stopped meanwhile
       job.result = result;
-      job.review = review;
+      job.review = reviewed?.review;
+      job.stamp = reviewed?.stamp ?? null;
       finish(job, 'done', '');
       const { counts } = result.summary;
       ctx.log.info('systems.scan-done', {
@@ -467,6 +485,7 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
         message: '',
         result: null,
         review: undefined,
+        stamp: null,
         settled: Promise.resolve(),
       };
       jobs.set(job.id, job);
@@ -507,6 +526,15 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
       return job.result;
     },
 
+    resyncSource(scanId, systemId) {
+      const job = jobOf(scanId);
+      if (job.state === 'running') throw new ApiError('conflict', 'The scan is still running. Wait for it to finish.');
+      if (job.state !== 'done' || job.result === null) throw gone();
+      if (!samePath(job.root, ctx.settings.root())) throw new ApiError('conflict', RESYNC_ROOT_CHANGED_MESSAGE);
+      if (job.systemId !== systemId || job.stamp === null) throw new ApiError('conflict', SCAN_OTHER_SYSTEM_MESSAGE);
+      return { result: job.result, root: job.root, stamp: job.stamp };
+    },
+
     async settled(scanId) {
       await jobOf(scanId).settled;
     },
@@ -522,7 +550,7 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
 // ---- making a system from a scan or a preset (§7.2) ----
 
 /** One project file, contained: no link anywhere on the way (`resolvePlainTarget`), no link at the leaf (O_NOFOLLOW), ≤ `maxBytes`. */
-const readProjectFile = async (directory: string, rel: string, maxBytes: number): Promise<Buffer | null> => {
+export const readProjectFile = async (directory: string, rel: string, maxBytes: number): Promise<Buffer | null> => {
   let file: string;
   try {
     file = await resolvePlainTarget(directory, rel.split('/'));
@@ -550,7 +578,7 @@ const readProjectFile = async (directory: string, rel: string, maxBytes: number)
 };
 
 /** The biggest asset a system takes (a document); fonts and logos are checked against their own cap after the read. */
-const ASSET_READ_MAX = 20 * 1024 * 1024;
+export const ASSET_READ_MAX = 20 * 1024 * 1024;
 
 const writeSeedText = async (systemDir: string, name: string, text: string): Promise<void> => {
   await writeFileAtomic(await resolvePlainTarget(systemDir, [name], { allowAbsent: true }), text, { createDirs: false });

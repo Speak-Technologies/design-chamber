@@ -17,7 +17,8 @@ import {
   SYSTEM_TOKEN_NAME_PATTERN,
   SYSTEM_UNDO_TEXT_MAX,
 } from '../../shared/limits.ts';
-import type { HandEdit, IsoDate } from '../../shared/types.ts';
+import { parseProvenance, parseSources } from '../../shared/system-json.ts';
+import type { HandEdit, IsoDate, SystemState } from '../../shared/types.ts';
 import type { Logger } from '../context.ts';
 import { appendLedger, EDITS_FILE_SEGMENTS, parseHandEdit, pruneUndo, serializeEditsFile, UNDO_LABEL_MAX, UNDO_REMOVED_MAX, UNDO_STEPS_MAX, type LedgerFile } from '../edits/file.ts';
 import type { HandEditBody } from '../edits/op-module.ts';
@@ -62,6 +63,15 @@ export type SystemUndoStep =
   /** A file the edit created; undo moves it to the trash (never a hard delete) while it still hashes to `sha`. */
   | { kind: 'create'; file: string; sha: string };
 
+/**
+ * What a re-sync changed in state.json (§6.3), put back by its Undo with the files: the provenance
+ * of each name it touched as it was before (null = the name had none) and the code source line.
+ */
+export type SystemResyncUndo = {
+  provenance: Record<string, SystemState['provenance'][string] | null>;
+  code: SystemState['sources']['code'];
+};
+
 export type SystemUndoRecord = {
   id: string;
   at: IsoDate;
@@ -69,7 +79,12 @@ export type SystemUndoRecord = {
   /** The first ledger entry this edit added, or null when it added none (its entries share its `editId`). */
   ledgerSeq: number | null;
   steps: SystemUndoStep[];
+  /** A re-sync's state.json part (absent for a hand edit). */
+  resync?: SystemResyncUndo;
 };
+
+/** Names one re-sync undo record may hold (the scan's token cap). */
+const RESYNC_UNDO_NAMES_MAX = 2000;
 
 export type SystemEditsFile = LedgerFile<SystemUndoRecord>;
 
@@ -151,7 +166,38 @@ export const parseSystemUndoRecord = (value: unknown): SystemUndoRecord | null =
     if (one === null) return null; // a record with one bad step cannot be undone exactly: drop it whole
     parsed.push(one);
   }
-  return { id, at, label: clip(oneLine(label), UNDO_LABEL_MAX), ledgerSeq, steps: parsed };
+  const record: SystemUndoRecord = { id, at, label: clip(oneLine(label), UNDO_LABEL_MAX), ledgerSeq, steps: parsed };
+  if (value.resync === undefined) return record;
+  const resync = parseResyncUndo(value.resync);
+  return resync === null ? null : { ...record, resync };
+};
+
+/** A re-sync's state part, validated with state.json's own rules; null drops the whole record. */
+export const parseResyncUndo = (value: unknown): SystemResyncUndo | null => {
+  if (!isObj(value) || !isObj(value.provenance) || !(value.code === null || isObj(value.code))) return null;
+  const names = Object.keys(value.provenance);
+  if (names.length > RESYNC_UNDO_NAMES_MAX || !names.every((name) => SYSTEM_TOKEN_NAME_PATTERN.test(name))) return null;
+  const present = parseProvenance(value.provenance);
+  const provenance: SystemResyncUndo['provenance'] = {};
+  for (const name of names) {
+    const entry = present[name];
+    if (entry !== undefined) provenance[name] = entry;
+    else if (value.provenance[name] === null) provenance[name] = null;
+    else return null;
+  }
+  const code = value.code === null ? null : parseSources({ code: value.code }).code;
+  if (value.code !== null && code === null) return null;
+  return { provenance, code };
+};
+
+/** state.json with a re-sync's state part put back (Undo, §6.3). */
+export const withResyncUndone = (state: SystemState, undo: SystemResyncUndo): SystemState => {
+  const provenance = { ...state.provenance };
+  for (const [name, entry] of Object.entries(undo.provenance)) {
+    if (entry === null) delete provenance[name];
+    else provenance[name] = entry;
+  }
+  return { ...state, provenance, sources: { ...state.sources, code: undo.code } };
 };
 
 /** The file as far as it validates; `damaged` counts what was dropped (logged, never the content). */
@@ -183,7 +229,7 @@ export const parseSystemEditsFile = (value: unknown): { file: SystemEditsFile; d
 
 // ---- updates (pure) ----
 
-export type NewSystemEdit = { editId: string; at: IsoDate; label: string; bodies: HandEditBody[]; steps: SystemUndoStep[] };
+export type NewSystemEdit = { editId: string; at: IsoDate; label: string; bodies: HandEditBody[]; steps: SystemUndoStep[]; resync?: SystemResyncUndo };
 
 /**
  * One successful system edit: one ledger entry per changed thing (§6.2), all with the edit's id,
@@ -198,7 +244,14 @@ export const appendSystemEdit = (file: SystemEditsFile, edit: NewSystemEdit, now
     first ??= appended.seq;
   }
   if (edit.steps.length === 0) return pruneUndo(current, nowMs);
-  const record: SystemUndoRecord = { id: edit.editId, at: edit.at, label: clip(oneLine(edit.label), UNDO_LABEL_MAX), ledgerSeq: first, steps: edit.steps };
+  const record: SystemUndoRecord = {
+    id: edit.editId,
+    at: edit.at,
+    label: clip(oneLine(edit.label), UNDO_LABEL_MAX),
+    ledgerSeq: first,
+    steps: edit.steps,
+    ...(edit.resync !== undefined ? { resync: edit.resync } : {}),
+  };
   return pruneUndo({ ...current, undo: [...current.undo.filter((one) => one.id !== record.id), record] }, nowMs);
 };
 

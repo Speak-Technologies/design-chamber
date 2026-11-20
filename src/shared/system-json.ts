@@ -217,7 +217,8 @@ const parseFingerprintMap = (value: unknown): Partial<Record<SystemSection, stri
   return out;
 };
 
-const parseSources = (value: unknown): SystemState['sources'] => {
+/** state.json's `sources`, validated (also the undo record of a re-sync, §6.3). */
+export const parseSources = (value: unknown): SystemState['sources'] => {
   const sources: SystemState['sources'] = { code: null, brand: null, description: null };
   if (!isObject(value)) return sources;
   const code = own(value, 'code');
@@ -240,7 +241,8 @@ const parseSources = (value: unknown): SystemState['sources'] => {
   return sources;
 };
 
-const parseProvenance = (value: unknown): SystemState['provenance'] => {
+/** state.json's `provenance`, validated (also the undo record of a re-sync, §6.3). */
+export const parseProvenance = (value: unknown): SystemState['provenance'] => {
   const out: SystemState['provenance'] = {};
   if (!isObject(value)) return out;
   for (const name of Object.keys(value)) {
@@ -1041,6 +1043,16 @@ export const safeAssetName = (name: string, existing: readonly string[]): string
 };
 
 /** An id the store may mint or read as a system (pattern, not reserved). */
+/**
+ * The re-sync stamp (§6.3): the system's tokens.css and system.json hashes when the scan's review was
+ * made (`none` for an absent file). The page sends the one it read with the system's detail
+ * (`detail.stamps`); the service refuses an apply when the files moved on since the review.
+ */
+export const resyncStampOf = (stamps: { tokens: string | null; systemJson: string | null }): string => `${stamps.tokens ?? 'none'}:${stamps.systemJson ?? 'none'}`;
+
+/** A re-sync stamp's shape (two sha256 hex strings or `none`), checked at the route. */
+export const RESYNC_STAMP_PATTERN = /^(?:[0-9a-f]{64}|none):(?:[0-9a-f]{64}|none)$/;
+
 export const isUsableSystemId = (id: string): boolean => SYSTEM_ID_PATTERN.test(id) && !isReservedSystemId(id);
 
 /** A path in the system file contract (§5.10): `system.json`, `tokens.css`, `OVERVIEW.md`, `notes/<id>.md`, …. */

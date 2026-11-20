@@ -13,7 +13,6 @@ import type { SystemDetail } from '../../../src/shared/types.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
 import { registerSystemEditRoutes } from '../../../src/service/routes/system-edits.ts';
 import { registerSystemsRoutes } from '../../../src/service/routes/systems.ts';
-import { SYSTEMS_NOT_BUILT_MESSAGE } from '../../../src/service/systems/not-built.ts';
 import { createFakeContext } from '../../helpers/fake-context.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
 
@@ -65,8 +64,8 @@ test('a traversal or invalid id is refused before any path is built', async (t) 
   const { call } = await serve(t);
   const body = { op: 'save', stamps: { tokens: null }, tokens: [{ kind: 'add', name: '--a', mode: 'light', value: '1px' }] };
   for (const hostile of ['..%2F..%2Fetc', '..%5Cwindows', 'a%00b']) {
-    for (const url of [`/systems/${hostile}/edits`, `/systems/${hostile}/edits/e_0123456789abcdef0123/undo`, `/systems/${hostile}/hand-edits/clear`]) {
-      const answer = await call('POST', url, url.endsWith('/edits') ? body : url.endsWith('/clear') ? { upTo: 1 } : {});
+    for (const url of [`/systems/${hostile}/edits`, `/systems/${hostile}/edits/e_0123456789abcdef0123/undo`, `/systems/${hostile}/hand-edits/clear`, `/systems/${hostile}/resync`]) {
+      const answer = await call('POST', url, url.endsWith('/edits') ? body : url.endsWith('/clear') ? { upTo: 1 } : url.endsWith('/resync') ? { scanId: 'x', stamp: 'y' } : {});
       assert.equal(answer.status, 400, url);
     }
   }
@@ -79,7 +78,7 @@ test('a traversal or invalid id is refused before any path is built', async (t) 
   assert.equal(gone.status, 404);
 });
 
-test('bodies are validated with a sentence; a bad edit id is 400; re-sync stays not built', async (t) => {
+test('bodies are validated with a sentence; a bad edit id is 400; a malformed re-sync is 400', async (t) => {
   const { call } = await serve(t);
   const { id } = (await call('POST', '/systems', { name: 'Acme' })).json as CreateSystemResponse;
   for (const body of [undefined, [], { op: 'save' }, { op: 'save', stamps: {}, texts: [{ file: '../x.md', text: 'x' }] }]) {
@@ -91,7 +90,7 @@ test('bodies are validated with a sentence; a bad edit id is 400; re-sync stays 
   assert.equal((await call('POST', `/systems/${id}/edits/e_0123456789abcdef0123/undo`, { extra: 1 })).status, 400);
   assert.equal((await call('POST', `/systems/${id}/hand-edits/clear`, { upTo: 0 })).status, 400);
   const resync = await call('POST', `/systems/${id}/resync`, { scanId: 'x', stamp: 'y' });
-  assert.deepEqual([resync.status, resync.json], [500, { error: 'internal', message: SYSTEMS_NOT_BUILT_MESSAGE }]);
+  assert.deepEqual([resync.status, (resync.json as { error: string }).error], [400, 'bad-request']);
 });
 
 test('a system whose tokens.css sets real tokens reads through GET /systems/:id (the T1 reader with the T3 rules)', async (t) => {

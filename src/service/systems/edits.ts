@@ -14,45 +14,71 @@
 //                   thing; the review fingerprints of the sections the save changed re-recorded.
 //     → the revision settles (outside the chain: it takes the store lock itself).
 //   undo(id, editId): the recorded reverse steps through the same chain, each guarded by the hash
-//                   the edit left (E9).
+//                   the edit left (E9); a re-sync's undo also puts its provenance back.
+//
+//   apply(id, resync) (§6.3, S4; internal home only, the repo flavour is T13's):
+//     the scan job's memory (`ResyncSource`: values, root, the stamp its review was made against)
+//     → the chain: the root and the stamp checked again, the review rebuilt from the files and
+//       provenance now, every tick inside its list (a removal only from "No longer in the code",
+//       which never holds an agent's or the user's token, nor one from a file the scan did not read)
+//     → version first ("Before re-sync", never coalesced) → token values set, added, removed;
+//       system.json metadata of added and removed tokens and the copied fonts and logos (notes,
+//       overview, existing fonts and assets untouched) → state.json provenance and code source
+//     → the revision settles outside the chain (the store lock is not re-entrant).
 //
 // E1: nothing here is reachable from a frame; the only callers are the routes, which only the
 // page and the rail call, from Design Chamber's own controls.
 
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, stat } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import type { MetaChange, SystemEditRequest, SystemEditResponse, SystemEditStamps, SystemTextFile, SystemUndoEditResponse, TokenEdit } from '../../shared/api.ts';
+import type { MetaChange, SystemEditRequest, SystemEditResponse, SystemEditStamps, SystemResyncResponse, SystemTextFile, SystemUndoEditResponse, TokenEdit } from '../../shared/api.ts';
 import {
   EDIT_ID_PATTERN,
+  SCAN_ID_PATTERN,
   SHA256_PATTERN,
   SYSTEM_JSON_MAX_BYTES,
   SYSTEM_NOTE_MAX,
   SYSTEM_OVERVIEW_MAX,
   SYSTEM_TOKEN_NAME_PATTERN,
   SYSTEM_TOKEN_VALUE_MAX,
+  SYSTEM_TOKENS_MAX,
   SYSTEM_UNDO_TEXT_MAX,
   TOKENS_CSS_MAX_BYTES,
 } from '../../shared/limits.ts';
-import { buildSystemDetail, parseSystemJson, sectionFingerprints, SYSTEM_SECTIONS, SYSTEM_TOKEN_RULES, type SystemTokenRules } from '../../shared/system-json.ts';
+import { buildSystemDetail, parseSystemJson, RESYNC_STAMP_PATTERN, resyncStampOf, safeAssetName, sectionFingerprints, SYSTEM_SECTIONS, SYSTEM_TOKEN_RULES, type SystemTokenRules } from '../../shared/system-json.ts';
 import { planTokenEdit, verifyTokenEdit, NOT_EXACT_SENTENCE } from '../../shared/token-edit.ts';
-import type { JsonObject, SystemSection, SystemState, TokenSection } from '../../shared/types.ts';
+import type { JsonObject, JsonValue, SystemSection, SystemState, TokenSection } from '../../shared/types.ts';
 import type { ChangeHub, Logger, SelfWrites, ServiceContext, SettingsStore } from '../context.ts';
 import { codeOf, createStepExecutor, executeSteps, ROLLED_BACK_MESSAGE, sha256, type ExecPlace, type ExecRun, type MoveAlternatives } from '../edits/execute.ts';
-import { clearLedger, findUndo } from '../edits/file.ts';
+import { clearLedger, findUndo, UNDO_STEPS_MAX } from '../edits/file.ts';
 import type { HandEditBody } from '../edits/op-module.ts';
 import { FILE_TOO_LARGE_MESSAGE, NOT_UTF8_MESSAGE } from '../edits/ops-text.ts';
 import { UNDO_STALE_MESSAGE } from '../edits/pipeline.ts';
 import { ensureTrashDir, TRASH_PREFIX, TRASH_SUFFIX_MAX, trashStampOf } from '../edits/trash.ts';
 import { ApiError } from '../http.ts';
-import { LINK_SENTENCE, resolvePlainTarget } from '../paths.ts';
+import { LINK_SENTENCE, resolvePlainTarget, samePath } from '../paths.ts';
 import { folderErrorSentence } from '../root.ts';
 import { toSummary, type VersionsService, type WrittenFile } from '../versions.ts';
 import { systemSelfWritesKey } from '../watch.ts';
+import { checkAsset, ensureFolder, FOLDER_OF_KIND, guessFontFace, guessLogoVariant } from './assets.ts';
 import { applyMetaChange, describeMeta, isMetaPath } from './edit-meta.ts';
-import { appendSystemEdit, applySystemUndone, bodyFileOf, createSystemEditsFile, isSystemEditableRel, type SystemEditsFileStore, type SystemUndoRecord, type SystemUndoStep } from './edits-file.ts';
+import {
+  appendSystemEdit,
+  applySystemUndone,
+  bodyFileOf,
+  createSystemEditsFile,
+  isSystemEditableRel,
+  withResyncUndone,
+  type SystemEditsFileStore,
+  type SystemResyncUndo,
+  type SystemUndoRecord,
+  type SystemUndoStep,
+} from './edits-file.ts';
+import { ASSET_READ_MAX, ensureScanJobs, readProjectFile, RESYNC_ROOT_CHANGED_MESSAGE, SCAN_GONE_MESSAGE, type ResyncSource, type ScanJobs } from './extract.ts';
+import { colourGroupOf, resyncReview } from './extract-rules.ts';
 import { notBuilt } from './not-built.ts';
 import { ensureSystemStore, SYSTEM_GONE_MESSAGE, type SystemStore } from './store.ts';
 import { ensureSystemVersions } from './versions.ts';
@@ -78,6 +104,8 @@ export const systemStaleMessage = (name: string): string => `${name} changed whi
 export const readOnlyMessage = (name: string, repo: string): string => `${name} lives in ${repo}. Change the values there, or ask the agent here.`;
 
 const partWayMessage = "Something went wrong part way. The version 'Before your edits' holds everything as it was; restore it from Versions.";
+const resyncPartWayMessage = "Something went wrong part way. The version 'Before re-sync' holds everything as it was; restore it from Versions.";
+export const RESYNC_UNDO_NOT_KEPT_NOTICE = "Restore 'Before re-sync' from Versions to undo.";
 
 // ---- request shape (pure) ----
 
@@ -171,10 +199,54 @@ export const parseSystemEditRequest = (body: unknown): SaveRequest => {
   };
 };
 
+// ---- the re-sync request (pure, §6.3) ----
+
+type ResyncRequest = Extract<SystemEditRequest, { op: 'resync' }>;
+
+/** New font and logo files one re-sync may copy (the scan offers ≤ 20 of each). */
+export const RESYNC_ASSETS_MAX = 40;
+export const RESYNC_NOTHING_TICKED_MESSAGE = 'Nothing is ticked, so there is nothing to apply.';
+const PROJECT_PATH_MAX = 4096;
+
+/** "Acme changed after the scan…": the review no longer describes the files (409 stale, **Scan again**). */
+export const resyncStaleMessage = (name: string): string => `${name} changed after the scan, so nothing was changed. Scan again.`;
+
+/**
+ * `POST /systems/:id/resync` (internal home) as a fresh, fully typed request, or 400 with one sentence.
+ * It names token names and project paths only, never values: every value comes from the scan's memory.
+ * Whether each name and path is in the review is the apply's rule (inside the chain).
+ */
+export const parseSystemResyncRequest = (body: unknown): ResyncRequest => {
+  if (!isObj(body)) return bad();
+  const { scanId, stamp } = body;
+  if (typeof scanId !== 'string' || !SCAN_ID_PATTERN.test(scanId)) return bad();
+  if (typeof stamp !== 'string' || !RESYNC_STAMP_PATTERN.test(stamp)) return bad();
+  const names = (value: unknown): string[] => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.length > SYSTEM_TOKENS_MAX) return bad();
+    const list = value.map((one: unknown) => (typeof one === 'string' && SYSTEM_TOKEN_NAME_PATTERN.test(one) ? one : bad()));
+    return new Set(list).size === list.length ? list : bad();
+  };
+  const changes = names(body.changes);
+  const add = names(body.add);
+  const remove = names(body.remove);
+  const useCode = names(body.useCode);
+  if (body.assets !== undefined && (!Array.isArray(body.assets) || body.assets.length > RESYNC_ASSETS_MAX)) return bad();
+  const assets = ((body.assets ?? []) as unknown[]).map((one) =>
+    typeof one === 'string' && one.length >= 1 && one.length <= PROJECT_PATH_MAX && !/[\u0000-\u001f\u007f]/.test(one) ? one : bad(),
+  );
+  if (new Set(assets).size !== assets.length) return bad();
+  if (changes.length + add.length + remove.length + useCode.length + assets.length === 0) throw new ApiError('bad-request', RESYNC_NOTHING_TICKED_MESSAGE);
+  return { op: 'resync', scanId, stamp, changes, add, remove, useCode, assets };
+};
+
 // ---- the service ----
 
 export type SystemEditService = {
+  /** A `save` answers `SystemEditResponse`; a `resync` answers `SystemResyncResponse` (its counts added). */
   apply(id: string, request: SystemEditRequest): Promise<SystemEditResponse>;
+  /** The internal-home re-sync (§6.3), typed. */
+  resync(id: string, request: ResyncRequest): Promise<SystemResyncResponse>;
   undo(id: string, editId: string): Promise<SystemUndoEditResponse>;
   clearHandEdits(id: string, upTo: number): Promise<void>;
   /** The system's edits.json queue (the prompt builder reads the ledger through it). */
@@ -193,6 +265,8 @@ export type SystemEditDeps = {
   pause?: (ms: number) => Promise<void>;
   editsFile?: SystemEditsFileStore;
   rules?: SystemTokenRules;
+  /** The scan jobs a re-sync reads its values from (§6.3); absent → no scan is ever found (404). */
+  scans?: Pick<ScanJobs, 'resyncSource'>;
 };
 
 /** `e_` + 20 hex characters (inside `EDIT_ID_PATTERN`). */
@@ -206,6 +280,20 @@ type SystemStep =
 type Done = { reverse: SystemUndoStep; record: SystemUndoStep[] | null };
 
 type Run = ExecRun & { id: string; dir: string; written: WrittenFile[]; files: Set<string>; stamps: SystemEditStamps };
+
+/** The section system.json gives a token (`tokens.<name>.section`), or null. */
+const sectionInRaw = (raw: JsonObject | null, name: string): TokenSection | null => {
+  const tokenNotes = raw?.tokens;
+  if (typeof tokenNotes !== 'object' || tokenNotes === null || Array.isArray(tokenNotes) || !Object.hasOwn(tokenNotes, name)) return null;
+  const entry = tokenNotes[name];
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry) || !Object.hasOwn(entry, 'section')) return null;
+  const section = entry.section;
+  return section === 'colours' || section === 'typography' || section === 'spacing' || section === 'radius' || section === 'shadows' || section === 'layers' || section === 'sizes' || section === 'other'
+    ? section
+    : null;
+};
+
+const isJsonObject = (value: JsonValue | undefined): value is JsonObject => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 type FileRead = { kind: 'absent' } | { kind: 'link' } | { kind: 'too-large' } | { kind: 'read'; bytes: Buffer; text: string; utf8: boolean };
 
@@ -238,7 +326,7 @@ const SYSTEM_TRASH_ALTERNATIVES: MoveAlternatives = { renamable: (place) => plac
 const stampKeyOf = (rel: string): 'tokens' | 'systemJson' | 'text' => (rel === 'tokens.css' ? 'tokens' : rel === 'system.json' ? 'systemJson' : 'text');
 
 export const createSystemEditService = (deps: SystemEditDeps): SystemEditService => {
-  const { systems, versions, hub, selfWrites, settings, log } = deps;
+  const { systems, versions, hub, selfWrites, settings, log, scans } = deps;
   const now = deps.now ?? ((): Date => new Date());
   const pause = deps.pause ?? ((ms: number) => delay(ms));
   const editsFile = deps.editsFile ?? createSystemEditsFile({ log });
@@ -251,7 +339,8 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
     throw new ApiError('read-only', readOnlyMessage(state.name, path.basename(state.home.directory) || state.home.directory));
   };
 
-  const newRun = (id: string, dir: string, staleMessage: string): Run => {
+  /** `resync`: the run may also create (and an undo trash) the brand files a re-sync copied (§5.3). */
+  const newRun = (id: string, dir: string, staleMessage: string, options: { resync?: boolean } = {}): Run => {
     let trash: Promise<string> | null = null;
     const run: Run = {
       key: systemSelfWritesKey(id),
@@ -267,14 +356,15 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
           trash ??= ensureTrashDir(settings.root());
           return { abs: await resolvePlainTarget(await trash, [place.slice(TRASH_PREFIX.length)], { allowAbsent }), rel: null };
         }
-        if (!isSystemEditableRel(place)) throw new ApiError('internal', ROLLED_BACK_MESSAGE);
+        if (!isSystemEditableRel(place, { resync: options.resync === true })) throw new ApiError('internal', ROLLED_BACK_MESSAGE);
         return { abs: await resolvePlainTarget(dir, place.split('/'), { allowAbsent }), rel: place };
       },
       noteWrite: (rel, bytes) => {
         if (rel === null) return;
         run.written.push([rel, bytes]);
         run.files.add(rel);
-        if (bytes === null) return;
+        // Brand files carry no edit stamp (only tokens.css, system.json and the texts do).
+        if (bytes === null || !isSystemEditableRel(rel)) return;
         const key = stampKeyOf(rel);
         if (key === 'text') run.stamps.texts = { ...run.stamps.texts, [rel]: sha256(bytes) };
         else run.stamps[key] = sha256(bytes);
@@ -419,17 +509,7 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
     // tokens.css: planned against the bytes read, then verified (§6.1).
     if (request.tokens !== undefined) {
       const css = tokensFile?.text ?? '';
-      const tokenNotes = raw?.tokens;
-      const sectionOf = (name: string): TokenSection | null => {
-        if (typeof tokenNotes !== 'object' || tokenNotes === null || Array.isArray(tokenNotes) || !Object.hasOwn(tokenNotes, name)) return null;
-        const entry = tokenNotes[name];
-        if (typeof entry !== 'object' || entry === null || Array.isArray(entry) || !Object.hasOwn(entry, 'section')) return null;
-        const section = entry.section;
-        return section === 'colours' || section === 'typography' || section === 'spacing' || section === 'radius' || section === 'shadows' || section === 'layers' || section === 'sizes' || section === 'other'
-          ? section
-          : null;
-      };
-      const plan = planTokenEdit(css, request.tokens, { contexts: 'system', sectionOf });
+      const plan = planTokenEdit(css, request.tokens, { contexts: 'system', sectionOf: (name) => sectionInRaw(raw, name) });
       if ('refusal' in plan) throw new ApiError('invalid', plan.refusal);
       if (!verifyTokenEdit(css, plan.result, request.tokens)) throw new ApiError('invalid', NOT_EXACT_SENTENCE);
       if (plan.result !== css) {
@@ -507,6 +587,195 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
     return { label, ...(steps.length === 0 ? { detail: 'Nothing changed.' } : undoable ? {} : { detail: UNDO_NOT_KEPT_NOTICE }), steps, bodies, undoable };
   };
 
+  // ---- planning a re-sync (inside the chain; writes nothing, §6.3) ----
+
+  type ResyncPlan = {
+    steps: SystemStep[];
+    /** Asset folders to make before the steps run (`assets/fonts`, `assets/logos`). */
+    folders: (readonly string[])[];
+    provenance: SystemState['provenance'];
+    undoState: SystemResyncUndo;
+    code: NonNullable<SystemState['sources']['code']>;
+    counts: SystemResyncResponse['counts'];
+    directoryChanged: boolean;
+    label: string;
+  };
+
+  /** A tracked file the re-sync rewrites: read, refused when it is a link, too large or not UTF-8. */
+  const readResyncFile = async (dir: string, rel: string, maxBytes: number): Promise<{ text: string; bytes: Buffer } | null> => {
+    const file = await readSystemFile(dir, rel, maxBytes);
+    if (file.kind === 'link') throw new ApiError('invalid', LINK_SENTENCE);
+    if (file.kind === 'too-large') throw new ApiError('too-large', FILE_TOO_LARGE_MESSAGE);
+    if (file.kind === 'absent') return null;
+    if (!file.utf8) throw new ApiError('invalid', NOT_UTF8_MESSAGE);
+    return { text: file.text, bytes: file.bytes };
+  };
+
+  /** File names already in a system asset folder (none when it is absent). */
+  const namesIn = async (dir: string, segments: readonly string[]): Promise<string[]> => {
+    return readdir(path.join(dir, ...segments)).catch((error: unknown) => {
+      if (codeOf(error) === 'ENOENT') return [];
+      throw error;
+    });
+  };
+
+  const planResync = async (id: string, dir: string, state: SystemState, request: ResyncRequest, source: ResyncSource): Promise<ResyncPlan> => {
+    const stale = resyncStaleMessage(state.name);
+    const scan = source.result;
+
+    // The files as they are now must be the ones the review was made against.
+    const tokensFile = await readResyncFile(dir, 'tokens.css', TOKENS_CSS_MAX_BYTES);
+    const systemJsonFile = await readResyncFile(dir, 'system.json', SYSTEM_JSON_MAX_BYTES);
+    const stampNow = resyncStampOf({ tokens: tokensFile === null ? null : sha256(tokensFile.bytes), systemJson: systemJsonFile === null ? null : sha256(systemJsonFile.bytes) });
+    if (stampNow !== source.stamp || request.stamp !== source.stamp) throw new ApiError('stale', stale);
+
+    // The review rebuilt from the system now; every tick must be in its own list.
+    const detail = buildSystemDetail(await systems.get(id), rules);
+    const review = resyncReview(detail, state.provenance, { tokens: scan.tokens, scanned: scan.scanned, assets: scan.assets, partial: scan.summary.partial });
+    const inList = (ticked: readonly string[], listed: Iterable<string>): boolean => {
+      const offered = new Set(listed);
+      return ticked.every((one) => offered.has(one));
+    };
+    if (
+      !inList(request.changes, review.changed.map((one) => one.name)) ||
+      !inList(request.useCode, review.conflicts.map((one) => one.name)) ||
+      !inList(request.add, review.added) ||
+      !inList(request.remove, review.removed) ||
+      !inList(request.assets, review.assets.map((one) => one.path))
+    ) {
+      throw new ApiError('stale', stale);
+    }
+
+    const scanned = new Map(scan.tokens.map((token) => [token.name, token]));
+    const mine = new Map(detail.tokens.map((token) => [token.name, token]));
+    const raw: JsonObject | null = systemJsonFile === null ? null : parseSystemJson(systemJsonFile.text).raw;
+
+    // tokens.css: values only (§6.3). Changed and "Use the code's" set the code's value; New adds both
+    // modes the code has; a ticked removal takes both modes.
+    const edits: TokenEdit[] = [];
+    for (const name of request.changes) for (const one of review.changed) if (one.name === name) edits.push({ kind: 'set', name, mode: one.mode, value: one.to });
+    for (const name of request.useCode) {
+      for (const one of review.conflicts) {
+        if (one.name !== name) continue;
+        const has = mine.get(name)?.[one.mode] !== null && mine.get(name)?.[one.mode] !== undefined;
+        edits.push({ kind: has ? 'set' : 'add', name, mode: one.mode, value: one.code });
+      }
+    }
+    for (const name of request.add) {
+      const token = scanned.get(name);
+      if (token === undefined) throw new ApiError('stale', stale);
+      if (token.light !== null) edits.push({ kind: 'add', name, mode: 'light', value: token.light });
+      if (token.dark !== null) edits.push({ kind: 'add', name, mode: 'dark', value: token.dark });
+    }
+    for (const name of request.remove) {
+      const token = mine.get(name);
+      // A token already gone from tokens.css only loses its provenance (and its metadata, below).
+      if (token !== undefined && (token.light !== null || token.dark !== null)) edits.push({ kind: 'remove', name, mode: 'both' });
+    }
+
+    const steps: SystemStep[] = [];
+    if (edits.length > 0) {
+      const css = tokensFile?.text ?? '';
+      const sectionOf = (name: string): TokenSection | null => sectionInRaw(raw, name) ?? scanned.get(name)?.section ?? null;
+      const plan = planTokenEdit(css, edits, { contexts: 'system', sectionOf });
+      if ('refusal' in plan) throw new ApiError('invalid', plan.refusal);
+      if (!verifyTokenEdit(css, plan.result, edits)) throw new ApiError('invalid', NOT_EXACT_SENTENCE);
+      if (plan.result !== css) steps.push(textStep('tokens.css', tokensFile, plan.result));
+    }
+
+    // The new brand files, read from the project with the scan's containment and checked like an upload.
+    const folders: (readonly string[])[] = [];
+    const assetSteps: SystemStep[] = [];
+    const taken: Record<'font' | 'logo', string[]> = { font: [], logo: [] };
+    const listed: Record<'font' | 'logo', string[] | null> = { font: null, logo: null };
+    const entries: { key: 'fonts' | 'logos'; entry: JsonObject }[] = [];
+    for (const rel of request.assets) {
+      const asset = scan.assets.find((one) => one.path === rel);
+      if (asset === undefined) throw new ApiError('stale', stale);
+      const segments = FOLDER_OF_KIND[asset.kind];
+      const name = rel.split('/').at(-1) ?? rel;
+      const bytes = await readProjectFile(scan.directory, rel, ASSET_READ_MAX);
+      if (bytes === null) throw new ApiError('stale', stale);
+      const check = checkAsset(name, asset.kind, bytes);
+      if (!check.ok) throw new ApiError('invalid', check.reason);
+      listed[asset.kind] ??= await namesIn(dir, segments);
+      const finalName = safeAssetName(name, [...(listed[asset.kind] ?? []), ...taken[asset.kind]]);
+      taken[asset.kind].push(finalName);
+      const file = [...segments, finalName].join('/');
+      if (!folders.includes(segments)) folders.push(segments);
+      const undo: SystemUndoStep = { kind: 'create', file, sha: sha256(bytes) };
+      assetSteps.push({ kind: 'create', rel: file, bytes, reverse: undo, record: [undo] });
+      if (asset.kind === 'font') {
+        const guess = guessFontFace(file);
+        const style = asset.style === 'italic' ? 'italic' : asset.style === 'normal' ? 'normal' : guess.style;
+        entries.push({ key: 'fonts', entry: { file, family: asset.family ?? guess.family, weight: asset.weight ?? guess.weight, style } });
+      } else {
+        entries.push({ key: 'logos', entry: { file, variant: guessLogoVariant(file) } });
+      }
+    }
+
+    // system.json: the metadata of added and removed tokens and the copied files; every other key,
+    // note and entry kept as it is (S4-1).
+    const removedMeta = request.remove.filter((name) => isJsonObject(raw?.tokens) && Object.hasOwn(raw.tokens, name));
+    const addedMeta = request.add.filter((name) => !(isJsonObject(raw?.tokens) && Object.hasOwn(raw.tokens, name)));
+    if (removedMeta.length + addedMeta.length + entries.length > 0) {
+      if (systemJsonFile !== null && raw === null) throw new ApiError('invalid', SYSTEM_JSON_UNREADABLE_MESSAGE);
+      const next: JsonObject = raw === null ? { version: 1 } : structuredClone(raw);
+      if (addedMeta.length + removedMeta.length > 0) {
+        if (next.tokens !== undefined && !isJsonObject(next.tokens)) throw new ApiError('invalid', SYSTEM_JSON_UNREADABLE_MESSAGE);
+        const tokens: JsonObject = isJsonObject(next.tokens) ? next.tokens : {};
+        for (const name of removedMeta) delete tokens[name];
+        for (const name of addedMeta) {
+          const section = scanned.get(name)?.section ?? 'other';
+          const group = section === 'colours' ? colourGroupOf(name) : null;
+          tokens[name] = group === null ? { section } : { section, group };
+        }
+        next.tokens = tokens;
+      }
+      for (const { key, entry } of entries) {
+        const list = next[key];
+        if (list !== undefined && !Array.isArray(list)) throw new ApiError('invalid', SYSTEM_JSON_UNREADABLE_MESSAGE);
+        next[key] = [...(list ?? []), entry];
+      }
+      const text = `${JSON.stringify(next, null, 2)}\n`;
+      if (systemJsonFile === null || text !== systemJsonFile.text) steps.push(textStep('system.json', systemJsonFile, text));
+    }
+    steps.push(...assetSteps);
+
+    // Every step inside the writable set (E7, plus the re-sync's brand files).
+    if (!steps.every((step) => isSystemEditableRel(step.rel, { resync: true }))) {
+      log.error('systems.edits.plan-refused', { op: 'resync' });
+      throw new ApiError('internal', ROLLED_BACK_MESSAGE);
+    }
+
+    // state.json: provenance of each touched name (what the code says now), the code source line.
+    const provenance = { ...state.provenance };
+    const before: SystemResyncUndo['provenance'] = {};
+    for (const name of [...request.changes, ...request.useCode, ...request.add]) {
+      const token = scanned.get(name);
+      if (token === undefined) continue;
+      before[name] = state.provenance[name] ?? null;
+      provenance[name] = { file: token.file, line: token.line, light: token.light, dark: token.dark };
+    }
+    for (const name of request.remove) {
+      before[name] = state.provenance[name] ?? null;
+      delete provenance[name];
+    }
+    const changed = new Set([...request.changes, ...request.useCode]).size;
+    const counts = { changed, added: request.add.length, removed: request.remove.length };
+    const previous = state.sources.code;
+    return {
+      steps,
+      folders,
+      provenance,
+      undoState: { provenance: before, code: previous },
+      code: { directory: scan.directory, lastScan: scan.at, partial: scan.summary.partial, scanned: scan.scanned },
+      counts,
+      directoryChanged: previous !== null && !samePath(previous.directory, scan.directory),
+      label: `Re-synced ${state.name}: ${counts.changed} changed, ${counts.added} added, ${counts.removed} removed.`,
+    };
+  };
+
   // ---- running steps ----
 
   const runStep = async (run: Run, step: SystemStep): Promise<Done> => {
@@ -572,11 +841,11 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
     if (stateChanged) hub.emit({ slug: null, kind: 'system', system: id, systemChange: 'state' });
   };
 
-  return {
+  const service: SystemEditService = {
     editsFile,
 
     async apply(id, request) {
-      if (request.op === 'resync') return notBuilt(); // T4/T13: built from the scan job's memory (§6.3)
+      if (request.op === 'resync') return service.resync(id, request);
       const state = await systems.readState(id);
       refuseReadOnly(state);
       const staleMessage = systemStaleMessage(state.name);
@@ -647,6 +916,82 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
       return { ...result.response, version: result.version === null ? null : toSummary(result.version), coalesced: result.coalesced };
     },
 
+    async resync(id, request) {
+      const state = await systems.readState(id);
+      // T13's seam: a repo-backed system's re-sync is all or nothing with no Undo (§7.4, AD-33):
+      // `snapshots.refresh(id, { by: "user", scanId, directory })`, never these ticks.
+      if (state.home?.kind === 'repo') return notBuilt();
+      if (scans === undefined) throw new ApiError('not-found', SCAN_GONE_MESSAGE);
+      const source = scans.resyncSource(request.scanId, id); // 404 expired, 409 running / other system / other root
+      if (request.stamp !== source.stamp) throw new ApiError('stale', resyncStaleMessage(state.name));
+      const editId = mintEditId();
+      const result = await versions.userEdit(id, 'resync', {
+        staleMessage: resyncStaleMessage(state.name),
+        precheck: async () => {
+          // Inside the chain: the root, the system and its files as they are now.
+          if (!samePath(settings.root(), source.root)) throw new ApiError('conflict', RESYNC_ROOT_CHANGED_MESSAGE);
+          const dir = await systems.dir(id);
+          const current = await systems.readState(id);
+          if (current.home?.kind === 'repo') return notBuilt();
+          const plan = await planResync(id, dir, current, request, source).catch(async (error: unknown) => {
+            throw await asUserError(id, dir, 'resync', error);
+          });
+          return { plan, run: newRun(id, dir, resyncStaleMessage(current.name), { resync: true }) };
+        },
+        apply: async ({ plan, run }) => {
+          try {
+            for (const segments of plan.folders) await ensureFolder(run.dir, segments);
+          } catch (error) {
+            throw await asUserError(id, run.dir, 'resync', error);
+          }
+          const done = await executeSteps<SystemStep, Done>(plan.steps, {
+            forward: (step) => runStep(run, step),
+            reverse: (undo) => runReverse(run, undo.reverse),
+            asUserError: (error) => asUserError(id, run.dir, 'resync', error),
+            rollbackFailed: (undo) => {
+              log.error('systems.edits.rollback-failed', { system: id, op: 'resync', step: undo.reverse.kind });
+              announce(run);
+              return new ApiError('internal', resyncPartWayMessage);
+            },
+            rolledBack: (step, cause) => log.warn('systems.edits.rolled-back', { system: id, op: 'resync', step: step.kind, code: cause instanceof ApiError ? cause.code : 'error' }),
+          });
+          announce(run);
+          // The undo record: every file step, and the state part (provenance and the code source line).
+          let undoable = false;
+          const records = done.map((one) => one.record);
+          const steps = records.every((one): one is SystemUndoStep[] => one !== null) ? records.flat() : [];
+          if (steps.length > 0 && steps.length <= UNDO_STEPS_MAX) {
+            try {
+              const at = now();
+              const after = await editsFile.update(id, run.dir, (file) => appendSystemEdit(file, { editId, at: at.toISOString(), label: plan.label, bodies: [], steps, resync: plan.undoState }, at.getTime()));
+              undoable = after.undo.some((one) => one.id === editId);
+            } catch (error) {
+              // The re-sync stands; the notice just has no Undo ("Before re-sync" restores it).
+              log.warn('systems.edits.record-failed', { system: id, op: 'resync', code: error instanceof ApiError ? error.code : (codeOf(error) ?? 'error') });
+            }
+          }
+          try {
+            // On the chain already (the system's lock): `updateStateLocked` takes no lock of its own.
+            await systems.updateStateLocked(id, (current) => ({ ...current, provenance: plan.provenance, sources: { ...current.sources, code: plan.code } }));
+          } catch (error) {
+            // The values stand; the next review compares against the provenance as it was.
+            log.warn('systems.edits.provenance-failed', { system: id, code: error instanceof ApiError ? error.code : (codeOf(error) ?? 'error') });
+          }
+          const response: Omit<SystemResyncResponse, 'version' | 'coalesced'> = {
+            edit: { id: editId, label: plan.label, ...(undoable ? {} : { detail: RESYNC_UNDO_NOT_KEPT_NOTICE }), files: [...run.files].sort(), undoable },
+            stamps: run.stamps,
+            counts: plan.counts,
+            ...(plan.directoryChanged ? { directoryChanged: true } : {}),
+          };
+          return { response, written: run.written };
+        },
+      });
+      // Outside the chain: `settleRevision` takes the store lock itself.
+      await settle(id, true);
+      log.info('systems.edits.resynced', { system: id, ...result.response.counts });
+      return { ...result.response, version: result.version === null ? null : toSummary(result.version), coalesced: result.coalesced };
+    },
+
     async undo(id, editId) {
       if (!EDIT_ID_PATTERN.test(editId)) throw new ApiError('bad-request', 'That is not an edit id.');
       const state = await systems.readState(id);
@@ -660,7 +1005,8 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
           const file = await editsFile.read(id, dir);
           const record = findUndo(file, editId, now().getTime());
           if (record === null) throw new ApiError('not-found', UNDO_GONE);
-          const run = newRun(id, dir, UNDO_STALE_MESSAGE);
+          // A re-sync's record may name the brand files it copied (validated when edits.json is read).
+          const run = newRun(id, dir, UNDO_STALE_MESSAGE, { resync: true });
           await checkUndoGuards(run, record).catch(async (error: unknown) => {
             throw await asUserError(id, dir, 'undo', error);
           });
@@ -693,7 +1039,8 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
           try {
             const after = await fingerprintsOf(id);
             await systems.updateStateLocked(id, (current) => {
-              const next = rerecord(current, before, after);
+              const restored = record.resync === undefined ? current : withResyncUndone(current, record.resync);
+              const next = rerecord(restored, before, after) ?? (record.resync === undefined ? null : restored);
               stateChanged = next !== null;
               return next;
             });
@@ -714,6 +1061,7 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
       await editsFile.update(id, dir, (file) => clearLedger(file, upTo));
     },
   };
+  return service;
 };
 
 // ---- wiring (the routes share one instance per context) ----
@@ -730,6 +1078,7 @@ export const ensureSystemEditService = (ctx: ServiceContext): SystemEditService 
     selfWrites: ctx.selfWrites,
     settings: ctx.settings,
     log: ctx.log,
+    scans: { resyncSource: (scanId, systemId) => ensureScanJobs(ctx).resyncSource(scanId, systemId) },
   });
   instances.set(ctx, created);
   return created;

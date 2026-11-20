@@ -1,23 +1,24 @@
-// Phase 2.5 system hand edits (documentation/specs/phase-2-5-technical.md §3.1, §5.3, §6.2):
-// POST /systems/:id/edits, POST /systems/:id/edits/:eid/undo, POST /systems/:id/hand-edits/clear.
+// Phase 2.5 system hand edits (documentation/specs/phase-2-5-technical.md §3.1, §5.3, §6.2, §6.3):
+// POST /systems/:id/edits, POST /systems/:id/edits/:eid/undo, POST /systems/:id/hand-edits/clear,
+// POST /systems/:id/resync.
 //
 // Behind the router's bearer check and body cap. Every handler resolves the system first through
 // `systems.dir(id)` (id pattern, containment, no links; 400 for a bad id, 404 when it is gone),
 // then validates its params and body; no route takes a path. `systems/edits.ts` does the rest.
 // Only the page and the rail call these, from Design Chamber's own controls (E1).
 //
-// POST /systems/:id/resync stays a stub until T4/T13 (built from the scan job's memory, §6.3).
+// POST /systems/:id/resync (internal home, §6.3): the body names a scan, the stamp the page read and
+// token names and project paths only; the values come from the scan job's memory. A repo-backed
+// system's re-sync (`{ scanId, stamp }`, all or nothing, §7.4) is T13's and answers not built yet.
 
-import type { OkResponse, RouteKey, SystemEditResponse, SystemUndoEditResponse } from '../../shared/api.ts';
+import type { OkResponse, SystemEditResponse, SystemResyncResponse, SystemUndoEditResponse } from '../../shared/api.ts';
 import { EDIT_ID_PATTERN } from '../../shared/limits.ts';
 import type { ServiceContext } from '../context.ts';
 import { CLEAR_RANGE_MESSAGE } from '../edits/file.ts';
 import { ApiError, type Router } from '../http.ts';
-import { ensureSystemEditService, parseSystemEditRequest } from '../systems/edits.ts';
-import { registerNotBuilt } from '../systems/not-built.ts';
+import { ensureSystemEditService, parseSystemEditRequest, parseSystemResyncRequest } from '../systems/edits.ts';
+import { notBuilt } from '../systems/not-built.ts';
 import { ensureSystemStore } from '../systems/store.ts';
-
-const NOT_BUILT_KEYS: readonly RouteKey[] = ['POST /systems/:id/resync'];
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -26,7 +27,7 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => type
  * - 'POST /systems/:id/edits'
  * - 'POST /systems/:id/edits/:eid/undo'
  * - 'POST /systems/:id/hand-edits/clear'
- * - 'POST /systems/:id/resync' (not built yet: T4/T13)
+ * - 'POST /systems/:id/resync'
  */
 export function registerSystemEditRoutes(router: Router, ctx: ServiceContext): void {
   router.on('POST /systems/:id/edits', async ({ params, body }): Promise<SystemEditResponse> => {
@@ -50,5 +51,11 @@ export function registerSystemEditRoutes(router: Router, ctx: ServiceContext): v
     return { ok: true };
   });
 
-  registerNotBuilt(router, NOT_BUILT_KEYS);
+  router.on('POST /systems/:id/resync', async ({ params, body }): Promise<SystemResyncResponse> => {
+    const systems = ensureSystemStore(ctx);
+    await systems.dir(params.id);
+    // T13: the repo flavour takes `{ scanId, stamp }` only and has no Undo (§7.4, AD-33).
+    if ((await systems.readState(params.id)).home?.kind === 'repo') return notBuilt();
+    return ensureSystemEditService(ctx).resync(params.id, parseSystemResyncRequest(body));
+  });
 }

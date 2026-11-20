@@ -121,10 +121,12 @@ const BUILT: ReadonlySet<RouteKey> = new Set<RouteKey>([
   // T6: test/service/systems/board-routes.test.ts.
   'GET /systems/:id/board',
   'GET /systems/:id/board/chunk',
-  // T3: test/service/systems/system-edits-routes.test.ts (re-sync stays a stub until T4/T13).
+  // T3: test/service/systems/system-edits-routes.test.ts.
   'POST /systems/:id/edits',
   'POST /systems/:id/edits/:eid/undo',
   'POST /systems/:id/hand-edits/clear',
+  // T9: test/service/systems/resync.test.ts (the repo flavour stays not built until T13).
+  'POST /systems/:id/resync',
   // T4: test/service/systems/extract-routes.test.ts.
   'POST /system-scans',
   'GET /system-scans/:scanId',
