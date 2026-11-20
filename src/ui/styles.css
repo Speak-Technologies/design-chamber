@@ -4919,3 +4919,337 @@ button.dc-sp-value:focus-visible {
 .dc-resync .dc-sheet-body[inert] {
   opacity: 0.6;
 }
+
+/* ---- Phase 2.5 U6: a repo-backed design system ---- */
+
+/* The panel's first line: the values are read only here, said once */
+.dc-syspg-readonly {
+  display: block;
+  margin: var(--dc-s2) var(--dc-s4);
+  padding: var(--dc-s2) var(--dc-s3);
+  border-radius: var(--dc-r);
+  background: color-mix(in srgb, var(--oc-info) 9%, transparent);
+  color: var(--oc-fg);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.dc-syspg-readonly strong {
+  font-weight: 600;
+}
+.dc-syspg-railliving {
+  display: flex;
+  margin: 0 var(--dc-s4) var(--dc-s2);
+}
+
+/* Banner stacking: two at most, the rest under "+N more" */
+.dc-banner-more {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+}
+.dc-banner-more-toggle {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--dc-s1);
+  min-height: 28px;
+  padding: 2px var(--dc-s2);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: none;
+  color: var(--oc-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.dc-banner-more-toggle:hover {
+  background: var(--oc-hover);
+  color: var(--oc-fg);
+}
+.dc-banner-more-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-banner-more-chev {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-1px) rotate(-45deg);
+  transition: transform 0.12s ease;
+}
+.dc-banner-more-toggle[aria-expanded='true'] .dc-banner-more-chev {
+  transform: translateY(-2px) rotate(45deg);
+}
+.dc-banner-more-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+}
+.dc-banner-more-body[hidden] {
+  display: none;
+}
+
+/* The repo page's Overview */
+.dc-syspg-repo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  margin: var(--dc-s2) var(--dc-s4) var(--dc-s3);
+}
+.dc-syspg-drift,
+.dc-syspg-landed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+}
+.dc-syspg-landed {
+  padding: var(--dc-s2) var(--dc-s3);
+  border-radius: var(--dc-r);
+  background: color-mix(in srgb, var(--oc-warning-text) 10%, transparent);
+}
+.dc-syspg-landed .dc-syspg-drift-line {
+  color: var(--dc-warning-text);
+}
+.dc-syspg-drift-line {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.dc-syspg-drift-actions {
+  display: flex;
+  margin-top: var(--dc-s1);
+}
+
+/* The living-page card */
+.dc-living {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+  min-width: 0;
+  padding: var(--dc-s3);
+  border: 1px solid var(--dc-hair);
+  border-radius: var(--dc-r);
+  background: var(--oc-bg);
+}
+.dc-living-head {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-living-title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.dc-living-badge {
+  display: inline-flex;
+  margin-left: auto;
+  min-width: 0;
+}
+.dc-living-line,
+.dc-living-path,
+.dc-living-why,
+.dc-living-secret {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.dc-living-secret {
+  color: var(--dc-warning-text);
+}
+.dc-living-path {
+  font-family: var(--oc-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+}
+.dc-living-why {
+  font-size: 0.75rem;
+}
+.dc-living-reasons {
+  margin: 0;
+  padding-left: var(--dc-s4);
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.dc-living-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dc-s2);
+  margin-top: var(--dc-s2);
+}
+.dc-living-tint.oc-sdk-btn {
+  background: color-mix(in srgb, var(--oc-primary) 14%, transparent);
+  color: var(--oc-fg);
+  border-color: color-mix(in srgb, var(--oc-primary) 30%, transparent);
+}
+.dc-living-tint.oc-sdk-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--oc-primary) 22%, transparent);
+}
+.dc-living-tint.oc-sdk-btn:disabled {
+  background: none;
+  border-color: var(--dc-hair);
+}
+.dc-living-fonts {
+  margin-top: var(--dc-s2);
+  padding-top: var(--dc-s2);
+  border-top: 1px solid var(--dc-hair);
+}
+.dc-living[data-regenerating='true'] .dc-living-line {
+  color: var(--oc-muted);
+}
+
+/* The living-page preview, in the board's place */
+.dc-lpv {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  background: var(--oc-bg);
+}
+.dc-lpv[hidden] {
+  display: none;
+}
+.dc-syspg[data-previewing='true'] .dc-sys-board,
+.dc-syspg[data-previewing='true'] .dc-syspg-built {
+  display: none;
+}
+.dc-lpv-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  min-height: 44px;
+  padding: var(--dc-s1) var(--dc-s3);
+  border-bottom: 1px solid var(--dc-hair);
+}
+.dc-lpv-title {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-lpv-band {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dc-s1) var(--dc-s2);
+  padding: var(--dc-s2) var(--dc-s3);
+  border-bottom: 1px solid var(--dc-hair);
+  background: color-mix(in srgb, var(--oc-info) 12%, transparent);
+  color: color-mix(in srgb, var(--oc-info-text) 68%, var(--oc-fg));
+  font-size: 0.8125rem;
+}
+.dc-lpv-note {
+  flex: none;
+  margin: 0;
+  padding: var(--dc-s2) var(--dc-s3) 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+.dc-lpv-frame {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 160px;
+  margin: var(--dc-s2) var(--dc-s3) var(--dc-s3);
+  overflow: hidden;
+  border: 1px solid var(--dc-hair);
+  border-radius: var(--dc-r);
+  background: var(--oc-bg);
+}
+.dc-lpv-frame .dc-frame {
+  pointer-events: auto;
+}
+.dc-lpv-frame[data-state='idle'] .dc-frame,
+.dc-lpv-frame[data-state='loading'] .dc-frame,
+.dc-lpv-frame[data-state='missing'] .dc-frame,
+.dc-lpv-frame[data-state='error'] .dc-frame {
+  visibility: hidden;
+}
+
+/* Being built in chat: no snapshot to draw yet */
+.dc-syspg-built {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--dc-s2);
+  min-height: 0;
+  padding: var(--dc-s5);
+}
+.dc-syspg-built[hidden] {
+  display: none;
+}
+.dc-syspg-built p {
+  margin: 0;
+  max-width: 42ch;
+}
+.dc-syspg-built-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.dc-syspg-built-wait {
+  font-weight: 500;
+}
+.dc-syspg-built-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dc-s2);
+  margin-top: var(--dc-s2);
+}
+.dc-syspg[data-surface='panel'] .dc-syspg-built {
+  padding: var(--dc-s3);
+}
+
+/* The versions drawer of a repo: no Restore, so the way back is said once */
+.dc-versions-foot {
+  margin: 0;
+  padding: var(--dc-s3) var(--dc-s4);
+  border-top: 1px solid var(--dc-hair);
+  font-size: 0.8125rem;
+}
+
+/* The repo re-sync sheet */
+.dc-resync-repoint {
+  margin: 0;
+  padding: var(--dc-s2) var(--dc-s3);
+  border-radius: var(--dc-r);
+  background: color-mix(in srgb, var(--oc-info) 9%, transparent);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.dc-resync-rownote {
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.dc-resync-row[data-repo-row='true'] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--dc-s2);
+}
+.dc-resync-row[data-repo-row='true'] .dc-resync-values {
+  flex-basis: 100%;
+}
+.dc-resync .dc-sheet-body {
+  overflow: auto;
+  min-height: 0;
+}
+.dc-resync-row[data-repo-row='true'] .dc-resync-values {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  padding-left: 0;
+}

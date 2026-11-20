@@ -23,6 +23,8 @@ export type SystemVersionsOptions = {
   onBackToCurrent: () => void;
   restoring: () => string | null;
   onRestore: (version: Version) => Promise<void>;
+  /** The repo's name for a repo-backed system: its versions can be viewed and compared but not restored (its own history is the way back). */
+  repo?: string;
 };
 
 export type SystemVersionsHandle = { el: HTMLElement; refresh: () => void; load: () => Promise<void>; focusRestore: (id: string) => void; dispose: () => void };
@@ -80,7 +82,7 @@ export const mountSystemVersions = (options: SystemVersionsOptions): SystemVersi
       { class: 'dc-version-actions' },
       btn({ label: active && !viewing?.compare ? 'Viewing' : 'View', variant: 'outline', size: 'xs', pressed: active && !viewing?.compare, onClick: () => { options.onView(row.id, row.n); void loadDiff(row.id); } }).el,
       btn({ label: active && viewing?.compare ? 'Comparing' : 'Compare', variant: 'outline', size: 'xs', icon: 'compare', pressed: active && viewing?.compare, onClick: () => { options.onCompare(row.id, row.n); void loadDiff(row.id); } }).el,
-      row.current ? null : restoreButton(row, options.restoring()),
+      row.current || options.repo !== undefined ? null : restoreButton(row, options.restoring()),
     );
     const changed =
       active && diff && diff.id === row.id
@@ -131,6 +133,7 @@ export const mountSystemVersions = (options: SystemVersionsOptions): SystemVersi
         ? h('div', { class: 'dc-empty' }, h('p', { class: 'dc-empty-title' }, 'No versions yet'), h('p', { class: 'dc-empty-body' }, 'A version is saved before each of your edits and after each agent turn.'))
         : h('ul', { class: 'dc-version-list' }, dirtyRow, ...rows.map((row) => rowEl(row, viewing)));
     el.append(...(notice ? [notice] : []), ...(back ? [h('div', { class: 'dc-versions-bar' }, back.el)] : []), list);
+    if (options.repo !== undefined) el.append(h('p', { class: 'dc-muted dc-versions-foot' }, `Repo changes are undone in ${options.repo}’s history, not here.`));
   }
 
   paint();

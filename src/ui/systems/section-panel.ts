@@ -31,7 +31,7 @@ import { COLOUR_GROUP_LABEL, NOT_COVERED, isCovered, tokensOf } from '../model/s
 export type SectionContext = {
   detail: SystemDetail;
   pending: PendingMap;
-  /** Why values can't be edited right now (an old version is on show, the system lives in a repo), or null. */
+  /** Why values can't be edited right now (an old version is on show), `''` for a repo's quiet read-only values, or null. */
   locked: string | null;
   selectedEntry: string | null;
   /** Put a change in the pending map; `null` drops the change for that key. */
@@ -75,13 +75,16 @@ type FieldOptions = {
 const fieldEditor = (options: FieldOptions): HTMLElement => {
   const shown = options.pending ?? options.saved;
   const dirty = options.pending !== null;
-  const root = h('div', { class: 'dc-sp-field', 'data-dirty': dirty ? 'true' : 'false', 'data-locked': options.lock ? 'true' : 'false' });
+  const root = h('div', { class: 'dc-sp-field', 'data-dirty': dirty ? 'true' : 'false', 'data-locked': options.lock !== null ? 'true' : 'false' });
   const problem = h('p', { class: 'dc-sp-problem', role: 'alert', hidden: true });
 
   const display = (): void => {
     root.replaceChildren();
-    if (options.lock) {
-      root.append(h('span', { class: `dc-sp-value dc-sp-value-locked${options.mono ? ' dc-mono' : ''}`, title: options.lock }, shown ?? 'Not set'), h('span', { class: 'dc-sp-lock' }, options.lock));
+    if (options.lock !== null) {
+      // A repo's values are read only and say so once, at the top of the panel: the empty lock is quiet (no sentence per value).
+      root.append(h('span', { class: `dc-sp-value dc-sp-value-locked${options.mono ? ' dc-mono' : ''}`, title: options.lock === '' ? null : options.lock }, shown ?? 'Not set'));
+      if (options.lock !== '') root.append(h('span', { class: 'dc-sp-lock' }, options.lock));
+      root.dataset.quiet = options.lock === '' ? 'true' : 'false';
       return;
     }
     const button = h(
@@ -186,7 +189,9 @@ const wrapRow = (ctx: SectionContext, entry: string | null, children: Array<HTML
   return row;
 };
 
-const labelled = (label: string, control: HTMLElement): HTMLElement => h('div', { class: 'dc-sp-labelled' }, h('span', { class: 'dc-sp-label' }, label), control);
+/** A quietly read-only field with nothing in it has nothing to show, so its label goes too. */
+const labelled = (label: string, control: HTMLElement): HTMLElement | null =>
+  control.dataset.quiet === 'true' && control.textContent === 'Not set' ? null : h('div', { class: 'dc-sp-labelled' }, h('span', { class: 'dc-sp-label' }, label), control);
 
 // ---- Tokens ----
 
@@ -227,7 +232,7 @@ const tokenRow = (ctx: SectionContext, token: SystemToken): HTMLElement => {
     );
   });
   const preview = isColour ? swatch(ctx.pending.get(tokenKey(token.name, 'light'))?.kind === 'token' ? (ctx.pending.get(tokenKey(token.name, 'light')) as { value: string }).value : (token.light?.text ?? null)) : null;
-  const remove = ctx.locked
+  const remove = ctx.locked !== null
     ? null
     : iconBtn({ icon: 'trash', label: `Remove ${token.name}`, size: 'sm', onClick: () => ctx.removeToken(token.name) });
   const flags = h('span', { class: 'dc-sp-flags' });

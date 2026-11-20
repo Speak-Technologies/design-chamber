@@ -733,7 +733,6 @@ export const createFakeBackend = (): FakeBackend => {
       get(params.slug);
       return { path: `C:\\Users\\you\\Downloads\\${params.slug}${body.format === 'zip' ? '.zip' : '.html'}`, bytes: 184_320, format: body.format };
     },
-    'POST /reveal': () => ({ ok: true }),
     'GET /presets': () => ({
       presets: [
         { id: 'minimal-saas', name: 'Minimal SaaS', bestFor: 'dashboards, settings' },

@@ -9,6 +9,7 @@
 import { mountCheckbox, mountSpinner, type CheckboxHandle } from '@openchamber/sdk/ui';
 
 import type { CodeResyncReview, ResyncReview, SystemResyncResponse } from '../../shared/api.ts';
+import type { SystemDetail } from '../../shared/types.ts';
 import { resyncStampOf } from '../../shared/system-json.ts';
 import { toServiceError } from '../../guest/service-client.ts';
 import { createScope, h, nextId } from '../components/dom.ts';
@@ -63,6 +64,8 @@ export type RepoReviewContext = {
   body: HTMLElement;
   foot: HTMLElement;
   close: () => void;
+  /** Read the folder again (the apply answered stale). */
+  scanAgain: () => void;
 };
 
 export type ResyncSheetOptions = {
@@ -72,17 +75,24 @@ export type ResyncSheetOptions = {
   directory: string;
   onApplied: (result: ResyncApplied) => void;
   repoReview?: (context: RepoReviewContext) => void;
+  /** The sheet's title and subtitle, when the repo flavour words them itself ("Re-sync Acme from shop"). */
+  title?: string;
+  subtitle?: string | null;
+  /** What the system's files look like right now, as the apply expects it; a repo's is its snapshot's tree hash. */
+  stampOf?: (detail: SystemDetail) => string;
+  /** Open on the folder box (the repo can't be read) instead of scanning at once. */
+  askFolder?: boolean;
 };
 
-type Phase = 'scanning' | 'review' | 'applying' | 'matches' | 'stale' | 'folder' | 'failed' | 'root-changed' | 'unsupported';
+type Phase = 'ask-folder' | 'scanning' | 'review' | 'applying' | 'matches' | 'stale' | 'folder' | 'failed' | 'root-changed' | 'unsupported';
 
 export const openResyncSheet = (hostEl: HTMLElement, options: ResyncSheetOptions): { close: () => void } => {
   const scope = createScope();
   let closed = false;
   const sheet = openSheet(hostEl, {
-    title: `Re-sync ${options.systemName}`,
+    title: options.title ?? `Re-sync ${options.systemName}`,
     variant: 'dialog',
-    subtitle: sheetSubtitle(options.systemName),
+    ...(options.subtitle === null ? {} : { subtitle: options.subtitle ?? sheetSubtitle(options.systemName) }),
     onClose: () => {
       closed = true;
       cancelScan();
@@ -141,7 +151,7 @@ export const openResyncSheet = (hostEl: HTMLElement, options: ResyncSheetOptions
       // The stamp is what the system's files look like right now; the service refuses the apply if they change first.
       const detail = await client.call('GET /systems/:id', { params: { id: options.id } });
       if (mine !== scanTicket) return;
-      stamp = resyncStampOf(detail.stamps);
+      stamp = options.stampOf ? options.stampOf(detail) : resyncStampOf(detail.stamps);
       const started = await client.call('POST /system-scans', { body: { directory: folder, systemId: options.id } });
       if (mine !== scanTicket) {
         client.call('DELETE /system-scans/:scanId', { params: { scanId: started.scanId } }).catch(() => undefined);
@@ -178,7 +188,7 @@ export const openResyncSheet = (hostEl: HTMLElement, options: ResyncSheetOptions
               message = '';
               phase = 'unsupported';
               paint();
-              options.repoReview({ review: answer.review, scanId: started.scanId, stamp, body: sheet.body, foot: sheet.foot, close: sheet.close });
+              options.repoReview({ review: answer.review, scanId: started.scanId, stamp, body: sheet.body, foot: sheet.foot, close: sheet.close, scanAgain: () => void scan(directory) });
               return;
             }
             message = `${options.systemName} lives in a project. Ask the agent to update it from the code.`;
@@ -293,6 +303,11 @@ export const openResyncSheet = (hostEl: HTMLElement, options: ResyncSheetOptions
     sheet.foot.replaceChildren();
     const system = options.systemName;
 
+    if (phase === 'ask-folder') {
+      sheet.body.append(folderForm(directory));
+      sheet.foot.append(done('Not now'));
+      return;
+    }
     if (phase === 'scanning') {
       scanningText = h('div', { class: 'dc-resync-running', role: 'status' });
       sheet.body.append(scanningText);
@@ -479,6 +494,9 @@ export const openResyncSheet = (hostEl: HTMLElement, options: ResyncSheetOptions
     if (busy) applyButton.set({ loading: true, disabled: true });
   }
 
-  void scan(directory);
+  if (options.askFolder) {
+    phase = 'ask-folder';
+    paint();
+  } else void scan(directory);
   return { close: sheet.close };
 };

@@ -7,6 +7,8 @@ import type {
   AddSystemAssetResponse,
   AssetsFromFolderResponse,
   CodeResyncReview,
+  LivingPageResponse,
+  RevealBody,
   CreateSystemResponse,
   CreateUploadResponse,
   DeleteSystemResponse,
@@ -34,7 +36,7 @@ import type {
   VersionListResponse,
   OkResponse as Ok,
 } from '../../../src/shared/api.ts';
-import { CHIP_PROVIDER_ID, type ChangeEvent, type SystemDetail, type SystemSection, type SystemSummary, type SystemToken, type VersionSummary } from '../../../src/shared/types.ts';
+import { CHIP_PROVIDER_ID, type ChangeEvent, type RepoResyncReview, type SystemDetail, type SystemSection, type SystemSummary, type SystemToken, type VersionSummary } from '../../../src/shared/types.ts';
 import { SYSTEM_NAME_MAX, SYSTEMS_MAX } from '../../../src/shared/limits.ts';
 import { resyncStampOf } from '../../../src/shared/system-json.ts';
 import { ServiceError } from './service-error.ts';
@@ -163,6 +165,26 @@ const SAMPLE_REVIEW: CodeResyncReview = {
   ],
   partial: false,
 };
+const SAMPLE_REPO_REVIEW: RepoResyncReview = {
+  kind: 'repo',
+  directory: TIDEPOOL,
+  directoryChanged: false,
+  folderFound: true,
+  tokens: {
+    changed: [
+      { name: '--brand', mode: 'light', from: '#2f6f6a', to: '#2a6b66' },
+      { name: '--brand', mode: 'dark', from: '#6fc2ba', to: '#7ad0c7' },
+      { name: '--text-muted', mode: 'light', from: '#5d6a68', to: '#566361' },
+    ],
+    added: ['--accent', '--space-8'],
+    removed: ['--danger'],
+    totals: { changed: 3, added: 2, removed: 1 },
+  },
+  files: { changed: ['design-system/overview.md', 'design-system/notes/voice.md'], added: ['design-system/notes/motion.md'], removed: [] },
+  livingPageFound: true,
+  refused: 0,
+  skipped: [{ path: 'design-system/fonts/Inter-Black.woff2', reason: 'larger than 1 MB' }],
+};
 const ADDED_VALUES: Record<string, string> = { '--accent': '#d9822b', '--space-8': '32px' };
 
 const LIVING_SENTENCE: Record<NonNullable<SystemSummary['livingPage']>, string> = {
@@ -288,6 +310,10 @@ export type FakeSystems = {
     'POST /systems/chip': (req: { body: SystemChipBody }) => SystemChipResponse;
     'GET /system-builds/:ticket': (req: Req) => SystemBuildTicketResponse;
     'POST /systems/:id/resync': (req: Req & { body: SystemResyncBody }) => SystemResyncResponse;
+    'GET /systems/:id/living-page': (req: Req) => LivingPageResponse;
+    'GET /systems/:id/living-page/render': (req: Req & { query: { which?: string; scheme?: string } }) => RenderMeta;
+    'GET /systems/:id/living-page/render/chunk': (req: Req & { query: { key?: string } }) => RenderChunkResponse;
+    'POST /reveal': (req: { body: RevealBody }) => OkResponse;
     'GET /systems/:id': (req: Req) => SystemDetail;
     'POST /systems/:id/edits': (req: Req & { body: SystemEditRequest }) => SystemEditResponse;
     'POST /systems/:id/edits/:eid/undo': (req: Req) => SystemUndoEditResponse;
@@ -331,6 +357,14 @@ export type FakeSystems = {
     setCoverage: (id: string, coverage: SystemDetail['coverage']) => void;
     /** Make the system's detail repo-backed (read only) with this living-page state (`null` = not judged yet). */
     setRepoHome: (id: string, state: NonNullable<SystemSummary['livingPage']> | null) => void;
+    /** Change pieces of the system's detail (a shallow merge; `home` merges one level down): banners, drift, landed, snapshot, proposal. */
+    patchDetail: (id: string, patch: Record<string, unknown>) => void;
+    /** Change pieces of the living-page view a repo-backed system answers (a shallow merge; `staged` merges one level down, `null` clears it). */
+    patchLiving: (id: string, patch: Record<string, unknown>) => void;
+    /** The review the next repo re-sync scan finds (`null` goes back to the sample). */
+    setRepoResync: (review: RepoResyncReview | null) => void;
+    /** The reveal requests, for a scenario's checks. */
+    revealLog: () => RevealBody[];
     /** What saves, undos, reviews and prompts reached the service. */
     pageLog: () => { saves: SystemEditRequest[]; undos: string[]; reviews: Array<{ section: string; state: string }>; asks: Array<{ purpose: string; text?: string; entry?: string; section?: string; before?: string }>; resyncs: SystemResyncBody[] };
     /** The review the next re-sync scan finds (`null` goes back to the sample). */
@@ -359,6 +393,9 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
   const versions = new Map<string, VersionSummary[]>();
   const pageLog: ReturnType<FakeSystems['hooks']['pageLog']> = { saves: [], undos: [], reviews: [], asks: [], resyncs: [] };
   let resyncReview: CodeResyncReview | null = null;
+  let repoReview: RepoResyncReview | null = null;
+  const livingPatch = new Map<string, Record<string, unknown>>();
+  const revealed: RevealBody[] = [];
   let resyncStale = false;
   let resyncFailure: string | null = null;
   let staleOnce = false;
@@ -380,6 +417,24 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
     detail.status = row.status;
     detail.updated = row.updated;
     return detail;
+  };
+  const detailOfId = (id: string): SystemDetail | undefined => details.get(id);
+  const livingView = (row: SystemSummary): LivingPageResponse => {
+    const detail = detailFor(row);
+    if (detail.home.kind !== 'repo') return { home: 'internal' };
+    const state = detail.livingPage?.state ?? 'missing';
+    const base = {
+      home: 'repo' as const,
+      path: `${detail.home.folder}/index.html`,
+      absolute: `${detail.home.directory}\\${detail.home.folder}\\index.html`,
+      staged: { revision: detail.revision, bytes: 421_000, omitted: [], problem: null, fonts: 'fallback' as const, secrets: [], preview: null },
+      committed: { state, revision: state === 'out-of-date' ? detail.revision - 2 : state === 'missing' ? null : detail.revision, sentence: detail.livingPage?.sentence ?? LIVING_SENTENCE[state], reasons: state === 'unsafe' ? ['A script tag Design Chamber didn’t write.', 'An inline event handler on a button.'] : [] },
+      repoReadable: detail.home.readable,
+      embedFonts: false,
+    };
+    const patch = livingPatch.get(row.id) ?? {};
+    const staged = patch.staged === undefined ? base.staged : patch.staged === null ? null : { ...base.staged, ...(patch.staged as object) };
+    return { ...base, ...patch, staged } as LivingPageResponse;
   };
   const versionsOf = (id: string): VersionSummary[] => {
     let list = versions.get(id);
@@ -502,6 +557,7 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
         scan.polls += 1;
         if (scan.polls <= slowPolls) return { state: 'running', seen: scan.polls * 240 };
         if (/unreadable/i.test(scan.directory)) return { state: 'failed', message: `Design Chamber can’t read ${scan.directory}. Permission denied.` };
+        if (scan.systemId && detailOfId(scan.systemId)?.home.kind === 'repo') return { state: 'done', summary: sampleScan(scan.directory), review: /matches/i.test(scan.directory) ? { ...(repoReview ?? SAMPLE_REPO_REVIEW), directoryChanged: false, tokens: { changed: [], added: [], removed: [], totals: { changed: 0, added: 0, removed: 0 } }, files: { changed: [], added: [], removed: [] }, skipped: [] } : (repoReview ?? SAMPLE_REPO_REVIEW) };
         if (scan.systemId) return { state: 'done', summary: sampleScan(scan.directory), review: /matches/i.test(scan.directory) ? { ...SAMPLE_REVIEW, changed: [], conflicts: [], added: [], removed: [], assets: [] } : (resyncReview ?? SAMPLE_REVIEW) };
         return { state: 'done', summary: /empty/i.test(scan.directory) ? EMPTY_SCAN(scan.directory) : sampleScan(scan.directory) };
       },
@@ -619,6 +675,17 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
           resyncFailure = null;
           throw new ServiceError('internal', message);
         }
+        if (detail.home.kind === 'repo') {
+          if (resyncStale || body.stamp !== (detail.snapshot?.treeHash ?? 'none')) {
+            resyncStale = false;
+            throw new ServiceError('stale', `${row.name} changed after the scan, so nothing was changed. Scan again.`);
+          }
+          const review = repoReview ?? SAMPLE_REPO_REVIEW;
+          detail.snapshot = { at: new Date().toISOString(), by: 'user', tampered: false, treeHash: `tree-${Date.now()}` };
+          stampBump(detail);
+          deps.emit(null, 'system');
+          return { counts: { changed: review.tokens.totals.changed, added: review.tokens.totals.added, removed: review.tokens.totals.removed }, edit: { undoable: false, id: null, detail: null }, version: null } as unknown as SystemResyncResponse;
+        }
         if (resyncStale || body.stamp !== resyncStampOf(detail.stamps)) {
           resyncStale = false;
           throw new ServiceError('stale', `${row.name} changed after the scan, so nothing was changed. Scan again.`);
@@ -667,6 +734,21 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
       },
       'POST /systems/:id/hand-edits/clear': ({ params }) => {
         find(params.id);
+        return { ok: true };
+      },
+      'GET /systems/:id/living-page': ({ params }) => livingView(find(params.id)),
+      'GET /systems/:id/living-page/render': ({ params, query }) => {
+        const row = find(params.id);
+        return { key: `living:${row.id}:${query.which ?? 'staged'}:${query.scheme ?? 'light'}`, chunks: 1, bytes: 2000, title: `${row.name}: living page`, missing: [], blocked: [], external: [], warnings: [] };
+      },
+      'GET /systems/:id/living-page/render/chunk': ({ params, query }) => {
+        const row = find(params.id);
+        const [, , which, scheme] = (query.key ?? '').split(':');
+        const dark = scheme === 'dark';
+        return `<!doctype html><html><head><meta charset="utf-8"><title>${row.name}</title><style>body{margin:0;padding:32px;background:${dark ? '#17191b' : '#fbfaf7'};color:${dark ? '#eef2f1' : '#1d2423'};font:15px system-ui,sans-serif}h1{margin:0 0 6px;font-size:30px}p{max-width:56ch;opacity:.8}.row{display:flex;gap:10px;margin-top:20px}.c{width:90px;height:56px;border-radius:10px;border:1px solid #8884}</style></head><body><h1>${row.name}</h1><p>${which === 'preview' ? 'A preview of the proposed living page.' : 'The living page Design Chamber generated.'}</p><div class="row"><div class="c" style="background:#2f6f6a"></div><div class="c" style="background:#d9822b"></div><div class="c" style="background:#b3402f"></div></div></body></html>`;
+      },
+      'POST /reveal': ({ body }) => {
+        revealed.push(body);
         return { ok: true };
       },
       'GET /systems/:id/board': ({ params, query }) => {
@@ -754,8 +836,24 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
         const label = row.home === 'internal' ? 'shop' : row.home.repo;
         detail.home = { kind: 'repo', directory, label, folder: 'design-system', livingPage: 'design-system/index.html', readable: true, problem: null, lastRead: ago(DAY) };
         detail.editable = false;
+        detail.snapshot = { at: ago(DAY), by: 'agent', tampered: false, treeHash: 'tree-1' };
         detail.livingPage = state === null ? null : { state, sentence: LIVING_SENTENCE[state] };
       },
+      patchDetail: (id, patch) => {
+        const detail = detailFor(find(id));
+        const { home, ...rest } = patch;
+        Object.assign(detail, rest);
+        if (home && typeof home === 'object') detail.home = { ...detail.home, ...home } as SystemDetail['home'];
+        deps.emit(null, 'system');
+      },
+      patchLiving: (id, patch) => {
+        livingPatch.set(id, { ...(livingPatch.get(id) ?? {}), ...patch });
+        deps.emit(null, 'system');
+      },
+      setRepoResync: (review) => {
+        repoReview = review;
+      },
+      revealLog: () => revealed,
       pageLog: () => pageLog,
       setResync: (review) => {
         resyncReview = review;

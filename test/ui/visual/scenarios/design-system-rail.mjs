@@ -103,7 +103,9 @@ const repoFlow = async (h, width, theme) => {
     const pill = await text(p, '.dc-syspg-living');
     h.check(pill === label, `${tag}: the pill reads "${label}" (${pill})`);
     h.check((await text(p, '.dc-syspg-home')).startsWith('Repo · tidepool-web'), `${tag}: the home line names the repo (${await text(p, '.dc-syspg-home')})`);
-    h.check((await text(p, '.dc-syspg-railhint')).includes('lives in tidepool-web'), `${tag}: the hint says where the values live (${await text(p, '.dc-syspg-railhint')})`);
+    h.check((await text(p, '.dc-syspg-readonly')).includes('lives in tidepool-web'), `${tag}: the read-only line says where the values live (${await text(p, '.dc-syspg-readonly')})`);
+    h.check((await count(p, '.dc-syspg-railhint')) === 0, `${tag}: the rail does not say it twice`);
+    h.check((await count(p, '.dc-syspg-repo, .dc-syspg-drift, .dc-living')) === 0, `${tag}: the compact view shows the home line and the living state only`);
     await noEditor(h, p, tag);
     if (state === 'fresh' || state === 'unsafe') await p.shot(tag);
     await p.close();

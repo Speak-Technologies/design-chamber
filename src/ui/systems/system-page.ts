@@ -57,8 +57,13 @@ import {
   type PhoneView,
 } from '../model/system-page-model.ts';
 import { RESYNC_NOTICE_MS } from '../model/resync-model.ts';
+import { REGENERATING_LABEL, livingCard, previewTarget, type LivingActionId, type LivingRepoView } from '../model/living-page-model.ts';
+import { driftLines, landedLine, readOnlyLine, repoHeaderLine, systemBanners, type BannerActionId, type BannerSpec } from '../model/system-home-model.ts';
 import { viewingBanner } from '../model/versions-model.ts';
 import type { WallSelection } from '../wall/wall-types.ts';
+import { renderLivingCard } from './living-card.ts';
+import { mountLivingPreview, type LivingPreviewHandle } from './living-preview.ts';
+import { paintRepoReview } from './repo-review.ts';
 import { openResyncSheet, type ResyncApplied } from './resync-sheet.ts';
 import { sendSystemMessage } from './system-ask.ts';
 import { mountBoard, type BoardHandle } from './system-board.ts';
@@ -133,6 +138,12 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
   let versionsSheet: { close: () => void } | null = null;
   let versions: SystemVersionsHandle | null = null;
   let loadTicket = 0;
+  /** A repo-backed system's living page, as the service last described it. */
+  let living: LivingRepoView | null = null;
+  /** The Embed fonts switch was changed and the page is being generated again. */
+  let regenerating = false;
+  let regenTimer: ReturnType<typeof setTimeout> | null = null;
+  let moreBanners = false;
 
   // ------------------------------------------------------------ the parts
   const notices = createNotices();
@@ -189,13 +200,29 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     onOpenChat: () => void openChat(),
   });
 
+  const preview: LivingPreviewHandle = mountLivingPreview({
+    id,
+    systemName: () => detail?.name ?? 'Design system',
+    repo: () => (detail?.home.kind === 'repo' ? detail.home.label : 'the repo'),
+    onClose: () => {
+      delete el.dataset.previewing;
+      paintPanel();
+    },
+  });
+  askBar.el.before(preview.el);
+  const buildingEl = h('div', { class: 'dc-syspg-built', hidden: true });
+  stage.prepend(buildingEl);
+
   // ------------------------------------------------------------ small helpers
+  /** Why values can't be edited. A repo's are read only and say so once, at the top of the panel, so theirs is empty. */
   const locked = (): string | null => {
     if (viewing) return OLD_VERSION_SENTENCE;
     if (!detail) return 'Loading';
-    if (!detail.editable) return detail.home.kind === 'repo' ? 'This system lives in your project. Change the files there, or ask the agent.' : 'This system can’t be edited here right now.';
+    if (!detail.editable) return detail.home.kind === 'repo' ? '' : 'This system can’t be edited here right now.';
     return null;
   };
+  const repoHome = (): Extract<SystemDetail['home'], { kind: 'repo' }> | null => (detail !== null && detail.home.kind === 'repo' ? detail.home : null);
+  const localeOf = (): string => host.snapshot()?.locale ?? 'en';
   const dirty = (): boolean => pending.size > 0;
   const name = (): string => detail?.name ?? 'This design system';
 
@@ -228,6 +255,16 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
   };
 
   // ------------------------------------------------------------ loading
+  /** The living page's own description; the card keeps the last one when the service can't answer. */
+  const loadLiving = async (system: SystemDetail): Promise<LivingRepoView | null> => {
+    if (system.home.kind !== 'repo') return null;
+    try {
+      const view = await client.call('GET /systems/:id/living-page', { params: { id } });
+      return view.home === 'repo' ? view : null;
+    } catch {
+      return living;
+    }
+  };
   const editingNow = (): boolean => document.activeElement instanceof HTMLElement && document.activeElement.classList.contains('dc-sp-input') && panel.contains(document.activeElement);
   const reload = async (): Promise<void> => {
     loadTicket += 1;
@@ -235,7 +272,10 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     try {
       const next = await client.call('GET /systems/:id', { params: { id } });
       if (disposed || mine !== loadTicket) return;
+      const nextLiving = await loadLiving(next);
+      if (disposed || mine !== loadTicket) return;
       detail = next;
+      living = nextLiving;
       load = 'ready';
       if (!isCovered(next, section) && !expanded.size) section = SYSTEM_SECTIONS.find((candidate) => isCovered(next, candidate)) ?? 'overview';
       expanded.add(AREA_OF_SECTION[section]);
@@ -315,11 +355,13 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
   };
 
   // ------------------------------------------------------------ re-sync
-  /** Only a system kept in Design Chamber with a code source can be re-read, and only on the page (the rail has no value editing). */
-  const canResync = (): boolean => !compact && detail !== null && detail.home.kind === 'internal' && detail.sources.code !== null;
+  /** A system kept in Design Chamber needs a code source to be re-read; a repo's reads its own folder. Only on the page: the rail has no actions. */
+  const canResync = (): boolean => !compact && detail !== null && (detail.home.kind === 'repo' || detail.sources.code !== null);
   const resyncEntry = (): { id: string; label: string; disabled?: boolean; reason?: string } => {
-    const reason = viewing ? OLD_VERSION_SENTENCE : dirty() ? 'Save or discard your changes first.' : null;
-    return reason === null ? { id: 'resync', label: 'Re-sync from code' } : { id: 'resync', label: 'Re-sync from code', disabled: true, reason };
+    const repo = repoHome();
+    const label = repo ? `Re-sync from ${repo.label}` : 'Re-sync from code';
+    const reason = viewing ? OLD_VERSION_SENTENCE : dirty() ? 'Save or discard your changes first.' : repo !== null && !repo.readable ? `${repo.label} can’t be read right now.` : null;
+    return reason === null ? { id: 'resync', label } : { id: 'resync', label, disabled: true, reason };
   };
 
   const resyncedNotice = (result: ResyncApplied): void => {
@@ -358,21 +400,105 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       },
     });
     buttons.push(ask);
-    showEditNotice(result.sentence, response.edit.undoable ? '' : response.edit.detail ?? 'Restore “Before re-sync” from Versions to undo.', buttons, RESYNC_NOTICE_MS);
+    // A repo's re-sync has no Undo: its own history is the way back, and the notice doesn't pretend otherwise.
+    const body = response.edit.undoable || repoHome() !== null ? '' : (response.edit.detail ?? 'Restore “Before re-sync” from Versions to undo.');
+    showEditNotice(result.sentence, body, buttons, RESYNC_NOTICE_MS);
   };
 
-  function startResync(): void {
-    if (!detail || !canResync() || detail.sources.code === null) return;
-    openResyncSheet(sheetHost, {
-      id,
-      systemName: detail.name,
-      directory: detail.sources.code.directory,
-      onApplied: (result) => {
-        resyncedNotice(result);
-        void reload().then(() => board.reload());
-      },
-    });
+  function startResync(choose: { askFolder?: boolean } = {}): void {
+    if (!detail || !canResync()) return;
+    const applied = (result: ResyncApplied): void => {
+      resyncedNotice(result);
+      void reload().then(() => board.reload());
+    };
+    const repo = repoHome();
+    if (repo !== null) {
+      const hasSnapshot = detail.snapshot !== null;
+      const systemName = detail.name;
+      openResyncSheet(sheetHost, {
+        id,
+        systemName,
+        directory: repo.directory,
+        title: hasSnapshot ? `Re-sync ${systemName} from ${repo.label}` : `Read ${systemName} from ${repo.label}`,
+        subtitle: null,
+        stampOf: (current) => current.snapshot?.treeHash ?? 'none',
+        ...(choose.askFolder ? { askFolder: true } : {}),
+        repoReview: (context) => paintRepoReview(context, { id, systemName, repo: repo.label, folder: repo.folder, hasSnapshot, onApplied: applied }),
+        onApplied: applied,
+      });
+      return;
+    }
+    if (detail.sources.code === null) return;
+    openResyncSheet(sheetHost, { id, systemName: detail.name, directory: detail.sources.code.directory, onApplied: applied });
   }
+
+  // ------------------------------------------------------------ the agent, the folder, the living page
+  const askAgent = async (purpose: 'living-page' | 'reconcile' | 'build-continue' | 'ask', extra: { text?: string } = {}): Promise<void> => {
+    try {
+      const outcome = await sendSystemMessage(id, { sessionId: detail?.sessionId ?? null }, { purpose, ...extra });
+      toast('success', askResultText(outcome));
+      void reload();
+    } catch (error) {
+      toast('error', errorText(error));
+    }
+  };
+
+  const revealTarget = async (target: 'repo' | 'living-page'): Promise<void> => {
+    try {
+      await client.call('POST /reveal', { body: { system: id, target } });
+    } catch (error) {
+      toast('error', `Couldn’t open the folder. ${errorText(error)}`);
+    }
+  };
+
+  const openPreview = (): void => {
+    if (!detail || !living) return;
+    const target = previewTarget(living, detail);
+    if (target === null) return;
+    phoneView = 'board';
+    el.dataset.phoneView = phoneView;
+    el.dataset.previewing = 'true';
+    paintMobile();
+    preview.open(target);
+  };
+
+  const stopRegenerating = (): void => {
+    regenerating = false;
+    if (regenTimer !== null) clearTimeout(regenTimer);
+    regenTimer = null;
+  };
+
+  const setEmbedFonts = async (checked: boolean): Promise<void> => {
+    regenerating = true;
+    if (regenTimer !== null) clearTimeout(regenTimer);
+    regenTimer = setTimeout(() => {
+      stopRegenerating();
+      paintPanel();
+    }, 20_000);
+    paintPanel();
+    try {
+      await patch({ livingPage: { embedFonts: checked } });
+      await reload();
+    } catch (error) {
+      stopRegenerating();
+      toast('error', `Couldn’t change that. ${errorText(error)}`);
+      paintPanel();
+    }
+  };
+
+  const livingAction = (action: LivingActionId): void => {
+    if (action === 'ask' || action === 'fix') void askAgent('living-page');
+    else if (action === 'preview') openPreview();
+    else void revealTarget('living-page');
+  };
+
+  const bannerAction = (action: BannerActionId): void => {
+    if (action === 'choose-folder') startResync({ askFolder: true });
+    else if (action === 'resync') startResync();
+    else if (action === 'build-continue') void askAgent('build-continue');
+    else if (action === 'ask-living') void askAgent('living-page');
+    else if (detail?.landed?.sentence) void askAgent('ask', { text: `About what landed: “${detail.landed.sentence}”` });
+  };
 
   const savedNotice = (answer: SystemEditResponse, body: string): void => {
     const buttons: BtnHandle[] = [];
@@ -636,6 +762,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       },
       restoring: () => restore.busyId(),
       onRestore: (version) => restore.restore(version),
+      ...(repoHome() ? { repo: repoHome()?.label ?? '' } : {}),
     });
     sheet.body.append(versions.el);
   };
@@ -651,8 +778,14 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     const title = detail
       ? h('button', { type: 'button', class: 'dc-syspg-title', title: 'Rename', 'aria-label': `${titleText}. Rename`, onClick: () => startRename() }, titleText)
       : h('h1', { class: 'dc-syspg-title' }, titleText);
-    const titleWrap = h('div', { class: 'dc-syspg-titlewrap' }, h('h1', { class: 'dc-syspg-h1' }, title), detail ? statusBadge(detail.status) : null, dirty() ? h('span', { class: 'dc-syspg-unsaved' }, 'Unsaved') : null);
-    const home = detail ? h('p', { class: 'dc-syspg-home dc-muted', title: homeTitle(detail) }, homeLine(detail, sourceText(detail.sources, folderName, (iso) => relativeTime(iso, Date.now(), host.snapshot()?.locale ?? 'en')))) : null;
+    const pencil = detail && !compact ? iconBtn({ icon: 'pencil', label: `Rename ${titleText}`, onClick: () => startRename() }) : null;
+    const titleWrap = h('div', { class: 'dc-syspg-titlewrap' }, h('h1', { class: 'dc-syspg-h1' }, title), pencil, detail ? statusBadge(detail.status) : null, dirty() ? h('span', { class: 'dc-syspg-unsaved' }, 'Unsaved') : null);
+    const repoLine = detail && !compact ? repoHeaderLine(detail) : null;
+    const home = detail
+      ? repoLine !== null
+        ? h('p', { class: 'dc-syspg-home dc-muted', title: repoLine.title }, repoLine.text)
+        : h('p', { class: 'dc-syspg-home dc-muted', title: homeTitle(detail) }, homeLine(detail, sourceText(detail.sources, folderName, (iso) => relativeTime(iso, Date.now(), localeOf()))))
+      : null;
     const living = detail ? livingPagePill(detail) : null;
     const livingEl = living ? h('span', { class: 'dc-syspg-living', title: living.title }) : null;
     if (livingEl && living) mountBadge(livingEl, { label: living.label, tone: living.tone });
@@ -670,6 +803,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
         onClick: () => void toggleReady(),
       });
       if (!compact) tools.append(ready.el);
+      if (!compact && repoHome() !== null) tools.append(btn({ label: 'Reveal', variant: 'outline', size: 'default', icon: 'external', title: `Reveal ${repoHome()?.label ?? 'the repo'} in your file manager`, onClick: () => void revealTarget('repo') }).el);
       if (!compact) tools.append(btn({ label: 'Versions', variant: 'outline', size: 'default', icon: 'history', onClick: () => openVersions() }).el);
       const more = iconBtn({ icon: 'more', label: 'More', onClick: () => undefined });
       attachMenu(
@@ -692,14 +826,76 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     header.append(back, main, tools);
   }
 
+  const bannerOf = (spec: BannerSpec): HTMLElement =>
+    banner({ tone: spec.tone, title: spec.title, body: spec.body, ...(spec.action ? { action: { label: spec.action.label, onClick: () => bannerAction((spec.action as { id: BannerActionId }).id) } } : {}) });
+
   function paintStatic(): void {
     const nodes: HTMLElement[] = [];
-    if (detail?.unreadable) nodes.push(banner({ tone: 'error', title: `${name()} can’t be read`, body: detail.unreadable }));
-    else if (detail && detail.problems.length > 0) nodes.push(banner({ tone: 'warning', title: `${plural(detail.problems.length, 'entry', 'entries')} couldn’t be read`, body: detail.problems.slice(0, 3).map((problem) => problem.message).join(' ') }));
+    if (detail) {
+      // The "changed since you marked it ready" line is a repo page's banner; an internal page says it on its Ready button.
+      const stack = systemBanners({ ...detail, changesToReview: detail.home.kind === 'repo' && detail.changesToReview }, { now: Date.now(), locale: localeOf(), secrets: living?.staged?.secrets ?? [] });
+      const shown = stack.shown;
+      const more = stack.more;
+      nodes.push(...shown.map(bannerOf));
+      if (more.length > 0) {
+        const toggle = h(
+          'button',
+          { type: 'button', class: 'dc-banner-more-toggle', 'aria-expanded': String(moreBanners), 'aria-controls': 'dc-banner-more-body', onClick: () => { moreBanners = !moreBanners; paintStatic(); } },
+          h('span', { class: 'dc-banner-more-chev', 'aria-hidden': 'true' }),
+          `+${more.length} more`,
+        );
+        const rest = h('div', { class: 'dc-banner-more-body', id: 'dc-banner-more-body', hidden: !moreBanners }, ...more.map(bannerOf));
+        nodes.push(h('div', { class: 'dc-banner-more' }, toggle, rest));
+      }
+      if (!detail.unreadable && detail.problems.length > 0) nodes.push(banner({ tone: 'warning', title: `${plural(detail.problems.length, 'entry', 'entries')} couldn’t be read`, body: detail.problems.slice(0, 3).map((problem) => problem.message).join(' ') }));
+    }
     if (viewing) {
       nodes.push(banner({ tone: 'info', title: viewingBanner(viewing.n, viewing.compare), body: OLD_VERSION_SENTENCE, action: { label: 'Back to current', onClick: () => setViewing(null) } }));
     }
     notices.setStatic(nodes);
+  }
+
+  /** The repo page's Overview: the living-page card, then the drift and landed lines. Nothing for a system kept in Design Chamber. */
+  function repoOverview(): HTMLElement | null {
+    if (!detail || repoHome() === null) return null;
+    const out = h('div', { class: 'dc-syspg-repo' });
+    if (living !== null) {
+      const card = livingCard(living, detail, { now: Date.now(), locale: localeOf(), regenerating, locked: viewing ? OLD_VERSION_SENTENCE : dirty() ? 'Save or discard your changes first.' : null });
+      out.append(renderLivingCard(card, { onAction: livingAction, onEmbedFonts: (checked) => void setEmbedFonts(checked) }));
+    }
+    const drift = driftLines(detail);
+    if (drift.sentence !== null || drift.agent !== null) {
+      out.append(
+        h(
+          'div',
+          { class: 'dc-syspg-drift', 'data-testid': 'drift' },
+          drift.sentence === null ? null : h('p', { class: 'dc-syspg-drift-line' }, drift.sentence),
+          drift.unread === null ? null : h('p', { class: 'dc-syspg-drift-line dc-muted' }, drift.unread),
+          drift.agent === null ? null : h('p', { class: 'dc-syspg-drift-line dc-muted' }, drift.agent),
+          drift.canReconcile ? h('div', { class: 'dc-syspg-drift-actions' }, btn({ label: 'Ask the agent to reconcile', variant: 'outline', size: 'sm', icon: 'chat', disabled: viewing !== null, onClick: () => void askAgent('reconcile') }).el) : null,
+        ),
+      );
+    }
+    const landed = landedLine(detail);
+    if (landed !== null) {
+      out.append(
+        h(
+          'div',
+          { class: 'dc-syspg-landed', 'data-testid': 'landed' },
+          h('p', { class: 'dc-syspg-drift-line' }, landed.sentence),
+          h('div', { class: 'dc-syspg-drift-actions' }, btn({ label: landed.action, variant: 'outline', size: 'sm', icon: 'chat', onClick: () => bannerAction('ask-landed') }).el),
+        ),
+      );
+    }
+    return out;
+  }
+
+  /** The rail says only the living page's state; the one thing it can do is show the preview. */
+  function railLiving(): HTMLElement | null {
+    if (!detail || !living || repoHome() === null) return null;
+    const target = previewTarget(living, detail);
+    if (target === null) return null;
+    return h('div', { class: 'dc-syspg-railliving' }, btn({ label: 'Preview living page', variant: 'outline', size: 'sm', icon: 'eye', onClick: () => openPreview() }).el);
   }
 
   function areasView(): HTMLElement {
@@ -757,7 +953,32 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     selectEntry: (entry) => select(section, entry),
   });
 
+  /** A repo-backed system the agent hasn't stamped yet has no snapshot to draw: say where it is and offer the two ways on. */
+  function paintStage(): void {
+    const repo = repoHome();
+    const building = load === 'ready' && detail !== null && repo !== null && detail.snapshot === null;
+    buildingEl.hidden = !building;
+    board.el.hidden = building;
+    buildingEl.replaceChildren();
+    if (!building || detail === null || repo === null) return;
+    const waiting = detail.proposal !== null && detail.proposal.state === 'current';
+    const target = living !== null ? previewTarget(living, detail) : null;
+    buildingEl.append(
+      h('h2', { class: 'dc-syspg-built-title' }, 'Being built in chat'),
+      h('p', { class: 'dc-muted' }, `${detail.name} will show here once the agent has written it to ${repo.label}.`),
+      ...(waiting ? [h('p', { class: 'dc-syspg-built-wait' }, 'The agent is waiting for your answer in chat.')] : []),
+      h(
+        'div',
+        { class: 'dc-syspg-built-actions' },
+        btn({ label: 'Continue in chat', variant: 'outline', icon: 'chat', onClick: () => void continueChat() }).el,
+        btn({ label: 'Re-sync', variant: 'outline', disabled: !canResync() || !repo.readable, title: repo.readable ? undefined : `${repo.label} can’t be read right now.`, onClick: () => startResync() }).el,
+        ...(waiting && target !== null ? [btn({ label: 'Preview living page', variant: 'outline', icon: 'eye', onClick: () => openPreview() }).el] : []),
+      ),
+    );
+  }
+
   function paintPanel(): void {
+    paintStage();
     const scrollTop = panelScroll.scrollTop;
     const focused = document.activeElement instanceof HTMLElement && panel.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
     panelScroll.replaceChildren();
@@ -784,10 +1005,16 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       const progress = reviewProgress(detail);
       const bar = h('span', { class: 'dc-syspg-progress', role: 'img', 'aria-label': progress.text });
       bar.style.setProperty('--dc-progress', `${progress.percent}%`);
+      const readOnly = readOnlyLine(detail);
       panelScroll.append(
         h('div', { class: 'dc-syspg-panelhead' }, h('h2', { class: 'dc-syspg-panel-title' }, 'Sections'), h('span', { class: 'dc-muted' }, progress.text), bar),
         areasView(),
       );
+      const readOnlyEl = readOnly === null ? null : h('p', { class: 'dc-syspg-readonly', 'data-testid': 'read-only' }, h('strong', null, readOnly.lead), ` ${readOnly.rest}`);
+      const railEl = compact ? railLiving() : null;
+      const areas = panelScroll.lastElementChild;
+      if (readOnlyEl !== null) areas?.before(readOnlyEl);
+      if (railEl !== null) areas?.before(railEl);
       if (!compact) {
         const editable = locked() === null;
         panelScroll.append(
@@ -795,6 +1022,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
             'div',
             { class: 'dc-syspg-detail' },
             h('div', { class: 'dc-syspg-detail-head' }, h('h3', { class: 'dc-syspg-detail-title' }, sectionLabel(section)), editable && isCovered(detail, section) ? h('span', { class: 'dc-muted dc-syspg-hint' }, 'Click a value to edit it.') : null),
+            section === 'overview' ? repoOverview() : null,
             renderSection(sectionContext(detail), section),
           ),
         );
@@ -833,7 +1061,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
           btn({ label: control.label, variant: control.emphasis === 'primary' ? 'default' : 'outline', size: 'sm', ...(control.emphasis === 'primary' ? { emphasis: 'primary' as const } : {}), disabled: viewing !== null, onClick: () => void toggleReady() }).el,
           btn({ label: 'Continue in chat', variant: 'outline', size: 'sm', icon: 'chat', onClick: () => void openChat() }).el,
         ),
-        h('p', { class: 'dc-muted dc-syspg-railhint' }, railHint(detail)),
+        ...(detail.home.kind === 'repo' ? [] : [h('p', { class: 'dc-muted dc-syspg-railhint' }, railHint(detail))]),
       );
     };
     if (foot.kind === 'uncovered') {
@@ -977,6 +1205,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       paint();
       return;
     }
+    if (regenerating && mine.some((event) => event.systemChange === 'living-page')) stopRegenerating();
     const files = mine.some((event) => event.systemChange === 'files' && event.origin !== 'user');
     if (refreshTimer !== null) clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
@@ -990,6 +1219,8 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
   scope.add(() => {
     disposed = true;
     if (refreshTimer !== null) clearTimeout(refreshTimer);
+    if (regenTimer !== null) clearTimeout(regenTimer);
+    preview.dispose();
     stopFeed();
     stopSession();
     versionsSheet?.close();
