@@ -114,6 +114,17 @@ export type SystemStoreDeps = {
   rules?: SystemTokenRules;
 };
 
+/**
+ * What a new system is made from beyond its name (§7.2), built by `extract.ts`. `write` runs inside
+ * the create lock on the new, empty folder and must leave tokens.css and system.json there; any
+ * throw moves the half-made folder to the trash like every failed create.
+ */
+export type SystemSeed = {
+  write(systemDir: string): Promise<void>;
+  /** The Code scan's source line and provenance for state.json (re-sync, §7.3). */
+  code?: { source: NonNullable<SystemState['sources']['code']>; provenance: SystemState['provenance'] };
+};
+
 export type SystemStore = {
   /** Every system folder in the current root, over-limit and unusable ones with their sentence; newest first. */
   list(): Promise<SystemSummary[]>;
@@ -123,7 +134,8 @@ export type SystemStore = {
   filesDir(id: string): Promise<string>;
   get(id: string): Promise<SystemDetailSource>;
   detail(id: string): Promise<SystemDetail>;
-  create(input: CreateSystemBody): Promise<{ id: string; system: SystemDetail }>;
+  /** With a seed (a Code scan or a preset, §7.2) its files replace the empty tokens.css and system.json. */
+  create(input: CreateSystemBody, seed?: SystemSeed): Promise<{ id: string; system: SystemDetail }>;
   patch(id: string, body: PatchSystemBody): Promise<PatchSystemResponse>;
   trash(id: string): Promise<DeleteSystemResponse>;
   /** The systems index (§5.1): the last good list, refreshed after `system` and `root` events. */
@@ -675,9 +687,9 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     return target;
   };
 
-  const create = async (input: CreateSystemBody): Promise<{ id: string; system: SystemDetail }> => {
-    // T4: making a system from a code scan (the seeds of §7.2).
-    if (input.code !== undefined) notBuilt();
+  const create = async (input: CreateSystemBody, seed?: SystemSeed): Promise<{ id: string; system: SystemDetail }> => {
+    // A Code scan's values travel only through the seed (`extract.ts` reads them from the job's memory).
+    if (input.code !== undefined && seed?.code === undefined) throw new ApiError('bad-request', 'That scan is no longer available. Scan the folder again.');
     const name = checkSystemName(input.name);
     try {
       await mkdir(settings.root(), { recursive: true });
@@ -703,16 +715,21 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
         throw new ApiError('bad-path', folderErrorSentence(error, systemDir));
       }
       try {
-        await writeFileAtomic(await resolvePlainTarget(systemDir, ['tokens.css'], { allowAbsent: true }), SEED_TOKENS_CSS, { createDirs: false });
-        await writeFileAtomic(await resolvePlainTarget(systemDir, ['system.json'], { allowAbsent: true }), SEED_SYSTEM_JSON, { createDirs: false });
+        if (seed === undefined) {
+          await writeFileAtomic(await resolvePlainTarget(systemDir, ['tokens.css'], { allowAbsent: true }), SEED_TOKENS_CSS, { createDirs: false });
+          await writeFileAtomic(await resolvePlainTarget(systemDir, ['system.json'], { allowAbsent: true }), SEED_SYSTEM_JSON, { createDirs: false });
+        } else {
+          await seed.write(systemDir);
+        }
         const at = now().toISOString();
         const content = await readContent(systemDir);
         const state: SystemState = {
           ...parseSystemState(null, minted, at),
           name,
           revision: { n: 1, treeHash: content.treeHash, at },
+          provenance: seed?.code?.provenance ?? {},
           sources: {
-            code: null,
+            code: seed?.code?.source ?? null,
             brand: input.brand === true ? { files: [] } : null,
             description: input.description === undefined ? null : { text: input.description.text, preset: input.description.preset },
           },
@@ -725,6 +742,7 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
           log.error('systems.create-cleanup-failed', { id: minted, error: trashError instanceof Error ? trashError.message : String(trashError) }),
         );
         log.warn('systems.create-failed', { id: minted, error: error instanceof Error ? error.message : String(error) });
+        if (error instanceof ApiError) throw error; // a seed's own sentence (a link where a folder should be, …)
         throw new ApiError('bad-path', folderErrorSentence(error, systemDir));
       }
       return minted;

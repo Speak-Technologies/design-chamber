@@ -2,7 +2,8 @@
 // create, patch and delete a design system. The router has already checked the bearer token and
 // refused encoded separators in `:id`; every body is validated here before the store sees it,
 // and the store resolves the id through `systems.dir(id)` (pattern, containment, no links).
-// No body carries a path. `GET /systems/:id/living-page` stays T14's (the living page).
+// The only paths a body carries are `code.assets`, and each must be one the named scan offered
+// (`buildSystemSeed`); nothing else is read. `GET /systems/:id/living-page` stays T14's (the living page).
 
 import type {
   CreateSystemBody,
@@ -18,6 +19,7 @@ import { isSystemSection, SYSTEM_REVIEW_NOTE_MAX } from '../../shared/system-jso
 import type { ReviewState, SystemDetail } from '../../shared/types.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
+import { buildSystemSeed } from '../systems/extract.ts';
 import { registerNotBuilt } from '../systems/not-built.ts';
 import { ensureSystemStore } from '../systems/store.ts';
 
@@ -123,7 +125,11 @@ export function registerSystemsRoutes(router: Router, ctx: ServiceContext): void
     return { systems, total: systems.length, max: SYSTEMS_MAX };
   });
 
-  router.on('POST /systems', async ({ body }): Promise<CreateSystemResponse> => ensureSystemStore(ctx).create(validateCreateSystem(body)));
+  router.on('POST /systems', async ({ body }): Promise<CreateSystemResponse> => {
+    const input = validateCreateSystem(body);
+    // The seed (§7.2): the scan's values from the job's memory and the preset's tokens; none for a plain system.
+    return ensureSystemStore(ctx).create(input, await buildSystemSeed(ctx, input));
+  });
 
   router.on('GET /systems/:id', async ({ params }): Promise<SystemDetail> => ensureSystemStore(ctx).detail(params.id));
 

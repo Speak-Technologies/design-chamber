@@ -315,6 +315,88 @@ const scan = (css: string, blocks: TokenBlock[] | null): Declaration[] => {
   return out;
 };
 
+// ---- @font-face rules (Phase 2.5 §7.1) ----
+
+/** One `@font-face` rule as written: each field the raw text (comments dropped, white space collapsed), null when absent. */
+export type FontFaceRule = {
+  family: string | null;
+  weight: string | null;
+  style: string | null;
+  /** Every `url(…)` of `src`, in order, unquoted; never resolved here. */
+  urls: string[];
+  /** Index of the rule's `{`. */
+  open: number;
+};
+
+/** The `name: value` declarations of `[from, to)`, split on `;` outside strings, comments, `url(…)` and brackets. */
+const plainDeclarations = (css: string, from: number, to: number): { name: string; value: string }[] => {
+  const out: { name: string; value: string }[] = [];
+  let start = from;
+  let colon = -1;
+  let depth = 0;
+  const push = (end: number): void => {
+    if (colon >= 0) out.push({ name: normalizePrelude(css.slice(start, colon)).toLowerCase(), value: normalizePrelude(css.slice(colon + 1, end)) });
+  };
+  for (let i = from; i < to; ) {
+    const code = css.charCodeAt(i);
+    if (code === 0x2f && css.charCodeAt(i + 1) === 0x2a) {
+      i = Math.min(commentEnd(css, i), to);
+      continue;
+    }
+    if (code === 0x22 || code === 0x27) {
+      i = Math.min(stringEnd(css, i).end, to);
+      continue;
+    }
+    if (code === 0x75 || code === 0x55) {
+      const url = unquotedUrlEnd(css, i);
+      if (url !== null) {
+        i = Math.min(url.end, to);
+        continue;
+      }
+    }
+    if (code === 0x28 || code === 0x5b) depth += 1;
+    else if (code === 0x29 || code === 0x5d) depth = Math.max(0, depth - 1);
+    else if (code === 0x3a && depth === 0 && colon < 0) colon = i;
+    else if (code === 0x3b && depth === 0) {
+      push(i);
+      start = i + 1;
+      colon = -1;
+    }
+    i += 1;
+  }
+  push(to);
+  return out;
+};
+
+const unquote = (text: string): string => {
+  const trimmed = text.trim();
+  const first = trimmed.charAt(0);
+  return trimmed.length >= 2 && (first === '"' || first === "'") && trimmed.endsWith(first) ? trimmed.slice(1, -1) : trimmed;
+};
+
+const SRC_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s"']*))\s*\)/gi;
+
+/**
+ * Every `@font-face` rule of the file in source order (Phase 2.5 §7.1), found with the same block
+ * rules as `scanTokens`, so a rule inside a comment or a string is not one. Pure: the URLs are text.
+ */
+export const scanFontFaces = (css: string): FontFaceRule[] => {
+  const faces: FontFaceRule[] = [];
+  for (const block of scanTokenBlocks(css)) {
+    const own = block.atRules.at(-1);
+    if (!block.atRule || own === undefined || own.toLowerCase() !== '@font-face') continue;
+    const face: FontFaceRule = { family: null, weight: null, style: null, urls: [], open: block.open };
+    for (const { name, value } of plainDeclarations(css, block.open + 1, block.close)) {
+      if (name === 'font-family') face.family = unquote(value);
+      else if (name === 'font-weight') face.weight = value;
+      else if (name === 'font-style') face.style = value;
+      else if (name === 'src') face.urls = [...value.matchAll(SRC_URL)].map((match) => match[1] ?? match[2] ?? match[3] ?? '').filter((url) => url !== '');
+    }
+    faces.push(face);
+  }
+  return faces.sort((a, b) => a.open - b.open);
+};
+
 // ---- the knob states ----
 
 /** A number as tokens.css writes it: digits with an optional fraction, then a lower-case unit. */

@@ -71,9 +71,9 @@ describe('creating a system', () => {
     assert.deepEqual(await readdir(tmp.at('_systems')), ['first']);
   });
 
-  test('a scan-based create waits for T4 and writes nothing', async (t) => {
+  test('a scan-based create without the scan’s seed is refused and writes nothing', async (t) => {
     const { tmp, store } = await setup(t);
-    await rejectsWith(store.create({ name: 'Acme', code: { scanId: 'sc_abcdefghijklmnop', assets: [] } }), 'internal');
+    await rejectsWith(store.create({ name: 'Acme', code: { scanId: 'sc_abcdefghijklmnop', assets: [] } }), 'bad-request', 'That scan is no longer available. Scan the folder again.');
     assert.equal(await readdir(tmp.at('_systems')).catch(() => null), null);
   });
 });

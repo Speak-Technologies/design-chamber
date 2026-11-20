@@ -4,6 +4,7 @@
 // folder may be anything — a monorepo, or the user's home directory. Only paths and headings leave
 // this module: the agent reads the files itself.
 
+import type { Dirent } from 'node:fs';
 import { open, readdir, stat, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -69,38 +70,62 @@ const SKIP_DIRS: ReadonlySet<string> = new Set(['node_modules', '.git', 'dist', 
 /** Other hidden folders are skipped too, except the two that hold agent rules. */
 const KEEP_HIDDEN_DIRS: ReadonlySet<string> = new Set(['.github', '.cursor']);
 
-const shouldDescend = (name: string): boolean => {
+const shouldDescend = (name: string, keepHidden: ReadonlySet<string>): boolean => {
   const lower = name.toLowerCase();
   if (SKIP_DIRS.has(lower)) return false;
-  return !lower.startsWith('.') || KEEP_HIDDEN_DIRS.has(lower);
+  return !lower.startsWith('.') || keepHidden.has(lower);
 };
 
-type Walk = { files: string[]; truncated: boolean };
+export type WalkOptions = {
+  /** Folder nesting below the root. */
+  depth: number;
+  /** Directory entries looked at in total. */
+  entries: number;
+  /** Checked before each folder is listed: true stops the walk (time cap, or an abort). */
+  expired: () => boolean;
+  /** Hidden folders still walked (lower case); every other dot folder is skipped. */
+  keepHidden?: ReadonlySet<string>;
+  /** A folder not walked, by its absolute path (the Code scan skips the Designs folder inside a project). */
+  skipDir?: (abs: string, rel: string) => boolean;
+  /** One folder's listing; null when it can't be read. The Code scan wraps it in a deadline. */
+  list?: (abs: string) => Promise<Dirent[] | null>;
+};
 
-/** Breadth-first listing of files as `/`-separated relative paths. Symlinks are never followed. */
-const walk = async (root: string, limits: DiscoveryLimits, expired: () => boolean): Promise<Walk> => {
+export type Walk = { files: string[]; truncated: boolean; entries: number };
+
+const listDir = (abs: string): Promise<Dirent[] | null> => readdir(abs, { withFileTypes: true }).catch(() => null);
+
+/**
+ * Breadth-first listing of files as `/`-separated relative paths. Symlinks are never followed: a
+ * Dirent of a link is neither a folder nor a file, so it is neither walked nor listed. Shared by
+ * discovery (its own small caps) and the Code scan (Phase 2.5 §7.1, AD-23: heavier caps).
+ */
+export const walk = async (root: string, options: WalkOptions): Promise<Walk> => {
+  const keepHidden = options.keepHidden ?? new Set<string>();
+  const list = options.list ?? listDir;
   const files: string[] = [];
   const queue: { abs: string; rel: string; depth: number }[] = [{ abs: root, rel: '', depth: 0 }];
   let entries = 0;
   for (let index = 0; index < queue.length; index += 1) {
     const dir = queue[index];
     if (dir === undefined) break;
-    if (expired()) return { files, truncated: true };
-    const dirents = await readdir(dir.abs, { withFileTypes: true }).catch(() => null);
+    if (options.expired()) return { files, truncated: true, entries };
+    const dirents = await list(dir.abs);
     if (dirents === null) continue;
     dirents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const dirent of dirents) {
       entries += 1;
-      if (entries > limits.entries) return { files, truncated: true };
+      if (entries > options.entries) return { files, truncated: true, entries };
       const rel = dir.rel === '' ? dirent.name : `${dir.rel}/${dirent.name}`;
       if (dirent.isDirectory()) {
-        if (dir.depth < limits.depth && shouldDescend(dirent.name)) queue.push({ abs: path.join(dir.abs, dirent.name), rel, depth: dir.depth + 1 });
+        const abs = path.join(dir.abs, dirent.name);
+        if (dir.depth < options.depth && shouldDescend(dirent.name, keepHidden) && options.skipDir?.(abs, rel) !== true) queue.push({ abs, rel, depth: dir.depth + 1 });
       } else if (dirent.isFile()) {
         files.push(rel);
       }
     }
   }
-  return { files, truncated: false };
+  return { files, truncated: false, entries };
 };
 
 /** The first `maxBytes` of a file as text; `null` when it cannot be read. */
@@ -122,7 +147,8 @@ const readHead = async (file: string, maxBytes: number): Promise<string | null> 
 // ---- classification (pure) ----
 
 const depthOf = (relative: string): number => relative.split('/').length - 1;
-const bySpot = (a: string, b: string): number => depthOf(a) - depthOf(b) || (a < b ? -1 : a > b ? 1 : 0);
+/** Shallowest first, then by name: the files nearest the project folder are its own. */
+export const bySpot = (a: string, b: string): number => depthOf(a) - depthOf(b) || (a < b ? -1 : a > b ? 1 : 0);
 const split = (relative: string): { dir: string; base: string } => {
   const lower = relative.toLowerCase();
   const slash = lower.lastIndexOf('/');
@@ -364,7 +390,7 @@ export const discoverProjectRules = async (projectDirectory: string | null | und
   const clock = options.now ?? Date.now;
   const startedAt = clock();
   const expired = (): boolean => clock() - startedAt > limits.timeMs;
-  const walked = await walk(directory, limits, expired);
+  const walked = await walk(directory, { depth: limits.depth, entries: limits.entries, expired, keepHidden: KEEP_HIDDEN_DIRS });
   let truncated = walked.truncated;
   const files = walked.files;
 

@@ -41,7 +41,7 @@ import { ensureSystemStore } from './store.ts';
 export type AssetKind = 'font' | 'logo' | 'source';
 type AssetGroup = 'font' | 'image' | 'document';
 
-const FOLDER_OF_KIND: Readonly<Record<AssetKind, readonly string[]>> = {
+export const FOLDER_OF_KIND: Readonly<Record<AssetKind, readonly string[]>> = {
   font: ['assets', 'fonts'],
   logo: ['assets', 'logos'],
   source: ['sources'],
@@ -315,8 +315,8 @@ const measure = async (systemDir: string): Promise<{ files: number; bytes: numbe
   return { files, bytes };
 };
 
-/** `assets/fonts` and friends, made one level at a time; each level must be a real folder (never a link). */
-const ensureFolder = async (systemDir: string, segments: readonly string[]): Promise<string> => {
+/** `assets/fonts` and friends, made one level at a time; each level must be a real folder (never a link). Also the Code scan's seed (§7.2). */
+export const ensureFolder = async (systemDir: string, segments: readonly string[]): Promise<string> => {
   for (let depth = 1; depth <= segments.length; depth += 1) {
     const part = segments.slice(0, depth);
     const abs = await resolveInside(systemDir, part);
