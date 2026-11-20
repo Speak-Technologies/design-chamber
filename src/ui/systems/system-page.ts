@@ -20,10 +20,10 @@ import { attachMenu, banner, bannerWithActions, btn, iconBtn, loadingRow, openSh
 import { createAskBar, type AskBarHandle } from '../components/ask-bar.ts';
 import { createNotices } from '../components/notices.ts';
 import { systems } from '../components/systems-store.ts';
-import { client, feed, guestHost } from '../guest.ts';
+import { client, feed, guestHost, host } from '../guest.ts';
 import { askResultText } from '../model/ask-bar-model.ts';
 import { RESTORE_NOTICE_MS, SHORT_NOTICE_MS } from '../model/findability-model.ts';
-import { folderName, plural } from '../model/format.ts';
+import { folderName, plural, relativeTime } from '../model/format.ts';
 import { systemNameProblem } from '../model/new-system-model.ts';
 import type { Version } from '../model/restore-core.ts';
 import {
@@ -56,8 +56,10 @@ import {
   unreviewedSections,
   type PhoneView,
 } from '../model/system-page-model.ts';
+import { RESYNC_NOTICE_MS } from '../model/resync-model.ts';
 import { viewingBanner } from '../model/versions-model.ts';
 import type { WallSelection } from '../wall/wall-types.ts';
+import { openResyncSheet, type ResyncApplied } from './resync-sheet.ts';
 import { sendSystemMessage } from './system-ask.ts';
 import { mountBoard, type BoardHandle } from './system-board.ts';
 import { mountSystemBuild, type SystemBuildHandle } from './system-build.ts';
@@ -311,6 +313,66 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       notices.setTransient('edit', banner({ tone: 'error', title: 'Couldn’t undo that', body: errorText(error) }));
     }
   };
+
+  // ------------------------------------------------------------ re-sync
+  /** Only a system kept in Design Chamber with a code source can be re-read, and only on the page (the rail has no value editing). */
+  const canResync = (): boolean => !compact && detail !== null && detail.home.kind === 'internal' && detail.sources.code !== null;
+  const resyncEntry = (): { id: string; label: string; disabled?: boolean; reason?: string } => {
+    const reason = viewing ? OLD_VERSION_SENTENCE : dirty() ? 'Save or discard your changes first.' : null;
+    return reason === null ? { id: 'resync', label: 'Re-sync from code' } : { id: 'resync', label: 'Re-sync from code', disabled: true, reason };
+  };
+
+  const resyncedNotice = (result: ResyncApplied): void => {
+    const { response } = result;
+    const buttons: BtnHandle[] = [];
+    if (response.edit.undoable) {
+      const undo = btn({
+        label: 'Undo',
+        variant: 'outline',
+        size: 'xs',
+        onClick: () => {
+          undo.set({ loading: true });
+          void undoEdit(response.edit.id);
+        },
+      });
+      buttons.push(undo);
+    }
+    const ask = btn({
+      label: 'Ask the agent to update notes',
+      variant: 'outline',
+      size: 'xs',
+      onClick: () => {
+        ask.set({ loading: true });
+        void (async () => {
+          try {
+            const before = response.version?.id;
+            const outcome = await sendSystemMessage(id, { sessionId: detail?.sessionId ?? null }, { purpose: 'resync-notes', ...(before ? { before } : {}) });
+            toast('success', askResultText(outcome));
+            ask.set({ loading: false, disabled: true });
+            void reload();
+          } catch (error) {
+            ask.set({ loading: false });
+            toast('error', errorText(error));
+          }
+        })();
+      },
+    });
+    buttons.push(ask);
+    showEditNotice(result.sentence, response.edit.undoable ? '' : response.edit.detail ?? 'Restore “Before re-sync” from Versions to undo.', buttons, RESYNC_NOTICE_MS);
+  };
+
+  function startResync(): void {
+    if (!detail || !canResync() || detail.sources.code === null) return;
+    openResyncSheet(sheetHost, {
+      id,
+      systemName: detail.name,
+      directory: detail.sources.code.directory,
+      onApplied: (result) => {
+        resyncedNotice(result);
+        void reload().then(() => board.reload());
+      },
+    });
+  }
 
   const savedNotice = (answer: SystemEditResponse, body: string): void => {
     const buttons: BtnHandle[] = [];
@@ -590,7 +652,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       ? h('button', { type: 'button', class: 'dc-syspg-title', title: 'Rename', 'aria-label': `${titleText}. Rename`, onClick: () => startRename() }, titleText)
       : h('h1', { class: 'dc-syspg-title' }, titleText);
     const titleWrap = h('div', { class: 'dc-syspg-titlewrap' }, h('h1', { class: 'dc-syspg-h1' }, title), detail ? statusBadge(detail.status) : null, dirty() ? h('span', { class: 'dc-syspg-unsaved' }, 'Unsaved') : null);
-    const home = detail ? h('p', { class: 'dc-syspg-home dc-muted', title: homeTitle(detail) }, homeLine(detail, sourceText(detail.sources, folderName))) : null;
+    const home = detail ? h('p', { class: 'dc-syspg-home dc-muted', title: homeTitle(detail) }, homeLine(detail, sourceText(detail.sources, folderName, (iso) => relativeTime(iso, Date.now(), host.snapshot()?.locale ?? 'en')))) : null;
     const living = detail ? livingPagePill(detail) : null;
     const livingEl = living ? h('span', { class: 'dc-syspg-living', title: living.title }) : null;
     if (livingEl && living) mountBadge(livingEl, { label: living.label, tone: living.tone });
@@ -615,11 +677,13 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
         () => [
           { id: 'rename', label: 'Rename' },
           { id: 'chat', label: 'Continue in chat' },
+          ...(canResync() ? [resyncEntry()] : []),
           ...(compact ? [{ id: 'versions', label: 'Versions' }] : []),
         ],
         (choice) => {
           if (choice === 'rename') startRename();
           else if (choice === 'chat') void continueChat();
+          else if (choice === 'resync') startResync();
           else if (choice === 'versions') openVersions();
         },
       );

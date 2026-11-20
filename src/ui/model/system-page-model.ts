@@ -268,8 +268,11 @@ export const entryLabel = (detail: SystemDetail, entry: string): { tag: string; 
 };
 
 /** "From tidepool-web", "From brand files", "From a description"; null when the system has no recorded source. */
-export const sourceText = (sources: SystemDetail['sources'], folder: (path: string) => string): string | null => {
-  if (sources.code) return `From ${folder(sources.code.directory)}`;
+export const sourceText = (sources: SystemDetail['sources'], folder: (path: string) => string, ago?: (iso: string) => string): string | null => {
+  if (sources.code) {
+    const when = ago ? ago(sources.code.lastScan) : '';
+    return when === '' ? `From ${folder(sources.code.directory)}` : `Synced with ${folder(sources.code.directory)} ${when}`;
+  }
   if (sources.brand > 0) return 'From brand files';
   if (sources.description) return 'From a description';
   return null;

@@ -6,6 +6,7 @@
 import type {
   AddSystemAssetResponse,
   AssetsFromFolderResponse,
+  CodeResyncReview,
   CreateSystemResponse,
   CreateUploadResponse,
   DeleteSystemResponse,
@@ -15,6 +16,8 @@ import type {
   PutUploadChunkResponse,
   ScanSummary,
   SystemListResponse,
+  SystemResyncBody,
+  SystemResyncResponse,
   SystemPromptResponse,
   SystemScanResponse,
   CreateSystemScanResponse,
@@ -30,6 +33,7 @@ import type {
 } from '../../../src/shared/api.ts';
 import { CHIP_PROVIDER_ID, type ChangeEvent, type SystemDetail, type SystemSection, type SystemSummary, type SystemToken, type VersionSummary } from '../../../src/shared/types.ts';
 import { SYSTEM_NAME_MAX, SYSTEMS_MAX } from '../../../src/shared/limits.ts';
+import { resyncStampOf } from '../../../src/shared/system-json.ts';
 import { ServiceError } from './service-error.ts';
 
 const MINUTE = 60_000;
@@ -136,6 +140,27 @@ const EMPTY_SCAN = (directory: string): ScanSummary => ({
   refused: 0,
   partial: false,
 });
+
+/** What a re-read of the project finds against a filled-in system: two modes of a colour, a conflict, new and gone tokens, new files. */
+const SAMPLE_REVIEW: CodeResyncReview = {
+  kind: 'code',
+  changed: [
+    { name: '--brand', mode: 'light', from: '#2f6f6a', to: '#0b6e66' },
+    { name: '--brand', mode: 'dark', from: '#6fc2ba', to: '#4fd1c5' },
+    { name: '--surface', mode: 'light', from: '#fbfaf7', to: '#f6f4ee' },
+    { name: '--space-4', mode: 'light', from: '16px', to: '20px' },
+    { name: '--radius-md', mode: 'light', from: '10px', to: '12px' },
+  ],
+  conflicts: [{ name: '--text-muted', mode: 'light', mine: '#5d6a68', code: '#4a5755' }],
+  added: ['--accent', '--space-8'],
+  removed: ['--danger', '--space-6'],
+  assets: [
+    { path: 'public/fonts/Inter-Italic.woff2', kind: 'font' },
+    { path: 'public/logo-dark.svg', kind: 'logo' },
+  ],
+  partial: false,
+};
+const ADDED_VALUES: Record<string, string> = { '--accent': '#d9822b', '--space-8': '32px' };
 
 const LIVING_SENTENCE: Record<NonNullable<SystemSummary['livingPage']>, string> = {
   fresh: 'Generated from revision 7, the current one.',
@@ -249,14 +274,15 @@ export type FakeSystems = {
     'POST /systems': (req: { body: { name: string; code?: { scanId: string; assets: string[] }; description?: { text: string; preset: string | null }; brand?: true } }) => CreateSystemResponse;
     'PATCH /systems/:id': (req: Req & { body: PatchSystemBody }) => PatchSystemResponse;
     'DELETE /systems/:id': (req: Req) => DeleteSystemResponse;
-    'POST /system-scans': (req: { body: { directory: string } }) => CreateSystemScanResponse;
+    'POST /system-scans': (req: { body: { directory: string; systemId?: string } }) => CreateSystemScanResponse;
     'GET /system-scans/:scanId': (req: Req) => SystemScanResponse;
     'DELETE /system-scans/:scanId': (req: Req) => OkResponse;
     'POST /uploads': (req: { body: { total: number; encoding?: 'text' | 'base64' } }) => CreateUploadResponse;
     'PUT /uploads/:id/:index': (req: Req & { body: { data: string } }) => PutUploadChunkResponse;
     'POST /systems/:id/assets': (req: Req & { body: { uploadId: string; name: string; kind: 'font' | 'logo' | 'source' } }) => AddSystemAssetResponse;
     'POST /systems/:id/assets/from-folder': (req: Req & { body: { directory: string } }) => AssetsFromFolderResponse;
-    'POST /systems/:id/prompt': (req: Req & { body: { purpose: string; text?: string; entry?: string; section?: string } }) => SystemPromptResponse;
+    'POST /systems/:id/prompt': (req: Req & { body: { purpose: string; text?: string; entry?: string; section?: string; before?: string } }) => SystemPromptResponse;
+    'POST /systems/:id/resync': (req: Req & { body: SystemResyncBody }) => SystemResyncResponse;
     'GET /systems/:id': (req: Req) => SystemDetail;
     'POST /systems/:id/edits': (req: Req & { body: SystemEditRequest }) => SystemEditResponse;
     'POST /systems/:id/edits/:eid/undo': (req: Req) => SystemUndoEditResponse;
@@ -297,7 +323,15 @@ export type FakeSystems = {
     /** Make the system's detail repo-backed (read only) with this living-page state (`null` = not judged yet). */
     setRepoHome: (id: string, state: NonNullable<SystemSummary['livingPage']> | null) => void;
     /** What saves, undos, reviews and prompts reached the service. */
-    pageLog: () => { saves: SystemEditRequest[]; undos: string[]; reviews: Array<{ section: string; state: string }>; asks: Array<{ purpose: string; text?: string; entry?: string; section?: string }> };
+    pageLog: () => { saves: SystemEditRequest[]; undos: string[]; reviews: Array<{ section: string; state: string }>; asks: Array<{ purpose: string; text?: string; entry?: string; section?: string; before?: string }>; resyncs: SystemResyncBody[] };
+    /** The review the next re-sync scan finds (`null` goes back to the sample). */
+    setResync: (review: CodeResyncReview | null) => void;
+    /** The next re-sync apply answers "stale", as if a file changed after the scan. */
+    staleResyncNext: () => void;
+    /** The next re-sync apply answers this sentence (the ticks stay); `null` goes back to working. */
+    failResync: (message: string | null) => void;
+    /** The folder the system's code source points at (to make the re-sync meet a missing or unreadable one). */
+    setCodeFolder: (id: string, directory: string) => void;
   };
 };
 
@@ -308,13 +342,16 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
   let slowPolls = 2;
   let scanN = 0;
   let uploadN = 0;
-  const scans = new Map<string, { directory: string; polls: number }>();
+  const scans = new Map<string, { directory: string; polls: number; systemId?: string }>();
   const uploads = new Map<string, { total: number; chunks: number; encoding: string }>();
   const log: ReturnType<FakeSystems['hooks']['log']> = { created: [], uploads: [], assets: [], prompts: 0, scanDirectories: [], cancelled: 0 };
   const details = new Map<string, SystemDetail>();
   const undos = new Map<string, string>();
   const versions = new Map<string, VersionSummary[]>();
-  const pageLog: ReturnType<FakeSystems['hooks']['pageLog']> = { saves: [], undos: [], reviews: [], asks: [] };
+  const pageLog: ReturnType<FakeSystems['hooks']['pageLog']> = { saves: [], undos: [], reviews: [], asks: [], resyncs: [] };
+  let resyncReview: CodeResyncReview | null = null;
+  let resyncStale = false;
+  let resyncFailure: string | null = null;
   let staleOnce = false;
   let detailFailing = false;
   let editN = 0;
@@ -430,7 +467,7 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
         if (/missing/i.test(directory)) throw new ServiceError('bad-path', `Design Chamber can’t read ${directory}. The folder doesn’t exist.`);
         scanN += 1;
         const scanId = `sc_fakescan${String(scanN).padStart(10, '0')}`;
-        scans.set(scanId, { directory, polls: 0 });
+        scans.set(scanId, { directory, polls: 0, ...(body.systemId ? { systemId: body.systemId } : {}) });
         log.scanDirectories.push(directory);
         return { scanId };
       },
@@ -440,6 +477,7 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
         scan.polls += 1;
         if (scan.polls <= slowPolls) return { state: 'running', seen: scan.polls * 240 };
         if (/unreadable/i.test(scan.directory)) return { state: 'failed', message: `Design Chamber can’t read ${scan.directory}. Permission denied.` };
+        if (scan.systemId) return { state: 'done', summary: sampleScan(scan.directory), review: /matches/i.test(scan.directory) ? { ...SAMPLE_REVIEW, changed: [], conflicts: [], added: [], removed: [], assets: [] } : (resyncReview ?? SAMPLE_REVIEW) };
         return { state: 'done', summary: /empty/i.test(scan.directory) ? EMPTY_SCAN(scan.directory) : sampleScan(scan.directory) };
       },
       'DELETE /system-scans/:scanId': ({ params }) => {
@@ -547,6 +585,61 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
         deps.emit(null, 'system');
         return { files: ['tokens.css'], stamps: {}, version: null };
       },
+      'POST /systems/:id/resync': ({ params, body }) => {
+        const row = find(params.id);
+        const detail = detailFor(row);
+        pageLog.resyncs.push(body);
+        if (resyncFailure !== null) {
+          const message = resyncFailure;
+          resyncFailure = null;
+          throw new ServiceError('internal', message);
+        }
+        if (resyncStale || body.stamp !== resyncStampOf(detail.stamps)) {
+          resyncStale = false;
+          throw new ServiceError('stale', `${row.name} changed after the scan, so nothing was changed. Scan again.`);
+        }
+        const review = resyncReview ?? SAMPLE_REVIEW;
+        const before = structuredClone(detail);
+        const list = versionsOf(row.id);
+        const put = (token: SystemToken, mode: 'light' | 'dark', value: string): void => {
+          const next = { text: value, editable: 'ok' as const, problem: null };
+          if (mode === 'light') token.light = next;
+          else token.dark = next;
+        };
+        let changed = 0;
+        for (const name of [...(body.changes ?? []), ...(body.useCode ?? [])]) {
+          const token = detail.tokens.find((entry) => entry.name === name);
+          if (!token) continue;
+          changed += 1;
+          for (const one of review.changed.filter((entry) => entry.name === name)) put(token, one.mode, one.to);
+          for (const one of review.conflicts.filter((entry) => entry.name === name)) put(token, one.mode, one.code);
+        }
+        for (const name of body.add ?? []) {
+          detail.tokens.push(tok(name, name.startsWith('--space') ? 'spacing' : 'colours', name.startsWith('--space') ? null : 'brand', ADDED_VALUES[name] ?? '#808080'));
+        }
+        const removed = (body.remove ?? []).filter((name) => detail.tokens.some((token) => token.name === name)).length;
+        detail.tokens = detail.tokens.filter((token) => !(body.remove ?? []).includes(token.name));
+        stampBump(detail);
+        const code = detail.sources.code;
+        if (code) {
+          detail.sources = { ...detail.sources, code: { ...code, lastScan: new Date().toISOString() } };
+          row.sources = detail.sources;
+        }
+        const n = list.length + 1;
+        const version: VersionSummary = { id: `v${n}`, n, created: new Date().toISOString(), reason: 'resync', sessionId: null, treeHash: `h${n}`, bytes: 4000 * n, fileCount: 3, label: 'Before re-sync' } as VersionSummary;
+        list.push(version);
+        editN += 1;
+        const id = `e${editN}`;
+        undos.set(id, JSON.stringify(before));
+        deps.emit(null, 'system');
+        return {
+          edit: { id, label: 'Re-synced from code', files: ['tokens.css', 'system.json'], undoable: true },
+          version,
+          coalesced: false,
+          stamps: { tokens: detail.stamps.tokens ?? undefined, systemJson: detail.stamps.systemJson ?? undefined },
+          counts: { changed, added: (body.add ?? []).length, removed },
+        };
+      },
       'POST /systems/:id/hand-edits/clear': ({ params }) => {
         find(params.id);
         return { ok: true };
@@ -582,7 +675,7 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
       'POST /systems/:id/prompt': ({ params, body }) => {
         const row = find(params.id);
         log.prompts += 1;
-        pageLog.asks.push({ purpose: body.purpose, ...(body.text ? { text: body.text } : {}), ...(body.entry ? { entry: body.entry } : {}), ...(body.section ? { section: body.section } : {}) });
+        pageLog.asks.push({ purpose: body.purpose, ...(body.text ? { text: body.text } : {}), ...(body.entry ? { entry: body.entry } : {}), ...(body.section ? { section: body.section } : {}), ...(body.before ? { before: body.before } : {}) });
         if (promptFailure !== null) throw new ServiceError('internal', promptFailure);
         return {
           text: `[Design Chamber] Write the design system "${row.name}". Its folder is _systems/${row.id}. Write only there.`,
@@ -635,6 +728,22 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
         detail.livingPage = state === null ? null : { state, sentence: LIVING_SENTENCE[state] };
       },
       pageLog: () => pageLog,
+      setResync: (review) => {
+        resyncReview = review;
+      },
+      staleResyncNext: () => {
+        resyncStale = true;
+      },
+      failResync: (message) => {
+        resyncFailure = message;
+      },
+      setCodeFolder: (id, directory) => {
+        const row = find(id);
+        const detail = detailFor(row);
+        if (detail.sources.code) detail.sources = { ...detail.sources, code: { ...detail.sources.code, directory } };
+        row.sources = detail.sources;
+        deps.emit(null, 'system');
+      },
       setDefaultId: (id) => {
         rows = rows.map((row) => ({ ...row, isDefault: row.id === id }));
         deps.emit(null, 'system');

@@ -2,8 +2,7 @@
 
 How the local service brings a design system's token values up to date with the project code it was
 made from. The user starts it from the system page (⋯ → Re-sync from code), looks at a review, ticks
-what to take, and applies. This page describes the rules the service enforces; the review sheet is
-built separately. It covers systems kept in the Designs folder. A system kept in a project's repo has
+what to take, and applies. This page describes the rules the service enforces and, at the end, the sheet the user sees. It covers systems kept in the Designs folder. A system kept in a project's repo has
 its own re-sync, which reads the repo as a whole and is not built yet.
 
 ## The review
@@ -47,3 +46,36 @@ afterwards.
 `POST /systems/:id/resync` behind the service token, with the system id checked before any path is built.
 The body is `{ scanId, stamp, changes, add, remove, useCode, assets }`; a malformed body or nothing ticked
 answers 400 before anything is read.
+
+## The Re-sync sheet (what the user sees)
+Code: `src/ui/systems/resync-sheet.ts` (the sheet), `src/ui/model/resync-model.ts` (the pure rules, tested in
+`test/ui/resync-model.test.ts`), the menu entry in `src/ui/systems/system-page.ts`. Pictures:
+`documentation/pages/img/resync-page-*`.
+
+- **Where it starts.** ⋯ → **Re-sync from code** on the full-screen system page, only for a system kept in Design
+  Chamber that has a code source. The rail never offers it. The entry is off, with a reason, while a version is
+  being viewed or there are unsaved edits.
+- **Scanning.** The sheet opens at once, reads the folder the system was made from and shows "Reading shop…" with
+  Cancel. Closing the sheet cancels the scan. Nothing is written until Apply.
+- **Review.** A fixed order: Changed, Conflicts, New, No longer in the code, New fonts and logos. Empty groups are
+  left out. Changed rows show old → new with colour swatches (light and dark on two lines). Conflicts show
+  "You changed this here. The code now says #4a5755." with **Keep mine** (the default) and **Use the code's**.
+  Changed and New start ticked; removals and files start unticked. Each group has a Tick all / Untick all button,
+  and long groups show 60 rows and then "Show N more". Agent tokens are never listed. A line says notes, overview,
+  fonts and assets stay as they are, and a partial scan adds "Some files weren't scanned, so tokens from them aren't
+  listed as removed."
+- **Apply.** The footer says what Apply will do ("Apply saves 5 changed, 2 added, 1 removed."), or "Tick at least
+  one change to apply." with Apply off. Apply is the filled primary; **Not now** closes without changing anything.
+  On success the sheet closes and a notice (5 minutes on the page) says "Re-synced Acme: 5 changed, 2 added, 1
+  removed." with **Undo** and **Ask the agent to update notes**. The agent request carries the id of the "Before
+  re-sync" version so it can read what changed. A re-sync that can't be undone here says to restore "Before
+  re-sync" from Versions.
+- **When it stops.** Each stop has its own sentence and the ticks are kept when the failure is not about the scan:
+  the system changed after the scan (**Scan again**), the folder can't be read (**Choose another folder…** with a
+  path box), the Designs folder changed (sheet says so and closes on Close), anything else is shown as the service
+  said it and Apply stays available. Nothing to apply says "Acme already matches shop." with no Apply.
+- **Source line.** Under the system name: "In Design Chamber · Synced with shop 3 days ago".
+- **Stamp.** The page reads the system once when the scan starts and sends its stamp with Apply; the service
+  refuses the apply if the files moved on in between.
+- **Repo systems.** A review of the other kind (`kind: 'repo'`) is handed to `options.repoReview`, the seam for the
+  repo sheet. Until that exists the sheet tells the user to ask the agent.
