@@ -3,12 +3,14 @@
 // refused encoded separators in `:id`; every body is validated here before the store sees it,
 // and the store resolves the id through `systems.dir(id)` (pattern, containment, no links).
 // The only paths a body carries are `code.assets`, and each must be one the named scan offered
-// (`buildSystemSeed`); nothing else is read. `GET /systems/:id/living-page` stays T14's (the living page).
+// (`buildSystemSeed`); nothing else is read. `GET /systems/:id/living-page` answers the staged record
+// and the committed page's state (T14); the Embed fonts switch regenerates the staged page.
 
 import type {
   CreateSystemBody,
   CreateSystemResponse,
   DeleteSystemResponse,
+  LivingPageResponse,
   PatchSystemBody,
   PatchSystemResponse,
   RouteKey,
@@ -20,7 +22,7 @@ import type { ReviewState, SystemDetail } from '../../shared/types.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
 import { buildSystemSeed } from '../systems/extract.ts';
-import { registerNotBuilt } from '../systems/not-built.ts';
+import { livingPageState, regenerateLivingPage } from '../systems/living-page.ts';
 import { ensureSystemStore } from '../systems/store.ts';
 
 /** Characters of a description a new system is made from (§3.1). */
@@ -105,9 +107,6 @@ export const validatePatchSystem = (body: unknown): PatchSystemBody => {
   throw new ApiError('bad-request', 'Say what to change: name, status, review, sessionId or livingPage.');
 };
 
-/** Routes T14 fills (the living page); they answer "not built yet" until then. */
-const LATER: readonly RouteKey[] = ['GET /systems/:id/living-page'];
-
 /**
  * Registers:
  * - 'GET /systems'
@@ -115,7 +114,7 @@ const LATER: readonly RouteKey[] = ['GET /systems/:id/living-page'];
  * - 'GET /systems/:id'
  * - 'PATCH /systems/:id'
  * - 'DELETE /systems/:id'
- * - 'GET /systems/:id/living-page' (T14; not built yet)
+ * - 'GET /systems/:id/living-page'
  *
  * The store is reached on the first request, never at registration.
  */
@@ -133,9 +132,19 @@ export function registerSystemsRoutes(router: Router, ctx: ServiceContext): void
 
   router.on('GET /systems/:id', async ({ params }): Promise<SystemDetail> => ensureSystemStore(ctx).detail(params.id));
 
-  router.on('PATCH /systems/:id', async ({ params, body }): Promise<PatchSystemResponse> => ensureSystemStore(ctx).patch(params.id, validatePatchSystem(body)));
+  router.on('PATCH /systems/:id', async ({ params, body }): Promise<PatchSystemResponse> => {
+    const patch = validatePatchSystem(body);
+    const answer = await ensureSystemStore(ctx).patch(params.id, patch);
+    // AD-32: the switch regenerates the staged page; the card says "Regenerating…" until the `living-page` event.
+    if ('livingPage' in patch) {
+      void regenerateLivingPage(ctx, params.id, { source: 'snapshot' }).catch((error: unknown) =>
+        ctx.log.warn('systems.living-page.regenerate-failed', { system: params.id, error: error instanceof Error ? error.name : 'error' }),
+      );
+    }
+    return answer;
+  });
 
   router.on('DELETE /systems/:id', async ({ params }): Promise<DeleteSystemResponse> => ensureSystemStore(ctx).trash(params.id));
 
-  registerNotBuilt(router, LATER);
+  router.on('GET /systems/:id/living-page', async ({ params }): Promise<LivingPageResponse> => livingPageState(ctx, params.id));
 }

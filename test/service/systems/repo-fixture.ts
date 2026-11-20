@@ -8,6 +8,7 @@ import path from 'node:path';
 import type { TestContext } from 'node:test';
 
 import type { ServiceContext } from '../../../src/service/context.ts';
+import { configureLivingExamples } from '../../../src/service/systems/living-examples.ts';
 import { ensureSystemStore, type SystemStore } from '../../../src/service/systems/store.ts';
 import { createFakeContext, type FakeContext } from '../../helpers/fake-context.ts';
 import { createTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
@@ -67,6 +68,9 @@ export const setupRepo = async (t: TestContext, options: { rootInsideProject?: b
   await mkdir(root, { recursive: true });
   const ctx = createFakeContext({ root, overrides: { designIndex: { all: () => [], get: () => null, bySession: () => [], ready: async () => true, dispose: async () => undefined } } }) as FakeContext & ServiceContext;
   t.after(() => ctx.dispose());
+  // A refresh regenerates the living page (T14): no real browser here, so every example picture is
+  // `no-browser` unless a test configures a fake one.
+  configureLivingExamples(ctx, { openBrowser: null });
   const systems = ensureSystemStore(ctx);
   const rig: RepoRig = {
     tmp,

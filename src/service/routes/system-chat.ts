@@ -5,7 +5,7 @@
 // system store (`SYSTEM_ID_PATTERN`, `resolveInside`, no link). No body carries a path: the names,
 // notes and versions a message cites are read from the system's own files and history.
 //
-// The living-page branch calls the living-page seam (the not-built sentence until T14 fills it); the
+// The living-page branch regenerates the staged page first and refuses when it has a problem; the
 // reconcile branch recounts the code drift first (§5.12). Their refusals (an internal home, no
 // drift) work either way. Every message rides the system's hand-edit block when its ledger has
 // entries (§8.5), shrunk to its compact form or left for the next message when it would not fit.
@@ -260,7 +260,7 @@ export function registerSystemChatRoutes(router: Router, ctx: ServiceContext): v
         }
         return { revision: view.staged.revision };
       };
-      await ready();
+      // Regenerate first (§8.10), then refuse unless the staged page has no problem.
       await regenerateLivingPage(ctx, id, { source: 'snapshot' });
       const staged = await ready();
       return deliver(

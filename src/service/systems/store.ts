@@ -63,14 +63,13 @@ import {
   type SystemDetailSource,
   type SystemTokenRules,
 } from '../../shared/system-json.ts';
-import type { BuildJson, DesignSummary, SystemDetail, SystemState, SystemSummary } from '../../shared/types.ts';
+import type { BuildJson, DesignSummary, LivingPageState, SystemDetail, SystemState, SystemSummary } from '../../shared/types.ts';
 import type { ChangeHub, DesignIndex, Logger, SelfWrites, ServiceContext, SettingsStore } from '../context.ts';
 import { ApiError } from '../http.ts';
 import { isAtomicTempName, isInsideOrEqual, LINK_SENTENCE, renameWithRetry, resolveInside, resolvePlainTarget, samePath, slugify, writeFileAtomic } from '../paths.ts';
 import { folderErrorSentence, isDirectory } from '../root.ts';
 import { treeHashOf } from '../versions.ts';
 import { systemSelfWritesKey } from '../watch.ts';
-import { notBuilt } from './not-built.ts';
 
 // ---- sentences ----
 
@@ -189,10 +188,18 @@ export type SystemStore = {
   isSettled(id: string): boolean;
   /** Settings notices queued by deletes and adoption, answered once (`GET /settings`). */
   takeNotices(): string[];
+  /**
+   * T14 attaches the committed living page's state (`living-page.ts` imports this store, so it plugs
+   * in rather than being imported). Until then, and for an internal home, the line is null.
+   */
+  attachLivingPages(reader: LivingPageReader): void;
   /** Queue a one-time page notice (an adopted build's name clash, §5.9). */
   queueNotice(text: string): void;
   dispose(): Promise<void>;
 };
+
+/** The committed living page's state for the detail and the list row; null when it can't be had. */
+export type LivingPageReader = (id: string) => Promise<{ state: LivingPageState; sentence: string } | null>;
 
 /** `trash` options: `guard` runs on the state under the system's lock, before the move; a throw refuses it (a build Stop, §5.9). */
 export type TrashOptions = { guard?: (state: SystemState) => void };
@@ -544,9 +551,12 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     };
   };
 
+  let livingPageReader: LivingPageReader | null = null;
+
   const detailOf = async (id: string): Promise<SystemDetail> => {
     const detail = buildSystemDetail(await get(id), rules);
-    return { ...detail, usedBy: designsOf().filter((design) => design.system?.id === id).length, ...settingsFacts(id) };
+    const livingPage = detail.home.kind === 'repo' && livingPageReader !== null ? ((await livingPageReader(id)) ?? detail.livingPage) : detail.livingPage;
+    return { ...detail, usedBy: designsOf().filter((design) => design.system?.id === id).length, ...settingsFacts(id), livingPage };
   };
 
   const summaryOf = (detail: SystemDetail): SystemSummary => ({
@@ -565,8 +575,8 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     home: detail.home.kind === 'internal' ? 'internal' : { repo: detail.home.label, directory: detail.home.directory },
     building: (detail.build !== null && detail.build.round !== 'done') || (detail.home.kind === 'repo' && detail.snapshot === null),
     sharedRepoWith: null,
-    // T14 (the living page) and T17 (proposals) fill these.
-    livingPage: null,
+    livingPage: detail.livingPage?.state ?? null,
+    // T17 (proposals) fills this.
     proposalWaiting: false,
   });
 
@@ -878,8 +888,10 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
         next = { ...state, sessionId };
       } else if ('livingPage' in body) {
         if (state.home?.kind !== 'repo') throw new ApiError('invalid', 'Only a design system kept in a project repo has a living page.');
-        // T14: the Embed fonts switch regenerates the staged page.
-        return notBuilt();
+        // AD-32: the user's switch only; the route regenerates the staged page once it lands.
+        const embedFonts = body.livingPage.embedFonts;
+        if ((state.livingPage?.embedFonts === true) === embedFonts) return false;
+        next = { ...state, livingPage: { embedFonts } };
       } else {
         throw new ApiError('bad-request', 'Say what to change: name, status, review, sessionId or livingPage.');
       }
@@ -957,6 +969,9 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     },
     takeNotices: () => notices.splice(0, notices.length),
     queueNotice: (text) => void notices.push(text),
+    attachLivingPages(reader) {
+      livingPageReader = reader;
+    },
     async dispose() {
       disposed = true;
       unsubscribe();

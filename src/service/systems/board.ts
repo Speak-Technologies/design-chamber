@@ -52,14 +52,14 @@ const prefixedSource = (inner: FileSource, prefix: string): FileSource => ({
   ...(inner.stat ? { stat: (rel: string) => inner.stat?.(`${prefix}/${rel}`) ?? Promise.resolve(null) } : {}),
 });
 
-/** The generated board at the virtual entry; every other path from `base`. */
-export const overlaySource = (base: FileSource, html: string): FileSource => {
+/** A generated document at the virtual entry (the board's, or the living page's); every other path from `base`. */
+export const overlaySource = (base: FileSource, html: string, entryFile: string = BOARD_ENTRY_FILE): FileSource => {
   const bytes = Buffer.from(html, 'utf8');
   const entry: SourceFile = { bytes, size: bytes.length, mtimeMs: 0 };
   return {
     root: base.root,
-    read: (rel) => (rel === BOARD_ENTRY_FILE ? Promise.resolve(entry) : base.read(rel)),
-    stat: (rel) => (rel === BOARD_ENTRY_FILE ? Promise.resolve({ size: entry.size, mtimeMs: 0 }) : base.stat?.(rel) ?? Promise.resolve(null)),
+    read: (rel) => (rel === entryFile ? Promise.resolve(entry) : base.read(rel)),
+    stat: (rel) => (rel === entryFile ? Promise.resolve({ size: entry.size, mtimeMs: 0 }) : base.stat?.(rel) ?? Promise.resolve(null)),
   };
 };
 

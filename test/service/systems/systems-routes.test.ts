@@ -138,9 +138,12 @@ test('bodies are validated with plain sentences', async (t) => {
   assert.equal((duplicate.json as { message: string }).message, 'You already have a system called Acme.');
 });
 
-test('the living-page state is still T14 and answers not built yet', async (t) => {
+test('the living-page state: 404 for a gone system, internal for a system kept in Design Chamber', async (t) => {
   const { call } = await serve(t);
-  const answer = await call('GET', '/systems/acme/living-page');
-  assert.equal(answer.status, 500);
-  assert.equal((answer.json as { message: string }).message, 'This part of Design Chamber (design systems) is not built yet.');
+  assert.equal((await call('GET', '/systems/acme/living-page')).status, 404);
+  const created = await call('POST', '/systems', { name: 'Acme' });
+  const { id } = created.json as CreateSystemResponse;
+  const answer = await call('GET', `/systems/${id}/living-page`);
+  assert.equal(answer.status, 200);
+  assert.deepEqual(answer.json, { home: 'internal' });
 });

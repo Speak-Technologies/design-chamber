@@ -44,6 +44,7 @@ import { foldsCase, isInsideOrEqual, resolveInside, resolvePlainTarget, samePath
 import { treeHashOf } from '../versions.ts';
 import { ensureBuildTickets, type BuildTickets } from './builds.ts';
 import { readProjectFile } from './extract.ts';
+import { dropLivingPages } from './living-page.ts';
 import { readLivingPageMark } from './living-safe.ts';
 import { validateScanFolder } from './scan-folder.ts';
 import { runBuildScan } from './drift.ts';
@@ -542,13 +543,14 @@ export const startHomes = (ctx: ServiceContext, ready?: () => Promise<void>): ((
     settings: ctx.settings,
     hub: ctx.hub,
     log: ctx.log,
-    // A failure is caught and logged (the stamp is already seen, so it never loops). T14 wires
-    // `livingPages.drop`, T17 `proposals.supersede`.
+    // A failure is caught and logged (the stamp is already seen, so it never loops). T17 wires
+    // `proposals.supersede`.
     snapshots: {
       refresh: async (id, options) => void (await refreshSnapshot(ctx, id, options)),
       clear: (id) => clearRecoverySnapshot(ctx, id),
     },
     scans: { build: (id, directory) => runBuildScan(ctx, id, directory) },
+    livingPages: { drop: (id) => dropLivingPages(ctx, id) },
     ...(ready !== undefined ? { ready } : {}),
   });
   return () => homes.stop();

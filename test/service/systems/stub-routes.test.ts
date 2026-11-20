@@ -144,6 +144,8 @@ const BUILT: ReadonlySet<RouteKey> = new Set<RouteKey>([
   'POST /system-stops/:undoId/undo',
   // T15: test/service/systems/system-chat-routes.test.ts.
   'POST /systems/:id/prompt',
+  // T14: test/service/systems/living-page.test.ts.
+  'GET /systems/:id/living-page',
   'GET /folders',
   'POST /folders',
   'PATCH /folders/:folderId',

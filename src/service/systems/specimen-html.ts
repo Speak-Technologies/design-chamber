@@ -41,6 +41,21 @@ export type SpecimenOptions = {
    * null when the component's id is off the pattern. Absent → no example part.
    */
   example?: (component: SystemComponent, id: string | null) => string;
+  /**
+   * The living page (§5.11) allows no `style` attribute: when given, each element's own declarations
+   * go to this callback, which answers a class name the caller defines in its one `<style>`. Absent
+   * (the board) → a `style` attribute, as before.
+   */
+  styleClass?: (declarations: string) => string;
+};
+
+/** ` class="base" style="…"`, or ` class="base <generated>"` when the caller takes declarations as classes. */
+type Styler = (base: string, declarations: string) => string;
+
+const stylerOf = (options: SpecimenOptions): Styler => {
+  const styleClass = options.styleClass;
+  if (styleClass === undefined) return (base, declarations) => ` class="${base}" style="${escapeHtml(declarations)}"`;
+  return (base, declarations) => (declarations === '' ? ` class="${base}"` : ` class="${base} ${styleClass(declarations)}"`);
 };
 
 /** The sentence an uncovered area's sections show (§2.11, S1). */
@@ -205,9 +220,9 @@ const GROUPS: readonly { group: ColourGroup; title: string }[] = [
   { group: 'other', title: 'Other colours' },
 ];
 
-const colourParts = (detail: SystemDetail): SectionParts => {
+const colourParts = (detail: SystemDetail, styled: Styler): SectionParts => {
   const colours = tokensOf(detail, 'colours');
-  const swatch = (name: string): string => `<div class="dc-swatch" style="background: var(${name})"></div>`;
+  const swatch = (name: string): string => `<div${styled('dc-swatch', `background: var(${name})`)}></div>`;
   const body = GROUPS.map(({ group, title }) => {
     const members = colours.filter((token) => (token.group ?? 'other') === group);
     if (members.length === 0) return '';
@@ -218,7 +233,7 @@ const colourParts = (detail: SystemDetail): SectionParts => {
 
 const caseOf = (style: TypeStyle): string => ({ none: 'none', upper: 'uppercase', lower: 'lowercase', title: 'capitalize' })[style.case] ?? 'none';
 
-const typeRow = (style: TypeStyle): string => {
+const typeRow = (style: TypeStyle, styled: Styler): string => {
   const values = TYPE_FIELDS.map((field) => style[field]).filter((value) => value !== '').map(escapeHtml).join(' · ');
   const id = SYSTEM_ENTRY_ID_PATTERN.test(style.id) ? style.id : null;
   const declarations =
@@ -236,14 +251,14 @@ const typeRow = (style: TypeStyle): string => {
     `<div class="dc-row"${id === null ? '' : entryAttr('type', id)}>` +
     `<div class="dc-meta"><div>${escapeHtml(style.name)}</div><div class="dc-value">${values}</div>` +
     (style.note !== '' ? `<div class="dc-note">${escapeHtml(style.note)}</div>` : '') +
-    `</div><div class="dc-specimen" style="${declarations}">${escapeHtml(style.name)}: The quick brown fox jumps over the lazy dog</div></div>`
+    `</div><div${styled('dc-specimen', declarations)}>${escapeHtml(style.name)}: The quick brown fox jumps over the lazy dog</div></div>`
   );
 };
 
-const fontRow = (font: FontAsset, index: number, unusable: ReadonlySet<string>): string => {
+const fontRow = (font: FontAsset, index: number, unusable: ReadonlySet<string>, styled: Styler): string => {
   const usable = !unusable.has(font.file) && assetUrl(font.file) !== null && FONT_FAMILY.test(font.family);
   const sample = usable
-    ? `<div class="dc-specimen" style="font-family: &quot;${escapeHtml(font.family)}&quot;, sans-serif; font-weight: ${Number.isInteger(font.weight) ? font.weight : 400}; font-style: ${font.style === 'italic' ? 'italic' : 'normal'}">Aa Bb Cc 0123456789</div>`
+    ? `<div${styled('dc-specimen', `font-family: "${font.family}", sans-serif; font-weight: ${Number.isInteger(font.weight) ? font.weight : 400}; font-style: ${font.style === 'italic' ? 'italic' : 'normal'}`)}>Aa Bb Cc 0123456789</div>`
     : `<div class="dc-specimen">${escapeHtml("This font file can't be used.")}</div>`;
   return (
     `<div class="dc-row"${entryAttr('font', String(index))}><div class="dc-meta"><div>${escapeHtml(font.family)}</div>` +
@@ -254,10 +269,10 @@ const fontRow = (font: FontAsset, index: number, unusable: ReadonlySet<string>):
 const plainTokenRows = (tokens: readonly SystemToken[]): string =>
   tokens.map((token) => `<div class="dc-row"${entryAttr('token', token.name)}><div class="dc-meta">${tokenText(token)}</div></div>`).join('');
 
-const typographyParts = (detail: SystemDetail, unusable: ReadonlySet<string>): SectionParts => {
+const typographyParts = (detail: SystemDetail, unusable: ReadonlySet<string>, styled: Styler): SectionParts => {
   const parts: string[] = [];
-  if (detail.type.length > 0) parts.push(`<h3>Type styles</h3>${detail.type.map(typeRow).join('')}`);
-  if (detail.fonts.length > 0) parts.push(`<h3>Fonts</h3>${detail.fonts.map((font, index) => fontRow(font, index, unusable)).join('')}`);
+  if (detail.type.length > 0) parts.push(`<h3>Type styles</h3>${detail.type.map((style) => typeRow(style, styled)).join('')}`);
+  if (detail.fonts.length > 0) parts.push(`<h3>Fonts</h3>${detail.fonts.map((font, index) => fontRow(font, index, unusable, styled)).join('')}`);
   const tokens = tokensOf(detail, 'typography');
   if (tokens.length > 0) parts.push(`<h3>Type tokens</h3>${plainTokenRows(tokens)}`);
   return { title: 'Typography', body: parts.join(''), empty: 'No type styles, fonts or type tokens yet.' };
@@ -273,7 +288,7 @@ const layerOrder = (token: SystemToken): number => {
   return /^-?\d+$/.test(text) ? Number(text) : 0;
 };
 
-const layersParts = (detail: SystemDetail): SectionParts => {
+const layersParts = (detail: SystemDetail, styled: Styler): SectionParts => {
   const tokens = [...tokensOf(detail, 'layers')].sort((a, b) => layerOrder(a) - layerOrder(b));
   const parts: SectionParts = { title: 'Layers', body: '', empty: 'No layer tokens yet.' };
   if (tokens.length === 0) return parts;
@@ -281,17 +296,17 @@ const layersParts = (detail: SystemDetail): SectionParts => {
   const diagram = shown
     .map((token, index) => {
       const z = isTokenName(token.name) && cssValueOf('layers', null, token.light?.text) !== null ? `z-index: var(${token.name}); ` : '';
-      return `<div class="dc-layer" style="${z}left: ${index * 28}px; top: ${index * 6}px">${escapeHtml(token.name)}</div>`;
+      return `<div${styled('dc-layer', `${z}left: ${index * 28}px; top: ${index * 6}px`)}>${escapeHtml(token.name)}</div>`;
     })
     .join('');
   const cards = tokens.map((token) => `<div class="dc-card"${entryAttr('token', token.name)}>${tokenText(token)}</div>`).join('');
   return { ...parts, body: `<div class="dc-stack" aria-hidden="true">${diagram}</div><div class="dc-grid">${cards}</div>` };
 };
 
-const sizesParts = (detail: SystemDetail): SectionParts => {
+const sizesParts = (detail: SystemDetail, styled: Styler): SectionParts => {
   const sizes = tokensOf(detail, 'sizes');
   const others = tokensOf(detail, 'other');
-  const bar = (name: string): string => `<div class="dc-bar" style="width: min(var(${name}), 100%)"></div>`;
+  const bar = (name: string): string => `<div${styled('dc-bar', `width: min(var(${name}), 100%)`)}></div>`;
   const parts: string[] = [];
   if (sizes.length > 0) parts.push(`<div class="dc-grid">${sizes.map((token) => tokenCard(token, bar)).join('')}</div>`);
   if (others.length > 0) parts.push(`<h3>Other tokens</h3>${plainTokenRows(others)}`);
@@ -394,23 +409,24 @@ const assetsParts = (detail: SystemDetail): SectionParts => {
 
 const partsOf = (detail: SystemDetail, section: SystemSection, options: SpecimenOptions): SectionParts => {
   const unusable = options.unusable ?? new Set<string>();
+  const styled = stylerOf(options);
   switch (section) {
     case 'overview':
       return overviewParts(detail);
     case 'colours':
-      return colourParts(detail);
+      return colourParts(detail, styled);
     case 'typography':
-      return typographyParts(detail, unusable);
+      return typographyParts(detail, unusable, styled);
     case 'spacing':
-      return visualParts(detail, 'spacing', 'Spacing', 'No spacing tokens yet.', (name) => `<div class="dc-bar" style="width: var(${name})"></div>`);
+      return visualParts(detail, 'spacing', 'Spacing', 'No spacing tokens yet.', (name) => `<div${styled('dc-bar', `width: var(${name})`)}></div>`);
     case 'radius':
-      return visualParts(detail, 'radius', 'Radius', 'No radius tokens yet.', (name) => `<div class="dc-radius-box" style="border-radius: var(${name})"></div>`);
+      return visualParts(detail, 'radius', 'Radius', 'No radius tokens yet.', (name) => `<div${styled('dc-radius-box', `border-radius: var(${name})`)}></div>`);
     case 'shadows':
-      return visualParts(detail, 'shadows', 'Shadows', 'No shadow tokens yet.', (name) => `<div class="dc-shadow-box" style="box-shadow: var(${name})"></div>`);
+      return visualParts(detail, 'shadows', 'Shadows', 'No shadow tokens yet.', (name) => `<div${styled('dc-shadow-box', `box-shadow: var(${name})`)}></div>`);
     case 'layers':
-      return layersParts(detail);
+      return layersParts(detail, styled);
     case 'sizes':
-      return sizesParts(detail);
+      return sizesParts(detail, styled);
     case 'components':
       return componentsParts(detail, options.example);
     case 'patterns':
