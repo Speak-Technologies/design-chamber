@@ -49,6 +49,8 @@ import { writeRuntimeRecord } from './runtime-record.ts';
 import { createSelfWrites } from './self-writes.ts';
 import { createSettingsStore, type SettingsEnv } from './settings.ts';
 import { createDesignStore } from './store.ts';
+import { startChoiceReconciler } from './systems/choice.ts';
+import { ensureLinkService } from './systems/link.ts';
 import { ensureSystemStore } from './systems/store.ts';
 import { ensureSystemVersions } from './systems/versions.ts';
 import { ensureThumbnailService } from './thumbnails.ts';
@@ -138,6 +140,12 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
 
   const watcher = startWatcher({ settings, hub, log, selfWrites, ...options.watch });
   ctx.onDispose(() => watcher.stop());
+
+  // Phase 2.5 §5.4, §5.5: a copy swap a restart interrupted is finished or undone, and the agent's
+  // recorded `systemChoice` is acted on from the first design event on.
+  const copiesRecovered = ensureLinkService(ctx).recoverAll();
+  ctx.onDispose(() => copiesRecovered);
+  ctx.onDispose(startChoiceReconciler(ctx));
 
   // The guide at <root>/AGENTS.md: synced after the watcher's baseline, on root changes and on
   // new designs. The skill ships inside the extension; an older installed copy is only read here.

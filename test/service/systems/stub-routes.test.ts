@@ -129,6 +129,10 @@ const BUILT: ReadonlySet<RouteKey> = new Set<RouteKey>([
   'POST /system-scans',
   'GET /system-scans/:scanId',
   'DELETE /system-scans/:scanId',
+  // T7: test/service/systems/link-routes.test.ts.
+  'GET /designs/:slug/system',
+  'GET /designs/:slug/system/preview',
+  'POST /designs/:slug/system',
   'GET /folders',
   'POST /folders',
   'PATCH /folders/:folderId',

@@ -53,7 +53,7 @@ const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoExc
 const stale = (): ApiError => new ApiError('stale', TOKENS_STALE_MESSAGE);
 
 /** tokens.css as read for a request: absent, not readable here (a link, too large), or its bytes. */
-type TokensFile =
+export type TokensFile =
   | { kind: 'absent' }
   | { kind: 'link' }
   | { kind: 'too-large' }
@@ -63,10 +63,10 @@ type TokensFile =
  * The design's tokens.css through the one plain-target check (§2.3): a link anywhere on the way,
  * inside the design or out of it, is not read; over `TOKENS_CSS_MAX_BYTES` is not read either.
  */
-const readTokensFile = async (dir: string): Promise<TokensFile> => {
+export const readTokensFile = async (dir: string, segments: readonly string[] = [TOKENS_FILE]): Promise<TokensFile> => {
   let file: string;
   try {
-    file = await resolvePlainTarget(dir, [TOKENS_FILE], { allowAbsent: true });
+    file = await resolvePlainTarget(dir, segments, { allowAbsent: true });
   } catch (error) {
     if (error instanceof ApiError) return { kind: 'link' };
     throw error;

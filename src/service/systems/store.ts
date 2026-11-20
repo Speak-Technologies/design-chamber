@@ -151,6 +151,11 @@ export type SystemStore = {
   updateStateLocked(id: string, mutate: (state: SystemState) => SystemState | null): Promise<void>;
   /** Bump the revision now when the content tree changed (a user's save, re-sync or restore landed). */
   settleRevision(id: string): Promise<void>;
+  /**
+   * §5.4 "settled": no change other than the user's own reached the system for `SYSTEM_QUIET_MS`
+   * (the agent may be mid-write otherwise, so a link would copy half a system).
+   */
+  isSettled(id: string): boolean;
   /** Settings notices queued by deletes, answered once (`GET /settings`). */
   takeNotices(): string[];
   dispose(): Promise<void>;
@@ -244,6 +249,8 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
   const locks = new Map<string, Promise<unknown>>();
   const hashCache = new Map<string, { key: string; sha256: string }>();
   const quietTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** When a change that was not the user's last reached each system (for `isSettled`). */
+  const lastOtherChange = new Map<string, number>();
   const notices: string[] = [];
   let summaries: readonly SystemSummary[] = [];
   let indexTimer: ReturnType<typeof setTimeout> | null = null;
@@ -643,6 +650,7 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
   const unsubscribe = hub.subscribe((event) => {
     if (event.kind === 'root') {
       for (const id of [...quietTimers.keys()]) clearQuiet(id);
+      lastOtherChange.clear();
       hashCache.clear();
       firstLoad = true;
       scheduleIndex();
@@ -652,9 +660,11 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     const id = event.system;
     if (event.systemChange === 'removed') {
       clearQuiet(id);
+      lastOtherChange.delete(id);
       selfWrites.forgetDesign(systemSelfWritesKey(id));
     } else if ((event.systemChange === 'files' || event.systemChange === 'added') && event.origin !== 'user') {
       // The agent's (or a hand-made folder's) change: a new revision once it has been quiet for a while.
+      lastOtherChange.set(id, now().getTime());
       scheduleQuiet(id);
     }
     scheduleIndex();
@@ -872,6 +882,10 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
       if (next !== null) await writeStateOf(systemDir, { ...next, updated: now().toISOString() });
     },
     settleRevision,
+    isSettled(id) {
+      const last = lastOtherChange.get(id);
+      return last === undefined || now().getTime() - last >= quietMs;
+    },
     takeNotices: () => notices.splice(0, notices.length),
     async dispose() {
       disposed = true;

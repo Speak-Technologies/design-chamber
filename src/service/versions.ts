@@ -519,8 +519,12 @@ export const createVersionFileSource = (designDir: string, files: Record<string,
 
 export type SnapshotOptions = { sessionId?: string | null; label?: string };
 
-/** The version reasons a hand edit takes (Phase 2 §2.1). */
-export type UserEditReason = Extract<VersionReason, 'user-edit' | 'keep-direction'>;
+/**
+ * The version reasons a hand edit takes (Phase 2 §2.1), and the copy-on-link writes (Phase 2.5 §5.4):
+ * `system-change` / `system-update` are always their own version, like `keep-direction` (only
+ * `user-edit` coalesces).
+ */
+export type UserEditReason = Extract<VersionReason, 'user-edit' | 'keep-direction' | 'system-change' | 'system-update' | 'resync'>;
 
 /** A design-relative file a hand edit left: its new bytes, or `null` when it removed or moved it away. */
 export type WrittenFile = readonly [rel: string, bytes: Uint8Array | null];
@@ -530,8 +534,11 @@ export type UserEditSteps<P, R> = {
   staleMessage: string;
   /** Reads, stale checks and plans; writes nothing. A throw here takes no version. */
   precheck: () => Promise<P>;
-  /** Runs after the version; `preTree` is the tree the edit started from. Reports every file it left. */
-  apply: (plan: P, preTree: VersionTree) => Promise<{ response: R; written: readonly WrittenFile[] }>;
+  /**
+   * Runs after the version; `preTree` is the tree the edit started from, `version` the version just
+   * taken (null when coalesced; the copy-on-link names it in COPY.json, Phase 2.5 §2.6). Reports every file it left.
+   */
+  apply: (plan: P, preTree: VersionTree, version: VersionEntry | null) => Promise<{ response: R; written: readonly WrittenFile[] }>;
 };
 
 export type UserEditResult<R> = {
@@ -899,7 +906,7 @@ export const createVersionsService = (deps: VersionsDeps): VersionsService => {
     }
     let applied: Awaited<ReturnType<UserEditSteps<P, R>['apply']>>;
     try {
-      applied = await steps.apply(plan, tree);
+      applied = await steps.apply(plan, tree, version);
     } catch (error) {
       // The version taken stays (it holds the files as they were). What the failed apply left is
       // unknown, so the next hand edit must not coalesce with it.

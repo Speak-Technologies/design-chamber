@@ -299,9 +299,9 @@ describe('a save', () => {
         userEdit: <P, R>(id: string, reason: 'user-edit' | 'keep-direction', steps: UserEditSteps<P, R>) =>
           real.userEdit(id, reason, {
             ...steps,
-            apply: async (plan, tree) => {
+            apply: async (plan, tree, version) => {
               await sneak?.();
-              return steps.apply(plan, tree);
+              return steps.apply(plan, tree, version);
             },
           }),
       }),

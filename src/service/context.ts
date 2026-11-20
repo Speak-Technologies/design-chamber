@@ -133,6 +133,13 @@ export type DesignStore = {
   moveComments(slug: string, moves: { from: string; to: string; ids?: string[] }[], hooks?: WriteHooks): Promise<{ moved: { id: string; from: string; to: string }[]; bytes: Uint8Array | null }>;
   /** WP3 registers one hook that writes `.chamber/RULES.md`. A failing hook is logged, never undoes the create. */
   onCreate(hook: (record: DesignRecord) => Promise<void>): () => void;
+  /**
+   * Phase 2.5 §2.7: change the design's service-owned system fields (`systemDecision`,
+   * `systemChoiceSeen`, `systemChoiceProblem`) under the design's lock. state.json only: these
+   * fields are never mirrored into design.json. `mutate` answers null to write nothing. Throws
+   * `bad-slug` or `not-found` like `get`.
+   */
+  updateSystemState(slug: string, mutate: (state: ServiceState) => ServiceState | null): Promise<ServiceState>;
 };
 
 // ---- WP1: change hub (§9.4) ----

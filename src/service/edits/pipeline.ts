@@ -36,6 +36,7 @@ import {
   SCREEN_ID_PATTERN,
   SCREENS_MAX,
   SHA256_PATTERN,
+  SYSTEM_TOKEN_NAME_PATTERN,
   TEXT_EDIT_MAX,
   TWEAK_VAR_PATTERN,
   TWEAKS_MAX,
@@ -90,10 +91,21 @@ export const STALE_MESSAGES: Readonly<Record<EditRequest['op'], string>> = {
   'token-reset': 'This override changed since you opened the update. Reload and try again.',
 };
 
-const VERSION_LABELS: Readonly<Record<UserEditReason, string>> = { 'user-edit': 'Before your edits', 'keep-direction': 'Before keeping a direction' };
+const VERSION_LABELS: Readonly<Record<UserEditReason, string>> = {
+  'user-edit': 'Before your edits',
+  'keep-direction': 'Before keeping a direction',
+  // Phase 2.5 §5.4 (the link service's versions; the labels match the versions list).
+  'system-change': 'Before changing the design system',
+  'system-update': 'Before updating the design system',
+  // Phase 2.5 §6.3 (a system's re-sync, `systems/edits.ts`).
+  resync: 'Before re-sync',
+};
 
 export const partWayMessage = (reason: UserEditReason): string =>
   `Something went wrong part way. The version '${VERSION_LABELS[reason]}' holds everything as it was; restore it from Versions.`;
+
+/** Phase 2.5 §3.2: overrides one Reset to system may remove at once. */
+export const TOKEN_RESET_NAMES_MAX = 200;
 
 // ---- request shape (pure, §10.2) ----
 
@@ -176,6 +188,13 @@ export const parseEditRequest = (body: unknown): EditRequest => {
       if (!uniqueIds(files.map((entry) => entry.id))) return bad();
       return { op: 'keep-direction', screens: sha(body.screens), of: screenId(body.of), keep: screenId(body.keep), files };
     }
+    case 'token-reset': {
+      // Phase 2.5 §6.4: 1..200 distinct token names; whether each is an override is the op's rule.
+      if (!Array.isArray(body.names) || body.names.length === 0 || body.names.length > TOKEN_RESET_NAMES_MAX) return bad();
+      const names = body.names.map((name: unknown) => (typeof name === 'string' && SYSTEM_TOKEN_NAME_PATTERN.test(name) ? name : bad()));
+      if (!uniqueIds(names)) return bad();
+      return { op: 'token-reset', base: sha(body.base), names };
+    }
     default:
       return bad();
   }
@@ -198,7 +217,7 @@ export const stepAllowed = (op: EditRequest['op'], record: DesignRecord, slug: s
   switch (step.kind) {
     case 'write':
       if (op === 'text') return record.design.kind === 'page' ? step.rel === ENTRY_FILE : record.design.kind === 'canvas' && listedScreen(record, step.rel);
-      return op === 'tokens' && step.rel === 'tokens.css';
+      return (op === 'tokens' || op === 'token-reset') && step.rel === 'tokens.css';
     case 'create':
       return op === 'duplicate' && record.design.kind === 'canvas' && screenIdOfFile(step.rel) !== null && !listedScreen(record, step.rel);
     case 'move':

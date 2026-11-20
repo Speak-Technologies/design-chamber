@@ -33,8 +33,12 @@ import {
   REVISION_TEXT_MAX,
   SESSION_ID_MAX,
   SLUG_PATTERN,
+  SYSTEM_ID_PATTERN,
   UPLOAD_ID_PATTERN,
 } from '../../shared/limits.ts';
+import { effectiveSystemChoice } from '../../shared/systems.ts';
+import type { EffectiveSystemChoice } from '../../shared/types.ts';
+import { ensureLinkService, LINK_SYSTEM_GONE_MESSAGE, linkDraftMessage } from '../systems/link.ts';
 import type { AnchorState, Comment, DesignKind } from '../../shared/types.ts';
 import type { DesignRecord, ServiceContext } from '../context.ts';
 import { ensureChecksService } from '../check/service.ts';
@@ -72,7 +76,14 @@ export const projectDirectoryOf = (value: unknown): string | null => {
   return value;
 };
 
-const parseChipBody = (body: unknown): { kind: DesignKind; brief: string; preset: string | null; projectDirectory: string | null } => {
+/** The New dialog's design-system choice (Phase 2.5 §3.2): a system id, `none` or `ask`; absent → null. */
+const chipSystemOf = (value: unknown): string | null => {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string' && (value === 'none' || value === 'ask' || SYSTEM_ID_PATTERN.test(value))) return value;
+  throw new ApiError('bad-request', 'That is not a design system choice. Pick a design system, No design system or Ask me in chat.');
+};
+
+const parseChipBody = (body: unknown): { kind: DesignKind; brief: string; preset: string | null; projectDirectory: string | null; system: string | null } => {
   const record = bodyOf(body, 'the new design');
   const { kind } = record;
   if (kind !== 'canvas' && kind !== 'page') throw new ApiError('bad-request', 'Say whether the design is a "canvas" or a "page".');
@@ -84,7 +95,7 @@ const parseChipBody = (body: unknown): { kind: DesignKind; brief: string; preset
   if (preset !== null && !PRESET_ID_PATTERN.test(preset)) throw new ApiError('bad-request', 'That is not a style preset id.');
   // `sessionId` is accepted but deliberately not stored: the user may never send the chip (§10.1).
   optionalText(record, 'sessionId', SESSION_ID_MAX, 'chat id');
-  return { kind, brief, preset, projectDirectory: projectDirectoryOf(record.projectDirectory) };
+  return { kind, brief, preset, projectDirectory: projectDirectoryOf(record.projectDirectory), system: chipSystemOf(record.system) };
 };
 
 const ANCHOR_STATES: ReadonlySet<unknown> = new Set<AnchorState>(['exact', 'moved', 'detached']);
@@ -388,19 +399,60 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
     ctx.log.warn('agent.rules-hook-unavailable', { error: error instanceof Error ? error.message : String(error) });
   }
 
+  /**
+   * Phase 2.5 §2.9, §5.4: a new design's system. A system is linked at creation (no version: the
+   * design holds nothing yet); `none` and `ask` are recorded as the decision; `none-silent` (no
+   * Ready system in this folder) leaves the design exactly as before Phase 2.5.
+   */
+  const applySystemChoice = async (slug: string, choice: EffectiveSystemChoice): Promise<void> => {
+    if (choice.choice === 'none-silent') return;
+    if (choice.choice === 'system') {
+      try {
+        await ensureLinkService(ctx).link(slug, { to: choice.id, by: 'creation', reason: 'system-change' });
+        return;
+      } catch (error) {
+        // The design is made either way; with the copy refused (the system changed a moment ago), the agent asks instead.
+        ctx.log.warn('systems.creation-link-failed', { slug, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    const decision = choice.choice === 'none' ? 'none' : 'ask';
+    await ctx.store.updateSystemState(slug, (state) => ({ ...state, systemDecision: decision })).catch((error: unknown) => {
+      ctx.log.warn('systems.creation-decision-failed', { slug, error: error instanceof Error ? error.message : String(error) });
+    });
+  };
+
   router.on('POST /chip', async ({ body }): Promise<ChipResponse> => {
     const input = parseChipBody(body);
     if (input.preset !== null && (await readPreset(ctx.packageRoot, input.preset)) === null) {
       throw new ApiError('bad-request', 'That style preset is not available. Pick another or start without one.');
     }
+    // Phase 2.5 §2.9: which system the new design gets. An explicit pick that is gone or a draft by now
+    // is refused before anything is made (the dialog offered it as Ready).
+    const systems = await ensureLinkService(ctx).indexed(true);
+    if (input.system !== null && input.system !== 'none' && input.system !== 'ask') {
+      const picked = systems.find((one) => one.id === input.system);
+      if (picked === undefined) throw new ApiError('invalid', LINK_SYSTEM_GONE_MESSAGE);
+      if (picked.status !== 'ready') throw new ApiError('invalid', linkDraftMessage(picked.name));
+    }
+    const choice = effectiveSystemChoice({
+      explicit: input.system,
+      projectDirectory: input.projectDirectory,
+      designsRoot: ctx.settings.root(),
+      settings: ctx.settings.read(),
+      systems,
+      foldsCase: foldsCase(),
+    });
     await instructions.discover(input.projectDirectory);
-    const record = await ctx.store.create({
+    const created = await ctx.store.create({
       kind: input.kind,
       title: titleFromBrief(input.brief, input.kind),
       brief: input.brief,
       preset: input.preset,
       projectDirectory: input.projectDirectory,
     });
+    await applySystemChoice(created.slug, choice);
+    // Re-read: the link wrote the copy and the decision the rules file reads.
+    const record = choice.choice === 'none-silent' ? created : await ctx.store.get(created.slug);
     // The chip makes RULES.md mandatory reading, so a failure to write it is a failure of the chip.
     const { context, text } = await instructions.prepare(record);
     await writeRulesFile(record.path, text);
