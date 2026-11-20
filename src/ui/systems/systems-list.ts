@@ -22,7 +22,7 @@ export type SystemsListOptions = {
   surface: 'panel' | 'page';
   actions: ActionContext;
   onBack: () => void;
-  /** A row was chosen. U2 opens the system page here. */
+  /** A row was chosen, or a new system was made: the system page opens. */
   onOpen: (id: string) => void;
 };
 
@@ -51,8 +51,7 @@ export const mountSystemsList = (options: SystemsListOptions): SystemsListHandle
     variant: 'default',
     size: options.surface === 'panel' ? 'sm' : 'default',
     icon: 'plus',
-    // U2: pass `onMade` here to open the new system's page.
-    onClick: () => openNewSystemSheet(options.actions.host),
+    onClick: () => openNewSystemSheet(options.actions.host, { onMade: (result) => options.onOpen(result.id) }),
   });
   const head =
     options.surface === 'panel'
@@ -114,9 +113,9 @@ export const mountSystemsList = (options: SystemsListOptions): SystemsListHandle
     const actions = h(
       'div',
       { class: 'dc-sys-empty-actions' },
-      btn({ label: 'From code…', variant: 'outline', size: 'sm', icon: 'page', onClick: () => openNewSystemSheet(options.actions.host, { source: 'code' }) }).el,
-      btn({ label: 'From brand files…', variant: 'outline', size: 'sm', icon: 'image', onClick: () => openNewSystemSheet(options.actions.host, { source: 'brand' }) }).el,
-      btn({ label: 'Describe…', variant: 'outline', size: 'sm', icon: 'pencil', onClick: () => openNewSystemSheet(options.actions.host, { source: 'description' }) }).el,
+      btn({ label: 'From code…', variant: 'outline', size: 'sm', icon: 'page', onClick: () => openNewSystemSheet(options.actions.host, { source: 'code', onMade: (result) => options.onOpen(result.id) }) }).el,
+      btn({ label: 'From brand files…', variant: 'outline', size: 'sm', icon: 'image', onClick: () => openNewSystemSheet(options.actions.host, { source: 'brand', onMade: (result) => options.onOpen(result.id) }) }).el,
+      btn({ label: 'Describe…', variant: 'outline', size: 'sm', icon: 'pencil', onClick: () => openNewSystemSheet(options.actions.host, { source: 'description', onMade: (result) => options.onOpen(result.id) }) }).el,
     );
     return h('li', { class: 'dc-sys-message dc-sys-empty' }, holder, actions);
   };

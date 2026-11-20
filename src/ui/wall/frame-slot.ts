@@ -11,6 +11,7 @@ import { ARTBOARD_SANDBOX, createFrameDocument, type FrameDocument } from '../..
 import type { RenderMeta } from '../../shared/api.ts';
 import type { BridgeMode, FrameToPageMessage } from '../../shared/bridge-protocol.ts';
 import { h } from '../components/dom.ts';
+import type { RenderDoc } from '../../guest/service-client.ts';
 import { client, isServiceError } from '../guest.ts';
 import { onReadyMessages, slotStorage, slotTokens } from '../model/slot-seed.ts';
 
@@ -20,7 +21,10 @@ import { onReadyMessages, slotStorage, slotTokens } from '../model/slot-seed.ts'
 export type SlotState = 'idle' | 'loading' | 'ready' | 'missing' | 'error';
 
 export type SlotOptions = {
+  /** The key the Tweaks preview and the saved page data are looked up by: the design slug, or `system:<id>` for a design system board. */
   slug: string;
+  /** What this frame renders; the default is the design `slug`'s own render. A design system board passes its board route here and takes no saved page data. */
+  loadDoc?: (screenId: string | null, version: string | null) => Promise<RenderDoc>;
   artboardId: string;
   title: string;
   mode: () => BridgeMode;
@@ -97,8 +101,9 @@ export const createFrameSlot = (options: SlotOptions): FrameSlot => {
       try {
         // Only a frame that shows the live design gets the design's saved page data, and it waits for it (the controller
         // answers within 2 s either way). An old version, a compare half and every other frame run with empty, unsaved storage.
-        const saved = version === null ? slotStorage(options.slug) : undefined;
-        const [rendered] = await Promise.all([client.loadRender(options.slug, screenId, version), saved?.ready]);
+        const saved = version === null && !options.loadDoc ? slotStorage(options.slug) : undefined;
+        const fetched = options.loadDoc ? options.loadDoc(screenId, version) : client.loadRender(options.slug, screenId, version);
+        const [rendered] = await Promise.all([fetched, saved?.ready]);
         if (mine !== token) return;
         meta = rendered.meta;
         drop();

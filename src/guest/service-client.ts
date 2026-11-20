@@ -107,6 +107,8 @@ export type ServiceClient = {
   call<K extends RouteKey>(key: K, ...args: CallArgs<K>): Promise<RouteResponse<K>>;
   /** Full bundled document for a page (`screen` null) or a canvas screen, optionally at a version. */
   loadRender(slug: string, screen?: string | null, version?: string | null): Promise<RenderDoc>;
+  /** The specimen board of a design system (Phase 2.5): live or at a version, in a colour scheme. */
+  loadBoard(id: string, version?: string | null, scheme?: 'light' | 'dark'): Promise<RenderDoc>;
   /** Uploads `text` in F7-safe chunks; resolves to the completed upload id. */
   upload(text: string): Promise<string>;
   /**
@@ -328,6 +330,41 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
     return task;
   };
 
+  const fetchBoard = async (id: string, version: string | null, scheme: 'light' | 'dark'): Promise<RenderDoc> => {
+    const query: RouteQuery<'GET /systems/:id/board'> = { scheme };
+    if (version) query.version = version;
+    const meta = await call('GET /systems/:id/board', { params: { id }, query });
+    const cached = renders.get(meta.key);
+    if (cached) {
+      renders.delete(meta.key);
+      renders.set(meta.key, cached);
+      return cached;
+    }
+    const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
+    const parts = await mapLimit(indexes, RENDER_CHUNK_CONCURRENCY, (n) =>
+      call('GET /systems/:id/board/chunk', { params: { id }, query: { key: meta.key, n: String(n) } }),
+    );
+    const doc = { meta, html: parts.join('') };
+    remember(doc);
+    return doc;
+  };
+
+  const loadBoard = (id: string, version: string | null = null, scheme: 'light' | 'dark' = 'light'): Promise<RenderDoc> => {
+    const key = `board\u0000${id}\u0000${version ?? ''}\u0000${scheme}`;
+    const running = inflight.get(key);
+    if (running) return running;
+    const task = (async () => {
+      try {
+        return await fetchBoard(id, version, scheme);
+      } catch (error) {
+        if (isServiceError(error, 'stale')) return fetchBoard(id, version, scheme);
+        throw error;
+      }
+    })().finally(() => inflight.delete(key));
+    inflight.set(key, task);
+    return task;
+  };
+
   const upload = async (text: string): Promise<string> => {
     if (text.length > UPLOAD_TOTAL_MAX) {
       throw new ServiceError('too-large', `This text is too long to send to Design Chamber (over ${UPLOAD_TOTAL_MAX.toLocaleString('en-US')} characters).`);
@@ -370,5 +407,5 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
     return answer;
   };
 
-  return { call, loadRender, upload, uploadBinary, thumbnail };
+  return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail };
 };

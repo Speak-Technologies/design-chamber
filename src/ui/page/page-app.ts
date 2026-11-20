@@ -10,7 +10,7 @@ import { mountSettings, type SettingsHandle } from '../components/settings-view.
 import { flows } from '../guest.ts';
 import { mountDesignView, type DesignViewHandle } from '../wall/design-view.ts';
 import { mountSystemsList, type SystemsListHandle } from '../systems/systems-list.ts';
-import { openSystem } from '../systems/open-system.ts';
+import { mountSystemPage, type SystemPageHandle } from '../systems/system-page.ts';
 import { mountLibrary } from './library-view.ts';
 
 export const mountPage = (root: HTMLElement): void => {
@@ -20,6 +20,8 @@ export const mountPage = (root: HTMLElement): void => {
   let open: { slug: string; handle: DesignViewHandle } | null = null;
   /** The design systems list, while it is the view on screen. */
   let systemsView: SystemsListHandle | null = null;
+  /** One design system, open from the list (the list stays behind it, hidden, so Back returns to it). */
+  let systemPage: { id: string; handle: SystemPageHandle } | null = null;
 
   const closeDesign = (): void => {
     const slug = open?.slug;
@@ -33,6 +35,8 @@ export const mountPage = (root: HTMLElement): void => {
   const showDesign = (slug: string): void => {
     open?.handle.dispose();
     // A chip click or an open request lands here while the systems list is up: it gives way to the design.
+    systemPage?.handle.dispose();
+    systemPage = null;
     systemsView?.dispose();
     systemsView = null;
     const handle = mountDesignView({ slug, surface: 'page', actions, onBack: leaveDesign });
@@ -82,6 +86,8 @@ export const mountPage = (root: HTMLElement): void => {
   };
 
   const closeSystems = (): void => {
+    systemPage?.handle.dispose();
+    systemPage = null;
     systemsView?.dispose();
     systemsView = null;
     library.el.hidden = false;
@@ -89,10 +95,31 @@ export const mountPage = (root: HTMLElement): void => {
   };
   const showSystems = (): void => {
     if (systemsView) return;
-    systemsView = mountSystemsList({ surface: 'page', actions, onBack: closeSystems, onOpen: openSystem });
+    systemsView = mountSystemsList({ surface: 'page', actions, onBack: closeSystems, onOpen: (id) => openSystem(id) });
     library.el.hidden = true;
     app.append(systemsView.el);
     systemsView.focus();
+  };
+
+  const closeSystemPage = (): void => {
+    systemPage?.handle.dispose();
+    systemPage = null;
+    if (systemsView) {
+      systemsView.el.hidden = false;
+      systemsView.focus();
+    }
+  };
+  const openSystem = (id: string): void => {
+    if (systemPage?.id === id) return;
+    systemPage?.handle.dispose();
+    systemPage = null;
+    if (!systemsView) showSystems();
+    if (!systemsView) return;
+    systemsView.el.hidden = true;
+    const handle = mountSystemPage({ id, surface: 'page', actions, onBack: closeSystemPage });
+    systemPage = { id, handle };
+    app.append(handle.el);
+    handle.focus();
   };
 
   const library = mountLibrary({

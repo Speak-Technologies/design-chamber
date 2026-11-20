@@ -1,7 +1,7 @@
-# Design systems: the list and the New design system sheet
+# Design systems: the list, the New design system sheet and the system page
 
 **Route:** the page's Library toolbar → **Design systems**, and the rail's header → **Design systems** (palette icon) · **Access:** every OpenChamber user
-**Purpose:** See every design system in the Designs folder and make a new one. A design system is a set of colours, type, spacing and components, with notes on how to use them, that the chat agent reads before it designs. What a system is, how it is made and what the service enforces: [Design systems](../features/design-systems.md). The system's own page (the board, the side panel, editing, review) is a later piece; until it lands, a row click says so instead of doing nothing.
+**Purpose:** See every design system in the Designs folder and make a new one. A design system is a set of colours, type, spacing and components, with notes on how to use them, that the chat agent reads before it designs. What a system is, how it is made and what the service enforces: [Design systems](../features/design-systems.md). A row opens the system's own page, described under [The system page](#the-system-page).
 
 Screenshots come from `test/ui/visual/scenarios/design-systems-list.mjs` (the real UI with the in-memory fake service), in `documentation/pages/img/systems-<surface>-<width>-<theme>-*.png`.
 
@@ -61,3 +61,42 @@ Every control is reachable by keyboard with a visible focus ring. Rows are butto
 ## Rail and page
 
 The same view on both. The rail (320 to 480 px) shows rows and the page shows cards in a grid. The sheet is a centred dialog on both and scrolls inside, with its buttons pinned.
+
+## The system page
+
+**Route:** a row (or **Open** in its row menu) in the list; a new system opens its page as soon as it is made · **Access:** every OpenChamber user. Screenshots come from `test/ui/visual/scenarios/design-system-page.mjs` in `documentation/pages/img/syspage-*.png` when that scenario is run with its default `--out`.
+
+This is an **internal** system (kept in the Designs folder). A system that lives in a project's repo gets its own page later; the page already keeps `detail.home` and the "this lives in your project" sentence for that.
+
+### Full-screen page
+
+- **Header.** Back (**Design systems**), the name (click to rename), a **Ready** or **Draft** badge, **Unsaved** while values are pending, and a line under it: "In Design Chamber · From tidepool-web · Used by 4 designs". On the right: **Mark ready** (the one filled button while the system is a Draft) or **Back to draft** (outline, no primary when it is Ready), **Versions**, and a **⋯** menu.
+- **Board.** The specimen board is drawn by the service and shown in a sandboxed frame (scripts on, never the page's own origin) on a quiet stage. It follows the OpenChamber light or dark theme. Clicking a swatch, a type sample or a component selects that entry in the panel and puts its name in the ask bar. While a value is pending the board shows it live.
+- **Panel (360 px).** "Sections" with "N of M reviewed" and a thin bar, then four areas that fold open: **Foundations** (Overview, Colours, Typography, Spacing, Radius, Shadows, Layers, Sizes), **Components**, **Patterns & voice**, **Brand & marketing**. Each section row shows its count ("8 colours", "Nothing yet") and, once reviewed, **Looks good** or **Needs work**. An area the system doesn't cover says "Not covered".
+- **The section on show** lists its entries with a swatch, the light and dark value, and a usage note per token, style or component. **Click a value to edit it.** A value that is a formula (`var(--brand)`) is shown but locked, with the reason.
+- **Editing.** A change goes into a pending list and the board previews it. An **Unsaved** bar appears with the count, **Reset** and **Save**. Save writes one edit; the service keeps a version first. After it: "Saved · Changed 1 value" with **Undo**. If the agent changed the files meanwhile the save is refused: "Tidepool changed while you were editing. Nothing was saved." with **Reload and try again**, and your typed values stay. Leaving the page with unsaved values asks: Keep editing, Discard, or Save and leave.
+- **Review.** Under the panel: "Does Colours look right?" with **Looks good** and **Needs work**. A reviewed section shows its state once and only offers the other button. **Needs work** asks what to fix and sends it, with the section, to the agent. Sections the system doesn't cover say "Not covered by this system." and have no review controls. Review state lives only in this panel.
+- **Mark ready.** "Acme is ready. 9 sections weren’t reviewed." with **Review the 9**, which jumps to the first section not reviewed. It never blocks.
+- **Versions** opens a drawer from the right: the system's versions with **View**, **Compare** (the list of changed files) and **Restore**. Viewing an old version puts a banner on the page ("You’re viewing an old version.", **Back to current**) and turns editing off. A restore offers **Undo**, not a confirm.
+- **Ask bar** under the board: it starts or continues the system's chat. With a board entry selected it sends the question about that entry. It says where the message goes ("Starts a new chat", or the linked chat's name).
+- **Build strip.** When the agent is writing the system, a strip over the board says what it is doing, with **Stop** and **Undo**.
+
+### Rail panel
+
+The same system, stacked and without value editing (the rail is too narrow for it): the board on top, the section list, the review controls, then **Back to draft / Mark ready** and **Continue in chat**, and a hint to open Design Chamber full screen to edit values.
+
+### Phone width
+
+Below 620 px the board and the sections are two views behind a **Board / Sections** switch (a segmented control, 44 px targets). **Brand & marketing** is spelled out.
+
+### States
+
+- **Loading:** "Loading the design system…" in the panel and "Loading the board…" on the stage.
+- **Didn’t load:** "The design system didn’t load" with the service's sentence and **Try again**. The board is hidden.
+- **Gone:** "Tidepool is gone. Its folder was moved or deleted." with any unsaved values listed so they can be copied, and **Back to design systems**.
+- **Can’t be read / entries that can’t be read:** a banner with the service's sentence.
+- **Board didn’t draw:** a message on the stage with **Try again**; the panel still works.
+
+### Keyboard and screen readers
+
+Rows and areas are buttons with a visible focus ring; a row's accessible name carries its count and review state. A value is a button that becomes a text box (Enter keeps it, Escape drops it); focus returns to the value after a repaint. Review state is words, never colour alone.
