@@ -16,6 +16,7 @@ import { client, guestHost, host } from '../guest.ts';
 import { folderName, plural } from '../model/format.ts';
 import { systemNameProblem } from '../model/new-system-model.ts';
 import { EMPTY_BODY, EMPTY_TITLE, atSystemsCap, deleteSentence, loadFailure, systemMenu, systemRow, systemsListState, type RowTone, type SystemMenuId } from '../model/systems-model.ts';
+import { BUILD_BUTTON_LABEL, openBuildWithAgent } from './build-with-agent.ts';
 import { openNewSystemSheet } from './new-system-sheet.ts';
 
 export type SystemsListOptions = {
@@ -53,11 +54,18 @@ export const mountSystemsList = (options: SystemsListOptions): SystemsListHandle
     icon: 'plus',
     onClick: () => openNewSystemSheet(options.actions.host, { onMade: (result) => options.onOpen(result.id) }),
   });
+  const buildButton = btn({
+    label: BUILD_BUTTON_LABEL,
+    variant: 'outline',
+    size: options.surface === 'panel' ? 'sm' : 'default',
+    icon: 'chat',
+    onClick: () => openBuildWithAgent(options.actions.host, buildButton.el),
+  });
   const head =
     options.surface === 'panel'
       ? h('header', { class: 'dc-rail-head' }, back, h('h1', { class: 'dc-rail-title' }, 'Design systems'), h('span', { class: 'dc-spacer' }))
-      : h('header', { class: 'dc-library-bar dc-sys-bar' }, back, h('h1', { class: 'dc-page-title' }, 'Design systems'), h('span', { class: 'dc-spacer' }), newButton.el);
-  const tools = options.surface === 'panel' ? h('div', { class: 'dc-sys-tools' }, newButton.el) : null;
+      : h('header', { class: 'dc-library-bar dc-sys-bar' }, back, h('h1', { class: 'dc-page-title' }, 'Design systems'), h('span', { class: 'dc-spacer' }), buildButton.el, newButton.el);
+  const tools = options.surface === 'panel' ? h('div', { class: 'dc-sys-tools' }, newButton.el, buildButton.el) : null;
   const capNote = h('p', { class: 'dc-muted dc-sys-cap', hidden: true });
 
   const notices = h('div', { class: 'dc-sys-notices' });
@@ -139,6 +147,7 @@ export const mountSystemsList = (options: SystemsListOptions): SystemsListHandle
     capNote.textContent = cap ?? '';
     capNote.hidden = cap === null;
     newButton.set({ disabled: cap !== null, title: cap ?? '' });
+    buildButton.set({ disabled: cap !== null, title: cap ?? '' });
   };
 
   const paint = (): void => {

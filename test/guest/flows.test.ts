@@ -741,8 +741,14 @@ test('items: our chip opens its design; foreign chips and bad slugs are ignored;
   assert.equal(await s.flows.handleItem({ ...chip, data: { slug: '../etc' } }), null);
   assert.equal(await s.flows.handleItem(null), null);
 
+  // A build chip opens the build's view (Phase 2.5 §9.6); a ticket that is not one is ignored.
+  const build = { providerId: 'design-chamber', id: 'system-build:sb_abcdef123456', title: 'New design system', url: '', data: { build: 'sb_abcdef123456' } };
+  assert.deepEqual(await s.flows.handleItem(build), { kind: 'open-build', ticket: 'sb_abcdef123456' });
+  assert.equal(await s.flows.handleItem({ ...build, data: { build: '../x' } }), null);
+  assert.equal(await s.flows.handleItem({ ...build, data: { build: 7 } }), null);
+
   const opened: string[] = [];
-  const stop = s.flows.watchItems((target) => opened.push(target.slug));
+  const stop = s.flows.watchItems((target) => opened.push(target.kind === 'open-design' ? target.slug : target.ticket));
   s.host.setItem(chip);
   s.host.emitReady({ item: chip });
   s.host.setItem(chip);

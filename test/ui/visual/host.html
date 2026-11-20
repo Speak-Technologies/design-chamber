@@ -69,6 +69,8 @@
         openSurfaceFails: null,
         /** Replace the block call of a block frame, as the host does when a block's arguments change. */
         setBlock: (call) => { block = call ? { name: call.name, args: call.args || {}, answered: call.answered ?? null } : null; sendReady(); },
+        /** Push a chat item to the frame, as the host does when a chip is clicked in the chat (null clears it). */
+        setItem: (item) => send({ type: 'item', payload: { item } }),
         /** Set to 'prompt' to make the next prompt call fail once. */
         failNext: null,
         promptGate: null,

@@ -58,3 +58,26 @@ Screenshots: `documentation/pages/img/rail-system-<width>-<theme>-*.png`, from `
 ## Code
 
 `src/ui/systems/system-page.ts` (the page and the rail share it; `compact` is the `panel` surface), `src/ui/model/system-page-model.ts` (`homeLine`, `homeTitle`, `livingPagePill`, `railHint`, `readyControl`), tests in `test/ui/system-page-model.test.ts`.
+
+# Rail: the build chip
+
+**Route:** a **New design system** chip in the chat (made by **Build with the agent…** or `/design-system`), opened from the chat (`panel` surface; the page shows the same in its own layout) · **Access:** every OpenChamber user
+**Purpose:** Show how a design system build is going, without the user having to hunt for the chat. The rail asks the service about the chip's ticket every 3 seconds while the window is visible (it stops when the window is hidden, and starts again with an immediate check when it is shown) and stops once there is an answer it can keep.
+
+Screenshots: `documentation/pages/img/build-chip-<surface>-<width>-<theme>-*.png`, from `test/ui/visual/scenarios/design-system-build.mjs`.
+
+## The build chip
+
+- **Checking:** "Checking the build…" with a spinner and nothing to press. [320 dark](img/build-chip-rail-320-dark-1-checking.png)
+- **Waiting:** "The agent is interviewing you in chat. The design system shows here once it’s started." with **Continue in chat**, and a muted "Project: shop" when the build has a project. [320 dark](img/build-chip-rail-320-dark-2-waiting.png)
+- **Made:** the system itself, as in [a design system](#rail-a-design-system), with its name and **Continue in chat** in the foot. The polling stops. [320 dark](img/build-chip-rail-320-dark-3-made.png) If the system can't be looked at, a card with **Open system** and **Continue in chat** stands in.
+- **Made, then stopped:** "This build was stopped. Its draft is in the Designs folder’s trash." with **Continue in chat**. [480 light](img/build-chip-rail-480-light-4-stopped.png)
+- **Expired:** "This build was started more than a week ago. Run /design-system again." No actions. [320 dark](img/build-chip-rail-320-dark-5-expired.png)
+- **Design Chamber isn’t running:** the error banner with **Try again**. [Page light](img/build-chip-page-1400-light-6-down.png)
+- **Couldn’t check the build:** after three failed checks in a row, the banner with the service's reason and **Try again**. One good answer in between starts the count over. [320 light](img/build-chip-rail-320-light-7-failed.png)
+
+**Continue in chat** goes back to the chat the chip was opened from (the service doesn't record which chat a build was asked in). Nothing scrolls sideways at 320 px.
+
+## Code
+
+`src/ui/systems/build-chip-view.ts` (the view and its polling), `src/ui/model/system-build-model.ts` (states, sentences, failure counting, the popover's setup), `src/ui/systems/build-with-agent.ts` (the popover), `src/guest/flows.ts` (`handleItem` returns `{ kind: 'open-build', ticket }`), tests in `test/ui/system-build-model.test.ts`.

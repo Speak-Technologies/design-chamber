@@ -11,6 +11,7 @@ import { mountSettings, type SettingsHandle } from '../components/settings-view.
 import { feed, flows } from '../guest.ts';
 import { mountDesignView, type DesignViewHandle } from '../wall/design-view.ts';
 import { mountSystemsList, type SystemsListHandle } from '../systems/systems-list.ts';
+import { mountBuildChipView, type BuildChipViewHandle } from '../systems/build-chip-view.ts';
 import { mountSystemPage, type SystemPageHandle } from '../systems/system-page.ts';
 import { mountListView } from './list-view.ts';
 
@@ -23,6 +24,8 @@ export const mountRail = (root: HTMLElement): void => {
   let systemsView: SystemsListHandle | null = null;
   /** One design system, open from the list (the list stays behind it, hidden, so Back returns to it). */
   let systemPage: { id: string; handle: SystemPageHandle } | null = null;
+  /** How a design system build is going, opened by its chip in the chat. */
+  let buildView: { ticket: string; handle: BuildChipViewHandle } | null = null;
 
   const closeViewer = (): void => {
     const slug = viewer?.slug;
@@ -40,6 +43,8 @@ export const mountRail = (root: HTMLElement): void => {
     systemPage = null;
     systemsView?.dispose();
     systemsView = null;
+    buildView?.handle.dispose();
+    buildView = null;
     const handle = mountDesignView({ slug, surface: 'panel', actions, onBack: leaveViewer, startIn: options.startIn });
     viewer = { slug, handle };
     place.remember(slug);
@@ -99,6 +104,35 @@ export const mountRail = (root: HTMLElement): void => {
     settings = mountSettings(sheet.body);
   };
 
+  const closeBuild = (): void => {
+    buildView?.handle.dispose();
+    buildView = null;
+    list.el.hidden = false;
+  };
+  const showBuild = (ticket: string): void => {
+    systemPage?.handle.dispose();
+    systemPage = null;
+    systemsView?.dispose();
+    systemsView = null;
+    buildView?.handle.dispose();
+    const handle = mountBuildChipView({ ticket, surface: 'panel', actions, onBack: closeBuild });
+    buildView = { ticket, handle };
+    list.el.hidden = true;
+    app.append(handle.el);
+    handle.focus();
+  };
+  /** A build chip opened from the chat. An open design with unsaved tweaks asks first, like going back. */
+  const openBuild = (ticket: string): void => {
+    if (buildView?.ticket === ticket) return;
+    const current = viewer;
+    if (!current) return showBuild(ticket);
+    void current.handle.beforeLeave().then((leave) => {
+      if (!leave || viewer !== current) return;
+      closeViewer();
+      showBuild(ticket);
+    });
+  };
+
   const closeSystems = (): void => {
     systemPage?.handle.dispose();
     systemPage = null;
@@ -109,6 +143,8 @@ export const mountRail = (root: HTMLElement): void => {
   };
   const showSystems = (): void => {
     if (systemsView) return;
+    buildView?.handle.dispose();
+    buildView = null;
     systemsView = mountSystemsList({ surface: 'panel', actions, onBack: closeSystems, onOpen: (id) => openSystem(id) });
     list.el.hidden = true;
     app.append(systemsView.el);
@@ -147,7 +183,7 @@ export const mountRail = (root: HTMLElement): void => {
 
   // A chip click or "Open as page" opens the viewer here.
   flows.watchItems(
-    (target) => openViewer(target.slug),
+    (target) => (target.kind === 'open-build' ? openBuild(target.ticket) : openViewer(target.slug)),
     (error) => toast('error', `Couldn’t open that design. ${errorText(error)}`),
   );
   // "Open as page" (background frame), a Work Status row or a chat block leaves a design for us to open.

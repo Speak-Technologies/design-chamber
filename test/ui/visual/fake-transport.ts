@@ -36,7 +36,7 @@ const json = (status: number, body: unknown): GuestRequestResult => ({ status, b
  * list, a 500) without editing `fake-backend.ts`. `body` is JSON-encoded; a string is sent as is
  * (for the raw-text routes). `delayMs` holds the answer, to look at a loading state.
  */
-export type RouteOverride = { status?: number; body?: unknown; delayMs?: number };
+export type RouteOverride = { status?: number; body?: unknown; delayMs?: number; /** Fail the way a service that is not running does: the request never gets an answer. */ throws?: string };
 
 export type RouteOverrides = {
   /** Answer `key` with `override` from now on; `null` goes back to the fake backend. */
@@ -90,6 +90,7 @@ export const createFakeTransport = (): FakeTransport => {
     const override = overrides.get(matched.key);
     if (override) {
       if (override.delayMs) await new Promise((resolve) => setTimeout(resolve, override.delayMs));
+      if (override.throws) throw new Error(override.throws);
       const body = override.body ?? {};
       return { status: override.status ?? 200, body: typeof body === 'string' ? body : JSON.stringify(body) };
     }

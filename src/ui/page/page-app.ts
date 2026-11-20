@@ -10,6 +10,7 @@ import { mountSettings, type SettingsHandle } from '../components/settings-view.
 import { flows } from '../guest.ts';
 import { mountDesignView, type DesignViewHandle } from '../wall/design-view.ts';
 import { mountSystemsList, type SystemsListHandle } from '../systems/systems-list.ts';
+import { mountBuildChipView, type BuildChipViewHandle } from '../systems/build-chip-view.ts';
 import { mountSystemPage, type SystemPageHandle } from '../systems/system-page.ts';
 import { mountLibrary } from './library-view.ts';
 
@@ -22,6 +23,8 @@ export const mountPage = (root: HTMLElement): void => {
   let systemsView: SystemsListHandle | null = null;
   /** One design system, open from the list (the list stays behind it, hidden, so Back returns to it). */
   let systemPage: { id: string; handle: SystemPageHandle } | null = null;
+  /** How a design system build is going, opened by its chip in the chat. */
+  let buildView: { ticket: string; handle: BuildChipViewHandle } | null = null;
 
   const closeDesign = (): void => {
     const slug = open?.slug;
@@ -39,6 +42,8 @@ export const mountPage = (root: HTMLElement): void => {
     systemPage = null;
     systemsView?.dispose();
     systemsView = null;
+    buildView?.handle.dispose();
+    buildView = null;
     const handle = mountDesignView({ slug, surface: 'page', actions, onBack: leaveDesign });
     open = { slug, handle };
     place.remember(slug);
@@ -94,6 +99,35 @@ export const mountPage = (root: HTMLElement): void => {
     settings = mountSettings(sheet.body);
   };
 
+  const closeBuild = (): void => {
+    buildView?.handle.dispose();
+    buildView = null;
+    library.el.hidden = false;
+  };
+  const showBuild = (ticket: string): void => {
+    systemPage?.handle.dispose();
+    systemPage = null;
+    systemsView?.dispose();
+    systemsView = null;
+    buildView?.handle.dispose();
+    const handle = mountBuildChipView({ ticket, surface: 'page', actions, onBack: closeBuild });
+    buildView = { ticket, handle };
+    library.el.hidden = true;
+    app.append(handle.el);
+    handle.focus();
+  };
+  /** A build chip opened from the chat. An open design with unsaved tweaks asks first, like going back. */
+  const openBuild = (ticket: string): void => {
+    if (buildView?.ticket === ticket) return;
+    const current = open;
+    if (!current) return showBuild(ticket);
+    void current.handle.beforeLeave().then((leave) => {
+      if (!leave || open !== current) return;
+      closeDesign();
+      showBuild(ticket);
+    });
+  };
+
   const closeSystems = (): void => {
     systemPage?.handle.dispose();
     systemPage = null;
@@ -104,6 +138,8 @@ export const mountPage = (root: HTMLElement): void => {
   };
   const showSystems = (): void => {
     if (systemsView) return;
+    buildView?.handle.dispose();
+    buildView = null;
     systemsView = mountSystemsList({ surface: 'page', actions, onBack: closeSystems, onOpen: (id) => openSystem(id) });
     library.el.hidden = true;
     app.append(systemsView.el);
@@ -141,7 +177,7 @@ export const mountPage = (root: HTMLElement): void => {
   app.append(library.el);
 
   flows.watchItems(
-    (target) => openDesign(target.slug),
+    (target) => (target.kind === 'open-build' ? openBuild(target.ticket) : openDesign(target.slug)),
     (error) => toast('error', `Couldn’t open that design. ${errorText(error)}`),
   );
 };

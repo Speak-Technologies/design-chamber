@@ -9,7 +9,7 @@ Screenshots come from `test/ui/visual/scenarios/design-systems-list.mjs` (the re
 
 [Rail 320 dark](img/systems-rail-320-dark-1-list.png) · [Rail 480 light](img/systems-rail-480-light-1-list.png) · [Page 1400 light](img/systems-page-1400-light-1-list.png)
 
-- **Header.** The rail has a back arrow ("Back to designs"), the title, and under it **New design system**. The page has **Library** (back), the title, and **New design system** on the right. New design system is the tinted button; the one filled button in the sheet is **Make design system**. Back returns focus to the Design systems button that opened the list.
+- **Header.** The rail has a back arrow ("Back to designs"), the title, and under it **New design system** and **Build with the agent…**. The page has **Library** (back), the title, and both buttons on the right. New design system is the tinted button, **Build with the agent…** is an outline button (see [Build with the agent…](#build-with-the-agent)); the one filled button in the sheet is **Make design system**. Back returns focus to the Design systems button that opened the list.
 - **A row** (a card on the page, where the list is a grid of cards three across at 1400 px):
   1. The name (one line, ends in an ellipsis) and its status: **Draft** or **Ready**.
   2. The home line: **In Design Chamber** or **Repo · shop** (the full path of the repo is the tooltip), then at most two badges, in this order of priority: **Being built**, **Changes to review**, **Default**, **Pinned for shop** (or "Pinned for 3 projects"), then the living page: **Living page out of date**, **Living page changed**, **Living page can’t be checked**. A third badge or more folds into **+1** (or +2…): its tooltip names what is folded, and the row's accessible name lists everything, so nothing is lost for a screen reader.
@@ -30,6 +30,21 @@ Screenshots come from `test/ui/visual/scenarios/design-systems-list.mjs` (the re
 - **The list didn’t load:** a banner with what happened and **Try again**. When the service isn't answering at all the title is "Design Chamber isn’t running" and the body says to allow the local service in Settings → Extensions. [Page 1400 light](img/systems-states-page-1400-light-3-failed.png)
 - **A refresh that failed** while rows are showing keeps the rows and adds "Couldn’t refresh the list" with **Try again**.
 - The list refreshes by itself when the agent writes a file in a system or a system is added or removed, and the times age while it is open.
+
+## Build with the agent…
+
+[Rail 320 dark, the popover](img/build-popover-rail-320-dark-2-popover.png) · [Rail 320 dark, not sent](img/build-popover-rail-320-dark-3-not-sent.png) · [Page 1400 light](img/build-popover-page-1400-light-2-popover.png)
+
+An outline button next to **New design system**, in the header of the list. It is there when the list is empty too (the three starts stay). At 50 systems it is held back with the same reason as New design system.
+
+- **The popover.** An optional line, "What is it for? (optional)", up to 2000 characters ("Keep it under 2000 characters." under the field past that); **Agent works in** with **This chat** and **New chat**; **Cancel** and **Start**.
+- **Which chat.** With a project folder open both are offered and This chat comes first. With no project folder only This chat is offered. With no chat open, This chat says "No chat is open right now. Open one first." and **Start** is off until **New chat** is picked.
+- **Start** asks the agent to interview the user in that chat and closes the popover with a toast ("Asked the agent to build a design system. Answer its questions in the chat.").
+- **When the request doesn't reach a chat.** The words stay. The popover says "Couldn’t ask the agent. The request didn’t reach a chat. Your words are still here." and **Start** becomes **Try again**; **Copy request** copies the text so it can be pasted into a chat by hand.
+
+The chip the agent's request carries opens as described in [Rail: the build chip](rail.md#the-build-chip).
+
+Screenshots come from `test/ui/visual/scenarios/design-system-build.mjs` (`build-popover-*`, `build-badges-*`).
 
 ## The New design system sheet
 
@@ -101,3 +116,7 @@ Below 620 px the board and the sections are two views behind a **Board / Section
 ### Keyboard and screen readers
 
 Rows and areas are buttons with a visible focus ring; a row's accessible name carries its count and review state. A value is a button that becomes a text box (Enter keeps it, Escape drops it); focus returns to the value after a repaint. Review state is words, never colour alone.
+
+### A system being built
+
+While the agent is building a system in a chat, its row carries the info badge **Being built**, first in the order, and its accessible name says "Being built". At 360 px two badges sit beside the home line and the rest fold into **+N** ([360 dark](img/build-badges-rail-360-dark-1-list.png)).

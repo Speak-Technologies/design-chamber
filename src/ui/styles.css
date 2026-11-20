@@ -3778,6 +3778,67 @@ summary.dc-checks-group-title:focus-visible {
 }
 /* ===== end design systems list ===== */
 
+/* ===== Phase 2.5: Build with the agent… and the build chip (U7) ===== */
+.dc-build-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  min-width: 0;
+}
+.dc-build-failure {
+  padding: var(--dc-s2) var(--dc-s3);
+  border-radius: var(--dc-r-md, 8px);
+  background: color-mix(in srgb, var(--oc-error) 10%, transparent);
+  color: var(--dc-error-text);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+.dc-build-failure strong {
+  font-weight: 600;
+}
+.dc-build-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.dc-build-stage {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--dc-s3);
+  min-height: 0;
+  overflow: auto;
+  padding: var(--dc-s2) var(--dc-s4) var(--dc-s4);
+}
+.dc-build-view[data-surface='page'] .dc-build-stage {
+  align-self: center;
+  width: min(520px, 100%);
+  padding-top: var(--dc-s6);
+}
+.dc-build-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  padding: var(--dc-s4) 0;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.dc-build-note {
+  margin: 0;
+  text-align: center;
+  font-size: 0.8125rem;
+}
+.dc-build-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--dc-s2);
+}
+/* ===== end Build with the agent… ===== */
+
 /* ===== Phase 2.5: the design system page (U2) ===== */
 /* Header, a specimen board on a quiet stage, and a 360px panel of sections. The rail shows the same page stacked. Host tokens only. */
 

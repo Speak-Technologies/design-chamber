@@ -117,10 +117,12 @@ export const systemsListState = (load: SystemsLoad): SystemsListState => {
 /** The host's own failure codes that mean the service itself isn't answering (the kit's "isn't running" state). */
 const SERVICE_DOWN_CODES: ReadonlySet<string> = new Set(['NO_SERVICE', 'SERVICE_FAILED', 'HOST_TIMEOUT', 'REQUEST_FAILED', 'DISABLED', 'HOST_UNAVAILABLE']);
 
+export const isServiceDownCode = (code: string): boolean => SERVICE_DOWN_CODES.has(code);
+
 /** The banner for a list that didn't load: the service being down is its own, plainer sentence. */
 export const loadFailure = (error: { code: string; message: string } | null): { title: string; body: string } => {
   const message = error?.message ?? 'Try again in a moment.';
-  return error !== null && SERVICE_DOWN_CODES.has(error.code)
+  return error !== null && isServiceDownCode(error.code)
     ? { title: 'Design Chamber isn’t running', body: message }
     : { title: 'Your design systems didn’t load', body: message };
 };

@@ -28,7 +28,7 @@ import { extractHtml } from '../shared/agent/html-extract.ts';
 import type { AskElement, OpenIntent, PromptBody, PromptResponse } from '../shared/api.ts';
 import type { AnchorState, BuildChipData, Chip, DesignChip, DesignKind, Outbox } from '../shared/types.ts';
 import { CHIP_PROVIDER_ID } from '../shared/types.ts';
-import { OUTBOX_TTL_MS, SLUG_PATTERN, TURN_SNAPSHOT_DEDUPE_MS } from '../shared/limits.ts';
+import { OUTBOX_TTL_MS, SLUG_PATTERN, SYSTEM_BUILD_TICKET_PATTERN, TURN_SNAPSHOT_DEDUPE_MS } from '../shared/limits.ts';
 import { sameDirectory } from '../shared/path-compare.ts';
 import type { ChangeBatch } from './changes.ts';
 import type { GuestHost, HostLike } from './host.ts';
@@ -166,7 +166,10 @@ export type AskResult = { outcome: AskOutcome; sessionId: string | null };
 export type DeliverOutboxResult = 'delivered' | 'composed' | 'none';
 
 /** What the surface should show for the item it was opened with. `intent` comes with an open request (§3.2); absent = `view`. */
-export type ItemTarget = { kind: 'open-design'; slug: string; intent?: OpenIntent };
+export type DesignTarget = { kind: 'open-design'; slug: string; intent?: OpenIntent };
+/** A `system-build:<ticket>` chip: the rail shows how that build is going (Phase 2.5 §9.6). */
+export type BuildTarget = { kind: 'open-build'; ticket: string };
+export type ItemTarget = DesignTarget | BuildTarget;
 
 /** Change batches after which the rail looks for an open request: a reset, a new design (`added`), or an `open` request. */
 export const takesOpenRequest = (batch: ChangeBatch): boolean => batch.reset || batch.events.some((event) => event.kind === 'added' || event.kind === 'open');
@@ -266,7 +269,7 @@ export type Flows = {
    * block on mount and after every batch `takesOpenRequest` accepts (the rail may already be
    * open), and open it with its intent. `subscribe` is the change feed's.
    */
-  watchOpenRequests(subscribe: (listener: (batch: ChangeBatch) => void) => () => void, open: (target: ItemTarget) => void): () => void;
+  watchOpenRequests(subscribe: (listener: (batch: ChangeBatch) => void) => () => void, open: (target: DesignTarget) => void): () => void;
 };
 
 export type FlowDeps = { host: GuestHost; client: ServiceClient; now?: () => number };
@@ -640,7 +643,9 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       if (isGuestAttachItem(item)) {
         if (item.providerId !== CHIP_PROVIDER_ID) return null;
         const data = item.data;
-        const slug = typeof data === 'object' && data !== null && !Array.isArray(data) ? data.slug : undefined;
+        if (typeof data !== 'object' || data === null || Array.isArray(data)) return null;
+        const { slug, build } = data;
+        if (typeof build === 'string') return SYSTEM_BUILD_TICKET_PATTERN.test(build) ? { kind: 'open-build', ticket: build } : null;
         return typeof slug === 'string' && SLUG_PATTERN.test(slug) ? { kind: 'open-design', slug } : null;
       }
       if (isGuestMessageItem(item) && item.action === OPEN_AS_PAGE_ACTION) {

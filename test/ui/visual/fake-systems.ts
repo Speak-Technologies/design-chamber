@@ -19,6 +19,9 @@ import type {
   SystemResyncBody,
   SystemResyncResponse,
   SystemPromptResponse,
+  SystemBuildTicketResponse,
+  SystemChipBody,
+  SystemChipResponse,
   SystemScanResponse,
   CreateSystemScanResponse,
   RenderChunkResponse,
@@ -282,6 +285,8 @@ export type FakeSystems = {
     'POST /systems/:id/assets': (req: Req & { body: { uploadId: string; name: string; kind: 'font' | 'logo' | 'source' } }) => AddSystemAssetResponse;
     'POST /systems/:id/assets/from-folder': (req: Req & { body: { directory: string } }) => AssetsFromFolderResponse;
     'POST /systems/:id/prompt': (req: Req & { body: { purpose: string; text?: string; entry?: string; section?: string; before?: string } }) => SystemPromptResponse;
+    'POST /systems/chip': (req: { body: SystemChipBody }) => SystemChipResponse;
+    'GET /system-builds/:ticket': (req: Req) => SystemBuildTicketResponse;
     'POST /systems/:id/resync': (req: Req & { body: SystemResyncBody }) => SystemResyncResponse;
     'GET /systems/:id': (req: Req) => SystemDetail;
     'POST /systems/:id/edits': (req: Req & { body: SystemEditRequest }) => SystemEditResponse;
@@ -294,6 +299,10 @@ export type FakeSystems = {
     'POST /systems/:id/versions/:vid/restore': (req: Req) => RestoreVersionResponse;
   };
   hooks: {
+    /** What `GET /system-builds/:ticket` answers from now on (the build chip's poll); the default is a build that is still waiting. */
+    setBuild: (answer: SystemBuildTicketResponse) => void;
+    /** The build requests the chip route was asked for and the tickets polled, for a scenario's checks. */
+    buildLog: () => { requests: SystemChipBody[]; polls: number };
     /** The list now (no event). */
     seed: (systems: SystemSummary[]) => void;
     /** The book as it is now (the design system link fake reads Ready/draft and revisions from it). */
@@ -355,6 +364,9 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
   let staleOnce = false;
   let detailFailing = false;
   let editN = 0;
+  let buildAnswer: SystemBuildTicketResponse = { state: 'waiting', project: { label: 'ember-oak' } };
+  let buildSeq = 0;
+  const buildLog: ReturnType<FakeSystems['hooks']['buildLog']> = { requests: [], polls: 0 };
 
   const detailFor = (row: SystemSummary): SystemDetail => {
     let detail = details.get(row.id);
@@ -416,6 +428,19 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
 
   return {
     handlers: {
+      'POST /systems/chip': ({ body }) => {
+        buildSeq += 1;
+        buildLog.requests.push({ ...body });
+        const ticket = `sb_${String(buildSeq).padStart(12, '0')}`;
+        return {
+          ticket,
+          chip: { providerId: CHIP_PROVIDER_ID, id: `system-build:${ticket}`, title: 'New design system', url: '', text: `[Design Chamber] Build a design system with the user.${body.brief ? ` The user's words: "${body.brief}"` : ''}`, data: { build: ticket } },
+        };
+      },
+      'GET /system-builds/:ticket': () => {
+        buildLog.polls += 1;
+        return buildAnswer;
+      },
       'GET /systems': () => {
         if (failing) throw new ServiceError('internal', 'The design systems list could not be read.');
         return { systems: rows.map((row) => ({ ...row })), total: rows.length, max: SYSTEMS_MAX };
@@ -685,6 +710,10 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
       },
     },
     hooks: {
+      setBuild: (answer) => {
+        buildAnswer = answer;
+      },
+      buildLog: () => buildLog,
       seed: (next) => {
         rows = next.map((row) => ({ ...row }));
       },
