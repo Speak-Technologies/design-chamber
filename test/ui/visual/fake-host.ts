@@ -13,7 +13,7 @@ import { ROUTE_KEYS, type RouteKey } from '../../../src/shared/api.ts';
 import type { HostLike } from '../../../src/guest/host.ts';
 import { createFakeTransport, type FakeTransport, type RouteOverride } from './fake-transport.ts';
 
-export type FakeHooks = Pick<FakeTransport['backend'], 'writePending' | 'writeFile' | 'ageDesign' | 'padScreens' | 'unwriteScreen' | 'addDirections' | 'failNextRestore' | 'touchTokens' | 'checks' | 'pageState' | 'folders' | 'systems' | 'designSystem' | 'setProject' | 'setMissingProjects'> & {
+export type FakeHooks = Pick<FakeTransport['backend'], 'writePending' | 'writeFile' | 'ageDesign' | 'padScreens' | 'unwriteScreen' | 'addDirections' | 'failNextRestore' | 'touchTokens' | 'checks' | 'pageState' | 'folders' | 'systems' | 'designSystem' | 'setProject' | 'setMissingProjects' | 'requestSystemOpen'> & {
   route: FakeTransport['routes']['set'];
   clearRoutes: FakeTransport['routes']['clear'];
 };
@@ -58,6 +58,7 @@ export const installFakeHost = <T extends HostLike>(real: T): T => {
     designSystem: fake.backend.designSystem,
     setProject: fake.backend.setProject,
     setMissingProjects: fake.backend.setMissingProjects,
+    requestSystemOpen: fake.backend.requestSystemOpen,
     route: fake.routes.set,
     clearRoutes: fake.routes.clear,
   };

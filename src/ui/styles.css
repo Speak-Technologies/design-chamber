@@ -4422,6 +4422,11 @@ button.dc-sp-value:focus-visible {
   flex: 0 0 40%;
   min-height: 180px;
 }
+/* The preview needs more room than the board: its bar, band and note come first, then a frame worth looking at, and the
+   ask bar must stay under them instead of landing on the frame. */
+.dc-syspg[data-surface='panel'][data-previewing='true'] .dc-syspg-stage {
+  flex-basis: 66%;
+}
 .dc-syspg[data-surface='panel'] .dc-sys-board {
   margin: var(--dc-s2);
 }
@@ -4442,6 +4447,14 @@ button.dc-sp-value:focus-visible {
   .dc-syspg-top {
     flex-wrap: wrap;
     padding: var(--dc-s2) var(--dc-s3);
+  }
+  /* The toolbar of a repo system is wider than a phone: it wraps under the title instead of pushing the page sideways
+     (which also shoved every sheet opened over it half off screen). */
+  .dc-syspg-tools {
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    max-width: 100%;
+    margin-left: auto;
   }
   .dc-syspg[data-surface='page'] .dc-syspg-mobile {
     display: flex;

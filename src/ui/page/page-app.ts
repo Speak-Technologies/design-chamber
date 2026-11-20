@@ -1,6 +1,7 @@
 // The full-screen page app: the library (P1) and one open design (canvas wall P2 / page
 // viewer P6) as views of one stack. Settings (P5) opens as a side sheet over either.
 
+import type { SystemOpenTarget } from '../../shared/api.ts';
 import { openNewDialog } from '../components/new-dialog.ts';
 import { toast, type ActionContext } from '../components/actions.ts';
 import { errorText, h } from '../components/dom.ts';
@@ -154,8 +155,11 @@ export const mountPage = (root: HTMLElement): void => {
       systemsView.focus();
     }
   };
-  const openSystem = (id: string): void => {
-    if (systemPage?.id === id) return;
+  const openSystem = (id: string, target: SystemOpenTarget = 'page'): void => {
+    if (systemPage?.id === id) {
+      if (target !== 'page') systemPage.handle.showTarget(target);
+      return;
+    }
     systemPage?.handle.dispose();
     systemPage = null;
     if (!systemsView) showSystems();
@@ -165,6 +169,7 @@ export const mountPage = (root: HTMLElement): void => {
     systemPage = { id, handle };
     app.append(handle.el);
     handle.focus();
+    if (target !== 'page') handle.showTarget(target);
   };
 
   const library = mountLibrary({
@@ -177,7 +182,7 @@ export const mountPage = (root: HTMLElement): void => {
   app.append(library.el);
 
   flows.watchItems(
-    (target) => (target.kind === 'open-build' ? openBuild(target.ticket) : target.kind === 'open-system' ? openSystem(target.system) : openDesign(target.slug)),
+    (target) => (target.kind === 'open-build' ? openBuild(target.ticket) : target.kind === 'open-system' ? openSystem(target.system, target.target) : openDesign(target.slug)),
     (error) => toast('error', `Couldn’t open that design. ${errorText(error)}`),
   );
 };

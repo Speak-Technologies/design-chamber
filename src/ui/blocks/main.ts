@@ -8,7 +8,7 @@ import { GUEST_BLOCK_HEIGHT_MAX, type GuestBlockCall, type ToastKind } from '@op
 import { applyHostReady, mountSpinner } from '@openchamber/sdk/ui';
 
 import { getGuestHost } from '../../guest/host.ts';
-import { PANEL_SURFACE_ID } from '../../guest/flows.ts';
+import { openSystemInRail } from '../../guest/flows.ts';
 import { createServiceClient } from '../../guest/service-client.ts';
 import { parseBlockArgs } from '../model/block-args.ts';
 import { notice, type BlockContext, type BlockView } from './block-view.ts';
@@ -21,22 +21,14 @@ if (!root) throw new Error('Design Chamber: #root is missing from blocks/index.h
 const blockRoot: HTMLElement = root;
 
 const guestHost = getGuestHost();
+const serviceClient = createServiceClient(guestHost.client);
 const ctx: BlockContext = {
-  client: createServiceClient(guestHost.client),
+  client: serviceClient,
   host: guestHost.client,
   toast: (kind: ToastKind, message: string) => {
     guestHost.client.toast({ kind, message, dismiss: kind === 'error' }).catch((error: unknown) => console.warn('Design Chamber: toast failed', error));
   },
-  // The service has no open request for a system yet (flows.openSystemInRail), so this opens the rail
-  // and the toast tells the user where the preview is.
-  openSystemPreview: async () => {
-    try {
-      await guestHost.client.openSurface(PANEL_SURFACE_ID);
-      return 'opened';
-    } catch {
-      return 'not-here';
-    }
-  },
+  openSystemPreview: (systemId, which) => openSystemInRail({ client: serviceClient, host: guestHost.client }, systemId, which === 'living-page-preview' ? 'preview' : 'board'),
 };
 
 // The kit's stylesheet comes in with the first kit mount; do it before the first paint.

@@ -324,6 +324,8 @@ export type FakeBackend = {
   /** Test hook (G1): which project folder a design was made for (`null`: none), and which project folders are gone from disk. */
   setProject: (slug: string, directory: string | null) => void;
   setMissingProjects: (directories: string[]) => void;
+  /** Leaves an open request for a system, as the service does for a chat block's preview button. */
+  requestSystemOpen: (system: string, target: 'page' | 'board' | 'preview') => void;
 };
 
 export const createFakeBackend = (): FakeBackend => {
@@ -928,6 +930,10 @@ export const createFakeBackend = (): FakeBackend => {
       if (!rec) return;
       rec.design.projectDirectory = directory;
       emit(slug, 'design');
+    },
+    requestSystemOpen: (system, target) => {
+      openRequest = { system, target, created: new Date().toISOString() };
+      emit(null, 'open');
     },
     setMissingProjects: (directories) => {
       missingProjects.clear();

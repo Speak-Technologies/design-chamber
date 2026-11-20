@@ -83,6 +83,11 @@ export type SystemPageHandle = {
   /** Resolves `true` when the view may go away: nothing unsaved, or the user chose Save or Discard. */
   beforeLeave: () => Promise<boolean>;
   focus: () => void;
+  /**
+   * An open request named more than the page: `board` brings the board forward (and closes the preview), `preview` opens
+   * the living page's preview frame. Waits for the system to load; says so quietly when there is no preview to show.
+   */
+  showTarget: (target: 'board' | 'preview') => void;
   dispose: () => void;
 };
 
@@ -144,6 +149,8 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
   let regenerating = false;
   let regenTimer: ReturnType<typeof setTimeout> | null = null;
   let moreBanners = false;
+  /** What an open request asked to see beyond the page, held until the system has loaded. */
+  let wanted: 'board' | 'preview' | null = null;
 
   // ------------------------------------------------------------ the parts
   const notices = createNotices();
@@ -259,7 +266,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
   const loadLiving = async (system: SystemDetail): Promise<LivingRepoView | null> => {
     if (system.home.kind !== 'repo') return null;
     try {
-      const view = await client.call('GET /systems/:id/living-page', { params: { id } });
+      const view = await client.loadLivingPage(id);
       return view.home === 'repo' ? view : null;
     } catch {
       return living;
@@ -293,6 +300,26 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       panel.addEventListener('focusout', () => setTimeout(() => !disposed && paint(), 0), { once: true });
     } else paint();
     build.relink();
+    applyWanted();
+  };
+
+  const showBoard = (): void => {
+    preview.close();
+    phoneView = 'board';
+    el.dataset.phoneView = phoneView;
+    paintMobile();
+  };
+  const applyWanted = (): void => {
+    if (wanted === null || load === 'loading') return;
+    const next = wanted;
+    wanted = null;
+    if (load !== 'ready' || !detail) return;
+    if (next === 'board') return showBoard();
+    if (living === null || previewTarget(living, detail) === null) {
+      toast('info', 'There is no living page preview to show yet.');
+      return showBoard();
+    }
+    openPreview();
   };
 
   // ------------------------------------------------------------ selecting
@@ -1239,6 +1266,10 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     el,
     beforeLeave,
     focus: () => header.querySelector<HTMLElement>('button')?.focus(),
+    showTarget: (target) => {
+      wanted = target;
+      applyWanted();
+    },
     dispose: () => scope.dispose(),
   };
 };

@@ -117,7 +117,7 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
     refused = false;
     paintFoot();
     try {
-      const result = await ctx.client.call('POST /systems/:id/build/stop', { params: { id: ask.systemId }, body: { proposalId: proposal.proposal.id } });
+      const result = await ctx.client.stopBuild(ask.systemId, proposal.proposal.id);
       undo = { id: result.undoId, until: Date.parse(result.until) };
     } catch (error) {
       busy = false;
@@ -139,7 +139,7 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
   const undoStop = (): void => {
     const pending = undo;
     if (pending === null || undone) return;
-    ctx.client.call('POST /system-stops/:undoId/undo', { params: { undoId: pending.id }, body: {} }).then(
+    ctx.client.undoStop(pending.id).then(
       () => {
         undone = true;
         renderAll();
@@ -262,7 +262,11 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
           disabled: !enabled,
           onClick: () => {
             ctx.openSystemPreview(ask.systemId, which).then(
-              (outcome) => ctx.toast(outcome === 'opened' ? 'info' : 'error', outcome === 'opened' ? 'Design Chamber is open in the rail. Open the system to see the preview.' : 'Open Design Chamber from the rail to see the preview.'),
+              (outcome) => {
+                if (outcome === 'opened') ctx.toast('info', which === 'living-page-preview' ? 'The living page preview is open in the rail.' : 'The board is open in the rail.');
+                else if (outcome === 'gone') ctx.toast('error', 'This design system is no longer in your Designs folder.');
+                else ctx.toast('error', 'Open Design Chamber from the rail to see the preview.');
+              },
               () => ctx.toast('error', 'Couldn’t open the preview. Open Design Chamber from the rail.'),
             );
           },
@@ -368,7 +372,7 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
     }
     try {
       const [next, detail] = await Promise.all([
-        ctx.client.call('GET /systems/:id/proposals/:proposalId', { params: { id: ask.systemId, proposalId: ask.proposalId } }),
+        ctx.client.getProposal(ask.systemId, ask.proposalId),
         nameTried ? Promise.resolve(name) : ctx.client.call('GET /systems/:id', { params: { id: ask.systemId } }).then((system) => system.name, () => null),
       ]);
       if (answeredText !== null || stoppedText !== null || busy || disposed) return;

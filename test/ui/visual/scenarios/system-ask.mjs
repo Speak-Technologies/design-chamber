@@ -187,6 +187,17 @@ const diff = async ({ openPage, check }, width, theme) => {
   await p.shot(`${base}-3-scrolled`);
   await p.guest('doc.querySelector(".dcb-ask-body").scrollTop = 0');
 
+  // ---- the preview buttons leave an open request for the system and open the rail (not just a toast)
+  const hostState = (expr) => p.host(`JSON.stringify(${expr})`).then((raw) => JSON.parse(raw));
+  const openedBefore = (await hostState('window.__host.surfacesOpened')).length;
+  await p.click('.dcb-preview-row button', { text: 'Preview living page' });
+  await p.settle(300);
+  check((await hostState('window.__host.surfacesOpened')).length === openedBefore + 1, `${base}: Preview living page opens the rail`);
+  check((await hostState('window.__host.toasts.map((t) => t.message)')).some((m) => m === 'The living page preview is open in the rail.'), `${base}: and says the preview is open there`);
+  await p.click('.dcb-preview-row button', { text: 'Open the board' });
+  await p.settle(300);
+  check((await hostState('window.__host.toasts.map((t) => t.message)')).some((m) => m === 'The board is open in the rail.'), `${base}: Open the board says the board is open`);
+
   // ---- a patch opens; a part switched off changes Approve
   await p.click('.dcb-file', { nth: 0 });
   check((await p.guest('return doc.querySelector(".dcb-file")?.getAttribute("aria-expanded")')) === 'true', `${base}: a file row opens its patch`);

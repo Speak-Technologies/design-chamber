@@ -284,6 +284,9 @@ const resyncFlow = async (h, width, theme) => {
     const pinned = await p.guest('const f = doc.querySelector(".dc-resync-foot, .dc-sheet-foot"); if (!f) return false; const r = f.getBoundingClientRect(); return r.bottom <= window.innerHeight + 1 && r.top > 0');
     h.check(pinned, `${tag}: the footer stays on screen`);
     h.check(await noOverflow(p), `${tag}: nothing scrolls sideways`);
+    const box = await p.guest('const r = (s) => { const b = doc.querySelector(s).getBoundingClientRect(); return [Math.round(b.left), Math.round(b.right)].join(":"); }; return `app ${r(".dc-app")} sheet ${r(".dc-resync")} panel ${r(".dc-resync .dc-sheet-panel")} syspg ${r(".dc-syspg")} scroll ${doc.querySelector(".dc-app").scrollLeft}/${doc.querySelector(".dc-app").scrollWidth} wide ${[...doc.querySelectorAll(".dc-app *")].filter((n) => n.getBoundingClientRect().width > 316).slice(0, 4).map((n) => n.className).join(",")} view ${window.innerWidth}`');
+    const inside = await p.guest('const b = doc.querySelector(".dc-resync .dc-sheet-panel").getBoundingClientRect(); return b.left >= 0 && b.right <= window.innerWidth + 1');
+    h.check(inside, `${tag}: the sheet sits inside the window (${box})`);
     await p.shot(`${tag}-1-review`);
     await p.click('.dc-resync .oc-sdk-btn', { text: 'Apply' });
     await h.checkSoon(async () => (await pageLog(p)).resyncs.length === 1, `${tag}: Apply posts once`);
@@ -307,6 +310,29 @@ const resyncFlow = async (h, width, theme) => {
   }
 };
 
+// ---------------------------------------------------------------- an open request names the preview or the board
+const openRequestFlow = async (h, surface, width, theme) => { // the rail only: the page never takes open requests
+  const tag = `sysrepo-request-${surface === 'panel' ? 'rail' : 'page'}-${width}-${theme}`;
+  const p = await h.openPage({ width, height: 900, surface, theme, label: tag });
+  console.log(tag);
+  await h.listReady(p);
+  await set(p, `setRepoHome('tidepool', 'fresh')`);
+  await p.host(`${FAKE}.requestSystemOpen('tidepool', 'preview')`);
+  await h.checkSoon(() => p.guest('return !!doc.querySelector(".dc-syspg[data-state=\\"ready\\"]")'), `${tag}: a preview request opens the system page`);
+  await h.checkSoon(() => p.guest('return !!doc.querySelector(".dc-lpv") && !doc.querySelector(".dc-lpv").hidden'), `${tag}: and the living page preview frame`);
+  h.check(await noOverflow(p), `${tag}: nothing scrolls sideways`);
+  await p.settle(600);
+  const clear = await p.guest('const frame = doc.querySelector(".dc-lpv-frame").getBoundingClientRect(); const ask = doc.querySelector(".dc-syspg-stage > .dc-ask").getBoundingClientRect(); return ask.top >= frame.bottom - 1');
+  h.check(clear, `${tag}: the ask bar sits under the frame, not on it`);
+  await p.shot(`${tag}-1-preview`);
+  // The same system is already open: a board request brings the board back and closes the preview.
+  await p.host(`${FAKE}.requestSystemOpen('tidepool', 'board')`);
+  await h.checkSoon(() => p.guest('return !!doc.querySelector(".dc-lpv")?.hidden'), `${tag}: a board request closes the preview`);
+  h.check((await count(p, '.dc-syspg')) === 1, `${tag}: still one system page`);
+  await p.shot(`${tag}-2-board`);
+  await p.close();
+};
+
 export const run = async (h) => {
   const only = process.env.DC_SYSREPO_ONLY ? new RegExp(process.env.DC_SYSREPO_ONLY) : null;
   const go = (tag, fn) => (only && !only.test(tag) ? Promise.resolve() : fn());
@@ -319,8 +345,10 @@ export const run = async (h) => {
     await go(`preview-page-${theme}`, () => previewFlow(h, 'page', 1400, theme));
     await go(`preview-proposal-${theme}`, () => proposalPreviewFlow(h, theme));
     await go(`preview-rail-${theme}`, () => previewFlow(h, 'panel', 320, theme));
+    await go(`request-rail-${theme}`, () => openRequestFlow(h, 'panel', 320, theme));
     await go(`built-${theme}`, () => builtFlow(h, theme));
     await go(`resync-1400-${theme}`, () => resyncFlow(h, 1400, theme));
+    await go(`resync-320-${theme}`, () => resyncFlow(h, 320, theme));
     await go(`resync-390-${theme}`, () => resyncFlow(h, 390, theme));
   }
 };

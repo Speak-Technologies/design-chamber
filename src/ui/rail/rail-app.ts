@@ -2,6 +2,7 @@
 // views of one stack, plus the New dialog. Chat links ("Open as page", a chip click) open
 // the viewer here, because an extension cannot open the full-screen page from code.
 
+import type { SystemOpenTarget } from '../../shared/api.ts';
 import { openNewDialog } from '../components/new-dialog.ts';
 import { toast, type ActionContext } from '../components/actions.ts';
 import { errorText, h } from '../components/dom.ts';
@@ -159,8 +160,12 @@ export const mountRail = (root: HTMLElement): void => {
       systemsView.focus();
     }
   };
-  const openSystem = (id: string): void => {
-    if (systemPage?.id === id) return;
+  /** The system's page; `board` and `preview` also bring the board or the living page's preview forward. */
+  const openSystem = (id: string, target: SystemOpenTarget = 'page'): void => {
+    if (systemPage?.id === id) {
+      if (target !== 'page') systemPage.handle.showTarget(target);
+      return;
+    }
     systemPage?.handle.dispose();
     systemPage = null;
     if (!systemsView) showSystems();
@@ -170,6 +175,7 @@ export const mountRail = (root: HTMLElement): void => {
     systemPage = { id, handle };
     app.append(handle.el);
     handle.focus();
+    if (target !== 'page') handle.showTarget(target);
   };
 
   const list = mountListView({
@@ -183,14 +189,14 @@ export const mountRail = (root: HTMLElement): void => {
 
   // A chip click or "Open as page" opens the viewer here.
   flows.watchItems(
-    (target) => (target.kind === 'open-build' ? openBuild(target.ticket) : target.kind === 'open-system' ? openSystem(target.system) : openViewer(target.slug)),
+    (target) => (target.kind === 'open-build' ? openBuild(target.ticket) : target.kind === 'open-system' ? openSystem(target.system, target.target) : openViewer(target.slug)),
     (error) => toast('error', `Couldn’t open that design. ${errorText(error)}`),
   );
   // "Open as page" (background frame), a Work Status row or a chat block leaves a design for us to open.
-  // A system request opens the system page; its board / preview frame jump is the UI follow-up's.
+  // A system request opens the system page, then jumps to its board or the living page preview when it asked for one.
   flows.watchOpenRequests(
     (listener) => feed.subscribe(listener),
     (target) => openViewer(target.slug, { startIn: target.intent }),
-    (target) => openSystem(target.system),
+    (target) => openSystem(target.system, target.target),
   );
 };

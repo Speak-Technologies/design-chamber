@@ -31,7 +31,7 @@ export type LivingPreviewOptions = {
 };
 
 /** The staged page (or the proposal's) as one document: the meta, then its chunks a few at a time. */
-export const loadLivingPage = async (id: string, which: PreviewTarget['which'], scheme: 'light' | 'dark'): Promise<RenderDoc> => {
+export const loadLivingRender = async (id: string, which: PreviewTarget['which'], scheme: 'light' | 'dark'): Promise<RenderDoc> => {
   const meta = await client.call('GET /systems/:id/living-page/render', { params: { id }, query: { which, scheme } });
   const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
   const parts: string[] = new Array<string>(indexes.length).fill('');
@@ -52,7 +52,7 @@ export const mountLivingPreview = (options: LivingPreviewOptions): LivingPreview
 
   const slot = createFrameSlot({
     slug: `living:${options.id}`,
-    loadDoc: () => loadLivingPage(options.id, target?.which ?? 'staged', boardScheme(host.snapshot()?.theme.mode)),
+    loadDoc: () => loadLivingRender(options.id, target?.which ?? 'staged', boardScheme(host.snapshot()?.theme.mode)),
     artboardId: artboardIdOf(null, 'living'),
     title: `${options.systemName()} living page preview`,
     mode: () => 'play',
