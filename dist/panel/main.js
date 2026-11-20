@@ -1519,6 +1519,7 @@
     "too-large": 413,
     "no-html": 422,
     invalid: 422,
+    "read-only": 422,
     internal: 500
   };
   var isApiErrorCode = (value) => typeof value === "string" && Object.hasOwn(API_ERROR_STATUS, value);
@@ -1538,6 +1539,7 @@
     "POST /designs/:slug/comments/mark-sent": "WP1",
     "POST /uploads": "WP1",
     "PUT /uploads/:id/:index": "WP1",
+    "DELETE /uploads/:id": "WP1",
     "GET /outbox": "WP1",
     "PUT /outbox": "WP1",
     "DELETE /outbox": "WP1",
@@ -1573,10 +1575,52 @@
     "POST /designs/:slug/hand-edits/clear": "P2",
     "GET /designs/:slug/page-state": "P2",
     "PATCH /designs/:slug/page-state": "P2",
-    "DELETE /designs/:slug/page-state": "P2"
+    "DELETE /designs/:slug/page-state": "P2",
+    "GET /systems": "P25",
+    "POST /systems": "P25",
+    "GET /systems/:id": "P25",
+    "PATCH /systems/:id": "P25",
+    "DELETE /systems/:id": "P25",
+    "POST /systems/:id/edits": "P25",
+    "POST /systems/:id/edits/:eid/undo": "P25",
+    "POST /systems/:id/hand-edits/clear": "P25",
+    "POST /systems/:id/assets": "P25",
+    "POST /systems/:id/assets/from-folder": "P25",
+    "GET /systems/:id/board": "P25",
+    "GET /systems/:id/board/chunk": "P25",
+    "GET /systems/:id/versions": "P25",
+    "GET /systems/:id/versions/:vid/diff": "P25",
+    "POST /systems/:id/versions/:vid/restore": "P25",
+    "POST /systems/:id/prompt": "P25",
+    "GET /systems/:id/checks": "P25",
+    "POST /system-scans": "P25",
+    "GET /system-scans/:scanId": "P25",
+    "DELETE /system-scans/:scanId": "P25",
+    "POST /systems/:id/resync": "P25",
+    "GET /designs/:slug/system": "P25",
+    "GET /designs/:slug/system/preview": "P25",
+    "POST /designs/:slug/system": "P25",
+    "GET /folders": "P25",
+    "POST /folders": "P25",
+    "PATCH /folders/:folderId": "P25",
+    "DELETE /folders/:folderId": "P25",
+    "POST /folders/:folderId/undelete": "P25",
+    "POST /folders/:folderId/designs": "P25",
+    "POST /systems/chip": "P25",
+    "GET /system-builds/:ticket": "P25",
+    "GET /systems/:id/living-page": "P25",
+    "GET /systems/:id/proposals/:proposalId": "P25",
+    "GET /systems/:id/living-page/render": "P25",
+    "GET /systems/:id/living-page/render/chunk": "P25",
+    "POST /systems/:id/build/stop": "P25",
+    "POST /system-stops/:undoId/undo": "P25"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
-  var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set(["GET /designs/:slug/render/chunk"]);
+  var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set([
+    "GET /designs/:slug/render/chunk",
+    "GET /systems/:id/board/chunk",
+    "GET /systems/:id/living-page/render/chunk"
+  ]);
   var splitRouteKey = (key) => {
     const space = key.indexOf(" ");
     return { method: key.slice(0, space), pattern: key.slice(space + 1) };
@@ -1654,6 +1698,34 @@
   var PAGE_STATE_CHANGES_MAX = 1e4;
   var PAGE_STATE_FLUSH_MS = 1e3;
   var PAGE_STATE_BATCH_MAX_CHARS = PAGE_STATE_MAX_CHARS;
+  var SYSTEM_ID_PATTERN = SLUG_PATTERN;
+  var SYSTEM_NAME_MAX = 60;
+  var SYSTEM_TOKEN_NAME_PATTERN = /^--[A-Za-z0-9_-]{1,60}$/;
+  var SYSTEM_TOKEN_VALUE_MAX = 100;
+  var SYSTEM_ENTRY_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
+  var SYSTEM_NOTE_MAX = 2e4;
+  var SYSTEM_USAGE_NOTE_MAX = 500;
+  var SYSTEM_FILES_MAX = 200;
+  var SYSTEM_BYTES_MAX = 100 * 1024 * 1024;
+  var SYSTEM_FONT_MAX_BYTES = 5 * 1024 * 1024;
+  var SYSTEM_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+  var SYSTEM_DOCUMENT_MAX_BYTES = 20 * 1024 * 1024;
+  var BINARY_UPLOAD_TOTAL_MAX = 28e6;
+  var SCAN_TTL_MS = 10 * 6e4;
+  var FOLDER_ID_PATTERN = /^f_[a-z0-9]{10}$/;
+  var FOLDERS_MAX = 50;
+  var FOLDER_NAME_MAX = 40;
+  var FOLDER_UNDO_MS = 60 * 6e4;
+  var TOKEN_PREVIEW_VARS_MAX = 512;
+  var TOKEN_PREVIEW_NAME_PATTERN = /^--[A-Za-z0-9_-]{1,80}$/;
+  var BOARD_ENTRY_MAX = 120;
+  var SYSTEM_BUILD_TICKET_PATTERN = /^sb_[a-z0-9]{12}$/;
+  var SYSTEM_BUILD_TTL_MS = 7 * 864e5;
+  var LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
+  var LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
+  var SCAN_JSON_MAX_BYTES = 2 * 1024 * 1024;
+  var SYSTEM_BUILD_POLL_MS = 3e3;
+  var SYSTEM_PROPOSAL_FILES_MAX = 200;
 
   // src/guest/service-client.ts
   var ServiceError = class extends Error {
@@ -1746,6 +1818,20 @@
     return chunks;
   };
   var fitsOneRequest = (json) => json.length <= UPLOAD_CHUNK_MAX_CHARS && utf8Length(json) <= UPLOAD_CHUNK_MAX_BYTES;
+  var BASE64_CHUNK_BYTES = 44997;
+  var BASE64_PIECE_BYTES = 8190;
+  var base64Of = (bytes) => {
+    let text = "";
+    for (let at = 0; at < bytes.length; at += BASE64_PIECE_BYTES) {
+      text += btoa(String.fromCharCode(...bytes.subarray(at, at + BASE64_PIECE_BYTES)));
+    }
+    return text;
+  };
+  var encodeBase64Chunks = (bytes, chunkBytes = BASE64_CHUNK_BYTES) => {
+    const chunks = [];
+    for (let at = 0; at < bytes.length; at += chunkBytes) chunks.push(base64Of(bytes.subarray(at, at + chunkBytes)));
+    return chunks;
+  };
   var mapLimit = async (items, limit, run) => {
     const out = new Array(items.length);
     let next = 0;
@@ -1834,6 +1920,41 @@
       inflight.set(id, task);
       return task;
     };
+    const fetchBoard = async (id, version, scheme) => {
+      const query = { scheme };
+      if (version) query.version = version;
+      const meta = await call("GET /systems/:id/board", { params: { id }, query });
+      const cached = renders.get(meta.key);
+      if (cached) {
+        renders.delete(meta.key);
+        renders.set(meta.key, cached);
+        return cached;
+      }
+      const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
+      const parts = await mapLimit(
+        indexes,
+        RENDER_CHUNK_CONCURRENCY,
+        (n) => call("GET /systems/:id/board/chunk", { params: { id }, query: { key: meta.key, n: String(n) } })
+      );
+      const doc = { meta, html: parts.join("") };
+      remember(doc);
+      return doc;
+    };
+    const loadBoard = (id, version = null, scheme = "light") => {
+      const key = `board\0${id}\0${version ?? ""}\0${scheme}`;
+      const running = inflight.get(key);
+      if (running) return running;
+      const task = (async () => {
+        try {
+          return await fetchBoard(id, version, scheme);
+        } catch (error) {
+          if (isServiceError(error, "stale")) return fetchBoard(id, version, scheme);
+          throw error;
+        }
+      })().finally(() => inflight.delete(key));
+      inflight.set(key, task);
+      return task;
+    };
     const upload = async (text) => {
       if (text.length > UPLOAD_TOTAL_MAX) {
         throw new ServiceError("too-large", `This text is too long to send to Design Chamber (over ${UPLOAD_TOTAL_MAX.toLocaleString("en-US")} characters).`);
@@ -1842,6 +1963,26 @@
       const chunks = splitUploadChunks(text);
       for (const [index, data] of chunks.entries()) {
         await call("PUT /uploads/:id/:index", { params: { id: uploadId, index: String(index) }, body: { data } });
+      }
+      return uploadId;
+    };
+    const uploadBinary = async (file, onProgress) => {
+      const chunks = encodeBase64Chunks(new Uint8Array(await file.arrayBuffer()));
+      const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      if (total > BINARY_UPLOAD_TOTAL_MAX) {
+        throw new ServiceError("too-large", "That file is larger than the 21 MB Design Chamber accepts.");
+      }
+      const { uploadId } = await call("POST /uploads", { body: { total, encoding: "base64" } });
+      let sent = 0;
+      try {
+        for (const [index, data] of chunks.entries()) {
+          await call("PUT /uploads/:id/:index", { params: { id: uploadId, index: String(index) }, body: { data } });
+          sent += data.length;
+          onProgress?.(total === 0 ? 1 : sent / total);
+        }
+      } catch (error) {
+        await call("DELETE /uploads/:id", { params: { id: uploadId } }).catch(() => void 0);
+        throw error;
       }
       return uploadId;
     };
@@ -1858,7 +1999,11 @@
       }
       return answer;
     };
-    return { call, loadRender, upload, thumbnail };
+    const getProposal = (systemId, proposalId) => call("GET /systems/:id/proposals/:proposalId", { params: { id: systemId, proposalId } });
+    const stopBuild = (systemId, proposalId = null) => call("POST /systems/:id/build/stop", { params: { id: systemId }, body: { proposalId } });
+    const undoStop = (undoId) => call("POST /system-stops/:undoId/undo", { params: { undoId }, body: {} });
+    const loadLivingPage = (systemId) => call("GET /systems/:id/living-page", { params: { id: systemId } });
+    return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
   };
 
   // node_modules/@openchamber/sdk/dist/ui/theme.js
@@ -2761,6 +2906,50 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
+  // node_modules/@openchamber/sdk/dist/ui/checkbox.js
+  var mountToggle = (root, initial, role) => {
+    ensureStyle(UI_CSS);
+    let props = initial;
+    const node = button("oc-sdk oc-sdk-check");
+    node.setAttribute("role", role);
+    const control = el("span", role === "switch" ? "oc-sdk-check-thumb" : "oc-sdk-check-box");
+    if (role === "checkbox") {
+      control.append(icon("check", 12));
+    }
+    const text = el("span", "oc-sdk-check-text");
+    const label = el("span", "oc-sdk-check-label");
+    const description = el("span", "oc-sdk-check-desc");
+    text.append(label, description);
+    node.append(control, text);
+    root.append(node);
+    const paint = () => {
+      node.setAttribute("aria-checked", props.checked ? "true" : "false");
+      node.disabled = Boolean(props.disabled);
+      setText(label, props.label);
+      setText(description, props.description);
+      description.hidden = !props.description;
+    };
+    const onClick = () => {
+      if (!props.disabled) {
+        props.onChange(!props.checked);
+      }
+    };
+    node.addEventListener("click", onClick);
+    paint();
+    return {
+      update: (next) => {
+        props = { ...props, ...next };
+        paint();
+      },
+      dispose: () => {
+        node.removeEventListener("click", onClick);
+        node.remove();
+      }
+    };
+  };
+  var mountCheckbox = (root, initial) => mountToggle(root, initial, "checkbox");
+  var mountSwitch = (root, initial) => mountToggle(root, initial, "switch");
+
   // node_modules/@openchamber/sdk/dist/ui/tabs.js
   var mountTabs = (root, initial) => {
     ensureStyle(UI_CSS);
@@ -2856,22 +3045,22 @@ ${GUEST_UI_LOOK_CSS}`;
     const slot = el("div", "oc-sdk-empty-action");
     shell.append(title2, body, slot);
     root.append(shell);
-    let action = null;
+    let action2 = null;
     const paint = () => {
       setText(title2, props.title);
       setText(body, props.body);
       body.hidden = !props.body;
       slot.hidden = !props.action;
       if (!props.action) {
-        action?.dispose();
-        action = null;
+        action2?.dispose();
+        action2 = null;
         return;
       }
       const next = { label: props.action.label, onClick: props.action.onClick };
-      if (action) {
-        action.update(next);
+      if (action2) {
+        action2.update(next);
       } else {
-        action = mountButton(slot, { ...next, variant: "outline", size: "sm" });
+        action2 = mountButton(slot, { ...next, variant: "outline", size: "sm" });
       }
     };
     paint();
@@ -2881,8 +3070,8 @@ ${GUEST_UI_LOOK_CSS}`;
         paint();
       },
       dispose: () => {
-        action?.dispose();
-        action = null;
+        action2?.dispose();
+        action2 = null;
         shell.remove();
       }
     };
@@ -2929,7 +3118,7 @@ ${GUEST_UI_LOOK_CSS}`;
     text.append(title2, body);
     node.append(text, slot);
     root.append(node);
-    let action = null;
+    let action2 = null;
     const paint = () => {
       node.dataset.tone = props.tone;
       node.setAttribute("role", props.tone === "error" || props.tone === "warning" ? "alert" : "status");
@@ -2938,15 +3127,15 @@ ${GUEST_UI_LOOK_CSS}`;
       body.hidden = !props.body;
       slot.hidden = !props.action;
       if (!props.action) {
-        action?.dispose();
-        action = null;
+        action2?.dispose();
+        action2 = null;
         return;
       }
       const next = { label: props.action.label, onClick: props.action.onClick };
-      if (action) {
-        action.update(next);
+      if (action2) {
+        action2.update(next);
       } else {
-        action = mountButton(slot, { ...next, variant: "outline", size: "xs" });
+        action2 = mountButton(slot, { ...next, variant: "outline", size: "xs" });
       }
     };
     paint();
@@ -2956,8 +3145,8 @@ ${GUEST_UI_LOOK_CSS}`;
         paint();
       },
       dispose: () => {
-        action?.dispose();
-        action = null;
+        action2?.dispose();
+        action2 = null;
         node.remove();
       }
     };
@@ -3063,6 +3252,7 @@ ${GUEST_UI_LOOK_CSS}`;
   // src/shared/agent/context.ts
   var VIEWPORT_TABLET = Object.freeze({ id: "tablet", label: "Tablet", width: 768, height: 1024 });
   var VIEWPORT_DESKTOP = Object.freeze({ id: "desktop", label: "Desktop", width: 1440, height: 900 });
+  var formatViewport = (viewport) => `${oneLine(viewport.label)} ${viewport.width}\xD7${viewport.height}`;
   var clip = (text, max) => text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1)).trimEnd()}\u2026`;
   var oneLine = (text) => text.replace(/[\s\u0085]+/g, " ").trim();
 
@@ -3132,7 +3322,7 @@ ${GUEST_UI_LOOK_CSS}`;
     startFailed: "Couldn't start a chat for this design. It is in your Designs list; try Continue in chat.",
     sendFailed: "The revision didn't reach the chat. Your comments are still open; try again.",
     nothingToSend: "There are no open comments to send.",
-    unknownCommand: "Design Chamber knows /design and /page only.",
+    unknownCommand: "Design Chamber knows /design, /page and /design-system only.",
     noSessionSelected: "Open a chat first, then try again.",
     markFailed: "Sent, but the comments could not be marked as sent. Resolve them by hand so they are not sent again.",
     savedPage: (title2) => `Saved as page \u201C${title2}\u201D.`,
@@ -3153,7 +3343,7 @@ ${GUEST_UI_LOOK_CSS}`;
     title: chip.title,
     url: chip.url,
     text: chip.text,
-    data: { slug: chip.data.slug, kind: chip.data.kind }
+    data: "build" in chip.data ? { build: chip.data.build } : { slug: chip.data.slug, kind: chip.data.kind }
   });
   var planReconciliation = (snapshot, designs) => {
     if (snapshot.state !== "ready") return [];
@@ -3179,6 +3369,7 @@ ${GUEST_UI_LOOK_CSS}`;
     if (snapshot.state !== "ready") return [];
     return snapshot.sessions.filter((session) => session.activity === "idle" && ["running", "retrying", "waiting-permission", "waiting-question"].includes(previous.get(session.id) ?? "")).map((session) => session.id);
   };
+  var BUILD_SYSTEM_DEFAULT_TEXT = "Let's build a design system.";
   var takesOpenRequest = (batch) => batch.reset || batch.events.some((event) => event.kind === "added" || event.kind === "open");
   var createFlows = ({ host: host2, client: client2, now = Date.now }) => {
     const api = host2.client;
@@ -3209,7 +3400,7 @@ ${GUEST_UI_LOOK_CSS}`;
       }
       return false;
     };
-    const projectIdFor = async (directory) => {
+    const projectIdFor2 = async (directory) => {
       if (!directory) return void 0;
       try {
         const { projects } = await api.listProjects();
@@ -3236,7 +3427,7 @@ ${GUEST_UI_LOOK_CSS}`;
       throw new FlowError("send-failed", MESSAGES.sendFailed);
     };
     const startLinkedSession = async (slug, chip, text, projectDirectory) => {
-      const projectId = await projectIdFor(projectDirectory) ?? await projectIdFor(host2.directory.get());
+      const projectId = await projectIdFor2(projectDirectory) ?? await projectIdFor2(host2.directory.get());
       if (!projectId && !host2.directory.get()) throw new FlowError("no-project", MESSAGES.noProject);
       const request = { ...toAttachRequest(chip), text, navigation: "open", ...projectId ? { projectId } : {} };
       const result = await api.startSession(request);
@@ -3283,24 +3474,28 @@ ${GUEST_UI_LOOK_CSS}`;
     const flows2 = {
       resolveSlashCommand: async ({ command, args }) => {
         const kind = command === "design" ? "canvas" : command === "page" ? "page" : null;
-        if (!kind) throw new FlowError("unknown-command", MESSAGES.unknownCommand);
+        if (!kind && command !== "design-system") throw new FlowError("unknown-command", MESSAGES.unknownCommand);
         const ready = host2.ready.get();
+        const projectDirectory = ready?.directory ?? null;
+        const sessionId = ready?.session?.id ?? null;
         try {
-          const { chip } = await client2.call("POST /chip", {
-            body: { kind, brief: args.trim(), projectDirectory: ready?.directory ?? null, sessionId: ready?.session?.id ?? null }
-          });
+          if (!kind) {
+            const { chip: chip2 } = await client2.call("POST /systems/chip", { body: { brief: args.trim(), projectDirectory, sessionId } });
+            return toAttachRequest(chip2);
+          }
+          const { chip } = await client2.call("POST /chip", { body: { kind, brief: args.trim(), projectDirectory, sessionId } });
           return toAttachRequest(chip);
         } catch (error) {
           throw new Error(error instanceof Error ? error.message : String(error));
         }
       },
-      newDesign: async ({ kind, brief, preset = null, destination }) => {
+      newDesign: async ({ kind, brief, preset = null, system, destination }) => {
         const ready = host2.ready.get();
         const directory = host2.directory.get();
         const text = brief.trim();
         if (destination === "new-chat") {
           if (!directory) throw new FlowError("no-project", MESSAGES.noProject);
-          const { slug: slug2, chip: chip2 } = await client2.call("POST /chip", { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null } });
+          const { slug: slug2, chip: chip2 } = await client2.call("POST /chip", { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null, ...system === void 0 ? {} : { system } } });
           const result = await api.startSession({ ...toAttachRequest(chip2), text: text || "Let's start this design.", navigation: "open" });
           if (result.sessionId === null) throw new FlowError("start-failed", MESSAGES.startFailed);
           await client2.call("PATCH /designs/:slug", { params: { slug: slug2 }, body: { sessionId: result.sessionId } });
@@ -3308,12 +3503,42 @@ ${GUEST_UI_LOOK_CSS}`;
         }
         const session = host2.session.get();
         const { slug, chip } = await client2.call("POST /chip", {
-          body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null }
+          body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null, ...system === void 0 ? {} : { system } }
         });
         await api.attach(toAttachRequest(chip));
         if (text) await api.compose({ text, mode: "append" });
         if (ready?.surface === "page") await api.close();
         return { slug, sessionId: session?.id ?? null };
+      },
+      buildSystem: async ({ brief, destination }) => {
+        const ready = host2.ready.get();
+        const directory = host2.directory.get();
+        const words = brief.trim();
+        const text = words || BUILD_SYSTEM_DEFAULT_TEXT;
+        if (destination === "new-chat") {
+          if (!directory) throw new FlowError("no-project", MESSAGES.noProject);
+          const { ticket: ticket2, chip: chip2 } = await client2.call("POST /systems/chip", { body: { brief: words, projectDirectory: directory, sessionId: null } });
+          try {
+            const result = await api.startSession({ ...toAttachRequest(chip2), text, navigation: "open" });
+            if (result.sessionId === null) return { outcome: "not-sent", ticket: ticket2, text: chip2.text };
+            return { outcome: "new-session", ticket: ticket2, sessionId: result.sessionId };
+          } catch (error) {
+            if (error instanceof HostRequestError) return { outcome: "not-sent", ticket: ticket2, text: chip2.text };
+            throw error;
+          }
+        }
+        const session = host2.session.get();
+        if (!session) throw new FlowError("no-session", MESSAGES.noSessionSelected);
+        const { ticket, chip } = await client2.call("POST /systems/chip", { body: { brief: words, projectDirectory: directory, sessionId: session.id } });
+        try {
+          await api.attach(toAttachRequest(chip));
+          const outcome = await promptSelected(session, text, MESSAGES.busyAsk);
+          if (ready?.surface === "page") await api.close();
+          return { outcome, ticket, sessionId: session.id };
+        } catch (error) {
+          if (error instanceof HostRequestError || error instanceof FlowError && error.code === "send-failed") return { outcome: "not-sent", ticket, text: chip.text };
+          throw error;
+        }
       },
       continueInChat: async (slug) => {
         const { design } = await client2.call("GET /designs/:slug", { params: { slug } });
@@ -3354,8 +3579,8 @@ ${GUEST_UI_LOOK_CSS}`;
         const { design } = await client2.call("GET /designs/:slug", { params: { slug } });
         return deliver(slug, prompt, design, null, MESSAGES.busyAsk);
       },
-      askAgent: async (slug, purpose) => {
-        const prompt = await client2.call("POST /designs/:slug/prompt", { params: { slug }, body: { purpose } });
+      askAgent: async (slug, purpose, before) => {
+        const prompt = await client2.call("POST /designs/:slug/prompt", { params: { slug }, body: before === void 0 ? { purpose } : { purpose, before } });
         const { design } = await client2.call("GET /designs/:slug", { params: { slug } });
         return deliver(slug, prompt, design, null, MESSAGES.busyAsk);
       },
@@ -3431,7 +3656,10 @@ ${GUEST_UI_LOOK_CSS}`;
         if (isGuestAttachItem(item)) {
           if (item.providerId !== CHIP_PROVIDER_ID) return null;
           const data = item.data;
-          const slug = typeof data === "object" && data !== null && !Array.isArray(data) ? data.slug : void 0;
+          if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+          const { slug, build, system } = data;
+          if (typeof build === "string") return SYSTEM_BUILD_TICKET_PATTERN.test(build) ? { kind: "open-build", ticket: build } : null;
+          if (typeof system === "string") return SYSTEM_ID_PATTERN.test(system) ? { kind: "open-system", system, target: "page" } : null;
           return typeof slug === "string" && SLUG_PATTERN.test(slug) ? { kind: "open-design", slug } : null;
         }
         if (isGuestMessageItem(item) && item.action === OPEN_AS_PAGE_ACTION) {
@@ -3467,7 +3695,7 @@ ${GUEST_UI_LOOK_CSS}`;
           const mine = generation;
           unsubscribe?.();
           unsubscribe = null;
-          const projectId = await projectIdFor(directory);
+          const projectId = await projectIdFor2(directory);
           if (!projectId || mine !== generation) return;
           const activity = /* @__PURE__ */ new Map();
           const stop = await api.onSessions(projectId, (snapshot) => {
@@ -3513,12 +3741,18 @@ ${GUEST_UI_LOOK_CSS}`;
           );
         });
       },
-      watchOpenRequests: (subscribe, open) => {
+      watchOpenRequests: (subscribe, open, openSystem) => {
         let stopped = false;
         const take = () => {
           client2.call("DELETE /open-request").then(
             ({ request }) => {
-              if (request && !stopped && SLUG_PATTERN.test(request.slug)) {
+              if (!request || stopped) return;
+              if ("system" in request) {
+                const target = request.target === "board" || request.target === "preview" ? request.target : "page";
+                if (SYSTEM_ID_PATTERN.test(request.system)) openSystem?.({ kind: "open-system", system: request.system, target });
+                return;
+              }
+              if (SLUG_PATTERN.test(request.slug)) {
                 open({ kind: "open-design", slug: request.slug, intent: request.intent === "comment" ? "comment" : "view" });
               }
             },
@@ -3541,6 +3775,103 @@ ${GUEST_UI_LOOK_CSS}`;
   var isFresh = (outbox, at) => {
     const created = Date.parse(outbox.created);
     return Number.isNaN(created) || at - created < OUTBOX_TTL_MS;
+  };
+
+  // src/guest/make-system.ts
+  var MAKE_MESSAGES = {
+    noProject: "Open a project first, then try again.",
+    noChat: "No chat is open right now. Choose New chat, or open one first.",
+    notSent: "The request didn\u2019t reach a chat."
+  };
+  var attachOf = (chip) => ({ providerId: chip.providerId, id: chip.id, title: chip.title, url: chip.url, text: chip.text, data: { ...chip.data } });
+  var reasonOf = (error) => {
+    const text = toServiceError(error).message;
+    return text.endsWith(".") || text.endsWith("?") || text.endsWith("!") ? text : `${text}.`;
+  };
+  var createMakeSystem = ({ host: host2, client: client2 }) => {
+    const api = host2.client;
+    const projectIdFor2 = async (directory) => {
+      if (!directory) return void 0;
+      try {
+        const { projects } = await api.listProjects();
+        return projects.find((project) => sameDirectory(project.directory, directory))?.id;
+      } catch {
+        return void 0;
+      }
+    };
+    const askToMake = async ({ id, destination, directory }) => {
+      const notSent = (reason, text = null) => ({ outcome: "not-sent", sessionId: null, reason, text });
+      let prompt;
+      try {
+        prompt = await client2.call("POST /systems/:id/prompt", { params: { id }, body: { purpose: "make" } });
+      } catch (error) {
+        return notSent(reasonOf(error));
+      }
+      try {
+        if (destination === "new-chat") {
+          const projectId = await projectIdFor2(directory) ?? await projectIdFor2(host2.directory.get());
+          if (!projectId && !host2.directory.get()) return notSent(MAKE_MESSAGES.noProject, prompt.text);
+          const started = await api.startSession({ ...attachOf(prompt.chip), text: prompt.text, navigation: "open", ...projectId ? { projectId } : {} });
+          if (started.sessionId === null) return notSent(MAKE_MESSAGES.notSent, prompt.text);
+          await linkSession2(id, started.sessionId);
+          return { outcome: "new-session", sessionId: started.sessionId, reason: null, text: null };
+        }
+        const session = host2.session.get();
+        if (!session) return notSent(MAKE_MESSAGES.noChat, prompt.text);
+        await api.attach(attachOf(prompt.chip));
+        await api.compose({ text: prompt.text, mode: "append" });
+        await linkSession2(id, session.id);
+        return { outcome: "composed", sessionId: session.id, reason: null, text: null };
+      } catch (error) {
+        if (isHostError(error, "NO_SESSION")) return notSent(MAKE_MESSAGES.noChat, prompt.text);
+        return notSent(reasonOf(error), prompt.text);
+      }
+    };
+    const linkSession2 = async (id, sessionId) => {
+      try {
+        await client2.call("PATCH /systems/:id", { params: { id }, body: { sessionId } });
+      } catch (error) {
+        console.warn("Design Chamber: the new design system could not be linked to its chat", error);
+      }
+    };
+    const make = async (input, onStep = () => void 0) => {
+      onStep({ phase: "creating" });
+      const body = { name: input.name };
+      if (input.code) body.code = { scanId: input.code.scanId, assets: input.code.assets };
+      if (input.description) body.description = input.description;
+      if (input.brand) body.brand = true;
+      const created = await client2.call("POST /systems", { body });
+      const { id } = created;
+      const name = created.system.name;
+      const files = { added: [], refused: [] };
+      if (input.brand) {
+        const total = input.brand.files.length;
+        for (const [index, upload] of input.brand.files.entries()) {
+          onStep({ phase: "files", done: index, total, name: upload.name });
+          try {
+            const uploadId = await client2.uploadBinary(upload.file);
+            const added = await client2.call("POST /systems/:id/assets", { params: { id }, body: { uploadId, name: upload.name, kind: upload.kind } });
+            files.added.push(added.asset.file);
+          } catch (error) {
+            files.refused.push({ name: upload.name, reason: reasonOf(error) });
+          }
+        }
+        if (input.brand.folder) {
+          onStep({ phase: "folder" });
+          try {
+            const answer = await client2.call("POST /systems/:id/assets/from-folder", { params: { id }, body: { directory: input.brand.folder } });
+            files.added.push(...answer.added.map((entry) => entry.file));
+            files.refused.push(...answer.refused.map((entry) => ({ name: entry.name, reason: entry.reason })));
+          } catch (error) {
+            files.refused.push({ name: input.brand.folder, reason: reasonOf(error) });
+          }
+        }
+      }
+      onStep({ phase: "asking" });
+      const agent = await askToMake({ id, destination: input.destination, directory: input.code?.directory ?? null });
+      return { id, name, files, agent };
+    };
+    return { make, askToMake };
   };
 
   // src/guest/store.ts
@@ -3863,12 +4194,14 @@ ${GUEST_UI_LOOK_CSS}`;
   var client;
   var store;
   var flows;
+  var makeSystem;
   var feed;
   var startGuest = (nextHost, nextClient) => {
     guestHost = nextHost;
     client = nextClient;
     store = createStore({ client });
     flows = createFlows({ host: guestHost, client });
+    makeSystem = createMakeSystem({ host: guestHost, client });
     feed = createChangeFeed(client);
     store.connect(feed);
   };
@@ -3899,22 +4232,8 @@ ${GUEST_UI_LOOK_CSS}`;
       )
     }
   };
-  var askAgent = async (slug, purpose) => (await flows.askAgent(slug, purpose)).outcome;
+  var askAgent = async (slug, purpose, before) => (await flows.askAgent(slug, purpose, before)).outcome;
   var askSelfContained = (slug) => askAgent(slug, "offline");
-
-  // src/ui/model/new-model.ts
-  var DESTINATIONS = [
-    { id: "new-chat", label: "New chat", hint: "Starts a chat in this project." },
-    { id: "current-chat", label: "Current chat", hint: "Attaches the design to the chat you have open." }
-  ];
-  var kindHint = (kind) => kind === "canvas" ? "A wall of screens at several device sizes, with comments and versions." : "One HTML page shown full screen, with comments and versions. Export it as a ZIP or a single file.";
-  var startLabel = (kind) => kind === "canvas" ? "Start canvas" : "Start page";
-  var validateBrief = (brief) => brief.length > BRIEF_MAX ? `Keep the brief under ${BRIEF_MAX} characters.` : null;
-  var briefPlaceholder = (kind) => kind === "canvas" ? "e.g. A pricing page for a coffee subscription, laptop and phone" : "e.g. A single-page invoice template I can print";
-  var presetOptions = (presets) => [
-    { id: "", label: "None, let the agent suggest one" },
-    ...presets.map((preset) => ({ id: preset.id, label: preset.name, hint: preset.bestFor }))
-  ];
 
   // src/ui/components/dom.ts
   var h = (tag, attrs = null, ...children) => {
@@ -3973,6 +4292,198 @@ ${GUEST_UI_LOOK_CSS}`;
   var uid = 0;
   var nextId2 = (prefix) => `${prefix}-${uid += 1}`;
 
+  // src/ui/components/systems-store.ts
+  var createSystemsStore = () => {
+    let state = { status: "idle", systems: null, total: 0, max: 50, error: null };
+    const listeners = /* @__PURE__ */ new Set();
+    let ticket = 0;
+    const set = (next) => {
+      state = next;
+      for (const listener of [...listeners]) listener(state);
+    };
+    const apply = (answer) => set({ status: "ready", systems: answer.systems, total: answer.total, max: answer.max, error: null });
+    const load = async () => {
+      ticket += 1;
+      const mine = ticket;
+      set({ ...state, status: state.systems === null ? "loading" : state.status, error: null });
+      try {
+        const answer = await client.call("GET /systems");
+        if (mine !== ticket) return;
+        apply(answer);
+      } catch (error) {
+        if (mine !== ticket) return;
+        console.warn("Design Chamber: design systems failed to load", error);
+        set({ ...state, status: "error", error: toServiceError(error) });
+      }
+    };
+    const run = async (request) => {
+      try {
+        const answer = await request();
+        void load();
+        return answer;
+      } catch (error) {
+        void load();
+        throw new Error(errorText2(error));
+      }
+    };
+    const refresh = debounce(() => void load(), 200);
+    feed.subscribe((batch) => {
+      if (batch.reset || batch.events.some((event) => event.kind === "system" || event.kind === "root")) refresh();
+    });
+    return {
+      get: () => state,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => void listeners.delete(listener);
+      },
+      load,
+      rename: (id, name) => run(async () => {
+        await client.call("PATCH /systems/:id", { params: { id }, body: { name } });
+      }),
+      remove: (id) => run(async () => {
+        const answer = await client.call("DELETE /systems/:id", { params: { id } });
+        return answer.clearedSettings;
+      }),
+      setDefault: (system) => run(async () => {
+        await store.updateSettings({ systemDefault: system === null ? { choice: "ask" } : { choice: "system", id: system.id, name: system.name } });
+      })
+    };
+  };
+  var shared2 = null;
+  var systems = () => {
+    if (shared2 === null) {
+      shared2 = createSystemsStore();
+      void shared2.load();
+    }
+    return shared2;
+  };
+
+  // src/shared/systems.ts
+  var folderKey = (value, foldsCase) => {
+    const norm = value.replace(/\\/g, "/").replace(/\/+$/, "");
+    return foldsCase || /^[A-Za-z]:\//.test(norm) ? norm.toLowerCase() : norm;
+  };
+  var isSameOrInside = (root, dir, foldsCase) => {
+    const base = folderKey(root, foldsCase);
+    const target = folderKey(dir, foldsCase);
+    return target === base || target.startsWith(`${base}/`);
+  };
+  var effectiveSystemChoice = (input) => {
+    const ready = (id) => id !== void 0 && input.systems.some((system) => system.id === id && system.status === "ready");
+    const anyReady = input.systems.some((system) => system.status === "ready");
+    const ask = () => anyReady ? { choice: "ask" } : { choice: "none-silent" };
+    const { explicit } = input;
+    if (explicit === "none") return { choice: "none", why: "explicit" };
+    if (explicit === "ask") return ask();
+    if (explicit !== null && ready(explicit)) return { choice: "system", id: explicit, why: "explicit" };
+    const project = input.projectDirectory;
+    if (project !== null && project !== "" && !isSameOrInside(input.designsRoot, project, input.foldsCase)) {
+      const pin = (input.settings.systemPins ?? []).find((one) => folderKey(one.directory, input.foldsCase) === folderKey(project, input.foldsCase));
+      if (pin !== void 0) {
+        if (pin.choice === "none") return { choice: "none", why: "pinned" };
+        if (pin.choice === "system" && ready(pin.id)) return { choice: "system", id: pin.id, why: "pinned" };
+      }
+    }
+    const fallback = input.settings.systemDefault ?? { choice: "ask" };
+    if (fallback.choice === "none") return { choice: "none", why: "default" };
+    if (fallback.choice === "system" && ready(fallback.id)) return { choice: "system", id: fallback.id, why: "default" };
+    return ask();
+  };
+
+  // src/ui/model/format.ts
+  var SECOND = 1e3;
+  var MINUTE = 60 * SECOND;
+  var HOUR = 60 * MINUTE;
+  var DAY = 24 * HOUR;
+  var relativeTime = (iso, nowMs, locale) => {
+    const then = Date.parse(iso);
+    if (!Number.isFinite(then)) return "";
+    const diff = nowMs - then;
+    if (diff < 45 * SECOND) return "just now";
+    const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
+    if (diff < HOUR) return rtf.format(-Math.max(1, Math.round(diff / MINUTE)), "minute");
+    if (diff < DAY) return rtf.format(-Math.round(diff / HOUR), "hour");
+    if (diff < 14 * DAY) return rtf.format(-Math.round(diff / DAY), "day");
+    return new Date(then).toLocaleDateString(locale, { month: "short", day: "numeric", year: diff > 300 * DAY ? "numeric" : void 0 });
+  };
+  var viewportSize = (viewport) => `${viewport.width}\xD7${viewport.height}`;
+  var viewportLabel = (viewport) => `${viewport.label} ${viewportSize(viewport)}`;
+  var artboardLabel = (screenTitle, viewport) => {
+    const detail = `${viewport.label} \xB7 ${viewportSize(viewport)}`;
+    return { name: screenTitle, detail, full: `${screenTitle} \xB7 ${detail}` };
+  };
+  var zoomPercent = (scale) => `${Math.round(scale * 100)}%`;
+  var fileSize = (bytes, locale) => {
+    const safe = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+    const [value, unit] = safe < 1e3 ? [safe, "byte"] : safe < 1e6 ? [safe / 1e3, "kilobyte"] : [safe / 1e6, "megabyte"];
+    return new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay: unit === "byte" ? "long" : "short", maximumFractionDigits: value < 10 && unit !== "byte" ? 1 : 0 }).format(value);
+  };
+  var plural = (count, one, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
+  var folderName = (path) => {
+    const parts = path.split(/[\\/]+/).filter((part) => part !== "");
+    return parts[parts.length - 1] ?? path;
+  };
+  var middlePath = (path, max = 48) => {
+    if (path.length <= max) return path;
+    const sep = path.includes("\\") ? "\\" : "/";
+    const parts = path.split(/[\\/]+/);
+    if (parts.length > 1 && parts[parts.length - 1] === "") parts.pop();
+    const head = parts[0] ?? "";
+    const last = parts[parts.length - 1] ?? path;
+    const build = (tail2) => `${head}${sep}\u2026${sep}${tail2.join(sep)}`;
+    const tail = [last];
+    for (let index = parts.length - 2; index > 0; index -= 1) {
+      const next = [parts[index] ?? "", ...tail];
+      if (build(next).length > max) break;
+      tail.unshift(parts[index] ?? "");
+    }
+    const short = build(tail);
+    if (parts.length > 2 && short.length <= max) return short;
+    return last.length + 2 <= max ? `\u2026${sep}${last}` : `${last.slice(0, Math.max(1, max - 1))}\u2026`;
+  };
+
+  // src/ui/model/new-model.ts
+  var DESTINATIONS = [
+    { id: "new-chat", label: "New chat", hint: "Starts a chat in this project." },
+    { id: "current-chat", label: "Current chat", hint: "Attaches the design to the chat you have open." }
+  ];
+  var kindHint = (kind) => kind === "canvas" ? "A wall of screens at several device sizes, with comments and versions." : "One HTML page shown full screen, with comments and versions. Export it as a ZIP or a single file.";
+  var startLabel = (kind) => kind === "canvas" ? "Start canvas" : "Start page";
+  var validateBrief = (brief) => brief.length > BRIEF_MAX ? `Keep the brief under ${BRIEF_MAX} characters.` : null;
+  var briefPlaceholder = (kind) => kind === "canvas" ? "e.g. A pricing page for a coffee subscription, laptop and phone" : "e.g. A single-page invoice template I can print";
+  var presetOptions = (presets) => [
+    { id: "", label: "None, let the agent suggest one" },
+    ...presets.map((preset) => ({ id: preset.id, label: preset.name, hint: preset.bestFor }))
+  ];
+  var SYSTEM_ASK = "ask";
+  var SYSTEM_NONE = "none";
+  var foldsCaseFor = (root, platform) => /^[A-Za-z]:|^\\\\/.test(root) || /mac|darwin/i.test(platform);
+  var systemFieldOf = (input, chosen, foldsCase) => {
+    const ready = input.systems.filter((system) => system.status === "ready");
+    const effective = effectiveSystemChoice({
+      explicit: chosen,
+      projectDirectory: input.projectDirectory,
+      designsRoot: input.designsRoot,
+      settings: { systemDefault: input.settings?.default, systemPins: input.settings?.pins },
+      systems: input.systems.map((system) => ({ id: system.id, status: system.status })),
+      foldsCase
+    });
+    if (ready.length === 0 || effective.choice === "none-silent") return { empty: ready.length === 0, options: [], value: SYSTEM_NONE, hint: null, showPreset: true, send: void 0 };
+    const options = [
+      ...ready.map((system) => ({ id: system.id, label: system.name, hint: `Revision ${system.revision}` })),
+      { id: SYSTEM_NONE, label: "No design system" },
+      { id: SYSTEM_ASK, label: "Ask me in chat" }
+    ];
+    const value = effective.choice === "system" ? effective.id : effective.choice === "none" ? SYSTEM_NONE : SYSTEM_ASK;
+    let hint = null;
+    if (chosen === null && (effective.choice === "system" || effective.choice === "none")) {
+      if (effective.why === "pinned") hint = `Pinned for ${input.projectDirectory === null ? "this project" : folderName(input.projectDirectory)}`;
+      else if (effective.why === "default") hint = "Your default";
+    }
+    return { empty: false, options, value, hint, showPreset: effective.choice !== "system", send: value };
+  };
+  var NO_SYSTEMS_LINE = "No design systems yet.";
+
   // src/ui/model/menu-model.ts
   var menuRowState = (entry, ids) => {
     if (entry.disabled !== true) return { navDisabled: false, inert: false, nativeDisabled: false, showsReason: false, describedBy: null };
@@ -4000,6 +4511,7 @@ ${GUEST_UI_LOOK_CSS}`;
     cursor: ["M4 4l7.07 16.97 2.51-7.39 7.39-2.51L4 4z"],
     play: ["m7 4 13 8-13 8z"],
     fit: ["M8 3H5a2 2 0 0 0-2 2v3", "M21 8V5a2 2 0 0 0-2-2h-3", "M3 16v3a2 2 0 0 0 2 2h3", "M16 21h3a2 2 0 0 0 2-2v-3"],
+    sidebar: ["M4 5h16v14H4z", "M9 5v14"],
     folder: ["M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"],
     canvas: ["M3 3h8v8H3z", "M13 3h8v5h-8z", "M13 10h8v11h-8z", "M3 13h8v8H3z"],
     page: ["M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z", "M14 3v5h5", "m10 13-2 2 2 2", "m14 13 2 2-2 2"],
@@ -4018,6 +4530,8 @@ ${GUEST_UI_LOOK_CSS}`;
     send: ["M22 2 11 13", "M22 2l-7 20-4-9-9-4z"],
     pin: ["M12 21s-7-5.2-7-11a7 7 0 1 1 14 0c0 5.8-7 11-7 11z", "M12 7.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"],
     layers: ["m12 3 9 5-9 5-9-5z", "m3 13 9 5 9-5"],
+    // A palette with its dabs: design systems.
+    system: ["M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4c0-4.4-4-8.1-9-8.1z", "M7.5 11.5h.01", "M10 7.5h.01", "M15 7.5h.01"],
     // Three sliders with their knobs: the Tweaks button.
     tune: ["M4 21v-7", "M4 10V3", "M12 21v-9", "M12 8V3", "M20 21v-5", "M20 12V3", "M2 14h4", "M10 8h4", "M18 16h4"]
   };
@@ -4101,11 +4615,11 @@ ${GUEST_UI_LOOK_CSS}`;
     const ids = { foot: notes.foot ? `${uid2}-foot` : null };
     const setActive = (id) => {
       activeId = id;
-      for (const [rowId, row2] of rows) row2.dataset.active = rowId === id ? "true" : "false";
-      const row = id ? rows.get(id) : void 0;
-      if (row) {
-        popup.setAttribute("aria-activedescendant", row.id);
-        row.scrollIntoView({ block: "nearest" });
+      for (const [rowId, row3] of rows) row3.dataset.active = rowId === id ? "true" : "false";
+      const row2 = id ? rows.get(id) : void 0;
+      if (row2) {
+        popup.setAttribute("aria-activedescendant", row2.id);
+        row2.scrollIntoView({ block: "nearest" });
       } else popup.removeAttribute("aria-activedescendant");
     };
     let closed = false;
@@ -4139,7 +4653,7 @@ ${GUEST_UI_LOOK_CSS}`;
       }
       const state = menuRowState(item, { reason: `${uid2}-${item.id}-reason`, foot: ids.foot });
       states.set(item.id, state);
-      const row = h(
+      const row2 = h(
         "button",
         {
           type: "button",
@@ -4157,10 +4671,10 @@ ${GUEST_UI_LOOK_CSS}`;
         item.hint ? h("span", { class: "oc-sdk-option-hint" }, item.hint) : null,
         state.showsReason ? h("span", { class: "dc-menu-reason", id: `${uid2}-${item.id}-reason` }, item.reason) : null
       );
-      row.addEventListener("pointerenter", () => setActive(item.id));
-      row.addEventListener("click", () => pick(item.id));
-      rows.set(item.id, row);
-      popup.append(row);
+      row2.addEventListener("pointerenter", () => setActive(item.id));
+      row2.addEventListener("click", () => pick(item.id));
+      rows.set(item.id, row2);
+      popup.append(row2);
     }
     if (notes.foot) popup.append(h("div", { class: "oc-sdk-separator", "data-labeled": "false" }), note("foot", notes.foot));
     const describedBy = [notes.lead ? `${uid2}-lead` : null, notes.foot ? `${uid2}-foot` : null].filter((id) => id !== null);
@@ -4570,10 +5084,22 @@ ${GUEST_UI_LOOK_CSS}`;
   var openNewDialog = (hostEl, options) => {
     let unsubscribe = () => {
     };
-    const sheet = openSheet(hostEl, { title: "New design", variant: "dialog", subtitle: "Your chat agent writes the files; they appear here as it works.", onClose: () => unsubscribe() });
+    let unsubscribeSystems = () => {
+    };
+    const sheet = openSheet(hostEl, {
+      title: "New design",
+      variant: "dialog",
+      subtitle: "Your chat agent writes the files; they appear here as it works.",
+      onClose: () => {
+        unsubscribe();
+        unsubscribeSystems();
+      }
+    });
     let kind = options.kind;
     let brief = "";
     let preset = "";
+    let systemChoice = null;
+    let systemSend;
     let destination = "new-chat";
     const kindHost = h("div", { class: "dc-field" }, h("span", { class: "oc-sdk-field-label" }, "Type"));
     const kindTabs = mountTabs(kindHost, {
@@ -4606,6 +5132,22 @@ ${GUEST_UI_LOOK_CSS}`;
         briefField.update({ error: validateBrief(next) ?? void 0 });
       }
     });
+    const systemHost = h("div", { class: "dc-field dc-system-field" });
+    const systemSelect = mountSelect(systemHost, { label: "Design system", value: "ask", options: [{ id: "ask", label: "Ask me in chat" }], onChange: (id) => {
+      systemChoice = id;
+      paintSystem();
+    } });
+    const systemNote = h("p", { class: "oc-sdk-field-note" });
+    const systemEmpty = h("p", { class: "oc-sdk-field-note dc-system-empty", hidden: true }, NO_SYSTEMS_LINE, " ");
+    if (options.onSystems) {
+      const make = h("button", { type: "button", class: "dc-link" }, "Make one");
+      make.addEventListener("click", () => {
+        sheet.close();
+        options.onSystems?.();
+      });
+      systemEmpty.append(make);
+    }
+    systemHost.append(systemNote);
     const presetHost = h("div", { class: "dc-field" });
     const presetSelect = mountSelect(presetHost, { label: "Style preset", value: "", options: presetOptions([]), disabled: true, onChange: (id) => void (preset = id) });
     const presetNote = h("p", { class: "oc-sdk-field-note", hidden: true });
@@ -4618,9 +5160,33 @@ ${GUEST_UI_LOOK_CSS}`;
         presetNote.hidden = false;
       }
     };
-    unsubscribe = store.subscribe(paintPresets);
+    const paintSystem = () => {
+      const list = systems().get();
+      const settings = store.getState().settings.data;
+      const view2 = systemFieldOf(
+        { systems: list.systems ?? [], settings: settings?.systems, designsRoot: settings?.root ?? "", projectDirectory: host.snapshot()?.directory ?? null },
+        systemChoice,
+        foldsCaseFor(settings?.root ?? "", typeof navigator === "undefined" ? "" : navigator.platform)
+      );
+      const loaded = list.systems !== null;
+      systemHost.hidden = !loaded || view2.empty;
+      systemEmpty.hidden = !loaded || !view2.empty;
+      systemSend = view2.send;
+      if (!view2.empty) {
+        systemSelect.update({ options: view2.options, value: view2.value });
+        systemNote.textContent = view2.hint ?? "";
+        systemNote.hidden = view2.hint === null;
+      }
+      presetHost.hidden = !view2.showPreset;
+    };
+    unsubscribeSystems = systems().subscribe(paintSystem);
+    unsubscribe = store.subscribe(() => {
+      paintPresets();
+      paintSystem();
+    });
     void store.loadPresets();
     paintPresets();
+    paintSystem();
     const destHost = h("div", { class: "dc-field" }, h("span", { class: "oc-sdk-field-label" }, "Where should the agent work?"));
     const destTabs = mountTabs(destHost, {
       items: DESTINATIONS.map(({ id, label }) => ({ id, label })),
@@ -4655,7 +5221,7 @@ ${GUEST_UI_LOOK_CSS}`;
         failure.hidden = true;
         submit.set({ loading: true });
         cancel.set({ disabled: true });
-        flows.newDesign({ kind, brief, preset: preset === "" ? null : preset, destination }).then(
+        flows.newDesign({ kind, brief, preset: preset === "" || presetHost.hidden ? null : preset, destination, ...systemSend === void 0 ? {} : { system: systemSend } }).then(
           ({ slug }) => {
             toast("success", "Design started. It shows up in your list while the agent works.");
             sheet.close();
@@ -4670,7 +5236,7 @@ ${GUEST_UI_LOOK_CSS}`;
         );
       }
     });
-    sheet.body.append(kindHost, briefHost, presetHost, destHost, failure);
+    sheet.body.append(kindHost, briefHost, systemHost, systemEmpty, presetHost, destHost, failure);
     sheet.foot.append(cancel.el, submit.el);
   };
 
@@ -4823,54 +5389,6 @@ ${GUEST_UI_LOOK_CSS}`;
     return capped(text, AGENTS_SNIPPET_MAX, "AGENTS.md snippet");
   };
 
-  // src/ui/model/format.ts
-  var SECOND = 1e3;
-  var MINUTE = 60 * SECOND;
-  var HOUR = 60 * MINUTE;
-  var DAY = 24 * HOUR;
-  var relativeTime = (iso, nowMs, locale) => {
-    const then = Date.parse(iso);
-    if (!Number.isFinite(then)) return "";
-    const diff = nowMs - then;
-    if (diff < 45 * SECOND) return "just now";
-    const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
-    if (diff < HOUR) return rtf.format(-Math.max(1, Math.round(diff / MINUTE)), "minute");
-    if (diff < DAY) return rtf.format(-Math.round(diff / HOUR), "hour");
-    if (diff < 14 * DAY) return rtf.format(-Math.round(diff / DAY), "day");
-    return new Date(then).toLocaleDateString(locale, { month: "short", day: "numeric", year: diff > 300 * DAY ? "numeric" : void 0 });
-  };
-  var viewportSize = (viewport) => `${viewport.width}\xD7${viewport.height}`;
-  var viewportLabel = (viewport) => `${viewport.label} ${viewportSize(viewport)}`;
-  var artboardLabel = (screenTitle, viewport) => {
-    const detail = `${viewport.label} \xB7 ${viewportSize(viewport)}`;
-    return { name: screenTitle, detail, full: `${screenTitle} \xB7 ${detail}` };
-  };
-  var zoomPercent = (scale) => `${Math.round(scale * 100)}%`;
-  var fileSize = (bytes, locale) => {
-    const safe = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
-    const [value, unit] = safe < 1e3 ? [safe, "byte"] : safe < 1e6 ? [safe / 1e3, "kilobyte"] : [safe / 1e6, "megabyte"];
-    return new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay: unit === "byte" ? "long" : "short", maximumFractionDigits: value < 10 && unit !== "byte" ? 1 : 0 }).format(value);
-  };
-  var plural = (count, one, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
-  var middlePath = (path, max = 48) => {
-    if (path.length <= max) return path;
-    const sep = path.includes("\\") ? "\\" : "/";
-    const parts = path.split(/[\\/]+/);
-    if (parts.length > 1 && parts[parts.length - 1] === "") parts.pop();
-    const head = parts[0] ?? "";
-    const last = parts[parts.length - 1] ?? path;
-    const build = (tail2) => `${head}${sep}\u2026${sep}${tail2.join(sep)}`;
-    const tail = [last];
-    for (let index = parts.length - 2; index > 0; index -= 1) {
-      const next = [parts[index] ?? "", ...tail];
-      if (build(next).length > max) break;
-      tail.unshift(parts[index] ?? "");
-    }
-    const short = build(tail);
-    if (parts.length > 2 && short.length <= max) return short;
-    return last.length + 2 <= max ? `\u2026${sep}${last}` : `${last.slice(0, Math.max(1, max - 1))}\u2026`;
-  };
-
   // src/ui/model/settings-model.ts
   var WINDOWS_ABSOLUTE = /^[A-Za-z]:[\\/]/;
   var UNC = /^\\\\[^\\]+\\[^\\]+/;
@@ -4942,6 +5460,55 @@ ${GUEST_UI_LOOK_CSS}`;
     }
   };
   var duplicateSentences = (skill) => skill.duplicates.map((path) => withPath("Another copy is at ", path, ". OpenCode needs one copy, so remove the other."));
+  var DEFAULT_ASK = "ask";
+  var SELECT_NONE = "none";
+  var PIN_DEFAULT = "default";
+  var SYSTEM_PREFIX = "system:";
+  var readySystems = (systems2) => systems2.filter((system) => system.status === "ready");
+  var defaultOptions = (systems2) => [
+    { id: DEFAULT_ASK, label: "Ask me each time" },
+    { id: SELECT_NONE, label: "No design system" },
+    ...readySystems(systems2).map((system) => ({ id: `${SYSTEM_PREFIX}${system.id}`, label: system.name }))
+  ];
+  var pinOptions = (systems2) => [
+    { id: PIN_DEFAULT, label: "Use the default" },
+    { id: SELECT_NONE, label: "No design system" },
+    ...readySystems(systems2).map((system) => ({ id: `${SYSTEM_PREFIX}${system.id}`, label: system.name }))
+  ];
+  var defaultValue = (view2) => view2.choice === "system" ? view2.state === "ok" ? `${SYSTEM_PREFIX}${view2.id}` : DEFAULT_ASK : view2.choice === "none" ? SELECT_NONE : DEFAULT_ASK;
+  var defaultFrom = (value, systems2) => {
+    if (value === SELECT_NONE) return { choice: "none" };
+    const system = value.startsWith(SYSTEM_PREFIX) ? readySystems(systems2).find((one) => one.id === value.slice(SYSTEM_PREFIX.length)) : void 0;
+    return system ? { choice: "system", id: system.id, name: system.name } : { choice: "ask" };
+  };
+  var pinValue = (pin) => {
+    if (pin === null) return PIN_DEFAULT;
+    if (pin.choice === "none") return SELECT_NONE;
+    return pin.choice === "system" && pin.state === "ok" && pin.id !== void 0 ? `${SYSTEM_PREFIX}${pin.id}` : PIN_DEFAULT;
+  };
+  var pinSetting = (pin) => {
+    const { state: _state, sentence: _sentence, ...setting } = pin;
+    return setting;
+  };
+  var pinsAfter = (pins, directory, value, systems2) => {
+    const others = pins.filter((pin) => !sameDirectory(pin.directory, directory)).map(pinSetting);
+    if (value === PIN_DEFAULT) return others;
+    if (value === SELECT_NONE) return [...others, { directory, choice: "none" }];
+    const system = value.startsWith(SYSTEM_PREFIX) ? readySystems(systems2).find((one) => one.id === value.slice(SYSTEM_PREFIX.length)) : void 0;
+    return system ? [...others, { directory, choice: "system", id: system.id, name: system.name }] : others;
+  };
+  var projectRows = (projects, pins) => {
+    const pinFor = (directory) => pins.find((pin) => sameDirectory(pin.directory, directory)) ?? null;
+    const rows = projects.map((project) => {
+      const pin = pinFor(project.directory);
+      return { directory: project.directory, name: project.name, value: pinValue(pin), sentence: pin !== null && pin.state !== "ok" ? pin.sentence : null };
+    });
+    const extra = pins.filter((pin) => !projects.some((project) => sameDirectory(project.directory, pin.directory))).map((pin) => ({ directory: pin.directory, name: folderName(pin.directory), value: pinValue(pin), sentence: pin.state !== "ok" ? pin.sentence : null }));
+    return [...rows, ...extra];
+  };
+  var defaultSentence = (view2) => view2.choice === "system" && view2.state !== "ok" ? view2.sentence : null;
+  var SYSTEMS_SECTION_TEXT = "New designs follow these when you start them. Pick one per project, or let the default decide.";
+  var NO_PROJECTS_TEXT = "Open a project in OpenChamber and it shows up here.";
 
   // src/ui/components/settings-view.ts
   var ACK_MS = 2e3;
@@ -4970,6 +5537,24 @@ ${GUEST_UI_LOOK_CSS}`;
       },
       () => void 0
     );
+    let projects = null;
+    void guestHost.client.listProjects().then(
+      (answer) => {
+        projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
+        paint();
+      },
+      (error) => {
+        console.warn("Design Chamber: the project list could not be read", error);
+        projects = [];
+        paint();
+      }
+    );
+    void systems().load();
+    scope.add(systems().subscribe(() => paint()));
+    const systemNotices = [];
+    let systemError = null;
+    let systemBusy = false;
+    let systemFocus = null;
     let rootDraft = null;
     let rootError = null;
     let chromeDraft = null;
@@ -5012,6 +5597,20 @@ ${GUEST_UI_LOOK_CSS}`;
         rootError = errorText2(error);
       } finally {
         rootBusy = false;
+        paint();
+      }
+    };
+    const saveSystem = async (focus, patch) => {
+      systemBusy = true;
+      systemError = null;
+      systemFocus = focus;
+      paint();
+      try {
+        await store.updateSettings(patch);
+      } catch (error) {
+        systemError = `Couldn\u2019t save that. ${errorText2(error)}`;
+      } finally {
+        systemBusy = false;
         paint();
       }
     };
@@ -5119,6 +5718,36 @@ ${GUEST_UI_LOOK_CSS}`;
         }
       });
       const folder = section("Where designs live", "Your chat agent writes each design as its own folder here.", folderHost, h("div", { class: "dc-row-actions" }, apply.el, reset.el));
+      const systemsSection = (() => {
+        const answer = settings.systems;
+        if (answer === void 0) return null;
+        for (const note of answer.notices) if (!systemNotices.includes(note)) systemNotices.push(note);
+        const list = systems().get().systems ?? [];
+        const defaultHost = h("div", { class: "dc-field", "data-system-select": "default" });
+        mountSelect(defaultHost, { label: "Default for new designs", value: defaultValue(answer.default), options: defaultOptions(list), disabled: systemBusy, onChange: (value) => void saveSystem("default", { systemDefault: defaultFrom(value, list) }) });
+        const defaultNote = defaultSentence(answer.default);
+        if (defaultNote !== null) defaultHost.append(h("p", { class: "oc-sdk-field-note" }, defaultNote));
+        const rows = projectRows(projects ?? [], answer.pins).map((row3) => {
+          const selectHost = h("div", { class: "dc-sys-pin-select", "data-system-select": `pin:${row3.directory}` });
+          mountSelect(selectHost, { value: row3.value, options: pinOptions(list), disabled: systemBusy, onChange: (value) => void saveSystem(`pin:${row3.directory}`, { systemPins: pinsAfter(answer.pins, row3.directory, value, list) }) });
+          selectHost.querySelector('button, [role="combobox"]')?.setAttribute("aria-label", `Design system for ${row3.name}`);
+          return h(
+            "li",
+            { class: "dc-sys-pin" },
+            h("div", { class: "dc-sys-pin-text" }, h("span", { class: "dc-sys-pin-name", title: row3.directory }, row3.name), row3.sentence !== null ? h("span", { class: "dc-muted" }, row3.sentence) : null),
+            selectHost
+          );
+        });
+        const projectsBlock = projects === null ? h("div", { class: "dc-field" }, loadingRow("Reading your projects")) : h("div", { class: "dc-field" }, h("span", { class: "oc-sdk-field-label" }, "Projects"), rows.length > 0 ? h("ul", { class: "dc-sys-pins" }, ...rows) : h("p", { class: "dc-muted" }, NO_PROJECTS_TEXT));
+        return section(
+          "Design systems",
+          SYSTEMS_SECTION_TEXT,
+          ...systemNotices.map((note) => banner({ tone: "info", title: note })),
+          defaultHost,
+          projectsBlock,
+          systemError !== null ? h("p", { class: "dc-form-error", role: "alert" }, systemError) : null
+        );
+      })();
       let previous = null;
       if (settings.previousRoots.length > 0) {
         const rows = settings.previousRoots.map((root) => {
@@ -5133,13 +5762,13 @@ ${GUEST_UI_LOOK_CSS}`;
         previous = section("Earlier folders", "Designs in these folders were left in place. Switch back to see them again.", h("ul", { class: "dc-prev-list" }, ...rows));
       }
       const guide = h("div", { class: "dc-field" }, h("span", { class: "oc-sdk-field-label" }, "Guide in your designs folder"), sentence(guideSentence(settings.agent.guide)));
-      const row = skillRow(settings.agent.skill);
-      const skill = h("div", { class: "dc-field", role: "group", "aria-label": "Agent skill", tabindex: "-1", "data-skill-row": "" }, h("span", { class: "oc-sdk-field-label" }, "Agent skill"), sentence(row.sentence));
-      if (row.control === "remove-old-copy") {
+      const row2 = skillRow(settings.agent.skill);
+      const skill = h("div", { class: "dc-field", role: "group", "aria-label": "Agent skill", tabindex: "-1", "data-skill-row": "" }, h("span", { class: "oc-sdk-field-label" }, "Agent skill"), sentence(row2.sentence));
+      if (row2.control === "remove-old-copy") {
         const remove2 = btn({ label: "Remove old copy", variant: "outline", size: "xs", loading: skillBusy, onClick: () => void removeOldCopy() });
         remove2.el.dataset.skillAction = "";
         skill.append(h("div", { class: "dc-row-actions" }, remove2.el));
-      } else if (row.control === "copy-path") {
+      } else if (row2.control === "copy-path") {
         const skillPath = settings.agent.skill.path;
         const copyPath3 = btn({ label: copied.skill ? "Copied" : "Copy path", variant: "outline", size: "xs", icon: copied.skill ? "check" : "copy", onClick: () => void copySnippet(skillPath, "skill") });
         copyPath3.el.setAttribute("aria-label", copied.skill ? "Copied the path of the older copy" : "Copy the path of the older copy");
@@ -5167,8 +5796,8 @@ ${GUEST_UI_LOOK_CSS}`;
       }
       const agents = section("Help your agent find your designs", "Chats that don\u2019t start with /design or /page can still find your designs folder through these.", guide, skill, snippetBlock);
       const status = browserStatus(settings.chrome.path, settings.chrome.source);
-      const statusBadge = h("span");
-      mountBadge(statusBadge, { label: status.title, tone: status.tone });
+      const statusBadge2 = h("span");
+      mountBadge(statusBadge2, { label: status.title, tone: status.tone });
       const chromeHost = h("div");
       const chromeField = mountTextField(chromeHost, {
         label: "Use a different browser",
@@ -5197,7 +5826,7 @@ ${GUEST_UI_LOOK_CSS}`;
       const browser = section(
         "Browser for thumbnails",
         "A headless browser takes the previews. Without one, thumbnails fall back to live previews.",
-        h("div", { class: "dc-status-line" }, statusBadge, h("span", { class: "dc-muted dc-status-detail" }, status.detail)),
+        h("div", { class: "dc-status-line" }, statusBadge2, h("span", { class: "dc-muted dc-status-detail" }, status.detail)),
         chromeHost,
         h("div", { class: "dc-row-actions" }, test.el, detected.el)
       );
@@ -5210,7 +5839,11 @@ ${GUEST_UI_LOOK_CSS}`;
         h("pre", { class: "dc-code", tabindex: "0", "aria-label": "opencode.json snippet" }, snippet),
         h("div", { class: "dc-row-actions" }, copy.el)
       );
-      append(body, folder, previous, agents, browser, permissions, h("p", { class: "dc-settings-foot" }, version ? `Design Chamber ${version.startsWith("v") ? version : `v${version}`}` : "Design Chamber"));
+      append(body, folder, systemsSection, previous, agents, browser, permissions, h("p", { class: "dc-settings-foot" }, version ? `Design Chamber ${version.startsWith("v") ? version : `v${version}`}` : "Design Chamber"));
+      if (systemFocus !== null) {
+        body.querySelector(`[data-system-select="${CSS.escape(systemFocus)}"] button`)?.focus();
+        systemFocus = null;
+      }
       if (skillFocus !== null) {
         body.querySelector(skillFocus === "action" ? "[data-skill-action]" : "[data-skill-row]")?.focus();
         skillFocus = null;
@@ -5487,14 +6120,14 @@ ${GUEST_UI_LOOK_CSS}`;
       } else {
         const lost = shown.filter((comment) => missing.has(comment.id));
         const placed = shown.filter((comment) => !missing.has(comment.id));
-        for (const group of groupComments(placed, design.screens, design.title)) {
-          const removed = group.removed === true;
+        for (const group2 of groupComments(placed, design.screens, design.title)) {
+          const removed = group2.removed === true;
           list.append(
             h(
               "section",
               { class: "dc-comment-group", "data-removed": removed ? "true" : null },
-              h("h3", { class: "dc-group-title" }, group.title, h("span", { class: "dc-muted" }, String(group.comments.length))),
-              h("ul", { class: "dc-comment-items" }, ...group.comments.map((comment) => item(comment, numbers.get(comment.id) ?? 0, false, design, removed)))
+              h("h3", { class: "dc-group-title" }, group2.title, h("span", { class: "dc-muted" }, String(group2.comments.length))),
+              h("ul", { class: "dc-comment-items" }, ...group2.comments.map((comment) => item(comment, numbers.get(comment.id) ?? 0, false, design, removed)))
             )
           );
         }
@@ -5582,7 +6215,7 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/ui/components/notices.ts
-  var TRANSIENT_ORDER = ["export", "restore", "edit", "tweaks", "page-data"];
+  var TRANSIENT_ORDER = ["system-update", "system", "export", "restore", "edit", "tweaks", "page-data"];
   var createNotices = () => {
     const el2 = h("div", { class: "dc-notices", "aria-live": "polite" });
     let statics = [];
@@ -6456,6 +7089,15 @@ ${GUEST_UI_LOOK_CSS}`;
         return "Before your edits";
       case "keep-direction":
         return "Before keeping a direction";
+      // Phase 2.5 (§5.2, §5.4, §5.10)
+      case "resync":
+        return "Before re-sync";
+      case "system-change":
+        return "Before changing the design system";
+      case "system-update":
+        return "Before updating the design system";
+      case "repo-read":
+        return "Before reading the repo";
     }
   };
   var versionRows = (versions, dirty) => {
@@ -6519,40 +7161,40 @@ ${GUEST_UI_LOOK_CSS}`;
         paint();
       }
     };
-    const restore = (row) => void options.onRestore({ id: row.id, n: row.n });
-    const restoreButton = (row, restoring) => {
-      const button2 = btn({ label: "Restore", variant: "ghost", size: "xs", loading: restoring === row.id, disabled: restoring !== null && restoring !== row.id, onClick: () => restore(row) });
-      button2.el.dataset.restore = row.id;
+    const restore = (row2) => void options.onRestore({ id: row2.id, n: row2.n });
+    const restoreButton = (row2, restoring) => {
+      const button2 = btn({ label: "Restore", variant: "ghost", size: "xs", loading: restoring === row2.id, disabled: restoring !== null && restoring !== row2.id, onClick: () => restore(row2) });
+      button2.el.dataset.restore = row2.id;
       return button2.el;
     };
-    const rowEl = (row, viewing) => {
-      const active2 = viewing?.id === row.id;
+    const rowEl = (row2, viewing) => {
+      const active2 = viewing?.id === row2.id;
       const restoring = options.restoring();
       const badge = h("span");
-      if (row.current) mountBadge(badge, { label: "Current", tone: "success" });
+      if (row2.current) mountBadge(badge, { label: "Current", tone: "success" });
       const actions = h(
         "div",
         { class: "dc-version-actions" },
         btn({ label: active2 && !viewing?.compare ? "Viewing" : "View", variant: "outline", size: "xs", pressed: active2 && !viewing?.compare, onClick: () => {
-          options.onView(row.id);
-          void loadDiff(row.id);
+          options.onView(row2.id);
+          void loadDiff(row2.id);
         } }).el,
         btn({ label: active2 && viewing?.compare ? "Comparing" : "Compare", variant: "outline", size: "xs", icon: "compare", pressed: active2 && viewing?.compare, onClick: () => {
-          options.onCompare(row.id);
-          void loadDiff(row.id);
+          options.onCompare(row2.id);
+          void loadDiff(row2.id);
         } }).el,
-        row.current ? null : restoreButton(row, restoring)
+        row2.current ? null : restoreButton(row2, restoring)
       );
-      const changed = active2 && diff && diff.id === row.id ? diff.state === "loading" ? loadingRow("Comparing files\u2026") : diff.state === "error" ? h("p", { class: "dc-form-error" }, `Couldn\u2019t compare. ${diff.error ?? ""}`) : h(
+      const changed = active2 && diff && diff.id === row2.id ? diff.state === "loading" ? loadingRow("Comparing files\u2026") : diff.state === "error" ? h("p", { class: "dc-form-error" }, `Couldn\u2019t compare. ${diff.error ?? ""}`) : h(
         "ul",
-        { class: "dc-diff", "aria-label": `Files changed since v${row.n}` },
+        { class: "dc-diff", "aria-label": `Files changed since v${row2.n}` },
         ...diff.files.length === 0 ? [h("li", { class: "dc-muted" }, "Identical to the current design.")] : diff.files.map((file) => h("li", null, h("span", { class: "dc-diff-kind", "data-change": file.change }, changeLabel(file.change)), h("code", { class: "dc-path" }, file.path)))
       ) : null;
       return h(
         "li",
         { class: "dc-version", "data-active": active2 ? "true" : "false" },
-        h("div", { class: "dc-version-head" }, h("span", { class: "dc-version-n" }, row.title), badge, h("span", { class: "dc-muted dc-version-when" }, relativeTime(row.created, Date.now(), host.snapshot()?.locale ?? "en"))),
-        h("p", { class: "dc-version-reason" }, row.label ?? row.reason, h("span", { class: "dc-muted" }, ` \xB7 ${row.fileCount} files`)),
+        h("div", { class: "dc-version-head" }, h("span", { class: "dc-version-n" }, row2.title), badge, h("span", { class: "dc-muted dc-version-when" }, relativeTime(row2.created, Date.now(), host.snapshot()?.locale ?? "en"))),
+        h("p", { class: "dc-version-reason" }, row2.label ?? row2.reason, h("span", { class: "dc-muted" }, ` \xB7 ${row2.fileCount} files`)),
         actions,
         changed
       );
@@ -6581,7 +7223,7 @@ ${GUEST_UI_LOOK_CSS}`;
       const save = btn({ label: "Save a version now", variant: dirty ? "default" : "outline", icon: "history", loading: snapshotBusy, onClick: () => void snapshot() });
       const dirtyRow = dirty ? h("li", { class: "dc-version dc-version-dirty" }, h("div", { class: "dc-version-head" }, h("span", { class: "dc-version-n" }, "Unsaved changes"), h("span", { class: "dc-muted" }, "Now")), h("p", { class: "dc-version-reason" }, "The files changed since the last version. Versions are also saved after each agent turn.")) : null;
       const back = viewing ? btn({ label: "Back to current", variant: "outline", icon: "back", onClick: () => options.onBackToCurrent() }) : null;
-      const list = rows.length === 0 && !dirty ? h("div", { class: "dc-empty" }, h("p", { class: "dc-empty-title" }, "No versions yet"), h("p", { class: "dc-empty-body" }, "A version is saved after each agent turn. You can also save one now.")) : h("ul", { class: "dc-version-list" }, dirtyRow, ...rows.map((row) => rowEl(row, viewing)));
+      const list = rows.length === 0 && !dirty ? h("div", { class: "dc-empty" }, h("p", { class: "dc-empty-title" }, "No versions yet"), h("p", { class: "dc-empty-body" }, "A version is saved after each agent turn. You can also save one now.")) : h("ul", { class: "dc-version-list" }, dirtyRow, ...rows.map((row2) => rowEl(row2, viewing)));
       el2.append(...notice ? [notice] : [], h("div", { class: "dc-versions-bar" }, back?.el ?? null, save.el), list);
     };
     scope.add(store.subscribe(paint));
@@ -6650,6 +7292,58 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var askFailureText = (reason) => `Couldn't send. ${reason.trim()} Your message is still here.`;
 
+  // src/shared/system-board.ts
+  var BOARD_ENTRY_PATTERN = /^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\d{1,3}|logo:\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40})$/;
+  var KINDS = /* @__PURE__ */ new Set(["token", "type", "font", "logo", "component", "overview", "note", "pattern", "brand"]);
+  var isBoardEntryKey = (text) => text.length <= BOARD_ENTRY_MAX && BOARD_ENTRY_PATTERN.test(text);
+  var entryKeyOf = (kind, key) => {
+    const text = kind === "overview" ? "overview" : `${kind}:${key}`;
+    if (!isBoardEntryKey(text)) throw new Error(`Not a board entry key: ${kind}`);
+    return text;
+  };
+  var parseEntryKey = (text) => {
+    if (!isBoardEntryKey(text)) return null;
+    if (text === "overview") return { kind: "overview", key: "" };
+    const at = text.indexOf(":");
+    const kind = text.slice(0, at);
+    if (!KINDS.has(kind)) return null;
+    return { kind, key: text.slice(at + 1) };
+  };
+  var sectionOfEntry = (key, detail) => {
+    switch (key.kind) {
+      case "token": {
+        const token = detail.tokens.find((candidate) => candidate.name === key.key);
+        if (token === void 0) return null;
+        return token.section === "other" ? "sizes" : token.section;
+      }
+      case "type":
+        return detail.type.some((style) => style.id === key.key) ? "typography" : null;
+      case "font":
+        return Number(key.key) < detail.fonts.length ? "typography" : null;
+      case "logo":
+        return Number(key.key) < detail.logos.length ? "brand" : null;
+      case "component":
+        return detail.components.some((component) => component.id === key.key) ? "components" : null;
+      case "overview":
+        return "overview";
+      case "note":
+        return detail.notes.some((note) => note.id === key.key) ? "overview" : null;
+      case "pattern":
+        return detail.patterns.some((entry) => entry.id === key.key) ? "patterns" : null;
+      case "brand":
+        return detail.brand.some((entry) => entry.id === key.key) ? "brand" : null;
+    }
+  };
+  var darkVarOf = (name) => {
+    if (!SYSTEM_TOKEN_NAME_PATTERN.test(name)) throw new Error("Not a token name.");
+    return `--dc-dark-${name.slice(2)}`;
+  };
+  var TYPE_FIELDS = /* @__PURE__ */ new Set(["family", "size", "weight", "lineHeight", "letterSpacing"]);
+  var typeVarOf = (id, field2) => {
+    if (!SYSTEM_ENTRY_ID_PATTERN.test(id) || !TYPE_FIELDS.has(field2)) throw new Error("Not a type style field.");
+    return `--dc-type-${id}-${field2}`;
+  };
+
   // src/shared/bridge-protocol.ts
   var BRIDGE_PROTOCOL_VERSION = 1;
   var BRIDGE_PLACEHOLDER = "<!--dc-bridge-->";
@@ -6665,7 +7359,8 @@ ${GUEST_UI_LOOK_CSS}`;
   var isKey = (value) => BRIDGE_KEYS.includes(value);
   var isList = (value, max, item) => Array.isArray(value) && value.length <= max && value.every(item);
   var isAnchorResult = (value) => isRec(value) && isId(value.id, BRIDGE_ARTBOARD_ID_MAX) && isBool(value.found) && isBool(value.exact) && (value.rect === null || isRect(value.rect));
-  var isHitElement = (value) => isRec(value) && isStr(value.selector, ANCHOR_SELECTOR_MAX) && isStr(value.text, ANCHOR_TEXT_MAX) && isStr(value.html, ANCHOR_HTML_MAX) && isRect(value.rect) && isId(value.tag, BRIDGE_TAG_MAX);
+  var isHitElement = (value) => isRec(value) && isStr(value.selector, ANCHOR_SELECTOR_MAX) && isStr(value.text, ANCHOR_TEXT_MAX) && isStr(value.html, ANCHOR_HTML_MAX) && isRect(value.rect) && isId(value.tag, BRIDGE_TAG_MAX) && // Phase 2.5 §4.2: optional; null or a board entry key, nothing else.
+  (value.entry === void 0 || value.entry === null || typeof value.entry === "string" && isBoardEntryKey(value.entry));
   var isInt = (value) => typeof value === "number" && Number.isInteger(value);
   var isStorageChanges = (value) => {
     if (!Array.isArray(value) || value.length > PAGE_STATE_CHANGES_MAX) return false;
@@ -6776,7 +7471,7 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     const artboards = [];
     let y = 0;
-    let row = 0;
+    let row2 = 0;
     for (const entry of rows) {
       if ("group" in entry) {
         const { viewport } = entry;
@@ -6792,7 +7487,7 @@ ${GUEST_UI_LOOK_CSS}`;
             screen: cell.id,
             screenTitle: cell.title,
             viewport,
-            row,
+            row: row2,
             col,
             line,
             label: { x: left, y: top, width: viewport.width, height: labelHeight },
@@ -6801,7 +7496,7 @@ ${GUEST_UI_LOOK_CSS}`;
         });
         const lines = Math.floor((cells2.length - 1) / columns) + 1;
         y += lines * (lineHeight + gap);
-        row += 1;
+        row2 += 1;
         continue;
       }
       const screen = entry;
@@ -6816,7 +7511,7 @@ ${GUEST_UI_LOOK_CSS}`;
           screen: screen.id,
           screenTitle: screen.title,
           viewport,
-          row,
+          row: row2,
           col,
           line: 0,
           label: { x: left, y, width: viewport.width, height: labelHeight },
@@ -6824,11 +7519,11 @@ ${GUEST_UI_LOOK_CSS}`;
         });
       }
       y += labelHeight + rowHeight + gap;
-      row += 1;
+      row2 += 1;
     }
     const ghost = options.ghost === void 0 ? void 0 : {
       kind: "ghost",
-      row,
+      row: row2,
       box: { x: 0, y, width: options.ghost.width, height: options.ghost.height }
     };
     const boxes = artboards.map(artboardBox);
@@ -6856,6 +7551,7 @@ ${GUEST_UI_LOOK_CSS}`;
     "screens",
     "designSystem",
     "tweaks",
+    "systemChoice",
     "comments"
   ];
   var KNOWN_FIELDS = new Set(CANONICAL_ORDER);
@@ -6959,13 +7655,13 @@ ${GUEST_UI_LOOK_CSS}`;
     const last = rows[rows.length - 1];
     if (first === void 0 || last === void 0) return null;
     let gap = 0;
-    for (const row of rows) {
-      if (worldY > (row.top + row.bottom) / 2) gap += 1;
+    for (const row2 of rows) {
+      if (worldY > (row2.top + row2.bottom) / 2) gap += 1;
     }
     const before = rows[gap - 1];
     const after = rows[gap];
     const y = before !== void 0 && after !== void 0 ? (before.bottom + after.top) / 2 : after !== void 0 ? first.top - edge : last.bottom + edge;
-    const at = rows.findIndex((row) => row.id === movedId);
+    const at = rows.findIndex((row2) => row2.id === movedId);
     return { gap, y, noop: at < 0 || gap === at || gap === at + 1 };
   };
   var revealPan = (box, stage, margin) => {
@@ -6999,14 +7695,14 @@ ${GUEST_UI_LOOK_CSS}`;
   var planDirections = (screens, viewports, chosen) => {
     const plan = { rows: /* @__PURE__ */ new Map(), memberOf: /* @__PURE__ */ new Map() };
     const byId = new Map(screens.map((screen) => [screen.id, screen]));
-    for (const group of directionGroups(screens)) {
-      const root = byId.get(group.of);
+    for (const group2 of directionGroups(screens)) {
+      const root = byId.get(group2.of);
       if (root === void 0) continue;
       const options = rowViewports(root, viewports);
-      const viewport = pickViewport(options, chosen(group.of));
+      const viewport = pickViewport(options, chosen(group2.of));
       if (viewport === null) continue;
-      plan.rows.set(root.id, { root, members: group.members, viewport, options });
-      for (const member of group.members) plan.memberOf.set(member.id, root.id);
+      plan.rows.set(root.id, { root, members: group2.members, viewport, options });
+      for (const member of group2.members) plan.memberOf.set(member.id, root.id);
     }
     return plan;
   };
@@ -7015,8 +7711,8 @@ ${GUEST_UI_LOOK_CSS}`;
     const rows = [];
     for (const screen of screens) {
       if (plan.memberOf.has(screen.id)) continue;
-      const row = plan.rows.get(screen.id);
-      rows.push(row === void 0 ? wallScreen(screen) : { group: { of: wallScreen(row.root), members: row.members.map(wallScreen) }, viewport: row.viewport });
+      const row2 = plan.rows.get(screen.id);
+      rows.push(row2 === void 0 ? wallScreen(screen) : { group: { of: wallScreen(row2.root), members: row2.members.map(wallScreen) }, viewport: row2.viewport });
     }
     return rows;
   };
@@ -7084,9 +7780,9 @@ ${GUEST_UI_LOOK_CSS}`;
     const isDirection = (cell) => cell.screen !== null && (plan.rows.has(cell.screen) || plan.memberOf.has(cell.screen));
     const lines = /* @__PURE__ */ new Map();
     for (const cell of layout.artboards) if (isDirection(cell)) lines.set(cell.row, Math.max(lines.get(cell.row) ?? 1, (cell.line ?? 0) + 1));
-    const before = (row) => {
+    const before = (row2) => {
       let total = 0;
-      for (const [directionRow, count] of lines) if (directionRow < row) total += headRoom + (count - 1) * lineRoom;
+      for (const [directionRow, count] of lines) if (directionRow < row2) total += headRoom + (count - 1) * lineRoom;
       return total;
     };
     const heads = /* @__PURE__ */ new Map();
@@ -7171,7 +7867,7 @@ ${GUEST_UI_LOOK_CSS}`;
     }
     close();
     if (groups.length === 0) return { deltas: clear ? [{ clear, changes: [] }] : [], dropped };
-    return { deltas: groups.map((group, index) => ({ clear: clear && index === 0, changes: group })), dropped };
+    return { deltas: groups.map((group2, index) => ({ clear: clear && index === 0, changes: group2 })), dropped };
   };
   var pageStateDiff = (before, after, dirty) => {
     const changes2 = [];
@@ -7472,6 +8168,7 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/ui/model/viewer-menu.ts
+  var NARROW_RAIL_QUERY = "(max-width: 359.98px)";
   var reveal2 = { id: "reveal", label: "Reveal in folder" };
   var copyPath2 = { id: "path", label: "Copy path" };
   var rename = { id: "rename", label: "Rename" };
@@ -7484,6 +8181,7 @@ ${GUEST_UI_LOOK_CSS}`;
     if (input.compact) {
       return [
         { id: "chat", label: "Continue in chat" },
+        ...input.railTweaks ? [{ id: "tweaks", label: input.railTweaks }] : [],
         ...ask,
         { separator: true },
         { id: "zip", label: "Export ZIP" },
@@ -7596,13 +8294,13 @@ ${GUEST_UI_LOOK_CSS}`;
     const groups = [];
     const reach = size / Math.max(scale, 1e-6);
     for (const pin of pins) {
-      const near = groups.find((group) => Math.hypot(group.x - pin.x, group.y - pin.y) < reach);
+      const near = groups.find((group2) => Math.hypot(group2.x - pin.x, group2.y - pin.y) < reach);
       if (near) near.ids.push(pin.id);
       else groups.push({ ids: [pin.id], x: pin.x, y: pin.y });
     }
     return groups;
   };
-  var fanOut = (group, scale, size, gap = 4) => group.ids.map((id, index) => ({ id, x: group.x + index * (size + gap) / Math.max(scale, 1e-6), y: group.y }));
+  var fanOut = (group2, scale, size, gap = 4) => group2.ids.map((id, index) => ({ id, x: group2.x + index * (size + gap) / Math.max(scale, 1e-6), y: group2.y }));
   var separatingScale = (spots, scale, size) => {
     let closest = Infinity;
     for (let i = 0; i < spots.length; i += 1) {
@@ -7750,15 +8448,15 @@ ${GUEST_UI_LOOK_CSS}`;
       paint();
     });
     area.addEventListener("keydown", (event) => {
-      const action = askKeyAction(keyOf(event), { hasChip: selection2 !== null });
-      if (action === "send") {
+      const action2 = askKeyAction(keyOf(event), { hasChip: selection2 !== null });
+      if (action2 === "send") {
         event.preventDefault();
         void submit();
-      } else if (action === "clear-chip") {
+      } else if (action2 === "clear-chip") {
         event.preventDefault();
         event.stopPropagation();
         clearChip();
-      } else if (action === "leave") {
+      } else if (action2 === "leave") {
         event.preventDefault();
         event.stopPropagation();
         options.onLeave();
@@ -8348,6 +9046,64 @@ ${GUEST_UI_LOOK_CSS}`;
     if (f.params?.reason === "failures") return `${what} (the browser failed three times in a row).`;
     return `${what} (the limit is ${num(f.params?.max)} per run). Use --screen <id> to check the rest.`;
   };
+  var systemNameOf = (f) => f.params?.system ?? "the design system";
+  var repoNameOf = (f) => f.params?.repo ?? "the repo";
+  var AREA_LABELS = {
+    foundations: "Foundations",
+    components: "Components",
+    patterns: "Patterns & voice",
+    brand: "Brand & marketing"
+  };
+  var SECRET_KIND_LABELS = {
+    "aws-key": "an AWS key",
+    "github-token": "a GitHub token",
+    "openai-style-key": "an OpenAI-style key",
+    "slack-token": "a Slack token",
+    "google-key": "a Google key",
+    "private-key": "a private key"
+  };
+  var LIVING_FAILED_REASONS = {
+    "too-large": "it would be too large.",
+    bundle: "a file couldn't be embedded.",
+    unsafe: "it didn't pass the safety check.",
+    "no-snapshot": "the repo hasn't been read yet.",
+    secret: "it would show something shaped like a secret."
+  };
+  var BUILD_PROBLEM_SENTENCES = {
+    unreadable: () => "BUILD.json isn't valid JSON.",
+    "ticket-unknown": () => "This design system was started from a chat Design Chamber no longer knows. Start it again with /design-system.",
+    "ticket-needed": () => "A system that lives in a repo needs a build ticket. Start it with /design-system in the project's chat.",
+    "repo-outside-project": () => "The repo must be the project this chat is in, or a folder inside it. To use a folder above it, such as the root of a monorepo, open a chat in that folder and run /design-system there.",
+    "repo-overlap": () => "Another design system already uses this repo folder or living-page path.",
+    "living-page-exists": (f) => `The living-page path already exists in ${repoNameOf(f)} and isn't this system's living page. Pick another path.`,
+    "code-outside-project": () => "The code folder must be the project this chat is in, or a folder inside it.",
+    "home-changed": (f) => `${systemNameOf(f)} already has files in ${repoNameOf(f)}, so its home can't change. Make a new system to move it.`,
+    "ticket-changed": () => "BUILD.json names another build. Keep the ticket this system started with.",
+    "applied-unknown-proposal": (f) => `The agent says it applied a proposal you didn't approve here. Check ${repoNameOf(f)}'s history.`
+  };
+  var PROPOSAL_PROBLEM_SENTENCES = {
+    "not-adopted": "the system has not been adopted from a build yet.",
+    round: "the interview is not finished; a proposal needs round two or done.",
+    "path-outside": "a system file lies outside the system folder.",
+    "living-page-path": "the living-page file is not the build's living-page path.",
+    "create-exists": "a file the proposal creates already exists in the repo. The proposal must change it, not create it.",
+    "from-missing": "a proposed file is missing from proposal/.",
+    "describe-change": "Describe only never changes the app's code.",
+    "internal-parts": "an internal system's proposal can only hold token fixes.",
+    "none-fixes": "a build with no code to fix cannot hold token fixes.",
+    rewritten: "this proposal changed after it was shown. Ask the agent for a new one.",
+    unreadable: "PROPOSAL.json isn't valid JSON.",
+    // §5.14 step 4: problems of the preview generated from proposal/.
+    "preview-too-large": "the living page it proposes would be too large.",
+    "preview-unsafe": "the living page it proposes didn't pass the safety check.",
+    "preview-secret": "the living page it proposes shows something shaped like a secret. Remove it before you approve."
+  };
+  var driftScope = (f, core) => {
+    const base = `In CSS variables and token JSON, ${core}`;
+    const unread = f.params?.unread ?? 0;
+    if (unread <= 0) return base;
+    return `${base} Design Chamber can't read ${num(unread)} token ${unread === 1 ? "file" : "files"}, so differences there aren't counted.`;
+  };
   var RULES = {
     "overflow-x": { severity: "error", sentence: (f, where) => `${where}: the content is ${num(f.params?.px)}px wide, wider than the ${num(f.params?.width)}px viewport.` },
     "text-clipped": { severity: "warning", sentence: (_f, where) => `${where}: some text is cut off.` },
@@ -8387,10 +9143,13 @@ ${GUEST_UI_LOOK_CSS}`;
     "doc-viewport": { severity: "warning", sentence: (f) => `${fileOf(f)} has no viewport meta tag.` },
     "doc-title": { severity: "warning", sentence: (f) => `${fileOf(f)} has no <title>.` },
     "doc-charset": { severity: "info", sentence: (f) => `${fileOf(f)} does not declare its charset.` },
-    "token-redefined": { severity: "warning", sentence: (f) => `${fileOf(f)} redefines ${num(f.params?.count)} tokens from tokens.css. Change them in tokens.css.` },
+    "token-redefined": {
+      severity: "warning",
+      sentence: (f) => f.params?.system !== void 0 ? `${fileOf(f)} redefines ${num(f.params?.count)} tokens from the design system ${f.params.system}. Use the system's values, or ask the user to change the system.` : `${fileOf(f)} redefines ${num(f.params?.count)} tokens from tokens.css. Change them in tokens.css.`
+    },
     "token-hardcoded": {
       severity: "info",
-      sentence: (f) => `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although tokens.css defines colours.`
+      sentence: (f) => f.params?.system !== void 0 ? `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although the design system ${f.params.system} defines colours. Use its tokens.` : `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although tokens.css defines colours.`
     },
     "tweak-broken": {
       severity: "warning",
@@ -8402,7 +9161,140 @@ ${GUEST_UI_LOOK_CSS}`;
         return "design.json declares tweaks, but the design has no tokens.css.";
       }
     },
-    "check-partial": { severity: "info", sentence: () => "Some files were not checked in time." }
+    "check-partial": { severity: "info", sentence: () => "Some files were not checked in time." },
+    // Phase 2.5 §10.1: a design against its linked system.
+    "system-drift": {
+      severity: "warning",
+      // `part: 'system-files'` when the tokens couldn't be compared (the system no longer holds the
+      // copy's original tokens.css) or other copy files changed: the files are counted instead.
+      sentence: (f) => f.params?.part === "system-files" ? `This design's copy of ${systemNameOf(f)} was changed: ${num(f.params?.count)} ${f.params?.count === 1 ? "file differs" : "files differ"} from revision ${num(f.params?.revision)}. Put them back, or keep the changes in this design's own tokens.css.` : `This design's copy of ${systemNameOf(f)} was changed: ${num(f.params?.count)} tokens differ from revision ${num(f.params?.revision)}. Put them back, or keep them as this design's own overrides.`
+    },
+    "system-copy-missing": {
+      severity: "warning",
+      sentence: (f) => `This design's copy of ${systemNameOf(f)} is missing ${num(f.params?.count)} files.`
+    },
+    "system-copy-invalid": {
+      severity: "warning",
+      sentence: () => "system/COPY.json can't be read, so Design Chamber can't tell which system this design uses."
+    },
+    "system-choice": {
+      severity: "warning",
+      sentence: (f) => f.params?.choice === "draft" ? `design.json asks for the design system "${f.params?.value ?? "?"}", which isn't ready yet.` : `design.json asks for the design system "${f.params?.value ?? "?"}", which isn't a Ready system in this Designs folder.`
+    },
+    // Phase 2.5 §10.3: checking a system.
+    "system-unreadable": {
+      severity: "error",
+      sentence: () => "Design Chamber can't read this design system. system.json isn't valid JSON."
+    },
+    "system-entry-invalid": {
+      severity: "warning",
+      sentence: () => "system.json has entries Design Chamber can't read."
+    },
+    "system-value-invalid": {
+      severity: "error",
+      sentence: () => "tokens.css holds a value that isn't valid for its section."
+    },
+    "system-font-missing": {
+      severity: "error",
+      sentence: (f) => `${fileOf(f)} is listed as a font but is missing or can't be used.`
+    },
+    "system-overview-empty": { severity: "warning", sentence: () => "The system has no overview yet." },
+    "system-overview-long": {
+      severity: "warning",
+      sentence: () => "Keep the overview under 4 000 characters. Move detail into a note."
+    },
+    "system-note-long": {
+      severity: "warning",
+      sentence: () => "A note is over 20 000 characters. Shorten it or split it."
+    },
+    "system-example-remote": {
+      severity: "error",
+      sentence: (f) => `${fileOf(f)} loads files from the internet, which the living page can't use.`
+    },
+    "system-token-undefined": {
+      severity: "warning",
+      sentence: () => "A component names a token the system doesn't define."
+    },
+    "system-token-cap": {
+      severity: "warning",
+      sentence: () => "Design systems hold up to 2 000 tokens. The rest weren't read."
+    },
+    // Phase 2.5 §10.4: the repo-backed system (S8, with the rev 3 wording).
+    "system-living-missing": {
+      severity: "warning",
+      sentence: (f) => `${systemNameOf(f)} lives in ${repoNameOf(f)} but has no living page yet.`
+    },
+    "system-living-stale": {
+      severity: "warning",
+      sentence: (f) => `The living page was generated from revision ${num(f.params?.from)}; ${systemNameOf(f)} is at revision ${num(f.params?.revision)}.`
+    },
+    "system-living-changed": {
+      severity: "warning",
+      sentence: () => "The living page in the repo differs from the one Design Chamber generated."
+    },
+    "system-living-unsafe": {
+      severity: "error",
+      sentence: () => "The living page has markup Design Chamber didn't generate and can't check as safe."
+    },
+    "system-living-failed": {
+      severity: "warning",
+      sentence: (f) => `Design Chamber couldn't generate the living page: ${LIVING_FAILED_REASONS[f.params?.failed ?? "too-large"]}`
+    },
+    "system-repo-unreadable": {
+      severity: "error",
+      sentence: (f) => `Design Chamber can't read ${repoNameOf(f)}'s design system folder. Choose another folder on the system page.`
+    },
+    "system-snapshot-changed": {
+      severity: "warning",
+      sentence: (f) => `${systemNameOf(f)}'s snapshot was changed outside Design Chamber. Re-sync to read ${repoNameOf(f)} again.`
+    },
+    "system-code-drift": {
+      severity: "warning",
+      sentence: (f) => driftScope(f, `${num(f.params?.count)} tokens differ from ${systemNameOf(f)}. Ask the agent to reconcile.`)
+    },
+    "system-code-differs": {
+      severity: "warning",
+      sentence: (f) => driftScope(f, `${num(f.params?.count)} tokens still differ from what ${systemNameOf(f)} describes.`)
+    },
+    "system-build-invalid": {
+      severity: "warning",
+      sentence: (f) => {
+        const reason = f.params?.build;
+        const sentence2 = reason !== void 0 ? BUILD_PROBLEM_SENTENCES[reason](f) : "Ask the agent to fix it.";
+        return `BUILD.json can't be used: ${sentence2}`;
+      }
+    },
+    "system-coverage-empty": {
+      severity: "warning",
+      sentence: (f) => `${systemNameOf(f)} covers ${AREA_LABELS[f.params?.area ?? "foundations"]} but has nothing there yet.`
+    },
+    // Phase 2.5 rev 3 (§10.4).
+    "system-living-reformatted": {
+      severity: "info",
+      sentence: () => "The living page may have been reformatted since it was generated. Its values are current."
+    },
+    "system-living-secret": {
+      // Error unless the page is dev-only; `severityOf` reads the validated `access` param.
+      severity: "error",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const label = SECRET_KIND_LABELS[f.params?.kind ?? "aws-key"];
+        const what = count === 1 ? `something shaped like a secret (${label})` : `${num(count)} things shaped like secrets (${label})`;
+        return `The living page shows ${what}. Remove ${count === 1 ? "it" : "them"} from the system.`;
+      }
+    },
+    "system-landed-differs": {
+      severity: "warning",
+      sentence: (f) => f.params?.part !== void 0 ? `The agent says it applied ${f.params.part}, but Design Chamber found none in ${repoNameOf(f)}.` : `What landed in ${repoNameOf(f)} differs from the proposal you approved in ${num(f.params?.count)} files.`
+    },
+    "system-proposal-invalid": {
+      severity: "warning",
+      sentence: (f) => {
+        const reason = f.params?.proposal;
+        if (reason === void 0 || reason === "unreadable" && f.detail !== void 0) return "PROPOSAL.json can't be used. Ask the agent to fix it.";
+        return `PROPOSAL.json can't be used: ${PROPOSAL_PROBLEM_SENTENCES[reason]}`;
+      }
+    }
   };
   var CHECK_CODES = Object.freeze(Object.keys(RULES));
   var SEVERITY_ORDER = { error: 0, warning: 1, info: 2 };
@@ -8471,8 +9363,8 @@ ${GUEST_UI_LOOK_CSS}`;
     const render = response.render.findings;
     const current = sortFindings([...response.static.findings, ...counted ? render.filter((finding) => !isRenderLineFinding(finding)) : []]);
     const groups = [];
-    const add = (group, items) => {
-      if (items.length > 0) groups.push({ ...group, items });
+    const add = (group2, items) => {
+      if (items.length > 0) groups.push({ ...group2, items });
     };
     add({ id: "errors", title: GROUP_TITLES.errors, tone: "error", collapsed: false }, current.filter((finding) => finding.severity === "error"));
     add({ id: "warnings", title: GROUP_TITLES.warnings, tone: "warning", collapsed: false }, current.filter((finding) => finding.severity === "warning"));
@@ -8565,7 +9457,7 @@ ${GUEST_UI_LOOK_CSS}`;
     const next = h("p", { class: "dc-checks-next" });
     const skeleton = h("div", { class: "dc-checks-skeleton", "aria-hidden": "true" }, h("span", { class: "dc-checks-skel", "data-w": "short" }), h("span", { class: "dc-checks-skel" }), h("span", { class: "dc-checks-skel" }), h("span", { class: "dc-checks-skel", "data-w": "mid" }));
     let noticeKey = "";
-    const row = (finding) => h(
+    const row2 = (finding) => h(
       "li",
       { class: "dc-checks-item", "data-severity": finding.severity },
       h("p", { class: "dc-checks-msg" }, finding.message),
@@ -8595,7 +9487,7 @@ ${GUEST_UI_LOOK_CSS}`;
       node.title.textContent = `${entry.title} \xB7 ${entry.items.length}`;
       const signature = JSON.stringify(entry.items.map((item) => [item.message, item.detail, item.selector]));
       if (signature !== node.signature) {
-        node.list.replaceChildren(...entry.items.map(row));
+        node.list.replaceChildren(...entry.items.map(row2));
         node.signature = signature;
       }
       return node.el;
@@ -9057,21 +9949,21 @@ ${view2.error.message}` : "";
     const keep = async (press) => {
       if (ctx.viewing() !== null) return;
       const detail = ctx.detail();
-      const row = planDirections(detail.design.screens, detail.design.viewports, () => void 0).rows.get(press.of);
-      const kept = row === void 0 ? void 0 : [row.root, ...row.members].find((screen) => screen.id === press.keep);
+      const row2 = planDirections(detail.design.screens, detail.design.viewports, () => void 0).rows.get(press.of);
+      const kept = row2 === void 0 ? void 0 : [row2.root, ...row2.members].find((screen) => screen.id === press.keep);
       const failTitle = kept?.direction ? `Couldn\u2019t keep direction ${kept.direction.letter}` : "Couldn\u2019t keep the current screen";
       if (detail.screensStamp === null) {
         notice.failed(failTitle, NO_DESIGN_JSON_MESSAGE);
         return;
       }
-      if (row === void 0 || kept === void 0) {
+      if (row2 === void 0 || kept === void 0) {
         notice.failed(failTitle, ROW_CHANGED_MESSAGE);
         void refresh();
         return;
       }
       wall.setScreensBusy({ id: press.keep });
       try {
-        const response = await store.applyEdit(slug, keepRequest({ stamp: detail.screensStamp, row, keep: press.keep, files: detail.files.screens }));
+        const response = await store.applyEdit(slug, keepRequest({ stamp: detail.screensStamp, row: row2, keep: press.keep, files: detail.files.screens }));
         if (disposed) return;
         if (response.edit.undoable) undoSlot.edited(response.edit.id);
         notice.saved(keptNotice(response.edit));
@@ -9098,7 +9990,7 @@ ${view2.error.message}` : "";
     const reasonId = nextId2("dc-seltoolbar-reason");
     const reason = h("p", { class: "dc-seltoolbar-reason", id: reasonId, hidden: true });
     let edit = { kind: "checking" };
-    const make = (action, label, icon3) => {
+    const make = (action2, label, icon3) => {
       const handle = btn({
         label,
         variant: "ghost",
@@ -9106,20 +9998,20 @@ ${view2.error.message}` : "";
         icon: icon3,
         title: label,
         onClick: () => {
-          if (action === "edit" && edit.kind !== "ready") return;
-          options.onAction(action);
+          if (action2 === "edit" && edit.kind !== "ready") return;
+          options.onAction(action2);
         }
       });
       handle.el.setAttribute("aria-label", label);
-      handle.el.dataset.action = action;
+      handle.el.dataset.action = action2;
       handle.el.tabIndex = -1;
-      return { action, label, icon: icon3, handle };
+      return { action: action2, label, icon: icon3, handle };
     };
     const items = [make("edit", "Edit text", "pencil"), make("comment", "Comment", "comment"), make("ask", "Ask agent", "chat")];
     const [editItem, commentItem] = items;
     if (commentItem) commentItem.handle.el.dataset.current = "true";
-    const row = h("div", { class: "dc-seltoolbar-row", role: "toolbar", "aria-label": options.name, "aria-orientation": "horizontal" }, ...items.map((item) => item.handle.el));
-    const el2 = h("div", { class: "dc-seltoolbar", "data-labels": String(options.labels) }, row, reason);
+    const row2 = h("div", { class: "dc-seltoolbar-row", role: "toolbar", "aria-label": options.name, "aria-orientation": "horizontal" }, ...items.map((item) => item.handle.el));
+    const el2 = h("div", { class: "dc-seltoolbar", "data-labels": String(options.labels) }, row2, reason);
     let current = 0;
     const setCurrent = (index, focus) => {
       current = (index + items.length) % items.length;
@@ -9129,7 +10021,7 @@ ${view2.error.message}` : "";
       if (focus) items[current]?.handle.el.focus();
     };
     setCurrent(0, false);
-    row.addEventListener("keydown", (event) => {
+    row2.addEventListener("keydown", (event) => {
       if (event.key === "ArrowRight") setCurrent(current + 1, true);
       else if (event.key === "ArrowLeft") setCurrent(current - 1, true);
       else if (event.key === "Home") setCurrent(0, true);
@@ -9139,7 +10031,7 @@ ${view2.error.message}` : "";
       event.preventDefault();
       event.stopPropagation();
     });
-    row.addEventListener("focusin", (event) => {
+    row2.addEventListener("focusin", (event) => {
       const at = items.findIndex((item) => item.handle.el === event.target);
       if (at >= 0 && at !== current) setCurrent(at, false);
     });
@@ -9395,14 +10287,14 @@ ${view2.error.message}` : "";
       current.toolbar.setEdit(check.editable ? { kind: "ready" } : { kind: "disabled", reason: reasonSentence(check.reason, check.detail) });
       placeToolbarFor(current);
     };
-    const onAction = (action) => {
+    const onAction = (action2) => {
       if (open.kind !== "toolbar") return;
       const { pick, check } = open;
-      if (action === "edit") {
+      if (action2 === "edit") {
         if (check?.editable) openEditor(pick, check);
         return;
       }
-      if (action === "comment") {
+      if (action2 === "comment") {
         wall.openComment(pick);
         return;
       }
@@ -9833,22 +10725,22 @@ ${view2.error.message}` : "";
       } catch {
       }
     };
-    const run = async (screenId, action) => {
+    const run = async (screenId, action2) => {
       if (ctx.viewing() !== null) return;
       wall.setScreensBusy({ id: screenId });
       try {
-        const response = await store.applyEdit(slug, action.request);
+        const response = await store.applyEdit(slug, action2.request);
         if (disposed) return;
         if (response.edit.undoable) undoSlot.edited(response.edit.id);
         notice.saved(response.edit);
         await refresh();
         if (disposed) return;
-        const reveal3 = action.reveal(response);
+        const reveal3 = action2.reveal(response);
         if (reveal3 === null) wall.focus();
         else wall.revealScreen(reveal3);
       } catch (error) {
         if (disposed) return;
-        notice.failed(action.failTitle, errorText2(error));
+        notice.failed(action2.failTitle, errorText2(error));
         void refresh();
       } finally {
         if (!disposed) wall.setScreensBusy(null);
@@ -9989,6 +10881,642 @@ ${view2.error.message}` : "";
       offViewing();
       closeAskBox();
       notice.dispose();
+    };
+  };
+
+  // src/ui/model/design-system-model.ts
+  var copyProblems = (view2) => {
+    if (view2.status.state !== "linked") return [];
+    const name = view2.status.name;
+    if (view2.copy.invalid) return [`This design\u2019s copy of ${name} can\u2019t be read.`];
+    const out = [];
+    if (view2.copy.missing.length > 0) out.push(`This design\u2019s copy of ${name} is missing ${plural(view2.copy.missing.length, "file")}.`);
+    if (view2.copy.drift.length > 0) out.push(`${plural(view2.copy.drift.length, "file")} in this design\u2019s copy of ${name} ${view2.copy.drift.length === 1 ? "was" : "were"} changed by hand.`);
+    return out;
+  };
+  var revisionOf = (view2) => view2.link?.revision ?? null;
+  var chipOf = (view2) => {
+    if (view2 === null) return null;
+    const { status } = view2;
+    switch (status.state) {
+      case "linked": {
+        if (status.linkState === "deleted") return { label: `${status.name} (deleted)`, title: `${status.name} was deleted. This design keeps its copy.`, tone: "warning" };
+        if (status.linkState === "draft") return { label: `${status.name} (draft)`, title: `${status.name} is a draft again. This design keeps its copy.`, tone: "warning" };
+        const revision = revisionOf(view2);
+        const parts = [revision === null ? status.name : `${status.name}, revision ${revision}`];
+        if (view2.updateAvailable) parts.push("an update is available");
+        if (view2.overrides.length > 0) parts.push(plural(view2.overrides.length, "override"));
+        const problems = copyProblems(view2);
+        parts.push(...problems.map((sentence2) => sentence2.replace(/\.$/, "")));
+        const tone2 = problems.length > 0 ? "warning" : view2.updateAvailable ? "info" : "neutral";
+        return { label: status.name, title: parts.join(", "), tone: tone2 };
+      }
+      case "invalid":
+        return { label: "Design system", title: "This design\u2019s system record can\u2019t be read.", tone: "warning" };
+      case "ask":
+        return { label: "Ask me in chat", title: "The agent will ask which design system to use.", tone: "neutral" };
+      case "none":
+      case "unset":
+        return { label: "No design system", title: "This design has no design system.", tone: "neutral" };
+    }
+  };
+  var popoverOf = (view2) => {
+    const { status } = view2;
+    const lines = [];
+    let openId = null;
+    let update = null;
+    if (status.state === "linked") {
+      const revision = revisionOf(view2);
+      if (status.linkState === "ok") openId = status.id;
+      if (status.linkState === "deleted") lines.push(`${status.name} was deleted. This design keeps its own copy of it.`);
+      else if (status.linkState === "draft") lines.push(`${status.name} is a draft again. This design keeps the copy it made${revision === null ? "" : ` at revision ${revision}`}.`);
+      else lines.push(revision === null ? `Using ${status.name}.` : `Using ${status.name}, copied at revision ${revision}.`);
+      if (status.linkState === "ok" && view2.updateAvailable && view2.systemRevision !== null) {
+        update = { revision: view2.systemRevision };
+        lines.push(`Revision ${view2.systemRevision} is available.`);
+      }
+    } else if (status.state === "invalid") lines.push("This design\u2019s system record can\u2019t be read, so Design Chamber can\u2019t tell which system it uses.");
+    else if (status.state === "ask") lines.push("The agent will ask which design system to use when it works on this design.");
+    else lines.push("This design styles itself. Pick a system to give it shared colors, type and components.");
+    return { lines, problems: copyProblems(view2), overrides: view2.overrides, openId, update };
+  };
+  var POPOVER_OVERRIDES_MAX = 4;
+  var overridesHeading = (count) => `${plural(count, "override")} in this design`;
+  var NO_SYSTEM = "none";
+  var changeOptions = (view2, systems2) => {
+    const currentId = view2.status.state === "linked" ? view2.status.id : null;
+    const ready = systems2.filter((system) => system.status === "ready" && system.id !== currentId).map((system) => ({ id: system.id, label: system.name, hint: `Revision ${system.revision}` }));
+    const none = view2.status.state === "none" || view2.status.state === "unset" ? [] : [{ id: NO_SYSTEM, label: "No design system", hint: null }];
+    return [...ready, ...none];
+  };
+  var NO_OTHER_SYSTEMS = "There are no other design systems to switch to yet.";
+  var previewLine = (preview, to) => {
+    const { changed, added, removed } = preview.tokens.totals;
+    const own = preview.ownTokens;
+    const keeps = own === 0 ? null : `this design\u2019s own ${own} stay${own === 1 ? "s" : ""} as ${own === 1 ? "an override" : "overrides"}`;
+    if (to.none) return `${to.fromName ?? "The system"}\u2019s tokens are removed from this design${own === 0 ? "" : `, and its own ${own} stay`}.`;
+    const parts = [];
+    if (changed > 0) parts.push(`${plural(changed, "token")} will change`);
+    if (added > 0) parts.push(changed > 0 ? `${added} ${added === 1 ? "is" : "are"} new` : `${plural(added, "token")} ${added === 1 ? "is" : "are"} new`);
+    if (removed > 0) parts.push(parts.length > 0 ? `${removed} ${removed === 1 ? "is" : "are"} removed` : `${plural(removed, "token")} ${removed === 1 ? "is" : "are"} removed`);
+    if (parts.length === 0) parts.push("No tokens change");
+    if (keeps) parts.push(keeps);
+    return `${parts.join(", ")}.`;
+  };
+  var dismissKey = (slug) => `system-update:${slug}`;
+  var parseDismissed = (value) => typeof value === "number" && Number.isInteger(value) ? value : null;
+  var bannerOf = (view2, dismissed) => {
+    if (view2 === null || view2.status.state !== "linked" || view2.status.linkState !== "ok" || !view2.updateAvailable || view2.systemRevision === null) return null;
+    if (dismissed !== null && dismissed >= view2.systemRevision) return null;
+    return { text: `${view2.status.name} was updated since this design copied it.`, revision: view2.systemRevision };
+  };
+  var SECTION_SHOW = 6;
+  var clip3 = (names) => ({ names: names.slice(0, SECTION_SHOW), more: Math.max(0, names.length - SECTION_SHOW) });
+  var updateSections = (preview) => {
+    const out = [];
+    const changed = preview.tokens.changed.map((token) => token.name);
+    if (changed.length > 0) out.push({ id: "changed", title: `${plural(preview.tokens.totals.changed, "token")} changed`, ...clip3(changed) });
+    if (preview.tokens.added.length > 0) out.push({ id: "added", title: `${plural(preview.tokens.totals.added, "new token")}`, ...clip3(preview.tokens.added) });
+    if (preview.tokens.removed.length > 0) out.push({ id: "removed", title: `${plural(preview.tokens.totals.removed, "token")} removed`, ...clip3(preview.tokens.removed) });
+    const parts = [...preview.components.changed, ...preview.components.added, ...preview.components.removed];
+    if (parts.length > 0) {
+      const bits = [];
+      if (preview.components.totals.changed > 0) bits.push(`${preview.components.totals.changed} changed`);
+      if (preview.components.totals.added > 0) bits.push(`${preview.components.totals.added} new`);
+      if (preview.components.totals.removed > 0) bits.push(`${preview.components.totals.removed} removed`);
+      out.push({ id: "components", title: `Components, ${bits.join(", ")}`, ...clip3(parts) });
+    }
+    return out;
+  };
+  var updateHeading = (name, preview) => preview.fromRevision !== null && preview.toRevision !== null ? `${name}, revision ${preview.fromRevision} to ${preview.toRevision}` : name;
+  var resetBase = (view2) => {
+    const at = view2.stamp.indexOf(":");
+    const base = at < 0 ? "" : view2.stamp.slice(at + 1);
+    return base === "" ? null : base;
+  };
+  var appliedNotice = (notice, name, revision) => {
+    switch (notice) {
+      case "updated":
+        return { title: revision === null ? `Updated ${name}.` : `Updated to ${name} revision ${revision}.`, ask: { purpose: "system-update", label: "Ask the agent to apply the changes" } };
+      case "removed":
+        return { title: "Removed the design system from this design.", ask: { purpose: "restyle", label: "Ask the agent to restyle" } };
+      case "linked":
+      case "switched":
+        return { title: `Now using ${name}.`, ask: { purpose: "restyle", label: "Ask the agent to restyle" } };
+      case "unchanged":
+        return { title: "Nothing changed.", ask: null };
+    }
+  };
+  var SYSTEM_REFRESH_KINDS = /* @__PURE__ */ new Set(["files", "design", "versions", "added"]);
+  var shouldRefetchSystem = (batch, slug) => batch.reset || batch.events.some((event) => event.slug === slug && SYSTEM_REFRESH_KINDS.has(event.kind) || event.kind === "system" || event.kind === "root");
+  var agentSwitchOf = (before, after) => {
+    if (before === null || after.status.state !== "linked" || after.link === null) return null;
+    if (after.link.by !== "agent" || after.link.before === null) return null;
+    if (before.link !== null && before.link.at === after.link.at) return null;
+    return { title: `The agent switched this design to ${after.status.name}.`, undoTo: after.link.before };
+  };
+
+  // src/ui/components/system-chip.ts
+  var REFETCH_MS2 = 600;
+  var STALE_TEXT2 = "This design changed since you opened this.";
+  var mountSystemChip = (options) => {
+    const { slug, notices } = options;
+    const compact = options.surface === "panel";
+    const scope = createScope();
+    let view2 = null;
+    let dismissed = null;
+    let hidden = false;
+    let disposed = false;
+    let token = 0;
+    const glyph = h("span", { class: "dc-system-glyph", "aria-hidden": "true" }, icon2("system", 14));
+    const label = h("span", { class: "dc-system-label" });
+    const button2 = h("button", { type: "button", class: "oc-sdk oc-sdk-badge dc-system-btn", "data-compact": compact ? "true" : "false", "aria-haspopup": "dialog", "aria-expanded": "false" }, glyph, label);
+    const el2 = h("div", { class: "dc-system", "data-surface": options.surface, hidden: true }, button2);
+    const paintChip = () => {
+      const chip = chipOf(view2);
+      el2.hidden = hidden || chip === null;
+      if (chip === null) return;
+      label.textContent = chip.label;
+      label.hidden = compact;
+      if (chip.tone === "neutral") button2.removeAttribute("data-tone");
+      else button2.dataset.tone = chip.tone;
+      const name = `Design system: ${chip.title}`;
+      button2.setAttribute("aria-label", name);
+      button2.title = name;
+    };
+    let mode = "main";
+    let showAllOverrides = false;
+    let busyReset = null;
+    let changeTo = null;
+    let preview = null;
+    let previewState = "idle";
+    let previewError = null;
+    let applying = false;
+    let applyError = null;
+    let panelBody = null;
+    let panelFoot = null;
+    let closePanel = null;
+    let panelPopover = null;
+    let lastSignature = "";
+    const failureLine = (text, retry) => text === null ? null : h("p", { class: "dc-form-error", role: "alert" }, text, retry ? " " : null, retry ? h("button", { type: "button", class: "dc-link", onclick: retry }, "Reload and try again.") : null);
+    const resetOverride = async (name) => {
+      if (view2 === null || busyReset !== null) return;
+      const base = resetBase(view2);
+      if (base === null) return;
+      busyReset = name;
+      paintPanel(true);
+      try {
+        await store.applyEdit(slug, { op: "token-reset", base, names: [name] });
+        toast("success", "Back to the system\u2019s value.");
+      } catch (failure) {
+        toast("error", isServiceError(failure, "stale") ? STALE_TEXT2 : `Couldn\u2019t reset that. ${errorText2(failure)}`);
+      } finally {
+        busyReset = null;
+        await load();
+      }
+    };
+    const overrideRow = (override) => {
+      const reset = btn({ label: "Reset to system", variant: "ghost", size: "xs", loading: busyReset === override.name, disabled: busyReset !== null, onClick: () => void resetOverride(override.name) });
+      reset.el.setAttribute("aria-label", `Reset ${override.name} to the system\u2019s value`);
+      return h(
+        "li",
+        { class: "dc-sys-override" },
+        h("div", { class: "dc-sys-override-text" }, h("code", { class: "dc-path", title: override.name }, override.name), h("span", { class: "dc-muted dc-sys-values" }, h("span", { title: "This design" }, override.value), " instead of ", h("span", { title: "The system" }, override.systemValue))),
+        reset.el
+      );
+    };
+    const overridesBlock = (current) => {
+      if (current.overrides.length === 0) return null;
+      const shown = showAllOverrides ? current.overrides : current.overrides.slice(0, POPOVER_OVERRIDES_MAX);
+      const hiddenCount = current.overrides.length - shown.length;
+      const more = hiddenCount > 0 ? h("button", { type: "button", class: "dc-link", onclick: () => {
+        showAllOverrides = true;
+        paintPanel(true);
+      } }, `Show ${hiddenCount} more`) : null;
+      return h("section", { class: "dc-sys-block" }, h("h3", { class: "dc-sys-h" }, overridesHeading(current.overrides.length)), h("ul", { class: "dc-sys-list" }, ...shown.map(overrideRow)), more);
+    };
+    const mainPanel = (current) => {
+      const pop = popoverOf(current);
+      const body = pop.lines.map((line) => h("p", { class: "dc-sys-line" }, line));
+      for (const problem of pop.problems) body.push(h("p", { class: "dc-sys-problem" }, icon2("alert", 14), h("span", {}, problem)));
+      const overrides = overridesBlock(current);
+      if (overrides) body.push(overrides);
+      const foot = [];
+      if (pop.update) foot.push(btn({ label: "Review update", variant: "default", emphasis: "primary", size: "sm", onClick: () => openUpdate() }).el);
+      foot.push(btn({ label: "Change\u2026", variant: "outline", size: "sm", onClick: () => startChange() }).el);
+      const openId = pop.openId;
+      if (openId !== null && options.onOpenSystem) {
+        const open = options.onOpenSystem;
+        foot.push(btn({ label: "Open system", variant: "outline", size: "sm", icon: "external", onClick: () => {
+          closePanel?.(false);
+          open(openId);
+        } }).el);
+      }
+      return { body, foot };
+    };
+    const loadPreview = async (to) => {
+      changeTo = to;
+      preview = null;
+      previewState = "loading";
+      previewError = null;
+      applyError = null;
+      paintPanel(true);
+      try {
+        const answer = await client.call("GET /designs/:slug/system/preview", { params: { slug }, query: { to } });
+        if (changeTo !== to) return;
+        preview = answer;
+        previewState = "ready";
+      } catch (failure) {
+        if (changeTo !== to) return;
+        previewState = "error";
+        previewError = `Couldn\u2019t work out what would change. ${errorText2(failure)}`;
+      }
+      paintPanel(true);
+    };
+    const startChange = () => {
+      mode = "change";
+      changeTo = null;
+      preview = null;
+      previewState = "idle";
+      previewError = null;
+      applyError = null;
+      void systems().load();
+      paintPanel(true);
+    };
+    const backToMain = () => {
+      mode = "main";
+      changeTo = null;
+      paintPanel(true);
+    };
+    const applyChange = async (name) => {
+      if (applying || changeTo === null || preview === null) return;
+      const to = changeTo;
+      applying = true;
+      applyError = null;
+      paintPanel(true);
+      try {
+        const answer = await client.call("POST /designs/:slug/system", { params: { slug }, body: { action: "set", to, stamp: preview.stamp } });
+        const said = appliedNotice(answer.notice, name, preview.toRevision);
+        applying = false;
+        mode = "main";
+        closePanel?.(false);
+        showApplied(said, answer.before?.id ?? null);
+        await store.refreshOpenDesign();
+        await load();
+      } catch (failure) {
+        applying = false;
+        applyError = isServiceError(failure, "stale") ? STALE_TEXT2 : errorText2(failure);
+        paintPanel(true);
+      }
+    };
+    const changePanel = (current) => {
+      const list = systems().get().systems ?? [];
+      const choices = changeOptions(current, list);
+      const body = [h("p", { class: "dc-sys-line" }, "Pick the design system this design should use.")];
+      if (choices.length === 0) body.push(h("p", { class: "dc-muted" }, NO_OTHER_SYSTEMS));
+      else {
+        const group2 = h("div", { class: "dc-sys-options", role: "radiogroup", "aria-label": "Design system" });
+        for (const choice of choices) {
+          const on = changeTo === choice.id;
+          const option = h(
+            "button",
+            { type: "button", class: "dc-sys-option", role: "radio", "aria-checked": on ? "true" : "false", disabled: applying, onclick: () => void loadPreview(choice.id) },
+            h("span", { class: "dc-sys-option-name" }, choice.label),
+            choice.hint ? h("span", { class: "dc-muted" }, choice.hint) : null
+          );
+          group2.append(option);
+        }
+        body.push(group2);
+      }
+      if (previewState === "loading") body.push(h("p", { class: "dc-muted dc-sys-preview", role: "status" }, "Checking what would change\u2026"));
+      if (previewState === "error") body.push(h("p", { class: "dc-form-error", role: "alert" }, previewError ?? ""));
+      let applyLabel = "Use this system";
+      if (preview !== null && previewState === "ready") {
+        const toNone = changeTo === NO_SYSTEM;
+        const named = choices.find((choice) => choice.id === changeTo)?.label ?? "this system";
+        applyLabel = toNone ? "Remove the system" : `Use ${named}`;
+        body.push(h("p", { class: "dc-sys-preview", role: "status" }, previewLine(preview, { none: toNone, fromName: current.status.state === "linked" ? current.status.name : null })));
+      }
+      const failed = failureLine(applyError, applyError === STALE_TEXT2 ? () => void refreshChange() : void 0);
+      if (failed) body.push(failed);
+      const target = choices.find((choice) => choice.id === changeTo)?.label ?? "";
+      const apply = btn({ label: applyLabel, variant: "default", emphasis: "primary", size: "sm", loading: applying, disabled: previewState !== "ready" || applying, onClick: () => void applyChange(changeTo === NO_SYSTEM ? "No design system" : target) });
+      const back = btn({ label: "Back", variant: "outline", size: "sm", icon: "back", disabled: applying, onClick: backToMain });
+      return { body, foot: [apply.el, back.el] };
+    };
+    const refreshChange = async () => {
+      await load();
+      if (changeTo !== null) await loadPreview(changeTo);
+    };
+    const paintPanel = (force = false) => {
+      if (panelBody === null || panelFoot === null) return;
+      if (view2 === null) return;
+      const signature = JSON.stringify([view2, mode, showAllOverrides, busyReset, changeTo, previewState, preview?.stamp ?? null, previewError, applying, applyError, systems().get().systems?.map((system) => [system.id, system.status, system.revision])]);
+      if (!force && signature === lastSignature) return;
+      lastSignature = signature;
+      const active2 = document.activeElement;
+      const keepFocusIn = active2 !== null && panelBody.contains(active2);
+      const parts = mode === "change" ? changePanel(view2) : mainPanel(view2);
+      panelBody.replaceChildren(...parts.body);
+      panelFoot.replaceChildren(...parts.foot);
+      panelFoot.hidden = parts.foot.length === 0;
+      if (keepFocusIn || active2 !== null && panelFoot.contains(active2)) focusFirst();
+    };
+    const focusFirst = () => {
+      const target = panelFoot?.querySelector("button:not(:disabled)") ?? panelBody?.querySelector("button:not(:disabled)");
+      if (target) target.focus({ preventScroll: true });
+      else panelPopover?.focus({ preventScroll: true });
+    };
+    const openMain = () => {
+      if (closePanel || view2 === null) return;
+      mode = "main";
+      showAllOverrides = false;
+      lastSignature = "";
+      const release = () => {
+        closePanel = null;
+        panelBody = null;
+        panelFoot = null;
+        panelPopover = null;
+        button2.setAttribute("aria-expanded", "false");
+      };
+      if (compact) {
+        const sheet = openSheet(options.host, { title: "Design system", variant: "full", onClose: release });
+        panelBody = h("div", { class: "dc-sys-panel" });
+        sheet.body.append(panelBody);
+        panelFoot = h("div", { class: "dc-sys-actions" });
+        sheet.foot.append(panelFoot);
+        closePanel = () => sheet.close();
+      } else {
+        const popover = openPopover(options.host, button2, { title: "Design system", onClose: release });
+        panelBody = h("div", { class: "dc-sys-panel" });
+        popover.body.append(panelBody);
+        panelFoot = h("div", { class: "dc-sys-actions" });
+        popover.foot.append(panelFoot);
+        closePanel = (restoreFocus) => popover.close(restoreFocus);
+        panelPopover = popover.el;
+      }
+      button2.setAttribute("aria-expanded", "true");
+      paintPanel(true);
+      queueMicrotask(focusFirst);
+      void load();
+    };
+    button2.addEventListener("click", () => {
+      if (closePanel) closePanel();
+      else openMain();
+    });
+    let closeUpdate = null;
+    const openUpdate = () => {
+      const current = view2;
+      if (current === null || current.status.state !== "linked" || closeUpdate) return;
+      const systemName = current.status.name;
+      const systemId = current.status.id;
+      closePanel?.(false);
+      const sheet = openSheet(options.host, { title: "Review update", variant: compact ? "full" : "side", onClose: () => {
+        closeUpdate = null;
+      } });
+      closeUpdate = () => sheet.close();
+      const content = h("div", { class: "dc-sys-panel", "aria-busy": "true" }, h("p", { class: "dc-muted", role: "status" }, "Checking what changed\u2026"));
+      sheet.body.append(content);
+      let loaded = null;
+      let busy = false;
+      let failure = null;
+      let busyName = null;
+      let primary2 = null;
+      const paint = () => {
+        const live = view2;
+        content.setAttribute("aria-busy", loaded === null && failure === null ? "true" : "false");
+        sheet.foot.replaceChildren();
+        if (loaded === null) {
+          if (failure !== null) {
+            content.replaceChildren(h("p", { class: "dc-form-error", role: "alert" }, failure));
+            sheet.foot.append(btn({ label: "Try again", variant: "outline", size: "sm", onClick: () => void fetchPreview() }).el);
+          }
+          return;
+        }
+        const nodes = [h("p", { class: "dc-sys-line" }, updateHeading(systemName, loaded))];
+        const sections = updateSections(loaded);
+        if (sections.length === 0) nodes.push(h("p", { class: "dc-muted" }, "No tokens or components change. The update only brings this design\u2019s copy to the new revision."));
+        for (const section2 of sections) {
+          nodes.push(
+            h(
+              "section",
+              { class: "dc-sys-block" },
+              h("h3", { class: "dc-sys-h" }, section2.title),
+              h("ul", { class: "dc-sys-names" }, ...section2.names.map((name) => h("li", {}, h("code", { class: "dc-path", title: name }, name)))),
+              section2.more > 0 ? h("p", { class: "dc-muted dc-sys-more" }, `and ${section2.more} more`) : null
+            )
+          );
+        }
+        const overrides = live?.overrides ?? [];
+        if (overrides.length > 0) {
+          nodes.push(
+            h(
+              "section",
+              { class: "dc-sys-block" },
+              h("h3", { class: "dc-sys-h" }, overridesHeading(overrides.length)),
+              h("p", { class: "dc-muted dc-sys-more" }, "These stay as they are unless you reset them."),
+              h("ul", { class: "dc-sys-list" }, ...overrides.map((override) => {
+                const reset = btn({ label: "Reset to system", variant: "ghost", size: "xs", loading: busyName === override.name, disabled: busyName !== null || busy, onClick: () => void resetInSheet(override.name) });
+                reset.el.setAttribute("aria-label", `Reset ${override.name} to the system\u2019s value`);
+                return h("li", { class: "dc-sys-override" }, h("div", { class: "dc-sys-override-text" }, h("code", { class: "dc-path", title: override.name }, override.name), h("span", { class: "dc-muted dc-sys-values" }, override.value, " instead of ", override.systemValue)), reset.el);
+              }))
+            )
+          );
+        }
+        const failed = failureLine(failure, failure === STALE_TEXT2 ? () => void fetchPreview() : void 0);
+        if (failed) nodes.push(failed);
+        content.replaceChildren(...nodes);
+        primary2 = btn({ label: "Update this design", variant: "default", emphasis: "primary", size: "sm", loading: busy, disabled: busy || busyName !== null, onClick: () => void apply() });
+        sheet.foot.append(primary2.el);
+      };
+      const fetchPreview = async () => {
+        failure = null;
+        loaded = null;
+        paint();
+        try {
+          await load();
+          loaded = await client.call("GET /designs/:slug/system/preview", { params: { slug }, query: { to: systemId } });
+        } catch (error) {
+          failure = `Couldn\u2019t work out what changed. ${errorText2(error)}`;
+        }
+        if (closeUpdate === null) return;
+        paint();
+      };
+      const resetInSheet = async (name) => {
+        const live = view2;
+        const base = live ? resetBase(live) : null;
+        if (base === null || busyName !== null) return;
+        busyName = name;
+        paint();
+        try {
+          await store.applyEdit(slug, { op: "token-reset", base, names: [name] });
+          failure = null;
+        } catch (error) {
+          failure = isServiceError(error, "stale") ? STALE_TEXT2 : `Couldn\u2019t reset that. ${errorText2(error)}`;
+        }
+        busyName = null;
+        await load();
+        if (closeUpdate !== null) paint();
+      };
+      const apply = async () => {
+        if (loaded === null || busy || loaded.toRevision === null) return;
+        busy = true;
+        failure = null;
+        paint();
+        try {
+          const answer = await client.call("POST /designs/:slug/system", { params: { slug }, body: { action: "update", toRevision: loaded.toRevision, stamp: loaded.stamp } });
+          const said = appliedNotice(answer.notice, systemName, loaded.toRevision);
+          busy = false;
+          sheet.close();
+          showApplied(said, answer.before?.id ?? null);
+          await store.refreshOpenDesign();
+          await load();
+        } catch (error) {
+          busy = false;
+          failure = isServiceError(error, "stale") ? STALE_TEXT2 : errorText2(error);
+          paint();
+        }
+      };
+      void fetchPreview();
+      queueMicrotask(() => primary2?.el.focus({ preventScroll: true }));
+    };
+    const showApplied = (said, before) => {
+      const buttons = [];
+      let undoButton = null;
+      if (before !== null) {
+        undoButton = btn({ label: "Undo", variant: "outline", size: "xs", onClick: () => void undo(before) });
+        buttons.push(undoButton);
+      }
+      if (said.ask !== null) {
+        const { purpose, label: askLabel } = said.ask;
+        const ask = btn({ label: askLabel, variant: "outline", size: "xs", icon: "send", onClick: () => {
+          ask.set({ loading: true });
+          void askAgent(slug, purpose, before ?? void 0).then(
+            (outcome) => {
+              const text = askRequestToast(outcome);
+              if (text !== null) toast("success", text);
+              ask.set({ loading: false });
+            },
+            (failure) => {
+              toast("error", `Couldn\u2019t ask the agent. ${errorText2(failure)}`);
+              ask.set({ loading: false });
+            }
+          );
+        } });
+        buttons.push(ask);
+      }
+      if (buttons.length === 0) {
+        notices.setTransient("system", banner({ tone: "success", title: said.title }), SHORT_NOTICE_MS);
+        return;
+      }
+      const wrap = h("div", { class: "dc-banner dc-system-notice", "data-actions": "stack" });
+      wrap.append(...bannerWithActions("success", said.title, [], buttons.map((one) => one.el)));
+      notices.setTransient("system", wrap, RESTORE_NOTICE_MS);
+    };
+    const undo = async (before) => {
+      try {
+        await store.restoreVersion(slug, before);
+        await store.refreshOpenDesign();
+        notices.setTransient("system", banner({ tone: "success", title: "Undone." }), SHORT_NOTICE_MS);
+        await load(true);
+      } catch (failure) {
+        notices.setTransient("system", banner({ tone: "error", title: "Couldn\u2019t undo that.", body: errorText2(failure) }));
+      }
+    };
+    const showAgentSwitch = (title2, undoTo) => {
+      const undoButton = btn({ label: "Undo", variant: "outline", size: "xs", onClick: () => void undo(undoTo) });
+      const wrap = h("div", { class: "dc-banner dc-system-notice", "data-actions": "stack" });
+      wrap.append(...bannerWithActions("info", title2, [], [undoButton.el]));
+      notices.setTransient("system", wrap, RESTORE_NOTICE_MS);
+    };
+    let bannerKey = "";
+    const paintBanner = () => {
+      const shown = hidden ? null : bannerOf(view2, dismissed);
+      const key = shown === null ? "" : `${shown.revision}:${shown.text}`;
+      if (key === bannerKey) return;
+      bannerKey = key;
+      if (shown === null) {
+        notices.setTransient("system-update", null);
+        return;
+      }
+      const review = btn({ label: "Review update", variant: "outline", size: "xs", onClick: () => openUpdate() });
+      const later = btn({ label: "Not now", variant: "ghost", size: "xs", onClick: () => {
+        dismissed = shown.revision;
+        void host.storage.set(dismissKey(slug), shown.revision);
+        paintBanner();
+      } });
+      const wrap = h("div", { class: "dc-banner dc-system-banner", "data-actions": "stack" });
+      wrap.append(...bannerWithActions("info", shown.text, [], [review.el, later.el]));
+      notices.setTransient("system-update", wrap);
+    };
+    const load = async (own = false) => {
+      token += 1;
+      const mine = token;
+      try {
+        const answer = await client.call("GET /designs/:slug/system", { params: { slug } });
+        if (disposed || mine !== token) return;
+        const before = view2;
+        view2 = answer;
+        const switched = own ? null : agentSwitchOf(before, answer);
+        if (switched !== null && !hidden) showAgentSwitch(switched.title, switched.undoTo);
+      } catch (failure) {
+        if (disposed || mine !== token) return;
+        console.warn("Design Chamber: the design system could not be read", failure);
+      }
+      paintChip();
+      paintBanner();
+      paintPanel();
+    };
+    const refetchSoon = debounce(() => {
+      if (!disposed) void load();
+    }, REFETCH_MS2);
+    scope.add(
+      feed.subscribe((batch) => {
+        if (shouldRefetchSystem(batch, slug)) refetchSoon();
+      })
+    );
+    scope.add(systems().subscribe(() => paintPanel()));
+    void host.storage.get(dismissKey(slug)).then((stored) => {
+      dismissed = parseDismissed(stored);
+      paintBanner();
+    });
+    paintChip();
+    void load();
+    return {
+      el: el2,
+      setHidden: (next) => {
+        hidden = next;
+        if (next) {
+          closePanel?.(false);
+          closeUpdate?.();
+          notices.setTransient("system-update", null);
+          bannerKey = "";
+        }
+        paintChip();
+        paintBanner();
+      },
+      dispose: () => {
+        disposed = true;
+        closePanel?.(false);
+        closeUpdate?.();
+        notices.setTransient("system-update", null);
+        notices.setTransient("system", null);
+        scope.dispose();
+        el2.remove();
+      }
+    };
+  };
+
+  // src/ui/wall/feature-system.ts
+  var mount8 = (ctx) => {
+    const chip = mountSystemChip({ slug: ctx.slug, surface: ctx.surface, host: ctx.actions.host, notices: ctx.notices, onOpenSystem: ctx.actions.onOpenSystem });
+    (ctx.surface === "page" ? ctx.slots.statusSlot : ctx.slots.railTools).prepend(chip.el);
+    const syncViewing = () => chip.setHidden(ctx.viewing() !== null);
+    syncViewing();
+    const unwatch = ctx.onViewing(syncViewing);
+    return () => {
+      unwatch();
+      chip.dispose();
     };
   };
 
@@ -10347,33 +11875,33 @@ ${view2.error.message}` : "";
       const li = h("li", { class: "dc-knob", "data-knob": tweak.var }, head, control, notes, reason);
       return { var: tweak.var, li, value, input, tabs, tabsHost, notes, notesKey: "", reason, reasonText, onChoice };
     };
-    const paintRow = (view2, row) => {
-      view2.value.textContent = row.valueText;
-      view2.li.dataset.changed = String(row.changed);
-      view2.li.dataset.broken = String(row.reason !== null);
-      view2.li.dataset.disabled = String(row.disabled);
-      if (view2.input && row.number) {
-        const text = String(row.number.value);
+    const paintRow = (view2, row2) => {
+      view2.value.textContent = row2.valueText;
+      view2.li.dataset.changed = String(row2.changed);
+      view2.li.dataset.broken = String(row2.reason !== null);
+      view2.li.dataset.disabled = String(row2.disabled);
+      if (view2.input && row2.number) {
+        const text = String(row2.number.value);
         if (view2.input.value !== text) view2.input.value = text;
-        view2.input.disabled = row.disabled;
-        view2.input.setAttribute("aria-valuetext", row.valueText);
+        view2.input.disabled = row2.disabled;
+        view2.input.setAttribute("aria-valuetext", row2.valueText);
       }
-      if (view2.tabs && view2.tabsHost && row.choice) {
-        view2.tabs.update({ activeId: row.choice.active });
-        view2.tabsHost.setAttribute("aria-disabled", String(row.disabled));
-        view2.tabsHost.dataset.disabled = String(row.disabled);
-        for (const tab of view2.tabsHost.querySelectorAll('[role="tab"]')) tab.disabled = row.disabled;
+      if (view2.tabs && view2.tabsHost && row2.choice) {
+        view2.tabs.update({ activeId: row2.choice.active });
+        view2.tabsHost.setAttribute("aria-disabled", String(row2.disabled));
+        view2.tabsHost.dataset.disabled = String(row2.disabled);
+        for (const tab of view2.tabsHost.querySelectorAll('[role="tab"]')) tab.disabled = row2.disabled;
       }
       const control = view2.input ?? view2.tabsHost;
-      if (row.reason !== null) control?.setAttribute("aria-describedby", view2.reason.id);
+      if (row2.reason !== null) control?.setAttribute("aria-describedby", view2.reason.id);
       else control?.removeAttribute("aria-describedby");
-      const key = row.notes.join("\n");
+      const key = row2.notes.join("\n");
       if (key !== view2.notesKey) {
         view2.notesKey = key;
-        view2.notes.replaceChildren(...row.notes.map((note) => h("p", { class: "dc-knob-note" }, note)));
+        view2.notes.replaceChildren(...row2.notes.map((note) => h("p", { class: "dc-knob-note" }, note)));
       }
-      view2.reason.hidden = row.reason === null;
-      view2.reasonText.textContent = row.reason ?? "";
+      view2.reason.hidden = row2.reason === null;
+      view2.reasonText.textContent = row2.reason ?? "";
     };
     const paintRows = (state, tweaks, viewing) => {
       const key = JSON.stringify(tweaks);
@@ -10384,9 +11912,9 @@ ${view2.error.message}` : "";
         rowsEl.replaceChildren(...rows.map((view2) => view2.li));
       }
       const model = knobRows(tweaks, state, { viewing });
-      model.forEach((row, index) => {
+      model.forEach((row2, index) => {
         const view2 = rows[index];
-        if (view2) paintRow(view2, row);
+        if (view2) paintRow(view2, row2);
       });
     };
     const bannerNode = (entry, state) => {
@@ -10522,7 +12050,7 @@ ${view2.error.message}` : "";
     set: (key, value) => guestHost.client.storage.set(key, value),
     delete: (key) => guestHost.client.storage.delete(key)
   };
-  var mount8 = (ctx) => {
+  var mount9 = (ctx) => {
     const { wall, slug } = ctx;
     const rail = ctx.surface === "panel";
     let disposed = false;
@@ -10549,6 +12077,12 @@ ${view2.error.message}` : "";
     let pageButton = null;
     let railButton = null;
     const buttonEl = () => pageButton?.el ?? railButton;
+    const focusOpener = () => {
+      const button2 = buttonEl();
+      const shown = button2 !== null && button2.getClientRects().length > 0;
+      const target = shown ? button2 : ctx.slots.compactActions.parentElement?.querySelector('[aria-label="More actions"]');
+      target?.focus({ preventScroll: true });
+    };
     const toggle = () => {
       if (!hasKnobs()) return;
       ctx.drawers.toggle("tweaks");
@@ -10631,7 +12165,7 @@ ${view2.error.message}` : "";
       const open = ctx.drawers.active() === "tweaks";
       askBarFor(wall)?.setQuiet(open);
       paintButton();
-      if (wasOpen && !open && (document.activeElement === document.body || document.activeElement === null)) buttonEl()?.focus({ preventScroll: true });
+      if (wasOpen && !open && (document.activeElement === document.body || document.activeElement === null)) focusOpener();
       wasOpen = open;
     };
     const syncDetail = () => {
@@ -10935,7 +12469,7 @@ ${view2.error.message}` : "";
 
   // src/guest/frame-doc.ts
   var ARTBOARD_SANDBOX = "allow-scripts";
-  var bundledBridge = () => true ? '"use strict";(()=>{var ee=/^[a-z0-9][a-z0-9-]{0,40}$/;var L=5e3,V=200,$=5e3;var lt=30*6e4;var te=12;var ne=/^--[A-Za-z0-9_-]{1,64}$/;var oe=/^[A-Za-z0-9 #%.,()+\\-\'"/]{1,100}$/;var D=1048576;var P=1e4;var w=D;var re=e=>{let t=0,r=0;for(let n of e)n==="\'"?t+=1:n===\'"\'&&(r+=1);return t%2===0&&r%2===0};var k=1;var ie=["Escape"," ","+","=","-","0","1"];var Q=e=>typeof e=="object"&&e!==null&&!Array.isArray(e),O=(e,t)=>typeof e=="string"&&e.length<=t,F=(e,t)=>O(e,t)&&e.length>0,b=e=>typeof e=="number"&&Number.isFinite(e)&&Math.abs(e)<=1e7;var Oe=e=>typeof e=="boolean",Ne=e=>e==="edit"||e==="play";var se=(e,t,r)=>Array.isArray(e)&&e.length<=t&&e.every(r),ke=e=>Q(e)&&F(e.id,100)&&O(e.selector,1e3)&&O(e.text,120)&&O(e.html,200);var Xe=e=>Q(e)&&typeof e.name=="string"&&ne.test(e.name)&&typeof e.value=="string"&&oe.test(e.value)&&re(e.value),Le=e=>{if(!Array.isArray(e)||e.length>P)return!1;let t=0;for(let r of e){if(!Array.isArray(r)||r.length!==2)return!1;let n=r[0],s=r[1];if(typeof n!="string"||s!==null&&typeof s!="string"||(t+=n.length+(s===null?0:s.length),t>w))return!1}return!0};var De=e=>e.dc===k&&F(e.artboardId,100)&&F(e.nonce,64),Pe={"init-ack":()=>!0,"set-mode":e=>Ne(e.mode),"hit-test":e=>b(e.x)&&b(e.y),"resolve-anchors":e=>se(e.anchors,500,ke),"scroll-by":e=>b(e.dx)&&b(e.dy),"scroll-to":e=>b(e.x)&&b(e.y),highlight:e=>e.selector===null||O(e.selector,1e3),"edit-probe":e=>b(e.x)&&b(e.y),"set-tokens":e=>se(e.vars,te,Xe),"storage-sync":e=>Oe(e.clear)&&Le(e.changes)};var we=(e,t)=>{if(!Q(t)||!De(t)||typeof t.type!="string"||!Object.hasOwn(e,t.type))return null;let r=e[t.type];return r!==void 0&&r(t)?t:null};var v=e=>we(Pe,e);var Be=["data-testid","data-screen","data-dc-id"],Ue=/^(is-|has-|js-|active|hover|focus)/,ue=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,ve=3,R=e=>e.tagName===e.tagName.toUpperCase()?e.tagName.toLowerCase():e.tagName,_e=e=>e.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),ae=e=>e===""?null:ue.test(e)?`#${e}`:`[id="${_e(e)}"]`,Ge=(e,t)=>{try{return e.querySelectorAll(t)}catch{return null}},X=(e,t,r)=>{let n=Ge(e,t);return n!==null&&n.length===1&&n[0]===r},Ke=e=>{let t=[];for(let r=0;r<e.classList.length&&t.length<ve;r+=1){let n=e.classList[r];n!==void 0&&ue.test(n)&&!Ue.test(n)&&t.push(n)}return t},We=e=>{let t=e.parentElement;if(!t)return null;let r=0,n=0;for(let s=0;s<t.children.length;s+=1){let l=t.children[s];!l||l.tagName!==e.tagName||(n+=1,l===e&&(r=n))}return n>1?r:null},Ve=e=>{let t=R(e);if(t==="html"||t==="body")return t;let r=Ke(e).map(s=>`.${s}`).join(""),n=We(e);return`${t}${r}${n===null?"":`:nth-of-type(${n})`}`},j=e=>{let t=[...e];for(;t.join(" > ").length>1e3&&t.length>1;)t.shift();return t.join(" > ").slice(0,1e3)},Ee=(e,t)=>{let r=R(e);if(r==="html"||r==="body"||r==="head")return r;let n=ae(e.id);if(n&&X(t,n,e))return n;for(let _ of Be){let E=e.getAttribute(_);if(E===null||E==="")continue;let d=`[${_}="${_e(E)}"]`;if(X(t,d,e))return d}let s=[],l=e;for(let _=0;l&&_<6;_+=1){s.unshift(Ve(l));let E=s.join(" > ");if(X(t,E,e))return j(s);let d=l.parentElement;if(!d)break;let u=ae(d.id);if(u&&X(t,u,d)){let p=[u,...s];if(X(t,p.join(" > "),e))return j(p)}l=d}return j(s)};var Fe=5e3,Ye=/^[A-Za-z][A-Za-z0-9-]*$/,I=e=>e.replace(/\\s+/g," ").trim(),ge=e=>I(e.textContent??"").slice(0,120),ze=e=>e.replace(/&/g,"&amp;").replace(/"/g,"&quot;"),Te=e=>{let t=`<${R(e)}`;for(let r=0;r<e.attributes.length;r+=1){let n=e.attributes[r];n&&(t+=n.value===""?` ${n.name}`:` ${n.name}="${ze(n.value)}"`)}return t+=">",t.length<=200?t:`${t.slice(0,198)}\\u2026>`},Qe=e=>{let t=/^<([A-Za-z][A-Za-z0-9:-]*)/.exec(e.trim());return t?.[1]?t[1].toLowerCase():null},de=(e,t)=>t===null||R(e).toLowerCase()===t,pe=(e,t)=>{try{return e.querySelectorAll(t)}catch{return[]}},Ae=(e,t)=>{let r={found:!1,exact:!1,element:null},n=Qe(t.html);if(t.selector!==""){let d=pe(e,t.selector);for(let u=0;u<d.length;u+=1){let p=d[u];if(p&&de(p,n))return{found:!0,exact:!0,element:p}}}let s=I(t.text);if(s.length<12)return r;let l=pe(e,n!==null&&Ye.test(n)?n:"*"),_=null,E=1/0;for(let d=0;d<l.length&&d<Fe;d+=1){let u=l[d];if(!u||!de(u,n))continue;let p=I(u.textContent??"");p.startsWith(s)&&p.length<=E&&(_=u,E=p.length)}return _?{found:!0,exact:!1,element:_}:r};var je=new Set(["svg","math","template"]),Ze=e=>{for(let t=e;t;t=t.parentElement)if(je.has(R(t).toLowerCase()))return!0;return!1},fe=e=>e.getAttribute("data-dc-overlay")!==null,xe=(e,t,r=$)=>{if(fe(e))return null;let n=R(e),s=n.toLowerCase();if(s===""||s.length>64)return null;let l=e.getAttribute("id");if(l!==null&&(l===""||l.length>V))return null;let _=I(e.textContent??""),E=_.length>L,d=e.children.length===0,u={tag:s,id:l,leaf:d,text:E?_.slice(0,L+1):_,truncated:E,sameIndex:0,sameCount:0},p=A=>A.children.length===0&&A.getAttribute("id")===l&&!fe(A)&&!Ze(A)&&I(A.textContent??"")===_;if(!d||!p(e))return u;let h=t.getElementsByTagName(n);if(h.length>r)return u;let M=-1,f=0;for(let A=0;A<h.length;A+=1){let m=h[A];!m||!p(m)||(m===e&&(M=f),f+=1)}return M===-1?u:{...u,sameIndex:M,sameCount:f}};var y=(e,t)=>e.length+(t===null?0:t.length),he=e=>{if(typeof e!="object"||e===null)return;let t=e;if(typeof t.persist!="boolean"||!Array.isArray(t.items))return;let r=new Set,n=[],s=0;for(let l of t.items){if(!Array.isArray(l)||l.length!==2)return;let _=l[0],E=l[1];if(typeof _!="string"||typeof E!="string"||(s+=y(_,E),s>D))return;r.has(_)||(r.add(_),n.push([_,E]))}return{persist:t.persist,items:n}},qe=(e,t,r={changes:P,chars:w})=>{let n=[],s=[],l=0,_=()=>{n.push({clear:e&&n.length===0,changes:s}),s=[],l=0};for(let E of t){let d=y(E[0],E[1]);s.length>0&&(s.length>=r.changes||l+d>r.chars)&&_(),s.push(E),l+=d}return(s.length>0||e&&n.length===0)&&_(),n},G=e=>`${e}`,K=(e,t,r)=>{if(t.length<r)throw new TypeError(`Failed to execute \'${e}\' on \'Storage\': ${r} argument${r===1?"":"s"} required, but only ${t.length} present.`)},me=(e,t,r)=>{let n=new Map,s=0;for(let[i,c]of e)n.has(i)||(n.set(i,c),s+=y(i,c));let l=null,_=(i,c)=>{let T=n.get(i);s+=y(i,c)-(T===void 0?0:y(i,T)),T===void 0&&(l=null),n.set(i,c)},E=i=>{let c=n.get(i);c!==void 0&&(s-=y(i,c),n.delete(i),l=null)},d=(...i)=>(K("getItem",i,1),n.get(G(i[0]))??null),u=(...i)=>{K("setItem",i,2);let c=G(i[0]),T=G(i[1]),S=n.get(c);if(S===T)return;if(s+y(c,T)-(S===void 0?0:y(c,S))>D)throw t(c);_(c,T),r?.set(c,T)},p=(...i)=>{K("removeItem",i,1);let c=G(i[0]);n.has(c)&&(E(c),r?.set(c,null))},h=()=>{n.size!==0&&(n.clear(),s=0,l=null,r?.clear())},M=(...i)=>{K("key",i,1);let c=Number(i[0])>>>0;return l??(l=[...n.keys()]),l[c]??null},f=Object.create(Object.prototype,{getItem:{value:d,enumerable:!0,configurable:!0,writable:!0},setItem:{value:u,enumerable:!0,configurable:!0,writable:!0},removeItem:{value:p,enumerable:!0,configurable:!0,writable:!0},clear:{value:h,enumerable:!0,configurable:!0,writable:!0},key:{value:M,enumerable:!0,configurable:!0,writable:!0},length:{get:()=>n.size,enumerable:!0,configurable:!0},[Symbol.toStringTag]:{value:"Storage",configurable:!0}}),A=Object.create(f),m=i=>typeof i=="string"&&n.has(i)&&!(i in A);return{storage:new Proxy(A,{get:(i,c,T)=>m(c)?n.get(c):Reflect.get(i,c,T),set:(i,c,T)=>typeof c!="string"?Reflect.set(i,c,T):(u(c,T),!0),has:(i,c)=>typeof c=="string"&&n.has(c)||Reflect.has(i,c),deleteProperty:(i,c)=>m(c)?(p(c),!0):Reflect.deleteProperty(i,c),ownKeys:i=>[...[...n.keys()].filter(c=>!(c in i)),...Reflect.ownKeys(i)],getOwnPropertyDescriptor:(i,c)=>m(c)?{value:n.get(c),writable:!0,enumerable:!0,configurable:!0}:Reflect.getOwnPropertyDescriptor(i,c),defineProperty:(i,c,T)=>typeof c!="string"?Reflect.defineProperty(i,c,T):"get"in T||"set"in T?!1:(u(c,T.value),!0),preventExtensions:()=>!1}),apply:(i,c)=>{i&&(n.clear(),s=0,l=null);for(let[T,S]of c)S===null?E(T):_(T,S)}}},Z=(e,t,r)=>{let n=e.DOMException??globalThis.DOMException,s=e.queueMicrotask?.bind(e)??(u=>void Promise.resolve().then(u)),l=u=>new n(`Failed to execute \'setItem\' on \'Storage\': Setting the value of \'${u}\' exceeded the quota.`,"QuotaExceededError"),_=null;if(t?.persist){let u=new Map,p=!1,h=!1,M=()=>{h=!1;let A=[...u],m=p;u=new Map,p=!1;for(let C of qe(m,A))r(C)},f=()=>{h||(h=!0,s(M))};_={set:(A,m)=>{u.delete(A),u.set(A,m),f()},clear:()=>{u.clear(),p=!0,f()}}}let E=me(t?.items??[],l,_),d=me([],l,null);for(let[u,p]of[["localStorage",E],["sessionStorage",d]])try{Object.defineProperty(e,u,{value:p.storage,configurable:!0,enumerable:!0,writable:!1})}catch{}return{sync:(u,p)=>E.apply(u,p)}};var Je=(e,t,r)=>{if(e===void 0)return;let n=v({dc:k,type:"set-tokens",artboardId:t,nonce:r,vars:e});return n?.type==="set-tokens"?n.vars:void 0},Se=e=>{if(typeof e!="object"||e===null)return null;let t=e,{artboardId:r,nonce:n,file:s,mode:l,scroll:_}=t;if(typeof r!="string"||r.length===0||r.length>100||typeof n!="string"||n.length===0||n.length>64||typeof s!="string"||l!=="edit"&&l!=="play"||typeof _!="object"||_===null)return null;let{x:E,y:d}=_;if(typeof E!="number"||typeof d!="number"||!Number.isFinite(E)||!Number.isFinite(d))return null;let u=Je(t.tokens,r,n),p=he(t.storage);return{artboardId:r,file:s,mode:l,scroll:{x:E,y:d},nonce:n,...u?{tokens:u}:{},...p?{storage:p}:{}}};var Re="https://design.invalid",q=e=>{try{return decodeURIComponent(e)}catch{return e}},Me=(e,t)=>{let r=e.trim();if(r==="")return{kind:"blocked",reason:"empty link"};if(r.startsWith("#"))return{kind:"fragment",id:q(r.slice(1))};let n;try{n=new URL(r,`${Re}/${t}`)}catch{return{kind:"blocked",reason:"malformed link"}}if(n.origin===Re){let s=q(n.pathname.replace(/^\\/+/,""));return s===t||s===""?n.hash?{kind:"fragment",id:q(n.hash.slice(1))}:{kind:"blocked",reason:"same page"}:/\\.html?$/i.test(s)?s.length>2e3||n.hash.length>2e3?{kind:"blocked",reason:"link too long"}:{kind:"navigate",href:s,hash:n.hash}:{kind:"blocked",reason:"not a page of this design"}}return(n.protocol==="https:"||n.protocol==="http:")&&n.href.length<=2e3?{kind:"external",url:n.href}:{kind:"blocked",reason:`${n.protocol} links do not open from a design`}},be=e=>ee.test(e)?{kind:"navigate",href:`screens/${e}.html`,hash:""}:{kind:"blocked",reason:"unknown screen id"};var tt=16,nt=5,ot=300,rt=e=>e instanceof Element?!!e.closest(\'input, textarea, select, [contenteditable=""], [contenteditable="true"]\'):!1,st=e=>{let t=e.mode,r=!1,n=window.parent,s=n!==window,l=o=>{n.postMessage({...o,dc:k,artboardId:e.artboardId,nonce:e.nonce},"*")},_=Z(window,s?e.storage:void 0,o=>l({type:"storage-batch",...o})),E=[],d=o=>{let a=document.documentElement.style,g=new Set(o.map(x=>x.name));for(let x of E)g.has(x)||a.removeProperty(x);for(let x of o)a.setProperty(x.name,x.value);E=[...g]};if(e.tokens&&d(e.tokens),!s)return;let u=()=>{let o=document.documentElement,a=document.body;return{docWidth:Math.max(o.scrollWidth,a?a.scrollWidth:0),docHeight:Math.max(o.scrollHeight,a?a.scrollHeight:0)}},p=o=>{let a=o.getBoundingClientRect();return{x:a.left+window.scrollX,y:a.top+window.scrollY,w:Math.max(0,a.width),h:Math.max(0,a.height)}},h=(o,a)=>{let g=document.elementFromPoint(o,a);return g&&g!==document.documentElement&&g!==document.body&&!g.hasAttribute("data-dc-overlay")?g:null},M=o=>({selector:Ee(o,document),text:ge(o),html:Te(o),rect:p(o),tag:R(o).slice(0,64)||"element"}),f=null,A=o=>{let a=null;if(o)try{a=document.querySelector(o)}catch{a=null}if(!a){f?.remove(),f=null;return}f||(f=document.createElement("div"),f.setAttribute("data-dc-overlay",""),f.setAttribute("aria-hidden","true"));let g=p(a);f.setAttribute("style",`position:absolute;left:${g.x}px;top:${g.y}px;width:${g.w}px;height:${g.h}px;outline:2px solid Highlight;outline-offset:1px;pointer-events:none;z-index:2147483647;margin:0;padding:0;border:0;background:transparent;`),f.isConnected||document.documentElement.append(f)},m=o=>{switch(o.type){case"init-ack":r=!0;return;case"set-mode":t=o.mode;return;case"hit-test":{let a=h(o.x,o.y);l({type:"hit",x:o.x,y:o.y,element:a?M(a):null});return}case"edit-probe":{let a=h(o.x,o.y),g=a?xe(a,document):null,x=a&&g?{...g,dir:getComputedStyle(a).direction==="rtl"?"rtl":"ltr",rect:p(a)}:null;l({type:"edit-probe-result",x:o.x,y:o.y,probe:x});return}case"set-tokens":d(o.vars);return;case"storage-sync":_.sync(o.clear,o.changes);return;case"resolve-anchors":{let a=o.anchors.map(g=>{let x=Ae(document,g);return{id:g.id,found:x.found,exact:x.exact,rect:x.element?p(x.element):null}});l({type:"anchors",results:a});return}case"scroll-by":window.scrollBy(o.dx,o.dy);return;case"scroll-to":window.scrollTo(o.x,o.y);return;case"highlight":A(o.selector);return}};window.addEventListener("message",o=>{if(o.source!==n)return;let a=v(o.data);!a||a.artboardId!==e.artboardId||a.nonce!==e.nonce||m(a)});let C=()=>l({type:"ready",...u(),title:document.title.slice(0,200)}),i=null,c="",T=()=>{i===null&&(i=setTimeout(()=>{i=null;let o=u(),a=`${o.docWidth}x${o.docHeight}`;a!==c&&(c=a,l({type:"size",...o}))},100))},S=!1;window.addEventListener("scroll",()=>{S||(S=!0,requestAnimationFrame(()=>{S=!1,l({type:"scroll",x:window.scrollX,y:window.scrollY})}))},{passive:!0});let W=()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),C();let o=0,a=setInterval(()=>{o+=1,r||o>nt?clearInterval(a):C()},ot);if(typeof ResizeObserver=="function"){let g=new ResizeObserver(T);g.observe(document.documentElement),document.body&&g.observe(document.body)}typeof MutationObserver=="function"&&new MutationObserver(T).observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,characterData:!0}),T()};document.readyState==="loading"?document.addEventListener("DOMContentLoaded",W,{once:!0}):W(),window.addEventListener("load",()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),T()});let J=o=>{switch(o.kind){case"fragment":{if(o.id===""){window.scrollTo(0,0);return}(document.getElementById(o.id)??document.getElementsByName(o.id)[0]??null)?.scrollIntoView();return}case"navigate":l({type:"navigate",href:o.href,hash:o.hash});return;case"external":l({type:"open-external",url:o.url});return;case"blocked":return}};document.addEventListener("click",o=>{let g=(o.target instanceof Element?o.target:null)?.closest("a[href], area[href], [data-dc-goto]")??null;if(!g)return;o.preventDefault();let x=g.getAttribute("data-dc-goto");if(x!==null){J(be(x));return}J(Me(g.getAttribute("href")??"",e.file))},!0),document.addEventListener("submit",o=>o.preventDefault(),!0),window.addEventListener("wheel",o=>{let a=o.ctrlKey||o.metaKey;if(!a&&t!=="edit")return;o.preventDefault();let g=o.deltaMode===1?tt:o.deltaMode===2?window.innerHeight:1;l({type:"wheel",deltaX:o.deltaX*g,deltaY:o.deltaY*g,x:o.clientX,y:o.clientY,ctrl:a})},{passive:!1,capture:!0}),window.addEventListener("keydown",o=>{rt(o.target)||ie.includes(o.key)&&l({type:"key",key:o.key,ctrl:o.ctrlKey,meta:o.metaKey,shift:o.shiftKey})},!0)},ye=Se(window.__DC);ye?st(ye):Z(window,void 0,()=>{});})();\n' : "";
+  var bundledBridge = () => true ? '"use strict";(()=>{var ne=/^[a-z0-9][a-z0-9-]{0,40}$/;var k=5e3,V=200,$=5e3;var _t=30*6e4;var oe=/^[A-Za-z0-9 #%.,()+\\-\'"/]{1,100}$/;var D=1048576;var B=1e4;var w=D;var ut=100*1024*1024,Et=5*1024*1024,pt=10*1024*1024,dt=20*1024*1024;var At=10*6e4;var Tt=60*6e4;var re=512,se=/^--[A-Za-z0-9_-]{1,80}$/,le=120;var St=7*864e5;var xt=20*1024*1024,gt=4*1024*1024;var ft=2*1024*1024;var Ce=/^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\\d{1,3}|logo:\\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40})$/;var F=e=>e.length<=le&&Ce.test(e);var ce=e=>{let t=0,r=0;for(let n of e)n==="\'"?t+=1:n===\'"\'&&(r+=1);return t%2===0&&r%2===0};var C=1;var ue=["Escape"," ","+","=","-","0","1"];var j=e=>typeof e=="object"&&e!==null&&!Array.isArray(e),O=(e,t)=>typeof e=="string"&&e.length<=t,W=(e,t)=>O(e,t)&&e.length>0,y=e=>typeof e=="number"&&Number.isFinite(e)&&Math.abs(e)<=1e7;var Pe=e=>typeof e=="boolean",ke=e=>e==="edit"||e==="play";var ie=(e,t,r)=>Array.isArray(e)&&e.length<=t&&e.every(r),De=e=>j(e)&&W(e.id,100)&&O(e.selector,1e3)&&O(e.text,120)&&O(e.html,200);var Be=e=>j(e)&&typeof e.name=="string"&&se.test(e.name)&&typeof e.value=="string"&&oe.test(e.value)&&ce(e.value),we=e=>{if(!Array.isArray(e)||e.length>B)return!1;let t=0;for(let r of e){if(!Array.isArray(r)||r.length!==2)return!1;let n=r[0],s=r[1];if(typeof n!="string"||s!==null&&typeof s!="string"||(t+=n.length+(s===null?0:s.length),t>w))return!1}return!0};var He=e=>e.dc===C&&W(e.artboardId,100)&&W(e.nonce,64),Ue={"init-ack":()=>!0,"set-mode":e=>ke(e.mode),"hit-test":e=>y(e.x)&&y(e.y),"resolve-anchors":e=>ie(e.anchors,500,De),"scroll-by":e=>y(e.dx)&&y(e.dy),"scroll-to":e=>y(e.x)&&y(e.y),highlight:e=>e.selector===null||O(e.selector,1e3),"edit-probe":e=>y(e.x)&&y(e.y),"set-tokens":e=>ie(e.vars,re,Be),"storage-sync":e=>Pe(e.clear)&&we(e.changes)};var Ye=(e,t)=>{if(!j(t)||!He(t)||typeof t.type!="string"||!Object.hasOwn(e,t.type))return null;let r=e[t.type];return r!==void 0&&r(t)?t:null};var G=e=>Ye(Ue,e);var ve=["data-testid","data-screen","data-dc-id"],Ke=/^(is-|has-|js-|active|hover|focus)/,pe=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,Ve=3,h=e=>e.tagName===e.tagName.toUpperCase()?e.tagName.toLowerCase():e.tagName,de=e=>e.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),Ee=e=>e===""?null:pe.test(e)?`#${e}`:`[id="${de(e)}"]`,$e=(e,t)=>{try{return e.querySelectorAll(t)}catch{return null}},X=(e,t,r)=>{let n=$e(e,t);return n!==null&&n.length===1&&n[0]===r},Fe=e=>{let t=[];for(let r=0;r<e.classList.length&&t.length<Ve;r+=1){let n=e.classList[r];n!==void 0&&pe.test(n)&&!Ke.test(n)&&t.push(n)}return t},We=e=>{let t=e.parentElement;if(!t)return null;let r=0,n=0;for(let s=0;s<t.children.length;s+=1){let c=t.children[s];!c||c.tagName!==e.tagName||(n+=1,c===e&&(r=n))}return n>1?r:null},ze=e=>{let t=h(e);if(t==="html"||t==="body")return t;let r=Fe(e).map(s=>`.${s}`).join(""),n=We(e);return`${t}${r}${n===null?"":`:nth-of-type(${n})`}`},Q=e=>{let t=[...e];for(;t.join(" > ").length>1e3&&t.length>1;)t.shift();return t.join(" > ").slice(0,1e3)},Ae=(e,t)=>{let r=h(e);if(r==="html"||r==="body"||r==="head")return r;let n=Ee(e.id);if(n&&X(t,n,e))return n;for(let u of ve){let E=e.getAttribute(u);if(E===null||E==="")continue;let p=`[${u}="${de(E)}"]`;if(X(t,p,e))return p}let s=[],c=e;for(let u=0;c&&u<6;u+=1){s.unshift(ze(c));let E=s.join(" > ");if(X(t,E,e))return Q(s);let p=c.parentElement;if(!p)break;let _=Ee(p.id);if(_&&X(t,_,p)){let d=[_,...s];if(X(t,d.join(" > "),e))return Q(d)}c=p}return Q(s)};var je=5e3,Qe=/^[A-Za-z][A-Za-z0-9-]*$/,b=e=>e.replace(/\\s+/g," ").trim(),xe=e=>b(e.textContent??"").slice(0,120),qe=e=>e.replace(/&/g,"&amp;").replace(/"/g,"&quot;"),ge=e=>{let t=`<${h(e)}`;for(let r=0;r<e.attributes.length;r+=1){let n=e.attributes[r];n&&(t+=n.value===""?` ${n.name}`:` ${n.name}="${qe(n.value)}"`)}return t+=">",t.length<=200?t:`${t.slice(0,198)}\\u2026>`},Je=e=>{let t=/^<([A-Za-z][A-Za-z0-9:-]*)/.exec(e.trim());return t?.[1]?t[1].toLowerCase():null},Te=(e,t)=>t===null||h(e).toLowerCase()===t,Se=(e,t)=>{try{return e.querySelectorAll(t)}catch{return[]}},fe=(e,t)=>{let r={found:!1,exact:!1,element:null},n=Je(t.html);if(t.selector!==""){let p=Se(e,t.selector);for(let _=0;_<p.length;_+=1){let d=p[_];if(d&&Te(d,n))return{found:!0,exact:!0,element:d}}}let s=b(t.text);if(s.length<12)return r;let c=Se(e,n!==null&&Qe.test(n)?n:"*"),u=null,E=1/0;for(let p=0;p<c.length&&p<je;p+=1){let _=c[p];if(!_||!Te(_,n))continue;let d=b(_.textContent??"");d.startsWith(s)&&d.length<=E&&(u=_,E=d.length)}return u?{found:!0,exact:!1,element:u}:r};var et=new Set(["svg","math","template"]),tt=e=>{for(let t=e;t;t=t.parentElement)if(et.has(h(t).toLowerCase()))return!0;return!1},me=e=>e.getAttribute("data-dc-overlay")!==null,Me=(e,t,r=$)=>{if(me(e))return null;let n=h(e),s=n.toLowerCase();if(s===""||s.length>64)return null;let c=e.getAttribute("id");if(c!==null&&(c===""||c.length>V))return null;let u=b(e.textContent??""),E=u.length>k,p=e.children.length===0,_={tag:s,id:c,leaf:p,text:E?u.slice(0,k+1):u,truncated:E,sameIndex:0,sameCount:0},d=T=>T.children.length===0&&T.getAttribute("id")===c&&!me(T)&&!tt(T)&&b(T.textContent??"")===u;if(!p||!d(e))return _;let f=t.getElementsByTagName(n);if(f.length>r)return _;let R=-1,M=0;for(let T=0;T<f.length;T+=1){let g=f[T];!g||!d(g)||(g===e&&(R=M),M+=1)}return R===-1?_:{..._,sameIndex:R,sameCount:M}};var I=(e,t)=>e.length+(t===null?0:t.length),Re=e=>{if(typeof e!="object"||e===null)return;let t=e;if(typeof t.persist!="boolean"||!Array.isArray(t.items))return;let r=new Set,n=[],s=0;for(let c of t.items){if(!Array.isArray(c)||c.length!==2)return;let u=c[0],E=c[1];if(typeof u!="string"||typeof E!="string"||(s+=I(u,E),s>D))return;r.has(u)||(r.add(u),n.push([u,E]))}return{persist:t.persist,items:n}},nt=(e,t,r={changes:B,chars:w})=>{let n=[],s=[],c=0,u=()=>{n.push({clear:e&&n.length===0,changes:s}),s=[],c=0};for(let E of t){let p=I(E[0],E[1]);s.length>0&&(s.length>=r.changes||c+p>r.chars)&&u(),s.push(E),c+=p}return(s.length>0||e&&n.length===0)&&u(),n},v=e=>`${e}`,K=(e,t,r)=>{if(t.length<r)throw new TypeError(`Failed to execute \'${e}\' on \'Storage\': ${r} argument${r===1?"":"s"} required, but only ${t.length} present.`)},he=(e,t,r)=>{let n=new Map,s=0;for(let[i,l]of e)n.has(i)||(n.set(i,l),s+=I(i,l));let c=null,u=(i,l)=>{let S=n.get(i);s+=I(i,l)-(S===void 0?0:I(i,S)),S===void 0&&(c=null),n.set(i,l)},E=i=>{let l=n.get(i);l!==void 0&&(s-=I(i,l),n.delete(i),c=null)},p=(...i)=>(K("getItem",i,1),n.get(v(i[0]))??null),_=(...i)=>{K("setItem",i,2);let l=v(i[0]),S=v(i[1]),m=n.get(l);if(m===S)return;if(s+I(l,S)-(m===void 0?0:I(l,m))>D)throw t(l);u(l,S),r?.set(l,S)},d=(...i)=>{K("removeItem",i,1);let l=v(i[0]);n.has(l)&&(E(l),r?.set(l,null))},f=()=>{n.size!==0&&(n.clear(),s=0,c=null,r?.clear())},R=(...i)=>{K("key",i,1);let l=Number(i[0])>>>0;return c??(c=[...n.keys()]),c[l]??null},M=Object.create(Object.prototype,{getItem:{value:p,enumerable:!0,configurable:!0,writable:!0},setItem:{value:_,enumerable:!0,configurable:!0,writable:!0},removeItem:{value:d,enumerable:!0,configurable:!0,writable:!0},clear:{value:f,enumerable:!0,configurable:!0,writable:!0},key:{value:R,enumerable:!0,configurable:!0,writable:!0},length:{get:()=>n.size,enumerable:!0,configurable:!0},[Symbol.toStringTag]:{value:"Storage",configurable:!0}}),T=Object.create(M),g=i=>typeof i=="string"&&n.has(i)&&!(i in T);return{storage:new Proxy(T,{get:(i,l,S)=>g(l)?n.get(l):Reflect.get(i,l,S),set:(i,l,S)=>typeof l!="string"?Reflect.set(i,l,S):(_(l,S),!0),has:(i,l)=>typeof l=="string"&&n.has(l)||Reflect.has(i,l),deleteProperty:(i,l)=>g(l)?(d(l),!0):Reflect.deleteProperty(i,l),ownKeys:i=>[...[...n.keys()].filter(l=>!(l in i)),...Reflect.ownKeys(i)],getOwnPropertyDescriptor:(i,l)=>g(l)?{value:n.get(l),writable:!0,enumerable:!0,configurable:!0}:Reflect.getOwnPropertyDescriptor(i,l),defineProperty:(i,l,S)=>typeof l!="string"?Reflect.defineProperty(i,l,S):"get"in S||"set"in S?!1:(_(l,S.value),!0),preventExtensions:()=>!1}),apply:(i,l)=>{i&&(n.clear(),s=0,c=null);for(let[S,m]of l)m===null?E(S):u(S,m)}}},q=(e,t,r)=>{let n=e.DOMException??globalThis.DOMException,s=e.queueMicrotask?.bind(e)??(_=>void Promise.resolve().then(_)),c=_=>new n(`Failed to execute \'setItem\' on \'Storage\': Setting the value of \'${_}\' exceeded the quota.`,"QuotaExceededError"),u=null;if(t?.persist){let _=new Map,d=!1,f=!1,R=()=>{f=!1;let T=[..._],g=d;_=new Map,d=!1;for(let L of nt(g,T))r(L)},M=()=>{f||(f=!0,s(R))};u={set:(T,g)=>{_.delete(T),_.set(T,g),M()},clear:()=>{_.clear(),d=!0,M()}}}let E=he(t?.items??[],c,u),p=he([],c,null);for(let[_,d]of[["localStorage",E],["sessionStorage",p]])try{Object.defineProperty(e,_,{value:d.storage,configurable:!0,enumerable:!0,writable:!1})}catch{}return{sync:(_,d)=>E.apply(_,d)}};var ot=(e,t,r)=>{if(e===void 0)return;let n=G({dc:C,type:"set-tokens",artboardId:t,nonce:r,vars:e});return n?.type==="set-tokens"?n.vars:void 0},ye=e=>{if(typeof e!="object"||e===null)return null;let t=e,{artboardId:r,nonce:n,file:s,mode:c,scroll:u}=t;if(typeof r!="string"||r.length===0||r.length>100||typeof n!="string"||n.length===0||n.length>64||typeof s!="string"||c!=="edit"&&c!=="play"||typeof u!="object"||u===null)return null;let{x:E,y:p}=u;if(typeof E!="number"||typeof p!="number"||!Number.isFinite(E)||!Number.isFinite(p))return null;let _=ot(t.tokens,r,n),d=Re(t.storage);return{artboardId:r,file:s,mode:c,scroll:{x:E,y:p},nonce:n,..._?{tokens:_}:{},...d?{storage:d}:{}}};var Ie="https://design.invalid",J=e=>{try{return decodeURIComponent(e)}catch{return e}},be=(e,t)=>{let r=e.trim();if(r==="")return{kind:"blocked",reason:"empty link"};if(r.startsWith("#"))return{kind:"fragment",id:J(r.slice(1))};let n;try{n=new URL(r,`${Ie}/${t}`)}catch{return{kind:"blocked",reason:"malformed link"}}if(n.origin===Ie){let s=J(n.pathname.replace(/^\\/+/,""));return s===t||s===""?n.hash?{kind:"fragment",id:J(n.hash.slice(1))}:{kind:"blocked",reason:"same page"}:/\\.html?$/i.test(s)?s.length>2e3||n.hash.length>2e3?{kind:"blocked",reason:"link too long"}:{kind:"navigate",href:s,hash:n.hash}:{kind:"blocked",reason:"not a page of this design"}}return(n.protocol==="https:"||n.protocol==="http:")&&n.href.length<=2e3?{kind:"external",url:n.href}:{kind:"blocked",reason:`${n.protocol} links do not open from a design`}},Oe=e=>ne.test(e)?{kind:"navigate",href:`screens/${e}.html`,hash:""}:{kind:"blocked",reason:"unknown screen id"};var st=16,lt=5,ct=300,it=e=>e instanceof Element?!!e.closest(\'input, textarea, select, [contenteditable=""], [contenteditable="true"]\'):!1,at=e=>{let t=e.mode,r=!1,n=window.parent,s=n!==window,c=o=>{n.postMessage({...o,dc:C,artboardId:e.artboardId,nonce:e.nonce},"*")},u=q(window,s?e.storage:void 0,o=>c({type:"storage-batch",...o})),E=[],p=o=>{let a=document.documentElement.style,A=new Set(o.map(x=>x.name));for(let x of E)A.has(x)||a.removeProperty(x);for(let x of o)a.setProperty(x.name,x.value);E=[...A]};if(e.tokens&&p(e.tokens),!s)return;let _=()=>{let o=document.documentElement,a=document.body;return{docWidth:Math.max(o.scrollWidth,a?a.scrollWidth:0),docHeight:Math.max(o.scrollHeight,a?a.scrollHeight:0)}},d=o=>{let a=o.getBoundingClientRect();return{x:a.left+window.scrollX,y:a.top+window.scrollY,w:Math.max(0,a.width),h:Math.max(0,a.height)}},f=(o,a)=>{let A=document.elementFromPoint(o,a);return A&&A!==document.documentElement&&A!==document.body&&!A.hasAttribute("data-dc-overlay")?A:null},R=o=>{let a=o.closest("[data-dc-entry]")?.getAttribute("data-dc-entry")??null;return a!==null&&F(a)?a:null},M=o=>({entry:R(o),selector:Ae(o,document),text:xe(o),html:ge(o),rect:d(o),tag:h(o).slice(0,64)||"element"}),T=null,g=o=>{let a=null;if(o)try{a=document.querySelector(o)}catch{a=null}if(!a){T?.remove(),T=null;return}T||(T=document.createElement("div"),T.setAttribute("data-dc-overlay",""),T.setAttribute("aria-hidden","true"));let A=d(a);T.setAttribute("style",`position:absolute;left:${A.x}px;top:${A.y}px;width:${A.w}px;height:${A.h}px;outline:2px solid Highlight;outline-offset:1px;pointer-events:none;z-index:2147483647;margin:0;padding:0;border:0;background:transparent;`),T.isConnected||document.documentElement.append(T)},L=o=>{switch(o.type){case"init-ack":r=!0;return;case"set-mode":t=o.mode;return;case"hit-test":{let a=f(o.x,o.y);c({type:"hit",x:o.x,y:o.y,element:a?M(a):null});return}case"edit-probe":{let a=f(o.x,o.y),A=a?Me(a,document):null,x=a&&A?{...A,dir:getComputedStyle(a).direction==="rtl"?"rtl":"ltr",rect:d(a)}:null;c({type:"edit-probe-result",x:o.x,y:o.y,probe:x});return}case"set-tokens":p(o.vars);return;case"storage-sync":u.sync(o.clear,o.changes);return;case"resolve-anchors":{let a=o.anchors.map(A=>{let x=fe(document,A);return{id:A.id,found:x.found,exact:x.exact,rect:x.element?d(x.element):null}});c({type:"anchors",results:a});return}case"scroll-by":window.scrollBy(o.dx,o.dy);return;case"scroll-to":window.scrollTo(o.x,o.y);return;case"highlight":g(o.selector);return}};window.addEventListener("message",o=>{if(o.source!==n)return;let a=G(o.data);!a||a.artboardId!==e.artboardId||a.nonce!==e.nonce||L(a)});let i=()=>c({type:"ready",..._(),title:document.title.slice(0,200)}),l=null,S="",m=()=>{l===null&&(l=setTimeout(()=>{l=null;let o=_(),a=`${o.docWidth}x${o.docHeight}`;a!==S&&(S=a,c({type:"size",...o}))},100))},P=!1;window.addEventListener("scroll",()=>{P||(P=!0,requestAnimationFrame(()=>{P=!1,c({type:"scroll",x:window.scrollX,y:window.scrollY})}))},{passive:!0});let ee=()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),i();let o=0,a=setInterval(()=>{o+=1,r||o>lt?clearInterval(a):i()},ct);if(typeof ResizeObserver=="function"){let A=new ResizeObserver(m);A.observe(document.documentElement),document.body&&A.observe(document.body)}typeof MutationObserver=="function"&&new MutationObserver(m).observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,characterData:!0}),m()};document.readyState==="loading"?document.addEventListener("DOMContentLoaded",ee,{once:!0}):ee(),window.addEventListener("load",()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),m()});let te=o=>{switch(o.kind){case"fragment":{if(o.id===""){window.scrollTo(0,0);return}(document.getElementById(o.id)??document.getElementsByName(o.id)[0]??null)?.scrollIntoView();return}case"navigate":c({type:"navigate",href:o.href,hash:o.hash});return;case"external":c({type:"open-external",url:o.url});return;case"blocked":return}};document.addEventListener("click",o=>{let A=(o.target instanceof Element?o.target:null)?.closest("a[href], area[href], [data-dc-goto]")??null;if(!A)return;o.preventDefault();let x=A.getAttribute("data-dc-goto");if(x!==null){te(Oe(x));return}te(be(A.getAttribute("href")??"",e.file))},!0),document.addEventListener("submit",o=>o.preventDefault(),!0),window.addEventListener("wheel",o=>{let a=o.ctrlKey||o.metaKey;if(!a&&t!=="edit")return;o.preventDefault();let A=o.deltaMode===1?st:o.deltaMode===2?window.innerHeight:1;c({type:"wheel",deltaX:o.deltaX*A,deltaY:o.deltaY*A,x:o.clientX,y:o.clientY,ctrl:a})},{passive:!1,capture:!0}),window.addEventListener("keydown",o=>{it(o.target)||ue.includes(o.key)&&c({type:"key",key:o.key,ctrl:o.ctrlKey,meta:o.metaKey,shift:o.shiftKey})},!0)},Ne=ye(window.__DC);Ne?at(Ne):q(window,void 0,()=>{});})();\n' : "";
   var newNonce = () => {
     const bytes = new Uint8Array(12);
     globalThis.crypto.getRandomValues(bytes);
@@ -11047,8 +12581,9 @@ ${bridge}
         error = null;
         setState("loading");
         try {
-          const saved = version === null ? slotStorage(options.slug) : void 0;
-          const [rendered] = await Promise.all([client.loadRender(options.slug, screenId, version), saved?.ready]);
+          const saved = version === null && !options.loadDoc ? slotStorage(options.slug) : void 0;
+          const fetched = options.loadDoc ? options.loadDoc(screenId, version) : client.loadRender(options.slug, screenId, version);
+          const [rendered] = await Promise.all([fetched, saved?.ready]);
           if (mine !== token) return;
           meta = rendered.meta;
           drop();
@@ -11108,8 +12643,8 @@ ${bridge}
     const directionOf = (board) => {
       const id = board.art.screen?.id;
       if (id === void 0) return null;
-      const row = plan.rows.get(id) ?? plan.rows.get(plan.memberOf.get(id) ?? "");
-      return row === void 0 ? null : { row, current: row.root.id === id };
+      const row2 = plan.rows.get(id) ?? plan.rows.get(plan.memberOf.get(id) ?? "");
+      return row2 === void 0 ? null : { row: row2, current: row2.root.id === id };
     };
     const isFirstOfRow = (board) => {
       const id = board.art.screen?.id;
@@ -11132,9 +12667,9 @@ ${bridge}
       });
     };
     const pressKeep = (board) => {
-      const row = directionOf(board)?.row;
+      const row2 = directionOf(board)?.row;
       const keep = board.art.screen?.id;
-      if (row !== void 0 && keep !== void 0 && !ctx.disposed && ctx.screensBusy === null) options.onKeepDirection?.({ of: row.root.id, keep });
+      if (row2 !== void 0 && keep !== void 0 && !ctx.disposed && ctx.screensBusy === null) options.onKeepDirection?.({ of: row2.root.id, keep });
     };
     const openKeepMenu = (board) => {
       const state = keepStateOf(board);
@@ -11160,8 +12695,8 @@ ${bridge}
       board.label.hidden = width < 32 || crowded;
     };
     const placeHead = (rootId, head) => {
-      const row = plan.rows.get(rootId);
-      const current = row === void 0 ? void 0 : boards.get(artboardIdOf(rootId, row.viewport.id));
+      const row2 = plan.rows.get(rootId);
+      const current = row2 === void 0 ? void 0 : boards.get(artboardIdOf(rootId, row2.viewport.id));
       if (current === void 0) {
         head.root.hidden = true;
         return;
@@ -11253,9 +12788,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       }
       paintLabelMenu(board);
     };
-    const paintHeadMenu = (head, row) => {
+    const paintHeadMenu = (head, row2) => {
       head.menu.hidden = !(ctx.detail.design.kind === "canvas" && ctx.mode === "edit");
-      const name = `Actions for screen ${row.root.title}`;
+      const name = `Actions for screen ${row2.root.title}`;
       head.menu.setAttribute("aria-label", name);
       head.menu.title = name;
       if (ctx.screensBusy !== null) head.menu.setAttribute("aria-disabled", "true");
@@ -11482,12 +13017,12 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       ctx.labels.append(root);
       return { root, title: title2, selectHost, select, menu };
     };
-    const paintHead = (head, row) => {
-      head.title.textContent = rowTitle(row.root.title, row.members.length);
+    const paintHead = (head, row2) => {
+      head.title.textContent = rowTitle(row2.root.title, row2.members.length);
       head.title.title = head.title.textContent;
-      head.selectHost.hidden = row.options.length < 2;
-      head.select.update({ value: row.viewport.id, options: row.options.map((viewport) => ({ id: viewport.id, label: viewport.label })) });
-      paintHeadMenu(head, row);
+      head.selectHost.hidden = row2.options.length < 2;
+      head.select.update({ value: row2.viewport.id, options: row2.options.map((viewport) => ({ id: viewport.id, label: viewport.label })) });
+      paintHeadMenu(head, row2);
     };
     const syncHeads = () => {
       for (const [rootId, head] of headEls) {
@@ -11496,13 +13031,13 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         head.root.remove();
         headEls.delete(rootId);
       }
-      for (const row of plan.rows.values()) {
-        let head = headEls.get(row.root.id);
+      for (const row2 of plan.rows.values()) {
+        let head = headEls.get(row2.root.id);
         if (head === void 0) {
-          head = makeHead(row.root.id);
-          headEls.set(row.root.id, head);
+          head = makeHead(row2.root.id);
+          headEls.set(row2.root.id, head);
         }
-        paintHead(head, row);
+        paintHead(head, row2);
       }
     };
     const rebuild = () => {
@@ -11908,11 +13443,11 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       mountBadge(badgeHost, { label: statusLabel(status), tone: status === "open" ? "primary" : status === "sent" ? "info" : "neutral" });
     };
     paintBadge();
-    const guard = async (button2, action) => {
+    const guard = async (button2, action2) => {
       button2.set({ loading: true });
       failure.hidden = true;
       try {
-        await action();
+        await action2();
       } catch (error) {
         failure.textContent = errorText2(error);
         failure.hidden = false;
@@ -12222,14 +13757,14 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const setTool = () => {
       surface.dataset.tool = spaceDown || panTool ? "pan" : "none";
     };
-    const run = (action) => {
-      switch (action.type) {
+    const run = (action2) => {
+      switch (action2.type) {
         case "escape":
           if (!popovers.current()) return false;
           popovers.close();
           return true;
         case "zoom":
-          camera.zoomAtCentre(action.factor);
+          camera.zoomAtCentre(action2.factor);
           return true;
         case "zoom-reset":
           camera.zoomReset();
@@ -12238,7 +13773,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           camera.fit();
           return true;
         case "pan":
-          camera.set(panBy(camera.get(), action.dx, action.dy), true);
+          camera.set(panBy(camera.get(), action2.dx, action2.dy), true);
           return true;
         case "toggle-pan-tool":
           panTool = !panTool;
@@ -12253,10 +13788,10 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       }
     };
     const shortcut = (key, shift) => {
-      const action = shortcutAction({ key, shift, pageMode });
-      if (!action) return false;
-      const used = run(action);
-      if (used && action.type !== "escape") setTool();
+      const action2 = shortcutAction({ key, shift, pageMode });
+      if (!action2) return false;
+      const used = run(action2);
+      if (used && action2.type !== "escape") setTool();
       return used;
     };
     const readyPageBoard = () => {
@@ -12266,11 +13801,11 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
     const pageKey = (event) => {
       const board = readyPageBoard();
-      const action = pageKeyAction({ key: event.key, shift: event.shiftKey, frameHeight: board?.art.rect.h ?? 0 });
-      if (!action) return false;
-      if (action.type === "escape") return shortcut("Escape", false);
+      const action2 = pageKeyAction({ key: event.key, shift: event.shiftKey, frameHeight: board?.art.rect.h ?? 0 });
+      if (!action2) return false;
+      if (action2.type === "escape") return shortcut("Escape", false);
       if (!board) return false;
-      board.main.post(action.type === "scroll-by" ? { type: "scroll-by", dx: action.dx, dy: action.dy } : { type: "scroll-to", x: action.x, y: action.y });
+      board.main.post(action2.type === "scroll-by" ? { type: "scroll-by", dx: action2.dx, dy: action2.dy } : { type: "scroll-to", x: action2.x, y: action2.y });
       return true;
     };
     scope.listen(surface, "keydown", (event) => {
@@ -12285,10 +13820,10 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         if (pageKey(event)) event.preventDefault();
         return;
       }
-      const action = wallKeyAction({ key: event.key, code: event.code, shift: event.shiftKey, pageMode });
-      if (!action) return;
-      const handled = run(action);
-      if (handled && (action.type === "space-down" || action.type === "zoom")) setTool();
+      const action2 = wallKeyAction({ key: event.key, code: event.code, shift: event.shiftKey, pageMode });
+      if (!action2) return;
+      const handled = run(action2);
+      if (handled && (action2.type === "space-down" || action2.type === "zoom")) setTool();
       if (handled) event.preventDefault();
     });
     scope.listen(surface, "keyup", (event) => {
@@ -12329,15 +13864,15 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       surface.focus({ preventScroll: true });
       const at = ctx.local(event);
       const board = boards.at(at);
-      const action = pointerDownAction({ pageMode, button: event.button, spaceDown, panTool, onBoard: board !== null, mode: ctx.mode, readOnly: ctx.readOnly() });
-      if (action === "ignore") return;
+      const action2 = pointerDownAction({ pageMode, button: event.button, spaceDown, panTool, onBoard: board !== null, mode: ctx.mode, readOnly: ctx.readOnly() });
+      if (action2 === "ignore") return;
       if (popovers.current()) popovers.close();
-      if (action === "pan") {
+      if (action2 === "pan") {
         panning = { id: event.pointerId, last: at };
         surface.setPointerCapture(event.pointerId);
         surface.dataset.panning = "true";
         event.preventDefault();
-      } else downAt = action === "press" ? { point: at, board } : null;
+      } else downAt = action2 === "press" ? { point: at, board } : null;
     });
     scope.listen(surface, "pointermove", (event) => {
       if (deps.reorder.active()) {
@@ -12541,40 +14076,40 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         placePin(pin, point);
         if (inView) spots.push({ id: comment.id, x: point.x, y: point.y });
       }
-      for (const group of clusterPins(spots, scale, ctx.pinSize())) {
-        if (group.ids.length === 1) continue;
-        const members = spots.filter((spot) => group.ids.includes(spot.id));
+      for (const group2 of clusterPins(spots, scale, ctx.pinSize())) {
+        if (group2.ids.length === 1) continue;
+        const members = spots.filter((spot) => group2.ids.includes(spot.id));
         if (scale >= PIN_FAN_SCALE || ctx.pageMode) {
-          for (const spot of fanOut(group, scale, ctx.pinSize())) {
+          for (const spot of fanOut(group2, scale, ctx.pinSize())) {
             const pin = board.pins.get(spot.id);
             if (pin) placePin(pin, spot);
           }
           continue;
         }
-        for (const id of group.ids) {
+        for (const id of group2.ids) {
           const pin = board.pins.get(id);
           if (pin) pin.hidden = true;
         }
-        const labels = group.ids.map((id) => nums.get(id) ?? 0).join(", ");
-        const statuses = new Set(group.ids.map((id) => ctx.comments().find((comment) => comment.id === id)?.status));
+        const labels = group2.ids.map((id) => nums.get(id) ?? 0).join(", ");
+        const statuses = new Set(group2.ids.map((id) => ctx.comments().find((comment) => comment.id === id)?.status));
         const cluster = h(
           "button",
           {
             type: "button",
             class: "dc-pin dc-pin-cluster",
             "data-status": statuses.has("open") ? "open" : statuses.has("sent") ? "sent" : "resolved",
-            "aria-label": `${group.ids.length} comments here (${labels}). Zoom in to see them.`,
+            "aria-label": `${group2.ids.length} comments here (${labels}). Zoom in to see them.`,
             title: `Comments ${labels}. Click to zoom in`
           },
-          String(group.ids.length)
+          String(group2.ids.length)
         );
         cluster.tabIndex = show ? 0 : -1;
         cluster.addEventListener("pointerdown", (event) => event.stopPropagation());
         cluster.addEventListener("click", (event) => {
           event.stopPropagation();
-          openCluster(board, members, group);
+          openCluster(board, members, group2);
         });
-        placePin(cluster, group);
+        placePin(cluster, group2);
         board.overlay.append(cluster);
         board.clusters.push(cluster);
       }
@@ -12630,7 +14165,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       if (!drop || target === null || target.noop) return;
       const order = moveRowToGap(
         ctx.screens().map((screen) => screen.id),
-        deps.boards.rows().map((row) => row.id),
+        deps.boards.rows().map((row2) => row2.id),
         current.id,
         deps.boards.rowScreenIds(current.id),
         target.gap
@@ -13088,7 +14623,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         overlay: h("div", { class: "dc-stage-overlay" }),
         bottomDock: h("div", { class: "dc-bottom-dock" }),
         compactActions: h("div", { class: "dc-compact-actions" }),
-        tweaksSlot: h("span", { class: "dc-tweaks-slot" })
+        tweaksSlot: h("span", { class: "dc-tweaks-slot" }),
+        railTools: h("span", { class: "dc-rail-tools" })
       };
       let dockEl = null;
       const pageData = createPageData({ slug, wall: () => wall, dialogHost: options.actions.host, title: () => design().title, viewing: () => viewing !== null });
@@ -13247,11 +14783,26 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       };
       const ref = () => ({ slug, title: design().title, kind: design().kind, sessionId: design().sessionId });
       const rename2 = () => renameDialog(options.actions.host, ref());
-      const moreEntries = () => viewerMenuEntries({ compact, isPage, copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX, askForTweaks: design().tweaks.length === 0 && viewing === null, pageData: pageData.entry() });
+      const railTweaksLabel = () => {
+        if (!compact || !window.matchMedia(NARROW_RAIL_QUERY).matches) return null;
+        const button2 = slots2.compactActions.querySelector(".dc-tweaks-btn");
+        return button2 && !button2.hidden ? button2.getAttribute("aria-label") ?? "Tweaks" : null;
+      };
+      const moreEntries = () => viewerMenuEntries({
+        compact,
+        isPage,
+        copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX,
+        askForTweaks: design().tweaks.length === 0 && viewing === null,
+        railTweaks: railTweaksLabel(),
+        pageData: pageData.entry()
+      });
       const onMore = (id) => {
         switch (id) {
           case "chat":
             void continueInChat(slug);
+            return;
+          case "tweaks":
+            toggleDrawer("tweaks");
             return;
           case "ask-tweaks": {
             const bar = askBarFor(wall);
@@ -13335,7 +14886,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           { class: "dc-toolbar dc-toolbar-compact" },
           h("div", { class: "dc-toolbar-row" }, iconBtn({ icon: "back", label: "Back to designs", onClick: options.onBack }), titleText, slots2.compactActions, moreButton),
           // A page never pans or zooms, so its second row has no zoom group.
-          isPage ? h("div", { class: "dc-toolbar-row dc-toolbar-tools" }, viewportHost, commentMode.el) : h("div", { class: "dc-toolbar-row dc-toolbar-tools" }, modeHost, h("span", { class: "dc-spacer" }), zoomGroup)
+          isPage ? h("div", { class: "dc-toolbar-row dc-toolbar-tools" }, viewportHost, commentMode.el, slots2.railTools) : h("div", { class: "dc-toolbar-row dc-toolbar-tools" }, modeHost, slots2.railTools, zoomGroup)
         );
       } else if (isPage) {
         toolbar = h(
@@ -13641,9 +15192,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         actions: options.actions,
         scope: bscope
       };
-      const mountFeature = (name, mount9) => {
+      const mountFeature = (name, mount10) => {
         try {
-          const unmount = mount9(viewContext);
+          const unmount = mount10(viewContext);
           return () => {
             try {
               unmount();
@@ -13661,6 +15212,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         mountFeature("ask bar", mount),
         mountFeature("findability", mount6),
         mountFeature("checks badge", mount3),
+        mountFeature("design system", mount8),
         // After the build strip and the ask bar: it reads the strip's phase and hands the ask bar an element.
         mountFeature("edit text", mount5),
         // Also after the build strip (it reads the strip's phase for the menu's hint) and after Edit text (they share one undo slot).
@@ -13668,7 +15220,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         // Also after Edit text (one undo slot), and after the screens feature: both write through the same notices.
         mountFeature("directions", mount4),
         // After the build strip (its phase is the panel's agent-working hint), the ask bar (Send goes quiet while the panel is open) and Edit text (they share one undo slot).
-        mountFeature("tweaks", mount8),
+        mountFeature("tweaks", mount9),
         // Last: the notices it shows land after the ones the other features raise (their order is fixed by the notices region).
         mountFeature("saved page data", pageData.mount)
       ];
@@ -13739,6 +15291,5330 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
   };
 
+  // src/ui/model/new-system-model.ts
+  var SOURCES = [
+    { id: "code", label: "Project code", hint: "Read a project\u2019s colours, type and components. The project isn\u2019t changed." },
+    { id: "brand", label: "Brand files", hint: "Fonts, logos and brand documents you already have." },
+    { id: "description", label: "A description", hint: "Say what it should look like, or start from a style preset." }
+  ];
+  var systemNameProblem = (raw, existing) => {
+    const name = raw.normalize("NFKC").trim();
+    if (name === "") return "Give the design system a name.";
+    if (/[\u0000-\u001f\u007f-\u009f]/u.test(name)) return "A design system name can\u2019t contain line breaks or tabs.";
+    if (name.length > SYSTEM_NAME_MAX) return `Keep the name to ${SYSTEM_NAME_MAX} characters or fewer.`;
+    const taken = existing.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
+    return taken ? `You already have a system called ${taken.name}.` : null;
+  };
+  var KIND_BY_EXTENSION = {
+    woff2: { kind: "font", max: SYSTEM_FONT_MAX_BYTES, limit: "5 MB" },
+    woff: { kind: "font", max: SYSTEM_FONT_MAX_BYTES, limit: "5 MB" },
+    ttf: { kind: "font", max: SYSTEM_FONT_MAX_BYTES, limit: "5 MB" },
+    otf: { kind: "font", max: SYSTEM_FONT_MAX_BYTES, limit: "5 MB" },
+    svg: { kind: "logo", max: SYSTEM_IMAGE_MAX_BYTES, limit: "10 MB" },
+    png: { kind: "logo", max: SYSTEM_IMAGE_MAX_BYTES, limit: "10 MB" },
+    jpg: { kind: "logo", max: SYSTEM_IMAGE_MAX_BYTES, limit: "10 MB" },
+    jpeg: { kind: "logo", max: SYSTEM_IMAGE_MAX_BYTES, limit: "10 MB" },
+    webp: { kind: "logo", max: SYSTEM_IMAGE_MAX_BYTES, limit: "10 MB" },
+    pdf: { kind: "source", max: SYSTEM_DOCUMENT_MAX_BYTES, limit: "20 MB" },
+    md: { kind: "source", max: SYSTEM_DOCUMENT_MAX_BYTES, limit: "20 MB" },
+    txt: { kind: "source", max: SYSTEM_DOCUMENT_MAX_BYTES, limit: "20 MB" }
+  };
+  var BRAND_ACCEPT = Object.keys(KIND_BY_EXTENSION).map((extension) => `.${extension}`).join(",");
+  var BRAND_TYPES_LINE = "Fonts (woff2, woff, ttf, otf), logos (svg, png, jpg, webp) and documents (pdf, md, txt).";
+  var classifyBrandFile = (name, bytes) => {
+    const dot = name.lastIndexOf(".");
+    const rule = dot > 0 ? KIND_BY_EXTENSION[name.slice(dot + 1).toLowerCase()] : void 0;
+    if (!rule) return { ok: false, reason: `${name} isn\u2019t a file type design systems use.` };
+    if (bytes > rule.max) return { ok: false, reason: `${name} is too large (the limit is ${rule.limit}).` };
+    if (bytes === 0) return { ok: false, reason: `${name} is empty.` };
+    return { ok: true, kind: rule.kind };
+  };
+  var takeBrandFiles = (incoming, kept) => {
+    const added = [];
+    const refused = [];
+    let count = kept.length;
+    let bytes = kept.reduce((sum, file) => sum + file.bytes, 0);
+    for (const file of incoming) {
+      if (kept.some((entry) => entry.key === file.key) || added.some((entry) => entry.key === file.key)) continue;
+      const verdict = classifyBrandFile(file.name, file.bytes);
+      if (!verdict.ok) {
+        refused.push({ name: file.name, reason: verdict.reason });
+        continue;
+      }
+      if (count >= SYSTEM_FILES_MAX) {
+        refused.push({ name: file.name, reason: `${file.name} wasn\u2019t added: a design system holds up to ${SYSTEM_FILES_MAX} files.` });
+        continue;
+      }
+      if (bytes + file.bytes > SYSTEM_BYTES_MAX) {
+        refused.push({ name: file.name, reason: `${file.name} wasn\u2019t added: a design system holds up to ${Math.round(SYSTEM_BYTES_MAX / 1024 / 1024)} MB of files.` });
+        continue;
+      }
+      count += 1;
+      bytes += file.bytes;
+      added.push({ ...file, kind: verdict.kind });
+    }
+    return { added, refused };
+  };
+  var folderPathProblem = (raw) => {
+    const path = raw.trim();
+    if (path === "") return "Type the full path of the folder.";
+    if (!/^([A-Za-z]:[\\/]|\\\\|\/)/.test(path)) return "Use the full path of the folder, such as C:\\Brand or /Users/you/Brand.";
+    return null;
+  };
+  var scanSummarySentence = (summary) => {
+    const counts = summary.counts;
+    const parts = [
+      counts.colours > 0 ? plural(counts.colours, "colour") : null,
+      counts.typography > 0 ? plural(counts.typography, "type style") : null,
+      counts.spacing > 0 ? plural(counts.spacing, "spacing value") : null,
+      counts.radius > 0 ? `${plural(counts.radius, "corner radius", "corner radii")}` : null,
+      counts.shadows > 0 ? plural(counts.shadows, "shadow") : null,
+      counts.layers > 0 ? plural(counts.layers, "layer") : null,
+      counts.sizes + counts.other > 0 ? plural(counts.sizes + counts.other, "size") : null,
+      counts.fonts > 0 ? plural(counts.fonts, "font file") : null,
+      counts.logos > 0 ? plural(counts.logos, "logo file") : null
+    ].filter((part) => part !== null);
+    if (parts.length === 0) return null;
+    return `Found ${parts.join(", ")} in ${plural(summary.files.length, "file")}.`;
+  };
+  var SCAN_NOTHING_FOUND = "Design Chamber didn\u2019t find design tokens in this project. The agent can still read it and write the system.";
+  var SCAN_PARTIAL = "Scanned part of the project; it\u2019s large.";
+  var FONT_LICENCE_NOTE = "Check you\u2019re allowed to use these fonts in designs.";
+  var forAgentLine = (summary) => summary.forAgent.length === 0 ? null : `${plural(summary.forAgent.length, "file")} Design Chamber doesn\u2019t run. The agent will read ${summary.forAgent.length === 1 ? "it" : "them"}.`;
+  var skippedLine = (summary) => summary.skipped.length + summary.refused === 0 ? null : `${plural(summary.skipped.length + summary.refused, "file")} skipped (too large, secret or unreadable).`;
+  var draftProblems = (draft, existing) => {
+    const problems = [];
+    const name = systemNameProblem(draft.name, existing);
+    if (name !== null) problems.push({ field: "name", message: name });
+    if (draft.sources.code) {
+      if (draft.scan.state === "idle") problems.push({ field: "code", message: "Pick the project to read, or untick Project code." });
+      else if (draft.scan.state === "running") problems.push({ field: "code", message: "Wait for the scan to finish, or cancel it and untick Project code." });
+      else if (draft.scan.state === "failed") problems.push({ field: "code", message: "Pick a folder Design Chamber can read, or untick Project code." });
+    }
+    if (draft.sources.brand) {
+      if (draft.brand.files.length === 0 && draft.brand.folder.trim() === "") problems.push({ field: "brand", message: "Add brand files, or untick Brand files." });
+      else if (draft.brand.folder.trim() !== "") {
+        const folder = folderPathProblem(draft.brand.folder);
+        if (folder !== null) problems.push({ field: "brand", message: folder });
+      }
+    }
+    if (draft.sources.description && draft.description.length > DESCRIPTION_MAX) {
+      problems.push({ field: "description", message: `Keep the description to ${DESCRIPTION_MAX.toLocaleString("en-US")} characters or fewer.` });
+    } else if (draft.sources.description && draft.description.trim() === "" && draft.preset === "") {
+      problems.push({ field: "description", message: "Describe the look you want, pick a style preset, or untick A description." });
+    }
+    return problems;
+  };
+  var DESCRIPTION_MAX = 2e3;
+  var DESCRIPTION_PLACEHOLDER = "e.g. Calm and confident for a bookkeeping app. Deep green and warm neutrals, a serif for headings, generous space.";
+  var MAKE_LABEL = "Make design system";
+  var SHEET_SUBTITLE = "Starts as a draft you review. Your chat agent writes the notes and components.";
+  var resultClause = (refused, sent) => {
+    const files = refused === 1 ? "1 file wasn\u2019t added" : `${refused} files weren\u2019t added`;
+    if (refused > 0 && !sent) return `${files} and the agent wasn\u2019t asked`;
+    if (refused > 0) return files;
+    return "the agent wasn\u2019t asked";
+  };
+  var resultHeadline = (refused, sent) => {
+    const clause = resultClause(refused, sent);
+    return `${clause.charAt(0).toUpperCase()}${clause.slice(1)}.`;
+  };
+  var resultToast = (name, refused, sent) => `${name} is made, but ${resultClause(refused, sent)}.`;
+
+  // src/ui/model/systems-model.ts
+  var SYSTEM_ROW_BADGES_MAX = 2;
+  var pinnedLabel = (directories, label) => {
+    const [only] = directories;
+    return directories.length === 1 && only !== void 0 ? `Pinned for ${label(only)}` : `Pinned for ${plural(directories.length, "project")}`;
+  };
+  var LIVING_PAGE_BADGE = {
+    "out-of-date": { label: "Living page out of date", tone: "warning" },
+    changed: { label: "Living page changed", tone: "warning" },
+    unsafe: { label: "Living page can\u2019t be checked", tone: "error" }
+  };
+  var systemRowBadges = (summary, label) => {
+    const all = [];
+    if (summary.building) all.push({ id: "building", label: "Being built", tone: "info" });
+    if (summary.changesToReview) all.push({ id: "changes", label: "Changes to review", tone: "warning" });
+    if (summary.isDefault) all.push({ id: "default", label: "Default", tone: "neutral" });
+    if (summary.pinnedFor.length > 0) all.push({ id: "pinned", label: pinnedLabel(summary.pinnedFor, label), tone: "neutral" });
+    const living = summary.livingPage === null ? void 0 : LIVING_PAGE_BADGE[summary.livingPage];
+    if (living) all.push({ id: "living", ...living });
+    return { shown: all.slice(0, SYSTEM_ROW_BADGES_MAX), hidden: all.slice(SYSTEM_ROW_BADGES_MAX) };
+  };
+  var sourceLine = (sources, label) => [
+    ...sources.code ? [`From ${label(sources.code.directory)}`] : [],
+    ...sources.brand > 0 ? ["From brand files"] : [],
+    ...sources.description ? ["Described"] : []
+  ];
+  var usedByLine = (count) => count === 0 ? "Not used by a design yet" : `Used by ${plural(count, "design")}`;
+  var homeLine = (summary) => summary.home === "internal" ? { label: "In Design Chamber", title: "Kept in your Designs folder" } : { label: `Repo \xB7 ${summary.home.repo}`, title: summary.home.directory };
+  var sharedRepoNotice = (summary) => summary.home !== "internal" && summary.sharedRepoWith !== null ? `${summary.home.repo} already has a repo-backed system (${summary.sharedRepoWith}).` : null;
+  var systemRow = (summary, context) => {
+    const badges = systemRowBadges(summary, context.label);
+    const home = homeLine(summary);
+    const updated = relativeTime(summary.updated, context.nowMs, context.locale);
+    const meta = [...sourceLine(summary.sources, context.label), usedByLine(summary.usedBy), ...updated === "" ? [] : [updated]];
+    const status = summary.status === "ready" ? { label: "Ready", tone: "success" } : { label: "Draft", tone: "info" };
+    const notice = sharedRepoNotice(summary);
+    const hiddenLabels = badges.hidden.map((badge) => badge.label);
+    const spoken = [summary.name, status.label, home.label, ...badges.shown.map((badge) => badge.label), ...hiddenLabels];
+    return {
+      id: summary.id,
+      name: summary.name,
+      unreadable: summary.unreadable,
+      status,
+      home,
+      badges: badges.shown,
+      more: badges.hidden.length > 0 ? { text: `+${badges.hidden.length}`, title: hiddenLabels.join(", ") } : null,
+      notice,
+      meta,
+      ariaLabel: summary.unreadable !== null ? `${summary.name}, can\u2019t be read` : `${spoken.join(", ")}. ${meta.join(", ")}.`
+    };
+  };
+  var systemsListState = (load) => {
+    if (load.systems === null) return load.status === "error" ? "error" : "loading";
+    return load.systems.length === 0 ? "empty" : "ready";
+  };
+  var SERVICE_DOWN_CODES = /* @__PURE__ */ new Set(["NO_SERVICE", "SERVICE_FAILED", "HOST_TIMEOUT", "REQUEST_FAILED", "DISABLED", "HOST_UNAVAILABLE"]);
+  var isServiceDownCode = (code) => SERVICE_DOWN_CODES.has(code);
+  var loadFailure = (error) => {
+    const message = error?.message ?? "Try again in a moment.";
+    return error !== null && isServiceDownCode(error.code) ? { title: "Design Chamber isn\u2019t running", body: message } : { title: "Your design systems didn\u2019t load", body: message };
+  };
+  var deleteSentence = (usedBy) => usedBy === 0 ? "It moves to the trash." : usedBy === 1 ? "It moves to the trash. The design that uses it keeps its copy." : `It moves to the trash. The ${usedBy} designs that use it keep their copy.`;
+  var EMPTY_TITLE = "No design systems yet";
+  var EMPTY_BODY = "Make one from a project\u2019s code, from brand files, or by describing it. Designs can then start from it.";
+  var atSystemsCap = (total, max) => total >= max ? `You have ${max} design systems, the most Design Chamber keeps. Delete one to make room.` : null;
+  var systemMenu = (summary) => {
+    const readable = summary.unreadable === null;
+    return [
+      ...readable ? [{ id: "open", label: "Open" }] : [],
+      ...readable ? summary.isDefault ? [{ id: "remove-default", label: "Remove as default" }] : [{ id: "make-default", label: "Make default", ...summary.status === "draft" ? { disabled: true, reason: "Mark it ready first." } : {} }] : [],
+      { id: "reveal", label: "Reveal in folder" },
+      ...readable ? [{ id: "rename", label: "Rename" }] : [],
+      { separator: true },
+      { id: "delete", label: "Delete\u2026", destructive: true }
+    ];
+  };
+
+  // src/ui/model/system-build-model.ts
+  var BUILD_POLL_FAILURES_MAX = 3;
+  var BUILD_CHIP_TITLE = "New design system";
+  var startBuildChip = () => ({ phase: "loading", failures: 0 });
+  var afterAnswer = (model, answer) => {
+    if (model.phase === "made" || model.phase === "expired") return model;
+    if (answer.state === "waiting") return { phase: "waiting", project: answer.project?.label ?? null, failures: 0 };
+    if (answer.state === "made") return { phase: "made", id: answer.id, name: answer.name, probe: "checking" };
+    return { phase: "expired" };
+  };
+  var afterFailure = (model, error) => {
+    if (model.phase === "made" || model.phase === "expired") return model;
+    if (isServiceDownCode(error.code)) return { phase: "service-down", message: error.message };
+    const failures = (model.phase === "loading" || model.phase === "waiting" ? model.failures : 0) + 1;
+    if (failures >= BUILD_POLL_FAILURES_MAX) return { phase: "failed", message: error.message };
+    return model.phase === "waiting" ? { ...model, failures } : { phase: "loading", failures };
+  };
+  var afterProbe = (model, probe) => model.phase === "made" ? { ...model, probe } : model;
+  var keepsPolling = (model) => model.phase === "loading" || model.phase === "waiting";
+  var CONTINUE = { id: "continue-chat", label: "Continue in chat", primary: true };
+  var TRY_AGAIN = { id: "try-again", label: "Try again", primary: true };
+  var WAITING_BODY = "The agent is interviewing you in chat. The design system shows here once it\u2019s started.";
+  var STOPPED_BODY = "This build was stopped. Its draft is in the Designs folder\u2019s trash.";
+  var EXPIRED_BODY = "This build was started more than a week ago. Run /design-system again.";
+  var chipView = (model) => {
+    const base = { title: BUILD_CHIP_TITLE, tone: "neutral", spinner: null, body: null, note: null, problem: null, actions: [] };
+    switch (model.phase) {
+      case "loading":
+        return { ...base, state: "loading", spinner: "Checking the build\u2026" };
+      case "waiting":
+        return { ...base, state: "waiting", tone: "info", body: WAITING_BODY, note: model.project === null ? null : `Project: ${model.project}`, actions: [CONTINUE] };
+      case "made":
+        if (model.probe === "checking" || model.probe === "present") return { ...base, state: "opening", title: model.name, tone: "info", spinner: `Opening ${model.name}\u2026` };
+        if (model.probe === "gone") return { ...base, state: "stopped", tone: "warning", body: STOPPED_BODY, actions: [CONTINUE] };
+        return {
+          ...base,
+          state: "made",
+          title: model.name,
+          tone: "info",
+          body: `${model.name} was started, but Design Chamber couldn\u2019t open it just now.`,
+          actions: [
+            { id: "open-system", label: "Open system", primary: true },
+            { ...CONTINUE, primary: false }
+          ]
+        };
+      case "expired":
+        return { ...base, state: "expired", body: EXPIRED_BODY };
+      case "service-down":
+        return { ...base, state: "service-down", tone: "error", problem: { title: "Design Chamber isn\u2019t running", body: model.message }, actions: [TRY_AGAIN] };
+      case "failed":
+        return { ...base, state: "failed", tone: "error", problem: { title: "Couldn\u2019t check the build", body: model.message }, actions: [TRY_AGAIN] };
+    }
+  };
+  var BUILD_DESTINATION_LABEL = { "current-chat": "This chat", "new-chat": "New chat" };
+  var buildSetup = (context) => ({
+    offered: [
+      { id: "current-chat", label: BUILD_DESTINATION_LABEL["current-chat"] },
+      ...context.hasProject ? [{ id: "new-chat", label: BUILD_DESTINATION_LABEL["new-chat"] }] : []
+    ],
+    initial: context.hasSession || !context.hasProject ? "current-chat" : "new-chat"
+  });
+  var destinationHint = (destination, context) => {
+    if (destination === "current-chat") {
+      return context.hasSession ? { text: "The agent interviews you in the chat you have open.", blocked: false } : { text: "No chat is open right now. Open one first.", blocked: true };
+    }
+    return { text: "Starts a chat in this project.", blocked: false };
+  };
+  var briefProblem = (brief) => brief.length > BRIEF_MAX ? `Keep it under ${BRIEF_MAX} characters.` : null;
+  var startedText = (result) => {
+    switch (result.outcome) {
+      case "sent":
+        return "Asked the agent to build a design system. Answer its questions in the chat.";
+      case "composed":
+        return "The agent is busy, so the request is waiting in the chat composer.";
+      case "new-session":
+        return "Started a chat for the agent. Answer its questions there.";
+    }
+  };
+  var NOT_SENT_TITLE = "Couldn\u2019t ask the agent";
+  var NOT_SENT_BODY = "The request didn\u2019t reach a chat. Your words are still here.";
+
+  // src/ui/systems/build-with-agent.ts
+  var BUILD_BUTTON_LABEL = "Build with the agent\u2026";
+  var BRIEF_ROWS = 3;
+  var openBuildWithAgent = (appHost, anchor) => {
+    const scope = createScope();
+    const context = () => ({ hasSession: host.session() !== null, hasProject: Boolean(host.snapshot()?.directory) });
+    const setup = buildSetup(context());
+    let destination = setup.initial;
+    let brief = "";
+    let unsent = null;
+    const popover = openPopover(appHost, anchor, { title: BUILD_BUTTON_LABEL.replace("\u2026", ""), onClose: () => scope.dispose() });
+    const briefHost = h("div");
+    const briefField = mountTextField(briefHost, {
+      label: "What is it for? (optional)",
+      value: brief,
+      multiline: true,
+      rows: BRIEF_ROWS,
+      placeholder: "A shop for hand-made candles, calm and warm",
+      onChange: (next) => {
+        brief = next;
+        unsent = null;
+        const error = briefProblem(next);
+        briefField.update({ value: next, error: error ?? void 0 });
+        paint();
+      }
+    });
+    scope.add(() => briefField.dispose());
+    const destHost = h("div", { class: "dc-field" });
+    const destLabel = h("span", { class: "oc-sdk-field-label" }, "Agent works in");
+    const tabsHost = h("div");
+    destHost.append(destLabel, tabsHost);
+    const tabs = mountTabs(tabsHost, {
+      items: setup.offered,
+      activeId: destination,
+      trackBackground: true,
+      onChange: (id) => {
+        destination = id === "new-chat" ? "new-chat" : "current-chat";
+        tabs.update({ activeId: destination });
+        unsent = null;
+        paint();
+      }
+    });
+    scope.add(() => tabs.dispose());
+    const hint = h("p", { class: "oc-sdk-field-note" });
+    destHost.append(hint);
+    const failure = h("div", { class: "dc-build-failure", role: "alert", hidden: true });
+    popover.body.append(h("div", { class: "dc-build-form" }, briefHost, destHost, failure));
+    const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => popover.close() });
+    const copy = btn({
+      label: "Copy request",
+      variant: "outline",
+      icon: "copy",
+      onClick: () => {
+        if (unsent === null) return;
+        void host.writeClipboard(unsent).then((ok) => toast(ok ? "success" : "error", ok ? "Request copied. Paste it into a chat." : "Couldn\u2019t reach the clipboard. Select the text and copy it by hand."));
+      }
+    });
+    const start = btn({ label: "Start", variant: "default", emphasis: "primary", onClick: () => void submit() });
+    copy.el.hidden = true;
+    popover.foot.append(h("span", { class: "dc-pop-actions" }, copy.el), h("span", { class: "dc-pop-actions" }, cancel.el, start.el));
+    const paint = () => {
+      const note = destinationHint(destination, context());
+      hint.textContent = note.text;
+      start.set({ disabled: note.blocked || briefProblem(brief) !== null });
+      if (unsent === null) {
+        failure.hidden = true;
+        failure.replaceChildren();
+        copy.el.hidden = true;
+        start.set({ label: "Start" });
+      }
+    };
+    const showNotSent = (text) => {
+      unsent = text;
+      failure.replaceChildren(h("strong", null, NOT_SENT_TITLE), h("span", null, ` ${NOT_SENT_BODY}`));
+      failure.hidden = false;
+      copy.el.hidden = false;
+      start.set({ label: "Try again", loading: false, disabled: false });
+      popover.reposition();
+    };
+    const submit = async () => {
+      start.set({ loading: true });
+      cancel.set({ disabled: true });
+      try {
+        const result = await flows.buildSystem({ brief, destination });
+        if (result.outcome === "not-sent") {
+          showNotSent(result.text);
+          return;
+        }
+        toast("success", startedText(result));
+        popover.close(false);
+      } catch (error) {
+        if (error instanceof FlowError) {
+          failure.replaceChildren(h("span", null, error.message));
+          failure.hidden = false;
+          popover.reposition();
+        } else toast("error", `Couldn\u2019t start the build. ${errorText2(error)}`);
+      } finally {
+        start.set({ loading: false });
+        cancel.set({ disabled: false });
+      }
+    };
+    paint();
+    popover.reposition();
+    briefHost.querySelector("textarea")?.focus();
+  };
+
+  // src/ui/systems/new-system-sheet.ts
+  var OTHER_FOLDER = "__other";
+  var SCAN_POLL_MS = 500;
+  var openNewSystemSheet = (hostEl, options = {}) => {
+    const scope = createScope();
+    let closed = false;
+    const sheet = openSheet(hostEl, {
+      title: "New design system",
+      variant: "dialog",
+      subtitle: SHEET_SUBTITLE,
+      onClose: () => {
+        closed = true;
+        cancelScan();
+        scope.dispose();
+      }
+    });
+    sheet.el.classList.add("dc-newsys");
+    const sources = { code: options.source === "code", brand: options.source === "brand", description: options.source === "description" || options.source === void 0 };
+    let name = "";
+    let nameTouched = false;
+    let destination = "new-chat";
+    let description = "";
+    let preset = "";
+    let scan = { state: "idle" };
+    const ticked = /* @__PURE__ */ new Set();
+    let projects = [];
+    let projectChoice = "";
+    let otherFolder = "";
+    let files = [];
+    const picked = /* @__PURE__ */ new Map();
+    let refused = [];
+    let brandFolder = "";
+    let folderOpen = false;
+    let making = false;
+    let attempted = false;
+    let problems = [];
+    const nameHost = h("div");
+    const nameField = mountTextField(nameHost, {
+      label: "Name",
+      value: name,
+      placeholder: "e.g. Acme",
+      onChange: (next) => {
+        name = next;
+        nameTouched = true;
+        nameField.update({ value: next });
+        if (attempted) paintProblems();
+      }
+    });
+    scope.add(() => nameField.dispose());
+    const checks = /* @__PURE__ */ new Map();
+    const panels = /* @__PURE__ */ new Map();
+    const problemLines = /* @__PURE__ */ new Map();
+    const sourceBlock = (id, body) => {
+      const entry = SOURCES.find((candidate) => candidate.id === id);
+      if (!entry) throw new Error(`Design Chamber: unknown source ${id}`);
+      const head = h("div", { class: "dc-newsys-head" });
+      const check = mountCheckbox(head, {
+        label: entry.label,
+        description: entry.hint,
+        checked: sources[id],
+        onChange: (checked) => {
+          sources[id] = checked;
+          paintSources();
+          if (id === "code" && checked) void startDefaultScan();
+          if (id === "code" && !checked) cancelScan();
+        }
+      });
+      checks.set(id, check);
+      scope.add(() => check.dispose());
+      const problem = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+      problemLines.set(id, problem);
+      const panel = h("div", { class: "dc-newsys-body" }, body, problem);
+      panels.set(id, panel);
+      return h("section", { class: "dc-newsys-source", "data-source": id }, head, panel);
+    };
+    const paintSources = () => {
+      for (const [id, panel] of panels) {
+        panel.hidden = !sources[id];
+        checks.get(id)?.update({ checked: sources[id] });
+      }
+      if (attempted) paintProblems();
+    };
+    const projectHost = h("div", { class: "dc-field" });
+    let projectSelect = null;
+    const otherHost = h("div", { class: "dc-newsys-other", hidden: true });
+    const otherId = nextId2("dc-newsys-folder");
+    const otherInput = h("input", { type: "text", id: otherId, class: "oc-sdk-input", placeholder: "C:\\Projects\\shop or /Users/you/shop", spellcheck: "false", autocomplete: "off" });
+    const otherScan = btn({ label: "Read this folder", variant: "outline", size: "sm", onClick: () => void scanFolder(otherFolder) });
+    otherHost.append(h("div", { class: "dc-field" }, h("label", { class: "oc-sdk-field-label", for: otherId }, "Project folder"), h("div", { class: "dc-newsys-row" }, otherInput, otherScan.el)));
+    otherInput.addEventListener("input", () => {
+      otherFolder = otherInput.value;
+    });
+    otherInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void scanFolder(otherFolder);
+      }
+    });
+    const scanHost = h("div", { class: "dc-newsys-scan", "aria-live": "polite" });
+    const codeBody = h("div", { class: "dc-newsys-stack" }, projectHost, otherHost, scanHost);
+    const projectOptions = () => [
+      ...projects.map((project) => ({ id: project.directory, label: project.name, hint: middlePath(project.directory, 28) })),
+      { id: OTHER_FOLDER, label: "Other folder\u2026" }
+    ];
+    const paintProject = () => {
+      projectSelect?.update({ options: projectOptions(), value: projectChoice === "" ? null : projectChoice });
+      otherHost.hidden = projectChoice !== OTHER_FOLDER;
+    };
+    projectSelect = mountSelect(projectHost, {
+      label: "Project",
+      value: null,
+      options: projectOptions(),
+      placeholder: "Choose a project",
+      onChange: (id) => {
+        projectChoice = id;
+        paintProject();
+        if (id === OTHER_FOLDER) {
+          otherInput.focus();
+          return;
+        }
+        void scanFolder(id);
+      }
+    });
+    scope.add(() => projectSelect?.dispose());
+    let scanTicket = 0;
+    let scanJob = null;
+    let scanTimer = null;
+    function cancelScan() {
+      scanTicket += 1;
+      if (scanTimer !== null) clearTimeout(scanTimer);
+      scanTimer = null;
+      const job = scanJob;
+      scanJob = null;
+      if (job !== null) {
+        client.call("DELETE /system-scans/:scanId", { params: { scanId: job } }).catch((error) => {
+          console.warn("Design Chamber: the scan could not be cancelled; the service ends it on its own", error);
+        });
+      }
+    }
+    const scanFolder = async (directory) => {
+      const folder = directory.trim();
+      if (folder === "") {
+        scan = { state: "failed", directory: "", message: "Type the full path of the folder to read." };
+        paintScan();
+        return;
+      }
+      cancelScan();
+      const mine = scanTicket;
+      scan = { state: "running", directory: folder, seen: 0 };
+      ticked.clear();
+      paintScan();
+      try {
+        const { scanId } = await client.call("POST /system-scans", { body: { directory: folder } });
+        if (mine !== scanTicket) {
+          client.call("DELETE /system-scans/:scanId", { params: { scanId } }).catch(() => void 0);
+          return;
+        }
+        scanJob = scanId;
+        const poll = async () => {
+          try {
+            const answer = await client.call("GET /system-scans/:scanId", { params: { scanId } });
+            if (mine !== scanTicket) return;
+            if (answer.state === "running") {
+              scan = { state: "running", directory: folder, seen: answer.seen };
+              paintScan();
+              scanTimer = setTimeout(() => void poll(), SCAN_POLL_MS);
+              return;
+            }
+            scanJob = null;
+            if (answer.state === "done") {
+              scan = { state: "done", directory: folder, scanId, summary: answer.summary };
+              for (const asset of answer.summary.assets) ticked.add(asset.path);
+              if (!nameTouched && name.trim() === "") suggestName(folder);
+            } else scan = { state: "failed", directory: folder, message: answer.message };
+            paintScan();
+          } catch (error) {
+            if (mine !== scanTicket) return;
+            scanJob = null;
+            scan = { state: "failed", directory: folder, message: errorText2(error) };
+            paintScan();
+          }
+        };
+        await poll();
+      } catch (error) {
+        if (mine !== scanTicket) return;
+        scan = { state: "failed", directory: folder, message: errorText2(error) };
+        paintScan();
+      }
+    };
+    const suggestName = (directory) => {
+      const match = projects.find((project) => sameDirectory(project.directory, directory));
+      name = match?.name ?? folderName(directory);
+      nameField.update({ value: name });
+    };
+    const startDefaultScan = async () => {
+      if (scan.state !== "idle" || projectChoice === "" || projectChoice === OTHER_FOLDER) return;
+      await scanFolder(projectChoice);
+    };
+    const summaryDetails = (summary) => {
+      const list = h("ul", { class: "dc-newsys-files" }, ...summary.files.slice(0, 40).map((file) => h("li", null, h("span", { class: "dc-path" }, file.path), h("span", { class: "dc-muted" }, plural(file.found, "value")))));
+      const more = summary.files.length > 40 ? h("p", { class: "dc-muted" }, `and ${summary.files.length - 40} more.`) : null;
+      return h("details", { class: "dc-newsys-details" }, h("summary", null, `Files read (${summary.files.length})`), list, more);
+    };
+    const paintScan = () => {
+      scanHost.replaceChildren();
+      if (attempted) paintProblems();
+      if (scan.state === "idle") {
+        const chosen = projectChoice === "" || projectChoice === OTHER_FOLDER ? null : projectChoice;
+        if (chosen === null && projectChoice === "" && projects.length > 0) scanHost.append(h("p", { class: "dc-muted" }, "Choose a project and Design Chamber reads its colours, type and spacing. Nothing in it is changed."));
+        if (chosen !== null) scanHost.append(btn({ label: `Read ${projects.find((project) => sameDirectory(project.directory, chosen))?.name ?? folderName(chosen)}`, variant: "outline", size: "sm", onClick: () => void scanFolder(chosen) }).el);
+        return;
+      }
+      if (scan.state === "running") {
+        const spinnerHost = h("div", { class: "dc-newsys-running" });
+        mountSpinner(spinnerHost, { label: scan.seen > 0 ? `Reading ${folderName(scan.directory)}\u2026 ${plural(scan.seen, "file")} looked at` : `Reading ${folderName(scan.directory)}\u2026` });
+        scanHost.append(spinnerHost, btn({ label: "Cancel scan", variant: "ghost", size: "xs", onClick: () => {
+          cancelScan();
+          scan = { state: "idle" };
+          paintScan();
+        } }).el);
+        return;
+      }
+      if (scan.state === "failed") {
+        scanHost.append(h("p", { class: "dc-form-error", role: "alert" }, scan.message), h("p", { class: "dc-muted" }, "What you typed is kept. Pick another folder, or untick Project code."));
+        return;
+      }
+      const { summary } = scan;
+      const sentence2 = scanSummarySentence(summary);
+      const lines = [sentence2 === null ? h("p", { class: "dc-muted" }, SCAN_NOTHING_FOUND) : h("p", { class: "dc-newsys-found" }, icon2("check", 14), sentence2)];
+      if (summary.partial) lines.push(h("p", { class: "dc-muted" }, SCAN_PARTIAL));
+      const agentLine = forAgentLine(summary);
+      if (agentLine) lines.push(h("p", { class: "dc-muted" }, agentLine));
+      const skipped = skippedLine(summary);
+      if (skipped) lines.push(h("p", { class: "dc-muted" }, skipped));
+      if (summary.files.length > 0) lines.push(summaryDetails(summary));
+      if (summary.assets.length > 0) {
+        const group2 = h("div", { class: "dc-newsys-assets" }, h("span", { class: "oc-sdk-field-label" }, "Copy into the system"));
+        for (const asset of summary.assets) {
+          const holder = h("div");
+          const label = asset.family ? `${asset.family}${asset.weight ? ` ${asset.weight}` : ""}` : folderName(asset.path);
+          const handle = mountCheckbox(holder, {
+            label: `${asset.kind === "font" ? "Font" : "Logo"}: ${label}`,
+            description: `${asset.path} \xB7 ${fileSize(asset.bytes, host.snapshot()?.locale ?? "en")}`,
+            checked: ticked.has(asset.path),
+            onChange: (checked) => void (checked ? ticked.add(asset.path) : ticked.delete(asset.path))
+          });
+          scope.add(() => handle.dispose());
+          group2.append(holder);
+        }
+        if (summary.assets.some((asset) => asset.kind === "font")) group2.append(h("p", { class: "dc-muted" }, FONT_LICENCE_NOTE));
+        lines.push(group2);
+      }
+      scanHost.append(...lines);
+    };
+    const fileInput = h("input", { type: "file", multiple: true, accept: BRAND_ACCEPT, hidden: true, "aria-hidden": "true", tabindex: "-1" });
+    const dropZone = h("div", { class: "dc-newsys-drop", "data-drop": "idle" });
+    const chooseFiles = btn({ label: "Choose files\u2026", variant: "outline", size: "sm", icon: "plus", onClick: () => fileInput.click() });
+    dropZone.append(h("span", { class: "dc-newsys-drop-text" }, "Drop files here, or"), chooseFiles.el, h("span", { class: "dc-muted dc-newsys-drop-types" }, BRAND_TYPES_LINE));
+    const fileList = h("ul", { class: "dc-newsys-picked", "aria-label": "Brand files to add" });
+    const refusedList = h("ul", { class: "dc-newsys-refused", "aria-label": "Files that can\u2019t be added", role: "status" });
+    const folderHost = h("div", { class: "dc-newsys-other", hidden: true });
+    const folderId = nextId2("dc-newsys-brand-folder");
+    const folderInput = h("input", { type: "text", id: folderId, class: "oc-sdk-input", placeholder: "C:\\Brand or /Users/you/Brand", spellcheck: "false", autocomplete: "off" });
+    folderHost.append(h("div", { class: "dc-field" }, h("label", { class: "oc-sdk-field-label", for: folderId }, "Brand folder"), folderInput), h("p", { class: "dc-muted" }, "Design Chamber reads the files directly in it, not in folders inside it. The folder isn\u2019t changed."));
+    folderInput.addEventListener("input", () => {
+      brandFolder = folderInput.value;
+    });
+    const folderToggle = btn({ label: "Add from a folder\u2026", variant: "ghost", size: "sm", icon: "folder", onClick: () => {
+      folderOpen = !folderOpen;
+      folderHost.hidden = !folderOpen;
+      if (folderOpen) folderInput.focus();
+      else {
+        brandFolder = "";
+        folderInput.value = "";
+      }
+    } });
+    const brandBody = h("div", { class: "dc-newsys-stack" }, dropZone, fileInput, fileList, refusedList, folderToggle.el, folderHost);
+    const paintFiles = () => {
+      const locale = host.snapshot()?.locale ?? "en";
+      fileList.replaceChildren(
+        ...files.map((file) => {
+          const remove2 = iconBtn({ icon: "close", label: `Remove ${file.name}`, size: "sm", onClick: () => {
+            picked.delete(file.key);
+            files = files.filter((entry) => entry.key !== file.key);
+            paintFiles();
+          } });
+          return h("li", { class: "dc-newsys-file" }, h("span", { class: "dc-newsys-file-name", title: file.name }, file.name), h("span", { class: "dc-muted dc-newsys-file-meta" }, `${KIND_LABEL[file.kind]} \xB7 ${fileSize(file.bytes, locale)}`), remove2);
+        })
+      );
+      fileList.hidden = files.length === 0;
+      refusedList.replaceChildren(...refused.map((entry) => h("li", null, icon2("alert", 14), h("span", null, entry.reason))));
+      refusedList.hidden = refused.length === 0;
+    };
+    const KIND_LABEL = { font: "Font", logo: "Logo", source: "Document" };
+    const take = (list) => {
+      if (!list || list.length === 0) return;
+      const incoming = Array.from(list).map((file) => ({ key: `${file.name}\0${file.size}\0${file.lastModified}`, name: file.name, bytes: file.size, file }));
+      const result = takeBrandFiles(incoming, files);
+      for (const entry of result.added) {
+        const source = incoming.find((candidate) => candidate.key === entry.key);
+        if (source) picked.set(entry.key, source.file);
+      }
+      files = [...files, ...result.added];
+      refused = result.refused;
+      paintFiles();
+      if (attempted) paintProblems();
+    };
+    fileInput.addEventListener("change", () => {
+      take(fileInput.files);
+      fileInput.value = "";
+    });
+    for (const type of ["dragenter", "dragover"]) {
+      dropZone.addEventListener(type, (event) => {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+        dropZone.dataset.drop = "over";
+      });
+    }
+    dropZone.addEventListener("dragleave", () => void (dropZone.dataset.drop = "idle"));
+    dropZone.addEventListener("drop", (event) => {
+      event.preventDefault();
+      dropZone.dataset.drop = "idle";
+      take(event.dataTransfer?.files ?? null);
+    });
+    const descHost = h("div");
+    const descField = mountTextField(descHost, {
+      label: "What should it look like?",
+      value: description,
+      multiline: true,
+      rows: 4,
+      placeholder: DESCRIPTION_PLACEHOLDER,
+      helper: `Up to ${DESCRIPTION_MAX.toLocaleString("en-US")} characters.`,
+      onChange: (next) => {
+        description = next;
+        descField.update({ value: next });
+        if (attempted) paintProblems();
+      }
+    });
+    scope.add(() => descField.dispose());
+    const presetHost = h("div", { class: "dc-field" });
+    const presetSelect = mountSelect(presetHost, { label: "Start from a style preset", value: "", options: presetOptions([]), disabled: true, onChange: (id) => void (preset = id) });
+    scope.add(() => presetSelect.dispose());
+    const presetNote = h("p", { class: "oc-sdk-field-note", hidden: true });
+    presetHost.append(presetNote);
+    const paintPresets = () => {
+      const state = store.getState().presets;
+      if (state.status === "ready" && state.data) presetSelect.update({ options: presetOptions(state.data.presets), disabled: false, value: preset });
+      if (state.status === "error") {
+        presetNote.textContent = "Style presets didn\u2019t load. You can still describe the look yourself.";
+        presetNote.hidden = false;
+      }
+    };
+    scope.add(store.subscribe(paintPresets));
+    void store.loadPresets();
+    paintPresets();
+    const descriptionBody = h("div", { class: "dc-newsys-stack" }, descHost, presetHost);
+    const destHost = h("div", { class: "dc-field" }, h("span", { class: "oc-sdk-field-label" }, "Agent works in"));
+    const destTabs = mountTabs(destHost, {
+      items: DESTINATIONS.map(({ id, label }) => ({ id, label })),
+      activeId: destination,
+      trackBackground: true,
+      onChange: (id) => {
+        destination = id === "current-chat" ? "current-chat" : "new-chat";
+        destTabs.update({ activeId: destination });
+        paintDest();
+      }
+    });
+    scope.add(() => destTabs.dispose());
+    const destHint = h("p", { class: "oc-sdk-field-note" });
+    destHost.append(destHint);
+    const paintDest = () => {
+      const noSession = destination === "current-chat" && host.session() === null;
+      destHint.textContent = noSession ? "No chat is open right now. Choose New chat, or open one first." : destination === "new-chat" ? "Starts a chat in the project you read, or in this one." : "Attaches the design system to the chat you have open.";
+    };
+    paintDest();
+    const nameProblem = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+    problemLines.set("name", nameProblem);
+    nameHost.append(nameProblem);
+    const failure = h("div", { class: "dc-newsys-failure", role: "alert", hidden: true });
+    const form = h(
+      "div",
+      { class: "dc-newsys-form" },
+      nameHost,
+      h("div", { class: "dc-newsys-sources", role: "group", "aria-label": "Start from" }, h("span", { class: "oc-sdk-field-label" }, "Start from"), sourceBlock("code", codeBody), sourceBlock("brand", brandBody), sourceBlock("description", descriptionBody)),
+      destHost,
+      failure
+    );
+    const progress = h("div", { class: "dc-newsys-progress", hidden: true, "aria-live": "polite" });
+    const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => sheet.close() });
+    const make = btn({ label: MAKE_LABEL, variant: "default", emphasis: "primary", onClick: () => void submit() });
+    sheet.body.append(form, progress);
+    sheet.foot.append(cancel.el, make.el);
+    const existing = () => systems().get().systems ?? [];
+    const currentDraft = () => ({ name, sources, scan, brand: { files, folder: brandFolder }, description, preset });
+    const paintProblems = () => {
+      problems = draftProblems(currentDraft(), existing());
+      for (const [field2, line] of problemLines) {
+        const problem = problems.find((entry) => entry.field === field2);
+        line.textContent = problem?.message ?? "";
+        line.hidden = problem === void 0;
+      }
+      nameField.update({ error: problems.find((entry) => entry.field === "name")?.message });
+      nameProblem.hidden = true;
+    };
+    const focusFirst = () => {
+      const first = problems[0];
+      if (!first) return;
+      const target = first.field === "name" ? nameHost.querySelector("input") : first.field === "code" ? otherHost.hidden ? projectHost.querySelector("button") : otherInput : first.field === "brand" ? chooseFiles.el : descHost.querySelector("textarea");
+      target?.focus();
+    };
+    const stepText = (step) => {
+      if (step.phase === "creating") return "Making the design system\u2026";
+      if (step.phase === "files") return `Adding brand files: ${step.done + 1} of ${step.total}, ${step.name}`;
+      if (step.phase === "folder") return "Adding brand files from the folder\u2026";
+      return "Asking the agent to write it\u2026";
+    };
+    const setMaking = (on) => {
+      making = on;
+      make.set({ loading: on });
+      cancel.set({ disabled: on });
+      form.inert = on;
+      progress.hidden = !on;
+    };
+    const submit = async () => {
+      if (making) return;
+      attempted = true;
+      paintProblems();
+      if (problems.length > 0) {
+        focusFirst();
+        return;
+      }
+      failure.hidden = true;
+      const input = {
+        name: name.normalize("NFKC").trim(),
+        code: sources.code && scan.state === "done" ? { scanId: scan.scanId, assets: [...ticked], directory: scan.directory } : null,
+        description: sources.description ? { text: description.trim(), preset: preset === "" ? null : preset } : null,
+        brand: sources.brand ? {
+          files: files.flatMap((file) => {
+            const blob = picked.get(file.key);
+            return blob ? [{ file: blob, name: file.name, kind: file.kind }] : [];
+          }),
+          folder: brandFolder.trim() === "" ? null : brandFolder.trim()
+        } : null,
+        destination
+      };
+      setMaking(true);
+      progress.replaceChildren();
+      const spinnerHost = h("div");
+      const spinner = mountSpinner(spinnerHost, { label: stepText({ phase: "creating" }) });
+      progress.append(spinnerHost);
+      const setStep = (step) => spinner.update({ label: stepText(step) });
+      try {
+        const result = await makeSystem.make(input, setStep);
+        void systems().load();
+        options.onMade?.(result);
+        finish(result);
+      } catch (error) {
+        setMaking(false);
+        failure.replaceChildren(h("p", { class: "dc-form-error" }, `Couldn\u2019t make the design system. ${errorText2(error)}`));
+        failure.hidden = false;
+      }
+    };
+    const finish = (result) => {
+      const refusedCount = result.files.refused.length;
+      const sent = result.agent.outcome !== "not-sent";
+      if (refusedCount === 0 && sent) {
+        toast("success", result.agent.outcome === "composed" ? `Made ${result.name}. The request is waiting in the chat composer.` : `Made ${result.name}. It\u2019s a draft; the agent is writing it now.`);
+        if (!closed) sheet.close();
+        return;
+      }
+      if (closed) {
+        toast("error", `${resultToast(result.name, refusedCount, sent)} Check the design system\u2019s files in the list.`);
+        return;
+      }
+      showResult(result);
+    };
+    const showResult = (result) => {
+      setMaking(false);
+      sheet.setTitle(`${result.name} is made`);
+      sheet.el.querySelector(".dc-sheet-sub")?.remove();
+      const body = h("div", { class: "dc-newsys-result" });
+      let agent = result.agent;
+      const render = () => {
+        body.replaceChildren(h("p", null, resultHeadline(result.files.refused.length, agent.outcome !== "not-sent")));
+        if (result.files.added.length > 0) body.append(h("p", { class: "dc-muted" }, `Added ${plural(result.files.added.length, "file")}: ${result.files.added.join(", ")}.`));
+        if (result.files.refused.length > 0) {
+          body.append(h("div", { class: "dc-newsys-block" }, h("span", { class: "oc-sdk-field-label" }, "Files not added"), h("ul", { class: "dc-newsys-refused" }, ...result.files.refused.map((entry) => h("li", null, icon2("alert", 14), h("span", null, entry.reason)))), h("p", { class: "dc-muted" }, "You can add them again from the system\u2019s page. The rest are in.")));
+        }
+        if (agent.outcome === "not-sent") {
+          const again = btn({ label: "Try again", variant: "outline", size: "sm", onClick: () => {
+            again.set({ loading: true });
+            void makeSystem.askToMake({ id: result.id, destination, directory: scan.state === "done" ? scan.directory : null }).then((next) => {
+              agent = next;
+              if (next.outcome !== "not-sent" && result.files.refused.length === 0) {
+                toast("success", `Asked the agent to write ${result.name}.`);
+                sheet.close();
+                return;
+              }
+              render();
+            });
+          } });
+          const actions = [again.el];
+          if (agent.text !== null) {
+            const text = agent.text;
+            actions.push(btn({ label: "Copy request", variant: "ghost", size: "sm", icon: "copy", onClick: () => void host.writeClipboard(text).then((ok) => toast(ok ? "success" : "error", ok ? "Copied the request. Paste it into a chat." : "Couldn\u2019t copy. Select the text and copy it yourself.")) }).el);
+          }
+          body.append(h("div", { class: "dc-newsys-block" }, banner({ tone: "warning", title: "Couldn\u2019t ask the agent", body: agent.reason ?? "The request didn\u2019t reach a chat." }), h("div", { class: "dc-row-actions" }, ...actions)), h("p", { class: "dc-muted" }, `${result.name} is saved as a draft with what was gathered. You can ask the agent later.`));
+        }
+      };
+      render();
+      sheet.body.replaceChildren(body);
+      sheet.foot.replaceChildren(btn({ label: "Done", variant: "default", emphasis: "primary", onClick: () => sheet.close() }).el);
+    };
+    paintSources();
+    paintFiles();
+    paintScan();
+    paintProject();
+    void guestHost.client.listProjects().then(
+      (answer) => {
+        if (closed) return;
+        projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
+        const current = host.snapshot()?.directory ?? null;
+        const match = current === null ? void 0 : projects.find((project) => sameDirectory(project.directory, current));
+        if (match && projectChoice === "") projectChoice = match.directory;
+        else if (projects.length === 0 && projectChoice === "") projectChoice = OTHER_FOLDER;
+        paintProject();
+        paintScan();
+        if (sources.code && scan.state === "idle") void startDefaultScan();
+      },
+      (error) => {
+        console.warn("Design Chamber: the project list could not be read; the folder path still works", error);
+        if (closed) return;
+        projectChoice = OTHER_FOLDER;
+        paintProject();
+      }
+    );
+    void systems().load();
+  };
+
+  // src/ui/systems/systems-list.ts
+  var SKELETON_ROWS = 4;
+  var tonedBadge = (label, tone2, title2) => {
+    const holder = h("span", { class: "dc-sys-badge", title: title2 ?? null });
+    mountBadge(holder, { label, tone: tone2 });
+    return holder;
+  };
+  var mountSystemsList = (options) => {
+    const scope = createScope();
+    const store2 = systems();
+    let projects = [];
+    const label = (directory) => projects.find((project) => sameDirectory(project.directory, directory))?.name ?? folderName(directory);
+    const el2 = h("div", { class: "dc-sys-view", "data-surface": options.surface });
+    const back = options.surface === "panel" ? iconBtn({ icon: "back", label: "Back to designs", onClick: () => options.onBack() }) : btn({ label: "Library", variant: "ghost", size: "default", icon: "back", onClick: () => options.onBack() }).el;
+    const newButton = btn({
+      label: "New design system",
+      variant: "default",
+      size: options.surface === "panel" ? "sm" : "default",
+      icon: "plus",
+      onClick: () => openNewSystemSheet(options.actions.host, { onMade: (result) => options.onOpen(result.id) })
+    });
+    const buildButton = btn({
+      label: BUILD_BUTTON_LABEL,
+      variant: "outline",
+      size: options.surface === "panel" ? "sm" : "default",
+      icon: "chat",
+      onClick: () => openBuildWithAgent(options.actions.host, buildButton.el)
+    });
+    const head = options.surface === "panel" ? h("header", { class: "dc-rail-head" }, back, h("h1", { class: "dc-rail-title" }, "Design systems"), h("span", { class: "dc-spacer" })) : h("header", { class: "dc-library-bar dc-sys-bar" }, back, h("h1", { class: "dc-page-title" }, "Design systems"), h("span", { class: "dc-spacer" }), buildButton.el, newButton.el);
+    const tools = options.surface === "panel" ? h("div", { class: "dc-sys-tools" }, newButton.el, buildButton.el) : null;
+    const capNote = h("p", { class: "dc-muted dc-sys-cap", hidden: true });
+    const notices = h("div", { class: "dc-sys-notices" });
+    const list = h("ul", { class: "dc-sys-list", "aria-label": "Design systems" });
+    const scroller = h("div", { class: options.surface === "panel" ? "dc-rail-scroll dc-sys-scroll" : "dc-library-scroll dc-sys-scroll" }, notices, capNote, list);
+    el2.append(head);
+    if (tools) el2.append(tools);
+    el2.append(scroller);
+    const rowFor = (summary) => {
+      const model = systemRow(summary, { nowMs: Date.now(), locale: host.snapshot()?.locale ?? "en", label });
+      const unreadable = model.unreadable !== null;
+      const title2 = h("span", { class: "dc-sys-title", title: model.name }, model.name);
+      const nameLine = h("span", { class: "dc-sys-name" }, title2, unreadable ? tonedBadge("Can\u2019t read", "error") : tonedBadge(model.status.label, model.status.tone));
+      const content = [nameLine];
+      if (unreadable) content.push(h("span", { class: "dc-sys-reason" }, model.unreadable ?? ""));
+      else {
+        const badges = h("span", { class: "dc-sys-line" }, tonedBadge(model.home.label, "neutral", model.home.title), ...model.badges.map((badge) => tonedBadge(badge.label, badge.tone)));
+        if (model.more) badges.append(h("span", { class: "dc-sys-more", title: model.more.title }, model.more.text, h("span", { class: "dc-sr-only" }, `: ${model.more.title}`)));
+        content.push(badges);
+        if (model.notice) content.push(h("span", { class: "dc-sys-notice" }, model.notice));
+        content.push(h("span", { class: "dc-sys-meta" }, model.meta.join(" \xB7 ")));
+      }
+      const main = unreadable ? h("div", { class: "dc-sys-main", "data-static": "true", role: "group", "aria-label": model.ariaLabel }, ...content) : h("button", { type: "button", class: "dc-sys-main", "aria-label": model.ariaLabel }, ...content);
+      if (!unreadable) main.addEventListener("click", () => options.onOpen(summary.id));
+      const more = iconBtn({ icon: "more", label: `Actions for ${summary.name}`, size: "sm", onClick: () => void 0 });
+      attachMenu(
+        more,
+        () => systemMenu(summary),
+        (id) => void runAction(id, summary)
+      );
+      return h("li", { class: "dc-sys", "data-id": summary.id, "data-state": unreadable ? "unreadable" : summary.status }, main, more);
+    };
+    const skeleton = () => Array.from(
+      { length: SKELETON_ROWS },
+      () => h(
+        "li",
+        { class: "dc-sys dc-sys-skeleton", "aria-hidden": "true" },
+        h("span", { class: "dc-sys-main" }, h("span", { class: "dc-skel dc-skel-line dc-sys-skel-name" }), h("span", { class: "dc-skel dc-skel-line dc-sys-skel-badges" }), h("span", { class: "dc-skel dc-skel-line dc-skel-short" }))
+      )
+    );
+    const emptyState = () => {
+      const holder = h("div");
+      mountEmpty(holder, { title: EMPTY_TITLE, body: EMPTY_BODY });
+      const actions = h(
+        "div",
+        { class: "dc-sys-empty-actions" },
+        btn({ label: "From code\u2026", variant: "outline", size: "sm", icon: "page", onClick: () => openNewSystemSheet(options.actions.host, { source: "code", onMade: (result) => options.onOpen(result.id) }) }).el,
+        btn({ label: "From brand files\u2026", variant: "outline", size: "sm", icon: "image", onClick: () => openNewSystemSheet(options.actions.host, { source: "brand", onMade: (result) => options.onOpen(result.id) }) }).el,
+        btn({ label: "Describe\u2026", variant: "outline", size: "sm", icon: "pencil", onClick: () => openNewSystemSheet(options.actions.host, { source: "description", onMade: (result) => options.onOpen(result.id) }) }).el
+      );
+      return h("li", { class: "dc-sys-message dc-sys-empty" }, holder, actions);
+    };
+    const failureState = (state) => {
+      const failure = loadFailure(state.error);
+      const holder = h("div", { class: "dc-banner dc-banner-block" });
+      mountBanner(holder, { tone: "error", title: failure.title, body: failure.body, action: { label: "Try again", onClick: () => void store2.load() } });
+      return h("li", { class: "dc-sys-message" }, holder);
+    };
+    const paintNotices = (state) => {
+      notices.replaceChildren();
+      if (state.status === "error" && state.systems !== null) {
+        const holder = h("div", { class: "dc-banner" });
+        mountBanner(holder, { tone: "warning", title: "Couldn\u2019t refresh the list", body: state.error?.message ?? "", action: { label: "Try again", onClick: () => void store2.load() } });
+        notices.append(holder);
+      }
+      notices.hidden = notices.childElementCount === 0;
+      const cap = atSystemsCap(state.total, state.max);
+      capNote.textContent = cap ?? "";
+      capNote.hidden = cap === null;
+      newButton.set({ disabled: cap !== null, title: cap ?? "" });
+      buildButton.set({ disabled: cap !== null, title: cap ?? "" });
+    };
+    const paint = () => {
+      const state = store2.get();
+      const previousScroll = scroller.scrollTop;
+      list.replaceChildren();
+      paintNotices(state);
+      const kind = systemsListState({ status: state.status, systems: state.systems });
+      if (kind === "loading") list.append(...skeleton());
+      else if (kind === "error") list.append(failureState(state));
+      else if (kind === "empty") list.append(emptyState());
+      else list.append(...(state.systems ?? []).map(rowFor));
+      list.setAttribute("aria-busy", kind === "loading" ? "true" : "false");
+      scroller.scrollTop = previousScroll;
+    };
+    const others = (id) => (store2.get().systems ?? []).filter((entry) => entry.id !== id);
+    const rename2 = (summary) => {
+      const sheet = openSheet(options.actions.host, { title: "Rename design system", variant: "dialog" });
+      let value = summary.name;
+      const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+      const holder = h("div");
+      const field2 = mountTextField(holder, {
+        label: "Name",
+        value,
+        onChange: (next) => {
+          value = next;
+          field2.update({ value: next, error: systemNameProblem(next, others(summary.id)) ?? void 0 });
+        }
+      });
+      const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => sheet.close() });
+      const save = btn({
+        label: "Rename",
+        variant: "default",
+        emphasis: "primary",
+        onClick: () => {
+          const problem = systemNameProblem(value, others(summary.id));
+          if (problem !== null) {
+            field2.update({ error: problem });
+            return;
+          }
+          failure.hidden = true;
+          save.set({ loading: true });
+          cancel.set({ disabled: true });
+          store2.rename(summary.id, value.normalize("NFKC").trim()).then(
+            () => {
+              toast("success", `Renamed to ${value.trim()}.`);
+              sheet.close();
+            },
+            (error) => {
+              failure.textContent = errorText2(error);
+              failure.hidden = false;
+              save.set({ loading: false });
+              cancel.set({ disabled: false });
+            }
+          );
+        }
+      });
+      sheet.body.append(holder, failure);
+      sheet.foot.append(cancel.el, save.el);
+    };
+    const remove2 = (summary) => {
+      confirmDialog(options.actions.host, {
+        title: `Delete ${summary.name}?`,
+        body: h("p", null, deleteSentence(summary.usedBy)),
+        confirmLabel: "Delete design system",
+        destructive: true,
+        onConfirm: async () => {
+          const cleared = await store2.remove(summary.id);
+          const extra = [cleared.default ? "It was your default, so new designs ask again." : null, cleared.pins > 0 ? `${plural(cleared.pins, "project pin")} cleared.` : null].filter((part) => part !== null);
+          toast("success", [`Deleted ${summary.name}.`, ...extra].join(" "));
+        }
+      });
+    };
+    const runAction = async (id, summary) => {
+      try {
+        if (id === "open") options.onOpen(summary.id);
+        else if (id === "rename") rename2(summary);
+        else if (id === "delete") remove2(summary);
+        else if (id === "make-default") {
+          await store2.setDefault({ id: summary.id, name: summary.name });
+          toast("success", `${summary.name} is now the default for new designs.`);
+        } else if (id === "remove-default") {
+          await store2.setDefault(null);
+          toast("success", `${summary.name} is no longer the default. New designs ask each time.`);
+        } else if (id === "reveal") {
+          await client.call("POST /reveal", { body: { system: summary.id, target: "folder" } });
+        }
+      } catch (error) {
+        toast("error", `${id === "reveal" ? "Couldn\u2019t open the folder" : "That didn\u2019t work"}. ${errorText2(error)}`);
+      }
+    };
+    let signature = "";
+    scope.add(
+      store2.subscribe((state) => {
+        const next = `${state.status}:${state.total}:${state.error?.message ?? ""}:${JSON.stringify(state.systems)}`;
+        if (next === signature) return;
+        signature = next;
+        paint();
+      })
+    );
+    const minute = setInterval(paint, 6e4);
+    scope.add(() => clearInterval(minute));
+    guestHost.client.listProjects().then(
+      (answer) => {
+        projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
+        paint();
+      },
+      (error) => console.warn("Design Chamber: the project names could not be read; systems show folder names", error)
+    );
+    void store2.load();
+    paint();
+    return {
+      el: el2,
+      focus: () => (el2.querySelector(".dc-sys-main:not([data-static])") ?? newButton.el).focus(),
+      focusRow: (id) => list.querySelector(`[data-id="${CSS.escape(id)}"] .dc-sys-main`)?.focus(),
+      dispose: () => {
+        scope.dispose();
+        el2.remove();
+      }
+    };
+  };
+
+  // src/shared/agent/chip.ts
+  var DEFAULT_VIEWPORTS = `${formatViewport(VIEWPORT_LAPTOP)} + ${formatViewport(VIEWPORT_PHONE)}`;
+
+  // src/shared/agent/system-prompts.ts
+  var SECTION_LABEL = {
+    overview: "Overview",
+    colours: "Colours",
+    typography: "Typography",
+    spacing: "Spacing",
+    radius: "Radius",
+    shadows: "Shadows",
+    layers: "Layers",
+    sizes: "Sizes",
+    components: "Components",
+    patterns: "Patterns & voice",
+    brand: "Brand & marketing",
+    assets: "Assets"
+  };
+  var sectionLabel = (section2) => SECTION_LABEL[section2];
+
+  // src/shared/token-edit.ts
+  var FORMULA_SENTENCE = "This value is a formula. Ask the agent to change it.";
+  var UNREADABLE_VALUE_SENTENCE = "This value can't be read.";
+  var PLAIN_SHAPE = "Use a plain CSS value of up to 100 characters, without ; { } < > \\ : or *, and without url().";
+  var SECTION_SHAPES = {
+    colours: "Use a colour, like #1a73e8, rgb(26 115 232) or a colour name.",
+    spacing: "Use a length, like 16px or 1rem.",
+    radius: "Use a length, like 8px or 0.5rem.",
+    sizes: "Use a size, like 1200px or 40rem, or a plain number.",
+    shadows: "Use a shadow, like 0 1px 2px rgb(0 0 0 / 0.2), or none.",
+    layers: "Use a whole number, like 10, or auto.",
+    typography: PLAIN_SHAPE,
+    other: PLAIN_SHAPE
+  };
+  var FIELD_SHAPES = {
+    family: 'Use font names separated by commas, like "Inter", sans-serif.',
+    size: "Use a size, like 16px or 1rem, or normal.",
+    weight: "Use a weight from 1 to 1000, or normal or bold.",
+    lineHeight: "Use a number like 1.5, a length, or normal.",
+    letterSpacing: "Use a length, like 0.02em, or normal."
+  };
+  var ALLOWED_FUNCTIONS = /* @__PURE__ */ new Set(["rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix", "var", "calc", "min", "max", "clamp"]);
+  var FORMULA_PATTERN = /(?:^|[^A-Za-z0-9-])(?:var|calc|min|max|clamp|color-mix)\(/i;
+  var passesRuleOne = (text) => {
+    if (text.length < 1 || text.length > SYSTEM_TOKEN_VALUE_MAX || !TOKEN_PREVIEW_VALUE_PATTERN.test(text) || !isBalancedQuotes(text)) return false;
+    let depth = 0;
+    for (const char of text) {
+      if (char === "(") depth += 1;
+      else if (char === ")") {
+        depth -= 1;
+        if (depth < 0) return false;
+      }
+    }
+    if (depth !== 0) return false;
+    for (const match of text.matchAll(/([A-Za-z-][A-Za-z0-9-]*)?\(/g)) {
+      const name = match[1];
+      if (name !== void 0 && !ALLOWED_FUNCTIONS.has(name.toLowerCase())) return false;
+    }
+    return true;
+  };
+  var NUMBER = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?";
+  var NUMBER_PATTERN = new RegExp(`^${NUMBER}$`);
+  var SPACING_UNITS = ["px", "rem", "em", "%", "vw", "vh", "vmin", "vmax", "svh", "dvh", "lvh", "ch", "ex"];
+  var ALL_LENGTH_UNITS = [
+    ...SPACING_UNITS,
+    "cm",
+    "mm",
+    "q",
+    "in",
+    "pt",
+    "pc",
+    "lh",
+    "rlh",
+    "cap",
+    "ic",
+    "rex",
+    "rch",
+    "ric",
+    "rcap",
+    "vi",
+    "vb",
+    "svw",
+    "svi",
+    "svb",
+    "lvw",
+    "lvi",
+    "lvb",
+    "dvw",
+    "dvi",
+    "dvb",
+    "cqw",
+    "cqh",
+    "cqi",
+    "cqb",
+    "cqmin",
+    "cqmax"
+  ];
+  var lengthPattern = (units) => new RegExp(`^(?:[+-]?0|${NUMBER}(?:${units.join("|")}))$`, "i");
+  var SPACING_LENGTH = lengthPattern(SPACING_UNITS);
+  var ANY_LENGTH = lengthPattern(ALL_LENGTH_UNITS);
+  var INTEGER = /^[+-]?\d+$/;
+  var NAMED_COLOURS = new Set(
+    "aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen transparent currentcolor".split(" ")
+  );
+  var HEX_COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+  var COLOUR_FUNCTION = /^(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(([^()]*)\)$/i;
+  var COLOUR_SPACES = /* @__PURE__ */ new Set(["srgb", "srgb-linear", "display-p3", "a98-rgb", "prophoto-rgb", "rec2020", "xyz", "xyz-d50", "xyz-d65"]);
+  var COLOUR_ARGUMENT = new RegExp(`^(?:${NUMBER}(?:%|deg|rad|grad|turn)?|none)$`, "i");
+  var isColour = (text) => {
+    if (HEX_COLOUR.test(text) || NAMED_COLOURS.has(text.toLowerCase())) return true;
+    const match = COLOUR_FUNCTION.exec(text);
+    if (match === null) return false;
+    const name = (match[1] ?? "").toLowerCase();
+    const args = (match[2] ?? "").trim().split(/[\s,/]+/).filter((part) => part !== "");
+    if (name === "color") {
+      const space = args.shift();
+      if (space === void 0 || !COLOUR_SPACES.has(space.toLowerCase())) return false;
+    }
+    return args.length >= 3 && args.length <= 4 && args.every((arg) => COLOUR_ARGUMENT.test(arg));
+  };
+  var splitTop = (text, separator) => {
+    const parts = [];
+    let depth = 0;
+    let quote = null;
+    let current = "";
+    for (const char of text) {
+      if (quote !== null) {
+        if (char === quote) quote = null;
+        current += char;
+      } else if (char === '"' || char === "'") {
+        quote = char;
+        current += char;
+      } else if (char === "(") {
+        depth += 1;
+        current += char;
+      } else if (char === ")") {
+        depth -= 1;
+        current += char;
+      } else if (depth === 0 && separator.test(char)) {
+        if (current.trim() !== "") parts.push(current.trim());
+        current = "";
+      } else current += char;
+    }
+    if (current.trim() !== "") parts.push(current.trim());
+    return parts;
+  };
+  var isShadow = (text, needsPair) => {
+    if (text.toLowerCase() === "none") return !needsPair;
+    const layers = splitTop(text, /,/);
+    if (layers.length === 0) return false;
+    return layers.every((layer) => {
+      let lengths = 0;
+      let colours = 0;
+      let insets = 0;
+      for (const part of splitTop(layer, /\s/)) {
+        if (part.toLowerCase() === "inset") insets += 1;
+        else if (ANY_LENGTH.test(part)) lengths += 1;
+        else if (isColour(part)) colours += 1;
+        else return false;
+      }
+      return lengths >= 2 && lengths <= 4 && colours <= 1 && insets <= 1;
+    });
+  };
+  var isLayer = (text) => {
+    if (text.toLowerCase() === "auto") return true;
+    if (!INTEGER.test(text)) return false;
+    const value = Number(text);
+    return value >= -2147483647 && value <= 2147483647;
+  };
+  var FAMILY_NAME = /^(?:"[^"]+"|'[^']+'|[A-Za-z-][A-Za-z0-9-]*(?: +[A-Za-z-][A-Za-z0-9-]*)*)$/;
+  var fieldValid = (field2, text) => {
+    const lower = text.toLowerCase();
+    switch (field2) {
+      case "family": {
+        const names = text.split(",").map((name) => name.trim());
+        return names.length > 0 && names.every((name) => FAMILY_NAME.test(name));
+      }
+      case "size":
+      case "letterSpacing":
+        return lower === "normal" || ANY_LENGTH.test(text);
+      case "weight": {
+        if (lower === "normal" || lower === "bold" || lower === "lighter" || lower === "bolder") return true;
+        if (!NUMBER_PATTERN.test(text)) return false;
+        const weight = Number(text);
+        return weight >= 1 && weight <= 1e3;
+      }
+      case "lineHeight":
+        return lower === "normal" || NUMBER_PATTERN.test(text) && Number(text) >= 0 || ANY_LENGTH.test(text);
+    }
+  };
+  var sectionValid = (section2, text) => {
+    switch (section2) {
+      case "colours":
+        return isColour(text);
+      case "spacing":
+        return SPACING_LENGTH.test(text);
+      case "radius":
+        return ANY_LENGTH.test(text);
+      case "sizes":
+        return SPACING_LENGTH.test(text) || NUMBER_PATTERN.test(text);
+      case "shadows":
+        return isShadow(text, false);
+      case "layers":
+        return isLayer(text);
+      case "typography":
+      case "other":
+        return true;
+    }
+  };
+  var validateTokenValue = (section2, field2, text) => {
+    const shape = field2 === null ? SECTION_SHAPES[section2] : FIELD_SHAPES[field2];
+    if (!passesRuleOne(text)) return { ok: false, sentence: shape };
+    if (FORMULA_PATTERN.test(text)) return { ok: true, formula: true };
+    const valid = field2 === null ? sectionValid(section2, text) : fieldValid(field2, text);
+    return valid ? { ok: true, formula: false } : { ok: false, sentence: shape };
+  };
+  var classifyToken = (name, value) => {
+    const text = value.trim();
+    const lower = name.toLowerCase();
+    if (isColour(text)) return "colours";
+    if (isShadow(text, true)) return "shadows";
+    if (/radius|rounded/.test(lower)) return "radius";
+    if (/(^--z-|z-?index|layer|stack)/.test(lower) && INTEGER.test(text)) return "layers";
+    if (/space|spacing|gap|gutter|pad|margin|inset/.test(lower) && SPACING_LENGTH.test(text)) return "spacing";
+    if (/font|family|text-|leading|line-height|tracking|letter|weight|^--fs-/.test(lower)) return "typography";
+    if (/size|width|height|breakpoint|^--bp-|screen|container/.test(lower) && ANY_LENGTH.test(text)) return "sizes";
+    return "other";
+  };
+  var DARK_MEDIA = "@media(prefers-color-scheme:dark)";
+  var normaliseAtRule = (prelude) => prelude.toLowerCase().replace(/\s*([():,])\s*/g, "$1").replace(/\s+/g, " ").trim();
+  var normaliseSelector = (selector) => selector.toLowerCase().replace(/\s+/g, " ").replace(/\[\s*([a-z0-9_-]+)\s*=\s*(["']?)([a-z0-9_-]+)\2\s*\]/g, "[$1=$3]").trim();
+  var selectorList = (prelude) => prelude.split(",").map(normaliseSelector);
+  var LIGHT_EXTRACTION = /* @__PURE__ */ new Set([":root", "html", ":host", ".light", "[data-theme=light]"]);
+  var DARK_TOP_EXTRACTION = /* @__PURE__ */ new Set([".dark", ":root.dark", "html.dark", "[data-theme=dark]", ":root[data-theme=dark]", "[data-mode=dark]"]);
+  var partsOf = (ctx) => ctx.kind === "root" ? { atRules: [], selectors: [":root"] } : { atRules: ctx.atRules ?? [], selectors: ctx.selectors ?? [] };
+  var isLightParts = (atRules, selectors, rules) => {
+    const [selector] = selectors;
+    if (atRules.length === 0 && selectors.length === 1 && selector !== void 0) {
+      const list = selectorList(selector);
+      return rules === "system" ? list.length === 1 && list[0] === ":root" : list.every((one) => LIGHT_EXTRACTION.has(one));
+    }
+    const [atRule] = atRules;
+    return rules === "extraction" && atRules.length === 1 && selectors.length === 0 && atRule !== void 0 && normaliseAtRule(atRule) === "@theme";
+  };
+  var isDarkParts = (atRules, selectors, rules) => {
+    const [selector] = selectors;
+    const [atRule] = atRules;
+    if (selectors.length !== 1 || selector === void 0) return false;
+    const list = selectorList(selector);
+    if (atRules.length === 1 && atRule !== void 0 && normaliseAtRule(atRule) === DARK_MEDIA) {
+      return rules === "system" ? list.length === 1 && list[0] === ":root" : list.every((one) => one === ":root" || one === "html");
+    }
+    return rules === "extraction" && atRules.length === 0 && list.every((one) => DARK_TOP_EXTRACTION.has(one));
+  };
+  var isLightContext = (ctx, rules) => {
+    if (ctx.kind === "root") return true;
+    const { atRules, selectors } = partsOf(ctx);
+    return isLightParts(atRules, selectors, rules);
+  };
+  var isDarkContext = (ctx, rules) => {
+    if (ctx.kind === "root") return false;
+    const { atRules, selectors } = partsOf(ctx);
+    return isDarkParts(atRules, selectors, rules);
+  };
+  var TOKEN_UNDO_REMOVED_MAX = TEXT_EDIT_MAX * 8;
+
+  // src/shared/system-json.ts
+  var AREA_OF_SECTION = Object.freeze({
+    overview: "foundations",
+    colours: "foundations",
+    typography: "foundations",
+    spacing: "foundations",
+    radius: "foundations",
+    shadows: "foundations",
+    layers: "foundations",
+    sizes: "foundations",
+    components: "components",
+    patterns: "patterns",
+    brand: "brand",
+    assets: "brand"
+  });
+  var SYSTEM_AREAS = Object.freeze(["foundations", "components", "patterns", "brand"]);
+  var SYSTEM_SECTIONS = Object.freeze(Object.keys(AREA_OF_SECTION));
+  var RESERVED_SYSTEM_IDS = Object.freeze(["none", "ask"]);
+  var SYSTEM_UNREADABLE_PREFIX = "Design Chamber can't read this design system.";
+  var NOT_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json isn't valid JSON.`;
+  var TOO_LARGE_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json is larger than 1 MB.`;
+  var SYSTEM_TOKEN_RULES = Object.freeze({
+    isLight: (ctx) => isLightContext(ctx, "system"),
+    isDark: (ctx) => isDarkContext(ctx, "system"),
+    classify: classifyToken,
+    validate: validateTokenValue
+  });
+  var resyncStampOf = (stamps) => `${stamps.tokens ?? "none"}:${stamps.systemJson ?? "none"}`;
+  var PROPOSAL_TOO_MANY_FILES = `PROPOSAL.json lists more than ${SYSTEM_PROPOSAL_FILES_MAX} files. Ask the agent to split the change.`;
+
+  // src/ui/model/system-edit-model.ts
+  var STALE_TITLE2 = "changed while you were editing";
+  var STALE_ACTION = "Reload and try again";
+  var OLD_VERSION_SENTENCE = "You\u2019re viewing an old version.";
+  var tokenKey = (name, mode) => `token:${name}:${mode}`;
+  var typeKey = (id, field2) => `type:${id}:${field2}`;
+  var noteKey = (path, id) => `note:${path}:${id}`;
+  var purposeKey = (id) => `purpose:${id}`;
+  var textKey = (file) => `text:${file}`;
+  var checkValue = (section2, field2, text) => {
+    const answer = validateTokenValue(section2, field2, text.trim());
+    return answer.ok ? { ok: true } : { ok: false, sentence: answer.sentence };
+  };
+  var noteProblem = (text, max = SYSTEM_USAGE_NOTE_MAX) => text.length > max ? `Keep this under ${max} characters.` : null;
+  var textProblem = (text) => text.length > SYSTEM_NOTE_MAX ? `Keep this under ${SYSTEM_NOTE_MAX} characters.` : null;
+  var valueLock = (editable) => editable === "formula" ? FORMULA_SENTENCE : editable === "unreadable" ? UNREADABLE_VALUE_SENTENCE : null;
+  var typeValue = (field2, text) => field2 === "weight" && /^\d{1,4}$/.test(text.trim()) ? Number(text.trim()) : text.trim();
+  var metaChanges = (pending) => {
+    const changes2 = [];
+    for (const change of pending.values()) {
+      if (change.kind === "type") changes2.push({ at: ["type", change.id, change.field], value: typeValue(change.field, change.value) });
+      else if (change.kind === "purpose") changes2.push({ at: ["components", change.id, "purpose"], value: change.value.trim() });
+      else if (change.kind === "note") {
+        const value = change.value.trim();
+        if (change.path === "tokens") changes2.push({ at: ["tokens", change.id, "note"], value });
+        else if (change.path === "components") changes2.push({ at: ["components", change.id, "note"], value });
+        else if (change.path === "type") changes2.push({ at: ["type", change.id, "note"], value });
+        else changes2.push({ at: [change.path, change.id, "note"], value });
+      }
+    }
+    return changes2;
+  };
+  var tokenEdits = (pending) => {
+    const edits = [];
+    for (const change of pending.values()) {
+      if (change.kind === "token") edits.push({ kind: change.existed ? "set" : "add", name: change.name, mode: change.mode, value: change.value.trim() });
+      else if (change.kind === "remove") edits.push({ kind: "remove", name: change.name, mode: "both" });
+    }
+    return edits;
+  };
+  var saveRequest = (pending, detail) => {
+    if (pending.size === 0) return null;
+    const tokens = tokenEdits(pending);
+    const meta = metaChanges(pending);
+    const texts = [];
+    for (const change of pending.values()) if (change.kind === "text") texts.push({ file: change.file, text: change.value });
+    const stamps = {};
+    if (tokens.length > 0) stamps.tokens = detail.stamps.tokens;
+    if (meta.length > 0) stamps.systemJson = detail.stamps.systemJson;
+    if (texts.length > 0) {
+      stamps.texts = {};
+      for (const entry of texts) stamps.texts[entry.file] = entry.file === "OVERVIEW.md" ? detail.stamps.overview : detail.stamps.notes[entry.file.replace(/^notes\//, "").replace(/\.md$/, "")] ?? null;
+    }
+    const request = { op: "save", stamps };
+    if (tokens.length > 0) request.tokens = tokens;
+    if (meta.length > 0) request.meta = meta;
+    if (texts.length > 0) request.texts = texts;
+    return request;
+  };
+  var previewVars = (pending) => {
+    const vars = [];
+    const add = (name, value) => {
+      const text = value.trim();
+      if (!TOKEN_PREVIEW_NAME_PATTERN.test(name) || !TOKEN_PREVIEW_VALUE_PATTERN.test(text)) return;
+      if (vars.length < TOKEN_PREVIEW_VARS_MAX) vars.push({ name, value: text });
+    };
+    for (const change of pending.values()) {
+      try {
+        if (change.kind === "token") add(change.mode === "light" ? change.name : darkVarOf(change.name), change.value);
+        else if (change.kind === "type") add(typeVarOf(change.id, change.field), change.value);
+      } catch {
+      }
+    }
+    return vars;
+  };
+  var staleSentence = (name) => `${name} ${STALE_TITLE2}. Nothing was saved.`;
+  var savedToken = (token, mode) => (mode === "light" ? token.light?.text : token.dark?.text) ?? null;
+  var savedType = (style, field2) => style[field2];
+
+  // src/ui/model/system-page-model.ts
+  var AREA_LABEL = Object.freeze({
+    foundations: "Foundations",
+    components: "Components",
+    patterns: "Patterns & voice",
+    brand: "Brand & marketing"
+  });
+  var COLOUR_GROUP_LABEL = Object.freeze({
+    brand: "Brand",
+    surface: "Surfaces",
+    text: "Text",
+    border: "Borders",
+    status: "Status",
+    data: "Data",
+    other: "Other"
+  });
+  var REVIEW_LABEL = Object.freeze({
+    "not-reviewed": "Not reviewed",
+    "looks-good": "Looks good",
+    "needs-work": "Needs work"
+  });
+  var NOT_COVERED = "Not covered by this system.";
+  var tokensOf = (detail, section2) => detail.tokens.filter((token) => (token.section === "other" ? "sizes" : token.section) === section2);
+  var COUNT_NOUN = {
+    colours: ["colour"],
+    spacing: ["value"],
+    radius: ["value"],
+    shadows: ["shadow"],
+    layers: ["layer"],
+    sizes: ["size"],
+    components: ["component"],
+    patterns: ["entry", "entries"],
+    brand: ["entry", "entries"]
+  };
+  var sectionCount = (detail, section2) => {
+    switch (section2) {
+      case "overview":
+        return (detail.overview?.text ? 1 : 0) + detail.notes.length;
+      case "typography":
+        return detail.type.length;
+      case "components":
+        return detail.components.length;
+      case "patterns":
+        return detail.patterns.length;
+      case "brand":
+        return detail.brand.length + detail.logos.length;
+      case "assets":
+        return detail.fonts.length + detail.sourceFiles.length;
+      default:
+        return tokensOf(detail, section2).length;
+    }
+  };
+  var countText = (detail, section2) => {
+    const count = sectionCount(detail, section2);
+    if (count === 0) return "Nothing yet";
+    if (section2 === "overview") return plural(detail.notes.length + (detail.overview?.text ? 1 : 0), "note");
+    if (section2 === "typography") return plural(count, "style");
+    if (section2 === "assets") return plural(count, "file");
+    const noun = COUNT_NOUN[section2] ?? ["entry", "entries"];
+    return count === 1 ? `1 ${noun[0]}` : `${count} ${noun[1] ?? `${noun[0]}s`}`;
+  };
+  var isCovered = (detail, section2) => detail.coverage.includes(AREA_OF_SECTION[section2]);
+  var sectionRow = (detail, section2) => {
+    const covered = isCovered(detail, section2);
+    const review = detail.review[section2]?.state ?? "not-reviewed";
+    const count = covered ? countText(detail, section2) : "Not covered";
+    return { section: section2, label: sectionLabel(section2), count, covered, review, ariaLabel: `${sectionLabel(section2)}, ${count}${covered ? `, ${REVIEW_LABEL[review]}` : ""}` };
+  };
+  var areaGroups = (detail) => SYSTEM_AREAS.map((area) => {
+    const rows = SYSTEM_SECTIONS.filter((section2) => AREA_OF_SECTION[section2] === area).map((section2) => sectionRow(detail, section2));
+    const covered = detail.coverage.includes(area);
+    return { area, label: AREA_LABEL[area], covered, meta: covered ? plural(rows.length, "section") : "Not covered", rows };
+  });
+  var reviewProgress = (detail) => {
+    const covered = SYSTEM_SECTIONS.filter((section2) => isCovered(detail, section2));
+    const done = covered.filter((section2) => detail.review[section2]?.state !== void 0 && detail.review[section2]?.state !== "not-reviewed").length;
+    const total = covered.length;
+    return { text: `${done} of ${total} reviewed`, done, total, percent: total === 0 ? 0 : Math.round(done / total * 100) };
+  };
+  var unreviewedSections = (detail) => SYSTEM_SECTIONS.filter((section2) => isCovered(detail, section2) && (detail.review[section2]?.state ?? "not-reviewed") === "not-reviewed");
+  var reviewFoot = (detail, section2) => {
+    if (!isCovered(detail, section2)) return { kind: "uncovered", text: NOT_COVERED };
+    const state = detail.review[section2]?.state ?? "not-reviewed";
+    if (state === "looks-good") return { kind: "state", state, text: "Looks good", actions: ["needs-work"] };
+    if (state === "needs-work") return { kind: "state", state, text: "Needs work", actions: ["looks-good"] };
+    return { kind: "ask", text: `Does ${sectionLabel(section2)} look right?`, actions: ["looks-good", "needs-work"] };
+  };
+  var REVIEW_BUTTON = Object.freeze({ "looks-good": "Looks good", "needs-work": "Needs work" });
+  var readyControl = (detail) => detail.status === "draft" ? { label: "Mark ready", emphasis: "primary", state: "draft" } : { label: "Back to draft", emphasis: "none", state: "ready" };
+  var readyNotice = (name, unreviewed) => unreviewed > 0 ? { title: `${name} is ready.`, body: `${plural(unreviewed, "section")} ${unreviewed === 1 ? "wasn\u2019t" : "weren\u2019t"} reviewed.`, action: unreviewed === 1 ? "Review it" : `Review the ${unreviewed}` } : { title: `${name} is ready.`, body: "", action: null };
+  var firstEntryOf = (detail, section2) => {
+    const key = (kind, id) => {
+      try {
+        return entryKeyOf(kind, id);
+      } catch {
+        return null;
+      }
+    };
+    switch (section2) {
+      case "overview":
+        return detail.overview?.text ? "overview" : detail.notes[0] ? key("note", detail.notes[0].id) : null;
+      case "typography":
+        return detail.type[0] ? key("type", detail.type[0].id) : detail.fonts.length > 0 ? key("font", "0") : null;
+      case "components":
+        return detail.components[0] ? key("component", detail.components[0].id) : null;
+      case "patterns":
+        return detail.patterns[0] ? key("pattern", detail.patterns[0].id) : null;
+      case "brand":
+        return detail.brand[0] ? key("brand", detail.brand[0].id) : detail.logos.length > 0 ? key("logo", "0") : null;
+      case "assets":
+        return detail.fonts.length > 0 ? key("font", "0") : null;
+      default: {
+        const first = tokensOf(detail, section2)[0];
+        return first ? key("token", first.name) : null;
+      }
+    }
+  };
+  var sectionOfHit = (detail, entry) => {
+    if (entry === void 0 || !BOARD_ENTRY_PATTERN.test(entry)) return null;
+    const parsed = parseEntryKey(entry);
+    return parsed === null ? null : sectionOfEntry(parsed, detail);
+  };
+  var entrySelector = (entry) => `[data-dc-entry="${entry.replace(/["\\]/g, "\\$&")}"]`;
+  var homeLine2 = (detail, sourceText2) => {
+    const parts = detail.home.kind === "repo" ? [`Repo \xB7 ${detail.home.label}`] : ["In Design Chamber"];
+    if (sourceText2 && detail.home.kind !== "repo") parts.push(sourceText2);
+    parts.push(detail.usedBy === 0 ? "Not used yet" : `Used by ${plural(detail.usedBy, "design")}`);
+    return parts.join(" \xB7 ");
+  };
+  var homeTitle = (detail) => detail.home.kind === "repo" ? detail.home.directory : "Kept in your Designs folder";
+  var livingPagePill = (detail) => {
+    if (detail.home.kind !== "repo" || detail.livingPage === null || detail.livingPage.state === null) return null;
+    const repo = detail.home.label;
+    const title2 = detail.livingPage.sentence ?? "";
+    switch (detail.livingPage.state) {
+      case "fresh":
+        return { label: "Living page up to date", tone: "success", title: title2 };
+      case "out-of-date":
+        return { label: "Living page out of date", tone: "warning", title: title2 };
+      case "missing":
+        return { label: `Living page not in ${repo} yet`, tone: "warning", title: title2 };
+      case "changed":
+        return { label: `Living page changed in ${repo}`, tone: "warning", title: title2 };
+      case "reformatted":
+        return { label: "Living page reformatted", tone: "info", title: title2 };
+      case "unsafe":
+        return { label: "Living page can\u2019t be checked as safe", tone: "error", title: title2 };
+      case "unreadable":
+        return { label: "Living page can\u2019t be read", tone: "error", title: title2 };
+    }
+  };
+  var railHint = (detail) => detail.home.kind === "repo" ? `${detail.name} lives in ${detail.home.label}. Change the values there, or ask the agent here.` : "To edit values, open Design Chamber full screen: sidebar, Extension pages, Design Chamber.";
+  var boardScheme = (mode) => mode === "dark" ? "dark" : "light";
+  var entryLabel = (detail, entry) => {
+    const parsed = parseEntryKey(entry);
+    if (parsed === null) return { tag: "entry", text: "" };
+    switch (parsed.kind) {
+      case "token":
+        return { tag: "token", text: parsed.key };
+      case "type":
+        return { tag: "type", text: detail.type.find((style) => style.id === parsed.key)?.name ?? parsed.key };
+      case "component":
+        return { tag: "component", text: detail.components.find((component) => component.id === parsed.key)?.name ?? parsed.key };
+      case "overview":
+        return { tag: "overview", text: "Overview" };
+      case "note":
+        return { tag: "note", text: detail.notes.find((note) => note.id === parsed.key)?.title ?? parsed.key };
+      case "pattern":
+        return { tag: "pattern", text: detail.patterns.find((entry2) => entry2.id === parsed.key)?.title ?? parsed.key };
+      case "brand":
+        return { tag: "brand", text: detail.brand.find((entry2) => entry2.id === parsed.key)?.title ?? parsed.key };
+      case "font":
+        return { tag: "font", text: detail.fonts[Number(parsed.key)]?.family ?? "Font" };
+      case "logo":
+        return { tag: "logo", text: detail.logos[Number(parsed.key)]?.variant ?? "Logo" };
+    }
+  };
+  var sourceText = (sources, folder, ago) => {
+    if (sources.code) {
+      const when = ago ? ago(sources.code.lastScan) : "";
+      return when === "" ? `From ${folder(sources.code.directory)}` : `Synced with ${folder(sources.code.directory)} ${when}`;
+    }
+    if (sources.brand > 0) return "From brand files";
+    if (sources.description) return "From a description";
+    return null;
+  };
+
+  // src/ui/model/resync-model.ts
+  var isCodeReview = (review) => review.kind === "code";
+  var KEPT_LINE = "Your notes, overview, fonts and assets stay as they are. Only values change.";
+  var PARTIAL_NOTE = "Some files weren\u2019t scanned, so tokens from them aren\u2019t listed as removed.";
+  var ROOT_CHANGED_SENTENCE = "Your Designs folder changed. Nothing was changed.";
+  var NOTHING_TICKED_REASON = "Tick at least one change to apply.";
+  var REMOVE_HINT = "These are no longer in the code. They stay in the system unless you tick them.";
+  var AGENT_TOKENS_NOTE = "Tokens the agent or you added here are never listed.";
+  var CHANGED_HINT = "The code changed these values since you made the system.";
+  var NEW_HINT = "In the code, not in the system yet.";
+  var FILES_HINT = "Fonts and logos in the project that the system doesn\u2019t have. Ticked ones are copied in.";
+  var CONFLICT_HINT = "You changed these here and the code changed them too. Your value stays unless you choose the code\u2019s.";
+  var NO_VALUE2 = "not set";
+  var RESYNC_NOTICE_MS = 3e5;
+  var GROUP_PAGE = 60;
+  var matchesSentence = (system, folder) => `${system} already matches ${folder}.`;
+  var scanningLabel = (folder, seen) => seen > 0 ? `Reading ${folder}\u2026 ${plural(seen, "file")} looked at` : `Reading ${folder}\u2026`;
+  var modeLabel = (mode) => mode === "light" ? "Light" : "Dark";
+  var byMode = (a, b) => a.mode === b.mode ? 0 : a.mode === "light" ? -1 : 1;
+  var changedRows = (review) => {
+    const rows = /* @__PURE__ */ new Map();
+    for (const one of review.changed) {
+      const row2 = rows.get(one.name) ?? { name: one.name, values: [] };
+      row2.values.push({ mode: one.mode, from: one.from, to: one.to });
+      rows.set(one.name, row2);
+    }
+    return [...rows.values()].map((row2) => ({ ...row2, values: row2.values.sort(byMode) }));
+  };
+  var conflictRows = (review) => {
+    const rows = /* @__PURE__ */ new Map();
+    for (const one of review.conflicts) {
+      const row2 = rows.get(one.name) ?? { name: one.name, values: [] };
+      row2.values.push({ mode: one.mode, mine: one.mine, code: one.code });
+      rows.set(one.name, row2);
+    }
+    return [...rows.values()].map((row2) => ({ ...row2, values: row2.values.sort(byMode) }));
+  };
+  var conflictSentence = (value, both) => `${both ? `${modeLabel(value.mode)}: ` : ""}You changed this here. The code now says ${value.code}.`;
+  var reviewIsEmpty = (review) => review.changed.length === 0 && review.conflicts.length === 0 && review.added.length === 0 && review.removed.length === 0 && review.assets.length === 0;
+  var swatchable = (value) => value !== "" && checkValue("colours", null, value).ok;
+  var reviewGroups = (review) => {
+    const groups = [
+      { id: "changes", title: "Changed", hint: CHANGED_HINT, ids: changedRows(review).map((row2) => row2.name) },
+      { id: "conflicts", title: "Conflicts", hint: CONFLICT_HINT, ids: conflictRows(review).map((row2) => row2.name) },
+      { id: "add", title: "New", hint: NEW_HINT, ids: [...review.added] },
+      { id: "remove", title: "No longer in the code", hint: REMOVE_HINT, ids: [...review.removed] },
+      { id: "assets", title: "New fonts and logos", hint: FILES_HINT, ids: review.assets.map((asset) => asset.path) }
+    ];
+    return groups.filter((group2) => group2.ids.length > 0);
+  };
+  var defaultTicks = (review) => ({
+    changes: new Set(changedRows(review).map((row2) => row2.name)),
+    add: new Set(review.added),
+    remove: /* @__PURE__ */ new Set(),
+    useCode: /* @__PURE__ */ new Set(),
+    assets: /* @__PURE__ */ new Set()
+  });
+  var isTicked = (ticks, group2, id) => (group2 === "conflicts" ? ticks.useCode : ticks[group2]).has(id);
+  var setTick = (ticks, group2, id, on) => {
+    const key = group2 === "conflicts" ? "useCode" : group2;
+    const next = new Set(ticks[key]);
+    if (on) next.add(id);
+    else next.delete(id);
+    return { ...ticks, [key]: next };
+  };
+  var setGroup = (ticks, group2, ids, on) => {
+    const key = group2 === "conflicts" ? "useCode" : group2;
+    return { ...ticks, [key]: on ? new Set(ids) : /* @__PURE__ */ new Set() };
+  };
+  var groupState = (ticks, group2, ids) => {
+    const set = group2 === "conflicts" ? ticks.useCode : ticks[group2];
+    const on = ids.filter((id) => set.has(id)).length;
+    return on === 0 ? "none" : on === ids.length ? "all" : "some";
+  };
+  var groupToggleLabel = (group2, state) => {
+    if (group2 === "conflicts") return state === "all" ? "Keep all mine" : "Use all the code\u2019s";
+    return state === "all" ? "Untick all" : "Tick all";
+  };
+  var countsOf = (ticks) => ({ changed: ticks.changes.size + ticks.useCode.size, added: ticks.add.size, removed: ticks.remove.size, files: ticks.assets.size });
+  var partsOf2 = (counts) => [
+    counts.changed > 0 ? `${counts.changed} changed` : "",
+    counts.added > 0 ? `${counts.added} added` : "",
+    counts.removed > 0 ? `${counts.removed} removed` : "",
+    counts.files > 0 ? `${plural(counts.files, "file")} copied` : ""
+  ].filter((part) => part !== "");
+  var nothingTicked = (ticks) => {
+    const counts = countsOf(ticks);
+    return counts.changed + counts.added + counts.removed + counts.files === 0;
+  };
+  var selectionLine = (ticks) => {
+    if (nothingTicked(ticks)) return { text: NOTHING_TICKED_REASON, canApply: false };
+    return { text: `Apply saves ${partsOf2(countsOf(ticks)).join(", ")}.`, canApply: true };
+  };
+  var resyncedSentence = (system, counts) => {
+    const parts = partsOf2(counts);
+    return parts.length === 0 ? `Re-synced ${system}.` : `Re-synced ${system}: ${parts.join(", ")}.`;
+  };
+  var applyBody = (scanId, stamp, ticks) => {
+    const sorted = (set) => [...set].sort();
+    return { scanId, stamp, changes: sorted(ticks.changes), add: sorted(ticks.add), remove: sorted(ticks.remove), useCode: sorted(ticks.useCode), assets: sorted(ticks.assets) };
+  };
+  var failureKind = (code, message) => {
+    if (message === ROOT_CHANGED_SENTENCE) return "root-changed";
+    if (code === "bad-path" || /^Design Chamber can['’]t read /.test(message)) return "folder";
+    if (/\bScan( the folder)? again\.?$/.test(message)) return "stale";
+    return "plain";
+  };
+  var folderInputProblem = (raw) => {
+    const path = raw.trim();
+    if (path === "") return "Type the full path of the folder.";
+    if (!/^([A-Za-z]:[\\/]|\\\\|\/)/.test(path)) return "Use the full path of the folder, such as C:\\Projects\\shop or /Users/you/shop.";
+    return null;
+  };
+  var sheetSubtitle = (system) => `Read the project again and update ${system} from it.`;
+
+  // src/ui/model/living-page-model.ts
+  var LIVING_TITLE = "Living page";
+  var REGENERATING_LABEL = "Regenerating\u2026";
+  var PREVIEW_NOTE2 = "This is the page Design Chamber generated. The copy in shop may differ.";
+  var FONTS_LABEL = "Embed fonts in the living page";
+  var FONTS_HELP = "Turn on only if the fonts\u2019 licences allow publishing them.";
+  var WAITING_WINDOW_MS = 3e4;
+  var SECRET_KIND_LABELS2 = {
+    "aws-key": "an AWS key",
+    "github-token": "a GitHub token",
+    "openai-style-key": "an OpenAI-style key",
+    "slack-token": "a Slack token",
+    "google-key": "a Google key",
+    "private-key": "a private key"
+  };
+  var PROBLEM_REASONS = {
+    "too-large": "It would be too large.",
+    bundle: "A file couldn\u2019t be embedded.",
+    unsafe: "It didn\u2019t pass the safety check.",
+    secret: "It would show something shaped like a secret.",
+    "no-snapshot": "The repo folder hasn\u2019t been read yet."
+  };
+  var OMITTED_REASONS = {
+    "too-large": "too large",
+    unsafe: "not safe to embed",
+    budget: "the page is at its size limit",
+    "no-browser": "Chrome isn\u2019t available",
+    "render-failed": "it couldn\u2019t be drawn",
+    licence: "Embed fonts is off"
+  };
+  var NOUN = {
+    font: ["font", "fonts", "embedded"],
+    logo: ["logo", "logos", "embedded"],
+    example: ["example picture", "example pictures", "included"]
+  };
+  var LABEL = {
+    fresh: { text: () => "Up to date", tone: "success" },
+    "out-of-date": { text: () => "Out of date", tone: "warning" },
+    missing: { text: (repo) => `Not in ${repo} yet`, tone: "warning" },
+    changed: { text: (repo) => `Changed in ${repo}`, tone: "warning" },
+    reformatted: { text: () => "Reformatted", tone: "info" },
+    unsafe: { text: () => "Can\u2019t check as safe", tone: "error" },
+    unreadable: { text: () => "Can\u2019t read", tone: "error" },
+    problem: { text: () => "Couldn\u2019t generate", tone: "error" }
+  };
+  var UNSAFE_SENTENCE = "The living page has markup Design Chamber didn\u2019t generate and can\u2019t check as safe.";
+  var WAITING_SENTENCE = "Design Chamber is waiting for the agent to commit it.";
+  var CANT_PREVIEW = "There is no generated page to preview yet.";
+  var CANT_ASK_UNREADABLE = "The repo can\u2019t be read.";
+  var CANT_ASK_PROBLEM = "Design Chamber couldn\u2019t generate the page yet.";
+  var repoOf = (context) => context.home.kind === "repo" ? context.home.label : "the repo";
+  var problemReason = (problem) => Object.hasOwn(PROBLEM_REASONS, problem) ? PROBLEM_REASONS[problem] : "Something went wrong.";
+  var kindOf = (view2) => view2.staged !== null && view2.staged.problem !== null ? "problem" : view2.committed.state;
+  var waitingForCommit = (context, now) => {
+    const at = context.build?.applied?.at;
+    if (at === void 0) return false;
+    const then = Date.parse(at);
+    return Number.isFinite(then) && now - then >= 0 && now - then <= WAITING_WINDOW_MS;
+  };
+  var sentenceOf = (kind, view2, context, now) => {
+    const repo = repoOf(context);
+    const revision = view2.committed.revision;
+    switch (kind) {
+      case "fresh":
+        return `Generated from revision ${revision ?? context.revision}, the current one.`;
+      case "out-of-date":
+        return `Generated from revision ${revision ?? "?"}; ${context.name} is at revision ${context.revision}.`;
+      case "missing":
+        return waitingForCommit(context, now) ? `No living page in ${repo} yet. ${WAITING_SENTENCE}` : `No living page in ${repo} yet.`;
+      case "changed":
+        return `The page in ${repo} differs from the one Design Chamber generated.`;
+      case "reformatted":
+        return `The living page may have been reformatted since it was generated. Its values are from revision ${revision ?? context.revision}, the current one.`;
+      case "unsafe":
+        return UNSAFE_SENTENCE;
+      case "unreadable":
+        return view2.committed.sentence.replace(/'/g, "\u2019");
+      case "problem":
+        return `Design Chamber couldn\u2019t generate the living page. ${problemReason(view2.staged?.problem ?? "")}`;
+    }
+  };
+  var secretLine = (secrets) => {
+    if (secrets.length === 0) return null;
+    const shown = secrets.slice(0, 2).map((secret) => `${SECRET_KIND_LABELS2[secret.kind] ?? "a secret"} in ${secret.where}`);
+    const rest = secrets.length - shown.length;
+    const list = rest > 0 ? `${shown.join(", ")} and ${plural(rest, "more")}` : shown.join(" and ");
+    return `The page shows something shaped like a secret (${list}). Remove it before anyone else sees the page.`;
+  };
+  var omittedLines = (omitted) => {
+    const order = [];
+    const groups = /* @__PURE__ */ new Map();
+    for (const item of omitted) {
+      const key = `${item.what}\0${item.reason}`;
+      const found = groups.get(key);
+      if (found) found.count += 1;
+      else {
+        groups.set(key, { what: item.what, reason: item.reason, count: 1 });
+        order.push(key);
+      }
+    }
+    return order.map((key) => {
+      const group2 = groups.get(key);
+      const [one, many, verb] = NOUN[group2.what] ?? ["item", "items", "included"];
+      const reason = Object.hasOwn(OMITTED_REASONS, group2.reason) ? OMITTED_REASONS[group2.reason] : "left out";
+      return `${plural(group2.count, one, many)} ${group2.count === 1 ? "wasn\u2019t" : "weren\u2019t"} ${verb}: ${reason}.`;
+    });
+  };
+  var previewTarget = (view2, context) => {
+    const staged = view2.staged;
+    if (staged === null) return null;
+    if (context.proposal !== null && context.proposal.state === "current" && staged.preview !== null && staged.preview.problem === null) return { which: "preview", proposal: staged.preview.proposal };
+    return staged.problem === null ? { which: "staged", proposal: null } : null;
+  };
+  var ACTIONS = {
+    fresh: ["preview", "reveal"],
+    "out-of-date": ["ask", "preview", "reveal"],
+    missing: ["ask", "preview"],
+    changed: ["ask", "preview", "reveal"],
+    reformatted: ["preview", "reveal"],
+    unsafe: ["ask", "reveal"],
+    unreadable: ["reveal"],
+    problem: ["fix", "ask"]
+  };
+  var ACTION_COPY = {
+    ask: { label: "Ask the agent to update it", look: "tinted" },
+    fix: { label: "Ask the agent to fix it", look: "tinted" },
+    preview: { label: "Preview living page", look: "outline" },
+    reveal: { label: "Reveal living page", look: "ghost" }
+  };
+  var livingCard = (view2, context, options) => {
+    const kind = kindOf(view2);
+    const staged = view2.staged;
+    const regenerating = options.regenerating === true;
+    const locked = options.locked ?? null;
+    const repo = repoOf(context);
+    const preview = previewTarget(view2, context);
+    const gate = (id) => {
+      if (id === "reveal") return { enabled: true, why: null };
+      if (regenerating) return { enabled: false, why: REGENERATING_LABEL };
+      if (id === "preview") return preview === null ? { enabled: false, why: CANT_PREVIEW } : { enabled: true, why: null };
+      if (locked !== null) return { enabled: false, why: locked };
+      if (!view2.repoReadable) return { enabled: false, why: CANT_ASK_UNREADABLE };
+      if (id === "ask" && kind === "problem") return { enabled: false, why: CANT_ASK_PROBLEM };
+      return { enabled: true, why: null };
+    };
+    const actions = ACTIONS[kind].map((id) => ({ id, ...ACTION_COPY[id], ...gate(id) }));
+    const parts = [view2.path];
+    if (staged !== null) parts.push(fileSize(staged.bytes, options.locale), `rev ${staged.revision}`);
+    const access = context.build?.access ?? null;
+    return {
+      kind,
+      label: LABEL[kind].text(repo),
+      tone: LABEL[kind].tone,
+      sentence: sentenceOf(kind, view2, context, options.now),
+      reasons: kind === "unsafe" ? view2.committed.reasons.slice(0, 3) : [],
+      pathLine: parts.join(" \xB7 "),
+      omitted: staged === null ? [] : omittedLines(staged.omitted),
+      secretLine: staged === null ? null : secretLine(staged.secrets),
+      actions,
+      fonts: access === "dev" ? null : { label: FONTS_LABEL, help: FONTS_HELP, checked: view2.embedFonts, disabled: locked !== null || regenerating },
+      regenerating
+    };
+  };
+  var previewBand = (target) => target.which === "preview" && target.proposal !== null ? `Preview of proposal ${target.proposal}` : "Preview of the generated living page";
+
+  // src/ui/model/system-home-model.ts
+  var BANNER_MAX = 2;
+  var ACTION_LABEL = {
+    "choose-folder": "Choose another folder\u2026",
+    resync: "Re-sync",
+    "build-continue": "Ask the agent to fix it",
+    "ask-landed": "Ask the agent about it",
+    "ask-living": "Ask the agent to update it"
+  };
+  var action = (id) => ({ id, label: ACTION_LABEL[id] });
+  var withoutRepeatedActions = (banners) => {
+    const seen = /* @__PURE__ */ new Set();
+    return banners.map((banner2) => {
+      if (banner2.action === null) return banner2;
+      if (seen.has(banner2.action.id)) return { ...banner2, action: null };
+      seen.add(banner2.action.id);
+      return banner2;
+    });
+  };
+  var candidates = (detail, options) => {
+    const out = [];
+    const repo = detail.home.kind === "repo" ? detail.home : null;
+    if (detail.unreadable) out.push({ id: "unreadable", tone: "error", title: `${detail.name} can\u2019t be read`, body: detail.unreadable, action: null });
+    if (repo !== null && !repo.readable) {
+      const ago = repo.lastRead === null ? "" : relativeTime(repo.lastRead, options.now, options.locale);
+      const parts = [repo.problem ?? "", ago === "" ? "" : `Showing the last scan from ${ago}.`, "Re-sync and the living-page actions are off until it reads again."];
+      out.push({ id: "repoProblem", tone: "error", title: "The repo can\u2019t be read.", body: parts.filter((part) => part !== "").join(" "), action: action("choose-folder") });
+    }
+    if (repo !== null && detail.snapshot?.tampered === true) {
+      out.push({ id: "tampered", tone: "warning", title: `${detail.name}\u2019s snapshot was changed outside Design Chamber.`, body: `Re-sync to read ${repo.label} again.`, action: action("resync") });
+    }
+    if (detail.buildProblem) out.push({ id: "buildProblem", tone: "warning", title: "The build has a problem.", body: detail.buildProblem, action: action("build-continue") });
+    if (detail.landed !== null && !detail.landed.matches && detail.landed.sentence) {
+      out.push({ id: "landed", tone: "warning", title: "What landed differs from what you approved.", body: detail.landed.sentence, action: action("ask-landed") });
+    }
+    if (repo !== null) {
+      const secret = options.secrets !== void 0 && options.secrets.length > 0 ? secretLine(options.secrets) : null;
+      if (detail.livingPage?.state === "unsafe") {
+        out.push({ id: "living", tone: "error", title: "The living page can\u2019t be checked as safe.", body: UNSAFE_SENTENCE, action: action("ask-living") });
+      } else if (secret !== null) {
+        out.push({ id: "living", tone: detail.build?.access === "dev" ? "warning" : "error", title: "The living page shows something shaped like a secret.", body: secret, action: action("ask-living") });
+      }
+    }
+    if (detail.changesToReview) {
+      out.push({ id: "changes", tone: "info", title: "Some values changed since you marked it ready.", body: "Look at what changed, then mark it ready again.", action: null });
+    }
+    return out;
+  };
+  var systemBanners = (detail, options) => {
+    const all = withoutRepeatedActions(candidates(detail, options));
+    const shown = all.slice(0, BANNER_MAX);
+    const more = all.slice(BANNER_MAX);
+    return { shown, more, moreLabel: more.length === 0 ? null : `+${more.length} more` };
+  };
+  var readOnlyLine = (detail) => detail.home.kind === "repo" ? { lead: `${detail.name} lives in ${detail.home.label}.`, rest: "Change the values there, or ask the agent here." } : null;
+  var repoHeaderLine = (detail) => detail.home.kind === "repo" ? { text: `Repo \xB7 ${detail.home.label} \xB7 ${detail.home.folder.replace(/\/+$/, "")}/`, title: detail.home.directory } : null;
+  var NAME_MAX2 = 80;
+  var clip4 = (text, max) => {
+    const flat = text.replace(/\s+/g, " ").trim();
+    return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
+  };
+  var nameList = (files) => {
+    const shown = files.slice(0, 3).map((file) => clip4(file, NAME_MAX2));
+    return files.length > 3 ? `${shown.join(", ")} and ${files.length - 3} more` : shown.join(", ");
+  };
+  var driftLines = (detail) => {
+    const code = detail.codeDrift;
+    const agent = detail.agentDrift;
+    let sentence2 = null;
+    let unread = null;
+    if (code !== null) {
+      if (code.differ > 0) {
+        sentence2 = code.mode === "fix" ? `In CSS variables and token JSON, ${plural(code.differ, "token")} ${code.differ === 1 ? "differs" : "differ"} from ${detail.name}.` : `In CSS variables and token JSON, ${plural(code.differ, "token")} still ${code.differ === 1 ? "differs" : "differ"} from what ${detail.name} describes.`;
+        if (code.unread.length > 0) unread = `Design Chamber can\u2019t read ${nameList(code.unread)}, so differences there aren\u2019t counted.`;
+      } else if (code.unread.length > 0) {
+        sentence2 = `No differences in CSS variables or token JSON. Design Chamber can\u2019t check ${nameList(code.unread)}.`;
+      }
+    }
+    let agentLine = null;
+    if (agent !== null && agent.differ > 0) {
+      const kinds = agent.kinds.map((kind) => clip4(kind, NAME_MAX2)).filter((kind) => kind !== "").join(", ");
+      const note = clip4(agent.note, 300);
+      const count = plural(agent.differ, "difference");
+      agentLine = note === "" ? `The agent reports ${count}${kinds === "" ? "" : ` in ${kinds}`} that Design Chamber can\u2019t count.` : `The agent reports: \u201C${note}\u201D (${count}${kinds === "" ? "" : ` in ${kinds}`}; Design Chamber can\u2019t count these).`;
+    }
+    return { sentence: sentence2, unread, agent: agentLine, canReconcile: (code?.differ ?? 0) > 0 || (agent?.differ ?? 0) > 0 };
+  };
+  var landedLine = (detail) => detail.landed !== null && !detail.landed.matches && detail.landed.sentence ? { sentence: detail.landed.sentence, action: ACTION_LABEL["ask-landed"] } : null;
+  var row = (name, patch = {}) => ({ name, tag: null, from: null, to: null, note: null, ...patch });
+  var repoReviewModel = (review, context) => {
+    const { tokens, files } = review;
+    const sections = [];
+    const add = (id, title2, count, rows) => {
+      if (count > 0 || rows.length > 0) sections.push({ id, title: title2, count: Math.max(count, rows.length), rows, more: Math.max(0, count - rows.length) });
+    };
+    add(
+      "changed",
+      "Changed",
+      tokens.totals.changed,
+      tokens.changed.map((one) => row(one.name, { tag: one.mode === "light" ? "Light" : "Dark", from: one.from, to: one.to }))
+    );
+    add("added", `New in ${context.repo}`, tokens.totals.added, tokens.added.map((name) => row(name)));
+    add("removed", `No longer in ${context.repo}`, tokens.totals.removed, tokens.removed.map((name) => row(name)));
+    const fileRows = [
+      ...files.changed.map((name) => row(name, { tag: "Changed" })),
+      ...files.added.map((name) => row(name, { tag: "New" })),
+      ...files.removed.map((name) => row(name, { tag: "Removed" }))
+    ];
+    add("files", "Other files changed", fileRows.length, fileRows);
+    add("skipped", "Skipped", review.skipped.length, review.skipped.map((one) => row(one.path, { note: one.reason })));
+    const hasChange2 = sections.some((section2) => section2.id !== "skipped") || review.directoryChanged;
+    return {
+      title: context.hasSnapshot ? `Re-sync ${context.systemName} from ${context.repo}` : `Read ${context.systemName} from ${context.repo}`,
+      intro: `Design Chamber will show ${context.repo} as it is now. To go back, change ${context.repo} and re-sync.`,
+      repoint: review.directoryChanged ? `${context.systemName} will read from ${review.directory} from now on.` : null,
+      sections,
+      refused: review.refused > 0 ? `${plural(review.refused, "file")} ${review.refused === 1 ? "isn\u2019t a type" : "aren\u2019t a type"} design systems use, so ${review.refused === 1 ? "it was" : "they were"} left out.` : null,
+      blocked: review.folderFound ? null : `${context.repo} has no ${context.folder} folder yet.`,
+      nothingChanged: !hasChange2,
+      matches: `${context.repo} matches what Design Chamber shows.`
+    };
+  };
+
+  // src/ui/systems/living-card.ts
+  var ICON = { ask: "chat", fix: "chat", preview: "eye" };
+  var actionButton = (action2, handlers) => {
+    const handle = btn({
+      label: action2.label,
+      variant: action2.look === "tinted" ? "default" : action2.look,
+      size: "sm",
+      ...ICON[action2.id] ? { icon: ICON[action2.id] } : {},
+      disabled: !action2.enabled,
+      ...action2.why ? { title: action2.why } : {},
+      onClick: () => handlers.onAction(action2.id)
+    });
+    handle.el.dataset.action = action2.id;
+    if (action2.look === "tinted") handle.el.classList.add("dc-living-tint");
+    return handle.el;
+  };
+  var renderLivingCard = (card, handlers) => {
+    const badge = h("span", { class: "dc-living-badge" });
+    mountBadge(badge, { label: card.regenerating ? REGENERATING_LABEL : card.label, tone: card.regenerating ? "neutral" : card.tone });
+    const reasons = card.reasons.length > 0 ? h("ul", { class: "dc-living-reasons" }, ...card.reasons.map((reason) => h("li", null, reason))) : null;
+    const whys = [...new Set(card.actions.filter((action2) => !action2.enabled && action2.why !== null && action2.why !== REGENERATING_LABEL && action2.id !== "preview").map((action2) => action2.why))];
+    const root = h(
+      "article",
+      { class: "dc-living", "data-kind": card.kind, "data-tone": card.tone, "data-regenerating": String(card.regenerating), "aria-label": LIVING_TITLE },
+      h("div", { class: "dc-living-head" }, h("h4", { class: "dc-living-title" }, LIVING_TITLE), badge),
+      h("p", { class: "dc-living-line" }, card.sentence),
+      reasons,
+      ...card.omitted.map((line) => h("p", { class: "dc-living-line dc-muted" }, line)),
+      card.secretLine === null ? null : h("p", { class: "dc-living-secret", role: "alert" }, card.secretLine),
+      h("p", { class: "dc-living-path dc-muted" }, card.pathLine),
+      h("div", { class: "dc-living-actions" }, ...card.actions.map((action2) => actionButton(action2, handlers))),
+      ...whys.map((why) => h("p", { class: "dc-living-why dc-muted" }, why))
+    );
+    if (card.fonts !== null) {
+      const holder = h("div", { class: "dc-living-fonts" });
+      mountSwitch(holder, { label: card.fonts.label, description: card.fonts.help, checked: card.fonts.checked, disabled: card.fonts.disabled, onChange: (checked) => handlers.onEmbedFonts(checked) });
+      root.append(holder);
+    }
+    return root;
+  };
+
+  // src/ui/systems/living-preview.ts
+  var loadLivingRender = async (id, which, scheme) => {
+    const meta = await client.call("GET /systems/:id/living-page/render", { params: { id }, query: { which, scheme } });
+    const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
+    const parts = new Array(indexes.length).fill("");
+    let next = 0;
+    const worker = async () => {
+      while (next < indexes.length) {
+        const n = next;
+        next += 1;
+        parts[n] = await client.call("GET /systems/:id/living-page/render/chunk", { params: { id }, query: { key: meta.key, n: String(n) } });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(RENDER_CHUNK_CONCURRENCY, indexes.length) }, worker));
+    return { meta, html: parts.join("") };
+  };
+  var mountLivingPreview = (options) => {
+    let target = null;
+    const slot = createFrameSlot({
+      slug: `living:${options.id}`,
+      loadDoc: () => loadLivingRender(options.id, target?.which ?? "staged", boardScheme(host.snapshot()?.theme.mode)),
+      artboardId: artboardIdOf(null, "living"),
+      title: `${options.systemName()} living page preview`,
+      mode: () => "play",
+      scroll: () => ({ x: 0, y: 0 }),
+      onState: () => paintState()
+    });
+    slot.iframe.classList.add("dc-sys-frame");
+    const band = h("div", { class: "dc-lpv-band" });
+    const note = h("p", { class: "dc-lpv-note dc-muted" });
+    const status = h("div", { class: "dc-sys-board-state" });
+    const frame = h("div", { class: "dc-lpv-frame", role: "region" }, slot.iframe, status);
+    const close = iconBtn({ icon: "close", label: "Close the preview", onClick: () => api.close() });
+    const el2 = h(
+      "section",
+      { class: "dc-lpv", hidden: true, "aria-label": "Living page preview" },
+      h("div", { class: "dc-lpv-top" }, close, h("h2", { class: "dc-lpv-title" }, "Living page preview")),
+      band,
+      note,
+      frame
+    );
+    const load = () => void slot.load(null, null, "living-page.html");
+    function paintState() {
+      const state = slot.state();
+      frame.dataset.state = state;
+      status.replaceChildren();
+      if (state === "loading" || state === "idle") status.append(loadingRow("Loading the preview\u2026"));
+      else if (state === "missing" || state === "error") {
+        status.append(
+          h("p", { class: "dc-sys-board-message" }, state === "missing" ? "There is no generated page to show yet." : "The preview didn\u2019t load."),
+          h("p", { class: "dc-muted" }, slot.error() ?? "Try again in a moment."),
+          btn({ label: "Try again", variant: "outline", size: "sm", onClick: () => load() }).el
+        );
+      }
+    }
+    const api = {
+      el: el2,
+      open: (next) => {
+        target = next;
+        band.replaceChildren(h("span", { class: "dc-lpv-band-text" }, previewBand(next)));
+        note.textContent = PREVIEW_NOTE2.replace("shop", options.repo());
+        frame.setAttribute("aria-label", `Preview of the ${options.systemName()} living page`);
+        el2.hidden = false;
+        load();
+        close.focus();
+      },
+      close: () => {
+        if (el2.hidden) return;
+        el2.hidden = true;
+        target = null;
+        slot.unload();
+        options.onClose();
+      },
+      isOpen: () => !el2.hidden,
+      dispose: () => {
+        slot.dispose();
+        el2.remove();
+      }
+    };
+    return api;
+  };
+
+  // src/ui/systems/repo-review.ts
+  var rowView = (row2) => {
+    const values = row2.from !== null || row2.to !== null ? h("span", { class: "dc-resync-values" }, h("code", { class: "dc-resync-code" }, row2.from ?? ""), h("span", { class: "dc-resync-arrow", "aria-hidden": "true" }, "\u2192"), h("code", { class: "dc-resync-code" }, row2.to ?? "")) : null;
+    return h(
+      "li",
+      { class: "dc-resync-row", "data-repo-row": "true" },
+      h("span", { class: "dc-resync-name" }, row2.name),
+      row2.tag === null ? null : h("span", { class: "dc-resync-mode dc-muted" }, row2.tag),
+      values,
+      row2.note === null ? null : h("span", { class: "dc-resync-rownote dc-muted" }, row2.note)
+    );
+  };
+  var sectionView = (section2) => h(
+    "section",
+    { class: "dc-resync-group", "data-group": section2.id },
+    h("div", { class: "dc-resync-grouphead" }, h("h3", { class: "dc-resync-title" }, section2.title, h("span", { class: "dc-resync-count dc-muted" }, String(section2.count)))),
+    h("ul", { class: "dc-resync-list" }, ...section2.rows.map(rowView)),
+    section2.more > 0 ? h("p", { class: "dc-muted dc-resync-hint" }, `and ${section2.more} more`) : null
+  );
+  var paintRepoReview = (context, options) => {
+    const model = repoReviewModel(context.review, options);
+    let problem = null;
+    let busy = false;
+    let stale = false;
+    const draw = () => {
+      context.body.replaceChildren();
+      context.foot.replaceChildren();
+      if (busy) context.body.setAttribute("inert", "");
+      else context.body.removeAttribute("inert");
+      if (stale) {
+        context.body.append(h("p", { class: "dc-form-error", role: "alert" }, problem?.body ?? ""));
+        context.foot.append(btn({ label: "Not now", variant: "outline", onClick: () => context.close() }).el, btn({ label: "Scan again", variant: "default", emphasis: "primary", onClick: () => context.scanAgain() }).el);
+        return;
+      }
+      if (problem) context.body.append(banner({ tone: "error", title: problem.title, body: problem.body }));
+      if (model.nothingChanged && model.blocked === null) {
+        context.body.append(h("p", { class: "dc-resync-matches", role: "status" }, model.matches));
+        if (model.refused !== null) context.body.append(h("p", { class: "dc-muted" }, model.refused));
+        context.foot.append(btn({ label: "Close", variant: "outline", onClick: () => context.close() }).el);
+        return;
+      }
+      context.body.append(h("p", { class: "dc-muted dc-resync-intro" }, model.intro));
+      if (model.repoint !== null) context.body.append(h("p", { class: "dc-resync-repoint" }, model.repoint));
+      if (model.blocked !== null) context.body.append(h("p", { class: "dc-form-error", role: "alert" }, model.blocked));
+      for (const section2 of model.sections) context.body.append(sectionView(section2));
+      if (model.refused !== null) context.body.append(h("p", { class: "dc-muted dc-resync-foot-note" }, model.refused));
+      const apply = btn({ label: "Apply", variant: "default", emphasis: "primary", loading: busy, disabled: model.blocked !== null || busy, ...model.blocked !== null ? { title: model.blocked } : {}, onClick: () => void run() });
+      context.foot.append(btn({ label: "Not now", variant: "outline", disabled: busy, onClick: () => context.close() }).el, apply.el);
+    };
+    const run = async () => {
+      if (busy) return;
+      busy = true;
+      problem = null;
+      draw();
+      try {
+        const response = await client.call("POST /systems/:id/resync", { params: { id: options.id }, body: { scanId: context.scanId, stamp: context.stamp } });
+        const counts = { changed: response.counts.changed, added: response.counts.added, removed: response.counts.removed, files: 0 };
+        context.close();
+        options.onApplied({ response, counts, sentence: resyncedSentence(options.systemName, counts) });
+      } catch (error) {
+        busy = false;
+        const failure = toServiceError(error);
+        const kind = failureKind(failure.code, failure.message);
+        problem = { title: "Nothing was changed", body: failure.message };
+        stale = kind === "stale" || failure.code === "stale";
+        draw();
+      }
+    };
+    draw();
+  };
+
+  // src/ui/systems/resync-sheet.ts
+  var SCAN_POLL_MS2 = 500;
+  var openResyncSheet = (hostEl, options) => {
+    const scope = createScope();
+    let closed = false;
+    const sheet = openSheet(hostEl, {
+      title: options.title ?? `Re-sync ${options.systemName}`,
+      variant: "dialog",
+      ...options.subtitle === null ? {} : { subtitle: options.subtitle ?? sheetSubtitle(options.systemName) },
+      onClose: () => {
+        closed = true;
+        cancelScan();
+        scope.dispose();
+      }
+    });
+    sheet.el.classList.add("dc-resync");
+    let phase = "scanning";
+    let directory = options.directory;
+    let seen = 0;
+    let message = "";
+    let scanId = "";
+    let stamp = "";
+    let review = null;
+    let ticks = { changes: /* @__PURE__ */ new Set(), add: /* @__PURE__ */ new Set(), remove: /* @__PURE__ */ new Set(), useCode: /* @__PURE__ */ new Set(), assets: /* @__PURE__ */ new Set() };
+    let applyProblem = "";
+    let paintScope = createScope();
+    scope.add(() => paintScope.dispose());
+    let scanTicket = 0;
+    let scanJob = null;
+    let scanTimer = null;
+    function cancelScan() {
+      scanTicket += 1;
+      if (scanTimer !== null) clearTimeout(scanTimer);
+      scanTimer = null;
+      const job = scanJob;
+      scanJob = null;
+      if (job !== null) {
+        client.call("DELETE /system-scans/:scanId", { params: { scanId: job } }).catch((error) => {
+          console.warn("Design Chamber: the scan could not be cancelled; the service ends it on its own", error);
+        });
+      }
+    }
+    const fail = (error) => {
+      const failure = toServiceError(error);
+      message = failure.message;
+      const kind = failureKind(failure.code, failure.message);
+      phase = kind === "root-changed" ? "root-changed" : kind === "folder" ? "folder" : kind === "stale" ? "stale" : "failed";
+      paint();
+    };
+    const scan = async (folder) => {
+      cancelScan();
+      const mine = scanTicket;
+      directory = folder;
+      seen = 0;
+      applyProblem = "";
+      phase = "scanning";
+      paint();
+      try {
+        const detail = await client.call("GET /systems/:id", { params: { id: options.id } });
+        if (mine !== scanTicket) return;
+        stamp = options.stampOf ? options.stampOf(detail) : resyncStampOf(detail.stamps);
+        const started = await client.call("POST /system-scans", { body: { directory: folder, systemId: options.id } });
+        if (mine !== scanTicket) {
+          client.call("DELETE /system-scans/:scanId", { params: { scanId: started.scanId } }).catch(() => void 0);
+          return;
+        }
+        scanId = started.scanId;
+        scanJob = started.scanId;
+        const poll = async () => {
+          try {
+            const answer = await client.call("GET /system-scans/:scanId", { params: { scanId: started.scanId } });
+            if (mine !== scanTicket) return;
+            if (answer.state === "running") {
+              seen = answer.seen;
+              paintScanning();
+              scanTimer = setTimeout(() => void poll(), SCAN_POLL_MS2);
+              return;
+            }
+            scanJob = null;
+            if (answer.state !== "done") {
+              message = answer.message;
+              const kind = answer.state === "root-changed" ? "root-changed" : failureKind(null, answer.message);
+              phase = kind === "root-changed" ? "root-changed" : kind === "folder" ? "folder" : "failed";
+              paint();
+              return;
+            }
+            if (answer.review === void 0) {
+              message = "That scan has nothing to compare against. Scan again.";
+              phase = "stale";
+              paint();
+              return;
+            }
+            if (!isCodeReview(answer.review)) {
+              if (options.repoReview) {
+                message = "";
+                phase = "unsupported";
+                paint();
+                options.repoReview({ review: answer.review, scanId: started.scanId, stamp, body: sheet.body, foot: sheet.foot, close: sheet.close, scanAgain: () => void scan(directory) });
+                return;
+              }
+              message = `${options.systemName} lives in a project. Ask the agent to update it from the code.`;
+              phase = "unsupported";
+              paint();
+              return;
+            }
+            review = answer.review;
+            ticks = defaultTicks(answer.review);
+            phase = reviewIsEmpty(answer.review) ? "matches" : "review";
+            paint();
+          } catch (error) {
+            if (mine !== scanTicket) return;
+            scanJob = null;
+            fail(error);
+          }
+        };
+        await poll();
+      } catch (error) {
+        if (mine !== scanTicket) return;
+        fail(error);
+      }
+    };
+    let applying = false;
+    const apply = async () => {
+      if (applying || review === null) return;
+      const line = selectionLine(ticks);
+      if (!line.canApply) return;
+      applying = true;
+      applyProblem = "";
+      const counts = countsOf(ticks);
+      phase = "applying";
+      paint();
+      try {
+        const response = await client.call("POST /systems/:id/resync", { params: { id: options.id }, body: applyBody(scanId, stamp, ticks) });
+        if (closed) return;
+        applying = false;
+        const written = { changed: response.counts.changed, added: response.counts.added, removed: response.counts.removed, files: counts.files };
+        options.onApplied({ response, counts: written, sentence: resyncedSentence(options.systemName, written) });
+        sheet.close();
+      } catch (error) {
+        applying = false;
+        if (closed) return;
+        const failure = toServiceError(error);
+        const kind = failureKind(failure.code, failure.message);
+        message = failure.message;
+        if (kind === "plain") {
+          applyProblem = failure.message;
+          phase = "review";
+        } else phase = kind === "root-changed" ? "root-changed" : kind === "folder" ? "folder" : "stale";
+        paint();
+      }
+    };
+    const swatch2 = (value) => {
+      const node = h("span", { class: "dc-sp-swatch dc-resync-swatch", "aria-hidden": "true" });
+      if (swatchable(value)) node.style.setProperty("background-color", value);
+      else node.dataset.empty = "true";
+      return node;
+    };
+    const valueChip = (value) => {
+      const text = h("code", { class: "dc-resync-code" });
+      text.textContent = value === "" ? NO_VALUE2 : value;
+      return h("span", { class: "dc-resync-val" }, swatchable(value) ? swatch2(value) : null, text);
+    };
+    const modeTag = (mode) => h("span", { class: "dc-resync-mode dc-muted" }, modeLabel(mode));
+    const folderForm = (initial) => {
+      const inputId = nextId2("dc-resync-folder");
+      const input = h("input", { type: "text", id: inputId, class: "oc-sdk-input", placeholder: "C:\\Projects\\shop or /Users/you/shop", spellcheck: "false", autocomplete: "off" });
+      input.value = initial;
+      const problem = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+      const go = () => {
+        const issue = folderInputProblem(input.value);
+        problem.hidden = issue === null;
+        problem.textContent = issue ?? "";
+        if (issue === null) void scan(input.value.trim());
+      };
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          go();
+        }
+      });
+      const read = btn({ label: "Read this folder", variant: "outline", size: "sm", onClick: go });
+      queueMicrotask(() => input.focus());
+      return h("div", { class: "dc-field dc-resync-folder" }, h("label", { class: "oc-sdk-field-label", for: inputId }, "Project folder"), h("div", { class: "dc-newsys-row" }, input, read.el), problem);
+    };
+    const done = (label = "Close") => btn({ label, variant: "outline", onClick: () => sheet.close() }).el;
+    let scanningText = null;
+    function paintScanning() {
+      if (phase === "scanning" && scanningText) {
+        scanningText.replaceChildren();
+        mountSpinner(scanningText, { label: scanningLabel(folderName(directory), seen) });
+      }
+    }
+    function paint() {
+      paintScope.dispose();
+      paintScope = createScope();
+      scanningText = null;
+      sheet.body.removeAttribute("inert");
+      sheet.body.replaceChildren();
+      sheet.foot.replaceChildren();
+      const system = options.systemName;
+      if (phase === "ask-folder") {
+        sheet.body.append(folderForm(directory));
+        sheet.foot.append(done("Not now"));
+        return;
+      }
+      if (phase === "scanning") {
+        scanningText = h("div", { class: "dc-resync-running", role: "status" });
+        sheet.body.append(scanningText);
+        paintScanning();
+        sheet.foot.append(btn({ label: "Cancel", variant: "outline", onClick: () => sheet.close() }).el);
+        return;
+      }
+      if (phase === "matches") {
+        sheet.body.append(h("p", { class: "dc-resync-matches", role: "status" }, matchesSentence(system, folderName(directory))), h("p", { class: "dc-muted" }, KEPT_LINE));
+        sheet.foot.append(done());
+        return;
+      }
+      if (phase === "stale") {
+        sheet.body.append(h("p", { class: "dc-form-error", role: "alert" }, message));
+        sheet.foot.append(done("Not now"), btn({ label: "Scan again", variant: "default", emphasis: "primary", onClick: () => void scan(directory) }).el);
+        return;
+      }
+      if (phase === "folder") {
+        const form = h("div", { class: "dc-resync-stack" }, h("p", { class: "dc-form-error", role: "alert" }, message));
+        const choose = btn({
+          label: "Choose another folder\u2026",
+          variant: "outline",
+          size: "sm",
+          onClick: () => {
+            choose.el.replaceWith(folderForm(directory));
+          }
+        });
+        form.append(choose.el);
+        sheet.body.append(form);
+        sheet.foot.append(done("Not now"));
+        return;
+      }
+      if (phase === "failed") {
+        sheet.body.append(h("div", { class: "dc-resync-stack" }, h("p", { class: "dc-form-error", role: "alert" }, message), h("p", { class: "dc-muted" }, `${system} wasn\u2019t changed.`)));
+        sheet.foot.append(done("Not now"), btn({ label: "Scan again", variant: "outline", onClick: () => void scan(directory) }).el);
+        return;
+      }
+      if (phase === "root-changed") {
+        sheet.body.append(h("p", { class: "dc-form-error", role: "alert" }, message));
+        sheet.foot.append(done());
+        return;
+      }
+      if (phase === "unsupported") {
+        if (message !== "") {
+          sheet.body.append(h("p", { class: "dc-muted" }, message));
+          sheet.foot.append(done());
+        }
+        return;
+      }
+      if (review !== null) paintReview(review);
+    }
+    function paintReview(current) {
+      const boxes = /* @__PURE__ */ new Map();
+      const pairs = /* @__PURE__ */ new Map();
+      const toggles = /* @__PURE__ */ new Map();
+      const busy = phase === "applying";
+      const groups = reviewGroups(current);
+      const changed = new Map(changedRows(current).map((row2) => [row2.name, row2]));
+      const conflicts = new Map(conflictRows(current).map((row2) => [row2.name, row2]));
+      const keyOf3 = (group2, id) => `${group2}:${id}`;
+      const syncTicks = () => {
+        for (const [key, box] of boxes) {
+          const [group2, ...rest] = key.split(":");
+          box.update({ checked: isTicked(ticks, group2, rest.join(":")) });
+        }
+        for (const [key, pair] of pairs) {
+          const on = isTicked(ticks, "conflicts", key);
+          pair.mine.set({ pressed: !on });
+          pair.code.set({ pressed: on });
+        }
+        for (const [group2, toggle] of toggles) toggle.button.set({ label: groupToggleLabel(group2, groupState(ticks, group2, toggle.ids)) });
+        const line = selectionLine(ticks);
+        selection2.textContent = line.text;
+        selection2.dataset.empty = String(!line.canApply);
+        applyButton.set({ disabled: !line.canApply });
+      };
+      const tick = (group2, id, on) => {
+        ticks = setTick(ticks, group2, id, on);
+        syncTicks();
+      };
+      const tickRow = (group2, id, label, detail) => {
+        const holder = h("div", { class: "dc-resync-check" });
+        const box = mountCheckbox(holder, { label, checked: isTicked(ticks, group2, id), disabled: busy, onChange: (on) => tick(group2, id, on) });
+        paintScope.add(() => box.dispose());
+        boxes.set(keyOf3(group2, id), box);
+        return h("li", { class: "dc-resync-row", "data-group": group2 }, holder, detail);
+      };
+      const changedRow = (name) => {
+        const row2 = changed.get(name);
+        const lines = (row2?.values ?? []).map((value) => {
+          const both = (row2?.values.length ?? 0) > 1 || value.mode === "dark";
+          const line = h("p", { class: "dc-resync-line" }, both ? modeTag(value.mode) : null, valueChip(value.from), h("span", { class: "dc-resync-arrow", "aria-hidden": "true" }, "\u2192"), h("span", { class: "dc-sr-only" }, "now"), valueChip(value.to));
+          return line;
+        });
+        return tickRow("changes", name, name, h("div", { class: "dc-resync-values" }, ...lines));
+      };
+      const conflictRow = (name) => {
+        const row2 = conflicts.get(name);
+        const both = (row2?.values.length ?? 0) > 1 || row2?.values[0]?.mode === "dark";
+        const lines = (row2?.values ?? []).map(
+          (value) => h(
+            "div",
+            { class: "dc-resync-conflict" },
+            h("p", { class: "dc-resync-text" }, conflictSentence(value, both)),
+            h("p", { class: "dc-resync-line" }, h("span", { class: "dc-muted" }, "Yours"), valueChip(value.mine), h("span", { class: "dc-muted" }, "Code"), valueChip(value.code))
+          )
+        );
+        const on = isTicked(ticks, "conflicts", name);
+        const mine = btn({ label: "Keep mine", variant: "outline", size: "xs", pressed: !on, disabled: busy, onClick: () => tick("conflicts", name, false) });
+        const code = btn({ label: "Use the code\u2019s", variant: "outline", size: "xs", pressed: on, disabled: busy, onClick: () => tick("conflicts", name, true) });
+        pairs.set(name, { mine, code });
+        const choice = h("div", { class: "dc-resync-choice", role: "group", "aria-label": `${name}: which value to keep` }, mine.el, code.el);
+        const title2 = h("p", { class: "dc-resync-name" });
+        title2.textContent = name;
+        return h("li", { class: "dc-resync-row", "data-group": "conflicts" }, title2, h("div", { class: "dc-resync-values" }, ...lines), choice);
+      };
+      const plainRow = (group2, id) => {
+        if (group2 === "assets") {
+          const asset = current.assets.find((one) => one.path === id);
+          return tickRow(group2, id, `${asset?.kind === "logo" ? "Logo" : "Font"}: ${folderName(id)}`, h("p", { class: "dc-resync-line dc-muted" }, h("span", { class: "dc-path" }, id)));
+        }
+        return tickRow(group2, id, id, null);
+      };
+      const rowFor = (group2, id) => group2 === "changes" ? changedRow(id) : group2 === "conflicts" ? conflictRow(id) : plainRow(group2, id);
+      const groupView = (info) => {
+        const list = h("ul", { class: "dc-resync-list" });
+        let shownCount = 0;
+        const more = h("div", { class: "dc-resync-more" });
+        const showMore = () => {
+          const next = info.ids.slice(shownCount, shownCount + GROUP_PAGE);
+          for (const id of next) list.append(rowFor(info.id, id));
+          shownCount += next.length;
+          more.replaceChildren();
+          if (shownCount < info.ids.length) {
+            const rest = info.ids.length - shownCount;
+            more.append(btn({ label: `Show ${rest} more`, variant: "ghost", size: "xs", onClick: () => {
+              showMore();
+              syncTicks();
+            } }).el);
+          }
+        };
+        showMore();
+        const toggle = btn({
+          label: groupToggleLabel(info.id, groupState(ticks, info.id, info.ids)),
+          variant: "ghost",
+          size: "xs",
+          disabled: busy,
+          onClick: () => {
+            ticks = setGroup(ticks, info.id, info.ids, groupState(ticks, info.id, info.ids) !== "all");
+            syncTicks();
+          }
+        });
+        toggles.set(info.id, { button: toggle, ids: info.ids });
+        const headId = nextId2("dc-resync-group");
+        return h(
+          "section",
+          { class: "dc-resync-group", "data-group": info.id, "aria-labelledby": headId },
+          h("div", { class: "dc-resync-grouphead" }, h("h3", { class: "dc-resync-title", id: headId }, info.title, h("span", { class: "dc-resync-count dc-muted" }, String(info.ids.length))), toggle.el),
+          info.hint ? h("p", { class: "dc-muted dc-resync-hint" }, info.hint) : null,
+          list,
+          more
+        );
+      };
+      const selection2 = h("p", { class: "dc-resync-sel", "aria-live": "polite" });
+      const applyButton = btn({ label: "Apply", variant: "default", emphasis: "primary", loading: busy, onClick: () => void apply() });
+      const intro = h("div", { class: "dc-resync-intro" }, h("p", { class: "dc-muted" }, KEPT_LINE));
+      if (current.partial) intro.append(h("p", { class: "dc-resync-note" }, PARTIAL_NOTE));
+      if (applyProblem !== "") sheet.body.append(banner({ tone: "error", title: "Nothing was changed", body: applyProblem }));
+      sheet.body.append(intro, ...groups.map(groupView));
+      sheet.body.append(h("p", { class: "dc-muted dc-resync-foot-note" }, AGENT_TOKENS_NOTE));
+      if (busy) sheet.body.setAttribute("inert", "");
+      sheet.foot.append(selection2, btn({ label: "Not now", variant: "outline", disabled: busy, onClick: () => sheet.close() }).el, applyButton.el);
+      syncTicks();
+      if (busy) applyButton.set({ loading: true, disabled: true });
+    }
+    if (options.askFolder) {
+      phase = "ask-folder";
+      paint();
+    } else void scan(directory);
+    return { close: sheet.close };
+  };
+
+  // src/ui/systems/system-ask.ts
+  var attachOf2 = (chip) => ({ providerId: chip.providerId, id: chip.id, title: chip.title, url: chip.url, text: chip.text, data: { ...chip.data } });
+  var NO_PROJECT_SENTENCE = "Open a project first, then try again.";
+  var NOT_SENT_SENTENCE = "The message didn\u2019t reach a chat.";
+  var projectIdFor = async (directory) => {
+    if (!directory) return void 0;
+    try {
+      const { projects } = await guestHost.client.listProjects();
+      return projects.find((project) => sameDirectory(project.directory, directory))?.id;
+    } catch {
+      return void 0;
+    }
+  };
+  var linkSession = async (id, sessionId) => {
+    try {
+      await client.call("PATCH /systems/:id", { params: { id }, body: { sessionId } });
+    } catch (error) {
+      console.warn("Design Chamber: the design system could not be linked to its chat", error);
+    }
+  };
+  var sendSystemMessage = async (id, chat, body) => {
+    const api = guestHost.client;
+    const prompt = await client.call("POST /systems/:id/prompt", { params: { id }, body });
+    const selected = guestHost.session.get();
+    let outcome;
+    if (chat.sessionId && selected?.id === chat.sessionId) {
+      try {
+        if (selected.busy) {
+          await api.compose({ text: prompt.text, mode: "append" });
+          outcome = "composed";
+        } else {
+          const result = await api.prompt({ text: prompt.text, send: true });
+          if (result.sent !== "sent") throw new Error(NOT_SENT_SENTENCE);
+          outcome = "sent";
+        }
+      } catch (error) {
+        if (!isHostError(error, "SESSION_BUSY")) throw error;
+        await api.compose({ text: prompt.text, mode: "append" });
+        outcome = "composed";
+      }
+    } else {
+      let delivered = null;
+      if (chat.sessionId) {
+        await client.call("PUT /outbox", { body: { sessionId: chat.sessionId, slug: id, system: id, text: prompt.text, commentIds: [], version: null } });
+        try {
+          await api.openSurface(PANEL_SURFACE_ID);
+        } catch {
+        }
+        try {
+          await api.openSession(chat.sessionId);
+          delivered = "outbox";
+        } catch (error) {
+          if (!isHostError(error, "NO_SESSION")) throw error;
+          await client.call("DELETE /outbox");
+        }
+      }
+      if (delivered === null) {
+        const projectId = await projectIdFor(guestHost.directory.get()) ?? void 0;
+        if (!projectId && !guestHost.directory.get()) throw new Error(NO_PROJECT_SENTENCE);
+        const started = await api.startSession({ ...attachOf2(prompt.chip), text: prompt.text, navigation: "open", ...projectId ? { projectId } : {} });
+        if (started.sessionId === null || started.sent !== "sent") throw new Error(NOT_SENT_SENTENCE);
+        await linkSession(id, started.sessionId);
+        delivered = "new-session";
+      }
+      outcome = delivered;
+    }
+    if (prompt.handEdits) {
+      try {
+        await client.call("POST /systems/:id/hand-edits/clear", { params: { id }, body: { upTo: prompt.handEdits.upTo } });
+      } catch (error) {
+        console.warn("Design Chamber: the hand-edit ledger could not be cleared after the message was delivered", error);
+      }
+    }
+    return outcome;
+  };
+
+  // src/ui/systems/system-board.ts
+  var VIEWPORT = "board";
+  var FILE = "board.html";
+  var themeVars = () => {
+    const tokens = host.snapshot()?.theme.tokens;
+    if (!tokens) return [];
+    const wanted = [
+      ["--dc-board-bg", tokens.background],
+      ["--dc-board-card", tokens.elevated],
+      ["--dc-board-fg", tokens.foreground],
+      ["--dc-board-muted", tokens.muted],
+      ["--dc-board-border", tokens.border],
+      ["--dc-board-font", tokens.font],
+      ["--dc-board-radius", tokens.radius]
+    ];
+    return wanted.filter(([name, value]) => TOKEN_PREVIEW_NAME_PATTERN.test(name) && TOKEN_PREVIEW_VALUE_PATTERN.test(value)).map(([name, value]) => ({ name, value }));
+  };
+  var mountBoard = (options) => {
+    const key = `system:${options.id}`;
+    let version = null;
+    let preview = [];
+    let scheme = boardScheme(host.snapshot()?.theme.mode);
+    let waiting = null;
+    let scrollTo = null;
+    let hit = null;
+    const slot = createFrameSlot({
+      slug: key,
+      loadDoc: (_screen, versionId) => client.loadBoard(options.id, versionId, scheme),
+      artboardId: artboardIdOf(null, VIEWPORT),
+      title: `${options.name()} specimen board`,
+      mode: () => "edit",
+      scroll: () => ({ x: 0, y: 0 }),
+      onState: (state) => {
+        paintState();
+        options.onState(state);
+      }
+    });
+    slot.iframe.classList.add("dc-sys-frame");
+    const overlay = h("div", { class: "dc-sys-hit", "aria-hidden": "true" });
+    const status = h("div", { class: "dc-sys-board-state" });
+    const el2 = h("div", { class: "dc-sys-board", "data-state": "idle" }, slot.iframe, overlay, status);
+    const vars = () => [...themeVars(), ...preview].slice(0, TOKEN_PREVIEW_VARS_MAX);
+    const sendTokens = () => {
+      const all = vars();
+      setSlotTokens(key, all);
+      slot.post({ type: "set-tokens", vars: all });
+    };
+    const load = () => {
+      setSlotTokens(key, vars());
+      void slot.load(null, version, FILE);
+    };
+    function paintState() {
+      const state = slot.state();
+      el2.dataset.state = state;
+      status.replaceChildren();
+      if (state === "loading" || state === "idle") status.append(loadingRow("Loading the board\u2026"));
+      else if (state === "missing" || state === "error") {
+        status.append(
+          h("p", { class: "dc-sys-board-message" }, state === "missing" ? "The board isn\u2019t ready yet." : "The board didn\u2019t load."),
+          h("p", { class: "dc-muted" }, slot.error() ?? "Try again in a moment."),
+          btn({ label: "Try again", variant: "outline", size: "sm", onClick: () => load() }).el
+        );
+      }
+    }
+    const unsubscribe = slot.channel.subscribe((message) => {
+      if (message.type === "ready") {
+        sendTokens();
+        if (waiting) scrollTo?.(waiting.entry);
+      } else if (message.type === "hit") {
+        if (!hit || hit.x !== message.x || hit.y !== message.y) return;
+        hit = null;
+        options.onEntry(message.element?.entry ?? void 0);
+      } else if (message.type === "anchors") {
+        const found = message.results.find((result) => result.id === "entry" && result.found && result.rect);
+        if (found?.rect) slot.post({ type: "scroll-to", x: 0, y: Math.max(0, Math.round(found.rect.y) - 72) });
+      }
+    });
+    scrollTo = (entry) => {
+      const selector = entrySelector(entry);
+      slot.post({ type: "resolve-anchors", anchors: [{ id: "entry", selector, text: "", html: "" }] });
+      slot.post({ type: "highlight", selector });
+    };
+    overlay.addEventListener("click", (event) => {
+      if (slot.state() !== "ready") return;
+      const rect = slot.iframe.getBoundingClientRect();
+      hit = { x: Math.round(event.clientX - rect.left), y: Math.round(event.clientY - rect.top) };
+      slot.post({ type: "hit-test", x: hit.x, y: hit.y });
+    });
+    overlay.addEventListener(
+      "wheel",
+      (event) => {
+        if (slot.state() !== "ready" || event.ctrlKey || event.metaKey) return;
+        event.preventDefault();
+        slot.post({ type: "scroll-by", dx: Math.round(event.deltaX), dy: Math.round(event.deltaY) });
+      },
+      { passive: false }
+    );
+    const stopReady = host.onReady((context) => {
+      const next = boardScheme(context.theme.mode);
+      if (next !== scheme) {
+        scheme = next;
+        load();
+      } else if (slot.state() === "ready") sendTokens();
+    });
+    paintState();
+    load();
+    return {
+      el: el2,
+      state: () => slot.state(),
+      reload: () => load(),
+      setVersion: (next) => {
+        version = next;
+        load();
+      },
+      setPreview: (next) => {
+        preview = next;
+        if (slot.state() === "ready") sendTokens();
+        else setSlotTokens(key, vars());
+      },
+      focusEntry: (entry) => {
+        if (entry === null) {
+          waiting = null;
+          slot.post({ type: "highlight", selector: null });
+          return;
+        }
+        waiting = { entry };
+        if (slot.state() === "ready") scrollTo?.(entry);
+      },
+      dispose: () => {
+        unsubscribe();
+        stopReady();
+        slot.dispose();
+        setSlotTokens(key, []);
+        el2.remove();
+      }
+    };
+  };
+
+  // src/ui/systems/system-build.ts
+  var REPAINT_MS2 = 1e3;
+  var systemEvents = (events, id) => events.flatMap((event) => {
+    if (event.system !== id) return [];
+    if (event.systemChange === "files") return [{ ...event, slug: id, kind: "files" }];
+    if (event.systemChange === "added") return [{ ...event, slug: id, kind: "added" }];
+    return [];
+  });
+  var systemFeed = (id) => ({
+    start: () => feed.start(),
+    stop: () => feed.stop(),
+    status: () => feed.status(),
+    onStatus: (listener) => feed.onStatus(listener),
+    subscribe: (listener) => feed.subscribe((batch) => listener({ ...batch, events: systemEvents(batch.events, id) }))
+  });
+  var mountSystemBuild = (options) => {
+    const listeners = /* @__PURE__ */ new Set();
+    const detail = () => ({
+      slug: options.id,
+      path: "",
+      design: { kind: "page", sessionId: options.sessionId(), projectDirectory: null, created: options.created(), screens: [] },
+      pending: false,
+      files: { screens: {} },
+      warnings: [],
+      screensStamp: null,
+      designJson: "ok"
+    });
+    const watcher = watchBuildActivity({
+      host: guestHost,
+      feed: systemFeed(options.id),
+      slug: options.id,
+      detail,
+      onDetail: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }
+    });
+    const strip = mountBuildStrip(options.host, {
+      compact: options.compact,
+      onOpenChat: () => options.onOpenChat(),
+      onDismiss: () => watcher.dismiss()
+    });
+    let tick = null;
+    const render = () => {
+      const view2 = buildView(watcher.get(), Date.now(), host.snapshot()?.locale ?? "en");
+      strip.update(view2);
+      const wantsTick = view2.elapsed !== null && !document.hidden;
+      if (wantsTick && tick === null) tick = setInterval(render, REPAINT_MS2);
+      else if (!wantsTick && tick !== null) {
+        clearInterval(tick);
+        tick = null;
+      }
+    };
+    const unwatch = watcher.subscribe(render);
+    document.addEventListener("visibilitychange", render);
+    render();
+    const relink = () => {
+      for (const listener of [...listeners]) listener();
+    };
+    const stopSession = guestHost.session.subscribe(relink);
+    return {
+      watcher,
+      relink,
+      dispose: () => {
+        unwatch();
+        stopSession();
+        document.removeEventListener("visibilitychange", render);
+        if (tick !== null) clearInterval(tick);
+        watcher.dispose();
+        strip.dispose();
+      }
+    };
+  };
+
+  // src/ui/systems/section-panel.ts
+  var GROUP_ORDER = ["brand", "surface", "text", "border", "status", "data", "other"];
+  var entryKey = (kind, id) => {
+    try {
+      return entryKeyOf(kind, id);
+    } catch {
+      return null;
+    }
+  };
+  var fieldEditor = (options) => {
+    const shown = options.pending ?? options.saved;
+    const dirty = options.pending !== null;
+    const root = h("div", { class: "dc-sp-field", "data-dirty": dirty ? "true" : "false", "data-locked": options.lock !== null ? "true" : "false" });
+    const problem = h("p", { class: "dc-sp-problem", role: "alert", hidden: true });
+    const display = () => {
+      root.replaceChildren();
+      if (options.lock !== null) {
+        root.append(h("span", { class: `dc-sp-value dc-sp-value-locked${options.mono ? " dc-mono" : ""}`, title: options.lock === "" ? null : options.lock }, shown ?? "Not set"));
+        if (options.lock !== "") root.append(h("span", { class: "dc-sp-lock" }, options.lock));
+        root.dataset.quiet = options.lock === "" ? "true" : "false";
+        return;
+      }
+      const button2 = h(
+        "button",
+        {
+          type: "button",
+          class: `dc-sp-value${options.mono ? " dc-mono" : ""}`,
+          "data-empty": shown === null || shown === "" ? "true" : "false",
+          "data-focus-key": options.focusKey,
+          "aria-label": `${options.label}: ${shown === null || shown === "" ? "empty" : shown}. Edit`,
+          onClick: () => edit()
+        },
+        shown === null || shown === "" ? options.placeholder : shown,
+        dirty ? h("span", { class: "dc-sp-dirty-dot", "aria-hidden": "true" }) : null
+      );
+      root.append(button2);
+    };
+    const edit = () => {
+      const input = options.multiline ? h("textarea", { class: "oc-sdk-input dc-sp-input", rows: 3 }) : h("input", { class: "oc-sdk-input dc-sp-input", type: "text", autocomplete: "off", spellcheck: "false" });
+      input.value = shown ?? "";
+      input.setAttribute("aria-label", options.label);
+      input.maxLength = options.max + 200;
+      let done = false;
+      const finish = (commit) => {
+        if (done) return;
+        const text = input.value;
+        if (commit) {
+          const trimmed = text.trim();
+          if (trimmed === (options.saved ?? "").trim()) {
+            done = true;
+            options.onChange(null);
+            return;
+          }
+          const sentence2 = options.check(trimmed);
+          if (sentence2) {
+            problem.textContent = sentence2;
+            problem.hidden = false;
+            input.setAttribute("aria-invalid", "true");
+            input.focus();
+            return;
+          }
+          done = true;
+          options.onChange(trimmed);
+          return;
+        }
+        done = true;
+        problem.hidden = true;
+        display();
+        root.querySelector("[data-focus-key]")?.focus();
+      };
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          finish(false);
+        } else if (event.key === "Enter" && (!options.multiline || event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          finish(true);
+        }
+      });
+      input.addEventListener("blur", () => {
+        if (!done && !problem.hidden) return;
+        finish(true);
+      });
+      root.replaceChildren(input, problem);
+      input.focus();
+      input.select();
+    };
+    display();
+    return root;
+  };
+  var noteField = (ctx, path, id, saved, label) => {
+    const key = noteKey(path, id);
+    const change = ctx.pending.get(key);
+    return fieldEditor({
+      label: `${label} usage note`,
+      saved,
+      pending: change?.kind === "note" ? change.value : null,
+      lock: ctx.locked,
+      multiline: true,
+      placeholder: "Add a note on when to use it",
+      max: SYSTEM_USAGE_NOTE_MAX,
+      check: (text) => noteProblem(text),
+      onChange: (next) => ctx.propose(key, next === null ? null : { kind: "note", path, id, value: next }),
+      focusKey: key
+    });
+  };
+  var wrapRow = (ctx, entry, children) => {
+    const row2 = h("li", { class: "dc-sp-entry", "data-entry": entry ?? null, "aria-current": entry !== null && ctx.selectedEntry === entry ? "true" : null }, ...children);
+    if (entry !== null) {
+      row2.addEventListener("click", (event) => {
+        if (event.target instanceof Element && event.target.closest("button, input, textarea, a")) return;
+        ctx.selectEntry(entry);
+      });
+    }
+    return row2;
+  };
+  var labelled = (label, control) => control.dataset.quiet === "true" && control.textContent === "Not set" ? null : h("div", { class: "dc-sp-labelled" }, h("span", { class: "dc-sp-label" }, label), control);
+  var swatch = (value) => {
+    const node = h("span", { class: "dc-sp-swatch", "aria-hidden": "true" });
+    if (value !== null && checkValue("colours", null, value).ok) node.style.setProperty("background-color", value);
+    else node.dataset.empty = "true";
+    return node;
+  };
+  var tokenRow = (ctx, token) => {
+    const isColour2 = token.section === "colours";
+    const modes = token.dark !== null || isColour2 ? ["light", "dark"] : ["light"];
+    const fields = modes.map((mode) => {
+      const key = tokenKey(token.name, mode);
+      const value = mode === "light" ? token.light : token.dark;
+      const change = ctx.pending.get(key);
+      const pendingText = change?.kind === "token" ? change.value : null;
+      const lock = ctx.locked ?? (value ? valueLock(value.editable) : null);
+      const section2 = token.section;
+      return labelled(
+        mode === "light" ? "Light" : "Dark",
+        fieldEditor({
+          label: `${mode === "light" ? "Light" : "Dark"} value of ${token.name}`,
+          saved: savedToken(token, mode),
+          pending: pendingText,
+          lock,
+          mono: true,
+          placeholder: mode === "dark" ? "Add a dark value" : "Add a value",
+          max: 100,
+          check: (text) => {
+            const answer = checkValue(section2, null, text);
+            return answer.ok ? null : answer.sentence;
+          },
+          onChange: (next) => ctx.propose(key, next === null ? null : { kind: "token", name: token.name, mode, value: next, section: section2, existed: value !== null }),
+          focusKey: key
+        })
+      );
+    });
+    const preview = isColour2 ? swatch(ctx.pending.get(tokenKey(token.name, "light"))?.kind === "token" ? ctx.pending.get(tokenKey(token.name, "light")).value : token.light?.text ?? null) : null;
+    const remove2 = ctx.locked !== null ? null : iconBtn({ icon: "trash", label: `Remove ${token.name}`, size: "sm", onClick: () => ctx.removeToken(token.name) });
+    const flags = h("span", { class: "dc-sp-flags" });
+    if (token.alsoSet.length > 0) flags.append(h("span", { class: "dc-muted" }, `Also set in ${token.alsoSet.join(", ")}`));
+    if (token.breakpoint) flags.append(h("span", { class: "dc-muted" }, "Changes with the screen size"));
+    return wrapRow(ctx, entryKey("token", token.name), [
+      h("div", { class: "dc-sp-entry-head" }, preview, h("code", { class: "dc-sp-name" }, token.name), flags, remove2),
+      token.problem ? h("p", { class: "dc-sp-problem" }, token.problem) : null,
+      h("div", { class: "dc-sp-fields" }, ...fields),
+      labelled("Note", noteField(ctx, "tokens", token.name, token.note, token.name))
+    ]);
+  };
+  var TYPE_FIELDS2 = [
+    { field: "family", label: "Family" },
+    { field: "size", label: "Size" },
+    { field: "weight", label: "Weight" },
+    { field: "lineHeight", label: "Line height" },
+    { field: "letterSpacing", label: "Letter spacing" }
+  ];
+  var typeRow = (ctx, style) => {
+    const fields = TYPE_FIELDS2.map(({ field: field2, label }) => {
+      const key = typeKey(style.id, field2);
+      const change = ctx.pending.get(key);
+      return labelled(
+        label,
+        fieldEditor({
+          label: `${label} of ${style.name}`,
+          saved: savedType(style, field2),
+          pending: change?.kind === "type" ? change.value : null,
+          lock: ctx.locked,
+          mono: true,
+          placeholder: "Set a value",
+          max: 100,
+          check: (text) => {
+            const answer = checkValue("typography", field2, text);
+            return answer.ok ? null : answer.sentence;
+          },
+          onChange: (next) => ctx.propose(key, next === null ? null : { kind: "type", id: style.id, field: field2, value: next }),
+          focusKey: key
+        })
+      );
+    });
+    return wrapRow(ctx, entryKey("type", style.id), [
+      h("div", { class: "dc-sp-entry-head" }, h("span", { class: "dc-sp-name" }, style.name), style.case !== "none" ? h("span", { class: "dc-muted" }, style.case === "upper" ? "Uppercase" : style.case === "lower" ? "Lowercase" : "Title case") : null),
+      h("div", { class: "dc-sp-fields" }, ...fields),
+      labelled("Note", noteField(ctx, "type", style.id, style.note, style.name))
+    ]);
+  };
+  var chips = (label, items) => items.length === 0 ? null : h("div", { class: "dc-sp-chips" }, h("span", { class: "dc-sp-label" }, label), ...items.map((item) => h("span", { class: "dc-sp-chip" }, item)));
+  var componentRow = (ctx, id) => {
+    const component = ctx.detail.components.find((entry) => entry.id === id);
+    if (!component) return null;
+    const purpose = ctx.pending.get(purposeKey(component.id));
+    return wrapRow(ctx, entryKey("component", component.id), [
+      h("div", { class: "dc-sp-entry-head" }, h("span", { class: "dc-sp-name" }, component.name), component.source ? h("code", { class: "dc-muted dc-mono" }, component.source) : null),
+      labelled(
+        "Purpose",
+        fieldEditor({
+          label: `Purpose of ${component.name}`,
+          saved: component.purpose,
+          pending: purpose?.kind === "purpose" ? purpose.value : null,
+          lock: ctx.locked,
+          multiline: true,
+          placeholder: "Say what it is for",
+          max: SYSTEM_USAGE_NOTE_MAX,
+          check: (text) => noteProblem(text),
+          onChange: (next) => ctx.propose(purposeKey(component.id), next === null ? null : { kind: "purpose", id: component.id, value: next }),
+          focusKey: purposeKey(component.id)
+        })
+      ),
+      labelled("Note", noteField(ctx, "components", component.id, component.note, component.name)),
+      chips("Variants", component.variants),
+      chips("States", component.states),
+      chips("Uses", component.tokens),
+      component.undefinedTokens.length > 0 ? h("p", { class: "dc-sp-problem" }, `Uses ${plural(component.undefinedTokens.length, "value")} this system doesn\u2019t define: ${component.undefinedTokens.join(", ")}.`) : null
+    ]);
+  };
+  var textField = (ctx, file, saved, label) => {
+    const key = textKey(file);
+    const change = ctx.pending.get(key);
+    return fieldEditor({
+      label,
+      saved,
+      pending: change?.kind === "text" ? change.value : null,
+      lock: ctx.locked,
+      multiline: true,
+      placeholder: "Write something",
+      max: SYSTEM_NOTE_MAX,
+      check: (text) => textProblem(text) ?? (file === "OVERVIEW.md" && text.trim() === "" ? "The overview can\u2019t be empty." : null),
+      onChange: (next) => ctx.propose(key, next === null ? null : { kind: "text", file, value: next }),
+      focusKey: key
+    });
+  };
+  var overviewRows = (ctx) => {
+    const rows = [];
+    const { overview, notes } = ctx.detail;
+    if (overview) rows.push(wrapRow(ctx, "overview", [h("div", { class: "dc-sp-entry-head" }, h("span", { class: "dc-sp-name" }, "Overview")), overview.problem ? h("p", { class: "dc-sp-problem" }, overview.problem) : null, textField(ctx, "OVERVIEW.md", overview.text, "Overview text")]));
+    for (const note of notes) {
+      rows.push(wrapRow(ctx, entryKey("note", note.id), [h("div", { class: "dc-sp-entry-head" }, h("span", { class: "dc-sp-name" }, note.title)), note.problem ? h("p", { class: "dc-sp-problem" }, note.problem) : null, textField(ctx, `notes/${note.id}.md`, note.text, `${note.title} text`)]));
+    }
+    return rows;
+  };
+  var entryTextRows = (ctx, kind) => {
+    const list = kind === "pattern" ? ctx.detail.patterns : ctx.detail.brand;
+    return list.map(
+      (entry) => wrapRow(ctx, entryKey(kind, entry.id), [
+        h("div", { class: "dc-sp-entry-head" }, h("span", { class: "dc-sp-name" }, entry.title), h("span", { class: "dc-muted" }, entry.kind)),
+        entry.problem ? h("p", { class: "dc-sp-problem" }, entry.problem) : null,
+        entry.text ? h("p", { class: "dc-sp-body" }, entry.text) : null,
+        labelled("Note", noteField(ctx, kind === "pattern" ? "patterns" : "brand", entry.id, entry.note, entry.title))
+      ])
+    );
+  };
+  var assetRows = (ctx) => {
+    const { fonts, sourceFiles } = ctx.detail;
+    const rows = [];
+    fonts.forEach(
+      (font2, index) => rows.push(wrapRow(ctx, entryKey("font", String(index)), [h("div", { class: "dc-sp-entry-head" }, h("span", { class: "dc-sp-name" }, font2.family), h("span", { class: "dc-muted" }, `${font2.weight} ${font2.style}`)), h("code", { class: "dc-muted dc-mono" }, font2.file)]))
+    );
+    for (const source of sourceFiles) rows.push(wrapRow(ctx, null, [h("div", { class: "dc-sp-entry-head" }, h("code", { class: "dc-mono" }, source.file), h("span", { class: "dc-muted" }, "Source file"))]));
+    return rows;
+  };
+  var logoRows = (ctx) => ctx.detail.logos.map(
+    (logo, index) => wrapRow(ctx, entryKey("logo", String(index)), [h("div", { class: "dc-sp-entry-head" }, h("span", { class: "dc-sp-name" }, logo.variant), h("span", { class: "dc-muted" }, "Logo")), h("code", { class: "dc-muted dc-mono" }, logo.file), logo.note ? h("p", { class: "dc-sp-body" }, logo.note) : null])
+  );
+  var group = (title2, rows) => h("section", { class: "dc-sp-group", "aria-label": title2 }, h("h3", { class: "dc-sp-group-title" }, title2), h("ul", { class: "dc-sp-entries" }, ...rows));
+  var emptyNote = (section2) => {
+    const text = {
+      overview: "No overview or notes yet. Ask the agent to write them.",
+      components: "No components yet. Ask the agent to add the ones your designs use.",
+      patterns: "No patterns yet. Ask the agent to describe how things are put together.",
+      brand: "No brand entries yet. Ask the agent to add the voice and the logo rules.",
+      assets: "No fonts or logos yet."
+    };
+    return h("p", { class: "dc-muted dc-sp-none" }, text[section2] ?? "Nothing here yet. Ask the agent to add some.");
+  };
+  var renderSection = (ctx, section2) => {
+    const root = h("div", { class: "dc-sp-section", "data-section": section2 });
+    if (!isCovered(ctx.detail, section2)) {
+      root.append(h("p", { class: "dc-muted dc-sp-none" }, NOT_COVERED));
+      return root;
+    }
+    const detail = ctx.detail;
+    switch (section2) {
+      case "overview": {
+        const rows = overviewRows(ctx);
+        root.append(rows.length === 0 ? emptyNote(section2) : h("ul", { class: "dc-sp-entries" }, ...rows));
+        break;
+      }
+      case "typography": {
+        if (detail.type.length === 0) root.append(emptyNote(section2));
+        else root.append(h("ul", { class: "dc-sp-entries" }, ...detail.type.map((style) => typeRow(ctx, style))));
+        break;
+      }
+      case "components": {
+        const rows = detail.components.map((component) => componentRow(ctx, component.id)).filter((row2) => row2 !== null);
+        root.append(rows.length === 0 ? emptyNote(section2) : h("ul", { class: "dc-sp-entries" }, ...rows));
+        break;
+      }
+      case "patterns": {
+        const rows = entryTextRows(ctx, "pattern");
+        root.append(rows.length === 0 ? emptyNote(section2) : h("ul", { class: "dc-sp-entries" }, ...rows));
+        break;
+      }
+      case "brand": {
+        const rows = [...entryTextRows(ctx, "brand"), ...logoRows(ctx)];
+        root.append(rows.length === 0 ? emptyNote(section2) : h("ul", { class: "dc-sp-entries" }, ...rows));
+        break;
+      }
+      case "assets": {
+        const rows = assetRows(ctx);
+        root.append(rows.length === 0 ? emptyNote(section2) : h("ul", { class: "dc-sp-entries" }, ...rows));
+        break;
+      }
+      case "colours": {
+        const tokens = tokensOf(detail, "colours");
+        if (tokens.length === 0) root.append(h("p", { class: "dc-muted dc-sp-none" }, "No colours yet. Ask the agent to add some."));
+        for (const name of GROUP_ORDER) {
+          const rows = tokens.filter((token) => (token.group ?? "other") === name).map((token) => tokenRow(ctx, token));
+          if (rows.length > 0) root.append(group(COLOUR_GROUP_LABEL[name], rows));
+        }
+        break;
+      }
+      default: {
+        const tokens = tokensOf(detail, section2);
+        if (tokens.length === 0) root.append(h("p", { class: "dc-muted dc-sp-none" }, "Nothing here yet. Ask the agent to add some."));
+        else root.append(h("ul", { class: "dc-sp-entries" }, ...tokens.map((token) => tokenRow(ctx, token))));
+      }
+    }
+    return root;
+  };
+
+  // src/ui/systems/system-versions.ts
+  var mountSystemVersions = (options) => {
+    const scope = createScope();
+    const el2 = h("div", { class: "dc-versions" });
+    let listed = { status: "loading", data: null, error: null };
+    let diff = null;
+    let diffToken = 0;
+    let loadToken = 0;
+    const load = async () => {
+      loadToken += 1;
+      const mine = loadToken;
+      if (listed.data === null) listed = { status: "loading", data: null, error: null };
+      paint();
+      try {
+        const data = await client.call("GET /systems/:id/versions", { params: { id: options.id } });
+        if (mine === loadToken) listed = { status: "ready", data, error: null };
+      } catch (error) {
+        if (mine === loadToken) listed = { status: "error", data: listed.data, error: errorText2(error) };
+      }
+      paint();
+    };
+    const loadDiff = async (id) => {
+      diffToken += 1;
+      const mine = diffToken;
+      diff = { id, state: "loading", files: [], error: null };
+      paint();
+      try {
+        const answer = await client.call("GET /systems/:id/versions/:vid/diff", { params: { id: options.id, vid: id }, query: { against: "current" } });
+        if (mine === diffToken) diff = { id, state: "ready", files: answer.files, error: null };
+      } catch (error) {
+        if (mine === diffToken) diff = { id, state: "error", files: [], error: errorText2(error) };
+      }
+      paint();
+    };
+    const restoreButton = (row2, restoring) => {
+      const button2 = btn({ label: "Restore", variant: "ghost", size: "xs", loading: restoring === row2.id, disabled: restoring !== null && restoring !== row2.id, onClick: () => void options.onRestore({ id: row2.id, n: row2.n }) });
+      button2.el.dataset.restore = row2.id;
+      return button2.el;
+    };
+    const rowEl = (row2, viewing) => {
+      const active2 = viewing?.id === row2.id;
+      const badge = h("span");
+      if (row2.current) mountBadge(badge, { label: "Current", tone: "success" });
+      const actions = h(
+        "div",
+        { class: "dc-version-actions" },
+        btn({ label: active2 && !viewing?.compare ? "Viewing" : "View", variant: "outline", size: "xs", pressed: active2 && !viewing?.compare, onClick: () => {
+          options.onView(row2.id, row2.n);
+          void loadDiff(row2.id);
+        } }).el,
+        btn({ label: active2 && viewing?.compare ? "Comparing" : "Compare", variant: "outline", size: "xs", icon: "compare", pressed: active2 && viewing?.compare, onClick: () => {
+          options.onCompare(row2.id, row2.n);
+          void loadDiff(row2.id);
+        } }).el,
+        row2.current || options.repo !== void 0 ? null : restoreButton(row2, options.restoring())
+      );
+      const changed = active2 && diff && diff.id === row2.id ? diff.state === "loading" ? loadingRow("Comparing files\u2026") : diff.state === "error" ? h("p", { class: "dc-form-error" }, `Couldn\u2019t compare. ${diff.error ?? ""}`) : h(
+        "ul",
+        { class: "dc-diff", "aria-label": `Files changed since v${row2.n}` },
+        ...diff.files.length === 0 ? [h("li", { class: "dc-muted" }, "Identical to the current design system.")] : diff.files.map((file) => h("li", null, h("span", { class: "dc-diff-kind", "data-change": file.change }, changeLabel(file.change)), h("code", { class: "dc-path" }, file.path)))
+      ) : null;
+      return h(
+        "li",
+        { class: "dc-version", "data-active": active2 ? "true" : "false" },
+        h("div", { class: "dc-version-head" }, h("span", { class: "dc-version-n" }, row2.title), badge, h("span", { class: "dc-muted dc-version-when" }, relativeTime(row2.created, Date.now(), host.snapshot()?.locale ?? "en"))),
+        h("p", { class: "dc-version-reason" }, row2.label ?? row2.reason, h("span", { class: "dc-muted" }, ` \xB7 ${row2.fileCount} files`)),
+        actions,
+        changed
+      );
+    };
+    function paint() {
+      el2.replaceChildren();
+      if (listed.status === "loading" && !listed.data) {
+        el2.append(loadingRow("Loading versions\u2026"));
+        return;
+      }
+      if (!listed.data) {
+        el2.append(banner({ tone: "error", title: "Versions didn\u2019t load", body: listed.error ?? "The local service didn\u2019t answer.", action: { label: "Try again", onClick: () => void load() } }));
+        return;
+      }
+      const { history, dirty } = listed.data;
+      const notice = history ? banner(historyNotice(history)) : null;
+      if (notice && history === "unsupported") {
+        el2.append(notice);
+        return;
+      }
+      const rows = versionRows(listed.data.versions, dirty);
+      const viewing = options.viewing();
+      const dirtyRow = dirty ? h("li", { class: "dc-version dc-version-dirty" }, h("div", { class: "dc-version-head" }, h("span", { class: "dc-version-n" }, "Unsaved changes"), h("span", { class: "dc-muted" }, "Now")), h("p", { class: "dc-version-reason" }, "The files changed since the last version. A version is saved before each of your edits and after each agent turn.")) : null;
+      const back = viewing ? btn({ label: "Back to current", variant: "outline", icon: "back", onClick: () => options.onBackToCurrent() }) : null;
+      const list = rows.length === 0 && !dirty ? h("div", { class: "dc-empty" }, h("p", { class: "dc-empty-title" }, "No versions yet"), h("p", { class: "dc-empty-body" }, "A version is saved before each of your edits and after each agent turn.")) : h("ul", { class: "dc-version-list" }, dirtyRow, ...rows.map((row2) => rowEl(row2, viewing)));
+      el2.append(...notice ? [notice] : [], ...back ? [h("div", { class: "dc-versions-bar" }, back.el)] : [], list);
+      if (options.repo !== void 0) el2.append(h("p", { class: "dc-muted dc-versions-foot" }, `Repo changes are undone in ${options.repo}\u2019s history, not here.`));
+    }
+    paint();
+    void load();
+    scope.add(() => {
+      loadToken += 1;
+      diffToken += 1;
+    });
+    return {
+      el: el2,
+      refresh: paint,
+      load,
+      focusRestore: (id) => el2.querySelector(`[data-restore="${CSS.escape(id)}"]`)?.focus(),
+      dispose: () => {
+        scope.dispose();
+        el2.remove();
+      }
+    };
+  };
+  var createSystemRestore = (options) => {
+    const { notices } = options;
+    let noticeButtons = [];
+    const show = (tone2, title2, body, buttons, ttlMs) => {
+      noticeButtons = buttons;
+      if (buttons.length === 0) {
+        notices.setTransient("restore", banner({ tone: tone2, title: title2, body }), ttlMs);
+        return;
+      }
+      const wrap = h("div", { class: "dc-banner dc-restore-notice", "data-actions": "stack" });
+      wrap.append(...bannerWithActions(tone2, title2, [body], buttons.map((button2) => button2.el)));
+      notices.setTransient("restore", wrap, ttlMs);
+    };
+    const keepFocus = () => {
+      const active2 = document.activeElement;
+      if (!active2 || active2 === document.body) options.focusBoard();
+    };
+    const core = createRestoreCore({
+      restore: (versionId) => client.call("POST /systems/:id/versions/:vid/restore", { params: { id: options.id, vid: versionId } }),
+      refresh: options.refresh,
+      describe: errorText2,
+      view: {
+        busy: (versionId) => {
+          for (const button2 of noticeButtons) button2.set({ disabled: versionId !== null, title: versionId !== null ? "Another restore is running." : void 0 });
+          options.onBusy();
+        },
+        restoreFailed: (version, message) => {
+          toast("error", message);
+          options.onFailed(version);
+        },
+        reloaded: () => options.onRestored(),
+        restored: (version, notice, ttlMs) => {
+          const undoTo = notice.undoTo;
+          if (!undoTo) show("success", notice.title, notice.body, [], ttlMs);
+          else {
+            const undoButton = btn({
+              label: "Undo",
+              variant: "outline",
+              size: "xs",
+              onClick: () => {
+                if (core.busyId() !== null) return;
+                undoButton.set({ loading: true });
+                void core.undo(undoTo, version);
+              }
+            });
+            show("success", notice.title, notice.body, [undoButton], ttlMs);
+          }
+          keepFocus();
+        },
+        undone: (notice, ttlMs) => {
+          show("success", notice.title, notice.body, [], ttlMs);
+          options.focusBoard();
+        },
+        undoFailed: (to, from, notice) => {
+          const again = btn({
+            label: "Try again",
+            variant: "outline",
+            size: "xs",
+            onClick: () => {
+              if (core.busyId() !== null) return;
+              again.set({ loading: true });
+              void core.undo(to, from);
+            }
+          });
+          const dismiss = btn({
+            label: "Dismiss",
+            variant: "ghost",
+            size: "xs",
+            onClick: () => {
+              noticeButtons = [];
+              notices.setTransient("restore", null);
+              options.focusBoard();
+            }
+          });
+          show("error", notice.title, notice.body, [again, dismiss]);
+          again.el.focus();
+        }
+      }
+    });
+    return { restore: core.restore, busyId: core.busyId, dispose: core.dispose };
+  };
+
+  // src/ui/systems/system-page.ts
+  var REVIEW_DOT = { "not-reviewed": "Not reviewed", "looks-good": "Looks good", "needs-work": "Needs work" };
+  var statusBadge = (status) => {
+    const holder = h("span", { class: "dc-sys-badge" });
+    mountBadge(holder, status === "ready" ? { label: "Ready", tone: "success" } : { label: "Draft", tone: "neutral" });
+    return holder;
+  };
+  var describeChange = (change) => {
+    switch (change.kind) {
+      case "token":
+        return `${change.name} (${change.mode}): ${change.value}`;
+      case "type":
+        return `${change.id} ${change.field}: ${change.value}`;
+      case "note":
+        return `Note on ${change.id}: ${change.value}`;
+      case "purpose":
+        return `Purpose of ${change.id}: ${change.value}`;
+      case "text":
+        return `${change.file}: ${change.value}`;
+      case "remove":
+        return `Remove ${change.name}`;
+    }
+  };
+  var mountSystemPage = (options) => {
+    const { id, surface } = options;
+    const compact = surface === "panel";
+    const scope = createScope();
+    const sheetHost = options.actions.host;
+    let detail = null;
+    let load = "loading";
+    let loadFailure2 = "";
+    let section2 = "overview";
+    let selectedEntry = null;
+    const expanded = /* @__PURE__ */ new Set();
+    let pending = /* @__PURE__ */ new Map();
+    let editBase = null;
+    let saving = false;
+    let viewing = null;
+    let renaming = false;
+    let askingNote = false;
+    let reviewBusy = false;
+    let phoneView = "board";
+    let disposed = false;
+    let versionsSheet = null;
+    let versions = null;
+    let loadTicket = 0;
+    let living = null;
+    let regenerating = false;
+    let regenTimer = null;
+    let moreBanners = false;
+    let wanted = null;
+    const notices = createNotices();
+    const header = h("header", { class: compact ? "dc-rail-head dc-syspg-head" : "dc-syspg-top" });
+    const panelScroll = h("div", { class: "dc-syspg-scroll" });
+    const panelFoot = h("div", { class: "dc-syspg-foot" });
+    const stage = h("div", { class: "dc-syspg-stage" });
+    const panel = h("aside", { class: "dc-syspg-panel" }, panelScroll, panelFoot);
+    const body = h("div", { class: "dc-syspg-body" }, stage, panel);
+    const mobile = h("div", { class: "dc-syspg-mobile oc-segmented", role: "group", "aria-label": "Show" });
+    const el2 = h("div", { class: "dc-syspg", "data-surface": surface, "data-phone-view": phoneView, "data-state": "loading" }, header, notices.el, body, compact ? null : mobile);
+    const board = mountBoard({
+      id,
+      name: () => detail?.name ?? "Design system",
+      onEntry: (entry) => {
+        if (!detail) return;
+        const target = sectionOfHit(detail, entry);
+        if (target === null || entry === void 0) return;
+        select(target, entry);
+      },
+      onState: () => void 0
+    });
+    const askLink = () => {
+      const selected = guestHost.session.get();
+      return { sessionId: detail?.sessionId ?? null, selectedId: selected?.id ?? null, selectedTitle: selected?.title ?? null };
+    };
+    const afterSend = async (outcome) => {
+      void reload();
+      return outcome;
+    };
+    const askBar = createAskBar({
+      surface: compact ? "panel" : "page",
+      onSend: async (text, selection2) => afterSend(await sendSystemMessage(id, { sessionId: detail?.sessionId ?? null }, { purpose: "ask", text, ...selection2 ? { entry: selection2.key } : {} })),
+      onChipRemoved: () => {
+        selectedEntry = null;
+        board.focusEntry(null);
+        paintPanel();
+      },
+      onLeave: () => (board.el.querySelector("iframe") ?? board.el).focus()
+    });
+    stage.append(board.el, askBar.el);
+    const buildHost = h("div", { class: "dc-syspg-build" });
+    stage.prepend(buildHost);
+    const build = mountSystemBuild({
+      id,
+      host: buildHost,
+      compact,
+      sessionId: () => detail?.sessionId ?? null,
+      created: () => detail?.created ?? (/* @__PURE__ */ new Date()).toISOString(),
+      onOpenChat: () => void openChat()
+    });
+    const preview = mountLivingPreview({
+      id,
+      systemName: () => detail?.name ?? "Design system",
+      repo: () => detail?.home.kind === "repo" ? detail.home.label : "the repo",
+      onClose: () => {
+        delete el2.dataset.previewing;
+        paintPanel();
+      }
+    });
+    askBar.el.before(preview.el);
+    const buildingEl = h("div", { class: "dc-syspg-built", hidden: true });
+    stage.prepend(buildingEl);
+    const locked = () => {
+      if (viewing) return OLD_VERSION_SENTENCE;
+      if (!detail) return "Loading";
+      if (!detail.editable) return detail.home.kind === "repo" ? "" : "This system can\u2019t be edited here right now.";
+      return null;
+    };
+    const repoHome = () => detail !== null && detail.home.kind === "repo" ? detail.home : null;
+    const localeOf = () => host.snapshot()?.locale ?? "en";
+    const dirty = () => pending.size > 0;
+    const name = () => detail?.name ?? "This design system";
+    const syncAsk = () => {
+      askBar.setLink(askLink());
+      askBar.setViewing(viewing !== null);
+      askBar.setQuiet(dirty());
+    };
+    const openChat = async () => {
+      if (!detail?.sessionId) {
+        toast("info", "This system has no chat yet. Send a message below to start one.");
+        return;
+      }
+      try {
+        await guestHost.client.openSession(detail.sessionId);
+      } catch (error) {
+        toast("error", `Couldn\u2019t open the chat. ${errorText2(error)}`);
+      }
+    };
+    const continueChat = async () => {
+      try {
+        const outcome = await sendSystemMessage(id, { sessionId: detail?.sessionId ?? null }, { purpose: "continue" });
+        toast("success", askResultText(outcome));
+        void reload();
+      } catch (error) {
+        toast("error", errorText2(error));
+      }
+    };
+    const loadLiving = async (system) => {
+      if (system.home.kind !== "repo") return null;
+      try {
+        const view2 = await client.loadLivingPage(id);
+        return view2.home === "repo" ? view2 : null;
+      } catch {
+        return living;
+      }
+    };
+    const editingNow = () => document.activeElement instanceof HTMLElement && document.activeElement.classList.contains("dc-sp-input") && panel.contains(document.activeElement);
+    const reload = async () => {
+      loadTicket += 1;
+      const mine = loadTicket;
+      try {
+        const next = await client.call("GET /systems/:id", { params: { id } });
+        if (disposed || mine !== loadTicket) return;
+        const nextLiving = await loadLiving(next);
+        if (disposed || mine !== loadTicket) return;
+        detail = next;
+        living = nextLiving;
+        load = "ready";
+        if (!isCovered(next, section2) && !expanded.size) section2 = SYSTEM_SECTIONS.find((candidate) => isCovered(next, candidate)) ?? "overview";
+        expanded.add(AREA_OF_SECTION[section2]);
+      } catch (error) {
+        if (disposed || mine !== loadTicket) return;
+        const failure = toServiceError(error);
+        if (failure.code === "not-found") load = "gone";
+        else if (detail === null) {
+          load = "error";
+          loadFailure2 = failure.message;
+        } else toast("error", `Couldn\u2019t refresh ${name()}. ${failure.message}`);
+      }
+      if (editingNow()) {
+        panel.addEventListener("focusout", () => setTimeout(() => !disposed && paint(), 0), { once: true });
+      } else paint();
+      build.relink();
+      applyWanted();
+    };
+    const showBoard = () => {
+      preview.close();
+      phoneView = "board";
+      el2.dataset.phoneView = phoneView;
+      paintMobile();
+    };
+    const applyWanted = () => {
+      if (wanted === null || load === "loading") return;
+      const next = wanted;
+      wanted = null;
+      if (load !== "ready" || !detail) return;
+      if (next === "board") return showBoard();
+      if (living === null || previewTarget(living, detail) === null) {
+        toast("info", "There is no living page preview to show yet.");
+        return showBoard();
+      }
+      openPreview();
+    };
+    function select(next, entry) {
+      if (!detail) return;
+      section2 = next;
+      expanded.add(AREA_OF_SECTION[next]);
+      selectedEntry = entry ?? firstEntryOf(detail, next);
+      board.focusEntry(selectedEntry);
+      if (entry !== void 0) {
+        const label = entryLabel(detail, entry);
+        const selection2 = {
+          key: entry,
+          element: { screen: null, viewport: "board", anchor: { selector: entrySelector(entry), text: label.text, html: "", rect: { x: 0, y: 0, w: 0, h: 0 }, point: { x: 0, y: 0 } } },
+          tag: label.tag,
+          where: sectionLabel(next)
+        };
+        askBar.setSelection(selection2);
+      }
+      askingNote = false;
+      paintPanel();
+      panelScroll.querySelector('[aria-current="true"][data-entry]')?.scrollIntoView({ block: "nearest" });
+    }
+    const propose = (key, change) => {
+      if (!detail) return;
+      const next = new Map(pending);
+      if (change === null) next.delete(key);
+      else {
+        if (editBase === null) editBase = detail;
+        next.set(key, change);
+      }
+      pending = next;
+      if (pending.size === 0) editBase = null;
+      board.setPreview(previewVars(pending));
+      syncAsk();
+      paint();
+    };
+    const showEditNotice = (title2, body2, buttons, ttl, tone2 = "success") => {
+      if (buttons.length === 0) {
+        notices.setTransient("edit", banner({ tone: tone2, title: title2, body: body2 }), ttl);
+        return;
+      }
+      const wrap = h("div", { class: "dc-banner dc-restore-notice", "data-actions": "stack" });
+      wrap.append(...bannerWithActions(tone2, title2, body2 === "" ? [] : [body2], buttons.map((button2) => button2.el)));
+      notices.setTransient("edit", wrap, ttl);
+    };
+    const undoEdit = async (editId) => {
+      try {
+        await client.call("POST /systems/:id/edits/:eid/undo", { params: { id, eid: editId }, body: {} });
+        showEditNotice("Undone", "", [], SHORT_NOTICE_MS);
+        await reload();
+        board.reload();
+      } catch (error) {
+        notices.setTransient("edit", banner({ tone: "error", title: "Couldn\u2019t undo that", body: errorText2(error) }));
+      }
+    };
+    const canResync = () => !compact && detail !== null && (detail.home.kind === "repo" || detail.sources.code !== null);
+    const resyncEntry = () => {
+      const repo = repoHome();
+      const label = repo ? `Re-sync from ${repo.label}` : "Re-sync from code";
+      const reason = viewing ? OLD_VERSION_SENTENCE : dirty() ? "Save or discard your changes first." : repo !== null && !repo.readable ? `${repo.label} can\u2019t be read right now.` : null;
+      return reason === null ? { id: "resync", label } : { id: "resync", label, disabled: true, reason };
+    };
+    const resyncedNotice = (result) => {
+      const { response } = result;
+      const buttons = [];
+      if (response.edit.undoable) {
+        const undo = btn({
+          label: "Undo",
+          variant: "outline",
+          size: "xs",
+          onClick: () => {
+            undo.set({ loading: true });
+            void undoEdit(response.edit.id);
+          }
+        });
+        buttons.push(undo);
+      }
+      const ask = btn({
+        label: "Ask the agent to update notes",
+        variant: "outline",
+        size: "xs",
+        onClick: () => {
+          ask.set({ loading: true });
+          void (async () => {
+            try {
+              const before = response.version?.id;
+              const outcome = await sendSystemMessage(id, { sessionId: detail?.sessionId ?? null }, { purpose: "resync-notes", ...before ? { before } : {} });
+              toast("success", askResultText(outcome));
+              ask.set({ loading: false, disabled: true });
+              void reload();
+            } catch (error) {
+              ask.set({ loading: false });
+              toast("error", errorText2(error));
+            }
+          })();
+        }
+      });
+      buttons.push(ask);
+      const body2 = response.edit.undoable || repoHome() !== null ? "" : response.edit.detail ?? "Restore \u201CBefore re-sync\u201D from Versions to undo.";
+      showEditNotice(result.sentence, body2, buttons, RESYNC_NOTICE_MS);
+    };
+    function startResync(choose = {}) {
+      if (!detail || !canResync()) return;
+      const applied = (result) => {
+        resyncedNotice(result);
+        void reload().then(() => board.reload());
+      };
+      const repo = repoHome();
+      if (repo !== null) {
+        const hasSnapshot = detail.snapshot !== null;
+        const systemName = detail.name;
+        openResyncSheet(sheetHost, {
+          id,
+          systemName,
+          directory: repo.directory,
+          title: hasSnapshot ? `Re-sync ${systemName} from ${repo.label}` : `Read ${systemName} from ${repo.label}`,
+          subtitle: null,
+          stampOf: (current) => current.snapshot?.treeHash ?? "none",
+          ...choose.askFolder ? { askFolder: true } : {},
+          repoReview: (context) => paintRepoReview(context, { id, systemName, repo: repo.label, folder: repo.folder, hasSnapshot, onApplied: applied }),
+          onApplied: applied
+        });
+        return;
+      }
+      if (detail.sources.code === null) return;
+      openResyncSheet(sheetHost, { id, systemName: detail.name, directory: detail.sources.code.directory, onApplied: applied });
+    }
+    const askAgent2 = async (purpose, extra = {}) => {
+      try {
+        const outcome = await sendSystemMessage(id, { sessionId: detail?.sessionId ?? null }, { purpose, ...extra });
+        toast("success", askResultText(outcome));
+        void reload();
+      } catch (error) {
+        toast("error", errorText2(error));
+      }
+    };
+    const revealTarget = async (target) => {
+      try {
+        await client.call("POST /reveal", { body: { system: id, target } });
+      } catch (error) {
+        toast("error", `Couldn\u2019t open the folder. ${errorText2(error)}`);
+      }
+    };
+    const openPreview = () => {
+      if (!detail || !living) return;
+      const target = previewTarget(living, detail);
+      if (target === null) return;
+      phoneView = "board";
+      el2.dataset.phoneView = phoneView;
+      el2.dataset.previewing = "true";
+      paintMobile();
+      preview.open(target);
+    };
+    const stopRegenerating = () => {
+      regenerating = false;
+      if (regenTimer !== null) clearTimeout(regenTimer);
+      regenTimer = null;
+    };
+    const setEmbedFonts = async (checked) => {
+      regenerating = true;
+      if (regenTimer !== null) clearTimeout(regenTimer);
+      regenTimer = setTimeout(() => {
+        stopRegenerating();
+        paintPanel();
+      }, 2e4);
+      paintPanel();
+      try {
+        await patch({ livingPage: { embedFonts: checked } });
+        await reload();
+      } catch (error) {
+        stopRegenerating();
+        toast("error", `Couldn\u2019t change that. ${errorText2(error)}`);
+        paintPanel();
+      }
+    };
+    const livingAction = (action2) => {
+      if (action2 === "ask" || action2 === "fix") void askAgent2("living-page");
+      else if (action2 === "preview") openPreview();
+      else void revealTarget("living-page");
+    };
+    const bannerAction = (action2) => {
+      if (action2 === "choose-folder") startResync({ askFolder: true });
+      else if (action2 === "resync") startResync();
+      else if (action2 === "build-continue") void askAgent2("build-continue");
+      else if (action2 === "ask-living") void askAgent2("living-page");
+      else if (detail?.landed?.sentence) void askAgent2("ask", { text: `About what landed: \u201C${detail.landed.sentence}\u201D` });
+    };
+    const savedNotice = (answer, body2) => {
+      const buttons = [];
+      if (answer.edit.undoable) {
+        const undo = btn({
+          label: "Undo",
+          variant: "outline",
+          size: "xs",
+          onClick: () => {
+            undo.set({ loading: true });
+            void undoEdit(answer.edit.id);
+          }
+        });
+        buttons.push(undo);
+      }
+      showEditNotice("Saved", body2 === "" ? answer.edit.label : body2, buttons, RESTORE_NOTICE_MS);
+    };
+    const failedSave = (error) => {
+      const failure = toServiceError(error);
+      if (failure.code === "stale") {
+        const again = btn({
+          label: STALE_ACTION,
+          variant: "outline",
+          size: "xs",
+          onClick: () => {
+            again.set({ loading: true });
+            void reload().then(() => {
+              editBase = detail;
+              board.reload();
+              notices.setTransient("edit", null);
+            });
+          }
+        });
+        showEditNotice(staleSentence(name()), "", [again], void 0, "error");
+        return;
+      }
+      showEditNotice("Nothing was saved", failure.message, [], void 0, "error");
+    };
+    const save = async () => {
+      if (!detail || saving) return false;
+      const request = saveRequest(pending, editBase ?? detail);
+      if (!request) return true;
+      saving = true;
+      paintFoot();
+      try {
+        const answer = await client.call("POST /systems/:id/edits", { params: { id }, body: request });
+        pending = /* @__PURE__ */ new Map();
+        editBase = null;
+        board.setPreview([]);
+        saving = false;
+        syncAsk();
+        paint();
+        savedNotice(answer, "");
+        await reload();
+        board.reload();
+        return true;
+      } catch (error) {
+        saving = false;
+        failedSave(error);
+        paintFoot();
+        return false;
+      }
+    };
+    const reset = () => {
+      pending = /* @__PURE__ */ new Map();
+      editBase = null;
+      board.setPreview([]);
+      syncAsk();
+      paint();
+    };
+    const removeToken = (token) => {
+      if (!detail || saving) return;
+      const stamp = detail.stamps.tokens;
+      saving = true;
+      void client.call("POST /systems/:id/edits", { params: { id }, body: { op: "save", stamps: stamp ? { tokens: stamp } : {}, tokens: [{ kind: "remove", name: token, mode: "both" }] } }).then(async (answer) => {
+        const next = new Map(pending);
+        for (const [key, change] of next) if (change.kind === "token" && change.name === token || change.kind === "note" && change.path === "tokens" && change.id === token) next.delete(key);
+        pending = next;
+        saving = false;
+        savedNotice(answer, `Removed ${token}. Designs that copied ${name()} keep it.`);
+        await reload();
+        editBase = pending.size > 0 ? detail : null;
+        board.setPreview(previewVars(pending));
+        board.reload();
+      }).catch((error) => {
+        saving = false;
+        failedSave(error);
+        paintFoot();
+      });
+    };
+    const patch = async (body2) => client.call("PATCH /systems/:id", { params: { id }, body: body2 });
+    const setReview = async (target, state, note) => {
+      reviewBusy = true;
+      paintFoot();
+      try {
+        await patch({ review: { section: target, state, ...note ? { note } : {} } });
+        await reload();
+      } catch (error) {
+        toast("error", `Couldn\u2019t save that. ${errorText2(error)}`);
+      } finally {
+        reviewBusy = false;
+        paintFoot();
+      }
+    };
+    const sendNeedsWork = async (target, note) => {
+      reviewBusy = true;
+      paintFoot();
+      try {
+        await patch({ review: { section: target, state: "needs-work", ...note.trim() ? { note: note.trim() } : {} } });
+        const outcome = await sendSystemMessage(id, { sessionId: detail?.sessionId ?? null }, { purpose: "review", section: target });
+        askingNote = false;
+        toast("success", askResultText(outcome));
+        await reload();
+      } catch (error) {
+        toast("error", errorText2(error));
+      } finally {
+        reviewBusy = false;
+        paint();
+      }
+    };
+    const toggleReady = async () => {
+      if (!detail) return;
+      const toReady = detail.status === "draft";
+      try {
+        const answer = await patch({ status: toReady ? "ready" : "draft" });
+        await reload();
+        if (!toReady) {
+          showEditNotice(`${name()} is back to a draft.`, "", [], SHORT_NOTICE_MS, "info");
+          return;
+        }
+        const note = readyNotice(name(), answer.readyNote?.unreviewed ?? 0);
+        const buttons = [];
+        if (note.action && detail) {
+          const first = unreviewedSections(detail)[0];
+          if (first) buttons.push(btn({ label: note.action, variant: "outline", size: "xs", onClick: () => select(first) }));
+        }
+        showEditNotice(note.title, note.body, buttons, RESTORE_NOTICE_MS);
+      } catch (error) {
+        toast("error", `Couldn\u2019t change the status. ${errorText2(error)}`);
+      }
+    };
+    const startRename = () => {
+      if (!detail || renaming || viewing) return;
+      renaming = true;
+      const input = h("input", { class: "oc-sdk-input dc-syspg-rename", type: "text", "aria-label": "Design system name", autocomplete: "off", spellcheck: "false" });
+      input.value = detail.name;
+      const problem = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+      let finished = false;
+      const finish = async (commit) => {
+        if (finished) return;
+        if (!commit || input.value.trim() === detail?.name) {
+          finished = true;
+          renaming = false;
+          paintHeader();
+          return;
+        }
+        const others = (systems().get().systems ?? []).filter((entry) => entry.id !== id);
+        const sentence2 = systemNameProblem(input.value, others);
+        if (sentence2) {
+          problem.textContent = sentence2;
+          problem.hidden = false;
+          input.setAttribute("aria-invalid", "true");
+          input.focus();
+          return;
+        }
+        finished = true;
+        try {
+          await systems().rename(id, input.value.trim());
+          await reload();
+        } catch (error) {
+          toast("error", errorText2(error));
+        }
+        renaming = false;
+        paintHeader();
+      };
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void finish(true);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          void finish(false);
+        }
+      });
+      input.addEventListener("blur", () => {
+        if (problem.hidden) void finish(true);
+      });
+      header.querySelector(".dc-syspg-titlewrap")?.replaceChildren(input, problem);
+      input.focus();
+      input.select();
+    };
+    const setViewing = (next) => {
+      viewing = next;
+      board.setVersion(next?.id ?? null);
+      syncAsk();
+      paint();
+    };
+    const restore = createSystemRestore({
+      id,
+      notices,
+      refresh: async () => {
+        await reload();
+        editBase = pending.size > 0 ? detail : null;
+        board.reload();
+      },
+      onRestored: () => {
+        viewing = null;
+        board.setVersion(null);
+        syncAsk();
+        paint();
+        versions?.load().catch(() => void 0);
+      },
+      onBusy: () => versions?.refresh(),
+      focusBoard: () => (board.el.querySelector("iframe") ?? board.el).focus(),
+      onFailed: (version) => versions?.focusRestore(version.id)
+    });
+    const openVersions = () => {
+      if (versionsSheet) return;
+      const sheet = openSheet(sheetHost, {
+        title: "Versions",
+        variant: "side",
+        onClose: () => {
+          versions?.dispose();
+          versions = null;
+          versionsSheet = null;
+        }
+      });
+      versionsSheet = sheet;
+      versions = mountSystemVersions({
+        id,
+        viewing: () => viewing ? { id: viewing.id, compare: viewing.compare } : null,
+        onView: (vid, n) => {
+          setViewing({ id: vid, n, compare: false });
+          versions?.refresh();
+        },
+        onCompare: (vid, n) => {
+          setViewing({ id: vid, n, compare: true });
+          versions?.refresh();
+        },
+        onBackToCurrent: () => {
+          setViewing(null);
+          versions?.refresh();
+        },
+        restoring: () => restore.busyId(),
+        onRestore: (version) => restore.restore(version),
+        ...repoHome() ? { repo: repoHome()?.label ?? "" } : {}
+      });
+      sheet.body.append(versions.el);
+    };
+    function paintHeader() {
+      if (renaming) return;
+      header.replaceChildren();
+      const back = compact ? iconBtn({ icon: "back", label: "Back to design systems", onClick: () => void leave() }) : btn({ label: "Design systems", variant: "ghost", size: "default", icon: "back", onClick: () => void leave() }).el;
+      const titleText = detail?.name ?? "Design system";
+      const title2 = detail ? h("button", { type: "button", class: "dc-syspg-title", title: "Rename", "aria-label": `${titleText}. Rename`, onClick: () => startRename() }, titleText) : h("h1", { class: "dc-syspg-title" }, titleText);
+      const pencil = detail && !compact ? iconBtn({ icon: "pencil", label: `Rename ${titleText}`, onClick: () => startRename() }) : null;
+      const titleWrap = h("div", { class: "dc-syspg-titlewrap" }, h("h1", { class: "dc-syspg-h1" }, title2), pencil, detail ? statusBadge(detail.status) : null, dirty() ? h("span", { class: "dc-syspg-unsaved" }, "Unsaved") : null);
+      const repoLine = detail && !compact ? repoHeaderLine(detail) : null;
+      const home = detail ? repoLine !== null ? h("p", { class: "dc-syspg-home dc-muted", title: repoLine.title }, repoLine.text) : h("p", { class: "dc-syspg-home dc-muted", title: homeTitle(detail) }, homeLine2(detail, sourceText(detail.sources, folderName, (iso) => relativeTime(iso, Date.now(), localeOf())))) : null;
+      const living2 = detail ? livingPagePill(detail) : null;
+      const livingEl = living2 ? h("span", { class: "dc-syspg-living", title: living2.title }) : null;
+      if (livingEl && living2) mountBadge(livingEl, { label: living2.label, tone: living2.tone });
+      const main = h("div", { class: "dc-syspg-main" }, titleWrap, home, livingEl);
+      const tools = h("div", { class: "dc-syspg-tools" });
+      if (detail) {
+        const control = readyControl(detail);
+        const ready = btn({
+          label: control.label,
+          variant: control.emphasis === "primary" && !dirty() ? "default" : "outline",
+          size: compact ? "sm" : "default",
+          ...control.emphasis === "primary" && !dirty() ? { emphasis: "primary" } : {},
+          disabled: viewing !== null,
+          title: viewing ? OLD_VERSION_SENTENCE : void 0,
+          onClick: () => void toggleReady()
+        });
+        if (!compact) tools.append(ready.el);
+        if (!compact && repoHome() !== null) tools.append(btn({ label: "Reveal", variant: "outline", size: "default", icon: "external", title: `Reveal ${repoHome()?.label ?? "the repo"} in your file manager`, onClick: () => void revealTarget("repo") }).el);
+        if (!compact) tools.append(btn({ label: "Versions", variant: "outline", size: "default", icon: "history", onClick: () => openVersions() }).el);
+        const more = iconBtn({ icon: "more", label: "More", onClick: () => void 0 });
+        attachMenu(
+          more,
+          () => [
+            { id: "rename", label: "Rename" },
+            { id: "chat", label: "Continue in chat" },
+            ...canResync() ? [resyncEntry()] : [],
+            ...compact ? [{ id: "versions", label: "Versions" }] : []
+          ],
+          (choice) => {
+            if (choice === "rename") startRename();
+            else if (choice === "chat") void continueChat();
+            else if (choice === "resync") startResync();
+            else if (choice === "versions") openVersions();
+          }
+        );
+        tools.append(more);
+      }
+      header.append(back, main, tools);
+    }
+    const bannerOf2 = (spec) => banner({ tone: spec.tone, title: spec.title, body: spec.body, ...spec.action ? { action: { label: spec.action.label, onClick: () => bannerAction(spec.action.id) } } : {} });
+    function paintStatic() {
+      const nodes = [];
+      if (detail) {
+        const stack = systemBanners({ ...detail, changesToReview: detail.home.kind === "repo" && detail.changesToReview }, { now: Date.now(), locale: localeOf(), secrets: living?.staged?.secrets ?? [] });
+        const shown = stack.shown;
+        const more = stack.more;
+        nodes.push(...shown.map(bannerOf2));
+        if (more.length > 0) {
+          const toggle = h(
+            "button",
+            { type: "button", class: "dc-banner-more-toggle", "aria-expanded": String(moreBanners), "aria-controls": "dc-banner-more-body", onClick: () => {
+              moreBanners = !moreBanners;
+              paintStatic();
+            } },
+            h("span", { class: "dc-banner-more-chev", "aria-hidden": "true" }),
+            `+${more.length} more`
+          );
+          const rest = h("div", { class: "dc-banner-more-body", id: "dc-banner-more-body", hidden: !moreBanners }, ...more.map(bannerOf2));
+          nodes.push(h("div", { class: "dc-banner-more" }, toggle, rest));
+        }
+        if (!detail.unreadable && detail.problems.length > 0) nodes.push(banner({ tone: "warning", title: `${plural(detail.problems.length, "entry", "entries")} couldn\u2019t be read`, body: detail.problems.slice(0, 3).map((problem) => problem.message).join(" ") }));
+      }
+      if (viewing) {
+        nodes.push(banner({ tone: "info", title: viewingBanner(viewing.n, viewing.compare), body: OLD_VERSION_SENTENCE, action: { label: "Back to current", onClick: () => setViewing(null) } }));
+      }
+      notices.setStatic(nodes);
+    }
+    function repoOverview() {
+      if (!detail || repoHome() === null) return null;
+      const out = h("div", { class: "dc-syspg-repo" });
+      if (living !== null) {
+        const card = livingCard(living, detail, { now: Date.now(), locale: localeOf(), regenerating, locked: viewing ? OLD_VERSION_SENTENCE : dirty() ? "Save or discard your changes first." : null });
+        out.append(renderLivingCard(card, { onAction: livingAction, onEmbedFonts: (checked) => void setEmbedFonts(checked) }));
+      }
+      const drift = driftLines(detail);
+      if (drift.sentence !== null || drift.agent !== null) {
+        out.append(
+          h(
+            "div",
+            { class: "dc-syspg-drift", "data-testid": "drift" },
+            drift.sentence === null ? null : h("p", { class: "dc-syspg-drift-line" }, drift.sentence),
+            drift.unread === null ? null : h("p", { class: "dc-syspg-drift-line dc-muted" }, drift.unread),
+            drift.agent === null ? null : h("p", { class: "dc-syspg-drift-line dc-muted" }, drift.agent),
+            drift.canReconcile ? h("div", { class: "dc-syspg-drift-actions" }, btn({ label: "Ask the agent to reconcile", variant: "outline", size: "sm", icon: "chat", disabled: viewing !== null, onClick: () => void askAgent2("reconcile") }).el) : null
+          )
+        );
+      }
+      const landed = landedLine(detail);
+      if (landed !== null) {
+        out.append(
+          h(
+            "div",
+            { class: "dc-syspg-landed", "data-testid": "landed" },
+            h("p", { class: "dc-syspg-drift-line" }, landed.sentence),
+            h("div", { class: "dc-syspg-drift-actions" }, btn({ label: landed.action, variant: "outline", size: "sm", icon: "chat", onClick: () => bannerAction("ask-landed") }).el)
+          )
+        );
+      }
+      return out;
+    }
+    function railLiving() {
+      if (!detail || !living || repoHome() === null) return null;
+      const target = previewTarget(living, detail);
+      if (target === null) return null;
+      return h("div", { class: "dc-syspg-railliving" }, btn({ label: "Preview living page", variant: "outline", size: "sm", icon: "eye", onClick: () => openPreview() }).el);
+    }
+    function areasView() {
+      const root = h("div", { class: "dc-syspg-areas" });
+      if (!detail) return root;
+      for (const group2 of areaGroups(detail)) {
+        const open = expanded.has(group2.area);
+        const rowsId = `dc-syspg-rows-${group2.area}`;
+        const head = h(
+          "button",
+          {
+            type: "button",
+            class: "dc-syspg-area-head",
+            "aria-expanded": String(open),
+            "aria-controls": rowsId,
+            onClick: () => {
+              if (expanded.has(group2.area)) expanded.delete(group2.area);
+              else expanded.add(group2.area);
+              paintPanel();
+            }
+          },
+          h("span", { class: "dc-syspg-chev", "aria-hidden": "true" }),
+          h("span", { class: "dc-syspg-area-name" }, group2.label),
+          h("span", { class: "dc-syspg-area-meta dc-muted" }, group2.meta)
+        );
+        const rows = h("ul", { class: "dc-syspg-rows", id: rowsId, hidden: !open });
+        for (const row2 of group2.rows) {
+          const current = row2.section === section2;
+          rows.append(
+            h(
+              "li",
+              null,
+              h(
+                "button",
+                { type: "button", class: "dc-syspg-row", "aria-current": current ? "true" : null, "aria-label": row2.ariaLabel, "data-focus-key": `row:${row2.section}`, onClick: () => select(row2.section) },
+                h("span", { class: "dc-syspg-row-name" }, row2.label),
+                h("span", { class: "dc-syspg-row-count dc-muted" }, row2.count),
+                row2.covered ? h("span", { class: "dc-syspg-row-state", "data-state": row2.review, title: REVIEW_DOT[row2.review] }, row2.review === "not-reviewed" ? "" : REVIEW_LABEL[row2.review]) : null
+              )
+            )
+          );
+        }
+        root.append(h("section", { class: "dc-syspg-area", "data-area": group2.area, "data-covered": String(group2.covered) }, head, rows));
+      }
+      return root;
+    }
+    const sectionContext = (current) => ({
+      detail: current,
+      pending,
+      locked: locked(),
+      selectedEntry,
+      propose,
+      removeToken,
+      selectEntry: (entry) => select(section2, entry)
+    });
+    function paintStage() {
+      const repo = repoHome();
+      const building = load === "ready" && detail !== null && repo !== null && detail.snapshot === null;
+      buildingEl.hidden = !building;
+      board.el.hidden = building;
+      buildingEl.replaceChildren();
+      if (!building || detail === null || repo === null) return;
+      const waiting = detail.proposal !== null && detail.proposal.state === "current";
+      const target = living !== null ? previewTarget(living, detail) : null;
+      buildingEl.append(
+        h("h2", { class: "dc-syspg-built-title" }, "Being built in chat"),
+        h("p", { class: "dc-muted" }, `${detail.name} will show here once the agent has written it to ${repo.label}.`),
+        ...waiting ? [h("p", { class: "dc-syspg-built-wait" }, "The agent is waiting for your answer in chat.")] : [],
+        h(
+          "div",
+          { class: "dc-syspg-built-actions" },
+          btn({ label: "Continue in chat", variant: "outline", icon: "chat", onClick: () => void continueChat() }).el,
+          btn({ label: "Re-sync", variant: "outline", disabled: !canResync() || !repo.readable, title: repo.readable ? void 0 : `${repo.label} can\u2019t be read right now.`, onClick: () => startResync() }).el,
+          ...waiting && target !== null ? [btn({ label: "Preview living page", variant: "outline", icon: "eye", onClick: () => openPreview() }).el] : []
+        )
+      );
+    }
+    function paintPanel() {
+      paintStage();
+      const scrollTop = panelScroll.scrollTop;
+      const focused = document.activeElement instanceof HTMLElement && panel.contains(document.activeElement) ? document.activeElement.dataset.focusKey : void 0;
+      panelScroll.replaceChildren();
+      el2.dataset.state = load;
+      if (load === "loading") {
+        panelScroll.append(loadingRow("Loading the design system\u2026"));
+      } else if (load === "error") {
+        panelScroll.append(
+          h("div", { class: "dc-sys-pagemsg" }, h("p", { class: "dc-sys-pagemsg-title" }, "The design system didn\u2019t load"), h("p", { class: "dc-muted" }, loadFailure2 || "The local service didn\u2019t answer."), btn({ label: "Try again", variant: "outline", onClick: () => void reload() }).el)
+        );
+      } else if (load === "gone") {
+        const kept = [...pending.values()];
+        panelScroll.append(
+          h(
+            "div",
+            { class: "dc-sys-pagemsg" },
+            h("p", { class: "dc-sys-pagemsg-title" }, `${name()} is gone`),
+            h("p", { class: "dc-muted" }, "Its folder was moved or deleted. Check the trash in the Designs folder."),
+            kept.length > 0 ? h("div", null, h("p", { class: "dc-muted" }, "Your unsaved values, so you can copy them:"), h("ul", { class: "dc-syspg-kept" }, ...kept.map((change) => h("li", { class: "dc-mono" }, describeChange(change))))) : null,
+            btn({ label: "Back to design systems", variant: "outline", icon: "back", onClick: () => options.onBack() }).el
+          )
+        );
+      } else if (detail) {
+        const progress = reviewProgress(detail);
+        const bar = h("span", { class: "dc-syspg-progress", role: "img", "aria-label": progress.text });
+        bar.style.setProperty("--dc-progress", `${progress.percent}%`);
+        const readOnly = readOnlyLine(detail);
+        panelScroll.append(
+          h("div", { class: "dc-syspg-panelhead" }, h("h2", { class: "dc-syspg-panel-title" }, "Sections"), h("span", { class: "dc-muted" }, progress.text), bar),
+          areasView()
+        );
+        const readOnlyEl = readOnly === null ? null : h("p", { class: "dc-syspg-readonly", "data-testid": "read-only" }, h("strong", null, readOnly.lead), ` ${readOnly.rest}`);
+        const railEl = compact ? railLiving() : null;
+        const areas = panelScroll.lastElementChild;
+        if (readOnlyEl !== null) areas?.before(readOnlyEl);
+        if (railEl !== null) areas?.before(railEl);
+        if (!compact) {
+          const editable = locked() === null;
+          panelScroll.append(
+            h(
+              "div",
+              { class: "dc-syspg-detail" },
+              h("div", { class: "dc-syspg-detail-head" }, h("h3", { class: "dc-syspg-detail-title" }, sectionLabel(section2)), editable && isCovered(detail, section2) ? h("span", { class: "dc-muted dc-syspg-hint" }, "Click a value to edit it.") : null),
+              section2 === "overview" ? repoOverview() : null,
+              renderSection(sectionContext(detail), section2)
+            )
+          );
+        }
+      }
+      panelScroll.scrollTop = scrollTop;
+      if (focused) panelScroll.querySelector(`[data-focus-key="${CSS.escape(focused)}"]`)?.focus();
+      paintFoot();
+    }
+    function paintFoot() {
+      panelFoot.replaceChildren();
+      if (load !== "ready" || !detail) return;
+      if (dirty() && !compact) {
+        const saveButton = btn({ label: "Save", variant: "default", size: "sm", emphasis: "primary", loading: saving, onClick: () => void save() });
+        panelFoot.append(
+          h(
+            "div",
+            { class: "dc-syspg-editbar" },
+            h("span", { class: "dc-syspg-editcount" }, h("span", { class: "dc-sp-dirty-dot", "aria-hidden": "true" }), `${plural(pending.size, "unsaved change")}`),
+            h("span", { class: "dc-spacer" }),
+            btn({ label: "Reset", variant: "ghost", size: "sm", disabled: saving, onClick: () => reset() }).el,
+            saveButton.el
+          )
+        );
+      }
+      const foot = reviewFoot(detail, section2);
+      const railFoot = () => {
+        if (!compact || !detail) return;
+        const control = readyControl(detail);
+        panelFoot.append(
+          h(
+            "div",
+            { class: "dc-syspg-railactions" },
+            btn({ label: control.label, variant: control.emphasis === "primary" ? "default" : "outline", size: "sm", ...control.emphasis === "primary" ? { emphasis: "primary" } : {}, disabled: viewing !== null, onClick: () => void toggleReady() }).el,
+            btn({ label: "Continue in chat", variant: "outline", size: "sm", icon: "chat", onClick: () => void openChat() }).el
+          ),
+          ...detail.home.kind === "repo" ? [] : [h("p", { class: "dc-muted dc-syspg-railhint" }, railHint(detail))]
+        );
+      };
+      if (foot.kind === "uncovered") {
+        railFoot();
+        return;
+      }
+      const disabled = reviewBusy || viewing !== null;
+      if (askingNote) {
+        const note = h("textarea", { class: "oc-sdk-input dc-syspg-note", rows: 3, "aria-label": `What needs work in ${sectionLabel(section2)}?`, placeholder: "What needs work? (optional)", maxlength: 500 });
+        panelFoot.append(
+          h(
+            "div",
+            { class: "dc-syspg-review", "data-state": "work" },
+            h("p", { class: "dc-syspg-review-text" }, `Tell the agent what to fix in ${sectionLabel(section2)}.`),
+            note,
+            h(
+              "div",
+              { class: "dc-syspg-review-actions" },
+              btn({ label: "Cancel", variant: "ghost", size: "sm", disabled: reviewBusy, onClick: () => {
+                askingNote = false;
+                paintFoot();
+              } }).el,
+              btn({ label: "Send to the agent", variant: "default", size: "sm", icon: "send", loading: reviewBusy, onClick: () => void sendNeedsWork(section2, note.value) }).el
+            )
+          )
+        );
+        note.focus();
+        return;
+      }
+      const actions = foot.actions.map(
+        (action2) => btn({
+          label: REVIEW_BUTTON[action2],
+          variant: "outline",
+          size: "sm",
+          disabled,
+          title: viewing ? OLD_VERSION_SENTENCE : void 0,
+          onClick: () => {
+            if (action2 === "needs-work") {
+              askingNote = true;
+              paintFoot();
+            } else void setReview(section2, "looks-good");
+          }
+        }).el
+      );
+      panelFoot.append(
+        h(
+          "div",
+          { class: "dc-syspg-review", "data-state": foot.kind === "state" ? foot.state === "looks-good" ? "good" : "work" : "ask" },
+          h("p", { class: "dc-syspg-review-text", "aria-live": "polite" }, foot.text),
+          h("div", { class: "dc-syspg-review-actions" }, ...actions)
+        )
+      );
+      railFoot();
+    }
+    function paintMobile() {
+      if (compact) return;
+      mobile.replaceChildren();
+      for (const view2 of ["board", "sections"]) {
+        mobile.append(
+          h(
+            "button",
+            {
+              type: "button",
+              class: "dc-syspg-mobile-btn",
+              "aria-pressed": String(phoneView === view2),
+              onClick: () => {
+                phoneView = view2;
+                el2.dataset.phoneView = view2;
+                paintMobile();
+              }
+            },
+            view2 === "board" ? "Board" : "Sections"
+          )
+        );
+      }
+    }
+    function paint() {
+      if (disposed) return;
+      paintHeader();
+      paintStatic();
+      paintPanel();
+      paintMobile();
+      syncAsk();
+    }
+    const beforeLeave = () => {
+      if (!dirty() || load !== "ready") return Promise.resolve(true);
+      return new Promise((resolve) => {
+        let settled2 = false;
+        const done = (value) => {
+          if (settled2) return;
+          settled2 = true;
+          resolve(value);
+        };
+        const sheet = openSheet(sheetHost, { title: `Save your changes to ${name()}?`, variant: "dialog", onClose: () => done(false) });
+        const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+        sheet.body.append(h("p", null, `You have ${plural(pending.size, "unsaved change")}. A version of ${name()} is saved first, so you can go back.`), failure);
+        const keep = btn({ label: "Keep editing", variant: "ghost", onClick: () => sheet.close() });
+        const discard = btn({
+          label: "Discard",
+          variant: "outline",
+          onClick: () => {
+            done(true);
+            sheet.close();
+          }
+        });
+        const saveButton = btn({
+          label: "Save",
+          variant: "default",
+          emphasis: "primary",
+          onClick: () => {
+            saveButton.set({ loading: true });
+            void save().then((ok) => {
+              if (ok) {
+                done(true);
+                sheet.close();
+              } else {
+                saveButton.set({ loading: false });
+                failure.textContent = "Couldn\u2019t save. Nothing was changed.";
+                failure.hidden = false;
+              }
+            });
+          }
+        });
+        sheet.foot.append(keep.el, discard.el, saveButton.el);
+        saveButton.el.focus();
+      });
+    };
+    async function leave() {
+      if (await beforeLeave()) options.onBack();
+    }
+    let refreshTimer = null;
+    const stopFeed = feed.subscribe((batch) => {
+      const mine = batch.events.filter((event) => event.system === id);
+      if (!batch.reset && mine.length === 0) return;
+      if (mine.some((event) => event.systemChange === "removed")) {
+        load = "gone";
+        paint();
+        return;
+      }
+      if (regenerating && mine.some((event) => event.systemChange === "living-page")) stopRegenerating();
+      const files = mine.some((event) => event.systemChange === "files" && event.origin !== "user");
+      if (refreshTimer !== null) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        void reload();
+        if (files && viewing === null) board.reload();
+      }, 300);
+    });
+    const stopSession = guestHost.session.subscribe(() => syncAsk());
+    scope.add(() => {
+      disposed = true;
+      if (refreshTimer !== null) clearTimeout(refreshTimer);
+      if (regenTimer !== null) clearTimeout(regenTimer);
+      preview.dispose();
+      stopFeed();
+      stopSession();
+      versionsSheet?.close();
+      restore.dispose();
+      build.dispose();
+      askBar.dispose();
+      board.dispose();
+      notices.dispose();
+      el2.remove();
+    });
+    paint();
+    void reload();
+    return {
+      el: el2,
+      beforeLeave,
+      focus: () => header.querySelector("button")?.focus(),
+      showTarget: (target) => {
+        wanted = target;
+        applyWanted();
+      },
+      dispose: () => scope.dispose()
+    };
+  };
+
+  // src/ui/systems/build-chip-view.ts
+  var mountBuildChipView = (options) => {
+    const scope = createScope();
+    let model = startBuildChip();
+    const chatId = host.session()?.id ?? null;
+    let system = null;
+    let timer = null;
+    let inFlight2 = false;
+    const el2 = h("div", { class: "dc-build-view", "data-surface": options.surface });
+    const back = options.surface === "panel" ? iconBtn({ icon: "back", label: "Back to designs", onClick: () => options.onBack() }) : btn({ label: "Library", variant: "ghost", size: "default", icon: "back", onClick: () => options.onBack() }).el;
+    const title2 = h("h1", { class: options.surface === "panel" ? "dc-rail-title" : "dc-page-title" }, BUILD_CHIP_TITLE);
+    const head = options.surface === "panel" ? h("header", { class: "dc-rail-head" }, back, title2, h("span", { class: "dc-spacer" })) : h("header", { class: "dc-library-bar dc-sys-bar" }, back, title2, h("span", { class: "dc-spacer" }));
+    const stage = h("div", { class: "dc-build-stage", "aria-live": "polite" });
+    el2.append(head, stage);
+    const continueChat = async () => {
+      const id = chatId ?? host.session()?.id ?? null;
+      if (id === null) {
+        toast("info", "Open the chat that started this build, then try again.");
+        return;
+      }
+      try {
+        await guestHost.client.openSession(id);
+      } catch (error) {
+        toast("error", `Couldn\u2019t open the chat. ${errorText2(error)}`);
+      }
+    };
+    const run = (id) => {
+      if (id === "continue-chat") void continueChat();
+      else if (id === "open-system" && model.phase === "made") {
+        model = { ...model, probe: "checking" };
+        paint();
+        void probe();
+      } else if (id === "try-again") {
+        model = startBuildChip();
+        paint();
+        void tick();
+      }
+    };
+    const actionRow = (actions) => h(
+      "div",
+      { class: "dc-build-actions" },
+      ...actions.map((action2) => btn({ label: action2.label, variant: action2.primary ? "default" : "outline", size: "sm", icon: action2.id === "continue-chat" ? "chat" : void 0, onClick: () => run(action2.id) }).el)
+    );
+    const showSystem = (id) => {
+      if (system?.id === id) return;
+      system?.handle.dispose();
+      const handle = mountSystemPage({ id, surface: options.surface, actions: options.actions, onBack: options.onBack });
+      system = { id, handle };
+      el2.replaceChildren(handle.el);
+      handle.focus();
+    };
+    const paint = () => {
+      if (model.phase === "made" && system?.id === model.id) return;
+      const view2 = chipView(model);
+      title2.textContent = view2.title;
+      stage.replaceChildren();
+      if (view2.spinner !== null) {
+        const holder = h("div", { class: "dc-build-loading" });
+        mountSpinner(holder, { label: view2.spinner });
+        stage.append(holder);
+      } else if (view2.problem !== null) {
+        const holder = h("div", { class: "dc-banner dc-banner-block" });
+        const retry = view2.actions.find((action2) => action2.id === "try-again");
+        mountBanner(holder, { tone: "error", title: view2.problem.title, body: view2.problem.body, ...retry ? { action: { label: retry.label, onClick: () => run("try-again") } } : {} });
+        stage.append(holder);
+      } else {
+        const holder = h("div", { class: "dc-build-empty" });
+        const lead = view2.actions.find((action2) => action2.primary && action2.id === "continue-chat");
+        mountEmpty(holder, { title: view2.title, body: view2.body ?? "", ...lead ? { action: { label: lead.label, onClick: () => run(lead.id) } } : {} });
+        stage.append(holder);
+        if (view2.note !== null) stage.append(h("p", { class: "dc-muted dc-build-note" }, view2.note));
+        const rest = view2.actions.filter((action2) => action2 !== lead);
+        if (rest.length > 0) stage.append(actionRow(rest));
+      }
+    };
+    const probe = async () => {
+      if (model.phase !== "made") return;
+      const { id } = model;
+      try {
+        await client.call("GET /systems/:id", { params: { id } });
+        model = afterProbe(model, "present");
+        showSystem(id);
+      } catch (error) {
+        model = afterProbe(model, isServiceError(error) && error.code === "not-found" ? "gone" : "unknown");
+        paint();
+      }
+    };
+    const schedule = () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      if (!keepsPolling(model) || document.hidden) return;
+      timer = setTimeout(() => void tick(), SYSTEM_BUILD_POLL_MS);
+    };
+    const tick = async () => {
+      if (inFlight2 || !keepsPolling(model)) return;
+      inFlight2 = true;
+      try {
+        const answer = await client.call("GET /system-builds/:ticket", { params: { ticket: options.ticket } });
+        model = afterAnswer(model, answer);
+      } catch (error) {
+        model = afterFailure(model, isServiceError(error) ? { code: error.code, message: error.message } : { code: "unknown", message: errorText2(error) });
+      } finally {
+        inFlight2 = false;
+      }
+      paint();
+      if (model.phase === "made") void probe();
+      schedule();
+    };
+    const onVisible = () => {
+      if (document.hidden) {
+        if (timer !== null) clearTimeout(timer);
+        timer = null;
+      } else void tick().then(schedule);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    scope.add(() => document.removeEventListener("visibilitychange", onVisible));
+    scope.add(() => {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    });
+    paint();
+    void tick();
+    return {
+      el: el2,
+      focus: () => {
+        if (system) system.handle.focus();
+        else back.focus();
+      },
+      dispose: () => {
+        scope.dispose();
+        system?.handle.dispose();
+        el2.remove();
+      }
+    };
+  };
+
+  // src/ui/model/list-model.ts
+  var LIST_TABS = [
+    { id: "all", label: "All" },
+    { id: "canvas", label: "Canvases" },
+    { id: "page", label: "Pages" }
+  ];
+  var LIST_SORTS = [
+    { id: "updated", label: "Updated" },
+    { id: "created", label: "Created" },
+    { id: "title", label: "Title" }
+  ];
+  var kindLabel = (kind) => kind === "canvas" ? "Canvas" : "Page";
+  var matchesQuery = (design, query) => {
+    const needle = query.trim().toLowerCase();
+    if (needle === "") return true;
+    return design.title.toLowerCase().includes(needle) || design.slug.toLowerCase().includes(needle);
+  };
+  var matchesTab = (design, tab) => tab === "all" || design.kind === tab;
+  var filterDesigns = (designs, query, tab) => designs.filter((design) => matchesTab(design, tab) && matchesQuery(design, query));
+  var tabCounts = (designs, query) => {
+    const searched = designs.filter((design) => matchesQuery(design, query));
+    return {
+      all: searched.length,
+      canvas: searched.filter((design) => design.kind === "canvas").length,
+      page: searched.filter((design) => design.kind === "page").length
+    };
+  };
+  var sortDesigns = (designs, sort) => {
+    const copy = [...designs];
+    if (sort === "title") return copy.sort((a, b) => a.title.localeCompare(b.title, void 0, { sensitivity: "base" }));
+    const key = sort === "created" ? "created" : "updated";
+    return copy.sort((a, b) => Date.parse(b[key]) - Date.parse(a[key]));
+  };
+  var kindSummary = (design) => {
+    if (design.kind === "page") return "Page";
+    return `Canvas \xB7 ${plural(design.screenCount, "screen")}`;
+  };
+  var emptyKind = (all, shown) => {
+    if (shown.length > 0) return "none";
+    return all.length === 0 ? "no-designs" : "no-matches";
+  };
+  var rowAriaLabel = (design) => {
+    const parts = [design.title, kindSummary(design)];
+    if (design.pending) parts.push("waiting for the agent");
+    if (design.openComments > 0) parts.push(plural(design.openComments, "open comment"));
+    if (systemUpdated(design)) parts.push(SYSTEM_UPDATED_LABEL);
+    return parts.join(", ");
+  };
+  var SYSTEM_UPDATED_LABEL = "System updated";
+  var systemUpdated = (design) => design.system?.updateAvailable === true;
+  var ALL_SCOPE = { kind: "all" };
+  var normalizeDirectory = (value) => value.replace(/\\/g, "/").replace(/\/+$/, "");
+  var isWindowsDirectory = (value) => /^[A-Za-z]:\//.test(value);
+  var isInsideOrEqualDirectory = (root, dir) => {
+    const left = normalizeDirectory(root);
+    const right = normalizeDirectory(dir);
+    const windows = isWindowsDirectory(left) || isWindowsDirectory(right);
+    const a = windows ? left.toLowerCase() : left;
+    const b = windows ? right.toLowerCase() : right;
+    return b === a || b.startsWith(`${a}/`);
+  };
+  var baseName = (directory) => {
+    const parts = normalizeDirectory(directory).split("/").filter((part) => part !== "");
+    return parts[parts.length - 1] ?? directory;
+  };
+  var parentName = (directory) => {
+    const parts = normalizeDirectory(directory).split("/").filter((part) => part !== "");
+    return parts[parts.length - 2] ?? "";
+  };
+  var projectOf = (design, designsRoot) => {
+    const directory = design.projectDirectory;
+    if (directory === null || directory.trim() === "") return null;
+    if (designsRoot !== "" && isInsideOrEqualDirectory(designsRoot, directory)) return null;
+    return directory;
+  };
+  var projectGroups = (designs, projects, designsRoot, projectFolders) => {
+    const groups = [];
+    for (const design of designs) {
+      const directory = projectOf(design, designsRoot);
+      if (directory === null) continue;
+      const found = groups.find((group2) => sameDirectory(group2.directory, directory));
+      if (found) {
+        found.count += 1;
+        continue;
+      }
+      const named2 = projects.find((project) => sameDirectory(project.directory, directory))?.name.trim();
+      const stat = projectFolders?.find((entry) => sameDirectory(entry.directory, directory));
+      groups.push({ directory, label: named2 ? named2 : baseName(directory), title: directory, count: 1, missing: stat !== void 0 && !stat.exists });
+    }
+    const seen = /* @__PURE__ */ new Map();
+    for (const group2 of groups) seen.set(group2.label.toLowerCase(), (seen.get(group2.label.toLowerCase()) ?? 0) + 1);
+    const named = groups.map((group2) => {
+      const parent = parentName(group2.directory);
+      return (seen.get(group2.label.toLowerCase()) ?? 0) > 1 && parent !== "" ? { ...group2, label: `${group2.label} \xB7 ${parent}` } : group2;
+    });
+    return named.sort((a, b) => a.label.localeCompare(b.label, void 0, { sensitivity: "base" }));
+  };
+  var groupOf = (design, groups, designsRoot) => {
+    const directory = projectOf(design, designsRoot);
+    if (directory === null) return null;
+    return groups.find((group2) => sameDirectory(group2.directory, directory)) ?? null;
+  };
+  var scopeDesigns = (designs, scope, folders2, designsRoot) => {
+    switch (scope.kind) {
+      case "all":
+        return [...designs];
+      case "no-project":
+        return designs.filter((design) => projectOf(design, designsRoot) === null);
+      case "project":
+        return designs.filter((design) => {
+          const directory = projectOf(design, designsRoot);
+          return directory !== null && sameDirectory(directory, scope.directory);
+        });
+      case "folder": {
+        const members = new Set(folders2.find((folder) => folder.id === scope.id)?.slugs ?? []);
+        return designs.filter((design) => members.has(design.slug));
+      }
+    }
+  };
+  var scopeCounts = (designs, folders2, designsRoot) => {
+    const live = new Set(designs.map((design) => design.slug));
+    const counts = {};
+    for (const folder of folders2) counts[folder.id] = new Set(folder.slugs.filter((slug) => live.has(slug))).size;
+    return { all: designs.length, noProject: designs.filter((design) => projectOf(design, designsRoot) === null).length, folders: counts };
+  };
+  var scopeLabel = (scope, groups, folders2) => {
+    switch (scope.kind) {
+      case "all":
+        return null;
+      case "no-project":
+        return "No project";
+      case "project":
+        return groups.find((group2) => sameDirectory(group2.directory, scope.directory))?.label ?? baseName(scope.directory);
+      case "folder":
+        return folders2.find((folder) => folder.id === scope.id)?.name ?? null;
+    }
+  };
+  var resolveScope = (scope, groups, folders2) => {
+    if (scope.kind === "project") return groups.some((group2) => sameDirectory(group2.directory, scope.directory)) ? scope : ALL_SCOPE;
+    if (scope.kind === "folder") return folders2.some((folder) => folder.id === scope.id) ? scope : ALL_SCOPE;
+    return scope;
+  };
+  var sameScope = (a, b) => {
+    if (a.kind !== b.kind) return false;
+    if (a.kind === "project" && b.kind === "project") return sameDirectory(a.directory, b.directory);
+    if (a.kind === "folder" && b.kind === "folder") return a.id === b.id;
+    return true;
+  };
+  var noMatchesSentence = (label, query) => label === null ? `No designs match \u201C${query.trim()}\u201D.` : `No designs in ${label} match \u201C${query.trim()}\u201D.`;
+  var folderEmptyBody = (draggable) => draggable ? "Drag designs here, or use Add to folder in a design\u2019s menu." : "Use Add to folder in a design\u2019s menu.";
+  var cardProjectLine = (design, scope, groups, designsRoot) => {
+    const group2 = groupOf(design, groups, designsRoot);
+    if (group2 === null) return null;
+    if (scope.kind === "project" && sameDirectory(scope.directory, group2.directory)) return null;
+    return { label: group2.label, title: group2.missing ? `${group2.title}
+Folder not found` : group2.title };
+  };
+  var scopeStorageKey = (surface) => `list-scope:${surface}`;
+  var scopeToId = (scope) => {
+    switch (scope.kind) {
+      case "all":
+        return "all";
+      case "no-project":
+        return "no-project";
+      case "project":
+        return `project:${scope.directory}`;
+      case "folder":
+        return `folder:${scope.id}`;
+    }
+  };
+  var SCOPE_ID_MAX = 1024;
+  var scopeFromId = (raw) => {
+    if (typeof raw !== "string" || raw.length > SCOPE_ID_MAX) return ALL_SCOPE;
+    if (raw === "no-project") return { kind: "no-project" };
+    if (raw.startsWith("project:") && raw.length > "project:".length) return { kind: "project", directory: raw.slice("project:".length) };
+    if (raw.startsWith("folder:") && FOLDER_ID_PATTERN.test(raw.slice("folder:".length))) return { kind: "folder", id: raw.slice("folder:".length) };
+    return ALL_SCOPE;
+  };
+  var scopeOptions = (groups, counts, folders2) => [
+    { id: "all", label: "All designs", hint: String(counts.all) },
+    ...groups.map((group2) => ({ id: scopeToId({ kind: "project", directory: group2.directory }), label: group2.label, hint: String(group2.count) })),
+    ...counts.noProject > 0 ? [{ id: "no-project", label: "No project", hint: String(counts.noProject) }] : [],
+    ...folders2.map((folder) => ({ id: scopeToId({ kind: "folder", id: folder.id }), label: `Folder \xB7 ${folder.name}`, hint: String(counts.folders[folder.id] ?? 0) }))
+  ];
+  var FOLDER_NAME_CONTROL = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]", "u");
+  var folderNameProblem = (raw, folders2, ignoreId = null) => {
+    const name = raw.normalize("NFKC").trim();
+    if (name.length === 0) return "Give the folder a name.";
+    if (FOLDER_NAME_CONTROL.test(name)) return "A folder name can't contain line breaks or tabs.";
+    if (name.length > FOLDER_NAME_MAX) return `Keep the folder name to ${FOLDER_NAME_MAX} characters or fewer.`;
+    const taken = folders2.find((folder) => folder.id !== ignoreId && folder.name.toLowerCase() === name.toLowerCase());
+    if (taken) return `You already have a folder called ${taken.name}.`;
+    if (ignoreId === null && folders2.length >= FOLDERS_MAX) return `You can have up to ${FOLDERS_MAX} folders.`;
+    return null;
+  };
+
+  // src/ui/components/folders-store.ts
+  var FOLDERS_COULDNT_LOAD = "Folders couldn\u2019t load. Try again.";
+  var sameSet2 = (a, b) => a.length === b.length && a.every((slug) => b.includes(slug));
+  var createFoldersStore = () => {
+    let state = { status: "idle", folders: [], damaged: false, error: null };
+    const listeners = /* @__PURE__ */ new Set();
+    let ticket = 0;
+    const set = (next) => {
+      state = next;
+      for (const listener of [...listeners]) listener(state);
+    };
+    const load = async () => {
+      ticket += 1;
+      const mine = ticket;
+      set({ ...state, status: state.status === "ready" ? "ready" : "loading", error: null });
+      try {
+        const answer = await client.call("GET /folders");
+        if (mine !== ticket) return;
+        if (answer.damaged) set({ status: "error", folders: [], damaged: true, error: FOLDERS_COULDNT_LOAD });
+        else set({ status: "ready", folders: answer.folders, damaged: false, error: null });
+      } catch (error) {
+        if (mine !== ticket) return;
+        console.warn("Design Chamber: folders failed to load", error);
+        set({ status: "error", folders: state.folders, damaged: false, error: FOLDERS_COULDNT_LOAD });
+      }
+    };
+    const replaceOne = (folder) => {
+      ticket += 1;
+      const known = state.folders.some((entry) => entry.id === folder.id);
+      set({ ...state, status: "ready", error: null, folders: known ? state.folders.map((entry) => entry.id === folder.id ? folder : entry) : [...state.folders, folder] });
+    };
+    const run = async (request) => {
+      try {
+        return await request();
+      } catch (error) {
+        void load();
+        throw new Error(errorText2(error));
+      }
+    };
+    const change = (id, body) => {
+      const before = state.folders.find((folder) => folder.id === id);
+      if (before) {
+        const slugs = [...before.slugs.filter((slug) => !(body.remove ?? []).includes(slug)), ...(body.add ?? []).filter((slug) => !before.slugs.includes(slug))];
+        if (!sameSet2(slugs, before.slugs)) replaceOne({ ...before, slugs });
+      }
+      return run(async () => {
+        const { folder } = await client.call("POST /folders/:folderId/designs", { params: { folderId: id }, body });
+        replaceOne(folder);
+        return folder;
+      });
+    };
+    const refresh = debounce(() => void load(), 150);
+    feed.subscribe((batch) => {
+      if (batch.reset || batch.events.some((event) => event.kind === "folders" || event.kind === "removed" || event.kind === "root")) refresh();
+    });
+    return {
+      get: () => state,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => void listeners.delete(listener);
+      },
+      load,
+      create: (name) => run(async () => {
+        const { folder } = await client.call("POST /folders", { body: { name } });
+        replaceOne(folder);
+        return folder;
+      }),
+      rename: (id, name) => run(async () => {
+        const { folder } = await client.call("PATCH /folders/:folderId", { params: { folderId: id }, body: { name } });
+        replaceOne(folder);
+        return folder;
+      }),
+      remove: (id) => run(async () => {
+        const { designs } = await client.call("DELETE /folders/:folderId", { params: { folderId: id } });
+        ticket += 1;
+        set({ ...state, folders: state.folders.filter((folder) => folder.id !== id) });
+        return designs;
+      }),
+      restore: (id) => run(async () => {
+        const { folder } = await client.call("POST /folders/:folderId/undelete", { params: { folderId: id }, body: {} });
+        replaceOne(folder);
+        return folder;
+      }),
+      add: (id, slugs) => change(id, { add: slugs }),
+      removeDesigns: (id, slugs) => change(id, { remove: slugs })
+    };
+  };
+  var shared3 = null;
+  var folders = () => {
+    if (shared3 === null) {
+      shared3 = createFoldersStore();
+      void shared3.load();
+    }
+    return shared3;
+  };
+
+  // src/ui/components/folder-actions.ts
+  var DESIGN_DRAG_TYPE = "application/x-design-chamber-design";
+  var listDesignMenu = (inFolder) => {
+    const base = designMenu({ includeOpen: true });
+    const at = base.findIndex((entry) => "id" in entry && entry.id === "reveal");
+    const extra = [{ id: "add-to-folder", label: "Add to folder\u2026" }, ...inFolder ? [{ id: "remove-from-folder", label: `Remove from ${inFolder.name}` }] : []];
+    return [...base.slice(0, at), ...extra, ...base.slice(at)];
+  };
+  var runListAction = (id, design, context, inFolder) => {
+    if (id === "add-to-folder") {
+      openAddToFolder(context.host, design);
+      return;
+    }
+    if (id === "remove-from-folder" && inFolder) {
+      void removeFromFolder(inFolder, design);
+      return;
+    }
+    runDesignAction(id, design, context);
+  };
+  var removeFromFolder = async (folder, design) => {
+    try {
+      await folders().removeDesigns(folder.id, [design.slug]);
+      toast("info", `Removed \u201C${design.title}\u201D from ${folder.name}. It is still in All designs.`);
+    } catch (error) {
+      toast("error", `Couldn\u2019t remove it from ${folder.name}. ${errorText2(error)}`);
+    }
+  };
+  var addToFolder = async (folder, design) => {
+    const current = folders().get().folders.find((entry) => entry.id === folder.id);
+    if (current?.slugs.includes(design.slug)) {
+      toast("info", `\u201C${design.title}\u201D is already in ${folder.name}.`);
+      return;
+    }
+    try {
+      await folders().add(folder.id, [design.slug]);
+      toast("success", `Added \u201C${design.title}\u201D to ${folder.name}.`);
+    } catch (error) {
+      toast("error", `Couldn\u2019t add it to ${folder.name}. ${errorText2(error)}`);
+    }
+  };
+  var SKELETON_ROWS2 = 3;
+  var openAddToFolder = (hostEl, design) => {
+    const store2 = folders();
+    const scope = createScope();
+    const sheet = openSheet(hostEl, { title: "Add to folder", subtitle: design.title, variant: "dialog", onClose: () => scope.dispose() });
+    const list = h("ul", { class: "dc-folder-pick", role: "list", "aria-label": "Folders" });
+    const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+    const createBox = h("div", { class: "dc-folder-new" });
+    const body = sheet.body;
+    body.append(list, failure, createBox);
+    const checks = /* @__PURE__ */ new Map();
+    let builtFor = "";
+    let createField = null;
+    let creating = false;
+    const showFailure = (message) => {
+      failure.hidden = message === null;
+      failure.textContent = message ?? "";
+    };
+    const toggle = async (folder, checked) => {
+      showFailure(null);
+      const handle = checks.get(folder.id);
+      handle?.update({ disabled: true });
+      try {
+        if (checked) await store2.add(folder.id, [design.slug]);
+        else await store2.removeDesigns(folder.id, [design.slug]);
+      } catch (error) {
+        handle?.update({ checked: !checked });
+        showFailure(`Couldn\u2019t ${checked ? "add it to" : "remove it from"} ${folder.name}. ${errorText2(error)}`);
+      } finally {
+        handle?.update({ disabled: false });
+      }
+    };
+    const paintList = () => {
+      const state = store2.get();
+      if ((state.status === "idle" || state.status === "loading") && state.folders.length === 0) {
+        builtFor = "";
+        checks.clear();
+        list.replaceChildren(...Array.from({ length: SKELETON_ROWS2 }, () => h("li", { class: "dc-folder-pick-skeleton", "aria-hidden": "true" }, h("span", { class: "dc-skel dc-skel-line" }))));
+        return;
+      }
+      if (state.status === "error") {
+        builtFor = "";
+        checks.clear();
+        const retry = btn({ label: "Try again", variant: "outline", size: "sm", onClick: () => void store2.load() });
+        list.replaceChildren(h("li", { class: "dc-folder-pick-message" }, h("p", { class: "dc-form-error" }, state.error ?? FOLDERS_COULDNT_LOAD), retry.el));
+        return;
+      }
+      if (state.folders.length === 0) {
+        builtFor = "";
+        checks.clear();
+        list.replaceChildren(h("li", { class: "dc-folder-pick-message" }, h("p", { class: "dc-muted" }, "No folders yet. Name one below and this design goes in it.")));
+        return;
+      }
+      const signature = state.folders.map((folder) => `${folder.id}:${folder.name}`).join("|");
+      if (signature !== builtFor) {
+        builtFor = signature;
+        checks.clear();
+        list.replaceChildren(
+          ...state.folders.map((folder) => {
+            const holder = h("li", { class: "dc-folder-pick-row" });
+            const handle = mountCheckbox(holder, { label: folder.name, checked: folder.slugs.includes(design.slug), description: plural(folder.slugs.length, "design"), onChange: (checked) => void toggle(folder, checked) });
+            checks.set(folder.id, handle);
+            return holder;
+          })
+        );
+        return;
+      }
+      for (const folder of state.folders) checks.get(folder.id)?.update({ checked: folder.slugs.includes(design.slug), description: plural(folder.slugs.length, "design") });
+    };
+    const paintCreate = () => {
+      const state = store2.get();
+      const noFolders = state.status === "ready" && state.folders.length === 0;
+      if (createField !== null) return;
+      if (state.status === "error") {
+        createBox.replaceChildren();
+        return;
+      }
+      if (noFolders) {
+        mountField();
+        return;
+      }
+      if (createBox.firstElementChild === null) {
+        const open = btn({ label: "New folder\u2026", variant: "ghost", size: "sm", icon: "plus", onClick: () => mountField(true) });
+        createBox.replaceChildren(open.el);
+      }
+    };
+    const mountField = (focus = false) => {
+      createBox.replaceChildren();
+      const holder = h("div", { class: "dc-folder-new-field" });
+      let value = "";
+      const field2 = mountTextField(holder, { label: "Folder name", value, placeholder: "Q4 launch", onChange: (next) => void (value = next) });
+      createField = field2;
+      const input = holder.querySelector("input");
+      const create = btn({ label: "Create and add", variant: "default", size: "sm", onClick: () => void submit() });
+      const submit = async () => {
+        if (creating) return;
+        const problem = folderNameProblem(value, store2.get().folders);
+        if (problem !== null) {
+          field2.update({ error: problem });
+          return;
+        }
+        creating = true;
+        create.set({ loading: true });
+        showFailure(null);
+        try {
+          const folder = await store2.create(value.trim());
+          await store2.add(folder.id, [design.slug]);
+          createField = null;
+          createBox.replaceChildren();
+          paintList();
+          paintCreate();
+          toast("success", `Added \u201C${design.title}\u201D to ${folder.name}.`);
+        } catch (error) {
+          field2.update({ error: errorText2(error) });
+        } finally {
+          creating = false;
+          create.set({ loading: false });
+        }
+      };
+      input?.addEventListener("blur", () => {
+        if (value.trim() !== "") field2.update({ error: folderNameProblem(value, store2.get().folders) ?? void 0 });
+      });
+      holder.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
+          event.preventDefault();
+          void submit();
+        }
+      });
+      createBox.append(holder, h("div", { class: "dc-folder-new-actions" }, create.el));
+      if (focus) queueMicrotask(() => input?.focus());
+    };
+    const done = btn({ label: "Done", variant: "default", emphasis: "primary", onClick: () => sheet.close() });
+    sheet.foot.append(done.el);
+    scope.add(
+      store2.subscribe(() => {
+        paintList();
+        paintCreate();
+      })
+    );
+    void store2.load();
+    paintList();
+    paintCreate();
+  };
+  var openRenameFolder = (hostEl, folder) => {
+    const store2 = folders();
+    const sheet = openSheet(hostEl, { title: "Rename folder", variant: "dialog" });
+    let value = folder.name;
+    const field2 = mountTextField(sheet.body, { label: "Name", value, onChange: (next) => void (value = next) });
+    const submit = btn({ label: "Save name", variant: "default", emphasis: "primary", onClick: () => void save() });
+    const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => sheet.close() });
+    const save = async () => {
+      const problem = folderNameProblem(value, store2.get().folders, folder.id);
+      if (problem !== null) {
+        field2.update({ error: problem });
+        return;
+      }
+      submit.set({ loading: true });
+      cancel.set({ disabled: true });
+      try {
+        await store2.rename(folder.id, value.trim());
+        sheet.close();
+      } catch (error) {
+        field2.update({ error: errorText2(error) });
+        submit.set({ loading: false });
+        cancel.set({ disabled: false });
+      }
+    };
+    sheet.body.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
+        event.preventDefault();
+        void save();
+      }
+    });
+    sheet.foot.append(cancel.el, submit.el);
+    queueMicrotask(() => sheet.body.querySelector("input")?.select());
+  };
+  var UNDO_MS = 1e4;
+  var mountUndoNotice = () => {
+    const el2 = h("div", { class: "dc-undo-notice", "aria-live": "polite" });
+    let timer = null;
+    const clear = () => {
+      timer?.cancel();
+      timer = null;
+      el2.replaceChildren();
+    };
+    return {
+      el: el2,
+      clear,
+      dispose: clear,
+      show: ({ title: title2, body, undoLabel = "Undo", onUndo }) => {
+        timer?.cancel();
+        let busy = false;
+        const node = banner({
+          tone: "info",
+          title: title2,
+          body,
+          action: {
+            label: undoLabel,
+            onClick: () => {
+              if (busy) return;
+              busy = true;
+              clear();
+              void onUndo();
+            }
+          }
+        });
+        el2.replaceChildren(node);
+        const own = createHoldableTimer(UNDO_MS, clear);
+        timer = own;
+        node.addEventListener("pointerenter", () => own.setHeld("hover", true));
+        node.addEventListener("pointerleave", () => own.setHeld("hover", false));
+        node.addEventListener("focusin", () => own.setHeld("focus", true));
+        node.addEventListener("focusout", () => own.setHeld("focus", false));
+        own.start();
+      }
+    };
+  };
+  var deleteFolder = async (folder, notice) => {
+    const store2 = folders();
+    let count;
+    try {
+      count = await store2.remove(folder.id);
+    } catch (error) {
+      toast("error", `Couldn\u2019t delete ${folder.name}. ${errorText2(error)}`);
+      return false;
+    }
+    notice.show({
+      title: `Deleted folder ${folder.name}.`,
+      body: count === 0 ? "It was empty." : `Its ${count === 1 ? "design is" : `${count} designs are`} still in All designs.`,
+      onUndo: async () => {
+        try {
+          const back = await store2.restore(folder.id);
+          toast("success", `Brought back ${back.name}.`);
+        } catch (error) {
+          toast("error", `Couldn\u2019t bring ${folder.name} back. ${errorText2(error)}`);
+        }
+      }
+    });
+    return true;
+  };
+
   // src/ui/model/loose-model.ts
   var LOOSE_DISMISSED_KEY = "loose-dismissed";
   var LOOSE_BANNER_NAMES = 3;
@@ -13748,7 +20624,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const current = looseKey(files);
     return current.length === dismissed.length && current.every((name, index) => name === dismissed[index]);
   };
-  var parseDismissed = (value) => Array.isArray(value) && value.every((entry) => typeof entry === "string") ? [...value].sort() : null;
+  var parseDismissed2 = (value) => Array.isArray(value) && value.every((entry) => typeof entry === "string") ? [...value].sort() : null;
   var looseBanner = (loose, dismissed) => {
     if (!loose || loose.total <= 0) return null;
     if (isDismissed(loose.files, dismissed)) return null;
@@ -13811,8 +20687,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const notNow = btn({ label: "Not now", variant: "ghost", size: "xs", onClick: () => dismiss() });
       if (model.mode === "single") {
         const name = model.name;
-        const action = btn({ label: "Import as page", variant: "outline", size: "xs", loading: busy, onClick: () => void importOne(name) });
-        el2.replaceChildren(...bannerWithActions("info", model.title, [h("code", { class: "dc-chip-code" }, name), ` ${model.body}`], [action.el, notNow.el]));
+        const action2 = btn({ label: "Import as page", variant: "outline", size: "xs", loading: busy, onClick: () => void importOne(name) });
+        el2.replaceChildren(...bannerWithActions("info", model.title, [h("code", { class: "dc-chip-code" }, name), ` ${model.body}`], [action2.el, notNow.el]));
       } else {
         const review = btn({ label: "Review", variant: "outline", size: "xs", onClick: () => openReview() });
         el2.replaceChildren(...bannerWithActions("info", model.title, [model.body], [review.el, notNow.el]));
@@ -13850,13 +20726,13 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         variant: "dialog"
       });
       const locale = host.snapshot()?.locale ?? "en";
-      const row = (file) => {
+      const row2 = (file) => {
         const detail = h("span", { class: "dc-muted" }, `${fileSize(file.bytes, locale)} \xB7 ${relativeTime(file.mtime, Date.now(), locale)}`);
         const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
         const text = h("div", { class: "dc-prev-text" }, h("code", { class: "dc-path", title: file.name }, file.name), detail, failure);
         const item = h("li", { class: "dc-prev" }, text);
-        const action = btn({ label: "Import", variant: "outline", size: "xs", onClick: () => {
-          action.set({ loading: true });
+        const action2 = btn({ label: "Import", variant: "outline", size: "xs", onClick: () => {
+          action2.set({ loading: true });
           failure.hidden = true;
           importLoose(file.name).then(
             (result) => {
@@ -13866,27 +20742,27 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
                 sheet.close();
                 options.onOpen(result.slug);
               } });
-              action.el.replaceWith(open.el);
+              action2.el.replaceWith(open.el);
               open.el.focus();
               void store.refreshDesigns();
             },
             (error) => {
               failure.textContent = errorText2(error);
               failure.hidden = false;
-              action.set({ loading: false });
+              action2.set({ loading: false });
             }
           );
         } });
-        action.el.setAttribute("aria-label", `Import ${file.name} as a page`);
-        item.append(action.el);
+        action2.el.setAttribute("aria-label", `Import ${file.name} as a page`);
+        item.append(action2.el);
         return item;
       };
       const note = unlistedNote(snapshot);
-      append(sheet.body, h("ul", { class: "dc-prev-list", "aria-label": "HTML files" }, ...snapshot.files.map(row)), note ? h("p", { class: "dc-muted" }, note) : null);
+      append(sheet.body, h("ul", { class: "dc-prev-list", "aria-label": "HTML files" }, ...snapshot.files.map(row2)), note ? h("p", { class: "dc-muted" }, note) : null);
       sheet.foot.append(btn({ label: "Done", variant: "ghost", onClick: () => sheet.close() }).el);
     };
     void host.storage.get(LOOSE_DISMISSED_KEY).then((value) => {
-      dismissed = parseDismissed(value);
+      dismissed = parseDismissed2(value);
       paint();
     });
     return {
@@ -14035,61 +20911,271 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
   };
 
-  // src/ui/model/list-model.ts
-  var LIST_TABS = [
-    { id: "all", label: "All" },
-    { id: "canvas", label: "Canvases" },
-    { id: "page", label: "Pages" }
-  ];
-  var LIST_SORTS = [
-    { id: "updated", label: "Updated" },
-    { id: "created", label: "Created" },
-    { id: "title", label: "Title" }
-  ];
-  var kindLabel = (kind) => kind === "canvas" ? "Canvas" : "Page";
-  var matchesQuery = (design, query) => {
-    const needle = query.trim().toLowerCase();
-    if (needle === "") return true;
-    return design.title.toLowerCase().includes(needle) || design.slug.toLowerCase().includes(needle);
-  };
-  var matchesTab = (design, tab) => tab === "all" || design.kind === tab;
-  var filterDesigns = (designs, query, tab) => designs.filter((design) => matchesTab(design, tab) && matchesQuery(design, query));
-  var tabCounts = (designs, query) => {
-    const searched = designs.filter((design) => matchesQuery(design, query));
-    return {
-      all: searched.length,
-      canvas: searched.filter((design) => design.kind === "canvas").length,
-      page: searched.filter((design) => design.kind === "page").length
+  // src/ui/page/library-sidebar.ts
+  var FOLDER_SKELETONS = 2;
+  var mountSidebar = (options) => {
+    let model = null;
+    let renaming = null;
+    const el2 = h("nav", { class: "dc-side", "aria-label": "Projects and folders" });
+    const lists = h("div", { class: "dc-side-body" });
+    el2.append(lists);
+    const createSlot = h("div", { class: "dc-side-create-slot", hidden: true });
+    let createDraft = "";
+    let creating = false;
+    let painting = false;
+    const createInput = h("input", { class: "oc-sdk oc-sdk-input dc-side-input", type: "text", "aria-label": "New folder name", autocomplete: "off", spellcheck: "false", placeholder: "Folder name" });
+    const createError = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+    const createForm = h("form", { class: "dc-side-create", novalidate: true }, createInput, createError);
+    createSlot.append(createForm);
+    let newFolderButton = null;
+    const showCreateError = (message) => {
+      createError.hidden = message === null;
+      createError.textContent = message ?? "";
+      createInput.setAttribute("aria-invalid", message === null ? "false" : "true");
     };
-  };
-  var sortDesigns = (designs, sort) => {
-    const copy = [...designs];
-    if (sort === "title") return copy.sort((a, b) => a.title.localeCompare(b.title, void 0, { sensitivity: "base" }));
-    const key = sort === "created" ? "created" : "updated";
-    return copy.sort((a, b) => Date.parse(b[key]) - Date.parse(a[key]));
-  };
-  var kindSummary = (design) => {
-    if (design.kind === "page") return "Page";
-    return `Canvas \xB7 ${plural(design.screenCount, "screen")}`;
-  };
-  var emptyKind = (all, shown) => {
-    if (shown.length > 0) return "none";
-    return all.length === 0 ? "no-designs" : "no-matches";
-  };
-  var rowAriaLabel = (design) => {
-    const parts = [design.title, kindSummary(design)];
-    if (design.pending) parts.push("waiting for the agent");
-    if (design.openComments > 0) parts.push(plural(design.openComments, "open comment"));
-    return parts.join(", ");
+    const closeCreate = (focusButton) => {
+      createDraft = "";
+      createInput.value = "";
+      showCreateError(null);
+      createSlot.hidden = true;
+      newFolderButton?.setAttribute("aria-expanded", "false");
+      if (focusButton) newFolderButton?.focus();
+    };
+    const openCreate = () => {
+      createSlot.hidden = false;
+      newFolderButton?.setAttribute("aria-expanded", "true");
+      createInput.focus();
+    };
+    createInput.addEventListener("input", () => {
+      createDraft = createInput.value;
+      if (createError.hidden === false) showCreateError(null);
+    });
+    createInput.addEventListener("blur", () => {
+      if (creating || painting) return;
+      if (createDraft.trim() === "") closeCreate(false);
+      else showCreateError(options.validate(createDraft, null));
+    });
+    createInput.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeCreate(true);
+      }
+    });
+    const submitCreate = () => {
+      void (async () => {
+        if (creating) return;
+        const problem = options.validate(createDraft, null);
+        if (problem !== null) {
+          showCreateError(problem);
+          return;
+        }
+        creating = true;
+        createInput.disabled = true;
+        try {
+          await options.onCreate(createDraft.trim());
+          closeCreate(true);
+        } catch (error) {
+          showCreateError(error instanceof Error ? error.message : "Couldn\u2019t make the folder. Try again.");
+        } finally {
+          creating = false;
+          createInput.disabled = false;
+          if (!createSlot.hidden) createInput.focus();
+        }
+      })();
+    };
+    createForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitCreate();
+    });
+    createInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submitCreate();
+      }
+    });
+    const rowFor = (config) => {
+      const main = h(
+        "button",
+        { type: "button", class: "dc-side-main", "aria-current": config.selected ? "true" : null, title: config.title, "aria-label": `${config.label}, ${config.count}${config.missing ? ", folder not found" : ""}` },
+        icon2(config.glyph, 14),
+        h("span", { class: "dc-side-label" }, config.label),
+        config.missing ? h("span", { class: "dc-side-warn", "aria-hidden": "true" }, icon2("alert", 12)) : null,
+        h("span", { class: "dc-side-count", "aria-hidden": "true" }, String(config.count))
+      );
+      main.addEventListener("click", () => options.onSelect(config.scope));
+      return h("li", { class: "dc-side-row", "data-scope": scopeToId(config.scope), "data-selected": config.selected ? "true" : "false" }, main);
+    };
+    const heading = (text, ...trailing) => h("div", { class: "dc-side-heading" }, h("h2", { class: "dc-side-title" }, text), ...trailing);
+    const folderRow = (folder, current) => {
+      const selected = sameScope(current.scope, { kind: "folder", id: folder.id });
+      const count = current.counts.folders[folder.id] ?? 0;
+      if (renaming?.id === folder.id) return renameRow(folder);
+      const row2 = rowFor({ scope: { kind: "folder", id: folder.id }, label: folder.name, count, glyph: "folder", title: folder.name, selected });
+      const more = iconBtn({ icon: "more", label: `Actions for folder ${folder.name}`, size: "sm", onClick: () => void 0 });
+      attachMenu(
+        more,
+        () => [
+          { id: "rename", label: "Rename" },
+          { separator: true },
+          { id: "delete", label: "Delete folder", destructive: true }
+        ],
+        (id) => {
+          if (id === "rename") {
+            renaming = { id: folder.id, draft: folder.name, error: null, busy: false };
+            paint(current, true);
+          } else options.onDelete(folder);
+        }
+      );
+      row2.append(more);
+      const accepts = (event) => event.dataTransfer?.types.includes(DESIGN_DRAG_TYPE) === true;
+      row2.addEventListener("dragenter", (event) => {
+        if (!accepts(event)) return;
+        event.preventDefault();
+        row2.dataset.drop = "over";
+      });
+      row2.addEventListener("dragover", (event) => {
+        if (!accepts(event)) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+        row2.dataset.drop = "over";
+      });
+      row2.addEventListener("dragleave", (event) => {
+        if (event.relatedTarget instanceof Node && row2.contains(event.relatedTarget)) return;
+        delete row2.dataset.drop;
+      });
+      row2.addEventListener("drop", (event) => {
+        delete row2.dataset.drop;
+        if (!accepts(event)) return;
+        event.preventDefault();
+        const slug = event.dataTransfer?.getData(DESIGN_DRAG_TYPE) ?? "";
+        if (slug !== "") options.onDrop(folder, slug);
+      });
+      return row2;
+    };
+    const renameRow = (folder) => {
+      const state = renaming;
+      const input = h("input", { class: "oc-sdk oc-sdk-input dc-side-input", type: "text", "aria-label": `New name for ${folder.name}`, value: state?.draft ?? folder.name, autocomplete: "off", spellcheck: "false", disabled: state?.busy ? true : null });
+      input.value = state?.draft ?? folder.name;
+      const error = h("p", { class: "dc-form-error", role: "alert", hidden: state?.error ? null : true }, state?.error ?? "");
+      const form = h("form", { class: "dc-side-create", novalidate: true }, input, error);
+      const stop = () => {
+        renaming = null;
+        if (model) paint(model, false);
+        lists.querySelector(`[data-scope="folder:${folder.id}"] .dc-side-main`)?.focus();
+      };
+      input.addEventListener("input", () => {
+        if (renaming) renaming.draft = input.value;
+        error.hidden = true;
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          stop();
+        }
+      });
+      const submit = () => {
+        void (async () => {
+          const mine = renaming;
+          if (mine === null || mine.busy) return;
+          const problem = options.validate(input.value, folder.id);
+          if (problem !== null) {
+            mine.error = problem;
+            error.hidden = false;
+            error.textContent = problem;
+            input.setAttribute("aria-invalid", "true");
+            return;
+          }
+          mine.busy = true;
+          input.disabled = true;
+          try {
+            await options.onRename(folder, input.value.trim());
+            stop();
+          } catch (failure) {
+            mine.busy = false;
+            mine.error = failure instanceof Error ? failure.message : "Couldn\u2019t rename the folder. Try again.";
+            input.disabled = false;
+            error.hidden = false;
+            error.textContent = mine.error;
+            input.focus();
+          }
+        })();
+      };
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        submit();
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          submit();
+        }
+      });
+      return h("li", { class: "dc-side-row dc-side-row-edit", "data-scope": `folder:${folder.id}` }, form);
+    };
+    const paint = (next, keepFocus = false) => {
+      model = next;
+      const hadCreateFocus = document.activeElement === createInput;
+      const focusedScope = keepFocus ? null : document.activeElement instanceof HTMLElement ? document.activeElement.closest(".dc-side-row")?.dataset.scope ?? null : null;
+      const { scope, counts, groups, folders: list } = next;
+      const projectRows2 = groups.map(
+        (group2) => rowFor({ scope: { kind: "project", directory: group2.directory }, label: group2.label, count: group2.count, glyph: "layers", title: group2.missing ? `${group2.title}
+Folder not found` : group2.title, missing: group2.missing, selected: sameScope(scope, { kind: "project", directory: group2.directory }) })
+      );
+      if (counts.noProject > 0) projectRows2.push(rowFor({ scope: { kind: "no-project" }, label: "No project", count: counts.noProject, glyph: "page", selected: scope.kind === "no-project" }));
+      newFolderButton = btn({ label: "New folder", variant: "ghost", size: "xs", icon: "plus", onClick: () => createSlot.hidden ? openCreate() : closeCreate(true) }).el;
+      newFolderButton.setAttribute("aria-expanded", createSlot.hidden ? "false" : "true");
+      const folderBody = [];
+      if (next.foldersStatus === "loading" && list.length === 0) {
+        folderBody.push(h("ul", { class: "dc-side-list", "aria-hidden": "true" }, ...Array.from({ length: FOLDER_SKELETONS }, () => h("li", { class: "dc-side-skeleton" }, h("span", { class: "dc-skel dc-skel-line" })))));
+      } else if (next.foldersStatus === "error") {
+        folderBody.push(
+          h(
+            "div",
+            { class: "dc-side-note" },
+            h("p", { class: "dc-form-error" }, next.foldersError ?? "Folders couldn\u2019t load. Try again."),
+            btn({ label: "Try again", variant: "outline", size: "xs", onClick: options.onRetryFolders }).el
+          )
+        );
+      }
+      if (next.foldersStatus !== "error" && list.length > 0) folderBody.push(h("ul", { class: "dc-side-list", role: "list", "aria-label": "Folders" }, ...list.map((folder) => folderRow(folder, next))));
+      if (next.foldersStatus === "ready" && list.length === 0) folderBody.push(h("p", { class: "dc-side-hint" }, "No folders yet. Make one to group designs your own way."));
+      painting = true;
+      lists.replaceChildren(
+        h("ul", { class: "dc-side-list", role: "list" }, rowFor({ scope: { kind: "all" }, label: "All designs", count: counts.all, glyph: "canvas", selected: scope.kind === "all" })),
+        ...projectRows2.length > 0 ? [heading("Projects"), h("ul", { class: "dc-side-list", role: "list", "aria-label": "Projects" }, ...projectRows2)] : [],
+        heading("Folders", newFolderButton),
+        createSlot,
+        ...folderBody
+      );
+      painting = false;
+      if (hadCreateFocus && !createSlot.hidden) createInput.focus();
+      else if (focusedScope !== null) lists.querySelector(`[data-scope="${CSS.escape(focusedScope)}"] .dc-side-main`)?.focus();
+      else if (keepFocus) lists.querySelector(".dc-side-row-edit input")?.focus();
+    };
+    return {
+      el: el2,
+      paint: (next) => paint(next),
+      focusSelected: () => lists.querySelector('.dc-side-row[data-selected="true"] .dc-side-main')?.focus(),
+      dispose: () => el2.remove()
+    };
   };
 
   // src/ui/page/library-view.ts
   var SKELETON_CARDS = 8;
+  var SIDEBAR_MIN_PAGE_WIDTH = 900;
   var mountLibrary = (options) => {
     const scope = createScope();
     let query = "";
     let tab = "all";
     let sort = "updated";
+    let chosen = ALL_SCOPE;
+    let projects = [];
+    let view2 = { scope: ALL_SCOPE, groups: [], root: "", folder: null };
+    let sidebarWanted = null;
+    let narrow = false;
+    const folderStore = folders();
     const thumbs = /* @__PURE__ */ new Map();
     const el2 = h("div", { class: "dc-library" });
     const newButton = btn({ label: "New", variant: "default", size: "default", icon: "plus", chevron: true, onClick: () => void 0 });
@@ -14102,6 +21188,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       (id) => options.onNew(id === "page" ? "page" : "canvas")
     );
     const settingsButton = btn({ label: "Settings", variant: "ghost", size: "default", icon: "settings", onClick: () => options.onSettings() });
+    const systemsButton = btn({ label: "Design systems", variant: "ghost", size: "default", icon: "system", onClick: () => options.onSystems() });
     const searchHost = h("div", { class: "dc-search" });
     const search = mountSearchField(searchHost, { value: "", placeholder: "Search designs", label: "Search designs", onChange: (value) => {
       query = value;
@@ -14120,12 +21207,16 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       sortSelect.update({ value: sort });
       paintGrid();
     } });
+    const sidebarToggle = iconBtn({ icon: "sidebar", label: "Projects and folders", pressed: true, onClick: () => toggleSidebar() });
+    const scopeName = h("span", { class: "dc-page-scope", hidden: true });
     const toolbar = h(
       "header",
       { class: "dc-library-bar" },
-      h("h1", { class: "dc-page-title" }, "Designs"),
+      sidebarToggle,
+      h("h1", { class: "dc-page-title" }, "Designs", scopeName),
       h("div", { class: "dc-library-controls" }, searchHost, tabsHost, sortHost),
       h("span", { class: "dc-spacer" }),
+      systemsButton.el,
       settingsButton.el,
       newButton.el
     );
@@ -14135,9 +21226,70 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
     const looseBanner2 = mountLooseBanner({ sheetHost: options.actions.host, onOpen: options.onOpen, onPaint: syncNotices });
     notices.append(looseBanner2.el);
+    const undo = mountUndoNotice();
+    const undoHost = h("div", { class: "dc-library-undo" }, undo.el);
     const grid = h("ul", { class: "dc-grid", role: "list", "aria-label": "Designs" });
-    const scroller = h("div", { class: "dc-library-scroll" }, notices, grid);
-    el2.append(toolbar, scroller);
+    const scroller = h("div", { class: "dc-library-scroll" }, undoHost, notices, grid);
+    const sidebar = mountSidebar({
+      onSelect: (next) => {
+        setScope(next);
+        if (narrow) setSidebar(false);
+      },
+      onDrop: (folder, slug) => {
+        const design = store.getState().designs.data?.designs.find((entry) => entry.slug === slug);
+        if (design) void addToFolder(folder, { slug, title: design.title });
+      },
+      onRetryFolders: () => void folderStore.load(),
+      onCreate: async (name) => {
+        const folder = await folderStore.create(name);
+        toast("success", `Made folder ${folder.name}.`);
+      },
+      onRename: async (folder, name) => void await folderStore.rename(folder.id, name),
+      onDelete: (folder) => {
+        void deleteFolder({ id: folder.id, name: folder.name }, undo);
+      },
+      validate: (name, ignoreId) => folderNameProblem(name, folderStore.get().folders, ignoreId)
+    });
+    const body = h("div", { class: "dc-library-body" }, sidebar.el, scroller);
+    el2.append(toolbar, body);
+    const sidebarOpen = () => sidebarWanted ?? !narrow;
+    const paintSidebarState = () => {
+      const open = sidebarOpen();
+      body.dataset.sidebar = open ? "open" : "closed";
+      body.dataset.narrow = narrow ? "true" : "false";
+      sidebarToggle.setAttribute("aria-pressed", String(open));
+      sidebarToggle.setAttribute("aria-expanded", String(open));
+      sidebar.el.inert = !open;
+    };
+    const setSidebar = (open) => {
+      sidebarWanted = open;
+      paintSidebarState();
+    };
+    const toggleSidebar = () => {
+      setSidebar(!sidebarOpen());
+      if (sidebarOpen()) sidebar.focusSelected();
+    };
+    const sizeWatcher = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 0;
+      const next = width > 0 && width < SIDEBAR_MIN_PAGE_WIDTH;
+      if (next === narrow) return;
+      narrow = next;
+      paintSidebarState();
+    });
+    sizeWatcher.observe(el2);
+    scope.add(() => sizeWatcher.disconnect());
+    sidebar.el.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && narrow && sidebarOpen() && !event.defaultPrevented) {
+        event.preventDefault();
+        setSidebar(false);
+        sidebarToggle.focus();
+      }
+    });
+    const setScope = (next) => {
+      chosen = next;
+      void host.storage.set(scopeStorageKey("page"), scopeToId(next));
+      paintGrid();
+    };
     const switchBack = async (path) => {
       try {
         await store.updateSettings({ root: path });
@@ -14153,24 +21305,42 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         thumb = mountThumb(design, "card");
         thumbs.set(design.slug, thumb);
       }
+      const line = cardProjectLine(design, view2.scope, view2.groups, view2.root);
       const kindBadge = h("span");
       mountBadge(kindBadge, { label: kindLabel(design.kind), tone: "neutral" });
       const locale = host.snapshot()?.locale ?? "en";
       const indicators = h("span", { class: "dc-card-flags" });
+      if (systemUpdated(design)) indicators.append(h("span", { class: "dc-flag", "data-tone": "info", title: `${design.system?.name ?? "The design system"} was updated since this design copied it.` }, SYSTEM_UPDATED_LABEL));
       if (design.openComments > 0) indicators.append(h("span", { class: "dc-flag", title: plural(design.openComments, "open comment") }, icon2("pin", 12), String(design.openComments)));
       if (design.sessionId) indicators.append(h("span", { class: "dc-flag dc-flag-icon", title: "Linked to a chat", role: "img", "aria-label": "Linked to a chat" }, icon2("chat", 12)));
       const main = h(
         "button",
         { type: "button", class: "dc-card-main", "aria-label": rowAriaLabel(design) },
         h("span", { class: "dc-card-thumb" }, thumb.el, design.pending ? h("span", { class: "dc-card-overlay" }, h("span", { class: "dc-flag", "data-tone": "warning" }, "Waiting for agent")) : null),
-        h("span", { class: "dc-card-body" }, h("span", { class: "dc-card-title" }, design.title), h("span", { class: "dc-card-meta" }, kindBadge, h("span", { class: "dc-muted" }, relativeTime(design.updated, Date.now(), locale)), indicators))
+        h(
+          "span",
+          { class: "dc-card-body" },
+          h("span", { class: "dc-card-title" }, design.title),
+          line ? h("span", { class: "dc-card-project", title: line.title }, icon2("layers", 12), h("span", { class: "dc-card-project-name" }, line.label)) : null,
+          h("span", { class: "dc-card-meta" }, kindBadge, h("span", { class: "dc-muted" }, relativeTime(design.updated, Date.now(), locale)), indicators)
+        )
       );
       main.addEventListener("click", () => options.onOpen(design.slug));
       const more = iconBtn({ icon: "more", label: `Actions for ${design.title}`, size: "sm", onClick: () => void 0 });
       more.classList.add("dc-card-more");
       const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
-      attachMenu(more, () => designMenu({ includeOpen: true }), (id) => runDesignAction(id, ref, options.actions));
-      return h("li", { class: "dc-card", "data-slug": design.slug, "data-pending": design.pending ? "true" : "false" }, main, more);
+      attachMenu(more, () => listDesignMenu(view2.folder), (id) => runListAction(id, ref, options.actions, view2.folder));
+      const item = h("li", { class: "dc-card", "data-slug": design.slug, "data-pending": design.pending ? "true" : "false", draggable: "true" }, main, more);
+      item.addEventListener("dragstart", (event) => {
+        if (!event.dataTransfer) return;
+        event.dataTransfer.setData(DESIGN_DRAG_TYPE, design.slug);
+        event.dataTransfer.effectAllowed = "copy";
+        item.dataset.dragging = "true";
+      });
+      item.addEventListener("dragend", () => {
+        delete item.dataset.dragging;
+      });
+      return item;
     };
     const skeletons = () => Array.from({ length: SKELETON_CARDS }, () => h("li", { class: "dc-card dc-card-skeleton", "aria-hidden": "true" }, h("span", { class: "dc-skel dc-skel-card" }), h("span", { class: "dc-skel dc-skel-line" }), h("span", { class: "dc-skel dc-skel-line dc-skel-short" })));
     const message = (...children) => h("li", { class: "dc-grid-message" }, ...children);
@@ -14208,17 +21378,41 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         return;
       }
       const all = state.data.designs;
-      const shown = sortDesigns(filterDesigns(all, query, tab), sort);
-      const counts = tabCounts(all, query);
-      tabsHandle.update({ items: LIST_TABS.map(({ id, label }) => ({ id, label, count: counts[id] })) });
+      const root = state.data.root;
+      const foldersState = folderStore.get();
+      const folderList = foldersState.status === "error" ? [] : foldersState.folders;
+      const groups = projectGroups(all, projects, root, state.data.projectFolders);
+      const foldersPending = chosen.kind === "folder" && (foldersState.status === "idle" || foldersState.status === "loading") && foldersState.folders.length === 0;
+      const effective = foldersPending ? chosen : resolveScope(chosen, groups, folderList);
+      const folder = effective.kind === "folder" ? folderList.find((entry) => entry.id === effective.id) ?? null : null;
+      view2 = { scope: effective, groups, root, folder: folder ? { id: folder.id, name: folder.name } : null };
+      const counts4 = scopeCounts(all, folderList, root);
+      sidebar.paint({ scope: effective, counts: counts4, groups, folders: folderList, foldersStatus: foldersState.status === "error" ? "error" : foldersState.status === "ready" ? "ready" : "loading", foldersError: foldersState.error });
+      paintSidebarState();
+      const label = scopeLabel(effective, groups, folderList);
+      scopeName.hidden = label === null;
+      scopeName.textContent = label ?? "";
+      if (foldersPending) {
+        grid.append(...skeletons());
+        scroller.scrollTop = previousScroll;
+        return;
+      }
+      const scoped = scopeDesigns(all, effective, folderList, root);
+      const shown = sortDesigns(filterDesigns(scoped, query, tab), sort);
+      const counts = tabCounts(scoped, query);
+      tabsHandle.update({ items: LIST_TABS.map(({ id, label: tabLabel }) => ({ id, label: tabLabel, count: counts[id] })) });
       const kind = emptyKind(all, shown);
-      if (kind === "no-designs") {
+      if (kind !== "none" && kind !== "no-designs" && scoped.length === 0 && folder) {
+        const wrap = h("div");
+        mountEmpty(wrap, { title: `No designs in ${folder.name} yet`, body: folderEmptyBody(true), action: { label: "Show all designs", onClick: () => setScope(ALL_SCOPE) } });
+        grid.append(message(wrap));
+      } else if (kind === "no-designs") {
         const wrap = h("div");
         mountEmpty(wrap, { title: "No designs yet", body: "Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here the moment they are saved.", action: { label: "New canvas", onClick: () => options.onNew("canvas") } });
         grid.append(message(wrap));
       } else if (kind === "no-matches") {
         const wrap = h("div");
-        mountEmpty(wrap, { title: query.trim() !== "" ? `No designs match \u201C${query.trim()}\u201D` : "Nothing in this tab yet", body: "Try another word, or look in All.", action: { label: "Clear filters", onClick: () => {
+        mountEmpty(wrap, { title: query.trim() !== "" ? noMatchesSentence(label, query) : label !== null ? `Nothing in ${label} for this tab yet` : "Nothing in this tab yet", body: label !== null ? "Try another word, look in All, or show all designs." : "Try another word, or look in All.", action: { label: "Clear filters", onClick: () => {
           query = "";
           tab = "all";
           search.update({ value: "" });
@@ -14240,7 +21434,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     scope.add(
       store.subscribe(() => {
         const state = store.getState();
-        const next = `${state.designs.status}:${JSON.stringify(state.designs.data?.designs ?? null)}:${JSON.stringify(state.designs.data?.loose ?? null)}:${state.designs.error?.message ?? ""}:${JSON.stringify(state.settings.data?.previousRoots ?? null)}`;
+        const next = `${state.designs.status}:${state.designs.data?.root ?? ""}:${JSON.stringify(state.designs.data?.projectFolders ?? null)}:${JSON.stringify(state.designs.data?.designs ?? null)}:${JSON.stringify(state.designs.data?.loose ?? null)}:${state.designs.error?.message ?? ""}:${JSON.stringify(state.settings.data?.previousRoots ?? null)}`;
         if (next === signature) return;
         signature = next;
         paintGrid();
@@ -14248,6 +21442,18 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     );
     const minute = setInterval(paintGrid, 6e4);
     scope.add(() => clearInterval(minute));
+    scope.add(folderStore.subscribe(paintGrid));
+    void host.storage.get(scopeStorageKey("page")).then((stored) => {
+      chosen = scopeFromId(stored);
+      paintGrid();
+    });
+    void guestHost.client.listProjects().then(
+      (answer) => {
+        projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
+        paintGrid();
+      },
+      (error) => console.warn("Design Chamber: the project names could not be read; folders show their own names", error)
+    );
     void store.refreshDesigns();
     void store.loadSettings();
     paintGrid();
@@ -14256,6 +21462,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       focusCard: (slug) => {
         grid.querySelector(`[data-slug="${CSS.escape(slug)}"] .dc-card-main`)?.focus();
       },
+      focusSystems: () => systemsButton.el.focus(),
       dispose: () => {
         scope.dispose();
         looseBanner2.dispose();
@@ -14264,6 +21471,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         search.dispose();
         tabsHandle.dispose();
         sortSelect.dispose();
+        sidebar.dispose();
+        undo.dispose();
         el2.remove();
       }
     };
@@ -14274,6 +21483,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const app = h("div", { class: "dc-app", "data-surface": "page" });
     root.replaceChildren(app);
     let open = null;
+    let systemsView = null;
+    let systemPage = null;
+    let buildView2 = null;
     const closeDesign = () => {
       const slug = open?.slug;
       open?.handle.dispose();
@@ -14284,6 +21496,12 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
     const showDesign = (slug) => {
       open?.handle.dispose();
+      systemPage?.handle.dispose();
+      systemPage = null;
+      systemsView?.dispose();
+      systemsView = null;
+      buildView2?.handle.dispose();
+      buildView2 = null;
       const handle = mountDesignView({ slug, surface: "page", actions, onBack: leaveDesign });
       open = { slug, handle };
       place.remember(slug);
@@ -14314,6 +21532,15 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       onOpen: openDesign,
       onRemoved: (slug) => {
         if (open?.slug === slug) closeDesign();
+      },
+      onOpenSystem: (id) => {
+        const current = open;
+        if (!current) return openSystem(id);
+        void current.handle.beforeLeave().then((leave) => {
+          if (!leave || open !== current) return;
+          closeDesign();
+          openSystem(id);
+        });
       }
     };
     const openSettings = () => {
@@ -14321,25 +21548,98 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const sheet = openSheet(app, { title: "Settings", variant: "side", onClose: () => settings?.dispose() });
       settings = mountSettings(sheet.body);
     };
+    const closeBuild = () => {
+      buildView2?.handle.dispose();
+      buildView2 = null;
+      library.el.hidden = false;
+    };
+    const showBuild = (ticket) => {
+      systemPage?.handle.dispose();
+      systemPage = null;
+      systemsView?.dispose();
+      systemsView = null;
+      buildView2?.handle.dispose();
+      const handle = mountBuildChipView({ ticket, surface: "page", actions, onBack: closeBuild });
+      buildView2 = { ticket, handle };
+      library.el.hidden = true;
+      app.append(handle.el);
+      handle.focus();
+    };
+    const openBuild = (ticket) => {
+      if (buildView2?.ticket === ticket) return;
+      const current = open;
+      if (!current) return showBuild(ticket);
+      void current.handle.beforeLeave().then((leave) => {
+        if (!leave || open !== current) return;
+        closeDesign();
+        showBuild(ticket);
+      });
+    };
+    const closeSystems = () => {
+      systemPage?.handle.dispose();
+      systemPage = null;
+      systemsView?.dispose();
+      systemsView = null;
+      library.el.hidden = false;
+      library.focusSystems();
+    };
+    const showSystems = () => {
+      if (systemsView) return;
+      buildView2?.handle.dispose();
+      buildView2 = null;
+      systemsView = mountSystemsList({ surface: "page", actions, onBack: closeSystems, onOpen: (id) => openSystem(id) });
+      library.el.hidden = true;
+      app.append(systemsView.el);
+      systemsView.focus();
+    };
+    const closeSystemPage = () => {
+      systemPage?.handle.dispose();
+      systemPage = null;
+      if (systemsView) {
+        systemsView.el.hidden = false;
+        systemsView.focus();
+      }
+    };
+    const openSystem = (id, target = "page") => {
+      if (systemPage?.id === id) {
+        if (target !== "page") systemPage.handle.showTarget(target);
+        return;
+      }
+      systemPage?.handle.dispose();
+      systemPage = null;
+      if (!systemsView) showSystems();
+      if (!systemsView) return;
+      systemsView.el.hidden = true;
+      const handle = mountSystemPage({ id, surface: "page", actions, onBack: closeSystemPage });
+      systemPage = { id, handle };
+      app.append(handle.el);
+      handle.focus();
+      if (target !== "page") handle.showTarget(target);
+    };
     const library = mountLibrary({
       actions,
       onOpen: openDesign,
+      onSystems: showSystems,
       onSettings: openSettings,
-      onNew: (kind) => openNewDialog(app, { kind, onCreated: openDesign })
+      onNew: (kind) => openNewDialog(app, { kind, onCreated: openDesign, onSystems: showSystems })
     });
     app.append(library.el);
     flows.watchItems(
-      (target) => openDesign(target.slug),
+      (target) => target.kind === "open-build" ? openBuild(target.ticket) : target.kind === "open-system" ? openSystem(target.system, target.target) : openDesign(target.slug),
       (error) => toast("error", `Couldn\u2019t open that design. ${errorText2(error)}`)
     );
   };
 
   // src/ui/rail/list-view.ts
-  var SKELETON_ROWS = 4;
+  var SKELETON_ROWS3 = 4;
   var mountListView = (options) => {
     const scope = createScope();
     let query = "";
     let tab = "all";
+    let chosen = ALL_SCOPE;
+    let projects = [];
+    let view2 = { scope: ALL_SCOPE, groups: [], root: "", folder: null };
+    const folderStore = folders();
     const thumbs = /* @__PURE__ */ new Map();
     const el2 = h("div", { class: "dc-list-view" });
     const newButton = btn({ label: "New", variant: "default", size: "sm", icon: "plus", chevron: true, onClick: () => void 0 });
@@ -14352,7 +21652,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       (id) => options.onNew(id === "page" ? "page" : "canvas")
     );
     const settingsButton = iconBtn({ icon: "settings", label: "Settings", onClick: () => options.onSettings() });
-    const head = h("header", { class: "dc-rail-head" }, h("h1", { class: "dc-rail-title" }, "Designs"), h("span", { class: "dc-spacer" }), newButton.el, settingsButton);
+    const systemsButton = iconBtn({ icon: "system", label: "Design systems", onClick: () => options.onSystems() });
+    const head = h("header", { class: "dc-rail-head" }, h("h1", { class: "dc-rail-title" }, "Designs"), h("span", { class: "dc-spacer" }), systemsButton, newButton.el, settingsButton);
     const searchHost = h("div", { class: "dc-search" });
     const search = mountSearchField(searchHost, { value: "", placeholder: "Search designs", label: "Search designs", onChange: (value) => {
       query = value;
@@ -14365,7 +21666,28 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       tabsHandle.update({ activeId: tab });
       paintList();
     } });
-    const filters = h("div", { class: "dc-rail-filters" }, searchHost, tabsHost);
+    const showHost = h("div", { class: "dc-rail-show-select" });
+    const showSelect = mountSelect(showHost, { value: "all", options: [{ id: "all", label: "All designs" }], onChange: (id) => setScope(scopeFromId(id)) });
+    const showTrigger = showHost.querySelector("button");
+    const folderMore = iconBtn({ icon: "more", label: "Folder actions", size: "md", onClick: () => void 0 });
+    folderMore.hidden = true;
+    attachMenu(
+      folderMore,
+      () => [
+        { id: "rename", label: "Rename folder" },
+        { separator: true },
+        { id: "delete", label: "Delete folder", destructive: true }
+      ],
+      (id) => {
+        const folder = view2.folder;
+        if (!folder) return;
+        if (id === "rename") openRenameFolder(options.actions.host, folder);
+        else void deleteFolder(folder, undo);
+      }
+    );
+    const showRow = h("div", { class: "dc-rail-show" }, h("span", { class: "dc-sort-label", "aria-hidden": "true" }, "Show"), showHost, folderMore);
+    const foldersNote = h("div", { class: "dc-rail-folders-note", hidden: true }, h("p", { class: "dc-form-error" }, "Folders couldn\u2019t load. Try again."), btn({ label: "Try again", variant: "outline", size: "xs", onClick: () => void folderStore.load() }).el);
+    const filters = h("div", { class: "dc-rail-filters" }, searchHost, showRow, foldersNote, tabsHost);
     const tipHost = h("div", { class: "dc-rail-tip", hidden: true });
     let tipWanted = null;
     let tipHidden = false;
@@ -14402,8 +21724,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
     const looseBanner2 = mountLooseBanner({ sheetHost: options.actions.host, onOpen: options.onOpen, onPaint: syncNotices });
     notices.append(looseBanner2.el);
+    const undo = mountUndoNotice();
     const list = h("ul", { class: "dc-rows", role: "list", "aria-label": "Designs" });
-    const scroller = h("div", { class: "dc-rail-scroll" }, notices, list);
+    const scroller = h("div", { class: "dc-rail-scroll" }, h("div", { class: "dc-rail-undo" }, undo.el), notices, list);
     el2.append(head, tipHost, filters, scroller);
     const switchBack = async (path) => {
       try {
@@ -14421,19 +21744,21 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         thumbs.set(design.slug, thumb);
       }
       const locale = host.snapshot()?.locale ?? "en";
+      const line = cardProjectLine(design, view2.scope, view2.groups, view2.root);
       const meta = h("span", { class: "dc-row-meta" }, `${kindSummary(design)} \xB7 ${relativeTime(design.updated, Date.now(), locale)}`);
       const flags = h("span", { class: "dc-row-flags" });
       if (design.pending) flags.append(h("span", { class: "dc-flag", "data-tone": "warning" }, "Waiting for agent"));
+      if (systemUpdated(design)) flags.append(h("span", { class: "dc-flag", "data-tone": "info", title: `${design.system?.name ?? "The design system"} was updated since this design copied it.` }, SYSTEM_UPDATED_LABEL));
       if (design.openComments > 0) flags.append(h("span", { class: "dc-flag", title: plural(design.openComments, "open comment") }, icon2("pin", 12), String(design.openComments)));
       if (design.sessionId) flags.append(h("span", { class: "dc-flag dc-flag-icon", title: "Linked to a chat", role: "img", "aria-label": "Linked to a chat" }, icon2("chat", 12)));
-      const main = h("button", { type: "button", class: "dc-row-main", "aria-label": rowAriaLabel(design) }, thumb.el, h("span", { class: "dc-row-text" }, h("span", { class: "dc-row-title" }, design.title), meta, flags.childElementCount > 0 ? flags : null));
+      const main = h("button", { type: "button", class: "dc-row-main", "aria-label": rowAriaLabel(design) }, thumb.el, h("span", { class: "dc-row-text" }, h("span", { class: "dc-row-title" }, design.title), meta, line ? h("span", { class: "dc-row-project", title: line.title }, icon2("layers", 12), h("span", { class: "dc-row-project-name" }, line.label)) : null, flags.childElementCount > 0 ? flags : null));
       main.addEventListener("click", () => options.onOpen(design.slug));
       const more = iconBtn({ icon: "more", label: `Actions for ${design.title}`, size: "sm", onClick: () => void 0 });
       const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
-      attachMenu(more, () => designMenu({ includeOpen: true }), (id) => runDesignAction(id, ref, options.actions));
+      attachMenu(more, () => listDesignMenu(view2.folder), (id) => runListAction(id, ref, options.actions, view2.folder));
       return h("li", { class: "dc-row", "data-pending": design.pending ? "true" : "false", "data-slug": design.slug }, main, more);
     };
-    const skeleton = () => Array.from({ length: SKELETON_ROWS }, () => h("li", { class: "dc-row dc-row-skeleton", "aria-hidden": "true" }, h("span", { class: "dc-skel dc-skel-thumb" }), h("span", { class: "dc-skel-lines" }, h("span", { class: "dc-skel dc-skel-line" }), h("span", { class: "dc-skel dc-skel-line dc-skel-short" }))));
+    const skeleton = () => Array.from({ length: SKELETON_ROWS3 }, () => h("li", { class: "dc-row dc-row-skeleton", "aria-hidden": "true" }, h("span", { class: "dc-skel dc-skel-thumb" }), h("span", { class: "dc-skel-lines" }, h("span", { class: "dc-skel dc-skel-line" }), h("span", { class: "dc-skel dc-skel-line dc-skel-short" }))));
     const paintNotices = () => {
       for (const child of [...notices.children]) if (child !== looseBanner2.el) child.remove();
       const state = store.getState();
@@ -14453,6 +21778,21 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       looseBanner2.update(state.designs.data?.loose ?? null);
       syncNotices();
     };
+    const paintShow = (scope2, groups, folderList, counts, foldersState) => {
+      const entries = scopeOptions(groups, counts, folderList);
+      showSelect.update({ value: scopeToId(scope2), options: entries.map(({ id, label, hint }) => ({ id, label, hint })) });
+      const current = entries.find((entry) => entry.id === scopeToId(scope2));
+      showTrigger?.removeAttribute("aria-labelledby");
+      showTrigger?.setAttribute("aria-label", `Show: ${current?.label ?? "All designs"}`);
+      folderMore.hidden = view2.folder === null;
+      showRow.dataset.folders = foldersState.status === "error" ? "error" : "ok";
+      foldersNote.hidden = foldersState.status !== "error";
+    };
+    const setScope = (next) => {
+      chosen = next;
+      void host.storage.set(scopeStorageKey("panel"), scopeToId(next));
+      paintList();
+    };
     const paintList = () => {
       const state = store.getState().designs;
       list.replaceChildren();
@@ -14470,16 +21810,36 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         return;
       }
       const all = state.data.designs;
-      const shown = sortDesigns(filterDesigns(all, query, tab), "updated");
-      tabsHandle.update({ items: LIST_TABS.map(({ id, label }) => ({ id, label, count: tabCounts(all, query)[id] })) });
+      const root = state.data.root;
+      const foldersState = folderStore.get();
+      const folderList = foldersState.status === "error" ? [] : foldersState.folders;
+      const groups = projectGroups(all, projects, root, state.data.projectFolders);
+      const foldersPending = chosen.kind === "folder" && (foldersState.status === "idle" || foldersState.status === "loading") && foldersState.folders.length === 0;
+      const effective = foldersPending ? chosen : resolveScope(chosen, groups, folderList);
+      const folder = effective.kind === "folder" ? folderList.find((entry) => entry.id === effective.id) ?? null : null;
+      view2 = { scope: effective, groups, root, folder: folder ? { id: folder.id, name: folder.name } : null };
+      paintShow(effective, groups, folderList, scopeCounts(all, folderList, root), foldersState);
+      if (foldersPending) {
+        list.append(...skeleton());
+        return;
+      }
+      const label = scopeLabel(effective, groups, folderList);
+      const scoped = scopeDesigns(all, effective, folderList, root);
+      const shown = sortDesigns(filterDesigns(scoped, query, tab), "updated");
+      const tabTotals = tabCounts(scoped, query);
+      tabsHandle.update({ items: LIST_TABS.map(({ id, label: tabLabel }) => ({ id, label: tabLabel, count: tabTotals[id] })) });
       const kind = emptyKind(all, shown);
-      if (kind === "no-designs") {
+      if (kind !== "none" && kind !== "no-designs" && scoped.length === 0 && folder) {
+        const wrap = h("div");
+        mountEmpty(wrap, { title: `No designs in ${folder.name} yet`, body: folderEmptyBody(false), action: { label: "Show all designs", onClick: () => setScope(ALL_SCOPE) } });
+        list.append(h("li", { class: "dc-list-message" }, wrap));
+      } else if (kind === "no-designs") {
         const wrap = h("div");
         mountEmpty(wrap, { title: "No designs yet", body: "Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here.", action: { label: "New canvas", onClick: () => options.onNew("canvas") } });
         list.append(h("li", { class: "dc-list-message" }, wrap));
       } else if (kind === "no-matches") {
         const wrap = h("div");
-        mountEmpty(wrap, { title: query.trim() !== "" ? `No designs match \u201C${query.trim()}\u201D` : "Nothing in this tab yet", body: "Try another word, or look in All.", action: { label: "Clear filters", onClick: () => {
+        mountEmpty(wrap, { title: query.trim() !== "" ? noMatchesSentence(label, query) : label !== null ? `Nothing in ${label} for this tab yet` : "Nothing in this tab yet", body: label !== null ? "Try another word, look in All, or show all designs." : "Try another word, or look in All.", action: { label: "Clear filters", onClick: () => {
           query = "";
           tab = "all";
           search.update({ value: "" });
@@ -14502,7 +21862,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     scope.add(
       store.subscribe(() => {
         const state = store.getState();
-        const next = `${state.designs.status}:${JSON.stringify(state.designs.data?.designs ?? null)}:${JSON.stringify(state.designs.data?.loose ?? null)}:${state.designs.error?.message ?? ""}:${JSON.stringify(state.settings.data?.previousRoots ?? null)}`;
+        const next = `${state.designs.status}:${state.designs.data?.root ?? ""}:${JSON.stringify(state.designs.data?.projectFolders ?? null)}:${JSON.stringify(state.designs.data?.designs ?? null)}:${JSON.stringify(state.designs.data?.loose ?? null)}:${state.designs.error?.message ?? ""}:${JSON.stringify(state.settings.data?.previousRoots ?? null)}`;
         if (next === signature) return;
         signature = next;
         paintList();
@@ -14510,6 +21870,18 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     );
     const minute = setInterval(paintList, 6e4);
     scope.add(() => clearInterval(minute));
+    scope.add(folderStore.subscribe(paintList));
+    void host.storage.get(scopeStorageKey("panel")).then((stored) => {
+      chosen = scopeFromId(stored);
+      paintList();
+    });
+    void guestHost.client.listProjects().then(
+      (answer) => {
+        projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
+        paintList();
+      },
+      (error) => console.warn("Design Chamber: the project names could not be read; folders show their own names", error)
+    );
     void store.refreshDesigns();
     void store.loadSettings();
     paintList();
@@ -14518,6 +21890,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       focusRow: (slug) => {
         list.querySelector(`[data-slug="${CSS.escape(slug)}"] .dc-row-main`)?.focus();
       },
+      focusSystems: () => systemsButton.focus(),
       dispose: () => {
         scope.dispose();
         looseBanner2.dispose();
@@ -14525,6 +21898,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         thumbs.clear();
         search.dispose();
         tabsHandle.dispose();
+        showSelect.dispose();
+        undo.dispose();
         el2.remove();
       }
     };
@@ -14535,6 +21910,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const app = h("div", { class: "dc-app", "data-surface": "panel" });
     root.replaceChildren(app);
     let viewer = null;
+    let systemsView = null;
+    let systemPage = null;
+    let buildView2 = null;
     const closeViewer = () => {
       const slug = viewer?.slug;
       viewer?.handle.dispose();
@@ -14545,6 +21923,12 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
     const showViewer = (slug, options) => {
       viewer?.handle.dispose();
+      systemPage?.handle.dispose();
+      systemPage = null;
+      systemsView?.dispose();
+      systemsView = null;
+      buildView2?.handle.dispose();
+      buildView2 = null;
       const handle = mountDesignView({ slug, surface: "panel", actions, onBack: leaveViewer, startIn: options.startIn });
       viewer = { slug, handle };
       place.remember(slug);
@@ -14578,6 +21962,15 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       onOpen: openViewer,
       onRemoved: (slug) => {
         if (viewer?.slug === slug) closeViewer();
+      },
+      onOpenSystem: (id) => {
+        const current = viewer;
+        if (!current) return openSystem(id);
+        void current.handle.beforeLeave().then((leave) => {
+          if (!leave || viewer !== current) return;
+          closeViewer();
+          openSystem(id);
+        });
       }
     };
     const openSettings = () => {
@@ -14585,18 +21978,91 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const sheet = openSheet(app, { title: "Settings", variant: "full", onClose: () => settings?.dispose() });
       settings = mountSettings(sheet.body);
     };
+    const closeBuild = () => {
+      buildView2?.handle.dispose();
+      buildView2 = null;
+      list.el.hidden = false;
+    };
+    const showBuild = (ticket) => {
+      systemPage?.handle.dispose();
+      systemPage = null;
+      systemsView?.dispose();
+      systemsView = null;
+      buildView2?.handle.dispose();
+      const handle = mountBuildChipView({ ticket, surface: "panel", actions, onBack: closeBuild });
+      buildView2 = { ticket, handle };
+      list.el.hidden = true;
+      app.append(handle.el);
+      handle.focus();
+    };
+    const openBuild = (ticket) => {
+      if (buildView2?.ticket === ticket) return;
+      const current = viewer;
+      if (!current) return showBuild(ticket);
+      void current.handle.beforeLeave().then((leave) => {
+        if (!leave || viewer !== current) return;
+        closeViewer();
+        showBuild(ticket);
+      });
+    };
+    const closeSystems = () => {
+      systemPage?.handle.dispose();
+      systemPage = null;
+      systemsView?.dispose();
+      systemsView = null;
+      list.el.hidden = false;
+      list.focusSystems();
+    };
+    const showSystems = () => {
+      if (systemsView) return;
+      buildView2?.handle.dispose();
+      buildView2 = null;
+      systemsView = mountSystemsList({ surface: "panel", actions, onBack: closeSystems, onOpen: (id) => openSystem(id) });
+      list.el.hidden = true;
+      app.append(systemsView.el);
+      systemsView.focus();
+    };
+    const closeSystemPage = () => {
+      systemPage?.handle.dispose();
+      systemPage = null;
+      if (systemsView) {
+        systemsView.el.hidden = false;
+        systemsView.focus();
+      }
+    };
+    const openSystem = (id, target = "page") => {
+      if (systemPage?.id === id) {
+        if (target !== "page") systemPage.handle.showTarget(target);
+        return;
+      }
+      systemPage?.handle.dispose();
+      systemPage = null;
+      if (!systemsView) showSystems();
+      if (!systemsView) return;
+      systemsView.el.hidden = true;
+      const handle = mountSystemPage({ id, surface: "panel", actions, onBack: closeSystemPage });
+      systemPage = { id, handle };
+      app.append(handle.el);
+      handle.focus();
+      if (target !== "page") handle.showTarget(target);
+    };
     const list = mountListView({
       actions,
       onOpen: openViewer,
+      onSystems: showSystems,
       onSettings: openSettings,
-      onNew: (kind) => openNewDialog(app, { kind, onCreated: openViewer })
+      onNew: (kind) => openNewDialog(app, { kind, onCreated: openViewer, onSystems: showSystems })
     });
     app.append(list.el);
     flows.watchItems(
-      (target) => openViewer(target.slug),
+      (target) => target.kind === "open-build" ? openBuild(target.ticket) : target.kind === "open-system" ? openSystem(target.system, target.target) : openViewer(target.slug),
       (error) => toast("error", `Couldn\u2019t open that design. ${errorText2(error)}`)
     );
-    flows.watchOpenRequests((listener) => feed.subscribe(listener), (target) => openViewer(target.slug, { startIn: target.intent }));
+    flows.watchOpenRequests(
+      (listener) => feed.subscribe(listener),
+      (target) => openViewer(target.slug, { startIn: target.intent }),
+      (target) => openSystem(target.system, target.target)
+    );
   };
 
   // src/ui/app.ts

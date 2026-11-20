@@ -4,6 +4,9 @@
   var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
   var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
+  // <define:__DC_SYSTEM_QUESTIONS__>
+  var define_DC_SYSTEM_QUESTIONS_default = { roundOne: [{ topic: "home", label: "Where should the design system live?", multiple: false, options: [{ choice: "repo", label: "Repo + living page", why: "The system and its living page ship with your repo, next to the code.", recommended: true }, { choice: "internal", label: "In Design Chamber", why: "Stays in the Designs folder. No page in the repo.", recommended: false }] }, { topic: "mode", label: "Should building it also fix the code, or only describe what should be?", multiple: false, options: [{ choice: "fix", label: "Fix tokens, then document", why: "I change the token definitions in your code after you approve a diff.", recommended: true }, { choice: "describe", label: "Describe only, never change the app's code", why: "The system documents the target and your code keeps its values. New system files are still created after you approve a diff.", recommended: false }] }, { topic: "coverage", label: "Which parts should it cover?", multiple: true, options: [{ choice: "foundations", label: "Foundations", why: "Colour, type, space, radius, shadows, layers and sizes.", recommended: true }, { choice: "components", label: "Components", why: "The components the code has, with when to use them.", recommended: true }, { choice: "patterns", label: "Patterns & voice", why: "Layout patterns and how the product speaks.", recommended: true }, { choice: "brand", label: "Brand & marketing", why: "Logos, brand guidance and marketing surfaces.", recommended: true }] }, { topic: "dark", label: "Dark mode as part of this?", multiple: false, options: [{ choice: "not-now", label: "Not now", why: "Light values only. Dark can be added later.", recommended: true }, { choice: "include", label: "Include dark values", why: "I derive a dark value for every colour, and round two asks how.", recommended: false }] }], roundTwo: [{ topic: "status-colours", label: "Status colours", multiple: false, options: [{ choice: "brand-tuned", label: "Brand-tuned set", why: "One warning, one danger, one success, tuned to your brand. The proposed values are shown with this call.", recommended: true }, { choice: "stock", label: "Keep the stock set", why: "The code keeps its current status colours. The system records them as they are.", recommended: false }, { choice: "custom", label: "Custom", why: "Say what you want in the note.", recommended: false }] }, { topic: "greys", label: "Greys", multiple: false, options: [{ choice: "brand-tinted", label: "Brand-tinted greys", why: "The neutral ramp leans a few degrees toward the brand hue.", recommended: true }, { choice: "neutral", label: "Keep neutral grey", why: "The current greys stay; only the colours change.", recommended: false }] }, { topic: "access", label: "Who can open the living page", multiple: false, options: [{ choice: "dev", label: "Dev builds only", why: "The page ships in the repo and is not published.", recommended: true }, { choice: "public", label: "Public", why: "GitHub Pages or a similar host. Fonts fall back unless you turn on Embed fonts.", recommended: false }] }, { topic: "typography", label: "Typography", multiple: false, options: [{ choice: "one-font", label: "One font only", why: "The same font everywhere, including marketing headings.", recommended: true }, { choice: "display", label: "Add a display font", why: "A second face for marketing headings. Specimens fall back where the face is missing.", recommended: false }] }, { topic: "dark-values", label: "Dark values", multiple: false, options: [{ choice: "derive", label: "Derive dark values from the light ones", why: "A dark value for every colour, computed from the light set. Consistent, and quick to review.", recommended: true }, { choice: "hand-tune", label: "Hand-tune them with me", why: "We go through the dark values together, one group at a time.", recommended: false }] }], closing: "Reply with changes, or say go to accept the defaults." };
+
   // node_modules/@openchamber/sdk/dist/api-version.js
   var OPENCHAMBER_SDK_CHANNEL = "openchamber.sdk";
   var OPENCHAMBER_SDK_API_VERSION = 1;
@@ -122,6 +125,7 @@
   // node_modules/@openchamber/sdk/dist/manifest.js
   var TRACKER_URL_TOKENS = ["{id}", "{segment}", "{segments+}"];
   var TRACKER_URL_TOKEN_SET = new Set(TRACKER_URL_TOKENS);
+  var GUEST_BLOCK_ARGS_TEXT_MAX = 16e3;
   var GUEST_BLOCK_HEIGHT_MAX = 960;
 
   // node_modules/@openchamber/sdk/dist/session-events.js
@@ -1918,6 +1922,121 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
+  // node_modules/@openchamber/sdk/dist/ui/field.js
+  var mountTextField = (root2, initial) => {
+    ensureStyle(UI_CSS);
+    let props = initial;
+    const field2 = el("label", "oc-sdk oc-sdk-field");
+    const caption = el("span", "oc-sdk-field-label");
+    const input = props.multiline ? el("textarea", "oc-sdk-input") : el("input", "oc-sdk-input");
+    const note2 = el("span", "oc-sdk-field-note");
+    field2.append(caption, input, note2);
+    root2.append(field2);
+    const paint = () => {
+      setText(caption, props.label);
+      caption.hidden = !props.label;
+      if (input instanceof HTMLInputElement) {
+        input.type = props.password ? "password" : "text";
+      } else {
+        input.rows = props.rows ?? 3;
+      }
+      if (input.value !== props.value) {
+        input.value = props.value;
+      }
+      input.disabled = Boolean(props.disabled);
+      setAttr(input, "placeholder", props.placeholder);
+      input.dataset.mono = props.mono ? "true" : "false";
+      const invalid = Boolean(props.error);
+      field2.dataset.invalid = invalid ? "true" : "false";
+      input.setAttribute("aria-invalid", invalid ? "true" : "false");
+      const text = props.error ?? props.helper ?? "";
+      setText(note2, text);
+      note2.hidden = text === "";
+    };
+    const onInput = () => {
+      props.onChange(input.value);
+    };
+    input.addEventListener("input", onInput);
+    paint();
+    return {
+      update: (next) => {
+        props = { ...props, ...next };
+        paint();
+      },
+      dispose: () => {
+        input.removeEventListener("input", onInput);
+        field2.remove();
+      }
+    };
+  };
+
+  // node_modules/@openchamber/sdk/dist/ui/icons.js
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var ICON_PATH = {
+    search: "M18.031 16.617l4.283 4.282-1.415 1.415-4.282-4.283A8.96 8.96 0 0 1 11 20c-4.968 0-9-4.032-9-9s4.032-9 9-9 9 4.032 9 9a8.96 8.96 0 0 1-1.969 5.617zm-2.006-.742A6.977 6.977 0 0 0 18 11c0-3.868-3.133-7-7-7-3.868 0-7 3.132-7 7 0 3.867 3.132 7 7 7a6.977 6.977 0 0 0 4.875-1.975l.15-.15z",
+    chevron: "M12 13.172l4.95-4.95 1.414 1.414L12 16 5.636 9.636 7.05 8.222z",
+    check: "M10 15.172l9.192-9.193 1.415 1.414L10 18l-6.364-6.364 1.414-1.414z",
+    close: "M12 10.586l4.95-4.95 1.414 1.414-4.95 4.95 4.95 4.95-1.414 1.414-4.95-4.95-4.95 4.95-1.414-1.414 4.95-4.95-4.95-4.95L7.05 5.636z"
+  };
+  var icon = (name, size, className) => {
+    const node = document.createElementNS(SVG_NS, "svg");
+    node.setAttribute("viewBox", "0 0 24 24");
+    node.setAttribute("width", String(size));
+    node.setAttribute("height", String(size));
+    node.setAttribute("aria-hidden", "true");
+    node.setAttribute("fill", "currentColor");
+    if (className) {
+      node.setAttribute("class", className);
+    }
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", ICON_PATH[name]);
+    node.append(path);
+    return node;
+  };
+
+  // node_modules/@openchamber/sdk/dist/ui/checkbox.js
+  var mountToggle = (root2, initial, role) => {
+    ensureStyle(UI_CSS);
+    let props = initial;
+    const node = button("oc-sdk oc-sdk-check");
+    node.setAttribute("role", role);
+    const control = el("span", role === "switch" ? "oc-sdk-check-thumb" : "oc-sdk-check-box");
+    if (role === "checkbox") {
+      control.append(icon("check", 12));
+    }
+    const text = el("span", "oc-sdk-check-text");
+    const label = el("span", "oc-sdk-check-label");
+    const description = el("span", "oc-sdk-check-desc");
+    text.append(label, description);
+    node.append(control, text);
+    root2.append(node);
+    const paint = () => {
+      node.setAttribute("aria-checked", props.checked ? "true" : "false");
+      node.disabled = Boolean(props.disabled);
+      setText(label, props.label);
+      setText(description, props.description);
+      description.hidden = !props.description;
+    };
+    const onClick = () => {
+      if (!props.disabled) {
+        props.onChange(!props.checked);
+      }
+    };
+    node.addEventListener("click", onClick);
+    paint();
+    return {
+      update: (next) => {
+        props = { ...props, ...next };
+        paint();
+      },
+      dispose: () => {
+        node.removeEventListener("click", onClick);
+        node.remove();
+      }
+    };
+  };
+  var mountSwitch = (root2, initial) => mountToggle(root2, initial, "switch");
+
   // node_modules/@openchamber/sdk/dist/ui/badge.js
   var applyTone = (node, tone2) => {
     setAttr(node, "data-tone", tone2 && tone2 !== "neutral" ? tone2 : null);
@@ -1967,6 +2086,52 @@ ${GUEST_UI_LOOK_CSS}`;
         paint();
       },
       dispose: () => {
+        node.remove();
+      }
+    };
+  };
+
+  // node_modules/@openchamber/sdk/dist/ui/banner.js
+  var mountBanner = (root2, initial) => {
+    ensureStyle(UI_CSS);
+    let props = initial;
+    const node = el("div", "oc-sdk oc-sdk-banner");
+    const text = el("div", "oc-sdk-banner-text");
+    const title = el("div", "oc-sdk-banner-title");
+    const body = el("div", "oc-sdk-banner-body");
+    const slot = el("div", "oc-sdk-banner-action");
+    text.append(title, body);
+    node.append(text, slot);
+    root2.append(node);
+    let action = null;
+    const paint = () => {
+      node.dataset.tone = props.tone;
+      node.setAttribute("role", props.tone === "error" || props.tone === "warning" ? "alert" : "status");
+      setText(title, props.title);
+      setText(body, props.body);
+      body.hidden = !props.body;
+      slot.hidden = !props.action;
+      if (!props.action) {
+        action?.dispose();
+        action = null;
+        return;
+      }
+      const next = { label: props.action.label, onClick: props.action.onClick };
+      if (action) {
+        action.update(next);
+      } else {
+        action = mountButton(slot, { ...next, variant: "outline", size: "xs" });
+      }
+    };
+    paint();
+    return {
+      update: (next) => {
+        props = { ...props, ...next };
+        paint();
+      },
+      dispose: () => {
+        action?.dispose();
+        action = null;
         node.remove();
       }
     };
@@ -2039,6 +2204,60 @@ ${GUEST_UI_LOOK_CSS}`;
     return shared;
   };
 
+  // src/shared/limits.ts
+  var SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+  var SNAPSHOT_BYTES_MAX = 100 * 1024 * 1024;
+  var TURN_PROMOTE_AUTO_MS = 30 * 6e4;
+  var UPLOAD_TOTAL_MAX = 2e6;
+  var UPLOAD_CHUNK_MAX_CHARS = 6e4;
+  var UPLOAD_CHUNK_MAX_BYTES = 75e3;
+  var UPLOAD_TTL_MS = 10 * 6e4;
+  var OUTBOX_TTL_MS = 10 * 6e4;
+  var OPEN_REQUEST_TTL_MS = 2 * 6e4;
+  var RENDER_DOC_MAX_BYTES = 60 * 1024 * 1024;
+  var RENDER_CACHE_MAX_BYTES = 256 * 1024 * 1024;
+  var GUEST_RENDER_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+  var RENDER_CHUNK_CONCURRENCY = 3;
+  var CHECK_RUN_BUDGET_MS = 9e4;
+  var LOOSE_IMPORT_MAX_BYTES = 20 * 1024 * 1024;
+  var ACTIVITY_WORKING_EXPIRY_MS = 30 * 6e4;
+  var STATUS_RECENT_MS = 7 * 864e5;
+  var THUMB_DATA_TEXT_MAX = 4194304;
+  var THUMB_RETRY_DELAYS_MS = [2e3, 5e3, 1e4];
+  var BLOCK_TITLE_MAX = 80;
+  var BLOCK_SCREEN_TITLE_MAX = 40;
+  var BLOCK_SCREENS_SHOWN = 6;
+  var DIRECTION_QUESTION_MAX = 200;
+  var DIRECTION_LABEL_MAX = 80;
+  var DIRECTION_OPTIONS_MIN = 2;
+  var DIRECTION_OPTIONS_MAX = 4;
+  var USER_UNDO_TTL_MS = 30 * 6e4;
+  var SYSTEM_ID_PATTERN = SLUG_PATTERN;
+  var SYSTEM_BYTES_MAX = 100 * 1024 * 1024;
+  var SYSTEM_FONT_MAX_BYTES = 5 * 1024 * 1024;
+  var SYSTEM_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+  var SYSTEM_DOCUMENT_MAX_BYTES = 20 * 1024 * 1024;
+  var BINARY_UPLOAD_TOTAL_MAX = 28e6;
+  var SCAN_TTL_MS = 10 * 6e4;
+  var FOLDER_UNDO_MS = 60 * 6e4;
+  var SYSTEM_BUILD_TICKET_PATTERN = /^sb_[a-z0-9]{12}$/;
+  var SYSTEM_BUILD_TTL_MS = 7 * 864e5;
+  var LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
+  var LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
+  var SCAN_JSON_MAX_BYTES = 2 * 1024 * 1024;
+  var SYSTEM_PROPOSAL_ID_PATTERN = /^p_[a-z0-9]{8,16}$/;
+  var SYSTEM_ASK_POLL_MS = 5e3;
+  var SYSTEM_ASK_CALLS_MAX = 8;
+  var SYSTEM_ASK_WHY_MAX = 300;
+  var SYSTEM_ASK_PROPOSED_MAX = 200;
+
+  // src/shared/agent/context.ts
+  var VIEWPORT_TABLET = Object.freeze({ id: "tablet", label: "Tablet", width: 768, height: 1024 });
+  var VIEWPORT_DESKTOP = Object.freeze({ id: "desktop", label: "Desktop", width: 1440, height: 900 });
+
+  // src/shared/types.ts
+  var CHIP_PROVIDER_ID = "design-chamber";
+
   // src/shared/api.ts
   var API_ERROR_STATUS = {
     unauthorized: 401,
@@ -2051,6 +2270,7 @@ ${GUEST_UI_LOOK_CSS}`;
     "too-large": 413,
     "no-html": 422,
     invalid: 422,
+    "read-only": 422,
     internal: 500
   };
   var isApiErrorCode = (value) => typeof value === "string" && Object.hasOwn(API_ERROR_STATUS, value);
@@ -2070,6 +2290,7 @@ ${GUEST_UI_LOOK_CSS}`;
     "POST /designs/:slug/comments/mark-sent": "WP1",
     "POST /uploads": "WP1",
     "PUT /uploads/:id/:index": "WP1",
+    "DELETE /uploads/:id": "WP1",
     "GET /outbox": "WP1",
     "PUT /outbox": "WP1",
     "DELETE /outbox": "WP1",
@@ -2105,10 +2326,52 @@ ${GUEST_UI_LOOK_CSS}`;
     "POST /designs/:slug/hand-edits/clear": "P2",
     "GET /designs/:slug/page-state": "P2",
     "PATCH /designs/:slug/page-state": "P2",
-    "DELETE /designs/:slug/page-state": "P2"
+    "DELETE /designs/:slug/page-state": "P2",
+    "GET /systems": "P25",
+    "POST /systems": "P25",
+    "GET /systems/:id": "P25",
+    "PATCH /systems/:id": "P25",
+    "DELETE /systems/:id": "P25",
+    "POST /systems/:id/edits": "P25",
+    "POST /systems/:id/edits/:eid/undo": "P25",
+    "POST /systems/:id/hand-edits/clear": "P25",
+    "POST /systems/:id/assets": "P25",
+    "POST /systems/:id/assets/from-folder": "P25",
+    "GET /systems/:id/board": "P25",
+    "GET /systems/:id/board/chunk": "P25",
+    "GET /systems/:id/versions": "P25",
+    "GET /systems/:id/versions/:vid/diff": "P25",
+    "POST /systems/:id/versions/:vid/restore": "P25",
+    "POST /systems/:id/prompt": "P25",
+    "GET /systems/:id/checks": "P25",
+    "POST /system-scans": "P25",
+    "GET /system-scans/:scanId": "P25",
+    "DELETE /system-scans/:scanId": "P25",
+    "POST /systems/:id/resync": "P25",
+    "GET /designs/:slug/system": "P25",
+    "GET /designs/:slug/system/preview": "P25",
+    "POST /designs/:slug/system": "P25",
+    "GET /folders": "P25",
+    "POST /folders": "P25",
+    "PATCH /folders/:folderId": "P25",
+    "DELETE /folders/:folderId": "P25",
+    "POST /folders/:folderId/undelete": "P25",
+    "POST /folders/:folderId/designs": "P25",
+    "POST /systems/chip": "P25",
+    "GET /system-builds/:ticket": "P25",
+    "GET /systems/:id/living-page": "P25",
+    "GET /systems/:id/proposals/:proposalId": "P25",
+    "GET /systems/:id/living-page/render": "P25",
+    "GET /systems/:id/living-page/render/chunk": "P25",
+    "POST /systems/:id/build/stop": "P25",
+    "POST /system-stops/:undoId/undo": "P25"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
-  var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set(["GET /designs/:slug/render/chunk"]);
+  var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set([
+    "GET /designs/:slug/render/chunk",
+    "GET /systems/:id/board/chunk",
+    "GET /systems/:id/living-page/render/chunk"
+  ]);
   var splitRouteKey = (key) => {
     const space = key.indexOf(" ");
     return { method: key.slice(0, space), pattern: key.slice(space + 1) };
@@ -2121,35 +2384,6 @@ ${GUEST_UI_LOOK_CSS}`;
       return encodeURIComponent(value);
     });
   };
-
-  // src/shared/limits.ts
-  var SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
-  var SNAPSHOT_BYTES_MAX = 100 * 1024 * 1024;
-  var TURN_PROMOTE_AUTO_MS = 30 * 6e4;
-  var UPLOAD_TOTAL_MAX = 2e6;
-  var UPLOAD_CHUNK_MAX_CHARS = 6e4;
-  var UPLOAD_CHUNK_MAX_BYTES = 75e3;
-  var UPLOAD_TTL_MS = 10 * 6e4;
-  var OUTBOX_TTL_MS = 10 * 6e4;
-  var OPEN_REQUEST_TTL_MS = 2 * 6e4;
-  var RENDER_DOC_MAX_BYTES = 60 * 1024 * 1024;
-  var RENDER_CACHE_MAX_BYTES = 256 * 1024 * 1024;
-  var GUEST_RENDER_CACHE_MAX_BYTES = 64 * 1024 * 1024;
-  var RENDER_CHUNK_CONCURRENCY = 3;
-  var CHECK_RUN_BUDGET_MS = 9e4;
-  var LOOSE_IMPORT_MAX_BYTES = 20 * 1024 * 1024;
-  var ACTIVITY_WORKING_EXPIRY_MS = 30 * 6e4;
-  var STATUS_RECENT_MS = 7 * 864e5;
-  var THUMB_DATA_TEXT_MAX = 4194304;
-  var THUMB_RETRY_DELAYS_MS = [2e3, 5e3, 1e4];
-  var BLOCK_TITLE_MAX = 80;
-  var BLOCK_SCREEN_TITLE_MAX = 40;
-  var BLOCK_SCREENS_SHOWN = 6;
-  var DIRECTION_QUESTION_MAX = 200;
-  var DIRECTION_LABEL_MAX = 80;
-  var DIRECTION_OPTIONS_MIN = 2;
-  var DIRECTION_OPTIONS_MAX = 4;
-  var USER_UNDO_TTL_MS = 30 * 6e4;
 
   // src/guest/service-client.ts
   var ServiceError = class extends Error {
@@ -2241,6 +2475,20 @@ ${GUEST_UI_LOOK_CSS}`;
     if (index > start) chunks.push(text.slice(start));
     return chunks;
   };
+  var BASE64_CHUNK_BYTES = 44997;
+  var BASE64_PIECE_BYTES = 8190;
+  var base64Of = (bytes) => {
+    let text = "";
+    for (let at = 0; at < bytes.length; at += BASE64_PIECE_BYTES) {
+      text += btoa(String.fromCharCode(...bytes.subarray(at, at + BASE64_PIECE_BYTES)));
+    }
+    return text;
+  };
+  var encodeBase64Chunks = (bytes, chunkBytes = BASE64_CHUNK_BYTES) => {
+    const chunks = [];
+    for (let at = 0; at < bytes.length; at += chunkBytes) chunks.push(base64Of(bytes.subarray(at, at + chunkBytes)));
+    return chunks;
+  };
   var mapLimit = async (items, limit, run) => {
     const out = new Array(items.length);
     let next = 0;
@@ -2329,6 +2577,41 @@ ${GUEST_UI_LOOK_CSS}`;
       inflight.set(id, task);
       return task;
     };
+    const fetchBoard = async (id, version, scheme) => {
+      const query = { scheme };
+      if (version) query.version = version;
+      const meta = await call("GET /systems/:id/board", { params: { id }, query });
+      const cached = renders.get(meta.key);
+      if (cached) {
+        renders.delete(meta.key);
+        renders.set(meta.key, cached);
+        return cached;
+      }
+      const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
+      const parts = await mapLimit(
+        indexes,
+        RENDER_CHUNK_CONCURRENCY,
+        (n) => call("GET /systems/:id/board/chunk", { params: { id }, query: { key: meta.key, n: String(n) } })
+      );
+      const doc = { meta, html: parts.join("") };
+      remember(doc);
+      return doc;
+    };
+    const loadBoard = (id, version = null, scheme = "light") => {
+      const key = `board\0${id}\0${version ?? ""}\0${scheme}`;
+      const running = inflight.get(key);
+      if (running) return running;
+      const task = (async () => {
+        try {
+          return await fetchBoard(id, version, scheme);
+        } catch (error) {
+          if (isServiceError(error, "stale")) return fetchBoard(id, version, scheme);
+          throw error;
+        }
+      })().finally(() => inflight.delete(key));
+      inflight.set(key, task);
+      return task;
+    };
     const upload = async (text) => {
       if (text.length > UPLOAD_TOTAL_MAX) {
         throw new ServiceError("too-large", `This text is too long to send to Design Chamber (over ${UPLOAD_TOTAL_MAX.toLocaleString("en-US")} characters).`);
@@ -2337,6 +2620,26 @@ ${GUEST_UI_LOOK_CSS}`;
       const chunks = splitUploadChunks(text);
       for (const [index, data] of chunks.entries()) {
         await call("PUT /uploads/:id/:index", { params: { id: uploadId, index: String(index) }, body: { data } });
+      }
+      return uploadId;
+    };
+    const uploadBinary = async (file, onProgress) => {
+      const chunks = encodeBase64Chunks(new Uint8Array(await file.arrayBuffer()));
+      const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      if (total > BINARY_UPLOAD_TOTAL_MAX) {
+        throw new ServiceError("too-large", "That file is larger than the 21 MB Design Chamber accepts.");
+      }
+      const { uploadId } = await call("POST /uploads", { body: { total, encoding: "base64" } });
+      let sent = 0;
+      try {
+        for (const [index, data] of chunks.entries()) {
+          await call("PUT /uploads/:id/:index", { params: { id: uploadId, index: String(index) }, body: { data } });
+          sent += data.length;
+          onProgress?.(total === 0 ? 1 : sent / total);
+        }
+      } catch (error) {
+        await call("DELETE /uploads/:id", { params: { id: uploadId } }).catch(() => void 0);
+        throw error;
       }
       return uploadId;
     };
@@ -2353,7 +2656,36 @@ ${GUEST_UI_LOOK_CSS}`;
       }
       return answer;
     };
-    return { call, loadRender, upload, thumbnail };
+    const getProposal = (systemId, proposalId) => call("GET /systems/:id/proposals/:proposalId", { params: { id: systemId, proposalId } });
+    const stopBuild = (systemId, proposalId = null) => call("POST /systems/:id/build/stop", { params: { id: systemId }, body: { proposalId } });
+    const undoStop = (undoId) => call("POST /system-stops/:undoId/undo", { params: { undoId }, body: {} });
+    const loadLivingPage = (systemId) => call("GET /systems/:id/living-page", { params: { id: systemId } });
+    return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
+  };
+
+  // src/guest/flows.ts
+  var PANEL_SURFACE_ID = `plugin:${CHIP_PROVIDER_ID}`;
+  var isHostError = (error, code) => error instanceof HostRequestError && error.code === code;
+  var openInRail = async (deps, slug, intent) => leaveAndOpen(deps, { slug, intent });
+  var openSystemInRail = async (deps, system, target) => leaveAndOpen(deps, { system, target });
+  var leaveAndOpen = async (deps, body) => {
+    try {
+      await deps.client.call("POST /open-request", { body });
+    } catch (error) {
+      if (isServiceError(error, "not-found")) return "gone";
+      throw error;
+    }
+    try {
+      await deps.host.openSurface(PANEL_SURFACE_ID);
+      return "opened";
+    } catch (error) {
+      try {
+        await deps.client.call("DELETE /open-request");
+      } catch {
+      }
+      if (isHostError(error, "NO_DIRECTORY") || isHostError(error, "UNSUPPORTED")) return "not-here";
+      throw error;
+    }
   };
 
   // src/ui/model/block-args.ts
@@ -2390,12 +2722,71 @@ ${GUEST_UI_LOOK_CSS}`;
     const question = clipText(textArg(args.question) ?? "", DIRECTION_QUESTION_MAX);
     return { ok: true, block: { name: "DirectionPick", question: question === "" ? DEFAULT_QUESTION : question, options } };
   };
+  var BAD_ASK = { ok: false, reason: "bad-system-ask" };
+  var argsFit = (args) => {
+    try {
+      return JSON.stringify(args).length <= GUEST_BLOCK_ARGS_TEXT_MAX;
+    } catch {
+      return false;
+    }
+  };
+  var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+  var parseCalls = (value) => {
+    const text = textArg(value);
+    if (text === null || text.trim() === "") return null;
+    let raw;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(raw)) return null;
+    const calls = [];
+    let dropped = 0;
+    for (const entry of raw) {
+      const topic = isRecord(entry) ? textArg(entry.topic)?.trim() : void 0;
+      if (!isRecord(entry) || topic === void 0 || topic === "" || calls.length >= SYSTEM_ASK_CALLS_MAX || calls.some((call) => call.topic === topic)) {
+        dropped += 1;
+        continue;
+      }
+      calls.push({
+        topic,
+        why: clipText(textArg(entry.why) ?? "", SYSTEM_ASK_WHY_MAX),
+        proposed: clipText(textArg(entry.proposed) ?? "", SYSTEM_ASK_PROPOSED_MAX)
+      });
+    }
+    return { calls, dropped };
+  };
+  var matching = (value, pattern) => {
+    const text = textArg(value)?.trim() ?? "";
+    return pattern.test(text) ? text : null;
+  };
+  var parseSystemAskArgs = (args) => {
+    if (!argsFit(args)) return BAD_ASK;
+    const kind = textArg(args.kind)?.trim();
+    if (kind === "interview-1") {
+      const ticket = matching(args.ticket, SYSTEM_BUILD_TICKET_PATTERN);
+      return ticket === null ? BAD_ASK : { ok: true, block: { name: "SystemAsk", ask: { kind, ticket } } };
+    }
+    const systemId = matching(args.systemId, SYSTEM_ID_PATTERN);
+    if (systemId === null) return BAD_ASK;
+    if (kind === "interview-2") {
+      const read = parseCalls(args.calls);
+      return read === null ? BAD_ASK : { ok: true, block: { name: "SystemAsk", ask: { kind, systemId, calls: read.calls, dropped: read.dropped } } };
+    }
+    if (kind === "diff") {
+      const proposalId = matching(args.proposalId, SYSTEM_PROPOSAL_ID_PATTERN);
+      return proposalId === null ? BAD_ASK : { ok: true, block: { name: "SystemAsk", ask: { kind, systemId, proposalId } } };
+    }
+    return BAD_ASK;
+  };
   var parseBlockArgs = (name, args) => {
     if (name === "DesignCard") {
       const slug = slugOf(args.slug);
       return slug === null ? { ok: false, reason: "bad-slug" } : { ok: true, block: { name: "DesignCard", slug } };
     }
     if (name === "DirectionPick") return parseDirection(args);
+    if (name === "SystemAsk") return parseSystemAskArgs(args);
     return { ok: false, reason: "unknown-block" };
   };
 
@@ -2422,7 +2813,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var errorText2 = (error) => error instanceof Error && error.message !== "" ? error.message : "Something unexpected happened. Try again.";
 
   // src/ui/components/icons.ts
-  var SVG_NS = "http://www.w3.org/2000/svg";
+  var SVG_NS2 = "http://www.w3.org/2000/svg";
   var ICONS = {
     back: ["M19 12H5", "m12 19-7-7 7-7"],
     plus: ["M5 12h14", "M12 5v14"],
@@ -2440,6 +2831,7 @@ ${GUEST_UI_LOOK_CSS}`;
     cursor: ["M4 4l7.07 16.97 2.51-7.39 7.39-2.51L4 4z"],
     play: ["m7 4 13 8-13 8z"],
     fit: ["M8 3H5a2 2 0 0 0-2 2v3", "M21 8V5a2 2 0 0 0-2-2h-3", "M3 16v3a2 2 0 0 0 2 2h3", "M16 21h3a2 2 0 0 0 2-2v-3"],
+    sidebar: ["M4 5h16v14H4z", "M9 5v14"],
     folder: ["M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"],
     canvas: ["M3 3h8v8H3z", "M13 3h8v5h-8z", "M13 10h8v11h-8z", "M3 13h8v8H3z"],
     page: ["M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z", "M14 3v5h5", "m10 13-2 2 2 2", "m14 13 2 2-2 2"],
@@ -2458,11 +2850,13 @@ ${GUEST_UI_LOOK_CSS}`;
     send: ["M22 2 11 13", "M22 2l-7 20-4-9-9-4z"],
     pin: ["M12 21s-7-5.2-7-11a7 7 0 1 1 14 0c0 5.8-7 11-7 11z", "M12 7.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"],
     layers: ["m12 3 9 5-9 5-9-5z", "m3 13 9 5 9-5"],
+    // A palette with its dabs: design systems.
+    system: ["M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4c0-4.4-4-8.1-9-8.1z", "M7.5 11.5h.01", "M10 7.5h.01", "M15 7.5h.01"],
     // Three sliders with their knobs: the Tweaks button.
     tune: ["M4 21v-7", "M4 10V3", "M12 21v-9", "M12 8V3", "M20 21v-5", "M20 12V3", "M2 14h4", "M10 8h4", "M18 16h4"]
   };
   var icon2 = (name, size = 16) => {
-    const svg = document.createElementNS(SVG_NS, "svg");
+    const svg = document.createElementNS(SVG_NS2, "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
     svg.setAttribute("width", String(size));
     svg.setAttribute("height", String(size));
@@ -2475,7 +2869,7 @@ ${GUEST_UI_LOOK_CSS}`;
     svg.setAttribute("focusable", "false");
     svg.classList.add("dc-icon");
     for (const d of ICONS[name]) {
-      const path = document.createElementNS(SVG_NS, "path");
+      const path = document.createElementNS(SVG_NS2, "path");
       path.setAttribute("d", d);
       svg.append(path);
     }
@@ -2494,36 +2888,6 @@ ${GUEST_UI_LOOK_CSS}`;
     return el2;
   };
 
-  // src/shared/agent/context.ts
-  var VIEWPORT_TABLET = Object.freeze({ id: "tablet", label: "Tablet", width: 768, height: 1024 });
-  var VIEWPORT_DESKTOP = Object.freeze({ id: "desktop", label: "Desktop", width: 1440, height: 900 });
-
-  // src/shared/types.ts
-  var CHIP_PROVIDER_ID = "design-chamber";
-
-  // src/guest/flows.ts
-  var PANEL_SURFACE_ID = `plugin:${CHIP_PROVIDER_ID}`;
-  var isHostError = (error, code) => error instanceof HostRequestError && error.code === code;
-  var openInRail = async (deps, slug, intent) => {
-    try {
-      await deps.client.call("POST /open-request", { body: { slug, intent } });
-    } catch (error) {
-      if (isServiceError(error, "not-found")) return "gone";
-      throw error;
-    }
-    try {
-      await deps.host.openSurface(PANEL_SURFACE_ID);
-      return "opened";
-    } catch (error) {
-      try {
-        await deps.client.call("DELETE /open-request");
-      } catch {
-      }
-      if (isHostError(error, "NO_DIRECTORY") || isHostError(error, "UNSUPPORTED")) return "not-here";
-      throw error;
-    }
-  };
-
   // src/shared/checks.ts
   var num = (value, digits = 0) => value === void 0 ? "?" : digits === 0 ? String(Math.round(value)) : value.toFixed(digits);
   var fileOf = (f) => f.file ?? "This design";
@@ -2533,6 +2897,64 @@ ${GUEST_UI_LOOK_CSS}`;
     if (f.params?.reason === "budget") return `${what} (the run took longer than ${Math.round(CHECK_RUN_BUDGET_MS / 1e3)} seconds).`;
     if (f.params?.reason === "failures") return `${what} (the browser failed three times in a row).`;
     return `${what} (the limit is ${num(f.params?.max)} per run). Use --screen <id> to check the rest.`;
+  };
+  var systemNameOf = (f) => f.params?.system ?? "the design system";
+  var repoNameOf = (f) => f.params?.repo ?? "the repo";
+  var AREA_LABELS = {
+    foundations: "Foundations",
+    components: "Components",
+    patterns: "Patterns & voice",
+    brand: "Brand & marketing"
+  };
+  var SECRET_KIND_LABELS = {
+    "aws-key": "an AWS key",
+    "github-token": "a GitHub token",
+    "openai-style-key": "an OpenAI-style key",
+    "slack-token": "a Slack token",
+    "google-key": "a Google key",
+    "private-key": "a private key"
+  };
+  var LIVING_FAILED_REASONS = {
+    "too-large": "it would be too large.",
+    bundle: "a file couldn't be embedded.",
+    unsafe: "it didn't pass the safety check.",
+    "no-snapshot": "the repo hasn't been read yet.",
+    secret: "it would show something shaped like a secret."
+  };
+  var BUILD_PROBLEM_SENTENCES = {
+    unreadable: () => "BUILD.json isn't valid JSON.",
+    "ticket-unknown": () => "This design system was started from a chat Design Chamber no longer knows. Start it again with /design-system.",
+    "ticket-needed": () => "A system that lives in a repo needs a build ticket. Start it with /design-system in the project's chat.",
+    "repo-outside-project": () => "The repo must be the project this chat is in, or a folder inside it. To use a folder above it, such as the root of a monorepo, open a chat in that folder and run /design-system there.",
+    "repo-overlap": () => "Another design system already uses this repo folder or living-page path.",
+    "living-page-exists": (f) => `The living-page path already exists in ${repoNameOf(f)} and isn't this system's living page. Pick another path.`,
+    "code-outside-project": () => "The code folder must be the project this chat is in, or a folder inside it.",
+    "home-changed": (f) => `${systemNameOf(f)} already has files in ${repoNameOf(f)}, so its home can't change. Make a new system to move it.`,
+    "ticket-changed": () => "BUILD.json names another build. Keep the ticket this system started with.",
+    "applied-unknown-proposal": (f) => `The agent says it applied a proposal you didn't approve here. Check ${repoNameOf(f)}'s history.`
+  };
+  var PROPOSAL_PROBLEM_SENTENCES = {
+    "not-adopted": "the system has not been adopted from a build yet.",
+    round: "the interview is not finished; a proposal needs round two or done.",
+    "path-outside": "a system file lies outside the system folder.",
+    "living-page-path": "the living-page file is not the build's living-page path.",
+    "create-exists": "a file the proposal creates already exists in the repo. The proposal must change it, not create it.",
+    "from-missing": "a proposed file is missing from proposal/.",
+    "describe-change": "Describe only never changes the app's code.",
+    "internal-parts": "an internal system's proposal can only hold token fixes.",
+    "none-fixes": "a build with no code to fix cannot hold token fixes.",
+    rewritten: "this proposal changed after it was shown. Ask the agent for a new one.",
+    unreadable: "PROPOSAL.json isn't valid JSON.",
+    // §5.14 step 4: problems of the preview generated from proposal/.
+    "preview-too-large": "the living page it proposes would be too large.",
+    "preview-unsafe": "the living page it proposes didn't pass the safety check.",
+    "preview-secret": "the living page it proposes shows something shaped like a secret. Remove it before you approve."
+  };
+  var driftScope = (f, core) => {
+    const base = `In CSS variables and token JSON, ${core}`;
+    const unread = f.params?.unread ?? 0;
+    if (unread <= 0) return base;
+    return `${base} Design Chamber can't read ${num(unread)} token ${unread === 1 ? "file" : "files"}, so differences there aren't counted.`;
   };
   var RULES = {
     "overflow-x": { severity: "error", sentence: (f, where) => `${where}: the content is ${num(f.params?.px)}px wide, wider than the ${num(f.params?.width)}px viewport.` },
@@ -2573,10 +2995,13 @@ ${GUEST_UI_LOOK_CSS}`;
     "doc-viewport": { severity: "warning", sentence: (f) => `${fileOf(f)} has no viewport meta tag.` },
     "doc-title": { severity: "warning", sentence: (f) => `${fileOf(f)} has no <title>.` },
     "doc-charset": { severity: "info", sentence: (f) => `${fileOf(f)} does not declare its charset.` },
-    "token-redefined": { severity: "warning", sentence: (f) => `${fileOf(f)} redefines ${num(f.params?.count)} tokens from tokens.css. Change them in tokens.css.` },
+    "token-redefined": {
+      severity: "warning",
+      sentence: (f) => f.params?.system !== void 0 ? `${fileOf(f)} redefines ${num(f.params?.count)} tokens from the design system ${f.params.system}. Use the system's values, or ask the user to change the system.` : `${fileOf(f)} redefines ${num(f.params?.count)} tokens from tokens.css. Change them in tokens.css.`
+    },
     "token-hardcoded": {
       severity: "info",
-      sentence: (f) => `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although tokens.css defines colours.`
+      sentence: (f) => f.params?.system !== void 0 ? `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although the design system ${f.params.system} defines colours. Use its tokens.` : `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although tokens.css defines colours.`
     },
     "tweak-broken": {
       severity: "warning",
@@ -2588,7 +3013,140 @@ ${GUEST_UI_LOOK_CSS}`;
         return "design.json declares tweaks, but the design has no tokens.css.";
       }
     },
-    "check-partial": { severity: "info", sentence: () => "Some files were not checked in time." }
+    "check-partial": { severity: "info", sentence: () => "Some files were not checked in time." },
+    // Phase 2.5 §10.1: a design against its linked system.
+    "system-drift": {
+      severity: "warning",
+      // `part: 'system-files'` when the tokens couldn't be compared (the system no longer holds the
+      // copy's original tokens.css) or other copy files changed: the files are counted instead.
+      sentence: (f) => f.params?.part === "system-files" ? `This design's copy of ${systemNameOf(f)} was changed: ${num(f.params?.count)} ${f.params?.count === 1 ? "file differs" : "files differ"} from revision ${num(f.params?.revision)}. Put them back, or keep the changes in this design's own tokens.css.` : `This design's copy of ${systemNameOf(f)} was changed: ${num(f.params?.count)} tokens differ from revision ${num(f.params?.revision)}. Put them back, or keep them as this design's own overrides.`
+    },
+    "system-copy-missing": {
+      severity: "warning",
+      sentence: (f) => `This design's copy of ${systemNameOf(f)} is missing ${num(f.params?.count)} files.`
+    },
+    "system-copy-invalid": {
+      severity: "warning",
+      sentence: () => "system/COPY.json can't be read, so Design Chamber can't tell which system this design uses."
+    },
+    "system-choice": {
+      severity: "warning",
+      sentence: (f) => f.params?.choice === "draft" ? `design.json asks for the design system "${f.params?.value ?? "?"}", which isn't ready yet.` : `design.json asks for the design system "${f.params?.value ?? "?"}", which isn't a Ready system in this Designs folder.`
+    },
+    // Phase 2.5 §10.3: checking a system.
+    "system-unreadable": {
+      severity: "error",
+      sentence: () => "Design Chamber can't read this design system. system.json isn't valid JSON."
+    },
+    "system-entry-invalid": {
+      severity: "warning",
+      sentence: () => "system.json has entries Design Chamber can't read."
+    },
+    "system-value-invalid": {
+      severity: "error",
+      sentence: () => "tokens.css holds a value that isn't valid for its section."
+    },
+    "system-font-missing": {
+      severity: "error",
+      sentence: (f) => `${fileOf(f)} is listed as a font but is missing or can't be used.`
+    },
+    "system-overview-empty": { severity: "warning", sentence: () => "The system has no overview yet." },
+    "system-overview-long": {
+      severity: "warning",
+      sentence: () => "Keep the overview under 4 000 characters. Move detail into a note."
+    },
+    "system-note-long": {
+      severity: "warning",
+      sentence: () => "A note is over 20 000 characters. Shorten it or split it."
+    },
+    "system-example-remote": {
+      severity: "error",
+      sentence: (f) => `${fileOf(f)} loads files from the internet, which the living page can't use.`
+    },
+    "system-token-undefined": {
+      severity: "warning",
+      sentence: () => "A component names a token the system doesn't define."
+    },
+    "system-token-cap": {
+      severity: "warning",
+      sentence: () => "Design systems hold up to 2 000 tokens. The rest weren't read."
+    },
+    // Phase 2.5 §10.4: the repo-backed system (S8, with the rev 3 wording).
+    "system-living-missing": {
+      severity: "warning",
+      sentence: (f) => `${systemNameOf(f)} lives in ${repoNameOf(f)} but has no living page yet.`
+    },
+    "system-living-stale": {
+      severity: "warning",
+      sentence: (f) => `The living page was generated from revision ${num(f.params?.from)}; ${systemNameOf(f)} is at revision ${num(f.params?.revision)}.`
+    },
+    "system-living-changed": {
+      severity: "warning",
+      sentence: () => "The living page in the repo differs from the one Design Chamber generated."
+    },
+    "system-living-unsafe": {
+      severity: "error",
+      sentence: () => "The living page has markup Design Chamber didn't generate and can't check as safe."
+    },
+    "system-living-failed": {
+      severity: "warning",
+      sentence: (f) => `Design Chamber couldn't generate the living page: ${LIVING_FAILED_REASONS[f.params?.failed ?? "too-large"]}`
+    },
+    "system-repo-unreadable": {
+      severity: "error",
+      sentence: (f) => `Design Chamber can't read ${repoNameOf(f)}'s design system folder. Choose another folder on the system page.`
+    },
+    "system-snapshot-changed": {
+      severity: "warning",
+      sentence: (f) => `${systemNameOf(f)}'s snapshot was changed outside Design Chamber. Re-sync to read ${repoNameOf(f)} again.`
+    },
+    "system-code-drift": {
+      severity: "warning",
+      sentence: (f) => driftScope(f, `${num(f.params?.count)} tokens differ from ${systemNameOf(f)}. Ask the agent to reconcile.`)
+    },
+    "system-code-differs": {
+      severity: "warning",
+      sentence: (f) => driftScope(f, `${num(f.params?.count)} tokens still differ from what ${systemNameOf(f)} describes.`)
+    },
+    "system-build-invalid": {
+      severity: "warning",
+      sentence: (f) => {
+        const reason = f.params?.build;
+        const sentence = reason !== void 0 ? BUILD_PROBLEM_SENTENCES[reason](f) : "Ask the agent to fix it.";
+        return `BUILD.json can't be used: ${sentence}`;
+      }
+    },
+    "system-coverage-empty": {
+      severity: "warning",
+      sentence: (f) => `${systemNameOf(f)} covers ${AREA_LABELS[f.params?.area ?? "foundations"]} but has nothing there yet.`
+    },
+    // Phase 2.5 rev 3 (§10.4).
+    "system-living-reformatted": {
+      severity: "info",
+      sentence: () => "The living page may have been reformatted since it was generated. Its values are current."
+    },
+    "system-living-secret": {
+      // Error unless the page is dev-only; `severityOf` reads the validated `access` param.
+      severity: "error",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const label = SECRET_KIND_LABELS[f.params?.kind ?? "aws-key"];
+        const what = count === 1 ? `something shaped like a secret (${label})` : `${num(count)} things shaped like secrets (${label})`;
+        return `The living page shows ${what}. Remove ${count === 1 ? "it" : "them"} from the system.`;
+      }
+    },
+    "system-landed-differs": {
+      severity: "warning",
+      sentence: (f) => f.params?.part !== void 0 ? `The agent says it applied ${f.params.part}, but Design Chamber found none in ${repoNameOf(f)}.` : `What landed in ${repoNameOf(f)} differs from the proposal you approved in ${num(f.params?.count)} files.`
+    },
+    "system-proposal-invalid": {
+      severity: "warning",
+      sentence: (f) => {
+        const reason = f.params?.proposal;
+        if (reason === void 0 || reason === "unreadable" && f.detail !== void 0) return "PROPOSAL.json can't be used. Ask the agent to fix it.";
+        return `PROPOSAL.json can't be used: ${PROPOSAL_PROBLEM_SENTENCES[reason]}`;
+      }
+    }
   };
   var CHECK_CODES = Object.freeze(Object.keys(RULES));
 
@@ -3002,17 +3560,1003 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
+  // src/ui/model/system-ask-model.ts
+  var defaultPicks = (questions) => Object.fromEntries(questions.map((question) => [question.topic, question.options.filter((option) => option.recommended).map((option) => option.choice)]));
+  var withPick = (picks, question, choice, on = true) => {
+    if (!question.options.some((option) => option.choice === choice)) return picks;
+    if (!question.multiple) return { ...picks, [question.topic]: [choice] };
+    const now = picks[question.topic] ?? [];
+    const next = question.options.map((option) => option.choice).filter((id) => id === choice ? on : now.includes(id));
+    return { ...picks, [question.topic]: next };
+  };
+  var optionLabel = (question, choice) => question.options.find((option) => option.choice === choice)?.label ?? choice;
+  var picksOf = (picks, question) => picks[question.topic] ?? [];
+  var NO_PROJECT_LINE = "No project folder is open in this chat, so the system will live in Design Chamber and your code stays untouched.";
+  var PROJECT_TOPICS = ["home", "mode"];
+  var NO_PROJECT_PICKS = { home: ["internal"], mode: ["describe"] };
+  var roundOneQuestions = (set, hasProject) => hasProject ? [...set.roundOne] : set.roundOne.filter((question) => !PROJECT_TOPICS.includes(question.topic));
+  var WORDS = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+  var coverageText = (question, chosen) => {
+    const total = question.options.length;
+    if (chosen.length === total) return `all ${WORDS[total] ?? String(total)} areas`;
+    return chosen.length === 0 ? "no areas" : chosen.map((choice) => optionLabel(question, choice)).join(", ");
+  };
+  var darkText = (question, chosen) => {
+    const choice = chosen[0];
+    if (choice === "not-now") return "dark mode not now";
+    if (choice === "include") return "dark values included";
+    return choice === void 0 ? "dark mode not chosen" : optionLabel(question, choice);
+  };
+  var roundOneBlock = (questions, picks) => {
+    const coverage = questions.find((question) => question.topic === "coverage");
+    return coverage && picksOf(picks, coverage).length === 0 ? "Pick at least one area to cover." : null;
+  };
+  var resolveCalls = (calls, dropped, set) => {
+    const shown = [];
+    let lost = dropped;
+    for (const call of calls) {
+      const question = set.roundTwo.find((entry) => entry.topic === call.topic);
+      if (!question || shown.length >= SYSTEM_ASK_CALLS_MAX) lost += 1;
+      else shown.push({ question, why: call.why, proposed: call.proposed });
+    }
+    return { calls: shown, dropped: lost };
+  };
+  var roundTwoRead = (detail) => {
+    if (detail === null) return { phase: "gone", name: null };
+    const name = detail.name.trim() === "" ? null : detail.name;
+    return { phase: detail.build !== null && detail.build.round === 2 ? "form" : "stale", name };
+  };
+  var roundTwoSub = (name) => name === null ? "Round 2 of 2" : `${clipText(name, 60)} \xB7 Round 2 of 2`;
+  var droppedLine = (count) => count <= 0 ? null : count === 1 ? "1 question couldn\u2019t be shown; answer it in the chat." : `${count} questions couldn\u2019t be shown; answer them in the chat.`;
+  var isCustom = (picks, question) => picksOf(picks, question).includes("custom");
+  var CUSTOM_LINE = "Say what you want in the note below.";
+  var FIELD = /^[a-z0-9_,-]+$/;
+  var markerLine = (fields) => `[SystemAsk ${fields.filter(([key, value]) => FIELD.test(key) && FIELD.test(value)).map(([key, value]) => `${key}=${value}`).join(" ")}]`;
+  var cleanNote = (note2) => note2.replace(/\r\n?/g, "\n").replace(/\[SystemAsk/gi, "(SystemAsk").trim();
+  var composeAnswer = (sentence, marker, note2 = "") => {
+    const words = cleanNote(note2);
+    const head = `${sentence}
+`;
+    const room = GUEST_BLOCK_ANSWER_MAX - head.length - marker.length - 1 - "Note: ".length - 1;
+    const kept = words === "" || room <= 0 ? "" : Array.from(words).slice(0, room).join("");
+    return `${head}${kept === "" ? "" : `Note: ${kept}
+`}${marker}`;
+  };
+  var csv = (values) => values.join(",");
+  var withHome = (picks, hasProject) => hasProject ? picks : { ...picks, ...NO_PROJECT_PICKS };
+  var roundOneAnswer = (ticket, set, picksNow, hasProject, note2) => {
+    const picks = withHome(picksNow, hasProject);
+    const parts = [];
+    const fields = [["ticket", ticket], ["round", "1"]];
+    for (const question of set.roundOne) {
+      const chosen = picksOf(picks, question);
+      fields.push([question.topic, csv(chosen)]);
+      if (question.topic === "coverage") parts.push(coverageText(question, chosen));
+      else if (question.topic === "dark") parts.push(darkText(question, chosen));
+      else if (hasProject || !PROJECT_TOPICS.includes(question.topic)) parts.push(chosen.map((choice) => optionLabel(question, choice)).join(", "));
+    }
+    const lead = hasProject ? "" : "no project folder, so the system lives in Design Chamber; ";
+    return composeAnswer(`Round one: ${lead}${parts.filter((part) => part !== "").join("; ")}.`, markerLine(fields), note2);
+  };
+  var roundTwoAnswer = (systemId, calls, picks, note2) => {
+    const fields = [["system", systemId], ["round", "2"]];
+    const parts = calls.map(({ question }) => {
+      const chosen = picksOf(picks, question);
+      fields.push([question.topic, csv(chosen)]);
+      const text = chosen.map((choice) => optionLabel(question, choice)).join(", ");
+      return `${question.label}: ${text}${chosen.includes("custom") ? " (see my note)" : ""}`;
+    });
+    return composeAnswer(`Round two: ${parts.join("; ")}.`, markerLine(fields), note2);
+  };
+  var PART_LABELS = {
+    "system-files": "System files",
+    "token-fixes": "Token fixes",
+    docs: "Docs",
+    "living-page": "Living page"
+  };
+  var MODE_LABEL = { fix: "Fix tokens, then document", describe: "Describe only" };
+  var isCurrent = (view2) => view2 !== null && view2.state === "current";
+  var proposalStateSentence = (view2) => {
+    switch (view2.state) {
+      case "current":
+        return null;
+      case "superseded":
+        return "A newer proposal replaced this one.";
+      case "rewritten":
+        return "The files changed after this proposal was written. Ask the agent for a new one.";
+      case "approved":
+        return "This proposal was already approved.";
+      case "declined":
+        return "This proposal was already declined.";
+      case "unknown":
+        return "Design Chamber can\u2019t find this proposal. It may have been cleared.";
+      case "unreadable":
+        return view2.sentence;
+    }
+  };
+  var partCountText = (part) => `${part.files.length} ${part.files.length === 1 ? "file" : "files"}`;
+  var partStat = (part) => {
+    const added = part.files.reduce((sum, file) => sum + file.added, 0);
+    const removed = part.files.reduce((sum, file) => sum + file.removed, 0);
+    return `${partCountText(part)} \xB7 +${added} \u2212${removed}`;
+  };
+  var partLabel = (name) => name in PART_LABELS ? PART_LABELS[name] : name;
+  var CHANGE_WORD = { create: "Create", modify: "Change", delete: "Delete" };
+  var fileRowText = (file) => `${file.path} \xB7 ${CHANGE_WORD[file.change]} \xB7 +${file.added} \u2212${file.removed}`;
+  var patchView = (file) => {
+    if (file.patch !== null && file.patch !== "") return { kind: "patch", text: file.patch };
+    if (file.patchOmitted) return { kind: "sentence", text: "This patch was too long to show here. The file is in the proposal folder." };
+    if (file.change === "create") return { kind: "sentence", text: "Created from the proposal. See the preview." };
+    return { kind: "sentence", text: file.summary === "" ? "No patch was provided for this file." : file.summary };
+  };
+  var unlistedUses = (part) => {
+    const unlisted = part.files.filter((file) => file.usages !== null && !file.usages.listed);
+    if (unlisted.length === 0) return null;
+    return { uses: unlisted.reduce((sum, file) => sum + (file.usages?.count ?? 0), 0), files: unlisted.length };
+  };
+  var usesLine = (uses) => `${uses.uses} ${uses.uses === 1 ? "use" : "uses"} in ${uses.files} ${uses.files === 1 ? "file" : "files"}. Listed in the chat.`;
+  var listedFiles = (part) => part.files.filter((file) => file.usages === null || file.usages.listed);
+  var previewButtons = (view2) => {
+    const { preview, proposal } = view2;
+    const repo = proposal.home.kind === "repo";
+    const page = preview.livingPage;
+    return {
+      livingPage: { shown: repo && page !== "none", enabled: page === "ready" },
+      board: { shown: preview.board, enabled: preview.board },
+      sentence: page === "generating" ? preview.sentence ?? "Design Chamber is drawing the preview\u2026" : page === "failed" ? preview.sentence ?? "The preview couldn\u2019t be drawn." : preview.sentence
+    };
+  };
+  var selectedParts = (view2, on) => view2.proposal.parts.filter((part) => on.has(part.name)).map((part) => part.name);
+  var SHA16 = /^[0-9a-f]{16}$/;
+  var approveView = (view2, on, askedId, busy = false) => {
+    if (view2 === null) return { enabled: false, label: "Approve", reason: LOADING_PROPOSAL };
+    if (!isCurrent(view2)) return { enabled: false, label: "Approve", reason: proposalStateSentence(view2) };
+    const total = view2.proposal.parts.length;
+    const count = selectedParts(view2, on).length;
+    const label = total <= 1 ? "Approve" : count === total ? `Approve all ${total} parts` : `Approve ${count} of ${total} parts`;
+    if (view2.proposal.id !== askedId) return { enabled: false, label, reason: "Design Chamber showed a different proposal than this card names. Ask the agent for a new one." };
+    if (!SHA16.test(view2.sha16)) return { enabled: false, label, reason: "Design Chamber couldn\u2019t check this proposal against its files. Ask the agent for a new one." };
+    if (view2.proposal.problems.length > 0) return { enabled: false, label, reason: "This proposal has problems, so it can\u2019t be approved. Ask the agent to fix them." };
+    if (total === 0) return { enabled: false, label, reason: "This proposal has nothing in it to approve." };
+    if (count === 0) return { enabled: false, label, reason: "Turn on at least one part to approve." };
+    return { enabled: !busy, label, reason: null };
+  };
+  var approveAnswer = (systemId, view2, on) => {
+    const names = view2.proposal.parts.map((part) => part.name);
+    const chosen = names.filter((name) => on.has(name));
+    const skipped = names.filter((name) => !on.has(name));
+    const lower = (list) => list.map((name) => partLabel(name).toLowerCase()).join(", ");
+    const sentence = `Approve proposal ${view2.proposal.id}: ${lower(chosen)}${skipped.length > 0 ? `; not ${lower(skipped)}` : ""}.`;
+    const fields = [["system", systemId], ["approve", view2.proposal.id], ["sha", view2.sha16], ["parts", csv(chosen)]];
+    if (skipped.length > 0) fields.push(["skipped", csv(skipped)]);
+    return composeAnswer(sentence, markerLine(fields));
+  };
+  var describeAnswer = (systemId, proposalId) => composeAnswer(`Decline proposal ${proposalId}. Describe only instead.`, markerLine([["system", systemId], ["decline", proposalId], ["then", "describe"]]));
+  var stopAnswer = (systemId, name, proposalId) => composeAnswer(`Stop building ${clipText(name, 60)}. Design Chamber removed the draft.`, markerLine([["system", systemId], ["decline", proposalId], ["then", "stop"]]));
+  var UNDO_SLACK_MS = 50;
+  var undoWindow = (until, now) => Number.isFinite(until) && now < until ? { open: true, repaintIn: until - now + UNDO_SLACK_MS } : { open: false, repaintIn: 0 };
+  var describeOffered = (view2) => isCurrent(view2) && view2.proposal.mode === "fix";
+  var systemName = (detailName, systemId) => detailName !== null && detailName.trim() !== "" ? detailName : systemId;
+  var diffTitle = (view2) => {
+    const { home, mode } = view2.proposal;
+    return {
+      target: home.kind === "repo" ? `Proposed changes to ${home.label}` : "Proposed changes in Design Chamber",
+      mode: mode === "none" ? null : MODE_LABEL[mode]
+    };
+  };
+  var parseMarker = (text) => {
+    if (text === null) return null;
+    const found = [...text.matchAll(/\[SystemAsk ([^\]\n]*)\]/g)].at(-1);
+    if (!found) return null;
+    const fields = {};
+    for (const entry of (found[1] ?? "").split(" ")) {
+      const at = entry.indexOf("=");
+      if (at <= 0) continue;
+      const key = entry.slice(0, at);
+      const value = entry.slice(at + 1);
+      if (FIELD.test(key) && FIELD.test(value)) fields[key] = value;
+    }
+    return Object.keys(fields).length === 0 ? null : fields;
+  };
+  var PART_NAMES = Object.keys(PART_LABELS);
+  var split = (value) => value === void 0 || value === "" ? [] : value.split(",");
+  var answeredView = (answered, set) => {
+    const fields = parseMarker(answered);
+    const base = { kind: "other", headline: "You answered in the chat:", lines: [], verbatim: clipText(answered, 400), picks: {}, parts: [] };
+    if (fields === null) return base;
+    const approve = fields.approve;
+    const decline = fields.decline;
+    if (approve !== void 0) {
+      const parts = split(fields.parts).filter((name) => PART_NAMES.includes(name));
+      const skipped = split(fields.skipped).filter((name) => PART_NAMES.includes(name));
+      const count = parts.length;
+      return {
+        ...base,
+        kind: "approve",
+        headline: skipped.length === 0 && count > 1 ? `You approved all ${count} parts of proposal ${approve}.` : `You approved ${count} ${count === 1 ? "part" : "parts"} of proposal ${approve}.`,
+        lines: skipped.length === 0 ? [] : [`Skipped: ${skipped.map(partLabel).join(", ")}.`],
+        verbatim: null,
+        parts
+      };
+    }
+    if (decline !== void 0) {
+      return fields.then === "stop" ? { ...base, kind: "stop", headline: "You stopped this build.", verbatim: null } : { ...base, kind: "describe", headline: `You declined proposal ${decline}: describe only instead.`, verbatim: null };
+    }
+    if (fields.round === "1" || fields.round === "2") {
+      const questions = fields.round === "1" ? set.roundOne : set.roundTwo;
+      const picks = {};
+      const lines = [];
+      for (const question of questions) {
+        if (fields[question.topic] === void 0) continue;
+        const chosen = split(fields[question.topic]);
+        picks[question.topic] = chosen;
+        lines.push(chosen.map((choice) => optionLabel(question, choice)).join(", "));
+      }
+      return {
+        ...base,
+        kind: fields.round === "1" ? "round-1" : "round-2",
+        headline: fields.round === "1" ? "You answered round one." : "You answered round two.",
+        lines: lines.filter((line) => line !== ""),
+        verbatim: null,
+        picks
+      };
+    }
+    return base;
+  };
+  var LOADING_PROPOSAL = "Loading the proposal\u2026";
+  var SERVICE_DOWN = "Design Chamber isn\u2019t running. Open it from the rail, then try again.";
+  var REFUSED_ANSWER = "Couldn\u2019t send your answer. Type it in the chat instead.";
+  var HOST_CANNOT_TAKE = "Reply in the chat to answer.";
+  var SYSTEM_GONE = "This design system is no longer in your Designs folder. Reply in the chat if the agent still needs something.";
+  var OUT_OF_DATE = "This question is out of date. Reply in the chat if the agent still needs something.";
+  var TICKET_EXPIRED = "This build has expired. Run /design-system again to start over.";
+
+  // src/ui/blocks/system-ask-shared.ts
+  var counter = 0;
+  var uid = (prefix) => `${prefix}${counter += 1}`;
+  var frame = (options) => {
+    const titleId = uid("dcb-ask-title");
+    const body = h("div", { class: "dcb-ask-body" });
+    const foot = options.foot ? h("footer", { class: "dcb-ask-foot" }) : null;
+    const el2 = h(
+      "section",
+      { class: "dcb-block dcb-ask", "aria-labelledby": titleId },
+      h(
+        "header",
+        { class: "dcb-ask-head" },
+        h("span", { class: "dcb-ask-icon" }, icon2(options.icon, 16)),
+        h("div", { class: "dcb-ask-titles" }, h("h2", { class: "dcb-ask-title", id: titleId }, options.title), options.sub ? h("p", { class: "dcb-ask-sub" }, options.sub) : null),
+        options.side ? h("span", { class: "dcb-ask-side" }, options.side) : null
+      ),
+      body,
+      foot
+    );
+    return { el: el2, body, foot };
+  };
+  var sendAnswer = (ctx2, text) => ctx2.host.answerBlock(text).then(
+    () => "sent",
+    (error) => isHostError(error, "HOST_REJECTED") ? "host-rejected" : "refused"
+  );
+  var refusedLine = () => h("p", { class: "dcb-ask-problem", role: "alert" }, REFUSED_ANSWER);
+  var cannotTake = (ctx2, text) => {
+    const slot = h("span", { class: "dcb-ask-btn" });
+    let handle = null;
+    const status = h("p", { class: "dcb-ask-reason", role: "status" }, HOST_CANNOT_TAKE);
+    handle = mountButton(slot, {
+      label: "Copy my answer",
+      variant: "outline",
+      size: "sm",
+      onClick: () => {
+        ctx2.host.writeClipboard(text).then(
+          () => ctx2.toast("success", "Copied. Paste it in the chat."),
+          () => ctx2.toast("error", "Couldn\u2019t copy. Select the answer and copy it yourself.")
+        );
+      }
+    });
+    return { el: h("div", { class: "dcb-ask-cannot" }, status, slot), dispose: () => handle?.dispose() };
+  };
+  var startRefetch = (tick, ms) => {
+    let busy = false;
+    const run = () => {
+      if (busy || document.visibilityState === "hidden") return;
+      busy = true;
+      tick().catch((error) => console.warn("Design Chamber: refetch failed", error)).finally(() => {
+        busy = false;
+      });
+    };
+    const timer = setInterval(run, ms);
+    window.addEventListener("focus", run);
+    document.addEventListener("visibilitychange", run);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", run);
+      document.removeEventListener("visibilitychange", run);
+    };
+  };
+  var primaryOf = (slot) => {
+    const button2 = slot.querySelector("button");
+    button2?.setAttribute("data-emphasis", "primary");
+    return button2;
+  };
+
+  // src/ui/blocks/system-ask-diff.ts
+  var UNDO_LINE = "Design Chamber brought the build back. Tell the agent to carry on.";
+  var mountDiff = (root2, ctx2, ask, set, answered) => {
+    let load = answered === null ? "loading" : "ready";
+    let view2 = null;
+    let viewKey = "";
+    let name = null;
+    let nameTried = false;
+    let on = /* @__PURE__ */ new Set();
+    let partsKnown = false;
+    const open = /* @__PURE__ */ new Set();
+    let declining = false;
+    let busy = false;
+    let refused = false;
+    let stopError = null;
+    let cannot = null;
+    let answeredText = answered;
+    let stoppedText = null;
+    let undo = null;
+    let undone = false;
+    let undoing = false;
+    let undoButton = null;
+    let undoTimer = null;
+    let owned = [];
+    let footOwned = [];
+    let footEl = null;
+    let bodyEl = null;
+    let stopRefetch = null;
+    let disposed = false;
+    const title = () => systemName(name, ask.systemId);
+    const current = () => isCurrent(view2) ? view2 : null;
+    const slotButton = (label, variant, onClick, state = {}) => {
+      const slot = h("span", { class: "dcb-ask-btn" });
+      const handle = mountButton(slot, { label, variant, size: "default", disabled: state.disabled === true, loading: state.loading === true, onClick });
+      footOwned.push(handle);
+      if (state.primary) primaryOf(slot);
+      return slot;
+    };
+    const submit = (text) => {
+      if (busy || cannot !== null || answeredText !== null) return;
+      const sent = sendAnswer(ctx2, text);
+      busy = true;
+      refused = false;
+      paintFoot();
+      void sent.then((outcome) => {
+        busy = false;
+        if (outcome === "sent") {
+          answeredText = text;
+          stopRefetch?.();
+          stopRefetch = null;
+          renderAll();
+        } else if (outcome === "host-rejected") {
+          cannot = text;
+          renderAll();
+        } else {
+          refused = true;
+          paintFoot();
+        }
+      });
+    };
+    const stop = async (proposal) => {
+      if (busy || cannot !== null || answeredText !== null) return;
+      busy = true;
+      stopError = null;
+      refused = false;
+      paintFoot();
+      try {
+        const result = await ctx2.client.stopBuild(ask.systemId, proposal.proposal.id);
+        undo = { id: result.undoId, until: Date.parse(result.until) };
+        scheduleUndoExpiry();
+      } catch (error) {
+        busy = false;
+        stopError = isServiceError(error, "conflict") ? error.message : "Couldn\u2019t stop the build. Try again, or tell the agent in the chat.";
+        paintFoot();
+        return;
+      }
+      const text = stopAnswer(ask.systemId, title(), proposal.proposal.id);
+      const outcome = await sendAnswer(ctx2, text);
+      busy = false;
+      stopRefetch?.();
+      stopRefetch = null;
+      if (outcome === "sent") answeredText = text;
+      else stoppedText = text;
+      renderAll();
+    };
+    const clearUndoTimer = () => {
+      if (undoTimer !== null) clearTimeout(undoTimer);
+      undoTimer = null;
+    };
+    const scheduleUndoExpiry = () => {
+      clearUndoTimer();
+      if (undo === null || undone) return;
+      const offer = undoWindow(undo.until, Date.now());
+      if (!offer.open) return;
+      undoTimer = setTimeout(() => {
+        undoTimer = null;
+        renderAll();
+      }, offer.repaintIn);
+    };
+    const undoStop = () => {
+      const pending = undo;
+      if (pending === null || undone || undoing) return;
+      undoing = true;
+      undoButton?.update({ disabled: true, loading: true });
+      ctx2.client.undoStop(pending.id).then(
+        () => {
+          undoing = false;
+          undone = true;
+          clearUndoTimer();
+          renderAll();
+        },
+        () => {
+          undoing = false;
+          undoButton?.update({ disabled: false, loading: false });
+          ctx2.toast("error", "Couldn\u2019t bring the build back. It may have been too long.");
+        }
+      );
+    };
+    const paintFoot = () => {
+      if (!footEl) return;
+      for (const handle of footOwned) handle.dispose();
+      footOwned = [];
+      const proposal = current();
+      const approve = approveView(view2, on, ask.proposalId, busy);
+      const reason = proposal === null ? null : approve.reason;
+      if (cannot !== null) {
+        const fallback = cannotTake(ctx2, cannot);
+        footOwned.push(fallback);
+        footEl.replaceChildren(fallback.el);
+        return;
+      }
+      const lines = [
+        reason !== null && !declining ? h("p", { class: "dcb-ask-reason", role: "status" }, reason) : null,
+        stopError !== null ? h("p", { class: "dcb-ask-problem", role: "alert" }, stopError) : null,
+        refused ? refusedLine() : null
+      ];
+      const actions = declining && proposal !== null ? [
+        describeOffered(proposal) ? slotButton("Describe only instead", "outline", () => submit(describeAnswer(ask.systemId, proposal.proposal.id)), { disabled: busy }) : null,
+        slotButton("Stop", "destructive", () => void stop(proposal), { disabled: busy }),
+        slotButton("Back", "outline", () => {
+          declining = false;
+          stopError = null;
+          paintFoot();
+          footEl?.querySelector("button")?.focus();
+        }, { disabled: busy })
+      ] : [
+        slotButton("Decline", "outline", () => {
+          declining = true;
+          refused = false;
+          paintFoot();
+          footEl?.querySelector("button")?.focus();
+        }, { disabled: proposal === null || busy }),
+        slotButton(approve.label, "default", () => {
+          const now = current();
+          if (now !== null && approveView(now, on, ask.proposalId).enabled) submit(approveAnswer(ask.systemId, now, on));
+        }, { disabled: !approve.enabled, loading: busy && !declining, primary: true })
+      ];
+      footEl.replaceChildren(...lines.filter((line) => line !== null), h("div", { class: "dcb-ask-actions" }, ...actions.filter((el2) => el2 !== null)));
+    };
+    const own = (handle) => {
+      owned.push(handle);
+      return handle;
+    };
+    const banner = (tone2, text, action) => {
+      const slot = h("div", { class: "dcb-ask-banner" });
+      own(mountBanner(slot, { tone: tone2, title: text, action }));
+      return slot;
+    };
+    const partBlock = (proposal, index) => {
+      const part = proposal.proposal.parts[index];
+      if (!part) return h("div");
+      const switchSlot = h("div", { class: "dcb-part-switch" });
+      const handle = own(
+        mountSwitch(switchSlot, {
+          label: PART_LABELS[part.name],
+          description: partStat(part),
+          checked: on.has(part.name),
+          disabled: cannot !== null,
+          onChange: (checked) => {
+            if (checked) on.add(part.name);
+            else on.delete(part.name);
+            handle.update({ checked });
+            paintFoot();
+          }
+        })
+      );
+      const list = h("ul", { class: "dcb-files" });
+      for (const file of listedFiles(part)) {
+        const patchId = uid("dcb-patch");
+        const patch = patchView(file);
+        const panel = h("div", { class: "dcb-patch", id: patchId, hidden: !open.has(`${part.name}:${file.path}`) }, patch.kind === "patch" ? h("pre", { class: "dcb-patch-code", tabindex: 0 }, patch.text) : h("p", { class: "dcb-patch-note" }, patch.text));
+        const button2 = h(
+          "button",
+          { type: "button", class: "dcb-file", "aria-expanded": String(!panel.hidden), "aria-controls": patchId },
+          h("span", { class: "dcb-file-chev" }, icon2("chevron", 14)),
+          h("span", { class: "dcb-file-text" }, fileRowText(file))
+        );
+        button2.addEventListener("click", () => {
+          const key = `${part.name}:${file.path}`;
+          if (open.has(key)) open.delete(key);
+          else open.add(key);
+          panel.hidden = !open.has(key);
+          button2.setAttribute("aria-expanded", String(open.has(key)));
+        });
+        list.append(h("li", { class: "dcb-file-item" }, button2, panel));
+      }
+      const uses = unlistedUses(part);
+      if (uses) list.append(h("li", { class: "dcb-uses" }, usesLine(uses)));
+      return h("div", { class: "dcb-part" }, switchSlot, list.childElementCount > 0 ? list : null);
+    };
+    const previewRow = (proposal) => {
+      const buttons = previewButtons(proposal);
+      if (!buttons.livingPage.shown && !buttons.board.shown && buttons.sentence === null) return null;
+      const row = h("div", { class: "dcb-preview-row" });
+      const add = (label, which, enabled) => {
+        const slot = h("span", { class: "dcb-ask-btn" });
+        own(
+          mountButton(slot, {
+            label,
+            variant: "outline",
+            size: "sm",
+            disabled: !enabled,
+            onClick: () => {
+              ctx2.openSystemPreview(ask.systemId, which).then(
+                (outcome) => {
+                  if (outcome === "opened") ctx2.toast("info", which === "living-page-preview" ? "The living page preview is open in the rail." : "The board is open in the rail.");
+                  else if (outcome === "gone") ctx2.toast("error", "This design system is no longer in your Designs folder.");
+                  else ctx2.toast("error", "Open Design Chamber from the rail to see the preview.");
+                },
+                () => ctx2.toast("error", "Couldn\u2019t open the preview. Open Design Chamber from the rail.")
+              );
+            }
+          })
+        );
+        row.append(slot);
+      };
+      if (buttons.livingPage.shown) add("Preview living page", "living-page-preview", buttons.livingPage.enabled);
+      if (buttons.board.shown) add("Open the board", "board-preview", buttons.board.enabled);
+      return h("div", { class: "dcb-preview-wrap" }, row, buttons.sentence === null ? null : h("p", { class: "dcb-ask-fact", role: "status" }, buttons.sentence));
+    };
+    const proposalBody = (body, proposal) => {
+      const { proposal: p } = proposal;
+      const mode = diffTitle(proposal).mode;
+      append(
+        body,
+        p.summary === "" ? null : h("p", { class: "dcb-ask-summary" }, p.summary),
+        h("dl", { class: "dcb-meta" }, mode === null ? null : h("dt", null, "Mode"), mode === null ? null : h("dd", null, mode), h("dt", null, "Way back"), h("dd", null, p.wayBack.text))
+      );
+      if (p.problems.length > 0) {
+        const list = h("ul", { class: "dcb-problems" }, ...p.problems.map((problem) => h("li", null, problem)));
+        body.append(h("div", { class: "dcb-ask-banner" }, banner("warning", "This proposal has problems."), list));
+      }
+      body.append(h("div", { class: "dcb-parts" }, ...p.parts.map((_, index) => partBlock(proposal, index))));
+      const previews = previewRow(proposal);
+      if (previews) body.append(previews);
+    };
+    const answeredBody = (body, text) => {
+      const done = answeredView(text, set);
+      body.append(h("p", { class: "dcb-ask-done" }, icon2("check", 16), done.headline));
+      if (done.verbatim !== null) body.append(h("p", { class: "dcb-ask-quote" }, done.verbatim));
+      for (const line of done.lines) body.append(h("p", { class: "dcb-ask-fact" }, line));
+      if (done.kind === "stop") undoBody(body);
+    };
+    const undoBody = (body) => {
+      if (undone) {
+        body.append(h("p", { class: "dcb-ask-fact", role: "status" }, UNDO_LINE));
+        return;
+      }
+      if (undo === null || !undoWindow(undo.until, Date.now()).open) return;
+      const slot = h("span", { class: "dcb-ask-btn" });
+      undoButton = own(mountButton(slot, { label: "Undo", variant: "outline", size: "sm", disabled: undoing, loading: undoing, onClick: undoStop }));
+      body.append(h("div", { class: "dcb-ask-actions" }, slot));
+    };
+    const stoppedBody = (body, text) => {
+      body.append(h("p", { class: "dcb-ask-done" }, icon2("check", 16), "You stopped this build."));
+      body.append(h("p", { class: "dcb-ask-fact" }, "Design Chamber removed the draft, but the chat did not take the message."));
+      const fallback = cannotTake(ctx2, text);
+      own(fallback);
+      body.append(fallback.el);
+      undoBody(body);
+    };
+    const loadingBody = (body) => {
+      const row = h("p", { class: "dcb-ask-loading", role: "status" });
+      const spin = h("span", { class: "dcb-ask-spin" });
+      mountSpinner(spin, { size: "sm" });
+      row.append(spin, LOADING_PROPOSAL);
+      body.append(row);
+    };
+    const renderAll = () => {
+      if (disposed) return;
+      const scroll = bodyEl?.scrollTop ?? 0;
+      for (const handle of owned) handle.dispose();
+      for (const handle of footOwned) handle.dispose();
+      owned = [];
+      footOwned = [];
+      undoButton = null;
+      const proposal = current();
+      const settled = answeredText !== null || stoppedText !== null;
+      const head = proposal ? diffTitle(proposal) : { target: "Proposed changes", mode: null };
+      const f = frame({
+        icon: "layers",
+        title: settled ? "Proposed changes" : head.target,
+        sub: title(),
+        side: ask.proposalId,
+        foot: !settled && load === "ready" && proposal !== null
+      });
+      bodyEl = f.body;
+      footEl = f.foot;
+      if (answeredText !== null) answeredBody(f.body, answeredText);
+      else if (stoppedText !== null) stoppedBody(f.body, stoppedText);
+      else if (load === "loading") loadingBody(f.body);
+      else if (load === "down") f.body.append(banner("warning", SERVICE_DOWN, { label: "Try again", onClick: () => void readProposal(true) }));
+      else if (proposal) proposalBody(f.body, proposal);
+      else if (view2 !== null) f.body.append(banner("info", proposalStateSentence(view2) ?? ""));
+      root2.replaceChildren(f.el);
+      f.body.scrollTop = scroll;
+      paintFoot();
+    };
+    const readProposal = async (retry = false) => {
+      if (answeredText !== null || stoppedText !== null || busy) return;
+      if (retry && load === "down") {
+        load = "loading";
+        renderAll();
+      }
+      try {
+        const [next, detail] = await Promise.all([
+          ctx2.client.getProposal(ask.systemId, ask.proposalId),
+          nameTried ? Promise.resolve(name) : ctx2.client.call("GET /systems/:id", { params: { id: ask.systemId } }).then((system) => system.name, () => null)
+        ]);
+        if (answeredText !== null || stoppedText !== null || busy || disposed) return;
+        const key = JSON.stringify(next);
+        const changedName = detail !== name;
+        name = detail;
+        nameTried = true;
+        if (next.state === "current" && !partsKnown) {
+          on = new Set(next.proposal.parts.map((part) => part.name));
+          partsKnown = true;
+        }
+        if (load === "ready" && key === viewKey && !changedName) return;
+        load = "ready";
+        view2 = next;
+        viewKey = key;
+        renderAll();
+      } catch (error) {
+        if (isServiceError(error, "not-found")) {
+          if (answeredText !== null || stoppedText !== null || busy || disposed) return;
+          const gone = { state: "unknown" };
+          const goneKey = JSON.stringify(gone);
+          if (load === "ready" && viewKey === goneKey) return;
+          load = "ready";
+          view2 = gone;
+          viewKey = goneKey;
+          declining = false;
+          stopError = null;
+          renderAll();
+          return;
+        }
+        if (load === "ready" && view2 !== null) return;
+        if (!isServiceError(error)) console.warn("Design Chamber: reading the proposal failed", error);
+        if (load === "down") return;
+        load = "down";
+        renderAll();
+      }
+    };
+    renderAll();
+    if (answered === null) {
+      void readProposal();
+      stopRefetch = startRefetch(() => readProposal(), SYSTEM_ASK_POLL_MS);
+    }
+    return {
+      update: (next) => {
+        if (next === null || next === answeredText) return;
+        answeredText = next;
+        cannot = null;
+        stopRefetch?.();
+        stopRefetch = null;
+        renderAll();
+      },
+      dispose: () => {
+        disposed = true;
+        clearUndoTimer();
+        stopRefetch?.();
+        for (const handle of owned) handle.dispose();
+        for (const handle of footOwned) handle.dispose();
+        owned = [];
+        footOwned = [];
+        root2.replaceChildren();
+      }
+    };
+  };
+
+  // src/ui/blocks/system-ask-interview.ts
+  var NOTHING_TO_ANSWER = "There is nothing to answer here. Reply in the chat.";
+  var mountInterview = (root2, ctx2, ask, set, answered) => {
+    const roundOne = ask.kind === "interview-1";
+    const two = ask.kind === "interview-2" ? resolveCalls(ask.calls, ask.dropped, set) : null;
+    const blockId = uid("dcb-i");
+    let phase = "loading";
+    let systemNameNow = null;
+    let disposed = false;
+    let hasProject = true;
+    let picks = defaultPicks(roundOne ? set.roundOne : (two?.calls ?? []).map((call) => call.question));
+    let note2 = "";
+    let sending = false;
+    let refused = false;
+    let cannot = null;
+    let answeredText = answered;
+    let owned = [];
+    let stopRefetch = null;
+    let goHandle = null;
+    let reasonEl = null;
+    let refusedEl = null;
+    let inputs = [];
+    let customLines = [];
+    let noteField = null;
+    const shown = () => roundOne ? roundOneQuestions(set, hasProject) : (two?.calls ?? []).map((call) => call.question);
+    const own = (handle) => {
+      owned.push(handle);
+      return handle;
+    };
+    const paint = () => {
+      const reason = roundOne ? roundOneBlock(shown(), picks) : null;
+      goHandle?.update({ disabled: reason !== null || sending, loading: sending });
+      if (reasonEl) {
+        reasonEl.textContent = reason ?? "";
+        reasonEl.hidden = reason === null;
+      }
+      if (refusedEl) refusedEl.hidden = !refused;
+      for (const input of inputs) input.disabled = sending || cannot !== null;
+      noteField?.update({ disabled: sending || cannot !== null });
+      for (const line of customLines) line.el.hidden = !isCustom(picks, line.question);
+    };
+    const questionBlock = (question, call) => {
+      const labelId = uid(`${blockId}-q`);
+      const group = h(
+        "div",
+        { class: "dcb-q", role: question.multiple ? "group" : "radiogroup", "aria-labelledby": labelId },
+        h("p", { class: "dcb-q-label", id: labelId }, question.label)
+      );
+      if (call && (call.why !== "" || call.proposed !== "")) {
+        group.append(
+          h(
+            "div",
+            { class: "dcb-q-agent" },
+            call.why === "" ? null : h("p", null, h("span", { class: "dcb-q-agent-k" }, "From the agent: "), call.why),
+            call.proposed === "" ? null : h("p", null, h("span", { class: "dcb-q-agent-k" }, "Proposed: "), call.proposed)
+          )
+        );
+      }
+      const name = `${blockId}-${question.topic}`;
+      for (const option of question.options) {
+        const input = h("input", { class: "dcb-opt-input", type: question.multiple ? "checkbox" : "radio", name, value: option.choice });
+        input.checked = (picks[question.topic] ?? []).includes(option.choice);
+        input.addEventListener("change", () => {
+          picks = withPick(picks, question, option.choice, question.multiple ? input.checked : true);
+          paint();
+        });
+        inputs.push(input);
+        group.append(
+          h(
+            "label",
+            { class: "dcb-opt" },
+            input,
+            h(
+              "span",
+              { class: "dcb-opt-text" },
+              h("span", { class: "dcb-opt-name", "data-recommended": option.recommended ? "" : null }, option.label, option.recommended ? h("span", { class: "dcb-sr" }, " (recommended)") : null),
+              option.why === "" ? null : h("span", { class: "dcb-opt-why" }, option.why)
+            )
+          )
+        );
+      }
+      if (question.options.some((option) => option.choice === "custom")) {
+        const line = h("p", { class: "dcb-q-custom", role: "status" }, CUSTOM_LINE);
+        customLines.push({ el: line, question });
+        group.append(line);
+      }
+      return group;
+    };
+    const go = () => {
+      const reason = roundOne ? roundOneBlock(shown(), picks) : null;
+      if (sending || reason !== null || cannot !== null || answeredText !== null) return;
+      const text = roundOne ? roundOneAnswer(ask.ticket, set, picks, hasProject, note2) : roundTwoAnswer(ask.systemId, two?.calls ?? [], picks, note2);
+      const sent = sendAnswer(ctx2, text);
+      sending = true;
+      refused = false;
+      paint();
+      void sent.then((outcome) => {
+        sending = false;
+        if (outcome === "sent") {
+          if (answeredText === null) answeredText = text;
+          stopRefetch?.();
+          stopRefetch = null;
+          render();
+        } else if (outcome === "host-rejected") {
+          cannot = text;
+          render();
+        } else {
+          refused = true;
+          paint();
+        }
+      });
+    };
+    const formBody = (body, foot) => {
+      inputs = [];
+      customLines = [];
+      const calls = two?.calls ?? [];
+      const dropped = two ? droppedLine(two.dropped) : null;
+      if (!roundOne && calls.length === 0) {
+        body.append(h("p", { class: "dcb-ask-fact" }, dropped ?? NOTHING_TO_ANSWER));
+        foot.remove();
+        return;
+      }
+      if (dropped) body.append(h("p", { class: "dcb-ask-fact" }, icon2("alert", 14), dropped));
+      if (roundOne && !hasProject) body.append(h("p", { class: "dcb-ask-fact" }, icon2("folder", 14), NO_PROJECT_LINE));
+      if (roundOne) for (const question of shown()) body.append(questionBlock(question, null));
+      else for (const call of calls) body.append(questionBlock(call.question, call));
+      const noteSlot = h("div", { class: "dcb-ask-note" });
+      body.append(noteSlot);
+      noteField = own(
+        mountTextField(noteSlot, {
+          label: "Add a note (optional)",
+          value: note2,
+          multiline: true,
+          rows: 2,
+          placeholder: "Anything the agent should know",
+          onChange: (value) => {
+            note2 = value;
+          }
+        })
+      );
+      reasonEl = h("p", { class: "dcb-ask-reason", role: "status" });
+      refusedEl = refusedLine();
+      refusedEl.hidden = true;
+      if (cannot !== null) {
+        const fallback = cannotTake(ctx2, cannot);
+        own(fallback);
+        foot.append(fallback.el);
+        return;
+      }
+      const slot = h("span", { class: "dcb-ask-btn" });
+      goHandle = own(mountButton(slot, { label: "Go with these", variant: "default", size: "default", onClick: go }));
+      primaryOf(slot);
+      foot.append(reasonEl, refusedEl, h("div", { class: "dcb-ask-actions" }, slot));
+    };
+    const answeredBody = (body, text) => {
+      const view2 = answeredView(text, set);
+      body.append(h("p", { class: "dcb-ask-done" }, icon2("check", 16), view2.headline));
+      if (view2.verbatim !== null) {
+        body.append(h("p", { class: "dcb-ask-quote" }, view2.verbatim));
+        return;
+      }
+      const list = h("dl", { class: "dcb-ask-picks" });
+      const questions = view2.kind === "round-1" ? set.roundOne : set.roundTwo;
+      for (const question of questions) {
+        const chosen = view2.picks[question.topic];
+        if (chosen === void 0) continue;
+        const words = chosen.map((choice) => question.options.find((option) => option.choice === choice)?.label ?? choice).join(", ");
+        list.append(h("dt", null, question.label), h("dd", null, words === "" ? "None" : words));
+      }
+      if (list.childElementCount > 0) body.append(list);
+    };
+    const phaseBody = (body) => {
+      if (phase === "loading") {
+        const row = h("p", { class: "dcb-ask-loading", role: "status" });
+        const spin = h("span", { class: "dcb-ask-spin" });
+        mountSpinner(spin, { size: "sm" });
+        row.append(spin, "Loading the question\u2026");
+        body.append(row);
+        return;
+      }
+      const slot = h("div", { class: "dcb-ask-banner" });
+      body.append(slot);
+      if (phase === "down") {
+        own(mountBanner(slot, { tone: "warning", title: SERVICE_DOWN, action: { label: "Try again", onClick: () => void read() } }));
+      } else {
+        own(mountBanner(slot, { tone: "info", title: phase === "expired" ? TICKET_EXPIRED : phase === "gone" ? SYSTEM_GONE : OUT_OF_DATE }));
+      }
+    };
+    const render = () => {
+      for (const handle of owned) handle.dispose();
+      owned = [];
+      goHandle = null;
+      reasonEl = null;
+      refusedEl = null;
+      noteField = null;
+      inputs = [];
+      customLines = [];
+      const open = answeredText === null && phase === "form";
+      const f = frame({ icon: "system", title: roundOne ? "Before I read the code" : "A few calls from the code", sub: roundOne ? "Round 1 of 2" : roundTwoSub(systemNameNow), foot: open });
+      if (answeredText !== null) answeredBody(f.body, answeredText);
+      else if (phase === "form" && f.foot) formBody(f.body, f.foot);
+      else phaseBody(f.body);
+      root2.replaceChildren(f.el);
+      paint();
+    };
+    const readTicket = async () => {
+      if (!roundOne || answeredText !== null || sending) return;
+      let next;
+      let project = hasProject;
+      try {
+        const answer = await ctx2.client.call("GET /system-builds/:ticket", { params: { ticket: ask.ticket } });
+        next = answer.state === "waiting" ? "form" : answer.state === "made" ? "stale" : "expired";
+        if (answer.state === "waiting") project = answer.project !== null;
+      } catch (error) {
+        if (phase === "form") return;
+        next = "down";
+        if (!isServiceError(error)) console.warn("Design Chamber: reading the build ticket failed", error);
+      }
+      if (disposed || answeredText !== null || sending || next === phase && project === hasProject) return;
+      phase = next;
+      hasProject = project;
+      render();
+    };
+    const readSystem = async () => {
+      if (roundOne || answeredText !== null || sending) return;
+      let next;
+      let name = systemNameNow;
+      try {
+        const detail = await ctx2.client.call("GET /systems/:id", { params: { id: ask.systemId } });
+        const result = roundTwoRead(detail);
+        next = result.phase;
+        name = result.name;
+      } catch (error) {
+        if (isServiceError(error, "not-found")) {
+          next = roundTwoRead(null).phase;
+          name = null;
+        } else {
+          if (phase !== "loading" && phase !== "down") return;
+          next = "down";
+          if (!isServiceError(error)) console.warn("Design Chamber: reading the system failed", error);
+        }
+      }
+      if (disposed || answeredText !== null || sending || next === phase && name === systemNameNow) return;
+      phase = next;
+      systemNameNow = name;
+      render();
+    };
+    const read = () => roundOne ? readTicket() : readSystem();
+    render();
+    if (answeredText === null) {
+      void read();
+      stopRefetch = startRefetch(read, SYSTEM_ASK_POLL_MS);
+    }
+    return {
+      update: (next) => {
+        if (next === null || next === answeredText) return;
+        answeredText = next;
+        stopRefetch?.();
+        stopRefetch = null;
+        render();
+      },
+      dispose: () => {
+        disposed = true;
+        stopRefetch?.();
+        for (const handle of owned) handle.dispose();
+        owned = [];
+        root2.replaceChildren();
+      }
+    };
+  };
+
+  // src/ui/blocks/system-ask.ts
+  var mountSystemAsk = (root2, ctx2, ask, set, answered) => ask.kind === "diff" ? mountDiff(root2, ctx2, ask, set, answered) : mountInterview(root2, ctx2, ask, set, answered);
+
   // src/ui/blocks/main.ts
   var root = document.querySelector("#root");
   if (!root) throw new Error("Design Chamber: #root is missing from blocks/index.html.");
   var blockRoot = root;
   var guestHost = getGuestHost();
+  var serviceClient = createServiceClient(guestHost.client);
   var ctx = {
-    client: createServiceClient(guestHost.client),
+    client: serviceClient,
     host: guestHost.client,
     toast: (kind, message) => {
       guestHost.client.toast({ kind, message, dismiss: kind === "error" }).catch((error) => console.warn("Design Chamber: toast failed", error));
-    }
+    },
+    openSystemPreview: (systemId, which) => openSystemInRail({ client: serviceClient, host: guestHost.client }, systemId, which === "living-page-preview" ? "preview" : "board")
   };
   mountSpinner(document.createElement("div")).dispose();
   guestHost.ready.subscribe((context) => {
@@ -3038,12 +4582,14 @@ ${GUEST_UI_LOOK_CSS}`;
         return null;
       }
       blockRoot.replaceChildren(
-        parsed.reason === "bad-slug" ? notice({ icon: "alert", text: "This card doesn\u2019t point to a design." }) : notice({ icon: "alert", text: "This question has no options to pick from." })
+        parsed.reason === "bad-slug" ? notice({ icon: "alert", text: "This card doesn\u2019t point to a design." }) : parsed.reason === "bad-system-ask" ? notice({ icon: "alert", text: "This question couldn\u2019t be read. Answer in the chat instead." }) : notice({ icon: "alert", text: "This question has no options to pick from." })
       );
       return null;
     }
     const { block } = parsed;
-    return block.name === "DesignCard" ? mountDesignCard(blockRoot, ctx, block.slug) : mountDirectionPick(blockRoot, ctx, block.question, block.options, call.answered);
+    if (block.name === "DesignCard") return mountDesignCard(blockRoot, ctx, block.slug);
+    if (block.name === "SystemAsk") return mountSystemAsk(blockRoot, ctx, block.ask, define_DC_SYSTEM_QUESTIONS_default, call.answered);
+    return mountDirectionPick(blockRoot, ctx, block.question, block.options, call.answered);
   };
   guestHost.client.onBlock((call) => {
     const key = JSON.stringify([call.name, call.args]);

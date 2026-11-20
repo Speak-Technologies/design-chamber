@@ -29,6 +29,17 @@ var CHECK_TOOL_SCREENS_MAX = 16;
 var RUNTIME_PATH_MAX = 4096;
 var STATUS_RECENT_MS = 7 * 864e5;
 var USER_UNDO_TTL_MS = 30 * 6e4;
+var SYSTEM_ID_PATTERN = SLUG_PATTERN;
+var SYSTEM_BYTES_MAX = 100 * 1024 * 1024;
+var SYSTEM_FONT_MAX_BYTES = 5 * 1024 * 1024;
+var SYSTEM_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+var SYSTEM_DOCUMENT_MAX_BYTES = 20 * 1024 * 1024;
+var SCAN_TTL_MS = 10 * 6e4;
+var FOLDER_UNDO_MS = 60 * 6e4;
+var SYSTEM_BUILD_TTL_MS = 7 * 864e5;
+var LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
+var LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
+var SCAN_JSON_MAX_BYTES = 2 * 1024 * 1024;
 
 // src/shared/path-compare.ts
 var foldsCase = (p, platform) => p.sep === "\\" || platform === "darwin";
@@ -49,6 +60,9 @@ var NOT_A_DESIGN_SENTENCE = "That is not a design folder name. Use the name of a
 var NOT_SCREENS_SENTENCE = "Those are not screen ids. Use the ids listed in the design.json screens, such as home or pricing.";
 var TOO_MANY_SCREENS_SENTENCE = `Check at most ${CHECK_TOOL_SCREENS_MAX} screens at a time, or leave screens out to check them all.`;
 var NOT_STATIC_SENTENCE = "static takes true or false.";
+var NOT_A_SYSTEM_SENTENCE = "That is not a design system id. Use the name of a folder in the Designs folder's _systems folder, such as acme.";
+var BOTH_SENTENCE = "Check a design or a design system, not both: give design or system.";
+var SYSTEM_SCREENS_SENTENCE = "A design system has no screens; leave screens out.";
 var SETUP_SENTENCE = "Design Chamber hasn't set up its check tool yet. Open the Design Chamber panel once, then try again.";
 var LAUNCHER_SENTENCE = "The design_check tool can't run in this setup. Run the check command from the AGENTS.md file in the Designs folder instead.";
 var CLI_MISSING_SENTENCE = "Design Chamber's check program is missing from its extension folder. Reinstall Design Chamber, then try again.";
@@ -60,9 +74,10 @@ var TOOL_DESCRIPTION = "Check a design in the Designs folder before you say it i
 var TOOL_INPUT = {
   type: "object",
   additionalProperties: true,
-  required: ["design"],
+  // One of design or system (Phase 2.5 §10.2); parseToolInput enforces it.
   properties: {
     design: { type: "string", description: "The design folder name, such as pricing-page" },
+    system: { type: "string", description: "Instead of design: a design system id, such as acme (files only)" },
     screens: { type: "array", items: { type: "string" }, description: "Canvas only: check just these screen ids" },
     static: { type: "boolean", description: "Check the files only, without a browser" }
   }
@@ -86,6 +101,13 @@ var screenList = (value) => {
 var parseToolInput = (input) => {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return { ok: false, message: NOT_A_DESIGN_SENTENCE };
   const value = input;
+  if (value.system !== void 0 && value.system !== null) {
+    if (value.design !== void 0 && value.design !== null) return { ok: false, message: BOTH_SENTENCE };
+    if (typeof value.system !== "string" || !SYSTEM_ID_PATTERN.test(value.system) || value.system === "none" || value.system === "ask") return { ok: false, message: NOT_A_SYSTEM_SENTENCE };
+    const screens2 = screenList(value.screens);
+    if (screens2 === null || screens2.length > 0) return { ok: false, message: SYSTEM_SCREENS_SENTENCE };
+    return { ok: true, system: value.system };
+  }
   if (typeof value.design !== "string" || !SLUG_PATTERN.test(value.design)) return { ok: false, message: NOT_A_DESIGN_SENTENCE };
   const list = screenList(value.screens);
   if (list === null || !list.every((screen) => typeof screen === "string" && SCREEN_ID_PATTERN.test(screen))) {
@@ -131,13 +153,7 @@ var validateRuntime = (check, p, platform) => {
   return { ok: true, execPath: realExecPath };
 };
 var runtimeRecordFile = (env, platform, homeDir, p) => p.join(designChamberDataDir({ platform, homeDir, appData: env.APPDATA, xdgConfigHome: void 0, join: p.join }), RUNTIME_FILE);
-var buildChildArgs = (cliPath, input) => [
-  cliPath,
-  "check",
-  input.design,
-  ...input.screens.flatMap((screen) => ["--screen", screen]),
-  ...input.static ? ["--static"] : []
-];
+var buildChildArgs = (cliPath, input) => "system" in input ? [cliPath, "check", "--system", input.system] : [cliPath, "check", input.design, ...input.screens.flatMap((screen) => ["--screen", screen]), ...input.static ? ["--static"] : []];
 var CHILD_ENV_KEYS = [
   "PATH",
   "HOME",

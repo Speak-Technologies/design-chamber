@@ -1526,6 +1526,19 @@
   var ACTIVITY_WORKING_EXPIRY_MS = 30 * 6e4;
   var STATUS_RECENT_MS = 7 * 864e5;
   var USER_UNDO_TTL_MS = 30 * 6e4;
+  var SYSTEM_ID_PATTERN = SLUG_PATTERN;
+  var SYSTEM_BYTES_MAX = 100 * 1024 * 1024;
+  var SYSTEM_FONT_MAX_BYTES = 5 * 1024 * 1024;
+  var SYSTEM_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+  var SYSTEM_DOCUMENT_MAX_BYTES = 20 * 1024 * 1024;
+  var BINARY_UPLOAD_TOTAL_MAX = 28e6;
+  var SCAN_TTL_MS = 10 * 6e4;
+  var FOLDER_UNDO_MS = 60 * 6e4;
+  var SYSTEM_BUILD_TICKET_PATTERN = /^sb_[a-z0-9]{12}$/;
+  var SYSTEM_BUILD_TTL_MS = 7 * 864e5;
+  var LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
+  var LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
+  var SCAN_JSON_MAX_BYTES = 2 * 1024 * 1024;
 
   // src/shared/agent/context.ts
   var VIEWPORT_TABLET = Object.freeze({ id: "tablet", label: "Tablet", width: 768, height: 1024 });
@@ -1597,6 +1610,7 @@
     "too-large": 413,
     "no-html": 422,
     invalid: 422,
+    "read-only": 422,
     internal: 500
   };
   var isApiErrorCode = (value) => typeof value === "string" && Object.hasOwn(API_ERROR_STATUS, value);
@@ -1616,6 +1630,7 @@
     "POST /designs/:slug/comments/mark-sent": "WP1",
     "POST /uploads": "WP1",
     "PUT /uploads/:id/:index": "WP1",
+    "DELETE /uploads/:id": "WP1",
     "GET /outbox": "WP1",
     "PUT /outbox": "WP1",
     "DELETE /outbox": "WP1",
@@ -1651,10 +1666,52 @@
     "POST /designs/:slug/hand-edits/clear": "P2",
     "GET /designs/:slug/page-state": "P2",
     "PATCH /designs/:slug/page-state": "P2",
-    "DELETE /designs/:slug/page-state": "P2"
+    "DELETE /designs/:slug/page-state": "P2",
+    "GET /systems": "P25",
+    "POST /systems": "P25",
+    "GET /systems/:id": "P25",
+    "PATCH /systems/:id": "P25",
+    "DELETE /systems/:id": "P25",
+    "POST /systems/:id/edits": "P25",
+    "POST /systems/:id/edits/:eid/undo": "P25",
+    "POST /systems/:id/hand-edits/clear": "P25",
+    "POST /systems/:id/assets": "P25",
+    "POST /systems/:id/assets/from-folder": "P25",
+    "GET /systems/:id/board": "P25",
+    "GET /systems/:id/board/chunk": "P25",
+    "GET /systems/:id/versions": "P25",
+    "GET /systems/:id/versions/:vid/diff": "P25",
+    "POST /systems/:id/versions/:vid/restore": "P25",
+    "POST /systems/:id/prompt": "P25",
+    "GET /systems/:id/checks": "P25",
+    "POST /system-scans": "P25",
+    "GET /system-scans/:scanId": "P25",
+    "DELETE /system-scans/:scanId": "P25",
+    "POST /systems/:id/resync": "P25",
+    "GET /designs/:slug/system": "P25",
+    "GET /designs/:slug/system/preview": "P25",
+    "POST /designs/:slug/system": "P25",
+    "GET /folders": "P25",
+    "POST /folders": "P25",
+    "PATCH /folders/:folderId": "P25",
+    "DELETE /folders/:folderId": "P25",
+    "POST /folders/:folderId/undelete": "P25",
+    "POST /folders/:folderId/designs": "P25",
+    "POST /systems/chip": "P25",
+    "GET /system-builds/:ticket": "P25",
+    "GET /systems/:id/living-page": "P25",
+    "GET /systems/:id/proposals/:proposalId": "P25",
+    "GET /systems/:id/living-page/render": "P25",
+    "GET /systems/:id/living-page/render/chunk": "P25",
+    "POST /systems/:id/build/stop": "P25",
+    "POST /system-stops/:undoId/undo": "P25"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
-  var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set(["GET /designs/:slug/render/chunk"]);
+  var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set([
+    "GET /designs/:slug/render/chunk",
+    "GET /systems/:id/board/chunk",
+    "GET /systems/:id/living-page/render/chunk"
+  ]);
   var splitRouteKey = (key) => {
     const space = key.indexOf(" ");
     return { method: key.slice(0, space), pattern: key.slice(space + 1) };
@@ -1758,6 +1815,20 @@
     if (index > start) chunks.push(text.slice(start));
     return chunks;
   };
+  var BASE64_CHUNK_BYTES = 44997;
+  var BASE64_PIECE_BYTES = 8190;
+  var base64Of = (bytes) => {
+    let text = "";
+    for (let at = 0; at < bytes.length; at += BASE64_PIECE_BYTES) {
+      text += btoa(String.fromCharCode(...bytes.subarray(at, at + BASE64_PIECE_BYTES)));
+    }
+    return text;
+  };
+  var encodeBase64Chunks = (bytes, chunkBytes = BASE64_CHUNK_BYTES) => {
+    const chunks = [];
+    for (let at = 0; at < bytes.length; at += chunkBytes) chunks.push(base64Of(bytes.subarray(at, at + chunkBytes)));
+    return chunks;
+  };
   var mapLimit = async (items, limit, run) => {
     const out = new Array(items.length);
     let next = 0;
@@ -1846,6 +1917,41 @@
       inflight.set(id, task);
       return task;
     };
+    const fetchBoard = async (id, version, scheme) => {
+      const query = { scheme };
+      if (version) query.version = version;
+      const meta = await call("GET /systems/:id/board", { params: { id }, query });
+      const cached = renders.get(meta.key);
+      if (cached) {
+        renders.delete(meta.key);
+        renders.set(meta.key, cached);
+        return cached;
+      }
+      const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
+      const parts = await mapLimit(
+        indexes,
+        RENDER_CHUNK_CONCURRENCY,
+        (n) => call("GET /systems/:id/board/chunk", { params: { id }, query: { key: meta.key, n: String(n) } })
+      );
+      const doc = { meta, html: parts.join("") };
+      remember(doc);
+      return doc;
+    };
+    const loadBoard = (id, version = null, scheme = "light") => {
+      const key = `board\0${id}\0${version ?? ""}\0${scheme}`;
+      const running = inflight.get(key);
+      if (running) return running;
+      const task = (async () => {
+        try {
+          return await fetchBoard(id, version, scheme);
+        } catch (error) {
+          if (isServiceError(error, "stale")) return fetchBoard(id, version, scheme);
+          throw error;
+        }
+      })().finally(() => inflight.delete(key));
+      inflight.set(key, task);
+      return task;
+    };
     const upload = async (text) => {
       if (text.length > UPLOAD_TOTAL_MAX) {
         throw new ServiceError("too-large", `This text is too long to send to Design Chamber (over ${UPLOAD_TOTAL_MAX.toLocaleString("en-US")} characters).`);
@@ -1854,6 +1960,26 @@
       const chunks = splitUploadChunks(text);
       for (const [index, data] of chunks.entries()) {
         await call("PUT /uploads/:id/:index", { params: { id: uploadId, index: String(index) }, body: { data } });
+      }
+      return uploadId;
+    };
+    const uploadBinary = async (file, onProgress) => {
+      const chunks = encodeBase64Chunks(new Uint8Array(await file.arrayBuffer()));
+      const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      if (total > BINARY_UPLOAD_TOTAL_MAX) {
+        throw new ServiceError("too-large", "That file is larger than the 21 MB Design Chamber accepts.");
+      }
+      const { uploadId } = await call("POST /uploads", { body: { total, encoding: "base64" } });
+      let sent = 0;
+      try {
+        for (const [index, data] of chunks.entries()) {
+          await call("PUT /uploads/:id/:index", { params: { id: uploadId, index: String(index) }, body: { data } });
+          sent += data.length;
+          onProgress?.(total === 0 ? 1 : sent / total);
+        }
+      } catch (error) {
+        await call("DELETE /uploads/:id", { params: { id: uploadId } }).catch(() => void 0);
+        throw error;
       }
       return uploadId;
     };
@@ -1870,7 +1996,11 @@
       }
       return answer;
     };
-    return { call, loadRender, upload, thumbnail };
+    const getProposal = (systemId, proposalId) => call("GET /systems/:id/proposals/:proposalId", { params: { id: systemId, proposalId } });
+    const stopBuild = (systemId, proposalId = null) => call("POST /systems/:id/build/stop", { params: { id: systemId }, body: { proposalId } });
+    const undoStop = (undoId) => call("POST /system-stops/:undoId/undo", { params: { undoId }, body: {} });
+    const loadLivingPage = (systemId) => call("GET /systems/:id/living-page", { params: { id: systemId } });
+    return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
   };
 
   // src/guest/flows.ts
@@ -1885,7 +2015,7 @@
     startFailed: "Couldn't start a chat for this design. It is in your Designs list; try Continue in chat.",
     sendFailed: "The revision didn't reach the chat. Your comments are still open; try again.",
     nothingToSend: "There are no open comments to send.",
-    unknownCommand: "Design Chamber knows /design and /page only.",
+    unknownCommand: "Design Chamber knows /design, /page and /design-system only.",
     noSessionSelected: "Open a chat first, then try again.",
     markFailed: "Sent, but the comments could not be marked as sent. Resolve them by hand so they are not sent again.",
     savedPage: (title) => `Saved as page \u201C${title}\u201D.`,
@@ -1906,7 +2036,7 @@
     title: chip.title,
     url: chip.url,
     text: chip.text,
-    data: { slug: chip.data.slug, kind: chip.data.kind }
+    data: "build" in chip.data ? { build: chip.data.build } : { slug: chip.data.slug, kind: chip.data.kind }
   });
   var planReconciliation = (snapshot, designs) => {
     if (snapshot.state !== "ready") return [];
@@ -1932,6 +2062,7 @@
     if (snapshot.state !== "ready") return [];
     return snapshot.sessions.filter((session) => session.activity === "idle" && ["running", "retrying", "waiting-permission", "waiting-question"].includes(previous.get(session.id) ?? "")).map((session) => session.id);
   };
+  var BUILD_SYSTEM_DEFAULT_TEXT = "Let's build a design system.";
   var takesOpenRequest = (batch) => batch.reset || batch.events.some((event) => event.kind === "added" || event.kind === "open");
   var createFlows = ({ host: host2, client, now = Date.now }) => {
     const api = host2.client;
@@ -2036,24 +2167,28 @@
     const flows2 = {
       resolveSlashCommand: async ({ command, args }) => {
         const kind = command === "design" ? "canvas" : command === "page" ? "page" : null;
-        if (!kind) throw new FlowError("unknown-command", MESSAGES.unknownCommand);
+        if (!kind && command !== "design-system") throw new FlowError("unknown-command", MESSAGES.unknownCommand);
         const ready = host2.ready.get();
+        const projectDirectory = ready?.directory ?? null;
+        const sessionId = ready?.session?.id ?? null;
         try {
-          const { chip } = await client.call("POST /chip", {
-            body: { kind, brief: args.trim(), projectDirectory: ready?.directory ?? null, sessionId: ready?.session?.id ?? null }
-          });
+          if (!kind) {
+            const { chip: chip2 } = await client.call("POST /systems/chip", { body: { brief: args.trim(), projectDirectory, sessionId } });
+            return toAttachRequest(chip2);
+          }
+          const { chip } = await client.call("POST /chip", { body: { kind, brief: args.trim(), projectDirectory, sessionId } });
           return toAttachRequest(chip);
         } catch (error) {
           throw new Error(error instanceof Error ? error.message : String(error));
         }
       },
-      newDesign: async ({ kind, brief, preset = null, destination }) => {
+      newDesign: async ({ kind, brief, preset = null, system, destination }) => {
         const ready = host2.ready.get();
         const directory = host2.directory.get();
         const text = brief.trim();
         if (destination === "new-chat") {
           if (!directory) throw new FlowError("no-project", MESSAGES.noProject);
-          const { slug: slug2, chip: chip2 } = await client.call("POST /chip", { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null } });
+          const { slug: slug2, chip: chip2 } = await client.call("POST /chip", { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null, ...system === void 0 ? {} : { system } } });
           const result = await api.startSession({ ...toAttachRequest(chip2), text: text || "Let's start this design.", navigation: "open" });
           if (result.sessionId === null) throw new FlowError("start-failed", MESSAGES.startFailed);
           await client.call("PATCH /designs/:slug", { params: { slug: slug2 }, body: { sessionId: result.sessionId } });
@@ -2061,12 +2196,42 @@
         }
         const session = host2.session.get();
         const { slug, chip } = await client.call("POST /chip", {
-          body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null }
+          body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null, ...system === void 0 ? {} : { system } }
         });
         await api.attach(toAttachRequest(chip));
         if (text) await api.compose({ text, mode: "append" });
         if (ready?.surface === "page") await api.close();
         return { slug, sessionId: session?.id ?? null };
+      },
+      buildSystem: async ({ brief, destination }) => {
+        const ready = host2.ready.get();
+        const directory = host2.directory.get();
+        const words = brief.trim();
+        const text = words || BUILD_SYSTEM_DEFAULT_TEXT;
+        if (destination === "new-chat") {
+          if (!directory) throw new FlowError("no-project", MESSAGES.noProject);
+          const { ticket: ticket2, chip: chip2 } = await client.call("POST /systems/chip", { body: { brief: words, projectDirectory: directory, sessionId: null } });
+          try {
+            const result = await api.startSession({ ...toAttachRequest(chip2), text, navigation: "open" });
+            if (result.sessionId === null) return { outcome: "not-sent", ticket: ticket2, text: chip2.text };
+            return { outcome: "new-session", ticket: ticket2, sessionId: result.sessionId };
+          } catch (error) {
+            if (error instanceof HostRequestError) return { outcome: "not-sent", ticket: ticket2, text: chip2.text };
+            throw error;
+          }
+        }
+        const session = host2.session.get();
+        if (!session) throw new FlowError("no-session", MESSAGES.noSessionSelected);
+        const { ticket, chip } = await client.call("POST /systems/chip", { body: { brief: words, projectDirectory: directory, sessionId: session.id } });
+        try {
+          await api.attach(toAttachRequest(chip));
+          const outcome = await promptSelected(session, text, MESSAGES.busyAsk);
+          if (ready?.surface === "page") await api.close();
+          return { outcome, ticket, sessionId: session.id };
+        } catch (error) {
+          if (error instanceof HostRequestError || error instanceof FlowError && error.code === "send-failed") return { outcome: "not-sent", ticket, text: chip.text };
+          throw error;
+        }
       },
       continueInChat: async (slug) => {
         const { design } = await client.call("GET /designs/:slug", { params: { slug } });
@@ -2107,8 +2272,8 @@
         const { design } = await client.call("GET /designs/:slug", { params: { slug } });
         return deliver(slug, prompt, design, null, MESSAGES.busyAsk);
       },
-      askAgent: async (slug, purpose) => {
-        const prompt = await client.call("POST /designs/:slug/prompt", { params: { slug }, body: { purpose } });
+      askAgent: async (slug, purpose, before) => {
+        const prompt = await client.call("POST /designs/:slug/prompt", { params: { slug }, body: before === void 0 ? { purpose } : { purpose, before } });
         const { design } = await client.call("GET /designs/:slug", { params: { slug } });
         return deliver(slug, prompt, design, null, MESSAGES.busyAsk);
       },
@@ -2184,7 +2349,10 @@
         if (isGuestAttachItem(item)) {
           if (item.providerId !== CHIP_PROVIDER_ID) return null;
           const data = item.data;
-          const slug = typeof data === "object" && data !== null && !Array.isArray(data) ? data.slug : void 0;
+          if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+          const { slug, build, system } = data;
+          if (typeof build === "string") return SYSTEM_BUILD_TICKET_PATTERN.test(build) ? { kind: "open-build", ticket: build } : null;
+          if (typeof system === "string") return SYSTEM_ID_PATTERN.test(system) ? { kind: "open-system", system, target: "page" } : null;
           return typeof slug === "string" && SLUG_PATTERN.test(slug) ? { kind: "open-design", slug } : null;
         }
         if (isGuestMessageItem(item) && item.action === OPEN_AS_PAGE_ACTION) {
@@ -2266,12 +2434,18 @@
           );
         });
       },
-      watchOpenRequests: (subscribe, open) => {
+      watchOpenRequests: (subscribe, open, openSystem) => {
         let stopped = false;
         const take = () => {
           client.call("DELETE /open-request").then(
             ({ request }) => {
-              if (request && !stopped && SLUG_PATTERN.test(request.slug)) {
+              if (!request || stopped) return;
+              if ("system" in request) {
+                const target = request.target === "board" || request.target === "preview" ? request.target : "page";
+                if (SYSTEM_ID_PATTERN.test(request.system)) openSystem?.({ kind: "open-system", system: request.system, target });
+                return;
+              }
+              if (SLUG_PATTERN.test(request.slug)) {
                 open({ kind: "open-design", slug: request.slug, intent: request.intent === "comment" ? "comment" : "view" });
               }
             },

@@ -535,6 +535,17 @@ ${GUEST_UI_LOOK_CSS}`;
   var STATUS_REFETCH_DEBOUNCE_MS = 250;
   var STATUS_STARTING_GIVE_UP_MS = 1e4;
   var USER_UNDO_TTL_MS = 30 * 6e4;
+  var SYSTEM_BYTES_MAX = 100 * 1024 * 1024;
+  var SYSTEM_FONT_MAX_BYTES = 5 * 1024 * 1024;
+  var SYSTEM_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+  var SYSTEM_DOCUMENT_MAX_BYTES = 20 * 1024 * 1024;
+  var BINARY_UPLOAD_TOTAL_MAX = 28e6;
+  var SCAN_TTL_MS = 10 * 6e4;
+  var FOLDER_UNDO_MS = 60 * 6e4;
+  var SYSTEM_BUILD_TTL_MS = 7 * 864e5;
+  var LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
+  var LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
+  var SCAN_JSON_MAX_BYTES = 2 * 1024 * 1024;
 
   // node_modules/@openchamber/sdk/dist/api-version.js
   var OPENCHAMBER_SDK_CHANNEL = "openchamber.sdk";
@@ -1922,6 +1933,7 @@ ${GUEST_UI_LOOK_CSS}`;
     "too-large": 413,
     "no-html": 422,
     invalid: 422,
+    "read-only": 422,
     internal: 500
   };
   var isApiErrorCode = (value) => typeof value === "string" && Object.hasOwn(API_ERROR_STATUS, value);
@@ -1941,6 +1953,7 @@ ${GUEST_UI_LOOK_CSS}`;
     "POST /designs/:slug/comments/mark-sent": "WP1",
     "POST /uploads": "WP1",
     "PUT /uploads/:id/:index": "WP1",
+    "DELETE /uploads/:id": "WP1",
     "GET /outbox": "WP1",
     "PUT /outbox": "WP1",
     "DELETE /outbox": "WP1",
@@ -1976,10 +1989,52 @@ ${GUEST_UI_LOOK_CSS}`;
     "POST /designs/:slug/hand-edits/clear": "P2",
     "GET /designs/:slug/page-state": "P2",
     "PATCH /designs/:slug/page-state": "P2",
-    "DELETE /designs/:slug/page-state": "P2"
+    "DELETE /designs/:slug/page-state": "P2",
+    "GET /systems": "P25",
+    "POST /systems": "P25",
+    "GET /systems/:id": "P25",
+    "PATCH /systems/:id": "P25",
+    "DELETE /systems/:id": "P25",
+    "POST /systems/:id/edits": "P25",
+    "POST /systems/:id/edits/:eid/undo": "P25",
+    "POST /systems/:id/hand-edits/clear": "P25",
+    "POST /systems/:id/assets": "P25",
+    "POST /systems/:id/assets/from-folder": "P25",
+    "GET /systems/:id/board": "P25",
+    "GET /systems/:id/board/chunk": "P25",
+    "GET /systems/:id/versions": "P25",
+    "GET /systems/:id/versions/:vid/diff": "P25",
+    "POST /systems/:id/versions/:vid/restore": "P25",
+    "POST /systems/:id/prompt": "P25",
+    "GET /systems/:id/checks": "P25",
+    "POST /system-scans": "P25",
+    "GET /system-scans/:scanId": "P25",
+    "DELETE /system-scans/:scanId": "P25",
+    "POST /systems/:id/resync": "P25",
+    "GET /designs/:slug/system": "P25",
+    "GET /designs/:slug/system/preview": "P25",
+    "POST /designs/:slug/system": "P25",
+    "GET /folders": "P25",
+    "POST /folders": "P25",
+    "PATCH /folders/:folderId": "P25",
+    "DELETE /folders/:folderId": "P25",
+    "POST /folders/:folderId/undelete": "P25",
+    "POST /folders/:folderId/designs": "P25",
+    "POST /systems/chip": "P25",
+    "GET /system-builds/:ticket": "P25",
+    "GET /systems/:id/living-page": "P25",
+    "GET /systems/:id/proposals/:proposalId": "P25",
+    "GET /systems/:id/living-page/render": "P25",
+    "GET /systems/:id/living-page/render/chunk": "P25",
+    "POST /systems/:id/build/stop": "P25",
+    "POST /system-stops/:undoId/undo": "P25"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
-  var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set(["GET /designs/:slug/render/chunk"]);
+  var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set([
+    "GET /designs/:slug/render/chunk",
+    "GET /systems/:id/board/chunk",
+    "GET /systems/:id/living-page/render/chunk"
+  ]);
   var splitRouteKey = (key) => {
     const space = key.indexOf(" ");
     return { method: key.slice(0, space), pattern: key.slice(space + 1) };
@@ -2083,6 +2138,20 @@ ${GUEST_UI_LOOK_CSS}`;
     if (index > start) chunks.push(text.slice(start));
     return chunks;
   };
+  var BASE64_CHUNK_BYTES = 44997;
+  var BASE64_PIECE_BYTES = 8190;
+  var base64Of = (bytes) => {
+    let text = "";
+    for (let at = 0; at < bytes.length; at += BASE64_PIECE_BYTES) {
+      text += btoa(String.fromCharCode(...bytes.subarray(at, at + BASE64_PIECE_BYTES)));
+    }
+    return text;
+  };
+  var encodeBase64Chunks = (bytes, chunkBytes = BASE64_CHUNK_BYTES) => {
+    const chunks = [];
+    for (let at = 0; at < bytes.length; at += chunkBytes) chunks.push(base64Of(bytes.subarray(at, at + chunkBytes)));
+    return chunks;
+  };
   var mapLimit = async (items, limit, run) => {
     const out = new Array(items.length);
     let next = 0;
@@ -2171,6 +2240,41 @@ ${GUEST_UI_LOOK_CSS}`;
       inflight.set(id, task);
       return task;
     };
+    const fetchBoard = async (id, version, scheme) => {
+      const query = { scheme };
+      if (version) query.version = version;
+      const meta = await call("GET /systems/:id/board", { params: { id }, query });
+      const cached = renders.get(meta.key);
+      if (cached) {
+        renders.delete(meta.key);
+        renders.set(meta.key, cached);
+        return cached;
+      }
+      const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
+      const parts = await mapLimit(
+        indexes,
+        RENDER_CHUNK_CONCURRENCY,
+        (n) => call("GET /systems/:id/board/chunk", { params: { id }, query: { key: meta.key, n: String(n) } })
+      );
+      const doc = { meta, html: parts.join("") };
+      remember(doc);
+      return doc;
+    };
+    const loadBoard = (id, version = null, scheme = "light") => {
+      const key = `board\0${id}\0${version ?? ""}\0${scheme}`;
+      const running = inflight.get(key);
+      if (running) return running;
+      const task = (async () => {
+        try {
+          return await fetchBoard(id, version, scheme);
+        } catch (error) {
+          if (isServiceError(error, "stale")) return fetchBoard(id, version, scheme);
+          throw error;
+        }
+      })().finally(() => inflight.delete(key));
+      inflight.set(key, task);
+      return task;
+    };
     const upload = async (text) => {
       if (text.length > UPLOAD_TOTAL_MAX) {
         throw new ServiceError("too-large", `This text is too long to send to Design Chamber (over ${UPLOAD_TOTAL_MAX.toLocaleString("en-US")} characters).`);
@@ -2179,6 +2283,26 @@ ${GUEST_UI_LOOK_CSS}`;
       const chunks = splitUploadChunks(text);
       for (const [index, data2] of chunks.entries()) {
         await call("PUT /uploads/:id/:index", { params: { id: uploadId, index: String(index) }, body: { data: data2 } });
+      }
+      return uploadId;
+    };
+    const uploadBinary = async (file, onProgress) => {
+      const chunks = encodeBase64Chunks(new Uint8Array(await file.arrayBuffer()));
+      const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+      if (total > BINARY_UPLOAD_TOTAL_MAX) {
+        throw new ServiceError("too-large", "That file is larger than the 21 MB Design Chamber accepts.");
+      }
+      const { uploadId } = await call("POST /uploads", { body: { total, encoding: "base64" } });
+      let sent = 0;
+      try {
+        for (const [index, data2] of chunks.entries()) {
+          await call("PUT /uploads/:id/:index", { params: { id: uploadId, index: String(index) }, body: { data: data2 } });
+          sent += data2.length;
+          onProgress?.(total === 0 ? 1 : sent / total);
+        }
+      } catch (error) {
+        await call("DELETE /uploads/:id", { params: { id: uploadId } }).catch(() => void 0);
+        throw error;
       }
       return uploadId;
     };
@@ -2195,7 +2319,11 @@ ${GUEST_UI_LOOK_CSS}`;
       }
       return answer;
     };
-    return { call, loadRender, upload, thumbnail };
+    const getProposal = (systemId, proposalId) => call("GET /systems/:id/proposals/:proposalId", { params: { id: systemId, proposalId } });
+    const stopBuild = (systemId, proposalId = null) => call("POST /systems/:id/build/stop", { params: { id: systemId }, body: { proposalId } });
+    const undoStop = (undoId) => call("POST /system-stops/:undoId/undo", { params: { undoId }, body: {} });
+    const loadLivingPage = (systemId) => call("GET /systems/:id/living-page", { params: { id: systemId } });
+    return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
   };
 
   // src/guest/changes.ts
@@ -2314,9 +2442,10 @@ ${GUEST_UI_LOOK_CSS}`;
   // src/guest/flows.ts
   var PANEL_SURFACE_ID = `plugin:${CHIP_PROVIDER_ID}`;
   var isHostError = (error, code) => error instanceof HostRequestError && error.code === code;
-  var openInRail = async (deps, slug, intent) => {
+  var openInRail = async (deps, slug, intent) => leaveAndOpen(deps, { slug, intent });
+  var leaveAndOpen = async (deps, body) => {
     try {
-      await deps.client.call("POST /open-request", { body: { slug, intent } });
+      await deps.client.call("POST /open-request", { body });
     } catch (error) {
       if (isServiceError(error, "not-found")) return "gone";
       throw error;
@@ -2449,6 +2578,7 @@ ${GUEST_UI_LOOK_CSS}`;
     cursor: ["M4 4l7.07 16.97 2.51-7.39 7.39-2.51L4 4z"],
     play: ["m7 4 13 8-13 8z"],
     fit: ["M8 3H5a2 2 0 0 0-2 2v3", "M21 8V5a2 2 0 0 0-2-2h-3", "M3 16v3a2 2 0 0 0 2 2h3", "M16 21h3a2 2 0 0 0 2-2v-3"],
+    sidebar: ["M4 5h16v14H4z", "M9 5v14"],
     folder: ["M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"],
     canvas: ["M3 3h8v8H3z", "M13 3h8v5h-8z", "M13 10h8v11h-8z", "M3 13h8v8H3z"],
     page: ["M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z", "M14 3v5h5", "m10 13-2 2 2 2", "m14 13 2 2-2 2"],
@@ -2467,6 +2597,8 @@ ${GUEST_UI_LOOK_CSS}`;
     send: ["M22 2 11 13", "M22 2l-7 20-4-9-9-4z"],
     pin: ["M12 21s-7-5.2-7-11a7 7 0 1 1 14 0c0 5.8-7 11-7 11z", "M12 7.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"],
     layers: ["m12 3 9 5-9 5-9-5z", "m3 13 9 5 9-5"],
+    // A palette with its dabs: design systems.
+    system: ["M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4c0-4.4-4-8.1-9-8.1z", "M7.5 11.5h.01", "M10 7.5h.01", "M15 7.5h.01"],
     // Three sliders with their knobs: the Tweaks button.
     tune: ["M4 21v-7", "M4 10V3", "M12 21v-9", "M12 8V3", "M20 21v-5", "M20 12V3", "M2 14h4", "M10 8h4", "M18 16h4"]
   };
@@ -2583,6 +2715,64 @@ ${GUEST_UI_LOOK_CSS}`;
     if (f.params?.reason === "failures") return `${what} (the browser failed three times in a row).`;
     return `${what} (the limit is ${num(f.params?.max)} per run). Use --screen <id> to check the rest.`;
   };
+  var systemNameOf = (f) => f.params?.system ?? "the design system";
+  var repoNameOf = (f) => f.params?.repo ?? "the repo";
+  var AREA_LABELS = {
+    foundations: "Foundations",
+    components: "Components",
+    patterns: "Patterns & voice",
+    brand: "Brand & marketing"
+  };
+  var SECRET_KIND_LABELS = {
+    "aws-key": "an AWS key",
+    "github-token": "a GitHub token",
+    "openai-style-key": "an OpenAI-style key",
+    "slack-token": "a Slack token",
+    "google-key": "a Google key",
+    "private-key": "a private key"
+  };
+  var LIVING_FAILED_REASONS = {
+    "too-large": "it would be too large.",
+    bundle: "a file couldn't be embedded.",
+    unsafe: "it didn't pass the safety check.",
+    "no-snapshot": "the repo hasn't been read yet.",
+    secret: "it would show something shaped like a secret."
+  };
+  var BUILD_PROBLEM_SENTENCES = {
+    unreadable: () => "BUILD.json isn't valid JSON.",
+    "ticket-unknown": () => "This design system was started from a chat Design Chamber no longer knows. Start it again with /design-system.",
+    "ticket-needed": () => "A system that lives in a repo needs a build ticket. Start it with /design-system in the project's chat.",
+    "repo-outside-project": () => "The repo must be the project this chat is in, or a folder inside it. To use a folder above it, such as the root of a monorepo, open a chat in that folder and run /design-system there.",
+    "repo-overlap": () => "Another design system already uses this repo folder or living-page path.",
+    "living-page-exists": (f) => `The living-page path already exists in ${repoNameOf(f)} and isn't this system's living page. Pick another path.`,
+    "code-outside-project": () => "The code folder must be the project this chat is in, or a folder inside it.",
+    "home-changed": (f) => `${systemNameOf(f)} already has files in ${repoNameOf(f)}, so its home can't change. Make a new system to move it.`,
+    "ticket-changed": () => "BUILD.json names another build. Keep the ticket this system started with.",
+    "applied-unknown-proposal": (f) => `The agent says it applied a proposal you didn't approve here. Check ${repoNameOf(f)}'s history.`
+  };
+  var PROPOSAL_PROBLEM_SENTENCES = {
+    "not-adopted": "the system has not been adopted from a build yet.",
+    round: "the interview is not finished; a proposal needs round two or done.",
+    "path-outside": "a system file lies outside the system folder.",
+    "living-page-path": "the living-page file is not the build's living-page path.",
+    "create-exists": "a file the proposal creates already exists in the repo. The proposal must change it, not create it.",
+    "from-missing": "a proposed file is missing from proposal/.",
+    "describe-change": "Describe only never changes the app's code.",
+    "internal-parts": "an internal system's proposal can only hold token fixes.",
+    "none-fixes": "a build with no code to fix cannot hold token fixes.",
+    rewritten: "this proposal changed after it was shown. Ask the agent for a new one.",
+    unreadable: "PROPOSAL.json isn't valid JSON.",
+    // §5.14 step 4: problems of the preview generated from proposal/.
+    "preview-too-large": "the living page it proposes would be too large.",
+    "preview-unsafe": "the living page it proposes didn't pass the safety check.",
+    "preview-secret": "the living page it proposes shows something shaped like a secret. Remove it before you approve."
+  };
+  var driftScope = (f, core) => {
+    const base = `In CSS variables and token JSON, ${core}`;
+    const unread = f.params?.unread ?? 0;
+    if (unread <= 0) return base;
+    return `${base} Design Chamber can't read ${num(unread)} token ${unread === 1 ? "file" : "files"}, so differences there aren't counted.`;
+  };
   var RULES = {
     "overflow-x": { severity: "error", sentence: (f, where) => `${where}: the content is ${num(f.params?.px)}px wide, wider than the ${num(f.params?.width)}px viewport.` },
     "text-clipped": { severity: "warning", sentence: (_f, where) => `${where}: some text is cut off.` },
@@ -2622,10 +2812,13 @@ ${GUEST_UI_LOOK_CSS}`;
     "doc-viewport": { severity: "warning", sentence: (f) => `${fileOf(f)} has no viewport meta tag.` },
     "doc-title": { severity: "warning", sentence: (f) => `${fileOf(f)} has no <title>.` },
     "doc-charset": { severity: "info", sentence: (f) => `${fileOf(f)} does not declare its charset.` },
-    "token-redefined": { severity: "warning", sentence: (f) => `${fileOf(f)} redefines ${num(f.params?.count)} tokens from tokens.css. Change them in tokens.css.` },
+    "token-redefined": {
+      severity: "warning",
+      sentence: (f) => f.params?.system !== void 0 ? `${fileOf(f)} redefines ${num(f.params?.count)} tokens from the design system ${f.params.system}. Use the system's values, or ask the user to change the system.` : `${fileOf(f)} redefines ${num(f.params?.count)} tokens from tokens.css. Change them in tokens.css.`
+    },
     "token-hardcoded": {
       severity: "info",
-      sentence: (f) => `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although tokens.css defines colours.`
+      sentence: (f) => f.params?.system !== void 0 ? `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although the design system ${f.params.system} defines colours. Use its tokens.` : `${fileOf(f)} has ${num(f.params?.count)} hardcoded colours although tokens.css defines colours.`
     },
     "tweak-broken": {
       severity: "warning",
@@ -2637,7 +2830,140 @@ ${GUEST_UI_LOOK_CSS}`;
         return "design.json declares tweaks, but the design has no tokens.css.";
       }
     },
-    "check-partial": { severity: "info", sentence: () => "Some files were not checked in time." }
+    "check-partial": { severity: "info", sentence: () => "Some files were not checked in time." },
+    // Phase 2.5 §10.1: a design against its linked system.
+    "system-drift": {
+      severity: "warning",
+      // `part: 'system-files'` when the tokens couldn't be compared (the system no longer holds the
+      // copy's original tokens.css) or other copy files changed: the files are counted instead.
+      sentence: (f) => f.params?.part === "system-files" ? `This design's copy of ${systemNameOf(f)} was changed: ${num(f.params?.count)} ${f.params?.count === 1 ? "file differs" : "files differ"} from revision ${num(f.params?.revision)}. Put them back, or keep the changes in this design's own tokens.css.` : `This design's copy of ${systemNameOf(f)} was changed: ${num(f.params?.count)} tokens differ from revision ${num(f.params?.revision)}. Put them back, or keep them as this design's own overrides.`
+    },
+    "system-copy-missing": {
+      severity: "warning",
+      sentence: (f) => `This design's copy of ${systemNameOf(f)} is missing ${num(f.params?.count)} files.`
+    },
+    "system-copy-invalid": {
+      severity: "warning",
+      sentence: () => "system/COPY.json can't be read, so Design Chamber can't tell which system this design uses."
+    },
+    "system-choice": {
+      severity: "warning",
+      sentence: (f) => f.params?.choice === "draft" ? `design.json asks for the design system "${f.params?.value ?? "?"}", which isn't ready yet.` : `design.json asks for the design system "${f.params?.value ?? "?"}", which isn't a Ready system in this Designs folder.`
+    },
+    // Phase 2.5 §10.3: checking a system.
+    "system-unreadable": {
+      severity: "error",
+      sentence: () => "Design Chamber can't read this design system. system.json isn't valid JSON."
+    },
+    "system-entry-invalid": {
+      severity: "warning",
+      sentence: () => "system.json has entries Design Chamber can't read."
+    },
+    "system-value-invalid": {
+      severity: "error",
+      sentence: () => "tokens.css holds a value that isn't valid for its section."
+    },
+    "system-font-missing": {
+      severity: "error",
+      sentence: (f) => `${fileOf(f)} is listed as a font but is missing or can't be used.`
+    },
+    "system-overview-empty": { severity: "warning", sentence: () => "The system has no overview yet." },
+    "system-overview-long": {
+      severity: "warning",
+      sentence: () => "Keep the overview under 4 000 characters. Move detail into a note."
+    },
+    "system-note-long": {
+      severity: "warning",
+      sentence: () => "A note is over 20 000 characters. Shorten it or split it."
+    },
+    "system-example-remote": {
+      severity: "error",
+      sentence: (f) => `${fileOf(f)} loads files from the internet, which the living page can't use.`
+    },
+    "system-token-undefined": {
+      severity: "warning",
+      sentence: () => "A component names a token the system doesn't define."
+    },
+    "system-token-cap": {
+      severity: "warning",
+      sentence: () => "Design systems hold up to 2 000 tokens. The rest weren't read."
+    },
+    // Phase 2.5 §10.4: the repo-backed system (S8, with the rev 3 wording).
+    "system-living-missing": {
+      severity: "warning",
+      sentence: (f) => `${systemNameOf(f)} lives in ${repoNameOf(f)} but has no living page yet.`
+    },
+    "system-living-stale": {
+      severity: "warning",
+      sentence: (f) => `The living page was generated from revision ${num(f.params?.from)}; ${systemNameOf(f)} is at revision ${num(f.params?.revision)}.`
+    },
+    "system-living-changed": {
+      severity: "warning",
+      sentence: () => "The living page in the repo differs from the one Design Chamber generated."
+    },
+    "system-living-unsafe": {
+      severity: "error",
+      sentence: () => "The living page has markup Design Chamber didn't generate and can't check as safe."
+    },
+    "system-living-failed": {
+      severity: "warning",
+      sentence: (f) => `Design Chamber couldn't generate the living page: ${LIVING_FAILED_REASONS[f.params?.failed ?? "too-large"]}`
+    },
+    "system-repo-unreadable": {
+      severity: "error",
+      sentence: (f) => `Design Chamber can't read ${repoNameOf(f)}'s design system folder. Choose another folder on the system page.`
+    },
+    "system-snapshot-changed": {
+      severity: "warning",
+      sentence: (f) => `${systemNameOf(f)}'s snapshot was changed outside Design Chamber. Re-sync to read ${repoNameOf(f)} again.`
+    },
+    "system-code-drift": {
+      severity: "warning",
+      sentence: (f) => driftScope(f, `${num(f.params?.count)} tokens differ from ${systemNameOf(f)}. Ask the agent to reconcile.`)
+    },
+    "system-code-differs": {
+      severity: "warning",
+      sentence: (f) => driftScope(f, `${num(f.params?.count)} tokens still differ from what ${systemNameOf(f)} describes.`)
+    },
+    "system-build-invalid": {
+      severity: "warning",
+      sentence: (f) => {
+        const reason = f.params?.build;
+        const sentence = reason !== void 0 ? BUILD_PROBLEM_SENTENCES[reason](f) : "Ask the agent to fix it.";
+        return `BUILD.json can't be used: ${sentence}`;
+      }
+    },
+    "system-coverage-empty": {
+      severity: "warning",
+      sentence: (f) => `${systemNameOf(f)} covers ${AREA_LABELS[f.params?.area ?? "foundations"]} but has nothing there yet.`
+    },
+    // Phase 2.5 rev 3 (§10.4).
+    "system-living-reformatted": {
+      severity: "info",
+      sentence: () => "The living page may have been reformatted since it was generated. Its values are current."
+    },
+    "system-living-secret": {
+      // Error unless the page is dev-only; `severityOf` reads the validated `access` param.
+      severity: "error",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const label = SECRET_KIND_LABELS[f.params?.kind ?? "aws-key"];
+        const what = count === 1 ? `something shaped like a secret (${label})` : `${num(count)} things shaped like secrets (${label})`;
+        return `The living page shows ${what}. Remove ${count === 1 ? "it" : "them"} from the system.`;
+      }
+    },
+    "system-landed-differs": {
+      severity: "warning",
+      sentence: (f) => f.params?.part !== void 0 ? `The agent says it applied ${f.params.part}, but Design Chamber found none in ${repoNameOf(f)}.` : `What landed in ${repoNameOf(f)} differs from the proposal you approved in ${num(f.params?.count)} files.`
+    },
+    "system-proposal-invalid": {
+      severity: "warning",
+      sentence: (f) => {
+        const reason = f.params?.proposal;
+        if (reason === void 0 || reason === "unreadable" && f.detail !== void 0) return "PROPOSAL.json can't be used. Ask the agent to fix it.";
+        return `PROPOSAL.json can't be used: ${PROPOSAL_PROBLEM_SENTENCES[reason]}`;
+      }
+    }
   };
   var CHECK_CODES = Object.freeze(Object.keys(RULES));
 
