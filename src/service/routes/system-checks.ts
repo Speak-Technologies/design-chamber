@@ -1,7 +1,8 @@
 // A design system's checks (documentation/specs/phase-2-5-technical.md §10.3): the static findings
 // over what the system store reads now, with severity and sentence from `src/shared/checks.ts`.
 // The router checks the bearer token first; the id is checked and contained by the store
-// (`SYSTEM_ID_PATTERN`, `resolveInside`, no link). Nothing is written. The S8 findings are T16's.
+// (`SYSTEM_ID_PATTERN`, `resolveInside`, no link). Nothing is written; the S8 findings (§10.4) read the
+// committed living page in the repo the same way the CLI does (`readS8Facts`).
 
 import type { SystemChecksResponse } from '../../shared/api.ts';
 import { countFindings, sortFindings, withMessage } from '../../shared/checks.ts';

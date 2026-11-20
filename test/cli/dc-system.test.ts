@@ -94,3 +94,23 @@ test('dc check --system refuses a linked system folder and writes nothing throug
   assert.match(refused.err, /That is not a design system in /);
   assert.equal(await tmp.read('outside/evil/.chamber/check.json').catch(() => null), null);
 });
+
+test('dc check --system reads the committed living page in the repo: missing is a warning, a hand-edited unsafe page is an error', async (t) => {
+  const tmp = await useTmpRoot(t);
+  const project = tmp.at('shop');
+  await tmp.write('shop/design-system/.keep', '');
+  await tmp.write('_systems/acme/snapshot/tokens.css', ':root {\n  --brand: #0a5;\n}\n');
+  await tmp.write('_systems/acme/snapshot/system.json', '{ "version": 1, "tokens": {} }');
+  await tmp.write('_systems/acme/snapshot/OVERVIEW.md', 'Calm.');
+  await tmp.write('_systems/acme/.chamber/state.json', { name: 'Acme', status: 'ready', home: { kind: 'repo', directory: project, folder: 'design-system', livingPage: 'design-system/index.html', adoptedAt: '2026-11-01T10:00:00.000Z' } });
+
+  const missing = await dc(tmp, ['check', '--system', 'acme', '--json']);
+  assert.equal(missing.code, 0, missing.err);
+  const codes = (JSON.parse(missing.out) as { findings: { code: string; severity: string }[] }).findings.map((finding) => [finding.code, finding.severity]);
+  assert.deepEqual(codes, [['system-living-missing', 'warning']]);
+
+  await tmp.write('shop/design-system/index.html', '<!doctype html><html><body><script>alert(1)</script></body></html>');
+  const unsafe = await dc(tmp, ['check', '--system', 'acme']);
+  assert.equal(unsafe.code, 1, unsafe.err);
+  assert.match(unsafe.out, /The living page has markup Design Chamber didn't generate and can't check as safe\./);
+});

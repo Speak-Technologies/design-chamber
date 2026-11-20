@@ -141,7 +141,7 @@ const chamberFile = async (ctx: ServiceContext, id: string, systemDir: string, n
   return file;
 };
 
-const readRecord = async (systemDir: string): Promise<LivingPageRecord | null> => {
+export const readRecord = async (systemDir: string): Promise<LivingPageRecord | null> => {
   let file: string;
   try {
     file = await resolvePlainTarget(systemDir, ['.chamber', STAGED_JSON]);
@@ -244,7 +244,7 @@ type Shared = {
   committed: Map<string, { key: string; view: CommittedView }>;
 };
 
-type CommittedView = { state: LivingPageState; revision: number | null; sentence: string; reasons: string[] };
+export type CommittedView = { state: LivingPageState; revision: number | null; sentence: string; reasons: string[] };
 
 const shared = new WeakMap<ServiceContext, Shared>();
 
@@ -619,9 +619,9 @@ export const dropLivingPages = async (ctx: ServiceContext, id: string): Promise<
 
 // ---- the committed page's state ----
 
-type CommittedRead = { kind: 'view'; key: string; view: CommittedView } | { kind: 'text'; key: string; text: string } | { kind: 'repo-unreadable' };
+export type CommittedRead = { kind: 'view'; key: string; view: CommittedView } | { kind: 'text'; key: string; text: string } | { kind: 'repo-unreadable' };
 
-const readCommitted = async (repoDirectory: string, rel: string, repo: string): Promise<CommittedRead> => {
+export const readCommitted = async (repoDirectory: string, rel: string, repo: string): Promise<CommittedRead> => {
   const unreadable = (reason: string, key: string): CommittedRead => ({ kind: 'view', key, view: { state: 'unreadable', revision: null, sentence: livingUnreadableSentence(reason), reasons: [] } });
   const repoReal = await realpath(repoDirectory).catch(() => null);
   if (repoReal === null) return { kind: 'repo-unreadable' };

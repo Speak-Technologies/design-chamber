@@ -7,22 +7,46 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { buildSystemDetail } from '../../shared/system-json.ts';
+import { CHECK_FINDINGS_MAX } from '../../shared/limits.ts';
+import { findSecretShapes } from '../../shared/secret-shapes.ts';
+import { buildSystemDetail, type SystemDetailSource } from '../../shared/system-json.ts';
 import type { SettingsFile, SystemDetail } from '../../shared/types.ts';
 import { createChangeHub } from '../changes.ts';
 import type { Logger, SettingsStore } from '../context.ts';
 import { resolvePlainTarget, writeFileAtomic } from '../paths.ts';
 import { createSelfWrites } from '../self-writes.ts';
-import { createSystemStore, type SystemStore } from '../systems/store.ts';
-import { systemCheckReport, systemFindings, type SystemCheckReport } from './system-static.ts';
+import { committedStateOf, readCommitted, readRecord } from '../systems/living-page.ts';
+import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/store.ts';
+import { s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemCheckReport } from './system-static.ts';
 
 export type SystemCheckRun = { report: SystemCheckReport; detail: SystemDetail };
 
+/**
+ * What S8 needs from outside the system's files (§10.4): the COMMITTED living page in the repo, read
+ * here (contained under the repo's realpath, never a link, bounded, never rendered), and the staged
+ * record. The repo is only read. The same read serves the CLI and the route, with no service cache.
+ */
+export const readS8Facts = async (store: Pick<SystemStore, 'dir'>, id: string, source: Pick<SystemDetailSource, 'state'>): Promise<S8Facts> => {
+  const home = source.state.home;
+  // The proposal's problem is read with the proposal (§5.14, T17); until that reader lands, none is raised.
+  const proposal = null;
+  if (home?.kind !== 'repo') return { living: null, proposal };
+  const record = await readRecord(await store.dir(id));
+  const staged = record === null ? null : { problem: record.problem, secrets: record.secrets };
+  const read = await readCommitted(home.directory, home.livingPage, repoLabelOf(home.directory));
+  if (read.kind === 'repo-unreadable') return { living: { committed: null, secrets: [], staged }, proposal };
+  if (read.kind === 'view') return { living: { committed: read.view, secrets: [], staged }, proposal };
+  const committed = committedStateOf(read.text, { id, name: source.state.name, revision: source.state.revision.n });
+  return { living: { committed, secrets: findSecretShapes(read.text).map((hit) => ({ kind: hit.kind })), staged }, proposal };
+};
+
 /** The findings of one system, from what the store reads now. */
-export const runSystemCheck = async (store: Pick<SystemStore, 'get'>, id: string, input: { now: Date; tool: SystemCheckReport['tool'] }): Promise<SystemCheckRun> => {
+export const runSystemCheck = async (store: Pick<SystemStore, 'get' | 'dir'>, id: string, input: { now: Date; tool: SystemCheckReport['tool'] }): Promise<SystemCheckRun> => {
   const source = await store.get(id);
   const detail = buildSystemDetail(source);
-  return { report: systemCheckReport({ id, findings: systemFindings(source, detail), now: input.now, tool: input.tool }), detail };
+  const facts = await readS8Facts(store, id, source);
+  const findings = [...systemFindings(source, detail), ...s8Findings(source, detail, facts)].slice(0, CHECK_FINDINGS_MAX);
+  return { report: systemCheckReport({ id, findings, now: input.now, tool: input.tool }), detail };
 };
 
 /**
