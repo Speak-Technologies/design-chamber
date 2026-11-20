@@ -1,6 +1,6 @@
 // Phase 2.5 S8 routes (documentation/specs/phase-2-5-technical.md §3.5, §5.9, §8.7, AD-16, AD-29):
-// the /design-system chip and its build ticket, the ticket's state, Stop and its Undo. The proposal
-// read and the living-page render (T17) still answer "not built yet".
+// the /design-system chip and its build ticket, the ticket's state, Stop and its Undo; (T17, §5.14) the
+// proposal read and the living-page render (staged or preview, from `.chamber/` only) with its chunks.
 //
 // The router checks the bearer token first. Every parameter is checked against its pattern here,
 // before any path is built; the ticket files live under `<root>/.chamber/system-builds/` (builds.ts,
@@ -13,24 +13,19 @@ import { pathToFileURL } from 'node:url';
 import { buildSystemBuildChip, buildSystemTicketHeader, buildSystemTicketRules } from '../../shared/agent/system-prompts.ts';
 import { systemContractSection } from '../../shared/agent/system-rules.ts';
 import { buildSystemSkillBody } from '../../shared/agent/system-skill-doc.ts';
-import type { RouteKey, StopBuildResponse, SystemBuildTicketResponse, SystemChipResponse, UndoStopResponse } from '../../shared/api.ts';
-import { BRIEF_MAX, SESSION_ID_MAX, SYSTEM_PROPOSAL_ID_PATTERN, SYSTEM_STOP_UNDO_PATTERN, SYSTEMS_MAX } from '../../shared/limits.ts';
+import type { ProposalResponse, RenderChunkResponse, RenderMeta, StopBuildResponse, SystemBuildTicketResponse, SystemChipResponse, UndoStopResponse } from '../../shared/api.ts';
+import { BRIEF_MAX, SESSION_ID_MAX, SHA256_PATTERN, SYSTEM_PROPOSAL_ID_PATTERN, SYSTEM_STOP_UNDO_PATTERN, SYSTEMS_MAX } from '../../shared/limits.ts';
 import { isReservedSystemId } from '../../shared/system-json.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
 import { ensureBuildTickets, NOT_AN_UNDO_MESSAGE } from '../systems/builds.ts';
-import { registerNotBuilt } from '../systems/not-built.ts';
+import { livingPageChunk, renderLivingPage } from '../systems/living-page.ts';
+import { ensureProposals } from '../systems/proposals.ts';
 import { validateScanFolder } from '../systems/scan-folder.ts';
 import { ensureSystemStore, SYSTEMS_CAP_MESSAGE } from '../systems/store.ts';
 import { projectDirectoryOf } from './chat.ts';
 import { readSystemQuestions } from './presets.ts';
-
-/** T17's routes, still stubs. */
-const NOT_BUILT_KEYS: readonly RouteKey[] = [
-  'GET /systems/:id/proposals/:proposalId',
-  'GET /systems/:id/living-page/render',
-  'GET /systems/:id/living-page/render/chunk',
-];
+import { parseBoardScheme } from './system-board.ts';
 
 type Rec = Record<string, unknown>;
 const isRec = (value: unknown): value is Rec => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -108,5 +103,25 @@ export function registerSystemBuildRoutes(router: Router, ctx: ServiceContext): 
     return ensureBuildTickets(ctx).undoStop(params.undoId);
   });
 
-  registerNotBuilt(router, NOT_BUILT_KEYS);
+  router.on('GET /systems/:id/proposals/:proposalId', ({ params }): Promise<ProposalResponse> => {
+    if (!SYSTEM_PROPOSAL_ID_PATTERN.test(params.proposalId)) throw new ApiError('bad-request', 'That is not a proposal id.');
+    return ensureProposals(ctx).view(params.id, params.proposalId);
+  });
+
+  router.on('GET /systems/:id/living-page/render', ({ params, query }): Promise<RenderMeta> => {
+    const which = query.get('which');
+    if (which !== 'staged' && which !== 'preview') throw new ApiError('bad-request', 'Ask for the staged page or the preview.');
+    const scheme = parseBoardScheme(query.get('scheme'));
+    return renderLivingPage(ctx, params.id, { which, scheme });
+  });
+
+  router.on('GET /systems/:id/living-page/render/chunk', async ({ params, query }): Promise<RenderChunkResponse> => {
+    // The id is resolved first: one system's page is never readable through another id's route.
+    await ensureSystemStore(ctx).dir(params.id);
+    const key = query.get('key') ?? '';
+    if (!SHA256_PATTERN.test(key)) throw new ApiError('bad-request', 'That is not a page key.');
+    const rawN = query.get('n') ?? '';
+    if (!/^[0-9]{1,9}$/.test(rawN)) throw new ApiError('bad-request', 'That is not a chunk number.');
+    return livingPageChunk(ctx, params.id, key, Number(rawN));
+  });
 }

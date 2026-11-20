@@ -16,6 +16,7 @@ import type { Logger, SettingsStore } from '../context.ts';
 import { resolvePlainTarget, writeFileAtomic } from '../paths.ts';
 import { createSelfWrites } from '../self-writes.ts';
 import { committedStateOf, readCommitted, readRecord } from '../systems/living-page.ts';
+import { readProposalProblem } from '../systems/proposal-record.ts';
 import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/store.ts';
 import { s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemCheckReport } from './system-static.ts';
 
@@ -28,10 +29,11 @@ export type SystemCheckRun = { report: SystemCheckReport; detail: SystemDetail }
  */
 export const readS8Facts = async (store: Pick<SystemStore, 'dir'>, id: string, source: Pick<SystemDetailSource, 'state'>): Promise<S8Facts> => {
   const home = source.state.home;
-  // The proposal's problem is read with the proposal (§5.14, T17); until that reader lands, none is raised.
-  const proposal = null;
+  // PROPOSAL.json is read here through the parser, and the service's record adds the step 3 problems (§5.14).
+  const systemDir = await store.dir(id);
+  const proposal = await readProposalProblem(systemDir);
   if (home?.kind !== 'repo') return { living: null, proposal };
-  const record = await readRecord(await store.dir(id));
+  const record = await readRecord(systemDir);
   const staged = record === null ? null : { problem: record.problem, secrets: record.secrets };
   const read = await readCommitted(home.directory, home.livingPage, repoLabelOf(home.directory));
   if (read.kind === 'repo-unreadable') return { living: { committed: null, secrets: [], staged }, proposal };

@@ -11,7 +11,7 @@
 
 import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
-import { lstat, open, readdir, readFile, realpath, rm } from 'node:fs/promises';
+import { lstat, open, readFile, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -21,19 +21,22 @@ import {
   LIVING_PAGE_GENERATOR_VERSION,
   LIVING_PAGE_MAX_BYTES,
   LIVING_PAGE_OMITTED_MAX,
+  RENDER_CHUNK_MAX_BYTES,
   SECRET_SHAPES_MAX,
   SYSTEM_PROPOSAL_ID_PATTERN,
-  SYSTEM_PROPOSAL_MAX_BYTES,
 } from '../../shared/limits.ts';
 import { findSecretShapes } from '../../shared/secret-shapes.ts';
 import { buildSystemDetail } from '../../shared/system-json.ts';
+import type { RenderMeta } from '../../shared/api.ts';
 import type { LivingPageState, LivingPageView, SecretShapeKind, SystemDetail, SystemState } from '../../shared/types.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource, type FileSource } from '../bundle.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError } from '../http.ts';
 import { resolveInside, resolvePlainTarget, samePath, writeFileAtomic } from '../paths.ts';
+import { splitChunks } from '../render-cache.ts';
 import { checkAsset } from './assets.ts';
 import { detailSourceFromTree, overlaySource } from './board.ts';
+import { listFiles, proposalDirOf, readProposalFile } from './proposal-record.ts';
 import { renderExamplePngs, type ExampleShot } from './living-examples.ts';
 import { buildLivingPage, LIVING_ENTRY_FILE, livingSchemes, type ExampleReason, type LivingExampleShot, type LivingPageDocument, type LivingPageInput, entryAt } from './living-html.ts';
 import { LIVING_PAGE_SCAN_MAX_BYTES, LIVING_PAGE_TOO_LARGE_REASON, normaliseForHash, scanLivingPage } from './living-safe.ts';
@@ -67,9 +70,6 @@ const ZERO_HASH = '0'.repeat(64);
 const PROBLEMS: readonly LivingProblem[] = ['too-large', 'bundle', 'unsafe', 'no-snapshot', 'secret'];
 const OMITTED_REASONS: readonly OmittedReason[] = ['too-large', 'unsafe', 'budget', 'no-browser', 'render-failed', 'licence'];
 const SECRET_KINDS: readonly SecretShapeKind[] = ['aws-key', 'github-token', 'openai-style-key', 'slack-token', 'google-key', 'private-key'];
-/** Folder levels and entries the proposal walk looks at (the §2.1 contract is three levels deep at most). */
-const PROPOSAL_DEPTH_MAX = 4;
-const PROPOSAL_ENTRIES_MAX = 2000;
 
 const sha256 = (data: string | Uint8Array): string => createHash('sha256').update(data).digest('hex');
 const errorName = (error: unknown): string => (error instanceof Error ? error.name : 'error');
@@ -242,7 +242,12 @@ type Shared = {
   pending: Map<string, Promise<void>>;
   /** The committed page's last state per system, keyed by what the file looked like. */
   committed: Map<string, { key: string; view: CommittedView }>;
+  /** Rendered staged and preview pages (`GET /systems/:id/living-page/render`), LRU by insertion order. */
+  renders: Map<string, RenderEntry>;
+  renderBytes: number;
 };
+
+type RenderEntry = { id: string; chunks: string[]; meta: RenderMeta; bytes: number };
 
 export type CommittedView = { state: LivingPageState; revision: number | null; sentence: string; reasons: string[] };
 
@@ -252,9 +257,21 @@ const sharedOf = (ctx: ServiceContext): Shared => {
   let out = shared.get(ctx);
   if (out === undefined) {
     const abort = new AbortController();
-    out = { abort, running: new Map(), pending: new Map(), committed: new Map() };
-    shared.set(ctx, out);
+    const state: Shared = { abort, running: new Map(), pending: new Map(), committed: new Map(), renders: new Map(), renderBytes: 0 };
+    out = state;
+    shared.set(ctx, state);
     ctx.onDispose(() => abort.abort());
+    // A rendered page belongs to the files it was read from: any change to the system (or the root) drops it.
+    ctx.onDispose(
+      ctx.hub.subscribe((event) => {
+        if (event.kind !== 'root' && (event.kind !== 'system' || event.system === undefined)) return;
+        for (const [key, entry] of [...state.renders]) {
+          if (event.kind === 'system' && entry.id !== event.system) continue;
+          state.renders.delete(key);
+          state.renderBytes -= entry.bytes;
+        }
+      }),
+    );
   }
   return out;
 };
@@ -428,44 +445,6 @@ const generate = async (
 const FONT_MIME: Readonly<Record<string, string>> = { '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.otf': 'font/otf' };
 const fontMime = (file: string): string => FONT_MIME[path.posix.extname(file).toLowerCase()] ?? 'font/woff2';
 
-/** A plain folder's files (no links followed), relative with `/`, bounded. */
-const listFiles = async (dir: string): Promise<string[]> => {
-  const out: string[] = [];
-  let budget = PROPOSAL_ENTRIES_MAX;
-  const walk = async (rel: string, depth: number): Promise<void> => {
-    const abs = rel === '' ? dir : path.join(dir, ...rel.split('/'));
-    const entries = (await readdir(abs, { withFileTypes: true }).catch(() => [])).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    for (const entry of entries) {
-      if (budget <= 0) return;
-      budget -= 1;
-      if (entry.name.startsWith('.')) continue;
-      const child = rel === '' ? entry.name : `${rel}/${entry.name}`;
-      if (entry.isDirectory() && depth < PROPOSAL_DEPTH_MAX) await walk(child, depth + 1);
-      else if (entry.isFile()) out.push(child);
-    }
-  };
-  await walk('', 0);
-  return out;
-};
-
-/** The proposal id from `PROPOSAL.json` (bounded, never through a link); null when there is none. */
-const proposalIdOf = async (systemDir: string): Promise<string | null> => {
-  let file: string;
-  try {
-    file = await resolvePlainTarget(systemDir, ['PROPOSAL.json']);
-  } catch {
-    return null;
-  }
-  const info = await lstat(file).catch(() => null);
-  if (info === null || !info.isFile() || info.size > SYSTEM_PROPOSAL_MAX_BYTES) return null;
-  try {
-    const raw: unknown = JSON.parse(await readFile(file, 'utf8'));
-    return isRecord(raw) && typeof raw.id === 'string' && SYSTEM_PROPOSAL_ID_PATTERN.test(raw.id) ? raw.id : null;
-  } catch {
-    return null;
-  }
-};
-
 /** Writes the record, keeping the parts the other source owns. */
 const writeRecord = async (ctx: ServiceContext, id: string, systemDir: string, update: (current: LivingPageRecord | null) => LivingPageRecord): Promise<void> => {
   const file = await chamberFile(ctx, id, systemDir, STAGED_JSON);
@@ -549,16 +528,11 @@ const regenerateProposal = async (ctx: ServiceContext, id: string): Promise<void
   const state = await systems.readState(id);
   if (state.home?.kind !== 'repo') return;
   const systemDir = await systems.dir(id);
-  const proposal = await proposalIdOf(systemDir);
-  if (proposal === null) return;
-  let proposalDir: string;
-  try {
-    proposalDir = await resolveInside(systemDir, ['proposal']);
-  } catch {
-    return;
-  }
-  const info = await lstat(proposalDir).catch(() => null);
-  if (info === null || !info.isDirectory() || !samePath(proposalDir, path.join(systemDir, 'proposal'))) return;
+  const file = await readProposalFile(systemDir);
+  if (file.kind === 'absent' || file.parsed.unreadable !== null || file.parsed.id === null) return;
+  const proposal = file.parsed.id;
+  const proposalDir = await proposalDirOf(systemDir);
+  if (proposalDir === null) return;
 
   const source = createLiveFileSource(proposalDir);
   const detail = buildSystemDetail(await detailSourceFromTree({ id, dir: systemDir, state, rels: await listFiles(proposalDir) }, source));
@@ -754,4 +728,90 @@ export const startLivingPages = (ctx: ServiceContext, ready?: () => Promise<unkn
     stopped = true;
     await sweep.catch(() => undefined);
   };
+};
+
+// ---- the staged page and the proposal preview, rendered for the artboard frame (§3.5 rev 3, AD-30) ----
+
+export const LIVING_RENDER_MISSING = "There's no living page to show yet.";
+export const LIVING_RENDER_STALE = 'That living page is no longer in the cache. Open it again.';
+const LIVING_RENDER_TOO_LARGE = 'The living page is too large to show inside OpenChamber.';
+const RENDER_CACHE_MAX = 64 * 1024 * 1024;
+const RENDER_ENTRY = 'living-page.html';
+
+/**
+ * `RenderMeta` of the staged page (`which: staged`) or the proposal preview (`which: preview`), read from
+ * `.chamber/` only (never the repo). The page is self-contained, so the bundle reads nothing beside it:
+ * any reference stays missing. The page shows both modes itself; `scheme` keys the cache for the frame.
+ */
+export const renderLivingPage = async (ctx: ServiceContext, id: string, options: { which: 'staged' | 'preview'; scheme: 'light' | 'dark' }): Promise<RenderMeta> => {
+  const systems = ensureSystemStore(ctx);
+  const systemDir = await systems.dir(id);
+  const state = await systems.readState(id);
+  if (state.home?.kind !== 'repo') throw new ApiError('not-found', LIVING_RENDER_MISSING);
+  let file: string;
+  try {
+    file = await resolvePlainTarget(systemDir, ['.chamber', options.which === 'staged' ? STAGED_HTML : PREVIEW_HTML]);
+  } catch {
+    throw new ApiError('not-found', LIVING_RENDER_MISSING);
+  }
+  const info = await lstat(file).catch(() => null);
+  if (info === null || !info.isFile()) throw new ApiError('not-found', LIVING_RENDER_MISSING);
+  if (info.size > LIVING_PAGE_MAX_BYTES) throw new ApiError('too-large', LIVING_RENDER_TOO_LARGE);
+  const handle = await open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)).catch(() => null);
+  if (handle === null) throw new ApiError('not-found', LIVING_RENDER_MISSING);
+  let html: string;
+  try {
+    const bytes = await handle.readFile();
+    if (bytes.length > LIVING_PAGE_MAX_BYTES) throw new ApiError('too-large', LIVING_RENDER_TOO_LARGE);
+    html = bytes.toString('utf8');
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+
+  const cache = sharedOf(ctx);
+  const key = sha256(JSON.stringify({ g: 'living-page', id, which: options.which, scheme: options.scheme, html: sha256(html) }));
+  const cached = cache.renders.get(key);
+  if (cached !== undefined) {
+    cache.renders.delete(key);
+    cache.renders.set(key, cached);
+    return cached.meta;
+  }
+  const empty: FileSource = { root: systemDir, read: () => Promise.resolve(null), stat: () => Promise.resolve(null) };
+  let result: Awaited<ReturnType<typeof bundleDocument>>;
+  try {
+    result = await bundleDocument(overlaySource(empty, html, RENDER_ENTRY), RENDER_ENTRY, { mode: 'render' });
+  } catch (error) {
+    if (error instanceof BundleTooLarge) throw new ApiError('too-large', LIVING_RENDER_TOO_LARGE);
+    throw error;
+  }
+  const chunks = splitChunks(result.html, RENDER_CHUNK_MAX_BYTES);
+  const bytes = Buffer.byteLength(result.html, 'utf8');
+  const meta: RenderMeta = {
+    key,
+    chunks: chunks.length,
+    bytes,
+    title: `${state.name}: ${options.which === 'staged' ? 'living page' : 'living page preview'}`,
+    missing: result.missing,
+    blocked: result.blocked,
+    external: result.external,
+    warnings: result.warnings,
+  };
+  cache.renders.set(key, { id, chunks, meta, bytes });
+  cache.renderBytes += bytes;
+  for (const [old, entry] of [...cache.renders]) {
+    if (cache.renderBytes <= RENDER_CACHE_MAX) break;
+    cache.renders.delete(old);
+    cache.renderBytes -= entry.bytes;
+  }
+  return meta;
+};
+
+/** One chunk of a rendered living page; `stale` when the key was dropped or belongs to another system. */
+export const livingPageChunk = (ctx: ServiceContext, id: string, key: string, n: number): string => {
+  const entry = sharedOf(ctx).renders.get(key);
+  if (entry === undefined || entry.id !== id) throw new ApiError('stale', LIVING_RENDER_STALE);
+  if (!Number.isInteger(n) || n < 0 || n >= entry.chunks.length) throw new ApiError('bad-request', 'That chunk number is not part of this page.');
+  const chunk = entry.chunks[n];
+  if (chunk === undefined) throw new ApiError('stale', LIVING_RENDER_STALE);
+  return chunk;
 };

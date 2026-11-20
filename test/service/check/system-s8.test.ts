@@ -128,7 +128,7 @@ test('s8Findings: what landed differs from the approval, and a proposal that can
   assert.deepEqual(out.map((finding) => findingMessage(finding)), ['What landed in shop differs from the proposal you approved in 2 files.', "The agent says it applied docs, but Design Chamber found none in shop."]);
   assert.deepEqual(run(source({ home: repoHome(), landed: { ...landed, matches: true } })), []);
 
-  const proposal = run(source({ home: repoHome() }), { ...FRESH, proposal: 'path-outside' });
+  const proposal = run(source({ home: repoHome() }), { ...FRESH, proposal: { reason: 'path-outside', sentence: null } });
   assert.deepEqual(proposal.map((finding) => [finding.code, finding.file, severityOf(finding.code, finding.params)]), [['system-proposal-invalid', 'PROPOSAL.json', 'warning']]);
   assert.match(findingMessage(proposal[0] as CheckFindingData), /^PROPOSAL\.json can't be used: /);
 });

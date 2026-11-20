@@ -70,6 +70,7 @@ import { isAtomicTempName, isInsideOrEqual, LINK_SENTENCE, renameWithRetry, reso
 import { folderErrorSentence, isDirectory } from '../root.ts';
 import { treeHashOf } from '../versions.ts';
 import { systemSelfWritesKey } from '../watch.ts';
+import { currentEntry, readProposalsRecord } from './proposal-record.ts';
 
 // ---- sentences ----
 
@@ -554,9 +555,13 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
   let livingPageReader: LivingPageReader | null = null;
 
   const detailOf = async (id: string): Promise<SystemDetail> => {
-    const detail = buildSystemDetail(await get(id), rules);
+    const source = await get(id);
+    const detail = buildSystemDetail(source, rules);
     const livingPage = detail.home.kind === 'repo' && livingPageReader !== null ? ((await livingPageReader(id)) ?? detail.livingPage) : detail.livingPage;
-    return { ...detail, usedBy: designsOf().filter((design) => design.system?.id === id).length, ...settingsFacts(id), livingPage };
+    // The proposal as the service recorded it (§5.14); the block reads the rest from its own route.
+    const current = currentEntry(await readProposalsRecord(source.dir).catch(() => null));
+    const proposal = current === null ? null : { id: current.id, state: current.state };
+    return { ...detail, usedBy: designsOf().filter((design) => design.system?.id === id).length, ...settingsFacts(id), livingPage, proposal };
   };
 
   const summaryOf = (detail: SystemDetail): SystemSummary => ({
@@ -576,8 +581,7 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     building: (detail.build !== null && detail.build.round !== 'done') || (detail.home.kind === 'repo' && detail.snapshot === null),
     sharedRepoWith: null,
     livingPage: detail.livingPage?.state ?? null,
-    // T17 (proposals) fills this.
-    proposalWaiting: false,
+    proposalWaiting: detail.proposal?.state === 'current',
   });
 
   /** A row that has no detail: an unusable folder, one over the cap, or one that can't be read. */

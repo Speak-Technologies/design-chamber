@@ -9,7 +9,7 @@
 //
 // T1 fills `parseSystemJson`, `parseSystemState`, `coveredAreas`, `buildSystemDetail`,
 // `sectionFingerprints`, `deriveReview` and `safeAssetName`; T12b `parseBuildJson`,
-// `isSystemContractRel` and `buildProblemSentence`. Still a seam: T17 (`parseProposal`).
+// `isSystemContractRel` and `buildProblemSentence`; T17 `parseProposal` and `landedSentence`.
 //
 // Token values: which declaration is light or dark, a token's section and whether a value is
 // valid are the token rules of `token-edit.ts` (T3). `buildSystemDetail` takes them as
@@ -34,7 +34,12 @@ import {
   SYSTEM_NOTES_MAX,
   SYSTEM_OVERVIEW_MAX,
   SYSTEM_PATTERNS_MAX,
+  REPO_PATH_PATTERN,
+  SYSTEM_PROPOSAL_FILES_MAX,
   SYSTEM_PROPOSAL_ID_PATTERN,
+  SYSTEM_PROPOSAL_MAX_BYTES,
+  SYSTEM_PROPOSAL_PATCH_MAX,
+  SYSTEM_PROPOSAL_PATCHES_MAX,
   SYSTEM_TOKEN_NAME_PATTERN,
   SYSTEM_TOKENS_MAX,
   SYSTEM_TYPE_STYLES_MAX,
@@ -51,7 +56,12 @@ import type {
   JsonObject,
   JsonValue,
   LogoAsset,
+  LandedView,
+  ProposalFile,
+  ProposalFileEntry,
   ProposalJson,
+  ProposalPart,
+  ProposalPartName,
   ReviewState,
   SourceLine,
   SystemArea,
@@ -66,11 +76,6 @@ import type {
   TokenValue,
   TypeStyle,
 } from './types.ts';
-
-const NOT_BUILT = 'This part of Design Chamber (design systems) is not built yet.';
-const notBuilt = (): never => {
-  throw new Error(NOT_BUILT);
-};
 
 /** One entry that could not be read; the page lists them ("3 entries couldn't be read."). */
 export type SystemProblem = { entry: string; message: string };
@@ -864,7 +869,7 @@ const repoProblemSentence = (state: SystemState, home: Extract<NonNullable<Syste
   return repoProblemText(problem.reason, home.directory, home.folder);
 };
 
-const homeViewOf = (state: SystemState): SystemHomeView => {
+export const homeViewOf = (state: SystemState): SystemHomeView => {
   const home = state.home;
   if (home === undefined || home.kind === 'internal') return { kind: 'internal' };
   // The label is the folder's base name; the guest maps it to the host's listProjects name (§9.5),
@@ -1024,7 +1029,7 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
     codeDrift: state.codeDrift ? { ...state.codeDrift, unread: state.codeDrift.unread ?? [] } : null,
     livingPage: home.kind === 'repo' ? { state: null, sentence: null } : null,
     proposal: null,
-    landed: state.landed ? { ...state.landed, sentence: null } : null,
+    landed: state.landed ? { ...state.landed, sentence: landedSentence(state.landed, home.kind === 'repo' ? home.label : 'your code') } : null,
     agentDrift: source.build?.drift ?? null,
   };
   const derived = deriveReview(state, sectionFingerprints(detail, source.hashes ?? {}));
@@ -1174,6 +1179,30 @@ export const resyncStampOf = (stamps: { tokens: string | null; systemJson: strin
 export const RESYNC_STAMP_PATTERN = /^(?:[0-9a-f]{64}|none):(?:[0-9a-f]{64}|none)$/;
 
 export const isUsableSystemId = (id: string): boolean => SYSTEM_ID_PATTERN.test(id) && !isReservedSystemId(id);
+
+const PART_APPLIED: Readonly<Record<ProposalPartName, string>> = { 'system-files': 'the system files', 'token-fixes': 'the token fixes', docs: 'docs', 'living-page': 'the living page' };
+const PART_FOUND: Readonly<Record<ProposalPartName, string>> = { 'system-files': 'system files', 'token-fixes': 'token fixes', docs: 'docs', 'living-page': 'living page' };
+const andList = (items: readonly string[]): string => (items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+
+/**
+ * What landed vs what was approved (§5.14 step 6), in words: the files that differ, then the parts the
+ * agent stamped that Design Chamber did not find. Null when everything matches.
+ */
+export const landedSentence = (landed: Pick<LandedView, 'differ' | 'unclaimed'>, repo: string): string | null => {
+  const out: string[] = [];
+  if (landed.differ.length > 0) {
+    const count = landed.differ.length;
+    out.push(`What landed in ${repo} differs from what you approved in ${count === 1 ? '1 file' : `${count} files`}: ${landed.differ.join(', ')}.`);
+  }
+  const parts = landed.unclaimed.filter((part): part is ProposalPartName => Object.hasOwn(PART_APPLIED, part));
+  if (parts.length === 1) {
+    const part = parts[0] as ProposalPartName;
+    out.push(`The agent says it applied ${PART_APPLIED[part]}, but Design Chamber found no ${PART_FOUND[part]} in ${repo}.`);
+  } else if (parts.length > 1) {
+    out.push(`The agent says it applied ${andList(parts.map((part) => PART_APPLIED[part]))}, but Design Chamber found none of them in ${repo}.`);
+  }
+  return out.length === 0 ? null : out.join(' ');
+};
 
 /** A path in the system file contract (§5.10): `system.json`, `tokens.css`, `OVERVIEW.md`, `notes/<id>.md`, …. */
 export const isSystemContractRel = (rel: string): boolean => {
@@ -1354,7 +1383,183 @@ export const parseBuildJson = (text: string): ParsedBuildJson => {
   return { build, raw: value, problems, unreadable: null };
 };
 
-/** `PROPOSAL.json` (schema `design-chamber/system-proposal@1`, §2.15): ≤ `SYSTEM_PROPOSAL_MAX_BYTES`, else unreadable. */
-export type ParsedProposal = { proposal: ProposalJson | null; problems: SystemProblem[]; unreadable: string | null };
+/**
+ * `PROPOSAL.json` (schema `design-chamber/system-proposal@1`, §2.15): ≤ `SYSTEM_PROPOSAL_MAX_BYTES`, else unreadable.
+ * `id` is the proposal's id whenever it passes its pattern, even when the rest is unreadable (so the
+ * record can mark that id). `parts` is the view's shape (`patchOmitted` set, `bytes` null until the
+ * service measures the `from` file). Any problem means the user would not see the whole diff, so the
+ * service lists them and Approve stays off.
+ */
+export type ParsedProposal = {
+  proposal: ProposalJson | null;
+  id: string | null;
+  parts: ProposalPart[];
+  raw: JsonObject | null;
+  problems: SystemProblem[];
+  unreadable: string | null;
+};
 
-export const parseProposal = (text: string): ParsedProposal => notBuilt();
+export const PROPOSAL_NOT_JSON = "PROPOSAL.json isn't valid JSON.";
+export const PROPOSAL_TOO_LARGE = 'PROPOSAL.json is larger than 512 KB.';
+export const PROPOSAL_NO_ID = 'PROPOSAL.json needs an id like p_k3m9q2x7, new for every proposal.';
+export const PROPOSAL_TOO_MANY_FILES = `PROPOSAL.json lists more than ${SYSTEM_PROPOSAL_FILES_MAX} files. Ask the agent to split the change.`;
+export const PROPOSAL_NO_PARTS = 'PROPOSAL.json needs a parts list.';
+export const PATCH_OMITTED_SENTENCE = "The change is too long to show here; it's in the chat.";
+const PROPOSAL_SUMMARY_MAX = 500;
+const PROPOSAL_FILE_SUMMARY_MAX = 300;
+const PROPOSAL_COUNT_MAX = 1_000_000;
+const WAY_BACK_NAME_MAX = 100;
+const WAY_BACK_TEXT_MAX = 300;
+const WAY_BACK_KINDS: readonly string[] = ['commit', 'branch', 'stash', 'none'];
+const FROM_PARTS: readonly string[] = ['system-files', 'docs'];
+
+const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= PROPOSAL_COUNT_MAX;
+
+/**
+ * Tolerant like `parseBuildJson`: an invalid file entry or field is dropped with a problem; without an
+ * id, a parts list, or with more than 200 files there is nothing safe to show, so the file is
+ * unreadable. `skipDirs` is discovery's list (passed in so this module stays pure and there is one list).
+ */
+export const parseProposal = (text: string, options: { skipDirs: ReadonlySet<string> }): ParsedProposal => {
+  const fail = (unreadable: string, extra: Partial<ParsedProposal> = {}): ParsedProposal => ({ proposal: null, id: null, parts: [], raw: null, problems: [], unreadable, ...extra });
+  if (text.length > SYSTEM_PROPOSAL_MAX_BYTES || (text.length * 3 > SYSTEM_PROPOSAL_MAX_BYTES && byteLength(text) > SYSTEM_PROPOSAL_MAX_BYTES)) return fail(PROPOSAL_TOO_LARGE);
+  let value: unknown;
+  try {
+    value = JSON.parse(stripBom(text));
+  } catch {
+    return fail(PROPOSAL_NOT_JSON);
+  }
+  if (!isObject(value)) return fail(PROPOSAL_NOT_JSON);
+  const rawId = own(value, 'id');
+  if (typeof rawId !== 'string' || !SYSTEM_PROPOSAL_ID_PATTERN.test(rawId)) return fail(PROPOSAL_NO_ID, { raw: value });
+  const id = rawId;
+  const rawParts = own(value, 'parts');
+  if (!Array.isArray(rawParts)) return fail(PROPOSAL_NO_PARTS, { raw: value, id });
+  let fileCount = 0;
+  for (const part of rawParts) {
+    const files = isObject(part) ? own(part, 'files') : undefined;
+    if (Array.isArray(files)) fileCount += files.length;
+  }
+  if (fileCount > SYSTEM_PROPOSAL_FILES_MAX) return fail(PROPOSAL_TOO_MANY_FILES, { raw: value, id });
+
+  const problems: SystemProblem[] = [];
+  const broken = (entry: string, message: string): void => void problems.push({ entry, message });
+
+  const rawVersion = own(value, 'version');
+  if (rawVersion !== undefined && rawVersion !== 1) broken('version', 'version in PROPOSAL.json must be 1.');
+
+  let supersedes: string | null = null;
+  const rawSupersedes = own(value, 'supersedes');
+  if (rawSupersedes !== undefined && rawSupersedes !== null) {
+    if (typeof rawSupersedes === 'string' && SYSTEM_PROPOSAL_ID_PATTERN.test(rawSupersedes)) supersedes = rawSupersedes;
+    else broken('supersedes', 'supersedes in PROPOSAL.json is not a proposal id, so it was skipped.');
+  }
+
+  const rawCreated = own(value, 'created');
+  const created = isIso(rawCreated) ? rawCreated : new Date(0).toISOString();
+  if (!isIso(rawCreated)) broken('created', 'created in PROPOSAL.json needs an ISO time.');
+
+  const rawMode = own(value, 'mode');
+  const mode = rawMode === 'fix' || rawMode === 'describe' || rawMode === 'none' ? rawMode : 'none';
+  if (mode !== rawMode) broken('mode', 'mode in PROPOSAL.json must be fix, describe or none.');
+
+  const summaryText = noteText(own(value, 'summary'), PROPOSAL_SUMMARY_MAX);
+  const summary = summaryText ?? '';
+  if (summaryText === null) broken('summary', `The summary in PROPOSAL.json must be text of up to ${PROPOSAL_SUMMARY_MAX} characters.`);
+
+  let wayBack: ProposalJson['wayBack'] = { kind: 'none', name: '', text: '' };
+  const rawWayBack = own(value, 'wayBack');
+  if (rawWayBack !== undefined && rawWayBack !== null) {
+    const kind = isObject(rawWayBack) ? own(rawWayBack, 'kind') : undefined;
+    const name = isObject(rawWayBack) ? noteText(own(rawWayBack, 'name'), WAY_BACK_NAME_MAX) : null;
+    const wayText = isObject(rawWayBack) ? noteText(own(rawWayBack, 'text'), WAY_BACK_TEXT_MAX) : null;
+    if (typeof kind === 'string' && WAY_BACK_KINDS.includes(kind) && name !== null && wayText !== null) {
+      wayBack = { kind: kind as ProposalJson['wayBack']['kind'], name, text: wayText };
+    } else {
+      broken('wayBack', 'wayBack in PROPOSAL.json needs a kind (commit, branch, stash or none), a name and a line of text.');
+    }
+  } else {
+    broken('wayBack', 'PROPOSAL.json should say how to undo the change (wayBack).');
+  }
+
+  const rawAccess = own(value, 'access');
+  const access = rawAccess === 'dev' || rawAccess === 'public' ? rawAccess : null;
+  if (rawAccess !== undefined && rawAccess !== null && access !== rawAccess) broken('access', 'access in PROPOSAL.json must be dev, public or null.');
+
+  // Patches: each ≤ SYSTEM_PROPOSAL_PATCH_MAX characters, all ≤ SYSTEM_PROPOSAL_PATCHES_MAX; one over
+  // either cap is dropped and its file says so (that is not a problem: the patch is in the chat).
+  let patchBudget = SYSTEM_PROPOSAL_PATCHES_MAX;
+  const parts: ProposalJson['parts'] = [];
+  const views: ProposalPart[] = [];
+  rawParts.forEach((rawPart, partIndex) => {
+    const partEntry = `parts[${partIndex}]`;
+    if (!isObject(rawPart)) return broken(partEntry, 'This part is not an object.');
+    const name = own(rawPart, 'name');
+    if (typeof name !== 'string' || !BUILD_PART_NAMES.includes(name)) return broken(partEntry, 'A part is named system-files, token-fixes, docs or living-page.');
+    const partName = name as ProposalPartName;
+    if (parts.some((part) => part.name === partName)) return broken(partEntry, `${partName} appears more than once in PROPOSAL.json.`);
+    const rawFiles = own(rawPart, 'files');
+    if (!Array.isArray(rawFiles)) return broken(partEntry, `${partName} needs a files list.`);
+    const files: ProposalFileEntry[] = [];
+    const fileViews: ProposalFile[] = [];
+    rawFiles.forEach((rawFile, fileIndex) => {
+      const entry = `${partEntry}.files[${fileIndex}]`;
+      if (!isObject(rawFile)) return broken(entry, 'This file is not an object.');
+      const filePath = own(rawFile, 'path');
+      if (typeof filePath !== 'string' || !REPO_PATH_PATTERN.test(filePath) || filePath.split('/').some((segment) => options.skipDirs.has(segment))) {
+        return broken(entry, 'A file path must be relative to the repo, up to 8 folders deep, and not inside node_modules, .git, dist, build or other generated folders.');
+      }
+      const change = own(rawFile, 'change');
+      if (change !== 'create' && change !== 'modify' && change !== 'delete') return broken(entry, `${filePath}: change must be create, modify or delete.`);
+      const fileSummary = noteText(own(rawFile, 'summary'), PROPOSAL_FILE_SUMMARY_MAX);
+      if (fileSummary === null) return broken(entry, `${filePath}: the summary must be text of up to ${PROPOSAL_FILE_SUMMARY_MAX} characters.`);
+      const added = own(rawFile, 'added') ?? 0;
+      const removed = own(rawFile, 'removed') ?? 0;
+      if (!isCount(added) || !isCount(removed)) return broken(entry, `${filePath}: added and removed are whole numbers from 0 to 1 000 000.`);
+
+      let patch: string | null = null;
+      let patchOmitted = false;
+      const rawPatch = own(rawFile, 'patch');
+      if (rawPatch !== undefined && rawPatch !== null) {
+        if (typeof rawPatch !== 'string') return broken(entry, `${filePath}: the patch must be text.`);
+        if (partName === 'living-page') broken(entry, 'The living page is generated by Design Chamber, so it has no patch.');
+        else if (rawPatch.length > SYSTEM_PROPOSAL_PATCH_MAX || rawPatch.length > patchBudget) patchOmitted = true;
+        else {
+          patch = rawPatch;
+          patchBudget -= rawPatch.length;
+        }
+      }
+
+      let from: string | null = null;
+      const rawFrom = own(rawFile, 'from');
+      if (rawFrom !== undefined && rawFrom !== null) {
+        const rel = typeof rawFrom === 'string' && rawFrom.startsWith('proposal/') ? rawFrom.slice('proposal/'.length) : null;
+        if (rel === null || !isSystemContractRel(rel)) return broken(entry, `${filePath}: from must name a system file under proposal/, like proposal/tokens.css.`);
+        if (change !== 'create' || !FROM_PARTS.includes(partName)) return broken(entry, `${filePath}: only a new system file or doc can point at proposal/.`);
+        from = rawFrom as string;
+      }
+
+      let usages: ProposalFileEntry['usages'] = null;
+      const rawUsages = own(rawFile, 'usages');
+      if (rawUsages !== undefined && rawUsages !== null) {
+        const count = isObject(rawUsages) ? own(rawUsages, 'count') : undefined;
+        const listed = isObject(rawUsages) ? own(rawUsages, 'listed') : undefined;
+        if (!isCount(count) || typeof listed !== 'boolean') return broken(entry, `${filePath}: usages needs a count and listed (true or false).`);
+        usages = { count, listed };
+      }
+
+      if (files.some((file) => file.path === filePath)) return broken(entry, `${filePath} is listed twice in ${partName}.`);
+      files.push({ path: filePath, change, summary: fileSummary, added, removed, patch, from, usages });
+      fileViews.push({ path: filePath, change, summary: fileSummary, added, removed, patch, patchOmitted, from, bytes: null, usages });
+    });
+    if (partName === 'living-page') {
+      const usable = files.length === 1 && files[0]?.change !== 'delete';
+      if (!usable) broken(partEntry, 'The living-page part holds exactly one file: a create or change of the living page.');
+    }
+    parts.push({ name: partName, files });
+    views.push({ name: partName, files: fileViews });
+  });
+
+  const proposal: ProposalJson = { version: 1, id, supersedes, created, mode, summary, parts, wayBack, access };
+  return { proposal, id, parts: views, raw: value, problems, unreadable: null };
+};

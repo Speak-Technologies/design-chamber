@@ -330,7 +330,9 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
     severity: 'warning',
     sentence: (f) => {
       const reason = f.params?.proposal;
-      return `PROPOSAL.json can't be used: ${reason !== undefined ? PROPOSAL_PROBLEM_SENTENCES[reason] : 'ask the agent to fix it.'}`;
+      // An unreadable file's own sentence is in the detail; the closed one would only guess at it.
+      if (reason === undefined || (reason === 'unreadable' && f.detail !== undefined)) return "PROPOSAL.json can't be used. Ask the agent to fix it.";
+      return `PROPOSAL.json can't be used: ${PROPOSAL_PROBLEM_SENTENCES[reason]}`;
     },
   },
 };

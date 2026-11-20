@@ -25,7 +25,7 @@ Design Chamber never writes into a repo. The agent writes the repo files; the se
 ## After adoption
 - **Until the first applied stamp** (`applied` in BUILD.json, written when the agent has put files in the repo) the agent may change the folder, the living page, the code folder, or go back to internal. Each change is checked again against the stored project folder. A change that fails leaves the last good home in place.
 - **From the first stamp on** the home is fixed. A different home is `home-changed` ("Acme already has files in shop, so its home can't change. Make a new system to move it."). A different ticket is `ticket-changed`. A different name is ignored.
-- **The stamp is acted on once.** The newest stamp seen is recorded in `state.json`, so a restart or a second write of the same stamp does nothing. A repo system's snapshot is refreshed (later task T13); an internal system with a code folder is scanned again.
+- **The stamp is acted on once.** The newest stamp seen is recorded in `state.json`, so a restart or a second write of the same stamp does nothing. A repo system's snapshot is refreshed and the approval the stamp claims is checked; an internal system with a code folder is scanned again.
 
 ## Read-only in Design Chamber (AD-20)
 A repo-backed system cannot be changed here. Hand edits and their Undo, adding brand files (by upload or from a folder) and restoring a version all answer 422 `read-only` with "Acme lives in shop. Change the values there, or ask the agent here." The refusal comes before any version, upload or write. A dropped upload is discarded, not kept for a retry.
@@ -37,4 +37,4 @@ A repo-backed system cannot be changed here. Hand edits and their Undo, adding b
 `src/service/systems/homes.ts` (`verifyRepoHome`, the adopt and follow rules, `startHomes`), `src/shared/system-json.ts` (`parseBuildJson`, the sentences), `src/shared/systems.ts` (`repoHomeShapeProblem`, pure), `src/service/systems/living-safe.ts` (`readLivingPageMark`), `src/service/systems/store.ts` (`refuseReadOnly`, a repo system's content from its snapshot), `src/service/reveal.ts` (`revealSystem`). Tests: `test/service/systems/homes.test.ts` (adoption reasons, follow rules, the stamp, the repo left unchanged), `test/shared/build-json.test.ts`, `test/service/render/reveal.test.ts`, and the read-only cases in `assets-routes.test.ts`, `versions.test.ts` and `edits.test.ts`.
 
 ## Not in this version
-The repo snapshot refresh and the code scan on adoption are wired to stubs (T13). Dropping staged living pages on a home change (T14) and superseding proposals (T17) are seams too.
+A home change drops the staged living pages and supersedes the current proposal. A new stamp checks the approval it claims ([Proposals](design-system-proposals.md)).

@@ -31,7 +31,7 @@ import {
 import { scanLivingPage } from '../../../src/service/systems/living-safe.ts';
 import { refreshSnapshot } from '../../../src/service/systems/snapshot.ts';
 import { createFakeBrowser } from './fake-cdp.ts';
-import { setupRepo, SYSTEM_JSON, type RepoRig } from './repo-fixture.ts';
+import { proposalJson, setupRepo, SYSTEM_JSON, type RepoRig } from './repo-fixture.ts';
 
 const TOKEN = 'living-page-bearer-token-0123456789abcdef';
 // Built from parts so no file in the repo holds a whole key shape.
@@ -347,7 +347,7 @@ test('a proposal preview has the band and no mark; one with a secret shape is ne
   const id = await rig.repoSystem();
   await rig.refresh(id);
   const dir = await rig.systems.dir(id);
-  await rig.tmp.write(path.relative(rig.tmp.root, path.join(dir, 'PROPOSAL.json')), { id: 'p_abcd1234' });
+  await rig.tmp.write(path.relative(rig.tmp.root, path.join(dir, 'PROPOSAL.json')), proposalJson('p_abcd1234'));
   const proposal = (rel: string, text: string): Promise<string> => rig.tmp.write(path.relative(rig.tmp.root, path.join(dir, 'proposal', ...rel.split('/'))), text);
   await proposal('tokens.css', ':root {\n  --brand-500: #0b57d0;\n}\n');
   await proposal('system.json', `${JSON.stringify({ version: 1, notes: [{ id: 'history', title: 'History' }] }, null, 2)}\n`);

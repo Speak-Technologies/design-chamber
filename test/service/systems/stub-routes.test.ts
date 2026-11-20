@@ -1,6 +1,6 @@
-// Phase 2.5 T0 (documentation/specs/phase-2-5-technical.md §18): every new route is registered as a
-// stub that answers the "not built yet" sentence, behind the same bearer check and path-parameter
-// gate as every other route. Each task that fills a route keeps these refusals.
+// Phase 2.5 T0 (documentation/specs/phase-2-5-technical.md §18): every new route was registered as a
+// stub, behind the same bearer check and path-parameter gate as every other route. T17 built the last
+// ones; these refusals stay for every route.
 
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
@@ -20,7 +20,6 @@ import { registerSystemEditRoutes } from '../../../src/service/routes/system-edi
 import { registerSystemScanRoutes } from '../../../src/service/routes/system-scans.ts';
 import { registerSystemVersionsRoutes } from '../../../src/service/routes/system-versions.ts';
 import { registerSystemsRoutes } from '../../../src/service/routes/systems.ts';
-import { SYSTEMS_NOT_BUILT_MESSAGE } from '../../../src/service/systems/not-built.ts';
 
 const TOKEN = 'stub-routes-token-0123456789';
 const P25 = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'P25');
@@ -146,6 +145,10 @@ const BUILT: ReadonlySet<RouteKey> = new Set<RouteKey>([
   'POST /systems/:id/prompt',
   // T14: test/service/systems/living-page.test.ts.
   'GET /systems/:id/living-page',
+  // T17: test/service/systems/proposals-routes.test.ts.
+  'GET /systems/:id/proposals/:proposalId',
+  'GET /systems/:id/living-page/render',
+  'GET /systems/:id/living-page/render/chunk',
   'GET /folders',
   'POST /folders',
   'PATCH /folders/:folderId',
@@ -154,12 +157,6 @@ const BUILT: ReadonlySet<RouteKey> = new Set<RouteKey>([
   'POST /folders/:folderId/designs',
 ]);
 
-test('with the token, every stub answers 500 with the not-built sentence and nothing else', async (t) => {
-  const { call } = await serve(t);
-  for (const key of P25.filter((candidate) => !BUILT.has(candidate))) {
-    const answer = await call(key, sample);
-    assert.equal(answer.status, 500, key);
-    assert.deepEqual(await answer.json(), { error: 'internal', message: SYSTEMS_NOT_BUILT_MESSAGE }, key);
-  }
-  assert.equal(SYSTEMS_NOT_BUILT_MESSAGE, 'This part of Design Chamber (design systems) is not built yet.');
+test('every Phase 2.5 route is built: no stub is left', () => {
+  assert.deepEqual(P25.filter((key) => !BUILT.has(key)), []);
 });

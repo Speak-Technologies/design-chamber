@@ -46,6 +46,23 @@ export const REPO_FILES: Record<string, string> = {
   'design-system/index.html': '<!doctype html><title>Acme</title>\n',
 };
 
+/**
+ * A sound PROPOSAL.json (§2.15) for the fixture repo: a token change in `design-system/`, created from
+ * `proposal/tokens.css`. `overrides` replace top-level keys (a test builds a broken one from it).
+ */
+export const proposalJson = (id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+  version: 1,
+  id,
+  supersedes: null,
+  created: '2026-11-20T10:00:00.000Z',
+  mode: 'fix',
+  summary: 'A darker brand blue.',
+  parts: [{ name: 'system-files', files: [{ path: 'design-system/tokens.css', change: 'modify', summary: 'The new blue.', added: 1, removed: 1 }] }],
+  wayBack: { kind: 'commit', name: 'abc1234', text: 'Revert the commit.' },
+  access: null,
+  ...overrides,
+});
+
 export type RepoRig = {
   tmp: TmpRoot;
   base: string;

@@ -1,8 +1,8 @@
 // AD-18 (documentation/specs/phase-2-5-technical.md §5.13): the service never writes a project repo.
 // Every step a repo-backed system goes through runs between two fingerprints of the repo (each file's
 // bytes, mode and mtime, each folder's listing), and the two must match: adoption, the code scan,
-// the snapshot refresh, the living page, the state routes, a user re-sync with a re-point, a link
-// and the delete.
+// the snapshot refresh, the living page, the state routes, a proposal (settle, preview, the T17 routes,
+// the approval and the landed compare), a user re-sync with a re-point, a link and the delete.
 
 import assert from 'node:assert/strict';
 import { cp, writeFile } from 'node:fs/promises';
@@ -12,6 +12,8 @@ import { test } from 'node:test';
 
 import type { CreateSystemScanResponse, SystemScanResponse } from '../../../src/shared/api.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
+import { registerSystemBoardRoutes } from '../../../src/service/routes/system-board.ts';
+import { registerSystemBuildRoutes } from '../../../src/service/routes/system-build.ts';
 import { registerSystemEditRoutes } from '../../../src/service/routes/system-edits.ts';
 import { registerSystemScanRoutes } from '../../../src/service/routes/system-scans.ts';
 import { registerSystemsRoutes } from '../../../src/service/routes/systems.ts';
@@ -21,11 +23,12 @@ import { runBuildScan } from '../../../src/service/systems/drift.ts';
 import { ensureScanJobs } from '../../../src/service/systems/extract.ts';
 import { createHomes } from '../../../src/service/systems/homes.ts';
 import { createLinkService } from '../../../src/service/systems/link.ts';
-import { regenerateLivingPage } from '../../../src/service/systems/living-page.ts';
+import { livingPagesIdle, regenerateLivingPage } from '../../../src/service/systems/living-page.ts';
+import { ensureProposals } from '../../../src/service/systems/proposals.ts';
 import { clearRecoverySnapshot, refreshSnapshot } from '../../../src/service/systems/snapshot.ts';
 import { createSystemStore } from '../../../src/service/systems/store.ts';
 import { createVersionsService } from '../../../src/service/versions.ts';
-import { fingerprintTree, setupRepo } from './repo-fixture.ts';
+import { fingerprintTree, proposalJson, setupRepo } from './repo-fixture.ts';
 
 const TOKEN = 'repo-readonly-token-0123456789ab';
 
@@ -52,6 +55,8 @@ test('no step of a repo-backed system changes a byte, mode, mtime or listing of 
   registerSystemsRoutes(router, ctx);
   registerSystemScanRoutes(router, ctx);
   registerSystemEditRoutes(router, ctx);
+  registerSystemBuildRoutes(router, ctx);
+  registerSystemBoardRoutes(router, ctx);
   const server = createServiceServer(router);
   await listenLoopback(server, 0);
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
@@ -75,6 +80,7 @@ test('no step of a repo-backed system changes a byte, mode, mtime or listing of 
     log: ctx.log,
     snapshots: { refresh: async (id, options) => void (await refreshSnapshot(ctx, id, options)), clear: (id) => clearRecoverySnapshot(ctx, id) },
     scans: { build: (id, directory) => runBuildScan(ctx, id, directory) },
+    proposals: ensureProposals(ctx),
   });
   t.after(() => homes.stop());
   const { ticket } = (await tickets.issue({ projectDirectory: project, sessionId: 'ses_build', rulesFor: () => '# rules\n' })).ticket;
@@ -100,18 +106,39 @@ test('no step of a repo-backed system changes a byte, mode, mtime or listing of 
     await writeFile(path.join(rig.base, 'unrelated.txt'), 'a change outside the repo\n');
     await refreshSnapshot(ctx, id, { by: 'agent' });
   });
-  // T14 lands the generator; until then it answers not-built. Either way the repo is untouched.
   await step('living-page generation', async () => {
-    try {
-      await regenerateLivingPage(ctx, id, { source: 'snapshot' });
-    } catch {
-      // The T14 stub throws before it returns a promise.
-    }
+    await regenerateLivingPage(ctx, id, { source: 'snapshot' });
   });
   await step('state routes', async () => {
     assert.equal((await call('GET', `/systems/${id}`)).status, 200);
     await call('GET', `/systems/${id}/living-page`);
     assert.equal((await call('GET', '/systems')).status, 200);
+  });
+
+  await step('proposal, preview and approval', async () => {
+    const dir = await systems.dir(id);
+    const inSystem = (rel: string): string => path.relative(rig.tmp.root, path.join(dir, ...rel.split('/')));
+    await rig.tmp.write(inSystem('proposal/tokens.css'), ':root {\n  --brand-500: #0b57d0;\n}\n');
+    await rig.tmp.write(inSystem('proposal/notes/palette.md'), 'A darker blue.\n');
+    const parts = [
+      { name: 'system-files', files: [{ path: 'design-system/notes/palette.md', change: 'create', summary: 'Why the blue.', added: 1, removed: 0, from: 'proposal/notes/palette.md' }] },
+      { name: 'living-page', files: [{ path: 'docs/design-system.html', change: 'create', summary: 'The page.', added: 1, removed: 0 }] },
+    ];
+    await rig.tmp.write(inSystem('PROPOSAL.json'), `${JSON.stringify(proposalJson('p_aaaa1111', { parts }), null, 2)}\n`);
+    const proposals = ensureProposals(ctx);
+    await proposals.settle(id);
+    await proposals.idle();
+    await livingPagesIdle(ctx);
+    assert.equal((await call('GET', `/systems/${id}/proposals/p_aaaa1111`)).status, 200);
+    const preview = await call('GET', `/systems/${id}/living-page/render?which=preview&scheme=light`);
+    assert.equal(preview.status, 200, JSON.stringify(preview.json));
+    assert.equal((await call('GET', `/systems/${id}/board?proposal=p_aaaa1111&scheme=light`)).status, 200);
+    await writeBuild({ round: 'done', applied: { at: '2026-11-20T12:00:00.000Z', parts: ['system-files', 'living-page'], skipped: [] }, proposal: 'p_aaaa1111' });
+    await livingPagesIdle(ctx);
+    const state = await systems.readState(id);
+    assert.equal(state.build?.approved?.proposal, 'p_aaaa1111');
+    // Nothing was written to the repo (the agent never applied it), and the compare says so.
+    assert.deepEqual([state.landed?.differ, state.landed?.unclaimed], [['notes/palette.md'], ['system-files', 'living-page']]);
   });
 
   await step('user re-sync with a re-point', async () => {
@@ -144,5 +171,5 @@ test('no step of a repo-backed system changes a byte, mode, mtime or listing of 
     assert.equal(deleted.status, 200, JSON.stringify(deleted.json));
   });
 
-  assert.deepEqual(steps, ['adoption', 'code scan', 'snapshot refresh', 'living-page generation', 'state routes', 'user re-sync with a re-point', 'link', 'delete']);
+  assert.deepEqual(steps, ['adoption', 'code scan', 'snapshot refresh', 'living-page generation', 'state routes', 'proposal, preview and approval', 'user re-sync with a re-point', 'link', 'delete']);
 });

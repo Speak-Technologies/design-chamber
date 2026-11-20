@@ -584,7 +584,8 @@ export type AssetsFromFolderBody = { directory: string };
 export type AssetsFromFolderResponse = { added: { file: string; kind: 'font' | 'logo' | 'source' }[]; refused: { name: string; reason: string }[] };
 
 /** The board render: a version (default live) and a colour scheme (default light). */
-export type SystemBoardQuery = { version?: string; scheme?: 'light' | 'dark' };
+/** `proposal`: the preview board of the proposal waiting now (§5.14 step 4); not with `version`. */
+export type SystemBoardQuery = { version?: string; proposal?: string; scheme?: 'light' | 'dark' };
 
 export type SystemPromptPurpose =
   | 'make' | 'ask' | 'review' | 'resync-notes' | 'checks' | 'continue'

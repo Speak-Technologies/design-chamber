@@ -49,6 +49,7 @@ import { readLivingPageMark } from './living-safe.ts';
 import { validateScanFolder } from './scan-folder.ts';
 import { runBuildScan } from './drift.ts';
 import { clearRecoverySnapshot, refreshSnapshot } from './snapshot.ts';
+import { ensureProposals } from './proposals.ts';
 import { ensureSystemStore, type SystemStore } from './store.ts';
 
 /** The living page's mark sits in the head; this much of an existing file is read to find it. */
@@ -147,8 +148,15 @@ export type HomesDeps = {
   scans?: { build(id: string, directory: string): Promise<void> };
   /** T14: drop the staged and preview living pages (a home change makes them the old home's). */
   livingPages?: { drop(id: string): Promise<void> };
-  /** T17: mark the current proposal superseded (a proposal for the old home is never approvable). */
-  proposals?: { supersede(id: string): Promise<void> };
+  /**
+   * T17: mark the current proposal superseded (a proposal for the old home is never approvable); the
+   * approval a stamp claims (inside the lock); what landed against it (after the refresh).
+   */
+  proposals?: {
+    supersede(id: string): Promise<void>;
+    approveLocked?(id: string, proposal: string | null, parts: readonly string[]): Promise<{ approved: boolean }>;
+    compareLanded?(id: string): Promise<void>;
+  };
   /** The watcher's current baseline (it changes with the root); each full pass runs after it. */
   ready?: () => Promise<void>;
   now?: () => Date;
@@ -163,7 +171,7 @@ export type Homes = {
 };
 
 /** What runs after the chain step, outside the system's lock (the seams take their own chains). */
-type Post = { refresh?: boolean; clearSnapshot?: boolean; scan?: string; dropLivingPages?: boolean; supersedeProposal?: boolean };
+type Post = { refresh?: boolean; clearSnapshot?: boolean; scan?: string; dropLivingPages?: boolean; supersedeProposal?: boolean; compareLanded?: boolean };
 
 type BuildRead = { kind: 'absent' } | { kind: 'unreadable' } | { kind: 'read'; parsed: ParsedBuildJson };
 
@@ -407,9 +415,15 @@ export const createHomes = (deps: HomesDeps): Homes => {
     );
     emitBuild(id);
     log.info('systems.homes.applied-seen', { system: id });
-    // T17: when `proposal` names the approved proposal, the refresh then runs compareLanded (§5.14).
+    // §5.14 step 5: the stamp's proposal must be the one recorded as shown, bytes unchanged. Anything
+    // else is a problem, and the snapshot is still read, because the repo is what it is.
+    let approved = false;
+    if (deps.proposals?.approveLocked !== undefined) {
+      approved = (await deps.proposals.approveLocked(id, build.proposal, build.applied.parts)).approved;
+      if (!approved && (await setProblem(id, 'applied-unknown-proposal', build.proposal ?? ''))) emitBuild(id);
+    }
     const home = state.home ?? { kind: 'internal' };
-    if (home.kind === 'repo') return { refresh: true };
+    if (home.kind === 'repo') return approved ? { refresh: true, compareLanded: true } : { refresh: true };
     const code = state.sources.code?.directory ?? null;
     return code === null ? {} : { scan: code };
   };
@@ -473,6 +487,9 @@ export const createHomes = (deps: HomesDeps): Homes => {
       if (deps.snapshots !== undefined) {
         await deps.snapshots.refresh(id, { by: 'agent' }).catch((error: unknown) => log.warn('systems.homes.refresh-failed', { system: id, error: errorText(error) }));
       }
+    }
+    if (post.compareLanded === true && deps.proposals?.compareLanded !== undefined) {
+      await deps.proposals.compareLanded(id).catch((error: unknown) => log.warn('systems.homes.landed-failed', { system: id, error: errorText(error) }));
     }
     if (post.scan !== undefined) {
       if (deps.scans !== undefined) {
@@ -543,14 +560,14 @@ export const startHomes = (ctx: ServiceContext, ready?: () => Promise<void>): ((
     settings: ctx.settings,
     hub: ctx.hub,
     log: ctx.log,
-    // A failure is caught and logged (the stamp is already seen, so it never loops). T17 wires
-    // `proposals.supersede`.
+    // A failure is caught and logged (the stamp is already seen, so it never loops).
     snapshots: {
       refresh: async (id, options) => void (await refreshSnapshot(ctx, id, options)),
       clear: (id) => clearRecoverySnapshot(ctx, id),
     },
     scans: { build: (id, directory) => runBuildScan(ctx, id, directory) },
     livingPages: { drop: (id) => dropLivingPages(ctx, id) },
+    proposals: ensureProposals(ctx),
     ...(ready !== undefined ? { ready } : {}),
   });
   return () => homes.stop();

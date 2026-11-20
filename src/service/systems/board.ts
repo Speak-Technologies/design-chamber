@@ -19,7 +19,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import type { RenderMeta } from '../../shared/api.ts';
-import { RENDER_CHUNK_MAX_BYTES, SYSTEM_JSON_MAX_BYTES, SYSTEM_NOTE_MAX, SYSTEM_OVERVIEW_MAX, TOKENS_CSS_MAX_BYTES, VERSION_ID_PATTERN } from '../../shared/limits.ts';
+import { RENDER_CHUNK_MAX_BYTES, SYSTEM_JSON_MAX_BYTES, SYSTEM_PROPOSAL_ID_PATTERN, SYSTEM_NOTE_MAX, SYSTEM_OVERVIEW_MAX, TOKENS_CSS_MAX_BYTES, VERSION_ID_PATTERN } from '../../shared/limits.ts';
 import { buildSystemDetail, type SystemDetailSource } from '../../shared/system-json.ts';
 import type { SystemDetail, SystemState } from '../../shared/types.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource, type BundleResult, type FileSource, type SourceFile } from '../bundle.ts';
@@ -29,6 +29,7 @@ import { splitChunks } from '../render-cache.ts';
 import type { VersionsService } from '../versions.ts';
 import { checkAsset } from './assets.ts';
 import { BOARD_ENTRY_FILE, BOARD_GENERATOR_VERSION, buildBoardHtml } from './board-html.ts';
+import { listFiles, proposalDirOf, readProposalFile, sha256Of } from './proposal-record.ts';
 import { ensureSystemStore, type SystemStore } from './store.ts';
 import { ensureSystemVersions } from './versions.ts';
 
@@ -40,6 +41,7 @@ const NOT_CONTENT = new Set(['BUILD.json', 'PROPOSAL.json', 'proposal', 'snapsho
 
 export const BOARD_TOO_LARGE_MESSAGE = "This design system's board is too large to show inside OpenChamber. Ask the agent to use smaller fonts, logos or examples.";
 export const BOARD_STALE_MESSAGE = 'That board is no longer in the cache. Load the design system again.';
+export const BOARD_NO_PROPOSAL_MESSAGE = "That proposal isn't the one waiting any more, so there's no preview to show.";
 
 const sha256 = (data: string | Uint8Array): string => createHash('sha256').update(data).digest('hex');
 
@@ -108,7 +110,8 @@ export const detailSourceFromTree = async (
 type BoardEntry = { key: string; id: string; chunks: string[]; meta: RenderMeta; bytes: number };
 
 export type BoardService = {
-  render(id: string, options: { version?: string; scheme: 'light' | 'dark' }): Promise<RenderMeta>;
+  /** `proposal`: the preview board over `proposal/` (§5.14 step 4), only for the proposal waiting now. */
+  render(id: string, options: { version?: string; proposal?: string; scheme: 'light' | 'dark' }): Promise<RenderMeta>;
   /** One chunk of a cached board; `stale` when the key was dropped or belongs to another system. */
   chunk(id: string, key: string, n: number): string;
 };
@@ -156,6 +159,20 @@ export const createBoardService = (deps: BoardDeps): BoardService => {
     }),
   );
 
+  /** The proposed system: `proposal/` read as a system folder, for the current PROPOSAL.json only; its sha keys the cache. */
+  const readProposal = async (id: string, proposal: string): Promise<{ detail: SystemDetail; source: FileSource; sha: string }> => {
+    if (!SYSTEM_PROPOSAL_ID_PATTERN.test(proposal)) throw new ApiError('bad-request', 'That is not a proposal id.');
+    const dir = await deps.systems.dir(id);
+    const state = await deps.systems.readState(id);
+    const file = state.home?.kind === 'repo' ? await readProposalFile(dir) : null;
+    const proposalDir = file !== null && file.kind !== 'absent' && file.parsed.id === proposal ? await proposalDirOf(dir) : null;
+    if (file === null || file.kind === 'absent' || proposalDir === null) throw new ApiError('not-found', BOARD_NO_PROPOSAL_MESSAGE);
+    const source = createLiveFileSource(proposalDir);
+    const rels = await listFiles(proposalDir);
+    const detail = buildSystemDetail(await detailSourceFromTree({ id, dir, state, rels }, source));
+    return { detail, source, sha: sha256Of(`${file.fileSha256}\n${rels.sort().join('\n')}`) };
+  };
+
   /** The detail and the source its files come from, live or from a version. */
   const read = async (id: string, version: string | undefined): Promise<{ detail: SystemDetail; source: FileSource }> => {
     if (version === undefined) {
@@ -177,7 +194,9 @@ export const createBoardService = (deps: BoardDeps): BoardService => {
 
   return {
     async render(id, options) {
-      const { detail, source } = await read(id, options.version);
+      if (options.proposal !== undefined && options.version !== undefined) throw new ApiError('bad-request', 'Ask for a version or a proposal, not both.');
+      const proposed = options.proposal !== undefined ? await readProposal(id, options.proposal) : null;
+      const { detail, source } = proposed ?? (await read(id, options.version));
 
       // Examples, one by one, relative to components/ (their remote refs per component).
       const examples: Record<string, string> = {};
@@ -201,7 +220,9 @@ export const createBoardService = (deps: BoardDeps): BoardService => {
       }
 
       const html = buildBoardHtml({ ...detail, components }, { scheme: options.scheme, examples, unusable });
-      const key = sha256(JSON.stringify({ g: BOARD_GENERATOR_VERSION, id, v: options.version ?? null, s: options.scheme, html: sha256(html), assets: keyParts.sort() }));
+      const key = sha256(
+        JSON.stringify({ g: BOARD_GENERATOR_VERSION, id, v: options.version ?? null, p: proposed === null ? null : [options.proposal, proposed.sha], s: options.scheme, html: sha256(html), assets: keyParts.sort() }),
+      );
       const cached = cache.get(key);
       if (cached !== undefined) {
         cache.delete(key);
@@ -222,7 +243,7 @@ export const createBoardService = (deps: BoardDeps): BoardService => {
         key,
         chunks: chunks.length,
         bytes,
-        title: `${detail.name}: specimen board`,
+        title: proposed === null ? `${detail.name}: specimen board` : `${detail.name}: proposed specimen board`,
         missing: result.missing,
         blocked: result.blocked,
         external: [...new Set([...result.external, ...components.flatMap((component) => component.example?.remote ?? [])])],
@@ -255,5 +276,5 @@ export const ensureBoardService = (ctx: ServiceContext): BoardService => {
 };
 
 /** The T0 entry point (§5.7). */
-export const renderBoard = (ctx: ServiceContext, id: string, options: { version?: string; scheme: 'light' | 'dark' }): Promise<RenderMeta> =>
+export const renderBoard = (ctx: ServiceContext, id: string, options: { version?: string; proposal?: string; scheme: 'light' | 'dark' }): Promise<RenderMeta> =>
   ensureBoardService(ctx).render(id, options);

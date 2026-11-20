@@ -41,6 +41,7 @@ import type { ChangeHub, Logger, ServiceContext, SettingsStore } from '../contex
 import { ApiError } from '../http.ts';
 import { renameWithRetry, resolveInside, resolvePlainTarget, samePath, writeFileAtomic } from '../paths.ts';
 import { folderErrorSentence } from '../root.ts';
+import { ensureProposals } from './proposals.ts';
 import { ensureSystemStore, SYSTEMS_CAP_MESSAGE, type SystemStore } from './store.ts';
 
 export type BuildTicket = { v: 1; ticket: string; created: string; projectDirectory: string | null; sessionId: string | null };
@@ -91,6 +92,8 @@ export type BuildTicketsDeps = {
   hub: Pick<ChangeHub, 'emit' | 'subscribe'>;
   log: Logger;
   systems: Pick<SystemStore, 'list' | 'index' | 'readState' | 'trash' | 'withLock'>;
+  /** T17: Stop declines the proposal it was clicked on (§5.14), inside the system's lock. */
+  proposals?: () => { declineLocked(id: string, proposalId: string | null): Promise<void> };
   /** Test seams. */
   now?: () => Date;
   undoMs?: number;
@@ -401,6 +404,10 @@ export const createBuildTickets = (deps: BuildTicketsDeps): BuildTickets => {
     sweep: () => run(() => sweepNow(SYSTEM_BUILDS_MAX)),
 
     stop: async (id, { proposalId }) => {
+      // The decline goes first, so the record goes to the trash with the folder (and comes back with Undo).
+      // It changes only a proposal still waiting; a stop that is then refused leaves the user's no standing.
+      const proposals = deps.proposals?.();
+      if (proposals !== undefined) await systems.withLock(id, () => proposals.declineLocked(id, proposalId));
       let name = id;
       const deleted = await systems.trash(id, {
         guard: (state) => {
@@ -414,7 +421,6 @@ export const createBuildTickets = (deps: BuildTicketsDeps): BuildTickets => {
       const undoId = `su_${randomSuffix()}`;
       const until = now().getTime() + undoMs;
       undos.set(undoId, { id, name, trashedTo: deleted.trashedTo, root: settings.root(), until });
-      // T17 records the proposal as declined (`.chamber/proposals.json`, which went to the trash with the folder).
       log.info('system-builds.stopped', { system: id, proposal: proposalId });
       return { undoId, until: new Date(until).toISOString() };
     },
@@ -476,7 +482,7 @@ const instances = new WeakMap<ServiceContext, BuildTickets>();
 export const ensureBuildTickets = (ctx: ServiceContext): BuildTickets => {
   const existing = instances.get(ctx);
   if (existing !== undefined) return existing;
-  const created = createBuildTickets({ settings: ctx.settings, hub: ctx.hub, log: ctx.log, systems: ensureSystemStore(ctx) });
+  const created = createBuildTickets({ settings: ctx.settings, hub: ctx.hub, log: ctx.log, systems: ensureSystemStore(ctx), proposals: () => ensureProposals(ctx) });
   instances.set(ctx, created);
   ctx.onDispose(() => created.dispose());
   created.sweep().catch((error: unknown) => ctx.log.warn('system-builds.sweep-failed', { error: errorText(error) }));

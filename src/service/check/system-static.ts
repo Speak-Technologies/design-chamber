@@ -112,8 +112,11 @@ export type S8Facts = {
     /** The staged record (`.chamber/living-page.json`), null when there is none. */
     staged: { problem: NonNullable<CheckParams['failed']> | null; secrets: readonly { kind: SecretShapeKind; where: string }[] } | null;
   } | null;
-  /** The current PROPOSAL.json's first problem (§5.14's closed list), null when there is none or it is sound. */
-  proposal: ProposalProblemReason | null;
+  /**
+   * The current PROPOSAL.json's first problem (§5.14's closed list), null when there is none or it is sound;
+   * `sentence` is the specific one (the parser's, or the step 3 check's) and goes in the finding's detail.
+   */
+  proposal: { reason: ProposalProblemReason; sentence: string | null } | null;
 };
 
 const PART_NAMES: readonly ProposalPartName[] = ['system-files', 'token-fixes', 'docs', 'living-page'];
@@ -223,7 +226,10 @@ export const s8Findings = (source: Pick<SystemDetailSource, 'state' | 'systemJso
     });
   }
 
-  if (facts.proposal !== null) out.push({ code: 'system-proposal-invalid', file: 'PROPOSAL.json', screen: null, viewport: null, params: named({ proposal: facts.proposal }) });
+  if (facts.proposal !== null) {
+    const detail = facts.proposal.sentence === null ? '' : cleanDetail(facts.proposal.sentence, CHECK_DETAIL_MAX);
+    out.push({ code: 'system-proposal-invalid', file: 'PROPOSAL.json', screen: null, viewport: null, params: named({ proposal: facts.proposal.reason }), ...(detail !== '' ? { detail } : {}) });
+  }
 
   const landed = detail.landed;
   if (landed !== null && !landed.matches) {
