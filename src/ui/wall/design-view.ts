@@ -35,6 +35,7 @@ import * as editText from './feature-edit-text.ts';
 import * as findability from './feature-findability.ts';
 import { createPageData } from './feature-page-state.ts';
 import * as screens from './feature-screens.ts';
+import * as system from './feature-system.ts';
 import * as tweaks from './feature-tweaks.ts';
 import type { DrawerContent, DrawerKind, FeatureMount, ViewContext } from './view-context.ts';
 import type { DirectionKeepPress } from './wall-types.ts';
@@ -158,6 +159,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       bottomDock: h('div', { class: 'dc-bottom-dock' }),
       compactActions: h('div', { class: 'dc-compact-actions' }),
       tweaksSlot: h('span', { class: 'dc-tweaks-slot' }),
+      railTools: h('span', { class: 'dc-rail-tools' }),
     };
     // Set once the drawers exist; on a narrow page the dock is laid over the wall (styles.css).
     let dockEl: HTMLElement | null = null;
@@ -431,8 +433,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         h('div', { class: 'dc-toolbar-row' }, iconBtn({ icon: 'back', label: 'Back to designs', onClick: options.onBack }), titleText, slots.compactActions, moreButton),
         // A page never pans or zooms, so its second row has no zoom group.
         isPage
-          ? h('div', { class: 'dc-toolbar-row dc-toolbar-tools' }, viewportHost, commentMode.el)
-          : h('div', { class: 'dc-toolbar-row dc-toolbar-tools' }, modeHost, h('span', { class: 'dc-spacer' }), zoomGroup),
+          ? h('div', { class: 'dc-toolbar-row dc-toolbar-tools' }, viewportHost, commentMode.el, slots.railTools)
+          : h('div', { class: 'dc-toolbar-row dc-toolbar-tools' }, modeHost, slots.railTools, zoomGroup),
       );
     } else if (isPage) {
       toolbar = h(
@@ -802,6 +804,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       mountFeature('ask bar', askBar.mount),
       mountFeature('findability', findability.mount),
       mountFeature('checks badge', checks.mount),
+      mountFeature('design system', system.mount),
       // After the build strip and the ask bar: it reads the strip's phase and hands the ask bar an element.
       mountFeature('edit text', editText.mount),
       // Also after the build strip (it reads the strip's phase for the menu's hint) and after Edit text (they share one undo slot).

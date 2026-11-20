@@ -47,8 +47,11 @@ Each row: name, **Draft** or **Ready**, where it lives, at most two badges by pr
 - Files by picking or dropping work inside the sandboxed frame (spike SP-1); **Add from a folder…** is the way for a folder.
 - Text from a system, a scan or a file name is always shown as text, never as markup.
 
+## Using a system from a design
+A design shows its system as a chip in the viewer, with an update banner, a review sheet, Change… and Undo ([Viewer: a design's system](../pages/viewer.md)). Rows and cards in the designs list carry a **System updated** badge when the system has a newer revision than the design's copy. Defaults and project pins live in Settings, and the New design dialog preselects from them ([Settings: Design systems](../pages/settings.md)). Code: `src/ui/components/system-chip.ts`, `src/ui/model/design-system-model.ts`.
+
 ## Not in this version
-The system's own page (the board, the side panel, editing, review, Mark ready), **Continue in chat** and **Pin to project…** in the row menu, the Settings section for defaults and pins, and building a repo-backed system from the list.
+**Continue in chat** and **Pin to project…** in the row menu, and building a repo-backed system from the list.
 
 ## Where it lives in the code
 `src/ui/systems/` (the list, the sheet, the one seam for opening a system), `src/ui/model/systems-model.ts` and `new-system-model.ts` (pure), `src/ui/components/systems-store.ts` (the list, kept fresh by the change feed), `src/guest/make-system.ts` (create, upload, ask), `src/guest/service-client.ts` (`uploadBinary`). Tests: `test/ui/systems-list-model.test.ts`, `test/ui/new-system-model.test.ts`, `test/guest/make-system.test.ts`, `test/guest/binary-upload.test.ts`; the screens: `test/ui/visual/scenarios/design-systems-list.mjs`.

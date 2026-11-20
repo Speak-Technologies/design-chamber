@@ -19,6 +19,7 @@ import type {
 } from '../../../src/shared/types.ts';
 import { createFakeFolders, type FakeFolders } from './fake-folders.ts';
 import { createFakeSystems, type FakeSystems } from './fake-systems.ts';
+import { createFakeDesignSystem, type FakeDesignSystem } from './fake-design-system.ts';
 import { createFakeChecks, type FakeChecks } from './fake-checks.ts';
 import { createFakePageState, type FakePageState } from './fake-page-state.ts';
 import { createFakeTokens, type FakeTokens } from './fake-tokens.ts';
@@ -318,6 +319,8 @@ export type FakeBackend = {
   folders: FakeFolders['hooks'];
   /** Test hooks (Phase 2.5 U1): the design systems book (fake-systems.ts). */
   systems: FakeSystems['hooks'];
+  /** Test hooks (Phase 2.5 U4): each design's system link (fake-design-system.ts). */
+  designSystem: FakeDesignSystem['hooks'];
   /** Test hook (G1): which project folder a design was made for (`null`: none), and which project folders are gone from disk. */
   setProject: (slug: string, directory: string | null) => void;
   setMissingProjects: (directories: string[]) => void;
@@ -366,6 +369,7 @@ export const createFakeBackend = (): FakeBackend => {
     openComments: rec.design.comments.filter((c) => c.status === 'open').length,
     thumb: { state: rec.thumb, key: rec.thumb === 'ready' ? `${slug}:${rec.rev}` : null },
     warnings: [],
+    system: designSystem.summary(slug),
   });
 
   const docFor = (slug: string, rec: Rec, screenId: string | undefined, versionId: string | undefined): string => {
@@ -476,6 +480,19 @@ export const createFakeBackend = (): FakeBackend => {
   const missingProjects = new Set<string>();
   const folderBook: FakeFolders = createFakeFolders({ emit: (slug, kind) => emit(slug, kind), exists: (slug) => db.has(slug) });
   const systemBook: FakeSystems = createFakeSystems({ emit: (slug, kind) => emit(slug, kind) });
+  const designSystem: FakeDesignSystem = createFakeDesignSystem({
+    emit: (slug, kind, files) => emit(slug, kind, files),
+    rows: () => systemBook.hooks.current(),
+    setRows: (next) => systemBook.hooks.seed(next),
+    exists: (slug) => db.has(slug),
+    checkpoint: (slug) => {
+      const rec = get(slug);
+      const n = (rec.versions[rec.versions.length - 1]?.n ?? 0) + 1;
+      const version: VersionSummary = { id: `v${n}`, n, created: new Date().toISOString(), reason: 'system-change', sessionId: null, treeHash: `tree${n}`, bytes: 30_000, fileCount: 8 };
+      rec.versions.push(version);
+      return version;
+    },
+  });
 
   type Req<K extends RouteKey> = { params: Record<string, string>; query: Record<string, string>; body: RouteBody<K> };
   type Handlers = { [K in RouteKey]?: (req: Req<K>) => RouteResponse<K> | Promise<RouteResponse<K>> };
@@ -495,6 +512,7 @@ export const createFakeBackend = (): FakeBackend => {
         guide: { path: `${root}\\AGENTS.md`, state: 'current' },
         skill: { path: 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md', state: skillState, duplicates: [] },
       },
+      systems: designSystem.settings(),
     }),
     'PUT /settings': ({ body }) => {
       if (body.root !== undefined) {
@@ -508,7 +526,7 @@ export const createFakeBackend = (): FakeBackend => {
       if (body.chromePath !== undefined) {
         chromePath = body.chromePath;
       }
-      if (body.systemDefault !== undefined) systemBook.hooks.setDefaultId(body.systemDefault.choice === 'system' ? body.systemDefault.id : null);
+      designSystem.putSettings(body);
       return handlers['GET /settings']?.({ params: {}, query: {}, body: undefined }) as RouteResponse<'PUT /settings'>;
     },
     'GET /designs': ({ query }) => {
@@ -705,6 +723,7 @@ export const createFakeBackend = (): FakeBackend => {
       rec.versions.push(point);
       const restored: VersionSummary = { id: `v${n + 1}`, n: n + 1, created: new Date().toISOString(), reason: 'restored', sessionId: null, treeHash: target.treeHash, bytes: target.bytes, fileCount: target.fileCount };
       rec.versions.push(restored);
+      designSystem.restored(params.slug ?? '', params.vid ?? '');
       touch(rec);
       emit(params.slug ?? null, 'versions');
       emit(params.slug ?? null, 'files');
@@ -747,6 +766,7 @@ export const createFakeBackend = (): FakeBackend => {
       // The service-written requests of "Ask the agent to fix it" (checks badge, remote-files banner).
       if (body.purpose === 'checks') return { ...checks.prompt(params.slug ?? ''), commentIds: [], omitted: [], chip, handEdits: null };
       if (body.purpose === 'offline') return { text: `[Design Chamber] Make "${rec.design.title}" work offline: bundle remote files into assets/ or remove them.`, commentIds: [], omitted: [], chip, handEdits: null };
+      if (body.purpose === 'restyle' || body.purpose === 'system-update') return { text: `[Design Chamber] ${body.purpose === 'restyle' ? 'Restyle' : 'Apply the system update to'} "${rec.design.title}".`, commentIds: [], omitted: [], chip, handEdits: null };
       if (body.purpose !== 'ask') throw new ServiceError('internal', 'The UI shim answers revisions, asks, checks and offline requests only.');
       const words = typeof body.text === 'string' ? body.text.trim() : '';
       if (words === '') throw new ServiceError('bad-request', 'Write what you want the agent to do.');
@@ -762,6 +782,7 @@ export const createFakeBackend = (): FakeBackend => {
     'POST /designs/:slug/edits': ({ params, body }) => {
       const rec = get(params.slug);
       if (body.op === 'reorder' || body.op === 'duplicate' || body.op === 'trash-screen' || body.op === 'keep-direction') return screenEdit(params.slug ?? '', rec, body);
+      if (body.op === 'token-reset') return designSystem.resetTokens(params.slug ?? '', body.base, body.names);
       if (body.op === 'tokens') return tokens.edit(params.slug ?? '', body.base, body.values, rec.design.tweaks);
       throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
     },
@@ -793,6 +814,7 @@ export const createFakeBackend = (): FakeBackend => {
     ...pageState.handlers,
     ...folderBook.handlers,
     ...systemBook.handlers,
+    ...designSystem.handlers,
   };
 
   const checks = createFakeChecks({
@@ -896,6 +918,7 @@ export const createFakeBackend = (): FakeBackend => {
     pageState: pageState.hooks,
     folders: folderBook.hooks,
     systems: systemBook.hooks,
+    designSystem: designSystem.hooks,
     setProject: (slug, directory) => {
       const rec = db.get(slug);
       if (!rec) return;

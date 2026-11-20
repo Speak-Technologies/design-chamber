@@ -23,6 +23,8 @@ export type ViewSlots = {
   compactActions: HTMLElement;
   /** Full-screen toolbar, between Comments and Versions: the Tweaks button goes here (empty and out of the layout while it has no content). */
   tweaksSlot: HTMLElement;
+  /** Rail header row two, after the mode controls (it takes the free room, so a button here costs the title nothing). Detached on the full-screen page. */
+  railTools: HTMLElement;
 };
 
 export type DrawerKind = 'comments' | 'versions' | 'tweaks';

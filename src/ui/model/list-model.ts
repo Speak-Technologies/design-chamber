@@ -69,8 +69,13 @@ export const rowAriaLabel = (design: DesignSummary): string => {
   const parts = [design.title, kindSummary(design)];
   if (design.pending) parts.push('waiting for the agent');
   if (design.openComments > 0) parts.push(plural(design.openComments, 'open comment'));
+  if (systemUpdated(design)) parts.push(SYSTEM_UPDATED_LABEL);
   return parts.join(', ');
 };
+
+/** The badge on a row or card whose design system has a newer revision than the design's copy (Phase 2.5 U4). */
+export const SYSTEM_UPDATED_LABEL = 'System updated';
+export const systemUpdated = (design: Pick<DesignSummary, 'system'>): boolean => design.system?.updateAvailable === true;
 
 // ---- Projects and folders (Phase 2.5 G1, technical design §9.5) ----
 //

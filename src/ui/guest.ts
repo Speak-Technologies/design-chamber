@@ -71,7 +71,8 @@ export const host = {
  * agent is busy, or a new linked chat when there is none or it is gone. The service answers 422 when
  * there is nothing to ask any more; that sentence reaches the caller before any chat opens.
  */
-export const askAgent = async (slug: string, purpose: 'offline' | 'checks'): Promise<AskOutcome> => (await flows.askAgent(slug, purpose)).outcome;
+export const askAgent = async (slug: string, purpose: 'offline' | 'checks' | 'restyle' | 'system-update', before?: string): Promise<AskOutcome> =>
+  (await flows.askAgent(slug, purpose, before)).outcome;
 
 /** "Ask the agent to make it work offline" (the remote-files banner). */
 export const askSelfContained = (slug: string): Promise<AskOutcome> => askAgent(slug, 'offline');

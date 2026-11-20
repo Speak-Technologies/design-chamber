@@ -82,6 +82,15 @@ export const mountRail = (root: HTMLElement): void => {
     onRemoved: (slug) => {
       if (viewer?.slug === slug) closeViewer();
     },
+    onOpenSystem: (id) => {
+      const current = viewer;
+      if (!current) return openSystem(id);
+      void current.handle.beforeLeave().then((leave) => {
+        if (!leave || viewer !== current) return;
+        closeViewer();
+        openSystem(id);
+      });
+    },
   };
 
   const openSettings = (): void => {
@@ -132,7 +141,7 @@ export const mountRail = (root: HTMLElement): void => {
     onOpen: openViewer,
     onSystems: showSystems,
     onSettings: openSettings,
-    onNew: (kind) => openNewDialog(app, { kind, onCreated: openViewer }),
+    onNew: (kind) => openNewDialog(app, { kind, onCreated: openViewer, onSystems: showSystems }),
   });
   app.append(list.el);
 

@@ -77,6 +77,15 @@ export const mountPage = (root: HTMLElement): void => {
     onRemoved: (slug) => {
       if (open?.slug === slug) closeDesign();
     },
+    onOpenSystem: (id) => {
+      const current = open;
+      if (!current) return openSystem(id);
+      void current.handle.beforeLeave().then((leave) => {
+        if (!leave || open !== current) return;
+        closeDesign();
+        openSystem(id);
+      });
+    },
   };
 
   const openSettings = (): void => {
@@ -127,7 +136,7 @@ export const mountPage = (root: HTMLElement): void => {
     onOpen: openDesign,
     onSystems: showSystems,
     onSettings: openSettings,
-    onNew: (kind) => openNewDialog(app, { kind, onCreated: openDesign }),
+    onNew: (kind) => openNewDialog(app, { kind, onCreated: openDesign, onSystems: showSystems }),
   });
   app.append(library.el);
 

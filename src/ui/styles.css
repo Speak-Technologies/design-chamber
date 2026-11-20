@@ -613,6 +613,10 @@ body {
   color: var(--dc-warning-text);
   background: color-mix(in srgb, var(--oc-warning) 16%, transparent);
 }
+.dc-flag[data-tone='info'] {
+  color: var(--oc-info-text);
+  background: color-mix(in srgb, var(--oc-info) 14%, transparent);
+}
 .dc-flag[data-tone='warning']::before {
   content: '';
   width: 6px;
@@ -4417,4 +4421,266 @@ button.dc-sp-value:focus-visible {
   .dc-syspg-progress::before {
     transition: none;
   }
+}
+
+/* ===== Phase 2.5 U4: design system chip, update sheet, picker fields ===== */
+/* The chip: the checks badge's look, so the two sit as a pair in the header. Full screen it is at the left end of
+   the status slot; in the rail it is a 26 px glyph in the title row's compact actions. */
+.dc-status-slot:has(> .dc-system) {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--dc-s2);
+}
+.dc-system {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-width: 0;
+}
+.dc-system[hidden] {
+  display: none;
+}
+.dc-system-btn {
+  appearance: none;
+  gap: var(--dc-s1);
+  max-width: 200px;
+  margin: 0;
+  padding: 3px 10px 3px 8px;
+  border: 0;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 18px;
+  cursor: pointer;
+  transition: box-shadow 120ms ease-out;
+}
+.dc-system-btn:hover,
+.dc-system-btn[aria-expanded='true'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 40%, transparent);
+}
+.dc-system-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-system-btn:not([data-tone]) {
+  color: var(--oc-muted);
+}
+.dc-system-btn[data-compact='true'] {
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+}
+.dc-rail-tools {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+.dc-rail-tools:empty {
+  display: none;
+}
+.dc-system-glyph {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+}
+.dc-system-glyph svg {
+  width: 14px;
+  height: 14px;
+}
+.dc-system-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The popover / sheet body and the update sheet. */
+.dc-sys-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  min-width: 0;
+}
+.dc-sys-line {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.dc-sys-problem {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  margin: 0;
+  color: var(--dc-warning-text);
+  overflow-wrap: anywhere;
+}
+.dc-sys-problem svg {
+  flex: none;
+  margin-top: 2px;
+}
+.dc-sys-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-sys-h {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.dc-sys-more {
+  margin: 0;
+  font-size: 0.8125rem;
+}
+.dc-sys-list,
+.dc-sys-names,
+.dc-sys-pins {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dc-sys-names {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--dc-s1) var(--dc-s2);
+}
+.dc-sys-names .dc-path {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+.dc-sys-override,
+.dc-sys-pin {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--dc-s3);
+  min-width: 0;
+  padding: var(--dc-s2) 0;
+  border-top: 1px solid var(--dc-hair);
+}
+.dc-sys-override-text,
+.dc-sys-pin-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dc-sys-override-text .dc-path,
+.dc-sys-pin-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-sys-values {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+.dc-sys-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dc-s2);
+  width: 100%;
+}
+.dc-app[data-surface='panel'] .dc-sys-actions .oc-sdk-btn {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+.dc-sheet-foot:has(> .dc-sys-actions[hidden]),
+.dc-pop-foot:has(> .dc-sys-actions[hidden]) {
+  display: none;
+}
+.dc-sys-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+}
+.dc-sys-option {
+  appearance: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--dc-s3);
+  width: 100%;
+  margin: 0;
+  padding: var(--dc-s2) var(--dc-s3);
+  border: 1px solid var(--dc-hair);
+  border-radius: var(--dc-r);
+  background: transparent;
+  color: var(--oc-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-sys-option:hover:not(:disabled) {
+  background: var(--oc-hover);
+}
+.dc-sys-option[aria-checked='true'] {
+  border-color: var(--oc-primary);
+  background: color-mix(in srgb, var(--oc-primary) 10%, transparent);
+}
+.dc-sys-option:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-sys-option:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.dc-sys-option-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.dc-sys-preview {
+  margin: 0;
+  color: var(--oc-muted);
+}
+/* A text button that reads as a link, for "Reload", "Show 3 more" and "Make one". */
+.dc-link {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--oc-primary);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.dc-link:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+  border-radius: 2px;
+}
+.dc-system-empty {
+  margin: 0;
+}
+.dc-sys-pin-select {
+  flex: none;
+  width: 190px;
+}
+.dc-app[data-surface='panel'] .dc-sys-pin {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--dc-s2);
+}
+.dc-app[data-surface='panel'] .dc-sys-pin-select {
+  width: 100%;
 }

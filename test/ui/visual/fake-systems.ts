@@ -270,6 +270,8 @@ export type FakeSystems = {
   hooks: {
     /** The list now (no event). */
     seed: (systems: SystemSummary[]) => void;
+    /** The book as it is now (the design system link fake reads Ready/draft and revisions from it). */
+    current: () => SystemSummary[];
     /** An empty list. */
     clear: () => void;
     /** `GET /systems` answers a failure until `false`. */
@@ -593,6 +595,7 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
       seed: (next) => {
         rows = next.map((row) => ({ ...row }));
       },
+      current: () => rows,
       clear: () => {
         rows = [];
       },

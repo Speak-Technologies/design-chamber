@@ -35,7 +35,9 @@ import {
   scopeLabel,
   scopeStorageKey,
   scopeToId,
+  SYSTEM_UPDATED_LABEL,
   sortDesigns,
+  systemUpdated,
   tabCounts,
   type ListScope,
   type ListSort,
@@ -219,6 +221,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     mountBadge(kindBadge, { label: kindLabel(design.kind), tone: 'neutral' });
     const locale = host.snapshot()?.locale ?? 'en';
     const indicators = h('span', { class: 'dc-card-flags' });
+    if (systemUpdated(design)) indicators.append(h('span', { class: 'dc-flag', 'data-tone': 'info', title: `${design.system?.name ?? 'The design system'} was updated since this design copied it.` }, SYSTEM_UPDATED_LABEL));
     if (design.openComments > 0) indicators.append(h('span', { class: 'dc-flag', title: plural(design.openComments, 'open comment') }, icon('pin', 12), String(design.openComments)));
     if (design.sessionId) indicators.append(h('span', { class: 'dc-flag dc-flag-icon', title: 'Linked to a chat', role: 'img', 'aria-label': 'Linked to a chat' }, icon('chat', 12)));
     const main = h(

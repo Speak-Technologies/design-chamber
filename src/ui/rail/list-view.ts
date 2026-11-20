@@ -35,7 +35,9 @@ import {
   scopeOptions,
   scopeStorageKey,
   scopeToId,
+  SYSTEM_UPDATED_LABEL,
   sortDesigns,
+  systemUpdated,
   tabCounts,
   type ListScope,
   type ListTab,
@@ -191,6 +193,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     const meta = h('span', { class: 'dc-row-meta' }, `${kindSummary(design)} · ${relativeTime(design.updated, Date.now(), locale)}`);
     const flags = h('span', { class: 'dc-row-flags' });
     if (design.pending) flags.append(h('span', { class: 'dc-flag', 'data-tone': 'warning' }, 'Waiting for agent'));
+    if (systemUpdated(design)) flags.append(h('span', { class: 'dc-flag', 'data-tone': 'info', title: `${design.system?.name ?? 'The design system'} was updated since this design copied it.` }, SYSTEM_UPDATED_LABEL));
     if (design.openComments > 0) flags.append(h('span', { class: 'dc-flag', title: plural(design.openComments, 'open comment') }, icon('pin', 12), String(design.openComments)));
     if (design.sessionId) flags.append(h('span', { class: 'dc-flag dc-flag-icon', title: 'Linked to a chat', role: 'img', 'aria-label': 'Linked to a chat' }, icon('chat', 12)));
     const main = h('button', { type: 'button', class: 'dc-row-main', 'aria-label': rowAriaLabel(design) }, thumb.el, h('span', { class: 'dc-row-text' }, h('span', { class: 'dc-row-title' }, design.title), meta, line ? h('span', { class: 'dc-row-project', title: line.title }, icon('layers', 12), h('span', { class: 'dc-row-project-name' }, line.label)) : null, flags.childElementCount > 0 ? flags : null));

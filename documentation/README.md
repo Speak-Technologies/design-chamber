@@ -12,6 +12,8 @@ fix the doc and note what drifted.
 | [Library: projects and folders](pages/library.md) | the page's designs list | The sidebar that groups designs by project and by your own folders, drag to add, delete with Undo. |
 | [Rail: projects and folders](pages/rail.md) | the rail's designs list | The Show select with the same groups, Add to folder and folder actions. |
 | [Design systems](pages/design-systems.md) | the page's Library toolbar and the rail's header → Design systems | The list of design systems (badges, states, row menu) and the New design system sheet: from code, brand files or a description. |
+| [Viewer: a design's system](pages/viewer.md) | the chip in a design's header | The system chip, popover, update banner and sheet, Change…, Undo and the agent switch notice. |
+| [Settings: Design systems](pages/settings.md) | Settings → Design systems, and the New design dialog | The default and per-project pins, and the dialog's Design system field. |
 
 ## Features
 | Feature | One-liner | Pages involved |

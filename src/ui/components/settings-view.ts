@@ -2,19 +2,28 @@
 // your designs (guide, skill, AGENTS.md snippet), the browser that makes thumbnails, and the
 // opencode.json tip. Same content in the rail sheet and the page sheet.
 
-import { mountBadge, mountTextField } from '@openchamber/sdk/ui';
+import { mountBadge, mountSelect, mountTextField } from '@openchamber/sdk/ui';
 
 import { buildAgentsSnippet } from '../../shared/agent/guide.ts';
 import type { SettingsResponse } from '../../shared/api.ts';
-import { client, host, store } from '../guest.ts';
+import { client, guestHost, host, store } from '../guest.ts';
 import { middlePath } from '../model/format.ts';
 import {
+  NO_PROJECTS_TEXT,
+  SYSTEMS_SECTION_TEXT,
   browserStatus,
+  defaultFrom,
+  defaultOptions,
+  defaultSentence,
+  defaultValue,
   designCountLabel,
   duplicateSentences,
   guideSentence,
   isSameRootInput,
   permissionSnippet,
+  pinOptions,
+  pinsAfter,
+  projectRows,
   skillRow,
   validateRootInput,
   type PathSentence,
@@ -22,6 +31,7 @@ import {
 import { toast } from './actions.ts';
 import { append, createScope, errorText, h } from './dom.ts';
 import { banner, btn, loadingRow } from './kit.ts';
+import { systems as systemsStore } from './systems-store.ts';
 
 export type SettingsHandle = { dispose: () => void };
 
@@ -60,6 +70,27 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
     },
     () => undefined,
   );
+
+  // Design systems: the host's project list (for the pin rows) and the one-time notices the service sent.
+  let projects: Array<{ directory: string; name: string }> | null = null;
+  void guestHost.client.listProjects().then(
+    (answer) => {
+      projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
+      paint();
+    },
+    (error: unknown) => {
+      console.warn('Design Chamber: the project list could not be read', error);
+      projects = [];
+      paint();
+    },
+  );
+  void systemsStore().load();
+  scope.add(systemsStore().subscribe(() => paint()));
+  const systemNotices: string[] = [];
+  let systemError: string | null = null;
+  let systemBusy = false;
+  /** The select that had focus when a change was saved (its row is rebuilt by the repaint). */
+  let systemFocus: string | null = null;
 
   // Field state survives repaints (a settings refresh must not wipe what is being typed).
   let rootDraft: string | null = null;
@@ -106,6 +137,21 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
       rootError = errorText(error);
     } finally {
       rootBusy = false;
+      paint();
+    }
+  };
+
+  const saveSystem = async (focus: string, patch: { systemDefault: ReturnType<typeof defaultFrom> } | { systemPins: ReturnType<typeof pinsAfter> }): Promise<void> => {
+    systemBusy = true;
+    systemError = null;
+    systemFocus = focus;
+    paint();
+    try {
+      await store.updateSettings(patch);
+    } catch (error) {
+      systemError = `Couldn’t save that. ${errorText(error)}`;
+    } finally {
+      systemBusy = false;
       paint();
     }
   };
@@ -224,6 +270,41 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
     });
     const folder = section('Where designs live', 'Your chat agent writes each design as its own folder here.', folderHost, h('div', { class: 'dc-row-actions' }, apply.el, reset.el));
 
+    // Design systems: the default for new designs and one row per project.
+    const systemsSection = ((): HTMLElement | null => {
+      const answer = settings.systems;
+      if (answer === undefined) return null;
+      for (const note of answer.notices) if (!systemNotices.includes(note)) systemNotices.push(note);
+      const list = systemsStore().get().systems ?? [];
+      const defaultHost = h('div', { class: 'dc-field', 'data-system-select': 'default' });
+      mountSelect(defaultHost, { label: 'Default for new designs', value: defaultValue(answer.default), options: defaultOptions(list), disabled: systemBusy, onChange: (value) => void saveSystem('default', { systemDefault: defaultFrom(value, list) }) });
+      const defaultNote = defaultSentence(answer.default);
+      if (defaultNote !== null) defaultHost.append(h('p', { class: 'oc-sdk-field-note' }, defaultNote));
+      const rows = projectRows(projects ?? [], answer.pins).map((row) => {
+        const selectHost = h('div', { class: 'dc-sys-pin-select', 'data-system-select': `pin:${row.directory}` });
+        mountSelect(selectHost, { value: row.value, options: pinOptions(list), disabled: systemBusy, onChange: (value) => void saveSystem(`pin:${row.directory}`, { systemPins: pinsAfter(answer.pins, row.directory, value, list) }) });
+        selectHost.querySelector('button, [role="combobox"]')?.setAttribute('aria-label', `Design system for ${row.name}`);
+        return h(
+          'li',
+          { class: 'dc-sys-pin' },
+          h('div', { class: 'dc-sys-pin-text' }, h('span', { class: 'dc-sys-pin-name', title: row.directory }, row.name), row.sentence !== null ? h('span', { class: 'dc-muted' }, row.sentence) : null),
+          selectHost,
+        );
+      });
+      const projectsBlock =
+        projects === null
+          ? h('div', { class: 'dc-field' }, loadingRow('Reading your projects'))
+          : h('div', { class: 'dc-field' }, h('span', { class: 'oc-sdk-field-label' }, 'Projects'), rows.length > 0 ? h('ul', { class: 'dc-sys-pins' }, ...rows) : h('p', { class: 'dc-muted' }, NO_PROJECTS_TEXT));
+      return section(
+        'Design systems',
+        SYSTEMS_SECTION_TEXT,
+        ...systemNotices.map((note) => banner({ tone: 'info', title: note })),
+        defaultHost,
+        projectsBlock,
+        systemError !== null ? h('p', { class: 'dc-form-error', role: 'alert' }, systemError) : null,
+      );
+    })();
+
     // Previous folders
     let previous: HTMLElement | null = null;
     if (settings.previousRoots.length > 0) {
@@ -325,7 +406,12 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
       h('div', { class: 'dc-row-actions' }, copy.el),
     );
 
-    append(body, folder, previous, agents, browser, permissions, h('p', { class: 'dc-settings-foot' }, version ? `Design Chamber ${version.startsWith('v') ? version : `v${version}`}` : 'Design Chamber'));
+    append(body, folder, systemsSection, previous, agents, browser, permissions, h('p', { class: 'dc-settings-foot' }, version ? `Design Chamber ${version.startsWith('v') ? version : `v${version}`}` : 'Design Chamber'));
+
+    if (systemFocus !== null) {
+      body.querySelector<HTMLElement>(`[data-system-select="${CSS.escape(systemFocus)}"] button`)?.focus();
+      systemFocus = null;
+    }
 
     // The remove button was rebuilt (and is gone once the copy is): put focus back where the user was.
     if (skillFocus !== null) {

@@ -125,6 +125,8 @@ export type NewDesignInput = {
   kind: DesignKind;
   brief: string;
   preset?: string | null;
+  /** The New dialog's design-system choice: a system id, `none` or `ask` (Phase 2.5 §3.2). Absent: the service decides from the settings. */
+  system?: string;
   /** `new-chat` (default in the dialog) starts a session; `current-chat` attaches to the selected one. */
   destination: 'new-chat' | 'current-chat';
 };
@@ -227,7 +229,7 @@ export type Flows = {
    * linked chat when there is none or it is gone. The service answers 422 when there is nothing
    * to ask any more; that error reaches the caller before any chat is touched.
    */
-  askAgent(slug: string, purpose: 'offline' | 'checks'): Promise<AskResult>;
+  askAgent(slug: string, purpose: 'offline' | 'checks' | 'restyle' | 'system-update', before?: string): Promise<AskResult>;
   /** Rail panel: deliver a waiting outbox to `session` when it is the one the outbox is for. */
   deliverOutbox(session?: SessionSnapshot | null): Promise<DeliverOutboxResult>;
   /** Patch every link `planReconciliation` finds; returns what was patched. */
@@ -449,13 +451,13 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       }
     },
 
-    newDesign: async ({ kind, brief, preset = null, destination }) => {
+    newDesign: async ({ kind, brief, preset = null, system, destination }) => {
       const ready = host.ready.get();
       const directory = host.directory.get();
       const text = brief.trim();
       if (destination === 'new-chat') {
         if (!directory) throw new FlowError('no-project', MESSAGES.noProject);
-        const { slug, chip } = await client.call('POST /chip', { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null } });
+        const { slug, chip } = await client.call('POST /chip', { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null, ...(system === undefined ? {} : { system }) } });
         const result = await api.startSession({ ...toAttachRequest(chip), text: text || "Let's start this design.", navigation: 'open' });
         if (result.sessionId === null) throw new FlowError('start-failed', MESSAGES.startFailed);
         await client.call('PATCH /designs/:slug', { params: { slug }, body: { sessionId: result.sessionId } });
@@ -463,7 +465,7 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       }
       const session = host.session.get();
       const { slug, chip } = await client.call('POST /chip', {
-        body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null },
+        body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null, ...(system === undefined ? {} : { system }) },
       });
       await api.attach(toAttachRequest(chip));
       if (text) await api.compose({ text, mode: 'append' });
@@ -549,8 +551,8 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       return deliver(slug, prompt, design, null, MESSAGES.busyAsk);
     },
 
-    askAgent: async (slug, purpose) => {
-      const prompt = await client.call('POST /designs/:slug/prompt', { params: { slug }, body: { purpose } });
+    askAgent: async (slug, purpose, before) => {
+      const prompt = await client.call('POST /designs/:slug/prompt', { params: { slug }, body: before === undefined ? { purpose } : { purpose, before } });
       const { design } = await client.call('GET /designs/:slug', { params: { slug } });
       return deliver(slug, prompt, design, null, MESSAGES.busyAsk);
     },

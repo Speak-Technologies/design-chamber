@@ -17,6 +17,8 @@ export type ActionContext = {
   /** Called after an action that changes which designs exist or which one is open. */
   onRemoved: (slug: string) => void;
   onOpen: (slug: string) => void;
+  /** Open one design system's page (the viewer's "Open system"); the viewer closes first. Absent where there is no systems view. */
+  onOpenSystem?: (id: string) => void;
 };
 
 /** Menu shared by list rows, library cards and the viewer's overflow. `open` is hidden where it would be a no-op. */
