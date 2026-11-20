@@ -39,6 +39,8 @@ const workflow = (presets: BundledSkillInput['presets']): string[] => [
   '- Never touch .versions/, .chamber/, .thumb.png or .trash/ in a design folder.',
   '- Design systems live in _systems/<id>/ in the designs folder. Write there only when the user or Design Chamber asks you to make or change a system; never set its status.',
   "- A design's copy of its system is its system/ folder: read it, never change it.",
+  '- To build a design system with the user, use /design-system or the design-system-builder skill.',
+  "- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff.",
   presetsLine(presets),
 ];
 

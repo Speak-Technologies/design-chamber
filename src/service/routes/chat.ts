@@ -15,6 +15,7 @@ import { buildHandEditsBlock, type HandEditsBlock } from '../../shared/agent/han
 import { derivePageTitle, extractHtml } from '../../shared/agent/html-extract.ts';
 import { buildChecksPrompt, buildContinuePrompt, buildOfflinePrompt, buildRevisionPrompt, type ExternalList } from '../../shared/agent/revision-prompt.ts';
 import { buildRulesDoc } from '../../shared/agent/rules-doc.ts';
+import { buildDesignRestylePrompt, buildDesignSystemUpdatePrompt } from '../../shared/agent/system-prompts.ts';
 import { normalizeExternalUrl, sortFindings } from '../../shared/checks.ts';
 import type { AskElement, ChipResponse, FromMessageResponse, OkResponse, OpenIntent, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse, RenderMeta, RenderQuery } from '../../shared/api.ts';
 import {
@@ -34,11 +35,14 @@ import {
   SESSION_ID_MAX,
   SLUG_PATTERN,
   SYSTEM_ID_PATTERN,
+  SYSTEM_JSON_MAX_BYTES,
   UPLOAD_ID_PATTERN,
+  VERSION_ID_PATTERN,
 } from '../../shared/limits.ts';
+import { COPY_DIR, componentDiff, parseCopyRecordText, tokenDiff } from '../../shared/system-copy.ts';
 import { effectiveSystemChoice } from '../../shared/systems.ts';
 import type { EffectiveSystemChoice } from '../../shared/types.ts';
-import { ensureLinkService, LINK_SYSTEM_GONE_MESSAGE, linkDraftMessage } from '../systems/link.ts';
+import { ensureLinkService, LINK_NO_COPY_MESSAGE, LINK_SYSTEM_GONE_MESSAGE, linkDraftMessage } from '../systems/link.ts';
 import { ensureSystemStore } from '../systems/store.ts';
 import { agentSystemOf } from '../agent-system.ts';
 import type { AnchorState, Comment, DesignKind } from '../../shared/types.ts';
@@ -46,9 +50,12 @@ import type { DesignRecord, ServiceContext } from '../context.ts';
 import { ensureChecksService } from '../check/service.ts';
 import { ensureLauncherService } from '../check/launcher.ts';
 import { discoverProjectRules, withDeadline } from '../discovery.ts';
+import { readTokensFile } from '../edits/ops-tokens.ts';
 import { ensureEditService } from '../edits/pipeline.ts';
 import { ApiError, type Router } from '../http.ts';
 import { foldsCase } from '../paths.ts';
+import { readCopyRecord } from '../store.ts';
+import { ensureVersionsService } from '../versions.ts';
 import { parseElement } from './comments.ts';
 import { readPreset, readRulesDocs } from './presets.ts';
 
@@ -121,13 +128,15 @@ type PromptInput = {
   text: string;
   /** Ask only: the attached element before it is checked against the design. */
   element: AskElement | null;
+  /** Restyle / system-update only: the version holding the previous copy. */
+  before: string | null;
 };
 
 const parsePromptBody = (body: unknown): PromptInput => {
   const record = bodyOf(body, 'the prompt request');
   const { purpose, commentIds } = record;
-  if (purpose !== 'revision' && purpose !== 'continue' && purpose !== 'offline' && purpose !== 'checks' && purpose !== 'ask') {
-    throw new ApiError('bad-request', 'The prompt purpose must be "revision", "continue", "offline", "checks" or "ask".');
+  if (purpose !== 'revision' && purpose !== 'continue' && purpose !== 'offline' && purpose !== 'checks' && purpose !== 'ask' && purpose !== 'restyle' && purpose !== 'system-update') {
+    throw new ApiError('bad-request', 'The prompt purpose must be "revision", "continue", "offline", "checks", "ask", "restyle" or "system-update".');
   }
   if (purpose === 'ask') {
     if (typeof record.text !== 'string' || record.text.trim() === '') throw new ApiError('bad-request', 'Write what you want the agent to do.');
@@ -136,10 +145,14 @@ const parsePromptBody = (body: unknown): PromptInput => {
       throw new ApiError('invalid', `Your message is ${text.length - ASK_TEXT_MAX} characters over the limit of ${ASK_TEXT_MAX}. Shorten it and send again.`);
     }
     const element = record.element === undefined || record.element === null ? null : parseElement(record.element);
-    return { purpose, commentIds: null, anchorStates: {}, text, element };
+    return { purpose, commentIds: null, anchorStates: {}, text, element, before: null };
+  }
+  if (purpose === 'restyle' || purpose === 'system-update') {
+    if (typeof record.before !== 'string' || !VERSION_ID_PATTERN.test(record.before)) throw new ApiError('bad-request', 'Say which version holds the previous copy.');
+    return { purpose, commentIds: null, anchorStates: {}, text: '', element: null, before: record.before };
   }
   const anchorStates = parseAnchorStates(record.anchorStates);
-  const base: Omit<PromptInput, 'commentIds'> = { purpose, anchorStates, text: '', element: null };
+  const base: Omit<PromptInput, 'commentIds'> = { purpose, anchorStates, text: '', element: null, before: null };
   if (commentIds === undefined) return { ...base, commentIds: null };
   const ids = Array.isArray(commentIds) ? commentIds.filter((id): id is string => typeof id === 'string' && COMMENT_ID_PATTERN.test(id)) : [];
   if (!Array.isArray(commentIds) || commentIds.length > COMMENTS_MAX || ids.length !== commentIds.length) throw new ApiError('bad-request', 'The comment list is not valid.');
@@ -177,18 +190,19 @@ let tmpCounter = 0;
 
 /**
  * Write `<folder>/.chamber/RULES.md` atomically (tmp + rename), skipping the write when the bytes
- * are unchanged. `folder` must already be a contained design folder (`store.dir` / a record's
- * `path`). The agent writes into the design folder too, so a `.chamber` that is a link or a
- * plain file is refused rather than followed out of the folder.
+ * are unchanged. `folder` must already be a contained design or system folder (`store.dir` / a
+ * record's `path` / `systems.dir`). The agent writes into the folder too, so a `.chamber` that is a
+ * link or a plain file is refused rather than followed out of the folder. `what` names the folder's
+ * owner in the refusal sentence ('design' or 'system').
  */
-export const writeRulesFile = async (folder: string, text: string): Promise<void> => {
+export const writeRulesFile = async (folder: string, text: string, what: 'design' | 'system' = 'design'): Promise<void> => {
   const dir = path.join(folder, '.chamber');
   const info = await lstat(dir).catch((error: unknown) => {
     if (isMissing(error)) return null;
     throw error;
   });
   if (info !== null && (info.isSymbolicLink() || !info.isDirectory())) {
-    throw new ApiError('internal', 'This design\'s .chamber entry is not a normal folder, so Design Chamber cannot write the agent instructions there. Remove it and try again.');
+    throw new ApiError('internal', `This ${what}'s .chamber entry is not a normal folder, so Design Chamber cannot write the agent instructions there. Remove it and try again.`);
   }
   await mkdir(dir, { recursive: true });
   const target = path.join(dir, 'RULES.md');
@@ -488,6 +502,43 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
     const edits = await ensureEditService(ctx).editsFile.read(record.slug, record.path);
     const block = buildHandEditsBlock(edits.ledger, edits.dropped);
     const compactBlock = (): HandEditsBlock | null => buildHandEditsBlock(edits.ledger, edits.dropped, { compact: true });
+
+    if (input.purpose === 'restyle' || input.purpose === 'system-update') {
+      // Phase 2.5 §8.5: the names and the changes are read from the two copies (the before
+      // version's and the live one), never from the request. Safe: parsePromptBody set `before`.
+      const before = input.before as string;
+      const { source } = await ensureVersionsService(ctx).readTree(record.slug, before);
+      const oldCopyBytes = await source.read(`${COPY_DIR}/COPY.json`);
+      const oldCopy = oldCopyBytes === null ? null : parseCopyRecordText(oldCopyBytes.bytes.toString('utf8'));
+      const nowCopy = await readCopyRecord(record.path);
+      const from = oldCopy?.name ?? null;
+      const to = nowCopy.kind === 'ok' ? nowCopy.record.name : null;
+      if (input.purpose === 'restyle') {
+        if (from === null && to === null) throw new ApiError('invalid', "This design's design system didn't change.");
+        const text = buildDesignRestylePrompt({ title: design.title, kind: design.kind, folder: record.path, from, to, maxChars: budgetFor(block) });
+        return { text: withBlock(block, text), commentIds: [], omitted: [], chip, handEdits: handEditsOf(block) };
+      }
+      if (nowCopy.kind !== 'ok') throw new ApiError('invalid', LINK_NO_COPY_MESSAGE);
+      const oldCss = await source.read(`${COPY_DIR}/tokens.css`);
+      const oldJson = await source.read(`${COPY_DIR}/system.json`);
+      const nowCss = await readTokensFile(record.path, [COPY_DIR, 'tokens.css']);
+      const nowJson = await readTokensFile(record.path, [COPY_DIR, 'system.json'], SYSTEM_JSON_MAX_BYTES);
+      const tokens = tokenDiff(oldCss === null ? null : oldCss.bytes.toString('utf8'), nowCss.kind === 'read' ? nowCss.text : null);
+      const components = componentDiff(oldJson === null ? null : oldJson.bytes.toString('utf8'), nowJson.kind === 'read' ? nowJson.text : null);
+      const changed = tokens.changed.length + tokens.added.length + tokens.removed.length + components.changed.length + components.added.length + components.removed.length;
+      if (changed === 0) throw new ApiError('invalid', 'Nothing changed between the two copies; the design is already up to date.');
+      const text = buildDesignSystemUpdatePrompt({
+        title: design.title,
+        kind: design.kind,
+        folder: record.path,
+        name: nowCopy.record.name,
+        revision: nowCopy.record.revision,
+        tokens: { added: tokens.added, changed: tokens.changed.map((change) => change.name), removed: tokens.removed },
+        components,
+        maxChars: budgetFor(block),
+      });
+      return { text: withBlock(block, text), commentIds: [], omitted: [], chip, handEdits: handEditsOf(block) };
+    }
 
     if (input.purpose === 'offline') {
       const external = await collectExternal(ctx, record);

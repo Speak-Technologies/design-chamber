@@ -8,7 +8,7 @@
 //   dist/plugin/     index.js, package.json           — the OpenCode plugin (ESM, imports nothing)
 //   dist/status/     index.html, status.css, main.js  — Work Status frame (IIFE, browser)
 //   dist/blocks/     index.html, blocks.css, main.js  — chat block frame (IIFE, browser)
-//   dist/skills/     design-chamber/SKILL.md, presets/<id>.md — the bundled agent skill
+//   dist/skills/     design-chamber/SKILL.md, presets/<id>.md, design-system-builder/SKILL.md — the bundled agent skills
 //
 // The design-frame bridge is bundled first, in memory, and injected into the panel bundle
 // as the string constant `__DC_BRIDGE__` (src/guest/globals.d.ts).
@@ -123,14 +123,11 @@ await writeFile(
   `${JSON.stringify({ name: 'design-chamber-tools', version, private: true, type: 'module', exports: { '.': './index.js' } }, null, 2)}\n`,
 );
 
-// (8) Work Status frame and (9) chat block frame: browser IIFE plus their own small CSS, so they
-// never touch the panel's styles.css.
+// (8) Work Status frame: browser IIFE plus its own small CSS, so it never touches the panel's
+// styles.css. The chat block frame is built at (10c), after the interview it bakes is parsed.
 await build({ ...browser, entryPoints: [at('src', 'ui', 'status', 'main.ts')], outfile: at('dist', 'status', 'main.js') });
 await copyFile(at('src', 'ui', 'status', 'index.html'), at('dist', 'status', 'index.html'));
 await copyFile(at('src', 'ui', 'status', 'status.css'), at('dist', 'status', 'status.css'));
-await build({ ...browser, entryPoints: [at('src', 'ui', 'blocks', 'main.ts')], outfile: at('dist', 'blocks', 'main.js') });
-await copyFile(at('src', 'ui', 'blocks', 'index.html'), at('dist', 'blocks', 'index.html'));
-await copyFile(at('src', 'ui', 'blocks', 'blocks.css'), at('dist', 'blocks', 'blocks.css'));
 
 // (10) Bundled skill. skill-doc.ts and presets.ts are pure TypeScript with no Node imports, so
 // Node (>= 22.18) loads them directly by stripping the types; nothing is bundled twice.
@@ -156,6 +153,22 @@ if (!/^---\r?\nname: design-chamber\r?\n/.test(skill)) {
 }
 await writeFile(at('dist', 'skills', 'design-chamber', 'SKILL.md'), skill);
 
-const outputs = ['panel/index.html', 'panel/styles.css', 'panel/main.js', 'background/index.html', 'background/main.js', 'service/main.js', 'cli/dc.mjs', 'plugin/index.js', 'status/main.js', 'blocks/main.js', 'skills/design-chamber/SKILL.md'];
+// (10b) The design-system-builder skill and the interview the SystemAsk block bakes (§8.8 rev 3).
+// One file feeds both: rules/SYSTEM-QUESTIONS.md is inlined verbatim into the skill and parsed
+// into the set the blocks bundle gets below. A missing or broken file, an over-cap skill or a
+// skill named like a command fails the build here.
+const { buildBuilderSkill } = await import('./build-skill.mjs');
+const systemQuestions = await buildBuilderSkill({ packageRoot: root, distDir: dist });
+
+// (10c) Chat block frame, with the interview baked in as __DC_SYSTEM_QUESTIONS__ (the __DC_BRIDGE__
+// pattern): the block's fixed wording and the skill's interview are the same file at the same build.
+await build({ ...browser, entryPoints: [at('src', 'ui', 'blocks', 'main.ts')], outfile: at('dist', 'blocks', 'main.js'), define: { __DC_SYSTEM_QUESTIONS__: JSON.stringify(systemQuestions) } });
+if ((await readFile(at('dist', 'blocks', 'main.js'), 'utf8')).includes('__DC_SYSTEM_QUESTIONS__')) {
+  throw new Error('build: __DC_SYSTEM_QUESTIONS__ was not replaced in the blocks bundle.');
+}
+await copyFile(at('src', 'ui', 'blocks', 'index.html'), at('dist', 'blocks', 'index.html'));
+await copyFile(at('src', 'ui', 'blocks', 'blocks.css'), at('dist', 'blocks', 'blocks.css'));
+
+const outputs = ['panel/index.html', 'panel/styles.css', 'panel/main.js', 'background/index.html', 'background/main.js', 'service/main.js', 'cli/dc.mjs', 'plugin/index.js', 'status/main.js', 'blocks/main.js', 'skills/design-chamber/SKILL.md', 'skills/design-system-builder/SKILL.md'];
 const sizes = await Promise.all(outputs.map(async (file) => `${file} ${((await stat(at('dist', file))).size / 1024).toFixed(1)} kB`));
 console.log(`built dist/ (bridge ${(Buffer.byteLength(bridge) / 1024).toFixed(1)} kB)\n  ${sizes.join('\n  ')}`);

@@ -1,4 +1,4 @@
-<!-- design-chamber:guide v1 sha256:793aec6276482362893b21530568641d464e04ed2ceca4725d2ccd9e0b203777 -->
+<!-- design-chamber:guide v1 sha256:37e9e2480efc2ff3709ed74e83da9bdccc2b0ebdd0936e41079634fdf1954eeb -->
 # Designs folder (Design Chamber)
 
 This folder, `/home/you/Documents/Designs`, is the user's designs folder for Design Chamber, the design viewer inside OpenChamber. The user sets it in Design Chamber settings (the default is `~/Documents/Designs`). Designs saved anywhere else do not show up.
@@ -81,6 +81,8 @@ Leave `_systems/` alone too, unless you were asked to work on a system.
 
 - Design systems live in `_systems/<id>/` in the designs folder. Write there only when the user or Design Chamber asks you to make or change a system; never set its status.
 - A design's copy of its system is its `system/` folder: read it, never change it.
+- To build a design system with the user, use /design-system or the design-system-builder skill.
+- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff.
 
 ## Design rules
 

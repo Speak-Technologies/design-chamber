@@ -142,6 +142,8 @@ const BUILT: ReadonlySet<RouteKey> = new Set<RouteKey>([
   'GET /system-builds/:ticket',
   'POST /systems/:id/build/stop',
   'POST /system-stops/:undoId/undo',
+  // T15: test/service/systems/system-chat-routes.test.ts.
+  'POST /systems/:id/prompt',
   'GET /folders',
   'POST /folders',
   'PATCH /folders/:folderId',
