@@ -53,6 +53,7 @@ import { startChoiceReconciler } from './systems/choice.ts';
 import { ensureLinkService } from './systems/link.ts';
 import { ensureBuildTickets } from './systems/builds.ts';
 import { startHomes } from './systems/homes.ts';
+import { startSnapshots } from './systems/snapshot.ts';
 import { ensureSystemStore } from './systems/store.ts';
 import { ensureSystemVersions } from './systems/versions.ts';
 import { ensureThumbnailService } from './thumbnails.ts';
@@ -152,6 +153,9 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   ctx.onDispose(startChoiceReconciler(ctx));
   // Phase 2.5 §5.9: BUILD.json is adopted and followed from the watcher's baseline on.
   ctx.onDispose(startHomes(ctx, () => watcher.ready));
+  // Phase 2.5 §5.10: a snapshot swap a restart interrupted is finished or undone, and a snapshot
+  // changed outside Design Chamber is marked tampered (a link refuses it until a re-sync).
+  ctx.onDispose(startSnapshots(ctx));
 
   // The guide at <root>/AGENTS.md: synced after the watcher's baseline, on root changes and on
   // new designs. The skill ships inside the extension; an older installed copy is only read here.

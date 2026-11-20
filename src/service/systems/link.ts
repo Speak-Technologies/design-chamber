@@ -52,6 +52,7 @@ import { renameWithRetry, resolveInside, resolvePlainTarget, writeFileAtomic } f
 import { readCopyRecord, readCopyRecordIn } from '../store.ts';
 import { ensureVersionsService, listTracked, toSummary, treeHashOf, type VersionsService } from '../versions.ts';
 import { ensureSystemStore, type SystemStore } from './store.ts';
+import { snapshotTamperedMessage } from './snapshot.ts';
 
 // ---- sentences (§5.4, §3.2) ----
 
@@ -366,12 +367,15 @@ export const createLinkService = (deps: LinkServiceDeps): LinkService => {
     const state = await systems.readState(id);
     if (state.status !== 'ready') throw new LinkRefusal('invalid', linkDraftMessage(state.name), 'draft');
     if (!systems.isSettled(id)) throw new LinkRefusal('conflict', linkBeingChangedMessage(state.name), 'being-changed');
+    // §5.10 tamper rule: a snapshot holding bytes Design Chamber didn't put there is never copied.
+    if (state.home?.kind === 'repo' && state.snapshot?.tampered === true) throw new LinkRefusal('conflict', snapshotTamperedMessage(state.name), 'failed');
     for (let attempt = 0; attempt < 2; attempt += 1) {
       // Outside the lock: settleRevision takes the system's lock itself.
       await systems.settleRevision(id);
       const read = await systems.withLock(id, async (): Promise<SystemCopy | null> => {
         const current = await systems.readState(id);
         if (current.status !== 'ready') throw new LinkRefusal('invalid', linkDraftMessage(current.name), 'draft');
+        if (current.home?.kind === 'repo' && current.snapshot?.tampered === true) throw new LinkRefusal('conflict', snapshotTamperedMessage(current.name), 'failed');
         const source = await systems.get(id);
         const before = treeHashOf(source.hashes ?? {});
         if (before !== current.revision.treeHash) return null;

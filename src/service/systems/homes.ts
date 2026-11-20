@@ -46,7 +46,8 @@ import { ensureBuildTickets, type BuildTickets } from './builds.ts';
 import { readProjectFile } from './extract.ts';
 import { readLivingPageMark } from './living-safe.ts';
 import { validateScanFolder } from './scan-folder.ts';
-import { refreshSnapshot } from './snapshot.ts';
+import { runBuildScan } from './drift.ts';
+import { clearRecoverySnapshot, refreshSnapshot } from './snapshot.ts';
 import { ensureSystemStore, type SystemStore } from './store.ts';
 
 /** The living page's mark sits in the head; this much of an existing file is read to find it. */
@@ -136,7 +137,11 @@ export type HomesDeps = {
   hub: Pick<ChangeHub, 'emit' | 'subscribe'>;
   log: Logger;
   /** T13's snapshot refresh (§5.10); a failure leaves the last snapshot. */
-  snapshots?: { refresh(id: string, options: { by: 'agent' }): Promise<void> };
+  snapshots?: {
+    refresh(id: string, options: { by: 'agent' }): Promise<void>;
+    /** §5.10 rev 3: a home change before the first stamp empties a recovery snapshot (version first). */
+    clear?(id: string): Promise<void>;
+  };
   /** T13's build scan (§7.4: the code scan whose summary becomes `.chamber/scan.json`). */
   scans?: { build(id: string, directory: string): Promise<void> };
   /** T14: drop the staged and preview living pages (a home change makes them the old home's). */
@@ -157,7 +162,7 @@ export type Homes = {
 };
 
 /** What runs after the chain step, outside the system's lock (the seams take their own chains). */
-type Post = { refresh?: boolean; scan?: string; dropLivingPages?: boolean; supersedeProposal?: boolean };
+type Post = { refresh?: boolean; clearSnapshot?: boolean; scan?: string; dropLivingPages?: boolean; supersedeProposal?: boolean };
 
 type BuildRead = { kind: 'absent' } | { kind: 'unreadable' } | { kind: 'read'; parsed: ParsedBuildJson };
 
@@ -381,8 +386,13 @@ export const createHomes = (deps: HomesDeps): Homes => {
     emitBuild(id);
     log.info('systems.homes.home-followed', { system: id, home: build.home, code: codeDir !== null });
     // A proposal for the old home is never approvable; the staged pages are the old home's.
-    // T13 also replaces a recovery snapshot with an empty one here (version first, §5.10 rev 3).
-    return { dropLivingPages: true, supersedeProposal: true, ...(codeDiffers && codeDir !== null ? { scan: codeDir } : {}) };
+    // A recovery snapshot (the user's read of the old folder) is emptied, version first (§5.10 rev 3).
+    return {
+      dropLivingPages: true,
+      supersedeProposal: true,
+      ...(homeDiffers && state.snapshot != null ? { clearSnapshot: true } : {}),
+      ...(codeDiffers && codeDir !== null ? { scan: codeDir } : {}),
+    };
   };
 
   /** Step 4: a newer applied stamp, recorded as seen before anything that can fail runs. */
@@ -454,6 +464,9 @@ export const createHomes = (deps: HomesDeps): Homes => {
     }
     if (post.supersedeProposal === true) {
       if (deps.proposals !== undefined) await deps.proposals.supersede(id).catch((error: unknown) => log.warn('systems.homes.proposal-supersede-failed', { system: id, error: errorText(error) }));
+    }
+    if (post.clearSnapshot === true && deps.snapshots?.clear !== undefined) {
+      await deps.snapshots.clear(id).catch((error: unknown) => log.warn('systems.homes.snapshot-clear-failed', { system: id, error: errorText(error) }));
     }
     if (post.refresh === true) {
       if (deps.snapshots !== undefined) {
@@ -529,9 +542,13 @@ export const startHomes = (ctx: ServiceContext, ready?: () => Promise<void>): ((
     settings: ctx.settings,
     hub: ctx.hub,
     log: ctx.log,
-    // T13 fills snapshot.ts; until then the refresh fails loudly and is caught (the stamp is seen,
-    // so it never loops). T13 wires `scans.build`, T14 `livingPages.drop`, T17 `proposals.supersede`.
-    snapshots: { refresh: (id, options) => refreshSnapshot(ctx, id, options) },
+    // A failure is caught and logged (the stamp is already seen, so it never loops). T14 wires
+    // `livingPages.drop`, T17 `proposals.supersede`.
+    snapshots: {
+      refresh: async (id, options) => void (await refreshSnapshot(ctx, id, options)),
+      clear: (id) => clearRecoverySnapshot(ctx, id),
+    },
+    scans: { build: (id, directory) => runBuildScan(ctx, id, directory) },
     ...(ready !== undefined ? { ready } : {}),
   });
   return () => homes.stop();

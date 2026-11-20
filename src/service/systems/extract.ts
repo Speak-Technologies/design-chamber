@@ -1,7 +1,10 @@
 // The Code scan (documentation/specs/phase-2-5-technical.md §7.1 to §7.3, AD-23): a bounded, read-only
 // job over a project folder the user picked, the seed of a new system made from it (§7.2), and the
 // re-sync review of an internal-home system (§7.3; its apply is `systems/edits.ts` op `resync`, §6.3).
-// The repo flavour and the S8 purposes are T13's.
+// S8 (§7.4, AD-23): one walker, five purposes. `make` and `resync` as above; `repo-resync` reads a
+// repo-backed system's folder like a snapshot refresh (`repo-read.ts`) and answers a `RepoResyncReview`
+// (its apply is `snapshot.ts`); `build` and `drift` are the service's own code scans (`drift.ts`), run
+// through `runInternal` under the same running cap, root-change abort and limits.
 //
 // Safety: the folder passes `validateScanFolder` (absolute, not a drive root, outside the Designs
 // folder, compared as realpaths) and is walked from its realpath with discovery's walker under the
@@ -18,7 +21,7 @@ import { constants as fsConstants, type Dirent } from 'node:fs';
 import { lstat, open, readdir, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { CodeResyncReview, CreateSystemBody, CreateSystemScanBody, ScanSummary, SystemScanResponse } from '../../shared/api.ts';
+import type { CreateSystemBody, CreateSystemScanBody, ResyncReview, ScanSummary, SystemScanResponse } from '../../shared/api.ts';
 import {
   SCAN_CANDIDATES_MAX,
   SCAN_DEPTH_MAX,
@@ -31,7 +34,7 @@ import {
   SCANS_RUNNING_MAX,
   SYSTEM_ID_PATTERN,
 } from '../../shared/limits.ts';
-import { resyncStampOf, safeAssetName } from '../../shared/system-json.ts';
+import { repoProblemText, resyncStampOf, safeAssetName } from '../../shared/system-json.ts';
 import type { SystemState } from '../../shared/types.ts';
 import type { ServiceContext } from '../context.ts';
 import { bySpot, walk, withDeadline } from '../discovery.ts';
@@ -61,7 +64,8 @@ import {
   type ScannedToken,
   type SeedToken,
 } from './extract-rules.ts';
-import { notBuilt } from './not-built.ts';
+import { ASSET_READ_MAX, readProjectFile } from './project-file.ts';
+import { readRepoSystem, repoResyncReview, RepoReadStopped, type RepoRead } from './repo-read.ts';
 import { validateScanFolder } from './scan-folder.ts';
 import { ensureSystemStore, type SystemSeed } from './store.ts';
 
@@ -119,7 +123,7 @@ export type ScanResult = {
   summary: ScanSummary;
 };
 
-class ScanStopped extends Error {}
+export class ScanStopped extends Error {}
 
 type ReadOutcome = { text: string } | 'too-large' | 'unreadable' | 'timeout';
 
@@ -157,6 +161,11 @@ export type ScanInput = {
   now: () => number;
   /** Directory entries seen so far, for the running answer. */
   onSeen?: (seen: number) => void;
+  /**
+   * Absolute paths never read (§5.12: the system's repo folder, the living page, `_systems`): a
+   * folder is not walked, a file is dropped with the secret names. Compared as paths, not realpaths.
+   */
+  exclude?: readonly string[];
 };
 
 /** The scan itself (§7.1). Throws `ScanStopped` when the signal aborts; never writes anything. */
@@ -169,6 +178,8 @@ export const runScan = async (input: ScanInput): Promise<ScanResult> => {
   };
   const expired = (): boolean => signal.aborted || left() <= 0;
   const designsReal = await realpath(input.designsRoot).catch(() => path.resolve(input.designsRoot));
+  const exclude = input.exclude ?? [];
+  const excluded = (abs: string): boolean => exclude.some((one) => samePath(abs, one));
   stopIfAborted();
 
   const skipped: { path: string; reason: string }[] = [];
@@ -178,6 +189,7 @@ export const runScan = async (input: ScanInput): Promise<ScanResult> => {
     entries: limits.entries,
     expired,
     skipDir: (abs, rel) => {
+      if (excluded(abs)) return true;
       if (!samePath(abs, designsReal)) return false;
       skipped.push({ path: rel, reason: SKIP_DESIGNS });
       return true;
@@ -193,7 +205,7 @@ export const runScan = async (input: ScanInput): Promise<ScanResult> => {
   let partial = walked.truncated;
 
   // Secret files are dropped here, by name: nothing below can open them.
-  const files = walked.files.filter((rel) => !isSecretName(rel));
+  const files = walked.files.filter((rel) => !isSecretName(rel) && !excluded(path.join(directory, ...rel.split('/'))));
   const walkedSet = new Set(files);
 
   const forAgent: { path: string; why: string }[] = [];
@@ -314,8 +326,15 @@ export const runScan = async (input: ScanInput): Promise<ScanResult> => {
 
 type JobState = 'running' | 'done' | 'failed' | 'cancelled' | 'root-changed';
 
+/** §7.4: what a job is for. `build` and `drift` are the service's own (never listed or reviewed). */
+export type ScanPurpose = 'make' | 'resync' | 'build' | 'drift' | 'repo-resync';
+
+/** A repo re-sync's read, kept in memory so what lands is what was reviewed (§7.4). */
+type RepoJob = { folder: string; livingPage: string; directoryChanged: boolean; read: RepoRead | null };
+
 type Job = {
   id: string;
+  purpose: ScanPurpose;
   /** The designs root when the job started: a result is never used under another root. */
   root: string;
   systemId: string | null;
@@ -327,7 +346,10 @@ type Job = {
   seen: number;
   message: string;
   result: ScanResult | null;
-  review: CodeResyncReview | undefined;
+  review: ResyncReview | undefined;
+  repo: RepoJob | null;
+  /** Internal runs only: paths the walk leaves out (§5.12). */
+  exclude: readonly string[];
   /** The system's re-sync stamp when the review was made (§6.3), null for a scan without a system. */
   stamp: string | null;
   settled: Promise<void>;
@@ -335,6 +357,19 @@ type Job = {
 
 /** A done re-sync scan, for the apply (§6.3): the values, the root it ran under and the stamp its review was made against. */
 export type ResyncSource = { result: ScanResult; root: string; stamp: string };
+
+/**
+ * A done repo re-sync scan (§7.4): the folder's bytes as reviewed (null when the folder was not
+ * found), the repo's realpath, whether it re-points the home, and the snapshot stamp it was made against.
+ */
+export type RepoResyncSource = {
+  read: RepoRead | null;
+  root: string;
+  stamp: string;
+  directory: string;
+  directoryChanged: boolean;
+  review: Extract<ResyncReview, { kind: 'repo' }>;
+};
 
 export type ScanJobs = {
   start(input: CreateSystemScanBody): Promise<{ scanId: string }>;
@@ -347,6 +382,13 @@ export type ScanJobs = {
    * runs, when it was made for another system, or under another Designs folder.
    */
   resyncSource(scanId: string, systemId: string): ResyncSource;
+  /** `resyncSource` for a repo-backed system (§7.4): the same 404 / 409 rules. */
+  repoResyncSource(scanId: string, systemId: string): RepoResyncSource;
+  /**
+   * The service's own scan (`build`, `drift`; §7.4): same limits, walker and root-change abort, and
+   * it waits for a free slot instead of refusing. Throws `ScanStopped` when stopped.
+   */
+  runInternal(purpose: 'build' | 'drift', directory: string, exclude: readonly string[]): Promise<ScanResult>;
   /** Resolves once the job has finished, whatever its end (tests and the create flow). */
   settled(scanId: string): Promise<void>;
   dispose(): void;
@@ -400,7 +442,7 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
   });
 
   /** §7.3: the review of an internal-home system against what the scan found. */
-  const reviewFor = async (systemId: string, result: ScanResult): Promise<{ review: CodeResyncReview; stamp: string }> => {
+  const reviewFor = async (systemId: string, result: ScanResult): Promise<{ review: ResyncReview; stamp: string }> => {
     const store = ensureSystemStore(ctx);
     const state = await store.readState(systemId);
     const detail = await store.detail(systemId);
@@ -410,10 +452,61 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
     };
   };
 
+  /** §7.4 repo re-sync: the folder read like a snapshot refresh, reviewed against the current snapshot. */
+  const runRepo = async (job: Job, repo: RepoJob): Promise<void> => {
+    // Safe: a repo-resync job always names its system (see `start`).
+    const systemId = job.systemId as string;
+    const store = ensureSystemStore(ctx);
+    const outcome = await readRepoSystem({ directory: job.directory, folder: repo.folder, livingPage: repo.livingPage, signal: job.abort.signal });
+    // A re-point must hold the system's folder (§7.4); the home's own folder may be gone (the sheet says so).
+    if (outcome.kind === 'problem' && (outcome.reason !== 'folder-missing' || repo.directoryChanged)) {
+      finish(job, 'failed', repoProblemText(outcome.reason, job.directory, repo.folder));
+      ctx.log.warn('systems.repo-scan-problem', { scanId: job.id, reason: outcome.reason });
+      return;
+    }
+    const read = outcome.kind === 'read' ? outcome : null;
+    const state = await store.readState(systemId);
+    const source = state.snapshot == null ? null : await store.get(systemId);
+    const current = source === null ? null : { hashes: source.hashes ?? {}, tokensCss: source.tokensCss };
+    const review = repoResyncReview(current, read, {
+      directory: job.directory,
+      directoryChanged: repo.directoryChanged,
+      folderFound: read !== null,
+      livingPageFound: read?.livingPageFound ?? false,
+    });
+    if (job.state !== 'running') return; // stopped meanwhile
+    repo.read = read;
+    job.review = review;
+    job.stamp = state.snapshot?.treeHash ?? 'none';
+    job.result = {
+      directory: job.directory,
+      at: new Date(now()).toISOString(),
+      tokens: [],
+      scanned: [],
+      assets: [],
+      summary: {
+        directory: job.directory,
+        counts: emptyCounts(),
+        files: [],
+        skipped: read?.skipped ?? [],
+        assets: [],
+        forAgent: [],
+        refused: read?.refused ?? 0,
+        partial: false,
+      },
+    };
+    finish(job, 'done', '');
+    ctx.log.info('systems.repo-scan-done', { scanId: job.id, files: read?.files.size ?? 0, refused: read?.refused ?? 0, ms: now() - job.startedAt });
+  };
+
   const run = async (job: Job): Promise<void> => {
     try {
       await options.gate?.();
       if (job.abort.signal.aborted) return;
+      if (job.repo !== null) {
+        await runRepo(job, job.repo);
+        return;
+      }
       const result = await runScan({
         directory: job.directory,
         designsRoot: job.root,
@@ -423,8 +516,9 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
         onSeen: (seen) => {
           job.seen = seen;
         },
+        exclude: job.exclude,
       });
-      const reviewed = job.systemId === null ? null : await reviewFor(job.systemId, result);
+      const reviewed = job.systemId === null || job.purpose !== 'resync' ? null : await reviewFor(job.systemId, result);
       if (job.state !== 'running') return; // stopped meanwhile
       job.result = result;
       job.review = reviewed?.review;
@@ -433,6 +527,7 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
       const { counts } = result.summary;
       ctx.log.info('systems.scan-done', {
         scanId: job.id,
+        purpose: job.purpose,
         tokens: SECTION_ORDER.reduce((sum, section) => sum + counts[section], 0),
         fonts: counts.fonts,
         logos: counts.logos,
@@ -441,7 +536,7 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
         ms: now() - job.startedAt,
       });
     } catch (error) {
-      if (error instanceof ScanStopped || job.state !== 'running') return;
+      if (error instanceof ScanStopped || error instanceof RepoReadStopped || job.state !== 'running') return;
       finish(job, 'failed', error instanceof ApiError ? error.message : scanFailedMessage(job.directory));
       ctx.log.warn('systems.scan-failed', { scanId: job.id, error: error instanceof Error ? error.name : 'unknown', ms: now() - job.startedAt });
     } finally {
@@ -449,45 +544,57 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
     }
   };
 
+  /** A job the routes may see: the service's own runs are never listed, read or cancelled from outside. */
   const jobOf = (scanId: string): Job => {
     prune();
     const job = typeof scanId === 'string' && SCAN_ID_PATTERN.test(scanId) ? jobs.get(scanId) : undefined;
-    if (job === undefined) throw gone();
+    if (job === undefined || job.purpose === 'build' || job.purpose === 'drift') throw gone();
     return job;
   };
+
+  const running = (): number => [...jobs.values()].filter((job) => job.state === 'running').length;
+
+  const newJob = (fields: Pick<Job, 'purpose' | 'root' | 'systemId' | 'directory' | 'repo' | 'exclude'>): Job => ({
+    ...fields,
+    id: newScanId(),
+    startedAt: now(),
+    finishedAt: null,
+    abort: new AbortController(),
+    state: 'running',
+    seen: 0,
+    message: '',
+    result: null,
+    review: undefined,
+    stamp: null,
+    settled: Promise.resolve(),
+  });
 
   return {
     async start(input) {
       prune();
-      if ([...jobs.values()].filter((job) => job.state === 'running').length >= SCANS_RUNNING_MAX) throw new ApiError('conflict', SCANS_BUSY_MESSAGE);
+      if (running() >= SCANS_RUNNING_MAX) throw new ApiError('conflict', SCANS_BUSY_MESSAGE);
       const root = ctx.settings.root();
       let systemId: string | null = null;
+      let home: Extract<NonNullable<SystemState['home']>, { kind: 'repo' }> | null = null;
       if (input.systemId !== undefined) {
         if (typeof input.systemId !== 'string' || !SYSTEM_ID_PATTERN.test(input.systemId)) throw new ApiError('bad-request', 'That is not a design system id.');
         const state = await ensureSystemStore(ctx).readState(input.systemId); // 404 sentence when it is gone
-        // T13: a repo-backed system is re-read from its repo folder (§7.4), not reviewed against code provenance.
-        if (state.home?.kind === 'repo') notBuilt();
+        // §7.4: a repo-backed system is re-read from its repo folder, not reviewed against code provenance.
+        if (state.home?.kind === 'repo') home = state.home;
         systemId = input.systemId;
       }
+      // A re-point must pass the same folder rules as any scan (§7.4); the home's own folder too.
       const directory = await validateScanFolder(input.directory, root);
       // Checked again after the awaits: a third start could have slipped in.
-      if ([...jobs.values()].filter((job) => job.state === 'running').length >= SCANS_RUNNING_MAX) throw new ApiError('conflict', SCANS_BUSY_MESSAGE);
-      const job: Job = {
-        id: newScanId(),
+      if (running() >= SCANS_RUNNING_MAX) throw new ApiError('conflict', SCANS_BUSY_MESSAGE);
+      const job = newJob({
+        purpose: home !== null ? 'repo-resync' : systemId !== null ? 'resync' : 'make',
         root,
         systemId,
         directory,
-        startedAt: now(),
-        finishedAt: null,
-        abort: new AbortController(),
-        state: 'running',
-        seen: 0,
-        message: '',
-        result: null,
-        review: undefined,
-        stamp: null,
-        settled: Promise.resolve(),
-      };
+        repo: home === null ? null : { folder: home.folder, livingPage: home.livingPage, directoryChanged: !samePath(directory, home.directory), read: null },
+        exclude: [],
+      });
       jobs.set(job.id, job);
       job.settled = run(job);
       return { scanId: job.id };
@@ -531,8 +638,53 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
       if (job.state === 'running') throw new ApiError('conflict', 'The scan is still running. Wait for it to finish.');
       if (job.state !== 'done' || job.result === null) throw gone();
       if (!samePath(job.root, ctx.settings.root())) throw new ApiError('conflict', RESYNC_ROOT_CHANGED_MESSAGE);
-      if (job.systemId !== systemId || job.stamp === null) throw new ApiError('conflict', SCAN_OTHER_SYSTEM_MESSAGE);
+      if (job.purpose !== 'resync' || job.systemId !== systemId || job.stamp === null) throw new ApiError('conflict', SCAN_OTHER_SYSTEM_MESSAGE);
       return { result: job.result, root: job.root, stamp: job.stamp };
+    },
+
+    repoResyncSource(scanId, systemId) {
+      const job = jobOf(scanId);
+      if (job.state === 'running') throw new ApiError('conflict', 'The scan is still running. Wait for it to finish.');
+      if (job.state !== 'done' || job.repo === null || job.review?.kind !== 'repo') throw gone();
+      if (!samePath(job.root, ctx.settings.root())) throw new ApiError('conflict', RESYNC_ROOT_CHANGED_MESSAGE);
+      if (job.systemId !== systemId || job.stamp === null) throw new ApiError('conflict', SCAN_OTHER_SYSTEM_MESSAGE);
+      return { read: job.repo.read, root: job.root, stamp: job.stamp, directory: job.directory, directoryChanged: job.repo.directoryChanged, review: job.review };
+    },
+
+    async runInternal(purpose, directory, exclude) {
+      const root = ctx.settings.root();
+      // The service's own scan waits for a free slot instead of failing.
+      while (running() >= SCANS_RUNNING_MAX) {
+        const busy = [...jobs.values()].filter((job) => job.state === 'running').map((job) => job.settled);
+        await Promise.race(busy);
+        if (!samePath(root, ctx.settings.root())) throw new ScanStopped();
+      }
+      const job = newJob({ purpose, root, systemId: null, directory, repo: null, exclude });
+      jobs.set(job.id, job);
+      const work = (async (): Promise<ScanResult> => {
+        try {
+          await options.gate?.();
+          if (job.abort.signal.aborted) throw new ScanStopped();
+          const result = await runScan({ directory, designsRoot: root, limits, signal: job.abort.signal, now, exclude });
+          if (job.state !== 'running') throw new ScanStopped();
+          job.result = result;
+          finish(job, 'done', '');
+          ctx.log.info('systems.scan-done', { scanId: job.id, purpose, tokens: result.tokens.length, files: result.scanned.length, partial: result.summary.partial, ms: now() - job.startedAt });
+          return result;
+        } catch (error) {
+          finish(job, error instanceof ScanStopped ? 'cancelled' : 'failed', '');
+          throw error;
+        } finally {
+          // The service's own runs keep no result: they leave the map at once.
+          jobs.delete(job.id);
+        }
+      })();
+      // Another waiter races on this: it settles when the slot frees, whatever the outcome.
+      job.settled = work.then(
+        () => undefined,
+        () => undefined,
+      );
+      return work;
     },
 
     async settled(scanId) {
@@ -549,36 +701,8 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
 
 // ---- making a system from a scan or a preset (§7.2) ----
 
-/** One project file, contained: no link anywhere on the way (`resolvePlainTarget`), no link at the leaf (O_NOFOLLOW), ≤ `maxBytes`. */
-export const readProjectFile = async (directory: string, rel: string, maxBytes: number): Promise<Buffer | null> => {
-  let file: string;
-  try {
-    file = await resolvePlainTarget(directory, rel.split('/'));
-  } catch {
-    return null;
-  }
-  const handle = await open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)).catch(() => null);
-  if (handle === null) return null;
-  try {
-    const info = await handle.stat();
-    if (!info.isFile() || info.size > maxBytes) return null;
-    const bytes = Buffer.alloc(info.size);
-    let filled = 0;
-    while (filled < bytes.length) {
-      const { bytesRead } = await handle.read(bytes, filled, bytes.length - filled, filled);
-      if (bytesRead === 0) break;
-      filled += bytesRead;
-    }
-    return bytes.subarray(0, filled);
-  } catch {
-    return null;
-  } finally {
-    await handle.close().catch(() => undefined);
-  }
-};
-
-/** The biggest asset a system takes (a document); fonts and logos are checked against their own cap after the read. */
-export const ASSET_READ_MAX = 20 * 1024 * 1024;
+/** Re-exported for the modules that read project files through the scan's module. */
+export { ASSET_READ_MAX, readProjectFile };
 
 const writeSeedText = async (systemDir: string, name: string, text: string): Promise<void> => {
   await writeFileAtomic(await resolvePlainTarget(systemDir, [name], { allowAbsent: true }), text, { createDirs: false });

@@ -1,0 +1,148 @@
+// AD-18 (documentation/specs/phase-2-5-technical.md §5.13): the service never writes a project repo.
+// Every step a repo-backed system goes through runs between two fingerprints of the repo (each file's
+// bytes, mode and mtime, each folder's listing), and the two must match: adoption, the code scan,
+// the snapshot refresh, the living page, the state routes, a user re-sync with a re-point, a link
+// and the delete.
+
+import assert from 'node:assert/strict';
+import { cp, writeFile } from 'node:fs/promises';
+import type { AddressInfo } from 'node:net';
+import path from 'node:path';
+import { test } from 'node:test';
+
+import type { CreateSystemScanResponse, SystemScanResponse } from '../../../src/shared/api.ts';
+import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
+import { registerSystemEditRoutes } from '../../../src/service/routes/system-edits.ts';
+import { registerSystemScanRoutes } from '../../../src/service/routes/system-scans.ts';
+import { registerSystemsRoutes } from '../../../src/service/routes/systems.ts';
+import { createDesignStore } from '../../../src/service/store.ts';
+import { ensureBuildTickets } from '../../../src/service/systems/builds.ts';
+import { runBuildScan } from '../../../src/service/systems/drift.ts';
+import { ensureScanJobs } from '../../../src/service/systems/extract.ts';
+import { createHomes } from '../../../src/service/systems/homes.ts';
+import { createLinkService } from '../../../src/service/systems/link.ts';
+import { regenerateLivingPage } from '../../../src/service/systems/living-page.ts';
+import { clearRecoverySnapshot, refreshSnapshot } from '../../../src/service/systems/snapshot.ts';
+import { createSystemStore } from '../../../src/service/systems/store.ts';
+import { createVersionsService } from '../../../src/service/versions.ts';
+import { fingerprintTree, setupRepo } from './repo-fixture.ts';
+
+const TOKEN = 'repo-readonly-token-0123456789ab';
+
+test('no step of a repo-backed system changes a byte, mode, mtime or listing of the repo', async (t) => {
+  const rig = await setupRepo(t);
+  const { ctx, systems, project } = rig;
+  // A second copy of the repo, for the re-point; made before any step, so it is fingerprinted too.
+  const moved = path.join(rig.base, 'shop-moved');
+  await cp(project, moved, { recursive: true, preserveTimestamps: true });
+  await writeFile(path.join(moved, 'design-system', 'OVERVIEW.md'), 'Acme, from its new home.\n');
+
+  const repos = [project, moved];
+  const steps: string[] = [];
+  const step = async (name: string, run: () => Promise<unknown>): Promise<void> => {
+    const before = await Promise.all(repos.map((dir) => fingerprintTree(dir)));
+    await run();
+    const after = await Promise.all(repos.map((dir) => fingerprintTree(dir)));
+    assert.deepEqual(after, before, `${name} left the repo exactly as it was`);
+    steps.push(name);
+  };
+
+  ensureScanJobs(ctx);
+  const router = createRouter({ token: TOKEN, log: ctx.log });
+  registerSystemsRoutes(router, ctx);
+  registerSystemScanRoutes(router, ctx);
+  registerSystemEditRoutes(router, ctx);
+  const server = createServiceServer(router);
+  await listenLoopback(server, 0);
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const { port } = server.address() as AddressInfo;
+  const call = async (method: string, url: string, body?: unknown): Promise<{ status: number; json: unknown }> => {
+    const answer = await fetch(`http://127.0.0.1:${port}${url}`, {
+      method,
+      headers: { authorization: `Bearer ${TOKEN}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    return { status: answer.status, json: (await answer.json()) as unknown };
+  };
+
+  // Adoption (the living page goes where no file is yet: one in place refuses it), with the real snapshot refresh and build scan behind it.
+  const tickets = ensureBuildTickets(ctx);
+  const homes = createHomes({
+    systems,
+    tickets,
+    settings: ctx.settings,
+    hub: ctx.hub,
+    log: ctx.log,
+    snapshots: { refresh: async (id, options) => void (await refreshSnapshot(ctx, id, options)), clear: (id) => clearRecoverySnapshot(ctx, id) },
+    scans: { build: (id, directory) => runBuildScan(ctx, id, directory) },
+  });
+  t.after(() => homes.stop());
+  const { ticket } = (await tickets.issue({ projectDirectory: project, sessionId: 'ses_build', rulesFor: () => '# rules\n' })).ticket;
+  const id = 'acme';
+  const writeBuild = async (over: Record<string, unknown>): Promise<void> => {
+    const build = { version: 1, ticket, name: 'Acme', home: 'repo', repo: { directory: project, folder: 'design-system', livingPage: 'docs/design-system.html' }, code: { directory: project }, mode: 'fix', ...over };
+    await rig.tmp.write(`Designs/_systems/${id}/BUILD.json`, `${JSON.stringify(build, null, 2)}\n`);
+    await homes.reconcile(id);
+    await homes.idle();
+  };
+  await step('adoption', async () => {
+    await writeBuild({});
+  });
+  const adopted = await systems.readState(id);
+  assert.equal(adopted.home?.kind, 'repo');
+
+  await step('code scan', () => runBuildScan(ctx, id, project));
+  assert.notEqual((await systems.readState(id)).sources.code?.lastScan ?? null, null, 'the code was scanned');
+  // The agent's applied stamp makes the service read the repo (§5.10), then a direct refresh.
+  await step('snapshot refresh', async () => {
+    await writeBuild({ applied: { at: '2026-11-20T11:00:00.000Z', parts: ['system-files'], skipped: [] } });
+    assert.notEqual((await systems.readState(id)).snapshot ?? null, null, 'the stamp read the repo');
+    await writeFile(path.join(rig.base, 'unrelated.txt'), 'a change outside the repo\n');
+    await refreshSnapshot(ctx, id, { by: 'agent' });
+  });
+  // T14 lands the generator; until then it answers not-built. Either way the repo is untouched.
+  await step('living-page generation', async () => {
+    try {
+      await regenerateLivingPage(ctx, id, { source: 'snapshot' });
+    } catch {
+      // The T14 stub throws before it returns a promise.
+    }
+  });
+  await step('state routes', async () => {
+    assert.equal((await call('GET', `/systems/${id}`)).status, 200);
+    await call('GET', `/systems/${id}/living-page`);
+    assert.equal((await call('GET', '/systems')).status, 200);
+  });
+
+  await step('user re-sync with a re-point', async () => {
+    const started = await call('POST', '/system-scans', { directory: moved, systemId: id });
+    assert.equal(started.status, 200, JSON.stringify(started.json));
+    const { scanId } = started.json as CreateSystemScanResponse;
+    await ensureScanJobs(ctx).settled(scanId);
+    const got = (await call('GET', `/system-scans/${scanId}`)).json as SystemScanResponse;
+    assert.equal(got.state, 'done', JSON.stringify(got));
+    const stamp = (await systems.readState(id)).snapshot?.treeHash ?? 'none';
+    const applied = await call('POST', `/systems/${id}/resync`, { scanId, stamp });
+    assert.equal(applied.status, 200, JSON.stringify(applied.json));
+    const state = await systems.readState(id);
+    assert.equal(state.home?.kind === 'repo' ? state.home.directory : null, moved);
+  });
+
+  await step('link', async () => {
+    await systems.withLock(id, () => systems.updateStateLocked(id, (state) => ({ ...state, status: 'ready' })));
+    const store = createDesignStore({ settings: ctx.settings, log: ctx.log, hub: ctx.hub });
+    const quiet = createSystemStore({ settings: ctx.settings, hub: ctx.hub, log: ctx.log, selfWrites: ctx.selfWrites, quietMs: 0, indexRefreshMs: 5 });
+    t.after(() => quiet.dispose());
+    const versions = createVersionsService({ store, hub: ctx.hub, log: ctx.log, onDispose: ctx.onDispose, quietMs: 600_000 });
+    const link = createLinkService({ store, versions, systems: quiet, selfWrites: ctx.selfWrites, hub: ctx.hub, log: ctx.log, root: () => rig.root });
+    const { slug } = await store.create({ kind: 'page', title: 'Checkout', html: '<!doctype html><html><body><h1>Checkout</h1></body></html>' });
+    await link.link(slug, { to: id, by: 'agent', reason: 'system-change' });
+  });
+
+  await step('delete', async () => {
+    const deleted = await call('DELETE', `/systems/${id}`);
+    assert.equal(deleted.status, 200, JSON.stringify(deleted.json));
+  });
+
+  assert.deepEqual(steps, ['adoption', 'code scan', 'snapshot refresh', 'living-page generation', 'state routes', 'user re-sync with a re-point', 'link', 'delete']);
+});

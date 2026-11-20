@@ -66,7 +66,7 @@ import {
 import type { BuildJson, DesignSummary, SystemDetail, SystemState, SystemSummary } from '../../shared/types.ts';
 import type { ChangeHub, DesignIndex, Logger, SelfWrites, ServiceContext, SettingsStore } from '../context.ts';
 import { ApiError } from '../http.ts';
-import { isAtomicTempName, LINK_SENTENCE, renameWithRetry, resolveInside, resolvePlainTarget, samePath, slugify, writeFileAtomic } from '../paths.ts';
+import { isAtomicTempName, isInsideOrEqual, LINK_SENTENCE, renameWithRetry, resolveInside, resolvePlainTarget, samePath, slugify, writeFileAtomic } from '../paths.ts';
 import { folderErrorSentence, isDirectory } from '../root.ts';
 import { treeHashOf } from '../versions.ts';
 import { systemSelfWritesKey } from '../watch.ts';
@@ -94,6 +94,20 @@ export const repoLabelOf = (directory: string): string => path.basename(director
 export const refuseReadOnly = (state: SystemState): void => {
   if (state.home?.kind !== 'repo') return;
   throw new ApiError('read-only', readOnlyMessage(state.name, repoLabelOf(state.home.directory)));
+};
+
+/** AD-18 (§5.13): the sentence for a write the guard below stopped (a bug, never the user's doing). */
+export const WRITE_OUTSIDE_ROOT_MESSAGE = 'Design Chamber stopped a write outside your Designs folder. Nothing was changed.';
+
+/**
+ * AD-18 (§5.13): every systems write lands under the designs root (the repo is never written). A
+ * target outside it is refused with 500 and logged with the system id only (no path in the log).
+ */
+export const guardSystemWrite = async (root: string, target: string, id: string, log: Pick<Logger, 'error'>): Promise<void> => {
+  const rootReal = await realpath(root).catch(() => path.resolve(root));
+  if (isInsideOrEqual(rootReal, target) || isInsideOrEqual(path.resolve(root), target)) return;
+  log.error('systems.write-outside-root', { system: id });
+  throw new ApiError('internal', WRITE_OUTSIDE_ROOT_MESSAGE);
 };
 
 // ---- content walk bounds ----
@@ -381,6 +395,7 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
       if (code !== 'EEXIST') throw error;
     }
     const file = await resolvePlainTarget(systemDir, ['.chamber', 'state.json'], { allowAbsent: true });
+    await guardSystemWrite(settings.root(), file, state.id, log);
     try {
       await writeFileAtomic(file, `${JSON.stringify(state, null, 2)}\n`, { createDirs: false });
     } catch (error) {

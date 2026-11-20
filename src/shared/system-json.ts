@@ -849,14 +849,19 @@ const REPO_PROBLEM_REASONS: Readonly<Record<NonNullable<SystemState['repoProblem
   'being-changed': 'It changed while Design Chamber was reading it.',
 };
 
+/** One repo read problem as its sentence (§5.10 step 1): the page and the refusals of a read word it the same. */
+export const repoProblemText = (reason: string, directory: string, folder: string): string => {
+  const repo = baseName(directory);
+  // state.json is agent-reachable: an unknown reason reads as the generic sentence, never as text.
+  if (!Object.hasOwn(REPO_PROBLEM_REASONS, reason)) return `Design Chamber can't read ${repo}.`;
+  if (reason === 'folder-missing') return `${repo} has no ${folder} folder yet.`;
+  return `Design Chamber can't read ${repo}. ${REPO_PROBLEM_REASONS[reason as keyof typeof REPO_PROBLEM_REASONS]}`;
+};
+
 const repoProblemSentence = (state: SystemState, home: Extract<NonNullable<SystemState['home']>, { kind: 'repo' }>): string | null => {
   const problem = state.repoProblem;
   if (problem === undefined || problem === null) return null;
-  const repo = baseName(home.directory);
-  // state.json is agent-reachable: an unknown reason reads as the generic sentence, never as text.
-  if (!Object.hasOwn(REPO_PROBLEM_REASONS, problem.reason)) return `Design Chamber can't read ${repo}.`;
-  if (problem.reason === 'folder-missing') return `${repo} has no ${home.folder} folder yet.`;
-  return `Design Chamber can't read ${repo}. ${REPO_PROBLEM_REASONS[problem.reason]}`;
+  return repoProblemText(problem.reason, home.directory, home.folder);
 };
 
 const homeViewOf = (state: SystemState): SystemHomeView => {

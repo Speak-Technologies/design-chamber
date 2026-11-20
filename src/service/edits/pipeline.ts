@@ -99,6 +99,8 @@ const VERSION_LABELS: Readonly<Record<UserEditReason, string>> = {
   'system-update': 'Before updating the design system',
   // Phase 2.5 §6.3 (a system's re-sync, `systems/edits.ts`).
   resync: 'Before re-sync',
+  // Phase 2.5 §5.10 (an agent-triggered snapshot refresh of a repo-backed system).
+  'repo-read': 'Before reading the repo',
 };
 
 export const partWayMessage = (reason: UserEditReason): string =>

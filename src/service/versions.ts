@@ -524,7 +524,7 @@ export type SnapshotOptions = { sessionId?: string | null; label?: string };
  * `system-change` / `system-update` are always their own version, like `keep-direction` (only
  * `user-edit` coalesces).
  */
-export type UserEditReason = Extract<VersionReason, 'user-edit' | 'keep-direction' | 'system-change' | 'system-update' | 'resync'>;
+export type UserEditReason = Extract<VersionReason, 'user-edit' | 'keep-direction' | 'system-change' | 'system-update' | 'resync' | 'repo-read'>;
 
 /** A design-relative file a hand edit left: its new bytes, or `null` when it removed or moved it away. */
 export type WrittenFile = readonly [rel: string, bytes: Uint8Array | null];

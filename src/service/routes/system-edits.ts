@@ -17,7 +17,7 @@ import type { ServiceContext } from '../context.ts';
 import { CLEAR_RANGE_MESSAGE } from '../edits/file.ts';
 import { ApiError, type Router } from '../http.ts';
 import { ensureSystemEditService, parseSystemEditRequest, parseSystemResyncRequest } from '../systems/edits.ts';
-import { notBuilt } from '../systems/not-built.ts';
+import { applyRepoResync, parseRepoResyncRequest } from '../systems/snapshot.ts';
 import { ensureSystemStore } from '../systems/store.ts';
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -54,8 +54,8 @@ export function registerSystemEditRoutes(router: Router, ctx: ServiceContext): v
   router.on('POST /systems/:id/resync', async ({ params, body }): Promise<SystemResyncResponse> => {
     const systems = ensureSystemStore(ctx);
     await systems.dir(params.id);
-    // T13: the repo flavour takes `{ scanId, stamp }` only and has no Undo (§7.4, AD-33).
-    if ((await systems.readState(params.id)).home?.kind === 'repo') return notBuilt();
+    // The repo flavour takes `{ scanId, stamp }` only and has no Undo (§7.4, AD-33).
+    if ((await systems.readState(params.id)).home?.kind === 'repo') return applyRepoResync(ctx, params.id, parseRepoResyncRequest(body));
     return ensureSystemEditService(ctx).resync(params.id, parseSystemResyncRequest(body));
   });
 }

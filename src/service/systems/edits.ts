@@ -16,7 +16,7 @@
 //   undo(id, editId): the recorded reverse steps through the same chain, each guarded by the hash
 //                   the edit left (E9); a re-sync's undo also puts its provenance back.
 //
-//   apply(id, resync) (§6.3, S4; internal home only, the repo flavour is T13's):
+//   apply(id, resync) (§6.3, S4; internal home only, the repo flavour is `snapshot.ts`):
 //     the scan job's memory (`ResyncSource`: values, root, the stamp its review was made against)
 //     → the chain: the root and the stamp checked again, the review rebuilt from the files and
 //       provenance now, every tick inside its list (a removal only from "No longer in the code",
@@ -79,7 +79,6 @@ import {
 } from './edits-file.ts';
 import { ASSET_READ_MAX, ensureScanJobs, readProjectFile, RESYNC_ROOT_CHANGED_MESSAGE, SCAN_GONE_MESSAGE, type ResyncSource, type ScanJobs } from './extract.ts';
 import { colourGroupOf, resyncReview } from './extract-rules.ts';
-import { notBuilt } from './not-built.ts';
 import { ensureSystemStore, refuseReadOnly, SYSTEM_GONE_MESSAGE, type SystemStore } from './store.ts';
 import { ensureSystemVersions } from './versions.ts';
 
@@ -909,9 +908,9 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
 
     async resync(id, request) {
       const state = await systems.readState(id);
-      // T13's seam: a repo-backed system's re-sync is all or nothing with no Undo (§7.4, AD-33):
-      // `snapshots.refresh(id, { by: "user", scanId, directory })`, never these ticks.
-      if (state.home?.kind === 'repo') return notBuilt();
+      // A repo-backed system's re-sync is all or nothing with no Undo (`snapshot.ts`
+      // `applyRepoResync`, §7.4, AD-33), never these ticks: a ticked request for one is out of date.
+      if (state.home?.kind === 'repo') throw new ApiError('stale', resyncStaleMessage(state.name));
       if (scans === undefined) throw new ApiError('not-found', SCAN_GONE_MESSAGE);
       const source = scans.resyncSource(request.scanId, id); // 404 expired, 409 running / other system / other root
       if (request.stamp !== source.stamp) throw new ApiError('stale', resyncStaleMessage(state.name));
@@ -923,7 +922,7 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
           if (!samePath(settings.root(), source.root)) throw new ApiError('conflict', RESYNC_ROOT_CHANGED_MESSAGE);
           const dir = await systems.dir(id);
           const current = await systems.readState(id);
-          if (current.home?.kind === 'repo') return notBuilt();
+          if (current.home?.kind === 'repo') throw new ApiError('stale', resyncStaleMessage(current.name));
           const plan = await planResync(id, dir, current, request, source).catch(async (error: unknown) => {
             throw await asUserError(id, dir, 'resync', error);
           });

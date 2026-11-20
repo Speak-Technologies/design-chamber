@@ -1,8 +1,8 @@
 // The system prompt route over HTTP (documentation/specs/phase-2-5-technical.md §3.1, §3.5, §8.5,
 // §8.10, T15): the bearer check, the parameter gates, body validation with sentences, every purpose
 // that works before T12b/T13/T14 (make, ask, review, resync-notes, checks, continue, build-continue,
-// the living-page refusal), the RULES.md refresh, and the hand-edit block. The living-page and
-// reconcile seams answer the not-built sentence until their tasks land; their refusals work now.
+// the living-page refusal), the RULES.md refresh, and the hand-edit block. The living-page seam
+// answers the not-built sentence until T14 lands; reconcile recounts the code drift first (T13).
 
 import assert from 'node:assert/strict';
 import { mkdir, readdir } from 'node:fs/promises';
@@ -18,7 +18,6 @@ import { registerSystemChatRoutes } from '../../../src/service/routes/system-cha
 import { ensureSystemEditService } from '../../../src/service/systems/edits.ts';
 import { ensureSystemStore, SYSTEM_GONE_MESSAGE } from '../../../src/service/systems/store.ts';
 import { ensureSystemVersions } from '../../../src/service/systems/versions.ts';
-import { SYSTEMS_NOT_BUILT_MESSAGE } from '../../../src/service/systems/not-built.ts';
 import { createFakeContext } from '../../helpers/fake-context.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
 
@@ -192,16 +191,16 @@ test('continue and resync-notes: the chip text, and the names changed since the 
   assert.equal(gone.status, 404);
 });
 
-test('living-page: an internal home is refused; reconcile awaits T13\'s drift seam', async (t) => {
+test('living-page: an internal home is refused; reconcile with no code drift has nothing to do', async (t) => {
   const { tmp, call, systems } = await serve(t);
   const id = await seedClean(tmp, systems);
   const living = await call(`/systems/${id}/prompt`, { purpose: 'living-page' });
   assert.equal(living.status, 422);
   assert.equal((living.json as { message: string }).message, 'Only a design system kept in a project repo has a living page.');
-  // T13 fills recomputeDrift; until then the reconcile branch answers the not-built sentence.
+  // No code folder and no agent drift: the drift recount finds nothing, so there is nothing to reconcile.
   const reconcile = await call(`/systems/${id}/prompt`, { purpose: 'reconcile' });
-  assert.equal(reconcile.status, 500);
-  assert.equal((reconcile.json as { message: string }).message, SYSTEMS_NOT_BUILT_MESSAGE);
+  assert.equal(reconcile.status, 422);
+  assert.equal((reconcile.json as { message: string }).message, 'There is nothing to reconcile.');
 });
 
 test('build-continue: only for a chat build; the problem sentence or "the build wasn\'t finished"', async (t) => {
