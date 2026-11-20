@@ -114,9 +114,13 @@ const listFlow = async (h, surface, width, theme) => {
   await p.click('.dc-sheet .oc-sdk-btn', { text: 'Delete design system' });
   await h.checkSoon(() => p.guest(`return !doc.querySelector('${row('field-notes')}')`), `${tag}: the row is gone`);
 
-  // ---- a row opens the system (U2 draws the page; until then it says so, it is not a dead click)
+  // ---- a row opens the system's page (U2); Back returns to the list with its rows
   await p.click(`${row('harbor')} .dc-sys-main`);
-  await h.checkSoon(async () => /design system page/.test(await toastTexts(p)), `${tag}: a row click is answered`);
+  await h.checkSoon(() => p.guest('return !!doc.querySelector(".dc-syspg[data-state=\\"ready\\"]")'), `${tag}: a row click opens the system page`);
+  h.check((await text(p, '.dc-syspg-h1')).startsWith('Harbor'), `${tag}: the page is the clicked system (Harbor)`);
+  if (surface === 'panel') await p.click('.dc-syspg-head .dc-iconbtn[aria-label="Back to design systems"]');
+  else await p.click('.dc-syspg-top .oc-sdk-btn', { text: 'Design systems' });
+  await h.checkSoon(() => p.guest('return !doc.querySelector(".dc-syspg") && doc.querySelectorAll(".dc-sys[data-id]").length >= 4'), `${tag}: Back from the system page returns to the list`);
 
   // ---- an unreadable system and a refresh that fails
   await p.host(`${FAKE}.systems.addUnreadable()`);
@@ -365,6 +369,12 @@ const agentFlow = async (h, surface, width, theme) => {
   await p.click('.dc-newsys-result .oc-sdk-btn', { text: 'Try again' });
   await h.checkSoon(async () => /Asked the agent to write Meadow\./.test(await toastTexts(p)), `${tag}: Try again reaches the agent`);
   await h.checkSoon(() => p.guest('return !doc.querySelector(".dc-newsys")'), `${tag}: the sheet closes`);
+
+  // Making a system opens its page (U2): back to the list for the next sheet.
+  await h.checkSoon(() => p.guest('return !!doc.querySelector(".dc-syspg[data-state=\\"ready\\"]")'), `${tag}: the new system's page opens`);
+  if (surface === 'panel') await p.click('.dc-syspg-head .dc-iconbtn[aria-label="Back to design systems"]');
+  else await p.click('.dc-syspg-top .oc-sdk-btn', { text: 'Design systems' });
+  await h.checkSoon(() => p.guest('return !doc.querySelector(".dc-syspg") && doc.querySelectorAll(".dc-sys[data-id]").length >= 5'), `${tag}: back at the list`);
 
   // The current chat: the request is attached and waits in the composer.
   await openSheetFromList(p);
