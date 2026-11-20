@@ -397,10 +397,17 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
     }
     const { uploadId } = await call('POST /uploads', { body: { total, encoding: 'base64' } });
     let sent = 0;
-    for (const [index, data] of chunks.entries()) {
-      await call('PUT /uploads/:id/:index', { params: { id: uploadId, index: String(index) }, body: { data } });
-      sent += data.length;
-      onProgress?.(total === 0 ? 1 : sent / total);
+    try {
+      for (const [index, data] of chunks.entries()) {
+        await call('PUT /uploads/:id/:index', { params: { id: uploadId, index: String(index) }, body: { data } });
+        sent += data.length;
+        onProgress?.(total === 0 ? 1 : sent / total);
+      }
+    } catch (error) {
+      // Free the service's slot now rather than after the 10 minute expiry (KI-22). The chunk's own
+      // error is the one the user needs, so a failed delete is ignored.
+      await call('DELETE /uploads/:id', { params: { id: uploadId } }).catch(() => undefined);
+      throw error;
     }
     return uploadId;
   };

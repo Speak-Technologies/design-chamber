@@ -3,10 +3,22 @@
 // variant guesses, and the system.json merge that keeps every other key and never writes over a broken file.
 
 import assert from 'node:assert/strict';
+import type { FileHandle } from 'node:fs/promises';
 import { describe, test } from 'node:test';
 
-import { checkAsset, checkAssetMeta, displayName, guessFontFace, guessLogoVariant, isSvgText, withAssetEntries } from '../../../src/service/systems/assets.ts';
+import {
+  checkAsset,
+  checkAssetMeta,
+  displayName,
+  folderFiles,
+  guessFontFace,
+  guessLogoVariant,
+  isSvgText,
+  notPlainFileReason,
+  withAssetEntries,
+} from '../../../src/service/systems/assets.ts';
 import { SYSTEM_DOCUMENT_MAX_BYTES, SYSTEM_FONT_MAX_BYTES, SYSTEM_IMAGE_MAX_BYTES } from '../../../src/shared/limits.ts';
+import { useTmpRoot } from '../../helpers/tmp-root.ts';
 
 const bytes = (...parts: (string | number[])[]): Buffer =>
   Buffer.concat(parts.map((part) => (typeof part === 'string' ? Buffer.from(part, 'latin1') : Buffer.from(part))));
@@ -175,5 +187,26 @@ describe('withAssetEntries: the system.json merge', () => {
     assert.equal(withAssetEntries('{"fonts": {"x": 1}}', [{ rel: 'assets/fonts/a.woff2', kind: 'font' }]), null);
     // A wrong-typed key the addition does not touch is left as it is.
     assert.equal(JSON.parse(withAssetEntries('{"logos": 5}', [{ rel: 'sources/a.md', kind: 'source' }]) ?? '').logos, 5);
+  });
+});
+
+describe('folderFiles: every listed file ends added or refused (KI-24)', () => {
+  test('a file that is no longer a plain file when opened is named with a refusal, not dropped', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await tmp.write('brand/Inter-Regular.woff2', WOFF2);
+    await tmp.write('brand/acme.svg', SVG);
+    await tmp.write('brand/zeta.png', PNG);
+    const rows: ({ name: string; reason: string } | { name: string; kind: string | null; bytes: Buffer })[] = [];
+    // acme.svg was a file at the listing and is something else by the time it is opened (a sync tool).
+    const statOf = async (handle: FileHandle, abs: string): Promise<{ isFile(): boolean; size: number }> => {
+      const info = await handle.stat();
+      return abs.endsWith('acme.svg') ? { isFile: () => false, size: info.size } : info;
+    };
+    for await (const row of folderFiles(tmp.at('brand'), { statOf })) rows.push(row);
+    assert.deepEqual(
+      rows.map((row) => ('reason' in row ? `refused ${row.name}: ${row.reason}` : `file ${row.name}`)),
+      ['file Inter-Regular.woff2', `refused acme.svg: ${notPlainFileReason('acme.svg')}`, 'file zeta.png'],
+    );
+    assert.equal(notPlainFileReason('acme.svg'), "acme.svg isn't a plain file, so it wasn't added.");
   });
 });

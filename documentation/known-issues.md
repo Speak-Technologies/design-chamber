@@ -104,15 +104,6 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 > In the compact rail toolbar (`src/ui/wall/feature-tweaks.ts` `railButton` and the `.dc-toolbar-compact` rules in `src/ui/styles.css`), give the title back at least 120 px at 320 px wide: below about 360 px, move Tweaks (or Versions) into the ⋯ menu instead of showing it as an icon button, keeping the shortcut and the menu item's label. Update the width-budget comment. Run `node test/ui/visual/shoot.mjs 'findability|checks'` and confirm `find-rail-320-dark` and `checks-rail-320` (dark and light) pass, look at the PNGs at 320 and 480 in light and dark, then run `npm run check`.
 
 
-### KI-22 — An abandoned font or logo upload holds its slot for 10 minutes
-🟣 Minor · found 2026-11-20 · `src/service/uploads.ts:63-66, 90` (lazy TTL sweep is the only way out), `src/guest/service-client.ts:393-404` (`uploadBinary` has no cleanup when a chunk fails) · owner: fullstack-developer
-**What:** a base64 upload leaves the store only when its bytes are taken or when it is 10 minutes old. If a chunk `PUT` fails, or the panel closes mid-upload, the entry stays. Two such leftovers reach `BINARY_UPLOADS_OPEN_MAX`, and every further brand-file upload answers 409 "Another file is still uploading. Wait for it to finish." although nothing is uploading. Each leftover also keeps its buffer (up to about 16 MB decoded).
-**Who:** end user adding fonts or logos to a design system · **Seen:** visible: the upload is refused with a sentence that is not true
-**Happens:** two uploads fail or are abandoned within 10 minutes (a rejected chunk, the panel closed or reloaded while a large font is sending) · rare (loopback transfers are quick) · **Effect:** no brand files can be added for up to 10 minutes; nothing is lost and it clears by itself
-**Why not fixed now:** self-healing, needs two failures close together, found in a report-only review
-**Fix prompt:**
-> In `src/service/uploads.ts` add `discard(id)` to the upload store and a `DELETE /uploads/:id` route in `src/service/routes/uploads.ts` (id checked with the existing pattern, 204 whether or not it existed; type it in `src/shared/api.ts` through the main agent). In `src/guest/service-client.ts` wrap the chunk loop of `uploadBinary` in try/catch: on any error call the delete (ignore its failure) and rethrow. Also drop a base64 entry inside `put` when the chunk is refused as not base64 or over the announced total. Tests in `test/service/core/uploads-binary.test.ts`: a failed chunk frees the slot at once; two discarded uploads leave room for a third; the route refuses a bad id. Run `npm run check`.
-
 ### KI-23 — Undo after stopping a build can be pressed twice and stays after it has expired
 🟣 Minor · found 2026-11-20 · `src/ui/blocks/system-ask-diff.ts:139-149` (`undoStop` has no in-flight guard), `:312` (the expiry is checked only when the block repaints) · owner: ui-ux-developer
 **What:** the Undo button the `SystemAsk` diff card shows after Stop sends a request on every click, so a double click sends two; the second is refused and the card shows "Couldn't bring the build back. It may have been too long." next to a build that did come back. The button is also still on screen after the 10 minute window ends, because nothing repaints the card at that time, so a late click only gets the error.
@@ -121,12 +112,3 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Why not fixed now:** cosmetic, no data at risk, found in a report-only review
 **Fix prompt:**
 > In `src/ui/blocks/system-ask-diff.ts` give `undoStop` an in-flight flag: return when a request is already out, disable the Undo button while it runs (kit `disabled`), clear the flag on failure. Start one timer when `undo` is set that calls `renderAll()` at `undo.until` so the button leaves when the window ends, and clear it in the block's dispose and when `undone` becomes true. Add a view-model or DOM test in `test/ui/` that two quick clicks call `client.undoStop` once and that the button is gone after `until`. Run `npm run check`.
-
-### KI-24 — Adding brand files from a folder skips some entries without saying so
-🟣 Minor · found 2026-11-20 · `src/service/systems/assets.ts:517` (`if (!info.isFile()) continue;`) · owner: fullstack-developer
-**What:** `assets/from-folder` lists what it added and what it refused, but an entry that stops being a plain file between the listing and the open (or is a special file) is dropped with no refusal row, so the counts the user sees are short by one and the file is not named anywhere.
-**Who:** end user adding fonts or logos from a folder · **Seen:** visible only as a missing file: the result says nothing about it
-**Happens:** a file in the chosen folder is replaced or removed while the import runs (a sync tool, a build writing into that folder) · rare · **Effect:** one font or logo is not added and the user is not told; adding it again works
-**Why not fixed now:** needs a file to change during a short import, and nothing is damaged
-**Fix prompt:**
-> In `src/service/systems/assets.ts` from-folder, replace the silent `continue` at the `!info.isFile()` check with a refusal row for that name using the existing "not a plain file" sentence the listing step uses for links and folders, so every listed entry ends up in `added` or `refused`. Add a case to `test/service/systems/assets.test.ts` with an lstat seam (or a FIFO on POSIX, skipped on Windows) proving the name is reported. Run `npm run check`.

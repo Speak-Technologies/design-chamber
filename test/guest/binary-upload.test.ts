@@ -53,6 +53,27 @@ test('uploadBinary announces the base64 size, sends the chunks in order and repo
   assert.ok((progress[0] ?? 0) > 0 && (progress[0] ?? 0) < 1);
 });
 
+test('a failed chunk drops the upload on the service and the chunk’s own error reaches the caller (KI-22)', async () => {
+  for (const deleteFails of [false, true]) {
+    const calls: Array<{ method: string; path: string }> = [];
+    const client = createServiceClient({
+      serviceRequest: async (request) => {
+        calls.push({ method: request.method, path: request.path });
+        if (request.path === '/uploads') return { status: 200, body: JSON.stringify({ uploadId: 'u_testupload1' }) };
+        if (request.method === 'DELETE') return deleteFails ? { status: 500, body: '{"error":"internal","message":"no"}' } : { status: 200, body: '{"ok":true}' };
+        if (request.path.endsWith('/1')) return { status: 400, body: JSON.stringify({ error: 'bad-request', message: "This part of the file isn't valid base64. Send the file again." }) };
+        return { status: 200, body: JSON.stringify({ received: 0, complete: false }) };
+      },
+    });
+    await assert.rejects(() => client.uploadBinary(new Blob([bytesOf(2 * BASE64_CHUNK_BYTES + 10)])), /isn't valid base64/, `delete fails: ${deleteFails}`);
+    assert.deepEqual(
+      calls.slice(1).map((call) => `${call.method} ${call.path}`),
+      ['PUT /uploads/u_testupload1/0', 'PUT /uploads/u_testupload1/1', 'DELETE /uploads/u_testupload1'],
+      'no chunk after the failed one; the upload is dropped once',
+    );
+  }
+});
+
 test('a file whose base64 is over the service’s limit is refused here, before anything is sent', async () => {
   let sent = 0;
   const client = createServiceClient({

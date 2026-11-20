@@ -53,16 +53,59 @@ describe('binary uploads', () => {
     assert.equal(isBase64Chunk('QUJD-_', true), false, 'base64url is not accepted');
   });
 
-  test('a chunk that is not base64 is refused with a sentence and the upload keeps waiting for it', () => {
+  test('a chunk that is not base64 is refused with a sentence and the upload is dropped (KI-22: it can never finish)', () => {
     const uploads = createUploadStore();
     const id = uploads.create(8, 'base64');
     const refused = errorOf(() => uploads.put(id, 0, 'QU*D'));
     assert.equal(refused.code, 'bad-request');
     assert.equal(refused.message, "This part of the file isn't valid base64. Send the file again.");
-    assert.equal(errorOf(() => uploads.put(id, 0, 'QUI=')).code, 'bad-request', 'padding in a body chunk');
-    uploads.put(id, 0, 'QUJD');
-    uploads.put(id, 1, 'REVG');
-    assert.equal(uploads.takeBytes(id).toString('latin1'), 'ABCDEF');
+    assert.equal(errorOf(() => uploads.put(id, 0, 'QUJD')).code, 'not-found', 'gone: the guest sends the file again');
+    const again = uploads.create(8, 'base64');
+    assert.equal(errorOf(() => uploads.put(again, 0, 'QUI=')).code, 'bad-request', 'padding in a body chunk');
+    assert.equal(uploads.heldBytes(), 0);
+    const ok = uploads.create(8, 'base64');
+    uploads.put(ok, 0, 'QUJD');
+    uploads.put(ok, 1, 'REVG');
+    assert.equal(uploads.takeBytes(ok).toString('latin1'), 'ABCDEF');
+  });
+
+  test('a refused chunk frees the slot at once: the next file can start without waiting for the expiry', () => {
+    const uploads = createUploadStore();
+    uploads.create(8, 'base64'); // another file still sending, holding the other slot
+    const failing = uploads.create(8, 'base64');
+    assert.equal(errorOf(() => uploads.create(8, 'base64')).code, 'conflict', 'both slots taken');
+    uploads.put(failing, 0, 'QUJD');
+    assert.equal(errorOf(() => uploads.put(failing, 1, 'QU*D')).code, 'bad-request');
+    const overflow = uploads.create(4, 'base64'); // the not-base64 refusal freed its slot
+    assert.equal(errorOf(() => uploads.put(overflow, 0, 'QUJDREVG')).code, 'too-large');
+    assert.equal(errorOf(() => uploads.put(overflow, 0, 'QUJD')).code, 'not-found', 'an overflowing file is dropped too');
+    assert.equal(typeof uploads.create(4, 'base64'), 'string', 'the over-total refusal freed its slot');
+  });
+
+  test('two discarded uploads leave room for a third; discarding an unknown id is fine', () => {
+    const uploads = createUploadStore();
+    const first = uploads.create(8, 'base64');
+    const second = uploads.create(8, 'base64');
+    uploads.put(first, 0, 'QUJD');
+    assert.equal(errorOf(() => uploads.create(8, 'base64')).code, 'conflict');
+    uploads.discard(first);
+    uploads.discard(second);
+    uploads.discard(first); // twice: nothing to do
+    uploads.discard('u_neverexisted0');
+    assert.equal(uploads.heldBytes(), 0, 'the decoded buffer is released with it');
+    assert.equal(errorOf(() => uploads.put(first, 1, 'REVG')).code, 'not-found');
+    const third = uploads.create(4, 'base64');
+    uploads.put(third, 0, 'QUJD');
+    assert.equal(uploads.takeBytes(third).toString('latin1'), 'ABC');
+    assert.equal(typeof uploads.create(4, 'base64'), 'string');
+  });
+
+  test('text uploads keep waiting after an over-total chunk (only files are dropped)', () => {
+    const uploads = createUploadStore();
+    const id = uploads.create(4);
+    assert.equal(errorOf(() => uploads.put(id, 0, 'hello')).code, 'too-large');
+    uploads.put(id, 0, 'hell');
+    assert.equal(uploads.take(id), 'hell');
   });
 
   test('at most BINARY_UPLOADS_OPEN_MAX binary uploads open; text uploads are counted apart', () => {
@@ -108,9 +151,9 @@ describe('binary uploads', () => {
     const id = uploads.create(8, 'base64');
     assert.equal(errorOf(() => uploads.put(id, 1, 'QUJD')).code, 'conflict');
     uploads.put(id, 0, 'QUJD');
-    assert.equal(errorOf(() => uploads.put(id, 1, 'QUJDREVG')).code, 'too-large');
     assert.equal(errorOf(() => uploads.takeBytes(id)).code, 'conflict', 'incomplete');
     assert.equal(errorOf(() => uploads.take(id)).message, 'That upload is a file, not text.');
+    assert.equal(errorOf(() => uploads.put(id, 1, 'QUJDREVG')).code, 'too-large');
     const textId = uploads.create(2);
     uploads.put(textId, 0, 'hi');
     assert.equal(errorOf(() => uploads.takeBytes(textId)).message, 'That upload is text, not a file.');

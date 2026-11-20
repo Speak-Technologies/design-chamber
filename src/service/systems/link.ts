@@ -10,7 +10,8 @@
 //                 being-changed 409); the size cap. Nothing written, no version.
 //       version first ("Before changing / updating the design system"; refused → 422, nothing changed)
 //       apply:    staged in `.chamber/system-incoming-<rand>/` (COPY.json last, naming the version),
-//                 the old copy moved to `.chamber/system-replaced-<rand>`, the staging renamed to
+//                 the old copy moved to `.chamber/system-replaced-<rand>` (an unlink's to
+//                 `.chamber/system-removed-<rand>`, which recovery never puts back), the staging renamed to
 //                 `system/` (a failed rename puts the old copy back), the old copy removed; the
 //                 self-writes recorded before the publish, so the watcher shows them as the
 //                 user's; then state.json and the `files` event.
@@ -167,6 +168,11 @@ export const designSystemStamp = (copyBytes: Uint8Array | null, tokensBytes: Uin
 
 const STAGING_PREFIX = 'system-incoming-';
 const REPLACED_PREFIX = 'system-replaced-';
+/**
+ * An unlink's old copy, on its way out. Its own prefix, so recovery can tell it from a swap's
+ * replaced copy: a removed system never comes back, whatever stopped the cleanup.
+ */
+const REMOVED_PREFIX = 'system-removed-';
 /** Folder levels a copy can have (`fonts/x`, `notes/x.md`); deeper entries are not part of it. */
 const COPY_DEPTH_MAX = 3;
 
@@ -235,14 +241,19 @@ const isComplete = async (stagingDir: string): Promise<boolean> => {
 /**
  * Finish or undo a swap a restart interrupted (§5.4 Recovery), so a design keeps its old copy or
  * the new one, never neither: with no `system/`, a complete staging (a valid COPY.json and every
- * file it lists) is renamed into place, else a replaced copy is renamed back. Every other leftover
- * is Design Chamber's own folder and is removed.
+ * file it lists) is renamed into place, else a replaced copy is renamed back. A removed copy (an
+ * unlink whose cleanup did not finish) is never put back. Every other leftover is Design Chamber's
+ * own folder and is removed.
  */
 export const recoverCopy = async (designDir: string): Promise<void> => {
   const chamber = path.join(designDir, '.chamber');
   const entries = await readdir(chamber, { withFileTypes: true }).catch(() => []);
-  const staged = entries.filter((entry) => entry.isDirectory() && entry.name.startsWith(STAGING_PREFIX)).map((entry) => path.join(chamber, entry.name));
-  const replaced = entries.filter((entry) => entry.isDirectory() && entry.name.startsWith(REPLACED_PREFIX)).map((entry) => path.join(chamber, entry.name));
+  const withPrefix = (prefix: string): string[] =>
+    entries.filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix)).map((entry) => path.join(chamber, entry.name));
+  const staged = withPrefix(STAGING_PREFIX);
+  const replaced = withPrefix(REPLACED_PREFIX);
+  const removed = withPrefix(REMOVED_PREFIX);
+  for (const leftover of removed) await rm(leftover, { recursive: true, force: true });
   if (staged.length === 0 && replaced.length === 0) return;
   const live = path.join(designDir, COPY_DIR);
   let used: string | null = null;
@@ -310,6 +321,8 @@ export type LinkServiceDeps = {
   /** The designs root now (start-up recovery lists it). */
   root: () => string;
   now?: () => Date;
+  /** Test seam: removes the old copy after a swap (default `rm -r`), so a cleanup that fails can be proven. */
+  removeTree?: (dir: string) => Promise<void>;
 };
 
 export type LinkService = {
@@ -341,6 +354,7 @@ const toIndexed = (rows: readonly SystemSummary[]): IndexedSystem[] =>
 export const createLinkService = (deps: LinkServiceDeps): LinkService => {
   const { store, versions, systems, selfWrites, hub, log } = deps;
   const now = deps.now ?? ((): Date => new Date());
+  const removeTree = deps.removeTree ?? ((dir: string): Promise<void> => rm(dir, { recursive: true, force: true }));
   let startup: Promise<void> = Promise.resolve();
 
   const indexed = async (fresh = false): Promise<IndexedSystem[]> => {
@@ -487,7 +501,8 @@ export const createLinkService = (deps: LinkServiceDeps): LinkService => {
 
     let replaced: string | null = null;
     if ((await copyFolderKind(designDir)) === 'folder') {
-      replaced = path.join(chamber, `${REPLACED_PREFIX}${token}`);
+      // An unlink's old copy is "removed", not "replaced": recovery deletes it instead of putting it back.
+      replaced = path.join(chamber, `${staging === null ? REMOVED_PREFIX : REPLACED_PREFIX}${token}`);
       try {
         await renameWithRetry(live, replaced);
       } catch (error) {
@@ -508,7 +523,7 @@ export const createLinkService = (deps: LinkServiceDeps): LinkService => {
       }
     }
     // The version taken first holds the old copy's bytes; this folder is Design Chamber's own.
-    if (replaced !== null) await rm(replaced, { recursive: true, force: true }).catch((error: unknown) => log.warn('systems.copy-cleanup-failed', { slug, error: messageOf(error) }));
+    if (replaced !== null) await removeTree(replaced).catch((error: unknown) => log.warn('systems.copy-cleanup-failed', { slug, error: messageOf(error) }));
     return [...new Set([...Object.keys(plan.old), ...Object.keys(now)])].sort();
   };
 

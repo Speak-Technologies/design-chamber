@@ -386,6 +386,56 @@ describe('staging, swap and recovery', () => {
     assert.deepEqual((await readdir(rig.tmp.at(`${rig.slug}/.chamber`))).filter((name) => name.startsWith('system-')), []);
   });
 
+  test('an unlink whose cleanup failed stays removed: recovery deletes the leftover and never restores it', async (t) => {
+    const rig = await setup(t);
+    await makeCopy(rig);
+    const design = rig.tmp.at(rig.slug);
+    // The same rig, but the old copy can't be removed after the swap (a virus scanner holding a file).
+    const stuck = createLinkService({
+      store: rig.ctx.store,
+      versions: rig.versions,
+      systems: rig.systems,
+      selfWrites: rig.ctx.selfWrites,
+      hub: rig.ctx.hub,
+      log: rig.ctx.log,
+      root: () => rig.tmp.root,
+      removeTree: () => Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' })),
+    });
+    const removed = await stuck.link(rig.slug, { to: 'none', by: 'user', stamp: await rig.stamp(), reason: 'system-change' });
+    assert.equal(removed.notice, 'removed');
+    assert.equal(await lstat(path.join(design, 'system')).catch(() => null), null);
+    const leftovers = (await readdir(path.join(design, '.chamber'))).filter((name) => name.startsWith('system-'));
+    assert.equal(leftovers.length, 1);
+    assert.match(leftovers[0] ?? '', /^system-removed-[0-9a-f]{12}$/, 'an unlink leftover is named apart from a swap');
+
+    await recoverCopy(design);
+    assert.equal(await lstat(path.join(design, 'system')).catch(() => null), null, 'the removed system does not come back');
+    assert.deepEqual((await readdir(path.join(design, '.chamber'))).filter((name) => name.startsWith('system-')), []);
+    assert.deepEqual((await rig.link.view(rig.slug)).status, { state: 'none' });
+  });
+
+  test('at service start a removed copy with no system/ is deleted, not restored', async (t) => {
+    const rig = await setup(t);
+    await makeCopy(rig);
+    const design = rig.tmp.at(rig.slug);
+    await rename(path.join(design, 'system'), path.join(design, '.chamber', 'system-removed-ffff'));
+    await rig.link.recoverAll();
+    assert.equal(await lstat(path.join(design, 'system')).catch(() => null), null);
+    assert.deepEqual((await readdir(path.join(design, '.chamber'))).filter((name) => name.startsWith('system-')), []);
+  });
+
+  test('a removed leftover never stands in for a replaced copy: an interrupted swap still restores the replaced one', async (t) => {
+    const rig = await setup(t);
+    const record = await makeCopy(rig);
+    const design = rig.tmp.at(rig.slug);
+    await cp(path.join(design, 'system'), path.join(design, '.chamber', 'system-removed-1111'), { recursive: true });
+    await rig.tmp.write(`${rig.slug}/.chamber/system-removed-1111/COPY.json`, '{"stale":true}');
+    await rename(path.join(design, 'system'), path.join(design, '.chamber', 'system-replaced-2222'));
+    await recoverCopy(design);
+    assert.equal(await rig.tmp.read(`${rig.slug}/system/COPY.json`), record);
+    assert.deepEqual((await readdir(path.join(design, '.chamber'))).filter((name) => name.startsWith('system-')), []);
+  });
+
   test('a link recovers leftovers first, then links', async (t) => {
     const rig = await setup(t);
     await rig.tmp.write(`${rig.slug}/.chamber/system-incoming-eeee/tokens.css`, 'half');

@@ -18,7 +18,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { constants as fsConstants, type Dirent } from 'node:fs';
-import { lstat, open, readdir, realpath, writeFile } from 'node:fs/promises';
+import { lstat, open, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { CreateSystemBody, CreateSystemScanBody, ResyncReview, ScanSummary, SystemScanResponse } from '../../shared/api.ts';
@@ -39,7 +39,7 @@ import type { SystemState } from '../../shared/types.ts';
 import type { ServiceContext } from '../context.ts';
 import { bySpot, walk, withDeadline } from '../discovery.ts';
 import { ApiError } from '../http.ts';
-import { resolvePlainTarget, samePath, writeFileAtomic } from '../paths.ts';
+import { atomicTempPath, moveNoReplace, resolvePlainTarget, samePath, writeFileAtomic } from '../paths.ts';
 import { readPreset } from '../routes/presets.ts';
 import { checkAsset, checkAssetMeta, ensureFolder, FOLDER_OF_KIND, guessFontFace, guessLogoVariant } from './assets.ts';
 import {
@@ -709,6 +709,23 @@ const writeSeedText = async (systemDir: string, name: string, text: string): Pro
 };
 
 /**
+ * A seed font or logo: written to a dot-named temp beside it, then moved into place without ever
+ * replacing a file (the old `wx` promise), so a crash mid-write leaves no truncated asset, only a
+ * temp the watcher and the tracked-file rules skip. Any outcome but `moved` fails the creation,
+ * which removes the half-made system.
+ */
+const writeSeedAsset = async (target: string, bytes: Buffer): Promise<void> => {
+  const tmp = atomicTempPath(target);
+  try {
+    await writeFile(tmp, bytes, { flag: 'wx' });
+    const outcome = await moveNoReplace(tmp, target);
+    if (outcome !== 'moved') throw new Error(`systems: seed asset ${path.basename(target)} was not written (${outcome}).`);
+  } finally {
+    await rm(tmp, { force: true }).catch(() => undefined);
+  }
+};
+
+/**
  * The seed of `POST /systems` (§7.2), or undefined for the plain empty system. Code: the scan's tokens
  * and the ticked fonts and logos (each must be one the scan offered), with provenance for re-sync.
  * Preset: its `:root` custom properties for every name the scan did not set. No `OVERVIEW.md`: the agent writes it.
@@ -749,7 +766,7 @@ export const buildSystemSeed = async (ctx: ServiceContext, input: CreateSystemBo
       const finalName = safeAssetName(name, taken[asset.kind]);
       taken[asset.kind].push(finalName);
       const file = [...segments, finalName].join('/');
-      await writeFile(await resolvePlainTarget(systemDir, [...segments, finalName], { allowAbsent: true }), bytes, { flag: 'wx' });
+      await writeSeedAsset(await resolvePlainTarget(systemDir, [...segments, finalName], { allowAbsent: true }), bytes);
       if (asset.kind === 'font') {
         const guess = guessFontFace(file);
         const style = asset.style === 'italic' ? 'italic' : asset.style === 'normal' ? 'normal' : guess.style;

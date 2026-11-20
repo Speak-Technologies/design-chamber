@@ -11,13 +11,18 @@ service enforces).
   text (one request can't carry more than 64 000 characters). The service decodes each piece as it
   arrives and keeps only the bytes, so a 21 MB file never takes more than 21 MB of memory. At most
   two files upload at once; a third waits ("Another file is still uploading. Wait for it to
-  finish."). Files are sent one at a time after the system is made, so nothing is written before
-  **Make design system**.
+  finish."). If a piece is refused or fails to send, the panel tells the service to drop that
+  upload at once (`DELETE /uploads/:id`), and the service drops a file whose piece isn't base64 or
+  runs past its announced size by itself, so a failed upload never blocks the next one. An upload
+  nobody finishes still expires after 10 minutes. Files are sent one at a time after the system is
+  made, so nothing is written before **Make design system**.
 - **Add from a folder.** The user names a folder; the service reads the files directly in it (not
   in subfolders). It must be a full path, not a whole drive, and not the Designs folder or any folder
   inside it (checked after following links, so a link into the Designs folder is refused too). Links
-  and hidden files in the folder are skipped. At most 200 files are looked at. The folder itself is
-  only read, never changed.
+  and hidden files in the folder are skipped. At most 200 files are looked at. A file that turns
+  into something else between the listing and the read (a sync tool swapping it for a folder) is
+  refused by name ("logo.svg isn't a plain file, so it wasn't added."), never left out silently. The
+  folder itself is only read, never changed.
 
 ## What is accepted
 | Kind | File types | Largest file |

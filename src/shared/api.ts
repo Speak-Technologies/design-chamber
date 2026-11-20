@@ -750,6 +750,8 @@ export interface ApiRoutes {
   'POST /designs/:slug/comments/mark-sent': Route<NoQuery, MarkSentBody, MarkSentResponse>;
   'POST /uploads': Route<NoQuery, CreateUploadBody, CreateUploadResponse>;
   'PUT /uploads/:id/:index': Route<NoQuery, PutUploadChunkBody, PutUploadChunkResponse>;
+  /** Drop an upload the guest gave up on (KI-22): `{ ok: true }` whether or not it was still open. */
+  'DELETE /uploads/:id': Route<NoQuery, undefined, OkResponse>;
   'GET /outbox': Route<NoQuery, undefined, OutboxResponse>;
   'PUT /outbox': Route<NoQuery, PutOutboxBody, OutboxResponse>;
   'DELETE /outbox': Route<NoQuery, undefined, OutboxResponse>;
@@ -877,6 +879,7 @@ export const ROUTE_OWNERS = {
   'POST /designs/:slug/comments/mark-sent': 'WP1',
   'POST /uploads': 'WP1',
   'PUT /uploads/:id/:index': 'WP1',
+  'DELETE /uploads/:id': 'WP1',
   'GET /outbox': 'WP1',
   'PUT /outbox': 'WP1',
   'DELETE /outbox': 'WP1',

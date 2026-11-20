@@ -178,6 +178,8 @@ export type UploadStore = {
   take(id: string): string;
   /** The complete decoded bytes of a base64 upload, once. Throws `not-found` or `conflict` (incomplete, or a text upload). */
   takeBytes(id: string): Buffer;
+  /** Drop an upload the guest gave up on (a failed chunk, KI-22), freeing its slot; unknown ids are fine. */
+  discard(id: string): void;
 };
 
 export type OutboxStore = {

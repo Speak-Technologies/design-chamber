@@ -2,7 +2,8 @@
 // host caps one `serviceRequest` body at 64 000 chars (F7), so larger payloads (a big page HTML, an
 // assistant message for "Open as page", a brand font or logo) arrive as ordered chunks of one
 // upload: POST /uploads mints an id, PUT /uploads/:id/:index stores chunks strictly in order, and
-// the consumer `take`s the joined text (or `takeBytes` the decoded file) exactly once.
+// the consumer `take`s the joined text (or `takeBytes` the decoded file) exactly once. A guest
+// whose chunk failed drops the upload with DELETE /uploads/:id, so it never holds a slot.
 //
 // Text: TTL 10 min, ≤ 8 open. Binary (`encoding: "base64"`, AD-8): ≤ 2 open, each ≤ 28 000 000
 // base64 characters (21 MB decoded). Every base64 chunk is checked and decoded when it arrives and
@@ -111,13 +112,19 @@ export const createUploadStore = (options: UploadStoreOptions = {}): UploadStore
         throw new ApiError('conflict', `Chunks must arrive in order: this upload waits for chunk ${expected}, not ${index}.`);
       }
       if (entry.received + data.length > entry.total) {
+        // A file that overflows can never complete: its slot and buffer are freed at once (KI-22).
+        if (entry.kind === 'base64') open.delete(id);
         throw new ApiError('too-large', 'This upload has received more text than it announced.');
       }
       if (entry.kind === 'text') {
         entry.chunks.push(data);
       } else {
         const last = entry.received + data.length === entry.total;
-        if (!isBase64Chunk(data, last)) throw new ApiError('bad-request', NOT_BASE64);
+        if (!isBase64Chunk(data, last)) {
+          // The guest sends the file again from the start ("Send the file again."), so this one is dropped.
+          open.delete(id);
+          throw new ApiError('bad-request', NOT_BASE64);
+        }
         // Decoded now into one buffer of the decoded size: the base64 text is dropped with the request,
         // and taking the file needs no second copy.
         entry.bytes ??= Buffer.allocUnsafe(Math.ceil(entry.total / 4) * 3);
@@ -140,6 +147,10 @@ export const createUploadStore = (options: UploadStoreOptions = {}): UploadStore
       if (entry.received !== entry.total) throw incomplete(entry);
       open.delete(id);
       return entry.bytes === null ? Buffer.alloc(0) : entry.bytes.subarray(0, entry.filled);
+    },
+    discard(id: string): void {
+      sweep();
+      open.delete(id);
     },
     heldBytes(): number {
       let bytes = 0;

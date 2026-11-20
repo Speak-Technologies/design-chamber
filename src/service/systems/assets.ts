@@ -17,7 +17,7 @@
 
 import { createHash } from 'node:crypto';
 import { constants as fsConstants, type Dirent } from 'node:fs';
-import { lstat, mkdir, open, readdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, rm, writeFile, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { AddSystemAssetResponse, AssetsFromFolderResponse } from '../../shared/api.ts';
@@ -483,8 +483,23 @@ export const addSystemAsset = async (ctx: ServiceContext, id: string, input: { u
   return { asset: { file: added.rel, kind: added.kind, bytes: added.bytes }, refused: null };
 };
 
-/** Read one regular file of the brand folder, refusing by name and size before opening and never following a link. */
-async function* folderFiles(directory: string): AsyncGenerator<{ name: string; kind: AssetKind | null; bytes: Buffer } | { name: string; reason: string }> {
+/** A listed file that is something else once opened (swapped for a folder, a device or a pipe meanwhile). */
+export const notPlainFileReason = (name: string): string => `${displayName(name)} isn't a plain file, so it wasn't added.`;
+
+export type FolderFilesDeps = {
+  /** Test seam: what the opened file is (default `handle.stat()`). */
+  statOf?: (handle: FileHandle, abs: string) => Promise<{ isFile(): boolean; size: number }>;
+};
+
+/**
+ * Read one regular file of the brand folder, refusing by name and size before opening and never following
+ * a link. Every regular file the listing names ends as a file or a refusal, never dropped unsaid (KI-24).
+ */
+export async function* folderFiles(
+  directory: string,
+  deps: FolderFilesDeps = {},
+): AsyncGenerator<{ name: string; kind: AssetKind | null; bytes: Buffer } | { name: string; reason: string }> {
+  const statOf = deps.statOf ?? ((handle: FileHandle): Promise<{ isFile(): boolean; size: number }> => handle.stat());
   let listed: Dirent[];
   try {
     listed = await readdir(directory, { withFileTypes: true });
@@ -513,8 +528,11 @@ async function* folderFiles(directory: string): AsyncGenerator<{ name: string; k
       continue;
     }
     try {
-      const info = await handle.stat();
-      if (!info.isFile()) continue;
+      const info = await statOf(handle, abs);
+      if (!info.isFile()) {
+        yield { name: entry.name, reason: notPlainFileReason(entry.name) };
+        continue;
+      }
       const bySize = checkAssetMeta(entry.name, null, info.size);
       if (!bySize.ok) {
         yield { name: entry.name, reason: bySize.reason };

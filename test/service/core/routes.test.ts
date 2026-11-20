@@ -84,6 +84,7 @@ describe('route registration and auth', () => {
       ['/designs/whatever/comments/mark-sent', { method: 'POST', body: {} }],
       ['/uploads', { method: 'POST', body: {} }],
       ['/uploads/u_abcdefgh12345678/0', { method: 'PUT', body: {} }],
+      ['/uploads/u_abcdefgh12345678', { method: 'DELETE' }],
       ['/outbox', {}],
       ['/outbox', { method: 'PUT', body: {} }],
       ['/outbox', { method: 'DELETE' }],
@@ -548,6 +549,29 @@ describe('uploads over HTTP', () => {
     assert.equal((await core.request(`/uploads/${uploadId}/0`, { method: 'PUT', body: { data: 42 } })).status, 400);
     const huge = await core.request(`/uploads/${uploadId}/0`, { method: 'PUT', body: { data: 'x'.repeat(60_001) } });
     assert.equal(huge.status, 413);
+  });
+
+  test('DELETE /uploads/:id frees a file upload slot at once, answers ok for a gone one, refuses a bad id (KI-22)', async (t) => {
+    const core = await useServedCore(t);
+    const open = async (): Promise<Response> => core.request('/uploads', { method: 'POST', body: { total: 8, encoding: 'base64' } });
+    const first = await json<CreateUploadResponse>(await open());
+    await json<CreateUploadResponse>(await open());
+    assert.equal((await open()).status, 409, 'both file slots taken');
+    assert.deepEqual(await json<OkResponse>(await core.request(`/uploads/${first.uploadId}`, { method: 'DELETE' })), { ok: true });
+    assert.equal((await open()).status, 200, 'the discarded upload freed its slot');
+    assert.equal((await core.request(`/uploads/${first.uploadId}/0`, { method: 'PUT', body: { data: 'QUJD' } })).status, 404);
+    // Idempotent: already gone, or never there.
+    assert.deepEqual(await json<OkResponse>(await core.request(`/uploads/${first.uploadId}`, { method: 'DELETE' })), { ok: true });
+    assert.deepEqual(await json<OkResponse>(await core.request('/uploads/u_neverexisted0', { method: 'DELETE' })), { ok: true });
+    // Not an upload id: refused before the store is asked; separators never reach it.
+    for (const bad of ['nope', 'u_short', 'u_abc.efghij', `u_${'a'.repeat(41)}`, 'u_abc%2E%2E%2Fxyz12']) {
+      const answer = await core.request(`/uploads/${bad}`, { method: 'DELETE' });
+      assert.equal(answer.status, 400, bad);
+      assert.match((await errorOf(answer)).message, /upload id|characters a design path cannot have|not valid/, bad);
+    }
+    const traversal = await core.request('/uploads/u_abc%2F..%2Fsettings', { method: 'DELETE' });
+    assert.equal(traversal.status, 400);
+    assert.equal((await errorOf(traversal)).error, 'bad-path');
   });
 });
 
