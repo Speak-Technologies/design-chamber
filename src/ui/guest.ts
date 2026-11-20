@@ -8,6 +8,7 @@ import type { HostReadyContext, SessionSnapshot, ToastRequest } from '@openchamb
 import { createChangeFeed, type ChangeFeed } from '../guest/changes.ts';
 import { createFlows, type AskOutcome, type Flows } from '../guest/flows.ts';
 import type { GuestHost } from '../guest/host.ts';
+import { createMakeSystem, type MakeSystem } from '../guest/make-system.ts';
 import type { ServiceClient } from '../guest/service-client.ts';
 import { createStore, type Store } from '../guest/store.ts';
 
@@ -18,6 +19,8 @@ export let guestHost!: GuestHost;
 export let client!: ServiceClient;
 export let store!: Store;
 export let flows!: Flows;
+/** Making a design system from the New design system sheet (Phase 2.5 U1). */
+export let makeSystem!: MakeSystem;
 export let feed!: ChangeFeed;
 
 export const startGuest = (nextHost: GuestHost, nextClient: ServiceClient): void => {
@@ -25,6 +28,7 @@ export const startGuest = (nextHost: GuestHost, nextClient: ServiceClient): void
   client = nextClient;
   store = createStore({ client });
   flows = createFlows({ host: guestHost, client });
+  makeSystem = createMakeSystem({ host: guestHost, client });
   feed = createChangeFeed(client);
   store.connect(feed);
 };

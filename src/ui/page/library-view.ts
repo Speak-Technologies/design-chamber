@@ -50,10 +50,12 @@ export type LibraryOptions = {
   actions: ActionContext;
   onNew: (kind: 'canvas' | 'page') => void;
   onSettings: () => void;
+  /** Opens the design systems list (Phase 2.5). */
+  onSystems: () => void;
   onOpen: (slug: string) => void;
 };
 
-export type LibraryHandle = { el: HTMLElement; focusCard: (slug: string) => void; dispose: () => void };
+export type LibraryHandle = { el: HTMLElement; focusCard: (slug: string) => void; focusSystems: () => void; dispose: () => void };
 
 const SKELETON_CARDS = 8;
 /** Under this page width the sidebar starts closed and floats over the grid when opened. */
@@ -86,6 +88,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     (id) => options.onNew(id === 'page' ? 'page' : 'canvas'),
   );
   const settingsButton = btn({ label: 'Settings', variant: 'ghost', size: 'default', icon: 'settings', onClick: () => options.onSettings() });
+  const systemsButton = btn({ label: 'Design systems', variant: 'ghost', size: 'default', icon: 'system', onClick: () => options.onSystems() });
 
   const searchHost = h('div', { class: 'dc-search' });
   const search = mountSearchField(searchHost, { value: '', placeholder: 'Search designs', label: 'Search designs', onChange: (value) => {
@@ -115,6 +118,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     h('h1', { class: 'dc-page-title' }, 'Designs', scopeName),
     h('div', { class: 'dc-library-controls' }, searchHost, tabsHost, sortHost),
     h('span', { class: 'dc-spacer' }),
+    systemsButton.el,
     settingsButton.el,
     newButton.el,
   );
@@ -377,6 +381,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     focusCard: (slug) => {
       grid.querySelector<HTMLElement>(`[data-slug="${CSS.escape(slug)}"] .dc-card-main`)?.focus();
     },
+    focusSystems: () => systemsButton.el.focus(),
     dispose: () => {
       scope.dispose();
       looseBanner.dispose();

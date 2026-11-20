@@ -3398,3 +3398,378 @@ summary.dc-checks-group-title:focus-visible {
   }
 }
 /* ===== end projects and folders ===== */
+
+/* ===== Phase 2.5: design systems list and the New design system sheet (U1) ===== */
+/* One list for the rail (rows) and the page (cards). Host tokens only; a state is said in words and a badge, never by colour alone. */
+
+.dc-sys-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.dc-sys-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dc-s2);
+  padding: 0 var(--dc-s3) var(--dc-s2) var(--dc-s4);
+}
+.dc-sys-bar > .oc-sdk-btn:first-child {
+  margin-left: calc(var(--dc-s2) * -1);
+}
+.dc-sys-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  padding: 0 var(--dc-s2) var(--dc-s2);
+}
+.dc-sys-view[data-surface='page'] .dc-sys-notices {
+  padding: 0 var(--dc-s5) var(--dc-s2);
+}
+.dc-sys-cap {
+  padding: 0 var(--dc-s3) var(--dc-s2);
+  font-size: 0.8125rem;
+}
+.dc-sys-view[data-surface='page'] .dc-sys-cap {
+  padding: 0 var(--dc-s5) var(--dc-s2);
+}
+
+.dc-sys-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dc-sys-view[data-surface='page'] .dc-sys-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--dc-s3);
+  padding: var(--dc-s2) var(--dc-s5) var(--dc-s6);
+}
+.dc-sys {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  border-radius: 10px;
+  transition: background 120ms ease-out, border-color 140ms ease-out;
+}
+.dc-sys-view[data-surface='page'] .dc-sys {
+  border: 1px solid var(--oc-border);
+  border-radius: var(--dc-r-lg);
+}
+.dc-sys:hover,
+.dc-sys:focus-within {
+  background: var(--oc-hover);
+}
+.dc-sys[data-state='unreadable'] {
+  background: color-mix(in srgb, var(--oc-error) 8%, transparent);
+}
+.dc-sys-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 6px 9px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-sys-main[data-static='true'] {
+  cursor: default;
+}
+.dc-sys-view[data-surface='page'] .dc-sys-main {
+  padding: var(--dc-s3) var(--dc-s2) var(--dc-s3) var(--dc-s4);
+}
+.dc-sys-name {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  max-width: 100%;
+  min-width: 0;
+}
+.dc-sys-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.dc-sys-badge {
+  display: inline-flex;
+  flex: none;
+  max-width: 100%;
+  min-width: 0;
+}
+.dc-sys-line .dc-sys-badge {
+  flex: 0 1 auto;
+}
+.dc-sys-badge .oc-sdk-badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-sys-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+.dc-sys-more {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: 9999px;
+  background: var(--oc-hover);
+  color: var(--oc-muted);
+  font-size: 0.6875rem;
+  line-height: 18px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.dc-sys-notice,
+.dc-sys-meta {
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.dc-sys-reason {
+  color: var(--dc-error-text);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.dc-sys > .dc-iconbtn {
+  margin: 6px 4px 0 0;
+  opacity: 0;
+}
+.dc-sys:hover > .dc-iconbtn,
+.dc-sys:focus-within > .dc-iconbtn,
+.dc-sys > .dc-iconbtn[aria-expanded='true'] {
+  opacity: 1;
+}
+.dc-sys-skeleton {
+  pointer-events: none;
+}
+.dc-sys-skeleton .dc-sys-main {
+  gap: 8px;
+  cursor: default;
+}
+.dc-sys-skel-name {
+  width: 46%;
+  height: 12px;
+}
+.dc-sys-skel-badges {
+  width: 72%;
+  height: 16px;
+  border-radius: 9999px;
+}
+.dc-sys-message {
+  grid-column: 1 / -1;
+  list-style: none;
+}
+.dc-sys-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--dc-s2);
+  padding: 0 var(--dc-s3) var(--dc-s4);
+}
+.dc-app :is(.dc-sys-main, .dc-sys-more):focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+
+/* ---- the sheet */
+
+.dc-sheet[data-variant='dialog'].dc-newsys .dc-sheet-panel {
+  width: min(560px, 100%);
+}
+.dc-newsys-form,
+.dc-newsys-sources,
+.dc-newsys-source,
+.dc-newsys-stack,
+.dc-newsys-result,
+.dc-newsys-block,
+.dc-newsys-assets {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.dc-newsys-form {
+  gap: var(--dc-s4);
+}
+.dc-newsys-form[inert] {
+  opacity: 0.55;
+}
+.dc-newsys-sources {
+  gap: var(--dc-s2);
+}
+.dc-newsys-source,
+.dc-newsys-stack,
+.dc-newsys-assets {
+  gap: var(--dc-s2);
+}
+.dc-newsys-result,
+.dc-newsys-block {
+  gap: var(--dc-s3);
+}
+.dc-newsys-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  min-width: 0;
+  margin-left: var(--dc-s2);
+  padding: var(--dc-s1) 0 var(--dc-s1) var(--dc-s4);
+  border-left: 2px solid var(--dc-hair);
+}
+.dc-newsys .dc-muted {
+  font-size: 0.8125rem;
+}
+.dc-newsys-stack > .oc-sdk-btn,
+.dc-newsys-scan > .oc-sdk-btn {
+  align-self: flex-start;
+}
+.dc-newsys-row {
+  display: flex;
+  gap: var(--dc-s2);
+}
+.dc-newsys-row > input {
+  flex: 1;
+  min-width: 0;
+}
+.dc-newsys-scan {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-newsys-scan p {
+  overflow-wrap: anywhere;
+}
+.dc-newsys-found {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-weight: 500;
+}
+.dc-newsys-found > svg {
+  margin-top: 3px;
+  color: var(--dc-success-text);
+}
+.dc-newsys-details {
+  max-width: 100%;
+}
+.dc-newsys-details > summary {
+  cursor: pointer;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  border-radius: 4px;
+}
+.dc-newsys-details > summary:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-newsys-files {
+  list-style: none;
+  margin: var(--dc-s2) 0 0;
+  padding: 0;
+  max-height: 160px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dc-newsys-files li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--dc-s3);
+  font-size: 0.75rem;
+}
+.dc-newsys-files .dc-muted {
+  flex: none;
+}
+.dc-newsys-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--dc-s2);
+  padding: var(--dc-s4) var(--dc-s3);
+  border: 1.5px dashed var(--oc-border);
+  border-radius: var(--dc-r-lg);
+  text-align: center;
+  transition: border-color 120ms ease-out, background 120ms ease-out;
+}
+.dc-newsys-drop[data-drop='over'] {
+  border-color: var(--oc-primary);
+  background: color-mix(in srgb, var(--oc-primary) 8%, transparent);
+}
+.dc-newsys-drop-types {
+  font-size: 0.75rem;
+}
+.dc-newsys-picked,
+.dc-newsys-refused {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dc-newsys-file {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 var(--dc-s2);
+  padding: 2px 0 2px var(--dc-s2);
+  border-radius: 8px;
+}
+.dc-newsys-file:hover {
+  background: var(--oc-hover);
+}
+.dc-newsys-file-name {
+  flex: 1 1 8rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.dc-newsys-file-meta {
+  font-size: 0.75rem;
+}
+.dc-newsys-refused li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--dc-warning-text);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.dc-newsys-refused li > svg {
+  margin-top: 2px;
+}
+.dc-newsys-progress {
+  padding: var(--dc-s2) 0;
+}
+.dc-newsys-failure {
+  min-width: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dc-sys,
+  .dc-newsys-drop {
+    transition: none;
+  }
+}
+/* ===== end design systems list ===== */

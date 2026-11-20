@@ -11,6 +11,7 @@ fix the doc and note what drifted.
 | [Full-screen page](pages/full-screen-page.md) | OpenChamber sidebar → Extension pages → Design Chamber (`page` surface) | The library, the canvas wall and the page viewer. |
 | [Library: projects and folders](pages/library.md) | the page's designs list | The sidebar that groups designs by project and by your own folders, drag to add, delete with Undo. |
 | [Rail: projects and folders](pages/rail.md) | the rail's designs list | The Show select with the same groups, Add to folder and folder actions. |
+| [Design systems](pages/design-systems.md) | the page's Library toolbar and the rail's header → Design systems | The list of design systems (badges, states, row menu) and the New design system sheet: from code, brand files or a description. |
 
 ## Features
 | Feature | One-liner | Pages involved |
@@ -28,6 +29,7 @@ fix the doc and note what drifted.
 | [Screens and directions](features/screens-and-directions.md) | Grow and shape a canvas: the "+ Screen" board, the screen menu (Duplicate, Move up/down, Move to trash), drag reorder, and direction rows with Keep this one. | Rail panel, Full-screen page |
 | [Saved page data](features/saved-page-data.md) | Designs that remember ticks, toggles and filters (`localStorage`, 1 MB per design, shared by every screen): where it lives, what Clear does, the notices. | Rail panel, Full-screen page |
 | [Projects and folders](features/projects-and-folders.md) | Group designs by project (automatic) and by hand-made folders (a design may sit in several); a registry in the designs folder, never a move on disk; delete with Undo; damaged-file recovery. | Full-screen page (Library), Rail panel |
+| [Design systems](features/design-systems.md) | What a design system is, where it lives, how the New design system sheet makes one (create, add brand files, ask the agent), and what the list shows. | Full-screen page, Rail panel |
 | [Design system brand files](features/design-system-brand-files.md) | Fonts, logos and source documents added to a design system by picking, dropping or naming a folder: accepted types checked by content, size limits, safe names, what system.json records. | Full-screen page (design systems) |
 | [Design system hand edits](features/design-system-hand-edits.md) | Saving a token, metadata or text change to a design system by hand: what can change, the value check, version first, refused when changed, Undo, what the agent is told. | Full-screen page (design systems) |
 | [Design system re-sync](features/design-system-resync.md) | Bringing a system's token values up to date with the code it was made from: the review lists, what Apply changes and keeps, stale and folder refusals, "Before re-sync" and Undo. | Full-screen page (design systems) |

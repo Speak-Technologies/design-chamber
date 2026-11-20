@@ -49,10 +49,12 @@ export type ListViewOptions = {
   actions: ActionContext;
   onNew: (kind: 'canvas' | 'page') => void;
   onSettings: () => void;
+  /** Opens the design systems list (Phase 2.5). */
+  onSystems: () => void;
   onOpen: (slug: string) => void;
 };
 
-export type ListViewHandle = { el: HTMLElement; focusRow: (slug: string) => void; dispose: () => void };
+export type ListViewHandle = { el: HTMLElement; focusRow: (slug: string) => void; focusSystems: () => void; dispose: () => void };
 
 const SKELETON_ROWS = 4;
 
@@ -80,7 +82,8 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     (id) => options.onNew(id === 'page' ? 'page' : 'canvas'),
   );
   const settingsButton = iconBtn({ icon: 'settings', label: 'Settings', onClick: () => options.onSettings() });
-  const head = h('header', { class: 'dc-rail-head' }, h('h1', { class: 'dc-rail-title' }, 'Designs'), h('span', { class: 'dc-spacer' }), newButton.el, settingsButton);
+  const systemsButton = iconBtn({ icon: 'system', label: 'Design systems', onClick: () => options.onSystems() });
+  const head = h('header', { class: 'dc-rail-head' }, h('h1', { class: 'dc-rail-title' }, 'Designs'), h('span', { class: 'dc-spacer' }), systemsButton, newButton.el, settingsButton);
 
   // filters
   const searchHost = h('div', { class: 'dc-search' });
@@ -336,6 +339,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     focusRow: (slug) => {
       list.querySelector<HTMLElement>(`[data-slug="${CSS.escape(slug)}"] .dc-row-main`)?.focus();
     },
+    focusSystems: () => systemsButton.focus(),
     dispose: () => {
       scope.dispose();
       looseBanner.dispose();

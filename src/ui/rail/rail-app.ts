@@ -10,6 +10,8 @@ import { keepPlace } from '../components/place-memory.ts';
 import { mountSettings, type SettingsHandle } from '../components/settings-view.ts';
 import { feed, flows } from '../guest.ts';
 import { mountDesignView, type DesignViewHandle } from '../wall/design-view.ts';
+import { mountSystemsList, type SystemsListHandle } from '../systems/systems-list.ts';
+import { openSystem } from '../systems/open-system.ts';
 import { mountListView } from './list-view.ts';
 
 export const mountRail = (root: HTMLElement): void => {
@@ -17,6 +19,8 @@ export const mountRail = (root: HTMLElement): void => {
   root.replaceChildren(app);
 
   let viewer: { slug: string; handle: DesignViewHandle } | null = null;
+  /** The design systems list, while it is the view on screen. */
+  let systemsView: SystemsListHandle | null = null;
 
   const closeViewer = (): void => {
     const slug = viewer?.slug;
@@ -29,6 +33,9 @@ export const mountRail = (root: HTMLElement): void => {
 
   const showViewer = (slug: string, options: { startIn?: 'view' | 'comment' }): void => {
     viewer?.handle.dispose();
+    // A chip click or an open request lands here while the systems list is up: it gives way to the design.
+    systemsView?.dispose();
+    systemsView = null;
     const handle = mountDesignView({ slug, surface: 'panel', actions, onBack: leaveViewer, startIn: options.startIn });
     viewer = { slug, handle };
     place.remember(slug);
@@ -79,9 +86,24 @@ export const mountRail = (root: HTMLElement): void => {
     settings = mountSettings(sheet.body);
   };
 
+  const closeSystems = (): void => {
+    systemsView?.dispose();
+    systemsView = null;
+    list.el.hidden = false;
+    list.focusSystems();
+  };
+  const showSystems = (): void => {
+    if (systemsView) return;
+    systemsView = mountSystemsList({ surface: 'panel', actions, onBack: closeSystems, onOpen: openSystem });
+    list.el.hidden = true;
+    app.append(systemsView.el);
+    systemsView.focus();
+  };
+
   const list = mountListView({
     actions,
     onOpen: openViewer,
+    onSystems: showSystems,
     onSettings: openSettings,
     onNew: (kind) => openNewDialog(app, { kind, onCreated: openViewer }),
   });

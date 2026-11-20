@@ -25,6 +25,7 @@ import {
   type ThumbnailResponse,
 } from '../shared/api.ts';
 import {
+  BINARY_UPLOAD_TOTAL_MAX,
   GUEST_RENDER_CACHE_MAX_BYTES,
   RENDER_CHUNK_CONCURRENCY,
   UPLOAD_CHUNK_MAX_BYTES,
@@ -108,6 +109,11 @@ export type ServiceClient = {
   loadRender(slug: string, screen?: string | null, version?: string | null): Promise<RenderDoc>;
   /** Uploads `text` in F7-safe chunks; resolves to the completed upload id. */
   upload(text: string): Promise<string>;
+  /**
+   * Uploads a file as base64 chunks (`encoding: "base64"`); resolves to the completed upload id. `onProgress`
+   * gets the fraction sent so far (0 to 1) after each chunk. One file at a time: the service holds at most 2 open.
+   */
+  uploadBinary(file: Blob, onProgress?: (fraction: number) => void): Promise<string>;
   /** Thumbnail state; a `ready` PNG is served from memory when `key` matches a cached one. */
   thumbnail(slug: string, key?: string | null): Promise<ThumbnailResponse>;
 };
@@ -187,6 +193,33 @@ export const splitUploadChunks = (text: string, maxChars: number = UPLOAD_CHUNK_
  */
 export const fitsOneRequest = (json: string): boolean =>
   json.length <= UPLOAD_CHUNK_MAX_CHARS && utf8Length(json) <= UPLOAD_CHUNK_MAX_BYTES;
+
+// ---- Binary upload chunking (pure, exported for tests) ----
+
+/**
+ * Bytes per base64 chunk: a multiple of 3, so every chunk but the last is whole base64 with no padding
+ * (the service decodes each on arrival), and 44 997 bytes encode to 59 996 characters, which as a JSON
+ * string (two quotes) is 59 998, under `UPLOAD_CHUNK_MAX_CHARS`.
+ */
+export const BASE64_CHUNK_BYTES = 44_997;
+
+/** `String.fromCharCode` takes arguments one by one; 8 190 (a multiple of 3) stays far below any engine's limit. */
+const BASE64_PIECE_BYTES = 8190;
+
+const base64Of = (bytes: Uint8Array): string => {
+  let text = '';
+  for (let at = 0; at < bytes.length; at += BASE64_PIECE_BYTES) {
+    text += btoa(String.fromCharCode(...bytes.subarray(at, at + BASE64_PIECE_BYTES)));
+  }
+  return text;
+};
+
+/** The file's bytes as base64 chunks the upload route accepts (in order; only the last may carry `=`). */
+export const encodeBase64Chunks = (bytes: Uint8Array, chunkBytes: number = BASE64_CHUNK_BYTES): string[] => {
+  const chunks: string[] = [];
+  for (let at = 0; at < bytes.length; at += chunkBytes) chunks.push(base64Of(bytes.subarray(at, at + chunkBytes)));
+  return chunks;
+};
 
 // ---- Concurrency helper ----
 
@@ -307,6 +340,22 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
     return uploadId;
   };
 
+  const uploadBinary = async (file: Blob, onProgress?: (fraction: number) => void): Promise<string> => {
+    const chunks = encodeBase64Chunks(new Uint8Array(await file.arrayBuffer()));
+    const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    if (total > BINARY_UPLOAD_TOTAL_MAX) {
+      throw new ServiceError('too-large', 'That file is larger than the 21 MB Design Chamber accepts.');
+    }
+    const { uploadId } = await call('POST /uploads', { body: { total, encoding: 'base64' } });
+    let sent = 0;
+    for (const [index, data] of chunks.entries()) {
+      await call('PUT /uploads/:id/:index', { params: { id: uploadId, index: String(index) }, body: { data } });
+      sent += data.length;
+      onProgress?.(total === 0 ? 1 : sent / total);
+    }
+    return uploadId;
+  };
+
   const thumbnail = async (slug: string, key: string | null = null): Promise<ThumbnailResponse> => {
     if (key) {
       const cached = thumbs.get(key);
@@ -321,5 +370,5 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
     return answer;
   };
 
-  return { call, loadRender, upload, thumbnail };
+  return { call, loadRender, upload, uploadBinary, thumbnail };
 };

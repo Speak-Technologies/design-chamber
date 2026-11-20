@@ -9,6 +9,8 @@ import { keepPlace } from '../components/place-memory.ts';
 import { mountSettings, type SettingsHandle } from '../components/settings-view.ts';
 import { flows } from '../guest.ts';
 import { mountDesignView, type DesignViewHandle } from '../wall/design-view.ts';
+import { mountSystemsList, type SystemsListHandle } from '../systems/systems-list.ts';
+import { openSystem } from '../systems/open-system.ts';
 import { mountLibrary } from './library-view.ts';
 
 export const mountPage = (root: HTMLElement): void => {
@@ -16,6 +18,8 @@ export const mountPage = (root: HTMLElement): void => {
   root.replaceChildren(app);
 
   let open: { slug: string; handle: DesignViewHandle } | null = null;
+  /** The design systems list, while it is the view on screen. */
+  let systemsView: SystemsListHandle | null = null;
 
   const closeDesign = (): void => {
     const slug = open?.slug;
@@ -28,6 +32,9 @@ export const mountPage = (root: HTMLElement): void => {
 
   const showDesign = (slug: string): void => {
     open?.handle.dispose();
+    // A chip click or an open request lands here while the systems list is up: it gives way to the design.
+    systemsView?.dispose();
+    systemsView = null;
     const handle = mountDesignView({ slug, surface: 'page', actions, onBack: leaveDesign });
     open = { slug, handle };
     place.remember(slug);
@@ -74,9 +81,24 @@ export const mountPage = (root: HTMLElement): void => {
     settings = mountSettings(sheet.body);
   };
 
+  const closeSystems = (): void => {
+    systemsView?.dispose();
+    systemsView = null;
+    library.el.hidden = false;
+    library.focusSystems();
+  };
+  const showSystems = (): void => {
+    if (systemsView) return;
+    systemsView = mountSystemsList({ surface: 'page', actions, onBack: closeSystems, onOpen: openSystem });
+    library.el.hidden = true;
+    app.append(systemsView.el);
+    systemsView.focus();
+  };
+
   const library = mountLibrary({
     actions,
     onOpen: openDesign,
+    onSystems: showSystems,
     onSettings: openSettings,
     onNew: (kind) => openNewDialog(app, { kind, onCreated: openDesign }),
   });

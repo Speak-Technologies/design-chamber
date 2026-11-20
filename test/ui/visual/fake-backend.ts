@@ -18,6 +18,7 @@ import type {
   Viewport,
 } from '../../../src/shared/types.ts';
 import { createFakeFolders, type FakeFolders } from './fake-folders.ts';
+import { createFakeSystems, type FakeSystems } from './fake-systems.ts';
 import { createFakeChecks, type FakeChecks } from './fake-checks.ts';
 import { createFakePageState, type FakePageState } from './fake-page-state.ts';
 import { createFakeTokens, type FakeTokens } from './fake-tokens.ts';
@@ -315,6 +316,8 @@ export type FakeBackend = {
   pageState: FakePageState['hooks'];
   /** Test hooks (Phase 2.5 G1): seed folders, fail their load, play another window (fake-folders.ts). */
   folders: FakeFolders['hooks'];
+  /** Test hooks (Phase 2.5 U1): the design systems book (fake-systems.ts). */
+  systems: FakeSystems['hooks'];
   /** Test hook (G1): which project folder a design was made for (`null`: none), and which project folders are gone from disk. */
   setProject: (slug: string, directory: string | null) => void;
   setMissingProjects: (directories: string[]) => void;
@@ -472,6 +475,7 @@ export const createFakeBackend = (): FakeBackend => {
 
   const missingProjects = new Set<string>();
   const folderBook: FakeFolders = createFakeFolders({ emit: (slug, kind) => emit(slug, kind), exists: (slug) => db.has(slug) });
+  const systemBook: FakeSystems = createFakeSystems({ emit: (slug, kind) => emit(slug, kind) });
 
   type Req<K extends RouteKey> = { params: Record<string, string>; query: Record<string, string>; body: RouteBody<K> };
   type Handlers = { [K in RouteKey]?: (req: Req<K>) => RouteResponse<K> | Promise<RouteResponse<K>> };
@@ -504,6 +508,7 @@ export const createFakeBackend = (): FakeBackend => {
       if (body.chromePath !== undefined) {
         chromePath = body.chromePath;
       }
+      if (body.systemDefault !== undefined) systemBook.hooks.setDefaultId(body.systemDefault.choice === 'system' ? body.systemDefault.id : null);
       return handlers['GET /settings']?.({ params: {}, query: {}, body: undefined }) as RouteResponse<'PUT /settings'>;
     },
     'GET /designs': ({ query }) => {
@@ -787,6 +792,7 @@ export const createFakeBackend = (): FakeBackend => {
     // Saved page data (feature 19): in memory, in fake-page-state.ts.
     ...pageState.handlers,
     ...folderBook.handlers,
+    ...systemBook.handlers,
   };
 
   const checks = createFakeChecks({
@@ -889,6 +895,7 @@ export const createFakeBackend = (): FakeBackend => {
     touchTokens: (slug) => tokens.touch(slug),
     pageState: pageState.hooks,
     folders: folderBook.hooks,
+    systems: systemBook.hooks,
     setProject: (slug, directory) => {
       const rec = db.get(slug);
       if (!rec) return;

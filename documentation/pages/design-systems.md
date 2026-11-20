@@ -1,0 +1,63 @@
+# Design systems: the list and the New design system sheet
+
+**Route:** the page's Library toolbar → **Design systems**, and the rail's header → **Design systems** (palette icon) · **Access:** every OpenChamber user
+**Purpose:** See every design system in the Designs folder and make a new one. A design system is a set of colours, type, spacing and components, with notes on how to use them, that the chat agent reads before it designs. What a system is, how it is made and what the service enforces: [Design systems](../features/design-systems.md). The system's own page (the board, the side panel, editing, review) is a later piece; until it lands, a row click says so instead of doing nothing.
+
+Screenshots come from `test/ui/visual/scenarios/design-systems-list.mjs` (the real UI with the in-memory fake service), in `documentation/pages/img/systems-<surface>-<width>-<theme>-*.png`.
+
+## The list
+
+[Rail 320 dark](img/systems-rail-320-dark-1-list.png) · [Rail 480 light](img/systems-rail-480-light-1-list.png) · [Page 1400 light](img/systems-page-1400-light-1-list.png)
+
+- **Header.** The rail has a back arrow ("Back to designs"), the title, and under it **New design system**. The page has **Library** (back), the title, and **New design system** on the right. New design system is the tinted button; the one filled button in the sheet is **Make design system**. Back returns focus to the Design systems button that opened the list.
+- **A row** (a card on the page, where the list is a grid of cards three across at 1400 px):
+  1. The name (one line, ends in an ellipsis) and its status: **Draft** or **Ready**.
+  2. The home line: **In Design Chamber** or **Repo · shop** (the full path of the repo is the tooltip), then at most two badges, in this order of priority: **Being built**, **Changes to review**, **Default**, **Pinned for shop** (or "Pinned for 3 projects"), then the living page: **Living page out of date**, **Living page changed**, **Living page can’t be checked**. A third badge or more folds into **+1** (or +2…): its tooltip names what is folded, and the row's accessible name lists everything, so nothing is lost for a screen reader.
+  3. When another system reads the same repo: "shop already has a repo-backed system (Acme)." in muted text. It is never a badge.
+  4. A muted line: what it was made from ("From shop", "From brand files", "Described", joined with dots), who uses it ("Used by 4 designs", or "Not used by a design yet") and when it last changed ("2 hr. ago").
+- **Row menu** (the ⋯ that appears on hover or focus): **Open**, **Make default** (or **Remove as default** on the default), **Reveal in folder**, **Rename**, **Delete…**. A draft can't be the default, so **Make default** is off and says "Mark it ready first." inside the menu.
+  - **Rename** is a small dialog. A name is 1 to 60 characters and unique ignoring case: "You already have a system called Harbor." shows under the field as you type, and the service's sentence shows there too if it refuses.
+  - **Delete…** confirms, because it is a deletion: "Delete Harbor? It moves to the trash. The 4 designs that use it keep their copy." After it, a toast says what else it cleared ("It was your default, so new designs ask again.").
+  - **Make default** and **Remove as default** act at once and say what happened in a toast; the row shows **Default** once the service confirms.
+- **Continue in chat** and **Pin to project…** are not in the menu yet; they arrive with the system page and with Settings.
+- **The cap.** At 50 systems **New design system** is held back and the list says why ("You have 50 design systems, the most Design Chamber keeps. Delete one to make room.").
+
+## States
+
+- **Loading:** four skeleton rows shaped like the rows above. [Rail 480 light](img/systems-states-rail-480-light-1-loading.png)
+- **Empty:** "No design systems yet. Make one from a project’s code, from brand files, or by describing it. Designs can then start from it." with **From code…**, **From brand files…** and **Describe…**; each opens the sheet with that source ticked. [Rail 320 dark](img/systems-states-rail-320-dark-2-empty.png)
+- **A system that can’t be read:** the row shows the service's sentence in the error tone ("Design Chamber can’t read this design system. Its system.json isn’t valid JSON.") and a **Can’t read** badge. It is not a button (there is nothing to open); its menu keeps **Reveal in folder** and **Delete…**. [Rail 320 dark](img/systems-rail-320-dark-4-unreadable.png)
+- **The list didn’t load:** a banner with what happened and **Try again**. When the service isn't answering at all the title is "Design Chamber isn’t running" and the body says to allow the local service in Settings → Extensions. [Page 1400 light](img/systems-states-page-1400-light-3-failed.png)
+- **A refresh that failed** while rows are showing keeps the rows and adds "Couldn’t refresh the list" with **Try again**.
+- The list refreshes by itself when the agent writes a file in a system or a system is added or removed, and the times age while it is open.
+
+## The New design system sheet
+
+[Page 1400 light, scanned](img/systems-sheet-page-1400-light-4-scanned.png) · [Rail 320 dark](img/systems-sheet-rail-320-dark-1-sheet.png)
+
+Opened from **New design system** (a description is pre-ticked) or from an empty-list action (that source is pre-ticked). It makes an **internal** design system, kept in the Designs folder. A system that lives in a project's repo is made with the `/design-system` command in chat, not here.
+
+1. **Name** (required). Filled in for you from the project when you read one and haven't typed anything.
+2. **Start from**: three ticks, any mix, or none (a blank draft with only a name).
+   - **Project code.** Choose a project (OpenChamber's projects by name, the current chat's project first) or **Other folder…** with a full path. It reads the project (nothing in it is changed), shows what it is doing and a **Cancel scan** button, then says what it found: "Found 48 colours, 9 type styles, 12 spacing values, 3 font files, 2 logo files in 14 files." plus an expandable **Files read** list, "Scanned part of the project; it’s large." when it hit a bound, the files it skipped, and the config files the agent will read because Design Chamber doesn't run them. Every font and logo found has a tick (ticked) to copy into the system, with "Check you’re allowed to use these fonts in designs." If it found nothing: "Design Chamber didn’t find design tokens in this project. The agent can still read it and write the system." A folder it can't read says why ("Pick your app’s folder, not the Designs folder.") and keeps what you typed. Starting a scan again is **Read ember-oak**.
+   - **Brand files.** Drop files on the zone or **Choose files…**, or **Add from a folder…** (a full path; the service reads the files directly in it). Fonts (woff2, woff, ttf, otf, up to 5 MB), logos (svg, png, jpg, webp, up to 10 MB) and documents (pdf, md, txt, up to 20 MB), at most 200 files and 100 MB. Each file you pick shows its kind and size with a remove button; each one refused is named with its reason right away ("brand.key isn’t a file type design systems use.", "huge.woff2 is too large (the limit is 5 MB)."). [Rail 320 dark](img/systems-brand-rail-320-dark-1-files.png)
+   - **A description.** Up to 2,000 characters and an optional **style preset**. A description or a preset is enough.
+3. **Agent works in**: **New chat** (in the project you read, or the current one) or **Current chat** (attaches the system and puts the request in the composer).
+4. **Make design system** (the one filled button). Nothing is written before it. Problems are shown **on press**, beside the thing to fix, and focus moves there: "Give the design system a name.", "Pick the project to read, or untick Project code.", "Add brand files, or untick Brand files.", "Describe the look you want, pick a style preset, or untick A description.". A failed make keeps the whole sheet and says "Couldn’t make the design system. <the service's sentence>".
+
+While it works the form is locked and a line says where it is ("Making the design system…", "Adding brand files: 2 of 5, Mark.svg", "Asking the agent to write it…"). Files go one at a time after the system exists.
+
+**When it all goes through,** the sheet closes with "Made Orchard. It’s a draft; the agent is writing it now." (or "…The request is waiting in the chat composer." for the current chat) and the new row is in the list.
+
+**When something needs a look,** the sheet stays and becomes a result: "Orchard brand is made" with what is still open. [Page 1400 light](img/systems-brand-page-1400-light-2-result.png) · [Rail 480 light](img/systems-agent-rail-480-light-1-not-sent.png)
+- **Files not added** lists each file with its sentence ("broken.png isn’t a real PNG file."). The rest are in.
+- **Couldn’t ask the agent** (no chat, the host refused, the request wasn't built): the system is still a draft with what was gathered. **Try again** asks the agent again without making anything twice; **Copy request** puts the request on the clipboard when there is one.
+- If the sheet was closed before the work finished, a toast says the same thing in one sentence.
+
+## Keyboard and screen readers
+
+Every control is reachable by keyboard with a visible focus ring. Rows are buttons whose accessible name lists the badges, folded ones too. Status is words and badges, never colour alone. Problems are in `role="alert"` lines; the scan line is a polite live region. Escape closes a sheet and stops a running scan.
+
+## Rail and page
+
+The same view on both. The rail (320 to 480 px) shows rows and the page shows cards in a grid. The sheet is a centred dialog on both and scrolls inside, with its buttons pinned.
