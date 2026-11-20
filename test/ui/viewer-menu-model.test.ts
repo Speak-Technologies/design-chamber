@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import type { MenuEntry } from '../../src/ui/components/kit.ts';
-import { viewerMenuEntries, type ViewerMenuInput } from '../../src/ui/model/viewer-menu.ts';
+import { NARROW_RAIL_QUERY, viewerMenuEntries, type ViewerMenuInput } from '../../src/ui/model/viewer-menu.ts';
 
 type Action = Extract<MenuEntry, { id: string }>;
 const find = (entries: readonly MenuEntry[], id: string): Action | undefined => entries.find((entry): entry is Action => 'id' in entry && entry.id === id);
@@ -93,4 +95,15 @@ describe('Clear saved page data', () => {
     const entries = entriesOf({ compact: true, pageData: 'enabled' });
     assert.equal(entries.filter((entry) => 'destructive' in entry && entry.destructive).length, 1);
   });
+});
+
+test('the media query hiding the rail Tweaks button matches NARROW_RAIL_QUERY (KI-21: the two must not drift)', () => {
+  const css = readFileSync(fileURLToPath(new URL('../../src/ui/styles.css', import.meta.url)), 'utf8');
+  const btn = css.indexOf('.dc-compact-actions .dc-tweaks-btn');
+  assert.ok(btn > -1, 'the compact Tweaks button rule exists in styles.css');
+  const media = css.lastIndexOf('@media', btn);
+  assert.ok(media > -1, 'a media query guards the compact Tweaks button');
+  const open = css.indexOf('{', media);
+  const condition = css.slice(media + '@media'.length, open).trim();
+  assert.equal(condition, NARROW_RAIL_QUERY);
 });
