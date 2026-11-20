@@ -199,7 +199,7 @@ To verify in spikes before the UI tasks (each has a designed fallback):
     - **No extra sandbox token needed.** `allow-scripts` alone is enough; `allow-modals` is not needed for the picker (it only gates `alert/confirm/prompt`). The picker must be opened from a user gesture (a click handler), which a button always is. Call `preventDefault()` on `dragover` and `drop`.
     - **Not covered:** Firefox/Safari on the web build, and OpenChamber's own Electron host (same Chromium engine, no reason to differ, but not run). The host's own sandbox attribute is `allow-scripts` per its `DOCUMENTATION.md`, which is what the probe used.
     - **T5 consequence:** use the picker plus drop zone with the base64 upload route (AD-8), and keep **Add from a folder…** as the third route (large files, and any browser where a smoke test shows the picker failing). Probe and script: not committed (throwaway, `/tmp/sp1`).
-- **SP-2** a `setInstructions(dir, text)` text reaches a session whose directory is `dir` **in addition to** the `null` text (not instead of it). Fallback when it replaces: the pin line is appended to the global text instead ("Designs for these projects use these design systems: shop → Shop, …", capped), sent with `null`.
+- **SP-2** ~~a `setInstructions(dir, text)` text reaches a session whose directory is `dir` **in addition to** the `null` text (not instead of it). Fallback when it replaces: the pin line is appended to the global text instead ("Designs for these projects use these design systems: shop → Shop, …", capped), sent with `null`.~~ **RESOLVED: additive, no fallback (SP-2 result in §18; T8 sends each pin with its directory).**
 - **SP-3** (S8) after a folder install, both bundled skills (`design-chamber`, `design-system-builder`) are
   listed to the agent and `/design-system` appears in the composer beside `/design` and `/page`. Fallback when
   the second skill is not listed: the builder text is appended to the `design-chamber` skill as a "Building a
@@ -2105,7 +2105,7 @@ target (§2.9) is a Ready system in this root: `directory → "Designs for this 
 record each `saved` result; a refusal or `unavailable` is logged and retried on the next trigger only.
 Triggers: watcher baseline, root change, settings change (pins/default), and `system` events that change a
 pinned system's name or status (coalesced 1 s). `host-calls.ts` `setInstructions(text, directory = null)`.
-SP-2 fallback per §1.
+SP-2 resolved: additive (§18), so no fallback; each pin is sent with its resolved directory and the global text is untouched.
 
 ### 8.7 The `/design-system` command (S8, AD-16)
 
@@ -3342,7 +3342,7 @@ on the feature branch (Review 🔵); smoke tests between T0 and T12a skip it.
   `system-prompts.ts`, `instructions.ts` pins, `host-calls.ts` directory, `guide.ts`, `skill-doc.ts`,
   `instructions.ts` text, `session-links.ts` system chips, turn events. Tests: the three precedence variants,
   none/unset byte-identical to today, caps with 10 choices, injection sentence present, pin sync add/change/
-  remove across restarts (fake host), SP-2 fallback.
+  remove across restarts (fake host), ~~SP-2 fallback~~ host-calls passes the directory (SP-2 additive).
 - **T9 · Re-sync** (fullstack, Med | M): `resyncReview`, `op: resync`, route. Tests: changed/conflict/new/gone
   rules, partial scan never proposes removals, agent tokens never removable, stale, root change.
 - **T10 · Checks** (fullstack, Med | M): `static.ts`, `checks.ts`, `check/system-static.ts`, CLI `--system`,

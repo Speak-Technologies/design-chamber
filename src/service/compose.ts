@@ -11,7 +11,7 @@ import { unavailable, type Logger, type ServiceContext } from './context.ts';
 import { createDesignIndex } from './design-index.ts';
 import { createHostCalls } from './host-calls.ts';
 import { createRouter, registerHealthRoute, type Router } from './http.ts';
-import { startInstructions } from './instructions.ts';
+import { instructionsFileOf, startInstructions } from './instructions.ts';
 import { createOutboxStore } from './outbox.ts';
 import { ensureRenderService } from './render-cache.ts';
 import { ensureLauncherService } from './check/launcher.ts';
@@ -47,7 +47,7 @@ import { registerUploadsRoutes } from './routes/uploads.ts';
 import { registerVersionsRoutes } from './routes/versions.ts';
 import { writeRuntimeRecord } from './runtime-record.ts';
 import { createSelfWrites } from './self-writes.ts';
-import { createSettingsStore, type SettingsEnv } from './settings.ts';
+import { createSettingsStore, settingsFilePath, type SettingsEnv } from './settings.ts';
 import { createDesignStore } from './store.ts';
 import { startChoiceReconciler } from './systems/choice.ts';
 import { ensureLinkService } from './systems/link.ts';
@@ -164,13 +164,29 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
     await agent.idle();
   });
 
-  // The Design Chamber note in every agent's instructions: after the baseline and on root changes.
-  ctx.onDispose(startInstructions(ctx, { commandFor: (root) => launcher.commandFor(root, '<slug>'), ready: watcher.ready }));
+  // The Design Chamber note in every agent's instructions: after the baseline and on root changes;
+  // plus one line per pinned project (Phase 2.5 §8.6), also on settings and system changes.
+  const systemStore = ensureSystemStore(ctx);
+  ctx.onDispose(
+    startInstructions(ctx, {
+      commandFor: (root) => launcher.commandFor(root, '<slug>'),
+      ready: watcher.ready,
+      pins: {
+        settings: () => settings.read(),
+        systems: () => systemStore.list(),
+        file: instructionsFileOf(settingsFilePath(options.env ?? process.env, process.platform, options.homeDir)),
+        onSettingsChange: (listener) => settings.onChange(listener),
+        subscribe: (listener) => hub.subscribe(listener),
+      },
+    }),
+  );
 
   // Session events: the route answers at once; this queue snapshots linked designs after each turn.
   const turnEvents = createTurnEvents({
     index: designIndex,
     versions: { turn: (sessionId) => ensureVersionsService(ctx).turn(sessionId) },
+    // Phase 2.5 §8.5: the systems linked to the chat get their turn snapshot too.
+    systemVersions: { turn: (sessionId) => ensureSystemVersions(ctx).turn(sessionId), any: () => systemStore.index().length > 0 },
     activity: ctx.activity,
     hub,
     log,

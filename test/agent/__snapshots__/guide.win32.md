@@ -1,4 +1,4 @@
-<!-- design-chamber:guide v1 sha256:4fc0fd4112cf927320236c443df9e9cf31c77cfbeec77e60fc76c43aed6b42dd -->
+<!-- design-chamber:guide v1 sha256:978d9e94f37873283e3d59975c5a785ab814b17a2c431f02f455fd84ff4453de -->
 # Designs folder (Design Chamber)
 
 This folder, `C:\Users\you\Documents\Designs`, is the user's designs folder for Design Chamber, the design viewer inside OpenChamber. The user sets it in Design Chamber settings (the default is `~/Documents/Designs`). Designs saved anywhere else do not show up.
@@ -75,6 +75,12 @@ If you don't have that tool, read your HTML once more for overflow, contrast, al
 ## Leave these alone
 
 Never touch `.versions/`, `.chamber/`, `.thumb.png` or `.trash/`. Design Chamber keeps versions, comments and thumbnails there.
+Leave `_systems/` alone too, unless you were asked to work on a system.
+
+## Design systems
+
+- Design systems live in `_systems/<id>/` in the designs folder. Write there only when the user or Design Chamber asks you to make or change a system; never set its status.
+- A design's copy of its system is its `system/` folder: read it, never change it.
 
 ## Design rules
 

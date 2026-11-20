@@ -223,7 +223,6 @@ export type HostCalls = {
    * one project folder (Phase 2.5 AD-12/AD-24; SDK `setInstructions(directory, text)`, additive per
    * directory, SP-2). Empty text removes that directory's text. `unavailable`: no host callback here
    * (tests, an old host, the host did not answer); `refused`: the host said no.
-   * T8 wires `directory` through `host-calls.ts`; until then no caller passes one.
    */
   setInstructions(text: string, directory?: string | null): Promise<'saved' | 'unavailable' | 'refused'>;
 };

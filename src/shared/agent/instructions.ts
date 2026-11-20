@@ -36,7 +36,21 @@ const compose = (root: string, platform: NodeJS.Platform, checkCommand: string |
     checkLine(checkCommand, platform),
     `- When a design is ready, show it with a DesignCard block. To let the user pick between directions you made as separate design folders, ask with DirectionPick. Directions of one canvas screen are screens you mark in design.json instead; the user keeps one on the wall. Write each in a fenced openui-lang code block whose first line is root = Stack([...]), for example ${code('root = Stack([DesignCard("<slug>")])')} or ${code('root = Stack([DirectionPick("Which direction?", "Bold|Calm", "pricing-a|pricing-b")])')}. A root without Stack([...]) is not drawn.`,
     '- The user can type /design or /page to start a design with the project\'s rules attached.',
+    '- Design systems live in `_systems/<id>/` in the designs folder. Write there only when the user or Design Chamber asks you to make or change a system; never set its status.',
+    "- A design's copy of its system is its system/ folder: read it, never change it.",
   ].join('\n');
+};
+
+/** A project pin's text (Phase 2.5 §8.6, AD-12): at most this many characters. */
+export const PIN_INSTRUCTION_MAX = 200;
+
+/** The one line a pinned project's sessions read beside the global note (SP-2: additive per directory). */
+export const buildPinInstruction = (systemName: string): string => {
+  const name = systemName.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const text = (shown: string): string => `Designs for this project use the design system "${shown}" in Design Chamber.`;
+  const full = text(name);
+  if (full.length <= PIN_INSTRUCTION_MAX) return full;
+  return text(`${name.slice(0, Math.max(1, name.length - (full.length - PIN_INSTRUCTION_MAX) - 1)).trimEnd()}…`);
 };
 
 /**

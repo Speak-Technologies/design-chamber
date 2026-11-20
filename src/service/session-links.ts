@@ -12,15 +12,22 @@
 // without a marker (made before markers) links nothing. A design is linked only while it has no
 // chat, under its lock (`store.linkIfUnlinked`), and never moved from one chat to another; the guest
 // reconciliation keeps the job of repairing a link to a chat that is gone.
+//
+// Phase 2.5 (§8.5): a design system's chip (`system:<id>`, `buildSystemChip`) links the system the
+// same way: marker-gated (the system's created time), only while its `sessionId` is null, under the
+// system's lock, never moved to another chat.
 
-import { chipMarkerInUrl } from '../shared/agent/chip.ts';
-import { SLUG_PATTERN, TURN_EVENT_QUEUE_MAX } from '../shared/limits.ts';
+import { chipMarkerInUrl, chipMarkerOf } from '../shared/agent/chip.ts';
+import { SLUG_PATTERN, SYSTEM_ID_PATTERN, TURN_EVENT_QUEUE_MAX } from '../shared/limits.ts';
 import { CHIP_PROVIDER_ID } from '../shared/types.ts';
-import type { DesignIndex, DesignStore, Logger } from './context.ts';
+import type { ChangeHub, DesignIndex, DesignStore, Logger } from './context.ts';
 import { ApiError } from './http.ts';
+import type { SystemStore } from './systems/store.ts';
 
 /** How OpenChamber names our chip among a chat's linked items (`buildChip` makes the id `design:<slug>`). */
 const CHIP_LINK_PREFIX = `guest:${CHIP_PROVIDER_ID}:design:`;
+/** A design system's chip (`buildSystemChip` makes the id `system:<id>`). */
+const SYSTEM_CHIP_LINK_PREFIX = `guest:${CHIP_PROVIDER_ID}:system:`;
 
 /** Design chips read from one event; a chat carries one or two in practice. */
 export const LINKED_CHIPS_MAX = 16;
@@ -51,11 +58,33 @@ export const chipsOf = (linked: readonly unknown[]): ChipRef[] => {
   return chips;
 };
 
+/** One of our system chips on a chat: the system's id and the marker of the system it was made for. */
+export type SystemChipRef = { system: string; marker: string };
+
+/** Our marked system chips on a chat: valid ids, once each, at most `LINKED_CHIPS_MAX`. Anything else is skipped. */
+export const systemChipsOf = (linked: readonly unknown[]): SystemChipRef[] => {
+  const chips: SystemChipRef[] = [];
+  for (const item of linked) {
+    if (!isRecord(item) || item.kind !== 'guest' || typeof item.id !== 'string' || typeof item.url !== 'string') continue;
+    if (!item.id.startsWith(SYSTEM_CHIP_LINK_PREFIX)) continue;
+    const system = item.id.slice(SYSTEM_CHIP_LINK_PREFIX.length);
+    const marker = chipMarkerInUrl(item.url);
+    if (marker === null || !SYSTEM_ID_PATTERN.test(system) || chips.some((chip) => chip.system === system)) continue;
+    chips.push({ system, marker });
+    if (chips.length === LINKED_CHIPS_MAX) break;
+  }
+  return chips;
+};
+
 export type SessionLinksDeps = {
   store: Pick<DesignStore, 'linkIfUnlinked'>;
   index: Pick<DesignIndex, 'get'>;
   log: Logger;
+  /** Phase 2.5: system chips; absent → system chips are ignored. */
+  systems?: { store: Pick<SystemStore, 'index' | 'withLock' | 'updateStateLocked'>; hub: Pick<ChangeHub, 'emit'> };
 };
+
+type Work = { designs: ChipRef[]; systems: SystemChipRef[] };
 
 export type SessionLinks = {
   /** Queue an accepted event; never throws, never waits. */
@@ -66,9 +95,9 @@ export type SessionLinks = {
   dispose(): void;
 };
 
-export const createSessionLinks = ({ store, index, log }: SessionLinksDeps): SessionLinks => {
+export const createSessionLinks = ({ store, index, log, systems }: SessionLinksDeps): SessionLinks => {
   // Per chat, the chips of its latest event, in arrival order; one worker drains it.
-  const pending = new Map<string, ChipRef[]>();
+  const pending = new Map<string, Work>();
   let running: Promise<void> | null = null;
   let disposed = false;
 
@@ -86,19 +115,51 @@ export const createSessionLinks = ({ store, index, log }: SessionLinksDeps): Ses
     }
   };
 
+  /** Link a system to the chat under its lock, only while it has none and only for the system the chip was made for. */
+  const linkSystem = async (sessionId: string, chip: SystemChipRef): Promise<void> => {
+    if (systems === undefined) return;
+    // Only a system the index knows (no disk for an id that is not ours); a linked one stays linked.
+    if (!systems.store.index().some((row) => row.id === chip.system)) return;
+    let linked = false;
+    try {
+      await systems.store.withLock(chip.system, () =>
+        systems.store.updateStateLocked(chip.system, (state) => {
+          if (state.sessionId !== null || chipMarkerOf(state.created) !== chip.marker) return null;
+          linked = true;
+          return { ...state, sessionId };
+        }),
+      );
+    } catch (error) {
+      // The chip outlived its system (deleted): nothing to link.
+      if (error instanceof ApiError && (error.code === 'not-found' || error.code === 'bad-slug' || error.code === 'bad-request')) return;
+      throw error;
+    }
+    if (!linked) return;
+    systems.hub.emit({ slug: null, kind: 'system', system: chip.system, systemChange: 'state' });
+    log.info('session-links.system-linked', { system: chip.system, sessionPrefix: sessionId.slice(0, 8) });
+  };
+
   const drain = async (): Promise<void> => {
     while (!disposed) {
       const next = pending.entries().next();
       if (next.done) return;
-      const [sessionId, chips] = next.value;
+      const [sessionId, work] = next.value;
       pending.delete(sessionId);
-      for (const chip of chips) {
+      for (const chip of work.designs) {
         if (disposed) return;
         try {
           await linkOne(sessionId, chip);
         } catch (error) {
           // One design failing must not stop the others; the chat's next event tries again.
           log.warn('session-links.failed', { slug: chip.slug, error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      for (const chip of work.systems) {
+        if (disposed) return;
+        try {
+          await linkSystem(sessionId, chip);
+        } catch (error) {
+          log.warn('session-links.system-failed', { system: chip.system, error: error instanceof Error ? error.message : String(error) });
         }
       }
     }
@@ -116,18 +177,20 @@ export const createSessionLinks = ({ store, index, log }: SessionLinksDeps): Ses
     take(event) {
       if (disposed || event.session.parentId !== null) return; // a subagent's chat is not the user's
       let chips: ChipRef[];
+      let systemChips: SystemChipRef[];
       try {
         chips = chipsOf(event.linked);
+        systemChips = systems === undefined ? [] : systemChipsOf(event.linked);
       } catch (error) {
         // Not expected (every item is checked), but the route relies on take never throwing:
         // a link lost here must not cost the turn its snapshot.
         log.warn('session-links.take-failed', { error: error instanceof Error ? error.message : String(error) });
         return;
       }
-      if (chips.length === 0) return;
+      if (chips.length === 0 && systemChips.length === 0) return;
       // The latest event wins for its chat; re-inserting keeps the order fair.
       pending.delete(event.session.id);
-      pending.set(event.session.id, chips);
+      pending.set(event.session.id, { designs: chips, systems: systemChips });
       if (pending.size > TURN_EVENT_QUEUE_MAX) {
         const oldest = pending.keys().next();
         if (!oldest.done) pending.delete(oldest.value);

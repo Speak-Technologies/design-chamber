@@ -15,6 +15,7 @@ import { SESSION_ID_MAX } from '../../shared/limits.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
 import { createSessionLinks, type SessionLinks } from '../session-links.ts';
+import { ensureSystemStore } from '../systems/store.ts';
 import { isTurnEventType, type TurnEvents } from '../turn-events.ts';
 
 /** Printable, no control characters, 1 to `SESSION_ID_MAX` characters. */
@@ -22,7 +23,7 @@ const isSessionId = (value: string): boolean => value.length >= 1 && value.lengt
 
 /** The context's linker, stopped with the service (shutdown waits for a link write in flight). */
 export const sessionLinksOf = (ctx: ServiceContext): SessionLinks => {
-  const links = createSessionLinks({ store: ctx.store, index: ctx.designIndex, log: ctx.log });
+  const links = createSessionLinks({ store: ctx.store, index: ctx.designIndex, log: ctx.log, systems: { store: ensureSystemStore(ctx), hub: ctx.hub } });
   ctx.onDispose(async () => {
     links.dispose();
     await links.idle();

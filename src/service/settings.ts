@@ -154,7 +154,10 @@ export type SettingsStoreOptions = {
  * a warning); `read()` then answers from cache and `update()` validates, persists atomically
  * and notifies root-change listeners.
  */
-export const createSettingsStore = async (options: SettingsStoreOptions): Promise<SettingsStore> => {
+/** The store as composed: also says when any setting was saved (the pin instructions follow it, Phase 2.5 §8.6). */
+export type ObservableSettingsStore = SettingsStore & { onChange(listener: () => void): () => void };
+
+export const createSettingsStore = async (options: SettingsStoreOptions): Promise<ObservableSettingsStore> => {
   const { log, packageRoot } = options;
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
@@ -168,10 +171,11 @@ export const createSettingsStore = async (options: SettingsStoreOptions): Promis
   const rootHost = { platform, env };
   const defaultRoot = defaultDesignsRoot(homeDir, rootHost);
   const rootListeners = new Set<(root: string, previous: string) => void>();
+  const changeListeners = new Set<() => void>();
   const rootOf = (candidate: SettingsFile): string =>
     typeof candidate.root === 'string' && candidate.root.trim() !== '' ? path.resolve(candidate.root) : defaultRoot;
 
-  const store: SettingsStore = {
+  const store: ObservableSettingsStore = {
     root: () => rootOf(current),
     defaultRoot: () => defaultRoot,
     read: () => current,
@@ -233,11 +237,22 @@ export const createSettingsStore = async (options: SettingsStoreOptions): Promis
           }
         }
       }
+      for (const listener of [...changeListeners]) {
+        try {
+          listener();
+        } catch (error) {
+          log.error('settings.change-listener-failed', { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
       return current;
     },
     onRootChange(listener) {
       rootListeners.add(listener);
       return () => rootListeners.delete(listener);
+    },
+    onChange(listener) {
+      changeListeners.add(listener);
+      return () => changeListeners.delete(listener);
     },
   };
   return store;

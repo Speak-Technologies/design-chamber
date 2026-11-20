@@ -39,6 +39,8 @@ import {
 import { effectiveSystemChoice } from '../../shared/systems.ts';
 import type { EffectiveSystemChoice } from '../../shared/types.ts';
 import { ensureLinkService, LINK_SYSTEM_GONE_MESSAGE, linkDraftMessage } from '../systems/link.ts';
+import { ensureSystemStore } from '../systems/store.ts';
+import { agentSystemOf } from '../agent-system.ts';
 import type { AnchorState, Comment, DesignKind } from '../../shared/types.ts';
 import type { DesignRecord, ServiceContext } from '../context.ts';
 import { ensureChecksService } from '../check/service.ts';
@@ -268,13 +270,15 @@ const createInstructions = (ctx: ServiceContext): Instructions => {
     discover,
     async prepare(record) {
       const { design } = record;
-      const [files, preset, project, hasDesignMd, hasTokensCss, checkCommand] = await Promise.all([
+      const [files, preset, project, hasDesignMd, hasTokensCss, checkCommand, system] = await Promise.all([
         readRulesDocs(ctx.packageRoot),
         loadPreset(design.preset),
         discover(design.projectDirectory),
         isFile(path.join(record.path, 'DESIGN.md')),
         isFile(path.join(record.path, 'tokens.css')),
         ensureLauncherService(ctx).commandFor(ctx.settings.root(), record.slug),
+        // Phase 2.5 §8.1: the design's system (linked, ask, none or unset) for the precedence layer.
+        agentSystemOf({ systems: ensureSystemStore(ctx), settings: () => ctx.settings.read(), log: ctx.log }, record),
       ]);
       const context: AgentContext = {
         title: design.title,
@@ -289,6 +293,7 @@ const createInstructions = (ctx: ServiceContext): Instructions => {
         pending: record.pending,
         designSystem: { confirmed: design.designSystem.confirmed, hasDesignMd, hasTokensCss },
         checkCommand,
+        system,
       };
       return { context, text: buildRulesDoc(context, files) };
     },
