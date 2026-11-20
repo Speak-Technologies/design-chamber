@@ -881,7 +881,8 @@ export type SystemDetail = {
   coverage: SystemArea[];
   patterns: SystemEntryText[];
   brand: SystemEntryText[];
-  snapshot: { at: IsoDate; by: 'agent' | 'user'; tampered: boolean } | null;
+  /** `treeHash` is the repo re-sync's stamp (§7.4): the apply carries it so a snapshot that moved under the sheet answers stale. */
+  snapshot: { at: IsoDate; by: 'agent' | 'user'; tampered: boolean; treeHash: string } | null;
   codeDrift: { at: IsoDate; mode: 'fix' | 'describe'; differ: number; names: string[]; partial: boolean; unread: string[] } | null;
   /** The living page's summary; the route has the detail. */
   livingPage: { state: LivingPageState | null; sentence: string | null } | null;

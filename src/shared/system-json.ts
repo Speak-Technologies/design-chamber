@@ -1025,7 +1025,7 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
     coverage: coverage.areas,
     patterns,
     brand,
-    snapshot: state.snapshot ? { at: state.snapshot.at, by: state.snapshot.by, tampered: state.snapshot.tampered } : null,
+    snapshot: state.snapshot ? { at: state.snapshot.at, by: state.snapshot.by, tampered: state.snapshot.tampered, treeHash: state.snapshot.treeHash } : null,
     codeDrift: state.codeDrift ? { ...state.codeDrift, unread: state.codeDrift.unread ?? [] } : null,
     livingPage: home.kind === 'repo' ? { state: null, sentence: null } : null,
     proposal: null,
