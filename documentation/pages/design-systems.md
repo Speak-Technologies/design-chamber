@@ -81,7 +81,7 @@ The same view on both. The rail (320 to 480 px) shows rows and the page shows ca
 
 **Route:** a row (or **Open** in its row menu) in the list; a new system opens its page as soon as it is made · **Access:** every OpenChamber user. Screenshots come from `test/ui/visual/scenarios/design-system-page.mjs` in `documentation/pages/img/syspage-*.png` when that scenario is run with its default `--out`.
 
-This is an **internal** system (kept in the Designs folder). A system that lives in a project's repo gets its own page later; the page already keeps `detail.home` and the "this lives in your project" sentence for that.
+The sections below describe an **internal** system (kept in the Designs folder). A system that lives in a project's repo uses the same page, read only; see [A system that lives in a repo](#a-system-that-lives-in-a-repo).
 
 ### Full-screen page
 
@@ -99,7 +99,7 @@ This is an **internal** system (kept in the Designs folder). A system that lives
 
 ### Rail panel
 
-The same system, stacked and without value editing (the rail is too narrow for it): the board on top, the section list, the review controls, then **Back to draft / Mark ready** and **Continue in chat**, and a hint to open Design Chamber full screen to edit values. A repo-backed system adds a living page pill under its name and the hint says the values live in the repo. The rail's view is written up in [rail: a design system](rail.md).
+The same system, stacked and without value editing (the rail is too narrow for it): the board on top, the section list, the review controls, then **Back to draft / Mark ready** and **Continue in chat**, and a hint to open Design Chamber full screen to edit values. A repo-backed system shows the quiet "lives in" line, a living-page state label and **Preview living page**, and nothing else from the repo page. The rail's view is written up in [rail: a design system](rail.md).
 
 ### Phone width
 
@@ -120,3 +120,18 @@ Rows and areas are buttons with a visible focus ring; a row's accessible name ca
 ### A system being built
 
 While the agent is building a system in a chat, its row carries the info badge **Being built**, first in the order, and its accessible name says "Being built". At 360 px two badges sit beside the home line and the rest fold into **+N** ([360 dark](img/build-badges-rail-360-dark-1-list.png)).
+
+## A system that lives in a repo
+
+The same page and the same panel, read only. The values live in the project's repo, so Design Chamber shows them and never writes them. Screenshots come from `test/ui/visual/scenarios/design-system-repo.mjs` (page, living-page card states, banners, preview frame, re-sync sheet) and `design-system-rail.mjs` (rail 320 and 480).
+
+- **Header.** The name with its rename pencil and badge, then "Repo · shop · design-system/" (the full path is the tooltip). Right side: **Mark ready**, **Reveal** (shows the repo folder in the file manager), **Versions**, **⋯**. **Re-sync from shop** is in the **⋯** menu.
+- **Read-only line.** The first line of the panel, above the areas: "Acme lives in shop. Change the values there, or ask the agent here." It is a plain line, never a banner. There is no Save, Reset, Add, edit pencil or remove button, and no "Click a value to edit it." hint.
+- **Review stays.** **Looks good** and **Needs work** work as before. **Needs work** and the ask bar send a proposal request to the system's chat, where the agent shows a diff for you to approve.
+- **Coverage.** An area the system doesn't cover reads "Not covered by this system." and has no review buttons.
+- **Living page card.** At the top of Overview, with the same state as a pill in the header. States: **Up to date** (Preview living page), **Out of date**, **Not in shop yet**, **Changed in shop**, **Reformatted**, **Can’t check as safe**, **Can’t read** (Reveal living page), and a build problem (**Ask the agent to fix it**). A token shaped like a secret on a page for developers adds a warning line. A font that was left out is named with the reason. **Embed fonts** is a switch on the card, and is not shown on a page for developers. After a change it says "Regenerating…" until the service reports the page again.
+- **Preview living page** opens the staged page in a frame over the board (sandboxed, scripts on, never the page's own origin), with a note that the copy in the repo may differ. While a proposal waits, the frame shows the proposal's page and the band says so. The committed page is never drawn.
+- **Banners.** At most two show, the rest fold under **+N more**. They cover: the repo can't be read (**Choose another folder…** opens the re-sync sheet), the snapshot was changed outside Design Chamber (**Re-sync**), changes since marked ready, and a build problem. Code that differs from the system and what a commit landed are plain lines in Overview with their own buttons (**Ask the agent to reconcile**), not banners. A count of zero with a file that couldn't be read never says "matches".
+- **Versions.** **View** and **Compare** only. The footer says "Repo changes are undone in shop’s history, not here." A repo re-sync has no **Undo** notice for the same reason.
+- **Re-sync sheet.** Lists what changed in the repo (**Changed**, **New**, **No longer in the repo**, **Files**) with the old and new value on one line. It is all or nothing, with **Apply** pinned in the footer. When nothing changed it says shop matches what Design Chamber shows and offers **Close**. When the repo can't be read it asks for the folder. Apply sends the scan and a stamp of the snapshot, never a value.
+- **Being built in chat.** While the agent builds the system and there is no snapshot yet, the page says so, says when the agent is waiting for an answer, and offers **Continue in chat**, **Re-sync** and **Preview living page**.
