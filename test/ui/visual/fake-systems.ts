@@ -137,6 +137,16 @@ const EMPTY_SCAN = (directory: string): ScanSummary => ({
   partial: false,
 });
 
+const LIVING_SENTENCE: Record<NonNullable<SystemSummary['livingPage']>, string> = {
+  fresh: 'Generated from revision 7, the current one.',
+  'out-of-date': 'Generated from revision 5; the system is at revision 7.',
+  missing: 'No living page in the repo yet.',
+  changed: 'The page in the repo differs from the one Design Chamber generated.',
+  reformatted: 'The living page may have been reformatted since it was generated.',
+  unsafe: 'The living page has markup Design Chamber didn’t generate and can’t check as safe.',
+  unreadable: 'Design Chamber can’t read the living page.',
+};
+
 const SECTIONS: readonly SystemSection[] = ['overview', 'colours', 'typography', 'spacing', 'radius', 'shadows', 'layers', 'sizes', 'components', 'patterns', 'brand', 'assets'];
 
 const detailOf = (summary: SystemSummary): SystemDetail => ({
@@ -282,6 +292,8 @@ export type FakeSystems = {
     failDetail: (fail: boolean) => void;
     /** A system with this coverage (areas), to show the uncovered sentence. */
     setCoverage: (id: string, coverage: SystemDetail['coverage']) => void;
+    /** Make the system's detail repo-backed (read only) with this living-page state (`null` = not judged yet). */
+    setRepoHome: (id: string, state: NonNullable<SystemSummary['livingPage']> | null) => void;
     /** What saves, undos, reviews and prompts reached the service. */
     pageLog: () => { saves: SystemEditRequest[]; undos: string[]; reviews: Array<{ section: string; state: string }>; asks: Array<{ purpose: string; text?: string; entry?: string; section?: string }> };
   };
@@ -609,6 +621,15 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
       },
       setCoverage: (id, coverage) => {
         detailFor(find(id)).coverage = coverage;
+      },
+      setRepoHome: (id, state) => {
+        const row = find(id);
+        const detail = detailFor(row);
+        const directory = row.home === 'internal' ? TIDEPOOL : row.home.directory;
+        const label = row.home === 'internal' ? 'shop' : row.home.repo;
+        detail.home = { kind: 'repo', directory, label, folder: 'design-system', livingPage: 'design-system/index.html', readable: true, problem: null, lastRead: ago(DAY) };
+        detail.editable = false;
+        detail.livingPage = state === null ? null : { state, sentence: LIVING_SENTENCE[state] };
       },
       pageLog: () => pageLog,
       setDefaultId: (id) => {

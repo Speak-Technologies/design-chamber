@@ -23,3 +23,38 @@ Screenshots: `documentation/pages/img/folders-rail-<width>-<theme>-*.png`, from 
 
 - **Loading:** skeleton rows as before; a remembered folder view shows them until the folders arrive.
 - **Error:** "Folders couldn’t load. Try again." with **Try again** under the select ([320 light](img/folders-rail-320-light-fail-1-note.png)); projects and designs still work.
+
+# Rail: a design system
+
+**Route:** the rail's **Design systems** button, then a system's row (`panel` surface) · **Access:** every OpenChamber user
+**Purpose:** Read a system, review its sections, mark it ready and talk to the agent about it without leaving the rail. Editing values is not here: the rail is too narrow for it, so it says where to go. The full page is in [design systems](design-systems.md); the list is in the same page.
+
+Screenshots: `documentation/pages/img/rail-system-<width>-<theme>-*.png`, from `test/ui/visual/scenarios/design-system-rail.mjs`.
+
+## What the rail shows
+
+[320 light, a section](img/rail-system-320-light-section.png) · [480 dark, a draft](img/rail-system-480-dark-draft.png)
+
+- **Header:** back to the list, the name, a **Draft** or **Ready** badge and a ⋯ menu (Rename, Continue in chat, Versions). Under the name a home line says where the system lives ("In Design Chamber · From brand files · Used by 2 designs") and a repo-backed system reads "Repo · shop · Used by 4 designs".
+- **Board:** the system drawn read only at a rail height, with the **ask bar** under it. Choosing a section scrolls the board to it.
+- **Sections:** the same four areas as the page (Foundations, Components, Patterns & voice, Brand & marketing) with counts and review marks, in an accordion. There is no value editor, no unsaved bar and no inline editing in the rail.
+- **Foot, under the section list:** **Looks good** and **Needs work** for the chosen section (Needs work opens a note and sends it to the agent), then **Mark ready** (or **Back to draft**) and **Continue in chat**, then one line: "To edit values, open Design Chamber full screen: sidebar, Extension pages, Design Chamber." A section the system doesn’t cover says "Not covered" and has no review buttons; the two buttons and the line stay.
+
+## A system read from a repo
+
+[320 dark](img/rail-system-320-dark-repo.png)
+
+- The home line names the repo and its tooltip is the folder. The header carries one small **living page** pill: "Living page up to date", "Living page out of date", "Living page not in shop yet", "Living page changed in shop", "Living page reformatted", "Living page can’t be checked as safe" or "Living page can’t be read". The pill is only a label here; re-syncing and the living page actions are on the full-screen page.
+- The line under the buttons changes to "Tidepool lives in tidepool-web. Change the values there, or ask the agent here."
+- An internal system, or one the service hasn’t judged yet, shows no pill.
+
+## States
+
+- **Loading:** "Loading the board…" on the board and "Loading the design system…" in the sections. Never a blank frame.
+- **Error:** "The design system didn’t load" with the reason and **Try again** ([320 dark](img/rail-system-320-dark-error.png)).
+- **Gone:** "<name> is gone. Its folder was moved or deleted. Check the trash in the Designs folder." with **Back to design systems** ([320 dark](img/rail-system-320-dark-gone.png)). Unsaved values from the full page are not kept in the rail because it has none.
+- **Narrow rail:** nothing scrolls sideways at 320 px; buttons wrap, and the badge and pill fold under the name.
+
+## Code
+
+`src/ui/systems/system-page.ts` (the page and the rail share it; `compact` is the `panel` surface), `src/ui/model/system-page-model.ts` (`homeLine`, `homeTitle`, `livingPagePill`, `railHint`, `readyControl`), tests in `test/ui/system-page-model.test.ts`.

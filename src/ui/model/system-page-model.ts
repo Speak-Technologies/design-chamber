@@ -190,12 +190,50 @@ export const entrySelector = (entry: string): string => `[data-dc-entry="${entry
 
 // ---- Header ----
 
+/** "In Design Chamber · From a description · Used by 2 designs", or "Repo · shop · Used by 2 designs" (the repo is the source). */
 export const homeLine = (detail: Pick<SystemDetail, 'home' | 'sources' | 'usedBy'>, sourceText: string | null): string => {
-  const parts = ['In Design Chamber'];
-  if (sourceText) parts.push(sourceText);
+  const parts = detail.home.kind === 'repo' ? [`Repo · ${detail.home.label}`] : ['In Design Chamber'];
+  if (sourceText && detail.home.kind !== 'repo') parts.push(sourceText);
   parts.push(detail.usedBy === 0 ? 'Not used yet' : `Used by ${plural(detail.usedBy, 'design')}`);
   return parts.join(' · ');
 };
+
+/** The home line's tooltip: the repo's full path, or where an internal system is kept. */
+export const homeTitle = (detail: Pick<SystemDetail, 'home'>): string => (detail.home.kind === 'repo' ? detail.home.directory : 'Kept in your Designs folder');
+
+export type LivingPill = { label: string; tone: 'success' | 'warning' | 'error' | 'info'; title: string };
+
+/**
+ * The repo-backed system's living-page state as one small pill (technical design §9.6 table, the rail's one line about it).
+ * Null for an internal system or while the service hasn't judged the page. Actions for it live on the full-screen page.
+ */
+export const livingPagePill = (detail: Pick<SystemDetail, 'home' | 'livingPage'>): LivingPill | null => {
+  if (detail.home.kind !== 'repo' || detail.livingPage === null || detail.livingPage.state === null) return null;
+  const repo = detail.home.label;
+  const title = detail.livingPage.sentence ?? '';
+  switch (detail.livingPage.state) {
+    case 'fresh':
+      return { label: 'Living page up to date', tone: 'success', title };
+    case 'out-of-date':
+      return { label: 'Living page out of date', tone: 'warning', title };
+    case 'missing':
+      return { label: `Living page not in ${repo} yet`, tone: 'warning', title };
+    case 'changed':
+      return { label: `Living page changed in ${repo}`, tone: 'warning', title };
+    case 'reformatted':
+      return { label: 'Living page reformatted', tone: 'info', title };
+    case 'unsafe':
+      return { label: 'Living page can’t be checked as safe', tone: 'error', title };
+    case 'unreadable':
+      return { label: 'Living page can’t be read', tone: 'error', title };
+  }
+};
+
+/** The line under the rail's buttons: where values are changed. Never an editor on the rail. */
+export const railHint = (detail: Pick<SystemDetail, 'home' | 'name'>): string =>
+  detail.home.kind === 'repo'
+    ? `${detail.name} lives in ${detail.home.label}. Change the values there, or ask the agent here.`
+    : 'To edit values, open Design Chamber full screen: sidebar, Extension pages, Design Chamber.';
 
 /** The colour scheme the board is drawn in follows the host. */
 export const boardScheme = (mode: 'light' | 'dark' | undefined): 'light' | 'dark' => (mode === 'dark' ? 'dark' : 'light');

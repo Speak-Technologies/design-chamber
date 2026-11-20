@@ -43,7 +43,10 @@ import {
   entrySelector,
   firstEntryOf,
   homeLine,
+  homeTitle,
   isCovered,
+  livingPagePill,
+  railHint,
   readyControl,
   readyNotice,
   reviewFoot,
@@ -587,8 +590,11 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       ? h('button', { type: 'button', class: 'dc-syspg-title', title: 'Rename', 'aria-label': `${titleText}. Rename`, onClick: () => startRename() }, titleText)
       : h('h1', { class: 'dc-syspg-title' }, titleText);
     const titleWrap = h('div', { class: 'dc-syspg-titlewrap' }, h('h1', { class: 'dc-syspg-h1' }, title), detail ? statusBadge(detail.status) : null, dirty() ? h('span', { class: 'dc-syspg-unsaved' }, 'Unsaved') : null);
-    const home = detail ? h('p', { class: 'dc-syspg-home dc-muted' }, homeLine(detail, sourceText(detail.sources, folderName))) : null;
-    const main = h('div', { class: 'dc-syspg-main' }, titleWrap, home);
+    const home = detail ? h('p', { class: 'dc-syspg-home dc-muted', title: homeTitle(detail) }, homeLine(detail, sourceText(detail.sources, folderName))) : null;
+    const living = detail ? livingPagePill(detail) : null;
+    const livingEl = living ? h('span', { class: 'dc-syspg-living', title: living.title }) : null;
+    if (livingEl && living) mountBadge(livingEl, { label: living.label, tone: living.tone });
+    const main = h('div', { class: 'dc-syspg-main' }, titleWrap, home, livingEl);
     const tools = h('div', { class: 'dc-syspg-tools' });
     if (detail) {
       const control = readyControl(detail);
@@ -752,7 +758,24 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       );
     }
     const foot = reviewFoot(detail, section);
-    if (foot.kind === 'uncovered') return;
+    // The rail's buttons and hint stay under every section, including one the system doesn't cover.
+    const railFoot = (): void => {
+      if (!compact || !detail) return;
+      const control = readyControl(detail);
+      panelFoot.append(
+        h(
+          'div',
+          { class: 'dc-syspg-railactions' },
+          btn({ label: control.label, variant: control.emphasis === 'primary' ? 'default' : 'outline', size: 'sm', ...(control.emphasis === 'primary' ? { emphasis: 'primary' as const } : {}), disabled: viewing !== null, onClick: () => void toggleReady() }).el,
+          btn({ label: 'Continue in chat', variant: 'outline', size: 'sm', icon: 'chat', onClick: () => void openChat() }).el,
+        ),
+        h('p', { class: 'dc-muted dc-syspg-railhint' }, railHint(detail)),
+      );
+    };
+    if (foot.kind === 'uncovered') {
+      railFoot();
+      return;
+    }
     const disabled = reviewBusy || viewing !== null;
     if (askingNote) {
       const note = h('textarea', { class: 'oc-sdk-input dc-syspg-note', rows: 3, 'aria-label': `What needs work in ${sectionLabel(section)}?`, placeholder: 'What needs work? (optional)', maxlength: 500 });
@@ -796,18 +819,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
         h('div', { class: 'dc-syspg-review-actions' }, ...actions),
       ),
     );
-    if (compact) {
-      const control = readyControl(detail);
-      panelFoot.append(
-        h(
-          'div',
-          { class: 'dc-syspg-railactions' },
-          btn({ label: control.label, variant: control.emphasis === 'primary' ? 'default' : 'outline', size: 'sm', ...(control.emphasis === 'primary' ? { emphasis: 'primary' as const } : {}), disabled: viewing !== null, onClick: () => void toggleReady() }).el,
-          btn({ label: 'Continue in chat', variant: 'outline', size: 'sm', icon: 'chat', onClick: () => void openChat() }).el,
-        ),
-        h('p', { class: 'dc-muted dc-syspg-railhint' }, 'To edit values, open Design Chamber full screen: sidebar, Extension pages, Design Chamber.'),
-      );
-    }
+    railFoot();
   }
 
   function paintMobile(): void {

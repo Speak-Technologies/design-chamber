@@ -83,7 +83,7 @@ This is an **internal** system (kept in the Designs folder). A system that lives
 
 ### Rail panel
 
-The same system, stacked and without value editing (the rail is too narrow for it): the board on top, the section list, the review controls, then **Back to draft / Mark ready** and **Continue in chat**, and a hint to open Design Chamber full screen to edit values.
+The same system, stacked and without value editing (the rail is too narrow for it): the board on top, the section list, the review controls, then **Back to draft / Mark ready** and **Continue in chat**, and a hint to open Design Chamber full screen to edit values. A repo-backed system adds a living page pill under its name and the hint says the values live in the repo. The rail's view is written up in [rail: a design system](rail.md).
 
 ### Phone width
 

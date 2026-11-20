@@ -3859,6 +3859,11 @@ button.dc-syspg-title:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.dc-syspg-living {
+  display: flex;
+  min-width: 0;
+  margin-top: var(--dc-s1);
+}
 .dc-syspg-tools {
   display: flex;
   align-items: center;

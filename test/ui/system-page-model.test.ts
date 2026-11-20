@@ -11,7 +11,10 @@ import {
   entrySelector,
   firstEntryOf,
   homeLine,
+  homeTitle,
   isCovered,
+  livingPagePill,
+  railHint,
   readyControl,
   readyNotice,
   reviewFoot,
@@ -152,6 +155,39 @@ test('the ask bar chip names the entry', () => {
 test('the header line says where the system lives and who uses it', () => {
   assert.equal(homeLine({ home: { kind: 'internal' }, sources: { code: null, brand: 0 }, usedBy: 0 } as never, 'From tidepool-web'), 'In Design Chamber · From tidepool-web · Not used yet');
   assert.equal(homeLine({ home: { kind: 'internal' }, sources: { code: null, brand: 0 }, usedBy: 4 } as never, null), 'In Design Chamber · Used by 4 designs');
+});
+
+const repoHome = { kind: 'repo', directory: 'C:\\work\\shop', label: 'shop', folder: 'design-system', livingPage: 'design-system/index.html', readable: true, problem: null, lastRead: null };
+
+test('a repo-backed system says which repo it is read from', () => {
+  const line = homeLine({ home: repoHome, sources: { code: 'C:\\work\\shop', brand: 0 }, usedBy: 2 } as never, 'From shop');
+  assert.equal(line, 'Repo · shop · Used by 2 designs');
+  assert.equal(homeTitle({ home: repoHome } as never), 'C:\\work\\shop');
+  assert.equal(homeTitle({ home: { kind: 'internal' } } as never), 'Kept in your Designs folder');
+});
+
+test('the rail shows one living page pill for a repo system and none otherwise', () => {
+  const repo = (state: string | null) => ({ home: repoHome, livingPage: state === null ? null : { state, sentence: 'Because.' } }) as never;
+  assert.equal(livingPagePill({ home: { kind: 'internal' }, livingPage: null } as never), null);
+  assert.equal(livingPagePill({ home: { kind: 'internal' }, livingPage: { state: 'fresh', sentence: 'x' } } as never), null);
+  assert.equal(livingPagePill(repo(null)), null);
+  assert.deepEqual(livingPagePill(repo('fresh')), { label: 'Living page up to date', tone: 'success', title: 'Because.' });
+  assert.equal(livingPagePill(repo('out-of-date'))?.tone, 'warning');
+  assert.equal(livingPagePill(repo('missing'))?.label, 'Living page not in shop yet');
+  assert.equal(livingPagePill(repo('changed'))?.label, 'Living page changed in shop');
+  assert.equal(livingPagePill(repo('reformatted'))?.tone, 'info');
+  assert.equal(livingPagePill(repo('unsafe'))?.tone, 'error');
+  assert.equal(livingPagePill(repo('unreadable'))?.tone, 'error');
+});
+
+test('every living page state has a pill, none uses a dash, and the hint never offers an editor', () => {
+  for (const state of ['fresh', 'out-of-date', 'missing', 'changed', 'reformatted', 'unsafe', 'unreadable']) {
+    const pill = livingPagePill({ home: repoHome, livingPage: { state, sentence: '' } } as never);
+    assert.ok(pill, state);
+    assert.ok(!/[—–]/.test(pill.label), state);
+  }
+  assert.equal(railHint({ name: 'Tidepool', home: { kind: 'internal' } } as never), 'To edit values, open Design Chamber full screen: sidebar, Extension pages, Design Chamber.');
+  assert.equal(railHint({ name: 'Shop', home: repoHome } as never), 'Shop lives in shop. Change the values there, or ask the agent here.');
 });
 
 test('the board follows the host colour scheme', () => {
