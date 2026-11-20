@@ -1,11 +1,18 @@
 // The viewer's "More actions" menu, defined in one place. The rail's compact header carries the
 // extra entries (continue, export, copy) because it has no room for buttons (Comments and Versions
-// sit beside the title instead);
+// sit beside the title instead; Tweaks does too until the rail is narrower than NARROW_RAIL_QUERY,
+// where it moves in here and the title gets its room back);
 // the full-screen page shows those as toolbar buttons and keeps only the design-level entries here.
 
 import type { MenuEntry } from '../components/kit.ts';
 import { PAGE_DATA_CLEAR_LABEL, PAGE_DATA_DISABLED_REASON, type PageDataEntry } from './page-state-model.ts';
 import { ASK_FOR_TWEAKS_LABEL } from './tweaks-model.ts';
+
+/**
+ * A rail narrower than this has no room for the Tweaks icon button beside the title (the title needs 120 px at
+ * 320). `styles.css` hides the button under the same width; keep the two numbers together.
+ */
+export const NARROW_RAIL_QUERY = '(max-width: 359.98px)';
 
 export type ViewerMenuInput = {
   /** The rail viewer (compact header). */
@@ -15,6 +22,8 @@ export type ViewerMenuInput = {
   copyHtmlTooLarge: boolean;
   /** The design declares no tweaks (and no old version is on show): offer "Ask for tweaks", which fills the ask bar. */
   askForTweaks?: boolean;
+  /** The rail is narrow and the design has tweaks: the menu item that stands in for the hidden Tweaks button, with its label. */
+  railTweaks?: string | null;
   /** Saved page data: `enabled` or `disabled` shows "Clear saved page data" (before Rename), `hidden` or absent leaves it out. */
   pageData?: PageDataEntry;
 };
@@ -40,6 +49,7 @@ export const viewerMenuEntries = (input: ViewerMenuInput): MenuEntry[] => {
   if (input.compact) {
     return [
       { id: 'chat', label: 'Continue in chat' },
+      ...(input.railTweaks ? [{ id: 'tweaks', label: input.railTweaks } satisfies MenuEntry] : []),
       ...ask,
       { separator: true },
       { id: 'zip', label: 'Export ZIP' },

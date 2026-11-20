@@ -34,6 +34,7 @@ import {
   proposalStateSentence,
   stopAnswer,
   systemName,
+  undoWindow,
   unlistedUses,
   usesLine,
   type CurrentProposal,
@@ -66,6 +67,10 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
   let stoppedText: string | null = null;
   let undo: { id: string; until: number } | null = null;
   let undone = false;
+  /** An Undo request is out: a second click waits for it. */
+  let undoing = false;
+  let undoButton: ButtonHandle | null = null;
+  let undoTimer: ReturnType<typeof setTimeout> | null = null;
   let owned: Disposable[] = [];
   let footOwned: Disposable[] = [];
   let footEl: HTMLElement | null = null;
@@ -119,6 +124,7 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
     try {
       const result = await ctx.client.stopBuild(ask.systemId, proposal.proposal.id);
       undo = { id: result.undoId, until: Date.parse(result.until) };
+      scheduleUndoExpiry();
     } catch (error) {
       busy = false;
       // A 409 has its own sentence (the build already moved on); nothing is sent to the chat.
@@ -136,15 +142,40 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
     renderAll();
   };
 
+  /** One timer for the Undo window: when it ends the card repaints and the button leaves. */
+  const clearUndoTimer = (): void => {
+    if (undoTimer !== null) clearTimeout(undoTimer);
+    undoTimer = null;
+  };
+
+  const scheduleUndoExpiry = (): void => {
+    clearUndoTimer();
+    if (undo === null || undone) return;
+    const offer = undoWindow(undo.until, Date.now());
+    if (!offer.open) return;
+    undoTimer = setTimeout(() => {
+      undoTimer = null;
+      renderAll();
+    }, offer.repaintIn);
+  };
+
   const undoStop = (): void => {
     const pending = undo;
-    if (pending === null || undone) return;
+    if (pending === null || undone || undoing) return;
+    undoing = true;
+    undoButton?.update({ disabled: true, loading: true });
     ctx.client.undoStop(pending.id).then(
       () => {
+        undoing = false;
         undone = true;
+        clearUndoTimer();
         renderAll();
       },
-      () => ctx.toast('error', 'Couldn’t bring the build back. It may have been too long.'),
+      () => {
+        undoing = false;
+        undoButton?.update({ disabled: false, loading: false });
+        ctx.toast('error', 'Couldn’t bring the build back. It may have been too long.');
+      },
     );
   };
 
@@ -153,7 +184,7 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
     for (const handle of footOwned) handle.dispose();
     footOwned = [];
     const proposal = current();
-    const approve = approveView(view, on, busy);
+    const approve = approveView(view, on, ask.proposalId, busy);
     const reason = proposal === null ? null : approve.reason;
     if (cannot !== null) {
       const fallback = cannotTake(ctx, cannot);
@@ -186,7 +217,8 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
           }, { disabled: proposal === null || busy }),
           slotButton(approve.label, 'default', () => {
             const now = current();
-            if (now !== null) submit(approveAnswer(ask.systemId, now, on));
+            // The button is off for any proposal that is not the one this card names; so is a click that raced the repaint.
+            if (now !== null && approveView(now, on, ask.proposalId).enabled) submit(approveAnswer(ask.systemId, now, on));
           }, { disabled: !approve.enabled, loading: busy && !declining, primary: true }),
         ];
     footEl.replaceChildren(...lines.filter((line): line is HTMLElement => line !== null), h('div', { class: 'dcb-ask-actions' }, ...actions.filter((el): el is HTMLElement => el !== null)));
@@ -309,9 +341,9 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
       body.append(h('p', { class: 'dcb-ask-fact', role: 'status' }, UNDO_LINE));
       return;
     }
-    if (undo === null || Date.now() >= undo.until) return;
+    if (undo === null || !undoWindow(undo.until, Date.now()).open) return;
     const slot = h('span', { class: 'dcb-ask-btn' });
-    own(mountButton(slot, { label: 'Undo', variant: 'outline', size: 'sm', onClick: undoStop }));
+    undoButton = own(mountButton(slot, { label: 'Undo', variant: 'outline', size: 'sm', disabled: undoing, loading: undoing, onClick: undoStop }));
     body.append(h('div', { class: 'dcb-ask-actions' }, slot));
   };
 
@@ -339,6 +371,7 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
     for (const handle of footOwned) handle.dispose();
     owned = [];
     footOwned = [];
+    undoButton = null;
     const proposal = current();
     const settled = answeredText !== null || stoppedText !== null;
     const head = proposal ? diffTitle(proposal) : { target: 'Proposed changes', mode: null };
@@ -390,7 +423,21 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
       viewKey = key;
       renderAll();
     } catch (error) {
-      // A hiccup while a proposal is on screen is not worth taking it away for.
+      if (isServiceError(error, 'not-found')) {
+        // The service answered: it has no such proposal (or system) any more. Never keep Approve live for it.
+        if (answeredText !== null || stoppedText !== null || busy || disposed) return;
+        const gone: ProposalView = { state: 'unknown' };
+        const goneKey = JSON.stringify(gone);
+        if (load === 'ready' && viewKey === goneKey) return;
+        load = 'ready';
+        view = gone;
+        viewKey = goneKey;
+        declining = false;
+        stopError = null;
+        renderAll();
+        return;
+      }
+      // A hiccup (the service not answering) while a proposal is on screen is not worth taking it away for.
       if (load === 'ready' && view !== null) return;
       if (!isServiceError(error)) console.warn('Design Chamber: reading the proposal failed', error);
       if (load === 'down') return;
@@ -416,6 +463,7 @@ export const mountDiff = (root: HTMLElement, ctx: BlockContext, ask: Diff, set: 
     },
     dispose: () => {
       disposed = true;
+      clearUndoTimer();
       stopRefetch?.();
       for (const handle of owned) handle.dispose();
       for (const handle of footOwned) handle.dispose();

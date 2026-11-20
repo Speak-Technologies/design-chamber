@@ -11,6 +11,10 @@ const ROUND_ONE = { name: 'SystemAsk', args: { kind: 'interview-1', ticket: TICK
 const roundTwo = (calls) => ({ name: 'SystemAsk', args: { kind: 'interview-2', ticket: '', systemId: SYSTEM, proposalId: '', calls: JSON.stringify(calls) } });
 const DIFF = { name: 'SystemAsk', args: { kind: 'diff', ticket: '', systemId: SYSTEM, proposalId: PROPOSAL, calls: '' } };
 const withAnswer = (block, answered) => ({ ...block, answered });
+/** What `GET /systems/:id` answers a round-two card: the service's name and the round its build is in. */
+const SYSTEM_READ = (round) => ({ 'GET /systems/:id': { body: { name: 'Tidepool', build: round === null ? null : { round } } } });
+const TWO_LIVE = SYSTEM_READ(2);
+const POLL_WAIT = 6500;
 
 const CALLS = [
   { topic: 'status-colours', why: 'About 700 uses across 40 files; amber in 12, orange in 8, three reds.', proposed: 'warning #b45309, danger #b91c1c, success #15803d' },
@@ -116,9 +120,9 @@ const rounds = async ({ openPage, check }, width, theme) => {
   await p.close();
 
   // ---- round two: calls with the agent's reason, one dropped
-  p = await open('two', roundTwo(CALLS));
+  p = await open('two', roundTwo(CALLS), TWO_LIVE);
   await p.waitFor('return !!doc.querySelector(".dcb-q")', 'round two');
-  check((await p.guest('return doc.querySelector(".dcb-ask-title")?.textContent')) === 'A few calls from the code' && (await p.guest('return doc.querySelector(".dcb-ask-sub")?.textContent')) === 'Round 2 of 2', `${base}: round two titles`);
+  check((await p.guest('return doc.querySelector(".dcb-ask-title")?.textContent')) === 'A few calls from the code' && (await p.guest('return doc.querySelector(".dcb-ask-sub")?.textContent')) === 'Tidepool · Round 2 of 2', `${base}: round two titles name the system the service gave`);
   check((await p.guest('return doc.querySelectorAll(".dcb-q").length')) === 3, `${base}: three calls`);
   check((await p.guest('return doc.querySelector(".dcb-q-agent")?.textContent.startsWith("From the agent: ")')), `${base}: the agent's reason is labelled`);
   check(await fits(p), `${base}: round two fits the column`);
@@ -141,10 +145,45 @@ const rounds = async ({ openPage, check }, width, theme) => {
   check(!(await p.guest('return !!doc.querySelector(".dcb-ask-foot")')), `${base}: an answered block has no footer`);
   await p.shot(`${base}-9-two-replayed`);
   await p.close();
-  p = await open('two-dropped', roundTwo([...CALLS.slice(0, 1), { topic: 'nope-not-a-topic', why: 'x', proposed: 'y' }]));
+  p = await open('two-dropped', roundTwo([...CALLS.slice(0, 1), { topic: 'nope-not-a-topic', why: 'x', proposed: 'y' }]), TWO_LIVE);
   await p.waitFor('return !!doc.querySelector(".dcb-q")', 'the one call that can be shown');
   await p.shot(`${base}-10-two-dropped`);
   await p.close();
+
+  // ---- round two reads the system: a build that moved on, and a system that is gone, are read-only
+  p = await open('two-stale', roundTwo(CALLS), SYSTEM_READ('done'));
+  await p.waitFor('return !!doc.querySelector(".dcb-ask-banner")', 'the out of date banner');
+  check(!(await p.guest('return !!doc.querySelector(".dcb-ask-foot button, .dcb-q")')), `${base}: a round-two card whose build moved on has no questions and no buttons`);
+  check((await p.guest('return doc.querySelector(".dcb-ask-sub")?.textContent')) === 'Tidepool · Round 2 of 2', `${base}: and still names the system`);
+  await p.shot(`${base}-12-two-stale`);
+  await p.close();
+  p = await open('two-gone', roundTwo(CALLS), { 'GET /systems/:id': { status: 404, body: { error: 'not-found', message: 'That design system is not in your list any more.' } } });
+  await p.waitFor('return !!doc.querySelector(".dcb-ask-banner")', 'the gone banner');
+  check((await p.guest('return doc.querySelector(".dcb-ask-banner")?.textContent ?? ""')).includes('no longer in your Designs folder'), `${base}: a system that is gone says so`);
+  check(!(await p.guest('return !!doc.querySelector(".dcb-ask-foot button, .dcb-q")')), `${base}: and has nothing to press`);
+  await p.shot(`${base}-13-two-gone`);
+  await p.close();
+  p = await open('two-down', roundTwo(CALLS), { 'GET /systems/:id': { throws: 'down' } });
+  await p.waitFor('return !!doc.querySelector(".dcb-ask-banner button")', 'the down banner');
+  await p.route('GET /systems/:id', TWO_LIVE['GET /systems/:id']);
+  await p.click('.dcb-ask-banner button', { text: 'Try again' });
+  await p.waitFor('return !!doc.querySelector(".dcb-q")', 'the form after Try again');
+  check(true, `${base}: round two Try again loads the question`);
+  await p.close();
+
+  // ---- a poll that fails keeps the picks; one that finds the build done turns the form read-only (slow: waits for the poll)
+  if (width === 480 && theme === 'dark') {
+    p = await open('two-poll', roundTwo(CALLS), TWO_LIVE);
+    await p.waitFor('return !!doc.querySelector(".dcb-q")', 'round two');
+    await p.click('.dcb-opt', { text: 'Custom' });
+    await p.route('GET /systems/:id', { throws: 'down' });
+    await p.settle(POLL_WAIT);
+    check(await p.guest('return !!doc.querySelector(".dcb-q") && [...doc.querySelectorAll(".dcb-opt-input:checked")].some((n) => n.value === "custom")'), `${base}: a failed read keeps the form and the pick`);
+    await p.route('GET /systems/:id', SYSTEM_READ('done')['GET /systems/:id']);
+    await p.settle(POLL_WAIT);
+    check(!(await p.guest('return !!doc.querySelector(".dcb-q, .dcb-ask-foot button")')) && (await p.guest('return !!doc.querySelector(".dcb-ask-banner")')), `${base}: a read that finds the build done turns the card read-only`);
+    await p.close();
+  }
 
   // ---- a block the arguments do not make sense of
   p = await open('bad', { name: 'SystemAsk', args: { kind: 'bogus' } });
@@ -243,6 +282,62 @@ const diff = async ({ openPage, check }, width, theme) => {
   check(await p.guest('return [...doc.querySelectorAll(".dcb-ask-body button")].some((b) => b.textContent.trim() === "Undo")'), `${base}: Undo is offered after Stop`);
   await p.shot(`${base}-9-stopped`);
   await p.close();
+
+  // ---- Undo after Stop: one request for two quick clicks, then the whole window
+  p = await open('undo', DIFF, routesFor(SMALL, { 'POST /systems/:id/build/stop': { body: { undoId: 'u_abcd1234', until: new Date(Date.now() + 5 * 60_000).toISOString() } }, 'POST /system-stops/:undoId/undo': { delayMs: 900, body: { id: 'u_abcd1234' } } }));
+  await ready(p);
+  await p.click('.dcb-ask-foot button', { text: 'Decline' });
+  await p.host('window.__host.blockClick = true');
+  await p.click('.dcb-ask-foot button', { text: 'Stop' });
+  await p.waitFor('return !!doc.querySelector(".dcb-ask-done")', 'stopped');
+  await p.click('.dcb-ask-body button', { text: 'Undo' });
+  await p.click('.dcb-ask-body button', { text: 'Undo' });
+  check(await p.guest('return [...doc.querySelectorAll(".dcb-ask-body button")].find((b) => b.textContent.includes("Undo"))?.disabled === true'), `${base}: Undo is off while its request is out`);
+  await p.settle(1200);
+  check((await p.routeHits('POST /system-stops/:undoId/undo')) === 1, `${base}: two quick clicks on Undo send one request (${await p.routeHits('POST /system-stops/:undoId/undo')})`);
+  check((await p.guest('return doc.querySelector(".dcb-ask-body")?.textContent ?? ""')).includes('Design Chamber brought the build back.'), `${base}: and the build comes back once`);
+  check(!(await p.guest('return [...doc.querySelectorAll(".dcb-ask-body button")].some((b) => b.textContent.includes("Undo"))')), `${base}: Undo leaves once it has worked`);
+  await p.shot(`${base}-9b-undone`);
+  await p.close();
+  p = await open('undo-fails', DIFF, routesFor(SMALL, { 'POST /systems/:id/build/stop': { body: { undoId: 'u_abcd1234', until: new Date(Date.now() + 5 * 60_000).toISOString() } }, 'POST /system-stops/:undoId/undo': { status: 409, body: { error: 'conflict', message: 'Too late.' } } }));
+  await ready(p);
+  await p.click('.dcb-ask-foot button', { text: 'Decline' });
+  await p.host('window.__host.blockClick = true');
+  await p.click('.dcb-ask-foot button', { text: 'Stop' });
+  await p.waitFor('return !!doc.querySelector(".dcb-ask-done")', 'stopped');
+  await p.click('.dcb-ask-body button', { text: 'Undo' });
+  await p.settle(400);
+  check(await p.guest('return [...doc.querySelectorAll(".dcb-ask-body button")].find((b) => b.textContent.includes("Undo"))?.disabled === false'), `${base}: a refused Undo can be tried again`);
+  await p.close();
+  p = await open('undo-expires', DIFF, routesFor(SMALL, { 'POST /systems/:id/build/stop': { body: { undoId: 'u_abcd1234', until: new Date(Date.now() + 2500).toISOString() } } }));
+  await ready(p);
+  await p.click('.dcb-ask-foot button', { text: 'Decline' });
+  await p.host('window.__host.blockClick = true');
+  await p.click('.dcb-ask-foot button', { text: 'Stop' });
+  await p.waitFor('return !!doc.querySelector(".dcb-ask-done")', 'stopped');
+  check(await p.guest('return [...doc.querySelectorAll(".dcb-ask-body button")].some((b) => b.textContent.includes("Undo"))'), `${base}: Undo is there inside its window`);
+  await p.settle(3500);
+  check(!(await p.guest('return [...doc.querySelectorAll(".dcb-ask-body button")].some((b) => b.textContent.includes("Undo"))')), `${base}: the button leaves when the window ends, with no other repaint`);
+  await p.close();
+
+  // ---- a proposal the service no longer has: Approve goes away with the proposal (slow: waits for the poll)
+  if (width === 480 && theme === 'dark') {
+    p = await open('vanishes', DIFF, routesFor(SMALL));
+    await ready(p);
+    check(await p.guest('return doc.querySelector(".dcb-ask-foot button[data-emphasis=primary]")?.disabled === false'), `${base}: Approve is live for a proposal that can be read`);
+    await p.route('GET /systems/:id/proposals/:proposalId', { status: 404, body: { error: 'not-found', message: 'That proposal is gone.' } });
+    await p.settle(POLL_WAIT);
+    check(!(await p.guest('return !!doc.querySelector(".dcb-ask-foot button")')) && (await p.guest('return !!doc.querySelector(".dcb-ask-banner")')), `${base}: a proposal the service cannot find turns the card read-only, with no Approve`);
+    check((await p.guest('return doc.querySelector(".dcb-ask-banner")?.textContent ?? ""')).includes('can’t find this proposal'), `${base}: and says so`);
+    await p.shot(`${base}-14-vanished`);
+    await p.close();
+    p = await open('hiccup', DIFF, routesFor(SMALL));
+    await ready(p);
+    await p.route('GET /systems/:id/proposals/:proposalId', { throws: 'down' });
+    await p.settle(POLL_WAIT);
+    check(await p.guest('return doc.querySelector(".dcb-ask-foot button[data-emphasis=primary]")?.disabled === false'), `${base}: a service that stops answering does not take the proposal away`);
+    await p.close();
+  }
 
   // ---- Stop when the build moved on: a sentence, nothing sent
   p = await open('stop-409', DIFF, routesFor(SMALL, { 'POST /systems/:id/build/stop': { status: 409, body: { error: 'conflict', message: 'The agent has already moved on. Nothing was stopped.' } } }));

@@ -17,6 +17,7 @@ import {
   NO_PROJECT_LINE,
   OUT_OF_DATE,
   SERVICE_DOWN,
+  SYSTEM_GONE,
   TICKET_EXPIRED,
   answeredView,
   defaultPicks,
@@ -27,6 +28,8 @@ import {
   roundOneBlock,
   roundOneQuestions,
   roundTwoAnswer,
+  roundTwoRead,
+  roundTwoSub,
   withPick,
   type Picks,
   type RoundTwoCall,
@@ -35,7 +38,7 @@ import type { BlockContext, BlockView } from './block-view.ts';
 import { cannotTake, frame, primaryOf, refusedLine, sendAnswer, startRefetch, uid } from './system-ask-shared.ts';
 
 type Interview = Extract<SystemAskBlock, { kind: 'interview-1' | 'interview-2' }>;
-type Phase = 'loading' | 'form' | 'stale' | 'expired' | 'down';
+type Phase = 'loading' | 'form' | 'stale' | 'expired' | 'gone' | 'down';
 
 const NOTHING_TO_ANSWER = 'There is nothing to answer here. Reply in the chat.';
 
@@ -44,7 +47,11 @@ export const mountInterview = (root: HTMLElement, ctx: BlockContext, ask: Interv
   const two = ask.kind === 'interview-2' ? resolveCalls(ask.calls, ask.dropped, set) : null;
   const blockId = uid('dcb-i');
 
-  let phase: Phase = roundOne ? 'loading' : 'form';
+  // Both rounds read the service before they can be answered: the ticket (round one) or the system (round two).
+  let phase: Phase = 'loading';
+  /** Round two: the system's name as the service gave it. */
+  let systemNameNow: string | null = null;
+  let disposed = false;
   let hasProject = true;
   let picks: Picks = defaultPicks(roundOne ? set.roundOne : (two?.calls ?? []).map((call) => call.question));
   let note = '';
@@ -232,9 +239,9 @@ export const mountInterview = (root: HTMLElement, ctx: BlockContext, ask: Interv
     const slot = h('div', { class: 'dcb-ask-banner' });
     body.append(slot);
     if (phase === 'down') {
-      own(mountBanner(slot, { tone: 'warning', title: SERVICE_DOWN, action: { label: 'Try again', onClick: () => void readTicket() } }));
+      own(mountBanner(slot, { tone: 'warning', title: SERVICE_DOWN, action: { label: 'Try again', onClick: () => void read() } }));
     } else {
-      own(mountBanner(slot, { tone: 'info', title: phase === 'expired' ? TICKET_EXPIRED : OUT_OF_DATE }));
+      own(mountBanner(slot, { tone: 'info', title: phase === 'expired' ? TICKET_EXPIRED : phase === 'gone' ? SYSTEM_GONE : OUT_OF_DATE }));
     }
   };
 
@@ -248,7 +255,7 @@ export const mountInterview = (root: HTMLElement, ctx: BlockContext, ask: Interv
     inputs = [];
     customLines = [];
     const open = answeredText === null && phase === 'form';
-    const f = frame({ icon: 'system', title: roundOne ? 'Before I read the code' : 'A few calls from the code', sub: roundOne ? 'Round 1 of 2' : 'Round 2 of 2', foot: open });
+    const f = frame({ icon: 'system', title: roundOne ? 'Before I read the code' : 'A few calls from the code', sub: roundOne ? 'Round 1 of 2' : roundTwoSub(systemNameNow), foot: open });
     if (answeredText !== null) answeredBody(f.body, answeredText);
     else if (phase === 'form' && f.foot) formBody(f.body, f.foot);
     else phaseBody(f.body);
@@ -270,16 +277,45 @@ export const mountInterview = (root: HTMLElement, ctx: BlockContext, ask: Interv
       next = 'down';
       if (!isServiceError(error)) console.warn('Design Chamber: reading the build ticket failed', error);
     }
-    if (answeredText !== null || sending || (next === phase && project === hasProject)) return;
+    if (disposed || answeredText !== null || sending || (next === phase && project === hasProject)) return;
     phase = next;
     hasProject = project;
     render();
   };
 
+  /** Round two: the system must be in round two for the card to be answerable (§8.12). */
+  const readSystem = async (): Promise<void> => {
+    if (roundOne || answeredText !== null || sending) return;
+    let next: Phase;
+    let name = systemNameNow;
+    try {
+      const detail = await ctx.client.call('GET /systems/:id', { params: { id: ask.systemId } });
+      const result = roundTwoRead(detail);
+      next = result.phase;
+      name = result.name;
+    } catch (error) {
+      if (isServiceError(error, 'not-found')) {
+        next = roundTwoRead(null).phase;
+        name = null;
+      } else {
+        // A hiccup while the form (or a settled sentence) is up is not worth losing the user's picks for.
+        if (phase !== 'loading' && phase !== 'down') return;
+        next = 'down';
+        if (!isServiceError(error)) console.warn('Design Chamber: reading the system failed', error);
+      }
+    }
+    if (disposed || answeredText !== null || sending || (next === phase && name === systemNameNow)) return;
+    phase = next;
+    systemNameNow = name;
+    render();
+  };
+
+  const read = (): Promise<void> => (roundOne ? readTicket() : readSystem());
+
   render();
-  if (roundOne && answeredText === null) {
-    void readTicket();
-    stopRefetch = startRefetch(readTicket, SYSTEM_ASK_POLL_MS);
+  if (answeredText === null) {
+    void read();
+    stopRefetch = startRefetch(read, SYSTEM_ASK_POLL_MS);
   }
 
   return {
@@ -291,6 +327,7 @@ export const mountInterview = (root: HTMLElement, ctx: BlockContext, ask: Interv
       render();
     },
     dispose: () => {
+      disposed = true;
       stopRefetch?.();
       for (const handle of owned) handle.dispose();
       owned = [];

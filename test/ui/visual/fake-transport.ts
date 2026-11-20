@@ -42,6 +42,8 @@ export type RouteOverrides = {
   /** Answer `key` with `override` from now on; `null` goes back to the fake backend. */
   set(key: RouteKey, override: RouteOverride | null): void;
   clear(): void;
+  /** How many requests the route has had (answered by an override or the fake backend), for a scenario that counts clicks. */
+  hits(key: RouteKey): number;
 };
 
 export type FakeTransport = { serviceRequest(request: GuestRequest): Promise<GuestRequestResult>; backend: FakeBackend; routes: RouteOverrides };
@@ -81,12 +83,15 @@ export const createFakeTransport = (): FakeTransport => {
   const routes: RouteOverrides = {
     set: (key, override) => void (override === null ? overrides.delete(key) : overrides.set(key, override)),
     clear: () => overrides.clear(),
+    hits: (key) => hitCounts.get(key) ?? 0,
   };
+  const hitCounts = new Map<RouteKey, number>();
 
   const serviceRequest = async (request: GuestRequest): Promise<GuestRequestResult> => {
     const matched = matchRoute(request.method, request.path);
     if (!matched) return json(404, { error: 'not-found', message: 'Unknown route.' });
     const query = request.query ?? {};
+    hitCounts.set(matched.key, (hitCounts.get(matched.key) ?? 0) + 1);
     const override = overrides.get(matched.key);
     if (override) {
       if (override.delayMs) await new Promise((resolve) => setTimeout(resolve, override.delayMs));

@@ -275,6 +275,8 @@ const openPage = async ({ width, height, surface, theme, label, query = '', rout
     /** Answer a route yourself from now on (`override` per `RouteOverride` in fake-transport.ts); `null` goes back to the fake backend. */
     route: (key, override) => host(`window.frames[0].__dcFake.route(${JSON.stringify(key)}, ${JSON.stringify(override)})`),
     clearRoutes: () => host('window.frames[0].__dcFake.clearRoutes()'),
+    /** How many requests a route has had since the page opened. */
+    routeHits: (key) => host(`window.frames[0].__dcFake.routeHits(${JSON.stringify(key)})`),
     /** A block frame's new call (or `null`), as the host sends it. */
     setBlock: (call) => host(`window.__host.setBlock(${JSON.stringify(call)})`),
     async shot(name) {

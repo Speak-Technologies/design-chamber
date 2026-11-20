@@ -23,7 +23,7 @@ import { viewportLabel, viewportSize, zoomPercent } from '../model/format.ts';
 import { readDirectionViewports } from '../model/directions-model.ts';
 import { createListeners } from '../model/listeners.ts';
 import { ASK_FOR_TWEAKS_TEXT, TWEAKS_SUBTITLE, TWEAKS_TITLE, tweaksSheetVariant } from '../model/tweaks-model.ts';
-import { viewerMenuEntries } from '../model/viewer-menu.ts';
+import { NARROW_RAIL_QUERY, viewerMenuEntries } from '../model/viewer-menu.ts';
 import { viewingBanner } from '../model/versions-model.ts';
 import { pageViewOptions, remoteBannerHidden, remoteNotice, resolvePageView, shortUrl } from '../model/wall-model.ts';
 import * as askBar from './feature-ask-bar.ts';
@@ -336,13 +336,30 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const ref = () => ({ slug, title: design().title, kind: design().kind, sessionId: design().sessionId });
     const rename = (): void => renameDialog(options.actions.host, ref());
 
+    /** The Tweaks icon button's own name ("Tweaks" or "Tweaks, unsaved changes") while the rail is too narrow to show it; null otherwise. */
+    const railTweaksLabel = (): string | null => {
+      if (!compact || !window.matchMedia(NARROW_RAIL_QUERY).matches) return null;
+      const button = slots.compactActions.querySelector<HTMLElement>('.dc-tweaks-btn');
+      return button && !button.hidden ? (button.getAttribute('aria-label') ?? 'Tweaks') : null;
+    };
+
     const moreEntries = (): MenuEntry[] =>
-      viewerMenuEntries({ compact, isPage, copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX, askForTweaks: design().tweaks.length === 0 && viewing === null, pageData: pageData.entry() });
+      viewerMenuEntries({
+        compact,
+        isPage,
+        copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX,
+        askForTweaks: design().tweaks.length === 0 && viewing === null,
+        railTweaks: railTweaksLabel(),
+        pageData: pageData.entry(),
+      });
 
     const onMore = (id: string): void => {
       switch (id) {
         case 'chat':
           void continueInChat(slug);
+          return;
+        case 'tweaks':
+          toggleDrawer('tweaks');
           return;
         case 'ask-tweaks': {
           // Words for the ask bar, not sent: the user adds what they want and presses Send.

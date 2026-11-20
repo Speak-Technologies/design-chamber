@@ -30,7 +30,10 @@ import {
   roundOneBlock,
   roundOneQuestions,
   roundTwoAnswer,
+  roundTwoRead,
+  roundTwoSub,
   stopAnswer,
+  undoWindow,
   unlistedUses,
   usesLine,
   withPick,
@@ -39,6 +42,7 @@ import {
 
 const set: SystemQuestionSet = parseSystemQuestions(readFileSync(new URL('../../rules/SYSTEM-QUESTIONS.md', import.meta.url), 'utf8'));
 const TICKET = 'sb_abcdefghij12';
+const ID = 'p_k3m9q2x7';
 
 const file = (path: string, over: Partial<ProposalFile> = {}): ProposalFile => ({
   path,
@@ -178,15 +182,29 @@ test('round two: topics the question set does not have are dropped and counted w
 
 test('Approve: every enabled-and-why case', () => {
   const view = proposal();
-  assert.deepEqual(approveView(view, all(view)), { enabled: true, label: 'Approve all 4 parts', reason: null });
-  assert.deepEqual(approveView(view, new Set<ProposalPartName>(['system-files', 'docs', 'living-page'])), { enabled: true, label: 'Approve 3 of 4 parts', reason: null });
-  assert.deepEqual(approveView(view, new Set()), { enabled: false, label: 'Approve 0 of 4 parts', reason: 'Turn on at least one part to approve.' });
-  assert.equal(approveView(view, all(view), true).enabled, false, 'not while an answer is on its way');
-  assert.equal(approveView(proposal({ problems: ['The patch does not apply.'] }), all(view)).enabled, false);
-  assert.match(approveView(proposal({ problems: ['x'] }), all(view)).reason ?? '', /problems/);
-  assert.equal(approveView(null, new Set()).reason, 'Loading the proposal…');
-  assert.equal(approveView(proposal({ parts: [part('docs')] }), new Set<ProposalPartName>(['docs'])).label, 'Approve');
-  assert.equal(approveView(proposal({ parts: [] }), new Set()).enabled, false);
+  assert.deepEqual(approveView(view, all(view), ID), { enabled: true, label: 'Approve all 4 parts', reason: null });
+  assert.deepEqual(approveView(view, new Set<ProposalPartName>(['system-files', 'docs', 'living-page']), ID), { enabled: true, label: 'Approve 3 of 4 parts', reason: null });
+  assert.deepEqual(approveView(view, new Set(), ID), { enabled: false, label: 'Approve 0 of 4 parts', reason: 'Turn on at least one part to approve.' });
+  assert.equal(approveView(view, all(view), ID, true).enabled, false, 'not while an answer is on its way');
+  assert.equal(approveView(proposal({ problems: ['The patch does not apply.'] }), all(view), ID).enabled, false);
+  assert.match(approveView(proposal({ problems: ['x'] }), all(view), ID).reason ?? '', /problems/);
+  assert.equal(approveView(null, new Set(), ID).reason, 'Loading the proposal…');
+  assert.equal(approveView(proposal({ parts: [part('docs')] }), new Set<ProposalPartName>(['docs']), ID).label, 'Approve');
+  assert.equal(approveView(proposal({ parts: [] }), new Set(), ID).enabled, false);
+});
+
+test('Approve is off for a proposal that is not the one the card names, or whose sha cannot be quoted', () => {
+  const view = proposal();
+  const other = approveView(view, all(view), 'p_zzzzzzzz');
+  assert.equal(other.enabled, false);
+  assert.match(other.reason ?? '', /different proposal/);
+  for (const sha16 of ['', '0123456789abcde', '0123456789abcdef0', '0123456789ABCDEF', '0123456789abcdeg', 'has space....ab']) {
+    const bad = { ...view, sha16 };
+    const approve = approveView(bad, all(bad), ID);
+    assert.equal(approve.enabled, false, `sha16 ${JSON.stringify(sha16)} refused`);
+    assert.match(approve.reason ?? '', /couldn’t check/);
+  }
+  assert.equal(approveView(view, all(view), ID).enabled, true, 'the same view with the right id and sha is on');
 });
 
 test('Approve is off, with the sentence, for every state but current', () => {
@@ -200,11 +218,20 @@ test('Approve is off, with the sentence, for every state but current', () => {
   ];
   for (const [view, sentence] of states) {
     assert.equal(proposalStateSentence(view), sentence);
-    const approve = approveView(view, new Set(['docs']));
+    const approve = approveView(view, new Set(['docs']), ID);
     assert.deepEqual([approve.enabled, approve.reason], [false, sentence]);
     assert.equal(describeOffered(view), false);
   }
   assert.equal(proposalStateSentence(proposal()), null);
+});
+
+test('a proposal that cannot be found after a ready view turns Approve off (the block swaps to unknown)', () => {
+  const ready = proposal();
+  assert.equal(approveView(ready, all(ready), ID).enabled, true);
+  const gone: ProposalView = { state: 'unknown' };
+  const approve = approveView(gone, all(ready), ID);
+  assert.equal(approve.enabled, false);
+  assert.equal(approve.reason, 'Design Chamber can’t find this proposal. It may have been cleared.');
 });
 
 test('Describe only instead is offered only for a fix-mode proposal', () => {
@@ -299,6 +326,36 @@ test('the last marker line wins, and the user\'s note cannot forge one', () => {
   assert.equal((text.match(/\[SystemAsk /g) ?? []).length, 1, 'only our own marker is a marker');
   assert.equal(answeredView(text, set).kind, 'round-1');
   assert.equal(parseMarker('[SystemAsk round=1 home=repo]\n[SystemAsk round=2 greys=neutral]')?.round, '2');
+});
+
+// ---------------------------------------------------------------- round two reads the system
+
+test('round two: the card is live only while the build is in round two', () => {
+  assert.deepEqual(roundTwoRead({ name: 'Tidepool', build: { round: 2 } }), { phase: 'form', name: 'Tidepool' });
+  for (const build of [{ round: 1 as const }, { round: 'done' as const }, null]) {
+    assert.deepEqual(roundTwoRead({ name: 'Tidepool', build }), { phase: 'stale', name: 'Tidepool' }, `build ${JSON.stringify(build)} is stale`);
+  }
+});
+
+test('round two: a system the service cannot find is gone, with no name to show', () => {
+  assert.deepEqual(roundTwoRead(null), { phase: 'gone', name: null });
+});
+
+test('round two: the name shown is the service\'s, under the round, and a blank one is left out', () => {
+  assert.equal(roundTwoSub('Tidepool'), 'Tidepool · Round 2 of 2');
+  assert.equal(roundTwoSub(null), 'Round 2 of 2');
+  assert.equal(roundTwoRead({ name: '   ', build: { round: 2 } }).name, null);
+  assert.equal(roundTwoSub('N'.repeat(300)).endsWith(' · Round 2 of 2'), true);
+  assert.ok(roundTwoSub('N'.repeat(300)).length < 100, 'a long name is cut');
+});
+
+// ---------------------------------------------------------------- undo after Stop
+
+test('Undo after Stop: on offer until the window ends, then the card repaints once, just after it', () => {
+  assert.deepEqual(undoWindow(10_000, 4_000), { open: true, repaintIn: 6_050 });
+  assert.equal(undoWindow(10_000, 10_000).open, false, 'the window is shut at until');
+  assert.equal(undoWindow(10_000, 12_000).open, false);
+  assert.equal(undoWindow(Number.NaN, 0).open, false, 'a time that cannot be read offers no Undo');
 });
 
 // ---------------------------------------------------------------- limits

@@ -16,6 +16,7 @@ import { createFakeTransport, type FakeTransport, type RouteOverride } from './f
 export type FakeHooks = Pick<FakeTransport['backend'], 'writePending' | 'writeFile' | 'ageDesign' | 'padScreens' | 'unwriteScreen' | 'addDirections' | 'failNextRestore' | 'touchTokens' | 'checks' | 'pageState' | 'folders' | 'systems' | 'designSystem' | 'setProject' | 'setMissingProjects' | 'requestSystemOpen'> & {
   route: FakeTransport['routes']['set'];
   clearRoutes: FakeTransport['routes']['clear'];
+  routeHits: FakeTransport['routes']['hits'];
 };
 
 const isRouteKey = (key: string): key is RouteKey => (ROUTE_KEYS as readonly string[]).includes(key);
@@ -61,6 +62,7 @@ export const installFakeHost = <T extends HostLike>(real: T): T => {
     requestSystemOpen: fake.backend.requestSystemOpen,
     route: fake.routes.set,
     clearRoutes: fake.routes.clear,
+    routeHits: fake.routes.hits,
   };
   return new Proxy(real, {
     get: (target, key, receiver) => (key === 'serviceRequest' ? fake.serviceRequest : Reflect.get(target, key, receiver)),

@@ -1006,6 +1006,12 @@ body {
 .dc-compact-actions:empty {
   display: none;
 }
+/* Under 360 px the Tweaks icon button gives its room to the title; the ⋯ menu carries a "Tweaks" item instead (viewer-menu.ts, NARROW_RAIL_QUERY: keep the two widths together). */
+@media (max-width: 359.98px) {
+  .dc-compact-actions .dc-tweaks-btn {
+    display: none;
+  }
+}
 .dc-dock {
   display: flex;
   flex-direction: column;
@@ -2228,7 +2234,7 @@ body {
   justify-content: center;
   height: 26px;
   min-width: 26px;
-  /* Tight on purpose: at 320 px the title row also holds back, Comments, Versions and the menu, and the title needs 120 px. */
+  /* Tight on purpose. Width budget of the rail title row at 320 px: back, Comments chip, Versions, Checks and the menu share it with the title, which needs 120 px. Tweaks leaves the row under 360 px (below) and sits in the menu. */
   gap: 2px;
   padding: 0 6px;
   font-variant-numeric: tabular-nums;

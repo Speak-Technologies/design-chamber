@@ -62,6 +62,14 @@ export const mount: FeatureMount = (ctx) => {
   let railButton: HTMLButtonElement | null = null;
   const buttonEl = (): HTMLElement | null => pageButton?.el ?? railButton;
 
+  /** Where focus goes when the sheet closes: the Tweaks button, or the ⋯ menu button that stands in for it when the rail is too narrow to show it. */
+  const focusOpener = (): void => {
+    const button = buttonEl();
+    const shown = button !== null && button.getClientRects().length > 0;
+    const target = shown ? button : ctx.slots.compactActions.parentElement?.querySelector<HTMLElement>('[aria-label="More actions"]');
+    target?.focus({ preventScroll: true });
+  };
+
   const toggle = (): void => {
     if (!hasKnobs()) return;
     ctx.drawers.toggle('tweaks');
@@ -169,7 +177,7 @@ export const mount: FeatureMount = (ctx) => {
     askBarFor(wall)?.setQuiet(open);
     paintButton();
     // A non-modal sheet gives no focus back when it closes: the button that opened it does.
-    if (wasOpen && !open && (document.activeElement === document.body || document.activeElement === null)) buttonEl()?.focus({ preventScroll: true });
+    if (wasOpen && !open && (document.activeElement === document.body || document.activeElement === null)) focusOpener();
     wasOpen = open;
   };
 

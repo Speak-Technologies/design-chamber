@@ -88,6 +88,27 @@ export const resolveCalls = (calls: readonly SystemAskCall[], dropped: number, s
   return { calls: shown, dropped: lost };
 };
 
+/** What reading the system (`GET /systems/:id`) means for a round-two card. */
+export type RoundTwoRead = {
+  /** `form`: the build is in round two, so the card can be answered. `stale`: it moved on. `gone`: no such system. */
+  phase: 'form' | 'stale' | 'gone';
+  /** The service's name for the system, never the block's arguments. */
+  name: string | null;
+};
+
+/**
+ * A round-two card is live only while the system's build is in round two; a build with no record, in round
+ * one or done is not the question this card asks. `null` is a system the service could not find.
+ */
+export const roundTwoRead = (detail: { name: string; build: { round: 1 | 2 | 'done' } | null } | null): RoundTwoRead => {
+  if (detail === null) return { phase: 'gone', name: null };
+  const name = detail.name.trim() === '' ? null : detail.name;
+  return { phase: detail.build !== null && detail.build.round === 2 ? 'form' : 'stale', name };
+};
+
+/** Under the title of a round-two card: the system it is about, when the service said, and the round. */
+export const roundTwoSub = (name: string | null): string => (name === null ? 'Round 2 of 2' : `${clipText(name, 60)} · Round 2 of 2`);
+
 export const droppedLine = (count: number): string | null =>
   count <= 0 ? null : count === 1 ? '1 question couldn’t be shown; answer it in the chat.' : `${count} questions couldn’t be shown; answer them in the chat.`;
 
@@ -247,16 +268,22 @@ export const selectedParts = (view: CurrentProposal, on: ReadonlySet<ProposalPar
 
 export type ApproveView = { enabled: boolean; label: string; reason: string | null };
 
+const SHA16 = /^[0-9a-f]{16}$/;
+
 /**
  * The Approve button: its words, and when it is off, why. Only a current proposal with no problem and
- * at least one part switched on can be approved, and not while an answer is already on its way.
+ * at least one part switched on can be approved, and not while an answer is already on its way. The
+ * proposal must be the one the card names (`askedId`) and carry the sha the answer quotes: a view that
+ * is not, whatever the service said, is never approved from here.
  */
-export const approveView = (view: ProposalView | null, on: ReadonlySet<ProposalPartName>, busy = false): ApproveView => {
+export const approveView = (view: ProposalView | null, on: ReadonlySet<ProposalPartName>, askedId: string, busy = false): ApproveView => {
   if (view === null) return { enabled: false, label: 'Approve', reason: LOADING_PROPOSAL };
   if (!isCurrent(view)) return { enabled: false, label: 'Approve', reason: proposalStateSentence(view) };
   const total = view.proposal.parts.length;
   const count = selectedParts(view, on).length;
   const label = total <= 1 ? 'Approve' : count === total ? `Approve all ${total} parts` : `Approve ${count} of ${total} parts`;
+  if (view.proposal.id !== askedId) return { enabled: false, label, reason: 'Design Chamber showed a different proposal than this card names. Ask the agent for a new one.' };
+  if (!SHA16.test(view.sha16)) return { enabled: false, label, reason: 'Design Chamber couldn’t check this proposal against its files. Ask the agent for a new one.' };
   if (view.proposal.problems.length > 0) return { enabled: false, label, reason: 'This proposal has problems, so it can’t be approved. Ask the agent to fix them.' };
   if (total === 0) return { enabled: false, label, reason: 'This proposal has nothing in it to approve.' };
   if (count === 0) return { enabled: false, label, reason: 'Turn on at least one part to approve.' };
@@ -279,6 +306,13 @@ export const describeAnswer = (systemId: string, proposalId: string): string =>
 
 export const stopAnswer = (systemId: string, name: string, proposalId: string): string =>
   composeAnswer(`Stop building ${clipText(name, 60)}. Design Chamber removed the draft.`, markerLine([['system', systemId], ['decline', proposalId], ['then', 'stop']]));
+
+/** Slack after `until` before the card repaints, so a timer that fires a hair early still finds the window shut. */
+const UNDO_SLACK_MS = 50;
+
+/** The Undo after Stop: whether it is still on offer, and how long until the card must repaint to take it away. */
+export const undoWindow = (until: number, now: number): { open: boolean; repaintIn: number } =>
+  Number.isFinite(until) && now < until ? { open: true, repaintIn: until - now + UNDO_SLACK_MS } : { open: false, repaintIn: 0 };
 
 /** "Describe only instead" is offered only when the proposal is the fix-mode one. */
 export const describeOffered = (view: ProposalView | null): boolean => isCurrent(view) && view.proposal.mode === 'fix';
@@ -383,5 +417,6 @@ export const SERVICE_DOWN = 'Design Chamber isn’t running. Open it from the ra
 export const BAD_BLOCK = 'This question couldn’t be read. Answer in the chat instead.';
 export const REFUSED_ANSWER = 'Couldn’t send your answer. Type it in the chat instead.';
 export const HOST_CANNOT_TAKE = 'Reply in the chat to answer.';
+export const SYSTEM_GONE = 'This design system is no longer in your Designs folder. Reply in the chat if the agent still needs something.';
 export const OUT_OF_DATE = 'This question is out of date. Reply in the chat if the agent still needs something.';
 export const TICKET_EXPIRED = 'This build has expired. Run /design-system again to start over.';

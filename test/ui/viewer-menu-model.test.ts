@@ -62,6 +62,15 @@ test('a design that has tweaks, or an old version on show, does not offer it', (
   for (const input of [{}, { askForTweaks: false }, { compact: true }, { isPage: true }]) assert.equal(find(entriesOf(input), 'ask-tweaks'), undefined);
 });
 
+test('a narrow rail moves Tweaks into the menu, right after the chat link, under the label the button had', () => {
+  assert.deepEqual(shape({ compact: true, railTweaks: 'Tweaks' }), ['chat', 'tweaks', '-', 'zip', 'html', 'path', 'reveal', 'rename', '-', 'delete']);
+  assert.equal(find(entriesOf({ compact: true, railTweaks: 'Tweaks, unsaved changes' }), 'tweaks')?.label, 'Tweaks, unsaved changes');
+  // Not offered when the rail is wide enough (no railTweaks), and never on the full-screen page, whose toolbar has the button.
+  for (const input of [{ compact: true }, { compact: true, railTweaks: null }, { compact: false, railTweaks: 'Tweaks' }, { compact: false, isPage: true, railTweaks: 'Tweaks' }]) {
+    assert.equal(find(entriesOf(input), 'tweaks'), undefined, JSON.stringify(input));
+  }
+});
+
 describe('Clear saved page data', () => {
   test('is left out unless the design has saved data', () => {
     for (const compact of [false, true]) for (const isPage of [false, true]) assert.equal(find(entriesOf({ compact, isPage }), 'page-data'), undefined);
