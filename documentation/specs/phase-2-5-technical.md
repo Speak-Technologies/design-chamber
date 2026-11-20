@@ -349,6 +349,7 @@ The tree below is an **internal-home** system. A **repo-backed** system's folder
     .chamber/state.json                   gains `systemDecision`, `systemChoiceSeen`, `systemChoiceProblem` §2.7
     .chamber/system-incoming-<rand>/      staging of a copy (never tracked, never watched)
     .chamber/system-replaced-<rand>/      the copy being replaced, until the swap commits
+    .chamber/system-removed-<rand>/       the copy removed by an unlink; recovery always deletes it
 ```
 
 The `.trash` names keep the existing rule that a dot cannot occur in a slug or screen id, so
@@ -1285,7 +1286,8 @@ shop") is taken before an agent-triggered snapshot refresh (§5.10).
    no version is taken, since the design holds nothing yet.
 5. Stage: write every planned file into `<design>/.chamber/system-incoming-<rand>/` (writeFileAtomic each;
    `COPY.json` last, with `before` = the version id). For `"none"` nothing is staged.
-6. Swap: if `<design>/system/` exists and is a real folder, rename it to `.chamber/system-replaced-<rand>`;
+6. Swap: if `<design>/system/` exists and is a real folder, rename it to `.chamber/system-replaced-<rand>`
+   (or `.chamber/system-removed-<rand>` for an unlink, so recovery deletes it instead of restoring it);
    rename staging to `system/` (`renameWithRetry`, Windows lock retry). On a failed second rename, rename
    the old copy back and answer 409 "Another program is using this design's files. Close it and try
    again." Then remove `system-replaced-*` (Design Chamber's own folder; the version taken in step 4 holds
@@ -1298,8 +1300,10 @@ shop") is taken before an agent-triggered snapshot refresh (§5.10).
 
 **Recovery** (`recoverCopy(designDir)`, run at service start for designs that have `.chamber/system-*`
 leftovers and before every `link`): staging without `system/` and with a complete `COPY.json` → finish the
-rename; `system-replaced-*` without `system/` → rename back; any other leftover → removed. So a restart
-mid-swap leaves the old copy or the new one, never neither (RS §10).
+rename; `system-replaced-*` without `system/` → rename back (an interrupted swap); `system-removed-*` →
+always deleted, never restored (an unlink whose cleanup failed must not bring the removed system back);
+any other leftover → removed. So a restart mid-swap leaves the old copy or the new one, never neither
+(RS §10), and a removed system stays removed.
 
 **Restore** needs no new code: `system/**` is tracked, so a design restore brings back the copy and its
 `COPY.json`; the banner then compares revisions again (RS S5).
