@@ -29,7 +29,7 @@ import {
 
 import { API_ERROR_STATUS, ROUTE_KEYS, splitRouteKey, type ApiErrorCode, type ChangesResponse, type EditStamps, type EditResponse, type OpenRequest, type RouteKey, type StatusDesignRow, type TokensResponse, type TweakState, type UndoEditResponse } from '../shared/api.ts';
 import { CHIP_PROVIDER_ID, type AgentSkillStatus, type ChangeEvent, type ChangeKind, type Comment, type DesignJson, type DesignKind, type DesignSummary, type HandEdit, type HandEditBase, type LooseHtmlFile, type Outbox, type Preset, type Screen, type VersionSummary, type Viewport } from '../shared/types.ts';
-import { CHANGES_RING_SIZE, EDIT_ID_PATTERN, HAND_EDITS_LEDGER_MAX, HAND_EDIT_QUOTE_MAX, LOOSE_LIST_MAX, SCREENS_MAX, SLUG_PATTERN, STATUS_ROWS_MAX, TEXT_EDIT_MAX, USER_EDIT_COALESCE_MS, USER_UNDO_KEEP } from '../shared/limits.ts';
+import { CHANGES_RING_SIZE, EDIT_ID_PATTERN, HAND_EDITS_LEDGER_MAX, HAND_EDIT_QUOTE_MAX, LOOSE_LIST_MAX, SCREENS_MAX, SLUG_PATTERN, SYSTEM_ID_PATTERN, STATUS_ROWS_MAX, TEXT_EDIT_MAX, USER_EDIT_COALESCE_MS, USER_UNDO_KEEP } from '../shared/limits.ts';
 import { sameDirectory } from '../shared/path-compare.ts';
 import { ENTRY_FILE, screenFileOf } from '../shared/design-json.ts';
 import { copyTitle, describeMove, directionGroups, freeCopyId, SCREEN_LIST_STALE_MESSAGE, SCREENS_CAP_MESSAGE } from '../shared/screen-ops.ts';
@@ -266,6 +266,8 @@ export type FakeServiceOptions = {
 export type FakeService = {
   handle(request: GuestRequest): Promise<GuestRequestResult>;
   readonly designs: Map<string, FakeDesign>;
+  /** Design system ids `POST /open-request` knows (Phase 2.5); starts with `acme`. */
+  readonly systems: Set<string>;
   outbox: Outbox | null;
   /** Every request, in order (method + path). */
   readonly requests: GuestRequest[];
@@ -279,6 +281,7 @@ export type FakeService = {
 
 export const createFakeService = (options: FakeServiceOptions = {}): FakeService => {
   const designs = options.empty ? new Map<string, FakeDesign>() : sampleDesigns();
+  const systems = new Set<string>(['acme']);
   const epoch = fakeHash(String(Math.random())).slice(0, 16);
   const events: ChangeEvent[] = [];
   let seq = 0;
@@ -954,6 +957,15 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
         return { request: taken };
       }
       case 'POST /open-request': {
+        if (Object.hasOwn(body, 'system')) {
+          const system = typeof body.system === 'string' ? body.system : '';
+          if (!SYSTEM_ID_PATTERN.test(system)) throw new FakeHttpError('bad-slug', 'That is not a design system name.');
+          if (!systems.has(system)) throw new FakeHttpError('not-found', 'That design system is no longer in your Designs folder.');
+          const target = body.target === 'board' || body.target === 'preview' ? body.target : 'page';
+          openRequest.value = { system, target, created: new Date().toISOString() };
+          emit(null, 'open');
+          return { ok: true };
+        }
         const wanted = typeof body.slug === 'string' ? body.slug : '';
         if (!SLUG_PATTERN.test(wanted)) throw new FakeHttpError('bad-slug', 'That is not a design folder name.');
         if (!designs.has(wanted)) throw new FakeHttpError('not-found', 'That design is no longer in your Designs folder.');
@@ -1206,6 +1218,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
   return {
     handle,
     designs,
+    systems,
     get outbox() {
       return outbox.value;
     },

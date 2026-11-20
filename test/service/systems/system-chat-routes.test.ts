@@ -1,8 +1,8 @@
 // The system prompt route over HTTP (documentation/specs/phase-2-5-technical.md §3.1, §3.5, §8.5,
 // §8.10, T15): the bearer check, the parameter gates, body validation with sentences, every purpose
 // that works before T12b/T13/T14 (make, ask, review, resync-notes, checks, continue, build-continue,
-// the living-page refusal), the RULES.md refresh, and the hand-edit block. The living-page seam
-// answers the not-built sentence until T14 lands; reconcile recounts the code drift first (T13).
+// the living-page refusal), the RULES.md refresh, and the hand-edit block. Reconcile recounts the
+// code drift first (T13).
 
 import assert from 'node:assert/strict';
 import { mkdir, readdir } from 'node:fs/promises';
@@ -124,6 +124,19 @@ test('make: the sources, the user\'s description, the write rule, the injection 
   assert.ok(rules.includes(`Write only inside ${tmp.at(`_systems/${id}`)}.`));
   assert.ok(rules.includes('check --system acme'), 'the launcher command names the system');
   assert.ok(rules.includes(SYSTEM_INJECTION_SENTENCE));
+});
+
+test('make: the scan\'s forAgent list kept in sources.code becomes "Read yourself" lines', async (t) => {
+  const { call, systems } = await serve(t);
+  const { id } = await systems.create({ name: 'Acme' });
+  const forAgent = [{ path: 'tailwind.config.js', why: 'Tailwind config: the agent can read its theme.' }];
+  await systems.withLock(id, () =>
+    systems.updateStateLocked(id, (state) => ({ ...state, sources: { ...state.sources, code: { directory: '/work/shop', lastScan: state.created, partial: false, scanned: ['src/app.css'], forAgent } } })),
+  );
+  const answer = await call(`/systems/${id}/prompt`, { purpose: 'make' });
+  assert.equal(answer.status, 200, JSON.stringify(answer.json));
+  const { text } = answer.json as SystemPromptResponse;
+  assert.ok(text.includes('Read yourself: tailwind.config.js (Tailwind config: the agent can read its theme.)'), text);
 });
 
 test('ask: the words verbatim, an entry checked against the detail, the repo gate absent for an internal home', async (t) => {

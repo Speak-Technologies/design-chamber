@@ -229,6 +229,21 @@ const parseFingerprintMap = (value: unknown): Partial<Record<SystemSection, stri
 };
 
 /** state.json's `sources`, validated (also the undo record of a re-sync, §6.3). */
+/** The scan's forAgent list kept in `sources.code` (≤ 20 files, like scan.json's). */
+export const SOURCES_FOR_AGENT_MAX = 20;
+
+const forAgentList = (value: unknown): { path: string; why: string }[] | null => {
+  if (!Array.isArray(value)) return null;
+  const out: { path: string; why: string }[] = [];
+  for (const item of value.slice(0, SOURCES_FOR_AGENT_MAX)) {
+    if (!isObject(item)) continue;
+    const file = own(item, 'path');
+    const why = own(item, 'why');
+    if (typeof file === 'string' && file !== '' && file.length <= 4096 && typeof why === 'string' && why.length <= 300) out.push({ path: file, why });
+  }
+  return out;
+};
+
 export const parseSources = (value: unknown): SystemState['sources'] => {
   const sources: SystemState['sources'] = { code: null, brand: null, description: null };
   if (!isObject(value)) return sources;
@@ -238,7 +253,8 @@ export const parseSources = (value: unknown): SystemState['sources'] => {
     const lastScan = own(code, 'lastScan');
     const scanned = stringList(own(code, 'scanned'), 10_000, 4096) ?? [];
     if (typeof directory === 'string' && directory !== '' && isIso(lastScan)) {
-      sources.code = { directory, lastScan, partial: own(code, 'partial') === true, scanned };
+      const forAgent = forAgentList(own(code, 'forAgent'));
+      sources.code = { directory, lastScan, partial: own(code, 'partial') === true, scanned, ...(forAgent !== null ? { forAgent } : {}) };
     }
   }
   const brand = own(value, 'brand');

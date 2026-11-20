@@ -384,11 +384,16 @@ export type ChecksRunResponse = { state: 'running' };
 
 /** How the rail opens a requested design: `comment` starts in Edit mode with Comment pressed. */
 export type OpenIntent = 'view' | 'comment';
+/** Where a system open request lands: the system page, its board, or the living page's preview frame. */
+export type SystemOpenTarget = 'page' | 'board' | 'preview';
 /** A design the rail should open as soon as it is up; taken once, kept `OPEN_REQUEST_TTL_MS`. */
-export type OpenRequest = { slug: string; intent: OpenIntent; created: IsoDate };
+export type DesignOpenRequest = { slug: string; intent: OpenIntent; created: IsoDate };
+/** Phase 2.5: a design system the rail should open (a SystemAsk block's Preview living page / Open the board). */
+export type SystemOpenRequest = { system: string; target: SystemOpenTarget; created: IsoDate };
+export type OpenRequest = DesignOpenRequest | SystemOpenRequest;
 export type OpenRequestResponse = { request: OpenRequest | null };
-/** `POST /open-request` (a Work Status row or a chat block): `intent` defaults to `view`. */
-export type OpenRequestBody = { slug: string; intent?: OpenIntent };
+/** `POST /open-request` (a Work Status row or a chat block): `intent` defaults to `view`; a system's `target` defaults to `page`. */
+export type OpenRequestBody = { slug: string; intent?: OpenIntent } | { system: string; target?: SystemOpenTarget };
 
 /** As much of a `ChecksResponse` as a badge needs; a whole `ChecksResponse` fits it. */
 export type ChecksSummary = { counts: ChecksResponse['counts']; render: { state: ChecksRenderState }; canRun: boolean; browser: boolean };

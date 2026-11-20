@@ -99,4 +99,52 @@ describe('POST /open-request', () => {
     assert.equal(request.slug, reply.json.slug);
     assert.equal(request.intent, 'view');
   });
+  test('a system request (Phase 2.5): page by default, board or preview; taken once; a gone system is 404', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await tmp.write('_systems/acme/tokens.css', ':root {}\n');
+    const ctx = createChatContext(tmp);
+    const { call } = await serveRoutes(t, ctx);
+
+    assert.equal((await call('/open-request', { body: { system: 'acme', target: 'preview' } })).status, 200);
+    assert.deepEqual(ctx.events.map((event) => ({ slug: event.slug, kind: event.kind })), [{ slug: null, kind: 'open' }]);
+    const taken = (await call('/open-request', { method: 'DELETE' })).json.request as Record<string, unknown>;
+    assert.equal(taken.system, 'acme');
+    assert.equal(taken.target, 'preview');
+    assert.equal('slug' in taken, false);
+    assert.deepEqual((await call('/open-request', { method: 'DELETE' })).json, { request: null });
+
+    assert.equal((await call('/open-request', { body: { system: 'acme' } })).status, 200);
+    assert.equal(((await call('/open-request', { method: 'DELETE' })).json.request as Record<string, unknown>).target, 'page');
+
+    // A design request still replaces a system one, and the slug path is unchanged.
+    await seedDesign(tmp, 'pricing-page');
+    assert.equal((await call('/open-request', { body: { system: 'acme', target: 'board' } })).status, 200);
+    assert.equal((await call('/open-request', { body: { slug: 'pricing-page' } })).status, 200);
+    assert.equal(((await call('/open-request', { method: 'DELETE' })).json.request as Record<string, unknown>).slug, 'pricing-page');
+
+    const gone = await call('/open-request', { body: { system: 'gone-system' } });
+    assertError(gone, 404, 'not-found');
+    assert.equal(gone.json.message, 'That design system is no longer in your Designs folder.');
+    assert.deepEqual((await call('/open-request', { method: 'DELETE' })).json, { request: null });
+  });
+
+  test('system requests: no token is 401; ids that could name a path, bad targets and mixed bodies are 400', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await tmp.write('_systems/acme/tokens.css', ':root {}\n');
+    await seedDesign(tmp, 'real');
+    const ctx = createChatContext(tmp);
+    const { call } = await serveRoutes(t, ctx);
+    assert.equal((await call('/open-request', { body: { system: 'acme' }, token: null })).status, 401);
+    assert.equal((await call('/open-request', { body: { system: 'acme' }, token: 'wrong' })).status, 401);
+    for (const system of ['../acme', '..', '/etc', 'C:\\Windows', 'acme/../acme', '', '%2e%2e', 'acme\u0000', 3, null]) {
+      const reply = await call('/open-request', { body: { system } });
+      assert.equal(reply.status, 400, `system ${JSON.stringify(system)}`);
+    }
+    for (const body of [{ system: 'acme', target: 'edit' }, { system: 'acme', target: 1 }, { system: 'acme', slug: 'real' }, { system: 'acme', intent: 'view' }]) {
+      const reply = await call('/open-request', { body });
+      assert.equal(reply.status, 400, JSON.stringify(body));
+    }
+    assert.deepEqual((await call('/open-request', { method: 'DELETE' })).json, { request: null });
+    assert.deepEqual(ctx.events, []);
+  });
 });

@@ -553,6 +553,11 @@ export const createFakeBackend = (): FakeBackend => {
     },
     // A Work Status row or a chat block asks the rail to open a design; the rail takes it once.
     'POST /open-request': ({ body }) => {
+      if ('system' in body) {
+        openRequest = { system: body.system, target: body.target ?? 'page', created: new Date().toISOString() };
+        emit(null, 'open');
+        return { ok: true };
+      }
       get(body.slug);
       openRequest = { slug: body.slug, intent: body.intent ?? 'view', created: new Date().toISOString() };
       emit(body.slug, 'open');

@@ -177,7 +177,7 @@ export const mountPage = (root: HTMLElement): void => {
   app.append(library.el);
 
   flows.watchItems(
-    (target) => (target.kind === 'open-build' ? openBuild(target.ticket) : openDesign(target.slug)),
+    (target) => (target.kind === 'open-build' ? openBuild(target.ticket) : target.kind === 'open-system' ? openSystem(target.system) : openDesign(target.slug)),
     (error) => toast('error', `Couldn’t open that design. ${errorText(error)}`),
   );
 };

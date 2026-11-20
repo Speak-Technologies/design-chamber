@@ -914,7 +914,8 @@ export type SystemState = {
   review: Partial<Record<SystemSection, { state: ReviewState; fingerprint: string; at: IsoDate; note?: string }>>;
   readyFingerprints: Partial<Record<SystemSection, string>> | null;
   sources: {
-    code: { directory: string; lastScan: IsoDate; partial: boolean; scanned: string[] } | null;
+    /** `forAgent`: the scan's files Design Chamber doesn't run, which the make prompt asks the agent to read (absent in older state). */
+    code: { directory: string; lastScan: IsoDate; partial: boolean; scanned: string[]; forAgent?: { path: string; why: string }[] } | null;
     brand: { files: string[] } | null;
     description: { text: string; preset: string | null } | null;
   };

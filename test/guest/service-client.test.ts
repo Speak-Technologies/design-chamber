@@ -209,3 +209,21 @@ test('thumbnail: a ready PNG is cached by key', async () => {
   await client.thumbnail('d', 'k2');
   assert.equal(calls, 2);
 });
+
+test('system wrappers: getProposal, stopBuild, undoStop and loadLivingPage call their routes', async () => {
+  const { requests, client } = recording(() => json(200, { ok: true }));
+  await client.getProposal('acme', 'pr_1');
+  await client.stopBuild('acme');
+  await client.stopBuild('acme', 'pr_1');
+  await client.undoStop('su_1');
+  await client.loadLivingPage('acme');
+  assert.deepEqual(requests, [
+    { method: 'GET', path: '/systems/acme/proposals/pr_1' },
+    { method: 'POST', path: '/systems/acme/build/stop', body: '{"proposalId":null}' },
+    { method: 'POST', path: '/systems/acme/build/stop', body: '{"proposalId":"pr_1"}' },
+    { method: 'POST', path: '/system-stops/su_1/undo', body: '{}' },
+    { method: 'GET', path: '/systems/acme/living-page' },
+  ]);
+  const failing = recording(() => json(404, { error: 'not-found', message: 'That design system is no longer in your Designs folder.' }));
+  await rejects(failing.client.loadLivingPage('gone'), 'not-found', /no longer/, 404);
+});

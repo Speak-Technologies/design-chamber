@@ -6,7 +6,7 @@ import { HostRequestError, type ComposeRequest, type GuestMessageItem, type Gues
 
 import { createFakeServices, createFakeService, type FakeServices } from '../../src/guest/fake-services.ts';
 import type { ChangeBatch } from '../../src/guest/changes.ts';
-import { createFlows, FlowError, MESSAGES, openInRail, planReconciliation, takesOpenRequest, type Flows, type ItemTarget } from '../../src/guest/flows.ts';
+import { createFlows, FlowError, MESSAGES, openInRail, openSystemInRail, planReconciliation, takesOpenRequest, type Flows, type ItemTarget } from '../../src/guest/flows.ts';
 import type { ChangeKind } from '../../src/shared/types.ts';
 import { sameDirectory } from '../../src/shared/path-compare.ts';
 import { createGuestHost } from '../../src/guest/host.ts';
@@ -748,7 +748,7 @@ test('items: our chip opens its design; foreign chips and bad slugs are ignored;
   assert.equal(await s.flows.handleItem({ ...build, data: { build: 7 } }), null);
 
   const opened: string[] = [];
-  const stop = s.flows.watchItems((target) => opened.push(target.kind === 'open-design' ? target.slug : target.ticket));
+  const stop = s.flows.watchItems((target) => opened.push(target.kind === 'open-design' ? target.slug : target.kind === 'open-build' ? target.ticket : target.system));
   s.host.setItem(chip);
   s.host.emitReady({ item: chip });
   s.host.setItem(chip);
@@ -852,6 +852,53 @@ test('openInRail: a failing clean-up DELETE still answers not-here; another host
   };
   await assert.rejects(openInRail({ client: t.client, host: t.host }, COFFEE, 'view'), (error: unknown) => error instanceof HostRequestError && error.code === 'DISABLED');
   assert.deepEqual(routes(t), ['POST /open-request', 'DELETE /open-request']);
+});
+
+test('openSystemInRail: the request names the system and target; the rail takes it as an open-system target', async () => {
+  const s = setup({ surface: 'panel' });
+  const designs: ItemTarget[] = [];
+  const systems: ItemTarget[] = [];
+  let feed: ((batch: ChangeBatch) => void) | null = null;
+  const stop = s.flows.watchOpenRequests(
+    (listener) => {
+      feed = listener;
+      return () => (feed = null);
+    },
+    (target) => designs.push(target),
+    (target) => systems.push(target),
+  );
+  await tick();
+  assert.equal(await openSystemInRail({ client: s.client, host: s.host }, 'acme', 'preview'), 'opened');
+  assert.deepEqual(JSON.parse(s.service.requests.find((request) => request.method === 'POST')?.body ?? '{}'), { system: 'acme', target: 'preview' });
+  assert.deepEqual(s.host.callsOf('openSurface'), [['plugin:design-chamber']]);
+  (feed as ((batch: ChangeBatch) => void) | null)?.(batchOf('open'));
+  await until(() => systems.length === 1, 'rail opened the system on the open event');
+  assert.deepEqual(systems, [{ kind: 'open-system', system: 'acme', target: 'preview' }]);
+  assert.deepEqual(designs, []);
+  stop();
+
+  assert.equal(await openSystemInRail({ client: s.client, host: s.host }, 'gone-system', 'board'), 'gone');
+  assert.deepEqual(s.host.callsOf('openSurface'), [['plugin:design-chamber']], 'a gone system does not open the rail');
+});
+
+test('a system request without an openSystem handler is taken and dropped, never opened as a design', async () => {
+  const s = setup({ surface: 'panel' });
+  const designs: ItemTarget[] = [];
+  await s.client.call('POST /open-request', { body: { system: 'acme', target: 'board' } });
+  const stop = s.flows.watchOpenRequests(() => () => {}, (target) => designs.push(target));
+  await until(() => routes(s).includes('DELETE /open-request'), 'taken on mount');
+  await tick();
+  assert.deepEqual(designs, []);
+  assert.deepEqual(await s.client.call('DELETE /open-request'), { request: null });
+  stop();
+});
+
+test('items: a system chip opens the system page; a bad id is ignored', async () => {
+  const s = setup({ surface: 'panel' });
+  const chip = { providerId: 'design-chamber', id: 'system:acme', title: 'Acme (design system)', url: '', data: { system: 'acme' } };
+  assert.deepEqual(await s.flows.handleItem(chip), { kind: 'open-system', system: 'acme', target: 'page' });
+  assert.equal(await s.flows.handleItem({ ...chip, data: { system: '../acme' } }), null);
+  assert.equal(await s.flows.handleItem({ ...chip, data: { system: 7 } }), null);
 });
 
 // ---- Phase 2 §7.3: the hand-edit ledger clears after each delivery outcome ----

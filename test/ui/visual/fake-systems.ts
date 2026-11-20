@@ -85,7 +85,6 @@ export const sampleSystems = (): SystemSummary[] => [
     revision: 9,
     home: { repo: 'tidepool-web', directory: TIDEPOOL },
     sources: { code: { directory: TIDEPOOL, lastScan: ago(DAY), partial: false }, brand: 0, description: false },
-    sharedRepoWith: 'Acme',
   }),
   blank({ id: 'acme', name: 'Acme', status: 'draft', building: true, updated: ago(MINUTE / 2), home: { repo: 'tidepool-web', directory: TIDEPOOL }, sharedRepoWith: 'Tidepool' }),
   blank({

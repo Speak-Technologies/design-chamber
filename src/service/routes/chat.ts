@@ -17,7 +17,7 @@ import { buildChecksPrompt, buildContinuePrompt, buildOfflinePrompt, buildRevisi
 import { buildRulesDoc } from '../../shared/agent/rules-doc.ts';
 import { buildDesignRestylePrompt, buildDesignSystemUpdatePrompt } from '../../shared/agent/system-prompts.ts';
 import { normalizeExternalUrl, sortFindings } from '../../shared/checks.ts';
-import type { AskElement, ChipResponse, FromMessageResponse, OkResponse, OpenIntent, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse, RenderMeta, RenderQuery } from '../../shared/api.ts';
+import type { AskElement, ChipResponse, FromMessageResponse, OkResponse, OpenIntent, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse, RenderMeta, RenderQuery, SystemOpenTarget } from '../../shared/api.ts';
 import {
   ASK_TEXT_MAX,
   BRIEF_MAX,
@@ -43,7 +43,7 @@ import { COPY_DIR, componentDiff, parseCopyRecordText, tokenDiff } from '../../s
 import { effectiveSystemChoice } from '../../shared/systems.ts';
 import type { EffectiveSystemChoice } from '../../shared/types.ts';
 import { ensureLinkService, LINK_NO_COPY_MESSAGE, LINK_SYSTEM_GONE_MESSAGE, linkDraftMessage } from '../systems/link.ts';
-import { ensureSystemStore } from '../systems/store.ts';
+import { ensureSystemStore, SYSTEM_GONE_MESSAGE } from '../systems/store.ts';
 import { agentSystemOf } from '../agent-system.ts';
 import type { AnchorState, Comment, DesignKind } from '../../shared/types.ts';
 import type { DesignRecord, ServiceContext } from '../context.ts';
@@ -174,8 +174,16 @@ const parseFromMessageBody = (body: unknown): { uploadId: string; sessionId: str
  * `POST /open-request` body. The slug is checked against `SLUG_PATTERN` here, before any path is
  * built from it; the store then resolves it under the root (containment) and says whether it exists.
  */
-export const parseOpenRequestBody = (body: unknown): { slug: string; intent: OpenIntent } => {
+export const parseOpenRequestBody = (body: unknown): { slug: string; intent: OpenIntent } | { system: string; target: SystemOpenTarget } => {
   const record = bodyOf(body, 'the open request');
+  if (Object.hasOwn(record, 'system')) {
+    // Phase 2.5: a system's page, board or living-page preview. A body naming both is refused.
+    const { system, target } = record;
+    if (Object.hasOwn(record, 'slug') || Object.hasOwn(record, 'intent')) throw new ApiError('bad-request', 'Send a design folder name or a design system, not both.');
+    if (typeof system !== 'string' || !SYSTEM_ID_PATTERN.test(system)) throw new ApiError('bad-slug', 'That is not a design system name.');
+    if (target !== undefined && target !== 'page' && target !== 'board' && target !== 'preview') throw new ApiError('bad-request', 'The target must be "page", "board" or "preview".');
+    return { system, target: target ?? 'page' };
+  }
   const { slug, intent } = record;
   if (typeof slug !== 'string' || !SLUG_PATTERN.test(slug)) throw new ApiError('bad-slug', 'That is not a design folder name.');
   if (intent !== undefined && intent !== 'view' && intent !== 'comment') throw new ApiError('bad-request', 'The intent must be "view" or "comment".');
@@ -404,6 +412,9 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
   let openRequest: { request: OpenRequest; at: number } | null = null;
   const leaveOpenRequest = (slug: string, intent: OpenIntent): void => {
     openRequest = { request: { slug, intent, created: new Date().toISOString() }, at: Date.now() };
+  };
+  const leaveSystemRequest = (system: string, target: SystemOpenTarget): void => {
+    openRequest = { request: { system, target, created: new Date().toISOString() }, at: Date.now() };
   };
 
   try {
@@ -639,7 +650,20 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
   // A Work Status row or a chat block: open an existing design in the rail. The `open` event
   // reaches a rail that is already up; one opened next takes the request on mount.
   router.on('POST /open-request', async ({ body }): Promise<OkResponse> => {
-    const { slug, intent } = parseOpenRequestBody(body);
+    const parsed = parseOpenRequestBody(body);
+    if ('system' in parsed) {
+      // The id passed SYSTEM_ID_PATTERN; the system store resolves it under the root (containment).
+      try {
+        await ensureSystemStore(ctx).dir(parsed.system);
+      } catch (error) {
+        if (error instanceof ApiError && error.code === 'not-found') throw new ApiError('not-found', SYSTEM_GONE_MESSAGE);
+        throw error;
+      }
+      leaveSystemRequest(parsed.system, parsed.target);
+      ctx.hub.emit({ slug: null, kind: 'open' });
+      return { ok: true };
+    }
+    const { slug, intent } = parsed;
     try {
       await ctx.store.dir(slug);
     } catch (error) {

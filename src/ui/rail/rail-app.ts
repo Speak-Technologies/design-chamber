@@ -183,9 +183,14 @@ export const mountRail = (root: HTMLElement): void => {
 
   // A chip click or "Open as page" opens the viewer here.
   flows.watchItems(
-    (target) => (target.kind === 'open-build' ? openBuild(target.ticket) : openViewer(target.slug)),
+    (target) => (target.kind === 'open-build' ? openBuild(target.ticket) : target.kind === 'open-system' ? openSystem(target.system) : openViewer(target.slug)),
     (error) => toast('error', `Couldn’t open that design. ${errorText(error)}`),
   );
   // "Open as page" (background frame), a Work Status row or a chat block leaves a design for us to open.
-  flows.watchOpenRequests((listener) => feed.subscribe(listener), (target) => openViewer(target.slug, { startIn: target.intent }));
+  // A system request opens the system page; its board / preview frame jump is the UI follow-up's.
+  flows.watchOpenRequests(
+    (listener) => feed.subscribe(listener),
+    (target) => openViewer(target.slug, { startIn: target.intent }),
+    (target) => openSystem(target.system),
+  );
 };

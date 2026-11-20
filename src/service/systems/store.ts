@@ -620,6 +620,8 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
       throw error;
     }
     const rows: SystemSummary[] = [];
+    /** Each row's state.created, for the shared-repo notice's order. */
+    const createdOf = new Map<string, string>();
     let usable = 0;
     for (const id of ids) {
       if (isReservedSystemId(id)) {
@@ -632,18 +634,28 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
         continue;
       }
       try {
-        rows.push(summaryOf(await detailOf(id)));
+        const detail = await detailOf(id);
+        createdOf.set(id, detail.created);
+        rows.push(summaryOf(detail));
       } catch (error) {
         // One broken system must not blank the whole list (loud in the log, graceful on screen).
         log.warn('systems.list-entry-failed', { id, error: error instanceof Error ? error.message : String(error) });
         rows.push(await blankSummary(root, id, FOLDER_UNREADABLE));
       }
     }
+    // The notice goes under the later-created system only, naming the first one made in that repo.
+    const madeBefore = (a: SystemSummary, b: SystemSummary): boolean => {
+      const ca = createdOf.get(a.id) ?? '';
+      const cb = createdOf.get(b.id) ?? '';
+      return ca === cb ? a.id < b.id : ca < cb;
+    };
     for (const row of rows) {
       if (row.home === 'internal') continue;
       const home = row.home;
-      const other = rows.find((candidate) => candidate !== row && candidate.home !== 'internal' && samePath(candidate.home.directory, home.directory));
-      row.sharedRepoWith = other?.name ?? null;
+      const earlier = rows
+        .filter((candidate) => candidate !== row && candidate.home !== 'internal' && samePath(candidate.home.directory, home.directory) && madeBefore(candidate, row))
+        .sort((a, b) => (madeBefore(a, b) ? -1 : 1));
+      row.sharedRepoWith = earlier[0]?.name ?? null;
     }
     return rows.sort((a, b) => (a.updated === b.updated ? a.id.localeCompare(b.id) : b.updated.localeCompare(a.updated)));
   };

@@ -132,6 +132,16 @@ describe('parseSystemState', () => {
     assert.equal(parsed.home?.kind, 'repo');
   });
 
+  test('sources.code keeps the scan\'s forAgent list; an older state without it parses unchanged', () => {
+    const code = { directory: '/abs/shop', lastScan: NOW, partial: false, scanned: ['src/a.css'] };
+    assert.deepEqual(parseSystemState({ sources: { code } }, 'acme', NOW).sources.code, code);
+    const forAgent = [{ path: 'tailwind.config.js', why: 'Tailwind config' }, { path: '', why: 'empty path' }, { path: 'x.ts' }, 'junk'];
+    assert.deepEqual(parseSystemState({ sources: { code: { ...code, forAgent } } }, 'acme', NOW).sources.code?.forAgent, [{ path: 'tailwind.config.js', why: 'Tailwind config' }]);
+    const many = Array.from({ length: 30 }, (_, n) => ({ path: `f${n}.js`, why: 'js' }));
+    assert.equal(parseSystemState({ sources: { code: { ...code, forAgent: many } } }, 'acme', NOW).sources.code?.forAgent?.length, 20);
+    assert.equal(parseSystemState({ sources: { code: { ...code, forAgent: 'nope' } } }, 'acme', NOW).sources.code?.forAgent, undefined);
+  });
+
   test('a name with a line break or over 60 characters falls back to the humanised id', () => {
     assert.equal(parseSystemState({ name: 'a\nb' }, 'acme', NOW).name, 'Acme');
     assert.equal(parseSystemState({ name: 'x'.repeat(61) }, 'acme', NOW).name, 'Acme');

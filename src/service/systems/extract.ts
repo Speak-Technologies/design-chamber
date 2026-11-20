@@ -768,7 +768,7 @@ export const buildSystemSeed = async (ctx: ServiceContext, input: CreateSystemBo
   return {
     write,
     code: {
-      source: { directory: scan.directory, lastScan: scan.at, partial: scan.summary.partial, scanned: scan.scanned },
+      source: { directory: scan.directory, lastScan: scan.at, partial: scan.summary.partial, scanned: scan.scanned, forAgent: scan.summary.forAgent },
       provenance,
     },
   };

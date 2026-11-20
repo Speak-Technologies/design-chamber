@@ -16,13 +16,17 @@ import {
   routePath,
   splitRouteKey,
   type ApiErrorCode,
+  type LivingPageResponse,
+  type ProposalResponse,
   type RenderMeta,
   type RouteBody,
   type RouteKey,
   type RouteParams,
   type RouteQuery,
   type RouteResponse,
+  type StopBuildResponse,
   type ThumbnailResponse,
+  type UndoStopResponse,
 } from '../shared/api.ts';
 import {
   BINARY_UPLOAD_TOTAL_MAX,
@@ -118,6 +122,14 @@ export type ServiceClient = {
   uploadBinary(file: Blob, onProgress?: (fraction: number) => void): Promise<string>;
   /** Thumbnail state; a `ready` PNG is served from memory when `key` matches a cached one. */
   thumbnail(slug: string, key?: string | null): Promise<ThumbnailResponse>;
+  /** A system's proposal as the SystemAsk diff shows it (Phase 2.5 rev 3). */
+  getProposal(systemId: string, proposalId: string): Promise<ProposalResponse>;
+  /** Stop a system's build (optionally the proposal it was building); the answer carries the Undo id and its deadline. */
+  stopBuild(systemId: string, proposalId?: string | null): Promise<StopBuildResponse>;
+  /** Undo a stop while its `until` holds. */
+  undoStop(undoId: string): Promise<UndoStopResponse>;
+  /** A repo-backed system's living-page view (state, sentence, what the preview can show). */
+  loadLivingPage(systemId: string): Promise<LivingPageResponse>;
 };
 
 const queryOf = (query: Record<string, string | undefined> | undefined): Record<string, string> | undefined => {
@@ -407,5 +419,10 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
     return answer;
   };
 
-  return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail };
+  const getProposal = (systemId: string, proposalId: string): Promise<ProposalResponse> => call('GET /systems/:id/proposals/:proposalId', { params: { id: systemId, proposalId } });
+  const stopBuild = (systemId: string, proposalId: string | null = null): Promise<StopBuildResponse> => call('POST /systems/:id/build/stop', { params: { id: systemId }, body: { proposalId } });
+  const undoStop = (undoId: string): Promise<UndoStopResponse> => call('POST /system-stops/:undoId/undo', { params: { undoId }, body: {} });
+  const loadLivingPage = (systemId: string): Promise<LivingPageResponse> => call('GET /systems/:id/living-page', { params: { id: systemId } });
+
+  return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
 };

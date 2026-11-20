@@ -304,6 +304,7 @@ test('making a system from a scan: seeded tokens.css and system.json, ticked fon
   assert.equal(state.revision.n, 1);
   assert.equal(state.sources.code?.directory, project.root);
   assert.deepEqual(state.sources.code?.scanned.sort(), ['src/styles/theme.css', 'src/vars.scss', 'tokens/base.json']);
+  assert.deepEqual(state.sources.code?.forAgent?.map((one) => one.path).sort(), ['docs/DESIGN.md', 'src/styles/theme.css', 'src/vars.scss', 'tailwind.config.js'], 'kept for the make message');
   assert.deepEqual(state.provenance['--brand-500'], { file: 'src/styles/theme.css', line: 2, light: '#1a73e8', dark: '#8ab4f8' });
   assert.equal(system.tokens.find((token) => token.name === '--brand-500')?.fromCode, true);
   assert.equal(system.revision, 1);

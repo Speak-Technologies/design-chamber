@@ -759,7 +759,7 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
       folders,
       provenance,
       undoState: { provenance: before, code: previous },
-      code: { directory: scan.directory, lastScan: scan.at, partial: scan.summary.partial, scanned: scan.scanned },
+      code: { directory: scan.directory, lastScan: scan.at, partial: scan.summary.partial, scanned: scan.scanned, forAgent: scan.summary.forAgent },
       counts,
       directoryChanged: previous !== null && !samePath(previous.directory, scan.directory),
       label: `Re-synced ${state.name}: ${counts.changed} changed, ${counts.added} added, ${counts.removed} removed.`,

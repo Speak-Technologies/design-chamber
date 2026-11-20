@@ -216,7 +216,7 @@ export const runBuildScan = async (ctx: ServiceContext, id: string, directory: s
     await guardSystemWrite(ctx.settings.root(), file, id, ctx.log);
     await writeFileAtomic(file, scanJsonOf(scanned), { createDirs: false });
     await systems.updateStateLocked(id, (current) =>
-      current.sources.code === null ? null : { ...current, sources: { ...current.sources, code: { ...current.sources.code, lastScan: scanned.at, partial: scanned.summary.partial, scanned: scanned.scanned.slice(0, SCAN_FILES_MAX) } } },
+      current.sources.code === null ? null : { ...current, sources: { ...current.sources, code: { ...current.sources.code, lastScan: scanned.at, partial: scanned.summary.partial, scanned: scanned.scanned.slice(0, SCAN_FILES_MAX), forAgent: scanned.summary.forAgent.slice(0, SCAN_FOR_AGENT_MAX) } } },
     );
   });
   ctx.log.info('systems.build-scan', { system: id, tokens: scanned.tokens.length, files: scanned.scanned.length, partial: scanned.summary.partial });

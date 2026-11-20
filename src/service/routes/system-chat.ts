@@ -162,9 +162,7 @@ export function registerSystemChatRoutes(router: Router, ctx: ServiceContext): v
             system,
             projectDirectory: state.sources.code?.directory ?? state.build?.projectDirectory ?? null,
             scanned: state.sources.code?.scanned ?? [],
-            // The scan's forAgent list lives in the scan job, not in state.json; the agent reads
-            // those files itself (the make message tells it to). T13's scan.json seeds the build flow.
-            forAgent: [],
+            forAgent: state.sources.code?.forAgent ?? [],
             brandFiles: (state.sources.brand?.files ?? []).map((file) => joinFolder(source.dir, file)),
             description: state.sources.description?.text ?? null,
             preset: state.sources.description?.preset ?? null,

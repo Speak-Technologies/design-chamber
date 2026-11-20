@@ -185,3 +185,40 @@ test('a snapshot changed outside Design Chamber is marked tampered, a link answe
   await link.link(slug, { to: id, by: 'agent', reason: 'system-change' });
   assert.ok((await lstat(path.join(rig.root, slug, 'system', 'tokens.css'))).isFile());
 });
+
+test("the sheet's stamp is the detail's snapshot treeHash: SNAPSHOT.json's own, and Apply takes it", async (t) => {
+  const rig = await setupRepo(t);
+  const id = await rig.repoSystem();
+  assert.equal((await rig.systems.detail(id)).snapshot, null, 'no snapshot yet: the stamp is "none"');
+  await refreshSnapshot(rig.ctx, id, { by: 'agent' });
+  const detail = await rig.systems.detail(id);
+  const record = JSON.parse(await readFile(path.join(await rig.systems.dir(id), 'snapshot', 'SNAPSHOT.json'), 'utf8')) as { treeHash: string };
+  assert.match(detail.snapshot?.treeHash ?? '', /^[0-9a-f]{64}$/);
+  assert.equal(detail.snapshot?.treeHash, record.treeHash);
+
+  await writeFile(rig.repo('design-system/OVERVIEW.md'), 'Changed in the repo.\n');
+  const reviewed = await scan(rig, id);
+  // What the system page sends: `current.snapshot?.treeHash ?? 'none'`.
+  const stamp = (await rig.systems.detail(id)).snapshot?.treeHash ?? 'none';
+  const applied = await applyRepoResync(rig.ctx, id, { scanId: reviewed.scanId, stamp });
+  assert.equal(applied.version?.reason, 'resync');
+  assert.notEqual((await rig.systems.detail(id)).snapshot?.treeHash, stamp, 'the stamp moved with the new snapshot');
+});
+
+test('two systems in one repo: only the later-created one carries the shared-repo notice', async (t) => {
+  const rig = await setupRepo(t);
+  const first = await rig.repoSystem('Tidepool');
+  const second = await rig.repoSystem('Acme', { folder: 'other-system', livingPage: 'other-system/index.html' });
+  const setCreated = (id: string, created: string) => rig.systems.withLock(id, () => rig.systems.updateStateLocked(id, (state) => ({ ...state, created })));
+  await setCreated(first, '2026-11-01T09:00:00.000Z');
+  await setCreated(second, '2026-11-02T09:00:00.000Z');
+  const rows = await rig.systems.list();
+  assert.equal(rows.find((row) => row.id === first)?.sharedRepoWith, null);
+  assert.equal(rows.find((row) => row.id === second)?.sharedRepoWith, 'Tidepool');
+
+  // The order follows created, not the list's order by update.
+  await setCreated(first, '2026-11-03T09:00:00.000Z');
+  const swapped = await rig.systems.list();
+  assert.equal(swapped.find((row) => row.id === first)?.sharedRepoWith, 'Acme');
+  assert.equal(swapped.find((row) => row.id === second)?.sharedRepoWith, null);
+});

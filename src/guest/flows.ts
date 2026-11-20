@@ -25,10 +25,10 @@ import {
 } from '@openchamber/sdk';
 
 import { extractHtml } from '../shared/agent/html-extract.ts';
-import type { AskElement, OpenIntent, PromptBody, PromptResponse } from '../shared/api.ts';
+import type { AskElement, OpenIntent, PromptBody, PromptResponse, SystemOpenTarget } from '../shared/api.ts';
 import type { AnchorState, BuildChipData, Chip, DesignChip, DesignKind, Outbox } from '../shared/types.ts';
 import { CHIP_PROVIDER_ID } from '../shared/types.ts';
-import { OUTBOX_TTL_MS, SLUG_PATTERN, SYSTEM_BUILD_TICKET_PATTERN, TURN_SNAPSHOT_DEDUPE_MS } from '../shared/limits.ts';
+import { OUTBOX_TTL_MS, SLUG_PATTERN, SYSTEM_BUILD_TICKET_PATTERN, SYSTEM_ID_PATTERN, TURN_SNAPSHOT_DEDUPE_MS } from '../shared/limits.ts';
 import { sameDirectory } from '../shared/path-compare.ts';
 import type { ChangeBatch } from './changes.ts';
 import type { GuestHost, HostLike } from './host.ts';
@@ -169,7 +169,9 @@ export type DeliverOutboxResult = 'delivered' | 'composed' | 'none';
 export type DesignTarget = { kind: 'open-design'; slug: string; intent?: OpenIntent };
 /** A `system-build:<ticket>` chip: the rail shows how that build is going (Phase 2.5 §9.6). */
 export type BuildTarget = { kind: 'open-build'; ticket: string };
-export type ItemTarget = DesignTarget | BuildTarget;
+/** A design system to show: its page, its board, or the living page's preview frame (Phase 2.5; a `system:<id>` chip opens the page). */
+export type SystemTarget = { kind: 'open-system'; system: string; target: SystemOpenTarget };
+export type ItemTarget = DesignTarget | BuildTarget | SystemTarget;
 
 /** Change batches after which the rail looks for an open request: a reset, a new design (`added`), or an `open` request. */
 export const takesOpenRequest = (batch: ChangeBatch): boolean => batch.reset || batch.events.some((event) => event.kind === 'added' || event.kind === 'open');
@@ -188,9 +190,25 @@ export const openInRail = async (
   deps: { client: ServiceClient; host: Pick<HostLike, 'openSurface'> },
   slug: string,
   intent: OpenIntent,
+): Promise<OpenInRailOutcome> => leaveAndOpen(deps, { slug, intent });
+
+/**
+ * As `openInRail`, for a design system (a SystemAsk block's **Preview living page** / **Open the
+ * board**): the rail opens the system page, and for `preview` its living-page preview frame.
+ * `gone`: the system is no longer in the Designs folder.
+ */
+export const openSystemInRail = async (
+  deps: { client: ServiceClient; host: Pick<HostLike, 'openSurface'> },
+  system: string,
+  target: SystemOpenTarget,
+): Promise<OpenInRailOutcome> => leaveAndOpen(deps, { system, target });
+
+const leaveAndOpen = async (
+  deps: { client: ServiceClient; host: Pick<HostLike, 'openSurface'> },
+  body: { slug: string; intent: OpenIntent } | { system: string; target: SystemOpenTarget },
 ): Promise<OpenInRailOutcome> => {
   try {
-    await deps.client.call('POST /open-request', { body: { slug, intent } });
+    await deps.client.call('POST /open-request', { body });
   } catch (error) {
     if (isServiceError(error, 'not-found')) return 'gone';
     throw error;
@@ -269,7 +287,12 @@ export type Flows = {
    * block on mount and after every batch `takesOpenRequest` accepts (the rail may already be
    * open), and open it with its intent. `subscribe` is the change feed's.
    */
-  watchOpenRequests(subscribe: (listener: (batch: ChangeBatch) => void) => () => void, open: (target: DesignTarget) => void): () => void;
+  watchOpenRequests(
+    subscribe: (listener: (batch: ChangeBatch) => void) => () => void,
+    open: (target: DesignTarget) => void,
+    /** A system request (Phase 2.5); without it a system request is taken and dropped. */
+    openSystem?: (target: SystemTarget) => void,
+  ): () => void;
 };
 
 export type FlowDeps = { host: GuestHost; client: ServiceClient; now?: () => number };
@@ -644,8 +667,9 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
         if (item.providerId !== CHIP_PROVIDER_ID) return null;
         const data = item.data;
         if (typeof data !== 'object' || data === null || Array.isArray(data)) return null;
-        const { slug, build } = data;
+        const { slug, build, system } = data;
         if (typeof build === 'string') return SYSTEM_BUILD_TICKET_PATTERN.test(build) ? { kind: 'open-build', ticket: build } : null;
+        if (typeof system === 'string') return SYSTEM_ID_PATTERN.test(system) ? { kind: 'open-system', system, target: 'page' } : null;
         return typeof slug === 'string' && SLUG_PATTERN.test(slug) ? { kind: 'open-design', slug } : null;
       }
       if (isGuestMessageItem(item) && item.action === OPEN_AS_PAGE_ACTION) {
@@ -740,12 +764,18 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       });
     },
 
-    watchOpenRequests: (subscribe, open) => {
+    watchOpenRequests: (subscribe, open, openSystem) => {
       let stopped = false;
       const take = (): void => {
         client.call('DELETE /open-request').then(
           ({ request }) => {
-            if (request && !stopped && SLUG_PATTERN.test(request.slug)) {
+            if (!request || stopped) return;
+            if ('system' in request) {
+              const target = request.target === 'board' || request.target === 'preview' ? request.target : 'page';
+              if (SYSTEM_ID_PATTERN.test(request.system)) openSystem?.({ kind: 'open-system', system: request.system, target });
+              return;
+            }
+            if (SLUG_PATTERN.test(request.slug)) {
               open({ kind: 'open-design', slug: request.slug, intent: request.intent === 'comment' ? 'comment' : 'view' });
             }
           },
