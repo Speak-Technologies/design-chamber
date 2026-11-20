@@ -1,4 +1,4 @@
-// Chat block frame, shared by DesignCard and DirectionPick (documentation/specs/phase-1-5-sdk-2-7.md
+// Chat block frame, shared by DesignCard, DirectionPick and SystemAsk (documentation/specs/phase-1-5-sdk-2-7.md
 // §U7, §U8). The host mounts it in an agent's reply with the panel's grants and hands it the call
 // (`onBlock`); the arguments are written by a model, so they go through `parseBlockArgs` before
 // anything is drawn or read. The frame follows the host theme on every `ready` and tells the host how
@@ -8,11 +8,13 @@ import { GUEST_BLOCK_HEIGHT_MAX, type GuestBlockCall, type ToastKind } from '@op
 import { applyHostReady, mountSpinner } from '@openchamber/sdk/ui';
 
 import { getGuestHost } from '../../guest/host.ts';
+import { PANEL_SURFACE_ID } from '../../guest/flows.ts';
 import { createServiceClient } from '../../guest/service-client.ts';
 import { parseBlockArgs } from '../model/block-args.ts';
 import { notice, type BlockContext, type BlockView } from './block-view.ts';
 import { mountDesignCard } from './design-card.ts';
 import { mountDirectionPick } from './direction-pick.ts';
+import { mountSystemAsk } from './system-ask.ts';
 
 const root = document.querySelector<HTMLElement>('#root');
 if (!root) throw new Error('Design Chamber: #root is missing from blocks/index.html.');
@@ -24,6 +26,16 @@ const ctx: BlockContext = {
   host: guestHost.client,
   toast: (kind: ToastKind, message: string) => {
     guestHost.client.toast({ kind, message, dismiss: kind === 'error' }).catch((error: unknown) => console.warn('Design Chamber: toast failed', error));
+  },
+  // The service has no open request for a system yet (flows.openSystemInRail), so this opens the rail
+  // and the toast tells the user where the preview is.
+  openSystemPreview: async () => {
+    try {
+      await guestHost.client.openSurface(PANEL_SURFACE_ID);
+      return 'opened';
+    } catch {
+      return 'not-here';
+    }
   },
 };
 
@@ -62,12 +74,16 @@ const draw = (call: GuestBlockCall): BlockView | null => {
     blockRoot.replaceChildren(
       parsed.reason === 'bad-slug'
         ? notice({ icon: 'alert', text: 'This card doesn’t point to a design.' })
-        : notice({ icon: 'alert', text: 'This question has no options to pick from.' }),
+        : parsed.reason === 'bad-system-ask'
+          ? notice({ icon: 'alert', text: 'This question couldn’t be read. Answer in the chat instead.' })
+          : notice({ icon: 'alert', text: 'This question has no options to pick from.' }),
     );
     return null;
   }
   const { block } = parsed;
-  return block.name === 'DesignCard' ? mountDesignCard(blockRoot, ctx, block.slug) : mountDirectionPick(blockRoot, ctx, block.question, block.options, call.answered);
+  if (block.name === 'DesignCard') return mountDesignCard(blockRoot, ctx, block.slug);
+  if (block.name === 'SystemAsk') return mountSystemAsk(blockRoot, ctx, block.ask, __DC_SYSTEM_QUESTIONS__, call.answered);
+  return mountDirectionPick(blockRoot, ctx, block.question, block.options, call.answered);
 };
 
 guestHost.client.onBlock((call) => {

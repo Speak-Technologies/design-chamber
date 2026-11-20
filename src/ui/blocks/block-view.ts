@@ -11,9 +11,11 @@ import { icon, type IconName } from '../components/icons.ts';
 
 export type BlockContext = {
   client: ServiceClient;
-  host: Pick<HostLike, 'openSurface' | 'answerBlock'>;
+  host: Pick<HostLike, 'openSurface' | 'answerBlock' | 'writeClipboard'>;
   /** Best effort: a toast that cannot be shown is logged, never thrown. */
   toast: (kind: ToastKind, message: string) => void;
+  /** Opens a system's living page or board preview in the rail; `'not-here'` when the host has no rail to open. */
+  openSystemPreview: (systemId: string, which: 'living-page-preview' | 'board-preview') => Promise<'opened' | 'not-here'>;
 };
 
 export type BlockView = {

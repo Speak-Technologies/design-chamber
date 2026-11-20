@@ -163,7 +163,8 @@ const systemQuestions = await buildBuilderSkill({ packageRoot: root, distDir: di
 // (10c) Chat block frame, with the interview baked in as __DC_SYSTEM_QUESTIONS__ (the __DC_BRIDGE__
 // pattern): the block's fixed wording and the skill's interview are the same file at the same build.
 await build({ ...browser, entryPoints: [at('src', 'ui', 'blocks', 'main.ts')], outfile: at('dist', 'blocks', 'main.js'), define: { __DC_SYSTEM_QUESTIONS__: JSON.stringify(systemQuestions) } });
-if ((await readFile(at('dist', 'blocks', 'main.js'), 'utf8')).includes('__DC_SYSTEM_QUESTIONS__')) {
+// esbuild leaves a "// <define:NAME>" comment above a replaced value; only a use left in code counts.
+if ((await readFile(at('dist', 'blocks', 'main.js'), 'utf8')).replace(/^\s*\/\/ <define:__DC_SYSTEM_QUESTIONS__>\s*$/gm, '').includes('__DC_SYSTEM_QUESTIONS__')) {
   throw new Error('build: __DC_SYSTEM_QUESTIONS__ was not replaced in the blocks bundle.');
 }
 await copyFile(at('src', 'ui', 'blocks', 'index.html'), at('dist', 'blocks', 'index.html'));

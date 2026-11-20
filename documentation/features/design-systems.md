@@ -51,6 +51,18 @@ Each row: name, **Draft** or **Ready**, where it lives, at most two badges by pr
 ## Using a system from a design
 A design shows its system as a chip in the viewer, with an update banner, a review sheet, Change… and Undo ([Viewer: a design's system](../pages/viewer.md)). Rows and cards in the designs list carry a **System updated** badge when the system has a newer revision than the design's copy. Defaults and project pins live in Settings, and the New design dialog preselects from them ([Settings: Design systems](../pages/settings.md)). Code: `src/ui/components/system-chip.ts`, `src/ui/model/design-system-model.ts`.
 
+## Asking in chat (the SystemAsk block)
+A `/design-system` chat asks its questions in place, as one chat block with three views (spec §8.12). It sits in the chat's reply and answers the chat with one message.
+
+- **Round one, "Before I read the code" (Round 1 of 2).** Where the system lives, whether to fix the code or only describe it, which parts to cover (checkboxes), and dark mode. The recommended answer is bold and already picked. **Go with these** sends the picks. With no project folder open in the chat, home and mode are hidden and a line says the system will live in Design Chamber and the code stays untouched.
+- **Round two, "A few calls from the code" (Round 2 of 2).** Only the calls the agent found, each with its fixed options and "From the agent:" lines for why and what it proposes. Picking **Custom** points to the note. A call the block can't show is counted in a line ("1 question couldn't be shown; answer it in the chat.").
+- **The diff.** The header names the system (read from the service, never from the block's text). Each part (System files, Token fixes, Docs, Living page) has a switch, on by default, with its file count. Files open to their patch as plain text; unlisted use rewrites are summed up ("214 uses in 38 files. Listed in the chat."). **Preview living page** and **Open the board** open Design Chamber in the rail. **Approve** reads "Approve all 4 parts" or "Approve 3 of 4 parts" and is off, with the reason, when no part is on or the proposal has problems. **Decline** swaps the footer to **Describe only instead** (fix mode only), **Stop** and **Back**. Stop removes the draft first and then tells the chat; **Undo** brings it back for a few minutes. A 409 shows its own sentence and sends nothing.
+- **Both rounds have their own note box.** A note alone never counts as approval.
+- **Read-only states.** Superseded, rewritten, unknown, unreadable and expired proposals or tickets show a sentence and no buttons. An answered block shows what was picked. If the host won't take the answer, the choices stay and **Copy my answer** appears; any other refusal says "Couldn't send your answer. Type it in the chat instead." and keeps the form.
+- **Fresh.** The block rereads on window focus and every 5 seconds while it is visible and unanswered.
+
+Code: `src/ui/blocks/system-ask*.ts`, `src/ui/model/system-ask-model.ts` (pure) and `parseSystemAskArgs` in `src/ui/model/block-args.ts`. Visual check: `test/ui/visual/scenarios/system-ask.mjs`.
+
 ## Not in this version
 **Continue in chat** and **Pin to project…** in the row menu, and building a repo-backed system from the list.
 

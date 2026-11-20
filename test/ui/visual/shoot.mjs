@@ -29,6 +29,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { build } from 'esbuild';
 
+import { parseSystemQuestions } from '../../../src/shared/agent/system-questions.ts';
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..', '..');
 const args = process.argv.slice(2);
@@ -50,7 +52,9 @@ if (!chromePath) throw new Error('No Chrome or Edge found; set DC_TEST_CHROME.')
 
 const browser = { bundle: true, format: 'iife', platform: 'browser', target: ['es2020'], write: false, logLevel: 'warning', legalComments: 'none' };
 const bridge = (await build({ ...browser, entryPoints: [path.join(root, 'src', 'guest', 'bridge', 'bridge.ts')], minify: true })).outputFiles[0].text;
-const define = { __DC_BRIDGE__: JSON.stringify(bridge) };
+// The blocks bundle has the interview questions baked in, as the real build does (scripts/build.mjs 10c).
+const systemQuestions = parseSystemQuestions(readFileSync(path.join(root, 'rules', 'SYSTEM-QUESTIONS.md'), 'utf8'));
+const define = { __DC_BRIDGE__: JSON.stringify(bridge), __DC_SYSTEM_QUESTIONS__: JSON.stringify(systemQuestions) };
 const harnessJs = (await build({ ...browser, entryPoints: [path.join(here, 'fake-main.ts')], define })).outputFiles[0].text;
 
 // A frame's real entry point, with `@openchamber/sdk` swapped for fake-sdk.ts (the real SDK with

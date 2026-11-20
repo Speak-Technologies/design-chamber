@@ -86,6 +86,7 @@ test('the real build ships both skills, disjoint from the commands, and bakes th
   const builder = await readFile(path.join(REPO, 'dist', 'skills', SYSTEM_SKILL_NAME, 'SKILL.md'), 'utf8');
   assert.ok(builder.length <= SYSTEM_SKILL_TEXT_MAX, `${builder.length}`);
   const blocks = await readFile(path.join(REPO, 'dist', 'blocks', 'main.js'), 'utf8');
-  assert.ok(!blocks.includes('__DC_SYSTEM_QUESTIONS__'), 'the define was replaced (or nothing references it yet)');
+  // esbuild leaves a "// <define:NAME>" comment above a replaced value; only a use left in code counts.
+  assert.ok(!blocks.replace(/^\s*\/\/ <define:__DC_SYSTEM_QUESTIONS__>\s*$/gm, '').includes('__DC_SYSTEM_QUESTIONS__'), 'the define was replaced');
   t.diagnostic(`builder skill ${builder.length} characters; blocks bundle ${blocks.length} bytes`);
 });
