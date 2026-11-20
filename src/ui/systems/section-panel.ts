@@ -81,7 +81,7 @@ const fieldEditor = (options: FieldOptions): HTMLElement => {
   const display = (): void => {
     root.replaceChildren();
     if (options.lock) {
-      root.append(h('span', { class: `dc-sp-value dc-sp-value-locked${options.mono ? ' dc-mono' : ''}`, title: options.lock }, shown ?? '—'), h('span', { class: 'dc-sp-lock' }, options.lock));
+      root.append(h('span', { class: `dc-sp-value dc-sp-value-locked${options.mono ? ' dc-mono' : ''}`, title: options.lock }, shown ?? 'Not set'), h('span', { class: 'dc-sp-lock' }, options.lock));
       return;
     }
     const button = h(
