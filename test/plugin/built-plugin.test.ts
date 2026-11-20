@@ -49,8 +49,9 @@ test('setup registers exactly one tool, design_check, with plain JSON Schema inp
   // Plain JSON Schema: survives a JSON round trip unchanged and holds no functions or zod objects.
   assert.deepEqual(JSON.parse(JSON.stringify(tool.input)), tool.input);
   assert.equal(tool.input.type, 'object');
-  assert.deepEqual(tool.input.required, ['design']);
-  assert.deepEqual(Object.keys(tool.input.properties as object).sort(), ['design', 'screens', 'static']);
+  // One of design or system (Phase 2.5 §10.2): the schema can't say "exactly one", parseToolInput does.
+  assert.equal(tool.input.required, undefined);
+  assert.deepEqual(Object.keys(tool.input.properties as object).sort(), ['design', 'screens', 'static', 'system']);
   assert.equal(typeof tool.execute, 'function');
 });
 

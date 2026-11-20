@@ -195,8 +195,12 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
   // Phase 2.5 §10.1: a design against its linked system.
   'system-drift': {
     severity: 'warning',
+    // `part: 'system-files'` when the tokens couldn't be compared (the system no longer holds the
+    // copy's original tokens.css) or other copy files changed: the files are counted instead.
     sentence: (f) =>
-      `This design's copy of ${systemNameOf(f)} was changed: ${num(f.params?.count)} tokens differ from revision ${num(f.params?.revision)}. Put them back, or keep them as this design's own overrides.`,
+      f.params?.part === 'system-files'
+        ? `This design's copy of ${systemNameOf(f)} was changed: ${num(f.params?.count)} ${f.params?.count === 1 ? 'file differs' : 'files differ'} from revision ${num(f.params?.revision)}. Put them back, or keep the changes in this design's own tokens.css.`
+        : `This design's copy of ${systemNameOf(f)} was changed: ${num(f.params?.count)} tokens differ from revision ${num(f.params?.revision)}. Put them back, or keep them as this design's own overrides.`,
   },
   'system-copy-missing': {
     severity: 'warning',

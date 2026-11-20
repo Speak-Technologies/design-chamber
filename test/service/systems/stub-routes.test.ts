@@ -135,6 +135,13 @@ const BUILT: ReadonlySet<RouteKey> = new Set<RouteKey>([
   'GET /designs/:slug/system',
   'GET /designs/:slug/system/preview',
   'POST /designs/:slug/system',
+  // T10: test/service/check/system-checks.test.ts.
+  'GET /systems/:id/checks',
+  // T12a: test/service/systems/system-build-routes.test.ts.
+  'POST /systems/chip',
+  'GET /system-builds/:ticket',
+  'POST /systems/:id/build/stop',
+  'POST /system-stops/:undoId/undo',
   'GET /folders',
   'POST /folders',
   'PATCH /folders/:folderId',

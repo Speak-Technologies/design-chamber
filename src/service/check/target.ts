@@ -4,7 +4,8 @@
 // folder, the root itself, a UNC or drive path outside the root, a plain folder all end in the
 // same refusal. Pure over an injected path flavour, realpath and design test.
 
-import { SLUG_PATTERN } from '../../shared/limits.ts';
+import { SLUG_PATTERN, SYSTEM_ID_PATTERN } from '../../shared/limits.ts';
+import { isReservedSystemId, SYSTEMS_DIR } from '../../shared/system-json.ts';
 import { samePath, type PathModule } from '../paths.ts';
 
 export type TargetDeps = {
@@ -18,6 +19,41 @@ export type TargetDeps = {
 export type TargetResult = { ok: true; slug: string; dir: string; root: string } | { ok: false; message: string };
 
 const refusal = (root: string): TargetResult => ({ ok: false, message: `That is not a design in ${root}.` });
+
+export type SystemTargetDeps = Omit<TargetDeps, 'isDesignFolder'> & {
+  /** A real folder (lstat, never a link). */
+  isRealDirectory: (dir: string) => Promise<boolean>;
+};
+
+export type SystemTargetResult = { ok: true; id: string; dir: string; root: string } | { ok: false; message: string };
+
+/**
+ * Which design system `dc check --system <id>` checks (Phase 2.5 §10.2): the id must be a system id
+ * (never `none` or `ask`, never a path), and `<root>/_systems/<id>` a real folder whose realpath is
+ * the lexical path under the realpath'd root, so a link at `_systems` or at `<id>` is refused.
+ */
+export const resolveSystemTarget = async (input: { id: string; root: string }, deps: SystemTargetDeps): Promise<SystemTargetResult> => {
+  const { id, root } = input;
+  const refused: SystemTargetResult = { ok: false, message: `That is not a design system in ${root}.` };
+  if (!SYSTEM_ID_PATTERN.test(id) || isReservedSystemId(id)) return refused;
+  let realRoot: string;
+  try {
+    realRoot = await deps.realpath(deps.path.resolve(root));
+  } catch {
+    return { ok: false, message: `The designs folder ${root} does not exist.` };
+  }
+  const lexical = deps.path.join(realRoot, SYSTEMS_DIR, id);
+  let real: string;
+  try {
+    real = await deps.realpath(lexical);
+  } catch {
+    return refused;
+  }
+  if (!samePath(real, lexical, deps.path, deps.platform)) return refused;
+  if (!samePath(deps.path.dirname(deps.path.dirname(real)), realRoot, deps.path, deps.platform)) return refused;
+  if (!(await deps.isRealDirectory(real))) return refused;
+  return { ok: true, id, dir: real, root: realRoot };
+};
 
 export const resolveTarget = async (input: { arg: string; root: string; cwd: string }, deps: TargetDeps): Promise<TargetResult> => {
   const { arg, root, cwd } = input;

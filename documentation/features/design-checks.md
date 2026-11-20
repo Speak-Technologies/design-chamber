@@ -103,6 +103,45 @@ reported as an ignored `design.json` field, as before. The five-per-kind cap app
 Static checks (the files) run on every change. Rendering runs when the agent runs the command, or
 when the user asks (`POST /designs/:slug/checks/run`, one design at a time).
 
+## A design that uses a design system
+When a design has a readable copy of a design system (`system/COPY.json`), the token checks read the
+system's `tokens.css` (in `system/`) together with the design's own, and name the system when the
+finding is about the system's tokens: "screens/home.html redefines 3 tokens from the design system
+Acme. Use the system's values, or ask the user to change the system." and "… has 7 hardcoded
+colours although the design system Acme defines colours. Use its tokens." A token only the design's
+own `tokens.css` defines keeps the old wording. Without a system nothing changes.
+
+Four more warnings come from the copy itself:
+
+- **Drift:** a file under `system/` differs from what `COPY.json` recorded. When the system still
+  holds the `tokens.css` the copy started from, the warning counts and names the tokens ("3 tokens
+  differ from revision 6"); otherwise it counts the changed files. A change that only moves
+  whitespace in `tokens.css` is not drift.
+- **Missing files** in the copy, by name.
+- **An unreadable `COPY.json`**: Design Chamber can't tell which system the design uses.
+- **The agent's `systemChoice`** names a system that isn't in this Designs folder or is still a
+  draft. A design already linked to the system it asked for gets no such warning.
+
+Overrides are never drift. They live in the design's own `tokens.css`, which is also where the
+Tweaks panel writes, so a tweak on a system token is an override. "A newer version of the system
+exists" is never a finding; the viewer's banner says that.
+
+## Checking a design system
+`dc check --system <id> [--json]` and `design_check { "system": "<id>" }` check one system in
+`<designs folder>/_systems/<id>`. The id must be a system id (never a path, never `none` or `ask`),
+and the folder must be a real folder, not a link. The check reads files only (no browser), writes its
+report to `<system>/.chamber/check.json`, and exits 0, 1 or 2 as for a design. `--screen` doesn't
+apply, and giving a design and a system together is refused. `GET /systems/:id/checks` answers the
+same findings for the system page, behind the service token, and writes nothing.
+
+| Severity | Finding |
+|---|---|
+| Error | `system.json` isn't valid JSON (only this is said then) · a `tokens.css` value isn't valid for its section · a listed font file is missing · a component example loads files from the internet |
+| Warning | entries in `system.json` Design Chamber can't read (up to three named) · no overview · an overview over 4 000 characters · a note over 20 000 characters · a component names a token the system doesn't define · more than 2 000 tokens |
+
+A finding about an area the system doesn't cover (its `coverage`) isn't raised. The repo-backed
+findings (living page, code drift) come later.
+
 ## What counts as overlapping text
 Overlap is judged on the boxes text actually paints, one line at a time, not on one big box around
 all of an element's text. An inline element that wraps over several lines no longer looks like it
