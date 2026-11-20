@@ -478,6 +478,8 @@ export const SYSTEM_BUILDS_MAX = 20;
 export const SYSTEM_BUILD_TTL_MS = 7 * 86_400_000;
 export const SYSTEM_BUILD_JSON_MAX_BYTES = 65_536;
 export const SYSTEM_BUILD_CALLS_MAX = 20;
+/** Characters of a `buildProblem.value` (the raw agent value, shown as text; §2.5). */
+export const BUILD_PROBLEM_VALUE_MAX = 80;
 /** A repo-relative path: up to 5 segments, each 1..64 chars, no dot-only segment. */
 export const REPO_REL_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}(\/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){0,4}$/;
 export const SYSTEM_PATTERNS_MAX = 100;

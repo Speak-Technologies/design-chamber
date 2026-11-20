@@ -52,6 +52,7 @@ import { createDesignStore } from './store.ts';
 import { startChoiceReconciler } from './systems/choice.ts';
 import { ensureLinkService } from './systems/link.ts';
 import { ensureBuildTickets } from './systems/builds.ts';
+import { startHomes } from './systems/homes.ts';
 import { ensureSystemStore } from './systems/store.ts';
 import { ensureSystemVersions } from './systems/versions.ts';
 import { ensureThumbnailService } from './thumbnails.ts';
@@ -149,6 +150,8 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   const copiesRecovered = ensureLinkService(ctx).recoverAll();
   ctx.onDispose(() => copiesRecovered);
   ctx.onDispose(startChoiceReconciler(ctx));
+  // Phase 2.5 §5.9: BUILD.json is adopted and followed from the watcher's baseline on.
+  ctx.onDispose(startHomes(ctx, () => watcher.ready));
 
   // The guide at <root>/AGENTS.md: synced after the watcher's baseline, on root changes and on
   // new designs. The skill ships inside the extension; an older installed copy is only read here.

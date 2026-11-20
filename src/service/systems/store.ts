@@ -22,8 +22,10 @@
 // re-sync or restore) or after `SYSTEM_QUIET_MS` of quiet after the agent's changes. Bumps run
 // under the system's lock, so two never race.
 //
-// Homes (AD-14): every content reader goes through `filesDir(id)`. An internal home answers
-// `dir(id)`; the repo-backed branch (the `snapshot/` folder) is T12b's.
+// Homes (AD-14, T12b): every content reader goes through `filesDir(id)`. An internal home answers
+// `dir(id)`; a repo-backed one `dir(id)/snapshot` — a real folder, never a link. Without a snapshot
+// yet the path reads as empty ("Being built in chat", §9.6); the snapshot's own `SNAPSHOT.json` is
+// outside the content set, so an interview update never bumps a revision (§2.10).
 
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
@@ -34,6 +36,7 @@ import type { CreateSystemBody, DeleteSystemResponse, PatchSystemBody, PatchSyst
 import {
   DESIGN_INDEX_REFRESH_MS,
   SESSION_ID_MAX,
+  SYSTEM_BUILD_JSON_MAX_BYTES,
   SYSTEM_ID_PATTERN,
   SYSTEM_JSON_MAX_BYTES,
   SYSTEM_NAME_MAX,
@@ -47,6 +50,7 @@ import {
   buildSystemDetail,
   isReservedSystemId,
   isSystemSection,
+  parseBuildJson,
   parseSystemState,
   sectionFingerprints,
   deriveReview,
@@ -59,10 +63,10 @@ import {
   type SystemDetailSource,
   type SystemTokenRules,
 } from '../../shared/system-json.ts';
-import type { DesignSummary, SystemDetail, SystemState, SystemSummary } from '../../shared/types.ts';
+import type { BuildJson, DesignSummary, SystemDetail, SystemState, SystemSummary } from '../../shared/types.ts';
 import type { ChangeHub, DesignIndex, Logger, SelfWrites, ServiceContext, SettingsStore } from '../context.ts';
 import { ApiError } from '../http.ts';
-import { isAtomicTempName, renameWithRetry, resolveInside, resolvePlainTarget, samePath, slugify, writeFileAtomic } from '../paths.ts';
+import { isAtomicTempName, LINK_SENTENCE, renameWithRetry, resolveInside, resolvePlainTarget, samePath, slugify, writeFileAtomic } from '../paths.ts';
 import { folderErrorSentence, isDirectory } from '../root.ts';
 import { treeHashOf } from '../versions.ts';
 import { systemSelfWritesKey } from '../watch.ts';
@@ -80,6 +84,18 @@ const nameTaken = (existing: string): string => `You already have a system calle
 const reservedSentence = (id: string): string => `This folder is named ${id}, which Design Chamber keeps for itself. Rename the folder to use it.`;
 const FOLDER_UNREADABLE = `${SYSTEM_UNREADABLE_PREFIX} Its folder can't be opened.`;
 
+/** AD-20: the refusal for a system that lives in a project repo (edits, uploads; restore words it its own way). */
+export const readOnlyMessage = (name: string, repo: string): string => `${name} lives in ${repo}. Change the values there, or ask the agent here.`;
+
+/** The repo label of a home: the folder's base name, as the sentences name it ("shop"). */
+export const repoLabelOf = (directory: string): string => path.basename(directory) || directory;
+
+/** AD-20 (T12b): a repo-backed system is read-only here, refused before any stamp, version or write. */
+export const refuseReadOnly = (state: SystemState): void => {
+  if (state.home?.kind !== 'repo') return;
+  throw new ApiError('read-only', readOnlyMessage(state.name, repoLabelOf(state.home.directory)));
+};
+
 // ---- content walk bounds ----
 
 /** Entries the content walk of one system looks at (assets and sources are capped at 200 files by policy). */
@@ -88,8 +104,9 @@ const CONTENT_ENTRIES_MAX = 2000;
 const CONTENT_DEPTH_MAX = 6;
 /** Files larger than this are not hashed (counted by size and time instead); no system file the service reads is this large. */
 const HASH_MAX_BYTES = 32 * 1024 * 1024;
-/** Top-level names that are not part of the content set (§2.10): the agent's records and the S8 staging folders. */
-const NOT_CONTENT = new Set(['BUILD.json', 'PROPOSAL.json', 'proposal', 'snapshot']);
+/** Top-level names that are not part of the content set (§2.10): the agent's records, the S8 staging
+ * folders, and the snapshot's own record (under `filesDir` = `snapshot/`, `SNAPSHOT.json` is top-level). */
+const NOT_CONTENT = new Set(['BUILD.json', 'PROPOSAL.json', 'proposal', 'snapshot', 'SNAPSHOT.json']);
 /** A body or overview is read up to 4 bytes per character of its cap: more is certainly over the cap. */
 const BYTES_PER_CHAR_MAX = 4;
 
@@ -156,8 +173,10 @@ export type SystemStore = {
    * (the agent may be mid-write otherwise, so a link would copy half a system).
    */
   isSettled(id: string): boolean;
-  /** Settings notices queued by deletes, answered once (`GET /settings`). */
+  /** Settings notices queued by deletes and adoption, answered once (`GET /settings`). */
   takeNotices(): string[];
+  /** Queue a one-time page notice (an adopted build's name clash, §5.9). */
+  queueNotice(text: string): void;
   dispose(): Promise<void>;
 };
 
@@ -371,9 +390,18 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
   };
 
   const filesDirOf = async (systemDir: string, state: SystemState): Promise<string> => {
-    // T12b: a repo-backed system reads `snapshot/` (a real folder, not a link) once adoption exists.
-    if (state.home?.kind === 'repo') return notBuilt();
-    return systemDir;
+    if (state.home?.kind !== 'repo') return systemDir;
+    // `snapshot/` must be a real folder: containment first, then the realpath equal to the lexical
+    // path (a link anywhere on the way is refused, even one pointing inside), then an lstat.
+    const lexical = path.join(systemDir, 'snapshot');
+    const real = await resolveInside(systemDir, ['snapshot']);
+    if (!samePath(real, lexical)) throw new ApiError('invalid', LINK_SENTENCE);
+    const info = await lstat(lexical).catch(() => null);
+    // No snapshot yet: the path reads as empty ("Being built in chat", §2.10). A file or a link
+    // where the snapshot folder should be is never read through.
+    if (info === null) return lexical;
+    if (!info.isDirectory()) throw new ApiError('invalid', LINK_SENTENCE);
+    return lexical;
   };
 
   /** Hash a file, reusing the last hash while its size and time are unchanged. */
@@ -440,6 +468,23 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     }
   };
 
+  /** BUILD.json (§2.13), the agent's interview record: parsed, bounded; null when absent, a link or over the cap. */
+  const readBuild = async (systemDir: string): Promise<BuildJson | null> => {
+    let file: string;
+    try {
+      file = await resolvePlainTarget(systemDir, ['BUILD.json'], { allowAbsent: true });
+    } catch (error) {
+      if (error instanceof ApiError) return null; // a link or a folder: never read through
+      throw error;
+    }
+    const read = await readBounded(file, SYSTEM_BUILD_JSON_MAX_BYTES).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    });
+    if (read === null || read.over) return null;
+    return parseBuildJson(read.bytes.toString('utf8')).build;
+  };
+
   const get = async (id: string): Promise<SystemDetailSource> => {
     const systemDir = await dir(id);
     const { state } = await readStateOf(systemDir, id);
@@ -461,13 +506,14 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     return {
       id,
       dir: systemDir,
+      filesDir,
       state,
       systemJson: systemJson === null || systemJson.over ? null : systemJson.text,
       tokensCss: tokensCss === null || tokensCss.over ? null : tokensCss.text,
       texts,
       files: content.files,
-      // T12b reads BUILD.json (parseBuildJson) for the building flow.
-      build: null,
+      treeHash: content.treeHash,
+      build: await readBuild(systemDir),
       hashes: content.hashes,
       tooLarge,
     };
@@ -585,7 +631,10 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
         throw error;
       }
       const { state } = await readStateOf(systemDir, id);
-      if (state.home?.kind === 'repo') return false; // T12b: a repo-backed revision follows its snapshot
+      // A repo-backed revision follows its snapshot: the refresh bumps it at once (§5.10 step 6, T13);
+      // a quiet settle never does (BUILD.json is outside the content set, and a hand-changed snapshot
+      // is tamper, not a revision).
+      if (state.home?.kind === 'repo') return false;
       const content = await readContent(await filesDirOf(systemDir, state));
       if (content.treeHash === state.revision.treeHash) return false;
       const at = now().toISOString();
@@ -892,6 +941,7 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
       return last === undefined || now().getTime() - last >= quietMs;
     },
     takeNotices: () => notices.splice(0, notices.length),
+    queueNotice: (text) => void notices.push(text),
     async dispose() {
       disposed = true;
       unsubscribe();

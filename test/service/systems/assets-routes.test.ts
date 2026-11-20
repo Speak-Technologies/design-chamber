@@ -92,6 +92,33 @@ test('both routes refuse a missing or wrong token with 401 and write nothing', a
   assert.equal((await call('POST', '/systems/acme/assets', { uploadId, name: 'a.svg', kind: 'logo' })).status, 200);
 });
 
+test('a repo-backed system refuses both routes with 422 read-only and writes nothing (AD-20)', async (t) => {
+  const { tmp, call, upload, at, state } = await serve(t);
+  const home = { kind: 'repo', directory: path.join(tmp.root, 'shop'), folder: 'design-system', livingPage: 'design-system/index.html', adoptedAt: '2026-11-20T10:00:00.000Z' };
+  await writeFile(at('.chamber/state.json'), `${JSON.stringify({ ...(await state()), home }, null, 2)}\n`);
+  const systemJsonBefore = await readFile(at('system.json'), 'utf8');
+  const sentence = 'Acme lives in shop. Change the values there, or ask the agent here.';
+
+  const uploadId = await upload(SVG);
+  const added = await call('POST', '/systems/acme/assets', { uploadId, name: 'a.svg', kind: 'logo' });
+  assert.equal(added.status, 422);
+  assert.deepEqual(added.json, { error: 'read-only', message: sentence });
+  // The upload was dropped with the refusal, never kept in memory for a retry.
+  assert.equal((await call('POST', '/systems/acme/assets', { uploadId, name: 'a.svg', kind: 'logo' })).status, 422);
+
+  const brand = path.join(tmp.root, 'brand');
+  await mkdir(brand, { recursive: true });
+  await writeFile(path.join(brand, 'logo.svg'), SVG);
+  const folder = await call('POST', '/systems/acme/assets/from-folder', { directory: brand });
+  assert.equal(folder.status, 422);
+  assert.deepEqual(folder.json, { error: 'read-only', message: sentence });
+  // Refused before the folder is looked at: a folder that is not there answers the same.
+  assert.equal((await call('POST', '/systems/acme/assets/from-folder', { directory: path.join(tmp.root, 'gone') })).status, 422);
+
+  await assert.rejects(readdir(at('assets')), { code: 'ENOENT' });
+  assert.equal(await readFile(at('system.json'), 'utf8'), systemJsonBefore);
+});
+
 test('a traversal or invalid id is refused before any path is built; an unknown system keeps the upload', async (t) => {
   const { call, upload } = await serve(t);
   const uploadId = await upload(SVG);

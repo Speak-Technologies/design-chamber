@@ -2,7 +2,7 @@
 // the Phase 2 user-edit rules E1 to E12 read with "system" in place of "design").
 //
 //   apply(id, save):
-//     repo-backed → 422 read-only before anything (AD-20, T12b's seam)
+//     repo-backed → 422 read-only before anything (AD-20, the store's refuseReadOnly)
 //     → systemVersions.userEdit (the system's chain, its store lock):
 //         precheck: every stamp equals the file's sha now (E4); metadata applied to the parsed
 //                   system.json; tokens planned and verified (§6.1); texts checked against their
@@ -80,7 +80,7 @@ import {
 import { ASSET_READ_MAX, ensureScanJobs, readProjectFile, RESYNC_ROOT_CHANGED_MESSAGE, SCAN_GONE_MESSAGE, type ResyncSource, type ScanJobs } from './extract.ts';
 import { colourGroupOf, resyncReview } from './extract-rules.ts';
 import { notBuilt } from './not-built.ts';
-import { ensureSystemStore, SYSTEM_GONE_MESSAGE, type SystemStore } from './store.ts';
+import { ensureSystemStore, refuseReadOnly, SYSTEM_GONE_MESSAGE, type SystemStore } from './store.ts';
 import { ensureSystemVersions } from './versions.ts';
 
 // ---- sentences ----
@@ -99,9 +99,6 @@ const UNDO_GONE = "This edit can't be undone any more.";
 
 /** E4 for a system: "Acme changed while you were editing. Nothing was saved." */
 export const systemStaleMessage = (name: string): string => `${name} changed while you were editing. Nothing was saved.`;
-
-/** AD-20 (T12b's seam): the refusal for a system that lives in a project repo. */
-export const readOnlyMessage = (name: string, repo: string): string => `${name} lives in ${repo}. Change the values there, or ask the agent here.`;
 
 const partWayMessage = "Something went wrong part way. The version 'Before your edits' holds everything as it was; restore it from Versions.";
 const resyncPartWayMessage = "Something went wrong part way. The version 'Before re-sync' holds everything as it was; restore it from Versions.";
@@ -332,12 +329,6 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
   const editsFile = deps.editsFile ?? createSystemEditsFile({ log });
   const rules = deps.rules ?? SYSTEM_TOKEN_RULES;
   const exec = createStepExecutor({ selfWrites, pause });
-
-  /** AD-20, T12b's seam: a repo-backed system is read-only here, refused before any stamp or version. */
-  const refuseReadOnly = (state: SystemState): void => {
-    if (state.home?.kind !== 'repo') return;
-    throw new ApiError('read-only', readOnlyMessage(state.name, path.basename(state.home.directory) || state.home.directory));
-  };
 
   /** `resync`: the run may also create (and an undo trash) the brand files a re-sync copied (§5.3). */
   const newRun = (id: string, dir: string, staleMessage: string, options: { resync?: boolean } = {}): Run => {

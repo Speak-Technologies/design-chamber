@@ -2,15 +2,11 @@
 // (documentation/specs/phase-2-5-technical.md §2.9, §5.9). No Node imports: the New dialog,
 // the chip route and the RULES.md builder decide the same way.
 //
-// T0 seam: the signatures are the contract. T7 filled `effectiveSystemChoice`; T12b fills
-// `repoHomeShapeProblem` (the I/O half, realpath and lstat, lives in `systems/homes.ts`).
+// T7 filled `effectiveSystemChoice`; T12b `repoHomeShapeProblem` (the I/O half, realpath and
+// lstat, lives in `systems/homes.ts` as `verifyRepoHome`).
 
+import { BUILD_PROBLEM_VALUE_MAX, REPO_REL_PATTERN } from './limits.ts';
 import type { BuildProblemReason, EffectiveSystemChoice, SettingsFile } from './types.ts';
-
-const NOT_BUILT = 'This part of Design Chamber (design systems) is not built yet.';
-const notBuilt = (): never => {
-  throw new Error(NOT_BUILT);
-};
 
 /** A system as the choice rules see it: its id and whether it is Ready. */
 export type ChoiceSystem = { id: string; status: 'draft' | 'ready' };
@@ -80,13 +76,48 @@ export type RepoHomeRequest = { directory: string; folder: string; livingPage: s
 /** Another repo-backed system's home, for the overlap rule. */
 export type OtherRepoHome = { id: string; name: string; directory: string; folder: string; livingPage: string };
 
+/** A folder path built from a base and `/`-separated segments, for text comparison only. */
+const under = (base: string, segments: readonly string[]): string => `${base.replace(/[\\/]+$/, '')}/${segments.join('/')}`;
+
+const problemValue = (value: string): string => value.slice(0, BUILD_PROBLEM_VALUE_MAX);
+
 /**
  * The checks that need no filesystem (§5.9 step 2): `folder` and `livingPage` match
  * `REPO_REL_PATTERN` with no discovery `SKIP_DIRS` segment, the repo lies inside the project folder,
- * and no other system's folder overlaps or shares the living-page path. Null when it passes.
- * `repoReal` is the repo's realpath, already resolved by the caller.
+ * the system folder is not the designs root, inside it or containing it, and no other system's folder
+ * overlaps or shares the living-page path (compared with `foldsCase` on win32/darwin). Null when it
+ * passes. `repoReal` is the repo's realpath, already resolved by the caller; `skipDirs` is discovery's
+ * `SKIP_DIRS` (passed in, so this module stays pure and there is one list). The I/O half
+ * (`verifyRepoHome`) re-checks the designs-root rule against the resolved folder and reads the
+ * living-page mark.
  */
 export const repoHomeShapeProblem = (
   request: RepoHomeRequest,
-  context: { repoReal: string; projectDirectory: string; designsRoot: string; others: readonly OtherRepoHome[]; foldsCase: boolean },
-): { reason: BuildProblemReason; value: string } | null => notBuilt();
+  context: { repoReal: string; projectDirectory: string; designsRoot: string; others: readonly OtherRepoHome[]; foldsCase: boolean; skipDirs: ReadonlySet<string> },
+): { reason: BuildProblemReason; value: string } | null => {
+  const { repoReal, projectDirectory, designsRoot, others, foldsCase, skipDirs } = context;
+  const folderSegments = REPO_REL_PATTERN.test(request.folder) ? request.folder.split('/') : null;
+  const pageSegments = REPO_REL_PATTERN.test(request.livingPage) && request.livingPage.endsWith('.html') ? request.livingPage.split('/') : null;
+  if (folderSegments === null || pageSegments === null) return { reason: 'unreadable', value: problemValue(`${request.folder} ${request.livingPage}`) };
+  // A system folder never lives in a folder the scan skips (node_modules, dist, …).
+  const skipped = [...folderSegments, ...pageSegments].find((segment) => skipDirs.has(segment.toLowerCase()));
+  if (skipped !== undefined) return { reason: 'repo-outside-project', value: problemValue(skipped) };
+  if (!isSameOrInside(projectDirectory, repoReal, foldsCase)) return { reason: 'repo-outside-project', value: problemValue(request.directory) };
+
+  const folderAbs = under(repoReal, folderSegments);
+  const pageAbs = under(repoReal, pageSegments);
+  // The designs root is never the system folder, never inside it and never contains it (§5.9).
+  if (isSameOrInside(designsRoot, folderAbs, foldsCase) || isSameOrInside(folderAbs, designsRoot, foldsCase)) {
+    return { reason: 'repo-outside-project', value: problemValue(folderAbs) };
+  }
+  for (const other of others) {
+    const otherFolder = under(other.directory, other.folder.split('/'));
+    if (isSameOrInside(folderAbs, otherFolder, foldsCase) || isSameOrInside(otherFolder, folderAbs, foldsCase)) {
+      return { reason: 'repo-overlap', value: problemValue(other.name) };
+    }
+    if (folderKey(pageAbs, foldsCase) === folderKey(under(other.directory, other.livingPage.split('/')), foldsCase)) {
+      return { reason: 'repo-overlap', value: problemValue(other.name) };
+    }
+  }
+  return null;
+};

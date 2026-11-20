@@ -10,16 +10,30 @@
 // The service env is an allowlist (F9: no DISPLAY, WAYLAND_DISPLAY or DBUS_SESSION_BUS_ADDRESS),
 // so on Linux the session bus and Wayland socket are re-derived from XDG_RUNTIME_DIR, which is
 // passed — that is how the desktop's file manager is reached from a headless child process.
+//
+// Phase 2.5 (§3.5, T12b): the system form `{ system, target }` takes no path. The service derives it
+// from the system's state: `folder` = `_systems/<id>/`, `repo` = `<repo>/<folder>`, `living-page` =
+// the committed file (its folder opened, the file selected). Read-only: nothing is created or written.
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { lstat } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { PROJECT_DIRECTORY_MAX } from '../shared/limits.ts';
+import { PROJECT_DIRECTORY_MAX, SYSTEM_ID_PATTERN } from '../shared/limits.ts';
+import type { SystemState } from '../shared/types.ts';
 import { ApiError } from './http.ts';
 import type { DesignStore, Logger } from './context.ts';
-import { foldsCase } from './paths.ts';
+import { foldsCase, resolveInside } from './paths.ts';
+
+/** The three places a system's Reveal may open (§3.5); never a path. */
+export type SystemRevealTarget = 'folder' | 'repo' | 'living-page';
+
+export const SYSTEM_REVEAL_TARGETS: readonly SystemRevealTarget[] = ['folder', 'repo', 'living-page'];
+
+/** What the system form needs from the system store: the contained folder and the state. */
+export type RevealSystems = { dir(id: string): Promise<string>; readState(id: string): Promise<SystemState> };
 
 /** Paths the service wrote this run. Bounded: the oldest issued path is forgotten first. */
 export type RevealRegistry = {
@@ -131,6 +145,8 @@ export type RevealDeps = {
   store: DesignStore;
   log: Logger;
   registry: RevealRegistry;
+  /** The system form's source; without it the form answers bad-path. */
+  systems?: RevealSystems;
   /** Injectable for tests. */
   launch?: LaunchFn;
   platform?: NodeJS.Platform;
@@ -142,6 +158,8 @@ export type RevealService = {
   reveal(requested: string): Promise<void>;
   /** True when the path may be revealed (export issued this run, or a design folder). */
   mayReveal(requested: string): Promise<boolean>;
+  /** The system form: the path is derived from the system's state, never taken from the caller. */
+  revealSystem(id: unknown, target: unknown): Promise<void>;
 };
 
 export const createRevealService = (deps: RevealDeps): RevealService => {
@@ -168,7 +186,57 @@ export const createRevealService = (deps: RevealDeps): RevealService => {
     throw new ApiError('bad-path', 'Design Chamber only opens the folders and export files it created itself.');
   };
 
+  const open = async (resolved: string): Promise<void> => {
+    const baseEnv = deps.env ?? process.env;
+    const env = platform === 'win32' || platform === 'darwin' ? baseEnv : linuxOpenerEnv(baseEnv);
+    const tried: string[] = [];
+    for (const step of revealPlan(resolved, platform)) {
+      tried.push(step.command);
+      if (await launch(step, env)) return;
+    }
+    deps.log.warn('reveal.no-file-manager', { tried: tried.join(', ') });
+    throw new ApiError(
+      'internal',
+      `Design Chamber could not open a file manager. The file is at ${resolved}. Open it yourself, or install xdg-utils so "Show in folder" works.`,
+    );
+  };
+
+  /** The path a system target names, derived from state and contained; it must exist as that kind. */
+  const systemTarget = async (id: unknown, target: unknown): Promise<string> => {
+    if (typeof id !== 'string' || !SYSTEM_ID_PATTERN.test(id)) throw new ApiError('bad-slug', 'That is not a design system id.');
+    if (typeof target !== 'string' || !(SYSTEM_REVEAL_TARGETS as readonly string[]).includes(target)) {
+      throw new ApiError('bad-request', 'Reveal opens a design system\'s folder, its repo folder or its living page.');
+    }
+    const systems = deps.systems;
+    if (systems === undefined) throw new ApiError('bad-path', 'That is not a path Design Chamber can open.');
+    const systemDir = await systems.dir(id); // 404 when gone, bad-slug when not an id
+    if (target === 'folder') return systemDir;
+    const state = await systems.readState(id);
+    const home = state.home;
+    if (home === undefined || home.kind !== 'repo') throw new ApiError('invalid', `${state.name} lives in Design Chamber, not in a repo.`);
+    const repoName = path.basename(home.directory) || home.directory;
+    const rel = target === 'repo' ? home.folder : home.livingPage;
+    const repoInfo = await lstat(home.directory).catch(() => null);
+    if (repoInfo === null || !repoInfo.isDirectory()) throw new ApiError('not-found', `${repoName} isn't at ${home.directory} anymore.`);
+    let resolved: string;
+    try {
+      resolved = await resolveInside(home.directory, rel.split('/'));
+    } catch {
+      throw new ApiError('bad-path', `That path leaves ${repoName}, so Design Chamber won't open it.`);
+    }
+    const info = await lstat(resolved).catch(() => null);
+    if (target === 'repo') {
+      if (info === null || !info.isDirectory()) throw new ApiError('not-found', `${rel} isn't in ${repoName} yet.`);
+    } else if (info === null || !info.isFile()) {
+      throw new ApiError('not-found', `The living page isn't in ${repoName} yet.`);
+    }
+    return resolved;
+  };
+
   return {
+    async revealSystem(id: unknown, target: unknown): Promise<void> {
+      await open(await systemTarget(id, target));
+    },
     async mayReveal(requested: string): Promise<boolean> {
       try {
         await check(requested);
@@ -180,18 +248,7 @@ export const createRevealService = (deps: RevealDeps): RevealService => {
     async reveal(requested: string): Promise<void> {
       const resolved = await check(requested);
       if (!existsSync(resolved)) throw new ApiError('not-found', 'That file does not exist any more.');
-      const baseEnv = deps.env ?? process.env;
-      const env = platform === 'win32' || platform === 'darwin' ? baseEnv : linuxOpenerEnv(baseEnv);
-      const tried: string[] = [];
-      for (const step of revealPlan(resolved, platform)) {
-        tried.push(step.command);
-        if (await launch(step, env)) return;
-      }
-      deps.log.warn('reveal.no-file-manager', { tried: tried.join(', ') });
-      throw new ApiError(
-        'internal',
-        `Design Chamber could not open a file manager. The file is at ${resolved}. Open it yourself, or install xdg-utils so "Show in folder" works.`,
-      );
+      await open(resolved);
     },
   };
 };

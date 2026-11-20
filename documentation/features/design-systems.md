@@ -7,6 +7,7 @@ Pieces, each with its own page:
 - [Brand files](design-system-brand-files.md): fonts, logos and documents, and the rules the service holds them to.
 - [Hand edits](design-system-hand-edits.md): changing a value or a note by hand.
 - [Re-sync](design-system-resync.md): bringing token values up to date with the code a system was read from.
+- [Homes and adoption](design-system-homes.md): internal and repo-backed systems, how the agent's BUILD.json is checked, and why a repo system is read-only here.
 - [The list and the sheet on screen](../pages/design-systems.md).
 
 ## Where a system lives

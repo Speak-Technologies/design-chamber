@@ -10,14 +10,14 @@
 // settled after the restore's chain step, through `afterRestore` (a restore is not the user's hand
 // edit, so changed sections read Not reviewed, derived by the store).
 //
-// T12b seam (AD-20): a repo-backed system refuses Restore with 422 `read-only` before anything is
-// read or written, except the Undo of a re-sync. That check belongs in `restoreSystemVersion` below,
-// the one entry the route uses; T2 serves internal homes only.
+// AD-20 (T12b): a repo-backed system refuses Restore with 422 `read-only` before anything is read or
+// written, in `restoreSystemVersion` below, the one entry the route uses. A repo re-sync has no Undo
+// (AD-33, rev 3), so there is no exception. Its history stays viewable.
 
 import type { RestoreVersionResponse } from '../../shared/api.ts';
 import type { ChangeHub, ServiceContext } from '../context.ts';
 import { createVersionsService, type VersionsService, type VersionTarget } from '../versions.ts';
-import { ensureSystemStore, type SystemStore } from './store.ts';
+import { ensureSystemStore, refuseReadOnly, type SystemStore } from './store.ts';
 
 /** The system's linked chat, from its state.json; null when it has none or cannot be read. */
 const sessionOf = async (systems: SystemStore, id: string): Promise<string | null> => (await systems.get(id).catch(() => null))?.state.sessionId ?? null;
@@ -64,7 +64,10 @@ export const ensureSystemVersions = (ctx: ServiceContext): VersionsService => {
 };
 
 /**
- * Restore a system version: the route's one entry. T12b adds the repo-home refusal here (AD-20),
- * checked before the versions service reads or writes anything.
+ * Restore a system version: the route's one entry. A repo-backed system answers 422 `read-only`
+ * (AD-20) before the versions service reads or writes anything.
  */
-export const restoreSystemVersion = (versions: VersionsService, id: string, vid: string): Promise<RestoreVersionResponse> => versions.restore(id, vid);
+export const restoreSystemVersion = async (versions: VersionsService, systems: Pick<SystemStore, 'readState'>, id: string, vid: string): Promise<RestoreVersionResponse> => {
+  refuseReadOnly(await systems.readState(id));
+  return versions.restore(id, vid);
+};

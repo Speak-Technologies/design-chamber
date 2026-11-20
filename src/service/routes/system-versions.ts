@@ -8,6 +8,7 @@ import type { RestoreVersionResponse, VersionDiffResponse, VersionListResponse }
 import { VERSION_ID_PATTERN } from '../../shared/limits.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
+import { ensureSystemStore } from '../systems/store.ts';
 import { ensureSystemVersions, restoreSystemVersion } from '../systems/versions.ts';
 
 const parseVid = (vid: string): string => {
@@ -32,6 +33,6 @@ export function registerSystemVersionsRoutes(router: Router, ctx: ServiceContext
   });
 
   router.on('POST /systems/:id/versions/:vid/restore', async ({ params }): Promise<RestoreVersionResponse> =>
-    restoreSystemVersion(ensureSystemVersions(ctx), params.id, parseVid(params.vid)),
+    restoreSystemVersion(ensureSystemVersions(ctx), ensureSystemStore(ctx), params.id, parseVid(params.vid)),
   );
 }

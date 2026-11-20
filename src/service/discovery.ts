@@ -66,7 +66,8 @@ export type DiscoveryOptions = {
 
 // ---- walking ----
 
-const SKIP_DIRS: ReadonlySet<string> = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage', 'vendor', '.venv']);
+/** The folders no scan walks; the repo home check refuses them as a system folder too (§5.9, T12b). */
+export const SKIP_DIRS: ReadonlySet<string> = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage', 'vendor', '.venv']);
 /** Other hidden folders are skipped too, except the two that hold agent rules. */
 const KEEP_HIDDEN_DIRS: ReadonlySet<string> = new Set(['.github', '.cursor']);
 

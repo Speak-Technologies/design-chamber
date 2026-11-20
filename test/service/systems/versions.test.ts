@@ -446,4 +446,24 @@ describe('system versions routes', () => {
     assert.equal(await readFile(tmp.at(`_systems/${id}/tokens.css`), 'utf8'), ':root {\n  --a: 1px;\n}\n');
     assert.equal((await call('POST', `/systems/${id}/versions/v99/restore`)).status, 404);
   });
+
+  test('a repo-backed system refuses a restore with 422 before any restore point or write (AD-20, AD-33)', async (t) => {
+    const { tmp, ctx, call } = await serve(t);
+    const { id } = await ensureSystemStore(ctx).create({ name: 'Acme' });
+    await tmp.write(`_systems/${id}/tokens.css`, ':root {\n  --a: 1px;\n}\n');
+    const v1 = await ensureSystemVersions(ctx).create(id, 'manual');
+    assert.ok(v1);
+    await tmp.write(`_systems/${id}/tokens.css`, ':root {\n  --a: 2px;\n}\n');
+    const stateFile = `_systems/${id}/.chamber/state.json`;
+    const state = JSON.parse(await tmp.read(stateFile)) as Record<string, unknown>;
+    const home = { kind: 'repo', directory: path.join(tmp.root, 'shop'), folder: 'design-system', livingPage: 'design-system/index.html', adoptedAt: '2026-11-20T10:00:00.000Z' };
+    await tmp.write(stateFile, { ...state, home });
+    const before = await listing(tmp.at(`_systems/${id}/.versions`));
+
+    const refused = await call('POST', `/systems/${id}/versions/${v1.id}/restore`);
+    assert.equal(refused.status, 422);
+    assert.deepEqual(refused.json, { error: 'read-only', message: 'Acme lives in shop. Change the values there, or ask the agent here.' });
+    assert.deepEqual(await listing(tmp.at(`_systems/${id}/.versions`)), before, 'no restore point');
+    assert.equal(await readFile(tmp.at(`_systems/${id}/tokens.css`), 'utf8'), ':root {\n  --a: 2px;\n}\n');
+  });
 });

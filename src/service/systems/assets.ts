@@ -34,9 +34,8 @@ import type { ServiceContext } from '../context.ts';
 import { ApiError } from '../http.ts';
 import { atomicTempPath, isAtomicTempName, moveNoReplace, replaceFileIfHashUnchanged, resolveInside, resolvePlainTarget, samePath } from '../paths.ts';
 import { systemSelfWritesKey } from '../watch.ts';
-import { notBuilt } from './not-built.ts';
 import { validateScanFolder } from './scan-folder.ts';
-import { ensureSystemStore } from './store.ts';
+import { ensureSystemStore, refuseReadOnly } from './store.ts';
 
 export type AssetKind = 'font' | 'logo' | 'source';
 type AssetGroup = 'font' | 'image' | 'document';
@@ -423,8 +422,9 @@ const addUnderLock = async (
   const result = await store.withLock(id, async () => {
     const systemDir = await store.dir(id);
     const state = await store.readState(id);
-    // T12b: a repo-backed system refuses brand files with 422 `read-only` (S8, AD-20); nothing is written until then.
-    if (state.home?.kind === 'repo') return notBuilt();
+    // A repo-backed system refuses brand files with 422 `read-only` (S8, AD-20): again under the lock,
+    // so a home adopted while the request waited is honoured before anything is written.
+    refuseReadOnly(state);
     const env: AddEnv = { ctx, id, systemDir, totals: await measure(systemDir) };
     const added: { rel: string; kind: AssetKind; bytes: number }[] = [];
     const refused: { name: string; reason: string }[] = [];
@@ -459,6 +459,15 @@ const addUnderLock = async (
 export const addSystemAsset = async (ctx: ServiceContext, id: string, input: { uploadId: string; name: string; kind: AssetKind }): Promise<AddSystemAssetResponse> => {
   const store = ensureSystemStore(ctx);
   await store.dir(id); // 404 before the upload is consumed
+  const state = await store.readState(id);
+  if (state.home?.kind === 'repo') {
+    try {
+      ctx.uploads.takeBytes(input.uploadId); // gone whatever the answer
+    } catch {
+      /* already gone or never there: the read-only answer still stands */
+    }
+    refuseReadOnly(state);
+  }
   // Refused by type before the bytes are taken out of memory (they are dropped with the upload either way).
   const meta = checkAssetMeta(input.name, input.kind, 0);
   const bytes = ctx.uploads.takeBytes(input.uploadId);
@@ -530,6 +539,7 @@ async function* folderFiles(directory: string): AsyncGenerator<{ name: string; k
 export const addAssetsFromFolder = async (ctx: ServiceContext, id: string, directory: string): Promise<AssetsFromFolderResponse> => {
   const store = ensureSystemStore(ctx);
   await store.dir(id);
+  refuseReadOnly(await store.readState(id)); // before the folder is even looked at
   const folder = await validateScanFolder(directory, ctx.settings.root(), { insideRootSentence: 'Pick a folder outside your Designs folder.' });
   const result = await addUnderLock(ctx, id, folderFiles(folder));
   if (!result.recorded) throw new ApiError('conflict', notRecorded(result.added.map((one) => one.rel.split('/').at(-1) ?? one.rel)));

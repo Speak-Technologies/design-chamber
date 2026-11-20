@@ -8,8 +8,8 @@
 // `__proto__` key is an ordinary, ignored key.
 //
 // T1 fills `parseSystemJson`, `parseSystemState`, `coveredAreas`, `buildSystemDetail`,
-// `sectionFingerprints`, `deriveReview` and `safeAssetName`. Still seams: T12b (`parseBuildJson`,
-// `isSystemContractRel`) and T17 (`parseProposal`).
+// `sectionFingerprints`, `deriveReview` and `safeAssetName`; T12b `parseBuildJson`,
+// `isSystemContractRel` and `buildProblemSentence`. Still a seam: T17 (`parseProposal`).
 //
 // Token values: which declaration is light or dark, a token's section and whether a value is
 // valid are the token rules of `token-edit.ts` (T3). `buildSystemDetail` takes them as
@@ -18,7 +18,11 @@
 
 import { sha256Hex } from './agent/ownership.ts';
 import {
+  BUILD_PROBLEM_VALUE_MAX,
+  REPO_REL_PATTERN,
   SYSTEM_BRAND_MAX,
+  SYSTEM_BUILD_CALLS_MAX,
+  SYSTEM_BUILD_JSON_MAX_BYTES,
   SYSTEM_BUILD_TICKET_PATTERN,
   SYSTEM_COMPONENTS_MAX,
   SYSTEM_ENTRY_ID_PATTERN,
@@ -30,6 +34,7 @@ import {
   SYSTEM_NOTES_MAX,
   SYSTEM_OVERVIEW_MAX,
   SYSTEM_PATTERNS_MAX,
+  SYSTEM_PROPOSAL_ID_PATTERN,
   SYSTEM_TOKEN_NAME_PATTERN,
   SYSTEM_TOKENS_MAX,
   SYSTEM_TYPE_STYLES_MAX,
@@ -260,6 +265,20 @@ export const parseProvenance = (value: unknown): SystemState['provenance'] => {
   return out;
 };
 
+/**
+ * An absolute folder path as state.json may hold it (§2.5): ≤ 4 096 characters, no control character,
+ * POSIX or a win32 drive. A UNC path is never one: `validateScanFolder` refuses it at adoption, so a
+ * state.json holding one is damaged or forged and reads as no home.
+ */
+/** An absolute POSIX or drive path; a UNC or device path (`\\x`, `//x`, either slash mix) never is. */
+const isAbsPath = (value: unknown): value is string =>
+  typeof value === 'string' &&
+  value.length > 0 &&
+  value.length <= 4096 &&
+  !hasControl(value) &&
+  !/^[\\/]{2}/.test(value) &&
+  (value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value));
+
 const parseHome = (value: unknown): SystemState['home'] | undefined => {
   if (!isObject(value)) return undefined;
   const kind = own(value, 'kind');
@@ -269,7 +288,10 @@ const parseHome = (value: unknown): SystemState['home'] | undefined => {
   const folder = own(value, 'folder');
   const livingPage = own(value, 'livingPage');
   const adoptedAt = own(value, 'adoptedAt');
-  if (typeof directory !== 'string' || typeof folder !== 'string' || typeof livingPage !== 'string' || !isIso(adoptedAt)) return undefined;
+  // The repo home's paths are validated here too (T12b): state.json is agent-reachable, and every
+  // reader (filesDir, reveal, the snapshot) builds paths from these fields.
+  if (!isAbsPath(directory) || typeof folder !== 'string' || !REPO_REL_PATTERN.test(folder)) return undefined;
+  if (typeof livingPage !== 'string' || !REPO_REL_PATTERN.test(livingPage) || !livingPage.endsWith('.html') || !isIso(adoptedAt)) return undefined;
   return { kind: 'repo', directory, folder, livingPage, adoptedAt };
 };
 
@@ -287,7 +309,8 @@ export const parseBuildState = (value: unknown): SystemState['build'] | undefine
   const approved = own(value, 'approved');
   if (ticket !== null && (typeof ticket !== 'string' || !SYSTEM_BUILD_TICKET_PATTERN.test(ticket))) return undefined;
   if (!isIso(adoptedAt) || (appliedSeen !== null && !isIso(appliedSeen))) return undefined;
-  if (projectDirectory !== undefined && projectDirectory !== null && (typeof projectDirectory !== 'string' || projectDirectory.length > 4096)) return undefined;
+  // The project folder outlives the ticket (AD-28) and every home re-verification compares against it.
+  if (projectDirectory !== undefined && projectDirectory !== null && !isAbsPath(projectDirectory)) return undefined;
   return {
     ticket,
     adoptedAt,
@@ -419,6 +442,8 @@ export type SystemDetailSource = {
   id: string;
   /** The system folder (`_systems/<id>`), shown as the path. */
   dir: string;
+  /** The content root the files were read from (§5.1): `dir` internal, `dir/snapshot` repo-backed. */
+  filesDir?: string;
   state: SystemState;
   systemJson: string | null;
   tokensCss: string | null;
@@ -426,6 +451,8 @@ export type SystemDetailSource = {
   texts: Record<string, string>;
   /** Every file under the system's content set, contract-relative, with its size. */
   files: { rel: string; bytes: number }[];
+  /** The content set's tree hash as the walk computed it (adoption records it, §5.9). */
+  treeHash?: string;
   build: BuildJson | null;
   /**
    * sha256 of the raw bytes of content files, by contract-relative path (the edit stamps and the
@@ -812,11 +839,72 @@ const baseName = (directory: string): string => {
   return parts.at(-1) ?? directory;
 };
 
+/** The repoProblem reasons (§5.10) as the page's sentence; the closed list, never free text. */
+const REPO_PROBLEM_REASONS: Readonly<Record<NonNullable<SystemState['repoProblem']>['reason'], string>> = {
+  missing: "It doesn't exist.",
+  'not-a-folder': "It isn't a folder.",
+  unreadable: "Design Chamber isn't allowed to open it.",
+  'folder-missing': '', // named with the folder below
+  'too-large': 'It holds more files than Design Chamber can read.',
+  'being-changed': 'It changed while Design Chamber was reading it.',
+};
+
+const repoProblemSentence = (state: SystemState, home: Extract<NonNullable<SystemState['home']>, { kind: 'repo' }>): string | null => {
+  const problem = state.repoProblem;
+  if (problem === undefined || problem === null) return null;
+  const repo = baseName(home.directory);
+  // state.json is agent-reachable: an unknown reason reads as the generic sentence, never as text.
+  if (!Object.hasOwn(REPO_PROBLEM_REASONS, problem.reason)) return `Design Chamber can't read ${repo}.`;
+  if (problem.reason === 'folder-missing') return `${repo} has no ${home.folder} folder yet.`;
+  return `Design Chamber can't read ${repo}. ${REPO_PROBLEM_REASONS[problem.reason]}`;
+};
+
 const homeViewOf = (state: SystemState): SystemHomeView => {
   const home = state.home;
   if (home === undefined || home.kind === 'internal') return { kind: 'internal' };
-  // T12b refines readability and the listProjects label; until then the folder's base name.
-  return { kind: 'repo', directory: home.directory, label: baseName(home.directory), folder: home.folder, livingPage: home.livingPage, readable: true, problem: null, lastRead: state.snapshot?.at ?? null };
+  // The label is the folder's base name; the guest maps it to the host's listProjects name (§9.5),
+  // which the service cannot call. Readability follows the last snapshot read's problem (§5.10).
+  const problem = repoProblemSentence(state, home);
+  return { kind: 'repo', directory: home.directory, label: baseName(home.directory), folder: home.folder, livingPage: home.livingPage, readable: problem === null, problem, lastRead: state.snapshot?.at ?? null };
+};
+
+/** §5.9's closed adoption reasons as the system page's one sentence (the check's wording, with the
+ * value named where the spec names it: the other system, the living-page path). Null when none. */
+export const buildProblemSentence = (state: SystemState): string | null => {
+  const problem = state.buildProblem;
+  if (problem === undefined || problem === null) return null;
+  const repo =
+    state.home?.kind === 'repo'
+      ? baseName(state.home.directory)
+      : state.build?.projectDirectory !== undefined && state.build.projectDirectory !== null
+        ? baseName(state.build.projectDirectory)
+        : 'your project';
+  const value = typeof problem.value === 'string' ? problem.value.slice(0, BUILD_PROBLEM_VALUE_MAX) : '';
+  switch (problem.reason) {
+    case 'unreadable':
+      return "BUILD.json isn't valid JSON.";
+    case 'ticket-unknown':
+      return 'This design system was started from a chat Design Chamber no longer knows. Start it again with /design-system.';
+    case 'ticket-needed':
+      return "A system that lives in a repo needs a build ticket. Start it with /design-system in the project's chat.";
+    case 'repo-outside-project':
+      return 'The repo must be the project this chat is in, or a folder inside it. To use a folder above it, such as the root of a monorepo, open a chat in that folder and run /design-system there.';
+    case 'repo-overlap':
+      return value === '' ? 'Another design system already uses this repo folder or living-page path.' : `${value} already uses this repo folder or living-page path.`;
+    case 'living-page-exists':
+      return `${value === '' ? 'The living-page path' : value} already exists in ${repo} and isn't this system's living page. Pick another path.`;
+    case 'code-outside-project':
+      return 'The code folder must be the project this chat is in, or a folder inside it.';
+    case 'home-changed':
+      return `${state.name} already has files in ${repo}, so its home can't change. Make a new system to move it.`;
+    case 'ticket-changed':
+      return 'BUILD.json names another build. Keep the ticket this system started with.';
+    case 'applied-unknown-proposal':
+      return `The agent says it applied a proposal you didn't approve here${value === '' ? '' : ` (${value})`}. Check ${repo}'s history.`;
+    default:
+      // A forged or damaged state.json: the reason is not in the closed list.
+      return "BUILD.json can't be used. Ask the agent to fix it.";
+  }
 };
 
 const buildViewOf = (build: BuildJson | null): BuildView | null =>
@@ -923,8 +1011,7 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
     home,
     editable: home.kind === 'internal',
     build: buildViewOf(source.build),
-    // T12b turns `state.buildProblem` into its sentence.
-    buildProblem: null,
+    buildProblem: buildProblemSentence(state),
     coverage: coverage.areas,
     patterns,
     brand,
@@ -1084,12 +1171,183 @@ export const RESYNC_STAMP_PATTERN = /^(?:[0-9a-f]{64}|none):(?:[0-9a-f]{64}|none
 export const isUsableSystemId = (id: string): boolean => SYSTEM_ID_PATTERN.test(id) && !isReservedSystemId(id);
 
 /** A path in the system file contract (§5.10): `system.json`, `tokens.css`, `OVERVIEW.md`, `notes/<id>.md`, …. */
-export const isSystemContractRel = (rel: string): boolean => notBuilt();
+export const isSystemContractRel = (rel: string): boolean => {
+  if (rel === 'system.json' || rel === 'tokens.css' || rel === 'OVERVIEW.md') return true;
+  const entry = /^(notes|patterns|brand)\/([^/]+)\.md$/.exec(rel);
+  if (entry !== null) return SYSTEM_ENTRY_ID_PATTERN.test(entry[2] ?? '');
+  const component = /^components\/([^/]+)\.html$/.exec(rel);
+  if (component !== null) return SYSTEM_ENTRY_ID_PATTERN.test(component[1] ?? '');
+  const asset = /^(assets\/fonts|assets\/logos|sources)\/([^/]+)$/.exec(rel);
+  return asset !== null && SAFE_FILE_PATTERN.test(asset[2] ?? '') && !(asset[2] ?? '').includes('..');
+};
 
 /** `BUILD.json` (schema `design-chamber/system-build@1`, §2.13): ≤ `SYSTEM_BUILD_JSON_MAX_BYTES`, else unreadable. */
 export type ParsedBuildJson = { build: BuildJson | null; raw: JsonObject | null; problems: SystemProblem[]; unreadable: string | null };
 
-export const parseBuildJson = (text: string): ParsedBuildJson => notBuilt();
+const BUILD_NOT_JSON = "BUILD.json isn't valid JSON.";
+const BUILD_TOO_LARGE = 'BUILD.json is larger than 64 KB.';
+const BUILD_PART_NAMES: readonly string[] = ['system-files', 'token-fixes', 'docs', 'living-page'];
+const BUILD_DRIFT_KINDS: readonly string[] = ['tailwind-config', 'js-theme', 'scss', 'less', 'other'];
+const BUILD_CALL_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+/** A part list (`applied.parts`, `applied.skipped`): the four names, each at most once; null when not a list of them. */
+const buildParts = (value: unknown): string[] | null => {
+  if (!Array.isArray(value) || value.length > BUILD_PART_NAMES.length) return null;
+  const out: string[] = [];
+  for (const part of value) {
+    if (typeof part !== 'string' || !BUILD_PART_NAMES.includes(part) || out.includes(part)) return null;
+    out.push(part);
+  }
+  return out;
+};
+
+/**
+ * `BUILD.json`, the agent's interview record and home request (§2.13). Tolerant like `parseSystemJson`:
+ * a wrong optional field is dropped with a problem and its default kept; `home` (and a repo home's
+ * paths) and `name` are required — without them there is nothing to adopt, so `build` is null and
+ * `unreadable` says why. Unknown keys stay on `raw`. Every string is shown as text, never markup.
+ */
+export const parseBuildJson = (text: string): ParsedBuildJson => {
+  // A cheap bound first: every UTF-16 unit is at most 3 UTF-8 bytes.
+  if (text.length > SYSTEM_BUILD_JSON_MAX_BYTES || (text.length * 3 > SYSTEM_BUILD_JSON_MAX_BYTES && byteLength(text) > SYSTEM_BUILD_JSON_MAX_BYTES)) {
+    return { build: null, raw: null, problems: [], unreadable: BUILD_TOO_LARGE };
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(stripBom(text));
+  } catch {
+    return { build: null, raw: null, problems: [], unreadable: BUILD_NOT_JSON };
+  }
+  if (!isObject(value)) return { build: null, raw: null, problems: [], unreadable: BUILD_NOT_JSON };
+  const problems: SystemProblem[] = [];
+  const broken = (entry: string, message: string): null => {
+    problems.push({ entry, message });
+    return null;
+  };
+
+  const home = own(value, 'home');
+  if (home !== 'internal' && home !== 'repo') {
+    return { build: null, raw: value, problems: [{ entry: 'home', message: 'BUILD.json must say where the system lives: home is "internal" or "repo".' }], unreadable: BUILD_NOT_JSON };
+  }
+  const rawName = own(value, 'name');
+  const name = typeof rawName === 'string' ? rawName.normalize('NFKC').trim() : '';
+  if (name === '' || name.length > SYSTEM_NAME_MAX || hasControl(name)) {
+    return { build: null, raw: value, problems: [{ entry: 'name', message: 'BUILD.json needs a system name of 1 to 60 characters.' }], unreadable: BUILD_NOT_JSON };
+  }
+
+  // The repo home's paths: absolute directory, repo-relative folder and living page (§2.13).
+  let repo: BuildJson['repo'] = null;
+  const rawRepo = own(value, 'repo');
+  if (rawRepo !== undefined && rawRepo !== null) {
+    if (!isObject(rawRepo)) {
+      if (home === 'repo') return { build: null, raw: value, problems: [{ entry: 'repo', message: 'A repo home needs a repo object with directory, folder and livingPage.' }], unreadable: BUILD_NOT_JSON };
+      broken('repo', 'repo in BUILD.json is not an object, so it was skipped.');
+    } else {
+      const directory = own(rawRepo, 'directory');
+      const folder = own(rawRepo, 'folder');
+      const livingPage = own(rawRepo, 'livingPage');
+      const ok =
+        isAbsPath(directory) &&
+        typeof folder === 'string' && REPO_REL_PATTERN.test(folder) &&
+        typeof livingPage === 'string' && REPO_REL_PATTERN.test(livingPage) && livingPage.endsWith('.html');
+      if (!ok) {
+        if (home === 'repo') return { build: null, raw: value, problems: [{ entry: 'repo', message: 'A repo home needs an absolute directory, a folder and a livingPage path inside the repo (ending .html).' }], unreadable: BUILD_NOT_JSON };
+        broken('repo', 'The repo paths in BUILD.json are not usable, so they were skipped.');
+      } else {
+        // Safe: `ok` checked every field's type and shape.
+        repo = { directory: directory as string, folder: folder as string, livingPage: livingPage as string };
+      }
+    }
+  } else if (home === 'repo') {
+    return { build: null, raw: value, problems: [{ entry: 'repo', message: 'A repo home needs a repo object with directory, folder and livingPage.' }], unreadable: BUILD_NOT_JSON };
+  }
+
+  let code: BuildJson['code'] = null;
+  const rawCode = own(value, 'code');
+  if (rawCode !== undefined && rawCode !== null) {
+    const directory = isObject(rawCode) ? own(rawCode, 'directory') : undefined;
+    if (isAbsPath(directory)) code = { directory };
+    else broken('code', 'The code directory in BUILD.json is not an absolute path, so it was skipped.');
+  }
+
+  let ticket: string | null = null;
+  const rawTicket = own(value, 'ticket');
+  if (rawTicket !== undefined && rawTicket !== null) {
+    if (typeof rawTicket === 'string' && SYSTEM_BUILD_TICKET_PATTERN.test(rawTicket)) ticket = rawTicket;
+    else broken('ticket', 'The ticket in BUILD.json is not a build ticket id, so it was skipped.');
+  }
+
+  const rawMode = own(value, 'mode');
+  const mode = rawMode === 'fix' || rawMode === 'describe' || rawMode === 'none' ? rawMode : 'none';
+  if (rawMode !== undefined && mode !== rawMode) broken('mode', 'mode in BUILD.json must be fix, describe or none.');
+  const rawDark = own(value, 'dark');
+  const dark = rawDark === true;
+  if (rawDark !== undefined && typeof rawDark !== 'boolean') broken('dark', 'dark in BUILD.json must be true or false.');
+  const rawAccess = own(value, 'access');
+  const access = rawAccess === 'dev' || rawAccess === 'public' ? rawAccess : null;
+  if (rawAccess !== undefined && rawAccess !== null && access !== rawAccess) broken('access', 'access in BUILD.json must be dev, public or null.');
+  const rawRound = own(value, 'round');
+  const round = rawRound === 1 || rawRound === 2 || rawRound === 'done' ? rawRound : 1;
+  if (rawRound !== undefined && round !== rawRound) broken('round', 'round in BUILD.json must be 1, 2 or done.');
+
+  const calls: BuildJson['calls'] = [];
+  const rawCalls = own(value, 'calls');
+  if (rawCalls !== undefined && rawCalls !== null) {
+    if (!Array.isArray(rawCalls)) broken('calls', 'calls in BUILD.json is not a list, so it was skipped.');
+    else {
+      if (rawCalls.length > SYSTEM_BUILD_CALLS_MAX) problems.push({ entry: 'calls', message: `BUILD.json holds up to ${SYSTEM_BUILD_CALLS_MAX} calls; the rest weren't read.` });
+      rawCalls.slice(0, SYSTEM_BUILD_CALLS_MAX).forEach((call, index) => {
+        const entry = `calls[${index}]`;
+        if (!isObject(call)) return void problems.push({ entry, message: 'This call is not an object.' });
+        const topic = own(call, 'topic');
+        const choice = own(call, 'choice');
+        if (typeof topic !== 'string' || !BUILD_CALL_PATTERN.test(topic) || typeof choice !== 'string' || !BUILD_CALL_PATTERN.test(choice)) {
+          return void problems.push({ entry, message: 'A call needs a topic and a choice: lower-case letters, digits and dashes.' });
+        }
+        const note = noteText(own(call, 'note'), SYSTEM_USAGE_NOTE_MAX);
+        if (note === null) return void problems.push({ entry, message: 'Its note is longer than 500 characters.' });
+        calls.push({ topic, choice, note });
+      });
+    }
+  }
+
+  let applied: BuildJson['applied'] = null;
+  const rawApplied = own(value, 'applied');
+  if (rawApplied !== undefined && rawApplied !== null) {
+    const at = isObject(rawApplied) ? own(rawApplied, 'at') : undefined;
+    const parts = isObject(rawApplied) ? buildParts(own(rawApplied, 'parts')) : null;
+    const skipped = isObject(rawApplied) ? buildParts(own(rawApplied, 'skipped')) : null;
+    if (isIso(at) && parts !== null && skipped !== null) applied = { at, parts, skipped };
+    else broken('applied', 'applied in BUILD.json needs an ISO time and parts and skipped from system-files, token-fixes, docs, living-page.');
+  }
+
+  let proposal: string | null = null;
+  const rawProposal = own(value, 'proposal');
+  if (rawProposal !== undefined && rawProposal !== null) {
+    if (typeof rawProposal === 'string' && SYSTEM_PROPOSAL_ID_PATTERN.test(rawProposal)) proposal = rawProposal;
+    else broken('proposal', 'The proposal in BUILD.json is not a proposal id, so it was skipped.');
+  }
+
+  let drift: BuildJson['drift'] = null;
+  const rawDrift = own(value, 'drift');
+  if (rawDrift !== undefined && rawDrift !== null) {
+    const differ = isObject(rawDrift) ? own(rawDrift, 'differ') : undefined;
+    const rawKinds = isObject(rawDrift) ? own(rawDrift, 'kinds') : undefined;
+    const note = isObject(rawDrift) ? noteText(own(rawDrift, 'note'), 300) : null;
+    const kinds =
+      Array.isArray(rawKinds) && rawKinds.length <= BUILD_DRIFT_KINDS.length && rawKinds.every((kind) => typeof kind === 'string' && BUILD_DRIFT_KINDS.includes(kind))
+        ? [...new Set(rawKinds as string[])]
+        : null;
+    if (typeof differ === 'number' && Number.isInteger(differ) && differ >= 0 && differ <= 100_000 && kinds !== null && note !== null) {
+      drift = { differ, kinds, note };
+    } else {
+      broken('drift', "drift in BUILD.json needs a differ count (0 to 100 000), kinds from tailwind-config, js-theme, scss, less, other, and a note up to 300 characters.");
+    }
+  }
+
+  const build: BuildJson = { version: 1, ticket, name, home, repo, code, mode, dark, calls, access, round, applied, proposal, drift };
+  return { build, raw: value, problems, unreadable: null };
+};
 
 /** `PROPOSAL.json` (schema `design-chamber/system-proposal@1`, §2.15): ≤ `SYSTEM_PROPOSAL_MAX_BYTES`, else unreadable. */
 export type ParsedProposal = { proposal: ProposalJson | null; problems: SystemProblem[]; unreadable: string | null };
