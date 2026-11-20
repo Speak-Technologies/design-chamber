@@ -1048,6 +1048,8 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
 
     async clearHandEdits(id, upTo) {
       const dir = await systems.dir(id);
+      // A repo home is read-only (AD-20): its hand-edit ledger takes no writes either.
+      refuseReadOnly(await systems.readState(id));
       await editsFile.update(id, dir, (file) => clearLedger(file, upTo));
     },
   };

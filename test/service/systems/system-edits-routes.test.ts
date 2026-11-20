@@ -1,11 +1,14 @@
 // The system hand-edit routes over HTTP (documentation/specs/phase-2-5-technical.md §3.1, §5.3,
 // §6.2): the bearer check on every route, the id gate (traversal), body validation with
 // sentences, and the flow save → GET /systems/:id (real token values, light and dark) → undo →
-// clear, against a real system store and real system history in a temp designs root.
+// clear, against a real system store and real system history in a temp designs root; a repo-backed
+// system refuses the edit, the undo and the ledger clear with the read-only sentence (AD-20).
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readdir } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
+import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 
 import type { CreateSystemResponse, SystemEditResponse } from '../../../src/shared/api.ts';
@@ -13,6 +16,7 @@ import type { SystemDetail } from '../../../src/shared/types.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
 import { registerSystemEditRoutes } from '../../../src/service/routes/system-edits.ts';
 import { registerSystemsRoutes } from '../../../src/service/routes/systems.ts';
+import { ensureSystemStore } from '../../../src/service/systems/store.ts';
 import { createFakeContext } from '../../helpers/fake-context.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
 
@@ -38,7 +42,7 @@ const serve = async (t: TestContext) => {
     });
     return { status: answer.status, json: (await answer.json()) as unknown };
   };
-  return { tmp, call };
+  return { tmp, ctx, call };
 };
 
 test('every system edit route refuses a missing or wrong token with 401 and touches nothing', async (t) => {
@@ -142,4 +146,36 @@ test('the flow: save over HTTP, read it back, undo, clear', async (t) => {
   assert.equal(await tmp.read(`_systems/${id}/tokens.css`), ':root {\n}\n\n@media (prefers-color-scheme: dark) {\n  :root {\n  }\n}\n');
   const cleared = await call('POST', `/systems/${id}/hand-edits/clear`, { upTo: 1 });
   assert.deepEqual([cleared.status, cleared.json], [200, { ok: true }]);
+});
+
+test('a repo-backed system refuses an edit, its undo and a ledger clear with 422 read-only, writing nothing', async (t) => {
+  const { tmp, ctx, call } = await serve(t);
+  const { id, system } = (await call('POST', '/systems', { name: 'Acme' })).json as CreateSystemResponse;
+  // A real edit first, so the undo and the clear have something they would otherwise act on.
+  const saved = await call('POST', `/systems/${id}/edits`, { op: 'save', stamps: { tokens: system.stamps.tokens }, tokens: [{ kind: 'add', name: '--a', mode: 'light', value: '1px' }] });
+  assert.equal(saved.status, 200, JSON.stringify(saved.json));
+  const edit = saved.json as SystemEditResponse;
+  const systems = ensureSystemStore(ctx);
+  await systems.withLock(id, () =>
+    systems.updateStateLocked(id, (state) => ({
+      ...state,
+      home: { kind: 'repo', directory: path.join(tmp.root, '..', 'shop'), folder: 'design-system', livingPage: 'design-system/index.html', adoptedAt: '2026-11-20T09:00:00.000Z' },
+    })),
+  );
+  const files = ['tokens.css', '.chamber/edits.json'];
+  const before = await Promise.all(files.map((file) => tmp.read(`_systems/${id}/${file}`)));
+  const versionsBefore = await readdir(tmp.at(`_systems/${id}/.versions`)).catch(() => []);
+  const sentence = 'Acme lives in shop. Change the values there, or ask the agent here.';
+  const attempts: [string, unknown][] = [
+    [`/systems/${id}/edits`, { op: 'save', stamps: { tokens: edit.stamps.tokens }, tokens: [{ kind: 'add', name: '--b', mode: 'light', value: '2px' }] }],
+    [`/systems/${id}/edits/${edit.edit.id}/undo`, {}],
+    [`/systems/${id}/hand-edits/clear`, { upTo: 1 }],
+  ];
+  for (const [url, body] of attempts) {
+    const answer = await call('POST', url, body);
+    assert.equal(answer.status, 422, `${url}: ${JSON.stringify(answer.json)}`);
+    assert.deepEqual(answer.json, { error: 'read-only', message: sentence }, url);
+  }
+  assert.deepEqual(await Promise.all(files.map((file) => tmp.read(`_systems/${id}/${file}`))), before);
+  assert.deepEqual(await readdir(tmp.at(`_systems/${id}/.versions`)).catch(() => []), versionsBefore);
 });
