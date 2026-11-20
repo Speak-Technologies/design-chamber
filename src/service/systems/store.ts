@@ -137,7 +137,7 @@ export type SystemStore = {
   /** With a seed (a Code scan or a preset, §7.2) its files replace the empty tokens.css and system.json. */
   create(input: CreateSystemBody, seed?: SystemSeed): Promise<{ id: string; system: SystemDetail }>;
   patch(id: string, body: PatchSystemBody): Promise<PatchSystemResponse>;
-  trash(id: string): Promise<DeleteSystemResponse>;
+  trash(id: string, options?: TrashOptions): Promise<DeleteSystemResponse>;
   /** The systems index (§5.1): the last good list, refreshed after `system` and `root` events. */
   index(): readonly SystemSummary[];
   /** Run `fn` on the system's chain (its lock): revision bumps, and later edits and restores. */
@@ -160,6 +160,9 @@ export type SystemStore = {
   takeNotices(): string[];
   dispose(): Promise<void>;
 };
+
+/** `trash` options: `guard` runs on the state under the system's lock, before the move; a throw refuses it (a build Stop, §5.9). */
+export type TrashOptions = { guard?: (state: SystemState) => void };
 
 const isRealDirectory = async (target: string): Promise<boolean> => {
   try {
@@ -824,10 +827,12 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     return readyNote === undefined ? { system } : { system, readyNote };
   };
 
-  const trash = async (id: string): Promise<DeleteSystemResponse> => {
+  const trash = async (id: string, options: TrashOptions = {}): Promise<DeleteSystemResponse> => {
     const { trashedTo, name, repo } = await withLock(id, async () => {
       const systemDir = await dir(id);
       const { state } = await readStateOf(systemDir, id);
+      // Under the same lock as the move, so nothing (an `applied` stamp seen meanwhile) lands between the check and the move.
+      options.guard?.(state);
       const target = await moveToTrash(await realRootOf(), id, systemDir);
       return { trashedTo: target, name: state.name, repo: state.home?.kind === 'repo' };
     });

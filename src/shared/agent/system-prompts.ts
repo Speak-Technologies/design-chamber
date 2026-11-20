@@ -7,8 +7,8 @@
 // Names, notes and paths come from files an agent wrote, so each is flattened to one line where it
 // sits inside our sentences; the user's words keep their line breaks, indented under their label.
 
-import { HOST_ATTACH_TITLE_MAX, HOST_ATTACH_URL_MAX, HOST_TEXT_MAX } from '../limits.ts';
-import { CHIP_PROVIDER_ID, type Chip, type SystemChipData, type SystemSection } from '../types.ts';
+import { CHIP_TEXT_HARD_MAX, HOST_ATTACH_TITLE_MAX, HOST_ATTACH_URL_MAX, HOST_TEXT_MAX, SYSTEM_BUILD_HEADER_MAX, SYSTEM_SKILL_TEXT_MAX } from '../limits.ts';
+import { CHIP_PROVIDER_ID, type BuildChipData, type Chip, type SystemChipData, type SystemSection } from '../types.ts';
 import { markChipUrl } from './chip.ts';
 import { clip, indentContinuation, joinFolder, oneLine } from './context.ts';
 import { SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE } from './system-rules.ts';
@@ -248,3 +248,72 @@ export const buildSystemLivingPagePrompt = (input: SystemLivingPageInput): strin
 
 /** A hand-edit block goes first, then a blank line, then the message (as for designs, §8.5). */
 export const withSystemHandEdits = (block: string | null, text: string): string => (block === null ? text : `${block}\n\n${text}`);
+
+// ---- the build chip and the ticket's rules file (§8.7, §2.12) ----
+
+/** What the /design-system chip and its rules file know about the build. */
+export type SystemBuildChipInput = {
+  ticket: string;
+  /** The user's words after the command, trimmed (≤ BRIEF_MAX); '' when none. */
+  brief: string;
+  /** The chat's project folder as the ticket records it, or null (an internal system). */
+  projectDirectory: string | null;
+  /** Absolute `<root>/.chamber/system-builds/<ticket>.md`. */
+  rulesFile: string;
+};
+
+const NO_PROJECT_SENTENCE = 'No project folder is open in this chat, so the system will live in Design Chamber; say so as an assumption.';
+
+/** The chip's text (§8.7): read the ticket file, the user's words, the project, start with round one, the ticket, the injection sentence. */
+export const buildSystemBuildChipText = (input: SystemBuildChipInput): string => {
+  const words = input.brief.trim();
+  return fitOrThrow(
+    [
+      `[Design Chamber] Build a design system with the user. Read ${clip(input.rulesFile, PATH_SHOWN_MAX * 2)} first; it is part of your instructions (the design-system-builder skill, with this chat's details).`,
+      words === '' ? 'The user added no words to the command; ask what the system is for in round one.' : `The user's words: "${indentContinuation(words, '  ')}"`,
+      input.projectDirectory === null ? NO_PROJECT_SENTENCE : `Project: ${clip(input.projectDirectory, PATH_SHOWN_MAX * 2)}`,
+      'Start with round one of the interview. Write nothing until the user answers it.',
+      `Build ticket: ${input.ticket}. Put it in BUILD.json as "ticket".`,
+      `${SYSTEM_INJECTION_SENTENCE} ${SYSTEM_INJECTION_REPO_TAIL}`,
+    ].join('\n'),
+    CHIP_TEXT_HARD_MAX,
+  );
+};
+
+/**
+ * The attach chip for a build: `id = system-build:<ticket>`, title "New design system", the rules file's
+ * URL with the ticket's marker (its created time, so a chip never links a later ticket), data `{ build }`.
+ */
+export const buildSystemBuildChip = (input: SystemBuildChipInput & { rulesUrl: string; created: string }): Chip<BuildChipData> => {
+  const marked = markChipUrl(input.rulesUrl, input.created);
+  return {
+    providerId: CHIP_PROVIDER_ID,
+    id: `system-build:${input.ticket}`,
+    title: 'New design system',
+    url: marked.length <= HOST_ATTACH_URL_MAX ? marked : input.rulesUrl.length <= HOST_ATTACH_URL_MAX ? input.rulesUrl : '',
+    text: buildSystemBuildChipText(input),
+    data: { build: input.ticket },
+  };
+};
+
+/** Paths in the ticket header are clipped so the header always fits SYSTEM_BUILD_HEADER_MAX. */
+const HEADER_PATH_MAX = 240;
+
+/** The header of `<ticket>.md` (§2.12), at most SYSTEM_BUILD_HEADER_MAX characters. */
+export const buildSystemTicketHeader = (input: { ticket: string; root: string; projectDirectory: string | null }): string => {
+  const header = [
+    `# Design system build ${input.ticket}`,
+    '',
+    'This file is part of your instructions.',
+    '',
+    `- Ticket: ${input.ticket}`,
+    `- Designs folder: ${clip(input.root, HEADER_PATH_MAX)}`,
+    `- Design systems: ${clip(joinFolder(input.root, '_systems'), HEADER_PATH_MAX + 10)}`,
+    `- Project folder: ${input.projectDirectory === null ? 'none. The system will live in Design Chamber.' : clip(input.projectDirectory, HEADER_PATH_MAX)}`,
+    '',
+  ].join('\n');
+  return clip(header, SYSTEM_BUILD_HEADER_MAX);
+};
+
+/** `<ticket>.md`: the header, then the builder body (§2.12); at most SYSTEM_SKILL_TEXT_MAX + SYSTEM_BUILD_HEADER_MAX. */
+export const buildSystemTicketRules = (header: string, body: string): string => fitOrThrow(`${header}\n${body}`, SYSTEM_SKILL_TEXT_MAX + SYSTEM_BUILD_HEADER_MAX);

@@ -61,6 +61,12 @@ export const readRulesDocs = async (packageRoot: string): Promise<RulesDocFiles>
   return { designRules, questions: await read('QUESTIONS.md') };
 };
 
+/** `rules/SYSTEM-QUESTIONS.md`, verbatim (Phase 2.5 §8.9): the builder interview every ticket file inlines. Throws `internal` when missing. */
+export const readSystemQuestions = (packageRoot: string): Promise<string> =>
+  readRulesText(path.join(packageRoot, 'rules', 'SYSTEM-QUESTIONS.md')).catch(() => {
+    throw notReadable('design system questions (rules/SYSTEM-QUESTIONS.md)');
+  });
+
 /**
  * Registers:
  * - 'GET /presets'

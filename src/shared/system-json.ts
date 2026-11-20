@@ -19,6 +19,7 @@
 import { sha256Hex } from './agent/ownership.ts';
 import {
   SYSTEM_BRAND_MAX,
+  SYSTEM_BUILD_TICKET_PATTERN,
   SYSTEM_COMPONENTS_MAX,
   SYSTEM_ENTRY_ID_PATTERN,
   SYSTEM_EXAMPLE_MAX,
@@ -273,6 +274,31 @@ const parseHome = (value: unknown): SystemState['home'] | undefined => {
 };
 
 /**
+ * state.json's `build` (§5.9, adoption writes it; Stop reads `appliedSeen`): the ticket the system was
+ * started from, when it was adopted, the `applied` stamp acted on, and (rev 3) the ticket's project folder.
+ * `approved` is T17's and kept when it is an object or null. Anything else drops the record (undefined).
+ */
+export const parseBuildState = (value: unknown): SystemState['build'] | undefined => {
+  if (!isObject(value)) return undefined;
+  const ticket = own(value, 'ticket');
+  const adoptedAt = own(value, 'adoptedAt');
+  const appliedSeen = own(value, 'appliedSeen');
+  const projectDirectory = own(value, 'projectDirectory');
+  const approved = own(value, 'approved');
+  if (ticket !== null && (typeof ticket !== 'string' || !SYSTEM_BUILD_TICKET_PATTERN.test(ticket))) return undefined;
+  if (!isIso(adoptedAt) || (appliedSeen !== null && !isIso(appliedSeen))) return undefined;
+  if (projectDirectory !== undefined && projectDirectory !== null && (typeof projectDirectory !== 'string' || projectDirectory.length > 4096)) return undefined;
+  return {
+    ticket,
+    adoptedAt,
+    appliedSeen,
+    ...(projectDirectory === undefined ? {} : { projectDirectory }),
+    // Safe: `approved` is service-written; T17 validates it in depth before reading it.
+    ...(approved === null || isObject(approved) ? { approved: approved as NonNullable<SystemState['build']>['approved'] } : {}),
+  };
+};
+
+/**
  * `<system>/.chamber/state.json` (schema `design-chamber/system-state@1`, §2.5). A missing or broken file
  * gives a provisional state (name from the id humanised, Draft, revision 0), written on the first service write.
  * Service-owned fields T12b and later add (`build`, `snapshot`, …) are kept when they are objects of the
@@ -352,9 +378,11 @@ export const parseSystemState = (raw: unknown, id: string, now: IsoDate): System
       state.landed = { proposal, matches: own(landed, 'matches') === true, differ, unclaimed };
     }
   }
+  const build = parseBuildState(own(raw, 'build'));
+  if (build !== undefined) state.build = build;
   // Service-owned S8 records the detail does not read yet: kept as the service wrote them (objects
   // only), so a T1 write never drops them; their own tasks (T12b, T14) validate them in depth.
-  const passThrough = ['build', 'buildProblem', 'repoProblem', 'livingPage'] as const;
+  const passThrough = ['buildProblem', 'repoProblem', 'livingPage'] as const;
   for (const key of passThrough) {
     const value = own(raw, key);
     // Safe: these keys are written only by the service, and nothing reads them before their tasks validate them.

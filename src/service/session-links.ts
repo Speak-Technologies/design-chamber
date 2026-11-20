@@ -16,18 +16,26 @@
 // Phase 2.5 (§8.5): a design system's chip (`system:<id>`, `buildSystemChip`) links the system the
 // same way: marker-gated (the system's created time), only while its `sessionId` is null, under the
 // system's lock, never moved to another chat.
+//
+// S8 (§2.12): a build chip (`system-build:<ticket>`, `buildSystemBuildChip`) records its chat in the
+// ticket the same way: marker-gated (the ticket's created time), only while the ticket has none, on
+// the tickets' queue (`builds.linkSession`), so a chat started by Build with the agent… is known
+// before the agent's BUILD.json is adopted.
 
 import { chipMarkerInUrl, chipMarkerOf } from '../shared/agent/chip.ts';
-import { SLUG_PATTERN, SYSTEM_ID_PATTERN, TURN_EVENT_QUEUE_MAX } from '../shared/limits.ts';
+import { SLUG_PATTERN, SYSTEM_BUILD_TICKET_PATTERN, SYSTEM_ID_PATTERN, TURN_EVENT_QUEUE_MAX } from '../shared/limits.ts';
 import { CHIP_PROVIDER_ID } from '../shared/types.ts';
 import type { ChangeHub, DesignIndex, DesignStore, Logger } from './context.ts';
 import { ApiError } from './http.ts';
+import type { BuildTickets } from './systems/builds.ts';
 import type { SystemStore } from './systems/store.ts';
 
 /** How OpenChamber names our chip among a chat's linked items (`buildChip` makes the id `design:<slug>`). */
 const CHIP_LINK_PREFIX = `guest:${CHIP_PROVIDER_ID}:design:`;
 /** A design system's chip (`buildSystemChip` makes the id `system:<id>`). */
 const SYSTEM_CHIP_LINK_PREFIX = `guest:${CHIP_PROVIDER_ID}:system:`;
+/** A build chip (`buildSystemBuildChip` makes the id `system-build:<ticket>`). */
+const BUILD_CHIP_LINK_PREFIX = `guest:${CHIP_PROVIDER_ID}:system-build:`;
 
 /** Design chips read from one event; a chat carries one or two in practice. */
 export const LINKED_CHIPS_MAX = 16;
@@ -76,15 +84,35 @@ export const systemChipsOf = (linked: readonly unknown[]): SystemChipRef[] => {
   return chips;
 };
 
+/** One of our build chips on a chat: the ticket and the marker of the ticket it was made for. */
+export type BuildChipRef = { ticket: string; marker: string };
+
+/** Our marked build chips on a chat: valid tickets, once each, at most `LINKED_CHIPS_MAX`. Anything else is skipped. */
+export const buildChipsOf = (linked: readonly unknown[]): BuildChipRef[] => {
+  const chips: BuildChipRef[] = [];
+  for (const item of linked) {
+    if (!isRecord(item) || item.kind !== 'guest' || typeof item.id !== 'string' || typeof item.url !== 'string') continue;
+    if (!item.id.startsWith(BUILD_CHIP_LINK_PREFIX)) continue;
+    const ticket = item.id.slice(BUILD_CHIP_LINK_PREFIX.length);
+    const marker = chipMarkerInUrl(item.url);
+    if (marker === null || !SYSTEM_BUILD_TICKET_PATTERN.test(ticket) || chips.some((chip) => chip.ticket === ticket)) continue;
+    chips.push({ ticket, marker });
+    if (chips.length === LINKED_CHIPS_MAX) break;
+  }
+  return chips;
+};
+
 export type SessionLinksDeps = {
   store: Pick<DesignStore, 'linkIfUnlinked'>;
   index: Pick<DesignIndex, 'get'>;
   log: Logger;
   /** Phase 2.5: system chips; absent → system chips are ignored. */
   systems?: { store: Pick<SystemStore, 'index' | 'withLock' | 'updateStateLocked'>; hub: Pick<ChangeHub, 'emit'> };
+  /** Phase 2.5 S8: build chips; absent → build chips are ignored. */
+  builds?: Pick<BuildTickets, 'linkSession'>;
 };
 
-type Work = { designs: ChipRef[]; systems: SystemChipRef[] };
+type Work = { designs: ChipRef[]; systems: SystemChipRef[]; builds: BuildChipRef[] };
 
 export type SessionLinks = {
   /** Queue an accepted event; never throws, never waits. */
@@ -95,7 +123,7 @@ export type SessionLinks = {
   dispose(): void;
 };
 
-export const createSessionLinks = ({ store, index, log, systems }: SessionLinksDeps): SessionLinks => {
+export const createSessionLinks = ({ store, index, log, systems, builds }: SessionLinksDeps): SessionLinks => {
   // Per chat, the chips of its latest event, in arrival order; one worker drains it.
   const pending = new Map<string, Work>();
   let running: Promise<void> | null = null;
@@ -162,6 +190,15 @@ export const createSessionLinks = ({ store, index, log, systems }: SessionLinksD
           log.warn('session-links.system-failed', { system: chip.system, error: error instanceof Error ? error.message : String(error) });
         }
       }
+      for (const chip of work.builds) {
+        if (disposed || builds === undefined) return;
+        try {
+          // The ticket is written only while it has no chat and only for the ticket the chip was made for.
+          await builds.linkSession(chip.ticket, sessionId, chip.marker);
+        } catch (error) {
+          log.warn('session-links.build-failed', { ticket: chip.ticket, error: error instanceof Error ? error.message : String(error) });
+        }
+      }
     }
   };
 
@@ -178,19 +215,21 @@ export const createSessionLinks = ({ store, index, log, systems }: SessionLinksD
       if (disposed || event.session.parentId !== null) return; // a subagent's chat is not the user's
       let chips: ChipRef[];
       let systemChips: SystemChipRef[];
+      let buildChips: BuildChipRef[];
       try {
         chips = chipsOf(event.linked);
         systemChips = systems === undefined ? [] : systemChipsOf(event.linked);
+        buildChips = builds === undefined ? [] : buildChipsOf(event.linked);
       } catch (error) {
         // Not expected (every item is checked), but the route relies on take never throwing:
         // a link lost here must not cost the turn its snapshot.
         log.warn('session-links.take-failed', { error: error instanceof Error ? error.message : String(error) });
         return;
       }
-      if (chips.length === 0 && systemChips.length === 0) return;
+      if (chips.length === 0 && systemChips.length === 0 && buildChips.length === 0) return;
       // The latest event wins for its chat; re-inserting keeps the order fair.
       pending.delete(event.session.id);
-      pending.set(event.session.id, { designs: chips, systems: systemChips });
+      pending.set(event.session.id, { designs: chips, systems: systemChips, builds: buildChips });
       if (pending.size > TURN_EVENT_QUEUE_MAX) {
         const oldest = pending.keys().next();
         if (!oldest.done) pending.delete(oldest.value);

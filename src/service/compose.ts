@@ -51,6 +51,7 @@ import { createSettingsStore, settingsFilePath, type SettingsEnv } from './setti
 import { createDesignStore } from './store.ts';
 import { startChoiceReconciler } from './systems/choice.ts';
 import { ensureLinkService } from './systems/link.ts';
+import { ensureBuildTickets } from './systems/builds.ts';
 import { ensureSystemStore } from './systems/store.ts';
 import { ensureSystemVersions } from './systems/versions.ts';
 import { ensureThumbnailService } from './thumbnails.ts';
@@ -137,6 +138,8 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   ensureSystemVersions(ctx);
   // Eager, so a removed design leaves the folder registry from the first event on (Phase 2.5 §5.8).
   ensureFoldersService(ctx);
+  // Eager, so expired and over-the-cap build tickets are swept at service start (Phase 2.5 §2.12).
+  ensureBuildTickets(ctx);
 
   const watcher = startWatcher({ settings, hub, log, selfWrites, ...options.watch });
   ctx.onDispose(() => watcher.stop());

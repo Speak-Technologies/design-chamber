@@ -773,6 +773,9 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
     };
   };
 
+  /** Build tickets handed out (`POST /systems/chip`). */
+  let buildSeq = 0;
+
   const route = async ({ key, params }: Matched, query: Record<string, string>, body: Record<string, unknown>): Promise<unknown> => {
     const slug = params.slug ?? '';
     switch (key) {
@@ -1097,6 +1100,23 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           preset: typeof body.preset === 'string' ? body.preset : null,
         });
         return { slug: created, chip: chipOf(created) };
+      }
+      // Phase 2.5 S8: a build ticket and its chip, as the service answers (no files here).
+      case 'POST /systems/chip': {
+        buildSeq += 1;
+        const ticket = `sb_${String(buildSeq).padStart(12, '0')}`;
+        const brief = typeof body.brief === 'string' ? body.brief.trim() : '';
+        return {
+          ticket,
+          chip: {
+            providerId: 'design-chamber',
+            id: `system-build:${ticket}`,
+            title: 'New design system',
+            url: `file:///fake/Designs/.chamber/system-builds/${ticket}.md`,
+            text: `[Design Chamber] Build a design system with the user.${brief ? ` The user's words: "${brief}"` : ''}`,
+            data: { build: ticket },
+          },
+        };
       }
       case 'POST /designs/:slug/prompt': {
         const entry = get(slug);
