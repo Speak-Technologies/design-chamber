@@ -563,10 +563,10 @@ const keyboardAndLive = async () => {
   // a viewport chip hides one column and keeps one visible.
   await p.click('.dc-chips .oc-sdk-btn', { text: 'Phone' });
   await p.settle(300);
-  check((await p.guest('return doc.querySelectorAll(".dc-board").length')) === 3, `${tag}: hiding Phone leaves the Laptop column`);
+  check((await p.guest('return doc.querySelectorAll(".dc-board:not(.dc-ghost)").length')) === 3, `${tag}: hiding Phone leaves the Laptop column`);
   await p.click('.dc-chips .oc-sdk-btn', { text: 'Laptop' });
   await p.settle(300);
-  check((await p.guest('return doc.querySelectorAll(".dc-board").length')) === 3, `${tag}: the last visible size cannot be hidden`);
+  check((await p.guest('return doc.querySelectorAll(".dc-board:not(.dc-ghost)").length')) === 3, `${tag}: the last visible size cannot be hidden`);
   await p.close();
 };
 

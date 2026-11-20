@@ -61,6 +61,13 @@ export const run = async (helpers) => {
       await p.click('.dc-toolbar .oc-sdk-btn', { text: 'Fit' });
       await p.wheel(home.x + home.w / 2, home.y + home.h / 2, 0, -130, { ctrl: true });
       await p.settle(500);
+    } else {
+      // Same as edit-text.mjs: the rail keeps 4 frames live and the "+ Screen" board pulls the fit centre down, so Home is left
+      // paused. Wheel over it until it is the nearest to the centre and loads.
+      const wall = await p.rect('.dc-wall');
+      await p.wheel(home.x + home.w / 2, home.y + home.h / 2, 0, home.y + home.h / 2 - (wall.y + wall.h / 2));
+      await p.waitFor('return doc.querySelector(\'.dc-board[data-board="home@laptop"]\')?.dataset.state === "ready"', 'Home to load after panning to it', 20000);
+      await p.settle(500);
     }
     const board = await p.rect('.dc-board[data-board="home@laptop"]');
     const pick = [board.x + board.w * 0.2, board.y + board.h * 0.22];
