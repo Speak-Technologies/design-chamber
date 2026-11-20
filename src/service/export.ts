@@ -3,7 +3,8 @@
 // on Linux, user-dirs.ts), falling back to `<root>/.exports/` when that folder is missing — and
 // answers the path for the toast's "Show in folder" (reveal only accepts paths issued here).
 //
-//   ZIP:  `<slug>/` tree of every tracked file except design.json (internal)
+//   ZIP:  `<slug>/` tree of every tracked file except design.json (internal); under `system/` (a
+//         design system's copy, Phase 2.5 §2.6) only what the pages use, never the agent's reference
 //   HTML: bundleDocument output WITHOUT the bridge — page index.html, or the chosen screen
 //
 // Names get ` (2)`, ` (3)`… on collision (also between exports running at the same time);
@@ -14,7 +15,7 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { ExportBody, ExportResponse } from '../shared/api.ts';
-import { DESIGN_JSON_FILE } from '../shared/design-json.ts';
+import { DESIGN_JSON_FILE, screenFileOf } from '../shared/design-json.ts';
 import { ApiError } from './http.ts';
 import type { DesignRecord, DesignStore, Logger, SettingsStore } from './context.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource } from './bundle.ts';
@@ -76,9 +77,46 @@ const uniqueTarget = (dir: string, baseName: string, reserved: ReadonlySet<strin
   return candidate;
 };
 
+/** Files of a design-system copy a page can use (Phase 2.5 §2.6): its stylesheets, fonts and logos. */
+const COPY_ASSET_PATTERN = /^system\/(?:system\.css|fonts\.css|tokens\.css|fonts\/[^/]+|logos\/[^/]+)$/;
+
+/**
+ * Whether a tracked file goes into the ZIP (Phase 2.5 §2.6). Everything outside `system/` does, as
+ * before. Under `system/` only what the bundled pages reference (`referenced`, design-relative), and
+ * never the agent's reference (OVERVIEW.md, notes, patterns, brand, components, system.json) or
+ * COPY.json. `referenced` null means the pages could not be bundled to tell: then the stylesheets,
+ * fonts and logos go in, and still none of the reference.
+ */
+export const exportIncludes = (rel: string, referenced: ReadonlySet<string> | null): boolean => {
+  if (rel !== 'system' && !rel.startsWith('system/')) return true;
+  if (!COPY_ASSET_PATTERN.test(rel)) return false;
+  return referenced === null || referenced.has(rel);
+};
+
+/** Every design-relative file the design's pages read when bundled for export; null when one can't be bundled. */
+const referencedFiles = async (record: DesignRecord): Promise<Set<string> | null> => {
+  const entries = record.design.kind === 'page' ? ['index.html'] : record.design.screens.filter((screen) => record.files.screens[screen.id]?.exists).map((screen) => screenFileOf(screen.id));
+  const source = createLiveFileSource(record.path);
+  const referenced = new Set<string>();
+  for (const entry of entries) {
+    try {
+      const result = await bundleDocument(source, entry, { mode: 'export' });
+      for (const input of result.inputs) referenced.add(input.rel);
+    } catch (error) {
+      if (error instanceof BundleMissingEntry) continue; // a screen not written yet references nothing
+      return null;
+    }
+  }
+  return referenced;
+};
+
 /** What the tracked-minus-design.json set holds, or `no-html` when there is nothing to put in a ZIP. */
 const zipRels = async (record: DesignRecord): Promise<string[]> => {
-  const rels = (await listTracked(record.path)).filter((rel) => rel !== DESIGN_JSON_FILE);
+  let rels = (await listTracked(record.path)).filter((rel) => rel !== DESIGN_JSON_FILE);
+  if (rels.some((rel) => rel.startsWith('system/'))) {
+    const referenced = await referencedFiles(record);
+    rels = rels.filter((rel) => exportIncludes(rel, referenced));
+  }
   if (rels.length === 0) throw new ApiError('no-html', 'This design has no files to export yet.');
   return rels;
 };

@@ -7,17 +7,19 @@
 // launcher the service writes (`<root>/.chamber/bin/dc`) calls it with `--root`.
 
 import { readFileSync } from 'node:fs';
-import { realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CheckInterrupted, CheckUsageError, runCheck } from '../service/check/engine.ts';
-import { allFindings, exitCodeOf, formatCheckText, jsonOutput, parseArgs, USAGE } from '../service/check/report-text.ts';
+import { allFindings, exitCodeOf, formatCheckText, formatSystemCheckText, jsonOutput, parseArgs, systemFindingsOf, systemJsonOutput, USAGE } from '../service/check/report-text.ts';
 import { CheckOutputError } from '../service/check/output.ts';
-import { resolveTarget } from '../service/check/target.ts';
+import { cliSystemStore, runSystemCheck, writeSystemCheckReport } from '../service/check/system-run.ts';
+import { resolveSystemTarget, resolveTarget } from '../service/check/target.ts';
 import { resolveBrowser } from '../service/chrome.ts';
 import { defaultDesignsRoot, isDesignFolder, isDirectory } from '../service/root.ts';
 import { readSettingsFile, settingsFilePath } from '../service/settings.ts';
+import type { SettingsFile } from '../shared/types.ts';
 
 const out = (text: string): void => {
   process.stdout.write(text);
@@ -39,9 +41,32 @@ const versionOf = (): string => {
 };
 
 /** The designs root: `--root` (the launcher passes it), else the setting, else the default. */
-const rootFrom = async (given: string | null): Promise<{ root: string; chromePath: string | undefined }> => {
+const rootFrom = async (given: string | null): Promise<{ root: string; chromePath: string | undefined; settings: SettingsFile }> => {
   const { settings } = await readSettingsFile(settingsFilePath());
-  return { root: given ?? settings.root ?? defaultDesignsRoot(), chromePath: settings.chromePath };
+  return { root: given ?? settings.root ?? defaultDesignsRoot(), chromePath: settings.chromePath, settings };
+};
+
+const isRealDirectory = async (dir: string): Promise<boolean> => {
+  const info = await lstat(dir).catch(() => null);
+  return info !== null && info.isDirectory() && !info.isSymbolicLink();
+};
+
+/** `dc check --system <id>` (Phase 2.5 §10.2): static only, the report written to `<system>/.chamber/check.json`. */
+const checkSystem = async (input: { root: string; settings: SettingsFile; id: string; json: boolean }): Promise<number> => {
+  const target = await resolveSystemTarget({ id: input.id, root: input.root }, { path, realpath, isRealDirectory, platform: process.platform });
+  if (!target.ok) return fail(target.message);
+  const store = cliSystemStore(target.root, input.settings);
+  try {
+    const { report, detail } = await runSystemCheck(store, target.id, { now: new Date(), tool: 'cli' });
+    const reportPath = await writeSystemCheckReport(target.dir, report);
+    const text = { report, name: detail.name, reportPath };
+    out(input.json ? systemJsonOutput(text) : formatSystemCheckText(text));
+    return exitCodeOf(systemFindingsOf(report));
+  } catch (error) {
+    return fail(`The check could not run: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    await store.dispose();
+  }
 };
 
 const main = async (): Promise<number> => {
@@ -56,12 +81,14 @@ const main = async (): Promise<number> => {
     case 'error':
       return fail(command.message);
     case 'check':
+    case 'check-system':
       break;
   }
 
-  const { root, chromePath } = await rootFrom(command.root);
+  const { root, chromePath, settings } = await rootFrom(command.root);
   if (!path.isAbsolute(root)) return fail(`The designs folder must be a full path, not ${root}.`);
   if (!(await isDirectory(root))) return fail(`The designs folder ${root} does not exist.`);
+  if (command.kind === 'check-system') return checkSystem({ root, settings, id: command.system, json: command.json });
   const target = await resolveTarget({ arg: command.target, root, cwd: process.cwd() }, { path, realpath, isDesignFolder, platform: process.platform });
   if (!target.ok) return fail(target.message);
 

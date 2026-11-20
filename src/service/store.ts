@@ -23,7 +23,7 @@
 // `resolveInside`; per-slug locks serialise read-modify-write cycles.
 
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, readdir, readFile, rename, stat } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, rename, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { CreateCommentBody, PatchCommentBody, PatchDesignBody } from '../shared/api.ts';
@@ -63,6 +63,8 @@ import type {
   ThumbState,
 } from '../shared/types.ts';
 import { chipMarkerOf } from '../shared/agent/chip.ts';
+import { COPY_DIR, COPY_JSON_FILE, COPY_JSON_MAX_BYTES, parseCopyRecordText } from '../shared/system-copy.ts';
+import type { CopyRecord, SystemChoiceProblem } from '../shared/types.ts';
 import { DESIGN_JSON_UNREADABLE_MESSAGE, NO_DESIGN_JSON_MESSAGE, PAGE_HAS_NO_SCREENS_MESSAGE, SCREEN_LIST_STALE_MESSAGE } from '../shared/screen-ops.ts';
 import type { ChangeHub, DesignRecord, DesignStore, LinkIfUnlinkedOutcome, Logger, SettingsStore, ThumbnailService } from './context.ts';
 import { ApiError } from './http.ts';
@@ -71,6 +73,59 @@ import { folderErrorSentence, isDesignFolder, isDirectory } from './root.ts';
 
 /** `.chamber/state.json` — the service-owned truth (§6.3). */
 const stateFileOf = (dir: string): string => path.join(dir, '.chamber', 'state.json');
+
+/**
+ * A design's `system/COPY.json` (Phase 2.5 §2.7): `absent` when there is no copy, `invalid` when the
+ * file is a link, a folder, over 64 KiB or not a record Design Chamber writes. Never follows a link:
+ * `system` and `COPY.json` must both be real (lstat), so an agent-made link can't point the read away.
+ */
+export type CopyRecordRead = { kind: 'absent' } | { kind: 'invalid' } | { kind: 'ok'; record: CopyRecord; bytes: Buffer };
+
+export const readCopyRecord = async (designDir: string): Promise<CopyRecordRead> => {
+  const folder = await lstat(path.join(designDir, COPY_DIR)).catch(() => null);
+  if (folder === null) return { kind: 'absent' };
+  if (!folder.isDirectory()) return { kind: 'invalid' };
+  return readCopyRecordIn(path.join(designDir, COPY_DIR));
+};
+
+/** `COPY.json` inside a copy folder (the live `system/` or a staged one), with the rules of `readCopyRecord`. */
+export const readCopyRecordIn = async (copyDir: string): Promise<CopyRecordRead> => {
+  const file = path.join(copyDir, COPY_JSON_FILE);
+  const info = await lstat(file).catch(() => null);
+  if (info === null) return { kind: 'absent' };
+  if (!info.isFile() || info.size > COPY_JSON_MAX_BYTES) return { kind: 'invalid' };
+  let bytes: Buffer;
+  try {
+    const handle = await open(file, 'r');
+    try {
+      const buffer = Buffer.alloc(COPY_JSON_MAX_BYTES + 1);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      if (bytesRead > COPY_JSON_MAX_BYTES) return { kind: 'invalid' };
+      bytes = buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
+    throw error;
+  }
+  const record = parseCopyRecordText(bytes.toString('utf8'));
+  return record === null ? { kind: 'invalid' } : { kind: 'ok', record, bytes };
+};
+
+/** The design warning for an agent `systemChoice` the service could not act on (§5.5); wording as the check's. */
+const choiceProblemWarning = (problem: SystemChoiceProblem): DesignWarning => ({
+  code: 'invalid-system-choice',
+  field: 'systemChoice',
+  message:
+    problem.reason === 'draft'
+      ? `design.json asks for the design system "${problem.value}", which isn't ready yet.`
+      : problem.reason === 'unknown'
+        ? `design.json asks for the design system "${problem.value}", which isn't a Ready system in this Designs folder.`
+        : problem.reason === 'too-large'
+          ? `design.json asks for the design system "${problem.value}", whose files are too large to copy into this design.`
+          : `design.json asks for the design system "${problem.value}", but Design Chamber couldn't copy it. Choose it again with Change… on the design's system.`,
+});
 
 /**
  * The screen list's stamp (Phase 2 §5.1): sha256 of the RAW `screens` value, not the normalised
@@ -220,6 +275,8 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
         : parsed.warnings;
 
     const finalState = state ?? serviceStateOf(parsed.design);
+    // Phase 2.5 §5.5: an agent choice the service could not act on reads as a design warning.
+    if (finalState.systemChoiceProblem !== undefined) warnings.push(choiceProblemWarning(finalState.systemChoiceProblem));
     const design = applyServiceState(parsed.design, finalState);
     // P2 adopts the agent's own reading of design.json: a provisional kind is only a guess from
     // the files, so it must not decide the kind of a design.json that lists screens but no kind.
@@ -394,7 +451,7 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
   /** Cheap stat fingerprint deciding whether a cached summary is still valid. */
   const cacheKeyOf = async (dir: string): Promise<string> => {
     const parts: string[] = [];
-    for (const relative of ['design.json', '.chamber/state.json', ENTRY_FILE, 'screens', 'assets', '.']) {
+    for (const relative of ['design.json', '.chamber/state.json', ENTRY_FILE, 'screens', 'assets', '.', `${COPY_DIR}/${COPY_JSON_FILE}`]) {
       const info = await stat(path.join(dir, relative)).catch(() => null);
       parts.push(info === null ? '-' : `${info.mtimeMs}:${info.size}`);
     }
@@ -407,7 +464,12 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     const cached = summaryCache.get(slug);
     if (cached !== undefined && cached.key === key) return { ...cached.summary, thumb: thumbOf(slug) };
     const read = await readInternal(slug);
-    const summary = summaryOf(read.record);
+    // Phase 2.5 §2.7: the copy's own line; `GET /designs` joins it with the systems index (name, state, update).
+    const copy = await readCopyRecord(read.record.path).catch(() => ({ kind: 'invalid' as const }));
+    const summary: DesignSummary = {
+      ...summaryOf(read.record),
+      system: copy.kind === 'ok' ? { id: copy.record.id, name: copy.record.name, revision: copy.record.revision, state: 'ok', updateAvailable: false } : null,
+    };
     summaryCache.set(slug, { key, summary });
     return { ...summary, thumb: thumbOf(slug) };
   };
@@ -703,6 +765,22 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     onCreate(hook) {
       hooks.add(hook);
       return () => hooks.delete(hook);
+    },
+
+    // Phase 2.5 §2.7: the system fields are service-owned and never mirrored, so only state.json is
+    // written (no design.json write, no `design` event, nothing for the watcher to echo).
+    async updateSystemState(slug, mutate) {
+      return withLock(slug, async () => {
+        const read = await readSettled(slug);
+        const next = mutate(read.record.state);
+        if (next === null) return read.record.state;
+        const state = normalizeServiceState(JSON.parse(JSON.stringify(next)));
+        // Unreachable for a state built from a read one; kept so a bad mutate can never write a broken file.
+        if (state === null) throw new ApiError('internal', 'Design Chamber could not record the design system for this design.');
+        await writeState(read.record.path, state);
+        summaryCache.delete(slug);
+        return state;
+      });
     },
 
     // Phase 2 §5.1: the screen list is an agent field the service writes only for a user's

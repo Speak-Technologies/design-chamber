@@ -4,7 +4,8 @@ import { mountSelect, mountTabs, mountTextField } from '@openchamber/sdk/ui';
 
 import type { DesignKind } from '../../shared/types.ts';
 import { flows, host, store } from '../guest.ts';
-import { DESTINATIONS, briefPlaceholder, kindHint, presetOptions, startLabel, validateBrief, type Destination } from '../model/new-model.ts';
+import { systems as systemsStore } from './systems-store.ts';
+import { DESTINATIONS, NO_SYSTEMS_LINE, briefPlaceholder, foldsCaseFor, kindHint, presetOptions, startLabel, systemFieldOf, validateBrief, type Destination } from '../model/new-model.ts';
 import { errorText, h } from './dom.ts';
 import { btn, openSheet } from './kit.ts';
 import { toast } from './actions.ts';
@@ -12,14 +13,28 @@ import { toast } from './actions.ts';
 export type NewDialogOptions = {
   kind: DesignKind;
   onCreated: (slug: string) => void;
+  /** Opens the design systems list ("No design systems yet. Make one"); absent where there is none. */
+  onSystems?: () => void;
 };
 
 export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): void => {
   let unsubscribe = (): void => {};
-  const sheet = openSheet(hostEl, { title: 'New design', variant: 'dialog', subtitle: 'Your chat agent writes the files; they appear here as it works.', onClose: () => unsubscribe() });
+  let unsubscribeSystems = (): void => {};
+  const sheet = openSheet(hostEl, {
+    title: 'New design',
+    variant: 'dialog',
+    subtitle: 'Your chat agent writes the files; they appear here as it works.',
+    onClose: () => {
+      unsubscribe();
+      unsubscribeSystems();
+    },
+  });
   let kind = options.kind;
   let brief = '';
   let preset = '';
+  /** The design system the person picked; null until they do (then the pin, the default or ask decides). */
+  let systemChoice: string | null = null;
+  let systemSend: string | undefined;
   let destination: Destination = 'new-chat';
 
   const kindHost = h('div', { class: 'dc-field' }, h('span', { class: 'oc-sdk-field-label' }, 'Type'));
@@ -55,6 +70,23 @@ export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): v
     },
   });
 
+  // The design system: preselected the way the service will decide, so the field says what will happen.
+  const systemHost = h('div', { class: 'dc-field dc-system-field' });
+  const systemSelect = mountSelect(systemHost, { label: 'Design system', value: 'ask', options: [{ id: 'ask', label: 'Ask me in chat' }], onChange: (id) => {
+    systemChoice = id;
+    paintSystem();
+  } });
+  const systemNote = h('p', { class: 'oc-sdk-field-note' });
+  const systemEmpty = h('p', { class: 'oc-sdk-field-note dc-system-empty', hidden: true }, NO_SYSTEMS_LINE, ' ');
+  if (options.onSystems) {
+    const make = h('button', { type: 'button', class: 'dc-link' }, 'Make one');
+    make.addEventListener('click', () => {
+      sheet.close();
+      options.onSystems?.();
+    });
+    systemEmpty.append(make);
+  }
+  systemHost.append(systemNote);
   const presetHost = h('div', { class: 'dc-field' });
   const presetSelect = mountSelect(presetHost, { label: 'Style preset', value: '', options: presetOptions([]), disabled: true, onChange: (id) => void (preset = id) });
   const presetNote = h('p', { class: 'oc-sdk-field-note', hidden: true });
@@ -67,9 +99,34 @@ export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): v
       presetNote.hidden = false;
     }
   };
-  unsubscribe = store.subscribe(paintPresets);
+  const paintSystem = (): void => {
+    const list = systemsStore().get();
+    const settings = store.getState().settings.data;
+    const view = systemFieldOf(
+      { systems: list.systems ?? [], settings: settings?.systems, designsRoot: settings?.root ?? '', projectDirectory: host.snapshot()?.directory ?? null },
+      systemChoice,
+      foldsCaseFor(settings?.root ?? '', typeof navigator === 'undefined' ? '' : navigator.platform),
+    );
+    // Hidden until the list has answered, and replaced by a pointer when there is nothing to pick.
+    const loaded = list.systems !== null;
+    systemHost.hidden = !loaded || view.empty;
+    systemEmpty.hidden = !loaded || !view.empty;
+    systemSend = view.send;
+    if (!view.empty) {
+      systemSelect.update({ options: view.options, value: view.value });
+      systemNote.textContent = view.hint ?? '';
+      systemNote.hidden = view.hint === null;
+    }
+    presetHost.hidden = !view.showPreset;
+  };
+  unsubscribeSystems = systemsStore().subscribe(paintSystem);
+  unsubscribe = store.subscribe(() => {
+    paintPresets();
+    paintSystem();
+  });
   void store.loadPresets();
   paintPresets();
+  paintSystem();
 
   const destHost = h('div', { class: 'dc-field' }, h('span', { class: 'oc-sdk-field-label' }, 'Where should the agent work?'));
   const destTabs = mountTabs(destHost, {
@@ -106,7 +163,7 @@ export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): v
       failure.hidden = true;
       submit.set({ loading: true });
       cancel.set({ disabled: true });
-      flows.newDesign({ kind, brief, preset: preset === '' ? null : preset, destination }).then(
+      flows.newDesign({ kind, brief, preset: preset === '' || presetHost.hidden ? null : preset, destination, ...(systemSend === undefined ? {} : { system: systemSend }) }).then(
         ({ slug }) => {
           toast('success', 'Design started. It shows up in your list while the agent works.');
           sheet.close();
@@ -122,6 +179,6 @@ export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): v
     },
   });
 
-  sheet.body.append(kindHost, briefHost, presetHost, destHost, failure);
+  sheet.body.append(kindHost, briefHost, systemHost, systemEmpty, presetHost, destHost, failure);
   sheet.foot.append(cancel.el, submit.el);
 };

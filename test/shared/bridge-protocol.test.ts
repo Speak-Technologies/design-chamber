@@ -111,23 +111,41 @@ describe('edit-probe and edit-probe-result', () => {
   });
 });
 
+describe('hit entry (Phase 2.5 §4.2)', () => {
+  const element = { selector: 'main > h1', text: 'Hi', html: '<h1>', rect: { x: 0, y: 0, w: 10, h: 10 }, tag: 'h1' };
+  test('absent, null or a board entry key parses', () => {
+    for (const entry of [undefined, null, 'token:--brand-500', 'type:body', 'font:3', 'logo:12', 'component:button', 'overview', 'note:history', 'pattern:empty-states', 'brand:hero']) {
+      const message = { ...env, type: 'hit', x: 1, y: 1, element: entry === undefined ? element : { ...element, entry } };
+      assert.notEqual(parseFrameMessage(message), null, String(entry));
+    }
+  });
+  test('anything off the entry pattern drops the whole message', () => {
+    for (const entry of ['', 'token:brand', 'token:--a b', 'type:Body', 'font:1234', 'section:colours', 'overview ', 'note:../x', `pattern:${'a'.repeat(41)}`, 7, {}, ['overview']]) {
+      assert.equal(parseFrameMessage({ ...env, type: 'hit', x: 1, y: 1, element: { ...element, entry } }), null, JSON.stringify(entry));
+    }
+  });
+});
+
 describe('set-tokens', () => {
   test('valid preview values parse, including an empty list (clear)', () => {
     assert.notEqual(parsePageMessage({ ...env, type: 'set-tokens', vars: [] }), null);
     assert.notEqual(parsePageMessage({ ...env, type: 'set-tokens', vars: [{ name: '--accent-h', value: '210' }] }), null);
     assert.notEqual(parsePageMessage({ ...env, type: 'set-tokens', vars: [{ name: '--radius', value: '8px' }, { name: '--density', value: '1.2' }] }), null);
-    // 12 knobs is the cap.
-    const twelve = Array.from({ length: 12 }, (_, i) => ({ name: `--v${i}`, value: '1' }));
-    assert.notEqual(parsePageMessage({ ...env, type: 'set-tokens', vars: twelve }), null);
+    // Phase 2.5 §4.2: the board previews a whole system, so the cap is TOKEN_PREVIEW_VARS_MAX (512)
+    // and names may be up to 80 characters after `--` (a superset of the Tweaks pattern).
+    const all = Array.from({ length: 512 }, (_, i) => ({ name: `--v${i}`, value: '1' }));
+    assert.notEqual(parsePageMessage({ ...env, type: 'set-tokens', vars: all }), null);
+    assert.notEqual(parsePageMessage({ ...env, type: 'set-tokens', vars: [{ name: `--${'x'.repeat(80)}`, value: '1' }] }), null);
+    assert.notEqual(parsePageMessage({ ...env, type: 'set-tokens', vars: [{ name: '--dc-dark-brand_500', value: '#8ab4f8' }] }), null);
   });
 
   test('malformed names, values and lists are rejected', () => {
     const bad: unknown[] = [
       { ...env, type: 'set-tokens', vars: 'all' },
-      { ...env, type: 'set-tokens', vars: Array.from({ length: 13 }, (_, i) => ({ name: `--v${i}`, value: '1' })) },
+      { ...env, type: 'set-tokens', vars: Array.from({ length: 513 }, (_, i) => ({ name: `--v${i}`, value: '1' })) },
       { ...env, type: 'set-tokens', vars: [{ name: 'accent-h', value: '1' }] },
       { ...env, type: 'set-tokens', vars: [{ name: '--', value: '1' }] },
-      { ...env, type: 'set-tokens', vars: [{ name: `--${'x'.repeat(65)}`, value: '1' }] },
+      { ...env, type: 'set-tokens', vars: [{ name: `--${'x'.repeat(81)}`, value: '1' }] },
       { ...env, type: 'set-tokens', vars: [{ name: '--accent; color: red', value: '1' }] },
       { ...env, type: 'set-tokens', vars: [{ name: '--accent', value: '1; color: red' }] },
       { ...env, type: 'set-tokens', vars: [{ name: '--accent', value: '{red}' }] },

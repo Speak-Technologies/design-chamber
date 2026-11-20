@@ -1,8 +1,9 @@
-// WP1 — POST /uploads, PUT /uploads/:id/:index (docs/SPEC.md §7): the chunked-text door for
-// payloads bigger than one host serviceRequest (F7). Chunk bounds are enforced here (chars
-// after JSON.stringify and UTF-8 bytes) so the host transport limits can never be exceeded.
+// WP1 — POST /uploads, PUT /uploads/:id/:index (docs/SPEC.md §7): the chunked door for payloads
+// bigger than one host serviceRequest (F7), text or (Phase 2.5 §5.6) a base64 file. Chunk bounds
+// are enforced here (chars after JSON.stringify and UTF-8 bytes) so the host transport limits can
+// never be exceeded; the store checks and decodes base64 chunks.
 
-import type { CreateUploadResponse, PutUploadChunkResponse } from '../../shared/api.ts';
+import type { CreateUploadResponse, OkResponse, PutUploadChunkResponse } from '../../shared/api.ts';
 import { UPLOAD_CHUNK_MAX_BYTES, UPLOAD_CHUNK_MAX_CHARS, UPLOAD_ID_PATTERN } from '../../shared/limits.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
@@ -14,13 +15,16 @@ const isBodyRecord = (body: unknown): body is Record<string, unknown> =>
  * Registers:
  * - 'POST /uploads'
  * - 'PUT /uploads/:id/:index'
+ * - 'DELETE /uploads/:id'
  */
 export function registerUploadsRoutes(router: Router, ctx: ServiceContext): void {
   router.on('POST /uploads', ({ body }): CreateUploadResponse => {
     if (!isBodyRecord(body) || !Number.isInteger(body.total)) {
       throw new ApiError('bad-request', 'Announce the upload with { "total": <character count> }.');
     }
-    return { uploadId: ctx.uploads.create(body.total as number) }; // Safe: isInteger checked above.
+    const encoding = body.encoding ?? 'text';
+    if (encoding !== 'text' && encoding !== 'base64') throw new ApiError('bad-request', 'An upload is sent as "text" or "base64".');
+    return { uploadId: ctx.uploads.create(body.total as number, encoding) }; // Safe: isInteger checked above.
   });
 
   router.on('PUT /uploads/:id/:index', ({ params, body }): PutUploadChunkResponse => {
@@ -36,5 +40,12 @@ export function registerUploadsRoutes(router: Router, ctx: ServiceContext): void
       throw new ApiError('too-large', 'One upload chunk is too big. Send it in smaller pieces.');
     }
     return ctx.uploads.put(params.id, index, data);
+  });
+
+  // Idempotent: the guest calls it after a failed chunk and ignores the answer, so a gone upload is fine.
+  router.on('DELETE /uploads/:id', ({ params }): OkResponse => {
+    if (!UPLOAD_ID_PATTERN.test(params.id)) throw new ApiError('bad-request', 'That is not an upload id.');
+    ctx.uploads.discard(params.id);
+    return { ok: true };
   });
 }

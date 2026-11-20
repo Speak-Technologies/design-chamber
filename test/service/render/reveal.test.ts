@@ -4,7 +4,8 @@ import { describe, test, type TestContext } from 'node:test';
 
 import { createFakeContext } from '../../helpers/fake-context.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
-import { createRevealRegistry, createRevealService, linuxOpenerEnv, revealPlan } from '../../../src/service/reveal.ts';
+import { createRevealRegistry, createRevealService, linuxOpenerEnv, revealPlan, type RevealSystems } from '../../../src/service/reveal.ts';
+import type { SystemState } from '../../../src/shared/types.ts';
 import { ApiError } from '../../../src/service/http.ts';
 import { pageDesign } from './harness.ts';
 
@@ -187,5 +188,95 @@ describe('reveal', () => {
     for (let i = 0; i < 1200; i += 1) registry.issue(`C:\\bulk\\f${i}.zip`);
     assert.equal(registry.has('C:\\first\\a.zip'), false);
     assert.equal(registry.has('C:\\bulk\\f1199.zip'), true);
+  });
+});
+
+describe('reveal, the system form (phase 2.5 §3.5)', () => {
+  type Home = SystemState['home'];
+  /** A system store stand-in: one system `acme` with the given home, its folder under the tmp root. */
+  const systemRig = async (t: TestContext, home: Home) => {
+    const tmp = await useTmpRoot(t);
+    const systemDir = await tmp.write('_systems/acme/system.json', '{}').then((file) => path.dirname(file));
+    await tmp.write('shop/design-system/tokens.css', ':root {}\n');
+    await tmp.write('shop/design-system/index.html', '<p>living</p>\n');
+    const ctx = createFakeContext({ root: tmp.root });
+    t.after(() => ctx.dispose());
+    const spawns: SpawnCall[] = [];
+    const systems: RevealSystems = {
+      dir: async (id) => {
+        if (id !== 'acme') throw new ApiError('not-found', 'No such system.');
+        return systemDir;
+      },
+      readState: async () => ({ name: 'Acme', ...(home === undefined ? {} : { home }) }) as SystemState,
+    };
+    const reveal = createRevealService({
+      store: ctx.store,
+      log: ctx.log,
+      registry: createRevealRegistry('win32'),
+      platform: 'win32',
+      systems,
+      launch: async ({ command, args }) => {
+        spawns.push({ command, args });
+        return true;
+      },
+    });
+    return { tmp, reveal, spawns, systemDir };
+  };
+  const repoHome = (directory: string, folder = 'design-system', livingPage = 'design-system/index.html'): Home => ({
+    kind: 'repo',
+    directory,
+    folder,
+    livingPage,
+    adoptedAt: '2026-11-20T10:00:00.000Z',
+  });
+  const rejectsCode = (promise: Promise<unknown>, code: string) =>
+    assert.rejects(promise, (error: unknown) => error instanceof ApiError && error.code === code, code);
+
+  test('folder, repo and living page open the paths the service derives from state, nothing else', async (t) => {
+    const rig = await systemRig(t, undefined);
+    const home = repoHome(rig.tmp.at('shop'));
+    const repo = await systemRig(t, home);
+    await repo.reveal.revealSystem('acme', 'folder');
+    await repo.reveal.revealSystem('acme', 'repo');
+    await repo.reveal.revealSystem('acme', 'living-page');
+    // The repo stand-in lives in the first rig's tmp root; each target lands on its own path.
+    assert.deepEqual(
+      repo.spawns.map((spawn) => spawn.args[0]),
+      [`/select,${repo.systemDir}`, `/select,${path.join(rig.tmp.root, 'shop', 'design-system')}`, `/select,${path.join(rig.tmp.root, 'shop', 'design-system', 'index.html')}`],
+    );
+  });
+
+  test('an internal home has no repo target; the folder still opens', async (t) => {
+    const rig = await systemRig(t, { kind: 'internal' });
+    await rejectsCode(rig.reveal.revealSystem('acme', 'repo'), 'invalid');
+    await rejectsCode(rig.reveal.revealSystem('acme', 'living-page'), 'invalid');
+    await rig.reveal.revealSystem('acme', 'folder');
+    assert.equal(rig.spawns.length, 1);
+  });
+
+  test('a bad id, a bad target, a missing system or a missing file never spawns', async (t) => {
+    const rig = await systemRig(t, repoHome('/nowhere/shop'));
+    await rejectsCode(rig.reveal.revealSystem('../acme', 'folder'), 'bad-slug');
+    await rejectsCode(rig.reveal.revealSystem(42, 'folder'), 'bad-slug');
+    await rejectsCode(rig.reveal.revealSystem('acme', 'path'), 'bad-request');
+    await rejectsCode(rig.reveal.revealSystem('acme', undefined), 'bad-request');
+    await rejectsCode(rig.reveal.revealSystem('brand', 'folder'), 'not-found');
+    await rejectsCode(rig.reveal.revealSystem('acme', 'repo'), 'not-found');
+    await rejectsCode(rig.reveal.revealSystem('acme', 'living-page'), 'not-found');
+    assert.equal(rig.spawns.length, 0);
+  });
+
+  test('a stored path that climbs out of the repo is refused, never opened', async (t) => {
+    const rig = await systemRig(t, undefined);
+    const climbing = await systemRig(t, repoHome(rig.tmp.at('shop'), '../..', '../../etc/passwd'));
+    await rejectsCode(climbing.reveal.revealSystem('acme', 'repo'), 'bad-path');
+    await rejectsCode(climbing.reveal.revealSystem('acme', 'living-page'), 'bad-path');
+    assert.equal(climbing.spawns.length, 0);
+  });
+
+  test('without a system source the form is bad-path', async (t) => {
+    const { reveal, spawns } = await setup(t, 'linux');
+    await rejectsCode(reveal.revealSystem('acme', 'folder'), 'bad-path');
+    assert.equal(spawns.length, 0);
   });
 });

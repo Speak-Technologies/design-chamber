@@ -7,7 +7,7 @@
 import { BRIEF_MAX, DIRECTION_NAME_MAX, DIRECTION_OPTIONS_MAX, DIRECTION_OPTIONS_MIN, SCREEN_DESCRIPTION_MAX, SCREENS_MAX, TITLE_MAX, TWEAKS_MAX, TWEAK_CHOICES_MAX, TWEAK_CHOICES_MIN, VIEWPORT_HEIGHT_MAX, VIEWPORT_HEIGHT_MIN, VIEWPORT_WIDTH_MAX, VIEWPORT_WIDTH_MIN, VIEWPORTS_MAX } from '../limits.ts';
 import { VIEWPORT_LAPTOP, VIEWPORT_PHONE } from '../design-json.ts';
 import type { DesignKind, Viewport } from '../types.ts';
-import { clip, designFilePath, formatViewport, oneLine, VIEWPORT_DESKTOP, VIEWPORT_TABLET, type AgentContext, type ProjectBreakpoint, type ProjectRules } from './context.ts';
+import { clip, designFilePath, formatViewport, joinFolder, oneLine, SYSTEM_GUIDANCE_ONLY, systemOf, VIEWPORT_DESKTOP, VIEWPORT_TABLET, type AgentContext, type AgentSystem, type ProjectBreakpoint, type ProjectRules } from './context.ts';
 import { CHECK_TOOL_NAME } from './guide.ts';
 
 /** The two bundled rules files, exactly as read from `rules/`. */
@@ -65,7 +65,9 @@ const headerSection = (context: AgentContext): string[] => {
     '## Do this, in this order',
     '',
     '1. Read this whole file. Read it again at the start of every new request about this design: it may have been refreshed.',
-    '2. Look for the active project\'s design rules FIRST (Precedence, layer 2). Tell the user what you found in 2–4 lines, citing files, or say "no project context".',
+    systemOf(context).state === 'linked'
+      ? '2. Read the design system\'s OVERVIEW.md FIRST (Precedence, layer 2), then look for the active project\'s design rules for anything it does not cover (layer 3). Tell the user what you found in 2–4 lines, citing files.'
+      : '2. Look for the active project\'s design rules FIRST (Precedence, layer 2). Tell the user what you found in 2–4 lines, citing files, or say "no project context".',
     '3. Settle the viewports (Viewports).',
     '4. If anything material is unclear, ask before you build: one message, then wait (Ask when unsure). Skip the questions only if the user said "go" or the request is a small edit.',
     '5. Build only inside the folder above. Write design.json first, then the HTML. Write DESIGN.md and tokens.css before the second screen. Update design.json in the same turn as the files it describes.',
@@ -75,11 +77,10 @@ const headerSection = (context: AgentContext): string[] => {
 
 // ---- precedence ----
 
-const projectLayer = (project: ProjectRules): string[] => {
-  const intro = [
-    '### Layer 2: the active project\'s design rules (look for these FIRST)',
-    '',
-  ];
+const PROJECT_LAYER_HEADING = '### Layer 2: the active project\'s design rules (look for these FIRST)';
+
+const projectLayer = (project: ProjectRules, heading: string = PROJECT_LAYER_HEADING): string[] => {
+  const intro = [heading, ''];
   const discover = 'Also run the discovery in "Discover the project\'s design rules first" (Design rules, §2): this list can miss non-standard places. Copy the values you use into tokens.css with a comment naming the source file.';
   switch (project.state) {
     case 'no-project':
@@ -143,14 +144,21 @@ const designSystemLayer = (context: AgentContext): string[] => {
   return ['### Layer 4: this design\'s own DESIGN.md + tokens.css, once confirmed', '', `Status: ${status}`];
 };
 
-const precedenceSection = (context: AgentContext): string[] => [
-  '## Precedence',
+const PRECEDENCE_INTRO = 'Highest first. A higher layer always wins. Never silently override one; if a lower layer conflicts with a higher one, say so in one line. Inside the winning layer, do not invent colours, spacing or type values it already defines.';
+
+const userLayer = (): string[] => ['### Layer 1: the user\'s words in chat', '', 'Always first. Never ask the user to repeat something they already said in this chat.'];
+
+const builtInLayer = (): string[] => [
+  '### Layer 5: the built-in rules',
   '',
-  'Highest first. A higher layer always wins. Never silently override one; if a lower layer conflicts with a higher one, say so in one line. Inside the winning layer, do not invent colours, spacing or type values it already defines.',
+  'The "Design rules" and "Ask when unsure" sections below: anti-slop, best practices, file rules and the self-check. They apply when nothing above settles a question.',
+];
+
+/** The Phase 0 order, unchanged (a design with no system, or an old design: byte-identical, test-held). */
+const phaseZeroOrder = (context: AgentContext): string[] => [
+  PRECEDENCE_INTRO,
   '',
-  '### Layer 1: the user\'s words in chat',
-  '',
-  'Always first. Never ask the user to repeat something they already said in this chat.',
+  ...userLayer(),
   '',
   ...projectLayer(context.project),
   '',
@@ -158,10 +166,73 @@ const precedenceSection = (context: AgentContext): string[] => [
   '',
   ...designSystemLayer(context),
   '',
-  '### Layer 5: the built-in rules',
-  '',
-  'The "Design rules" and "Ask when unsure" sections below: anti-slop, best practices, file rules and the self-check. They apply when nothing above settles a question.',
+  ...builtInLayer(),
 ];
+
+type LinkedSystem = Extract<AgentSystem, { state: 'linked' }>;
+
+/** A system path as the agent sees it, in the design folder's separator style. */
+const inSystem = (system: LinkedSystem, relative: string): string => joinFolder(system.folder, ...relative.split('/'));
+
+/** Layer 2 with a linked system (§8.2, §8.10): the system, read by path, never inlined. */
+export const linkedSystemLines = (system: LinkedSystem): string[] => {
+  const name = oneLine(system.name);
+  return [
+    `This design uses the design system "${name}" (revision ${system.revision}), copied into ${system.folder}. Read ${inSystem(system, 'OVERVIEW.md')} first, every time. ` +
+      `Read only the sections a task needs in ${inSystem(system, 'system.json')} and ${inSystem(system, 'tokens.css')}, and a component's note in system.json before you build that component. ` +
+      'Use only its tokens. Follow its usage notes, including when not to use something. If it lacks something you need, tell the user and propose an addition to the system; don\'t invent it. ' +
+      `Never change any file in ${system.folder}; put this design's own changes in tokens.css as overrides. Link ${inSystem(system, 'system.css')} before tokens.css (system/system.css from index.html, ../system/system.css from screens/).`,
+    SYSTEM_GUIDANCE_ONLY,
+    `Read ${inSystem(system, 'patterns')} when a task involves layout or copy, and ${inSystem(system, 'brand')} when it involves marketing surfaces.`,
+    ...(system.repo === null
+      ? []
+      : [`This system lives in ${system.repo}. The copy here is a snapshot. To change the system, ask the user or use the system's chat; never write ${system.repo} from a design task.`]),
+    ...(system.complete ? [] : [`This design's copy of ${name} is missing ${system.missing.length === 0 ? 'some files' : system.missing.join(', ')}. Tell the user; don't recreate it.`]),
+    ...(system.overviewEmpty ? ['The system has no overview yet.'] : []),
+  ];
+};
+
+const linkedOrder = (context: AgentContext, system: LinkedSystem): string[] => [
+  PRECEDENCE_INTRO,
+  '',
+  ...userLayer(),
+  '',
+  '### Layer 2: this design\'s design system',
+  '',
+  ...linkedSystemLines(system).flatMap((line, index) => (index === 0 ? [line] : ['', line])),
+  '',
+  ...projectLayer(context.project, '### Layer 3: the active project\'s design rules, for anything the design system doesn\'t cover'),
+  '',
+  '### Layer 4: style preset',
+  '',
+  'No style preset applies: this design uses a design system.',
+  '',
+  ...builtInLayer(),
+  '',
+  'With a design system linked, you don\'t need to confirm a DESIGN.md or tokens.css.',
+];
+
+/** The ask paragraph (§8.2): which system, recorded in design.json, then wait for the copy. */
+export const askSystemLine = (context: AgentContext, system: Extract<AgentSystem, { state: 'ask' }>): string => {
+  const choices = system.choices.map((choice) => `${oneLine(choice.name)} (${choice.id}): ${oneLine(choice.line)}`);
+  const recommended = system.choices.find((choice) => choice.id === system.recommended);
+  return [
+    `Before the first screen, ask the user which design system to use. Your choices: ${[...choices, 'or none'].join('; ')}.`,
+    ...(recommended === undefined ? [] : [`I'd recommend ${oneLine(recommended.name)}.`]),
+    "If the user already said in this chat, don't ask.",
+    `Record the answer in design.json as "systemChoice": "<id>" or "none", then wait until ${designFilePath(context.folder, 'system/COPY.json')} exists before you use the system.`,
+  ].join(' ');
+};
+
+const precedenceSection = (context: AgentContext): string[] => {
+  const system = systemOf(context);
+  return [
+    '## Precedence',
+    '',
+    ...(system.state === 'ask' ? [askSystemLine(context, system), ''] : []),
+    ...(system.state === 'linked' ? linkedOrder(context, system) : phaseZeroOrder(context)),
+  ];
+};
 
 // ---- viewports ----
 
@@ -174,6 +245,10 @@ const viewportsSection = (context: AgentContext): string[] => {
           project.viewports.length > 0 ? `They suggest: ${project.viewports.map(formatViewport).join(', ')}. Treat that as a hint, not a decision.` : '',
         ].filter((line) => line !== '')
       : ['Design Chamber found no breakpoints in the project (or no project is open).'];
+  const system = systemOf(context);
+  if (system.state === 'linked' && system.breakpoints.length > 0) {
+    found.push(`The design system's breakpoints are ${system.breakpoints.map((px) => `${px}px`).join(', ')}; suggest them alongside the project's.`);
+  }
   return [
     '## Viewports',
     '',
@@ -246,6 +321,9 @@ const contractSection = (context: AgentContext): string[] => [
   `| \`screens\` | you | Canvas only, 0–${SCREENS_MAX}, in the order they appear on the wall: \`{ id, title, file, viewports?, description? }\`. \`id\` is lower-case letters, digits and \`-\`; \`file\` is exactly \`screens/<id>.html\`; \`viewports\` is an optional subset of the viewport ids (default: all); \`description\` ≤ ${SCREEN_DESCRIPTION_MAX} characters. A direction of another screen carries \`"direction": { "of": "home", "letter": "A", "name": "Bold" }\` (${DIRECTION_OPTIONS_MIN} to ${DIRECTION_OPTIONS_MAX} directions per screen, letters A to D, name up to ${DIRECTION_NAME_MAX} characters; never on the original). Design Chamber also writes this list when the user reorders, duplicates, trashes or keeps a screen, so read design.json again right before you write it. |`,
   '| `designSystem` | you | `{ "confirmed": false }`; set `true` once the user confirms DESIGN.md and tokens.css. |',
   `| \`tweaks\` | you | Optional, up to ${TWEAKS_MAX} knobs for the Tweaks panel. A number knob: \`{ "var", "label", "kind": "number", "min", "max", "step", "unit" }\`; a choice knob: \`{ "var", "label", "kind": "choice", "options": [{ "label", "value" }] }\` with ${TWEAK_CHOICES_MIN} to ${TWEAK_CHOICES_MAX} options. \`var\` must be set with a plain value in the \`:root\` block of tokens.css, in the knob's unit. When the user saves, Design Chamber writes only those values into tokens.css. |`,
+  ...(systemOf(context).state === 'ask' || systemOf(context).state === 'linked'
+    ? ['| `systemChoice` | you | The user\'s answer about the design system: a system id, or `"none"`. Design Chamber copies the system into `system/`; never edit that folder. |']
+    : []),
   '| `comments` | extension | The user\'s pinned comments. Never edit. |',
   '',
   '- Keep every key you do not own, including keys you do not recognise, exactly as it is. The extension puts its keys back if you change them.',

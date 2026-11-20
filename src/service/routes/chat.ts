@@ -15,8 +15,9 @@ import { buildHandEditsBlock, type HandEditsBlock } from '../../shared/agent/han
 import { derivePageTitle, extractHtml } from '../../shared/agent/html-extract.ts';
 import { buildChecksPrompt, buildContinuePrompt, buildOfflinePrompt, buildRevisionPrompt, type ExternalList } from '../../shared/agent/revision-prompt.ts';
 import { buildRulesDoc } from '../../shared/agent/rules-doc.ts';
+import { buildDesignRestylePrompt, buildDesignSystemUpdatePrompt } from '../../shared/agent/system-prompts.ts';
 import { normalizeExternalUrl, sortFindings } from '../../shared/checks.ts';
-import type { AskElement, ChipResponse, FromMessageResponse, OkResponse, OpenIntent, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse, RenderMeta, RenderQuery } from '../../shared/api.ts';
+import type { AskElement, ChipResponse, FromMessageResponse, OkResponse, OpenIntent, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse, RenderMeta, RenderQuery, SystemOpenTarget } from '../../shared/api.ts';
 import {
   ASK_TEXT_MAX,
   BRIEF_MAX,
@@ -33,16 +34,28 @@ import {
   REVISION_TEXT_MAX,
   SESSION_ID_MAX,
   SLUG_PATTERN,
+  SYSTEM_ID_PATTERN,
+  SYSTEM_JSON_MAX_BYTES,
   UPLOAD_ID_PATTERN,
+  VERSION_ID_PATTERN,
 } from '../../shared/limits.ts';
+import { COPY_DIR, componentDiff, parseCopyRecordText, tokenDiff } from '../../shared/system-copy.ts';
+import { effectiveSystemChoice } from '../../shared/systems.ts';
+import type { EffectiveSystemChoice } from '../../shared/types.ts';
+import { ensureLinkService, LINK_NO_COPY_MESSAGE, LINK_SYSTEM_GONE_MESSAGE, linkDraftMessage } from '../systems/link.ts';
+import { ensureSystemStore, SYSTEM_GONE_MESSAGE } from '../systems/store.ts';
+import { agentSystemOf } from '../agent-system.ts';
 import type { AnchorState, Comment, DesignKind } from '../../shared/types.ts';
 import type { DesignRecord, ServiceContext } from '../context.ts';
 import { ensureChecksService } from '../check/service.ts';
 import { ensureLauncherService } from '../check/launcher.ts';
 import { discoverProjectRules, withDeadline } from '../discovery.ts';
+import { readTokensFile } from '../edits/ops-tokens.ts';
 import { ensureEditService } from '../edits/pipeline.ts';
 import { ApiError, type Router } from '../http.ts';
 import { foldsCase } from '../paths.ts';
+import { readCopyRecord } from '../store.ts';
+import { ensureVersionsService } from '../versions.ts';
 import { parseElement } from './comments.ts';
 import { readPreset, readRulesDocs } from './presets.ts';
 
@@ -72,7 +85,14 @@ export const projectDirectoryOf = (value: unknown): string | null => {
   return value;
 };
 
-const parseChipBody = (body: unknown): { kind: DesignKind; brief: string; preset: string | null; projectDirectory: string | null } => {
+/** The New dialog's design-system choice (Phase 2.5 §3.2): a system id, `none` or `ask`; absent → null. */
+const chipSystemOf = (value: unknown): string | null => {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string' && (value === 'none' || value === 'ask' || SYSTEM_ID_PATTERN.test(value))) return value;
+  throw new ApiError('bad-request', 'That is not a design system choice. Pick a design system, No design system or Ask me in chat.');
+};
+
+const parseChipBody = (body: unknown): { kind: DesignKind; brief: string; preset: string | null; projectDirectory: string | null; system: string | null } => {
   const record = bodyOf(body, 'the new design');
   const { kind } = record;
   if (kind !== 'canvas' && kind !== 'page') throw new ApiError('bad-request', 'Say whether the design is a "canvas" or a "page".');
@@ -84,7 +104,7 @@ const parseChipBody = (body: unknown): { kind: DesignKind; brief: string; preset
   if (preset !== null && !PRESET_ID_PATTERN.test(preset)) throw new ApiError('bad-request', 'That is not a style preset id.');
   // `sessionId` is accepted but deliberately not stored: the user may never send the chip (§10.1).
   optionalText(record, 'sessionId', SESSION_ID_MAX, 'chat id');
-  return { kind, brief, preset, projectDirectory: projectDirectoryOf(record.projectDirectory) };
+  return { kind, brief, preset, projectDirectory: projectDirectoryOf(record.projectDirectory), system: chipSystemOf(record.system) };
 };
 
 const ANCHOR_STATES: ReadonlySet<unknown> = new Set<AnchorState>(['exact', 'moved', 'detached']);
@@ -108,13 +128,15 @@ type PromptInput = {
   text: string;
   /** Ask only: the attached element before it is checked against the design. */
   element: AskElement | null;
+  /** Restyle / system-update only: the version holding the previous copy. */
+  before: string | null;
 };
 
 const parsePromptBody = (body: unknown): PromptInput => {
   const record = bodyOf(body, 'the prompt request');
   const { purpose, commentIds } = record;
-  if (purpose !== 'revision' && purpose !== 'continue' && purpose !== 'offline' && purpose !== 'checks' && purpose !== 'ask') {
-    throw new ApiError('bad-request', 'The prompt purpose must be "revision", "continue", "offline", "checks" or "ask".');
+  if (purpose !== 'revision' && purpose !== 'continue' && purpose !== 'offline' && purpose !== 'checks' && purpose !== 'ask' && purpose !== 'restyle' && purpose !== 'system-update') {
+    throw new ApiError('bad-request', 'The prompt purpose must be "revision", "continue", "offline", "checks", "ask", "restyle" or "system-update".');
   }
   if (purpose === 'ask') {
     if (typeof record.text !== 'string' || record.text.trim() === '') throw new ApiError('bad-request', 'Write what you want the agent to do.');
@@ -123,10 +145,14 @@ const parsePromptBody = (body: unknown): PromptInput => {
       throw new ApiError('invalid', `Your message is ${text.length - ASK_TEXT_MAX} characters over the limit of ${ASK_TEXT_MAX}. Shorten it and send again.`);
     }
     const element = record.element === undefined || record.element === null ? null : parseElement(record.element);
-    return { purpose, commentIds: null, anchorStates: {}, text, element };
+    return { purpose, commentIds: null, anchorStates: {}, text, element, before: null };
+  }
+  if (purpose === 'restyle' || purpose === 'system-update') {
+    if (typeof record.before !== 'string' || !VERSION_ID_PATTERN.test(record.before)) throw new ApiError('bad-request', 'Say which version holds the previous copy.');
+    return { purpose, commentIds: null, anchorStates: {}, text: '', element: null, before: record.before };
   }
   const anchorStates = parseAnchorStates(record.anchorStates);
-  const base: Omit<PromptInput, 'commentIds'> = { purpose, anchorStates, text: '', element: null };
+  const base: Omit<PromptInput, 'commentIds'> = { purpose, anchorStates, text: '', element: null, before: null };
   if (commentIds === undefined) return { ...base, commentIds: null };
   const ids = Array.isArray(commentIds) ? commentIds.filter((id): id is string => typeof id === 'string' && COMMENT_ID_PATTERN.test(id)) : [];
   if (!Array.isArray(commentIds) || commentIds.length > COMMENTS_MAX || ids.length !== commentIds.length) throw new ApiError('bad-request', 'The comment list is not valid.');
@@ -148,8 +174,16 @@ const parseFromMessageBody = (body: unknown): { uploadId: string; sessionId: str
  * `POST /open-request` body. The slug is checked against `SLUG_PATTERN` here, before any path is
  * built from it; the store then resolves it under the root (containment) and says whether it exists.
  */
-export const parseOpenRequestBody = (body: unknown): { slug: string; intent: OpenIntent } => {
+export const parseOpenRequestBody = (body: unknown): { slug: string; intent: OpenIntent } | { system: string; target: SystemOpenTarget } => {
   const record = bodyOf(body, 'the open request');
+  if (Object.hasOwn(record, 'system')) {
+    // Phase 2.5: a system's page, board or living-page preview. A body naming both is refused.
+    const { system, target } = record;
+    if (Object.hasOwn(record, 'slug') || Object.hasOwn(record, 'intent')) throw new ApiError('bad-request', 'Send a design folder name or a design system, not both.');
+    if (typeof system !== 'string' || !SYSTEM_ID_PATTERN.test(system)) throw new ApiError('bad-slug', 'That is not a design system name.');
+    if (target !== undefined && target !== 'page' && target !== 'board' && target !== 'preview') throw new ApiError('bad-request', 'The target must be "page", "board" or "preview".');
+    return { system, target: target ?? 'page' };
+  }
   const { slug, intent } = record;
   if (typeof slug !== 'string' || !SLUG_PATTERN.test(slug)) throw new ApiError('bad-slug', 'That is not a design folder name.');
   if (intent !== undefined && intent !== 'view' && intent !== 'comment') throw new ApiError('bad-request', 'The intent must be "view" or "comment".');
@@ -164,18 +198,19 @@ let tmpCounter = 0;
 
 /**
  * Write `<folder>/.chamber/RULES.md` atomically (tmp + rename), skipping the write when the bytes
- * are unchanged. `folder` must already be a contained design folder (`store.dir` / a record's
- * `path`). The agent writes into the design folder too, so a `.chamber` that is a link or a
- * plain file is refused rather than followed out of the folder.
+ * are unchanged. `folder` must already be a contained design or system folder (`store.dir` / a
+ * record's `path` / `systems.dir`). The agent writes into the folder too, so a `.chamber` that is a
+ * link or a plain file is refused rather than followed out of the folder. `what` names the folder's
+ * owner in the refusal sentence ('design' or 'system').
  */
-export const writeRulesFile = async (folder: string, text: string): Promise<void> => {
+export const writeRulesFile = async (folder: string, text: string, what: 'design' | 'system' = 'design'): Promise<void> => {
   const dir = path.join(folder, '.chamber');
   const info = await lstat(dir).catch((error: unknown) => {
     if (isMissing(error)) return null;
     throw error;
   });
   if (info !== null && (info.isSymbolicLink() || !info.isDirectory())) {
-    throw new ApiError('internal', 'This design\'s .chamber entry is not a normal folder, so Design Chamber cannot write the agent instructions there. Remove it and try again.');
+    throw new ApiError('internal', `This ${what}'s .chamber entry is not a normal folder, so Design Chamber cannot write the agent instructions there. Remove it and try again.`);
   }
   await mkdir(dir, { recursive: true });
   const target = path.join(dir, 'RULES.md');
@@ -257,13 +292,15 @@ const createInstructions = (ctx: ServiceContext): Instructions => {
     discover,
     async prepare(record) {
       const { design } = record;
-      const [files, preset, project, hasDesignMd, hasTokensCss, checkCommand] = await Promise.all([
+      const [files, preset, project, hasDesignMd, hasTokensCss, checkCommand, system] = await Promise.all([
         readRulesDocs(ctx.packageRoot),
         loadPreset(design.preset),
         discover(design.projectDirectory),
         isFile(path.join(record.path, 'DESIGN.md')),
         isFile(path.join(record.path, 'tokens.css')),
         ensureLauncherService(ctx).commandFor(ctx.settings.root(), record.slug),
+        // Phase 2.5 §8.1: the design's system (linked, ask, none or unset) for the precedence layer.
+        agentSystemOf({ systems: ensureSystemStore(ctx), settings: () => ctx.settings.read(), log: ctx.log }, record),
       ]);
       const context: AgentContext = {
         title: design.title,
@@ -278,6 +315,7 @@ const createInstructions = (ctx: ServiceContext): Instructions => {
         pending: record.pending,
         designSystem: { confirmed: design.designSystem.confirmed, hasDesignMd, hasTokensCss },
         checkCommand,
+        system,
       };
       return { context, text: buildRulesDoc(context, files) };
     },
@@ -375,6 +413,9 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
   const leaveOpenRequest = (slug: string, intent: OpenIntent): void => {
     openRequest = { request: { slug, intent, created: new Date().toISOString() }, at: Date.now() };
   };
+  const leaveSystemRequest = (system: string, target: SystemOpenTarget): void => {
+    openRequest = { request: { system, target, created: new Date().toISOString() }, at: Date.now() };
+  };
 
   try {
     ctx.onDispose(
@@ -388,19 +429,60 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
     ctx.log.warn('agent.rules-hook-unavailable', { error: error instanceof Error ? error.message : String(error) });
   }
 
+  /**
+   * Phase 2.5 §2.9, §5.4: a new design's system. A system is linked at creation (no version: the
+   * design holds nothing yet); `none` and `ask` are recorded as the decision; `none-silent` (no
+   * Ready system in this folder) leaves the design exactly as before Phase 2.5.
+   */
+  const applySystemChoice = async (slug: string, choice: EffectiveSystemChoice): Promise<void> => {
+    if (choice.choice === 'none-silent') return;
+    if (choice.choice === 'system') {
+      try {
+        await ensureLinkService(ctx).link(slug, { to: choice.id, by: 'creation', reason: 'system-change' });
+        return;
+      } catch (error) {
+        // The design is made either way; with the copy refused (the system changed a moment ago), the agent asks instead.
+        ctx.log.warn('systems.creation-link-failed', { slug, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    const decision = choice.choice === 'none' ? 'none' : 'ask';
+    await ctx.store.updateSystemState(slug, (state) => ({ ...state, systemDecision: decision })).catch((error: unknown) => {
+      ctx.log.warn('systems.creation-decision-failed', { slug, error: error instanceof Error ? error.message : String(error) });
+    });
+  };
+
   router.on('POST /chip', async ({ body }): Promise<ChipResponse> => {
     const input = parseChipBody(body);
     if (input.preset !== null && (await readPreset(ctx.packageRoot, input.preset)) === null) {
       throw new ApiError('bad-request', 'That style preset is not available. Pick another or start without one.');
     }
+    // Phase 2.5 §2.9: which system the new design gets. An explicit pick that is gone or a draft by now
+    // is refused before anything is made (the dialog offered it as Ready).
+    const systems = await ensureLinkService(ctx).indexed(true);
+    if (input.system !== null && input.system !== 'none' && input.system !== 'ask') {
+      const picked = systems.find((one) => one.id === input.system);
+      if (picked === undefined) throw new ApiError('invalid', LINK_SYSTEM_GONE_MESSAGE);
+      if (picked.status !== 'ready') throw new ApiError('invalid', linkDraftMessage(picked.name));
+    }
+    const choice = effectiveSystemChoice({
+      explicit: input.system,
+      projectDirectory: input.projectDirectory,
+      designsRoot: ctx.settings.root(),
+      settings: ctx.settings.read(),
+      systems,
+      foldsCase: foldsCase(),
+    });
     await instructions.discover(input.projectDirectory);
-    const record = await ctx.store.create({
+    const created = await ctx.store.create({
       kind: input.kind,
       title: titleFromBrief(input.brief, input.kind),
       brief: input.brief,
       preset: input.preset,
       projectDirectory: input.projectDirectory,
     });
+    await applySystemChoice(created.slug, choice);
+    // Re-read: the link wrote the copy and the decision the rules file reads.
+    const record = choice.choice === 'none-silent' ? created : await ctx.store.get(created.slug);
     // The chip makes RULES.md mandatory reading, so a failure to write it is a failure of the chip.
     const { context, text } = await instructions.prepare(record);
     await writeRulesFile(record.path, text);
@@ -431,6 +513,43 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
     const edits = await ensureEditService(ctx).editsFile.read(record.slug, record.path);
     const block = buildHandEditsBlock(edits.ledger, edits.dropped);
     const compactBlock = (): HandEditsBlock | null => buildHandEditsBlock(edits.ledger, edits.dropped, { compact: true });
+
+    if (input.purpose === 'restyle' || input.purpose === 'system-update') {
+      // Phase 2.5 §8.5: the names and the changes are read from the two copies (the before
+      // version's and the live one), never from the request. Safe: parsePromptBody set `before`.
+      const before = input.before as string;
+      const { source } = await ensureVersionsService(ctx).readTree(record.slug, before);
+      const oldCopyBytes = await source.read(`${COPY_DIR}/COPY.json`);
+      const oldCopy = oldCopyBytes === null ? null : parseCopyRecordText(oldCopyBytes.bytes.toString('utf8'));
+      const nowCopy = await readCopyRecord(record.path);
+      const from = oldCopy?.name ?? null;
+      const to = nowCopy.kind === 'ok' ? nowCopy.record.name : null;
+      if (input.purpose === 'restyle') {
+        if (from === null && to === null) throw new ApiError('invalid', "This design's design system didn't change.");
+        const text = buildDesignRestylePrompt({ title: design.title, kind: design.kind, folder: record.path, from, to, maxChars: budgetFor(block) });
+        return { text: withBlock(block, text), commentIds: [], omitted: [], chip, handEdits: handEditsOf(block) };
+      }
+      if (nowCopy.kind !== 'ok') throw new ApiError('invalid', LINK_NO_COPY_MESSAGE);
+      const oldCss = await source.read(`${COPY_DIR}/tokens.css`);
+      const oldJson = await source.read(`${COPY_DIR}/system.json`);
+      const nowCss = await readTokensFile(record.path, [COPY_DIR, 'tokens.css']);
+      const nowJson = await readTokensFile(record.path, [COPY_DIR, 'system.json'], SYSTEM_JSON_MAX_BYTES);
+      const tokens = tokenDiff(oldCss === null ? null : oldCss.bytes.toString('utf8'), nowCss.kind === 'read' ? nowCss.text : null);
+      const components = componentDiff(oldJson === null ? null : oldJson.bytes.toString('utf8'), nowJson.kind === 'read' ? nowJson.text : null);
+      const changed = tokens.changed.length + tokens.added.length + tokens.removed.length + components.changed.length + components.added.length + components.removed.length;
+      if (changed === 0) throw new ApiError('invalid', 'Nothing changed between the two copies; the design is already up to date.');
+      const text = buildDesignSystemUpdatePrompt({
+        title: design.title,
+        kind: design.kind,
+        folder: record.path,
+        name: nowCopy.record.name,
+        revision: nowCopy.record.revision,
+        tokens: { added: tokens.added, changed: tokens.changed.map((change) => change.name), removed: tokens.removed },
+        components,
+        maxChars: budgetFor(block),
+      });
+      return { text: withBlock(block, text), commentIds: [], omitted: [], chip, handEdits: handEditsOf(block) };
+    }
 
     if (input.purpose === 'offline') {
       const external = await collectExternal(ctx, record);
@@ -531,7 +650,20 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
   // A Work Status row or a chat block: open an existing design in the rail. The `open` event
   // reaches a rail that is already up; one opened next takes the request on mount.
   router.on('POST /open-request', async ({ body }): Promise<OkResponse> => {
-    const { slug, intent } = parseOpenRequestBody(body);
+    const parsed = parseOpenRequestBody(body);
+    if ('system' in parsed) {
+      // The id passed SYSTEM_ID_PATTERN; the system store resolves it under the root (containment).
+      try {
+        await ensureSystemStore(ctx).dir(parsed.system);
+      } catch (error) {
+        if (error instanceof ApiError && error.code === 'not-found') throw new ApiError('not-found', SYSTEM_GONE_MESSAGE);
+        throw error;
+      }
+      leaveSystemRequest(parsed.system, parsed.target);
+      ctx.hub.emit({ slug: null, kind: 'open' });
+      return { ok: true };
+    }
+    const { slug, intent } = parsed;
     try {
       await ctx.store.dir(slug);
     } catch (error) {

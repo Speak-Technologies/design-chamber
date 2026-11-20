@@ -32,6 +32,10 @@
         {
           "name": "page",
           "description": "New page: one HTML page shown full screen"
+        },
+        {
+          "name": "design-system",
+          "description": "Build a design system: interview, then extract and document"
         }
       ],
       "actions": [
@@ -116,6 +120,20 @@
           ],
           "entry": "dist/blocks/index.html",
           "height": 264,
+          "answers": true
+        },
+        {
+          "name": "SystemAsk",
+          "description": "Only in a /design-system chat: interview rounds and the diff to approve. kind: interview-1|interview-2|diff; see skill",
+          "args": [
+            "kind",
+            "ticket",
+            "systemId",
+            "proposalId",
+            "calls"
+          ],
+          "entry": "dist/blocks/index.html",
+          "height": 480,
           "answers": true
         }
       ]

@@ -20,6 +20,7 @@ const ICONS = {
   cursor: ['M4 4l7.07 16.97 2.51-7.39 7.39-2.51L4 4z'],
   play: ['m7 4 13 8-13 8z'],
   fit: ['M8 3H5a2 2 0 0 0-2 2v3', 'M21 8V5a2 2 0 0 0-2-2h-3', 'M3 16v3a2 2 0 0 0 2 2h3', 'M16 21h3a2 2 0 0 0 2-2v-3'],
+  sidebar: ['M4 5h16v14H4z', 'M9 5v14'],
   folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
   canvas: ['M3 3h8v8H3z', 'M13 3h8v5h-8z', 'M13 10h8v11h-8z', 'M3 13h8v8H3z'],
   page: ['M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z', 'M14 3v5h5', 'm10 13-2 2 2 2', 'm14 13 2 2-2 2'],
@@ -38,6 +39,8 @@ const ICONS = {
   send: ['M22 2 11 13', 'M22 2l-7 20-4-9-9-4z'],
   pin: ['M12 21s-7-5.2-7-11a7 7 0 1 1 14 0c0 5.8-7 11-7 11z', 'M12 7.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z'],
   layers: ['m12 3 9 5-9 5-9-5z', 'm3 13 9 5 9-5'],
+  // A palette with its dabs: design systems.
+  system: ['M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4c0-4.4-4-8.1-9-8.1z', 'M7.5 11.5h.01', 'M10 7.5h.01', 'M15 7.5h.01'],
   // Three sliders with their knobs: the Tweaks button.
   tune: ['M4 21v-7', 'M4 10V3', 'M12 21v-9', 'M12 8V3', 'M20 21v-5', 'M20 12V3', 'M2 14h4', 'M10 8h4', 'M18 16h4'],
 } as const satisfies Record<string, readonly string[]>;

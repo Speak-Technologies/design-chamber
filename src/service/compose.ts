@@ -11,7 +11,7 @@ import { unavailable, type Logger, type ServiceContext } from './context.ts';
 import { createDesignIndex } from './design-index.ts';
 import { createHostCalls } from './host-calls.ts';
 import { createRouter, registerHealthRoute, type Router } from './http.ts';
-import { startInstructions } from './instructions.ts';
+import { instructionsFileOf, startInstructions } from './instructions.ts';
 import { createOutboxStore } from './outbox.ts';
 import { ensureRenderService } from './render-cache.ts';
 import { ensureLauncherService } from './check/launcher.ts';
@@ -19,9 +19,12 @@ import { registerChangesRoutes } from './routes/changes.ts';
 import { registerChecksRoutes } from './routes/checks.ts';
 import { registerChatRoutes } from './routes/chat.ts';
 import { registerCommentsRoutes } from './routes/comments.ts';
+import { registerDesignSystemRoutes } from './routes/design-system.ts';
 import { registerDesignsRoutes } from './routes/designs.ts';
 import { registerEditRoutes } from './routes/edits.ts';
 import { registerExportRoutes } from './routes/export.ts';
+import { registerFoldersRoutes } from './routes/folders.ts';
+import { ensureFoldersService } from './folders.ts';
 import { registerMentionsRoutes } from './routes/mentions.ts';
 import { registerOutboxRoutes } from './routes/outbox.ts';
 import { registerPageStateRoutes } from './routes/page-state.ts';
@@ -30,13 +33,31 @@ import { registerRenderRoutes } from './routes/render.ts';
 import { registerSessionEventsRoutes } from './routes/session-events.ts';
 import { registerSettingsRoutes } from './routes/settings.ts';
 import { registerStatusRoutes } from './routes/status.ts';
+import { registerSystemAssetRoutes } from './routes/system-assets.ts';
+import { registerSystemBoardRoutes } from './routes/system-board.ts';
+import { registerSystemBuildRoutes } from './routes/system-build.ts';
+import { registerSystemChatRoutes } from './routes/system-chat.ts';
+import { registerSystemChecksRoutes } from './routes/system-checks.ts';
+import { registerSystemEditRoutes } from './routes/system-edits.ts';
+import { registerSystemScanRoutes } from './routes/system-scans.ts';
+import { registerSystemVersionsRoutes } from './routes/system-versions.ts';
+import { registerSystemsRoutes } from './routes/systems.ts';
 import { registerThumbnailsRoutes } from './routes/thumbnails.ts';
 import { registerUploadsRoutes } from './routes/uploads.ts';
 import { registerVersionsRoutes } from './routes/versions.ts';
 import { writeRuntimeRecord } from './runtime-record.ts';
 import { createSelfWrites } from './self-writes.ts';
-import { createSettingsStore, type SettingsEnv } from './settings.ts';
+import { createSettingsStore, settingsFilePath, type SettingsEnv } from './settings.ts';
 import { createDesignStore } from './store.ts';
+import { startChoiceReconciler } from './systems/choice.ts';
+import { ensureLinkService } from './systems/link.ts';
+import { ensureBuildTickets } from './systems/builds.ts';
+import { startHomes } from './systems/homes.ts';
+import { startLivingPages } from './systems/living-page.ts';
+import { startProposals } from './systems/proposals.ts';
+import { startSnapshots } from './systems/snapshot.ts';
+import { ensureSystemStore } from './systems/store.ts';
+import { ensureSystemVersions } from './systems/versions.ts';
 import { ensureThumbnailService } from './thumbnails.ts';
 import { createTurnEvents } from './turn-events.ts';
 import { createUploadStore } from './uploads.ts';
@@ -114,9 +135,34 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   // snapshots from the first content event on, and the routes share these same instances.
   ctx.renders = ensureRenderService(ctx);
   ctx.thumbnails = ensureThumbnailService(ctx);
+  // Eager, so the systems index loads and agent changes to a system count towards a new revision
+  // from the first event on (Phase 2.5 §5.1, AD-13).
+  ensureSystemStore(ctx);
+  // Eager, so a system's quiet-period snapshots start from the first content event (Phase 2.5 §5.2, AD-3).
+  ensureSystemVersions(ctx);
+  // Eager, so a removed design leaves the folder registry from the first event on (Phase 2.5 §5.8).
+  ensureFoldersService(ctx);
+  // Eager, so expired and over-the-cap build tickets are swept at service start (Phase 2.5 §2.12).
+  ensureBuildTickets(ctx);
 
   const watcher = startWatcher({ settings, hub, log, selfWrites, ...options.watch });
   ctx.onDispose(() => watcher.stop());
+
+  // Phase 2.5 §5.4, §5.5: a copy swap a restart interrupted is finished or undone, and the agent's
+  // recorded `systemChoice` is acted on from the first design event on.
+  const copiesRecovered = ensureLinkService(ctx).recoverAll();
+  ctx.onDispose(() => copiesRecovered);
+  ctx.onDispose(startChoiceReconciler(ctx));
+  // Phase 2.5 §5.9: BUILD.json is adopted and followed from the watcher's baseline on.
+  ctx.onDispose(startHomes(ctx, () => watcher.ready));
+  // Phase 2.5 §5.10: a snapshot swap a restart interrupted is finished or undone, and a snapshot
+  // changed outside Design Chamber is marked tampered (a link refuses it until a re-sync).
+  ctx.onDispose(startSnapshots(ctx));
+  // Phase 2.5 §5.11: the committed living page's state joins the system rows, and a staged page from
+  // another revision or generator is regenerated once after the watcher's baseline.
+  ctx.onDispose(startLivingPages(ctx, () => watcher.ready));
+  // Phase 2.5 §5.14: each PROPOSAL.json is settled, recorded and previewed after the watcher's baseline.
+  ctx.onDispose(startProposals(ctx, () => watcher.ready));
 
   // The guide at <root>/AGENTS.md: synced after the watcher's baseline, on root changes and on
   // new designs. The skill ships inside the extension; an older installed copy is only read here.
@@ -135,13 +181,29 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
     await agent.idle();
   });
 
-  // The Design Chamber note in every agent's instructions: after the baseline and on root changes.
-  ctx.onDispose(startInstructions(ctx, { commandFor: (root) => launcher.commandFor(root, '<slug>'), ready: watcher.ready }));
+  // The Design Chamber note in every agent's instructions: after the baseline and on root changes;
+  // plus one line per pinned project (Phase 2.5 §8.6), also on settings and system changes.
+  const systemStore = ensureSystemStore(ctx);
+  ctx.onDispose(
+    startInstructions(ctx, {
+      commandFor: (root) => launcher.commandFor(root, '<slug>'),
+      ready: watcher.ready,
+      pins: {
+        settings: () => settings.read(),
+        systems: () => systemStore.list(),
+        file: instructionsFileOf(settingsFilePath(options.env ?? process.env, process.platform, options.homeDir)),
+        onSettingsChange: (listener) => settings.onChange(listener),
+        subscribe: (listener) => hub.subscribe(listener),
+      },
+    }),
+  );
 
   // Session events: the route answers at once; this queue snapshots linked designs after each turn.
   const turnEvents = createTurnEvents({
     index: designIndex,
     versions: { turn: (sessionId) => ensureVersionsService(ctx).turn(sessionId) },
+    // Phase 2.5 §8.5: the systems linked to the chat get their turn snapshot too.
+    systemVersions: { turn: (sessionId) => ensureSystemVersions(ctx).turn(sessionId), any: () => systemStore.index().length > 0 },
     activity: ctx.activity,
     hub,
     log,
@@ -182,6 +244,19 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   // Phase 2: hand edits (the edit pipeline) and saved page data (per-design page state).
   registerEditRoutes(router, ctx);
   registerPageStateRoutes(router, ctx);
+  // Phase 2.5: design systems and folders (documentation/specs/phase-2-5-technical.md §3); T0 stubs
+  // answer "not built yet" until each task replaces its file's registrations.
+  registerSystemsRoutes(router, ctx);
+  registerSystemVersionsRoutes(router, ctx);
+  registerSystemEditRoutes(router, ctx);
+  registerSystemScanRoutes(router, ctx);
+  registerSystemAssetRoutes(router, ctx);
+  registerSystemBoardRoutes(router, ctx);
+  registerSystemChatRoutes(router, ctx);
+  registerSystemChecksRoutes(router, ctx);
+  registerDesignSystemRoutes(router, ctx);
+  registerFoldersRoutes(router, ctx);
+  registerSystemBuildRoutes(router, ctx);
 
   let disposed = false;
   return {

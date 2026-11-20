@@ -9,8 +9,8 @@
 
 import { CHANGES_RING_SIZE, CHANGES_WAIT_MAX_MS } from '../shared/limits.ts';
 import type { ChangesResponse } from '../shared/api.ts';
-import type { ChangeEvent, ChangeKind } from '../shared/types.ts';
-import type { ChangeHub } from './context.ts';
+import type { ChangeEvent } from '../shared/types.ts';
+import type { ChangeEmit, ChangeHub } from './context.ts';
 
 export type ChangeHubOptions = {
   /** Ring capacity; default `CHANGES_RING_SIZE` (500). */
@@ -36,7 +36,7 @@ export const createChangeHub = (epoch: string, options: ChangeHubOptions = {}): 
   return {
     epoch,
     seq: () => seq,
-    emit(input: { slug: string | null; kind: ChangeKind; files?: string[]; origin?: 'user' }): ChangeEvent {
+    emit(input: ChangeEmit): ChangeEvent {
       seq += 1;
       const event: ChangeEvent = {
         seq,
@@ -44,6 +44,8 @@ export const createChangeHub = (epoch: string, options: ChangeHubOptions = {}): 
         kind: input.kind,
         ...(input.files ? { files: input.files } : {}),
         ...(input.origin ? { origin: input.origin } : {}),
+        ...(input.system !== undefined ? { system: input.system } : {}),
+        ...(input.systemChange !== undefined ? { systemChange: input.systemChange } : {}),
       };
       ring.push(event);
       if (ring.length > ringSize) ring.splice(0, ring.length - ringSize);

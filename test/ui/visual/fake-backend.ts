@@ -17,6 +17,9 @@ import type {
   VersionSummary,
   Viewport,
 } from '../../../src/shared/types.ts';
+import { createFakeFolders, type FakeFolders } from './fake-folders.ts';
+import { createFakeSystems, type FakeSystems } from './fake-systems.ts';
+import { createFakeDesignSystem, type FakeDesignSystem } from './fake-design-system.ts';
 import { createFakeChecks, type FakeChecks } from './fake-checks.ts';
 import { createFakePageState, type FakePageState } from './fake-page-state.ts';
 import { createFakeTokens, type FakeTokens } from './fake-tokens.ts';
@@ -312,6 +315,17 @@ export type FakeBackend = {
   touchTokens: (slug: string) => void;
   /** Test hooks (saved page data): seed it, play another surface clearing it, count the accepted writes (fake-page-state.ts). */
   pageState: FakePageState['hooks'];
+  /** Test hooks (Phase 2.5 G1): seed folders, fail their load, play another window (fake-folders.ts). */
+  folders: FakeFolders['hooks'];
+  /** Test hooks (Phase 2.5 U1): the design systems book (fake-systems.ts). */
+  systems: FakeSystems['hooks'];
+  /** Test hooks (Phase 2.5 U4): each design's system link (fake-design-system.ts). */
+  designSystem: FakeDesignSystem['hooks'];
+  /** Test hook (G1): which project folder a design was made for (`null`: none), and which project folders are gone from disk. */
+  setProject: (slug: string, directory: string | null) => void;
+  setMissingProjects: (directories: string[]) => void;
+  /** Leaves an open request for a system, as the service does for a chat block's preview button. */
+  requestSystemOpen: (system: string, target: 'page' | 'board' | 'preview') => void;
 };
 
 export const createFakeBackend = (): FakeBackend => {
@@ -357,6 +371,7 @@ export const createFakeBackend = (): FakeBackend => {
     openComments: rec.design.comments.filter((c) => c.status === 'open').length,
     thumb: { state: rec.thumb, key: rec.thumb === 'ready' ? `${slug}:${rec.rev}` : null },
     warnings: [],
+    system: designSystem.summary(slug),
   });
 
   const docFor = (slug: string, rec: Rec, screenId: string | undefined, versionId: string | undefined): string => {
@@ -464,6 +479,23 @@ export const createFakeBackend = (): FakeBackend => {
     return { edit: { id, label, ...(detailText ? { detail: detailText } : {}), files: [], undoable: true }, version: null, coalesced: false, stamps: { screens: stampOf(rec) }, ...(created ? { created } : {}) };
   };
 
+  const missingProjects = new Set<string>();
+  const folderBook: FakeFolders = createFakeFolders({ emit: (slug, kind) => emit(slug, kind), exists: (slug) => db.has(slug) });
+  const systemBook: FakeSystems = createFakeSystems({ emit: (slug, kind) => emit(slug, kind) });
+  const designSystem: FakeDesignSystem = createFakeDesignSystem({
+    emit: (slug, kind, files) => emit(slug, kind, files),
+    rows: () => systemBook.hooks.current(),
+    setRows: (next) => systemBook.hooks.seed(next),
+    exists: (slug) => db.has(slug),
+    checkpoint: (slug) => {
+      const rec = get(slug);
+      const n = (rec.versions[rec.versions.length - 1]?.n ?? 0) + 1;
+      const version: VersionSummary = { id: `v${n}`, n, created: new Date().toISOString(), reason: 'system-change', sessionId: null, treeHash: `tree${n}`, bytes: 30_000, fileCount: 8 };
+      rec.versions.push(version);
+      return version;
+    },
+  });
+
   type Req<K extends RouteKey> = { params: Record<string, string>; query: Record<string, string>; body: RouteBody<K> };
   type Handlers = { [K in RouteKey]?: (req: Req<K>) => RouteResponse<K> | Promise<RouteResponse<K>> };
 
@@ -482,6 +514,7 @@ export const createFakeBackend = (): FakeBackend => {
         guide: { path: `${root}\\AGENTS.md`, state: 'current' },
         skill: { path: 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md', state: skillState, duplicates: [] },
       },
+      systems: designSystem.settings(),
     }),
     'PUT /settings': ({ body }) => {
       if (body.root !== undefined) {
@@ -495,13 +528,15 @@ export const createFakeBackend = (): FakeBackend => {
       if (body.chromePath !== undefined) {
         chromePath = body.chromePath;
       }
+      designSystem.putSettings(body);
       return handlers['GET /settings']?.({ params: {}, query: {}, body: undefined }) as RouteResponse<'PUT /settings'>;
     },
     'GET /designs': ({ query }) => {
       let designs = rootVisible() ? [...db.entries()].map(([slug, rec]) => summary(slug, rec)) : [];
       if (query.q) designs = designs.filter((d) => d.title.toLowerCase().includes((query.q ?? '').toLowerCase()));
       const files = rootVisible() ? [...loose.entries()].map(([name, file]) => ({ name, ...file })).sort((a, b) => b.mtime.localeCompare(a.mtime)) : [];
-      return { root, designs, loose: { files, total: files.length } };
+      const directories = [...new Set(designs.map((d) => d.projectDirectory).filter((d): d is string => d !== null))];
+      return { root, designs, loose: { files, total: files.length }, projectFolders: directories.map((directory) => ({ directory, exists: !missingProjects.has(directory) })) };
     },
     'POST /loose/import': ({ body }) => {
       if (!loose.delete(body.name)) throw new ServiceError('not-found', 'That file is no longer in your designs folder.');
@@ -520,6 +555,11 @@ export const createFakeBackend = (): FakeBackend => {
     },
     // A Work Status row or a chat block asks the rail to open a design; the rail takes it once.
     'POST /open-request': ({ body }) => {
+      if ('system' in body) {
+        openRequest = { system: body.system, target: body.target ?? 'page', created: new Date().toISOString() };
+        emit(null, 'open');
+        return { ok: true };
+      }
       get(body.slug);
       openRequest = { slug: body.slug, intent: body.intent ?? 'view', created: new Date().toISOString() };
       emit(body.slug, 'open');
@@ -690,6 +730,7 @@ export const createFakeBackend = (): FakeBackend => {
       rec.versions.push(point);
       const restored: VersionSummary = { id: `v${n + 1}`, n: n + 1, created: new Date().toISOString(), reason: 'restored', sessionId: null, treeHash: target.treeHash, bytes: target.bytes, fileCount: target.fileCount };
       rec.versions.push(restored);
+      designSystem.restored(params.slug ?? '', params.vid ?? '');
       touch(rec);
       emit(params.slug ?? null, 'versions');
       emit(params.slug ?? null, 'files');
@@ -699,7 +740,6 @@ export const createFakeBackend = (): FakeBackend => {
       get(params.slug);
       return { path: `C:\\Users\\you\\Downloads\\${params.slug}${body.format === 'zip' ? '.zip' : '.html'}`, bytes: 184_320, format: body.format };
     },
-    'POST /reveal': () => ({ ok: true }),
     'GET /presets': () => ({
       presets: [
         { id: 'minimal-saas', name: 'Minimal SaaS', bestFor: 'dashboards, settings' },
@@ -732,6 +772,7 @@ export const createFakeBackend = (): FakeBackend => {
       // The service-written requests of "Ask the agent to fix it" (checks badge, remote-files banner).
       if (body.purpose === 'checks') return { ...checks.prompt(params.slug ?? ''), commentIds: [], omitted: [], chip, handEdits: null };
       if (body.purpose === 'offline') return { text: `[Design Chamber] Make "${rec.design.title}" work offline: bundle remote files into assets/ or remove them.`, commentIds: [], omitted: [], chip, handEdits: null };
+      if (body.purpose === 'restyle' || body.purpose === 'system-update') return { text: `[Design Chamber] ${body.purpose === 'restyle' ? 'Restyle' : 'Apply the system update to'} "${rec.design.title}".`, commentIds: [], omitted: [], chip, handEdits: null };
       if (body.purpose !== 'ask') throw new ServiceError('internal', 'The UI shim answers revisions, asks, checks and offline requests only.');
       const words = typeof body.text === 'string' ? body.text.trim() : '';
       if (words === '') throw new ServiceError('bad-request', 'Write what you want the agent to do.');
@@ -747,6 +788,7 @@ export const createFakeBackend = (): FakeBackend => {
     'POST /designs/:slug/edits': ({ params, body }) => {
       const rec = get(params.slug);
       if (body.op === 'reorder' || body.op === 'duplicate' || body.op === 'trash-screen' || body.op === 'keep-direction') return screenEdit(params.slug ?? '', rec, body);
+      if (body.op === 'token-reset') return designSystem.resetTokens(params.slug ?? '', body.base, body.names);
       if (body.op === 'tokens') return tokens.edit(params.slug ?? '', body.base, body.values, rec.design.tweaks);
       throw new ServiceError('internal', 'This part of Design Chamber (edits) is not built yet.');
     },
@@ -776,6 +818,9 @@ export const createFakeBackend = (): FakeBackend => {
     },
     // Saved page data (feature 19): in memory, in fake-page-state.ts.
     ...pageState.handlers,
+    ...folderBook.handlers,
+    ...systemBook.handlers,
+    ...designSystem.handlers,
   };
 
   const checks = createFakeChecks({
@@ -877,6 +922,24 @@ export const createFakeBackend = (): FakeBackend => {
     },
     touchTokens: (slug) => tokens.touch(slug),
     pageState: pageState.hooks,
+    folders: folderBook.hooks,
+    systems: systemBook.hooks,
+    designSystem: designSystem.hooks,
+    setProject: (slug, directory) => {
+      const rec = db.get(slug);
+      if (!rec) return;
+      rec.design.projectDirectory = directory;
+      emit(slug, 'design');
+    },
+    requestSystemOpen: (system, target) => {
+      openRequest = { system, target, created: new Date().toISOString() };
+      emit(null, 'open');
+    },
+    setMissingProjects: (directories) => {
+      missingProjects.clear();
+      for (const directory of directories) missingProjects.add(directory);
+      emit(null, 'root');
+    },
   };
 };
 

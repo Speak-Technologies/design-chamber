@@ -31,12 +31,24 @@ export const isBalancedQuotes = (value: string): boolean => {
 
 // ---- the scanner ----
 
-/** Where a declaration sits: a top-level rule whose selector is exactly `:root`, or anywhere else. */
-export type TokenContext = { kind: 'root' } | { kind: 'other'; label: string };
+/**
+ * Where a declaration sits: a top-level rule whose selector is exactly `:root`, or anywhere else.
+ *
+ * Phase 2.5 §2.4 (additive): an `other` context also carries `atRules` and `selectors`, the
+ * normalised preludes of its enclosing blocks from outer to inner, so a design system can tell its
+ * dark block (`:root` inside `@media (prefers-color-scheme: dark)`) apart from every other place.
+ * Both are non-enumerable: the context still compares and serialises as `{ kind, label }`, so every
+ * existing caller and comparison sees exactly what it saw before.
+ */
+export type TokenContext = { kind: 'root' } | { kind: 'other'; label: string; readonly atRules?: readonly string[]; readonly selectors?: readonly string[] };
 
 export type Declaration = {
   /** The property name as written, e.g. `--accent-h`. */
   name: string;
+  /** Phase 2.5 §2.4 (additive): index of the name's first character. */
+  start: number;
+  /** Phase 2.5 §2.4 (additive): index of the `;` that ends it, or of the `}` / end of file when there is none. */
+  end: number;
   /** `valueRaw = [from, to)`: after the colon's whitespace, before trailing whitespace, a comment, `!important`, `;` or `}`. */
   from: number;
   to: number;
@@ -110,14 +122,47 @@ const normalizePrelude = (text: string): string => {
 
 const clipLabel = (text: string): string => (text.length <= TOKEN_CONTEXT_MAX ? text : `${text.slice(0, TOKEN_CONTEXT_MAX - 1).trimEnd()}…`);
 
-type Block = { prelude: string; atRule: boolean };
+type Block = { prelude: string; atRule: boolean; open: number };
 
 const contextOf = (stack: readonly Block[]): TokenContext => {
   const [only] = stack;
   if (stack.length === 1 && only !== undefined && !only.atRule && only.prelude.toLowerCase() === ':root') return { kind: 'root' };
   const atRules = stack.filter((block) => block.atRule).map((block) => block.prelude);
   const label = atRules.length > 0 ? atRules.join(' ') : stack.map((block) => block.prelude).join(' ');
-  return { kind: 'other', label: clipLabel(label) };
+  const context: TokenContext = { kind: 'other', label: clipLabel(label) };
+  // Non-enumerable (see TokenContext): additive data that no existing comparison sees.
+  Object.defineProperty(context, 'atRules', { value: Object.freeze(atRules), enumerable: false });
+  Object.defineProperty(context, 'selectors', { value: Object.freeze(stack.filter((block) => !block.atRule).map((block) => block.prelude)), enumerable: false });
+  return context;
+};
+
+/**
+ * One rule or at-rule block of the file (Phase 2.5 §6.1, where the token planner inserts): its
+ * preludes from outer to inner (this block's own last), the index of its `{` and of its `}` (the end
+ * of the file when it is never closed), and whether text that a `}` ended without a `;` sits at
+ * its end (`tailStart` is where that text starts), so an insertion knows to close it first.
+ */
+export type TokenBlock = {
+  atRules: readonly string[];
+  selectors: readonly string[];
+  /** Whether this block's own prelude is an at-rule (the innermost of the lists above). */
+  atRule: boolean;
+  open: number;
+  close: number;
+  closed: boolean;
+  openTail: boolean;
+  tailStart: number;
+};
+
+/** The index of the first character at or after `from` that is not whitespace or inside a comment. */
+const skipSpaceAndComments = (css: string, from: number, limit: number): number => {
+  let i = from;
+  while (i < limit) {
+    if (isSpace(css.charCodeAt(i)) || css.charCodeAt(i) === 0xfeff) i += 1;
+    else if (css.startsWith('/*', i)) i = commentEnd(css, i);
+    else break;
+  }
+  return Math.min(i, limit);
 };
 
 /** `!` at `at` followed (after whitespace and comments) by `important`. */
@@ -132,9 +177,31 @@ const isImportantAt = (css: string, at: number): boolean => {
 };
 
 /** Every custom-property declaration in the file, in source order (§4.2). */
-export const scanTokens = (css: string): Declaration[] => {
+export const scanTokens = (css: string): Declaration[] => scan(css, null);
+
+/** Every block of the file in the order they close (unclosed ones last), for the token planner (Phase 2.5 §6.1). */
+export const scanTokenBlocks = (css: string): TokenBlock[] => {
+  const blocks: TokenBlock[] = [];
+  scan(css, blocks);
+  return blocks;
+};
+
+const scan = (css: string, blocks: TokenBlock[] | null): Declaration[] => {
   const out: Declaration[] = [];
   const stack: Block[] = [];
+  const recordBlock = (close: number, closed: boolean, tailStart: number): void => {
+    if (blocks === null) return;
+    blocks.push({
+      atRules: stack.filter((block) => block.atRule).map((block) => block.prelude),
+      selectors: stack.filter((block) => !block.atRule).map((block) => block.prelude),
+      atRule: stack.at(-1)?.atRule ?? false,
+      open: stack.at(-1)?.open ?? 0,
+      close,
+      closed,
+      openTail: normalizePrelude(css.slice(tailStart, close)) !== '',
+      tailStart,
+    });
+  };
   let i = css.charCodeAt(0) === 0xfeff ? 1 : 0;
 
   // The segment being read: a declaration, a rule's prelude, or an at-statement.
@@ -166,6 +233,8 @@ export const scanTokens = (css: string): Declaration[] => {
       while (to > from && isSpace(css.charCodeAt(to - 1))) to -= 1;
       out.push({
         name: normalizePrelude(css.slice(segStart, colonAt)),
+        start: skipSpaceAndComments(css, segStart, colonAt),
+        end: at,
         from,
         to: Math.max(from, to),
         important: importantAt !== null,
@@ -220,12 +289,14 @@ export const scanTokens = (css: string): Declaration[] => {
       if (custom && colonAt !== null) brackets.push(0x7d); // a custom property's value may hold a `{}` block
       else {
         const prelude = normalizePrelude(css.slice(segStart, i));
-        stack.push({ prelude, atRule: prelude.startsWith('@') });
+        stack.push({ prelude, atRule: prelude.startsWith('@'), open: i });
         resetSegment(i + 1);
       }
     } else if (code === 0x7d) {
       if (stack.length > 0) {
+        const tailStart = segStart;
         endSegment(i);
+        recordBlock(i, true, tailStart);
         stack.pop();
       } else resetSegment(i + 1); // a stray `}` at the top level
     } else if (code === 0x3b) {
@@ -234,8 +305,96 @@ export const scanTokens = (css: string): Declaration[] => {
     }
     i += 1;
   }
+  const tailStart = segStart;
   endSegment(css.length);
+  // Blocks the file never closes, innermost first (as a browser closes them at the end).
+  while (stack.length > 0) {
+    recordBlock(css.length, false, tailStart);
+    stack.pop();
+  }
   return out;
+};
+
+// ---- @font-face rules (Phase 2.5 §7.1) ----
+
+/** One `@font-face` rule as written: each field the raw text (comments dropped, white space collapsed), null when absent. */
+export type FontFaceRule = {
+  family: string | null;
+  weight: string | null;
+  style: string | null;
+  /** Every `url(…)` of `src`, in order, unquoted; never resolved here. */
+  urls: string[];
+  /** Index of the rule's `{`. */
+  open: number;
+};
+
+/** The `name: value` declarations of `[from, to)`, split on `;` outside strings, comments, `url(…)` and brackets. */
+const plainDeclarations = (css: string, from: number, to: number): { name: string; value: string }[] => {
+  const out: { name: string; value: string }[] = [];
+  let start = from;
+  let colon = -1;
+  let depth = 0;
+  const push = (end: number): void => {
+    if (colon >= 0) out.push({ name: normalizePrelude(css.slice(start, colon)).toLowerCase(), value: normalizePrelude(css.slice(colon + 1, end)) });
+  };
+  for (let i = from; i < to; ) {
+    const code = css.charCodeAt(i);
+    if (code === 0x2f && css.charCodeAt(i + 1) === 0x2a) {
+      i = Math.min(commentEnd(css, i), to);
+      continue;
+    }
+    if (code === 0x22 || code === 0x27) {
+      i = Math.min(stringEnd(css, i).end, to);
+      continue;
+    }
+    if (code === 0x75 || code === 0x55) {
+      const url = unquotedUrlEnd(css, i);
+      if (url !== null) {
+        i = Math.min(url.end, to);
+        continue;
+      }
+    }
+    if (code === 0x28 || code === 0x5b) depth += 1;
+    else if (code === 0x29 || code === 0x5d) depth = Math.max(0, depth - 1);
+    else if (code === 0x3a && depth === 0 && colon < 0) colon = i;
+    else if (code === 0x3b && depth === 0) {
+      push(i);
+      start = i + 1;
+      colon = -1;
+    }
+    i += 1;
+  }
+  push(to);
+  return out;
+};
+
+const unquote = (text: string): string => {
+  const trimmed = text.trim();
+  const first = trimmed.charAt(0);
+  return trimmed.length >= 2 && (first === '"' || first === "'") && trimmed.endsWith(first) ? trimmed.slice(1, -1) : trimmed;
+};
+
+const SRC_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s"']*))\s*\)/gi;
+
+/**
+ * Every `@font-face` rule of the file in source order (Phase 2.5 §7.1), found with the same block
+ * rules as `scanTokens`, so a rule inside a comment or a string is not one. Pure: the URLs are text.
+ */
+export const scanFontFaces = (css: string): FontFaceRule[] => {
+  const faces: FontFaceRule[] = [];
+  for (const block of scanTokenBlocks(css)) {
+    const own = block.atRules.at(-1);
+    if (!block.atRule || own === undefined || own.toLowerCase() !== '@font-face') continue;
+    const face: FontFaceRule = { family: null, weight: null, style: null, urls: [], open: block.open };
+    for (const { name, value } of plainDeclarations(css, block.open + 1, block.close)) {
+      if (name === 'font-family') face.family = unquote(value);
+      else if (name === 'font-weight') face.weight = value;
+      else if (name === 'font-style') face.style = value;
+      else if (name === 'src') face.urls = [...value.matchAll(SRC_URL)].map((match) => match[1] ?? match[2] ?? match[3] ?? '').filter((url) => url !== '');
+    }
+    faces.push(face);
+  }
+  return faces.sort((a, b) => a.open - b.open);
 };
 
 // ---- the knob states ----

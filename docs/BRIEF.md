@@ -6,6 +6,15 @@ as plain files by the user's own chat agent.
 
 Owner decisions (2026-10-26). Anything not listed here is open — ask, don't guess.
 
+## North star (owner endorsed 2026-11-19)
+Design Chamber is growing from a design tool into a full artifact manager, with designs as the
+first artifact type. Every artifact is a folder with a contract (`design.json`), rendered in the
+same sandboxed viewer, versioned, checked, and steered by the same agent instructions. Design
+systems, projects, and the ways out (export, present, handoff) all reuse those same primitives, so
+the foundation does not change, it generalizes. The design canvas stays the heart of it, now one
+view over a broader library. The whole lifecycle lives here: make it, systematize it, organize it
+by project, review it, and ship it out, with the agent as the author and the user as the editor.
+
 ## Platform
 - OpenChamber extension (SDK `apiVersion: 1`), source of OpenChamber at
   `~/Documents/GitHub/openchamber` (SDK: `packages/sdk/DOCUMENTATION.md`, `API.md`,
@@ -124,6 +133,62 @@ Precedence, highest first:
 - On the rail, a direction row wraps to a 2×2 grid so Current, A, B and C are visible at once; the page
   keeps the single row. The row's "Show at" viewport switch is drawn on both surfaces. (Owner approved
   2026-11-11.)
+
+## Owner decisions (2026-11-19, Phase 2.5)
+- Design systems and project grouping live inside Design Chamber (not a separate extension).
+- A new design picks its system: the project's pinned system, else the user's global default, else the
+  agent asks which. A per-design explicit choice always wins.
+- Components are tokens + styles + a component inventory with usage notes; no running project builds or
+  real-component import in this phase.
+- Designs group by project automatically AND by manual folders; a design may sit in several folders
+  (folders behave like tags). Grouping never moves a design's folder on disk.
+- Systems are created by extracting from a project's code (repo left unchanged), uploading brand
+  files/fonts, and manual on-page editing; re-sync updates values but keeps notes/overview/fonts/assets.
+- Extraction is split: Design Chamber parses CSS variables and token JSON it can read with certainty; the
+  agent writes the overview, usage notes, components and anything unparseable.
+- Rules order with a linked system: the user's words, then the design's system, then the project's files
+  for whatever the system doesn't cover, then the preset only when no system is linked, then the built-in
+  rules. The preset picker hides when a system is chosen. (Supersedes the Phase 0 precedence for designs
+  with a linked system.)
+- One system per design this phase (two systems' tokens clash by name).
+- Each design keeps its own copy of the system (copy-on-link); when the system changes the design shows
+  "Review update" and never updates by itself. The design's own token changes stay as overrides on top of
+  a newer system, each with "Reset to system".
+
+### Building systems like Claude (added 2026-11-19)
+- A system lives either in the internal Design Chamber store or in the project repo with a generated
+  living page, chosen per system (like Claude's "Repo + living page"). Copy-on-link feeds designs either way.
+- A `/design-system` slash command plus a building skill (a different name, since the host drops a command
+  whose name a skill already uses) run a Claude-style interview: where it lives, fix-vs-describe, coverage,
+  dark mode, then the token calls (status colours, greys, typography, who can open the living page).
+- "Fix tokens, then document": the agent reconciles the project's token code to the agreed system after a
+  reviewed diff the user approves, in its normal coding role, then writes the docs and living page. The
+  service stays read-only on project repos: it generates the living-page HTML and re-scans, but never writes
+  the repo. The agent writes the repo (tokens and living page).
+- Coverage spans four areas: Foundations, Components, Patterns & voice, Brand & marketing.
+- The living page is one self-contained HTML file (no scripts, no remote refs) the agent commits to the repo;
+  the skill advises placement and access (dev builds only vs public). Hosting and access are the repo's
+  concern, not Design Chamber's.
+- Folded into Phase 2.5 as one on-par release (not a separate phase).
+- Describe-only with a repo + living-page home never modifies the app's existing code, but the agent still
+  creates the new system files, docs and living page after the same reviewed-diff approval; the code keeps its
+  values and the gap shows as an informational finding.
+- Hand edits on a repo-backed system: the panel shows values and notes read-only ("lives in <repo>; change
+  them there, or ask the agent here"). The ask bar and Needs work send the change to the system's chat (the
+  agent proposes a diff); review, Mark ready, rename and delete stay Design Chamber actions. E1-E12 hold via
+  the diff gate.
+- A living-page refresh: the user's explicit "Ask the agent to update it" is the approval to commit the one
+  regenerated file (the agent commits only it and says so). Any other repo write, and every token-code change,
+  needs a fresh reviewed diff.
+- Re-syncing a repo-backed system applies the whole read (new tokens and removals together), all or nothing;
+  holding back part would leave Design Chamber showing values the repo no longer has.
+- A new system first appears as a Draft after round one of the interview (so the chip resolves and round two
+  has scan.json); the repo is not written until the diff is approved.
+- The interview and diff ship as extension-rendered chat blocks (one SystemAsk block with a kind argument)
+  with Approve/Decline buttons; the diff is read from a proposal file, approval is bound to the proposal id
+  (no stale approvals), and a note alone is never approval (a typed reply always works).
+- Living-page component examples are rendered to PNG by the headless-Chrome thumbnail pipeline and embedded
+  as data:image, so no agent-written markup ever reaches the unsandboxed page.
 
 ## Process
 - Public GitHub repo, MIT, default branch `master` with branch protection (PR + 1 approval + CI; owner-only bypass). (Updated 2026-10-27; was local-only.)

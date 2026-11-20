@@ -125,6 +125,14 @@ describe('buildAgentGuide (§4)', () => {
     }
   });
 
+  test('the design-system lines: build with /design-system, and a design task never writes a repo (Phase 2.5 §8.11)', () => {
+    for (const [root, platform] of [[POSIX_ROOT, 'linux'], [WIN_ROOT, 'win32']] as const) {
+      const guide = buildAgentGuide({ root, platform });
+      assert.ok(guide.includes('- To build a design system with the user, use /design-system or the design-system-builder skill.'));
+      assert.ok(guide.includes("- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff."));
+    }
+  });
+
   test('win32 uses native separators for folder paths', () => {
     const guide = buildAgentGuide({ root: WIN_ROOT, platform: 'win32' });
     assert.ok(guide.includes(`${WIN_ROOT}\\<slug>\\`));

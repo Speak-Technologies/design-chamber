@@ -20,6 +20,7 @@ import {
   RUNTIME_PATH_MAX,
   SCREEN_ID_PATTERN,
   SLUG_PATTERN,
+  SYSTEM_ID_PATTERN,
 } from '../shared/limits.ts';
 import { foldsCase, isStrictlyInside, type PathModule } from '../shared/path-compare.ts';
 
@@ -31,6 +32,9 @@ export const NOT_A_DESIGN_SENTENCE = 'That is not a design folder name. Use the 
 const NOT_SCREENS_SENTENCE = 'Those are not screen ids. Use the ids listed in the design.json screens, such as home or pricing.';
 const TOO_MANY_SCREENS_SENTENCE = `Check at most ${CHECK_TOOL_SCREENS_MAX} screens at a time, or leave screens out to check them all.`;
 const NOT_STATIC_SENTENCE = 'static takes true or false.';
+export const NOT_A_SYSTEM_SENTENCE = 'That is not a design system id. Use the name of a folder in the Designs folder\'s _systems folder, such as acme.';
+const BOTH_SENTENCE = 'Check a design or a design system, not both: give design or system.';
+const SYSTEM_SCREENS_SENTENCE = 'A design system has no screens; leave screens out.';
 export const SETUP_SENTENCE = "Design Chamber hasn't set up its check tool yet. Open the Design Chamber panel once, then try again.";
 export const LAUNCHER_SENTENCE = "The design_check tool can't run in this setup. Run the check command from the AGENTS.md file in the Designs folder instead.";
 const CLI_MISSING_SENTENCE = "Design Chamber's check program is missing from its extension folder. Reinstall Design Chamber, then try again.";
@@ -48,9 +52,10 @@ export const TOOL_DESCRIPTION =
 export const TOOL_INPUT = {
   type: 'object',
   additionalProperties: true,
-  required: ['design'],
+  // One of design or system (Phase 2.5 §10.2); parseToolInput enforces it.
   properties: {
     design: { type: 'string', description: 'The design folder name, such as pricing-page' },
+    system: { type: 'string', description: 'Instead of design: a design system id, such as acme (files only)' },
     screens: { type: 'array', items: { type: 'string' }, description: 'Canvas only: check just these screen ids' },
     static: { type: 'boolean', description: 'Check the files only, without a browser' },
   },
@@ -62,7 +67,10 @@ const answer = (content: string, exit: 0 | 1 | 2): ToolAnswer => ({ content, met
 
 // ---- 1. tool input ----
 
-export type CheckInput = { design: string; screens: string[]; static: boolean };
+export type DesignCheckInput = { design: string; screens: string[]; static: boolean };
+/** A design system: files only, no screens (Phase 2.5 §10.2). */
+export type SystemCheckInput = { system: string };
+export type CheckInput = DesignCheckInput | SystemCheckInput;
 export type ParsedInput = ({ ok: true } & CheckInput) | { ok: false; message: string };
 
 /** Screens as an array, a stringified array or a comma-separated string (models send all three). */
@@ -89,7 +97,15 @@ const screenList = (value: unknown): unknown[] | null => {
  */
 export const parseToolInput = (input: unknown): ParsedInput => {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return { ok: false, message: NOT_A_DESIGN_SENTENCE };
-  const value = input as { design?: unknown; screens?: unknown; static?: unknown };
+  const value = input as { design?: unknown; system?: unknown; screens?: unknown; static?: unknown };
+  if (value.system !== undefined && value.system !== null) {
+    if (value.design !== undefined && value.design !== null) return { ok: false, message: BOTH_SENTENCE };
+    if (typeof value.system !== 'string' || !SYSTEM_ID_PATTERN.test(value.system) || value.system === 'none' || value.system === 'ask') return { ok: false, message: NOT_A_SYSTEM_SENTENCE };
+    const screens = screenList(value.screens);
+    if (screens === null || screens.length > 0) return { ok: false, message: SYSTEM_SCREENS_SENTENCE };
+    // `static` is allowed and changes nothing: a system check is files only.
+    return { ok: true, system: value.system };
+  }
   if (typeof value.design !== 'string' || !SLUG_PATTERN.test(value.design)) return { ok: false, message: NOT_A_DESIGN_SENTENCE };
 
   const list = screenList(value.screens);
@@ -176,13 +192,10 @@ export const runtimeRecordFile = (env: Readonly<Record<string, string | undefine
 
 // ---- 4, 5. the child ----
 
-export const buildChildArgs = (cliPath: string, input: CheckInput): string[] => [
-  cliPath,
-  'check',
-  input.design,
-  ...input.screens.flatMap((screen) => ['--screen', screen]),
-  ...(input.static ? ['--static'] : []),
-];
+export const buildChildArgs = (cliPath: string, input: CheckInput): string[] =>
+  'system' in input
+    ? [cliPath, 'check', '--system', input.system]
+    : [cliPath, 'check', input.design, ...input.screens.flatMap((screen) => ['--screen', screen]), ...(input.static ? ['--static'] : [])];
 
 /**
  * A fresh environment for the CLI: the few variables it needs to find its settings, a browser and

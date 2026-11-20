@@ -21,6 +21,15 @@ export const reasonLabel = (reason: VersionReason): string => {
       return 'Before your edits';
     case 'keep-direction':
       return 'Before keeping a direction';
+    // Phase 2.5 (§5.2, §5.4, §5.10)
+    case 'resync':
+      return 'Before re-sync';
+    case 'system-change':
+      return 'Before changing the design system';
+    case 'system-update':
+      return 'Before updating the design system';
+    case 'repo-read':
+      return 'Before reading the repo';
   }
 };
 

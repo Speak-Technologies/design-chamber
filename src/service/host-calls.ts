@@ -24,7 +24,9 @@ export const createHostCalls = ({ env, log, connect = (callEnv) => createService
   let loggedUnavailable = false;
 
   return {
-    async setInstructions(text) {
+    // `directory` null: every session; a project folder: the sessions under it, added to the
+    // global text (SP-2, additive). The caller passes the same resolved path on write and removal.
+    async setInstructions(text, directory = null) {
       if (host === null) {
         if (!loggedUnavailable) {
           loggedUnavailable = true;
@@ -33,7 +35,7 @@ export const createHostCalls = ({ env, log, connect = (callEnv) => createService
         return 'unavailable';
       }
       try {
-        await host.setInstructions(null, text);
+        await host.setInstructions(directory, text);
         return 'saved';
       } catch (error) {
         const code = error instanceof ServiceHostError ? error.code : error instanceof Error ? error.name : 'unknown';

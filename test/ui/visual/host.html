@@ -60,7 +60,7 @@
       const subscriptions = new Map();
       window.__host = {
         toasts: [], clipboard: [], opened: [],
-        prompts: [], composes: [], sessionsOpened: [],
+        prompts: [], composes: [], sessionsOpened: [], sessionsStarted: [], attached: [],
         heights: [], blockAnswers: [], surfacesOpened: [],
         storageGet: (key) => (store.has(key) ? store.get(key) : undefined),
         /** Set true right before the click a scenario simulates: `block-answer` is refused (DENIED) without it, as the host does. */
@@ -69,6 +69,8 @@
         openSurfaceFails: null,
         /** Replace the block call of a block frame, as the host does when a block's arguments change. */
         setBlock: (call) => { block = call ? { name: call.name, args: call.args || {}, answered: call.answered ?? null } : null; sendReady(); },
+        /** Push a chat item to the frame, as the host does when a chip is clicked in the chat (null clears it). */
+        setItem: (item) => send({ type: 'item', payload: { item } }),
         /** Set to 'prompt' to make the next prompt call fail once. */
         failNext: null,
         promptGate: null,
@@ -169,6 +171,8 @@
             else ok({ sent: 'sent' });
           });
         } else if (m.type === 'compose') { window.__host.composes.push(m.payload); ok({}); }
+        else if (m.type === 'start-session') { window.__host.sessionsStarted.push(m.payload); ok({ sessionId: `ses_started_${window.__host.sessionsStarted.length}`, sent: 'sent' }); }
+        else if (m.type === 'attach') { window.__host.attached.push(m.payload); ok({}); }
         else if (m.type === 'open-session') { window.__host.sessionsOpened.push(m.payload.sessionId); ok({}); }
         else if (m.id) ok({});
       });

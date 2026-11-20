@@ -53,7 +53,7 @@ const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoExc
 const stale = (): ApiError => new ApiError('stale', TOKENS_STALE_MESSAGE);
 
 /** tokens.css as read for a request: absent, not readable here (a link, too large), or its bytes. */
-type TokensFile =
+export type TokensFile =
   | { kind: 'absent' }
   | { kind: 'link' }
   | { kind: 'too-large' }
@@ -61,20 +61,22 @@ type TokensFile =
 
 /**
  * The design's tokens.css through the one plain-target check (§2.3): a link anywhere on the way,
- * inside the design or out of it, is not read; over `TOKENS_CSS_MAX_BYTES` is not read either.
+ * inside the design or out of it, is not read; over `maxBytes` (default `TOKENS_CSS_MAX_BYTES`) is
+ * not read either. Also reads a copy's files (`system/tokens.css`, `system/system.json`), each with
+ * its own cap.
  */
-const readTokensFile = async (dir: string): Promise<TokensFile> => {
+export const readTokensFile = async (dir: string, segments: readonly string[] = [TOKENS_FILE], maxBytes: number = TOKENS_CSS_MAX_BYTES): Promise<TokensFile> => {
   let file: string;
   try {
-    file = await resolvePlainTarget(dir, [TOKENS_FILE], { allowAbsent: true });
+    file = await resolvePlainTarget(dir, segments, { allowAbsent: true });
   } catch (error) {
     if (error instanceof ApiError) return { kind: 'link' };
     throw error;
   }
   try {
-    if ((await stat(file)).size > TOKENS_CSS_MAX_BYTES) return { kind: 'too-large' };
+    if ((await stat(file)).size > maxBytes) return { kind: 'too-large' };
     const bytes = await readFile(file);
-    if (bytes.length > TOKENS_CSS_MAX_BYTES) return { kind: 'too-large' };
+    if (bytes.length > maxBytes) return { kind: 'too-large' };
     const text = bytes.toString('utf8');
     return { kind: 'read', bytes, text, utf8: Buffer.from(text, 'utf8').equals(bytes) };
   } catch (error) {

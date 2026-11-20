@@ -177,7 +177,8 @@ test('init: malformed tokens mean no preview; malformed storage means empty and 
     [{ name: '--accent', value: '1; color: red' }],
     [{ name: '--accent', value: '</style>' }],
     [{ name: '--accent', value: "it's" }],
-    Array.from({ length: 13 }, (_, i) => ({ name: `--v${i}`, value: '1' })),
+    // Phase 2.5 §4.2: the cap is TOKEN_PREVIEW_VARS_MAX (512), so 513 is one too many.
+    Array.from({ length: 513 }, (_, i) => ({ name: `--v${i}`, value: '1' })),
   ];
   for (const tokens of badTokens) {
     const init = readInit({ ...BASE_INIT, tokens });

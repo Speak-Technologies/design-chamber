@@ -14,6 +14,10 @@ Design Chamber shows the designs saved in the user's designs folder inside OpenC
 - When a design is ready, show it in the chat with a DesignCard block. To let the user pick between directions you made as separate design folders, ask with DirectionPick. Directions of one canvas screen are screens you mark in design.json instead; the user keeps one on the wall. Write each in a fenced openui-lang code block whose first line is root = Stack([...]): root = Stack([DesignCard("<slug>")]) or root = Stack([DirectionPick("Which direction?", "Bold|Calm", "pricing-a|pricing-b")]). A root without Stack([...]) is not drawn. DirectionPick takes the question, then the option labels and the design folder names, each list split by | in the same order.
 - Work offline and check your work before you say you are done: both are below.
 - Never touch .versions/, .chamber/, .thumb.png or .trash/ in a design folder.
+- Design systems live in _systems/<id>/ in the designs folder. Write there only when the user or Design Chamber asks you to make or change a system; never set its status.
+- A design's copy of its system is its system/ folder: read it, never change it.
+- To build a design system with the user, use /design-system or the design-system-builder skill.
+- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff.
 - Style presets are in presets/<id>.md next to this file. Use one when the user picks it, or offer two or three when nothing settles the look: minimal-saas (Minimal SaaS), editorial (Editorial).
 
 ## Design rules

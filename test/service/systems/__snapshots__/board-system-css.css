@@ -1,0 +1,36 @@
+@font-face { font-family: "Inter"; src: url("assets/fonts/inter.woff2"); font-weight: 400; font-style: normal; font-display: block; }
+:root {
+--brand: #1a73e8;
+--dc-dark-brand: #8ab4f8;
+--surface: #ffffff;
+--dc-dark-surface: #121212;
+--ink: #1d1d1f;
+--dc-dark-ink: #ececef;
+--line: #d8d8dc;
+--ok: #188038;
+--chart-1: #8430ce;
+--misc: #abcdef;
+--font-sans: "Inter", sans-serif;
+--space-2: 8px;
+--space-4: 16px;
+--radius-md: 6px;
+--shadow-1: 0 1px 2px rgb(0 0 0 / 0.2);
+--z-base: 1;
+--z-modal: 100;
+--container: 1200px;
+--bp-tablet: 768px;
+--duration-fast: 120ms;
+--dc-type-body-family: var(--font-sans);
+--dc-type-body-size: 16px;
+--dc-type-body-weight: 400;
+--dc-type-body-lineHeight: 1.5;
+--dc-type-eyebrow-family: Inter;
+--dc-type-eyebrow-size: 12px;
+--dc-type-eyebrow-weight: 600;
+--dc-type-eyebrow-letterSpacing: 0.08em;
+}
+.dc-dark {
+--brand: var(--dc-dark-brand);
+--surface: var(--dc-dark-surface);
+--ink: var(--dc-dark-ink);
+}

@@ -17,6 +17,10 @@
 // `versions.turn` dedupes a session within `TURN_SNAPSHOT_DEDUPE_MS` and skips unchanged trees,
 // so the open page's own turn snapshot (docs/SPEC.md §10.6) and this one make one version.
 // Nothing of an event is logged beyond its type and the first 8 characters of its session id.
+//
+// Phase 2.5 (§8.5): a finished or failed turn also takes a turn snapshot of every design system
+// linked to that chat (`systemVersions.turn`, which reads the systems' own state). Only while this
+// root has a system at all, so a user without systems pays nothing.
 
 import type { GuestSessionEventRequest } from '@openchamber/sdk';
 
@@ -42,6 +46,8 @@ export type TurnEventsDeps = {
   log: Logger;
   /** How long the worker waits for the index (test seam); `DESIGN_INDEX_TURN_WAIT_MS` outside tests. */
   indexWaitMs?: number;
+  /** Phase 2.5: system turn snapshots; `any` answers whether this root has a system (no disk). */
+  systemVersions?: { turn(sessionId: string): Promise<unknown>; any(): boolean };
 };
 
 export type TurnEvents = {
@@ -63,7 +69,7 @@ const logFieldsOf = (event: TurnEvent): LogFields => ({ type: event.type, sessio
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-export const createTurnEvents = ({ index, versions, activity, hub, log, indexWaitMs = DESIGN_INDEX_TURN_WAIT_MS }: TurnEventsDeps): TurnEvents => {
+export const createTurnEvents = ({ index, versions, activity, hub, log, indexWaitMs = DESIGN_INDEX_TURN_WAIT_MS, systemVersions }: TurnEventsDeps): TurnEvents => {
   // Insertion order is queue order; updating an existing key keeps its place.
   const queue = new Map<string, Pending>();
   let disposed = false;
@@ -97,7 +103,21 @@ export const createTurnEvents = ({ index, versions, activity, hub, log, indexWai
     }
   };
 
-  const handle = async ({ event, snapshot: endedTurn }: Pending): Promise<void> => {
+  const systemSnapshot = async (event: TurnEvent): Promise<void> => {
+    if (systemVersions === undefined || !systemVersions.any()) return;
+    try {
+      await systemVersions.turn(event.session.id);
+    } catch (error) {
+      log.warn('turn-events.system-snapshot-failed', { ...logFieldsOf(event), error: messageOf(error) });
+    }
+  };
+
+  const handle = async (pending: Pending): Promise<void> => {
+    await handleDesigns(pending);
+    if (pending.snapshot && !disposed) await systemSnapshot(pending.event);
+  };
+
+  const handleDesigns = async ({ event, snapshot: endedTurn }: Pending): Promise<void> => {
     const sessionId = event.session.id;
     activity.record({ sessionId, type: event.type, at: event.at, directory: event.project.directory });
     const loaded = await waitForIndex();

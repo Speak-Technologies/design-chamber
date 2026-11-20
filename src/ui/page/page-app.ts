@@ -1,6 +1,7 @@
 // The full-screen page app: the library (P1) and one open design (canvas wall P2 / page
 // viewer P6) as views of one stack. Settings (P5) opens as a side sheet over either.
 
+import type { SystemOpenTarget } from '../../shared/api.ts';
 import { openNewDialog } from '../components/new-dialog.ts';
 import { toast, type ActionContext } from '../components/actions.ts';
 import { errorText, h } from '../components/dom.ts';
@@ -9,6 +10,9 @@ import { keepPlace } from '../components/place-memory.ts';
 import { mountSettings, type SettingsHandle } from '../components/settings-view.ts';
 import { flows } from '../guest.ts';
 import { mountDesignView, type DesignViewHandle } from '../wall/design-view.ts';
+import { mountSystemsList, type SystemsListHandle } from '../systems/systems-list.ts';
+import { mountBuildChipView, type BuildChipViewHandle } from '../systems/build-chip-view.ts';
+import { mountSystemPage, type SystemPageHandle } from '../systems/system-page.ts';
 import { mountLibrary } from './library-view.ts';
 
 export const mountPage = (root: HTMLElement): void => {
@@ -16,6 +20,12 @@ export const mountPage = (root: HTMLElement): void => {
   root.replaceChildren(app);
 
   let open: { slug: string; handle: DesignViewHandle } | null = null;
+  /** The design systems list, while it is the view on screen. */
+  let systemsView: SystemsListHandle | null = null;
+  /** One design system, open from the list (the list stays behind it, hidden, so Back returns to it). */
+  let systemPage: { id: string; handle: SystemPageHandle } | null = null;
+  /** How a design system build is going, opened by its chip in the chat. */
+  let buildView: { ticket: string; handle: BuildChipViewHandle } | null = null;
 
   const closeDesign = (): void => {
     const slug = open?.slug;
@@ -28,6 +38,13 @@ export const mountPage = (root: HTMLElement): void => {
 
   const showDesign = (slug: string): void => {
     open?.handle.dispose();
+    // A chip click or an open request lands here while the systems list is up: it gives way to the design.
+    systemPage?.handle.dispose();
+    systemPage = null;
+    systemsView?.dispose();
+    systemsView = null;
+    buildView?.handle.dispose();
+    buildView = null;
     const handle = mountDesignView({ slug, surface: 'page', actions, onBack: leaveDesign });
     open = { slug, handle };
     place.remember(slug);
@@ -66,6 +83,15 @@ export const mountPage = (root: HTMLElement): void => {
     onRemoved: (slug) => {
       if (open?.slug === slug) closeDesign();
     },
+    onOpenSystem: (id) => {
+      const current = open;
+      if (!current) return openSystem(id);
+      void current.handle.beforeLeave().then((leave) => {
+        if (!leave || open !== current) return;
+        closeDesign();
+        openSystem(id);
+      });
+    },
   };
 
   const openSettings = (): void => {
@@ -74,16 +100,89 @@ export const mountPage = (root: HTMLElement): void => {
     settings = mountSettings(sheet.body);
   };
 
+  const closeBuild = (): void => {
+    buildView?.handle.dispose();
+    buildView = null;
+    library.el.hidden = false;
+  };
+  const showBuild = (ticket: string): void => {
+    systemPage?.handle.dispose();
+    systemPage = null;
+    systemsView?.dispose();
+    systemsView = null;
+    buildView?.handle.dispose();
+    const handle = mountBuildChipView({ ticket, surface: 'page', actions, onBack: closeBuild });
+    buildView = { ticket, handle };
+    library.el.hidden = true;
+    app.append(handle.el);
+    handle.focus();
+  };
+  /** A build chip opened from the chat. An open design with unsaved tweaks asks first, like going back. */
+  const openBuild = (ticket: string): void => {
+    if (buildView?.ticket === ticket) return;
+    const current = open;
+    if (!current) return showBuild(ticket);
+    void current.handle.beforeLeave().then((leave) => {
+      if (!leave || open !== current) return;
+      closeDesign();
+      showBuild(ticket);
+    });
+  };
+
+  const closeSystems = (): void => {
+    systemPage?.handle.dispose();
+    systemPage = null;
+    systemsView?.dispose();
+    systemsView = null;
+    library.el.hidden = false;
+    library.focusSystems();
+  };
+  const showSystems = (): void => {
+    if (systemsView) return;
+    buildView?.handle.dispose();
+    buildView = null;
+    systemsView = mountSystemsList({ surface: 'page', actions, onBack: closeSystems, onOpen: (id) => openSystem(id) });
+    library.el.hidden = true;
+    app.append(systemsView.el);
+    systemsView.focus();
+  };
+
+  const closeSystemPage = (): void => {
+    systemPage?.handle.dispose();
+    systemPage = null;
+    if (systemsView) {
+      systemsView.el.hidden = false;
+      systemsView.focus();
+    }
+  };
+  const openSystem = (id: string, target: SystemOpenTarget = 'page'): void => {
+    if (systemPage?.id === id) {
+      if (target !== 'page') systemPage.handle.showTarget(target);
+      return;
+    }
+    systemPage?.handle.dispose();
+    systemPage = null;
+    if (!systemsView) showSystems();
+    if (!systemsView) return;
+    systemsView.el.hidden = true;
+    const handle = mountSystemPage({ id, surface: 'page', actions, onBack: closeSystemPage });
+    systemPage = { id, handle };
+    app.append(handle.el);
+    handle.focus();
+    if (target !== 'page') handle.showTarget(target);
+  };
+
   const library = mountLibrary({
     actions,
     onOpen: openDesign,
+    onSystems: showSystems,
     onSettings: openSettings,
-    onNew: (kind) => openNewDialog(app, { kind, onCreated: openDesign }),
+    onNew: (kind) => openNewDialog(app, { kind, onCreated: openDesign, onSystems: showSystems }),
   });
   app.append(library.el);
 
   flows.watchItems(
-    (target) => openDesign(target.slug),
+    (target) => (target.kind === 'open-build' ? openBuild(target.ticket) : target.kind === 'open-system' ? openSystem(target.system, target.target) : openDesign(target.slug)),
     (error) => toast('error', `Couldn’t open that design. ${errorText(error)}`),
   );
 };

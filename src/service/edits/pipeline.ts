@@ -17,9 +17,13 @@
 //
 // E1: nothing here is reachable from a frame. The only callers are the routes, which only the
 // page and the rail call, from Design Chamber's own controls (§2.11).
+//
+// The file mechanics (compare-and-swap, no-replace creates and moves, busy retries, self-write
+// records, rollback order) live in `execute.ts`, shared with a design system's hand edits
+// (Phase 2.5 §5.3); what each step means for a design stays here.
 
-import { createHash, randomBytes } from 'node:crypto';
-import { lstat, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import type { EditRequest, EditResponse, EditStamps, EditTarget, FileStamp, TokensResponse, TweakValue, UndoEditResponse } from '../../shared/api.ts';
@@ -32,6 +36,7 @@ import {
   SCREEN_ID_PATTERN,
   SCREENS_MAX,
   SHA256_PATTERN,
+  SYSTEM_TOKEN_NAME_PATTERN,
   TEXT_EDIT_MAX,
   TWEAK_VAR_PATTERN,
   TWEAKS_MAX,
@@ -39,15 +44,17 @@ import {
 } from '../../shared/limits.ts';
 import type { ChangeHub, DesignRecord, DesignStore, Logger, SelfWrites, ServiceContext, SettingsStore, WriteHooks } from '../context.ts';
 import { ApiError } from '../http.ts';
-import { atomicTempPath, moveNoReplace, replaceFileIfHashUnchanged, resolvePlainTarget } from '../paths.ts';
+import { resolvePlainTarget } from '../paths.ts';
 import { folderErrorSentence } from '../root.ts';
 import { screensStampOf } from '../store.ts';
 import { ensureVersionsService, toSummary, type UserEditReason, type VersionsService, type WrittenFile } from '../versions.ts';
+import { BUSY_MESSAGE, codeOf, createStepExecutor, executeSteps, ROLLED_BACK_MESSAGE, sha256, UNDO_GONE_MESSAGE, type ExecPlace, type ExecRun, type MoveAlternatives } from './execute.ts';
 import { applyUndone, appendEdit, clearLedger, createEditsFile, findUndo, isEditableRel, screenIdOfFile, type EditsFileStore, type UndoRecord, type UndoStep } from './file.ts';
 import type { OpInput, OpModules, OpPlan, PlannedStep } from './op-module.ts';
 import { screensOp } from './ops-screens.ts';
 import { textOp } from './ops-text.ts';
 import { readTokens, tokensOp } from './ops-tokens.ts';
+import { tokensResetOp } from './ops-tokens-reset.ts';
 import { ensureTrashDir, isOwnTrashPlace, nextTrashPlace, trashPlaceOf, trashStampOf, TRASH_PREFIX } from './trash.ts';
 
 // ---- the fixed op map (T3, T4, T5 replace only their module, never this table) ----
@@ -59,6 +66,8 @@ export const DEFAULT_OPS: OpModules = {
   duplicate: screensOp,
   'trash-screen': screensOp,
   'keep-direction': screensOp,
+  // Phase 2.5 §6.4 "Reset to system" (T7).
+  'token-reset': tokensResetOp,
 };
 
 // ---- sentences (§2.8) ----
@@ -66,10 +75,8 @@ export const DEFAULT_OPS: OpModules = {
 export const GONE_MESSAGE = 'That design is no longer in your Designs folder.';
 export const BAD_EDIT_MESSAGE = "Design Chamber couldn't read that edit. Nothing was saved.";
 export const TOO_LONG_MESSAGE = "That's too long to edit here. Ask the agent instead.";
-export const BUSY_MESSAGE = 'Another program is using this file. Close it and try again.';
-export const ROLLED_BACK_MESSAGE = 'Something went wrong, so nothing was changed.';
+export { BUSY_MESSAGE, ROLLED_BACK_MESSAGE, UNDO_GONE_MESSAGE };
 export const UNDO_STALE_MESSAGE = "This file changed after your edit, so it can't be undone here. Restore the version 'Before your edits' from Versions.";
-export const UNDO_GONE_MESSAGE = "This edit can't be undone any more.";
 
 const SCREEN_LIST_STALE = 'The screen list changed while you were working. Nothing was changed.';
 
@@ -81,12 +88,26 @@ export const STALE_MESSAGES: Readonly<Record<EditRequest['op'], string>> = {
   duplicate: SCREEN_LIST_STALE,
   'trash-screen': SCREEN_LIST_STALE,
   'keep-direction': SCREEN_LIST_STALE,
+  'token-reset': 'This override changed since you opened the update. Reload and try again.',
 };
 
-const VERSION_LABELS: Readonly<Record<UserEditReason, string>> = { 'user-edit': 'Before your edits', 'keep-direction': 'Before keeping a direction' };
+const VERSION_LABELS: Readonly<Record<UserEditReason, string>> = {
+  'user-edit': 'Before your edits',
+  'keep-direction': 'Before keeping a direction',
+  // Phase 2.5 §5.4 (the link service's versions; the labels match the versions list).
+  'system-change': 'Before changing the design system',
+  'system-update': 'Before updating the design system',
+  // Phase 2.5 §6.3 (a system's re-sync, `systems/edits.ts`).
+  resync: 'Before re-sync',
+  // Phase 2.5 §5.10 (an agent-triggered snapshot refresh of a repo-backed system).
+  'repo-read': 'Before reading the repo',
+};
 
 export const partWayMessage = (reason: UserEditReason): string =>
   `Something went wrong part way. The version '${VERSION_LABELS[reason]}' holds everything as it was; restore it from Versions.`;
+
+/** Phase 2.5 §3.2: overrides one Reset to system may remove at once. */
+export const TOKEN_RESET_NAMES_MAX = 200;
 
 // ---- request shape (pure, §10.2) ----
 
@@ -169,6 +190,13 @@ export const parseEditRequest = (body: unknown): EditRequest => {
       if (!uniqueIds(files.map((entry) => entry.id))) return bad();
       return { op: 'keep-direction', screens: sha(body.screens), of: screenId(body.of), keep: screenId(body.keep), files };
     }
+    case 'token-reset': {
+      // Phase 2.5 §6.4: 1..200 distinct token names; whether each is an override is the op's rule.
+      if (!Array.isArray(body.names) || body.names.length === 0 || body.names.length > TOKEN_RESET_NAMES_MAX) return bad();
+      const names = body.names.map((name: unknown) => (typeof name === 'string' && SYSTEM_TOKEN_NAME_PATTERN.test(name) ? name : bad()));
+      if (!uniqueIds(names)) return bad();
+      return { op: 'token-reset', base: sha(body.base), names };
+    }
     default:
       return bad();
   }
@@ -191,7 +219,7 @@ export const stepAllowed = (op: EditRequest['op'], record: DesignRecord, slug: s
   switch (step.kind) {
     case 'write':
       if (op === 'text') return record.design.kind === 'page' ? step.rel === ENTRY_FILE : record.design.kind === 'canvas' && listedScreen(record, step.rel);
-      return op === 'tokens' && step.rel === 'tokens.css';
+      return (op === 'tokens' || op === 'token-reset') && step.rel === 'tokens.css';
     case 'create':
       return op === 'duplicate' && record.design.kind === 'canvas' && screenIdOfFile(step.rel) !== null && !listedScreen(record, step.rel);
     case 'move':
@@ -237,17 +265,17 @@ export type EditServiceDeps = {
   pause?: (ms: number) => Promise<void>;
 };
 
-const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
-const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoException | null)?.code;
-
 /** `e_` + 20 hex characters (inside `EDIT_ID_PATTERN`). */
 const mintEditId = (): string => `e_${randomBytes(10).toString('hex')}`;
 
-/** Busy retries for a Windows lock: three more tries after the first, then the conflict sentence (§2.5). */
-const BUSY_PAUSES_MS: readonly number[] = [40, 80, 120];
+/** A trash destination taken meanwhile moves on to the next `-n`; any other taken destination is stale. */
+const TRASH_ALTERNATIVES: MoveAlternatives = {
+  renamable: (place) => place.startsWith(TRASH_PREFIX),
+  next: (place) => nextTrashPlace(place),
+};
 
 /** What one run of steps (forward or reverse) left: for the events, the answer and the coalescing tree. */
-type Run = {
+type Run = ExecRun & {
   slug: string;
   dir: string;
   staleMessage: string;
@@ -266,8 +294,9 @@ export const createEditService = (deps: EditServiceDeps): EditService => {
   const editsFile = deps.editsFile ?? createEditsFile({ log });
   const tokensReader = deps.readTokens ?? readTokens;
   const pause = deps.pause ?? ((ms: number) => delay(ms));
+  const exec = createStepExecutor({ selfWrites, pause });
 
-  const stale = (run: Run): ApiError => new ApiError('stale', run.staleMessage);
+  const stale = (run: Run): ApiError => exec.stale(run);
 
   /** The design as it is now; gone → the edit routes' own 404 sentence. */
   const recordOf = async (slug: string): Promise<DesignRecord> => {
@@ -291,40 +320,35 @@ export const createEditService = (deps: EditServiceDeps): EditService => {
 
   const newRun = (slug: string, dir: string, staleMessage: string): Run => {
     let trash: Promise<string> | null = null;
+    const trashDir = (): Promise<string> => (trash ??= ensureTrashDir(settings.root()));
     const run: Run = {
+      key: slug,
       slug,
       dir,
       staleMessage,
-      trashDir: () => (trash ??= ensureTrashDir(settings.root())),
+      trashDir,
       hooks: { beforeRename: (bytes) => selfWrites.record(slug, DESIGN_JSON_FILE, sha256(bytes), bytes.length) },
       written: [],
       files: new Set(),
       designJson: false,
       stamps: {},
+      resolve: (place, allowAbsent) => resolvePlace(slug, dir, trashDir, place, allowAbsent),
+      noteWrite: (rel, bytes) => noteWrite(run, rel, bytes),
     };
     return run;
   };
 
   /** A place's absolute path: design-relative editable files under the design, own trash names under `<root>/.trash`. */
-  const resolvePlace = async (run: Run, place: string, allowAbsent: boolean): Promise<{ abs: string; rel: string | null }> => {
+  const resolvePlace = async (slug: string, dir: string, trashDir: () => Promise<string>, place: string, allowAbsent: boolean): Promise<ExecPlace> => {
     if (place.startsWith(TRASH_PREFIX)) {
-      if (!isOwnTrashPlace(place, run.slug)) throw new ApiError('internal', ROLLED_BACK_MESSAGE);
-      return { abs: await resolvePlainTarget(await run.trashDir(), [place.slice(TRASH_PREFIX.length)], { allowAbsent }), rel: null };
+      if (!isOwnTrashPlace(place, slug)) throw new ApiError('internal', ROLLED_BACK_MESSAGE);
+      return { abs: await resolvePlainTarget(await trashDir(), [place.slice(TRASH_PREFIX.length)], { allowAbsent }), rel: null };
     }
     if (!isEditableRel(place)) throw new ApiError('internal', ROLLED_BACK_MESSAGE);
-    return { abs: await resolvePlainTarget(run.dir, place.split('/'), { allowAbsent }), rel: place };
+    return { abs: await resolvePlainTarget(dir, place.split('/'), { allowAbsent }), rel: place };
   };
 
-  /** The sha256 of a place's bytes now, or null when it is absent. */
-  const shaOnDisk = async (run: Run, place: string): Promise<string | null> => {
-    const { abs } = await resolvePlace(run, place, true);
-    try {
-      return sha256(await readFile(abs));
-    } catch (error) {
-      if (codeOf(error) === 'ENOENT') return null;
-      throw error;
-    }
-  };
+  const shaOnDisk = (run: Run, place: string): Promise<string | null> => exec.shaOnDisk(run, place);
 
   const noteWrite = (run: Run, rel: string | null, bytes: Uint8Array | null): void => {
     if (rel === null) return;
@@ -336,102 +360,20 @@ export const createEditService = (deps: EditServiceDeps): EditService => {
     }
   };
 
-  /** Compare-and-swap with the busy retries; the self-write is recorded first and forgotten again when nothing was written. */
-  const casWrite = async (run: Run, abs: string, rel: string, expectSha: string, bytes: Uint8Array): Promise<void> => {
-    selfWrites.record(run.slug, rel, sha256(bytes), bytes.length);
-    for (let attempt = 0; ; attempt += 1) {
-      const outcome = await replaceFileIfHashUnchanged(abs, expectSha, bytes);
-      if (outcome === 'replaced') return noteWrite(run, rel, bytes);
-      if (outcome === 'changed' || attempt >= BUSY_PAUSES_MS.length) {
-        selfWrites.forget(run.slug, rel);
-        throw outcome === 'changed' ? stale(run) : new ApiError('conflict', BUSY_MESSAGE);
-      }
-      await pause(BUSY_PAUSES_MS[attempt] ?? 0);
-    }
-  };
-
-  /** `moveNoReplace` with the busy retries; `exists` is the caller's to answer. */
-  const moveRetry = async (from: string, to: string): Promise<'moved' | 'exists'> => {
-    for (let attempt = 0; ; attempt += 1) {
-      const outcome = await moveNoReplace(from, to);
-      if (outcome !== 'busy') return outcome;
-      if (attempt >= BUSY_PAUSES_MS.length) throw new ApiError('conflict', BUSY_MESSAGE);
-      await pause(BUSY_PAUSES_MS[attempt] ?? 0);
-    }
-  };
-
-  /**
-   * Move a file to `to` without replacing anything; a trash name taken meanwhile moves on to the
-   * next `-n` (then 409 conflict). Answers the place actually used.
-   */
-  const movePlace = async (run: Run, from: { abs: string; rel: string | null }, to: string, bytes: Buffer): Promise<string> => {
-    for (let candidate: string | null = to; candidate !== null; candidate = candidate.startsWith(TRASH_PREFIX) ? nextTrashPlace(candidate) : null) {
-      const target = await resolvePlace(run, candidate, true);
-      if (from.rel !== null) selfWrites.record(run.slug, from.rel, null, null);
-      if (target.rel !== null) selfWrites.record(run.slug, target.rel, sha256(bytes), bytes.length);
-      const outcome = await moveRetry(from.abs, target.abs).catch((error: unknown) => {
-        if (from.rel !== null) selfWrites.forget(run.slug, from.rel);
-        if (target.rel !== null) selfWrites.forget(run.slug, target.rel);
-        throw error;
-      });
-      if (outcome === 'moved') {
-        noteWrite(run, from.rel, null);
-        noteWrite(run, target.rel, bytes);
-        return candidate;
-      }
-      if (from.rel !== null) selfWrites.forget(run.slug, from.rel);
-      if (target.rel !== null) selfWrites.forget(run.slug, target.rel);
-      if (!candidate.startsWith(TRASH_PREFIX)) throw stale(run);
-    }
-    throw new ApiError('conflict', BUSY_MESSAGE);
-  };
-
-  /** The source of a move, still as the module saw it: its hash, or the size and mtime the wall showed. */
-  const readMoveSource = async (run: Run, from: string, expect: { sha: string } | FileStamp): Promise<{ abs: string; rel: string | null; bytes: Buffer }> => {
-    const source = await resolvePlace(run, from, true);
-    let bytes: Buffer;
-    try {
-      if (!('sha' in expect)) {
-        const info = await lstat(source.abs);
-        if (info.size !== expect.size || info.mtime.toISOString() !== expect.mtime) throw stale(run);
-      }
-      bytes = await readFile(source.abs);
-    } catch (error) {
-      if (codeOf(error) === 'ENOENT') throw stale(run);
-      throw error;
-    }
-    if ('sha' in expect && sha256(bytes) !== expect.sha) throw stale(run);
-    return { ...source, bytes };
-  };
+  const readMoveSource = (run: Run, from: string, expect: { sha: string } | FileStamp): Promise<ExecPlace & { bytes: Buffer }> => exec.readMoveSource(run, from, expect);
+  const movePlace = (run: Run, from: ExecPlace, to: string, bytes: Buffer): Promise<string> => exec.movePlace(run, from, to, bytes, TRASH_ALTERNATIVES);
 
   // ---- forward steps ----
 
   const runStep = async (run: Run, step: PlannedStep): Promise<UndoStep> => {
     switch (step.kind) {
       case 'write': {
-        const { abs } = await resolvePlace(run, step.rel, false);
-        await casWrite(run, abs, step.rel, step.expectSha, step.bytes);
+        const { abs } = await run.resolve(step.rel, false);
+        await exec.casWrite(run, abs, step.rel, step.expectSha, step.bytes);
         return step.undo;
       }
       case 'create': {
-        const { abs } = await resolvePlace(run, step.rel, true);
-        const temp = atomicTempPath(abs);
-        await writeFile(temp, step.bytes);
-        selfWrites.record(run.slug, step.rel, sha256(step.bytes), step.bytes.length);
-        let outcome: 'moved' | 'exists';
-        try {
-          outcome = await moveRetry(temp, abs);
-        } catch (error) {
-          selfWrites.forget(run.slug, step.rel);
-          await rm(temp, { force: true });
-          throw error;
-        }
-        if (outcome === 'exists') {
-          selfWrites.forget(run.slug, step.rel);
-          await rm(temp, { force: true });
-          throw stale(run);
-        }
-        noteWrite(run, step.rel, step.bytes);
+        await exec.createFile(run, step.rel, step.bytes);
         return step.undo;
       }
       case 'move': {
@@ -464,19 +406,8 @@ export const createEditService = (deps: EditServiceDeps): EditService => {
 
   const runReverse = async (run: Run, step: UndoStep): Promise<void> => {
     switch (step.kind) {
-      case 'splice': {
-        const { abs } = await resolvePlace(run, step.file, false);
-        const current = await readFile(abs).catch((error: unknown) => {
-          throw codeOf(error) === 'ENOENT' ? stale(run) : error;
-        });
-        if (sha256(current) !== step.afterSha) throw stale(run);
-        const text = current.toString('utf8');
-        if (step.start + step.inserted > text.length) throw new ApiError('invalid', UNDO_GONE_MESSAGE);
-        const restored = Buffer.from(`${text.slice(0, step.start)}${step.removed}${text.slice(step.start + step.inserted)}`, 'utf8');
-        if (sha256(restored) !== step.beforeSha) throw new ApiError('invalid', UNDO_GONE_MESSAGE);
-        await casWrite(run, abs, step.file, step.afterSha, restored);
-        return;
-      }
+      case 'splice':
+        return exec.reverseSplice(run, step);
       case 'screens': {
         const before = step.before;
         const result = await store.writeScreens(run.slug, step.afterStamp, () => structuredClone(before), run.hooks);
@@ -572,30 +503,18 @@ export const createEditService = (deps: EditServiceDeps): EditService => {
   };
 
   /** The steps in order; on a failure, the done steps undone newest first (§2.9). */
-  const runForward = async (run: Run, op: EditRequest['op'], reason: UserEditReason, steps: readonly PlannedStep[]): Promise<UndoStep[]> => {
-    const done: UndoStep[] = [];
-    for (const step of steps) {
-      try {
-        done.push(await runStep(run, step));
-      } catch (error) {
-        const cause = await asUserError(run.slug, run.dir, op, error);
-        if (done.length === 0) throw cause;
-        for (const undoStep of [...done].reverse()) {
-          try {
-            await runReverse(run, undoStep);
-          } catch {
-            log.error('edits.rollback-failed', { slug: run.slug, op, step: undoStep.kind });
-            announce(run);
-            throw new ApiError('internal', partWayMessage(reason));
-          }
-        }
-        log.warn('edits.rolled-back', { slug: run.slug, op, step: step.kind, code: cause instanceof ApiError ? cause.code : 'error' });
-        if (cause instanceof ApiError && (cause.code === 'stale' || cause.code === 'conflict')) throw cause;
-        throw new ApiError('internal', ROLLED_BACK_MESSAGE);
-      }
-    }
-    return done;
-  };
+  const runForward = (run: Run, op: EditRequest['op'], reason: UserEditReason, steps: readonly PlannedStep[]): Promise<UndoStep[]> =>
+    executeSteps<PlannedStep, UndoStep>(steps, {
+      forward: (step) => runStep(run, step),
+      reverse: (undoStep) => runReverse(run, undoStep),
+      asUserError: (error) => asUserError(run.slug, run.dir, op, error),
+      rollbackFailed: (undoStep) => {
+        log.error('edits.rollback-failed', { slug: run.slug, op, step: undoStep.kind });
+        announce(run);
+        return new ApiError('internal', partWayMessage(reason));
+      },
+      rolledBack: (step, cause) => log.warn('edits.rolled-back', { slug: run.slug, op, step: step.kind, code: cause instanceof ApiError ? cause.code : 'error' }),
+    });
 
   const planOf = (base: Omit<OpInput, 'request'>, request: EditRequest): Promise<OpPlan> => {
     switch (request.op) {
@@ -611,6 +530,8 @@ export const createEditService = (deps: EditServiceDeps): EditService => {
         return ops['trash-screen'].plan({ ...base, request });
       case 'keep-direction':
         return ops['keep-direction'].plan({ ...base, request });
+      case 'token-reset':
+        return ops['token-reset'].plan({ ...base, request });
     }
   };
 

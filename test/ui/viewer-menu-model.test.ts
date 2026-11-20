@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import type { MenuEntry } from '../../src/ui/components/kit.ts';
-import { viewerMenuEntries, type ViewerMenuInput } from '../../src/ui/model/viewer-menu.ts';
+import { NARROW_RAIL_QUERY, viewerMenuEntries, type ViewerMenuInput } from '../../src/ui/model/viewer-menu.ts';
 
 type Action = Extract<MenuEntry, { id: string }>;
 const find = (entries: readonly MenuEntry[], id: string): Action | undefined => entries.find((entry): entry is Action => 'id' in entry && entry.id === id);
@@ -62,6 +64,15 @@ test('a design that has tweaks, or an old version on show, does not offer it', (
   for (const input of [{}, { askForTweaks: false }, { compact: true }, { isPage: true }]) assert.equal(find(entriesOf(input), 'ask-tweaks'), undefined);
 });
 
+test('a narrow rail moves Tweaks into the menu, right after the chat link, under the label the button had', () => {
+  assert.deepEqual(shape({ compact: true, railTweaks: 'Tweaks' }), ['chat', 'tweaks', '-', 'zip', 'html', 'path', 'reveal', 'rename', '-', 'delete']);
+  assert.equal(find(entriesOf({ compact: true, railTweaks: 'Tweaks, unsaved changes' }), 'tweaks')?.label, 'Tweaks, unsaved changes');
+  // Not offered when the rail is wide enough (no railTweaks), and never on the full-screen page, whose toolbar has the button.
+  for (const input of [{ compact: true }, { compact: true, railTweaks: null }, { compact: false, railTweaks: 'Tweaks' }, { compact: false, isPage: true, railTweaks: 'Tweaks' }]) {
+    assert.equal(find(entriesOf(input), 'tweaks'), undefined, JSON.stringify(input));
+  }
+});
+
 describe('Clear saved page data', () => {
   test('is left out unless the design has saved data', () => {
     for (const compact of [false, true]) for (const isPage of [false, true]) assert.equal(find(entriesOf({ compact, isPage }), 'page-data'), undefined);
@@ -84,4 +95,15 @@ describe('Clear saved page data', () => {
     const entries = entriesOf({ compact: true, pageData: 'enabled' });
     assert.equal(entries.filter((entry) => 'destructive' in entry && entry.destructive).length, 1);
   });
+});
+
+test('the media query hiding the rail Tweaks button matches NARROW_RAIL_QUERY (KI-21: the two must not drift)', () => {
+  const css = readFileSync(fileURLToPath(new URL('../../src/ui/styles.css', import.meta.url)), 'utf8');
+  const btn = css.indexOf('.dc-compact-actions .dc-tweaks-btn');
+  assert.ok(btn > -1, 'the compact Tweaks button rule exists in styles.css');
+  const media = css.lastIndexOf('@media', btn);
+  assert.ok(media > -1, 'a media query guards the compact Tweaks button');
+  const open = css.indexOf('{', media);
+  const condition = css.slice(media + '@media'.length, open).trim();
+  assert.equal(condition, NARROW_RAIL_QUERY);
 });

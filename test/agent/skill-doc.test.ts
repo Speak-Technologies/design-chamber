@@ -68,6 +68,13 @@ describe('buildBundledSkill (§U2.4)', () => {
     assert.ok(skill.includes('Directions of one canvas screen are screens you mark in design.json instead; the user keeps one on the wall.'));
   });
 
+  test('the design-system lines and the 30 000-character ceiling (Phase 2.5 §8.11)', async () => {
+    const skill = buildBundledSkill(await realInput());
+    assert.ok(skill.includes('- To build a design system with the user, use /design-system or the design-system-builder skill.'));
+    assert.ok(skill.includes("- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff."));
+    assert.ok(skill.length <= 30_000, `${skill.length} characters`);
+  });
+
   test('no absolute path, no path from this machine', async () => {
     const skill = buildBundledSkill(await realInput());
     assert.doesNotMatch(skill, /\/home\/|\/Users\/|[A-Za-z]:\\|\\\\[A-Za-z]/);

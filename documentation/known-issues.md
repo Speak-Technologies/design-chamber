@@ -93,3 +93,4 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Why not fixed now:** older than this diff (before 859c051 the delete never folded case on any OS) and needs an unusual drive setup
 **Fix prompt:**
 > In `src/service/versions.ts` restore, decide `caseFolds` from the design folder itself rather than `foldsCase()`: probe once per restore (for example `stat` the design folder path with its last segment's letter case swapped and compare `ino`/`dev` with the real folder, falling back to `foldsCase()` when the name has no letters or the probe errors). Pass that to `relsToRemoveOnRestore`. Make the probe a small named function in `src/service/paths.ts` with an injectable `stat` so it is unit-testable on Linux (fake a case-insensitive answer). Add a versions test using the fake that proves the re-cased file survives a restore on a "case-insensitive" Linux folder; mutation-check by forcing the probe to `false`. Run `npm run check`.
+

@@ -16,15 +16,20 @@ import {
   routePath,
   splitRouteKey,
   type ApiErrorCode,
+  type LivingPageResponse,
+  type ProposalResponse,
   type RenderMeta,
   type RouteBody,
   type RouteKey,
   type RouteParams,
   type RouteQuery,
   type RouteResponse,
+  type StopBuildResponse,
   type ThumbnailResponse,
+  type UndoStopResponse,
 } from '../shared/api.ts';
 import {
+  BINARY_UPLOAD_TOTAL_MAX,
   GUEST_RENDER_CACHE_MAX_BYTES,
   RENDER_CHUNK_CONCURRENCY,
   UPLOAD_CHUNK_MAX_BYTES,
@@ -106,10 +111,25 @@ export type ServiceClient = {
   call<K extends RouteKey>(key: K, ...args: CallArgs<K>): Promise<RouteResponse<K>>;
   /** Full bundled document for a page (`screen` null) or a canvas screen, optionally at a version. */
   loadRender(slug: string, screen?: string | null, version?: string | null): Promise<RenderDoc>;
+  /** The specimen board of a design system (Phase 2.5): live or at a version, in a colour scheme. */
+  loadBoard(id: string, version?: string | null, scheme?: 'light' | 'dark'): Promise<RenderDoc>;
   /** Uploads `text` in F7-safe chunks; resolves to the completed upload id. */
   upload(text: string): Promise<string>;
+  /**
+   * Uploads a file as base64 chunks (`encoding: "base64"`); resolves to the completed upload id. `onProgress`
+   * gets the fraction sent so far (0 to 1) after each chunk. One file at a time: the service holds at most 2 open.
+   */
+  uploadBinary(file: Blob, onProgress?: (fraction: number) => void): Promise<string>;
   /** Thumbnail state; a `ready` PNG is served from memory when `key` matches a cached one. */
   thumbnail(slug: string, key?: string | null): Promise<ThumbnailResponse>;
+  /** A system's proposal as the SystemAsk diff shows it (Phase 2.5 rev 3). */
+  getProposal(systemId: string, proposalId: string): Promise<ProposalResponse>;
+  /** Stop a system's build (optionally the proposal it was building); the answer carries the Undo id and its deadline. */
+  stopBuild(systemId: string, proposalId?: string | null): Promise<StopBuildResponse>;
+  /** Undo a stop while its `until` holds. */
+  undoStop(undoId: string): Promise<UndoStopResponse>;
+  /** A repo-backed system's living-page view (state, sentence, what the preview can show). */
+  loadLivingPage(systemId: string): Promise<LivingPageResponse>;
 };
 
 const queryOf = (query: Record<string, string | undefined> | undefined): Record<string, string> | undefined => {
@@ -187,6 +207,33 @@ export const splitUploadChunks = (text: string, maxChars: number = UPLOAD_CHUNK_
  */
 export const fitsOneRequest = (json: string): boolean =>
   json.length <= UPLOAD_CHUNK_MAX_CHARS && utf8Length(json) <= UPLOAD_CHUNK_MAX_BYTES;
+
+// ---- Binary upload chunking (pure, exported for tests) ----
+
+/**
+ * Bytes per base64 chunk: a multiple of 3, so every chunk but the last is whole base64 with no padding
+ * (the service decodes each on arrival), and 44 997 bytes encode to 59 996 characters, which as a JSON
+ * string (two quotes) is 59 998, under `UPLOAD_CHUNK_MAX_CHARS`.
+ */
+export const BASE64_CHUNK_BYTES = 44_997;
+
+/** `String.fromCharCode` takes arguments one by one; 8 190 (a multiple of 3) stays far below any engine's limit. */
+const BASE64_PIECE_BYTES = 8190;
+
+const base64Of = (bytes: Uint8Array): string => {
+  let text = '';
+  for (let at = 0; at < bytes.length; at += BASE64_PIECE_BYTES) {
+    text += btoa(String.fromCharCode(...bytes.subarray(at, at + BASE64_PIECE_BYTES)));
+  }
+  return text;
+};
+
+/** The file's bytes as base64 chunks the upload route accepts (in order; only the last may carry `=`). */
+export const encodeBase64Chunks = (bytes: Uint8Array, chunkBytes: number = BASE64_CHUNK_BYTES): string[] => {
+  const chunks: string[] = [];
+  for (let at = 0; at < bytes.length; at += chunkBytes) chunks.push(base64Of(bytes.subarray(at, at + chunkBytes)));
+  return chunks;
+};
 
 // ---- Concurrency helper ----
 
@@ -295,6 +342,41 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
     return task;
   };
 
+  const fetchBoard = async (id: string, version: string | null, scheme: 'light' | 'dark'): Promise<RenderDoc> => {
+    const query: RouteQuery<'GET /systems/:id/board'> = { scheme };
+    if (version) query.version = version;
+    const meta = await call('GET /systems/:id/board', { params: { id }, query });
+    const cached = renders.get(meta.key);
+    if (cached) {
+      renders.delete(meta.key);
+      renders.set(meta.key, cached);
+      return cached;
+    }
+    const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
+    const parts = await mapLimit(indexes, RENDER_CHUNK_CONCURRENCY, (n) =>
+      call('GET /systems/:id/board/chunk', { params: { id }, query: { key: meta.key, n: String(n) } }),
+    );
+    const doc = { meta, html: parts.join('') };
+    remember(doc);
+    return doc;
+  };
+
+  const loadBoard = (id: string, version: string | null = null, scheme: 'light' | 'dark' = 'light'): Promise<RenderDoc> => {
+    const key = `board\u0000${id}\u0000${version ?? ''}\u0000${scheme}`;
+    const running = inflight.get(key);
+    if (running) return running;
+    const task = (async () => {
+      try {
+        return await fetchBoard(id, version, scheme);
+      } catch (error) {
+        if (isServiceError(error, 'stale')) return fetchBoard(id, version, scheme);
+        throw error;
+      }
+    })().finally(() => inflight.delete(key));
+    inflight.set(key, task);
+    return task;
+  };
+
   const upload = async (text: string): Promise<string> => {
     if (text.length > UPLOAD_TOTAL_MAX) {
       throw new ServiceError('too-large', `This text is too long to send to Design Chamber (over ${UPLOAD_TOTAL_MAX.toLocaleString('en-US')} characters).`);
@@ -303,6 +385,29 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
     const chunks = splitUploadChunks(text);
     for (const [index, data] of chunks.entries()) {
       await call('PUT /uploads/:id/:index', { params: { id: uploadId, index: String(index) }, body: { data } });
+    }
+    return uploadId;
+  };
+
+  const uploadBinary = async (file: Blob, onProgress?: (fraction: number) => void): Promise<string> => {
+    const chunks = encodeBase64Chunks(new Uint8Array(await file.arrayBuffer()));
+    const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    if (total > BINARY_UPLOAD_TOTAL_MAX) {
+      throw new ServiceError('too-large', 'That file is larger than the 21 MB Design Chamber accepts.');
+    }
+    const { uploadId } = await call('POST /uploads', { body: { total, encoding: 'base64' } });
+    let sent = 0;
+    try {
+      for (const [index, data] of chunks.entries()) {
+        await call('PUT /uploads/:id/:index', { params: { id: uploadId, index: String(index) }, body: { data } });
+        sent += data.length;
+        onProgress?.(total === 0 ? 1 : sent / total);
+      }
+    } catch (error) {
+      // Free the service's slot now rather than after the 10 minute expiry (KI-22). The chunk's own
+      // error is the one the user needs, so a failed delete is ignored.
+      await call('DELETE /uploads/:id', { params: { id: uploadId } }).catch(() => undefined);
+      throw error;
     }
     return uploadId;
   };
@@ -321,5 +426,10 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
     return answer;
   };
 
-  return { call, loadRender, upload, thumbnail };
+  const getProposal = (systemId: string, proposalId: string): Promise<ProposalResponse> => call('GET /systems/:id/proposals/:proposalId', { params: { id: systemId, proposalId } });
+  const stopBuild = (systemId: string, proposalId: string | null = null): Promise<StopBuildResponse> => call('POST /systems/:id/build/stop', { params: { id: systemId }, body: { proposalId } });
+  const undoStop = (undoId: string): Promise<UndoStopResponse> => call('POST /system-stops/:undoId/undo', { params: { undoId }, body: {} });
+  const loadLivingPage = (systemId: string): Promise<LivingPageResponse> => call('GET /systems/:id/living-page', { params: { id: systemId } });
+
+  return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
 };

@@ -1,0 +1,137 @@
+# Design systems: the list, the New design system sheet and the system page
+
+**Route:** the page's Library toolbar → **Design systems**, and the rail's header → **Design systems** (palette icon) · **Access:** every OpenChamber user
+**Purpose:** See every design system in the Designs folder and make a new one. A design system is a set of colours, type, spacing and components, with notes on how to use them, that the chat agent reads before it designs. What a system is, how it is made and what the service enforces: [Design systems](../features/design-systems.md). A row opens the system's own page, described under [The system page](#the-system-page).
+
+Screenshots come from `test/ui/visual/scenarios/design-systems-list.mjs` (the real UI with the in-memory fake service), in `documentation/pages/img/systems-<surface>-<width>-<theme>-*.png`.
+
+## The list
+
+[Rail 320 dark](img/systems-rail-320-dark-1-list.png) · [Rail 480 light](img/systems-rail-480-light-1-list.png) · [Page 1400 light](img/systems-page-1400-light-1-list.png)
+
+- **Header.** The rail has a back arrow ("Back to designs"), the title, and under it **New design system** and **Build with the agent…**. The page has **Library** (back), the title, and both buttons on the right. New design system is the tinted button, **Build with the agent…** is an outline button (see [Build with the agent…](#build-with-the-agent)); the one filled button in the sheet is **Make design system**. Back returns focus to the Design systems button that opened the list.
+- **A row** (a card on the page, where the list is a grid of cards three across at 1400 px):
+  1. The name (one line, ends in an ellipsis) and its status: **Draft** or **Ready**.
+  2. The home line: **In Design Chamber** or **Repo · shop** (the full path of the repo is the tooltip), then at most two badges, in this order of priority: **Being built**, **Changes to review**, **Default**, **Pinned for shop** (or "Pinned for 3 projects"), then the living page: **Living page out of date**, **Living page changed**, **Living page can’t be checked**. A third badge or more folds into **+1** (or +2…): its tooltip names what is folded, and the row's accessible name lists everything, so nothing is lost for a screen reader.
+  3. When another system reads the same repo: "shop already has a repo-backed system (Acme)." in muted text. It is never a badge.
+  4. A muted line: what it was made from ("From shop", "From brand files", "Described", joined with dots), who uses it ("Used by 4 designs", or "Not used by a design yet") and when it last changed ("2 hr. ago").
+- **Row menu** (the ⋯ that appears on hover or focus): **Open**, **Make default** (or **Remove as default** on the default), **Reveal in folder**, **Rename**, **Delete…**. A draft can't be the default, so **Make default** is off and says "Mark it ready first." inside the menu.
+  - **Rename** is a small dialog. A name is 1 to 60 characters and unique ignoring case: "You already have a system called Harbor." shows under the field as you type, and the service's sentence shows there too if it refuses.
+  - **Delete…** confirms, because it is a deletion: "Delete Harbor? It moves to the trash. The 4 designs that use it keep their copy." After it, a toast says what else it cleared ("It was your default, so new designs ask again.").
+  - **Make default** and **Remove as default** act at once and say what happened in a toast; the row shows **Default** once the service confirms.
+- **Continue in chat** and **Pin to project…** are not in the menu yet; they arrive with the system page and with Settings.
+- **The cap.** At 50 systems **New design system** is held back and the list says why ("You have 50 design systems, the most Design Chamber keeps. Delete one to make room.").
+
+## States
+
+- **Loading:** four skeleton rows shaped like the rows above. [Rail 480 light](img/systems-states-rail-480-light-1-loading.png)
+- **Empty:** "No design systems yet. Make one from a project’s code, from brand files, or by describing it. Designs can then start from it." with **From code…**, **From brand files…** and **Describe…**; each opens the sheet with that source ticked. [Rail 320 dark](img/systems-states-rail-320-dark-2-empty.png)
+- **A system that can’t be read:** the row shows the service's sentence in the error tone ("Design Chamber can’t read this design system. Its system.json isn’t valid JSON.") and a **Can’t read** badge. It is not a button (there is nothing to open); its menu keeps **Reveal in folder** and **Delete…**. [Rail 320 dark](img/systems-rail-320-dark-4-unreadable.png)
+- **The list didn’t load:** a banner with what happened and **Try again**. When the service isn't answering at all the title is "Design Chamber isn’t running" and the body says to allow the local service in Settings → Extensions. [Page 1400 light](img/systems-states-page-1400-light-3-failed.png)
+- **A refresh that failed** while rows are showing keeps the rows and adds "Couldn’t refresh the list" with **Try again**.
+- The list refreshes by itself when the agent writes a file in a system or a system is added or removed, and the times age while it is open.
+
+## Build with the agent…
+
+[Rail 320 dark, the popover](img/build-popover-rail-320-dark-2-popover.png) · [Rail 320 dark, not sent](img/build-popover-rail-320-dark-3-not-sent.png) · [Page 1400 light](img/build-popover-page-1400-light-2-popover.png)
+
+An outline button next to **New design system**, in the header of the list. It is there when the list is empty too (the three starts stay). At 50 systems it is held back with the same reason as New design system.
+
+- **The popover.** An optional line, "What is it for? (optional)", up to 2000 characters ("Keep it under 2000 characters." under the field past that); **Agent works in** with **This chat** and **New chat**; **Cancel** and **Start**.
+- **Which chat.** With a project folder open both are offered and This chat comes first. With no project folder only This chat is offered. With no chat open, This chat says "No chat is open right now. Open one first." and **Start** is off until **New chat** is picked.
+- **Start** asks the agent to interview the user in that chat and closes the popover with a toast ("Asked the agent to build a design system. Answer its questions in the chat.").
+- **When the request doesn't reach a chat.** The words stay. The popover says "Couldn’t ask the agent. The request didn’t reach a chat. Your words are still here." and **Start** becomes **Try again**; **Copy request** copies the text so it can be pasted into a chat by hand.
+
+The chip the agent's request carries opens as described in [Rail: the build chip](rail.md#the-build-chip).
+
+Screenshots come from `test/ui/visual/scenarios/design-system-build.mjs` (`build-popover-*`, `build-badges-*`).
+
+## The New design system sheet
+
+[Page 1400 light, scanned](img/systems-sheet-page-1400-light-4-scanned.png) · [Rail 320 dark](img/systems-sheet-rail-320-dark-1-sheet.png)
+
+Opened from **New design system** (a description is pre-ticked) or from an empty-list action (that source is pre-ticked). It makes an **internal** design system, kept in the Designs folder. A system that lives in a project's repo is made with the `/design-system` command in chat, not here.
+
+1. **Name** (required). Filled in for you from the project when you read one and haven't typed anything.
+2. **Start from**: three ticks, any mix, or none (a blank draft with only a name).
+   - **Project code.** Choose a project (OpenChamber's projects by name, the current chat's project first) or **Other folder…** with a full path. It reads the project (nothing in it is changed), shows what it is doing and a **Cancel scan** button, then says what it found: "Found 48 colours, 9 type styles, 12 spacing values, 3 font files, 2 logo files in 14 files." plus an expandable **Files read** list, "Scanned part of the project; it’s large." when it hit a bound, the files it skipped, and the config files the agent will read because Design Chamber doesn't run them. Every font and logo found has a tick (ticked) to copy into the system, with "Check you’re allowed to use these fonts in designs." If it found nothing: "Design Chamber didn’t find design tokens in this project. The agent can still read it and write the system." A folder it can't read says why ("Pick your app’s folder, not the Designs folder.") and keeps what you typed. Starting a scan again is **Read ember-oak**.
+   - **Brand files.** Drop files on the zone or **Choose files…**, or **Add from a folder…** (a full path; the service reads the files directly in it). Fonts (woff2, woff, ttf, otf, up to 5 MB), logos (svg, png, jpg, webp, up to 10 MB) and documents (pdf, md, txt, up to 20 MB), at most 200 files and 100 MB. Each file you pick shows its kind and size with a remove button; each one refused is named with its reason right away ("brand.key isn’t a file type design systems use.", "huge.woff2 is too large (the limit is 5 MB)."). [Rail 320 dark](img/systems-brand-rail-320-dark-1-files.png)
+   - **A description.** Up to 2,000 characters and an optional **style preset**. A description or a preset is enough.
+3. **Agent works in**: **New chat** (in the project you read, or the current one) or **Current chat** (attaches the system and puts the request in the composer).
+4. **Make design system** (the one filled button). Nothing is written before it. Problems are shown **on press**, beside the thing to fix, and focus moves there: "Give the design system a name.", "Pick the project to read, or untick Project code.", "Add brand files, or untick Brand files.", "Describe the look you want, pick a style preset, or untick A description.". A failed make keeps the whole sheet and says "Couldn’t make the design system. <the service's sentence>".
+
+While it works the form is locked and a line says where it is ("Making the design system…", "Adding brand files: 2 of 5, Mark.svg", "Asking the agent to write it…"). Files go one at a time after the system exists.
+
+**When it all goes through,** the sheet closes with "Made Orchard. It’s a draft; the agent is writing it now." (or "…The request is waiting in the chat composer." for the current chat) and the new row is in the list.
+
+**When something needs a look,** the sheet stays and becomes a result: "Orchard brand is made" with what is still open. [Page 1400 light](img/systems-brand-page-1400-light-2-result.png) · [Rail 480 light](img/systems-agent-rail-480-light-1-not-sent.png)
+- **Files not added** lists each file with its sentence ("broken.png isn’t a real PNG file."). The rest are in.
+- **Couldn’t ask the agent** (no chat, the host refused, the request wasn't built): the system is still a draft with what was gathered. **Try again** asks the agent again without making anything twice; **Copy request** puts the request on the clipboard when there is one.
+- If the sheet was closed before the work finished, a toast says the same thing in one sentence.
+
+## Keyboard and screen readers
+
+Every control is reachable by keyboard with a visible focus ring. Rows are buttons whose accessible name lists the badges, folded ones too. Status is words and badges, never colour alone. Problems are in `role="alert"` lines; the scan line is a polite live region. Escape closes a sheet and stops a running scan.
+
+## Rail and page
+
+The same view on both. The rail (320 to 480 px) shows rows and the page shows cards in a grid. The sheet is a centred dialog on both and scrolls inside, with its buttons pinned.
+
+## The system page
+
+**Route:** a row (or **Open** in its row menu) in the list; a new system opens its page as soon as it is made · **Access:** every OpenChamber user. Screenshots come from `test/ui/visual/scenarios/design-system-page.mjs` in `documentation/pages/img/syspage-*.png` when that scenario is run with its default `--out`.
+
+The sections below describe an **internal** system (kept in the Designs folder). A system that lives in a project's repo uses the same page, read only; see [A system that lives in a repo](#a-system-that-lives-in-a-repo).
+
+### Full-screen page
+
+- **Header.** Back (**Design systems**), the name (click to rename), a **Ready** or **Draft** badge, **Unsaved** while values are pending, and a line under it: "In Design Chamber · Synced with tidepool-web yesterday · Used by 4 designs". On the right: **Mark ready** (the one filled button while the system is a Draft) or **Back to draft** (outline, no primary when it is Ready), **Versions**, and a **⋯** menu (Rename, Continue in chat, and **Re-sync from code** when the system has a code source).
+- **Board.** The specimen board is drawn by the service and shown in a sandboxed frame (scripts on, never the page's own origin) on a quiet stage. It follows the OpenChamber light or dark theme. Clicking a swatch, a type sample or a component selects that entry in the panel and puts its name in the ask bar. While a value is pending the board shows it live.
+- **Panel (360 px).** "Sections" with "N of M reviewed" and a thin bar, then four areas that fold open: **Foundations** (Overview, Colours, Typography, Spacing, Radius, Shadows, Layers, Sizes), **Components**, **Patterns & voice**, **Brand & marketing**. Each section row shows its count ("8 colours", "Nothing yet") and, once reviewed, **Looks good** or **Needs work**. An area the system doesn't cover says "Not covered".
+- **The section on show** lists its entries with a swatch, the light and dark value, and a usage note per token, style or component. **Click a value to edit it.** A value that is a formula (`var(--brand)`) is shown but locked, with the reason.
+- **Editing.** A change goes into a pending list and the board previews it. An **Unsaved** bar appears with the count, **Reset** and **Save**. Save writes one edit; the service keeps a version first. After it: "Saved · Changed 1 value" with **Undo**. If the agent changed the files meanwhile the save is refused: "Tidepool changed while you were editing. Nothing was saved." with **Reload and try again**, and your typed values stay. Leaving the page with unsaved values asks: Keep editing, Discard, or Save and leave.
+- **Review.** Under the panel: "Does Colours look right?" with **Looks good** and **Needs work**. A reviewed section shows its state once and only offers the other button. **Needs work** asks what to fix and sends it, with the section, to the agent. Sections the system doesn't cover say "Not covered by this system." and have no review controls. Review state lives only in this panel.
+- **Mark ready.** "Acme is ready. 9 sections weren’t reviewed." with **Review the 9**, which jumps to the first section not reviewed. It never blocks.
+- **Versions** opens a drawer from the right: the system's versions with **View**, **Compare** (the list of changed files) and **Restore**. Viewing an old version puts a banner on the page ("You’re viewing an old version.", **Back to current**) and turns editing off. A restore offers **Undo**, not a confirm.
+- **Re-sync from code** opens a sheet that reads the project again and lets you tick what to take. It is written up in [design system re-sync](../features/design-system-resync.md) (screenshots `resync-page-*.png`, from `design-system-resync.mjs`). The rail never offers it.
+- **Ask bar** under the board: it starts or continues the system's chat. With a board entry selected it sends the question about that entry. It says where the message goes ("Starts a new chat", or the linked chat's name).
+- **Build strip.** When the agent is writing the system, a strip over the board says what it is doing, with **Stop** and **Undo**.
+
+### Rail panel
+
+The same system, stacked and without value editing (the rail is too narrow for it): the board on top, the section list, the review controls, then **Back to draft / Mark ready** and **Continue in chat**, and a hint to open Design Chamber full screen to edit values. A repo-backed system shows the quiet "lives in" line, a living-page state label and **Preview living page**, and nothing else from the repo page. The rail's view is written up in [rail: a design system](rail.md).
+
+### Phone width
+
+Below 620 px the board and the sections are two views behind a **Board / Sections** switch (a segmented control, 44 px targets). **Brand & marketing** is spelled out.
+
+### States
+
+- **Loading:** "Loading the design system…" in the panel and "Loading the board…" on the stage.
+- **Didn’t load:** "The design system didn’t load" with the service's sentence and **Try again**. The board is hidden.
+- **Gone:** "Tidepool is gone. Its folder was moved or deleted." with any unsaved values listed so they can be copied, and **Back to design systems**.
+- **Can’t be read / entries that can’t be read:** a banner with the service's sentence.
+- **Board didn’t draw:** a message on the stage with **Try again**; the panel still works.
+
+### Keyboard and screen readers
+
+Rows and areas are buttons with a visible focus ring; a row's accessible name carries its count and review state. A value is a button that becomes a text box (Enter keeps it, Escape drops it); focus returns to the value after a repaint. Review state is words, never colour alone.
+
+### A system being built
+
+While the agent is building a system in a chat, its row carries the info badge **Being built**, first in the order, and its accessible name says "Being built". At 360 px two badges sit beside the home line and the rest fold into **+N** ([360 dark](img/build-badges-rail-360-dark-1-list.png)).
+
+## A system that lives in a repo
+
+The same page and the same panel, read only. The values live in the project's repo, so Design Chamber shows them and never writes them. Screenshots come from `test/ui/visual/scenarios/design-system-repo.mjs` (page, living-page card states, banners, preview frame, re-sync sheet) and `design-system-rail.mjs` (rail 320 and 480).
+
+- **Header.** The name with its rename pencil and badge, then "Repo · shop · design-system/" (the full path is the tooltip). Right side: **Mark ready**, **Reveal** (shows the repo folder in the file manager), **Versions**, **⋯**. **Re-sync from shop** is in the **⋯** menu.
+- **Read-only line.** The first line of the panel, above the areas: "Acme lives in shop. Change the values there, or ask the agent here." It is a plain line, never a banner. There is no Save, Reset, Add, edit pencil or remove button, and no "Click a value to edit it." hint.
+- **Review stays.** **Looks good** and **Needs work** work as before. **Needs work** and the ask bar send a proposal request to the system's chat, where the agent shows a diff for you to approve.
+- **Coverage.** An area the system doesn't cover reads "Not covered by this system." and has no review buttons.
+- **Living page card.** At the top of Overview, with the same state as a pill in the header. States: **Up to date** (Preview living page), **Out of date**, **Not in shop yet**, **Changed in shop**, **Reformatted**, **Can’t check as safe**, **Can’t read** (Reveal living page), and a build problem (**Ask the agent to fix it**). A token shaped like a secret on a page for developers adds a warning line. A font that was left out is named with the reason. **Embed fonts** is a switch on the card, and is not shown on a page for developers. After a change it says "Regenerating…" until the service reports the page again.
+- **Preview living page** opens the staged page in a frame over the board (sandboxed, scripts on, never the page's own origin), with a note that the copy in the repo may differ. While a proposal waits, the frame shows the proposal's page and the band says so. The committed page is never drawn.
+- **Banners.** At most two show, the rest fold under **+N more**. They cover: the repo can't be read (**Choose another folder…** opens the re-sync sheet), the snapshot was changed outside Design Chamber (**Re-sync**), changes since marked ready, and a build problem. Code that differs from the system and what a commit landed are plain lines in Overview with their own buttons (**Ask the agent to reconcile**), not banners. A count of zero with a file that couldn't be read never says "matches".
+- **Versions.** **View** and **Compare** only. The footer says "Repo changes are undone in shop’s history, not here." A repo re-sync has no **Undo** notice for the same reason.
+- **Re-sync sheet.** Lists what changed in the repo (**Changed**, **New**, **No longer in the repo**, **Files**) with the old and new value on one line. It is all or nothing, with **Apply** pinned in the footer. When nothing changed it says shop matches what Design Chamber shows and offers **Close**. When the repo can't be read it asks for the folder. Apply sends the scan and a stamp of the snapshot, never a value.
+- **Being built in chat.** While the agent builds the system and there is no snapshot yet, the page says so, says when the agent is waiting for an answer, and offers **Continue in chat**, **Re-sync** and **Preview living page**.

@@ -2,6 +2,8 @@
 // send comments (incl. the outbox for a session that is not selected), session
 // reconciliation, turn snapshots, "Open as page", chip clicks, and opening a design in the rail
 // from a Work Status row or a chat block (documentation/specs/phase-1-5-sdk-2-7.md §3.2).
+// Phase 2.5 S8 (documentation/specs/phase-2-5-technical.md §8.7): `/design-system` and Build with the
+// agent… ask the service for a build ticket and its chip (`POST /systems/chip`).
 //
 // Host constraints these flows are shaped by: `prompt` acts on the selected session only
 // (F13); `openSession` closes the page and throws NO_SESSION for an unknown id (F12);
@@ -23,10 +25,10 @@ import {
 } from '@openchamber/sdk';
 
 import { extractHtml } from '../shared/agent/html-extract.ts';
-import type { AskElement, OpenIntent, PromptBody, PromptResponse } from '../shared/api.ts';
-import type { AnchorState, DesignChip, DesignKind, Outbox } from '../shared/types.ts';
+import type { AskElement, OpenIntent, PromptBody, PromptResponse, SystemOpenTarget } from '../shared/api.ts';
+import type { AnchorState, BuildChipData, Chip, DesignChip, DesignKind, Outbox } from '../shared/types.ts';
 import { CHIP_PROVIDER_ID } from '../shared/types.ts';
-import { OUTBOX_TTL_MS, SLUG_PATTERN, TURN_SNAPSHOT_DEDUPE_MS } from '../shared/limits.ts';
+import { OUTBOX_TTL_MS, SLUG_PATTERN, SYSTEM_BUILD_TICKET_PATTERN, SYSTEM_ID_PATTERN, TURN_SNAPSHOT_DEDUPE_MS } from '../shared/limits.ts';
 import { sameDirectory } from '../shared/path-compare.ts';
 import type { ChangeBatch } from './changes.ts';
 import type { GuestHost, HostLike } from './host.ts';
@@ -44,7 +46,7 @@ export const MESSAGES = {
   startFailed: "Couldn't start a chat for this design. It is in your Designs list; try Continue in chat.",
   sendFailed: "The revision didn't reach the chat. Your comments are still open; try again.",
   nothingToSend: 'There are no open comments to send.',
-  unknownCommand: 'Design Chamber knows /design and /page only.',
+  unknownCommand: 'Design Chamber knows /design, /page and /design-system only.',
   noSessionSelected: 'Open a chat first, then try again.',
   markFailed: 'Sent, but the comments could not be marked as sent. Resolve them by hand so they are not sent again.',
   savedPage: (title: string) => `Saved as page “${title}”.`,
@@ -66,13 +68,13 @@ export class FlowError extends Error {
 export const isHostError = (error: unknown, code: string): boolean => error instanceof HostRequestError && error.code === code;
 
 /** The chip as the SDK's attach request (our chip type is structurally one). */
-export const toAttachRequest = (chip: DesignChip): AttachIssueRequest => ({
+export const toAttachRequest = (chip: DesignChip | Chip<BuildChipData>): AttachIssueRequest => ({
   providerId: chip.providerId,
   id: chip.id,
   title: chip.title,
   url: chip.url,
   text: chip.text,
-  data: { slug: chip.data.slug, kind: chip.data.kind },
+  data: 'build' in chip.data ? { build: chip.data.build } : { slug: chip.data.slug, kind: chip.data.kind },
 });
 
 // ---- §10.5 reconciliation, pure ----
@@ -123,12 +125,28 @@ export type NewDesignInput = {
   kind: DesignKind;
   brief: string;
   preset?: string | null;
+  /** The New dialog's design-system choice: a system id, `none` or `ask` (Phase 2.5 §3.2). Absent: the service decides from the settings. */
+  system?: string;
   /** `new-chat` (default in the dialog) starts a session; `current-chat` attaches to the selected one. */
   destination: 'new-chat' | 'current-chat';
 };
 export type NewDesignResult = { slug: string; sessionId: string | null };
 
 export type ContinueResult = { outcome: 'opened' | 'new-session'; sessionId: string };
+
+/** Build with the agent… (§8.7): the user's words and where the agent works. */
+export type BuildSystemInput = { brief: string; destination: 'new-chat' | 'current-chat' };
+/**
+ * `sent` / `composed`: the request went to the selected chat (composed when it was busy) · `new-session`:
+ * a new chat was started with it · `not-sent`: the ticket exists but the chat did not take the request;
+ * `text` is the request for **Copy request**, and **Try again** calls `buildSystem` again.
+ */
+export type BuildSystemResult =
+  | { outcome: 'sent' | 'composed' | 'new-session'; ticket: string; sessionId: string | null }
+  | { outcome: 'not-sent'; ticket: string; text: string };
+
+/** The first message of a build when the user added no words. */
+export const BUILD_SYSTEM_DEFAULT_TEXT = "Let's build a design system.";
 
 /**
  * `sent`: delivered to the selected chat · `composed`: the agent was busy, text is in the
@@ -148,7 +166,12 @@ export type AskResult = { outcome: AskOutcome; sessionId: string | null };
 export type DeliverOutboxResult = 'delivered' | 'composed' | 'none';
 
 /** What the surface should show for the item it was opened with. `intent` comes with an open request (§3.2); absent = `view`. */
-export type ItemTarget = { kind: 'open-design'; slug: string; intent?: OpenIntent };
+export type DesignTarget = { kind: 'open-design'; slug: string; intent?: OpenIntent };
+/** A `system-build:<ticket>` chip: the rail shows how that build is going (Phase 2.5 §9.6). */
+export type BuildTarget = { kind: 'open-build'; ticket: string };
+/** A design system to show: its page, its board, or the living page's preview frame (Phase 2.5; a `system:<id>` chip opens the page). */
+export type SystemTarget = { kind: 'open-system'; system: string; target: SystemOpenTarget };
+export type ItemTarget = DesignTarget | BuildTarget | SystemTarget;
 
 /** Change batches after which the rail looks for an open request: a reset, a new design (`added`), or an `open` request. */
 export const takesOpenRequest = (batch: ChangeBatch): boolean => batch.reset || batch.events.some((event) => event.kind === 'added' || event.kind === 'open');
@@ -167,9 +190,25 @@ export const openInRail = async (
   deps: { client: ServiceClient; host: Pick<HostLike, 'openSurface'> },
   slug: string,
   intent: OpenIntent,
+): Promise<OpenInRailOutcome> => leaveAndOpen(deps, { slug, intent });
+
+/**
+ * As `openInRail`, for a design system (a SystemAsk block's **Preview living page** / **Open the
+ * board**): the rail opens the system page, and for `preview` its living-page preview frame.
+ * `gone`: the system is no longer in the Designs folder.
+ */
+export const openSystemInRail = async (
+  deps: { client: ServiceClient; host: Pick<HostLike, 'openSurface'> },
+  system: string,
+  target: SystemOpenTarget,
+): Promise<OpenInRailOutcome> => leaveAndOpen(deps, { system, target });
+
+const leaveAndOpen = async (
+  deps: { client: ServiceClient; host: Pick<HostLike, 'openSurface'> },
+  body: { slug: string; intent: OpenIntent } | { system: string; target: SystemOpenTarget },
 ): Promise<OpenInRailOutcome> => {
   try {
-    await deps.client.call('POST /open-request', { body: { slug, intent } });
+    await deps.client.call('POST /open-request', { body });
   } catch (error) {
     if (isServiceError(error, 'not-found')) return 'gone';
     throw error;
@@ -192,6 +231,8 @@ export type Flows = {
   /** Background frame: `/design <brief>` and `/page <brief>` → our chip. */
   resolveSlashCommand(request: ResolveRequest): Promise<AttachIssueRequest>;
   newDesign(input: NewDesignInput): Promise<NewDesignResult>;
+  /** Build with the agent… on the systems list: a build ticket, then the chip to the current or a new chat. */
+  buildSystem(input: BuildSystemInput): Promise<BuildSystemResult>;
   continueInChat(slug: string): Promise<ContinueResult>;
   /**
    * One revision request with the given (default: all open) comments. `anchorStates` comes from
@@ -209,7 +250,7 @@ export type Flows = {
    * linked chat when there is none or it is gone. The service answers 422 when there is nothing
    * to ask any more; that error reaches the caller before any chat is touched.
    */
-  askAgent(slug: string, purpose: 'offline' | 'checks'): Promise<AskResult>;
+  askAgent(slug: string, purpose: 'offline' | 'checks' | 'restyle' | 'system-update', before?: string): Promise<AskResult>;
   /** Rail panel: deliver a waiting outbox to `session` when it is the one the outbox is for. */
   deliverOutbox(session?: SessionSnapshot | null): Promise<DeliverOutboxResult>;
   /** Patch every link `planReconciliation` finds; returns what was patched. */
@@ -246,7 +287,12 @@ export type Flows = {
    * block on mount and after every batch `takesOpenRequest` accepts (the rail may already be
    * open), and open it with its intent. `subscribe` is the change feed's.
    */
-  watchOpenRequests(subscribe: (listener: (batch: ChangeBatch) => void) => () => void, open: (target: ItemTarget) => void): () => void;
+  watchOpenRequests(
+    subscribe: (listener: (batch: ChangeBatch) => void) => () => void,
+    open: (target: DesignTarget) => void,
+    /** A system request (Phase 2.5); without it a system request is taken and dropped. */
+    openSystem?: (target: SystemTarget) => void,
+  ): () => void;
 };
 
 export type FlowDeps = { host: GuestHost; client: ServiceClient; now?: () => number };
@@ -413,12 +459,17 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
   const flows: Flows = {
     resolveSlashCommand: async ({ command, args }) => {
       const kind: DesignKind | null = command === 'design' ? 'canvas' : command === 'page' ? 'page' : null;
-      if (!kind) throw new FlowError('unknown-command', MESSAGES.unknownCommand);
+      if (!kind && command !== 'design-system') throw new FlowError('unknown-command', MESSAGES.unknownCommand);
       const ready = host.ready.get();
+      const projectDirectory = ready?.directory ?? null;
+      const sessionId = ready?.session?.id ?? null;
       try {
-        const { chip } = await client.call('POST /chip', {
-          body: { kind, brief: args.trim(), projectDirectory: ready?.directory ?? null, sessionId: ready?.session?.id ?? null },
-        });
+        if (!kind) {
+          // `/design-system`: a build ticket bound to this chat's project and session (§8.7).
+          const { chip } = await client.call('POST /systems/chip', { body: { brief: args.trim(), projectDirectory, sessionId } });
+          return toAttachRequest(chip);
+        }
+        const { chip } = await client.call('POST /chip', { body: { kind, brief: args.trim(), projectDirectory, sessionId } });
         return toAttachRequest(chip);
       } catch (error) {
         // The host shows a thrown error's message to the user (F15).
@@ -426,13 +477,13 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       }
     },
 
-    newDesign: async ({ kind, brief, preset = null, destination }) => {
+    newDesign: async ({ kind, brief, preset = null, system, destination }) => {
       const ready = host.ready.get();
       const directory = host.directory.get();
       const text = brief.trim();
       if (destination === 'new-chat') {
         if (!directory) throw new FlowError('no-project', MESSAGES.noProject);
-        const { slug, chip } = await client.call('POST /chip', { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null } });
+        const { slug, chip } = await client.call('POST /chip', { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null, ...(system === undefined ? {} : { system }) } });
         const result = await api.startSession({ ...toAttachRequest(chip), text: text || "Let's start this design.", navigation: 'open' });
         if (result.sessionId === null) throw new FlowError('start-failed', MESSAGES.startFailed);
         await client.call('PATCH /designs/:slug', { params: { slug }, body: { sessionId: result.sessionId } });
@@ -440,13 +491,46 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       }
       const session = host.session.get();
       const { slug, chip } = await client.call('POST /chip', {
-        body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null },
+        body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null, ...(system === undefined ? {} : { system }) },
       });
       await api.attach(toAttachRequest(chip));
       if (text) await api.compose({ text, mode: 'append' });
       if (ready?.surface === 'page') await api.close();
       // The link is made by reconciliation once the chip is on a session (§10.5).
       return { slug, sessionId: session?.id ?? null };
+    },
+
+    buildSystem: async ({ brief, destination }) => {
+      const ready = host.ready.get();
+      const directory = host.directory.get();
+      const words = brief.trim();
+      const text = words || BUILD_SYSTEM_DEFAULT_TEXT;
+      if (destination === 'new-chat') {
+        // A new chat needs a project (F14); with none the dialog offers This chat only.
+        if (!directory) throw new FlowError('no-project', MESSAGES.noProject);
+        const { ticket, chip } = await client.call('POST /systems/chip', { body: { brief: words, projectDirectory: directory, sessionId: null } });
+        try {
+          const result = await api.startSession({ ...toAttachRequest(chip), text, navigation: 'open' });
+          if (result.sessionId === null) return { outcome: 'not-sent', ticket, text: chip.text };
+          // The chat is recorded in the ticket from its first session event (session-links, marker-gated).
+          return { outcome: 'new-session', ticket, sessionId: result.sessionId };
+        } catch (error) {
+          if (error instanceof HostRequestError) return { outcome: 'not-sent', ticket, text: chip.text };
+          throw error;
+        }
+      }
+      const session = host.session.get();
+      if (!session) throw new FlowError('no-session', MESSAGES.noSessionSelected);
+      const { ticket, chip } = await client.call('POST /systems/chip', { body: { brief: words, projectDirectory: directory, sessionId: session.id } });
+      try {
+        await api.attach(toAttachRequest(chip));
+        const outcome = await promptSelected(session, text, MESSAGES.busyAsk);
+        if (ready?.surface === 'page') await api.close();
+        return { outcome, ticket, sessionId: session.id };
+      } catch (error) {
+        if (error instanceof HostRequestError || (error instanceof FlowError && error.code === 'send-failed')) return { outcome: 'not-sent', ticket, text: chip.text };
+        throw error;
+      }
     },
 
     continueInChat: async (slug) => {
@@ -493,8 +577,8 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       return deliver(slug, prompt, design, null, MESSAGES.busyAsk);
     },
 
-    askAgent: async (slug, purpose) => {
-      const prompt = await client.call('POST /designs/:slug/prompt', { params: { slug }, body: { purpose } });
+    askAgent: async (slug, purpose, before) => {
+      const prompt = await client.call('POST /designs/:slug/prompt', { params: { slug }, body: before === undefined ? { purpose } : { purpose, before } });
       const { design } = await client.call('GET /designs/:slug', { params: { slug } });
       return deliver(slug, prompt, design, null, MESSAGES.busyAsk);
     },
@@ -582,7 +666,10 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       if (isGuestAttachItem(item)) {
         if (item.providerId !== CHIP_PROVIDER_ID) return null;
         const data = item.data;
-        const slug = typeof data === 'object' && data !== null && !Array.isArray(data) ? data.slug : undefined;
+        if (typeof data !== 'object' || data === null || Array.isArray(data)) return null;
+        const { slug, build, system } = data;
+        if (typeof build === 'string') return SYSTEM_BUILD_TICKET_PATTERN.test(build) ? { kind: 'open-build', ticket: build } : null;
+        if (typeof system === 'string') return SYSTEM_ID_PATTERN.test(system) ? { kind: 'open-system', system, target: 'page' } : null;
         return typeof slug === 'string' && SLUG_PATTERN.test(slug) ? { kind: 'open-design', slug } : null;
       }
       if (isGuestMessageItem(item) && item.action === OPEN_AS_PAGE_ACTION) {
@@ -677,12 +764,18 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       });
     },
 
-    watchOpenRequests: (subscribe, open) => {
+    watchOpenRequests: (subscribe, open, openSystem) => {
       let stopped = false;
       const take = (): void => {
         client.call('DELETE /open-request').then(
           ({ request }) => {
-            if (request && !stopped && SLUG_PATTERN.test(request.slug)) {
+            if (!request || stopped) return;
+            if ('system' in request) {
+              const target = request.target === 'board' || request.target === 'preview' ? request.target : 'page';
+              if (SYSTEM_ID_PATTERN.test(request.system)) openSystem?.({ kind: 'open-system', system: request.system, target });
+              return;
+            }
+            if (SLUG_PATTERN.test(request.slug)) {
               open({ kind: 'open-design', slug: request.slug, intent: request.intent === 'comment' ? 'comment' : 'view' });
             }
           },

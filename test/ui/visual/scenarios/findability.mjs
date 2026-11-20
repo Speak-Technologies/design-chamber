@@ -37,7 +37,22 @@ const tipAndHeader = async (h, width, theme) => {
   await p.click('.dc-toolbar-compact .dc-iconbtn[aria-label="More actions"]');
   h.check(!(await p.guest('return [...doc.querySelectorAll(".dc-popup [role=menuitem]")].some((n) => /Versions|Comments/.test(n.textContent))')), `${tag}: the ⋯ menu no longer lists Comments or Versions`);
   await p.shot(`${tag}-4-menu`);
-  await p.key('Escape');
+  // Under 360 px the Tweaks icon button leaves the title row and the ⋯ menu carries "Tweaks" instead (KI-21).
+  const narrow = width < 360;
+  const tweaksButton = await p.guest('const b = doc.querySelector(".dc-compact-actions .dc-tweaks-btn"); return b ? { shown: b.getClientRects().length > 0, hidden: b.hidden } : null');
+  h.check(tweaksButton !== null && !tweaksButton.hidden && tweaksButton.shown === !narrow, `${tag}: the Tweaks icon button is ${narrow ? 'out of the title row' : 'in the title row'} (${JSON.stringify(tweaksButton)})`);
+  h.check((await p.guest('return [...doc.querySelectorAll(".dc-popup [role=menuitem]")].some((n) => n.textContent.trim() === "Tweaks")')) === narrow, `${tag}: the ⋯ menu ${narrow ? 'carries a Tweaks item' : 'has no Tweaks item'}`);
+  if (narrow) {
+    await p.click('.dc-popup [role=menuitem]', { text: 'Tweaks' });
+    await p.waitFor('return !!doc.querySelector(".dc-sheet")', 'the Tweaks sheet');
+    await p.settle(200);
+    await p.shot(`${tag}-4b-tweaks-from-menu`);
+    await p.key('Escape');
+    await p.settle(200);
+    h.check(await p.guest('return doc.activeElement?.getAttribute("aria-label") === "More actions"'), `${tag}: closing the Tweaks sheet puts focus back on the ⋯ button`);
+  } else {
+    await p.key('Escape');
+  }
 
   await p.click('.dc-compact-actions .dc-comments-chip');
   await p.waitFor('return !!doc.querySelector(".dc-comment")', 'comments');

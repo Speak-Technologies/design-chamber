@@ -34,7 +34,7 @@ test('the manifest parses with the SDK host parser', () => {
   assert.equal(contributes.panel.entry, 'dist/panel/index.html');
   assert.equal(contributes.background?.entry, 'dist/background/index.html');
   assert.equal(contributes.service?.entry, 'dist/service/main.js');
-  assert.deepEqual(contributes.commands?.map((command) => command.name), ['design', 'page']);
+  assert.deepEqual(contributes.commands?.map((command) => command.name), ['design', 'page', 'design-system']);
   assert.deepEqual(contributes.actions?.map((action) => [action.id, action.label]), [['open-as-page', 'Open as page']]);
   assert.deepEqual(contributes.capabilities, ['prompt', 'sessions']);
 });
@@ -56,8 +56,8 @@ test('the manifest carries every SDK 2.7 key, so users approve once', () => {
   assert.equal(contributes.opencodePlugin, 'dist/plugin');
   assert.deepEqual(contributes.mentions, { label: 'Designs' });
   assert.deepEqual(contributes.tools?.map((tool) => tool.match), ['design_check']);
-  assert.deepEqual(contributes.blocks?.map((block) => block.name), ['DesignCard', 'DirectionPick']);
-  assert.deepEqual(contributes.blocks?.map((block) => block.entry), ['dist/blocks/index.html', 'dist/blocks/index.html']);
+  assert.deepEqual(contributes.blocks?.map((block) => block.name), ['DesignCard', 'DirectionPick', 'SystemAsk']);
+  assert.deepEqual(contributes.blocks?.map((block) => block.entry), ['dist/blocks/index.html', 'dist/blocks/index.html', 'dist/blocks/index.html']);
   assert.equal(contributes.blocks?.find((block) => block.name === 'DirectionPick')?.answers, true);
   assert.equal(contributes.blocks?.find((block) => block.name === 'DesignCard')?.answers, undefined);
 });
@@ -80,6 +80,22 @@ test('the new keys stay inside the SDK limits', () => {
     for (const arg of block.args ?? []) assert.match(arg, GUEST_BLOCK_ARG_NAME);
     assert.ok((block.height ?? 0) <= GUEST_BLOCK_HEIGHT_MAX);
   }
+});
+
+test('the SystemAsk block is scoped to /design-system chats (Phase 2.5 §8.12)', () => {
+  const result = parseManifestJson(text);
+  if (!result.ok) return assert.fail(JSON.stringify(result));
+  const block = result.manifest.contributes.blocks?.find((entry) => entry.name === 'SystemAsk');
+  if (!block) return assert.fail('SystemAsk is not declared');
+  // The exact wording keeps other agents from using it for ordinary diffs; its length is part of the contract.
+  assert.equal(block.description, 'Only in a /design-system chat: interview rounds and the diff to approve. kind: interview-1|interview-2|diff; see skill');
+  assert.equal(block.description.length, 118);
+  assert.deepEqual(block.args, ['kind', 'ticket', 'systemId', 'proposalId', 'calls']);
+  assert.equal(block.entry, 'dist/blocks/index.html');
+  assert.equal(block.height, 480);
+  assert.equal(block.answers, true);
+  const command = result.manifest.contributes.commands?.find((entry) => entry.name === 'design-system');
+  assert.equal(command?.description, 'Build a design system: interview, then extract and document');
 });
 
 test('command and action text is short and plain (≤ 80 characters, no em dashes)', () => {

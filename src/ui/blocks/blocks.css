@@ -210,24 +210,29 @@ body {
 }
 
 /* Open is the card's one filled action (as data-emphasis in src/ui/styles.css). Scoped under
-   .dcb-actions so it outranks the kit's own variant rules, which are injected after this file. */
-.dcb-actions .oc-sdk-btn[data-emphasis='primary'] {
+   .dcb-actions (the card) and .dcb-ask (SystemAsk's footer) so it outranks the kit's own variant rules, which are injected after this file. */
+.dcb-actions .oc-sdk-btn[data-emphasis='primary'] ,
+.dcb-ask .oc-sdk-btn[data-emphasis='primary']  {
   background: var(--oc-primary);
   background-image: none;
   color: var(--oc-primary-fg);
   border-color: var(--oc-primary);
 }
-.dcb-actions .oc-sdk-btn[data-emphasis='primary']:hover {
+.dcb-actions .oc-sdk-btn[data-emphasis='primary']:hover ,
+.dcb-ask .oc-sdk-btn[data-emphasis='primary']:hover  {
   background: color-mix(in srgb, var(--oc-primary) 88%, var(--oc-fg));
 }
-.dcb-actions .oc-sdk-btn[data-emphasis='primary']:active {
+.dcb-actions .oc-sdk-btn[data-emphasis='primary']:active ,
+.dcb-ask .oc-sdk-btn[data-emphasis='primary']:active  {
   background: color-mix(in srgb, var(--oc-primary) 80%, var(--oc-fg));
 }
-.dcb-actions .oc-sdk-btn[data-emphasis='primary']:focus-visible {
+.dcb-actions .oc-sdk-btn[data-emphasis='primary']:focus-visible ,
+.dcb-ask .oc-sdk-btn[data-emphasis='primary']:focus-visible  {
   outline: none;
   box-shadow: 0 0 0 2px var(--oc-bg), 0 0 0 4px color-mix(in srgb, var(--oc-primary) 55%, transparent);
 }
-.dcb-actions .oc-sdk-btn[data-emphasis='primary'] .oc-sdk-spinner-ring {
+.dcb-actions .oc-sdk-btn[data-emphasis='primary'] .oc-sdk-spinner-ring ,
+.dcb-ask .oc-sdk-btn[data-emphasis='primary'] .oc-sdk-spinner-ring  {
   border-color: color-mix(in srgb, currentColor 30%, transparent);
   border-top-color: currentColor;
 }
@@ -404,6 +409,461 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .dcb-tile {
+    transition: none;
+  }
+}
+
+/* ------------------------------------------------------------------ SystemAsk */
+
+/* The one block that can outgrow the frame: it is as tall as its content up to the host's 960 px, and
+   past that the body scrolls inside the frame while the footer stays where it is. */
+.dcb-ask {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  max-height: 960px;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.dcb-ask-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  padding: var(--dc-s3) var(--dc-s3) 0;
+}
+
+.dcb-ask-icon {
+  display: inline-flex;
+  padding-top: 2px;
+  color: var(--oc-muted);
+}
+
+.dcb-ask-titles {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.dcb-ask-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.dcb-ask-sub {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.dcb-ask-side {
+  flex: none;
+  max-width: 45%;
+  padding-top: 2px;
+  overflow: hidden;
+  color: var(--oc-muted);
+  font-family: var(--oc-mono);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dcb-ask-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  min-height: 0;
+  padding: 0 var(--dc-s3);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The footer is never part of the scroll: it keeps the same rule a card's edge has. */
+.dcb-ask-foot {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  padding: var(--dc-s3);
+  border-top: 1px solid var(--oc-border);
+  background: var(--oc-bg);
+}
+
+.dcb-ask-body:last-child {
+  padding-bottom: var(--dc-s3);
+}
+
+.dcb-ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--dc-s2);
+}
+
+.dcb-ask-btn {
+  display: inline-flex;
+}
+
+.dcb-ask-reason,
+.dcb-ask-fact {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.dcb-ask-fact > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.dcb-ask-problem {
+  color: var(--oc-error-text);
+  font-size: 0.8125rem;
+}
+
+.dcb-ask-cannot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--dc-s2);
+}
+
+.dcb-ask-cannot .dcb-ask-reason {
+  flex: 1 1 10rem;
+}
+
+.dcb-ask-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  padding-bottom: var(--dc-s3);
+  color: var(--oc-muted);
+}
+
+.dcb-ask-spin {
+  display: inline-flex;
+}
+
+.dcb-ask-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+}
+
+.dcb-ask-done {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  font-weight: 500;
+}
+
+.dcb-ask-done > svg {
+  flex: none;
+  color: var(--oc-primary-text);
+}
+
+.dcb-ask-quote {
+  padding-left: var(--dc-s3);
+  color: var(--oc-muted);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.dcb-ask-picks {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--dc-s1) var(--dc-s3);
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+.dcb-ask-picks dt {
+  color: var(--oc-muted);
+}
+
+.dcb-ask-picks dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dcb-ask-note {
+  display: block;
+}
+
+/* ---- questions: native radios and checkboxes, the recommended answer in bold */
+
+.dcb-q {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+  min-width: 0;
+  margin: 0;
+}
+
+.dcb-q-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.dcb-q-agent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--dc-s1);
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.dcb-q-agent-k {
+  color: var(--oc-fg);
+  font-weight: 500;
+}
+
+.dcb-q-custom {
+  padding: 0 var(--dc-s2);
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+
+.dcb-opt {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--dc-s2);
+  padding: var(--dc-s2);
+  border-radius: var(--dc-r);
+  cursor: pointer;
+}
+
+.dcb-opt:hover {
+  background: var(--oc-hover);
+}
+
+.dcb-opt:has(input:checked) {
+  background: var(--oc-selection);
+  color: var(--oc-selection-fg);
+}
+
+.dcb-opt:has(input:focus-visible) {
+  box-shadow: var(--dc-ring);
+}
+
+.dcb-opt-input {
+  width: 1rem;
+  height: 1rem;
+  margin: 2px 0 0;
+  accent-color: var(--oc-primary);
+}
+
+.dcb-opt-input:focus-visible {
+  outline: none;
+}
+
+.dcb-opt-input:disabled,
+.dcb-opt-input:disabled ~ .dcb-opt-text {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.dcb-opt-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dcb-opt-name {
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.dcb-opt-name[data-recommended] {
+  font-weight: 600;
+}
+
+.dcb-opt-why {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.dcb-opt:has(input:checked) .dcb-opt-why {
+  color: inherit;
+  opacity: 0.8;
+}
+
+/* ---- the diff */
+
+.dcb-ask-summary {
+  overflow-wrap: anywhere;
+}
+
+.dcb-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--dc-s1) var(--dc-s3);
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+.dcb-meta dt {
+  color: var(--oc-muted);
+}
+
+.dcb-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dcb-problems {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--oc-warning-text);
+  font-size: 0.8125rem;
+}
+
+.dcb-parts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+}
+
+.dcb-part {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+  min-width: 0;
+}
+
+.dcb-part-switch {
+  display: block;
+}
+
+.dcb-files {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0 0 0 var(--dc-s4);
+  list-style: none;
+}
+
+.dcb-file-item {
+  min-width: 0;
+}
+
+.dcb-file {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s1);
+  width: 100%;
+  min-height: 1.75rem;
+  padding: var(--dc-s1) var(--dc-s2);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: start;
+  cursor: pointer;
+}
+
+.dcb-file:hover {
+  background: var(--oc-hover);
+}
+
+.dcb-file:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+
+.dcb-file-chev {
+  display: inline-flex;
+  flex: none;
+  margin-top: 2px;
+  color: var(--oc-muted);
+  transition: transform 120ms ease-out;
+}
+
+.dcb-file[aria-expanded='true'] .dcb-file-chev {
+  transform: rotate(90deg);
+}
+
+.dcb-file-text {
+  min-width: 0;
+  font-family: var(--oc-mono);
+  overflow-wrap: anywhere;
+}
+
+.dcb-patch {
+  margin: 0 0 var(--dc-s2) var(--dc-s4);
+}
+
+.dcb-patch-code {
+  max-height: 14rem;
+  margin: 0;
+  padding: var(--dc-s2);
+  overflow: auto;
+  border: 1px solid var(--oc-border);
+  border-radius: var(--dc-r);
+  background: var(--oc-muted-surface);
+  font-family: var(--oc-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.dcb-patch-code:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+
+.dcb-patch-note,
+.dcb-uses {
+  padding: 0 var(--dc-s2);
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+
+.dcb-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+}
+
+.dcb-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dc-s2);
+}
+
+@media (pointer: coarse) {
+  .dcb-opt {
+    min-height: 44px;
+    align-items: center;
+  }
+  .dcb-opt-input {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+  .dcb-file {
+    min-height: 44px;
+    align-items: center;
+  }
+  .dcb-ask .oc-sdk-btn {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dcb-file-chev {
     transition: none;
   }
 }

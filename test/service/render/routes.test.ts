@@ -49,6 +49,7 @@ describe('WP2 routes over HTTP', () => {
       ['/designs/art/versions/v1/restore', { method: 'POST' }],
       ['/designs/art/export', { method: 'POST', body: { format: 'zip' } }],
       ['/reveal', { method: 'POST', body: { path: 'C:\\x' } }],
+      ['/reveal', { method: 'POST', body: { system: 'acme', target: 'folder' } }],
       ['/designs/art/thumbnail', {}],
       ['/designs/art/thumbnail/refresh', { method: 'POST' }],
     ];
@@ -248,6 +249,12 @@ describe('WP2 routes over HTTP', () => {
     const foreignFolder = await svc.call('/reveal', { method: 'POST', body: { path: downloads.root } });
     assert.equal(foreignFolder.status, 400, 'a folder that is neither an issued export nor a design is refused');
     assert.equal((await svc.call('/reveal', { method: 'POST', body: {} })).status, 400);
+    // The system form takes no path: the service derives it, so a path beside it is refused.
+    const errorOf = async (body: unknown): Promise<string> => ((await (await svc.call('/reveal', { method: 'POST', body })).json()) as { error: string }).error;
+    assert.equal(await errorOf({ system: 'acme', target: 'folder', path: downloads.root }), 'bad-request');
+    assert.equal(await errorOf({ system: '../acme', target: 'folder' }), 'bad-slug');
+    assert.equal(await errorOf({ system: 'acme', target: 'elsewhere' }), 'bad-request');
+    assert.equal(await errorOf({ system: 'acme', target: 'folder' }), 'not-found');
     assert.equal((await svc.call('/designs/art/export', { method: 'POST', body: { format: 'pdf' } })).status, 400);
   });
 

@@ -6,7 +6,7 @@
 import { BRIEF_MAX, CHIP_PROJECT_PATHS_MAX, HOST_ATTACH_TITLE_MAX, HOST_ATTACH_URL_MAX, TITLE_MAX } from '../limits.ts';
 import { VIEWPORT_LAPTOP, VIEWPORT_PHONE } from '../design-json.ts';
 import { CHIP_PROVIDER_ID, type DesignChip, type DesignKind } from '../types.ts';
-import { clip, formatViewport, oneLine, rulesPathOf, type AgentContext, type ProjectRules } from './context.ts';
+import { clip, designFilePath, formatViewport, joinFolder, oneLine, rulesPathOf, systemOf, type AgentContext, type ProjectRules } from './context.ts';
 
 /** `new`: the design was just created. `continue`: it exists; the chat is (re)starting work on it. */
 export type ChipMode = 'new' | 'continue';
@@ -96,6 +96,42 @@ const filesStep = (kind: DesignKind): string =>
 const checkStep = (command: string): string =>
   `8. Before you say you are done, run ${command} . Fix every error it lists and open the PNGs it names to look at your work.${command.startsWith('"') ? ' (In PowerShell, put & in front.)' : ''}`;
 
+const PHASE_ZERO_ORDER = (context: AgentContext): string =>
+  `the user's words in this chat · the project's design rules (step 2) · style preset (${context.preset ? context.preset.name : 'none chosen'}) · this design's DESIGN.md + tokens.css once confirmed · the built-in rules in RULES.md.`;
+
+/** Step 3 (Phase 2.5 §8.2): the three variants in one line; no system or an old design reads exactly as before. */
+const precedenceStep = (context: AgentContext): string => {
+  const system = systemOf(context);
+  if (system.state === 'linked') {
+    const name = oneLine(system.name);
+    const overview = joinFolder(system.folder, 'OVERVIEW.md');
+    const extras = [
+      ...(system.repo === null ? [] : [`It lives in ${clip(system.repo, DIRECTORY_SHOWN_MAX)}; never write there from a design task.`]),
+      ...(system.complete ? [] : [`Its copy is missing ${system.missing.length === 0 ? 'some files' : system.missing.join(', ')}: tell the user; don't recreate it.`]),
+      ...(system.overviewEmpty ? ['The system has no overview yet.'] : []),
+    ];
+    return (
+      `3. Precedence, highest first. Never silently override a higher layer: the user's words in this chat · this design's design system "${name}" (read ${overview} first, every time; use only its tokens; never change ${system.folder}; link system.css before tokens.css) · the project's design rules (step 2), for anything the system doesn't cover · the built-in rules in RULES.md. No style preset applies.` +
+      (extras.length === 0 ? '' : ` ${extras.join(' ')}`)
+    );
+  }
+  const order = `3. Precedence, highest first. Never silently override a higher layer: ${PHASE_ZERO_ORDER(context)}`;
+  if (system.state !== 'ask') return order;
+  const choices = system.choices.map((choice) => `${oneLine(choice.name)} (${choice.id})`);
+  const recommended = system.choices.find((choice) => choice.id === system.recommended);
+  return (
+    `${order} Before the first screen, ask the user which design system to use: ${[...choices, 'or none'].join(', ')}.` +
+    `${recommended === undefined ? '' : ` I'd recommend ${oneLine(recommended.name)}.`} If the user already said in this chat, don't ask. ` +
+    `Record it in design.json as "systemChoice": "<id>" or "none", then wait until ${designFilePath(context.folder, 'system/COPY.json')} exists before you use the system.`
+  );
+};
+
+const ownedKeys = (context: AgentContext): string => {
+  const base = context.kind === 'canvas' ? 'title, updated, viewports, screens, designSystem' : 'title, updated, viewports, designSystem';
+  const state = systemOf(context).state;
+  return state === 'ask' || state === 'linked' ? `${base}, tweaks and systemChoice` : `${base} and tweaks`;
+};
+
 /** The chip core text. Always ≤ `CHIP_TEXT_HARD_MAX` (the brief is clipped to `BRIEF_MAX`, every path is clipped). */
 export const buildChipText = (context: AgentContext, mode: ChipMode): string => {
   const title = clip(oneLine(context.title), TITLE_MAX);
@@ -111,11 +147,11 @@ export const buildChipText = (context: AgentContext, mode: ChipMode): string => 
     `1. FIRST read, in full: ${rulesPathOf(context.folder)}`,
     '   It is part of this message: the complete design rules, the ask-when-unsure protocol and the design.json contract. Design nothing before you have read it.',
     `2. THEN look for the active project's own design rules before designing: ${projectStep(context.project)}`,
-    `3. Precedence, highest first. Never silently override a higher layer: the user's words in this chat · the project's design rules (step 2) · style preset (${context.preset ? context.preset.name : 'none chosen'}) · this design's DESIGN.md + tokens.css once confirmed · the built-in rules in RULES.md.`,
+    precedenceStep(context),
     `4. ${viewportStep(context, mode)}`,
     '5. Unsure about anything material? Ask first: ONE message with 3–6 short numbered questions, each with a bold recommended default, then wait for the answer. Do not ask what the project files already answer; skip the questions if the user said "go" or this is a small edit.',
     `6. ${filesStep(context.kind)}`,
-    `7. design.json: you own ${context.kind === 'canvas' ? 'title, updated, viewports, screens, designSystem and tweaks' : 'title, updated, viewports, designSystem and tweaks'}. Keep every other key exactly as it is, and set "updated" (ISO time) whenever you change the design. Full contract in RULES.md.`,
+    `7. design.json: you own ${ownedKeys(context)}. Keep every other key exactly as it is, and set "updated" (ISO time) whenever you change the design. Full contract in RULES.md.`,
     ...(context.checkCommand === null ? [] : [checkStep(context.checkCommand)]),
     'Your file tools may ask permission to write in your designs folder because it is outside the project; that is expected.',
   ];

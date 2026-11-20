@@ -246,6 +246,7 @@ export const PROMPT_EXTERNAL_SCAN_MS = 5000;
 // ---- Agent discovery: guide, skill, snippet ----
 
 export const GUIDE_TEXT_MAX = 8000;
+/** The old Settings-installed `design-chamber` skill only; the builder skill uses SYSTEM_SKILL_TEXT_MAX (Phase 2.5 rev 3). */
 export const SKILL_TEXT_MAX = 6000;
 export const SKILL_DESCRIPTION_MAX = 1024;
 export const AGENTS_SNIPPET_MAX = 1000;
@@ -396,3 +397,143 @@ export const PAGE_STATE_FLUSH_MS = 1000;
 export const PAGE_STATE_BATCH_MAX_CHARS = PAGE_STATE_MAX_CHARS;
 /** In-memory page-state cache across designs (least recently used dropped after a flush) [§8.2]. */
 export const PAGE_STATE_CACHE_MAX_BYTES = 33_554_432;
+
+// ---- Phase 2.5: design systems (documentation/specs/phase-2-5-technical.md §12) ----
+
+/** A system folder name under `_systems`; the id is minted from the name and never renamed. */
+export const SYSTEM_ID_PATTERN = SLUG_PATTERN;
+export const SYSTEMS_MAX = 50;
+export const SYSTEM_NAME_MAX = 60;
+/** Token declarations read from a system's tokens.css; the rest are named, not read. */
+export const SYSTEM_TOKENS_MAX = 2000;
+export const SYSTEM_TOKEN_NAME_PATTERN = /^--[A-Za-z0-9_-]{1,60}$/;
+/** Characters of one token value (the preview pattern already caps at 100). */
+export const SYSTEM_TOKEN_VALUE_MAX = 100;
+/** Type style, component, note, pattern and brand entry ids. */
+export const SYSTEM_ENTRY_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
+export const SYSTEM_COMPONENTS_MAX = 200;
+export const SYSTEM_TYPE_STYLES_MAX = 60;
+export const SYSTEM_NOTES_MAX = 50;
+export const SYSTEM_OVERVIEW_MAX = 4000;
+/** Characters of one note, pattern or brand body file. */
+export const SYSTEM_NOTE_MAX = 20_000;
+/** Characters of a usage note (token, type style, component, font, logo, pattern, brand). */
+export const SYSTEM_USAGE_NOTE_MAX = 500;
+export const SYSTEM_EXAMPLE_MAX = 20_000;
+export const SYSTEM_JSON_MAX_BYTES = 1_048_576;
+/** Files and bytes across a system's assets/ and sources/. */
+export const SYSTEM_FILES_MAX = 200;
+export const SYSTEM_BYTES_MAX = 100 * 1024 * 1024;
+export const SYSTEM_FONT_MAX_BYTES = 5 * 1024 * 1024;
+export const SYSTEM_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+export const SYSTEM_DOCUMENT_MAX_BYTES = 20 * 1024 * 1024;
+/** Quiet period before a non-user system change bumps the revision (= VERSION_QUIET_MS). */
+export const SYSTEM_QUIET_MS = 8000;
+/** Whole-file undo text cap for a token edit; over it the edit stands with undoable: false. */
+export const SYSTEM_UNDO_TEXT_MAX = 262_144;
+export const SYSTEM_EDITS_FILE_MAX_BYTES = 1_048_576;
+/** Base64 characters of one binary upload (28 000 000 chars = 21 MB decoded). */
+export const BINARY_UPLOAD_TOTAL_MAX = 28_000_000;
+export const BINARY_UPLOADS_OPEN_MAX = 2;
+
+// ---- Phase 2.5: code scans and the design's copy ----
+
+export const SCAN_ID_PATTERN = /^sc_[A-Za-z0-9_-]{16,40}$/;
+export const SCAN_DEPTH_MAX = 8;
+export const SCAN_ENTRIES_MAX = 20_000;
+export const SCAN_TIME_MS = 10_000;
+export const SCAN_FILE_MAX_BYTES = 1_000_000;
+export const SCAN_CANDIDATES_MAX = 200;
+export const SCANS_RUNNING_MAX = 2;
+export const SCANS_KEPT_MAX = 4;
+export const SCAN_TTL_MS = 10 * 60_000;
+/** `<design>/system/COPY.json` larger than this reads as invalid. */
+export const COPY_RECORD_MAX_BYTES = 65_536;
+/** Characters of a `systemChoiceProblem.value` (the raw agent value, shown as text). */
+export const SYSTEM_CHOICE_VALUE_MAX = 80;
+
+// ---- Phase 2.5: folders (G1) ----
+
+export const FOLDER_ID_PATTERN = /^f_[a-z0-9]{10}$/;
+export const FOLDERS_MAX = 50;
+export const FOLDER_NAME_MAX = 40;
+export const FOLDER_DESIGNS_MAX = 2000;
+/** Undo window for a soft-deleted folder. */
+export const FOLDER_UNDO_MS = 60 * 60_000;
+
+// ---- Phase 2.5: settings pins, board preview and entries ----
+
+export const SYSTEM_PINS_MAX = 50;
+/** `set-tokens` vars per message (the board preview; the page is the only sender). */
+export const TOKEN_PREVIEW_VARS_MAX = 512;
+/** A custom property name the board preview may set (a superset of TWEAK_VAR_PATTERN). */
+export const TOKEN_PREVIEW_NAME_PATTERN = /^--[A-Za-z0-9_-]{1,80}$/;
+/** Characters of one board entry key (`data-dc-entry`). */
+export const BOARD_ENTRY_MAX = 120;
+
+// ---- Phase 2.5 S8: building systems with the agent ----
+
+export const SYSTEM_BUILD_TICKET_PATTERN = /^sb_[a-z0-9]{12}$/;
+export const SYSTEM_BUILDS_MAX = 20;
+export const SYSTEM_BUILD_TTL_MS = 7 * 86_400_000;
+export const SYSTEM_BUILD_JSON_MAX_BYTES = 65_536;
+export const SYSTEM_BUILD_CALLS_MAX = 20;
+/** Characters of a `buildProblem.value` (the raw agent value, shown as text; §2.5). */
+export const BUILD_PROBLEM_VALUE_MAX = 80;
+/** A repo-relative path: up to 5 segments, each 1..64 chars, no dot-only segment. */
+export const REPO_REL_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}(\/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){0,4}$/;
+export const SYSTEM_PATTERNS_MAX = 100;
+export const SYSTEM_BRAND_MAX = 100;
+/** The staged living page, in UTF-8 bytes (encoded assets included). */
+export const LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
+/** One font or logo embedded into the living page. */
+export const LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
+export const LIVING_PAGE_OMITTED_MAX = 50;
+/** rev 3: PNG examples (S8's 1 is superseded). */
+export const LIVING_PAGE_GENERATOR_VERSION = 2;
+export const LIVING_PAGE_MARK_NAME = 'dc-living-page';
+/** `.chamber/scan.json`, the build scan's certain values for the agent. */
+export const SCAN_JSON_MAX_BYTES = 2 * 1024 * 1024;
+export const SNAPSHOT_SKIPPED_MAX = 50;
+export const CODE_DRIFT_NAMES_MAX = 20;
+/** The rail build chip polls GET /system-builds/:ticket this often while visible. */
+export const SYSTEM_BUILD_POLL_MS = 3000;
+/** Header budget of the ticket's builder-rules file, on top of SYSTEM_SKILL_TEXT_MAX (§2.12). */
+export const SYSTEM_BUILD_HEADER_MAX = 1000;
+
+// ---- Phase 2.5 rev 3: the builder skill, proposals, SystemAsk, PNG examples ----
+
+/** The design-system-builder skill text; the ticket file adds SYSTEM_BUILD_HEADER_MAX. */
+export const SYSTEM_SKILL_TEXT_MAX = 24_000;
+/** SP-3 fallback only: both skills merged into one file when the host refuses two. */
+export const SKILL_TEXT_MAX_MERGED = 48_000;
+export const SYSTEM_PROPOSAL_ID_PATTERN = /^p_[a-z0-9]{8,16}$/;
+export const SYSTEM_PROPOSAL_MAX_BYTES = 524_288;
+export const SYSTEM_PROPOSAL_FILES_MAX = 200;
+/** Patch characters per file, and across the whole proposal. */
+export const SYSTEM_PROPOSAL_PATCH_MAX = 20_000;
+export const SYSTEM_PROPOSAL_PATCHES_MAX = 400_000;
+export const SYSTEM_PROPOSALS_KEPT = 50;
+/** A proposal file path: REPO_REL_PATTERN with up to 8 segments. */
+export const REPO_PATH_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}(\/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){0,7}$/;
+/** Undo window for a stopped build (in memory; a restart forgets it). */
+export const SYSTEM_STOP_UNDO_MS = 600_000;
+export const SYSTEM_STOP_UNDO_PATTERN = /^su_[a-z0-9]{12}$/;
+/** The SystemAsk block refetches its route this often while visible and unanswered. */
+export const SYSTEM_ASK_POLL_MS = 5000;
+/** Round-two calls the block shows; each why ≤ SYSTEM_ASK_WHY_MAX, proposed ≤ SYSTEM_ASK_PROPOSED_MAX. */
+export const SYSTEM_ASK_CALLS_MAX = 8;
+export const SYSTEM_ASK_WHY_MAX = 300;
+export const SYSTEM_ASK_PROPOSED_MAX = 200;
+/** The skill waits this long after an apply for the staged page's forApplied before asking. */
+export const LIVING_PAGE_FORAPPLIED_WAIT_MS = 30_000;
+/** Example PNG shots: CSS px width, device scale, clamped content height. */
+export const LIVING_EXAMPLE_WIDTH = 720;
+export const LIVING_EXAMPLE_SCALE = 2;
+export const LIVING_EXAMPLE_HEIGHT_MAX = 1200;
+export const LIVING_EXAMPLE_PNG_MAX_BYTES = 1_048_576;
+export const LIVING_EXAMPLE_TIMEOUT_MS = 5000;
+export const LIVING_EXAMPLES_BUDGET_MS = 60_000;
+export const LIVING_EXAMPLES_CACHE_MAX = 800;
+/** Secret-shape hits recorded per page (kind and entry key, never the value). */
+export const SECRET_SHAPES_MAX = 10;

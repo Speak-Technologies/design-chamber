@@ -23,7 +23,7 @@ import { viewportLabel, viewportSize, zoomPercent } from '../model/format.ts';
 import { readDirectionViewports } from '../model/directions-model.ts';
 import { createListeners } from '../model/listeners.ts';
 import { ASK_FOR_TWEAKS_TEXT, TWEAKS_SUBTITLE, TWEAKS_TITLE, tweaksSheetVariant } from '../model/tweaks-model.ts';
-import { viewerMenuEntries } from '../model/viewer-menu.ts';
+import { NARROW_RAIL_QUERY, viewerMenuEntries } from '../model/viewer-menu.ts';
 import { viewingBanner } from '../model/versions-model.ts';
 import { pageViewOptions, remoteBannerHidden, remoteNotice, resolvePageView, shortUrl } from '../model/wall-model.ts';
 import * as askBar from './feature-ask-bar.ts';
@@ -35,6 +35,7 @@ import * as editText from './feature-edit-text.ts';
 import * as findability from './feature-findability.ts';
 import { createPageData } from './feature-page-state.ts';
 import * as screens from './feature-screens.ts';
+import * as system from './feature-system.ts';
 import * as tweaks from './feature-tweaks.ts';
 import type { DrawerContent, DrawerKind, FeatureMount, ViewContext } from './view-context.ts';
 import type { DirectionKeepPress } from './wall-types.ts';
@@ -158,6 +159,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       bottomDock: h('div', { class: 'dc-bottom-dock' }),
       compactActions: h('div', { class: 'dc-compact-actions' }),
       tweaksSlot: h('span', { class: 'dc-tweaks-slot' }),
+      railTools: h('span', { class: 'dc-rail-tools' }),
     };
     // Set once the drawers exist; on a narrow page the dock is laid over the wall (styles.css).
     let dockEl: HTMLElement | null = null;
@@ -334,13 +336,30 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     const ref = () => ({ slug, title: design().title, kind: design().kind, sessionId: design().sessionId });
     const rename = (): void => renameDialog(options.actions.host, ref());
 
+    /** The Tweaks icon button's own name ("Tweaks" or "Tweaks, unsaved changes") while the rail is too narrow to show it; null otherwise. */
+    const railTweaksLabel = (): string | null => {
+      if (!compact || !window.matchMedia(NARROW_RAIL_QUERY).matches) return null;
+      const button = slots.compactActions.querySelector<HTMLElement>('.dc-tweaks-btn');
+      return button && !button.hidden ? (button.getAttribute('aria-label') ?? 'Tweaks') : null;
+    };
+
     const moreEntries = (): MenuEntry[] =>
-      viewerMenuEntries({ compact, isPage, copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX, askForTweaks: design().tweaks.length === 0 && viewing === null, pageData: pageData.entry() });
+      viewerMenuEntries({
+        compact,
+        isPage,
+        copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX,
+        askForTweaks: design().tweaks.length === 0 && viewing === null,
+        railTweaks: railTweaksLabel(),
+        pageData: pageData.entry(),
+      });
 
     const onMore = (id: string): void => {
       switch (id) {
         case 'chat':
           void continueInChat(slug);
+          return;
+        case 'tweaks':
+          toggleDrawer('tweaks');
           return;
         case 'ask-tweaks': {
           // Words for the ask bar, not sent: the user adds what they want and presses Send.
@@ -431,8 +450,8 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         h('div', { class: 'dc-toolbar-row' }, iconBtn({ icon: 'back', label: 'Back to designs', onClick: options.onBack }), titleText, slots.compactActions, moreButton),
         // A page never pans or zooms, so its second row has no zoom group.
         isPage
-          ? h('div', { class: 'dc-toolbar-row dc-toolbar-tools' }, viewportHost, commentMode.el)
-          : h('div', { class: 'dc-toolbar-row dc-toolbar-tools' }, modeHost, h('span', { class: 'dc-spacer' }), zoomGroup),
+          ? h('div', { class: 'dc-toolbar-row dc-toolbar-tools' }, viewportHost, commentMode.el, slots.railTools)
+          : h('div', { class: 'dc-toolbar-row dc-toolbar-tools' }, modeHost, slots.railTools, zoomGroup),
       );
     } else if (isPage) {
       toolbar = h(
@@ -802,6 +821,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       mountFeature('ask bar', askBar.mount),
       mountFeature('findability', findability.mount),
       mountFeature('checks badge', checks.mount),
+      mountFeature('design system', system.mount),
       // After the build strip and the ask bar: it reads the strip's phase and hands the ask bar an element.
       mountFeature('edit text', editText.mount),
       // Also after the build strip (it reads the strip's phase for the menu's hint) and after Edit text (they share one undo slot).

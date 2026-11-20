@@ -57,6 +57,7 @@ const NEW_ROUTES: [string, { method?: string; body?: unknown }][] = [
   ['/mentions/resolve', { body: { id: 'pricing' } }],
   ['/status/designs?directory=%2Fhome%2Fyou%2Fshop&session=ses_1', {}],
   ['/open-request', { body: { slug: 'pricing' } }],
+  ['/open-request', { method: 'DELETE' }],
   ['/agent/skill', { method: 'DELETE' }],
 ];
 

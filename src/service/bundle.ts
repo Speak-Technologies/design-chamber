@@ -22,6 +22,7 @@ import path from 'node:path';
 import { BRIDGE_PLACEHOLDER } from '../shared/bridge-protocol.ts';
 import { BUNDLE_CSS_DEPTH_MAX, BUNDLE_REFS_MAX, RENDER_DOC_MAX_BYTES } from '../shared/limits.ts';
 import type { DesignWarning } from '../shared/types.ts';
+import { findRawTextEnd, parseTagAt, RAW_TEXT_TAGS, WS, type Tag } from './html-tags.ts';
 import { ApiError } from './http.ts';
 import { isStrictlyInside, resolveInside } from './paths.ts';
 
@@ -178,73 +179,6 @@ export const classifyRef = (rawRef: string, baseRelDir: string, designDir: strin
 
 // ---- tolerant HTML tokenizer ----
 
-type Attr = { name: string; value: string | null; raw: string; replaced?: string };
-type Tag = { name: string; lower: string; attrs: Attr[]; end: number; selfClosing: boolean };
-
-const RAW_TEXT_TAGS = new Set(['script', 'style', 'title', 'textarea']);
-const WS = new Set([' ', '\t', '\n', '\r', '\f']);
-
-const parseTagAt = (text: string, lt: number): Tag | null => {
-  const nameMatch = /^[A-Za-z][^\s/>]*/.exec(text.slice(lt + 1, lt + 128));
-  if (!nameMatch) return null;
-  const name = nameMatch[0];
-  const attrs: Attr[] = [];
-  let i = lt + 1 + name.length;
-  let selfClosing = false;
-  for (;;) {
-    while (i < text.length && WS.has(text[i] ?? '')) i += 1;
-    const c = text[i];
-    if (c === undefined) {
-      // Unterminated tag at EOF: the rest of the file is the tag (tolerant, like a browser).
-      return { name, lower: name.toLowerCase(), attrs, end: text.length, selfClosing: false };
-    }
-    if (c === '>') {
-      i += 1;
-      break;
-    }
-    if (c === '/' && text[i + 1] === '>') {
-      selfClosing = true;
-      i += 2;
-      break;
-    }
-    if (c === '/') {
-      // Stray slash inside a tag (`<div / >`): skip it.
-      i += 1;
-      continue;
-    }
-    const attrStart = i;
-    while (i < text.length && !WS.has(text[i] ?? '') && text[i] !== '=' && text[i] !== '>' && !(text[i] === '/' && text[i + 1] === '>')) i += 1;
-    const attrName = text.slice(attrStart, i);
-    if (attrName === '') {
-      // Guarantees termination: always make progress.
-      i += 1;
-      continue;
-    }
-    let j = i;
-    while (j < text.length && WS.has(text[j] ?? '')) j += 1;
-    let value: string | null = null;
-    if (text[j] === '=') {
-      j += 1;
-      while (j < text.length && WS.has(text[j] ?? '')) j += 1;
-      const quote = text[j];
-      if (quote === '"' || quote === "'") {
-        const close = text.indexOf(quote, j + 1);
-        value = text.slice(j + 1, close === -1 ? text.length : close);
-        i = close === -1 ? text.length : close + 1;
-      } else {
-        const valueStart = j;
-        while (j < text.length && !WS.has(text[j] ?? '') && text[j] !== '>') j += 1;
-        value = text.slice(valueStart, j);
-        i = j;
-      }
-    } else {
-      i = attrStart + attrName.length;
-    }
-    attrs.push({ name: attrName.toLowerCase(), value, raw: text.slice(attrStart, i) });
-  }
-  return { name, lower: name.toLowerCase(), attrs, end: i, selfClosing };
-};
-
 const escapeAttr = (value: string): string => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 
 const serializeTag = (tag: Tag, drop: ReadonlySet<string> = new Set()): string => {
@@ -254,14 +188,6 @@ const serializeTag = (tag: Tag, drop: ReadonlySet<string> = new Set()): string =
     out += attr.replaced !== undefined ? ` ${attr.name}="${escapeAttr(attr.replaced)}"` : ` ${attr.raw}`;
   }
   return out + (tag.selfClosing ? ' />' : '>');
-};
-
-/** End of a raw-text element's content: the first `</name` a browser would honour. */
-const findRawTextEnd = (text: string, from: number, tag: string): number => {
-  const re = new RegExp(`</${tag}(?=[\\s>/]|$)`, 'gi');
-  re.lastIndex = from;
-  const match = re.exec(text);
-  return match ? match.index : text.length;
 };
 
 /** `</script` inside inlined JS would end the element early in a browser; `<\/script` is the standard escape (case preserved). */

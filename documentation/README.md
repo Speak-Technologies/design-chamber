@@ -9,6 +9,11 @@ fix the doc and note what drifted.
 |---|---|---|
 | [Rail panel](pages/rail-panel.md) | the Design Chamber icon in OpenChamber's rail (`panel` surface) | The navigator in OpenChamber's rail: browse designs, compact viewer, settings. |
 | [Full-screen page](pages/full-screen-page.md) | OpenChamber sidebar → Extension pages → Design Chamber (`page` surface) | The library, the canvas wall and the page viewer. |
+| [Library: projects and folders](pages/library.md) | the page's designs list | The sidebar that groups designs by project and by your own folders, drag to add, delete with Undo. |
+| [Rail: projects and folders](pages/rail.md) | the rail's designs list | The Show select with the same groups, Add to folder and folder actions. |
+| [Design systems](pages/design-systems.md) | the page's Library toolbar and the rail's header → Design systems | The list of design systems (badges, states, row menu) and the New design system sheet: from code, brand files or a description. |
+| [Viewer: a design's system](pages/viewer.md) | the chip in a design's header | The system chip, popover, update banner and sheet, Change…, Undo and the agent switch notice. |
+| [Settings: Design systems](pages/settings.md) | Settings → Design systems, and the New design dialog | The default and per-project pins, and the dialog's Design system field. |
 
 ## Features
 | Feature | One-liner | Pages involved |
@@ -25,4 +30,12 @@ fix the doc and note what drifted.
 | [Edit on the canvas](features/edit-on-canvas.md) | The rules every hand edit follows: only the user writes, a version first, refused when the file changed, smallest change, Undo, and what the agent is told. | Rail panel, Full-screen page |
 | [Screens and directions](features/screens-and-directions.md) | Grow and shape a canvas: the "+ Screen" board, the screen menu (Duplicate, Move up/down, Move to trash), drag reorder, and direction rows with Keep this one. | Rail panel, Full-screen page |
 | [Saved page data](features/saved-page-data.md) | Designs that remember ticks, toggles and filters (`localStorage`, 1 MB per design, shared by every screen): where it lives, what Clear does, the notices. | Rail panel, Full-screen page |
+| [Projects and folders](features/projects-and-folders.md) | Group designs by project (automatic) and by hand-made folders (a design may sit in several); a registry in the designs folder, never a move on disk; delete with Undo; damaged-file recovery. | Full-screen page (Library), Rail panel |
+| [Design systems](features/design-systems.md) | What a design system is, where it lives, how the New design system sheet makes one (create, add brand files, ask the agent), and what the list shows. | Full-screen page, Rail panel |
+| [Design system brand files](features/design-system-brand-files.md) | Fonts, logos and source documents added to a design system by picking, dropping or naming a folder: accepted types checked by content, size limits, safe names, what system.json records. | Full-screen page (design systems) |
+| [Design system hand edits](features/design-system-hand-edits.md) | Saving a token, metadata or text change to a design system by hand: what can change, the value check, version first, refused when changed, Undo, what the agent is told. | Full-screen page (design systems) |
+| [Design system re-sync](features/design-system-resync.md) | Bringing a system's token values up to date with the code it was made from: the review lists, what Apply changes and keeps, stale and folder refusals, "Before re-sync" and Undo. | Full-screen page (design systems) |
+| [Design system homes and adoption](features/design-system-homes.md) | Internal and repo-backed systems: how the agent's BUILD.json is checked and adopted (every refusal reason), when the home can still change, the applied stamp, the read-only refusals and Show in folder for a system. | Full-screen page (design systems) |
+| [Design system proposals](features/design-system-proposals.md) | What the agent proposes before it changes a repo-backed system: PROPOSAL.json and its limits, the checks against the build, the preview, approval bound to the bytes shown, Stop, and the compare of what landed. | Full-screen page (design systems) |
+| [Design system coverage](features/design-system-coverage.md) | The four areas a design system covers (Foundations, Components, Patterns & voice, Brand & marketing), the patterns and brand entries, where logos show, and what "Not covered by this system." means for the board and review. | Full-screen page (design systems) |
 | [Tweaks](features/tweaks.md) | Knobs the agent declares in design.json, read from and saved into tokens.css: which declaration a knob uses, why one can't be tuned, what Save writes. | Rail panel, Full-screen page |

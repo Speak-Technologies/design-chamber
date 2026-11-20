@@ -122,6 +122,12 @@ export type DesignJson = {
   designSystem: DesignSystemStatus;
   /** Tweaks knobs for the panel (Phase 2 §4.1); `[]` when absent. */
   tweaks: Tweak[];
+  /**
+   * The agent's recorded design-system choice (Phase 2.5 §2.7): a system id or `"none"`.
+   * Agent-owned; the service never writes it. Absent on old designs and until the agent
+   * records an answer; an invalid value is dropped with an `invalid-system-choice` warning.
+   */
+  systemChoice?: string;
   comments: Comment[];
 };
 
@@ -142,15 +148,33 @@ export type ServiceOwnedField =
  * rename; `screens` is shared — the service writes it for the user's screen actions and the
  * agent's later write wins (Phase 2 §5.1).
  */
-export type AgentOwnedField = 'title' | 'updated' | 'viewports' | 'screens' | 'designSystem' | 'tweaks';
+export type AgentOwnedField = 'title' | 'updated' | 'viewports' | 'screens' | 'designSystem' | 'tweaks' | 'systemChoice';
 
 /**
  * `.chamber/state.json` — authoritative service-owned fields [§6.3].
  * `provisional: true` marks a state seeded from files before the agent's design.json
  * landed; it is adopted from design.json once that parses, and is never mirrored into
  * design.json. Absent = final.
+ *
+ * The Phase 2.5 system fields (§2.7) are service-owned too: never mirrored into
+ * design.json, never adopted from it, never versioned.
  */
-export type ServiceState = Pick<DesignJson, Exclude<ServiceOwnedField, 'version'>> & { version: 1; provisional?: true };
+export type ServiceState = Pick<DesignJson, Exclude<ServiceOwnedField, 'version'>> & {
+  version: 1;
+  provisional?: true;
+  /** The design's system decision: `ask` until answered, `none` or `system` after a link action. */
+  systemDecision?: 'ask' | 'none' | 'system';
+  /** The last design.json `systemChoice` value the service acted on (an id or `"none"`). */
+  systemChoiceSeen?: string;
+  /** Why the agent's recorded choice could not be acted on. */
+  systemChoiceProblem?: SystemChoiceProblem;
+};
+
+/** A `systemChoice` the service could not act on (Phase 2.5 §2.7); `value` is the raw agent text, ≤ 80 chars. */
+export type SystemChoiceProblem = {
+  value: string;
+  reason: 'unknown' | 'draft' | 'being-changed' | 'too-large' | 'failed';
+};
 
 /** One problem found while reading agent-written data. Never fatal. */
 export type DesignWarning = {
@@ -164,8 +188,14 @@ export type DesignWarning = {
 
 // ---- .versions/ [§6.4] ----
 
-/** `manual` is the user's "Snapshot now" (SPEC §14 "WP0 deviations"); `user-edit` and `keep-direction` are the hand-edit versions (Phase 2 §2.1). */
-export type VersionReason = 'auto' | 'turn' | 'manual' | 'restore-point' | 'restored' | 'user-edit' | 'keep-direction';
+/**
+ * `manual` is the user's "Snapshot now" (SPEC §14 "WP0 deviations"); `user-edit` and `keep-direction` are the hand-edit versions (Phase 2 §2.1).
+ * Phase 2.5: `resync` ("Before re-sync"), `system-change` / `system-update` (a design's copy-on-link / update, §5.4),
+ * `repo-read` ("Before reading shop", an agent-triggered snapshot refresh, §5.2).
+ */
+export type VersionReason =
+  | 'auto' | 'turn' | 'manual' | 'restore-point' | 'restored' | 'user-edit' | 'keep-direction'
+  | 'resync' | 'system-change' | 'system-update' | 'repo-read';
 
 export type VersionEntry = {
   /** `v<n>`. */
@@ -212,7 +242,14 @@ export type HandEdit = HandEditBase & (
   | { kind: 'duplicate'; screen: string; copy: string; file: string }
   | { kind: 'trash'; screen: string; file: string }
   | { kind: 'keep'; screen: string; letter: DirectionLetter | null; name: string | null }
-  | { kind: 'undo'; of: string });
+  | { kind: 'undo'; of: string }
+  // Phase 2.5 §6.2: a system's hand edits (its own `.chamber/edits.json` ledger).
+  | { kind: 'system-token'; name: string; mode: 'light' | 'dark'; before: string; after: string }
+  | { kind: 'system-token-add'; name: string }
+  | { kind: 'system-token-remove'; name: string }
+  /** `what` names the changed thing, e.g. "the note of --brand-500", ≤ 80 chars. */
+  | { kind: 'system-meta'; what: string }
+  | { kind: 'system-text'; file: string });
 
 // ---- Settings [§6.5] ----
 
@@ -224,7 +261,22 @@ export type SettingsFile = {
   previousRoots?: string[];
   chromePath?: string;
   downloadsDir?: string;
+  /** Phase 2.5 §2.9 (AD-11): the default design system; absent = ask. */
+  systemDefault?: SystemDefaultSetting;
+  /** Phase 2.5 §2.9: per-project pins, ≤ `SYSTEM_PINS_MAX`, first wins per `sameDirectory`. */
+  systemPins?: SystemPinSetting[];
 };
+
+/** The default system choice for new designs (§2.9); a system is named by id, resolved against the current root. */
+export type SystemDefaultSetting = { choice: 'ask' } | { choice: 'none' } | { choice: 'system'; id: string; name: string };
+
+/** A project pin (§2.9): `default` follows the default, `none` never links, `system` names one. */
+export type SystemPinSetting = { directory: string; choice: 'default' | 'none' | 'system'; id?: string; name?: string };
+
+/** Whether a setting's system still resolves in this root (§3.4); `sentence` says why when not ok. */
+export type SystemSettingState = 'ok' | 'draft' | 'missing' | 'deleted';
+export type SystemChoiceView = SystemDefaultSetting & { state: SystemSettingState; sentence: string | null };
+export type SystemPinView = SystemPinSetting & { state: SystemSettingState; sentence: string | null };
 
 export type BrowserSource = 'setting' | 'detected' | 'none';
 
@@ -235,19 +287,30 @@ export type BrowserSource = 'setting' | 'detected' | 'none';
  * `open`: a status or block frame asked the rail to open this design (`POST /open-request`).
  * `activity`: the linked agent's turn state for this design changed (session events).
  * `page-state`: the design's saved page data changed (Phase 2 §8.2; no data in the event).
+ * `system`: a design system changed (Phase 2.5 §3.4; `slug` null, `system` + `systemChange` set).
+ * `folders`: the folder registry changed (Phase 2.5 G1; `slug` null).
  * None of these but `page-state` changes design data.
  */
-export type ChangeKind = 'added' | 'removed' | 'design' | 'files' | 'thumb' | 'versions' | 'comments' | 'root' | 'loose' | 'checks' | 'open' | 'activity' | 'page-state';
+export type ChangeKind =
+  | 'added' | 'removed' | 'design' | 'files' | 'thumb' | 'versions' | 'comments' | 'root' | 'loose' | 'checks' | 'open' | 'activity' | 'page-state'
+  | 'system' | 'folders';
+
+/** What changed on a system (Phase 2.5 §3.4, §3.5); `build` = BUILD.json adoption or problem, `proposal` = a new, superseded, rewritten or approved proposal, or a new preview. */
+export type SystemChangeKind = 'added' | 'removed' | 'files' | 'state' | 'versions' | 'checks' | 'build' | 'living-page' | 'proposal';
 
 export type ChangeEvent = {
   seq: number;
-  /** `null` for root-wide events (`root`, `loose`). */
+  /** `null` for root-wide events (`root`, `loose`, `system`, `folders`). */
   slug: string | null;
   kind: ChangeKind;
   /** Relative paths inside the design (`/` separators) for `files` events. */
   files?: string[];
   /** Set only on events the edit pipeline emits for the user's own writes (Phase 2 §2.6); absent on watcher events. */
   origin?: 'user';
+  /** `system` events only: the system id (`SYSTEM_ID_PATTERN`). */
+  system?: string;
+  /** `system` events only: what changed. */
+  systemChange?: SystemChangeKind;
 };
 
 // ---- Summaries and records [§7] ----
@@ -270,6 +333,21 @@ export type DesignSummary = {
   openComments: number;
   thumb: { state: ThumbState; key: string | null };
   warnings: DesignWarning[];
+  /**
+   * Phase 2.5 §2.7: the system this design's copy names, from `system/COPY.json` and the systems
+   * index; null when it has none. Optional until T7 fills it (absent reads as null).
+   */
+  system?: DesignSystemSummary | null;
+};
+
+/** A design's linked system as the list shows it (§2.7). */
+export type DesignSystemSummary = {
+  id: string;
+  name: string;
+  revision: number;
+  state: 'ok' | 'draft' | 'deleted';
+  /** state ok, the system Ready, and its revision newer than the copy's. */
+  updateAvailable: boolean;
 };
 
 export type FileStatus = { exists: boolean; size: number; mtime: IsoDate | null };
@@ -349,7 +427,40 @@ export type CheckCode =
   | 'token-redefined'
   | 'token-hardcoded'
   | 'tweak-broken'
-  | 'check-partial';
+  | 'check-partial'
+  // Phase 2.5: a design against its linked system (§10.1)
+  | 'system-drift'
+  | 'system-copy-missing'
+  | 'system-copy-invalid'
+  | 'system-choice'
+  // Phase 2.5: checking a system (§10.3)
+  | 'system-unreadable'
+  | 'system-entry-invalid'
+  | 'system-value-invalid'
+  | 'system-font-missing'
+  | 'system-overview-empty'
+  | 'system-overview-long'
+  | 'system-note-long'
+  | 'system-example-remote'
+  | 'system-token-undefined'
+  | 'system-token-cap'
+  // Phase 2.5 S8: the repo-backed system (§10.4)
+  | 'system-living-missing'
+  | 'system-living-stale'
+  | 'system-living-changed'
+  | 'system-living-unsafe'
+  | 'system-living-failed'
+  | 'system-repo-unreadable'
+  | 'system-snapshot-changed'
+  | 'system-code-drift'
+  | 'system-code-differs'
+  | 'system-build-invalid'
+  | 'system-coverage-empty'
+  // Phase 2.5 rev 3 (§10.4)
+  | 'system-living-reformatted'
+  | 'system-living-secret'
+  | 'system-landed-differs'
+  | 'system-proposal-invalid';
 
 export type CheckSeverity = 'error' | 'warning' | 'info';
 
@@ -367,6 +478,34 @@ export type CheckParams = {
   reason?: 'limit' | 'budget' | 'failures';
   /** `tweak-broken` only: why the knob cannot be tuned (Phase 2 technical design §4.7). */
   tweak?: 'missing' | 'formula' | 'unit' | 'no-tokens';
+  /** Phase 2.5: the design system's name (≤ `SYSTEM_NAME_MAX`), for the sentences that name it. */
+  system?: string;
+  /** Phase 2.5 S8: the repo folder's base name, for the sentences that name it. */
+  repo?: string;
+  /** Phase 2.5: the raw `systemChoice` value a `system-choice` finding quotes (≤ 80 chars). */
+  value?: string;
+  /** Phase 2.5: the system's current revision. */
+  revision?: number;
+  /** Phase 2.5: the revision a living page or copy was generated from. */
+  from?: number;
+  /** Phase 2.5 S8: token files the scan could not read (their names travel in `detail`). */
+  unread?: number;
+  /** `system-coverage-empty` only. */
+  area?: SystemArea;
+  /** `system-living-secret` only: the shape found, never the value. */
+  kind?: SecretShapeKind;
+  /** `system-living-secret` only: who may open the page; `dev` lowers the severity to warning. */
+  access?: 'dev' | 'public';
+  /** `system-landed-differs` only: the part the agent stamped but Design Chamber did not find. */
+  part?: ProposalPartName;
+  /** `system-choice` only: why the recorded choice was not accepted. */
+  choice?: 'unknown' | 'draft';
+  /** `system-living-failed` only: why the page could not be generated. */
+  failed?: 'too-large' | 'bundle' | 'unsafe' | 'no-snapshot' | 'secret';
+  /** `system-build-invalid` only: the closed reason from §5.9. */
+  build?: BuildProblemReason;
+  /** `system-proposal-invalid` only: the closed reason from §5.14. */
+  proposal?: ProposalProblemReason;
 };
 
 /** A finding as `check.json` stores it. `detail` and `selector` are untrusted design text. */
@@ -427,26 +566,38 @@ export type CheckReport = {
 
 export const CHIP_PROVIDER_ID = 'design-chamber';
 
-/** Data stored on our chip; the host hands it back as `ready.item.data` [§10]. */
-export type ChipData = { slug: string; kind: DesignKind };
+/**
+ * Data stored on our chip; the host hands it back as `ready.item.data` [§10].
+ * Phase 2.5 §3.4: a design chip carries `{ slug, kind }` (id `design:<slug>`), a system chip
+ * `{ system: id }` (id `system:<id>`), a build chip `{ build: ticket }` (id `system-build:<ticket>`).
+ */
+export type ChipData = DesignChipData | SystemChipData | BuildChipData;
+export type DesignChipData = { slug: string; kind: DesignKind };
+export type SystemChipData = { system: string };
+export type BuildChipData = { build: string };
 
 /**
  * Our attach chip. Structurally an SDK `AttachIssueRequest`
- * (`id = "design:<slug>"`, `url = file URL of the folder or ""`).
+ * (`id = "design:<slug>"`, `url = file URL of the folder or ""`). `D` narrows the data to
+ * one chip kind: `DesignChip` for designs, `Chip<SystemChipData>` / `Chip<BuildChipData>` for systems.
  */
-export type DesignChip = {
+export type Chip<D extends ChipData = ChipData> = {
   providerId: typeof CHIP_PROVIDER_ID;
   id: string;
   title: string;
   url: string;
   text: string;
-  data: ChipData;
+  data: D;
 };
+
+export type DesignChip = Chip<DesignChipData>;
 
 /** One pending "send comments" delivery for a session that is not selected [§10.4]. */
 export type Outbox = {
   sessionId: string;
   slug: string;
+  /** Phase 2.5 §3.4: a delivery for a system's chat names the system id (T9 fills it; absent for designs). */
+  system?: string;
   text: string;
   commentIds: string[];
   version: number | null;
@@ -458,3 +609,449 @@ export type Preset = { id: string; name: string; bestFor: string };
 // ---- Export [§9.5] ----
 
 export type ExportFormat = 'zip' | 'html';
+
+// ---- Phase 2.5: design systems (documentation/specs/phase-2-5-technical.md §2, §4) ----
+
+/** The board's sections; `patterns` and `brand` are S8 (AD-22). */
+export type SystemSection =
+  | 'overview' | 'colours' | 'typography' | 'spacing' | 'radius' | 'shadows' | 'layers' | 'sizes'
+  | 'components' | 'patterns' | 'brand' | 'assets';
+
+/** The sections a token can belong to (`other` shows at the end of Sizes). */
+export type TokenSection = Exclude<SystemSection, 'overview' | 'components' | 'patterns' | 'brand' | 'assets'> | 'other';
+
+/** The four coverage areas (S8, AD-22); sections group under them. */
+export type SystemArea = 'foundations' | 'components' | 'patterns' | 'brand';
+
+export type ReviewState = 'not-reviewed' | 'looks-good' | 'needs-work';
+
+export type ColourGroup = 'brand' | 'surface' | 'text' | 'border' | 'status' | 'data' | 'other';
+
+/** One token value as the panel and board show it; `problem` says why it is not editable. */
+export type TokenValue = { text: string; editable: 'ok' | 'formula' | 'unreadable'; problem: string | null };
+
+export type SystemToken = {
+  name: string;
+  section: TokenSection;
+  group: ColourGroup | null;
+  light: TokenValue | null;
+  dark: TokenValue | null;
+  note: string;
+  breakpoint: boolean;
+  /** Other contexts the name is also set in, ≤ 3 labels. */
+  alsoSet: string[];
+  /** The value came from the project's code (provenance recorded for re-sync). */
+  fromCode: boolean;
+  problem: string | null;
+};
+
+/** One type style; every value is text checked with `validateTokenValue` (a `var(--x)` reads as a formula). */
+export type TypeStyle = {
+  id: string;
+  name: string;
+  family: string;
+  size: string;
+  weight: string;
+  lineHeight: string;
+  letterSpacing: string;
+  case: 'none' | 'upper' | 'lower' | 'title';
+  note: string;
+};
+
+export type FontAsset = { file: string; family: string; weight: number; style: 'normal' | 'italic' };
+export type LogoAsset = { file: string; variant: string; note: string };
+
+export type SystemComponent = {
+  id: string;
+  name: string;
+  purpose: string;
+  note: string;
+  variants: string[];
+  states: string[];
+  /** Token names the component uses. */
+  tokens: string[];
+  /** Where it lives in the code, shown as text only (never resolved, never opened). */
+  source: string | null;
+  /** The example's remote refs, found while bundling; null when the component has no example. */
+  example: { remote: string[] } | null;
+  /** Named tokens the system does not define. */
+  undefinedTokens: string[];
+};
+
+/** A Patterns & voice or Brand & marketing entry; `text` is the body file, shown as text, never markup. */
+export type SystemEntryText = { id: string; kind: string; title: string; note: string; text: string | null; problem: string | null };
+
+/** Where a system lives (S8, AD-14): in the Designs folder, or read from a repo folder. */
+export type SystemHomeView =
+  | { kind: 'internal' }
+  | {
+      kind: 'repo';
+      /** Realpath of the repo at adoption. */
+      directory: string;
+      /** The listProjects name, else the base name (§9.5 rule). */
+      label: string;
+      /** Repo-relative, `/` separators. */
+      folder: string;
+      livingPage: string;
+      readable: boolean;
+      problem: string | null;
+      lastRead: IsoDate | null;
+    };
+
+/** The interview record as the page shows it (BUILD.json, §2.13). */
+export type BuildView = {
+  mode: 'fix' | 'describe' | 'none';
+  dark: boolean;
+  calls: { topic: string; choice: string; note: string }[];
+  access: 'dev' | 'public' | null;
+  round: 1 | 2 | 'done';
+  applied: { at: IsoDate; parts: string[]; skipped: string[] } | null;
+};
+
+/** The committed living page's state (§5.11); `reformatted` is rev 3 (mark current, normalised hash differs). */
+export type LivingPageState = 'fresh' | 'out-of-date' | 'missing' | 'changed' | 'unsafe' | 'unreadable' | 'reformatted';
+
+/** GET /systems/:id/living-page (§4.3); the committed page itself is never served. */
+export type LivingPageView =
+  | { home: 'internal' }
+  | {
+      home: 'repo';
+      /** Repo-relative path of the committed page. */
+      path: string;
+      absolute: string;
+      staged: {
+        revision: number;
+        bytes: number;
+        omitted: { what: string; name: string; reason: string }[];
+        problem: string | null;
+        /** rev 3 (AD-32): whether fonts were embedded. */
+        fonts: 'embedded' | 'fallback';
+        /** rev 3: secret shapes found (kind and entry key, never the value). */
+        secrets: { kind: string; where: string }[];
+        /** rev 3: the proposal preview's record, when one was generated. */
+        preview: { proposal: string; problem: string | null } | null;
+      } | null;
+      committed: { state: LivingPageState; revision: number | null; sentence: string; reasons: string[] };
+      repoReadable: boolean;
+      /** rev 3 (AD-32): the user's Embed fonts switch; absent state reads as false. */
+      embedFonts: boolean;
+    };
+
+/** One file of a proposal's diff (rev 3, §2.15); every string is shown as text. */
+export type ProposalFile = {
+  path: string;
+  change: 'create' | 'modify' | 'delete';
+  summary: string;
+  added: number;
+  removed: number;
+  patch: string | null;
+  /** The patch was over the cap and dropped; the file says so. */
+  patchOmitted: boolean;
+  /** `proposal/<rel>` for a create in system-files or docs; null otherwise. */
+  from: string | null;
+  /** Size of the `from` file, when read. */
+  bytes: number | null;
+  /** Rewrites of uses, only when the agent listed them (§8.8). */
+  usages: { count: number; listed: boolean } | null;
+};
+
+export type ProposalPartName = 'system-files' | 'token-fixes' | 'docs' | 'living-page';
+export type ProposalPart = { name: ProposalPartName; files: ProposalFile[] };
+
+/** GET /systems/:id/proposals/:proposalId (rev 3, §4.3). */
+export type ProposalView =
+  | {
+      state: 'current';
+      /** First 16 hex digits of the recorded sha256: the answer's `sha=` matches it. */
+      sha16: string;
+      preview: { board: boolean; livingPage: 'ready' | 'generating' | 'failed' | 'none'; sentence: string | null };
+      proposal: {
+        id: string;
+        supersedes: string | null;
+        created: IsoDate;
+        mode: 'fix' | 'describe' | 'none';
+        summary: string;
+        parts: ProposalPart[];
+        wayBack: { kind: string; name: string; text: string };
+        access: 'dev' | 'public' | null;
+        home: SystemHomeView;
+        /** ≤ 10 sentences; any problem disables Approve. */
+        problems: string[];
+      };
+    }
+  | { state: 'superseded'; by: string | null }
+  | { state: 'rewritten' }
+  | { state: 'approved' | 'declined'; at: IsoDate }
+  | { state: 'unknown' }
+  | { state: 'unreadable'; sentence: string };
+
+/**
+ * A repo-backed system's re-sync review (S8, §4.3, §7.4): a read of the repo's system folder,
+ * all or nothing, no conflicts. Token lists ≤ 200 each (totals carried), file lists ≤ 50 each.
+ */
+export type RepoResyncReview = {
+  kind: 'repo';
+  directory: string;
+  directoryChanged: boolean;
+  folderFound: boolean;
+  tokens: {
+    changed: { name: string; mode: 'light' | 'dark'; from: string; to: string }[];
+    added: string[];
+    removed: string[];
+    totals: { changed: number; added: number; removed: number };
+  };
+  /** Non-token content files. */
+  files: { changed: string[]; added: string[]; removed: string[] };
+  livingPageFound: boolean;
+  refused: number;
+  skipped: { path: string; reason: string }[];
+};
+
+/** What landed in the repo vs the approved proposal (rev 3, §5.14). */
+export type LandedView = { proposal: string; matches: boolean; differ: string[]; unclaimed: string[]; sentence: string | null };
+
+/** The sources line of a system row: what it was made from, and when the code was last read. */
+export type SourceLine = {
+  code: { directory: string; lastScan: IsoDate; partial: boolean } | null;
+  brand: number;
+  description: boolean;
+};
+
+export type SystemSummary = {
+  id: string;
+  name: string;
+  status: 'draft' | 'ready';
+  changesToReview: boolean;
+  sources: SourceLine;
+  usedBy: number;
+  isDefault: boolean;
+  /** Directories the system is pinned for. */
+  pinnedFor: string[];
+  updated: IsoDate;
+  revision: number;
+  empty: boolean;
+  unreadable: string | null;
+  /** S8: `repo` carries the label and the directory. */
+  home: 'internal' | { repo: string; directory: string };
+  /** BUILD.json round ≠ done, or a repo home with no snapshot yet. */
+  building: boolean;
+  /** The other system sharing this repo, by name. */
+  sharedRepoWith: string | null;
+  livingPage: LivingPageState | null;
+  /** rev 3: a current proposal, not yet approved or declined. */
+  proposalWaiting: boolean;
+};
+
+export type SystemDetail = {
+  id: string;
+  name: string;
+  path: string;
+  status: 'draft' | 'ready';
+  revision: number;
+  created: IsoDate;
+  updated: IsoDate;
+  sessionId: string | null;
+  sources: SourceLine;
+  review: Record<SystemSection, { state: ReviewState; note: string | null }>;
+  changesToReview: boolean;
+  overview: { text: string; problem: string | null } | null;
+  notes: { id: string; title: string; text: string; problem: string | null }[];
+  tokens: SystemToken[];
+  type: TypeStyle[];
+  fonts: FontAsset[];
+  logos: LogoAsset[];
+  sourceFiles: { file: string; bytes: number }[];
+  components: SystemComponent[];
+  /** The "3 entries couldn't be read." list. */
+  problems: { entry: string; message: string }[];
+  /** Whole-system reason (RS S1 states); null when readable. */
+  unreadable: string | null;
+  stamps: { tokens: string | null; systemJson: string | null; overview: string | null; notes: Record<string, string> };
+  usedBy: number;
+  isDefault: boolean;
+  pinnedFor: string[];
+  empty: boolean;
+  // S8 (§4.3)
+  home: SystemHomeView;
+  /** Internal home and not viewing a version; a repo-backed system is never editable here (AD-20). */
+  editable: boolean;
+  build: BuildView | null;
+  /** The adoption problem's sentence (§5.9), null when none. */
+  buildProblem: string | null;
+  coverage: SystemArea[];
+  patterns: SystemEntryText[];
+  brand: SystemEntryText[];
+  /** `treeHash` is the repo re-sync's stamp (§7.4): the apply carries it so a snapshot that moved under the sheet answers stale. */
+  snapshot: { at: IsoDate; by: 'agent' | 'user'; tampered: boolean; treeHash: string } | null;
+  codeDrift: { at: IsoDate; mode: 'fix' | 'describe'; differ: number; names: string[]; partial: boolean; unread: string[] } | null;
+  /** The living page's summary; the route has the detail. */
+  livingPage: { state: LivingPageState | null; sentence: string | null } | null;
+  // rev 3 (§4.3)
+  proposal: { id: string; state: ProposalView['state'] } | null;
+  landed: LandedView | null;
+  /** BUILD.json's own drift count, labelled "The agent reports" (never added to Design Chamber's). */
+  agentDrift: { differ: number; kinds: string[]; note: string } | null;
+};
+
+// ---- Phase 2.5: the system's own files (§2.5, §2.13, §2.15, §2.6, §2.8) ----
+
+/** Why a BUILD.json could not be adopted or followed (§5.9's closed list). */
+export type BuildProblemReason =
+  | 'unreadable' | 'ticket-unknown' | 'ticket-needed' | 'repo-outside-project' | 'repo-overlap'
+  | 'living-page-exists' | 'code-outside-project' | 'home-changed' | 'ticket-changed' | 'applied-unknown-proposal';
+
+/** `<system>/.chamber/state.json` (schema `design-chamber/system-state@1`, service-owned, §2.5). */
+export type SystemState = {
+  v: 1;
+  id: string;
+  name: string;
+  created: IsoDate;
+  updated: IsoDate;
+  status: 'draft' | 'ready';
+  sessionId: string | null;
+  revision: { n: number; treeHash: string; at: IsoDate };
+  /** Per section; absent = Not reviewed. Shown only while the fingerprint still matches (`deriveReview`). */
+  review: Partial<Record<SystemSection, { state: ReviewState; fingerprint: string; at: IsoDate; note?: string }>>;
+  readyFingerprints: Partial<Record<SystemSection, string>> | null;
+  sources: {
+    /** `forAgent`: the scan's files Design Chamber doesn't run, which the make prompt asks the agent to read (absent in older state). */
+    code: { directory: string; lastScan: IsoDate; partial: boolean; scanned: string[]; forAgent?: { path: string; why: string }[] } | null;
+    brand: { files: string[] } | null;
+    description: { text: string; preset: string | null } | null;
+  };
+  /** Tokens that came from code, for re-sync (internal home only). */
+  provenance: Record<string, { file: string; line: number; light: string | null; dark: string | null }>;
+  handEditsSeq: number;
+  /** S8: absent = internal home. */
+  home?:
+    | { kind: 'internal' }
+    | { kind: 'repo'; directory: string; folder: string; livingPage: string; adoptedAt: IsoDate };
+  build?: {
+    ticket: string | null;
+    adoptedAt: IsoDate;
+    appliedSeen: IsoDate | null;
+    /** rev 3 (AD-28): copied from the ticket at adoption, outlives it. */
+    projectDirectory?: string | null;
+    /** rev 3: the last approval the service saw (§5.14). */
+    approved?: { proposal: string; sha256: string; parts: string[] } | null;
+  };
+  buildProblem?: { reason: BuildProblemReason; value: string } | null;
+  repoProblem?: { reason: 'missing' | 'not-a-folder' | 'unreadable' | 'folder-missing' | 'too-large' | 'being-changed'; at: IsoDate } | null;
+  snapshot?: { at: IsoDate; by: 'agent' | 'user'; treeHash: string; tampered: boolean } | null;
+  codeDrift?: { at: IsoDate; mode: 'fix' | 'describe'; differ: number; names: string[]; partial: boolean; unread?: string[] } | null;
+  /** rev 3 (AD-32): the user's Embed fonts switch; absent = false. */
+  livingPage?: { embedFonts: boolean } | null;
+  /** rev 3: what landed vs the approved proposal (§5.14). */
+  landed?: { proposal: string; matches: boolean; differ: string[]; unclaimed: string[] } | null;
+};
+
+/** `_systems/<id>/BUILD.json` (schema `design-chamber/system-build@1`, agent-written, §2.13). */
+export type BuildJson = {
+  version: 1;
+  ticket: string | null;
+  name: string;
+  home: 'internal' | 'repo';
+  repo: { directory: string; folder: string; livingPage: string } | null;
+  code: { directory: string } | null;
+  mode: 'fix' | 'describe' | 'none';
+  dark: boolean;
+  calls: { topic: string; choice: string; note: string }[];
+  access: 'dev' | 'public' | null;
+  round: 1 | 2 | 'done';
+  applied: { at: IsoDate; parts: string[]; skipped: string[] } | null;
+  /** rev 3: the approved proposal `applied.at` refers to. */
+  proposal: string | null;
+  /** rev 3: the agent's own drift count for what Design Chamber can't read (§5.12). */
+  drift: { differ: number; kinds: string[]; note: string } | null;
+};
+
+/** One proposal file as PROPOSAL.json writes it (rev 3, §2.15); the view adds `patchOmitted` and `bytes`. */
+export type ProposalFileEntry = {
+  path: string;
+  change: 'create' | 'modify' | 'delete';
+  summary: string;
+  added: number;
+  removed: number;
+  patch?: string | null;
+  from?: string | null;
+  usages?: { count: number; listed: boolean } | null;
+};
+
+/** `_systems/<id>/PROPOSAL.json` (schema `design-chamber/system-proposal@1`, agent-written, §2.15). */
+export type ProposalJson = {
+  version: 1;
+  id: string;
+  supersedes: string | null;
+  created: IsoDate;
+  mode: 'fix' | 'describe' | 'none';
+  summary: string;
+  parts: { name: ProposalPartName; files: ProposalFileEntry[] }[];
+  wayBack: { kind: 'commit' | 'branch' | 'stash' | 'none'; name: string; text: string };
+  access: 'dev' | 'public' | null;
+};
+
+/** Why a proposal cannot be approved (§5.14's closed list; the first problem's sentence is the finding's). */
+export type ProposalProblemReason =
+  | 'not-adopted' | 'round' | 'path-outside' | 'living-page-path' | 'create-exists' | 'from-missing'
+  | 'describe-change' | 'internal-parts' | 'none-fixes' | 'rewritten' | 'unreadable'
+  // §5.14 step 4: the preview's own problems block approval too.
+  | 'preview-too-large' | 'preview-unsafe' | 'preview-secret';
+
+/** `<design>/system/COPY.json` (schema `design-chamber/system-copy@1`, §2.6); Design Chamber writes it last. */
+export type CopyRecord = {
+  v: 1;
+  id: string;
+  name: string;
+  revision: number;
+  treeHash: string;
+  at: IsoDate;
+  by: 'user' | 'agent' | 'creation';
+  /** The design version taken first (the Undo target); null at creation. */
+  before: string | null;
+  /** Copy-relative paths (`/` separators) → sha256, without COPY.json itself. */
+  files: Record<string, string>;
+};
+
+/** One folder of the registry (`<root>/.chamber/folders.json`, schema `design-chamber/folders@1`, §2.8). */
+export type FolderRecord = {
+  id: string;
+  name: string;
+  created: IsoDate;
+  /** Soft delete; Undo within FOLDER_UNDO_MS clears it. */
+  deleted: IsoDate | null;
+  /** Membership is by slug AND the design's created time. */
+  designs: { slug: string; created: IsoDate }[];
+};
+
+// ---- Phase 2.5: secret shapes and the SystemAsk block (rev 3) ----
+
+/** The high-confidence shapes `findSecretShapes` looks for (§5.11); never logged with the match. */
+export type SecretShapeKind = 'aws-key' | 'github-token' | 'openai-style-key' | 'slack-token' | 'google-key' | 'private-key';
+
+/** The SystemAsk block's arguments (untrusted, model-written; §8.12). Names come from the service, never from here. */
+export type SystemAskArgs =
+  | { kind: 'interview-1'; ticket: string }
+  | { kind: 'interview-2'; systemId: string; calls: { topic: string; why: string; proposed: string }[] }
+  | { kind: 'diff'; systemId: string; proposalId: string };
+
+/** One interview question, parsed from rules/SYSTEM-QUESTIONS.md at build time (§8.9, §8.12). */
+export type SystemQuestion = {
+  topic: string;
+  label: string;
+  multiple: boolean;
+  options: { choice: string; label: string; why: string; recommended: boolean }[];
+};
+
+export type SystemQuestionSet = { roundOne: SystemQuestion[]; roundTwo: SystemQuestion[]; closing: string };
+
+// ---- Phase 2.5: the effective choice for a new design (§2.9, RS S5-1) ----
+
+/** Why a system was chosen: the New dialog, a project pin, or the default. */
+export type SystemChoiceWhy = 'explicit' | 'pinned' | 'default';
+
+/** `none-silent`: ask, but no Ready system exists in this root, so behave as before (no ask, nothing linked). */
+export type EffectiveSystemChoice =
+  | { choice: 'system'; id: string; why: SystemChoiceWhy }
+  | { choice: 'none'; why: SystemChoiceWhy }
+  | { choice: 'ask' }
+  | { choice: 'none-silent' };

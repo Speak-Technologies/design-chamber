@@ -22,7 +22,10 @@ import {
 import type { DesignKind } from '../../shared/types.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
+import { createProjectFolderStats } from '../folders.ts';
 import { createLooseImporter, listLooseHtml, type LooseList } from '../loose.ts';
+import { designSystemSummary, type IndexedSystem } from '../../shared/system-copy.ts';
+import { ensureLinkService } from '../systems/link.ts';
 import { projectDirectoryOf } from './chat.ts';
 
 const isBodyRecord = (body: unknown): body is Record<string, unknown> =>
@@ -121,19 +124,31 @@ const validatePatch = (body: unknown): PatchDesignBody => {
  */
 export function registerDesignsRoutes(router: Router, ctx: ServiceContext): void {
   const looseImporter = createLooseImporter({ settings: ctx.settings, store: ctx.store, log: ctx.log });
+  const projectFolders = createProjectFolderStats();
 
   router.on('GET /designs', async ({ query }): Promise<DesignListResponse> => {
     const q = query.get('q') ?? undefined;
     const kindParam = query.get('kind') ?? undefined;
     if (kindParam !== undefined && !isKind(kindParam)) throw new ApiError('bad-request', 'The kind filter is "page" or "canvas".');
     const root = ctx.settings.root();
-    const designs = await ctx.store.list({ ...(q !== undefined ? { q } : {}), ...(kindParam !== undefined ? { kind: kindParam } : {}) });
+    const listed = await ctx.store.list({ ...(q !== undefined ? { q } : {}), ...(kindParam !== undefined ? { kind: kindParam } : {}) });
+    // Phase 2.5 §2.7: each copy's line joined with the systems index (current name, draft or deleted, update available).
+    // When the systems can't be read the copy's own line stays (never a false "deleted").
+    let systems: IndexedSystem[] | null = null;
+    if (listed.some((design) => design.system)) {
+      try {
+        systems = await ensureLinkService(ctx).indexed();
+      } catch (error) {
+        ctx.log.warn('systems.index-unavailable', { error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    const designs = listed.map((design) => ({ ...design, system: design.system && systems !== null ? designSystemSummary(design.system, systems) : (design.system ?? null) }));
     // The loose-file banner is a hint: if the root cannot be listed for it, the designs still show.
     const loose = await listLooseHtml(root).catch((error: unknown): LooseList => {
       ctx.log.warn('loose.list-failed', { error: error instanceof Error ? error.message : String(error) });
       return { files: [], total: 0 };
     });
-    return { root, designs, loose };
+    return { root, designs, loose, projectFolders: await projectFolders(designs) };
   });
 
   router.on('POST /loose/import', async ({ body }): Promise<ImportLooseResponse> => {

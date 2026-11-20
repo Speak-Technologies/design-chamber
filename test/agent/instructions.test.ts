@@ -28,7 +28,8 @@ describe('buildInstructions (§U2.2)', () => {
   });
 
   test('a root so long the text would pass the limit drops the command clause first, then throws', () => {
-    const root = `/home/you/${'a'.repeat(1300)}`;
+    // Phase 2.5 §8.11 added two lines, so the command clause goes at a shorter root than before.
+    const root = `/home/you/${'a'.repeat(1200 - '/home/you/'.length)}`;
     const text = buildInstructions({ root, platform: 'linux', checkCommand: posixCommand(root) });
     assert.ok(text.length <= SERVICE_INSTRUCTIONS_MAX, `${text.length} characters`);
     assert.ok(text.includes('check it with the design_check tool.'), 'the tool is still named');
@@ -88,6 +89,14 @@ describe('buildInstructions (§U2.2)', () => {
     }
   });
 
+  test('the design-system lines: build with /design-system, and a design task never writes a repo (Phase 2.5 §8.11)', () => {
+    for (const platform of ['linux', 'win32'] as const) {
+      const text = buildInstructions({ root: platform === 'win32' ? WIN_ROOT : POSIX_ROOT, platform, checkCommand: null });
+      assert.ok(text.includes('- To build a design system with the user, use /design-system or the design-system-builder skill.'));
+      assert.ok(text.includes("- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff."));
+    }
+  });
+
   test('no launcher: the tool alone; Windows: native separators and the PowerShell hint', () => {
     const none = buildInstructions({ root: POSIX_ROOT, platform: 'linux', checkCommand: null });
     assert.ok(none.includes('check it with the design_check tool.'));
@@ -104,7 +113,7 @@ describe('buildInstructions (§U2.2)', () => {
     assert.ok(!text.includes('\u2014'));
     assert.equal(text, buildInstructions(input));
     assert.doesNotMatch(text, /token|bearer|OPENCHAMBER_/i);
-    assert.ok(text.split('\n').length <= 8, 'a short note');
+    assert.ok(text.split('\n').length <= 10, 'a short note');
   });
 });
 

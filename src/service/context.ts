@@ -28,6 +28,7 @@ import type {
   Outbox,
   ServiceState,
   SettingsFile,
+  SystemChangeKind,
   ThumbState,
 } from '../shared/types.ts';
 import { ApiError } from './http.ts';
@@ -132,16 +133,27 @@ export type DesignStore = {
   moveComments(slug: string, moves: { from: string; to: string; ids?: string[] }[], hooks?: WriteHooks): Promise<{ moved: { id: string; from: string; to: string }[]; bytes: Uint8Array | null }>;
   /** WP3 registers one hook that writes `.chamber/RULES.md`. A failing hook is logged, never undoes the create. */
   onCreate(hook: (record: DesignRecord) => Promise<void>): () => void;
+  /**
+   * Phase 2.5 §2.7: change the design's service-owned system fields (`systemDecision`,
+   * `systemChoiceSeen`, `systemChoiceProblem`) under the design's lock. state.json only: these
+   * fields are never mirrored into design.json. `mutate` answers null to write nothing. Throws
+   * `bad-slug` or `not-found` like `get`.
+   */
+  updateSystemState(slug: string, mutate: (state: ServiceState) => ServiceState | null): Promise<ServiceState>;
 };
 
 // ---- WP1: change hub (§9.4) ----
+
+/** What a module hands the hub; the hub adds `seq`. */
+export type ChangeEmit = { slug: string | null; kind: ChangeKind; files?: string[]; origin?: 'user'; system?: string; systemChange?: SystemChangeKind };
 
 export type ChangeHub = {
   /** Same as `ServiceContext.epoch`. */
   readonly epoch: string;
   /** Highest seq emitted so far (0 before any event). */
   seq(): number;
-  emit(event: { slug: string | null; kind: ChangeKind; files?: string[]; origin?: 'user' }): ChangeEvent;
+  /** `system` and `systemChange` travel on `system` events only (Phase 2.5 §3.4). */
+  emit(event: ChangeEmit): ChangeEvent;
   /** Events after `since`, or `reset` when `epoch` differs or `since` left the ring. Resolves early on the next event, at `waitMs` (≤ `CHANGES_WAIT_MAX_MS`), or when `signal` aborts. */
   waitFor(since: number, epoch: string, waitMs: number, signal?: AbortSignal): Promise<ChangesResponse>;
   /** In-process listeners (render cache, thumbnails, versions, design.json merge). */
@@ -151,12 +163,23 @@ export type ChangeHub = {
 // ---- WP1: uploads and outbox (§7) ----
 
 export type UploadStore = {
-  /** Throws `too-large` over `UPLOAD_TOTAL_MAX`, `conflict` with `UPLOADS_OPEN_MAX` open. */
-  create(total: number): string;
-  /** Chunks arrive in index order; throws `not-found` (unknown/expired), `conflict` (out of order), `too-large` (beyond total). */
+  /**
+   * `text` (default): throws `too-large` over `UPLOAD_TOTAL_MAX`, `conflict` with `UPLOADS_OPEN_MAX` open.
+   * `base64` (Phase 2.5 §5.6, a binary file): `total` is base64 characters ≤ `BINARY_UPLOAD_TOTAL_MAX`;
+   * `conflict` with `BINARY_UPLOADS_OPEN_MAX` binary uploads open.
+   */
+  create(total: number, encoding?: 'text' | 'base64'): string;
+  /**
+   * Chunks arrive in index order; throws `not-found` (unknown/expired), `conflict` (out of order), `too-large` (beyond total).
+   * A base64 chunk is checked and decoded as it arrives (`bad-request` for anything that is not base64).
+   */
   put(id: string, index: number, data: string): PutUploadChunkResponse;
-  /** The complete text, once; the upload is gone afterwards. Throws `not-found` or `conflict` (incomplete). */
+  /** The complete text, once; the upload is gone afterwards. Throws `not-found` or `conflict` (incomplete, or a binary upload). */
   take(id: string): string;
+  /** The complete decoded bytes of a base64 upload, once. Throws `not-found` or `conflict` (incomplete, or a text upload). */
+  takeBytes(id: string): Buffer;
+  /** Drop an upload the guest gave up on (a failed chunk, KI-22), freeing its slot; unknown ids are fine. */
+  discard(id: string): void;
 };
 
 export type OutboxStore = {
@@ -197,8 +220,13 @@ export type DesignIndex = {
 
 /** Calls from the service to OpenChamber (`createServiceHost`). Never throws; the token stays in this process. */
 export type HostCalls = {
-  /** The agent instructions for every session (directory `null`). `unavailable`: no host callback here (tests, an old host, the host did not answer); `refused`: the host said no. */
-  setInstructions(text: string): Promise<'saved' | 'unavailable' | 'refused'>;
+  /**
+   * The agent instructions for every session (`directory` null or absent), or for the sessions under
+   * one project folder (Phase 2.5 AD-12/AD-24; SDK `setInstructions(directory, text)`, additive per
+   * directory, SP-2). Empty text removes that directory's text. `unavailable`: no host callback here
+   * (tests, an old host, the host did not answer); `refused`: the host said no.
+   */
+  setInstructions(text: string, directory?: string | null): Promise<'saved' | 'unavailable' | 'refused'>;
 };
 
 /** The three session events Design Chamber subscribes to (manifest `contributes.sessionEvents`). */
