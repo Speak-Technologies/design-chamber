@@ -511,8 +511,8 @@ const pageScenario = async (width, theme) => {
   await p.shot(`${tag}-12-artifact-exported`);
   await p.click('.dc-toolbar .oc-sdk-btn', { text: 'Library' });
 
-  // settings sheet
-  await p.click('.dc-library-bar .oc-sdk-btn', { text: 'Settings' });
+  // settings sheet (the gear icon button, Phase 2.6 L1a)
+  await p.click('.dc-library-bar .dc-iconbtn[aria-label="Settings"]');
   await p.waitFor('return !!doc.querySelector(".dc-settings .dc-code")', 'settings');
   await p.settle(300);
   await p.shot(`${tag}-13-settings`);

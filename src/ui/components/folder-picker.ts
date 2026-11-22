@@ -16,34 +16,6 @@ import { banner, btn, type BtnHandle } from './kit.ts';
 import { folders, type FoldersState } from './folders-store.ts';
 import { icon } from './icons.ts';
 
-// icons.ts belongs to the library task (L1a); the picker's two extra glyphs live here until they
-// move into ICONS. Same 24×24 stroke vocabulary as that file.
-const GLYPHS = {
-  lock: ['M7 11h10a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2z', 'M8 11V8a4 4 0 0 1 8 0v3'],
-  info: ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z', 'M12 11v5', 'M12 8h.01'],
-} as const;
-
-export const pickGlyph = (name: keyof typeof GLYPHS, size = 14): SVGSVGElement => {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('width', String(size));
-  svg.setAttribute('height', String(size));
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '1.75');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
-  svg.setAttribute('aria-hidden', 'true');
-  svg.setAttribute('focusable', 'false');
-  svg.classList.add('dc-icon');
-  for (const d of GLYPHS[name]) {
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', d);
-    svg.append(path);
-  }
-  return svg;
-};
-
 export type PickerDesignRef = { slug: string; title: string; projectDirectory: string | null };
 
 export type FolderPickerOptions = {
@@ -232,12 +204,12 @@ export const mountFolderPicker = (holder: HTMLElement, options: FolderPickerOpti
       const checkName = name === 'folder' ? null : name;
       if (checkName === node.glyphName) return;
       node.glyph?.remove();
-      node.glyph = checkName === null ? null : checkName === 'lock' ? pickGlyph('lock', 14) : icon(checkName, 14);
+      node.glyph = checkName === null ? null : icon(checkName, 14);
       node.glyphName = checkName;
       if (node.glyph) node.li.querySelector('.oc-sdk-check-text')?.before(node.glyph);
     } else {
       if (name === null || name === node.glyphName) return;
-      const next = name === 'lock' ? pickGlyph('lock', 14) : icon(name, 14);
+      const next = icon(name, 14);
       node.glyph.replaceWith(next);
       node.glyph = next;
       node.glyphName = name;

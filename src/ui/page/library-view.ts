@@ -1,49 +1,64 @@
-// P1, the page's library: toolbar (search, tabs, sort, New, settings) over a responsive grid
-// of design cards with 16:10 thumbnails. Cards update live from change events without losing scroll.
-// Notices above the grid: a failed refresh, an earlier folder with designs, loose HTML files to import.
+// P1, the page's library: header (title and counts, Design systems, Settings, New) over a toolbar
+// (search, kind tabs, System filter, Sort, Tiles/List) and a responsive grid of design cards with
+// 16:10 thumbnails, or a column list of the same designs. View and sort are remembered per surface
+// (host.storage); search, tab and the System filter live for the session. Cards and rows update
+// live from change events without losing scroll. Notices above: a failed refresh, an earlier
+// folder with designs, loose HTML files to import. The approved canvas (phase-2-6-library-ui) is
+// the visual authority; system tiles and chips arrive with L1b.
 
-import { mountBadge, mountBanner, mountEmpty, mountSearchField, mountSelect, mountTabs } from '@openchamber/sdk/ui';
+import { mountBadge, mountBanner, mountSearchField, mountSelect, mountTabs } from '@openchamber/sdk/ui';
 
 import type { DesignSummary } from '../../shared/types.ts';
+import { sameDirectory } from '../../shared/path-compare.ts';
 import { toast, type ActionContext } from '../components/actions.ts';
+import { mountDesignRow, type DesignRowView } from '../components/design-row.ts';
 import { createScope, h } from '../components/dom.ts';
-import { addToFolder, deleteFolder, DESIGN_DRAG_TYPE, listDesignMenu, mountUndoNotice, runListAction, type FolderRef } from '../components/folder-actions.ts';
+import { addToFolder, deleteFolder, DESIGN_DRAG_TYPE, listDesignMenu, mountUndoNotice, runListAction, type DesignMenuView, type FolderRef } from '../components/folder-actions.ts';
 import { folders as foldersStore, type FoldersState } from '../components/folders-store.ts';
 import { icon } from '../components/icons.ts';
-import { attachMenu, btn, iconBtn } from '../components/kit.ts';
+import { attachMenu, btn, iconBtn, nameSelect } from '../components/kit.ts';
+import { mountLibraryEmpty } from '../components/library-empty.ts';
 import { mountLooseBanner } from '../components/loose-banner.ts';
+import { systems as systemsStore } from '../components/systems-store.ts';
 import { mountThumb, type ThumbHandle } from '../components/thumb.ts';
 import { guestHost, host, store } from '../guest.ts';
 import { middlePath, plural, relativeTime } from '../model/format.ts';
 import {
   ALL_SCOPE,
+  ALL_SYSTEMS,
   LIST_SORTS,
   LIST_TABS,
   cardProjectLine,
-  emptyKind,
-  filterDesigns,
-  folderEmptyBody,
+  emptyStateOf,
   folderNameProblem,
   kindLabel,
-  noMatchesSentence,
+  libraryDesigns,
   projectGroups,
   resolveScope,
+  resolveSystemFilter,
   rowAriaLabel,
   scopeCounts,
-  scopeDesigns,
   scopeFromId,
   scopeLabel,
   scopeStorageKey,
+  scopeSystems,
   scopeToId,
+  sortFromStored,
+  sortStorageKey,
+  systemFilterFromId,
+  systemFilterToId,
+  systemOptions,
   SYSTEM_UPDATED_LABEL,
-  sortDesigns,
   systemUpdated,
-  tabCounts,
+  viewFromStored,
+  viewStorageKey,
+  type LibraryView,
   type ListScope,
   type ListSort,
   type ListTab,
   type ProjectGroup,
   type ProjectInfo,
+  type SystemFilter,
 } from '../model/list-model.ts';
 import { designCountLabel } from '../model/settings-model.ts';
 import { mountSidebar } from './library-sidebar.ts';
@@ -60,14 +75,20 @@ export type LibraryOptions = {
 export type LibraryHandle = { el: HTMLElement; focusCard: (slug: string) => void; focusSystems: () => void; dispose: () => void };
 
 const SKELETON_CARDS = 8;
+const SKELETON_ROWS = 6;
 /** Under this page width the sidebar starts closed and floats over the grid when opened. */
 const SIDEBAR_MIN_PAGE_WIDTH = 900;
+
+const LOAD_FAILED_BODY = 'The local service didn’t answer. Allow it in Settings, then Extensions, and try again. Your folders and filters are kept.';
+const REFRESH_FAILED_BODY = 'You’re seeing the designs from a minute ago. New ones will appear when the refresh works.';
 
 export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   const scope = createScope();
   let query = '';
   let tab: ListTab = 'all';
   let sort: ListSort = 'updated';
+  let libraryView: LibraryView = 'tiles';
+  let systemFilter: SystemFilter = ALL_SYSTEMS;
   /** The remembered view; the one actually shown is `resolveScope` of it (a project or folder that is gone reads as All designs). */
   let chosen: ListScope = ALL_SCOPE;
   let projects: ProjectInfo[] = [];
@@ -77,6 +98,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   let sidebarWanted: boolean | null = null;
   let narrow = false;
   const folderStore = foldersStore();
+  const systemStore = systemsStore();
   const thumbs = new Map<string, ThumbHandle>();
   const el = h('div', { class: 'dc-library' });
 
@@ -89,7 +111,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     ],
     (id) => options.onNew(id === 'page' ? 'page' : 'canvas'),
   );
-  const settingsButton = btn({ label: 'Settings', variant: 'ghost', size: 'default', icon: 'settings', onClick: () => options.onSettings() });
+  const settingsButton = iconBtn({ icon: 'gear', label: 'Settings', onClick: () => options.onSettings() });
   const systemsButton = btn({ label: 'Design systems', variant: 'ghost', size: 'default', icon: 'system', onClick: () => options.onSystems() });
 
   const searchHost = h('div', { class: 'dc-search' });
@@ -104,26 +126,45 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     tabsHandle.update({ activeId: tab });
     paintGrid();
   } });
-  const sortHost = h('div', { class: 'dc-sort', title: 'Sort designs' }, h('span', { class: 'dc-sort-label' }, 'Sort'));
-  const sortSelect = mountSelect(sortHost, { value: sort, options: LIST_SORTS.map(({ id, label }) => ({ id, label })), onChange: (id) => {
-    sort = LIST_SORTS.find((entry) => entry.id === id)?.id ?? 'updated';
-    sortSelect.update({ value: sort });
+  const systemHost = h('div', { class: 'dc-inline-select dc-system-select' });
+  const systemSelect = mountSelect(systemHost, { label: 'System', value: 'all', options: [{ id: 'all', label: 'All systems' }, { id: 'none', label: 'No system' }], onChange: (id) => {
+    systemFilter = systemFilterFromId(id);
     paintGrid();
   } });
+  const sortHost = h('div', { class: 'dc-inline-select dc-sort-select' });
+  const sortSelect = mountSelect(sortHost, { label: 'Sort', value: sort, options: LIST_SORTS.map(({ id, label }) => ({ id, label })), onChange: (id) => {
+    sort = LIST_SORTS.find((entry) => entry.id === id)?.id ?? 'updated';
+    sortSelect.update({ value: sort });
+    void host.storage.set(sortStorageKey('page'), sort);
+    paintGrid();
+  } });
+  const viewButton = (view: LibraryView, label: string, glyph: 'tiles' | 'list'): HTMLButtonElement =>
+    h('button', { type: 'button', class: 'dc-view-toggle-btn', 'aria-pressed': String(libraryView === view), 'aria-label': `View as ${label.toLowerCase()}` }, icon(glyph, 14), label);
+  const tilesButton = viewButton('tiles', 'Tiles', 'tiles');
+  const listButton = viewButton('list', 'List', 'list');
+  const viewToggle = h('div', { class: 'dc-view-toggle', role: 'group', 'aria-label': 'View' }, tilesButton, listButton);
+  const setView = (next: LibraryView): void => {
+    if (libraryView === next) return;
+    libraryView = next;
+    void host.storage.set(viewStorageKey, next);
+    paintGrid();
+  };
+  tilesButton.addEventListener('click', () => setView('tiles'));
+  listButton.addEventListener('click', () => setView('list'));
 
   const sidebarToggle = iconBtn({ icon: 'sidebar', label: 'Projects and folders', pressed: true, onClick: () => toggleSidebar() });
-  const scopeName = h('span', { class: 'dc-page-scope', hidden: true });
+  const countLine = h('span', { class: 'dc-page-count', hidden: true });
   const toolbar = h(
     'header',
     { class: 'dc-library-bar' },
     sidebarToggle,
-    h('h1', { class: 'dc-page-title' }, 'Designs', scopeName),
-    h('div', { class: 'dc-library-controls' }, searchHost, tabsHost, sortHost),
+    h('h1', { class: 'dc-page-title' }, 'Designs', countLine),
     h('span', { class: 'dc-spacer' }),
     systemsButton.el,
-    settingsButton.el,
+    settingsButton,
     newButton.el,
   );
+  const controls = h('div', { class: 'dc-library-controls', role: 'toolbar', 'aria-label': 'Filter and arrange the library' }, searchHost, tabsHost, systemHost, sortHost, viewToggle);
   const notices = h('div', { class: 'dc-library-notices' });
   // Long-lived: repaints of the other notices never detach it, so focus and an import in flight survive.
   const syncNotices = (): void => {
@@ -134,7 +175,10 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   const undo = mountUndoNotice();
   const undoHost = h('div', { class: 'dc-library-undo' }, undo.el);
   const grid = h('ul', { class: 'dc-grid', role: 'list', 'aria-label': 'Designs' });
-  const scroller = h('div', { class: 'dc-library-scroll' }, undoHost, notices, grid);
+  const listHead = h('div', { class: 'dc-list-head', 'aria-hidden': 'true' }, h('span'), h('span', null, 'Name'), h('span', { class: 'dc-list-head-in' }, 'In'), h('span', { class: 'dc-list-head-when' }, 'Updated'), h('span'));
+  const list = h('ul', { class: 'dc-library-list', role: 'list', 'aria-label': 'Designs' });
+  const listWrap = h('div', { class: 'dc-list-wrap', hidden: true }, listHead, list);
+  const scroller = h('div', { class: 'dc-library-scroll' }, undoHost, notices, grid, listWrap);
   const sidebar = mountSidebar({
     onSelect: (next) => {
       setScope(next);
@@ -157,7 +201,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     validate: (name, ignoreId) => folderNameProblem(name, folderStore.get().folders, ignoreId),
   });
   const body = h('div', { class: 'dc-library-body' }, sidebar.el, scroller);
-  el.append(toolbar, body);
+  el.append(toolbar, controls, body);
 
   const sidebarOpen = (): boolean => sidebarWanted ?? !narrow;
   const paintSidebarState = (): void => {
@@ -209,6 +253,17 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     }
   };
 
+  /** What the row and card menus offer here: the folder being viewed, or a project this design is a manual member of. */
+  let manualSlugs = new Set<string>();
+  const menuFor = (design: DesignSummary): DesignMenuView => {
+    if (view.folder) return { folder: view.folder, project: null };
+    if (view.scope.kind === 'project') {
+      const label = scopeLabel(view.scope, view.groups, folderStore.get().folders);
+      return { folder: null, project: { directory: view.scope.directory, label: label ?? view.scope.directory, manual: manualSlugs.has(design.slug) } };
+    }
+    return { folder: null, project: null };
+  };
+
   const card = (design: DesignSummary): HTMLElement => {
     let thumb = thumbs.get(design.slug);
     if (thumb) thumb.update(design);
@@ -240,7 +295,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     const more = iconBtn({ icon: 'more', label: `Actions for ${design.title}`, size: 'sm', onClick: () => undefined });
     more.classList.add('dc-card-more');
     const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
-    attachMenu(more, () => listDesignMenu(view.folder), (id) => runListAction(id, ref, options.actions, view.folder));
+    attachMenu(more, () => listDesignMenu(menuFor(design)), (id) => runListAction(id, ref, options.actions, menuFor(design)));
     const item = h('li', { class: 'dc-card', 'data-slug': design.slug, 'data-pending': design.pending ? 'true' : 'false', draggable: 'true' }, main, more);
     // Drag a card onto a folder in the sidebar to add it. Add to folder… in the menu does the same with a click.
     item.addEventListener('dragstart', (event) => {
@@ -256,16 +311,48 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   };
 
   const skeletons = (): HTMLElement[] =>
-    Array.from({ length: SKELETON_CARDS }, () => h('li', { class: 'dc-card dc-card-skeleton', 'aria-hidden': 'true' }, h('span', { class: 'dc-skel dc-skel-card' }), h('span', { class: 'dc-skel dc-skel-line' }), h('span', { class: 'dc-skel dc-skel-line dc-skel-short' })));
+    libraryView === 'tiles'
+      ? Array.from({ length: SKELETON_CARDS }, () => h('li', { class: 'dc-card dc-card-skeleton', 'aria-hidden': 'true' }, h('span', { class: 'dc-skel dc-skel-card' }), h('span', { class: 'dc-skel dc-skel-line' }), h('span', { class: 'dc-skel dc-skel-line dc-skel-short' })))
+      : Array.from({ length: SKELETON_ROWS }, () =>
+          h(
+            'li',
+            { class: 'dc-row dc-list-row dc-row-skeleton', 'aria-hidden': 'true' },
+            h('span', { class: 'dc-row-thumb' }, h('span', { class: 'dc-skel dc-skel-thumb' })),
+            h('span', { class: 'dc-row-name' }, h('span', { class: 'dc-skel dc-skel-line' }), h('span', { class: 'dc-skel dc-skel-line dc-skel-short' })),
+            h('span', { class: 'dc-row-in' }, h('span', { class: 'dc-skel dc-skel-line dc-skel-short' })),
+            h('span', { class: 'dc-row-when' }, h('span', { class: 'dc-skel dc-skel-line dc-skel-short' })),
+          ),
+        );
 
   const message = (...children: Array<Node>): HTMLElement => h('li', { class: 'dc-grid-message' }, ...children);
+  /** The container the current view paints into; the other one stays hidden. */
+  const activeList = (): HTMLElement => (libraryView === 'tiles' ? grid : list);
+  const paintViewState = (): void => {
+    grid.hidden = libraryView !== 'tiles';
+    listWrap.hidden = libraryView !== 'list';
+    tilesButton.setAttribute('aria-pressed', String(libraryView === 'tiles'));
+    listButton.setAttribute('aria-pressed', String(libraryView === 'list'));
+  };
+  const showLoading = (): void => {
+    scroller.setAttribute('aria-busy', 'true');
+    activeList().append(...skeletons(), h('li', { class: 'dc-grid-message dc-sr-only', role: 'status' }, 'Loading your designs'));
+  };
+
+  const clearFilters = (): void => {
+    query = '';
+    tab = 'all';
+    systemFilter = ALL_SYSTEMS;
+    search.update({ value: '' });
+    tabsHandle.update({ activeId: 'all' });
+    paintGrid();
+  };
 
   const paintNotices = (): void => {
     for (const child of [...notices.children]) if (child !== looseBanner.el) child.remove();
     const state = store.getState();
     if (state.designs.status === 'error' && state.designs.data) {
       const wrap = h('div', { class: 'dc-banner' });
-      mountBanner(wrap, { tone: 'warning', title: 'Couldn’t refresh the list', body: state.designs.error?.message ?? '', action: { label: 'Try again', onClick: () => void store.refreshDesigns() } });
+      mountBanner(wrap, { tone: 'warning', title: 'Couldn’t refresh the list', body: REFRESH_FAILED_BODY, action: { label: 'Try again', onClick: () => void store.refreshDesigns() } });
       looseBanner.el.before(wrap);
     }
     const first = state.settings.data?.previousRoots.find((root) => root.exists && root.designCount > 0);
@@ -283,15 +370,20 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     const previousScroll = scroller.scrollTop;
     const state = store.getState().designs;
     grid.replaceChildren();
+    list.replaceChildren();
+    paintViewState();
     paintNotices();
+    scroller.removeAttribute('aria-busy');
     if ((state.status === 'idle' || state.status === 'loading') && !state.data) {
-      grid.append(...skeletons());
+      countLine.hidden = true;
+      showLoading();
       return;
     }
     if (!state.data) {
-      const wrap = h('div');
-      mountBanner(wrap, { tone: 'error', title: 'Your designs didn’t load', body: state.error?.message ?? 'The local service didn’t answer. Allow it in Settings → Extensions, then try again.', action: { label: 'Try again', onClick: () => void store.refreshDesigns() } });
-      grid.append(message(wrap));
+      countLine.hidden = true;
+      const wrap = h('div', { class: 'dc-banner' });
+      mountBanner(wrap, { tone: 'error', title: 'Your designs didn’t load', body: state.error?.message ? `${state.error.message} Your folders and filters are kept.` : LOAD_FAILED_BODY, action: { label: 'Try again', onClick: () => void store.refreshDesigns() } });
+      activeList().append(message(wrap));
       return;
     }
     const all = state.data.designs;
@@ -303,41 +395,64 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     const effective = foldersPending ? chosen : resolveScope(chosen, groups, folderList);
     const folder = effective.kind === 'folder' ? folderList.find((entry) => entry.id === effective.id) ?? null : null;
     view = { scope: effective, groups, root, folder: folder ? { id: folder.id, name: folder.name } : null };
+    manualSlugs = new Set(effective.kind === 'project' ? foldersState.projects.find((entry) => sameDirectory(entry.directory, effective.directory))?.slugs ?? [] : []);
     const counts4 = scopeCounts(all, folderList, root);
     sidebar.paint({ scope: effective, counts: counts4, groups, folders: folderList, foldersStatus: foldersState.status === 'error' ? 'error' : foldersState.status === 'ready' ? 'ready' : 'loading', foldersError: foldersState.error });
     paintSidebarState();
     const label = scopeLabel(effective, groups, folderList);
-    scopeName.hidden = label === null;
-    scopeName.textContent = label ?? '';
+
+    // Systems: the header count follows the scope (systems as items); the filter's options are
+    // every system, because a design in any scope can carry any system's copy (the canvas draws
+    // a folder scope with a system filter active). A failed load leaves All systems / No system only.
+    const systemsState = systemStore.get();
+    const systemList = systemsState.status === 'error' ? [] : systemsState.systems ?? [];
+    const scopedSystems = scopeSystems(systemList, effective);
+    systemFilter = resolveSystemFilter(systemFilter, systemList);
+    const systemEntries = systemOptions(systemList);
+    systemSelect.update({ value: systemFilterToId(systemFilter), options: systemEntries });
+    nameSelect(systemHost, 'System', systemEntries.find((entry) => entry.id === systemFilterToId(systemFilter))?.label ?? 'All systems');
+    nameSelect(sortHost, 'Sort', LIST_SORTS.find((entry) => entry.id === sort)?.label ?? 'Updated');
+
     if (foldersPending) {
-      grid.append(...skeletons());
+      countLine.hidden = true;
+      showLoading();
       scroller.scrollTop = previousScroll;
       return;
     }
-    const scoped = scopeDesigns(all, effective, folderList, root);
-    const shown = sortDesigns(filterDesigns(scoped, query, tab), sort);
-    const counts = tabCounts(scoped, query);
+    const filters = { query, tab, system: systemFilter };
+    const { scoped, shown, counts } = libraryDesigns(all, effective, folderList, root, filters, sort);
+    countLine.hidden = false;
+    const totals = scopedSystems.length > 0 ? `${plural(scoped.length, 'design')} and ${plural(scopedSystems.length, 'system')}` : plural(scoped.length, 'design');
+    // With a scope active the line names it too: the sidebar may be closed on a narrow page.
+    countLine.textContent = label === null ? totals : `${label} · ${totals}`;
     tabsHandle.update({ items: LIST_TABS.map(({ id, label: tabLabel }) => ({ id, label: tabLabel, count: counts[id] })) });
-    const kind = emptyKind(all, shown);
-    if (kind !== 'none' && kind !== 'no-designs' && scoped.length === 0 && folder) {
+    const empty = emptyStateOf({ all, scoped, shown, scope: effective, scopeLabel: label, folderName: folder?.name ?? null, filters, systems: systemList, draggable: true });
+    if (empty) {
       const wrap = h('div');
-      mountEmpty(wrap, { title: `No designs in ${folder.name} yet`, body: folderEmptyBody(true), action: { label: 'Show all designs', onClick: () => setScope(ALL_SCOPE) } });
-      grid.append(message(wrap));
-    } else if (kind === 'no-designs') {
-      const wrap = h('div');
-      mountEmpty(wrap, { title: 'No designs yet', body: 'Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here the moment they are saved.', action: { label: 'New canvas', onClick: () => options.onNew('canvas') } });
-      grid.append(message(wrap));
-    } else if (kind === 'no-matches') {
-      const wrap = h('div');
-      mountEmpty(wrap, { title: query.trim() !== '' ? noMatchesSentence(label, query) : label !== null ? `Nothing in ${label} for this tab yet` : 'Nothing in this tab yet', body: label !== null ? 'Try another word, look in All, or show all designs.' : 'Try another word, or look in All.', action: { label: 'Clear filters', onClick: () => {
-        query = '';
-        tab = 'all';
-        search.update({ value: '' });
-        tabsHandle.update({ activeId: 'all' });
-        paintGrid();
-      } } });
-      grid.append(message(wrap));
-    } else grid.append(...shown.map(card));
+      mountLibraryEmpty(wrap, empty, {
+        onAction: () => {
+          if (empty.action === 'new') options.onNew('canvas');
+          else if (empty.action === 'show-all') setScope(ALL_SCOPE);
+          else clearFilters();
+        },
+        onClearChip: (id) => {
+          if (id === 'search') {
+            query = '';
+            search.update({ value: '' });
+          } else if (id === 'tab') {
+            tab = 'all';
+            tabsHandle.update({ activeId: 'all' });
+          } else systemFilter = ALL_SYSTEMS;
+          paintGrid();
+        },
+      });
+      activeList().append(message(wrap));
+    } else if (libraryView === 'tiles') {
+      grid.append(...shown.map(card));
+    } else {
+      const rowView: DesignRowView = { scope: effective, groups, root, menu: { folder: null, project: null } };
+      list.append(...shown.map((design) => mountDesignRow(design, { variant: 'list', view: { ...rowView, menu: menuFor(design) }, actions: options.actions, onOpen: options.onOpen, thumbs })));
+    }
     const live = new Set(all.map((design) => design.slug));
     for (const [slug, handle] of thumbs) {
       if (!live.has(slug)) {
@@ -361,10 +476,21 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   const minute = setInterval(paintGrid, 60_000);
   scope.add(() => clearInterval(minute));
   scope.add(folderStore.subscribe(paintGrid));
+  scope.add(systemStore.subscribe(paintGrid));
 
-  // The remembered view and the host's project names arrive after the first paint; a failure of either only costs the memory or the nicer name.
+  // The remembered scope, sort and view, and the host's project names, arrive after the first paint;
+  // a failure of any only costs the memory or the nicer name.
   void host.storage.get(scopeStorageKey('page')).then((stored) => {
     chosen = scopeFromId(stored);
+    paintGrid();
+  });
+  void host.storage.get(sortStorageKey('page')).then((stored) => {
+    sort = sortFromStored(stored);
+    sortSelect.update({ value: sort });
+    paintGrid();
+  });
+  void host.storage.get(viewStorageKey).then((stored) => {
+    libraryView = viewFromStored(stored);
     paintGrid();
   });
   void guestHost.client.listProjects().then(
@@ -382,7 +508,8 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   return {
     el,
     focusCard: (slug) => {
-      grid.querySelector<HTMLElement>(`[data-slug="${CSS.escape(slug)}"] .dc-card-main`)?.focus();
+      const escaped = CSS.escape(slug);
+      (grid.querySelector<HTMLElement>(`[data-slug="${escaped}"] .dc-card-main`) ?? list.querySelector<HTMLElement>(`[data-slug="${escaped}"] .dc-row-hit`))?.focus();
     },
     focusSystems: () => systemsButton.el.focus(),
     dispose: () => {
@@ -393,6 +520,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
       search.dispose();
       tabsHandle.dispose();
       sortSelect.dispose();
+      systemSelect.dispose();
       sidebar.dispose();
       undo.dispose();
       el.remove();

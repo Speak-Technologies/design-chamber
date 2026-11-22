@@ -1,8 +1,8 @@
 // View-model of the designs list (rail R1, page P1): search, tabs, sort and the facts a row shows.
 
-import { FOLDER_ID_PATTERN, FOLDER_NAME_MAX, FOLDERS_MAX } from '../../shared/limits.ts';
+import { FOLDER_ID_PATTERN, FOLDER_NAME_MAX, FOLDERS_MAX, SYSTEM_ID_PATTERN } from '../../shared/limits.ts';
 import { sameDirectory } from '../../shared/path-compare.ts';
-import type { DesignKind, DesignSummary } from '../../shared/types.ts';
+import type { DesignKind, DesignSummary, SystemSummary } from '../../shared/types.ts';
 import { plural } from './format.ts';
 
 export type ListTab = 'all' | 'canvas' | 'page';
@@ -54,14 +54,6 @@ export const sortDesigns = (designs: readonly DesignSummary[], sort: ListSort): 
 export const kindSummary = (design: DesignSummary): string => {
   if (design.kind === 'page') return 'Page';
   return `Canvas · ${plural(design.screenCount, 'screen')}`;
-};
-
-export type EmptyKind = 'none' | 'no-designs' | 'no-matches';
-
-/** Which empty state applies: nothing written yet, or a search/tab that hides everything. */
-export const emptyKind = (all: readonly DesignSummary[], shown: readonly DesignSummary[]): EmptyKind => {
-  if (shown.length > 0) return 'none';
-  return all.length === 0 ? 'no-designs' : 'no-matches';
 };
 
 /** Plain sentence for the row's accessible name. */
@@ -233,10 +225,6 @@ export const sameScope = (a: ListScope, b: ListScope): boolean => {
   return true;
 };
 
-/** "No designs in shop match “hero”." (no scope: "No designs match “hero”."). */
-export const noMatchesSentence = (label: string | null, query: string): string =>
-  label === null ? `No designs match “${query.trim()}”.` : `No designs in ${label} match “${query.trim()}”.`;
-
 /** The empty folder's sentence; the rail has nothing to drag onto, so it only names the menu. */
 export const folderEmptyBody = (draggable: boolean): string =>
   draggable ? 'Drag designs here, or use Add to folder in a design’s menu.' : 'Use Add to folder in a design’s menu.';
@@ -310,3 +298,182 @@ export const folderNameProblem = (raw: string, folders: ReadonlyArray<Pick<Folde
 
 /** Folder facts the menus need for one design. */
 export const foldersOfDesign = (slug: string, folders: readonly FolderLite[]): FolderLite[] => folders.filter((folder) => folder.slugs.includes(slug));
+
+// ---- Library views, sort and the System filter (Phase 2.6 L1a, technical design §2.4, §6.4) ----
+//
+// View (page only) and sort (per surface) are remembered in host.storage; search, tab and the
+// System filter live for the session only. Composition order: scope, System filter, search,
+// tab counts, tab, sort. The empty state names every active filter and offers Clear filters,
+// which clears search, tab and system but keeps the scope.
+
+export type LibraryView = 'tiles' | 'list';
+
+/** The page's view toggle; the rail is a list by nature and has no toggle. */
+export const viewStorageKey = 'library-view:page';
+export const sortStorageKey = (surface: 'panel' | 'page'): string => `list-sort:${surface}`;
+
+/** Stored preferences read back; anything unknown or malformed falls back (Tiles, Updated). */
+export const viewFromStored = (raw: unknown): LibraryView => (raw === 'list' ? 'list' : 'tiles');
+export const sortFromStored = (raw: unknown): ListSort => (raw === 'created' || raw === 'title' ? raw : 'updated');
+
+export type SystemFilter = { kind: 'all' } | { kind: 'none' } | { kind: 'system'; id: string };
+
+export const ALL_SYSTEMS: SystemFilter = { kind: 'all' };
+
+export const systemFilterToId = (filter: SystemFilter): string => {
+  switch (filter.kind) {
+    case 'all':
+      return 'all';
+    case 'none':
+      return 'none';
+    case 'system':
+      return `system:${filter.id}`;
+  }
+};
+
+/** Reads a select id back; anything unknown or malformed is All systems. */
+export const systemFilterFromId = (raw: unknown): SystemFilter => {
+  if (raw === 'none') return { kind: 'none' };
+  if (typeof raw === 'string' && raw.startsWith('system:') && SYSTEM_ID_PATTERN.test(raw.slice('system:'.length))) return { kind: 'system', id: raw.slice('system:'.length) };
+  return ALL_SYSTEMS;
+};
+
+/** A filter naming a system that is gone reads as All systems (the select shows it). */
+export const resolveSystemFilter = (filter: SystemFilter, systems: readonly Pick<SystemSummary, 'id'>[]): SystemFilter =>
+  filter.kind === 'system' && !systems.some((system) => system.id === filter.id) ? ALL_SYSTEMS : filter;
+
+/** A deleted system counts as no system: the design keeps its own copy, but the link is gone. */
+export const matchesSystem = (design: Pick<DesignSummary, 'system'>, filter: SystemFilter): boolean => {
+  const link = design.system ?? null;
+  const live = link !== null && link.state !== 'deleted' ? link : null;
+  if (filter.kind === 'all') return true;
+  if (filter.kind === 'none') return live === null;
+  return live !== null && live.id === filter.id;
+};
+
+export type SystemOption = { id: string; label: string; hint?: string };
+
+/** The System select's entries: All systems, each system by name (Draft or its used-by count), No system. */
+export const systemOptions = (systems: readonly SystemSummary[]): SystemOption[] => [
+  { id: 'all', label: 'All systems' },
+  ...[...systems]
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    .map((system) => ({ id: systemFilterToId({ kind: 'system', id: system.id }), label: system.name, hint: system.status === 'draft' ? 'Draft' : String(system.usedBy) })),
+  { id: 'none', label: 'No system' },
+];
+
+/** The project a system belongs to: its repo home, else its code source's project or folder. */
+export const systemProjectOf = (summary: Pick<SystemSummary, 'home' | 'sources'>): string | null =>
+  summary.home !== 'internal' ? summary.home.directory : summary.sources.code?.project ?? summary.sources.code?.directory ?? null;
+
+/** Systems one scope shows. Folders hold designs, not systems. */
+export const scopeSystems = (systems: readonly SystemSummary[], scope: ListScope): SystemSummary[] => {
+  switch (scope.kind) {
+    case 'all':
+      return [...systems];
+    case 'folder':
+      return [];
+    case 'no-project':
+      return systems.filter((system) => systemProjectOf(system) === null);
+    case 'project':
+      return systems.filter((system) => {
+        const directory = systemProjectOf(system);
+        return directory !== null && sameDirectory(directory, scope.directory);
+      });
+  }
+};
+
+export type LibraryFilters = { query: string; tab: ListTab; system: SystemFilter };
+
+/** Scope, then the System filter, then search, then tab counts, then tab, then sort (§6.4). */
+export const libraryDesigns = (
+  designs: readonly DesignSummary[],
+  scope: ListScope,
+  folders: readonly FolderLite[],
+  designsRoot: string,
+  filters: LibraryFilters,
+  sort: ListSort,
+): { scoped: DesignSummary[]; shown: DesignSummary[]; counts: Record<ListTab, number> } => {
+  const scoped = scopeDesigns(designs, scope, folders, designsRoot);
+  const systemed = scoped.filter((design) => matchesSystem(design, filters.system));
+  const counts = tabCounts(systemed, filters.query);
+  const shown = sortDesigns(filterDesigns(systemed, filters.query, filters.tab), sort);
+  return { scoped, shown, counts };
+};
+
+/** One active filter in the empty state's chip row; the scope chip is fixed (Clear filters keeps it). */
+export type EmptyChip = { id: 'scope' | 'search' | 'tab' | 'system'; label: string; fixed: boolean; icon?: 'folder' | 'layers' | 'page' };
+
+export type LibraryEmpty = {
+  kind: 'no-designs' | 'folder-empty' | 'no-matches';
+  title: string;
+  body: string;
+  action: 'new' | 'show-all' | 'clear-filters';
+  chips: EmptyChip[];
+};
+
+const systemNameOf = (filter: SystemFilter, systems: readonly Pick<SystemSummary, 'id' | 'name'>[]): string | null =>
+  filter.kind === 'system' ? systems.find((system) => system.id === filter.id)?.name ?? null : null;
+
+/**
+ * "No designs in Q4 launch match “hero” with the Speak UI system." The approved canvas keeps the
+ * generic noun in the sentence; the chip row names the exact tab. No search and no system: the
+ * older "Nothing in … for this tab yet".
+ */
+export const noMatchesSentenceFor = (input: { scopeLabel: string | null; query: string; system: SystemFilter; systems: readonly Pick<SystemSummary, 'id' | 'name'>[] }): string => {
+  const query = input.query.trim();
+  const name = systemNameOf(input.system, input.systems);
+  const systemPart = name !== null ? ` with the ${name} system` : input.system.kind === 'none' ? ' with no system' : '';
+  const scopePart = input.scopeLabel === null ? '' : ` in ${input.scopeLabel}`;
+  if (query === '' && systemPart === '') return input.scopeLabel === null ? 'Nothing in this tab yet' : `Nothing in ${input.scopeLabel} for this tab yet`;
+  return `No designs${scopePart}${query === '' ? '' : ` match “${query}”`}${systemPart}.`;
+};
+
+/** Which empty state applies, with its copy and the active filters named. Null when rows show. */
+export const emptyStateOf = (input: {
+  all: readonly DesignSummary[];
+  scoped: readonly DesignSummary[];
+  shown: readonly DesignSummary[];
+  scope: ListScope;
+  scopeLabel: string | null;
+  folderName: string | null;
+  filters: LibraryFilters;
+  systems: readonly Pick<SystemSummary, 'id' | 'name'>[];
+  draggable: boolean;
+}): LibraryEmpty | null => {
+  if (input.shown.length > 0) return null;
+  if (input.all.length === 0) {
+    return {
+      kind: 'no-designs',
+      title: 'No designs yet',
+      body: input.draggable
+        ? 'Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here the moment they are saved.'
+        : 'Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here.',
+      action: 'new',
+      chips: [],
+    };
+  }
+  if (input.scoped.length === 0 && input.folderName !== null) {
+    return { kind: 'folder-empty', title: `No designs in ${input.folderName} yet`, body: folderEmptyBody(input.draggable), action: 'show-all', chips: [] };
+  }
+  const { query, tab, system } = input.filters;
+  const trimmed = query.trim();
+  const chips: EmptyChip[] = [];
+  if (input.scopeLabel !== null) {
+    const label = input.scope.kind === 'folder' ? `Folder: ${input.scopeLabel}` : input.scope.kind === 'project' ? `Project: ${input.scopeLabel}` : input.scopeLabel;
+    chips.push({ id: 'scope', label, fixed: true, icon: input.scope.kind === 'folder' ? 'folder' : input.scope.kind === 'project' ? 'layers' : 'page' });
+  }
+  if (trimmed !== '') chips.push({ id: 'search', label: `Search: ${trimmed}`, fixed: false });
+  if (tab !== 'all') chips.push({ id: 'tab', label: LIST_TABS.find((entry) => entry.id === tab)?.label ?? tab, fixed: false });
+  const name = systemNameOf(system, input.systems);
+  if (name !== null) chips.push({ id: 'system', label: `System: ${name}`, fixed: false });
+  else if (system.kind === 'none') chips.push({ id: 'system', label: 'No system', fixed: false });
+  const lead = trimmed !== '' ? 'Try another word, or clear the filters.' : 'Clear the filters to see what is here.';
+  return {
+    kind: 'no-matches',
+    title: noMatchesSentenceFor({ scopeLabel: input.scopeLabel, query, system, systems: input.systems }),
+    body: input.scopeLabel === null ? lead : `${lead} ${input.scopeLabel} stays selected.`,
+    action: 'clear-filters',
+    chips,
+  };
+};

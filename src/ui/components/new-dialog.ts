@@ -12,7 +12,7 @@ import { DESTINATIONS, FOLDER_FIELD_HELPER, FOLDER_FIELD_LABEL, NO_SYSTEMS_LINE,
 import { filingOf, filingProblem, goesLine, keyOfTarget, type TargetKey } from '../model/folder-picker-model.ts';
 import { folderName } from '../model/format.ts';
 import { errorText, h } from './dom.ts';
-import { mountFolderPicker, pickGlyph } from './folder-picker.ts';
+import { mountFolderPicker } from './folder-picker.ts';
 import { folders } from './folders-store.ts';
 import { bannerWithActions, btn, iconBtn, openSheet } from './kit.ts';
 import { icon } from './icons.ts';
@@ -197,7 +197,7 @@ export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): v
     const keys = picker.selected();
     const chipNodes: HTMLElement[] = [];
     if (derived !== null) {
-      chipNodes.push(h('span', { class: 'dc-pick-chip', 'data-fixed': 'true', title: `Automatic: the agent works in ${derived.label}` }, pickGlyph('lock', 12), h('span', { class: 'dc-pick-chip-name' }, derived.label)));
+      chipNodes.push(h('span', { class: 'dc-pick-chip', 'data-fixed': 'true', title: `Automatic: the agent works in ${derived.label}` }, icon('lock', 12), h('span', { class: 'dc-pick-chip-name' }, derived.label)));
     }
     for (const row of selected) {
       const remove = h('button', { type: 'button', class: 'dc-pick-chip-x', 'aria-label': `Remove ${row.label}`, title: `Remove ${row.label}` }, icon('close', 12));
@@ -209,7 +209,7 @@ export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): v
     const goes = goesLine(selected, derived?.label ?? null);
     folderNote.replaceChildren();
     if (goes === null) folderNote.append(FOLDER_FIELD_HELPER);
-    else folderNote.append(pickGlyph('info', 14), h('span', null, goes));
+    else folderNote.append(icon('info', 14), h('span', null, goes));
     folderNote.classList.toggle('dc-goes-line', goes !== null);
   };
   const picker = mountFolderPicker(pickerHost, {

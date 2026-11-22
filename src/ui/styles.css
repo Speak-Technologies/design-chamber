@@ -656,15 +656,6 @@ body {
   width: 280px;
   max-width: 100%;
 }
-.dc-sort {
-  display: flex;
-  align-items: center;
-  gap: var(--dc-s2);
-}
-.dc-sort-label {
-  color: var(--oc-muted);
-  font-size: 0.8125rem;
-}
 .dc-library-scroll {
   flex: 1;
   min-height: 0;
@@ -3138,14 +3129,6 @@ summary.dc-checks-group-title:focus-visible {
 .dc-library-body > .dc-library-scroll {
   flex: 1;
   min-width: 0;
-}
-.dc-page-scope {
-  color: var(--oc-muted);
-  font-weight: 500;
-}
-.dc-page-scope::before {
-  content: '/';
-  margin: 0 var(--dc-s2);
 }
 .dc-library-bar > .dc-iconbtn[aria-label='Projects and folders'] {
   margin-left: calc(var(--dc-s1) * -1);
@@ -5905,3 +5888,339 @@ button.dc-sp-value:focus-visible {
   box-shadow: var(--dc-ring);
 }
 /* ===== end Phase 2.6 design warnings ===== */
+
+/* ===== Phase 2.6 L1a: library views (Tiles/List), Sort, the System filter, the gear ===== */
+/*
+ * The approved canvas (Designs/phase-2-6-library-ui: library-tiles, library-list, rail-library,
+ * library-states) is the visual authority. Host tokens and kit variables only. The inline selects
+ * put the kit's caption inside the field box; the page List view lays the shared row's facts out
+ * in columns; the rail title keeps its 120 px budget at 320 (the controls never squeeze it).
+ */
+
+/* The header's count line: "24 designs and 4 systems" beside the title. */
+.dc-page-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-page-count {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+/* The toolbar row under the header: search, tabs, System, Sort, then the view toggle at the end. */
+.dc-library-controls {
+  padding: 0 var(--dc-s5) var(--dc-s3);
+}
+.dc-view-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  margin-left: auto;
+  border-radius: calc(var(--dc-r) + 2px);
+  background: color-mix(in srgb, var(--oc-fg) 4%, transparent);
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--oc-fg) 12%, transparent);
+}
+.dc-view-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--dc-s1);
+  height: 26px;
+  padding: 0 var(--dc-s2);
+  border: 1px solid transparent;
+  border-radius: var(--dc-r);
+  background: none;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease-out, color 120ms ease-out;
+}
+.dc-view-toggle-btn:hover {
+  color: var(--oc-fg);
+  background: var(--oc-hover);
+}
+.dc-view-toggle-btn[aria-pressed='true'] {
+  background: var(--oc-sdk-raised-bg);
+  border-color: var(--oc-sdk-edge);
+  box-shadow: var(--oc-sdk-raised-lift);
+  color: var(--oc-elevated-fg);
+  font-weight: 600;
+}
+.dc-view-toggle-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+
+/* A select with its caption inside the field box (the canvas's "System  All systems  ⌄"). */
+.dc-inline-select {
+  min-width: 0;
+}
+.dc-inline-select .oc-sdk-select {
+  flex-direction: row;
+  align-items: center;
+  gap: 0;
+  height: 28px;
+  padding-left: 10px;
+  border: 1px solid var(--oc-sdk-edge);
+  border-radius: var(--dc-r);
+  background: var(--oc-sdk-raised-bg);
+  box-shadow: var(--oc-sdk-raised-lift);
+}
+.dc-inline-select .oc-sdk-field-label {
+  flex: none;
+  padding-right: var(--dc-s1);
+  color: var(--oc-muted);
+  font-weight: 500;
+}
+.dc-inline-select .oc-sdk-trigger {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.dc-inline-select .oc-sdk-trigger:hover,
+.dc-inline-select .oc-sdk-trigger[aria-expanded='true'] {
+  background-image: none;
+}
+.dc-inline-select .oc-sdk-select:hover {
+  background-image: linear-gradient(var(--oc-hover), var(--oc-hover));
+}
+.dc-inline-select .oc-sdk-select:focus-within {
+  box-shadow: var(--dc-ring);
+}
+.dc-inline-select .oc-sdk-trigger:focus-visible {
+  box-shadow: none;
+}
+
+/* Rail: System and Sort side by side under the Show select; values truncate, the title never does. */
+.dc-rail-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: var(--dc-s2);
+}
+.dc-rail-pair-select .oc-sdk-select {
+  width: 100%;
+}
+.dc-rail-title {
+  min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The page List view: the shared row's facts in columns, a whole-row hit button under the cells. */
+.dc-list-wrap {
+  padding: 0 var(--dc-s5) var(--dc-s6);
+}
+.dc-list-head,
+.dc-library-list .dc-list-row {
+  display: grid;
+  grid-template-columns: 76px minmax(200px, 1.5fr) minmax(170px, 1.1fr) 96px 28px;
+  align-items: center;
+  gap: var(--dc-s3);
+}
+/* L1b flips data-chip when the system chip column arrives. */
+.dc-list-wrap[data-chip='true'] .dc-list-head,
+.dc-list-wrap[data-chip='true'] .dc-list-row {
+  grid-template-columns: 76px minmax(200px, 1.5fr) minmax(120px, 0.8fr) minmax(170px, 1.1fr) 96px 28px;
+}
+.dc-list-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-height: 32px;
+  padding: 0 var(--dc-s1);
+  border-bottom: 1px solid var(--dc-hair);
+  background: var(--oc-bg);
+  color: var(--oc-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.dc-library-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.dc-list-row {
+  position: relative;
+  min-height: 56px;
+  padding: var(--dc-s1);
+  border-bottom: 1px solid var(--dc-hair);
+  border-radius: 0;
+}
+.dc-row-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  cursor: pointer;
+}
+.dc-list-row > :not(.dc-row-hit) {
+  position: relative;
+  z-index: 1;
+}
+.dc-list-row .dc-row-in,
+.dc-list-row .dc-row-when,
+.dc-list-row .dc-row-name,
+.dc-list-row .dc-row-thumb {
+  pointer-events: none;
+}
+.dc-list-row .dc-row-system {
+  pointer-events: auto;
+  min-width: 0;
+}
+.dc-row-hit:focus-visible {
+  outline: none;
+  box-shadow: inset var(--dc-ring);
+}
+.dc-list-row .dc-row-thumb {
+  width: 76px;
+}
+.dc-list-row .dc-thumb {
+  width: 76px;
+  height: auto;
+  aspect-ratio: 16 / 10;
+  /* A thumb shared with the Tiles view arrives with the card aspect (no border): the row restores it. */
+  border: 1px solid var(--dc-hair);
+  border-radius: 6px;
+}
+.dc-list-row .dc-thumb[data-state='pending'] {
+  border-style: dashed;
+  background: transparent;
+}
+.dc-row-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dc-list-row .dc-row-title {
+  font-weight: 600;
+}
+.dc-row-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--dc-s1);
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+.dc-row-sub .dc-row-flags {
+  margin-top: 0;
+}
+.dc-row-in {
+  min-width: 0;
+  overflow: hidden;
+}
+.dc-row-when {
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dc-list-row[data-dragging='true'] {
+  opacity: 0.5;
+}
+.dc-list-row.dc-row-skeleton {
+  pointer-events: none;
+}
+.dc-list-row .dc-skel-thumb {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 10;
+}
+/* A narrow page cannot spare the In column; the project line stays on the tiles. */
+@media (max-width: 700px) {
+  .dc-list-head,
+  .dc-library-list .dc-list-row {
+    grid-template-columns: 64px minmax(140px, 1.5fr) 84px 28px;
+  }
+  .dc-list-wrap[data-chip='true'] .dc-list-head,
+  .dc-list-wrap[data-chip='true'] .dc-list-row {
+    grid-template-columns: 64px minmax(120px, 1.5fr) minmax(90px, 0.8fr) 84px 28px;
+  }
+  .dc-list-head-in,
+  .dc-list-row .dc-row-in {
+    display: none;
+  }
+  .dc-list-row .dc-row-thumb,
+  .dc-list-row .dc-thumb {
+    width: 64px;
+  }
+}
+
+/* The empty state's active-filter chips: the scope is fixed, the rest clear on their own. */
+.dc-empty-filters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--dc-s1) var(--dc-s2);
+  margin-top: var(--dc-s2);
+}
+.dc-empty-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--dc-s1);
+  max-width: 100%;
+  padding: 2px var(--dc-s2);
+  border-radius: 9999px;
+  background: var(--oc-hover);
+  color: var(--oc-fg);
+  font-size: 0.75rem;
+}
+.dc-empty-chip[data-fixed='true'] {
+  color: var(--oc-muted);
+}
+.dc-empty-chip .dc-icon {
+  color: var(--oc-muted);
+}
+.dc-empty-chip-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-empty-chip-x {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--oc-muted);
+  cursor: pointer;
+}
+.dc-empty-chip-x:hover {
+  background: var(--oc-active);
+  color: var(--oc-fg);
+}
+.dc-empty-chip-x:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-view-toggle-btn {
+    transition: none;
+  }
+}
+/* ===== end Phase 2.6 L1a ===== */

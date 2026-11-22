@@ -1,6 +1,7 @@
 // Visual scenario for the Tweaks panel (Phase 2 feature 09, U2): page 1400 and rail 320 and 480 (780 and 900 tall), dark and
 // light, plus the rail at 540 px tall (the full-height fallback). Per variant, on the coffee canvas (five knobs: three sliders, a choice and
-// a formula the panel cannot tune; one slider is also set for a narrow screen): the Tweaks button and its place; the panel
+// a formula the panel cannot tune; one slider is also set for a narrow screen): the Tweaks button and its place (below 360 px it is hidden
+// and the ⋯ menu carries it, KI-21); the panel
 // (a side dock on the page, a non-modal bottom sheet of at most half the rail on the rail, the wall live above it); the
 // rows, the broken knob's reason and the also-set note; moving a knob (the dot, "Unsaved", Send going quiet so Save is the
 // one filled primary); saving (progress, a refusal with the values kept, then a real save with its notice and Undo); a file
@@ -34,6 +35,8 @@ export const run = async (helpers) => {
   for (const [kind, width, height, theme] of VARIANTS) {
     const rail = kind === 'rail';
     const short = height < 560;
+    // KI-21 (Phase 2.5): below 360 px the Tweaks icon button is hidden and the ⋯ menu carries it.
+    const narrow = rail && width < 360;
     const tag = `${kind}-${width}${rail && height !== 780 ? 'x' + height : ''}-${theme}-tweaks`;
     if (only && !only.test(tag)) continue;
     console.log(tag);
@@ -64,7 +67,13 @@ export const run = async (helpers) => {
     };
     const openPanel = async () => {
       if (await sheetOpen()) return;
-      await p.click(BUTTON);
+      if (narrow) {
+        // The hidden button's stand-in: the ⋯ menu's Tweaks item (its label follows the button's).
+        await p.click('.dc-toolbar-row .dc-iconbtn[aria-label="More actions"]');
+        await p.click('.dc-popup [role="menuitem"]', { text: 'Tweaks' });
+      } else {
+        await p.click(BUTTON);
+      }
       await checkSoon(sheetOpen, `${tag}: the panel opens`);
       await p.settle(250);
     };
@@ -85,8 +94,16 @@ export const run = async (helpers) => {
 
     await openDesign(SLUG, rail ? 2 : 6);
 
-    // 1. the button: between Comments and Versions, no dot, named
-    check(await visible(BUTTON), `${tag}: the Tweaks button is shown (the design has knobs)`);
+    // 1. the button: between Comments and Versions, no dot, named. Below 360 px it is hidden
+    // (KI-21): the title keeps its room and the ⋯ menu carries a Tweaks item in its place.
+    if (narrow) {
+      check(await p.guest(`const b = doc.querySelector(${q(BUTTON)}); return !!b && b.getClientRects().length === 0`), `${tag}: below 360 px the Tweaks button is hidden (the title keeps its room)`);
+      await p.click('.dc-toolbar-row .dc-iconbtn[aria-label="More actions"]');
+      check(await p.guest(`return [...doc.querySelectorAll('.dc-popup [role=menuitem]')].some((n) => n.textContent.trim() === 'Tweaks')`), `${tag}: the ⋯ menu carries Tweaks instead`);
+      await p.key('Escape');
+    } else {
+      check(await visible(BUTTON), `${tag}: the Tweaks button is shown (the design has knobs)`);
+    }
     check(
       await p.guest(
         rail
@@ -165,7 +182,9 @@ export const run = async (helpers) => {
     await closePanel();
     check(await p.guest(`return doc.querySelector(${q(BUTTON)}).classList.contains('dc-dotmark')`), `${tag}: the dot stays after the panel is closed`);
     check(!(await sendQuiet()), `${tag}: Send is the filled primary again`);
-    check(await p.guest(`return doc.activeElement === doc.querySelector(${q(BUTTON)})`), `${tag}: focus goes back to the Tweaks button`);
+    check(await p.guest(narrow
+      ? `return doc.activeElement === doc.querySelector('.dc-toolbar-row .dc-iconbtn[aria-label="More actions"]')`
+      : `return doc.activeElement === doc.querySelector(${q(BUTTON)})`), `${tag}: focus goes back to ${narrow ? 'the ⋯ menu button that stands in for Tweaks' : 'the Tweaks button'}`);
     await openPanel();
     check((await value('--accent-h')) === '20' && (await value('--density')) === 'Roomy', `${tag}: the values are still there when it opens again`);
 
@@ -253,7 +272,7 @@ export const run = async (helpers) => {
     await p.shot(`${tag}-8-leave`);
     await p.key('Escape', { focus: '.dc-sheet[data-variant="dialog"] .dc-sheet-panel' });
     await checkSoon(async () => !(await visible('.dc-sheet[data-variant="dialog"]')), `${tag}: Escape is Keep editing`);
-    check(await visible('.dc-tweaks-btn'), `${tag}: the design is still open`);
+    check(narrow ? await p.guest('return !!doc.querySelector(".dc-wall")') : await visible('.dc-tweaks-btn'), `${tag}: the design is still open`);
     if (!short) check(await sheetOpen(), `${tag}: Keep editing leaves the panel open`);
     await back();
     await checkSoon(() => visible('.dc-sheet[data-variant="dialog"]'), `${tag}: back asks again`);
@@ -270,7 +289,8 @@ export const run = async (helpers) => {
     await p.host('document.getElementById("g").contentWindow.location.reload()');
     await p.settle(900);
     await p.waitFor('return !!doc.querySelector(".dc-app")', 'the app to mount again');
-    if (!(await visible(BUTTON))) {
+    // After a reload the frame is back on the list at every width (the open design is not restored).
+    if (!(await p.guest('return !!doc.querySelector(".dc-wall")'))) {
       await listReady(p);
       await openDesign(SLUG, rail ? 2 : 6);
     }
@@ -309,7 +329,9 @@ export const run = async (helpers) => {
     check((await text('.dc-tweaks-error'))?.startsWith("Couldn't read tokens.css.") === true, `${tag}: "Couldn't read tokens.css. …" (${await text('.dc-tweaks-error')})`);
     check(await p.guest(`return [...doc.querySelectorAll('.dc-knob input[type=range]')].every((n) => n.disabled) && doc.querySelector(${q(SAVE)}).disabled && doc.querySelector(${q(RESET)}).disabled`), `${tag}: every knob and both buttons are off`);
     check(await visible('.dc-tweaks-failed .oc-sdk-btn'), `${tag}: Try again is there`);
-    check(await visible(BUTTON), `${tag}: the Tweaks button stays`);
+    check(narrow
+      ? await p.guest(`const b = doc.querySelector(${q(BUTTON)}); return !!b && b.getClientRects().length === 0`)
+      : await visible(BUTTON), `${tag}: the Tweaks button stays${narrow ? ' (hidden; the menu carries it)' : ''}`);
     await p.shot(`${tag}-10-failed`);
     await p.route('GET /designs/:slug/tokens', null);
     await p.click('.dc-tweaks-failed .oc-sdk-btn', { text: 'Try again' });

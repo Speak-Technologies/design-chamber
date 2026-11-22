@@ -10,6 +10,7 @@ Screenshots: `documentation/pages/img/folders-rail-<width>-<theme>-*.png` and `f
 [320 dark, open](img/folders-rail-320-dark-2-show-open.png) · [480 light](img/folders-rail-480-light-3-project.png)
 
 - One **Show** select sits between the search and the tabs. Its entries: **All designs**, each project (name, count), **No project** (only when there are some), then each folder as "Folder · Launch" (count). Its accessible name reads "Show: shop".
+- Under it, **System** and **Sort** sit side by side, each half width (their values truncate at 320 px; the title keeps its 120 px). System is the same filter as the page's (All systems, each system with Draft or its count, No system); Sort is Updated / Created / Title, remembered on this surface (`list-sort:panel` in `host.storage`, fallback Updated). Search, tab and the System filter live for the session.
 - The tabs and their counts, the search and the empty states work inside the choice. Each row shows its project under the kind line, except inside that project.
 - The choice is remembered on this surface (`list-scope:panel` in `host.storage`); an unknown value, or a project or folder that is gone, reads as All designs.
 

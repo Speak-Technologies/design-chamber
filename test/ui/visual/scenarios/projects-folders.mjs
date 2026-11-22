@@ -73,7 +73,7 @@ const pageFlow = async (h, width, theme) => {
   // A project row filters the grid; search, tabs and counts work inside it; the card's project line goes.
   await p.click('.dc-side-main', { text: 'shop' });
   await h.checkSoon(async () => JSON.stringify(await gridSlugs(p)) === '["habit-tracker","northwind-pricing"]', `${tag}: the shop row shows only shop's designs`);
-  h.check(await p.guest('return doc.querySelector(".dc-page-scope")?.textContent === "shop" && !doc.querySelector(".dc-card-project")'), `${tag}: the title names the view and the cards drop their project line inside it`);
+  h.check(await p.guest('return doc.querySelector(".dc-page-count")?.textContent === "shop · 2 designs" && !doc.querySelector(".dc-card-project")'), `${tag}: the count line names the view and the cards drop their project line inside it`);
   h.check(await p.guest('const t = [...doc.querySelectorAll(".dc-tabs [role=tab]")].map((n) => n.textContent.replace(/\\s+/g, " ").trim()); return /All.*2/.test(t[0]) && /Canvases.*1/.test(t[1]) && /Pages.*1/.test(t[2])'), `${tag}: tab counts follow the project`);
   h.check(String(await p.host('window.__host.storageGet("list-scope:page")')).startsWith('project:'), `${tag}: the chosen view is remembered (list-scope:page)`);
   await p.type('.dc-search input', 'zzz');
@@ -161,7 +161,7 @@ const pageFlow = async (h, width, theme) => {
   await p.type('.dc-side-row-edit input', 'Ideas');
   await p.key('Enter', { focus: '.dc-side-row-edit input' });
   await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-side-label")].some((n) => n.textContent === "Ideas") && !doc.querySelector(".dc-side-row-edit")'), `${tag}: renaming inline keeps the folder`);
-  h.check(await p.guest('return doc.querySelector(".dc-page-scope")?.textContent === "Ideas"'), `${tag}: the open view follows the new name`);
+  h.check(await p.guest('return doc.querySelector(".dc-page-count")?.textContent === "Ideas · 0 designs"'), `${tag}: the open view follows the new name`);
   await p.click('.dc-side-row[data-selected=true] .dc-iconbtn');
   await p.click('.dc-popup [role="menuitem"]', { text: 'Delete folder' });
   await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog]")', 'the delete confirm (Phase 2.6)');
@@ -172,7 +172,7 @@ const pageFlow = async (h, width, theme) => {
   await p.settle(250);
   h.check(!(await p.guest('return !!doc.querySelector(".dc-sheet[data-variant=dialog]")')), `${tag}: the confirm closes once the folder is gone`);
   h.check(await p.guest('const n = doc.querySelector(".dc-undo-notice"); return /Deleted Ideas\\./.test(n.textContent) && /It was empty/.test(n.textContent) && /Undo/.test(n.textContent) && n.getAttribute("aria-live") === "polite"'), `${tag}: the notice says what was deleted and offers Undo (live region)`);
-  h.check(await p.guest('return doc.querySelector(".dc-page-scope")?.hidden === true'), `${tag}: the view falls back to All designs`);
+  h.check(await p.guest('return doc.querySelector(".dc-side-row[data-selected=true] .dc-side-label")?.textContent === "All designs"'), `${tag}: the view falls back to All designs`);
   await p.shot(`${tag}-7-deleted-undo`);
   await p.click('.dc-undo-notice .oc-sdk-btn', { text: 'Undo' });
   await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-side-label")].some((n) => n.textContent === "Ideas") && !doc.querySelector(".dc-undo-notice .oc-sdk-banner")'), `${tag}: Undo brings the folder back`);

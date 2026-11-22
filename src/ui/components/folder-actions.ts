@@ -15,9 +15,10 @@ import { keyOfTarget } from '../model/folder-picker-model.ts';
 import { folderNameProblem, type FolderLite } from '../model/list-model.ts';
 import { designMenu, runDesignAction, toast, type ActionContext, type DesignRef } from './actions.ts';
 import { errorText, h } from './dom.ts';
-import { mountFolderPicker, pickGlyph, type PickerDesignRef } from './folder-picker.ts';
+import { mountFolderPicker, type PickerDesignRef } from './folder-picker.ts';
 import { banner, btn, confirmDialog, openSheet, type MenuEntry } from './kit.ts';
 import { folders } from './folders-store.ts';
+import { icon } from './icons.ts';
 
 export type FolderRef = { id: string; name: string };
 
@@ -125,7 +126,7 @@ const pickerRefOf = (design: Pick<DesignRef, 'slug' | 'title'>): PickerDesignRef
 export const openAddToFolder = (hostEl: HTMLElement, design: Pick<DesignRef, 'slug' | 'title'>): void => {
   const pickerHost = h('div');
   const sheet = openSheet(hostEl, { title: 'Add to folder', subtitle: design.title, variant: 'dialog', onClose: () => picker.dispose() });
-  const note = h('p', { class: 'dc-pick-note-line' }, pickGlyph('info', 14), h('span', null, 'Projects and folders both group this design. Tick as many as you like. Each tick saves at once.'));
+  const note = h('p', { class: 'dc-pick-note-line' }, icon('info', 14), h('span', null, 'Projects and folders both group this design. Tick as many as you like. Each tick saves at once.'));
   sheet.body.append(note, pickerHost);
   const picker = mountFolderPicker(pickerHost, { mode: 'multi', apply: 'immediate', design: pickerRefOf(design), derivedProject: null });
   sheet.foot.append(btn({ label: 'Done', variant: 'default', emphasis: 'primary', onClick: () => sheet.close() }).el);
@@ -361,7 +362,7 @@ export const deleteFolder = (folder: FolderRef, notice: UndoNoticeHandle): void 
       'div',
       { class: 'dc-delete-facts' },
       h('p', null, ...copy.parts.map((part) => (part.strong ? h('strong', null, part.text) : part.text))),
-      copy.promise === null ? null : h('p', { class: 'dc-delete-promise' }, pickGlyph('info', 14), h('span', null, copy.promise)),
+      copy.promise === null ? null : h('p', { class: 'dc-delete-promise' }, icon('info', 14), h('span', null, copy.promise)),
     ),
     confirmLabel: 'Delete folder',
     destructive: true,

@@ -1,23 +1,29 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-import type { DesignSummary } from '../../src/shared/types.ts';
+import type { DesignSummary, SystemSummary } from '../../src/shared/types.ts';
 import { fileSize, relativeTime, plural, folderName, middlePath, zoomPercent } from '../../src/ui/model/format.ts';
 import {
   ALL_SCOPE,
+  ALL_SYSTEMS,
   LIST_TABS,
   cardProjectLine,
-  emptyKind,
+  emptyStateOf,
   filterDesigns,
   folderEmptyBody,
   folderNameProblem,
   foldersOfDesign,
   kindLabel,
   kindSummary,
-  noMatchesSentence,
+  libraryDesigns,
+  matchesSystem,
+  noMatchesSentenceFor,
   projectGroups,
   projectOf,
   resolveScope,
+  resolveSystemFilter,
   rowAriaLabel,
   sameScope,
   scopeCounts,
@@ -26,11 +32,21 @@ import {
   scopeLabel,
   scopeOptions,
   scopeStorageKey,
+  scopeSystems,
   scopeToId,
   sortDesigns,
+  sortFromStored,
+  sortStorageKey,
+  systemFilterFromId,
+  systemFilterToId,
+  systemOptions,
+  systemProjectOf,
   tabCounts,
+  viewFromStored,
+  viewStorageKey,
   type FolderLite,
   type ListScope,
+  type SystemFilter,
 } from '../../src/ui/model/list-model.ts';
 import { kindHint, startLabel } from '../../src/ui/model/new-model.ts';
 
@@ -74,12 +90,6 @@ test('sortDesigns orders by updated/created newest first and by title A–Z, wit
   assert.deepEqual(sortDesigns(set, 'created').map((d) => d.slug), ['invoice', 'coffee', 'onboarding']);
   assert.deepEqual(sortDesigns(set, 'title').map((d) => d.slug), ['coffee', 'invoice', 'onboarding']);
   assert.deepEqual(set.map((d) => d.slug), before);
-});
-
-test('emptyKind tells "nothing written yet" from "the search hides everything"', () => {
-  assert.equal(emptyKind([], []), 'no-designs');
-  assert.equal(emptyKind(set, []), 'no-matches');
-  assert.equal(emptyKind(set, set), 'none');
 });
 
 test('kindSummary and rowAriaLabel use the glossary words and singular/plural correctly', () => {
@@ -204,7 +214,8 @@ test('search, tab and sort work inside a scope, and tab counts follow it', () =>
   assert.deepEqual(tabCounts(inShop, 'hero'), { all: 1, canvas: 0, page: 1 });
   assert.deepEqual(sortDesigns(filterDesigns(inShop, '', 'all'), 'title').map((d) => d.slug), ['cart', 'hero']);
   assert.deepEqual(sortDesigns(filterDesigns(inShop, '', 'page'), 'updated').map((d) => d.slug), ['hero']);
-  assert.equal(emptyKind(grouped, filterDesigns(inShop, 'zzz', 'all')), 'no-matches');
+  const hidden = emptyStateOf({ all: grouped, scoped: inShop, shown: filterDesigns(inShop, 'zzz', 'all'), scope: { kind: 'project', directory: SHOP }, scopeLabel: 'shop', folderName: null, filters: { query: 'zzz', tab: 'all', system: ALL_SYSTEMS }, systems: [], draggable: false });
+  assert.equal(hidden?.kind, 'no-matches');
 });
 
 test('scopeCounts counts only designs that are in the list, per folder, and No project', () => {
@@ -217,10 +228,14 @@ test('a design in several folders is found by each, and foldersOfDesign lists th
   assert.deepEqual(foldersOfDesign('hero', folders), []);
 });
 
-test('noMatchesSentence names the scope and the search', () => {
-  assert.equal(noMatchesSentence('shop', 'hero'), 'No designs in shop match “hero”.');
-  assert.equal(noMatchesSentence('shop', '  hero '), 'No designs in shop match “hero”.');
-  assert.equal(noMatchesSentence(null, 'hero'), 'No designs match “hero”.');
+test('noMatchesSentenceFor names the scope, the search and the system (the approved canvas sentence)', () => {
+  const systems = [{ id: 'speak', name: 'Speak UI' }];
+  assert.equal(noMatchesSentenceFor({ scopeLabel: 'Q4 launch', query: 'hero', system: { kind: 'system', id: 'speak' }, systems }), 'No designs in Q4 launch match “hero” with the Speak UI system.');
+  assert.equal(noMatchesSentenceFor({ scopeLabel: 'shop', query: '  hero ', system: ALL_SYSTEMS, systems }), 'No designs in shop match “hero”.');
+  assert.equal(noMatchesSentenceFor({ scopeLabel: null, query: 'hero', system: ALL_SYSTEMS, systems }), 'No designs match “hero”.');
+  assert.equal(noMatchesSentenceFor({ scopeLabel: 'shop', query: '', system: { kind: 'none' }, systems }), 'No designs in shop with no system.');
+  assert.equal(noMatchesSentenceFor({ scopeLabel: null, query: '', system: { kind: 'system', id: 'gone' }, systems }), 'Nothing in this tab yet', 'a gone system drops its clause; the tab-only fallback reads');
+  assert.equal(noMatchesSentenceFor({ scopeLabel: 'shop', query: '', system: ALL_SYSTEMS, systems }), 'Nothing in shop for this tab yet');
 });
 
 test('the empty folder says what to do, with or without drag', () => {
@@ -288,4 +303,190 @@ test('folderNameProblem: the same rules and sentences as the service, before the
   const full = Array.from({ length: 50 }, (_, n) => ({ id: `f_${String(n).padStart(10, '0')}`, name: `F${n}` }));
   assert.equal(folderNameProblem('One more', full), 'You can have up to 50 folders.');
   assert.equal(folderNameProblem('F3 renamed', full, 'f_0000000003'), null, 'a rename is not a new folder');
+});
+
+// ---- Library views, sort and the System filter (Phase 2.6 L1a) ----
+
+const TIDEPOOL = 'C:\\Users\\you\\work\\tidepool-web';
+const system = (over: Partial<SystemSummary> & Pick<SystemSummary, 'id' | 'name'>): SystemSummary => ({
+  status: 'ready',
+  changesToReview: false,
+  sources: { code: null, brand: 0, description: false },
+  created: '2026-01-01T00:00:00Z',
+  swatches: [],
+  usedBy: 0,
+  isDefault: false,
+  pinnedFor: [],
+  updated: '2026-10-01T10:00:00.000Z',
+  revision: 1,
+  empty: false,
+  unreadable: null,
+  home: 'internal',
+  building: false,
+  sharedRepoWith: null,
+  livingPage: null,
+  proposalWaiting: false,
+  ...over,
+});
+const link = (id: string, state: 'ok' | 'draft' | 'deleted' = 'ok'): NonNullable<DesignSummary['system']> => ({ id, name: id, revision: 1, state, updateAvailable: false });
+
+test('the remembered view and sort fall back to Tiles and Updated on anything unknown', () => {
+  assert.equal(viewStorageKey, 'library-view:page');
+  assert.equal(sortStorageKey('panel'), 'list-sort:panel');
+  assert.equal(sortStorageKey('page'), 'list-sort:page');
+  assert.equal(viewFromStored('list'), 'list');
+  assert.equal(viewFromStored('tiles'), 'tiles');
+  for (const bad of [undefined, null, 5, {}, '', 'grid', 'LIST', 'list ']) assert.equal(viewFromStored(bad), 'tiles', String(bad));
+  assert.equal(sortFromStored('updated'), 'updated');
+  assert.equal(sortFromStored('created'), 'created');
+  assert.equal(sortFromStored('title'), 'title');
+  for (const bad of [undefined, null, 5, {}, '', 'name', 'TITLE', 'updated ']) assert.equal(sortFromStored(bad), 'updated', String(bad));
+});
+
+test('the System filter round-trips through its select id; unknown or hostile ids read as All systems', () => {
+  const samples: SystemFilter[] = [ALL_SYSTEMS, { kind: 'none' }, { kind: 'system', id: 'tidepool' }];
+  for (const filter of samples) assert.deepEqual(systemFilterFromId(systemFilterToId(filter)), filter);
+  for (const bad of [undefined, null, 5, {}, '', 'system:', 'system:UPPER', 'system:bad id', 'system:' + 'x'.repeat(64), 'all ', 'nope']) {
+    assert.deepEqual(systemFilterFromId(bad), ALL_SYSTEMS, String(bad).slice(0, 20));
+  }
+});
+
+test('a System filter naming a gone system resolves to All systems; none and all stay', () => {
+  const systems = [system({ id: 'tidepool', name: 'Tidepool' })];
+  assert.deepEqual(resolveSystemFilter({ kind: 'system', id: 'tidepool' }, systems), { kind: 'system', id: 'tidepool' });
+  assert.deepEqual(resolveSystemFilter({ kind: 'system', id: 'gone' }, systems), ALL_SYSTEMS);
+  assert.deepEqual(resolveSystemFilter({ kind: 'system', id: 'tidepool' }, []), ALL_SYSTEMS);
+  assert.deepEqual(resolveSystemFilter({ kind: 'none' }, systems), { kind: 'none' });
+  assert.deepEqual(resolveSystemFilter(ALL_SYSTEMS, systems), ALL_SYSTEMS);
+});
+
+test('matchesSystem: a deleted system counts as no system, never as itself', () => {
+  const ok = design({ slug: 'a', system: link('tidepool', 'ok') });
+  const draft = design({ slug: 'b', system: link('acme', 'draft') });
+  const deleted = design({ slug: 'c', system: link('tidepool', 'deleted') });
+  const none = design({ slug: 'd', system: null });
+  const absent = design({ slug: 'e' });
+  assert.equal(matchesSystem(ok, { kind: 'system', id: 'tidepool' }), true);
+  assert.equal(matchesSystem(draft, { kind: 'system', id: 'acme' }), true, 'a Draft system still matches its own designs');
+  assert.equal(matchesSystem(deleted, { kind: 'system', id: 'tidepool' }), false, 'deleted never matches its own id');
+  assert.equal(matchesSystem(deleted, { kind: 'none' }), true);
+  assert.equal(matchesSystem(none, { kind: 'none' }), true);
+  assert.equal(matchesSystem(absent, { kind: 'none' }), true, 'an absent link reads as none');
+  assert.equal(matchesSystem(ok, { kind: 'none' }), false);
+  assert.equal(matchesSystem(ok, { kind: 'system', id: 'acme' }), false);
+  for (const d of [ok, draft, deleted, none, absent]) assert.equal(matchesSystem(d, ALL_SYSTEMS), true);
+});
+
+test('systemOptions lists All systems, each system by name with Draft or its count, then No system', () => {
+  const systems = [
+    system({ id: 'tidepool', name: 'Tidepool', usedBy: 4 }),
+    system({ id: 'acme', name: 'Acme', status: 'draft', usedBy: 0 }),
+    system({ id: 'harbor', name: 'Harbor', usedBy: 2 }),
+  ];
+  assert.deepEqual(systemOptions(systems).map((o) => [o.id, o.label, o.hint]), [
+    ['all', 'All systems', undefined],
+    ['system:acme', 'Acme', 'Draft'],
+    ['system:harbor', 'Harbor', '2'],
+    ['system:tidepool', 'Tidepool', '4'],
+    ['none', 'No system', undefined],
+  ]);
+  assert.deepEqual(systemOptions([]).map((o) => o.id), ['all', 'none'], 'no systems: All systems and No system only');
+});
+
+test('systemProjectOf reads the repo home, else the code source project or folder', () => {
+  assert.equal(systemProjectOf(system({ id: 'a', name: 'A', home: { repo: 'tidepool-web', directory: TIDEPOOL } })), TIDEPOOL);
+  assert.equal(systemProjectOf(system({ id: 'b', name: 'B', sources: { code: { directory: SHOP, lastScan: '2026-10-01T10:00:00.000Z', partial: false, project: 'C:\\work\\other' }, brand: 0, description: false } })), 'C:\\work\\other');
+  assert.equal(systemProjectOf(system({ id: 'c', name: 'C', sources: { code: { directory: SHOP, lastScan: '2026-10-01T10:00:00.000Z', partial: false }, brand: 0, description: false } })), SHOP);
+  assert.equal(systemProjectOf(system({ id: 'd', name: 'D' })), null);
+});
+
+test('scopeSystems: all, one project, No project, and a folder (folders hold designs, not systems)', () => {
+  const repo = system({ id: 'tidepool', name: 'Tidepool', home: { repo: 'tidepool-web', directory: TIDEPOOL } });
+  const code = system({ id: 'shop-sys', name: 'Shop', sources: { code: { directory: SHOP, lastScan: '2026-10-01T10:00:00.000Z', partial: false }, brand: 0, description: false } });
+  const loose = system({ id: 'harbor', name: 'Harbor' });
+  const systems = [repo, code, loose];
+  assert.deepEqual(scopeSystems(systems, ALL_SCOPE).map((s) => s.id), ['tidepool', 'shop-sys', 'harbor']);
+  assert.deepEqual(scopeSystems(systems, { kind: 'project', directory: 'c:/users/you/work/shop' }).map((s) => s.id), ['shop-sys'], 'matched by sameDirectory');
+  assert.deepEqual(scopeSystems(systems, { kind: 'no-project' }).map((s) => s.id), ['harbor']);
+  assert.deepEqual(scopeSystems(systems, { kind: 'folder', id: 'f_aaaaaaaaaa' }), []);
+});
+
+test('libraryDesigns composes scope, then system, then search, then tab counts, then tab, then sort', () => {
+  const designs = [
+    design({ slug: 'alpha', title: 'Alpha', kind: 'canvas', projectDirectory: SHOP, system: link('harbor'), updated: '2026-10-27T10:00:00.000Z' }),
+    design({ slug: 'beta', title: 'Beta', kind: 'page', projectDirectory: SHOP, system: link('harbor'), updated: '2026-10-26T10:00:00.000Z' }),
+    design({ slug: 'gamma', title: 'Gamma', kind: 'canvas', projectDirectory: SHOP, system: link('tidepool'), updated: '2026-10-25T10:00:00.000Z' }),
+    design({ slug: 'delta', title: 'Delta', kind: 'canvas', projectDirectory: null, system: link('harbor'), updated: '2026-10-24T10:00:00.000Z' }),
+  ];
+  const scope: ListScope = { kind: 'project', directory: SHOP };
+  const filters = { query: '', tab: 'all' as const, system: { kind: 'system' as const, id: 'harbor' } };
+  const r = libraryDesigns(designs, scope, folders, ROOT, filters, 'updated');
+  assert.deepEqual(r.scoped.map((d) => d.slug), ['alpha', 'beta', 'gamma'], 'scope first');
+  assert.deepEqual(r.shown.map((d) => d.slug), ['alpha', 'beta'], 'the system filter hides gamma; delta is out of scope');
+  assert.deepEqual(r.counts, { all: 2, canvas: 1, page: 1 }, 'counts follow the system filter');
+  const searched = libraryDesigns(designs, scope, folders, ROOT, { ...filters, query: 'alph' }, 'updated');
+  assert.deepEqual(searched.counts, { all: 1, canvas: 1, page: 0 }, 'counts follow the search too');
+  const paged = libraryDesigns(designs, scope, folders, ROOT, { ...filters, query: 'alph', tab: 'page' }, 'updated');
+  assert.deepEqual(paged.shown, [], 'the tab hides the last row');
+  assert.deepEqual(paged.counts, { all: 1, canvas: 1, page: 0 }, 'the tab never changes the counts');
+  const byTitle = libraryDesigns(designs, scope, folders, ROOT, { query: '', tab: 'all', system: ALL_SYSTEMS }, 'title');
+  assert.deepEqual(byTitle.shown.map((d) => d.slug), ['alpha', 'beta', 'gamma'], 'sort last, A–Z');
+});
+
+test('emptyStateOf: nothing written, an empty folder, and no matches with every filter named', () => {
+  const one = design({ slug: 'coffee', title: 'Coffee subscription' });
+  const filters = { query: 'hero', tab: 'page' as const, system: { kind: 'system' as const, id: 'speak' } };
+  const systems = [system({ id: 'speak', name: 'Speak UI' })];
+  const base = { all: [one], scoped: [one], shown: [], scope: { kind: 'folder' as const, id: 'f_aaaaaaaaaa' }, scopeLabel: 'Q4 launch', folderName: 'Q4 launch', filters, systems, draggable: true };
+  assert.equal(emptyStateOf({ ...base, shown: [one] }), null, 'rows show: no empty state');
+
+  const first = emptyStateOf({ ...base, all: [], scoped: [], shown: [] });
+  assert.equal(first?.kind, 'no-designs');
+  assert.equal(first?.action, 'new');
+  assert.deepEqual(first?.chips, []);
+  assert.match(first?.body ?? '', /the moment they are saved/, 'the page copy');
+  assert.doesNotMatch(emptyStateOf({ ...base, all: [], scoped: [], shown: [], draggable: false })?.body ?? '', /the moment they are saved/, 'the rail copy is shorter');
+
+  const emptyFolder = emptyStateOf({ ...base, scoped: [], shown: [], filters: { query: '', tab: 'all', system: ALL_SYSTEMS } });
+  assert.equal(emptyFolder?.kind, 'folder-empty');
+  assert.equal(emptyFolder?.title, 'No designs in Q4 launch yet');
+  assert.equal(emptyFolder?.action, 'show-all');
+  assert.match(emptyFolder?.body ?? '', /Drag designs here/);
+
+  const noMatches = emptyStateOf(base);
+  assert.equal(noMatches?.kind, 'no-matches');
+  assert.equal(noMatches?.title, 'No designs in Q4 launch match “hero” with the Speak UI system.');
+  assert.equal(noMatches?.body, 'Try another word, or clear the filters. Q4 launch stays selected.');
+  assert.equal(noMatches?.action, 'clear-filters');
+  assert.deepEqual(noMatches?.chips, [
+    { id: 'scope', label: 'Folder: Q4 launch', fixed: true, icon: 'folder' },
+    { id: 'search', label: 'Search: hero', fixed: false },
+    { id: 'tab', label: 'Pages', fixed: false },
+    { id: 'system', label: 'System: Speak UI', fixed: false },
+  ], 'every active filter is named; the scope chip is the fixed one');
+});
+
+test('emptyStateOf: the tab-only and system-only sentences, and No project naming', () => {
+  const one = design({ slug: 'coffee', title: 'Coffee subscription' });
+  const base = { all: [one], scoped: [one], shown: [], scope: ALL_SCOPE, scopeLabel: null, folderName: null, systems: [], draggable: false };
+  const tabOnly = emptyStateOf({ ...base, filters: { query: '', tab: 'canvas', system: ALL_SYSTEMS } });
+  assert.equal(tabOnly?.title, 'Nothing in this tab yet');
+  assert.equal(tabOnly?.body, 'Clear the filters to see what is here.');
+  assert.deepEqual(tabOnly?.chips, [{ id: 'tab', label: 'Canvases', fixed: false }]);
+  const noneSys = emptyStateOf({ ...base, scope: { kind: 'no-project' }, scopeLabel: 'No project', filters: { query: '', tab: 'all', system: { kind: 'none' } } });
+  assert.equal(noneSys?.title, 'No designs in No project with no system.');
+  assert.deepEqual(noneSys?.chips, [
+    { id: 'scope', label: 'No project', fixed: true, icon: 'page' },
+    { id: 'system', label: 'No system', fixed: false },
+  ]);
+  const projectScope = emptyStateOf({ ...base, scope: { kind: 'project', directory: SHOP }, scopeLabel: 'shop', filters: { query: '', tab: 'all', system: ALL_SYSTEMS } });
+  assert.deepEqual(projectScope?.chips, [{ id: 'scope', label: 'Project: shop', fixed: true, icon: 'layers' }]);
+});
+
+test('the rail list title keeps its 120 px budget at 320 (L1a: the controls never squeeze it)', () => {
+  const css = readFileSync(fileURLToPath(new URL('../../src/ui/styles.css', import.meta.url)), 'utf8');
+  const rule = css.lastIndexOf('.dc-rail-title {');
+  assert.ok(rule > -1, 'the rail title rule exists');
+  const block = css.slice(rule, css.indexOf('}', rule));
+  assert.match(block, /min-width:\s*120px/, 'the title keeps 120px; the head controls take the rest');
 });
