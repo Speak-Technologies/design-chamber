@@ -97,9 +97,16 @@ test('the warning reaches the guests: a comments event after the state write, on
 test('the announcement is not content: it never makes a version', async (t) => {
   const core = await createCore(t);
   t.after(() => core.stop());
-  const versions = createVersionsService({ store: core.store, hub: core.ctx.hub, log: core.ctx.log, onDispose: core.ctx.onDispose, quietMs: 20 });
+  const quietMs = 20;
+  const versions = createVersionsService({ store: core.store, hub: core.ctx.hub, log: core.ctx.log, onDispose: core.ctx.onDispose, quietMs });
   const record = await core.store.create({ kind: 'page', title: 'Pricing' });
-  await sleep(150);
+  // Settle the create's own snapshot before taking the baseline. Under Windows runner load the
+  // create's quiet-period snapshot and its 'versions' announcement landed past a fixed sleep(150),
+  // so the late event fell inside the assertion window below (CI flake). Waiting for the committed
+  // version, then draining three quiet periods, lets any pending timer fire and dedupe by tree
+  // hash: nothing create-related can emit after we subscribe. The assertions are unchanged.
+  await until(async () => ((await versions.list(record.slug)).versions.length > 0 ? true : undefined));
+  await sleep(quietMs * 3);
   const before = (await versions.list(record.slug)).versions.length;
   const events: ChangeEvent[] = [];
   core.ctx.hub.subscribe((event) => void events.push(event));
