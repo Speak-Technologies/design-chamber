@@ -1035,7 +1035,7 @@ describe('folderRequest (Phase 2.6 AD-16)', () => {
   });
   test('a wrong shape, an empty request, a shared name, a control character or an over-long list is ignored with a warning', () => {
     const nul = 'a' + String.fromCharCode(0) + 'b';
-    const bads: unknown[] = [{ add: 'Q4' }, {}, { add: ['Q4'], remove: ['Q4'] }, { add: Array.from({ length: 11 }, (_, i) => `f${i}`) }, { add: [''] }, { add: [nul] }, 7];
+    const bads: unknown[] = [{ add: 'Q4' }, {}, { add: ['Q4'], remove: ['Q4'] }, { add: Array.from({ length: 11 }, (_, i) => `f${i}`) }, { add: [''] }, { add: [nul] }, { add: ['Q4'], at: 'yesterday' }, 7];
     for (const bad of bads) {
       const out = normalizeDesign({ ...base, folderRequest: bad }, OPTS);
       assert.equal(Object.hasOwn(out.design, 'folderRequest'), false, JSON.stringify(bad));

@@ -560,7 +560,7 @@ const parseFolderRequest = (raw: Rec, warnings: Warnings): FolderRequest | null 
   if (add.length === 0 && remove.length === 0) return bad();
   if (add.some((name) => remove.includes(name))) return bad();
   const at = value.at;
-  if (at !== undefined && at !== null && (typeof at !== 'string' || at.length > 40)) return bad();
+  if (at !== undefined && at !== null && (typeof at !== 'string' || at.length > 40 || Number.isNaN(Date.parse(at)))) return bad();
   return {
     ...(add.length > 0 ? { add } : {}),
     ...(remove.length > 0 ? { remove } : {}),
