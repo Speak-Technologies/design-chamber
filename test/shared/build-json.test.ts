@@ -181,3 +181,31 @@ describe('buildProblemSentence', () => {
     assert.equal(buildProblemSentence(changed), "Acme already has files in shop, so its home can't change. Make a new system to move it.");
   });
 });
+
+describe('Phase 2.6 AD-11: BUILD.json existing and its problem', () => {
+  test('existing is a folder inside the project ("." is its root); a wrong shape is skipped with a problem', () => {
+    assert.deepEqual(parseBuildJson(repoBuild(REPO, { existing: { folder: 'design-system' } })).build?.existing, { folder: 'design-system' });
+    assert.deepEqual(parseBuildJson(repoBuild(REPO, { existing: { folder: '.' } })).build?.existing, { folder: '.' });
+    const absent = parseBuildJson(repoBuild(REPO)).build;
+    assert.ok(absent !== null && !('existing' in absent), 'an older record has no existing key at all');
+    assert.ok(!('existing' in (parseBuildJson(repoBuild(REPO, { existing: null })).build ?? {})));
+    for (const folder of ['../outside', '/abs/path', 'a/../b', 'C:\\x', '', 'a b', 42]) {
+      const parsed = parseBuildJson(repoBuild(REPO, { existing: { folder } }));
+      assert.notEqual(parsed.build, null, JSON.stringify(folder));
+      assert.ok(!('existing' in (parsed.build ?? {})), JSON.stringify(folder));
+      assert.deepEqual(parsed.problems.map((one) => one.entry), ['existing'], JSON.stringify(folder));
+      // §19 item 5: the refused hint travels on, as text, so the service can say it was ignored.
+      assert.equal(parsed.existingRefused, typeof folder === 'string' ? folder : JSON.stringify({ folder }), JSON.stringify(folder));
+    }
+    assert.equal(parseBuildJson(repoBuild(REPO, { existing: 'design-system' })).existingRefused, 'design-system');
+    assert.equal(parseBuildJson(repoBuild(REPO, { existing: [1] })).existingRefused, '[1]');
+    assert.equal(parseBuildJson(repoBuild(REPO, { existing: { folder: `/${'x'.repeat(200)}` } })).existingRefused?.length, 80);
+    assert.ok(!('existingRefused' in parseBuildJson(repoBuild(REPO, { existing: { folder: 'design-system' } }))), 'an accepted hint is not refused');
+    assert.ok(!('existingRefused' in parseBuildJson(repoBuild(REPO))));
+  });
+
+  test('existing-outside-project has its own sentence', () => {
+    const state = parseSystemState({ v: 1, name: 'Acme', buildProblem: { reason: 'existing-outside-project', value: 'linked' } }, 'acme', '2026-11-20T10:00:00.000Z');
+    assert.equal(buildProblemSentence(state), 'The existing system must be a folder inside the project this chat is in, so Design Chamber ignored it.');
+  });
+});

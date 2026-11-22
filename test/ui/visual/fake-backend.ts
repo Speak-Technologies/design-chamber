@@ -10,6 +10,7 @@ import type {
   Comment,
   DesignJson,
   DesignKind,
+  DesignWarning,
   DesignSummary,
   Outbox,
   Screen,
@@ -321,6 +322,11 @@ export type FakeBackend = {
   systems: FakeSystems['hooks'];
   /** Test hooks (Phase 2.5 U4): each design's system link (fake-design-system.ts). */
   designSystem: FakeDesignSystem['hooks'];
+  /**
+   * Test hook (Phase 2.6 design warnings): what the service reports in this design's `warnings` from the next answer on
+   * (`[]` clears them). Sends the `comments` change the service sends after a reconciler write, so an open view refetches.
+   */
+  setWarnings: (slug: string, warnings: DesignWarning[]) => void;
   /** Test hook (G1): which project folder a design was made for (`null`: none), and which project folders are gone from disk. */
   setProject: (slug: string, directory: string | null) => void;
   setMissingProjects: (directories: string[]) => void;
@@ -400,6 +406,8 @@ export const createFakeBackend = (): FakeBackend => {
     rec.rev += 1;
   };
 
+  const warningBook = new Map<string, DesignWarning[]>();
+
   const detail = (slug: string, rec: Rec): RouteResponse<'GET /designs/:slug'> => {
     const screens: Record<string, { exists: boolean; size: number; mtime: string | null }> = {};
     for (const s of rec.design.screens) screens[s.id] = { exists: rec.written.has(s.id), size: rec.written.has(s.id) ? 18_400 : 0, mtime: rec.written.has(s.id) ? rec.design.updated : null };
@@ -409,7 +417,7 @@ export const createFakeBackend = (): FakeBackend => {
       design: rec.design,
       pending: isPending(rec),
       files: rec.design.kind === 'page' ? { entry: { exists: rec.written.has('index'), size: 22_000, mtime: rec.design.updated }, screens: {} } : { screens },
-      warnings: [],
+      warnings: warningBook.get(slug) ?? [],
       screensStamp: `screens:${rec.design.screens.map((s) => s.id).join(',')}`,
       designJson: 'ok',
     };
@@ -481,7 +489,7 @@ export const createFakeBackend = (): FakeBackend => {
 
   const missingProjects = new Set<string>();
   const folderBook: FakeFolders = createFakeFolders({ emit: (slug, kind) => emit(slug, kind), exists: (slug) => db.has(slug) });
-  const systemBook: FakeSystems = createFakeSystems({ emit: (slug, kind) => emit(slug, kind) });
+  const systemBook: FakeSystems = createFakeSystems({ emit: (slug, kind) => emit(slug, kind), visible: rootVisible });
   const designSystem: FakeDesignSystem = createFakeDesignSystem({
     emit: (slug, kind, files) => emit(slug, kind, files),
     rows: () => systemBook.hooks.current(),
@@ -615,6 +623,20 @@ export const createFakeBackend = (): FakeBackend => {
       emit(unique, 'added');
       return { slug: unique, path: `${root}\\${unique}`, design };
     },
+    // ---- Phase 2.6 F2: the New dialog's chip, with filing (AD-5). The design is made first; a
+    // filing failure answers per-target results and never fails the chip. F1 owns the real route. ----
+    'POST /chip': ({ body }) => {
+      const title = body.brief.trim() === '' ? 'Untitled design' : body.brief.trim().slice(0, 60);
+      const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'design';
+      const unique = db.has(slug) ? `${slug}-${(nextId += 1)}` : slug;
+      const design = baseDesign({ kind: body.kind, title, brief: body.brief, projectDirectory: body.projectDirectory ?? null, sessionId: body.sessionId ?? null, preset: body.preset ?? null, created: new Date().toISOString(), updated: new Date().toISOString() });
+      db.set(unique, { design, palette: SLATE, thumb: 'pending', written: new Set(), external: [], blocked: [], rev: 1, versions: [], dirty: false });
+      emit(unique, 'added');
+      const chip: DesignChip = { providerId: CHIP_PROVIDER_ID, id: `design:${unique}`, title, url: `file:///designs/${unique}`, text: 'Continue this design.', data: { slug: unique, kind: body.kind } };
+      const filing = folderBook.fileDesign(unique, body.filing);
+      return filing === undefined ? { slug: unique, chip } : { slug: unique, chip, filing };
+    },
+    // ---- end Phase 2.6 F2 ----
     'GET /designs/:slug': ({ params }) => detail(params.slug ?? '', get(params.slug)),
     'PATCH /designs/:slug': ({ params, body }) => {
       const rec = get(params.slug);
@@ -925,6 +947,11 @@ export const createFakeBackend = (): FakeBackend => {
     folders: folderBook.hooks,
     systems: systemBook.hooks,
     designSystem: designSystem.hooks,
+    setWarnings: (slug, warnings) => {
+      if (!db.has(slug)) return;
+      warningBook.set(slug, structuredClone(warnings));
+      emit(slug, 'comments');
+    },
     setProject: (slug, directory) => {
       const rec = db.get(slug);
       if (!rec) return;

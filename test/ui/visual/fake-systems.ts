@@ -8,6 +8,7 @@ import type {
   AssetsFromFolderResponse,
   CodeResyncReview,
   LivingPageResponse,
+  LocationView,
   RevealBody,
   CreateSystemResponse,
   CreateUploadResponse,
@@ -16,7 +17,9 @@ import type {
   PatchSystemBody,
   PatchSystemResponse,
   PutUploadChunkResponse,
+  RegisterSystemBody,
   ScanSummary,
+  SystemCandidate,
   SystemListResponse,
   SystemResyncBody,
   SystemResyncResponse,
@@ -38,6 +41,7 @@ import type {
 } from '../../../src/shared/api.ts';
 import { CHIP_PROVIDER_ID, type ChangeEvent, type RepoResyncReview, type SystemDetail, type SystemSection, type SystemSummary, type SystemToken, type VersionSummary } from '../../../src/shared/types.ts';
 import { SYSTEM_NAME_MAX, SYSTEMS_MAX } from '../../../src/shared/limits.ts';
+import { sameDirectory } from '../../../src/shared/path-compare.ts';
 import { resyncStampOf } from '../../../src/shared/system-json.ts';
 import { ServiceError } from './service-error.ts';
 
@@ -56,6 +60,8 @@ const blank = (over: Partial<SystemSummary> & Pick<SystemSummary, 'id' | 'name'>
   status: 'draft',
   changesToReview: false,
   sources: none,
+  created: '2026-01-01T00:00:00Z',
+  swatches: [],
   usedBy: 0,
   isDefault: false,
   pinnedFor: [],
@@ -76,6 +82,7 @@ export const sampleSystems = (): SystemSummary[] => [
   blank({
     id: 'tidepool',
     name: 'Tidepool',
+    swatches: ['#0f766e', '#134e4a', '#f59e0b', '#ccfbf1', '#f0fdfa'],
     status: 'ready',
     changesToReview: true,
     isDefault: true,
@@ -90,6 +97,7 @@ export const sampleSystems = (): SystemSummary[] => [
   blank({
     id: 'harbor',
     name: 'Harbor',
+    swatches: ['#1d4ed8', '#0f172a', '#e11d48', '#dbeafe'],
     status: 'ready',
     changesToReview: true,
     pinnedFor: [SHOP],
@@ -98,10 +106,11 @@ export const sampleSystems = (): SystemSummary[] => [
     revision: 4,
     sources: { code: null, brand: 3, description: true },
   }),
-  blank({ id: 'field-notes', name: 'Field notes', status: 'ready', usedBy: 1, updated: ago(3 * DAY), revision: 2, sources: { code: null, brand: 0, description: true } }),
+  blank({ id: 'field-notes', name: 'Field notes', swatches: ['#7c2d12', '#1c1917', '#d6d3d1'], status: 'ready', usedBy: 1, updated: ago(3 * DAY), revision: 2, sources: { code: null, brand: 0, description: true } }),
   blank({
     id: 'juniper',
     name: 'Juniper',
+    swatches: ['#15803d', '#052e16', '#fbbf24', '#dcfce7', '#fafaf9', '#78716c'],
     status: 'ready',
     pinnedFor: [SHOP],
     usedBy: 6,
@@ -132,6 +141,9 @@ export const sampleScan = (directory: string): ScanSummary => ({
   ],
   refused: 1,
   partial: false,
+  // Phase 2.6 E2: the real read count (14 files held values, 4 more were read with none) and what was missed.
+  read: 18,
+  missed: { pages: 12, components: 40, codeThemes: 2 },
 });
 
 const EMPTY_SCAN = (directory: string): ScanSummary => ({
@@ -143,7 +155,142 @@ const EMPTY_SCAN = (directory: string): ScanSummary => ({
   forAgent: [],
   refused: 0,
   partial: false,
+  read: 0,
+  missed: { pages: 0, components: 0, codeThemes: 0 },
 });
+
+// ---- Phase 2.6 E2 (visual): discovery candidates, location scans, "Register it as it is" ----
+// The shapes and sentences mirror the service (src/service/systems/{candidates,scan-folder,extract,register}.ts);
+// the real rules are tested there. Paths drive the answers, as the rest of this fake does.
+
+const baseName = (directory: string): string => directory.split(/[\\/]+/).filter((part) => part !== '').pop() ?? directory;
+
+/** The four places the approved canvas draws, ranked as the service ranks them (contract first). */
+const sampleCandidates = (): SystemCandidate[] => [
+  { path: 'design-system', marks: ['contract', 'page', 'tokens', 'docs', 'components'], counts: { colours: 24, tokens: 29, docs: 3, components: 14, pages: 1 }, strong: true, registered: null },
+  { path: 'apps/web/design-system', marks: ['page', 'components'], counts: { colours: 0, tokens: 0, docs: 0, components: 14, pages: 1 }, strong: true, registered: { id: 'juniper', name: 'Juniper' } },
+  { path: 'packages/ui/tokens', marks: ['tokens'], counts: { colours: 79, tokens: 143, docs: 0, components: 0, pages: 0 }, strong: false, registered: null },
+  { path: 'docs/design', marks: ['docs'], counts: { colours: 0, tokens: 0, docs: 2, components: 0, pages: 0 }, strong: false, registered: null },
+];
+
+const COMPONENT_PATHS = Array.from({ length: 14 }, (_, n) => `design-system/components/${['Button', 'Card', 'Field', 'Tabs', 'Badge', 'Banner', 'Dialog', 'Menu', 'Table', 'Toast', 'Nav', 'Footer', 'Hero', 'Grid'][n]}.tsx`);
+
+/** A location scan's answer, by the folder scanned: the complete contract, an incomplete one, docs only, tokens only. */
+const locationSummary = (directory: string, location: { project: string; rel: string }): ScanSummary => {
+  const { rel } = location;
+  const view = (over: Partial<LocationView> & Pick<LocationView, 'marks' | 'read' | 'contract'>): LocationView => ({ path: rel, ...over });
+  if (rel === 'design-system' || rel === 'full-system') {
+    return {
+      directory,
+      counts: { colours: 24, typography: 2, spacing: 0, radius: 0, shadows: 3, layers: 0, sizes: 0, other: 0, fonts: 1, logos: 0 },
+      // Paths here are relative to the scanned folder, as the service's walk reports them; location.read is project-relative.
+      files: [
+        { path: 'tokens.css', found: 18 },
+        { path: 'system.json', found: 7 },
+        { path: 'theme.css', found: 2 },
+        { path: 'components.css', found: 2 },
+      ],
+      skipped: [{ path: 'bundle.css', reason: "It's larger than 1 MB, so it wasn't read." }],
+      assets: [{ path: 'fonts/SpeakSans-Regular.woff2', kind: 'font', bytes: 96_000, family: 'Speak Sans', weight: 400, style: 'normal' }],
+      forAgent: [],
+      refused: 0,
+      partial: false,
+      read: 6,
+      missed: { pages: 1, components: 14, codeThemes: 0 },
+      location: view({
+        marks: ['contract', 'page', 'tokens', 'docs', 'components'],
+        read: { page: ['design-system/index.html'], docs: ['design-system/DESIGN.md', 'design-system/notes/voice.md', 'design-system/notes/motion.md'], components: COMPONENT_PATHS },
+        contract: { complete: true },
+      }),
+    };
+  }
+  if (/incomplete|style-guide/i.test(rel)) {
+    return {
+      directory,
+      counts: { colours: 8, typography: 0, spacing: 0, radius: 0, shadows: 0, layers: 0, sizes: 0, other: 0, fonts: 0, logos: 0 },
+      files: [{ path: 'tokens.css', found: 8 }],
+      skipped: [],
+      assets: [],
+      forAgent: [],
+      refused: 0,
+      partial: false,
+      read: 2,
+      missed: { pages: 0, components: 0, codeThemes: 0 },
+      location: view({ marks: ['tokens', 'docs'], read: { page: [], docs: [`${rel}/DESIGN.md`], components: [] }, contract: { complete: false, missing: ['tokens.css'] } }),
+    };
+  }
+  if (rel === 'docs/design') {
+    return {
+      ...EMPTY_SCAN(directory),
+      location: view({ marks: ['docs'], read: { page: [], docs: ['docs/design/DESIGN.md', 'docs/design/voice.md'], components: [] }, contract: null }),
+    };
+  }
+  if (rel === 'packages/ui/tokens') {
+    return {
+      directory,
+      counts: { colours: 79, typography: 0, spacing: 0, radius: 0, shadows: 0, layers: 0, sizes: 64, other: 0, fonts: 0, logos: 0 },
+      files: [{ path: 'tokens.css', found: 79 }, { path: 'sizes.css', found: 64 }],
+      skipped: [],
+      assets: [],
+      forAgent: [],
+      refused: 0,
+      partial: false,
+      read: 3,
+      missed: { pages: 0, components: 0, codeThemes: 0 },
+      location: view({ marks: ['tokens'], read: { page: [], docs: [], components: [] }, contract: null }),
+    };
+  }
+  if (rel === '') {
+    // The project root reads like Project code, but a repo home needs a folder of its own.
+    return {
+      ...sampleScan(directory),
+      location: view({ marks: ['page', 'tokens', 'docs'], read: { page: ['index.html'], docs: ['DESIGN.md'], components: [] }, contract: { complete: false, missing: ['a folder inside the project'] } }),
+    };
+  }
+  return {
+    directory,
+    counts: { colours: 6, typography: 0, spacing: 0, radius: 0, shadows: 0, layers: 0, sizes: 0, other: 0, fonts: 0, logos: 0 },
+    files: [{ path: 'tokens.css', found: 6 }],
+    skipped: [],
+    assets: [],
+    forAgent: [],
+    refused: 0,
+    partial: false,
+    read: 1,
+    missed: { pages: 0, components: 0, codeThemes: 0 },
+    location: view({ marks: ['tokens'], read: { page: [], docs: [], components: [] }, contract: null }),
+  };
+};
+
+/** The service's location validation, disk-free: a web address, an escape from the project, a folder that isn't there. */
+const fakeLocation = (raw: string, project: string): { rel: string } => {
+  const value = raw.trim();
+  if (value === '') throw new ServiceError('bad-path', 'Choose a folder.');
+  if (/^[a-z][a-z0-9+.-]+:\/\//i.test(value) || /^www\./i.test(value) || /^localhost(:\d+)?(\/|$)/i.test(value)) {
+    throw new ServiceError('bad-path', 'Use the folder on this machine, not a web address.');
+  }
+  const inside = `Pick a folder inside ${baseName(project)}.`;
+  let rel: string;
+  if (/^([A-Za-z]:[\\/]|\/|\\\\)/.test(value)) {
+    const norm = value.replace(/\\/g, '/').replace(/\/+$/, '');
+    const proj = project.replace(/\\/g, '/').replace(/\/+$/, '');
+    if (norm.toLowerCase() !== proj.toLowerCase() && !norm.toLowerCase().startsWith(`${proj.toLowerCase()}/`)) throw new ServiceError('bad-path', inside);
+    rel = norm.slice(proj.length).replace(/^\//, '');
+  } else {
+    const stack: string[] = [];
+    for (const part of value.split(/[\\/]+/).filter((part) => part !== '')) {
+      if (part === '.') continue;
+      if (part === '..') {
+        if (stack.length === 0) throw new ServiceError('bad-path', inside);
+        stack.pop();
+      } else stack.push(part);
+    }
+    rel = stack.join('/');
+  }
+  if (/missing|gone/i.test(rel)) throw new ServiceError('bad-path', `Design Chamber can't read ${value}. It doesn't exist.`);
+  return { rel };
+};
+// ---- end Phase 2.6 E2 ----
 
 /** What a re-read of the project finds against a filled-in system: two modes of a colour, a conflict, new and gone tokens, new files. */
 const SAMPLE_REVIEW: CodeResyncReview = {
@@ -298,9 +445,11 @@ export type FakeSystems = {
     'POST /systems': (req: { body: { name: string; code?: { scanId: string; assets: string[] }; description?: { text: string; preset: string | null }; brand?: true } }) => CreateSystemResponse;
     'PATCH /systems/:id': (req: Req & { body: PatchSystemBody }) => PatchSystemResponse;
     'DELETE /systems/:id': (req: Req) => DeleteSystemResponse;
-    'POST /system-scans': (req: { body: { directory: string; systemId?: string } }) => CreateSystemScanResponse;
+    'POST /system-scans': (req: { body: { directory: string; systemId?: string; location?: string } }) => CreateSystemScanResponse;
     'GET /system-scans/:scanId': (req: Req) => SystemScanResponse;
     'DELETE /system-scans/:scanId': (req: Req) => OkResponse;
+    /** Phase 2.6 E2: register a done location scan's complete contract as a repo-backed Draft. */
+    'POST /systems/register': (req: { body: RegisterSystemBody }) => CreateSystemResponse;
     'POST /uploads': (req: { body: { total: number; encoding?: 'text' | 'base64' } }) => CreateUploadResponse;
     'PUT /uploads/:id/:index': (req: Req & { body: { data: string } }) => PutUploadChunkResponse;
     'POST /systems/:id/assets': (req: Req & { body: { uploadId: string; name: string; kind: 'font' | 'logo' | 'source' } }) => AddSystemAssetResponse;
@@ -374,17 +523,28 @@ export type FakeSystems = {
     failResync: (message: string | null) => void;
     /** The folder the system's code source points at (to make the re-sync meet a missing or unreadable one). */
     setCodeFolder: (id: string, directory: string) => void;
+    // ---- Phase 2.6 E2 hooks ----
+    /** What register was asked to do, for a scenario's checks. */
+    registerLog: () => Array<{ name: string; scanId: string; rel: string }>;
+    /** The next register answers this sentence (a conflict); `null` goes back to working. */
+    failRegister: (message: string | null) => void;
+    /** Pieces of the next project scan's summary (candidates, missed, read); applied once, `null` clears. */
+    setNextScan: (patch: Partial<ScanSummary> | null) => void;
   };
 };
 
-export const createFakeSystems = (deps: { emit: (slug: string | null, kind: ChangeEvent['kind']) => void }): FakeSystems => {
+export const createFakeSystems = (deps: { emit: (slug: string | null, kind: ChangeEvent['kind']) => void; /** Systems live under the designs root: a foreign root has none of them (the rows stay, so switching back restores them). */ visible?: () => boolean }): FakeSystems => {
   let rows: SystemSummary[] = sampleSystems();
   let failing = false;
   let promptFailure: string | null = null;
   let slowPolls = 2;
   let scanN = 0;
   let uploadN = 0;
-  const scans = new Map<string, { directory: string; polls: number; systemId?: string }>();
+  const scans = new Map<string, { directory: string; polls: number; systemId?: string; location?: { project: string; rel: string } }>();
+  // Phase 2.6 E2 state: the register log, a one-shot refusal, and a one-shot patch of the next project scan.
+  const registerLog: Array<{ name: string; scanId: string; rel: string }> = [];
+  let registerFailure: string | null = null;
+  let nextScanPatch: Partial<ScanSummary> | null = null;
   const uploads = new Map<string, { total: number; chunks: number; encoding: string }>();
   const log: ReturnType<FakeSystems['hooks']['log']> = { created: [], uploads: [], assets: [], prompts: 0, scanDirectories: [], cancelled: 0 };
   const details = new Map<string, SystemDetail>();
@@ -465,6 +625,8 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
     if (!row) throw new ServiceError('not-found', 'That design system is no longer in your Designs folder.');
     return row;
   };
+  /** The service reads `_systems/` under the current root; the fake keeps its rows but hides them on a foreign root. */
+  const inThisRoot = (): boolean => deps.visible === undefined || deps.visible();
   const checkName = (raw: string, ignore: string | null): string => {
     const name = raw.normalize('NFKC').trim();
     if (name === '') throw new ServiceError('bad-request', 'Give the design system a name.');
@@ -497,7 +659,8 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
       },
       'GET /systems': () => {
         if (failing) throw new ServiceError('internal', 'The design systems list could not be read.');
-        return { systems: rows.map((row) => ({ ...row })), total: rows.length, max: SYSTEMS_MAX };
+        const shown = inThisRoot() ? rows : [];
+        return { systems: shown.map((row) => ({ ...row })), total: shown.length, max: SYSTEMS_MAX };
       },
       'POST /systems': ({ body }) => {
         const name = checkName(body.name, null);
@@ -544,6 +707,15 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
         const directory = body.directory.trim();
         if (/designs/i.test(directory)) throw new ServiceError('bad-request', 'Pick your app’s folder, not the Designs folder.');
         if (/missing/i.test(directory)) throw new ServiceError('bad-path', `Design Chamber can’t read ${directory}. The folder doesn’t exist.`);
+        // Phase 2.6 E2: a location scan is rooted at the folder, inside the project (the service's validateLocation).
+        if (body.location !== undefined) {
+          const { rel } = fakeLocation(body.location, directory);
+          scanN += 1;
+          const scanId = `sc_fakescan${String(scanN).padStart(10, '0')}`;
+          scans.set(scanId, { directory: rel === '' ? directory : `${directory}\\${rel.replace(/\//g, '\\')}`, polls: 0, location: { project: directory, rel } });
+          log.scanDirectories.push(directory);
+          return { scanId };
+        }
         scanN += 1;
         const scanId = `sc_fakescan${String(scanN).padStart(10, '0')}`;
         scans.set(scanId, { directory, polls: 0, ...(body.systemId ? { systemId: body.systemId } : {}) });
@@ -556,15 +728,63 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
         scan.polls += 1;
         if (scan.polls <= slowPolls) return { state: 'running', seen: scan.polls * 240 };
         if (/unreadable/i.test(scan.directory)) return { state: 'failed', message: `Design Chamber can’t read ${scan.directory}. Permission denied.` };
+        // Phase 2.6 E2: a location job answers what the folder holds, with its contract verdict.
+        if (scan.location) return { state: 'done', summary: locationSummary(scan.directory, scan.location) };
         if (scan.systemId && detailOfId(scan.systemId)?.home.kind === 'repo') return { state: 'done', summary: sampleScan(scan.directory), review: /matches/i.test(scan.directory) ? { ...(repoReview ?? SAMPLE_REPO_REVIEW), directoryChanged: false, tokens: { changed: [], added: [], removed: [], totals: { changed: 0, added: 0, removed: 0 } }, files: { changed: [], added: [], removed: [] }, skipped: [] } : (repoReview ?? SAMPLE_REPO_REVIEW) };
         if (scan.systemId) return { state: 'done', summary: sampleScan(scan.directory), review: /matches/i.test(scan.directory) ? { ...SAMPLE_REVIEW, changed: [], conflicts: [], added: [], removed: [], assets: [] } : (resyncReview ?? SAMPLE_REVIEW) };
-        return { state: 'done', summary: /empty/i.test(scan.directory) ? EMPTY_SCAN(scan.directory) : sampleScan(scan.directory) };
+        // Phase 2.6 E2: a project scan also answers its candidates (the sheet's discovery and nudge).
+        if (/empty/i.test(scan.directory)) return { state: 'done', summary: { ...EMPTY_SCAN(scan.directory), candidates: [], candidatesMore: 0, ...(nextScanPatch ?? {}) } };
+        const patch = nextScanPatch;
+        nextScanPatch = null;
+        return { state: 'done', summary: { ...sampleScan(scan.directory), candidates: sampleCandidates(), candidatesMore: 2, ...(patch ?? {}) } };
       },
       'DELETE /system-scans/:scanId': ({ params }) => {
         scans.delete(params.scanId ?? '');
         log.cancelled += 1;
         return { ok: true };
       },
+      // ---- Phase 2.6 E2: "Register it as it is" (the service's register.ts, same refusals) ----
+      'POST /systems/register': ({ body }) => {
+        const name = checkName(body.name, null);
+        if (rows.length >= SYSTEMS_MAX) throw new ServiceError('conflict', `You can have up to ${SYSTEMS_MAX} design systems.`);
+        if (registerFailure !== null) {
+          const message = registerFailure;
+          registerFailure = null;
+          throw new ServiceError('conflict', message);
+        }
+        const scan = scans.get(body.scanId);
+        if (!scan) throw new ServiceError('not-found', 'That scan is no longer available. Scan the folder again.');
+        if (scan.polls <= slowPolls) throw new ServiceError('conflict', 'The scan is still running. Wait for it to finish.');
+        if (!scan.location) throw new ServiceError('conflict', "That scan isn't of a system folder. Scan the folder again.");
+        const { project, rel } = scan.location;
+        if (locationSummary(scan.directory, scan.location).location?.contract?.complete !== true) {
+          throw new ServiceError('conflict', "That scan isn't of a system folder. Scan the folder again.");
+        }
+        if (rel === 'full-system') {
+          throw new ServiceError('conflict', `${rel} already has index.html and living-page.html, so Design Chamber has no place for its living page. Make a new system from it instead.`);
+        }
+        const overlap = rows.find((row) => {
+          const home = detailFor(row).home;
+          return home.kind === 'repo' && home.folder === rel && sameDirectory(home.directory, project);
+        });
+        if (overlap) throw new ServiceError('conflict', `${overlap.name} already uses this repo folder or living-page path.`);
+        const row = blank({
+          id: idFor(name),
+          name,
+          updated: new Date().toISOString(),
+          home: { repo: baseName(project), directory: project },
+          sources: { code: null, brand: 0, description: false },
+        });
+        const detail = detailFor(row);
+        detail.home = { kind: 'repo', directory: project, label: baseName(project), folder: rel, livingPage: `${rel}/index.html`, readable: true, problem: null, lastRead: new Date().toISOString() };
+        detail.editable = false;
+        detail.snapshot = { at: new Date().toISOString(), by: 'user', tampered: false, treeHash: `tree-${Date.now()}` };
+        rows = [row, ...rows];
+        registerLog.push({ name, scanId: body.scanId, rel });
+        deps.emit(null, 'system');
+        return { id: row.id, system: detail };
+      },
+      // ---- end Phase 2.6 E2 ----
       'POST /uploads': ({ body }) => {
         uploadN += 1;
         const uploadId = `u_fakeupload${String(uploadN).padStart(8, '0')}`;
@@ -601,6 +821,7 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
       },
 
       'GET /systems/:id': ({ params }) => {
+        if (!inThisRoot()) throw new ServiceError('not-found', 'That design system is no longer in your Designs folder.');
         const row = find(params.id);
         if (detailFailing) throw new ServiceError('internal', 'The design system could not be read.');
         return structuredClone(detailFor(row));
@@ -873,6 +1094,14 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
       setDefaultId: (id) => {
         rows = rows.map((row) => ({ ...row, isDefault: row.id === id }));
         deps.emit(null, 'system');
+      },
+      // ---- Phase 2.6 E2 hooks ----
+      registerLog: () => registerLog,
+      failRegister: (message) => {
+        registerFailure = message;
+      },
+      setNextScan: (patch) => {
+        nextScanPatch = patch;
       },
     },
   };

@@ -111,7 +111,7 @@ describe('precedence (§8.2): a linked system', () => {
     const step3 = chip.split('\n').find((line) => line.startsWith('3. '));
     assert.ok(step3?.includes('this design\'s design system "Acme"'));
     assert.ok(step3?.includes('No style preset applies.'));
-    assert.ok(chip.includes('tweaks and systemChoice'));
+    assert.ok(chip.includes('tweaks, systemChoice and folderRequest'));
   });
 
   test('a hostile name stays on one line', () => {

@@ -12,6 +12,7 @@ import { CHECK_TOOL_NAME, SKILL_DESCRIPTION, SKILL_NAME } from '../../src/shared
 import { findOwnershipMarker } from '../../src/shared/agent/ownership.ts';
 import { checkSection, renderingSection, verbatim } from '../../src/shared/agent/rules-doc.ts';
 import { buildBundledSkill } from '../../src/shared/agent/skill-doc.ts';
+import { SKILL_TEXT_MAX_MERGED } from '../../src/shared/limits.ts';
 import { REPO_RULES } from './helpers.ts';
 import { assertSnapshot } from './snapshot.ts';
 
@@ -63,7 +64,7 @@ describe('buildBundledSkill (§U2.4)', () => {
 
   test('the workflow names tweaks among the owned keys and the two kinds of directions (Phase 2)', async () => {
     const skill = buildBundledSkill(await realInput());
-    assert.ok(skill.includes('In an existing design.json change only title, updated, viewports, screens, designSystem and tweaks, and keep every other key as it is.'));
+    assert.ok(skill.includes('In an existing design.json change only title, updated, viewports, screens, designSystem, tweaks and folderRequest, and keep every other key as it is.'));
     assert.ok(skill.includes('To let the user pick between directions you made as separate design folders, ask with DirectionPick.'));
     assert.ok(skill.includes('Directions of one canvas screen are screens you mark in design.json instead; the user keeps one on the wall.'));
   });
@@ -73,6 +74,18 @@ describe('buildBundledSkill (§U2.4)', () => {
     assert.ok(skill.includes('- To build a design system with the user, use /design-system or the design-system-builder skill.'));
     assert.ok(skill.includes("- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff."));
     assert.ok(skill.length <= 30_000, `${skill.length} characters`);
+  });
+
+  test('Phase 2.6 §7.3: three lines after the four system lines, before the presets line, and the built skill stays under the merged cap', async () => {
+    const skill = buildBundledSkill(await realInput());
+    const lines = skill.split('\n');
+    const repo = lines.indexOf("- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff.");
+    assert.ok(repo > 0);
+    assert.equal(lines[repo + 1], '- Folders are tags the user sets in the library; a design can sit in several and nothing moves on disk. Only when the user asks, add a design to an existing folder by name with design.json "folderRequest": { "add": ["<name>"], "at": "<now>" } (or "remove"). The names are in .chamber/folders.json in the designs folder; read it, never write it. Never create, rename or delete folders.');
+    assert.equal(lines[repo + 2], '- A project may already have a design system (a page, docs, components). When the user points at one, read those first and build from what is there.');
+    assert.equal(lines[repo + 3], '- The user browses the library as tiles or a list, sorted and filtered by project, folder, kind and system. Point them there when they ask where a design is.');
+    assert.ok((lines[repo + 4] ?? '').startsWith('- Style presets are in presets/'));
+    assert.ok(skill.length <= SKILL_TEXT_MAX_MERGED, `${skill.length} characters`);
   });
 
   test('no absolute path, no path from this machine', async () => {

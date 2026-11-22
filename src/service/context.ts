@@ -138,6 +138,7 @@ export type DesignStore = {
    * `systemChoiceSeen`, `systemChoiceProblem`) under the design's lock. state.json only: these
    * fields are never mirrored into design.json. `mutate` answers null to write nothing. Throws
    * `bad-slug` or `not-found` like `get`.
+   * Phase 2.6 AD-16: the same accessor carries `folderRequestSeen` and `folderRequestProblem`.
    */
   updateSystemState(slug: string, mutate: (state: ServiceState) => ServiceState | null): Promise<ServiceState>;
 };

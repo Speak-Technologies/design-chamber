@@ -246,9 +246,17 @@ const openPage = async ({ width, height, surface, theme, label, query = '', rout
         r = again;
         if (still) break;
       }
-      await api.clickAt(r.x + (opts.dx ?? r.w / 2), r.y + (opts.dy ?? r.h / 2));
+      const x = r.x + (opts.dx ?? r.w / 2);
+      const y = r.y + (opts.dy ?? r.h / 2);
+      await api.dismissToastsAt(x, y);
+      await api.clickAt(x, y);
       await sleep(opts.wait ?? 120);
     },
+    /** The mock host's toasts sit over the frame's bottom right for 4 s; one left over from the last step must not swallow a click or sit in a picture. Harness only: the product keeps its toasts. */
+    dismissToasts: () => host(`document.getElementById('toasts')?.replaceChildren()`),
+    /** Drop only the toasts that cover this point (the frame's own coordinates are the page's). */
+    dismissToastsAt: (x, y) =>
+      host(`for (const n of [...document.querySelectorAll('#toasts .toast')]) { const b = n.getBoundingClientRect(); if (${x} >= b.left && ${x} <= b.right && ${y} >= b.top && ${y} <= b.bottom) n.remove(); }`),
     async hover(selector, opts = {}) {
       const r = await until(() => rect(selector, opts.nth ?? 0, opts.text ?? null), `element ${selector}`);
       await api.move(r.x + r.w / 2, r.y + r.h / 2);
@@ -280,6 +288,7 @@ const openPage = async ({ width, height, surface, theme, label, query = '', rout
     /** A block frame's new call (or `null`), as the host sends it. */
     setBlock: (call) => host(`window.__host.setBlock(${JSON.stringify(call)})`),
     async shot(name) {
+      await api.dismissToasts();
       const { data } = await send('Page.captureScreenshot', { format: 'png' });
       const file = path.join(outDir, `${name}.png`);
       writeFileSync(file, Buffer.from(data, 'base64'));
@@ -511,8 +520,8 @@ const pageScenario = async (width, theme) => {
   await p.shot(`${tag}-12-artifact-exported`);
   await p.click('.dc-toolbar .oc-sdk-btn', { text: 'Library' });
 
-  // settings sheet
-  await p.click('.dc-library-bar .oc-sdk-btn', { text: 'Settings' });
+  // settings sheet (the gear icon button, Phase 2.6 L1a)
+  await p.click('.dc-library-bar .dc-iconbtn[aria-label="Settings"]');
   await p.waitFor('return !!doc.querySelector(".dc-settings .dc-code")', 'settings');
   await p.settle(300);
   await p.shot(`${tag}-13-settings`);
@@ -590,6 +599,8 @@ const emptyAndErrors = async () => {
   await listReady(p);
   await p.click('.dc-rail-head .dc-iconbtn[aria-label="Settings"]');
   await p.waitFor('return !!doc.querySelector(".dc-settings input")', 'settings');
+  // The settings answer repaints the field when it lands; typing before that loses the text to the repaint.
+  await p.settle(400);
   await p.type('.dc-settings input', 'relative/folder');
   await p.click('.dc-settings .oc-sdk-btn', { text: 'Apply folder' });
   await checkSoon(() => p.guest('return !!doc.querySelector(".dc-settings .oc-sdk-field-note")?.textContent?.includes("full path")'), `${tag}: invalid folder says what to do`);

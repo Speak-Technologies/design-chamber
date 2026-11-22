@@ -24,6 +24,8 @@ import { registerDesignsRoutes } from './routes/designs.ts';
 import { registerEditRoutes } from './routes/edits.ts';
 import { registerExportRoutes } from './routes/export.ts';
 import { registerFoldersRoutes } from './routes/folders.ts';
+import { registerMembershipsRoutes } from './routes/memberships.ts';
+import { registerSystemRegisterRoutes } from './routes/system-register.ts';
 import { ensureFoldersService } from './folders.ts';
 import { registerMentionsRoutes } from './routes/mentions.ts';
 import { registerOutboxRoutes } from './routes/outbox.ts';
@@ -50,6 +52,7 @@ import { createSelfWrites } from './self-writes.ts';
 import { createSettingsStore, settingsFilePath, type SettingsEnv } from './settings.ts';
 import { createDesignStore } from './store.ts';
 import { startChoiceReconciler } from './systems/choice.ts';
+import { startFolderRequests } from './folder-requests.ts';
 import { ensureLinkService } from './systems/link.ts';
 import { ensureBuildTickets } from './systems/builds.ts';
 import { startHomes } from './systems/homes.ts';
@@ -149,10 +152,16 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   ctx.onDispose(() => watcher.stop());
 
   // Phase 2.5 §5.4, §5.5: a copy swap a restart interrupted is finished or undone, and the agent's
-  // recorded `systemChoice` is acted on from the first design event on.
+  // recorded `systemChoice` is acted on from the first design event on, plus one sweep once the
+  // watcher's baseline (or a new root's baseline) is seeded, as for folder requests below. A link
+  // waits for the copy recovery first.
   const copiesRecovered = ensureLinkService(ctx).recoverAll();
   ctx.onDispose(() => copiesRecovered);
-  ctx.onDispose(startChoiceReconciler(ctx));
+  ctx.onDispose(startChoiceReconciler(ctx, () => watcher.ready));
+  // Phase 2.6 AD-16: the agent's folderRequest pickup (F1). It listens to live events from here (the
+  // watcher's baseline seed emits none) and sweeps every design once that baseline, or a new root's
+  // baseline, is seeded, so a request written while the service was down is acted on (KI-26).
+  ctx.onDispose(startFolderRequests(ctx, () => watcher.ready));
   // Phase 2.5 §5.9: BUILD.json is adopted and followed from the watcher's baseline on.
   ctx.onDispose(startHomes(ctx, () => watcher.ready));
   // Phase 2.5 §5.10: a snapshot swap a restart interrupted is finished or undone, and a snapshot
@@ -257,6 +266,9 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   registerDesignSystemRoutes(router, ctx);
   registerFoldersRoutes(router, ctx);
   registerSystemBuildRoutes(router, ctx);
+  // Phase 2.6 routes: POST /memberships (folders.ts, AD-2) and POST /systems/register (systems/register.ts, AD-10).
+  registerMembershipsRoutes(router, ctx);
+  registerSystemRegisterRoutes(router, ctx);
 
   let disposed = false;
   return {

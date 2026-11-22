@@ -97,7 +97,7 @@ export const run = async (helpers) => {
     await openMenu();
     const labels = await menuLabels();
     check(labels.includes(CLEAR), `${tag}: "${CLEAR}" is in the menu now (${labels.join(' · ')})`);
-    check(labels.indexOf(CLEAR) === labels.indexOf('Copy path') + (rail ? 2 : 1), `${tag}: it follows Copy path${rail ? ' and Reveal in folder' : ''}, before Rename`);
+    check(labels.indexOf(CLEAR) === labels.indexOf('Copy path') + (rail ? 3 : 1), `${tag}: it follows Copy path${rail ? ', Add to folder… and Reveal in folder' : ''}, before Rename`);
     check(labels[labels.indexOf(CLEAR) + 1] === 'Rename', `${tag}: and Rename comes next`);
     await p.shot(`${tag}-1-menu`);
 

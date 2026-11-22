@@ -29,6 +29,8 @@ const scenario = async ({ openPage, check, checkSoon, listReady, wallReady, thum
   };
   const panelSel = rail ? '.dc-sheet[data-variant="full"]' : '.dc-pop';
   const openDesign = async (slug, ready = 1) => {
+    // The rail list also holds system rows now, so a lower design can sit under the bottom toast: bring it to the middle first.
+    await p.guest(`doc.querySelector('.dc-row[data-slug="${slug}"], .dc-card[data-slug="${slug}"]')?.scrollIntoView({ block: 'center' })`);
     await p.click(rail ? `.dc-row[data-slug="${slug}"] .dc-row-main` : `.dc-card[data-slug="${slug}"] .dc-card-main`);
     await wallReady(p, ready);
     await p.waitFor(`return !!doc.querySelector('${BADGE}')`, 'the badge');

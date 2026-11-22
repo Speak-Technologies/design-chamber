@@ -8,14 +8,25 @@ import type { CreateSystemScanBody, CreateSystemScanResponse, OkResponse, System
 import { SYSTEM_ID_PATTERN } from '../../shared/limits.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
-import { ensureScanJobs } from '../systems/extract.ts';
+import { ensureScanJobs, LOCATION_RESYNC_MESSAGE } from '../systems/extract.ts';
+import { SCAN_FOLDER_PATH_MAX } from '../systems/scan-folder.ts';
 
 const isBodyRecord = (body: unknown): body is Record<string, unknown> => typeof body === 'object' && body !== null && !Array.isArray(body);
 
-/** `POST /system-scans`: a folder path (checked fully by `validateScanFolder`) and an optional system to review against. */
+/**
+ * `POST /system-scans`: a folder path (checked fully by `validateScanFolder`) and an optional system to
+ * review against, or (Phase 2.6 §3.2) a `location` inside that project folder, checked fully by
+ * `validateLocation` in the job registry. A location and a system together are refused.
+ */
 export const validateCreateScan = (body: unknown): CreateSystemScanBody => {
   if (!isBodyRecord(body)) throw new ApiError('bad-request', 'Name the folder to scan.');
   if (typeof body.directory !== 'string' || body.directory.trim() === '') throw new ApiError('bad-request', 'Name the folder to scan.');
+  if (body.location !== undefined) {
+    if (body.systemId !== undefined) throw new ApiError('bad-request', LOCATION_RESYNC_MESSAGE);
+    if (typeof body.location !== 'string' || body.location.trim() === '') throw new ApiError('bad-path', 'Choose a folder.');
+    if (body.location.length > SCAN_FOLDER_PATH_MAX) throw new ApiError('bad-path', 'That folder path is too long.');
+    return { directory: body.directory, location: body.location };
+  }
   if (body.systemId === undefined) return { directory: body.directory };
   if (typeof body.systemId !== 'string' || !SYSTEM_ID_PATTERN.test(body.systemId)) throw new ApiError('bad-request', 'That is not a design system id.');
   return { directory: body.directory, systemId: body.systemId };

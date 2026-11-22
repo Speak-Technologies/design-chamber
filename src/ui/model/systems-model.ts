@@ -2,8 +2,10 @@
 // at the rail's narrow widths (technical design §9.6 "Systems list rows at 360 px"), the source and meta lines, and
 // the state the whole list is in. Pure: no DOM, no host calls, so a test can pin every sentence.
 
+import { SYSTEM_SWATCHES_MAX } from '../../shared/limits.ts';
 import type { SystemSummary } from '../../shared/types.ts';
 import { folderName, plural, relativeTime } from './format.ts';
+import { swatchable } from './resync-model.ts';
 
 export type RowTone = 'neutral' | 'info' | 'warning' | 'success' | 'error';
 
@@ -50,7 +52,7 @@ export const sourceLine = (sources: SystemSummary['sources'], label: ProjectLabe
   ...(sources.description ? ['Described'] : []),
 ];
 
-export const usedByLine = (count: number): string => (count === 0 ? 'Not used by a design yet' : `Used by ${plural(count, 'design')}`);
+export const usedByLine = (count: number): string => (count === 0 ? 'Not used yet' : `Used by ${plural(count, 'design')}`);
 
 export type SystemRowModel = {
   id: string;
@@ -67,6 +69,8 @@ export type SystemRowModel = {
   notice: string | null;
   /** Source line, used by, updated: joined with a dot on screen. */
   meta: string[];
+  /** The same facts apart, so the used-by part can be a link into the filtered library. */
+  metaParts: { source: string[]; usedBy: { count: number; text: string }; updated: string | null };
   /** The row button's accessible name; hidden badges are in it too. */
   ariaLabel: string;
 };
@@ -83,7 +87,8 @@ export const systemRow = (summary: SystemSummary, context: { nowMs: number; loca
   const badges = systemRowBadges(summary, context.label);
   const home = homeLine(summary);
   const updated = relativeTime(summary.updated, context.nowMs, context.locale);
-  const meta = [...sourceLine(summary.sources, context.label), usedByLine(summary.usedBy), ...(updated === '' ? [] : [updated])];
+  const source = sourceLine(summary.sources, context.label);
+  const meta = [...source, usedByLine(summary.usedBy), ...(updated === '' ? [] : [updated])];
   const status: SystemRowModel['status'] = summary.status === 'ready' ? { label: 'Ready', tone: 'success' } : { label: 'Draft', tone: 'info' };
   const notice = sharedRepoNotice(summary);
   const hiddenLabels = badges.hidden.map((badge) => badge.label);
@@ -98,6 +103,7 @@ export const systemRow = (summary: SystemSummary, context: { nowMs: number; loca
     more: badges.hidden.length > 0 ? { text: `+${badges.hidden.length}`, title: hiddenLabels.join(', ') } : null,
     notice,
     meta,
+    metaParts: { source, usedBy: { count: summary.usedBy, text: usedByLine(summary.usedBy) }, updated: updated === '' ? null : updated },
     ariaLabel: summary.unreadable !== null ? `${summary.name}, can’t be read` : `${spoken.join(', ')}. ${meta.join(', ')}.`,
   };
 };
@@ -159,3 +165,54 @@ export const systemMenu = (summary: Pick<SystemSummary, 'status' | 'isDefault' |
 
 /** The folder a repo-backed or code-scanned system names, for the project label fallback. */
 export const labelFromDirectory = (directory: string): string => folderName(directory);
+
+// ---------------------------------------------------------------- systems in the library (Phase 2.6 L1b)
+//
+// A system is a library item (a tile on the page, a row on the rail and in the List view). The plate shows the
+// system's own colours, never a colour of ours; the tile's menu is the short one, because renaming and deleting
+// stay in the Design systems list.
+
+/** The colours a plate paints: the summary's own, only those the editor would accept as a colour, at most six. */
+export const plateSwatches = (summary: Pick<SystemSummary, 'swatches'>): string[] => summary.swatches.filter(swatchable).slice(0, SYSTEM_SWATCHES_MAX);
+
+/** The living page states that have something to preview (a missing, unsafe or unreadable page has not). */
+const PREVIEWABLE_LIVING_PAGE: ReadonlySet<string> = new Set(['fresh', 'out-of-date', 'changed', 'reformatted']);
+
+export const canPreviewLivingPage = (summary: Pick<SystemSummary, 'livingPage'>): boolean => summary.livingPage !== null && PREVIEWABLE_LIVING_PAGE.has(summary.livingPage);
+
+/** The tile's own **Living page** button is for a repo-backed system; every other system reaches the preview from its menu. */
+export const showsLivingPageButton = (summary: Pick<SystemSummary, 'livingPage' | 'home' | 'unreadable'>): boolean =>
+  summary.unreadable === null && summary.home !== 'internal' && canPreviewLivingPage(summary);
+
+export type LibrarySystemMenuId = 'open' | 'preview' | 'reveal';
+
+export const librarySystemMenu = (summary: Pick<SystemSummary, 'livingPage' | 'unreadable'>): Array<{ id: LibrarySystemMenuId; label: string }> => [
+  ...(summary.unreadable === null ? [{ id: 'open' as const, label: 'Open' }] : []),
+  ...(summary.unreadable === null && canPreviewLivingPage(summary) ? [{ id: 'preview' as const, label: 'Preview living page' }] : []),
+  { id: 'reveal' as const, label: 'Reveal in folder' },
+];
+
+/** The tile's accessible name: name, what it is, its state, where it lives, who uses it, when it changed. */
+export const libraryTileLabel = (summary: SystemSummary, context: { nowMs: number; locale: string }): string => {
+  if (summary.unreadable !== null) return `${summary.name}, design system, can’t be read`;
+  const updated = relativeTime(summary.updated, context.nowMs, context.locale);
+  const used = summary.usedBy === 0 ? 'not used yet' : `used by ${plural(summary.usedBy, 'design')}`;
+  return [summary.name, 'design system', summary.status === 'ready' ? 'Ready' : 'Draft', homeLine(summary).label, used, ...(updated === '' ? [] : [`updated ${updated}`])].join(', ');
+};
+
+/** The link's accessible name: it says where it goes. */
+export const usedByLinkLabel = (count: number): string => `${usedByLine(count)}. Show ${count === 1 ? 'it' : 'them'}`;
+
+/** The page sidebar's system rows: by name, each with its first colour, its Draft mark and its used-by count. */
+export type SidebarSystem = { id: string; name: string; draft: boolean; usedBy: number; swatch: string | null };
+
+export const sidebarSystems = (systems: readonly SystemSummary[]): SidebarSystem[] =>
+  [...systems]
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    .map((system) => ({ id: system.id, name: system.name, draft: system.status === 'draft', usedBy: system.usedBy, swatch: plateSwatches(system)[0] ?? null }));
+
+/** The first readable colour of a system by id, for a design chip's dot; null when unknown or it has none. */
+export const swatchLookup = (systems: readonly SystemSummary[]): ((id: string) => string | null) => {
+  const byId = new Map(systems.map((system) => [system.id, plateSwatches(system)[0] ?? null] as const));
+  return (id) => byId.get(id) ?? null;
+};

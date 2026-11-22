@@ -43,3 +43,16 @@ test('no string in src/ carries an em dash', () => {
   const found = files.flatMap((entry) => emDashStrings(entry, readFileSync(path.join(srcDir, entry), 'utf8')));
   assert.deepEqual(found, [], 'reword these without an em dash (a full stop, comma, colon or brackets)');
 });
+
+test('no rules/*.md line carries an em dash (the bundled skill and RULES.md ship them verbatim)', () => {
+  const rulesDir = fileURLToPath(new URL('../rules/', import.meta.url));
+  const files = readdirSync(rulesDir, { encoding: 'utf8' }).filter((entry) => entry.endsWith('.md'));
+  assert.ok(files.length >= 3, 'the rules files were found');
+  const found = files.flatMap((entry) =>
+    readFileSync(path.join(rulesDir, entry), 'utf8')
+      .split('\n')
+      .map((line, index) => (line.includes('—') ? `${entry}:${index + 1}: ${line.slice(0, 120)}` : null))
+      .filter((line): line is string => line !== null),
+  );
+  assert.deepEqual(found, [], 'reword these without an em dash (a full stop, comma, colon or brackets)');
+});

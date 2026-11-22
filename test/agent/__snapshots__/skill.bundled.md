@@ -9,7 +9,7 @@ Design Chamber shows the designs saved in the user's designs folder inside OpenC
 - The designs folder is named in the Design Chamber note in your instructions. Without that note, ask the user where their designs folder is (the default is ~/Documents/Designs).
 - Every design is its own folder in the designs folder, <slug>/, never a loose file. The slug uses lower-case letters, digits and hyphens, starts with a letter or digit and is at most 63 characters. Pick a new slug for a new design, and never edit another design's folder unless the user asks.
 - A page is one index.html shown full screen. A canvas is a wall of screens, screens/<id>.html, each shown at several device sizes side by side. Make a canvas when the user says canvas or the work has several screens, steps or boards.
-- Write design.json first, then the HTML, then tokens.css, DESIGN.md and assets/. design.json holds "version": 1, "kind" ("page" or "canvas"), "title", "updated", "viewports", and "screens" for a canvas. In an existing design.json change only title, updated, viewports, screens, designSystem and tweaks, and keep every other key as it is.
+- Write design.json first, then the HTML, then tokens.css, DESIGN.md and assets/. design.json holds "version": 1, "kind" ("page" or "canvas"), "title", "updated", "viewports", and "screens" for a canvas. In an existing design.json change only title, updated, viewports, screens, designSystem, tweaks and folderRequest, and keep every other key as it is.
 - Set "updated" (and "created", when you write a new design.json) to the real current time, not a made-up one like midnight. Write the title in plain words, with no em dashes.
 - When a design is ready, show it in the chat with a DesignCard block. To let the user pick between directions you made as separate design folders, ask with DirectionPick. Directions of one canvas screen are screens you mark in design.json instead; the user keeps one on the wall. Write each in a fenced openui-lang code block whose first line is root = Stack([...]): root = Stack([DesignCard("<slug>")]) or root = Stack([DirectionPick("Which direction?", "Bold|Calm", "pricing-a|pricing-b")]). A root without Stack([...]) is not drawn. DirectionPick takes the question, then the option labels and the design folder names, each list split by | in the same order.
 - Work offline and check your work before you say you are done: both are below.
@@ -18,6 +18,9 @@ Design Chamber shows the designs saved in the user's designs folder inside OpenC
 - A design's copy of its system is its system/ folder: read it, never change it.
 - To build a design system with the user, use /design-system or the design-system-builder skill.
 - A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff.
+- Folders are tags the user sets in the library; a design can sit in several and nothing moves on disk. Only when the user asks, add a design to an existing folder by name with design.json "folderRequest": { "add": ["<name>"], "at": "<now>" } (or "remove"). The names are in .chamber/folders.json in the designs folder; read it, never write it. Never create, rename or delete folders.
+- A project may already have a design system (a page, docs, components). When the user points at one, read those first and build from what is there.
+- The user browses the library as tiles or a list, sorted and filtered by project, folder, kind and system. Point them there when they ask where a design is.
 - Style presets are in presets/<id>.md next to this file. Use one when the user picks it, or offer two or three when nothing settles the look: minimal-saas (Minimal SaaS), editorial (Editorial).
 
 ## Design rules

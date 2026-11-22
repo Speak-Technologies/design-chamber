@@ -25,7 +25,7 @@ import {
 } from '@openchamber/sdk';
 
 import { extractHtml } from '../shared/agent/html-extract.ts';
-import type { AskElement, OpenIntent, PromptBody, PromptResponse, SystemOpenTarget } from '../shared/api.ts';
+import type { AskElement, ChipFiling, MembershipResult, OpenIntent, PromptBody, PromptResponse, SystemOpenTarget } from '../shared/api.ts';
 import type { AnchorState, BuildChipData, Chip, DesignChip, DesignKind, Outbox } from '../shared/types.ts';
 import { CHIP_PROVIDER_ID } from '../shared/types.ts';
 import { OUTBOX_TTL_MS, SLUG_PATTERN, SYSTEM_BUILD_TICKET_PATTERN, SYSTEM_ID_PATTERN, TURN_SNAPSHOT_DEDUPE_MS } from '../shared/limits.ts';
@@ -129,8 +129,11 @@ export type NewDesignInput = {
   system?: string;
   /** `new-chat` (default in the dialog) starts a session; `current-chat` attaches to the selected one. */
   destination: 'new-chat' | 'current-chat';
+  /** Phase 2.6 AD-5: folder ids and project directories to file the new design into (best effort). */
+  filing?: ChipFiling;
 };
-export type NewDesignResult = { slug: string; sessionId: string | null };
+/** `filing` is present only when filing was asked: one result per target; a failure never stops the design. */
+export type NewDesignResult = { slug: string; sessionId: string | null; filing?: { results: MembershipResult[] } };
 
 export type ContinueResult = { outcome: 'opened' | 'new-session'; sessionId: string };
 
@@ -477,27 +480,32 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
       }
     },
 
-    newDesign: async ({ kind, brief, preset = null, system, destination }) => {
+    newDesign: async ({ kind, brief, preset = null, system, destination, filing }) => {
       const ready = host.ready.get();
       const directory = host.directory.get();
       const text = brief.trim();
+      // Optional parts of the chip body travel only when the dialog set them.
+      const extra = { ...(system === undefined ? {} : { system }), ...(filing === undefined ? {} : { filing }) };
+      const filed = (answer: { filing?: { results: MembershipResult[] } }): Pick<NewDesignResult, 'filing'> => (answer.filing === undefined ? {} : { filing: answer.filing });
       if (destination === 'new-chat') {
         if (!directory) throw new FlowError('no-project', MESSAGES.noProject);
-        const { slug, chip } = await client.call('POST /chip', { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null, ...(system === undefined ? {} : { system }) } });
+        const answer = await client.call('POST /chip', { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null, ...extra } });
+        const { slug, chip } = answer;
         const result = await api.startSession({ ...toAttachRequest(chip), text: text || "Let's start this design.", navigation: 'open' });
         if (result.sessionId === null) throw new FlowError('start-failed', MESSAGES.startFailed);
         await client.call('PATCH /designs/:slug', { params: { slug }, body: { sessionId: result.sessionId } });
-        return { slug, sessionId: result.sessionId };
+        return { slug, sessionId: result.sessionId, ...filed(answer) };
       }
       const session = host.session.get();
-      const { slug, chip } = await client.call('POST /chip', {
-        body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null, ...(system === undefined ? {} : { system }) },
+      const answer = await client.call('POST /chip', {
+        body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null, ...extra },
       });
+      const { slug, chip } = answer;
       await api.attach(toAttachRequest(chip));
       if (text) await api.compose({ text, mode: 'append' });
       if (ready?.surface === 'page') await api.close();
       // The link is made by reconciliation once the chip is on a session (§10.5).
-      return { slug, sessionId: session?.id ?? null };
+      return { slug, sessionId: session?.id ?? null, ...filed(answer) };
     },
 
     buildSystem: async ({ brief, destination }) => {

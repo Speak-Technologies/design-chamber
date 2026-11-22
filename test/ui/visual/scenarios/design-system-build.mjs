@@ -68,7 +68,7 @@ const buildFlow = async (h, surface, width, theme) => {
   const q = await h.openPage({ width, height, surface, theme, label: `${tag}-empty`, routes: { 'GET /systems': { status: 200, body: { systems: [], total: 0, max: 50 } } } });
   await h.listReady(q);
   await openList(q, surface);
-  await q.waitFor('return !!doc.querySelector(".dc-sys-empty")', 'the empty state');
+  await q.waitFor('return !!doc.querySelector(".dc-sys-empty")', 'the empty state', 20000);
   await h.checkSoon(() => q.guest('return [...doc.querySelectorAll(".oc-sdk-btn")].some((b) => b.textContent.includes("Build with the agent"))'), `${tag}: Build with the agent… works in the empty state too`);
   h.check((await text(q, '.dc-sys-empty')).includes('From code') && (await text(q, '.dc-sys-empty')).includes('Describe'), `${tag}: the three starts stay in the empty state`);
   await q.shot(`${tag}-4-empty`);

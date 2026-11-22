@@ -187,3 +187,9 @@ disk has no such file).
   (the Fedora CI container).
 - Platform rules (paths, folders, browser lists, reveal plans, TCC sentences, capture args) are
   unit-tested with an injected platform, so they run on every OS.
+- macOS letter case (Phase 2.6): project directories compare with the platform's case rule
+  (`sameDirectory`). On a case-insensitive volume `/Users/sam/App` and `/Users/sam/app` are one
+  project; on a case-sensitive one they are two, and the registry keeps manual members under the
+  spelling they were filed with instead of guessing. The strict parse still refuses two entries
+  that differ only in case on a case-folding platform, because they would name the same project
+  twice. Tests inject the platform, so both readings run on every OS.

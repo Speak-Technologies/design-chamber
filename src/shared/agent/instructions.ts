@@ -40,6 +40,8 @@ const compose = (root: string, platform: NodeJS.Platform, checkCommand: string |
     "- A design's copy of its system is its system/ folder: read it, never change it.",
     '- To build a design system with the user, use /design-system or the design-system-builder skill.',
     "- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff.",
+    '- Folders in the library are the user\'s tags. Add a design to an existing folder only when the user asks, with design.json "folderRequest" (the design-chamber skill has the format). Never create, rename or delete folders.',
+    '- When the user points at a design system a project already has, read its page, docs and components before you build from it.',
   ].join('\n');
 };
 

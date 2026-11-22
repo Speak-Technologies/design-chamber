@@ -5,6 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { cp, lstat, mkdir, readdir, rename, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
@@ -487,6 +488,30 @@ describe('the agent recorded choice (§5.5)', () => {
     record = await rig.ctx.store.get(rig.slug);
     assert.deepEqual(record.state.systemChoiceProblem, { value: rig.id, reason: 'draft' });
     assert.equal(await lstat(rig.tmp.at(`${rig.slug}/system`)).catch(() => null), null);
+  });
+
+  test('a choice problem reaches the guests: a comments event after the state write, none for a repeat', async (t) => {
+    const rig = await setup(t);
+    const reconciler = createChoiceReconciler({ ctx: rig.ctx, link: rig.link, retryMs: 5 });
+    t.after(() => reconciler.stop());
+    const stateFile = rig.tmp.at(`${rig.slug}/.chamber/state.json`);
+    /** What state.json held at the moment each `comments` event for the design was emitted. */
+    const seen: unknown[] = [];
+    rig.ctx.hub.subscribe((event) => {
+      if (event.slug !== rig.slug || event.kind !== 'comments') return;
+      seen.push((JSON.parse(readFileSync(stateFile, 'utf8')) as { systemChoiceProblem?: unknown }).systemChoiceProblem);
+    });
+    await writeChoice(rig, 'nobody');
+    await reconciler.reconcile(rig.slug);
+    assert.deepEqual(seen, [{ value: 'nobody', reason: 'unknown' }]);
+    await reconciler.reconcile(rig.slug);
+    rig.ctx.hub.emit({ slug: rig.slug, kind: 'design' });
+    await reconciler.idle();
+    assert.equal(seen.length, 1);
+    // The fix clears it, and that is announced too ("none" on an unlinked design).
+    await writeChoice(rig, 'none');
+    await reconciler.reconcile(rig.slug);
+    assert.deepEqual(seen, [{ value: 'nobody', reason: 'unknown' }, undefined]);
   });
 
   test('"none" unlinks a linked design; on an unlinked one it only records the decision', async (t) => {

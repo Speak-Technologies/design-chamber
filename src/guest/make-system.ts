@@ -2,7 +2,8 @@
 // create the Draft, add the brand files one at a time, then ask the chat agent to write the rest. Only the
 // creation can fail the whole thing (the sheet keeps its input and says why); once the system exists every
 // later problem is a line in the result (a refused file, "Couldn't ask the agent") and the system stays a
-// Draft with what was gathered. Repo-backed systems are not made here (`/design-system` does that).
+// Draft with what was gathered. Repo-backed systems are made here only by "Register it as it is"
+// (Phase 2.6 AD-10: a folder already in Design Chamber's format, read-only); `/design-system` builds the rest.
 
 import type { AttachIssueRequest } from '@openchamber/sdk';
 
@@ -46,10 +47,18 @@ export type MakeSystemResult = {
 
 export type AskToMakeInput = { id: string; destination: MakeDestination; directory: string | null };
 
+/** "Register it as it is" (Phase 2.6 AD-10): the done location scan of a complete system folder, and its name. */
+export type RegisterSystemInput = { scanId: string; name: string };
+
 export type MakeSystem = {
   make(input: MakeSystemInput, onStep?: (step: MakeStep) => void): Promise<MakeSystemResult>;
   /** The delivery step on its own: "Try again" after a request that didn't reach a chat. Never throws. */
   askToMake(input: AskToMakeInput): Promise<AskOutcome>;
+  /**
+   * One call, no agent request, no chat: the system is registered read-only from what the scan read.
+   * Rejects with the service's sentence when it can't be (nothing is made then; the sheet keeps its input).
+   */
+  register(input: RegisterSystemInput): Promise<{ id: string; name: string }>;
 };
 
 export const MAKE_MESSAGES = {
@@ -160,5 +169,10 @@ export const createMakeSystem = ({ host, client }: { host: GuestHost; client: Se
     return { id, name, files, agent };
   };
 
-  return { make, askToMake };
+  const register: MakeSystem['register'] = async ({ scanId, name }) => {
+    const created = await client.call('POST /systems/register', { body: { scanId, name } });
+    return { id: created.id, name: created.system.name };
+  };
+
+  return { make, askToMake, register };
 };

@@ -1,20 +1,37 @@
-// View-model of the New design system sheet (Phase 2.5 U1): the name rule, the three sources, what a brand file is
-// and why one is refused, the scan's sentences and the one question "can it be made?". Pure: no DOM, no host calls.
-// The service has the last word on every rule here (names, file types, sizes); this only says it early, in the
-// same words, next to the field.
+// View-model of the New design system sheet (Phase 2.5 U1, Phase 2.6 E2): the name rule, the four sources, what a
+// brand file is and why one is refused, the scan's sentences, the existing-system discovery and location copy, and
+// the one question "can it be made?". Pure: no DOM, no host calls. The service has the last word on every rule here
+// (names, file types, sizes, locations); this only says it early, in the same words, next to the field.
 
-import type { ScanSummary } from '../../shared/api.ts';
+import type { LocationView, ScanSummary, SystemCandidate } from '../../shared/api.ts';
 import { SYSTEM_BYTES_MAX, SYSTEM_DOCUMENT_MAX_BYTES, SYSTEM_FILES_MAX, SYSTEM_FONT_MAX_BYTES, SYSTEM_IMAGE_MAX_BYTES, SYSTEM_NAME_MAX } from '../../shared/limits.ts';
 import { plural } from './format.ts';
 
-export type SourceId = 'code' | 'brand' | 'description';
+export type SourceId = 'code' | 'brand' | 'description' | 'existing';
 
 /** The checkboxes under "Start from", in the order the sheet shows them. */
 export const SOURCES: ReadonlyArray<{ id: SourceId; label: string; hint: string }> = [
-  { id: 'code', label: 'Project code', hint: 'Read a project’s colours, type and components. The project isn’t changed.' },
+  { id: 'code', label: 'Project code', hint: 'Design Chamber reads the CSS and token files it can parse. The agent reads the rest of the project and writes the overview, notes and components. The project isn’t changed.' },
   { id: 'brand', label: 'Brand files', hint: 'Fonts, logos and brand documents you already have.' },
   { id: 'description', label: 'A description', hint: 'Say what it should look like, or start from a style preset.' },
+  { id: 'existing', label: 'Existing design system', hint: 'Your project already has a system? Point at where it lives. Design Chamber reads its token files; the agent reads its page, docs and components.' },
 ];
+
+/**
+ * Ticking one source: Project code and Existing design system exclude each other (the chosen project stays), and
+ * Existing design system unticks an empty A description with no preset, so a start stays within the step budget.
+ */
+export const nextSources = (
+  current: Readonly<Record<SourceId, boolean>>,
+  id: SourceId,
+  checked: boolean,
+  context: { description: string; preset: string },
+): Record<SourceId, boolean> => {
+  const next = { ...current, [id]: checked };
+  if (checked && (id === 'code' || id === 'existing')) next[id === 'code' ? 'existing' : 'code'] = false;
+  if (checked && id === 'existing' && context.description.trim() === '' && context.preset === '') next.description = false;
+  return next;
+};
 
 // ---------------------------------------------------------------- name
 
@@ -137,11 +154,156 @@ export const FONT_LICENCE_NOTE = 'Check you’re allowed to use these fonts in d
 export const forAgentLine = (summary: ScanSummary): string | null =>
   summary.forAgent.length === 0 ? null : `${plural(summary.forAgent.length, 'file')} Design Chamber doesn’t run. The agent will read ${summary.forAgent.length === 1 ? 'it' : 'them'}.`;
 
-export const skippedLine = (summary: ScanSummary): string | null =>
-  summary.skipped.length + summary.refused === 0 ? null : `${plural(summary.skipped.length + summary.refused, 'file')} skipped (too large, secret or unreadable).`;
+export const skippedLine = (summary: ScanSummary): string | null => {
+  const total = summary.skipped.length + summary.refused;
+  if (total === 0) return null;
+  // One skipped file is named with the service's own reason; more than one is said as a count.
+  const only = summary.skipped[0];
+  if (total === 1 && only !== undefined) return `Skipped ${only.path}. ${only.reason}`;
+  return `${plural(total, 'file')} skipped (too large, secret or unreadable).`;
+};
 
 /** A scan that found nothing usable: no counts and no assets. */
 export const scanFoundNothing = (summary: ScanSummary): boolean => scanSummarySentence(summary) === null;
+
+// ---------------------------------------------------------------- existing systems (Phase 2.6 E2)
+
+/** "A, B and C": the list join every sentence here shares. */
+const joinParts = (parts: readonly string[]): string => {
+  if (parts.length <= 1) return parts[0] ?? '';
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+};
+
+/** What the location field holds for the project root: the service takes '.', and a candidate at the root has the path ''. */
+export const ROOT_LOCATION = '.';
+
+/** A candidate's path as it goes into the location field and the scan: the root's '' becomes '.'. */
+export const locationValue = (candidatePath: string): string => (candidatePath === '' ? ROOT_LOCATION : candidatePath);
+
+/** A location as the sheet names it: "design-system/", or "the project root" for '' and '.'. */
+export const locationLabel = (path: string): string => (path === '' || path === ROOT_LOCATION ? 'the project root' : `${path}/`);
+
+export const MISSED_LINE = 'Design Chamber reads CSS and token JSON. Pages, components and themes written in code are left for the agent.';
+
+/** MISSED_LINE plus what this scan saw but never parses; zero parts are left out. */
+export const missedLine = (summary: ScanSummary): string => {
+  const { pages, components, codeThemes } = summary.missed;
+  const parts = [
+    pages > 0 ? plural(pages, 'page') : null,
+    components > 0 ? plural(components, 'component file') : null,
+    codeThemes > 0 ? plural(codeThemes, 'theme in code', 'themes in code') : null,
+  ].filter((part): part is string => part !== null);
+  return parts.length === 0 ? MISSED_LINE : `${MISSED_LINE} It saw ${joinParts(parts)}.`;
+};
+
+export const NO_CANDIDATES = 'No existing design system found in this project. Point at a folder yourself, or start from the code.';
+
+export const NOTHING_IN_LOCATION = (folder: string): string =>
+  `Design Chamber didn’t find token files in ${folder}. The agent can still read its page and docs and write the system.`;
+
+/** What marks a candidate, in the service's mark order: "system.json, page, tokens, 3 docs". */
+export const candidateMarkLine = (candidate: SystemCandidate): string => {
+  const has = (mark: SystemCandidate['marks'][number]): boolean => candidate.marks.includes(mark);
+  const words: string[] = [];
+  if (has('contract')) words.push('system.json');
+  if (has('page')) words.push('page');
+  if (has('tokens')) words.push(candidate.marks.length === 1 ? 'token files' : 'tokens');
+  if (has('docs')) words.push(plural(candidate.counts.docs, 'doc'));
+  if (has('components')) words.push(plural(candidate.counts.components, 'component'));
+  if (has('theme')) words.push('theme');
+  if (has('docs') && !has('tokens')) words.push('no token files');
+  return words.join(', ');
+};
+
+/** A candidate's counts, or its registered system, or "Nothing to parse". */
+export const candidateCountLine = (candidate: SystemCandidate): string => {
+  if (candidate.registered !== null) return `Already in Design Chamber as ${candidate.registered.name}`;
+  const parts = [
+    candidate.counts.colours > 0 ? plural(candidate.counts.colours, 'colour') : null,
+    candidate.counts.tokens > 0 ? plural(candidate.counts.tokens, 'token') : null,
+  ].filter((part): part is string => part !== null);
+  return parts.length === 0 ? 'Nothing to parse' : parts.join(' · ');
+};
+
+export const candidatesNote = (total: number): string => `${plural(total, 'place')} found`;
+
+export const candidatesMoreLine = (more: number): string => `and ${more} more. Type a folder below to use another.`;
+
+export const nudgeLine = (candidate: SystemCandidate): string =>
+  `This project already has a design system in ${locationLabel(candidate.path)}. Start from it instead?`;
+
+/** The page, docs and component files a location leaves for the agent; null when there are none. */
+export const leftForAgentLine = (location: LocationView): string | null => {
+  const parts = [
+    ...location.read.page,
+    location.read.docs.length > 0 ? plural(location.read.docs.length, 'doc') : null,
+    location.read.components.length > 0 ? plural(location.read.components.length, 'component file') : null,
+  ].filter((part): part is string => part !== null);
+  return parts.length === 0 ? null : `Left for the agent: ${joinParts(parts)}.`;
+};
+
+/** "Files read (N)": the files the scan actually opened, not only the ones that held values. */
+export const filesReadLabel = (summary: ScanSummary): string => `Files read (${summary.read})`;
+
+/** The rest of the read files, the ones with no values; null when every read file held values. */
+export const filesReadMore = (summary: ScanSummary): string | null => {
+  const more = Math.max(0, summary.read - summary.files.length);
+  return more === 0 ? null : `and ${more} more with no values.`;
+};
+
+/**
+ * Why a location's contract can't be registered as it is. The service names each gap, and one name covers
+ * two cases: `tokens.css` is a gap when the file is absent and when it is there with no custom property, so
+ * the clause says both. `system.json` is only a gap when the file vanished between the walk and the read
+ * (a folder that never had one is not a contract at all), so that sentence stops claiming the folder has it.
+ * A sentence stands on its own, and the project root gets its own line (it needs a folder).
+ */
+export const contractProblemLine = (missing: readonly string[]): string => {
+  if (missing.includes('a folder inside the project')) {
+    return 'The project root can’t be registered as it is. A registered system needs its own folder inside the project. Make a new system from it instead.';
+  }
+  const lost = missing.includes('system.json');
+  const clauses = missing.map((gap) => {
+    if (gap === 'system.json') return 'system.json went missing';
+    if (gap === 'tokens.css') return 'tokens.css is missing or holds no token values';
+    if (gap === 'a folder path of up to four folders without spaces') return 'its folder path must be up to four folders without spaces';
+    if (gap === 'a folder Design Chamber can read in full') return 'Design Chamber can’t read the whole folder';
+    return gap;
+  });
+  const lead = lost ? 'While the folder was read, ' : 'This folder has a system.json but ';
+  const way = lost ? 'Read the folder again, or make a new system from it instead.' : 'Make a new system from it instead.';
+  return `${lead}${joinParts(clauses)}, so it can’t be registered as it is. ${way}`;
+};
+
+export const LOOKING_LABEL = (project: string): string => `Looking for a design system in ${project}…`;
+
+export const DISCOVERY_IDLE = 'Choose a project and Design Chamber looks for a design system in it. Nothing in it is changed.';
+
+export const LOCATION_HELPER = (project: string): string => `A folder inside ${project}. Design Chamber only reads it.`;
+
+export const LOCATION_IDLE = 'Pick a folder and Design Chamber reads its token files. Nothing in it is changed.';
+
+/** A folder is typed in the field but not read (the field changed after a read, or nothing was pressed yet). */
+export const LOCATION_UNREAD = 'This folder hasn’t been read yet. Press Read this folder to see what is in it.';
+
+export const LOCATION_FAILED_HINT = 'The folder wasn’t read. The path field says why.';
+
+export const REGISTER_CHOICE_LABEL = 'Register it as it is';
+
+export const MAKE_CHOICE_LABEL = 'Make a new system from it';
+
+export const REGISTER_HINT = (project: string): string =>
+  `This folder already holds a complete system in Design Chamber’s format. It is registered read-only and opens as a Draft for review. Nothing is written to ${project} and the agent isn’t asked.`;
+
+export const MAKE_FROM_HINT = 'Design Chamber reads the tokens and the agent writes the overview, notes and components. The new system lives in Design Chamber.';
+
+export const AGENT_DISABLED_HINT = 'Only needed when the agent writes the system. Registering it sends no request.';
+
+export const REPO_UNTOUCHED_LINE = 'Your repository stays exactly as it is.';
+
+export const NAME_SUGGESTED_HELPER = 'Suggested from the project. Change it if you like.';
+
+export const REGISTER_TOAST = (name: string, project: string): string => `Registered ${name} from ${project}. Review it, then mark it ready.`;
 
 // ---------------------------------------------------------------- the whole draft
 
@@ -151,10 +313,20 @@ export type ScanState =
   | { state: 'done'; directory: string; scanId: string; summary: ScanSummary }
   | { state: 'failed'; directory: string; message: string };
 
+/** The location scan of the Existing design system start (Phase 2.6 §6.6): a second job rooted at the folder. */
+export type LocationScanState =
+  | { state: 'idle' }
+  | { state: 'running'; path: string }
+  | { state: 'done'; path: string; scanId: string; summary: ScanSummary }
+  | { state: 'failed'; path: string; message: string };
+
+/** The sheet's two scans: the project's (code values and discovery) and the chosen location's. */
+export type SheetScans = { project: ScanState; location: LocationScanState };
+
 export type DraftInput = {
   name: string;
   sources: Readonly<Record<SourceId, boolean>>;
-  scan: ScanState;
+  scan: SheetScans;
   brand: { files: readonly PickedFile[]; folder: string };
   description: string;
   /** A bundled style preset id, or '' for none. */
@@ -162,7 +334,7 @@ export type DraftInput = {
 };
 
 /** Where Make design system found a problem and what to say there. `null` field: the one line above the buttons. */
-export type DraftProblem = { field: 'name' | 'code' | 'brand' | 'description'; message: string };
+export type DraftProblem = { field: 'name' | 'code' | 'existing' | 'brand' | 'description'; message: string };
 
 /** Everything that stops Make, first problem first. Empty means it can be made. Checked on press, not by a greyed-out button. */
 export const draftProblems = (draft: DraftInput, existing: ReadonlyArray<{ name: string }>): DraftProblem[] => {
@@ -170,9 +342,17 @@ export const draftProblems = (draft: DraftInput, existing: ReadonlyArray<{ name:
   const name = systemNameProblem(draft.name, existing);
   if (name !== null) problems.push({ field: 'name', message: name });
   if (draft.sources.code) {
-    if (draft.scan.state === 'idle') problems.push({ field: 'code', message: 'Pick the project to read, or untick Project code.' });
-    else if (draft.scan.state === 'running') problems.push({ field: 'code', message: 'Wait for the scan to finish, or cancel it and untick Project code.' });
-    else if (draft.scan.state === 'failed') problems.push({ field: 'code', message: 'Pick a folder Design Chamber can read, or untick Project code.' });
+    if (draft.scan.project.state === 'idle') problems.push({ field: 'code', message: 'Pick the project to read, or untick Project code.' });
+    else if (draft.scan.project.state === 'running') problems.push({ field: 'code', message: 'Wait for the scan to finish, or cancel it and untick Project code.' });
+    else if (draft.scan.project.state === 'failed') problems.push({ field: 'code', message: 'Pick a folder Design Chamber can read, or untick Project code.' });
+  }
+  if (draft.sources.existing) {
+    const { project, location } = draft.scan;
+    if (project.state === 'idle') problems.push({ field: 'existing', message: 'Pick the project to read, or untick Existing design system.' });
+    else if (project.state === 'running') problems.push({ field: 'existing', message: 'Wait for Design Chamber to look through the project.' });
+    if (location.state === 'idle') problems.push({ field: 'existing', message: 'Pick where the system lives, or type its folder.' });
+    else if (location.state === 'running') problems.push({ field: 'existing', message: 'Wait for Design Chamber to read that folder.' });
+    else if (location.state === 'failed') problems.push({ field: 'existing', message: location.message });
   }
   if (draft.sources.brand) {
     if (draft.brand.files.length === 0 && draft.brand.folder.trim() === '') problems.push({ field: 'brand', message: 'Add brand files, or untick Brand files.' });
@@ -196,8 +376,11 @@ export const DESCRIPTION_PLACEHOLDER = 'e.g. Calm and confident for a bookkeepin
 
 export const MAKE_LABEL = 'Make design system';
 
+/** The footer's primary when "Register it as it is" is chosen (Phase 2.6 AD-10). */
+export const REGISTER_LABEL = 'Register design system';
+
 /** The sentence under the sheet's title. */
-export const SHEET_SUBTITLE = 'Starts as a draft you review. Your chat agent writes the notes and components.';
+export const SHEET_SUBTITLE = 'Start it from what you already have. Nothing is made until you press the button below.';
 
 /** After the system exists but not everything went through: what is still open, as a clause the headline and the toast share. */
 export const resultClause = (refused: number, sent: boolean): string => {

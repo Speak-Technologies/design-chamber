@@ -27,9 +27,26 @@ import {
   type StartSessionResult,
 } from '@openchamber/sdk';
 
-import { API_ERROR_STATUS, ROUTE_KEYS, splitRouteKey, type ApiErrorCode, type ChangesResponse, type EditStamps, type EditResponse, type OpenRequest, type RouteKey, type StatusDesignRow, type TokensResponse, type TweakState, type UndoEditResponse } from '../shared/api.ts';
+import {
+  API_ERROR_STATUS,
+  ROUTE_KEYS,
+  splitRouteKey,
+  type ApiErrorCode,
+  type ChangesResponse,
+  type EditStamps,
+  type EditResponse,
+  type FolderListResponse,
+  type MembershipResult,
+  type MembershipTarget,
+  type OpenRequest,
+  type RouteKey,
+  type StatusDesignRow,
+  type TokensResponse,
+  type TweakState,
+  type UndoEditResponse,
+} from '../shared/api.ts';
 import { CHIP_PROVIDER_ID, type AgentSkillStatus, type ChangeEvent, type ChangeKind, type Comment, type DesignJson, type DesignKind, type DesignSummary, type HandEdit, type HandEditBase, type LooseHtmlFile, type Outbox, type Preset, type Screen, type VersionSummary, type Viewport } from '../shared/types.ts';
-import { CHANGES_RING_SIZE, EDIT_ID_PATTERN, HAND_EDITS_LEDGER_MAX, HAND_EDIT_QUOTE_MAX, LOOSE_LIST_MAX, SCREENS_MAX, SLUG_PATTERN, SYSTEM_ID_PATTERN, STATUS_ROWS_MAX, TEXT_EDIT_MAX, USER_EDIT_COALESCE_MS, USER_UNDO_KEEP } from '../shared/limits.ts';
+import { CHANGES_RING_SIZE, EDIT_ID_PATTERN, FOLDER_DESIGNS_MAX, HAND_EDITS_LEDGER_MAX, HAND_EDIT_QUOTE_MAX, LOOSE_LIST_MAX, SCREENS_MAX, SLUG_PATTERN, SYSTEM_ID_PATTERN, STATUS_ROWS_MAX, TEXT_EDIT_MAX, USER_EDIT_COALESCE_MS, USER_UNDO_KEEP } from '../shared/limits.ts';
 import { sameDirectory } from '../shared/path-compare.ts';
 import { ENTRY_FILE, screenFileOf } from '../shared/design-json.ts';
 import { copyTitle, describeMove, directionGroups, freeCopyId, SCREEN_LIST_STALE_MESSAGE, SCREENS_CAP_MESSAGE } from '../shared/screen-ops.ts';
@@ -277,7 +294,14 @@ export type FakeService = {
   writeFile(slug: string, file: string, text: string): void;
   /** Simulate the agent saving a loose html file directly in the designs root (emits `loose`). */
   writeLooseFile(name: string, text: string): void;
+  /** F1 (Phase 2.6): folders a test seeded, by id (`f_` + ten characters); `POST /memberships` and chip filing change them. */
+  readonly folders: Map<string, FakeFolder>;
+  /** F1: manual project members, by directory. */
+  readonly projectMembers: Map<string, Set<string>>;
 };
+
+/** F1: a seeded folder in the fake service. */
+export type FakeFolder = { name: string; created: string; slugs: Set<string> };
 
 export const createFakeService = (options: FakeServiceOptions = {}): FakeService => {
   const designs = options.empty ? new Map<string, FakeDesign>() : sampleDesigns();
@@ -299,6 +323,9 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
   );
   const skillPath = 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md';
   let skill: AgentSkillStatus = { path: skillPath, state: 'not-installed', duplicates: [] };
+  // F1 (Phase 2.6): seeded folders and manual project members.
+  const folders = new Map<string, FakeFolder>();
+  const projectMembers = new Map<string, Set<string>>();
 
   const emit = (slug: string | null, kind: ChangeKind, files?: string[], origin?: 'user'): void => {
     seq += 1;
@@ -779,6 +806,79 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
   /** Build tickets handed out (`POST /systems/chip`). */
   let buildSeq = 0;
 
+  // ---- F1 (Phase 2.6 §5.1 to §5.3): folder and project membership, as the service answers it ----
+  // Folders exist only when a test seeds `folders`; the service's real rules (registry, caps,
+  // derived skip, atomic writes) are tested in test/service. Same sentences as folders.ts.
+  const membershipFailure = {
+    gone: "That folder isn't there any more.",
+    full: `A folder can hold up to ${FOLDER_DESIGNS_MAX.toLocaleString('en-US')} designs.`,
+    invalid: "That project folder can't be used.",
+  } as const;
+  const membershipStatus = { gone: 'not-found', full: 'conflict', invalid: 'bad-request' } as const;
+
+  const folderListOf = (): FolderListResponse => ({
+    folders: [...folders].map(([id, folder]) => ({ id, name: folder.name, created: folder.created, slugs: [...folder.slugs].filter((slug) => designs.has(slug)) })),
+    projects: [...projectMembers]
+      .map(([directory, slugs]) => ({ directory, slugs: [...slugs].filter((slug) => designs.has(slug)) }))
+      .filter((project) => project.slugs.length > 0),
+  });
+
+  /** One batch over copies; atomic throws on the first failure and keeps nothing. */
+  const applyFakeMemberships = (changes: readonly { target: MembershipTarget; add: string[]; remove: string[] }[], atomic: boolean): MembershipResult[] => {
+    const nextFolders = new Map([...folders].map(([id, folder]) => [id, { ...folder, slugs: new Set(folder.slugs) }]));
+    const nextProjects = new Map([...projectMembers].map(([directory, slugs]) => [directory, new Set(slugs)]));
+    const results: MembershipResult[] = [];
+    for (const { target, add, remove } of changes) {
+      let failure: keyof typeof membershipFailure | null = null;
+      let members: Set<string> | undefined;
+      if (target.kind === 'folder') {
+        members = nextFolders.get(target.id)?.slugs;
+        if (members === undefined) failure = 'gone';
+      } else if (!/^([A-Za-z]:[\\/]|[\\/])/.test(target.directory)) {
+        failure = 'invalid';
+      } else {
+        const key = [...nextProjects.keys()].find((directory) => sameDirectory(directory, target.directory)) ?? target.directory;
+        members = nextProjects.get(key) ?? new Set();
+        nextProjects.set(key, members);
+      }
+      if (members !== undefined) {
+        const next = new Set([...members].filter((slug) => !remove.includes(slug)));
+        for (const slug of add) {
+          const own = designs.get(slug)?.design.projectDirectory ?? null;
+          // A design's own project is never written as a manual member.
+          if (designs.has(slug) && !(target.kind === 'project' && own !== null && sameDirectory(own, target.directory))) next.add(slug);
+        }
+        if (next.size > FOLDER_DESIGNS_MAX) failure = 'full';
+        else {
+          members.clear();
+          for (const slug of next) members.add(slug);
+        }
+      }
+      if (failure !== null) {
+        if (atomic) throw new FakeHttpError(membershipStatus[failure], membershipFailure[failure]);
+        results.push({ target, ok: false, code: failure, message: membershipFailure[failure] });
+      } else results.push({ target, ok: true });
+    }
+    if (results.some((result) => result.ok)) {
+      folders.clear();
+      for (const [id, folder] of nextFolders) folders.set(id, folder);
+      projectMembers.clear();
+      for (const [directory, slugs] of nextProjects) if (slugs.size > 0) projectMembers.set(directory, slugs);
+      emit(null, 'folders');
+    }
+    return results;
+  };
+
+  /** `POST /chip { filing }`: best effort after the design is made. */
+  const fileFakeDesign = (slug: string, filing: unknown): { results: MembershipResult[] } | undefined => {
+    if (typeof filing !== 'object' || filing === null) return undefined;
+    const list = (value: unknown): string[] => (Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []);
+    const record = filing as Record<string, unknown>;
+    const targets: MembershipTarget[] = [...list(record.folders).map((id) => ({ kind: 'folder' as const, id })), ...list(record.projects).map((directory) => ({ kind: 'project' as const, directory }))];
+    return { results: targets.length === 0 ? [] : applyFakeMemberships(targets.map((target) => ({ target, add: [slug], remove: [] })), false) };
+  };
+  // ---- end F1 ----
+
   const route = async ({ key, params }: Matched, query: Record<string, string>, body: Record<string, unknown>): Promise<unknown> => {
     const slug = params.slug ?? '';
     switch (key) {
@@ -1111,8 +1211,21 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           projectDirectory: typeof body.projectDirectory === 'string' ? body.projectDirectory : null,
           preset: typeof body.preset === 'string' ? body.preset : null,
         });
-        return { slug: created, chip: chipOf(created) };
+        // F1: filing at creation (Phase 2.6 AD-5), answered only when it was asked.
+        const filing = fileFakeDesign(created, body.filing);
+        return filing === undefined ? { slug: created, chip: chipOf(created) } : { slug: created, chip: chipOf(created), filing };
       }
+      // ---- F1 (Phase 2.6 §3.1): batch membership ----
+      case 'POST /memberships': {
+        const changes = Array.isArray(body.changes) ? (body.changes as { target: MembershipTarget; add?: string[]; remove?: string[] }[]) : [];
+        if (changes.length === 0) throw new FakeHttpError('bad-request', 'Send between 1 and 64 folder changes at once.');
+        const results = applyFakeMemberships(
+          changes.map((change) => ({ target: change.target, add: change.add ?? [], remove: change.remove ?? [] })),
+          body.atomic === true,
+        );
+        return { results, list: folderListOf() };
+      }
+      // ---- end F1 ----
       // Phase 2.5 S8: a build ticket and its chip, as the service answers (no files here).
       case 'POST /systems/chip': {
         buildSeq += 1;
@@ -1194,6 +1307,14 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
       case 'DELETE /designs/:slug/page-state':
         get(slug);
         throw new FakeHttpError('internal', 'This part of Design Chamber (page-state) is not built yet.');
+      // ---- Phase 2.6 E1 (services): "Register it as it is" ----
+      // This fake has no scan jobs (the visual harness's `fake-systems.ts` answers scans), so no scan
+      // id it is given can name a read folder: the route answers as the service does for a gone scan.
+      case 'POST /systems/register': {
+        if (typeof body.name !== 'string' || body.name.trim() === '') throw new FakeHttpError('bad-request', 'Give the design system a name.');
+        throw new FakeHttpError('not-found', 'That scan is no longer available. Scan the folder again.');
+      }
+      // ---- end Phase 2.6 E1 ----
     }
   };
 
@@ -1239,6 +1360,8 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
       loose.set(name, { text, mtime: new Date().toISOString() });
       emit(null, 'loose');
     },
+    folders,
+    projectMembers,
   };
 };
 

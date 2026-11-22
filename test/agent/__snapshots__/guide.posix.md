@@ -1,4 +1,4 @@
-<!-- design-chamber:guide v1 sha256:37e9e2480efc2ff3709ed74e83da9bdccc2b0ebdd0936e41079634fdf1954eeb -->
+<!-- design-chamber:guide v1 sha256:224fb44b2460c57a4fa4f586ea1baa7d303cf3dcfae84de02c2cd21382a75395 -->
 # Designs folder (Design Chamber)
 
 This folder, `/home/you/Documents/Designs`, is the user's designs folder for Design Chamber, the design viewer inside OpenChamber. The user sets it in Design Chamber settings (the default is `~/Documents/Designs`). Designs saved anywhere else do not show up.
@@ -54,7 +54,7 @@ design.json for a canvas:
 }
 ```
 
-Set `updated` to the current time whenever you change the design. When design.json already exists, change only `title`, `updated`, `viewports`, `screens`, `designSystem` and `tweaks`, and keep every other key as it is.
+Set `updated` to the current time whenever you change the design. When design.json already exists, change only `title`, `updated`, `viewports`, `screens`, `designSystem`, `tweaks` and `folderRequest`, and keep every other key as it is.
 
 ## Works offline
 
@@ -80,9 +80,22 @@ Leave `_systems/` alone too, unless you were asked to work on a system.
 ## Design systems
 
 - Design systems live in `_systems/<id>/` in the designs folder. Write there only when the user or Design Chamber asks you to make or change a system; never set its status.
+- A project may already have a design system: a page, docs, components. When the user points at one, read its page, docs and components first, and build from what is there. Design Chamber reads the CSS and token files it can parse; you write the overview, notes and components.
 - A design's copy of its system is its `system/` folder: read it, never change it.
 - To build a design system with the user, use /design-system or the design-system-builder skill.
 - A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff.
+
+## Folders
+
+- The user groups designs into folders in the library. Folders are tags: a design can sit in several, and grouping never moves a design's folder on disk.
+- Projects group designs by the project they were made for. The user can also file a design under another project; that only groups it, and its design rules still come from the project it was made for.
+- When the user asks you to put a design in a folder, add it to an existing folder by name: in its design.json set `"folderRequest": { "add": ["Q4 launch"], "at": "<the current time>" }`, or use `"remove"` to take it out. Design Chamber files it within a few seconds.
+- The folder names are in `/home/you/Documents/Designs/.chamber/folders.json`. Read it, never write it. If the folder doesn't exist, say so and name the closest ones; never invent a folder.
+- Never create, rename or delete folders, and never move files to organise them. The user does that in the library.
+
+## The library
+
+The user browses designs as tiles or a list, sorts them by Updated, Created or Title, and filters them by project, folder, kind and system. Design systems show there too. Point the user at the library when they ask where a design is.
 
 ## Design rules
 

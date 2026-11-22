@@ -39,7 +39,7 @@ const dragCard = (p, slug, folderScope) =>
 /** Opens the sidebar when it is closed (narrow pages close it after a choice). */
 const ensureSidebar = async (p) => {
   if ((await p.guest('return doc.querySelector(".dc-library-body").dataset.sidebar')) === 'closed') {
-    await p.click('.dc-library-bar .dc-iconbtn[aria-label="Projects and folders"]');
+    await p.click('.dc-library-bar .dc-iconbtn[aria-label="Projects, folders and design systems"]');
     await p.settle(150);
   }
 };
@@ -73,7 +73,7 @@ const pageFlow = async (h, width, theme) => {
   // A project row filters the grid; search, tabs and counts work inside it; the card's project line goes.
   await p.click('.dc-side-main', { text: 'shop' });
   await h.checkSoon(async () => JSON.stringify(await gridSlugs(p)) === '["habit-tracker","northwind-pricing"]', `${tag}: the shop row shows only shop's designs`);
-  h.check(await p.guest('return doc.querySelector(".dc-page-scope")?.textContent === "shop" && !doc.querySelector(".dc-card-project")'), `${tag}: the title names the view and the cards drop their project line inside it`);
+  h.check(await p.guest('return doc.querySelector(".dc-page-count")?.textContent === "shop · 2 designs" && !doc.querySelector(".dc-card-project")'), `${tag}: the count line names the view and the cards drop their project line inside it`);
   h.check(await p.guest('const t = [...doc.querySelectorAll(".dc-tabs [role=tab]")].map((n) => n.textContent.replace(/\\s+/g, " ").trim()); return /All.*2/.test(t[0]) && /Canvases.*1/.test(t[1]) && /Pages.*1/.test(t[2])'), `${tag}: tab counts follow the project`);
   h.check(String(await p.host('window.__host.storageGet("list-scope:page")')).startsWith('project:'), `${tag}: the chosen view is remembered (list-scope:page)`);
   await p.type('.dc-search input', 'zzz');
@@ -121,14 +121,16 @@ const pageFlow = async (h, width, theme) => {
   await p.hover('.dc-card[data-slug="northwind-pricing"]');
   await p.click('.dc-card[data-slug="northwind-pricing"] .dc-card-more');
   await p.click('.dc-popup [role="menuitem"]', { text: 'Add to folder' });
-  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog] .dc-folder-pick .oc-sdk-check")', 'the Add to folder dialog');
+  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog] .dc-pick .oc-sdk-check")', 'the Add to folder dialog');
   await p.settle(250);
-  h.check(await p.guest('const c = [...doc.querySelectorAll(".dc-folder-pick .oc-sdk-check")]; return c.length === 2 && c.every((n) => n.getAttribute("aria-checked") === "false")'), `${tag}: the dialog lists both folders, none ticked for this design`);
+  h.check(await p.guest('const s = [...doc.querySelectorAll(".dc-pick-section .dc-pick-title")].map((n) => n.textContent); return JSON.stringify(s) === JSON.stringify(["Projects","Folders"])'), `${tag}: the dialog lists Projects then Folders (Phase 2.6)`);
+  h.check(await p.guest('const f = [...doc.querySelectorAll(".dc-pick .oc-sdk-check")].filter((n) => n.closest("section").querySelector(".dc-pick-title").textContent === "Folders"); return f.length === 2 && f.every((n) => n.getAttribute("aria-checked") === "false")'), `${tag}: both folders listed, none ticked for this design`);
+  h.check(await p.guest('const p = doc.querySelector(".dc-pick .oc-sdk-check[aria-disabled=true]"); return !!p && p.getAttribute("aria-checked") === "true" && /Automatic/.test(p.textContent)'), `${tag}: the design's own project is ticked and locked, and says why`);
   await p.shot(`${tag}-4-add-to-folder`);
-  await p.click('.dc-folder-pick .oc-sdk-check', { text: 'Explorations' });
-  await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-folder-pick .oc-sdk-check")].find((n) => n.textContent.includes("Explorations"))?.getAttribute("aria-checked") === "true"'), `${tag}: ticking adds it at once`);
-  await p.click('.dc-folder-pick .oc-sdk-check', { text: 'Q4 launch' });
-  await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-folder-pick .oc-sdk-check")].every((n) => n.getAttribute("aria-checked") === "true")'), `${tag}: a design can sit in two folders`);
+  await p.click('.dc-pick .oc-sdk-check', { text: 'Explorations' });
+  await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-pick .oc-sdk-check")].find((n) => n.textContent.includes("Explorations"))?.getAttribute("aria-checked") === "true"'), `${tag}: ticking adds it at once`);
+  await p.click('.dc-pick .oc-sdk-check', { text: 'Q4 launch' });
+  await h.checkSoon(() => p.guest('const f = [...doc.querySelectorAll(".dc-pick-section")].find((s) => s.querySelector(".dc-pick-title").textContent === "Folders"); return [...f.querySelectorAll(".oc-sdk-check")].every((n) => n.getAttribute("aria-checked") === "true")'), `${tag}: a design can sit in two folders`);
   await p.click('.dc-sheet .oc-sdk-btn', { text: 'Done' });
   await p.settle(150);
 
@@ -159,22 +161,29 @@ const pageFlow = async (h, width, theme) => {
   await p.type('.dc-side-row-edit input', 'Ideas');
   await p.key('Enter', { focus: '.dc-side-row-edit input' });
   await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-side-label")].some((n) => n.textContent === "Ideas") && !doc.querySelector(".dc-side-row-edit")'), `${tag}: renaming inline keeps the folder`);
-  h.check(await p.guest('return doc.querySelector(".dc-page-scope")?.textContent === "Ideas"'), `${tag}: the open view follows the new name`);
+  h.check(await p.guest('return doc.querySelector(".dc-page-count")?.textContent === "Ideas · 0 designs"'), `${tag}: the open view follows the new name`);
   await p.click('.dc-side-row[data-selected=true] .dc-iconbtn');
   await p.click('.dc-popup [role="menuitem"]', { text: 'Delete folder' });
+  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog]")', 'the delete confirm (Phase 2.6)');
+  h.check(await p.guest('const s = doc.querySelector(".dc-sheet"); return /Delete Ideas\\?/.test(s.querySelector(".dc-sheet-title").textContent) && /is empty\\. Deleting it changes nothing\\./.test(s.textContent)'), `${tag}: the confirm names the folder and says it is empty`);
+  await p.shot(`${tag}-6b-delete-confirm`);
+  await p.click('.dc-sheet .oc-sdk-btn', { text: 'Delete folder' });
   await p.waitFor('return !!doc.querySelector(".dc-undo-notice .oc-sdk-banner")', 'the Undo notice');
   await p.settle(250);
-  h.check(!(await p.guest('return !!doc.querySelector(".dc-sheet[data-variant=dialog]")')), `${tag}: deleting a folder asks nothing first`);
-  h.check(await p.guest('const n = doc.querySelector(".dc-undo-notice"); return /Deleted folder Ideas\\./.test(n.textContent) && /It was empty/.test(n.textContent) && /Undo/.test(n.textContent) && n.getAttribute("aria-live") === "polite"'), `${tag}: the notice says what was deleted and offers Undo (live region)`);
-  h.check(await p.guest('return doc.querySelector(".dc-page-scope")?.hidden === true'), `${tag}: the view falls back to All designs`);
+  h.check(!(await p.guest('return !!doc.querySelector(".dc-sheet[data-variant=dialog]")')), `${tag}: the confirm closes once the folder is gone`);
+  h.check(await p.guest('const n = doc.querySelector(".dc-undo-notice"); return /Deleted Ideas\\./.test(n.textContent) && /It was empty/.test(n.textContent) && /Undo/.test(n.textContent) && n.getAttribute("aria-live") === "polite"'), `${tag}: the notice says what was deleted and offers Undo (live region)`);
+  h.check(await p.guest('return doc.querySelector(".dc-side-row[data-selected=true] .dc-side-label")?.textContent === "All designs"'), `${tag}: the view falls back to All designs`);
   await p.shot(`${tag}-7-deleted-undo`);
   await p.click('.dc-undo-notice .oc-sdk-btn', { text: 'Undo' });
   await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-side-label")].some((n) => n.textContent === "Ideas") && !doc.querySelector(".dc-undo-notice .oc-sdk-banner")'), `${tag}: Undo brings the folder back`);
 
-  // A folder with designs: the notice counts them and every design stays listed. (Undo returned the view to Ideas; go back to All designs.)
+  // A folder with designs: the confirm names what stays, the notice counts them and every design stays listed. (Undo returned the view to Ideas; go back to All designs.)
   await p.click('.dc-side-main', { text: 'All designs' });
   await p.click(`.dc-side-row[data-scope="${folderScope}"] .dc-iconbtn`);
   await p.click('.dc-popup [role="menuitem"]', { text: 'Delete folder' });
+  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog]")', 'the delete confirm');
+  h.check(await p.guest('return /1 design is in Q4 launch\\. 1 of them is in no other folder; it stays in All designs\\./.test(doc.querySelector(".dc-sheet").textContent) && /Deleting a folder never deletes designs\\./.test(doc.querySelector(".dc-sheet").textContent)'), `${tag}: the confirm names the one design that loses its last folder, with the promise`);
+  await p.click('.dc-sheet .oc-sdk-btn', { text: 'Delete folder' });
   await p.waitFor('return !!doc.querySelector(".dc-undo-notice .oc-sdk-banner")', 'the Undo notice');
   h.check(await p.guest('return /Its design is still in All designs\\./.test(doc.querySelector(".dc-undo-notice").textContent)'), `${tag}: the notice counts the designs that stay`);
   h.check((await p.guest('return doc.querySelectorAll(".dc-card[data-slug]").length')) === 6, `${tag}: every design is still listed`);
@@ -207,7 +216,7 @@ const pageNarrow = async (h) => {
   await ensureSidebar(p);
   await p.key('Escape', { focus: '.dc-side-main' });
   await p.settle(150);
-  h.check((await p.guest('return doc.querySelector(".dc-library-body").dataset.sidebar + ":" + (doc.activeElement?.getAttribute("aria-label") ?? "")')) === 'closed:Projects and folders', `${tag}: Escape closes it and focus returns to the button`);
+  h.check((await p.guest('return doc.querySelector(".dc-library-body").dataset.sidebar + ":" + (doc.activeElement?.getAttribute("aria-label") ?? "")')) === 'closed:Projects, folders and design systems', `${tag}: Escape closes it and focus returns to the button`);
   await p.shot(`${tag}-3-shop`);
   await p.close();
 };
@@ -282,16 +291,18 @@ const railFlow = async (h, width, theme, full) => {
   await p.hover('.dc-row[data-slug="coffee-subscription"]');
   await p.click('.dc-row[data-slug="coffee-subscription"] .dc-iconbtn');
   await p.click('.dc-popup [role="menuitem"]', { text: 'Add to folder' });
-  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog] .dc-folder-new-field input")', 'the Add to folder dialog with the name field (no folders yet)');
+  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog] .dc-pick-new-field input")', 'the Add to folder dialog with the name field (no folders yet)');
   await p.settle(200);
-  h.check(await p.guest('return /No folders yet/.test(doc.querySelector(".dc-folder-pick").textContent)'), `${tag}: with no folders the dialog says so and asks for a name`);
+  h.check(await p.guest('return /No folders yet/.test(doc.querySelector(".dc-pick").textContent)'), `${tag}: with no folders the dialog says so and asks for a name`);
+  h.check(await p.guest('return /Automatic/.test(doc.querySelector(".dc-pick").textContent) && !!doc.querySelector(".dc-pick .oc-sdk-check[aria-disabled=true]")'), `${tag}: the project the design was made for is listed, ticked and locked`);
   await p.shot(`${tag}-4-add-first-folder`);
-  await p.type('.dc-folder-new-field input', 'a\tb');
+  await p.type('.dc-pick-new-field input', 'a\tb');
   await p.click('.dc-sheet .oc-sdk-btn', { text: 'Create and add' });
-  await h.checkSoon(() => p.guest('return doc.querySelector(".dc-folder-new-field")?.textContent.includes("line breaks or tabs")'), `${tag}: a tab in the name is refused next to the field`);
-  await p.type('.dc-folder-new-field input', 'Q4 launch');
+  await h.checkSoon(() => p.guest('return doc.querySelector(".dc-pick-new-field")?.textContent.includes("line breaks or tabs")'), `${tag}: a tab in the name is refused next to the field`);
+  await p.type('.dc-pick-new-field input', 'Q4 launch');
   await p.click('.dc-sheet .oc-sdk-btn', { text: 'Create and add' });
-  await h.checkSoon(() => p.guest('const c = doc.querySelector(".dc-folder-pick .oc-sdk-check"); return c?.getAttribute("aria-checked") === "true" && c.textContent.includes("Q4 launch")'), `${tag}: Create and add makes the folder and ticks it`);
+  await h.checkSoon(() => p.guest('const c = [...doc.querySelectorAll(".dc-pick .oc-sdk-check")].find((n) => n.textContent.includes("Q4 launch")); return c?.getAttribute("aria-checked") === "true"'), `${tag}: Create and add makes the folder and ticks it`);
+  await h.checkSoon(() => p.guest('return /Added to Q4 launch\\./.test(doc.querySelector(".dc-pick-status")?.textContent ?? "")'), `${tag}: the status line says what happened`);
   await p.shot(`${tag}-5-added`);
   await p.click('.dc-sheet .oc-sdk-btn', { text: 'Done' });
   await p.settle(150);
@@ -317,9 +328,12 @@ const railFlow = async (h, width, theme, full) => {
 
   await p.click('.dc-rail-show .dc-iconbtn');
   await p.click('.dc-popup [role="menuitem"]', { text: 'Delete folder' });
+  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog]")', 'the delete confirm');
+  h.check(await p.guest('return /Delete Q4 push\\?/.test(doc.querySelector(".dc-sheet-title").textContent) && /Deleting a folder never deletes designs\\./.test(doc.querySelector(".dc-sheet").textContent)'), `${tag}: the confirm names the folder and the promise`);
+  await p.click('.dc-sheet .oc-sdk-btn', { text: 'Delete folder' });
   await p.waitFor('return !!doc.querySelector(".dc-undo-notice .oc-sdk-banner")', 'the Undo notice');
   await p.settle(250);
-  h.check(await p.guest('return /Deleted folder Q4 push\\./.test(doc.querySelector(".dc-undo-notice").textContent) && /still in All designs/.test(doc.querySelector(".dc-undo-notice").textContent)'), `${tag}: delete says what stays, with Undo`);
+  h.check(await p.guest('return /Deleted Q4 push\\./.test(doc.querySelector(".dc-undo-notice").textContent) && /still in All designs/.test(doc.querySelector(".dc-undo-notice").textContent)'), `${tag}: delete says what stays, with Undo`);
   h.check((await gridSlugs(p)).length === 6, `${tag}: back on All designs with every design listed`);
   await p.shot(`${tag}-7-deleted-undo`);
   await p.click('.dc-undo-notice .oc-sdk-btn', { text: 'Undo' });
@@ -352,6 +366,70 @@ const railFoldersFail = async (h, width, theme) => {
   await p.close();
 };
 
+// ---------------------------------------------------------------- manual members (QA-L1)
+
+const MYCHAMBA = 'C:\\Users\\you\\work\\mychamba';
+
+/**
+ * Designs filed under a project by hand (the registry's `projects`, not the design's own folder) reach the library:
+ * a project with only manual members gets its row and Show entry, lists and counts them, and a filed design leaves No project.
+ */
+const manualFlow = async (h, surface, width, theme) => {
+  const tag = `folders-manual-${surface === 'page' ? 'page' : 'rail'}-${width}-${theme}`;
+  const p = await h.openPage({ width, height: surface === 'page' ? 900 : 780, surface, theme, label: tag });
+  console.log(tag);
+  await h.listReady(p);
+  await h.thumbsReady(p);
+  await groupSamples(h, p, tag);
+  await p.settle(400);
+  const noProjectBefore = surface === 'page' ? await p.guest('return doc.querySelector(".dc-side-row[data-scope=no-project] .dc-side-count")?.textContent ?? ""') : '';
+  // Before: invoice-template is made for no project, and nobody filed anything under mychamba.
+  if (surface === 'page') h.check(noProjectBefore === '1', `${tag}: No project starts with 1 design (invoice-template)`);
+  await p.host(`${FAKE}.folders.seedProject(${JSON.stringify(MYCHAMBA)}, ['invoice-template', 'launch-announcement'])`);
+  await p.host(`${FAKE}.folders.changed()`);
+  await p.settle(500);
+
+  if (surface === 'page') {
+    await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-side-row .dc-side-label")].some((n) => n.textContent === "mychamba")'), `${tag}: a project with only hand-filed designs gets a sidebar row`);
+    h.check(await p.guest('const r = [...doc.querySelectorAll(".dc-side-row")].find((n) => n.querySelector(".dc-side-label")?.textContent === "mychamba"); return r?.querySelector(".dc-side-count")?.textContent === "2"'), `${tag}: it counts both filed designs`);
+    h.check(await p.guest('return !doc.querySelector(".dc-side-row[data-scope=no-project]")'), `${tag}: invoice-template left No project, so the row is gone (nothing is made for no project now)`);
+    h.check(await p.guest('const r = [...doc.querySelectorAll(".dc-side-row")].find((n) => n.querySelector(".dc-side-label")?.textContent === "app · personal"); return r?.querySelector(".dc-side-count")?.textContent === "1"'), `${tag}: a design made for one project and filed under another counts in both`);
+    h.check(await p.guest('const c = doc.querySelector(".dc-card[data-slug=invoice-template] .dc-card-project"); return c?.querySelector(".dc-card-project-name")?.textContent === "mychamba" && c.dataset.filed === "true" && /Filed here by you/.test(c.title)'), `${tag}: the card of a design filed by hand shows that project, tooltip "Filed here by you"`);
+    h.check(await p.guest('const c = doc.querySelector(".dc-card[data-slug=launch-announcement] .dc-card-project"); return c?.querySelector(".dc-card-project-name")?.textContent === "app · personal" && c.dataset.filed !== "true" && !/Filed here/.test(c.title)'), `${tag}: a design made for a project keeps that project on its card`);
+    await p.click('.dc-side-main', { text: 'mychamba' });
+  } else {
+    await p.click('.dc-rail-show-select button');
+    await p.waitFor('return !!doc.querySelector(".oc-sdk-popup .oc-sdk-option")', 'the Show options');
+    const options = await p.guest('return [...doc.querySelectorAll(".oc-sdk-popup .oc-sdk-option")].map((n) => n.textContent.replace(/\\s+/g, " ").trim())');
+    h.check(options.some((t) => /^mychamba\s*2$/.test(t)), `${tag}: Show lists mychamba with its 2 filed designs (${options.join(' | ')})`);
+    h.check(!options.some((t) => t.startsWith('No project')), `${tag}: No project is gone from Show`);
+    await p.click('.oc-sdk-popup .oc-sdk-option', { text: 'mychamba' });
+  }
+  await h.checkSoon(async () => JSON.stringify(await gridSlugs(p)) === '["invoice-template","launch-announcement"]', `${tag}: choosing mychamba lists the two filed designs`);
+  h.check(await p.guest('return !doc.querySelector(".dc-card-project, .dc-row-project") || [...doc.querySelectorAll(".dc-card-project-name, .dc-row-project-name")].every((n) => n.textContent !== "mychamba")'), `${tag}: inside mychamba its own line goes`);
+  h.check(await p.guest('const t = [...doc.querySelectorAll(".dc-tabs [role=tab]")].map((n) => n.textContent.replace(/\\s+/g, " ").trim()); return /All.*2/.test(t[0])'), `${tag}: the tab counts follow the filed designs`);
+  await p.shot(`${tag}-1-mychamba`);
+
+  // The menu of a design filed here: Move to folder… and Remove from mychamba. A derived member has neither (launch is made for app · personal).
+  const rowOf = (slug) => (surface === 'page' ? `.dc-card[data-slug="${slug}"]` : `.dc-row[data-slug="${slug}"]`);
+  await p.hover(rowOf('invoice-template'));
+  await p.click(`${rowOf('invoice-template')} ${surface === 'page' ? '.dc-card-more' : '.dc-iconbtn'}`);
+  await p.waitFor('return !!doc.querySelector(".dc-popup [role=menuitem]")', 'the row menu');
+  h.check(await p.guest('const m = [...doc.querySelectorAll(".dc-popup [role=menuitem]")].map((n) => n.textContent.trim()); return m.includes("Move to folder…") && m.includes("Remove from mychamba")'), `${tag}: a design filed here offers Move to folder… and Remove from mychamba`);
+  await p.shot(`${tag}-2-menu`);
+  await p.key('Escape');
+  await p.settle(150);
+
+  // Remove from mychamba: it leaves the project and, being made for none, returns to No project.
+  await p.hover(rowOf('invoice-template'));
+  await p.click(`${rowOf('invoice-template')} ${surface === 'page' ? '.dc-card-more' : '.dc-iconbtn'}`);
+  await p.click('.dc-popup [role="menuitem"]', { text: 'Remove from mychamba' });
+  await h.checkSoon(async () => JSON.stringify(await gridSlugs(p)) === '["launch-announcement"]', `${tag}: Remove from mychamba takes it out of the project's list`);
+  await h.checkSoon(async () => /Removed .*Invoice.* from mychamba\./.test(await toastTexts(p)), `${tag}: it says what happened`);
+  if (surface === 'page') await h.checkSoon(() => p.guest('return doc.querySelector(".dc-side-row[data-scope=no-project] .dc-side-count")?.textContent === "1"'), `${tag}: the design is back in No project`);
+  await p.close();
+};
+
 export const run = async (helpers) => {
   await pageFlow(helpers, 1400, 'light');
   await pageFlow(helpers, 1400, 'dark');
@@ -361,4 +439,6 @@ export const run = async (helpers) => {
   for (const [width, theme] of [[320, 'dark'], [480, 'light']]) await railFlow(helpers, width, theme, true);
   for (const [width, theme] of [[320, 'light'], [480, 'dark']]) await railFlow(helpers, width, theme, false);
   await railFoldersFail(helpers, 320, 'light');
+  await manualFlow(helpers, 'page', 1400, 'dark');
+  await manualFlow(helpers, 'panel', 480, 'light');
 };

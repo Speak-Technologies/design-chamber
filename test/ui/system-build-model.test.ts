@@ -31,6 +31,8 @@ const summary = (over: Partial<SystemSummary> = {}): SystemSummary => ({
   status: 'draft',
   changesToReview: false,
   sources: { code: null, brand: 0, description: false },
+  created: '2026-01-01T00:00:00Z',
+  swatches: [],
   usedBy: 0,
   isDefault: false,
   pinnedFor: [],

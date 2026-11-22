@@ -12,6 +12,7 @@ import type {
   AgentGuideStatus,
   AgentSkillStatus,
   AnchorState,
+  CandidateMark,
   BrowserSource,
   CheckFinding,
   Comment,
@@ -311,8 +312,10 @@ export type ChipBody = {
   sessionId?: string | null;
   /** The New dialog's explicit design-system choice (Phase 2.5 §3.2): an id, `"none"` or `"ask"`. */
   system?: string;
+  /** Phase 2.6 §3.2: folders and projects to file the new design into; a failure never blocks creation. */
+  filing?: ChipFiling;
 };
-export type ChipResponse = { slug: string; chip: DesignChip };
+export type ChipResponse = { slug: string; chip: DesignChip; filing?: { results: MembershipResult[] } };
 
 /** The element an ask is about: where it is, without a comment body. */
 export type AskElement = Omit<CreateCommentBody, 'body'>;
@@ -545,6 +548,15 @@ export type ScanSummary = {
   forAgent: { path: string; why: string }[];
   refused: number;
   partial: boolean;
+  /** Phase 2.6 §5.7: files the scan actually read (the old label counted only files with values). */
+  read: number;
+  /** What the scan never reads: pages, components and themes written in code (Phase 2.6 §5.7). */
+  missed: { pages: number; components: number; codeThemes: number };
+  /** Project scans only: existing-system locations found in the walk (Phase 2.6 §5.5). */
+  candidates?: SystemCandidate[];
+  candidatesMore?: number;
+  /** Location scans only: what the chosen folder holds (Phase 2.6 §5.6). */
+  location?: LocationView;
 };
 
 /** The internal-home re-sync review (§7.3): provenance-based, with conflicts and ticks. */
@@ -611,7 +623,7 @@ export type SystemPromptResponse = { text: string; chip: Chip<SystemChipData>; h
 /** Static system findings only (§10.3, §10.4); no browser runs for a system check. */
 export type SystemChecksResponse = { findings: CheckFinding[]; counts: { errors: number; warnings: number; notes: number }; at: IsoDate };
 
-export type CreateSystemScanBody = { directory: string; systemId?: string };
+export type CreateSystemScanBody = { directory: string; systemId?: string; location?: string };
 export type CreateSystemScanResponse = { scanId: string };
 export type SystemScanResponse =
   | { state: 'running'; seen: number }
@@ -697,13 +709,47 @@ export type DesignSystemActionResponse = {
 
 /** A folder as the list answers it: live members only. */
 export type FolderView = { id: string; name: string; created: IsoDate; slugs: string[] };
-export type FolderListResponse = { folders: FolderView[]; damaged?: true };
+export type FolderListResponse = { folders: FolderView[]; projects: ProjectMembersView[]; damaged?: true };
 export type CreateFolderBody = { name: string };
 export type PatchFolderBody = { name: string };
 export type FolderResponse = { folder: FolderView };
-export type DeleteFolderResponse = { ok: true; designs: number };
+export type DeleteFolderResponse = { ok: true; designs: number; onlyHere: number };
 /** Set semantics, idempotent; unknown slugs are skipped silently. Each list ≤ 200. */
 export type FolderDesignsBody = { add?: string[]; remove?: string[] };
+
+// ---- Phase 2.6: memberships, discovery and locations (§3, §5.5 to §5.9) ----
+
+/** A project's manual members (Phase 2.6 AD-1); derived membership stays out of the registry. */
+export type ProjectMembersView = { directory: string; slugs: string[] };
+export type MembershipTarget = { kind: 'folder'; id: string } | { kind: 'project'; directory: string };
+export type MembershipChange = { target: MembershipTarget; add?: string[]; remove?: string[] };
+export type MembershipsBody = { changes: MembershipChange[]; atomic?: boolean };
+export type MembershipResult =
+  | { target: MembershipTarget; ok: true }
+  | { target: MembershipTarget; ok: false; code: 'gone' | 'full' | 'invalid'; message: string };
+export type MembershipsResponse = { results: MembershipResult[]; list: FolderListResponse };
+/** The New dialog's filing pick: folder ids and project directories. */
+export type ChipFiling = { folders?: string[]; projects?: string[] };
+
+export type { CandidateMark };
+export type SystemCandidate = {
+  /** Project-relative, '/' separators, '' = project root. */
+  path: string;
+  marks: CandidateMark[];
+  counts: { colours: number; tokens: number; docs: number; components: number; pages: number };
+  /** contract, page, or a design-system-named folder: drives the sheet's nudge. */
+  strong: boolean;
+  registered: { id: string; name: string } | null;
+};
+export type LocationView = {
+  /** Project-relative ('' = root). */
+  path: string;
+  marks: CandidateMark[];
+  read: { page: string[]; docs: string[]; components: string[] };
+  /** null = no system.json + tokens.css at its root. */
+  contract: null | { complete: true } | { complete: false; missing: string[] };
+};
+export type RegisterSystemBody = { scanId: string; name: string };
 
 // ---- Phase 2.5 S8: build tickets, the living page, stops (§3.5) ----
 
@@ -828,6 +874,9 @@ export interface ApiRoutes {
   'DELETE /folders/:folderId': Route<NoQuery, undefined, DeleteFolderResponse>;
   'POST /folders/:folderId/undelete': Route<NoQuery, Record<string, never>, FolderResponse>;
   'POST /folders/:folderId/designs': Route<NoQuery, FolderDesignsBody, FolderResponse>;
+  // Phase 2.6 (§3)
+  'POST /memberships': Route<NoQuery, MembershipsBody, MembershipsResponse>;
+  'POST /systems/register': Route<NoQuery, RegisterSystemBody, CreateSystemResponse>;
   // Phase 2.5 S8 (§3.5)
   'POST /systems/chip': Route<NoQuery, SystemChipBody, SystemChipResponse>;
   'GET /system-builds/:ticket': Route<NoQuery, undefined, SystemBuildTicketResponse>;
@@ -954,7 +1003,9 @@ export const ROUTE_OWNERS = {
   'GET /systems/:id/living-page/render/chunk': 'P25',
   'POST /systems/:id/build/stop': 'P25',
   'POST /system-stops/:undoId/undo': 'P25',
-} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2' | 'P25'>;
+  'POST /memberships': 'P26',
+  'POST /systems/register': 'P26',
+} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2' | 'P25' | 'P26'>;
 
 export const ROUTE_KEYS = Object.keys(ROUTE_OWNERS) as RouteKey[];
 

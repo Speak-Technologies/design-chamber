@@ -78,6 +78,18 @@ export const iconBtn = (options: IconBtnOptions): HTMLButtonElement => {
   return el;
 };
 
+/**
+ * Names a mounted select's trigger "<name>: <choice>" (and tooltips it). The kit's caption alone
+ * would read just the field name; with the caption shown inline the trigger still says both.
+ */
+export const nameSelect = (host: HTMLElement, name: string, choice: string): void => {
+  const trigger = host.querySelector('button');
+  if (!trigger) return;
+  trigger.removeAttribute('aria-labelledby');
+  trigger.setAttribute('aria-label', `${name}: ${choice}`);
+  trigger.title = `${name}: ${choice}`;
+};
+
 // ---------------------------------------------------------------- menus
 
 export type MenuEntry =

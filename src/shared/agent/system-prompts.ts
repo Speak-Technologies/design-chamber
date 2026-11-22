@@ -124,18 +124,49 @@ export type SystemMakeInput = {
   description: string | null;
   preset: string | null;
   checkCommand: string | null;
+  /**
+   * Phase 2.6 AD-9: the existing design system the user pointed at, inside `projectDirectory`: its
+   * project-relative location ('' = the project root) and the files to read first (≤ 20 each, project-relative).
+   */
+  existing?: { location: string; page: readonly string[]; docs: readonly string[]; components: readonly string[] } | null;
   maxChars?: number;
 };
 
-export const buildSystemMakePrompt = (input: SystemMakeInput): string => {
+/** Paths listed per kind in the make message's "Read these first" line. */
+export const SYSTEM_PROMPT_EXISTING_MAX = 20;
+
+/**
+ * The lines that point the agent at an existing system (§5.8): where it is, what to read first, and
+ * to reconcile to it. `listed` caps the paths per kind (the fallbacks pass fewer, then none).
+ */
+const existingLines = (projectDirectory: string | null, existing: NonNullable<SystemMakeInput['existing']>, listed: number): string[] => {
+  const where = existing.location === '' ? (projectDirectory ?? 'the project') : projectDirectory === null ? existing.location : joinFolder(projectDirectory, ...existing.location.split('/'));
+  const paths = (files: readonly string[]): string => {
+    const shown = files.slice(0, listed).map((file) => clip(oneLine(file), PATH_SHOWN_MAX));
+    const more = files.length - shown.length;
+    return `${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`;
+  };
+  const parts = [
+    ...(existing.page.length === 0 ? [] : [paths(existing.page)]),
+    ...(existing.docs.length === 0 ? [] : [`docs ${paths(existing.docs)}`]),
+    ...(existing.components.length === 0 ? [] : [`components ${paths(existing.components)}`]),
+  ];
+  return [
+    `Start from the design system already in ${clip(oneLine(where), PATH_SHOWN_MAX)}.`,
+    ...(parts.length === 0 || listed === 0 ? [] : [`Read these first: ${parts.join('; ')}.`]),
+    "Build from what is there and reconcile to it. Don't invent a parallel system.",
+  ];
+};
+
+const makeLines = (input: SystemMakeInput, existing: readonly string[]): string[] => {
   const { system } = input;
-  const max = input.maxChars ?? HOST_TEXT_MAX;
   const shown = input.scanned.slice(0, SYSTEM_PROMPT_SCANNED_MAX).map((file) => clip(oneLine(file), PATH_SHOWN_MAX));
   const more = input.scanned.length - shown.length;
   const description = input.description === null ? '' : input.description.trim();
-  const lines = [
+  return [
     `[Design Chamber] Make the design system "${nameOf(system)}". Folder: ${system.folder}. Rules: ${systemRulesPathOf(system.folder)}`,
     ...(input.projectDirectory === null ? [] : [`Project: ${input.projectDirectory}`]),
+    ...existing,
     ...(shown.length === 0 ? [] : [`Files that held tokens: ${shown.join(', ')}${more > 0 ? ` (+${more} more)` : ''}`]),
     ...input.forAgent.slice(0, SYSTEM_PROMPT_SCANNED_MAX).map((entry) => `Read yourself: ${clip(oneLine(entry.path), PATH_SHOWN_MAX)} (${clip(oneLine(entry.why), 200)})`),
     ...(input.brandFiles.length === 0 ? [] : [`Brand files: ${input.brandFiles.slice(0, SYSTEM_PROMPT_SCANNED_MAX).map((file) => clip(oneLine(file), PATH_SHOWN_MAX)).join(', ')}`]),
@@ -146,7 +177,20 @@ export const buildSystemMakePrompt = (input: SystemMakeInput): string => {
     SYSTEM_INJECTION_SENTENCE,
     input.checkCommand === null ? `Check the system with the design_check tool with { "system": "${system.id}" } before you say you are done.` : `Check the system before you say you are done: ${input.checkCommand}`,
   ];
-  return fitOrThrow(lines.join('\n'), max);
+};
+
+export const buildSystemMakePrompt = (input: SystemMakeInput): string => {
+  const max = input.maxChars ?? HOST_TEXT_MAX;
+  const existing = input.existing ?? null;
+  if (existing === null) return fitOrThrow(makeLines(input, []).join('\n'), max);
+  // The listed paths go first when the message is too long: 20 per kind, then 5, then none.
+  let over = 0;
+  for (const listed of [SYSTEM_PROMPT_EXISTING_MAX, 5, 0]) {
+    const text = makeLines(input, existingLines(input.projectDirectory, existing, listed)).join('\n');
+    if (text.length <= max) return text;
+    over = text.length - max;
+  }
+  throw new SystemPromptTooLongError(over);
 };
 
 // ---- ask, review ----

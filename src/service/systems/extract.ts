@@ -15,14 +15,23 @@
 //
 // The values stay in the job's memory: the guest gets counts and paths (`ScanSummary`), and the logs
 // get the job id, counts and the duration only. A root change stops running jobs and drops done ones.
+//
+// Phase 2.6 (documentation/specs/phase-2-6-technical.md §5.5 to §5.8, AD-7, AD-8, AD-12): every
+// summary counts the files actually read and what the walk saw but never parses (`missed`). A project
+// scan also lists the folders that look like an existing design system (`candidates.ts`, path-only,
+// from this same walk). A location scan (`location` in the body) walks that folder inside the project
+// (`validateLocation`) with the same walker and caps; when the folder holds Design Chamber's file
+// contract it is also read like a snapshot (`readRepoSystem`, P25's read) and the bytes stay on the
+// job, in memory only, for "Register it as it is" (`registrationSource`).
 
 import { randomBytes } from 'node:crypto';
 import { constants as fsConstants, type Dirent } from 'node:fs';
 import { lstat, open, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { CreateSystemBody, CreateSystemScanBody, ResyncReview, ScanSummary, SystemScanResponse } from '../../shared/api.ts';
+import type { CreateSystemBody, CreateSystemScanBody, LocationView, ResyncReview, ScanSummary, SystemScanResponse } from '../../shared/api.ts';
 import {
+  REPO_REL_PATTERN,
   SCAN_CANDIDATES_MAX,
   SCAN_DEPTH_MAX,
   SCAN_ENTRIES_MAX,
@@ -32,12 +41,14 @@ import {
   SCAN_TTL_MS,
   SCANS_KEPT_MAX,
   SCANS_RUNNING_MAX,
+  SYSTEM_CANDIDATES_SHOWN_MAX,
   SYSTEM_ID_PATTERN,
 } from '../../shared/limits.ts';
-import { repoProblemText, resyncStampOf, safeAssetName } from '../../shared/system-json.ts';
-import type { SystemState } from '../../shared/types.ts';
+import { tokenValues } from '../../shared/system-copy.ts';
+import { parseSystemJson, repoProblemText, resyncStampOf, safeAssetName } from '../../shared/system-json.ts';
+import type { CandidateMark, SystemState } from '../../shared/types.ts';
 import type { ServiceContext } from '../context.ts';
-import { bySpot, walk, withDeadline } from '../discovery.ts';
+import { bySpot, SKIP_DIRS, walk, withDeadline } from '../discovery.ts';
 import { ApiError } from '../http.ts';
 import { atomicTempPath, moveNoReplace, resolvePlainTarget, samePath, writeFileAtomic } from '../paths.ts';
 import { readPreset } from '../routes/presets.ts';
@@ -65,8 +76,9 @@ import {
   type SeedToken,
 } from './extract-rules.ts';
 import { ASSET_READ_MAX, readProjectFile } from './project-file.ts';
+import { findSystemCandidates, locationView, missedCounts, type RegisteredSystem } from './candidates.ts';
 import { readRepoSystem, repoResyncReview, RepoReadStopped, type RepoRead } from './repo-read.ts';
-import { validateScanFolder } from './scan-folder.ts';
+import { recheckLocation, validateLocation, validateScanFolder } from './scan-folder.ts';
 import { ensureSystemStore, type SystemSeed } from './store.ts';
 
 // ---- sentences ----
@@ -78,6 +90,19 @@ export const SCAN_ROOT_CHANGED_MESSAGE = 'Your Designs folder changed, so the sc
 /** A re-sync apply whose scan was made under another designs root (RS S4 "Changed folder"). */
 export const RESYNC_ROOT_CHANGED_MESSAGE = 'Your Designs folder changed. Nothing was changed.';
 export const SCAN_OTHER_SYSTEM_MESSAGE = 'That scan was made for another design system. Scan again.';
+export const LOCATION_RESYNC_MESSAGE = "A re-sync reads the system's own folder.";
+export const NOT_A_SYSTEM_SCAN_MESSAGE = "That scan isn't of a system folder. Scan the folder again.";
+const SCAN_RUNNING_MESSAGE = 'The scan is still running. Wait for it to finish.';
+
+// What a location's file contract lacks (§5.7 `contractVerdict`), as the sheet names it.
+export const CONTRACT_MISSING = {
+  systemJson: 'system.json',
+  tokensCss: 'tokens.css',
+  unreadableJson: "system.json can't be read",
+  rootFolder: 'a folder inside the project',
+  folderPath: 'a folder path of up to four folders without spaces',
+  readable: 'a folder Design Chamber can read in full',
+} as const;
 const scanFailedMessage = (directory: string): string => `Design Chamber couldn't finish reading ${directory}. Try again.`;
 
 const SKIP_TOO_LARGE = "It's larger than 1 MB, so it wasn't read.";
@@ -121,6 +146,10 @@ export type ScanResult = {
   scanned: string[];
   assets: ScanAsset[];
   summary: ScanSummary;
+  /** Every file the walk listed (secret names dropped): discovery's only input besides the tokens (§5.5). */
+  walked: string[];
+  /** A location scan's project and what the folder holds, for the seed (§5.8). */
+  location?: { project: string; rel: string; marks: CandidateMark[]; read: LocationView['read'] };
 };
 
 export class ScanStopped extends Error {}
@@ -309,6 +338,7 @@ export const runScan = async (input: ScanInput): Promise<ScanResult> => {
     tokens: merged.tokens,
     scanned,
     assets,
+    walked: files,
     summary: {
       directory,
       counts,
@@ -318,8 +348,52 @@ export const runScan = async (input: ScanInput): Promise<ScanResult> => {
       forAgent: forAgent.slice(0, FOR_AGENT_MAX),
       refused,
       partial,
+      // AD-12: the files actually opened (not only those with values), and what is left for the agent.
+      read: scanned.length,
+      missed: missedCounts(files),
     },
   };
+};
+
+// ---- existing systems (§5.5, §5.7) ----
+
+/** The systems of this root that already read a folder: a repo home's folder, or a code folder. */
+export const registeredSystems = async (ctx: ServiceContext): Promise<RegisteredSystem[]> => {
+  const store = ensureSystemStore(ctx);
+  const rows = await store.list().catch((error: unknown) => {
+    ctx.log.warn('systems.candidates-list-failed', { error: error instanceof Error ? error.name : 'error' });
+    return [];
+  });
+  const out: RegisteredSystem[] = [];
+  for (const row of rows) {
+    if (row.unreadable !== null) continue;
+    const state = await store.readState(row.id).catch(() => null);
+    if (state === null) continue;
+    if (state.home?.kind === 'repo') out.push({ id: row.id, name: row.name, abs: path.join(state.home.directory, ...state.home.folder.split('/')) });
+    if (state.sources.code !== null) out.push({ id: row.id, name: row.name, abs: state.sources.code.directory });
+  }
+  return out;
+};
+
+/**
+ * Whether a location's contract read is complete (§5.7): `system.json` parses as a whole system and
+ * `tokens.css` sets at least one custom property. `missing` names each gap.
+ */
+export const contractVerdict = (read: Pick<RepoRead, 'files'>): NonNullable<LocationView['contract']> => {
+  const missing: string[] = [];
+  const json = read.files.get('system.json');
+  if (json === undefined) missing.push(CONTRACT_MISSING.systemJson);
+  else if (parseSystemJson(json.toString('utf8')).unreadable !== null) missing.push(CONTRACT_MISSING.unreadableJson);
+  const css = read.files.get('tokens.css');
+  if (css === undefined || tokenValues(css.toString('utf8')).size === 0) missing.push(CONTRACT_MISSING.tokensCss);
+  return missing.length === 0 ? { complete: true } : { complete: false, missing };
+};
+
+/** A folder a repo home can hold, with room for its living page beside it (≤ 5 segments in all). */
+export const isRegistrableFolder = (rel: string): boolean => {
+  if (!REPO_REL_PATTERN.test(rel)) return false;
+  const segments = rel.split('/');
+  return segments.length <= 4 && !segments.some((segment) => SKIP_DIRS.has(segment.toLowerCase()));
 };
 
 // ---- the jobs ----
@@ -352,8 +426,15 @@ type Job = {
   exclude: readonly string[];
   /** The system's re-sync stamp when the review was made (§6.3), null for a scan without a system. */
   stamp: string | null;
+  /** A location scan (Phase 2.6 §5.7): the project's realpath and the folder's project-relative path. */
+  location: { project: string; rel: string } | null;
+  /** A location's complete contract read, in memory only, for registration (AD-10). */
+  contract: RepoRead | null;
   settled: Promise<void>;
 };
+
+/** A done location scan whose folder holds a complete system (§5.7 `registrationSource`). */
+export type RegistrationSource = { read: RepoRead; project: string; rel: string; root: string };
 
 /** A done re-sync scan, for the apply (§6.3): the values, the root it ran under and the stamp its review was made against. */
 export type ResyncSource = { result: ScanResult; root: string; stamp: string };
@@ -384,6 +465,11 @@ export type ScanJobs = {
   resyncSource(scanId: string, systemId: string): ResyncSource;
   /** `resyncSource` for a repo-backed system (§7.4): the same 404 / 409 rules. */
   repoResyncSource(scanId: string, systemId: string): RepoResyncSource;
+  /**
+   * A done location scan with a complete contract read under the current root (Phase 2.6 §5.7):
+   * 404 when it expired, 409 while it runs, under another root, or when it is not of a system folder.
+   */
+  registrationSource(scanId: string): RegistrationSource;
   /**
    * The service's own scan (`build`, `drift`; §7.4): same limits, walker and root-change abort, and
    * it waits for a free slot instead of refusing. Throws `ScanStopped` when stopped.
@@ -484,6 +570,7 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
       tokens: [],
       scanned: [],
       assets: [],
+      walked: [],
       summary: {
         directory: job.directory,
         counts: emptyCounts(),
@@ -493,10 +580,52 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
         forAgent: [],
         refused: read?.refused ?? 0,
         partial: false,
+        // The system folder's contract files read; a repo re-sync parses nothing in code.
+        read: read?.files.size ?? 0,
+        missed: { pages: 0, components: 0, codeThemes: 0 },
       },
     };
     finish(job, 'done', '');
     ctx.log.info('systems.repo-scan-done', { scanId: job.id, files: read?.files.size ?? 0, refused: read?.refused ?? 0, ms: now() - job.startedAt });
+  };
+
+  /**
+   * §5.7: a location's file contract. Null when its root holds no `system.json`; incomplete (with what
+   * is missing) when a part is absent or the folder can't hold a repo home; else read like a snapshot.
+   */
+  const contractOf = async (job: Job, location: { project: string; rel: string }, files: readonly string[]): Promise<{ contract: LocationView['contract']; read: RepoRead | null }> => {
+    if (!files.includes('system.json')) return { contract: null, read: null };
+    const missing: string[] = [];
+    if (!files.includes('tokens.css')) missing.push(CONTRACT_MISSING.tokensCss);
+    if (location.rel === '') missing.push(CONTRACT_MISSING.rootFolder);
+    else if (!isRegistrableFolder(location.rel)) missing.push(CONTRACT_MISSING.folderPath);
+    if (missing.length > 0) return { contract: { complete: false, missing }, read: null };
+    const outcome = await readRepoSystem({ directory: location.project, folder: location.rel, livingPage: `${location.rel}/index.html`, signal: job.abort.signal });
+    if (outcome.kind === 'problem') {
+      ctx.log.info('systems.location-contract-unread', { scanId: job.id, reason: outcome.reason });
+      return { contract: { complete: false, missing: [CONTRACT_MISSING.readable] }, read: null };
+    }
+    const contract = contractVerdict(outcome);
+    return { contract, read: contract.complete ? outcome : null };
+  };
+
+  /** Phase 2.6: what a `make` scan adds to its summary: candidates (project) or the location view. */
+  const discover = async (job: Job, result: ScanResult): Promise<ScanResult> => {
+    if (job.purpose !== 'make') return result;
+    if (job.location === null) {
+      const found = findSystemCandidates({ files: result.walked, tokens: result.tokens, registered: await registeredSystems(ctx), root: job.directory });
+      const shown = found.candidates.slice(0, SYSTEM_CANDIDATES_SHOWN_MAX);
+      return { ...result, summary: { ...result.summary, candidates: shown, candidatesMore: found.total - shown.length } };
+    }
+    const location = job.location;
+    const view = locationView({ location: location.rel, files: result.walked, tokens: result.tokens });
+    const { contract, read } = await contractOf(job, location, result.walked);
+    job.contract = read;
+    return {
+      ...result,
+      location: { project: location.project, rel: location.rel, marks: view.marks, read: view.read },
+      summary: { ...result.summary, location: { ...view, contract } },
+    };
   };
 
   const run = async (job: Job): Promise<void> => {
@@ -507,7 +636,7 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
         await runRepo(job, job.repo);
         return;
       }
-      const result = await runScan({
+      const scanned = await runScan({
         directory: job.directory,
         designsRoot: job.root,
         limits,
@@ -518,6 +647,7 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
         },
         exclude: job.exclude,
       });
+      const result = await discover(job, scanned);
       const reviewed = job.systemId === null || job.purpose !== 'resync' ? null : await reviewFor(job.systemId, result);
       if (job.state !== 'running') return; // stopped meanwhile
       job.result = result;
@@ -533,6 +663,8 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
         logos: counts.logos,
         files: result.scanned.length,
         partial: result.summary.partial,
+        candidates: result.summary.candidates?.length ?? 0,
+        location: job.location !== null,
         ms: now() - job.startedAt,
       });
     } catch (error) {
@@ -554,7 +686,8 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
 
   const running = (): number => [...jobs.values()].filter((job) => job.state === 'running').length;
 
-  const newJob = (fields: Pick<Job, 'purpose' | 'root' | 'systemId' | 'directory' | 'repo' | 'exclude'>): Job => ({
+  const newJob = (fields: Pick<Job, 'purpose' | 'root' | 'systemId' | 'directory' | 'repo' | 'exclude'> & Partial<Pick<Job, 'location'>>): Job => ({
+    location: null,
     ...fields,
     id: newScanId(),
     startedAt: now(),
@@ -566,6 +699,7 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
     result: null,
     review: undefined,
     stamp: null,
+    contract: null,
     settled: Promise.resolve(),
   });
 
@@ -574,6 +708,17 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
       prune();
       if (running() >= SCANS_RUNNING_MAX) throw new ApiError('conflict', SCANS_BUSY_MESSAGE);
       const root = ctx.settings.root();
+      if (input.location !== undefined) {
+        // §5.6: a location scan is a make scan rooted at a folder inside the project; never a re-sync.
+        if (input.systemId !== undefined) throw new ApiError('bad-request', LOCATION_RESYNC_MESSAGE);
+        const project = await validateScanFolder(input.directory, root);
+        const { real, rel } = await validateLocation(input.location, project, root);
+        if (running() >= SCANS_RUNNING_MAX) throw new ApiError('conflict', SCANS_BUSY_MESSAGE);
+        const job = newJob({ purpose: 'make', root, systemId: null, directory: real, repo: null, exclude: [], location: { project, rel } });
+        jobs.set(job.id, job);
+        job.settled = run(job);
+        return { scanId: job.id };
+      }
       let systemId: string | null = null;
       let home: Extract<NonNullable<SystemState['home']>, { kind: 'repo' }> | null = null;
       if (input.systemId !== undefined) {
@@ -649,6 +794,15 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
       if (!samePath(job.root, ctx.settings.root())) throw new ApiError('conflict', RESYNC_ROOT_CHANGED_MESSAGE);
       if (job.systemId !== systemId || job.stamp === null) throw new ApiError('conflict', SCAN_OTHER_SYSTEM_MESSAGE);
       return { read: job.repo.read, root: job.root, stamp: job.stamp, directory: job.directory, directoryChanged: job.repo.directoryChanged, review: job.review };
+    },
+
+    registrationSource(scanId) {
+      const job = jobOf(scanId);
+      if (job.state === 'running') throw new ApiError('conflict', SCAN_RUNNING_MESSAGE);
+      if (job.state !== 'done' || job.result === null) throw gone();
+      if (!samePath(job.root, ctx.settings.root())) throw new ApiError('conflict', SCAN_ROOT_CHANGED_MESSAGE);
+      if (job.location === null || job.contract === null) throw new ApiError('conflict', NOT_A_SYSTEM_SCAN_MESSAGE);
+      return { read: job.contract, project: job.location.project, rel: job.location.rel, root: job.root };
     },
 
     async runInternal(purpose, directory, exclude) {
@@ -732,6 +886,8 @@ const writeSeedAsset = async (target: string, bytes: Buffer): Promise<void> => {
  */
 export const buildSystemSeed = async (ctx: ServiceContext, input: CreateSystemBody): Promise<SystemSeed | undefined> => {
   const scan = input.code === undefined ? null : ensureScanJobs(ctx).result(input.code.scanId);
+  // §5.8: a location is checked again before anything is made ("That folder is gone." when it went).
+  if (scan?.location !== undefined) await recheckLocation(scan.location.rel, scan.location.project, ctx.settings.root());
   const ticked = input.code?.assets ?? [];
   const offered = new Map((scan?.assets ?? []).map((asset) => [asset.path, asset]));
   for (const rel of ticked) if (!offered.has(rel)) throw new ApiError('bad-request', 'One of the files to copy was not found by the scan. Scan the folder again.');
@@ -782,10 +938,19 @@ export const buildSystemSeed = async (ctx: ServiceContext, input: CreateSystemBo
   if (scan === null) return { write };
   const provenance: SystemState['provenance'] = {};
   for (const token of scan.tokens) provenance[token.name] = { file: token.file, line: token.line, light: token.light, dark: token.dark };
+  // AD-9: a system made from a location records it as its code source, with the project and what it holds.
+  const location = scan.location;
   return {
     write,
     code: {
-      source: { directory: scan.directory, lastScan: scan.at, partial: scan.summary.partial, scanned: scan.scanned, forAgent: scan.summary.forAgent },
+      source: {
+        directory: scan.directory,
+        lastScan: scan.at,
+        partial: scan.summary.partial,
+        scanned: scan.scanned,
+        forAgent: scan.summary.forAgent,
+        ...(location === undefined ? {} : { project: location.project, existing: { location: location.rel, marks: location.marks, read: location.read } }),
+      },
       provenance,
     },
   };

@@ -143,6 +143,16 @@ describe('RULES.md assembly', () => {
     assert.ok(page.includes('| `tweaks` | you |'));
   });
 
+  test('the contract names folderRequest as agent-owned, beside systemChoice, for pages and canvases (Phase 2.6 AD-16)', async () => {
+    const files = await realFiles();
+    const ROW = '| `folderRequest` | you | Optional, only when the user asks you to put this design in a folder, or take it out: `{ "add": ["<folder name>"], "remove": ["<folder name>"], "at": "<ISO time>" }`, up to 10 names in each list. Use the names of folders that already exist (they are in `.chamber/folders.json` in the designs folder: read it, never write it). Design Chamber files the design within a few seconds and never creates a folder. |';
+    for (const kind of ['canvas', 'page'] as const) {
+      const doc = buildRulesDoc(baseContext({ kind }), files);
+      assert.ok(doc.includes(ROW), kind);
+      assert.ok(doc.indexOf('| `tweaks` | you |') < doc.indexOf(ROW) && doc.indexOf(ROW) < doc.indexOf('| `comments` | extension |'), 'the row sits between tweaks and comments');
+    }
+  });
+
   test('rendering constraints: localStorage is kept per design, sessionStorage per reload, no IndexedDB (Phase 2)', async () => {
     const doc = buildRulesDoc(baseContext(), await realFiles());
     assert.ok(doc.includes('`localStorage` works and is kept per design (up to 1 MB), so saved ticks and filters survive a reload'));

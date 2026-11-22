@@ -299,6 +299,10 @@ test('the recommended system and breakpoints (§8.1)', () => {
   assert.equal(recommendedSystem(rows, '/code/shop', {}), 'shop');
   assert.equal(recommendedSystem(rows, '/code/other', { systemDefault: { choice: 'system', id: 'acme', name: 'Acme' } }), 'acme');
   assert.equal(recommendedSystem(rows, null, { systemDefault: { choice: 'system', id: 'gone', name: 'Gone' } }), null);
+  // Phase 2.6 AD-9: a system made from a folder inside a project belongs to the project, not the folder.
+  const located = [{ id: 'speak', status: 'ready' as const, unreadable: null, sources: { code: { directory: '/code/speak/design-system', project: '/code/speak', lastScan: CREATED, partial: false }, brand: 0, description: false } }];
+  assert.equal(recommendedSystem(located, '/code/speak', {}), 'speak');
+  assert.equal(recommendedSystem(located, '/code/speak/design-system', {}), null, 'the location is not the project');
   const token = (text: string, breakpoint: boolean) => ({ breakpoint, light: { text, editable: 'ok' as const, problem: null }, dark: null }) as unknown as Parameters<typeof breakpointsOf>[0]['tokens'][number];
   assert.deepEqual(breakpointsOf({ tokens: [token('1024px', true), token('640px', true), token('640px', true), token('2rem', true), token('12px', false)] }), [640, 1024]);
 });

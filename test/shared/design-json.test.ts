@@ -1022,3 +1022,43 @@ describe('systemChoice (Phase 2.5 §2.7, AD-6)', () => {
     assert.deepEqual(old && Object.keys(old), ['version', 'kind', 'created', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry', 'comments']);
   });
 });
+
+describe('folderRequest (Phase 2.6 AD-16)', () => {
+  const base = { kind: 'page', title: 'Pricing' };
+  test('names are normalised and kept; absent stays absent', () => {
+    const none = normalizeDesign(base, OPTS);
+    assert.equal(Object.hasOwn(none.design, 'folderRequest'), false);
+    assert.deepEqual(none.warnings, []);
+    const kept = normalizeDesign({ ...base, folderRequest: { add: ['  Q4 launch  '], remove: ['Old ideas'], at: '2026-11-22T10:04:00Z' } }, OPTS);
+    assert.deepEqual(kept.design.folderRequest, { add: ['Q4 launch'], remove: ['Old ideas'], at: '2026-11-22T10:04:00Z' });
+    assert.deepEqual(kept.warnings, []);
+  });
+  test('a wrong shape, an empty request, a shared name, a control character or an over-long list is ignored with a warning', () => {
+    const nul = 'a' + String.fromCharCode(0) + 'b';
+    const bads: unknown[] = [{ add: 'Q4' }, {}, { add: ['Q4'], remove: ['Q4'] }, { add: Array.from({ length: 11 }, (_, i) => `f${i}`) }, { add: [''] }, { add: [nul] }, { add: ['Q4'], at: 'yesterday' }, 7];
+    for (const bad of bads) {
+      const out = normalizeDesign({ ...base, folderRequest: bad }, OPTS);
+      assert.equal(Object.hasOwn(out.design, 'folderRequest'), false, JSON.stringify(bad));
+      assert.ok(out.warnings.some((w) => w.code === 'invalid-folder-request'), JSON.stringify(bad));
+    }
+  });
+  test('state carries the stamp and the unknown names, capped; unusable values drop', () => {
+    const stateBase = { version: 1, kind: 'page', created: '2026-01-01T00:00:00Z', brief: '', sessionId: null, projectDirectory: null, preset: null, entry: 'index.html', comments: [] };
+    const state = normalizeServiceState({ ...stateBase, folderRequestSeen: 'a'.repeat(64), folderRequestProblem: { unknown: ['Q4', 'x'.repeat(60), 3] } });
+    assert.ok(state);
+    assert.equal(state.folderRequestSeen, 'a'.repeat(64));
+    assert.deepEqual(state.folderRequestProblem, { unknown: ['Q4'] });
+    const dropped = normalizeServiceState({ ...stateBase, folderRequestSeen: 'nope', folderRequestProblem: { unknown: 'Q4' } });
+    assert.ok(dropped);
+    assert.equal(Object.hasOwn(dropped, 'folderRequestSeen'), false);
+    assert.equal(Object.hasOwn(dropped, 'folderRequestProblem'), false);
+  });
+  test('a waiting filing keeps reason "write"; an older wait without one reads as damaged; a stray reason drops', () => {
+    const stateBase = { version: 1, kind: 'page', created: '2026-01-01T00:00:00Z', brief: '', sessionId: null, projectDirectory: null, preset: null, entry: 'index.html', comments: [] };
+    const problemOf = (folderRequestProblem: unknown) => normalizeServiceState({ ...stateBase, folderRequestProblem })?.folderRequestProblem;
+    assert.deepEqual(problemOf({ unknown: [], waiting: true, reason: 'write' }), { unknown: [], waiting: true, reason: 'write' });
+    assert.deepEqual(problemOf({ unknown: [], waiting: true }), { unknown: [], waiting: true });
+    assert.deepEqual(problemOf({ unknown: [], waiting: true, reason: 'disk' }), { unknown: [], waiting: true });
+    assert.deepEqual(problemOf({ unknown: ['Q4'], reason: 'write' }), { unknown: ['Q4'] });
+  });
+});

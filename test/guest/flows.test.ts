@@ -109,6 +109,53 @@ test('new design in the current chat: attach + compose(append); the page closes'
   assert.equal(rail.host.callsOf('compose').length, 0);
 });
 
+test('new design with filing (Phase 2.6 AD-5): the pick travels in POST /chip and the per-target results come back', async () => {
+  const s = setup({ surface: 'page', session: { id: 'ses_cur', title: 'Current', busy: false } });
+  s.service.folders.set('f_aaaaaaaaaa', { name: 'Q4 launch', created: '2026-11-01T10:00:00.000Z', slugs: new Set() });
+  const filing = { folders: ['f_aaaaaaaaaa', 'f_zzzzzzzzzz'], projects: ['C:\\Users\\you\\projects\\blog'] };
+
+  const viaNewChat = await s.flows.newDesign({ kind: 'page', brief: 'Pricing', destination: 'new-chat', filing });
+  const chipBody = JSON.parse(s.service.requests.find((request) => request.path === '/chip')?.body ?? '{}');
+  assert.deepEqual(chipBody.filing, filing);
+  assert.deepEqual(viaNewChat.filing?.results.map((result) => (result.ok ? 'ok' : result.code)), ['ok', 'gone', 'ok']);
+  assert.deepEqual([...(s.service.folders.get('f_aaaaaaaaaa')?.slugs ?? [])], [viaNewChat.slug]);
+  assert.deepEqual([...(s.service.projectMembers.get('C:\\Users\\you\\projects\\blog') ?? [])], [viaNewChat.slug]);
+
+  const viaCurrent = await s.flows.newDesign({ kind: 'canvas', brief: 'Wall', destination: 'current-chat', filing: { folders: ['f_aaaaaaaaaa'] } });
+  assert.deepEqual(viaCurrent.filing?.results, [{ target: { kind: 'folder', id: 'f_aaaaaaaaaa' }, ok: true }]);
+
+  // No pick: no `filing` in the body or the result (the chip is exactly as before).
+  const before = s.service.requests.length;
+  const plain = await s.flows.newDesign({ kind: 'page', brief: 'Plain', destination: 'new-chat' });
+  const plainBody = JSON.parse(s.service.requests.slice(before).find((request) => request.path === '/chip')?.body ?? '{}');
+  assert.equal(Object.hasOwn(plainBody, 'filing'), false);
+  assert.equal(Object.hasOwn(plain, 'filing'), false);
+});
+
+test('the fake batch route: atomic refuses with the sentence and keeps nothing; a derived project is a quiet no-op', async () => {
+  const s = setup();
+  s.service.folders.set('f_aaaaaaaaaa', { name: 'From', created: '2026-11-01T10:00:00.000Z', slugs: new Set([COFFEE]) });
+  const move = await s.client.call('POST /memberships', {
+    body: {
+      changes: [
+        { target: { kind: 'folder', id: 'f_aaaaaaaaaa' }, remove: [COFFEE] },
+        { target: { kind: 'folder', id: 'f_zzzzzzzzzz' }, add: [COFFEE] },
+      ],
+      atomic: true,
+    },
+  }).catch((error: unknown) => error);
+  assert.ok(move instanceof Error);
+  assert.equal(move.message, "That folder isn't there any more.");
+  assert.deepEqual([...(s.service.folders.get('f_aaaaaaaaaa')?.slugs ?? [])], [COFFEE]);
+
+  // A design made in this chat's project: filing it there again by hand is a quiet no-op.
+  const { slug } = await s.flows.newDesign({ kind: 'page', brief: 'Shop page', destination: 'new-chat' });
+  const own = 'c:/users/you/projects/shop/';
+  const answer = await s.client.call('POST /memberships', { body: { changes: [{ target: { kind: 'project', directory: own }, add: [slug] }] } });
+  assert.deepEqual(answer.results, [{ target: { kind: 'project', directory: own }, ok: true }]);
+  assert.deepEqual(answer.list.projects, []);
+});
+
 // ---- §10.3 continue in chat ----
 
 test('continue in chat: opens the linked session', async () => {

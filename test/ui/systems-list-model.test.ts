@@ -29,6 +29,8 @@ const summary = (over: Partial<SystemSummary> = {}): SystemSummary => ({
   status: 'ready',
   changesToReview: false,
   sources: { code: null, brand: 0, description: false },
+  created: '2026-01-01T00:00:00Z',
+  swatches: [],
   usedBy: 0,
   isDefault: false,
   pinnedFor: [],
@@ -128,7 +130,7 @@ test('the source line says where a system came from, in the order code, brand fi
 });
 
 test('used by: none, one and many', () => {
-  assert.equal(usedByLine(0), 'Not used by a design yet');
+  assert.equal(usedByLine(0), 'Not used yet');
   assert.equal(usedByLine(1), 'Used by 1 design');
   assert.equal(usedByLine(4), 'Used by 4 designs');
 });

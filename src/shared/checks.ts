@@ -97,6 +97,7 @@ const BUILD_PROBLEM_SENTENCES: Readonly<Record<BuildProblemReason, (f: CheckFind
   'home-changed': (f) => `${systemNameOf(f)} already has files in ${repoNameOf(f)}, so its home can't change. Make a new system to move it.`,
   'ticket-changed': () => 'BUILD.json names another build. Keep the ticket this system started with.',
   'applied-unknown-proposal': (f) => `The agent says it applied a proposal you didn't approve here. Check ${repoNameOf(f)}'s history.`,
+  'existing-outside-project': () => 'The existing system folder is outside the project it was found in; it was ignored.',
 };
 
 /** §5.14's closed proposal problems; the first one's sentence completes the finding. */
@@ -461,6 +462,7 @@ const PART_NAMES: readonly ProposalPartName[] = ['system-files', 'token-fixes', 
 const BUILD_REASONS: readonly BuildProblemReason[] = [
   'unreadable', 'ticket-unknown', 'ticket-needed', 'repo-outside-project', 'repo-overlap',
   'living-page-exists', 'code-outside-project', 'home-changed', 'ticket-changed', 'applied-unknown-proposal',
+  'existing-outside-project',
 ];
 const PROPOSAL_REASONS: readonly ProposalProblemReason[] = [
   'not-adopted', 'round', 'path-outside', 'living-page-path', 'create-exists', 'from-missing',

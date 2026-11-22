@@ -76,6 +76,8 @@ export type SystemPageOptions = {
   surface: 'page' | 'panel';
   actions: ActionContext;
   onBack: () => void;
+  /** Where Back goes, when it is not the systems list (a chip or a tile opened this page from the library). */
+  backTo?: 'library';
 };
 
 export type SystemPageHandle = {
@@ -799,8 +801,8 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     if (renaming) return;
     header.replaceChildren();
     const back = compact
-      ? iconBtn({ icon: 'back', label: 'Back to design systems', onClick: () => void leave() })
-      : btn({ label: 'Design systems', variant: 'ghost', size: 'default', icon: 'back', onClick: () => void leave() }).el;
+      ? iconBtn({ icon: 'back', label: options.backTo === 'library' ? 'Back to designs' : 'Back to design systems', onClick: () => void leave() })
+      : btn({ label: options.backTo === 'library' ? 'Library' : 'Design systems', variant: 'ghost', size: 'default', icon: 'back', onClick: () => void leave() }).el;
     const titleText = detail?.name ?? 'Design system';
     const title = detail
       ? h('button', { type: 'button', class: 'dc-syspg-title', title: 'Rename', 'aria-label': `${titleText}. Rename`, onClick: () => startRename() }, titleText)
