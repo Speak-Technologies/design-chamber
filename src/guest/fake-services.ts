@@ -1307,6 +1307,14 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
       case 'DELETE /designs/:slug/page-state':
         get(slug);
         throw new FakeHttpError('internal', 'This part of Design Chamber (page-state) is not built yet.');
+      // ---- Phase 2.6 E1 (services): "Register it as it is" ----
+      // This fake has no scan jobs (the visual harness's `fake-systems.ts` answers scans), so no scan
+      // id it is given can name a read folder: the route answers as the service does for a gone scan.
+      case 'POST /systems/register': {
+        if (typeof body.name !== 'string' || body.name.trim() === '') throw new FakeHttpError('bad-request', 'Give the design system a name.');
+        throw new FakeHttpError('not-found', 'That scan is no longer available. Scan the folder again.');
+      }
+      // ---- end Phase 2.6 E1 ----
     }
   };
 
