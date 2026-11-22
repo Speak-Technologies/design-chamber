@@ -1281,6 +1281,10 @@ The mockup canvas `Designs/phase-2-6-library-ui` (dc check: 0 errors, 0 warnings
    in; systems are reached by the pinned "Design systems, N. Show them" foot entry and the header icon.
    The page keeps four tabs with system tiles mixed into All and inclusive counts. The canvas rail
    screens are the authority for the rail; the page screens for the page.
+   Implemented in `a5e6d9d`: the foot entry shows no count while the systems list is loading or failed
+   (a 0 there would mislead), a loaded empty list shows 0; the rail systems list keeps the shared
+   systems-list header rather than the canvas's scoped shell (one component across surfaces; Back
+   returns focus to the entry or the header icon, whichever was used).
 The canvas is the visual authority for presentation; where this spec's prose differs, the canvas wins.
 
 ---
