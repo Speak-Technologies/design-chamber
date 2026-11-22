@@ -1256,6 +1256,9 @@ None for the owner. Four presentation calls made here, cheap to overrule:
 3. Page sidebar system rows **set the System filter** (scope kept); the section heading navigates to the systems
    list.
 4. The New dialog field is labelled **Folder or project** (RS §9.4's "Folder" predates projects in the picker).
+5. **Resolved 2026-11-22 (main agent, E1's recommendation):** a BUILD.json `existing` folder outside the
+   project is ignored with the `existing-outside-project` problem and the build is still adopted. It is a
+   hint, not a gate; blocking would stop a valid build. §5.10's refusal reading is superseded.
 
 ---
 
