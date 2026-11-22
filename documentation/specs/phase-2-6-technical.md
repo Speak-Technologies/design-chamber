@@ -1259,6 +1259,24 @@ None for the owner. Four presentation calls made here, cheap to overrule:
 
 ---
 
+## 20. Owner sign-off (2026-11-22, chat; authoritative over §19)
+
+The mockup canvas `Designs/phase-2-6-library-ui` (dc check: 0 errors, 0 warnings) was reviewed and approved:
+1. **Sheet layout:** three columns at laptop width (start options / location / what-was-read), one column at
+   320 px. Approved as drawn.
+2. **The four defaults are adopted:** a fourth Systems kind tab with system tiles mixed into the grid by sort;
+   the sheet preselects "Register it as it is" (Recommended) when the location holds a complete Design
+   Chamber-format system, with "Make a new system from it" beside it; the Complete badge only appears for a
+   folder with `system.json` (a Claude-built page offers Make only); projects in the picker show as automatic
+   (locked, ticked) or "Added by you".
+3. **§19 call 2 is overruled:** system tiles DO mix into the All tab by sort, as the approved mockup draws.
+   The Systems tab shows systems only. Counts follow the mockup: header "24 designs and 4 systems", the All
+   tab count includes systems, sidebar design counts stay designs-only.
+4. §19 calls 1, 3 and 4 are adopted as written.
+The canvas is the visual authority for presentation; where this spec's prose differs, the canvas wins.
+
+---
+
 ## Final self-check
 
 - [x] Zero implementation code: shapes, rules, pseudocode and copy only.
