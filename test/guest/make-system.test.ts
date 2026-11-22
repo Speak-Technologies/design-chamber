@@ -44,6 +44,8 @@ const rig = (options: Options = {}): Rig => {
       const failure = fail[key];
       if (failure) throw new ServiceError('internal', failure);
       if (key === 'POST /systems') return { id: 'acme', system: { id: 'acme', name: request?.body?.name ?? 'Acme' } };
+      // The service may adopt a different name than the one typed; the guest reports what it made.
+      if (key === 'POST /systems/register') return { id: 'acme-2', system: { id: 'acme-2', name: `${request?.body?.name ?? 'Acme'} 2` } };
       if (key === 'POST /systems/:id/assets') {
         const name = request?.body?.name ?? '';
         if (options.refuseUpload?.includes(name)) throw new ServiceError('invalid', `${name} isn’t a real file.`);
@@ -196,6 +198,25 @@ test('Try again asks only the agent: no second system, no second upload', async 
   assert.equal(outcome.outcome, 'new-session');
   assert.deepEqual(keys(t.calls), ['POST /systems/:id/prompt', 'PATCH /systems/:id']);
   assert.equal(t.uploaded.length, 0);
+});
+
+test('Register it as it is: one call with the scan and the name, the made system answered, no chat touched', async () => {
+  const t = rig();
+  const made = await t.make.register({ scanId: 'sc_1234567890123456', name: 'Acme' });
+  assert.deepEqual(made, { id: 'acme-2', name: 'Acme 2' });
+  assert.deepEqual(t.calls, [{ key: 'POST /systems/register', params: undefined, body: { scanId: 'sc_1234567890123456', name: 'Acme' } }]);
+  assert.equal(t.started.length + t.attached.length + t.composed.length + t.uploaded.length, 0, 'no agent request, no chat, no upload');
+});
+
+test('a refused registration rejects with the service’s sentence and makes nothing else', async () => {
+  const sentence = 'Acme already uses this repo folder or living-page path.';
+  const t = rig({ fail: { 'POST /systems/register': sentence } });
+  await assert.rejects(
+    () => t.make.register({ scanId: 'sc_1234567890123456', name: 'Acme two' }),
+    (error: unknown) => error instanceof ServiceError && error.message === sentence,
+  );
+  assert.deepEqual(keys(t.calls), ['POST /systems/register'], 'no fallback create, no prompt, no link');
+  assert.equal(t.started.length + t.attached.length + t.composed.length, 0);
 });
 
 test('a chat that can’t be linked back does not undo a request that already reached it', async () => {

@@ -9,6 +9,7 @@ import { lstat, mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/pro
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 
+import { buildProblemSentence } from '../../../src/shared/system-json.ts';
 import type { BuildProblemReason, SystemState } from '../../../src/shared/types.ts';
 import { createBuildTickets, type BuildTickets } from '../../../src/service/systems/builds.ts';
 import { createHomes, verifyRepoHome, type Homes } from '../../../src/service/systems/homes.ts';
@@ -537,10 +538,41 @@ test('existing-outside-project: a link out, a gone folder or no ticket project i
   const internal = await rig.agent('calm', { version: 1, name: 'Calm', home: 'internal', existing: { folder: 'apps/web' } });
   assert.deepEqual(internal.buildProblem, { reason: 'existing-outside-project', value: 'apps/web' });
   assert.equal(internal.sources.code, null);
-  // A shape the record refuses is skipped at parse: no problem, nothing read.
-  const shape = await rig.agent('shape', { version: 1, name: 'Shape', home: 'internal', existing: { folder: '../outside' } });
-  assert.equal(shape.buildProblem ?? null, null);
-  assert.equal(shape.sources.code, null);
+});
+
+test('existing-outside-project: a hint whose shape is refused (absolute, traversal, wrong type) is ignored with a problem; the build is still adopted', async (t) => {
+  const rig = await setup(t);
+  const absolute = path.join(rig.project, 'design-system');
+  const cases: Array<{ id: string; existing: unknown; value: string }> = [
+    { id: 'abs', existing: { folder: absolute }, value: absolute.slice(0, 80) },
+    { id: 'dots', existing: { folder: '../outside' }, value: '../outside' },
+    { id: 'deep', existing: { folder: 'apps/../../outside' }, value: 'apps/../../outside' },
+    { id: 'num', existing: { folder: 7 }, value: '{"folder":7}' },
+    { id: 'str', existing: 'design-system', value: 'design-system' },
+    { id: 'list', existing: ['design-system'], value: '["design-system"]' },
+  ];
+  for (const one of cases) {
+    const state = await rig.agent(one.id, { version: 1, ticket: await rig.issue(), name: `Shape ${one.id}`, home: 'internal', existing: one.existing });
+    assert.deepEqual(state.buildProblem, { reason: 'existing-outside-project', value: one.value }, one.id);
+    assert.notEqual(state.build, undefined, `${one.id}: adopted anyway`);
+    assert.equal(state.status, 'draft', one.id);
+    assert.equal(state.sources.code, null, `${one.id}: the ignored folder is never read`);
+    // The system page says the hint was ignored, the same sentence an outside folder gets.
+    assert.equal(buildProblemSentence(state), 'The existing system must be a folder inside the project this chat is in, so Design Chamber ignored it.', one.id);
+  }
+  assert.deepEqual(rig.calls.scans, []);
+  // A long refused hint is clipped to the problem value cap.
+  const long = await rig.agent('long', { version: 1, ticket: await rig.issue(), name: 'Long', home: 'internal', existing: { folder: `/${'a'.repeat(300)}` } });
+  assert.equal(long.buildProblem?.value, `/${'a'.repeat(79)}`);
+
+  // Fixing the hint before the first stamp clears the problem; refusing it again sets it back.
+  const ticket = await rig.issue();
+  await rig.agent('fix', { version: 1, ticket, name: 'Fix', home: 'internal', existing: { folder: '/abs/ds' } });
+  const fixed = await rig.rewrite('fix', { version: 1, ticket, name: 'Fix', home: 'internal', existing: { folder: 'apps/web' } });
+  assert.equal(fixed.buildProblem ?? null, null);
+  assert.equal(fixed.sources.code?.existing?.location, 'apps/web');
+  const again = await rig.rewrite('fix', { version: 1, ticket, name: 'Fix', home: 'internal', existing: { folder: '../x' } });
+  assert.deepEqual(again.buildProblem, { reason: 'existing-outside-project', value: '../x' });
 });
 
 test('existing is re-verified and followed before the first stamp; a fix clears the problem', async (t) => {

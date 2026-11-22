@@ -22,7 +22,8 @@
 //
 // Phase 2.6 (AD-11, §5.10): BUILD.json `existing` names the system the agent started from. At adoption
 // and before the first stamp it must be a folder inside the ticket's project (`validateLocation`);
-// otherwise it is ignored with `existing-outside-project` and the build is adopted anyway. When no
+// otherwise it is ignored with `existing-outside-project` and the build is adopted anyway (a hint the
+// parser refuses by shape, like an absolute path or `..`, gets the same problem, §19 item 5). When no
 // code folder is named, the existing folder is the code source; the build scan fills what it holds.
 //
 // The service NEVER writes the repo: every path under `home.directory` is only validated, resolved
@@ -270,6 +271,15 @@ export const createHomes = (deps: HomesDeps): Homes => {
     }
   };
 
+  /**
+   * The `existing-outside-project` value, or null: the hint's folder when it did not resolve inside
+   * the project, or the raw text of a hint the parser refused by shape (§19 item 5).
+   */
+  const existingProblemOf = (build: BuildJson, existing: Existing | null, refused: string | null): string | null => {
+    if (build.existing != null) return existing === null ? build.existing.folder : null;
+    return refused;
+  };
+
   /** The code source a build asks for: its code folder, else the existing system's folder (AD-11). */
   const codeSourceOf = (codeDir: string | null, existing: Existing | null, at: string): NonNullable<SystemState['sources']['code']> | null => {
     const directory = codeDir ?? existing?.real ?? null;
@@ -284,7 +294,13 @@ export const createHomes = (deps: HomesDeps): Homes => {
   };
 
   /** Step 2: adopt an unadopted build. Runs on the system's chain; null when a problem stopped it. */
-  const adopt = async (id: string, state: SystemState, build: BuildJson, ticket: { ticket: string; projectDirectory: string | null; sessionId: string | null } | null): Promise<Post | null> => {
+  const adopt = async (
+    id: string,
+    state: SystemState,
+    build: BuildJson,
+    ticket: { ticket: string; projectDirectory: string | null; sessionId: string | null } | null,
+    existingRefused: string | null,
+  ): Promise<Post | null> => {
     // Over the cap, reserved or unreadable folders are not adopted (the list shows their sentence).
     const rows = await systems.list();
     const row = rows.find((one) => one.id === id);
@@ -315,9 +331,10 @@ export const createHomes = (deps: HomesDeps): Homes => {
         return null;
       }
     }
-    // An existing system outside the project is ignored, with a problem; it never stops the adoption.
+    // An existing system outside the project, or a hint whose shape the parser refused (§19 item 5),
+    // is ignored with a problem; it never stops the adoption.
     const existing = build.existing == null ? null : await existingWithin(build.existing.folder, projectDirectory);
-    const existingProblem = build.existing != null && existing === null ? build.existing.folder : null;
+    const existingProblem = existingProblemOf(build, existing, existingRefused);
 
     // A name clash ignoring case adopts "<name> 2" (then 3…) and says so in the page notice.
     const others = rows.filter((one) => one.id !== id);
@@ -361,7 +378,7 @@ export const createHomes = (deps: HomesDeps): Homes => {
   };
 
   /** Step 3: follow an adopted build (rev 3, AD-28). Null when a problem stopped it (the adopted values stand). */
-  const follow = async (id: string, state: SystemState, build: BuildJson): Promise<Post | null> => {
+  const follow = async (id: string, state: SystemState, build: BuildJson, existingRefused: string | null): Promise<Post | null> => {
     const record = state.build;
     // Safe: follow is called only when state.build exists.
     if (record === undefined) return null;
@@ -381,7 +398,7 @@ export const createHomes = (deps: HomesDeps): Homes => {
         (!samePath(await realOrResolved(build.repo.directory), currentHome.directory) || build.repo.folder !== currentHome.folder || build.repo.livingPage !== currentHome.livingPage));
     // Phase 2.6 AD-11: the existing system folder, checked like the code folder; outside the project it is ignored.
     const existing = build.existing == null ? null : await existingWithin(build.existing.folder, projectDirectory);
-    const existingProblem = build.existing != null && existing === null ? build.existing.folder : null;
+    const existingProblem = existingProblemOf(build, existing, existingRefused);
     const existingDiffers = (existing?.rel ?? null) !== (state.sources.code?.existing?.location ?? null);
     /** No other problem: the existing folder's own, or none. */
     const settleProblem = async (): Promise<void> => {
@@ -527,9 +544,9 @@ export const createHomes = (deps: HomesDeps): Homes => {
           }
           ticket = open;
         }
-        followed = await adopt(id, state, build, ticket);
+        followed = await adopt(id, state, build, ticket, read.parsed.existingRefused ?? null);
       } else {
-        followed = await follow(id, state, build);
+        followed = await follow(id, state, build, read.parsed.existingRefused ?? null);
       }
       // A problem stops the step: the adopted values stand, and a stamp in the same write is not
       // acted on. Otherwise the stamp acts on the home as it stands now (a home change and a stamp

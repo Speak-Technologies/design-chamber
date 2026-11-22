@@ -177,6 +177,28 @@ test('a snapshot that fails to land leaves nothing half-registered', async (t) =
   assert.equal((await call('POST', '/systems/register', { scanId, name: 'Acme' })).status, 200);
 });
 
+test('a scan read whose bytes changed after the scan is refused, and nothing half-registered is left', async (t) => {
+  const { call, scan, project, tmp, jobs } = await setupLocation(t);
+  const before = await fingerprintTree(project);
+  const { scanId } = await scan({ directory: project, location: 'design-system' });
+  // The job keeps the read in memory; swap one file's bytes there, after the scan hashed them.
+  const read = jobs.registrationSource(scanId).read;
+  const [rel, original] = [...read.files.entries()].find(([one]) => one === 'tokens.css') ?? [];
+  assert.ok(rel !== undefined && original !== undefined, 'the scan read tokens.css');
+  read.files.set(rel, Buffer.from(':root { --brand-500: #ff0000; }\n'));
+
+  const refused = await call('POST', '/systems/register', { scanId, name: 'Acme' });
+  assert.equal(refused.status, 409, JSON.stringify(refused.json));
+  assert.equal(messageOf(refused), "Design Chamber couldn't use that read of the folder. Read the folder again.");
+  assert.deepEqual(await readdir(tmp.at('Designs/_systems')), [], 'the half-made system went to the trash');
+  assert.deepEqual(((await call('GET', '/systems')).json as SystemListResponse).systems, []);
+  assert.deepEqual(await fingerprintTree(project), before, 'the repo is exactly as it was');
+
+  // Put the scanned bytes back: the same read lands.
+  read.files.set(rel, original);
+  assert.equal((await call('POST', '/systems/register', { scanId, name: 'Acme' })).status, 200);
+});
+
 test('R-1: a registered system (no state.build) through every repo-home path', async (t) => {
   const { call, scan, project, tmp, systems, jobs } = await setupLocation(t);
   const before = await fingerprintTree(project);

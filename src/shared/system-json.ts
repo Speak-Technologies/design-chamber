@@ -1277,7 +1277,25 @@ export const isSystemContractRel = (rel: string): boolean => {
 };
 
 /** `BUILD.json` (schema `design-chamber/system-build@1`, §2.13): ≤ `SYSTEM_BUILD_JSON_MAX_BYTES`, else unreadable. */
-export type ParsedBuildJson = { build: BuildJson | null; raw: JsonObject | null; problems: SystemProblem[]; unreadable: string | null };
+export type ParsedBuildJson = {
+  build: BuildJson | null;
+  raw: JsonObject | null;
+  problems: SystemProblem[];
+  unreadable: string | null;
+  /**
+   * Phase 2.6 §19 item 5: an `existing` hint whose shape was refused (absolute, `..`, wrong type),
+   * as text clipped to `BUILD_PROBLEM_VALUE_MAX`. The build is still adopted; the service records it
+   * as `existing-outside-project` so the system page says the hint was ignored.
+   */
+  existingRefused?: string;
+};
+
+/** The raw `existing` hint as text a problem can show: its folder when it has a string one, else the JSON. */
+const refusedHintText = (raw: unknown): string => {
+  const folder = isObject(raw) ? own(raw, 'folder') : raw;
+  const text = typeof folder === 'string' ? folder : (JSON.stringify(raw) ?? String(raw));
+  return text.slice(0, BUILD_PROBLEM_VALUE_MAX);
+};
 
 const BUILD_NOT_JSON = "BUILD.json isn't valid JSON.";
 const BUILD_TOO_LARGE = 'BUILD.json is larger than 64 KB.';
@@ -1367,11 +1385,15 @@ export const parseBuildJson = (text: string): ParsedBuildJson => {
 
   // Phase 2.6 AD-11: the existing system the agent found, a folder inside the project ("." = its root).
   let existing: { folder: string } | null = null;
+  let existingRefused: string | null = null;
   const rawExisting = own(value, 'existing');
   if (rawExisting !== undefined && rawExisting !== null) {
     const folder = isObject(rawExisting) ? own(rawExisting, 'folder') : undefined;
     if (typeof folder === 'string' && (folder === '.' || REPO_REL_PATTERN.test(folder))) existing = { folder };
-    else broken('existing', 'existing in BUILD.json needs a folder inside the project, like "design-system", so it was skipped.');
+    else {
+      existingRefused = refusedHintText(rawExisting);
+      broken('existing', 'existing in BUILD.json needs a folder inside the project, like "design-system", so it was skipped.');
+    }
   }
 
   let ticket: string | null = null;
@@ -1450,7 +1472,7 @@ export const parseBuildJson = (text: string): ParsedBuildJson => {
   }
 
   const build: BuildJson = { version: 1, ticket, name, home, repo, code, ...(existing !== null ? { existing } : {}), mode, dark, calls, access, round, applied, proposal, drift };
-  return { build, raw: value, problems, unreadable: null };
+  return { build, raw: value, problems, unreadable: null, ...(existingRefused !== null ? { existingRefused } : {}) };
 };
 
 /**

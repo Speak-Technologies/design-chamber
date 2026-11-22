@@ -194,7 +194,14 @@ describe('Phase 2.6 AD-11: BUILD.json existing and its problem', () => {
       assert.notEqual(parsed.build, null, JSON.stringify(folder));
       assert.ok(!('existing' in (parsed.build ?? {})), JSON.stringify(folder));
       assert.deepEqual(parsed.problems.map((one) => one.entry), ['existing'], JSON.stringify(folder));
+      // §19 item 5: the refused hint travels on, as text, so the service can say it was ignored.
+      assert.equal(parsed.existingRefused, typeof folder === 'string' ? folder : JSON.stringify({ folder }), JSON.stringify(folder));
     }
+    assert.equal(parseBuildJson(repoBuild(REPO, { existing: 'design-system' })).existingRefused, 'design-system');
+    assert.equal(parseBuildJson(repoBuild(REPO, { existing: [1] })).existingRefused, '[1]');
+    assert.equal(parseBuildJson(repoBuild(REPO, { existing: { folder: `/${'x'.repeat(200)}` } })).existingRefused?.length, 80);
+    assert.ok(!('existingRefused' in parseBuildJson(repoBuild(REPO, { existing: { folder: 'design-system' } }))), 'an accepted hint is not refused');
+    assert.ok(!('existingRefused' in parseBuildJson(repoBuild(REPO))));
   });
 
   test('existing-outside-project has its own sentence', () => {
