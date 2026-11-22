@@ -5271,9 +5271,14 @@ button.dc-sp-value:focus-visible {
   display: flex;
   flex-direction: column;
   gap: var(--dc-s3);
-  max-height: calc(var(--dc-pick-rows, 6) * var(--dc-pick-row-h));
+  /* Projects and Folders share this window and a project row is two lines, so six rows is not enough: give it a taller cap
+     that still yields to a short rail, and never cut a failure notice off. */
+  max-height: max(calc(var(--dc-pick-rows, 6) * var(--dc-pick-row-h)), min(calc(var(--dc-pick-rows, 6) * var(--dc-pick-row-h) + 8rem), 45vh));
   overflow: auto;
   min-width: 0;
+}
+.dc-pick-list:has(.oc-sdk-banner) {
+  max-height: none;
 }
 .dc-pick-section {
   display: flex;
@@ -5614,6 +5619,9 @@ button.dc-sp-value:focus-visible {
       'name where result'
       'opts where result'
       'agent where result';
+    /* The location and read columns span all three rows: give any extra height to the last row, so Name, Start from and
+       Agent works in stay together instead of spreading apart. */
+    grid-template-rows: auto auto 1fr;
     column-gap: var(--dc-s5);
     align-items: start;
   }

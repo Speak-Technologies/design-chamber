@@ -32,6 +32,12 @@ const tickExisting = async (p, tag) => {
   await p.waitFor('return !doc.querySelector(".dc-newsys-g-where").hidden', 'the Existing column');
 };
 
+// At the rail's width the read column sits under the options, below the fold: scroll it into view for the picture.
+const reveal = async (p, surface, selector, block = 'start') => {
+  if (surface === 'panel') await p.guest(`doc.querySelector(${JSON.stringify(selector)})?.scrollIntoView({ block: ${JSON.stringify(block)} })`);
+  await p.settle(120);
+};
+
 const waitCandidates = (p, tag) => p.waitFor('return doc.querySelectorAll(".dc-newsys-cand").length >= 4', `${tag}: the candidates`);
 
 /** One column at the rail's width, three at the page's: the where column sits under (rail) or beside (page) the options. */
@@ -118,6 +124,7 @@ const sheetFlow = async (h, surface, width, theme) => {
   h.check((await text(p, '.dc-newsys-agent .oc-sdk-field-note')) === 'Only needed when the agent writes the system. Registering it sends no request.', `${tag}: the disabled agent field says why`);
   h.check(await p.guest('return doc.querySelector(".dc-newsys-g-name input").value === "ember-oak"'), `${tag}: the project's name is suggested`);
   await checkLayout(h, p, tag, surface === 'page');
+  await reveal(p, surface, '.dc-newsys-g-result');
   await p.shot(`${tag}-3-found-register`);
 
   // The disclosure lists the files with values, then the rest of the read.
@@ -125,6 +132,7 @@ const sheetFlow = async (h, surface, width, theme) => {
   await p.settle(200);
   const files = await text(p, '.dc-newsys-g-result details');
   h.check(files.includes('tokens.css') && files.includes('18 values') && files.includes('and 2 more with no values.'), `${tag}: the disclosure lists values first, then the rest of the read`);
+  await reveal(p, surface, '.dc-newsys-g-result details', 'center');
   await p.shot(`${tag}-4-files-read`);
 
   // Make beside it: the primary follows the choice and the agent field comes back.
@@ -178,12 +186,14 @@ const errorsFlow = async (h, surface, width, theme) => {
   h.check((await text(p, '.dc-newsys-contract-problem')) === 'This folder has a system.json but tokens.css is missing, so it can’t be registered as it is. Make a new system from it instead.', `${tag}: the incomplete contract names what is missing`);
   h.check(await p.guest('return !doc.querySelector(".dc-newsys-choice")'), `${tag}: no register choice for an incomplete contract`);
   h.check(await p.guest(`return doc.querySelector('${PRIMARY}').textContent.trim() === 'Make design system'`), `${tag}: the primary stays Make design system`);
+  await reveal(p, surface, '.dc-newsys-g-result');
   await p.shot(`${tag}-3-incomplete`);
 
   // A folder with no token files: the agent can still write the system.
   await p.type(LOC_INPUT, 'docs/design');
   await p.click('.dc-newsys-g-where .oc-sdk-btn', { text: 'Read this folder' });
   await h.checkSoon(() => p.guest('return (doc.querySelector(".dc-newsys-g-result")?.textContent ?? "").includes("Design Chamber didn’t find token files in docs/design/")'), `${tag}: nothing found says the agent can still write it`);
+  await reveal(p, surface, '.dc-newsys-g-result');
   await p.shot(`${tag}-4-nothing`);
 
   // The nudge from Project code: once per sheet, Start from it keeps the name and reads the folder.
