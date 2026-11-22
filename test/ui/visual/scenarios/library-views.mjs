@@ -106,6 +106,18 @@ const pageViews = async (h, theme) => {
   await h.checkSoon(async () => (await rowCount(p)) === 6, `${tag}: Clear filters brings every design back`);
   h.check(await p.guest('return doc.querySelector(".dc-system-select button")?.getAttribute("aria-label") === "System: All systems"'), `${tag}: the select reads All systems again`);
 
+  // Search, the kind tab and the System filter are session-only (S5-5): a reload resets all three,
+  // while the view and the sort stay remembered. Nothing of the three is ever written to storage.
+  await p.type('.dc-search input', 'zzz');
+  await p.click('.dc-tabs [role=tab]', { text: 'Pages' });
+  await pickOption(p, '.dc-system-select', 'Acme');
+  h.check((await storageGet(p, 'library-view:page')) === '"tiles"' && (await storageGet(p, 'list-sort:page')) === '"created"', `${tag}: the filters write nothing to storage`);
+  await reload(p);
+  await h.listReady(p);
+  h.check(await p.guest('return doc.querySelector(".dc-search input").value === "" && doc.querySelector(".dc-tabs [role=tab][aria-selected=true]")?.dataset.id === "all" && doc.querySelector(".dc-system-select button")?.getAttribute("aria-label") === "System: All systems"'), `${tag}: search, tab and System filter reset on reload (session-only)`);
+  h.check(await p.guest('return doc.querySelector(".dc-view-toggle-btn[aria-label=\\"View as tiles\\"]")?.getAttribute("aria-pressed") === "true"'), `${tag}: the view still survives the reload`);
+  h.check((await firstTitle(p, 'page')) === 'Onboarding flow', `${tag}: the sort still survives the reload`);
+
   // Every active filter at once: folder scope, search, kind tab, system. The sentence names them
   // all, the chips name them again, and Clear filters keeps the folder.
   await seedFolder(p);
@@ -178,6 +190,15 @@ const railViews = async (h, width, theme) => {
   await p.click('.oc-sdk-empty-action .oc-sdk-btn', { text: 'Clear filters' });
   await h.checkSoon(async () => (await rowCount(p)) === 1, `${tag}: Clear filters keeps the folder`);
   h.check(await p.guest('return doc.querySelector(".dc-rail-show-select button")?.getAttribute("aria-label") === "Show: Folder · Q4 launch"'), `${tag}: the Show select still reads the folder`);
+  // Session-only on the rail too: search, tab and System filter reset on reload; the sort and scope stay.
+  await p.type('.dc-search input', 'zzz');
+  await p.click('.dc-tabs [role=tab]', { text: 'Pages' });
+  await pickOption(p, '.dc-rail-pair .dc-system-select', 'Harbor');
+  await reload(p);
+  await h.listReady(p);
+  h.check(await p.guest('return doc.querySelector(".dc-search input").value === "" && doc.querySelector(".dc-tabs [role=tab][aria-selected=true]")?.dataset.id === "all" && doc.querySelector(".dc-rail-pair .dc-system-select button")?.getAttribute("aria-label") === "System: All systems"'), `${tag}: search, tab and System filter reset on reload (session-only)`);
+  // The seeded folder lives in the frame's fake and goes with the reload; the sort key is the host's and stays.
+  h.check((await storageGet(p, 'list-sort:panel')) === '"updated"', `${tag}: the rail sort stays remembered across the reload`);
   await p.close();
 };
 
