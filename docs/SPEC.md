@@ -42,8 +42,7 @@ AD-17; its §20 owner sign-off overrules its §19); requirements `documentation/
 (S1 to S8 under its §9.9 owner answers). Text marked **Phase 2.6** summarises the architecture committed on
 `feat/phase-2-6-library` (T0 `b31370d`, F1 `23ed18d` + `2ce2374`, E1 `d499738` + `2f542c0`, G1 `f4337a3` +
 `239440d`, QA fixes `e36f4fc`, `e6ed725`, `ecf17e4`, rules `5e81ea4`, F2 `dcb0563`, the warnings band `a9e8a5d`,
-E2 `1a75890`). The library view (L1a, L1b) is **landing**: where a detail below is marked "landing with
-L1a/L1b" it is P26's design, not yet committed code. P26 holds the field-level detail. Manual project filing
+E2 `1a75890`, L1a `6dc6319`, L1b `23d1f9d`). The library view is committed. P26 holds the field-level detail. Manual project filing
 and folders organise only: **nothing here changes a design's rules, pinned system or files on disk.**
 
 ---
@@ -2195,7 +2194,7 @@ clear the sent entries (§8.2). The rules tell the agent to re-read a file befor
   request; the system page opens on its read-only repo panel as a Draft. Make goes through `POST /systems` with
   the location's scan and then the `make` prompt. Budget ≤ 6. In a `/design-system` chat the agent may start from
   an existing system itself and record it in `BUILD.json` `existing` (§9.22).
-- **Used-by → library** (landing with L1b): the systems list's "Used by N designs" link closes the systems view
+- **Used-by → library**: the systems list's "Used by N designs" link closes the systems view
   and filters the library by that system (scope All, tab All). A design's system chip opens its system (1 step).
 
 ---
@@ -2602,9 +2601,9 @@ src/ui/model/folder-picker-model.ts, components/{folder-picker,folder-actions,fo
 src/ui/model/design-warnings-model.ts, components/design-warnings.ts                       ui-ux [L1c]
 src/ui/model/new-system-model.ts, systems/new-system-sheet.ts                              ui-ux [E2]
 src/ui/model/list-model.ts, components/{design-row,library-empty}.ts, components/icons.ts,
-  page/library-view.ts, rail/list-view.ts                                                  ui-ux [L1a, landing]
+  page/library-view.ts, rail/list-view.ts                                                  ui-ux [L1a]
 src/ui/systems/{system-tile,system-row}.ts, systems-list.ts, page/library-sidebar.ts,
-  page/page-app.ts, rail/rail-app.ts                                                       ui-ux [L1b, landing]
+  page/page-app.ts, rail/rail-app.ts                                                       ui-ux [L1b]
 test/service/core/folders.test.ts, test/service/{folders-qa-gaps,folder-requests,folder-requests-events,
   chat-chip-filing,manual-members-isolation}.test.ts,
   test/service/systems/{candidates,candidates-purity,scan-folder,location-scan,register,repo-readonly}.test.ts,
@@ -2966,7 +2965,7 @@ radii and spacing from the kit scale); swatch strips paint system content, never
   complete contract preselects **Register it as it is** (Recommended) beside **Make a new system from it**; the
   footer primary follows the choice and **Agent works in** is disabled with its reason while registering. The
   nudge over Project code appears once per sheet session and never blocks Make.
-- **Library view** (**landing with L1a/L1b**; design P26 §6.4, §6.5 as amended by §20):
+- **Library view** (P26 §6.4, §6.5 as amended by §20):
   - **Preferences in `host.storage`**, never `settings.json`: `library-view:page` (`tiles` | `list`, default
     tiles), `list-sort:panel` / `list-sort:page` (`updated` | `created` | `title`, default updated); garbage falls
     back to the default. Search, kind tab and System filter are session-only.
@@ -3362,7 +3361,7 @@ sign-off §20); requirements `documentation/specs/phase-2-6-library-and-systems.
   group (QA-F, QA-L, QA-E, QA-G). Shared files sequenced by the main agent (P26 §15 table): `list-view.ts` and
   `library-view.ts` L1a then L1b; `library-sidebar.ts` F2 then L1b; `systems-list.ts` L1b then E2; fakes and
   `styles.css` in marked blocks. Status at this entry: T0, F1, F2, E1, E2, G1, R2, L1c and the QA fixes
-  committed; **L1a and L1b landing**.
+  committed; L1a `6dc6319` and L1b `23d1f9d` committed.
 - **Key decisions held.** Manual project members in the one existing registry, organisation only (AD-1); one
   batch route (AD-2); one shared picker (AD-4); filing rides on `POST /chip` and never fails it (AD-5); the
   agent files through `design.json`, existing folders only (AD-16); discovery is a pure function over the scan's
