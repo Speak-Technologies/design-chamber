@@ -1205,3 +1205,20 @@ S5 M, S6 S, S7 S, S8 M. The four open questions go to the owner via the main age
 defaults are what gets built unless he says otherwise.
 
 Spec Complete → architect (technical design) | → main agent (4 questions for the user)
+
+### 9.9 Owner answers (2026-11-22, chat; authoritative over any conflicting line above)
+
+1. **O1 answered: the Add to folder dialog.** With no manual folders created it showed only the create
+   field, and projects were never listed. S3's picker work lands there first (and in the New dialog).
+2. **Projects accept manual filing.** The picker lists projects AND folders. Filing a design under a
+   project adds a manual member to that project group, organisation only. Derived membership (the repo
+   a design was started in) is unchanged and still decides design rules and the pinned system; nothing
+   on disk moves. This supersedes S3's "projects explained as automatic" and the folders-only picker.
+3. **Systems as library items.** Systems get a sidebar section and their own tiles in the page grid
+   (a tile opens the system page or its living page), every design card/row shows its system chip, and
+   a System filter joins kind and folder on both rail and page. This supersedes S6's bounded set. How
+   the rail (rows, 320-480 px) represents systems is the architect's call.
+4. **O2, O3, O4: the recommended defaults are adopted** (D11, D12, D13): the agent may tag/untag into
+   existing folders on explicit request only; the sheet's Existing design system makes an internal-home
+   Draft while /design-system gains the existing-location start; a contract-complete location offers
+   "Register it as it is". The owner delegated the batch end to end on 2026-11-22.
