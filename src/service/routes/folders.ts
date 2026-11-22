@@ -2,6 +2,8 @@
 // create, rename, soft delete, undelete, and membership. The router checks the bearer token and
 // refuses encoded separators in `:folderId` first; the id is matched to `FOLDER_ID_PATTERN` here,
 // and the only file touched is `<root>/.chamber/folders.json`, through `folders.ts`.
+// Phase 2.6 (§3.2): `GET /folders` also answers the manual project members; `DELETE` answers
+// `onlyHere`.
 
 import type { DeleteFolderResponse, FolderListResponse, FolderResponse } from '../../shared/api.ts';
 import { FOLDER_ID_PATTERN } from '../../shared/limits.ts';
@@ -38,12 +40,10 @@ export function registerFoldersRoutes(router: Router, ctx: ServiceContext): void
 
   router.on('DELETE /folders/:folderId', async ({ params }): Promise<DeleteFolderResponse> => {
     const id = assertFolderId(params.folderId);
-    // AD-6: how many of the folder's designs lose their LAST folder (the confirm names this count).
-    const before = await folders().list();
-    const mine = before.folders.find((folder) => folder.id === id)?.slugs ?? [];
-    const elsewhere = new Set(before.folders.filter((folder) => folder.id !== id).flatMap((folder) => folder.slugs));
-    const onlyHere = mine.filter((slug) => !elsewhere.has(slug)).length;
-    return { ok: true, designs: await folders().remove(id), onlyHere };
+    // AD-6: `onlyHere` (designs that lose their LAST folder) is counted in the same queued write
+    // that deletes, so a membership change a moment earlier is reported truthfully.
+    const { designs, onlyHere } = await folders().remove(id);
+    return { ok: true, designs, onlyHere };
   });
 
   router.on('POST /folders/:folderId/undelete', async ({ params }): Promise<FolderResponse> => {

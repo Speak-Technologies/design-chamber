@@ -127,6 +127,19 @@ const choiceProblemWarning = (problem: SystemChoiceProblem): DesignWarning => ({
           : `design.json asks for the design system "${problem.value}", but Design Chamber couldn't copy it. Choose it again with Change… on the design's system.`,
 });
 
+/** Phase 2.6 AD-16: `folderRequest` names no folder has (never created); the names are shown as text. */
+const folderRequestWarning = (unknown: readonly string[]): DesignWarning => {
+  const names = unknown.length <= 1 ? (unknown[0] ?? '') : `${unknown.slice(0, -1).join(', ')} and ${unknown[unknown.length - 1] ?? ''}`;
+  return {
+    code: 'folder-request-unknown',
+    field: 'folderRequest',
+    message:
+      unknown.length <= 1
+        ? `The agent asked to add this design to ${names}, but there's no folder with that name.`
+        : `The agent asked to add this design to ${names}, but there are no folders with those names.`,
+  };
+};
+
 /**
  * The screen list's stamp (Phase 2 §5.1): sha256 of the RAW `screens` value, not the normalised
  * one, so even an invalid entry the wall does not show counts as part of the list. A comment,
@@ -277,6 +290,7 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     const finalState = state ?? serviceStateOf(parsed.design);
     // Phase 2.5 §5.5: an agent choice the service could not act on reads as a design warning.
     if (finalState.systemChoiceProblem !== undefined) warnings.push(choiceProblemWarning(finalState.systemChoiceProblem));
+    if (finalState.folderRequestProblem !== undefined) warnings.push(folderRequestWarning(finalState.folderRequestProblem.unknown));
     const design = applyServiceState(parsed.design, finalState);
     // P2 adopts the agent's own reading of design.json: a provisional kind is only a guess from
     // the files, so it must not decide the kind of a design.json that lists screens but no kind.

@@ -17,18 +17,35 @@
 //   design end with one entry). There is no in-memory copy, so a root change reads the new root's
 //   file fresh and never moves the old one.
 // - Folder names are the user's words: they never reach a log line.
+//
+// Phase 2.6 (documentation/specs/phase-2-6-technical.md §2.1, §5.1, AD-1, AD-2, AD-6): the same
+// file also holds `projects[]`, the designs the user filed by hand under a project. That is
+// organisation only: a design's own `projectDirectory` (its derived project) still decides its
+// rules and its pinned system, and nothing here is read by those modules. A project's id is its
+// directory string, compared with `sameDirectory`; it is a stored string, never opened or stat'ed.
+// A 0.4.0 file (no `projects`) reads as `projects: []`; the first write adds the key.
 
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, readFile, rename, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { FolderListResponse, FolderView } from '../shared/api.ts';
-import { FOLDER_DESIGNS_MAX, FOLDER_ID_PATTERN, FOLDER_NAME_MAX, FOLDER_UNDO_MS, FOLDERS_MAX } from '../shared/limits.ts';
+import type { FolderListResponse, FolderView, MembershipResult, MembershipsResponse, MembershipTarget, ProjectMembersView } from '../shared/api.ts';
+import {
+  FOLDER_DESIGNS_MAX,
+  FOLDER_ID_PATTERN,
+  FOLDER_NAME_MAX,
+  FOLDER_UNDO_MS,
+  FOLDERS_MAX,
+  MEMBERSHIP_CHANGES_MAX,
+  MEMBERSHIP_SLUGS_TOTAL_MAX,
+  PROJECT_DIRECTORY_MAX,
+  PROJECT_ENTRIES_MAX,
+} from '../shared/limits.ts';
 import { sameDirectory } from '../shared/path-compare.ts';
-import type { DesignSummary, FolderRecord, IsoDate } from '../shared/types.ts';
+import type { DesignSummary, FolderRecord, IsoDate, ProjectMembersRecord } from '../shared/types.ts';
 import type { ChangeHub, DesignStore, Logger, SettingsStore } from './context.ts';
 import { ApiError } from './http.ts';
-import { isSlug, resolveInside, resolvePlainTarget, writeFileAtomic } from './paths.ts';
+import { isInsideOrEqual, isSlug, resolveInside, resolvePlainTarget, writeFileAtomic } from './paths.ts';
 
 export const FOLDERS_FILE_SEGMENTS = ['.chamber', 'folders.json'] as const;
 /** A registry larger than this reads as damaged (§2.8). */
@@ -44,14 +61,32 @@ export const FOLDER_GONE = "That folder isn't there any more.";
 export const FOLDER_UNDELETE_GONE = "That folder can't be brought back any more.";
 export const FOLDER_DESIGNS_FULL = `A folder can hold up to ${FOLDER_DESIGNS_MAX.toLocaleString('en-US')} designs.`;
 export const folderNameTaken = (name: string): string => `You already have a folder called ${name}.`;
+export const PROJECT_UNUSABLE = "That project folder can't be used.";
+export const PROJECTS_FULL = `You can file designs under up to ${PROJECT_ENTRIES_MAX} projects.`;
+export const PROJECT_DESIGNS_FULL = `A project can hold up to ${FOLDER_DESIGNS_MAX.toLocaleString('en-US')} filed designs.`;
+/** A write whose file would pass the size cap (§13): refused, nothing written. */
+export const FOLDERS_FILE_FULL = 'Folders are full. Take some designs out of folders, then try again.';
 
-export type FoldersRegistry = { v: 1; rev: number; folders: FolderRecord[] };
+export type FoldersRegistry = { v: 1; rev: number; folders: FolderRecord[]; projects: ProjectMembersRecord[] };
 
 /** What the disk holds: no file yet, a valid registry, or a file that could not be used. */
 export type RegistryRead = { kind: 'absent' } | { kind: 'ok'; registry: FoldersRegistry } | { kind: 'damaged' };
 
-/** slug → the live design's created time. */
-export type LiveDesigns = ReadonlyMap<string, IsoDate>;
+/** A live design as membership needs it: its created time (the key with the slug) and its derived project. */
+export type LiveDesign = { created: IsoDate; projectDirectory: string | null };
+/** slug → the live design. */
+export type LiveDesigns = ReadonlyMap<string, LiveDesign>;
+
+/** One membership change after the route boundary: lists are slug-filtered and capped. */
+export type MembershipChangeInput = { target: MembershipTarget; add: string[]; remove: string[] };
+
+/** The registry could not be read, and the caller (an agent request) may not set it aside. */
+export class FoldersDamagedError extends Error {
+  constructor() {
+    super("Folders couldn't load, so the agent's request wasn't applied.");
+    this.name = 'FoldersDamagedError';
+  }
+}
 
 // ---- Pure parts (tested directly) ----
 
@@ -94,8 +129,49 @@ const parseFolder = (value: unknown): FolderRecord | null => {
   return { id, name: normalized, created, deleted, designs: entries };
 };
 
-/** Validate the registry text; null when anything about it is wrong (the caller reads that as damaged). */
-export const parseFoldersRegistry = (text: string): FoldersRegistry | null => {
+const isAbsoluteAnywhere = (value: string): boolean => path.isAbsolute(value) || path.win32.isAbsolute(value);
+
+/**
+ * A project directory as the registry stores it (§2.1), or null when it can't be one: text of at
+ * most `PROJECT_DIRECTORY_MAX`, absolute in either flavour, no control character (NUL included),
+ * and not the designs root or inside it (lexical, no stat: the string is never opened). Trailing
+ * separators are trimmed unless that would leave a bare drive or an empty string.
+ */
+export const normalizeProjectDirectory = (value: unknown, root: string): string | null => {
+  if (typeof value !== 'string' || value.length === 0 || value.length > PROJECT_DIRECTORY_MAX) return null;
+  if (CONTROL.test(value)) return null;
+  if (!isAbsoluteAnywhere(value)) return null;
+  const trimmed = value.replace(/[\\/]+$/, '');
+  const stored = isAbsoluteAnywhere(trimmed) ? trimmed : value;
+  // Only a path absolute on this platform can sit under the root; a Windows path on POSIX cannot.
+  if (path.isAbsolute(stored) && isInsideOrEqual(root, stored)) return null;
+  return stored;
+};
+
+const parseMembers = (designs: unknown): { slug: string; created: IsoDate }[] | null => {
+  if (!Array.isArray(designs) || designs.length > FOLDER_DESIGNS_MAX) return null;
+  const entries: { slug: string; created: IsoDate }[] = [];
+  for (const entry of designs) {
+    if (!isRecord(entry) || !isSlug(entry.slug) || !isIsoText(entry.created)) return null;
+    entries.push({ slug: entry.slug, created: entry.created });
+  }
+  return entries;
+};
+
+const parseProject = (value: unknown, root: string): ProjectMembersRecord | null => {
+  if (!isRecord(value)) return null;
+  const directory = normalizeProjectDirectory(value.directory, root);
+  if (directory === null || directory !== value.directory) return null;
+  const designs = parseMembers(value.designs);
+  return designs === null ? null : { directory, designs };
+};
+
+/**
+ * Validate the registry text; null when anything about it is wrong (the caller reads that as
+ * damaged). `root` is the designs root the file lives in: a project entry at or inside it is
+ * corruption. An absent `projects` (a 0.4.0 file) reads as `[]`.
+ */
+export const parseFoldersRegistry = (text: string, root: string): FoldersRegistry | null => {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -114,10 +190,25 @@ export const parseFoldersRegistry = (text: string): FoldersRegistry | null => {
     folders.push(folder);
   }
   if (folders.filter((folder) => folder.deleted === null).length > FOLDERS_MAX) return null;
-  return { v: 1, rev: raw.rev, folders };
+  // Absent (a 0.4.0 file) reads as none; any other non-list (null included) is damage.
+  const rawProjects = raw.projects === undefined ? [] : raw.projects;
+  if (!Array.isArray(rawProjects) || rawProjects.length > PROJECT_ENTRIES_MAX) return null;
+  const projects: ProjectMembersRecord[] = [];
+  for (const value of rawProjects) {
+    const project = parseProject(value, root);
+    if (project === null || projects.some((seen) => sameDirectory(seen.directory, project.directory))) return null;
+    projects.push(project);
+  }
+  return { v: 1, rev: raw.rev, folders, projects };
 };
 
-export const isLiveMember = (entry: { slug: string; created: IsoDate }, live: LiveDesigns): boolean => live.get(entry.slug) === entry.created;
+export const isLiveMember = (entry: { slug: string; created: IsoDate }, live: LiveDesigns): boolean => live.get(entry.slug)?.created === entry.created;
+
+/** The design's derived project is this directory: a manual entry there would only shadow it. */
+const isDerivedMember = (slug: string, directory: string, live: LiveDesigns): boolean => {
+  const own = live.get(slug)?.projectDirectory ?? null;
+  return own !== null && sameDirectory(own, directory);
+};
 
 /** The folder as the list answers it: live members only, each slug once. */
 export const folderView = (folder: FolderRecord, live: LiveDesigns): FolderView => ({
@@ -127,18 +218,43 @@ export const folderView = (folder: FolderRecord, live: LiveDesigns): FolderView 
   slugs: [...new Set(folder.designs.filter((entry) => isLiveMember(entry, live)).map((entry) => entry.slug))],
 });
 
+/** A project's manual members as the list answers them: live, not derived there, each slug once. Null when none is left. */
+export const projectView = (project: ProjectMembersRecord, live: LiveDesigns): ProjectMembersView | null => {
+  const slugs = [
+    ...new Set(project.designs.filter((entry) => isLiveMember(entry, live) && !isDerivedMember(entry.slug, project.directory, live)).map((entry) => entry.slug)),
+  ];
+  return slugs.length === 0 ? null : { directory: project.directory, slugs };
+};
+
 /** The list answer: deleted folders hidden, members filtered against the live designs. */
 export const listView = (read: RegistryRead, live: LiveDesigns): FolderListResponse => {
-  // T0 placeholder; F1 answers the registry's manual project members (AD-1).
   if (read.kind === 'damaged') return { folders: [], projects: [], damaged: true };
   if (read.kind === 'absent') return { folders: [], projects: [] };
-  return { folders: read.registry.folders.filter((folder) => folder.deleted === null).map((folder) => folderView(folder, live)), projects: [] };
+  return {
+    folders: read.registry.folders.filter((folder) => folder.deleted === null).map((folder) => folderView(folder, live)),
+    projects: read.registry.projects.map((project) => projectView(project, live)).filter((view): view is ProjectMembersView => view !== null),
+  };
+};
+
+/** Live entries only, each slug once; `drop` names entries to leave out as well. */
+const liveMembers = (
+  designs: readonly { slug: string; created: IsoDate }[],
+  live: LiveDesigns,
+  drop: (slug: string) => boolean = () => false,
+): { slug: string; created: IsoDate }[] => {
+  const seen = new Set<string>();
+  return designs.filter((entry) => {
+    const keep = isLiveMember(entry, live) && !seen.has(entry.slug) && !drop(entry.slug);
+    seen.add(entry.slug);
+    return keep;
+  });
 };
 
 /**
- * What every write does first (§2.8): drop folders deleted longer than the undo window ago, and
- * design entries that no longer match a live design (by slug and created). Pure; `changed` says
- * whether anything was dropped.
+ * What every write does first (§2.8, P26 §2.1): drop folders deleted longer than the undo window
+ * ago, design entries that no longer match a live design (by slug and created), manual project
+ * members that are now that project's derived members, and project entries left with no member.
+ * Pure; `changed` says whether anything was dropped.
  */
 export const cleanRegistry = (registry: FoldersRegistry, live: LiveDesigns, now: number): { registry: FoldersRegistry; changed: boolean } => {
   let changed = false;
@@ -148,30 +264,125 @@ export const cleanRegistry = (registry: FoldersRegistry, live: LiveDesigns, now:
       changed = true;
       continue;
     }
-    const seen = new Set<string>();
-    const designs = folder.designs.filter((entry) => {
-      const keep = isLiveMember(entry, live) && !seen.has(entry.slug);
-      seen.add(entry.slug);
-      return keep;
-    });
+    const designs = liveMembers(folder.designs, live);
     if (designs.length !== folder.designs.length) changed = true;
     folders.push({ ...folder, designs });
   }
-  return { registry: { ...registry, folders }, changed };
+  const projects: ProjectMembersRecord[] = [];
+  for (const project of registry.projects) {
+    const designs = liveMembers(project.designs, live, (slug) => isDerivedMember(slug, project.directory, live));
+    if (designs.length !== project.designs.length) changed = true;
+    if (designs.length === 0) {
+      changed = true;
+      continue;
+    }
+    projects.push({ ...project, designs });
+  }
+  return { registry: { ...registry, folders, projects }, changed };
 };
 
 /** Set semantics: each added live slug ends present once with its current created; removed slugs end absent. Unknown slugs are skipped. */
 export const applyMembership = (folder: FolderRecord, change: { add: readonly string[]; remove: readonly string[] }, live: LiveDesigns): FolderRecord => {
   const drop = new Set(change.remove);
   let designs = folder.designs.filter((entry) => !drop.has(entry.slug));
-  for (const slug of change.add) {
-    const created = live.get(slug);
-    if (created === undefined || drop.has(slug)) continue;
+  designs = addMembers(designs, change.add, drop, live, () => false);
+  if (designs.length > FOLDER_DESIGNS_MAX) throw new ApiError('conflict', FOLDER_DESIGNS_FULL);
+  return { ...folder, designs };
+};
+
+/** Set-semantic adds: a live slug ends present once with its current created; `skip` leaves a slug out. */
+const addMembers = (
+  start: { slug: string; created: IsoDate }[],
+  add: readonly string[],
+  drop: ReadonlySet<string>,
+  live: LiveDesigns,
+  skip: (slug: string) => boolean,
+): { slug: string; created: IsoDate }[] => {
+  let designs = start;
+  for (const slug of add) {
+    const created = live.get(slug)?.created;
+    if (created === undefined || drop.has(slug) || skip(slug)) continue;
     if (designs.some((entry) => entry.slug === slug && entry.created === created)) continue;
     designs = [...designs.filter((entry) => entry.slug !== slug), { slug, created }];
   }
-  if (designs.length > FOLDER_DESIGNS_MAX) throw new ApiError('conflict', FOLDER_DESIGNS_FULL);
-  return { ...folder, designs };
+  return designs;
+};
+
+/** One failed change, returned (never thrown) to `applyChanges`; an atomic batch turns it into an `ApiError`. */
+type ChangeFailure = { code: 'gone' | 'full' | 'invalid'; message: string };
+
+const failureStatus = { gone: 'not-found', full: 'conflict', invalid: 'bad-request' } as const;
+
+const applyProjectChange = (
+  registry: FoldersRegistry,
+  directoryRaw: string,
+  change: { add: readonly string[]; remove: readonly string[] },
+  live: LiveDesigns,
+  root: string,
+): FoldersRegistry | ChangeFailure => {
+  const directory = normalizeProjectDirectory(directoryRaw, root);
+  if (directory === null) return { code: 'invalid', message: PROJECT_UNUSABLE };
+  const index = registry.projects.findIndex((project) => sameDirectory(project.directory, directory));
+  const existing = index === -1 ? undefined : registry.projects[index];
+  const drop = new Set(change.remove);
+  const kept = (existing?.designs ?? []).filter((entry) => !drop.has(entry.slug));
+  // Membership never shadows the derived project: such an add is a quiet no-op.
+  const designs = addMembers(kept, change.add, drop, live, (slug) => isDerivedMember(slug, directory, live));
+  if (designs.length > FOLDER_DESIGNS_MAX) return { code: 'full', message: PROJECT_DESIGNS_FULL };
+  if (existing === undefined) {
+    if (designs.length === 0) return registry;
+    if (registry.projects.length >= PROJECT_ENTRIES_MAX) return { code: 'full', message: PROJECTS_FULL };
+    return { ...registry, projects: [...registry.projects, { directory, designs }] };
+  }
+  const projects = designs.length === 0 ? registry.projects.filter((_project, at) => at !== index) : registry.projects.map((project, at) => (at === index ? { ...project, designs } : project));
+  return { ...registry, projects };
+};
+
+const applyFolderChange = (registry: FoldersRegistry, id: string, change: { add: readonly string[]; remove: readonly string[] }, live: LiveDesigns): FoldersRegistry | ChangeFailure => {
+  if (!FOLDER_ID_PATTERN.test(id)) return { code: 'invalid', message: FOLDER_GONE };
+  const folder = registry.folders.find((candidate) => candidate.id === id && candidate.deleted === null);
+  if (folder === undefined) return { code: 'gone', message: FOLDER_GONE };
+  let next: FolderRecord;
+  try {
+    next = applyMembership(folder, change, live);
+  } catch (error) {
+    if (error instanceof ApiError && error.code === 'conflict') return { code: 'full', message: error.message };
+    throw error;
+  }
+  return { ...registry, folders: registry.folders.map((candidate) => (candidate === folder ? next : candidate)) };
+};
+
+/**
+ * A batch of membership changes, in order, over one registry (pure; AD-2). Best effort: each change
+ * answers its own result, and a failed change leaves the registry as it was before that change.
+ * `atomic`: the first failure throws its `ApiError` (`not-found` gone, `conflict` full,
+ * `bad-request` invalid), so the caller writes nothing.
+ */
+export const applyChanges = (
+  registry: FoldersRegistry,
+  changes: readonly MembershipChangeInput[],
+  live: LiveDesigns,
+  options: { atomic: boolean; root: string },
+): { registry: FoldersRegistry; results: MembershipResult[] } => {
+  let current = registry;
+  const results: MembershipResult[] = [];
+  for (const { target, add, remove } of changes) {
+    const outcome = target.kind === 'folder' ? applyFolderChange(current, target.id, { add, remove }, live) : applyProjectChange(current, target.directory, { add, remove }, live, options.root);
+    if ('code' in outcome) {
+      if (options.atomic) throw new ApiError(failureStatus[outcome.code], outcome.message);
+      results.push({ target, ok: false, code: outcome.code, message: outcome.message });
+      continue;
+    }
+    current = outcome;
+    results.push({ target, ok: true });
+  }
+  return { registry: current, results };
+};
+
+/** Live members of this folder that are in no other live folder (the delete confirm's second number, AD-6). */
+export const onlyHereCount = (registry: FoldersRegistry, folder: FolderRecord, live: LiveDesigns): number => {
+  const elsewhere = new Set(registry.folders.filter((other) => other.id !== folder.id && other.deleted === null).flatMap((other) => folderView(other, live).slugs));
+  return folderView(folder, live).slugs.filter((slug) => !elsewhere.has(slug)).length;
 };
 
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -204,16 +415,66 @@ export const assertFolderId = (value: string): string => {
   return value;
 };
 
+const MEMBERSHIPS_UNREADABLE = "Design Chamber couldn't read that folder change. Nothing was changed.";
+
+/**
+ * A target's shape (P26 §3.1). Only the shape is checked here: a folder id that does not match
+ * the pattern or a project folder that can't be used answers that change's own result
+ * (`invalid`), so a best-effort batch still applies the rest.
+ */
+export const parseMembershipTarget = (value: unknown): MembershipTarget => {
+  if (!isRecord(value)) throw new ApiError('bad-request', MEMBERSHIPS_UNREADABLE);
+  if (value.kind === 'folder' && typeof value.id === 'string' && value.id.length <= 64) return { kind: 'folder', id: value.id };
+  if (value.kind === 'project' && typeof value.directory === 'string' && value.directory.length <= PROJECT_DIRECTORY_MAX) return { kind: 'project', directory: value.directory };
+  throw new ApiError('bad-request', MEMBERSHIPS_UNREADABLE);
+};
+
+/** `POST /memberships` (P26 §3.1, §5.1): 1..64 changes, ≤ 200 slugs per list, ≤ 400 across the batch. */
+export const parseMembershipsBody = (body: unknown): { changes: MembershipChangeInput[]; atomic: boolean } => {
+  if (!isRecord(body)) throw new ApiError('bad-request', MEMBERSHIPS_UNREADABLE);
+  const { changes, atomic } = body;
+  if (atomic !== undefined && typeof atomic !== 'boolean') throw new ApiError('bad-request', MEMBERSHIPS_UNREADABLE);
+  if (!Array.isArray(changes) || changes.length === 0 || changes.length > MEMBERSHIP_CHANGES_MAX) {
+    throw new ApiError('bad-request', `Send between 1 and ${MEMBERSHIP_CHANGES_MAX} folder changes at once.`);
+  }
+  let total = 0;
+  const parsed = changes.map((change): MembershipChangeInput => {
+    if (!isRecord(change)) throw new ApiError('bad-request', MEMBERSHIPS_UNREADABLE);
+    const target = parseMembershipTarget(change.target);
+    const { add, remove } = parseFolderChange(change);
+    total += add.length + remove.length;
+    return { target, add, remove };
+  });
+  if (total > MEMBERSHIP_SLUGS_TOTAL_MAX) throw new ApiError('bad-request', `A folder change can include at most ${MEMBERSHIP_SLUGS_TOTAL_MAX} designs.`);
+  return { changes: parsed, atomic: atomic === true };
+};
+
 // ---- The service ----
 
 export type FoldersService = {
   list(): Promise<FolderListResponse>;
   create(name: unknown): Promise<FolderView>;
   rename(id: string, name: unknown): Promise<FolderView>;
-  /** Soft delete; answers how many designs were in it. Deleting a deleted folder again answers the same. */
-  remove(id: string): Promise<number>;
+  /**
+   * Soft delete; answers how many designs were in it and how many of those are in no other live
+   * folder, both counted in the same write. Deleting a deleted folder again answers the same.
+   */
+  remove(id: string): Promise<{ designs: number; onlyHere: number }>;
   undelete(id: string): Promise<FolderView>;
   change(id: string, change: { add: readonly string[]; remove: readonly string[] }): Promise<FolderView>;
+  /**
+   * A batch of folder and project membership changes in one queued write (P26 AD-2). `atomic`: all
+   * or nothing (the first failure throws its sentence). Best effort: per-change results, and a
+   * batch where every change failed writes nothing (no rev bump, no event).
+   */
+  changeMany(changes: readonly MembershipChangeInput[], options: { atomic: boolean }): Promise<MembershipsResponse>;
+  /**
+   * The agent's `folderRequest` (P26 AD-16): tag or untag one design in EXISTING live folders,
+   * matched by name ignoring case. Never creates, renames or deletes a folder; never touches
+   * projects. Answers the `add` names no folder has. A damaged registry is never set aside here:
+   * it throws `FoldersDamagedError`. Nothing to change writes nothing.
+   */
+  changeByName(slug: string, request: { add: readonly string[]; remove: readonly string[] }): Promise<{ unknown: string[] }>;
   /** Drop entries of designs that are gone (one write, only when something changed; never over a damaged file). */
   prune(): Promise<void>;
   /** Stop listening; settles once queued writes have finished. */
@@ -247,9 +508,9 @@ export const createFoldersService = (deps: FoldersDeps): FoldersService => {
     return run;
   };
 
-  const liveDesigns = async (): Promise<Map<string, IsoDate>> => {
+  const liveDesigns = async (): Promise<Map<string, LiveDesign>> => {
     const designs = await store.list();
-    return new Map(designs.map((design) => [design.slug, design.created]));
+    return new Map(designs.map((design) => [design.slug, { created: design.created, projectDirectory: design.projectDirectory }]));
   };
 
   const readRegistry = async (root: string): Promise<RegistryRead> => {
@@ -276,7 +537,7 @@ export const createFoldersService = (deps: FoldersDeps): FoldersService => {
       throw error;
     }
     if (size > FOLDERS_FILE_MAX_BYTES) return { kind: 'damaged' };
-    const registry = parseFoldersRegistry(await readFile(file, 'utf8'));
+    const registry = parseFoldersRegistry(await readFile(file, 'utf8'), root);
     return registry === null ? { kind: 'damaged' } : { kind: 'ok', registry };
   };
 
@@ -293,9 +554,12 @@ export const createFoldersService = (deps: FoldersDeps): FoldersService => {
   };
 
   const writeRegistry = async (root: string, registry: FoldersRegistry): Promise<void> => {
+    const text = `${JSON.stringify(registry, null, 2)}\n`;
+    // A file past the read cap would read back as damaged: refuse the write instead (§13).
+    if (Buffer.byteLength(text, 'utf8') > FOLDERS_FILE_MAX_BYTES) throw new ApiError('conflict', FOLDERS_FILE_FULL);
     await chamberDir(root);
     const file = await resolvePlainTarget(root, FOLDERS_FILE_SEGMENTS, { allowAbsent: true });
-    await writeFileAtomic(file, `${JSON.stringify(registry, null, 2)}\n`, { createDirs: false });
+    await writeFileAtomic(file, text, { createDirs: false });
     hub.emit({ slug: null, kind: 'folders' });
   };
 
@@ -307,17 +571,28 @@ export const createFoldersService = (deps: FoldersDeps): FoldersService => {
     log.warn('folders.damaged-set-aside', { file: path.basename(aside) });
   };
 
-  /** A user action: read (setting a damaged file aside), clean, apply, write with rev + 1. */
-  const mutate = <T>(apply: (registry: FoldersRegistry, live: LiveDesigns, at: Date) => { registry: FoldersRegistry; result: T }): Promise<T> => {
+  /**
+   * Read (a user action sets a damaged file aside; `onDamaged: 'refuse'` throws
+   * `FoldersDamagedError` and leaves it), clean, apply, write with rev + 1. `apply` may answer
+   * `write: false` to leave the file exactly as it is (no rev bump, no event).
+   */
+  const mutate = <T>(
+    apply: (registry: FoldersRegistry, live: LiveDesigns, at: Date, root: string) => { registry: FoldersRegistry; result: T; write?: boolean },
+    options: { onDamaged: 'set-aside' | 'refuse' } = { onDamaged: 'set-aside' },
+  ): Promise<T> => {
     const root = settings.root();
     return queued(root, async () => {
       const read = await readRegistry(root);
-      if (read.kind === 'damaged') await setAside(root);
-      const base: FoldersRegistry = read.kind === 'ok' ? read.registry : { v: 1, rev: 0, folders: [] };
+      if (read.kind === 'damaged') {
+        if (options.onDamaged === 'refuse') throw new FoldersDamagedError();
+        await setAside(root);
+      }
+      const base: FoldersRegistry = read.kind === 'ok' ? read.registry : { v: 1, rev: 0, folders: [], projects: [] };
       const live = await liveDesigns();
       const at = now();
       const cleaned = cleanRegistry(base, live, at.getTime()).registry;
-      const { registry, result } = apply(cleaned, live, at);
+      const { registry, result, write } = apply(cleaned, live, at, root);
+      if (write === false) return result;
       await writeRegistry(root, { ...registry, rev: base.rev + 1 });
       return result;
     });
@@ -387,9 +662,10 @@ export const createFoldersService = (deps: FoldersDeps): FoldersService => {
       return mutate((registry, live, at) => {
         const existing = registry.folders.find((folder) => folder.id === id);
         if (existing === undefined) throw new ApiError('not-found', FOLDER_GONE);
-        const count = folderView(existing, live).slugs.length;
-        if (existing.deleted !== null) return { registry, result: count };
-        return { registry: replace(registry, { ...existing, deleted: at.toISOString() }), result: count };
+        // Counted on the queue, in the write that deletes, so the notice reports what happened (AD-6).
+        const result = { designs: folderView(existing, live).slugs.length, onlyHere: onlyHereCount(registry, existing, live) };
+        if (existing.deleted !== null) return { registry, result };
+        return { registry: replace(registry, { ...existing, deleted: at.toISOString() }), result };
       });
     },
 
@@ -411,6 +687,52 @@ export const createFoldersService = (deps: FoldersDeps): FoldersService => {
         const folder = applyMembership(findLive(registry, id), change, live);
         return { registry: replace(registry, folder), result: folderView(folder, live) };
       });
+    },
+
+    changeMany(changes, options) {
+      return mutate((registry, live, _at, root) => {
+        const applied = applyChanges(registry, changes, live, { atomic: options.atomic, root });
+        const failed = applied.results.filter((result) => !result.ok).length;
+        log.info('folders.memberships', { changes: changes.length, failed, atomic: options.atomic });
+        // Every change failed: the registry is unchanged, so nothing is written (no rev bump, no event).
+        const write = failed < applied.results.length;
+        return { registry: applied.registry, write, result: { results: applied.results, list: listView({ kind: 'ok', registry: applied.registry }, live) } };
+      });
+    },
+
+    changeByName(slug, request) {
+      return mutate(
+        (registry, live, _at, root) => {
+          const byName = (name: string): FolderRecord | undefined => {
+            let wanted: string;
+            try {
+              wanted = normalizeFolderName(name);
+            } catch {
+              return undefined;
+            }
+            return registry.folders.find((folder) => folder.deleted === null && sameName(folder.name, wanted));
+          };
+          const unknown: string[] = [];
+          const changes: MembershipChangeInput[] = [];
+          for (const name of request.add) {
+            const folder = byName(name);
+            if (folder === undefined) unknown.push(name);
+            else changes.push({ target: { kind: 'folder', id: folder.id }, add: [slug], remove: [] });
+          }
+          // An unknown name to remove is already true (the design is in no such folder): nothing to report.
+          for (const name of request.remove) {
+            const folder = byName(name);
+            if (folder !== undefined) changes.push({ target: { kind: 'folder', id: folder.id }, add: [], remove: [slug] });
+          }
+          if (changes.length === 0) return { registry, write: false, result: { unknown } };
+          // Best effort: a full folder is skipped (counted in the log), the others still land.
+          const applied = applyChanges(registry, changes, live, { atomic: false, root });
+          const failed = applied.results.filter((result) => !result.ok).length;
+          if (failed > 0) log.warn('folders.request-partly-applied', { changes: changes.length, failed });
+          return { registry: applied.registry, write: failed < changes.length, result: { unknown } };
+        },
+        { onDamaged: 'refuse' },
+      );
     },
 
     prune,

@@ -3,6 +3,8 @@
 // and the `onCreate` hook that writes `<design>/.chamber/RULES.md`. Revision and offline prompts
 // list the remote URLs the viewer blocks, taken from the bundler's static scan of the design's
 // files on disk; a design frame never supplies them (documentation/specs/agent-guidance-and-pages.md §3.6).
+// `POST /chip` also files the new design into the folders and projects the New dialog picked
+// (Phase 2.6 §5.3), best effort, after it is made; filing never changes the chip or RULES.md.
 
 import { lstat, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -17,13 +19,31 @@ import { buildChecksPrompt, buildContinuePrompt, buildOfflinePrompt, buildRevisi
 import { buildRulesDoc } from '../../shared/agent/rules-doc.ts';
 import { buildDesignRestylePrompt, buildDesignSystemUpdatePrompt } from '../../shared/agent/system-prompts.ts';
 import { normalizeExternalUrl, sortFindings } from '../../shared/checks.ts';
-import type { AskElement, ChipResponse, FromMessageResponse, OkResponse, OpenIntent, OpenRequest, OpenRequestResponse, PromptBody, PromptResponse, RenderMeta, RenderQuery, SystemOpenTarget } from '../../shared/api.ts';
+import type {
+  AskElement,
+  ChipResponse,
+  FromMessageResponse,
+  MembershipResult,
+  MembershipTarget,
+  OkResponse,
+  OpenIntent,
+  OpenRequest,
+  OpenRequestResponse,
+  PromptBody,
+  PromptResponse,
+  RenderMeta,
+  RenderQuery,
+  SystemOpenTarget,
+} from '../../shared/api.ts';
 import {
   ASK_TEXT_MAX,
   BRIEF_MAX,
   COMMENT_ID_PATTERN,
   COMMENTS_MAX,
   DISCOVERY_TIME_MAX_MS,
+  FILING_PROJECTS_MAX,
+  FOLDERS_MAX,
+  MEMBERSHIP_CHANGES_MAX,
   OPEN_REQUEST_TTL_MS,
   PAGE_FILL_VIEWPORT_ID,
   PRESET_ID_PATTERN,
@@ -50,6 +70,7 @@ import type { DesignRecord, ServiceContext } from '../context.ts';
 import { ensureChecksService } from '../check/service.ts';
 import { ensureLauncherService } from '../check/launcher.ts';
 import { discoverProjectRules, withDeadline } from '../discovery.ts';
+import { ensureFoldersService } from '../folders.ts';
 import { readTokensFile } from '../edits/ops-tokens.ts';
 import { ensureEditService } from '../edits/pipeline.ts';
 import { ApiError, type Router } from '../http.ts';
@@ -92,7 +113,35 @@ const chipSystemOf = (value: unknown): string | null => {
   throw new ApiError('bad-request', 'That is not a design system choice. Pick a design system, No design system or Ask me in chat.');
 };
 
-const parseChipBody = (body: unknown): { kind: DesignKind; brief: string; preset: string | null; projectDirectory: string | null; system: string | null } => {
+const FILING_UNREADABLE = "Design Chamber couldn't read the folders to file this design in. Nothing was made.";
+
+/**
+ * Phase 2.6 §3.2, §5.3: the New dialog's filing pick, checked before anything is made (a bad
+ * shape is the dialog's bug, not a filing failure). Ids and directories are only shape-checked
+ * here; an unknown id or an unusable folder answers that target's own result after creation.
+ */
+export const parseChipFiling = (value: unknown): MembershipTarget[] | null => {
+  if (value === undefined || value === null) return null;
+  if (!isRec(value)) throw new ApiError('bad-request', FILING_UNREADABLE);
+  const list = (key: 'folders' | 'projects', max: number, itemMax: number): string[] => {
+    const items = value[key];
+    if (items === undefined || items === null) return [];
+    if (!Array.isArray(items) || items.length > max || !items.every((item) => typeof item === 'string' && item.length >= 1 && item.length <= itemMax)) {
+      throw new ApiError('bad-request', FILING_UNREADABLE);
+    }
+    return items;
+  };
+  const folders = list('folders', FOLDERS_MAX, 64);
+  const projects = list('projects', FILING_PROJECTS_MAX, PROJECT_DIRECTORY_MAX);
+  if (folders.length + projects.length > MEMBERSHIP_CHANGES_MAX) throw new ApiError('bad-request', FILING_UNREADABLE);
+  return [...folders.map((id): MembershipTarget => ({ kind: 'folder', id })), ...projects.map((directory): MembershipTarget => ({ kind: 'project', directory }))];
+};
+
+export const FILING_FAILED_MESSAGE = "Folders couldn't be updated. Try again.";
+
+const parseChipBody = (
+  body: unknown,
+): { kind: DesignKind; brief: string; preset: string | null; projectDirectory: string | null; system: string | null; filing: MembershipTarget[] | null } => {
   const record = bodyOf(body, 'the new design');
   const { kind } = record;
   if (kind !== 'canvas' && kind !== 'page') throw new ApiError('bad-request', 'Say whether the design is a "canvas" or a "page".');
@@ -104,7 +153,7 @@ const parseChipBody = (body: unknown): { kind: DesignKind; brief: string; preset
   if (preset !== null && !PRESET_ID_PATTERN.test(preset)) throw new ApiError('bad-request', 'That is not a style preset id.');
   // `sessionId` is accepted but deliberately not stored: the user may never send the chip (§10.1).
   optionalText(record, 'sessionId', SESSION_ID_MAX, 'chat id');
-  return { kind, brief, preset, projectDirectory: projectDirectoryOf(record.projectDirectory), system: chipSystemOf(record.system) };
+  return { kind, brief, preset, projectDirectory: projectDirectoryOf(record.projectDirectory), system: chipSystemOf(record.system), filing: parseChipFiling(record.filing) };
 };
 
 const ANCHOR_STATES: ReadonlySet<unknown> = new Set<AnchorState>(['exact', 'moved', 'detached']);
@@ -451,6 +500,19 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
     });
   };
 
+  /** Best effort, per target; a registry that can't be written reports every target as failed. */
+  const fileNewDesign = async (slug: string, targets: MembershipTarget[]): Promise<MembershipResult[]> => {
+    if (targets.length === 0) return [];
+    try {
+      return (await ensureFoldersService(ctx).changeMany(targets.map((target) => ({ target, add: [slug], remove: [] })), { atomic: false })).results;
+    } catch (error) {
+      ctx.log.warn('folders.creation-filing-failed', { targets: targets.length, error: error instanceof ApiError ? error.code : 'internal' });
+      // A refusal with its own sentence (a missing root, folders full) says so; anything else is the generic one.
+      const message = error instanceof ApiError ? error.message : FILING_FAILED_MESSAGE;
+      return targets.map((target): MembershipResult => ({ target, ok: false, code: 'invalid', message }));
+    }
+  };
+
   router.on('POST /chip', async ({ body }): Promise<ChipResponse> => {
     const input = parseChipBody(body);
     if (input.preset !== null && (await readPreset(ctx.packageRoot, input.preset)) === null) {
@@ -480,13 +542,17 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
       preset: input.preset,
       projectDirectory: input.projectDirectory,
     });
+    // Phase 2.6 AD-5: filing at creation. Organisation only: it never changes `projectDirectory`,
+    // RULES.md, the system choice or the chip, and a failure never fails the chip.
+    const filing = input.filing === null ? undefined : { results: await fileNewDesign(created.slug, input.filing) };
     await applySystemChoice(created.slug, choice);
     // Re-read: the link wrote the copy and the decision the rules file reads.
     const record = choice.choice === 'none-silent' ? created : await ctx.store.get(created.slug);
     // The chip makes RULES.md mandatory reading, so a failure to write it is a failure of the chip.
     const { context, text } = await instructions.prepare(record);
     await writeRulesFile(record.path, text);
-    return { slug: record.slug, chip: buildChip(context, { slug: record.slug, mode: 'new', folderUrl: pathToFileURL(record.path).href, created: record.state.created }) };
+    const chip = buildChip(context, { slug: record.slug, mode: 'new', folderUrl: pathToFileURL(record.path).href, created: record.state.created });
+    return filing === undefined ? { slug: record.slug, chip } : { slug: record.slug, chip, filing };
   });
 
   router.on('POST /designs/:slug/prompt', async ({ params, body }): Promise<PromptResponse> => {
