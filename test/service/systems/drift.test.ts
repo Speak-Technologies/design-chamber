@@ -161,6 +161,8 @@ test('scan.json caps every list and drops tokens until it fits 2 MiB', () => {
       forAgent: Array.from({ length: 30 }, (_, n) => ({ path: `a${n}/tailwind.config.js`, why: 'Tailwind config: the agent can read its theme.' })),
       refused: 0,
       partial: false,
+      read: 0,
+      missed: { pages: 0, components: 0, codeThemes: 0 },
     },
   };
   const capped = JSON.parse(scanJsonOf(result)) as ScanJson;

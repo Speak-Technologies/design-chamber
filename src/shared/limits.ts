@@ -461,6 +461,27 @@ export const FOLDER_DESIGNS_MAX = 2000;
 /** Undo window for a soft-deleted folder. */
 export const FOLDER_UNDO_MS = 60 * 60_000;
 
+// ---- Phase 2.6: memberships, filing and discovery (§4.3) ----
+
+/** Projects with manual members in the registry. */
+export const PROJECT_ENTRIES_MAX = 100;
+/** Changes per POST /memberships, and targets per chip filing. */
+export const MEMBERSHIP_CHANGES_MAX = 64;
+/** Slugs across one membership batch. */
+export const MEMBERSHIP_SLUGS_TOTAL_MAX = 400;
+/** Project targets in one chip filing. */
+export const FILING_PROJECTS_MAX = 14;
+/** Names per add/remove list of design.json folderRequest. */
+export const FOLDER_REQUEST_NAMES_MAX = 10;
+/** Existing-system candidates computed per scan. */
+export const SYSTEM_CANDIDATES_MAX = 50;
+/** Candidates travelling in ScanSummary. */
+export const SYSTEM_CANDIDATES_SHOWN_MAX = 10;
+/** Paths per kind in LocationView.read and sources.code.existing.read. */
+export const LOCATION_READ_LIST_MAX = 20;
+/** Token colours on a system tile plate. */
+export const SYSTEM_SWATCHES_MAX = 6;
+
 // ---- Phase 2.5: settings pins, board preview and entries ----
 
 export const SYSTEM_PINS_MAX = 50;

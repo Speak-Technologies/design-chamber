@@ -97,6 +97,7 @@ const BUILD_PROBLEM_SENTENCES: Readonly<Record<BuildProblemReason, (f: CheckFind
   'home-changed': (f) => `${systemNameOf(f)} already has files in ${repoNameOf(f)}, so its home can't change. Make a new system to move it.`,
   'ticket-changed': () => 'BUILD.json names another build. Keep the ticket this system started with.',
   'applied-unknown-proposal': (f) => `The agent says it applied a proposal you didn't approve here. Check ${repoNameOf(f)}'s history.`,
+  'existing-outside-project': () => 'The existing system folder is outside the project it was found in; it was ignored.',
 };
 
 /** §5.14's closed proposal problems; the first one's sentence completes the finding. */

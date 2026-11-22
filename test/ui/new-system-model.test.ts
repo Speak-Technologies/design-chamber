@@ -102,6 +102,8 @@ const scan = (over: Partial<ScanSummary> = {}): ScanSummary => ({
   forAgent: [],
   refused: 0,
   partial: false,
+  read: 0,
+  missed: { pages: 0, components: 0, codeThemes: 0 },
   ...over,
 });
 

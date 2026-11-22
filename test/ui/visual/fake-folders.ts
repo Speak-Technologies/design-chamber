@@ -64,7 +64,7 @@ export const createFakeFolders = (deps: { emit: (slug: string | null, kind: Chan
     handlers: {
       'GET /folders': () => {
         if (failing) throw new ServiceError('internal', 'The folders list could not be read.');
-        return { folders: live().map((rec) => view({ ...rec, slugs: rec.slugs.filter((slug) => deps.exists(slug)) })) };
+        return { folders: live().map((rec) => view({ ...rec, slugs: rec.slugs.filter((slug) => deps.exists(slug)) })), projects: [] };
       },
       'POST /folders': ({ body }) => {
         const name = checkName(body.name, null);
@@ -81,9 +81,12 @@ export const createFakeFolders = (deps: { emit: (slug: string | null, kind: Chan
       },
       'DELETE /folders/:folderId': ({ params }) => {
         const rec = find(params.folderId);
+        const liveSlugs = rec.slugs.filter((slug) => deps.exists(slug));
+        const elsewhere = new Set(live().filter((other) => other.id !== rec.id).flatMap((other) => other.slugs));
+        const onlyHere = liveSlugs.filter((slug) => !elsewhere.has(slug)).length;
         rec.deleted = true;
         deps.emit(null, 'folders');
-        return { ok: true, designs: rec.slugs.filter((slug) => deps.exists(slug)).length };
+        return { ok: true, designs: liveSlugs.length, onlyHere };
       },
       'POST /folders/:folderId/undelete': ({ params }) => {
         const rec = recs.find((entry) => entry.id === params.folderId && entry.deleted);

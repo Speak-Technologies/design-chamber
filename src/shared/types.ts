@@ -128,6 +128,11 @@ export type DesignJson = {
    * records an answer; an invalid value is dropped with an `invalid-system-choice` warning.
    */
   systemChoice?: string;
+  /**
+   * The agent's filing request (Phase 2.6 AD-16): folder names to tag or untag, acted on once
+   * by the service. Agent-owned; unknown names warn, never create. Absent on old designs.
+   */
+  folderRequest?: FolderRequest;
   comments: Comment[];
 };
 
@@ -148,7 +153,7 @@ export type ServiceOwnedField =
  * rename; `screens` is shared — the service writes it for the user's screen actions and the
  * agent's later write wins (Phase 2 §5.1).
  */
-export type AgentOwnedField = 'title' | 'updated' | 'viewports' | 'screens' | 'designSystem' | 'tweaks' | 'systemChoice';
+export type AgentOwnedField = 'title' | 'updated' | 'viewports' | 'screens' | 'designSystem' | 'tweaks' | 'systemChoice' | 'folderRequest';
 
 /**
  * `.chamber/state.json` — authoritative service-owned fields [§6.3].
@@ -168,6 +173,10 @@ export type ServiceState = Pick<DesignJson, Exclude<ServiceOwnedField, 'version'
   systemChoiceSeen?: string;
   /** Why the agent's recorded choice could not be acted on. */
   systemChoiceProblem?: SystemChoiceProblem;
+  /** The last design.json `folderRequest` stamp the service acted on (Phase 2.6 AD-16). */
+  folderRequestSeen?: string;
+  /** Folder names in a `folderRequest` that do not exist; never created. */
+  folderRequestProblem?: { unknown: string[] };
 };
 
 /** A `systemChoice` the service could not act on (Phase 2.5 §2.7); `value` is the raw agent text, ≤ 80 chars. */
@@ -812,7 +821,7 @@ export type LandedView = { proposal: string; matches: boolean; differ: string[];
 
 /** The sources line of a system row: what it was made from, and when the code was last read. */
 export type SourceLine = {
-  code: { directory: string; lastScan: IsoDate; partial: boolean } | null;
+  code: { directory: string; lastScan: IsoDate; partial: boolean; project?: string; existing?: { location: string } } | null;
   brand: number;
   description: boolean;
 };
@@ -823,6 +832,9 @@ export type SystemSummary = {
   status: 'draft' | 'ready';
   changesToReview: boolean;
   sources: SourceLine;
+  /** Phase 2.6 AD-14: creation time and up to SYSTEM_SWATCHES_MAX token colours for the tile plate. */
+  created: IsoDate;
+  swatches: string[];
   usedBy: number;
   isDefault: boolean;
   /** Directories the system is pinned for. */
@@ -898,7 +910,8 @@ export type SystemDetail = {
 /** Why a BUILD.json could not be adopted or followed (§5.9's closed list). */
 export type BuildProblemReason =
   | 'unreadable' | 'ticket-unknown' | 'ticket-needed' | 'repo-outside-project' | 'repo-overlap'
-  | 'living-page-exists' | 'code-outside-project' | 'home-changed' | 'ticket-changed' | 'applied-unknown-proposal';
+  | 'living-page-exists' | 'code-outside-project' | 'home-changed' | 'ticket-changed' | 'applied-unknown-proposal'
+  | 'existing-outside-project';
 
 /** `<system>/.chamber/state.json` (schema `design-chamber/system-state@1`, service-owned, §2.5). */
 export type SystemState = {
@@ -915,7 +928,13 @@ export type SystemState = {
   readyFingerprints: Partial<Record<SystemSection, string>> | null;
   sources: {
     /** `forAgent`: the scan's files Design Chamber doesn't run, which the make prompt asks the agent to read (absent in older state). */
-    code: { directory: string; lastScan: IsoDate; partial: boolean; scanned: string[]; forAgent?: { path: string; why: string }[] } | null;
+    code: {
+      directory: string; lastScan: IsoDate; partial: boolean; scanned: string[]; forAgent?: { path: string; why: string }[];
+      /** Phase 2.6 AD-9: the project's realpath when the code source is a location inside it. */
+      project?: string;
+      /** Phase 2.6 AD-9/AD-11: the existing-system location the system was made from or registered against. */
+      existing?: { location: string; marks: CandidateMark[]; read: { page: string[]; docs: string[]; components: string[] } };
+    } | null;
     brand: { files: string[] } | null;
     description: { text: string; preset: string | null } | null;
   };
@@ -953,6 +972,8 @@ export type BuildJson = {
   home: 'internal' | 'repo';
   repo: { directory: string; folder: string; livingPage: string } | null;
   code: { directory: string } | null;
+  /** Phase 2.6 AD-11: the existing-system folder the agent found, relative to the project. */
+  existing?: { folder: string } | null;
   mode: 'fix' | 'describe' | 'none';
   dark: boolean;
   calls: { topic: string; choice: string; note: string }[];
@@ -1022,6 +1043,17 @@ export type FolderRecord = {
   /** Membership is by slug AND the design's created time. */
   designs: { slug: string; created: IsoDate }[];
 };
+
+// ---- Phase 2.6: folder requests, project members, discovery marks (§2) ----
+
+/** The agent's filing request in design.json (AD-16); names, never ids; ≤ FOLDER_REQUEST_NAMES_MAX each. */
+export type FolderRequest = { add?: string[]; remove?: string[]; at?: IsoDate };
+
+/** A project's manual members in the registry (AD-1); derived membership is never stored. */
+export type ProjectMembersRecord = { directory: string; designs: { slug: string; created: IsoDate }[] };
+
+/** What marks a folder as an existing design system (AD-7); re-exported by api.ts. */
+export type CandidateMark = 'page' | 'tokens' | 'docs' | 'theme' | 'components' | 'contract';
 
 // ---- Phase 2.5: secret shapes and the SystemAsk block (rev 3) ----
 

@@ -24,6 +24,8 @@ import { registerDesignsRoutes } from './routes/designs.ts';
 import { registerEditRoutes } from './routes/edits.ts';
 import { registerExportRoutes } from './routes/export.ts';
 import { registerFoldersRoutes } from './routes/folders.ts';
+import { registerMembershipsRoutes } from './routes/memberships.ts';
+import { registerSystemRegisterRoutes } from './routes/system-register.ts';
 import { ensureFoldersService } from './folders.ts';
 import { registerMentionsRoutes } from './routes/mentions.ts';
 import { registerOutboxRoutes } from './routes/outbox.ts';
@@ -257,6 +259,9 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   registerDesignSystemRoutes(router, ctx);
   registerFoldersRoutes(router, ctx);
   registerSystemBuildRoutes(router, ctx);
+  // Phase 2.6 T0 stubs (§4.7): F1 and E1 replace these registrations in their own files.
+  registerMembershipsRoutes(router, ctx);
+  registerSystemRegisterRoutes(router, ctx);
 
   let disposed = false;
   return {

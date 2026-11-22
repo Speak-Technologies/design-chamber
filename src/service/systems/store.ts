@@ -570,6 +570,9 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     status: detail.status,
     changesToReview: detail.changesToReview,
     sources: detail.sources,
+    created: detail.created,
+    // T0 placeholder; E1 fills the tile swatches (AD-14).
+    swatches: [],
     usedBy: detail.usedBy,
     isDefault: detail.isDefault,
     pinnedFor: detail.pinnedFor,
@@ -594,6 +597,9 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
       status: state.status,
       changesToReview: false,
       sources: { code: null, brand: 0, description: false },
+      created: state.created,
+      // T0 placeholder; E1 fills the tile swatches (AD-14).
+      swatches: [],
       usedBy: 0,
       isDefault: false,
       pinnedFor: [],

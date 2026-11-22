@@ -17,6 +17,8 @@ import {
   COMMENTS_MAX,
   DESIGN_JSON_VERSION,
   DIRECTION_NAME_MAX,
+  FOLDER_NAME_MAX,
+  FOLDER_REQUEST_NAMES_MAX,
   PRESET_ID_PATTERN,
   PROJECT_DIRECTORY_MAX,
   SCREEN_DESCRIPTION_MAX,
@@ -56,6 +58,7 @@ import type {
   DesignWarning,
   DirectionLetter,
   DirectionMark,
+  FolderRequest,
   IsoDate,
   JsonObject,
   JsonValue,
@@ -86,12 +89,12 @@ export const defaultViewports = (kind: DesignKind): Viewport[] =>
 export const SERVICE_OWNED_FIELDS: readonly ServiceOwnedField[] = [
   'version', 'kind', 'created', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry', 'comments',
 ];
-export const AGENT_OWNED_FIELDS: readonly AgentOwnedField[] = ['title', 'updated', 'viewports', 'screens', 'designSystem', 'tweaks', 'systemChoice'];
+export const AGENT_OWNED_FIELDS: readonly AgentOwnedField[] = ['title', 'updated', 'viewports', 'screens', 'designSystem', 'tweaks', 'systemChoice', 'folderRequest'];
 
-/** Canonical key order for files the service creates. `systemChoice` (Phase 2.5 §2.7) follows `tweaks`. */
+/** Canonical key order for files the service creates. `systemChoice` (Phase 2.5 §2.7) follows `tweaks`; `folderRequest` (Phase 2.6 AD-16) follows it. */
 const CANONICAL_ORDER: readonly (keyof DesignJson)[] = [
   'version', 'kind', 'title', 'created', 'updated', 'brief', 'sessionId', 'projectDirectory', 'preset', 'entry',
-  'viewports', 'screens', 'designSystem', 'tweaks', 'systemChoice', 'comments',
+  'viewports', 'screens', 'designSystem', 'tweaks', 'systemChoice', 'folderRequest', 'comments',
 ];
 const KNOWN_FIELDS: ReadonlySet<string> = new Set<string>(CANONICAL_ORDER);
 const COMMENT_STATUSES: readonly CommentStatus[] = ['open', 'sent', 'resolved'];
@@ -523,6 +526,48 @@ const parseSystemChoice = (raw: Rec, warnings: Warnings): string | null => {
   return null;
 };
 
+/**
+ * The agent's filing request (Phase 2.6 AD-16): folder names to tag or untag, never ids. Names
+ * are NFKC-normalised and trimmed; a wrong shape, an empty request, an over-long list or a name
+ * in both lists is dropped with `invalid-folder-request`. Acting on it is the service's job
+ * (folder-requests.ts); parsing never creates anything.
+ */
+const parseFolderRequest = (raw: Rec, warnings: Warnings): FolderRequest | null => {
+  if (!has(raw, 'folderRequest')) return null;
+  const bad = (): null => {
+    warnings.add('invalid-folder-request', 'folderRequest', 'folderRequest must list folder names to add or remove; it was ignored.');
+    return null;
+  };
+  const value = raw.folderRequest;
+  if (!isRec(value)) return bad();
+  const names = (key: 'add' | 'remove'): string[] | null => {
+    const list = value[key];
+    if (list === undefined || list === null) return [];
+    if (!Array.isArray(list) || list.length > FOLDER_REQUEST_NAMES_MAX) return null;
+    const out: string[] = [];
+    for (const entry of list) {
+      if (typeof entry !== 'string') return null;
+      const name = entry.normalize('NFKC').trim();
+      const control = [...name].some((ch) => ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127);
+      if (name.length < 1 || name.length > FOLDER_NAME_MAX || control) return null;
+      out.push(name);
+    }
+    return out;
+  };
+  const add = names('add');
+  const remove = names('remove');
+  if (add === null || remove === null) return bad();
+  if (add.length === 0 && remove.length === 0) return bad();
+  if (add.some((name) => remove.includes(name))) return bad();
+  const at = value.at;
+  if (at !== undefined && at !== null && (typeof at !== 'string' || at.length > 40)) return bad();
+  return {
+    ...(add.length > 0 ? { add } : {}),
+    ...(remove.length > 0 ? { remove } : {}),
+    ...(typeof at === 'string' ? { at } : {}),
+  };
+};
+
 // ---- normalise ----
 
 export type NormalizeOptions = {
@@ -611,6 +656,7 @@ export const normalizeDesign = (raw: unknown, options: NormalizeOptions): Normal
 
   const tweaks = parseTweaks(record, warnings);
   const systemChoice = parseSystemChoice(record, warnings);
+  const folderRequest = parseFolderRequest(record, warnings);
   const comments = parseComments(record, warnings);
 
   const extra: JsonObject = Object.fromEntries(
@@ -636,6 +682,7 @@ export const normalizeDesign = (raw: unknown, options: NormalizeOptions): Normal
       tweaks,
       // Absent stays absent, so a design without the key normalises exactly as before.
       ...(systemChoice !== null ? { systemChoice } : {}),
+      ...(folderRequest !== null ? { folderRequest } : {}),
       comments,
     },
     extra,
@@ -700,6 +747,17 @@ export const normalizeServiceState = (raw: unknown): ServiceState | null => {
   if (isRec(problem) && typeof problem.value === 'string' && SYSTEM_CHOICE_PROBLEM_REASONS.some((reason) => reason === problem.reason)) {
     // Safe: `reason` was just matched against the closed list.
     state.systemChoiceProblem = { value: problem.value.slice(0, SYSTEM_CHOICE_VALUE_MAX), reason: problem.reason as SystemChoiceProblem['reason'] };
+  }
+  // Phase 2.6 AD-16: the filing stamp and its unknown-name problem; an unusable value is dropped.
+  if (typeof raw.folderRequestSeen === 'string' && /^[0-9a-f]{64}$/.test(raw.folderRequestSeen)) {
+    state.folderRequestSeen = raw.folderRequestSeen;
+  }
+  const filingProblem = raw.folderRequestProblem;
+  if (isRec(filingProblem) && Array.isArray(filingProblem.unknown)) {
+    const unknown = filingProblem.unknown
+      .filter((name): name is string => typeof name === 'string' && name.length >= 1 && name.length <= FOLDER_NAME_MAX)
+      .slice(0, FOLDER_REQUEST_NAMES_MAX);
+    if (unknown.length > 0) state.folderRequestProblem = { unknown };
   }
   return state;
 };

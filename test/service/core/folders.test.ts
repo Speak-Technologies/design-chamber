@@ -218,7 +218,7 @@ describe('folders: service', () => {
     const { core, folders, file } = await rig(t);
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, '{ not json');
-    assert.deepEqual(await folders.list(), { folders: [], damaged: true });
+    assert.deepEqual(await folders.list(), { folders: [], projects: [], damaged: true });
     await folders.prune();
     assert.equal(await readFile(file, 'utf8'), '{ not json');
 
@@ -257,7 +257,7 @@ describe('folders: service', () => {
     await mkdir(rootB);
     await core.ctx.settings.update({ root: rootB });
 
-    assert.deepEqual(await folders.list(), { folders: [] });
+    assert.deepEqual(await folders.list(), { folders: [], projects: [] });
     await folders.create('In B');
     assert.equal(await readFile(oldFile, 'utf8'), before);
     assert.deepEqual((await onDisk(path.join(rootB, '.chamber', 'folders.json'))).folders.map((entry) => entry.name), ['In B']);
@@ -275,7 +275,7 @@ describe('folders: service', () => {
       return;
     }
     await rm(gone, { recursive: true, force: true });
-    assert.deepEqual(await folders.list(), { folders: [] });
+    assert.deepEqual(await folders.list(), { folders: [], projects: [] });
     await assert.rejects(folders.create('X'), { code: 'bad-path' });
     await assert.rejects(readdir(gone), { code: 'ENOENT' });
   });
@@ -378,7 +378,7 @@ describe('folders: routes', () => {
     const renamed = (await (await server.request(`/folders/${id}`, { method: 'PATCH', body: { name: 'Q4' } })).json()) as FolderResponse;
     assert.equal(renamed.folder.name, 'Q4');
     const deleted = (await (await server.request(`/folders/${id}`, { method: 'DELETE' })).json()) as DeleteFolderResponse;
-    assert.deepEqual(deleted, { ok: true, designs: 1 });
+    assert.deepEqual(deleted, { ok: true, designs: 1, onlyHere: 1 });
     assert.deepEqual(((await (await server.request('/folders')).json()) as FolderListResponse).folders, []);
     const back = await server.request(`/folders/${id}/undelete`, { method: 'POST', body: {} });
     assert.equal(back.status, 200);

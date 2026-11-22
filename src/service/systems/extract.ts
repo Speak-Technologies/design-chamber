@@ -318,6 +318,9 @@ export const runScan = async (input: ScanInput): Promise<ScanResult> => {
       forAgent: forAgent.slice(0, FOR_AGENT_MAX),
       refused,
       partial,
+      // T0 placeholder; E1 fills the real found-vs-missed counts (AD-12).
+      read: scanned.length,
+      missed: { pages: 0, components: 0, codeThemes: 0 },
     },
   };
 };
@@ -493,6 +496,9 @@ export const createScanJobs = (ctx: ServiceContext, options: ScanJobsOptions = {
         forAgent: [],
         refused: read?.refused ?? 0,
         partial: false,
+        // T0 placeholder; E1 fills the real found-vs-missed counts (AD-12).
+        read: 0,
+        missed: { pages: 0, components: 0, codeThemes: 0 },
       },
     };
     finish(job, 'done', '');

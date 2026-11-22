@@ -129,9 +129,10 @@ export const folderView = (folder: FolderRecord, live: LiveDesigns): FolderView 
 
 /** The list answer: deleted folders hidden, members filtered against the live designs. */
 export const listView = (read: RegistryRead, live: LiveDesigns): FolderListResponse => {
-  if (read.kind === 'damaged') return { folders: [], damaged: true };
-  if (read.kind === 'absent') return { folders: [] };
-  return { folders: read.registry.folders.filter((folder) => folder.deleted === null).map((folder) => folderView(folder, live)) };
+  // T0 placeholder; F1 answers the registry's manual project members (AD-1).
+  if (read.kind === 'damaged') return { folders: [], projects: [], damaged: true };
+  if (read.kind === 'absent') return { folders: [], projects: [] };
+  return { folders: read.registry.folders.filter((folder) => folder.deleted === null).map((folder) => folderView(folder, live)), projects: [] };
 };
 
 /**

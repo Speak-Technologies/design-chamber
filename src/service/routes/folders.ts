@@ -38,7 +38,12 @@ export function registerFoldersRoutes(router: Router, ctx: ServiceContext): void
 
   router.on('DELETE /folders/:folderId', async ({ params }): Promise<DeleteFolderResponse> => {
     const id = assertFolderId(params.folderId);
-    return { ok: true, designs: await folders().remove(id) };
+    // AD-6: how many of the folder's designs lose their LAST folder (the confirm names this count).
+    const before = await folders().list();
+    const mine = before.folders.find((folder) => folder.id === id)?.slugs ?? [];
+    const elsewhere = new Set(before.folders.filter((folder) => folder.id !== id).flatMap((folder) => folder.slugs));
+    const onlyHere = mine.filter((slug) => !elsewhere.has(slug)).length;
+    return { ok: true, designs: await folders().remove(id), onlyHere };
   });
 
   router.on('POST /folders/:folderId/undelete', async ({ params }): Promise<FolderResponse> => {

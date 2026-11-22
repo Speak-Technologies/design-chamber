@@ -56,6 +56,8 @@ const blank = (over: Partial<SystemSummary> & Pick<SystemSummary, 'id' | 'name'>
   status: 'draft',
   changesToReview: false,
   sources: none,
+  created: '2026-01-01T00:00:00Z',
+  swatches: [],
   usedBy: 0,
   isDefault: false,
   pinnedFor: [],
@@ -132,6 +134,8 @@ export const sampleScan = (directory: string): ScanSummary => ({
   ],
   refused: 1,
   partial: false,
+  read: 0,
+  missed: { pages: 0, components: 0, codeThemes: 0 },
 });
 
 const EMPTY_SCAN = (directory: string): ScanSummary => ({
@@ -143,6 +147,8 @@ const EMPTY_SCAN = (directory: string): ScanSummary => ({
   forAgent: [],
   refused: 0,
   partial: false,
+  read: 0,
+  missed: { pages: 0, components: 0, codeThemes: 0 },
 });
 
 /** What a re-read of the project finds against a filled-in system: two modes of a colour, a conflict, new and gone tokens, new files. */
