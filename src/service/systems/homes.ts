@@ -599,20 +599,29 @@ export const createHomes = (deps: HomesDeps): Homes => {
     return run;
   };
 
+  /** Bumped on each root change, so a pass started for the old root never lists or queues. */
+  let generation = 0;
+
   /** Once per system at start (and after a root change), after the watcher's baseline. */
   const initial = async (): Promise<void> => {
+    const mine = generation;
+    // The watcher replaces its baseline promise right after it emits `root`: read it a turn later,
+    // or the pass would run against the old root's (already settled) baseline.
+    await Promise.resolve();
     await deps.ready?.();
-    if (stopped) return;
+    if (stopped || mine !== generation) return;
     const rows = await systems.list().catch((error: unknown) => {
       log.warn('systems.homes.start-failed', { error: errorText(error) });
       return [];
     });
+    if (stopped || mine !== generation) return;
     for (const row of rows) if (row.unreadable === null) void enqueue(row.id, () => reconcile(row.id));
   };
 
   const unsubscribe = hub.subscribe((event) => {
     if (stopped) return;
     if (event.kind === 'root') {
+      generation += 1;
       void initial();
       return;
     }

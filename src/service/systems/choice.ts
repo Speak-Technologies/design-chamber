@@ -10,6 +10,8 @@
 //   unknown/Draft → `systemChoiceProblem` (`unknown` / `draft`), shown as a design warning;
 //   a refusal     → its reason (`being-changed` retries once after the quiet period, then stays).
 // One chain per design, so two quick writes of `systemChoice` are acted on in order, once each.
+// A choice written while the service was down, or sitting in a designs folder the user switches to,
+// is acted on by one sweep after the watcher's baseline (the same rule as `folder-requests.ts`).
 
 import { SYSTEM_CHOICE_VALUE_MAX, SYSTEM_QUIET_MS } from '../../shared/limits.ts';
 import type { ServiceState, SystemChoiceProblem } from '../../shared/types.ts';
@@ -23,12 +25,17 @@ export type ChoiceReconcilerDeps = {
   link?: LinkService;
   /** Wait before the one retry of a being-changed refusal; `SYSTEM_QUIET_MS` outside tests. */
   retryMs?: number;
+  /**
+   * The watcher's current baseline (`() => watcher.ready`). Given: every design is swept once after it
+   * settles, and again after each root change. Absent (unit tests): only events drive the reconciler.
+   */
+  ready?: () => Promise<void>;
 };
 
 export type ChoiceReconciler = {
   /** Act on the design's current `systemChoice` (the hub listener calls this; tests await it). */
   reconcile(slug: string): Promise<void>;
-  /** Resolves when every queued reconcile has finished (tests). */
+  /** Resolves when the current sweep and every queued reconcile have finished (tests, shutdown). */
   idle(): Promise<void>;
   stop(): void;
 };
@@ -42,6 +49,9 @@ export const createChoiceReconciler = (deps: ChoiceReconcilerDeps): ChoiceReconc
   const chains = new Map<string, Promise<void>>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
   let stopped = false;
+  /** Bumped on each root change, so a sweep of the old folder stops queueing. */
+  let generation = 0;
+  let sweeping: Promise<void> = Promise.resolve();
 
   // state.json changed but design.json did not, so no watcher event tells the guests. `comments`
   // makes the guest store refetch the list and the open design; no reconciler acts on it and the
@@ -157,16 +167,54 @@ export const createChoiceReconciler = (deps: ChoiceReconcilerDeps): ChoiceReconc
     return run;
   };
 
+  /**
+   * Once after the baseline and after each root change: a choice written while the service was down
+   * (or in the folder just switched to) is acted on now. One design at a time on the per-design
+   * chains; `reconcile` reads each and acts only where `systemChoice` differs from the seen one.
+   */
+  const sweep = async (ready: () => Promise<void>): Promise<void> => {
+    const mine = generation;
+    // The watcher replaces its baseline promise right after it emits `root`: read it a turn later.
+    await Promise.resolve();
+    await ready();
+    if (stopped || mine !== generation) return;
+    let designs: { slug: string }[];
+    try {
+      designs = await ctx.store.list();
+    } catch (error) {
+      ctx.log.warn('systems.choice-sweep-failed', { error: messageOf(error) });
+      return;
+    }
+    for (const { slug } of designs) {
+      if (stopped || mine !== generation) return;
+      await enqueue(slug, () => reconcile(slug));
+    }
+  };
+
+  const startSweep = (): void => {
+    const ready = deps.ready;
+    if (ready === undefined) return;
+    sweeping = sweep(ready).catch((error: unknown) => ctx.log.warn('systems.choice-sweep-failed', { error: messageOf(error) }));
+  };
+
   const unsubscribe = ctx.hub.subscribe((event) => {
-    if (stopped || event.slug === null || event.origin === 'user') return;
+    if (stopped) return;
+    if (event.kind === 'root') {
+      generation += 1;
+      startSweep();
+      return;
+    }
+    if (event.slug === null || event.origin === 'user') return;
     if (event.kind !== 'design' && event.kind !== 'added') return;
     const slug = event.slug;
     void enqueue(slug, () => reconcile(slug));
   });
+  startSweep();
 
   return {
     reconcile: (slug) => enqueue(slug, () => reconcile(slug)),
     async idle() {
+      await sweeping;
       while (chains.size > 0) await Promise.all([...chains.values()]);
     },
     stop() {
@@ -178,8 +226,14 @@ export const createChoiceReconciler = (deps: ChoiceReconcilerDeps): ChoiceReconc
   };
 };
 
-/** Subscribes to design events; returns the unsubscribe. */
-export const startChoiceReconciler = (ctx: ServiceContext): (() => void) => {
-  const reconciler = createChoiceReconciler({ ctx });
-  return () => reconciler.stop();
+/**
+ * Subscribes to design events now (the watcher's baseline seed emits none) and sweeps every design
+ * once `ready` settles. Returns the stop, which waits for the queued reconciles.
+ */
+export const startChoiceReconciler = (ctx: ServiceContext, ready?: () => Promise<void>): (() => Promise<void>) => {
+  const reconciler = createChoiceReconciler({ ctx, ...(ready !== undefined ? { ready } : {}) });
+  return async () => {
+    reconciler.stop();
+    await reconciler.idle();
+  };
 };
