@@ -1,4 +1,4 @@
-# Ask when unsure — protocol
+# Ask when unsure: protocol
 
 Asking is cheap; redesigning the wrong thing is not. But questions you could have answered by reading are noise. Order: **read, then ask, then build.**
 
@@ -28,14 +28,14 @@ Never ask more than **one round** before the first screen exists. Put questions,
 ## 3. How to ask
 
 - 3–6 short numbered questions, in ONE message. Fewer is better; ask only what changes the design.
-- Each gets a **bold recommended default** and a few words of why: `2. Tone? **Calm and editorial** — fits a long-reading product.`
+- Each gets a **bold recommended default** and a few words of why: `2. Tone? **Calm and editorial**: fits a long-reading product.`
 - Questions worth asking, in order of value: devices/viewports, audience + primary task, tone/feel, key screens/flow, real content & brand assets, look source (project / preset / new), number of directions.
 - Multiple-choice beats open-ended. Name the options.
 - End with exactly: **"Reply with changes, or say *go* to accept the defaults."**
 - After the answer: write down what was agreed in `DESIGN.md` (and viewports in `design.json`), then build.
 - Open questions that remain after building: at most one, at the end of your reply.
 
-## 4. Viewports — always settle them
+## 4. Viewports: always settle them
 
 1. **Derive from the project first**: breakpoints in `tailwind.config.*`, `@media`/container queries, `sm:/md:/lg:` usage, viewport meta, "mobile app"/"desktop-only" statements in AGENTS.md/CLAUDE.md. Say what you found: "Project is mobile-first with `sm 640 · md 768 · lg 1024`".
 2. If they make it clear (e.g. an admin console that is desktop-only, a mobile app), use that and state it as an assumption; no question needed.
@@ -54,11 +54,11 @@ After the user picks, build the key screen of each chosen direction as sibling s
 ```
 Found: <2–4 lines citing project files, or "no project context">.
 
-1. <question> **<recommended default>** — <why>
-2. Viewports? **Laptop 1280×800 + Phone 390×844** — <why/what the project says>
+1. <question> **<recommended default>**: <why>
+2. Viewports? **Laptop 1280×800 + Phone 390×844**: <why/what the project says>
 3. …
 
-Directions (if open): **A · Name** — idea · palette · type · move  /  B · … 
+Directions (if open): **A · Name**: idea · palette · type · move  /  B · … 
 
 Reply with changes, or say *go* to accept the defaults.
 ```
