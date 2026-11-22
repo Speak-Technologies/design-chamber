@@ -4,7 +4,7 @@ Status: v1 spec, 2026-10-26; updated 2026-11-01 for agent guidance and pages (§
 "Agent guidance and pages") and 2026-11-08 for Phase 0 and Phase 1 as built (§14, audit entry
 "Phase 0 and Phase 1") and 2026-11-10 for Phase 1.5 as built (§14, audit entry "Phase 1.5") and
 2026-11-12 for Phase 2 as built (§14, audit entry "Phase 2") and 2026-11-20 for Phase 2.5 (§14,
-entry "Phase 2.5").
+entry "Phase 2.5") and 2026-11-22 for Phase 2.6 (§14, entry "Phase 2.6").
 Authority for architecture, contracts and lanes (see `AGENTS.md`).
 Product decisions live in `docs/BRIEF.md` and are not re-decided here. Every platform claim
 cites OpenChamber source at commit `0056bf6a9` (`~/Documents/GitHub/openchamber`, "OC:" below)
@@ -35,6 +35,16 @@ Phase 2.5)" and "Building systems like Claude". Text marked **Phase 2.5** summar
 `feat/phase-2-5`; P25 holds the field-level detail (schemas, sentences, caps, edge cases) and is not repeated
 here. **The service never writes a project repository.** A repo changes only by the user's own chat agent,
 after the user approves a reviewed diff in the system's chat (§9.19, §16.3).
+
+**2026-11-22: Phase 2.6 (library and systems).** Technical design:
+`documentation/specs/phase-2-6-technical.md` ("P26" below, with its section numbers and decisions AD-1 to
+AD-17; its §20 owner sign-off overrules its §19); requirements `documentation/specs/phase-2-6-library-and-systems.md`
+(S1 to S8 under its §9.9 owner answers). Text marked **Phase 2.6** summarises the architecture committed on
+`feat/phase-2-6-library` (T0 `b31370d`, F1 `23ed18d` + `2ce2374`, E1 `d499738` + `2f542c0`, G1 `f4337a3` +
+`239440d`, QA fixes `e36f4fc`, `e6ed725`, `ecf17e4`, rules `5e81ea4`, F2 `dcb0563`, the warnings band `a9e8a5d`,
+E2 `1a75890`). The library view (L1a, L1b) is **landing**: where a detail below is marked "landing with
+L1a/L1b" it is P26's design, not yet committed code. P26 holds the field-level detail. Manual project filing
+and folders organise only: **nothing here changes a design's rules, pinned system or files on disk.**
 
 ---
 
@@ -543,6 +553,13 @@ in `CANONICAL_ORDER`; anything else is dropped with `invalid-system-choice`. It 
 the agent asked which system to use; the service acts on it (§9.19 choice reconciler) and never writes it.
 Old designs have no key and read as before.
 
+**Phase 2.6 field** (agent-owned, P26 §2.2, AD-16): `"folderRequest": { "add"?: [names], "remove"?: [names],
+"at"?: ISO }`, folder **names** (≤ `FOLDER_REQUEST_NAMES_MAX` 10 per list, NFKC + trim, 1..`FOLDER_NAME_MAX`, no
+control character, `at` ≤ 40), placed after `systemChoice` in `CANONICAL_ORDER` and in `AGENT_OWNED_FIELDS`. A
+wrong type, an empty request or a name in both lists drops the key with `invalid-folder-request`. The agent
+writes it only when the user asks; the service acts on it (§9.21) and never writes it. Old designs have no key
+and parse byte-identically.
+
 `Comment`:
 ```jsonc
 { "id": "c_8f3k2", "screen": "home" | null /*page*/, "viewport": "laptop" | "fill" /*page Full width view*/,
@@ -605,6 +622,11 @@ comments from one screen id to another (keep a direction) through the normal sta
 `systemChoice` value acted on, so an old agent value never undoes the user's choice) and
 `systemChoiceProblem?` (`unknown`, `draft`, `being-changed`, `too-large`, `failed`; shown as a warning and the
 check finding `system-choice`). P1 to P5 never adopt them.
+**Phase 2.6 state fields** (same rules): `folderRequestSeen?` (sha256 hex of the normalised request's canonical
+JSON, recorded **before** acting) and `folderRequestProblem?: { unknown: string[]; waiting?: true }`. They become
+the design warnings `folder-request-unknown` ("The agent asked to add this design to Q4, but there's no folder with
+that name.") and `folder-request-waiting` ("Folders couldn't load, so the agent's request wasn't applied."),
+shown in the viewer's warnings band (§13.7).
 
 ### 6.4 `.versions/`
 ```
@@ -739,6 +761,21 @@ written by `POST /systems/chip`: the chat's project folder and session. `<ticket
 skill text with this chat's details, so an agent without the skill has the whole protocol. A ticket is consumed
 by the one `BUILD.json` adoption that names it.
 
+**Phase 2.6 additions** (P26 §2.3; every field optional, older state reads as before):
+- `sources.code` gains `project?` (the project's realpath when the code source is a location inside it) and
+  `existing?: { location, marks, read: { page, docs, components } }` (project-relative, ≤ 20 paths each). A system
+  made from a location records the location's realpath as `sources.code.directory`, so re-sync reads the same
+  place. `SourceLine.code` carries `project?` and `existing?: { location }`.
+- **Registered systems** ("Register it as it is", §9.22): `home.kind = "repo"`, `sources.code: null`, **no
+  `state.build`**, and a first snapshot recorded `by: "user"`. They are not "being built": Stop and pick-up are
+  refused; re-sync, the living-page request and delete work as for any repo home.
+- `BUILD.json` gains `existing?: { folder } | null` (project-relative, `REPO_REL_PATTERN` or `"."`). A folder
+  outside the ticket's project, or one refused by shape (absolute, `..`, wrong type), is **ignored with the
+  `existing-outside-project` build problem and the build is still adopted** (P26 §19.5).
+- `.chamber/scan.json` gains `candidates` (≤ 10) for the builder's round two.
+- `SystemSummary` gains `created` and `swatches` (≤ `SYSTEM_SWATCHES_MAX` 6 light colour values, brand group
+  first, each passing the colour check, never a `var()`).
+
 ### 6.8 A design's copy of its system, Phase 2.5 (`<design>/system/`; P25 §2.6)
 Copy-on-link (AD-5): linking a design copies the system into `<design>/system/`, so a design renders, exports
 and versions without reaching back to `_systems` or a repo. `planCopy` (pure) produces `tokens.css` (byte copy),
@@ -762,6 +799,27 @@ designs: [{ slug, created }] }] }`, ≤ 50 folders, ≤ 2 000 designs each, ≤ 
 the design's `created`, so a later design reusing a slug is not a member. Delete is soft with Undo for 1 h. One
 write queue per root; a damaged file reads as empty with `damaged: true` and is renamed aside on the next user
 action, never silently replaced. A root change never moves the file.
+
+**Phase 2.6: manual project members** (P26 §2.1, AD-1). The same file gains a top-level `projects: [{ directory,
+designs: [{ slug, created }] }]` beside `folders`; schema stays `v: 1` (additive key, so 0.4.0 still reads the
+file). A project's id **is its directory string**, compared with `sameDirectory`; the stored spelling is the first
+one written, trailing separators trimmed. ≤ `PROJECT_ENTRIES_MAX` (100) entries, members ≤ `FOLDER_DESIGNS_MAX`.
+- **Organisation only.** A manual member is shown under that project in the library. The **derived** project
+  (`design.json` `projectDirectory`) is unchanged and is still the only input to the design's rules, RULES.md, the
+  chip, the pinned system and the per-project instructions (§16.4). A design is never written as a manual member
+  of its own derived project (a quiet no-op), and the clean step drops a manual entry that has become derived.
+  Nothing moves on disk.
+- **Strict parse.** Every entry must pass the directory rules (string, ≤ `PROJECT_DIRECTORY_MAX`, absolute in
+  either flavour, no NUL or control character, not the designs root or inside it, checked lexically with no
+  stat); two `sameDirectory` entries or any invalid entry → the whole file is damaged (the existing all-or-nothing
+  rule). Directories are stored strings, never opened or stat'ed.
+- **Lazy migration.** No rewrite on read: a 0.4.0 file parses unchanged and answers `projects: []`; the first
+  write adds the key and bumps `rev`. Downgrade: an older build drops `projects` on its next write (manual
+  members lost, folders kept; known issue, P26 R-3).
+- **Clean step** also drops dead project members (slug + created) and empty project entries.
+- **Size.** The 1 MiB cap is checked on the serialised bytes at write time (`FOLDERS_FILE_MAX_BYTES`); a write
+  over it is refused with "Folders are full. Take some designs out of folders, then try again." A batch that
+  changes nothing writes nothing (no `rev` bump, no event).
 
 ---
 
@@ -898,6 +956,28 @@ takes `system` instead of `slug`; `ChipData` gains `{ system }` and `{ build: ti
 kinds `system` (with `system` id and `systemChange`: `added`, `removed`, `files`, `state`, `versions`,
 `checks`, `build`, `living-page`, `proposal`) and `folders`; existing listeners ignore both. A design's
 `system/…` file changes travel as normal `files` events.
+
+**Phase 2.6 routes** (P26 §3; typed in `src/shared/api.ts`, owner `'P26'` in `ROUTE_OWNERS`; 2 routes, **90 →
+92**, P25 stays 38 and the other 52 unchanged, asserted in `test/shared/api.test.ts`). Same bearer check, body
+cap, error shape and handler budget. **No body carries a path into the designs root**; the only outside paths are
+project directories (stored strings, never opened) and a location inside a project (validated, read-only).
+
+| Method & path | Request | Response | Module |
+|---|---|---|---|
+| `POST /memberships` | `{ changes: [{ target: { kind:"folder", id } \| { kind:"project", directory }, add?, remove? }] (1..`MEMBERSHIP_CHANGES_MAX` 64), atomic?: boolean }`; ≤ 200 slugs per list, ≤ `MEMBERSHIP_SLUGS_TOTAL_MAX` 400 per batch; a slug in both lists of one change → 400 | `{ results: MembershipResult[], list: FolderListResponse }`. One queued registry write, one `folders` event. `atomic: true` (Move and its Undo): the first failure answers 404 (`gone`) / 409 (`full`) / 400 (`invalid`) with its sentence and **nothing is written**. Best effort (picker ticks, filing retry): each change answers `ok` or `{ ok:false, code:"gone"\|"full"\|"invalid", message }`; unknown slugs are skipped (set semantics) | `routes/memberships.ts`, `folders.ts` `changeMany` |
+| `POST /systems/register` | `{ scanId, name }` (exactly those keys) | `CreateSystemResponse { id, system }`; 404 scan gone; 409 running, another root, not a system folder, "That folder changed since Design Chamber read it.", no living-page place, overlap (names the other system), name taken; nothing half-made is kept (§9.22) | `routes/system-register.ts`, `systems/register.ts` |
+
+**Changed bodies and answers** (P26 §3.2): `GET /folders` answers `projects: [{ directory, slugs }]` (live members,
+`[]` when damaged or absent); `DELETE /folders/:folderId` answers `onlyHere` (live members in no other live
+folder, counted on the queue in the same write that soft-deletes); `POST /chip` takes `filing?: { folders?: ids
+(≤ 50), projects?: directories (≤ `FILING_PROJECTS_MAX` 14) }` (≤ 64 targets) and answers `filing?: { results }`
+only when asked (§9.21; **a filing failure never fails the chip**); `POST /system-scans` takes `location?` (≤
+4 096; with it `directory` is the project and required; `systemId` + `location` → 400 "A re-sync reads the
+system's own folder."); `GET /system-scans/:scanId` `ScanSummary` gains `read` (files actually opened),
+`missed: { pages, components, codeThemes }`, `candidates?` / `candidatesMore?` (project scans) and `location?:
+LocationView` (location scans: `path`, `marks`, `read` lists, `contract`); `GET /systems` summaries gain `created`
+and `swatches`. **No new `GET /changes` kind**: the reconcilers announce a warning change with the existing
+`comments` kind (§9.21).
 
 `DesignSummary.pending` = no entry/screen file exists yet. Thumbnail `key` = sha256 of the render
 inputs; the guest caches thumbnails by key in memory.
@@ -1681,7 +1761,8 @@ Every write goes through `systems.dir(id)` + `resolvePlainTarget` or the root's 
 - **The agent's choice** (`choice.ts`): on a non-user `design` event, a new `systemChoice` is recorded as seen
   first (so a failure never loops), then `none` unlinks and a Ready id links with `by: "agent"`; an unknown id,
   a Draft or a refusal becomes `systemChoiceProblem`. The viewer offers Undo of an agent switch (restores
-  `before`).
+  `before`). **Phase 2.6:** also swept at start and on a root change, and announces warning changes with a
+  `comments` event (§9.21).
 - **Folders** (`src/service/folders.ts`): §6.9; prunes members on `removed`, emits `folders`.
 - **Per-project instructions** (`src/service/instructions.ts`, the pin sync in `startInstructions`,
   `desiredPinTexts`): for each pin whose
@@ -1762,6 +1843,95 @@ ticket file) · `SYSTEM_PROPOSAL_MAX_BYTES` 512 KiB, 200 files, patches 20 000 e
 `SYSTEM_STOP_UNDO_MS` 10 min · `LIVING_PAGE_MAX_BYTES` 20 MB, `LIVING_PAGE_ASSET_MAX_BYTES` 4 MB · example
 PNGs 720 px at 2×, height ≤ 1 200, ≤ 1 MiB, 5 s each, 60 s per batch, ≤ 800 cached · `TOKEN_PREVIEW_VARS_MAX`
 512.
+
+### 9.21 Folders, projects and the agent's filing, Phase 2.6 (`src/service/folders.ts`, `folder-requests.ts`, `routes/{memberships,chat}.ts`; P26 §5.1 to §5.4)
+- **Registry** (`folders.ts`): §6.9. `LiveDesigns` carries `{ created, projectDirectory }` per slug. Pure
+  `applyChanges(registry, changes, live, { atomic, root })` applies a batch to folders (`gone`, `full`) and
+  projects (directory rules → `invalid`; entry found by `sameDirectory` or created on add; the derived-project
+  skip; a new entry past 100 → `full`); in atomic mode the first failure throws an `ApiError` so `mutate` writes
+  nothing. `FoldersService` gains `changeMany` (the route) and `changeByName` (the reconciler: names matched to
+  live folders by `normalizeFolderName`, ignoring case; **never creates**; refuses a damaged file instead of
+  setting it aside), and `remove` answers `{ designs, onlyHere }` from the same queued write. Logs carry ids,
+  counts and codes, never folder names or project paths.
+- **Filing at creation** (`POST /chip`, AD-5): `filing` is shape-checked in `parseChipBody` before anything is
+  made (a bad shape is the dialog's bug → 400). After `ctx.store.create` and before the system choice, the route
+  files the new slug with one best-effort `changeMany`; a thrown registry error becomes per-target `invalid`
+  results ("Folders couldn't be updated. Try again."). Filing never changes `projectDirectory`, RULES.md, the
+  system choice or the chip text (a test compares bytes with an unfiled chip). The guest shows each failed target
+  as a notice with **Try again** (a best-effort `POST /memberships` of the failed targets); Start is never blocked.
+  `/design` and `/page` send no filing.
+- **The agent's filing request** (`folder-requests.ts`, AD-16; wired in `compose.ts` after the watcher baseline).
+  Agents have no token and cannot call routes, so `design.json` `folderRequest` is their only filing path. On a
+  `design` / `added` event, per slug on the design's lock:
+  1. no request, or its stamp equals `folderRequestSeen` → nothing (idempotent across restarts and echoes);
+  2. record `folderRequestSeen` **first** (a failure never loops), then `changeByName`;
+  3. unknown names → `folderRequestProblem.unknown` (warning); a clean request clears the problem;
+  4. **damaged registry**: never set aside here (only a user action may); the stamp is put back, the problem is
+     `waiting: true` (a visible warning), and the request is retried on the next design event **or the next
+     registry write** (the user's folder action that repairs it);
+  5. never creates, renames or deletes a folder, never touches `projects`, never builds a path from a name.
+- **Sweeps.** A request written while the service was down, or in a designs folder the user switches to, is
+  picked up by one sweep after the watcher's baseline and after each root change. The same sweep now runs for
+  `systemChoice` (`systems/choice.ts`: acts only where the value differs from `systemChoiceSeen`, per-design
+  chains, a root change stops an old sweep, stop waits for queued work), and `systems/homes.ts` waits for the
+  new root's baseline before its pass.
+- **Event-kind reuse.** Each change to a design's warning (folder request or system choice) is announced with a
+  `comments` event **after** the state.json write, so the guests refetch the design and the warnings band
+  updates. Nothing in `folder-requests.ts`, `choice.ts` or the versions service acts on `comments`, so the
+  announcement cannot loop, and it never makes a version (state.json is not tracked).
+
+### 9.22 Existing design systems, Phase 2.6 (`src/service/systems/{candidates,scan-folder,extract,register,homes,drift,edits,store,snapshot}.ts`; P26 §5.5 to §5.11)
+- **Discovery** (`candidates.ts`, AD-7): `findSystemCandidates` is **pure and path-only over the scan's own
+  walk** (secret names already dropped, links never listed, `node_modules` / build output / dot folders never
+  walked) and the tokens the scan already extracted. **No fs, no network**: no second walker, no extra file
+  opened (QA holds this with an import allow-list and an fs/fetch spy). A folder qualifies by the contract
+  (`system.json` + `tokens.css` directly in it), a design-system page, a system-named folder
+  (`design-system`, `style-guide`, `ui-kit`), `DESIGN.md` / `design-system*.md`, or docs and tokens together; a
+  lone token file or generic doc does not. Ranked contract 4, page 3, system folder 2, docs+tokens 1; `strong` =
+  rank ≥ 2 (drives the sheet's nudge); ≤ 50 computed, ≤ 10 travel with `candidatesMore`; a candidate already made
+  into a system (`samePath` its repo folder or code directory) carries `registered`. `missedCounts` (pages,
+  components and themes written in code that the scan does not parse) and `locationView` are exported beside it.
+- **`validateLocation`** (`scan-folder.ts`, AD-8): the single new resolver. Trim, ≤ 4 096, no control character;
+  a URL (`looksLikeUrl`: a scheme of 2+ letters, so `C:/` is a path; `www.`; `localhost`) and a UNC path from a
+  non-UNC project are refused **before any stat**; relative input resolves against the project's realpath; then
+  `validateScanFolder` (exists, folder, realpath, not a drive root, not the designs root or inside it); then
+  `isInsideOrEqual(projectReal, real)` on realpaths, so a link inside the project that leads out is refused and
+  one that stays inside is followed. Answers `{ real, rel }` (posix `rel`, `''` = the project root).
+  `recheckLocation` runs it again at use ("That folder is gone. Pick another location.").
+- **Location scans** (`extract.ts`): a `make` job rooted at the location with the project scan's walker, caps,
+  secret rules and abort. Every summary counts `read` and `missed`; a project job answers `candidates`; a
+  location job answers `location` with its read lists and **contract verdict** (`contractVerdict`: `system.json`
+  parses as a whole system and `tokens.css` sets ≥ 1 custom property, else `missing` names each gap; `null` with
+  no `system.json`). A complete contract in a registrable folder is read with P25's `readRepoSystem` (same
+  walker, caps, deadline) and the bytes stay on the job **in memory only** until it expires. The project root
+  gets an incomplete verdict (a repo home needs a folder).
+- **Make from a location** (AD-9): `buildSystemSeed` re-checks the location, then seeds as from code and records
+  `sources.code.{project, existing}`. The make prompt names the project (not the folder) in "Don't change
+  anything in <project>", says to start from the system in that folder, lists the files to read first and to
+  reconcile rather than invent a parallel system; over the cap the file lists shrink first (20, then 5, then
+  none). `recommendedSystem` matches `project ?? directory`. A re-sync that re-points the code source outside
+  `project` drops `project` and `existing` (a plain code source now).
+- **Register it as it is** (`register.ts`, AD-10, P25 R-1): `registrationSource(scanId)` (a done location job of
+  this root with a complete contract) → `recheckLocation` (a different `rel` → 409 "That folder changed…") → the
+  living page goes to the first free (`lstat` ENOENT) of `<rel>/index.html`, `<rel>/living-page.html` → the store
+  creates the repo-backed Draft with `verifyRepoHome` run **inside the create lock** against the minted id →
+  `refreshSnapshot(id, { by: "user", read })` writes the first snapshot **from the job's read, re-hashed** against
+  its tree hash (a read tampered after the scan is refused); the repo is never read a second time and never
+  written. No ticket, no `BUILD.json`, no `state.build`, no agent request. Any failure after the folder was made
+  moves the half-made system to the trash.
+- **The builder flow** (`homes.ts`, `drift.ts`, AD-11): `BUILD.json` `existing` is resolved with
+  `validateLocation` against the ticket's project at adoption and while following the build; outside, or refused
+  by shape → `existing-outside-project`, ignored, build adopted (§6.7). With no code folder named, the existing
+  folder becomes the code source. The adoption scan fills `existing.read` and writes `candidates` into
+  `scan.json`.
+- **Read-only property** unchanged and re-proved: `repo-readonly.test.ts` also covers a project scan, a location
+  scan, a make from a location, a register, a repo re-sync of the registered system and a `folderRequest`
+  adoption.
+
+### 9.23 Phase 2.6 limits (P26 §4.3)
+`PROJECT_ENTRIES_MAX` 100 · `MEMBERSHIP_CHANGES_MAX` 64 · `MEMBERSHIP_SLUGS_TOTAL_MAX` 400 · `FILING_PROJECTS_MAX`
+14 · `FOLDER_REQUEST_NAMES_MAX` 10 · `SYSTEM_CANDIDATES_MAX` 50 / `SYSTEM_CANDIDATES_SHOWN_MAX` 10 ·
+`LOCATION_READ_LIST_MAX` 20 · `SYSTEM_SWATCHES_MAX` 6 · registry 1 MiB (`FOLDERS_FILE_MAX_BYTES`, service-side).
 
 ---
 
@@ -2003,6 +2173,31 @@ clear the sent entries (§8.2). The rules tell the agent to re-read a file befor
 - **Folders and projects**: the Library sidebar groups designs by project (`projectDirectory`) and by user
   folders (§6.9); add and remove are set operations; delete has Undo.
 
+### 10.17 Library and existing-system flows, Phase 2.6 (P26 §6, §12, §18)
+- **File at creation**: the New dialog's **Folder or project** field (the shared picker, deferred) → `flows.newDesign`
+  → `POST /chip { filing }` → create → best-effort filing → `folders` event → both surfaces reload. A failed
+  target: toast + notice "Couldn't add it to <name>. <reason>" with **Try again**; the design is made either way.
+  Budget ≤ 4 (New ▾ → kind → tick → Start).
+- **Add to folder** (card/row ⋯ and the viewer ⋯): the picker, immediate; each tick is one best-effort `POST
+  /memberships`, reverted with the sentence on failure. Budget ≤ 4.
+- **Move** (in a folder view, or a project view where the design is a manual member): single pick → one
+  **atomic** batch (remove from where it is, add to the target); the notice's **Undo** is the inverse atomic
+  batch; a refusal changes nothing. Picking a target that already holds it says so and sends nothing. Derived
+  members can't leave the project they were made for. Budget ≤ 3 + Undo.
+- **Delete a folder**: a destructive confirm with counts from the folders store ("…<k> of them are in no other
+  folder; they stay in All designs. Deleting a folder never deletes designs.") → `DELETE /folders/:id` → the
+  notice uses the **answer's** `designs` / `onlyHere`, so it reports what happened → Undo as before.
+- **Agent filing**: the user asks in chat → the agent reads `<root>/.chamber/folders.json` (read only) and writes
+  `folderRequest` → §9.21 → `folders` event; problems → warning band.
+- **Existing-system start** (the sheet): tick **Existing design system** → project scan doubles as discovery →
+  pick a candidate or type a folder → location scan → **Register it as it is** (preselected, Recommended, when the
+  contract is complete) or **Make a new system from it**. Register is one `POST /systems/register` with no agent
+  request; the system page opens on its read-only repo panel as a Draft. Make goes through `POST /systems` with
+  the location's scan and then the `make` prompt. Budget ≤ 6. In a `/design-system` chat the agent may start from
+  an existing system itself and record it in `BUILD.json` `existing` (§9.22).
+- **Used-by → library** (landing with L1b): the systems list's "Used by N designs" link closes the systems view
+  and filters the library by that system (scope All, tab All). A design's system chip opens its system (1 step).
+
 ---
 
 ## 11. Agent instruction assembly (WP3, `src/shared/agent/**`, `src/service/discovery.ts`)
@@ -2230,6 +2425,38 @@ guide is rewritten on the next start or folder change).
   project's repo; a system's repo changes only from its own chat, after the user approves a diff.**
 - **Per-project instructions**: §9.19.
 
+### 11.9 Folders, the library and existing systems in the instructions, Phase 2.6 (P26 §7, AD-17)
+Exact text: P26 §7 and `documentation/features/agent-instructions.md`. Plain imperative lines, no em dashes.
+- **Guide** (`guide.ts`): the write-order and agent-owned key lists name `folderRequest`; **Design systems**
+  gains "a project may already have a design system… read its page, docs and components first, and build from
+  what is there"; a new **Folders** section (folders are tags, nothing moves on disk; manual project filing only
+  groups, rules still come from the project a design was made for; add to an **existing** folder by name with
+  `folderRequest`, only when the user asks; read `<root>/.chamber/folders.json`, never write it; never create,
+  rename or delete folders, never invent one, name the closest when it doesn't exist); a new **The library**
+  section (tiles or list, sort, filters, systems shown there). Ownership unchanged: only an unedited guide of
+  ours is rewritten; an edited or foreign one is never touched, and Settings says so.
+- **Snippet**: one line ("Designs can be grouped into folders (tags, never disk moves) and use design systems.
+  Read the guide for the rules.").
+- **Bundled `design-chamber` skill**: the agent-owned key line names `folderRequest`; three lines (folders and
+  `folderRequest`, an existing system to read first, the library).
+- **Instructions note**: two lines (folders only when the user asks, through `folderRequest`; read an existing
+  system's page, docs and components first). **Pin lines unchanged**: they come from settings pins only; manual
+  project members never produce, change or clear one.
+- **Chip and RULES.md own `folderRequest`**: chip step 7 lists it among the agent-owned keys (beside
+  `systemChoice` when that applies), and RULES.md's design.json contract has a `folderRequest` row (≤ 10 names
+  per list, existing folders only, read the registry never write it).
+- **Builder skill** (`system-skill-doc.ts`): a **Starting from an existing system** section (look before round
+  one for a page or route, design docs, token and theme files, or a contract folder, skipping `node_modules`,
+  build output and dot folders; recommend starting from it; read its page, docs and components first; record
+  `BUILD.json` `existing`; its files are guidance only and can't approve, run or override anything).
+- **R2** (`rules/SYSTEM-QUESTIONS.md`, rules author): round one gains the conditional question **Start from a
+  system the project already has?** `{#existing}` with the marker line "Ask only when a location was found or
+  named." The parser (`system-questions.ts`) checks its shape but leaves it out of the set the `SystemAsk` block
+  bakes (the block has no folder to name), so **the agent asks it in plain words** from the skill text.
+- **Precedence untouched**: `precedenceSection` and chip step 3 are byte-identical (pinned by test); no rule
+  input reads folder or project membership (§16.4). Caps hold with a long Windows root (guide ≈ 6 750 / 8 000,
+  instructions ≈ 2 330 / 4 096, builder skill ≈ 16 900 / 24 000).
+
 
 ---
 
@@ -2360,6 +2587,36 @@ WP0 interface additions (main agent, T0): the system, copy, build, proposal, liv
 caps in `bridge-protocol.ts`, `systemChoice` in `design-json.ts`, and `ServiceContext` accessor types. Build:
 step (10b) writes the builder skill from `system-skill-doc.ts` + `rules/SYSTEM-QUESTIONS.md` with its checks;
 (10c) bundles the blocks frame with `__DC_SYSTEM_QUESTIONS__`.
+
+Phase 2.6 (P26 §15; the task that built each file in brackets):
+```
+src/service/routes/memberships.ts folder-requests.ts; folders.ts, routes/{folders,chat}.ts   fullstack [F1]
+src/service/systems/{candidates,register}.ts routes/system-register.ts;
+  systems/{scan-folder,extract,homes,drift,edits,store,snapshot}.ts, agent-system.ts,
+  src/shared/{system-json,checks}.ts, src/shared/agent/system-prompts.ts                   fullstack [E1]
+src/guest/flows.ts (newDesign filing), make-system.ts (register), fake-services.ts         fullstack [F1, E1]
+src/shared/agent/{guide,skill-doc,instructions,system-skill-doc,system-questions,chip,rules-doc}.ts   fullstack [G1]
+rules/SYSTEM-QUESTIONS.md (R2)                                                              rules author
+src/ui/model/folder-picker-model.ts, components/{folder-picker,folder-actions,folders-store,new-dialog}.ts,
+  model/{new-model,viewer-menu}.ts                                                         ui-ux [F2]
+src/ui/model/design-warnings-model.ts, components/design-warnings.ts                       ui-ux [L1c]
+src/ui/model/new-system-model.ts, systems/new-system-sheet.ts                              ui-ux [E2]
+src/ui/model/list-model.ts, components/{design-row,library-empty}.ts, components/icons.ts,
+  page/library-view.ts, rail/list-view.ts                                                  ui-ux [L1a, landing]
+src/ui/systems/{system-tile,system-row}.ts, systems-list.ts, page/library-sidebar.ts,
+  page/page-app.ts, rail/rail-app.ts                                                       ui-ux [L1b, landing]
+test/service/core/folders.test.ts, test/service/{folders-qa-gaps,folder-requests,folder-requests-events,
+  chat-chip-filing,manual-members-isolation}.test.ts,
+  test/service/systems/{candidates,candidates-purity,scan-folder,location-scan,register,repo-readonly}.test.ts,
+  test/ui/{folder-picker-model,folder-actions-model,design-warnings-model,new-system-model}.test.ts
+test/ui/visual/scenarios/{folder-picker,folder-manage,design-warnings,existing-system}.mjs
+  (+ library-views, systems-library with L1a/L1b)
+```
+WP0 interface additions (main agent, T0): the membership, filing, discovery, location and register types in
+`api.ts`, `FolderRequest`, `ProjectMembersRecord`, the state and summary fields in `types.ts`, the nine Phase 2.6
+limits, `folderRequest` in `design-json.ts`, the two routes with owner `'P26'`, and stubs wired in the
+composition root so no builder edited `compose.ts`. `bridge-protocol.ts`, `main.ts` and `http.ts`: unchanged
+(nothing new crosses a frame boundary). Later: `2ce2374` widened the state type for the waiting warning.
 
 Build (`scripts/build.mjs`, esbuild ^0.24, as design-canvas `scripts/build.mjs`): (1) bundle
 `src/guest/bridge/bridge.ts` → IIFE string (`write:false`, minified; the build fails if it is < 1 kB,
@@ -2679,6 +2936,59 @@ the board, never chrome. Detail and copy: P25 §9 and `documentation/`.
 - **Library sidebar** (`page/library-sidebar.ts`): All designs, Projects (by `projectDirectory`, "Folder not
   found" when missing) and Folders (create, rename, delete with Undo, add/remove designs).
 - **SystemAsk block**: §8.1; layout and states P25 §8.12.
+
+### 13.7 Library, folders and existing systems, Phase 2.6 (P26 §6, §20)
+Same kit, host tokens only (surfaces, text, border, accent for pressed/selected, the kit's destructive variant,
+radii and spacing from the kit scale); swatch strips paint system content, never chrome. **The approved canvas
+`Designs/phase-2-6-library-ui` is the visual authority** where P26's prose differs (P26 §20).
+- **Shared folder picker** (`components/folder-picker.ts`, pure `model/folder-picker-model.ts`; F2): one
+  `mountFolderPicker` in `multi` / `single` and `immediate` / `deferred` modes behind Add to folder, the New
+  dialog's **Folder or project** field and Move. Sections **Projects** then **Folders** (canvas order); projects
+  merge the host's `listProjects`, the derived groups and the registry's manual members by `sameDirectory`; the
+  design's derived project shows ticked and locked ("automatic"), manual ones "Added by you"; search past 8
+  targets; inline **New folder…**; loading, empty and error states in which projects still work. Names are
+  `textContent`, truncated with the full text in `title`.
+- **Folder management** (F2): Move (single pick, one atomic batch, Undo), the delete confirm with truthful counts
+  (§10.17), **Add to folder…** in the viewer ⋯ menu, **New folder…** in the sidebar row menu. Filing failures
+  at creation never block Start.
+- **Design warnings band** (`components/design-warnings.ts`, `model/design-warnings-model.ts`; L1c): mounted by
+  `design-view.ts`, so it shows in **both the rail viewer and the page viewer**. It lists the open design's
+  `warnings` as plain sentences (empty and repeated ones dropped), 2 lines then "Show N more", a named region
+  ("2 problems with this design"). It carries the folder-request and system-choice problems; it refreshes on the
+  `comments` event the reconcilers emit (§9.21).
+- **New design system sheet, Existing design system start** (`systems/new-system-sheet.ts`,
+  `model/new-system-model.ts`; E2): four starts (Project code, Brand files, A description, Existing design
+  system; code and existing exclude each other). Three columns at laptop width (what to start from / where the
+  system lives / what Design Chamber read and what should happen), one column at the rail's width. Discovery
+  lists ≤ 10 ranked candidates with marks and counts, **Complete** only on a folder with `system.json`,
+  "Already in Design Chamber as <name>" with **Open**; the location field keeps typed input on every refusal;
+  the read column says found vs missed ("Files read (<read>)", the missed line, what is left for the agent). A
+  complete contract preselects **Register it as it is** (Recommended) beside **Make a new system from it**; the
+  footer primary follows the choice and **Agent works in** is disabled with its reason while registering. The
+  nudge over Project code appears once per sheet session and never blocks Make.
+- **Library view** (**landing with L1a/L1b**; design P26 §6.4, §6.5 as amended by §20):
+  - **Preferences in `host.storage`**, never `settings.json`: `library-view:page` (`tiles` | `list`, default
+    tiles), `list-sort:panel` / `list-sort:page` (`updated` | `created` | `title`, default updated); garbage falls
+    back to the default. Search, kind tab and System filter are session-only.
+  - **Filter order** (pure `libraryItems`): scope → System filter → search → tab counts → tab → sort. One pure
+    empty state names every active filter and offers **Clear filters** (search, tab, system; the scope stays).
+    "No project" means neither a derived nor a manual project. A project scope shows derived ∪ manual members.
+  - **Systems as library items**: a fourth kind tab **Systems** (systems only) on both surfaces; **system tiles
+    also mix into the All tab by the current sort** (the §20 sign-off overrules P26 §19.2); header counts read
+    "24 designs and 4 systems", the All tab count includes systems, sidebar design counts stay designs-only. A
+    system tile: swatch strip (re-checked with `swatchable`, painted through CSSOM), name, Draft/Ready, home
+    line, used-by; opens the system page; ⋯ offers Preview living page when there is one. The rail shows compact
+    system rows.
+  - **System chip** on every design card and row, a sibling of the main button (never nested): opens the system;
+    Draft badge; "(deleted)" muted with a toast on click.
+  - **Page sidebar**: a **Design systems** section under Folders; its heading navigates to the systems list, each
+    row sets the System filter (scope kept).
+  - **Used-by link** on the systems list opens the library filtered by that system (`filterBySystem`).
+  - **Gear**: a new `gear` icon replaces the sliders `settings` glyph on both settings buttons (the old key is
+    removed so a missed use fails typecheck); the page's Settings becomes an icon button named "Settings".
+  - Page **Tiles / List** toggle (List reuses the extracted `components/design-row.ts`); the rail gets a System
+    select and a Sort select, and **New folder…** at the end of its Show select. At 320 px the tab counts move
+    into each tab's accessible name so four tabs fit.
 
 ---
 
@@ -3037,6 +3347,65 @@ test plan §19); requirements `documentation/specs/phase-2-5-design-systems.md`;
 5. **Recovery rule for an unlink** (from the Phase 2.5 code review): `system-removed-*` is always deleted on
    recovery, never restored (§9.19).
 
+### Phase 2.6 (2026-11-22)
+Design: `documentation/specs/phase-2-6-technical.md` (AD-1 to AD-17; work packages §15, test plan §16, owner
+sign-off §20); requirements `documentation/specs/phase-2-6-library-and-systems.md` (§9.9 owner answers). Built on
+`feat/phase-2-6-library`. Sections updated: the header, §6.2, §6.3, §6.7, §6.9, §7, §9.19, §9.21 to §9.23 (new),
+§10.17 (new), §11.9 (new), §12, §13.7 (new), §15.7 (new), §16.4 (new).
+- **Work packages** (P26 §15; lanes per `AGENTS.md`): **T0** contracts and stubs (main agent: types, 92 routes,
+  limits, `folderRequest` parse, stubs wired) → in parallel **F1** registry, `POST /memberships`, chip filing,
+  the folder-request reconciler (fullstack) · **F2** picker, Move, delete confirm, filing UI (ui-ux) · **E1**
+  discovery, `validateLocation`, location scans, make from a location, register, `BUILD.json existing`
+  (fullstack) → **L1a** view model, views, sort, System filter, gear (ui-ux, after F2's menu signature) → **L1b**
+  systems in the library (ui-ux, after L1a and E1's summary types) · **L1c** the design warnings band · **E2** the
+  sheet's Existing start (ui-ux, after E1) → **G1** guidance (fullstack, last) + **R2** (rules author) → QA per
+  group (QA-F, QA-L, QA-E, QA-G). Shared files sequenced by the main agent (P26 §15 table): `list-view.ts` and
+  `library-view.ts` L1a then L1b; `library-sidebar.ts` F2 then L1b; `systems-list.ts` L1b then E2; fakes and
+  `styles.css` in marked blocks. Status at this entry: T0, F1, F2, E1, E2, G1, R2, L1c and the QA fixes
+  committed; **L1a and L1b landing**.
+- **Key decisions held.** Manual project members in the one existing registry, organisation only (AD-1); one
+  batch route (AD-2); one shared picker (AD-4); filing rides on `POST /chip` and never fails it (AD-5); the
+  agent files through `design.json`, existing folders only (AD-16); discovery is a pure function over the scan's
+  walk (AD-7); a location is a second bounded scan with realpath containment (AD-8); Register it as it is is a
+  user click that stands in for a ticket (AD-10).
+
+**Spec-vs-code decisions recorded here** (the code is described above):
+1. **P26 §19.5, resolved by the main agent:** a `BUILD.json` `existing` folder outside the project, or one the
+   parser refuses by shape, is ignored with `existing-outside-project` and the build is still adopted (a hint,
+   not a gate). P26 §5.10's refusal reading is superseded.
+2. **P26 §20 owner sign-off overrules §19.2:** system tiles mix into the All tab by sort; the Systems tab shows
+   systems only; header and All-tab counts include systems, sidebar design counts don't. The sign-off also
+   adopts: Register preselected (Recommended) for a complete Design Chamber-format folder, Complete only with
+   `system.json`, projects in the picker as automatic (locked) or "Added by you". The approved canvas is the
+   visual authority.
+3. **Event-kind reuse, no new kind:** warning changes from the folder-request and system-choice reconcilers are
+   announced as `comments` events after the state write (QA-F, `e6ed725`); nothing acts on `comments` in a way
+   that loops or versions.
+4. **Damaged registry waits visibly** (P26 §5.4 refined, `2ce2374`, `e6ed725`): the problem carries `waiting:
+   true` (its own warning, `folder-request-waiting`) and the request retries on the next registry write as well
+   as the next design event (KI-25 closed).
+5. **Startup and root-change sweeps** for both `folderRequest` and `systemChoice` (KI-26 closed, `ecf17e4`);
+   `homes.ts` waits for the new root's baseline.
+6. **No-op batches write nothing** (`changeMany`, `changeByName`), and the 1 MiB cap is enforced on write with
+   its own sentence.
+7. **Picker order:** Projects then Folders (the canvas), not P26 §6.1's Folders then Projects.
+
+**E1's judgement calls kept** (`d499738`, `e36f4fc`):
+1. The register route lives in its own `routes/system-register.ts` (not `systems.ts`).
+2. `verifyRepoHome` runs **inside the store's create lock** against the minted id, so two registers can't both
+   pass the overlap check.
+3. A half-made registered system is **moved to the trash**, not deleted outright (as `POST /systems` does).
+4. Register re-checks the location and refuses when its `rel` changed ("That folder changed since Design Chamber
+   read it. Read the folder again."), and the snapshot is re-hashed against the job's read, so a read tampered
+   after the scan is refused.
+5. A registrable folder has ≤ 4 segments (room for the living page within `REPO_REL_PATTERN`'s 5) and no
+   `SKIP_DIRS` segment.
+6. A candidate path over 200 characters or holding a control character is **left out**, not truncated (it could
+   not be typed back).
+7. In a system folder a plain `.md` is a doc, not a page; `.mdx` routes are pages.
+8. With `BUILD.json` `existing` and no code folder named, the existing folder becomes the build's code source;
+   swatches skip `var()` values; the make prompt's file lists shrink 20 → 5 → none before any fixed line.
+
 ---
 
 ## 15. Test plan
@@ -3130,6 +3499,32 @@ Uninstall afterwards only if this run installed it.
   skill folder hides a command (`test/build-skill.test.ts`).
 - **Visual and click-through:** the system page (internal and repo), list, sheet, sidebar, the three
   `SystemAsk` states, rail and page, light and dark; `/design-system` end to end in OpenChamber.
+
+### 15.7 Phase 2.6 (P26 §16)
+- **Unit and service, failing test first** for the risk logic: the registry (`projects` parse, strict damage on a
+  duplicate `sameDirectory` or a directory at or inside the designs root, a 0.4.0 file round trip, clean, the
+  derived skip, atomic batches write nothing on a failure, all-failed best effort writes nothing, `onlyHere` with
+  overlapping folders, the 1 MiB cap); the route (caps, shapes, 400/404/409 sentences, bearer and 401);
+  the reconciler (once per stamp, restart idempotent, unknown names warn, never creates, damaged registry not
+  set aside and retried on the next registry write, projects untouched, startup and root-change sweeps, the
+  `comments` announcement makes no version and no loop); chip filing (success, partial, registry unreadable,
+  root changed; chip text and RULES.md bytes equal an unfiled chip); `findSystemCandidates` fixtures (Next.js,
+  Vite, a contract folder, `node_modules/design-system`, a lone `brand.md`) and its purity (import allow-list and
+  an fs/fetch spy); the `validateLocation` matrix (P26 §11); location scans and the contract verdict; register
+  (happy path, every refusal, a tampered read, half-made cleanup, the R-1 audit: not building, Stop refused,
+  re-sync, living page, delete); make prompt lines and cap; `BUILD.json existing` adoption and refusal; the
+  `design.json` `folderRequest` parse; G1 caps with a long Windows root, ownership refresh of an unedited guide
+  only, byte-identical precedence and pin lines, the R2 parse check.
+- **Isolation** (`manual-members-isolation.test.ts`): an import-graph test (no rule module imports `folders.ts`)
+  and a behaviour test (a design made for project A and filed under B keeps A's system, chip, RULES.md and link;
+  B's pin line and the design's bytes are unchanged).
+- **Read-only repo**: `repo-readonly.test.ts` extended (§9.22).
+- **Pure UI models**: `folder-picker-model`, `folder-actions-model`, `design-warnings-model`, `new-system-model`;
+  `list-model` with L1a. QA mutation targets: P26 §16.2.
+- **Visual** (drop-in scenarios, rail 320/480 and page, light and dark): `folder-picker`, `folder-manage`,
+  `design-warnings`, `existing-system`; `library-views` and `systems-library` land with L1a/L1b. Budgets (P26 §18)
+  counted by hand on rail 320 and page.
+- **Platforms**: macOS is not in CI; run `npm run check` there for the path-comparison changes (§16.4).
 
 ---
 
@@ -3276,6 +3671,46 @@ project repo. All are parsed with caps and shown as text.
 - **Data exposure.** Repo paths appear only in the user's own UI, RULES.md, the ticket file and the system's
   chat. The living page carries no absolute path, designs root or token. `scan.json` is never versioned,
   exported, copied into a design or logged. Logs carry ids, reason codes and counts.
+
+### 16.4 Phase 2.6 threat model (P26 §10, §11)
+Untrusted: `design.json` `folderRequest`, `BUILD.json` `existing`, every project file name and path a scan lists,
+system names and swatch values. Trusted: the service (loopback, bearer). The chrome guests hold no token; the
+design and board frames get nothing new (no message added, sandbox, CSP and feed unchanged).
+- **Routes.** `POST /memberships`: bearer; body validated (shape, caps, `FOLDER_ID_PATTERN`, directory rules,
+  slug filter); writes only `<root>/.chamber/folders.json` through `resolvePlainTarget`; no path is built from a
+  folder name or a project directory. `POST /systems/register`: bearer; the scan id must name a done location
+  job of this root; the location is re-validated on realpaths, `verifyRepoHome` re-run inside the create lock;
+  writes only `_systems/<id>/**`; the repo is read only through the job's earlier `readRepoSystem`. `POST
+  /system-scans` with `location`: `validateScanFolder` + `validateLocation`, same walker and caps, no write.
+  `POST /chip` filing: validated before create, writes the registry only.
+- **Manual members never alter rules or pins** (structural and tested, §15.7): the only inputs of
+  `effectiveSystemChoice`, `discovery.ts`, RULES.md, the pin texts and the chip are `projectDirectory`, settings
+  and the systems index.
+- **The agent's reach is bounded by construction.** `folderRequest` can only tag or untag existing folders by
+  name; the reconciler has no create, rename or delete path and never touches projects; projects and pins are
+  never agent targets. Abuse (tagging everything) is visible in counts and undone by untagging.
+- **Read-only discovery.** Path-only over the existing walk; no file opened beyond the scan's own reads; the
+  contract read is P25's. Repo paths are shown with `textContent`, one-lined and capped; candidate paths are
+  re-validated on use.
+- **Crafted locations** (`../..`, a link out, the designs root, a UNC share, a URL): refused by
+  `validateLocation` (URL and UNC before any stat; realpath + `isInsideOrEqual`). Prompt injection through a
+  living page or docs: the make prompt's injection sentence and "write only in the system folder"; any repo
+  write still needs the reviewed-diff gate.
+- **Registry poisoning** (`projects` naming a share): stored strings, never opened or stat'ed. **Hostile system
+  names and swatches**: text only; swatches re-checked with `swatchable` and painted through CSSOM, never markup.
+  **A lying delete confirm**: `onlyHere` comes from the same write that deletes.
+- **Data exposure.** No token, port or secret in a bundle, log, file or frame. Logs carry ids, counts, outcome
+  codes and durations, never folder names, project paths or file paths. The guide and skills carry only the
+  designs root and the `folders.json` path.
+- **Platforms.** Windows: project ids compare with `sameDirectory` (drive letter → case-folded, either slash),
+  realpaths with `samePath` (folded on win32); the location field takes `\` and `/`; `C:/x` and `C:\x` are never
+  read as URLs; the living-page choice uses `lstat` ENOENT, so `Index.html` on a case-insensitive volume counts as
+  taken. macOS: `isInsideOrEqual` folds case on darwin, `sameDirectory` does not (no drive letter), so
+  `/Users/sam/App` and `/Users/sam/app` stay two project ids, as derived groups already behave (P26 R-6; not yet
+  noted in `docs/testing/PLATFORMS.md`); typed locations resolve to the on-disk spelling through realpath. Linux: exact.
+- **Residual risks** (P26 §14): a downgrade to 0.4.0 drops manual project members (R-3); candidate rules may over-
+  or under-match real repos, with the location field always available (R-2); agents that read neither the guide
+  nor the note never write `folderRequest`, and the user can always file in the library (R-5).
 
 ## 17. Owner questions — resolved 2026-10-26 (`docs/BRIEF.md`, "Owner decisions on spec questions")
 
