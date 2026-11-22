@@ -2974,12 +2974,15 @@ radii and spacing from the kit scale); swatch strips paint system content, never
   - **Filter order** (pure `libraryItems`): scope → System filter → search → tab counts → tab → sort. One pure
     empty state names every active filter and offers **Clear filters** (search, tab, system; the scope stays).
     "No project" means neither a derived nor a manual project. A project scope shows derived ∪ manual members.
-  - **Systems as library items**: a fourth kind tab **Systems** (systems only) on both surfaces; **system tiles
-    also mix into the All tab by the current sort** (the §20 sign-off overrules P26 §19.2); header counts read
+  - **Systems as library items**: on the **page**, a fourth kind tab **Systems** (systems only) and **system
+    tiles mixed into the All tab by the current sort** (the §20 sign-off overrules P26 §19.2); header counts read
     "24 designs and 4 systems", the All tab count includes systems, sidebar design counts stay designs-only. A
     system tile: swatch strip (re-checked with `swatchable`, painted through CSSOM), name, Draft/Ready, home
-    line, used-by; opens the system page; ⋯ offers Preview living page when there is one. The rail shows compact
-    system rows.
+    line, used-by; opens the system page; ⋯ offers Preview living page when there is one. On the **rail**, per
+    the owner's 2026-11-22 decision (P26 §20 point 5, `a5e6d9d`), there are **three** kind tabs, All lists and
+    counts **designs only**, and systems are reached through the pinned **"Design systems, N. Show them"** foot
+    entry (no count while the systems list is loading or failed) and the header icon; the entry opens the shared
+    systems list, and Back returns focus to whichever entry was used.
   - **System chip** on every design card and row, a sibling of the main button (never nested): opens the system;
     Draft badge; "(deleted)" muted with a toast on click.
   - **Page sidebar**: a **Design systems** section under Folders; its heading navigates to the systems list, each
@@ -2988,8 +2991,8 @@ radii and spacing from the kit scale); swatch strips paint system content, never
   - **Gear**: a new `gear` icon replaces the sliders `settings` glyph on both settings buttons (the old key is
     removed so a missed use fails typecheck); the page's Settings becomes an icon button named "Settings".
   - Page **Tiles / List** toggle (List reuses the extracted `components/design-row.ts`); the rail gets a System
-    select and a Sort select, and **New folder…** at the end of its Show select. At 320 px the tab counts move
-    into each tab's accessible name so four tabs fit.
+    select and a Sort select, and **New folder…** at the end of its Show select. Below 380 px the tab counts move
+    into each tab's accessible name: four tabs on the page, three on the rail.
 
 ---
 
@@ -3374,9 +3377,9 @@ sign-off §20); requirements `documentation/specs/phase-2-6-library-and-systems.
 1. **P26 §19.5, resolved by the main agent:** a `BUILD.json` `existing` folder outside the project, or one the
    parser refuses by shape, is ignored with `existing-outside-project` and the build is still adopted (a hint,
    not a gate). P26 §5.10's refusal reading is superseded.
-2. **P26 §20 owner sign-off overrules §19.2:** system tiles mix into the All tab by sort; the Systems tab shows
-   systems only; header and All-tab counts include systems, sidebar design counts don't. The sign-off also
-   adopts: Register preselected (Recommended) for a complete Design Chamber-format folder, Complete only with
+2. **P26 §20 owner sign-off overrules §19.2:** on the page, system tiles mix into the All tab by sort; the Systems
+   tab shows systems only; header and All-tab counts include systems, sidebar design counts don't. The sign-off
+   also adopts: Register preselected (Recommended) for a complete Design Chamber-format folder, Complete only with
    `system.json`, projects in the picker as automatic (locked) or "Added by you". The approved canvas is the
    visual authority.
 3. **Event-kind reuse, no new kind:** warning changes from the folder-request and system-choice reconcilers are
@@ -3391,6 +3394,10 @@ sign-off §20); requirements `documentation/specs/phase-2-6-library-and-systems.
 6. **No-op batches write nothing** (`changeMany`, `changeByName`), and the 1 MiB cap is enforced on write with
    its own sentence.
 7. **Picker order:** Projects then Folders (the canvas), not P26 §6.1's Folders then Projects.
+8. **Rail follows the approved canvas (owner, 2026-11-22, `a5e6d9d`):** three kind tabs, designs-only All, no
+   mixed system rows; systems via the pinned foot entry and the header icon; the shared systems-list header is
+   kept rather than the canvas's scoped shell (P26 §20 point 5, `7023464`). The page keeps four tabs and mixed
+   tiles. This supersedes AD-14's "both surfaces" prose for the rail.
 
 **E1's judgement calls kept** (`d499738`, `e36f4fc`):
 1. The register route lives in its own `routes/system-register.ts` (not `systems.ts`).
