@@ -3,6 +3,7 @@
 
 import { mountTextField } from '@openchamber/sdk/ui';
 
+import type { SystemOpenTarget } from '../../shared/api.ts';
 import { HOST_CLIPBOARD_MAX } from '../../shared/limits.ts';
 import type { ExportFormat } from '../../shared/types.ts';
 import { client, flows, host, store } from '../guest.ts';
@@ -18,7 +19,7 @@ export type ActionContext = {
   onRemoved: (slug: string) => void;
   onOpen: (slug: string) => void;
   /** Open one design system's page (the viewer's "Open system"); the viewer closes first. Absent where there is no systems view. */
-  onOpenSystem?: (id: string) => void;
+  onOpenSystem?: (id: string, target?: SystemOpenTarget) => void;
 };
 
 /** Menu shared by list rows, library cards and the viewer's overflow. `open` is hidden where it would be a no-op. */

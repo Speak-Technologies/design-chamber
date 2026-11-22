@@ -23,7 +23,7 @@ export const mountPage = (root: HTMLElement): void => {
   /** The design systems list, while it is the view on screen. */
   let systemsView: SystemsListHandle | null = null;
   /** One design system, open from the list (the list stays behind it, hidden, so Back returns to it). */
-  let systemPage: { id: string; handle: SystemPageHandle } | null = null;
+  let systemPage: { id: string; handle: SystemPageHandle; /** Opened straight from the library (a chip, a tile): Back returns there, not to the systems list. */ fromLibrary: boolean } | null = null;
   /** How a design system build is going, opened by its chip in the chat. */
   let buildView: { ticket: string; handle: BuildChipViewHandle } | null = null;
 
@@ -83,13 +83,13 @@ export const mountPage = (root: HTMLElement): void => {
     onRemoved: (slug) => {
       if (open?.slug === slug) closeDesign();
     },
-    onOpenSystem: (id) => {
+    onOpenSystem: (id, target) => {
       const current = open;
-      if (!current) return openSystem(id);
+      if (!current) return openSystem(id, target);
       void current.handle.beforeLeave().then((leave) => {
         if (!leave || open !== current) return;
         closeDesign();
-        openSystem(id);
+        openSystem(id, target);
       });
     },
   };
@@ -129,27 +129,39 @@ export const mountPage = (root: HTMLElement): void => {
     });
   };
 
-  const closeSystems = (): void => {
+  const closeSystems = (focus: 'button' | 'none' = 'button'): void => {
     systemPage?.handle.dispose();
     systemPage = null;
     systemsView?.dispose();
     systemsView = null;
     library.el.hidden = false;
-    library.focusSystems();
+    if (focus === 'button') library.focusSystems();
   };
   const showSystems = (): void => {
     if (systemsView) return;
     buildView?.handle.dispose();
     buildView = null;
-    systemsView = mountSystemsList({ surface: 'page', actions, onBack: closeSystems, onOpen: (id) => openSystem(id) });
+    systemsView = mountSystemsList({ surface: 'page', actions, onBack: () => closeSystems(), onOpen: (id) => openSystem(id), onShowDesigns: showDesignsOf });
     library.el.hidden = true;
     app.append(systemsView.el);
     systemsView.focus();
   };
 
+  /** A used-by link in the systems list: back to the library, filtered to that system. */
+  const showDesignsOf = (id: string): void => {
+    closeSystems('none');
+    library.filterBySystem(id);
+  };
+
   const closeSystemPage = (): void => {
+    const origin = systemPage;
     systemPage?.handle.dispose();
     systemPage = null;
+    if (origin?.fromLibrary) {
+      closeSystems('none');
+      library.focusSystemEntry(origin.id);
+      return;
+    }
     if (systemsView) {
       systemsView.el.hidden = false;
       systemsView.focus();
@@ -162,11 +174,12 @@ export const mountPage = (root: HTMLElement): void => {
     }
     systemPage?.handle.dispose();
     systemPage = null;
+    const fromLibrary = systemsView === null;
     if (!systemsView) showSystems();
     if (!systemsView) return;
     systemsView.el.hidden = true;
-    const handle = mountSystemPage({ id, surface: 'page', actions, onBack: closeSystemPage });
-    systemPage = { id, handle };
+    const handle = mountSystemPage({ id, surface: 'page', actions, onBack: closeSystemPage, backTo: fromLibrary ? 'library' : undefined });
+    systemPage = { id, handle, fromLibrary };
     app.append(handle.el);
     handle.focus();
     if (target !== 'page') handle.showTarget(target);

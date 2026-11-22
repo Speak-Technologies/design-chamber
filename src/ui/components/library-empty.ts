@@ -10,7 +10,7 @@ import { h } from './dom.ts';
 import { icon } from './icons.ts';
 
 export type LibraryEmptyHandlers = {
-  /** The one action: New canvas, Show all designs or Clear filters, per the model. */
+  /** The one action: New canvas, Show all designs, Clear filters, New design system… or Try again, per the model. */
   onAction: () => void;
   onClearChip: (id: Exclude<EmptyChip['id'], 'scope'>) => void;
 };
@@ -19,6 +19,8 @@ const ACTION_LABEL: Record<LibraryEmpty['action'], string> = {
   new: 'New canvas',
   'show-all': 'Show all designs',
   'clear-filters': 'Clear filters',
+  'new-system': 'New design system…',
+  'retry-systems': 'Try again',
 };
 
 const CLEAR_LABEL: Record<Exclude<EmptyChip['id'], 'scope'>, string> = {
@@ -28,7 +30,7 @@ const CLEAR_LABEL: Record<Exclude<EmptyChip['id'], 'scope'>, string> = {
 };
 
 export const mountLibraryEmpty = (wrap: HTMLElement, model: LibraryEmpty, handlers: LibraryEmptyHandlers): void => {
-  mountEmpty(wrap, { title: model.title, body: model.body, action: { label: ACTION_LABEL[model.action], onClick: handlers.onAction } });
+  mountEmpty(wrap, { title: model.title, body: model.body, action: { label: model.actionLabel ?? ACTION_LABEL[model.action], onClick: handlers.onAction } });
   if (model.chips.length === 0) return;
   const row = h('div', { class: 'dc-empty-filters', role: 'group', 'aria-label': 'Active filters' });
   for (const chip of model.chips) {

@@ -5,14 +5,18 @@ import { sameDirectory } from '../../shared/path-compare.ts';
 import type { DesignKind, DesignSummary, SystemSummary } from '../../shared/types.ts';
 import { plural } from './format.ts';
 
-export type ListTab = 'all' | 'canvas' | 'page';
+export type ListTab = 'all' | 'canvas' | 'page' | 'system';
 export type ListSort = 'updated' | 'created' | 'title';
 
 export const LIST_TABS: ReadonlyArray<{ id: ListTab; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'canvas', label: 'Canvases' },
   { id: 'page', label: 'Pages' },
+  { id: 'system', label: 'Systems' },
 ];
+
+/** The design kinds' counts; the Systems tab is counted by `libraryItems`. */
+export type DesignTabCounts = Record<Exclude<ListTab, 'system'>, number>;
 
 export const LIST_SORTS: ReadonlyArray<{ id: ListSort; label: string }> = [
   { id: 'updated', label: 'Updated' },
@@ -34,7 +38,7 @@ export const filterDesigns = (designs: readonly DesignSummary[], query: string, 
   designs.filter((design) => matchesTab(design, tab) && matchesQuery(design, query));
 
 /** Counts per tab for the current search, so a tab never promises rows the search hides. */
-export const tabCounts = (designs: readonly DesignSummary[], query: string): Record<ListTab, number> => {
+export const tabCounts = (designs: readonly DesignSummary[], query: string): DesignTabCounts => {
   const searched = designs.filter((design) => matchesQuery(design, query));
   return {
     all: searched.length,
@@ -59,6 +63,7 @@ export const kindSummary = (design: DesignSummary): string => {
 /** Plain sentence for the row's accessible name. */
 export const rowAriaLabel = (design: DesignSummary): string => {
   const parts = [design.title, kindSummary(design)];
+  if (design.system) parts.push(design.system.state === 'deleted' ? `uses ${design.system.name}, deleted` : `uses ${design.system.name}`);
   if (design.pending) parts.push('waiting for the agent');
   if (design.openComments > 0) parts.push(plural(design.openComments, 'open comment'));
   if (systemUpdated(design)) parts.push(SYSTEM_UPDATED_LABEL);
@@ -393,7 +398,7 @@ export const libraryDesigns = (
   designsRoot: string,
   filters: LibraryFilters,
   sort: ListSort,
-): { scoped: DesignSummary[]; shown: DesignSummary[]; counts: Record<ListTab, number> } => {
+): { scoped: DesignSummary[]; shown: DesignSummary[]; counts: DesignTabCounts } => {
   const scoped = scopeDesigns(designs, scope, folders, designsRoot);
   const systemed = scoped.filter((design) => matchesSystem(design, filters.system));
   const counts = tabCounts(systemed, filters.query);
@@ -401,14 +406,103 @@ export const libraryDesigns = (
   return { scoped, shown, counts };
 };
 
+// ---- Systems as library items (Phase 2.6 L1b, §6.4, §20) ----
+//
+// A system is a library item next to the designs: it mixes into the All tab by the chosen sort, the
+// Systems tab shows systems only, and the other two tabs show designs only. The System filter keeps
+// only that system (None keeps none) and the system leads the All tab. The All count includes the
+// systems; the sidebar's design counts stay designs-only.
+
+export type LibraryItem = { kind: 'design'; design: DesignSummary } | { kind: 'system'; system: SystemSummary };
+
+const matchesSystemQuery = (system: Pick<SystemSummary, 'id' | 'name'>, query: string): boolean => {
+  const needle = query.trim().toLowerCase();
+  return needle === '' || system.name.toLowerCase().includes(needle) || system.id.toLowerCase().includes(needle);
+};
+
+const matchesSystemFilter = (system: Pick<SystemSummary, 'id'>, filter: SystemFilter): boolean =>
+  filter.kind === 'all' || (filter.kind === 'system' && filter.id === system.id);
+
+const itemKey = (item: LibraryItem, sort: ListSort): number | string => {
+  if (sort === 'title') return item.kind === 'design' ? item.design.title : item.system.name;
+  const stamp = item.kind === 'design' ? item.design[sort === 'created' ? 'created' : 'updated'] : item.system[sort === 'created' ? 'created' : 'updated'];
+  return Date.parse(stamp);
+};
+
+/** Designs and systems in one order: newest first, or A to Z. Equal keys keep the given order (designs come first). */
+export const sortItems = (items: readonly LibraryItem[], sort: ListSort): LibraryItem[] =>
+  items
+    .map((item, index) => ({ item, index, key: itemKey(item, sort) }))
+    .sort((a, b) => {
+      if (typeof a.key === 'string' && typeof b.key === 'string') return a.key.localeCompare(b.key, undefined, { sensitivity: 'base' }) || a.index - b.index;
+      const left = typeof a.key === 'number' && !Number.isNaN(a.key) ? a.key : 0;
+      const right = typeof b.key === 'number' && !Number.isNaN(b.key) ? b.key : 0;
+      return right - left || a.index - b.index;
+    })
+    .map((entry) => entry.item);
+
+export type LibraryContents = {
+  /** Designs in scope, before any filter (the header count and the empty states read it). */
+  scoped: DesignSummary[];
+  /** Systems in scope, before any filter. */
+  scopedSystems: SystemSummary[];
+  /** What the current tab shows, in order: the lead system first under a System filter. */
+  items: LibraryItem[];
+  /** The filtered system, when the tab is All; it leads `items`. */
+  lead: SystemSummary | null;
+  shownDesigns: DesignSummary[];
+  shownSystems: SystemSummary[];
+  counts: Record<ListTab, number>;
+};
+
+/** Scope, then the System filter, then search, then the counts per tab, then the tab, then the sort. */
+export const libraryItems = (input: {
+  designs: readonly DesignSummary[];
+  systems: readonly SystemSummary[];
+  scope: ListScope;
+  folders: readonly FolderLite[];
+  designsRoot: string;
+  filters: LibraryFilters;
+  sort: ListSort;
+}): LibraryContents => {
+  const { filters, sort } = input;
+  const scoped = scopeDesigns(input.designs, input.scope, input.folders, input.designsRoot);
+  const scopedSystems = scopeSystems(input.systems, input.scope);
+  const designCounts = tabCounts(
+    scoped.filter((design) => matchesSystem(design, filters.system)),
+    filters.query,
+  );
+  const systemsFound = scopedSystems.filter((system) => matchesSystemFilter(system, filters.system) && matchesSystemQuery(system, filters.query));
+  const counts: Record<ListTab, number> = { all: designCounts.all + systemsFound.length, canvas: designCounts.canvas, page: designCounts.page, system: systemsFound.length };
+  const shownDesigns = filters.tab === 'system' ? [] : sortDesigns(filterDesigns(scoped.filter((design) => matchesSystem(design, filters.system)), filters.query, filters.tab), sort);
+  const shownSystems = filters.tab === 'all' || filters.tab === 'system' ? systemsFound : [];
+  const lead = filters.tab === 'all' && filters.system.kind === 'system' ? shownSystems[0] ?? null : null;
+  const rest: LibraryItem[] = [
+    ...shownDesigns.map((design): LibraryItem => ({ kind: 'design', design })),
+    ...shownSystems.filter((system) => system !== lead).map((system): LibraryItem => ({ kind: 'system', system })),
+  ];
+  const sorted = sortItems(rest, sort);
+  return {
+    scoped,
+    scopedSystems,
+    items: lead === null ? sorted : [{ kind: 'system', system: lead }, ...sorted],
+    lead,
+    shownDesigns,
+    shownSystems,
+    counts,
+  };
+};
+
 /** One active filter in the empty state's chip row; the scope chip is fixed (Clear filters keeps it). */
 export type EmptyChip = { id: 'scope' | 'search' | 'tab' | 'system'; label: string; fixed: boolean; icon?: 'folder' | 'layers' | 'page' };
 
 export type LibraryEmpty = {
-  kind: 'no-designs' | 'folder-empty' | 'no-matches';
+  kind: 'no-designs' | 'folder-empty' | 'no-matches' | 'no-systems' | 'folder-no-systems' | 'systems-failed';
   title: string;
   body: string;
-  action: 'new' | 'show-all' | 'clear-filters';
+  action: 'new' | 'show-all' | 'clear-filters' | 'new-system' | 'retry-systems';
+  /** Replaces the action's usual label (Show all systems, where the usual one says designs). */
+  actionLabel?: string;
   chips: EmptyChip[];
 };
 
@@ -420,14 +514,23 @@ const systemNameOf = (filter: SystemFilter, systems: readonly Pick<SystemSummary
  * generic noun in the sentence; the chip row names the exact tab. No search and no system: the
  * older "Nothing in … for this tab yet".
  */
-export const noMatchesSentenceFor = (input: { scopeLabel: string | null; query: string; system: SystemFilter; systems: readonly Pick<SystemSummary, 'id' | 'name'>[] }): string => {
+export const noMatchesSentenceFor = (input: { scopeLabel: string | null; query: string; system: SystemFilter; systems: readonly Pick<SystemSummary, 'id' | 'name'>[]; tab?: ListTab }): string => {
   const query = input.query.trim();
   const name = systemNameOf(input.system, input.systems);
   const systemPart = name !== null ? ` with the ${name} system` : input.system.kind === 'none' ? ' with no system' : '';
   const scopePart = input.scopeLabel === null ? '' : ` in ${input.scopeLabel}`;
+  // Only the Systems tab changes the noun; the other tabs keep the generic one (the chip row names the tab).
+  const noun = input.tab === 'system' ? 'systems' : 'designs';
   if (query === '' && systemPart === '') return input.scopeLabel === null ? 'Nothing in this tab yet' : `Nothing in ${input.scopeLabel} for this tab yet`;
-  return `No designs${scopePart}${query === '' ? '' : ` match “${query}”`}${systemPart}.`;
+  return `No ${noun}${scopePart}${query === '' ? '' : ` match “${query}”`}${systemPart}.`;
 };
+
+export const SYSTEMS_FAILED_TITLE = 'Design systems didn’t load';
+export const SYSTEMS_FAILED_BODY = 'Your designs are fine. Try again in a moment.';
+export const NO_SYSTEMS_TITLE = 'No design systems yet';
+export const NO_SYSTEMS_BODY = 'Make one from a project’s code, from brand files, or by describing it. Designs can then start from it.';
+export const FOLDER_NO_SYSTEMS_TITLE = 'Folders hold designs, not systems.';
+export const FOLDER_NO_SYSTEMS_BODY = 'Show all systems to see the ones you have.';
 
 /** Which empty state applies, with its copy and the active filters named. Null when rows show. */
 export const emptyStateOf = (input: {
@@ -438,11 +541,21 @@ export const emptyStateOf = (input: {
   scopeLabel: string | null;
   folderName: string | null;
   filters: LibraryFilters;
+  /** Every system the library knows (the System filter's names and the Systems tab's "none yet"). */
   systems: readonly Pick<SystemSummary, 'id' | 'name'>[];
+  /** What the current tab shows besides designs; omitted where the surface shows designs only. */
+  shownSystems?: readonly unknown[];
+  /** The systems list did not load: the Systems tab says so instead of "none yet". */
+  systemsFailed?: boolean;
   draggable: boolean;
 }): LibraryEmpty | null => {
-  if (input.shown.length > 0) return null;
-  if (input.all.length === 0) {
+  if (input.shown.length + (input.shownSystems?.length ?? 0) > 0) return null;
+  if (input.filters.tab === 'system') {
+    if (input.systemsFailed === true) return { kind: 'systems-failed', title: SYSTEMS_FAILED_TITLE, body: SYSTEMS_FAILED_BODY, action: 'retry-systems', actionLabel: 'Try again', chips: [] };
+    if (input.scope.kind === 'folder') return { kind: 'folder-no-systems', title: FOLDER_NO_SYSTEMS_TITLE, body: FOLDER_NO_SYSTEMS_BODY, action: 'show-all', actionLabel: 'Show all systems', chips: [] };
+    if (input.systems.length === 0) return { kind: 'no-systems', title: NO_SYSTEMS_TITLE, body: NO_SYSTEMS_BODY, action: 'new-system', actionLabel: 'New design system…', chips: [] };
+  }
+  if (input.all.length === 0 && (input.filters.tab !== 'all' || input.systems.length === 0)) {
     return {
       kind: 'no-designs',
       title: 'No designs yet',
@@ -471,7 +584,7 @@ export const emptyStateOf = (input: {
   const lead = trimmed !== '' ? 'Try another word, or clear the filters.' : 'Clear the filters to see what is here.';
   return {
     kind: 'no-matches',
-    title: noMatchesSentenceFor({ scopeLabel: input.scopeLabel, query, system, systems: input.systems }),
+    title: noMatchesSentenceFor({ scopeLabel: input.scopeLabel, query, system, systems: input.systems, tab }),
     body: input.scopeLabel === null ? lead : `${lead} ${input.scopeLabel} stays selected.`,
     action: 'clear-filters',
     chips,

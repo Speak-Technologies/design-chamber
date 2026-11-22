@@ -1,16 +1,17 @@
 // One design row, two layouts (Phase 2.6 L1a, extracted from the rail's rowFor): the rail's
 // thumbnail row and the page List view's column row. Same facts, same ⋯ menu, same drag to a
-// folder; the system chip (L1b) arrives through `chip`, a sibling of the row's main button and
-// never nested in it, so adding it touches this file alone. Names and titles are text, never markup.
+// folder. The system chip (L1b) is a sibling of the row's main button, never nested in it; it names the
+// design's system and opens it. Names and titles are text, never markup.
 
 import { mountBadge } from '@openchamber/sdk/ui';
 
 import type { DesignSummary } from '../../shared/types.ts';
+import { mountSwatchDot } from '../systems/system-plate.ts';
 import { host } from '../guest.ts';
 import { cardProjectLine, kindLabel, kindSummary, rowAriaLabel, SYSTEM_UPDATED_LABEL, systemUpdated, type ListScope, type ProjectGroup } from '../model/list-model.ts';
 import { plural, relativeTime } from '../model/format.ts';
 import { DESIGN_DRAG_TYPE, listDesignMenu, runListAction, type DesignMenuView } from './folder-actions.ts';
-import type { ActionContext } from './actions.ts';
+import { toast, type ActionContext } from './actions.ts';
 import { h } from './dom.ts';
 import { icon } from './icons.ts';
 import { attachMenu, iconBtn } from './kit.ts';
@@ -32,8 +33,42 @@ export type DesignRowOptions = {
   onOpen: (slug: string) => void;
   /** The frame's thumbnail handles, kept across repaints (the caller disposes the gone ones). */
   thumbs: Map<string, ThumbHandle>;
-  /** L1b: the system chip, rendered beside the main button. Null while the design has no system. */
-  chip?: HTMLElement | null;
+  /** The first readable colour of a system, for the chip's dot; null when it has none or is not loaded. */
+  swatchOf?: (systemId: string) => string | null;
+};
+
+export const SYSTEM_DELETED_TOAST = 'This system was deleted. The design keeps its own copy.';
+
+/**
+ * The system chip: a button beside the row's or card's main button. Draft systems carry a Draft mark, a deleted
+ * one reads "<name> (deleted)" and says so when pressed. No system, no chip.
+ */
+export const designSystemChip = (design: Pick<DesignSummary, 'system'>, deps: { actions: ActionContext; swatchOf?: (systemId: string) => string | null }): HTMLElement | null => {
+  const link = design.system ?? null;
+  if (link === null) return null;
+  const deleted = link.state === 'deleted';
+  const draft = link.state === 'draft';
+  const colour = deleted ? null : deps.swatchOf?.(link.id) ?? null;
+  const chip = h(
+    'button',
+    {
+      type: 'button',
+      class: 'dc-design-system-chip',
+      'data-state': deleted ? 'gone' : draft ? 'draft' : 'ok',
+      'data-system-id': link.id,
+      'aria-label': deleted ? `${link.name}, deleted system` : draft ? `Open system ${link.name}, Draft` : `Open system ${link.name}`,
+      title: deleted ? SYSTEM_DELETED_TOAST : draft ? `${link.name} (Draft)` : link.name,
+    },
+    mountSwatchDot(colour, 'dc-design-system-dot'),
+    h('span', { class: 'dc-design-system-name' }, deleted ? `${link.name} (deleted)` : link.name),
+    draft ? h('span', { class: 'dc-design-system-mark' }, 'Draft') : null,
+  );
+  chip.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (deleted) toast('info', SYSTEM_DELETED_TOAST);
+    else deps.actions.onOpenSystem?.(link.id);
+  });
+  return chip;
 };
 
 /** The small status marks a row carries: waiting, system update, open comments, linked chat. */
@@ -61,7 +96,7 @@ export const mountDesignRow = (design: DesignSummary, options: DesignRowOptions)
   const more = iconBtn({ icon: 'more', label: `Actions for ${design.title}`, size: 'sm', onClick: () => undefined });
   const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
   attachMenu(more, () => listDesignMenu(view.menu), (id) => runListAction(id, ref, actions, view.menu));
-  const chip = options.chip ?? null;
+  const chip = designSystemChip(design, { actions, swatchOf: options.swatchOf });
   const pending = design.pending ? 'true' : 'false';
 
   if (variant === 'list') {
@@ -77,7 +112,7 @@ export const mountDesignRow = (design: DesignSummary, options: DesignRowOptions)
       hit,
       h('span', { class: 'dc-row-thumb' }, thumb.el),
       h('span', { class: 'dc-row-name' }, h('span', { class: 'dc-row-title' }, design.title), h('span', { class: 'dc-row-sub' }, kindBadge, flags.childElementCount > 0 ? flags : null)),
-      chip === null ? null : h('span', { class: 'dc-row-system' }, chip),
+      h('span', { class: 'dc-row-system' }, chip),
       h('span', { class: 'dc-row-in' }, project),
       h('span', { class: 'dc-row-when' }, relativeTime(design.updated, Date.now(), locale)),
       more,
@@ -104,5 +139,5 @@ export const mountDesignRow = (design: DesignSummary, options: DesignRowOptions)
     h('span', { class: 'dc-row-text' }, h('span', { class: 'dc-row-title' }, design.title), meta, project, flags.childElementCount > 0 ? flags : null),
   );
   main.addEventListener('click', () => onOpen(design.slug));
-  return h('li', { class: 'dc-row', 'data-pending': pending, 'data-slug': design.slug }, main, more, chip);
+  return h('li', { class: 'dc-row', 'data-pending': pending, 'data-slug': design.slug, 'data-chip': chip === null ? 'false' : 'true' }, main, more, chip === null ? null : h('div', { class: 'dc-row-foot' }, chip));
 };

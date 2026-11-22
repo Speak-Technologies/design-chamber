@@ -70,7 +70,7 @@ const listFlow = async (h, surface, width, theme) => {
   h.check((await text(p, `${row('juniper')} .dc-sys-line`)).includes('Living page out of date'), `${tag}: the living page state shows when it needs a look`);
   const harborMeta = await text(p, `${row('harbor')} .dc-sys-meta`);
   h.check(harborMeta.includes('From brand files') && harborMeta.includes('Used by 2 designs'), `${tag}: the meta line says what it was made from and who uses it`);
-  h.check((await text(p, `${row('acme')} .dc-sys-meta`)).includes('Not used by a design yet'), `${tag}: an unused system says so`);
+  h.check((await text(p, `${row('acme')} .dc-sys-meta`)).includes('Not used yet'), `${tag}: an unused system says so`);
   h.check(await p.guest('return [...doc.querySelectorAll(".dc-sys-line")].every((l) => l.querySelectorAll(".dc-sys-badge").length <= 3)'), `${tag}: never more than the home line and two badges`);
   await p.shot(`${tag}-1-list`);
 
@@ -164,7 +164,7 @@ const statesFlow = async (h, surface, width, theme) => {
   await p.shot(`${tag}-1-loading`);
   await p.close();
 
-  // empty: what goes here and the three ways to start
+  // empty: what goes here and the four ways to start
   p = await h.openPage({ width, height, surface, theme, label: `${tag}-empty`, routes: { 'GET /systems': { status: 200, body: { systems: [], total: 0, max: 50 } } } });
   await h.listReady(p);
   await openList(p, surface);
@@ -172,7 +172,7 @@ const statesFlow = async (h, surface, width, theme) => {
   await p.settle(300);
   const empty = await text(p, '.dc-sys-empty');
   h.check(empty.includes('No design systems yet') && empty.includes('Make one from a project’s code'), `${tag}: the empty list says what goes here`);
-  h.check((await p.guest('return [...doc.querySelectorAll(".dc-sys-empty-actions .oc-sdk-btn")].map((b) => b.textContent.trim()).join("|")')) === 'From code…|From brand files…|Describe…', `${tag}: the three ways to start`);
+  h.check((await p.guest('return [...doc.querySelectorAll(".dc-sys-empty-actions .oc-sdk-btn")].map((b) => b.textContent.trim()).join("|")')) === 'From code…|From brand files…|Describe…|From an existing system…', `${tag}: the four ways to start`);
   h.check(await noOverflow(p), `${tag}: no horizontal overflow`);
   await p.shot(`${tag}-2-empty`);
   const starts = [

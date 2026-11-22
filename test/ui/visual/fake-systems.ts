@@ -82,6 +82,7 @@ export const sampleSystems = (): SystemSummary[] => [
   blank({
     id: 'tidepool',
     name: 'Tidepool',
+    swatches: ['#0f766e', '#134e4a', '#f59e0b', '#ccfbf1', '#f0fdfa'],
     status: 'ready',
     changesToReview: true,
     isDefault: true,
@@ -96,6 +97,7 @@ export const sampleSystems = (): SystemSummary[] => [
   blank({
     id: 'harbor',
     name: 'Harbor',
+    swatches: ['#1d4ed8', '#0f172a', '#e11d48', '#dbeafe'],
     status: 'ready',
     changesToReview: true,
     pinnedFor: [SHOP],
@@ -104,10 +106,11 @@ export const sampleSystems = (): SystemSummary[] => [
     revision: 4,
     sources: { code: null, brand: 3, description: true },
   }),
-  blank({ id: 'field-notes', name: 'Field notes', status: 'ready', usedBy: 1, updated: ago(3 * DAY), revision: 2, sources: { code: null, brand: 0, description: true } }),
+  blank({ id: 'field-notes', name: 'Field notes', swatches: ['#7c2d12', '#1c1917', '#d6d3d1'], status: 'ready', usedBy: 1, updated: ago(3 * DAY), revision: 2, sources: { code: null, brand: 0, description: true } }),
   blank({
     id: 'juniper',
     name: 'Juniper',
+    swatches: ['#15803d', '#052e16', '#fbbf24', '#dcfce7', '#fafaf9', '#78716c'],
     status: 'ready',
     pinnedFor: [SHOP],
     usedBy: 6,

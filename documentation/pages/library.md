@@ -1,9 +1,11 @@
-# Library: projects and folders
+# Library: projects, folders and design systems
 
 **Route:** OpenChamber sidebar → Extension pages → Design Chamber (`page` surface), the designs list before a design is opened · **Access:** every OpenChamber user
 **Purpose:** Find a design among many. The library groups the same list two ways, and neither moves anything on disk: **projects** (automatic, from the project folder each design was made for) and **folders** (your own labels; one design can be in several). The rest of the library (cards, search, tabs, sort, New, Settings) is described in the [full-screen page](full-screen-page.md). The rail has the same groups in one select: see [Rail: projects and folders](rail.md). How the folders are stored is in [Projects and folders](../features/projects-and-folders.md).
 
-Screenshots come from `test/ui/visual/scenarios/projects-folders.mjs`, `folder-picker.mjs` and `folder-manage.mjs` (the real UI with the in-memory fake service), in `documentation/pages/img/folders-page-<width>-<theme>-*.png`, `folder-picker-*.png` and `folder-manage-*.png`.
+Design systems are library items too: tiles and rows next to the designs, a chip on every design, and a sidebar section ([Design systems in the library](#design-systems-in-the-library)).
+
+Screenshots come from `test/ui/visual/scenarios/projects-folders.mjs`, `folder-picker.mjs`, `folder-manage.mjs` and `systems-library.mjs` (the real UI with the in-memory fake service), in `documentation/pages/img/folders-page-<width>-<theme>-*.png`, `folder-picker-*.png` and `folder-manage-*.png`.
 
 ## The sidebar
 
@@ -12,7 +14,8 @@ Screenshots come from `test/ui/visual/scenarios/projects-folders.mjs`, `folder-p
 - **All designs** (count), then **Projects**: one row per project folder that has designs (name, count, the full path as a tooltip), then **No project** (only when there are some), then **Folders** with **New folder** and one row per folder (name, count). A folder row's ⋯ menu holds **Rename**, **New folder…** and **Delete folder**.
 - The selected row filters the grid and says so three ways: a bar and bold text on the row, `aria-current` for screen readers, and the count line beside the title ("Q4 launch · 1 design"). Search, the tabs, the System filter and sort work inside it, and the tab counts follow it. Cards show their project under the title, except inside that project.
 - A project is named by OpenChamber's project list, else by the folder's name. Two projects with the same name show their parent folder too ("app · work", "app · personal"). A project folder that no longer exists still groups its designs, with a warning mark and "Folder not found" in the tooltip. Designs made from a chat opened in the Designs folder itself count as No project.
-- The sidebar button in the toolbar opens and closes it. Under 900 px of page width it starts closed and floats over the grid when open ([800 px, open](img/folders-page-800-light-2-open.png)); choosing a row or pressing Escape closes it, and Escape returns focus to the button.
+- **Design systems** sits below Folders ([sidebar](#design-systems-in-the-library)). It is not a scope: a system row sets the System filter and leaves the selected project or folder alone.
+- The sidebar button in the toolbar opens and closes it (its name is "Projects, folders and design systems"). Under 900 px of page width it starts closed and floats over the grid when open ([800 px, open](img/folders-page-800-light-2-open.png)); choosing a row or pressing Escape closes it, and Escape returns focus to the button.
 
 ## Folders
 
@@ -23,6 +26,26 @@ Screenshots come from `test/ui/visual/scenarios/projects-folders.mjs`, `folder-p
 - **Rename** is inline from the row's ⋯ menu. **Delete folder** asks first ([confirm](img/folder-manage-page-1400-dark-4-delete-confirm.png)): the confirm names how many designs are in the folder and how many of them are in no other folder ("2 designs are in Q4 launch. 1 of them is in no other folder; they stay in All designs."), with the promise "Deleting a folder never deletes designs." An empty folder reads "Scratch is empty. Deleting it changes nothing."; a folder whose designs all keep another folder reads "Its 6 designs all keep their other folders." After the delete, a notice reads "Deleted Q4 launch. Its 2 designs are still in All designs." with **Undo** for 10 seconds ([notice](img/folders-page-1400-light-7-deleted-undo.png)); the counts come from the delete itself, so a membership that changed meanwhile is reported truthfully. The clock stops while the pointer or focus is on it. While the folder is gone the view shows All designs, and Undo brings the folder and the view back.
 - An empty folder says "No designs in Scratch yet. Drag designs here, or use Add to folder in a design’s menu." with **Show all designs** ([empty](img/folders-page-1400-light-6-empty-folder.png)).
 - Deleting a design removes it from its folders at once.
+## Design systems in the library
+
+A design system is a library item, not a separate place. The header counts both ("24 designs and 4 systems", following the scope), and the sidebar's design counts stay designs only. Screenshots: `systems-library-page-1400-<theme>-*.png` and `systems-library-rail-<width>-<theme>-*.png`.
+
+- **The All tab mixes systems into the grid by the sort** (Updated, Created, or Title by name), so a system that changed an hour ago sits among the designs that changed then. Its count includes the systems. **Canvases** and **Pages** show designs only. **Systems** shows systems only, with its own count. Search matches a system by name; the System filter keeps one system (or None keeps no system tiles).
+- **The system tile** (page, Tiles): a plate where a design shows its thumbnail, then the name, where it lives (**Repo · speakappi**, or **In Design Chamber**), a **System** mark, **Ready** or **Draft**, when it changed, and the most urgent flag it carries (**Being built**, **Changes to review**, and so on). The plate is the system's own colours: up to six swatches, painted only after the guest checks each is a colour; with none it shows the system glyph. A system whose files can't be read shows **Can't read** with the service's reason and opens nothing. In the foot, **Used by 6 designs** is a link; a system nobody uses says "Not used yet" in plain words. A repo-backed system with a living page also has a **Living page** button. The tile's ⋯ menu is the short one: **Open**, **Preview living page** (when there is one), **Reveal in folder**. Renaming, defaults and deleting stay in the Design systems list.
+- **List view and the rail** draw the same system as a row: the page's List view as a column row (plate, name and **System** mark, a used-by link in the System column, where it lives under In, and when), the rail as the Design systems row (plate, name, **Ready** or **Draft**, home and flags, source, used-by link, when). The rail's Systems tab is the fourth tab; below 380 px the tab counts leave the labels so four fit at 320 px, and each tab keeps its count in its accessible name ("Systems, 5").
+- **Used by is a link into the library.** From a tile, a row or the Design systems list it shows the library with scope **All designs**, tab **All**, no search, and the System filter set to that system. That system leads the grid (a bordered tile or row), its designs follow, and the All count is the system plus its designs. In the Design systems view the link closes it first. Steps: system to its designs, 1.
+- **The chip on every design.** A card, a List row and a rail row show the design's system as a small pill (a dot in the system's first colour, its name) beside the main button, never inside it. One click opens that system (the rail opens its compact view); Back returns to the library with the chip focused. A **Draft** system's chip says Draft; a deleted system reads "<name> (deleted)" with a dashed outline, and pressing it says "This system was deleted. The design keeps its own copy." and opens nothing. A design with no system has no chip. The row's accessible name adds "uses Speak UI". Steps: design to its system, 1.
+- **The sidebar section.** The heading **Design systems** is a button that opens the Design systems list (a chevron, no pressed state; its name says the count). **New** opens the New design system sheet. One row per system by name: its first colour, a **Draft** mark, and how many designs use it; the row for the active System filter is marked current. Clicking a row sets the filter in one step.
+
+### States
+
+- **Loading:** the Systems tab shows skeleton tiles while the first answer is on its way; on the other tabs systems arrive into the grid. The sidebar section shows two skeleton rows.
+- **No systems:** the Systems tab says **No design systems yet** with **New design system…**; the sidebar says "No design systems yet." with its **New** button. In a folder, the Systems tab says **Folders hold designs, not systems.** with **Show all systems**, which sets the scope to All designs. A project scope shows only that project's systems.
+- **No matches:** the sentence uses the tab's noun ("No systems match “zzz”."), and **Clear filters** keeps the scope.
+- **Failed:** if the systems list can't be read, the designs still list. The Systems tab says "Design systems didn’t load" with **Try again**; the sidebar says "Design systems couldn’t load. Try again." and the System select keeps All systems and No system only.
+- **No designs yet but some systems:** the grid shows the systems. The first-run "No designs yet" appears when there are neither.
+
+Code: `src/ui/systems/system-tile.ts`, `system-row.ts`, `system-plate.ts`; `designSystemChip` in `src/ui/components/design-row.ts`; the sidebar section in `src/ui/page/library-sidebar.ts`; the pure composition (`libraryItems`, `emptyStateOf`) in `src/ui/model/list-model.ts` and the tile and menu rules in `src/ui/model/systems-model.ts`. Tests: `test/ui/list-model.test.ts`, `test/ui/systems-library-model.test.ts`.
 
 ## States
 
@@ -33,4 +56,4 @@ Screenshots come from `test/ui/visual/scenarios/projects-folders.mjs`, `folder-p
 
 ## Remembered view
 
-The chosen row is remembered on this surface (`list-scope:page` in `host.storage`), and so are the view (`library-view:page`, Tiles or List) and the sort (`list-sort:page`). A stored value that is unknown, or names a project or folder that is gone, reads as All designs; an unreadable view or sort falls back to Tiles and Updated. Search, the tab and the System filter are not stored: they live for the session.
+The chosen row is remembered on this surface (`list-scope:page` in `host.storage`), and so are the view (`library-view:page`, Tiles or List) and the sort (`list-sort:page`). A stored value that is unknown, or names a project or folder that is gone, reads as All designs; an unreadable view or sort falls back to Tiles and Updated. Search, the tab and the System filter are not stored: they live for the session. A System filter whose system has been deleted reads as All systems.

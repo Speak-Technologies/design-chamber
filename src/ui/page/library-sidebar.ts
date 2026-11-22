@@ -1,14 +1,19 @@
-// The page library's left sidebar (Phase 2.5 G1): All designs, Projects, No project and the user's Folders.
-// One row is selected and filters the grid. Folder rows are drop targets for a dragged card, rename inline,
-// and open a menu with Rename, New folder… and Delete folder (a confirm names what stays, then Undo).
-// Everything it draws comes in through `paint`; it never reads the store itself.
+// The page library's left sidebar (Phase 2.5 G1): All designs, Projects, No project and the user's Folders,
+// then (Phase 2.6 L1b) Design systems. One scope row is selected and filters the grid. Folder rows are drop
+// targets for a dragged card, rename inline, and open a menu with Rename, New folder… and Delete folder (a
+// confirm names what stays, then Undo). A system row sets the System filter and leaves the scope alone; the
+// section heading opens the systems list. Everything it draws comes in through `paint`; it never reads the
+// store itself.
 
 import type { FolderView } from '../../shared/api.ts';
 import { DESIGN_DRAG_TYPE, openNewFolder } from '../components/folder-actions.ts';
 import { h } from '../components/dom.ts';
 import { icon, type IconName } from '../components/icons.ts';
 import { attachMenu, btn, iconBtn } from '../components/kit.ts';
-import { sameScope, scopeToId, type ListScope, type ProjectGroup, type ScopeCounts } from '../model/list-model.ts';
+import { sameScope, scopeToId, type ListScope, type ProjectGroup, type ScopeCounts, type SystemFilter } from '../model/list-model.ts';
+import { plural } from '../model/format.ts';
+import type { SidebarSystem } from '../model/systems-model.ts';
+import { mountSwatchDot } from '../systems/system-plate.ts';
 
 export type SidebarModel = {
   scope: ListScope;
@@ -17,6 +22,10 @@ export type SidebarModel = {
   folders: readonly FolderView[];
   foldersStatus: 'loading' | 'ready' | 'error';
   foldersError: string | null;
+  /** The systems the sidebar lists (a failed load leaves none and says so). */
+  systems: readonly SidebarSystem[];
+  systemFilter: SystemFilter;
+  systemsStatus: 'loading' | 'ready' | 'error';
 };
 
 export type SidebarOptions = {
@@ -29,6 +38,12 @@ export type SidebarOptions = {
   onDelete: (folder: FolderView) => void;
   /** The first problem with a name, or null. `ignoreId` is the folder being renamed. */
   validate: (name: string, ignoreId: string | null) => string | null;
+  /** A system row: filter the library to that system, keeping the scope. */
+  onFilterSystem: (id: string) => void;
+  /** The section heading: open the design systems list. */
+  onSystems: () => void;
+  onNewSystem: () => void;
+  onRetrySystems: () => void;
 };
 
 export type SidebarHandle = { el: HTMLElement; paint: (model: SidebarModel) => void; focusSelected: () => void; dispose: () => void };
@@ -39,7 +54,7 @@ export const mountSidebar = (options: SidebarOptions): SidebarHandle => {
   let model: SidebarModel | null = null;
   let renaming: { id: string; draft: string; error: string | null; busy: boolean } | null = null;
 
-  const el = h('nav', { class: 'dc-side', 'aria-label': 'Projects and folders' });
+  const el = h('nav', { class: 'dc-side', 'aria-label': 'Projects, folders and design systems' });
   const lists = h('div', { class: 'dc-side-body' });
   el.append(lists);
 
@@ -139,6 +154,45 @@ export const mountSidebar = (options: SidebarOptions): SidebarHandle => {
 
   const heading = (text: string, ...trailing: Array<HTMLElement | null>): HTMLElement =>
     h('div', { class: 'dc-side-heading' }, h('h2', { class: 'dc-side-title' }, text), ...trailing);
+
+  /** The Design systems section: a heading that opens the list, a row per system, and its own empty, loading and failed states. */
+  const systemsSection = (current: SidebarModel): HTMLElement[] => {
+    const total = current.systems.length;
+    const headingButton = h(
+      'button',
+      { type: 'button', class: 'dc-side-heading-link', 'aria-label': current.systemsStatus === 'ready' ? `Design systems, ${total}. Open the list` : 'Design systems. Open the list' },
+      'Design systems',
+      icon('chevron-right', 12),
+    );
+    headingButton.addEventListener('click', () => options.onSystems());
+    const newButton = btn({ label: 'New', variant: 'ghost', size: 'xs', icon: 'plus', onClick: () => options.onNewSystem() }).el;
+    newButton.setAttribute('aria-label', 'New design system');
+    const out: HTMLElement[] = [h('div', { class: 'dc-side-heading' }, h('h2', { class: 'dc-side-title' }, headingButton), newButton)];
+    if (current.systemsStatus === 'loading' && total === 0) {
+      out.push(h('ul', { class: 'dc-side-list', 'aria-hidden': 'true' }, ...Array.from({ length: FOLDER_SKELETONS }, () => h('li', { class: 'dc-side-skeleton' }, h('span', { class: 'dc-skel dc-skel-line' })))));
+    } else if (current.systemsStatus === 'error' && total === 0) {
+      out.push(h('div', { class: 'dc-side-note' }, h('p', { class: 'dc-form-error' }, 'Design systems couldn’t load. Try again.'), btn({ label: 'Try again', variant: 'outline', size: 'xs', onClick: options.onRetrySystems }).el));
+    } else if (total === 0) {
+      out.push(h('p', { class: 'dc-side-hint' }, 'No design systems yet.'));
+    } else {
+      out.push(h('ul', { class: 'dc-side-list', role: 'list', 'aria-label': 'Design systems' }, ...current.systems.map((system) => systemRowFor(system, current))));
+    }
+    return out;
+  };
+
+  const systemRowFor = (system: SidebarSystem, current: SidebarModel): HTMLLIElement => {
+    const selected = current.systemFilter.kind === 'system' && current.systemFilter.id === system.id;
+    const main = h(
+      'button',
+      { type: 'button', class: 'dc-side-main', 'aria-current': selected ? 'true' : null, title: system.name, 'aria-label': `${system.name}${system.draft ? ', Draft' : ''}, ${system.usedBy === 0 ? 'not used yet' : `used by ${plural(system.usedBy, 'design')}`}. Show its designs` },
+      mountSwatchDot(system.swatch, 'dc-side-swatch'),
+      h('span', { class: 'dc-side-label' }, system.name),
+      system.draft ? h('span', { class: 'dc-side-mark', 'aria-hidden': 'true' }, 'Draft') : null,
+      h('span', { class: 'dc-side-count', 'aria-hidden': 'true' }, String(system.usedBy)),
+    );
+    main.addEventListener('click', () => options.onFilterSystem(system.id));
+    return h('li', { class: 'dc-side-row', 'data-scope': `system:${system.id}`, 'data-selected': selected ? 'true' : 'false' }, main);
+  };
 
   const folderRow = (folder: FolderView, current: SidebarModel): HTMLLIElement => {
     const selected = sameScope(current.scope, { kind: 'folder', id: folder.id });
@@ -290,6 +344,7 @@ export const mountSidebar = (options: SidebarOptions): SidebarHandle => {
       heading('Folders', newFolderButton),
       createSlot,
       ...folderBody,
+      ...systemsSection(next),
     );
     painting = false;
     if (hadCreateFocus && !createSlot.hidden) createInput.focus();

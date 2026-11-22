@@ -4,8 +4,9 @@
 // that names every active filter with Clear filters keeping the scope, the gear on both surfaces
 // with its accessible name, the rail at 320 and 480 (the title keeps its 120 px budget), light and
 // dark, and the loading, couldn't-load, first-run and systems-failed states. The approved canvas
-// (Designs/phase-2-6-library-ui) is the visual authority. System tiles, chips and the Systems tab
-// arrive with L1b and are not drawn here.
+// (Designs/phase-2-6-library-ui) is the visual authority. System tiles and rows mix into the All
+// tab since L1b, so the first-item checks here look at designs only; systems-library.mjs draws the
+// systems themselves.
 
 const FAKE = 'window.frames[0].__dcFake';
 const ROOT = 'C:\\Users\\you\\Documents\\Designs';
@@ -24,7 +25,7 @@ const pickOption = async (p, select, text) => {
   await p.settle(250);
 };
 const firstTitle = (p, surface) =>
-  p.guest(`return doc.querySelector(${surface === 'page' ? '".dc-card .dc-card-title, .dc-list-row .dc-row-title"' : '".dc-rows .dc-row-title"'})?.textContent?.trim() ?? null`);
+  p.guest(`return doc.querySelector(${surface === 'page' ? '".dc-card[data-slug] .dc-card-title, .dc-list-row[data-slug] .dc-row-title"' : '".dc-rows .dc-row[data-slug] .dc-row-title"'})?.textContent?.trim() ?? null`);
 const rowCount = (p) => p.guest('return doc.querySelectorAll(".dc-row[data-slug], .dc-card[data-slug]").length');
 const emptyTitle = (p) => p.guest('return doc.querySelector(".oc-sdk-empty-title")?.textContent?.trim() ?? null');
 const chipLabels = (p) => p.guest('return JSON.stringify([...doc.querySelectorAll(".dc-empty-chip")].map((n) => n.textContent.trim()))');
@@ -96,8 +97,10 @@ const pageViews = async (h, theme) => {
   await pickOption(p, '.dc-system-select', 'No system');
   await h.checkSoon(async () => (await rowCount(p)) === 4, `${tag}: No system leaves the four unlinked designs`);
   await pickOption(p, '.dc-system-select', 'Acme');
-  await h.checkSoon(async () => (await emptyTitle(p)) === 'No designs with the Acme system.', `${tag}: a system with no designs says so (${await emptyTitle(p)})`);
-  h.check((await chipLabels(p)) === JSON.stringify(['System: Acme']), `${tag}: the chip names the system filter`);
+  await h.checkSoon(async () => (await rowCount(p)) === 0 && (await p.guest('return doc.querySelectorAll("[data-kind=system]").length')) === 1, `${tag}: a system with no designs leaves only its own tile (it leads the All tab)`);
+  await p.type('.dc-search input', 'zzz');
+  await h.checkSoon(async () => (await emptyTitle(p)) === 'No designs match “zzz” with the Acme system.', `${tag}: a search that matches nothing says so (${await emptyTitle(p)})`);
+  h.check((await chipLabels(p)) === JSON.stringify(['Search: zzz', 'System: Acme']), `${tag}: the chips name the search and the system filter`);
   await p.shot(`${tag}-4-system-empty`);
   await p.click('.oc-sdk-empty-action .oc-sdk-btn', { text: 'Clear filters' });
   await h.checkSoon(async () => (await rowCount(p)) === 6, `${tag}: Clear filters brings every design back`);
@@ -185,7 +188,7 @@ const pageStates = async (h) => {
   // empty list, so the state resolves to the first-run empty (the error page below covers designs
   // arriving after a failure).
   const loadingTag = 'library-views-page-loading-dark';
-  const loading = await h.openPage({ width: 1400, height: 900, surface: 'page', theme: 'dark', label: loadingTag, routes: { 'GET /designs': { delayMs: 2500, body: { root: ROOT, designs: [], loose: { files: [], total: 0 }, projectFolders: [] } } } });
+  const loading = await h.openPage({ width: 1400, height: 900, surface: 'page', theme: 'dark', label: loadingTag, routes: { 'GET /systems': { status: 200, body: { systems: [], total: 0, max: 50 } }, 'GET /designs': { delayMs: 2500, body: { root: ROOT, designs: [], loose: { files: [], total: 0 }, projectFolders: [] } } } });
   console.log(loadingTag);
   await loading.waitFor('return doc.querySelectorAll(".dc-card-skeleton").length >= 4', 'the tile skeletons');
   h.check(await loading.guest('return doc.querySelector(".dc-library-scroll")?.getAttribute("aria-busy") === "true" && !!doc.querySelector(".dc-library-controls")'), `${loadingTag}: skeletons with aria-busy; the toolbar stays`);
@@ -207,7 +210,7 @@ const pageStates = async (h) => {
 
   // First run: no designs yet, with the way to make one.
   const firstTag = 'library-views-page-first-run-dark';
-  const first = await h.openPage({ width: 1400, height: 900, surface: 'page', theme: 'dark', label: firstTag, routes: { 'GET /designs': { status: 200, body: { root: ROOT, designs: [], loose: { files: [], total: 0 }, projectFolders: [] } } } });
+  const first = await h.openPage({ width: 1400, height: 900, surface: 'page', theme: 'dark', label: firstTag, routes: { 'GET /systems': { status: 200, body: { systems: [], total: 0, max: 50 } }, 'GET /designs': { status: 200, body: { root: ROOT, designs: [], loose: { files: [], total: 0 }, projectFolders: [] } } } });
   console.log(firstTag);
   await first.waitFor('return !!doc.querySelector(".oc-sdk-empty")', 'the first-run empty state');
   h.check(await first.guest('return doc.querySelector(".oc-sdk-empty-title")?.textContent?.trim() === "No designs yet" && /\\/design or \\/page/.test(doc.querySelector(".oc-sdk-empty-body")?.textContent ?? "") && [...doc.querySelectorAll(".oc-sdk-empty-action .oc-sdk-btn")].some((n) => n.textContent.trim() === "New canvas")'), `${firstTag}: No designs yet, how to make one, New canvas`);

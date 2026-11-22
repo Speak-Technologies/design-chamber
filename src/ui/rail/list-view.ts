@@ -1,5 +1,6 @@
 // R1, the rail's designs list: header (Design systems, Settings, New), search, the Show select,
-// the System and Sort pair, kind tabs, thumbnail rows with badges and a row menu, an empty state
+// the System and Sort pair, kind tabs (Systems is the fourth), thumbnail rows with badges, a system
+// chip and a row menu, system rows mixed into All by the sort, an empty state
 // that names every active filter, a notice when an earlier folder still holds designs, and the
 // offer to import loose HTML files saved straight into the designs folder. Sort is remembered
 // (host.storage `list-sort:panel`); search, tab and the System filter live for the session.
@@ -21,14 +22,14 @@ import { systems as systemsStore } from '../components/systems-store.ts';
 import { type ThumbHandle } from '../components/thumb.ts';
 import { guestHost, host, store } from '../guest.ts';
 import { dismissedTip, shouldShowTip, TIP_KEY } from '../model/findability-model.ts';
-import { middlePath } from '../model/format.ts';
+import { folderName, middlePath } from '../model/format.ts';
 import {
   ALL_SCOPE,
   ALL_SYSTEMS,
   LIST_SORTS,
   LIST_TABS,
   emptyStateOf,
-  libraryDesigns,
+  libraryItems,
   projectGroups,
   resolveScope,
   resolveSystemFilter,
@@ -51,6 +52,9 @@ import {
   type SystemFilter,
 } from '../model/list-model.ts';
 import { designCountLabel } from '../model/settings-model.ts';
+import { librarySystemMenu, swatchLookup, type LibrarySystemMenuId } from '../model/systems-model.ts';
+import { openNewSystemSheet } from '../systems/new-system-sheet.ts';
+import { mountSystemRow, runLibrarySystemAction } from '../systems/system-row.ts';
 import { toast } from '../components/actions.ts';
 
 export type ListViewOptions = {
@@ -62,7 +66,16 @@ export type ListViewOptions = {
   onOpen: (slug: string) => void;
 };
 
-export type ListViewHandle = { el: HTMLElement; focusRow: (slug: string) => void; focusSystems: () => void; dispose: () => void };
+export type ListViewHandle = {
+  el: HTMLElement;
+  focusRow: (slug: string) => void;
+  focusSystems: () => void;
+  /** Back from a system opened out of the list: focus the chip or row that opened it, else the systems button. */
+  focusSystemEntry: (id: string) => void;
+  /** Show the list filtered to one system: scope All, tab All, no search (a used-by link or a chip lands here). */
+  filterBySystem: (id: string) => void;
+  dispose: () => void;
+};
 
 const SKELETON_ROWS = 4;
 
@@ -79,6 +92,8 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   let chosen: ListScope = ALL_SCOPE;
   let projects: ProjectInfo[] = [];
   let view: { scope: ListScope; groups: readonly ProjectGroup[]; root: string; folder: FolderRef | null } = { scope: ALL_SCOPE, groups: [], root: '', folder: null };
+  /** The first colour of each system, for the chips' dots; refreshed on every paint. */
+  let swatches: (id: string) => string | null = () => null;
   const folderStore = foldersStore();
   const systemStore = systemsStore();
   const thumbs = new Map<string, ThumbHandle>();
@@ -225,6 +240,22 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     list.append(...skeleton(), h('li', { class: 'dc-list-message dc-sr-only', role: 'status' }, 'Loading your designs'));
   };
 
+  /** The host's project names make "From shop" read like the user's own words; without them the folder name stands in. */
+  const projectLabel = (directory: string): string => projects.find((project) => sameDirectory(project.directory, directory))?.name ?? folderName(directory);
+
+  const newSystem = (): void => openNewSystemSheet(options.actions.host, { onMade: (result) => options.actions.onOpenSystem?.(result.id) });
+
+  /** A used-by link or a chip: every design that uses this system, nothing else in the way. */
+  const filterBySystem = (id: string): void => {
+    chosen = ALL_SCOPE;
+    query = '';
+    tab = 'all';
+    systemFilter = { kind: 'system', id };
+    search.update({ value: '' });
+    tabsHandle.update({ activeId: 'all' });
+    paintList();
+  };
+
   const clearFilters = (): void => {
     query = '';
     tab = 'all';
@@ -303,27 +334,36 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     // system's copy); a failed load leaves All systems / No system only.
     const systemsState = systemStore.get();
     const systemList = systemsState.status === 'error' ? [] : systemsState.systems ?? [];
+    const systemsFailed = systemsState.status === 'error' && systemsState.systems === null;
     systemFilter = resolveSystemFilter(systemFilter, systemList);
+    swatches = swatchLookup(systemList);
     const systemEntries = systemOptions(systemList);
     systemSelect.update({ value: systemFilterToId(systemFilter), options: systemEntries });
     nameSelect(systemHost, 'System', systemEntries.find((entry) => entry.id === systemFilterToId(systemFilter))?.label ?? 'All systems');
     nameSelect(sortHost, 'Sort', LIST_SORTS.find((entry) => entry.id === sort)?.label ?? 'Updated');
 
-    if (foldersPending) {
+    if (foldersPending || (tab === 'system' && systemsState.systems === null && !systemsFailed)) {
       showLoading();
       return;
     }
     const label = scopeLabel(effective, groups, folderList);
     const filters = { query, tab, system: systemFilter };
-    const { scoped, shown, counts } = libraryDesigns(all, effective, folderList, root, filters, sort);
+    const { scoped, items, lead, shownDesigns, shownSystems, counts } = libraryItems({ designs: all, systems: systemList, scope: effective, folders: folderList, designsRoot: root, filters, sort });
     tabsHandle.update({ items: LIST_TABS.map(({ id, label: tabLabel }) => ({ id, label: tabLabel, count: counts[id] })) });
-    const empty = emptyStateOf({ all, scoped, shown, scope: effective, scopeLabel: label, folderName: folder?.name ?? null, filters, systems: systemList, draggable: false });
+    // Below 380 px the counts leave the tabs (CSS) so four fit; each tab keeps its count in its accessible name.
+    for (const tabButton of tabsHost.querySelectorAll<HTMLElement>('[role=tab]')) {
+      const entry = LIST_TABS.find((item) => item.id === tabButton.dataset.id);
+      if (entry) tabButton.setAttribute('aria-label', `${entry.label}, ${counts[entry.id]}`);
+    }
+    const empty = emptyStateOf({ all, scoped, shown: shownDesigns, shownSystems, scope: effective, scopeLabel: label, folderName: folder?.name ?? null, filters, systems: systemList, systemsFailed, draggable: false });
     if (empty) {
       const wrap = h('div');
       mountLibraryEmpty(wrap, empty, {
         onAction: () => {
           if (empty.action === 'new') options.onNew('canvas');
           else if (empty.action === 'show-all') setScope(ALL_SCOPE);
+          else if (empty.action === 'new-system') newSystem();
+          else if (empty.action === 'retry-systems') void systemStore.load();
           else clearFilters();
         },
         onClearChip: (id) => {
@@ -340,7 +380,23 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
       list.append(h('li', { class: 'dc-list-message' }, wrap));
     } else {
       const rowView: DesignRowView = { scope: effective, groups, root, menu: { folder: null, project: null } };
-      list.append(...shown.map((design) => mountDesignRow(design, { variant: 'rail', view: { ...rowView, menu: menuFor(design) }, actions: options.actions, onOpen: options.onOpen, thumbs })));
+      const open = (id: string): void => options.actions.onOpenSystem?.(id);
+      const systemActions = { onOpen: open, onPreview: (id: string) => options.actions.onOpenSystem?.(id, 'preview') };
+      list.append(
+        ...items.map((item) =>
+          item.kind === 'system'
+            ? mountSystemRow(item.system, {
+                variant: 'library',
+                label: projectLabel,
+                onOpen: open,
+                onShowDesigns: filterBySystem,
+                entries: () => librarySystemMenu(item.system),
+                onMenu: (id) => void runLibrarySystemAction(id as LibrarySystemMenuId, item.system, systemActions),
+              })
+            : mountDesignRow(item.design, { variant: 'rail', view: { ...rowView, menu: menuFor(item.design) }, actions: options.actions, onOpen: options.onOpen, thumbs, swatchOf: swatches }),
+        ),
+      );
+      if (lead !== null) list.querySelector(`[data-id="${CSS.escape(lead.id)}"]`)?.setAttribute('data-lead', 'true');
     }
     const live = new Set(all.map((design) => design.slug));
     for (const [slug, handle] of thumbs) {
@@ -396,6 +452,11 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
       list.querySelector<HTMLElement>(`[data-slug="${CSS.escape(slug)}"] .dc-row-main`)?.focus();
     },
     focusSystems: () => systemsButton.focus(),
+    focusSystemEntry: (id) => {
+      const escaped = CSS.escape(id);
+      (list.querySelector<HTMLElement>(`[data-id="${escaped}"] .dc-sys-main, .dc-design-system-chip[data-system-id="${escaped}"]`) ?? systemsButton).focus();
+    },
+    filterBySystem,
     dispose: () => {
       scope.dispose();
       looseBanner.dispose();

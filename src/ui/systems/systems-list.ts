@@ -1,23 +1,25 @@
 // The design systems list (Phase 2.5 U1, technical design §9.3), one view for the rail and the page: a header with the way
-// back and **New design system**, then a row per system (name, Draft or Ready, where it lives, what needs a look, what
-// it was made from, who uses it). Every state is drawn: a skeleton that matches the rows, the empty list with its three
-// ways to start, a system whose files can't be read, and the service not answering. Rows open a system through
-// `onOpen`; the system page itself is U2's.
+// back and **New design system**, then a row per system (plate, name, Draft or Ready, where it lives, what needs a
+// look, what it was made from, who uses it). The row itself is `system-row.ts`, shared with the library's Systems
+// tab; its used-by count is a link into the library filtered to that system (`onShowDesigns`). Every state is drawn:
+// a skeleton that matches the rows, the empty list with its four ways to start, a system whose files can't be
+// read, and the service not answering. Rows open a system through `onOpen`; the system page itself is U2's.
 
-import { mountBadge, mountBanner, mountEmpty, mountTextField } from '@openchamber/sdk/ui';
+import { mountBanner, mountEmpty, mountTextField } from '@openchamber/sdk/ui';
 
 import type { SystemSummary } from '../../shared/types.ts';
 import { sameDirectory } from '../../shared/path-compare.ts';
 import { toast, type ActionContext } from '../components/actions.ts';
 import { createScope, errorText, h } from '../components/dom.ts';
-import { attachMenu, btn, confirmDialog, iconBtn, openSheet } from '../components/kit.ts';
+import { btn, confirmDialog, iconBtn, openSheet } from '../components/kit.ts';
 import { systems, type SystemsState } from '../components/systems-store.ts';
-import { client, guestHost, host } from '../guest.ts';
+import { client, guestHost } from '../guest.ts';
 import { folderName, plural } from '../model/format.ts';
 import { systemNameProblem } from '../model/new-system-model.ts';
-import { EMPTY_BODY, EMPTY_TITLE, atSystemsCap, deleteSentence, loadFailure, systemMenu, systemRow, systemsListState, type RowTone, type SystemMenuId } from '../model/systems-model.ts';
+import { EMPTY_BODY, EMPTY_TITLE, atSystemsCap, deleteSentence, loadFailure, systemMenu, systemsListState, type SystemMenuId } from '../model/systems-model.ts';
 import { BUILD_BUTTON_LABEL, openBuildWithAgent } from './build-with-agent.ts';
 import { openNewSystemSheet } from './new-system-sheet.ts';
+import { mountSystemRow } from './system-row.ts';
 
 export type SystemsListOptions = {
   surface: 'panel' | 'page';
@@ -25,17 +27,13 @@ export type SystemsListOptions = {
   onBack: () => void;
   /** A row was chosen, or a new system was made: the system page opens. */
   onOpen: (id: string) => void;
+  /** The used-by link: close this view and show the designs that use the system. */
+  onShowDesigns: (id: string) => void;
 };
 
 export type SystemsListHandle = { el: HTMLElement; focus: () => void; focusRow: (id: string) => void; dispose: () => void };
 
 const SKELETON_ROWS = 4;
-
-const tonedBadge = (label: string, tone: RowTone, title?: string): HTMLElement => {
-  const holder = h('span', { class: 'dc-sys-badge', title: title ?? null });
-  mountBadge(holder, { label, tone });
-  return holder;
-};
 
 export const mountSystemsList = (options: SystemsListOptions): SystemsListHandle => {
   const scope = createScope();
@@ -76,35 +74,14 @@ export const mountSystemsList = (options: SystemsListOptions): SystemsListHandle
   el.append(scroller);
 
   // ------------------------------------------------------------ rows
-  const rowFor = (summary: SystemSummary): HTMLElement => {
-    const model = systemRow(summary, { nowMs: Date.now(), locale: host.snapshot()?.locale ?? 'en', label });
-    const unreadable = model.unreadable !== null;
-
-    const title = h('span', { class: 'dc-sys-title', title: model.name }, model.name);
-    const nameLine = h('span', { class: 'dc-sys-name' }, title, unreadable ? tonedBadge('Can’t read', 'error') : tonedBadge(model.status.label, model.status.tone));
-    const content: HTMLElement[] = [nameLine];
-    if (unreadable) content.push(h('span', { class: 'dc-sys-reason' }, model.unreadable ?? ''));
-    else {
-      const badges = h('span', { class: 'dc-sys-line' }, tonedBadge(model.home.label, 'neutral', model.home.title), ...model.badges.map((badge) => tonedBadge(badge.label, badge.tone)));
-      if (model.more) badges.append(h('span', { class: 'dc-sys-more', title: model.more.title }, model.more.text, h('span', { class: 'dc-sr-only' }, `: ${model.more.title}`)));
-      content.push(badges);
-      if (model.notice) content.push(h('span', { class: 'dc-sys-notice' }, model.notice));
-      content.push(h('span', { class: 'dc-sys-meta' }, model.meta.join(' · ')));
-    }
-
-    const main = unreadable
-      ? h('div', { class: 'dc-sys-main', 'data-static': 'true', role: 'group', 'aria-label': model.ariaLabel }, ...content)
-      : h('button', { type: 'button', class: 'dc-sys-main', 'aria-label': model.ariaLabel }, ...content);
-    if (!unreadable) main.addEventListener('click', () => options.onOpen(summary.id));
-
-    const more = iconBtn({ icon: 'more', label: `Actions for ${summary.name}`, size: 'sm', onClick: () => undefined });
-    attachMenu(
-      more,
-      () => systemMenu(summary),
-      (id) => void runAction(id as SystemMenuId, summary),
-    );
-    return h('li', { class: 'dc-sys', 'data-id': summary.id, 'data-state': unreadable ? 'unreadable' : summary.status }, main, more);
-  };
+  const rowFor = (summary: SystemSummary): HTMLElement =>
+    mountSystemRow(summary, {
+      label,
+      onOpen: options.onOpen,
+      onShowDesigns: options.onShowDesigns,
+      entries: () => systemMenu(summary),
+      onMenu: (id) => void runAction(id as SystemMenuId, summary),
+    });
 
   const skeleton = (): HTMLElement[] =>
     Array.from({ length: SKELETON_ROWS }, () =>
@@ -124,6 +101,7 @@ export const mountSystemsList = (options: SystemsListOptions): SystemsListHandle
       btn({ label: 'From code…', variant: 'outline', size: 'sm', icon: 'page', onClick: () => openNewSystemSheet(options.actions.host, { source: 'code', onMade: (result) => options.onOpen(result.id) }) }).el,
       btn({ label: 'From brand files…', variant: 'outline', size: 'sm', icon: 'image', onClick: () => openNewSystemSheet(options.actions.host, { source: 'brand', onMade: (result) => options.onOpen(result.id) }) }).el,
       btn({ label: 'Describe…', variant: 'outline', size: 'sm', icon: 'pencil', onClick: () => openNewSystemSheet(options.actions.host, { source: 'description', onMade: (result) => options.onOpen(result.id) }) }).el,
+      btn({ label: 'From an existing system…', variant: 'outline', size: 'sm', icon: 'repo', onClick: () => openNewSystemSheet(options.actions.host, { source: 'existing', onMade: (result) => options.onOpen(result.id) }) }).el,
     );
     return h('li', { class: 'dc-sys-message dc-sys-empty' }, holder, actions);
   };

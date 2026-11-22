@@ -47,6 +47,10 @@ const ICONS = {
   layers: ['m12 3 9 5-9 5-9-5z', 'm3 13 9 5 9-5'],
   // A palette with its dabs: design systems.
   system: ['M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4c0-4.4-4-8.1-9-8.1z', 'M7.5 11.5h.01', 'M10 7.5h.01', 'M15 7.5h.01'],
+  // A branch: a design system that lives in a project's repo.
+  repo: ['M6 3v12', 'M18 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', 'M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', 'M18 9a9 9 0 0 1-9 9'],
+  // A right chevron: a heading that opens a list.
+  'chevron-right': ['m9 6 6 6-6 6'],
   // Three sliders with their knobs: the Tweaks button.
   tune: ['M4 21v-7', 'M4 10V3', 'M12 21v-9', 'M12 8V3', 'M20 21v-5', 'M20 12V3', 'M2 14h4', 'M10 8h4', 'M18 16h4'],
 } as const satisfies Record<string, readonly string[]>;

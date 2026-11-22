@@ -39,7 +39,7 @@ const dragCard = (p, slug, folderScope) =>
 /** Opens the sidebar when it is closed (narrow pages close it after a choice). */
 const ensureSidebar = async (p) => {
   if ((await p.guest('return doc.querySelector(".dc-library-body").dataset.sidebar')) === 'closed') {
-    await p.click('.dc-library-bar .dc-iconbtn[aria-label="Projects and folders"]');
+    await p.click('.dc-library-bar .dc-iconbtn[aria-label="Projects, folders and design systems"]');
     await p.settle(150);
   }
 };
@@ -216,7 +216,7 @@ const pageNarrow = async (h) => {
   await ensureSidebar(p);
   await p.key('Escape', { focus: '.dc-side-main' });
   await p.settle(150);
-  h.check((await p.guest('return doc.querySelector(".dc-library-body").dataset.sidebar + ":" + (doc.activeElement?.getAttribute("aria-label") ?? "")')) === 'closed:Projects and folders', `${tag}: Escape closes it and focus returns to the button`);
+  h.check((await p.guest('return doc.querySelector(".dc-library-body").dataset.sidebar + ":" + (doc.activeElement?.getAttribute("aria-label") ?? "")')) === 'closed:Projects, folders and design systems', `${tag}: Escape closes it and focus returns to the button`);
   await p.shot(`${tag}-3-shop`);
   await p.close();
 };

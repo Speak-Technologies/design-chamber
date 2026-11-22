@@ -3130,7 +3130,7 @@ summary.dc-checks-group-title:focus-visible {
   flex: 1;
   min-width: 0;
 }
-.dc-library-bar > .dc-iconbtn[aria-label='Projects and folders'] {
+.dc-library-bar > .dc-iconbtn[aria-label='Projects, folders and design systems'] {
   margin-left: calc(var(--dc-s1) * -1);
 }
 
@@ -6224,3 +6224,379 @@ button.dc-sp-value:focus-visible {
   }
 }
 /* ===== end Phase 2.6 L1a ===== */
+
+/* ===== Phase 2.6 L1b: design systems in the library (tiles, rows, the chip, the sidebar section) ===== */
+/*
+ * The approved canvas (Designs/phase-2-6-library-ui: library-tiles, library-list, rail-library,
+ * rail-systems) is the visual authority. Host tokens only. The plate's surface, letters and lines are
+ * host chrome and follow the theme; its swatches are the system's own colours, set through the style
+ * object by system-plate.ts, so they do not follow the theme (§13).
+ */
+
+/* The system chip: a quiet pill beside a design's main button. It names the system and opens it. */
+.dc-design-system-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border: 1px solid var(--dc-hair);
+  border-radius: 9999px;
+  background: transparent;
+  color: color-mix(in srgb, var(--oc-muted) 70%, var(--oc-fg));
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dc-design-system-chip:hover {
+  background: var(--oc-hover);
+  color: var(--oc-fg);
+}
+.dc-design-system-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-design-system-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--oc-fg) 22%, transparent);
+}
+.dc-design-system-dot[data-empty='true'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--oc-muted);
+}
+.dc-design-system-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dc-design-system-mark {
+  flex: none;
+  color: var(--dc-warning-text);
+  font-weight: 600;
+}
+.dc-design-system-chip[data-state='gone'] {
+  border-style: dashed;
+}
+.dc-design-system-chip[data-state='gone'] .dc-design-system-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--oc-muted);
+}
+
+/* Where the chip sits: under a card's body, in the list's System column, under a rail row's text. */
+.dc-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dc-s1) var(--dc-s2);
+  min-width: 0;
+  padding: 0 var(--dc-s3) var(--dc-s3);
+  margin-top: auto;
+}
+.dc-list-row .dc-row-system {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.dc-row[data-chip='true'] {
+  flex-wrap: wrap;
+}
+.dc-row-foot {
+  flex: 0 0 100%;
+  min-width: 0;
+  padding: 0 var(--dc-s2) var(--dc-s2) calc(var(--dc-s2) + 64px + 10px);
+}
+
+/* The plate: a system's stand-in for a thumbnail, 16:10 like the designs'. */
+.dc-sys-plate {
+  position: relative;
+  display: block;
+  flex: none;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border: 1px solid var(--dc-hair);
+  border-radius: 6px;
+}
+.dc-card-thumb.dc-sys-plate {
+  border: 0;
+  border-bottom: 1px solid var(--dc-hair);
+  border-radius: 0;
+}
+.dc-plate {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: 1fr auto;
+  gap: 4px 12px;
+  padding: 12px 14px;
+  background: var(--oc-muted-surface);
+  color: var(--oc-fg);
+}
+.dc-plate[data-empty='true'] {
+  display: grid;
+  place-items: center;
+  color: var(--oc-muted);
+}
+.dc-plate-aa {
+  grid-row: 1;
+  align-self: center;
+  font-size: 2.5rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.dc-plate-spec {
+  grid-row: 1;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.dc-plate-accent {
+  align-self: flex-start;
+  width: 44px;
+  height: 16px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--oc-fg) 16%, transparent);
+}
+.dc-plate-line {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--oc-fg) 16%, transparent);
+}
+.dc-plate-line[data-w='long'] {
+  width: 80%;
+}
+.dc-plate-line[data-w='short'] {
+  width: 55%;
+}
+.dc-plate-swatches {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex;
+  gap: 5px;
+}
+.dc-plate-swatch {
+  display: block;
+  flex: 1;
+  height: 14px;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--oc-fg) 16%, transparent);
+}
+/* The small plate (a rail row, a List row): the letters and a thin strip, no spec lines. */
+.dc-plate[data-variant='row'] {
+  grid-template-columns: auto;
+  gap: 2px;
+  padding: 4px 6px;
+}
+.dc-plate[data-variant='row'] .dc-plate-aa {
+  grid-column: 1;
+  font-size: 1.0625rem;
+}
+.dc-plate[data-variant='row'] .dc-plate-swatches {
+  gap: 2px;
+}
+.dc-plate[data-variant='row'] .dc-plate-swatch {
+  height: 5px;
+  border-radius: 1px;
+}
+
+/* The system tile. */
+.dc-sys-tile {
+  border-color: color-mix(in srgb, var(--oc-primary) 16%, var(--oc-border));
+}
+.dc-sys-tile[data-lead='true'] {
+  border-color: color-mix(in srgb, var(--oc-primary) 55%, var(--oc-border));
+}
+.dc-sys-tile .dc-card-main[data-static='true'] {
+  cursor: default;
+}
+.dc-sys-tile-reason {
+  padding: 0 var(--dc-s3) var(--dc-s3);
+}
+.dc-sys-tile-foot {
+  padding-top: 0;
+}
+.dc-sys-tile .dc-card-meta {
+  flex-wrap: wrap;
+  gap: var(--dc-s1) var(--dc-s2);
+}
+.dc-sys-tile .dc-card-meta > * {
+  white-space: nowrap;
+}
+.dc-sys-kind .oc-sdk-badge {
+  font-weight: 600;
+}
+.dc-sys-used {
+  font-size: 0.75rem;
+}
+.dc-sys-used[data-zero='true'] {
+  color: var(--oc-muted);
+}
+.dc-list-row .dc-sys-plate,
+.dc-list-row .dc-row-thumb.dc-sys-plate {
+  width: 76px;
+  border: 1px solid var(--dc-hair);
+  border-radius: 6px;
+  pointer-events: none;
+}
+.dc-list-row[data-kind='system'] .dc-row-system .dc-sys-used {
+  pointer-events: auto;
+}
+
+/* A system's row (the Design systems list, the library's Systems tab, the rail): plate and name over the badges and facts. */
+.dc-libsys {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  border-radius: 10px;
+  transition: background 120ms ease-out, border-color 140ms ease-out;
+}
+.dc-libsys:hover,
+.dc-libsys:focus-within {
+  background: var(--oc-hover);
+}
+.dc-libsys[data-state='unreadable'] {
+  background: color-mix(in srgb, var(--oc-error) 8%, transparent);
+}
+.dc-app :is(.dc-sys, .dc-libsys) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 8px 6px 9px 10px;
+  --dc-sys-indent: calc(64px + 10px);
+}
+.dc-app .dc-sys-view[data-surface='page'] .dc-sys {
+  padding: var(--dc-s3) var(--dc-s3) var(--dc-s3) var(--dc-s4);
+  gap: 6px;
+}
+:is(.dc-sys, .dc-libsys)[data-lead='true'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--oc-primary) 45%, transparent);
+}
+.dc-sys-top {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.dc-app :is(.dc-sys, .dc-libsys) > .dc-sys-top > .dc-sys-main {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border-radius: var(--dc-r);
+}
+.dc-sys-main .dc-sys-plate {
+  width: 64px;
+}
+.dc-sys-main .dc-sys-name {
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.dc-sys-main .dc-sys-title {
+  flex: 0 1 auto;
+}
+/* In the library a system row sits among design rows, whose titles are medium weight. */
+.dc-libsys .dc-sys-title {
+  font-weight: 500;
+}
+:is(.dc-sys, .dc-libsys) > .dc-sys-line,
+:is(.dc-sys, .dc-libsys) > .dc-sys-notice,
+:is(.dc-sys, .dc-libsys) > .dc-sys-meta,
+:is(.dc-sys, .dc-libsys) > .dc-sys-reason {
+  margin-left: var(--dc-sys-indent);
+}
+:is(.dc-sys, .dc-libsys) > .dc-sys-reason {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.dc-sys-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+}
+.dc-sys-dot {
+  color: var(--oc-muted);
+}
+.dc-sys-top > .dc-iconbtn {
+  margin: 0;
+  opacity: 0;
+}
+:is(.dc-sys, .dc-libsys):hover .dc-sys-top > .dc-iconbtn,
+:is(.dc-sys, .dc-libsys):focus-within .dc-sys-top > .dc-iconbtn,
+.dc-sys-top > .dc-iconbtn[aria-expanded='true'] {
+  opacity: 1;
+}
+
+/* The sidebar's Design systems section: the heading navigates, each row filters. */
+.dc-side-heading-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.dc-side-heading-link:hover {
+  color: var(--oc-fg);
+}
+.dc-side-heading-link:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-side-swatch {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--oc-fg) 22%, transparent);
+}
+.dc-side-swatch[data-empty='true'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--oc-muted);
+}
+.dc-side-mark {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--oc-info) 14%, transparent);
+  color: var(--oc-info-text);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+/* The rail at its narrowest: the plate and the chip's indent shrink with the thumbnail, and the tabs keep only their names (the count stays in each tab's accessible name). */
+@media (max-width: 380px) {
+  .dc-row-foot {
+    padding-left: calc(var(--dc-s2) + 56px + 10px);
+  }
+  .dc-app :is(.dc-sys, .dc-libsys) {
+    --dc-sys-indent: calc(56px + 10px);
+  }
+  .dc-sys-main .dc-sys-plate {
+    width: 56px;
+  }
+  .dc-rail-filters .oc-sdk-tab-count {
+    display: none;
+  }
+  .dc-rail-filters .oc-sdk-tab {
+    padding-inline: var(--dc-s1);
+  }
+}
+/* ===== end Phase 2.6 L1b ===== */
