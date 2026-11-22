@@ -75,6 +75,21 @@ const pagePicker = async (h, theme) => {
   await p.click('.dc-pick .oc-sdk-check', { text: 'Explorations' });
   await h.checkSoon(async () => !(await p.host(`${FAKE}.folders.members(${JSON.stringify(ids.Explorations)})`)).includes('coffee-subscription'), `${tag}: unticking removes it`);
 
+  // Focus survives: a tick, a busy-state paint and a live designs-store refresh never move the row the keyboard is on.
+  const focusedOnExplorations = '(() => { const a = doc.activeElement; return !!a && a.getAttribute("role") === "checkbox" && a.textContent.includes("Explorations"); })()';
+  await p.click('.dc-pick .oc-sdk-check', { text: 'Explorations' });
+  await h.checkSoon(async () => (await p.host(`${FAKE}.folders.members(${JSON.stringify(ids.Explorations)})`)).includes('coffee-subscription'), `${tag}: the focus check ticks Explorations`);
+  await p.settle(300);
+  h.check(await p.guest(`return ${focusedOnExplorations}`), `${tag}: the Explorations checkbox keeps focus after its tick saved`);
+  await p.guest(`win.__dcFake.writeFile("coffee-subscription", "screens/focus-probe.html")`);
+  await p.guest(`win.__dcFake.folders.changed()`);
+  await p.settle(500);
+  h.check(await p.guest(`return ${focusedOnExplorations}`), `${tag}: the checkbox keeps focus through a designs-store refresh and a folders refresh with the picker open`);
+  await p.click('.dc-pick .oc-sdk-check', { text: 'Explorations' });
+  await h.checkSoon(async () => !(await p.host(`${FAKE}.folders.members(${JSON.stringify(ids.Explorations)})`)).includes('coffee-subscription'), `${tag}: the focus check unticks Explorations`);
+  await p.settle(300);
+  h.check(await p.guest(`return ${focusedOnExplorations}`), `${tag}: the checkbox keeps focus after the untick too`);
+
   // Search narrows both sections.
   await p.type('.dc-pick-search input', 'arch');
   await h.checkSoon(() => p.guest('const f = [...doc.querySelectorAll(".dc-pick-section")][1]; return f.querySelectorAll(".oc-sdk-check").length === 1 && f.textContent.includes("Archive") && /No projects match “arch”\\./.test(doc.querySelectorAll(".dc-pick-section")[0].textContent)'), `${tag}: searching "arch" leaves Archive and says no projects match`);

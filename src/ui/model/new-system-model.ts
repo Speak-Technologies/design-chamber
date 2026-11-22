@@ -174,8 +174,14 @@ const joinParts = (parts: readonly string[]): string => {
   return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 };
 
-/** A location as the sheet names it: "design-system/", or "the project root" for ''. */
-export const locationLabel = (path: string): string => (path === '' ? 'the project root' : `${path}/`);
+/** What the location field holds for the project root: the service takes '.', and a candidate at the root has the path ''. */
+export const ROOT_LOCATION = '.';
+
+/** A candidate's path as it goes into the location field and the scan: the root's '' becomes '.'. */
+export const locationValue = (candidatePath: string): string => (candidatePath === '' ? ROOT_LOCATION : candidatePath);
+
+/** A location as the sheet names it: "design-system/", or "the project root" for '' and '.'. */
+export const locationLabel = (path: string): string => (path === '' || path === ROOT_LOCATION ? 'the project root' : `${path}/`);
 
 export const MISSED_LINE = 'Design Chamber reads CSS and token JSON. Pages, components and themes written in code are left for the agent.';
 

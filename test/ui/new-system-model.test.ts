@@ -24,6 +24,7 @@ import {
   forAgentLine,
   leftForAgentLine,
   locationLabel,
+  locationValue,
   missedLine,
   nextSources,
   nudgeLine,
@@ -291,6 +292,9 @@ test('a location is named with its trailing slash, and the root in words', () =>
   assert.equal(locationLabel('design-system'), 'design-system/');
   assert.equal(locationLabel('packages/ui/tokens'), 'packages/ui/tokens/');
   assert.equal(locationLabel(''), 'the project root');
+  assert.equal(locationLabel('.'), 'the project root');
+  assert.equal(locationValue(''), '.');
+  assert.equal(locationValue('design-system'), 'design-system');
   assert.equal(nudgeLine(candidate()), 'This project already has a design system in design-system/. Start from it instead?');
   assert.equal(nudgeLine(candidate({ path: '' })), 'This project already has a design system in the project root. Start from it instead?');
 });

@@ -276,10 +276,11 @@ export const mountFolderPicker = (holder: HTMLElement, options: FolderPickerOpti
         label: row.label,
         checked,
         description: row.kind === 'project' ? projectHint(row, options.design) : undefined,
-        disabled: busy.has(row.key),
+        // Never the kit's `disabled` while a write is in flight: a disabled button drops focus. toggle() already ignores a busy row.
+        disabled: false,
       });
       const control = node.li.querySelector('.oc-sdk-check');
-      control?.setAttribute('aria-disabled', row.locked ? 'true' : 'false');
+      control?.setAttribute('aria-disabled', row.locked || busy.has(row.key) ? 'true' : 'false');
       control?.setAttribute('title', row.title);
       node.count.textContent = String(row.count);
       setGlyph(node, row.kind === 'project' ? (row.locked ? 'lock' : 'layers') : null);
@@ -299,20 +300,25 @@ export const mountFolderPicker = (holder: HTMLElement, options: FolderPickerOpti
   };
 
   const paintRows = (ul: HTMLUListElement, wanted: PickRow[]): void => {
-    const keep = new Set<TargetKey>();
-    for (const row of wanted) {
-      keep.add(row.key);
-      let node = rows.get(row.key);
-      if (!node) node = mode === 'multi' ? makeCheckRow(row) : makeBtnRow(row);
-      updateRow(node, row);
-      ul.append(node.li); // append moves an existing row, so focus and the kit handle survive
-    }
+    const keep = new Set<TargetKey>(wanted.map((row) => row.key));
+    // Stale rows go first, so what is left only has to be put in order.
     for (const [key, node] of [...rows]) {
       if (keep.has(key) || node.li.parentElement !== ul) continue;
       if (node.kind === 'check') node.handle.dispose();
       node.li.remove();
       rows.delete(key);
     }
+    const nodes = wanted.map((row) => {
+      let node = rows.get(row.key);
+      if (!node) node = mode === 'multi' ? makeCheckRow(row) : makeBtnRow(row);
+      updateRow(node, row);
+      return node.li;
+    });
+    // Move a row only when it is out of place: any move of a node, even to where it already is, blurs the focused control inside it.
+    nodes.forEach((li, index) => {
+      if (ul.children[index] !== li) ul.insertBefore(li, ul.children[index] ?? null);
+    });
+    while (ul.children.length > nodes.length) ul.lastElementChild?.remove(); // a "no match" message left from a search
   };
 
   // ---- the inline New folder field ----

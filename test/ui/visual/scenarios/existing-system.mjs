@@ -263,6 +263,71 @@ const errorsFlow = async (h, surface, width, theme) => {
   await p.close();
 };
 
+// A candidate at the project root has the path '' (the service's wording); the location field and the read take '.'.
+// '' in the field would be refused ("Pick where the system lives, or type its folder."), so the sheet maps it.
+const ROOT_CANDIDATE = { path: '', marks: ['page', 'tokens', 'docs'], counts: { colours: 6, tokens: 12, docs: 1, components: 0, pages: 1 }, strong: true, registered: null };
+
+const rootFlow = async (h, surface, width, theme) => {
+  const tag = `existing-root-${surfaceName(surface)}-${width}-${theme}`;
+  const p = await h.openPage({ width, height: surface === 'panel' ? 900 : 1000, surface, theme, label: tag });
+  console.log(tag);
+  await h.listReady(p);
+  await openList(p, surface);
+  await h.checkSoon(() => p.guest('return doc.querySelectorAll(".dc-sys[data-id]").length >= 5'), `${tag}: the list is up`);
+
+  // The nudge: the strongest candidate is the project root, Start from it fills '.' and reads it.
+  await p.host(`${FAKE}.systems.setNextScan({ candidates: [${JSON.stringify(ROOT_CANDIDATE)}], candidatesMore: 0 })`);
+  await openSheet(p);
+  await p.type('.dc-newsys-g-name input', 'Root nudge');
+  await p.click(CHECK, { text: 'A description' });
+  await p.click(CHECK, { text: 'Project code' });
+  await p.waitFor('return !!doc.querySelector(".dc-newsys-nudge")', 'the nudge for the root');
+  h.check((await text(p, '.dc-newsys-nudge')).includes('This project already has a design system in the project root. Start from it instead?'), `${tag}: the nudge names the project root`);
+  await p.click('.dc-newsys-nudge .oc-sdk-btn', { text: 'Start from it' });
+  await h.checkSoon(() => p.guest(`return doc.querySelector('${LOC_INPUT}').value === '.'`), `${tag}: Start from it fills the field with '.'`);
+  await p.waitFor('return !!doc.querySelector(".dc-newsys-contract-problem")', 'the root location read');
+  h.check(!(await text(p, LOC_NOTE)).includes('Pick where the system lives'), `${tag}: the field is not refused`);
+  h.check((await text(p, '.dc-newsys-g-result')).includes('In the project root'), `${tag}: the read column says the project root`);
+  await p.shot(`${tag}-1-from-nudge`);
+  await p.key('Escape');
+  await p.settle(200);
+
+  // A root candidate in the list: one click fills '.', the read settles, the radio stays ticked, Register is refused, Make works.
+  await p.host(`${FAKE}.systems.setNextScan({ candidates: [${JSON.stringify(ROOT_CANDIDATE)}, ${JSON.stringify({ ...ROOT_CANDIDATE, path: 'design-system', strong: false })}], candidatesMore: 0 })`);
+  await openSheet(p);
+  await tickExisting(p, tag);
+  await p.waitFor('return doc.querySelectorAll(".dc-newsys-cand").length >= 2', `${tag}: the candidates`);
+  h.check((await text(p, '.dc-newsys-cand')).startsWith('the project root'), `${tag}: the root candidate reads "the project root"`);
+  await p.click('.dc-newsys-cand-path-label', { text: 'the project root' });
+  await h.checkSoon(() => p.guest(`return doc.querySelector('${LOC_INPUT}').value === '.'`), `${tag}: picking the root candidate fills the field with '.'`);
+  await p.waitFor('return !!doc.querySelector(".dc-newsys-contract-problem")', 'the root location read');
+  await p.settle(300);
+  h.check(!(await text(p, LOC_NOTE)).includes('Pick where the system lives'), `${tag}: the root candidate is not refused`);
+  h.check(await p.guest('return doc.querySelector(".dc-newsys-cand input").checked'), `${tag}: the root candidate stays ticked`);
+  h.check((await text(p, '.dc-newsys-g-result')).includes('In the project root'), `${tag}: the read column is scoped to the project root`);
+  h.check((await text(p, '.dc-newsys-contract-problem')).startsWith('The project root can’t be registered as it is.'), `${tag}: register is refused for the root with the service's reason`);
+  h.check(await p.guest('return !doc.querySelector(".dc-newsys-choice")'), `${tag}: no register choice for the root`);
+  h.check(await p.guest(`return doc.querySelector('${PRIMARY}').textContent.trim() === 'Make design system'`), `${tag}: the primary is Make design system`);
+  await reveal(p, surface, '.dc-newsys-g-result');
+  await p.shot(`${tag}-2-root-candidate`);
+
+  // The tick follows the field: another folder moves it off the root, '.' brings it back.
+  await p.type(LOC_INPUT, 'design-system');
+  await h.checkSoon(() => p.guest('const c = doc.querySelectorAll(".dc-newsys-cand input"); return !c[0].checked && c[1].checked'), `${tag}: typing design-system ticks that candidate, not the root`);
+  await p.type(LOC_INPUT, '.');
+  await h.checkSoon(() => p.guest('const c = doc.querySelectorAll(".dc-newsys-cand input"); return c[0].checked && !c[1].checked'), `${tag}: typing '.' ticks the root candidate`);
+  await p.click('.dc-newsys-g-where .oc-sdk-btn', { text: 'Read this folder' });
+  await p.waitFor('return !!doc.querySelector(".dc-newsys-contract-problem")', 'the root read again');
+
+  // Make from the root asks the agent, as it does for any other folder.
+  await p.type('.dc-newsys-g-name input', 'Root system');
+  const before = Number(await p.host('window.__host.sessionsStarted.length'));
+  await p.click(PRIMARY);
+  await h.checkSoon(() => p.guest('return !doc.querySelector(".dc-newsys")'), `${tag}: Make closes the sheet`);
+  await h.checkSoon(async () => Number(await p.host('window.__host.sessionsStarted.length')) === before + 1, `${tag}: Make from the root asks the agent`);
+  await p.close();
+};
+
 export const run = async (h) => {
   for (const theme of ['dark', 'light']) {
     await sheetFlow(h, 'page', 1400, theme);
@@ -271,4 +336,6 @@ export const run = async (h) => {
   await sheetFlow(h, 'panel', 480, 'light');
   await errorsFlow(h, 'page', 1400, 'dark');
   await errorsFlow(h, 'panel', 320, 'light');
+  await rootFlow(h, 'page', 1400, 'dark');
+  await rootFlow(h, 'panel', 320, 'light');
 };

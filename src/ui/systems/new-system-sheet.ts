@@ -57,6 +57,7 @@ import {
   forAgentLine,
   leftForAgentLine,
   locationLabel,
+  locationValue,
   missedLine,
   nextSources,
   nudgeLine,
@@ -531,9 +532,10 @@ export const openNewSystemSheet = (hostEl: HTMLElement, options: NewSystemOption
     if (!first || !first.strong) return null;
     const start = btn({ label: 'Start from it', variant: 'outline', size: 'xs', onClick: () => {
       Object.assign(sources, nextSources(sources, 'existing', true, { description, preset }));
-      locationPath = first.path;
+      const where = locationValue(first.path);
+      locationPath = where;
       paintSources();
-      void scanLocation(first.path);
+      void scanLocation(where);
     } });
     const dismiss = btn({ label: 'Dismiss', variant: 'ghost', size: 'xs', onClick: () => {
       nudgeDismissed = true;
@@ -618,13 +620,15 @@ export const openNewSystemSheet = (hostEl: HTMLElement, options: NewSystemOption
   const candidateRow = (candidate: SystemCandidate, groupName: string): HTMLElement => {
     const id = nextId('dc-newsys-cand');
     const input = h('input', { type: 'radio', class: 'dc-newsys-radio', name: groupName, id });
+    // The root's '' is not a folder the field can hold ("Pick where the system lives…"); the service takes '.'.
+    const where = locationValue(candidate.path);
     input.addEventListener('change', () => {
       if (!input.checked) return;
-      locationPath = candidate.path;
-      locationField.update({ value: candidate.path, error: undefined });
-      void scanLocation(candidate.path);
+      locationPath = where;
+      locationField.update({ value: where, error: undefined });
+      void scanLocation(where);
     });
-    candidateInputs.set(candidate.path, input);
+    candidateInputs.set(where, input);
     const pathLabel = h('label', { for: id, class: 'dc-newsys-cand-path-label', title: candidate.path === '' ? projectLabel() : candidate.path }, locationLabel(candidate.path));
     const pathLine = h('div', { class: 'dc-newsys-cand-path' }, pathLabel);
     if (candidate.marks.includes('contract')) {
@@ -786,7 +790,7 @@ export const openNewSystemSheet = (hostEl: HTMLElement, options: NewSystemOption
     resultHost.append(h('div', { class: 'dc-newsys-col-head' }, h('h3', { class: 'dc-newsys-h3' }, 'What Design Chamber read')));
     if (location.state === 'running') {
       const spinnerHost = h('div', { class: 'dc-newsys-running' });
-      mountSpinner(spinnerHost, { label: `Reading ${folderName(location.path)}…` });
+      mountSpinner(spinnerHost, { label: `Reading ${location.path === locationValue('') ? locationLabel(location.path) : folderName(location.path)}…` });
       resultHost.append(spinnerHost, btn({ label: 'Cancel scan', variant: 'ghost', size: 'xs', onClick: () => {
         cancelSlot(locationSlot);
         location = { state: 'idle' };
