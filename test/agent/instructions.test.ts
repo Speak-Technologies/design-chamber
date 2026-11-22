@@ -28,8 +28,9 @@ describe('buildInstructions (§U2.2)', () => {
   });
 
   test('a root so long the text would pass the limit drops the command clause first, then throws', () => {
-    // Phase 2.5 §8.11 added two lines, so the command clause goes at a shorter root than before.
-    const root = `/home/you/${'a'.repeat(1200 - '/home/you/'.length)}`;
+    // Phase 2.5 §8.11 and Phase 2.6 §7.4 each added lines, so the command clause goes at a shorter root than before.
+    const root = `/home/you/${'a'.repeat(1000 - '/home/you/'.length)}`;
+    assert.ok(buildInstructions({ root, platform: 'linux', checkCommand: null }).length <= SERVICE_INSTRUCTIONS_MAX, 'without the command it still fits');
     const text = buildInstructions({ root, platform: 'linux', checkCommand: posixCommand(root) });
     assert.ok(text.length <= SERVICE_INSTRUCTIONS_MAX, `${text.length} characters`);
     assert.ok(text.includes('check it with the design_check tool.'), 'the tool is still named');
@@ -97,6 +98,29 @@ describe('buildInstructions (§U2.2)', () => {
     }
   });
 
+  test('Phase 2.6 §7.4: two lines after the system lines, and the long Windows root stays within the host limit', () => {
+    const FOLDERS_LINE = '- Folders in the library are the user\'s tags. Add a design to an existing folder only when the user asks, with design.json "folderRequest" (the design-chamber skill has the format). Never create, rename or delete folders.';
+    const EXISTING_LINE = '- When the user points at a design system a project already has, read its page, docs and components before you build from it.';
+    for (const platform of ['linux', 'win32'] as const) {
+      const root = platform === 'win32' ? WIN_ROOT : POSIX_ROOT;
+      const lines = buildInstructions({ root, platform, checkCommand: null }).split('\n');
+      const repo = lines.indexOf("- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff.");
+      assert.ok(repo > 0);
+      assert.equal(lines[repo + 1], FOLDERS_LINE);
+      assert.equal(lines[repo + 2], EXISTING_LINE);
+      assert.equal(lines.length, repo + 3, 'nothing after them');
+    }
+    const longWin = `C:\\Users\\you\\${'very-long-folder-name\\'.repeat(11)}Designs`;
+    const text = buildInstructions({ root: longWin, platform: 'win32', checkCommand: winCommand(longWin) });
+    assert.ok(text.length <= SERVICE_INSTRUCTIONS_MAX, `${text.length} characters`);
+    assert.ok(text.includes('design.json "folderRequest"'));
+  });
+
+  test('Phase 2.6 §7.4: the pin line is not part of the note (it comes from settings pins only)', () => {
+    const text = buildInstructions({ root: POSIX_ROOT, platform: 'linux', checkCommand: null });
+    assert.ok(!text.includes('Designs for this project use the design system'));
+  });
+
   test('no launcher: the tool alone; Windows: native separators and the PowerShell hint', () => {
     const none = buildInstructions({ root: POSIX_ROOT, platform: 'linux', checkCommand: null });
     assert.ok(none.includes('check it with the design_check tool.'));
@@ -113,7 +137,7 @@ describe('buildInstructions (§U2.2)', () => {
     assert.ok(!text.includes('\u2014'));
     assert.equal(text, buildInstructions(input));
     assert.doesNotMatch(text, /token|bearer|OPENCHAMBER_/i);
-    assert.ok(text.split('\n').length <= 10, 'a short note');
+    assert.ok(text.split('\n').length <= 12, 'a short note');
   });
 });
 

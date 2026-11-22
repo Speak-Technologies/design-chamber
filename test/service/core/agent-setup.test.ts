@@ -18,6 +18,7 @@ import type { Logger } from '../../../src/service/context.ts';
 import { createSettingsStore } from '../../../src/service/settings.ts';
 import { checkCommandFor } from '../../../src/shared/agent/check-command.ts';
 import { buildAgentGuide, buildRetiredGuide, buildSkillDoc } from '../../../src/shared/agent/guide.ts';
+import { OWNERSHIP_PLACEHOLDER, withOwnershipHash } from '../../../src/shared/agent/ownership.ts';
 import type { ChangeEvent } from '../../../src/shared/types.ts';
 import { useTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
 import { REPO_ROOT } from './harness.ts';
@@ -181,6 +182,36 @@ describe('guide at <root>/AGENTS.md (§3.3)', () => {
     assert.equal((await agent.guideStatus(root)).state, 'outdated');
     assert.equal((await agent.syncGuide()).state, 'current');
     assert.equal(await readFile(file, 'utf8'), guideFor(root));
+  });
+
+  // Phase 2.6 G1: the guide text grew (Folders, The library). The shipped pre-2.6 guide, at this test's root, is ours and
+  // unedited, so it is refreshed; the same text with one user edit is never touched.
+  const pre26Guide = async (root: string): Promise<string> => {
+    const fixture = await readFile(path.join(REPO_ROOT, 'test', 'fixtures', 'guide-pre-2-6.posix.md'), 'utf8');
+    const zeroed = fixture.replace(/^(<!-- design-chamber:guide v1 sha256:)[0-9a-f]{64}( -->)/, `$1${OWNERSHIP_PLACEHOLDER}$2`).replaceAll('/home/you/Documents/Designs', root);
+    return withOwnershipHash(zeroed);
+  };
+
+  test('Phase 2.6: an unedited pre-2.6 guide of ours is refreshed to the new text', { skip: process.platform === 'win32' }, async (t) => {
+    const { root, agent } = await useFixture(t);
+    const file = path.join(root, 'AGENTS.md');
+    const old = await pre26Guide(root);
+    assert.ok(!old.includes('## Folders'), 'the fixture is the old guide');
+    await writeOld(file, old);
+    assert.equal((await agent.guideStatus(root)).state, 'outdated');
+    assert.equal((await agent.syncGuide()).state, 'current');
+    const now = await readFile(file, 'utf8');
+    assert.equal(now, guideFor(root));
+    assert.ok(now.includes('## Folders') && now.includes('## The library'));
+  });
+
+  test('Phase 2.6: a pre-2.6 guide the user edited is left alone (bytes and mtime), never refreshed', { skip: process.platform === 'win32' }, async (t) => {
+    const { root, agent } = await useFixture(t);
+    const file = path.join(root, 'AGENTS.md');
+    await writeOld(file, (await pre26Guide(root)).replace('Write order', 'My write order'));
+    const before = await fingerprint(file);
+    assert.equal((await agent.syncGuide()).state, 'edited');
+    assert.deepEqual(await fingerprint(file), before);
   });
 
   test('an edited guide is left alone (bytes and mtime), even when emptied', async (t) => {

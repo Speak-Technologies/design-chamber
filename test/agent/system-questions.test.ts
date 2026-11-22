@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, test } from 'node:test';
 
-import { parseSystemQuestions, SYSTEM_QUESTIONS_CLOSING } from '../../src/shared/agent/system-questions.ts';
+import { parseSystemQuestions, SYSTEM_QUESTIONS_CLOSING, SYSTEM_QUESTIONS_CONDITIONAL_LINE } from '../../src/shared/agent/system-questions.ts';
 import { buildSystemSkillBody } from '../../src/shared/agent/system-skill-doc.ts';
 import { systemContractSection } from '../../src/shared/agent/system-rules.ts';
 
@@ -58,6 +58,47 @@ describe('parseSystemQuestions: R1 accepted', () => {
 
   test('CRLF reads the same as LF', () => {
     assert.deepEqual(parseSystemQuestions(R1.replace(/\n/g, '\r\n')), set);
+  });
+});
+
+describe('parseSystemQuestions: the conditional existing-system question (Phase 2.6 §7.6, R2)', () => {
+  const FROM_LINE = '- **Start from the system in <folder>** {#from-existing}:';
+
+  test('R2 is in the file: round one, asked only when a location was found or named, recommended first, "whole" second', () => {
+    const one = R1.slice(R1.indexOf('## Round one'), R1.indexOf('## Round two'));
+    assert.ok(one.includes('### Start from a system the project already has? {#existing}\n' + SYSTEM_QUESTIONS_CONDITIONAL_LINE + '\n'));
+    assert.ok(one.includes(FROM_LINE));
+    assert.ok(one.includes('- Read the whole project {#whole}:'));
+    assert.ok(one.indexOf('{#from-existing}') < one.indexOf('{#whole}'));
+    assert.ok(!R1.includes('\u2014'), 'no em dash');
+  });
+
+  test('the parser accepts it, so the build stays green, and leaves it out of the set the block draws', () => {
+    const set = parseSystemQuestions(R1);
+    assert.ok(!set.roundOne.some((question) => question.topic === 'existing'));
+    assert.deepEqual(set.roundOne.map((question) => question.topic), ['home', 'mode', 'coverage', 'dark']);
+  });
+
+  test('the same file without the conditional question parses to the same set (the question is additive)', () => {
+    const without = R1.replace(/### Start from a system the project already has\? \{#existing\}\n(?:.*\n)+?\n(?=### Where)/, '');
+    assert.ok(!without.includes('{#existing}'));
+    assert.deepEqual(parseSystemQuestions(without), parseSystemQuestions(R1));
+  });
+
+  test('a conditional topic needs its marker line; the marker belongs to no other topic', () => {
+    assert.throws(() => parseSystemQuestions(mutated(`${SYSTEM_QUESTIONS_CONDITIONAL_LINE}\n`, '')), /"existing" is conditional and needs the line/);
+    assert.throws(() => parseSystemQuestions(mutated('### Where should the design system live? {#home}\n', `### Where should the design system live? {#home}\n${SYSTEM_QUESTIONS_CONDITIONAL_LINE}\n`)), /only a conditional question may carry the line/);
+  });
+
+  test('it is still checked like any question: one recommended option, a valid id, no duplicate choice, not multiple', () => {
+    assert.throws(() => parseSystemQuestions(mutated(FROM_LINE, '- Start from the system in <folder> {#from-existing}:')), /needs exactly one recommended option/);
+    assert.throws(() => parseSystemQuestions(mutated('{#from-existing}', '{#From-existing}')), /must be lower-case letters, digits and dashes/);
+    assert.throws(() => parseSystemQuestions(mutated('{#whole}', '{#from-existing}')), /duplicate choice "from-existing"/);
+    assert.throws(() => parseSystemQuestions(mutated(`${SYSTEM_QUESTIONS_CONDITIONAL_LINE}\n`, `${SYSTEM_QUESTIONS_CONDITIONAL_LINE}\nPick any.\n`)), /needs exactly one recommended option|cannot be a "Pick any\." question/);
+  });
+
+  test('an unknown round-one topic is still refused (only "existing" is conditional)', () => {
+    assert.throws(() => parseSystemQuestions(mutated('{#existing}', '{#other}')), /"other" is not a round one question the SystemAsk block knows/);
   });
 });
 
@@ -121,7 +162,8 @@ describe('the skill and the block read the same ids (AD-25)', () => {
     for (const id of ids) assert.ok(body.includes(`{#${id}}`), `the skill carries {#${id}}`);
     // The markers in the file are exactly the ids the set holds: no extra question, no lost one.
     const inFile = [...R1.matchAll(/\{#([a-z0-9][a-z0-9-]{0,39})\}/g)].map((match) => match[1]);
-    assert.deepEqual([...inFile].sort(), [...ids].sort());
+    // The conditional question is in the file and the skill but not in the set the block draws (Phase 2.6 §7.6).
+    assert.deepEqual([...inFile].sort(), [...ids, 'existing', 'from-existing', 'whole'].sort());
     assert.ok(body.includes(R1.trim()), 'the interview is inlined verbatim, so the wording is one source');
   });
 });

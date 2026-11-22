@@ -118,11 +118,44 @@ describe('buildAgentGuide (§4)', () => {
     assert.match(guide, /"kind": "canvas"/);
   });
 
-  test('the owned-field list names tweaks (Phase 2)', () => {
+  test('the owned-field list names tweaks (Phase 2) and folderRequest (Phase 2.6 §7.1)', () => {
     for (const [root, platform] of [[POSIX_ROOT, 'linux'], [WIN_ROOT, 'win32']] as const) {
       const guide = buildAgentGuide({ root, platform });
-      assert.ok(guide.includes('change only `title`, `updated`, `viewports`, `screens`, `designSystem` and `tweaks`, and keep every other key as it is.'));
+      assert.ok(guide.includes('change only `title`, `updated`, `viewports`, `screens`, `designSystem`, `tweaks` and `folderRequest`, and keep every other key as it is.'));
     }
+  });
+
+  test('Phase 2.6 §7.1: the existing-system line, the Folders section and the library section, in that order after the design-system lines', () => {
+    for (const [root, platform, sep] of [[POSIX_ROOT, 'linux', '/'], [WIN_ROOT, 'win32', '\\']] as const) {
+      const guide = buildAgentGuide({ root, platform });
+      const foldersFile = `${root}${sep}.chamber${sep}folders.json`;
+      const needles = [
+        '## Design systems',
+        '- A project may already have a design system: a page, docs, components. When the user points at one, read its page, docs and components first, and build from what is there. Design Chamber reads the CSS and token files it can parse; you write the overview, notes and components.',
+        "- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff.",
+        '## Folders',
+        "- The user groups designs into folders in the library. Folders are tags: a design can sit in several, and grouping never moves a design's folder on disk.",
+        '- Projects group designs by the project they were made for. The user can also file a design under another project; that only groups it, and its design rules still come from the project it was made for.',
+        '- When the user asks you to put a design in a folder, add it to an existing folder by name: in its design.json set `"folderRequest": { "add": ["Q4 launch"], "at": "<the current time>" }`, or use `"remove"` to take it out. Design Chamber files it within a few seconds.',
+        `- The folder names are in \`${foldersFile}\`. Read it, never write it. If the folder doesn't exist, say so and name the closest ones; never invent a folder.`,
+        '- Never create, rename or delete folders, and never move files to organise them. The user does that in the library.',
+        '## The library',
+        'The user browses designs as tiles or a list, sorts them by Updated, Created or Title, and filters them by project, folder, kind and system. Design systems show there too. Point the user at the library when they ask where a design is.',
+        '## Design rules',
+      ];
+      let from = 0;
+      for (const needle of needles) {
+        const at = guide.indexOf(needle, from);
+        assert.ok(at >= 0, `missing or out of order: ${needle}`);
+        from = at;
+      }
+    }
+  });
+
+  test('Phase 2.6: the Leave-these-alone section is unchanged, and the guide never tells the agent to write folders.json', () => {
+    const guide = buildAgentGuide({ root: POSIX_ROOT, platform: 'linux' });
+    assert.ok(guide.includes('## Leave these alone\n\nNever touch `.versions/`, `.chamber/`, `.thumb.png` or `.trash/`. Design Chamber keeps versions, comments and thumbnails there.\nLeave `_systems/` alone too, unless you were asked to work on a system.\n'));
+    assert.ok(guide.includes('Read it, never write it.'));
   });
 
   test('the design-system lines: build with /design-system, and a design task never writes a repo (Phase 2.5 §8.11)', () => {
@@ -225,9 +258,20 @@ describe('buildAgentsSnippet (§5.3)', () => {
         `When I ask for a design, mockup, page or canvas, save it in my designs folder: ${POSIX_ROOT}`,
         `Read ${POSIX_ROOT}/AGENTS.md first and follow it. Each design is its own folder there, never a loose`,
         '.html file. Write design.json first, then the HTML. Work offline: no CDNs, no Google Fonts.',
+        'Designs can be grouped into folders (tags, never disk moves) and use design systems. Read the guide for the rules.',
       ].join('\n'),
     );
     assert.ok(buildAgentsSnippet(WIN_ROOT).includes(`${WIN_ROOT}\\AGENTS.md`));
+  });
+
+  test('Phase 2.6 §7.2: five lines, well under the cap, and it needs nothing from the guide file (so it stays copyable beside an edited guide)', () => {
+    for (const root of [POSIX_ROOT, WIN_ROOT]) {
+      const snippet = buildAgentsSnippet(root);
+      assert.equal(snippet.split('\n').length, 5);
+      assert.ok(snippet.length <= AGENTS_SNIPPET_MAX, `${snippet.length}`);
+      assert.ok(snippet.endsWith('Read the guide for the rules.'));
+      assert.equal(snippet, buildAgentsSnippet(root), 'a pure function of the root');
+    }
   });
 });
 

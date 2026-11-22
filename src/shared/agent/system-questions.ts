@@ -9,6 +9,12 @@
 // `Pick any.` line, options as `- **Label** {#choice}: why` (recommended) or `- Label {#choice}: why`,
 // and each round ending with the closing sentence. Anything else is refused with its sentence, so
 // a broken file fails the build instead of reaching a chat.
+//
+// One round-one question is conditional (Phase 2.6 §7.6, `existing`): it carries the line
+// `Ask only when a location was found or named.` and is asked only when the agent found, or the
+// user named, a design system the project already has. The agent asks it in plain words from the
+// skill text; the block never draws it (it has no folder to name), so the parser checks its
+// shape and leaves it out of the set the block bakes.
 
 import type { SystemQuestion, SystemQuestionSet } from '../types.ts';
 
@@ -19,6 +25,8 @@ const WHY_MAX = 200;
 
 export const SYSTEM_QUESTIONS_CLOSING = 'Reply with changes, or say go to accept the defaults.';
 export const SYSTEM_QUESTIONS_FILE = 'rules/SYSTEM-QUESTIONS.md';
+/** The marker line of a conditional question: it is asked only when a location was found or named. */
+export const SYSTEM_QUESTIONS_CONDITIONAL_LINE = 'Ask only when a location was found or named.';
 
 const ROUND_ONE_HEADING = '## Round one: before you read the code';
 const ROUND_TWO_HEADING = '## Round two: after you read the code';
@@ -27,6 +35,8 @@ const AFTER_HEADING = '## After two rounds';
 /** The closed topic set of each round (§8.9); the file's order is kept. */
 const ROUND_ONE_TOPICS: readonly string[] = ['home', 'mode', 'coverage', 'dark'];
 const ROUND_TWO_TOPICS: readonly string[] = ['status-colours', 'greys', 'access', 'typography', 'dark-values'];
+/** Topics a round may also hold, each only with the conditional marker line, and never baked into the block's set. */
+const ROUND_ONE_CONDITIONAL: readonly string[] = ['existing'];
 
 const fail = (sentence: string): Error => new Error(`${SYSTEM_QUESTIONS_FILE}: ${sentence}`);
 
@@ -46,7 +56,7 @@ const parseOption = (line: string): Option | null => {
 };
 
 /** The questions of one round section, in file order, with the round's closing sentence checked. */
-const parseRound = (lines: readonly string[], expected: readonly string[], roundName: string): SystemQuestion[] => {
+const parseRound = (lines: readonly string[], expected: readonly string[], roundName: string, conditional: readonly string[] = []): SystemQuestion[] => {
   const questions: SystemQuestion[] = [];
   const seenTopics = new Set<string>();
   let current: { question: SystemQuestion; body: string[] } | null = null;
@@ -77,7 +87,13 @@ const parseRound = (lines: readonly string[], expected: readonly string[], round
     if (options.length === 0) throw fail(`the question "${question.topic}" has no options.`);
     const recommended = options.filter((option) => option.recommended).length;
     if (!multiple && recommended !== 1) throw fail(`the question "${question.topic}" needs exactly one recommended option (in bold), or the "Pick any." line.`);
-    questions.push({ ...question, multiple, options });
+    // The marker line and the topic go together: a conditional topic without it, or the line on any other topic, is a file mistake.
+    const marked = trimmedBody.includes(SYSTEM_QUESTIONS_CONDITIONAL_LINE);
+    const isConditional = conditional.includes(question.topic);
+    if (isConditional && !marked) throw fail(`the question "${question.topic}" is conditional and needs the line "${SYSTEM_QUESTIONS_CONDITIONAL_LINE}".`);
+    if (marked && !isConditional) throw fail(`only a conditional question may carry the line "${SYSTEM_QUESTIONS_CONDITIONAL_LINE}", not "${question.topic}".`);
+    if (isConditional && multiple) throw fail(`the conditional question "${question.topic}" cannot be a "Pick any." question.`);
+    if (!isConditional) questions.push({ ...question, multiple, options });
   };
 
   for (const line of lines) {
@@ -92,7 +108,7 @@ const parseRound = (lines: readonly string[], expected: readonly string[], round
       if (label.length > LABEL_MAX) throw fail(`the label of "${topic}" is over ${LABEL_MAX} characters.`);
       if (!ID_PATTERN.test(topic)) throw fail(`the topic id "${topic}" must be lower-case letters, digits and dashes, up to 40 characters.`);
       if (seenTopics.has(topic)) throw fail(`duplicate topic "${topic}".`);
-      if (!expected.includes(topic)) throw fail(`"${topic}" is not a ${roundName} question the SystemAsk block knows.`);
+      if (!expected.includes(topic) && !conditional.includes(topic)) throw fail(`"${topic}" is not a ${roundName} question the SystemAsk block knows.`);
       seenTopics.add(topic);
       current = { question: { topic, label, multiple: false, options: [] }, body: [] };
       continue;
@@ -125,7 +141,7 @@ export const parseSystemQuestions = (markdown: string): SystemQuestionSet => {
   const after = headingAt(AFTER_HEADING);
   if (!(one < two && two < after)) throw fail('the round headings must come in order: round one, round two, after two rounds.');
   return {
-    roundOne: parseRound(lines.slice(one + 1, two), ROUND_ONE_TOPICS, 'round one'),
+    roundOne: parseRound(lines.slice(one + 1, two), ROUND_ONE_TOPICS, 'round one', ROUND_ONE_CONDITIONAL),
     roundTwo: parseRound(lines.slice(two + 1, after), ROUND_TWO_TOPICS, 'round two'),
     closing: SYSTEM_QUESTIONS_CLOSING,
   };
