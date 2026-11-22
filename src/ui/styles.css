@@ -5572,3 +5572,68 @@ button.dc-sp-value:focus-visible {
   }
 }
 /* ===== end Phase 2.6 F2 ===== */
+
+/* ===== Phase 2.6 design warnings (components/design-warnings.ts) ===== */
+/* A calm band under the toolbar: the service's own sentences about what it could not apply. */
+.dc-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+  margin: var(--dc-s2) var(--dc-s3) 0;
+  padding: 6px var(--dc-s3);
+  border-radius: var(--dc-r);
+  background: color-mix(in srgb, var(--oc-warning) 12%, transparent);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+.dc-warnings[hidden],
+.dc-warnings-line[hidden],
+.dc-warnings-more[hidden] {
+  display: none;
+}
+.dc-warnings-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dc-warnings-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-warnings-line > .dc-icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--dc-warning-text);
+}
+.dc-warnings-text {
+  min-width: 0;
+  color: var(--oc-fg);
+  overflow-wrap: anywhere;
+}
+.dc-warnings-more {
+  align-self: flex-start;
+  min-height: 28px;
+  margin: 0 calc(var(--dc-s2) * -1);
+  padding: 2px var(--dc-s2);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: none;
+  color: var(--oc-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.dc-warnings-more:hover {
+  background: var(--oc-hover);
+  color: var(--oc-fg);
+}
+.dc-warnings-more:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+/* ===== end Phase 2.6 design warnings ===== */

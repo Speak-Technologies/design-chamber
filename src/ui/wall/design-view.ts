@@ -10,6 +10,7 @@ import { confirmDelete, continueInChat, copyHtml, copyPath, exportDesign, rename
 import { mountComments, type CommentsHandle } from '../components/comments-drawer.ts';
 import { createScope, debounce, errorText, h, replace } from '../components/dom.ts';
 import { openAddToFolder } from '../components/folder-actions.ts';
+import { mountDesignWarnings } from '../components/design-warnings.ts';
 import { createNotices } from '../components/notices.ts';
 import { sendOneComment } from '../components/send-comments.ts';
 import { trackBottomSheet } from '../components/bottom-sheet.ts';
@@ -479,6 +480,9 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
 
     // ---------------------------------------------------------------- notices
     const notices = createNotices();
+    // Problems the service found in what the agent wrote (a folder or design system it could not apply); fed by `apply`.
+    const warningsBand = mountDesignWarnings();
+    bscope.add(() => warningsBand.dispose());
 
     // "Ask the agent to fix it": one request at a time; the button is busy until it finishes,
     // also when the banner was repainted meanwhile.
@@ -733,6 +737,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
       paintChips();
       paintViewportOptions();
       paintNotices();
+      warningsBand.set(next.warnings);
       // The agent removed the viewport this page was shown at: back to Full width.
       if (isPage && resolvePageView(pageView, next.design.viewports) !== pageView) showPageView(PAGE_FILL_VIEWPORT_ID);
       detailListeners.emit();
@@ -754,7 +759,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     );
 
     const main = h('div', { class: 'dc-design-main' }, h('div', { class: 'dc-wall-col' }, stage, slots.bottomDock), dock);
-    replace(el, toolbar, notices.el, main, compact ? h('footer', { class: 'dc-hint' }, FULL_SCREEN_HINT) : null);
+    replace(el, toolbar, warningsBand.el, notices.el, main, compact ? h('footer', { class: 'dc-hint' }, FULL_SCREEN_HINT) : null);
     apply(first);
     refreshHtmlSize();
     if (isPage) {
