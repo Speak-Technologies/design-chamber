@@ -8,7 +8,7 @@ import { mountBadge } from '@openchamber/sdk/ui';
 import type { DesignSummary } from '../../shared/types.ts';
 import { mountSwatchDot } from '../systems/system-plate.ts';
 import { host } from '../guest.ts';
-import { cardProjectLine, kindLabel, kindSummary, rowAriaLabel, SYSTEM_UPDATED_LABEL, systemUpdated, type ListScope, type ProjectGroup } from '../model/list-model.ts';
+import { cardProjectLine, kindLabel, kindSummary, rowAriaLabel, SYSTEM_UPDATED_LABEL, systemUpdated, type ListScope, type ManualProjects, type ProjectGroup } from '../model/list-model.ts';
 import { plural, relativeTime } from '../model/format.ts';
 import { DESIGN_DRAG_TYPE, listDesignMenu, runListAction, type DesignMenuView } from './folder-actions.ts';
 import { toast, type ActionContext } from './actions.ts';
@@ -21,6 +21,8 @@ export type DesignRowView = {
   scope: ListScope;
   groups: readonly ProjectGroup[];
   root: string;
+  /** The registry's manual project members, so a design filed by hand shows its project line. */
+  manual?: ManualProjects;
   /** What the row's menu offers: the folder or manual project being viewed, if any (F2). */
   menu: DesignMenuView;
 };
@@ -90,8 +92,8 @@ export const mountDesignRow = (design: DesignSummary, options: DesignRowOptions)
     thumbs.set(design.slug, thumb);
   }
   const locale = host.snapshot()?.locale ?? 'en';
-  const line = cardProjectLine(design, view.scope, view.groups, view.root);
-  const project = line ? h('span', { class: 'dc-row-project', title: line.title }, icon('layers', 12), h('span', { class: 'dc-row-project-name' }, line.label)) : null;
+  const line = cardProjectLine(design, view.scope, view.groups, view.root, view.manual);
+  const project = line ? h('span', { class: 'dc-row-project', title: line.title, 'data-filed': line.manual ? 'true' : null }, icon('layers', 12), h('span', { class: 'dc-row-project-name' }, line.label)) : null;
   const flags = rowFlags(design);
   const more = iconBtn({ icon: 'more', label: `Actions for ${design.title}`, size: 'sm', onClick: () => undefined });
   const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };

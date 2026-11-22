@@ -6608,3 +6608,30 @@ button.dc-sp-value:focus-visible {
   }
 }
 /* ===== end Phase 2.6 L1b ===== */
+
+/* ===== Phase 2.6 QA-L: the first-run system start in the empty state ===== */
+/* Two actions side by side (New canvas, Start a design system), wrapping at the rail's width. */
+.dc-app .oc-sdk-empty-action:has(+ .dc-empty-note),
+.dc-app .oc-sdk-empty-action:has(.oc-sdk-btn + .oc-sdk-btn) {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--dc-s2);
+}
+/* The line under the first-run actions: a plain sentence with one link, left aligned inside a centred block. */
+.dc-empty-note {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--dc-s2);
+  max-width: 44ch;
+  margin: var(--dc-s3) auto 0;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  text-align: left;
+}
+.dc-empty-note > .dc-icon {
+  flex: none;
+  margin-top: 2px;
+}
+/* ===== end Phase 2.6 QA-L ===== */

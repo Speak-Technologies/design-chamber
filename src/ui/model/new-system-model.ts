@@ -246,20 +246,27 @@ export const filesReadMore = (summary: ScanSummary): string | null => {
 };
 
 /**
- * Why a location's contract can't be registered as it is. The service names each gap; a gap that is a file name
- * reads "… is missing", a sentence stands on its own, and the project root gets its own line (it needs a folder).
+ * Why a location's contract can't be registered as it is. The service names each gap, and one name covers
+ * two cases: `tokens.css` is a gap when the file is absent and when it is there with no custom property, so
+ * the clause says both. `system.json` is only a gap when the file vanished between the walk and the read
+ * (a folder that never had one is not a contract at all), so that sentence stops claiming the folder has it.
+ * A sentence stands on its own, and the project root gets its own line (it needs a folder).
  */
 export const contractProblemLine = (missing: readonly string[]): string => {
   if (missing.includes('a folder inside the project')) {
     return 'The project root can’t be registered as it is. A registered system needs its own folder inside the project. Make a new system from it instead.';
   }
+  const lost = missing.includes('system.json');
   const clauses = missing.map((gap) => {
-    if (gap === 'system.json' || gap === 'tokens.css') return `${gap} is missing`;
+    if (gap === 'system.json') return 'system.json went missing';
+    if (gap === 'tokens.css') return 'tokens.css is missing or holds no token values';
     if (gap === 'a folder path of up to four folders without spaces') return 'its folder path must be up to four folders without spaces';
     if (gap === 'a folder Design Chamber can read in full') return 'Design Chamber can’t read the whole folder';
     return gap;
   });
-  return `This folder has a system.json but ${joinParts(clauses)}, so it can’t be registered as it is. Make a new system from it instead.`;
+  const lead = lost ? 'While the folder was read, ' : 'This folder has a system.json but ';
+  const way = lost ? 'Read the folder again, or make a new system from it instead.' : 'Make a new system from it instead.';
+  return `${lead}${joinParts(clauses)}, so it can’t be registered as it is. ${way}`;
 };
 
 export const LOOKING_LABEL = (project: string): string => `Looking for a design system in ${project}…`;
@@ -269,6 +276,9 @@ export const DISCOVERY_IDLE = 'Choose a project and Design Chamber looks for a d
 export const LOCATION_HELPER = (project: string): string => `A folder inside ${project}. Design Chamber only reads it.`;
 
 export const LOCATION_IDLE = 'Pick a folder and Design Chamber reads its token files. Nothing in it is changed.';
+
+/** A folder is typed in the field but not read (the field changed after a read, or nothing was pressed yet). */
+export const LOCATION_UNREAD = 'This folder hasn’t been read yet. Press Read this folder to see what is in it.';
 
 export const LOCATION_FAILED_HINT = 'The folder wasn’t read. The path field says why.';
 

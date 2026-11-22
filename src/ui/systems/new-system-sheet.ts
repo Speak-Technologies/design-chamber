@@ -29,6 +29,7 @@ import {
   LOCATION_FAILED_HINT,
   LOCATION_HELPER,
   LOCATION_IDLE,
+  LOCATION_UNREAD,
   LOOKING_LABEL,
   MAKE_CHOICE_LABEL,
   MAKE_FROM_HINT,
@@ -464,6 +465,15 @@ export const openNewSystemSheet = (hostEl: HTMLElement, options: NewSystemOption
     onChange: (next) => {
       locationPath = next;
       locationField.update({ value: next });
+      // A read, a failure or a scan under way belongs to the folder it was for. A different folder in the field
+      // drops it, so the footer can't Register or Make from a scan of the old one; a failure's sentence goes with it.
+      if (location.state !== 'idle' && next.trim() !== location.path) {
+        cancelSlot(locationSlot);
+        location = { state: 'idle' };
+        choice = 'make';
+        locationTicked.clear();
+        paintExisting();
+      }
       syncCandidateChecks();
       if (attempted) paintProblems();
     },
@@ -784,7 +794,7 @@ export const openNewSystemSheet = (hostEl: HTMLElement, options: NewSystemOption
       } }).el);
       return;
     }
-    resultHost.append(h('p', { class: 'dc-muted' }, location.state === 'failed' ? LOCATION_FAILED_HINT : LOCATION_IDLE));
+    resultHost.append(h('p', { class: 'dc-muted' }, location.state === 'failed' ? LOCATION_FAILED_HINT : locationPath.trim() === '' ? LOCATION_IDLE : LOCATION_UNREAD));
   };
 
   const paintExisting = (): void => {

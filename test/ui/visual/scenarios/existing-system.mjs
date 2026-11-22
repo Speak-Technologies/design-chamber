@@ -142,6 +142,22 @@ const sheetFlow = async (h, surface, width, theme) => {
   await p.click('.dc-newsys-choice[data-choice="register"] input');
   await h.checkSoon(() => p.guest(`return doc.querySelector('${PRIMARY}').textContent.trim() === 'Register design system'`), `${tag}: choosing Register swaps it back`);
 
+  // A stale read: typing another folder after a read drops the stale read, so the footer cannot Register the old scan.
+  await p.type(LOC_INPUT, 'style-guide');
+  await h.checkSoon(() => p.guest(`return doc.querySelector('${PRIMARY}').textContent.trim() === 'Make design system'`), `${tag}: a different folder typed after a read puts the primary back to Make design system`);
+  h.check(await p.guest('return !doc.querySelector(".dc-newsys-choice")'), `${tag}: the register choice is gone while the typed folder is unread`);
+  h.check((await text(p, '.dc-newsys-g-result')).includes('This folder hasn’t been read yet. Press Read this folder to see what is in it.'), `${tag}: the read column says the typed folder has not been read`);
+  h.check(!(await text(p, '.dc-newsys-g-result')).includes('In design-system/'), `${tag}: the read column no longer names the old folder`);
+  h.check(await p.guest(`return doc.querySelector('${LOC_INPUT}').value === 'style-guide'`), `${tag}: what was typed is kept`);
+  await reveal(p, surface, '.dc-newsys-g-result');
+  await p.shot(`${tag}-3b-stale-read`);
+  // Back to the complete folder and read it: the choice returns for that path, Register preselected.
+  await p.type(LOC_INPUT, 'design-system');
+  await p.click('.dc-newsys-g-where .oc-sdk-btn', { text: 'Read this folder' });
+  await p.waitFor('return !!doc.querySelector(".dc-newsys-choice")', 'the register choice after reading again');
+  h.check(await p.guest('return doc.querySelector(".dc-newsys-choice[data-choice=register] input").checked'), `${tag}: reading the complete folder again preselects Register`);
+  h.check(await p.guest(`return doc.querySelector('${PRIMARY}').textContent.trim() === 'Register design system'`), `${tag}: the primary reads Register design system again`);
+
   // Register: a name edit, one press, a toast, and the system's page opens.
   await p.type('.dc-newsys-g-name input', 'Speak UI');
   await p.click(PRIMARY);
@@ -183,7 +199,7 @@ const errorsFlow = async (h, surface, width, theme) => {
   await p.type(LOC_INPUT, 'style-guide');
   await p.click('.dc-newsys-g-where .oc-sdk-btn', { text: 'Read this folder' });
   await p.waitFor('return !!doc.querySelector(".dc-newsys-contract-problem")', 'the incomplete contract line');
-  h.check((await text(p, '.dc-newsys-contract-problem')) === 'This folder has a system.json but tokens.css is missing, so it can’t be registered as it is. Make a new system from it instead.', `${tag}: the incomplete contract names what is missing`);
+  h.check((await text(p, '.dc-newsys-contract-problem')) === 'This folder has a system.json but tokens.css is missing or holds no token values, so it can’t be registered as it is. Make a new system from it instead.', `${tag}: the incomplete contract names what is missing`);
   h.check(await p.guest('return !doc.querySelector(".dc-newsys-choice")'), `${tag}: no register choice for an incomplete contract`);
   h.check(await p.guest(`return doc.querySelector('${PRIMARY}').textContent.trim() === 'Make design system'`), `${tag}: the primary stays Make design system`);
   await reveal(p, surface, '.dc-newsys-g-result');

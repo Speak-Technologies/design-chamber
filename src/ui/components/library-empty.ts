@@ -8,11 +8,17 @@ import { mountEmpty } from '@openchamber/sdk/ui';
 import type { EmptyChip, LibraryEmpty } from '../model/list-model.ts';
 import { h } from './dom.ts';
 import { icon } from './icons.ts';
+import { btn } from './kit.ts';
 
 export type LibraryEmptyHandlers = {
   /** The one action: New canvas, Show all designs, Clear filters, New design system… or Try again, per the model. */
   onAction: () => void;
   onClearChip: (id: Exclude<EmptyChip['id'], 'scope'>) => void;
+  /**
+   * First run only (no designs and no systems yet): a second action that starts a design system, and a line
+   * that starts one from a system the project already has (the approved canvas's First run board).
+   */
+  firstRun?: { onNewSystem: () => void; onExistingSystem: () => void };
 };
 
 const ACTION_LABEL: Record<LibraryEmpty['action'], string> = {
@@ -31,6 +37,16 @@ const CLEAR_LABEL: Record<Exclude<EmptyChip['id'], 'scope'>, string> = {
 
 export const mountLibraryEmpty = (wrap: HTMLElement, model: LibraryEmpty, handlers: LibraryEmptyHandlers): void => {
   mountEmpty(wrap, { title: model.title, body: model.body, action: { label: model.actionLabel ?? ACTION_LABEL[model.action], onClick: handlers.onAction } });
+  if (model.kind === 'no-designs' && handlers.firstRun) {
+    const { onNewSystem, onExistingSystem } = handlers.firstRun;
+    const more = btn({ label: 'Start a design system', variant: 'outline', size: 'sm', icon: 'system', onClick: onNewSystem });
+    const existing = h('button', { type: 'button', class: 'dc-link' }, 'From an existing system…');
+    existing.addEventListener('click', onExistingSystem);
+    const slot = wrap.querySelector('.oc-sdk-empty-action');
+    if (slot) slot.append(more.el);
+    else wrap.append(more.el);
+    wrap.append(h('p', { class: 'dc-empty-note' }, icon('info', 14), h('span', null, 'Already have a design system in a project? Start one from it with ', existing)));
+  }
   if (model.chips.length === 0) return;
   const row = h('div', { class: 'dc-empty-filters', role: 'group', 'aria-label': 'Active filters' });
   for (const chip of model.chips) {

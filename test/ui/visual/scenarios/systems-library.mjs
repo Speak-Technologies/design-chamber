@@ -240,7 +240,7 @@ const railFlow = async (h, width, theme) => {
   h.check(await p.guest('return !!doc.querySelector(".dc-syspg .dc-iconbtn[aria-label=\\"Back to designs\\"]")'), `${tag}: Back is named for where it goes`);
   await p.click('.dc-syspg .dc-iconbtn[aria-label="Back to designs"]');
   await h.checkSoon(() => p.guest('return !doc.querySelector(".dc-syspg") && !doc.querySelector(".dc-sys-view") && !!doc.querySelector(".dc-row[data-slug]")'), `${tag}: Back returns to the library, not the systems list`);
-  h.check(await p.guest('return doc.activeElement?.dataset.systemId === "tidepool"'), `${tag}: focus returns to the chip`);
+  await h.checkSoon(() => p.guest('return doc.activeElement?.dataset.systemId === "tidepool"'), `${tag}: focus returns to the chip`);
   await p.click('.dc-row[data-slug="onboarding-flow"] .dc-design-system-chip');
   await h.checkSoon(async () => /This system was deleted/.test(await toastTexts(p)), `${tag}: a deleted chip says so in a toast`);
 

@@ -23,6 +23,7 @@ import {
   noMatchesSentenceFor,
   projectGroups,
   projectOf,
+  projectsOf,
   resolveScope,
   resolveSystemFilter,
   rowAriaLabel,
@@ -255,6 +256,72 @@ test('cardProjectLine shows the project under the title unless the list is that 
   assert.equal(cardProjectLine(cart, { kind: 'folder', id: 'f_aaaaaaaaaa' }, groups, ROOT)?.label, 'shop');
   assert.equal(cardProjectLine(cart, { kind: 'project', directory: 'c:/users/you/work/shop' }, groups, ROOT), null);
   assert.equal(cardProjectLine(grouped[3] as DesignSummary, ALL_SCOPE, groups, ROOT), null, 'no project, no line');
+});
+
+// ---- Manual project members (Phase 2.6 QA-L1): the library reads the registry's projects with the derived ones ----
+
+const MYCHAMBA = 'C:\\Users\\you\\work\\mychamba';
+/** loose-idea has no project of its own and the user filed it under mychamba; cart is made for shop and also filed under mychamba. */
+const manual = [{ directory: MYCHAMBA, slugs: ['loose-idea', 'cart', 'gone-slug'] }];
+
+test('projectsOf: the derived project first, then the manual ones, each once; none means No project', () => {
+  const cart = grouped[0] as DesignSummary;
+  const idea = grouped[3] as DesignSummary;
+  assert.deepEqual(projectsOf(cart, ROOT, manual), [SHOP, MYCHAMBA]);
+  assert.deepEqual(projectsOf(idea, ROOT, manual), [MYCHAMBA]);
+  assert.deepEqual(projectsOf(idea, ROOT), [], 'no registry, no project');
+  assert.deepEqual(projectsOf(cart, ROOT, [{ directory: 'c:/users/you/work/shop/', slugs: ['cart'] }]), [SHOP], 'a manual entry for the derived project adds nothing');
+  assert.deepEqual(projectsOf(idea, ROOT, [{ directory: `${ROOT}\\scratch`, slugs: ['loose-idea'] }]), [], 'a manual project inside the designs folder is still No project');
+});
+
+test('a project with only manual members gets a group, and manual members join the derived count', () => {
+  const groups = projectGroups(grouped, [], ROOT, undefined, manual);
+  assert.deepEqual(groups.map((g) => [g.label, g.count]), [['docs', 1], ['mychamba', 2], ['shop', 2]], 'gone-slug is not in the list, so it never counts');
+  assert.deepEqual(projectGroups(grouped, [], ROOT, undefined).map((g) => g.label), ['docs', 'shop'], 'without the registry the project is not there');
+  const onlyManual = projectGroups([grouped[3] as DesignSummary], [{ directory: MYCHAMBA, name: 'My Chamba' }], ROOT, undefined, manual);
+  assert.deepEqual(onlyManual.map((g) => [g.label, g.count, g.directory]), [['My Chamba', 1, MYCHAMBA]]);
+});
+
+test('a design filed under project B lists in B’s scope and counts, and leaves No project', () => {
+  const slugs = (scope: ListScope): string[] => scopeDesigns(grouped, scope, folders, ROOT, manual).map((d) => d.slug);
+  assert.deepEqual(slugs({ kind: 'project', directory: MYCHAMBA }), ['cart', 'loose-idea']);
+  assert.deepEqual(slugs({ kind: 'project', directory: 'c:/users/you/work/MyChamba/' }), ['cart', 'loose-idea'], 'matched by sameDirectory, not by spelling')
+  assert.deepEqual(slugs({ kind: 'project', directory: SHOP }), ['cart', 'hero'], 'still in the project it was made for');
+  assert.deepEqual(slugs({ kind: 'no-project' }), ['from-designs-chat'], 'the filed design is no longer No project (§19.1)');
+  assert.deepEqual(scopeCounts(grouped, folders, ROOT, manual), { all: 5, noProject: 1, folders: { f_aaaaaaaaaa: 2, f_bbbbbbbbbb: 1, f_cccccccccc: 0 } });
+  const groups = projectGroups(grouped, [], ROOT, undefined, manual);
+  const options = scopeOptions(groups, scopeCounts(grouped, folders, ROOT, manual), folders);
+  assert.deepEqual(options.find((o) => o.label === 'mychamba'), { id: `project:${MYCHAMBA}`, label: 'mychamba', hint: '2' });
+  assert.equal(options.find((o) => o.id === 'no-project')?.hint, '1');
+});
+
+test('libraryItems and libraryDesigns take the manual members into the project scope and the search inside it', () => {
+  const input = { designs: grouped, systems: [], scope: { kind: 'project', directory: MYCHAMBA } as ListScope, folders, designsRoot: ROOT, filters: { query: '', tab: 'all' as const, system: ALL_SYSTEMS }, sort: 'title' as const, manual };
+  assert.deepEqual(libraryItems(input).shownDesigns.map((d) => d.slug), ['Cart', 'Loose idea'].map((t) => (grouped.find((d) => d.title === t) as DesignSummary).slug));
+  assert.equal(libraryItems(input).counts.all, 2);
+  assert.deepEqual(libraryItems({ ...input, filters: { ...input.filters, query: 'idea' } }).shownDesigns.map((d) => d.slug), ['loose-idea']);
+  assert.equal(libraryItems({ ...input, manual: [] }).counts.all, 0, 'without the registry the project is empty');
+  assert.deepEqual(libraryDesigns(grouped, { kind: 'project', directory: MYCHAMBA }, folders, ROOT, input.filters, 'title', manual).shown.map((d) => d.slug), ['cart', 'loose-idea']);
+});
+
+test('cardProjectLine: the made-for project wins, a design filed by hand reads "Filed here by you", more projects count', () => {
+  const groups = projectGroups(grouped, [], ROOT, undefined, manual);
+  const cart = grouped[0] as DesignSummary;
+  const idea = grouped[3] as DesignSummary;
+  const madeFor = cardProjectLine(cart, ALL_SCOPE, groups, ROOT, manual);
+  assert.equal(madeFor?.label, 'shop');
+  assert.equal(madeFor?.manual, false);
+  assert.doesNotMatch(madeFor?.title ?? '', /Filed here/);
+  const filed = cardProjectLine(idea, ALL_SCOPE, groups, ROOT, manual);
+  assert.equal(filed?.label, 'mychamba');
+  assert.equal(filed?.manual, true);
+  assert.equal(filed?.title, `${MYCHAMBA}\nFiled here by you`);
+  assert.equal(cardProjectLine(idea, { kind: 'project', directory: MYCHAMBA }, groups, ROOT, manual), null, 'the list is already that project');
+  assert.equal(cardProjectLine(cart, { kind: 'project', directory: SHOP }, groups, ROOT, manual)?.label, 'mychamba', 'inside its made-for project the line names the other one');
+  const two = [...manual, { directory: 'C:\\Users\\you\\work\\blog', slugs: ['loose-idea'] }];
+  const twoGroups = projectGroups(grouped, [], ROOT, undefined, two);
+  assert.equal(cardProjectLine(idea, ALL_SCOPE, twoGroups, ROOT, two)?.label, 'mychamba and 1 more');
+  assert.equal(cardProjectLine(idea, ALL_SCOPE, groups, ROOT), null, 'no registry, no project, no line');
 });
 
 test('resolveScope falls back to All designs when the project or folder is gone', () => {

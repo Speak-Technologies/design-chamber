@@ -13,7 +13,7 @@ import { sameDirectory } from '../../shared/path-compare.ts';
 import { type ActionContext } from '../components/actions.ts';
 import { mountDesignRow, type DesignRowView } from '../components/design-row.ts';
 import { createScope, h } from '../components/dom.ts';
-import { deleteFolder, mountUndoNotice, openRenameFolder, type DesignMenuView, type FolderRef } from '../components/folder-actions.ts';
+import { deleteFolder, mountUndoNotice, openNewFolder, openRenameFolder, type DesignMenuView, type FolderRef } from '../components/folder-actions.ts';
 import { folders as foldersStore, type FoldersState } from '../components/folders-store.ts';
 import { attachMenu, btn, iconBtn, nameSelect } from '../components/kit.ts';
 import { mountLibraryEmpty } from '../components/library-empty.ts';
@@ -47,6 +47,7 @@ import {
   type ListScope,
   type ListSort,
   type ListTab,
+  type ManualProjects,
   type ProjectGroup,
   type ProjectInfo,
   type SystemFilter,
@@ -78,6 +79,8 @@ export type ListViewHandle = {
 };
 
 const SKELETON_ROWS = 4;
+/** The Show select's last entry: an action, not a scope. Picking it opens the New folder dialog and the select goes back to the current scope. */
+const NEW_FOLDER_ID = '__new-folder';
 
 const LOAD_FAILED_BODY = 'The local service didn’t answer. Allow it in Settings, then Extensions, and try again. Your folders and filters are kept.';
 const REFRESH_FAILED_BODY = 'You’re seeing the designs from a minute ago. New ones will appear when the refresh works.';
@@ -91,7 +94,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   /** The remembered view; the one shown is `resolveScope` of it (a project or folder that is gone reads as All designs). */
   let chosen: ListScope = ALL_SCOPE;
   let projects: ProjectInfo[] = [];
-  let view: { scope: ListScope; groups: readonly ProjectGroup[]; root: string; folder: FolderRef | null } = { scope: ALL_SCOPE, groups: [], root: '', folder: null };
+  let view: { scope: ListScope; groups: readonly ProjectGroup[]; root: string; manual: ManualProjects; folder: FolderRef | null } = { scope: ALL_SCOPE, groups: [], root: '', manual: [], folder: null };
   /** The first colour of each system, for the chips' dots; refreshed on every paint. */
   let swatches: (id: string) => string | null = () => null;
   const folderStore = foldersStore();
@@ -129,18 +132,32 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   } });
   // Show: the same groups as the page's sidebar (all, each project, No project, each folder) in one select.
   const showHost = h('div', { class: 'dc-rail-show-select dc-inline-select' });
-  const showSelect = mountSelect(showHost, { label: 'Show', value: 'all', options: [{ id: 'all', label: 'All designs' }], onChange: (id) => setScope(scopeFromId(id)) });
+  const showSelect = mountSelect(showHost, { label: 'Show', value: 'all', options: [{ id: 'all', label: 'All designs' }], onChange: (id) => {
+    if (id !== NEW_FOLDER_ID) {
+      setScope(scopeFromId(id));
+      return;
+    }
+    // Not a scope: put the select back on the current one before the dialog opens, so closing it changes nothing.
+    paintList();
+    openNewFolder(options.actions.host);
+  } });
   const folderMore = iconBtn({ icon: 'more', label: 'Folder actions', size: 'md', onClick: () => undefined });
   folderMore.hidden = true;
   attachMenu(
     folderMore,
     () => [
+      { id: 'new-folder', label: 'New folder…' },
+      { separator: true },
       { id: 'rename', label: 'Rename folder' },
       { separator: true },
       { id: 'delete', label: 'Delete folder', destructive: true },
     ],
     (id) => {
       const folder = view.folder;
+      if (id === 'new-folder') {
+        openNewFolder(options.actions.host);
+        return;
+      }
       if (!folder) return;
       if (id === 'rename') openRenameFolder(options.actions.host, folder);
       // The view falls back to All designs while the folder is gone, and returns to it with Undo.
@@ -243,7 +260,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   /** The host's project names make "From shop" read like the user's own words; without them the folder name stands in. */
   const projectLabel = (directory: string): string => projects.find((project) => sameDirectory(project.directory, directory))?.name ?? folderName(directory);
 
-  const newSystem = (): void => openNewSystemSheet(options.actions.host, { onMade: (result) => options.actions.onOpenSystem?.(result.id) });
+  const newSystem = (source?: 'existing'): void => openNewSystemSheet(options.actions.host, { ...(source ? { source } : {}), onMade: (result) => options.actions.onOpenSystem?.(result.id) });
 
   /** A used-by link or a chip: every design that uses this system, nothing else in the way. */
   const filterBySystem = (id: string): void => {
@@ -287,7 +304,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
 
   const paintShow = (scope: ListScope, groups: readonly ProjectGroup[], folderList: FoldersState['folders'], counts: ReturnType<typeof scopeCounts>, foldersState: FoldersState): void => {
     const entries = scopeOptions(groups, counts, folderList);
-    showSelect.update({ value: scopeToId(scope), options: entries.map(({ id, label, hint }) => ({ id, label, hint })) });
+    showSelect.update({ value: scopeToId(scope), options: [...entries.map(({ id, label, hint }) => ({ id, label, hint })), { id: NEW_FOLDER_ID, label: 'New folder…' }] });
     const current = entries.find((entry) => entry.id === scopeToId(scope));
     nameSelect(showHost, 'Show', current?.label ?? 'All designs');
     folderMore.hidden = view.folder === null;
@@ -322,13 +339,14 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     const root = state.data.root;
     const foldersState: FoldersState = folderStore.get();
     const folderList = foldersState.status === 'error' ? [] : foldersState.folders;
-    const groups = projectGroups(all, projects, root, state.data.projectFolders);
+    const manualProjects: ManualProjects = foldersState.projects;
+    const groups = projectGroups(all, projects, root, state.data.projectFolders, manualProjects);
     const foldersPending = chosen.kind === 'folder' && (foldersState.status === 'idle' || foldersState.status === 'loading') && foldersState.folders.length === 0;
     const effective = foldersPending ? chosen : resolveScope(chosen, groups, folderList);
     const folder = effective.kind === 'folder' ? folderList.find((entry) => entry.id === effective.id) ?? null : null;
-    view = { scope: effective, groups, root, folder: folder ? { id: folder.id, name: folder.name } : null };
+    view = { scope: effective, groups, root, manual: manualProjects, folder: folder ? { id: folder.id, name: folder.name } : null };
     manualSlugs = new Set(effective.kind === 'project' ? foldersState.projects.find((entry) => sameDirectory(entry.directory, effective.directory))?.slugs ?? [] : []);
-    paintShow(effective, groups, folderList, scopeCounts(all, folderList, root), foldersState);
+    paintShow(effective, groups, folderList, scopeCounts(all, folderList, root, manualProjects), foldersState);
 
     // Systems: the filter's options are every system (a design in any scope can carry any
     // system's copy); a failed load leaves All systems / No system only.
@@ -348,7 +366,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     }
     const label = scopeLabel(effective, groups, folderList);
     const filters = { query, tab, system: systemFilter };
-    const { scoped, items, lead, shownDesigns, shownSystems, counts } = libraryItems({ designs: all, systems: systemList, scope: effective, folders: folderList, designsRoot: root, filters, sort });
+    const { scoped, items, lead, shownDesigns, shownSystems, counts } = libraryItems({ designs: all, systems: systemList, scope: effective, folders: folderList, designsRoot: root, filters, sort, manual: manualProjects });
     tabsHandle.update({ items: LIST_TABS.map(({ id, label: tabLabel }) => ({ id, label: tabLabel, count: counts[id] })) });
     // Below 380 px the counts leave the tabs (CSS) so four fit; each tab keeps its count in its accessible name.
     for (const tabButton of tabsHost.querySelectorAll<HTMLElement>('[role=tab]')) {
@@ -359,6 +377,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     if (empty) {
       const wrap = h('div');
       mountLibraryEmpty(wrap, empty, {
+        ...(systemsState.systems !== null && systemList.length === 0 && !systemsFailed ? { firstRun: { onNewSystem: () => newSystem(), onExistingSystem: () => newSystem('existing') } } : {}),
         onAction: () => {
           if (empty.action === 'new') options.onNew('canvas');
           else if (empty.action === 'show-all') setScope(ALL_SCOPE);
@@ -379,7 +398,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
       });
       list.append(h('li', { class: 'dc-list-message' }, wrap));
     } else {
-      const rowView: DesignRowView = { scope: effective, groups, root, menu: { folder: null, project: null } };
+      const rowView: DesignRowView = { scope: effective, groups, root, manual: manualProjects, menu: { folder: null, project: null } };
       const open = (id: string): void => options.actions.onOpenSystem?.(id);
       const systemActions = { onOpen: open, onPreview: (id: string) => options.actions.onOpenSystem?.(id, 'preview') };
       list.append(

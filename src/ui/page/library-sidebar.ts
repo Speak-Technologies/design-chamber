@@ -44,9 +44,11 @@ export type SidebarOptions = {
   onSystems: () => void;
   onNewSystem: () => void;
   onRetrySystems: () => void;
+  /** The designs themselves didn't load: the way out beside the sentence. */
+  onRetryDesigns: () => void;
 };
 
-export type SidebarHandle = { el: HTMLElement; paint: (model: SidebarModel) => void; focusSelected: () => void; dispose: () => void };
+export type SidebarHandle = { el: HTMLElement; paint: (model: SidebarModel) => void; /** Before the designs have loaded, or after they failed to: the sidebar says so instead of staying blank. */ paintWithoutDesigns: (state: 'loading' | 'failed') => void; focusSelected: () => void; dispose: () => void };
 
 const FOLDER_SKELETONS = 2;
 
@@ -352,9 +354,28 @@ export const mountSidebar = (options: SidebarOptions): SidebarHandle => {
     else if (keepFocus) lists.querySelector<HTMLInputElement>('.dc-side-row-edit input')?.focus();
   };
 
+  const paintWithoutDesigns = (state: 'loading' | 'failed'): void => {
+    model = null;
+    painting = true;
+    if (state === 'loading') {
+      lists.replaceChildren(h('ul', { class: 'dc-side-list', 'aria-hidden': 'true' }, ...Array.from({ length: FOLDER_SKELETONS + 1 }, () => h('li', { class: 'dc-side-skeleton' }, h('span', { class: 'dc-skel dc-skel-line' })))));
+    } else {
+      lists.replaceChildren(
+        h(
+          'div',
+          { class: 'dc-side-note', role: 'status' },
+          h('p', { class: 'dc-form-error' }, 'Your designs didn’t load, so projects and folders can’t show yet.'),
+          btn({ label: 'Try again', variant: 'outline', size: 'xs', onClick: options.onRetryDesigns }).el,
+        ),
+      );
+    }
+    painting = false;
+  };
+
   return {
     el,
     paint: (next) => paint(next),
+    paintWithoutDesigns,
     focusSelected: () => lists.querySelector<HTMLElement>('.dc-side-row[data-selected="true"] .dc-side-main')?.focus(),
     dispose: () => el.remove(),
   };

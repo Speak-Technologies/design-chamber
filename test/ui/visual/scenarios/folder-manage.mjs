@@ -177,6 +177,38 @@ const railManage = async (h, width, theme) => {
   await p.shot(`${tag}-5-delete-undo`);
   await p.click('.dc-undo-notice .oc-sdk-btn', { text: 'Undo' });
   await h.checkSoon(() => p.guest('return !doc.querySelector(".dc-undo-notice .oc-sdk-banner")'), `${tag}: Undo clears the notice`);
+
+  // Rail parity (QA-L2): New folder… is the Show select's last entry and the folder actions menu's first. It is an action,
+  // not a place: the select goes back to the scope it had, and creating or cancelling changes nothing about what is shown.
+  const showName = () => p.guest('return doc.querySelector(".dc-rail-show-select button").getAttribute("aria-label")');
+  await h.checkSoon(async () => (await showName()) === 'Show: Folder · Q4 launch', `${tag}: after the Undo the select is back on the folder that returned`);
+  const before = await showName();
+  await p.click('.dc-rail-show-select button');
+  await p.waitFor('return !!doc.querySelector(".oc-sdk-popup .oc-sdk-option")', 'the Show options');
+  h.check(await p.guest('const o = [...doc.querySelectorAll(".oc-sdk-popup .oc-sdk-option")].map((n) => n.textContent.trim()); return o[o.length - 1].startsWith("New folder…") && o.filter((t) => t.startsWith("New folder")).length === 1'), `${tag}: the Show select ends with New folder…`);
+  await p.shot(`${tag}-6-show-new-folder`);
+  await p.click('.oc-sdk-popup .oc-sdk-option', { text: 'New folder…' });
+  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog] input")', 'the New folder dialog');
+  { const now = await showName(); h.check(now === before, `${tag}: the select stays on ${before} while the dialog is open (now ${now})`); }
+  await p.shot(`${tag}-7-new-folder-dialog`);
+  await p.type('.dc-sheet input', 'Handoff');
+  await p.key('Enter', { focus: '.dc-sheet input' });
+  await h.checkSoon(async () => /Made folder Handoff/.test(await toastTexts(p)), `${tag}: creating the folder says so (select, New folder…, Create folder = 3 steps)`);
+  await h.checkSoon(() => p.guest('return !doc.querySelector(".dc-sheet[data-variant=dialog]")'), `${tag}: the dialog closes`);
+  { const now = await showName(); h.check(now === before, `${tag}: the scope is still ${before} after creating (now ${now})`); }
+  await p.click('.dc-rail-show-select button');
+  h.check(await p.guest('const o = [...doc.querySelectorAll(".oc-sdk-popup .oc-sdk-option")].map((n) => n.textContent.trim()); return o.some((t) => t.startsWith("Folder · Handoff")) && o[o.length - 1].startsWith("New folder…")'), `${tag}: the new folder is listed and New folder… stays last`);
+  await p.key('Escape');
+  await p.settle(200);
+
+  // The folder actions menu (in a folder's view) offers it too; Cancel changes nothing.
+  await p.click('.dc-rail-show .dc-iconbtn');
+  h.check(await p.guest('const m = [...doc.querySelectorAll(".dc-popup [role=menuitem]")].map((n) => n.textContent.trim()); return JSON.stringify(m) === JSON.stringify(["New folder…","Rename folder","Delete folder"])'), `${tag}: the folder actions menu is New folder…, Rename folder, Delete folder`);
+  await p.click('.dc-popup [role="menuitem"]', { text: 'New folder…' });
+  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog] input")', 'the New folder dialog from the menu');
+  await p.click('.dc-sheet .oc-sdk-btn', { text: 'Cancel' });
+  await h.checkSoon(() => p.guest('return !doc.querySelector(".dc-sheet[data-variant=dialog]")'), `${tag}: Cancel closes it`);
+  { const now = await showName(); h.check(now === before, `${tag}: the scope is unchanged after Cancel (now ${now})`); }
   h.check(await noOverflow(p), `${tag}: no horizontal overflow at the end`);
   await p.close();
 };

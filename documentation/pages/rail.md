@@ -9,9 +9,9 @@ Screenshots: `documentation/pages/img/folders-rail-<width>-<theme>-*.png` and `f
 
 [320 dark, open](img/folders-rail-320-dark-2-show-open.png) · [480 light](img/folders-rail-480-light-3-project.png)
 
-- One **Show** select sits between the search and the tabs. Its entries: **All designs**, each project (name, count), **No project** (only when there are some), then each folder as "Folder · Launch" (count). Its accessible name reads "Show: shop".
+- One **Show** select sits between the search and the tabs. Its entries: **All designs**, each project (name, count), **No project** (only when there are some), then each folder as "Folder · Launch" (count), and last **New folder…**, which is an action, not a place: it opens the New folder dialog and the select stays on the scope you had (cancelling or creating changes nothing about what is shown). A project counts the designs made for it and the ones you filed under it by hand; a project that only has hand-filed designs is still listed, and a filed design leaves No project. Its accessible name reads "Show: shop".
 - Under it, **System** and **Sort** sit side by side, each half width (their values truncate at 320 px; the title keeps its 120 px). System is the same filter as the page's (All systems, each system with Draft or its count, No system); Sort is Updated / Created / Title, remembered on this surface (`list-sort:panel` in `host.storage`, fallback Updated). Search, tab and the System filter live for the session.
-- The tabs and their counts, the search and the empty states work inside the choice. Each row shows its project under the kind line, except inside that project.
+- The tabs and their counts, the search and the empty states work inside the choice. Each row shows its project under the kind line, except inside that project; a design filed under a project by hand and made for none shows that project with the tooltip "Filed here by you" (and "and 2 more" when there are several). The folder actions menu (⋯ beside the select, inside a folder) is **New folder…**, **Rename folder** and **Delete folder**. Making a folder from the rail is three steps: Show select, New folder…, Create folder.
 - The choice is remembered on this surface (`list-scope:panel` in `host.storage`); an unknown value, or a project or folder that is gone, reads as All designs.
 
 ## Systems tab and the system chip

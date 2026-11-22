@@ -366,6 +366,70 @@ const railFoldersFail = async (h, width, theme) => {
   await p.close();
 };
 
+// ---------------------------------------------------------------- manual members (QA-L1)
+
+const MYCHAMBA = 'C:\\Users\\you\\work\\mychamba';
+
+/**
+ * Designs filed under a project by hand (the registry's `projects`, not the design's own folder) reach the library:
+ * a project with only manual members gets its row and Show entry, lists and counts them, and a filed design leaves No project.
+ */
+const manualFlow = async (h, surface, width, theme) => {
+  const tag = `folders-manual-${surface === 'page' ? 'page' : 'rail'}-${width}-${theme}`;
+  const p = await h.openPage({ width, height: surface === 'page' ? 900 : 780, surface, theme, label: tag });
+  console.log(tag);
+  await h.listReady(p);
+  await h.thumbsReady(p);
+  await groupSamples(h, p, tag);
+  await p.settle(400);
+  const noProjectBefore = surface === 'page' ? await p.guest('return doc.querySelector(".dc-side-row[data-scope=no-project] .dc-side-count")?.textContent ?? ""') : '';
+  // Before: invoice-template is made for no project, and nobody filed anything under mychamba.
+  if (surface === 'page') h.check(noProjectBefore === '1', `${tag}: No project starts with 1 design (invoice-template)`);
+  await p.host(`${FAKE}.folders.seedProject(${JSON.stringify(MYCHAMBA)}, ['invoice-template', 'launch-announcement'])`);
+  await p.host(`${FAKE}.folders.changed()`);
+  await p.settle(500);
+
+  if (surface === 'page') {
+    await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-side-row .dc-side-label")].some((n) => n.textContent === "mychamba")'), `${tag}: a project with only hand-filed designs gets a sidebar row`);
+    h.check(await p.guest('const r = [...doc.querySelectorAll(".dc-side-row")].find((n) => n.querySelector(".dc-side-label")?.textContent === "mychamba"); return r?.querySelector(".dc-side-count")?.textContent === "2"'), `${tag}: it counts both filed designs`);
+    h.check(await p.guest('return !doc.querySelector(".dc-side-row[data-scope=no-project]")'), `${tag}: invoice-template left No project, so the row is gone (nothing is made for no project now)`);
+    h.check(await p.guest('const r = [...doc.querySelectorAll(".dc-side-row")].find((n) => n.querySelector(".dc-side-label")?.textContent === "app · personal"); return r?.querySelector(".dc-side-count")?.textContent === "1"'), `${tag}: a design made for one project and filed under another counts in both`);
+    h.check(await p.guest('const c = doc.querySelector(".dc-card[data-slug=invoice-template] .dc-card-project"); return c?.querySelector(".dc-card-project-name")?.textContent === "mychamba" && c.dataset.filed === "true" && /Filed here by you/.test(c.title)'), `${tag}: the card of a design filed by hand shows that project, tooltip "Filed here by you"`);
+    h.check(await p.guest('const c = doc.querySelector(".dc-card[data-slug=launch-announcement] .dc-card-project"); return c?.querySelector(".dc-card-project-name")?.textContent === "app · personal" && c.dataset.filed !== "true" && !/Filed here/.test(c.title)'), `${tag}: a design made for a project keeps that project on its card`);
+    await p.click('.dc-side-main', { text: 'mychamba' });
+  } else {
+    await p.click('.dc-rail-show-select button');
+    await p.waitFor('return !!doc.querySelector(".oc-sdk-popup .oc-sdk-option")', 'the Show options');
+    const options = await p.guest('return [...doc.querySelectorAll(".oc-sdk-popup .oc-sdk-option")].map((n) => n.textContent.replace(/\\s+/g, " ").trim())');
+    h.check(options.some((t) => /^mychamba\s*2$/.test(t)), `${tag}: Show lists mychamba with its 2 filed designs (${options.join(' | ')})`);
+    h.check(!options.some((t) => t.startsWith('No project')), `${tag}: No project is gone from Show`);
+    await p.click('.oc-sdk-popup .oc-sdk-option', { text: 'mychamba' });
+  }
+  await h.checkSoon(async () => JSON.stringify(await gridSlugs(p)) === '["invoice-template","launch-announcement"]', `${tag}: choosing mychamba lists the two filed designs`);
+  h.check(await p.guest('return !doc.querySelector(".dc-card-project, .dc-row-project") || [...doc.querySelectorAll(".dc-card-project-name, .dc-row-project-name")].every((n) => n.textContent !== "mychamba")'), `${tag}: inside mychamba its own line goes`);
+  h.check(await p.guest('const t = [...doc.querySelectorAll(".dc-tabs [role=tab]")].map((n) => n.textContent.replace(/\\s+/g, " ").trim()); return /All.*2/.test(t[0])'), `${tag}: the tab counts follow the filed designs`);
+  await p.shot(`${tag}-1-mychamba`);
+
+  // The menu of a design filed here: Move to folder… and Remove from mychamba. A derived member has neither (launch is made for app · personal).
+  const rowOf = (slug) => (surface === 'page' ? `.dc-card[data-slug="${slug}"]` : `.dc-row[data-slug="${slug}"]`);
+  await p.hover(rowOf('invoice-template'));
+  await p.click(`${rowOf('invoice-template')} ${surface === 'page' ? '.dc-card-more' : '.dc-iconbtn'}`);
+  await p.waitFor('return !!doc.querySelector(".dc-popup [role=menuitem]")', 'the row menu');
+  h.check(await p.guest('const m = [...doc.querySelectorAll(".dc-popup [role=menuitem]")].map((n) => n.textContent.trim()); return m.includes("Move to folder…") && m.includes("Remove from mychamba")'), `${tag}: a design filed here offers Move to folder… and Remove from mychamba`);
+  await p.shot(`${tag}-2-menu`);
+  await p.key('Escape');
+  await p.settle(150);
+
+  // Remove from mychamba: it leaves the project and, being made for none, returns to No project.
+  await p.hover(rowOf('invoice-template'));
+  await p.click(`${rowOf('invoice-template')} ${surface === 'page' ? '.dc-card-more' : '.dc-iconbtn'}`);
+  await p.click('.dc-popup [role="menuitem"]', { text: 'Remove from mychamba' });
+  await h.checkSoon(async () => JSON.stringify(await gridSlugs(p)) === '["launch-announcement"]', `${tag}: Remove from mychamba takes it out of the project's list`);
+  await h.checkSoon(async () => /Removed .*Invoice.* from mychamba\./.test(await toastTexts(p)), `${tag}: it says what happened`);
+  if (surface === 'page') await h.checkSoon(() => p.guest('return doc.querySelector(".dc-side-row[data-scope=no-project] .dc-side-count")?.textContent === "1"'), `${tag}: the design is back in No project`);
+  await p.close();
+};
+
 export const run = async (helpers) => {
   await pageFlow(helpers, 1400, 'light');
   await pageFlow(helpers, 1400, 'dark');
@@ -375,4 +439,6 @@ export const run = async (helpers) => {
   for (const [width, theme] of [[320, 'dark'], [480, 'light']]) await railFlow(helpers, width, theme, true);
   for (const [width, theme] of [[320, 'light'], [480, 'dark']]) await railFlow(helpers, width, theme, false);
   await railFoldersFail(helpers, 320, 'light');
+  await manualFlow(helpers, 'page', 1400, 'dark');
+  await manualFlow(helpers, 'panel', 480, 'light');
 };

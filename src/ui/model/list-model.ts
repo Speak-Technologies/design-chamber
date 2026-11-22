@@ -2,6 +2,7 @@
 
 import { FOLDER_ID_PATTERN, FOLDER_NAME_MAX, FOLDERS_MAX, SYSTEM_ID_PATTERN } from '../../shared/limits.ts';
 import { sameDirectory } from '../../shared/path-compare.ts';
+import type { ProjectMembersView } from '../../shared/api.ts';
 import type { DesignKind, DesignSummary, SystemSummary } from '../../shared/types.ts';
 import { plural } from './format.ts';
 
@@ -136,25 +137,46 @@ export const projectOf = (design: Pick<DesignSummary, 'projectDirectory'>, desig
   return directory;
 };
 
-/** One row per project folder that has designs, labelled by the host's project name or the folder's base name. */
+/** The registry's manual project members (`GET /folders` `projects`): designs the user filed under a project by hand. */
+export type ManualProjects = readonly ProjectMembersView[];
+
+/**
+ * Every project folder a design sits in: the one it was made for first (`projectOf`), then the ones
+ * the user filed it under by hand, each once (matched by `sameDirectory`). A manual project inside the
+ * designs folder reads as none, like a derived one. Empty means No project (§19.1).
+ */
+export const projectsOf = (design: Pick<DesignSummary, 'slug' | 'projectDirectory'>, designsRoot: string, manual: ManualProjects = []): string[] => {
+  const found: string[] = [];
+  const add = (directory: string | null): void => {
+    if (directory === null || directory.trim() === '') return;
+    if (designsRoot !== '' && isInsideOrEqualDirectory(designsRoot, directory)) return;
+    if (!found.some((entry) => sameDirectory(entry, directory))) found.push(directory);
+  };
+  add(projectOf(design, designsRoot));
+  for (const entry of manual) if (entry.slugs.includes(design.slug)) add(entry.directory);
+  return found;
+};
+
+/** One row per project folder that has designs (made for it, or filed under it by hand), labelled by the host's project name or the folder's base name. */
 export const projectGroups = (
   designs: readonly DesignSummary[],
   projects: readonly ProjectInfo[],
   designsRoot: string,
   projectFolders: ReadonlyArray<{ directory: string; exists: boolean }> | undefined,
+  manual: ManualProjects = [],
 ): ProjectGroup[] => {
   const groups: ProjectGroup[] = [];
   for (const design of designs) {
-    const directory = projectOf(design, designsRoot);
-    if (directory === null) continue;
-    const found = groups.find((group) => sameDirectory(group.directory, directory));
-    if (found) {
-      found.count += 1;
-      continue;
+    for (const directory of projectsOf(design, designsRoot, manual)) {
+      const found = groups.find((group) => sameDirectory(group.directory, directory));
+      if (found) {
+        found.count += 1;
+        continue;
+      }
+      const named = projects.find((project) => sameDirectory(project.directory, directory))?.name.trim();
+      const stat = projectFolders?.find((entry) => sameDirectory(entry.directory, directory));
+      groups.push({ directory, label: named ? named : baseName(directory), title: directory, count: 1, missing: stat !== undefined && !stat.exists });
     }
-    const named = projects.find((project) => sameDirectory(project.directory, directory))?.name.trim();
-    const stat = projectFolders?.find((entry) => sameDirectory(entry.directory, directory));
-    groups.push({ directory, label: named ? named : baseName(directory), title: directory, count: 1, missing: stat !== undefined && !stat.exists });
   }
   // Two projects with the same name tell apart by their parent folder: "app · work", "app · personal".
   const seen = new Map<string, number>();
@@ -166,7 +188,7 @@ export const projectGroups = (
   return named.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
 };
 
-/** The group a design sits in, matched by `sameDirectory`. */
+/** The group a design sits in by being made for it, matched by `sameDirectory`. */
 export const groupOf = (design: Pick<DesignSummary, 'projectDirectory'>, groups: readonly ProjectGroup[], designsRoot: string): ProjectGroup | null => {
   const directory = projectOf(design, designsRoot);
   if (directory === null) return null;
@@ -174,17 +196,14 @@ export const groupOf = (design: Pick<DesignSummary, 'projectDirectory'>, groups:
 };
 
 /** The designs one scope shows. Folders count a slug only when that design is in the list (a pruned name never shows). */
-export const scopeDesigns = (designs: readonly DesignSummary[], scope: ListScope, folders: readonly FolderLite[], designsRoot: string): DesignSummary[] => {
+export const scopeDesigns = (designs: readonly DesignSummary[], scope: ListScope, folders: readonly FolderLite[], designsRoot: string, manual: ManualProjects = []): DesignSummary[] => {
   switch (scope.kind) {
     case 'all':
       return [...designs];
     case 'no-project':
-      return designs.filter((design) => projectOf(design, designsRoot) === null);
+      return designs.filter((design) => projectsOf(design, designsRoot, manual).length === 0);
     case 'project':
-      return designs.filter((design) => {
-        const directory = projectOf(design, designsRoot);
-        return directory !== null && sameDirectory(directory, scope.directory);
-      });
+      return designs.filter((design) => projectsOf(design, designsRoot, manual).some((directory) => sameDirectory(directory, scope.directory)));
     case 'folder': {
       const members = new Set(folders.find((folder) => folder.id === scope.id)?.slugs ?? []);
       return designs.filter((design) => members.has(design.slug));
@@ -195,11 +214,11 @@ export const scopeDesigns = (designs: readonly DesignSummary[], scope: ListScope
 export type ScopeCounts = { all: number; noProject: number; folders: Record<string, number> };
 
 /** Counts for the sidebar and the Show select. */
-export const scopeCounts = (designs: readonly DesignSummary[], folders: readonly FolderLite[], designsRoot: string): ScopeCounts => {
+export const scopeCounts = (designs: readonly DesignSummary[], folders: readonly FolderLite[], designsRoot: string, manual: ManualProjects = []): ScopeCounts => {
   const live = new Set(designs.map((design) => design.slug));
   const counts: Record<string, number> = {};
   for (const folder of folders) counts[folder.id] = new Set(folder.slugs.filter((slug) => live.has(slug))).size;
-  return { all: designs.length, noProject: designs.filter((design) => projectOf(design, designsRoot) === null).length, folders: counts };
+  return { all: designs.length, noProject: designs.filter((design) => projectsOf(design, designsRoot, manual).length === 0).length, folders: counts };
 };
 
 /** The scope's name for a sentence ("shop", "Launch"); null for All designs. */
@@ -234,14 +253,39 @@ export const sameScope = (a: ListScope, b: ListScope): boolean => {
 export const folderEmptyBody = (draggable: boolean): string =>
   draggable ? 'Drag designs here, or use Add to folder in a design’s menu.' : 'Use Add to folder in a design’s menu.';
 
-export type ProjectLine = { label: string; title: string };
+export type ProjectLine = { label: string; title: string; /** Filed under this project by the user, not made for it. */ manual: boolean };
 
-/** The project name under a card's title, unless the list is already that project. */
-export const cardProjectLine = (design: Pick<DesignSummary, 'projectDirectory'>, scope: ListScope, groups: readonly ProjectGroup[], designsRoot: string): ProjectLine | null => {
-  const group = groupOf(design, groups, designsRoot);
-  if (group === null) return null;
-  if (scope.kind === 'project' && sameDirectory(scope.directory, group.directory)) return null;
-  return { label: group.label, title: group.missing ? `${group.title}\nFolder not found` : group.title };
+/** The tooltip line for a project filed by hand. */
+export const FILED_BY_YOU = 'Filed here by you';
+
+/**
+ * The project name under a card's title, unless the list is already that project: the one the design
+ * was made for; with none (or when the list is that project), the first project the user filed it
+ * under, with "and N more" for the rest.
+ */
+export const cardProjectLine = (
+  design: Pick<DesignSummary, 'slug' | 'projectDirectory'>,
+  scope: ListScope,
+  groups: readonly ProjectGroup[],
+  designsRoot: string,
+  manual: ManualProjects = [],
+): ProjectLine | null => {
+  const derived = projectOf(design, designsRoot);
+  const candidates = projectsOf(design, designsRoot, manual)
+    .filter((directory) => !(scope.kind === 'project' && sameDirectory(scope.directory, directory)))
+    .map((directory) => ({ directory, group: groups.find((group) => sameDirectory(group.directory, directory)) ?? null }))
+    .filter((entry): entry is { directory: string; group: ProjectGroup } => entry.group !== null);
+  const first = candidates[0];
+  if (first === undefined) return null;
+  const isManual = derived === null || !sameDirectory(derived, first.directory);
+  const more = isManual ? candidates.length - 1 : 0;
+  const note = isManual ? `\n${FILED_BY_YOU}` : '';
+  const missing = first.group.missing ? '\nFolder not found' : '';
+  return {
+    label: more > 0 ? `${first.group.label} and ${more} more` : first.group.label,
+    title: `${first.group.title}${missing}${note}`,
+    manual: isManual,
+  };
 };
 
 // -- The remembered view (host.storage `list-scope:<surface>`) --
@@ -398,8 +442,9 @@ export const libraryDesigns = (
   designsRoot: string,
   filters: LibraryFilters,
   sort: ListSort,
+  manual: ManualProjects = [],
 ): { scoped: DesignSummary[]; shown: DesignSummary[]; counts: DesignTabCounts } => {
-  const scoped = scopeDesigns(designs, scope, folders, designsRoot);
+  const scoped = scopeDesigns(designs, scope, folders, designsRoot, manual);
   const systemed = scoped.filter((design) => matchesSystem(design, filters.system));
   const counts = tabCounts(systemed, filters.query);
   const shown = sortDesigns(filterDesigns(systemed, filters.query, filters.tab), sort);
@@ -464,9 +509,11 @@ export const libraryItems = (input: {
   designsRoot: string;
   filters: LibraryFilters;
   sort: ListSort;
+  /** The registry's manual project members: a project scope lists them with the designs made for it. */
+  manual?: ManualProjects;
 }): LibraryContents => {
   const { filters, sort } = input;
-  const scoped = scopeDesigns(input.designs, input.scope, input.folders, input.designsRoot);
+  const scoped = scopeDesigns(input.designs, input.scope, input.folders, input.designsRoot, input.manual ?? []);
   const scopedSystems = scopeSystems(input.systems, input.scope);
   const designCounts = tabCounts(
     scoped.filter((design) => matchesSystem(design, filters.system)),

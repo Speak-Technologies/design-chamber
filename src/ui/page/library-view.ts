@@ -57,6 +57,7 @@ import {
   type ListScope,
   type ListSort,
   type ListTab,
+  type ManualProjects,
   type ProjectGroup,
   type ProjectInfo,
   type SystemFilter,
@@ -107,7 +108,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   let chosen: ListScope = ALL_SCOPE;
   let projects: ProjectInfo[] = [];
   /** What the open card menus and the card lines need, refreshed on every paint. */
-  let view: { scope: ListScope; groups: readonly ProjectGroup[]; root: string; folder: FolderRef | null } = { scope: ALL_SCOPE, groups: [], root: '', folder: null };
+  let view: { scope: ListScope; groups: readonly ProjectGroup[]; root: string; manual: ManualProjects; folder: FolderRef | null } = { scope: ALL_SCOPE, groups: [], root: '', manual: [], folder: null };
   /** null follows the page width (open from 900 px); the sidebar button sets it. */
   let sidebarWanted: boolean | null = null;
   let narrow = false;
@@ -221,6 +222,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     onSystems: () => options.onSystems(),
     onNewSystem: () => newSystem(),
     onRetrySystems: () => void systemStore.load(),
+    onRetryDesigns: () => void store.refreshDesigns(),
   });
   const body = h('div', { class: 'dc-library-body' }, sidebar.el, scroller);
   el.append(toolbar, controls, body);
@@ -265,7 +267,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     paintGrid();
   };
 
-  const newSystem = (): void => openNewSystemSheet(options.actions.host, { onMade: (result) => options.actions.onOpenSystem?.(result.id) });
+  const newSystem = (source?: 'existing'): void => openNewSystemSheet(options.actions.host, { ...(source ? { source } : {}), onMade: (result) => options.actions.onOpenSystem?.(result.id) });
 
   /** The host's project names make "From shop" read like the user's own words; without them the folder name stands in. */
   const projectLabel = (directory: string): string => projects.find((project) => sameDirectory(project.directory, directory))?.name ?? folderName(directory);
@@ -305,7 +307,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
       thumb = mountThumb(design, 'card');
       thumbs.set(design.slug, thumb);
     }
-    const line = cardProjectLine(design, view.scope, view.groups, view.root);
+    const line = cardProjectLine(design, view.scope, view.groups, view.root, view.manual);
     const kindBadge = h('span');
     mountBadge(kindBadge, { label: kindLabel(design.kind), tone: 'neutral' });
     const locale = host.snapshot()?.locale ?? 'en';
@@ -321,7 +323,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
         'span',
         { class: 'dc-card-body' },
         h('span', { class: 'dc-card-title' }, design.title),
-        line ? h('span', { class: 'dc-card-project', title: line.title }, icon('layers', 12), h('span', { class: 'dc-card-project-name' }, line.label)) : null,
+        line ? h('span', { class: 'dc-card-project', title: line.title, 'data-filed': line.manual ? 'true' : null }, icon('layers', 12), h('span', { class: 'dc-card-project-name' }, line.label)) : null,
         h('span', { class: 'dc-card-meta' }, kindBadge, h('span', { class: 'dc-muted' }, relativeTime(design.updated, Date.now(), locale)), indicators),
       ),
     );
@@ -422,11 +424,15 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     scroller.removeAttribute('aria-busy');
     if ((state.status === 'idle' || state.status === 'loading') && !state.data) {
       countLine.hidden = true;
+      sidebar.paintWithoutDesigns('loading');
+      paintSidebarState();
       showLoading();
       return;
     }
     if (!state.data) {
       countLine.hidden = true;
+      sidebar.paintWithoutDesigns('failed');
+      paintSidebarState();
       const wrap = h('div', { class: 'dc-banner' });
       mountBanner(wrap, { tone: 'error', title: 'Your designs didn’t load', body: state.error?.message ? `${state.error.message} Your folders and filters are kept.` : LOAD_FAILED_BODY, action: { label: 'Try again', onClick: () => void store.refreshDesigns() } });
       activeList().append(message(wrap));
@@ -436,13 +442,14 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     const root = state.data.root;
     const foldersState: FoldersState = folderStore.get();
     const folderList = foldersState.status === 'error' ? [] : foldersState.folders;
-    const groups = projectGroups(all, projects, root, state.data.projectFolders);
+    const manualProjects: ManualProjects = foldersState.projects;
+    const groups = projectGroups(all, projects, root, state.data.projectFolders, manualProjects);
     const foldersPending = chosen.kind === 'folder' && (foldersState.status === 'idle' || foldersState.status === 'loading') && foldersState.folders.length === 0;
     const effective = foldersPending ? chosen : resolveScope(chosen, groups, folderList);
     const folder = effective.kind === 'folder' ? folderList.find((entry) => entry.id === effective.id) ?? null : null;
-    view = { scope: effective, groups, root, folder: folder ? { id: folder.id, name: folder.name } : null };
+    view = { scope: effective, groups, root, manual: manualProjects, folder: folder ? { id: folder.id, name: folder.name } : null };
     manualSlugs = new Set(effective.kind === 'project' ? foldersState.projects.find((entry) => sameDirectory(entry.directory, effective.directory))?.slugs ?? [] : []);
-    const counts4 = scopeCounts(all, folderList, root);
+    const counts4 = scopeCounts(all, folderList, root, manualProjects);
 
     // Systems: the filter's options are every system, because a design in any scope can carry any
     // system's copy (the canvas draws a folder scope with a system filter active). A failed load
@@ -477,7 +484,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
       return;
     }
     const filters = { query, tab, system: systemFilter };
-    const { scoped, scopedSystems, items, lead, shownDesigns, shownSystems, counts } = libraryItems({ designs: all, systems: systemList, scope: effective, folders: folderList, designsRoot: root, filters, sort });
+    const { scoped, scopedSystems, items, lead, shownDesigns, shownSystems, counts } = libraryItems({ designs: all, systems: systemList, scope: effective, folders: folderList, designsRoot: root, filters, sort, manual: manualProjects });
     countLine.hidden = false;
     const totals = scopedSystems.length > 0 ? `${plural(scoped.length, 'design')} and ${plural(scopedSystems.length, 'system')}` : plural(scoped.length, 'design');
     // With a scope active the line names it too: the sidebar may be closed on a narrow page.
@@ -487,6 +494,8 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     if (empty) {
       const wrap = h('div');
       mountLibraryEmpty(wrap, empty, {
+        // First run: nothing to show yet, so offer the system start too (not while the systems list is unknown).
+        ...(systemsState.systems !== null && systemList.length === 0 && !systemsFailed ? { firstRun: { onNewSystem: () => newSystem(), onExistingSystem: () => newSystem('existing') } } : {}),
         onAction: () => {
           if (empty.action === 'new') options.onNew('canvas');
           else if (empty.action === 'show-all') setScope(ALL_SCOPE);
@@ -508,7 +517,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
       activeList().append(message(wrap));
     } else {
       const systemActions = { label: projectLabel, onOpen: (id: string) => options.actions.onOpenSystem?.(id), onPreview: (id: string) => options.actions.onOpenSystem?.(id, 'preview'), onShowDesigns: (id: string) => filterBySystem(id) };
-      const rowView: DesignRowView = { scope: effective, groups, root, menu: { folder: null, project: null } };
+      const rowView: DesignRowView = { scope: effective, groups, root, manual: manualProjects, menu: { folder: null, project: null } };
       const nodes = items.map((item) => {
         if (item.kind === 'system') return libraryView === 'tiles' ? mountSystemTile(item.system, { ...systemActions, lead: item.system === lead }) : mountSystemListRow(item.system, systemActions);
         return libraryView === 'tiles' ? card(item.design) : mountDesignRow(item.design, { variant: 'list', view: { ...rowView, menu: menuFor(item.design) }, actions: options.actions, onOpen: options.onOpen, thumbs, swatchOf: swatches });

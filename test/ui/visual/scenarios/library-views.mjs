@@ -213,6 +213,7 @@ const pageStates = async (h) => {
   console.log(loadingTag);
   await loading.waitFor('return doc.querySelectorAll(".dc-card-skeleton").length >= 4', 'the tile skeletons');
   h.check(await loading.guest('return doc.querySelector(".dc-library-scroll")?.getAttribute("aria-busy") === "true" && !!doc.querySelector(".dc-library-controls")'), `${loadingTag}: skeletons with aria-busy; the toolbar stays`);
+  h.check(await loading.guest('return doc.querySelectorAll(".dc-side .dc-side-skeleton").length >= 2'), `${loadingTag}: the sidebar shows skeleton rows too, not a blank column`);
   await loading.shot(`${loadingTag}-1-skeletons`);
   await h.checkSoon(() => loading.guest('return doc.querySelectorAll(".dc-card-skeleton").length === 0 && doc.querySelector(".oc-sdk-empty-title")?.textContent?.trim() === "No designs yet"'), `${loadingTag}: the skeletons resolve when the answer lands`, 10000);
   await loading.close();
@@ -223,10 +224,11 @@ const pageStates = async (h) => {
   console.log(errorTag);
   await error.waitFor('return [...doc.querySelectorAll(".dc-banner")].some((n) => /Your designs didn’t load/.test(n.textContent))', 'the error banner');
   h.check(await error.guest('const b = [...doc.querySelectorAll(".dc-banner")].find((n) => /Your designs didn’t load/.test(n.textContent)); return !!b && /Your folders and filters are kept\\./.test(b.textContent) && [...b.querySelectorAll(".oc-sdk-btn")].some((n) => n.textContent.trim() === "Try again")'), `${errorTag}: the sentence says what happened and that filters are kept, with Try again`);
+  h.check(await error.guest('const n = doc.querySelector(".dc-side .dc-side-note"); return !!n && /Your designs didn’t load, so projects and folders can’t show yet\\./.test(n.textContent) && [...n.querySelectorAll(".oc-sdk-btn")].some((b) => b.textContent.trim() === "Try again")'), `${errorTag}: the sidebar says so too, with its own Try again, instead of staying blank`);
   await error.shot(`${errorTag}-1-error`);
   await error.route('GET /designs', null);
-  await error.click('.dc-grid-message .dc-banner .oc-sdk-btn', { text: 'Try again' });
-  await h.checkSoon(() => error.guest('return doc.querySelectorAll(".dc-card[data-slug]").length >= 5'), `${errorTag}: Try again loads the designs`);
+  await error.click('.dc-side .dc-side-note .oc-sdk-btn', { text: 'Try again' });
+  await h.checkSoon(() => error.guest('return doc.querySelectorAll(".dc-card[data-slug]").length >= 5 && !doc.querySelector(".dc-side .dc-side-note .dc-form-error") && doc.querySelectorAll(".dc-side .dc-side-row").length >= 2'), `${errorTag}: the sidebar's Try again loads the designs and the sidebar fills in`);
   await error.close();
 
   // First run: no designs yet, with the way to make one.
@@ -235,8 +237,28 @@ const pageStates = async (h) => {
   console.log(firstTag);
   await first.waitFor('return !!doc.querySelector(".oc-sdk-empty")', 'the first-run empty state');
   h.check(await first.guest('return doc.querySelector(".oc-sdk-empty-title")?.textContent?.trim() === "No designs yet" && /\\/design or \\/page/.test(doc.querySelector(".oc-sdk-empty-body")?.textContent ?? "") && [...doc.querySelectorAll(".oc-sdk-empty-action .oc-sdk-btn")].some((n) => n.textContent.trim() === "New canvas")'), `${firstTag}: No designs yet, how to make one, New canvas`);
+  h.check(await first.guest('const a = [...doc.querySelectorAll(".oc-sdk-empty-action .oc-sdk-btn")].map((n) => n.textContent.trim()); return a[0] === "New canvas" && a.includes("Start a design system") && /Already have a design system in a project\\? Start one from it with From an existing system…/.test(doc.querySelector(".dc-empty-note")?.textContent ?? "")'), `${firstTag}: New canvas leads, Start a design system follows, and the note offers From an existing system…`);
   await first.shot(`${firstTag}-1-first-run`);
+  // From an existing system…: one press opens the sheet with Existing design system ticked and its column showing.
+  await first.click('.dc-empty-note .dc-link', { text: 'From an existing system' });
+  await first.waitFor('return !!doc.querySelector(".dc-newsys")', 'the New design system sheet');
+  await h.checkSoon(() => first.guest('const c = [...doc.querySelectorAll(".dc-newsys-head .oc-sdk-check")].find((n) => n.textContent.includes("Existing design system")); return c?.getAttribute("aria-checked") === "true" && !doc.querySelector(".dc-newsys-g-where").hidden'), `${firstTag}: the link opens the sheet at its Existing start`);
+  await first.shot(`${firstTag}-2-existing-start`);
+  await first.key('Escape');
+  await h.checkSoon(() => first.guest('return !doc.querySelector(".dc-newsys")'), `${firstTag}: Escape closes the sheet`);
+  await first.click('.oc-sdk-empty-action .oc-sdk-btn', { text: 'Start a design system' });
+  await first.waitFor('return !!doc.querySelector(".dc-newsys")', 'the sheet from Start a design system');
+  h.check(await first.guest('const c = [...doc.querySelectorAll(".dc-newsys-head .oc-sdk-check")].find((n) => n.textContent.includes("Existing design system")); return c?.getAttribute("aria-checked") !== "true"'), `${firstTag}: Start a design system opens the plain sheet (Existing not ticked)`);
   await first.close();
+
+  // The same first run on the rail (320): the actions and the note fit and the title keeps its room.
+  const railFirstTag = 'library-views-rail-first-run-320-light';
+  const railFirst = await h.openPage({ width: 320, height: 780, surface: 'panel', theme: 'light', label: railFirstTag, routes: { 'GET /systems': { status: 200, body: { systems: [], total: 0, max: 50 } }, 'GET /designs': { status: 200, body: { root: ROOT, designs: [], loose: { files: [], total: 0 }, projectFolders: [] } } } });
+  console.log(railFirstTag);
+  await railFirst.waitFor('return !!doc.querySelector(".dc-empty-note")', 'the rail first-run empty state');
+  h.check(await railFirst.guest('return doc.documentElement.scrollWidth <= doc.documentElement.clientWidth && !!doc.querySelector(".dc-empty-note .dc-link")'), `${railFirstTag}: no horizontal overflow, the link is there`);
+  await railFirst.shot(`${railFirstTag}-1-first-run`);
+  await railFirst.close();
 
   // Systems failed: the designs still list; the System select keeps All systems / No system only.
   const sysTag = 'library-views-page-systems-failed-dark';

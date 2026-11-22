@@ -326,9 +326,15 @@ test('Files read counts the files the scan opened, not only the ones with values
 });
 
 test('an incomplete contract says what is missing and offers Make instead', () => {
-  assert.equal(contractProblemLine(['tokens.css']), 'This folder has a system.json but tokens.css is missing, so it can’t be registered as it is. Make a new system from it instead.');
+  assert.equal(contractProblemLine(['tokens.css']), 'This folder has a system.json but tokens.css is missing or holds no token values, so it can’t be registered as it is. Make a new system from it instead.');
   assert.equal(contractProblemLine(["system.json can't be read"]), "This folder has a system.json but system.json can't be read, so it can’t be registered as it is. Make a new system from it instead.");
-  assert.equal(contractProblemLine(['tokens.css', "system.json can't be read"]), "This folder has a system.json but tokens.css is missing and system.json can't be read, so it can’t be registered as it is. Make a new system from it instead.");
+  assert.equal(contractProblemLine(['tokens.css', "system.json can't be read"]), "This folder has a system.json but tokens.css is missing or holds no token values and system.json can't be read, so it can’t be registered as it is. Make a new system from it instead.");
+  // The walk/read race: the service answers system.json when the file was there at the walk and gone at the read.
+  // The sentence must not claim the folder has the file it names as the gap.
+  const raced = contractProblemLine(['system.json']);
+  assert.equal(raced, 'While the folder was read, system.json went missing, so it can’t be registered as it is. Read the folder again, or make a new system from it instead.');
+  assert.doesNotMatch(raced, /has a system\.json/);
+  assert.doesNotMatch(contractProblemLine(['system.json', 'tokens.css']), /has a system\.json/);
   assert.equal(contractProblemLine(['a folder inside the project']), 'The project root can’t be registered as it is. A registered system needs its own folder inside the project. Make a new system from it instead.');
 });
 
