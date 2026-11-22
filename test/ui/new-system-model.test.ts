@@ -1,15 +1,32 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import type { ScanSummary } from '../../src/shared/api.ts';
+import type { LocationView, ScanSummary, SystemCandidate } from '../../src/shared/api.ts';
 import { SYSTEM_BYTES_MAX, SYSTEM_FILES_MAX, SYSTEM_NAME_MAX } from '../../src/shared/limits.ts';
 import {
   BRAND_ACCEPT,
   DESCRIPTION_MAX,
+  MAKE_LABEL,
+  MISSED_LINE,
+  NO_CANDIDATES,
+  REGISTER_LABEL,
+  SOURCES,
+  candidateCountLine,
+  candidateMarkLine,
+  candidatesMoreLine,
+  candidatesNote,
   classifyBrandFile,
+  contractProblemLine,
   draftProblems,
+  filesReadLabel,
+  filesReadMore,
   folderPathProblem,
   forAgentLine,
+  leftForAgentLine,
+  locationLabel,
+  missedLine,
+  nextSources,
+  nudgeLine,
   resultClause,
   resultHeadline,
   resultToast,
@@ -20,6 +37,7 @@ import {
   takeBrandFiles,
   type DraftInput,
   type PickedFile,
+  type SourceId,
 } from '../../src/ui/model/new-system-model.ts';
 
 const MB = 1024 * 1024;
@@ -128,12 +146,16 @@ test('files for the agent and skipped files are said once, in plain words', () =
   assert.equal(forAgentLine(scan({ forAgent: [{ path: 'a', why: 'js' }, { path: 'b', why: 'js' }] })), '2 files Design Chamber doesn’t run. The agent will read them.');
   assert.equal(skippedLine(scan()), null);
   assert.equal(skippedLine(scan({ skipped: [{ path: 'x.min.css', reason: 'large' }], refused: 2 })), '3 files skipped (too large, secret or unreadable).');
+  // One skipped file is named with the service's own reason (the canvas's "Skipped 1 file over 1 MB: …").
+  assert.equal(skippedLine(scan({ skipped: [{ path: 'design-system/bundle.css', reason: 'It’s larger than 1 MB, so it wasn’t read.' }] })), 'Skipped design-system/bundle.css. It’s larger than 1 MB, so it wasn’t read.');
 });
+
+const sources = (over: Partial<Record<SourceId, boolean>> = {}): Record<SourceId, boolean> => ({ code: false, brand: false, description: false, existing: false, ...over });
 
 const draft = (over: Partial<DraftInput> = {}): DraftInput => ({
   name: 'Orchard',
-  sources: { code: false, brand: false, description: true },
-  scan: { state: 'idle' },
+  sources: sources({ description: true }),
+  scan: { project: { state: 'idle' }, location: { state: 'idle' } },
   brand: { files: [], folder: '' },
   description: 'Calm and confident.',
   preset: '',
@@ -145,7 +167,7 @@ test('a draft with a name and a description can be made', () => {
 });
 
 test('a draft with nothing ticked is a blank system: only the name is needed', () => {
-  assert.deepEqual(draftProblems(draft({ sources: { code: false, brand: false, description: false }, description: '' }), []), []);
+  assert.deepEqual(draftProblems(draft({ sources: sources(), description: '' }), []), []);
 });
 
 test('the name problem comes first and names the field', () => {
@@ -162,23 +184,23 @@ test('a description or a preset is enough; neither is named; too long is named',
 });
 
 test('project code needs a finished scan: not picked, still running and failed each say what to do', () => {
-  const sources = { code: true, brand: false, description: false };
-  assert.equal(draftProblems(draft({ sources, scan: { state: 'idle' } }), [])[0]?.message, 'Pick the project to read, or untick Project code.');
-  assert.equal(draftProblems(draft({ sources, scan: { state: 'running', directory: 'C:\\x', seen: 3 } }), [])[0]?.message, 'Wait for the scan to finish, or cancel it and untick Project code.');
-  assert.equal(draftProblems(draft({ sources, scan: { state: 'failed', directory: 'C:\\x', message: 'no' } }), [])[0]?.message, 'Pick a folder Design Chamber can read, or untick Project code.');
-  assert.deepEqual(draftProblems(draft({ sources, scan: { state: 'done', directory: 'C:\\x', scanId: 'sc_x', summary: scan() } }), []), []);
+  const ticked = sources({ code: true });
+  assert.equal(draftProblems(draft({ sources: ticked, scan: { project: { state: 'idle' }, location: { state: 'idle' } } }), [])[0]?.message, 'Pick the project to read, or untick Project code.');
+  assert.equal(draftProblems(draft({ sources: ticked, scan: { project: { state: 'running', directory: 'C:\\x', seen: 3 }, location: { state: 'idle' } } }), [])[0]?.message, 'Wait for the scan to finish, or cancel it and untick Project code.');
+  assert.equal(draftProblems(draft({ sources: ticked, scan: { project: { state: 'failed', directory: 'C:\\x', message: 'no' }, location: { state: 'idle' } } }), [])[0]?.message, 'Pick a folder Design Chamber can read, or untick Project code.');
+  assert.deepEqual(draftProblems(draft({ sources: ticked, scan: { project: { state: 'done', directory: 'C:\\x', scanId: 'sc_x', summary: scan() }, location: { state: 'idle' } } }), []), []);
 });
 
 test('brand files need a file or a folder, and a folder needs a full path', () => {
-  const sources = { code: false, brand: true, description: false };
-  assert.equal(draftProblems(draft({ sources }), [])[0]?.message, 'Add brand files, or untick Brand files.');
-  assert.deepEqual(draftProblems(draft({ sources, brand: { files: [{ key: 'a', name: 'a.svg', bytes: 1, kind: 'logo' }], folder: '' } }), []), []);
-  assert.deepEqual(draftProblems(draft({ sources, brand: { files: [], folder: 'C:\\Brand' } }), []), []);
-  assert.equal(draftProblems(draft({ sources, brand: { files: [], folder: 'brand' } }), [])[0]?.message, 'Use the full path of the folder, such as C:\\Brand or /Users/you/Brand.');
+  const ticked = sources({ brand: true });
+  assert.equal(draftProblems(draft({ sources: ticked }), [])[0]?.message, 'Add brand files, or untick Brand files.');
+  assert.deepEqual(draftProblems(draft({ sources: ticked, brand: { files: [{ key: 'a', name: 'a.svg', bytes: 1, kind: 'logo' }], folder: '' } }), []), []);
+  assert.deepEqual(draftProblems(draft({ sources: ticked, brand: { files: [], folder: 'C:\\Brand' } }), []), []);
+  assert.equal(draftProblems(draft({ sources: ticked, brand: { files: [], folder: 'brand' } }), [])[0]?.message, 'Use the full path of the folder, such as C:\\Brand or /Users/you/Brand.');
 });
 
 test('a source that is not ticked is never a problem', () => {
-  assert.deepEqual(draftProblems(draft({ sources: { code: false, brand: false, description: false }, scan: { state: 'failed', directory: 'C:\\x', message: 'no' }, brand: { files: [], folder: 'nope' } }), []), []);
+  assert.deepEqual(draftProblems(draft({ sources: sources(), scan: { project: { state: 'failed', directory: 'C:\\x', message: 'no' }, location: { state: 'failed', path: 'x', message: 'no' } }, brand: { files: [], folder: 'nope' } }), []), []);
 });
 
 test('the result after a made system: what is still open, in one clause shared by the headline and the toast', () => {
@@ -189,4 +211,128 @@ test('the result after a made system: what is still open, in one clause shared b
   assert.equal(resultHeadline(2, false), '2 files weren’t added and the agent wasn’t asked.');
   assert.equal(resultHeadline(0, false), 'The agent wasn’t asked.');
   assert.equal(resultToast('Orchard', 1, true), 'Orchard is made, but 1 file wasn’t added.');
+});
+
+// ---------------------------------------------------------------- Phase 2.6 E2: the existing-system start
+
+test('the four starts, in order, each saying what Design Chamber does and what the agent does', () => {
+  assert.deepEqual(SOURCES.map((source) => source.id), ['code', 'brand', 'description', 'existing']);
+  assert.equal(SOURCES[3]?.label, 'Existing design system');
+  assert.equal(SOURCES[3]?.hint, 'Your project already has a system? Point at where it lives. Design Chamber reads its token files; the agent reads its page, docs and components.');
+  assert.equal(SOURCES[0]?.hint, 'Design Chamber reads the CSS and token files it can parse. The agent reads the rest of the project and writes the overview, notes and components. The project isn’t changed.');
+});
+
+test('ticking Project code or Existing design system unticks the other; the rest stays', () => {
+  const start = sources({ code: true, brand: true });
+  const existing = nextSources(start, 'existing', true, { description: '', preset: '' });
+  assert.deepEqual(existing, { code: false, brand: true, description: false, existing: true });
+  const back = nextSources(existing, 'code', true, { description: '', preset: '' });
+  assert.deepEqual(back, { code: true, brand: true, description: false, existing: false });
+  // Unticking never touches the other sources.
+  assert.deepEqual(nextSources(existing, 'existing', false, { description: '', preset: '' }), { code: false, brand: true, description: false, existing: false });
+});
+
+test('Existing design system unticks an empty description only when no preset is picked', () => {
+  assert.equal(nextSources(sources({ description: true }), 'existing', true, { description: '  ', preset: '' }).description, false);
+  assert.equal(nextSources(sources({ description: true }), 'existing', true, { description: 'Calm.', preset: '' }).description, true);
+  assert.equal(nextSources(sources({ description: true }), 'existing', true, { description: '', preset: 'editorial' }).description, true);
+  // The rule is about ticking existing, not about the description itself.
+  assert.equal(nextSources(sources({ description: true }), 'brand', true, { description: '', preset: '' }).description, true);
+});
+
+const doneProject = { state: 'done' as const, directory: 'C:\\x', scanId: 'sc_p', summary: scan() };
+const doneLocation = { state: 'done' as const, path: 'design-system', scanId: 'sc_l', summary: scan() };
+
+test('existing needs a project read and a location read; each wait and failure says what to do', () => {
+  const ticked = sources({ existing: true });
+  const withScan = (project: DraftInput['scan']['project'], location: DraftInput['scan']['location']): DraftInput => draft({ sources: ticked, scan: { project, location } });
+  assert.equal(draftProblems(withScan({ state: 'idle' }, { state: 'idle' }), [])[0]?.message, 'Pick the project to read, or untick Existing design system.');
+  assert.equal(draftProblems(withScan({ state: 'running', directory: 'C:\\x', seen: 2 }, { state: 'idle' }), [])[0]?.message, 'Wait for Design Chamber to look through the project.');
+  assert.equal(draftProblems(withScan(doneProject, { state: 'idle' }), [])[0]?.message, 'Pick where the system lives, or type its folder.');
+  assert.equal(draftProblems(withScan(doneProject, { state: 'running', path: 'design-system' }), [])[0]?.message, 'Wait for Design Chamber to read that folder.');
+  assert.equal(draftProblems(withScan(doneProject, { state: 'failed', path: 'nope', message: 'That folder is gone. Pick another location.' }), [])[0]?.message, 'That folder is gone. Pick another location.');
+  assert.deepEqual(draftProblems(withScan(doneProject, doneLocation), []), []);
+  // A failed project scan does not block Make once the location itself was read (the path can be typed).
+  assert.deepEqual(draftProblems(withScan({ state: 'failed', directory: 'C:\\x', message: 'no' }, doneLocation), []), []);
+});
+
+const candidate = (over: Partial<SystemCandidate> = {}): SystemCandidate => ({
+  path: 'design-system',
+  marks: ['contract', 'page', 'tokens', 'docs'],
+  counts: { colours: 24, tokens: 31, docs: 3, components: 14, pages: 1 },
+  strong: true,
+  registered: null,
+  ...over,
+});
+
+test('a candidate line says what marks it, in the service’s mark order', () => {
+  assert.equal(candidateMarkLine(candidate()), 'system.json, page, tokens, 3 docs');
+  assert.equal(candidateMarkLine(candidate({ marks: ['docs'], counts: { colours: 0, tokens: 0, docs: 2, components: 0, pages: 0 } })), '2 docs, no token files');
+  assert.equal(candidateMarkLine(candidate({ marks: ['tokens'], counts: { colours: 79, tokens: 143, docs: 0, components: 0, pages: 0 } })), 'token files');
+  assert.equal(candidateMarkLine(candidate({ marks: ['page', 'components'], counts: { colours: 0, tokens: 0, docs: 0, components: 14, pages: 1 } })), 'page, 14 components');
+  assert.equal(candidateMarkLine(candidate({ marks: ['tokens', 'theme'], counts: { colours: 0, tokens: 4, docs: 0, components: 0, pages: 0 } })), 'tokens, theme');
+});
+
+test('a candidate’s counts, its registered system, or Nothing to parse', () => {
+  assert.equal(candidateCountLine(candidate()), '24 colours · 31 tokens');
+  assert.equal(candidateCountLine(candidate({ counts: { colours: 1, tokens: 0, docs: 0, components: 0, pages: 0 } })), '1 colour');
+  assert.equal(candidateCountLine(candidate({ counts: { colours: 0, tokens: 0, docs: 2, components: 0, pages: 0 } })), 'Nothing to parse');
+  assert.equal(candidateCountLine(candidate({ registered: { id: 'juniper', name: 'Juniper' } })), 'Already in Design Chamber as Juniper');
+});
+
+test('the discovery note counts every place found, and the more line points at the field', () => {
+  assert.equal(candidatesNote(1), '1 place found');
+  assert.equal(candidatesNote(6), '6 places found');
+  assert.equal(candidatesMoreLine(2), 'and 2 more. Type a folder below to use another.');
+  assert.equal(NO_CANDIDATES, 'No existing design system found in this project. Point at a folder yourself, or start from the code.');
+});
+
+test('a location is named with its trailing slash, and the root in words', () => {
+  assert.equal(locationLabel('design-system'), 'design-system/');
+  assert.equal(locationLabel('packages/ui/tokens'), 'packages/ui/tokens/');
+  assert.equal(locationLabel(''), 'the project root');
+  assert.equal(nudgeLine(candidate()), 'This project already has a design system in design-system/. Start from it instead?');
+  assert.equal(nudgeLine(candidate({ path: '' })), 'This project already has a design system in the project root. Start from it instead?');
+});
+
+test('the missed line says what Design Chamber never parses, leaving out zero counts', () => {
+  assert.equal(missedLine(scan()), MISSED_LINE);
+  assert.equal(missedLine(scan({ missed: { pages: 12, components: 40, codeThemes: 0 } })), `${MISSED_LINE} It saw 12 pages and 40 component files.`);
+  assert.equal(missedLine(scan({ missed: { pages: 1, components: 0, codeThemes: 0 } })), `${MISSED_LINE} It saw 1 page.`);
+  assert.equal(missedLine(scan({ missed: { pages: 2, components: 3, codeThemes: 1 } })), `${MISSED_LINE} It saw 2 pages, 3 component files and 1 theme in code.`);
+  assert.equal(missedLine(scan({ missed: { pages: 0, components: 0, codeThemes: 2 } })), `${MISSED_LINE} It saw 2 themes in code.`);
+});
+
+const locationView = (over: Partial<LocationView['read']> = {}): LocationView => ({
+  path: 'design-system',
+  marks: ['contract', 'page', 'tokens', 'docs', 'components'],
+  read: { page: ['design-system/index.html'], docs: ['design-system/DESIGN.md', 'design-system/notes/voice.md', 'design-system/notes/motion.md'], components: Array.from({ length: 14 }, (_, n) => `design-system/components/c${n}.tsx`), ...over },
+  contract: { complete: true },
+});
+
+test('what a location leaves for the agent: its page paths, doc and component counts', () => {
+  assert.equal(leftForAgentLine(locationView()), 'Left for the agent: design-system/index.html, 3 docs and 14 component files.');
+  assert.equal(leftForAgentLine(locationView({ page: [], components: [] })), 'Left for the agent: 3 docs.');
+  assert.equal(leftForAgentLine(locationView({ page: [], docs: [], components: [] })), null);
+});
+
+test('Files read counts the files the scan opened, not only the ones with values', () => {
+  // The SpeakAppi bug: 2 files held values but 4 were read; the label must say 4.
+  const summary = scan({ read: 4, files: [{ path: 'a.css', found: 5 }, { path: 'b.css', found: 3 }] });
+  assert.equal(filesReadLabel(summary), 'Files read (4)');
+  assert.equal(filesReadMore(summary), 'and 2 more with no values.');
+  assert.equal(filesReadMore(scan({ read: 2, files: [{ path: 'a.css', found: 5 }, { path: 'b.css', found: 3 }] })), null);
+  assert.equal(filesReadLabel(scan({ read: 0 })), 'Files read (0)');
+});
+
+test('an incomplete contract says what is missing and offers Make instead', () => {
+  assert.equal(contractProblemLine(['tokens.css']), 'This folder has a system.json but tokens.css is missing, so it can’t be registered as it is. Make a new system from it instead.');
+  assert.equal(contractProblemLine(["system.json can't be read"]), "This folder has a system.json but system.json can't be read, so it can’t be registered as it is. Make a new system from it instead.");
+  assert.equal(contractProblemLine(['tokens.css', "system.json can't be read"]), "This folder has a system.json but tokens.css is missing and system.json can't be read, so it can’t be registered as it is. Make a new system from it instead.");
+  assert.equal(contractProblemLine(['a folder inside the project']), 'The project root can’t be registered as it is. A registered system needs its own folder inside the project. Make a new system from it instead.');
+});
+
+test('the footer button follows the choice: Make design system or Register design system', () => {
+  assert.equal(MAKE_LABEL, 'Make design system');
+  assert.equal(REGISTER_LABEL, 'Register design system');
 });

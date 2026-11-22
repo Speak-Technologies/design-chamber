@@ -176,14 +176,14 @@ const statesFlow = async (h, surface, width, theme) => {
   h.check(await noOverflow(p), `${tag}: no horizontal overflow`);
   await p.shot(`${tag}-2-empty`);
   const starts = [
-    ['From code…', [['code', true], ['brand', false], ['description', false]]],
-    ['From brand files…', [['code', false], ['brand', true], ['description', false]]],
-    ['Describe…', [['code', false], ['brand', false], ['description', true]]],
+    ['From code…', [['code', true], ['brand', false], ['description', false], ['existing', false]]],
+    ['From brand files…', [['code', false], ['brand', true], ['description', false], ['existing', false]]],
+    ['Describe…', [['code', false], ['brand', false], ['description', true], ['existing', false]]],
   ];
   for (const [action, expected] of starts) {
     await p.click('.dc-sys-empty-actions .oc-sdk-btn', { text: action });
     await p.waitFor('return !!doc.querySelector(".dc-newsys")', `the sheet from ${action}`);
-    h.check(await p.guest(`const c = [...doc.querySelectorAll(".dc-newsys-source")].map((s) => [s.dataset.source, !s.querySelector(".dc-newsys-body").hidden]); return JSON.stringify(c) === ${JSON.stringify(JSON.stringify(expected))}`), `${tag}: ${action} opens the sheet with only its source ticked`);
+    h.check(await p.guest(`const c = [...doc.querySelectorAll(".dc-newsys-source")].map((s) => [s.dataset.source, s.querySelector(".oc-sdk-check").getAttribute("aria-checked") === "true"]); return JSON.stringify(c) === ${JSON.stringify(JSON.stringify(expected))}`), `${tag}: ${action} opens the sheet with only its source ticked`);
     if (action === 'From code…') {
       await h.checkSoon(() => p.guest('return !!doc.querySelector(".dc-newsys-found")'), `${tag}: From code… reads the current project at once`);
       h.check(await p.guest('return doc.querySelector(".dc-newsys-form > div:first-child input").value === "ember-oak"'), `${tag}: and suggests its name for the empty Name field`);
@@ -217,8 +217,8 @@ const sheetFlow = async (h, surface, width, theme) => {
   await h.checkSoon(() => p.guest('return doc.querySelectorAll(".dc-sys[data-id]").length >= 5'), `${tag}: the list is up`);
   await openSheetFromList(p);
 
-  const sources = () => p.guest('return JSON.stringify([...doc.querySelectorAll(".dc-newsys-source")].map((s) => [s.dataset.source, !s.querySelector(".dc-newsys-body").hidden]))');
-  h.check((await sources()) === '[["code",false],["brand",false],["description",true]]', `${tag}: the header button opens with a description ticked`);
+  const sources = () => p.guest('return JSON.stringify([...doc.querySelectorAll(".dc-newsys-source")].map((s) => [s.dataset.source, s.querySelector(".oc-sdk-check").getAttribute("aria-checked") === "true"]))');
+  h.check((await sources()) === '[["code",false],["brand",false],["description",true],["existing",false]]', `${tag}: the header button opens with a description ticked`);
   h.check((await text(p, '.dc-sheet-title')) === 'New design system', `${tag}: titled New design system`);
   h.check(await p.guest('const primary = [...doc.querySelectorAll(".dc-newsys .oc-sdk-btn[data-emphasis=primary]")]; return primary.length === 1 && primary[0].textContent.trim() === "Make design system"'), `${tag}: one primary action, Make design system`);
   h.check(await p.guest('return !!doc.querySelector(".dc-newsys .oc-sdk-field-label")'), `${tag}: fields have visible labels, not placeholders`);

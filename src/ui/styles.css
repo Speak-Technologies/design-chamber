@@ -5573,6 +5573,274 @@ button.dc-sp-value:focus-visible {
 }
 /* ===== end Phase 2.6 F2 ===== */
 
+/* ===== Phase 2.6 E2: the New design system sheet, Existing design system ===== */
+/* The approved canvas (Designs/phase-2-6-library-ui, system-sheet-existing): three columns at laptop width
+   (start / location / what was read and what to do), one column at the rail's width. Host tokens only. */
+
+.dc-sheet[data-variant='dialog'].dc-newsys[data-existing='true'] .dc-sheet-panel {
+  width: min(1180px, 100%);
+}
+/* The columns follow the surface width: the sheet lives in the guest frame, whose window is the rail
+   (320 to 480 px) or the full page. A container query on the panel would contain layout and misplace
+   the kit's fixed popups inside it, so the breakpoint is the window's, as the approved canvas draws it. */
+.dc-newsys-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    'name'
+    'opts'
+    'agent';
+  gap: var(--dc-s4);
+  min-width: 0;
+}
+.dc-newsys[data-existing='true'] .dc-newsys-grid {
+  grid-template-areas:
+    'name'
+    'opts'
+    'where'
+    'result'
+    'agent';
+}
+.dc-newsys-g-name {
+  grid-area: name;
+}
+.dc-newsys-g-opts {
+  grid-area: opts;
+}
+.dc-newsys-g-where {
+  grid-area: where;
+}
+.dc-newsys-g-result {
+  grid-area: result;
+}
+.dc-newsys-g-agent {
+  grid-area: agent;
+}
+.dc-newsys-g-where,
+.dc-newsys-g-result {
+  min-width: 0;
+}
+.dc-newsys-g-where.dc-newsys-stack,
+.dc-newsys-g-result.dc-newsys-stack {
+  gap: var(--dc-s3);
+}
+@media (min-width: 1100px) {
+  .dc-newsys[data-existing='true'] .dc-newsys-grid {
+    grid-template-columns: 300px minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      'name where result'
+      'opts where result'
+      'agent where result';
+    column-gap: var(--dc-s5);
+    align-items: start;
+  }
+  .dc-newsys[data-existing='true'] .dc-newsys-g-where,
+  .dc-newsys[data-existing='true'] .dc-newsys-g-result {
+    padding-left: var(--dc-s5);
+    border-left: 1px solid var(--dc-hair);
+  }
+}
+
+.dc-newsys-col-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dc-newsys-h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.dc-newsys-project-note {
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.dc-newsys-discovery {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-newsys-discovery p {
+  overflow-wrap: anywhere;
+}
+.dc-newsys-pick-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--dc-s2);
+  width: 100%;
+}
+.dc-newsys-pick-note {
+  flex: none;
+  font-size: 0.6875rem;
+}
+
+/* The candidate list: a radio group of places, each with its marks and counts. */
+.dc-newsys-cands {
+  width: 100%;
+  border: 1px solid var(--dc-hair);
+  border-radius: var(--dc-r);
+  overflow: hidden;
+}
+.dc-newsys-cand {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 2px var(--dc-s2);
+  padding: var(--dc-s2) var(--dc-s3);
+  border-top: 1px solid var(--dc-hair);
+}
+.dc-newsys-cand:first-child {
+  border-top: 0;
+}
+.dc-newsys-cand[data-on='true'] {
+  background: var(--oc-selection);
+}
+.dc-newsys-radio {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--oc-primary);
+}
+.dc-newsys-radio:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+  border-radius: 9999px;
+}
+.dc-newsys-cand-path {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px var(--dc-s2);
+  min-width: 0;
+}
+.dc-newsys-cand-path-label {
+  font-family: var(--oc-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.dc-newsys-cand-badge {
+  display: inline-flex;
+  flex: none;
+}
+.dc-newsys-cand-mark,
+.dc-newsys-cand-count {
+  grid-column: 2;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.dc-newsys-cand-count {
+  font-variant-numeric: tabular-nums;
+}
+.dc-newsys-cand-more {
+  padding: var(--dc-s2) var(--dc-s3);
+  border-top: 1px solid var(--dc-hair);
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+
+/* What the location scan read: the found sentence, then the quiet notes under it. */
+.dc-newsys-read-lines {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-newsys-found-line {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.dc-newsys-found-line strong {
+  font-weight: 600;
+}
+.dc-newsys-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.dc-newsys-note > .dc-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--oc-muted);
+}
+.dc-newsys-contract-problem {
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+/* Register it as it is / Make a new system from it. */
+.dc-newsys-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-newsys-choice {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 2px var(--dc-s2);
+  padding: var(--dc-s2) var(--dc-s3);
+  border: 1px solid var(--dc-hair);
+  border-radius: var(--dc-r);
+}
+.dc-newsys-choice[data-on='true'] {
+  border-color: color-mix(in srgb, var(--oc-primary) 45%, var(--oc-border));
+  background: color-mix(in srgb, var(--oc-primary) 6%, transparent);
+}
+.dc-newsys-choice label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px var(--dc-s2);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dc-newsys-choice-hint {
+  grid-column: 2;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+/* The nudge over Project code, the disabled agent field, the footer's promise. */
+.dc-newsys-nudge {
+  width: 100%;
+  min-width: 0;
+}
+.dc-newsys-agent[data-disabled='true'] .oc-sdk-tabs {
+  opacity: 0.55;
+}
+.dc-newsys-repo-note {
+  margin-right: auto;
+  align-self: center;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+/* Narrow sheet: the promise gets its own row above the buttons, never a squeezed column. */
+.dc-newsys .dc-sheet-foot {
+  flex-wrap: wrap;
+}
+@media (max-width: 1099px) {
+  .dc-newsys-repo-note {
+    flex-basis: 100%;
+    margin-right: 0;
+    align-self: flex-start;
+  }
+}
+/* ===== end Phase 2.6 E2 ===== */
+
 /* ===== Phase 2.6 design warnings (components/design-warnings.ts) ===== */
 /* A calm band under the toolbar: the service's own sentences about what it could not apply. */
 .dc-warnings {
