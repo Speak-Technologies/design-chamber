@@ -119,7 +119,11 @@ var SCAN_TIME_MS = 1e4;
 var SCAN_FILE_MAX_BYTES = 1e6;
 var SCAN_CANDIDATES_MAX = 200;
 var SCAN_TTL_MS = 10 * 6e4;
+var FOLDER_NAME_MAX = 40;
 var FOLDER_UNDO_MS = 60 * 6e4;
+var FOLDER_REQUEST_NAMES_MAX = 10;
+var LOCATION_READ_LIST_MAX = 20;
+var SYSTEM_SWATCHES_MAX = 6;
 var SYSTEM_PINS_MAX = 50;
 var SYSTEM_BUILD_TICKET_PATTERN = /^sb_[a-z0-9]{12}$/;
 var SYSTEM_BUILD_TTL_MS = 7 * 864e5;
@@ -562,7 +566,9 @@ var ROUTE_OWNERS = {
   "GET /systems/:id/living-page/render": "P25",
   "GET /systems/:id/living-page/render/chunk": "P25",
   "POST /systems/:id/build/stop": "P25",
-  "POST /system-stops/:undoId/undo": "P25"
+  "POST /system-stops/:undoId/undo": "P25",
+  "POST /memberships": "P26",
+  "POST /systems/register": "P26"
 };
 var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
 
@@ -1249,6 +1255,7 @@ var CANONICAL_ORDER = [
   "designSystem",
   "tweaks",
   "systemChoice",
+  "folderRequest",
   "comments"
 ];
 var KNOWN_FIELDS = new Set(CANONICAL_ORDER);
@@ -1584,6 +1591,41 @@ var parseSystemChoice = (raw, warnings) => {
   warnings.add("invalid-system-choice", "systemChoice", 'systemChoice must be a design system id or "none"; it was ignored.');
   return null;
 };
+var parseFolderRequest = (raw, warnings) => {
+  if (!has(raw, "folderRequest")) return null;
+  const bad = () => {
+    warnings.add("invalid-folder-request", "folderRequest", "folderRequest must list folder names to add or remove; it was ignored.");
+    return null;
+  };
+  const value = raw.folderRequest;
+  if (!isRec(value)) return bad();
+  const names = (key) => {
+    const list = value[key];
+    if (list === void 0 || list === null) return [];
+    if (!Array.isArray(list) || list.length > FOLDER_REQUEST_NAMES_MAX) return null;
+    const out2 = [];
+    for (const entry of list) {
+      if (typeof entry !== "string") return null;
+      const name = entry.normalize("NFKC").trim();
+      const control = [...name].some((ch) => ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127);
+      if (name.length < 1 || name.length > FOLDER_NAME_MAX || control) return null;
+      out2.push(name);
+    }
+    return out2;
+  };
+  const add = names("add");
+  const remove = names("remove");
+  if (add === null || remove === null) return bad();
+  if (add.length === 0 && remove.length === 0) return bad();
+  if (add.some((name) => remove.includes(name))) return bad();
+  const at = value.at;
+  if (at !== void 0 && at !== null && (typeof at !== "string" || at.length > 40 || Number.isNaN(Date.parse(at)))) return bad();
+  return {
+    ...add.length > 0 ? { add } : {},
+    ...remove.length > 0 ? { remove } : {},
+    ...typeof at === "string" ? { at } : {}
+  };
+};
 var normalizeDesign = (raw, options) => {
   const warnings = new Warnings();
   const record = isRec(raw) ? raw : {};
@@ -1643,6 +1685,7 @@ var normalizeDesign = (raw, options) => {
   }
   const tweaks = parseTweaks(record, warnings);
   const systemChoice = parseSystemChoice(record, warnings);
+  const folderRequest = parseFolderRequest(record, warnings);
   const comments = parseComments(record, warnings);
   const extra = Object.fromEntries(
     // Safe: `record` came from JSON.parse (or is {}), so every value is JSON.
@@ -1666,6 +1709,7 @@ var normalizeDesign = (raw, options) => {
       tweaks,
       // Absent stays absent, so a design without the key normalises exactly as before.
       ...systemChoice !== null ? { systemChoice } : {},
+      ...folderRequest !== null ? { folderRequest } : {},
       comments
     },
     extra,
@@ -2091,7 +2135,8 @@ var BUILD_PROBLEM_SENTENCES = {
   "code-outside-project": () => "The code folder must be the project this chat is in, or a folder inside it.",
   "home-changed": (f) => `${systemNameOf(f)} already has files in ${repoNameOf(f)}, so its home can't change. Make a new system to move it.`,
   "ticket-changed": () => "BUILD.json names another build. Keep the ticket this system started with.",
-  "applied-unknown-proposal": (f) => `The agent says it applied a proposal you didn't approve here. Check ${repoNameOf(f)}'s history.`
+  "applied-unknown-proposal": (f) => `The agent says it applied a proposal you didn't approve here. Check ${repoNameOf(f)}'s history.`,
+  "existing-outside-project": () => "The existing system folder is outside the project it was found in; it was ignored."
 };
 var PROPOSAL_PROBLEM_SENTENCES = {
   "not-adopted": "the system has not been adopted from a build yet.",
@@ -2692,7 +2737,7 @@ var openPage = async (session, serving) => {
   await page.send("Log.enable");
   await page.send("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
   await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
-  const storageShim = true ? '"use strict";(()=>{var B=30*6e4;var l=1048576;var i=1e4;var D=l;var Y=100*1024*1024,f=5*1024*1024,d=10*1024*1024,G=20*1024*1024;var K=10*6e4;var h=60*6e4;var V=7*864e5;var b=20*1024*1024,m=4*1024*1024;var W=2*1024*1024;var I=(E,T)=>E.length+(T===null?0:T.length);var g=(E,T,A={changes:i,chars:D})=>{let o=[],r=[],s=0,M=()=>{o.push({clear:E&&o.length===0,changes:r}),r=[],s=0};for(let c of T){let O=I(c[0],c[1]);r.length>0&&(r.length>=A.changes||s+O>A.chars)&&M(),r.push(c),s+=O}return(r.length>0||E&&o.length===0)&&M(),o},a=E=>`${E}`,C=(E,T,A)=>{if(T.length<A)throw new TypeError(`Failed to execute \'${E}\' on \'Storage\': ${A} argument${A===1?"":"s"} required, but only ${T.length} present.`)},u=(E,T,A)=>{let o=new Map,r=0;for(let[_,t]of E)o.has(_)||(o.set(_,t),r+=I(_,t));let s=null,M=(_,t)=>{let e=o.get(_);r+=I(_,t)-(e===void 0?0:I(_,e)),e===void 0&&(s=null),o.set(_,t)},c=_=>{let t=o.get(_);t!==void 0&&(r-=I(_,t),o.delete(_),s=null)},O=(..._)=>(C("getItem",_,1),o.get(a(_[0]))??null),n=(..._)=>{C("setItem",_,2);let t=a(_[0]),e=a(_[1]),R=o.get(t);if(R===e)return;if(r+I(t,e)-(R===void 0?0:I(t,R))>l)throw T(t);M(t,e),A?.set(t,e)},S=(..._)=>{C("removeItem",_,1);let t=a(_[0]);o.has(t)&&(c(t),A?.set(t,null))},N=()=>{o.size!==0&&(o.clear(),r=0,s=null,A?.clear())},L=(..._)=>{C("key",_,1);let t=Number(_[0])>>>0;return s??(s=[...o.keys()]),s[t]??null},X=Object.create(Object.prototype,{getItem:{value:O,enumerable:!0,configurable:!0,writable:!0},setItem:{value:n,enumerable:!0,configurable:!0,writable:!0},removeItem:{value:S,enumerable:!0,configurable:!0,writable:!0},clear:{value:N,enumerable:!0,configurable:!0,writable:!0},key:{value:L,enumerable:!0,configurable:!0,writable:!0},length:{get:()=>o.size,enumerable:!0,configurable:!0},[Symbol.toStringTag]:{value:"Storage",configurable:!0}}),p=Object.create(X),x=_=>typeof _=="string"&&o.has(_)&&!(_ in p);return{storage:new Proxy(p,{get:(_,t,e)=>x(t)?o.get(t):Reflect.get(_,t,e),set:(_,t,e)=>typeof t!="string"?Reflect.set(_,t,e):(n(t,e),!0),has:(_,t)=>typeof t=="string"&&o.has(t)||Reflect.has(_,t),deleteProperty:(_,t)=>x(t)?(S(t),!0):Reflect.deleteProperty(_,t),ownKeys:_=>[...[...o.keys()].filter(t=>!(t in _)),...Reflect.ownKeys(_)],getOwnPropertyDescriptor:(_,t)=>x(t)?{value:o.get(t),writable:!0,enumerable:!0,configurable:!0}:Reflect.getOwnPropertyDescriptor(_,t),defineProperty:(_,t,e)=>typeof t!="string"?Reflect.defineProperty(_,t,e):"get"in e||"set"in e?!1:(n(t,e.value),!0),preventExtensions:()=>!1}),apply:(_,t)=>{_&&(o.clear(),r=0,s=null);for(let[e,R]of t)R===null?c(e):M(e,R)}}},H=(E,T,A)=>{let o=E.DOMException??globalThis.DOMException,r=E.queueMicrotask?.bind(E)??(n=>void Promise.resolve().then(n)),s=n=>new o(`Failed to execute \'setItem\' on \'Storage\': Setting the value of \'${n}\' exceeded the quota.`,"QuotaExceededError"),M=null;if(T?.persist){let n=new Map,S=!1,N=!1,L=()=>{N=!1;let p=[...n],x=S;n=new Map,S=!1;for(let P of g(x,p))A(P)},X=()=>{N||(N=!0,r(L))};M={set:(p,x)=>{n.delete(p),n.set(p,x),X()},clear:()=>{n.clear(),S=!0,X()}}}let c=u(T?.items??[],s,M),O=u([],s,null);for(let[n,S]of[["localStorage",c],["sessionStorage",O]])try{Object.defineProperty(E,n,{value:S.storage,configurable:!0,enumerable:!0,writable:!1})}catch{}return{sync:(n,S)=>c.apply(n,S)}};H(window,void 0,()=>{});})();\n' : "";
+  const storageShim = true ? '"use strict";(()=>{var Y=30*6e4;var P=1048576;var D=1e4;var i=P;var B=100*1024*1024,f=5*1024*1024,G=10*1024*1024,d=20*1024*1024;var K=10*6e4;var h=60*6e4;var V=7*864e5;var b=20*1024*1024,m=4*1024*1024;var W=2*1024*1024;var I=(E,A)=>E.length+(A===null?0:A.length);var g=(E,A,S={changes:D,chars:i})=>{let o=[],r=[],s=0,M=()=>{o.push({clear:E&&o.length===0,changes:r}),r=[],s=0};for(let c of A){let O=I(c[0],c[1]);r.length>0&&(r.length>=S.changes||s+O>S.chars)&&M(),r.push(c),s+=O}return(r.length>0||E&&o.length===0)&&M(),o},C=E=>`${E}`,a=(E,A,S)=>{if(A.length<S)throw new TypeError(`Failed to execute \'${E}\' on \'Storage\': ${S} argument${S===1?"":"s"} required, but only ${A.length} present.`)},u=(E,A,S)=>{let o=new Map,r=0;for(let[_,t]of E)o.has(_)||(o.set(_,t),r+=I(_,t));let s=null,M=(_,t)=>{let e=o.get(_);r+=I(_,t)-(e===void 0?0:I(_,e)),e===void 0&&(s=null),o.set(_,t)},c=_=>{let t=o.get(_);t!==void 0&&(r-=I(_,t),o.delete(_),s=null)},O=(..._)=>(a("getItem",_,1),o.get(C(_[0]))??null),n=(..._)=>{a("setItem",_,2);let t=C(_[0]),e=C(_[1]),R=o.get(t);if(R===e)return;if(r+I(t,e)-(R===void 0?0:I(t,R))>P)throw A(t);M(t,e),S?.set(t,e)},T=(..._)=>{a("removeItem",_,1);let t=C(_[0]);o.has(t)&&(c(t),S?.set(t,null))},N=()=>{o.size!==0&&(o.clear(),r=0,s=null,S?.clear())},L=(..._)=>{a("key",_,1);let t=Number(_[0])>>>0;return s??(s=[...o.keys()]),s[t]??null},X=Object.create(Object.prototype,{getItem:{value:O,enumerable:!0,configurable:!0,writable:!0},setItem:{value:n,enumerable:!0,configurable:!0,writable:!0},removeItem:{value:T,enumerable:!0,configurable:!0,writable:!0},clear:{value:N,enumerable:!0,configurable:!0,writable:!0},key:{value:L,enumerable:!0,configurable:!0,writable:!0},length:{get:()=>o.size,enumerable:!0,configurable:!0},[Symbol.toStringTag]:{value:"Storage",configurable:!0}}),p=Object.create(X),x=_=>typeof _=="string"&&o.has(_)&&!(_ in p);return{storage:new Proxy(p,{get:(_,t,e)=>x(t)?o.get(t):Reflect.get(_,t,e),set:(_,t,e)=>typeof t!="string"?Reflect.set(_,t,e):(n(t,e),!0),has:(_,t)=>typeof t=="string"&&o.has(t)||Reflect.has(_,t),deleteProperty:(_,t)=>x(t)?(T(t),!0):Reflect.deleteProperty(_,t),ownKeys:_=>[...[...o.keys()].filter(t=>!(t in _)),...Reflect.ownKeys(_)],getOwnPropertyDescriptor:(_,t)=>x(t)?{value:o.get(t),writable:!0,enumerable:!0,configurable:!0}:Reflect.getOwnPropertyDescriptor(_,t),defineProperty:(_,t,e)=>typeof t!="string"?Reflect.defineProperty(_,t,e):"get"in e||"set"in e?!1:(n(t,e.value),!0),preventExtensions:()=>!1}),apply:(_,t)=>{_&&(o.clear(),r=0,s=null);for(let[e,R]of t)R===null?c(e):M(e,R)}}},H=(E,A,S)=>{let o=E.DOMException??globalThis.DOMException,r=E.queueMicrotask?.bind(E)??(n=>void Promise.resolve().then(n)),s=n=>new o(`Failed to execute \'setItem\' on \'Storage\': Setting the value of \'${n}\' exceeded the quota.`,"QuotaExceededError"),M=null;if(A?.persist){let n=new Map,T=!1,N=!1,L=()=>{N=!1;let p=[...n],x=T;n=new Map,T=!1;for(let l of g(x,p))S(l)},X=()=>{N||(N=!0,r(L))};M={set:(p,x)=>{n.delete(p),n.set(p,x),X()},clear:()=>{n.clear(),T=!0,X()}}}let c=u(A?.items??[],s,M),O=u([],s,null);for(let[n,T]of[["localStorage",c],["sessionStorage",O]])try{Object.defineProperty(E,n,{value:T.storage,configurable:!0,enumerable:!0,writable:!1})}catch{}return{sync:(n,T)=>c.apply(n,T)}};H(window,void 0,()=>{});})();\n' : "";
   if (storageShim !== "") await page.send("Page.addScriptToEvaluateOnNewDocument", { source: storageShim });
   session.on("Fetch.requestPaused", (event) => {
     if (event.sessionId !== sessionId) return;
@@ -3523,6 +3568,21 @@ var forAgentList = (value) => {
   }
   return out2;
 };
+var CANDIDATE_MARKS = ["page", "tokens", "docs", "theme", "components", "contract"];
+var isProjectRel = (value) => typeof value === "string" && value.length <= 4096 && !hasControl(value) && !value.startsWith("/") && !/^[A-Za-z]:/.test(value) && !value.split("/").includes("..") && !value.includes("\\");
+var existingSource = (value) => {
+  if (!isObject(value)) return null;
+  const location = own(value, "location");
+  if (!isProjectRel(location)) return null;
+  const rawMarks = own(value, "marks");
+  const marks = Array.isArray(rawMarks) ? rawMarks.filter((mark, index) => CANDIDATE_MARKS.includes(mark) && rawMarks.indexOf(mark) === index) : [];
+  const read = own(value, "read");
+  const list = (key) => {
+    const raw = isObject(read) ? own(read, key) : void 0;
+    return Array.isArray(raw) ? raw.filter(isProjectRel).slice(0, LOCATION_READ_LIST_MAX) : [];
+  };
+  return { location, marks, read: { page: list("page"), docs: list("docs"), components: list("components") } };
+};
 var parseSources = (value) => {
   const sources = { code: null, brand: null, description: null };
   if (!isObject(value)) return sources;
@@ -3533,7 +3593,17 @@ var parseSources = (value) => {
     const scanned = stringList(own(code, "scanned"), 1e4, 4096) ?? [];
     if (typeof directory === "string" && directory !== "" && isIso(lastScan)) {
       const forAgent = forAgentList(own(code, "forAgent"));
-      sources.code = { directory, lastScan, partial: own(code, "partial") === true, scanned, ...forAgent !== null ? { forAgent } : {} };
+      const project = own(code, "project");
+      const existing = existingSource(own(code, "existing"));
+      sources.code = {
+        directory,
+        lastScan,
+        partial: own(code, "partial") === true,
+        scanned,
+        ...forAgent !== null ? { forAgent } : {},
+        ...isAbsPath(project) ? { project } : {},
+        ...existing !== null ? { existing } : {}
+      };
     }
   }
   const brand = own(value, "brand");
@@ -4047,13 +4117,21 @@ var buildProblemSentence = (state) => {
       return "BUILD.json names another build. Keep the ticket this system started with.";
     case "applied-unknown-proposal":
       return `The agent says it applied a proposal you didn't approve here${value === "" ? "" : ` (${value})`}. Check ${repo}'s history.`;
+    case "existing-outside-project":
+      return "The existing system must be a folder inside the project this chat is in, so Design Chamber ignored it.";
     default:
       return "BUILD.json can't be used. Ask the agent to fix it.";
   }
 };
 var buildViewOf = (build) => build === null ? null : { mode: build.mode, dark: build.dark, calls: build.calls, access: build.access, round: build.round, applied: build.applied };
 var sourceLineOf = (state) => ({
-  code: state.sources.code === null ? null : { directory: state.sources.code.directory, lastScan: state.sources.code.lastScan, partial: state.sources.code.partial },
+  code: state.sources.code === null ? null : {
+    directory: state.sources.code.directory,
+    lastScan: state.sources.code.lastScan,
+    partial: state.sources.code.partial,
+    ...state.sources.code.project !== void 0 ? { project: state.sources.code.project } : {},
+    ...state.sources.code.existing !== void 0 ? { existing: { location: state.sources.code.existing.location } } : {}
+  },
   brand: state.sources.brand?.files.length ?? 0,
   description: state.sources.description !== null
 });
@@ -4236,6 +4314,11 @@ var isSystemContractRel = (rel) => {
   const asset = /^(assets\/fonts|assets\/logos|sources)\/([^/]+)$/.exec(rel);
   return asset !== null && SAFE_FILE_PATTERN.test(asset[2] ?? "") && !(asset[2] ?? "").includes("..");
 };
+var refusedHintText = (raw) => {
+  const folder = isObject(raw) ? own(raw, "folder") : raw;
+  const text3 = typeof folder === "string" ? folder : JSON.stringify(raw) ?? String(raw);
+  return text3.slice(0, BUILD_PROBLEM_VALUE_MAX);
+};
 var BUILD_NOT_JSON = "BUILD.json isn't valid JSON.";
 var BUILD_TOO_LARGE = "BUILD.json is larger than 64 KB.";
 var BUILD_PART_NAMES = ["system-files", "token-fixes", "docs", "living-page"];
@@ -4303,6 +4386,17 @@ var parseBuildJson = (text3) => {
     if (isAbsPath(directory)) code = { directory };
     else broken("code", "The code directory in BUILD.json is not an absolute path, so it was skipped.");
   }
+  let existing = null;
+  let existingRefused = null;
+  const rawExisting = own(value, "existing");
+  if (rawExisting !== void 0 && rawExisting !== null) {
+    const folder = isObject(rawExisting) ? own(rawExisting, "folder") : void 0;
+    if (typeof folder === "string" && (folder === "." || REPO_REL_PATTERN.test(folder))) existing = { folder };
+    else {
+      existingRefused = refusedHintText(rawExisting);
+      broken("existing", 'existing in BUILD.json needs a folder inside the project, like "design-system", so it was skipped.');
+    }
+  }
   let ticket = null;
   const rawTicket = own(value, "ticket");
   if (rawTicket !== void 0 && rawTicket !== null) {
@@ -4369,8 +4463,8 @@ var parseBuildJson = (text3) => {
       broken("drift", "drift in BUILD.json needs a differ count (0 to 100 000), kinds from tailwind-config, js-theme, scss, less, other, and a note up to 300 characters.");
     }
   }
-  const build = { version: 1, ticket, name, home, repo, code, mode, dark, calls, access, round, applied, proposal, drift };
-  return { build, raw: value, problems, unreadable: null };
+  const build = { version: 1, ticket, name, home, repo, code, ...existing !== null ? { existing } : {}, mode, dark, calls, access, round, applied, proposal, drift };
+  return { build, raw: value, problems, unreadable: null, ...existingRefused !== null ? { existingRefused } : {} };
 };
 var PROPOSAL_NOT_JSON = "PROPOSAL.json isn't valid JSON.";
 var PROPOSAL_TOO_LARGE = "PROPOSAL.json is larger than 512 KB.";
@@ -4923,6 +5017,18 @@ var BYTES_PER_CHAR_MAX = 4;
 var SEED_TOKENS_CSS = ":root {\n}\n\n@media (prefers-color-scheme: dark) {\n  :root {\n  }\n}\n";
 var SEED_SYSTEM_JSON = '{\n  "version": 1,\n  "tokens": {}\n}\n';
 var CREATE_LOCK = "\0systems";
+var swatchesOf = (tokens) => {
+  const colours = tokens.filter((token) => token.section === "colours" && token.light !== null);
+  const ordered = [...colours.filter((token) => token.group === "brand"), ...colours.filter((token) => token.group !== "brand")];
+  const out2 = [];
+  for (const token of ordered) {
+    const value = token.light?.text.trim() ?? "";
+    if (value === "" || out2.includes(value) || /var\(/i.test(value) || !validateTokenValue("colours", null, value).ok) continue;
+    out2.push(value);
+    if (out2.length >= SYSTEM_SWATCHES_MAX) break;
+  }
+  return out2;
+};
 var isRealDirectory = async (target) => {
   try {
     const info = await lstat4(target);
@@ -5213,6 +5319,8 @@ var createSystemStore = (deps) => {
     status: detail.status,
     changesToReview: detail.changesToReview,
     sources: detail.sources,
+    created: detail.created,
+    swatches: swatchesOf(detail.tokens),
     usedBy: detail.usedBy,
     isDefault: detail.isDefault,
     pinnedFor: detail.pinnedFor,
@@ -5235,6 +5343,9 @@ var createSystemStore = (deps) => {
       status: state.status,
       changesToReview: false,
       sources: { code: null, brand: 0, description: false },
+      created: state.created,
+      // A row without a readable detail has no tokens to show.
+      swatches: [],
       usedBy: 0,
       isDefault: false,
       pinnedFor: [],
@@ -5402,8 +5513,10 @@ var createSystemStore = (deps) => {
     await renameWithRetry(systemDir, target);
     return target;
   };
-  const create = async (input, seed) => {
+  const create = async (input, seed, options = {}) => {
     if (input.code !== void 0 && seed?.code === void 0) throw new ApiError("bad-request", "That scan is no longer available. Scan the folder again.");
+    const repoHome = options.repoHome;
+    if (repoHome !== void 0 && (seed !== void 0 || input.code !== void 0)) throw new Error("systems: a repo-home create takes no seed.");
     const name = checkSystemName(input.name);
     try {
       await mkdir6(settings.root(), { recursive: true });
@@ -5421,6 +5534,7 @@ var createSystemStore = (deps) => {
         if (foldName(state.name) === foldName(name)) throw new ApiError("conflict", nameTaken(state.name));
       }
       const minted = mintSystemId(name, new Set(entries.map((entry) => entry.name.toLowerCase())));
+      await options.beforeMake?.(minted);
       const systemDir = path10.join(systemsDir, minted);
       try {
         await mkdir6(systemDir);
@@ -5429,25 +5543,25 @@ var createSystemStore = (deps) => {
         throw new ApiError("bad-path", folderErrorSentence(error, systemDir));
       }
       try {
-        if (seed === void 0) {
+        if (repoHome === void 0 && seed === void 0) {
           await writeFileAtomic(await resolvePlainTarget(systemDir, ["tokens.css"], { allowAbsent: true }), SEED_TOKENS_CSS, { createDirs: false });
           await writeFileAtomic(await resolvePlainTarget(systemDir, ["system.json"], { allowAbsent: true }), SEED_SYSTEM_JSON, { createDirs: false });
-        } else {
+        } else if (seed !== void 0) {
           await seed.write(systemDir);
         }
         const at = now().toISOString();
-        const content = await readContent(systemDir);
+        const treeHash = repoHome !== void 0 ? treeHashOf({}) : (await readContent(systemDir)).treeHash;
         const state = {
           ...parseSystemState(null, minted, at),
           name,
-          revision: { n: 1, treeHash: content.treeHash, at },
+          revision: { n: 1, treeHash, at },
           provenance: seed?.code?.provenance ?? {},
           sources: {
             code: seed?.code?.source ?? null,
             brand: input.brand === true ? { files: [] } : null,
             description: input.description === void 0 ? null : { text: input.description.text, preset: input.description.preset }
           },
-          home: { kind: "internal" }
+          home: repoHome !== void 0 ? { kind: "repo", ...repoHome, adoptedAt: at } : { kind: "internal" }
         };
         await writeStateOf(systemDir, state);
       } catch (error) {
@@ -7251,7 +7365,7 @@ var main = async () => {
       staticOnly: command.staticOnly,
       tool: "cli",
       browserPath: browser.path,
-      probeSource: true ? '"use strict";var __dcProbe=(()=>{var x=Object.defineProperty;var b=Object.getOwnPropertyDescriptor;var H=Object.getOwnPropertyNames;var Y=Object.prototype.hasOwnProperty;var B=(e,t)=>{for(var o in t)x(e,o,{get:t[o],enumerable:!0})},U=(e,t,o,n)=>{if(t&&typeof t=="object"||typeof t=="function")for(let r of H(t))!Y.call(e,r)&&r!==o&&x(e,r,{get:()=>t[r],enumerable:!(n=b(t,r))||n.enumerable});return e};var G=e=>U(x({},"__esModule",{value:!0}),e);var Nt={};B(Nt,{collect:()=>Rt});var Ct=30*6e4;var Xt=100*1024*1024,Lt=5*1024*1024,ft=10*1024*1024,Pt=20*1024*1024;var dt=10*6e4;var mt=60*6e4;var gt=7*864e5;var ht=20*1024*1024,Dt=4*1024*1024;var bt=2*1024*1024;var w=["data-testid","data-screen","data-dc-id"],K=/^(is-|has-|js-|active|hover|focus)/,C=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,V=3,X=e=>e.tagName===e.tagName.toUpperCase()?e.tagName.toLowerCase():e.tagName,L=e=>e.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),O=e=>e===""?null:C.test(e)?`#${e}`:`[id="${L(e)}"]`,W=(e,t)=>{try{return e.querySelectorAll(t)}catch{return null}},p=(e,t,o)=>{let n=W(e,t);return n!==null&&n.length===1&&n[0]===o},F=e=>{let t=[];for(let o=0;o<e.classList.length&&t.length<V;o+=1){let n=e.classList[o];n!==void 0&&C.test(n)&&!K.test(n)&&t.push(n)}return t},z=e=>{let t=e.parentElement;if(!t)return null;let o=0,n=0;for(let r=0;r<t.children.length;r+=1){let _=t.children[r];!_||_.tagName!==e.tagName||(n+=1,_===e&&(o=n))}return n>1?o:null},$=e=>{let t=X(e);if(t==="html"||t==="body")return t;let o=F(e).map(r=>`.${r}`).join(""),n=z(e);return`${t}${o}${n===null?"":`:nth-of-type(${n})`}`},a=e=>{let t=[...e];for(;t.join(" > ").length>1e3&&t.length>1;)t.shift();return t.join(" > ").slice(0,1e3)},f=(e,t)=>{let o=X(e);if(o==="html"||o==="body"||o==="head")return o;let n=O(e.id);if(n&&p(t,n,e))return n;for(let E of w){let s=e.getAttribute(E);if(s===null||s==="")continue;let c=`[${E}="${L(s)}"]`;if(p(t,c,e))return c}let r=[],_=e;for(let E=0;_&&E<6;E+=1){r.unshift($(_));let s=r.join(" > ");if(p(t,s,e))return a(r);let c=_.parentElement;if(!c)break;let l=O(c.id);if(l&&p(t,l,c)){let S=[l,...r];if(p(t,S.join(" > "),e))return a(S)}_=c}return a(r)};var k=new Set(["SCRIPT","STYLE","NOSCRIPT","TEMPLATE","TITLE","HEAD","OPTION","TEXTAREA"]),Z=new Set(["IMG","VIDEO","CANVAS","PICTURE","SVG","IFRAME","OBJECT","EMBED"]),Q=new Set(["hidden","submit","button","reset","image"]),m=20,j=5e3,q=80,P=100,J=64,I=e=>f(e,document),tt=e=>{let t=/^rgba?\\(([^)]*)\\)$/.exec(e.trim());if(!t)return!1;let o=t[1]??"";if(o.includes("/"))return/\\/\\s*1(\\.0*)?\\s*$|\\/\\s*100%/.test(o);let n=o.split(",").map(r=>r.trim());return n.length===3||n.length===4&&Number.parseFloat(n[3]??"1")>=1},R=e=>{let t=getComputedStyle(e);return t.display!=="none"&&t.visibility!=="hidden"&&e.getClientRects().length>0},et=e=>{let t=[],o=document.createRange();for(let n of e){if(t.length>=P)break;o.selectNodeContents(n);for(let r of Array.from(o.getClientRects()))if(!(r.width<1||r.height<1)&&(t.push({x:r.left+window.scrollX,y:r.top+window.scrollY,w:r.width,h:r.height}),t.length>=P))break}return t},ot=e=>{let t=1/0,o=1/0,n=-1/0,r=-1/0;for(let _ of e)t=Math.min(t,_.x),o=Math.min(o,_.y),n=Math.max(n,_.x+_.w),r=Math.max(r,_.y+_.h);return{x:t,y:o,w:n-t,h:r-o}},M=(e,t,o,n)=>{if(!o&&!n)return e;let r=[];for(let _ of e){let E=o?Math.max(_.x,t.x):_.x,s=n?Math.max(_.y,t.y):_.y,c=o?Math.min(_.x+_.w,t.x+t.w):_.x+_.w,l=n?Math.min(_.y+_.h,t.y+t.h):_.y+_.h,S=c-E,T=l-s;S>=1&&T>=1&&r.push({x:E,y:s,w:S,h:T})}return r},nt=(e,t,o,n)=>o&&(e.x<t.x-1||e.x+e.w>t.x+t.w+1)||n&&(e.y<t.y-1||e.y+e.h>t.y+t.h+1),rt=(e,t,o,n)=>{if(!o&&!n)return e;let r=[];for(let _ of e){let E={x:o?t.x:_.x,y:n?t.y:_.y,w:o?t.w:_.w,h:n?t.h:_.h};E.w>=1&&E.h>=1&&r.push(E)}return r},g=(e,t)=>{let o=getComputedStyle(e);return o.display==="contents"?!1:!!(t==="absolute"&&o.position!=="static"||o.transform!=="none"||o.perspective!=="none"||o.filter!=="none"||o.backdropFilter!=="none"||o.translate!=="none"||o.rotate!=="none"||o.scale!=="none"||/transform|translate|rotate|scale|perspective|filter/.test(o.willChange)||/paint|layout|strict|content/.test(o.contain))},_t=e=>{for(let t=e.parentElement;t!==null;t=t.parentElement)if(g(t,"fixed"))return t;return null},st=e=>{if(e!==document.body)return!1;let t=getComputedStyle(document.documentElement);return t.overflowX==="visible"&&t.overflowY==="visible"},ct=new Set(["inline","contents","table-row","table-row-group","table-header-group","table-footer-group"]),Et=e=>{let t=e.getBoundingClientRect(),o=e instanceof HTMLElement&&e.offsetWidth>0?t.width/e.offsetWidth:1,n=e instanceof HTMLElement&&e.offsetHeight>0?t.height/e.offsetHeight:1;return{x:t.left+e.clientLeft*o+window.scrollX,y:t.top+e.clientTop*n+window.scrollY,w:e.clientWidth*o,h:e.clientHeight*n}},d=(e,t)=>{if(t.overflowX==="visible"&&t.overflowY==="visible"||e===document.documentElement||st(e)||ct.has(t.display))return null;let o=_=>_==="auto"||_==="scroll",n=o(t.overflowX)&&e.scrollWidth>e.clientWidth+1,r=o(t.overflowY)&&e.scrollHeight>e.clientHeight+1;return{box:Et(e),cutX:t.overflowX!=="visible"&&!n,cutY:t.overflowY!=="visible"&&!r,scrollX:n,scrollY:r}},lt=(e,t,o)=>{let n={lines:o,reachable:!0,scrolled:null},r=o,_=(E,s)=>{if(s===null)return;let{box:c,cutX:l,cutY:S,scrollX:T,scrollY:A}=s,i=M(n.lines,c,l,S);n.scrolled===null&&i.some(D=>nt(D,c,T,A))&&(n.scrolled={box:E,lines:i}),n.lines=M(i,c,T,A),r=rt(M(r,c,l,S),c,T,A)};if(_(e,d(e,t)),t.position==="fixed"&&_t(e)===null){let E={x:window.scrollX,y:window.scrollY,w:innerWidth,h:innerHeight};n.lines=M(n.lines,E,!0,!0),r=M(r,E,!0,!0)}else{let E=e,s=t.position;for(;n.lines.length>0||r.length>0;){let c=E.parentElement;if(s==="absolute"||s==="fixed")for(;c!==null&&!g(c,s);)c=c.parentElement;if(c===null)break;let l=getComputedStyle(c);_(c,d(c,l)),E=c,s=l.position}}return n.reachable=r.length>0,n},Tt=e=>{let t=/^rect\\(([^)]*)\\)$/.exec(e.trim());if(!t)return!1;let o=(t[1]??"").split(/[\\s,]+/).filter(s=>s!=="").map(s=>Number.parseFloat(s));if(o.length!==4||o.some(s=>!Number.isFinite(s)))return!1;let n=o[0]??0,r=o[1]??0,_=o[2]??0,E=o[3]??0;return _<=n||r<=E},St=(e,t)=>{let o=/^inset\\(([^)]*)\\)$/.exec(e.trim());if(!o)return!1;let n=(o[1]??"").trim().split(/\\s+/).filter(l=>l!=="");if(n.length===0||n.length>4)return!1;let r=(l,S)=>{if(l===void 0)return null;let T=/^(-?[\\d.]+)(px|%)$/.exec(l);if(!T)return null;let A=Number.parseFloat(T[1]??"");return T[2]==="%"?A/100*S:A},_=r(n[0],t.height),E=r(n[1]??n[0],t.width),s=r(n[2]??n[0],t.height),c=r(n[3]??n[1]??n[0],t.width);return _===null||E===null||s===null||c===null?!1:_+s>=t.height||c+E>=t.width},At=(e,t,o)=>{if(!o)return!0;for(let _=e;_;_=_.parentElement)if(Number.parseFloat(getComputedStyle(_).opacity)===0)return!0;if((t.position==="absolute"||t.position==="fixed")&&Tt(t.clip))return!0;let n=e.getBoundingClientRect();if(St(t.clipPath,n))return!0;let r=t.overflowX==="hidden"||t.overflowX==="clip"||t.overflowY==="hidden"||t.overflowY==="clip";return n.width<=1&&n.height<=1&&r},it=(e,t)=>{let o=[];for(let _=e;_;_=_.parentElement){let E=getComputedStyle(_);if(E.backgroundImage!=="none"||E.filter!=="none"||E.mixBlendMode!=="normal"||Number.parseFloat(E.opacity)<1)return null;if(o.push(E.backgroundColor),tt(E.backgroundColor))break}let n=t.x-window.scrollX+t.w/2,r=t.y-window.scrollY+t.h/2;if(n>=0&&r>=0&&n<=innerWidth&&r<=innerHeight){let _=document.elementsFromPoint(n,r),E=_.findIndex(s=>s===e||e.contains(s));for(let s of E<0?[]:_.slice(E+1))if(!s.contains(e)&&(Z.has(s.tagName.toUpperCase())||getComputedStyle(s).backgroundImage!=="none"))return null}return o},pt=e=>{for(let t=e;t;t=t.parentElement){let o=getComputedStyle(t).position;if(o==="fixed"||o==="sticky")return!0}return!1},Mt=(e,t)=>{let o=n=>n==="hidden"||n==="clip";return!o(t.overflowX)&&!o(t.overflowY)?!1:e.scrollWidth>e.clientWidth+1||e.scrollHeight>e.clientHeight+1},xt=e=>{let t=new Map,o=document.createTreeWalker(document.body??document.documentElement,NodeFilter.SHOW_TEXT);for(let s=o.nextNode();s&&t.size<e;s=o.nextNode()){let c=s,l=c.parentElement;if(!l||k.has(l.tagName.toUpperCase())||c.data.trim()==="")continue;let S=t.get(l);S?S.push(c):t.set(l,[c])}let n=[],r=new Map,_=s=>{let c=r.get(s);return c!==void 0?c:(r.set(s,r.size),r.size-1)};for(let[s,c]of t){if(!R(s))continue;let l=et(c);if(l.length===0)continue;let S=ot(l),T=getComputedStyle(s),A=lt(s,T,l);n.push({element:s,text:{selector:I(s),text:c.map(i=>i.data).join(" ").replace(/\\s+/g," ").trim().slice(0,q),rect:S,lines:A.lines,...A.scrolled===null?{}:{inScroll:{box:_(A.scrolled.box),lines:A.scrolled.lines}},hidden:At(s,T,A.reachable),color:T.color,bgChain:it(s,S),fontPx:Number.parseFloat(T.fontSize)||0,weight:Number.parseInt(T.fontWeight,10)||400,fixed:pt(s),disabled:s.closest(\':disabled, [aria-disabled="true"]\')!==null,clipped:Mt(s,T),ellipsis:T.textOverflow.includes("ellipsis")||T.getPropertyValue("-webkit-line-clamp")!==""&&T.getPropertyValue("-webkit-line-clamp")!=="none",ancestors:[]}})}let E=new Map(n.map((s,c)=>[s.element,c]));return n.map(({element:s,text:c})=>{let l=[];for(let S=s.parentElement;S&&l.length<J;S=S.parentElement){let T=E.get(S);T!==void 0&&l.push(T)}return{...c,ancestors:l}})},at=()=>{let e=[],t=document.body?document.body.querySelectorAll("*"):[];for(let o=0;o<t.length&&o<j;o+=1){let n=t[o];if(!n)continue;let r=n.getBoundingClientRect().right+window.scrollX;if(r<=innerWidth+1||!R(n))continue;let _=!1,E=0;for(let s=n.parentElement;s&&s!==document.body&&s!==document.documentElement;s=s.parentElement){E+=1;let c=getComputedStyle(s);(c.overflowX!=="visible"||c.position==="fixed")&&(_=!0)}_||e.push({element:n,depth:E,right:r})}return e.sort((o,n)=>n.depth-o.depth||n.right-o.right).slice(0,m).map(o=>({selector:I(o.element),right:Math.round(o.right)}))},h=e=>(e??"").split(/\\s+/).map(t=>t===""?"":document.getElementById(t)?.textContent??"").join(" ").trim(),ut=e=>(e.getAttribute("aria-label")??"").trim()!==""||h(e.getAttribute("aria-labelledby"))!==""||(e.getAttribute("title")??"").trim()!==""||(e.textContent??"").trim()!==""||e.querySelector(\'img[alt]:not([alt=""]), svg title, [aria-label]\')!==null,It=e=>(e.getAttribute("aria-label")??"").trim()!==""||h(e.getAttribute("aria-labelledby"))!==""||(e.getAttribute("title")??"").trim()!==""?!0:Array.from(e.labels??[]).some(t=>(t.textContent??"").trim()!==""),u=(e,t)=>{let o=[];for(let n of Array.from(document.querySelectorAll(e))){if(o.length>=m)break;R(n)&&t(n)&&o.push(I(n))}return o},Rt=(e={})=>{let t=document.scrollingElement??document.documentElement;return{scrollWidth:t.scrollWidth,scrollHeight:t.scrollHeight,innerWidth,innerHeight,wide:at(),texts:xt(e.maxTexts??2e3),imgsNoAlt:u("img",o=>!o.hasAttribute("alt")&&!["presentation","none"].includes(o.getAttribute("role")??"")&&o.getAttribute("aria-hidden")!=="true"),unlabeled:u("input, select, textarea",o=>{let n=(o.getAttribute("type")??"").toLowerCase();return!Q.has(n)&&!It(o)}),nameless:u(\'button, a[href], [role="button"]\',o=>!ut(o))}};return G(Nt);})();\n' : "",
+      probeSource: true ? '"use strict";var __dcProbe=(()=>{var x=Object.defineProperty;var H=Object.getOwnPropertyDescriptor;var b=Object.getOwnPropertyNames;var Y=Object.prototype.hasOwnProperty;var B=(e,t)=>{for(var o in t)x(e,o,{get:t[o],enumerable:!0})},U=(e,t,o,n)=>{if(t&&typeof t=="object"||typeof t=="function")for(let r of b(t))!Y.call(e,r)&&r!==o&&x(e,r,{get:()=>t[r],enumerable:!(n=H(t,r))||n.enumerable});return e};var G=e=>U(x({},"__esModule",{value:!0}),e);var Nt={};B(Nt,{collect:()=>Rt});var Xt=30*6e4;var Ct=100*1024*1024,Lt=5*1024*1024,Pt=10*1024*1024,ft=20*1024*1024;var dt=10*6e4;var mt=60*6e4;var Dt=7*864e5;var gt=20*1024*1024,ht=4*1024*1024;var Ht=2*1024*1024;var w=["data-testid","data-screen","data-dc-id"],K=/^(is-|has-|js-|active|hover|focus)/,X=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,V=3,C=e=>e.tagName===e.tagName.toUpperCase()?e.tagName.toLowerCase():e.tagName,L=e=>e.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),O=e=>e===""?null:X.test(e)?`#${e}`:`[id="${L(e)}"]`,W=(e,t)=>{try{return e.querySelectorAll(t)}catch{return null}},p=(e,t,o)=>{let n=W(e,t);return n!==null&&n.length===1&&n[0]===o},F=e=>{let t=[];for(let o=0;o<e.classList.length&&t.length<V;o+=1){let n=e.classList[o];n!==void 0&&X.test(n)&&!K.test(n)&&t.push(n)}return t},z=e=>{let t=e.parentElement;if(!t)return null;let o=0,n=0;for(let r=0;r<t.children.length;r+=1){let _=t.children[r];!_||_.tagName!==e.tagName||(n+=1,_===e&&(o=n))}return n>1?o:null},$=e=>{let t=C(e);if(t==="html"||t==="body")return t;let o=F(e).map(r=>`.${r}`).join(""),n=z(e);return`${t}${o}${n===null?"":`:nth-of-type(${n})`}`},a=e=>{let t=[...e];for(;t.join(" > ").length>1e3&&t.length>1;)t.shift();return t.join(" > ").slice(0,1e3)},P=(e,t)=>{let o=C(e);if(o==="html"||o==="body"||o==="head")return o;let n=O(e.id);if(n&&p(t,n,e))return n;for(let E of w){let s=e.getAttribute(E);if(s===null||s==="")continue;let c=`[${E}="${L(s)}"]`;if(p(t,c,e))return c}let r=[],_=e;for(let E=0;_&&E<6;E+=1){r.unshift($(_));let s=r.join(" > ");if(p(t,s,e))return a(r);let c=_.parentElement;if(!c)break;let l=O(c.id);if(l&&p(t,l,c)){let S=[l,...r];if(p(t,S.join(" > "),e))return a(S)}_=c}return a(r)};var k=new Set(["SCRIPT","STYLE","NOSCRIPT","TEMPLATE","TITLE","HEAD","OPTION","TEXTAREA"]),Z=new Set(["IMG","VIDEO","CANVAS","PICTURE","SVG","IFRAME","OBJECT","EMBED"]),Q=new Set(["hidden","submit","button","reset","image"]),m=20,J=5e3,j=80,f=100,q=64,I=e=>P(e,document),tt=e=>{let t=/^rgba?\\(([^)]*)\\)$/.exec(e.trim());if(!t)return!1;let o=t[1]??"";if(o.includes("/"))return/\\/\\s*1(\\.0*)?\\s*$|\\/\\s*100%/.test(o);let n=o.split(",").map(r=>r.trim());return n.length===3||n.length===4&&Number.parseFloat(n[3]??"1")>=1},R=e=>{let t=getComputedStyle(e);return t.display!=="none"&&t.visibility!=="hidden"&&e.getClientRects().length>0},et=e=>{let t=[],o=document.createRange();for(let n of e){if(t.length>=f)break;o.selectNodeContents(n);for(let r of Array.from(o.getClientRects()))if(!(r.width<1||r.height<1)&&(t.push({x:r.left+window.scrollX,y:r.top+window.scrollY,w:r.width,h:r.height}),t.length>=f))break}return t},ot=e=>{let t=1/0,o=1/0,n=-1/0,r=-1/0;for(let _ of e)t=Math.min(t,_.x),o=Math.min(o,_.y),n=Math.max(n,_.x+_.w),r=Math.max(r,_.y+_.h);return{x:t,y:o,w:n-t,h:r-o}},M=(e,t,o,n)=>{if(!o&&!n)return e;let r=[];for(let _ of e){let E=o?Math.max(_.x,t.x):_.x,s=n?Math.max(_.y,t.y):_.y,c=o?Math.min(_.x+_.w,t.x+t.w):_.x+_.w,l=n?Math.min(_.y+_.h,t.y+t.h):_.y+_.h,S=c-E,T=l-s;S>=1&&T>=1&&r.push({x:E,y:s,w:S,h:T})}return r},nt=(e,t,o,n)=>o&&(e.x<t.x-1||e.x+e.w>t.x+t.w+1)||n&&(e.y<t.y-1||e.y+e.h>t.y+t.h+1),rt=(e,t,o,n)=>{if(!o&&!n)return e;let r=[];for(let _ of e){let E={x:o?t.x:_.x,y:n?t.y:_.y,w:o?t.w:_.w,h:n?t.h:_.h};E.w>=1&&E.h>=1&&r.push(E)}return r},D=(e,t)=>{let o=getComputedStyle(e);return o.display==="contents"?!1:!!(t==="absolute"&&o.position!=="static"||o.transform!=="none"||o.perspective!=="none"||o.filter!=="none"||o.backdropFilter!=="none"||o.translate!=="none"||o.rotate!=="none"||o.scale!=="none"||/transform|translate|rotate|scale|perspective|filter/.test(o.willChange)||/paint|layout|strict|content/.test(o.contain))},_t=e=>{for(let t=e.parentElement;t!==null;t=t.parentElement)if(D(t,"fixed"))return t;return null},st=e=>{if(e!==document.body)return!1;let t=getComputedStyle(document.documentElement);return t.overflowX==="visible"&&t.overflowY==="visible"},ct=new Set(["inline","contents","table-row","table-row-group","table-header-group","table-footer-group"]),Et=e=>{let t=e.getBoundingClientRect(),o=e instanceof HTMLElement&&e.offsetWidth>0?t.width/e.offsetWidth:1,n=e instanceof HTMLElement&&e.offsetHeight>0?t.height/e.offsetHeight:1;return{x:t.left+e.clientLeft*o+window.scrollX,y:t.top+e.clientTop*n+window.scrollY,w:e.clientWidth*o,h:e.clientHeight*n}},d=(e,t)=>{if(t.overflowX==="visible"&&t.overflowY==="visible"||e===document.documentElement||st(e)||ct.has(t.display))return null;let o=_=>_==="auto"||_==="scroll",n=o(t.overflowX)&&e.scrollWidth>e.clientWidth+1,r=o(t.overflowY)&&e.scrollHeight>e.clientHeight+1;return{box:Et(e),cutX:t.overflowX!=="visible"&&!n,cutY:t.overflowY!=="visible"&&!r,scrollX:n,scrollY:r}},lt=(e,t,o)=>{let n={lines:o,reachable:!0,scrolled:null},r=o,_=(E,s)=>{if(s===null)return;let{box:c,cutX:l,cutY:S,scrollX:T,scrollY:A}=s,i=M(n.lines,c,l,S);n.scrolled===null&&i.some(h=>nt(h,c,T,A))&&(n.scrolled={box:E,lines:i}),n.lines=M(i,c,T,A),r=rt(M(r,c,l,S),c,T,A)};if(_(e,d(e,t)),t.position==="fixed"&&_t(e)===null){let E={x:window.scrollX,y:window.scrollY,w:innerWidth,h:innerHeight};n.lines=M(n.lines,E,!0,!0),r=M(r,E,!0,!0)}else{let E=e,s=t.position;for(;n.lines.length>0||r.length>0;){let c=E.parentElement;if(s==="absolute"||s==="fixed")for(;c!==null&&!D(c,s);)c=c.parentElement;if(c===null)break;let l=getComputedStyle(c);_(c,d(c,l)),E=c,s=l.position}}return n.reachable=r.length>0,n},Tt=e=>{let t=/^rect\\(([^)]*)\\)$/.exec(e.trim());if(!t)return!1;let o=(t[1]??"").split(/[\\s,]+/).filter(s=>s!=="").map(s=>Number.parseFloat(s));if(o.length!==4||o.some(s=>!Number.isFinite(s)))return!1;let n=o[0]??0,r=o[1]??0,_=o[2]??0,E=o[3]??0;return _<=n||r<=E},St=(e,t)=>{let o=/^inset\\(([^)]*)\\)$/.exec(e.trim());if(!o)return!1;let n=(o[1]??"").trim().split(/\\s+/).filter(l=>l!=="");if(n.length===0||n.length>4)return!1;let r=(l,S)=>{if(l===void 0)return null;let T=/^(-?[\\d.]+)(px|%)$/.exec(l);if(!T)return null;let A=Number.parseFloat(T[1]??"");return T[2]==="%"?A/100*S:A},_=r(n[0],t.height),E=r(n[1]??n[0],t.width),s=r(n[2]??n[0],t.height),c=r(n[3]??n[1]??n[0],t.width);return _===null||E===null||s===null||c===null?!1:_+s>=t.height||c+E>=t.width},At=(e,t,o)=>{if(!o)return!0;for(let _=e;_;_=_.parentElement)if(Number.parseFloat(getComputedStyle(_).opacity)===0)return!0;if((t.position==="absolute"||t.position==="fixed")&&Tt(t.clip))return!0;let n=e.getBoundingClientRect();if(St(t.clipPath,n))return!0;let r=t.overflowX==="hidden"||t.overflowX==="clip"||t.overflowY==="hidden"||t.overflowY==="clip";return n.width<=1&&n.height<=1&&r},it=(e,t)=>{let o=[];for(let _=e;_;_=_.parentElement){let E=getComputedStyle(_);if(E.backgroundImage!=="none"||E.filter!=="none"||E.mixBlendMode!=="normal"||Number.parseFloat(E.opacity)<1)return null;if(o.push(E.backgroundColor),tt(E.backgroundColor))break}let n=t.x-window.scrollX+t.w/2,r=t.y-window.scrollY+t.h/2;if(n>=0&&r>=0&&n<=innerWidth&&r<=innerHeight){let _=document.elementsFromPoint(n,r),E=_.findIndex(s=>s===e||e.contains(s));for(let s of E<0?[]:_.slice(E+1))if(!s.contains(e)&&(Z.has(s.tagName.toUpperCase())||getComputedStyle(s).backgroundImage!=="none"))return null}return o},pt=e=>{for(let t=e;t;t=t.parentElement){let o=getComputedStyle(t).position;if(o==="fixed"||o==="sticky")return!0}return!1},Mt=(e,t)=>{let o=n=>n==="hidden"||n==="clip";return!o(t.overflowX)&&!o(t.overflowY)?!1:e.scrollWidth>e.clientWidth+1||e.scrollHeight>e.clientHeight+1},xt=e=>{let t=new Map,o=document.createTreeWalker(document.body??document.documentElement,NodeFilter.SHOW_TEXT);for(let s=o.nextNode();s&&t.size<e;s=o.nextNode()){let c=s,l=c.parentElement;if(!l||k.has(l.tagName.toUpperCase())||c.data.trim()==="")continue;let S=t.get(l);S?S.push(c):t.set(l,[c])}let n=[],r=new Map,_=s=>{let c=r.get(s);return c!==void 0?c:(r.set(s,r.size),r.size-1)};for(let[s,c]of t){if(!R(s))continue;let l=et(c);if(l.length===0)continue;let S=ot(l),T=getComputedStyle(s),A=lt(s,T,l);n.push({element:s,text:{selector:I(s),text:c.map(i=>i.data).join(" ").replace(/\\s+/g," ").trim().slice(0,j),rect:S,lines:A.lines,...A.scrolled===null?{}:{inScroll:{box:_(A.scrolled.box),lines:A.scrolled.lines}},hidden:At(s,T,A.reachable),color:T.color,bgChain:it(s,S),fontPx:Number.parseFloat(T.fontSize)||0,weight:Number.parseInt(T.fontWeight,10)||400,fixed:pt(s),disabled:s.closest(\':disabled, [aria-disabled="true"]\')!==null,clipped:Mt(s,T),ellipsis:T.textOverflow.includes("ellipsis")||T.getPropertyValue("-webkit-line-clamp")!==""&&T.getPropertyValue("-webkit-line-clamp")!=="none",ancestors:[]}})}let E=new Map(n.map((s,c)=>[s.element,c]));return n.map(({element:s,text:c})=>{let l=[];for(let S=s.parentElement;S&&l.length<q;S=S.parentElement){let T=E.get(S);T!==void 0&&l.push(T)}return{...c,ancestors:l}})},at=()=>{let e=[],t=document.body?document.body.querySelectorAll("*"):[];for(let o=0;o<t.length&&o<J;o+=1){let n=t[o];if(!n)continue;let r=n.getBoundingClientRect().right+window.scrollX;if(r<=innerWidth+1||!R(n))continue;let _=!1,E=0;for(let s=n.parentElement;s&&s!==document.body&&s!==document.documentElement;s=s.parentElement){E+=1;let c=getComputedStyle(s);(c.overflowX!=="visible"||c.position==="fixed")&&(_=!0)}_||e.push({element:n,depth:E,right:r})}return e.sort((o,n)=>n.depth-o.depth||n.right-o.right).slice(0,m).map(o=>({selector:I(o.element),right:Math.round(o.right)}))},g=e=>(e??"").split(/\\s+/).map(t=>t===""?"":document.getElementById(t)?.textContent??"").join(" ").trim(),ut=e=>(e.getAttribute("aria-label")??"").trim()!==""||g(e.getAttribute("aria-labelledby"))!==""||(e.getAttribute("title")??"").trim()!==""||(e.textContent??"").trim()!==""||e.querySelector(\'img[alt]:not([alt=""]), svg title, [aria-label]\')!==null,It=e=>(e.getAttribute("aria-label")??"").trim()!==""||g(e.getAttribute("aria-labelledby"))!==""||(e.getAttribute("title")??"").trim()!==""?!0:Array.from(e.labels??[]).some(t=>(t.textContent??"").trim()!==""),u=(e,t)=>{let o=[];for(let n of Array.from(document.querySelectorAll(e))){if(o.length>=m)break;R(n)&&t(n)&&o.push(I(n))}return o},Rt=(e={})=>{let t=document.scrollingElement??document.documentElement;return{scrollWidth:t.scrollWidth,scrollHeight:t.scrollHeight,innerWidth,innerHeight,wide:at(),texts:xt(e.maxTexts??2e3),imgsNoAlt:u("img",o=>!o.hasAttribute("alt")&&!["presentation","none"].includes(o.getAttribute("role")??"")&&o.getAttribute("aria-hidden")!=="true"),unlabeled:u("input, select, textarea",o=>{let n=(o.getAttribute("type")??"").toLowerCase();return!Q.has(n)&&!It(o)}),nameless:u(\'button, a[href], [role="button"]\',o=>!ut(o))}};return G(Nt);})();\n' : "",
       platform: process.platform,
       isRoot: process.getuid?.() === 0,
       now: () => /* @__PURE__ */ new Date(),

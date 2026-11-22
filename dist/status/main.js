@@ -2027,7 +2027,9 @@ ${GUEST_UI_LOOK_CSS}`;
     "GET /systems/:id/living-page/render": "P25",
     "GET /systems/:id/living-page/render/chunk": "P25",
     "POST /systems/:id/build/stop": "P25",
-    "POST /system-stops/:undoId/undo": "P25"
+    "POST /system-stops/:undoId/undo": "P25",
+    "POST /memberships": "P26",
+    "POST /systems/register": "P26"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
   var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set([
@@ -2569,7 +2571,13 @@ ${GUEST_UI_LOOK_CSS}`;
     chevron: ["m6 9 6 6 6-6"],
     close: ["M18 6 6 18", "m6 6 12 12"],
     check: ["M20 6 9 17l-5-5"],
-    settings: ["M4 6h8", "M16 6h4", "M14 4v4", "M4 12h2", "M10 12h10", "M8 10v4", "M4 18h10", "M18 18h2", "M16 16v4"],
+    // A cog: the Settings control on both surfaces (Phase 2.6 L1a replaces the sliders glyph).
+    gear: ["M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z", "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"],
+    // The library's view toggle: four squares, and three lines with leading dots.
+    tiles: ["M3 3h7v7H3z", "M14 3h7v7h-7z", "M3 14h7v7H3z", "M14 14h7v7h-7z"],
+    list: ["M8 6h13", "M8 12h13", "M8 18h13", "M3 6h.01", "M3 12h.01", "M3 18h.01"],
+    lock: ["M7 11h10a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2z", "M8 11V8a4 4 0 0 1 8 0v3"],
+    info: ["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z", "M12 11v5", "M12 8h.01"],
     comment: ["M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"],
     history: ["M3 12a9 9 0 1 0 3-6.7L3 8", "M3 3v5h5", "M12 7v5l3 2"],
     download: ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "m7 10 5 5 5-5", "M12 15V3"],
@@ -2599,6 +2607,10 @@ ${GUEST_UI_LOOK_CSS}`;
     layers: ["m12 3 9 5-9 5-9-5z", "m3 13 9 5 9-5"],
     // A palette with its dabs: design systems.
     system: ["M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4c0-4.4-4-8.1-9-8.1z", "M7.5 11.5h.01", "M10 7.5h.01", "M15 7.5h.01"],
+    // A branch: a design system that lives in a project's repo.
+    repo: ["M6 3v12", "M18 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6z", "M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6z", "M18 9a9 9 0 0 1-9 9"],
+    // A right chevron: a heading that opens a list.
+    "chevron-right": ["m9 6 6 6-6 6"],
     // Three sliders with their knobs: the Tweaks button.
     tune: ["M4 21v-7", "M4 10V3", "M12 21v-9", "M12 8V3", "M20 21v-5", "M20 12V3", "M2 14h4", "M10 8h4", "M18 16h4"]
   };
@@ -2748,7 +2760,8 @@ ${GUEST_UI_LOOK_CSS}`;
     "code-outside-project": () => "The code folder must be the project this chat is in, or a folder inside it.",
     "home-changed": (f) => `${systemNameOf(f)} already has files in ${repoNameOf(f)}, so its home can't change. Make a new system to move it.`,
     "ticket-changed": () => "BUILD.json names another build. Keep the ticket this system started with.",
-    "applied-unknown-proposal": (f) => `The agent says it applied a proposal you didn't approve here. Check ${repoNameOf(f)}'s history.`
+    "applied-unknown-proposal": (f) => `The agent says it applied a proposal you didn't approve here. Check ${repoNameOf(f)}'s history.`,
+    "existing-outside-project": () => "The existing system folder is outside the project it was found in; it was ignored."
   };
   var PROPOSAL_PROBLEM_SENTENCES = {
     "not-adopted": "the system has not been adopted from a build yet.",

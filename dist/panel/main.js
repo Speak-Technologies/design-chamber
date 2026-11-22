@@ -1613,7 +1613,9 @@
     "GET /systems/:id/living-page/render": "P25",
     "GET /systems/:id/living-page/render/chunk": "P25",
     "POST /systems/:id/build/stop": "P25",
-    "POST /system-stops/:undoId/undo": "P25"
+    "POST /system-stops/:undoId/undo": "P25",
+    "POST /memberships": "P26",
+    "POST /systems/register": "P26"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
   var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set([
@@ -1716,6 +1718,9 @@
   var FOLDERS_MAX = 50;
   var FOLDER_NAME_MAX = 40;
   var FOLDER_UNDO_MS = 60 * 6e4;
+  var MEMBERSHIP_CHANGES_MAX = 64;
+  var FILING_PROJECTS_MAX = 14;
+  var SYSTEM_SWATCHES_MAX = 6;
   var TOKEN_PREVIEW_VARS_MAX = 512;
   var TOKEN_PREVIEW_NAME_PATTERN = /^--[A-Za-z0-9_-]{1,80}$/;
   var BOARD_ENTRY_MAX = 120;
@@ -3489,26 +3494,30 @@ ${GUEST_UI_LOOK_CSS}`;
           throw new Error(error instanceof Error ? error.message : String(error));
         }
       },
-      newDesign: async ({ kind, brief, preset = null, system, destination }) => {
+      newDesign: async ({ kind, brief, preset = null, system, destination, filing }) => {
         const ready = host2.ready.get();
         const directory = host2.directory.get();
         const text = brief.trim();
+        const extra = { ...system === void 0 ? {} : { system }, ...filing === void 0 ? {} : { filing } };
+        const filed = (answer2) => answer2.filing === void 0 ? {} : { filing: answer2.filing };
         if (destination === "new-chat") {
           if (!directory) throw new FlowError("no-project", MESSAGES.noProject);
-          const { slug: slug2, chip: chip2 } = await client2.call("POST /chip", { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null, ...system === void 0 ? {} : { system } } });
+          const answer2 = await client2.call("POST /chip", { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null, ...extra } });
+          const { slug: slug2, chip: chip2 } = answer2;
           const result = await api.startSession({ ...toAttachRequest(chip2), text: text || "Let's start this design.", navigation: "open" });
           if (result.sessionId === null) throw new FlowError("start-failed", MESSAGES.startFailed);
           await client2.call("PATCH /designs/:slug", { params: { slug: slug2 }, body: { sessionId: result.sessionId } });
-          return { slug: slug2, sessionId: result.sessionId };
+          return { slug: slug2, sessionId: result.sessionId, ...filed(answer2) };
         }
         const session = host2.session.get();
-        const { slug, chip } = await client2.call("POST /chip", {
-          body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null, ...system === void 0 ? {} : { system } }
+        const answer = await client2.call("POST /chip", {
+          body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null, ...extra }
         });
+        const { slug, chip } = answer;
         await api.attach(toAttachRequest(chip));
         if (text) await api.compose({ text, mode: "append" });
         if (ready?.surface === "page") await api.close();
-        return { slug, sessionId: session?.id ?? null };
+        return { slug, sessionId: session?.id ?? null, ...filed(answer) };
       },
       buildSystem: async ({ brief, destination }) => {
         const ready = host2.ready.get();
@@ -3871,7 +3880,11 @@ ${GUEST_UI_LOOK_CSS}`;
       const agent = await askToMake({ id, destination: input.destination, directory: input.code?.directory ?? null });
       return { id, name, files, agent };
     };
-    return { make, askToMake };
+    const register = async ({ scanId, name }) => {
+      const created = await client2.call("POST /systems/register", { body: { scanId, name } });
+      return { id: created.id, name: created.system.name };
+    };
+    return { make, askToMake, register };
   };
 
   // src/guest/store.ts
@@ -4483,6 +4496,479 @@ ${GUEST_UI_LOOK_CSS}`;
     return { empty: false, options, value, hint, showPreset: effective.choice !== "system", send: value };
   };
   var NO_SYSTEMS_LINE = "No design systems yet.";
+  var FOLDER_FIELD_LABEL = "Folder or project";
+  var FOLDER_FIELD_HELPER = "Optional. Pick where this design belongs; you can change it later.";
+
+  // src/ui/model/list-model.ts
+  var LIST_TABS = [
+    { id: "all", label: "All" },
+    { id: "canvas", label: "Canvases" },
+    { id: "page", label: "Pages" },
+    { id: "system", label: "Systems" }
+  ];
+  var RAIL_TABS = [
+    { id: "all", label: "All" },
+    { id: "canvas", label: "Canvases" },
+    { id: "page", label: "Pages" }
+  ];
+  var systemsEntryLabel = (count) => count === null ? "Design systems. Show them" : `Design systems, ${count}. Show them`;
+  var LIST_SORTS = [
+    { id: "updated", label: "Updated" },
+    { id: "created", label: "Created" },
+    { id: "title", label: "Title" }
+  ];
+  var kindLabel = (kind) => kind === "canvas" ? "Canvas" : "Page";
+  var matchesQuery = (design, query) => {
+    const needle = query.trim().toLowerCase();
+    if (needle === "") return true;
+    return design.title.toLowerCase().includes(needle) || design.slug.toLowerCase().includes(needle);
+  };
+  var matchesTab = (design, tab) => tab === "all" || design.kind === tab;
+  var filterDesigns = (designs, query, tab) => designs.filter((design) => matchesTab(design, tab) && matchesQuery(design, query));
+  var tabCounts = (designs, query) => {
+    const searched = designs.filter((design) => matchesQuery(design, query));
+    return {
+      all: searched.length,
+      canvas: searched.filter((design) => design.kind === "canvas").length,
+      page: searched.filter((design) => design.kind === "page").length
+    };
+  };
+  var sortDesigns = (designs, sort) => {
+    const copy = [...designs];
+    if (sort === "title") return copy.sort((a, b) => a.title.localeCompare(b.title, void 0, { sensitivity: "base" }));
+    const key = sort === "created" ? "created" : "updated";
+    return copy.sort((a, b) => Date.parse(b[key]) - Date.parse(a[key]));
+  };
+  var kindSummary = (design) => {
+    if (design.kind === "page") return "Page";
+    return `Canvas \xB7 ${plural(design.screenCount, "screen")}`;
+  };
+  var rowAriaLabel = (design) => {
+    const parts = [design.title, kindSummary(design)];
+    if (design.system) parts.push(design.system.state === "deleted" ? `uses ${design.system.name}, deleted` : `uses ${design.system.name}`);
+    if (design.pending) parts.push("waiting for the agent");
+    if (design.openComments > 0) parts.push(plural(design.openComments, "open comment"));
+    if (systemUpdated(design)) parts.push(SYSTEM_UPDATED_LABEL);
+    return parts.join(", ");
+  };
+  var SYSTEM_UPDATED_LABEL = "System updated";
+  var systemUpdated = (design) => design.system?.updateAvailable === true;
+  var ALL_SCOPE = { kind: "all" };
+  var normalizeDirectory = (value) => value.replace(/\\/g, "/").replace(/\/+$/, "");
+  var isWindowsDirectory = (value) => /^[A-Za-z]:\//.test(value);
+  var isInsideOrEqualDirectory = (root, dir) => {
+    const left = normalizeDirectory(root);
+    const right = normalizeDirectory(dir);
+    const windows = isWindowsDirectory(left) || isWindowsDirectory(right);
+    const a = windows ? left.toLowerCase() : left;
+    const b = windows ? right.toLowerCase() : right;
+    return b === a || b.startsWith(`${a}/`);
+  };
+  var baseName = (directory) => {
+    const parts = normalizeDirectory(directory).split("/").filter((part) => part !== "");
+    return parts[parts.length - 1] ?? directory;
+  };
+  var parentName = (directory) => {
+    const parts = normalizeDirectory(directory).split("/").filter((part) => part !== "");
+    return parts[parts.length - 2] ?? "";
+  };
+  var projectOf = (design, designsRoot) => {
+    const directory = design.projectDirectory;
+    if (directory === null || directory.trim() === "") return null;
+    if (designsRoot !== "" && isInsideOrEqualDirectory(designsRoot, directory)) return null;
+    return directory;
+  };
+  var projectsOf = (design, designsRoot, manual = []) => {
+    const found = [];
+    const add = (directory) => {
+      if (directory === null || directory.trim() === "") return;
+      if (designsRoot !== "" && isInsideOrEqualDirectory(designsRoot, directory)) return;
+      if (!found.some((entry) => sameDirectory(entry, directory))) found.push(directory);
+    };
+    add(projectOf(design, designsRoot));
+    for (const entry of manual) if (entry.slugs.includes(design.slug)) add(entry.directory);
+    return found;
+  };
+  var projectGroups = (designs, projects, designsRoot, projectFolders, manual = []) => {
+    const groups = [];
+    for (const design of designs) {
+      for (const directory of projectsOf(design, designsRoot, manual)) {
+        const found = groups.find((group2) => sameDirectory(group2.directory, directory));
+        if (found) {
+          found.count += 1;
+          continue;
+        }
+        const named2 = projects.find((project) => sameDirectory(project.directory, directory))?.name.trim();
+        const stat = projectFolders?.find((entry) => sameDirectory(entry.directory, directory));
+        groups.push({ directory, label: named2 ? named2 : baseName(directory), title: directory, count: 1, missing: stat !== void 0 && !stat.exists });
+      }
+    }
+    const seen = /* @__PURE__ */ new Map();
+    for (const group2 of groups) seen.set(group2.label.toLowerCase(), (seen.get(group2.label.toLowerCase()) ?? 0) + 1);
+    const named = groups.map((group2) => {
+      const parent = parentName(group2.directory);
+      return (seen.get(group2.label.toLowerCase()) ?? 0) > 1 && parent !== "" ? { ...group2, label: `${group2.label} \xB7 ${parent}` } : group2;
+    });
+    return named.sort((a, b) => a.label.localeCompare(b.label, void 0, { sensitivity: "base" }));
+  };
+  var scopeDesigns = (designs, scope, folders2, designsRoot, manual = []) => {
+    switch (scope.kind) {
+      case "all":
+        return [...designs];
+      case "no-project":
+        return designs.filter((design) => projectsOf(design, designsRoot, manual).length === 0);
+      case "project":
+        return designs.filter((design) => projectsOf(design, designsRoot, manual).some((directory) => sameDirectory(directory, scope.directory)));
+      case "folder": {
+        const members = new Set(folders2.find((folder) => folder.id === scope.id)?.slugs ?? []);
+        return designs.filter((design) => members.has(design.slug));
+      }
+    }
+  };
+  var scopeCounts = (designs, folders2, designsRoot, manual = []) => {
+    const live = new Set(designs.map((design) => design.slug));
+    const counts = {};
+    for (const folder of folders2) counts[folder.id] = new Set(folder.slugs.filter((slug) => live.has(slug))).size;
+    return { all: designs.length, noProject: designs.filter((design) => projectsOf(design, designsRoot, manual).length === 0).length, folders: counts };
+  };
+  var scopeLabel = (scope, groups, folders2) => {
+    switch (scope.kind) {
+      case "all":
+        return null;
+      case "no-project":
+        return "No project";
+      case "project":
+        return groups.find((group2) => sameDirectory(group2.directory, scope.directory))?.label ?? baseName(scope.directory);
+      case "folder":
+        return folders2.find((folder) => folder.id === scope.id)?.name ?? null;
+    }
+  };
+  var resolveScope = (scope, groups, folders2) => {
+    if (scope.kind === "project") return groups.some((group2) => sameDirectory(group2.directory, scope.directory)) ? scope : ALL_SCOPE;
+    if (scope.kind === "folder") return folders2.some((folder) => folder.id === scope.id) ? scope : ALL_SCOPE;
+    return scope;
+  };
+  var sameScope = (a, b) => {
+    if (a.kind !== b.kind) return false;
+    if (a.kind === "project" && b.kind === "project") return sameDirectory(a.directory, b.directory);
+    if (a.kind === "folder" && b.kind === "folder") return a.id === b.id;
+    return true;
+  };
+  var folderEmptyBody = (draggable) => draggable ? "Drag designs here, or use Add to folder in a design\u2019s menu." : "Use Add to folder in a design\u2019s menu.";
+  var FILED_BY_YOU = "Filed here by you";
+  var cardProjectLine = (design, scope, groups, designsRoot, manual = []) => {
+    const derived = projectOf(design, designsRoot);
+    const candidates2 = projectsOf(design, designsRoot, manual).filter((directory) => !(scope.kind === "project" && sameDirectory(scope.directory, directory))).map((directory) => ({ directory, group: groups.find((group2) => sameDirectory(group2.directory, directory)) ?? null })).filter((entry) => entry.group !== null);
+    const first = candidates2[0];
+    if (first === void 0) return null;
+    const isManual = derived === null || !sameDirectory(derived, first.directory);
+    const more = isManual ? candidates2.length - 1 : 0;
+    const note = isManual ? `
+${FILED_BY_YOU}` : "";
+    const missing = first.group.missing ? "\nFolder not found" : "";
+    return {
+      label: more > 0 ? `${first.group.label} and ${more} more` : first.group.label,
+      title: `${first.group.title}${missing}${note}`,
+      manual: isManual
+    };
+  };
+  var scopeStorageKey = (surface) => `list-scope:${surface}`;
+  var scopeToId = (scope) => {
+    switch (scope.kind) {
+      case "all":
+        return "all";
+      case "no-project":
+        return "no-project";
+      case "project":
+        return `project:${scope.directory}`;
+      case "folder":
+        return `folder:${scope.id}`;
+    }
+  };
+  var SCOPE_ID_MAX = 1024;
+  var scopeFromId = (raw) => {
+    if (typeof raw !== "string" || raw.length > SCOPE_ID_MAX) return ALL_SCOPE;
+    if (raw === "no-project") return { kind: "no-project" };
+    if (raw.startsWith("project:") && raw.length > "project:".length) return { kind: "project", directory: raw.slice("project:".length) };
+    if (raw.startsWith("folder:") && FOLDER_ID_PATTERN.test(raw.slice("folder:".length))) return { kind: "folder", id: raw.slice("folder:".length) };
+    return ALL_SCOPE;
+  };
+  var scopeOptions = (groups, counts, folders2) => [
+    { id: "all", label: "All designs", hint: String(counts.all) },
+    ...groups.map((group2) => ({ id: scopeToId({ kind: "project", directory: group2.directory }), label: group2.label, hint: String(group2.count) })),
+    ...counts.noProject > 0 ? [{ id: "no-project", label: "No project", hint: String(counts.noProject) }] : [],
+    ...folders2.map((folder) => ({ id: scopeToId({ kind: "folder", id: folder.id }), label: `Folder \xB7 ${folder.name}`, hint: String(counts.folders[folder.id] ?? 0) }))
+  ];
+  var FOLDER_NAME_CONTROL = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]", "u");
+  var folderNameProblem = (raw, folders2, ignoreId = null) => {
+    const name = raw.normalize("NFKC").trim();
+    if (name.length === 0) return "Give the folder a name.";
+    if (FOLDER_NAME_CONTROL.test(name)) return "A folder name can't contain line breaks or tabs.";
+    if (name.length > FOLDER_NAME_MAX) return `Keep the folder name to ${FOLDER_NAME_MAX} characters or fewer.`;
+    const taken = folders2.find((folder) => folder.id !== ignoreId && folder.name.toLowerCase() === name.toLowerCase());
+    if (taken) return `You already have a folder called ${taken.name}.`;
+    if (ignoreId === null && folders2.length >= FOLDERS_MAX) return `You can have up to ${FOLDERS_MAX} folders.`;
+    return null;
+  };
+  var viewStorageKey = "library-view:page";
+  var sortStorageKey = (surface) => `list-sort:${surface}`;
+  var viewFromStored = (raw) => raw === "list" ? "list" : "tiles";
+  var sortFromStored = (raw) => raw === "created" || raw === "title" ? raw : "updated";
+  var ALL_SYSTEMS = { kind: "all" };
+  var systemFilterToId = (filter) => {
+    switch (filter.kind) {
+      case "all":
+        return "all";
+      case "none":
+        return "none";
+      case "system":
+        return `system:${filter.id}`;
+    }
+  };
+  var systemFilterFromId = (raw) => {
+    if (raw === "none") return { kind: "none" };
+    if (typeof raw === "string" && raw.startsWith("system:") && SYSTEM_ID_PATTERN.test(raw.slice("system:".length))) return { kind: "system", id: raw.slice("system:".length) };
+    return ALL_SYSTEMS;
+  };
+  var resolveSystemFilter = (filter, systems2) => filter.kind === "system" && !systems2.some((system) => system.id === filter.id) ? ALL_SYSTEMS : filter;
+  var matchesSystem = (design, filter) => {
+    const link = design.system ?? null;
+    const live = link !== null && link.state !== "deleted" ? link : null;
+    if (filter.kind === "all") return true;
+    if (filter.kind === "none") return live === null;
+    return live !== null && live.id === filter.id;
+  };
+  var systemOptions = (systems2) => [
+    { id: "all", label: "All systems" },
+    ...[...systems2].sort((a, b) => a.name.localeCompare(b.name, void 0, { sensitivity: "base" })).map((system) => ({ id: systemFilterToId({ kind: "system", id: system.id }), label: system.name, hint: system.status === "draft" ? "Draft" : String(system.usedBy) })),
+    { id: "none", label: "No system" }
+  ];
+  var systemProjectOf = (summary) => summary.home !== "internal" ? summary.home.directory : summary.sources.code?.project ?? summary.sources.code?.directory ?? null;
+  var scopeSystems = (systems2, scope) => {
+    switch (scope.kind) {
+      case "all":
+        return [...systems2];
+      case "folder":
+        return [];
+      case "no-project":
+        return systems2.filter((system) => systemProjectOf(system) === null);
+      case "project":
+        return systems2.filter((system) => {
+          const directory = systemProjectOf(system);
+          return directory !== null && sameDirectory(directory, scope.directory);
+        });
+    }
+  };
+  var matchesSystemQuery = (system, query) => {
+    const needle = query.trim().toLowerCase();
+    return needle === "" || system.name.toLowerCase().includes(needle) || system.id.toLowerCase().includes(needle);
+  };
+  var matchesSystemFilter = (system, filter) => filter.kind === "all" || filter.kind === "system" && filter.id === system.id;
+  var itemKey = (item, sort) => {
+    if (sort === "title") return item.kind === "design" ? item.design.title : item.system.name;
+    const stamp = item.kind === "design" ? item.design[sort === "created" ? "created" : "updated"] : item.system[sort === "created" ? "created" : "updated"];
+    return Date.parse(stamp);
+  };
+  var sortItems = (items, sort) => items.map((item, index) => ({ item, index, key: itemKey(item, sort) })).sort((a, b) => {
+    if (typeof a.key === "string" && typeof b.key === "string") return a.key.localeCompare(b.key, void 0, { sensitivity: "base" }) || a.index - b.index;
+    const left = typeof a.key === "number" && !Number.isNaN(a.key) ? a.key : 0;
+    const right = typeof b.key === "number" && !Number.isNaN(b.key) ? b.key : 0;
+    return right - left || a.index - b.index;
+  }).map((entry) => entry.item);
+  var libraryItems = (input) => {
+    const { sort } = input;
+    const rail = input.surface === "rail";
+    const filters = rail && input.filters.tab === "system" ? { ...input.filters, tab: "all" } : input.filters;
+    const scoped = scopeDesigns(input.designs, input.scope, input.folders, input.designsRoot, input.manual ?? []);
+    const scopedSystems = scopeSystems(input.systems, input.scope);
+    const designCounts = tabCounts(
+      scoped.filter((design) => matchesSystem(design, filters.system)),
+      filters.query
+    );
+    const systemsFound = scopedSystems.filter((system) => matchesSystemFilter(system, filters.system) && matchesSystemQuery(system, filters.query));
+    const counts = { all: designCounts.all + (rail ? 0 : systemsFound.length), canvas: designCounts.canvas, page: designCounts.page, system: systemsFound.length };
+    const shownDesigns = filters.tab === "system" ? [] : sortDesigns(filterDesigns(scoped.filter((design) => matchesSystem(design, filters.system)), filters.query, filters.tab), sort);
+    const shownSystems = !rail && (filters.tab === "all" || filters.tab === "system") ? systemsFound : [];
+    const lead = filters.tab === "all" && filters.system.kind === "system" ? shownSystems[0] ?? null : null;
+    const rest = [
+      ...shownDesigns.map((design) => ({ kind: "design", design })),
+      ...shownSystems.filter((system) => system !== lead).map((system) => ({ kind: "system", system }))
+    ];
+    const sorted = sortItems(rest, sort);
+    return {
+      scoped,
+      scopedSystems,
+      items: lead === null ? sorted : [{ kind: "system", system: lead }, ...sorted],
+      lead,
+      shownDesigns,
+      shownSystems,
+      counts
+    };
+  };
+  var systemNameOf = (filter, systems2) => filter.kind === "system" ? systems2.find((system) => system.id === filter.id)?.name ?? null : null;
+  var noMatchesSentenceFor = (input) => {
+    const query = input.query.trim();
+    const name = systemNameOf(input.system, input.systems);
+    const systemPart = name !== null ? ` with the ${name} system` : input.system.kind === "none" ? " with no system" : "";
+    const scopePart = input.scopeLabel === null ? "" : ` in ${input.scopeLabel}`;
+    const noun = input.tab === "system" ? "systems" : "designs";
+    if (query === "" && systemPart === "") return input.scopeLabel === null ? "Nothing in this tab yet" : `Nothing in ${input.scopeLabel} for this tab yet`;
+    return `No ${noun}${scopePart}${query === "" ? "" : ` match \u201C${query}\u201D`}${systemPart}.`;
+  };
+  var SYSTEMS_FAILED_TITLE = "Design systems didn\u2019t load";
+  var SYSTEMS_FAILED_BODY = "Your designs are fine. Try again in a moment.";
+  var NO_SYSTEMS_TITLE = "No design systems yet";
+  var NO_SYSTEMS_BODY = "Make one from a project\u2019s code, from brand files, or by describing it. Designs can then start from it.";
+  var FOLDER_NO_SYSTEMS_TITLE = "Folders hold designs, not systems.";
+  var FOLDER_NO_SYSTEMS_BODY = "Show all systems to see the ones you have.";
+  var emptyStateOf = (input) => {
+    if (input.shown.length + (input.shownSystems?.length ?? 0) > 0) return null;
+    if (input.filters.tab === "system") {
+      if (input.systemsFailed === true) return { kind: "systems-failed", title: SYSTEMS_FAILED_TITLE, body: SYSTEMS_FAILED_BODY, action: "retry-systems", actionLabel: "Try again", chips: [] };
+      if (input.scope.kind === "folder") return { kind: "folder-no-systems", title: FOLDER_NO_SYSTEMS_TITLE, body: FOLDER_NO_SYSTEMS_BODY, action: "show-all", actionLabel: "Show all systems", chips: [] };
+      if (input.systems.length === 0) return { kind: "no-systems", title: NO_SYSTEMS_TITLE, body: NO_SYSTEMS_BODY, action: "new-system", actionLabel: "New design system\u2026", chips: [] };
+    }
+    if (input.all.length === 0 && (input.filters.tab !== "all" || input.systems.length === 0 || input.surface === "rail")) {
+      return {
+        kind: "no-designs",
+        title: "No designs yet",
+        body: input.draggable ? "Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here the moment they are saved." : "Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here.",
+        action: "new",
+        chips: []
+      };
+    }
+    if (input.scoped.length === 0 && input.folderName !== null) {
+      return { kind: "folder-empty", title: `No designs in ${input.folderName} yet`, body: folderEmptyBody(input.draggable), action: "show-all", chips: [] };
+    }
+    const { query, tab, system } = input.filters;
+    const trimmed = query.trim();
+    const chips2 = [];
+    if (input.scopeLabel !== null) {
+      const label = input.scope.kind === "folder" ? `Folder: ${input.scopeLabel}` : input.scope.kind === "project" ? `Project: ${input.scopeLabel}` : input.scopeLabel;
+      chips2.push({ id: "scope", label, fixed: true, icon: input.scope.kind === "folder" ? "folder" : input.scope.kind === "project" ? "layers" : "page" });
+    }
+    if (trimmed !== "") chips2.push({ id: "search", label: `Search: ${trimmed}`, fixed: false });
+    if (tab !== "all") chips2.push({ id: "tab", label: LIST_TABS.find((entry) => entry.id === tab)?.label ?? tab, fixed: false });
+    const name = systemNameOf(system, input.systems);
+    if (name !== null) chips2.push({ id: "system", label: `System: ${name}`, fixed: false });
+    else if (system.kind === "none") chips2.push({ id: "system", label: "No system", fixed: false });
+    const lead = trimmed !== "" ? "Try another word, or clear the filters." : "Clear the filters to see what is here.";
+    return {
+      kind: "no-matches",
+      title: noMatchesSentenceFor({ scopeLabel: input.scopeLabel, query, system, systems: input.systems, tab }),
+      body: input.scopeLabel === null ? lead : `${lead} ${input.scopeLabel} stays selected.`,
+      action: "clear-filters",
+      chips: chips2
+    };
+  };
+
+  // src/ui/model/folder-picker-model.ts
+  var keyOfTarget = (target) => target.kind === "folder" ? `folder:${target.id}` : `project:${target.directory}`;
+  var targetOfKey = (key) => key.startsWith("folder:") ? { kind: "folder", id: key.slice("folder:".length) } : { kind: "project", directory: key.slice("project:".length) };
+  var SEARCH_AFTER = 8;
+  var showSearch = (total) => total > SEARCH_AFTER;
+  var filterRows = (rows, query) => {
+    const needle = query.trim().toLowerCase();
+    if (needle === "") return [...rows];
+    return rows.filter((row2) => row2.label.toLowerCase().includes(needle));
+  };
+  var baseName2 = folderName;
+  var parentName2 = (directory) => {
+    const parts = directory.replace(/\\/g, "/").replace(/\/+$/, "").split("/").filter((part) => part !== "");
+    return parts[parts.length - 2] ?? "";
+  };
+  var pickerTargets = (input) => {
+    const { folders: folders2, projectMembers, hostProjects, designs, designsRoot, design, derivedProject, exclude } = input;
+    const live = new Set(designs.map((entry) => entry.slug));
+    const groups = projectGroups(designs, hostProjects, designsRoot, void 0);
+    const derivedOfDesign = design === null ? null : projectOf(design, designsRoot);
+    const union = groups.map((group2) => ({ directory: group2.directory, label: group2.label }));
+    const addDirectory = (directory) => {
+      if (directory.trim() === "") return;
+      if (projectOf({ projectDirectory: directory }, designsRoot) === null) return;
+      if (union.some((entry) => sameDirectory(entry.directory, directory))) return;
+      const named = hostProjects.find((project) => sameDirectory(project.directory, directory))?.name.trim();
+      union.push({ directory, label: named && named !== "" ? named : baseName2(directory) });
+    };
+    for (const entry of projectMembers) addDirectory(entry.directory);
+    for (const project of hostProjects) addDirectory(project.directory);
+    if (design === null && derivedProject !== null) addDirectory(derivedProject);
+    const seen = /* @__PURE__ */ new Map();
+    for (const entry of union) seen.set(entry.label.toLowerCase(), (seen.get(entry.label.toLowerCase()) ?? 0) + 1);
+    const projects = union.map((entry) => {
+      const parent = parentName2(entry.directory);
+      const label = (seen.get(entry.label.toLowerCase()) ?? 0) > 1 && parent !== "" ? `${entry.label} \xB7 ${parent}` : entry.label;
+      const manual = projectMembers.find((member) => sameDirectory(member.directory, entry.directory));
+      const members = /* @__PURE__ */ new Set();
+      for (const candidate of designs) {
+        const directory = projectOf(candidate, designsRoot);
+        if (directory !== null && sameDirectory(directory, entry.directory)) members.add(candidate.slug);
+      }
+      for (const slug of manual?.slugs ?? []) if (live.has(slug)) members.add(slug);
+      const locked = design !== null ? derivedOfDesign !== null && sameDirectory(entry.directory, derivedOfDesign) : derivedProject !== null && projectOf({ projectDirectory: derivedProject }, designsRoot) !== null && sameDirectory(entry.directory, derivedProject);
+      const checked = locked || design !== null && (manual?.slugs.includes(design.slug) ?? false);
+      return {
+        key: `project:${entry.directory}`,
+        kind: "project",
+        label,
+        title: entry.directory,
+        count: members.size,
+        checked,
+        locked,
+        lockedReason: locked ? design !== null ? "Made for this project" : "This design is made for it" : null
+      };
+    }).sort((a, b) => a.label.localeCompare(b.label, void 0, { sensitivity: "base" }));
+    const folderRows = [...folders2].sort((a, b) => a.name.localeCompare(b.name, void 0, { sensitivity: "base" })).map((folder) => ({
+      key: `folder:${folder.id}`,
+      kind: "folder",
+      label: folder.name,
+      title: folder.name,
+      count: new Set(folder.slugs.filter((slug) => live.has(slug))).size,
+      checked: design !== null && folder.slugs.includes(design.slug),
+      locked: false,
+      lockedReason: null
+    }));
+    const keep = (row2) => row2.key !== exclude;
+    const shownProjects = projects.filter(keep);
+    const shownFolders = folderRows.filter(keep);
+    return { folders: shownFolders, projects: shownProjects, total: shownFolders.length + shownProjects.length };
+  };
+  var statedResult = (selected) => {
+    const names = selected.map((row2) => row2.label);
+    if (names.length === 0) return null;
+    if (names.length === 1) return `Goes into ${names[0]}`;
+    if (names.length === 2) return `Goes into ${names[0]} and ${names[1]}`;
+    return `Goes into ${names[0]}, ${names[1]} and ${names.length - 2} more`;
+  };
+  var goesLine = (selected, derivedLabel) => {
+    const stated = statedResult(selected);
+    if (stated === null && derivedLabel === null) return null;
+    const parts = [];
+    if (stated !== null) parts.push(`${stated}.`);
+    if (derivedLabel !== null) parts.push(`It also lands in ${derivedLabel} on its own.`);
+    parts.push("You can change this later.");
+    return parts.join(" ");
+  };
+  var filingOf = (selected) => {
+    const folders2 = [];
+    const projects = [];
+    for (const key of selected) {
+      const target = targetOfKey(key);
+      if (target.kind === "folder") folders2.push(target.id);
+      else projects.push(target.directory);
+    }
+    if (folders2.length === 0 && projects.length === 0) return void 0;
+    return { ...folders2.length > 0 ? { folders: folders2 } : {}, ...projects.length > 0 ? { projects } : {} };
+  };
+  var filingProblem = (selected) => {
+    const filing = filingOf(selected);
+    if (filing === void 0) return null;
+    const folders2 = filing.folders?.length ?? 0;
+    const projects = filing.projects?.length ?? 0;
+    if (projects > FILING_PROJECTS_MAX) return `A new design can go under up to ${FILING_PROJECTS_MAX} projects. Untick a few.`;
+    if (folders2 + projects > MEMBERSHIP_CHANGES_MAX) return `Pick up to ${MEMBERSHIP_CHANGES_MAX} folders and projects together.`;
+    return null;
+  };
 
   // src/ui/model/menu-model.ts
   var menuRowState = (entry, ids) => {
@@ -4502,7 +4988,13 @@ ${GUEST_UI_LOOK_CSS}`;
     chevron: ["m6 9 6 6 6-6"],
     close: ["M18 6 6 18", "m6 6 12 12"],
     check: ["M20 6 9 17l-5-5"],
-    settings: ["M4 6h8", "M16 6h4", "M14 4v4", "M4 12h2", "M10 12h10", "M8 10v4", "M4 18h10", "M18 18h2", "M16 16v4"],
+    // A cog: the Settings control on both surfaces (Phase 2.6 L1a replaces the sliders glyph).
+    gear: ["M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z", "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"],
+    // The library's view toggle: four squares, and three lines with leading dots.
+    tiles: ["M3 3h7v7H3z", "M14 3h7v7h-7z", "M3 14h7v7H3z", "M14 14h7v7h-7z"],
+    list: ["M8 6h13", "M8 12h13", "M8 18h13", "M3 6h.01", "M3 12h.01", "M3 18h.01"],
+    lock: ["M7 11h10a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2z", "M8 11V8a4 4 0 0 1 8 0v3"],
+    info: ["M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z", "M12 11v5", "M12 8h.01"],
     comment: ["M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"],
     history: ["M3 12a9 9 0 1 0 3-6.7L3 8", "M3 3v5h5", "M12 7v5l3 2"],
     download: ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "m7 10 5 5 5-5", "M12 15V3"],
@@ -4532,6 +5024,10 @@ ${GUEST_UI_LOOK_CSS}`;
     layers: ["m12 3 9 5-9 5-9-5z", "m3 13 9 5 9-5"],
     // A palette with its dabs: design systems.
     system: ["M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4c0-4.4-4-8.1-9-8.1z", "M7.5 11.5h.01", "M10 7.5h.01", "M15 7.5h.01"],
+    // A branch: a design system that lives in a project's repo.
+    repo: ["M6 3v12", "M18 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6z", "M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6z", "M18 9a9 9 0 0 1-9 9"],
+    // A right chevron: a heading that opens a list.
+    "chevron-right": ["m9 6 6 6-6 6"],
     // Three sliders with their knobs: the Tweaks button.
     tune: ["M4 21v-7", "M4 10V3", "M12 21v-9", "M12 8V3", "M20 21v-5", "M20 12V3", "M2 14h4", "M10 8h4", "M18 16h4"]
   };
@@ -4602,6 +5098,13 @@ ${GUEST_UI_LOOK_CSS}`;
     el2.append(icon2(options.icon, options.size === "sm" ? 14 : 16));
     el2.addEventListener("click", options.onClick);
     return el2;
+  };
+  var nameSelect = (host2, name, choice) => {
+    const trigger = host2.querySelector("button");
+    if (!trigger) return;
+    trigger.removeAttribute("aria-labelledby");
+    trigger.setAttribute("aria-label", `${name}: ${choice}`);
+    trigger.title = `${name}: ${choice}`;
   };
   var actionsOf = (items) => items.filter((item) => "id" in item);
   var openMenuClose = null;
@@ -4944,6 +5447,542 @@ ${GUEST_UI_LOOK_CSS}`;
     return { el: el2, body, foot, close, reposition: place };
   };
 
+  // src/ui/components/folders-store.ts
+  var FOLDERS_COULDNT_LOAD = "Folders couldn\u2019t load. Try again.";
+  var sameSet = (a, b) => a.length === b.length && a.every((slug) => b.includes(slug));
+  var applyLocal = (state, changes2) => {
+    const folders2 = state.folders.map((folder) => ({ ...folder, slugs: [...folder.slugs] }));
+    const projects = state.projects.map((entry) => ({ ...entry, slugs: [...entry.slugs] }));
+    for (const change of changes2) {
+      const add = change.add ?? [];
+      const remove2 = change.remove ?? [];
+      const target = change.target;
+      if (target.kind === "folder") {
+        const folder = folders2.find((entry) => entry.id === target.id);
+        if (!folder) continue;
+        folder.slugs = [...folder.slugs.filter((slug) => !remove2.includes(slug)), ...add.filter((slug) => !folder.slugs.includes(slug))];
+      } else {
+        const directory = target.directory;
+        let entry = projects.find((candidate) => sameDirectory(candidate.directory, directory));
+        if (!entry && add.length > 0) {
+          entry = { directory, slugs: [] };
+          projects.push(entry);
+        }
+        if (!entry) continue;
+        entry.slugs = [...entry.slugs.filter((slug) => !remove2.includes(slug)), ...add.filter((slug) => !entry.slugs.includes(slug))];
+      }
+    }
+    return { folders: folders2, projects: projects.filter((entry) => entry.slugs.length > 0) };
+  };
+  var createFoldersStore = () => {
+    let state = { status: "idle", folders: [], projects: [], damaged: false, error: null };
+    const listeners = /* @__PURE__ */ new Set();
+    let ticket = 0;
+    const set = (next) => {
+      state = next;
+      for (const listener of [...listeners]) listener(state);
+    };
+    const load = async () => {
+      ticket += 1;
+      const mine = ticket;
+      set({ ...state, status: state.status === "ready" ? "ready" : "loading", error: null });
+      try {
+        const answer = await client.call("GET /folders");
+        if (mine !== ticket) return;
+        if (answer.damaged) set({ status: "error", folders: [], projects: [], damaged: true, error: FOLDERS_COULDNT_LOAD });
+        else set({ status: "ready", folders: answer.folders, projects: answer.projects, damaged: false, error: null });
+      } catch (error) {
+        if (mine !== ticket) return;
+        console.warn("Design Chamber: folders failed to load", error);
+        set({ status: "error", folders: state.folders, projects: state.projects, damaged: false, error: FOLDERS_COULDNT_LOAD });
+      }
+    };
+    const replaceOne = (folder) => {
+      ticket += 1;
+      const known = state.folders.some((entry) => entry.id === folder.id);
+      set({ ...state, status: "ready", error: null, folders: known ? state.folders.map((entry) => entry.id === folder.id ? folder : entry) : [...state.folders, folder] });
+    };
+    const run = async (request) => {
+      try {
+        return await request();
+      } catch (error) {
+        void load();
+        throw new Error(errorText2(error));
+      }
+    };
+    const change = (id, body) => {
+      const before = state.folders.find((folder) => folder.id === id);
+      if (before) {
+        const slugs = [...before.slugs.filter((slug) => !(body.remove ?? []).includes(slug)), ...(body.add ?? []).filter((slug) => !before.slugs.includes(slug))];
+        if (!sameSet(slugs, before.slugs)) replaceOne({ ...before, slugs });
+      }
+      return run(async () => {
+        const { folder } = await client.call("POST /folders/:folderId/designs", { params: { folderId: id }, body });
+        replaceOne(folder);
+        return folder;
+      });
+    };
+    const refresh = debounce(() => void load(), 150);
+    feed.subscribe((batch) => {
+      if (batch.reset || batch.events.some((event) => event.kind === "folders" || event.kind === "removed" || event.kind === "root")) refresh();
+    });
+    return {
+      get: () => state,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => void listeners.delete(listener);
+      },
+      load,
+      create: (name) => run(async () => {
+        const { folder } = await client.call("POST /folders", { body: { name } });
+        replaceOne(folder);
+        return folder;
+      }),
+      rename: (id, name) => run(async () => {
+        const { folder } = await client.call("PATCH /folders/:folderId", { params: { folderId: id }, body: { name } });
+        replaceOne(folder);
+        return folder;
+      }),
+      remove: (id) => run(async () => {
+        const { designs, onlyHere } = await client.call("DELETE /folders/:folderId", { params: { folderId: id } });
+        ticket += 1;
+        set({ ...state, folders: state.folders.filter((folder) => folder.id !== id) });
+        return { designs, onlyHere };
+      }),
+      restore: (id) => run(async () => {
+        const { folder } = await client.call("POST /folders/:folderId/undelete", { params: { folderId: id }, body: {} });
+        replaceOne(folder);
+        return folder;
+      }),
+      add: (id, slugs) => change(id, { add: slugs }),
+      removeDesigns: (id, slugs) => change(id, { remove: slugs }),
+      apply: (changes2, options) => {
+        const optimistic = applyLocal(state, changes2);
+        ticket += 1;
+        set({ ...state, status: "ready", error: null, ...optimistic });
+        return run(async () => {
+          const answer = await client.call("POST /memberships", { body: { changes: changes2, ...options?.atomic ? { atomic: true } : {} } });
+          ticket += 1;
+          set({
+            status: "ready",
+            folders: answer.list.folders,
+            projects: answer.list.projects,
+            damaged: answer.list.damaged === true,
+            error: answer.list.damaged === true ? FOLDERS_COULDNT_LOAD : null
+          });
+          return answer;
+        });
+      }
+    };
+  };
+  var shared3 = null;
+  var folders = () => {
+    if (shared3 === null) {
+      shared3 = createFoldersStore();
+      void shared3.load();
+    }
+    return shared3;
+  };
+
+  // src/ui/components/folder-picker.ts
+  var SKELETON_ROWS = 3;
+  var PROJECTS_NOTE = "They group designs for you";
+  var FOLDERS_NOTE = "Yours to fill";
+  var NO_FOLDERS = "No folders yet. Name one below and this design goes in it.";
+  var LOAD_ERROR_TITLE = "Your folders didn\u2019t load";
+  var LOAD_ERROR_BODY = "The local service didn\u2019t answer, so folders can\u2019t be listed or made right now. Projects still work. Check the service is allowed in Settings, then try again.";
+  var projectHint = (row2, design) => {
+    if (row2.locked) return design !== null ? "Automatic. This design was made there." : "Automatic, where the agent works";
+    if (row2.checked) return design !== null ? "Added by you. Nothing on disk moved." : "Added by hand";
+    return "Tick to add this design by hand.";
+  };
+  var mountFolderPicker = (holder, options) => {
+    const scope = createScope();
+    const folderStore = folders();
+    const mode = options.mode;
+    const deferred = options.apply === "deferred";
+    const searchPlaceholder = options.searchPlaceholder ?? "Search folders and projects";
+    let hostProjects = [];
+    let query = "";
+    let selection2 = new Set(options.initial ?? []);
+    let failure = null;
+    let status = null;
+    let createOpen = false;
+    let createValue = "";
+    let creating = false;
+    const busy = /* @__PURE__ */ new Set();
+    const reverts = /* @__PURE__ */ new Map();
+    const rows = /* @__PURE__ */ new Map();
+    let disposed = false;
+    const el2 = h("div", { class: "dc-pick" });
+    const searchWrap = h("div", { class: "dc-pick-search", hidden: true });
+    const search = scope.own(mountSearchField(searchWrap, { value: "", placeholder: searchPlaceholder, label: searchPlaceholder, onChange: (value) => {
+      query = value;
+      status = null;
+      paint();
+    } }));
+    const list = h("div", { class: "dc-pick-list" });
+    list.style.setProperty("--dc-pick-rows", String(options.rows ?? 6));
+    const projectsSection = h("section", { class: "dc-pick-section" });
+    const projectsHead = h("div", { class: "dc-pick-head" }, h("h3", { class: "dc-pick-title" }, "Projects"), options.sectionNotes === false ? null : h("span", { class: "dc-pick-note" }, PROJECTS_NOTE));
+    const projectsList = h("ul", { class: "dc-pick-rows", role: "list", "aria-label": "Projects" });
+    projectsSection.append(projectsHead, projectsList);
+    const foldersSection = h("section", { class: "dc-pick-section" });
+    const foldersHead = h("div", { class: "dc-pick-head" }, h("h3", { class: "dc-pick-title" }, "Folders"), options.sectionNotes === false ? null : h("span", { class: "dc-pick-note" }, FOLDERS_NOTE));
+    const foldersBody = h("div", { class: "dc-pick-folders-body" });
+    foldersSection.append(foldersHead, foldersBody);
+    const failureLine = h("p", { class: "dc-form-error dc-pick-failure", role: "alert", hidden: true });
+    const createBox = h("div", { class: "dc-pick-new" });
+    const statusLine = h("p", { class: "dc-pick-status", role: "status", hidden: true });
+    list.append(projectsSection, foldersSection);
+    el2.append(searchWrap, list, failureLine, createBox, statusLine);
+    holder.append(el2);
+    let createField = null;
+    let createButton = null;
+    let createInput = null;
+    const designsNow = () => {
+      const data = store.getState().designs.data;
+      return { designs: data?.designs ?? [], root: data?.root ?? "" };
+    };
+    const modelNow = () => {
+      const state = folderStore.get();
+      const { designs, root } = designsNow();
+      return pickerTargets({
+        folders: state.status === "error" ? [] : state.folders,
+        projectMembers: state.projects,
+        hostProjects,
+        designs,
+        designsRoot: root,
+        design: options.design,
+        derivedProject: options.derivedProject,
+        ...options.exclude === void 0 ? {} : { exclude: options.exclude }
+      });
+    };
+    const selectedKeys = () => {
+      const model = modelNow();
+      const wanted = deferred ? selection2 : new Set([...model.projects, ...model.folders].filter((row2) => row2.checked && !row2.locked).map((row2) => row2.key));
+      return [...model.projects, ...model.folders].filter((row2) => wanted.has(row2.key) && !row2.locked).map((row2) => row2.key);
+    };
+    const emitChange = () => options.onChange?.(selectedKeys());
+    const showFailure = (message) => {
+      failure = message;
+      failureLine.hidden = message === null;
+      failureLine.textContent = message ?? "";
+    };
+    const showStatus = (message) => {
+      status = message;
+      statusLine.hidden = message === null;
+      statusLine.replaceChildren();
+      if (message !== null) statusLine.append(icon2("check", 14), h("span", null, message));
+    };
+    const toggle = async (row2, checked) => {
+      if (row2.locked || options.design === null || busy.has(row2.key)) return;
+      const slug = options.design.slug;
+      showFailure(null);
+      showStatus(null);
+      busy.add(row2.key);
+      paint();
+      const target = targetOfKey(row2.key);
+      const change = { target, ...checked ? { add: [slug] } : { remove: [slug] } };
+      try {
+        const answer = await folderStore.apply([change]);
+        const result = answer.results.find((entry) => keyOfTarget(entry.target) === row2.key);
+        if (result && !result.ok) showFailure(result.message);
+      } catch (error) {
+        showFailure(errorText2(error));
+        reverts.set(row2.key, !checked);
+        void folderStore.load().then(() => {
+          reverts.delete(row2.key);
+          paint();
+        });
+      } finally {
+        busy.delete(row2.key);
+        paint();
+      }
+    };
+    const setGlyph = (node, name) => {
+      if (node.kind === "check") {
+        const checkName = name === "folder" ? null : name;
+        if (checkName === node.glyphName) return;
+        node.glyph?.remove();
+        node.glyph = checkName === null ? null : icon2(checkName, 14);
+        node.glyphName = checkName;
+        if (node.glyph) node.li.querySelector(".oc-sdk-check-text")?.before(node.glyph);
+      } else {
+        if (name === null || name === node.glyphName) return;
+        const next = icon2(name, 14);
+        node.glyph.replaceWith(next);
+        node.glyph = next;
+        node.glyphName = name;
+      }
+    };
+    const makeCheckRow = (row2) => {
+      const li = h("li", { class: "dc-pick-row" });
+      const handle = mountCheckbox(li, {
+        label: row2.label,
+        checked: row2.checked,
+        description: row2.kind === "project" ? projectHint(row2, options.design) : void 0,
+        onChange: (checked) => {
+          if (deferred) {
+            if (row2.locked) return;
+            if (checked) selection2.add(row2.key);
+            else selection2.delete(row2.key);
+            showStatus(null);
+            paint();
+            emitChange();
+          } else {
+            void toggle(row2, checked);
+          }
+        }
+      });
+      const count = h("span", { class: "dc-pick-count", "aria-hidden": "true" }, String(row2.count));
+      li.append(count);
+      li.querySelector(".oc-sdk-check")?.setAttribute("title", row2.title);
+      const node = { kind: "check", li, handle, count, glyph: null, glyphName: null };
+      rows.set(row2.key, node);
+      return node;
+    };
+    const makeBtnRow = (row2) => {
+      const name = h("span", { class: "dc-pick-name" }, row2.label);
+      const hint = h("span", { class: "dc-pick-hint", hidden: true });
+      const count = h("span", { class: "dc-pick-count", "aria-hidden": "true" }, String(row2.count));
+      const chev = icon2("chevron", 14);
+      chev.classList.add("dc-pick-chev");
+      const glyph = row2.kind === "project" ? icon2("layers", 14) : icon2("folder", 14);
+      const button2 = h(
+        "button",
+        { type: "button", class: "dc-pick-btn", title: row2.title },
+        glyph,
+        h("span", { class: "dc-pick-text" }, name, hint),
+        count,
+        chev
+      );
+      button2.addEventListener("click", () => {
+        if (button2.getAttribute("aria-disabled") === "true") return;
+        options.onPick?.(targetOfKey(row2.key));
+      });
+      const li = h("li", { class: "dc-pick-row dc-pick-row-btn" }, button2);
+      const node = { kind: "btn", li, button: button2, name, hint, count, glyph, glyphName: row2.kind === "project" ? "layers" : "folder", chev };
+      rows.set(row2.key, node);
+      return node;
+    };
+    const updateRow = (node, row2) => {
+      const checked = reverts.get(row2.key) ?? (deferred && !row2.locked ? selection2.has(row2.key) : row2.checked);
+      const inert = row2.locked || mode === "single" && checked;
+      if (node.kind === "check") {
+        node.handle.update({
+          label: row2.label,
+          checked,
+          description: row2.kind === "project" ? projectHint(row2, options.design) : void 0,
+          // Never the kit's `disabled` while a write is in flight: a disabled button drops focus. toggle() already ignores a busy row.
+          disabled: false
+        });
+        const control = node.li.querySelector(".oc-sdk-check");
+        control?.setAttribute("aria-disabled", row2.locked || busy.has(row2.key) ? "true" : "false");
+        control?.setAttribute("title", row2.title);
+        node.count.textContent = String(row2.count);
+        setGlyph(node, row2.kind === "project" ? row2.locked ? "lock" : "layers" : null);
+        node.li.dataset.locked = row2.locked ? "true" : "false";
+      } else {
+        node.name.textContent = row2.label;
+        const hintText = row2.locked ? options.design !== null ? "Automatic. This design was made there." : row2.lockedReason ?? "" : mode === "single" && checked && options.design !== null ? `${options.design.title} is already in ${row2.label}.` : "";
+        node.hint.textContent = hintText;
+        node.hint.hidden = hintText === "";
+        node.count.textContent = String(row2.count);
+        node.button.setAttribute("aria-disabled", inert ? "true" : "false");
+        node.button.title = row2.title;
+        node.chev.style.display = inert ? "none" : "";
+        setGlyph(node, row2.kind === "project" ? row2.locked ? "lock" : "layers" : "folder");
+        node.li.dataset.locked = inert ? "true" : "false";
+      }
+    };
+    const paintRows = (ul, wanted) => {
+      const keep = new Set(wanted.map((row2) => row2.key));
+      for (const [key, node] of [...rows]) {
+        if (keep.has(key) || node.li.parentElement !== ul) continue;
+        if (node.kind === "check") node.handle.dispose();
+        node.li.remove();
+        rows.delete(key);
+      }
+      const nodes = wanted.map((row2) => {
+        let node = rows.get(row2.key);
+        if (!node) node = mode === "multi" ? makeCheckRow(row2) : makeBtnRow(row2);
+        updateRow(node, row2);
+        return node.li;
+      });
+      nodes.forEach((li, index) => {
+        if (ul.children[index] !== li) ul.insertBefore(li, ul.children[index] ?? null);
+      });
+      while (ul.children.length > nodes.length) ul.lastElementChild?.remove();
+    };
+    const closeCreate = () => {
+      createOpen = false;
+      createValue = "";
+      createField?.update({ error: void 0, value: "" });
+    };
+    const submitCreate = async () => {
+      if (creating || createField === null) return;
+      const problem = folderNameProblem(createValue, folderStore.get().folders);
+      if (problem !== null) {
+        createField.update({ error: problem });
+        return;
+      }
+      creating = true;
+      createButton?.set({ loading: true });
+      showFailure(null);
+      try {
+        const folder = await folderStore.create(createValue.trim());
+        const key = `folder:${folder.id}`;
+        if (mode === "single") {
+          closeCreate();
+          options.onPick?.({ kind: "folder", id: folder.id });
+        } else if (deferred) {
+          selection2.add(key);
+          closeCreate();
+          showStatus(`Created ${folder.name}.`);
+          emitChange();
+        } else if (options.design !== null) {
+          try {
+            await folderStore.apply([{ target: { kind: "folder", id: folder.id }, add: [options.design.slug] }]);
+            showStatus(`Added to ${folder.name}.`);
+          } catch (error) {
+            showFailure(errorText2(error));
+          }
+          closeCreate();
+        }
+      } catch (error) {
+        createField.update({ error: errorText2(error) });
+      } finally {
+        creating = false;
+        createButton?.set({ loading: false });
+        paint();
+      }
+    };
+    const paintCreate = (state, nothingAtAll, noFolders, loading) => {
+      createBox.hidden = state.status === "error" || loading;
+      if (state.status === "error" || loading) return;
+      const wantOpen = createOpen || nothingAtAll || noFolders;
+      if (wantOpen && createField === null) {
+        createBox.replaceChildren();
+        const fieldHost = h("div", { class: "dc-pick-new-field" });
+        createField = mountTextField(fieldHost, {
+          label: "Folder name",
+          value: createValue,
+          placeholder: "Q4 launch",
+          helper: "1 to 40 characters.",
+          onChange: (next) => void (createValue = next)
+        });
+        createInput = fieldHost.querySelector("input");
+        createButton = btn({ label: mode === "single" ? "Create and move" : "Create and add", variant: "default", size: "sm", onClick: () => void submitCreate() });
+        createInput?.addEventListener("blur", () => {
+          if (createValue.trim() !== "") createField?.update({ error: folderNameProblem(createValue, folderStore.get().folders) ?? void 0 });
+        });
+        fieldHost.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
+            event.preventDefault();
+            void submitCreate();
+          }
+        });
+        createBox.append(fieldHost, h("div", { class: "dc-pick-new-actions" }, createButton.el));
+        if (createOpen) queueMicrotask(() => createInput?.focus());
+      } else if (!wantOpen && createField !== null) {
+        createField.dispose();
+        createField = null;
+        createButton = null;
+        createInput = null;
+        createBox.replaceChildren();
+      }
+      if (!wantOpen && createBox.firstElementChild === null) {
+        const open = btn({ label: "New folder\u2026", variant: "ghost", size: "sm", icon: "plus", onClick: () => {
+          createOpen = true;
+          showStatus(null);
+          paint();
+        } });
+        createBox.append(open.el);
+      }
+    };
+    const paint = () => {
+      if (disposed) return;
+      const state = folderStore.get();
+      const model = modelNow();
+      const loading = (state.status === "idle" || state.status === "loading") && state.folders.length === 0;
+      const errored = state.status === "error";
+      const nothingAtAll = !loading && !errored && model.total === 0;
+      const noFolders = !loading && !errored && model.folders.length === 0;
+      searchWrap.hidden = !(options.search === "always" || showSearch(model.total));
+      const projectRows2 = filterRows(model.projects, query);
+      const searching = query.trim() !== "";
+      const projectsEmptyMatch = searching && projectRows2.length === 0 && model.projects.length > 0;
+      projectsSection.hidden = nothingAtAll || projectRows2.length === 0 && !projectsEmptyMatch;
+      if (projectsEmptyMatch) projectsList.replaceChildren(h("li", { class: "dc-pick-message dc-muted" }, `No projects match \u201C${query.trim()}\u201D.`));
+      else paintRows(projectsList, projectRows2);
+      foldersSection.hidden = nothingAtAll;
+      if (loading) {
+        foldersBody.replaceChildren(h("ul", { class: "dc-pick-rows", "aria-hidden": "true" }, ...Array.from({ length: SKELETON_ROWS }, () => h("li", { class: "dc-pick-skeleton" }, h("span", { class: "dc-skel dc-skel-line" })))));
+      } else if (errored) {
+        foldersBody.replaceChildren(banner({ tone: "error", title: LOAD_ERROR_TITLE, body: LOAD_ERROR_BODY, action: { label: "Try again", onClick: () => void folderStore.load() } }));
+      } else if (noFolders) {
+        foldersBody.replaceChildren(h("p", { class: "dc-pick-message dc-muted" }, NO_FOLDERS));
+      } else {
+        let ul = foldersBody.querySelector(".dc-pick-rows");
+        if (!ul) {
+          ul = h("ul", { class: "dc-pick-rows", role: "list", "aria-label": "Folders" });
+          foldersBody.replaceChildren(ul);
+        }
+        const folderRows = filterRows(model.folders, query);
+        if (searching && folderRows.length === 0) ul.replaceChildren(h("li", { class: "dc-pick-message dc-muted" }, `No folders match \u201C${query.trim()}\u201D.`));
+        else paintRows(ul, folderRows);
+      }
+      failureLine.hidden = failure === null;
+      failureLine.textContent = failure ?? "";
+      statusLine.hidden = status === null;
+      paintCreate(state, nothingAtAll, noFolders, loading);
+    };
+    scope.add(folderStore.subscribe(paint));
+    scope.add(store.subscribe(paint));
+    void guestHost.client.listProjects().then(
+      (answer) => {
+        hostProjects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
+        paint();
+      },
+      (error) => console.warn("Design Chamber: the project names could not be read; folders show their own names", error)
+    );
+    void folderStore.load();
+    paint();
+    return {
+      el: el2,
+      selected: selectedKeys,
+      selectedRows: () => {
+        const keys = new Set(selectedKeys());
+        const model = modelNow();
+        return [...model.projects, ...model.folders].filter((row2) => keys.has(row2.key));
+      },
+      derivedRow: () => {
+        const model = modelNow();
+        return model.projects.find((row2) => row2.locked) ?? null;
+      },
+      setSelected: (keys) => {
+        const model = modelNow();
+        const live = new Set([...model.projects, ...model.folders].filter((row2) => !row2.locked).map((row2) => row2.key));
+        selection2 = new Set(keys.filter((key) => live.has(key)));
+        paint();
+        emitChange();
+      },
+      focus: () => {
+        const target = (!searchWrap.hidden ? searchWrap.querySelector("input") : null) ?? list.querySelector('.oc-sdk-check:not([disabled]), .dc-pick-btn[aria-disabled="false"]') ?? createInput ?? createBox.querySelector("button");
+        target?.focus();
+      },
+      dispose: () => {
+        disposed = true;
+        scope.dispose();
+        for (const node of rows.values()) if (node.kind === "check") node.handle.dispose();
+        rows.clear();
+        createField?.dispose();
+        el2.remove();
+      }
+    };
+  };
+
   // src/ui/components/actions.ts
   var designMenu = (options) => [
     ...options.includeOpen ? [{ id: "open", label: "Open" }] : [],
@@ -5081,6 +6120,43 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/ui/components/new-dialog.ts
+  var showFilingFailures = (hostEl, slug, failed) => {
+    const strip = hostEl.querySelector(".dc-filing-notices") ?? h("div", { class: "dc-filing-notices" });
+    if (strip.parentElement === null) hostEl.prepend(strip);
+    const nameOf = (target) => target.kind === "folder" ? folders().get().folders.find((entry) => entry.id === target.id)?.name ?? "that folder" : folderName(target.directory);
+    const tidy = () => {
+      if (strip.childElementCount === 0) strip.remove();
+    };
+    for (const result of failed) {
+      const name = nameOf(result.target);
+      const body = h("span", null, `${result.message} The design was still made.`);
+      const retry = btn({ label: "Try again", variant: "outline", size: "xs", onClick: () => void tryAgain() });
+      const node = h("div", { class: "dc-filing-notice" });
+      const dismiss = iconBtn({ icon: "close", label: `Dismiss the notice about ${name}`, size: "sm", onClick: () => {
+        node.remove();
+        tidy();
+      } });
+      const tryAgain = async () => {
+        retry.set({ loading: true });
+        try {
+          const answer = await folders().apply([{ target: result.target, add: [slug] }]);
+          const again = answer.results.find((entry) => keyOfTarget(entry.target) === keyOfTarget(result.target));
+          if (again && !again.ok) body.textContent = `${again.message} The design was still made.`;
+          else {
+            node.remove();
+            tidy();
+            toast("success", `Added to ${name}.`);
+          }
+        } catch (error) {
+          body.textContent = `${errorText2(error)} The design was still made.`;
+        } finally {
+          retry.set({ loading: false });
+        }
+      };
+      node.append(h("div", { class: "dc-banner" }, ...bannerWithActions("warning", `Couldn\u2019t add it to ${name}.`, [body], [retry.el])), dismiss);
+      strip.append(node);
+    }
+  };
   var openNewDialog = (hostEl, options) => {
     let unsubscribe = () => {
     };
@@ -5093,6 +6169,7 @@ ${GUEST_UI_LOOK_CSS}`;
       onClose: () => {
         unsubscribe();
         unsubscribeSystems();
+        picker.dispose();
       }
     });
     let kind = options.kind;
@@ -5187,6 +6264,49 @@ ${GUEST_UI_LOOK_CSS}`;
     void store.loadPresets();
     paintPresets();
     paintSystem();
+    const folderHost = h("div", { class: "dc-field dc-folder-field" });
+    const folderLabel = h("span", { class: "oc-sdk-field-label" }, FOLDER_FIELD_LABEL);
+    const chips2 = h("div", { class: "dc-pick-chips", "aria-label": "Chosen folders and projects", hidden: true });
+    const pickerHost = h("div");
+    const folderNote = h("p", { class: "oc-sdk-field-note dc-folder-note" }, FOLDER_FIELD_HELPER);
+    folderHost.append(folderLabel, chips2, pickerHost, folderNote);
+    let filingKeys = [];
+    const paintFolderField = () => {
+      const selected = picker.selectedRows();
+      const derived = picker.derivedRow();
+      const keys = picker.selected();
+      const chipNodes = [];
+      if (derived !== null) {
+        chipNodes.push(h("span", { class: "dc-pick-chip", "data-fixed": "true", title: `Automatic: the agent works in ${derived.label}` }, icon2("lock", 12), h("span", { class: "dc-pick-chip-name" }, derived.label)));
+      }
+      for (const row2 of selected) {
+        const remove2 = h("button", { type: "button", class: "dc-pick-chip-x", "aria-label": `Remove ${row2.label}`, title: `Remove ${row2.label}` }, icon2("close", 12));
+        remove2.addEventListener("click", () => picker.setSelected(keys.filter((key) => key !== row2.key)));
+        chipNodes.push(h("span", { class: "dc-pick-chip", title: `${row2.kind === "folder" ? "Folder" : "Project"} ${row2.label}` }, icon2(row2.kind === "folder" ? "folder" : "layers", 12), h("span", { class: "dc-pick-chip-name" }, row2.label), remove2));
+      }
+      chips2.replaceChildren(...chipNodes);
+      chips2.hidden = chipNodes.length === 0;
+      const goes = goesLine(selected, derived?.label ?? null);
+      folderNote.replaceChildren();
+      if (goes === null) folderNote.append(FOLDER_FIELD_HELPER);
+      else folderNote.append(icon2("info", 14), h("span", null, goes));
+      folderNote.classList.toggle("dc-goes-line", goes !== null);
+    };
+    const picker = mountFolderPicker(pickerHost, {
+      mode: "multi",
+      apply: "deferred",
+      design: null,
+      derivedProject: host.snapshot()?.directory ?? null,
+      rows: 5,
+      search: "always",
+      searchPlaceholder: "Find or make a folder",
+      sectionNotes: false,
+      onChange: (keys) => {
+        filingKeys = keys;
+        paintFolderField();
+      }
+    });
+    paintFolderField();
     const destHost = h("div", { class: "dc-field" }, h("span", { class: "oc-sdk-field-label" }, "Where should the agent work?"));
     const destTabs = mountTabs(destHost, {
       items: DESTINATIONS.map(({ id, label }) => ({ id, label })),
@@ -5218,14 +6338,23 @@ ${GUEST_UI_LOOK_CSS}`;
           briefField.update({ error: problem });
           return;
         }
+        const filingIssue = filingProblem(filingKeys);
+        if (filingIssue !== null) {
+          failure.textContent = filingIssue;
+          failure.hidden = false;
+          return;
+        }
+        const filing = filingOf(filingKeys);
         failure.hidden = true;
         submit.set({ loading: true });
         cancel.set({ disabled: true });
-        flows.newDesign({ kind, brief, preset: preset === "" || presetHost.hidden ? null : preset, destination, ...systemSend === void 0 ? {} : { system: systemSend } }).then(
-          ({ slug }) => {
+        flows.newDesign({ kind, brief, preset: preset === "" || presetHost.hidden ? null : preset, destination, ...systemSend === void 0 ? {} : { system: systemSend }, ...filing === void 0 ? {} : { filing } }).then(
+          ({ slug, filing: filed }) => {
             toast("success", "Design started. It shows up in your list while the agent works.");
             sheet.close();
             options.onCreated(slug);
+            const failed = (filed?.results ?? []).filter((result) => !result.ok);
+            if (failed.length > 0) showFilingFailures(hostEl, slug, failed);
           },
           (error) => {
             failure.textContent = errorText2(error);
@@ -5236,7 +6365,7 @@ ${GUEST_UI_LOOK_CSS}`;
         );
       }
     });
-    sheet.body.append(kindHost, briefHost, systemHost, systemEmpty, presetHost, destHost, failure);
+    sheet.body.append(kindHost, briefHost, systemHost, systemEmpty, presetHost, folderHost, destHost, failure);
     sheet.foot.append(cancel.el, submit.el);
   };
 
@@ -5384,7 +6513,8 @@ ${GUEST_UI_LOOK_CSS}`;
       "## Designs (Design Chamber)",
       `When I ask for a design, mockup, page or canvas, save it in my designs folder: ${root}`,
       `Read ${guide} first and follow it. Each design is its own folder there, never a loose`,
-      ".html file. Write design.json first, then the HTML. Work offline: no CDNs, no Google Fonts."
+      ".html file. Write design.json first, then the HTML. Work offline: no CDNs, no Google Fonts.",
+      "Designs can be grouped into folders (tags, never disk moves) and use design systems. Read the guide for the rules."
     ].join("\n");
     return capped(text, AGENTS_SNIPPET_MAX, "AGENTS.md snippet");
   };
@@ -6211,6 +7341,349 @@ ${GUEST_UI_LOOK_CSS}`;
         clearTimeout(timer);
         timer = void 0;
       }
+    };
+  };
+
+  // src/ui/components/folder-actions.ts
+  var DESIGN_DRAG_TYPE = "application/x-design-chamber-design";
+  var menuViewOf = (view2) => {
+    if (view2 === null) return { folder: null, project: null };
+    if ("folder" in view2) return view2;
+    return { folder: view2, project: null };
+  };
+  var listDesignMenu = (view2) => {
+    const { folder, project } = menuViewOf(view2);
+    const base = designMenu({ includeOpen: true });
+    const at = base.findIndex((entry) => "id" in entry && entry.id === "reveal");
+    const extra = [{ id: "add-to-folder", label: "Add to folder\u2026" }];
+    if (folder) {
+      extra.push({ id: "move-design", label: "Move to folder\u2026" }, { id: "remove-from-folder", label: `Remove from ${folder.name}` });
+    } else if (project?.manual) {
+      extra.push({ id: "move-design", label: "Move to folder\u2026" }, { id: "remove-from-project", label: `Remove from ${project.label}` });
+    }
+    return [...base.slice(0, at), ...extra, ...base.slice(at)];
+  };
+  var runListAction = (id, design, context, view2) => {
+    const { folder, project } = menuViewOf(view2);
+    if (id === "add-to-folder") {
+      openAddToFolder(context.host, design);
+      return;
+    }
+    if (id === "move-design") {
+      const from = folder !== null ? { target: { kind: "folder", id: folder.id }, label: folder.name } : project?.manual ? { target: { kind: "project", directory: project.directory }, label: project.label } : null;
+      if (from !== null) openMoveDesign(context.host, design, from);
+      return;
+    }
+    if (id === "remove-from-folder" && folder) {
+      void removeFromFolder(folder, design);
+      return;
+    }
+    if (id === "remove-from-project" && project?.manual) {
+      void removeFromProject(project, design);
+      return;
+    }
+    runDesignAction(id, design, context);
+  };
+  var removeFromFolder = async (folder, design) => {
+    try {
+      await folders().removeDesigns(folder.id, [design.slug]);
+      toast("info", `Removed \u201C${design.title}\u201D from ${folder.name}. It is still in All designs.`);
+    } catch (error) {
+      toast("error", `Couldn\u2019t remove it from ${folder.name}. ${errorText2(error)}`);
+    }
+  };
+  var removeFromProject = async (project, design) => {
+    try {
+      await folders().apply([{ target: { kind: "project", directory: project.directory }, remove: [design.slug] }]);
+      toast("info", `Removed \u201C${design.title}\u201D from ${project.label}. It is still in All designs.`);
+    } catch (error) {
+      toast("error", `Couldn\u2019t remove it from ${project.label}. ${errorText2(error)}`);
+    }
+  };
+  var addToFolder = async (folder, design) => {
+    const current = folders().get().folders.find((entry) => entry.id === folder.id);
+    if (current?.slugs.includes(design.slug)) {
+      toast("info", `\u201C${design.title}\u201D is already in ${folder.name}.`);
+      return;
+    }
+    try {
+      await folders().add(folder.id, [design.slug]);
+      toast("success", `Added \u201C${design.title}\u201D to ${folder.name}.`);
+    } catch (error) {
+      toast("error", `Couldn\u2019t add it to ${folder.name}. ${errorText2(error)}`);
+    }
+  };
+  var pickerRefOf = (design) => ({
+    slug: design.slug,
+    title: design.title,
+    projectDirectory: store.getState().designs.data?.designs.find((entry) => entry.slug === design.slug)?.projectDirectory ?? null
+  });
+  var openAddToFolder = (hostEl, design) => {
+    const pickerHost = h("div");
+    const sheet = openSheet(hostEl, { title: "Add to folder", subtitle: design.title, variant: "dialog", onClose: () => picker.dispose() });
+    const note = h("p", { class: "dc-pick-note-line" }, icon2("info", 14), h("span", null, "Projects and folders both group this design. Tick as many as you like. Each tick saves at once."));
+    sheet.body.append(note, pickerHost);
+    const picker = mountFolderPicker(pickerHost, { mode: "multi", apply: "immediate", design: pickerRefOf(design), derivedProject: null });
+    sheet.foot.append(btn({ label: "Done", variant: "default", emphasis: "primary", onClick: () => sheet.close() }).el);
+  };
+  var openMoveDesign = (hostEl, design, from) => {
+    const folderStore = folders();
+    const ref = pickerRefOf(design);
+    let busy = false;
+    const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+    const pickerHost = h("div");
+    const sheet = openSheet(hostEl, { title: `Move ${design.title} out of ${from.label}`, subtitle: "Into which folder?", variant: "dialog", onClose: () => picker.dispose() });
+    sheet.body.append(pickerHost, failure);
+    const labelOf = (target) => target.kind === "folder" ? folderStore.get().folders.find((entry) => entry.id === target.id)?.name ?? "that folder" : folderName(target.directory);
+    const pick = async (target) => {
+      if (busy) return;
+      const state = folderStore.get();
+      const holds = target.kind === "folder" ? state.folders.find((entry) => entry.id === target.id)?.slugs.includes(design.slug) ?? false : (state.projects.find((entry) => sameDirectory(entry.directory, target.directory))?.slugs.includes(design.slug) ?? false) || ref.projectDirectory !== null && sameDirectory(ref.projectDirectory, target.directory);
+      const label = labelOf(target);
+      if (holds) {
+        toast("info", `\u201C${design.title}\u201D is already in ${label}.`);
+        return;
+      }
+      busy = true;
+      failure.hidden = true;
+      try {
+        await folderStore.apply([{ target: from.target, remove: [design.slug] }, { target, add: [design.slug] }], { atomic: true });
+        sheet.close();
+        const undo = async () => {
+          try {
+            await folderStore.apply([{ target, remove: [design.slug] }, { target: from.target, add: [design.slug] }], { atomic: true });
+          } catch (error) {
+            toast("error", `Couldn\u2019t undo the move. ${errorText2(error)}`);
+          }
+        };
+        if (frameNotice !== null) frameNotice.show({ title: `Moved ${design.title} to ${label}.`, onUndo: undo });
+        else toast("success", `Moved ${design.title} to ${label}.`);
+      } catch (error) {
+        failure.textContent = errorText2(error);
+        failure.hidden = false;
+      } finally {
+        busy = false;
+      }
+    };
+    const picker = mountFolderPicker(pickerHost, { mode: "single", apply: "immediate", design: ref, derivedProject: null, exclude: keyOfTarget(from.target), onPick: (target) => void pick(target) });
+    sheet.foot.append(h("p", { class: "dc-move-note dc-muted" }, "Picking a folder moves it at once."), btn({ label: "Cancel", variant: "outline", onClick: () => sheet.close() }).el);
+  };
+  var openNewFolder = (hostEl) => {
+    const folderStore = folders();
+    const sheet = openSheet(hostEl, { title: "New folder", variant: "dialog" });
+    let value = "";
+    const field2 = mountTextField(sheet.body, { label: "Folder name", value, placeholder: "Q4 launch", onChange: (next) => void (value = next) });
+    const submit = btn({ label: "Create folder", variant: "default", emphasis: "primary", onClick: () => void create() });
+    const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => sheet.close() });
+    const create = async () => {
+      const problem = folderNameProblem(value, folderStore.get().folders);
+      if (problem !== null) {
+        field2.update({ error: problem });
+        return;
+      }
+      submit.set({ loading: true });
+      cancel.set({ disabled: true });
+      try {
+        const folder = await folderStore.create(value.trim());
+        sheet.close();
+        toast("success", `Made folder ${folder.name}.`);
+      } catch (error) {
+        field2.update({ error: errorText2(error) });
+        submit.set({ loading: false });
+        cancel.set({ disabled: false });
+      }
+    };
+    sheet.body.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
+        event.preventDefault();
+        void create();
+      }
+    });
+    sheet.foot.append(cancel.el, submit.el);
+    queueMicrotask(() => sheet.body.querySelector("input")?.focus());
+  };
+  var openRenameFolder = (hostEl, folder) => {
+    const folderStore = folders();
+    const sheet = openSheet(hostEl, { title: "Rename folder", variant: "dialog" });
+    let value = folder.name;
+    const field2 = mountTextField(sheet.body, { label: "Name", value, onChange: (next) => void (value = next) });
+    const submit = btn({ label: "Save name", variant: "default", emphasis: "primary", onClick: () => void save() });
+    const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => sheet.close() });
+    const save = async () => {
+      const problem = folderNameProblem(value, folderStore.get().folders, folder.id);
+      if (problem !== null) {
+        field2.update({ error: problem });
+        return;
+      }
+      submit.set({ loading: true });
+      cancel.set({ disabled: true });
+      try {
+        await folderStore.rename(folder.id, value.trim());
+        sheet.close();
+      } catch (error) {
+        field2.update({ error: errorText2(error) });
+        submit.set({ loading: false });
+        cancel.set({ disabled: false });
+      }
+    };
+    sheet.body.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
+        event.preventDefault();
+        void save();
+      }
+    });
+    sheet.foot.append(cancel.el, submit.el);
+    queueMicrotask(() => sheet.body.querySelector("input")?.select());
+  };
+  var UNDO_MS = 1e4;
+  var frameNotice = null;
+  var mountUndoNotice = () => {
+    const el2 = h("div", { class: "dc-undo-notice", "aria-live": "polite" });
+    let timer = null;
+    const clear = () => {
+      timer?.cancel();
+      timer = null;
+      el2.replaceChildren();
+    };
+    const handle = {
+      el: el2,
+      clear,
+      dispose: () => {
+        if (frameNotice === handle) frameNotice = null;
+        clear();
+      },
+      show: ({ title: title2, body, undoLabel = "Undo", onUndo }) => {
+        timer?.cancel();
+        let busy = false;
+        const node = banner({
+          tone: "info",
+          title: title2,
+          body,
+          action: {
+            label: undoLabel,
+            onClick: () => {
+              if (busy) return;
+              busy = true;
+              clear();
+              void onUndo();
+            }
+          }
+        });
+        el2.replaceChildren(node);
+        const own = createHoldableTimer(UNDO_MS, clear);
+        timer = own;
+        node.addEventListener("pointerenter", () => own.setHeld("hover", true));
+        node.addEventListener("pointerleave", () => own.setHeld("hover", false));
+        node.addEventListener("focusin", () => own.setHeld("focus", true));
+        node.addEventListener("focusout", () => own.setHeld("focus", false));
+        own.start();
+      }
+    };
+    frameNotice = handle;
+    return handle;
+  };
+  var deleteFacts = (folderId, folders2) => {
+    const slugs = folders2.find((folder) => folder.id === folderId)?.slugs ?? [];
+    const elsewhere = new Set(folders2.filter((folder) => folder.id !== folderId).flatMap((folder) => folder.slugs));
+    return { count: slugs.length, onlyHere: slugs.filter((slug) => !elsewhere.has(slug)).length };
+  };
+  var DELETE_PROMISE = "Deleting a folder never deletes designs.";
+  var deleteConfirmCopy = (input) => {
+    const { name, count, onlyHere } = input;
+    if (count === 0) return { parts: [{ text: `${name} is empty. Deleting it changes nothing.` }], promise: null };
+    if (onlyHere === 0) {
+      return { parts: [{ text: count === 1 ? "Its 1 design keeps its other folders." : `Its ${count} designs all keep their other folders.` }], promise: DELETE_PROMISE };
+    }
+    const parts = count === 1 ? [{ text: "1 design", strong: true }, { text: ` is in ${name}. ` }] : [{ text: `${count} designs`, strong: true }, { text: ` are in ${name}. ` }];
+    if (onlyHere === 1) parts.push({ text: "1 of them", strong: true }, { text: " is in no other folder; it stays in All designs." });
+    else parts.push({ text: `${onlyHere} of them`, strong: true }, { text: " are in no other folder; they stay in All designs." });
+    return { parts, promise: DELETE_PROMISE };
+  };
+  var deleteFolder = (folder, notice) => {
+    const folderStore = folders();
+    const copy = deleteConfirmCopy({ name: folder.name, ...deleteFacts(folder.id, folderStore.get().folders) });
+    const host2 = notice.el.closest(".dc-app") ?? document.body;
+    confirmDialog(host2, {
+      title: `Delete ${folder.name}?`,
+      body: h(
+        "div",
+        { class: "dc-delete-facts" },
+        h("p", null, ...copy.parts.map((part) => part.strong ? h("strong", null, part.text) : part.text)),
+        copy.promise === null ? null : h("p", { class: "dc-delete-promise" }, icon2("info", 14), h("span", null, copy.promise))
+      ),
+      confirmLabel: "Delete folder",
+      destructive: true,
+      onConfirm: async () => {
+        const { designs } = await folderStore.remove(folder.id);
+        notice.show({
+          title: `Deleted ${folder.name}.`,
+          body: designs === 0 ? "It was empty." : `Its ${designs === 1 ? "design is" : `${designs} designs are`} still in All designs.`,
+          onUndo: async () => {
+            try {
+              const back = await folderStore.restore(folder.id);
+              toast("success", `Brought back ${back.name}.`);
+            } catch (error) {
+              toast("error", `Couldn\u2019t bring ${folder.name} back. ${errorText2(error)}`);
+            }
+          }
+        });
+      }
+    });
+  };
+
+  // src/ui/model/design-warnings-model.ts
+  var WARNING_LINES_SHOWN = 2;
+  var warningLines = (warnings) => {
+    const all = [];
+    for (const warning of warnings) {
+      const message = warning.message.trim();
+      if (message !== "" && !all.includes(message)) all.push(message);
+    }
+    const shown = all.slice(0, WARNING_LINES_SHOWN);
+    return { all, shown, more: all.length - shown.length };
+  };
+  var moreLabel = (more, expanded) => expanded ? "Show fewer" : `Show ${more} more`;
+  var bandLabel = (count) => count === 1 ? "A problem with this design" : `${count} problems with this design`;
+
+  // src/ui/components/design-warnings.ts
+  var mountDesignWarnings = () => {
+    const list = h("ul", { class: "dc-warnings-list" });
+    let expanded = false;
+    let key = "";
+    let lines = [];
+    let shownCount = 0;
+    const toggle = h("button", { type: "button", class: "dc-warnings-more", "aria-expanded": "false", hidden: true });
+    const el2 = h("div", { class: "dc-warnings", role: "status", "aria-live": "polite", hidden: true }, list, toggle);
+    const paintExpanded = () => {
+      [...list.children].forEach((item, index) => {
+        if (item instanceof HTMLElement) item.hidden = !expanded && index >= shownCount;
+      });
+      const more = lines.length - shownCount;
+      toggle.hidden = more <= 0;
+      toggle.setAttribute("aria-expanded", String(expanded));
+      toggle.textContent = moreLabel(more, expanded);
+    };
+    toggle.addEventListener("click", () => {
+      expanded = !expanded;
+      paintExpanded();
+    });
+    return {
+      el: el2,
+      set: (warnings) => {
+        const next = warningLines(warnings);
+        const nextKey = JSON.stringify(next.all);
+        if (nextKey === key) return;
+        key = nextKey;
+        lines = next.all;
+        shownCount = next.shown.length;
+        if (lines.length <= shownCount) expanded = false;
+        list.replaceChildren(...lines.map((line) => h("li", { class: "dc-warnings-line" }, icon2("warning", 14), h("span", { class: "dc-warnings-text" }, line))));
+        el2.hidden = lines.length === 0;
+        if (lines.length > 0) el2.setAttribute("aria-label", bandLabel(lines.length));
+        else el2.removeAttribute("aria-label");
+        paintExpanded();
+      },
+      dispose: () => el2.remove()
     };
   };
 
@@ -7552,6 +9025,7 @@ ${GUEST_UI_LOOK_CSS}`;
     "designSystem",
     "tweaks",
     "systemChoice",
+    "folderRequest",
     "comments"
   ];
   var KNOWN_FIELDS = new Set(CANONICAL_ORDER);
@@ -8170,12 +9644,13 @@ ${GUEST_UI_LOOK_CSS}`;
   // src/ui/model/viewer-menu.ts
   var NARROW_RAIL_QUERY = "(max-width: 359.98px)";
   var reveal2 = { id: "reveal", label: "Reveal in folder" };
+  var addToFolder2 = { id: "add-to-folder", label: "Add to folder\u2026" };
   var copyPath2 = { id: "path", label: "Copy path" };
   var rename = { id: "rename", label: "Rename" };
   var remove = { id: "delete", label: "Delete\u2026", destructive: true };
   var askTweaks = { id: "ask-tweaks", label: ASK_FOR_TWEAKS_LABEL };
   var clearPageData = (state) => state === "enabled" || state === "disabled" ? [{ id: "page-data", label: PAGE_DATA_CLEAR_LABEL, ...state === "disabled" ? { disabled: true, reason: PAGE_DATA_DISABLED_REASON } : {} }] : [];
-  var baseEntries = (pageData) => [reveal2, copyPath2, ...clearPageData(pageData), rename, { separator: true }, remove];
+  var baseEntries = (pageData) => [addToFolder2, reveal2, copyPath2, ...clearPageData(pageData), rename, { separator: true }, remove];
   var viewerMenuEntries = (input) => {
     const ask = input.askForTweaks ? [askTweaks] : [];
     if (input.compact) {
@@ -8188,6 +9663,7 @@ ${GUEST_UI_LOOK_CSS}`;
         { id: "html", label: input.isPage ? "Export single-file HTML" : "Export screen as HTML\u2026" },
         ...input.isPage ? [{ id: "copy-html", label: "Copy HTML", disabled: input.copyHtmlTooLarge, hint: input.copyHtmlTooLarge ? "too large" : void 0 }] : [],
         copyPath2,
+        addToFolder2,
         reveal2,
         ...clearPageData(input.pageData),
         rename,
@@ -8964,7 +10440,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var REPAINT_MS = 1e3;
   var watchers = /* @__PURE__ */ new WeakMap();
   var buildActivityFor = (wall) => watchers.get(wall);
-  var sameSet = (a, b) => a === b || a !== null && b !== null && a.size === b.size && [...a].every((value) => b.has(value));
+  var sameSet2 = (a, b) => a === b || a !== null && b !== null && a.size === b.size && [...a].every((value) => b.has(value));
   var mount2 = (ctx) => {
     const compact = ctx.surface === "panel";
     ctx.slots.overlay.parentElement?.prepend(ctx.slots.overlay);
@@ -8997,7 +10473,7 @@ ${GUEST_UI_LOOK_CSS}`;
     let recentTimer = null;
     let lit = null;
     const setLit = (next, restart = false) => {
-      if (!restart && sameSet(lit, next)) return;
+      if (!restart && sameSet2(lit, next)) return;
       lit = next;
       ctx.wall.markRecent(next);
     };
@@ -9046,7 +10522,7 @@ ${GUEST_UI_LOOK_CSS}`;
     if (f.params?.reason === "failures") return `${what} (the browser failed three times in a row).`;
     return `${what} (the limit is ${num(f.params?.max)} per run). Use --screen <id> to check the rest.`;
   };
-  var systemNameOf = (f) => f.params?.system ?? "the design system";
+  var systemNameOf2 = (f) => f.params?.system ?? "the design system";
   var repoNameOf = (f) => f.params?.repo ?? "the repo";
   var AREA_LABELS = {
     foundations: "Foundations",
@@ -9077,9 +10553,10 @@ ${GUEST_UI_LOOK_CSS}`;
     "repo-overlap": () => "Another design system already uses this repo folder or living-page path.",
     "living-page-exists": (f) => `The living-page path already exists in ${repoNameOf(f)} and isn't this system's living page. Pick another path.`,
     "code-outside-project": () => "The code folder must be the project this chat is in, or a folder inside it.",
-    "home-changed": (f) => `${systemNameOf(f)} already has files in ${repoNameOf(f)}, so its home can't change. Make a new system to move it.`,
+    "home-changed": (f) => `${systemNameOf2(f)} already has files in ${repoNameOf(f)}, so its home can't change. Make a new system to move it.`,
     "ticket-changed": () => "BUILD.json names another build. Keep the ticket this system started with.",
-    "applied-unknown-proposal": (f) => `The agent says it applied a proposal you didn't approve here. Check ${repoNameOf(f)}'s history.`
+    "applied-unknown-proposal": (f) => `The agent says it applied a proposal you didn't approve here. Check ${repoNameOf(f)}'s history.`,
+    "existing-outside-project": () => "The existing system folder is outside the project it was found in; it was ignored."
   };
   var PROPOSAL_PROBLEM_SENTENCES = {
     "not-adopted": "the system has not been adopted from a build yet.",
@@ -9167,11 +10644,11 @@ ${GUEST_UI_LOOK_CSS}`;
       severity: "warning",
       // `part: 'system-files'` when the tokens couldn't be compared (the system no longer holds the
       // copy's original tokens.css) or other copy files changed: the files are counted instead.
-      sentence: (f) => f.params?.part === "system-files" ? `This design's copy of ${systemNameOf(f)} was changed: ${num(f.params?.count)} ${f.params?.count === 1 ? "file differs" : "files differ"} from revision ${num(f.params?.revision)}. Put them back, or keep the changes in this design's own tokens.css.` : `This design's copy of ${systemNameOf(f)} was changed: ${num(f.params?.count)} tokens differ from revision ${num(f.params?.revision)}. Put them back, or keep them as this design's own overrides.`
+      sentence: (f) => f.params?.part === "system-files" ? `This design's copy of ${systemNameOf2(f)} was changed: ${num(f.params?.count)} ${f.params?.count === 1 ? "file differs" : "files differ"} from revision ${num(f.params?.revision)}. Put them back, or keep the changes in this design's own tokens.css.` : `This design's copy of ${systemNameOf2(f)} was changed: ${num(f.params?.count)} tokens differ from revision ${num(f.params?.revision)}. Put them back, or keep them as this design's own overrides.`
     },
     "system-copy-missing": {
       severity: "warning",
-      sentence: (f) => `This design's copy of ${systemNameOf(f)} is missing ${num(f.params?.count)} files.`
+      sentence: (f) => `This design's copy of ${systemNameOf2(f)} is missing ${num(f.params?.count)} files.`
     },
     "system-copy-invalid": {
       severity: "warning",
@@ -9222,11 +10699,11 @@ ${GUEST_UI_LOOK_CSS}`;
     // Phase 2.5 §10.4: the repo-backed system (S8, with the rev 3 wording).
     "system-living-missing": {
       severity: "warning",
-      sentence: (f) => `${systemNameOf(f)} lives in ${repoNameOf(f)} but has no living page yet.`
+      sentence: (f) => `${systemNameOf2(f)} lives in ${repoNameOf(f)} but has no living page yet.`
     },
     "system-living-stale": {
       severity: "warning",
-      sentence: (f) => `The living page was generated from revision ${num(f.params?.from)}; ${systemNameOf(f)} is at revision ${num(f.params?.revision)}.`
+      sentence: (f) => `The living page was generated from revision ${num(f.params?.from)}; ${systemNameOf2(f)} is at revision ${num(f.params?.revision)}.`
     },
     "system-living-changed": {
       severity: "warning",
@@ -9246,15 +10723,15 @@ ${GUEST_UI_LOOK_CSS}`;
     },
     "system-snapshot-changed": {
       severity: "warning",
-      sentence: (f) => `${systemNameOf(f)}'s snapshot was changed outside Design Chamber. Re-sync to read ${repoNameOf(f)} again.`
+      sentence: (f) => `${systemNameOf2(f)}'s snapshot was changed outside Design Chamber. Re-sync to read ${repoNameOf(f)} again.`
     },
     "system-code-drift": {
       severity: "warning",
-      sentence: (f) => driftScope(f, `${num(f.params?.count)} tokens differ from ${systemNameOf(f)}. Ask the agent to reconcile.`)
+      sentence: (f) => driftScope(f, `${num(f.params?.count)} tokens differ from ${systemNameOf2(f)}. Ask the agent to reconcile.`)
     },
     "system-code-differs": {
       severity: "warning",
-      sentence: (f) => driftScope(f, `${num(f.params?.count)} tokens still differ from what ${systemNameOf(f)} describes.`)
+      sentence: (f) => driftScope(f, `${num(f.params?.count)} tokens still differ from what ${systemNameOf2(f)} describes.`)
     },
     "system-build-invalid": {
       severity: "warning",
@@ -9266,7 +10743,7 @@ ${GUEST_UI_LOOK_CSS}`;
     },
     "system-coverage-empty": {
       severity: "warning",
-      sentence: (f) => `${systemNameOf(f)} covers ${AREA_LABELS[f.params?.area ?? "foundations"]} but has nothing there yet.`
+      sentence: (f) => `${systemNameOf2(f)} covers ${AREA_LABELS[f.params?.area ?? "foundations"]} but has nothing there yet.`
     },
     // Phase 2.5 rev 3 (§10.4).
     "system-living-reformatted": {
@@ -12469,7 +13946,7 @@ ${view2.error.message}` : "";
 
   // src/guest/frame-doc.ts
   var ARTBOARD_SANDBOX = "allow-scripts";
-  var bundledBridge = () => true ? '"use strict";(()=>{var ne=/^[a-z0-9][a-z0-9-]{0,40}$/;var k=5e3,V=200,$=5e3;var _t=30*6e4;var oe=/^[A-Za-z0-9 #%.,()+\\-\'"/]{1,100}$/;var D=1048576;var B=1e4;var w=D;var ut=100*1024*1024,Et=5*1024*1024,pt=10*1024*1024,dt=20*1024*1024;var At=10*6e4;var Tt=60*6e4;var re=512,se=/^--[A-Za-z0-9_-]{1,80}$/,le=120;var St=7*864e5;var xt=20*1024*1024,gt=4*1024*1024;var ft=2*1024*1024;var Ce=/^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\\d{1,3}|logo:\\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40})$/;var F=e=>e.length<=le&&Ce.test(e);var ce=e=>{let t=0,r=0;for(let n of e)n==="\'"?t+=1:n===\'"\'&&(r+=1);return t%2===0&&r%2===0};var C=1;var ue=["Escape"," ","+","=","-","0","1"];var j=e=>typeof e=="object"&&e!==null&&!Array.isArray(e),O=(e,t)=>typeof e=="string"&&e.length<=t,W=(e,t)=>O(e,t)&&e.length>0,y=e=>typeof e=="number"&&Number.isFinite(e)&&Math.abs(e)<=1e7;var Pe=e=>typeof e=="boolean",ke=e=>e==="edit"||e==="play";var ie=(e,t,r)=>Array.isArray(e)&&e.length<=t&&e.every(r),De=e=>j(e)&&W(e.id,100)&&O(e.selector,1e3)&&O(e.text,120)&&O(e.html,200);var Be=e=>j(e)&&typeof e.name=="string"&&se.test(e.name)&&typeof e.value=="string"&&oe.test(e.value)&&ce(e.value),we=e=>{if(!Array.isArray(e)||e.length>B)return!1;let t=0;for(let r of e){if(!Array.isArray(r)||r.length!==2)return!1;let n=r[0],s=r[1];if(typeof n!="string"||s!==null&&typeof s!="string"||(t+=n.length+(s===null?0:s.length),t>w))return!1}return!0};var He=e=>e.dc===C&&W(e.artboardId,100)&&W(e.nonce,64),Ue={"init-ack":()=>!0,"set-mode":e=>ke(e.mode),"hit-test":e=>y(e.x)&&y(e.y),"resolve-anchors":e=>ie(e.anchors,500,De),"scroll-by":e=>y(e.dx)&&y(e.dy),"scroll-to":e=>y(e.x)&&y(e.y),highlight:e=>e.selector===null||O(e.selector,1e3),"edit-probe":e=>y(e.x)&&y(e.y),"set-tokens":e=>ie(e.vars,re,Be),"storage-sync":e=>Pe(e.clear)&&we(e.changes)};var Ye=(e,t)=>{if(!j(t)||!He(t)||typeof t.type!="string"||!Object.hasOwn(e,t.type))return null;let r=e[t.type];return r!==void 0&&r(t)?t:null};var G=e=>Ye(Ue,e);var ve=["data-testid","data-screen","data-dc-id"],Ke=/^(is-|has-|js-|active|hover|focus)/,pe=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,Ve=3,h=e=>e.tagName===e.tagName.toUpperCase()?e.tagName.toLowerCase():e.tagName,de=e=>e.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),Ee=e=>e===""?null:pe.test(e)?`#${e}`:`[id="${de(e)}"]`,$e=(e,t)=>{try{return e.querySelectorAll(t)}catch{return null}},X=(e,t,r)=>{let n=$e(e,t);return n!==null&&n.length===1&&n[0]===r},Fe=e=>{let t=[];for(let r=0;r<e.classList.length&&t.length<Ve;r+=1){let n=e.classList[r];n!==void 0&&pe.test(n)&&!Ke.test(n)&&t.push(n)}return t},We=e=>{let t=e.parentElement;if(!t)return null;let r=0,n=0;for(let s=0;s<t.children.length;s+=1){let c=t.children[s];!c||c.tagName!==e.tagName||(n+=1,c===e&&(r=n))}return n>1?r:null},ze=e=>{let t=h(e);if(t==="html"||t==="body")return t;let r=Fe(e).map(s=>`.${s}`).join(""),n=We(e);return`${t}${r}${n===null?"":`:nth-of-type(${n})`}`},Q=e=>{let t=[...e];for(;t.join(" > ").length>1e3&&t.length>1;)t.shift();return t.join(" > ").slice(0,1e3)},Ae=(e,t)=>{let r=h(e);if(r==="html"||r==="body"||r==="head")return r;let n=Ee(e.id);if(n&&X(t,n,e))return n;for(let u of ve){let E=e.getAttribute(u);if(E===null||E==="")continue;let p=`[${u}="${de(E)}"]`;if(X(t,p,e))return p}let s=[],c=e;for(let u=0;c&&u<6;u+=1){s.unshift(ze(c));let E=s.join(" > ");if(X(t,E,e))return Q(s);let p=c.parentElement;if(!p)break;let _=Ee(p.id);if(_&&X(t,_,p)){let d=[_,...s];if(X(t,d.join(" > "),e))return Q(d)}c=p}return Q(s)};var je=5e3,Qe=/^[A-Za-z][A-Za-z0-9-]*$/,b=e=>e.replace(/\\s+/g," ").trim(),xe=e=>b(e.textContent??"").slice(0,120),qe=e=>e.replace(/&/g,"&amp;").replace(/"/g,"&quot;"),ge=e=>{let t=`<${h(e)}`;for(let r=0;r<e.attributes.length;r+=1){let n=e.attributes[r];n&&(t+=n.value===""?` ${n.name}`:` ${n.name}="${qe(n.value)}"`)}return t+=">",t.length<=200?t:`${t.slice(0,198)}\\u2026>`},Je=e=>{let t=/^<([A-Za-z][A-Za-z0-9:-]*)/.exec(e.trim());return t?.[1]?t[1].toLowerCase():null},Te=(e,t)=>t===null||h(e).toLowerCase()===t,Se=(e,t)=>{try{return e.querySelectorAll(t)}catch{return[]}},fe=(e,t)=>{let r={found:!1,exact:!1,element:null},n=Je(t.html);if(t.selector!==""){let p=Se(e,t.selector);for(let _=0;_<p.length;_+=1){let d=p[_];if(d&&Te(d,n))return{found:!0,exact:!0,element:d}}}let s=b(t.text);if(s.length<12)return r;let c=Se(e,n!==null&&Qe.test(n)?n:"*"),u=null,E=1/0;for(let p=0;p<c.length&&p<je;p+=1){let _=c[p];if(!_||!Te(_,n))continue;let d=b(_.textContent??"");d.startsWith(s)&&d.length<=E&&(u=_,E=d.length)}return u?{found:!0,exact:!1,element:u}:r};var et=new Set(["svg","math","template"]),tt=e=>{for(let t=e;t;t=t.parentElement)if(et.has(h(t).toLowerCase()))return!0;return!1},me=e=>e.getAttribute("data-dc-overlay")!==null,Me=(e,t,r=$)=>{if(me(e))return null;let n=h(e),s=n.toLowerCase();if(s===""||s.length>64)return null;let c=e.getAttribute("id");if(c!==null&&(c===""||c.length>V))return null;let u=b(e.textContent??""),E=u.length>k,p=e.children.length===0,_={tag:s,id:c,leaf:p,text:E?u.slice(0,k+1):u,truncated:E,sameIndex:0,sameCount:0},d=T=>T.children.length===0&&T.getAttribute("id")===c&&!me(T)&&!tt(T)&&b(T.textContent??"")===u;if(!p||!d(e))return _;let f=t.getElementsByTagName(n);if(f.length>r)return _;let R=-1,M=0;for(let T=0;T<f.length;T+=1){let g=f[T];!g||!d(g)||(g===e&&(R=M),M+=1)}return R===-1?_:{..._,sameIndex:R,sameCount:M}};var I=(e,t)=>e.length+(t===null?0:t.length),Re=e=>{if(typeof e!="object"||e===null)return;let t=e;if(typeof t.persist!="boolean"||!Array.isArray(t.items))return;let r=new Set,n=[],s=0;for(let c of t.items){if(!Array.isArray(c)||c.length!==2)return;let u=c[0],E=c[1];if(typeof u!="string"||typeof E!="string"||(s+=I(u,E),s>D))return;r.has(u)||(r.add(u),n.push([u,E]))}return{persist:t.persist,items:n}},nt=(e,t,r={changes:B,chars:w})=>{let n=[],s=[],c=0,u=()=>{n.push({clear:e&&n.length===0,changes:s}),s=[],c=0};for(let E of t){let p=I(E[0],E[1]);s.length>0&&(s.length>=r.changes||c+p>r.chars)&&u(),s.push(E),c+=p}return(s.length>0||e&&n.length===0)&&u(),n},v=e=>`${e}`,K=(e,t,r)=>{if(t.length<r)throw new TypeError(`Failed to execute \'${e}\' on \'Storage\': ${r} argument${r===1?"":"s"} required, but only ${t.length} present.`)},he=(e,t,r)=>{let n=new Map,s=0;for(let[i,l]of e)n.has(i)||(n.set(i,l),s+=I(i,l));let c=null,u=(i,l)=>{let S=n.get(i);s+=I(i,l)-(S===void 0?0:I(i,S)),S===void 0&&(c=null),n.set(i,l)},E=i=>{let l=n.get(i);l!==void 0&&(s-=I(i,l),n.delete(i),c=null)},p=(...i)=>(K("getItem",i,1),n.get(v(i[0]))??null),_=(...i)=>{K("setItem",i,2);let l=v(i[0]),S=v(i[1]),m=n.get(l);if(m===S)return;if(s+I(l,S)-(m===void 0?0:I(l,m))>D)throw t(l);u(l,S),r?.set(l,S)},d=(...i)=>{K("removeItem",i,1);let l=v(i[0]);n.has(l)&&(E(l),r?.set(l,null))},f=()=>{n.size!==0&&(n.clear(),s=0,c=null,r?.clear())},R=(...i)=>{K("key",i,1);let l=Number(i[0])>>>0;return c??(c=[...n.keys()]),c[l]??null},M=Object.create(Object.prototype,{getItem:{value:p,enumerable:!0,configurable:!0,writable:!0},setItem:{value:_,enumerable:!0,configurable:!0,writable:!0},removeItem:{value:d,enumerable:!0,configurable:!0,writable:!0},clear:{value:f,enumerable:!0,configurable:!0,writable:!0},key:{value:R,enumerable:!0,configurable:!0,writable:!0},length:{get:()=>n.size,enumerable:!0,configurable:!0},[Symbol.toStringTag]:{value:"Storage",configurable:!0}}),T=Object.create(M),g=i=>typeof i=="string"&&n.has(i)&&!(i in T);return{storage:new Proxy(T,{get:(i,l,S)=>g(l)?n.get(l):Reflect.get(i,l,S),set:(i,l,S)=>typeof l!="string"?Reflect.set(i,l,S):(_(l,S),!0),has:(i,l)=>typeof l=="string"&&n.has(l)||Reflect.has(i,l),deleteProperty:(i,l)=>g(l)?(d(l),!0):Reflect.deleteProperty(i,l),ownKeys:i=>[...[...n.keys()].filter(l=>!(l in i)),...Reflect.ownKeys(i)],getOwnPropertyDescriptor:(i,l)=>g(l)?{value:n.get(l),writable:!0,enumerable:!0,configurable:!0}:Reflect.getOwnPropertyDescriptor(i,l),defineProperty:(i,l,S)=>typeof l!="string"?Reflect.defineProperty(i,l,S):"get"in S||"set"in S?!1:(_(l,S.value),!0),preventExtensions:()=>!1}),apply:(i,l)=>{i&&(n.clear(),s=0,c=null);for(let[S,m]of l)m===null?E(S):u(S,m)}}},q=(e,t,r)=>{let n=e.DOMException??globalThis.DOMException,s=e.queueMicrotask?.bind(e)??(_=>void Promise.resolve().then(_)),c=_=>new n(`Failed to execute \'setItem\' on \'Storage\': Setting the value of \'${_}\' exceeded the quota.`,"QuotaExceededError"),u=null;if(t?.persist){let _=new Map,d=!1,f=!1,R=()=>{f=!1;let T=[..._],g=d;_=new Map,d=!1;for(let L of nt(g,T))r(L)},M=()=>{f||(f=!0,s(R))};u={set:(T,g)=>{_.delete(T),_.set(T,g),M()},clear:()=>{_.clear(),d=!0,M()}}}let E=he(t?.items??[],c,u),p=he([],c,null);for(let[_,d]of[["localStorage",E],["sessionStorage",p]])try{Object.defineProperty(e,_,{value:d.storage,configurable:!0,enumerable:!0,writable:!1})}catch{}return{sync:(_,d)=>E.apply(_,d)}};var ot=(e,t,r)=>{if(e===void 0)return;let n=G({dc:C,type:"set-tokens",artboardId:t,nonce:r,vars:e});return n?.type==="set-tokens"?n.vars:void 0},ye=e=>{if(typeof e!="object"||e===null)return null;let t=e,{artboardId:r,nonce:n,file:s,mode:c,scroll:u}=t;if(typeof r!="string"||r.length===0||r.length>100||typeof n!="string"||n.length===0||n.length>64||typeof s!="string"||c!=="edit"&&c!=="play"||typeof u!="object"||u===null)return null;let{x:E,y:p}=u;if(typeof E!="number"||typeof p!="number"||!Number.isFinite(E)||!Number.isFinite(p))return null;let _=ot(t.tokens,r,n),d=Re(t.storage);return{artboardId:r,file:s,mode:c,scroll:{x:E,y:p},nonce:n,..._?{tokens:_}:{},...d?{storage:d}:{}}};var Ie="https://design.invalid",J=e=>{try{return decodeURIComponent(e)}catch{return e}},be=(e,t)=>{let r=e.trim();if(r==="")return{kind:"blocked",reason:"empty link"};if(r.startsWith("#"))return{kind:"fragment",id:J(r.slice(1))};let n;try{n=new URL(r,`${Ie}/${t}`)}catch{return{kind:"blocked",reason:"malformed link"}}if(n.origin===Ie){let s=J(n.pathname.replace(/^\\/+/,""));return s===t||s===""?n.hash?{kind:"fragment",id:J(n.hash.slice(1))}:{kind:"blocked",reason:"same page"}:/\\.html?$/i.test(s)?s.length>2e3||n.hash.length>2e3?{kind:"blocked",reason:"link too long"}:{kind:"navigate",href:s,hash:n.hash}:{kind:"blocked",reason:"not a page of this design"}}return(n.protocol==="https:"||n.protocol==="http:")&&n.href.length<=2e3?{kind:"external",url:n.href}:{kind:"blocked",reason:`${n.protocol} links do not open from a design`}},Oe=e=>ne.test(e)?{kind:"navigate",href:`screens/${e}.html`,hash:""}:{kind:"blocked",reason:"unknown screen id"};var st=16,lt=5,ct=300,it=e=>e instanceof Element?!!e.closest(\'input, textarea, select, [contenteditable=""], [contenteditable="true"]\'):!1,at=e=>{let t=e.mode,r=!1,n=window.parent,s=n!==window,c=o=>{n.postMessage({...o,dc:C,artboardId:e.artboardId,nonce:e.nonce},"*")},u=q(window,s?e.storage:void 0,o=>c({type:"storage-batch",...o})),E=[],p=o=>{let a=document.documentElement.style,A=new Set(o.map(x=>x.name));for(let x of E)A.has(x)||a.removeProperty(x);for(let x of o)a.setProperty(x.name,x.value);E=[...A]};if(e.tokens&&p(e.tokens),!s)return;let _=()=>{let o=document.documentElement,a=document.body;return{docWidth:Math.max(o.scrollWidth,a?a.scrollWidth:0),docHeight:Math.max(o.scrollHeight,a?a.scrollHeight:0)}},d=o=>{let a=o.getBoundingClientRect();return{x:a.left+window.scrollX,y:a.top+window.scrollY,w:Math.max(0,a.width),h:Math.max(0,a.height)}},f=(o,a)=>{let A=document.elementFromPoint(o,a);return A&&A!==document.documentElement&&A!==document.body&&!A.hasAttribute("data-dc-overlay")?A:null},R=o=>{let a=o.closest("[data-dc-entry]")?.getAttribute("data-dc-entry")??null;return a!==null&&F(a)?a:null},M=o=>({entry:R(o),selector:Ae(o,document),text:xe(o),html:ge(o),rect:d(o),tag:h(o).slice(0,64)||"element"}),T=null,g=o=>{let a=null;if(o)try{a=document.querySelector(o)}catch{a=null}if(!a){T?.remove(),T=null;return}T||(T=document.createElement("div"),T.setAttribute("data-dc-overlay",""),T.setAttribute("aria-hidden","true"));let A=d(a);T.setAttribute("style",`position:absolute;left:${A.x}px;top:${A.y}px;width:${A.w}px;height:${A.h}px;outline:2px solid Highlight;outline-offset:1px;pointer-events:none;z-index:2147483647;margin:0;padding:0;border:0;background:transparent;`),T.isConnected||document.documentElement.append(T)},L=o=>{switch(o.type){case"init-ack":r=!0;return;case"set-mode":t=o.mode;return;case"hit-test":{let a=f(o.x,o.y);c({type:"hit",x:o.x,y:o.y,element:a?M(a):null});return}case"edit-probe":{let a=f(o.x,o.y),A=a?Me(a,document):null,x=a&&A?{...A,dir:getComputedStyle(a).direction==="rtl"?"rtl":"ltr",rect:d(a)}:null;c({type:"edit-probe-result",x:o.x,y:o.y,probe:x});return}case"set-tokens":p(o.vars);return;case"storage-sync":u.sync(o.clear,o.changes);return;case"resolve-anchors":{let a=o.anchors.map(A=>{let x=fe(document,A);return{id:A.id,found:x.found,exact:x.exact,rect:x.element?d(x.element):null}});c({type:"anchors",results:a});return}case"scroll-by":window.scrollBy(o.dx,o.dy);return;case"scroll-to":window.scrollTo(o.x,o.y);return;case"highlight":g(o.selector);return}};window.addEventListener("message",o=>{if(o.source!==n)return;let a=G(o.data);!a||a.artboardId!==e.artboardId||a.nonce!==e.nonce||L(a)});let i=()=>c({type:"ready",..._(),title:document.title.slice(0,200)}),l=null,S="",m=()=>{l===null&&(l=setTimeout(()=>{l=null;let o=_(),a=`${o.docWidth}x${o.docHeight}`;a!==S&&(S=a,c({type:"size",...o}))},100))},P=!1;window.addEventListener("scroll",()=>{P||(P=!0,requestAnimationFrame(()=>{P=!1,c({type:"scroll",x:window.scrollX,y:window.scrollY})}))},{passive:!0});let ee=()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),i();let o=0,a=setInterval(()=>{o+=1,r||o>lt?clearInterval(a):i()},ct);if(typeof ResizeObserver=="function"){let A=new ResizeObserver(m);A.observe(document.documentElement),document.body&&A.observe(document.body)}typeof MutationObserver=="function"&&new MutationObserver(m).observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,characterData:!0}),m()};document.readyState==="loading"?document.addEventListener("DOMContentLoaded",ee,{once:!0}):ee(),window.addEventListener("load",()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),m()});let te=o=>{switch(o.kind){case"fragment":{if(o.id===""){window.scrollTo(0,0);return}(document.getElementById(o.id)??document.getElementsByName(o.id)[0]??null)?.scrollIntoView();return}case"navigate":c({type:"navigate",href:o.href,hash:o.hash});return;case"external":c({type:"open-external",url:o.url});return;case"blocked":return}};document.addEventListener("click",o=>{let A=(o.target instanceof Element?o.target:null)?.closest("a[href], area[href], [data-dc-goto]")??null;if(!A)return;o.preventDefault();let x=A.getAttribute("data-dc-goto");if(x!==null){te(Oe(x));return}te(be(A.getAttribute("href")??"",e.file))},!0),document.addEventListener("submit",o=>o.preventDefault(),!0),window.addEventListener("wheel",o=>{let a=o.ctrlKey||o.metaKey;if(!a&&t!=="edit")return;o.preventDefault();let A=o.deltaMode===1?st:o.deltaMode===2?window.innerHeight:1;c({type:"wheel",deltaX:o.deltaX*A,deltaY:o.deltaY*A,x:o.clientX,y:o.clientY,ctrl:a})},{passive:!1,capture:!0}),window.addEventListener("keydown",o=>{it(o.target)||ue.includes(o.key)&&c({type:"key",key:o.key,ctrl:o.ctrlKey,meta:o.metaKey,shift:o.shiftKey})},!0)},Ne=ye(window.__DC);Ne?at(Ne):q(window,void 0,()=>{});})();\n' : "";
+  var bundledBridge = () => true ? '"use strict";(()=>{var ne=/^[a-z0-9][a-z0-9-]{0,40}$/;var k=5e3,V=200,F=5e3;var _t=30*6e4;var oe=/^[A-Za-z0-9 #%.,()+\\-\'"/]{1,100}$/;var D=1048576;var B=1e4;var w=D;var ut=100*1024*1024,Et=5*1024*1024,pt=10*1024*1024,dt=20*1024*1024;var At=10*6e4;var Tt=60*6e4;var re=512,se=/^--[A-Za-z0-9_-]{1,80}$/,le=120;var St=7*864e5;var xt=20*1024*1024,gt=4*1024*1024;var ft=2*1024*1024;var Ce=/^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\\d{1,3}|logo:\\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40})$/;var $=e=>e.length<=le&&Ce.test(e);var ce=e=>{let t=0,r=0;for(let n of e)n==="\'"?t+=1:n===\'"\'&&(r+=1);return t%2===0&&r%2===0};var C=1;var ue=["Escape"," ","+","=","-","0","1"];var j=e=>typeof e=="object"&&e!==null&&!Array.isArray(e),O=(e,t)=>typeof e=="string"&&e.length<=t,W=(e,t)=>O(e,t)&&e.length>0,y=e=>typeof e=="number"&&Number.isFinite(e)&&Math.abs(e)<=1e7;var Pe=e=>typeof e=="boolean",ke=e=>e==="edit"||e==="play";var ie=(e,t,r)=>Array.isArray(e)&&e.length<=t&&e.every(r),De=e=>j(e)&&W(e.id,100)&&O(e.selector,1e3)&&O(e.text,120)&&O(e.html,200);var Be=e=>j(e)&&typeof e.name=="string"&&se.test(e.name)&&typeof e.value=="string"&&oe.test(e.value)&&ce(e.value),we=e=>{if(!Array.isArray(e)||e.length>B)return!1;let t=0;for(let r of e){if(!Array.isArray(r)||r.length!==2)return!1;let n=r[0],s=r[1];if(typeof n!="string"||s!==null&&typeof s!="string"||(t+=n.length+(s===null?0:s.length),t>w))return!1}return!0};var He=e=>e.dc===C&&W(e.artboardId,100)&&W(e.nonce,64),Ue={"init-ack":()=>!0,"set-mode":e=>ke(e.mode),"hit-test":e=>y(e.x)&&y(e.y),"resolve-anchors":e=>ie(e.anchors,500,De),"scroll-by":e=>y(e.dx)&&y(e.dy),"scroll-to":e=>y(e.x)&&y(e.y),highlight:e=>e.selector===null||O(e.selector,1e3),"edit-probe":e=>y(e.x)&&y(e.y),"set-tokens":e=>ie(e.vars,re,Be),"storage-sync":e=>Pe(e.clear)&&we(e.changes)};var Ye=(e,t)=>{if(!j(t)||!He(t)||typeof t.type!="string"||!Object.hasOwn(e,t.type))return null;let r=e[t.type];return r!==void 0&&r(t)?t:null};var G=e=>Ye(Ue,e);var ve=["data-testid","data-screen","data-dc-id"],Ke=/^(is-|has-|js-|active|hover|focus)/,pe=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,Ve=3,h=e=>e.tagName===e.tagName.toUpperCase()?e.tagName.toLowerCase():e.tagName,de=e=>e.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),Ee=e=>e===""?null:pe.test(e)?`#${e}`:`[id="${de(e)}"]`,Fe=(e,t)=>{try{return e.querySelectorAll(t)}catch{return null}},X=(e,t,r)=>{let n=Fe(e,t);return n!==null&&n.length===1&&n[0]===r},$e=e=>{let t=[];for(let r=0;r<e.classList.length&&t.length<Ve;r+=1){let n=e.classList[r];n!==void 0&&pe.test(n)&&!Ke.test(n)&&t.push(n)}return t},We=e=>{let t=e.parentElement;if(!t)return null;let r=0,n=0;for(let s=0;s<t.children.length;s+=1){let c=t.children[s];!c||c.tagName!==e.tagName||(n+=1,c===e&&(r=n))}return n>1?r:null},ze=e=>{let t=h(e);if(t==="html"||t==="body")return t;let r=$e(e).map(s=>`.${s}`).join(""),n=We(e);return`${t}${r}${n===null?"":`:nth-of-type(${n})`}`},Q=e=>{let t=[...e];for(;t.join(" > ").length>1e3&&t.length>1;)t.shift();return t.join(" > ").slice(0,1e3)},Ae=(e,t)=>{let r=h(e);if(r==="html"||r==="body"||r==="head")return r;let n=Ee(e.id);if(n&&X(t,n,e))return n;for(let u of ve){let E=e.getAttribute(u);if(E===null||E==="")continue;let p=`[${u}="${de(E)}"]`;if(X(t,p,e))return p}let s=[],c=e;for(let u=0;c&&u<6;u+=1){s.unshift(ze(c));let E=s.join(" > ");if(X(t,E,e))return Q(s);let p=c.parentElement;if(!p)break;let _=Ee(p.id);if(_&&X(t,_,p)){let d=[_,...s];if(X(t,d.join(" > "),e))return Q(d)}c=p}return Q(s)};var je=5e3,Qe=/^[A-Za-z][A-Za-z0-9-]*$/,b=e=>e.replace(/\\s+/g," ").trim(),xe=e=>b(e.textContent??"").slice(0,120),qe=e=>e.replace(/&/g,"&amp;").replace(/"/g,"&quot;"),ge=e=>{let t=`<${h(e)}`;for(let r=0;r<e.attributes.length;r+=1){let n=e.attributes[r];n&&(t+=n.value===""?` ${n.name}`:` ${n.name}="${qe(n.value)}"`)}return t+=">",t.length<=200?t:`${t.slice(0,198)}\\u2026>`},Je=e=>{let t=/^<([A-Za-z][A-Za-z0-9:-]*)/.exec(e.trim());return t?.[1]?t[1].toLowerCase():null},Te=(e,t)=>t===null||h(e).toLowerCase()===t,Se=(e,t)=>{try{return e.querySelectorAll(t)}catch{return[]}},fe=(e,t)=>{let r={found:!1,exact:!1,element:null},n=Je(t.html);if(t.selector!==""){let p=Se(e,t.selector);for(let _=0;_<p.length;_+=1){let d=p[_];if(d&&Te(d,n))return{found:!0,exact:!0,element:d}}}let s=b(t.text);if(s.length<12)return r;let c=Se(e,n!==null&&Qe.test(n)?n:"*"),u=null,E=1/0;for(let p=0;p<c.length&&p<je;p+=1){let _=c[p];if(!_||!Te(_,n))continue;let d=b(_.textContent??"");d.startsWith(s)&&d.length<=E&&(u=_,E=d.length)}return u?{found:!0,exact:!1,element:u}:r};var et=new Set(["svg","math","template"]),tt=e=>{for(let t=e;t;t=t.parentElement)if(et.has(h(t).toLowerCase()))return!0;return!1},me=e=>e.getAttribute("data-dc-overlay")!==null,Me=(e,t,r=F)=>{if(me(e))return null;let n=h(e),s=n.toLowerCase();if(s===""||s.length>64)return null;let c=e.getAttribute("id");if(c!==null&&(c===""||c.length>V))return null;let u=b(e.textContent??""),E=u.length>k,p=e.children.length===0,_={tag:s,id:c,leaf:p,text:E?u.slice(0,k+1):u,truncated:E,sameIndex:0,sameCount:0},d=T=>T.children.length===0&&T.getAttribute("id")===c&&!me(T)&&!tt(T)&&b(T.textContent??"")===u;if(!p||!d(e))return _;let f=t.getElementsByTagName(n);if(f.length>r)return _;let R=-1,M=0;for(let T=0;T<f.length;T+=1){let g=f[T];!g||!d(g)||(g===e&&(R=M),M+=1)}return R===-1?_:{..._,sameIndex:R,sameCount:M}};var I=(e,t)=>e.length+(t===null?0:t.length),Re=e=>{if(typeof e!="object"||e===null)return;let t=e;if(typeof t.persist!="boolean"||!Array.isArray(t.items))return;let r=new Set,n=[],s=0;for(let c of t.items){if(!Array.isArray(c)||c.length!==2)return;let u=c[0],E=c[1];if(typeof u!="string"||typeof E!="string"||(s+=I(u,E),s>D))return;r.has(u)||(r.add(u),n.push([u,E]))}return{persist:t.persist,items:n}},nt=(e,t,r={changes:B,chars:w})=>{let n=[],s=[],c=0,u=()=>{n.push({clear:e&&n.length===0,changes:s}),s=[],c=0};for(let E of t){let p=I(E[0],E[1]);s.length>0&&(s.length>=r.changes||c+p>r.chars)&&u(),s.push(E),c+=p}return(s.length>0||e&&n.length===0)&&u(),n},v=e=>`${e}`,K=(e,t,r)=>{if(t.length<r)throw new TypeError(`Failed to execute \'${e}\' on \'Storage\': ${r} argument${r===1?"":"s"} required, but only ${t.length} present.`)},he=(e,t,r)=>{let n=new Map,s=0;for(let[i,l]of e)n.has(i)||(n.set(i,l),s+=I(i,l));let c=null,u=(i,l)=>{let S=n.get(i);s+=I(i,l)-(S===void 0?0:I(i,S)),S===void 0&&(c=null),n.set(i,l)},E=i=>{let l=n.get(i);l!==void 0&&(s-=I(i,l),n.delete(i),c=null)},p=(...i)=>(K("getItem",i,1),n.get(v(i[0]))??null),_=(...i)=>{K("setItem",i,2);let l=v(i[0]),S=v(i[1]),m=n.get(l);if(m===S)return;if(s+I(l,S)-(m===void 0?0:I(l,m))>D)throw t(l);u(l,S),r?.set(l,S)},d=(...i)=>{K("removeItem",i,1);let l=v(i[0]);n.has(l)&&(E(l),r?.set(l,null))},f=()=>{n.size!==0&&(n.clear(),s=0,c=null,r?.clear())},R=(...i)=>{K("key",i,1);let l=Number(i[0])>>>0;return c??(c=[...n.keys()]),c[l]??null},M=Object.create(Object.prototype,{getItem:{value:p,enumerable:!0,configurable:!0,writable:!0},setItem:{value:_,enumerable:!0,configurable:!0,writable:!0},removeItem:{value:d,enumerable:!0,configurable:!0,writable:!0},clear:{value:f,enumerable:!0,configurable:!0,writable:!0},key:{value:R,enumerable:!0,configurable:!0,writable:!0},length:{get:()=>n.size,enumerable:!0,configurable:!0},[Symbol.toStringTag]:{value:"Storage",configurable:!0}}),T=Object.create(M),g=i=>typeof i=="string"&&n.has(i)&&!(i in T);return{storage:new Proxy(T,{get:(i,l,S)=>g(l)?n.get(l):Reflect.get(i,l,S),set:(i,l,S)=>typeof l!="string"?Reflect.set(i,l,S):(_(l,S),!0),has:(i,l)=>typeof l=="string"&&n.has(l)||Reflect.has(i,l),deleteProperty:(i,l)=>g(l)?(d(l),!0):Reflect.deleteProperty(i,l),ownKeys:i=>[...[...n.keys()].filter(l=>!(l in i)),...Reflect.ownKeys(i)],getOwnPropertyDescriptor:(i,l)=>g(l)?{value:n.get(l),writable:!0,enumerable:!0,configurable:!0}:Reflect.getOwnPropertyDescriptor(i,l),defineProperty:(i,l,S)=>typeof l!="string"?Reflect.defineProperty(i,l,S):"get"in S||"set"in S?!1:(_(l,S.value),!0),preventExtensions:()=>!1}),apply:(i,l)=>{i&&(n.clear(),s=0,c=null);for(let[S,m]of l)m===null?E(S):u(S,m)}}},q=(e,t,r)=>{let n=e.DOMException??globalThis.DOMException,s=e.queueMicrotask?.bind(e)??(_=>void Promise.resolve().then(_)),c=_=>new n(`Failed to execute \'setItem\' on \'Storage\': Setting the value of \'${_}\' exceeded the quota.`,"QuotaExceededError"),u=null;if(t?.persist){let _=new Map,d=!1,f=!1,R=()=>{f=!1;let T=[..._],g=d;_=new Map,d=!1;for(let L of nt(g,T))r(L)},M=()=>{f||(f=!0,s(R))};u={set:(T,g)=>{_.delete(T),_.set(T,g),M()},clear:()=>{_.clear(),d=!0,M()}}}let E=he(t?.items??[],c,u),p=he([],c,null);for(let[_,d]of[["localStorage",E],["sessionStorage",p]])try{Object.defineProperty(e,_,{value:d.storage,configurable:!0,enumerable:!0,writable:!1})}catch{}return{sync:(_,d)=>E.apply(_,d)}};var ot=(e,t,r)=>{if(e===void 0)return;let n=G({dc:C,type:"set-tokens",artboardId:t,nonce:r,vars:e});return n?.type==="set-tokens"?n.vars:void 0},ye=e=>{if(typeof e!="object"||e===null)return null;let t=e,{artboardId:r,nonce:n,file:s,mode:c,scroll:u}=t;if(typeof r!="string"||r.length===0||r.length>100||typeof n!="string"||n.length===0||n.length>64||typeof s!="string"||c!=="edit"&&c!=="play"||typeof u!="object"||u===null)return null;let{x:E,y:p}=u;if(typeof E!="number"||typeof p!="number"||!Number.isFinite(E)||!Number.isFinite(p))return null;let _=ot(t.tokens,r,n),d=Re(t.storage);return{artboardId:r,file:s,mode:c,scroll:{x:E,y:p},nonce:n,..._?{tokens:_}:{},...d?{storage:d}:{}}};var Ie="https://design.invalid",J=e=>{try{return decodeURIComponent(e)}catch{return e}},be=(e,t)=>{let r=e.trim();if(r==="")return{kind:"blocked",reason:"empty link"};if(r.startsWith("#"))return{kind:"fragment",id:J(r.slice(1))};let n;try{n=new URL(r,`${Ie}/${t}`)}catch{return{kind:"blocked",reason:"malformed link"}}if(n.origin===Ie){let s=J(n.pathname.replace(/^\\/+/,""));return s===t||s===""?n.hash?{kind:"fragment",id:J(n.hash.slice(1))}:{kind:"blocked",reason:"same page"}:/\\.html?$/i.test(s)?s.length>2e3||n.hash.length>2e3?{kind:"blocked",reason:"link too long"}:{kind:"navigate",href:s,hash:n.hash}:{kind:"blocked",reason:"not a page of this design"}}return(n.protocol==="https:"||n.protocol==="http:")&&n.href.length<=2e3?{kind:"external",url:n.href}:{kind:"blocked",reason:`${n.protocol} links do not open from a design`}},Oe=e=>ne.test(e)?{kind:"navigate",href:`screens/${e}.html`,hash:""}:{kind:"blocked",reason:"unknown screen id"};var st=16,lt=5,ct=300,it=e=>e instanceof Element?!!e.closest(\'input, textarea, select, [contenteditable=""], [contenteditable="true"]\'):!1,at=e=>{let t=e.mode,r=!1,n=window.parent,s=n!==window,c=o=>{n.postMessage({...o,dc:C,artboardId:e.artboardId,nonce:e.nonce},"*")},u=q(window,s?e.storage:void 0,o=>c({type:"storage-batch",...o})),E=[],p=o=>{let a=document.documentElement.style,A=new Set(o.map(x=>x.name));for(let x of E)A.has(x)||a.removeProperty(x);for(let x of o)a.setProperty(x.name,x.value);E=[...A]};if(e.tokens&&p(e.tokens),!s)return;let _=()=>{let o=document.documentElement,a=document.body;return{docWidth:Math.max(o.scrollWidth,a?a.scrollWidth:0),docHeight:Math.max(o.scrollHeight,a?a.scrollHeight:0)}},d=o=>{let a=o.getBoundingClientRect();return{x:a.left+window.scrollX,y:a.top+window.scrollY,w:Math.max(0,a.width),h:Math.max(0,a.height)}},f=(o,a)=>{let A=document.elementFromPoint(o,a);return A&&A!==document.documentElement&&A!==document.body&&!A.hasAttribute("data-dc-overlay")?A:null},R=o=>{let a=o.closest("[data-dc-entry]")?.getAttribute("data-dc-entry")??null;return a!==null&&$(a)?a:null},M=o=>({entry:R(o),selector:Ae(o,document),text:xe(o),html:ge(o),rect:d(o),tag:h(o).slice(0,64)||"element"}),T=null,g=o=>{let a=null;if(o)try{a=document.querySelector(o)}catch{a=null}if(!a){T?.remove(),T=null;return}T||(T=document.createElement("div"),T.setAttribute("data-dc-overlay",""),T.setAttribute("aria-hidden","true"));let A=d(a);T.setAttribute("style",`position:absolute;left:${A.x}px;top:${A.y}px;width:${A.w}px;height:${A.h}px;outline:2px solid Highlight;outline-offset:1px;pointer-events:none;z-index:2147483647;margin:0;padding:0;border:0;background:transparent;`),T.isConnected||document.documentElement.append(T)},L=o=>{switch(o.type){case"init-ack":r=!0;return;case"set-mode":t=o.mode;return;case"hit-test":{let a=f(o.x,o.y);c({type:"hit",x:o.x,y:o.y,element:a?M(a):null});return}case"edit-probe":{let a=f(o.x,o.y),A=a?Me(a,document):null,x=a&&A?{...A,dir:getComputedStyle(a).direction==="rtl"?"rtl":"ltr",rect:d(a)}:null;c({type:"edit-probe-result",x:o.x,y:o.y,probe:x});return}case"set-tokens":p(o.vars);return;case"storage-sync":u.sync(o.clear,o.changes);return;case"resolve-anchors":{let a=o.anchors.map(A=>{let x=fe(document,A);return{id:A.id,found:x.found,exact:x.exact,rect:x.element?d(x.element):null}});c({type:"anchors",results:a});return}case"scroll-by":window.scrollBy(o.dx,o.dy);return;case"scroll-to":window.scrollTo(o.x,o.y);return;case"highlight":g(o.selector);return}};window.addEventListener("message",o=>{if(o.source!==n)return;let a=G(o.data);!a||a.artboardId!==e.artboardId||a.nonce!==e.nonce||L(a)});let i=()=>c({type:"ready",..._(),title:document.title.slice(0,200)}),l=null,S="",m=()=>{l===null&&(l=setTimeout(()=>{l=null;let o=_(),a=`${o.docWidth}x${o.docHeight}`;a!==S&&(S=a,c({type:"size",...o}))},100))},P=!1;window.addEventListener("scroll",()=>{P||(P=!0,requestAnimationFrame(()=>{P=!1,c({type:"scroll",x:window.scrollX,y:window.scrollY})}))},{passive:!0});let ee=()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),i();let o=0,a=setInterval(()=>{o+=1,r||o>lt?clearInterval(a):i()},ct);if(typeof ResizeObserver=="function"){let A=new ResizeObserver(m);A.observe(document.documentElement),document.body&&A.observe(document.body)}typeof MutationObserver=="function"&&new MutationObserver(m).observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,characterData:!0}),m()};document.readyState==="loading"?document.addEventListener("DOMContentLoaded",ee,{once:!0}):ee(),window.addEventListener("load",()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),m()});let te=o=>{switch(o.kind){case"fragment":{if(o.id===""){window.scrollTo(0,0);return}(document.getElementById(o.id)??document.getElementsByName(o.id)[0]??null)?.scrollIntoView();return}case"navigate":c({type:"navigate",href:o.href,hash:o.hash});return;case"external":c({type:"open-external",url:o.url});return;case"blocked":return}};document.addEventListener("click",o=>{let A=(o.target instanceof Element?o.target:null)?.closest("a[href], area[href], [data-dc-goto]")??null;if(!A)return;o.preventDefault();let x=A.getAttribute("data-dc-goto");if(x!==null){te(Oe(x));return}te(be(A.getAttribute("href")??"",e.file))},!0),document.addEventListener("submit",o=>o.preventDefault(),!0),window.addEventListener("wheel",o=>{let a=o.ctrlKey||o.metaKey;if(!a&&t!=="edit")return;o.preventDefault();let A=o.deltaMode===1?st:o.deltaMode===2?window.innerHeight:1;c({type:"wheel",deltaX:o.deltaX*A,deltaY:o.deltaY*A,x:o.clientX,y:o.clientY,ctrl:a})},{passive:!1,capture:!0}),window.addEventListener("keydown",o=>{it(o.target)||ue.includes(o.key)&&c({type:"key",key:o.key,ctrl:o.ctrlKey,meta:o.metaKey,shift:o.shiftKey})},!0)},Ne=ye(window.__DC);Ne?at(Ne):q(window,void 0,()=>{});})();\n' : "";
   var newNonce = () => {
     const bytes = new Uint8Array(12);
     globalThis.crypto.getRandomValues(bytes);
@@ -14826,6 +16303,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           case "path":
             void copyPath(slug);
             return;
+          case "add-to-folder":
+            openAddToFolder(options.actions.host, ref());
+            return;
           case "reveal":
             void revealDesign(slug);
             return;
@@ -14908,6 +16388,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         );
       }
       const notices = createNotices();
+      const warningsBand = mountDesignWarnings();
+      bscope.add(() => warningsBand.dispose());
       let asking = false;
       let askButton = null;
       const setAsking = (busy) => {
@@ -15128,6 +16610,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         paintChips();
         paintViewportOptions();
         paintNotices();
+        warningsBand.set(next.warnings);
         if (isPage && resolvePageView(pageView, next.design.viewports) !== pageView) showPageView(PAGE_FILL_VIEWPORT_ID);
         detailListeners.emit();
       };
@@ -15145,7 +16628,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         })
       );
       const main = h("div", { class: "dc-design-main" }, h("div", { class: "dc-wall-col" }, stage, slots2.bottomDock), dock);
-      replace(el2, toolbar, notices.el, main, compact ? h("footer", { class: "dc-hint" }, FULL_SCREEN_HINT) : null);
+      replace(el2, toolbar, warningsBand.el, notices.el, main, compact ? h("footer", { class: "dc-hint" }, FULL_SCREEN_HINT) : null);
       apply(first);
       refreshHtmlSize();
       if (isPage) {
@@ -15293,10 +16776,17 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
 
   // src/ui/model/new-system-model.ts
   var SOURCES = [
-    { id: "code", label: "Project code", hint: "Read a project\u2019s colours, type and components. The project isn\u2019t changed." },
+    { id: "code", label: "Project code", hint: "Design Chamber reads the CSS and token files it can parse. The agent reads the rest of the project and writes the overview, notes and components. The project isn\u2019t changed." },
     { id: "brand", label: "Brand files", hint: "Fonts, logos and brand documents you already have." },
-    { id: "description", label: "A description", hint: "Say what it should look like, or start from a style preset." }
+    { id: "description", label: "A description", hint: "Say what it should look like, or start from a style preset." },
+    { id: "existing", label: "Existing design system", hint: "Your project already has a system? Point at where it lives. Design Chamber reads its token files; the agent reads its page, docs and components." }
   ];
+  var nextSources = (current, id, checked, context) => {
+    const next = { ...current, [id]: checked };
+    if (checked && (id === "code" || id === "existing")) next[id === "code" ? "existing" : "code"] = false;
+    if (checked && id === "existing" && context.description.trim() === "" && context.preset === "") next.description = false;
+    return next;
+  };
   var systemNameProblem = (raw, existing) => {
     const name = raw.normalize("NFKC").trim();
     if (name === "") return "Give the design system a name.";
@@ -15381,15 +16871,114 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   var SCAN_PARTIAL = "Scanned part of the project; it\u2019s large.";
   var FONT_LICENCE_NOTE = "Check you\u2019re allowed to use these fonts in designs.";
   var forAgentLine = (summary) => summary.forAgent.length === 0 ? null : `${plural(summary.forAgent.length, "file")} Design Chamber doesn\u2019t run. The agent will read ${summary.forAgent.length === 1 ? "it" : "them"}.`;
-  var skippedLine = (summary) => summary.skipped.length + summary.refused === 0 ? null : `${plural(summary.skipped.length + summary.refused, "file")} skipped (too large, secret or unreadable).`;
+  var skippedLine = (summary) => {
+    const total = summary.skipped.length + summary.refused;
+    if (total === 0) return null;
+    const only = summary.skipped[0];
+    if (total === 1 && only !== void 0) return `Skipped ${only.path}. ${only.reason}`;
+    return `${plural(total, "file")} skipped (too large, secret or unreadable).`;
+  };
+  var joinParts = (parts) => {
+    if (parts.length <= 1) return parts[0] ?? "";
+    return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  };
+  var ROOT_LOCATION = ".";
+  var locationValue = (candidatePath) => candidatePath === "" ? ROOT_LOCATION : candidatePath;
+  var locationLabel = (path) => path === "" || path === ROOT_LOCATION ? "the project root" : `${path}/`;
+  var MISSED_LINE = "Design Chamber reads CSS and token JSON. Pages, components and themes written in code are left for the agent.";
+  var missedLine = (summary) => {
+    const { pages, components, codeThemes } = summary.missed;
+    const parts = [
+      pages > 0 ? plural(pages, "page") : null,
+      components > 0 ? plural(components, "component file") : null,
+      codeThemes > 0 ? plural(codeThemes, "theme in code", "themes in code") : null
+    ].filter((part) => part !== null);
+    return parts.length === 0 ? MISSED_LINE : `${MISSED_LINE} It saw ${joinParts(parts)}.`;
+  };
+  var NO_CANDIDATES = "No existing design system found in this project. Point at a folder yourself, or start from the code.";
+  var NOTHING_IN_LOCATION = (folder) => `Design Chamber didn\u2019t find token files in ${folder}. The agent can still read its page and docs and write the system.`;
+  var candidateMarkLine = (candidate) => {
+    const has = (mark) => candidate.marks.includes(mark);
+    const words = [];
+    if (has("contract")) words.push("system.json");
+    if (has("page")) words.push("page");
+    if (has("tokens")) words.push(candidate.marks.length === 1 ? "token files" : "tokens");
+    if (has("docs")) words.push(plural(candidate.counts.docs, "doc"));
+    if (has("components")) words.push(plural(candidate.counts.components, "component"));
+    if (has("theme")) words.push("theme");
+    if (has("docs") && !has("tokens")) words.push("no token files");
+    return words.join(", ");
+  };
+  var candidateCountLine = (candidate) => {
+    if (candidate.registered !== null) return `Already in Design Chamber as ${candidate.registered.name}`;
+    const parts = [
+      candidate.counts.colours > 0 ? plural(candidate.counts.colours, "colour") : null,
+      candidate.counts.tokens > 0 ? plural(candidate.counts.tokens, "token") : null
+    ].filter((part) => part !== null);
+    return parts.length === 0 ? "Nothing to parse" : parts.join(" \xB7 ");
+  };
+  var candidatesNote = (total) => `${plural(total, "place")} found`;
+  var candidatesMoreLine = (more) => `and ${more} more. Type a folder below to use another.`;
+  var nudgeLine = (candidate) => `This project already has a design system in ${locationLabel(candidate.path)}. Start from it instead?`;
+  var leftForAgentLine = (location) => {
+    const parts = [
+      ...location.read.page,
+      location.read.docs.length > 0 ? plural(location.read.docs.length, "doc") : null,
+      location.read.components.length > 0 ? plural(location.read.components.length, "component file") : null
+    ].filter((part) => part !== null);
+    return parts.length === 0 ? null : `Left for the agent: ${joinParts(parts)}.`;
+  };
+  var filesReadLabel = (summary) => `Files read (${summary.read})`;
+  var filesReadMore = (summary) => {
+    const more = Math.max(0, summary.read - summary.files.length);
+    return more === 0 ? null : `and ${more} more with no values.`;
+  };
+  var contractProblemLine = (missing) => {
+    if (missing.includes("a folder inside the project")) {
+      return "The project root can\u2019t be registered as it is. A registered system needs its own folder inside the project. Make a new system from it instead.";
+    }
+    const lost = missing.includes("system.json");
+    const clauses = missing.map((gap) => {
+      if (gap === "system.json") return "system.json went missing";
+      if (gap === "tokens.css") return "tokens.css is missing or holds no token values";
+      if (gap === "a folder path of up to four folders without spaces") return "its folder path must be up to four folders without spaces";
+      if (gap === "a folder Design Chamber can read in full") return "Design Chamber can\u2019t read the whole folder";
+      return gap;
+    });
+    const lead = lost ? "While the folder was read, " : "This folder has a system.json but ";
+    const way = lost ? "Read the folder again, or make a new system from it instead." : "Make a new system from it instead.";
+    return `${lead}${joinParts(clauses)}, so it can\u2019t be registered as it is. ${way}`;
+  };
+  var LOOKING_LABEL = (project) => `Looking for a design system in ${project}\u2026`;
+  var DISCOVERY_IDLE = "Choose a project and Design Chamber looks for a design system in it. Nothing in it is changed.";
+  var LOCATION_HELPER = (project) => `A folder inside ${project}. Design Chamber only reads it.`;
+  var LOCATION_IDLE = "Pick a folder and Design Chamber reads its token files. Nothing in it is changed.";
+  var LOCATION_UNREAD = "This folder hasn\u2019t been read yet. Press Read this folder to see what is in it.";
+  var LOCATION_FAILED_HINT = "The folder wasn\u2019t read. The path field says why.";
+  var REGISTER_CHOICE_LABEL = "Register it as it is";
+  var MAKE_CHOICE_LABEL = "Make a new system from it";
+  var REGISTER_HINT = (project) => `This folder already holds a complete system in Design Chamber\u2019s format. It is registered read-only and opens as a Draft for review. Nothing is written to ${project} and the agent isn\u2019t asked.`;
+  var MAKE_FROM_HINT = "Design Chamber reads the tokens and the agent writes the overview, notes and components. The new system lives in Design Chamber.";
+  var AGENT_DISABLED_HINT = "Only needed when the agent writes the system. Registering it sends no request.";
+  var REPO_UNTOUCHED_LINE = "Your repository stays exactly as it is.";
+  var NAME_SUGGESTED_HELPER = "Suggested from the project. Change it if you like.";
+  var REGISTER_TOAST = (name, project) => `Registered ${name} from ${project}. Review it, then mark it ready.`;
   var draftProblems = (draft, existing) => {
     const problems = [];
     const name = systemNameProblem(draft.name, existing);
     if (name !== null) problems.push({ field: "name", message: name });
     if (draft.sources.code) {
-      if (draft.scan.state === "idle") problems.push({ field: "code", message: "Pick the project to read, or untick Project code." });
-      else if (draft.scan.state === "running") problems.push({ field: "code", message: "Wait for the scan to finish, or cancel it and untick Project code." });
-      else if (draft.scan.state === "failed") problems.push({ field: "code", message: "Pick a folder Design Chamber can read, or untick Project code." });
+      if (draft.scan.project.state === "idle") problems.push({ field: "code", message: "Pick the project to read, or untick Project code." });
+      else if (draft.scan.project.state === "running") problems.push({ field: "code", message: "Wait for the scan to finish, or cancel it and untick Project code." });
+      else if (draft.scan.project.state === "failed") problems.push({ field: "code", message: "Pick a folder Design Chamber can read, or untick Project code." });
+    }
+    if (draft.sources.existing) {
+      const { project, location } = draft.scan;
+      if (project.state === "idle") problems.push({ field: "existing", message: "Pick the project to read, or untick Existing design system." });
+      else if (project.state === "running") problems.push({ field: "existing", message: "Wait for Design Chamber to look through the project." });
+      if (location.state === "idle") problems.push({ field: "existing", message: "Pick where the system lives, or type its folder." });
+      else if (location.state === "running") problems.push({ field: "existing", message: "Wait for Design Chamber to read that folder." });
+      else if (location.state === "failed") problems.push({ field: "existing", message: location.message });
     }
     if (draft.sources.brand) {
       if (draft.brand.files.length === 0 && draft.brand.folder.trim() === "") problems.push({ field: "brand", message: "Add brand files, or untick Brand files." });
@@ -15408,7 +16997,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   var DESCRIPTION_MAX = 2e3;
   var DESCRIPTION_PLACEHOLDER = "e.g. Calm and confident for a bookkeeping app. Deep green and warm neutrals, a serif for headings, generous space.";
   var MAKE_LABEL = "Make design system";
-  var SHEET_SUBTITLE = "Starts as a draft you review. Your chat agent writes the notes and components.";
+  var REGISTER_LABEL = "Register design system";
+  var SHEET_SUBTITLE = "Start it from what you already have. Nothing is made until you press the button below.";
   var resultClause = (refused, sent) => {
     const files = refused === 1 ? "1 file wasn\u2019t added" : `${refused} files weren\u2019t added`;
     if (refused > 0 && !sent) return `${files} and the agent wasn\u2019t asked`;
@@ -15420,1050 +17010,6 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     return `${clause.charAt(0).toUpperCase()}${clause.slice(1)}.`;
   };
   var resultToast = (name, refused, sent) => `${name} is made, but ${resultClause(refused, sent)}.`;
-
-  // src/ui/model/systems-model.ts
-  var SYSTEM_ROW_BADGES_MAX = 2;
-  var pinnedLabel = (directories, label) => {
-    const [only] = directories;
-    return directories.length === 1 && only !== void 0 ? `Pinned for ${label(only)}` : `Pinned for ${plural(directories.length, "project")}`;
-  };
-  var LIVING_PAGE_BADGE = {
-    "out-of-date": { label: "Living page out of date", tone: "warning" },
-    changed: { label: "Living page changed", tone: "warning" },
-    unsafe: { label: "Living page can\u2019t be checked", tone: "error" }
-  };
-  var systemRowBadges = (summary, label) => {
-    const all = [];
-    if (summary.building) all.push({ id: "building", label: "Being built", tone: "info" });
-    if (summary.changesToReview) all.push({ id: "changes", label: "Changes to review", tone: "warning" });
-    if (summary.isDefault) all.push({ id: "default", label: "Default", tone: "neutral" });
-    if (summary.pinnedFor.length > 0) all.push({ id: "pinned", label: pinnedLabel(summary.pinnedFor, label), tone: "neutral" });
-    const living = summary.livingPage === null ? void 0 : LIVING_PAGE_BADGE[summary.livingPage];
-    if (living) all.push({ id: "living", ...living });
-    return { shown: all.slice(0, SYSTEM_ROW_BADGES_MAX), hidden: all.slice(SYSTEM_ROW_BADGES_MAX) };
-  };
-  var sourceLine = (sources, label) => [
-    ...sources.code ? [`From ${label(sources.code.directory)}`] : [],
-    ...sources.brand > 0 ? ["From brand files"] : [],
-    ...sources.description ? ["Described"] : []
-  ];
-  var usedByLine = (count) => count === 0 ? "Not used by a design yet" : `Used by ${plural(count, "design")}`;
-  var homeLine = (summary) => summary.home === "internal" ? { label: "In Design Chamber", title: "Kept in your Designs folder" } : { label: `Repo \xB7 ${summary.home.repo}`, title: summary.home.directory };
-  var sharedRepoNotice = (summary) => summary.home !== "internal" && summary.sharedRepoWith !== null ? `${summary.home.repo} already has a repo-backed system (${summary.sharedRepoWith}).` : null;
-  var systemRow = (summary, context) => {
-    const badges = systemRowBadges(summary, context.label);
-    const home = homeLine(summary);
-    const updated = relativeTime(summary.updated, context.nowMs, context.locale);
-    const meta = [...sourceLine(summary.sources, context.label), usedByLine(summary.usedBy), ...updated === "" ? [] : [updated]];
-    const status = summary.status === "ready" ? { label: "Ready", tone: "success" } : { label: "Draft", tone: "info" };
-    const notice = sharedRepoNotice(summary);
-    const hiddenLabels = badges.hidden.map((badge) => badge.label);
-    const spoken = [summary.name, status.label, home.label, ...badges.shown.map((badge) => badge.label), ...hiddenLabels];
-    return {
-      id: summary.id,
-      name: summary.name,
-      unreadable: summary.unreadable,
-      status,
-      home,
-      badges: badges.shown,
-      more: badges.hidden.length > 0 ? { text: `+${badges.hidden.length}`, title: hiddenLabels.join(", ") } : null,
-      notice,
-      meta,
-      ariaLabel: summary.unreadable !== null ? `${summary.name}, can\u2019t be read` : `${spoken.join(", ")}. ${meta.join(", ")}.`
-    };
-  };
-  var systemsListState = (load) => {
-    if (load.systems === null) return load.status === "error" ? "error" : "loading";
-    return load.systems.length === 0 ? "empty" : "ready";
-  };
-  var SERVICE_DOWN_CODES = /* @__PURE__ */ new Set(["NO_SERVICE", "SERVICE_FAILED", "HOST_TIMEOUT", "REQUEST_FAILED", "DISABLED", "HOST_UNAVAILABLE"]);
-  var isServiceDownCode = (code) => SERVICE_DOWN_CODES.has(code);
-  var loadFailure = (error) => {
-    const message = error?.message ?? "Try again in a moment.";
-    return error !== null && isServiceDownCode(error.code) ? { title: "Design Chamber isn\u2019t running", body: message } : { title: "Your design systems didn\u2019t load", body: message };
-  };
-  var deleteSentence = (usedBy) => usedBy === 0 ? "It moves to the trash." : usedBy === 1 ? "It moves to the trash. The design that uses it keeps its copy." : `It moves to the trash. The ${usedBy} designs that use it keep their copy.`;
-  var EMPTY_TITLE = "No design systems yet";
-  var EMPTY_BODY = "Make one from a project\u2019s code, from brand files, or by describing it. Designs can then start from it.";
-  var atSystemsCap = (total, max) => total >= max ? `You have ${max} design systems, the most Design Chamber keeps. Delete one to make room.` : null;
-  var systemMenu = (summary) => {
-    const readable = summary.unreadable === null;
-    return [
-      ...readable ? [{ id: "open", label: "Open" }] : [],
-      ...readable ? summary.isDefault ? [{ id: "remove-default", label: "Remove as default" }] : [{ id: "make-default", label: "Make default", ...summary.status === "draft" ? { disabled: true, reason: "Mark it ready first." } : {} }] : [],
-      { id: "reveal", label: "Reveal in folder" },
-      ...readable ? [{ id: "rename", label: "Rename" }] : [],
-      { separator: true },
-      { id: "delete", label: "Delete\u2026", destructive: true }
-    ];
-  };
-
-  // src/ui/model/system-build-model.ts
-  var BUILD_POLL_FAILURES_MAX = 3;
-  var BUILD_CHIP_TITLE = "New design system";
-  var startBuildChip = () => ({ phase: "loading", failures: 0 });
-  var afterAnswer = (model, answer) => {
-    if (model.phase === "made" || model.phase === "expired") return model;
-    if (answer.state === "waiting") return { phase: "waiting", project: answer.project?.label ?? null, failures: 0 };
-    if (answer.state === "made") return { phase: "made", id: answer.id, name: answer.name, probe: "checking" };
-    return { phase: "expired" };
-  };
-  var afterFailure = (model, error) => {
-    if (model.phase === "made" || model.phase === "expired") return model;
-    if (isServiceDownCode(error.code)) return { phase: "service-down", message: error.message };
-    const failures = (model.phase === "loading" || model.phase === "waiting" ? model.failures : 0) + 1;
-    if (failures >= BUILD_POLL_FAILURES_MAX) return { phase: "failed", message: error.message };
-    return model.phase === "waiting" ? { ...model, failures } : { phase: "loading", failures };
-  };
-  var afterProbe = (model, probe) => model.phase === "made" ? { ...model, probe } : model;
-  var keepsPolling = (model) => model.phase === "loading" || model.phase === "waiting";
-  var CONTINUE = { id: "continue-chat", label: "Continue in chat", primary: true };
-  var TRY_AGAIN = { id: "try-again", label: "Try again", primary: true };
-  var WAITING_BODY = "The agent is interviewing you in chat. The design system shows here once it\u2019s started.";
-  var STOPPED_BODY = "This build was stopped. Its draft is in the Designs folder\u2019s trash.";
-  var EXPIRED_BODY = "This build was started more than a week ago. Run /design-system again.";
-  var chipView = (model) => {
-    const base = { title: BUILD_CHIP_TITLE, tone: "neutral", spinner: null, body: null, note: null, problem: null, actions: [] };
-    switch (model.phase) {
-      case "loading":
-        return { ...base, state: "loading", spinner: "Checking the build\u2026" };
-      case "waiting":
-        return { ...base, state: "waiting", tone: "info", body: WAITING_BODY, note: model.project === null ? null : `Project: ${model.project}`, actions: [CONTINUE] };
-      case "made":
-        if (model.probe === "checking" || model.probe === "present") return { ...base, state: "opening", title: model.name, tone: "info", spinner: `Opening ${model.name}\u2026` };
-        if (model.probe === "gone") return { ...base, state: "stopped", tone: "warning", body: STOPPED_BODY, actions: [CONTINUE] };
-        return {
-          ...base,
-          state: "made",
-          title: model.name,
-          tone: "info",
-          body: `${model.name} was started, but Design Chamber couldn\u2019t open it just now.`,
-          actions: [
-            { id: "open-system", label: "Open system", primary: true },
-            { ...CONTINUE, primary: false }
-          ]
-        };
-      case "expired":
-        return { ...base, state: "expired", body: EXPIRED_BODY };
-      case "service-down":
-        return { ...base, state: "service-down", tone: "error", problem: { title: "Design Chamber isn\u2019t running", body: model.message }, actions: [TRY_AGAIN] };
-      case "failed":
-        return { ...base, state: "failed", tone: "error", problem: { title: "Couldn\u2019t check the build", body: model.message }, actions: [TRY_AGAIN] };
-    }
-  };
-  var BUILD_DESTINATION_LABEL = { "current-chat": "This chat", "new-chat": "New chat" };
-  var buildSetup = (context) => ({
-    offered: [
-      { id: "current-chat", label: BUILD_DESTINATION_LABEL["current-chat"] },
-      ...context.hasProject ? [{ id: "new-chat", label: BUILD_DESTINATION_LABEL["new-chat"] }] : []
-    ],
-    initial: context.hasSession || !context.hasProject ? "current-chat" : "new-chat"
-  });
-  var destinationHint = (destination, context) => {
-    if (destination === "current-chat") {
-      return context.hasSession ? { text: "The agent interviews you in the chat you have open.", blocked: false } : { text: "No chat is open right now. Open one first.", blocked: true };
-    }
-    return { text: "Starts a chat in this project.", blocked: false };
-  };
-  var briefProblem = (brief) => brief.length > BRIEF_MAX ? `Keep it under ${BRIEF_MAX} characters.` : null;
-  var startedText = (result) => {
-    switch (result.outcome) {
-      case "sent":
-        return "Asked the agent to build a design system. Answer its questions in the chat.";
-      case "composed":
-        return "The agent is busy, so the request is waiting in the chat composer.";
-      case "new-session":
-        return "Started a chat for the agent. Answer its questions there.";
-    }
-  };
-  var NOT_SENT_TITLE = "Couldn\u2019t ask the agent";
-  var NOT_SENT_BODY = "The request didn\u2019t reach a chat. Your words are still here.";
-
-  // src/ui/systems/build-with-agent.ts
-  var BUILD_BUTTON_LABEL = "Build with the agent\u2026";
-  var BRIEF_ROWS = 3;
-  var openBuildWithAgent = (appHost, anchor) => {
-    const scope = createScope();
-    const context = () => ({ hasSession: host.session() !== null, hasProject: Boolean(host.snapshot()?.directory) });
-    const setup = buildSetup(context());
-    let destination = setup.initial;
-    let brief = "";
-    let unsent = null;
-    const popover = openPopover(appHost, anchor, { title: BUILD_BUTTON_LABEL.replace("\u2026", ""), onClose: () => scope.dispose() });
-    const briefHost = h("div");
-    const briefField = mountTextField(briefHost, {
-      label: "What is it for? (optional)",
-      value: brief,
-      multiline: true,
-      rows: BRIEF_ROWS,
-      placeholder: "A shop for hand-made candles, calm and warm",
-      onChange: (next) => {
-        brief = next;
-        unsent = null;
-        const error = briefProblem(next);
-        briefField.update({ value: next, error: error ?? void 0 });
-        paint();
-      }
-    });
-    scope.add(() => briefField.dispose());
-    const destHost = h("div", { class: "dc-field" });
-    const destLabel = h("span", { class: "oc-sdk-field-label" }, "Agent works in");
-    const tabsHost = h("div");
-    destHost.append(destLabel, tabsHost);
-    const tabs = mountTabs(tabsHost, {
-      items: setup.offered,
-      activeId: destination,
-      trackBackground: true,
-      onChange: (id) => {
-        destination = id === "new-chat" ? "new-chat" : "current-chat";
-        tabs.update({ activeId: destination });
-        unsent = null;
-        paint();
-      }
-    });
-    scope.add(() => tabs.dispose());
-    const hint = h("p", { class: "oc-sdk-field-note" });
-    destHost.append(hint);
-    const failure = h("div", { class: "dc-build-failure", role: "alert", hidden: true });
-    popover.body.append(h("div", { class: "dc-build-form" }, briefHost, destHost, failure));
-    const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => popover.close() });
-    const copy = btn({
-      label: "Copy request",
-      variant: "outline",
-      icon: "copy",
-      onClick: () => {
-        if (unsent === null) return;
-        void host.writeClipboard(unsent).then((ok) => toast(ok ? "success" : "error", ok ? "Request copied. Paste it into a chat." : "Couldn\u2019t reach the clipboard. Select the text and copy it by hand."));
-      }
-    });
-    const start = btn({ label: "Start", variant: "default", emphasis: "primary", onClick: () => void submit() });
-    copy.el.hidden = true;
-    popover.foot.append(h("span", { class: "dc-pop-actions" }, copy.el), h("span", { class: "dc-pop-actions" }, cancel.el, start.el));
-    const paint = () => {
-      const note = destinationHint(destination, context());
-      hint.textContent = note.text;
-      start.set({ disabled: note.blocked || briefProblem(brief) !== null });
-      if (unsent === null) {
-        failure.hidden = true;
-        failure.replaceChildren();
-        copy.el.hidden = true;
-        start.set({ label: "Start" });
-      }
-    };
-    const showNotSent = (text) => {
-      unsent = text;
-      failure.replaceChildren(h("strong", null, NOT_SENT_TITLE), h("span", null, ` ${NOT_SENT_BODY}`));
-      failure.hidden = false;
-      copy.el.hidden = false;
-      start.set({ label: "Try again", loading: false, disabled: false });
-      popover.reposition();
-    };
-    const submit = async () => {
-      start.set({ loading: true });
-      cancel.set({ disabled: true });
-      try {
-        const result = await flows.buildSystem({ brief, destination });
-        if (result.outcome === "not-sent") {
-          showNotSent(result.text);
-          return;
-        }
-        toast("success", startedText(result));
-        popover.close(false);
-      } catch (error) {
-        if (error instanceof FlowError) {
-          failure.replaceChildren(h("span", null, error.message));
-          failure.hidden = false;
-          popover.reposition();
-        } else toast("error", `Couldn\u2019t start the build. ${errorText2(error)}`);
-      } finally {
-        start.set({ loading: false });
-        cancel.set({ disabled: false });
-      }
-    };
-    paint();
-    popover.reposition();
-    briefHost.querySelector("textarea")?.focus();
-  };
-
-  // src/ui/systems/new-system-sheet.ts
-  var OTHER_FOLDER = "__other";
-  var SCAN_POLL_MS = 500;
-  var openNewSystemSheet = (hostEl, options = {}) => {
-    const scope = createScope();
-    let closed = false;
-    const sheet = openSheet(hostEl, {
-      title: "New design system",
-      variant: "dialog",
-      subtitle: SHEET_SUBTITLE,
-      onClose: () => {
-        closed = true;
-        cancelScan();
-        scope.dispose();
-      }
-    });
-    sheet.el.classList.add("dc-newsys");
-    const sources = { code: options.source === "code", brand: options.source === "brand", description: options.source === "description" || options.source === void 0 };
-    let name = "";
-    let nameTouched = false;
-    let destination = "new-chat";
-    let description = "";
-    let preset = "";
-    let scan = { state: "idle" };
-    const ticked = /* @__PURE__ */ new Set();
-    let projects = [];
-    let projectChoice = "";
-    let otherFolder = "";
-    let files = [];
-    const picked = /* @__PURE__ */ new Map();
-    let refused = [];
-    let brandFolder = "";
-    let folderOpen = false;
-    let making = false;
-    let attempted = false;
-    let problems = [];
-    const nameHost = h("div");
-    const nameField = mountTextField(nameHost, {
-      label: "Name",
-      value: name,
-      placeholder: "e.g. Acme",
-      onChange: (next) => {
-        name = next;
-        nameTouched = true;
-        nameField.update({ value: next });
-        if (attempted) paintProblems();
-      }
-    });
-    scope.add(() => nameField.dispose());
-    const checks = /* @__PURE__ */ new Map();
-    const panels = /* @__PURE__ */ new Map();
-    const problemLines = /* @__PURE__ */ new Map();
-    const sourceBlock = (id, body) => {
-      const entry = SOURCES.find((candidate) => candidate.id === id);
-      if (!entry) throw new Error(`Design Chamber: unknown source ${id}`);
-      const head = h("div", { class: "dc-newsys-head" });
-      const check = mountCheckbox(head, {
-        label: entry.label,
-        description: entry.hint,
-        checked: sources[id],
-        onChange: (checked) => {
-          sources[id] = checked;
-          paintSources();
-          if (id === "code" && checked) void startDefaultScan();
-          if (id === "code" && !checked) cancelScan();
-        }
-      });
-      checks.set(id, check);
-      scope.add(() => check.dispose());
-      const problem = h("p", { class: "dc-form-error", role: "alert", hidden: true });
-      problemLines.set(id, problem);
-      const panel = h("div", { class: "dc-newsys-body" }, body, problem);
-      panels.set(id, panel);
-      return h("section", { class: "dc-newsys-source", "data-source": id }, head, panel);
-    };
-    const paintSources = () => {
-      for (const [id, panel] of panels) {
-        panel.hidden = !sources[id];
-        checks.get(id)?.update({ checked: sources[id] });
-      }
-      if (attempted) paintProblems();
-    };
-    const projectHost = h("div", { class: "dc-field" });
-    let projectSelect = null;
-    const otherHost = h("div", { class: "dc-newsys-other", hidden: true });
-    const otherId = nextId2("dc-newsys-folder");
-    const otherInput = h("input", { type: "text", id: otherId, class: "oc-sdk-input", placeholder: "C:\\Projects\\shop or /Users/you/shop", spellcheck: "false", autocomplete: "off" });
-    const otherScan = btn({ label: "Read this folder", variant: "outline", size: "sm", onClick: () => void scanFolder(otherFolder) });
-    otherHost.append(h("div", { class: "dc-field" }, h("label", { class: "oc-sdk-field-label", for: otherId }, "Project folder"), h("div", { class: "dc-newsys-row" }, otherInput, otherScan.el)));
-    otherInput.addEventListener("input", () => {
-      otherFolder = otherInput.value;
-    });
-    otherInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        void scanFolder(otherFolder);
-      }
-    });
-    const scanHost = h("div", { class: "dc-newsys-scan", "aria-live": "polite" });
-    const codeBody = h("div", { class: "dc-newsys-stack" }, projectHost, otherHost, scanHost);
-    const projectOptions = () => [
-      ...projects.map((project) => ({ id: project.directory, label: project.name, hint: middlePath(project.directory, 28) })),
-      { id: OTHER_FOLDER, label: "Other folder\u2026" }
-    ];
-    const paintProject = () => {
-      projectSelect?.update({ options: projectOptions(), value: projectChoice === "" ? null : projectChoice });
-      otherHost.hidden = projectChoice !== OTHER_FOLDER;
-    };
-    projectSelect = mountSelect(projectHost, {
-      label: "Project",
-      value: null,
-      options: projectOptions(),
-      placeholder: "Choose a project",
-      onChange: (id) => {
-        projectChoice = id;
-        paintProject();
-        if (id === OTHER_FOLDER) {
-          otherInput.focus();
-          return;
-        }
-        void scanFolder(id);
-      }
-    });
-    scope.add(() => projectSelect?.dispose());
-    let scanTicket = 0;
-    let scanJob = null;
-    let scanTimer = null;
-    function cancelScan() {
-      scanTicket += 1;
-      if (scanTimer !== null) clearTimeout(scanTimer);
-      scanTimer = null;
-      const job = scanJob;
-      scanJob = null;
-      if (job !== null) {
-        client.call("DELETE /system-scans/:scanId", { params: { scanId: job } }).catch((error) => {
-          console.warn("Design Chamber: the scan could not be cancelled; the service ends it on its own", error);
-        });
-      }
-    }
-    const scanFolder = async (directory) => {
-      const folder = directory.trim();
-      if (folder === "") {
-        scan = { state: "failed", directory: "", message: "Type the full path of the folder to read." };
-        paintScan();
-        return;
-      }
-      cancelScan();
-      const mine = scanTicket;
-      scan = { state: "running", directory: folder, seen: 0 };
-      ticked.clear();
-      paintScan();
-      try {
-        const { scanId } = await client.call("POST /system-scans", { body: { directory: folder } });
-        if (mine !== scanTicket) {
-          client.call("DELETE /system-scans/:scanId", { params: { scanId } }).catch(() => void 0);
-          return;
-        }
-        scanJob = scanId;
-        const poll = async () => {
-          try {
-            const answer = await client.call("GET /system-scans/:scanId", { params: { scanId } });
-            if (mine !== scanTicket) return;
-            if (answer.state === "running") {
-              scan = { state: "running", directory: folder, seen: answer.seen };
-              paintScan();
-              scanTimer = setTimeout(() => void poll(), SCAN_POLL_MS);
-              return;
-            }
-            scanJob = null;
-            if (answer.state === "done") {
-              scan = { state: "done", directory: folder, scanId, summary: answer.summary };
-              for (const asset of answer.summary.assets) ticked.add(asset.path);
-              if (!nameTouched && name.trim() === "") suggestName(folder);
-            } else scan = { state: "failed", directory: folder, message: answer.message };
-            paintScan();
-          } catch (error) {
-            if (mine !== scanTicket) return;
-            scanJob = null;
-            scan = { state: "failed", directory: folder, message: errorText2(error) };
-            paintScan();
-          }
-        };
-        await poll();
-      } catch (error) {
-        if (mine !== scanTicket) return;
-        scan = { state: "failed", directory: folder, message: errorText2(error) };
-        paintScan();
-      }
-    };
-    const suggestName = (directory) => {
-      const match = projects.find((project) => sameDirectory(project.directory, directory));
-      name = match?.name ?? folderName(directory);
-      nameField.update({ value: name });
-    };
-    const startDefaultScan = async () => {
-      if (scan.state !== "idle" || projectChoice === "" || projectChoice === OTHER_FOLDER) return;
-      await scanFolder(projectChoice);
-    };
-    const summaryDetails = (summary) => {
-      const list = h("ul", { class: "dc-newsys-files" }, ...summary.files.slice(0, 40).map((file) => h("li", null, h("span", { class: "dc-path" }, file.path), h("span", { class: "dc-muted" }, plural(file.found, "value")))));
-      const more = summary.files.length > 40 ? h("p", { class: "dc-muted" }, `and ${summary.files.length - 40} more.`) : null;
-      return h("details", { class: "dc-newsys-details" }, h("summary", null, `Files read (${summary.files.length})`), list, more);
-    };
-    const paintScan = () => {
-      scanHost.replaceChildren();
-      if (attempted) paintProblems();
-      if (scan.state === "idle") {
-        const chosen = projectChoice === "" || projectChoice === OTHER_FOLDER ? null : projectChoice;
-        if (chosen === null && projectChoice === "" && projects.length > 0) scanHost.append(h("p", { class: "dc-muted" }, "Choose a project and Design Chamber reads its colours, type and spacing. Nothing in it is changed."));
-        if (chosen !== null) scanHost.append(btn({ label: `Read ${projects.find((project) => sameDirectory(project.directory, chosen))?.name ?? folderName(chosen)}`, variant: "outline", size: "sm", onClick: () => void scanFolder(chosen) }).el);
-        return;
-      }
-      if (scan.state === "running") {
-        const spinnerHost = h("div", { class: "dc-newsys-running" });
-        mountSpinner(spinnerHost, { label: scan.seen > 0 ? `Reading ${folderName(scan.directory)}\u2026 ${plural(scan.seen, "file")} looked at` : `Reading ${folderName(scan.directory)}\u2026` });
-        scanHost.append(spinnerHost, btn({ label: "Cancel scan", variant: "ghost", size: "xs", onClick: () => {
-          cancelScan();
-          scan = { state: "idle" };
-          paintScan();
-        } }).el);
-        return;
-      }
-      if (scan.state === "failed") {
-        scanHost.append(h("p", { class: "dc-form-error", role: "alert" }, scan.message), h("p", { class: "dc-muted" }, "What you typed is kept. Pick another folder, or untick Project code."));
-        return;
-      }
-      const { summary } = scan;
-      const sentence2 = scanSummarySentence(summary);
-      const lines = [sentence2 === null ? h("p", { class: "dc-muted" }, SCAN_NOTHING_FOUND) : h("p", { class: "dc-newsys-found" }, icon2("check", 14), sentence2)];
-      if (summary.partial) lines.push(h("p", { class: "dc-muted" }, SCAN_PARTIAL));
-      const agentLine = forAgentLine(summary);
-      if (agentLine) lines.push(h("p", { class: "dc-muted" }, agentLine));
-      const skipped = skippedLine(summary);
-      if (skipped) lines.push(h("p", { class: "dc-muted" }, skipped));
-      if (summary.files.length > 0) lines.push(summaryDetails(summary));
-      if (summary.assets.length > 0) {
-        const group2 = h("div", { class: "dc-newsys-assets" }, h("span", { class: "oc-sdk-field-label" }, "Copy into the system"));
-        for (const asset of summary.assets) {
-          const holder = h("div");
-          const label = asset.family ? `${asset.family}${asset.weight ? ` ${asset.weight}` : ""}` : folderName(asset.path);
-          const handle = mountCheckbox(holder, {
-            label: `${asset.kind === "font" ? "Font" : "Logo"}: ${label}`,
-            description: `${asset.path} \xB7 ${fileSize(asset.bytes, host.snapshot()?.locale ?? "en")}`,
-            checked: ticked.has(asset.path),
-            onChange: (checked) => void (checked ? ticked.add(asset.path) : ticked.delete(asset.path))
-          });
-          scope.add(() => handle.dispose());
-          group2.append(holder);
-        }
-        if (summary.assets.some((asset) => asset.kind === "font")) group2.append(h("p", { class: "dc-muted" }, FONT_LICENCE_NOTE));
-        lines.push(group2);
-      }
-      scanHost.append(...lines);
-    };
-    const fileInput = h("input", { type: "file", multiple: true, accept: BRAND_ACCEPT, hidden: true, "aria-hidden": "true", tabindex: "-1" });
-    const dropZone = h("div", { class: "dc-newsys-drop", "data-drop": "idle" });
-    const chooseFiles = btn({ label: "Choose files\u2026", variant: "outline", size: "sm", icon: "plus", onClick: () => fileInput.click() });
-    dropZone.append(h("span", { class: "dc-newsys-drop-text" }, "Drop files here, or"), chooseFiles.el, h("span", { class: "dc-muted dc-newsys-drop-types" }, BRAND_TYPES_LINE));
-    const fileList = h("ul", { class: "dc-newsys-picked", "aria-label": "Brand files to add" });
-    const refusedList = h("ul", { class: "dc-newsys-refused", "aria-label": "Files that can\u2019t be added", role: "status" });
-    const folderHost = h("div", { class: "dc-newsys-other", hidden: true });
-    const folderId = nextId2("dc-newsys-brand-folder");
-    const folderInput = h("input", { type: "text", id: folderId, class: "oc-sdk-input", placeholder: "C:\\Brand or /Users/you/Brand", spellcheck: "false", autocomplete: "off" });
-    folderHost.append(h("div", { class: "dc-field" }, h("label", { class: "oc-sdk-field-label", for: folderId }, "Brand folder"), folderInput), h("p", { class: "dc-muted" }, "Design Chamber reads the files directly in it, not in folders inside it. The folder isn\u2019t changed."));
-    folderInput.addEventListener("input", () => {
-      brandFolder = folderInput.value;
-    });
-    const folderToggle = btn({ label: "Add from a folder\u2026", variant: "ghost", size: "sm", icon: "folder", onClick: () => {
-      folderOpen = !folderOpen;
-      folderHost.hidden = !folderOpen;
-      if (folderOpen) folderInput.focus();
-      else {
-        brandFolder = "";
-        folderInput.value = "";
-      }
-    } });
-    const brandBody = h("div", { class: "dc-newsys-stack" }, dropZone, fileInput, fileList, refusedList, folderToggle.el, folderHost);
-    const paintFiles = () => {
-      const locale = host.snapshot()?.locale ?? "en";
-      fileList.replaceChildren(
-        ...files.map((file) => {
-          const remove2 = iconBtn({ icon: "close", label: `Remove ${file.name}`, size: "sm", onClick: () => {
-            picked.delete(file.key);
-            files = files.filter((entry) => entry.key !== file.key);
-            paintFiles();
-          } });
-          return h("li", { class: "dc-newsys-file" }, h("span", { class: "dc-newsys-file-name", title: file.name }, file.name), h("span", { class: "dc-muted dc-newsys-file-meta" }, `${KIND_LABEL[file.kind]} \xB7 ${fileSize(file.bytes, locale)}`), remove2);
-        })
-      );
-      fileList.hidden = files.length === 0;
-      refusedList.replaceChildren(...refused.map((entry) => h("li", null, icon2("alert", 14), h("span", null, entry.reason))));
-      refusedList.hidden = refused.length === 0;
-    };
-    const KIND_LABEL = { font: "Font", logo: "Logo", source: "Document" };
-    const take = (list) => {
-      if (!list || list.length === 0) return;
-      const incoming = Array.from(list).map((file) => ({ key: `${file.name}\0${file.size}\0${file.lastModified}`, name: file.name, bytes: file.size, file }));
-      const result = takeBrandFiles(incoming, files);
-      for (const entry of result.added) {
-        const source = incoming.find((candidate) => candidate.key === entry.key);
-        if (source) picked.set(entry.key, source.file);
-      }
-      files = [...files, ...result.added];
-      refused = result.refused;
-      paintFiles();
-      if (attempted) paintProblems();
-    };
-    fileInput.addEventListener("change", () => {
-      take(fileInput.files);
-      fileInput.value = "";
-    });
-    for (const type of ["dragenter", "dragover"]) {
-      dropZone.addEventListener(type, (event) => {
-        event.preventDefault();
-        if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
-        dropZone.dataset.drop = "over";
-      });
-    }
-    dropZone.addEventListener("dragleave", () => void (dropZone.dataset.drop = "idle"));
-    dropZone.addEventListener("drop", (event) => {
-      event.preventDefault();
-      dropZone.dataset.drop = "idle";
-      take(event.dataTransfer?.files ?? null);
-    });
-    const descHost = h("div");
-    const descField = mountTextField(descHost, {
-      label: "What should it look like?",
-      value: description,
-      multiline: true,
-      rows: 4,
-      placeholder: DESCRIPTION_PLACEHOLDER,
-      helper: `Up to ${DESCRIPTION_MAX.toLocaleString("en-US")} characters.`,
-      onChange: (next) => {
-        description = next;
-        descField.update({ value: next });
-        if (attempted) paintProblems();
-      }
-    });
-    scope.add(() => descField.dispose());
-    const presetHost = h("div", { class: "dc-field" });
-    const presetSelect = mountSelect(presetHost, { label: "Start from a style preset", value: "", options: presetOptions([]), disabled: true, onChange: (id) => void (preset = id) });
-    scope.add(() => presetSelect.dispose());
-    const presetNote = h("p", { class: "oc-sdk-field-note", hidden: true });
-    presetHost.append(presetNote);
-    const paintPresets = () => {
-      const state = store.getState().presets;
-      if (state.status === "ready" && state.data) presetSelect.update({ options: presetOptions(state.data.presets), disabled: false, value: preset });
-      if (state.status === "error") {
-        presetNote.textContent = "Style presets didn\u2019t load. You can still describe the look yourself.";
-        presetNote.hidden = false;
-      }
-    };
-    scope.add(store.subscribe(paintPresets));
-    void store.loadPresets();
-    paintPresets();
-    const descriptionBody = h("div", { class: "dc-newsys-stack" }, descHost, presetHost);
-    const destHost = h("div", { class: "dc-field" }, h("span", { class: "oc-sdk-field-label" }, "Agent works in"));
-    const destTabs = mountTabs(destHost, {
-      items: DESTINATIONS.map(({ id, label }) => ({ id, label })),
-      activeId: destination,
-      trackBackground: true,
-      onChange: (id) => {
-        destination = id === "current-chat" ? "current-chat" : "new-chat";
-        destTabs.update({ activeId: destination });
-        paintDest();
-      }
-    });
-    scope.add(() => destTabs.dispose());
-    const destHint = h("p", { class: "oc-sdk-field-note" });
-    destHost.append(destHint);
-    const paintDest = () => {
-      const noSession = destination === "current-chat" && host.session() === null;
-      destHint.textContent = noSession ? "No chat is open right now. Choose New chat, or open one first." : destination === "new-chat" ? "Starts a chat in the project you read, or in this one." : "Attaches the design system to the chat you have open.";
-    };
-    paintDest();
-    const nameProblem = h("p", { class: "dc-form-error", role: "alert", hidden: true });
-    problemLines.set("name", nameProblem);
-    nameHost.append(nameProblem);
-    const failure = h("div", { class: "dc-newsys-failure", role: "alert", hidden: true });
-    const form = h(
-      "div",
-      { class: "dc-newsys-form" },
-      nameHost,
-      h("div", { class: "dc-newsys-sources", role: "group", "aria-label": "Start from" }, h("span", { class: "oc-sdk-field-label" }, "Start from"), sourceBlock("code", codeBody), sourceBlock("brand", brandBody), sourceBlock("description", descriptionBody)),
-      destHost,
-      failure
-    );
-    const progress = h("div", { class: "dc-newsys-progress", hidden: true, "aria-live": "polite" });
-    const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => sheet.close() });
-    const make = btn({ label: MAKE_LABEL, variant: "default", emphasis: "primary", onClick: () => void submit() });
-    sheet.body.append(form, progress);
-    sheet.foot.append(cancel.el, make.el);
-    const existing = () => systems().get().systems ?? [];
-    const currentDraft = () => ({ name, sources, scan, brand: { files, folder: brandFolder }, description, preset });
-    const paintProblems = () => {
-      problems = draftProblems(currentDraft(), existing());
-      for (const [field2, line] of problemLines) {
-        const problem = problems.find((entry) => entry.field === field2);
-        line.textContent = problem?.message ?? "";
-        line.hidden = problem === void 0;
-      }
-      nameField.update({ error: problems.find((entry) => entry.field === "name")?.message });
-      nameProblem.hidden = true;
-    };
-    const focusFirst = () => {
-      const first = problems[0];
-      if (!first) return;
-      const target = first.field === "name" ? nameHost.querySelector("input") : first.field === "code" ? otherHost.hidden ? projectHost.querySelector("button") : otherInput : first.field === "brand" ? chooseFiles.el : descHost.querySelector("textarea");
-      target?.focus();
-    };
-    const stepText = (step) => {
-      if (step.phase === "creating") return "Making the design system\u2026";
-      if (step.phase === "files") return `Adding brand files: ${step.done + 1} of ${step.total}, ${step.name}`;
-      if (step.phase === "folder") return "Adding brand files from the folder\u2026";
-      return "Asking the agent to write it\u2026";
-    };
-    const setMaking = (on) => {
-      making = on;
-      make.set({ loading: on });
-      cancel.set({ disabled: on });
-      form.inert = on;
-      progress.hidden = !on;
-    };
-    const submit = async () => {
-      if (making) return;
-      attempted = true;
-      paintProblems();
-      if (problems.length > 0) {
-        focusFirst();
-        return;
-      }
-      failure.hidden = true;
-      const input = {
-        name: name.normalize("NFKC").trim(),
-        code: sources.code && scan.state === "done" ? { scanId: scan.scanId, assets: [...ticked], directory: scan.directory } : null,
-        description: sources.description ? { text: description.trim(), preset: preset === "" ? null : preset } : null,
-        brand: sources.brand ? {
-          files: files.flatMap((file) => {
-            const blob = picked.get(file.key);
-            return blob ? [{ file: blob, name: file.name, kind: file.kind }] : [];
-          }),
-          folder: brandFolder.trim() === "" ? null : brandFolder.trim()
-        } : null,
-        destination
-      };
-      setMaking(true);
-      progress.replaceChildren();
-      const spinnerHost = h("div");
-      const spinner = mountSpinner(spinnerHost, { label: stepText({ phase: "creating" }) });
-      progress.append(spinnerHost);
-      const setStep = (step) => spinner.update({ label: stepText(step) });
-      try {
-        const result = await makeSystem.make(input, setStep);
-        void systems().load();
-        options.onMade?.(result);
-        finish(result);
-      } catch (error) {
-        setMaking(false);
-        failure.replaceChildren(h("p", { class: "dc-form-error" }, `Couldn\u2019t make the design system. ${errorText2(error)}`));
-        failure.hidden = false;
-      }
-    };
-    const finish = (result) => {
-      const refusedCount = result.files.refused.length;
-      const sent = result.agent.outcome !== "not-sent";
-      if (refusedCount === 0 && sent) {
-        toast("success", result.agent.outcome === "composed" ? `Made ${result.name}. The request is waiting in the chat composer.` : `Made ${result.name}. It\u2019s a draft; the agent is writing it now.`);
-        if (!closed) sheet.close();
-        return;
-      }
-      if (closed) {
-        toast("error", `${resultToast(result.name, refusedCount, sent)} Check the design system\u2019s files in the list.`);
-        return;
-      }
-      showResult(result);
-    };
-    const showResult = (result) => {
-      setMaking(false);
-      sheet.setTitle(`${result.name} is made`);
-      sheet.el.querySelector(".dc-sheet-sub")?.remove();
-      const body = h("div", { class: "dc-newsys-result" });
-      let agent = result.agent;
-      const render = () => {
-        body.replaceChildren(h("p", null, resultHeadline(result.files.refused.length, agent.outcome !== "not-sent")));
-        if (result.files.added.length > 0) body.append(h("p", { class: "dc-muted" }, `Added ${plural(result.files.added.length, "file")}: ${result.files.added.join(", ")}.`));
-        if (result.files.refused.length > 0) {
-          body.append(h("div", { class: "dc-newsys-block" }, h("span", { class: "oc-sdk-field-label" }, "Files not added"), h("ul", { class: "dc-newsys-refused" }, ...result.files.refused.map((entry) => h("li", null, icon2("alert", 14), h("span", null, entry.reason)))), h("p", { class: "dc-muted" }, "You can add them again from the system\u2019s page. The rest are in.")));
-        }
-        if (agent.outcome === "not-sent") {
-          const again = btn({ label: "Try again", variant: "outline", size: "sm", onClick: () => {
-            again.set({ loading: true });
-            void makeSystem.askToMake({ id: result.id, destination, directory: scan.state === "done" ? scan.directory : null }).then((next) => {
-              agent = next;
-              if (next.outcome !== "not-sent" && result.files.refused.length === 0) {
-                toast("success", `Asked the agent to write ${result.name}.`);
-                sheet.close();
-                return;
-              }
-              render();
-            });
-          } });
-          const actions = [again.el];
-          if (agent.text !== null) {
-            const text = agent.text;
-            actions.push(btn({ label: "Copy request", variant: "ghost", size: "sm", icon: "copy", onClick: () => void host.writeClipboard(text).then((ok) => toast(ok ? "success" : "error", ok ? "Copied the request. Paste it into a chat." : "Couldn\u2019t copy. Select the text and copy it yourself.")) }).el);
-          }
-          body.append(h("div", { class: "dc-newsys-block" }, banner({ tone: "warning", title: "Couldn\u2019t ask the agent", body: agent.reason ?? "The request didn\u2019t reach a chat." }), h("div", { class: "dc-row-actions" }, ...actions)), h("p", { class: "dc-muted" }, `${result.name} is saved as a draft with what was gathered. You can ask the agent later.`));
-        }
-      };
-      render();
-      sheet.body.replaceChildren(body);
-      sheet.foot.replaceChildren(btn({ label: "Done", variant: "default", emphasis: "primary", onClick: () => sheet.close() }).el);
-    };
-    paintSources();
-    paintFiles();
-    paintScan();
-    paintProject();
-    void guestHost.client.listProjects().then(
-      (answer) => {
-        if (closed) return;
-        projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
-        const current = host.snapshot()?.directory ?? null;
-        const match = current === null ? void 0 : projects.find((project) => sameDirectory(project.directory, current));
-        if (match && projectChoice === "") projectChoice = match.directory;
-        else if (projects.length === 0 && projectChoice === "") projectChoice = OTHER_FOLDER;
-        paintProject();
-        paintScan();
-        if (sources.code && scan.state === "idle") void startDefaultScan();
-      },
-      (error) => {
-        console.warn("Design Chamber: the project list could not be read; the folder path still works", error);
-        if (closed) return;
-        projectChoice = OTHER_FOLDER;
-        paintProject();
-      }
-    );
-    void systems().load();
-  };
-
-  // src/ui/systems/systems-list.ts
-  var SKELETON_ROWS = 4;
-  var tonedBadge = (label, tone2, title2) => {
-    const holder = h("span", { class: "dc-sys-badge", title: title2 ?? null });
-    mountBadge(holder, { label, tone: tone2 });
-    return holder;
-  };
-  var mountSystemsList = (options) => {
-    const scope = createScope();
-    const store2 = systems();
-    let projects = [];
-    const label = (directory) => projects.find((project) => sameDirectory(project.directory, directory))?.name ?? folderName(directory);
-    const el2 = h("div", { class: "dc-sys-view", "data-surface": options.surface });
-    const back = options.surface === "panel" ? iconBtn({ icon: "back", label: "Back to designs", onClick: () => options.onBack() }) : btn({ label: "Library", variant: "ghost", size: "default", icon: "back", onClick: () => options.onBack() }).el;
-    const newButton = btn({
-      label: "New design system",
-      variant: "default",
-      size: options.surface === "panel" ? "sm" : "default",
-      icon: "plus",
-      onClick: () => openNewSystemSheet(options.actions.host, { onMade: (result) => options.onOpen(result.id) })
-    });
-    const buildButton = btn({
-      label: BUILD_BUTTON_LABEL,
-      variant: "outline",
-      size: options.surface === "panel" ? "sm" : "default",
-      icon: "chat",
-      onClick: () => openBuildWithAgent(options.actions.host, buildButton.el)
-    });
-    const head = options.surface === "panel" ? h("header", { class: "dc-rail-head" }, back, h("h1", { class: "dc-rail-title" }, "Design systems"), h("span", { class: "dc-spacer" })) : h("header", { class: "dc-library-bar dc-sys-bar" }, back, h("h1", { class: "dc-page-title" }, "Design systems"), h("span", { class: "dc-spacer" }), buildButton.el, newButton.el);
-    const tools = options.surface === "panel" ? h("div", { class: "dc-sys-tools" }, newButton.el, buildButton.el) : null;
-    const capNote = h("p", { class: "dc-muted dc-sys-cap", hidden: true });
-    const notices = h("div", { class: "dc-sys-notices" });
-    const list = h("ul", { class: "dc-sys-list", "aria-label": "Design systems" });
-    const scroller = h("div", { class: options.surface === "panel" ? "dc-rail-scroll dc-sys-scroll" : "dc-library-scroll dc-sys-scroll" }, notices, capNote, list);
-    el2.append(head);
-    if (tools) el2.append(tools);
-    el2.append(scroller);
-    const rowFor = (summary) => {
-      const model = systemRow(summary, { nowMs: Date.now(), locale: host.snapshot()?.locale ?? "en", label });
-      const unreadable = model.unreadable !== null;
-      const title2 = h("span", { class: "dc-sys-title", title: model.name }, model.name);
-      const nameLine = h("span", { class: "dc-sys-name" }, title2, unreadable ? tonedBadge("Can\u2019t read", "error") : tonedBadge(model.status.label, model.status.tone));
-      const content = [nameLine];
-      if (unreadable) content.push(h("span", { class: "dc-sys-reason" }, model.unreadable ?? ""));
-      else {
-        const badges = h("span", { class: "dc-sys-line" }, tonedBadge(model.home.label, "neutral", model.home.title), ...model.badges.map((badge) => tonedBadge(badge.label, badge.tone)));
-        if (model.more) badges.append(h("span", { class: "dc-sys-more", title: model.more.title }, model.more.text, h("span", { class: "dc-sr-only" }, `: ${model.more.title}`)));
-        content.push(badges);
-        if (model.notice) content.push(h("span", { class: "dc-sys-notice" }, model.notice));
-        content.push(h("span", { class: "dc-sys-meta" }, model.meta.join(" \xB7 ")));
-      }
-      const main = unreadable ? h("div", { class: "dc-sys-main", "data-static": "true", role: "group", "aria-label": model.ariaLabel }, ...content) : h("button", { type: "button", class: "dc-sys-main", "aria-label": model.ariaLabel }, ...content);
-      if (!unreadable) main.addEventListener("click", () => options.onOpen(summary.id));
-      const more = iconBtn({ icon: "more", label: `Actions for ${summary.name}`, size: "sm", onClick: () => void 0 });
-      attachMenu(
-        more,
-        () => systemMenu(summary),
-        (id) => void runAction(id, summary)
-      );
-      return h("li", { class: "dc-sys", "data-id": summary.id, "data-state": unreadable ? "unreadable" : summary.status }, main, more);
-    };
-    const skeleton = () => Array.from(
-      { length: SKELETON_ROWS },
-      () => h(
-        "li",
-        { class: "dc-sys dc-sys-skeleton", "aria-hidden": "true" },
-        h("span", { class: "dc-sys-main" }, h("span", { class: "dc-skel dc-skel-line dc-sys-skel-name" }), h("span", { class: "dc-skel dc-skel-line dc-sys-skel-badges" }), h("span", { class: "dc-skel dc-skel-line dc-skel-short" }))
-      )
-    );
-    const emptyState = () => {
-      const holder = h("div");
-      mountEmpty(holder, { title: EMPTY_TITLE, body: EMPTY_BODY });
-      const actions = h(
-        "div",
-        { class: "dc-sys-empty-actions" },
-        btn({ label: "From code\u2026", variant: "outline", size: "sm", icon: "page", onClick: () => openNewSystemSheet(options.actions.host, { source: "code", onMade: (result) => options.onOpen(result.id) }) }).el,
-        btn({ label: "From brand files\u2026", variant: "outline", size: "sm", icon: "image", onClick: () => openNewSystemSheet(options.actions.host, { source: "brand", onMade: (result) => options.onOpen(result.id) }) }).el,
-        btn({ label: "Describe\u2026", variant: "outline", size: "sm", icon: "pencil", onClick: () => openNewSystemSheet(options.actions.host, { source: "description", onMade: (result) => options.onOpen(result.id) }) }).el
-      );
-      return h("li", { class: "dc-sys-message dc-sys-empty" }, holder, actions);
-    };
-    const failureState = (state) => {
-      const failure = loadFailure(state.error);
-      const holder = h("div", { class: "dc-banner dc-banner-block" });
-      mountBanner(holder, { tone: "error", title: failure.title, body: failure.body, action: { label: "Try again", onClick: () => void store2.load() } });
-      return h("li", { class: "dc-sys-message" }, holder);
-    };
-    const paintNotices = (state) => {
-      notices.replaceChildren();
-      if (state.status === "error" && state.systems !== null) {
-        const holder = h("div", { class: "dc-banner" });
-        mountBanner(holder, { tone: "warning", title: "Couldn\u2019t refresh the list", body: state.error?.message ?? "", action: { label: "Try again", onClick: () => void store2.load() } });
-        notices.append(holder);
-      }
-      notices.hidden = notices.childElementCount === 0;
-      const cap = atSystemsCap(state.total, state.max);
-      capNote.textContent = cap ?? "";
-      capNote.hidden = cap === null;
-      newButton.set({ disabled: cap !== null, title: cap ?? "" });
-      buildButton.set({ disabled: cap !== null, title: cap ?? "" });
-    };
-    const paint = () => {
-      const state = store2.get();
-      const previousScroll = scroller.scrollTop;
-      list.replaceChildren();
-      paintNotices(state);
-      const kind = systemsListState({ status: state.status, systems: state.systems });
-      if (kind === "loading") list.append(...skeleton());
-      else if (kind === "error") list.append(failureState(state));
-      else if (kind === "empty") list.append(emptyState());
-      else list.append(...(state.systems ?? []).map(rowFor));
-      list.setAttribute("aria-busy", kind === "loading" ? "true" : "false");
-      scroller.scrollTop = previousScroll;
-    };
-    const others = (id) => (store2.get().systems ?? []).filter((entry) => entry.id !== id);
-    const rename2 = (summary) => {
-      const sheet = openSheet(options.actions.host, { title: "Rename design system", variant: "dialog" });
-      let value = summary.name;
-      const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
-      const holder = h("div");
-      const field2 = mountTextField(holder, {
-        label: "Name",
-        value,
-        onChange: (next) => {
-          value = next;
-          field2.update({ value: next, error: systemNameProblem(next, others(summary.id)) ?? void 0 });
-        }
-      });
-      const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => sheet.close() });
-      const save = btn({
-        label: "Rename",
-        variant: "default",
-        emphasis: "primary",
-        onClick: () => {
-          const problem = systemNameProblem(value, others(summary.id));
-          if (problem !== null) {
-            field2.update({ error: problem });
-            return;
-          }
-          failure.hidden = true;
-          save.set({ loading: true });
-          cancel.set({ disabled: true });
-          store2.rename(summary.id, value.normalize("NFKC").trim()).then(
-            () => {
-              toast("success", `Renamed to ${value.trim()}.`);
-              sheet.close();
-            },
-            (error) => {
-              failure.textContent = errorText2(error);
-              failure.hidden = false;
-              save.set({ loading: false });
-              cancel.set({ disabled: false });
-            }
-          );
-        }
-      });
-      sheet.body.append(holder, failure);
-      sheet.foot.append(cancel.el, save.el);
-    };
-    const remove2 = (summary) => {
-      confirmDialog(options.actions.host, {
-        title: `Delete ${summary.name}?`,
-        body: h("p", null, deleteSentence(summary.usedBy)),
-        confirmLabel: "Delete design system",
-        destructive: true,
-        onConfirm: async () => {
-          const cleared = await store2.remove(summary.id);
-          const extra = [cleared.default ? "It was your default, so new designs ask again." : null, cleared.pins > 0 ? `${plural(cleared.pins, "project pin")} cleared.` : null].filter((part) => part !== null);
-          toast("success", [`Deleted ${summary.name}.`, ...extra].join(" "));
-        }
-      });
-    };
-    const runAction = async (id, summary) => {
-      try {
-        if (id === "open") options.onOpen(summary.id);
-        else if (id === "rename") rename2(summary);
-        else if (id === "delete") remove2(summary);
-        else if (id === "make-default") {
-          await store2.setDefault({ id: summary.id, name: summary.name });
-          toast("success", `${summary.name} is now the default for new designs.`);
-        } else if (id === "remove-default") {
-          await store2.setDefault(null);
-          toast("success", `${summary.name} is no longer the default. New designs ask each time.`);
-        } else if (id === "reveal") {
-          await client.call("POST /reveal", { body: { system: summary.id, target: "folder" } });
-        }
-      } catch (error) {
-        toast("error", `${id === "reveal" ? "Couldn\u2019t open the folder" : "That didn\u2019t work"}. ${errorText2(error)}`);
-      }
-    };
-    let signature = "";
-    scope.add(
-      store2.subscribe((state) => {
-        const next = `${state.status}:${state.total}:${state.error?.message ?? ""}:${JSON.stringify(state.systems)}`;
-        if (next === signature) return;
-        signature = next;
-        paint();
-      })
-    );
-    const minute = setInterval(paint, 6e4);
-    scope.add(() => clearInterval(minute));
-    guestHost.client.listProjects().then(
-      (answer) => {
-        projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
-        paint();
-      },
-      (error) => console.warn("Design Chamber: the project names could not be read; systems show folder names", error)
-    );
-    void store2.load();
-    paint();
-    return {
-      el: el2,
-      focus: () => (el2.querySelector(".dc-sys-main:not([data-static])") ?? newButton.el).focus(),
-      focusRow: (id) => list.querySelector(`[data-id="${CSS.escape(id)}"] .dc-sys-main`)?.focus(),
-      dispose: () => {
-        scope.dispose();
-        el2.remove();
-      }
-    };
-  };
-
-  // src/shared/agent/chip.ts
-  var DEFAULT_VIEWPORTS = `${formatViewport(VIEWPORT_LAPTOP)} + ${formatViewport(VIEWPORT_PHONE)}`;
-
-  // src/shared/agent/system-prompts.ts
-  var SECTION_LABEL = {
-    overview: "Overview",
-    colours: "Colours",
-    typography: "Typography",
-    spacing: "Spacing",
-    radius: "Radius",
-    shadows: "Shadows",
-    layers: "Layers",
-    sizes: "Sizes",
-    components: "Components",
-    patterns: "Patterns & voice",
-    brand: "Brand & marketing",
-    assets: "Assets"
-  };
-  var sectionLabel = (section2) => SECTION_LABEL[section2];
 
   // src/shared/token-edit.ts
   var FORMULA_SENTENCE = "This value is a formula. Ask the agent to change it.";
@@ -16711,36 +17257,6 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   };
   var TOKEN_UNDO_REMOVED_MAX = TEXT_EDIT_MAX * 8;
 
-  // src/shared/system-json.ts
-  var AREA_OF_SECTION = Object.freeze({
-    overview: "foundations",
-    colours: "foundations",
-    typography: "foundations",
-    spacing: "foundations",
-    radius: "foundations",
-    shadows: "foundations",
-    layers: "foundations",
-    sizes: "foundations",
-    components: "components",
-    patterns: "patterns",
-    brand: "brand",
-    assets: "brand"
-  });
-  var SYSTEM_AREAS = Object.freeze(["foundations", "components", "patterns", "brand"]);
-  var SYSTEM_SECTIONS = Object.freeze(Object.keys(AREA_OF_SECTION));
-  var RESERVED_SYSTEM_IDS = Object.freeze(["none", "ask"]);
-  var SYSTEM_UNREADABLE_PREFIX = "Design Chamber can't read this design system.";
-  var NOT_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json isn't valid JSON.`;
-  var TOO_LARGE_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json is larger than 1 MB.`;
-  var SYSTEM_TOKEN_RULES = Object.freeze({
-    isLight: (ctx) => isLightContext(ctx, "system"),
-    isDark: (ctx) => isDarkContext(ctx, "system"),
-    classify: classifyToken,
-    validate: validateTokenValue
-  });
-  var resyncStampOf = (stamps) => `${stamps.tokens ?? "none"}:${stamps.systemJson ?? "none"}`;
-  var PROPOSAL_TOO_MANY_FILES = `PROPOSAL.json lists more than ${SYSTEM_PROPOSAL_FILES_MAX} files. Ask the agent to split the change.`;
-
   // src/ui/model/system-edit-model.ts
   var STALE_TITLE2 = "changed while you were editing";
   var STALE_ACTION = "Reload and try again";
@@ -16819,6 +17335,1745 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   var staleSentence = (name) => `${name} ${STALE_TITLE2}. Nothing was saved.`;
   var savedToken = (token, mode) => (mode === "light" ? token.light?.text : token.dark?.text) ?? null;
   var savedType = (style, field2) => style[field2];
+
+  // src/ui/model/resync-model.ts
+  var isCodeReview = (review) => review.kind === "code";
+  var KEPT_LINE = "Your notes, overview, fonts and assets stay as they are. Only values change.";
+  var PARTIAL_NOTE = "Some files weren\u2019t scanned, so tokens from them aren\u2019t listed as removed.";
+  var ROOT_CHANGED_SENTENCE = "Your Designs folder changed. Nothing was changed.";
+  var NOTHING_TICKED_REASON = "Tick at least one change to apply.";
+  var REMOVE_HINT = "These are no longer in the code. They stay in the system unless you tick them.";
+  var AGENT_TOKENS_NOTE = "Tokens the agent or you added here are never listed.";
+  var CHANGED_HINT = "The code changed these values since you made the system.";
+  var NEW_HINT = "In the code, not in the system yet.";
+  var FILES_HINT = "Fonts and logos in the project that the system doesn\u2019t have. Ticked ones are copied in.";
+  var CONFLICT_HINT = "You changed these here and the code changed them too. Your value stays unless you choose the code\u2019s.";
+  var NO_VALUE2 = "not set";
+  var RESYNC_NOTICE_MS = 3e5;
+  var GROUP_PAGE = 60;
+  var matchesSentence = (system, folder) => `${system} already matches ${folder}.`;
+  var scanningLabel = (folder, seen) => seen > 0 ? `Reading ${folder}\u2026 ${plural(seen, "file")} looked at` : `Reading ${folder}\u2026`;
+  var modeLabel = (mode) => mode === "light" ? "Light" : "Dark";
+  var byMode = (a, b) => a.mode === b.mode ? 0 : a.mode === "light" ? -1 : 1;
+  var changedRows = (review) => {
+    const rows = /* @__PURE__ */ new Map();
+    for (const one of review.changed) {
+      const row2 = rows.get(one.name) ?? { name: one.name, values: [] };
+      row2.values.push({ mode: one.mode, from: one.from, to: one.to });
+      rows.set(one.name, row2);
+    }
+    return [...rows.values()].map((row2) => ({ ...row2, values: row2.values.sort(byMode) }));
+  };
+  var conflictRows = (review) => {
+    const rows = /* @__PURE__ */ new Map();
+    for (const one of review.conflicts) {
+      const row2 = rows.get(one.name) ?? { name: one.name, values: [] };
+      row2.values.push({ mode: one.mode, mine: one.mine, code: one.code });
+      rows.set(one.name, row2);
+    }
+    return [...rows.values()].map((row2) => ({ ...row2, values: row2.values.sort(byMode) }));
+  };
+  var conflictSentence = (value, both) => `${both ? `${modeLabel(value.mode)}: ` : ""}You changed this here. The code now says ${value.code}.`;
+  var reviewIsEmpty = (review) => review.changed.length === 0 && review.conflicts.length === 0 && review.added.length === 0 && review.removed.length === 0 && review.assets.length === 0;
+  var swatchable = (value) => value !== "" && checkValue("colours", null, value).ok;
+  var reviewGroups = (review) => {
+    const groups = [
+      { id: "changes", title: "Changed", hint: CHANGED_HINT, ids: changedRows(review).map((row2) => row2.name) },
+      { id: "conflicts", title: "Conflicts", hint: CONFLICT_HINT, ids: conflictRows(review).map((row2) => row2.name) },
+      { id: "add", title: "New", hint: NEW_HINT, ids: [...review.added] },
+      { id: "remove", title: "No longer in the code", hint: REMOVE_HINT, ids: [...review.removed] },
+      { id: "assets", title: "New fonts and logos", hint: FILES_HINT, ids: review.assets.map((asset) => asset.path) }
+    ];
+    return groups.filter((group2) => group2.ids.length > 0);
+  };
+  var defaultTicks = (review) => ({
+    changes: new Set(changedRows(review).map((row2) => row2.name)),
+    add: new Set(review.added),
+    remove: /* @__PURE__ */ new Set(),
+    useCode: /* @__PURE__ */ new Set(),
+    assets: /* @__PURE__ */ new Set()
+  });
+  var isTicked = (ticks, group2, id) => (group2 === "conflicts" ? ticks.useCode : ticks[group2]).has(id);
+  var setTick = (ticks, group2, id, on) => {
+    const key = group2 === "conflicts" ? "useCode" : group2;
+    const next = new Set(ticks[key]);
+    if (on) next.add(id);
+    else next.delete(id);
+    return { ...ticks, [key]: next };
+  };
+  var setGroup = (ticks, group2, ids, on) => {
+    const key = group2 === "conflicts" ? "useCode" : group2;
+    return { ...ticks, [key]: on ? new Set(ids) : /* @__PURE__ */ new Set() };
+  };
+  var groupState = (ticks, group2, ids) => {
+    const set = group2 === "conflicts" ? ticks.useCode : ticks[group2];
+    const on = ids.filter((id) => set.has(id)).length;
+    return on === 0 ? "none" : on === ids.length ? "all" : "some";
+  };
+  var groupToggleLabel = (group2, state) => {
+    if (group2 === "conflicts") return state === "all" ? "Keep all mine" : "Use all the code\u2019s";
+    return state === "all" ? "Untick all" : "Tick all";
+  };
+  var countsOf = (ticks) => ({ changed: ticks.changes.size + ticks.useCode.size, added: ticks.add.size, removed: ticks.remove.size, files: ticks.assets.size });
+  var partsOf2 = (counts) => [
+    counts.changed > 0 ? `${counts.changed} changed` : "",
+    counts.added > 0 ? `${counts.added} added` : "",
+    counts.removed > 0 ? `${counts.removed} removed` : "",
+    counts.files > 0 ? `${plural(counts.files, "file")} copied` : ""
+  ].filter((part) => part !== "");
+  var nothingTicked = (ticks) => {
+    const counts = countsOf(ticks);
+    return counts.changed + counts.added + counts.removed + counts.files === 0;
+  };
+  var selectionLine = (ticks) => {
+    if (nothingTicked(ticks)) return { text: NOTHING_TICKED_REASON, canApply: false };
+    return { text: `Apply saves ${partsOf2(countsOf(ticks)).join(", ")}.`, canApply: true };
+  };
+  var resyncedSentence = (system, counts) => {
+    const parts = partsOf2(counts);
+    return parts.length === 0 ? `Re-synced ${system}.` : `Re-synced ${system}: ${parts.join(", ")}.`;
+  };
+  var applyBody = (scanId, stamp, ticks) => {
+    const sorted = (set) => [...set].sort();
+    return { scanId, stamp, changes: sorted(ticks.changes), add: sorted(ticks.add), remove: sorted(ticks.remove), useCode: sorted(ticks.useCode), assets: sorted(ticks.assets) };
+  };
+  var failureKind = (code, message) => {
+    if (message === ROOT_CHANGED_SENTENCE) return "root-changed";
+    if (code === "bad-path" || /^Design Chamber can['’]t read /.test(message)) return "folder";
+    if (/\bScan( the folder)? again\.?$/.test(message)) return "stale";
+    return "plain";
+  };
+  var folderInputProblem = (raw) => {
+    const path = raw.trim();
+    if (path === "") return "Type the full path of the folder.";
+    if (!/^([A-Za-z]:[\\/]|\\\\|\/)/.test(path)) return "Use the full path of the folder, such as C:\\Projects\\shop or /Users/you/shop.";
+    return null;
+  };
+  var sheetSubtitle = (system) => `Read the project again and update ${system} from it.`;
+
+  // src/ui/model/systems-model.ts
+  var SYSTEM_ROW_BADGES_MAX = 2;
+  var pinnedLabel = (directories, label) => {
+    const [only] = directories;
+    return directories.length === 1 && only !== void 0 ? `Pinned for ${label(only)}` : `Pinned for ${plural(directories.length, "project")}`;
+  };
+  var LIVING_PAGE_BADGE = {
+    "out-of-date": { label: "Living page out of date", tone: "warning" },
+    changed: { label: "Living page changed", tone: "warning" },
+    unsafe: { label: "Living page can\u2019t be checked", tone: "error" }
+  };
+  var systemRowBadges = (summary, label) => {
+    const all = [];
+    if (summary.building) all.push({ id: "building", label: "Being built", tone: "info" });
+    if (summary.changesToReview) all.push({ id: "changes", label: "Changes to review", tone: "warning" });
+    if (summary.isDefault) all.push({ id: "default", label: "Default", tone: "neutral" });
+    if (summary.pinnedFor.length > 0) all.push({ id: "pinned", label: pinnedLabel(summary.pinnedFor, label), tone: "neutral" });
+    const living = summary.livingPage === null ? void 0 : LIVING_PAGE_BADGE[summary.livingPage];
+    if (living) all.push({ id: "living", ...living });
+    return { shown: all.slice(0, SYSTEM_ROW_BADGES_MAX), hidden: all.slice(SYSTEM_ROW_BADGES_MAX) };
+  };
+  var sourceLine = (sources, label) => [
+    ...sources.code ? [`From ${label(sources.code.directory)}`] : [],
+    ...sources.brand > 0 ? ["From brand files"] : [],
+    ...sources.description ? ["Described"] : []
+  ];
+  var usedByLine = (count) => count === 0 ? "Not used yet" : `Used by ${plural(count, "design")}`;
+  var homeLine = (summary) => summary.home === "internal" ? { label: "In Design Chamber", title: "Kept in your Designs folder" } : { label: `Repo \xB7 ${summary.home.repo}`, title: summary.home.directory };
+  var sharedRepoNotice = (summary) => summary.home !== "internal" && summary.sharedRepoWith !== null ? `${summary.home.repo} already has a repo-backed system (${summary.sharedRepoWith}).` : null;
+  var systemRow = (summary, context) => {
+    const badges = systemRowBadges(summary, context.label);
+    const home = homeLine(summary);
+    const updated = relativeTime(summary.updated, context.nowMs, context.locale);
+    const source = sourceLine(summary.sources, context.label);
+    const meta = [...source, usedByLine(summary.usedBy), ...updated === "" ? [] : [updated]];
+    const status = summary.status === "ready" ? { label: "Ready", tone: "success" } : { label: "Draft", tone: "info" };
+    const notice = sharedRepoNotice(summary);
+    const hiddenLabels = badges.hidden.map((badge) => badge.label);
+    const spoken = [summary.name, status.label, home.label, ...badges.shown.map((badge) => badge.label), ...hiddenLabels];
+    return {
+      id: summary.id,
+      name: summary.name,
+      unreadable: summary.unreadable,
+      status,
+      home,
+      badges: badges.shown,
+      more: badges.hidden.length > 0 ? { text: `+${badges.hidden.length}`, title: hiddenLabels.join(", ") } : null,
+      notice,
+      meta,
+      metaParts: { source, usedBy: { count: summary.usedBy, text: usedByLine(summary.usedBy) }, updated: updated === "" ? null : updated },
+      ariaLabel: summary.unreadable !== null ? `${summary.name}, can\u2019t be read` : `${spoken.join(", ")}. ${meta.join(", ")}.`
+    };
+  };
+  var systemsListState = (load) => {
+    if (load.systems === null) return load.status === "error" ? "error" : "loading";
+    return load.systems.length === 0 ? "empty" : "ready";
+  };
+  var SERVICE_DOWN_CODES = /* @__PURE__ */ new Set(["NO_SERVICE", "SERVICE_FAILED", "HOST_TIMEOUT", "REQUEST_FAILED", "DISABLED", "HOST_UNAVAILABLE"]);
+  var isServiceDownCode = (code) => SERVICE_DOWN_CODES.has(code);
+  var loadFailure = (error) => {
+    const message = error?.message ?? "Try again in a moment.";
+    return error !== null && isServiceDownCode(error.code) ? { title: "Design Chamber isn\u2019t running", body: message } : { title: "Your design systems didn\u2019t load", body: message };
+  };
+  var deleteSentence = (usedBy) => usedBy === 0 ? "It moves to the trash." : usedBy === 1 ? "It moves to the trash. The design that uses it keeps its copy." : `It moves to the trash. The ${usedBy} designs that use it keep their copy.`;
+  var EMPTY_TITLE = "No design systems yet";
+  var EMPTY_BODY = "Make one from a project\u2019s code, from brand files, or by describing it. Designs can then start from it.";
+  var atSystemsCap = (total, max) => total >= max ? `You have ${max} design systems, the most Design Chamber keeps. Delete one to make room.` : null;
+  var systemMenu = (summary) => {
+    const readable = summary.unreadable === null;
+    return [
+      ...readable ? [{ id: "open", label: "Open" }] : [],
+      ...readable ? summary.isDefault ? [{ id: "remove-default", label: "Remove as default" }] : [{ id: "make-default", label: "Make default", ...summary.status === "draft" ? { disabled: true, reason: "Mark it ready first." } : {} }] : [],
+      { id: "reveal", label: "Reveal in folder" },
+      ...readable ? [{ id: "rename", label: "Rename" }] : [],
+      { separator: true },
+      { id: "delete", label: "Delete\u2026", destructive: true }
+    ];
+  };
+  var plateSwatches = (summary) => summary.swatches.filter(swatchable).slice(0, SYSTEM_SWATCHES_MAX);
+  var PREVIEWABLE_LIVING_PAGE = /* @__PURE__ */ new Set(["fresh", "out-of-date", "changed", "reformatted"]);
+  var canPreviewLivingPage = (summary) => summary.livingPage !== null && PREVIEWABLE_LIVING_PAGE.has(summary.livingPage);
+  var showsLivingPageButton = (summary) => summary.unreadable === null && summary.home !== "internal" && canPreviewLivingPage(summary);
+  var librarySystemMenu = (summary) => [
+    ...summary.unreadable === null ? [{ id: "open", label: "Open" }] : [],
+    ...summary.unreadable === null && canPreviewLivingPage(summary) ? [{ id: "preview", label: "Preview living page" }] : [],
+    { id: "reveal", label: "Reveal in folder" }
+  ];
+  var libraryTileLabel = (summary, context) => {
+    if (summary.unreadable !== null) return `${summary.name}, design system, can\u2019t be read`;
+    const updated = relativeTime(summary.updated, context.nowMs, context.locale);
+    const used = summary.usedBy === 0 ? "not used yet" : `used by ${plural(summary.usedBy, "design")}`;
+    return [summary.name, "design system", summary.status === "ready" ? "Ready" : "Draft", homeLine(summary).label, used, ...updated === "" ? [] : [`updated ${updated}`]].join(", ");
+  };
+  var usedByLinkLabel = (count) => `${usedByLine(count)}. Show ${count === 1 ? "it" : "them"}`;
+  var sidebarSystems = (systems2) => [...systems2].sort((a, b) => a.name.localeCompare(b.name, void 0, { sensitivity: "base" })).map((system) => ({ id: system.id, name: system.name, draft: system.status === "draft", usedBy: system.usedBy, swatch: plateSwatches(system)[0] ?? null }));
+  var swatchLookup = (systems2) => {
+    const byId = new Map(systems2.map((system) => [system.id, plateSwatches(system)[0] ?? null]));
+    return (id) => byId.get(id) ?? null;
+  };
+
+  // src/ui/model/system-build-model.ts
+  var BUILD_POLL_FAILURES_MAX = 3;
+  var BUILD_CHIP_TITLE = "New design system";
+  var startBuildChip = () => ({ phase: "loading", failures: 0 });
+  var afterAnswer = (model, answer) => {
+    if (model.phase === "made" || model.phase === "expired") return model;
+    if (answer.state === "waiting") return { phase: "waiting", project: answer.project?.label ?? null, failures: 0 };
+    if (answer.state === "made") return { phase: "made", id: answer.id, name: answer.name, probe: "checking" };
+    return { phase: "expired" };
+  };
+  var afterFailure = (model, error) => {
+    if (model.phase === "made" || model.phase === "expired") return model;
+    if (isServiceDownCode(error.code)) return { phase: "service-down", message: error.message };
+    const failures = (model.phase === "loading" || model.phase === "waiting" ? model.failures : 0) + 1;
+    if (failures >= BUILD_POLL_FAILURES_MAX) return { phase: "failed", message: error.message };
+    return model.phase === "waiting" ? { ...model, failures } : { phase: "loading", failures };
+  };
+  var afterProbe = (model, probe) => model.phase === "made" ? { ...model, probe } : model;
+  var keepsPolling = (model) => model.phase === "loading" || model.phase === "waiting";
+  var CONTINUE = { id: "continue-chat", label: "Continue in chat", primary: true };
+  var TRY_AGAIN = { id: "try-again", label: "Try again", primary: true };
+  var WAITING_BODY = "The agent is interviewing you in chat. The design system shows here once it\u2019s started.";
+  var STOPPED_BODY = "This build was stopped. Its draft is in the Designs folder\u2019s trash.";
+  var EXPIRED_BODY = "This build was started more than a week ago. Run /design-system again.";
+  var chipView = (model) => {
+    const base = { title: BUILD_CHIP_TITLE, tone: "neutral", spinner: null, body: null, note: null, problem: null, actions: [] };
+    switch (model.phase) {
+      case "loading":
+        return { ...base, state: "loading", spinner: "Checking the build\u2026" };
+      case "waiting":
+        return { ...base, state: "waiting", tone: "info", body: WAITING_BODY, note: model.project === null ? null : `Project: ${model.project}`, actions: [CONTINUE] };
+      case "made":
+        if (model.probe === "checking" || model.probe === "present") return { ...base, state: "opening", title: model.name, tone: "info", spinner: `Opening ${model.name}\u2026` };
+        if (model.probe === "gone") return { ...base, state: "stopped", tone: "warning", body: STOPPED_BODY, actions: [CONTINUE] };
+        return {
+          ...base,
+          state: "made",
+          title: model.name,
+          tone: "info",
+          body: `${model.name} was started, but Design Chamber couldn\u2019t open it just now.`,
+          actions: [
+            { id: "open-system", label: "Open system", primary: true },
+            { ...CONTINUE, primary: false }
+          ]
+        };
+      case "expired":
+        return { ...base, state: "expired", body: EXPIRED_BODY };
+      case "service-down":
+        return { ...base, state: "service-down", tone: "error", problem: { title: "Design Chamber isn\u2019t running", body: model.message }, actions: [TRY_AGAIN] };
+      case "failed":
+        return { ...base, state: "failed", tone: "error", problem: { title: "Couldn\u2019t check the build", body: model.message }, actions: [TRY_AGAIN] };
+    }
+  };
+  var BUILD_DESTINATION_LABEL = { "current-chat": "This chat", "new-chat": "New chat" };
+  var buildSetup = (context) => ({
+    offered: [
+      { id: "current-chat", label: BUILD_DESTINATION_LABEL["current-chat"] },
+      ...context.hasProject ? [{ id: "new-chat", label: BUILD_DESTINATION_LABEL["new-chat"] }] : []
+    ],
+    initial: context.hasSession || !context.hasProject ? "current-chat" : "new-chat"
+  });
+  var destinationHint = (destination, context) => {
+    if (destination === "current-chat") {
+      return context.hasSession ? { text: "The agent interviews you in the chat you have open.", blocked: false } : { text: "No chat is open right now. Open one first.", blocked: true };
+    }
+    return { text: "Starts a chat in this project.", blocked: false };
+  };
+  var briefProblem = (brief) => brief.length > BRIEF_MAX ? `Keep it under ${BRIEF_MAX} characters.` : null;
+  var startedText = (result) => {
+    switch (result.outcome) {
+      case "sent":
+        return "Asked the agent to build a design system. Answer its questions in the chat.";
+      case "composed":
+        return "The agent is busy, so the request is waiting in the chat composer.";
+      case "new-session":
+        return "Started a chat for the agent. Answer its questions there.";
+    }
+  };
+  var NOT_SENT_TITLE = "Couldn\u2019t ask the agent";
+  var NOT_SENT_BODY = "The request didn\u2019t reach a chat. Your words are still here.";
+
+  // src/ui/systems/build-with-agent.ts
+  var BUILD_BUTTON_LABEL = "Build with the agent\u2026";
+  var BRIEF_ROWS = 3;
+  var openBuildWithAgent = (appHost, anchor) => {
+    const scope = createScope();
+    const context = () => ({ hasSession: host.session() !== null, hasProject: Boolean(host.snapshot()?.directory) });
+    const setup = buildSetup(context());
+    let destination = setup.initial;
+    let brief = "";
+    let unsent = null;
+    const popover = openPopover(appHost, anchor, { title: BUILD_BUTTON_LABEL.replace("\u2026", ""), onClose: () => scope.dispose() });
+    const briefHost = h("div");
+    const briefField = mountTextField(briefHost, {
+      label: "What is it for? (optional)",
+      value: brief,
+      multiline: true,
+      rows: BRIEF_ROWS,
+      placeholder: "A shop for hand-made candles, calm and warm",
+      onChange: (next) => {
+        brief = next;
+        unsent = null;
+        const error = briefProblem(next);
+        briefField.update({ value: next, error: error ?? void 0 });
+        paint();
+      }
+    });
+    scope.add(() => briefField.dispose());
+    const destHost = h("div", { class: "dc-field" });
+    const destLabel = h("span", { class: "oc-sdk-field-label" }, "Agent works in");
+    const tabsHost = h("div");
+    destHost.append(destLabel, tabsHost);
+    const tabs = mountTabs(tabsHost, {
+      items: setup.offered,
+      activeId: destination,
+      trackBackground: true,
+      onChange: (id) => {
+        destination = id === "new-chat" ? "new-chat" : "current-chat";
+        tabs.update({ activeId: destination });
+        unsent = null;
+        paint();
+      }
+    });
+    scope.add(() => tabs.dispose());
+    const hint = h("p", { class: "oc-sdk-field-note" });
+    destHost.append(hint);
+    const failure = h("div", { class: "dc-build-failure", role: "alert", hidden: true });
+    popover.body.append(h("div", { class: "dc-build-form" }, briefHost, destHost, failure));
+    const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => popover.close() });
+    const copy = btn({
+      label: "Copy request",
+      variant: "outline",
+      icon: "copy",
+      onClick: () => {
+        if (unsent === null) return;
+        void host.writeClipboard(unsent).then((ok) => toast(ok ? "success" : "error", ok ? "Request copied. Paste it into a chat." : "Couldn\u2019t reach the clipboard. Select the text and copy it by hand."));
+      }
+    });
+    const start = btn({ label: "Start", variant: "default", emphasis: "primary", onClick: () => void submit() });
+    copy.el.hidden = true;
+    popover.foot.append(h("span", { class: "dc-pop-actions" }, copy.el), h("span", { class: "dc-pop-actions" }, cancel.el, start.el));
+    const paint = () => {
+      const note = destinationHint(destination, context());
+      hint.textContent = note.text;
+      start.set({ disabled: note.blocked || briefProblem(brief) !== null });
+      if (unsent === null) {
+        failure.hidden = true;
+        failure.replaceChildren();
+        copy.el.hidden = true;
+        start.set({ label: "Start" });
+      }
+    };
+    const showNotSent = (text) => {
+      unsent = text;
+      failure.replaceChildren(h("strong", null, NOT_SENT_TITLE), h("span", null, ` ${NOT_SENT_BODY}`));
+      failure.hidden = false;
+      copy.el.hidden = false;
+      start.set({ label: "Try again", loading: false, disabled: false });
+      popover.reposition();
+    };
+    const submit = async () => {
+      start.set({ loading: true });
+      cancel.set({ disabled: true });
+      try {
+        const result = await flows.buildSystem({ brief, destination });
+        if (result.outcome === "not-sent") {
+          showNotSent(result.text);
+          return;
+        }
+        toast("success", startedText(result));
+        popover.close(false);
+      } catch (error) {
+        if (error instanceof FlowError) {
+          failure.replaceChildren(h("span", null, error.message));
+          failure.hidden = false;
+          popover.reposition();
+        } else toast("error", `Couldn\u2019t start the build. ${errorText2(error)}`);
+      } finally {
+        start.set({ loading: false });
+        cancel.set({ disabled: false });
+      }
+    };
+    paint();
+    popover.reposition();
+    briefHost.querySelector("textarea")?.focus();
+  };
+
+  // src/ui/systems/new-system-sheet.ts
+  var OTHER_FOLDER = "__other";
+  var SCAN_POLL_MS = 500;
+  var openNewSystemSheet = (hostEl, options = {}) => {
+    const scope = createScope();
+    let closed = false;
+    const sheet = openSheet(hostEl, {
+      title: "New design system",
+      variant: "dialog",
+      subtitle: SHEET_SUBTITLE,
+      onClose: () => {
+        closed = true;
+        cancelSlot(projectSlot);
+        cancelSlot(locationSlot);
+        scope.dispose();
+      }
+    });
+    sheet.el.classList.add("dc-newsys");
+    const sources = { code: options.source === "code", brand: options.source === "brand", description: options.source === "description" || options.source === void 0, existing: options.source === "existing" };
+    let name = "";
+    let nameTouched = false;
+    let destination = "new-chat";
+    let description = "";
+    let preset = "";
+    let scan = { state: "idle" };
+    let location = { state: "idle" };
+    let locationPath = "";
+    let choice = "make";
+    let nudgeDismissed = false;
+    const ticked = /* @__PURE__ */ new Set();
+    const locationTicked = /* @__PURE__ */ new Set();
+    let projects = [];
+    let projectChoice = "";
+    let otherFolder = "";
+    let files = [];
+    const picked = /* @__PURE__ */ new Map();
+    let refused = [];
+    let brandFolder = "";
+    let folderOpen = false;
+    let making = false;
+    let attempted = false;
+    let problems = [];
+    const projectDirectory = () => projectChoice === OTHER_FOLDER ? otherFolder.trim() : projectChoice;
+    const projectLabel = () => {
+      const directory = projectDirectory();
+      return projects.find((project) => sameDirectory(project.directory, directory))?.name ?? folderName(directory);
+    };
+    const registering = () => sources.existing && location.state === "done" && location.summary.location?.contract?.complete === true && choice === "register";
+    const nameHost = h("div", { class: "dc-newsys-g-name" });
+    const nameField = mountTextField(nameHost, {
+      label: "Name",
+      value: name,
+      placeholder: "e.g. Acme",
+      onChange: (next) => {
+        name = next;
+        nameTouched = true;
+        nameField.update({ value: next, helper: "" });
+        if (attempted) paintProblems();
+      }
+    });
+    scope.add(() => nameField.dispose());
+    const checks = /* @__PURE__ */ new Map();
+    const panels = /* @__PURE__ */ new Map();
+    const problemLines = /* @__PURE__ */ new Map();
+    const whereHost = h("div", { class: "dc-newsys-g-where dc-newsys-stack", hidden: true });
+    const tickSource = (id, checked) => {
+      Object.assign(sources, nextSources(sources, id, checked, { description, preset }));
+      if (!sources.code && !sources.existing) {
+        cancelSlot(projectSlot);
+        scan = { state: "idle" };
+      }
+      if (!sources.existing) {
+        cancelSlot(locationSlot);
+        location = { state: "idle" };
+      }
+      paintSources();
+      if ((sources.code || sources.existing) && scan.state === "idle") void startDefaultScan();
+    };
+    const sourceBlock = (id, body, inline = true) => {
+      const entry = SOURCES.find((candidate) => candidate.id === id);
+      if (!entry) throw new Error(`Design Chamber: unknown source ${id}`);
+      const head = h("div", { class: "dc-newsys-head" });
+      const check = mountCheckbox(head, {
+        label: entry.label,
+        description: entry.hint,
+        checked: sources[id],
+        onChange: (checked) => tickSource(id, checked)
+      });
+      checks.set(id, check);
+      scope.add(() => check.dispose());
+      const problem = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+      problemLines.set(id, problem);
+      if (!inline) {
+        panels.set(id, whereHost);
+        whereHost.append(body, problem);
+        return h("section", { class: "dc-newsys-source", "data-source": id }, head);
+      }
+      const panel = h("div", { class: "dc-newsys-body" }, body, problem);
+      panels.set(id, panel);
+      return h("section", { class: "dc-newsys-source", "data-source": id }, head, panel);
+    };
+    const paintSources = () => {
+      for (const [id, panel] of panels) {
+        panel.hidden = !sources[id];
+        checks.get(id)?.update({ checked: sources[id] });
+      }
+      sheet.el.dataset.existing = sources.existing ? "true" : "false";
+      paintScan();
+      paintExisting();
+      paintFooter();
+      paintDest();
+      if (attempted) paintProblems();
+    };
+    const projectHost = h("div", { class: "dc-field" });
+    let projectSelect = null;
+    const otherHost = h("div", { class: "dc-newsys-other", hidden: true });
+    const otherId = nextId2("dc-newsys-folder");
+    const otherInput = h("input", { type: "text", id: otherId, class: "oc-sdk-input", placeholder: "C:\\Projects\\shop or /Users/you/shop", spellcheck: "false", autocomplete: "off" });
+    const otherScan = btn({ label: "Read this folder", variant: "outline", size: "sm", onClick: () => void scanFolder(otherFolder) });
+    otherHost.append(h("div", { class: "dc-field" }, h("label", { class: "oc-sdk-field-label", for: otherId }, "Project folder"), h("div", { class: "dc-newsys-row" }, otherInput, otherScan.el)));
+    otherInput.addEventListener("input", () => {
+      otherFolder = otherInput.value;
+      existingOtherInput.value = otherFolder;
+    });
+    otherInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void scanFolder(otherFolder);
+      }
+    });
+    const scanHost = h("div", { class: "dc-newsys-scan", "aria-live": "polite" });
+    const codeBody = h("div", { class: "dc-newsys-stack" }, projectHost, otherHost, scanHost);
+    const projectOptions = () => [
+      ...projects.map((project) => ({ id: project.directory, label: project.name, hint: middlePath(project.directory, 28) })),
+      { id: OTHER_FOLDER, label: "Other folder\u2026" }
+    ];
+    const paintProject = () => {
+      const value = projectChoice === "" ? null : projectChoice;
+      projectSelect?.update({ options: projectOptions(), value });
+      existingProjectSelect?.update({ options: projectOptions(), value });
+      otherHost.hidden = projectChoice !== OTHER_FOLDER;
+      existingOtherHost.hidden = projectChoice !== OTHER_FOLDER;
+      otherInput.value = otherFolder;
+      existingOtherInput.value = otherFolder;
+      const directory = projectDirectory();
+      existingProjectNote.hidden = directory === "";
+      existingProjectNote.textContent = directory === "" ? "" : `${middlePath(directory, 48)} \xB7 other folders are under \u201COther folder\u2026\u201D`;
+      existingProjectNote.title = directory;
+    };
+    const chooseProject = (id) => {
+      projectChoice = id;
+      cancelSlot(locationSlot);
+      location = { state: "idle" };
+      choice = "make";
+      paintProject();
+      paintExisting();
+      if (id === OTHER_FOLDER) {
+        cancelSlot(projectSlot);
+        scan = { state: "idle" };
+        paintScan();
+        paintDiscovery();
+        (sources.existing ? existingOtherInput : otherInput).focus();
+        return;
+      }
+      void scanFolder(id);
+    };
+    projectSelect = mountSelect(projectHost, {
+      label: "Project",
+      value: null,
+      options: projectOptions(),
+      placeholder: "Choose a project",
+      onChange: chooseProject
+    });
+    scope.add(() => projectSelect?.dispose());
+    const newSlot = () => ({ ticket: 0, job: null, timer: null });
+    const projectSlot = newSlot();
+    const locationSlot = newSlot();
+    const cancelSlot = (slot) => {
+      slot.ticket += 1;
+      if (slot.timer !== null) clearTimeout(slot.timer);
+      slot.timer = null;
+      const job = slot.job;
+      slot.job = null;
+      if (job !== null) {
+        client.call("DELETE /system-scans/:scanId", { params: { scanId: job } }).catch((error) => {
+          console.warn("Design Chamber: the scan could not be cancelled; the service ends it on its own", error);
+        });
+      }
+    };
+    const runScan = async (slot, body, settle) => {
+      cancelSlot(slot);
+      const mine = slot.ticket;
+      settle.running(0);
+      try {
+        const { scanId } = await client.call("POST /system-scans", { body });
+        if (mine !== slot.ticket) {
+          client.call("DELETE /system-scans/:scanId", { params: { scanId } }).catch(() => void 0);
+          return;
+        }
+        slot.job = scanId;
+        const poll = async () => {
+          try {
+            const answer = await client.call("GET /system-scans/:scanId", { params: { scanId } });
+            if (mine !== slot.ticket) return;
+            if (answer.state === "running") {
+              settle.running(answer.seen);
+              slot.timer = setTimeout(() => void poll(), SCAN_POLL_MS);
+              return;
+            }
+            slot.job = null;
+            if (answer.state === "done") settle.done(scanId, answer.summary);
+            else settle.failed(answer.message);
+          } catch (error) {
+            if (mine !== slot.ticket) return;
+            slot.job = null;
+            settle.failed(errorText2(error));
+          }
+        };
+        await poll();
+      } catch (error) {
+        if (mine !== slot.ticket) return;
+        settle.failed(errorText2(error));
+      }
+    };
+    const scanFolder = async (directory) => {
+      const folder = directory.trim();
+      if (folder === "") {
+        scan = { state: "failed", directory: "", message: "Type the full path of the folder to read." };
+        paintScan();
+        paintDiscovery();
+        return;
+      }
+      ticked.clear();
+      await runScan(projectSlot, { directory: folder }, {
+        running: (seen) => {
+          scan = { state: "running", directory: folder, seen };
+          paintScan();
+          paintDiscovery();
+        },
+        done: (scanId, summary) => {
+          scan = { state: "done", directory: folder, scanId, summary };
+          for (const asset of summary.assets) ticked.add(asset.path);
+          if (!nameTouched && name.trim() === "") suggestName(folder);
+          paintScan();
+          paintDiscovery();
+        },
+        failed: (message) => {
+          scan = { state: "failed", directory: folder, message };
+          paintScan();
+          paintDiscovery();
+        }
+      });
+    };
+    const scanLocation = async (raw) => {
+      const path = raw.trim();
+      const project = projectDirectory();
+      if (project === "") {
+        locationField.update({ error: "Pick the project to read first." });
+        return;
+      }
+      if (path === "") {
+        locationField.update({ error: "Pick where the system lives, or type its folder." });
+        return;
+      }
+      locationPath = path;
+      locationField.update({ value: path, error: void 0 });
+      locationTicked.clear();
+      await runScan(locationSlot, { directory: project, location: path }, {
+        running: () => {
+          location = { state: "running", path };
+          paintExisting();
+        },
+        done: (scanId, summary) => {
+          location = { state: "done", path, scanId, summary };
+          for (const asset of summary.assets) locationTicked.add(asset.path);
+          choice = summary.location?.contract?.complete === true ? "register" : "make";
+          paintExisting();
+        },
+        failed: (message) => {
+          location = { state: "failed", path, message };
+          paintExisting();
+        }
+      });
+    };
+    const suggestName = (directory) => {
+      const match = projects.find((project) => sameDirectory(project.directory, directory));
+      name = match?.name ?? folderName(directory);
+      nameField.update({ value: name, helper: NAME_SUGGESTED_HELPER });
+    };
+    const startDefaultScan = async () => {
+      if (scan.state !== "idle" || projectChoice === "" || projectChoice === OTHER_FOLDER) return;
+      await scanFolder(projectChoice);
+    };
+    const existingProjectHost = h("div", { class: "dc-field" });
+    let existingProjectSelect = null;
+    const existingProjectNote = h("p", { class: "dc-muted dc-newsys-project-note", hidden: true });
+    existingProjectSelect = mountSelect(existingProjectHost, {
+      label: "Project",
+      value: null,
+      options: projectOptions(),
+      placeholder: "Choose a project",
+      onChange: chooseProject
+    });
+    scope.add(() => existingProjectSelect?.dispose());
+    existingProjectHost.append(existingProjectNote);
+    const existingOtherHost = h("div", { class: "dc-newsys-other", hidden: true });
+    const existingOtherId = nextId2("dc-newsys-existing-folder");
+    const existingOtherInput = h("input", { type: "text", id: existingOtherId, class: "oc-sdk-input", placeholder: "C:\\Projects\\shop or /Users/you/shop", spellcheck: "false", autocomplete: "off" });
+    const existingOtherScan = btn({ label: "Read this folder", variant: "outline", size: "sm", onClick: () => void scanFolder(otherFolder) });
+    existingOtherHost.append(h("div", { class: "dc-field" }, h("label", { class: "oc-sdk-field-label", for: existingOtherId }, "Project folder"), h("div", { class: "dc-newsys-row" }, existingOtherInput, existingOtherScan.el)));
+    existingOtherInput.addEventListener("input", () => {
+      otherFolder = existingOtherInput.value;
+      otherInput.value = otherFolder;
+    });
+    existingOtherInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void scanFolder(otherFolder);
+      }
+    });
+    const discoveryHost = h("div", { class: "dc-newsys-discovery", "aria-live": "polite" });
+    const locationFieldHost = h("div");
+    const locationField = mountTextField(locationFieldHost, {
+      label: "Where does it live?",
+      value: locationPath,
+      mono: true,
+      placeholder: "design-system",
+      helper: LOCATION_HELPER(projectLabel()),
+      onChange: (next) => {
+        locationPath = next;
+        locationField.update({ value: next });
+        if (location.state !== "idle" && next.trim() !== location.path) {
+          cancelSlot(locationSlot);
+          location = { state: "idle" };
+          choice = "make";
+          locationTicked.clear();
+          paintExisting();
+        }
+        syncCandidateChecks();
+        if (attempted) paintProblems();
+      }
+    });
+    scope.add(() => locationField.dispose());
+    const locationRead = btn({ label: "Read this folder", variant: "outline", size: "sm", onClick: () => void scanLocation(locationPath) });
+    locationFieldHost.append(locationRead.el);
+    locationFieldHost.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
+        event.preventDefault();
+        void scanLocation(locationPath);
+      }
+    });
+    const existingBody = h(
+      "div",
+      { class: "dc-newsys-stack" },
+      h("div", { class: "dc-newsys-col-head" }, h("h3", { class: "dc-newsys-h3" }, "Existing design system"), h("p", { class: "dc-muted" }, "Pick where it lives. Design Chamber only reads the folder.")),
+      existingProjectHost,
+      existingOtherHost,
+      discoveryHost,
+      locationFieldHost
+    );
+    const assetGroup = (summary, ticks) => {
+      if (summary.assets.length === 0) return null;
+      const group2 = h("div", { class: "dc-newsys-assets" }, h("span", { class: "oc-sdk-field-label" }, "Copy into the system"));
+      for (const asset of summary.assets) {
+        const holder = h("div");
+        const label = asset.family ? `${asset.family}${asset.weight ? ` ${asset.weight}` : ""}` : folderName(asset.path);
+        const handle = mountCheckbox(holder, {
+          label: `${asset.kind === "font" ? "Font" : "Logo"}: ${label}`,
+          description: `${asset.path} \xB7 ${fileSize(asset.bytes, host.snapshot()?.locale ?? "en")}`,
+          checked: ticks.has(asset.path),
+          onChange: (checked) => void (checked ? ticks.add(asset.path) : ticks.delete(asset.path))
+        });
+        scope.add(() => handle.dispose());
+        group2.append(holder);
+      }
+      if (summary.assets.some((asset) => asset.kind === "font")) group2.append(h("p", { class: "dc-muted" }, FONT_LICENCE_NOTE));
+      return group2;
+    };
+    const summaryDetails = (summary) => {
+      const list = h("ul", { class: "dc-newsys-files" }, ...summary.files.slice(0, 40).map((file) => h("li", null, h("span", { class: "dc-path" }, file.path), h("span", { class: "dc-muted" }, plural(file.found, "value")))));
+      const more = summary.files.length > 40 ? h("p", { class: "dc-muted" }, `and ${summary.files.length - 40} more.`) : null;
+      const noValues = filesReadMore(summary);
+      return h("details", { class: "dc-newsys-details" }, h("summary", null, filesReadLabel(summary)), list, more, noValues === null ? null : h("p", { class: "dc-muted" }, noValues));
+    };
+    const nudgeBanner = () => {
+      if (!sources.code || nudgeDismissed || scan.state !== "done") return null;
+      const first = scan.summary.candidates?.[0];
+      if (!first || !first.strong) return null;
+      const start = btn({ label: "Start from it", variant: "outline", size: "xs", onClick: () => {
+        Object.assign(sources, nextSources(sources, "existing", true, { description, preset }));
+        const where = locationValue(first.path);
+        locationPath = where;
+        paintSources();
+        void scanLocation(where);
+      } });
+      const dismiss = btn({ label: "Dismiss", variant: "ghost", size: "xs", onClick: () => {
+        nudgeDismissed = true;
+        paintScan();
+      } });
+      const wrap = h("div", { class: "dc-newsys-nudge" });
+      wrap.append(...bannerWithActions("info", nudgeLine(first), [], [start.el, dismiss.el]));
+      return wrap;
+    };
+    const paintScan = () => {
+      scanHost.replaceChildren();
+      if (attempted) paintProblems();
+      if (scan.state === "idle") {
+        const chosen = projectChoice === "" || projectChoice === OTHER_FOLDER ? null : projectChoice;
+        if (chosen === null && projectChoice === "" && projects.length > 0) scanHost.append(h("p", { class: "dc-muted" }, "Choose a project and Design Chamber reads its colours, type and spacing. Nothing in it is changed."));
+        if (chosen !== null) scanHost.append(btn({ label: `Read ${projects.find((project) => sameDirectory(project.directory, chosen))?.name ?? folderName(chosen)}`, variant: "outline", size: "sm", onClick: () => void scanFolder(chosen) }).el);
+        return;
+      }
+      if (scan.state === "running") {
+        const spinnerHost = h("div", { class: "dc-newsys-running" });
+        mountSpinner(spinnerHost, { label: scan.seen > 0 ? `Reading ${folderName(scan.directory)}\u2026 ${plural(scan.seen, "file")} looked at` : `Reading ${folderName(scan.directory)}\u2026` });
+        scanHost.append(spinnerHost, btn({ label: "Cancel scan", variant: "ghost", size: "xs", onClick: () => {
+          cancelSlot(projectSlot);
+          scan = { state: "idle" };
+          paintScan();
+          paintDiscovery();
+        } }).el);
+        return;
+      }
+      if (scan.state === "failed") {
+        scanHost.append(h("p", { class: "dc-form-error", role: "alert" }, scan.message), h("p", { class: "dc-muted" }, "What you typed is kept. Pick another folder, or untick Project code."));
+        return;
+      }
+      const nudge = nudgeBanner();
+      if (nudge !== null) scanHost.append(nudge);
+      const { summary } = scan;
+      const sentence2 = scanSummarySentence(summary);
+      const lines = [sentence2 === null ? h("p", { class: "dc-muted" }, SCAN_NOTHING_FOUND) : h("p", { class: "dc-newsys-found" }, icon2("check", 14), sentence2)];
+      if (summary.partial) lines.push(h("p", { class: "dc-muted" }, SCAN_PARTIAL));
+      lines.push(h("p", { class: "dc-muted dc-newsys-note" }, missedLine(summary)));
+      const agentLine = forAgentLine(summary);
+      if (agentLine) lines.push(h("p", { class: "dc-muted" }, agentLine));
+      const skipped = skippedLine(summary);
+      if (skipped) lines.push(h("p", { class: "dc-muted" }, skipped));
+      if (summary.read > 0) lines.push(summaryDetails(summary));
+      const assets = assetGroup(summary, ticked);
+      if (assets !== null) lines.push(assets);
+      scanHost.append(...lines);
+    };
+    let discoveryKey = "";
+    const candidateInputs = /* @__PURE__ */ new Map();
+    const syncCandidateChecks = () => {
+      const selected = location.state === "done" || location.state === "running" ? location.path : locationPath.trim();
+      for (const [path, input] of candidateInputs) {
+        const on = path === selected;
+        input.checked = on;
+        input.closest(".dc-newsys-cand")?.setAttribute("data-on", on ? "true" : "false");
+      }
+    };
+    const openRegistered = (registered) => {
+      if (options.onMade) {
+        options.onMade(registered);
+        sheet.close();
+        return;
+      }
+      client.call("POST /open-request", { body: { system: registered.id, target: "page" } }).then(
+        () => sheet.close(),
+        (error) => toast("error", `Couldn\u2019t open ${registered.name}. ${errorText2(error)}`)
+      );
+    };
+    const candidateRow = (candidate, groupName) => {
+      const id = nextId2("dc-newsys-cand");
+      const input = h("input", { type: "radio", class: "dc-newsys-radio", name: groupName, id });
+      const where = locationValue(candidate.path);
+      input.addEventListener("change", () => {
+        if (!input.checked) return;
+        locationPath = where;
+        locationField.update({ value: where, error: void 0 });
+        void scanLocation(where);
+      });
+      candidateInputs.set(where, input);
+      const pathLabel = h("label", { for: id, class: "dc-newsys-cand-path-label", title: candidate.path === "" ? projectLabel() : candidate.path }, locationLabel(candidate.path));
+      const pathLine = h("div", { class: "dc-newsys-cand-path" }, pathLabel);
+      if (candidate.marks.includes("contract")) {
+        const badge = h("span", { class: "dc-newsys-cand-badge" });
+        mountBadge(badge, { label: "Complete", tone: "success" });
+        pathLine.append(badge);
+      }
+      if (candidate.registered !== null) {
+        const registered = candidate.registered;
+        const open = btn({ label: "Open", variant: "ghost", size: "xs", title: `Open ${registered.name}`, onClick: (event) => {
+          event.stopPropagation();
+          openRegistered(registered);
+        } });
+        open.el.setAttribute("aria-label", `Open ${registered.name} in Design Chamber`);
+        pathLine.append(open.el);
+      }
+      return h(
+        "div",
+        { class: "dc-newsys-cand", "data-on": "false" },
+        input,
+        pathLine,
+        h("p", { class: "dc-newsys-cand-mark" }, candidateMarkLine(candidate)),
+        h("p", { class: "dc-newsys-cand-count" }, candidateCountLine(candidate))
+      );
+    };
+    const paintDiscovery = () => {
+      if (attempted) paintProblems();
+      const key = scan.state === "done" ? `done:${scan.scanId}` : scan.state === "running" ? `running:${scan.directory}` : scan.state === "failed" ? `failed:${scan.directory}:${scan.message}` : `idle:${projectDirectory()}`;
+      if (key === discoveryKey && discoveryHost.childElementCount > 0) {
+        syncCandidateChecks();
+        return;
+      }
+      discoveryKey = key;
+      candidateInputs.clear();
+      discoveryHost.replaceChildren();
+      if (scan.state === "idle") {
+        const directory = projectDirectory();
+        if (directory === "") discoveryHost.append(h("p", { class: "dc-muted" }, DISCOVERY_IDLE));
+        else discoveryHost.append(btn({ label: "Look for a design system", variant: "outline", size: "sm", onClick: () => void scanFolder(directory) }).el);
+        return;
+      }
+      if (scan.state === "running") {
+        const spinnerHost = h("div", { class: "dc-newsys-running" });
+        mountSpinner(spinnerHost, { label: LOOKING_LABEL(projectLabel()) });
+        discoveryHost.append(spinnerHost, btn({ label: "Cancel scan", variant: "ghost", size: "xs", onClick: () => {
+          cancelSlot(projectSlot);
+          scan = { state: "idle" };
+          paintScan();
+          paintDiscovery();
+        } }).el);
+        return;
+      }
+      if (scan.state === "failed") {
+        const failedDirectory = scan.directory;
+        discoveryHost.append(
+          h("p", { class: "dc-form-error", role: "alert" }, scan.message),
+          btn({ label: "Try again", variant: "outline", size: "sm", onClick: () => void scanFolder(failedDirectory) }).el
+        );
+        return;
+      }
+      const candidates2 = scan.summary.candidates ?? [];
+      if (candidates2.length === 0) {
+        discoveryHost.append(h("p", { class: "dc-muted" }, NO_CANDIDATES));
+        return;
+      }
+      const more = scan.summary.candidatesMore ?? 0;
+      const groupName = nextId2("dc-newsys-loc");
+      const list = h("div", { class: "dc-newsys-cands", role: "radiogroup", "aria-label": "Looks like a design system" }, ...candidates2.map((candidate) => candidateRow(candidate, groupName)));
+      if (more > 0) list.append(h("p", { class: "dc-newsys-cand-more" }, candidatesMoreLine(more)));
+      discoveryHost.append(
+        h("div", { class: "dc-newsys-pick-head" }, h("h3", { class: "dc-newsys-h3" }, "Looks like a design system"), h("span", { class: "dc-muted dc-newsys-pick-note" }, candidatesNote(candidates2.length + more))),
+        list
+      );
+      syncCandidateChecks();
+    };
+    const locationSummaryBlock = (summary) => {
+      const sentence2 = scanSummarySentence(summary);
+      const lines = [
+        sentence2 === null ? h("p", { class: "dc-muted" }, NOTHING_IN_LOCATION(locationLabel(location.state === "done" ? location.path : ""))) : h("p", { class: "dc-newsys-found-line" }, h("strong", null, "Found"), sentence2.replace(/^Found/, ""))
+      ];
+      if (summary.partial) lines.push(h("p", { class: "dc-muted" }, SCAN_PARTIAL));
+      lines.push(h("p", { class: "dc-muted dc-newsys-note" }, missedLine(summary)));
+      const view2 = summary.location;
+      if (view2) {
+        const left = leftForAgentLine(view2);
+        if (left !== null) lines.push(h("p", { class: "dc-muted dc-newsys-note" }, icon2("page", 14), h("span", null, left)));
+      }
+      const agentLine = forAgentLine(summary);
+      if (agentLine) lines.push(h("p", { class: "dc-muted dc-newsys-note" }, agentLine));
+      const skipped = skippedLine(summary);
+      if (skipped) lines.push(h("p", { class: "dc-muted dc-newsys-note" }, icon2("alert", 14), h("span", null, skipped)));
+      if (summary.read > 0) lines.push(summaryDetails(summary));
+      const assets = assetGroup(summary, locationTicked);
+      if (assets !== null) lines.push(assets);
+      return lines;
+    };
+    const choiceBlock = (summary) => {
+      const contract = summary.location?.contract;
+      if (contract == null) return null;
+      if (!contract.complete) return h("p", { class: "dc-muted dc-newsys-contract-problem" }, contractProblemLine(contract.missing));
+      const groupName = nextId2("dc-newsys-how");
+      const option = (value, label, hint, recommended) => {
+        const id = nextId2("dc-newsys-choice");
+        const input = h("input", { type: "radio", class: "dc-newsys-radio", name: groupName, id, checked: choice === value });
+        input.addEventListener("change", () => {
+          if (!input.checked) return;
+          choice = value;
+          paintFooter();
+          paintDest();
+          syncChoiceChecks();
+        });
+        const labelEl = h("label", { for: id }, label);
+        if (recommended) {
+          const badge = h("span", { class: "dc-newsys-cand-badge" });
+          mountBadge(badge, { label: "Recommended", tone: "success" });
+          labelEl.append(" ", badge);
+        }
+        return h("div", { class: "dc-newsys-choice", "data-on": choice === value ? "true" : "false", "data-choice": value }, input, labelEl, h("p", { class: "dc-newsys-choice-hint" }, hint));
+      };
+      const group2 = h(
+        "div",
+        { class: "dc-newsys-choices", role: "radiogroup", "aria-label": "What should happen with it?" },
+        h("span", { class: "oc-sdk-field-label" }, "What should happen with it?"),
+        option("register", REGISTER_CHOICE_LABEL, REGISTER_HINT(projectLabel()), true),
+        option("make", MAKE_CHOICE_LABEL, MAKE_FROM_HINT, false)
+      );
+      return group2;
+    };
+    const syncChoiceChecks = () => {
+      for (const row2 of resultHost.querySelectorAll(".dc-newsys-choice")) {
+        const on = row2.dataset.choice === choice;
+        row2.setAttribute("data-on", on ? "true" : "false");
+        const input = row2.querySelector("input");
+        if (input) input.checked = on;
+      }
+    };
+    const resultHost = h("div", { class: "dc-newsys-g-result dc-newsys-stack", hidden: true, "aria-live": "polite" });
+    const paintResult = () => {
+      resultHost.replaceChildren();
+      if (location.state === "done") {
+        const { summary } = location;
+        resultHost.append(
+          h("div", { class: "dc-newsys-col-head" }, h("h3", { class: "dc-newsys-h3" }, "What Design Chamber read"), h("p", { class: "dc-muted" }, `In ${locationLabel(location.path)}`)),
+          h("div", { class: "dc-newsys-read-lines" }, ...locationSummaryBlock(summary))
+        );
+        const choiceEl = choiceBlock(summary);
+        if (choiceEl !== null) resultHost.append(choiceEl);
+        return;
+      }
+      resultHost.append(h("div", { class: "dc-newsys-col-head" }, h("h3", { class: "dc-newsys-h3" }, "What Design Chamber read")));
+      if (location.state === "running") {
+        const spinnerHost = h("div", { class: "dc-newsys-running" });
+        mountSpinner(spinnerHost, { label: `Reading ${location.path === locationValue("") ? locationLabel(location.path) : folderName(location.path)}\u2026` });
+        resultHost.append(spinnerHost, btn({ label: "Cancel scan", variant: "ghost", size: "xs", onClick: () => {
+          cancelSlot(locationSlot);
+          location = { state: "idle" };
+          paintExisting();
+        } }).el);
+        return;
+      }
+      resultHost.append(h("p", { class: "dc-muted" }, location.state === "failed" ? LOCATION_FAILED_HINT : locationPath.trim() === "" ? LOCATION_IDLE : LOCATION_UNREAD));
+    };
+    const paintExisting = () => {
+      resultHost.hidden = !sources.existing;
+      paintDiscovery();
+      paintResult();
+      locationRead.set({ loading: location.state === "running" });
+      locationField.update({
+        value: locationPath,
+        error: location.state === "failed" ? location.message : void 0,
+        helper: LOCATION_HELPER(projectLabel())
+      });
+      paintFooter();
+      paintDest();
+      if (attempted) paintProblems();
+    };
+    const fileInput = h("input", { type: "file", multiple: true, accept: BRAND_ACCEPT, hidden: true, "aria-hidden": "true", tabindex: "-1" });
+    const dropZone = h("div", { class: "dc-newsys-drop", "data-drop": "idle" });
+    const chooseFiles = btn({ label: "Choose files\u2026", variant: "outline", size: "sm", icon: "plus", onClick: () => fileInput.click() });
+    dropZone.append(h("span", { class: "dc-newsys-drop-text" }, "Drop files here, or"), chooseFiles.el, h("span", { class: "dc-muted dc-newsys-drop-types" }, BRAND_TYPES_LINE));
+    const fileList = h("ul", { class: "dc-newsys-picked", "aria-label": "Brand files to add" });
+    const refusedList = h("ul", { class: "dc-newsys-refused", "aria-label": "Files that can\u2019t be added", role: "status" });
+    const folderHost = h("div", { class: "dc-newsys-other", hidden: true });
+    const folderId = nextId2("dc-newsys-brand-folder");
+    const folderInput = h("input", { type: "text", id: folderId, class: "oc-sdk-input", placeholder: "C:\\Brand or /Users/you/Brand", spellcheck: "false", autocomplete: "off" });
+    folderHost.append(h("div", { class: "dc-field" }, h("label", { class: "oc-sdk-field-label", for: folderId }, "Brand folder"), folderInput), h("p", { class: "dc-muted" }, "Design Chamber reads the files directly in it, not in folders inside it. The folder isn\u2019t changed."));
+    folderInput.addEventListener("input", () => {
+      brandFolder = folderInput.value;
+    });
+    const folderToggle = btn({ label: "Add from a folder\u2026", variant: "ghost", size: "sm", icon: "folder", onClick: () => {
+      folderOpen = !folderOpen;
+      folderHost.hidden = !folderOpen;
+      if (folderOpen) folderInput.focus();
+      else {
+        brandFolder = "";
+        folderInput.value = "";
+      }
+    } });
+    const brandBody = h("div", { class: "dc-newsys-stack" }, dropZone, fileInput, fileList, refusedList, folderToggle.el, folderHost);
+    const paintFiles = () => {
+      const locale = host.snapshot()?.locale ?? "en";
+      fileList.replaceChildren(
+        ...files.map((file) => {
+          const remove2 = iconBtn({ icon: "close", label: `Remove ${file.name}`, size: "sm", onClick: () => {
+            picked.delete(file.key);
+            files = files.filter((entry) => entry.key !== file.key);
+            paintFiles();
+          } });
+          return h("li", { class: "dc-newsys-file" }, h("span", { class: "dc-newsys-file-name", title: file.name }, file.name), h("span", { class: "dc-muted dc-newsys-file-meta" }, `${KIND_LABEL[file.kind]} \xB7 ${fileSize(file.bytes, locale)}`), remove2);
+        })
+      );
+      fileList.hidden = files.length === 0;
+      refusedList.replaceChildren(...refused.map((entry) => h("li", null, icon2("alert", 14), h("span", null, entry.reason))));
+      refusedList.hidden = refused.length === 0;
+    };
+    const KIND_LABEL = { font: "Font", logo: "Logo", source: "Document" };
+    const take = (list) => {
+      if (!list || list.length === 0) return;
+      const incoming = Array.from(list).map((file) => ({ key: `${file.name}\0${file.size}\0${file.lastModified}`, name: file.name, bytes: file.size, file }));
+      const result = takeBrandFiles(incoming, files);
+      for (const entry of result.added) {
+        const source = incoming.find((candidate) => candidate.key === entry.key);
+        if (source) picked.set(entry.key, source.file);
+      }
+      files = [...files, ...result.added];
+      refused = result.refused;
+      paintFiles();
+      if (attempted) paintProblems();
+    };
+    fileInput.addEventListener("change", () => {
+      take(fileInput.files);
+      fileInput.value = "";
+    });
+    for (const type of ["dragenter", "dragover"]) {
+      dropZone.addEventListener(type, (event) => {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+        dropZone.dataset.drop = "over";
+      });
+    }
+    dropZone.addEventListener("dragleave", () => void (dropZone.dataset.drop = "idle"));
+    dropZone.addEventListener("drop", (event) => {
+      event.preventDefault();
+      dropZone.dataset.drop = "idle";
+      take(event.dataTransfer?.files ?? null);
+    });
+    const descHost = h("div");
+    const descField = mountTextField(descHost, {
+      label: "What should it look like?",
+      value: description,
+      multiline: true,
+      rows: 4,
+      placeholder: DESCRIPTION_PLACEHOLDER,
+      helper: `Up to ${DESCRIPTION_MAX.toLocaleString("en-US")} characters.`,
+      onChange: (next) => {
+        description = next;
+        descField.update({ value: next });
+        if (attempted) paintProblems();
+      }
+    });
+    scope.add(() => descField.dispose());
+    const presetHost = h("div", { class: "dc-field" });
+    const presetSelect = mountSelect(presetHost, { label: "Start from a style preset", value: "", options: presetOptions([]), disabled: true, onChange: (id) => void (preset = id) });
+    scope.add(() => presetSelect.dispose());
+    const presetNote = h("p", { class: "oc-sdk-field-note", hidden: true });
+    presetHost.append(presetNote);
+    const paintPresets = () => {
+      const state = store.getState().presets;
+      if (state.status === "ready" && state.data) presetSelect.update({ options: presetOptions(state.data.presets), disabled: false, value: preset });
+      if (state.status === "error") {
+        presetNote.textContent = "Style presets didn\u2019t load. You can still describe the look yourself.";
+        presetNote.hidden = false;
+      }
+    };
+    scope.add(store.subscribe(paintPresets));
+    void store.loadPresets();
+    paintPresets();
+    const descriptionBody = h("div", { class: "dc-newsys-stack" }, descHost, presetHost);
+    const destHost = h("div", { class: "dc-field dc-newsys-g-agent dc-newsys-agent" }, h("span", { class: "oc-sdk-field-label" }, "Agent works in"));
+    const destTabs = mountTabs(destHost, {
+      items: DESTINATIONS.map(({ id, label }) => ({ id, label })),
+      activeId: destination,
+      trackBackground: true,
+      onChange: (id) => {
+        if (registering()) {
+          destTabs.update({ activeId: destination });
+          return;
+        }
+        destination = id === "current-chat" ? "current-chat" : "new-chat";
+        destTabs.update({ activeId: destination });
+        paintDest();
+      }
+    });
+    scope.add(() => destTabs.dispose());
+    const destHint = h("p", { class: "oc-sdk-field-note" });
+    destHost.append(destHint);
+    const paintDest = () => {
+      const off = registering();
+      destHost.dataset.disabled = off ? "true" : "false";
+      for (const tab of destHost.querySelectorAll('[role="tab"]')) tab.setAttribute("aria-disabled", off ? "true" : "false");
+      const noSession = destination === "current-chat" && host.session() === null;
+      destHint.textContent = off ? AGENT_DISABLED_HINT : noSession ? "No chat is open right now. Choose New chat, or open one first." : destination === "new-chat" ? "Starts a chat in the project you read, or in this one." : "Attaches the design system to the chat you have open.";
+    };
+    paintDest();
+    const nameProblem = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+    problemLines.set("name", nameProblem);
+    nameHost.append(nameProblem);
+    const failure = h("div", { class: "dc-newsys-failure", role: "alert", hidden: true });
+    const grid = h(
+      "div",
+      { class: "dc-newsys-grid" },
+      nameHost,
+      h(
+        "div",
+        { class: "dc-newsys-sources dc-newsys-g-opts", role: "group", "aria-label": "Start from" },
+        h("span", { class: "oc-sdk-field-label" }, "Start from"),
+        sourceBlock("code", codeBody),
+        sourceBlock("brand", brandBody),
+        sourceBlock("description", descriptionBody),
+        sourceBlock("existing", existingBody, false)
+      ),
+      whereHost,
+      resultHost,
+      destHost
+    );
+    const form = h("div", { class: "dc-newsys-form" }, grid, failure);
+    const progress = h("div", { class: "dc-newsys-progress", hidden: true, "aria-live": "polite" });
+    const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => sheet.close() });
+    const make = btn({ label: MAKE_LABEL, variant: "default", emphasis: "primary", onClick: () => void submit() });
+    const repoNote = h("p", { class: "dc-newsys-repo-note", hidden: true }, REPO_UNTOUCHED_LINE);
+    sheet.body.append(form, progress);
+    sheet.foot.append(repoNote, cancel.el, make.el);
+    const paintFooter = () => {
+      make.set({ label: registering() ? REGISTER_LABEL : MAKE_LABEL });
+      repoNote.hidden = !sources.existing;
+    };
+    const existing = () => systems().get().systems ?? [];
+    const currentDraft = () => ({ name, sources, scan: { project: scan, location }, brand: { files, folder: brandFolder }, description, preset });
+    const paintProblems = () => {
+      problems = draftProblems(currentDraft(), existing());
+      for (const [field2, line] of problemLines) {
+        const problem = problems.find((entry) => entry.field === field2);
+        line.textContent = problem?.message ?? "";
+        line.hidden = problem === void 0;
+      }
+      nameField.update({ error: problems.find((entry) => entry.field === "name")?.message });
+      nameProblem.hidden = true;
+    };
+    const focusFirst = () => {
+      const first = problems[0];
+      if (!first) return;
+      const existingTarget = projectDirectory() === "" ? projectChoice === OTHER_FOLDER ? existingOtherInput : existingProjectHost.querySelector("button") : locationFieldHost.querySelector("input");
+      const target = first.field === "name" ? nameHost.querySelector("input") : first.field === "code" ? otherHost.hidden ? projectHost.querySelector("button") : otherInput : first.field === "existing" ? existingTarget : first.field === "brand" ? chooseFiles.el : descHost.querySelector("textarea");
+      target?.focus();
+    };
+    const stepText = (step) => {
+      if (step.phase === "creating") return "Making the design system\u2026";
+      if (step.phase === "files") return `Adding brand files: ${step.done + 1} of ${step.total}, ${step.name}`;
+      if (step.phase === "folder") return "Adding brand files from the folder\u2026";
+      return "Asking the agent to write it\u2026";
+    };
+    const setMaking = (on) => {
+      making = on;
+      make.set({ loading: on });
+      cancel.set({ disabled: on });
+      form.inert = on;
+      progress.hidden = !on;
+    };
+    const submit = async () => {
+      if (making) return;
+      attempted = true;
+      paintProblems();
+      if (problems.length > 0) {
+        focusFirst();
+        return;
+      }
+      failure.hidden = true;
+      const trimmedName = name.normalize("NFKC").trim();
+      if (registering() && location.state === "done") {
+        setMaking(true);
+        progress.replaceChildren();
+        const spinnerHost2 = h("div");
+        mountSpinner(spinnerHost2, { label: "Registering the design system\u2026" });
+        progress.append(spinnerHost2);
+        try {
+          const registered = await makeSystem.register({ scanId: location.scanId, name: trimmedName });
+          void systems().load();
+          options.onMade?.(registered);
+          toast("success", REGISTER_TOAST(registered.name, projectLabel()));
+          if (!closed) sheet.close();
+        } catch (error) {
+          setMaking(false);
+          failure.replaceChildren(h("p", { class: "dc-form-error" }, `Couldn\u2019t register the design system. ${errorText2(error)}`));
+          failure.hidden = false;
+        }
+        return;
+      }
+      const input = {
+        name: trimmedName,
+        // From a location: the scan is the location job, but the chat's project is the project it sits in (§5.8).
+        code: sources.existing && location.state === "done" ? { scanId: location.scanId, assets: [...locationTicked], directory: projectDirectory() } : sources.code && scan.state === "done" ? { scanId: scan.scanId, assets: [...ticked], directory: scan.directory } : null,
+        description: sources.description ? { text: description.trim(), preset: preset === "" ? null : preset } : null,
+        brand: sources.brand ? {
+          files: files.flatMap((file) => {
+            const blob = picked.get(file.key);
+            return blob ? [{ file: blob, name: file.name, kind: file.kind }] : [];
+          }),
+          folder: brandFolder.trim() === "" ? null : brandFolder.trim()
+        } : null,
+        destination
+      };
+      setMaking(true);
+      progress.replaceChildren();
+      const spinnerHost = h("div");
+      const spinner = mountSpinner(spinnerHost, { label: stepText({ phase: "creating" }) });
+      progress.append(spinnerHost);
+      const setStep = (step) => spinner.update({ label: stepText(step) });
+      try {
+        const result = await makeSystem.make(input, setStep);
+        void systems().load();
+        options.onMade?.(result);
+        finish(result);
+      } catch (error) {
+        setMaking(false);
+        failure.replaceChildren(h("p", { class: "dc-form-error" }, `Couldn\u2019t make the design system. ${errorText2(error)}`));
+        failure.hidden = false;
+      }
+    };
+    const finish = (result) => {
+      const refusedCount = result.files.refused.length;
+      const sent = result.agent.outcome !== "not-sent";
+      if (refusedCount === 0 && sent) {
+        toast("success", result.agent.outcome === "composed" ? `Made ${result.name}. The request is waiting in the chat composer.` : `Made ${result.name}. It\u2019s a draft; the agent is writing it now.`);
+        if (!closed) sheet.close();
+        return;
+      }
+      if (closed) {
+        toast("error", `${resultToast(result.name, refusedCount, sent)} Check the design system\u2019s files in the list.`);
+        return;
+      }
+      showResult(result);
+    };
+    const showResult = (result) => {
+      setMaking(false);
+      sheet.setTitle(`${result.name} is made`);
+      sheet.el.querySelector(".dc-sheet-sub")?.remove();
+      const body = h("div", { class: "dc-newsys-result" });
+      let agent = result.agent;
+      const render = () => {
+        body.replaceChildren(h("p", null, resultHeadline(result.files.refused.length, agent.outcome !== "not-sent")));
+        if (result.files.added.length > 0) body.append(h("p", { class: "dc-muted" }, `Added ${plural(result.files.added.length, "file")}: ${result.files.added.join(", ")}.`));
+        if (result.files.refused.length > 0) {
+          body.append(h("div", { class: "dc-newsys-block" }, h("span", { class: "oc-sdk-field-label" }, "Files not added"), h("ul", { class: "dc-newsys-refused" }, ...result.files.refused.map((entry) => h("li", null, icon2("alert", 14), h("span", null, entry.reason)))), h("p", { class: "dc-muted" }, "You can add them again from the system\u2019s page. The rest are in.")));
+        }
+        if (agent.outcome === "not-sent") {
+          const again = btn({ label: "Try again", variant: "outline", size: "sm", onClick: () => {
+            again.set({ loading: true });
+            void makeSystem.askToMake({ id: result.id, destination, directory: scan.state === "done" ? scan.directory : null }).then((next) => {
+              agent = next;
+              if (next.outcome !== "not-sent" && result.files.refused.length === 0) {
+                toast("success", `Asked the agent to write ${result.name}.`);
+                sheet.close();
+                return;
+              }
+              render();
+            });
+          } });
+          const actions = [again.el];
+          if (agent.text !== null) {
+            const text = agent.text;
+            actions.push(btn({ label: "Copy request", variant: "ghost", size: "sm", icon: "copy", onClick: () => void host.writeClipboard(text).then((ok) => toast(ok ? "success" : "error", ok ? "Copied the request. Paste it into a chat." : "Couldn\u2019t copy. Select the text and copy it yourself.")) }).el);
+          }
+          body.append(h("div", { class: "dc-newsys-block" }, banner({ tone: "warning", title: "Couldn\u2019t ask the agent", body: agent.reason ?? "The request didn\u2019t reach a chat." }), h("div", { class: "dc-row-actions" }, ...actions)), h("p", { class: "dc-muted" }, `${result.name} is saved as a draft with what was gathered. You can ask the agent later.`));
+        }
+      };
+      render();
+      sheet.body.replaceChildren(body);
+      sheet.foot.replaceChildren(btn({ label: "Done", variant: "default", emphasis: "primary", onClick: () => sheet.close() }).el);
+    };
+    paintProject();
+    paintSources();
+    paintFiles();
+    void guestHost.client.listProjects().then(
+      (answer) => {
+        if (closed) return;
+        projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
+        const current = host.snapshot()?.directory ?? null;
+        const match = current === null ? void 0 : projects.find((project) => sameDirectory(project.directory, current));
+        if (match && projectChoice === "") projectChoice = match.directory;
+        else if (projects.length === 0 && projectChoice === "") projectChoice = OTHER_FOLDER;
+        paintProject();
+        paintSources();
+        if ((sources.code || sources.existing) && scan.state === "idle") void startDefaultScan();
+      },
+      (error) => {
+        console.warn("Design Chamber: the project list could not be read; the folder path still works", error);
+        if (closed) return;
+        projectChoice = OTHER_FOLDER;
+        paintProject();
+        paintExisting();
+      }
+    );
+    void systems().load();
+  };
+
+  // src/ui/systems/system-plate.ts
+  var mountPlate = (summary, variant) => {
+    const colours = plateSwatches(summary);
+    const plate = h("span", { class: "dc-plate", "data-variant": variant, "data-empty": colours.length === 0 ? "true" : "false", "aria-hidden": "true" });
+    if (colours.length === 0) {
+      plate.append(icon2("system", variant === "tile" ? 28 : 18));
+      return plate;
+    }
+    plate.append(h("span", { class: "dc-plate-aa" }, "Aa"));
+    if (variant === "tile") {
+      const accent = h("span", { class: "dc-plate-accent" });
+      accent.style.setProperty("background-color", colours[0] ?? "");
+      plate.append(h("span", { class: "dc-plate-spec" }, accent, h("span", { class: "dc-plate-line", "data-w": "long" }), h("span", { class: "dc-plate-line", "data-w": "short" })));
+    }
+    const strip = h("span", { class: "dc-plate-swatches" });
+    for (const colour of colours) {
+      const cell = h("i", { class: "dc-plate-swatch" });
+      cell.style.setProperty("background-color", colour);
+      strip.append(cell);
+    }
+    plate.append(strip);
+    return plate;
+  };
+  var mountSwatchDot = (colour, className) => {
+    const dot = h("span", { class: className, "data-empty": colour === null ? "true" : "false", "aria-hidden": "true" });
+    if (colour !== null) dot.style.setProperty("background-color", colour);
+    return dot;
+  };
+
+  // src/ui/systems/system-row.ts
+  var toneBadge = (label, tone2, title2) => {
+    const holder = h("span", { class: "dc-sys-badge", title: title2 ?? null });
+    mountBadge(holder, { label, tone: tone2 });
+    return holder;
+  };
+  var usedByControl = (summary, text, onShowDesigns) => {
+    if (summary.usedBy === 0) return h("span", { class: "dc-sys-used", "data-zero": "true" }, text);
+    const link = h("button", { type: "button", class: "dc-link dc-sys-used", "aria-label": usedByLinkLabel(summary.usedBy), title: `Show the designs that use ${summary.name}` }, text);
+    link.addEventListener("click", () => onShowDesigns(summary.id));
+    return link;
+  };
+  var mountSystemRow = (summary, options) => {
+    const model = systemRow(summary, { nowMs: Date.now(), locale: host.snapshot()?.locale ?? "en", label: options.label });
+    const unreadable = model.unreadable !== null;
+    const title2 = h("span", { class: "dc-sys-title", title: model.name }, model.name);
+    const nameLine = h("span", { class: "dc-sys-name" }, title2, unreadable ? toneBadge("Can\u2019t read", "error") : toneBadge(model.status.label, model.status.tone));
+    const plate = h("span", { class: "dc-sys-plate" }, mountPlate(summary, "row"));
+    const main = unreadable ? h("div", { class: "dc-sys-main", "data-static": "true", role: "group", "aria-label": model.ariaLabel }, plate, nameLine) : h("button", { type: "button", class: "dc-sys-main", "aria-label": model.ariaLabel }, plate, nameLine);
+    if (!unreadable) main.addEventListener("click", () => options.onOpen(summary.id));
+    const more = iconBtn({ icon: "more", label: `Actions for ${summary.name}`, size: "sm", onClick: () => void 0 });
+    attachMenu(more, () => options.entries(), options.onMenu);
+    const body = [];
+    if (unreadable) body.push(h("p", { class: "dc-sys-reason" }, model.unreadable ?? ""));
+    else {
+      const badges = h("span", { class: "dc-sys-line" }, toneBadge(model.home.label, "neutral", model.home.title), ...model.badges.map((badge) => toneBadge(badge.label, badge.tone)));
+      if (model.more) badges.append(h("span", { class: "dc-sys-more", title: model.more.title }, model.more.text, h("span", { class: "dc-sr-only" }, `: ${model.more.title}`)));
+      body.push(badges);
+      if (model.notice) body.push(h("span", { class: "dc-sys-notice" }, model.notice));
+      const meta = h("span", { class: "dc-sys-meta" });
+      const parts = [...model.metaParts.source.map((text) => h("span", null, text)), usedByControl(summary, model.metaParts.usedBy.text, options.onShowDesigns), ...model.metaParts.updated === null ? [] : [h("span", null, model.metaParts.updated)]];
+      parts.forEach((part, index) => {
+        if (index > 0) meta.append(h("span", { class: "dc-sys-dot", "aria-hidden": "true" }, "\xB7"));
+        meta.append(part);
+      });
+      body.push(meta);
+    }
+    return h("li", { class: options.variant === "library" ? "dc-libsys" : "dc-sys", "data-id": summary.id, "data-state": unreadable ? "unreadable" : summary.status }, h("div", { class: "dc-sys-top" }, main, more), ...body);
+  };
+  var runLibrarySystemAction = async (id, summary, actions) => {
+    if (id === "open") return actions.onOpen(summary.id);
+    if (id === "preview") return actions.onPreview(summary.id);
+    try {
+      await client.call("POST /reveal", { body: { system: summary.id, target: "folder" } });
+    } catch (error) {
+      toast("error", `Couldn\u2019t open the folder. ${errorText2(error)}`);
+    }
+  };
+  var mountSystemListRow = (summary, options) => {
+    const locale = host.snapshot()?.locale ?? "en";
+    const model = systemRow(summary, { nowMs: Date.now(), locale, label: options.label });
+    const unreadable = model.unreadable !== null;
+    const hit = unreadable ? null : h("button", { type: "button", class: "dc-row-hit", "aria-label": libraryTileLabel(summary, { nowMs: Date.now(), locale }) });
+    hit?.addEventListener("click", () => options.onOpen(summary.id));
+    const kind = h("span", { class: "dc-sys-kind" });
+    mountBadge(kind, { label: "System", tone: "primary" });
+    const home = h("span", { class: "dc-card-project", title: model.home.title }, icon2(summary.home === "internal" ? "system" : "repo", 12), h("span", { class: "dc-row-project-name" }, model.home.label));
+    const more = iconBtn({ icon: "more", label: `Actions for ${summary.name}`, size: "sm", onClick: () => void 0 });
+    attachMenu(more, () => librarySystemMenu(summary), (id) => void runLibrarySystemAction(id, summary, options));
+    const updated = relativeTime(summary.updated, Date.now(), locale);
+    return h(
+      "li",
+      { class: "dc-row dc-list-row", "data-kind": "system", "data-system-id": summary.id },
+      hit,
+      h("span", { class: "dc-row-thumb dc-sys-plate" }, mountPlate(summary, "row")),
+      h(
+        "span",
+        { class: "dc-row-name" },
+        h("span", { class: "dc-row-title", title: summary.name }, summary.name),
+        h("span", { class: "dc-row-sub" }, kind, unreadable ? toneBadge("Can\u2019t read", "error", model.unreadable ?? void 0) : toneBadge(model.status.label, model.status.tone))
+      ),
+      h("span", { class: "dc-row-system" }, unreadable ? null : usedByControl(summary, model.metaParts.usedBy.text, options.onShowDesigns)),
+      h("span", { class: "dc-row-in" }, home),
+      h("span", { class: "dc-row-when" }, updated),
+      more
+    );
+  };
+
+  // src/ui/systems/systems-list.ts
+  var SKELETON_ROWS2 = 4;
+  var mountSystemsList = (options) => {
+    const scope = createScope();
+    const store2 = systems();
+    let projects = [];
+    const label = (directory) => projects.find((project) => sameDirectory(project.directory, directory))?.name ?? folderName(directory);
+    const el2 = h("div", { class: "dc-sys-view", "data-surface": options.surface });
+    const back = options.surface === "panel" ? iconBtn({ icon: "back", label: "Back to designs", onClick: () => options.onBack() }) : btn({ label: "Library", variant: "ghost", size: "default", icon: "back", onClick: () => options.onBack() }).el;
+    const newButton = btn({
+      label: "New design system",
+      variant: "default",
+      size: options.surface === "panel" ? "sm" : "default",
+      icon: "plus",
+      onClick: () => openNewSystemSheet(options.actions.host, { onMade: (result) => options.onOpen(result.id) })
+    });
+    const buildButton = btn({
+      label: BUILD_BUTTON_LABEL,
+      variant: "outline",
+      size: options.surface === "panel" ? "sm" : "default",
+      icon: "chat",
+      onClick: () => openBuildWithAgent(options.actions.host, buildButton.el)
+    });
+    const head = options.surface === "panel" ? h("header", { class: "dc-rail-head" }, back, h("h1", { class: "dc-rail-title" }, "Design systems"), h("span", { class: "dc-spacer" })) : h("header", { class: "dc-library-bar dc-sys-bar" }, back, h("h1", { class: "dc-page-title" }, "Design systems"), h("span", { class: "dc-spacer" }), buildButton.el, newButton.el);
+    const tools = options.surface === "panel" ? h("div", { class: "dc-sys-tools" }, newButton.el, buildButton.el) : null;
+    const capNote = h("p", { class: "dc-muted dc-sys-cap", hidden: true });
+    const notices = h("div", { class: "dc-sys-notices" });
+    const list = h("ul", { class: "dc-sys-list", "aria-label": "Design systems" });
+    const scroller = h("div", { class: options.surface === "panel" ? "dc-rail-scroll dc-sys-scroll" : "dc-library-scroll dc-sys-scroll" }, notices, capNote, list);
+    el2.append(head);
+    if (tools) el2.append(tools);
+    el2.append(scroller);
+    const rowFor = (summary) => mountSystemRow(summary, {
+      label,
+      onOpen: options.onOpen,
+      onShowDesigns: options.onShowDesigns,
+      entries: () => systemMenu(summary),
+      onMenu: (id) => void runAction(id, summary)
+    });
+    const skeleton = () => Array.from(
+      { length: SKELETON_ROWS2 },
+      () => h(
+        "li",
+        { class: "dc-sys dc-sys-skeleton", "aria-hidden": "true" },
+        h("span", { class: "dc-sys-main" }, h("span", { class: "dc-skel dc-skel-line dc-sys-skel-name" }), h("span", { class: "dc-skel dc-skel-line dc-sys-skel-badges" }), h("span", { class: "dc-skel dc-skel-line dc-skel-short" }))
+      )
+    );
+    const emptyState = () => {
+      const holder = h("div");
+      mountEmpty(holder, { title: EMPTY_TITLE, body: EMPTY_BODY });
+      const actions = h(
+        "div",
+        { class: "dc-sys-empty-actions" },
+        btn({ label: "From code\u2026", variant: "outline", size: "sm", icon: "page", onClick: () => openNewSystemSheet(options.actions.host, { source: "code", onMade: (result) => options.onOpen(result.id) }) }).el,
+        btn({ label: "From brand files\u2026", variant: "outline", size: "sm", icon: "image", onClick: () => openNewSystemSheet(options.actions.host, { source: "brand", onMade: (result) => options.onOpen(result.id) }) }).el,
+        btn({ label: "Describe\u2026", variant: "outline", size: "sm", icon: "pencil", onClick: () => openNewSystemSheet(options.actions.host, { source: "description", onMade: (result) => options.onOpen(result.id) }) }).el,
+        btn({ label: "From an existing system\u2026", variant: "outline", size: "sm", icon: "repo", onClick: () => openNewSystemSheet(options.actions.host, { source: "existing", onMade: (result) => options.onOpen(result.id) }) }).el
+      );
+      return h("li", { class: "dc-sys-message dc-sys-empty" }, holder, actions);
+    };
+    const failureState = (state) => {
+      const failure = loadFailure(state.error);
+      const holder = h("div", { class: "dc-banner dc-banner-block" });
+      mountBanner(holder, { tone: "error", title: failure.title, body: failure.body, action: { label: "Try again", onClick: () => void store2.load() } });
+      return h("li", { class: "dc-sys-message" }, holder);
+    };
+    const paintNotices = (state) => {
+      notices.replaceChildren();
+      if (state.status === "error" && state.systems !== null) {
+        const holder = h("div", { class: "dc-banner" });
+        mountBanner(holder, { tone: "warning", title: "Couldn\u2019t refresh the list", body: state.error?.message ?? "", action: { label: "Try again", onClick: () => void store2.load() } });
+        notices.append(holder);
+      }
+      notices.hidden = notices.childElementCount === 0;
+      const cap = atSystemsCap(state.total, state.max);
+      capNote.textContent = cap ?? "";
+      capNote.hidden = cap === null;
+      newButton.set({ disabled: cap !== null, title: cap ?? "" });
+      buildButton.set({ disabled: cap !== null, title: cap ?? "" });
+    };
+    const paint = () => {
+      const state = store2.get();
+      const previousScroll = scroller.scrollTop;
+      list.replaceChildren();
+      paintNotices(state);
+      const kind = systemsListState({ status: state.status, systems: state.systems });
+      if (kind === "loading") list.append(...skeleton());
+      else if (kind === "error") list.append(failureState(state));
+      else if (kind === "empty") list.append(emptyState());
+      else list.append(...(state.systems ?? []).map(rowFor));
+      list.setAttribute("aria-busy", kind === "loading" ? "true" : "false");
+      scroller.scrollTop = previousScroll;
+    };
+    const others = (id) => (store2.get().systems ?? []).filter((entry) => entry.id !== id);
+    const rename2 = (summary) => {
+      const sheet = openSheet(options.actions.host, { title: "Rename design system", variant: "dialog" });
+      let value = summary.name;
+      const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+      const holder = h("div");
+      const field2 = mountTextField(holder, {
+        label: "Name",
+        value,
+        onChange: (next) => {
+          value = next;
+          field2.update({ value: next, error: systemNameProblem(next, others(summary.id)) ?? void 0 });
+        }
+      });
+      const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => sheet.close() });
+      const save = btn({
+        label: "Rename",
+        variant: "default",
+        emphasis: "primary",
+        onClick: () => {
+          const problem = systemNameProblem(value, others(summary.id));
+          if (problem !== null) {
+            field2.update({ error: problem });
+            return;
+          }
+          failure.hidden = true;
+          save.set({ loading: true });
+          cancel.set({ disabled: true });
+          store2.rename(summary.id, value.normalize("NFKC").trim()).then(
+            () => {
+              toast("success", `Renamed to ${value.trim()}.`);
+              sheet.close();
+            },
+            (error) => {
+              failure.textContent = errorText2(error);
+              failure.hidden = false;
+              save.set({ loading: false });
+              cancel.set({ disabled: false });
+            }
+          );
+        }
+      });
+      sheet.body.append(holder, failure);
+      sheet.foot.append(cancel.el, save.el);
+    };
+    const remove2 = (summary) => {
+      confirmDialog(options.actions.host, {
+        title: `Delete ${summary.name}?`,
+        body: h("p", null, deleteSentence(summary.usedBy)),
+        confirmLabel: "Delete design system",
+        destructive: true,
+        onConfirm: async () => {
+          const cleared = await store2.remove(summary.id);
+          const extra = [cleared.default ? "It was your default, so new designs ask again." : null, cleared.pins > 0 ? `${plural(cleared.pins, "project pin")} cleared.` : null].filter((part) => part !== null);
+          toast("success", [`Deleted ${summary.name}.`, ...extra].join(" "));
+        }
+      });
+    };
+    const runAction = async (id, summary) => {
+      try {
+        if (id === "open") options.onOpen(summary.id);
+        else if (id === "rename") rename2(summary);
+        else if (id === "delete") remove2(summary);
+        else if (id === "make-default") {
+          await store2.setDefault({ id: summary.id, name: summary.name });
+          toast("success", `${summary.name} is now the default for new designs.`);
+        } else if (id === "remove-default") {
+          await store2.setDefault(null);
+          toast("success", `${summary.name} is no longer the default. New designs ask each time.`);
+        } else if (id === "reveal") {
+          await client.call("POST /reveal", { body: { system: summary.id, target: "folder" } });
+        }
+      } catch (error) {
+        toast("error", `${id === "reveal" ? "Couldn\u2019t open the folder" : "That didn\u2019t work"}. ${errorText2(error)}`);
+      }
+    };
+    let signature = "";
+    scope.add(
+      store2.subscribe((state) => {
+        const next = `${state.status}:${state.total}:${state.error?.message ?? ""}:${JSON.stringify(state.systems)}`;
+        if (next === signature) return;
+        signature = next;
+        paint();
+      })
+    );
+    const minute = setInterval(paint, 6e4);
+    scope.add(() => clearInterval(minute));
+    guestHost.client.listProjects().then(
+      (answer) => {
+        projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
+        paint();
+      },
+      (error) => console.warn("Design Chamber: the project names could not be read; systems show folder names", error)
+    );
+    void store2.load();
+    paint();
+    return {
+      el: el2,
+      focus: () => (el2.querySelector(".dc-sys-main:not([data-static])") ?? newButton.el).focus(),
+      focusRow: (id) => list.querySelector(`[data-id="${CSS.escape(id)}"] .dc-sys-main`)?.focus(),
+      dispose: () => {
+        scope.dispose();
+        el2.remove();
+      }
+    };
+  };
+
+  // src/shared/agent/chip.ts
+  var DEFAULT_VIEWPORTS = `${formatViewport(VIEWPORT_LAPTOP)} + ${formatViewport(VIEWPORT_PHONE)}`;
+
+  // src/shared/agent/system-prompts.ts
+  var SECTION_LABEL = {
+    overview: "Overview",
+    colours: "Colours",
+    typography: "Typography",
+    spacing: "Spacing",
+    radius: "Radius",
+    shadows: "Shadows",
+    layers: "Layers",
+    sizes: "Sizes",
+    components: "Components",
+    patterns: "Patterns & voice",
+    brand: "Brand & marketing",
+    assets: "Assets"
+  };
+  var sectionLabel = (section2) => SECTION_LABEL[section2];
+
+  // src/shared/system-json.ts
+  var AREA_OF_SECTION = Object.freeze({
+    overview: "foundations",
+    colours: "foundations",
+    typography: "foundations",
+    spacing: "foundations",
+    radius: "foundations",
+    shadows: "foundations",
+    layers: "foundations",
+    sizes: "foundations",
+    components: "components",
+    patterns: "patterns",
+    brand: "brand",
+    assets: "brand"
+  });
+  var SYSTEM_AREAS = Object.freeze(["foundations", "components", "patterns", "brand"]);
+  var SYSTEM_SECTIONS = Object.freeze(Object.keys(AREA_OF_SECTION));
+  var RESERVED_SYSTEM_IDS = Object.freeze(["none", "ask"]);
+  var SYSTEM_UNREADABLE_PREFIX = "Design Chamber can't read this design system.";
+  var NOT_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json isn't valid JSON.`;
+  var TOO_LARGE_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json is larger than 1 MB.`;
+  var SYSTEM_TOKEN_RULES = Object.freeze({
+    isLight: (ctx) => isLightContext(ctx, "system"),
+    isDark: (ctx) => isDarkContext(ctx, "system"),
+    classify: classifyToken,
+    validate: validateTokenValue
+  });
+  var resyncStampOf = (stamps) => `${stamps.tokens ?? "none"}:${stamps.systemJson ?? "none"}`;
+  var PROPOSAL_TOO_MANY_FILES = `PROPOSAL.json lists more than ${SYSTEM_PROPOSAL_FILES_MAX} files. Ask the agent to split the change.`;
 
   // src/ui/model/system-page-model.ts
   var AREA_LABEL = Object.freeze({
@@ -17006,121 +19261,6 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     if (sources.description) return "From a description";
     return null;
   };
-
-  // src/ui/model/resync-model.ts
-  var isCodeReview = (review) => review.kind === "code";
-  var KEPT_LINE = "Your notes, overview, fonts and assets stay as they are. Only values change.";
-  var PARTIAL_NOTE = "Some files weren\u2019t scanned, so tokens from them aren\u2019t listed as removed.";
-  var ROOT_CHANGED_SENTENCE = "Your Designs folder changed. Nothing was changed.";
-  var NOTHING_TICKED_REASON = "Tick at least one change to apply.";
-  var REMOVE_HINT = "These are no longer in the code. They stay in the system unless you tick them.";
-  var AGENT_TOKENS_NOTE = "Tokens the agent or you added here are never listed.";
-  var CHANGED_HINT = "The code changed these values since you made the system.";
-  var NEW_HINT = "In the code, not in the system yet.";
-  var FILES_HINT = "Fonts and logos in the project that the system doesn\u2019t have. Ticked ones are copied in.";
-  var CONFLICT_HINT = "You changed these here and the code changed them too. Your value stays unless you choose the code\u2019s.";
-  var NO_VALUE2 = "not set";
-  var RESYNC_NOTICE_MS = 3e5;
-  var GROUP_PAGE = 60;
-  var matchesSentence = (system, folder) => `${system} already matches ${folder}.`;
-  var scanningLabel = (folder, seen) => seen > 0 ? `Reading ${folder}\u2026 ${plural(seen, "file")} looked at` : `Reading ${folder}\u2026`;
-  var modeLabel = (mode) => mode === "light" ? "Light" : "Dark";
-  var byMode = (a, b) => a.mode === b.mode ? 0 : a.mode === "light" ? -1 : 1;
-  var changedRows = (review) => {
-    const rows = /* @__PURE__ */ new Map();
-    for (const one of review.changed) {
-      const row2 = rows.get(one.name) ?? { name: one.name, values: [] };
-      row2.values.push({ mode: one.mode, from: one.from, to: one.to });
-      rows.set(one.name, row2);
-    }
-    return [...rows.values()].map((row2) => ({ ...row2, values: row2.values.sort(byMode) }));
-  };
-  var conflictRows = (review) => {
-    const rows = /* @__PURE__ */ new Map();
-    for (const one of review.conflicts) {
-      const row2 = rows.get(one.name) ?? { name: one.name, values: [] };
-      row2.values.push({ mode: one.mode, mine: one.mine, code: one.code });
-      rows.set(one.name, row2);
-    }
-    return [...rows.values()].map((row2) => ({ ...row2, values: row2.values.sort(byMode) }));
-  };
-  var conflictSentence = (value, both) => `${both ? `${modeLabel(value.mode)}: ` : ""}You changed this here. The code now says ${value.code}.`;
-  var reviewIsEmpty = (review) => review.changed.length === 0 && review.conflicts.length === 0 && review.added.length === 0 && review.removed.length === 0 && review.assets.length === 0;
-  var swatchable = (value) => value !== "" && checkValue("colours", null, value).ok;
-  var reviewGroups = (review) => {
-    const groups = [
-      { id: "changes", title: "Changed", hint: CHANGED_HINT, ids: changedRows(review).map((row2) => row2.name) },
-      { id: "conflicts", title: "Conflicts", hint: CONFLICT_HINT, ids: conflictRows(review).map((row2) => row2.name) },
-      { id: "add", title: "New", hint: NEW_HINT, ids: [...review.added] },
-      { id: "remove", title: "No longer in the code", hint: REMOVE_HINT, ids: [...review.removed] },
-      { id: "assets", title: "New fonts and logos", hint: FILES_HINT, ids: review.assets.map((asset) => asset.path) }
-    ];
-    return groups.filter((group2) => group2.ids.length > 0);
-  };
-  var defaultTicks = (review) => ({
-    changes: new Set(changedRows(review).map((row2) => row2.name)),
-    add: new Set(review.added),
-    remove: /* @__PURE__ */ new Set(),
-    useCode: /* @__PURE__ */ new Set(),
-    assets: /* @__PURE__ */ new Set()
-  });
-  var isTicked = (ticks, group2, id) => (group2 === "conflicts" ? ticks.useCode : ticks[group2]).has(id);
-  var setTick = (ticks, group2, id, on) => {
-    const key = group2 === "conflicts" ? "useCode" : group2;
-    const next = new Set(ticks[key]);
-    if (on) next.add(id);
-    else next.delete(id);
-    return { ...ticks, [key]: next };
-  };
-  var setGroup = (ticks, group2, ids, on) => {
-    const key = group2 === "conflicts" ? "useCode" : group2;
-    return { ...ticks, [key]: on ? new Set(ids) : /* @__PURE__ */ new Set() };
-  };
-  var groupState = (ticks, group2, ids) => {
-    const set = group2 === "conflicts" ? ticks.useCode : ticks[group2];
-    const on = ids.filter((id) => set.has(id)).length;
-    return on === 0 ? "none" : on === ids.length ? "all" : "some";
-  };
-  var groupToggleLabel = (group2, state) => {
-    if (group2 === "conflicts") return state === "all" ? "Keep all mine" : "Use all the code\u2019s";
-    return state === "all" ? "Untick all" : "Tick all";
-  };
-  var countsOf = (ticks) => ({ changed: ticks.changes.size + ticks.useCode.size, added: ticks.add.size, removed: ticks.remove.size, files: ticks.assets.size });
-  var partsOf2 = (counts) => [
-    counts.changed > 0 ? `${counts.changed} changed` : "",
-    counts.added > 0 ? `${counts.added} added` : "",
-    counts.removed > 0 ? `${counts.removed} removed` : "",
-    counts.files > 0 ? `${plural(counts.files, "file")} copied` : ""
-  ].filter((part) => part !== "");
-  var nothingTicked = (ticks) => {
-    const counts = countsOf(ticks);
-    return counts.changed + counts.added + counts.removed + counts.files === 0;
-  };
-  var selectionLine = (ticks) => {
-    if (nothingTicked(ticks)) return { text: NOTHING_TICKED_REASON, canApply: false };
-    return { text: `Apply saves ${partsOf2(countsOf(ticks)).join(", ")}.`, canApply: true };
-  };
-  var resyncedSentence = (system, counts) => {
-    const parts = partsOf2(counts);
-    return parts.length === 0 ? `Re-synced ${system}.` : `Re-synced ${system}: ${parts.join(", ")}.`;
-  };
-  var applyBody = (scanId, stamp, ticks) => {
-    const sorted = (set) => [...set].sort();
-    return { scanId, stamp, changes: sorted(ticks.changes), add: sorted(ticks.add), remove: sorted(ticks.remove), useCode: sorted(ticks.useCode), assets: sorted(ticks.assets) };
-  };
-  var failureKind = (code, message) => {
-    if (message === ROOT_CHANGED_SENTENCE) return "root-changed";
-    if (code === "bad-path" || /^Design Chamber can['’]t read /.test(message)) return "folder";
-    if (/\bScan( the folder)? again\.?$/.test(message)) return "stale";
-    return "plain";
-  };
-  var folderInputProblem = (raw) => {
-    const path = raw.trim();
-    if (path === "") return "Type the full path of the folder.";
-    if (!/^([A-Za-z]:[\\/]|\\\\|\/)/.test(path)) return "Use the full path of the folder, such as C:\\Projects\\shop or /Users/you/shop.";
-    return null;
-  };
-  var sheetSubtitle = (system) => `Read the project again and update ${system} from it.`;
 
   // src/ui/model/living-page-model.ts
   var LIVING_TITLE = "Living page";
@@ -19457,7 +21597,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     function paintHeader() {
       if (renaming) return;
       header.replaceChildren();
-      const back = compact ? iconBtn({ icon: "back", label: "Back to design systems", onClick: () => void leave() }) : btn({ label: "Design systems", variant: "ghost", size: "default", icon: "back", onClick: () => void leave() }).el;
+      const back = compact ? iconBtn({ icon: "back", label: options.backTo === "library" ? "Back to designs" : "Back to design systems", onClick: () => void leave() }) : btn({ label: options.backTo === "library" ? "Library" : "Design systems", variant: "ghost", size: "default", icon: "back", onClick: () => void leave() }).el;
       const titleText = detail?.name ?? "Design system";
       const title2 = detail ? h("button", { type: "button", class: "dc-syspg-title", title: "Rename", "aria-label": `${titleText}. Rename`, onClick: () => startRename() }, titleText) : h("h1", { class: "dc-syspg-title" }, titleText);
       const pencil = detail && !compact ? iconBtn({ icon: "pencil", label: `Rename ${titleText}`, onClick: () => startRename() }) : null;
@@ -20042,577 +22182,271 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
   };
 
-  // src/ui/model/list-model.ts
-  var LIST_TABS = [
-    { id: "all", label: "All" },
-    { id: "canvas", label: "Canvases" },
-    { id: "page", label: "Pages" }
-  ];
-  var LIST_SORTS = [
-    { id: "updated", label: "Updated" },
-    { id: "created", label: "Created" },
-    { id: "title", label: "Title" }
-  ];
-  var kindLabel = (kind) => kind === "canvas" ? "Canvas" : "Page";
-  var matchesQuery = (design, query) => {
-    const needle = query.trim().toLowerCase();
-    if (needle === "") return true;
-    return design.title.toLowerCase().includes(needle) || design.slug.toLowerCase().includes(needle);
-  };
-  var matchesTab = (design, tab) => tab === "all" || design.kind === tab;
-  var filterDesigns = (designs, query, tab) => designs.filter((design) => matchesTab(design, tab) && matchesQuery(design, query));
-  var tabCounts = (designs, query) => {
-    const searched = designs.filter((design) => matchesQuery(design, query));
-    return {
-      all: searched.length,
-      canvas: searched.filter((design) => design.kind === "canvas").length,
-      page: searched.filter((design) => design.kind === "page").length
+  // src/ui/components/thumb.ts
+  var LIVE_MAX = 6;
+  var liveActive = 0;
+  var liveWaiting = [];
+  var acquireLive = (start) => {
+    const release = () => {
+      liveActive -= 1;
+      liveWaiting.shift()?.();
+    };
+    const begin = () => {
+      liveActive += 1;
+      start();
+    };
+    if (liveActive < LIVE_MAX) begin();
+    else liveWaiting.push(begin);
+    return () => {
+      const queued = liveWaiting.indexOf(begin);
+      if (queued >= 0) liveWaiting.splice(queued, 1);
+      else release();
     };
   };
-  var sortDesigns = (designs, sort) => {
-    const copy = [...designs];
-    if (sort === "title") return copy.sort((a, b) => a.title.localeCompare(b.title, void 0, { sensitivity: "base" }));
-    const key = sort === "created" ? "created" : "updated";
-    return copy.sort((a, b) => Date.parse(b[key]) - Date.parse(a[key]));
-  };
-  var kindSummary = (design) => {
-    if (design.kind === "page") return "Page";
-    return `Canvas \xB7 ${plural(design.screenCount, "screen")}`;
-  };
-  var emptyKind = (all, shown) => {
-    if (shown.length > 0) return "none";
-    return all.length === 0 ? "no-designs" : "no-matches";
-  };
-  var rowAriaLabel = (design) => {
-    const parts = [design.title, kindSummary(design)];
-    if (design.pending) parts.push("waiting for the agent");
-    if (design.openComments > 0) parts.push(plural(design.openComments, "open comment"));
-    if (systemUpdated(design)) parts.push(SYSTEM_UPDATED_LABEL);
-    return parts.join(", ");
-  };
-  var SYSTEM_UPDATED_LABEL = "System updated";
-  var systemUpdated = (design) => design.system?.updateAvailable === true;
-  var ALL_SCOPE = { kind: "all" };
-  var normalizeDirectory = (value) => value.replace(/\\/g, "/").replace(/\/+$/, "");
-  var isWindowsDirectory = (value) => /^[A-Za-z]:\//.test(value);
-  var isInsideOrEqualDirectory = (root, dir) => {
-    const left = normalizeDirectory(root);
-    const right = normalizeDirectory(dir);
-    const windows = isWindowsDirectory(left) || isWindowsDirectory(right);
-    const a = windows ? left.toLowerCase() : left;
-    const b = windows ? right.toLowerCase() : right;
-    return b === a || b.startsWith(`${a}/`);
-  };
-  var baseName = (directory) => {
-    const parts = normalizeDirectory(directory).split("/").filter((part) => part !== "");
-    return parts[parts.length - 1] ?? directory;
-  };
-  var parentName = (directory) => {
-    const parts = normalizeDirectory(directory).split("/").filter((part) => part !== "");
-    return parts[parts.length - 2] ?? "";
-  };
-  var projectOf = (design, designsRoot) => {
-    const directory = design.projectDirectory;
-    if (directory === null || directory.trim() === "") return null;
-    if (designsRoot !== "" && isInsideOrEqualDirectory(designsRoot, directory)) return null;
-    return directory;
-  };
-  var projectGroups = (designs, projects, designsRoot, projectFolders) => {
-    const groups = [];
-    for (const design of designs) {
-      const directory = projectOf(design, designsRoot);
-      if (directory === null) continue;
-      const found = groups.find((group2) => sameDirectory(group2.directory, directory));
-      if (found) {
-        found.count += 1;
-        continue;
-      }
-      const named2 = projects.find((project) => sameDirectory(project.directory, directory))?.name.trim();
-      const stat = projectFolders?.find((entry) => sameDirectory(entry.directory, directory));
-      groups.push({ directory, label: named2 ? named2 : baseName(directory), title: directory, count: 1, missing: stat !== void 0 && !stat.exists });
-    }
-    const seen = /* @__PURE__ */ new Map();
-    for (const group2 of groups) seen.set(group2.label.toLowerCase(), (seen.get(group2.label.toLowerCase()) ?? 0) + 1);
-    const named = groups.map((group2) => {
-      const parent = parentName(group2.directory);
-      return (seen.get(group2.label.toLowerCase()) ?? 0) > 1 && parent !== "" ? { ...group2, label: `${group2.label} \xB7 ${parent}` } : group2;
-    });
-    return named.sort((a, b) => a.label.localeCompare(b.label, void 0, { sensitivity: "base" }));
-  };
-  var groupOf = (design, groups, designsRoot) => {
-    const directory = projectOf(design, designsRoot);
-    if (directory === null) return null;
-    return groups.find((group2) => sameDirectory(group2.directory, directory)) ?? null;
-  };
-  var scopeDesigns = (designs, scope, folders2, designsRoot) => {
-    switch (scope.kind) {
-      case "all":
-        return [...designs];
-      case "no-project":
-        return designs.filter((design) => projectOf(design, designsRoot) === null);
-      case "project":
-        return designs.filter((design) => {
-          const directory = projectOf(design, designsRoot);
-          return directory !== null && sameDirectory(directory, scope.directory);
-        });
-      case "folder": {
-        const members = new Set(folders2.find((folder) => folder.id === scope.id)?.slugs ?? []);
-        return designs.filter((design) => members.has(design.slug));
-      }
-    }
-  };
-  var scopeCounts = (designs, folders2, designsRoot) => {
-    const live = new Set(designs.map((design) => design.slug));
-    const counts = {};
-    for (const folder of folders2) counts[folder.id] = new Set(folder.slugs.filter((slug) => live.has(slug))).size;
-    return { all: designs.length, noProject: designs.filter((design) => projectOf(design, designsRoot) === null).length, folders: counts };
-  };
-  var scopeLabel = (scope, groups, folders2) => {
-    switch (scope.kind) {
-      case "all":
-        return null;
-      case "no-project":
-        return "No project";
-      case "project":
-        return groups.find((group2) => sameDirectory(group2.directory, scope.directory))?.label ?? baseName(scope.directory);
-      case "folder":
-        return folders2.find((folder) => folder.id === scope.id)?.name ?? null;
-    }
-  };
-  var resolveScope = (scope, groups, folders2) => {
-    if (scope.kind === "project") return groups.some((group2) => sameDirectory(group2.directory, scope.directory)) ? scope : ALL_SCOPE;
-    if (scope.kind === "folder") return folders2.some((folder) => folder.id === scope.id) ? scope : ALL_SCOPE;
-    return scope;
-  };
-  var sameScope = (a, b) => {
-    if (a.kind !== b.kind) return false;
-    if (a.kind === "project" && b.kind === "project") return sameDirectory(a.directory, b.directory);
-    if (a.kind === "folder" && b.kind === "folder") return a.id === b.id;
-    return true;
-  };
-  var noMatchesSentence = (label, query) => label === null ? `No designs match \u201C${query.trim()}\u201D.` : `No designs in ${label} match \u201C${query.trim()}\u201D.`;
-  var folderEmptyBody = (draggable) => draggable ? "Drag designs here, or use Add to folder in a design\u2019s menu." : "Use Add to folder in a design\u2019s menu.";
-  var cardProjectLine = (design, scope, groups, designsRoot) => {
-    const group2 = groupOf(design, groups, designsRoot);
-    if (group2 === null) return null;
-    if (scope.kind === "project" && sameDirectory(scope.directory, group2.directory)) return null;
-    return { label: group2.label, title: group2.missing ? `${group2.title}
-Folder not found` : group2.title };
-  };
-  var scopeStorageKey = (surface) => `list-scope:${surface}`;
-  var scopeToId = (scope) => {
-    switch (scope.kind) {
-      case "all":
-        return "all";
-      case "no-project":
-        return "no-project";
-      case "project":
-        return `project:${scope.directory}`;
-      case "folder":
-        return `folder:${scope.id}`;
-    }
-  };
-  var SCOPE_ID_MAX = 1024;
-  var scopeFromId = (raw) => {
-    if (typeof raw !== "string" || raw.length > SCOPE_ID_MAX) return ALL_SCOPE;
-    if (raw === "no-project") return { kind: "no-project" };
-    if (raw.startsWith("project:") && raw.length > "project:".length) return { kind: "project", directory: raw.slice("project:".length) };
-    if (raw.startsWith("folder:") && FOLDER_ID_PATTERN.test(raw.slice("folder:".length))) return { kind: "folder", id: raw.slice("folder:".length) };
-    return ALL_SCOPE;
-  };
-  var scopeOptions = (groups, counts, folders2) => [
-    { id: "all", label: "All designs", hint: String(counts.all) },
-    ...groups.map((group2) => ({ id: scopeToId({ kind: "project", directory: group2.directory }), label: group2.label, hint: String(group2.count) })),
-    ...counts.noProject > 0 ? [{ id: "no-project", label: "No project", hint: String(counts.noProject) }] : [],
-    ...folders2.map((folder) => ({ id: scopeToId({ kind: "folder", id: folder.id }), label: `Folder \xB7 ${folder.name}`, hint: String(counts.folders[folder.id] ?? 0) }))
-  ];
-  var FOLDER_NAME_CONTROL = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]", "u");
-  var folderNameProblem = (raw, folders2, ignoreId = null) => {
-    const name = raw.normalize("NFKC").trim();
-    if (name.length === 0) return "Give the folder a name.";
-    if (FOLDER_NAME_CONTROL.test(name)) return "A folder name can't contain line breaks or tabs.";
-    if (name.length > FOLDER_NAME_MAX) return `Keep the folder name to ${FOLDER_NAME_MAX} characters or fewer.`;
-    const taken = folders2.find((folder) => folder.id !== ignoreId && folder.name.toLowerCase() === name.toLowerCase());
-    if (taken) return `You already have a folder called ${taken.name}.`;
-    if (ignoreId === null && folders2.length >= FOLDERS_MAX) return `You can have up to ${FOLDERS_MAX} folders.`;
-    return null;
-  };
-
-  // src/ui/components/folders-store.ts
-  var FOLDERS_COULDNT_LOAD = "Folders couldn\u2019t load. Try again.";
-  var sameSet2 = (a, b) => a.length === b.length && a.every((slug) => b.includes(slug));
-  var createFoldersStore = () => {
-    let state = { status: "idle", folders: [], damaged: false, error: null };
-    const listeners = /* @__PURE__ */ new Set();
-    let ticket = 0;
-    const set = (next) => {
-      state = next;
-      for (const listener of [...listeners]) listener(state);
-    };
-    const load = async () => {
-      ticket += 1;
-      const mine = ticket;
-      set({ ...state, status: state.status === "ready" ? "ready" : "loading", error: null });
-      try {
-        const answer = await client.call("GET /folders");
-        if (mine !== ticket) return;
-        if (answer.damaged) set({ status: "error", folders: [], damaged: true, error: FOLDERS_COULDNT_LOAD });
-        else set({ status: "ready", folders: answer.folders, damaged: false, error: null });
-      } catch (error) {
-        if (mine !== ticket) return;
-        console.warn("Design Chamber: folders failed to load", error);
-        set({ status: "error", folders: state.folders, damaged: false, error: FOLDERS_COULDNT_LOAD });
-      }
-    };
-    const replaceOne = (folder) => {
-      ticket += 1;
-      const known = state.folders.some((entry) => entry.id === folder.id);
-      set({ ...state, status: "ready", error: null, folders: known ? state.folders.map((entry) => entry.id === folder.id ? folder : entry) : [...state.folders, folder] });
-    };
-    const run = async (request) => {
-      try {
-        return await request();
-      } catch (error) {
-        void load();
-        throw new Error(errorText2(error));
-      }
-    };
-    const change = (id, body) => {
-      const before = state.folders.find((folder) => folder.id === id);
-      if (before) {
-        const slugs = [...before.slugs.filter((slug) => !(body.remove ?? []).includes(slug)), ...(body.add ?? []).filter((slug) => !before.slugs.includes(slug))];
-        if (!sameSet2(slugs, before.slugs)) replaceOne({ ...before, slugs });
-      }
-      return run(async () => {
-        const { folder } = await client.call("POST /folders/:folderId/designs", { params: { folderId: id }, body });
-        replaceOne(folder);
-        return folder;
-      });
-    };
-    const refresh = debounce(() => void load(), 150);
-    feed.subscribe((batch) => {
-      if (batch.reset || batch.events.some((event) => event.kind === "folders" || event.kind === "removed" || event.kind === "root")) refresh();
-    });
-    return {
-      get: () => state,
-      subscribe: (listener) => {
-        listeners.add(listener);
-        return () => void listeners.delete(listener);
-      },
-      load,
-      create: (name) => run(async () => {
-        const { folder } = await client.call("POST /folders", { body: { name } });
-        replaceOne(folder);
-        return folder;
-      }),
-      rename: (id, name) => run(async () => {
-        const { folder } = await client.call("PATCH /folders/:folderId", { params: { folderId: id }, body: { name } });
-        replaceOne(folder);
-        return folder;
-      }),
-      remove: (id) => run(async () => {
-        const { designs } = await client.call("DELETE /folders/:folderId", { params: { folderId: id } });
-        ticket += 1;
-        set({ ...state, folders: state.folders.filter((folder) => folder.id !== id) });
-        return designs;
-      }),
-      restore: (id) => run(async () => {
-        const { folder } = await client.call("POST /folders/:folderId/undelete", { params: { folderId: id }, body: {} });
-        replaceOne(folder);
-        return folder;
-      }),
-      add: (id, slugs) => change(id, { add: slugs }),
-      removeDesigns: (id, slugs) => change(id, { remove: slugs })
-    };
-  };
-  var shared3 = null;
-  var folders = () => {
-    if (shared3 === null) {
-      shared3 = createFoldersStore();
-      void shared3.load();
-    }
-    return shared3;
-  };
-
-  // src/ui/components/folder-actions.ts
-  var DESIGN_DRAG_TYPE = "application/x-design-chamber-design";
-  var listDesignMenu = (inFolder) => {
-    const base = designMenu({ includeOpen: true });
-    const at = base.findIndex((entry) => "id" in entry && entry.id === "reveal");
-    const extra = [{ id: "add-to-folder", label: "Add to folder\u2026" }, ...inFolder ? [{ id: "remove-from-folder", label: `Remove from ${inFolder.name}` }] : []];
-    return [...base.slice(0, at), ...extra, ...base.slice(at)];
-  };
-  var runListAction = (id, design, context, inFolder) => {
-    if (id === "add-to-folder") {
-      openAddToFolder(context.host, design);
-      return;
-    }
-    if (id === "remove-from-folder" && inFolder) {
-      void removeFromFolder(inFolder, design);
-      return;
-    }
-    runDesignAction(id, design, context);
-  };
-  var removeFromFolder = async (folder, design) => {
-    try {
-      await folders().removeDesigns(folder.id, [design.slug]);
-      toast("info", `Removed \u201C${design.title}\u201D from ${folder.name}. It is still in All designs.`);
-    } catch (error) {
-      toast("error", `Couldn\u2019t remove it from ${folder.name}. ${errorText2(error)}`);
-    }
-  };
-  var addToFolder = async (folder, design) => {
-    const current = folders().get().folders.find((entry) => entry.id === folder.id);
-    if (current?.slugs.includes(design.slug)) {
-      toast("info", `\u201C${design.title}\u201D is already in ${folder.name}.`);
-      return;
-    }
-    try {
-      await folders().add(folder.id, [design.slug]);
-      toast("success", `Added \u201C${design.title}\u201D to ${folder.name}.`);
-    } catch (error) {
-      toast("error", `Couldn\u2019t add it to ${folder.name}. ${errorText2(error)}`);
-    }
-  };
-  var SKELETON_ROWS2 = 3;
-  var openAddToFolder = (hostEl, design) => {
-    const store2 = folders();
-    const scope = createScope();
-    const sheet = openSheet(hostEl, { title: "Add to folder", subtitle: design.title, variant: "dialog", onClose: () => scope.dispose() });
-    const list = h("ul", { class: "dc-folder-pick", role: "list", "aria-label": "Folders" });
-    const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
-    const createBox = h("div", { class: "dc-folder-new" });
-    const body = sheet.body;
-    body.append(list, failure, createBox);
-    const checks = /* @__PURE__ */ new Map();
-    let builtFor = "";
-    let createField = null;
-    let creating = false;
-    const showFailure = (message) => {
-      failure.hidden = message === null;
-      failure.textContent = message ?? "";
-    };
-    const toggle = async (folder, checked) => {
-      showFailure(null);
-      const handle = checks.get(folder.id);
-      handle?.update({ disabled: true });
-      try {
-        if (checked) await store2.add(folder.id, [design.slug]);
-        else await store2.removeDesigns(folder.id, [design.slug]);
-      } catch (error) {
-        handle?.update({ checked: !checked });
-        showFailure(`Couldn\u2019t ${checked ? "add it to" : "remove it from"} ${folder.name}. ${errorText2(error)}`);
-      } finally {
-        handle?.update({ disabled: false });
-      }
-    };
-    const paintList = () => {
-      const state = store2.get();
-      if ((state.status === "idle" || state.status === "loading") && state.folders.length === 0) {
-        builtFor = "";
-        checks.clear();
-        list.replaceChildren(...Array.from({ length: SKELETON_ROWS2 }, () => h("li", { class: "dc-folder-pick-skeleton", "aria-hidden": "true" }, h("span", { class: "dc-skel dc-skel-line" }))));
-        return;
-      }
-      if (state.status === "error") {
-        builtFor = "";
-        checks.clear();
-        const retry = btn({ label: "Try again", variant: "outline", size: "sm", onClick: () => void store2.load() });
-        list.replaceChildren(h("li", { class: "dc-folder-pick-message" }, h("p", { class: "dc-form-error" }, state.error ?? FOLDERS_COULDNT_LOAD), retry.el));
-        return;
-      }
-      if (state.folders.length === 0) {
-        builtFor = "";
-        checks.clear();
-        list.replaceChildren(h("li", { class: "dc-folder-pick-message" }, h("p", { class: "dc-muted" }, "No folders yet. Name one below and this design goes in it.")));
-        return;
-      }
-      const signature = state.folders.map((folder) => `${folder.id}:${folder.name}`).join("|");
-      if (signature !== builtFor) {
-        builtFor = signature;
-        checks.clear();
-        list.replaceChildren(
-          ...state.folders.map((folder) => {
-            const holder = h("li", { class: "dc-folder-pick-row" });
-            const handle = mountCheckbox(holder, { label: folder.name, checked: folder.slugs.includes(design.slug), description: plural(folder.slugs.length, "design"), onChange: (checked) => void toggle(folder, checked) });
-            checks.set(folder.id, handle);
-            return holder;
-          })
-        );
-        return;
-      }
-      for (const folder of state.folders) checks.get(folder.id)?.update({ checked: folder.slugs.includes(design.slug), description: plural(folder.slugs.length, "design") });
-    };
-    const paintCreate = () => {
-      const state = store2.get();
-      const noFolders = state.status === "ready" && state.folders.length === 0;
-      if (createField !== null) return;
-      if (state.status === "error") {
-        createBox.replaceChildren();
-        return;
-      }
-      if (noFolders) {
-        mountField();
-        return;
-      }
-      if (createBox.firstElementChild === null) {
-        const open = btn({ label: "New folder\u2026", variant: "ghost", size: "sm", icon: "plus", onClick: () => mountField(true) });
-        createBox.replaceChildren(open.el);
-      }
-    };
-    const mountField = (focus = false) => {
-      createBox.replaceChildren();
-      const holder = h("div", { class: "dc-folder-new-field" });
-      let value = "";
-      const field2 = mountTextField(holder, { label: "Folder name", value, placeholder: "Q4 launch", onChange: (next) => void (value = next) });
-      createField = field2;
-      const input = holder.querySelector("input");
-      const create = btn({ label: "Create and add", variant: "default", size: "sm", onClick: () => void submit() });
-      const submit = async () => {
-        if (creating) return;
-        const problem = folderNameProblem(value, store2.get().folders);
-        if (problem !== null) {
-          field2.update({ error: problem });
-          return;
-        }
-        creating = true;
-        create.set({ loading: true });
-        showFailure(null);
-        try {
-          const folder = await store2.create(value.trim());
-          await store2.add(folder.id, [design.slug]);
-          createField = null;
-          createBox.replaceChildren();
-          paintList();
-          paintCreate();
-          toast("success", `Added \u201C${design.title}\u201D to ${folder.name}.`);
-        } catch (error) {
-          field2.update({ error: errorText2(error) });
-        } finally {
-          creating = false;
-          create.set({ loading: false });
-        }
-      };
-      input?.addEventListener("blur", () => {
-        if (value.trim() !== "") field2.update({ error: folderNameProblem(value, store2.get().folders) ?? void 0 });
-      });
-      holder.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
-          event.preventDefault();
-          void submit();
-        }
-      });
-      createBox.append(holder, h("div", { class: "dc-folder-new-actions" }, create.el));
-      if (focus) queueMicrotask(() => input?.focus());
-    };
-    const done = btn({ label: "Done", variant: "default", emphasis: "primary", onClick: () => sheet.close() });
-    sheet.foot.append(done.el);
-    scope.add(
-      store2.subscribe(() => {
-        paintList();
-        paintCreate();
-      })
-    );
-    void store2.load();
-    paintList();
-    paintCreate();
-  };
-  var openRenameFolder = (hostEl, folder) => {
-    const store2 = folders();
-    const sheet = openSheet(hostEl, { title: "Rename folder", variant: "dialog" });
-    let value = folder.name;
-    const field2 = mountTextField(sheet.body, { label: "Name", value, onChange: (next) => void (value = next) });
-    const submit = btn({ label: "Save name", variant: "default", emphasis: "primary", onClick: () => void save() });
-    const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => sheet.close() });
-    const save = async () => {
-      const problem = folderNameProblem(value, store2.get().folders, folder.id);
-      if (problem !== null) {
-        field2.update({ error: problem });
-        return;
-      }
-      submit.set({ loading: true });
-      cancel.set({ disabled: true });
-      try {
-        await store2.rename(folder.id, value.trim());
-        sheet.close();
-      } catch (error) {
-        field2.update({ error: errorText2(error) });
-        submit.set({ loading: false });
-        cancel.set({ disabled: false });
-      }
-    };
-    sheet.body.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
-        event.preventDefault();
-        void save();
-      }
-    });
-    sheet.foot.append(cancel.el, submit.el);
-    queueMicrotask(() => sheet.body.querySelector("input")?.select());
-  };
-  var UNDO_MS = 1e4;
-  var mountUndoNotice = () => {
-    const el2 = h("div", { class: "dc-undo-notice", "aria-live": "polite" });
-    let timer = null;
+  var modeOf = (summary) => summary.pending ? "pending" : summary.thumb.state === "ready" ? "image" : "live";
+  var mountThumb = (summary, aspect = "rail") => {
+    let current = summary;
+    const el2 = h("div", { class: "dc-thumb", "data-aspect": aspect, "data-state": "loading", "aria-hidden": "true" });
+    let disposed = false;
+    let teardown = null;
+    let sizeObserver = null;
+    let observer = null;
+    let token = 0;
     const clear = () => {
-      timer?.cancel();
-      timer = null;
+      teardown?.();
+      teardown = null;
+      sizeObserver?.disconnect();
+      sizeObserver = null;
+      observer?.disconnect();
+      observer = null;
       el2.replaceChildren();
     };
+    const showPending = () => {
+      el2.dataset.state = "pending";
+      el2.append(icon2(current.kind === "canvas" ? "canvas" : "page", aspect === "card" ? 28 : 18));
+    };
+    const showImage = () => {
+      el2.dataset.state = "loading";
+      const mine = token;
+      const key = current.thumb.key;
+      client.thumbnail(current.slug, key).then(
+        (answer) => {
+          if (disposed || mine !== token) return;
+          if (answer.state === "ready" && answer.png) {
+            const img = h("img", { alt: "", draggable: "false", src: `data:image/png;base64,${answer.png}` });
+            img.addEventListener("load", () => void (el2.dataset.state = "ready"), { once: true });
+            el2.append(img);
+          } else showLive();
+        },
+        () => {
+          if (!disposed && mine === token) showLive();
+        }
+      );
+    };
+    const showLive = () => {
+      clear();
+      el2.dataset.state = "loading";
+      const mine = token;
+      const place = () => {
+        let doc = null;
+        let release = null;
+        const start = () => {
+          const vp = current.viewports[0] ?? { width: 1280, height: 800, id: "laptop", label: "Laptop" };
+          client.loadRender(current.slug, null, null).then(
+            ({ html }) => {
+              if (disposed || mine !== token) return;
+              doc = createFrameDocument(html, { artboardId: "thumb", file: current.kind === "page" ? "index.html" : "thumb", mode: "play" });
+              const frame = h("iframe", { class: "dc-thumb-frame", sandbox: "", tabindex: "-1", title: "", src: doc.url, loading: "eager" });
+              frame.style.width = `${vp.width}px`;
+              frame.style.height = `${vp.height}px`;
+              const fit = () => {
+                const scale = el2.clientWidth / vp.width;
+                if (scale > 0) frame.style.transform = `scale(${scale})`;
+              };
+              fit();
+              sizeObserver = new ResizeObserver(fit);
+              sizeObserver.observe(el2);
+              frame.addEventListener("load", () => void (el2.dataset.state = "ready"), { once: true });
+              el2.append(frame);
+            },
+            () => {
+              if (!disposed && mine === token) el2.dataset.state = "error";
+            }
+          );
+        };
+        release = acquireLive(start);
+        teardown = () => {
+          release?.();
+          doc?.revoke();
+          el2.replaceChildren();
+        };
+      };
+      observer = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          observer?.disconnect();
+          observer = null;
+          place();
+        }
+      });
+      observer.observe(el2);
+    };
+    const render = () => {
+      token += 1;
+      clear();
+      const mode = modeOf(current);
+      if (mode === "pending") showPending();
+      else if (mode === "image") showImage();
+      else showLive();
+    };
+    render();
     return {
       el: el2,
-      clear,
-      dispose: clear,
-      show: ({ title: title2, body, undoLabel = "Undo", onUndo }) => {
-        timer?.cancel();
-        let busy = false;
-        const node = banner({
-          tone: "info",
-          title: title2,
-          body,
-          action: {
-            label: undoLabel,
-            onClick: () => {
-              if (busy) return;
-              busy = true;
-              clear();
-              void onUndo();
-            }
-          }
-        });
-        el2.replaceChildren(node);
-        const own = createHoldableTimer(UNDO_MS, clear);
-        timer = own;
-        node.addEventListener("pointerenter", () => own.setHeld("hover", true));
-        node.addEventListener("pointerleave", () => own.setHeld("hover", false));
-        node.addEventListener("focusin", () => own.setHeld("focus", true));
-        node.addEventListener("focusout", () => own.setHeld("focus", false));
-        own.start();
+      update: (next) => {
+        const changed = modeOf(next) !== modeOf(current) || next.thumb.key !== current.thumb.key || next.slug !== current.slug;
+        current = next;
+        if (changed) render();
+      },
+      dispose: () => {
+        disposed = true;
+        clear();
+        el2.remove();
       }
     };
   };
-  var deleteFolder = async (folder, notice) => {
-    const store2 = folders();
-    let count;
-    try {
-      count = await store2.remove(folder.id);
-    } catch (error) {
-      toast("error", `Couldn\u2019t delete ${folder.name}. ${errorText2(error)}`);
-      return false;
-    }
-    notice.show({
-      title: `Deleted folder ${folder.name}.`,
-      body: count === 0 ? "It was empty." : `Its ${count === 1 ? "design is" : `${count} designs are`} still in All designs.`,
-      onUndo: async () => {
-        try {
-          const back = await store2.restore(folder.id);
-          toast("success", `Brought back ${back.name}.`);
-        } catch (error) {
-          toast("error", `Couldn\u2019t bring ${folder.name} back. ${errorText2(error)}`);
-        }
-      }
+
+  // src/ui/components/design-row.ts
+  var SYSTEM_DELETED_TOAST = "This system was deleted. The design keeps its own copy.";
+  var designSystemChip = (design, deps) => {
+    const link = design.system ?? null;
+    if (link === null) return null;
+    const deleted = link.state === "deleted";
+    const draft = link.state === "draft";
+    const colour = deleted ? null : deps.swatchOf?.(link.id) ?? null;
+    const chip = h(
+      "button",
+      {
+        type: "button",
+        class: "dc-design-system-chip",
+        "data-state": deleted ? "gone" : draft ? "draft" : "ok",
+        "data-system-id": link.id,
+        "aria-label": deleted ? `${link.name}, deleted system` : draft ? `Open system ${link.name}, Draft` : `Open system ${link.name}`,
+        title: deleted ? SYSTEM_DELETED_TOAST : draft ? `${link.name} (Draft)` : link.name
+      },
+      mountSwatchDot(colour, "dc-design-system-dot"),
+      h("span", { class: "dc-design-system-name" }, deleted ? `${link.name} (deleted)` : link.name),
+      draft ? h("span", { class: "dc-design-system-mark" }, "Draft") : null
+    );
+    chip.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (deleted) toast("info", SYSTEM_DELETED_TOAST);
+      else deps.actions.onOpenSystem?.(link.id);
     });
-    return true;
+    return chip;
+  };
+  var rowFlags = (design) => {
+    const flags = h("span", { class: "dc-row-flags" });
+    if (design.pending) flags.append(h("span", { class: "dc-flag", "data-tone": "warning" }, "Waiting for agent"));
+    if (systemUpdated(design)) flags.append(h("span", { class: "dc-flag", "data-tone": "info", title: `${design.system?.name ?? "The design system"} was updated since this design copied it.` }, SYSTEM_UPDATED_LABEL));
+    if (design.openComments > 0) flags.append(h("span", { class: "dc-flag", title: plural(design.openComments, "open comment") }, icon2("pin", 12), String(design.openComments)));
+    if (design.sessionId) flags.append(h("span", { class: "dc-flag dc-flag-icon", title: "Linked to a chat", role: "img", "aria-label": "Linked to a chat" }, icon2("chat", 12)));
+    return flags;
+  };
+  var mountDesignRow = (design, options) => {
+    const { variant, view: view2, actions, onOpen, thumbs } = options;
+    let thumb = thumbs.get(design.slug);
+    if (thumb) thumb.update(design);
+    else {
+      thumb = mountThumb(design, "rail");
+      thumbs.set(design.slug, thumb);
+    }
+    const locale = host.snapshot()?.locale ?? "en";
+    const line = cardProjectLine(design, view2.scope, view2.groups, view2.root, view2.manual);
+    const project = line ? h("span", { class: "dc-row-project", title: line.title, "data-filed": line.manual ? "true" : null }, icon2("layers", 12), h("span", { class: "dc-row-project-name" }, line.label)) : null;
+    const flags = rowFlags(design);
+    const more = iconBtn({ icon: "more", label: `Actions for ${design.title}`, size: "sm", onClick: () => void 0 });
+    const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
+    attachMenu(more, () => listDesignMenu(view2.menu), (id) => runListAction(id, ref, actions, view2.menu));
+    const chip = designSystemChip(design, { actions, swatchOf: options.swatchOf });
+    const pending = design.pending ? "true" : "false";
+    if (variant === "list") {
+      const hit = h("button", { type: "button", class: "dc-row-hit", "aria-label": rowAriaLabel(design) });
+      hit.addEventListener("click", () => onOpen(design.slug));
+      const kindBadge = h("span");
+      mountBadge(kindBadge, { label: kindLabel(design.kind), tone: "neutral" });
+      const item = h(
+        "li",
+        { class: "dc-row dc-list-row", "data-slug": design.slug, "data-pending": pending, draggable: "true" },
+        hit,
+        h("span", { class: "dc-row-thumb" }, thumb.el),
+        h("span", { class: "dc-row-name" }, h("span", { class: "dc-row-title" }, design.title), h("span", { class: "dc-row-sub" }, kindBadge, flags.childElementCount > 0 ? flags : null)),
+        h("span", { class: "dc-row-system" }, chip),
+        h("span", { class: "dc-row-in" }, project),
+        h("span", { class: "dc-row-when" }, relativeTime(design.updated, Date.now(), locale)),
+        more
+      );
+      item.addEventListener("dragstart", (event) => {
+        if (!event.dataTransfer) return;
+        event.dataTransfer.setData(DESIGN_DRAG_TYPE, design.slug);
+        event.dataTransfer.effectAllowed = "copy";
+        item.dataset.dragging = "true";
+      });
+      item.addEventListener("dragend", () => {
+        delete item.dataset.dragging;
+      });
+      return item;
+    }
+    const meta = h("span", { class: "dc-row-meta" }, `${kindSummary(design)} \xB7 ${relativeTime(design.updated, Date.now(), locale)}`);
+    const main = h(
+      "button",
+      { type: "button", class: "dc-row-main", "aria-label": rowAriaLabel(design) },
+      thumb.el,
+      h("span", { class: "dc-row-text" }, h("span", { class: "dc-row-title" }, design.title), meta, project, flags.childElementCount > 0 ? flags : null)
+    );
+    main.addEventListener("click", () => onOpen(design.slug));
+    return h("li", { class: "dc-row", "data-pending": pending, "data-slug": design.slug, "data-chip": chip === null ? "false" : "true" }, main, more, chip === null ? null : h("div", { class: "dc-row-foot" }, chip));
+  };
+
+  // src/ui/components/library-empty.ts
+  var ACTION_LABEL2 = {
+    new: "New canvas",
+    "show-all": "Show all designs",
+    "clear-filters": "Clear filters",
+    "new-system": "New design system\u2026",
+    "retry-systems": "Try again"
+  };
+  var CLEAR_LABEL = {
+    search: "Clear search",
+    tab: "Clear the kind filter",
+    system: "Clear the system filter"
+  };
+  var mountLibraryEmpty = (wrap, model, handlers) => {
+    mountEmpty(wrap, { title: model.title, body: model.body, action: { label: model.actionLabel ?? ACTION_LABEL2[model.action], onClick: handlers.onAction } });
+    if (model.kind === "no-designs" && handlers.firstRun) {
+      const { onNewSystem, onExistingSystem } = handlers.firstRun;
+      const more = btn({ label: "Start a design system", variant: "outline", size: "sm", icon: "system", onClick: onNewSystem });
+      const existing = h("button", { type: "button", class: "dc-link" }, "From an existing system\u2026");
+      existing.addEventListener("click", onExistingSystem);
+      const slot2 = wrap.querySelector(".oc-sdk-empty-action");
+      if (slot2) slot2.append(more.el);
+      else wrap.append(more.el);
+      wrap.append(h("p", { class: "dc-empty-note" }, icon2("info", 14), h("span", null, "Already have a design system in a project? Start one from it with ", existing)));
+    }
+    if (model.chips.length === 0) return;
+    const row2 = h("div", { class: "dc-empty-filters", role: "group", "aria-label": "Active filters" });
+    for (const chip of model.chips) {
+      const el2 = h("span", { class: "dc-empty-chip", "data-fixed": chip.fixed ? "true" : "false" }, chip.icon ? icon2(chip.icon, 12) : null, h("span", { class: "dc-empty-chip-name" }, chip.label));
+      if (!chip.fixed && chip.id !== "scope") {
+        const id = chip.id;
+        const label = CLEAR_LABEL[id];
+        const clear = h("button", { type: "button", class: "dc-empty-chip-x", "aria-label": label, title: label }, icon2("close", 12));
+        clear.addEventListener("click", () => handlers.onClearChip(id));
+        el2.append(clear);
+      }
+      row2.append(el2);
+    }
+    const slot = wrap.querySelector(".oc-sdk-empty-action");
+    if (slot) slot.before(row2);
+    else wrap.append(row2);
   };
 
   // src/ui/model/loose-model.ts
@@ -20779,136 +22613,45 @@ Folder not found` : group2.title };
     };
   };
 
-  // src/ui/components/thumb.ts
-  var LIVE_MAX = 6;
-  var liveActive = 0;
-  var liveWaiting = [];
-  var acquireLive = (start) => {
-    const release = () => {
-      liveActive -= 1;
-      liveWaiting.shift()?.();
-    };
-    const begin = () => {
-      liveActive += 1;
-      start();
-    };
-    if (liveActive < LIVE_MAX) begin();
-    else liveWaiting.push(begin);
-    return () => {
-      const queued = liveWaiting.indexOf(begin);
-      if (queued >= 0) liveWaiting.splice(queued, 1);
-      else release();
-    };
-  };
-  var modeOf = (summary) => summary.pending ? "pending" : summary.thumb.state === "ready" ? "image" : "live";
-  var mountThumb = (summary, aspect = "rail") => {
-    let current = summary;
-    const el2 = h("div", { class: "dc-thumb", "data-aspect": aspect, "data-state": "loading", "aria-hidden": "true" });
-    let disposed = false;
-    let teardown = null;
-    let sizeObserver = null;
-    let observer = null;
-    let token = 0;
-    const clear = () => {
-      teardown?.();
-      teardown = null;
-      sizeObserver?.disconnect();
-      sizeObserver = null;
-      observer?.disconnect();
-      observer = null;
-      el2.replaceChildren();
-    };
-    const showPending = () => {
-      el2.dataset.state = "pending";
-      el2.append(icon2(current.kind === "canvas" ? "canvas" : "page", aspect === "card" ? 28 : 18));
-    };
-    const showImage = () => {
-      el2.dataset.state = "loading";
-      const mine = token;
-      const key = current.thumb.key;
-      client.thumbnail(current.slug, key).then(
-        (answer) => {
-          if (disposed || mine !== token) return;
-          if (answer.state === "ready" && answer.png) {
-            const img = h("img", { alt: "", draggable: "false", src: `data:image/png;base64,${answer.png}` });
-            img.addEventListener("load", () => void (el2.dataset.state = "ready"), { once: true });
-            el2.append(img);
-          } else showLive();
-        },
-        () => {
-          if (!disposed && mine === token) showLive();
-        }
-      );
-    };
-    const showLive = () => {
-      clear();
-      el2.dataset.state = "loading";
-      const mine = token;
-      const place = () => {
-        let doc = null;
-        let release = null;
-        const start = () => {
-          const vp = current.viewports[0] ?? { width: 1280, height: 800, id: "laptop", label: "Laptop" };
-          client.loadRender(current.slug, null, null).then(
-            ({ html }) => {
-              if (disposed || mine !== token) return;
-              doc = createFrameDocument(html, { artboardId: "thumb", file: current.kind === "page" ? "index.html" : "thumb", mode: "play" });
-              const frame = h("iframe", { class: "dc-thumb-frame", sandbox: "", tabindex: "-1", title: "", src: doc.url, loading: "eager" });
-              frame.style.width = `${vp.width}px`;
-              frame.style.height = `${vp.height}px`;
-              const fit = () => {
-                const scale = el2.clientWidth / vp.width;
-                if (scale > 0) frame.style.transform = `scale(${scale})`;
-              };
-              fit();
-              sizeObserver = new ResizeObserver(fit);
-              sizeObserver.observe(el2);
-              frame.addEventListener("load", () => void (el2.dataset.state = "ready"), { once: true });
-              el2.append(frame);
-            },
-            () => {
-              if (!disposed && mine === token) el2.dataset.state = "error";
-            }
-          );
-        };
-        release = acquireLive(start);
-        teardown = () => {
-          release?.();
-          doc?.revoke();
-          el2.replaceChildren();
-        };
-      };
-      observer = new IntersectionObserver((entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          observer?.disconnect();
-          observer = null;
-          place();
-        }
-      });
-      observer.observe(el2);
-    };
-    const render = () => {
-      token += 1;
-      clear();
-      const mode = modeOf(current);
-      if (mode === "pending") showPending();
-      else if (mode === "image") showImage();
-      else showLive();
-    };
-    render();
-    return {
-      el: el2,
-      update: (next) => {
-        const changed = modeOf(next) !== modeOf(current) || next.thumb.key !== current.thumb.key || next.slug !== current.slug;
-        current = next;
-        if (changed) render();
-      },
-      dispose: () => {
-        disposed = true;
-        clear();
-        el2.remove();
-      }
-    };
+  // src/ui/systems/system-tile.ts
+  var mountSystemTile = (summary, options) => {
+    const locale = host.snapshot()?.locale ?? "en";
+    const model = systemRow(summary, { nowMs: Date.now(), locale, label: options.label });
+    const unreadable = model.unreadable !== null;
+    const kind = h("span", { class: "dc-sys-kind" });
+    mountBadge(kind, { label: "System", tone: "primary" });
+    const status = unreadable ? toneBadge("Can\u2019t read", "error", model.unreadable ?? void 0) : toneBadge(model.status.label, model.status.tone);
+    const first = model.badges[0];
+    const updated = relativeTime(summary.updated, Date.now(), locale);
+    const body = h(
+      "span",
+      { class: "dc-card-body" },
+      h("span", { class: "dc-card-title", title: summary.name }, summary.name),
+      h("span", { class: "dc-card-project", title: model.home.title }, icon2(summary.home === "internal" ? "system" : "repo", 12), h("span", { class: "dc-card-project-name" }, model.home.label)),
+      h(
+        "span",
+        { class: "dc-card-meta" },
+        kind,
+        status,
+        updated === "" ? null : h("span", { class: "dc-muted" }, updated),
+        first && !unreadable ? h("span", { class: "dc-flag", "data-tone": first.tone === "warning" ? "warning" : first.tone === "info" ? "info" : null }, first.label) : null
+      )
+    );
+    const thumb = h("span", { class: "dc-card-thumb dc-sys-plate" }, mountPlate(summary, "tile"));
+    const main = unreadable ? h("div", { class: "dc-card-main", "data-static": "true", role: "group", "aria-label": libraryTileLabel(summary, { nowMs: Date.now(), locale }) }, thumb, body, h("span", { class: "dc-sys-reason dc-sys-tile-reason" }, model.unreadable ?? "")) : h("button", { type: "button", class: "dc-card-main", "aria-label": libraryTileLabel(summary, { nowMs: Date.now(), locale }) }, thumb, body);
+    if (!unreadable) main.addEventListener("click", () => options.onOpen(summary.id));
+    const foot = h("div", { class: "dc-card-foot dc-sys-tile-foot" });
+    if (!unreadable) foot.append(usedByControl(summary, model.metaParts.usedBy.text, options.onShowDesigns));
+    if (showsLivingPageButton(summary)) {
+      const living = btn({ label: "Living page", variant: "outline", size: "xs", icon: "external", onClick: () => options.onPreview(summary.id) });
+      living.el.classList.add("dc-sys-living");
+      living.el.setAttribute("aria-label", `Open the living page for ${summary.name}`);
+      foot.append(h("span", { class: "dc-spacer" }), living.el);
+    }
+    const more = iconBtn({ icon: "more", label: `Actions for ${summary.name}`, size: "sm", onClick: () => void 0 });
+    more.classList.add("dc-card-more");
+    attachMenu(more, () => librarySystemMenu(summary), (id) => void runLibrarySystemAction(id, summary, options));
+    return h("li", { class: "dc-card dc-sys-tile", "data-kind": "system", "data-system-id": summary.id, "data-lead": options.lead === true ? "true" : "false" }, main, foot.childElementCount > 0 ? foot : null, more);
   };
 
   // src/ui/page/library-sidebar.ts
@@ -20916,7 +22659,7 @@ Folder not found` : group2.title };
   var mountSidebar = (options) => {
     let model = null;
     let renaming = null;
-    const el2 = h("nav", { class: "dc-side", "aria-label": "Projects and folders" });
+    const el2 = h("nav", { class: "dc-side", "aria-label": "Projects, folders and design systems" });
     const lists = h("div", { class: "dc-side-body" });
     el2.append(lists);
     const createSlot = h("div", { class: "dc-side-create-slot", hidden: true });
@@ -21007,6 +22750,42 @@ Folder not found` : group2.title };
       return h("li", { class: "dc-side-row", "data-scope": scopeToId(config.scope), "data-selected": config.selected ? "true" : "false" }, main);
     };
     const heading = (text, ...trailing) => h("div", { class: "dc-side-heading" }, h("h2", { class: "dc-side-title" }, text), ...trailing);
+    const systemsSection = (current) => {
+      const total = current.systems.length;
+      const headingButton = h(
+        "button",
+        { type: "button", class: "dc-side-heading-link", "aria-label": current.systemsStatus === "ready" ? `Design systems, ${total}. Open the list` : "Design systems. Open the list" },
+        "Design systems",
+        icon2("chevron-right", 12)
+      );
+      headingButton.addEventListener("click", () => options.onSystems());
+      const newButton = btn({ label: "New", variant: "ghost", size: "xs", icon: "plus", onClick: () => options.onNewSystem() }).el;
+      newButton.setAttribute("aria-label", "New design system");
+      const out = [h("div", { class: "dc-side-heading" }, h("h2", { class: "dc-side-title" }, headingButton), newButton)];
+      if (current.systemsStatus === "loading" && total === 0) {
+        out.push(h("ul", { class: "dc-side-list", "aria-hidden": "true" }, ...Array.from({ length: FOLDER_SKELETONS }, () => h("li", { class: "dc-side-skeleton" }, h("span", { class: "dc-skel dc-skel-line" })))));
+      } else if (current.systemsStatus === "error" && total === 0) {
+        out.push(h("div", { class: "dc-side-note" }, h("p", { class: "dc-form-error" }, "Design systems couldn\u2019t load. Try again."), btn({ label: "Try again", variant: "outline", size: "xs", onClick: options.onRetrySystems }).el));
+      } else if (total === 0) {
+        out.push(h("p", { class: "dc-side-hint" }, "No design systems yet."));
+      } else {
+        out.push(h("ul", { class: "dc-side-list", role: "list", "aria-label": "Design systems" }, ...current.systems.map((system) => systemRowFor(system, current))));
+      }
+      return out;
+    };
+    const systemRowFor = (system, current) => {
+      const selected = current.systemFilter.kind === "system" && current.systemFilter.id === system.id;
+      const main = h(
+        "button",
+        { type: "button", class: "dc-side-main", "aria-current": selected ? "true" : null, title: system.name, "aria-label": `${system.name}${system.draft ? ", Draft" : ""}, ${system.usedBy === 0 ? "not used yet" : `used by ${plural(system.usedBy, "design")}`}. Show its designs` },
+        mountSwatchDot(system.swatch, "dc-side-swatch"),
+        h("span", { class: "dc-side-label" }, system.name),
+        system.draft ? h("span", { class: "dc-side-mark", "aria-hidden": "true" }, "Draft") : null,
+        h("span", { class: "dc-side-count", "aria-hidden": "true" }, String(system.usedBy))
+      );
+      main.addEventListener("click", () => options.onFilterSystem(system.id));
+      return h("li", { class: "dc-side-row", "data-scope": `system:${system.id}`, "data-selected": selected ? "true" : "false" }, main);
+    };
     const folderRow = (folder, current) => {
       const selected = sameScope(current.scope, { kind: "folder", id: folder.id });
       const count = current.counts.folders[folder.id] ?? 0;
@@ -21017,6 +22796,7 @@ Folder not found` : group2.title };
         more,
         () => [
           { id: "rename", label: "Rename" },
+          { id: "new-folder", label: "New folder\u2026" },
           { separator: true },
           { id: "delete", label: "Delete folder", destructive: true }
         ],
@@ -21024,7 +22804,8 @@ Folder not found` : group2.title };
           if (id === "rename") {
             renaming = { id: folder.id, draft: folder.name, error: null, busy: false };
             paint(current, true);
-          } else options.onDelete(folder);
+          } else if (id === "new-folder") openNewFolder(el2.closest(".dc-app") ?? document.body);
+          else options.onDelete(folder);
         }
       );
       row2.append(more);
@@ -21147,16 +22928,35 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         ...projectRows2.length > 0 ? [heading("Projects"), h("ul", { class: "dc-side-list", role: "list", "aria-label": "Projects" }, ...projectRows2)] : [],
         heading("Folders", newFolderButton),
         createSlot,
-        ...folderBody
+        ...folderBody,
+        ...systemsSection(next)
       );
       painting = false;
       if (hadCreateFocus && !createSlot.hidden) createInput.focus();
       else if (focusedScope !== null) lists.querySelector(`[data-scope="${CSS.escape(focusedScope)}"] .dc-side-main`)?.focus();
       else if (keepFocus) lists.querySelector(".dc-side-row-edit input")?.focus();
     };
+    const paintWithoutDesigns = (state) => {
+      model = null;
+      painting = true;
+      if (state === "loading") {
+        lists.replaceChildren(h("ul", { class: "dc-side-list", "aria-hidden": "true" }, ...Array.from({ length: FOLDER_SKELETONS + 1 }, () => h("li", { class: "dc-side-skeleton" }, h("span", { class: "dc-skel dc-skel-line" })))));
+      } else {
+        lists.replaceChildren(
+          h(
+            "div",
+            { class: "dc-side-note", role: "status" },
+            h("p", { class: "dc-form-error" }, "Your designs didn\u2019t load, so projects and folders can\u2019t show yet."),
+            btn({ label: "Try again", variant: "outline", size: "xs", onClick: options.onRetryDesigns }).el
+          )
+        );
+      }
+      painting = false;
+    };
     return {
       el: el2,
       paint: (next) => paint(next),
+      paintWithoutDesigns,
       focusSelected: () => lists.querySelector('.dc-side-row[data-selected="true"] .dc-side-main')?.focus(),
       dispose: () => el2.remove()
     };
@@ -21164,18 +22964,24 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
 
   // src/ui/page/library-view.ts
   var SKELETON_CARDS = 8;
+  var SKELETON_ROWS3 = 6;
   var SIDEBAR_MIN_PAGE_WIDTH = 900;
+  var LOAD_FAILED_BODY = "The local service didn\u2019t answer. Allow it in Settings, then Extensions, and try again. Your folders and filters are kept.";
+  var REFRESH_FAILED_BODY = "You\u2019re seeing the designs from a minute ago. New ones will appear when the refresh works.";
   var mountLibrary = (options) => {
     const scope = createScope();
     let query = "";
     let tab = "all";
     let sort = "updated";
+    let libraryView = "tiles";
+    let systemFilter = ALL_SYSTEMS;
     let chosen = ALL_SCOPE;
     let projects = [];
-    let view2 = { scope: ALL_SCOPE, groups: [], root: "", folder: null };
+    let view2 = { scope: ALL_SCOPE, groups: [], root: "", manual: [], folder: null };
     let sidebarWanted = null;
     let narrow = false;
     const folderStore = folders();
+    const systemStore = systems();
     const thumbs = /* @__PURE__ */ new Map();
     const el2 = h("div", { class: "dc-library" });
     const newButton = btn({ label: "New", variant: "default", size: "default", icon: "plus", chevron: true, onClick: () => void 0 });
@@ -21187,7 +22993,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       ],
       (id) => options.onNew(id === "page" ? "page" : "canvas")
     );
-    const settingsButton = btn({ label: "Settings", variant: "ghost", size: "default", icon: "settings", onClick: () => options.onSettings() });
+    const settingsButton = iconBtn({ icon: "gear", label: "Settings", onClick: () => options.onSettings() });
     const systemsButton = btn({ label: "Design systems", variant: "ghost", size: "default", icon: "system", onClick: () => options.onSystems() });
     const searchHost = h("div", { class: "dc-search" });
     const search = mountSearchField(searchHost, { value: "", placeholder: "Search designs", label: "Search designs", onChange: (value) => {
@@ -21201,25 +23007,43 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       tabsHandle.update({ activeId: tab });
       paintGrid();
     } });
-    const sortHost = h("div", { class: "dc-sort", title: "Sort designs" }, h("span", { class: "dc-sort-label" }, "Sort"));
-    const sortSelect = mountSelect(sortHost, { value: sort, options: LIST_SORTS.map(({ id, label }) => ({ id, label })), onChange: (id) => {
-      sort = LIST_SORTS.find((entry) => entry.id === id)?.id ?? "updated";
-      sortSelect.update({ value: sort });
+    const systemHost = h("div", { class: "dc-inline-select dc-system-select" });
+    const systemSelect = mountSelect(systemHost, { label: "System", value: "all", options: [{ id: "all", label: "All systems" }, { id: "none", label: "No system" }], onChange: (id) => {
+      systemFilter = systemFilterFromId(id);
       paintGrid();
     } });
-    const sidebarToggle = iconBtn({ icon: "sidebar", label: "Projects and folders", pressed: true, onClick: () => toggleSidebar() });
-    const scopeName = h("span", { class: "dc-page-scope", hidden: true });
+    const sortHost = h("div", { class: "dc-inline-select dc-sort-select" });
+    const sortSelect = mountSelect(sortHost, { label: "Sort", value: sort, options: LIST_SORTS.map(({ id, label }) => ({ id, label })), onChange: (id) => {
+      sort = LIST_SORTS.find((entry) => entry.id === id)?.id ?? "updated";
+      sortSelect.update({ value: sort });
+      void host.storage.set(sortStorageKey("page"), sort);
+      paintGrid();
+    } });
+    const viewButton = (view3, label, glyph) => h("button", { type: "button", class: "dc-view-toggle-btn", "aria-pressed": String(libraryView === view3), "aria-label": `View as ${label.toLowerCase()}` }, icon2(glyph, 14), label);
+    const tilesButton = viewButton("tiles", "Tiles", "tiles");
+    const listButton = viewButton("list", "List", "list");
+    const viewToggle = h("div", { class: "dc-view-toggle", role: "group", "aria-label": "View" }, tilesButton, listButton);
+    const setView = (next) => {
+      if (libraryView === next) return;
+      libraryView = next;
+      void host.storage.set(viewStorageKey, next);
+      paintGrid();
+    };
+    tilesButton.addEventListener("click", () => setView("tiles"));
+    listButton.addEventListener("click", () => setView("list"));
+    const sidebarToggle = iconBtn({ icon: "sidebar", label: "Projects, folders and design systems", pressed: true, onClick: () => toggleSidebar() });
+    const countLine = h("span", { class: "dc-page-count", hidden: true });
     const toolbar = h(
       "header",
       { class: "dc-library-bar" },
       sidebarToggle,
-      h("h1", { class: "dc-page-title" }, "Designs", scopeName),
-      h("div", { class: "dc-library-controls" }, searchHost, tabsHost, sortHost),
+      h("h1", { class: "dc-page-title" }, "Designs", countLine),
       h("span", { class: "dc-spacer" }),
       systemsButton.el,
-      settingsButton.el,
+      settingsButton,
       newButton.el
     );
+    const controls = h("div", { class: "dc-library-controls", role: "toolbar", "aria-label": "Filter and arrange the library" }, searchHost, tabsHost, systemHost, sortHost, viewToggle);
     const notices = h("div", { class: "dc-library-notices" });
     const syncNotices = () => {
       notices.hidden = ![...notices.children].some((child) => child instanceof HTMLElement && !child.hidden);
@@ -21229,7 +23053,10 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     const undo = mountUndoNotice();
     const undoHost = h("div", { class: "dc-library-undo" }, undo.el);
     const grid = h("ul", { class: "dc-grid", role: "list", "aria-label": "Designs" });
-    const scroller = h("div", { class: "dc-library-scroll" }, undoHost, notices, grid);
+    const listHead = h("div", { class: "dc-list-head", "aria-hidden": "true" }, h("span"), h("span", null, "Name"), h("span", { class: "dc-list-head-system" }, "System"), h("span", { class: "dc-list-head-in" }, "In"), h("span", { class: "dc-list-head-when" }, "Updated"), h("span"));
+    const list = h("ul", { class: "dc-library-list", role: "list", "aria-label": "Designs" });
+    const listWrap = h("div", { class: "dc-list-wrap", "data-chip": "true", hidden: true }, listHead, list);
+    const scroller = h("div", { class: "dc-library-scroll" }, undoHost, notices, grid, listWrap);
     const sidebar = mountSidebar({
       onSelect: (next) => {
         setScope(next);
@@ -21248,10 +23075,19 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       onDelete: (folder) => {
         void deleteFolder({ id: folder.id, name: folder.name }, undo);
       },
-      validate: (name, ignoreId) => folderNameProblem(name, folderStore.get().folders, ignoreId)
+      validate: (name, ignoreId) => folderNameProblem(name, folderStore.get().folders, ignoreId),
+      // A system row filters the library and keeps the scope; on a floating sidebar it then gets out of the way.
+      onFilterSystem: (id) => {
+        setSystemFilter({ kind: "system", id });
+        if (narrow) setSidebar(false);
+      },
+      onSystems: () => options.onSystems(),
+      onNewSystem: () => newSystem(),
+      onRetrySystems: () => void systemStore.load(),
+      onRetryDesigns: () => void store.refreshDesigns()
     });
     const body = h("div", { class: "dc-library-body" }, sidebar.el, scroller);
-    el2.append(toolbar, body);
+    el2.append(toolbar, controls, body);
     const sidebarOpen = () => sidebarWanted ?? !narrow;
     const paintSidebarState = () => {
       const open = sidebarOpen();
@@ -21285,6 +23121,12 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         sidebarToggle.focus();
       }
     });
+    const setSystemFilter = (next) => {
+      systemFilter = next;
+      paintGrid();
+    };
+    const newSystem = (source) => openNewSystemSheet(options.actions.host, { ...source ? { source } : {}, onMade: (result) => options.actions.onOpenSystem?.(result.id) });
+    const projectLabel = (directory) => projects.find((project) => sameDirectory(project.directory, directory))?.name ?? folderName(directory);
     const setScope = (next) => {
       chosen = next;
       void host.storage.set(scopeStorageKey("page"), scopeToId(next));
@@ -21298,6 +23140,16 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         toast("error", `Couldn\u2019t switch back. ${error instanceof Error ? error.message : ""}`);
       }
     };
+    let manualSlugs = /* @__PURE__ */ new Set();
+    let swatches = () => null;
+    const menuFor = (design) => {
+      if (view2.folder) return { folder: view2.folder, project: null };
+      if (view2.scope.kind === "project") {
+        const label = scopeLabel(view2.scope, view2.groups, folderStore.get().folders);
+        return { folder: null, project: { directory: view2.scope.directory, label: label ?? view2.scope.directory, manual: manualSlugs.has(design.slug) } };
+      }
+      return { folder: null, project: null };
+    };
     const card = (design) => {
       let thumb = thumbs.get(design.slug);
       if (thumb) thumb.update(design);
@@ -21305,7 +23157,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         thumb = mountThumb(design, "card");
         thumbs.set(design.slug, thumb);
       }
-      const line = cardProjectLine(design, view2.scope, view2.groups, view2.root);
+      const line = cardProjectLine(design, view2.scope, view2.groups, view2.root, view2.manual);
       const kindBadge = h("span");
       mountBadge(kindBadge, { label: kindLabel(design.kind), tone: "neutral" });
       const locale = host.snapshot()?.locale ?? "en";
@@ -21321,7 +23173,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
           "span",
           { class: "dc-card-body" },
           h("span", { class: "dc-card-title" }, design.title),
-          line ? h("span", { class: "dc-card-project", title: line.title }, icon2("layers", 12), h("span", { class: "dc-card-project-name" }, line.label)) : null,
+          line ? h("span", { class: "dc-card-project", title: line.title, "data-filed": line.manual ? "true" : null }, icon2("layers", 12), h("span", { class: "dc-card-project-name" }, line.label)) : null,
           h("span", { class: "dc-card-meta" }, kindBadge, h("span", { class: "dc-muted" }, relativeTime(design.updated, Date.now(), locale)), indicators)
         )
       );
@@ -21329,8 +23181,9 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       const more = iconBtn({ icon: "more", label: `Actions for ${design.title}`, size: "sm", onClick: () => void 0 });
       more.classList.add("dc-card-more");
       const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
-      attachMenu(more, () => listDesignMenu(view2.folder), (id) => runListAction(id, ref, options.actions, view2.folder));
-      const item = h("li", { class: "dc-card", "data-slug": design.slug, "data-pending": design.pending ? "true" : "false", draggable: "true" }, main, more);
+      attachMenu(more, () => listDesignMenu(menuFor(design)), (id) => runListAction(id, ref, options.actions, menuFor(design)));
+      const chip = designSystemChip(design, { actions: options.actions, swatchOf: swatches });
+      const item = h("li", { class: "dc-card", "data-slug": design.slug, "data-pending": design.pending ? "true" : "false", draggable: "true" }, main, chip === null ? null : h("div", { class: "dc-card-foot" }, chip), more);
       item.addEventListener("dragstart", (event) => {
         if (!event.dataTransfer) return;
         event.dataTransfer.setData(DESIGN_DRAG_TYPE, design.slug);
@@ -21342,14 +23195,52 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       });
       return item;
     };
-    const skeletons = () => Array.from({ length: SKELETON_CARDS }, () => h("li", { class: "dc-card dc-card-skeleton", "aria-hidden": "true" }, h("span", { class: "dc-skel dc-skel-card" }), h("span", { class: "dc-skel dc-skel-line" }), h("span", { class: "dc-skel dc-skel-line dc-skel-short" })));
+    const skeletons = () => libraryView === "tiles" ? Array.from({ length: SKELETON_CARDS }, () => h("li", { class: "dc-card dc-card-skeleton", "aria-hidden": "true" }, h("span", { class: "dc-skel dc-skel-card" }), h("span", { class: "dc-skel dc-skel-line" }), h("span", { class: "dc-skel dc-skel-line dc-skel-short" }))) : Array.from(
+      { length: SKELETON_ROWS3 },
+      () => h(
+        "li",
+        { class: "dc-row dc-list-row dc-row-skeleton", "aria-hidden": "true" },
+        h("span", { class: "dc-row-thumb" }, h("span", { class: "dc-skel dc-skel-thumb" })),
+        h("span", { class: "dc-row-name" }, h("span", { class: "dc-skel dc-skel-line" }), h("span", { class: "dc-skel dc-skel-line dc-skel-short" })),
+        h("span", { class: "dc-row-in" }, h("span", { class: "dc-skel dc-skel-line dc-skel-short" })),
+        h("span", { class: "dc-row-when" }, h("span", { class: "dc-skel dc-skel-line dc-skel-short" }))
+      )
+    );
     const message = (...children) => h("li", { class: "dc-grid-message" }, ...children);
+    const activeList = () => libraryView === "tiles" ? grid : list;
+    const paintViewState = () => {
+      grid.hidden = libraryView !== "tiles";
+      listWrap.hidden = libraryView !== "list";
+      tilesButton.setAttribute("aria-pressed", String(libraryView === "tiles"));
+      listButton.setAttribute("aria-pressed", String(libraryView === "list"));
+    };
+    const showLoading = () => {
+      scroller.setAttribute("aria-busy", "true");
+      activeList().append(...skeletons(), h("li", { class: "dc-grid-message dc-sr-only", role: "status" }, "Loading your designs"));
+    };
+    const clearFilters = () => {
+      query = "";
+      tab = "all";
+      systemFilter = ALL_SYSTEMS;
+      search.update({ value: "" });
+      tabsHandle.update({ activeId: "all" });
+      paintGrid();
+    };
+    const filterBySystem = (id) => {
+      chosen = ALL_SCOPE;
+      query = "";
+      tab = "all";
+      systemFilter = { kind: "system", id };
+      search.update({ value: "" });
+      tabsHandle.update({ activeId: "all" });
+      paintGrid();
+    };
     const paintNotices = () => {
       for (const child of [...notices.children]) if (child !== looseBanner2.el) child.remove();
       const state = store.getState();
       if (state.designs.status === "error" && state.designs.data) {
         const wrap = h("div", { class: "dc-banner" });
-        mountBanner(wrap, { tone: "warning", title: "Couldn\u2019t refresh the list", body: state.designs.error?.message ?? "", action: { label: "Try again", onClick: () => void store.refreshDesigns() } });
+        mountBanner(wrap, { tone: "warning", title: "Couldn\u2019t refresh the list", body: REFRESH_FAILED_BODY, action: { label: "Try again", onClick: () => void store.refreshDesigns() } });
         looseBanner2.el.before(wrap);
       }
       const first = state.settings.data?.previousRoots.find((root) => root.exists && root.designCount > 0);
@@ -21366,61 +23257,106 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       const previousScroll = scroller.scrollTop;
       const state = store.getState().designs;
       grid.replaceChildren();
+      list.replaceChildren();
+      paintViewState();
       paintNotices();
+      scroller.removeAttribute("aria-busy");
       if ((state.status === "idle" || state.status === "loading") && !state.data) {
-        grid.append(...skeletons());
+        countLine.hidden = true;
+        sidebar.paintWithoutDesigns("loading");
+        paintSidebarState();
+        showLoading();
         return;
       }
       if (!state.data) {
-        const wrap = h("div");
-        mountBanner(wrap, { tone: "error", title: "Your designs didn\u2019t load", body: state.error?.message ?? "The local service didn\u2019t answer. Allow it in Settings \u2192 Extensions, then try again.", action: { label: "Try again", onClick: () => void store.refreshDesigns() } });
-        grid.append(message(wrap));
+        countLine.hidden = true;
+        sidebar.paintWithoutDesigns("failed");
+        paintSidebarState();
+        const wrap = h("div", { class: "dc-banner" });
+        mountBanner(wrap, { tone: "error", title: "Your designs didn\u2019t load", body: state.error?.message ? `${state.error.message} Your folders and filters are kept.` : LOAD_FAILED_BODY, action: { label: "Try again", onClick: () => void store.refreshDesigns() } });
+        activeList().append(message(wrap));
         return;
       }
       const all = state.data.designs;
       const root = state.data.root;
       const foldersState = folderStore.get();
       const folderList = foldersState.status === "error" ? [] : foldersState.folders;
-      const groups = projectGroups(all, projects, root, state.data.projectFolders);
+      const manualProjects = foldersState.projects;
+      const groups = projectGroups(all, projects, root, state.data.projectFolders, manualProjects);
       const foldersPending = chosen.kind === "folder" && (foldersState.status === "idle" || foldersState.status === "loading") && foldersState.folders.length === 0;
       const effective = foldersPending ? chosen : resolveScope(chosen, groups, folderList);
       const folder = effective.kind === "folder" ? folderList.find((entry) => entry.id === effective.id) ?? null : null;
-      view2 = { scope: effective, groups, root, folder: folder ? { id: folder.id, name: folder.name } : null };
-      const counts4 = scopeCounts(all, folderList, root);
-      sidebar.paint({ scope: effective, counts: counts4, groups, folders: folderList, foldersStatus: foldersState.status === "error" ? "error" : foldersState.status === "ready" ? "ready" : "loading", foldersError: foldersState.error });
+      view2 = { scope: effective, groups, root, manual: manualProjects, folder: folder ? { id: folder.id, name: folder.name } : null };
+      manualSlugs = new Set(effective.kind === "project" ? foldersState.projects.find((entry) => sameDirectory(entry.directory, effective.directory))?.slugs ?? [] : []);
+      const counts4 = scopeCounts(all, folderList, root, manualProjects);
+      const systemsState = systemStore.get();
+      const systemList = systemsState.status === "error" ? [] : systemsState.systems ?? [];
+      const systemsFailed = systemsState.status === "error" && systemsState.systems === null;
+      systemFilter = resolveSystemFilter(systemFilter, systemList);
+      swatches = swatchLookup(systemList);
+      sidebar.paint({
+        scope: effective,
+        counts: counts4,
+        groups,
+        folders: folderList,
+        foldersStatus: foldersState.status === "error" ? "error" : foldersState.status === "ready" ? "ready" : "loading",
+        foldersError: foldersState.error,
+        systems: sidebarSystems(systemList),
+        systemFilter,
+        systemsStatus: systemsFailed ? "error" : systemsState.systems === null ? "loading" : "ready"
+      });
       paintSidebarState();
       const label = scopeLabel(effective, groups, folderList);
-      scopeName.hidden = label === null;
-      scopeName.textContent = label ?? "";
-      if (foldersPending) {
-        grid.append(...skeletons());
+      const systemEntries = systemOptions(systemList);
+      systemSelect.update({ value: systemFilterToId(systemFilter), options: systemEntries });
+      nameSelect(systemHost, "System", systemEntries.find((entry) => entry.id === systemFilterToId(systemFilter))?.label ?? "All systems");
+      nameSelect(sortHost, "Sort", LIST_SORTS.find((entry) => entry.id === sort)?.label ?? "Updated");
+      if (foldersPending || tab === "system" && systemsState.systems === null && !systemsFailed) {
+        countLine.hidden = true;
+        showLoading();
         scroller.scrollTop = previousScroll;
         return;
       }
-      const scoped = scopeDesigns(all, effective, folderList, root);
-      const shown = sortDesigns(filterDesigns(scoped, query, tab), sort);
-      const counts = tabCounts(scoped, query);
+      const filters = { query, tab, system: systemFilter };
+      const { scoped, scopedSystems, items, lead, shownDesigns, shownSystems, counts } = libraryItems({ designs: all, systems: systemList, scope: effective, folders: folderList, designsRoot: root, filters, sort, manual: manualProjects });
+      countLine.hidden = false;
+      const totals = scopedSystems.length > 0 ? `${plural(scoped.length, "design")} and ${plural(scopedSystems.length, "system")}` : plural(scoped.length, "design");
+      countLine.textContent = label === null ? totals : `${label} \xB7 ${totals}`;
       tabsHandle.update({ items: LIST_TABS.map(({ id, label: tabLabel }) => ({ id, label: tabLabel, count: counts[id] })) });
-      const kind = emptyKind(all, shown);
-      if (kind !== "none" && kind !== "no-designs" && scoped.length === 0 && folder) {
+      const empty = emptyStateOf({ all, scoped, shown: shownDesigns, shownSystems, scope: effective, scopeLabel: label, folderName: folder?.name ?? null, filters, systems: systemList, systemsFailed, draggable: true });
+      if (empty) {
         const wrap = h("div");
-        mountEmpty(wrap, { title: `No designs in ${folder.name} yet`, body: folderEmptyBody(true), action: { label: "Show all designs", onClick: () => setScope(ALL_SCOPE) } });
-        grid.append(message(wrap));
-      } else if (kind === "no-designs") {
-        const wrap = h("div");
-        mountEmpty(wrap, { title: "No designs yet", body: "Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here the moment they are saved.", action: { label: "New canvas", onClick: () => options.onNew("canvas") } });
-        grid.append(message(wrap));
-      } else if (kind === "no-matches") {
-        const wrap = h("div");
-        mountEmpty(wrap, { title: query.trim() !== "" ? noMatchesSentence(label, query) : label !== null ? `Nothing in ${label} for this tab yet` : "Nothing in this tab yet", body: label !== null ? "Try another word, look in All, or show all designs." : "Try another word, or look in All.", action: { label: "Clear filters", onClick: () => {
-          query = "";
-          tab = "all";
-          search.update({ value: "" });
-          tabsHandle.update({ activeId: "all" });
-          paintGrid();
-        } } });
-        grid.append(message(wrap));
-      } else grid.append(...shown.map(card));
+        mountLibraryEmpty(wrap, empty, {
+          // First run: nothing to show yet, so offer the system start too (not while the systems list is unknown).
+          ...systemsState.systems !== null && systemList.length === 0 && !systemsFailed ? { firstRun: { onNewSystem: () => newSystem(), onExistingSystem: () => newSystem("existing") } } : {},
+          onAction: () => {
+            if (empty.action === "new") options.onNew("canvas");
+            else if (empty.action === "show-all") setScope(ALL_SCOPE);
+            else if (empty.action === "new-system") newSystem();
+            else if (empty.action === "retry-systems") void systemStore.load();
+            else clearFilters();
+          },
+          onClearChip: (id) => {
+            if (id === "search") {
+              query = "";
+              search.update({ value: "" });
+            } else if (id === "tab") {
+              tab = "all";
+              tabsHandle.update({ activeId: "all" });
+            } else systemFilter = ALL_SYSTEMS;
+            paintGrid();
+          }
+        });
+        activeList().append(message(wrap));
+      } else {
+        const systemActions = { label: projectLabel, onOpen: (id) => options.actions.onOpenSystem?.(id), onPreview: (id) => options.actions.onOpenSystem?.(id, "preview"), onShowDesigns: (id) => filterBySystem(id) };
+        const rowView2 = { scope: effective, groups, root, manual: manualProjects, menu: { folder: null, project: null } };
+        const nodes = items.map((item) => {
+          if (item.kind === "system") return libraryView === "tiles" ? mountSystemTile(item.system, { ...systemActions, lead: item.system === lead }) : mountSystemListRow(item.system, systemActions);
+          return libraryView === "tiles" ? card(item.design) : mountDesignRow(item.design, { variant: "list", view: { ...rowView2, menu: menuFor(item.design) }, actions: options.actions, onOpen: options.onOpen, thumbs, swatchOf: swatches });
+        });
+        activeList().append(...nodes);
+      }
       const live = new Set(all.map((design) => design.slug));
       for (const [slug, handle] of thumbs) {
         if (!live.has(slug)) {
@@ -21443,8 +23379,18 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     const minute = setInterval(paintGrid, 6e4);
     scope.add(() => clearInterval(minute));
     scope.add(folderStore.subscribe(paintGrid));
+    scope.add(systemStore.subscribe(paintGrid));
     void host.storage.get(scopeStorageKey("page")).then((stored) => {
       chosen = scopeFromId(stored);
+      paintGrid();
+    });
+    void host.storage.get(sortStorageKey("page")).then((stored) => {
+      sort = sortFromStored(stored);
+      sortSelect.update({ value: sort });
+      paintGrid();
+    });
+    void host.storage.get(viewStorageKey).then((stored) => {
+      libraryView = viewFromStored(stored);
       paintGrid();
     });
     void guestHost.client.listProjects().then(
@@ -21460,9 +23406,16 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     return {
       el: el2,
       focusCard: (slug) => {
-        grid.querySelector(`[data-slug="${CSS.escape(slug)}"] .dc-card-main`)?.focus();
+        const escaped = CSS.escape(slug);
+        (grid.querySelector(`[data-slug="${escaped}"] .dc-card-main`) ?? list.querySelector(`[data-slug="${escaped}"] .dc-row-hit`))?.focus();
       },
       focusSystems: () => systemsButton.el.focus(),
+      focusSystemEntry: (id) => {
+        const escaped = CSS.escape(id);
+        const entry = scroller.querySelector(`[data-system-id="${escaped}"] .dc-card-main, [data-system-id="${escaped}"] .dc-row-hit, [data-system-id="${escaped}"].dc-design-system-chip`);
+        (entry ?? systemsButton.el).focus();
+      },
+      filterBySystem,
       dispose: () => {
         scope.dispose();
         looseBanner2.dispose();
@@ -21471,6 +23424,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         search.dispose();
         tabsHandle.dispose();
         sortSelect.dispose();
+        systemSelect.dispose();
         sidebar.dispose();
         undo.dispose();
         el2.remove();
@@ -21533,13 +23487,13 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       onRemoved: (slug) => {
         if (open?.slug === slug) closeDesign();
       },
-      onOpenSystem: (id) => {
+      onOpenSystem: (id, target) => {
         const current = open;
-        if (!current) return openSystem(id);
+        if (!current) return openSystem(id, target);
         void current.handle.beforeLeave().then((leave) => {
           if (!leave || open !== current) return;
           closeDesign();
-          openSystem(id);
+          openSystem(id, target);
         });
       }
     };
@@ -21575,26 +23529,36 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         showBuild(ticket);
       });
     };
-    const closeSystems = () => {
+    const closeSystems = (focus = "button") => {
       systemPage?.handle.dispose();
       systemPage = null;
       systemsView?.dispose();
       systemsView = null;
       library.el.hidden = false;
-      library.focusSystems();
+      if (focus === "button") library.focusSystems();
     };
     const showSystems = () => {
       if (systemsView) return;
       buildView2?.handle.dispose();
       buildView2 = null;
-      systemsView = mountSystemsList({ surface: "page", actions, onBack: closeSystems, onOpen: (id) => openSystem(id) });
+      systemsView = mountSystemsList({ surface: "page", actions, onBack: () => closeSystems(), onOpen: (id) => openSystem(id), onShowDesigns: showDesignsOf });
       library.el.hidden = true;
       app.append(systemsView.el);
       systemsView.focus();
     };
+    const showDesignsOf = (id) => {
+      closeSystems("none");
+      library.filterBySystem(id);
+    };
     const closeSystemPage = () => {
+      const origin = systemPage;
       systemPage?.handle.dispose();
       systemPage = null;
+      if (origin?.fromLibrary) {
+        closeSystems("none");
+        library.focusSystemEntry(origin.id);
+        return;
+      }
       if (systemsView) {
         systemsView.el.hidden = false;
         systemsView.focus();
@@ -21607,11 +23571,12 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       }
       systemPage?.handle.dispose();
       systemPage = null;
+      const fromLibrary = systemsView === null;
       if (!systemsView) showSystems();
       if (!systemsView) return;
       systemsView.el.hidden = true;
-      const handle = mountSystemPage({ id, surface: "page", actions, onBack: closeSystemPage });
-      systemPage = { id, handle };
+      const handle = mountSystemPage({ id, surface: "page", actions, onBack: closeSystemPage, backTo: fromLibrary ? "library" : void 0 });
+      systemPage = { id, handle, fromLibrary };
       app.append(handle.el);
       handle.focus();
       if (target !== "page") handle.showTarget(target);
@@ -21631,15 +23596,22 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
   };
 
   // src/ui/rail/list-view.ts
-  var SKELETON_ROWS3 = 4;
+  var SKELETON_ROWS4 = 4;
+  var NEW_FOLDER_ID = "__new-folder";
+  var LOAD_FAILED_BODY2 = "The local service didn\u2019t answer. Allow it in Settings, then Extensions, and try again. Your folders and filters are kept.";
+  var REFRESH_FAILED_BODY2 = "You\u2019re seeing the designs from a minute ago. New ones will appear when the refresh works.";
   var mountListView = (options) => {
     const scope = createScope();
     let query = "";
     let tab = "all";
+    let sort = "updated";
+    let systemFilter = ALL_SYSTEMS;
     let chosen = ALL_SCOPE;
     let projects = [];
-    let view2 = { scope: ALL_SCOPE, groups: [], root: "", folder: null };
+    let view2 = { scope: ALL_SCOPE, groups: [], root: "", manual: [], folder: null };
+    let swatches = () => null;
     const folderStore = folders();
+    const systemStore = systems();
     const thumbs = /* @__PURE__ */ new Map();
     const el2 = h("div", { class: "dc-list-view" });
     const newButton = btn({ label: "New", variant: "default", size: "sm", icon: "plus", chevron: true, onClick: () => void 0 });
@@ -21651,9 +23623,13 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       ],
       (id) => options.onNew(id === "page" ? "page" : "canvas")
     );
-    const settingsButton = iconBtn({ icon: "settings", label: "Settings", onClick: () => options.onSettings() });
-    const systemsButton = iconBtn({ icon: "system", label: "Design systems", onClick: () => options.onSystems() });
-    const head = h("header", { class: "dc-rail-head" }, h("h1", { class: "dc-rail-title" }, "Designs"), h("span", { class: "dc-spacer" }), systemsButton, newButton.el, settingsButton);
+    const settingsButton = iconBtn({ icon: "gear", label: "Settings", onClick: () => options.onSettings() });
+    let systemsOpener = "icon";
+    const systemsButton = iconBtn({ icon: "system", label: "Design systems", onClick: () => {
+      systemsOpener = "icon";
+      options.onSystems();
+    } });
+    const head = h("header", { class: "dc-rail-head" }, h("h1", { class: "dc-rail-title" }, "Designs"), h("span", { class: "dc-spacer" }), systemsButton, settingsButton, newButton.el);
     const searchHost = h("div", { class: "dc-search" });
     const search = mountSearchField(searchHost, { value: "", placeholder: "Search designs", label: "Search designs", onChange: (value) => {
       query = value;
@@ -21661,33 +23637,58 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       paintList();
     } });
     const tabsHost = h("div", { class: "dc-tabs" });
-    const tabsHandle = mountTabs(tabsHost, { items: LIST_TABS.map(({ id, label }) => ({ id, label })), activeId: tab, trackBackground: true, onChange: (id) => {
-      tab = LIST_TABS.find((entry) => entry.id === id)?.id ?? "all";
+    const tabsHandle = mountTabs(tabsHost, { items: RAIL_TABS.map(({ id, label }) => ({ id, label })), activeId: tab, trackBackground: true, onChange: (id) => {
+      tab = RAIL_TABS.find((entry) => entry.id === id)?.id ?? "all";
       tabsHandle.update({ activeId: tab });
       paintList();
     } });
-    const showHost = h("div", { class: "dc-rail-show-select" });
-    const showSelect = mountSelect(showHost, { value: "all", options: [{ id: "all", label: "All designs" }], onChange: (id) => setScope(scopeFromId(id)) });
-    const showTrigger = showHost.querySelector("button");
+    const showHost = h("div", { class: "dc-rail-show-select dc-inline-select" });
+    const showSelect = mountSelect(showHost, { label: "Show", value: "all", options: [{ id: "all", label: "All designs" }], onChange: (id) => {
+      if (id !== NEW_FOLDER_ID) {
+        setScope(scopeFromId(id));
+        return;
+      }
+      paintList();
+      openNewFolder(options.actions.host);
+    } });
     const folderMore = iconBtn({ icon: "more", label: "Folder actions", size: "md", onClick: () => void 0 });
     folderMore.hidden = true;
     attachMenu(
       folderMore,
       () => [
+        { id: "new-folder", label: "New folder\u2026" },
+        { separator: true },
         { id: "rename", label: "Rename folder" },
         { separator: true },
         { id: "delete", label: "Delete folder", destructive: true }
       ],
       (id) => {
         const folder = view2.folder;
+        if (id === "new-folder") {
+          openNewFolder(options.actions.host);
+          return;
+        }
         if (!folder) return;
         if (id === "rename") openRenameFolder(options.actions.host, folder);
         else void deleteFolder(folder, undo);
       }
     );
-    const showRow = h("div", { class: "dc-rail-show" }, h("span", { class: "dc-sort-label", "aria-hidden": "true" }, "Show"), showHost, folderMore);
+    const showRow = h("div", { class: "dc-rail-show" }, showHost, folderMore);
+    const systemHost = h("div", { class: "dc-inline-select dc-rail-pair-select dc-system-select" });
+    const systemSelect = mountSelect(systemHost, { label: "System", value: "all", options: [{ id: "all", label: "All systems" }, { id: "none", label: "No system" }], onChange: (id) => {
+      systemFilter = systemFilterFromId(id);
+      paintList();
+    } });
+    const sortHost = h("div", { class: "dc-inline-select dc-rail-pair-select dc-sort-select" });
+    const sortSelect = mountSelect(sortHost, { label: "Sort", value: sort, options: LIST_SORTS.map(({ id, label }) => ({ id, label })), onChange: (id) => {
+      sort = LIST_SORTS.find((entry) => entry.id === id)?.id ?? "updated";
+      sortSelect.update({ value: sort });
+      void host.storage.set(sortStorageKey("panel"), sort);
+      paintList();
+    } });
+    const pairRow = h("div", { class: "dc-rail-pair" }, systemHost, sortHost);
     const foldersNote = h("div", { class: "dc-rail-folders-note", hidden: true }, h("p", { class: "dc-form-error" }, "Folders couldn\u2019t load. Try again."), btn({ label: "Try again", variant: "outline", size: "xs", onClick: () => void folderStore.load() }).el);
-    const filters = h("div", { class: "dc-rail-filters" }, searchHost, showRow, foldersNote, tabsHost);
+    const filters = h("div", { class: "dc-rail-filters" }, searchHost, showRow, pairRow, foldersNote, tabsHost);
     const tipHost = h("div", { class: "dc-rail-tip", hidden: true });
     let tipWanted = null;
     let tipHidden = false;
@@ -21727,7 +23728,19 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     const undo = mountUndoNotice();
     const list = h("ul", { class: "dc-rows", role: "list", "aria-label": "Designs" });
     const scroller = h("div", { class: "dc-rail-scroll" }, h("div", { class: "dc-rail-undo" }, undo.el), notices, list);
-    el2.append(head, tipHost, filters, scroller);
+    const footCount = h("span", { class: "dc-rail-nav-count" });
+    const foot = h(
+      "button",
+      { type: "button", class: "dc-rail-nav", "aria-label": systemsEntryLabel(null), title: "Design systems", onClick: () => {
+        systemsOpener = "foot";
+        options.onSystems();
+      } },
+      icon2("system", 16),
+      h("span", { class: "dc-rail-nav-name" }, "Design systems"),
+      footCount,
+      icon2("chevron-right", 16)
+    );
+    el2.append(head, tipHost, filters, scroller, foot);
     const switchBack = async (path) => {
       try {
         await store.updateSettings({ root: path });
@@ -21736,35 +23749,44 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         toast("error", `Couldn\u2019t switch back. ${error instanceof Error ? error.message : ""}`);
       }
     };
-    const rowFor = (design) => {
-      let thumb = thumbs.get(design.slug);
-      if (thumb) thumb.update(design);
-      else {
-        thumb = mountThumb(design, "rail");
-        thumbs.set(design.slug, thumb);
+    let manualSlugs = /* @__PURE__ */ new Set();
+    const menuFor = (design) => {
+      if (view2.folder) return { folder: view2.folder, project: null };
+      if (view2.scope.kind === "project") {
+        const label = scopeLabel(view2.scope, view2.groups, folderStore.get().folders);
+        return { folder: null, project: { directory: view2.scope.directory, label: label ?? view2.scope.directory, manual: manualSlugs.has(design.slug) } };
       }
-      const locale = host.snapshot()?.locale ?? "en";
-      const line = cardProjectLine(design, view2.scope, view2.groups, view2.root);
-      const meta = h("span", { class: "dc-row-meta" }, `${kindSummary(design)} \xB7 ${relativeTime(design.updated, Date.now(), locale)}`);
-      const flags = h("span", { class: "dc-row-flags" });
-      if (design.pending) flags.append(h("span", { class: "dc-flag", "data-tone": "warning" }, "Waiting for agent"));
-      if (systemUpdated(design)) flags.append(h("span", { class: "dc-flag", "data-tone": "info", title: `${design.system?.name ?? "The design system"} was updated since this design copied it.` }, SYSTEM_UPDATED_LABEL));
-      if (design.openComments > 0) flags.append(h("span", { class: "dc-flag", title: plural(design.openComments, "open comment") }, icon2("pin", 12), String(design.openComments)));
-      if (design.sessionId) flags.append(h("span", { class: "dc-flag dc-flag-icon", title: "Linked to a chat", role: "img", "aria-label": "Linked to a chat" }, icon2("chat", 12)));
-      const main = h("button", { type: "button", class: "dc-row-main", "aria-label": rowAriaLabel(design) }, thumb.el, h("span", { class: "dc-row-text" }, h("span", { class: "dc-row-title" }, design.title), meta, line ? h("span", { class: "dc-row-project", title: line.title }, icon2("layers", 12), h("span", { class: "dc-row-project-name" }, line.label)) : null, flags.childElementCount > 0 ? flags : null));
-      main.addEventListener("click", () => options.onOpen(design.slug));
-      const more = iconBtn({ icon: "more", label: `Actions for ${design.title}`, size: "sm", onClick: () => void 0 });
-      const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
-      attachMenu(more, () => listDesignMenu(view2.folder), (id) => runListAction(id, ref, options.actions, view2.folder));
-      return h("li", { class: "dc-row", "data-pending": design.pending ? "true" : "false", "data-slug": design.slug }, main, more);
+      return { folder: null, project: null };
     };
-    const skeleton = () => Array.from({ length: SKELETON_ROWS3 }, () => h("li", { class: "dc-row dc-row-skeleton", "aria-hidden": "true" }, h("span", { class: "dc-skel dc-skel-thumb" }), h("span", { class: "dc-skel-lines" }, h("span", { class: "dc-skel dc-skel-line" }), h("span", { class: "dc-skel dc-skel-line dc-skel-short" }))));
+    const skeleton = () => Array.from({ length: SKELETON_ROWS4 }, () => h("li", { class: "dc-row dc-row-skeleton", "aria-hidden": "true" }, h("span", { class: "dc-skel dc-skel-thumb" }), h("span", { class: "dc-skel-lines" }, h("span", { class: "dc-skel dc-skel-line" }), h("span", { class: "dc-skel dc-skel-line dc-skel-short" }))));
+    const showLoading = () => {
+      scroller.setAttribute("aria-busy", "true");
+      list.append(...skeleton(), h("li", { class: "dc-list-message dc-sr-only", role: "status" }, "Loading your designs"));
+    };
+    const newSystem = (source) => openNewSystemSheet(options.actions.host, { ...source ? { source } : {}, onMade: (result) => options.actions.onOpenSystem?.(result.id) });
+    const filterBySystem = (id) => {
+      chosen = ALL_SCOPE;
+      query = "";
+      tab = "all";
+      systemFilter = { kind: "system", id };
+      search.update({ value: "" });
+      tabsHandle.update({ activeId: "all" });
+      paintList();
+    };
+    const clearFilters = () => {
+      query = "";
+      tab = "all";
+      systemFilter = ALL_SYSTEMS;
+      search.update({ value: "" });
+      tabsHandle.update({ activeId: "all" });
+      paintList();
+    };
     const paintNotices = () => {
       for (const child of [...notices.children]) if (child !== looseBanner2.el) child.remove();
       const state = store.getState();
       if (state.designs.status === "error" && state.designs.data) {
         const wrap = h("div", { class: "dc-banner" });
-        mountBanner(wrap, { tone: "warning", title: "Couldn\u2019t refresh the list", body: state.designs.error?.message ?? "", action: { label: "Try again", onClick: () => void store.refreshDesigns() } });
+        mountBanner(wrap, { tone: "warning", title: "Couldn\u2019t refresh the list", body: REFRESH_FAILED_BODY2, action: { label: "Try again", onClick: () => void store.refreshDesigns() } });
         looseBanner2.el.before(wrap);
       }
       const holders = state.settings.data?.previousRoots.filter((root) => root.exists && root.designCount > 0) ?? [];
@@ -21780,10 +23802,9 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     };
     const paintShow = (scope2, groups, folderList, counts, foldersState) => {
       const entries = scopeOptions(groups, counts, folderList);
-      showSelect.update({ value: scopeToId(scope2), options: entries.map(({ id, label, hint }) => ({ id, label, hint })) });
+      showSelect.update({ value: scopeToId(scope2), options: [...entries.map(({ id, label, hint }) => ({ id, label, hint })), { id: NEW_FOLDER_ID, label: "New folder\u2026" }] });
       const current = entries.find((entry) => entry.id === scopeToId(scope2));
-      showTrigger?.removeAttribute("aria-labelledby");
-      showTrigger?.setAttribute("aria-label", `Show: ${current?.label ?? "All designs"}`);
+      nameSelect(showHost, "Show", current?.label ?? "All designs");
       folderMore.hidden = view2.folder === null;
       showRow.dataset.folders = foldersState.status === "error" ? "error" : "ok";
       foldersNote.hidden = foldersState.status !== "error";
@@ -21793,19 +23814,27 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       void host.storage.set(scopeStorageKey("panel"), scopeToId(next));
       paintList();
     };
+    const paintFoot = () => {
+      const systems2 = systemStore.get().systems;
+      const count = systems2 === null ? null : systems2.length;
+      footCount.textContent = count === null ? "" : String(count);
+      foot.setAttribute("aria-label", systemsEntryLabel(count));
+    };
     const paintList = () => {
       const state = store.getState().designs;
+      paintFoot();
       list.replaceChildren();
       for (const handle of [...thumbs.values()]) handle.el.remove();
       paintNotices();
       paintTip();
+      scroller.removeAttribute("aria-busy");
       if ((state.status === "idle" || state.status === "loading") && !state.data) {
-        list.append(...skeleton());
+        showLoading();
         return;
       }
       if (!state.data) {
         const wrap = h("div", { class: "dc-banner dc-banner-block" });
-        mountBanner(wrap, { tone: "error", title: "Your designs didn\u2019t load", body: state.error?.message ?? "The local service didn\u2019t answer. Allow it in Settings \u2192 Extensions, then try again.", action: { label: "Try again", onClick: () => void store.refreshDesigns() } });
+        mountBanner(wrap, { tone: "error", title: "Your designs didn\u2019t load", body: state.error?.message ? `${state.error.message} Your folders and filters are kept.` : LOAD_FAILED_BODY2, action: { label: "Try again", onClick: () => void store.refreshDesigns() } });
         list.append(h("li", { class: "dc-list-message" }, wrap));
         return;
       }
@@ -21813,42 +23842,62 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       const root = state.data.root;
       const foldersState = folderStore.get();
       const folderList = foldersState.status === "error" ? [] : foldersState.folders;
-      const groups = projectGroups(all, projects, root, state.data.projectFolders);
+      const manualProjects = foldersState.projects;
+      const groups = projectGroups(all, projects, root, state.data.projectFolders, manualProjects);
       const foldersPending = chosen.kind === "folder" && (foldersState.status === "idle" || foldersState.status === "loading") && foldersState.folders.length === 0;
       const effective = foldersPending ? chosen : resolveScope(chosen, groups, folderList);
       const folder = effective.kind === "folder" ? folderList.find((entry) => entry.id === effective.id) ?? null : null;
-      view2 = { scope: effective, groups, root, folder: folder ? { id: folder.id, name: folder.name } : null };
-      paintShow(effective, groups, folderList, scopeCounts(all, folderList, root), foldersState);
+      view2 = { scope: effective, groups, root, manual: manualProjects, folder: folder ? { id: folder.id, name: folder.name } : null };
+      manualSlugs = new Set(effective.kind === "project" ? foldersState.projects.find((entry) => sameDirectory(entry.directory, effective.directory))?.slugs ?? [] : []);
+      paintShow(effective, groups, folderList, scopeCounts(all, folderList, root, manualProjects), foldersState);
+      const systemsState = systemStore.get();
+      const systemList = systemsState.status === "error" ? [] : systemsState.systems ?? [];
+      const systemsFailed = systemsState.status === "error" && systemsState.systems === null;
+      systemFilter = resolveSystemFilter(systemFilter, systemList);
+      swatches = swatchLookup(systemList);
+      const systemEntries = systemOptions(systemList);
+      systemSelect.update({ value: systemFilterToId(systemFilter), options: systemEntries });
+      nameSelect(systemHost, "System", systemEntries.find((entry) => entry.id === systemFilterToId(systemFilter))?.label ?? "All systems");
+      nameSelect(sortHost, "Sort", LIST_SORTS.find((entry) => entry.id === sort)?.label ?? "Updated");
       if (foldersPending) {
-        list.append(...skeleton());
+        showLoading();
         return;
       }
       const label = scopeLabel(effective, groups, folderList);
-      const scoped = scopeDesigns(all, effective, folderList, root);
-      const shown = sortDesigns(filterDesigns(scoped, query, tab), "updated");
-      const tabTotals = tabCounts(scoped, query);
-      tabsHandle.update({ items: LIST_TABS.map(({ id, label: tabLabel }) => ({ id, label: tabLabel, count: tabTotals[id] })) });
-      const kind = emptyKind(all, shown);
-      if (kind !== "none" && kind !== "no-designs" && scoped.length === 0 && folder) {
+      const filters2 = { query, tab, system: systemFilter };
+      const { scoped, items, shownDesigns, counts } = libraryItems({ designs: all, systems: systemList, scope: effective, folders: folderList, designsRoot: root, filters: filters2, sort, manual: manualProjects, surface: "rail" });
+      tabsHandle.update({ items: RAIL_TABS.map(({ id, label: tabLabel }) => ({ id, label: tabLabel, count: counts[id] })) });
+      for (const tabButton of tabsHost.querySelectorAll("[role=tab]")) {
+        const entry = RAIL_TABS.find((item) => item.id === tabButton.dataset.id);
+        if (entry) tabButton.setAttribute("aria-label", `${entry.label}, ${counts[entry.id]}`);
+      }
+      const empty = emptyStateOf({ all, scoped, shown: shownDesigns, scope: effective, scopeLabel: label, folderName: folder?.name ?? null, filters: filters2, systems: systemList, systemsFailed, draggable: false, surface: "rail" });
+      if (empty) {
         const wrap = h("div");
-        mountEmpty(wrap, { title: `No designs in ${folder.name} yet`, body: folderEmptyBody(false), action: { label: "Show all designs", onClick: () => setScope(ALL_SCOPE) } });
-        list.append(h("li", { class: "dc-list-message" }, wrap));
-      } else if (kind === "no-designs") {
-        const wrap = h("div");
-        mountEmpty(wrap, { title: "No designs yet", body: "Type /design or /page in any chat and describe what you want. Your agent writes the files and they show up here.", action: { label: "New canvas", onClick: () => options.onNew("canvas") } });
-        list.append(h("li", { class: "dc-list-message" }, wrap));
-      } else if (kind === "no-matches") {
-        const wrap = h("div");
-        mountEmpty(wrap, { title: query.trim() !== "" ? noMatchesSentence(label, query) : label !== null ? `Nothing in ${label} for this tab yet` : "Nothing in this tab yet", body: label !== null ? "Try another word, look in All, or show all designs." : "Try another word, or look in All.", action: { label: "Clear filters", onClick: () => {
-          query = "";
-          tab = "all";
-          search.update({ value: "" });
-          tabsHandle.update({ activeId: "all" });
-          paintList();
-        } } });
+        mountLibraryEmpty(wrap, empty, {
+          ...systemsState.systems !== null && systemList.length === 0 && !systemsFailed ? { firstRun: { onNewSystem: () => newSystem(), onExistingSystem: () => newSystem("existing") } } : {},
+          onAction: () => {
+            if (empty.action === "new") options.onNew("canvas");
+            else if (empty.action === "show-all") setScope(ALL_SCOPE);
+            else if (empty.action === "new-system") newSystem();
+            else if (empty.action === "retry-systems") void systemStore.load();
+            else clearFilters();
+          },
+          onClearChip: (id) => {
+            if (id === "search") {
+              query = "";
+              search.update({ value: "" });
+            } else if (id === "tab") {
+              tab = "all";
+              tabsHandle.update({ activeId: "all" });
+            } else systemFilter = ALL_SYSTEMS;
+            paintList();
+          }
+        });
         list.append(h("li", { class: "dc-list-message" }, wrap));
       } else {
-        list.append(...shown.map(rowFor));
+        const rowView2 = { scope: effective, groups, root, manual: manualProjects, menu: { folder: null, project: null } };
+        list.append(...items.flatMap((item) => item.kind === "design" ? [mountDesignRow(item.design, { variant: "rail", view: { ...rowView2, menu: menuFor(item.design) }, actions: options.actions, onOpen: options.onOpen, thumbs, swatchOf: swatches })] : []));
       }
       const live = new Set(all.map((design) => design.slug));
       for (const [slug, handle] of thumbs) {
@@ -21871,8 +23920,14 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     const minute = setInterval(paintList, 6e4);
     scope.add(() => clearInterval(minute));
     scope.add(folderStore.subscribe(paintList));
+    scope.add(systemStore.subscribe(paintList));
     void host.storage.get(scopeStorageKey("panel")).then((stored) => {
       chosen = scopeFromId(stored);
+      paintList();
+    });
+    void host.storage.get(sortStorageKey("panel")).then((stored) => {
+      sort = sortFromStored(stored);
+      sortSelect.update({ value: sort });
       paintList();
     });
     void guestHost.client.listProjects().then(
@@ -21890,7 +23945,12 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       focusRow: (slug) => {
         list.querySelector(`[data-slug="${CSS.escape(slug)}"] .dc-row-main`)?.focus();
       },
-      focusSystems: () => systemsButton.focus(),
+      focusSystems: () => (systemsOpener === "foot" ? foot : systemsButton).focus(),
+      focusSystemEntry: (id) => {
+        const escaped = CSS.escape(id);
+        (list.querySelector(`[data-id="${escaped}"] .dc-sys-main, .dc-design-system-chip[data-system-id="${escaped}"]`) ?? (systemsOpener === "foot" ? foot : systemsButton)).focus();
+      },
+      filterBySystem,
       dispose: () => {
         scope.dispose();
         looseBanner2.dispose();
@@ -21899,6 +23959,8 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         search.dispose();
         tabsHandle.dispose();
         showSelect.dispose();
+        systemSelect.dispose();
+        sortSelect.dispose();
         undo.dispose();
         el2.remove();
       }
@@ -21963,13 +24025,13 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       onRemoved: (slug) => {
         if (viewer?.slug === slug) closeViewer();
       },
-      onOpenSystem: (id) => {
+      onOpenSystem: (id, target) => {
         const current = viewer;
-        if (!current) return openSystem(id);
+        if (!current) return openSystem(id, target);
         void current.handle.beforeLeave().then((leave) => {
           if (!leave || viewer !== current) return;
           closeViewer();
-          openSystem(id);
+          openSystem(id, target);
         });
       }
     };
@@ -22005,26 +24067,36 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         showBuild(ticket);
       });
     };
-    const closeSystems = () => {
+    const closeSystems = (focus = "button") => {
       systemPage?.handle.dispose();
       systemPage = null;
       systemsView?.dispose();
       systemsView = null;
       list.el.hidden = false;
-      list.focusSystems();
+      if (focus === "button") list.focusSystems();
     };
     const showSystems = () => {
       if (systemsView) return;
       buildView2?.handle.dispose();
       buildView2 = null;
-      systemsView = mountSystemsList({ surface: "panel", actions, onBack: closeSystems, onOpen: (id) => openSystem(id) });
+      systemsView = mountSystemsList({ surface: "panel", actions, onBack: () => closeSystems(), onOpen: (id) => openSystem(id), onShowDesigns: showDesignsOf });
       list.el.hidden = true;
       app.append(systemsView.el);
       systemsView.focus();
     };
+    const showDesignsOf = (id) => {
+      closeSystems("none");
+      list.filterBySystem(id);
+    };
     const closeSystemPage = () => {
+      const origin = systemPage;
       systemPage?.handle.dispose();
       systemPage = null;
+      if (origin?.fromLibrary) {
+        closeSystems("none");
+        list.focusSystemEntry(origin.id);
+        return;
+      }
       if (systemsView) {
         systemsView.el.hidden = false;
         systemsView.focus();
@@ -22037,11 +24109,12 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       }
       systemPage?.handle.dispose();
       systemPage = null;
+      const fromLibrary = systemsView === null;
       if (!systemsView) showSystems();
       if (!systemsView) return;
       systemsView.el.hidden = true;
-      const handle = mountSystemPage({ id, surface: "panel", actions, onBack: closeSystemPage });
-      systemPage = { id, handle };
+      const handle = mountSystemPage({ id, surface: "panel", actions, onBack: closeSystemPage, backTo: fromLibrary ? "library" : void 0 });
+      systemPage = { id, handle, fromLibrary };
       app.append(handle.el);
       handle.focus();
       if (target !== "page") handle.showTarget(target);

@@ -1704,7 +1704,9 @@
     "GET /systems/:id/living-page/render": "P25",
     "GET /systems/:id/living-page/render/chunk": "P25",
     "POST /systems/:id/build/stop": "P25",
-    "POST /system-stops/:undoId/undo": "P25"
+    "POST /system-stops/:undoId/undo": "P25",
+    "POST /memberships": "P26",
+    "POST /systems/register": "P26"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
   var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set([
@@ -2182,26 +2184,30 @@
           throw new Error(error instanceof Error ? error.message : String(error));
         }
       },
-      newDesign: async ({ kind, brief, preset = null, system, destination }) => {
+      newDesign: async ({ kind, brief, preset = null, system, destination, filing }) => {
         const ready = host2.ready.get();
         const directory = host2.directory.get();
         const text = brief.trim();
+        const extra = { ...system === void 0 ? {} : { system }, ...filing === void 0 ? {} : { filing } };
+        const filed = (answer2) => answer2.filing === void 0 ? {} : { filing: answer2.filing };
         if (destination === "new-chat") {
           if (!directory) throw new FlowError("no-project", MESSAGES.noProject);
-          const { slug: slug2, chip: chip2 } = await client.call("POST /chip", { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null, ...system === void 0 ? {} : { system } } });
+          const answer2 = await client.call("POST /chip", { body: { kind, brief: text, preset, projectDirectory: directory, sessionId: null, ...extra } });
+          const { slug: slug2, chip: chip2 } = answer2;
           const result = await api.startSession({ ...toAttachRequest(chip2), text: text || "Let's start this design.", navigation: "open" });
           if (result.sessionId === null) throw new FlowError("start-failed", MESSAGES.startFailed);
           await client.call("PATCH /designs/:slug", { params: { slug: slug2 }, body: { sessionId: result.sessionId } });
-          return { slug: slug2, sessionId: result.sessionId };
+          return { slug: slug2, sessionId: result.sessionId, ...filed(answer2) };
         }
         const session = host2.session.get();
-        const { slug, chip } = await client.call("POST /chip", {
-          body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null, ...system === void 0 ? {} : { system } }
+        const answer = await client.call("POST /chip", {
+          body: { kind, brief: text, preset, projectDirectory: directory, sessionId: session?.id ?? null, ...extra }
         });
+        const { slug, chip } = answer;
         await api.attach(toAttachRequest(chip));
         if (text) await api.compose({ text, mode: "append" });
         if (ready?.surface === "page") await api.close();
-        return { slug, sessionId: session?.id ?? null };
+        return { slug, sessionId: session?.id ?? null, ...filed(answer) };
       },
       buildSystem: async ({ brief, destination }) => {
         const ready = host2.ready.get();

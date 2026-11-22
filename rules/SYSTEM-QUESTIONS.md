@@ -6,9 +6,14 @@ Name: derived from the project, stated as an assumption. The user renames it in 
 
 ## Round one: before you read the code
 
-Ask these four in one message, before you read the code in depth. Nothing is written until the user answers. "go", the user's own words of acceptance, or the block's Go with these accepts the defaults; apply any changes to the answers and do not ask the round again.
+Ask these four in one message, before you read the code in depth, and add the first question below to that message only when a location was found or named. Nothing is written until the user answers. "go", the user's own words of acceptance, or the block's Go with these accepts the defaults; apply any changes to the answers and do not ask the round again.
 
 Never ask what the files already answer. No project repo in the chat: don't ask the home or the mode; say the system lives in Design Chamber and the repo stays untouched. A project that is the Designs folder: the same, plus "Pick your app's folder, not the Designs folder."
+
+### Start from a system the project already has? {#existing}
+Ask only when a location was found or named.
+- **Start from the system in <folder>** {#from-existing}: I read its page, docs and components first and build from what is there, instead of starting a parallel system.
+- Read the whole project {#whole}: I ignore that folder and build from everything in the project.
 
 ### Where should the design system live? {#home}
 - **Repo + living page** {#repo}: The system and its living page ship with your repo, next to the code.

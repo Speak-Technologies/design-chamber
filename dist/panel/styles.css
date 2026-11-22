@@ -656,15 +656,6 @@ body {
   width: 280px;
   max-width: 100%;
 }
-.dc-sort {
-  display: flex;
-  align-items: center;
-  gap: var(--dc-s2);
-}
-.dc-sort-label {
-  color: var(--oc-muted);
-  font-size: 0.8125rem;
-}
 .dc-library-scroll {
   flex: 1;
   min-height: 0;
@@ -3139,15 +3130,7 @@ summary.dc-checks-group-title:focus-visible {
   flex: 1;
   min-width: 0;
 }
-.dc-page-scope {
-  color: var(--oc-muted);
-  font-weight: 500;
-}
-.dc-page-scope::before {
-  content: '/';
-  margin: 0 var(--dc-s2);
-}
-.dc-library-bar > .dc-iconbtn[aria-label='Projects and folders'] {
+.dc-library-bar > .dc-iconbtn[aria-label='Projects, folders and design systems'] {
   margin-left: calc(var(--dc-s1) * -1);
 }
 
@@ -5272,3 +5255,1437 @@ button.dc-sp-value:focus-visible {
   align-items: center;
   padding-left: 0;
 }
+
+/* ===== Phase 2.6 F2: the shared folder picker, Move, the delete confirm, filing notices ===== */
+/* The Add to folder dialog, the New dialog's Folder or project field and Move share one picker.
+   Host tokens only; a locked row says why in words, a count is never the only signal. */
+
+.dc-pick {
+  --dc-pick-row-h: 2.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  /* Projects and Folders share this window and a project row is two lines, so six rows is not enough: give it a taller cap
+     that still yields to a short rail, and never cut a failure notice off. */
+  max-height: max(calc(var(--dc-pick-rows, 6) * var(--dc-pick-row-h)), min(calc(var(--dc-pick-rows, 6) * var(--dc-pick-row-h) + 8rem), 45vh));
+  overflow: auto;
+  min-width: 0;
+}
+.dc-pick-list:has(.oc-sdk-banner) {
+  max-height: none;
+}
+.dc-pick-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+  min-width: 0;
+}
+.dc-pick-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--dc-s2);
+  padding: var(--dc-s1) var(--dc-s2) 0;
+}
+.dc-pick-title {
+  margin: 0;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.dc-pick-note {
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+.dc-pick-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dc-pick-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  padding: var(--dc-s1) var(--dc-s2);
+  border-radius: var(--dc-r);
+  transition: background 120ms ease-out;
+}
+.dc-pick-row:hover,
+.dc-pick-row:focus-within {
+  background: var(--oc-hover);
+}
+.dc-pick-row .oc-sdk-check {
+  flex: 1;
+  min-width: 0;
+}
+.dc-pick-row .oc-sdk-check-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-pick-row[data-locked='true'] .oc-sdk-check {
+  cursor: default;
+}
+.dc-pick-row > .dc-icon {
+  flex: none;
+  margin-top: 3px;
+  color: var(--oc-muted);
+}
+.dc-pick-count {
+  flex: none;
+  min-width: 2ch;
+  margin-top: 3px;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.dc-pick-message {
+  margin: var(--dc-s1) var(--dc-s2) 0;
+  font-size: 0.8125rem;
+}
+.dc-pick-skeleton {
+  padding: var(--dc-s1) var(--dc-s2);
+}
+.dc-pick-failure {
+  margin-top: var(--dc-s1);
+}
+
+/* Single mode (Move): the whole row is the action. */
+.dc-pick-row-btn {
+  padding: 0;
+}
+.dc-pick-btn {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  width: 100%;
+  padding: var(--dc-s1) var(--dc-s2);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-pick-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-pick-btn[aria-disabled='true'] {
+  cursor: default;
+}
+.dc-pick-btn > .dc-icon {
+  flex: none;
+  margin-top: 3px;
+  color: var(--oc-muted);
+}
+.dc-pick-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.dc-pick-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-pick-hint {
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+.dc-pick-chev {
+  margin-top: 3px;
+  transform: rotate(-90deg);
+}
+
+/* The inline New folder field and its status line. */
+.dc-pick-new {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  margin-top: var(--dc-s1);
+}
+.dc-pick-new-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.dc-pick-status {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s1);
+  margin-top: var(--dc-s1);
+  color: var(--dc-success-text);
+  font-size: 0.8125rem;
+}
+.dc-pick-note-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.dc-pick-note-line > .dc-icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* The New dialog's field: chips of the picks, then the combo, then the line that says where it goes. */
+.dc-pick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dc-s1);
+}
+.dc-pick-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--dc-s1);
+  max-width: 100%;
+  padding: 2px var(--dc-s2);
+  border: 1px solid var(--dc-hair);
+  border-radius: 999px;
+  background: var(--oc-elevated);
+  font-size: 0.75rem;
+}
+.dc-pick-chip > .dc-icon {
+  flex: none;
+  color: var(--oc-muted);
+}
+.dc-pick-chip[data-fixed='true'] {
+  color: var(--oc-muted);
+}
+.dc-pick-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-pick-chip-x {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--oc-muted);
+  cursor: pointer;
+}
+.dc-pick-chip-x:hover {
+  color: var(--oc-fg);
+  background: var(--oc-hover);
+}
+.dc-pick-chip-x:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-folder-note.dc-goes-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s1);
+  color: var(--oc-fg);
+}
+.dc-folder-note.dc-goes-line > .dc-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--oc-muted);
+}
+
+/* Move's foot note and the delete confirm's facts. */
+.dc-move-note {
+  margin-right: auto;
+  align-self: center;
+  font-size: 0.8125rem;
+}
+.dc-delete-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+}
+.dc-delete-facts strong {
+  font-weight: 600;
+}
+.dc-delete-promise {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s1);
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.dc-delete-promise > .dc-icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* After Start: a filing refusal never blocks the design; its notice offers Try again.
+   In flow above the view (never over a toolbar), so no control is hidden behind it. */
+.dc-filing-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  padding: var(--dc-s2) var(--dc-s2) 0;
+}
+.dc-filing-notices:empty {
+  display: none;
+}
+.dc-filing-notice {
+  position: relative;
+}
+.dc-filing-notice > .dc-iconbtn {
+  position: absolute;
+  top: var(--dc-s1);
+  right: var(--dc-s1);
+}
+.dc-filing-notice .oc-sdk-banner {
+  padding-right: var(--dc-s6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-pick-row {
+    transition: none;
+  }
+}
+/* ===== end Phase 2.6 F2 ===== */
+
+/* ===== Phase 2.6 E2: the New design system sheet, Existing design system ===== */
+/* The approved canvas (Designs/phase-2-6-library-ui, system-sheet-existing): three columns at laptop width
+   (start / location / what was read and what to do), one column at the rail's width. Host tokens only. */
+
+.dc-sheet[data-variant='dialog'].dc-newsys[data-existing='true'] .dc-sheet-panel {
+  width: min(1180px, 100%);
+}
+/* The columns follow the surface width: the sheet lives in the guest frame, whose window is the rail
+   (320 to 480 px) or the full page. A container query on the panel would contain layout and misplace
+   the kit's fixed popups inside it, so the breakpoint is the window's, as the approved canvas draws it. */
+.dc-newsys-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    'name'
+    'opts'
+    'agent';
+  gap: var(--dc-s4);
+  min-width: 0;
+}
+.dc-newsys[data-existing='true'] .dc-newsys-grid {
+  grid-template-areas:
+    'name'
+    'opts'
+    'where'
+    'result'
+    'agent';
+}
+.dc-newsys-g-name {
+  grid-area: name;
+}
+.dc-newsys-g-opts {
+  grid-area: opts;
+}
+.dc-newsys-g-where {
+  grid-area: where;
+}
+.dc-newsys-g-result {
+  grid-area: result;
+}
+.dc-newsys-g-agent {
+  grid-area: agent;
+}
+.dc-newsys-g-where,
+.dc-newsys-g-result {
+  min-width: 0;
+}
+.dc-newsys-g-where.dc-newsys-stack,
+.dc-newsys-g-result.dc-newsys-stack {
+  gap: var(--dc-s3);
+}
+@media (min-width: 1100px) {
+  .dc-newsys[data-existing='true'] .dc-newsys-grid {
+    grid-template-columns: 300px minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      'name where result'
+      'opts where result'
+      'agent where result';
+    /* The location and read columns span all three rows: give any extra height to the last row, so Name, Start from and
+       Agent works in stay together instead of spreading apart. */
+    grid-template-rows: auto auto 1fr;
+    column-gap: var(--dc-s5);
+    align-items: start;
+  }
+  .dc-newsys[data-existing='true'] .dc-newsys-g-where,
+  .dc-newsys[data-existing='true'] .dc-newsys-g-result {
+    padding-left: var(--dc-s5);
+    border-left: 1px solid var(--dc-hair);
+  }
+}
+
+.dc-newsys-col-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dc-newsys-h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.dc-newsys-project-note {
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.dc-newsys-discovery {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-newsys-discovery p {
+  overflow-wrap: anywhere;
+}
+.dc-newsys-pick-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--dc-s2);
+  width: 100%;
+}
+.dc-newsys-pick-note {
+  flex: none;
+  font-size: 0.6875rem;
+}
+
+/* The candidate list: a radio group of places, each with its marks and counts. */
+.dc-newsys-cands {
+  width: 100%;
+  border: 1px solid var(--dc-hair);
+  border-radius: var(--dc-r);
+  overflow: hidden;
+}
+.dc-newsys-cand {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 2px var(--dc-s2);
+  padding: var(--dc-s2) var(--dc-s3);
+  border-top: 1px solid var(--dc-hair);
+}
+.dc-newsys-cand:first-child {
+  border-top: 0;
+}
+.dc-newsys-cand[data-on='true'] {
+  background: var(--oc-selection);
+}
+.dc-newsys-radio {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--oc-primary);
+}
+.dc-newsys-radio:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+  border-radius: 9999px;
+}
+.dc-newsys-cand-path {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px var(--dc-s2);
+  min-width: 0;
+}
+.dc-newsys-cand-path-label {
+  font-family: var(--oc-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.dc-newsys-cand-badge {
+  display: inline-flex;
+  flex: none;
+}
+.dc-newsys-cand-mark,
+.dc-newsys-cand-count {
+  grid-column: 2;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.dc-newsys-cand-count {
+  font-variant-numeric: tabular-nums;
+}
+.dc-newsys-cand-more {
+  padding: var(--dc-s2) var(--dc-s3);
+  border-top: 1px solid var(--dc-hair);
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+
+/* What the location scan read: the found sentence, then the quiet notes under it. */
+.dc-newsys-read-lines {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-newsys-found-line {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.dc-newsys-found-line strong {
+  font-weight: 600;
+}
+.dc-newsys-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.dc-newsys-note > .dc-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--oc-muted);
+}
+.dc-newsys-contract-problem {
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+/* Register it as it is / Make a new system from it. */
+.dc-newsys-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-newsys-choice {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 2px var(--dc-s2);
+  padding: var(--dc-s2) var(--dc-s3);
+  border: 1px solid var(--dc-hair);
+  border-radius: var(--dc-r);
+}
+.dc-newsys-choice[data-on='true'] {
+  border-color: color-mix(in srgb, var(--oc-primary) 45%, var(--oc-border));
+  background: color-mix(in srgb, var(--oc-primary) 6%, transparent);
+}
+.dc-newsys-choice label {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px var(--dc-s2);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dc-newsys-choice-hint {
+  grid-column: 2;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+/* The nudge over Project code, the disabled agent field, the footer's promise. */
+.dc-newsys-nudge {
+  width: 100%;
+  min-width: 0;
+}
+.dc-newsys-agent[data-disabled='true'] .oc-sdk-tabs {
+  opacity: 0.55;
+}
+.dc-newsys-repo-note {
+  margin-right: auto;
+  align-self: center;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+/* Narrow sheet: the promise gets its own row above the buttons, never a squeezed column. */
+.dc-newsys .dc-sheet-foot {
+  flex-wrap: wrap;
+}
+@media (max-width: 1099px) {
+  .dc-newsys-repo-note {
+    flex-basis: 100%;
+    margin-right: 0;
+    align-self: flex-start;
+  }
+}
+/* ===== end Phase 2.6 E2 ===== */
+
+/* ===== Phase 2.6 design warnings (components/design-warnings.ts) ===== */
+/* A calm band under the toolbar: the service's own sentences about what it could not apply. */
+.dc-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+  margin: var(--dc-s2) var(--dc-s3) 0;
+  padding: 6px var(--dc-s3);
+  border-radius: var(--dc-r);
+  background: color-mix(in srgb, var(--oc-warning) 12%, transparent);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+.dc-warnings[hidden],
+.dc-warnings-line[hidden],
+.dc-warnings-more[hidden] {
+  display: none;
+}
+.dc-warnings-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dc-warnings-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-warnings-line > .dc-icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--dc-warning-text);
+}
+.dc-warnings-text {
+  min-width: 0;
+  color: var(--oc-fg);
+  overflow-wrap: anywhere;
+}
+.dc-warnings-more {
+  align-self: flex-start;
+  min-height: 28px;
+  margin: 0 calc(var(--dc-s2) * -1);
+  padding: 2px var(--dc-s2);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: none;
+  color: var(--oc-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.dc-warnings-more:hover {
+  background: var(--oc-hover);
+  color: var(--oc-fg);
+}
+.dc-warnings-more:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+/* ===== end Phase 2.6 design warnings ===== */
+
+/* ===== Phase 2.6 L1a: library views (Tiles/List), Sort, the System filter, the gear ===== */
+/*
+ * The approved canvas (Designs/phase-2-6-library-ui: library-tiles, library-list, rail-library,
+ * library-states) is the visual authority. Host tokens and kit variables only. The inline selects
+ * put the kit's caption inside the field box; the page List view lays the shared row's facts out
+ * in columns; the rail title keeps its 120 px budget at 320 (the controls never squeeze it).
+ */
+
+/* The header's count line: "24 designs and 4 systems" beside the title. */
+.dc-page-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-page-count {
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+/* The toolbar row under the header: search, tabs, System, Sort, then the view toggle at the end. */
+.dc-library-controls {
+  padding: 0 var(--dc-s5) var(--dc-s3);
+}
+.dc-view-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  margin-left: auto;
+  border-radius: calc(var(--dc-r) + 2px);
+  background: color-mix(in srgb, var(--oc-fg) 4%, transparent);
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--oc-fg) 12%, transparent);
+}
+.dc-view-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--dc-s1);
+  height: 26px;
+  padding: 0 var(--dc-s2);
+  border: 1px solid transparent;
+  border-radius: var(--dc-r);
+  background: none;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease-out, color 120ms ease-out;
+}
+.dc-view-toggle-btn:hover {
+  color: var(--oc-fg);
+  background: var(--oc-hover);
+}
+.dc-view-toggle-btn[aria-pressed='true'] {
+  background: var(--oc-sdk-raised-bg);
+  border-color: var(--oc-sdk-edge);
+  box-shadow: var(--oc-sdk-raised-lift);
+  color: var(--oc-elevated-fg);
+  font-weight: 600;
+}
+.dc-view-toggle-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+
+/* A select with its caption inside the field box (the canvas's "System  All systems  ⌄"). */
+.dc-inline-select {
+  min-width: 0;
+}
+.dc-inline-select .oc-sdk-select {
+  flex-direction: row;
+  align-items: center;
+  gap: 0;
+  height: 28px;
+  padding-left: 10px;
+  border: 1px solid var(--oc-sdk-edge);
+  border-radius: var(--dc-r);
+  background: var(--oc-sdk-raised-bg);
+  box-shadow: var(--oc-sdk-raised-lift);
+}
+.dc-inline-select .oc-sdk-field-label {
+  flex: none;
+  padding-right: var(--dc-s1);
+  color: var(--oc-muted);
+  font-weight: 500;
+}
+.dc-inline-select .oc-sdk-trigger {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.dc-inline-select .oc-sdk-trigger:hover,
+.dc-inline-select .oc-sdk-trigger[aria-expanded='true'] {
+  background-image: none;
+}
+.dc-inline-select .oc-sdk-select:hover {
+  background-image: linear-gradient(var(--oc-hover), var(--oc-hover));
+}
+.dc-inline-select .oc-sdk-select:focus-within {
+  box-shadow: var(--dc-ring);
+}
+.dc-inline-select .oc-sdk-trigger:focus-visible {
+  box-shadow: none;
+}
+
+/* Rail: System and Sort side by side under the Show select; values truncate, the title never does. */
+.dc-rail-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: var(--dc-s2);
+}
+.dc-rail-pair-select .oc-sdk-select {
+  width: 100%;
+}
+.dc-rail-title {
+  min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The page List view: the shared row's facts in columns, a whole-row hit button under the cells. */
+.dc-list-wrap {
+  padding: 0 var(--dc-s5) var(--dc-s6);
+}
+.dc-list-head,
+.dc-library-list .dc-list-row {
+  display: grid;
+  grid-template-columns: 76px minmax(200px, 1.5fr) minmax(170px, 1.1fr) 96px 28px;
+  align-items: center;
+  gap: var(--dc-s3);
+}
+/* L1b flips data-chip when the system chip column arrives. */
+.dc-list-wrap[data-chip='true'] .dc-list-head,
+.dc-list-wrap[data-chip='true'] .dc-list-row {
+  grid-template-columns: 76px minmax(200px, 1.5fr) minmax(120px, 0.8fr) minmax(170px, 1.1fr) 96px 28px;
+}
+.dc-list-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-height: 32px;
+  padding: 0 var(--dc-s1);
+  border-bottom: 1px solid var(--dc-hair);
+  background: var(--oc-bg);
+  color: var(--oc-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.dc-library-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.dc-list-row {
+  position: relative;
+  min-height: 56px;
+  padding: var(--dc-s1);
+  border-bottom: 1px solid var(--dc-hair);
+  border-radius: 0;
+}
+.dc-row-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  cursor: pointer;
+}
+.dc-list-row > :not(.dc-row-hit) {
+  position: relative;
+  z-index: 1;
+}
+.dc-list-row .dc-row-in,
+.dc-list-row .dc-row-when,
+.dc-list-row .dc-row-name,
+.dc-list-row .dc-row-thumb {
+  pointer-events: none;
+}
+.dc-list-row .dc-row-system {
+  pointer-events: auto;
+  min-width: 0;
+}
+.dc-row-hit:focus-visible {
+  outline: none;
+  box-shadow: inset var(--dc-ring);
+}
+.dc-list-row .dc-row-thumb {
+  width: 76px;
+}
+.dc-list-row .dc-thumb {
+  width: 76px;
+  height: auto;
+  aspect-ratio: 16 / 10;
+  /* A thumb shared with the Tiles view arrives with the card aspect (no border): the row restores it. */
+  border: 1px solid var(--dc-hair);
+  border-radius: 6px;
+}
+.dc-list-row .dc-thumb[data-state='pending'] {
+  border-style: dashed;
+  background: transparent;
+}
+.dc-row-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dc-list-row .dc-row-title {
+  font-weight: 600;
+}
+.dc-row-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--dc-s1);
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+.dc-row-sub .dc-row-flags {
+  margin-top: 0;
+}
+.dc-row-in {
+  min-width: 0;
+  overflow: hidden;
+}
+.dc-row-when {
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dc-list-row[data-dragging='true'] {
+  opacity: 0.5;
+}
+.dc-list-row.dc-row-skeleton {
+  pointer-events: none;
+}
+.dc-list-row .dc-skel-thumb {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 10;
+}
+/* A narrow page cannot spare the In column; the project line stays on the tiles. */
+@media (max-width: 700px) {
+  .dc-list-head,
+  .dc-library-list .dc-list-row {
+    grid-template-columns: 64px minmax(140px, 1.5fr) 84px 28px;
+  }
+  .dc-list-wrap[data-chip='true'] .dc-list-head,
+  .dc-list-wrap[data-chip='true'] .dc-list-row {
+    grid-template-columns: 64px minmax(120px, 1.5fr) minmax(90px, 0.8fr) 84px 28px;
+  }
+  .dc-list-head-in,
+  .dc-list-row .dc-row-in {
+    display: none;
+  }
+  .dc-list-row .dc-row-thumb,
+  .dc-list-row .dc-thumb {
+    width: 64px;
+  }
+}
+
+/* The empty state's active-filter chips: the scope is fixed, the rest clear on their own. */
+.dc-empty-filters {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--dc-s1) var(--dc-s2);
+  margin-top: var(--dc-s2);
+}
+.dc-empty-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--dc-s1);
+  max-width: 100%;
+  padding: 2px var(--dc-s2);
+  border-radius: 9999px;
+  background: var(--oc-hover);
+  color: var(--oc-fg);
+  font-size: 0.75rem;
+}
+.dc-empty-chip[data-fixed='true'] {
+  color: var(--oc-muted);
+}
+.dc-empty-chip .dc-icon {
+  color: var(--oc-muted);
+}
+.dc-empty-chip-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-empty-chip-x {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--oc-muted);
+  cursor: pointer;
+}
+.dc-empty-chip-x:hover {
+  background: var(--oc-active);
+  color: var(--oc-fg);
+}
+.dc-empty-chip-x:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-view-toggle-btn {
+    transition: none;
+  }
+}
+/* ===== end Phase 2.6 L1a ===== */
+
+/* ===== Phase 2.6 L1b: design systems in the library (tiles, rows, the chip, the sidebar section) ===== */
+/*
+ * The approved canvas (Designs/phase-2-6-library-ui: library-tiles, library-list, rail-library,
+ * rail-systems) is the visual authority. Host tokens only. The plate's surface, letters and lines are
+ * host chrome and follow the theme; its swatches are the system's own colours, set through the style
+ * object by system-plate.ts, so they do not follow the theme (§13).
+ */
+
+/* The system chip: a quiet pill beside a design's main button. It names the system and opens it. */
+.dc-design-system-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border: 1px solid var(--dc-hair);
+  border-radius: 9999px;
+  background: transparent;
+  color: color-mix(in srgb, var(--oc-muted) 70%, var(--oc-fg));
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.dc-design-system-chip:hover {
+  background: var(--oc-hover);
+  color: var(--oc-fg);
+}
+.dc-design-system-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-design-system-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--oc-fg) 22%, transparent);
+}
+.dc-design-system-dot[data-empty='true'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--oc-muted);
+}
+.dc-design-system-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dc-design-system-mark {
+  flex: none;
+  color: var(--dc-warning-text);
+  font-weight: 600;
+}
+.dc-design-system-chip[data-state='gone'] {
+  border-style: dashed;
+}
+.dc-design-system-chip[data-state='gone'] .dc-design-system-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--oc-muted);
+}
+
+/* Where the chip sits: under a card's body, in the list's System column, under a rail row's text. */
+.dc-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dc-s1) var(--dc-s2);
+  min-width: 0;
+  padding: 0 var(--dc-s3) var(--dc-s3);
+  margin-top: auto;
+}
+.dc-list-row .dc-row-system {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.dc-row[data-chip='true'] {
+  flex-wrap: wrap;
+}
+.dc-row-foot {
+  flex: 0 0 100%;
+  min-width: 0;
+  padding: 0 var(--dc-s2) var(--dc-s2) calc(var(--dc-s2) + 64px + 10px);
+}
+
+/* The plate: a system's stand-in for a thumbnail, 16:10 like the designs'. */
+.dc-sys-plate {
+  position: relative;
+  display: block;
+  flex: none;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border: 1px solid var(--dc-hair);
+  border-radius: 6px;
+}
+.dc-card-thumb.dc-sys-plate {
+  border: 0;
+  border-bottom: 1px solid var(--dc-hair);
+  border-radius: 0;
+}
+.dc-plate {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: 1fr auto;
+  gap: 4px 12px;
+  padding: 12px 14px;
+  background: var(--oc-muted-surface);
+  color: var(--oc-fg);
+}
+.dc-plate[data-empty='true'] {
+  display: grid;
+  place-items: center;
+  color: var(--oc-muted);
+}
+.dc-plate-aa {
+  grid-row: 1;
+  align-self: center;
+  font-size: 2.5rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.dc-plate-spec {
+  grid-row: 1;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.dc-plate-accent {
+  align-self: flex-start;
+  width: 44px;
+  height: 16px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--oc-fg) 16%, transparent);
+}
+.dc-plate-line {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--oc-fg) 16%, transparent);
+}
+.dc-plate-line[data-w='long'] {
+  width: 80%;
+}
+.dc-plate-line[data-w='short'] {
+  width: 55%;
+}
+.dc-plate-swatches {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex;
+  gap: 5px;
+}
+.dc-plate-swatch {
+  display: block;
+  flex: 1;
+  height: 14px;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--oc-fg) 16%, transparent);
+}
+/* The small plate (a rail row, a List row): the letters and a thin strip, no spec lines. */
+.dc-plate[data-variant='row'] {
+  grid-template-columns: auto;
+  gap: 2px;
+  padding: 4px 6px;
+}
+.dc-plate[data-variant='row'] .dc-plate-aa {
+  grid-column: 1;
+  font-size: 1.0625rem;
+}
+.dc-plate[data-variant='row'] .dc-plate-swatches {
+  gap: 2px;
+}
+.dc-plate[data-variant='row'] .dc-plate-swatch {
+  height: 5px;
+  border-radius: 1px;
+}
+
+/* The system tile. */
+.dc-sys-tile {
+  border-color: color-mix(in srgb, var(--oc-primary) 16%, var(--oc-border));
+}
+.dc-sys-tile[data-lead='true'] {
+  border-color: color-mix(in srgb, var(--oc-primary) 55%, var(--oc-border));
+}
+.dc-sys-tile .dc-card-main[data-static='true'] {
+  cursor: default;
+}
+.dc-sys-tile-reason {
+  padding: 0 var(--dc-s3) var(--dc-s3);
+}
+.dc-sys-tile-foot {
+  padding-top: 0;
+}
+.dc-sys-tile .dc-card-meta {
+  flex-wrap: wrap;
+  gap: var(--dc-s1) var(--dc-s2);
+}
+.dc-sys-tile .dc-card-meta > * {
+  white-space: nowrap;
+}
+.dc-sys-kind .oc-sdk-badge {
+  font-weight: 600;
+}
+.dc-sys-used {
+  font-size: 0.75rem;
+}
+.dc-sys-used[data-zero='true'] {
+  color: var(--oc-muted);
+}
+.dc-list-row .dc-sys-plate,
+.dc-list-row .dc-row-thumb.dc-sys-plate {
+  width: 76px;
+  border: 1px solid var(--dc-hair);
+  border-radius: 6px;
+  pointer-events: none;
+}
+.dc-list-row[data-kind='system'] .dc-row-system .dc-sys-used {
+  pointer-events: auto;
+}
+
+/* A system's row (the Design systems list, the library's Systems tab, the rail): plate and name over the badges and facts. */
+.dc-libsys {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  border-radius: 10px;
+  transition: background 120ms ease-out, border-color 140ms ease-out;
+}
+.dc-libsys:hover,
+.dc-libsys:focus-within {
+  background: var(--oc-hover);
+}
+.dc-libsys[data-state='unreadable'] {
+  background: color-mix(in srgb, var(--oc-error) 8%, transparent);
+}
+.dc-app :is(.dc-sys, .dc-libsys) {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 8px 6px 9px 10px;
+  --dc-sys-indent: calc(64px + 10px);
+}
+.dc-app .dc-sys-view[data-surface='page'] .dc-sys {
+  padding: var(--dc-s3) var(--dc-s3) var(--dc-s3) var(--dc-s4);
+  gap: 6px;
+}
+:is(.dc-sys, .dc-libsys)[data-lead='true'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--oc-primary) 45%, transparent);
+}
+.dc-sys-top {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.dc-app :is(.dc-sys, .dc-libsys) > .dc-sys-top > .dc-sys-main {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border-radius: var(--dc-r);
+}
+.dc-sys-main .dc-sys-plate {
+  width: 64px;
+}
+.dc-sys-main .dc-sys-name {
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.dc-sys-main .dc-sys-title {
+  flex: 0 1 auto;
+}
+/* In the library a system row sits among design rows, whose titles are medium weight. */
+.dc-libsys .dc-sys-title {
+  font-weight: 500;
+}
+:is(.dc-sys, .dc-libsys) > .dc-sys-line,
+:is(.dc-sys, .dc-libsys) > .dc-sys-notice,
+:is(.dc-sys, .dc-libsys) > .dc-sys-meta,
+:is(.dc-sys, .dc-libsys) > .dc-sys-reason {
+  margin-left: var(--dc-sys-indent);
+}
+:is(.dc-sys, .dc-libsys) > .dc-sys-reason {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.dc-sys-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+}
+.dc-sys-dot {
+  color: var(--oc-muted);
+}
+.dc-sys-top > .dc-iconbtn {
+  margin: 0;
+  opacity: 0;
+}
+:is(.dc-sys, .dc-libsys):hover .dc-sys-top > .dc-iconbtn,
+:is(.dc-sys, .dc-libsys):focus-within .dc-sys-top > .dc-iconbtn,
+.dc-sys-top > .dc-iconbtn[aria-expanded='true'] {
+  opacity: 1;
+}
+
+/* The sidebar's Design systems section: the heading navigates, each row filters. */
+.dc-side-heading-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.dc-side-heading-link:hover {
+  color: var(--oc-fg);
+}
+.dc-side-heading-link:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-side-swatch {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--oc-fg) 22%, transparent);
+}
+.dc-side-swatch[data-empty='true'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--oc-muted);
+}
+.dc-side-mark {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--oc-info) 14%, transparent);
+  color: var(--oc-info-text);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+/* The rail at its narrowest: the plate and the chip's indent shrink with the thumbnail, and the tabs keep only their names (the count stays in each tab's accessible name). */
+@media (max-width: 380px) {
+  .dc-row-foot {
+    padding-left: calc(var(--dc-s2) + 56px + 10px);
+  }
+  .dc-app :is(.dc-sys, .dc-libsys) {
+    --dc-sys-indent: calc(56px + 10px);
+  }
+  .dc-sys-main .dc-sys-plate {
+    width: 56px;
+  }
+  .dc-rail-filters .oc-sdk-tab-count {
+    display: none;
+  }
+  .dc-rail-filters .oc-sdk-tab {
+    padding-inline: var(--dc-s1);
+  }
+}
+/* ===== end Phase 2.6 L1b ===== */
+
+/* ===== Phase 2.6 QA-L: the first-run system start in the empty state ===== */
+/* Two actions side by side (New canvas, Start a design system), wrapping at the rail's width. */
+.dc-app .oc-sdk-empty-action:has(+ .dc-empty-note),
+.dc-app .oc-sdk-empty-action:has(.oc-sdk-btn + .oc-sdk-btn) {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--dc-s2);
+}
+/* The line under the first-run actions: a plain sentence with one link, left aligned inside a centred block. */
+.dc-empty-note {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--dc-s2);
+  max-width: 44ch;
+  margin: var(--dc-s3) auto 0;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  text-align: left;
+}
+.dc-empty-note > .dc-icon {
+  flex: none;
+  margin-top: 2px;
+}
+/* ===== end Phase 2.6 QA-L ===== */
+
+/* ===== Phase 2.6 rail systems entry: the pinned "Design systems" row under the designs list (approved canvas rail-nav) ===== */
+/* The rail lists designs only; this row is how a rail user reaches the systems list. It stays put while the list scrolls. */
+.dc-rail-nav {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--dc-s3) 0 var(--dc-s4);
+  border: 0;
+  border-top: 1px solid var(--dc-hair);
+  background: var(--oc-subtle);
+  color: var(--oc-fg);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-rail-nav:hover {
+  background: var(--oc-hover);
+}
+.dc-rail-nav:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--oc-primary) 55%, transparent);
+}
+.dc-rail-nav > .dc-icon {
+  flex: none;
+  color: var(--oc-muted);
+}
+.dc-rail-nav-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-rail-nav-count {
+  margin-left: auto;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.dc-rail-nav-count:empty {
+  display: none;
+}
+.dc-rail-nav-count + .dc-icon {
+  margin-left: 0;
+}
+.dc-rail-nav-name + .dc-icon {
+  margin-left: auto;
+}
+/* ===== end Phase 2.6 rail systems entry ===== */
