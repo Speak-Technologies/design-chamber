@@ -622,9 +622,11 @@ comments from one screen id to another (keep a direction) through the normal sta
 `systemChoiceProblem?` (`unknown`, `draft`, `being-changed`, `too-large`, `failed`; shown as a warning and the
 check finding `system-choice`). P1 to P5 never adopt them.
 **Phase 2.6 state fields** (same rules): `folderRequestSeen?` (sha256 hex of the normalised request's canonical
-JSON, recorded **before** acting) and `folderRequestProblem?: { unknown: string[]; waiting?: true }`. They become
+JSON, recorded **before** acting) and `folderRequestProblem?: { unknown: string[]; waiting?: true; reason?: 'write' }`. They become
 the design warnings `folder-request-unknown` ("The agent asked to add this design to Q4, but there's no folder with
-that name.") and `folder-request-waiting` ("Folders couldn't load, so the agent's request wasn't applied."),
+that name.") and `folder-request-waiting` (damaged registry: "Folders couldn't load, so the agent's request wasn't
+applied."; a failed write, `reason: 'write'`: "Folders couldn't be saved just now, so the agent's request wasn't
+applied. It will try again the next time folders change."),
 shown in the viewer's warnings band (§13.7).
 
 ### 6.4 `.versions/`
@@ -3380,9 +3382,10 @@ sign-off §20); requirements `documentation/specs/phase-2-6-library-and-systems.
 3. **Event-kind reuse, no new kind:** warning changes from the folder-request and system-choice reconcilers are
    announced as `comments` events after the state write (QA-F, `e6ed725`); nothing acts on `comments` in a way
    that loops or versions.
-4. **Damaged registry waits visibly** (P26 §5.4 refined, `2ce2374`, `e6ed725`): the problem carries `waiting:
-   true` (its own warning, `folder-request-waiting`) and the request retries on the next registry write as well
-   as the next design event (KI-25 closed).
+4. **Damaged registry or failed write waits visibly** (P26 §5.4 refined, `2ce2374`, `e6ed725`, `3473899`): the
+   problem carries `waiting: true` (plus `reason: 'write'` for a failed save) with its own warning,
+   `folder-request-waiting`, and the request retries on the next registry write as well as the next design
+   event (KI-25 and KI-30 closed). Any `changeByName` failure takes this path, never a silent drop.
 5. **Startup and root-change sweeps** for both `folderRequest` and `systemChoice` (KI-26 closed, `ecf17e4`);
    `homes.ts` waits for the new root's baseline.
 6. **No-op batches write nothing** (`changeMany`, `changeByName`), and the 1 MiB cap is enforced on write with
