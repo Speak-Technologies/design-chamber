@@ -88,7 +88,7 @@ export const createFolderRequestReconciler = (deps: FolderRequestDeps): FolderRe
       ctx.log.warn('folders.request-waiting', { slug, reason: 'damaged' });
       await ctx.store.updateSystemState(slug, (state) => {
         if (state.folderRequestSeen !== stamp) return null;
-        const next: ServiceState = { ...state };
+        const next: ServiceState = { ...state, folderRequestProblem: { unknown: [], waiting: true } };
         if (previous === undefined) delete next.folderRequestSeen;
         else next.folderRequestSeen = previous;
         return next;

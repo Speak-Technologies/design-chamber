@@ -52,6 +52,7 @@ import { createSelfWrites } from './self-writes.ts';
 import { createSettingsStore, settingsFilePath, type SettingsEnv } from './settings.ts';
 import { createDesignStore } from './store.ts';
 import { startChoiceReconciler } from './systems/choice.ts';
+import { startFolderRequests } from './folder-requests.ts';
 import { ensureLinkService } from './systems/link.ts';
 import { ensureBuildTickets } from './systems/builds.ts';
 import { startHomes } from './systems/homes.ts';
@@ -155,6 +156,8 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   const copiesRecovered = ensureLinkService(ctx).recoverAll();
   ctx.onDispose(() => copiesRecovered);
   ctx.onDispose(startChoiceReconciler(ctx));
+  // Phase 2.6 AD-16: the agent's folderRequest pickup (F1); started after the watcher baseline.
+  ctx.onDispose(startFolderRequests(ctx));
   // Phase 2.5 §5.9: BUILD.json is adopted and followed from the watcher's baseline on.
   ctx.onDispose(startHomes(ctx, () => watcher.ready));
   // Phase 2.5 §5.10: a snapshot swap a restart interrupted is finished or undone, and a snapshot

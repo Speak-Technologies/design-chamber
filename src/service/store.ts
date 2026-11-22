@@ -290,7 +290,14 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     const finalState = state ?? serviceStateOf(parsed.design);
     // Phase 2.5 §5.5: an agent choice the service could not act on reads as a design warning.
     if (finalState.systemChoiceProblem !== undefined) warnings.push(choiceProblemWarning(finalState.systemChoiceProblem));
-    if (finalState.folderRequestProblem !== undefined) warnings.push(folderRequestWarning(finalState.folderRequestProblem.unknown));
+    if (finalState.folderRequestProblem !== undefined) {
+      const filing = finalState.folderRequestProblem;
+      if (filing.waiting === true) {
+        warnings.push({ code: 'folder-request-waiting', field: 'folderRequest', message: "Folders couldn't load, so the agent's request wasn't applied." });
+      } else {
+        warnings.push(folderRequestWarning(filing.unknown));
+      }
+    }
     const design = applyServiceState(parsed.design, finalState);
     // P2 adopts the agent's own reading of design.json: a provisional kind is only a guess from
     // the files, so it must not decide the kind of a design.json that lists screens but no kind.

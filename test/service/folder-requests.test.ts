@@ -114,11 +114,19 @@ test('a damaged registry is never set aside by an agent request; the request wai
   assert.deepEqual(await readdir(path.dirname(r.file)), ['folders.json']);
   assert.equal((await r.core.store.get(r.slug)).state.folderRequestSeen, undefined);
   assert.ok(r.core.logs.some((line) => line.event === 'folders.request-waiting'));
+  // AD-16: the wait is visible on the design, not only in the log.
+  assert.deepEqual((await r.core.store.get(r.slug)).state.folderRequestProblem, { unknown: [], waiting: true });
+  assert.equal(
+    (await r.core.store.get(r.slug)).warnings.find((entry) => entry.code === 'folder-request-waiting')?.message,
+    "Folders couldn't load, so the agent's request wasn't applied.",
+  );
 
   // The user's next folder action sets the file aside; the next design event applies the request.
   await r.folders.create('Q4');
   await reconciler.reconcile(r.slug);
   assert.deepEqual(await membersOf(r, 'Q4'), [r.slug]);
+  assert.equal((await r.core.store.get(r.slug)).state.folderRequestProblem, undefined);
+  assert.equal((await r.core.store.get(r.slug)).warnings.some((entry) => entry.code === 'folder-request-waiting'), false);
 });
 
 test('the seen stamp is recorded before the folders write, so a failing write never loops', async (t) => {

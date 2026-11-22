@@ -757,7 +757,8 @@ export const normalizeServiceState = (raw: unknown): ServiceState | null => {
     const unknown = filingProblem.unknown
       .filter((name): name is string => typeof name === 'string' && name.length >= 1 && name.length <= FOLDER_NAME_MAX)
       .slice(0, FOLDER_REQUEST_NAMES_MAX);
-    if (unknown.length > 0) state.folderRequestProblem = { unknown };
+    const waiting = filingProblem.waiting === true;
+    if (unknown.length > 0 || waiting) state.folderRequestProblem = { unknown, ...(waiting ? { waiting: true as const } : {}) };
   }
   return state;
 };
