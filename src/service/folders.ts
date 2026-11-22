@@ -389,6 +389,9 @@ const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 /** `f_` and ten characters of `[a-z0-9]` (`FOLDER_ID_PATTERN`). */
 export const mintFolderId = (): string => `f_${[...randomBytes(10)].map((byte) => ID_ALPHABET[byte % ID_ALPHABET.length]).join('')}`;
 
+/** Same content: the membership helpers rebuild records, so identity says nothing; both come from the same cleaned base, so key order matches. */
+const sameRegistry = (a: FoldersRegistry, b: FoldersRegistry): boolean => JSON.stringify(a) === JSON.stringify(b);
+
 const stampOf = (date: Date): string => date.toISOString().replace(/[-:T]/g, '').slice(0, 14);
 
 // ---- Request validation (the route boundary) ----
@@ -464,8 +467,8 @@ export type FoldersService = {
   change(id: string, change: { add: readonly string[]; remove: readonly string[] }): Promise<FolderView>;
   /**
    * A batch of folder and project membership changes in one queued write (P26 AD-2). `atomic`: all
-   * or nothing (the first failure throws its sentence). Best effort: per-change results, and a
-   * batch where every change failed writes nothing (no rev bump, no event).
+   * or nothing (the first failure throws its sentence). Best effort: per-change results. A batch
+   * where every change failed, or that changes nothing, writes nothing (no rev bump, no event).
    */
   changeMany(changes: readonly MembershipChangeInput[], options: { atomic: boolean }): Promise<MembershipsResponse>;
   /**
@@ -694,8 +697,9 @@ export const createFoldersService = (deps: FoldersDeps): FoldersService => {
         const applied = applyChanges(registry, changes, live, { atomic: options.atomic, root });
         const failed = applied.results.filter((result) => !result.ok).length;
         log.info('folders.memberships', { changes: changes.length, failed, atomic: options.atomic });
-        // Every change failed: the registry is unchanged, so nothing is written (no rev bump, no event).
-        const write = failed < applied.results.length;
+        // Every change failed, or none changed anything (re-adding a member, removing a non-member):
+        // the registry is unchanged, so nothing is written (no rev bump, no event).
+        const write = failed < applied.results.length && !sameRegistry(applied.registry, registry);
         return { registry: applied.registry, write, result: { results: applied.results, list: listView({ kind: 'ok', registry: applied.registry }, live) } };
       });
     },
@@ -729,7 +733,7 @@ export const createFoldersService = (deps: FoldersDeps): FoldersService => {
           const applied = applyChanges(registry, changes, live, { atomic: false, root });
           const failed = applied.results.filter((result) => !result.ok).length;
           if (failed > 0) log.warn('folders.request-partly-applied', { changes: changes.length, failed });
-          return { registry: applied.registry, write: failed < changes.length, result: { unknown } };
+          return { registry: applied.registry, write: failed < changes.length && !sameRegistry(applied.registry, registry), result: { unknown } };
         },
         { onDamaged: 'refuse' },
       );

@@ -43,17 +43,30 @@ export const createChoiceReconciler = (deps: ChoiceReconcilerDeps): ChoiceReconc
   const timers = new Set<ReturnType<typeof setTimeout>>();
   let stopped = false;
 
-  const setProblem = (slug: string, problem: SystemChoiceProblem | null): Promise<ServiceState> =>
-    ctx.store.updateSystemState(slug, (state) => {
+  // state.json changed but design.json did not, so no watcher event tells the guests. `comments`
+  // makes the guest store refetch the list and the open design; no reconciler acts on it and the
+  // versions service does not count it as content, so it can neither loop nor make a version.
+  const announce = (slug: string): void => {
+    if (!stopped) ctx.hub.emit({ slug, kind: 'comments' });
+  };
+
+  const setProblem = async (slug: string, problem: SystemChoiceProblem | null): Promise<void> => {
+    let changed = false;
+    await ctx.store.updateSystemState(slug, (state) => {
       if (problem === null) {
         if (state.systemChoiceProblem === undefined) return null;
         const next: ServiceState = { ...state };
         delete next.systemChoiceProblem;
+        changed = true;
         return next;
       }
       const same = state.systemChoiceProblem?.value === problem.value && state.systemChoiceProblem.reason === problem.reason;
-      return same ? null : { ...state, systemChoiceProblem: problem };
+      if (same) return null;
+      changed = true;
+      return { ...state, systemChoiceProblem: problem };
     });
+    if (changed) announce(slug);
+  };
 
   /** The link itself, after the seen record; a refusal is recorded as the design's choice problem. */
   const act = async (slug: string, choice: string, retry: boolean): Promise<void> => {
@@ -62,11 +75,14 @@ export const createChoiceReconciler = (deps: ChoiceReconcilerDeps): ChoiceReconc
     const copy = await readCopyRecord(designDir);
     if (choice === 'none') {
       if (copy.kind === 'absent') {
+        let changed = false;
         await ctx.store.updateSystemState(slug, (state) => {
+          changed = state.systemDecision !== 'none' || state.systemChoiceProblem !== undefined;
           const next: ServiceState = { ...state, systemDecision: 'none' };
           delete next.systemChoiceProblem;
           return next;
         });
+        if (changed) announce(slug);
         return;
       }
       try {
