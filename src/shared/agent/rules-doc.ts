@@ -4,7 +4,7 @@
 // verbatim → rendering constraints. Deterministic for equal inputs (no clock), so the service
 // can skip a rewrite when nothing changed.
 
-import { BRIEF_MAX, DIRECTION_NAME_MAX, DIRECTION_OPTIONS_MAX, DIRECTION_OPTIONS_MIN, SCREEN_DESCRIPTION_MAX, SCREENS_MAX, TITLE_MAX, TWEAKS_MAX, TWEAK_CHOICES_MAX, TWEAK_CHOICES_MIN, VIEWPORT_HEIGHT_MAX, VIEWPORT_HEIGHT_MIN, VIEWPORT_WIDTH_MAX, VIEWPORT_WIDTH_MIN, VIEWPORTS_MAX } from '../limits.ts';
+import { BRIEF_MAX, DIRECTION_NAME_MAX, DIRECTION_OPTIONS_MAX, DIRECTION_OPTIONS_MIN, FOLDER_REQUEST_NAMES_MAX, SCREEN_DESCRIPTION_MAX, SCREENS_MAX, TITLE_MAX, TWEAKS_MAX, TWEAK_CHOICES_MAX, TWEAK_CHOICES_MIN, VIEWPORT_HEIGHT_MAX, VIEWPORT_HEIGHT_MIN, VIEWPORT_WIDTH_MAX, VIEWPORT_WIDTH_MIN, VIEWPORTS_MAX } from '../limits.ts';
 import { VIEWPORT_LAPTOP, VIEWPORT_PHONE } from '../design-json.ts';
 import type { DesignKind, Viewport } from '../types.ts';
 import { clip, designFilePath, formatViewport, joinFolder, oneLine, SYSTEM_GUIDANCE_ONLY, systemOf, VIEWPORT_DESKTOP, VIEWPORT_TABLET, type AgentContext, type AgentSystem, type ProjectBreakpoint, type ProjectRules } from './context.ts';
@@ -324,6 +324,7 @@ const contractSection = (context: AgentContext): string[] => [
   ...(systemOf(context).state === 'ask' || systemOf(context).state === 'linked'
     ? ['| `systemChoice` | you | The user\'s answer about the design system: a system id, or `"none"`. Design Chamber copies the system into `system/`; never edit that folder. |']
     : []),
+  `| \`folderRequest\` | you | Optional, only when the user asks you to put this design in a folder, or take it out: \`{ "add": ["<folder name>"], "remove": ["<folder name>"], "at": "<ISO time>" }\`, up to ${FOLDER_REQUEST_NAMES_MAX} names in each list. Use the names of folders that already exist (they are in \`.chamber/folders.json\` in the designs folder: read it, never write it). Design Chamber files the design within a few seconds and never creates a folder. |`,
   '| `comments` | extension | The user\'s pinned comments. Never edit. |',
   '',
   '- Keep every key you do not own, including keys you do not recognise, exactly as it is. The extension puts its keys back if you change them.',

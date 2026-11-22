@@ -15,6 +15,9 @@ import { buildRulesDoc } from '../../src/shared/agent/rules-doc.ts';
 import { baseContext, REPO_RULES } from './helpers.ts';
 
 const sha = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
+
+/** The chip without its owned-field line (step 7), which names folderRequest since Phase 2.6 AD-16; every other line is pinned. */
+const withoutOwnedLine = (chip: string): string => chip.split('\n').filter((line) => !line.startsWith('7. design.json: you own ')).join('\n');
 const read = (name: string): Promise<string> => readFile(path.join(REPO_RULES, name), 'utf8');
 
 /** The `## Precedence` section of a RULES.md: from its heading to the next level-2 heading. */
@@ -33,9 +36,10 @@ describe('Phase 2.6 §7.7: precedence and the pin lines are not touched by the f
     assert.equal(sha(precedence), PRECEDENCE_SHA256, 'the precedence text changed: it must stay as shipped');
   });
 
-  test('the chip text of a design with no system is byte-identical to the shipped text (new and continue)', () => {
-    assert.equal(sha(buildChipText(baseContext(), 'new')), CHIP_NEW_SHA256, 'the new-design chip text changed: it must stay as shipped');
-    assert.equal(sha(buildChipText(baseContext(), 'continue')), CHIP_CONTINUE_SHA256, 'the continue chip text changed: it must stay as shipped');
+  test('the chip text of a design with no system is byte-identical to the shipped text apart from the owned-field line (new and continue)', () => {
+    assert.equal(sha(withoutOwnedLine(buildChipText(baseContext(), 'new'))), CHIP_NEW_SHA256, 'the new-design chip text changed: it must stay as shipped');
+    assert.equal(sha(withoutOwnedLine(buildChipText(baseContext(), 'continue'))), CHIP_CONTINUE_SHA256, 'the continue chip text changed: it must stay as shipped');
+    assert.ok(buildChipText(baseContext(), 'new').includes('7. design.json: you own title, updated, viewports, screens, designSystem, tweaks and folderRequest.'));
   });
 
   test('the pin line comes from the system name alone, capped as before', () => {
@@ -45,5 +49,5 @@ describe('Phase 2.6 §7.7: precedence and the pin lines are not touched by the f
 });
 
 const PRECEDENCE_SHA256 = '5bceeea9c1aa1ade1316cf9904da127062aa69d68be9a88e1e025685215e0426';
-const CHIP_NEW_SHA256 = 'bce0cc0b7be0e60e33920f9af893942e792fa250af6860f1e8cb00179b97b9fd';
-const CHIP_CONTINUE_SHA256 = 'af029d2d3b9754c259f9ffed63c9ae3ea712de7b5aa88197e4012647f6c1e2f1';
+const CHIP_NEW_SHA256 = '9bded0e90c179bbf450845a89c81fc0a0196cb0625f02453d49d21aec39b05aa';
+const CHIP_CONTINUE_SHA256 = '95074cfd0c62afc10c915ff08ab8a7bf5d5a737cb5a7f521b7709abb1ebcf863';

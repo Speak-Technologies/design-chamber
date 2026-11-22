@@ -129,7 +129,7 @@ const precedenceStep = (context: AgentContext): string => {
 const ownedKeys = (context: AgentContext): string => {
   const base = context.kind === 'canvas' ? 'title, updated, viewports, screens, designSystem' : 'title, updated, viewports, designSystem';
   const state = systemOf(context).state;
-  return state === 'ask' || state === 'linked' ? `${base}, tweaks and systemChoice` : `${base} and tweaks`;
+  return state === 'ask' || state === 'linked' ? `${base}, tweaks, systemChoice and folderRequest` : `${base}, tweaks and folderRequest`;
 };
 
 /** The chip core text. Always ≤ `CHIP_TEXT_HARD_MAX` (the brief is clipped to `BRIEF_MAX`, every path is clipped). */
