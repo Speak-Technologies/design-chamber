@@ -19,6 +19,7 @@
 import { sha256Hex } from './agent/ownership.ts';
 import {
   BUILD_PROBLEM_VALUE_MAX,
+  LOCATION_READ_LIST_MAX,
   REPO_REL_PATTERN,
   SYSTEM_BRAND_MAX,
   SYSTEM_BUILD_CALLS_MAX,
@@ -50,6 +51,7 @@ import { ALSO_SET_MAX, scanTokens, type Declaration, type TokenContext } from '.
 import type {
   BuildJson,
   BuildView,
+  CandidateMark,
   ColourGroup,
   FontAsset,
   IsoDate,
@@ -244,6 +246,27 @@ const forAgentList = (value: unknown): { path: string; why: string }[] | null =>
   return out;
 };
 
+const CANDIDATE_MARKS: readonly CandidateMark[] = ['page', 'tokens', 'docs', 'theme', 'components', 'contract'];
+/** A project-relative path as a location or a read list holds it: `/`-separated, never absolute or climbing. */
+const isProjectRel = (value: unknown): value is string =>
+  typeof value === 'string' && value.length <= 4096 && !hasControl(value) && !value.startsWith('/') && !/^[A-Za-z]:/.test(value) && !value.split('/').includes('..') && !value.includes('\\');
+
+/** `sources.code.existing` (Phase 2.6 §2.3): a location, its marks and ≤ 20 paths per kind; null when unusable. */
+const existingSource = (value: unknown): NonNullable<NonNullable<SystemState['sources']['code']>['existing']> | null => {
+  if (!isObject(value)) return null;
+  const location = own(value, 'location');
+  if (!isProjectRel(location)) return null;
+  const rawMarks = own(value, 'marks');
+  // Known marks only, each once, in the order written.
+  const marks = Array.isArray(rawMarks) ? rawMarks.filter((mark, index): mark is CandidateMark => CANDIDATE_MARKS.includes(mark as CandidateMark) && rawMarks.indexOf(mark) === index) : [];
+  const read = own(value, 'read');
+  const list = (key: string): string[] => {
+    const raw = isObject(read) ? own(read, key) : undefined;
+    return Array.isArray(raw) ? raw.filter(isProjectRel).slice(0, LOCATION_READ_LIST_MAX) : [];
+  };
+  return { location, marks, read: { page: list('page'), docs: list('docs'), components: list('components') } };
+};
+
 export const parseSources = (value: unknown): SystemState['sources'] => {
   const sources: SystemState['sources'] = { code: null, brand: null, description: null };
   if (!isObject(value)) return sources;
@@ -254,7 +277,18 @@ export const parseSources = (value: unknown): SystemState['sources'] => {
     const scanned = stringList(own(code, 'scanned'), 10_000, 4096) ?? [];
     if (typeof directory === 'string' && directory !== '' && isIso(lastScan)) {
       const forAgent = forAgentList(own(code, 'forAgent'));
-      sources.code = { directory, lastScan, partial: own(code, 'partial') === true, scanned, ...(forAgent !== null ? { forAgent } : {}) };
+      // Phase 2.6 AD-9: the project a location belongs to, and the existing system it holds.
+      const project = own(code, 'project');
+      const existing = existingSource(own(code, 'existing'));
+      sources.code = {
+        directory,
+        lastScan,
+        partial: own(code, 'partial') === true,
+        scanned,
+        ...(forAgent !== null ? { forAgent } : {}),
+        ...(isAbsPath(project) ? { project } : {}),
+        ...(existing !== null ? { existing } : {}),
+      };
     }
   }
   const brand = own(value, 'brand');
@@ -927,6 +961,8 @@ export const buildProblemSentence = (state: SystemState): string | null => {
       return 'BUILD.json names another build. Keep the ticket this system started with.';
     case 'applied-unknown-proposal':
       return `The agent says it applied a proposal you didn't approve here${value === '' ? '' : ` (${value})`}. Check ${repo}'s history.`;
+    case 'existing-outside-project':
+      return 'The existing system must be a folder inside the project this chat is in, so Design Chamber ignored it.';
     default:
       // A forged or damaged state.json: the reason is not in the closed list.
       return "BUILD.json can't be used. Ask the agent to fix it.";
@@ -938,7 +974,16 @@ const buildViewOf = (build: BuildJson | null): BuildView | null =>
 
 /** The sources line of a row and the detail. */
 export const sourceLineOf = (state: SystemState): SourceLine => ({
-  code: state.sources.code === null ? null : { directory: state.sources.code.directory, lastScan: state.sources.code.lastScan, partial: state.sources.code.partial },
+  code:
+    state.sources.code === null
+      ? null
+      : {
+          directory: state.sources.code.directory,
+          lastScan: state.sources.code.lastScan,
+          partial: state.sources.code.partial,
+          ...(state.sources.code.project !== undefined ? { project: state.sources.code.project } : {}),
+          ...(state.sources.code.existing !== undefined ? { existing: { location: state.sources.code.existing.location } } : {}),
+        },
   brand: state.sources.brand?.files.length ?? 0,
   description: state.sources.description !== null,
 });
@@ -1320,6 +1365,15 @@ export const parseBuildJson = (text: string): ParsedBuildJson => {
     else broken('code', 'The code directory in BUILD.json is not an absolute path, so it was skipped.');
   }
 
+  // Phase 2.6 AD-11: the existing system the agent found, a folder inside the project ("." = its root).
+  let existing: { folder: string } | null = null;
+  const rawExisting = own(value, 'existing');
+  if (rawExisting !== undefined && rawExisting !== null) {
+    const folder = isObject(rawExisting) ? own(rawExisting, 'folder') : undefined;
+    if (typeof folder === 'string' && (folder === '.' || REPO_REL_PATTERN.test(folder))) existing = { folder };
+    else broken('existing', 'existing in BUILD.json needs a folder inside the project, like "design-system", so it was skipped.');
+  }
+
   let ticket: string | null = null;
   const rawTicket = own(value, 'ticket');
   if (rawTicket !== undefined && rawTicket !== null) {
@@ -1395,7 +1449,7 @@ export const parseBuildJson = (text: string): ParsedBuildJson => {
     }
   }
 
-  const build: BuildJson = { version: 1, ticket, name, home, repo, code, mode, dark, calls, access, round, applied, proposal, drift };
+  const build: BuildJson = { version: 1, ticket, name, home, repo, code, ...(existing !== null ? { existing } : {}), mode, dark, calls, access, round, applied, proposal, drift };
   return { build, raw: value, problems, unreadable: null };
 };
 

@@ -122,7 +122,7 @@ export function registerSystemChatRoutes(router: Router, ctx: ServiceContext): v
       id,
       name: state.name,
       folder: source.dir,
-      projectDirectory: state.build?.projectDirectory ?? state.sources.code?.directory ?? null,
+      projectDirectory: state.build?.projectDirectory ?? state.sources.code?.project ?? state.sources.code?.directory ?? null,
       home: state.home?.kind === 'repo' ? { kind: 'repo', directory: state.home.directory, folder: state.home.folder } : { kind: 'internal' },
       checkCommand,
     });
@@ -156,11 +156,14 @@ export function registerSystemChatRoutes(router: Router, ctx: ServiceContext): v
     const messageTooLong = (over: number): string => `The message is ${over} characters too long for the chat. Shorten the request and send again.`;
 
     if (input.purpose === 'make') {
+      // Phase 2.6 AD-9: a system made from a location names its project (not the location) and what to read first.
+      const existing = state.sources.code?.existing;
       return deliver(
         (maxChars) =>
           buildSystemMakePrompt({
             system,
-            projectDirectory: state.sources.code?.directory ?? state.build?.projectDirectory ?? null,
+            projectDirectory: state.sources.code?.project ?? state.sources.code?.directory ?? state.build?.projectDirectory ?? null,
+            existing: existing === undefined ? null : { location: existing.location, page: existing.read.page, docs: existing.read.docs, components: existing.read.components },
             scanned: state.sources.code?.scanned ?? [],
             forAgent: state.sources.code?.forAgent ?? [],
             brandFiles: (state.sources.brand?.files ?? []).map((file) => joinFolder(source.dir, file)),

@@ -497,3 +497,63 @@ test('BUILD.json events on the hub reconcile; a removed record or a sheet-made s
   assert.equal((await rig.systems.readState(id)).build, undefined);
   assert.equal((await lstat(path.join(rig.root, '_systems', id, 'BUILD.json')).catch(() => null)), null);
 });
+
+// ---- Phase 2.6 AD-11: BUILD.json `existing` (§5.10) ----
+
+const NO_READ = { page: [], docs: [], components: [] };
+
+test('existing: a folder inside the ticket project is adopted as the code source, with the project and the location', async (t) => {
+  const rig = await setup(t);
+  const state = await rig.agent('acme', repoBuild(rig, await rig.issue(), { existing: { folder: 'apps/web' } }));
+  assert.equal(state.buildProblem ?? null, null);
+  assert.deepEqual(state.sources.code, {
+    directory: path.join(rig.project, 'apps', 'web'),
+    lastScan: state.sources.code?.lastScan,
+    partial: false,
+    scanned: [],
+    project: rig.project,
+    existing: { location: 'apps/web', marks: [], read: NO_READ },
+  });
+  assert.deepEqual(rig.calls.scans, [['acme', path.join(rig.project, 'apps', 'web')]], 'the adoption scan fills what it holds');
+  // A code folder named too stays the code source; the existing folder rides along.
+  const both = await rig.agent('both', repoBuild(rig, await rig.issue(), { code: { directory: rig.project }, existing: { folder: '.' } }, { folder: 'brand', livingPage: 'brand/index.html' }));
+  assert.equal(both.sources.code?.directory, rig.project);
+  assert.deepEqual(both.sources.code?.existing, { location: '', marks: [], read: NO_READ });
+});
+
+test('existing-outside-project: a link out, a gone folder or no ticket project is ignored with a problem; the build is still adopted', async (t) => {
+  const rig = await setup(t);
+  await symlink(rig.base, path.join(rig.project, 'linkout'), 'dir');
+  rig.planted.add('linkout');
+  const out = await rig.agent('acme', repoBuild(rig, await rig.issue(), { existing: { folder: 'linkout' } }));
+  assert.deepEqual(out.buildProblem, { reason: 'existing-outside-project', value: 'linkout' });
+  assert.equal(out.home?.kind, 'repo', 'adopted anyway');
+  assert.notEqual(out.build, undefined);
+  assert.equal(out.sources.code, null, 'the ignored folder is never read');
+  assert.deepEqual(rig.calls.scans, []);
+  const gone = await rig.agent('gone', repoBuild(rig, await rig.issue(), { existing: { folder: 'nope' } }, { folder: 'brand', livingPage: 'brand/index.html' }));
+  assert.deepEqual(gone.buildProblem, { reason: 'existing-outside-project', value: 'nope' });
+  // An internal home without a ticket has no project for the folder to be inside.
+  const internal = await rig.agent('calm', { version: 1, name: 'Calm', home: 'internal', existing: { folder: 'apps/web' } });
+  assert.deepEqual(internal.buildProblem, { reason: 'existing-outside-project', value: 'apps/web' });
+  assert.equal(internal.sources.code, null);
+  // A shape the record refuses is skipped at parse: no problem, nothing read.
+  const shape = await rig.agent('shape', { version: 1, name: 'Shape', home: 'internal', existing: { folder: '../outside' } });
+  assert.equal(shape.buildProblem ?? null, null);
+  assert.equal(shape.sources.code, null);
+});
+
+test('existing is re-verified and followed before the first stamp; a fix clears the problem', async (t) => {
+  const rig = await setup(t);
+  const ticket = await rig.issue();
+  const first = await rig.agent('acme', repoBuild(rig, ticket, { existing: { folder: 'nope' } }));
+  assert.equal(first.buildProblem?.reason, 'existing-outside-project');
+  const fixed = await rig.rewrite('acme', repoBuild(rig, ticket, { existing: { folder: 'apps/web' } }));
+  assert.equal(fixed.buildProblem ?? null, null);
+  assert.equal(fixed.sources.code?.existing?.location, 'apps/web');
+  assert.deepEqual(rig.calls.drops, [], 'only the existing folder changed: the home and its pages stand');
+  assert.deepEqual(rig.calls.scans, [['acme', path.join(rig.project, 'apps', 'web')]]);
+  const unchanged = await rig.rewrite('acme', repoBuild(rig, ticket, { existing: { folder: 'apps/web' } }));
+  assert.equal(unchanged.buildProblem ?? null, null);
+  assert.equal(rig.calls.scans.length, 1, 'the same record is not a change');
+});

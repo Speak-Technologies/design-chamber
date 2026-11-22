@@ -20,6 +20,11 @@
 //      refreshes its snapshot and an internal home with code rescans (T13's seams; a failure leaves
 //      the last snapshot and a log line).
 //
+// Phase 2.6 (AD-11, §5.10): BUILD.json `existing` names the system the agent started from. At adoption
+// and before the first stamp it must be a folder inside the ticket's project (`validateLocation`);
+// otherwise it is ignored with `existing-outside-project` and the build is adopted anyway. When no
+// code folder is named, the existing folder is the code source; the build scan fills what it holds.
+//
 // The service NEVER writes the repo: every path under `home.directory` is only validated, resolved
 // and read (`validateScanFolder`, `resolveInside`, `lstat`, `readProjectFile`). Every write goes
 // through the system store into `_systems/<id>/.chamber/state.json` (AD-18, §5.13).
@@ -46,11 +51,14 @@ import { ensureBuildTickets, type BuildTickets } from './builds.ts';
 import { readProjectFile } from './extract.ts';
 import { dropLivingPages } from './living-page.ts';
 import { readLivingPageMark } from './living-safe.ts';
-import { validateScanFolder } from './scan-folder.ts';
+import { validateLocation, validateScanFolder } from './scan-folder.ts';
 import { runBuildScan } from './drift.ts';
 import { clearRecoverySnapshot, refreshSnapshot } from './snapshot.ts';
 import { ensureProposals } from './proposals.ts';
 import { ensureSystemStore, type SystemStore } from './store.ts';
+
+/** An existing system folder (Phase 2.6 AD-11): its realpath, project-relative path and the project's realpath. */
+type Existing = { real: string; rel: string; project: string };
 
 /** The living page's mark sits in the head; this much of an existing file is read to find it. */
 const LIVING_MARK_READ_MAX = 65_536;
@@ -245,6 +253,36 @@ export const createHomes = (deps: HomesDeps): Homes => {
     return isInsideOrEqual(projectDirectory, real) ? real : null;
   };
 
+  /**
+   * Phase 2.6 AD-11: the existing system folder BUILD.json names, resolved with `validateLocation`
+   * inside the ticket's project folder (realpaths; the designs root refused). Null when there is no
+   * project or the folder is not a usable one inside it.
+   */
+  const existingWithin = async (folder: string, projectDirectory: string | null): Promise<Existing | null> => {
+    if (projectDirectory === null) return null;
+    const project = await realpath(projectDirectory).catch(() => null);
+    if (project === null) return null;
+    try {
+      const located = await validateLocation(folder, project, settings.root());
+      return { ...located, project };
+    } catch {
+      return null;
+    }
+  };
+
+  /** The code source a build asks for: its code folder, else the existing system's folder (AD-11). */
+  const codeSourceOf = (codeDir: string | null, existing: Existing | null, at: string): NonNullable<SystemState['sources']['code']> | null => {
+    const directory = codeDir ?? existing?.real ?? null;
+    if (directory === null) return null;
+    return {
+      directory,
+      lastScan: at,
+      partial: false,
+      scanned: [],
+      ...(existing === null ? {} : { project: existing.project, existing: { location: existing.rel, marks: [], read: { page: [], docs: [], components: [] } } }),
+    };
+  };
+
   /** Step 2: adopt an unadopted build. Runs on the system's chain; null when a problem stopped it. */
   const adopt = async (id: string, state: SystemState, build: BuildJson, ticket: { ticket: string; projectDirectory: string | null; sessionId: string | null } | null): Promise<Post | null> => {
     // Over the cap, reserved or unreadable folders are not adopted (the list shows their sentence).
@@ -277,6 +315,9 @@ export const createHomes = (deps: HomesDeps): Homes => {
         return null;
       }
     }
+    // An existing system outside the project is ignored, with a problem; it never stops the adoption.
+    const existing = build.existing == null ? null : await existingWithin(build.existing.folder, projectDirectory);
+    const existingProblem = build.existing != null && existing === null ? build.existing.folder : null;
 
     // A name clash ignoring case adopts "<name> 2" (then 3…) and says so in the page notice.
     const others = rows.filter((one) => one.id !== id);
@@ -301,6 +342,7 @@ export const createHomes = (deps: HomesDeps): Homes => {
       build.home === 'repo' && repoReal !== null && build.repo !== null
         ? { kind: 'repo', directory: repoReal, folder: build.repo.folder, livingPage: build.repo.livingPage, adoptedAt: at }
         : { kind: 'internal' };
+    const code = codeSourceOf(codeDir, existing, at);
     await systems.updateStateLocked(id, (current) => ({
       ...current,
       name,
@@ -308,14 +350,14 @@ export const createHomes = (deps: HomesDeps): Homes => {
       sessionId: ticket?.sessionId ?? current.sessionId,
       home,
       build: { ticket: build.ticket, adoptedAt: at, appliedSeen: null, projectDirectory },
-      sources: { ...current.sources, code: codeDir === null ? null : { directory: codeDir, lastScan: at, partial: false, scanned: [] } },
+      sources: { ...current.sources, code },
       revision: { n: Math.max(1, current.revision.n), treeHash, at },
-      buildProblem: null,
+      buildProblem: existingProblem === null ? null : { reason: 'existing-outside-project', value: problemValue(existingProblem) },
     }));
     if (ticket !== null) await tickets.consume(ticket.ticket, id);
     emitBuild(id);
-    log.info('systems.homes.adopted', { system: id, home: build.home, ticket: ticket !== null, code: codeDir !== null });
-    return codeDir === null ? {} : { scan: codeDir };
+    log.info('systems.homes.adopted', { system: id, home: build.home, ticket: ticket !== null, code: code !== null, existing: existing !== null });
+    return code === null ? {} : { scan: code.directory };
   };
 
   /** Step 3: follow an adopted build (rev 3, AD-28). Null when a problem stopped it (the adopted values stand). */
@@ -337,7 +379,16 @@ export const createHomes = (deps: HomesDeps): Homes => {
         build.repo !== null &&
         currentHome.kind === 'repo' &&
         (!samePath(await realOrResolved(build.repo.directory), currentHome.directory) || build.repo.folder !== currentHome.folder || build.repo.livingPage !== currentHome.livingPage));
-    const codeAsked = build.code !== null && projectDirectory !== null ? build.code.directory : null;
+    // Phase 2.6 AD-11: the existing system folder, checked like the code folder; outside the project it is ignored.
+    const existing = build.existing == null ? null : await existingWithin(build.existing.folder, projectDirectory);
+    const existingProblem = build.existing != null && existing === null ? build.existing.folder : null;
+    const existingDiffers = (existing?.rel ?? null) !== (state.sources.code?.existing?.location ?? null);
+    /** No other problem: the existing folder's own, or none. */
+    const settleProblem = async (): Promise<void> => {
+      const changed = existingProblem === null ? await clearProblem(id) : await setProblem(id, 'existing-outside-project', existingProblem);
+      if (changed) emitBuild(id);
+    };
+    const codeAsked = build.code !== null && projectDirectory !== null ? build.code.directory : (existing?.real ?? null);
     const codeCurrent = state.sources.code?.directory ?? null;
     const codeDiffers = codeAsked === null || codeCurrent === null ? codeAsked !== codeCurrent : !samePath(await realOrResolved(codeAsked), codeCurrent);
 
@@ -348,13 +399,28 @@ export const createHomes = (deps: HomesDeps): Homes => {
         if (await setProblem(id, 'home-changed', value)) emitBuild(id);
         return null;
       }
-      if (await clearProblem(id)) emitBuild(id);
+      await settleProblem();
       return {};
     }
 
-    if (!homeDiffers && !codeDiffers) {
-      if (await clearProblem(id)) emitBuild(id);
+    if (!homeDiffers && !codeDiffers && !existingDiffers) {
+      await settleProblem();
       return {};
+    }
+    // Only the existing system folder changed (the code folder, if named, is the same; when none is
+    // named the existing folder is the code source): no home change, so the pages and proposal stand.
+    const existingInvolved = build.existing != null || state.sources.code?.existing !== undefined;
+    if (!homeDiffers && existingInvolved && (!codeDiffers || build.code === null)) {
+      const at = now().toISOString();
+      const code = codeSourceOf(build.code === null ? null : (state.sources.code?.directory ?? null), existing, at);
+      await systems.updateStateLocked(id, (current) => ({
+        ...current,
+        sources: { ...current.sources, code },
+        buildProblem: existingProblem === null ? null : { reason: 'existing-outside-project', value: problemValue(existingProblem) },
+      }));
+      emitBuild(id);
+      log.info('systems.homes.existing-followed', { system: id, existing: existing !== null });
+      return code === null ? {} : { scan: code.directory };
     }
 
     // Before the first stamp: re-verify exactly as step 2, the stored project folder standing in
@@ -373,11 +439,13 @@ export const createHomes = (deps: HomesDeps): Homes => {
       }
       repoReal = verified.repoReal;
     }
+    // The code folder BUILD.json names (the existing folder, when it stands in, is already checked).
+    const codeFolder = build.code !== null && projectDirectory !== null ? build.code.directory : null;
     let codeDir: string | null = null;
-    if (codeAsked !== null && projectDirectory !== null) {
-      codeDir = await codeWithin(codeAsked, projectDirectory);
+    if (codeFolder !== null && projectDirectory !== null) {
+      codeDir = await codeWithin(codeFolder, projectDirectory);
       if (codeDir === null) {
-        if (await setProblem(id, 'code-outside-project', codeAsked)) emitBuild(id);
+        if (await setProblem(id, 'code-outside-project', codeFolder)) emitBuild(id);
         return null;
       }
     }
@@ -386,21 +454,22 @@ export const createHomes = (deps: HomesDeps): Homes => {
       build.home === 'repo' && repoReal !== null && build.repo !== null
         ? { kind: 'repo', directory: repoReal, folder: build.repo.folder, livingPage: build.repo.livingPage, adoptedAt: record.adoptedAt }
         : { kind: 'internal' };
+    const code = codeSourceOf(codeDir, existing, at);
     await systems.updateStateLocked(id, (current) => ({
       ...current,
       home,
-      sources: { ...current.sources, code: codeDir === null ? null : { directory: codeDir, lastScan: at, partial: false, scanned: [] } },
-      buildProblem: null,
+      sources: { ...current.sources, code },
+      buildProblem: existingProblem === null ? null : { reason: 'existing-outside-project', value: problemValue(existingProblem) },
     }));
     emitBuild(id);
-    log.info('systems.homes.home-followed', { system: id, home: build.home, code: codeDir !== null });
+    log.info('systems.homes.home-followed', { system: id, home: build.home, code: codeDir !== null, existing: existing !== null });
     // A proposal for the old home is never approvable; the staged pages are the old home's.
     // A recovery snapshot (the user's read of the old folder) is emptied, version first (§5.10 rev 3).
     return {
       dropLivingPages: true,
       supersedeProposal: true,
       ...(homeDiffers && state.snapshot != null ? { clearSnapshot: true } : {}),
-      ...(codeDiffers && codeDir !== null ? { scan: codeDir } : {}),
+      ...((codeDiffers || existingDiffers) && code !== null ? { scan: code.directory } : {}),
     };
   };
 

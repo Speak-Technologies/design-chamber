@@ -152,6 +152,7 @@ test('scan.json caps every list and drops tokens until it fits 2 MiB', () => {
     tokens: Array.from({ length: SYSTEM_TOKENS_MAX + 500 }, (_, n) => token(n, '#fff')),
     scanned: [],
     assets: [],
+    walked: [],
     summary: {
       directory: '/project',
       counts: { fonts: 0, logos: 0 } as unknown as ScanResult['summary']['counts'],
@@ -174,6 +175,10 @@ test('scan.json caps every list and drops tokens until it fits 2 MiB', () => {
   assert.equal(capped.tokens.length, 2000);
   assert.equal(capped.partial, true, 'tokens past the cap make it partial');
   assert.deepEqual(Object.keys(capped.tokens[0] ?? {}), ['name', 'light', 'dark', 'file', 'line']);
+  assert.deepEqual(capped.candidates, [], 'no candidates given: an empty list');
+  const candidate = (n: number) => ({ path: `c${n}/design-system`, marks: ['page' as const], counts: { colours: 0, tokens: 0, docs: 0, components: 0, pages: 1 }, strong: true, registered: null });
+  const listed = JSON.parse(scanJsonOf(result, Array.from({ length: 15 }, (_, n) => candidate(n)))) as ScanJson;
+  assert.equal(listed.candidates.length, 10, 'Phase 2.6: at most 10 candidates for round two');
 
   const big = { ...result, tokens: Array.from({ length: SYSTEM_TOKENS_MAX }, (_, n) => token(n, 'x'.repeat(2000))) };
   const text = scanJsonOf(big);
@@ -213,4 +218,31 @@ test('a systems write outside the designs root is refused and logged with the sy
   assert.deepEqual(errors, [{ event: 'systems.write-outside-root', data: { system: 'acme' } }]);
   await guardSystemWrite(rig.root, path.join(rig.root, '_systems', 'acme', 'state.json'), 'acme', log);
   assert.equal(errors.length, 1);
+});
+
+test('Phase 2.6 AD-11: the build scan lists candidates in scan.json and fills the existing folder it holds', async (t) => {
+  const rig = await setupRepo(t);
+  const { id } = await rig.systems.create({ name: 'Calm' });
+  const empty = { page: [], docs: [], components: [] };
+  await rig.systems.withLock(id, () =>
+    rig.systems.updateStateLocked(id, (state) => ({
+      ...state,
+      sources: { ...state.sources, code: { directory: rig.project, lastScan: '2026-11-20T09:00:00.000Z', partial: false, scanned: [], project: rig.project, existing: { location: 'design-system', marks: [], read: empty } } },
+    })),
+  );
+  await runBuildScan(rig.ctx, id, rig.project);
+  const scanJson = JSON.parse(await readFile(path.join(await rig.systems.dir(id), '.chamber', 'scan.json'), 'utf8')) as ScanJson;
+  assert.deepEqual(scanJson.candidates.map((one) => one.path), ['design-system']);
+  assert.ok(scanJson.candidates[0]?.marks.includes('contract'));
+  const code = (await rig.systems.readState(id)).sources.code;
+  assert.equal(code?.project, rig.project, 'the project and the location outlive the scan');
+  assert.deepEqual(code?.existing, {
+    location: 'design-system',
+    marks: [],
+    read: {
+      page: ['design-system/index.html'],
+      docs: ['design-system/OVERVIEW.md', 'design-system/README.md', 'design-system/notes/history.md', 'design-system/notes/deep/nested.md'],
+      components: ['design-system/components/button.html'],
+    },
+  });
 });

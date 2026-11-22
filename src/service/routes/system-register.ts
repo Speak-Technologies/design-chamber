@@ -1,15 +1,17 @@
-// Phase 2.6 T0 stub (documentation/specs/phase-2-6-technical.md §4.7): E1 replaces this file's
-// registration with the real "Register it as it is" route. The router checks the bearer token first.
+// Phase 2.6 "Register it as it is" (documentation/specs/phase-2-6-technical.md §3.1, §5.9, AD-10).
+// The router checks the bearer token first; the body is validated here, and everything else (the scan
+// job, the location inside the project, the repo home, the snapshot) is re-checked in `register.ts`.
+// No body carries a path: the folder is the one the named location scan read.
 
 import type { CreateSystemResponse } from '../../shared/api.ts';
 import type { ServiceContext } from '../context.ts';
-import { ApiError, type Router } from '../http.ts';
+import type { Router } from '../http.ts';
+import { parseRegisterBody, registerSystem } from '../systems/register.ts';
 
-const NOT_BUILT = 'This part of Design Chamber (library and systems) is not built yet.';
-
-/** Registers 'POST /systems/register' (Phase 2.6 §3.1) until E1 lands. */
-export function registerSystemRegisterRoutes(router: Router, _ctx: ServiceContext): void {
-  router.on('POST /systems/register', async (): Promise<CreateSystemResponse> => {
-    throw new ApiError('internal', NOT_BUILT);
-  });
+/**
+ * Registers:
+ * - 'POST /systems/register'
+ */
+export function registerSystemRegisterRoutes(router: Router, ctx: ServiceContext): void {
+  router.on('POST /systems/register', async ({ body }): Promise<CreateSystemResponse> => registerSystem(ctx, parseRegisterBody(body)));
 }

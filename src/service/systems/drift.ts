@@ -17,13 +17,15 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 
-import { CODE_DRIFT_NAMES_MAX, SCAN_JSON_MAX_BYTES, SYSTEM_TOKENS_MAX } from '../../shared/limits.ts';
+import type { LocationView, SystemCandidate } from '../../shared/api.ts';
+import { CODE_DRIFT_NAMES_MAX, SCAN_JSON_MAX_BYTES, SYSTEM_CANDIDATES_SHOWN_MAX, SYSTEM_TOKENS_MAX } from '../../shared/limits.ts';
 import { tokenValues } from '../../shared/system-copy.ts';
 import { SYSTEMS_DIR } from '../../shared/system-json.ts';
 import type { SystemState } from '../../shared/types.ts';
 import type { ServiceContext } from '../context.ts';
-import { resolvePlainTarget, writeFileAtomic } from '../paths.ts';
-import { ensureScanJobs, ScanStopped, type ScanResult } from './extract.ts';
+import { isInsideOrEqual, resolvePlainTarget, writeFileAtomic } from '../paths.ts';
+import { findSystemCandidates, locationView } from './candidates.ts';
+import { ensureScanJobs, registeredSystems, ScanStopped, type ScanResult } from './extract.ts';
 import { validateScanFolder } from './scan-folder.ts';
 import { ensureSystemStore, guardSystemWrite } from './store.ts';
 
@@ -75,10 +77,12 @@ export type ScanJson = {
   forAgent: { path: string; why: string }[];
   skipped: { path: string; reason: string }[];
   tokens: { name: string; light: string | null; dark: string | null; file: string; line: number }[];
+  /** Phase 2.6 AD-11: folders that look like an existing design system, for the agent's round two (≤ 10). */
+  candidates: SystemCandidate[];
 };
 
 /** The file's body: every list capped, and tokens dropped from the end until it fits the byte cap. */
-export const scanJsonOf = (result: ScanResult): string => {
+export const scanJsonOf = (result: ScanResult, candidates: readonly SystemCandidate[] = []): string => {
   const tokens = result.tokens.slice(0, SYSTEM_TOKENS_MAX).map((token) => ({ name: token.name, light: token.light, dark: token.dark, file: token.file, line: token.line }));
   const body: ScanJson = {
     v: 1,
@@ -91,6 +95,7 @@ export const scanJsonOf = (result: ScanResult): string => {
     forAgent: result.summary.forAgent.slice(0, SCAN_FOR_AGENT_MAX),
     skipped: result.summary.skipped.slice(0, SCAN_SKIPPED_MAX),
     tokens,
+    candidates: candidates.slice(0, SYSTEM_CANDIDATES_SHOWN_MAX),
   };
   let text = `${JSON.stringify(body, null, 2)}\n`;
   while (Buffer.byteLength(text, 'utf8') > SCAN_JSON_MAX_BYTES && body.tokens.length > 0) {
@@ -99,6 +104,29 @@ export const scanJsonOf = (result: ScanResult): string => {
     text = `${JSON.stringify(body, null, 2)}\n`;
   }
   return text;
+};
+
+/**
+ * The page, docs and component files of an existing system folder (project-relative `location`), from
+ * a scan of a folder that contains it (Phase 2.6 §5.10: `locationView` over the walk's files under it).
+ */
+export const existingReadOf = (result: Pick<ScanResult, 'directory' | 'walked' | 'tokens'>, project: string, location: string): LocationView['read'] => {
+  const locationAbs = path.join(project, ...location.split('/').filter((part) => part !== ''));
+  const inside = (rel: string): string | null => {
+    const abs = path.join(result.directory, ...rel.split('/'));
+    if (!isInsideOrEqual(locationAbs, abs)) return null;
+    return path.relative(locationAbs, abs).split(path.sep).join('/');
+  };
+  const files: string[] = [];
+  for (const rel of result.walked) {
+    const inner = inside(rel);
+    if (inner !== null && inner !== '') files.push(inner);
+  }
+  const tokens = result.tokens.flatMap((token) => {
+    const inner = inside(token.file);
+    return inner === null ? [] : [{ file: inner, section: token.section }];
+  });
+  return locationView({ location, files, tokens }).read;
 };
 
 // ---- the scans ----
@@ -210,14 +238,32 @@ export const runBuildScan = async (ctx: ServiceContext, id: string, directory: s
   }
   if (result === null) return;
   const scanned = result;
+  // Phase 2.6 AD-11: the same walk names candidates for round two, and what the existing folder holds.
+  const candidates = findSystemCandidates({ files: scanned.walked, tokens: scanned.tokens, registered: await registeredSystems(ctx), root: scanned.directory }).candidates;
   const systemDir = await systems.dir(id);
   await systems.withLock(id, async () => {
     const file = await resolvePlainTarget(systemDir, ['.chamber', 'scan.json'], { allowAbsent: true });
     await guardSystemWrite(ctx.settings.root(), file, id, ctx.log);
-    await writeFileAtomic(file, scanJsonOf(scanned), { createDirs: false });
-    await systems.updateStateLocked(id, (current) =>
-      current.sources.code === null ? null : { ...current, sources: { ...current.sources, code: { ...current.sources.code, lastScan: scanned.at, partial: scanned.summary.partial, scanned: scanned.scanned.slice(0, SCAN_FILES_MAX), forAgent: scanned.summary.forAgent.slice(0, SCAN_FOR_AGENT_MAX) } } },
-    );
+    await writeFileAtomic(file, scanJsonOf(scanned, candidates), { createDirs: false });
+    await systems.updateStateLocked(id, (current) => {
+      const code = current.sources.code;
+      if (code === null) return null;
+      const existing = code.existing === undefined || code.project === undefined ? code.existing : { ...code.existing, read: existingReadOf(scanned, code.project, code.existing.location) };
+      return {
+        ...current,
+        sources: {
+          ...current.sources,
+          code: {
+            ...code,
+            lastScan: scanned.at,
+            partial: scanned.summary.partial,
+            scanned: scanned.scanned.slice(0, SCAN_FILES_MAX),
+            forAgent: scanned.summary.forAgent.slice(0, SCAN_FOR_AGENT_MAX),
+            ...(existing === undefined ? {} : { existing }),
+          },
+        },
+      };
+    });
   });
   ctx.log.info('systems.build-scan', { system: id, tokens: scanned.tokens.length, files: scanned.scanned.length, partial: scanned.summary.partial });
   const { facts, tokensCss } = await codeFactsOf(ctx, id);

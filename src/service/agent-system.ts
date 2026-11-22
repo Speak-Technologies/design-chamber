@@ -53,7 +53,8 @@ export const breakpointsOf = (detail: Pick<SystemDetail, 'tokens'>): number[] =>
 
 /**
  * The system the ask recommends (§8.1): the Ready system made from this design's project, else
- * the default when it is Ready, else none.
+ * the default when it is Ready, else none. A system made from a folder inside a project (Phase 2.6
+ * AD-9) belongs to that project, not to the folder.
  */
 export const recommendedSystem = (
   rows: readonly Pick<SystemSummary, 'id' | 'status' | 'unreadable' | 'sources'>[],
@@ -62,7 +63,7 @@ export const recommendedSystem = (
 ): string | null => {
   const ready = rows.filter((row) => row.status === 'ready' && row.unreadable === null);
   if (projectDirectory !== null) {
-    const fromProject = ready.find((row) => row.sources.code !== null && sameDirectory(row.sources.code.directory, projectDirectory));
+    const fromProject = ready.find((row) => row.sources.code !== null && sameDirectory(row.sources.code.project ?? row.sources.code.directory, projectDirectory));
     if (fromProject !== undefined) return fromProject.id;
   }
   const fallback = settings.systemDefault;

@@ -11,7 +11,7 @@ import { describe, test, type TestContext } from 'node:test';
 import { ApiError } from '../../../src/service/http.ts';
 import { countDesigns } from '../../../src/service/root.ts';
 import { createDesignStore } from '../../../src/service/store.ts';
-import { createSystemStore, mintSystemId, SYSTEM_GONE_MESSAGE, SYSTEM_OVER_LIMIT_MESSAGE, SYSTEMS_CAP_MESSAGE, type SystemStore } from '../../../src/service/systems/store.ts';
+import { createSystemStore, mintSystemId, swatchesOf, SYSTEM_GONE_MESSAGE, SYSTEM_OVER_LIMIT_MESSAGE, SYSTEMS_CAP_MESSAGE, type SystemStore } from '../../../src/service/systems/store.ts';
 import type { SystemTokenRules } from '../../../src/shared/system-json.ts';
 import type { SettingsFile } from '../../../src/shared/types.ts';
 import { createFakeContext, type FakeContext } from '../../helpers/fake-context.ts';
@@ -403,5 +403,31 @@ describe('the systems index', () => {
     const [row] = await store.list();
     assert.equal(row?.isDefault, true);
     assert.deepEqual(row?.pinnedFor, ['/abs/shop']);
+  });
+});
+
+describe('Phase 2.6 AD-14: swatches and created for the library tile', () => {
+  const colour = (text: string, group: 'brand' | 'surface' | null = null, section: 'colours' | 'spacing' = 'colours') => ({ section, group, light: { text, editable: 'ok' as const, problem: null } });
+
+  test('swatchesOf: light colour values, brand first, valid colours only, each once, at most six', () => {
+    assert.deepEqual(
+      swatchesOf([
+        colour('#ffffff', 'surface'),
+        colour('#1a73e8', 'brand'),
+        colour('8px', null, 'spacing'),
+        colour('var(--brand-500)'),
+        colour('url(javascript:alert(1))'),
+        colour('#ffffff', 'surface'),
+        colour('red; background: url(x)'),
+        colour('rgb(10 20 30)'),
+        colour('#000', 'brand'),
+        { section: 'colours' as const, group: null, light: null },
+        colour('#111111'),
+        colour('#222222'),
+        colour('#333333'),
+      ]),
+      ['#1a73e8', '#000', '#ffffff', 'rgb(10 20 30)', '#111111', '#222222'],
+    );
+    assert.deepEqual(swatchesOf([]), []);
   });
 });

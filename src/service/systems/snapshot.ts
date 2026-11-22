@@ -31,7 +31,7 @@ import { recomputeDrift } from './drift.ts';
 import { resyncStaleMessage } from './edits.ts';
 import { ensureScanJobs, RESYNC_ROOT_CHANGED_MESSAGE } from './extract.ts';
 import { regenerateLivingPage } from './living-page.ts';
-import { readRepoSystem, repoReviewCounts, type RepoProblemReason, type RepoReadOutcome } from './repo-read.ts';
+import { readRepoSystem, repoReviewCounts, type RepoProblemReason, type RepoRead, type RepoReadOutcome } from './repo-read.ts';
 import { ensureSystemStore, guardSystemWrite, repoLabelOf } from './store.ts';
 import { ensureSystemVersions } from './versions.ts';
 
@@ -268,6 +268,20 @@ export type RefreshOptions = {
   stamp?: string;
   /** A re-point: read from here (already through `validateScanFolder` in the scan job). */
   directory?: string;
+  /**
+   * Phase 2.6 AD-10 (registration): the bytes a location scan already read, and the root it ran
+   * under. Re-hashed against the read's own hashes and tree hash; the repo is not read again.
+   */
+  read?: { read: RepoRead; root: string };
+};
+
+const REGISTER_READ_CHANGED_MESSAGE = "Design Chamber couldn't use that read of the folder. Read the folder again.";
+
+/** The read's bytes hash to what it recorded (AD-10): what lands is exactly what the scan read. */
+export const isReadIntact = (read: Pick<RepoRead, 'files' | 'hashes' | 'treeHash'>): boolean => {
+  if (Object.keys(read.hashes).length !== read.files.size) return false;
+  for (const [rel, bytes] of read.files) if (read.hashes[rel] !== sha256(bytes)) return false;
+  return treeHashOf(read.hashes) === read.treeHash;
 };
 
 export type RefreshOutcome =
@@ -282,6 +296,11 @@ class Unchanged extends Error {}
 type Source = { read: RepoReadOutcome; root: string; directory: string; directoryChanged: boolean; jobStamp: string | null };
 
 const sourceOf = async (ctx: ServiceContext, id: string, home: RepoHome, options: RefreshOptions): Promise<Source> => {
+  if (options.read !== undefined) {
+    const given = options.read.read;
+    if (!isReadIntact(given)) throw new ApiError('conflict', REGISTER_READ_CHANGED_MESSAGE);
+    return { read: given, root: options.read.root, directory: given.directory, directoryChanged: !samePath(given.directory, home.directory), jobStamp: null };
+  }
   if (options.scanId !== undefined) {
     const job = ensureScanJobs(ctx).repoResyncSource(options.scanId, id); // 404 expired, 409 running / other system / other root
     return {

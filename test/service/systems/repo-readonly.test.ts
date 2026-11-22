@@ -6,12 +6,12 @@
 // a user re-sync with a re-point, a link and the delete.
 
 import assert from 'node:assert/strict';
-import { cp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { cp, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import type { CreateSystemScanResponse, StopBuildResponse, SystemScanResponse } from '../../../src/shared/api.ts';
+import type { CreateSystemResponse, CreateSystemScanResponse, StopBuildResponse, SystemScanResponse } from '../../../src/shared/api.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
 import { registerSystemBoardRoutes } from '../../../src/service/routes/system-board.ts';
 import { registerSystemBuildRoutes } from '../../../src/service/routes/system-build.ts';
@@ -31,6 +31,7 @@ import { clearRecoverySnapshot, refreshSnapshot } from '../../../src/service/sys
 import { createSystemStore } from '../../../src/service/systems/store.ts';
 import { createVersionsService } from '../../../src/service/versions.ts';
 import { createFakeBrowser } from './fake-cdp.ts';
+import { setupLocation, summaryOf } from './location-fixture.ts';
 import { fingerprintTree, proposalJson, setupRepo } from './repo-fixture.ts';
 
 const TOKEN = 'repo-readonly-token-0123456789ab';
@@ -219,4 +220,57 @@ test('no step of a repo-backed system changes a byte, mode, mtime or listing of 
   });
 
   assert.deepEqual(steps, ['adoption', 'code scan', 'snapshot refresh', 'living-page generation', 'state routes', 'proposal, preview and approval', 'example pictures with a fake browser', 'stop with a waiting proposal, and its Undo', 'user re-sync with a re-point', 'link', 'delete']);
+});
+
+// Phase 2.6 §10.3: discovery, a location scan, a make from a location, a register and the registered
+// system's repo re-sync leave the project exactly as it was. The fixture has a contract folder with a
+// living page, a link out, a secret file and the Designs folder inside the project.
+test('Phase 2.6: discovery, locations, make, register and re-sync never change the project', async (t) => {
+  const rig = await setupLocation(t, {}, { rootInsideProject: true });
+  const { project, call, scan, jobs } = rig;
+  await rig.tmp.write('outside/secret-system/tokens.css', ':root { --x: #000; }\n');
+  await symlink(path.join(rig.base, 'outside'), path.join(project, 'linked-out'), 'dir');
+  await writeFile(path.join(project, '.env'), 'TOKEN=not-a-real-secret\n');
+  const skipDesigns = (rel: string): boolean => rel === 'Designs';
+  const steps: string[] = [];
+  const step = async (name: string, run: () => Promise<unknown>): Promise<void> => {
+    const before = await fingerprintTree(project, skipDesigns);
+    await run();
+    assert.deepEqual(await fingerprintTree(project, skipDesigns), before, `${name} left the project exactly as it was`);
+    steps.push(name);
+  };
+
+  await step('project scan with discovery', async () => {
+    const summary = summaryOf((await scan({ directory: project })).answer);
+    assert.ok(summary.candidates?.some((one) => one.path === 'design-system'));
+    assert.ok(!JSON.stringify(summary).includes('linked-out'), 'the link out is never walked');
+  });
+  await step('location scan of the link out is refused', async () => {
+    const refused = await call('POST', '/system-scans', { directory: project, location: 'linked-out/secret-system' });
+    assert.equal(refused.status, 400);
+  });
+  let locationScan = '';
+  await step('location scan with the contract read', async () => {
+    const { scanId, answer } = await scan({ directory: project, location: 'design-system' });
+    assert.deepEqual(summaryOf(answer).location?.contract, { complete: true });
+    locationScan = scanId;
+  });
+  await step('make from the location', async () => {
+    const made = await call('POST', '/systems', { name: 'Made', code: { scanId: locationScan, assets: [] } });
+    assert.equal(made.status, 200, JSON.stringify(made.json));
+  });
+  let registered = '';
+  await step('register', async () => {
+    const answer = await call('POST', '/systems/register', { scanId: locationScan, name: 'Registered' });
+    assert.equal(answer.status, 200, JSON.stringify(answer.json));
+    registered = (answer.json as CreateSystemResponse).id;
+  });
+  await step('repo re-sync of the registered system', async () => {
+    const started = (await call('POST', '/system-scans', { directory: project, systemId: registered })).json as CreateSystemScanResponse;
+    await jobs.settled(started.scanId);
+    const stamp = (await rig.systems.readState(registered)).snapshot?.treeHash ?? 'none';
+    const applied = await call('POST', `/systems/${registered}/resync`, { scanId: started.scanId, stamp });
+    assert.equal(applied.status, 200, JSON.stringify(applied.json));
+  });
+  assert.deepEqual(steps, ['project scan with discovery', 'location scan of the link out is refused', 'location scan with the contract read', 'make from the location', 'register', 'repo re-sync of the registered system']);
 });

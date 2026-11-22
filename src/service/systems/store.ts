@@ -43,9 +43,11 @@ import {
   SYSTEM_NOTE_MAX,
   SYSTEM_OVERVIEW_MAX,
   SYSTEM_QUIET_MS,
+  SYSTEM_SWATCHES_MAX,
   SYSTEMS_MAX,
   TOKENS_CSS_MAX_BYTES,
 } from '../../shared/limits.ts';
+import { validateTokenValue } from '../../shared/token-edit.ts';
 import {
   buildSystemDetail,
   isReservedSystemId,
@@ -63,7 +65,7 @@ import {
   type SystemDetailSource,
   type SystemTokenRules,
 } from '../../shared/system-json.ts';
-import type { BuildJson, DesignSummary, LivingPageState, SystemDetail, SystemState, SystemSummary } from '../../shared/types.ts';
+import type { BuildJson, DesignSummary, LivingPageState, SystemDetail, SystemState, SystemSummary, SystemToken } from '../../shared/types.ts';
 import type { ChangeHub, DesignIndex, Logger, SelfWrites, ServiceContext, SettingsStore } from '../context.ts';
 import { ApiError } from '../http.ts';
 import { isAtomicTempName, isInsideOrEqual, LINK_SENTENCE, renameWithRetry, resolveInside, resolvePlainTarget, samePath, slugify, writeFileAtomic } from '../paths.ts';
@@ -156,6 +158,32 @@ export type SystemSeed = {
   code?: { source: NonNullable<SystemState['sources']['code']>; provenance: SystemState['provenance'] };
 };
 
+/**
+ * Phase 2.6 AD-10 ("Register it as it is"): a system made with a repo home and no seed files (its
+ * content is the snapshot the caller writes next), and a check run inside the create lock with the
+ * minted id before the folder is made (the repo-home verification, so two registrations of one
+ * folder can't both pass). A throw from `beforeMake` refuses the creation and leaves nothing behind.
+ */
+export type CreateOptions = {
+  repoHome?: { directory: string; folder: string; livingPage: string };
+  beforeMake?: (id: string) => Promise<void>;
+};
+
+/** AD-14: up to `SYSTEM_SWATCHES_MAX` light colour values for a system's tile, brand colours first, each a valid colour. */
+export const swatchesOf = (tokens: readonly Pick<SystemToken, 'section' | 'group' | 'light'>[]): string[] => {
+  const colours = tokens.filter((token) => token.section === 'colours' && token.light !== null);
+  const ordered = [...colours.filter((token) => token.group === 'brand'), ...colours.filter((token) => token.group !== 'brand')];
+  const out: string[] = [];
+  for (const token of ordered) {
+    const value = token.light?.text.trim() ?? '';
+    // A `var(--x)` reference has no colour outside its own system (on a tile it would read the host's variables).
+    if (value === '' || out.includes(value) || /var\(/i.test(value) || !validateTokenValue('colours', null, value).ok) continue;
+    out.push(value);
+    if (out.length >= SYSTEM_SWATCHES_MAX) break;
+  }
+  return out;
+};
+
 export type SystemStore = {
   /** Every system folder in the current root, over-limit and unusable ones with their sentence; newest first. */
   list(): Promise<SystemSummary[]>;
@@ -166,7 +194,7 @@ export type SystemStore = {
   get(id: string): Promise<SystemDetailSource>;
   detail(id: string): Promise<SystemDetail>;
   /** With a seed (a Code scan or a preset, §7.2) its files replace the empty tokens.css and system.json. */
-  create(input: CreateSystemBody, seed?: SystemSeed): Promise<{ id: string; system: SystemDetail }>;
+  create(input: CreateSystemBody, seed?: SystemSeed, options?: CreateOptions): Promise<{ id: string; system: SystemDetail }>;
   patch(id: string, body: PatchSystemBody): Promise<PatchSystemResponse>;
   trash(id: string, options?: TrashOptions): Promise<DeleteSystemResponse>;
   /** The systems index (§5.1): the last good list, refreshed after `system` and `root` events. */
@@ -571,8 +599,7 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     changesToReview: detail.changesToReview,
     sources: detail.sources,
     created: detail.created,
-    // T0 placeholder; E1 fills the tile swatches (AD-14).
-    swatches: [],
+    swatches: swatchesOf(detail.tokens),
     usedBy: detail.usedBy,
     isDefault: detail.isDefault,
     pinnedFor: detail.pinnedFor,
@@ -598,7 +625,7 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
       changesToReview: false,
       sources: { code: null, brand: 0, description: false },
       created: state.created,
-      // T0 placeholder; E1 fills the tile swatches (AD-14).
+      // A row without a readable detail has no tokens to show.
       swatches: [],
       usedBy: 0,
       isDefault: false,
@@ -796,9 +823,12 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     return target;
   };
 
-  const create = async (input: CreateSystemBody, seed?: SystemSeed): Promise<{ id: string; system: SystemDetail }> => {
+  const create = async (input: CreateSystemBody, seed?: SystemSeed, options: CreateOptions = {}): Promise<{ id: string; system: SystemDetail }> => {
     // A Code scan's values travel only through the seed (`extract.ts` reads them from the job's memory).
     if (input.code !== undefined && seed?.code === undefined) throw new ApiError('bad-request', 'That scan is no longer available. Scan the folder again.');
+    // A registered system's content is its snapshot: no seed files at its top level (AD-10).
+    const repoHome = options.repoHome;
+    if (repoHome !== undefined && (seed !== undefined || input.code !== undefined)) throw new Error('systems: a repo-home create takes no seed.');
     const name = checkSystemName(input.name);
     try {
       await mkdir(settings.root(), { recursive: true });
@@ -816,6 +846,8 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
         if (foldName(state.name) === foldName(name)) throw new ApiError('conflict', nameTaken(state.name));
       }
       const minted = mintSystemId(name, new Set(entries.map((entry) => entry.name.toLowerCase())));
+      // Inside the lock, before anything is made: a refusal here leaves nothing behind.
+      await options.beforeMake?.(minted);
       const systemDir = path.join(systemsDir, minted);
       try {
         await mkdir(systemDir); // not recursive: an existing folder is never taken over
@@ -824,25 +856,27 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
         throw new ApiError('bad-path', folderErrorSentence(error, systemDir));
       }
       try {
-        if (seed === undefined) {
+        // A repo home gets nothing at the top level: its content set is `snapshot/`, written next by the caller.
+        if (repoHome === undefined && seed === undefined) {
           await writeFileAtomic(await resolvePlainTarget(systemDir, ['tokens.css'], { allowAbsent: true }), SEED_TOKENS_CSS, { createDirs: false });
           await writeFileAtomic(await resolvePlainTarget(systemDir, ['system.json'], { allowAbsent: true }), SEED_SYSTEM_JSON, { createDirs: false });
-        } else {
+        } else if (seed !== undefined) {
           await seed.write(systemDir);
         }
         const at = now().toISOString();
-        const content = await readContent(systemDir);
+        // A repo home has no snapshot yet, so its content set is empty (as an adoption's, §5.9).
+        const treeHash = repoHome !== undefined ? treeHashOf({}) : (await readContent(systemDir)).treeHash;
         const state: SystemState = {
           ...parseSystemState(null, minted, at),
           name,
-          revision: { n: 1, treeHash: content.treeHash, at },
+          revision: { n: 1, treeHash, at },
           provenance: seed?.code?.provenance ?? {},
           sources: {
             code: seed?.code?.source ?? null,
             brand: input.brand === true ? { files: [] } : null,
             description: input.description === undefined ? null : { text: input.description.text, preset: input.description.preset },
           },
-          home: { kind: 'internal' },
+          home: repoHome !== undefined ? { kind: 'repo', ...repoHome, adoptedAt: at } : { kind: 'internal' },
         };
         await writeStateOf(systemDir, state);
       } catch (error) {

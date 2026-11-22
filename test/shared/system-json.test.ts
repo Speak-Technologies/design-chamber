@@ -19,6 +19,7 @@ import {
   parseSystemState,
   safeAssetName,
   sectionFingerprints,
+  sourceLineOf,
   SYSTEM_SECTIONS,
   type SystemDetailSource,
   type SystemTokenRules,
@@ -510,5 +511,35 @@ describe('safeAssetName', () => {
 
   test('NFKC folds compatibility characters before the alphabet check', () => {
     assert.equal(safeAssetName('ｌｏｇｏ.png', []), 'logo.png');
+  });
+});
+
+describe('Phase 2.6 AD-9: sources.code project and existing', () => {
+  const code = (extra: Record<string, unknown>) => ({ sources: { code: { directory: '/code/shop/design-system', lastScan: NOW, partial: false, scanned: [], ...extra } } });
+
+  test('they read back as written and reach the source line; older state reads as before', () => {
+    const read = { page: ['design-system/index.html'], docs: ['design-system/OVERVIEW.md'], components: [] };
+    const parsed = parseSystemState(code({ project: '/code/shop', existing: { location: 'design-system', marks: ['contract', 'page'], read } }), 'acme', NOW);
+    assert.equal(parsed.sources.code?.project, '/code/shop');
+    assert.deepEqual(parsed.sources.code?.existing, { location: 'design-system', marks: ['contract', 'page'], read });
+    assert.deepEqual(sourceLineOf(parsed).code, { directory: '/code/shop/design-system', lastScan: NOW, partial: false, project: '/code/shop', existing: { location: 'design-system' } });
+    const old = parseSystemState(code({}), 'acme', NOW);
+    assert.ok(old.sources.code !== null && !('project' in old.sources.code) && !('existing' in old.sources.code));
+    assert.deepEqual(sourceLineOf(old).code, { directory: '/code/shop/design-system', lastScan: NOW, partial: false });
+  });
+
+  test('forged values are dropped: a relative or UNC project, a climbing or absolute location, unknown marks, long lists', () => {
+    for (const project of ['code/shop', '\\\\server\\share', 42]) {
+      assert.equal(parseSystemState(code({ project }), 'acme', NOW).sources.code?.project, undefined, JSON.stringify(project));
+    }
+    for (const location of ['../etc', '/etc', 'C:/x', 'a\\b', 'a\nb', 7]) {
+      assert.equal(parseSystemState(code({ existing: { location, marks: [], read: {} } }), 'acme', NOW).sources.code?.existing, undefined, JSON.stringify(location));
+    }
+    const many = Array.from({ length: 30 }, (_, n) => `ds/c${n}.html`);
+    const parsed = parseSystemState(code({ existing: { location: 'ds', marks: ['page', 'evil', 'tokens'], read: { page: ['../x', 'ds/index.html'], docs: 'nope', components: many } } }), 'acme', NOW);
+    assert.deepEqual(parsed.sources.code?.existing?.marks, ['page', 'tokens']);
+    assert.deepEqual(parsed.sources.code?.existing?.read.page, ['ds/index.html']);
+    assert.deepEqual(parsed.sources.code?.existing?.read.docs, []);
+    assert.equal(parsed.sources.code?.existing?.read.components.length, 20);
   });
 });

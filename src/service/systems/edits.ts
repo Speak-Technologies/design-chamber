@@ -59,7 +59,7 @@ import { FILE_TOO_LARGE_MESSAGE, NOT_UTF8_MESSAGE } from '../edits/ops-text.ts';
 import { UNDO_STALE_MESSAGE } from '../edits/pipeline.ts';
 import { ensureTrashDir, TRASH_PREFIX, TRASH_SUFFIX_MAX, trashStampOf } from '../edits/trash.ts';
 import { ApiError } from '../http.ts';
-import { LINK_SENTENCE, resolvePlainTarget, samePath } from '../paths.ts';
+import { isInsideOrEqual, LINK_SENTENCE, resolvePlainTarget, samePath } from '../paths.ts';
 import { folderErrorSentence } from '../root.ts';
 import { toSummary, type VersionsService, type WrittenFile } from '../versions.ts';
 import { systemSelfWritesKey } from '../watch.ts';
@@ -754,12 +754,23 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
     const changed = new Set([...request.changes, ...request.useCode]).size;
     const counts = { changed, added: request.add.length, removed: request.remove.length };
     const previous = state.sources.code;
+    // Phase 2.6 §5.8: a re-sync that stays inside the system's project keeps the project and the
+    // existing location; one that re-points outside it is a plain code source now.
+    const project = previous?.project;
+    const keepsProject = project !== undefined && isInsideOrEqual(project, scan.directory);
     return {
       steps,
       folders,
       provenance,
       undoState: { provenance: before, code: previous },
-      code: { directory: scan.directory, lastScan: scan.at, partial: scan.summary.partial, scanned: scan.scanned, forAgent: scan.summary.forAgent },
+      code: {
+        directory: scan.directory,
+        lastScan: scan.at,
+        partial: scan.summary.partial,
+        scanned: scan.scanned,
+        forAgent: scan.summary.forAgent,
+        ...(keepsProject ? { project, ...(previous?.existing !== undefined ? { existing: previous.existing } : {}) } : {}),
+      },
       counts,
       directoryChanged: previous !== null && !samePath(previous.directory, scan.directory),
       label: `Re-synced ${state.name}: ${counts.changed} changed, ${counts.added} added, ${counts.removed} removed.`,

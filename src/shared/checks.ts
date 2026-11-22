@@ -462,6 +462,7 @@ const PART_NAMES: readonly ProposalPartName[] = ['system-files', 'token-fixes', 
 const BUILD_REASONS: readonly BuildProblemReason[] = [
   'unreadable', 'ticket-unknown', 'ticket-needed', 'repo-outside-project', 'repo-overlap',
   'living-page-exists', 'code-outside-project', 'home-changed', 'ticket-changed', 'applied-unknown-proposal',
+  'existing-outside-project',
 ];
 const PROPOSAL_REASONS: readonly ProposalProblemReason[] = [
   'not-adopted', 'round', 'path-outside', 'living-page-path', 'create-exists', 'from-missing',
