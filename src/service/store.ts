@@ -127,6 +127,9 @@ const choiceProblemWarning = (problem: SystemChoiceProblem): DesignWarning => ({
           : `design.json asks for the design system "${problem.value}", but Design Chamber couldn't copy it. Choose it again with Change… on the design's system.`,
 });
 
+/** KI-30: the folders write failed (busy, disk full, refused, the file cap); the request waits for the next change. */
+export const FOLDER_REQUEST_WRITE_FAILED = "Folders couldn't be saved just now, so the agent's request wasn't applied. It will try again the next time folders change.";
+
 /** Phase 2.6 AD-16: `folderRequest` names no folder has (never created); the names are shown as text. */
 const folderRequestWarning = (unknown: readonly string[]): DesignWarning => {
   const names = unknown.length <= 1 ? (unknown[0] ?? '') : `${unknown.slice(0, -1).join(', ')} and ${unknown[unknown.length - 1] ?? ''}`;
@@ -293,7 +296,8 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     if (finalState.folderRequestProblem !== undefined) {
       const filing = finalState.folderRequestProblem;
       if (filing.waiting === true) {
-        warnings.push({ code: 'folder-request-waiting', field: 'folderRequest', message: "Folders couldn't load, so the agent's request wasn't applied." });
+        const message = filing.reason === 'write' ? FOLDER_REQUEST_WRITE_FAILED : "Folders couldn't load, so the agent's request wasn't applied.";
+        warnings.push({ code: 'folder-request-waiting', field: 'folderRequest', message });
       } else {
         warnings.push(folderRequestWarning(filing.unknown));
       }

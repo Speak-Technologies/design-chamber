@@ -129,25 +129,79 @@ test('a damaged registry is never set aside by an agent request; the request wai
   assert.equal((await r.core.store.get(r.slug)).warnings.some((entry) => entry.code === 'folder-request-waiting'), false);
 });
 
-test('the seen stamp is recorded before the folders write, so a failing write never loops', async (t) => {
+test('the seen stamp is recorded before the folders write; a failing write waits and never loops', async (t) => {
   const r = await rig(t);
   await agentWrites(r.core, r.slug, { add: ['Q4'] });
   let calls = 0;
+  const seenDuringWrite: (string | undefined)[] = [];
   const reconciler = createFolderRequestReconciler({
     ctx: r.core.ctx,
     folders: {
-      changeByName: async () => {
+      changeByName: async (slug) => {
         calls += 1;
+        seenDuringWrite.push((await r.core.store.get(slug)).state.folderRequestSeen);
         throw new Error('disk gone');
       },
     },
   });
   t.after(() => reconciler.stop());
   await reconciler.reconcile(r.slug);
-  await reconciler.reconcile(r.slug);
+  await reconciler.idle();
+  // Seen first, then put back: nothing retries on its own, only the next event does.
+  assert.deepEqual(seenDuringWrite, [folderRequestStamp({ add: ['Q4'] })]);
   assert.equal(calls, 1);
-  assert.equal((await r.core.store.get(r.slug)).state.folderRequestSeen, folderRequestStamp({ add: ['Q4'] }));
-  assert.ok(r.core.logs.some((line) => line.event === 'folders.request-failed'));
+  const record = await r.core.store.get(r.slug);
+  assert.equal(record.state.folderRequestSeen, undefined);
+  assert.deepEqual(record.state.folderRequestProblem, { unknown: [], waiting: true, reason: 'write' });
+  assert.ok(r.core.logs.some((line) => line.event === 'folders.request-waiting' && line.fields?.reason === 'internal'));
+});
+
+test('a registry write that fails once (EBUSY) shows a waiting warning, then lands on the next folders event', async (t) => {
+  const r = await rig(t);
+  await r.folders.create('Q4');
+  await agentWrites(r.core, r.slug, { add: ['Q4'] });
+  let calls = 0;
+  const reconciler = createFolderRequestReconciler({
+    ctx: r.core.ctx,
+    folders: {
+      changeByName: async (slug, request) => {
+        calls += 1;
+        if (calls === 1) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+        return r.folders.changeByName(slug, request);
+      },
+    },
+  });
+  t.after(() => reconciler.stop());
+  await reconciler.reconcile(r.slug);
+  await reconciler.idle();
+
+  // Waiting, visible on the design, with the stamp rolled back and no retry of its own.
+  assert.equal(calls, 1);
+  assert.deepEqual(await membersOf(r, 'Q4'), []);
+  const waiting = await r.core.store.get(r.slug);
+  assert.equal(waiting.state.folderRequestSeen, undefined);
+  assert.deepEqual(waiting.state.folderRequestProblem, { unknown: [], waiting: true, reason: 'write' });
+  assert.equal(
+    waiting.warnings.find((entry) => entry.code === 'folder-request-waiting')?.message,
+    "Folders couldn't be saved just now, so the agent's request wasn't applied. It will try again the next time folders change.",
+  );
+  assert.ok(r.core.logs.some((line) => line.event === 'folders.request-waiting' && line.fields?.reason === 'EBUSY'));
+
+  // The next registry write (any folder action) retries it once and it lands.
+  await r.folders.create('Other');
+  await reconciler.idle();
+  assert.equal(calls, 2);
+  assert.deepEqual(await membersOf(r, 'Q4'), [r.slug]);
+  const landed = await r.core.store.get(r.slug);
+  assert.equal(landed.state.folderRequestSeen, folderRequestStamp({ add: ['Q4'] }));
+  assert.equal(landed.state.folderRequestProblem, undefined);
+  assert.equal(landed.warnings.some((entry) => entry.code === 'folder-request-waiting'), false);
+
+  // No loop: later folders events and an echo of the same request do nothing more.
+  await r.folders.create('Later');
+  await reconciler.reconcile(r.slug);
+  await reconciler.idle();
+  assert.equal(calls, 2);
 });
 
 test('manual project members are never touched by an agent request', async (t) => {

@@ -667,7 +667,8 @@ export const createFoldersService = (deps: FoldersDeps): FoldersService => {
         if (existing === undefined) throw new ApiError('not-found', FOLDER_GONE);
         // Counted on the queue, in the write that deletes, so the notice reports what happened (AD-6).
         const result = { designs: folderView(existing, live).slugs.length, onlyHere: onlyHereCount(registry, existing, live) };
-        if (existing.deleted !== null) return { registry, result };
+        // Already deleted: nothing to change, so nothing is written (no rev bump, no event).
+        if (existing.deleted !== null) return { registry, write: false, result };
         return { registry: replace(registry, { ...existing, deleted: at.toISOString() }), result };
       });
     },
@@ -677,7 +678,8 @@ export const createFoldersService = (deps: FoldersDeps): FoldersService => {
         // Folders past the undo window were dropped by the clean step, so they are not found here.
         const existing = registry.folders.find((folder) => folder.id === id);
         if (existing === undefined) throw new ApiError('not-found', FOLDER_UNDELETE_GONE);
-        if (existing.deleted === null) return { registry, result: folderView(existing, live) };
+        // Already live: nothing to change, so nothing is written (no rev bump, no event).
+        if (existing.deleted === null) return { registry, write: false, result: folderView(existing, live) };
         assertNameFree(registry, existing.name, id);
         if (registry.folders.filter((folder) => folder.deleted === null).length >= FOLDERS_MAX) throw new ApiError('conflict', FOLDERS_FULL);
         const folder = { ...existing, deleted: null };

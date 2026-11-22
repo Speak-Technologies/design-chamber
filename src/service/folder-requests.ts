@@ -14,7 +14,8 @@
 //   request clears it;
 // - a damaged registry is never set aside here (only a user action may): the stamp is put back and
 //   the request waits; the next design event or the next registry write (the user's folder action
-//   that repairs it) retries it (KI-25);
+//   that repairs it) retries it (KI-25). A failed write (busy, disk full, refused, the file cap)
+//   waits the same way with its own warning (KI-30);
 // - a request written while the service was down, or sitting in a designs folder the user switches
 //   to, is picked up by one sweep after the watcher's baseline (KI-26);
 // - every change to the design's warning is announced with a `comments` event, after the state.json
@@ -115,17 +116,19 @@ export const createFolderRequestReconciler = (deps: FolderRequestDeps): FolderRe
     try {
       ({ unknown } = await folders().changeByName(slug, { add: request.add ?? [], remove: request.remove ?? [] }));
     } catch (error) {
-      if (!(error instanceof FoldersDamagedError)) throw error;
-      // Folders couldn't load: the request waits (the stamp goes back) for the next design event
-      // or the next registry write.
-      ctx.log.warn('folders.request-waiting', { slug, reason: 'damaged' });
+      // Folders couldn't load, or the write failed (busy after its retries, disk full, refused, the
+      // file cap): the request waits (the stamp goes back) for the next design event or the next
+      // registry write (KI-25, KI-30). Only an event retries it, so a failure never loops.
+      const damaged = error instanceof FoldersDamagedError;
+      ctx.log.warn('folders.request-waiting', { slug, reason: damaged ? 'damaged' : codeOf(error) });
       waiting.add(slug);
+      const wait: NonNullable<ServiceState['folderRequestProblem']> = damaged ? { unknown: [], waiting: true } : { unknown: [], waiting: true, reason: 'write' };
       let changed = false;
       await ctx.store.updateSystemState(slug, (state) => {
         if (state.folderRequestSeen !== stamp) return null;
         const problem = state.folderRequestProblem;
-        changed = problem?.waiting !== true || problem.unknown.length > 0;
-        const next: ServiceState = { ...state, folderRequestProblem: { unknown: [], waiting: true } };
+        changed = problem?.waiting !== true || problem.unknown.length > 0 || problem.reason !== wait.reason;
+        const next: ServiceState = { ...state, folderRequestProblem: wait };
         if (previous === undefined) delete next.folderRequestSeen;
         else next.folderRequestSeen = previous;
         return next;

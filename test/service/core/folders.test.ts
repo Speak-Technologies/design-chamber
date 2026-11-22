@@ -231,6 +231,26 @@ describe('folders: service', () => {
     await assert.rejects(folders.remove('f_zzzzzzzzzz'), { code: 'not-found' });
   });
 
+  test('deleting a deleted folder or undeleting a live one writes nothing: no rev bump, no event', async (t) => {
+    const { core, folders, file } = await rig(t);
+    const design = await core.store.create({ kind: 'page', title: 'Page' });
+    const target = await folders.create('Launch');
+    await folders.change(target.id, { add: [design.slug], remove: [] });
+    const rev = (await onDisk(file)).rev;
+    const events: string[] = [];
+    core.ctx.hub.subscribe((event) => void events.push(event.kind));
+
+    assert.deepEqual((await folders.undelete(target.id)).slugs, [design.slug]);
+    assert.equal((await onDisk(file)).rev, rev);
+    await folders.remove(target.id);
+    assert.equal((await onDisk(file)).rev, rev + 1);
+    const afterDelete = events.length;
+    assert.deepEqual(await folders.remove(target.id), { designs: 1, onlyHere: 1 });
+    assert.equal((await onDisk(file)).rev, rev + 1);
+    assert.equal(events.length, afterDelete);
+    assert.equal(events.filter((kind) => kind === 'folders').length, 1);
+  });
+
   test('a damaged registry reads as damaged, a prune leaves it, the first user action sets it aside', async (t) => {
     const { core, folders, file } = await rig(t);
     await mkdir(path.dirname(file), { recursive: true });

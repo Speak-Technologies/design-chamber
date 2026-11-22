@@ -175,8 +175,11 @@ export type ServiceState = Pick<DesignJson, Exclude<ServiceOwnedField, 'version'
   systemChoiceProblem?: SystemChoiceProblem;
   /** The last design.json `folderRequest` stamp the service acted on (Phase 2.6 AD-16). */
   folderRequestSeen?: string;
-  /** Folder names in a `folderRequest` that do not exist; never created. `waiting`: the registry couldn't load. */
-  folderRequestProblem?: { unknown: string[]; waiting?: true };
+  /**
+   * Folder names in a `folderRequest` that do not exist; never created. `waiting`: the request waits for a
+   * retry; `reason: 'write'` when the registry write failed (busy, disk full), absent when it couldn't load.
+   */
+  folderRequestProblem?: { unknown: string[]; waiting?: true; reason?: 'write' };
 };
 
 /** A `systemChoice` the service could not act on (Phase 2.5 §2.7); `value` is the raw agent text, ≤ 80 chars. */

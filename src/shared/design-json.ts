@@ -758,7 +758,9 @@ export const normalizeServiceState = (raw: unknown): ServiceState | null => {
       .filter((name): name is string => typeof name === 'string' && name.length >= 1 && name.length <= FOLDER_NAME_MAX)
       .slice(0, FOLDER_REQUEST_NAMES_MAX);
     const waiting = filingProblem.waiting === true;
-    if (unknown.length > 0 || waiting) state.folderRequestProblem = { unknown, ...(waiting ? { waiting: true as const } : {}) };
+    // `reason` only qualifies a wait; absent reads as the registry couldn't load (files before KI-30).
+    const reason = waiting && filingProblem.reason === 'write' ? { reason: 'write' as const } : {};
+    if (unknown.length > 0 || waiting) state.folderRequestProblem = { unknown, ...(waiting ? { waiting: true as const } : {}), ...reason };
   }
   return state;
 };

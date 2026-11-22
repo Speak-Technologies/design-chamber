@@ -1053,4 +1053,12 @@ describe('folderRequest (Phase 2.6 AD-16)', () => {
     assert.equal(Object.hasOwn(dropped, 'folderRequestSeen'), false);
     assert.equal(Object.hasOwn(dropped, 'folderRequestProblem'), false);
   });
+  test('a waiting filing keeps reason "write"; an older wait without one reads as damaged; a stray reason drops', () => {
+    const stateBase = { version: 1, kind: 'page', created: '2026-01-01T00:00:00Z', brief: '', sessionId: null, projectDirectory: null, preset: null, entry: 'index.html', comments: [] };
+    const problemOf = (folderRequestProblem: unknown) => normalizeServiceState({ ...stateBase, folderRequestProblem })?.folderRequestProblem;
+    assert.deepEqual(problemOf({ unknown: [], waiting: true, reason: 'write' }), { unknown: [], waiting: true, reason: 'write' });
+    assert.deepEqual(problemOf({ unknown: [], waiting: true }), { unknown: [], waiting: true });
+    assert.deepEqual(problemOf({ unknown: [], waiting: true, reason: 'disk' }), { unknown: [], waiting: true });
+    assert.deepEqual(problemOf({ unknown: ['Q4'], reason: 'write' }), { unknown: ['Q4'] });
+  });
 });
