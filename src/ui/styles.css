@@ -6635,3 +6635,57 @@ button.dc-sp-value:focus-visible {
   margin-top: 2px;
 }
 /* ===== end Phase 2.6 QA-L ===== */
+
+/* ===== Phase 2.6 rail systems entry: the pinned "Design systems" row under the designs list (approved canvas rail-nav) ===== */
+/* The rail lists designs only; this row is how a rail user reaches the systems list. It stays put while the list scrolls. */
+.dc-rail-nav {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--dc-s3) 0 var(--dc-s4);
+  border: 0;
+  border-top: 1px solid var(--dc-hair);
+  background: var(--oc-subtle);
+  color: var(--oc-fg);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-rail-nav:hover {
+  background: var(--oc-hover);
+}
+.dc-rail-nav:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--oc-primary) 55%, transparent);
+}
+.dc-rail-nav > .dc-icon {
+  flex: none;
+  color: var(--oc-muted);
+}
+.dc-rail-nav-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-rail-nav-count {
+  margin-left: auto;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.dc-rail-nav-count:empty {
+  display: none;
+}
+.dc-rail-nav-count + .dc-icon {
+  margin-left: 0;
+}
+.dc-rail-nav-name + .dc-icon {
+  margin-left: auto;
+}
+/* ===== end Phase 2.6 rail systems entry ===== */

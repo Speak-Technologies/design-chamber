@@ -9,6 +9,9 @@ import {
   ALL_SCOPE,
   ALL_SYSTEMS,
   LIST_TABS,
+  RAIL_TABS,
+  type LibraryFilters,
+  systemsEntryLabel,
   cardProjectLine,
   emptyStateOf,
   filterDesigns,
@@ -105,7 +108,8 @@ test('kindSummary and rowAriaLabel use the glossary words and singular/plural co
 });
 
 test('the user sees "Page", never "artifact", in tabs, labels and the New dialog', () => {
-  assert.deepEqual(LIST_TABS.map((t) => t.label), ['All', 'Canvases', 'Pages', 'Systems']);
+  assert.deepEqual(LIST_TABS.map((t) => t.label), ['All', 'Canvases', 'Pages', 'Systems'], 'the page keeps four tabs');
+  assert.deepEqual(RAIL_TABS.map((t) => t.label), ['All', 'Canvases', 'Pages'], 'the rail has three: systems are reached from the entry under its list');
   assert.equal(kindLabel('page'), 'Page');
   assert.equal(kindLabel('canvas'), 'Canvas');
   assert.equal(startLabel('page'), 'Start page');
@@ -589,6 +593,35 @@ test('libraryItems: the All tab mixes systems and designs by the sort; counts in
   assert.deepEqual(itemsOf(byCreated), ['sys:harbor', 'loose', 'hero', 'cart', 'sys:acme', 'sys:tidepool'], 'by created, each kind on its own created date');
   const byTitle = libraryItems({ designs: L1B_DESIGNS, systems: L1B_SYSTEMS, scope: ALL_SCOPE, folders, designsRoot: ROOT, filters: L1B_FILTERS, sort: 'title' });
   assert.deepEqual(itemsOf(byTitle), ['sys:acme', 'cart', 'sys:harbor', 'hero', 'loose', 'sys:tidepool'], 'A to Z, a system by its name');
+});
+
+test('libraryItems on the rail: designs only, All counts designs only, no system rows however the filters read', () => {
+  const rail = (extra: { filters?: LibraryFilters; sort?: 'updated' | 'title' } = {}): ReturnType<typeof libraryItems> =>
+    libraryItems({ designs: L1B_DESIGNS, systems: L1B_SYSTEMS, scope: ALL_SCOPE, folders, designsRoot: ROOT, filters: extra.filters ?? L1B_FILTERS, sort: extra.sort ?? 'updated', surface: 'rail' });
+  const all = rail();
+  assert.deepEqual(itemsOf(all), ['cart', 'hero', 'loose'], 'no system rows among the designs');
+  assert.deepEqual(all.counts, { all: 3, canvas: 2, page: 1, system: 3 }, 'All is the three designs, not the six items the page counts');
+  assert.equal(all.shownSystems.length, 0);
+  assert.equal(all.lead, null);
+  const page = libraryItems({ designs: L1B_DESIGNS, systems: L1B_SYSTEMS, scope: ALL_SCOPE, folders, designsRoot: ROOT, filters: L1B_FILTERS, sort: 'updated' });
+  assert.equal(page.counts.all, 6, 'the page is unchanged: inclusive count, systems mixed in');
+  const filtered = rail({ filters: { ...L1B_FILTERS, system: { kind: 'system', id: 'tidepool' } }, sort: 'title' });
+  assert.deepEqual(itemsOf(filtered), ['cart', 'hero'], 'a System filter shows that system’s designs, with no lead system row');
+  assert.deepEqual(filtered.counts.all, 2);
+  assert.deepEqual(itemsOf(rail({ filters: { ...L1B_FILTERS, tab: 'system' } })), ['cart', 'hero', 'loose'], 'a stale Systems tab reads as All');
+  assert.deepEqual(rail({ filters: { ...L1B_FILTERS, query: 'har' } }).counts.all, 0, 'a search never counts a system on the rail');
+});
+
+test('emptyStateOf on the rail: designs only, so systems never turn "no designs" into "no matches"', () => {
+  const base = { all: [] as DesignSummary[], scoped: [] as DesignSummary[], shown: [] as DesignSummary[], scope: ALL_SCOPE, scopeLabel: null, folderName: null, filters: L1B_FILTERS, systems: L1B_SYSTEMS, draggable: false };
+  assert.equal(emptyStateOf(base)?.kind, 'no-matches', 'the page, with systems to show, treats an empty All as filtered');
+  assert.equal(emptyStateOf({ ...base, surface: 'rail' })?.kind, 'no-designs', 'the rail has nothing to show without designs');
+});
+
+test('systemsEntryLabel says the count and the action, and drops the number while it is unknown', () => {
+  assert.equal(systemsEntryLabel(4), 'Design systems, 4. Show them');
+  assert.equal(systemsEntryLabel(0), 'Design systems, 0. Show them');
+  assert.equal(systemsEntryLabel(null), 'Design systems. Show them');
 });
 
 test('libraryItems: the Systems tab shows systems only, the kind tabs designs only; the counts do not move with the tab', () => {

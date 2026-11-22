@@ -3,8 +3,9 @@
 // every design (open, Draft, deleted toast), the used-by link landing on a filtered library (from a
 // tile, a rail row and the Design systems list), the sidebar's Design systems section (heading opens
 // the list, rows set the filter and keep the scope), the Living page button, the List view's system
-// rows, the rail at 320 and 480 with four tabs, the empty, folder and failed Systems tab, light and
-// dark. The approved canvas (Designs/phase-2-6-library-ui) is the visual authority.
+// rows, the rail at 320 and 480 (three tabs, All counting designs only, the pinned Design systems entry
+// under the list; the page keeps four tabs and inclusive counts), the empty, folder and failed Systems tab
+// on the page and the entry's none and failed states on the rail, light and dark. The approved canvas (Designs/phase-2-6-library-ui) is the visual authority.
 
 const FAKE = 'window.frames[0].__dcFake';
 
@@ -220,16 +221,18 @@ const railFlow = async (h, width, theme) => {
   await h.thumbsReady(p);
   await linkWorld(p);
 
-  h.check((await count(p, '.dc-tabs [role=tab]')) === 4, `${tag}: four kind tabs`);
-  h.check(await p.guest('const t = doc.querySelector(".dc-tabs [role=tab][data-id=\\"system\\"]"); return t.getAttribute("aria-label") === "Systems, 5"'), `${tag}: the Systems tab keeps its count in its accessible name`);
+  // Three kind tabs, designs only: the page's four tabs and inclusive counts are not the rail's (owner decision 2026-11-22).
+  h.check((await count(p, '.dc-tabs [role=tab]')) === 3 && !(await count(p, '.dc-tabs [role=tab][data-id="system"]')), `${tag}: three kind tabs, no Systems tab`);
+  h.check(await p.guest('return doc.querySelector(".dc-tabs [role=tab][data-id=\\"all\\"]").getAttribute("aria-label") === "All, 6"'), `${tag}: All counts the six designs, not the systems (${await p.guest('return doc.querySelector(".dc-tabs [role=tab][data-id=\\"all\\"]").getAttribute("aria-label")')})`);
   const countVisible = await p.guest('const c = doc.querySelector(".dc-tabs [role=tab] .oc-sdk-tab-count"); return !!c && getComputedStyle(c).display !== "none"');
   h.check(width <= 380 ? countVisible === false : countVisible === true, `${tag}: the tab counts are ${width <= 380 ? 'moved into the names below 380 px' : 'shown beside the names'}`);
   h.check(await p.guest('return [...doc.querySelectorAll(".dc-tabs [role=tab]")].every((t) => t.scrollWidth <= t.clientWidth + 1)'), `${tag}: no tab clips its name`);
   h.check(await noOverflow(p), `${tag}: no horizontal overflow`);
   if (width === 320) h.check(await p.guest('return doc.querySelector(".dc-rail-title").getBoundingClientRect().width >= 120'), `${tag}: the title keeps its 120 px budget`);
-  h.check((await count(p, '.dc-libsys')) === 5, `${tag}: five system rows mixed into All`);
-  const mixed = await order(p);
-  h.check(mixed.includes('ds') && mixed.includes('sd'), `${tag}: systems and designs are mixed by the sort (${mixed})`);
+  h.check((await count(p, '.dc-libsys')) === 0 && (await order(p)) === 'dddddd', `${tag}: All lists the six designs and no system rows (${await order(p)})`);
+  // The pinned entry under the list: the count, the accessible name, and it stays in view under the scroll.
+  h.check(await p.guest('const f = doc.querySelector(".dc-rail-nav"); const r = f.getBoundingClientRect(); const list = doc.querySelector(".dc-rail-scroll").getBoundingClientRect(); return !!f && f.getAttribute("aria-label") === "Design systems, 5. Show them" && f.querySelector(".dc-rail-nav-count").textContent === "5" && r.bottom <= innerHeight + 1 && r.top >= list.bottom - 1 && r.height >= 44'), `${tag}: the Design systems entry sits under the list with its count and name`);
+  h.check(await p.guest('const f = doc.querySelector(".dc-rail-nav"); const c = f.querySelector(".dc-rail-nav-count").getBoundingClientRect(); const r = f.getBoundingClientRect(); return f.scrollWidth <= f.clientWidth + 1 && c.right <= r.right'), `${tag}: the entry does not overflow`);
   h.check(await p.guest('const r = doc.querySelector(".dc-row[data-slug=\\"coffee-subscription\\"]"); const c = r.querySelector(".dc-design-system-chip"); return !!c && !c.closest(".dc-row-main") && c.getAttribute("aria-label") === "Open system Tidepool"'), `${tag}: a design row has its chip as a sibling under the text`);
   h.check(await p.guest('const r = doc.querySelector(".dc-row[data-slug=\\"coffee-subscription\\"]"); const t = r.querySelector(".dc-row-title").getBoundingClientRect(); return t.width >= (innerWidth <= 380 ? 100 : 120)'), `${tag}: the chip does not take the title's room`);
   await p.shot(`${tag}-1-all`);
@@ -244,36 +247,30 @@ const railFlow = async (h, width, theme) => {
   await p.click('.dc-row[data-slug="onboarding-flow"] .dc-design-system-chip');
   await h.checkSoon(async () => /This system was deleted/.test(await toastTexts(p)), `${tag}: a deleted chip says so in a toast`);
 
-  // Systems tab: rows only, the plate and the link
-  await p.click('.dc-tabs [role=tab]', { text: 'Systems' }).catch(async () => p.click('.dc-tabs [role=tab][data-id="system"]'));
-  await h.checkSoon(async () => (await count(p, '.dc-libsys')) === 5 && (await count(p, '.dc-row[data-slug]')) === 0, `${tag}: the Systems tab shows systems only`);
-  h.check(await p.guest('const r = doc.querySelector(".dc-libsys[data-id=\\"tidepool\\"]"); return !!r.querySelector(".dc-plate") && r.querySelector(".dc-sys-used")?.tagName === "BUTTON" && /Ready/.test(r.querySelector(".dc-sys-name").textContent)'), `${tag}: a system row has its plate, status and a used-by link`);
-  h.check(await p.guest('const r = doc.querySelector(".dc-libsys[data-id=\\"acme\\"]"); return r.querySelector(".dc-plate")?.dataset.empty === "true" && r.querySelector(".dc-sys-used")?.tagName === "SPAN"'), `${tag}: an unused system with no colours shows the glyph plate and plain words`);
-  h.check(await noOverflow(p), `${tag}: no horizontal overflow on the Systems tab`);
-  await p.shot(`${tag}-2-systems-tab`);
+  // The foot entry opens the systems list; Back returns focus to it.
+  await p.click('.dc-rail-nav');
+  await h.checkSoon(() => p.guest('return doc.querySelectorAll(".dc-sys[data-id]").length >= 5'), `${tag}: the entry opens the systems list`);
+  await p.shot(`${tag}-2-systems-list`);
+  await p.click('.dc-sys-view [aria-label="Back to designs"]');
+  await h.checkSoon(() => p.guest('return !doc.querySelector(".dc-sys-view") && doc.activeElement?.classList.contains("dc-rail-nav")'), `${tag}: Back returns to the list with focus on the entry`);
 
-  // The row opens the system; the menu is the short one
-  await p.hover('.dc-libsys[data-id="juniper"]');
-  await p.click('.dc-libsys[data-id="juniper"] .dc-iconbtn');
-  await p.waitFor('return !!doc.querySelector("[role=menu]")', 'the row menu');
-  h.check((await p.guest('return [...doc.querySelectorAll("[role=menuitem]")].map((n) => n.textContent.trim()).join("|")')) === 'Open|Preview living page|Reveal in folder', `${tag}: the row menu is Open, Preview living page, Reveal in folder`);
-  await p.key('Escape');
-
-  // used-by link → filtered list, the system's row leads
-  await p.click('.dc-libsys[data-id="tidepool"] .dc-sys-used');
+  // used-by link in the systems list → the library filtered to that system: its designs only, no system row leading
+  await p.click('.dc-rail-nav');
+  await h.checkSoon(() => p.guest('return doc.querySelectorAll(".dc-sys[data-id]").length >= 5'), `${tag}: the systems list is up again`);
+  await p.click('.dc-sys[data-id="tidepool"] .dc-sys-used');
   await h.checkSoon(async () => (await selectLabel(p, '.dc-rail-pair .dc-system-select')) === 'System: Tidepool', `${tag}: the used-by link filters to Tidepool (${await selectLabel(p, '.dc-rail-pair .dc-system-select')})`);
   h.check((await p.guest('return doc.querySelector(".dc-tabs [role=tab][aria-selected=true]")?.dataset.id')) === 'all', `${tag}: the tab is All`);
-  h.check((await p.guest('return doc.querySelector(".dc-rows > li")?.dataset.lead')) === 'true', `${tag}: the filtered system's row leads`);
-  h.check((await count(p, '.dc-row[data-slug]')) === 1, `${tag}: the design that uses it follows`);
+  h.check((await count(p, '.dc-libsys')) === 0 && (await p.guest('return doc.querySelector(".dc-rows > li")?.dataset.lead ?? null')) === null, `${tag}: no system row leads the filtered list`);
+  h.check((await count(p, '.dc-row[data-slug]')) === 1, `${tag}: the design that uses it is the one row`);
   await p.shot(`${tag}-3-filtered`);
   await pickOption(p, '.dc-rail-pair .dc-system-select', 'All systems');
 
-  // The Design systems list's used-by link lands on the filtered library
+  // The header icon opens the same list, and its used-by link lands on the filtered library
   await p.click('.dc-rail-head .dc-iconbtn[aria-label="Design systems"]');
   await h.checkSoon(() => p.guest('return doc.querySelectorAll(".dc-sys[data-id]").length >= 5'), `${tag}: the systems list is up`);
   h.check(await p.guest('const r = doc.querySelector(".dc-sys[data-id=\\"harbor\\"]"); return !!r.querySelector(".dc-plate") && r.querySelector(".dc-sys-used")?.getAttribute("aria-label") === "Used by 2 designs. Show them"'), `${tag}: the list row has its plate and the link`);
   h.check(await noOverflow(p), `${tag}: no horizontal overflow in the systems list`);
-  await p.shot(`${tag}-4-systems-list`);
+  await p.shot(`${tag}-4-systems-list-icon`);
   await p.click('.dc-sys[data-id="harbor"] .dc-sys-used');
   await h.checkSoon(async () => !(await count(p, '.dc-sys-view')) && (await selectLabel(p, '.dc-rail-pair .dc-system-select')) === 'System: Harbor', `${tag}: the link closes the list and filters the library to Harbor`);
   await p.close();
@@ -281,16 +278,22 @@ const railFlow = async (h, width, theme) => {
 
 const railStates = async (h, width) => {
   const tag = `systems-library-rail-${width}-states-dark`;
-  // No systems on the rail: the Systems tab is not blank.
+  // No systems on the rail: the entry says 0 and still opens a list that is not blank.
   const empty = await h.openPage({ width, height: 780, surface: 'panel', theme: 'dark', label: tag, routes: { 'GET /systems': { status: 200, body: { systems: [], total: 0, max: 50 } } } });
   console.log(tag);
   await h.listReady(empty);
-  await empty.click('.dc-tabs [role=tab][data-id="system"]');
-  await h.checkSoon(async () => (await text(empty, '.oc-sdk-empty-title')) === 'No design systems yet', `${tag}: the Systems tab says what goes here (${await text(empty, '.oc-sdk-empty-title')})`);
-  h.check((await text(empty, '.oc-sdk-empty-action .oc-sdk-btn')) === 'New design system…', `${tag}: and offers to start one`);
+  await h.checkSoon(() => empty.guest('const f = doc.querySelector(".dc-rail-nav"); return f?.getAttribute("aria-label") === "Design systems, 0. Show them"'), `${tag}: the entry counts none`);
   h.check(await noOverflow(empty), `${tag}: no horizontal overflow`);
   await empty.shot(`${tag}-1-no-systems`);
+  await empty.click('.dc-rail-nav');
+  await h.checkSoon(() => empty.guest('return !!doc.querySelector(".dc-sys-empty-actions")'), `${tag}: the entry opens the empty systems list, which says what to do`);
   await empty.close();
+  // Systems failed: the designs still list, the entry shows no number and still opens the list.
+  const failed = await h.openPage({ width, height: 780, surface: 'panel', theme: 'dark', label: `${tag}-failed`, routes: { 'GET /systems': { status: 500, body: { error: 'internal', message: 'The design systems list could not be read.' } } } });
+  await h.listReady(failed);
+  await h.checkSoon(() => failed.guest('const f = doc.querySelector(".dc-rail-nav"); return f?.getAttribute("aria-label") === "Design systems. Show them" && f.querySelector(".dc-rail-nav-count").textContent === "" && doc.querySelectorAll(".dc-row[data-slug]").length >= 1'), `${tag}: failed systems leave the designs and an entry without a number`);
+  await failed.shot(`${tag}-1b-systems-failed`);
+  await failed.close();
   // The Design systems list's empty state has its fourth way to start.
   const list = await h.openPage({ width, height: 780, surface: 'panel', theme: 'dark', label: `${tag}-list`, routes: { 'GET /systems': { status: 200, body: { systems: [], total: 0, max: 50 } } } });
   await h.listReady(list);

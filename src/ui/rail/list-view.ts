@@ -1,6 +1,7 @@
 // R1, the rail's designs list: header (Design systems, Settings, New), search, the Show select,
-// the System and Sort pair, kind tabs (Systems is the fourth), thumbnail rows with badges, a system
-// chip and a row menu, system rows mixed into All by the sort, an empty state
+// the System and Sort pair, three kind tabs (All counts designs only, no system rows among them),
+// thumbnail rows with badges, a system chip and a row menu, a pinned "Design systems" entry under the
+// list (and the header icon) that opens the systems list, an empty state
 // that names every active filter, a notice when an earlier folder still holds designs, and the
 // offer to import loose HTML files saved straight into the designs folder. Sort is remembered
 // (host.storage `list-sort:panel`); search, tab and the System filter live for the session.
@@ -15,6 +16,7 @@ import { mountDesignRow, type DesignRowView } from '../components/design-row.ts'
 import { createScope, h } from '../components/dom.ts';
 import { deleteFolder, mountUndoNotice, openNewFolder, openRenameFolder, type DesignMenuView, type FolderRef } from '../components/folder-actions.ts';
 import { folders as foldersStore, type FoldersState } from '../components/folders-store.ts';
+import { icon } from '../components/icons.ts';
 import { attachMenu, btn, iconBtn, nameSelect } from '../components/kit.ts';
 import { mountLibraryEmpty } from '../components/library-empty.ts';
 import { mountLooseBanner } from '../components/loose-banner.ts';
@@ -22,12 +24,12 @@ import { systems as systemsStore } from '../components/systems-store.ts';
 import { type ThumbHandle } from '../components/thumb.ts';
 import { guestHost, host, store } from '../guest.ts';
 import { dismissedTip, shouldShowTip, TIP_KEY } from '../model/findability-model.ts';
-import { folderName, middlePath } from '../model/format.ts';
+import { middlePath } from '../model/format.ts';
 import {
   ALL_SCOPE,
   ALL_SYSTEMS,
   LIST_SORTS,
-  LIST_TABS,
+  RAIL_TABS,
   emptyStateOf,
   libraryItems,
   projectGroups,
@@ -44,6 +46,7 @@ import {
   systemFilterFromId,
   systemFilterToId,
   systemOptions,
+  systemsEntryLabel,
   type ListScope,
   type ListSort,
   type ListTab,
@@ -53,16 +56,15 @@ import {
   type SystemFilter,
 } from '../model/list-model.ts';
 import { designCountLabel } from '../model/settings-model.ts';
-import { librarySystemMenu, swatchLookup, type LibrarySystemMenuId } from '../model/systems-model.ts';
+import { swatchLookup } from '../model/systems-model.ts';
 import { openNewSystemSheet } from '../systems/new-system-sheet.ts';
-import { mountSystemRow, runLibrarySystemAction } from '../systems/system-row.ts';
 import { toast } from '../components/actions.ts';
 
 export type ListViewOptions = {
   actions: ActionContext;
   onNew: (kind: 'canvas' | 'page') => void;
   onSettings: () => void;
-  /** Opens the design systems list (Phase 2.5). */
+  /** Opens the design systems list (Phase 2.5): from the header icon and from the entry under the list. */
   onSystems: () => void;
   onOpen: (slug: string) => void;
 };
@@ -71,7 +73,7 @@ export type ListViewHandle = {
   el: HTMLElement;
   focusRow: (slug: string) => void;
   focusSystems: () => void;
-  /** Back from a system opened out of the list: focus the chip or row that opened it, else the systems button. */
+  /** Back from a system opened out of the list: focus the chip that opened it, else the entry that opened the systems list. */
   focusSystemEntry: (id: string) => void;
   /** Show the list filtered to one system: scope All, tab All, no search (a used-by link or a chip lands here). */
   filterBySystem: (id: string) => void;
@@ -114,7 +116,12 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     (id) => options.onNew(id === 'page' ? 'page' : 'canvas'),
   );
   const settingsButton = iconBtn({ icon: 'gear', label: 'Settings', onClick: () => options.onSettings() });
-  const systemsButton = iconBtn({ icon: 'system', label: 'Design systems', onClick: () => options.onSystems() });
+  /** Which of the two entries opened the systems list, so Back returns focus to it. */
+  let systemsOpener: 'icon' | 'foot' = 'icon';
+  const systemsButton = iconBtn({ icon: 'system', label: 'Design systems', onClick: () => {
+    systemsOpener = 'icon';
+    options.onSystems();
+  } });
   const head = h('header', { class: 'dc-rail-head' }, h('h1', { class: 'dc-rail-title' }, 'Designs'), h('span', { class: 'dc-spacer' }), systemsButton, settingsButton, newButton.el);
 
   // filters
@@ -125,8 +132,8 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     paintList();
   } });
   const tabsHost = h('div', { class: 'dc-tabs' });
-  const tabsHandle = mountTabs(tabsHost, { items: LIST_TABS.map(({ id, label }) => ({ id, label })), activeId: tab, trackBackground: true, onChange: (id) => {
-    tab = LIST_TABS.find((entry) => entry.id === id)?.id ?? 'all';
+  const tabsHandle = mountTabs(tabsHost, { items: RAIL_TABS.map(({ id, label }) => ({ id, label })), activeId: tab, trackBackground: true, onChange: (id) => {
+    tab = RAIL_TABS.find((entry) => entry.id === id)?.id ?? 'all';
     tabsHandle.update({ activeId: tab });
     paintList();
   } });
@@ -227,7 +234,20 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   const undo = mountUndoNotice();
   const list = h('ul', { class: 'dc-rows', role: 'list', 'aria-label': 'Designs' });
   const scroller = h('div', { class: 'dc-rail-scroll' }, h('div', { class: 'dc-rail-undo' }, undo.el), notices, list);
-  el.append(head, tipHost, filters, scroller);
+  // The pinned entry under the list: systems are not rows here, so this is where a rail user finds them (the approved canvas's rail-nav).
+  const footCount = h('span', { class: 'dc-rail-nav-count' });
+  const foot = h(
+    'button',
+    { type: 'button', class: 'dc-rail-nav', 'aria-label': systemsEntryLabel(null), title: 'Design systems', onClick: () => {
+      systemsOpener = 'foot';
+      options.onSystems();
+    } },
+    icon('system', 16),
+    h('span', { class: 'dc-rail-nav-name' }, 'Design systems'),
+    footCount,
+    icon('chevron-right', 16),
+  );
+  el.append(head, tipHost, filters, scroller, foot);
 
   const switchBack = async (path: string): Promise<void> => {
     try {
@@ -256,9 +276,6 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     scroller.setAttribute('aria-busy', 'true');
     list.append(...skeleton(), h('li', { class: 'dc-list-message dc-sr-only', role: 'status' }, 'Loading your designs'));
   };
-
-  /** The host's project names make "From shop" read like the user's own words; without them the folder name stands in. */
-  const projectLabel = (directory: string): string => projects.find((project) => sameDirectory(project.directory, directory))?.name ?? folderName(directory);
 
   const newSystem = (source?: 'existing'): void => openNewSystemSheet(options.actions.host, { ...(source ? { source } : {}), onMade: (result) => options.actions.onOpenSystem?.(result.id) });
 
@@ -318,8 +335,17 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     paintList();
   };
 
+  /** The entry under the list counts every system, whatever the designs are doing; while they load or when they failed it shows no number and still opens the list, which says which. */
+  const paintFoot = (): void => {
+    const systems = systemStore.get().systems;
+    const count = systems === null ? null : systems.length;
+    footCount.textContent = count === null ? '' : String(count);
+    foot.setAttribute('aria-label', systemsEntryLabel(count));
+  };
+
   const paintList = (): void => {
     const state = store.getState().designs;
+    paintFoot();
     list.replaceChildren();
     for (const handle of [...thumbs.values()]) handle.el.remove();
     paintNotices();
@@ -360,20 +386,20 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     nameSelect(systemHost, 'System', systemEntries.find((entry) => entry.id === systemFilterToId(systemFilter))?.label ?? 'All systems');
     nameSelect(sortHost, 'Sort', LIST_SORTS.find((entry) => entry.id === sort)?.label ?? 'Updated');
 
-    if (foldersPending || (tab === 'system' && systemsState.systems === null && !systemsFailed)) {
+    if (foldersPending) {
       showLoading();
       return;
     }
     const label = scopeLabel(effective, groups, folderList);
     const filters = { query, tab, system: systemFilter };
-    const { scoped, items, lead, shownDesigns, shownSystems, counts } = libraryItems({ designs: all, systems: systemList, scope: effective, folders: folderList, designsRoot: root, filters, sort, manual: manualProjects });
-    tabsHandle.update({ items: LIST_TABS.map(({ id, label: tabLabel }) => ({ id, label: tabLabel, count: counts[id] })) });
-    // Below 380 px the counts leave the tabs (CSS) so four fit; each tab keeps its count in its accessible name.
+    const { scoped, items, shownDesigns, counts } = libraryItems({ designs: all, systems: systemList, scope: effective, folders: folderList, designsRoot: root, filters, sort, manual: manualProjects, surface: 'rail' });
+    tabsHandle.update({ items: RAIL_TABS.map(({ id, label: tabLabel }) => ({ id, label: tabLabel, count: counts[id] })) });
+    // Below 380 px the counts leave the tabs (CSS); each tab keeps its count in its accessible name. They count designs only.
     for (const tabButton of tabsHost.querySelectorAll<HTMLElement>('[role=tab]')) {
-      const entry = LIST_TABS.find((item) => item.id === tabButton.dataset.id);
+      const entry = RAIL_TABS.find((item) => item.id === tabButton.dataset.id);
       if (entry) tabButton.setAttribute('aria-label', `${entry.label}, ${counts[entry.id]}`);
     }
-    const empty = emptyStateOf({ all, scoped, shown: shownDesigns, shownSystems, scope: effective, scopeLabel: label, folderName: folder?.name ?? null, filters, systems: systemList, systemsFailed, draggable: false });
+    const empty = emptyStateOf({ all, scoped, shown: shownDesigns, scope: effective, scopeLabel: label, folderName: folder?.name ?? null, filters, systems: systemList, systemsFailed, draggable: false, surface: 'rail' });
     if (empty) {
       const wrap = h('div');
       mountLibraryEmpty(wrap, empty, {
@@ -399,23 +425,8 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
       list.append(h('li', { class: 'dc-list-message' }, wrap));
     } else {
       const rowView: DesignRowView = { scope: effective, groups, root, manual: manualProjects, menu: { folder: null, project: null } };
-      const open = (id: string): void => options.actions.onOpenSystem?.(id);
-      const systemActions = { onOpen: open, onPreview: (id: string) => options.actions.onOpenSystem?.(id, 'preview') };
-      list.append(
-        ...items.map((item) =>
-          item.kind === 'system'
-            ? mountSystemRow(item.system, {
-                variant: 'library',
-                label: projectLabel,
-                onOpen: open,
-                onShowDesigns: filterBySystem,
-                entries: () => librarySystemMenu(item.system),
-                onMenu: (id) => void runLibrarySystemAction(id as LibrarySystemMenuId, item.system, systemActions),
-              })
-            : mountDesignRow(item.design, { variant: 'rail', view: { ...rowView, menu: menuFor(item.design) }, actions: options.actions, onOpen: options.onOpen, thumbs, swatchOf: swatches }),
-        ),
-      );
-      if (lead !== null) list.querySelector(`[data-id="${CSS.escape(lead.id)}"]`)?.setAttribute('data-lead', 'true');
+      // The rail lists designs only: a system is reached through its chip on a row, the entry under the list or the header icon.
+      list.append(...items.flatMap((item) => (item.kind === 'design' ? [mountDesignRow(item.design, { variant: 'rail', view: { ...rowView, menu: menuFor(item.design) }, actions: options.actions, onOpen: options.onOpen, thumbs, swatchOf: swatches })] : [])));
     }
     const live = new Set(all.map((design) => design.slug));
     for (const [slug, handle] of thumbs) {
@@ -470,10 +481,10 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     focusRow: (slug) => {
       list.querySelector<HTMLElement>(`[data-slug="${CSS.escape(slug)}"] .dc-row-main`)?.focus();
     },
-    focusSystems: () => systemsButton.focus(),
+    focusSystems: () => (systemsOpener === 'foot' ? foot : systemsButton).focus(),
     focusSystemEntry: (id) => {
       const escaped = CSS.escape(id);
-      (list.querySelector<HTMLElement>(`[data-id="${escaped}"] .dc-sys-main, .dc-design-system-chip[data-system-id="${escaped}"]`) ?? systemsButton).focus();
+      (list.querySelector<HTMLElement>(`[data-id="${escaped}"] .dc-sys-main, .dc-design-system-chip[data-system-id="${escaped}"]`) ?? (systemsOpener === 'foot' ? foot : systemsButton)).focus();
     },
     filterBySystem,
     dispose: () => {

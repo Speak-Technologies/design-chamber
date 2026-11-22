@@ -19,6 +19,23 @@ export const LIST_TABS: ReadonlyArray<{ id: ListTab; label: string }> = [
 /** The design kinds' counts; the Systems tab is counted by `libraryItems`. */
 export type DesignTabCounts = Record<Exclude<ListTab, 'system'>, number>;
 
+/**
+ * The rail's three kind tabs: designs only. Systems reach the rail through a pinned entry under the list and the
+ * header icon, never as a tab or as rows among the designs; the page keeps all four (approved canvas, DESIGN.md
+ * "The rail represents systems two ways").
+ */
+export const RAIL_TABS: ReadonlyArray<{ id: Exclude<ListTab, 'system'>; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'canvas', label: 'Canvases' },
+  { id: 'page', label: 'Pages' },
+];
+
+/** The rail's pinned entry under the designs list: the accessible name says how many systems there are and what the entry does; unknown while they load or failed to load. */
+export const systemsEntryLabel = (count: number | null): string => (count === null ? 'Design systems. Show them' : `Design systems, ${count}. Show them`);
+
+/** Which surface a library view is for: the page mixes systems into All and counts them; the rail lists designs only. */
+export type LibrarySurface = 'rail' | 'page';
+
 export const LIST_SORTS: ReadonlyArray<{ id: ListSort; label: string }> = [
   { id: 'updated', label: 'Updated' },
   { id: 'created', label: 'Created' },
@@ -453,10 +470,12 @@ export const libraryDesigns = (
 
 // ---- Systems as library items (Phase 2.6 L1b, §6.4, §20) ----
 //
-// A system is a library item next to the designs: it mixes into the All tab by the chosen sort, the
-// Systems tab shows systems only, and the other two tabs show designs only. The System filter keeps
-// only that system (None keeps none) and the system leads the All tab. The All count includes the
+// On the page a system is a library item next to the designs: it mixes into the All tab by the chosen
+// sort, the Systems tab shows systems only, and the other two tabs show designs only. The System filter
+// keeps only that system (None keeps none) and the system leads the All tab. The All count includes the
 // systems; the sidebar's design counts stay designs-only.
+// The rail is the asymmetric one (owner decision 2026-11-22): three tabs, designs only, and an All count
+// that counts designs only. The rail reaches systems through its own list (a pinned entry, the header icon).
 
 export type LibraryItem = { kind: 'design'; design: DesignSummary } | { kind: 'system'; system: SystemSummary };
 
@@ -511,8 +530,13 @@ export const libraryItems = (input: {
   sort: ListSort;
   /** The registry's manual project members: a project scope lists them with the designs made for it. */
   manual?: ManualProjects;
+  /** `rail`: designs only, no system rows, counts that leave the systems out. Default `page`. */
+  surface?: LibrarySurface;
 }): LibraryContents => {
-  const { filters, sort } = input;
+  const { sort } = input;
+  const rail = input.surface === 'rail';
+  // The rail has no Systems tab; a stale one reads as All.
+  const filters: LibraryFilters = rail && input.filters.tab === 'system' ? { ...input.filters, tab: 'all' } : input.filters;
   const scoped = scopeDesigns(input.designs, input.scope, input.folders, input.designsRoot, input.manual ?? []);
   const scopedSystems = scopeSystems(input.systems, input.scope);
   const designCounts = tabCounts(
@@ -520,9 +544,9 @@ export const libraryItems = (input: {
     filters.query,
   );
   const systemsFound = scopedSystems.filter((system) => matchesSystemFilter(system, filters.system) && matchesSystemQuery(system, filters.query));
-  const counts: Record<ListTab, number> = { all: designCounts.all + systemsFound.length, canvas: designCounts.canvas, page: designCounts.page, system: systemsFound.length };
+  const counts: Record<ListTab, number> = { all: designCounts.all + (rail ? 0 : systemsFound.length), canvas: designCounts.canvas, page: designCounts.page, system: systemsFound.length };
   const shownDesigns = filters.tab === 'system' ? [] : sortDesigns(filterDesigns(scoped.filter((design) => matchesSystem(design, filters.system)), filters.query, filters.tab), sort);
-  const shownSystems = filters.tab === 'all' || filters.tab === 'system' ? systemsFound : [];
+  const shownSystems = !rail && (filters.tab === 'all' || filters.tab === 'system') ? systemsFound : [];
   const lead = filters.tab === 'all' && filters.system.kind === 'system' ? shownSystems[0] ?? null : null;
   const rest: LibraryItem[] = [
     ...shownDesigns.map((design): LibraryItem => ({ kind: 'design', design })),
@@ -595,6 +619,8 @@ export const emptyStateOf = (input: {
   /** The systems list did not load: the Systems tab says so instead of "none yet". */
   systemsFailed?: boolean;
   draggable: boolean;
+  /** `rail`: designs only, so having systems does not make an empty All tab a "no matches". Default `page`. */
+  surface?: LibrarySurface;
 }): LibraryEmpty | null => {
   if (input.shown.length + (input.shownSystems?.length ?? 0) > 0) return null;
   if (input.filters.tab === 'system') {
@@ -602,7 +628,7 @@ export const emptyStateOf = (input: {
     if (input.scope.kind === 'folder') return { kind: 'folder-no-systems', title: FOLDER_NO_SYSTEMS_TITLE, body: FOLDER_NO_SYSTEMS_BODY, action: 'show-all', actionLabel: 'Show all systems', chips: [] };
     if (input.systems.length === 0) return { kind: 'no-systems', title: NO_SYSTEMS_TITLE, body: NO_SYSTEMS_BODY, action: 'new-system', actionLabel: 'New design system…', chips: [] };
   }
-  if (input.all.length === 0 && (input.filters.tab !== 'all' || input.systems.length === 0)) {
+  if (input.all.length === 0 && (input.filters.tab !== 'all' || input.systems.length === 0 || input.surface === 'rail')) {
     return {
       kind: 'no-designs',
       title: 'No designs yet',
