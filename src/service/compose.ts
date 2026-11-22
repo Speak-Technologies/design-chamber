@@ -266,7 +266,7 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   registerDesignSystemRoutes(router, ctx);
   registerFoldersRoutes(router, ctx);
   registerSystemBuildRoutes(router, ctx);
-  // Phase 2.6 T0 stubs (§4.7): F1 and E1 replace these registrations in their own files.
+  // Phase 2.6 routes: POST /memberships (folders.ts, AD-2) and POST /systems/register (systems/register.ts, AD-10).
   registerMembershipsRoutes(router, ctx);
   registerSystemRegisterRoutes(router, ctx);
 

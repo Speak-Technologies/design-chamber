@@ -93,3 +93,11 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Why not fixed now:** older than this diff (before 859c051 the delete never folded case on any OS) and needs an unusual drive setup
 **Fix prompt:**
 > In `src/service/versions.ts` restore, decide `caseFolds` from the design folder itself rather than `foldsCase()`: probe once per restore (for example `stat` the design folder path with its last segment's letter case swapped and compare `ino`/`dev` with the real folder, falling back to `foldsCase()` when the name has no letters or the probe errors). Pass that to `relsToRemoveOnRestore`. Make the probe a small named function in `src/service/paths.ts` with an injectable `stat` so it is unit-testable on Linux (fake a case-insensitive answer). Add a versions test using the fake that proves the re-cased file survives a restore on a "case-insensitive" Linux folder; mutation-check by forcing the probe to `false`. Run `npm run check`.
+
+### KI-29 — Downgrading to 0.4.0 drops manual project members on its next write
+🟣 Minor · found 2026-11-22 · `src/service/folders.ts` (registry schema `design-chamber/folders@1`, additive `projects[]`) · owner: deliberate, no fix planned
+**What:** 0.4.0 reads `folders.json` without the `projects[]` key and writes the file back without it, so manual project members filed in 0.5.0 are lost on the older version's next registry write. Folders and their members are untouched.
+**Who:** a user who downgrades the extension after filing designs under projects · **Seen:** the designs leave the project groups (they stay in All designs and in any folders)
+**Happens:** downgrade, then any folder create/rename/delete/membership change on 0.4.0 · **Effect:** manual project filing is gone; derived project grouping still works
+**Why not fixed now:** intended additive-schema behaviour (P26 R-3); the older version cannot know about a key it never had. Documented in `docs/SPEC.md` §6.9 and the technical spec §8.
+**Fix prompt:** none. Re-file the designs under their projects after upgrading again; the picker lists projects and folders for exactly this.
