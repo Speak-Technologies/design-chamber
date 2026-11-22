@@ -1276,6 +1276,11 @@ The mockup canvas `Designs/phase-2-6-library-ui` (dc check: 0 errors, 0 warnings
    The Systems tab shows systems only. Counts follow the mockup: header "24 designs and 4 systems", the All
    tab count includes systems, sidebar design counts stay designs-only.
 4. §19 calls 1, 3 and 4 are adopted as written.
+5. **Rail representation (owner, 2026-11-22, after the Qwen4-max xhigh review):** the rail follows the
+   approved canvas, not AD-14's prose: three kind tabs, All counts designs only, no system rows mixed
+   in; systems are reached by the pinned "Design systems, N. Show them" foot entry and the header icon.
+   The page keeps four tabs with system tiles mixed into All and inclusive counts. The canvas rail
+   screens are the authority for the rail; the page screens for the page.
 The canvas is the visual authority for presentation; where this spec's prose differs, the canvas wins.
 
 ---
