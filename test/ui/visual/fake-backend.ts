@@ -489,7 +489,7 @@ export const createFakeBackend = (): FakeBackend => {
 
   const missingProjects = new Set<string>();
   const folderBook: FakeFolders = createFakeFolders({ emit: (slug, kind) => emit(slug, kind), exists: (slug) => db.has(slug) });
-  const systemBook: FakeSystems = createFakeSystems({ emit: (slug, kind) => emit(slug, kind) });
+  const systemBook: FakeSystems = createFakeSystems({ emit: (slug, kind) => emit(slug, kind), visible: rootVisible });
   const designSystem: FakeDesignSystem = createFakeDesignSystem({
     emit: (slug, kind, files) => emit(slug, kind, files),
     rows: () => systemBook.hooks.current(),

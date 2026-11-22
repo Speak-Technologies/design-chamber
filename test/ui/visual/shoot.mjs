@@ -599,6 +599,8 @@ const emptyAndErrors = async () => {
   await listReady(p);
   await p.click('.dc-rail-head .dc-iconbtn[aria-label="Settings"]');
   await p.waitFor('return !!doc.querySelector(".dc-settings input")', 'settings');
+  // The settings answer repaints the field when it lands; typing before that loses the text to the repaint.
+  await p.settle(400);
   await p.type('.dc-settings input', 'relative/folder');
   await p.click('.dc-settings .oc-sdk-btn', { text: 'Apply folder' });
   await checkSoon(() => p.guest('return !!doc.querySelector(".dc-settings .oc-sdk-field-note")?.textContent?.includes("full path")'), `${tag}: invalid folder says what to do`);

@@ -533,7 +533,7 @@ export type FakeSystems = {
   };
 };
 
-export const createFakeSystems = (deps: { emit: (slug: string | null, kind: ChangeEvent['kind']) => void }): FakeSystems => {
+export const createFakeSystems = (deps: { emit: (slug: string | null, kind: ChangeEvent['kind']) => void; /** Systems live under the designs root: a foreign root has none of them (the rows stay, so switching back restores them). */ visible?: () => boolean }): FakeSystems => {
   let rows: SystemSummary[] = sampleSystems();
   let failing = false;
   let promptFailure: string | null = null;
@@ -625,6 +625,8 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
     if (!row) throw new ServiceError('not-found', 'That design system is no longer in your Designs folder.');
     return row;
   };
+  /** The service reads `_systems/` under the current root; the fake keeps its rows but hides them on a foreign root. */
+  const inThisRoot = (): boolean => deps.visible === undefined || deps.visible();
   const checkName = (raw: string, ignore: string | null): string => {
     const name = raw.normalize('NFKC').trim();
     if (name === '') throw new ServiceError('bad-request', 'Give the design system a name.');
@@ -657,7 +659,8 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
       },
       'GET /systems': () => {
         if (failing) throw new ServiceError('internal', 'The design systems list could not be read.');
-        return { systems: rows.map((row) => ({ ...row })), total: rows.length, max: SYSTEMS_MAX };
+        const shown = inThisRoot() ? rows : [];
+        return { systems: shown.map((row) => ({ ...row })), total: shown.length, max: SYSTEMS_MAX };
       },
       'POST /systems': ({ body }) => {
         const name = checkName(body.name, null);
@@ -818,6 +821,7 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
       },
 
       'GET /systems/:id': ({ params }) => {
+        if (!inThisRoot()) throw new ServiceError('not-found', 'That design system is no longer in your Designs folder.');
         const row = find(params.id);
         if (detailFailing) throw new ServiceError('internal', 'The design system could not be read.');
         return structuredClone(detailFor(row));
