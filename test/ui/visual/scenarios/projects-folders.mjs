@@ -121,14 +121,16 @@ const pageFlow = async (h, width, theme) => {
   await p.hover('.dc-card[data-slug="northwind-pricing"]');
   await p.click('.dc-card[data-slug="northwind-pricing"] .dc-card-more');
   await p.click('.dc-popup [role="menuitem"]', { text: 'Add to folder' });
-  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog] .dc-folder-pick .oc-sdk-check")', 'the Add to folder dialog');
+  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog] .dc-pick .oc-sdk-check")', 'the Add to folder dialog');
   await p.settle(250);
-  h.check(await p.guest('const c = [...doc.querySelectorAll(".dc-folder-pick .oc-sdk-check")]; return c.length === 2 && c.every((n) => n.getAttribute("aria-checked") === "false")'), `${tag}: the dialog lists both folders, none ticked for this design`);
+  h.check(await p.guest('const s = [...doc.querySelectorAll(".dc-pick-section .dc-pick-title")].map((n) => n.textContent); return JSON.stringify(s) === JSON.stringify(["Projects","Folders"])'), `${tag}: the dialog lists Projects then Folders (Phase 2.6)`);
+  h.check(await p.guest('const f = [...doc.querySelectorAll(".dc-pick .oc-sdk-check")].filter((n) => n.closest("section").querySelector(".dc-pick-title").textContent === "Folders"); return f.length === 2 && f.every((n) => n.getAttribute("aria-checked") === "false")'), `${tag}: both folders listed, none ticked for this design`);
+  h.check(await p.guest('const p = doc.querySelector(".dc-pick .oc-sdk-check[aria-disabled=true]"); return !!p && p.getAttribute("aria-checked") === "true" && /Automatic/.test(p.textContent)'), `${tag}: the design's own project is ticked and locked, and says why`);
   await p.shot(`${tag}-4-add-to-folder`);
-  await p.click('.dc-folder-pick .oc-sdk-check', { text: 'Explorations' });
-  await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-folder-pick .oc-sdk-check")].find((n) => n.textContent.includes("Explorations"))?.getAttribute("aria-checked") === "true"'), `${tag}: ticking adds it at once`);
-  await p.click('.dc-folder-pick .oc-sdk-check', { text: 'Q4 launch' });
-  await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-folder-pick .oc-sdk-check")].every((n) => n.getAttribute("aria-checked") === "true")'), `${tag}: a design can sit in two folders`);
+  await p.click('.dc-pick .oc-sdk-check', { text: 'Explorations' });
+  await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-pick .oc-sdk-check")].find((n) => n.textContent.includes("Explorations"))?.getAttribute("aria-checked") === "true"'), `${tag}: ticking adds it at once`);
+  await p.click('.dc-pick .oc-sdk-check', { text: 'Q4 launch' });
+  await h.checkSoon(() => p.guest('const f = [...doc.querySelectorAll(".dc-pick-section")].find((s) => s.querySelector(".dc-pick-title").textContent === "Folders"); return [...f.querySelectorAll(".oc-sdk-check")].every((n) => n.getAttribute("aria-checked") === "true")'), `${tag}: a design can sit in two folders`);
   await p.click('.dc-sheet .oc-sdk-btn', { text: 'Done' });
   await p.settle(150);
 
@@ -162,19 +164,26 @@ const pageFlow = async (h, width, theme) => {
   h.check(await p.guest('return doc.querySelector(".dc-page-scope")?.textContent === "Ideas"'), `${tag}: the open view follows the new name`);
   await p.click('.dc-side-row[data-selected=true] .dc-iconbtn');
   await p.click('.dc-popup [role="menuitem"]', { text: 'Delete folder' });
+  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog]")', 'the delete confirm (Phase 2.6)');
+  h.check(await p.guest('const s = doc.querySelector(".dc-sheet"); return /Delete Ideas\\?/.test(s.querySelector(".dc-sheet-title").textContent) && /is empty\\. Deleting it changes nothing\\./.test(s.textContent)'), `${tag}: the confirm names the folder and says it is empty`);
+  await p.shot(`${tag}-6b-delete-confirm`);
+  await p.click('.dc-sheet .oc-sdk-btn', { text: 'Delete folder' });
   await p.waitFor('return !!doc.querySelector(".dc-undo-notice .oc-sdk-banner")', 'the Undo notice');
   await p.settle(250);
-  h.check(!(await p.guest('return !!doc.querySelector(".dc-sheet[data-variant=dialog]")')), `${tag}: deleting a folder asks nothing first`);
-  h.check(await p.guest('const n = doc.querySelector(".dc-undo-notice"); return /Deleted folder Ideas\\./.test(n.textContent) && /It was empty/.test(n.textContent) && /Undo/.test(n.textContent) && n.getAttribute("aria-live") === "polite"'), `${tag}: the notice says what was deleted and offers Undo (live region)`);
+  h.check(!(await p.guest('return !!doc.querySelector(".dc-sheet[data-variant=dialog]")')), `${tag}: the confirm closes once the folder is gone`);
+  h.check(await p.guest('const n = doc.querySelector(".dc-undo-notice"); return /Deleted Ideas\\./.test(n.textContent) && /It was empty/.test(n.textContent) && /Undo/.test(n.textContent) && n.getAttribute("aria-live") === "polite"'), `${tag}: the notice says what was deleted and offers Undo (live region)`);
   h.check(await p.guest('return doc.querySelector(".dc-page-scope")?.hidden === true'), `${tag}: the view falls back to All designs`);
   await p.shot(`${tag}-7-deleted-undo`);
   await p.click('.dc-undo-notice .oc-sdk-btn', { text: 'Undo' });
   await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-side-label")].some((n) => n.textContent === "Ideas") && !doc.querySelector(".dc-undo-notice .oc-sdk-banner")'), `${tag}: Undo brings the folder back`);
 
-  // A folder with designs: the notice counts them and every design stays listed. (Undo returned the view to Ideas; go back to All designs.)
+  // A folder with designs: the confirm names what stays, the notice counts them and every design stays listed. (Undo returned the view to Ideas; go back to All designs.)
   await p.click('.dc-side-main', { text: 'All designs' });
   await p.click(`.dc-side-row[data-scope="${folderScope}"] .dc-iconbtn`);
   await p.click('.dc-popup [role="menuitem"]', { text: 'Delete folder' });
+  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog]")', 'the delete confirm');
+  h.check(await p.guest('return /1 design is in Q4 launch\\. 1 of them is in no other folder; it stays in All designs\\./.test(doc.querySelector(".dc-sheet").textContent) && /Deleting a folder never deletes designs\\./.test(doc.querySelector(".dc-sheet").textContent)'), `${tag}: the confirm names the one design that loses its last folder, with the promise`);
+  await p.click('.dc-sheet .oc-sdk-btn', { text: 'Delete folder' });
   await p.waitFor('return !!doc.querySelector(".dc-undo-notice .oc-sdk-banner")', 'the Undo notice');
   h.check(await p.guest('return /Its design is still in All designs\\./.test(doc.querySelector(".dc-undo-notice").textContent)'), `${tag}: the notice counts the designs that stay`);
   h.check((await p.guest('return doc.querySelectorAll(".dc-card[data-slug]").length')) === 6, `${tag}: every design is still listed`);
@@ -282,16 +291,18 @@ const railFlow = async (h, width, theme, full) => {
   await p.hover('.dc-row[data-slug="coffee-subscription"]');
   await p.click('.dc-row[data-slug="coffee-subscription"] .dc-iconbtn');
   await p.click('.dc-popup [role="menuitem"]', { text: 'Add to folder' });
-  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog] .dc-folder-new-field input")', 'the Add to folder dialog with the name field (no folders yet)');
+  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog] .dc-pick-new-field input")', 'the Add to folder dialog with the name field (no folders yet)');
   await p.settle(200);
-  h.check(await p.guest('return /No folders yet/.test(doc.querySelector(".dc-folder-pick").textContent)'), `${tag}: with no folders the dialog says so and asks for a name`);
+  h.check(await p.guest('return /No folders yet/.test(doc.querySelector(".dc-pick").textContent)'), `${tag}: with no folders the dialog says so and asks for a name`);
+  h.check(await p.guest('return /Automatic/.test(doc.querySelector(".dc-pick").textContent) && !!doc.querySelector(".dc-pick .oc-sdk-check[aria-disabled=true]")'), `${tag}: the project the design was made for is listed, ticked and locked`);
   await p.shot(`${tag}-4-add-first-folder`);
-  await p.type('.dc-folder-new-field input', 'a\tb');
+  await p.type('.dc-pick-new-field input', 'a\tb');
   await p.click('.dc-sheet .oc-sdk-btn', { text: 'Create and add' });
-  await h.checkSoon(() => p.guest('return doc.querySelector(".dc-folder-new-field")?.textContent.includes("line breaks or tabs")'), `${tag}: a tab in the name is refused next to the field`);
-  await p.type('.dc-folder-new-field input', 'Q4 launch');
+  await h.checkSoon(() => p.guest('return doc.querySelector(".dc-pick-new-field")?.textContent.includes("line breaks or tabs")'), `${tag}: a tab in the name is refused next to the field`);
+  await p.type('.dc-pick-new-field input', 'Q4 launch');
   await p.click('.dc-sheet .oc-sdk-btn', { text: 'Create and add' });
-  await h.checkSoon(() => p.guest('const c = doc.querySelector(".dc-folder-pick .oc-sdk-check"); return c?.getAttribute("aria-checked") === "true" && c.textContent.includes("Q4 launch")'), `${tag}: Create and add makes the folder and ticks it`);
+  await h.checkSoon(() => p.guest('const c = [...doc.querySelectorAll(".dc-pick .oc-sdk-check")].find((n) => n.textContent.includes("Q4 launch")); return c?.getAttribute("aria-checked") === "true"'), `${tag}: Create and add makes the folder and ticks it`);
+  await h.checkSoon(() => p.guest('return /Added to Q4 launch\\./.test(doc.querySelector(".dc-pick-status")?.textContent ?? "")'), `${tag}: the status line says what happened`);
   await p.shot(`${tag}-5-added`);
   await p.click('.dc-sheet .oc-sdk-btn', { text: 'Done' });
   await p.settle(150);
@@ -317,9 +328,12 @@ const railFlow = async (h, width, theme, full) => {
 
   await p.click('.dc-rail-show .dc-iconbtn');
   await p.click('.dc-popup [role="menuitem"]', { text: 'Delete folder' });
+  await p.waitFor('return !!doc.querySelector(".dc-sheet[data-variant=dialog]")', 'the delete confirm');
+  h.check(await p.guest('return /Delete Q4 push\\?/.test(doc.querySelector(".dc-sheet-title").textContent) && /Deleting a folder never deletes designs\\./.test(doc.querySelector(".dc-sheet").textContent)'), `${tag}: the confirm names the folder and the promise`);
+  await p.click('.dc-sheet .oc-sdk-btn', { text: 'Delete folder' });
   await p.waitFor('return !!doc.querySelector(".dc-undo-notice .oc-sdk-banner")', 'the Undo notice');
   await p.settle(250);
-  h.check(await p.guest('return /Deleted folder Q4 push\\./.test(doc.querySelector(".dc-undo-notice").textContent) && /still in All designs/.test(doc.querySelector(".dc-undo-notice").textContent)'), `${tag}: delete says what stays, with Undo`);
+  h.check(await p.guest('return /Deleted Q4 push\\./.test(doc.querySelector(".dc-undo-notice").textContent) && /still in All designs/.test(doc.querySelector(".dc-undo-notice").textContent)'), `${tag}: delete says what stays, with Undo`);
   h.check((await gridSlugs(p)).length === 6, `${tag}: back on All designs with every design listed`);
   await p.shot(`${tag}-7-deleted-undo`);
   await p.click('.dc-undo-notice .oc-sdk-btn', { text: 'Undo' });

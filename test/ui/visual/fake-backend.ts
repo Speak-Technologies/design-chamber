@@ -615,6 +615,20 @@ export const createFakeBackend = (): FakeBackend => {
       emit(unique, 'added');
       return { slug: unique, path: `${root}\\${unique}`, design };
     },
+    // ---- Phase 2.6 F2: the New dialog's chip, with filing (AD-5). The design is made first; a
+    // filing failure answers per-target results and never fails the chip. F1 owns the real route. ----
+    'POST /chip': ({ body }) => {
+      const title = body.brief.trim() === '' ? 'Untitled design' : body.brief.trim().slice(0, 60);
+      const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'design';
+      const unique = db.has(slug) ? `${slug}-${(nextId += 1)}` : slug;
+      const design = baseDesign({ kind: body.kind, title, brief: body.brief, projectDirectory: body.projectDirectory ?? null, sessionId: body.sessionId ?? null, preset: body.preset ?? null, created: new Date().toISOString(), updated: new Date().toISOString() });
+      db.set(unique, { design, palette: SLATE, thumb: 'pending', written: new Set(), external: [], blocked: [], rev: 1, versions: [], dirty: false });
+      emit(unique, 'added');
+      const chip: DesignChip = { providerId: CHIP_PROVIDER_ID, id: `design:${unique}`, title, url: `file:///designs/${unique}`, text: 'Continue this design.', data: { slug: unique, kind: body.kind } };
+      const filing = folderBook.fileDesign(unique, body.filing);
+      return filing === undefined ? { slug: unique, chip } : { slug: unique, chip, filing };
+    },
+    // ---- end Phase 2.6 F2 ----
     'GET /designs/:slug': ({ params }) => detail(params.slug ?? '', get(params.slug)),
     'PATCH /designs/:slug': ({ params, body }) => {
       const rec = get(params.slug);

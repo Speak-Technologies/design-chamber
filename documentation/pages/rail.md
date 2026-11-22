@@ -3,7 +3,7 @@
 **Route:** the Design Chamber icon in OpenChamber's rail (`panel` surface), the designs list · **Access:** every OpenChamber user
 **Purpose:** The same two groupings as the [library](library.md) (projects from the project folder each design was made for, and your own folders), in one select, because the rail has no room for a sidebar. The rest of the rail is in the [rail panel](rail-panel.md). Nothing here moves a design on disk.
 
-Screenshots: `documentation/pages/img/folders-rail-<width>-<theme>-*.png`, from `test/ui/visual/scenarios/projects-folders.mjs`.
+Screenshots: `documentation/pages/img/folders-rail-<width>-<theme>-*.png` and `folder-picker-rail-*.png`, from `test/ui/visual/scenarios/projects-folders.mjs` and `folder-picker.mjs`.
 
 ## Show
 
@@ -15,9 +15,9 @@ Screenshots: `documentation/pages/img/folders-rail-<width>-<theme>-*.png`, from 
 
 ## Folders in the rail
 
-- A row's ⋯ menu gains **Add to folder…** ([empty start](img/folders-rail-320-dark-4-add-first-folder.png) · [after creating](img/folders-rail-320-dark-5-added.png)): a ticked list, ticking adds or removes at once, and a name field with **Create and add** (also the only field when there are no folders yet). Inside a folder the menu also offers **Remove from <folder>**.
-- In a folder view a **Folder actions** button appears next to the select ([folder view](img/folders-rail-320-dark-6-folder.png)): **Rename folder** (a small dialog, the text kept on an error) and **Delete folder** (no confirm; a notice with **Undo** for 10 seconds, [notice](img/folders-rail-480-light-7-deleted-undo.png)). There is nothing to drag onto in the rail, so an empty folder says "Use Add to folder in a design’s menu."
-- Name rules and sentences are the library's: 1 to 40 characters, no line breaks or tabs, unique ignoring case, at most 50 folders.
+- A row's ⋯ menu gains **Add to folder…** ([empty start](img/folders-rail-320-dark-4-add-first-folder.png) · [after creating](img/folders-rail-320-dark-5-added.png) · [with folders and projects](img/folder-picker-rail-320-dark-1-add-dialog.png)): the same picker as the library, projects first (the design's own project ticked and locked, manual ones "Added by you"), then folders, ticking adds or removes at once, search past eight targets, and a name field with **Create and add** (also the only field when there are no folders yet). Inside a folder the menu also offers **Move to folder…** (one pick, then a notice with **Undo**) and **Remove from <folder>**; the same Move and Remove appear for a design filed under a project by hand.
+- In a folder view a **Folder actions** button appears next to the select ([folder view](img/folders-rail-320-dark-6-folder.png)): **Rename folder** (a small dialog, the text kept on an error) and **Delete folder**, which asks first: the confirm names the designs that stay and promises "Deleting a folder never deletes designs.", then a notice with **Undo** for 10 seconds ([notice](img/folders-rail-480-light-7-deleted-undo.png)). There is nothing to drag onto in the rail, so an empty folder says "Use Add to folder in a design’s menu."
+- Name rules and sentences are the library's: 1 to 40 characters, no line breaks or tabs, unique ignoring case, at most 50 folders. Filing a new design from the rail's New dialog uses the same **Folder or project** field as the library ([480 light](img/folder-picker-rail-480-light-2-new-field.png)); a filing refusal never blocks the design and offers **Try again**.
 
 ## States
 

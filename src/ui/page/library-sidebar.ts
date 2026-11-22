@@ -1,10 +1,10 @@
 // The page library's left sidebar (Phase 2.5 G1): All designs, Projects, No project and the user's Folders.
 // One row is selected and filters the grid. Folder rows are drop targets for a dragged card, rename inline,
-// and open a menu with Rename and Delete folder (no confirm: the designs stay, and a notice offers Undo).
+// and open a menu with Rename, New folder… and Delete folder (a confirm names what stays, then Undo).
 // Everything it draws comes in through `paint`; it never reads the store itself.
 
 import type { FolderView } from '../../shared/api.ts';
-import { DESIGN_DRAG_TYPE } from '../components/folder-actions.ts';
+import { DESIGN_DRAG_TYPE, openNewFolder } from '../components/folder-actions.ts';
 import { h } from '../components/dom.ts';
 import { icon, type IconName } from '../components/icons.ts';
 import { attachMenu, btn, iconBtn } from '../components/kit.ts';
@@ -150,6 +150,7 @@ export const mountSidebar = (options: SidebarOptions): SidebarHandle => {
       more,
       () => [
         { id: 'rename', label: 'Rename' },
+        { id: 'new-folder', label: 'New folder…' },
         { separator: true },
         { id: 'delete', label: 'Delete folder', destructive: true },
       ],
@@ -157,7 +158,8 @@ export const mountSidebar = (options: SidebarOptions): SidebarHandle => {
         if (id === 'rename') {
           renaming = { id: folder.id, draft: folder.name, error: null, busy: false };
           paint(current, true);
-        } else options.onDelete(folder);
+        } else if (id === 'new-folder') openNewFolder(el.closest<HTMLElement>('.dc-app') ?? document.body);
+        else options.onDelete(folder);
       },
     );
     row.append(more);

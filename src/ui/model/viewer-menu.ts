@@ -29,6 +29,7 @@ export type ViewerMenuInput = {
 };
 
 const reveal: MenuEntry = { id: 'reveal', label: 'Reveal in folder' };
+const addToFolder: MenuEntry = { id: 'add-to-folder', label: 'Add to folder…' };
 const copyPath: MenuEntry = { id: 'path', label: 'Copy path' };
 const rename: MenuEntry = { id: 'rename', label: 'Rename' };
 const remove: MenuEntry = { id: 'delete', label: 'Delete…', destructive: true };
@@ -41,7 +42,7 @@ const clearPageData = (state: PageDataEntry | undefined): MenuEntry[] =>
     : [];
 
 /** Design-level entries every viewer shows. */
-const baseEntries = (pageData: PageDataEntry | undefined): MenuEntry[] => [reveal, copyPath, ...clearPageData(pageData), rename, { separator: true }, remove];
+const baseEntries = (pageData: PageDataEntry | undefined): MenuEntry[] => [addToFolder, reveal, copyPath, ...clearPageData(pageData), rename, { separator: true }, remove];
 
 export const viewerMenuEntries = (input: ViewerMenuInput): MenuEntry[] => {
   // A design with no knobs gets one way to ask for some, right after the chat link in the rail and first on the page.
@@ -56,6 +57,7 @@ export const viewerMenuEntries = (input: ViewerMenuInput): MenuEntry[] => {
       { id: 'html', label: input.isPage ? 'Export single-file HTML' : 'Export screen as HTML…' },
       ...(input.isPage ? [{ id: 'copy-html', label: 'Copy HTML', disabled: input.copyHtmlTooLarge, hint: input.copyHtmlTooLarge ? 'too large' : undefined } satisfies MenuEntry] : []),
       copyPath,
+      addToFolder,
       reveal,
       ...clearPageData(input.pageData),
       rename,

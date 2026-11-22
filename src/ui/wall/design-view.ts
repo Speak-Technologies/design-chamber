@@ -9,6 +9,7 @@ import { HOST_CLIPBOARD_MAX, PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.t
 import { confirmDelete, continueInChat, copyHtml, copyPath, exportDesign, renameDesign, renameDialog, reveal, revealDesign, toast, type ActionContext } from '../components/actions.ts';
 import { mountComments, type CommentsHandle } from '../components/comments-drawer.ts';
 import { createScope, debounce, errorText, h, replace } from '../components/dom.ts';
+import { openAddToFolder } from '../components/folder-actions.ts';
 import { createNotices } from '../components/notices.ts';
 import { sendOneComment } from '../components/send-comments.ts';
 import { trackBottomSheet } from '../components/bottom-sheet.ts';
@@ -383,6 +384,9 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
           return;
         case 'path':
           void copyPath(slug);
+          return;
+        case 'add-to-folder':
+          openAddToFolder(options.actions.host, ref());
           return;
         case 'reveal':
           void revealDesign(slug);

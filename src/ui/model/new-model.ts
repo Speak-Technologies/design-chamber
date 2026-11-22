@@ -94,3 +94,8 @@ export const systemFieldOf = (input: SystemFieldInput, chosen: string | null, fo
 };
 
 export const NO_SYSTEMS_LINE = 'No design systems yet.';
+
+// ---------------------------------------------------------------- the Folder or project field (Phase 2.6 F2)
+
+export const FOLDER_FIELD_LABEL = 'Folder or project';
+export const FOLDER_FIELD_HELPER = 'Optional. Pick where this design belongs; you can change it later.';

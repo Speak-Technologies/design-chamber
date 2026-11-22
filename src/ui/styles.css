@@ -5272,3 +5272,303 @@ button.dc-sp-value:focus-visible {
   align-items: center;
   padding-left: 0;
 }
+
+/* ===== Phase 2.6 F2: the shared folder picker, Move, the delete confirm, filing notices ===== */
+/* The Add to folder dialog, the New dialog's Folder or project field and Move share one picker.
+   Host tokens only; a locked row says why in words, a count is never the only signal. */
+
+.dc-pick {
+  --dc-pick-row-h: 2.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  max-height: calc(var(--dc-pick-rows, 6) * var(--dc-pick-row-h));
+  overflow: auto;
+  min-width: 0;
+}
+.dc-pick-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s1);
+  min-width: 0;
+}
+.dc-pick-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--dc-s2);
+  padding: var(--dc-s1) var(--dc-s2) 0;
+}
+.dc-pick-title {
+  margin: 0;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.dc-pick-note {
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+.dc-pick-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dc-pick-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  padding: var(--dc-s1) var(--dc-s2);
+  border-radius: var(--dc-r);
+  transition: background 120ms ease-out;
+}
+.dc-pick-row:hover,
+.dc-pick-row:focus-within {
+  background: var(--oc-hover);
+}
+.dc-pick-row .oc-sdk-check {
+  flex: 1;
+  min-width: 0;
+}
+.dc-pick-row .oc-sdk-check-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-pick-row[data-locked='true'] .oc-sdk-check {
+  cursor: default;
+}
+.dc-pick-row > .dc-icon {
+  flex: none;
+  margin-top: 3px;
+  color: var(--oc-muted);
+}
+.dc-pick-count {
+  flex: none;
+  min-width: 2ch;
+  margin-top: 3px;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.dc-pick-message {
+  margin: var(--dc-s1) var(--dc-s2) 0;
+  font-size: 0.8125rem;
+}
+.dc-pick-skeleton {
+  padding: var(--dc-s1) var(--dc-s2);
+}
+.dc-pick-failure {
+  margin-top: var(--dc-s1);
+}
+
+/* Single mode (Move): the whole row is the action. */
+.dc-pick-row-btn {
+  padding: 0;
+}
+.dc-pick-btn {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  width: 100%;
+  padding: var(--dc-s1) var(--dc-s2);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-pick-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-pick-btn[aria-disabled='true'] {
+  cursor: default;
+}
+.dc-pick-btn > .dc-icon {
+  flex: none;
+  margin-top: 3px;
+  color: var(--oc-muted);
+}
+.dc-pick-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.dc-pick-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-pick-hint {
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+}
+.dc-pick-chev {
+  margin-top: 3px;
+  transform: rotate(-90deg);
+}
+
+/* The inline New folder field and its status line. */
+.dc-pick-new {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  margin-top: var(--dc-s1);
+}
+.dc-pick-new-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.dc-pick-status {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s1);
+  margin-top: var(--dc-s1);
+  color: var(--dc-success-text);
+  font-size: 0.8125rem;
+}
+.dc-pick-note-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s2);
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.dc-pick-note-line > .dc-icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* The New dialog's field: chips of the picks, then the combo, then the line that says where it goes. */
+.dc-pick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dc-s1);
+}
+.dc-pick-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--dc-s1);
+  max-width: 100%;
+  padding: 2px var(--dc-s2);
+  border: 1px solid var(--dc-hair);
+  border-radius: 999px;
+  background: var(--oc-elevated);
+  font-size: 0.75rem;
+}
+.dc-pick-chip > .dc-icon {
+  flex: none;
+  color: var(--oc-muted);
+}
+.dc-pick-chip[data-fixed='true'] {
+  color: var(--oc-muted);
+}
+.dc-pick-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-pick-chip-x {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--oc-muted);
+  cursor: pointer;
+}
+.dc-pick-chip-x:hover {
+  color: var(--oc-fg);
+  background: var(--oc-hover);
+}
+.dc-pick-chip-x:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-folder-note.dc-goes-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s1);
+  color: var(--oc-fg);
+}
+.dc-folder-note.dc-goes-line > .dc-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--oc-muted);
+}
+
+/* Move's foot note and the delete confirm's facts. */
+.dc-move-note {
+  margin-right: auto;
+  align-self: center;
+  font-size: 0.8125rem;
+}
+.dc-delete-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+}
+.dc-delete-facts strong {
+  font-weight: 600;
+}
+.dc-delete-promise {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--dc-s1);
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+}
+.dc-delete-promise > .dc-icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* After Start: a filing refusal never blocks the design; its notice offers Try again.
+   In flow above the view (never over a toolbar), so no control is hidden behind it. */
+.dc-filing-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  padding: var(--dc-s2) var(--dc-s2) 0;
+}
+.dc-filing-notices:empty {
+  display: none;
+}
+.dc-filing-notice {
+  position: relative;
+}
+.dc-filing-notice > .dc-iconbtn {
+  position: absolute;
+  top: var(--dc-s1);
+  right: var(--dc-s1);
+}
+.dc-filing-notice .oc-sdk-banner {
+  padding-right: var(--dc-s6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-pick-row {
+    transition: none;
+  }
+}
+/* ===== end Phase 2.6 F2 ===== */
