@@ -101,3 +101,12 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Happens:** downgrade, then any folder create/rename/delete/membership change on 0.4.0 · **Effect:** manual project filing is gone; derived project grouping still works
 **Why not fixed now:** intended additive-schema behaviour (P26 R-3); the older version cannot know about a key it never had. Documented in `docs/SPEC.md` §6.9 and the technical spec §8.
 **Fix prompt:** none. Re-file the designs under their projects after upgrading again; the picker lists projects and folders for exactly this.
+
+### KI-35 — Links in system notes on the board look clickable but only select the card
+🟣 Minor · found 2026-11-26 · `src/service/systems/markdown-html.ts:294` · `src/ui/systems/system-board.ts` (click overlay → `hit-test`) · owner: fullstack-developer
+**What:** the board now draws markdown links as underlined `<a>` elements, but the system board puts a click overlay over the frame that turns every click into an entry hit-test, and `system-board.ts` has no `open-external` handling. Clicking a link selects the note instead of opening anything.
+**Who:** end user reading a system's notes on the board · **Seen:** visible: an underlined link that does nothing when clicked
+**Happens:** any note or overview with a link, clicked · common · **Effect:** mild confusion; the address is still readable by hovering in the panel's raw text
+**Why not fixed now:** out of this diff's scope (the overlay predates it) and low impact
+**Fix prompt:**
+> In Design Chamber's system board, choose one: (a) make links work: when the board's hit-test lands on a `.dc-md-link`, ask the host to open http(s) and mailto addresses through the same external-open path designs use (`frame-messages.ts` `open-external`), and ignore relative ones; or (b) stop them looking clickable on the board by styling `.dc-md-link` there without the underline-as-affordance and adding the address after the label as the living page does. Add a test for the chosen behaviour (a view-model or generator test), and update `documentation/pages/design-systems.md`. Run `npm run check`.

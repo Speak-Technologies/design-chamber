@@ -80,9 +80,11 @@ const fieldEditor = (options: FieldOptions): HTMLElement => {
 
   const display = (): void => {
     root.replaceChildren();
+    // A multiline value (overview, notes) keeps its line breaks on show; the editor is a textarea already.
+    const pre = options.multiline ? ' dc-sp-value-pre' : '';
     if (options.lock !== null) {
       // A repo's values are read only and say so once, at the top of the panel: the empty lock is quiet (no sentence per value).
-      root.append(h('span', { class: `dc-sp-value dc-sp-value-locked${options.mono ? ' dc-mono' : ''}`, title: options.lock === '' ? null : options.lock }, shown ?? 'Not set'));
+      root.append(h('span', { class: `dc-sp-value dc-sp-value-locked${pre}${options.mono ? ' dc-mono' : ''}`, title: options.lock === '' ? null : options.lock }, shown ?? 'Not set'));
       if (options.lock !== '') root.append(h('span', { class: 'dc-sp-lock' }, options.lock));
       root.dataset.quiet = options.lock === '' ? 'true' : 'false';
       return;
@@ -91,7 +93,7 @@ const fieldEditor = (options: FieldOptions): HTMLElement => {
       'button',
       {
         type: 'button',
-        class: `dc-sp-value${options.mono ? ' dc-mono' : ''}`,
+        class: `dc-sp-value${pre}${options.mono ? ' dc-mono' : ''}`,
         'data-empty': shown === null || shown === '' ? 'true' : 'false',
         'data-focus-key': options.focusKey,
         'aria-label': `${options.label}: ${shown === null || shown === '' ? 'empty' : shown}. Edit`,

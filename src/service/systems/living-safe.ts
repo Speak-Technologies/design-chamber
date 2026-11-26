@@ -82,7 +82,8 @@ const ELEMENT_ATTRS: Readonly<Record<string, ReadonlySet<string>>> = {
   td: new Set(['colspan', 'rowspan', 'scope']),
 };
 
-const HREF = /^#[A-Za-z][A-Za-z0-9_-]{0,80}$/;
+/** The one href form a living page link may carry: a fragment of this page (also used by the markdown renderer). */
+export const LIVING_HREF = /^#[A-Za-z][A-Za-z0-9_-]{0,80}$/;
 const IMG_SRC = /^data:image\/(png|jpeg|gif|webp|svg\+xml);base64,[A-Za-z0-9+/]+={0,2}$/;
 const DIGITS = /^\d{1,6}$/;
 /** An attribute exactly as the generator writes it: a lower-case name, `=`, a double-quoted value. */
@@ -163,7 +164,7 @@ const tagReasons = (tag: Tag): string[] => {
       out.push(`a ${attr.name} attribute on <${name}>`);
       continue;
     }
-    if (name === 'a' && attr.name === 'href' && !HREF.test(attr.value)) out.push('a link that leaves the page');
+    if (name === 'a' && attr.name === 'href' && !LIVING_HREF.test(attr.value)) out.push('a link that leaves the page');
     if (name === 'img' && attr.name === 'src' && !IMG_SRC.test(attr.value)) out.push('a picture that is not embedded');
     if (name === 'img' && (attr.name === 'width' || attr.name === 'height') && !DIGITS.test(attr.value)) out.push(`an img ${attr.name} that is not a number`);
   }

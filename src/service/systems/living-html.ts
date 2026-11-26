@@ -17,6 +17,7 @@ import { darkVarOf, typeVarOf } from '../../shared/system-board.ts';
 import { AREA_OF_SECTION, SYSTEM_AREAS, SYSTEM_SECTIONS } from '../../shared/system-json.ts';
 import type { SystemArea, SystemComponent, SystemDetail, SystemSection } from '../../shared/types.ts';
 import { LIVING_VIEWPORT, livingCssProblems } from './living-safe.ts';
+import { markdownCss } from './markdown-html.ts';
 import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss } from './specimen-html.ts';
 
 /** The virtual entry the living page is bundled from (never a file on disk). */
@@ -371,7 +372,7 @@ export const buildLivingPage = (detail: SystemDetail, input: LivingPageInput): L
   // The body, with the board's entry marks, then the marks turned into ranges.
   const areas: string[] = [];
   for (const { area, sections } of AREA_SECTIONS) {
-    const rendered = sections.map((section) => renderSpecimenSection(shown, section, { unusable, styleClass, example: exampleFigures(input.examples ?? {}) })).join('\n');
+    const rendered = sections.map((section) => renderSpecimenSection(shown, section, { unusable, styleClass, markdown: 'living', example: exampleFigures(input.examples ?? {}) })).join('\n');
     areas.push(`<div class="lp-area" id="lp-area-${area}" role="group" aria-label="${escapeHtml(AREA_TITLES[area])}"><p class="lp-area-title" aria-hidden="true">${escapeHtml(AREA_TITLES[area])}</p>\n${rendered}\n</div>`);
   }
   const { text: body, marks } = stripEntryMarks(redact(areas.join('\n')));
@@ -382,7 +383,7 @@ export const buildLivingPage = (detail: SystemDetail, input: LivingPageInput): L
   const addCss = (text: string, where: string | null): void => {
     if (livingCssProblems(text).length === 0) cssLines.push({ text, where });
   };
-  addCss(FRAME_CSS, null);
+  addCss(`${FRAME_CSS}\n${markdownCss('living', 'light')}`, null);
   if (input.preview !== undefined) addCss(PREVIEW_CSS, null);
   // `specimenSystemCss` writes faces as relative URLs; the page writes its own, so every file is passed as unusable there.
   const systemCss = specimenSystemCss(detail, new Set(detail.fonts.map((font) => font.file)));

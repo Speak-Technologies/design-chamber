@@ -1397,7 +1397,7 @@ when it sees a `COPY.json` with `by: "agent"` newer than the one it last showed 
 **Extended (S8).** Step 1 reads `filesDir(id)` (the snapshot for a repo-backed system; a version's tree
 holds `snapshot/…`, so the FileSource is rooted at `snapshot/` inside it). The board groups sections under
 the four area headings (§2.11), draws Patterns & voice and Brand & marketing entries as escaped text cards
-(title, kind, note, body split into paragraphs; never markup), moves logos to Brand & marketing, and draws
+(title, kind, note, body rendered as markdown by `markdown-html.ts`: every text escaped, only the renderer's own markup, links limited to http(s), mailto and relative), moves logos to Brand & marketing, and draws
 "Not covered by this system." for an uncovered area. The section renderers that do not depend on the board
 script or the bridge (colours, type, spacing to sizes, logos, text cards) move into a shared pure
 `systems/specimen-html.ts` used by both `board-html.ts` and `living-html.ts` (§5.11), so the board and the
@@ -1591,9 +1591,12 @@ stages `living-page.html` (as below); `proposal` reads `_systems/<id>/proposal/`
       `fonts.css` (fonts always available here: the PNG never carries a font file, so licences don't apply to
       the picture) and sets `color-scheme`.
    2. Cache key = sha256(bundled example bytes, tokens.css bytes, fonts.css bytes, scheme,
-      `LIVING_EXAMPLE_WIDTH`, `LIVING_EXAMPLE_SCALE`, `LIVING_PAGE_GENERATOR_VERSION`). A hit reads
+      `LIVING_EXAMPLE_WIDTH`, `LIVING_EXAMPLE_SCALE`, `LIVING_EXAMPLE_GENERATOR_VERSION`). A hit reads
       `.chamber/living-examples/<key>.png` (checked with `pngSize`, `thumbnails.ts:125`, ≤
-      `LIVING_EXAMPLE_PNG_MAX_BYTES`); misses go to one browser.
+      `LIVING_EXAMPLE_PNG_MAX_BYTES`); misses go to one browser. Two generator constants, on purpose:
+      `LIVING_PAGE_GENERATOR_VERSION` keys the staged HTML (bump it when the page's markup changes, e.g.
+      markdown bodies), `LIVING_EXAMPLE_GENERATOR_VERSION` keys the PNG cache (bump it only when the
+      pictures' own inputs or rendering change). A page-generator bump must not re-render every picture.
    3. One CDP session for the whole batch (`openCdp` with `checkBrowserArgs`, the browser from `chrome.ts`
       `resolveBrowser`, the check engine's restart-once rule), concurrency 1, each shot ≤
       `LIVING_EXAMPLE_TIMEOUT_MS` (5 s), the batch ≤ `LIVING_EXAMPLES_BUDGET_MS` (60 s), abortable. Each document
@@ -2974,7 +2977,7 @@ versioned, exported, copied into a design or logged.
 | rev 3 `LIVING_EXAMPLE_WIDTH` / `_SCALE` | 720 css px / 2 | `LIVING_EXAMPLE_HEIGHT_MAX` | 1 200 css px |
 | rev 3 `LIVING_EXAMPLE_PNG_MAX_BYTES` | 1 048 576 | `LIVING_EXAMPLE_TIMEOUT_MS` / `LIVING_EXAMPLES_BUDGET_MS` | 5 000 / 60 000 |
 | rev 3 `LIVING_EXAMPLES_CACHE_MAX` | 800 files | `SECRET_SHAPES_MAX` | 10 |
-| rev 3 `LIVING_PAGE_GENERATOR_VERSION` | 2 (PNG examples) | | |
+| rev 3 `LIVING_PAGE_GENERATOR_VERSION` | 3 (markdown bodies; bump to regenerate staged pages) | rev 4 `LIVING_EXAMPLE_GENERATOR_VERSION` | 2 (PNG cache key; bump to re-render pictures) |
 
 ---
 
@@ -3005,7 +3008,7 @@ versioned, exported, copied into a design or logged.
 - (rev 3) Undo of a repo re-sync (AD-33).
 - (rev 3) Entropy-based or broad secret detection: only high-confidence shapes, so a finding means something;
   secret files are already never opened.
-- (S8) Markdown rendering in the board or the living page: bodies are text split into paragraphs.
+- (S8) Markdown rendering in the board or the living page: superseded. Bodies render through the escape-all renderer `src/service/systems/markdown-html.ts` (owner request, Nov 2026).
 - (S8) A Settings status row or install step for the builder skill: it ships in `dist/skills/` and has no
   legacy copy to manage (§8.8).
 - (S8) Switching a system's home, merging two systems on one repo, hosting or gating the living page (RS out

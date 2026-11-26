@@ -3,8 +3,9 @@
 // so both show the same values the same way. Pure: no service imports, so the CLI check can bundle it.
 //
 // Everything here is untrusted content's view: everything in it came from agent-written files. So:
-// - every name, note, title, kind and value shown as text is HTML-escaped; pattern and brand bodies are
-//   split into paragraphs of escaped text, never markup;
+// - every name, note, title, kind and value shown as text is HTML-escaped; overview, note, pattern
+//   and brand bodies render as markdown (`markdown-html.ts`): escaped text in the generator's own
+//   markup, never markup the agent wrote;
 // - a value enters CSS only as a custom property declaration, after `validateTokenValue` passes again
 //   (its alphabet has no `; { } < > \ : *` and no `url(`), so it can't leave its declaration or the
 //   `<style>` element; a refused value is shown as text beside a hatched "can't read" swatch;
@@ -32,6 +33,9 @@ import type {
   TokenSection,
   TypeStyle,
 } from '../../shared/types.ts';
+import { escapeHtml, renderMarkdown, withoutLeadingTitle, type MarkdownProfile } from './markdown-html.ts';
+
+export { escapeHtml };
 
 export type SpecimenOptions = {
   /** Font and logo files (`assets/…`) the service's `checkAsset` refused. */
@@ -47,6 +51,8 @@ export type SpecimenOptions = {
    * (the board) → a `style` attribute, as before.
    */
   styleClass?: (declarations: string) => string;
+  /** Which markdown vocabulary the bodies render in: the board's full one, or the living page's allowlist one. */
+  markdown?: MarkdownProfile;
 };
 
 /** ` class="base" style="…"`, or ` class="base <generated>"` when the caller takes declarations as classes. */
@@ -71,10 +77,8 @@ export const AREA_TITLES: Readonly<Record<SystemArea, string>> = Object.freeze({
 
 // ---- escaping ----
 
-const ESCAPES: Readonly<Record<string, string>> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-
-/** Text and attribute values: the five HTML specials. */
-export const escapeHtml = (text: string): string => text.replace(/[&<>"']/g, (char) => ESCAPES[char] ?? char);
+// `escapeHtml` lives in `markdown-html.ts` (the renderer and the sections share one escape) and is
+// re-exported above for the board and living page documents.
 
 /** ` data-dc-entry="…"` for a valid key; nothing for a key off the pattern (it is then just not selectable). */
 const entryAttr = (kind: BoardEntryKind, key: string): string => {
@@ -89,15 +93,6 @@ const cssValueOf = (section: TokenSection, field: TypeField | null, text: string
 };
 
 const isTokenName = (name: string): boolean => SYSTEM_TOKEN_NAME_PATTERN.test(name);
-
-/** Paragraphs of plain text, split on blank lines, each escaped. */
-const paragraphs = (text: string): string =>
-  text
-    .split(/\r?\n\s*\r?\n/)
-    .map((part) => part.trim())
-    .filter((part) => part !== '')
-    .map((part) => `<p>${escapeHtml(part)}</p>`)
-    .join('');
 
 /** A file name inside one contract folder, as a URL path the bundler decodes back. */
 const assetUrl = (rel: string): string | null => {
@@ -190,11 +185,11 @@ type SectionParts = { title: string; body: string; empty: string };
 
 // ---- foundations ----
 
-const overviewParts = (detail: SystemDetail): SectionParts => {
+const overviewParts = (detail: SystemDetail, markdown: MarkdownProfile): SectionParts => {
   const parts: string[] = [];
   if (detail.overview !== null) {
     parts.push(
-      `<div class="dc-text"${entryAttr('overview', '')}>${paragraphs(detail.overview.text) || emptyLine('The overview is empty.')}` +
+      `<div class="dc-text"${entryAttr('overview', '')}>${renderMarkdown(detail.overview.text, markdown) || emptyLine('The overview is empty.')}` +
         (detail.overview.problem !== null ? `<div class="dc-problem">${escapeHtml(detail.overview.problem)}</div>` : '') +
         '</div>',
     );
@@ -202,7 +197,7 @@ const overviewParts = (detail: SystemDetail): SectionParts => {
   for (const note of detail.notes) {
     const key = SYSTEM_ENTRY_ID_PATTERN.test(note.id) ? entryAttr('note', note.id) : '';
     parts.push(
-      `<div class="dc-card dc-text"${key}><h3>${escapeHtml(note.title)}</h3>${paragraphs(note.text)}` +
+      `<div class="dc-card dc-text"${key}><h3>${escapeHtml(note.title)}</h3>${renderMarkdown(withoutLeadingTitle(note.text, note.title), markdown)}` +
         (note.problem !== null ? `<div class="dc-problem">${escapeHtml(note.problem)}</div>` : '') +
         '</div>',
     );
@@ -352,25 +347,25 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
   other: 'Other',
 };
 
-/** One pattern or brand entry as an escaped text card: title, kind, note, then the body in paragraphs. */
-const entryTextCard = (kind: 'pattern' | 'brand', entry: SystemEntryText): string => {
+/** One pattern or brand entry as a text card: title, kind, note, then the body as markdown. */
+const entryTextCard = (kind: 'pattern' | 'brand', entry: SystemEntryText, markdown: MarkdownProfile): string => {
   const key = SYSTEM_ENTRY_ID_PATTERN.test(entry.id) ? entryAttr(kind, entry.id) : '';
   return (
     `<div class="dc-card dc-text"${key}><h3>${escapeHtml(entry.title)}</h3>` +
     `<div class="dc-value">${escapeHtml(KIND_LABELS[entry.kind] ?? entry.kind)}</div>` +
     (entry.note !== '' ? `<div class="dc-note">${escapeHtml(entry.note)}</div>` : '') +
-    (entry.text !== null && entry.text.trim() !== '' ? `<div class="dc-body">${paragraphs(entry.text)}</div>` : '') +
+    (entry.text !== null && entry.text.trim() !== '' ? `<div class="dc-body">${renderMarkdown(entry.text, markdown)}</div>` : '') +
     (entry.problem !== null ? `<div class="dc-problem">${escapeHtml(entry.problem)}</div>` : '') +
     '</div>'
   );
 };
 
-const entryTextGrid = (kind: 'pattern' | 'brand', entries: readonly SystemEntryText[]): string =>
-  entries.length > 0 ? `<div class="dc-grid dc-text-grid">${entries.map((entry) => entryTextCard(kind, entry)).join('')}</div>` : '';
+const entryTextGrid = (kind: 'pattern' | 'brand', entries: readonly SystemEntryText[], markdown: MarkdownProfile): string =>
+  entries.length > 0 ? `<div class="dc-grid dc-text-grid">${entries.map((entry) => entryTextCard(kind, entry, markdown)).join('')}</div>` : '';
 
-const patternsParts = (detail: SystemDetail): SectionParts => ({
+const patternsParts = (detail: SystemDetail, markdown: MarkdownProfile): SectionParts => ({
   title: 'Patterns & voice',
-  body: entryTextGrid('pattern', detail.patterns),
+  body: entryTextGrid('pattern', detail.patterns, markdown),
   empty: 'No patterns or voice guidance yet.',
 });
 
@@ -388,9 +383,9 @@ const logoCard = (logo: LogoAsset, index: number, unusable: ReadonlySet<string>)
   );
 };
 
-const brandParts = (detail: SystemDetail, unusable: ReadonlySet<string>): SectionParts => {
+const brandParts = (detail: SystemDetail, unusable: ReadonlySet<string>, markdown: MarkdownProfile): SectionParts => {
   const parts: string[] = [];
-  const entries = entryTextGrid('brand', detail.brand);
+  const entries = entryTextGrid('brand', detail.brand, markdown);
   if (entries !== '') parts.push(entries);
   if (detail.logos.length > 0) parts.push(`<h3>Logos</h3><div class="dc-grid">${detail.logos.map((logo, index) => logoCard(logo, index, unusable)).join('')}</div>`);
   return { title: 'Brand & marketing', body: parts.join(''), empty: 'No brand guidance or logos yet.' };
@@ -410,9 +405,10 @@ const assetsParts = (detail: SystemDetail): SectionParts => {
 const partsOf = (detail: SystemDetail, section: SystemSection, options: SpecimenOptions): SectionParts => {
   const unusable = options.unusable ?? new Set<string>();
   const styled = stylerOf(options);
+  const markdown = options.markdown ?? 'board';
   switch (section) {
     case 'overview':
-      return overviewParts(detail);
+      return overviewParts(detail, markdown);
     case 'colours':
       return colourParts(detail, styled);
     case 'typography':
@@ -430,9 +426,9 @@ const partsOf = (detail: SystemDetail, section: SystemSection, options: Specimen
     case 'components':
       return componentsParts(detail, options.example);
     case 'patterns':
-      return patternsParts(detail);
+      return patternsParts(detail, markdown);
     case 'brand':
-      return brandParts(detail, unusable);
+      return brandParts(detail, unusable, markdown);
     case 'assets':
       return assetsParts(detail);
   }

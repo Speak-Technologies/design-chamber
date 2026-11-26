@@ -4311,6 +4311,13 @@ button.dc-sp-value:focus-visible {
 .dc-sp-value-locked {
   cursor: default;
 }
+/* Multiline text (overview, notes) keeps its line breaks on show; the edit control is a textarea. */
+.dc-sp-value-pre {
+  align-items: flex-start;
+  max-height: 16em;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
 .dc-sp-lock {
   display: block;
   padding: 0 var(--dc-s2);
@@ -4343,6 +4350,7 @@ button.dc-sp-value:focus-visible {
 .dc-sp-body {
   font-size: 0.8125rem;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 .dc-sp-chips {
   display: flex;

@@ -10,12 +10,13 @@
 
 import { AREA_OF_SECTION, SYSTEM_AREAS, SYSTEM_SECTIONS } from '../../shared/system-json.ts';
 import type { SystemArea, SystemComponent, SystemDetail, SystemSection } from '../../shared/types.ts';
+import { markdownCss } from './markdown-html.ts';
 import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss } from './specimen-html.ts';
 
 export { escapeHtml } from './specimen-html.ts';
 
 /** Bumped when the generated document changes shape, so cached boards are not reused. */
-export const BOARD_GENERATOR_VERSION = 4;
+export const BOARD_GENERATOR_VERSION = 5;
 
 /** The virtual entry the board is bundled from (never a file on disk). */
 export const BOARD_ENTRY_FILE = '__board.html';
@@ -92,7 +93,7 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
 /* Light and dark grounds stack, each as wide as the card, so a wide preview never has to share the row. */
 .dc-components .dc-grounds { flex-direction: column; margin-bottom: 12px; }
 .dc-components .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
-`;
+${markdownCss('board', scheme)}`;
 };
 
 // ---- the board's example part (needs the board script) ----
