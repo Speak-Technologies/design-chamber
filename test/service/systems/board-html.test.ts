@@ -233,3 +233,58 @@ test('entry keys: build, parse, sections and the custom property names', () => {
   assert.ok(/^--[A-Za-z0-9_-]{1,80}$/.test(typeVarOf('a'.repeat(40), 'letterSpacing')));
   assert.ok(BOARD_ENTRY_PATTERN.test('brand:logo-use'));
 });
+
+// ---- layout runs: the board CSS and script (system-board-layout-and-visual-check.md §A.4) ----
+
+test('the board script measures .dc-fit (cards and table rows), and the run CSS is present', () => {
+  const html = buildBoardHtml(makeDetail(), { scheme: 'light', examples: { button: '<p>Hi</p>' } });
+  assert.ok(html.includes("document.querySelectorAll('.dc-fit')"));
+  assert.ok(!html.includes("document.querySelectorAll('.dc-components > .dc-card')"));
+  // Rule 1: the card run keeps the content-sized columns.
+  assert.match(html, /\.dc-components \{ display: block; column-width: 600px; column-gap: 16px; \}/);
+  assert.match(html, /\.dc-components > \.dc-card\.dc-wide \{ column-span: all; \}/);
+  // Rule 2: compact columns and padding; compact token and text grids; the smaller swatch.
+  assert.match(html, /\.dc-components\.dc-run-compact \{ column-width: 280px; \}/);
+  assert.match(html, /\.dc-run-compact > \.dc-card \{ padding: 12px; \}/);
+  assert.match(html, /\.dc-grid\.dc-run-compact \{ grid-template-columns: repeat\(auto-fill, minmax\(120px, 1fr\)\); \}/);
+  assert.match(html, /\.dc-grid\.dc-text-grid\.dc-run-compact \{ grid-template-columns: repeat\(auto-fill, minmax\(200px, 1fr\)\); \}/);
+  assert.match(html, /\.dc-run-compact \.dc-swatch \{ height: 32px; \}/);
+  // Rule 3: full is one column with a 16px gap.
+  assert.match(html, /\.dc-run-full \{ display: grid; grid-template-columns: 1fr; gap: 16px; \}/);
+  // Rule 4: the table grid, subgrid rows, row rules, muted header, the container query.
+  assert.match(html, /\.dc-run-table \{ display: grid; grid-template-columns: minmax\(160px, 1fr\) minmax\(0, 3fr\) minmax\(160px, 1\.2fr\); \}/);
+  assert.match(html, /\.dc-thead, \.dc-trow \{ display: grid; grid-template-columns: subgrid; grid-column: 1 \/ -1; \}/);
+  assert.match(html, /\.dc-trow \{ border-bottom: 1px solid var\(--dc-board-border/);
+  assert.match(html, /\.dc-thead \{ color: var\(--dc-board-muted/);
+  assert.match(html, /\.dc-section \{[^}]*container-type: inline-size;/);
+  assert.match(html, /@container \(max-width: 759px\) \{/);
+  // Rule 5: a widened row leaves the subgrid.
+  assert.match(html, /\.dc-trow\.dc-wide \{ grid-template-columns: 1fr 1fr; \}/);
+  assert.match(html, /\.dc-trow\.dc-wide \.dc-tcell-preview \{ grid-column: 1 \/ -1; grid-row: 2; \}/);
+  // Rule 6: light and dark grounds stack in every run (the base fix 64c0687), never side by side.
+  assert.ok(!/\.dc-grounds \{ flex-direction: row/.test(html), 'no run puts the grounds side by side');
+  assert.match(html, /\.dc-components \.dc-grounds \{ flex-direction: column;/);
+  assert.match(html, /\.dc-run-full \.dc-grounds \{ flex-direction: column;/);
+  assert.match(html, /\.dc-trow \.dc-grounds \{ flex-direction: column; \}/);
+  // Rule 7: every component run keeps the bounded card and the scrolling example.
+  assert.match(html, /\.dc-run-full > \.dc-card \{ overflow: hidden; \}/);
+  assert.match(html, /\.dc-example \{ display: block; min-height: 32px; overflow: auto; \}/);
+});
+
+test('a system with no hints renders the card run: dc-run-card on the container, dc-fit on the cards', () => {
+  const html = buildBoardHtml(makeDetail(), { scheme: 'light', examples: { button: '<p>Hi</p>' } });
+  assert.ok(html.includes('<div class="dc-grid dc-components dc-run-card">'));
+  assert.ok(html.includes('<div class="dc-card dc-fit" data-dc-entry="component:button">'));
+});
+
+test('table and full runs render their containers; compact components keep dc-components', () => {
+  const base = makeDetail();
+  const table = buildBoardHtml({ ...base, components: base.components.map((component) => ({ ...component, layout: 'table' as const })) }, { scheme: 'light', examples: { button: '<p>Hi</p>' } });
+  assert.ok(table.includes('<div class="dc-run-table" role="table" aria-label="Components">'));
+  assert.ok(table.includes('<div class="dc-trow dc-fit" role="row" data-dc-entry="component:button">'));
+  const full = buildBoardHtml({ ...base, components: base.components.map((component) => ({ ...component, layout: 'full' as const })) }, { scheme: 'light' });
+  assert.ok(full.includes('<div class="dc-run-full">'));
+  assert.ok(!full.includes('class="dc-card dc-fit"'), 'a full card is already the whole width');
+  const compact = buildBoardHtml({ ...base, components: base.components.map((component) => ({ ...component, layout: 'compact' as const })) }, { scheme: 'light' });
+  assert.ok(compact.includes('<div class="dc-grid dc-components dc-run-compact">'));
+});

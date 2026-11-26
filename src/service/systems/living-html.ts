@@ -191,6 +191,21 @@ body { margin: 0; background: #f7f7f8; color: #1d1d1f; font-family: system-ui, -
 .dc-text p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dc-text-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
 .dc-components { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.dc-components.dc-run-compact { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.dc-run-full { display: grid; grid-template-columns: 1fr; gap: 16px; }
+.dc-grid.dc-run-compact { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.dc-grid.dc-text-grid.dc-run-compact { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.dc-run-compact .dc-swatch { height: 32px; }
+.dc-run-table { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 3fr) minmax(160px, 1.2fr); }
+.dc-thead, .dc-trow { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+.dc-thead { color: #62626a; font-size: 12px; font-weight: 600; }
+.dc-thead .dc-tcell { padding: 8px 12px 8px 0; }
+.dc-trow { border-bottom: 1px solid #d8d8dc; }
+.dc-tcell { padding: 12px 12px 12px 0; min-width: 0; }
+.dc-tcell:last-child { padding-right: 0; }
+@media (max-width: 720px) {
+  .dc-run-table { grid-template-columns: 1fr; }
+}
 .dc-body { margin-top: 8px; }
 .lp-examples { display: grid; gap: 8px; margin-bottom: 8px; }
 .lp-example { margin: 0; }

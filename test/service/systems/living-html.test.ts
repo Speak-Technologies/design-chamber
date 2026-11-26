@@ -20,7 +20,7 @@ import {
   previewBandText,
   VALUES_IN_CODE_LINE,
 } from '../../../src/service/systems/living-html.ts';
-import { scanLivingPage } from '../../../src/service/systems/living-safe.ts';
+import { livingCssProblems, scanLivingPage } from '../../../src/service/systems/living-safe.ts';
 import { boardFixture } from './board-fixture.ts';
 
 // Logos are relative refs the bundler inlines; these document-level tests leave them out.
@@ -172,10 +172,45 @@ test('2000 tokens and 200 components stay well under the page bound', () => {
 
 test('markdown bodies stay inside the allowlist: no pre, blockquote, h5/h6 or link that leaves', () => {
   const rich = '# Title\n\n## Part\n\n### Deeper\n\n```css\na { b: c; }\n```\n\n> quote\n\n- one\n  - two\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n[out](https://example.com) and [in](#note-anchor)';
-  const html = build({ ...fixture(), overview: { text: rich, problem: null }, notes: [{ id: 'history', title: 'Why', text: rich, problem: null }] });
+  const html = build({ ...fixture(), overview: { text: rich, problem: null }, notes: [{ id: 'history', title: 'Why', text: rich, problem: null, layout: null }] });
   safe(html);
   for (const forbidden of ['<pre', '<blockquote', '<h5', '<h6', 'target=', 'rel=']) assert.ok(!html.includes(forbidden), forbidden);
   assert.ok(html.includes('<div class="dc-md-pre"><code>a { b: c; }</code></div>'), 'code block as a pre-wrap div');
   assert.ok(html.includes('out (https://example.com)'), 'a link that leaves is text and address');
   assert.ok(html.includes('<a class="dc-md-link" href="#note-anchor">in</a>'), 'a fragment link stays a link');
+});
+
+// ---- layout runs on the living page (system-board-layout-and-visual-check.md §A.6) ----
+
+test('all four layouts in every section that takes them: the page stays safe, marked and stripped of entry marks', () => {
+  const base = fixture();
+  const four = ['card', 'compact', 'full', 'table'] as const;
+  const detail: SystemDetail = {
+    ...base,
+    components: base.components.map((component, index) => ({ ...component, layout: four[index] ?? null })),
+    notes: four.map((layout, index) => ({ id: `n${index}`, title: `Note ${index}`, text: 'Body.', problem: null, layout })),
+    patterns: four.map((layout, index) => ({ id: `p${index}`, kind: 'other', title: `Pattern ${index}`, note: '', text: 'Body.', problem: null, layout })),
+    brand: four.map((layout, index) => ({ id: `b${index}`, kind: 'other', title: `Brand ${index}`, note: '', text: 'Body.', problem: null, layout })),
+    boardLayout: {
+      sections: { components: 'table', overview: 'full', patterns: 'compact', brand: 'card', colours: 'table', spacing: 'compact', radius: 'card', shadows: 'table', sizes: 'compact' },
+      ignored: [],
+      ignoredCount: 0,
+    },
+  };
+  const html = build(detail);
+  safe(html);
+  assert.ok(html.includes('dc-run-table') && html.includes('dc-run-full') && html.includes('dc-run-compact'));
+  assert.ok(!/data-dc-/.test(html), 'the entry marks are stripped from table rows too');
+  assert.ok(html.includes('role="table"') && html.includes('role="row"') && html.includes('role="columnheader"'));
+  // The run CSS survived addCss: a refused rule would be dropped silently.
+  for (const rule of ['.dc-run-table {', '.dc-thead, .dc-trow {', '@media (max-width: 720px) {', '.dc-components.dc-run-compact {', '.dc-run-full {', '.dc-grid.dc-run-compact {', '.dc-run-compact .dc-swatch {']) {
+    assert.ok(html.includes(rule), rule);
+  }
+  // Every CSS line of the page passes the allowlist on its own (the generator drops any that would not).
+  const css = /<style>\n([\s\S]*?)\n<\/style>/.exec(html)?.[1] ?? '';
+  assert.ok(css.length > 0);
+  for (const line of css.split('\n')) {
+    if (line.trim() === '') continue;
+    assert.deepEqual(livingCssProblems(line), [], line);
+  }
 });

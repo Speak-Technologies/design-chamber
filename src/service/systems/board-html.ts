@@ -16,7 +16,7 @@ import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss } fro
 export { escapeHtml } from './specimen-html.ts';
 
 /** Bumped when the generated document changes shape, so cached boards are not reused. */
-export const BOARD_GENERATOR_VERSION = 5;
+export const BOARD_GENERATOR_VERSION = 6;
 
 /** The virtual entry the board is bundled from (never a file on disk). */
 export const BOARD_ENTRY_FILE = '__board.html';
@@ -45,7 +45,7 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
   font-family: var(--dc-board-font, system-ui, sans-serif); font-size: 14px; line-height: 1.5; }
 .dc-board-title { margin: 0 0 4px; font-size: 24px; font-weight: 600; }
 .dc-board-sub { margin: 0 0 32px; color: var(--dc-board-muted, ${f.muted}); }
-.dc-section { padding: 24px 0 8px; border-top: 1px solid var(--dc-board-border, ${f.border}); content-visibility: auto; contain-intrinsic-size: auto 480px; }
+.dc-section { padding: 24px 0 8px; border-top: 1px solid var(--dc-board-border, ${f.border}); content-visibility: auto; contain-intrinsic-size: auto 480px; container-type: inline-size; }
 .dc-section > h2 { margin: 0 0 16px; font-size: 18px; font-weight: 600; }
 .dc-section h3 { margin: 16px 0 8px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--dc-board-muted, ${f.muted}); }
 .dc-empty, .dc-muted { color: var(--dc-board-muted, ${f.muted}); }
@@ -90,9 +90,41 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
   background: color-mix(in srgb, var(--dc-board-card, ${f.card}) 94%, var(--dc-board-fg, ${f.fg}));
   border: 1px solid color-mix(in srgb, var(--dc-board-border, ${f.border}) 70%, var(--dc-board-fg, ${f.fg})); }
 .dc-components > .dc-card.dc-wide { column-span: all; }
-/* Light and dark grounds stack, each as wide as the card, so a wide preview never has to share the row. */
+/* Light and dark grounds stack in every run, each as wide as the card, so a wide preview never has to share the row. */
 .dc-components .dc-grounds { flex-direction: column; margin-bottom: 12px; }
 .dc-components .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
+/* Compact: the same column flow with smaller pieces, for buttons, badges, pills and avatars. */
+.dc-components.dc-run-compact { column-width: 280px; }
+.dc-run-compact > .dc-card { padding: 12px; }
+/* Full: one card per row, the whole section width. */
+.dc-run-full { display: grid; grid-template-columns: 1fr; gap: 16px; }
+.dc-run-full > .dc-card { overflow: hidden; }
+.dc-run-full .dc-grounds { flex-direction: column; margin-bottom: 12px; }
+.dc-run-full .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
+/* Compact token and text grids, and the smaller swatch. */
+.dc-grid.dc-run-compact { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.dc-grid.dc-text-grid.dc-run-compact { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.dc-run-compact .dc-swatch { height: 32px; }
+/* Table runs: three aligned columns (subgrid), a rule between rows, muted header text. Under 760px of section width the
+   cells stack. A widened component row leaves the subgrid: name and notes side by side on top, the preview under them. */
+.dc-run-table { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 3fr) minmax(160px, 1.2fr); }
+.dc-thead, .dc-trow { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+.dc-thead { color: var(--dc-board-muted, ${f.muted}); font-size: 12px; font-weight: 600; }
+.dc-thead .dc-tcell { padding: 8px 12px 8px 0; }
+.dc-trow { border-bottom: 1px solid var(--dc-board-border, ${f.border}); }
+.dc-tcell { padding: 12px 12px 12px 0; min-width: 0; }
+.dc-tcell:last-child { padding-right: 0; }
+.dc-trow .dc-grounds { flex-direction: column; }
+.dc-trow .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
+.dc-trow.dc-wide { grid-template-columns: 1fr 1fr; }
+.dc-trow.dc-wide .dc-tcell-name { grid-column: 1; grid-row: 1; }
+.dc-trow.dc-wide .dc-tcell-notes { grid-column: 2; grid-row: 1; }
+.dc-trow.dc-wide .dc-tcell-preview { grid-column: 1 / -1; grid-row: 2; }
+@container (max-width: 759px) {
+  .dc-run-table { grid-template-columns: 1fr; }
+  .dc-trow.dc-wide { grid-template-columns: 1fr; }
+  .dc-trow.dc-wide .dc-tcell { grid-column: 1 / -1; grid-row: auto; }
+}
 ${markdownCss('board', scheme)}`;
 };
 
@@ -140,8 +172,8 @@ const BOARD_SCRIPT = `(function () {
       try { hosts[j].attachShadow({ mode: 'open' }).innerHTML = markup; } catch (error) { hosts[j].textContent = 'This example could not be shown.'; }
     }
   }
-  // A component card whose example is wider than its column spans the board instead (measured with the card narrow, again on resize).
-  var cards = document.querySelectorAll('.dc-components > .dc-card');
+  // A component card or table row whose example is wider than its column spans the board instead (measured with the card narrow, again on resize).
+  var cards = document.querySelectorAll('.dc-fit');
   var wider = function (host) {
     var root = host.shadowRoot;
     if (!root) return false;
