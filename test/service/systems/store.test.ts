@@ -358,6 +358,29 @@ describe('revision (AD-13)', () => {
     assert.equal((await store.detail('acme')).revision, 2);
   });
 
+  test('a layout-only edit is a new revision but keeps the reviews (layout is outside the section fingerprints)', async (t) => {
+    const { tmp, store } = await setup(t);
+    await store.create({ name: 'Acme' });
+    const json = (layout: Record<string, unknown>) =>
+      JSON.stringify({ version: 1, ...layout, components: [{ id: 'button', name: 'Button', purpose: 'Starts an action.', ...('item' in layout ? { layout: layout.item } : {}) }] });
+    await tmp.write('_systems/acme/system.json', json({}));
+    await store.settleRevision('acme');
+    await store.patch('acme', { review: { section: 'components', state: 'looks-good' } });
+    await store.patch('acme', { status: 'ready' });
+    const before = await store.detail('acme');
+    assert.equal(before.review.components.state, 'looks-good');
+
+    // Only hints change: an entry's own layout and a section default.
+    await tmp.write('_systems/acme/system.json', JSON.stringify({ ...JSON.parse(json({ item: 'compact' })), layout: { components: 'table' } }));
+    await store.settleRevision('acme');
+    const after = await store.detail('acme');
+    assert.equal(after.revision, before.revision + 1, 'system.json is in the content set, so the revision moves');
+    assert.equal(after.components[0]?.layout, 'compact');
+    assert.equal(after.boardLayout.sections.components, 'table');
+    assert.equal(after.review.components.state, 'looks-good', 'the review holds');
+    assert.equal(after.changesToReview, false, 'a Ready system has nothing new to review');
+  });
+
   test('files outside the content set (records, staging, service folders) never bump it', async (t) => {
     const { tmp, store } = await setup(t);
     await store.create({ name: 'Acme' });
