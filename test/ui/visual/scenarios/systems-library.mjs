@@ -258,12 +258,13 @@ const railFlow = async (h, width, theme) => {
   await p.click('.dc-rail-nav');
   await h.checkSoon(() => p.guest('return doc.querySelectorAll(".dc-sys[data-id]").length >= 5'), `${tag}: the systems list is up again`);
   await p.click('.dc-sys[data-id="tidepool"] .dc-sys-used');
-  await h.checkSoon(async () => (await selectLabel(p, '.dc-rail-pair .dc-system-select')) === 'System: Tidepool', `${tag}: the used-by link filters to Tidepool (${await selectLabel(p, '.dc-rail-pair .dc-system-select')})`);
+  await h.checkSoon(async () => (await selectLabel(p, '.dc-rail-filter-area .dc-system-select')) === 'System: Tidepool', `${tag}: the used-by link filters to Tidepool (${await selectLabel(p, '.dc-rail-filter-area .dc-system-select')})`);
   h.check((await p.guest('return doc.querySelector(".dc-tabs [role=tab][aria-selected=true]")?.dataset.id')) === 'all', `${tag}: the tab is All`);
   h.check((await count(p, '.dc-libsys')) === 0 && (await p.guest('return doc.querySelector(".dc-rows > li")?.dataset.lead ?? null')) === null, `${tag}: no system row leads the filtered list`);
   h.check((await count(p, '.dc-row[data-slug]')) === 1, `${tag}: the design that uses it is the one row`);
   await p.shot(`${tag}-3-filtered`);
-  await pickOption(p, '.dc-rail-pair .dc-system-select', 'All systems');
+  await p.click('.dc-filters-btn');
+  await pickOption(p, '.dc-rail-filter-area .dc-system-select', 'All systems');
 
   // The header icon opens the same list, and its used-by link lands on the filtered library
   await p.click('.dc-rail-head .dc-iconbtn[aria-label="Design systems"]');
@@ -272,7 +273,7 @@ const railFlow = async (h, width, theme) => {
   h.check(await noOverflow(p), `${tag}: no horizontal overflow in the systems list`);
   await p.shot(`${tag}-4-systems-list-icon`);
   await p.click('.dc-sys[data-id="harbor"] .dc-sys-used');
-  await h.checkSoon(async () => !(await count(p, '.dc-sys-view')) && (await selectLabel(p, '.dc-rail-pair .dc-system-select')) === 'System: Harbor', `${tag}: the link closes the list and filters the library to Harbor`);
+  await h.checkSoon(async () => !(await count(p, '.dc-sys-view')) && (await selectLabel(p, '.dc-rail-filter-area .dc-system-select')) === 'System: Harbor', `${tag}: the link closes the list and filters the library to Harbor`);
   await p.close();
 };
 

@@ -106,16 +106,23 @@ const pageViews = async (h, theme) => {
   await h.checkSoon(async () => (await rowCount(p)) === 6, `${tag}: Clear filters brings every design back`);
   h.check(await p.guest('return doc.querySelector(".dc-system-select button")?.getAttribute("aria-label") === "System: All systems"'), `${tag}: the select reads All systems again`);
 
-  // Search, the kind tab and the System filter are session-only (S5-5): a reload resets all three,
-  // while the view and the sort stay remembered. Nothing of the three is ever written to storage.
+  // Search is session-only; the kind tab and the System filter are remembered per surface like the sort
+  // and the view (`list-tab:page`, `list-system:page`).
   await p.type('.dc-search input', 'zzz');
   await p.click('.dc-tabs [role=tab]', { text: 'Pages' });
-  await pickOption(p, '.dc-system-select', 'Acme');
-  h.check((await storageGet(p, 'library-view:page')) === '"tiles"' && (await storageGet(p, 'list-sort:page')) === '"created"', `${tag}: the filters write nothing to storage`);
+  await pickOption(p, '.dc-system-select', 'Tidepool');
+  h.check((await storageGet(p, 'list-tab:page')) === '"page"' && (await storageGet(p, 'list-system:page')) === '"system:tidepool"', `${tag}: the tab and the System filter are written to their own page keys`);
+  h.check((await storageGet(p, 'library-view:page')) === '"tiles"' && (await storageGet(p, 'list-sort:page')) === '"created"', `${tag}: the view and the sort are untouched`);
   await reload(p);
-  await h.listReady(p);
-  h.check(await p.guest('return doc.querySelector(".dc-search input").value === "" && doc.querySelector(".dc-tabs [role=tab][aria-selected=true]")?.dataset.id === "all" && doc.querySelector(".dc-system-select button")?.getAttribute("aria-label") === "System: All systems"'), `${tag}: search, tab and System filter reset on reload (session-only)`);
+  await p.waitFor('return doc.querySelectorAll(".dc-card[data-slug], .dc-list-row[data-slug]").length >= 1', 'the library to list again');
+  await p.settle(400);
+  h.check(await p.guest('return doc.querySelector(".dc-search input").value === "" && doc.querySelector(".dc-tabs [role=tab][aria-selected=true]")?.dataset.id === "page" && doc.querySelector(".dc-system-select button")?.getAttribute("aria-label") === "System: Tidepool"'), `${tag}: the tab and the System filter survive the reload; search does not`);
+  h.check(await p.guest('return doc.querySelector(".dc-side-row[data-scope=\\"system:tidepool\\"]")?.getAttribute("data-selected") === "true"'), `${tag}: the sidebar's Design systems row for Tidepool is selected again`);
   h.check(await p.guest('return doc.querySelector(".dc-view-toggle-btn[aria-label=\\"View as tiles\\"]")?.getAttribute("aria-pressed") === "true"'), `${tag}: the view still survives the reload`);
+  await p.click('.dc-tabs [role=tab]', { text: 'All' });
+  await pickOption(p, '.dc-system-select', 'All systems');
+  await h.listReady(p);
+  h.check((await storageGet(p, 'list-tab:page')) === '"all"' && (await storageGet(p, 'list-system:page')) === '"all"', `${tag}: choosing All and All systems writes them back`);
   h.check((await firstTitle(p, 'page')) === 'Onboarding flow', `${tag}: the sort still survives the reload`);
 
   // Every active filter at once: folder scope, search, kind tab, system. The sentence names them
@@ -145,6 +152,17 @@ const pageViews = async (h, theme) => {
 
 // ---------------------------------------------------------------- the rail, 320 and 480, both themes
 
+const openFilters = async (p) => {
+  if ((await p.guest('return doc.querySelector(".dc-filters-btn")?.getAttribute("aria-expanded")')) !== 'true') {
+    await p.click('.dc-filters-btn');
+    await p.waitFor('return doc.querySelector(".dc-rail-filter-area")?.hidden === false', 'the Filters area');
+  }
+};
+const pickRail = async (p, select, text) => {
+  await openFilters(p);
+  await pickOption(p, `.dc-rail-filter-area ${select}`, text);
+};
+
 const railViews = async (h, width, theme) => {
   const tag = `library-views-rail-${width}-${theme}`;
   const p = await h.openPage({ width, height: 780, surface: 'panel', theme, label: tag, storage: { 'list-sort:panel': 'title' } });
@@ -153,7 +171,9 @@ const railViews = async (h, width, theme) => {
   await h.thumbsReady(p);
 
   h.check(await p.guest('return !!doc.querySelector(".dc-rail-head .dc-iconbtn[aria-label=\\"Settings\\"]")'), `${tag}: the gear is on the rail head, named Settings`);
-  h.check(await p.guest('return !!doc.querySelector(".dc-rail-pair .dc-system-select, .dc-rail-pair .dc-inline-select") && doc.querySelectorAll(".dc-rail-pair .dc-inline-select").length === 2'), `${tag}: System and Sort sit side by side under Show`);
+  h.check(await p.guest('return doc.querySelector(".dc-rail-filter-area")?.hidden === true && doc.querySelector(".dc-filters-btn")?.getAttribute("aria-expanded") === "false"'), `${tag}: the Filters area starts hidden`);
+  await openFilters(p);
+  h.check(await p.guest('const a = doc.querySelector(".dc-rail-filter-area"); return !!a.querySelector(".dc-system-select") && !!a.querySelector(".dc-sort-select") && !!a.querySelector(".dc-rail-view-toggle")'), `${tag}: System, Sort and View sit in the Filters area`);
   h.check((await firstTitle(p, 'rail')) === 'Coffee subscription', `${tag}: the seeded Title sort lands (${await firstTitle(p, 'rail')})`);
   h.check(await noOverflow(p), `${tag}: no horizontal overflow`);
   if (width === 320) {
@@ -162,7 +182,7 @@ const railViews = async (h, width, theme) => {
   await p.shot(`${tag}-1-list`);
 
   // Sort persists on the rail's own key.
-  await pickOption(p, '.dc-rail-pair .dc-sort-select', 'Updated');
+  await pickRail(p, '.dc-sort-select', 'Updated');
   await h.checkSoon(async () => (await firstTitle(p, 'rail')) === 'Onboarding flow', `${tag}: Updated sort puts the newest first`);
   h.check((await storageGet(p, 'list-sort:panel')) === '"updated"', `${tag}: the rail sort is written to its own key`);
   await reload(p);
@@ -170,9 +190,9 @@ const railViews = async (h, width, theme) => {
   h.check((await firstTitle(p, 'rail')) === 'Onboarding flow', `${tag}: the rail sort survives the reload`);
 
   // The System filter composes with the scope.
-  await pickOption(p, '.dc-rail-pair .dc-system-select', 'Tidepool');
+  await pickRail(p, '.dc-system-select', 'Tidepool');
   await h.checkSoon(async () => (await rowCount(p)) === 2, `${tag}: Tidepool leaves its two designs`);
-  await pickOption(p, '.dc-rail-pair .dc-system-select', 'All systems');
+  await pickRail(p, '.dc-system-select', 'All systems');
   await h.checkSoon(async () => (await rowCount(p)) === 6, `${tag}: All systems brings them back`);
 
   // The empty state at rail width: every filter named, Clear filters keeps the folder.
@@ -182,7 +202,7 @@ const railViews = async (h, width, theme) => {
   await h.checkSoon(async () => (await rowCount(p)) === 1, `${tag}: the Show select scopes to the folder`);
   await p.type('.dc-search input', 'hero');
   await p.click('.dc-tabs [role=tab]', { text: 'Pages' });
-  await pickOption(p, '.dc-rail-pair .dc-system-select', 'Harbor');
+  await pickRail(p, '.dc-system-select', 'Harbor');
   await h.checkSoon(async () => (await emptyTitle(p)) === 'No designs in Q4 launch match “hero” with the Harbor system.', `${tag}: the sentence names scope, search and system (${await emptyTitle(p)})`);
   h.check((await chipLabels(p)) === JSON.stringify(['Folder: Q4 launch', 'Search: hero', 'Pages', 'System: Harbor']), `${tag}: the chips name all four filters`);
   h.check(await noOverflow(p), `${tag}: no horizontal overflow with the empty state`);
@@ -190,13 +210,13 @@ const railViews = async (h, width, theme) => {
   await p.click('.oc-sdk-empty-action .oc-sdk-btn', { text: 'Clear filters' });
   await h.checkSoon(async () => (await rowCount(p)) === 1, `${tag}: Clear filters keeps the folder`);
   h.check(await p.guest('return doc.querySelector(".dc-rail-show-select button")?.getAttribute("aria-label") === "Show: Folder · Q4 launch"'), `${tag}: the Show select still reads the folder`);
-  // Session-only on the rail too: search, tab and System filter reset on reload; the sort and scope stay.
+  // On the rail the System filter and the kind tab are remembered with the sort and the view; search is session-only.
   await p.type('.dc-search input', 'zzz');
   await p.click('.dc-tabs [role=tab]', { text: 'Pages' });
-  await pickOption(p, '.dc-rail-pair .dc-system-select', 'Harbor');
+  await pickRail(p, '.dc-system-select', 'Harbor');
   await reload(p);
-  await h.listReady(p);
-  h.check(await p.guest('return doc.querySelector(".dc-search input").value === "" && doc.querySelector(".dc-tabs [role=tab][aria-selected=true]")?.dataset.id === "all" && doc.querySelector(".dc-rail-pair .dc-system-select button")?.getAttribute("aria-label") === "System: All systems"'), `${tag}: search, tab and System filter reset on reload (session-only)`);
+  await p.settle(600);
+  h.check(await p.guest('return doc.querySelector(".dc-search input").value === "" && doc.querySelector(".dc-tabs [role=tab][aria-selected=true]")?.dataset.id === "page" && doc.querySelector(".dc-filters-btn")?.dataset.filtered === "true"'), `${tag}: search resets on reload; the Pages tab and the System filter stay, and the Filters dot says so`);
   // The seeded folder lives in the frame's fake and goes with the reload; the sort key is the host's and stays.
   h.check((await storageGet(p, 'list-sort:panel')) === '"updated"', `${tag}: the rail sort stays remembered across the reload`);
   await p.close();

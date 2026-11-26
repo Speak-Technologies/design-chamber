@@ -1,7 +1,7 @@
 // P1, the page's library: header (title and counts, Design systems, Settings, New) over a toolbar
 // (search, kind tabs, System filter, Sort, Tiles/List) and a responsive grid of design cards with
 // 16:10 thumbnails, or a column list of the same designs. View and sort are remembered per surface
-// (host.storage); search, tab and the System filter live for the session. Cards and rows update
+// (host.storage), and so are the kind tab and the System filter (`list-tab:page`, `list-system:page`) with the scope; search lives for the session. Cards and rows update
 // live from change events without losing scroll. Notices above: a failed refresh, an earlier
 // folder with designs, loose HTML files to import. The approved canvas (phase-2-6-library-ui) is
 // the visual authority. Design systems are library items too (L1b): tiles (or list rows) mixed into
@@ -46,7 +46,12 @@ import {
   scopeToId,
   sortFromStored,
   sortStorageKey,
+  systemSelectOptions,
+  systemsForFilter,
+  tabFromStored,
+  tabStorageKey,
   systemFilterFromId,
+  systemFilterStorageKey,
   systemFilterToId,
   systemOptions,
   SYSTEM_UPDATED_LABEL,
@@ -137,14 +142,11 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   } });
   const tabsHost = h('div', { class: 'dc-tabs' });
   const tabsHandle = mountTabs(tabsHost, { items: LIST_TABS.map(({ id, label }) => ({ id, label })), activeId: tab, trackBackground: true, onChange: (id) => {
-    tab = LIST_TABS.find((entry) => entry.id === id)?.id ?? 'all';
-    tabsHandle.update({ activeId: tab });
-    paintGrid();
+    setTab(LIST_TABS.find((entry) => entry.id === id)?.id ?? 'all');
   } });
   const systemHost = h('div', { class: 'dc-inline-select dc-system-select' });
   const systemSelect = mountSelect(systemHost, { label: 'System', value: 'all', options: [{ id: 'all', label: 'All systems' }, { id: 'none', label: 'No system' }], onChange: (id) => {
-    systemFilter = systemFilterFromId(id);
-    paintGrid();
+    setSystemFilter(systemFilterFromId(id));
   } });
   const sortHost = h('div', { class: 'dc-inline-select dc-sort-select' });
   const sortSelect = mountSelect(sortHost, { label: 'Sort', value: sort, options: LIST_SORTS.map(({ id, label }) => ({ id, label })), onChange: (id) => {
@@ -262,8 +264,16 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     }
   });
 
+  /** The tab and the System filter are remembered per surface (`list-tab:page`, `list-system:page`); search is not. */
   const setSystemFilter = (next: SystemFilter): void => {
     systemFilter = next;
+    void host.storage.set(systemFilterStorageKey('page'), systemFilterToId(next));
+    paintGrid();
+  };
+  const setTab = (next: ListTab): void => {
+    tab = next;
+    tabsHandle.update({ activeId: next });
+    void host.storage.set(tabStorageKey('page'), next);
     paintGrid();
   };
 
@@ -377,22 +387,20 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
 
   const clearFilters = (): void => {
     query = '';
-    tab = 'all';
-    systemFilter = ALL_SYSTEMS;
     search.update({ value: '' });
-    tabsHandle.update({ activeId: 'all' });
-    paintGrid();
+    void host.storage.set(systemFilterStorageKey('page'), systemFilterToId(ALL_SYSTEMS));
+    systemFilter = ALL_SYSTEMS;
+    setTab('all');
   };
 
   /** A used-by link or a chip: every design that uses this system, nothing else in the way. */
   const filterBySystem = (id: string): void => {
     chosen = ALL_SCOPE;
     query = '';
-    tab = 'all';
-    systemFilter = { kind: 'system', id };
     search.update({ value: '' });
-    tabsHandle.update({ activeId: 'all' });
-    paintGrid();
+    systemFilter = { kind: 'system', id };
+    void host.storage.set(systemFilterStorageKey('page'), systemFilterToId(systemFilter));
+    setTab('all');
   };
 
   const paintNotices = (): void => {
@@ -455,9 +463,10 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     // system's copy (the canvas draws a folder scope with a system filter active). A failed load
     // leaves All systems / No system only. The tiles themselves follow the scope (`libraryItems`).
     const systemsState = systemStore.get();
-    const systemList = systemsState.status === 'error' ? [] : systemsState.systems ?? [];
-    const systemsFailed = systemsState.status === 'error' && systemsState.systems === null;
-    systemFilter = resolveSystemFilter(systemFilter, systemList);
+    // The last good list stays in use when a refresh fails; only a ready list can say a remembered system is gone (KI-31).
+    const { list: systemList, canResolve, failed: systemsFailed } = systemsForFilter(systemsState);
+    // A remembered system waits for the list before it can read as gone; until then it stays as chosen.
+    if (canResolve) systemFilter = resolveSystemFilter(systemFilter, systemList);
     swatches = swatchLookup(systemList);
     sidebar.paint({
       scope: effective,
@@ -472,7 +481,8 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     });
     paintSidebarState();
     const label = scopeLabel(effective, groups, folderList);
-    const systemEntries = systemOptions(systemList);
+    // A remembered system the list cannot name yet (not loaded, or failed) still gets an entry, so the select never claims All systems while the list is narrowed.
+    const systemEntries = systemSelectOptions(systemList, systemFilter);
     systemSelect.update({ value: systemFilterToId(systemFilter), options: systemEntries });
     nameSelect(systemHost, 'System', systemEntries.find((entry) => entry.id === systemFilterToId(systemFilter))?.label ?? 'All systems');
     nameSelect(sortHost, 'Sort', LIST_SORTS.find((entry) => entry.id === sort)?.label ?? 'Updated');
@@ -507,11 +517,9 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
           if (id === 'search') {
             query = '';
             search.update({ value: '' });
-          } else if (id === 'tab') {
-            tab = 'all';
-            tabsHandle.update({ activeId: 'all' });
-          } else systemFilter = ALL_SYSTEMS;
-          paintGrid();
+            paintGrid();
+          } else if (id === 'tab') setTab('all');
+          else setSystemFilter(ALL_SYSTEMS);
         },
       });
       activeList().append(message(wrap));
@@ -562,6 +570,18 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   });
   void host.storage.get(viewStorageKey).then((stored) => {
     libraryView = viewFromStored(stored);
+    paintGrid();
+  });
+  // Only an untouched tab or filter takes the remembered one: a choice made while this was loading wins.
+  void host.storage.get(tabStorageKey('page')).then((stored) => {
+    if (tab === 'all') {
+      tab = tabFromStored(stored);
+      tabsHandle.update({ activeId: tab });
+    }
+    paintGrid();
+  });
+  void host.storage.get(systemFilterStorageKey('page')).then((stored) => {
+    if (systemFilter.kind === 'all') systemFilter = systemFilterFromId(stored);
     paintGrid();
   });
   void guestHost.client.listProjects().then(

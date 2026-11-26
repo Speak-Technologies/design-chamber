@@ -30,6 +30,23 @@ export const RAIL_TABS: ReadonlyArray<{ id: Exclude<ListTab, 'system'>; label: s
   { id: 'page', label: 'Pages' },
 ];
 
+/** A stored tab read back; anything unknown or malformed is All. */
+export const tabFromStored = (raw: unknown): ListTab => LIST_TABS.find((entry) => entry.id === raw)?.id ?? 'all';
+
+/** The rail has no Systems tab: a stored one (or any unknown value) reads as All. */
+export const railTabFromStored = (raw: unknown): Exclude<ListTab, 'system'> => RAIL_TABS.find((entry) => entry.id === raw)?.id ?? 'all';
+
+/**
+ * What the System filter may rely on, from the systems store: the last good list (kept when a refresh fails, so a
+ * name is still known), and whether the filter may be checked against it. Only a ready list can say a system is
+ * gone; while loading, or after a failed read, the remembered filter stays as chosen (KI-31).
+ */
+export const systemsForFilter = <T>(state: { status: 'idle' | 'loading' | 'ready' | 'error'; systems: readonly T[] | null }): { list: readonly T[]; canResolve: boolean; failed: boolean } => ({
+  list: state.systems ?? [],
+  canResolve: state.status === 'ready' && state.systems !== null,
+  failed: state.status === 'error' && state.systems === null,
+});
+
 /** The rail's pinned entry under the designs list: the accessible name says how many systems there are and what the entry does; unknown while they load or failed to load. */
 export const systemsEntryLabel = (count: number | null): string => (count === null ? 'Design systems. Show them' : `Design systems, ${count}. Show them`);
 
@@ -368,7 +385,7 @@ export const foldersOfDesign = (slug: string, folders: readonly FolderLite[]): F
 // ---- Library views, sort and the System filter (Phase 2.6 L1a, technical design §2.4, §6.4) ----
 //
 // View (page only) and sort (per surface) are remembered in host.storage; search, tab and the
-// System filter live for the session only. Composition order: scope, System filter, search,
+// System filter are remembered per surface too (`list-tab:<surface>`, `list-system:<surface>`); search is not. Composition order: scope, System filter, search,
 // tab counts, tab, sort. The empty state names every active filter and offers Clear filters,
 // which clears search, tab and system but keeps the scope.
 
@@ -407,6 +424,91 @@ export const systemFilterFromId = (raw: unknown): SystemFilter => {
 /** A filter naming a system that is gone reads as All systems (the select shows it). */
 export const resolveSystemFilter = (filter: SystemFilter, systems: readonly Pick<SystemSummary, 'id'>[]): SystemFilter =>
   filter.kind === 'system' && !systems.some((system) => system.id === filter.id) ? ALL_SYSTEMS : filter;
+
+// -- The rail's Filters area: System filter, Sort and the view (titles or list), hidden until asked for --
+
+/** `titles`: one line per design, the title only. `list`: the richer rows with thumbnails (the rail's original look). */
+export type RailView = 'titles' | 'list';
+
+export const RAIL_VIEWS: ReadonlyArray<{ id: RailView; label: string; hint: string }> = [
+  { id: 'titles', label: 'Titles', hint: 'One line per design' },
+  { id: 'list', label: 'List', hint: 'Thumbnails and details' },
+];
+
+export const railViewStorageKey = 'rail-view:panel';
+/** The System filter and the kind tab are remembered per surface, like the sort (`list-sort:<surface>`). */
+export const systemFilterStorageKey = (surface: 'panel' | 'page'): string => `list-system:${surface}`;
+export const tabStorageKey = (surface: 'panel' | 'page'): string => `list-tab:${surface}`;
+export const railSystemStorageKey = systemFilterStorageKey('panel');
+/** What the rail does with no stored choice: the rows it always had. */
+export const DEFAULT_RAIL_VIEW: RailView = 'list';
+export const DEFAULT_SORT: ListSort = 'updated';
+
+/** Stored value read back; anything unknown or malformed is the default list. */
+export const railViewFromStored = (raw: unknown): RailView => (raw === 'titles' ? 'titles' : DEFAULT_RAIL_VIEW);
+
+/** What the rail calls a system filter whose system it cannot name (the systems list has not loaded, or failed). */
+export const UNKNOWN_SYSTEM_LABEL = 'One system';
+
+/** The System select's entries, plus one for a filter whose system is not in the list (not loaded, or failed), so the select, its name and the Filters button agree (KI-30). */
+export const systemSelectOptions = (systems: readonly SystemSummary[], filter: SystemFilter): SystemOption[] => {
+  const options = systemOptions(systems);
+  if (filter.kind !== 'system' || options.some((entry) => entry.id === systemFilterToId(filter))) return options;
+  return [...options.slice(0, -1), { id: systemFilterToId(filter), label: UNKNOWN_SYSTEM_LABEL }, ...options.slice(-1)];
+};
+
+/** The prefix of a system entry in the Show select: "System · Tidepool", as folders read "Folder · Launch". */
+export const SHOW_SYSTEM_LABEL = 'System · ';
+
+/**
+ * The rail's "Design systems" group in the Show select: one entry per system, A to Z, with Draft or its
+ * used-by count (the same entries and ids as the System select). Empty while the systems are not known, so
+ * the group is simply left out.
+ */
+export const showSystemOptions = (systems: readonly SystemSummary[]): ScopeOption[] =>
+  systemOptions(systems)
+    .filter((entry) => entry.id.startsWith('system:'))
+    .map((entry) => ({ id: entry.id, label: `${SHOW_SYSTEM_LABEL}${entry.label}`, hint: entry.hint ?? '' }));
+
+/** The system filter in words for the chip: the system's name, "No system", or "One system" when it cannot be named. Null when not filtering. */
+export const systemFilterLabel = (filter: SystemFilter, systems: readonly Pick<SystemSummary, 'id' | 'name'>[]): string | null => {
+  if (filter.kind === 'all') return null;
+  if (filter.kind === 'none') return 'No system';
+  return systems.find((system) => system.id === filter.id)?.name ?? UNKNOWN_SYSTEM_LABEL;
+};
+
+export type RailFilterState = {
+  /** The list is narrowed by a system filter. Sort and view change the look and the order, never what is listed. */
+  filtering: boolean;
+  /** How many of System, Sort and View differ from the defaults, for the area's own "Reset" offer. */
+  changed: number;
+  /** The Filters button's accessible name. */
+  buttonLabel: string;
+  /** The words next to the dot, for a screen reader and the tooltip; empty when nothing is filtered. */
+  summary: string;
+  /** The removable chip under the header while the Filters area is closed; null when nothing is filtered. */
+  chip: { label: string; removeLabel: string } | null;
+};
+
+/** What the Filters button shows while its area is closed: a dot when the list is narrowed, and a name that says so. */
+export const railFilterState = (input: { system: SystemFilter; sort: ListSort; view: RailView; systems: readonly Pick<SystemSummary, 'id' | 'name'>[] }): RailFilterState => {
+  const filter = input.system;
+  const filtering = filter.kind !== 'all';
+  const changed = (filtering ? 1 : 0) + (input.sort !== DEFAULT_SORT ? 1 : 0) + (input.view !== DEFAULT_RAIL_VIEW ? 1 : 0);
+  const named = filter.kind === 'system' ? input.systems.find((system) => system.id === filter.id)?.name : undefined;
+  const summary = filter.kind === 'all' ? '' : filter.kind === 'none' ? 'Showing designs with no system' : named ? `Showing designs that use ${named}` : 'Showing designs that use one system';
+  const label = systemFilterLabel(filter, input.systems);
+  return {
+    filtering,
+    changed,
+    buttonLabel: filtering ? `Filters, on. ${summary}` : 'Filters',
+    summary,
+    chip: label === null ? null : { label, removeLabel: filter.kind === 'none' ? 'Remove the no system filter' : label === UNKNOWN_SYSTEM_LABEL ? 'Remove the system filter' : `Remove the ${label} system filter` },
+  };
+};
+
+/** Back to the rail's defaults for the three controls in the area (System all, Updated, List). */
+export const RAIL_FILTER_DEFAULTS: { system: SystemFilter; sort: ListSort; view: RailView } = { system: ALL_SYSTEMS, sort: DEFAULT_SORT, view: DEFAULT_RAIL_VIEW };
 
 /** A deleted system counts as no system: the design keeps its own copy, but the link is gone. */
 export const matchesSystem = (design: Pick<DesignSummary, 'system'>, filter: SystemFilter): boolean => {
