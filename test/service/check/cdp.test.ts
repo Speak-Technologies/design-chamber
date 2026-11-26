@@ -4,7 +4,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 
-import { CdpUnavailable, checkBrowserArgs, createFrameParser, encodeMessage, openCdp } from '../../../src/service/check/cdp.ts';
+import { CdpUnavailable, DEFAULT_LAUNCH_BUDGET_MS, checkBrowserArgs, createFrameParser, encodeMessage, openCdp } from '../../../src/service/check/cdp.ts';
 import { CHECK_CSP, DOCUMENT_ORIGIN } from '../../../src/service/check/render.ts';
 import { browserClassOf, planArtboards } from '../../../src/service/check/engine.ts';
 import { parseDesignJsonText } from '../../../src/shared/design-json.ts';
@@ -101,7 +101,7 @@ test('the plan follows the wall: screens with a file, at their viewports; pages 
 
 // ---- the launch handshake against a fake browser process ----
 
-type FakeChild = EventEmitter & { stdio: (PassThrough | null)[]; pid: number | undefined; kill: (signal?: string) => boolean };
+type FakeChild = EventEmitter & { stdio: (PassThrough | null)[]; pid: number | undefined; kill: (signal?: string) => boolean; killed?: boolean };
 
 /**
  * A `spawn` fake: a browser process that stays alive but only answers `Browser.getVersion` after
@@ -109,7 +109,7 @@ type FakeChild = EventEmitter & { stdio: (PassThrough | null)[]; pid: number | u
  * a ChildProcess for `openCdp` (stdio pipes 3/4, `on`, `kill`, `pid`); `pid` is undefined so the
  * kill falls back to `child.kill` and no real process group is signalled.
  */
-const fakeBrowserSpawn = (delayMs: number, exitAt?: number): typeof import('node:child_process').spawn => {
+const fakeBrowserSpawn = (delayMs: number, exitAt?: number, spawned?: FakeChild[]): typeof import('node:child_process').spawn => {
   const impl = (): FakeChild => {
     const toBrowser = new PassThrough();
     const fromBrowser = new PassThrough();
@@ -117,9 +117,11 @@ const fakeBrowserSpawn = (delayMs: number, exitAt?: number): typeof import('node
     child.stdio = [null, null, null, toBrowser, fromBrowser];
     child.pid = undefined;
     child.kill = () => {
+      child.killed = true;
       child.emit('exit', 0, null);
       return true;
     };
+    spawned?.push(child);
     let ready = false;
     let lastVersionId: number | null = null;
     const answer = (id: number, result: object): void => {
@@ -215,4 +217,55 @@ test('a live browser that answers the handshake with an error is "can\'t be driv
   );
   assert.equal(asked, 1, 'asked once');
   assert.ok(Date.now() - started < 1000, 'failed at once');
+});
+
+test('the default launch budget for a live-but-silent browser is 60 s', () => {
+  assert.equal(DEFAULT_LAUNCH_BUDGET_MS, 60_000);
+});
+
+test('a launch budget shorter than one wait window clips that window (the restart launch gets only what is left)', async () => {
+  // timeoutMs alone would wait 5 s; the clip to the remaining budget ends it at 120 ms.
+  const started = Date.now();
+  await assert.rejects(
+    openCdp('/fake/chrome', [], { timeoutMs: 5000, launchBudgetMs: 120, spawnImpl: fakeBrowserSpawn(60_000) }),
+    (error: unknown) => error instanceof CdpUnavailable,
+  );
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed >= 100 && elapsed < 1500, `gave up at the budget, not the wait window (${elapsed} ms)`);
+});
+
+test('aborting a silent launch kills the browser and rejects at once, not after the launch budget', async () => {
+  const spawned: FakeChild[] = [];
+  const controller = new AbortController();
+  const started = Date.now();
+  const opening = openCdp('/fake/chrome', [], { timeoutMs: 5000, launchBudgetMs: 60_000, signal: controller.signal, spawnImpl: fakeBrowserSpawn(60_000, undefined, spawned) });
+  setTimeout(() => {
+    controller.abort();
+    assert.equal(spawned[0]?.killed, true, 'killed in the abort itself, not after the handshake unwinds');
+  }, 30);
+  await assert.rejects(opening, (error: unknown) => error instanceof CdpUnavailable && /cancelled/.test(error.message));
+  assert.ok(Date.now() - started < 1000, 'rejected at once');
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0]?.killed, true, 'the browser process was killed');
+});
+
+test('a launch whose signal is already aborted never starts a browser', async () => {
+  const spawned: FakeChild[] = [];
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    openCdp('/fake/chrome', [], { timeoutMs: 5000, signal: controller.signal, spawnImpl: fakeBrowserSpawn(10, undefined, spawned) }),
+    (error: unknown) => error instanceof CdpUnavailable,
+  );
+  assert.equal(spawned.length, 0);
+});
+
+test('aborting after the launch is the caller\'s business: the abort listener is gone and the session stays up', async () => {
+  const spawned: FakeChild[] = [];
+  const controller = new AbortController();
+  const session = await openCdp('/fake/chrome', [], { timeoutMs: 40, signal: controller.signal, spawnImpl: fakeBrowserSpawn(10, undefined, spawned) });
+  controller.abort();
+  assert.equal(session.exited, false);
+  assert.notEqual(spawned[0]?.killed, true);
+  await session.close();
 });

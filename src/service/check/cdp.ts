@@ -130,9 +130,14 @@ export type OpenOptions = {
   commandTimeoutMs?: number;
   /** Whole launch budget while the process stays alive; defaults to `DEFAULT_LAUNCH_BUDGET_MS`. Test seam. */
   launchBudgetMs?: number;
+  /** Aborting during the launch kills the browser and rejects at once (`CdpUnavailable`); after the launch the caller owns cancellation. */
+  signal?: AbortSignal;
   /** Injectable for tests. */
   spawnImpl?: typeof spawn;
 };
+
+/** What a caller's `openBrowser` may be told: the run's abort signal, and a launch budget shorter than the default. */
+export type OpenBrowserOptions = { signal?: AbortSignal; launchBudgetMs?: number };
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 15_000;
 const CLOSE_GRACE_MS = 1500;
@@ -140,9 +145,11 @@ const CLOSE_GRACE_MS = 1500;
  * How long a live browser is given to answer the launch handshake. A cold first start on a loaded
  * machine can take tens of seconds (CI saw the first launch exceed 20 s while later launches were
  * fast); a process that exits fails at once regardless, so this only bounds a live-but-silent one.
- * Kept well under the check tool's 180 s kill so a patient launch still leaves room for the run.
+ * A launch can be cancelled (`OpenOptions.signal`); the check's restart launch is also clipped to what
+ * is left of the whole run (render.ts), so the first launch plus the run plus a restart stay under the
+ * check tool's 180 s kill.
  */
-const DEFAULT_LAUNCH_BUDGET_MS = 60_000;
+export const DEFAULT_LAUNCH_BUDGET_MS = 60_000;
 
 const killTree = (child: ChildProcess, platform: NodeJS.Platform): void => {
   const { pid } = child;
@@ -162,6 +169,8 @@ const killTree = (child: ChildProcess, platform: NodeJS.Platform): void => {
 /** Start the browser with the pipe attached and prove it answers (`Browser.getVersion`). */
 export const openCdp = async (browserPath: string, args: string[], options: OpenOptions): Promise<CdpSession> => {
   const platform = process.platform;
+  // Already cancelled: do not start a browser at all.
+  if (options.signal?.aborted === true) throw new CdpUnavailable('The launch was cancelled.');
   const child = (options.spawnImpl ?? spawn)(browserPath, args, {
     stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'],
     detached: platform !== 'win32',
@@ -292,6 +301,15 @@ export const openCdp = async (browserPath: string, args: string[], options: Open
   // "can't be driven". A slow launch is not.
   const launchBudgetMs = options.launchBudgetMs ?? DEFAULT_LAUNCH_BUDGET_MS;
   const launchDeadline = Date.now() + launchBudgetMs;
+  // Cancelling during the launch ends the browser now (the handshake is rejected through `markExited`),
+  // not after the wait window, so Ctrl-C and the tool's SIGTERM are honoured at once.
+  let cancelled = false;
+  const onAbort = (): void => {
+    cancelled = true;
+    killTree(child, platform);
+    markExited();
+  };
+  options.signal?.addEventListener('abort', onAbort, { once: true });
   try {
     for (;;) {
       const remaining = launchDeadline - Date.now();
@@ -306,7 +324,9 @@ export const openCdp = async (browserPath: string, args: string[], options: Open
     }
   } catch (error) {
     await session.close();
-    throw new CdpUnavailable(error instanceof Error ? error.message : 'The browser did not answer.');
+    throw new CdpUnavailable(cancelled ? 'The launch was cancelled.' : error instanceof Error ? error.message : 'The browser did not answer.');
+  } finally {
+    options.signal?.removeEventListener('abort', onAbort);
   }
   return session;
 };

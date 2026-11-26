@@ -27,7 +27,7 @@ import {
 } from '../../shared/limits.ts';
 import type { SystemDetail } from '../../shared/types.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, dataUrlOf, type FileSource } from '../bundle.ts';
-import { CdpError, CdpUnavailable, checkBrowserArgs, openCdp, type CdpSession } from '../check/cdp.ts';
+import { CdpError, CdpUnavailable, checkBrowserArgs, openCdp, type CdpSession, type OpenBrowserOptions } from '../check/cdp.ts';
 import { CHECK_CSP, DOCUMENT_ORIGIN } from '../check/render.ts';
 import { resolveBrowser } from '../chrome.ts';
 import type { ServiceContext } from '../context.ts';
@@ -147,7 +147,7 @@ export const shellFontsCss = async (detail: SystemDetail, source: FileSource): P
 
 export type ExampleDeps = {
   /** Start a browser; `null` = none is installed (every shot `no-browser`). Default: the setting or detection. */
-  openBrowser?: (() => Promise<CdpSession>) | null;
+  openBrowser?: ((options?: OpenBrowserOptions) => Promise<CdpSession>) | null;
   clock?: () => number;
   shotTimeoutMs?: number;
   budgetMs?: number;
@@ -269,7 +269,7 @@ const withTimeout = async <T>(work: Promise<T>, ms: number, onTimeout: () => voi
  */
 export const drawShots = async (
   shots: readonly PlannedShot[],
-  options: { openBrowser: () => Promise<CdpSession>; signal?: AbortSignal; clock?: () => number; shotTimeoutMs?: number; budgetMs?: number; settleMs?: number },
+  options: { openBrowser: (launch?: OpenBrowserOptions) => Promise<CdpSession>; signal?: AbortSignal; clock?: () => number; shotTimeoutMs?: number; budgetMs?: number; settleMs?: number },
 ): Promise<Map<string, { png: Buffer } | { reason: ExampleReason }>> => {
   const out = new Map<string, { png: Buffer } | { reason: ExampleReason }>();
   if (shots.length === 0) return out;
@@ -284,7 +284,7 @@ export const drawShots = async (
 
   let session: CdpSession;
   try {
-    session = await options.openBrowser();
+    session = await options.openBrowser(options.signal ? { signal: options.signal } : {});
   } catch (error) {
     if (error instanceof CdpUnavailable || error instanceof CdpError) {
       failRest(0, 'render-failed');
@@ -315,7 +315,7 @@ export const drawShots = async (
         restarted = true;
         await session.close();
         try {
-          session = await options.openBrowser();
+          session = await options.openBrowser(options.signal ? { signal: options.signal } : {});
           await session.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => undefined);
           page = null;
         } catch {
@@ -427,15 +427,19 @@ export const configureLivingExamples = (ctx: ServiceContext, deps: ExampleDeps):
   configured.set(ctx, deps);
 };
 
-const defaultOpenBrowser = (ctx: ServiceContext, systemDir: string, workDirs: string[]): (() => Promise<CdpSession>) | null => {
+const defaultOpenBrowser = (ctx: ServiceContext, systemDir: string, workDirs: string[]): ((launch?: OpenBrowserOptions) => Promise<CdpSession>) | null => {
   const browserPath = resolveBrowser(ctx.settings.read()).path;
   if (browserPath === null) return null;
-  return async () => {
+  return async (launch) => {
     const parent = thumbWorkParent(process.platform, systemDir, os.tmpdir());
     if (parent !== os.tmpdir()) await removeStaleWorkDirs(parent, WORK_PREFIX);
     const workDir = await mkdtemp(path.join(parent, WORK_PREFIX));
     workDirs.push(workDir);
-    return openCdp(browserPath, checkBrowserArgs({ workDir, platform: process.platform, isRoot: process.getuid?.() === 0, join: path.join }), { timeoutMs: BROWSER_START_MS });
+    return openCdp(browserPath, checkBrowserArgs({ workDir, platform: process.platform, isRoot: process.getuid?.() === 0, join: path.join }), {
+      timeoutMs: BROWSER_START_MS,
+      ...(launch?.signal ? { signal: launch.signal } : {}),
+      ...(launch?.launchBudgetMs !== undefined ? { launchBudgetMs: launch.launchBudgetMs } : {}),
+    });
   };
 };
 

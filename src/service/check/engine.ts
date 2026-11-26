@@ -165,7 +165,12 @@ export const runCheck = async (input: RunCheckInput): Promise<RunCheckResult> =>
   try {
     if (plan.length > 0) await createRunDir(designDir, runId);
     const outcome = await renderArtboards({
-      openBrowser: () => openCdp(browserPath, checkBrowserArgs({ workDir, platform: input.platform, isRoot: input.isRoot, join: path.join }), { timeoutMs: BROWSER_START_MS }),
+      openBrowser: (launch) =>
+        openCdp(browserPath, checkBrowserArgs({ workDir, platform: input.platform, isRoot: input.isRoot, join: path.join }), {
+          timeoutMs: BROWSER_START_MS,
+          ...(launch?.signal ? { signal: launch.signal } : {}),
+          ...(launch?.launchBudgetMs !== undefined ? { launchBudgetMs: launch.launchBudgetMs } : {}),
+        }),
       plan,
       kind,
       loadDocument,
