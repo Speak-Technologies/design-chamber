@@ -283,3 +283,18 @@ test('a wide or cell-hungry table cannot multiply the source', () => {
   assert.ok(denseOut.includes('<p>|'), 'rows past the cell budget stay as text');
   assert.ok(living(dense).includes('<table'), 'the living profile bounds cells the same way');
 });
+
+test('rows past the table cell budget stay escaped text in both profiles', () => {
+  // 64 columns over 400 bare rows exhausts the budget, so the hostile last row lands in the overflow paragraph.
+  const hostile = '|<img src=x onerror=alert(1)>|[<svg onload=1>](javascript:x)|';
+  const source = `${'|a'.repeat(64)}\n${'|-'.repeat(64)}\n${Array(400).fill('|').join('\n')}\n${hostile}`;
+  for (const profile of ['board', 'living'] as const) {
+    const out = renderMarkdown(source, profile);
+    const overflow = out.slice(out.lastIndexOf('</table>'));
+    assert.ok(overflow.includes('<p>|'), `${profile}: the hostile row is in the overflow paragraph`);
+    assert.ok(!/<img/i.test(out), `${profile}: no img in ${overflow.slice(-200)}`);
+    assert.ok(!/<svg/i.test(out), `${profile}: no svg in ${overflow.slice(-200)}`);
+    assert.ok(overflow.includes('&lt;img src=x onerror=alert(1)&gt;'), `${profile}: the img stays escaped text`);
+    assert.ok(overflow.includes(escapeHtml('[<svg onload=1>](javascript:x)')), `${profile}: the refused link stays escaped text`);
+  }
+});
