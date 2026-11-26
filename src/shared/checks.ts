@@ -18,6 +18,7 @@ import {
   SYSTEM_NAME_MAX,
   VIEWPORT_ID_PATTERN,
 } from './limits.ts';
+import { BOARD_LAYOUTS } from './system-json.ts';
 import type {
   ArtboardCheck,
   BuildProblemReason,
@@ -336,6 +337,38 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
       return `PROPOSAL.json can't be used: ${PROPOSAL_PROBLEM_SENTENCES[reason]}`;
     },
   },
+  // Board layout hints and the visual system check (documentation/specs/system-board-layout-and-visual-check.md §B.6).
+  'system-layout-invalid': {
+    severity: 'warning',
+    sentence: (f) => `system.json asks for ${num(f.params?.count)} board layouts Design Chamber doesn't know, so those entries use the default.`,
+  },
+  'system-board-overflow': {
+    severity: 'warning',
+    sentence: (f, where) => `${where}: the board is ${num(f.params?.px)}px wide, wider than the ${num(f.params?.width)}px it has, so it scrolls sideways.`,
+  },
+  'system-board-preview-wide': {
+    severity: 'warning',
+    sentence: (f, where) => `${where}: this example is ${num(f.params?.px)}px wide but the board can give it ${num(f.params?.width)}px, so it scrolls sideways in its card.`,
+  },
+  'system-board-preview-outside': {
+    severity: 'warning',
+    sentence: (f, where) => `${where}: part of this example sits ${num(f.params?.px)}px outside its card, so it's cut off or covers other entries.`,
+  },
+  'system-board-text-outside': {
+    severity: 'warning',
+    sentence: (f, where) => `${where}: text runs ${num(f.params?.px)}px outside its card.`,
+  },
+  'system-board-hint-small': {
+    severity: 'info',
+    sentence: (f, where) => `${where}: this entry is set to ${f.params?.layout ?? 'card'} but needed the full width. Set its layout to full.`,
+  },
+  'system-board-partial': {
+    severity: 'info',
+    sentence: (f) =>
+      f.params?.area !== undefined
+        ? `Only the first ${num(f.params?.max)}px of ${AREA_LABELS[f.params.area]} were pictured at ${num(f.params?.width)}px; all of it was measured.`
+        : `Only the first ${num(f.params?.max)} entries were measured.`,
+  },
 };
 
 export const CHECK_CODES: readonly CheckCode[] = Object.freeze(Object.keys(RULES) as CheckCode[]);
@@ -368,6 +401,12 @@ const ARTBOARD_CODES: ReadonlySet<CheckCode> = new Set<CheckCode>([
   'dialog-opened',
   'render-failed',
   'render-timeout',
+  'system-board-overflow',
+  'system-board-preview-wide',
+  'system-board-preview-outside',
+  'system-board-text-outside',
+  'system-board-hint-small',
+  'system-board-partial',
 ]);
 
 /** `screens/home.html @ Phone 390×844`, or the file alone when the viewport is not known. */
@@ -514,6 +553,8 @@ const parseParams = (value: unknown): CheckParams | undefined => {
   if (build !== null) out.build = build;
   const proposal = oneOf(value.proposal, PROPOSAL_REASONS);
   if (proposal !== null) out.proposal = proposal;
+  const layout = oneOf(value.layout, BOARD_LAYOUTS);
+  if (layout !== null) out.layout = layout;
   return Object.keys(out).length > 0 ? out : undefined;
 };
 

@@ -86,8 +86,8 @@ test('hostile pattern and brand text never becomes markup', () => {
   const base = boardFixture();
   const detail: SystemDetail = {
     ...base,
-    patterns: [{ id: 'voice', kind: hostile, title: hostile, note: hostile, text: `${hostile}\n\n${hostile}`, problem: hostile }],
-    brand: [{ id: 'Bad Id', kind: 'other', title: hostile, note: '', text: null, problem: null }],
+    patterns: [{ id: 'voice', kind: hostile, title: hostile, note: hostile, text: `${hostile}\n\n${hostile}`, problem: hostile, layout: null }],
+    brand: [{ id: 'Bad Id', kind: 'other', title: hostile, note: '', text: null, problem: null, layout: null }],
   };
   const html = buildBoardHtml(detail, { scheme: 'light' });
   assert.equal((html.match(/<script\b/gi) ?? []).length, 1, 'only the board script');

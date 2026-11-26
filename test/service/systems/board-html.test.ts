@@ -84,7 +84,7 @@ test('hostile names, notes, titles and values are escaped in markup and never re
     ...base,
     name: HOSTILE,
     overview: { text: HOSTILE, problem: HOSTILE },
-    notes: [{ id: 'voice', title: HOSTILE, text: HOSTILE, problem: null }],
+    notes: [{ id: 'voice', title: HOSTILE, text: HOSTILE, problem: null, layout: null }],
     tokens: [
       ...base.tokens,
       hostileToken('--evil', 'red;}</style><script>alert(3)</script>'),

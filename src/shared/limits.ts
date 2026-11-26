@@ -491,6 +491,34 @@ export const TOKEN_PREVIEW_VARS_MAX = 512;
 export const TOKEN_PREVIEW_NAME_PATTERN = /^--[A-Za-z0-9_-]{1,80}$/;
 /** Characters of one board entry key (`data-dc-entry`). */
 export const BOARD_ENTRY_MAX = 120;
+/** Characters of an ignored layout hint's value shown in `boardLayout.ignored` (one line, clipped). */
+export const BOARD_LAYOUT_TEXT_MAX = 16;
+/** Ignored layout hints kept in `boardLayout.ignored`; `ignoredCount` carries the true total. */
+export const SYSTEM_LAYOUT_PROBLEMS_MAX = 20;
+
+// ---- Visual system check (documentation/specs/system-board-layout-and-visual-check.md §B.3) ----
+
+/** The board widths the check draws: a 1920px and a 1440px window with the side panel open (D7). */
+export const SYSTEM_CHECK_BOARD_WIDTHS = [
+  { id: 'wide', label: 'Wide board', width: 1526, height: 900 },
+  { id: 'narrow', label: 'Narrow board', width: 1046, height: 900 },
+] as const;
+/** Viewport-height tiles pictured per area per width (≤ 3 600px of an area). */
+export const SYSTEM_CHECK_TILES_PER_AREA = 4;
+/** PNGs per system check run: 2 widths × 4 areas × 4 tiles. */
+export const SYSTEM_CHECK_PNGS_MAX = 32;
+/** One board width's render budget. */
+export const SYSTEM_CHECK_BOARD_TIMEOUT_MS = 45_000;
+/** The whole system render's budget; the tool kills at CHECK_TOOL_TIMEOUT_MS (180s). */
+export const SYSTEM_CHECK_RENDER_BUDGET_MS = 110_000;
+/** Entries the board probe measures; the rest raise `system-board-partial`. */
+export const SYSTEM_BOARD_ITEMS_MEASURED_MAX = 1000;
+/** Text nodes scanned per entry for `textOut`. */
+export const SYSTEM_BOARD_TEXT_NODES_PER_ITEM = 50;
+/** Shadow elements scanned per preview. */
+export const SYSTEM_BOARD_PREVIEW_ELEMENTS_MAX = 400;
+/** Findings kept per board code (after dedupe across widths). */
+export const SYSTEM_BOARD_FINDINGS_PER_CODE = 20;
 
 // ---- Phase 2.5 S8: building systems with the agent ----
 

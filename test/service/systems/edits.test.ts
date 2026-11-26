@@ -230,6 +230,19 @@ describe('a save', () => {
     assert.equal(detail.tokens.some((token) => token.name === '--space-4'), false);
   });
 
+  test('a meta edit of a component keeps the agent\'s layout hint and the section defaults', async (t) => {
+    const rig = await setup(t);
+    await rig.tmp.write(
+      `_systems/${rig.id}/system.json`,
+      `${JSON.stringify({ version: 1, layout: { components: 'compact' }, components: [{ id: 'button', name: 'Button', note: 'Old.', layout: 'full' }] }, null, 2)}\n`,
+    );
+    await save(rig, { meta: [{ at: ['components', 'button', 'note'], value: 'New guidance.' }] });
+    const json = JSON.parse(await rig.file('system.json')) as { layout: unknown; components: { note: string; layout: string }[] };
+    assert.equal(json.components[0]?.note, 'New guidance.');
+    assert.equal(json.components[0]?.layout, 'full', 'the entry hint survives the user\'s note edit');
+    assert.deepEqual(json.layout, { components: 'compact' }, 'the section defaults survive too');
+  });
+
   test('a remove-only save says so in the notice', async (t) => {
     const rig = await setup(t);
     const answer = await save(rig, { tokens: [{ kind: 'remove', name: '--space-4', mode: 'both' }] });

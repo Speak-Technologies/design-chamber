@@ -10,21 +10,28 @@ import { createHash } from 'node:crypto';
 import { describe, test } from 'node:test';
 
 import {
+  BOARD_LAYOUTS,
   buildSystemDetail,
   coveredAreas,
   deriveReview,
+  effectiveLayout,
   humaniseSystemId,
+  isBoardLayout,
   isReservedSystemId,
+  LAYOUTS_OF_SECTION,
   parseSystemJson,
   parseSystemState,
+  readItemLayout,
+  readSectionLayouts,
   safeAssetName,
   sectionFingerprints,
   sourceLineOf,
   SYSTEM_SECTIONS,
+  type LayoutIgnoredSink,
   type SystemDetailSource,
   type SystemTokenRules,
 } from '../../src/shared/system-json.ts';
-import type { SystemState } from '../../src/shared/types.ts';
+import type { JsonObject, SystemState } from '../../src/shared/types.ts';
 
 const NOW = '2026-11-19T10:00:00.000Z';
 
@@ -409,7 +416,7 @@ describe('buildSystemDetail', () => {
       brand: [{ id: 'hero', kind: 'marketing', title: 'Heroes' }],
     });
     const detail = buildSystemDetail(source({ systemJson, texts: { 'patterns/voice.md': '<b>not markup</b>' } }), RULES);
-    assert.deepEqual(detail.patterns, [{ id: 'voice', kind: 'voice', title: 'Voice', note: 'Plain.', text: '<b>not markup</b>', problem: null }]);
+    assert.deepEqual(detail.patterns, [{ id: 'voice', kind: 'voice', title: 'Voice', note: 'Plain.', text: '<b>not markup</b>', problem: null, layout: null }]);
     assert.deepEqual(detail.brand.map((entry) => [entry.id, entry.text]), [['hero', null]]);
   });
 
@@ -541,5 +548,159 @@ describe('Phase 2.6 AD-9: sources.code project and existing', () => {
     assert.deepEqual(parsed.sources.code?.existing?.read.page, ['ds/index.html']);
     assert.deepEqual(parsed.sources.code?.existing?.read.docs, []);
     assert.equal(parsed.sources.code?.existing?.read.components.length, 20);
+  });
+});
+
+describe('board layout hints (system-board-layout-and-visual-check.md §A)', () => {
+  const sink = (): LayoutIgnoredSink => ({ ignored: [], ignoredCount: 0 });
+
+  test('the closed set and the per-section lists', () => {
+    assert.deepEqual(BOARD_LAYOUTS, ['card', 'compact', 'full', 'table']);
+    assert.ok(isBoardLayout('compact') && !isBoardLayout('wide') && !isBoardLayout('') && !isBoardLayout(7));
+    assert.deepEqual(LAYOUTS_OF_SECTION.components, ['card', 'compact', 'full', 'table']);
+    assert.deepEqual(LAYOUTS_OF_SECTION.colours, ['card', 'compact', 'table']);
+    for (const section of ['typography', 'layers', 'assets'] as const) assert.equal(LAYOUTS_OF_SECTION[section], undefined, section);
+  });
+
+  test('readItemLayout: absent or null reads as not set; a valid value reads as itself', () => {
+    const s = sink();
+    assert.equal(readItemLayout(undefined, 'components.button', s), null);
+    assert.equal(readItemLayout(null, 'components.button', s), null);
+    assert.equal(readItemLayout('full', 'components.button', s), 'full');
+    assert.deepEqual(s, { ignored: [], ignoredCount: 0 });
+  });
+
+  test('readItemLayout: unknown word, number, over 16 chars and control characters are ignored with a cleaned value', () => {
+    const s = sink();
+    assert.equal(readItemLayout('wide', 'components.table', s), null);
+    assert.equal(readItemLayout(42, 'components.num', s), null);
+    assert.equal(readItemLayout('x'.repeat(17), 'components.long', s), null);
+    assert.equal(readItemLayout('ca\trd\n', 'components.ctrl', s), null);
+    assert.equal(readItemLayout(true, 'components.bool', s), null);
+    assert.equal(readItemLayout({ layout: 'card' }, 'components.obj', s), null);
+    assert.equal(readItemLayout(['card'], 'components.arr', s), null);
+    assert.deepEqual(s.ignored, [
+      { entry: 'components.table', value: 'wide', reason: 'unknown' },
+      { entry: 'components.num', value: 'number', reason: 'unknown' },
+      { entry: 'components.long', value: `${'x'.repeat(15)}…`, reason: 'unknown' },
+      { entry: 'components.ctrl', value: 'ca rd', reason: 'unknown' },
+      { entry: 'components.bool', value: 'boolean', reason: 'unknown' },
+      { entry: 'components.obj', value: 'object', reason: 'unknown' },
+      { entry: 'components.arr', value: 'array', reason: 'unknown' },
+    ]);
+    assert.equal(s.ignoredCount, 7);
+  });
+
+  test('readSectionLayouts: valid defaults read; absent reads as {}', () => {
+    const s = sink();
+    assert.deepEqual(readSectionLayouts(null, s), {});
+    assert.deepEqual(readSectionLayouts({ version: 1 }, s), {});
+    assert.deepEqual(readSectionLayouts({ layout: { components: 'compact', colours: 'table', overview: 'full' } }, s), { components: 'compact', colours: 'table', overview: 'full' });
+    assert.deepEqual(s, { ignored: [], ignoredCount: 0 });
+  });
+
+  test('readSectionLayouts: not an object, unknown keys, misplaced and unknown values', () => {
+    const s = sink();
+    assert.deepEqual(readSectionLayouts({ layout: 'compact' }, s), {});
+    assert.deepEqual(readSectionLayouts({ layout: { typography: 'card', layers: 'table', assets: 'full', colours: 'full', nope: 'card', components: 'banana', spacing: 3 } }, s), {});
+    assert.deepEqual(s.ignored, [
+      { entry: 'layout', value: 'compact', reason: 'unknown' },
+      { entry: 'layout.typography', value: 'card', reason: 'not-here' },
+      { entry: 'layout.layers', value: 'table', reason: 'not-here' },
+      { entry: 'layout.assets', value: 'full', reason: 'not-here' },
+      { entry: 'layout.colours', value: 'full', reason: 'not-here' },
+      { entry: 'layout.nope', value: 'card', reason: 'unknown' },
+      { entry: 'layout.components', value: 'banana', reason: 'unknown' },
+      { entry: 'layout.spacing', value: 'number', reason: 'unknown' },
+    ]);
+    assert.equal(s.ignoredCount, 8);
+  });
+
+  test('readSectionLayouts: a __proto__ key is an ordinary ignored key, and a long key is clipped to 40', () => {
+    const s = sink();
+    const raw = JSON.parse(`{"layout":{"__proto__":"card","${'k'.repeat(60)}":"card"}}`) as JsonObject;
+    assert.deepEqual(readSectionLayouts(raw, s), {});
+    assert.equal(Object.getPrototypeOf(raw), Object.prototype);
+    assert.deepEqual(s.ignored.map((record) => record.entry), ['layout.__proto__', `layout.${'k'.repeat(40)}`]);
+    assert.ok(s.ignored.every((record) => record.reason === 'unknown'));
+  });
+
+  const layoutSource = (json: Record<string, unknown>): SystemDetailSource =>
+    source({
+      systemJson: JSON.stringify(json),
+      texts: { 'notes/grid.md': 'Space things.', 'patterns/empty.md': 'One action.', 'brand/press.md': 'Daylight.' },
+      files: [{ rel: 'components/button.html', bytes: 10 }],
+    });
+
+  test('the detail carries item hints, section defaults and the ignored list; a bad hint never drops its entry nor adds a problem', () => {
+    const detail = buildSystemDetail(
+      layoutSource({
+        version: 1,
+        layout: { components: 'compact', patterns: 'table' },
+        components: [
+          { id: 'button', name: 'Button', example: 'components/button.html' },
+          { id: 'table', name: 'Table', layout: 'full' },
+          { id: 'modal', name: 'Modal', layout: 'wide' },
+        ],
+        notes: [{ id: 'grid', title: 'Grid', layout: 'full' }],
+        patterns: [{ id: 'empty', kind: 'do-dont', title: 'Empty states', layout: 'card' }],
+        brand: [{ id: 'press', kind: 'marketing', title: 'Press', layout: 'bogus' }],
+      }),
+      RULES,
+    );
+    assert.deepEqual(detail.components.map((component) => component.layout), [null, 'full', null]);
+    assert.equal(detail.notes[0]?.layout, 'full');
+    assert.equal(detail.patterns[0]?.layout, 'card');
+    assert.equal(detail.brand[0]?.layout, null);
+    assert.deepEqual(detail.boardLayout.sections, { components: 'compact', patterns: 'table' });
+    assert.deepEqual(detail.boardLayout.ignored, [
+      { entry: 'components.modal', value: 'wide', reason: 'unknown' },
+      { entry: 'brand.press', value: 'bogus', reason: 'unknown' },
+    ]);
+    assert.equal(detail.boardLayout.ignoredCount, 2);
+    assert.equal(detail.components.length, 3, 'the modal entry stays');
+    assert.equal(detail.brand.length, 1, 'the press entry stays');
+    assert.deepEqual(detail.problems, [], 'a bad hint is not an entry problem');
+  });
+
+  test('effective layout: the entry hint wins over the section default, which wins over card', () => {
+    const detail = buildSystemDetail(layoutSource({ version: 1, layout: { components: 'compact' }, components: [{ id: 'button', name: 'Button', layout: 'full' }, { id: 'chip', name: 'Chip' }] }), RULES);
+    assert.equal(effectiveLayout(detail, 'components', detail.components[0]?.layout ?? null), 'full');
+    assert.equal(effectiveLayout(detail, 'components', detail.components[1]?.layout ?? null), 'compact');
+    assert.equal(effectiveLayout(detail, 'patterns', null), 'card');
+  });
+
+  test('the ignored list caps at 20 with the true count', () => {
+    const components = Array.from({ length: 30 }, (_, n) => ({ id: `c${n}`, name: `C${n}`, layout: 'wide' }));
+    const detail = buildSystemDetail(layoutSource({ version: 1, components }), RULES);
+    assert.equal(detail.boardLayout.ignored.length, 20);
+    assert.equal(detail.boardLayout.ignoredCount, 30);
+    assert.equal(detail.components.length, 30);
+  });
+
+  test('a layout-only change leaves every section fingerprint equal (reviews are not reset)', () => {
+    const plain = {
+      version: 1,
+      components: [{ id: 'button', name: 'Button', example: 'components/button.html' }],
+      notes: [{ id: 'grid', title: 'Grid' }],
+      patterns: [{ id: 'empty', kind: 'do-dont', title: 'Empty states' }],
+      brand: [{ id: 'press', kind: 'marketing', title: 'Press' }],
+    };
+    const hinted = {
+      ...plain,
+      layout: { components: 'compact', colours: 'table', overview: 'full', patterns: 'table', brand: 'compact' },
+      components: [{ id: 'button', name: 'Button', example: 'components/button.html', layout: 'full' }],
+      notes: [{ id: 'grid', title: 'Grid', layout: 'full' }],
+      patterns: [{ id: 'empty', kind: 'do-dont', title: 'Empty states', layout: 'card' }],
+      brand: [{ id: 'press', kind: 'marketing', title: 'Press', layout: 'table' }],
+    };
+    const before = sectionFingerprints(buildSystemDetail(layoutSource(plain), RULES));
+    const after = sectionFingerprints(buildSystemDetail(layoutSource(hinted), RULES));
+    assert.deepEqual(after, before);
+  });
+
+  test('an unreadable system.json carries no hints and no ignored records', () => {
+    const detail = buildSystemDetail(source({ systemJson: '{ nope' }), RULES);
+    assert.deepEqual(detail.boardLayout, { sections: {}, ignored: [], ignoredCount: 0 });
   });
 });

@@ -18,9 +18,11 @@
 
 import { sha256Hex } from './agent/ownership.ts';
 import {
+  BOARD_LAYOUT_TEXT_MAX,
   BUILD_PROBLEM_VALUE_MAX,
   LOCATION_READ_LIST_MAX,
   REPO_REL_PATTERN,
+  SYSTEM_LAYOUT_PROBLEMS_MAX,
   SYSTEM_BRAND_MAX,
   SYSTEM_BUILD_CALLS_MAX,
   SYSTEM_BUILD_JSON_MAX_BYTES,
@@ -49,6 +51,7 @@ import {
 import { classifyToken, isDarkContext, isLightContext, validateTokenValue, type TypeField, type ValueCheck } from './token-edit.ts';
 import { ALSO_SET_MAX, scanTokens, type Declaration, type TokenContext } from './tokens-css.ts';
 import type {
+  BoardLayout,
   BuildJson,
   BuildView,
   CandidateMark,
@@ -490,6 +493,92 @@ export const coveredAreas = (raw: JsonObject | null): { areas: SystemArea[]; pro
   return { areas: SYSTEM_AREAS.filter((area) => chosen.has(area)), problem: null };
 };
 
+// ---- board layout hints (documentation/specs/system-board-layout-and-visual-check.md §A) ----
+
+/** The closed set of board layouts; `card` is the default. */
+export const BOARD_LAYOUTS: readonly BoardLayout[] = Object.freeze(['card', 'compact', 'full', 'table']);
+
+export const isBoardLayout = (value: unknown): value is BoardLayout => typeof value === 'string' && (BOARD_LAYOUTS as readonly string[]).includes(value);
+
+/** Which layouts each section takes; a section absent here (typography, layers, assets) takes none. */
+export const LAYOUTS_OF_SECTION: Readonly<Partial<Record<SystemSection, readonly BoardLayout[]>>> = Object.freeze({
+  components: BOARD_LAYOUTS,
+  overview: BOARD_LAYOUTS,
+  patterns: BOARD_LAYOUTS,
+  brand: BOARD_LAYOUTS,
+  colours: Object.freeze(['card', 'compact', 'table'] as const),
+  spacing: Object.freeze(['card', 'compact', 'table'] as const),
+  radius: Object.freeze(['card', 'compact', 'table'] as const),
+  shadows: Object.freeze(['card', 'compact', 'table'] as const),
+  sizes: Object.freeze(['card', 'compact', 'table'] as const),
+});
+
+/** Ignored hints as the detail carries them: the list is capped, the count is the true total. */
+export type LayoutIgnoredSink = { ignored: SystemDetail['boardLayout']['ignored']; ignoredCount: number };
+
+const noteIgnored = (sink: LayoutIgnoredSink, record: SystemDetail['boardLayout']['ignored'][number]): void => {
+  sink.ignoredCount += 1;
+  if (sink.ignored.length < SYSTEM_LAYOUT_PROBLEMS_MAX) sink.ignored.push(record);
+};
+
+/**
+ * An ignored hint's value as text: a string cleaned to one line and clipped (the same cleaning
+ * `cleanDetail` applies, kept here so this file imports nothing from checks.ts), else the JSON type
+ * name. Never the raw value: it is agent text shown as data.
+ */
+const layoutValueText = (value: JsonValue): string => {
+  if (typeof value !== 'string') return Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value;
+  const flat = value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').replace(/ {2,}/g, ' ').trim();
+  return flat.length <= BOARD_LAYOUT_TEXT_MAX ? flat : `${flat.slice(0, Math.max(0, BOARD_LAYOUT_TEXT_MAX - 1)).trimEnd()}…`;
+};
+
+/**
+ * One entry's `layout` hint: absent or null → null (the section default applies); a value in
+ * `BOARD_LAYOUTS` → it; anything else → null plus one ignored record. Never drops the entry, never
+ * pushes to `problems`: the entry itself is fine, only the hint is ignored.
+ */
+export const readItemLayout = (value: JsonValue | undefined, entry: string, sink: LayoutIgnoredSink): BoardLayout | null => {
+  if (value === undefined || value === null) return null;
+  if (isBoardLayout(value)) return value;
+  noteIgnored(sink, { entry, value: layoutValueText(value), reason: 'unknown' });
+  return null;
+};
+
+/**
+ * The top-level `layout` object of section defaults. Absent → {}; not an object → one ignored record;
+ * each own key: an unknown section → `unknown`, a layout the section does not take → `not-here`, a
+ * value that is no layout at all → `unknown`. Own keys only, so `__proto__` is an ordinary ignored key.
+ */
+export const readSectionLayouts = (raw: JsonObject | null, sink: LayoutIgnoredSink): Partial<Record<SystemSection, BoardLayout>> => {
+  const out: Partial<Record<SystemSection, BoardLayout>> = {};
+  const value = raw === null ? undefined : own(raw, 'layout');
+  if (value === undefined) return out;
+  if (!isObject(value)) {
+    noteIgnored(sink, { entry: 'layout', value: layoutValueText(value), reason: 'unknown' });
+    return out;
+  }
+  for (const key of Object.keys(value)) {
+    const entryValue = own(value, key) ?? null;
+    if (!isSystemSection(key)) {
+      const shown = key.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').trim().slice(0, 40);
+      noteIgnored(sink, { entry: `layout.${shown}`, value: layoutValueText(entryValue), reason: 'unknown' });
+      continue;
+    }
+    const allowed = LAYOUTS_OF_SECTION[key];
+    if (isBoardLayout(entryValue)) {
+      if (allowed !== undefined && allowed.includes(entryValue)) out[key] = entryValue;
+      else noteIgnored(sink, { entry: `layout.${key}`, value: entryValue, reason: 'not-here' });
+    } else {
+      noteIgnored(sink, { entry: `layout.${key}`, value: layoutValueText(entryValue), reason: 'unknown' });
+    }
+  }
+  return out;
+};
+
+/** An entry's effective layout: its own valid hint, else the section's valid default, else `card`. */
+export const effectiveLayout = (detail: SystemDetail, section: SystemSection, itemLayout: BoardLayout | null): BoardLayout =>
+  itemLayout ?? detail.boardLayout.sections[section] ?? 'card';
+
 // ---- the detail ----
 
 /** What `buildSystemDetail` reads: one system's files as the store found them (§5.1 `SystemRecord`). */
@@ -777,6 +866,7 @@ const readComponents = (
   files: ReadonlySet<string>,
   defined: ReadonlySet<string>,
   problems: SystemProblem[],
+  layoutSink: LayoutIgnoredSink,
 ): SystemComponent[] => {
   const out: SystemComponent[] = [];
   const seen = new Set<string>();
@@ -798,6 +888,7 @@ const readComponents = (
     if (variants === null || states === null) return void problems.push({ entry, message: 'Variants and states are lists of up to 20 short names.' });
     if (tokenNames === null || !tokenNames.every((token) => SYSTEM_TOKEN_NAME_PATTERN.test(token))) return void problems.push({ entry, message: 'Its tokens must be a list of up to 40 token names.' });
     if (source !== undefined && source !== null && (typeof source !== 'string' || source.length > 300)) return void problems.push({ entry, message: 'Its source is text of up to 300 characters.' });
+    const layout = readItemLayout(own(value, 'layout'), entry, layoutSink);
     const exampleValue = own(value, 'example');
     let example: SystemComponent['example'] = null;
     if (exampleValue !== undefined && exampleValue !== null) {
@@ -819,6 +910,7 @@ const readComponents = (
       source: typeof source === 'string' && source !== '' ? source : null,
       example,
       undefinedTokens: tokenNames.filter((token) => !defined.has(token)),
+      layout,
     });
   });
   return out;
@@ -837,7 +929,7 @@ const bodyOf = (rel: string, texts: Readonly<Record<string, string>>, tooLarge: 
   return { text, problem: null };
 };
 
-const readNotes = (raw: JsonObject | null, texts: Readonly<Record<string, string>>, tooLarge: ReadonlySet<string>, problems: SystemProblem[]): SystemDetail['notes'] => {
+const readNotes = (raw: JsonObject | null, texts: Readonly<Record<string, string>>, tooLarge: ReadonlySet<string>, problems: SystemProblem[], layoutSink: LayoutIgnoredSink): SystemDetail['notes'] => {
   const out: SystemDetail['notes'] = [];
   const seen = new Set<string>();
   listOf(raw, 'notes').forEach((value, index) => {
@@ -849,8 +941,9 @@ const readNotes = (raw: JsonObject | null, texts: Readonly<Record<string, string
     const title = lineText(own(value, 'title'), 80);
     if (title === null) return void problems.push({ entry, message: 'This note needs a title of 1 to 80 characters.' });
     const body = bodyOf(`notes/${id}.md`, texts, tooLarge, SYSTEM_NOTE_MAX, true);
+    const layout = readItemLayout(own(value, 'layout'), entry, layoutSink);
     seen.add(id);
-    out.push({ id, title, text: body.text ?? '', problem: body.problem });
+    out.push({ id, title, text: body.text ?? '', problem: body.problem, layout });
   });
   return out;
 };
@@ -866,6 +959,7 @@ const readEntryTexts = (
   texts: Readonly<Record<string, string>>,
   tooLarge: ReadonlySet<string>,
   problems: SystemProblem[],
+  layoutSink: LayoutIgnoredSink,
 ): SystemEntryText[] => {
   const out: SystemEntryText[] = [];
   const seen = new Set<string>();
@@ -883,8 +977,9 @@ const readEntryTexts = (
     const note = noteText(own(value, 'note'), SYSTEM_USAGE_NOTE_MAX);
     if (note === null) return void problems.push({ entry, message: 'Its note is longer than 500 characters.' });
     const body = bodyOf(`${key}/${id}.md`, texts, tooLarge, SYSTEM_NOTE_MAX, false);
+    const layout = readItemLayout(own(value, 'layout'), entry, layoutSink);
     seen.add(id);
-    out.push({ id, kind, title, note, text: body.text, problem: body.problem });
+    out.push({ id, kind, title, note, text: body.text, problem: body.problem, layout });
   });
   return out;
 };
@@ -1015,10 +1110,12 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
   const fonts = readFonts(raw, files, problems);
   const logos = readLogos(raw, files, problems);
   const sourceFiles = readSourceFiles(raw, sizes, problems);
-  const components = readComponents(raw, files, defined, problems);
-  const notes = readNotes(raw, source.texts, tooLarge, problems);
-  const patterns = readEntryTexts('patterns', raw, source.texts, tooLarge, problems);
-  const brand = readEntryTexts('brand', raw, source.texts, tooLarge, problems);
+  const layoutSink: LayoutIgnoredSink = { ignored: [], ignoredCount: 0 };
+  const sectionLayouts = readSectionLayouts(raw, layoutSink);
+  const components = readComponents(raw, files, defined, problems, layoutSink);
+  const notes = readNotes(raw, source.texts, tooLarge, problems, layoutSink);
+  const patterns = readEntryTexts('patterns', raw, source.texts, tooLarge, problems, layoutSink);
+  const brand = readEntryTexts('brand', raw, source.texts, tooLarge, problems, layoutSink);
   const coverage = coveredAreas(raw);
   if (coverage.problem !== null) problems.push({ entry: 'coverage', message: coverage.problem });
 
@@ -1092,6 +1189,7 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
     proposal: null,
     landed: state.landed ? { ...state.landed, sentence: landedSentence(state.landed, home.kind === 'repo' ? home.label : 'your code') } : null,
     agentDrift: source.build?.drift ?? null,
+    boardLayout: { sections: sectionLayouts, ignored: layoutSink.ignored, ignoredCount: layoutSink.ignoredCount },
   };
   const derived = deriveReview(state, sectionFingerprints(detail, source.hashes ?? {}));
   detail.review = derived.review;

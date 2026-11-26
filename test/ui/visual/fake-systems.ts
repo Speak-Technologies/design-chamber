@@ -385,6 +385,7 @@ const detailOf = (summary: SystemSummary): SystemDetail => ({
   proposal: null,
   landed: null,
   agentDrift: null,
+  boardLayout: { sections: {}, ignored: [], ignoredCount: 0 },
 });
 
 
@@ -426,12 +427,12 @@ const fillIn = (detail: SystemDetail, coverage: SystemDetail['coverage']): void 
     { id: 'body', name: 'Body', family: 'Inter, sans-serif', size: '16px', weight: '400', lineHeight: '1.5', letterSpacing: '0', case: 'none', note: '' },
   ];
   detail.components = [
-    { id: 'button', name: 'Button', purpose: 'Starts or confirms one action.', note: '', variants: ['Filled', 'Outline', 'Ghost'], states: ['Hover', 'Disabled', 'Loading'], tokens: ['--brand', '--radius-md'], source: 'src/ui/Button.tsx', example: null, undefinedTokens: [] },
-    { id: 'card', name: 'Card', purpose: 'Groups related content on a raised surface.', note: 'Never nest a card in a card.', variants: ['Plain'], states: [], tokens: ['--surface-raised', '--border'], source: null, example: null, undefinedTokens: ['--card-pad'] },
+    { id: 'button', name: 'Button', purpose: 'Starts or confirms one action.', note: '', variants: ['Filled', 'Outline', 'Ghost'], states: ['Hover', 'Disabled', 'Loading'], tokens: ['--brand', '--radius-md'], source: 'src/ui/Button.tsx', example: null, undefinedTokens: [], layout: null },
+    { id: 'card', name: 'Card', purpose: 'Groups related content on a raised surface.', note: 'Never nest a card in a card.', variants: ['Plain'], states: [], tokens: ['--surface-raised', '--border'], source: null, example: null, undefinedTokens: ['--card-pad'], layout: null },
   ];
-  detail.notes = [{ id: 'accessibility', title: 'Accessibility', text: 'Text keeps 4.5 to 1 contrast on its background.', problem: null }];
-  detail.patterns = [{ id: 'forms', kind: 'pattern', title: 'Forms', note: '', text: 'Labels sit above fields. Errors sit under the field in plain words.', problem: null }];
-  detail.brand = [{ id: 'voice', kind: 'voice', title: 'Voice', note: '', text: 'Plain and warm. Short sentences.', problem: null }];
+  detail.notes = [{ id: 'accessibility', title: 'Accessibility', text: 'Text keeps 4.5 to 1 contrast on its background.', problem: null, layout: null }];
+  detail.patterns = [{ id: 'forms', kind: 'pattern', title: 'Forms', note: '', text: 'Labels sit above fields. Errors sit under the field in plain words.', problem: null, layout: null }];
+  detail.brand = [{ id: 'voice', kind: 'voice', title: 'Voice', note: '', text: 'Plain and warm. Short sentences.', problem: null, layout: null }];
   detail.fonts = [{ file: 'inter.woff2', family: 'Inter', weight: 400, style: 'normal' }];
   detail.logos = [{ file: 'mark.svg', variant: 'Mark', note: 'Use on light surfaces.' }];
   detail.stamps = { tokens: 'tk:1', systemJson: 'sj:1', overview: 'ov:1', notes: { accessibility: 'nt:1' } };

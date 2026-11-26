@@ -12,7 +12,7 @@
 import { cleanDetail, isDesignRelativeFile } from '../../shared/checks.ts';
 import { CHECK_DETAIL_MAX, CHECK_FINDINGS_MAX, SYSTEM_NOTE_MAX, SYSTEM_OVERVIEW_MAX } from '../../shared/limits.ts';
 import { AREA_OF_SECTION, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
-import type { CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, SecretShapeKind, SystemArea, SystemDetail } from '../../shared/types.ts';
+import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, RenderCheckState, SecretShapeKind, SystemArea, SystemDetail } from '../../shared/types.ts';
 import { capPerCode } from './analyze.ts';
 
 /** The words `buildSystemDetail` uses for the token cap (system-json.ts `TOKENS_CAP_SENTENCE`). */
@@ -56,6 +56,19 @@ export const systemFindings = (source: Pick<SystemDetailSource, 'texts' | 'tooLa
   }
   if (detail.unreadable === null && entryProblems.length > 0) {
     out.push({ code: 'system-entry-invalid', file: 'system.json', screen: null, viewport: null, params: { count: entryProblems.length }, detail: namesDetail(entryProblems) });
+  }
+
+  // Layout hints are presentation: an ignored hint is its own warning, whatever the coverage, and
+  // never an "entry couldn't be read" (the entry itself is fine).
+  if (detail.boardLayout.ignoredCount > 0) {
+    out.push({
+      code: 'system-layout-invalid',
+      file: 'system.json',
+      screen: null,
+      viewport: null,
+      params: { count: detail.boardLayout.ignoredCount },
+      detail: namesDetail(detail.boardLayout.ignored.map((problem) => `${problem.entry}: ${problem.value}`)),
+    });
   }
 
   if (covers(detail, AREA_OF_SECTION.colours)) {
@@ -133,7 +146,8 @@ const coverageDeclared = (systemJson: string | null): boolean => {
   }
 };
 
-const areaEmpty = (detail: SystemDetail, area: SystemArea): boolean => {
+/** Whether an area has nothing in it (the coverage finding's rule; the visual check tiles areas that hold entries even uncovered). */
+export const areaEmpty = (detail: SystemDetail, area: SystemArea): boolean => {
   switch (area) {
     case 'foundations':
       return detail.tokens.length === 0 && detail.type.length === 0 && detail.notes.length === 0 && (detail.overview === null || detail.overview.text.trim() === '');
@@ -249,9 +263,29 @@ export const s8Findings = (source: Pick<SystemDetailSource, 'state' | 'systemJso
 
 // ---- the report (`<system>/.chamber/check.json`) ----
 
+/** The board widths the visual check draws (ids of `SYSTEM_CHECK_BOARD_WIDTHS`). */
+export type SystemBoardWidthId = 'wide' | 'narrow';
+
+/**
+ * The visual check's part (documentation/specs/system-board-layout-and-visual-check.md §B.5): the
+ * board drawn at two widths, its PNG tiles by area, and the measured findings. `null` when only the
+ * files were checked (the route, `--static`). Additive: `version` stays 1.
+ */
+export type SystemCheckRender = {
+  state: RenderCheckState;
+  browser: CheckBrowser | null;
+  /** Which board was drawn: the live one, or the waiting proposal's (D10). */
+  drawn: { from: 'system' | 'proposal'; proposal: string | null };
+  /** One artboard per width, `screen` null, in plan order. */
+  widths: ArtboardCheck[];
+  /** The tiles by width and area, in area order; paths system-relative. */
+  shots: { width: SystemBoardWidthId; area: SystemArea; pngs: string[] }[];
+  findings: CheckFindingData[];
+};
+
 /**
  * A system's check report. Same `version` and findings as a design's (`CheckReport`), with the system
- * id in place of the slug and no render part: a system check is static only (§10.2).
+ * id in place of the slug. The render part is the visual check's; the route and `--static` leave it null.
  */
 export type SystemCheckReport = {
   version: 1;
@@ -259,12 +293,14 @@ export type SystemCheckReport = {
   createdAt: string;
   tool: CheckReport['tool'];
   static: { findings: CheckFindingData[] };
+  render: SystemCheckRender | null;
 };
 
-export const systemCheckReport = (input: { id: string; findings: CheckFindingData[]; now: Date; tool: CheckReport['tool'] }): SystemCheckReport => ({
+export const systemCheckReport = (input: { id: string; findings: CheckFindingData[]; now: Date; tool: CheckReport['tool']; render?: SystemCheckRender | null }): SystemCheckReport => ({
   version: 1,
   system: input.id,
   createdAt: input.now.toISOString(),
   tool: input.tool,
   static: { findings: input.findings },
+  render: input.render ?? null,
 });

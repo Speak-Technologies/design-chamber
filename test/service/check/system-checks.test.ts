@@ -257,6 +257,31 @@ test('systemFindings: a sound system has none; each problem has its code and sev
   assert.ok(values.some((finding) => finding.code === 'system-value-invalid' && finding.detail === '--brand'), JSON.stringify(values));
 });
 
+test('systemFindings: ignored layout hints are one warning with the true count and up to three names, whatever the coverage', () => {
+  const json = JSON.stringify({
+    version: 1,
+    coverage: ['components'],
+    layout: { typography: 'card', colours: 'full' },
+    components: [
+      { id: 'a', name: 'A', layout: 'wide' },
+      { id: 'b', name: 'B', layout: 'huge' },
+      { id: 'c', name: 'C', layout: 3 },
+      { id: 'd', name: 'D', layout: 'full' },
+    ],
+  });
+  const findings = findingsOf({ systemJson: json, texts: {} });
+  const layout = findings.filter((finding) => finding.code === 'system-layout-invalid');
+  assert.equal(layout.length, 1);
+  assert.equal(layout[0]?.params?.count, 5, 'two section defaults and three entry hints');
+  assert.equal(layout[0]?.detail, 'layout.typography: card, layout.colours: full, components.a: wide');
+  assert.equal(layout[0]?.file, 'system.json');
+  assert.equal(findingMessage(layout[0] as CheckFindingData), "system.json asks for 5 board layouts Design Chamber doesn't know, so those entries use the default.");
+  // The entries themselves are fine: no system-entry-invalid for the hints.
+  assert.ok(!findings.some((finding) => finding.code === 'system-entry-invalid'));
+  // A sound hint raises nothing.
+  assert.deepEqual(findingsOf({ systemJson: JSON.stringify({ version: 1, layout: { components: 'compact' }, components: [{ id: 'a', name: 'A', layout: 'full' }] }), texts: { 'OVERVIEW.md': 'ok' } }), []);
+});
+
 test('systemFindings respects coverage: an uncovered area raises nothing', () => {
   const uncovered = { systemJson: JSON.stringify({ version: 1, coverage: ['components'], components: [{ id: 'card', name: 'Card', tokens: ['--nope'] }] }), texts: {} };
   assert.deepEqual(codesOf(findingsOf(uncovered)), ['system-token-undefined'], 'no overview finding when Foundations is not covered');
@@ -308,7 +333,7 @@ test('runSystemCheck with the CLI store reads the system, and the report lands i
   try {
     const { report, detail } = await runSystemCheck(store, 'acme', { now: new Date(AT), tool: 'cli' });
     assert.equal(detail.name, 'Acme');
-    assert.deepEqual(report, { version: 1, system: 'acme', createdAt: AT, tool: 'cli', static: { findings: [{ code: 'system-unreadable', file: null, screen: null, viewport: null }] } });
+    assert.deepEqual(report, { version: 1, system: 'acme', createdAt: AT, tool: 'cli', static: { findings: [{ code: 'system-unreadable', file: null, screen: null, viewport: null }] }, render: null });
     const written = await writeSystemCheckReport(tmp.at('_systems/acme'), report);
     assert.equal(written, tmp.at('_systems/acme/.chamber/check.json'));
     assert.deepEqual(JSON.parse(await tmp.read('_systems/acme/.chamber/check.json')), report);
