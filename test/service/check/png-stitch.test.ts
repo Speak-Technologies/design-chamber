@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { deflateSync } from 'node:zlib';
 
-import { decodePng, encodePng, PNG_STITCH_SIDE_MAX, PngStitchError, stitchPngs, type DecodedPng } from '../../../src/service/check/png-stitch.ts';
+import { decodePng, encodePng, PNG_STITCH_PIXELS_MAX, PNG_STITCH_SIDE_MAX, PngStitchError, stitchPngs, type DecodedPng } from '../../../src/service/check/png-stitch.ts';
 
 const image = (width: number, height: number, channels: 3 | 4, seed: number): DecodedPng => ({
   width,
@@ -118,5 +118,16 @@ test('a deflate stream that inflates past the expected size is refused, not read
   head.writeUInt32BE(bomb.length, 0);
   head.write('IDAT', 4, 'latin1');
   const bytes = Buffer.concat([good.subarray(0, 33), head, bomb, Buffer.alloc(4), Buffer.from([0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82])]);
-  assert.throws(() => decodePng(bytes), PngStitchError);
+  // The inflate itself stops at the expected size (not a full inflate followed by a size check).
+  assert.throws(() => decodePng(bytes), (error: unknown) => error instanceof PngStitchError && /could not be read/.test(error.message));
+});
+
+test('a header inside the side limit but over the pixel limit is refused before anything is inflated', () => {
+  const good = encodePng(image(2, 2, 3, 1));
+  const wide = Buffer.from(good);
+  // 16 384 × 2 000 = 32.8 MP: each side passes PNG_STITCH_SIDE_MAX, the product passes PNG_STITCH_PIXELS_MAX.
+  wide.writeUInt32BE(PNG_STITCH_SIDE_MAX, 16);
+  wide.writeUInt32BE(2000, 20);
+  assert.ok(PNG_STITCH_SIDE_MAX * 2000 > PNG_STITCH_PIXELS_MAX);
+  assert.throws(() => decodePng(wide), (error: unknown) => error instanceof PngStitchError && /too large to read/.test(error.message));
 });
