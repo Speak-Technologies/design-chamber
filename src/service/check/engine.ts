@@ -11,7 +11,7 @@ import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckReport, Design
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource } from '../bundle.ts';
 import { removeStaleWorkDirs, thumbWorkParent } from '../thumbnails.ts';
 import { checkBrowserArgs, launchOpenOptions, openCdp } from './cdp.ts';
-import { cleanupRuns, createRunDir, ensureChamberDir, newRunId, pngNames, pngRelOf, pngStem, reportPathOf, writeCheckReport, writePng } from './output.ts';
+import { cleanupRuns, createRunDir, ensureChamberDir, newRunId, pngNames, pngRelOf, pngStem, reportPathOf, writeCheckReport, writePng, type CheckOwner } from './output.ts';
 import { CHECK_RUN_DEADLINE_MS, renderArtboards, type LoadedDocument, type PlannedArtboard } from './render.ts';
 import { entryKeyOf, runStaticChecks, type StaticRun } from './static.ts';
 import { normalizeExternalUrl } from '../../shared/checks.ts';
@@ -63,6 +63,66 @@ export const planArtboards = (input: { design: DesignJson; entries: StaticRun['e
     for (const viewport of shown) plan.push({ file: screen.file, screen: screen.id, viewport });
   }
   return plan;
+};
+
+/**
+ * The render-run plumbing a design check and a system check share (§B.3): the contained `.chamber/`
+ * folders, the throwaway browser profile, the run id and folder, PNG writing with unique names, the
+ * interrupt refusal, orphan and old-run cleanup. Everything written lands inside `dir/.chamber/`,
+ * only through output.ts. The caller writes its own report last and calls `finish` with the relative
+ * paths the report names; `close` removes the profile even when the run threw.
+ */
+export type CheckRunSpace = {
+  runId: string;
+  workDir: string;
+  savePng: (art: PlannedArtboard, slice: number, slices: number, bytes: Buffer, label?: string) => Promise<string>;
+  /** When the run was stopped: remove its folder and throw `CheckInterrupted` (the previous report stays). */
+  checkAborted: (aborted: boolean) => Promise<void>;
+  /** Keep only the PNGs the report names: drop orphans, remove an empty run folder, clean old runs. */
+  finish: (keptRels: readonly string[], nowMs: number) => Promise<void>;
+  close: () => Promise<void>;
+};
+
+export const openCheckRun = async (
+  dir: string,
+  input: { now: () => Date; platform: NodeJS.Platform; tmpdir?: string; withRunDir: boolean; owner?: CheckOwner },
+): Promise<CheckRunSpace> => {
+  await ensureChamberDir(dir, input.owner);
+  const parent = thumbWorkParent(input.platform, dir, input.tmpdir ?? os.tmpdir());
+  if (parent !== (input.tmpdir ?? os.tmpdir())) await removeStaleWorkDirs(parent, WORK_PREFIX);
+  const workDir = await mkdtemp(path.join(parent, WORK_PREFIX));
+  const runId = newRunId(input.now());
+  const stems: string[] = [];
+  /** Every file written, including slices of an artboard that failed afterwards. */
+  const written: string[] = [];
+  try {
+    if (input.withRunDir) await createRunDir(dir, runId, input.owner);
+  } catch (error) {
+    await rm(workDir, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+    throw error;
+  }
+  return {
+    runId,
+    workDir,
+    savePng: async (art, slice, slices, bytes, label) => {
+      stems.push(pngStem({ screen: art.screen, viewport: art.viewport.id, slice, slices, ...(label !== undefined ? { label } : {}) }));
+      const name = pngNames(stems).at(-1) ?? 'artboard.png';
+      written.push(await writePng(dir, runId, name, bytes));
+      return pngRelOf(runId, name);
+    },
+    checkAborted: async (aborted) => {
+      if (!aborted) return;
+      await rm(path.join(dir, '.chamber', 'check', runId), { recursive: true, force: true }).catch(() => undefined);
+      throw new CheckInterrupted();
+    },
+    finish: async (keptRels, nowMs) => {
+      const pngs = keptRels.map((rel) => path.join(dir, ...rel.split('/')));
+      for (const orphan of written.filter((file) => !pngs.includes(file))) await rm(orphan, { force: true }).catch(() => undefined);
+      if (pngs.length === 0) await rm(path.join(dir, '.chamber', 'check', runId), { recursive: true, force: true }).catch(() => undefined);
+      await cleanupRuns(dir, pngs.length > 0 ? new Set([runId]) : new Set(), nowMs);
+    },
+    close: () => rm(workDir, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined),
+  };
 };
 
 export type RunCheckInput = {
@@ -135,14 +195,7 @@ export const runCheck = async (input: RunCheckInput): Promise<RunCheckResult> =>
   }
 
   // Everything the run writes is inside the design's `.chamber/`, and lands there only through output.ts.
-  await ensureChamberDir(designDir);
-  const parent = thumbWorkParent(input.platform, designDir, input.tmpdir ?? os.tmpdir());
-  if (parent !== (input.tmpdir ?? os.tmpdir())) await removeStaleWorkDirs(parent, WORK_PREFIX);
-  const workDir = await mkdtemp(path.join(parent, WORK_PREFIX));
-  const runId = newRunId(input.now());
-  const stems: string[] = [];
-  /** Every file written, including slices of an artboard that failed afterwards. */
-  const written: string[] = [];
+  const space = await openCheckRun(designDir, { now: input.now, platform: input.platform, ...(input.tmpdir !== undefined ? { tmpdir: input.tmpdir } : {}), withRunDir: plan.length > 0 });
   const renderKeys: Record<string, string> = {};
   const source = createLiveFileSource(designDir);
   let cached: { file: string; html: string } | null = null;
@@ -167,31 +220,22 @@ export const runCheck = async (input: RunCheckInput): Promise<RunCheckResult> =>
   );
 
   try {
-    if (plan.length > 0) await createRunDir(designDir, runId);
     const outcome = await (input.render ?? renderArtboards)({
       openBrowser: (launch) =>
-        openCdp(browserPath, checkBrowserArgs({ workDir, platform: input.platform, isRoot: input.isRoot, join: path.join }), launchOpenOptions(launch, BROWSER_START_MS)),
+        openCdp(browserPath, checkBrowserArgs({ workDir: space.workDir, platform: input.platform, isRoot: input.isRoot, join: path.join }), launchOpenOptions(launch, BROWSER_START_MS)),
       deadlineAt,
       plan,
       kind,
       loadDocument,
       probeSource: input.probeSource,
       knownExternal,
-      savePng: async (art, slice, slices, bytes) => {
-        stems.push(pngStem({ screen: art.screen, viewport: art.viewport.id, slice, slices }));
-        const name = pngNames(stems).at(-1) ?? 'artboard.png';
-        written.push(await writePng(designDir, runId, name, bytes));
-        return pngRelOf(runId, name);
-      },
+      savePng: space.savePng,
       ...(input.signal ? { signal: input.signal } : {}),
       ...(input.budgets?.artboardMs !== undefined ? { artboardTimeoutMs: input.budgets.artboardMs } : {}),
       ...(input.budgets?.runMs !== undefined ? { runBudgetMs: input.budgets.runMs } : {}),
     });
 
-    if (input.signal?.aborted || outcome.stoppedBy === 'aborted') {
-      await rm(path.join(designDir, '.chamber', 'check', runId), { recursive: true, force: true }).catch(() => undefined);
-      throw new CheckInterrupted();
-    }
+    await space.checkAborted(input.signal?.aborted === true || outcome.stoppedBy === 'aborted');
     const findings: CheckFindingData[] = [...outcome.findings];
     if (outcome.unavailable) {
       findings.push({ code: 'render-failed', file: null, screen: null, viewport: null, detail: "This browser build can't be driven. Set another browser in Settings." });
@@ -219,13 +263,11 @@ export const runCheck = async (input: RunCheckInput): Promise<RunCheckResult> =>
     const reportPath = await writeCheckReport(designDir, report);
     // The run's pictures are the ones the report names, in artboard order: the text report pairs them with artboards by position,
     // so a slice saved by an artboard that then timed out must not be in the list (and is removed).
-    const pngs = outcome.artboards.flatMap((artboard) => artboard.pngs.map((rel) => path.join(designDir, ...rel.split('/'))));
-    for (const orphan of written.filter((file) => !pngs.includes(file))) await rm(orphan, { force: true }).catch(() => undefined);
-    if (pngs.length === 0) await rm(path.join(designDir, '.chamber', 'check', runId), { recursive: true, force: true }).catch(() => undefined);
-    await cleanupRuns(designDir, pngs.length > 0 ? new Set([runId]) : new Set(), input.now().getTime());
-    return done(report, reportPath, pngs);
+    const pngRels = outcome.artboards.flatMap((artboard) => artboard.pngs);
+    await space.finish(pngRels, input.now().getTime());
+    return done(report, reportPath, pngRels.map((rel) => path.join(designDir, ...rel.split('/'))));
   } finally {
-    await rm(workDir, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+    await space.close();
   }
 };
 

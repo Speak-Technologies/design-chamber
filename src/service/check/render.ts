@@ -38,6 +38,20 @@ export type PlannedArtboard = { file: string; screen: string | null; viewport: V
 
 export type LoadedDocument = { ok: true; html: string } | { ok: false; reason: 'missing' | 'too-large' };
 
+/**
+ * The page as the inspect hook sees it (documentation/specs/system-board-layout-and-visual-check.md
+ * §B.3): evaluate runs in the isolated world, capture takes a clip in document coordinates. Every
+ * method checks the artboard is still alive after its await, so a timed-out one is abandoned as today.
+ */
+export type InspectPage = {
+  evaluate: (expression: string, options: { awaitPromise: boolean }) => Promise<unknown>;
+  scrollTo: (y: number) => Promise<void>;
+  capture: (clip: { y: number; height: number }) => Promise<Buffer>;
+  save: (label: string, part: number, parts: number, bytes: Buffer) => Promise<string>;
+};
+
+export type InspectResult = { findings: CheckFindingData[]; docHeight: number; pngs: string[] };
+
 export type RenderDeps = {
   /**
    * Start a browser (used once, and once more after repeated failures). Given the run's abort signal
@@ -50,8 +64,13 @@ export type RenderDeps = {
   probeSource: string;
   /** Remote URLs the static pass already reports as `remote-ref`; a blocked request for one is not reported twice. */
   knownExternal: ReadonlySet<string>;
-  /** Store one PNG slice; answers its design-relative path. */
-  savePng: (artboard: PlannedArtboard, slice: number, slices: number, bytes: Buffer) => Promise<string>;
+  /** Store one PNG slice; answers its design-relative path. `label` replaces the screen in the name (the board's area id). */
+  savePng: (artboard: PlannedArtboard, slice: number, slices: number, bytes: Buffer, label?: string) => Promise<string>;
+  /**
+   * The system board's measurement, in place of the design probe and slicing: called after settle
+   * with the page and the artboard; `null` reads as "could not be measured". Absent → the design path.
+   */
+  inspect?: (page: InspectPage, artboard: PlannedArtboard) => Promise<InspectResult | null>;
   clock?: () => number;
   signal?: AbortSignal;
   artboardTimeoutMs?: number;
@@ -240,6 +259,40 @@ const renderOne = async (
     const { executionContextId } = await page.send<{ executionContextId: number }>('Page.createIsolatedWorld', { frameId: navigation.frameId, worldName: 'dc-probe' });
     await page.send('Runtime.evaluate', { expression: SETTLE_EXPRESSION, contextId: executionContextId, awaitPromise: true, returnByValue: true });
     guard();
+    if (deps.inspect !== undefined) {
+      // The board path: the hook measures and tiles; the console, dialog and blocked-request findings still apply.
+      const inspectPage: InspectPage = {
+        evaluate: async (expression, { awaitPromise }) => {
+          const evaluated = await page.send<{ result?: { value?: unknown }; exceptionDetails?: unknown }>('Runtime.evaluate', { expression, contextId: executionContextId, awaitPromise, returnByValue: true, timeout: 8000 });
+          guard();
+          return evaluated.exceptionDetails === undefined ? (evaluated.result?.value ?? null) : null;
+        },
+        scrollTo: async (y) => {
+          await page.send('Runtime.evaluate', { expression: `window.scrollTo({ top: ${y}, behavior: 'instant' }); ${FRAMES_EXPRESSION}`, contextId: executionContextId, awaitPromise: true, returnByValue: true });
+          guard();
+        },
+        capture: async (clip) => {
+          const shot = await page.send<{ data: string }>('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: clip.y, width: viewport.width, height: clip.height, scale: 1 } });
+          guard();
+          return Buffer.from(shot.data, 'base64');
+        },
+        save: async (label, part, parts, bytes) => {
+          const rel = await deps.savePng(art, part, parts, bytes, label);
+          guard();
+          return rel;
+        },
+      };
+      const inspected = await deps.inspect(inspectPage, art);
+      guard();
+      if (inspected === null) return { ok: false, reason: 'failed', detail: 'The page could not be measured.' };
+      const blocked = mine.blocked.filter((blockedUrl) => !deps.knownExternal.has(normalizeExternalUrl(blockedUrl) ?? blockedUrl));
+      const requests: CheckFindingData[] = [...new Set(blocked)].slice(0, 5).map((blockedUrl) => ({ code: 'request-blocked', ...where, detail: cleanDetail(blockedUrl, CHECK_DETAIL_MAX) }));
+      return {
+        ok: true,
+        findings: [...inspected.findings, ...events, ...requests],
+        check: { screen: art.screen, viewport: viewport.id, width: viewport.width, height: viewport.height, docHeight: Math.round(inspected.docHeight), pngs: inspected.pngs, ok: true, ms: (deps.clock ?? Date.now)() - started },
+      };
+    }
     const evaluated = await page.send<{ result?: { value?: unknown }; exceptionDetails?: unknown }>('Runtime.evaluate', {
       expression: `${deps.probeSource};__dcProbe.collect(${JSON.stringify({ maxTexts: CHECK_TEXT_ELEMENTS_MAX })})`,
       contextId: executionContextId,
