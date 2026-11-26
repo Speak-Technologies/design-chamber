@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { buildSystemDetail, parseSystemState } from '../../../src/shared/system-json.ts';
 import { BOARD_ENTRY_PATTERN, darkVarOf, entryKeyOf, isBoardEntryKey, parseEntryKey, sectionOfEntry, typeVarOf } from '../../../src/shared/system-board.ts';
 import type { SystemDetail, SystemToken } from '../../../src/shared/types.ts';
-import { buildBoardHtml, escapeHtml } from '../../../src/service/systems/board-html.ts';
+import { BOARD_GENERATOR_VERSION, buildBoardHtml, EAGER_SECTIONS_CSS, escapeHtml } from '../../../src/service/systems/board-html.ts';
 
 const NOW = '2026-11-20T10:00:00.000Z';
 
@@ -84,7 +84,7 @@ test('hostile names, notes, titles and values are escaped in markup and never re
     ...base,
     name: HOSTILE,
     overview: { text: HOSTILE, problem: HOSTILE },
-    notes: [{ id: 'voice', title: HOSTILE, text: HOSTILE, problem: null }],
+    notes: [{ id: 'voice', title: HOSTILE, text: HOSTILE, problem: null, layout: null }],
     tokens: [
       ...base.tokens,
       hostileToken('--evil', 'red;}</style><script>alert(3)</script>'),
@@ -232,4 +232,78 @@ test('entry keys: build, parse, sections and the custom property names', () => {
   assert.ok(/^--[A-Za-z0-9_-]{1,80}$/.test(darkVarOf(`--${'a'.repeat(60)}`)));
   assert.ok(/^--[A-Za-z0-9_-]{1,80}$/.test(typeVarOf('a'.repeat(40), 'letterSpacing')));
   assert.ok(BOARD_ENTRY_PATTERN.test('brand:logo-use'));
+});
+
+// ---- layout runs: the board CSS and script (system-board-layout-and-visual-check.md §A.4) ----
+
+test('eager: the check lays every section out; the page leaves off-screen sections to content-visibility', () => {
+  const page = buildBoardHtml(makeDetail(), { scheme: 'light' });
+  const check = buildBoardHtml(makeDetail(), { scheme: 'light', eager: true });
+  assert.match(page, /\.dc-section \{[^}]*content-visibility: auto;/);
+  assert.ok(!page.includes(EAGER_SECTIONS_CSS));
+  assert.ok(check.includes(EAGER_SECTIONS_CSS));
+  // The override comes after the rule it overrides, in the same sheet.
+  assert.ok(check.indexOf(EAGER_SECTIONS_CSS) > check.indexOf('content-visibility: auto'));
+});
+
+test('the generator version is 6 (the markdown board on master was 5), so boards cached before the layout runs are made again', () => {
+  assert.equal(BOARD_GENERATOR_VERSION, 6);
+});
+
+test('the board script measures .dc-fit (cards and table rows) and re-measures on load, fonts.ready and <html> style', () => {
+  const html = buildBoardHtml(makeDetail(), { scheme: 'light', examples: { button: '<p>Hi</p>' } });
+  assert.ok(html.includes("window.addEventListener('load', schedule);"));
+  assert.ok(html.includes('document.fonts.ready.then(schedule)'));
+  assert.ok(html.includes("attributeFilter: ['style']"));
+  assert.ok(html.includes("document.querySelectorAll('.dc-fit')"));
+  assert.ok(!html.includes("document.querySelectorAll('.dc-components > .dc-card')"));
+  // Rule 1: the card run keeps the content-sized columns.
+  assert.match(html, /\.dc-components \{ display: block; column-width: 600px; column-gap: 16px; \}/);
+  assert.match(html, /\.dc-components > \.dc-card\.dc-wide \{ column-span: all; \}/);
+  // Rule 2: compact columns and padding; compact token and text grids; the smaller swatch.
+  assert.match(html, /\.dc-components\.dc-run-compact \{ column-width: 280px; \}/);
+  assert.match(html, /\.dc-run-compact > \.dc-card \{ padding: 12px; \}/);
+  assert.match(html, /\.dc-grid\.dc-run-compact \{ grid-template-columns: repeat\(auto-fill, minmax\(120px, 1fr\)\); \}/);
+  assert.match(html, /\.dc-grid\.dc-text-grid\.dc-run-compact \{ grid-template-columns: repeat\(auto-fill, minmax\(200px, 1fr\)\); \}/);
+  assert.match(html, /\.dc-run-compact \.dc-swatch \{ height: 32px; \}/);
+  // Rule 3: full is one column with a 16px gap.
+  assert.match(html, /\.dc-run-full \{ display: grid; grid-template-columns: 1fr; gap: 16px; \}/);
+  assert.ok(html.includes(':is(.dc-grid, .dc-run-full, .dc-run-table, .dc-card) + :is(.dc-grid, .dc-run-full, .dc-run-table) { margin-top: 16px; }'), 'runs stand apart');
+  assert.ok(html.includes('.dc-text p, .dc-body p, .dc-md-list, .dc-md-quote, .dc-note { max-width: 90ch; }'), 'a readable measure');
+  // Rule 4: the table grid, subgrid rows, row rules, muted header, the container query.
+  assert.match(html, /\.dc-run-table \{ display: grid; grid-template-columns: minmax\(160px, 1fr\) minmax\(0, 3fr\) minmax\(160px, 1\.2fr\); \}/);
+  assert.match(html, /\.dc-thead, \.dc-trow \{ display: grid; grid-template-columns: subgrid; grid-column: 1 \/ -1; \}/);
+  assert.match(html, /\.dc-trow \{ border-bottom: 1px solid var\(--dc-board-border/);
+  assert.match(html, /\.dc-thead \{ color: var\(--dc-board-muted/);
+  assert.match(html, /\.dc-section \{[^}]*container-type: inline-size;/);
+  assert.match(html, /@container \(max-width: 759px\) \{/);
+  // Rule 5: a widened row leaves the subgrid.
+  assert.match(html, /\.dc-trow\.dc-wide \{ grid-template-columns: 1fr 1fr; \}/);
+  assert.match(html, /\.dc-trow\.dc-wide \.dc-tcell-preview \{ grid-column: 1 \/ -1; grid-row: 2; \}/);
+  // Rule 6: light and dark grounds stack in every run (the base fix 64c0687), never side by side.
+  assert.ok(!/\.dc-grounds \{ flex-direction: row/.test(html), 'no run puts the grounds side by side');
+  assert.match(html, /\.dc-components \.dc-grounds \{ flex-direction: column;/);
+  assert.match(html, /\.dc-run-full \.dc-grounds \{ flex-direction: column;/);
+  assert.match(html, /\.dc-trow \.dc-grounds \{ flex-direction: column; \}/);
+  // Rule 7: every component run keeps the bounded card and the scrolling example.
+  assert.match(html, /\.dc-run-full > \.dc-card \{ overflow: hidden; \}/);
+  assert.match(html, /\.dc-example \{ display: block; min-height: 32px; overflow: auto; \}/);
+});
+
+test('a system with no hints renders the card run: dc-run-card on the container, dc-fit on the cards', () => {
+  const html = buildBoardHtml(makeDetail(), { scheme: 'light', examples: { button: '<p>Hi</p>' } });
+  assert.ok(html.includes('<div class="dc-grid dc-components dc-run-card">'));
+  assert.ok(html.includes('<div class="dc-card dc-fit" data-dc-entry="component:button">'));
+});
+
+test('table and full runs render their containers; compact components keep dc-components', () => {
+  const base = makeDetail();
+  const table = buildBoardHtml({ ...base, components: base.components.map((component) => ({ ...component, layout: 'table' as const })) }, { scheme: 'light', examples: { button: '<p>Hi</p>' } });
+  assert.ok(table.includes('<div class="dc-run-table" role="table" aria-label="Components">'));
+  assert.ok(table.includes('<div class="dc-trow dc-fit" role="row" data-dc-entry="component:button">'));
+  const full = buildBoardHtml({ ...base, components: base.components.map((component) => ({ ...component, layout: 'full' as const })) }, { scheme: 'light' });
+  assert.ok(full.includes('<div class="dc-run-full">'));
+  assert.ok(!full.includes('class="dc-card dc-fit"'), 'a full card is already the whole width');
+  const compact = buildBoardHtml({ ...base, components: base.components.map((component) => ({ ...component, layout: 'compact' as const })) }, { scheme: 'light' });
+  assert.ok(compact.includes('<div class="dc-grid dc-components dc-run-compact">'));
 });

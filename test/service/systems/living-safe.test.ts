@@ -162,3 +162,21 @@ test('the hash swapped into the mark is the hash of the normalised page', () => 
   assert.notEqual(mark.hash, '0'.repeat(64));
   assert.equal(withPageHash(PAGE.replace(mark.hash, '0'.repeat(64))).hash, mark.hash);
 });
+
+test('a page with all four board layouts passes the scan (table divs, roles and the run CSS are on the lists)', () => {
+  const base = { ...boardFixture(), logos: [] };
+  const four = ['card', 'compact', 'full', 'table'] as const;
+  const hinted = {
+    ...base,
+    components: base.components.map((component, index) => ({ ...component, layout: four[index] ?? null })),
+    patterns: base.patterns.map((entry, index) => ({ ...entry, layout: four[index] ?? null })),
+    brand: base.brand.map((entry, index) => ({ ...entry, layout: four[index] ?? null })),
+    boardLayout: { sections: { components: 'table' as const, colours: 'table' as const, spacing: 'compact' as const, overview: 'full' as const }, ignored: [], ignoredCount: 0 },
+  };
+  const page = withPageHash(buildLivingPage(hinted, { revision: 8, generatedAt: '2026-11-19T10:00:00.000Z', coverage: hinted.coverage, redact: [] }).html).html;
+  const scan = scanLivingPage(page);
+  assert.deepEqual(scan.reasons, []);
+  assert.equal(scan.safe, true);
+  assert.equal(scan.mark?.revision, 8);
+  assert.ok(page.includes('dc-run-table') && !/data-dc-/.test(page));
+});

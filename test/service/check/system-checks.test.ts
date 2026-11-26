@@ -5,15 +5,18 @@
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, realpath, symlink } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 
 import { designSystemFindings, runStaticChecks, type DesignSystemInput } from '../../../src/service/check/static.ts';
-import { parseArgs } from '../../../src/service/check/report-text.ts';
+import { exitCodeOf, formatSystemCheckText, parseArgs, systemFindingsOf } from '../../../src/service/check/report-text.ts';
 import { cliSystemStore, runSystemCheck, writeSystemCheckReport } from '../../../src/service/check/system-run.ts';
-import { systemFindings } from '../../../src/service/check/system-static.ts';
+import { CHECK_RUN_DEADLINE_MS, type InspectPage, type PlannedArtboard, type RenderDeps } from '../../../src/service/check/render.ts';
+import { encodePng } from '../../../src/service/check/png-stitch.ts';
+import { systemCheckReport, systemFindings } from '../../../src/service/check/system-static.ts';
 import { resolveSystemTarget } from '../../../src/service/check/target.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
 import { registerSystemChecksRoutes } from '../../../src/service/routes/system-checks.ts';
@@ -21,7 +24,7 @@ import { buildChildArgs, parseToolInput } from '../../../src/plugin/check-tool.t
 import type { SystemChecksResponse } from '../../../src/shared/api.ts';
 import { findingMessage, parseCheckReport } from '../../../src/shared/checks.ts';
 import { buildSystemDetail, parseSystemState, type SystemDetailSource } from '../../../src/shared/system-json.ts';
-import type { CheckFindingData, CopyRecord } from '../../../src/shared/types.ts';
+import type { ArtboardCheck, CheckFindingData, CopyRecord } from '../../../src/shared/types.ts';
 import { createFakeContext } from '../../helpers/fake-context.ts';
 import { useTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
 
@@ -257,6 +260,39 @@ test('systemFindings: a sound system has none; each problem has its code and sev
   assert.ok(values.some((finding) => finding.code === 'system-value-invalid' && finding.detail === '--brand'), JSON.stringify(values));
 });
 
+test('systemFindings: ignored layout hints are one warning with the true count and up to three names, whatever the coverage', () => {
+  const json = JSON.stringify({
+    version: 1,
+    coverage: ['components'],
+    layout: { typography: 'card', colours: 'full' },
+    components: [
+      { id: 'a', name: 'A', layout: 'wide' },
+      { id: 'b', name: 'B', layout: 'huge' },
+      { id: 'c', name: 'C', layout: 3 },
+      { id: 'd', name: 'D', layout: 'full' },
+    ],
+  });
+  const findings = findingsOf({ systemJson: json, texts: {} });
+  const layout = findings.filter((finding) => finding.code === 'system-layout-invalid');
+  assert.equal(layout.length, 1);
+  assert.equal(layout[0]?.params?.count, 5, 'two section defaults and three entry hints');
+  assert.equal(layout[0]?.params?.misplaced, 2, 'typography: card and colours: full are known layouts in the wrong place');
+  // Each one says what its place takes, so the agent knows what to write instead.
+  assert.equal(
+    layout[0]?.detail,
+    'layout.typography: card (typography takes no layout); layout.colours: full (takes card, compact or table); components.a: wide (takes card, compact, full or table)',
+  );
+  assert.equal(layout[0]?.file, 'system.json');
+  assert.equal(
+    findingMessage(layout[0] as CheckFindingData),
+    "system.json asks for 5 board layouts it can't use (3 Design Chamber doesn't know, 2 in places that don't take them), so those entries use the default. Each one listed says what its place takes.",
+  );
+  // The entries themselves are fine: no system-entry-invalid for the hints.
+  assert.ok(!findings.some((finding) => finding.code === 'system-entry-invalid'));
+  // A sound hint raises nothing.
+  assert.deepEqual(findingsOf({ systemJson: JSON.stringify({ version: 1, layout: { components: 'compact' }, components: [{ id: 'a', name: 'A', layout: 'full' }] }), texts: { 'OVERVIEW.md': 'ok' } }), []);
+});
+
 test('systemFindings respects coverage: an uncovered area raises nothing', () => {
   const uncovered = { systemJson: JSON.stringify({ version: 1, coverage: ['components'], components: [{ id: 'card', name: 'Card', tokens: ['--nope'] }] }), texts: {} };
   assert.deepEqual(codesOf(findingsOf(uncovered)), ['system-token-undefined'], 'no overview finding when Foundations is not covered');
@@ -281,21 +317,21 @@ test('resolveSystemTarget: only a real folder in <root>/_systems, by id', async 
   }
 });
 
-test('parseArgs: --system checks a system, files only; it does not mix with a design or screens', () => {
-  assert.deepEqual(parseArgs(['check', '--system', 'acme']), { kind: 'check-system', root: null, system: 'acme', json: false });
-  assert.deepEqual(parseArgs(['--root', '/d', 'check', '--system=acme', '--json', '--static']), { kind: 'check-system', root: '/d', system: 'acme', json: true });
+test('parseArgs: --system checks a system, --static means files only; it does not mix with a design or screens', () => {
+  assert.deepEqual(parseArgs(['check', '--system', 'acme']), { kind: 'check-system', root: null, system: 'acme', staticOnly: false, json: false });
+  assert.deepEqual(parseArgs(['--root', '/d', 'check', '--system=acme', '--json', '--static']), { kind: 'check-system', root: '/d', system: 'acme', staticOnly: true, json: true });
   for (const args of [['check', '--system'], ['check', '--system', '../x'], ['check', 'demo', '--system', 'acme'], ['check', '--system', 'acme', '--screen', 'home'], ['check', '--system', 'a', '--system', 'b']]) {
     assert.equal(parseArgs(args).kind, 'error', args.join(' '));
   }
 });
 
 test('parseToolInput: system is an id, never with design or screens; the child gets --system', () => {
-  assert.deepEqual(parseToolInput({ system: 'acme' }), { ok: true, system: 'acme' });
-  assert.deepEqual(parseToolInput({ system: 'acme', static: true }), { ok: true, system: 'acme' });
+  assert.deepEqual(parseToolInput({ system: 'acme' }), { ok: true, system: 'acme', static: false });
+  assert.deepEqual(parseToolInput({ system: 'acme', static: true }), { ok: true, system: 'acme', static: true });
   for (const input of [{ system: '../acme' }, { system: 'C:\\x' }, { system: 'none' }, { system: 7 }, { system: 'acme', design: 'demo' }, { system: 'acme', screens: ['home'] }]) {
     assert.equal(parseToolInput(input).ok, false, JSON.stringify(input));
   }
-  assert.deepEqual(buildChildArgs('/x/dc.mjs', { system: 'acme' }), ['/x/dc.mjs', 'check', '--system', 'acme']);
+  assert.deepEqual(buildChildArgs('/x/dc.mjs', { system: 'acme', static: false }), ['/x/dc.mjs', 'check', '--system', 'acme']);
   assert.deepEqual(parseToolInput({ design: 'pricing' }), { ok: true, design: 'pricing', screens: [], static: false });
 });
 
@@ -308,13 +344,260 @@ test('runSystemCheck with the CLI store reads the system, and the report lands i
   try {
     const { report, detail } = await runSystemCheck(store, 'acme', { now: new Date(AT), tool: 'cli' });
     assert.equal(detail.name, 'Acme');
-    assert.deepEqual(report, { version: 1, system: 'acme', createdAt: AT, tool: 'cli', static: { findings: [{ code: 'system-unreadable', file: null, screen: null, viewport: null }] } });
+    assert.deepEqual(report, { version: 1, system: 'acme', createdAt: AT, tool: 'cli', static: { findings: [{ code: 'system-unreadable', file: null, screen: null, viewport: null }] }, render: null });
     const written = await writeSystemCheckReport(tmp.at('_systems/acme'), report);
     assert.equal(written, tmp.at('_systems/acme/.chamber/check.json'));
     assert.deepEqual(JSON.parse(await tmp.read('_systems/acme/.chamber/check.json')), report);
   } finally {
     await store.dispose();
   }
+});
+
+test('runSystemCheck with no browser: the render is unavailable with the note, the report is written, the exit follows the files', async (t) => {
+  const tmp = await useTmpRoot(t);
+  await tmp.write('_systems/acme/tokens.css', SYSTEM_TOKENS);
+  await tmp.write('_systems/acme/system.json', '{ "version": 1, "tokens": {} }');
+  await tmp.write('_systems/acme/.chamber/state.json', { name: 'Acme', status: 'ready' });
+  const store = cliSystemStore(tmp.root, { version: 1 });
+  try {
+    const result = await runSystemCheck(store, 'acme', {
+      now: new Date(AT),
+      tool: 'cli',
+      render: { browserPath: null, probeSource: '', platform: process.platform, isRoot: false },
+    });
+    assert.equal(result.report.render?.state, 'unavailable');
+    assert.equal(result.report.render?.browser, null);
+    assert.deepEqual(result.report.render?.findings.map((finding) => finding.code), ['browser-missing']);
+    assert.deepEqual(result.report.render?.drawn, { from: 'system', proposal: null });
+    assert.deepEqual(result.pngs, []);
+    assert.equal(result.reportPath, tmp.at('_systems/acme/.chamber/check.json'));
+    const text = formatSystemCheckText({ report: result.report, name: 'Acme', reportPath: result.reportPath });
+    assert.match(text, /No Chrome, Edge or Chromium was found, so the board wasn't drawn\. Only the files were checked\./);
+    // The exit follows the static findings: a warning only is 0.
+    assert.equal(exitCodeOf(systemFindingsOf(result.report)), 0);
+  } finally {
+    await store.dispose();
+  }
+});
+
+test('runSystemCheck: the run deadline starts at entry and reaches the render loop with the abort signal', async (t) => {
+  const tmp = await useTmpRoot(t);
+  await tmp.write('_systems/acme/tokens.css', SYSTEM_TOKENS);
+  await tmp.write('_systems/acme/system.json', '{ "version": 1, "tokens": {} }');
+  await tmp.write('_systems/acme/.chamber/state.json', { name: 'Acme', status: 'ready' });
+  const store = cliSystemStore(tmp.root, { version: 1 });
+  const entryAt = 1_800_000_000_000;
+  // Every read of the clock moves it on, so anything after entry sees a later time than the run's first read.
+  let reads = 0;
+  t.mock.method(Date, 'now', () => entryAt + 1000 * reads++);
+  const controller = new AbortController();
+  let seen: RenderDeps | null = null;
+  try {
+    await runSystemCheck(store, 'acme', {
+      now: new Date(AT),
+      tool: 'cli',
+      render: {
+        browserPath: '/never-started',
+        probeSource: '',
+        platform: process.platform,
+        isRoot: false,
+        signal: controller.signal,
+        renderLoop: (deps) => {
+          seen = deps;
+          return Promise.resolve({ artboards: [], findings: [], notRendered: deps.plan.length, stoppedBy: 'budget', unavailable: false });
+        },
+      },
+    });
+  } finally {
+    await store.dispose();
+  }
+  assert.ok(seen !== null, 'the run called the render loop');
+  const deps = seen as RenderDeps;
+  assert.equal(deps.deadlineAt, entryAt + CHECK_RUN_DEADLINE_MS);
+  assert.equal(deps.signal, controller.signal);
+});
+
+// ---- the render plan around the real inspect, through the renderLoop seam (no browser) ----
+
+/** A tiny valid PNG: what the fake page's capture answers (the overview stitcher decodes it). */
+const TINY_PNG = encodePng({ width: 4, height: 2, channels: 3, rows: [Buffer.alloc(12, 200), Buffer.alloc(12, 100)] });
+
+type ProbeArea = { area: string; top: number; height: number };
+type ProbeItem = { entry: string; y: number; h: number; previewWide?: boolean };
+
+/** A board probe answer `sanitizeBoardProbe` accepts: the given areas, and items (one with a too-wide preview is a finding). */
+const boardProbe = (width: number, areas: ProbeArea[], items: ProbeItem[] = []) => ({
+  innerWidth: width,
+  scrollWidth: width,
+  scrollHeight: Math.max(0, ...areas.map((area) => area.top + area.height)),
+  areas,
+  items: items.map((item) => ({
+    entry: item.entry,
+    widened: false,
+    box: { x: 40, y: item.y, w: 600, h: item.h },
+    previews: [{ w: 600, scrollW: item.previewWide ? 1800 : 600, contentRight: item.previewWide ? 1800 : 600, outLeft: 0, outTop: 0, outBottom: 0 }],
+    textOut: 0,
+  })),
+  truncated: false,
+});
+
+/** The InspectPage the real inspect drives: the probe answer, a PNG per capture, saves through the run's own savePng. */
+const fakePage = (deps: RenderDeps, art: PlannedArtboard, probe: unknown, captures: { y: number; scale: number }[] = []): InspectPage => ({
+  evaluate: () => Promise.resolve(probe),
+  scrollTo: () => Promise.resolve(),
+  capture: (clip) => {
+    captures.push({ y: clip.y, scale: clip.scale ?? 1 });
+    return Promise.resolve(TINY_PNG);
+  },
+  save: (label, part, parts, bytes) => deps.savePng(art, part, parts, bytes, label),
+});
+
+const artboardOf = (art: PlannedArtboard, ok: boolean, pngs: string[]): ArtboardCheck => ({ screen: null, viewport: art.viewport.id, width: art.viewport.width, height: art.viewport.height, docHeight: 0, pngs, ok, ms: 1 });
+
+const boardSystem = async (t: TestContext): Promise<{ tmp: TmpRoot; store: ReturnType<typeof cliSystemStore> }> => {
+  const tmp = await useTmpRoot(t);
+  await tmp.write('_systems/acme/tokens.css', SYSTEM_TOKENS);
+  await tmp.write('_systems/acme/system.json', '{ "version": 1, "tokens": {} }');
+  await tmp.write('_systems/acme/OVERVIEW.md', 'Calm.');
+  await tmp.write('_systems/acme/.chamber/state.json', { name: 'Acme', status: 'ready' });
+  const store = cliSystemStore(tmp.root, { version: 1 });
+  t.after(() => store.dispose());
+  return { tmp, store };
+};
+
+const renderInputOf = (renderLoop: NonNullable<Parameters<typeof runSystemCheck>[2]['render']>['renderLoop'], boardMs?: number) => ({
+  browserPath: '/never-started',
+  probeSource: '',
+  platform: process.platform,
+  isRoot: false,
+  renderLoop,
+  ...(boardMs !== undefined ? { budgets: { boardMs } } : {}),
+});
+
+test('a width that fails after saving pictures names none of them; the report lists only files that exist', async (t) => {
+  const { tmp, store } = await boardSystem(t);
+  const result = await runSystemCheck(store, 'acme', {
+    now: new Date(AT),
+    tool: 'cli',
+    render: renderInputOf(async (deps) => {
+      const [wide, narrow] = deps.plan as [PlannedArtboard, PlannedArtboard];
+      const inspect = deps.inspect;
+      assert.ok(inspect !== undefined);
+      // The wide width pictures its area (with a finding) and then times out: its artboard keeps no pictures.
+      const flagged = boardProbe(1526, [{ area: 'components', top: 0, height: 1800 }], [{ entry: 'component:table', y: 100, h: 300, previewWide: true }]);
+      await inspect(fakePage(deps, wide, flagged), wide);
+      const ok = await inspect(fakePage(deps, narrow, boardProbe(1046, [{ area: 'components', top: 0, height: 900 }])), narrow);
+      assert.ok(ok !== null);
+      return { artboards: [artboardOf(wide, false, []), artboardOf(narrow, true, ok.pngs)], findings: ok.findings, notRendered: 0, stoppedBy: null, unavailable: false };
+    }),
+  });
+  const render = result.report.render;
+  assert.ok(render !== null);
+  assert.equal(render.state, 'partial');
+  assert.deepEqual(render.shots.map((shot) => shot.width), ['narrow'], JSON.stringify(render.shots));
+  assert.deepEqual(render.entryShots, [], 'the wide finding tile was saved, then dropped with its width');
+  const named = render.shots.flatMap((shot) => [...(shot.overview ? [shot.overview.png] : []), ...shot.tiles.map((tile) => tile.png)]);
+  assert.ok(named.length > 0);
+  for (const rel of named) assert.ok(existsSync(tmp.at(`_systems/acme/${rel}`)), `${rel} exists`);
+  for (const png of result.pngs) assert.ok(existsSync(png), `${png} exists`);
+});
+
+test('after 60% of a width\'s time only overview strips and the tiles around findings are taken, and a note says so', async (t) => {
+  const { store } = await boardSystem(t);
+  // Every clock read moves 100ms on; with a 1 000ms width, the soft deadline is 600ms after the inspect starts.
+  let now = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => (now += 100));
+  const captures: { y: number; scale: number }[] = [];
+  const result = await runSystemCheck(store, 'acme', {
+    now: new Date(AT),
+    tool: 'cli',
+    render: renderInputOf(async (deps) => {
+      const [wide, narrow] = deps.plan as [PlannedArtboard, PlannedArtboard];
+      const inspect = deps.inspect;
+      assert.ok(inspect !== undefined);
+      // Ten bands; the finding sits in the last one.
+      const probe = boardProbe(1526, [{ area: 'components', top: 0, height: 9000 }], [{ entry: 'component:table', y: 8200, h: 300, previewWide: true }]);
+      const done = await inspect(fakePage(deps, wide, probe, captures), wide);
+      assert.ok(done !== null);
+      return { artboards: [artboardOf(wide, true, done.pngs), artboardOf(narrow, true, [])], findings: done.findings, notRendered: 0, stoppedBy: null, unavailable: false };
+    }, 1000),
+  });
+  const render = result.report.render;
+  assert.ok(render !== null);
+  const shot = render.shots.find((candidate) => candidate.width === 'wide' && candidate.area === 'components');
+  assert.ok(shot !== undefined);
+  const tileBands = shot.tiles.map((tile) => tile.y / 900 + 1);
+  assert.ok(tileBands.includes(10), `the finding band is still taken: ${tileBands.join(', ')}`);
+  assert.ok(tileBands.length < 10 && tileBands.length >= 2, `optional bands stop at the soft deadline: ${tileBands.join(', ')}`);
+  assert.ok(!tileBands.includes(9), 'a late optional band is skipped');
+  // The overview still covers all ten bands.
+  assert.equal(captures.filter((capture) => capture.scale < 1).length, 10);
+  assert.ok(shot.overview !== null);
+  const partial = render.findings.filter((finding) => finding.code === 'system-board-partial');
+  assert.equal(partial.length, 1, JSON.stringify(render.findings));
+  assert.equal(partial[0]?.params?.pictured, 'tiles');
+  assert.match(partial[0]?.detail ?? '', /^components at 1526px, \d of 10 full-size tiles$/);
+  assert.deepEqual(render.entryShots.map((entry) => entry.entry), ['component:table']);
+});
+
+test('a width that fails adds no note about the pictures it left out', async (t) => {
+  const { store } = await boardSystem(t);
+  const result = await runSystemCheck(store, 'acme', {
+    now: new Date(AT),
+    tool: 'cli',
+    render: renderInputOf(async (deps) => {
+      const [wide, narrow] = deps.plan as [PlannedArtboard, PlannedArtboard];
+      const inspect = deps.inspect;
+      assert.ok(inspect !== undefined);
+      // 45 000px at 1526px: past the overview's reach and the tile budget, so the wide width would note a gap.
+      await inspect(fakePage(deps, wide, boardProbe(1526, [{ area: 'components', top: 0, height: 45_000 }])), wide);
+      const ok = await inspect(fakePage(deps, narrow, boardProbe(1046, [{ area: 'components', top: 0, height: 900 }])), narrow);
+      assert.ok(ok !== null);
+      return { artboards: [artboardOf(wide, false, []), artboardOf(narrow, true, ok.pngs)], findings: ok.findings, notRendered: 0, stoppedBy: null, unavailable: false };
+    }),
+  });
+  const render = result.report.render;
+  assert.ok(render !== null);
+  assert.deepEqual(render.findings.filter((finding) => finding.code === 'system-board-partial'), [], JSON.stringify(render.findings));
+});
+
+test('the board pictures block: the run folder once, an overview and the full-size pictures per area, the picture on each finding', () => {
+  const run = '.chamber/check/r-20261126101500-a1b2c3';
+  const tiles = (area: string, width: string, count: number) =>
+    Array.from({ length: count }, (_, index) => ({ png: `${run}/${area}@${width}${index === 0 ? '' : `-${index + 1}`}.png`, y: index * 900, height: 900 }));
+  const report = systemCheckReport({
+    id: 'acme',
+    findings: [],
+    now: new Date(AT),
+    tool: 'cli',
+    render: {
+      state: 'done',
+      browser: 'chrome',
+      drawn: { from: 'system', proposal: null },
+      widths: [],
+      shots: [
+        { width: 'wide', area: 'foundations', heightPx: 2700, overview: { png: `${run}/foundations-overview@wide.png`, scale: 0.5, coversPx: 2700 }, tiles: tiles('foundations', 'wide', 3) },
+        // Over the budget: only some tiles, so each is named and the overview is pointed at.
+        { width: 'wide', area: 'components', heightPx: 2700, overview: { png: `${run}/components-overview@wide.png`, scale: 0.4, coversPx: 2000 }, tiles: [tiles('components', 'wide', 3)[2] as { png: string; y: number; height: number }] },
+        { width: 'narrow', area: 'foundations', heightPx: 400, overview: null, tiles: tiles('foundations', 'narrow', 1) },
+      ],
+      entryShots: [{ width: 'wide', entry: 'component:table', pngs: [`${run}/components@wide-3.png`] }],
+      findings: [
+        { code: 'system-board-preview-wide', file: 'components/table.html', screen: null, viewport: 'wide', params: { px: 1800, width: 1396 }, detail: 'component:table' },
+        { code: 'system-board-text-outside', file: 'board.html', screen: null, viewport: 'narrow', params: { px: 4 }, detail: 'token:--brand' },
+      ],
+    },
+  });
+  const text = formatSystemCheckText({ report, name: 'Acme', reportPath: null, runDir: '/d/_systems/acme/.chamber/check/r-20261126101500-a1b2c3' });
+  assert.ok(text.includes('Board pictures (light scheme) in /d/_systems/acme/.chamber/check/r-20261126101500-a1b2c3. Open them and look before you say you are done.'));
+  assert.ok(text.includes('  Wide board 1526px:\n    Foundations, 2700px tall: overview foundations-overview@wide.png (50%); full size foundations@wide.png to foundations@wide-3.png\n'));
+  assert.ok(text.includes('    Components, 2700px tall: overview components-overview@wide.png (40%, its first 2000px); full size components@wide-3.png (the rest of the area only in its overview)'));
+  assert.ok(text.includes('  Narrow board 1046px:\n    Foundations, 400px tall: no overview; full size foundations@narrow.png'));
+  // The folder is printed once; pictures are named inside it.
+  assert.equal(text.split('/d/_systems/acme/.chamber/check/').length - 1, 1);
+  // A finding about an entry names the full-size picture that shows it; one without a picture says nothing more.
+  assert.match(text, /this example is 1800px wide but the board can give it 1396px, so it scrolls sideways in its card\. "component:table" Picture: components@wide-3\.png\./);
+  assert.match(text, /text runs 4px outside its card\. "token:--brand"\n/);
 });
 
 // ---- the route ----

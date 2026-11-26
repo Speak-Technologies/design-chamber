@@ -16,7 +16,7 @@ import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss } fro
 export { escapeHtml } from './specimen-html.ts';
 
 /** Bumped when the generated document changes shape, so cached boards are not reused. */
-export const BOARD_GENERATOR_VERSION = 5;
+export const BOARD_GENERATOR_VERSION = 6;
 
 /** The virtual entry the board is bundled from (never a file on disk). */
 export const BOARD_ENTRY_FILE = '__board.html';
@@ -27,6 +27,12 @@ export type BoardHtmlOptions = {
   examples?: Readonly<Record<string, string>>;
   /** Font and logo files (`assets/…`) the service's `checkAsset` refused. */
   unusable?: ReadonlySet<string>;
+  /**
+   * Lay every section out now instead of leaving off-screen ones to `content-visibility: auto`. The visual check sets it: a
+   * skipped section keeps its 480px placeholder height and paints nothing, so areas would measure short and tiles come out
+   * blank. The page leaves it off (a long board stays fast to open); the layout once drawn is the same.
+   */
+  eager?: boolean;
 };
 
 // ---- the board's own chrome ----
@@ -45,7 +51,7 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
   font-family: var(--dc-board-font, system-ui, sans-serif); font-size: 14px; line-height: 1.5; }
 .dc-board-title { margin: 0 0 4px; font-size: 24px; font-weight: 600; }
 .dc-board-sub { margin: 0 0 32px; color: var(--dc-board-muted, ${f.muted}); }
-.dc-section { padding: 24px 0 8px; border-top: 1px solid var(--dc-board-border, ${f.border}); content-visibility: auto; contain-intrinsic-size: auto 480px; }
+.dc-section { padding: 24px 0 8px; border-top: 1px solid var(--dc-board-border, ${f.border}); content-visibility: auto; contain-intrinsic-size: auto 480px; container-type: inline-size; }
 .dc-section > h2 { margin: 0 0 16px; font-size: 18px; font-weight: 600; }
 .dc-section h3 { margin: 16px 0 8px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--dc-board-muted, ${f.muted}); }
 .dc-empty, .dc-muted { color: var(--dc-board-muted, ${f.muted}); }
@@ -74,7 +80,9 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
 .dc-example { display: block; min-height: 32px; overflow: auto; }
 .dc-list { margin: 0; padding-left: 18px; }
 .dc-logo { max-width: 100%; max-height: 96px; display: block; margin: 0 auto; }
-.dc-text p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dc-text p, .dc-body p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A readable measure: guidance, overview and note text (paragraphs, markdown lists and quotes) stops at about 90 characters, whatever the layout's width. */
+.dc-text p, .dc-body p, .dc-md-list, .dc-md-quote, .dc-note { max-width: 90ch; }
 .dc-area { padding-top: 16px; }
 .dc-area-title { margin: 24px 0 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dc-board-muted, ${f.muted}); }
 .dc-text-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
@@ -90,9 +98,50 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
   background: color-mix(in srgb, var(--dc-board-card, ${f.card}) 94%, var(--dc-board-fg, ${f.fg}));
   border: 1px solid color-mix(in srgb, var(--dc-board-border, ${f.border}) 70%, var(--dc-board-fg, ${f.fg})); }
 .dc-components > .dc-card.dc-wide { column-span: all; }
-/* Light and dark grounds stack, each as wide as the card, so a wide preview never has to share the row. */
+/* Light and dark grounds stack in every run, each as wide as the card, so a wide preview never has to share the row. */
 .dc-components .dc-grounds { flex-direction: column; margin-bottom: 12px; }
 .dc-components .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
+/* Neighbouring runs stand 16px apart (a column flow drops its last card's bottom margin, so two runs would touch). */
+:is(.dc-grid, .dc-run-full, .dc-run-table, .dc-card) + :is(.dc-grid, .dc-run-full, .dc-run-table) { margin-top: 16px; }
+:is(.dc-grid, .dc-run-full, .dc-run-table) + .dc-card { margin-top: 16px; }
+/* Compact: the same column flow with smaller pieces, for buttons, badges, pills and avatars. */
+.dc-components.dc-run-compact { column-width: 280px; }
+.dc-run-compact > .dc-card { padding: 12px; }
+/* Full: one card per row, the whole section width. */
+.dc-run-full { display: grid; grid-template-columns: 1fr; gap: 16px; }
+.dc-run-full > .dc-card { overflow: hidden; }
+.dc-run-full .dc-grounds { flex-direction: column; margin-bottom: 12px; }
+.dc-run-full .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
+/* Compact token and text grids, and the smaller swatch. */
+.dc-grid.dc-run-compact { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.dc-grid.dc-text-grid.dc-run-compact { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.dc-run-compact .dc-swatch { height: 32px; }
+/* Table runs: three aligned columns (subgrid), a rule between rows, muted header text. Under 760px of section width the
+   cells stack. A widened component row leaves the subgrid: name and notes side by side on top, the preview under them. */
+.dc-run-table { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 3fr) minmax(160px, 1.2fr); }
+/* Token tables: a short sample, the token column as wide as its longest name and value (up to 420px), the note after it.
+   Text tables with no notes have two columns. */
+.dc-run-table.dc-table-tokens { grid-template-columns: minmax(120px, 240px) fit-content(420px) minmax(200px, 1fr); }
+.dc-run-table.dc-table-two { grid-template-columns: minmax(160px, 1fr) minmax(0, 4fr); }
+.dc-table-tokens .dc-tcell-preview { padding-right: 24px; }
+.dc-thead, .dc-trow { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+.dc-thead { color: var(--dc-board-muted, ${f.muted}); font-size: 12px; font-weight: 600; }
+.dc-thead .dc-tcell { padding: 8px 12px 8px 0; }
+.dc-trow { border-bottom: 1px solid var(--dc-board-border, ${f.border}); }
+.dc-tcell { padding: 12px 12px 12px 0; min-width: 0; }
+.dc-tcell:last-child { padding-right: 0; }
+.dc-tcell > .dc-body:first-child { margin-top: 0; }
+.dc-trow .dc-grounds { flex-direction: column; }
+.dc-trow .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
+.dc-trow.dc-wide { grid-template-columns: 1fr 1fr; }
+.dc-trow.dc-wide .dc-tcell-name { grid-column: 1; grid-row: 1; }
+.dc-trow.dc-wide .dc-tcell-notes { grid-column: 2; grid-row: 1; }
+.dc-trow.dc-wide .dc-tcell-preview { grid-column: 1 / -1; grid-row: 2; }
+@container (max-width: 759px) {
+  .dc-run-table, .dc-run-table.dc-table-tokens, .dc-run-table.dc-table-two { grid-template-columns: 1fr; }
+  .dc-trow.dc-wide { grid-template-columns: 1fr; }
+  .dc-trow.dc-wide .dc-tcell { grid-column: 1 / -1; grid-row: auto; }
+}
 ${markdownCss('board', scheme)}`;
 };
 
@@ -140,8 +189,8 @@ const BOARD_SCRIPT = `(function () {
       try { hosts[j].attachShadow({ mode: 'open' }).innerHTML = markup; } catch (error) { hosts[j].textContent = 'This example could not be shown.'; }
     }
   }
-  // A component card whose example is wider than its column spans the board instead (measured with the card narrow, again on resize).
-  var cards = document.querySelectorAll('.dc-components > .dc-card');
+  // A component card or table row whose example is wider than its column spans the board instead (measured with the card narrow, again on resize).
+  var cards = document.querySelectorAll('.dc-fit');
   var wider = function (host) {
     var root = host.shadowRoot;
     if (!root) return false;
@@ -182,9 +231,12 @@ const BOARD_SCRIPT = `(function () {
 
 // ---- the document ----
 
-const documentOf = (title: string, scheme: 'light' | 'dark', css: string, body: string, script: boolean): string =>
+/** The visual check's override (see `BoardHtmlOptions.eager`). */
+export const EAGER_SECTIONS_CSS = '.dc-section { content-visibility: visible; }';
+
+const documentOf = (title: string, scheme: 'light' | 'dark', css: string, body: string, script: boolean, eager = false): string =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>` +
-  `<style>${chromeCss(scheme)}</style><style>${css}</style></head>` +
+  `<style>${chromeCss(scheme)}${eager ? `\n${EAGER_SECTIONS_CSS}\n` : ''}</style><style>${css}</style></head>` +
   `<body>${body}${script ? `<script>${BOARD_SCRIPT}</script>` : ''}</body></html>`;
 
 /** The whole board for one system (§5.7). */
@@ -202,5 +254,5 @@ export const buildBoardHtml = (detail: SystemDetail, options: BoardHtmlOptions):
   const specimen = { unusable, example: boardExample(examples, hasDark(detail)) };
   const areas = AREA_SECTIONS.map(({ area, sections }) => areaBlock(area, sections.map((section) => renderSpecimenSection(detail, section, specimen)).join('')));
   const body = [heading, sub, ...areas].join('');
-  return documentOf(title, options.scheme, specimenSystemCss(detail, unusable), body, true);
+  return documentOf(title, options.scheme, specimenSystemCss(detail, unusable), body, true, options.eager === true);
 };

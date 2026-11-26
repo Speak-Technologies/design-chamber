@@ -19,6 +19,7 @@ import {
   parseToolInput,
   runDesignCheck,
   SETUP_SENTENCE,
+  TOOL_INPUT,
   toolResult,
   validateRuntime,
   type SpawnedChild,
@@ -245,6 +246,22 @@ describe('buildChildArgs', () => {
     assert.deepEqual(buildChildArgs('/x/dist/cli/dc.mjs', { design: 'pricing', screens: [], static: false }), ['/x/dist/cli/dc.mjs', 'check', 'pricing']);
     assert.deepEqual(buildChildArgs('/x/dc.mjs', { design: 'p', screens: ['home', 'faq'], static: true }), ['/x/dc.mjs', 'check', 'p', '--screen', 'home', '--screen', 'faq', '--static']);
   });
+
+  test('a system check draws the board; static: true adds --static (the visual check §B.7)', () => {
+    assert.deepEqual(buildChildArgs('/x/dc.mjs', { system: 'acme', static: false }), ['/x/dc.mjs', 'check', '--system', 'acme']);
+    assert.deepEqual(buildChildArgs('/x/dc.mjs', { system: 'acme', static: true }), ['/x/dc.mjs', 'check', '--system', 'acme', '--static']);
+    assert.deepEqual(parseToolInput({ system: 'acme' }), { ok: true, system: 'acme', static: false });
+    assert.deepEqual(parseToolInput({ system: 'acme', static: true }), { ok: true, system: 'acme', static: true });
+    assert.deepEqual(parseToolInput({ system: 'acme', static: 'true' }), { ok: true, system: 'acme', static: true });
+    assert.equal(parseToolInput({ system: 'acme', static: 'yes' }).ok, false);
+    assert.equal(parseToolInput({ system: 'acme', static: 1 }).ok, false);
+  });
+
+  test('the tool input names the board draw and the files-only escape', () => {
+    assert.match(TOOL_INPUT.properties.system.description, /Draws its board at two widths and saves PNGs to look at/);
+    assert.ok(!TOOL_INPUT.properties.system.description.includes('files only'));
+    assert.match(TOOL_INPUT.properties.static.description, /designs and systems/);
+  });
 });
 
 describe('toolResult', () => {
@@ -276,6 +293,7 @@ describe('toolResult', () => {
     assert.equal(toolResult({ kind: 'exit', code: 134, stdout: '', stderr: '', stdoutCut: false }).metadata.designChamber.exit, 2);
     assert.match(toolResult({ kind: 'exit', code: null, stdout: '', stderr: '', stdoutCut: false }).content, /stopped before it finished/);
     assert.equal(toolResult({ kind: 'timeout' }).content, 'The check took longer than 3 minutes and was stopped. Try one screen with screens: ["<id>"].');
+    assert.equal(toolResult({ kind: 'timeout' }, true).content, 'The check took longer than 3 minutes and was stopped. Run it again with static: true to check the files only.');
     assert.equal(toolResult({ kind: 'spawn-error', code: 'EACCES' }).content, 'Design Chamber could not start its check (EACCES).');
     assert.equal(toolResult({ kind: 'spawn-error', code: 'EACCES' }).metadata.designChamber.exit, 2);
   });

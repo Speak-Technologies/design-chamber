@@ -86,8 +86,8 @@ test('hostile pattern and brand text never becomes markup', () => {
   const base = boardFixture();
   const detail: SystemDetail = {
     ...base,
-    patterns: [{ id: 'voice', kind: hostile, title: hostile, note: hostile, text: `${hostile}\n\n${hostile}`, problem: hostile }],
-    brand: [{ id: 'Bad Id', kind: 'other', title: hostile, note: '', text: null, problem: null }],
+    patterns: [{ id: 'voice', kind: hostile, title: hostile, note: hostile, text: `${hostile}\n\n${hostile}`, problem: hostile, layout: null }],
+    brand: [{ id: 'Bad Id', kind: 'other', title: hostile, note: '', text: null, problem: null, layout: null }],
   };
   const html = buildBoardHtml(detail, { scheme: 'light' });
   assert.equal((html.match(/<script\b/gi) ?? []).length, 1, 'only the board script');
@@ -136,8 +136,8 @@ test('overview, notes and pattern bodies render as markdown on the board', () =>
   const detail: SystemDetail = {
     ...base,
     overview: { text: '# Nexus design system\n\nThe system for **Pentima Nexus**.\n\n## The look\n\n- Brand blue `#00A0E0` for links.\n- See [the docs](https://example.com/look).', problem: null },
-    notes: [{ id: 'history', title: 'Why the palette changed', text: '## Contrast\n\nThe old blue failed **AA**.\n\n```\n--old: #1a73e8;\n```', problem: null }],
-    patterns: [{ id: 'voice', kind: 'voice', title: 'Voice and tone', note: '', text: 'Plain words.\n\n> No exclamation marks.', problem: null }],
+    notes: [{ id: 'history', title: 'Why the palette changed', text: '## Contrast\n\nThe old blue failed **AA**.\n\n```\n--old: #1a73e8;\n```', problem: null, layout: null }],
+    patterns: [{ id: 'voice', kind: 'voice', title: 'Voice and tone', note: '', text: 'Plain words.\n\n> No exclamation marks.', problem: null, layout: null }],
   };
   const html = buildBoardHtml(detail, { scheme: 'light' });
   const overview = sectionOf(html, 'overview');
@@ -157,7 +157,7 @@ test('hostile markdown in a note stays escaped text on the board', () => {
   const base = boardFixture();
   const detail: SystemDetail = {
     ...base,
-    notes: [{ id: 'history', title: 'Why', text: '# Hi\n\n<script>alert(1)</script>\n\n[x](javascript:alert(2))\n\n```\n</code></pre><img src=x onerror=alert(3)>\n```', problem: null }],
+    notes: [{ id: 'history', title: 'Why', text: '# Hi\n\n<script>alert(1)</script>\n\n[x](javascript:alert(2))\n\n```\n</code></pre><img src=x onerror=alert(3)>\n```', problem: null, layout: null }],
   };
   const html = buildBoardHtml(detail, { scheme: 'light' });
   assert.equal((html.match(/<script\b/gi) ?? []).length, 1, 'only the board script');
@@ -169,9 +169,203 @@ test('hostile markdown in a note stays escaped text on the board', () => {
 test('a note whose body opens with its own title shows that heading once', () => {
   const detail: SystemDetail = {
     ...boardFixture(),
-    notes: [{ id: 'history', title: 'Why the palette changed', text: '# Why the palette changed\n\nThe old blue failed contrast.', problem: null }],
+    notes: [{ id: 'history', title: 'Why the palette changed', text: '# Why the palette changed\n\nThe old blue failed contrast.', problem: null, layout: null }],
   };
   const overview = sectionOf(buildBoardHtml(detail, { scheme: 'light' }), 'overview');
   assert.equal((overview.match(/Why the palette changed/g) ?? []).length, 1, overview);
   assert.ok(overview.includes('<p>The old blue failed contrast.</p>'), overview);
+});
+
+// ---- layout runs (documentation/specs/system-board-layout-and-visual-check.md §A.3) ----
+
+const runsFixture = (json: Record<string, unknown>): SystemDetail => boardFixture({ ...BOARD_FIXTURE_JSON, ...json });
+
+test('runs keep the agent order: compact, compact, full, compact is three runs', () => {
+  const detail = runsFixture({
+    components: [
+      { id: 'a', name: 'A', layout: 'compact' },
+      { id: 'b', name: 'B', layout: 'compact' },
+      { id: 'c', name: 'C', layout: 'full' },
+      { id: 'd', name: 'D', layout: 'compact' },
+    ],
+  });
+  const section = renderSpecimenSection(detail, 'components');
+  const containers = [...section.matchAll(/<div class="(dc-grid dc-components[^"]*|dc-run-full)">/g)].map((match) => match[1]);
+  assert.deepEqual(containers, ['dc-grid dc-components dc-run-compact', 'dc-run-full', 'dc-grid dc-components dc-run-compact']);
+  const order = [...section.matchAll(/data-dc-entry="component:([a-d])"/g)].map((match) => match[1]);
+  assert.deepEqual(order, ['a', 'b', 'c', 'd'], 'the agent order is never changed');
+  // The first compact run holds a and b; the full run holds c; the last compact run holds d.
+  const first = section.slice(section.indexOf('dc-run-compact'), section.indexOf('dc-run-full'));
+  assert.ok(first.includes('component:a') && first.includes('component:b') && !first.includes('component:c'));
+});
+
+test('a section default applies to entries without their own hint; the entry hint wins', () => {
+  const detail = runsFixture({ layout: { components: 'compact' }, components: [{ id: 'a', name: 'A' }, { id: 'b', name: 'B', layout: 'card' }] });
+  const section = renderSpecimenSection(detail, 'components');
+  assert.ok(section.includes('<div class="dc-grid dc-components dc-run-compact"><div class="dc-card dc-fit" data-dc-entry="component:a">'));
+  assert.ok(section.includes('<div class="dc-grid dc-components dc-run-card"><div class="dc-card dc-fit" data-dc-entry="component:b">'));
+});
+
+test('component table rows carry the entry key, the roles and dc-fit; cells escape hostile text', () => {
+  const hostile = '</div><script>alert(1)</script>"\'&';
+  const detail = runsFixture({
+    layout: { components: 'table' },
+    components: [{ id: 'table', name: hostile, purpose: hostile, note: hostile, variants: [hostile], source: hostile, example: 'components/table.html' }],
+  });
+  const section = renderSpecimenSection(detail, 'components', { example: () => '<div class="dc-muted">example part</div>' });
+  assert.ok(section.includes('<div class="dc-run-table" role="table" aria-label="Components">'));
+  assert.ok(section.includes('<div class="dc-thead" role="row">'));
+  for (const header of ['Name', 'Preview', 'Notes']) assert.ok(section.includes(`role="columnheader">${header}</div>`), header);
+  assert.ok(section.includes('<div class="dc-trow dc-fit" role="row" data-dc-entry="component:table">'));
+  assert.ok(section.includes('<div class="dc-tcell dc-tcell-name" role="cell">'));
+  assert.ok(section.includes('<div class="dc-tcell dc-tcell-preview" role="cell">'));
+  assert.ok(section.includes('<div class="dc-tcell dc-tcell-notes" role="cell">'));
+  assert.ok(section.includes(escapeHtml(hostile)));
+  assert.ok(!section.includes('<script>alert'));
+  // No dc-fit on anything but the row in a table run.
+  assert.equal((section.match(/dc-fit/g) ?? []).length, 1);
+});
+
+test('text and token tables carry their entry keys and headers; no dc-fit (no live preview to measure)', () => {
+  const detail = runsFixture({
+    layout: { overview: 'table', patterns: 'table', brand: 'table', colours: 'table', spacing: 'table' },
+    notes: [{ id: 'history', title: 'Why the palette changed' }],
+  });
+  const overview = renderSpecimenSection(detail, 'overview');
+  // No note on any entry: the Note column is left out (two columns).
+  assert.ok(overview.includes('<div class="dc-run-table dc-table-two" role="table" aria-label="Notes">'));
+  assert.ok(overview.includes('<div class="dc-trow" role="row" data-dc-entry="note:history">'));
+  for (const header of ['Title', 'Guidance']) assert.ok(overview.includes(`role="columnheader">${header}</div>`), header);
+  assert.ok(!overview.includes('role="columnheader">Note</div>') && !overview.includes('dc-tcell-notes'));
+  assert.ok(!overview.includes('dc-fit'));
+  // The overview text itself stays full width, outside the table.
+  assert.ok(overview.includes('<div class="dc-text" data-dc-entry="overview">'));
+
+  const patterns = renderSpecimenSection(detail, 'patterns');
+  assert.ok(patterns.includes('data-dc-entry="pattern:voice"') && patterns.includes('role="table" aria-label="Patterns &amp; voice"'));
+  const brand = renderSpecimenSection(detail, 'brand');
+  assert.ok(brand.includes('data-dc-entry="brand:hero"'));
+  // Logos keep their cards even when brand entries are a table.
+  assert.ok(brand.includes('<div class="dc-card" data-dc-entry="logo:0">'));
+
+  const colours = renderSpecimenSection(detail, 'colours');
+  assert.ok(colours.includes('role="columnheader">Sample</div>') && colours.includes('role="columnheader">Token</div>') && colours.includes('role="columnheader">Note</div>'));
+  // Token tables size their token column to the names, not to three fifths of the board.
+  assert.ok(colours.includes('<div class="dc-run-table dc-table-tokens" role="table"'));
+  assert.ok(colours.includes('<div class="dc-trow" role="row" data-dc-entry="token:--brand">'));
+  assert.ok(!colours.includes('dc-fit'));
+  const spacing = renderSpecimenSection(detail, 'spacing');
+  assert.ok(spacing.includes('data-dc-entry="token:--space-2"') && spacing.includes('dc-run-table'));
+});
+
+test('colour groups keep their headings and form runs inside each group', () => {
+  const detail = runsFixture({ layout: { colours: 'table' } });
+  const colours = renderSpecimenSection(detail, 'colours');
+  const brandAt = colours.indexOf('<h3>Brand</h3>');
+  const surfaceAt = colours.indexOf('<h3>Surface</h3>');
+  assert.ok(brandAt !== -1 && surfaceAt > brandAt);
+  const brandGroup = colours.slice(brandAt, surfaceAt);
+  assert.ok(brandGroup.includes('dc-run-table') && brandGroup.includes('token:--brand'));
+  assert.ok(!brandGroup.includes('token:--surface'), 'the surface token stays in its own group');
+  // Tokens have no per-entry hints: one section default makes the whole group one run.
+  const mixed = runsFixture({
+    tokensCss: ':root { --a: #111111; --b: #222222; --c: #333333; }',
+    tokens: { '--a': { group: 'brand' }, '--b': { group: 'brand' }, '--c': { group: 'brand' } },
+    layout: { colours: 'compact' },
+  });
+  const section = renderSpecimenSection(mixed, 'colours');
+  assert.equal((section.match(/dc-run-compact/g) ?? []).length, 1, 'one section default, one run per group');
+});
+
+test('dc-fit marks only component cards in card and compact runs, never full cards, text or tokens', () => {
+  const detail = runsFixture({
+    components: [
+      { id: 'a', name: 'A', layout: 'card', example: 'components/a.html' },
+      { id: 'b', name: 'B', layout: 'compact', example: 'components/b.html' },
+      { id: 'c', name: 'C', layout: 'full', example: 'components/c.html' },
+    ],
+    layout: { overview: 'compact', colours: 'compact' },
+  });
+  const components = renderSpecimenSection(detail, 'components', { example: () => '' });
+  const fitted = [...components.matchAll(/class="([^"]*dc-fit[^"]*)" data-dc-entry="([^"]*)"/g)].map((match) => match[2]);
+  assert.deepEqual(fitted, ['component:a', 'component:b']);
+  const overview = renderSpecimenSection(detail, 'overview');
+  assert.ok(!overview.includes('dc-fit'));
+  const colours = renderSpecimenSection(detail, 'colours');
+  assert.ok(!colours.includes('dc-fit'));
+});
+
+test('notes: a card run keeps the loose cards, compact a text grid, full one column, table rows', () => {
+  const notes = [
+    { id: 'n1', title: 'One' },
+    { id: 'n2', title: 'Two', layout: 'compact' },
+    { id: 'n3', title: 'Three', layout: 'full' },
+    { id: 'n4', title: 'Four', layout: 'table' },
+  ];
+  const section = renderSpecimenSection(runsFixture({ notes }), 'overview');
+  assert.ok(section.includes('<div class="dc-card dc-text" data-dc-entry="note:n1">'), 'card run stays loose as today');
+  assert.ok(section.includes('<div class="dc-grid dc-text-grid dc-run-compact"><div class="dc-card dc-text" data-dc-entry="note:n2">'));
+  assert.ok(section.includes('<div class="dc-run-full"><div class="dc-card dc-text" data-dc-entry="note:n3">'));
+  // n4's body file is missing, so it carries a problem and the table keeps its Note column for it.
+  assert.ok(section.includes('<div class="dc-run-table" role="table" aria-label="Notes">'));
+  assert.ok(section.includes('data-dc-entry="note:n4"') && section.includes('dc-tcell-notes'));
+});
+
+test('a text table keeps its Note column when any entry has a note or a problem; the others get an empty cell', () => {
+  const detail = runsFixture({
+    layout: { patterns: 'table' },
+    patterns: [
+      { id: 'quiet', kind: 'voice', title: 'Quiet' },
+      { id: 'loud', kind: 'voice', title: 'Loud', note: 'Only for alerts.' },
+    ],
+  });
+  const patterns = renderSpecimenSection(detail, 'patterns');
+  assert.ok(patterns.includes('<div class="dc-run-table" role="table" aria-label="Patterns &amp; voice">'));
+  assert.ok(patterns.includes('role="columnheader">Note</div>'));
+  assert.equal((patterns.match(/dc-tcell-notes/g) ?? []).length, 2, 'every row has the cell, so the columns line up');
+  assert.ok(patterns.includes('<div class="dc-note">Only for alerts.</div>'));
+});
+
+test('an invalid hint falls back without a trace in the markup', () => {
+  const detail = runsFixture({ components: [{ id: 'a', name: 'A', layout: 'wide' }], layout: { components: 'bogus' } });
+  const section = renderSpecimenSection(detail, 'components');
+  assert.ok(section.includes('<div class="dc-grid dc-components dc-run-card">'), 'falls back to card');
+  assert.equal(detail.boardLayout.ignoredCount, 2);
+});
+
+// ---- markdown bodies inside every layout (the markdown renderer and the layout runs together) ----
+
+test('markdown bodies render inside card, compact, full and table runs, in both profiles; a note title is shown once', () => {
+  const md = '# Same title\n\nUse **bold** words.\n\n## Part\n\n- one\n- two\n\n```\ncode here\n```';
+  const four = ['card', 'compact', 'full', 'table'] as const;
+  const base = runsFixture({});
+  const detail: SystemDetail = {
+    ...base,
+    notes: four.map((layout) => ({ id: `n-${layout}`, title: 'Same title', text: md, problem: null, layout })),
+    patterns: four.map((layout) => ({ id: `p-${layout}`, kind: 'voice', title: `Pattern ${layout}`, note: '', text: md, problem: null, layout })),
+  };
+  // Each entry's own block: from its entry mark to the next one.
+  const blockOf = (html: string, key: string): string => {
+    const at = html.indexOf(`data-dc-entry="${key}"`);
+    assert.ok(at !== -1, key);
+    const next = html.indexOf('data-dc-entry="', at + 1);
+    return html.slice(at, next === -1 ? undefined : next);
+  };
+  for (const profile of ['board', 'living'] as const) {
+    const overview = renderSpecimenSection(detail, 'overview', { markdown: profile });
+    const patterns = renderSpecimenSection(detail, 'patterns', { markdown: profile });
+    for (const layout of four) {
+      const note = blockOf(overview, `note:n-${layout}`);
+      assert.ok(note.includes('<strong>bold</strong>'), `${profile} note ${layout}: ${note}`);
+      assert.ok(note.includes('<ul class="dc-md-list">'), `${profile} note ${layout}: a list`);
+      // The note's leading "# Same title" repeats its title: dropped in cards and table rows alike.
+      assert.equal((note.match(/Same title/g) ?? []).length, 1, `${profile} note ${layout}: ${note}`);
+      const pattern = blockOf(patterns, `pattern:p-${layout}`);
+      assert.ok(pattern.includes('<strong>bold</strong>') && pattern.includes('dc-md-list'), `${profile} pattern ${layout}: ${pattern}`);
+      if (profile === 'board') assert.ok(pattern.includes('<pre class="dc-md-pre">'), `board pattern ${layout}: a code block`);
+      else assert.ok(!pattern.includes('<pre') && pattern.includes('<div class="dc-md-pre">'), `living pattern ${layout}: the allowlist form`);
+    }
+    // Table rows put the body in the guidance cell.
+    assert.ok(/data-dc-entry="pattern:p-table"><div class="dc-tcell dc-tcell-name" role="cell">[\s\S]*?<div class="dc-tcell dc-tcell-preview" role="cell"><div class="dc-body"><h3 class="dc-md-h3">Same title<\/h3>/.test(patterns), 'a pattern keeps its own heading (only notes drop the title)');
+  }
 });

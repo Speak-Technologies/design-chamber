@@ -18,7 +18,7 @@ import {
   withMessage,
 } from '../../src/shared/checks.ts';
 import { CHECK_DETAIL_MAX, CHECK_FILE_MAX_BYTES, CHECK_FINDINGS_MAX, CHECK_SELECTOR_MAX } from '../../src/shared/limits.ts';
-import type { CheckFindingData, Viewport } from '../../src/shared/types.ts';
+import type { CheckFindingData, CheckParams, Viewport } from '../../src/shared/types.ts';
 
 const viewports: Viewport[] = [
   { id: 'laptop', label: 'Laptop', width: 1280, height: 800 },
@@ -295,6 +295,13 @@ test('Phase 2.5: every system code is in the closed table, with the spec severit
     'system-living-secret': 'error',
     'system-landed-differs': 'warning',
     'system-proposal-invalid': 'warning',
+    'system-layout-invalid': 'warning',
+    'system-board-overflow': 'warning',
+    'system-board-preview-wide': 'warning',
+    'system-board-preview-outside': 'warning',
+    'system-board-text-outside': 'warning',
+    'system-board-hint-small': 'info',
+    'system-board-partial': 'info',
   };
   for (const [code, severity] of Object.entries(expected)) {
     assert.ok(isCheckCode(code), code);
@@ -377,4 +384,108 @@ test('Phase 2.5: system params survive parsing only as closed enums or cleaned n
   assert.equal(dropped.params, undefined, 'every forged param is dropped');
   // A forged `access` can't lower the severity: without it the secret is an error.
   assert.equal(withMessage(dropped).severity, 'error');
+});
+
+// ---- board layout hints and the visual system check (§B.6) ----
+
+const boardWidths: Viewport[] = [
+  { id: 'wide', label: 'Wide board', width: 1526, height: 900 },
+  { id: 'narrow', label: 'Narrow board', width: 1046, height: 900 },
+];
+
+test('the seven board codes: severity and sentence come from the table only', () => {
+  assert.equal(severityOf('system-layout-invalid'), 'warning');
+  assert.equal(severityOf('system-board-overflow'), 'warning');
+  assert.equal(severityOf('system-board-preview-wide'), 'warning');
+  assert.equal(severityOf('system-board-preview-outside'), 'warning');
+  assert.equal(severityOf('system-board-text-outside'), 'warning');
+  assert.equal(severityOf('system-board-hint-small'), 'info');
+  assert.equal(severityOf('system-board-partial'), 'info');
+  const board = (code: CheckFindingData['code'], extra: Partial<CheckFindingData> = {}): CheckFindingData => ({ code, file: 'components/table.html', screen: null, viewport: 'wide', ...extra });
+  assert.equal(
+    findingMessage(board('system-board-overflow', { file: 'board.html', params: { px: 1600, width: 1526 } }), boardWidths),
+    'board.html @ Wide board 1526×900: the board is 1600px wide, wider than the 1526px it has, so it scrolls sideways.',
+  );
+  assert.equal(
+    findingMessage(board('system-board-preview-wide', { params: { px: 1800, width: 692 } }), boardWidths),
+    'components/table.html @ Wide board 1526×900: this example is 1800px wide but the board can give it 692px, so it scrolls sideways in its card.',
+  );
+  assert.equal(
+    findingMessage(board('system-board-preview-outside', { params: { px: 40 } }), boardWidths),
+    "components/table.html @ Wide board 1526×900: part of this example sits 40px outside its card, so it's cut off or covers other entries.",
+  );
+  assert.equal(
+    findingMessage(board('system-board-text-outside', { params: { px: 12 } }), boardWidths),
+    'components/table.html @ Wide board 1526×900: text runs 12px outside its card.',
+  );
+  assert.equal(
+    findingMessage(board('system-board-hint-small', { params: { layout: 'compact' } }), boardWidths),
+    'components/table.html @ Wide board 1526×900: this entry is set to compact but needed the full width. Set its layout to full.',
+  );
+  const partial = (params: CheckParams): string => findingMessage({ code: 'system-board-partial', file: 'board.html', screen: null, viewport: null, params }, boardWidths);
+  // One kind per note, singular and plural.
+  assert.equal(partial({ pictured: 'tiles', count: 2 }), '2 areas have full-size pictures for only part of their length (the picture limit for one check); their overview shows the rest, and all of the board was measured.');
+  assert.equal(partial({ pictured: 'tiles', count: 1 }), '1 area has full-size pictures for only part of its length (the picture limit for one check); its overview shows the rest, and all of the board was measured.');
+  assert.equal(partial({ pictured: 'overview', count: 1 }), 'The overview of 1 area stops early; its full-size pictures show the rest, and all of the board was measured.');
+  assert.equal(partial({ pictured: 'overview', count: 3 }), 'The overview of 3 areas stops early; their full-size pictures show the rest, and all of the board was measured.');
+  assert.equal(partial({ pictured: 'no-overview', count: 1 }), "1 area has no overview picture (it couldn't be made); its full-size pictures show all of it.");
+  assert.equal(partial({ pictured: 'gap', count: 1 }), 'Part of 1 area is in no picture (the picture limit for one check); the parts are listed. All of the board was measured, so the findings cover them.');
+  assert.equal(partial({ pictured: 'gap', count: 2 }), 'Parts of 2 areas are in no picture (the picture limit for one check); the parts are listed. All of the board was measured, so the findings cover them.');
+  assert.equal(partial({ pictured: 'entries', max: 1000 }), 'Only the first 1000 entries were measured.');
+  const layout = (params: CheckParams): string => findingMessage({ code: 'system-layout-invalid', file: 'system.json', screen: null, viewport: null, params });
+  assert.equal(layout({ count: 2 }), "system.json asks for 2 board layouts Design Chamber doesn't know, so those entries use the default. Each one listed says what its place takes.");
+  assert.equal(layout({ count: 2, misplaced: 2 }), "system.json asks for 2 board layouts in places that don't take them, so those entries use the default. Each one listed says what its place takes.");
+  assert.equal(
+    layout({ count: 3, misplaced: 1 }),
+    "system.json asks for 3 board layouts it can't use (2 Design Chamber doesn't know, 1 in places that don't take them), so those entries use the default. Each one listed says what its place takes.",
+  );
+  // A forged misplaced count above the total is held to it.
+  assert.equal(layout({ count: 1, misplaced: 9 }), "system.json asks for 1 board layouts in places that don't take them, so those entries use the default. Each one listed says what its place takes.");
+});
+
+test('parseParams keeps misplaced as a number and pictured only from its closed set', () => {
+  const report = parseCheckReport({
+    version: 1,
+    slug: 'demo',
+    kind: 'page',
+    createdAt: '2026-11-08T10:15:00.000Z',
+    tool: 'cli',
+    static: {
+      findings: [
+        { code: 'system-layout-invalid', file: 'system.json', screen: null, viewport: null, params: { count: 2, misplaced: 1 } },
+        { code: 'system-board-partial', file: 'board.html', screen: null, viewport: null, params: { pictured: 'tiles', count: 1 } },
+        { code: 'system-board-partial', file: 'board.html', screen: null, viewport: null, params: { pictured: 'gap', count: 1 } },
+        { code: 'system-board-partial', file: 'board.html', screen: null, viewport: null, params: { pictured: 'everything', count: 1 } },
+      ],
+    },
+    render: null,
+  });
+  assert.ok(report !== null);
+  assert.deepEqual(report.static.findings.map((finding) => finding.params), [{ count: 2, misplaced: 1 }, { pictured: 'tiles', count: 1 }, { pictured: 'gap', count: 1 }, { count: 1 }]);
+});
+
+test('parseParams keeps layout only from the closed set; a forged value never reaches the sentence', () => {
+  const report = parseCheckReport({
+    version: 1,
+    slug: 'demo',
+    kind: 'page',
+    createdAt: '2026-11-08T10:15:00.000Z',
+    tool: 'cli',
+    static: { findings: [] },
+    render: {
+      state: 'done',
+      browser: 'chrome',
+      keys: { design: sha('a'), entries: {} },
+      artboards: [],
+      skipped: 0,
+      findings: [
+        { code: 'system-board-hint-small', file: 'components/a.html', screen: null, viewport: 'wide', params: { layout: 'compact' } },
+        { code: 'system-board-hint-small', file: 'components/b.html', screen: null, viewport: 'wide', params: { layout: 'wide' } },
+        { code: 'system-board-hint-small', file: 'components/c.html', screen: null, viewport: 'wide', params: { layout: 7 } },
+      ],
+    },
+  });
+  assert.ok(report !== null && report.render !== null);
+  assert.deepEqual(report.render.findings.map((finding) => finding.params), [{ layout: 'compact' }, undefined, undefined]);
+  assert.equal(findingMessage(report.render.findings[1] as CheckFindingData, boardWidths), 'components/b.html @ Wide board 1526×900: this entry is set to card but needed the full width. Set its layout to full.');
 });

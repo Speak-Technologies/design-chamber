@@ -491,6 +491,47 @@ export const TOKEN_PREVIEW_VARS_MAX = 512;
 export const TOKEN_PREVIEW_NAME_PATTERN = /^--[A-Za-z0-9_-]{1,80}$/;
 /** Characters of one board entry key (`data-dc-entry`). */
 export const BOARD_ENTRY_MAX = 120;
+/** Characters of an ignored layout hint's value shown in `boardLayout.ignored` (one line, clipped). */
+export const BOARD_LAYOUT_TEXT_MAX = 16;
+/** Ignored layout hints kept in `boardLayout.ignored`; `ignoredCount` carries the true total. */
+export const SYSTEM_LAYOUT_PROBLEMS_MAX = 20;
+
+// ---- Visual system check (documentation/specs/system-board-layout-and-visual-check.md §B.3) ----
+
+/** The board widths the check draws: a 1920px and a 1440px window with the side panel open (D7). */
+export const SYSTEM_CHECK_BOARD_WIDTHS = [
+  { id: 'wide', label: 'Wide board', width: 1526, height: 900 },
+  { id: 'narrow', label: 'Narrow board', width: 1046, height: 900 },
+] as const;
+/**
+ * Full-size board pictures per run, in pixels, split evenly between the widths: about 32 000px of board
+ * at 1526px and 47 000px at 1046px, so a system the size of a full product (nexus: 25 000px) is pictured
+ * whole. Tiles around entries with a finding are taken first; past the budget the overview carries on.
+ */
+export const SYSTEM_CHECK_TILE_PIXELS_MAX = 100_000_000;
+/** Full-size tiles taken first around one entry with a finding (its top tiles). */
+export const SYSTEM_CHECK_ENTRY_TILES_MAX = 2;
+/** PNGs per system check run (overviews and full-size tiles), split evenly between the widths. */
+export const SYSTEM_CHECK_PNGS_MAX = 120;
+/** An area overview's height in pixels: the whole area, scaled to fit, within the scale bounds below. */
+export const SYSTEM_CHECK_OVERVIEW_HEIGHT_MAX = 4000;
+/** Overview scale bounds: never larger than half size; below a fifth an area's overview stops early. */
+export const SYSTEM_CHECK_OVERVIEW_SCALE_MAX = 0.5;
+export const SYSTEM_CHECK_OVERVIEW_SCALE_MIN = 0.2;
+/** Share of one width's time after which only overviews and finding tiles are still captured. */
+export const SYSTEM_CHECK_OPTIONAL_TILES_TIME_SHARE = 0.6;
+/** One board width's render budget. */
+export const SYSTEM_CHECK_BOARD_TIMEOUT_MS = 45_000;
+/** The whole system render's budget; the tool kills at CHECK_TOOL_TIMEOUT_MS (180s). */
+export const SYSTEM_CHECK_RENDER_BUDGET_MS = 110_000;
+/** Entries the board probe measures; the rest raise `system-board-partial`. */
+export const SYSTEM_BOARD_ITEMS_MEASURED_MAX = 1000;
+/** Text nodes scanned per entry for `textOut`. */
+export const SYSTEM_BOARD_TEXT_NODES_PER_ITEM = 50;
+/** Shadow elements scanned per preview. */
+export const SYSTEM_BOARD_PREVIEW_ELEMENTS_MAX = 400;
+/** Findings kept per board code (after dedupe across widths). */
+export const SYSTEM_BOARD_FINDINGS_PER_CODE = 20;
 
 // ---- Phase 2.5 S8: building systems with the agent ----
 
@@ -510,8 +551,8 @@ export const LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
 /** One font or logo embedded into the living page. */
 export const LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
 export const LIVING_PAGE_OMITTED_MAX = 50;
-/** rev 3: PNG examples (S8's 1 is superseded); rev 4 (value 3): markdown bodies. */
-export const LIVING_PAGE_GENERATOR_VERSION = 3;
+/** rev 3: PNG examples (S8's 1 is superseded); rev 4 (value 3): markdown bodies; value 4: board layout runs and tables, the 90ch measure. */
+export const LIVING_PAGE_GENERATOR_VERSION = 4;
 /** The example pictures' own generator: their inputs (component HTML, tokens, fonts) did not change with markdown, so the PNG cache survives a page-generator bump. */
 export const LIVING_EXAMPLE_GENERATOR_VERSION = 2;
 export const LIVING_PAGE_MARK_NAME = 'dc-living-page';

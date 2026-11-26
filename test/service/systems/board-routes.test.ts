@@ -20,6 +20,7 @@ import { BRIDGE_PLACEHOLDER } from '../../../src/shared/bridge-protocol.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
 import { registerSystemBoardRoutes } from '../../../src/service/routes/system-board.ts';
 import { registerSystemsRoutes } from '../../../src/service/routes/systems.ts';
+import { EAGER_SECTIONS_CSS } from '../../../src/service/systems/board-html.ts';
 import { ensureSystemVersions } from '../../../src/service/systems/versions.ts';
 import { chromeOrSkip, testBrowserFlags } from '../../helpers/chrome-or-skip.ts';
 import { createFakeContext } from '../../helpers/fake-context.ts';
@@ -160,6 +161,9 @@ test('a board render: bundled, with the bridge placeholder, data: assets and exa
   assert.ok(template[1]?.includes('rgb(1, 2, 3)'));
   assert.ok(!template[1]?.includes('<'));
   assert.equal((html.match(/<script\b/gi) ?? []).length, 1);
+  // The page's board leaves off-screen sections to content-visibility: the eager override is the visual check's only.
+  assert.ok(html.includes('content-visibility: auto'));
+  assert.ok(!html.includes(EAGER_SECTIONS_CSS), 'the page board is not drawn eager');
 
   // The same board again comes from the cache; dark is another render.
   const again = JSON.parse((await call('GET', '/systems/acme/board?scheme=light')).text) as RenderMeta;

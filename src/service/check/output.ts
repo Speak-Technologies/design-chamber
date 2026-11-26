@@ -20,27 +20,30 @@ export class CheckOutputError extends Error {
 
 const isMissing = (error: unknown): boolean => (error as NodeJS.ErrnoException | null)?.code === 'ENOENT';
 
+/** Whose folder a refusal names: a design's or a design system's. */
+export type CheckOwner = "This design's" | "This design system's";
+
 /** Create `<parent>/<name>` when absent; refuse a link or a plain file in its place (`label` names it in the message). */
-export const ensureNormalFolder = async (parent: string, name: string, label: string): Promise<string> => {
+export const ensureNormalFolder = async (parent: string, name: string, label: string, owner: CheckOwner = "This design's"): Promise<string> => {
   const target = path.join(parent, name);
   const info = await lstat(target).catch((error: unknown) => {
     if (isMissing(error)) return null;
     throw error;
   });
   if (info !== null && (info.isSymbolicLink() || !info.isDirectory())) {
-    throw new CheckOutputError(`This design's ${label} entry is not a normal folder, so Design Chamber cannot save the check there. Remove it and run the check again.`);
+    throw new CheckOutputError(`${owner} ${label} entry is not a normal folder, so Design Chamber cannot save the check there. Remove it and run the check again.`);
   }
   if (info === null) await mkdir(target);
   return target;
 };
 
 /** `<design>/.chamber`, created when absent; refuses a link or a file. */
-export const ensureChamberDir = (designDir: string): Promise<string> => ensureNormalFolder(designDir, '.chamber', '.chamber');
+export const ensureChamberDir = (designDir: string, owner: CheckOwner = "This design's"): Promise<string> => ensureNormalFolder(designDir, '.chamber', '.chamber', owner);
 
 /** `<design>/.chamber/check`, created when absent; refuses a link or a file at either level. Answers the contained real path. */
-export const ensureCheckDir = async (designDir: string): Promise<string> => {
-  const chamber = await ensureChamberDir(designDir);
-  await ensureNormalFolder(chamber, 'check', '.chamber/check');
+export const ensureCheckDir = async (designDir: string, owner: CheckOwner = "This design's"): Promise<string> => {
+  const chamber = await ensureChamberDir(designDir, owner);
+  await ensureNormalFolder(chamber, 'check', '.chamber/check', owner);
   return resolveInside(designDir, ['.chamber', 'check']);
 };
 
@@ -55,9 +58,9 @@ export const isRunId = (value: string): boolean => RUN_ID_PATTERN.test(value);
 
 const unsafeStemChars = /[^A-Za-z0-9@._-]/g;
 
-/** `home@laptop`, with `-<n>` for the second and later slices of a tall page. */
-export const pngStem = (input: { screen: string | null; viewport: string; slice: number; slices: number }): string => {
-  const base = `${(input.screen ?? 'page').replace(unsafeStemChars, '_')}@${input.viewport.replace(unsafeStemChars, '_')}`;
+/** `home@laptop`, with `-<n>` for the second and later slices of a tall page. `label` replaces the screen (the board's area id). */
+export const pngStem = (input: { screen: string | null; viewport: string; slice: number; slices: number; label?: string }): string => {
+  const base = `${(input.label ?? input.screen ?? 'page').replace(unsafeStemChars, '_')}@${input.viewport.replace(unsafeStemChars, '_')}`;
   return input.slices > 1 && input.slice > 1 ? `${base}-${input.slice}` : base;
 };
 
@@ -79,8 +82,8 @@ export const pngNames = (stems: readonly string[]): string[] => {
 export const pngRelOf = (runId: string, name: string): string => `.chamber/check/${runId}/${name}`;
 
 /** Create the run folder; answers its contained real path. */
-export const createRunDir = async (designDir: string, runId: string): Promise<string> => {
-  const checkDir = await ensureCheckDir(designDir);
+export const createRunDir = async (designDir: string, runId: string, owner: CheckOwner = "This design's"): Promise<string> => {
+  const checkDir = await ensureCheckDir(designDir, owner);
   const runDir = path.join(checkDir, runId);
   await mkdir(runDir, { recursive: true });
   return resolveInside(designDir, ['.chamber', 'check', runId]);

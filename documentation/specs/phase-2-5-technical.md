@@ -2730,7 +2730,9 @@ polled every 3 s while visible):
 `dc check --system <id> [--json]` and `design_check { system: "<id>" }` (mutually exclusive with `design`;
 `parseToolInput` validates `SYSTEM_ID_PATTERN`; the CLI's `resolveTarget` resolves `<root>/_systems/<id>`
 as a direct grandchild of the realpath'd root and a real folder). Static only (no browser). Exit 0 / 1 / 2 as
-for designs. Output written to `<system>/.chamber/check.json`.
+for designs. Output written to `<system>/.chamber/check.json`. **Superseded in part:** the CLI and the tool now
+also draw the board unless `--static` / `static: true`
+(`documentation/specs/system-board-layout-and-visual-check.md` §B); the route stays static.
 
 ### 10.3 System findings (`check/system-static.ts`, pure verdicts over `buildSystemDetail`)
 

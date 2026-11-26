@@ -20,6 +20,32 @@ test('run ids and png names', () => {
   assert.equal(pngStem({ screen: null, viewport: 'laptop', slice: 1, slices: 1 }), 'page@laptop');
   assert.equal(pngStem({ screen: 'a/b', viewport: '..\\x', slice: 1, slices: 1 }), 'a_b@.._x');
   assert.equal(pngRelOf(id, 'a.png'), '.chamber/check/r-20261108101500-a1b2c3/a.png');
+  // The board's tiles: the label (the area id) replaces the screen.
+  assert.equal(pngStem({ screen: null, viewport: 'wide', slice: 1, slices: 4, label: 'components' }), 'components@wide');
+  assert.equal(pngStem({ screen: null, viewport: 'wide', slice: 2, slices: 4, label: 'components' }), 'components@wide-2');
+  assert.deepEqual(pngNames(['components@wide', 'components@wide', 'Components@wide']), ['components@wide.png', 'components@wide-b.png', 'Components@wide-c.png']);
+});
+
+test('a system check refusal names the system, not the design', async (t) => {
+  const tmp = await useTmpRoot(t);
+  const dir = await tmp.writeDesign('sys', { 'system.json': '{}' });
+  await mkdir(tmp.at('elsewhere'));
+  await mkdir(tmp.at('sys/.chamber'));
+  await symlink(tmp.at('elsewhere'), tmp.at('sys/.chamber/check'), 'dir');
+  await assert.rejects(
+    () => createRunDir(dir, 'r-20261108101500-a1b2c3', "This design system's"),
+    (error: unknown) =>
+      error instanceof CheckOutputError &&
+      error.message === "This design system's .chamber/check entry is not a normal folder, so Design Chamber cannot save the check there. Remove it and run the check again.",
+  );
+  assert.deepEqual(await readdir(tmp.at('elsewhere')), []);
+  // A linked .chamber itself is refused with the same owner.
+  const other = await tmp.writeDesign('other', { 'system.json': '{}' });
+  await symlink(tmp.at('elsewhere'), tmp.at('other/.chamber'), 'dir');
+  await assert.rejects(
+    () => ensureCheckDir(other, "This design system's"),
+    (error: unknown) => error instanceof CheckOutputError && error.message.startsWith("This design system's .chamber entry"),
+  );
 });
 
 test('png names stay unique case-insensitively (Laptop and laptop are one file on Windows and macOS)', () => {

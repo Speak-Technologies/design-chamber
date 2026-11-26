@@ -18,6 +18,7 @@ import {
   SYSTEM_NAME_MAX,
   VIEWPORT_ID_PATTERN,
 } from './limits.ts';
+import { BOARD_LAYOUTS } from './system-json.ts';
 import type {
   ArtboardCheck,
   BuildProblemReason,
@@ -59,7 +60,7 @@ const systemNameOf = (f: CheckFindingData): string => f.params?.system ?? 'the d
 /** The repo folder's base name ("shop" in the spec's examples). */
 const repoNameOf = (f: CheckFindingData): string => f.params?.repo ?? 'the repo';
 
-const AREA_LABELS: Readonly<Record<SystemArea, string>> = {
+export const AREA_LABELS: Readonly<Record<SystemArea, string>> = {
   foundations: 'Foundations',
   components: 'Components',
   patterns: 'Patterns & voice',
@@ -336,6 +337,58 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
       return `PROPOSAL.json can't be used: ${PROPOSAL_PROBLEM_SENTENCES[reason]}`;
     },
   },
+  // Board layout hints and the visual system check (documentation/specs/system-board-layout-and-visual-check.md §B.6).
+  'system-layout-invalid': {
+    severity: 'warning',
+    sentence: (f) => {
+      const count = Math.round(f.params?.count ?? 0);
+      const misplaced = Math.min(count, Math.round(f.params?.misplaced ?? 0));
+      const tail = 'so those entries use the default. Each one listed says what its place takes.';
+      if (misplaced === 0) return `system.json asks for ${num(count)} board layouts Design Chamber doesn't know, ${tail}`;
+      if (misplaced === count) return `system.json asks for ${num(count)} board layouts in places that don't take them, ${tail}`;
+      return `system.json asks for ${num(count)} board layouts it can't use (${num(count - misplaced)} Design Chamber doesn't know, ${num(misplaced)} in places that don't take them), ${tail}`;
+    },
+  },
+  'system-board-overflow': {
+    severity: 'warning',
+    sentence: (f, where) => `${where}: the board is ${num(f.params?.px)}px wide, wider than the ${num(f.params?.width)}px it has, so it scrolls sideways.`,
+  },
+  'system-board-preview-wide': {
+    severity: 'warning',
+    sentence: (f, where) => `${where}: this example is ${num(f.params?.px)}px wide but the board can give it ${num(f.params?.width)}px, so it scrolls sideways in its card.`,
+  },
+  'system-board-preview-outside': {
+    severity: 'warning',
+    sentence: (f, where) => `${where}: part of this example sits ${num(f.params?.px)}px outside its card, so it's cut off or covers other entries.`,
+  },
+  'system-board-text-outside': {
+    severity: 'warning',
+    sentence: (f, where) => `${where}: text runs ${num(f.params?.px)}px outside its card.`,
+  },
+  'system-board-hint-small': {
+    severity: 'info',
+    sentence: (f, where) => `${where}: this entry is set to ${f.params?.layout ?? 'card'} but needed the full width. Set its layout to full.`,
+  },
+  'system-board-partial': {
+    severity: 'info',
+    sentence: (f) => {
+      const count = Math.round(f.params?.count ?? 0);
+      const areas = count === 1 ? '1 area' : `${num(count)} areas`;
+      const its = count === 1 ? 'its' : 'their';
+      switch (f.params?.pictured) {
+        case 'entries':
+          return `Only the first ${num(f.params?.max)} entries were measured.`;
+        case 'gap':
+          return `${count === 1 ? 'Part of 1 area is' : `Parts of ${areas} are`} in no picture (the picture limit for one check); the parts are listed. All of the board was measured, so the findings cover them.`;
+        case 'no-overview':
+          return `${areas} ${count === 1 ? 'has' : 'have'} no overview picture (it couldn't be made); ${its} full-size pictures show all of ${count === 1 ? 'it' : 'them'}.`;
+        case 'overview':
+          return `The overview of ${areas} stops early; ${its} full-size pictures show the rest, and all of the board was measured.`;
+        default:
+          return `${areas} ${count === 1 ? 'has' : 'have'} full-size pictures for only part of ${its} length (the picture limit for one check); ${its} overview shows the rest, and all of the board was measured.`;
+      }
+    },
+  },
 };
 
 export const CHECK_CODES: readonly CheckCode[] = Object.freeze(Object.keys(RULES) as CheckCode[]);
@@ -368,6 +421,12 @@ const ARTBOARD_CODES: ReadonlySet<CheckCode> = new Set<CheckCode>([
   'dialog-opened',
   'render-failed',
   'render-timeout',
+  'system-board-overflow',
+  'system-board-preview-wide',
+  'system-board-preview-outside',
+  'system-board-text-outside',
+  'system-board-hint-small',
+  'system-board-partial',
 ]);
 
 /** `screens/home.html @ Phone 390×844`, or the file alone when the viewport is not known. */
@@ -454,7 +513,7 @@ const PNGS_MAX = 4;
 const ENTRIES_MAX = 200;
 const PX_MAX = 1_000_000;
 
-const PARAM_NUMBERS = ['px', 'width', 'ratio', 'min', 'count', 'max', 'revision', 'from', 'unread'] as const;
+const PARAM_NUMBERS = ['px', 'width', 'ratio', 'min', 'count', 'max', 'revision', 'from', 'unread', 'misplaced'] as const;
 
 const AREAS: readonly SystemArea[] = ['foundations', 'components', 'patterns', 'brand'];
 const SECRET_KINDS: readonly SecretShapeKind[] = ['aws-key', 'github-token', 'openai-style-key', 'slack-token', 'google-key', 'private-key'];
@@ -469,6 +528,7 @@ const PROPOSAL_REASONS: readonly ProposalProblemReason[] = [
   'describe-change', 'internal-parts', 'none-fixes', 'rewritten', 'unreadable',
   'preview-too-large', 'preview-unsafe', 'preview-secret',
 ];
+const PICTURED: readonly NonNullable<CheckParams['pictured']>[] = ['tiles', 'overview', 'no-overview', 'gap', 'entries'];
 const LIVING_FAILED: readonly NonNullable<CheckParams['failed']>[] = ['too-large', 'bundle', 'unsafe', 'no-snapshot', 'secret'];
 
 /** One of a closed enum, else null: a forged param never reaches a sentence. */
@@ -514,6 +574,10 @@ const parseParams = (value: unknown): CheckParams | undefined => {
   if (build !== null) out.build = build;
   const proposal = oneOf(value.proposal, PROPOSAL_REASONS);
   if (proposal !== null) out.proposal = proposal;
+  const layout = oneOf(value.layout, BOARD_LAYOUTS);
+  if (layout !== null) out.layout = layout;
+  const pictured = oneOf(value.pictured, PICTURED);
+  if (pictured !== null) out.pictured = pictured;
   return Object.keys(out).length > 0 ? out : undefined;
 };
 

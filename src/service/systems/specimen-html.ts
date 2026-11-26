@@ -18,9 +18,10 @@
 
 import { SYSTEM_ENTRY_ID_PATTERN, SYSTEM_TOKEN_NAME_PATTERN } from '../../shared/limits.ts';
 import { darkVarOf, entryKeyOf, isBoardEntryKey, typeVarOf, type BoardEntryKind } from '../../shared/system-board.ts';
-import { AREA_OF_SECTION } from '../../shared/system-json.ts';
+import { AREA_OF_SECTION, effectiveLayout } from '../../shared/system-json.ts';
 import { validateTokenValue, type TypeField } from '../../shared/token-edit.ts';
 import type {
+  BoardLayout,
   ColourGroup,
   FontAsset,
   LogoAsset,
@@ -94,6 +95,31 @@ const cssValueOf = (section: TokenSection, field: TypeField | null, text: string
 
 const isTokenName = (name: string): boolean => SYSTEM_TOKEN_NAME_PATTERN.test(name);
 
+// ---- layout runs (documentation/specs/system-board-layout-and-visual-check.md §A.3) ----
+
+/** One run: consecutive entries sharing an effective layout, in the agent's order (D5: never reordered). */
+type LayoutRun<T> = { layout: BoardLayout; items: T[] };
+
+const runsOf = <T>(items: readonly T[], layoutOf: (item: T) => BoardLayout): LayoutRun<T>[] => {
+  const runs: LayoutRun<T>[] = [];
+  for (const item of items) {
+    const layout = layoutOf(item);
+    const last = runs.at(-1);
+    if (last !== undefined && last.layout === layout) last.items.push(item);
+    else runs.push({ layout, items: [item] });
+  }
+  return runs;
+};
+
+/** A table run: divs with ARIA roles, so the living page allowlist, hit-testing and the board script all work. */
+const tableWrap = (label: string, inner: string, variant: '' | ' dc-table-tokens' | ' dc-table-two' = ''): string =>
+  `<div class="dc-run-table${variant}" role="table" aria-label="${escapeHtml(label)}">${inner}</div>`;
+
+const tableHeader = (cells: readonly string[]): string =>
+  `<div class="dc-thead" role="row">${cells.map((cell) => `<div class="dc-tcell" role="columnheader">${escapeHtml(cell)}</div>`).join('')}</div>`;
+
+const tableCell = (name: 'name' | 'preview' | 'notes', inner: string): string => `<div class="dc-tcell dc-tcell-${name}" role="cell">${inner}</div>`;
+
 /** A file name inside one contract folder, as a URL path the bundler decodes back. */
 const assetUrl = (rel: string): string | null => {
   const match = /^assets\/(fonts|logos)\/([A-Za-z0-9_][A-Za-z0-9._ -]{0,79})$/.exec(rel);
@@ -145,16 +171,19 @@ export const specimenSystemCss = (detail: SystemDetail, unusable: ReadonlySet<st
 const HATCHED = (label: string): string => `<div class="dc-swatch dc-hatched" role="img" aria-label="${escapeHtml(label)}"></div><div class="dc-hatched-label">${escapeHtml(label)}</div>`;
 const CANT_READ = "Can't read this value";
 
-/** One token's identity lines: name, values as text, note, problem. */
-const tokenText = (token: SystemToken): string => {
+/** One token's name and values as text. */
+const tokenIdentity = (token: SystemToken): string => {
   const values = [token.light ? escapeHtml(token.light.text) : '', token.dark ? `dark ${escapeHtml(token.dark.text)}` : ''].filter(Boolean).join(' · ');
-  return (
-    `<div class="dc-name">${escapeHtml(token.name)}</div>` +
-    (values !== '' ? `<div class="dc-value">${values}</div>` : '') +
-    (token.note !== '' ? `<div class="dc-note">${escapeHtml(token.note)}</div>` : '') +
-    (token.problem !== null ? `<div class="dc-problem">${escapeHtml(token.problem)}</div>` : '')
-  );
+  return `<div class="dc-name">${escapeHtml(token.name)}</div>` + (values !== '' ? `<div class="dc-value">${values}</div>` : '');
 };
+
+/** One token's note and problem. */
+const tokenNote = (token: SystemToken): string =>
+  (token.note !== '' ? `<div class="dc-note">${escapeHtml(token.note)}</div>` : '') +
+  (token.problem !== null ? `<div class="dc-problem">${escapeHtml(token.problem)}</div>` : '');
+
+/** One token's identity lines: name, values as text, note, problem. */
+const tokenText = (token: SystemToken): string => tokenIdentity(token) + tokenNote(token);
 
 /** A visual for one side (light or dark) of a token, or the hatched "can't read" box. */
 const sideVisual = (token: SystemToken, side: 'light' | 'dark', draw: (name: string) => string): string => {
@@ -172,6 +201,40 @@ const grounds = (token: SystemToken, draw: (name: string) => string): string => 
 
 const tokenCard = (token: SystemToken, draw: (name: string) => string): string =>
   `<div class="dc-card"${entryAttr('token', token.name)}>${grounds(token, draw)}${tokenText(token)}</div>`;
+
+/** A table run of tokens: the grounds in the sample cell, the name and values in the token cell, note and problem in the note cell. */
+const tokenTable = (tokens: readonly SystemToken[], draw: (name: string) => string, label: string): string =>
+  tableWrap(
+    label,
+    tableHeader(['Sample', 'Token', 'Note']) +
+      tokens
+        .map(
+          (token) =>
+            `<div class="dc-trow" role="row"${entryAttr('token', token.name)}>` +
+            tableCell('name', grounds(token, draw)) +
+            tableCell('preview', tokenIdentity(token)) +
+            tableCell('notes', tokenNote(token)) +
+            '</div>',
+        )
+        .join(''),
+    // Token cells are short: their column fits the longest name and value, so the note sits next to it (not 800px away).
+    ' dc-table-tokens',
+  );
+
+/**
+ * One run of token cards. `card` keeps today's grid byte for byte; `compact` denser; `table` rows.
+ * `full` is not a token layout (the parser refuses it); it falls back to the card grid.
+ */
+const tokenRun = (run: LayoutRun<SystemToken>, draw: (name: string) => string, label: string): string => {
+  if (run.layout === 'table') return tokenTable(run.items, draw, label);
+  const cards = run.items.map((token) => tokenCard(token, draw)).join('');
+  return `<div class="dc-grid${run.layout === 'compact' ? ' dc-run-compact' : ''}">${cards}</div>`;
+};
+
+const tokenRuns = (detail: SystemDetail, tokens: readonly SystemToken[], section: SystemSection, draw: (name: string) => string, label: string): string =>
+  runsOf(tokens, () => effectiveLayout(detail, section, null))
+    .map((run) => tokenRun(run, draw, label))
+    .join('');
 
 const sectionElement = (id: SystemSection, title: string, body: string): string =>
   `<section class="dc-section" id="dc-section-${id}" data-dc-section="${id}"><h2>${escapeHtml(title)}</h2>${body}</section>`;
@@ -194,15 +257,27 @@ const overviewParts = (detail: SystemDetail, markdown: MarkdownProfile): Section
         '</div>',
     );
   }
-  for (const note of detail.notes) {
-    const key = SYSTEM_ENTRY_ID_PATTERN.test(note.id) ? entryAttr('note', note.id) : '';
-    parts.push(
-      `<div class="dc-card dc-text"${key}><h3>${escapeHtml(note.title)}</h3>${renderMarkdown(withoutLeadingTitle(note.text, note.title), markdown)}` +
-        (note.problem !== null ? `<div class="dc-problem">${escapeHtml(note.problem)}</div>` : '') +
-        '</div>',
-    );
+  // Notes run by the overview section's hints; a card run keeps today's loose full-width cards.
+  for (const run of runsOf(detail.notes, (note) => effectiveLayout(detail, 'overview', note.layout))) {
+    if (run.layout === 'table') {
+      parts.push(entryTextTable('note', run.items, 'Notes', markdown));
+      continue;
+    }
+    const cards = run.items.map((note) => noteCard(note, markdown)).join('');
+    if (run.layout === 'card') parts.push(cards);
+    else if (run.layout === 'full') parts.push(`<div class="dc-run-full">${cards}</div>`);
+    else parts.push(`<div class="dc-grid dc-text-grid dc-run-compact">${cards}</div>`);
   }
   return { title: 'Overview', body: parts.join(''), empty: 'No overview or notes yet.' };
+};
+
+const noteCard = (note: SystemDetail['notes'][number], markdown: MarkdownProfile): string => {
+  const key = SYSTEM_ENTRY_ID_PATTERN.test(note.id) ? entryAttr('note', note.id) : '';
+  return (
+    `<div class="dc-card dc-text"${key}><h3>${escapeHtml(note.title)}</h3>${renderMarkdown(withoutLeadingTitle(note.text, note.title), markdown)}` +
+    (note.problem !== null ? `<div class="dc-problem">${escapeHtml(note.problem)}</div>` : '') +
+    '</div>'
+  );
 };
 
 const GROUPS: readonly { group: ColourGroup; title: string }[] = [
@@ -221,7 +296,8 @@ const colourParts = (detail: SystemDetail, styled: Styler): SectionParts => {
   const body = GROUPS.map(({ group, title }) => {
     const members = colours.filter((token) => (token.group ?? 'other') === group);
     if (members.length === 0) return '';
-    return `<h3>${escapeHtml(title)}</h3><div class="dc-grid">${members.map((token) => tokenCard(token, swatch)).join('')}</div>`;
+    // Runs form inside each colour group; the group keeps its heading.
+    return `<h3>${escapeHtml(title)}</h3>${tokenRuns(detail, members, 'colours', swatch, `Colours: ${title}`)}`;
   }).join('');
   return { title: 'Colours', body, empty: 'No colour tokens yet.' };
 };
@@ -273,9 +349,9 @@ const typographyParts = (detail: SystemDetail, unusable: ReadonlySet<string>, st
   return { title: 'Typography', body: parts.join(''), empty: 'No type styles, fonts or type tokens yet.' };
 };
 
-const visualParts = (detail: SystemDetail, which: TokenSection, title: string, empty: string, draw: (name: string) => string): SectionParts => {
+const visualParts = (detail: SystemDetail, which: 'spacing' | 'radius' | 'shadows', title: string, empty: string, draw: (name: string) => string): SectionParts => {
   const tokens = tokensOf(detail, which);
-  return { title, body: tokens.length > 0 ? `<div class="dc-grid">${tokens.map((token) => tokenCard(token, draw)).join('')}</div>` : '', empty };
+  return { title, body: tokens.length > 0 ? tokenRuns(detail, tokens, which, draw, title) : '', empty };
 };
 
 const layerOrder = (token: SystemToken): number => {
@@ -303,36 +379,73 @@ const sizesParts = (detail: SystemDetail, styled: Styler): SectionParts => {
   const others = tokensOf(detail, 'other');
   const bar = (name: string): string => `<div${styled('dc-bar', `width: min(var(${name}), 100%)`)}></div>`;
   const parts: string[] = [];
-  if (sizes.length > 0) parts.push(`<div class="dc-grid">${sizes.map((token) => tokenCard(token, bar)).join('')}</div>`);
+  if (sizes.length > 0) parts.push(tokenRuns(detail, sizes, 'sizes', bar, 'Sizes'));
   if (others.length > 0) parts.push(`<h3>Other tokens</h3>${plainTokenRows(others)}`);
   return { title: 'Sizes', body: parts.join(''), empty: 'No size tokens yet.' };
 };
 
 // ---- components ----
 
-const componentCard = (component: SystemComponent, example: SpecimenOptions['example']): string => {
-  const id = SYSTEM_ENTRY_ID_PATTERN.test(component.id) ? component.id : null;
+/** A component's note, variants, states, tokens and source (the card's text under the name, the table's notes cell). */
+const componentLists = (component: SystemComponent): string => {
   const list = (label: string, items: readonly string[]): string =>
     items.length > 0 ? `<div class="dc-note">${escapeHtml(label)}: ${items.map(escapeHtml).join(', ')}</div>` : '';
-  const exampleHtml = component.example !== null && example !== undefined ? example(component, id) : '';
   const undefinedTokens = new Set(component.undefinedTokens);
   const tokens = component.tokens.map((name) => escapeHtml(undefinedTokens.has(name) ? `${name} (not in this system)` : name));
   return (
-    `<div class="dc-card"${id === null ? '' : entryAttr('component', id)}>${exampleHtml}` +
-    `<div><strong>${escapeHtml(component.name)}</strong></div>` +
-    (component.purpose !== '' ? `<div class="dc-note">${escapeHtml(component.purpose)}</div>` : '') +
     (component.note !== '' ? `<div class="dc-note">${escapeHtml(component.note)}</div>` : '') +
     list('Variants', component.variants) +
     list('States', component.states) +
     (tokens.length > 0 ? `<div class="dc-note">Tokens: ${tokens.join(', ')}</div>` : '') +
-    (component.source !== null ? `<div class="dc-value">${escapeHtml(component.source)}</div>` : '') +
+    (component.source !== null ? `<div class="dc-value">${escapeHtml(component.source)}</div>` : '')
+  );
+};
+
+const componentName = (component: SystemComponent): string =>
+  `<div><strong>${escapeHtml(component.name)}</strong></div>` + (component.purpose !== '' ? `<div class="dc-note">${escapeHtml(component.purpose)}</div>` : '');
+
+/** `fit` marks the card for the board script's widen measurement (card and compact runs only). */
+const componentCard = (component: SystemComponent, example: SpecimenOptions['example'], fit: boolean): string => {
+  const id = SYSTEM_ENTRY_ID_PATTERN.test(component.id) ? component.id : null;
+  const exampleHtml = component.example !== null && example !== undefined ? example(component, id) : '';
+  return (
+    `<div class="dc-card${fit ? ' dc-fit' : ''}"${id === null ? '' : entryAttr('component', id)}>${exampleHtml}` +
+    componentName(component) +
+    componentLists(component) +
     '</div>'
   );
 };
 
+/** A table run of components: name and purpose, the example, then the notes; the row carries the entry key and `dc-fit`. */
+const componentTable = (components: readonly SystemComponent[], example: SpecimenOptions['example']): string =>
+  tableWrap(
+    'Components',
+    tableHeader(['Name', 'Preview', 'Notes']) +
+      components
+        .map((component) => {
+          const id = SYSTEM_ENTRY_ID_PATTERN.test(component.id) ? component.id : null;
+          const exampleHtml = component.example !== null && example !== undefined ? example(component, id) : '';
+          return (
+            `<div class="dc-trow dc-fit" role="row"${id === null ? '' : entryAttr('component', id)}>` +
+            tableCell('name', componentName(component)) +
+            tableCell('preview', exampleHtml) +
+            tableCell('notes', componentLists(component)) +
+            '</div>'
+          );
+        })
+        .join(''),
+  );
+
 const componentsParts = (detail: SystemDetail, example: SpecimenOptions['example']): SectionParts => {
-  const body = detail.components.map((component) => componentCard(component, example)).join('');
-  return { title: 'Components', body: body !== '' ? `<div class="dc-grid dc-components">${body}</div>` : '', empty: 'No components yet.' };
+  const body = runsOf(detail.components, (component) => effectiveLayout(detail, 'components', component.layout))
+    .map((run) => {
+      if (run.layout === 'table') return componentTable(run.items, example);
+      const cards = run.items.map((component) => componentCard(component, example, run.layout !== 'full')).join('');
+      if (run.layout === 'full') return `<div class="dc-run-full">${cards}</div>`;
+      return `<div class="dc-grid dc-components${run.layout === 'compact' ? ' dc-run-compact' : ' dc-run-card'}">${cards}</div>`;
+    })
+    .join('');
+  return { title: 'Components', body, empty: 'No components yet.' };
 };
 
 // ---- patterns & voice, brand & marketing (S8, §2.11) ----
@@ -360,12 +473,48 @@ const entryTextCard = (kind: 'pattern' | 'brand', entry: SystemEntryText, markdo
   );
 };
 
-const entryTextGrid = (kind: 'pattern' | 'brand', entries: readonly SystemEntryText[], markdown: MarkdownProfile): string =>
-  entries.length > 0 ? `<div class="dc-grid dc-text-grid">${entries.map((entry) => entryTextCard(kind, entry, markdown)).join('')}</div>` : '';
+/** A text entry's note cell content: its note and its problem ('' when it has neither). */
+const entryTextNote = (entry: SystemEntryText | SystemDetail['notes'][number]): string =>
+  ('kind' in entry && entry.note !== '' ? `<div class="dc-note">${escapeHtml(entry.note)}</div>` : '') +
+  (entry.problem !== null ? `<div class="dc-problem">${escapeHtml(entry.problem)}</div>` : '');
+
+/** One text entry as a table row: title (and kind), the body as guidance, note and problem. */
+const entryTextRow = (kind: 'note' | 'pattern' | 'brand', entry: SystemEntryText | SystemDetail['notes'][number], withNote: boolean, markdown: MarkdownProfile): string => {
+  const key = SYSTEM_ENTRY_ID_PATTERN.test(entry.id) ? entryAttr(kind, entry.id) : '';
+  const isEntryText = 'kind' in entry;
+  const title =
+    `<div><strong>${escapeHtml(entry.title)}</strong></div>` +
+    (isEntryText ? `<div class="dc-value">${escapeHtml(KIND_LABELS[entry.kind] ?? entry.kind)}</div>` : '');
+  // A note's own leading heading repeats the title cell: dropped, as on the note cards.
+  const body = entry.text === null ? '' : isEntryText ? entry.text : withoutLeadingTitle(entry.text, entry.title);
+  const guidance = body.trim() !== '' ? `<div class="dc-body">${renderMarkdown(body, markdown)}</div>` : '';
+  return `<div class="dc-trow" role="row"${key}>` + tableCell('name', title) + tableCell('preview', guidance) + (withNote ? tableCell('notes', entryTextNote(entry)) : '') + '</div>';
+};
+
+/** A text table; when no entry in it has a note or a problem the Note column is left out (two columns). */
+const entryTextTable = (kind: 'note' | 'pattern' | 'brand', entries: readonly (SystemEntryText | SystemDetail['notes'][number])[], label: string, markdown: MarkdownProfile): string => {
+  const withNote = entries.some((entry) => entryTextNote(entry) !== '');
+  return tableWrap(
+    label,
+    tableHeader(withNote ? ['Title', 'Guidance', 'Note'] : ['Title', 'Guidance']) + entries.map((entry) => entryTextRow(kind, entry, withNote, markdown)).join(''),
+    withNote ? '' : ' dc-table-two',
+  );
+};
+
+/** Pattern and brand runs: a card run keeps today's text grid byte for byte; compact, full and table get their containers. */
+const entryTextRuns = (kind: 'pattern' | 'brand', detail: SystemDetail, entries: readonly SystemEntryText[], label: string, markdown: MarkdownProfile): string =>
+  runsOf(entries, (entry) => effectiveLayout(detail, kind === 'pattern' ? 'patterns' : 'brand', entry.layout))
+    .map((run) => {
+      if (run.layout === 'table') return entryTextTable(kind, run.items, label, markdown);
+      const cards = run.items.map((entry) => entryTextCard(kind, entry, markdown)).join('');
+      if (run.layout === 'full') return `<div class="dc-run-full">${cards}</div>`;
+      return `<div class="dc-grid dc-text-grid${run.layout === 'compact' ? ' dc-run-compact' : ''}">${cards}</div>`;
+    })
+    .join('');
 
 const patternsParts = (detail: SystemDetail, markdown: MarkdownProfile): SectionParts => ({
   title: 'Patterns & voice',
-  body: entryTextGrid('pattern', detail.patterns, markdown),
+  body: entryTextRuns('pattern', detail, detail.patterns, 'Patterns & voice', markdown),
   empty: 'No patterns or voice guidance yet.',
 });
 
@@ -385,7 +534,7 @@ const logoCard = (logo: LogoAsset, index: number, unusable: ReadonlySet<string>)
 
 const brandParts = (detail: SystemDetail, unusable: ReadonlySet<string>, markdown: MarkdownProfile): SectionParts => {
   const parts: string[] = [];
-  const entries = entryTextGrid('brand', detail.brand, markdown);
+  const entries = entryTextRuns('brand', detail, detail.brand, 'Brand & marketing', markdown);
   if (entries !== '') parts.push(entries);
   if (detail.logos.length > 0) parts.push(`<h3>Logos</h3><div class="dc-grid">${detail.logos.map((logo, index) => logoCard(logo, index, unusable)).join('')}</div>`);
   return { title: 'Brand & marketing', body: parts.join(''), empty: 'No brand guidance or logos yet.' };

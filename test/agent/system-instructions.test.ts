@@ -22,7 +22,7 @@ import {
   SystemPromptTooLongError,
   type SystemPromptSystem,
 } from '../../src/shared/agent/system-prompts.ts';
-import { buildSystemRules, SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE, systemContractSection } from '../../src/shared/agent/system-rules.ts';
+import { BOARD_PICTURES_SENTENCE, buildSystemRules, SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE, systemContractSection } from '../../src/shared/agent/system-rules.ts';
 import { CHIP_TEXT_HARD_MAX, HOST_TEXT_MAX, SYSTEM_NAME_MAX } from '../../src/shared/limits.ts';
 import { baseContext } from './helpers.ts';
 
@@ -182,6 +182,14 @@ describe('system RULES.md (§8.4)', () => {
     assert.ok(text.includes(`${SYSTEM_INJECTION_SENTENCE} ${SYSTEM_INJECTION_REPO_TAIL}`));
     assert.ok(text.includes("sh '/x/dc' check --system acme"));
   });
+
+  test('the check section says the check draws the board and where the pictures go, with or without the launcher', () => {
+    for (const checkCommand of [null, "sh '/x/dc' check --system acme"]) {
+      const text = buildSystemRules({ id: 'acme', name: 'Acme', folder: SYSTEM.folder, projectDirectory: null, home: { kind: 'internal' }, checkCommand });
+      const check = text.slice(text.indexOf('## Check your work'));
+      assert.ok(check.includes(BOARD_PICTURES_SENTENCE), String(checkCommand));
+    }
+  });
 });
 
 describe('system prompts (§8.5, §8.10)', () => {
@@ -230,6 +238,7 @@ describe('system prompts (§8.5, §8.10)', () => {
     assert.ok(make.includes("Don't change anything in /home/you/code/shop. Write only in"));
     assert.ok(make.includes('(+30 more)'));
     assert.ok(make.includes(SYSTEM_INJECTION_SENTENCE));
+    assert.ok(make.endsWith('The check saves pictures of the board at two widths (an overview of each area, then full size); look at them before you say you are done.'), 'the last line of the make prompt');
 
     const living = buildSystemLivingPagePrompt({ system: { ...SYSTEM, repo: { directory: '/home/you/code/shop', folder: 'design-system', livingPage: 'design-system/index.html' } }, stagedFile: '/x/living-page.html', revision: 7 });
     assert.ok(living.includes('copy /x/living-page.html byte for byte to /home/you/code/shop/design-system/index.html'));

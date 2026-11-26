@@ -31,6 +31,7 @@ import {
 } from '../../../src/service/systems/living-page.ts';
 import { scanLivingPage } from '../../../src/service/systems/living-safe.ts';
 import { refreshSnapshot } from '../../../src/service/systems/snapshot.ts';
+import { LIVING_PAGE_GENERATOR_VERSION } from '../../../src/shared/limits.ts';
 import { createFakeBrowser } from './fake-cdp.ts';
 import { proposalJson, setupRepo, SYSTEM_JSON, type RepoRig } from './repo-fixture.ts';
 
@@ -381,15 +382,15 @@ test('the start sweep regenerates a staged page whose record is from an older ge
   assert.ok(before !== null);
   const revision = (await rig.systems.readState(id)).revision.n;
   assert.equal(before.revision, revision);
-  // Pretend the record was written by the pre-markdown generator, at the same revision.
+  // Pretend the record was written by an older generator, at the same revision.
   const recordPath = path.join(await rig.systems.dir(id), '.chamber', 'living-page.json');
-  await writeFile(recordPath, JSON.stringify({ ...before, generator: 2 }));
+  await writeFile(recordPath, JSON.stringify({ ...before, generator: LIVING_PAGE_GENERATOR_VERSION - 1 }));
   const stop = startLivingPages(rig.ctx);
   t.after(stop);
-  for (let tries = 0; tries < 200 && (await rig.record(id))?.generator !== 3; tries += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+  for (let tries = 0; tries < 200 && (await rig.record(id))?.generator !== LIVING_PAGE_GENERATOR_VERSION; tries += 1) await new Promise((resolve) => setTimeout(resolve, 25));
   await livingPagesIdle(rig.ctx);
   const after = await rig.record(id);
-  assert.equal(after?.generator, 3, 'the sweep regenerated at the current revision');
+  assert.equal(after?.generator, LIVING_PAGE_GENERATOR_VERSION, 'the sweep regenerated at the current revision');
   assert.equal(after?.revision, revision, 'without touching the revision');
   assert.ok((await rig.staged(id)) !== null);
 });

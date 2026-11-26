@@ -281,7 +281,7 @@ const insetClipsAll = (clipPath: string, box: DOMRect): boolean => {
 };
 
 /** Visually hidden text (screen-reader-only patterns): no visual verdict applies to it. */
-const visuallyHidden = (element: Element, style: CSSStyleDeclaration, reachable: boolean): boolean => {
+export const visuallyHidden = (element: Element, style: CSSStyleDeclaration, reachable: boolean): boolean => {
   if (!reachable) return true; // parked outside a box that never shows it
   for (let node: Element | null = element; node; node = node.parentElement) {
     if (Number.parseFloat(getComputedStyle(node).opacity) === 0) return true;
@@ -447,6 +447,10 @@ const listOf = (selector: string, keep: (element: Element) => boolean): string[]
   }
   return out;
 };
+
+// The board probe rides in the same bundle (no build change): the check engine calls
+// `__dcProbe.collectBoard()` for a system board, `__dcProbe.collect()` for a design.
+export { collectBoard } from './board.ts';
 
 export const collect = (options: CollectOptions = {}): ProbeResult => {
   const scroller = document.scrollingElement ?? document.documentElement;

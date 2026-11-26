@@ -472,7 +472,15 @@ export type CheckCode =
   | 'system-living-reformatted'
   | 'system-living-secret'
   | 'system-landed-differs'
-  | 'system-proposal-invalid';
+  | 'system-proposal-invalid'
+  // Board layout hints and the visual system check (documentation/specs/system-board-layout-and-visual-check.md §B.6)
+  | 'system-layout-invalid'
+  | 'system-board-overflow'
+  | 'system-board-preview-wide'
+  | 'system-board-preview-outside'
+  | 'system-board-text-outside'
+  | 'system-board-hint-small'
+  | 'system-board-partial';
 
 export type CheckSeverity = 'error' | 'warning' | 'info';
 
@@ -518,6 +526,17 @@ export type CheckParams = {
   build?: BuildProblemReason;
   /** `system-proposal-invalid` only: the closed reason from §5.14. */
   proposal?: ProposalProblemReason;
+  /** `system-board-hint-small` only: the entry's effective board layout (a `BOARD_LAYOUTS` value). */
+  layout?: BoardLayout;
+  /** `system-layout-invalid` only: how many of `count` are known layouts in a place that doesn't take them. */
+  misplaced?: number;
+  /**
+   * `system-board-partial` only: what was left out (one note per kind, each area once). `tiles` = full-size
+   * pictures stop but the overview shows the rest; `overview` = the overview stops but full-size pictures show
+   * the rest; `no-overview` = the overview couldn't be made, the full-size pictures show all of it; `gap` = part
+   * of the area is in no picture; `entries` = entries past `max` weren't measured.
+   */
+  pictured?: 'tiles' | 'overview' | 'no-overview' | 'gap' | 'entries';
 };
 
 /** A finding as `check.json` stores it. `detail` and `selector` are untrusted design text. */
@@ -624,6 +643,13 @@ export type ExportFormat = 'zip' | 'html';
 
 // ---- Phase 2.5: design systems (documentation/specs/phase-2-5-technical.md §2, §4) ----
 
+/**
+ * How the specimen board lays one entry out (documentation/specs/system-board-layout-and-visual-check.md §A).
+ * The agent picks from this closed set per entry or per section; `card` is the default. Presentation only:
+ * never part of a section fingerprint.
+ */
+export type BoardLayout = 'card' | 'compact' | 'full' | 'table';
+
 /** The board's sections; `patterns` and `brand` are S8 (AD-22). */
 export type SystemSection =
   | 'overview' | 'colours' | 'typography' | 'spacing' | 'radius' | 'shadows' | 'layers' | 'sizes'
@@ -688,10 +714,12 @@ export type SystemComponent = {
   example: { remote: string[] } | null;
   /** Named tokens the system does not define. */
   undefinedTokens: string[];
+  /** The agent's board layout hint; null when not set on the entry (the section default applies). */
+  layout: BoardLayout | null;
 };
 
 /** A Patterns & voice or Brand & marketing entry; `text` is the body file, shown as text, never markup. */
-export type SystemEntryText = { id: string; kind: string; title: string; note: string; text: string | null; problem: string | null };
+export type SystemEntryText = { id: string; kind: string; title: string; note: string; text: string | null; problem: string | null; layout: BoardLayout | null };
 
 /** Where a system lives (S8, AD-14): in the Designs folder, or read from a repo folder. */
 export type SystemHomeView =
@@ -870,7 +898,7 @@ export type SystemDetail = {
   review: Record<SystemSection, { state: ReviewState; note: string | null }>;
   changesToReview: boolean;
   overview: { text: string; problem: string | null } | null;
-  notes: { id: string; title: string; text: string; problem: string | null }[];
+  notes: { id: string; title: string; text: string; problem: string | null; layout: BoardLayout | null }[];
   tokens: SystemToken[];
   type: TypeStyle[];
   fonts: FontAsset[];
@@ -906,6 +934,16 @@ export type SystemDetail = {
   landed: LandedView | null;
   /** BUILD.json's own drift count, labelled "The agent reports" (never added to Design Chamber's). */
   agentDrift: { differ: number; kinds: string[]; note: string } | null;
+  /**
+   * The board layout hints as read (§A.1): valid section defaults, and the hints that were ignored
+   * (unknown or misplaced). `ignored` is capped at `SYSTEM_LAYOUT_PROBLEMS_MAX`; `ignoredCount` is the
+   * true total. A bad hint never drops its entry and never lands in `problems`.
+   */
+  boardLayout: {
+    sections: Partial<Record<SystemSection, BoardLayout>>;
+    ignored: { entry: string; value: string; reason: 'unknown' | 'not-here' }[];
+    ignoredCount: number;
+  };
 };
 
 // ---- Phase 2.5: the system's own files (§2.5, §2.13, §2.15, §2.6, §2.8) ----

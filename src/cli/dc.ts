@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { CheckInterrupted, CheckUsageError, runCheck } from '../service/check/engine.ts';
 import { allFindings, exitCodeOf, formatCheckText, formatSystemCheckText, jsonOutput, parseArgs, systemFindingsOf, systemJsonOutput, USAGE } from '../service/check/report-text.ts';
 import { CheckOutputError } from '../service/check/output.ts';
-import { cliSystemStore, runSystemCheck, writeSystemCheckReport } from '../service/check/system-run.ts';
+import { cliSystemStore, runSystemCheck } from '../service/check/system-run.ts';
 import { resolveSystemTarget, resolveTarget } from '../service/check/target.ts';
 import { resolveBrowser } from '../service/chrome.ts';
 import { defaultDesignsRoot, isDesignFolder, isDirectory } from '../service/root.ts';
@@ -51,18 +51,40 @@ const isRealDirectory = async (dir: string): Promise<boolean> => {
   return info !== null && info.isDirectory() && !info.isSymbolicLink();
 };
 
-/** `dc check --system <id>` (Phase 2.5 §10.2): static only, the report written to `<system>/.chamber/check.json`. */
-const checkSystem = async (input: { root: string; settings: SettingsFile; id: string; json: boolean }): Promise<number> => {
+/** `dc check --system <id>`: draw the board at two widths and save its pictures, or `--static` for the files only. */
+const checkSystem = async (input: { root: string; settings: SettingsFile; id: string; json: boolean; staticOnly: boolean; chromePath: string | undefined }): Promise<number> => {
   const target = await resolveSystemTarget({ id: input.id, root: input.root }, { path, realpath, isRealDirectory, platform: process.platform });
   if (!target.ok) return fail(target.message);
+  const controller = new AbortController();
+  const stop = (): void => controller.abort();
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  const browser = input.staticOnly ? { path: null } : resolveBrowser(input.chromePath === undefined ? {} : { chromePath: input.chromePath });
   const store = cliSystemStore(target.root, input.settings);
   try {
-    const { report, detail } = await runSystemCheck(store, target.id, { now: new Date(), tool: 'cli' });
-    const reportPath = await writeSystemCheckReport(target.dir, report);
-    const text = { report, name: detail.name, reportPath };
+    const result = await runSystemCheck(store, target.id, {
+      now: new Date(),
+      tool: 'cli',
+      ...(input.staticOnly
+        ? {}
+        : {
+            render: {
+              browserPath: browser.path,
+              probeSource: typeof __DC_PROBE__ === 'string' ? __DC_PROBE__ : '',
+              platform: process.platform,
+              isRoot: process.getuid?.() === 0,
+              signal: controller.signal,
+            },
+          }),
+    });
+    // Every picture of a run sits in one run folder: printed once, the pictures by name inside it.
+    const firstPng = result.pngs[0];
+    const runDir = firstPng === undefined ? null : path.dirname(firstPng);
+    const text = { report: result.report, name: result.detail.name, reportPath: result.reportPath, pngs: result.pngs, runDir };
     out(input.json ? systemJsonOutput(text) : formatSystemCheckText(text));
-    return exitCodeOf(systemFindingsOf(report));
+    return exitCodeOf(systemFindingsOf(result.report));
   } catch (error) {
+    if (error instanceof CheckInterrupted || error instanceof CheckOutputError) return fail(error.message);
     return fail(`The check could not run: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     await store.dispose();
@@ -88,7 +110,7 @@ const main = async (): Promise<number> => {
   const { root, chromePath, settings } = await rootFrom(command.root);
   if (!path.isAbsolute(root)) return fail(`The designs folder must be a full path, not ${root}.`);
   if (!(await isDirectory(root))) return fail(`The designs folder ${root} does not exist.`);
-  if (command.kind === 'check-system') return checkSystem({ root, settings, id: command.system, json: command.json });
+  if (command.kind === 'check-system') return checkSystem({ root, settings, id: command.system, json: command.json, staticOnly: command.staticOnly, chromePath });
   const target = await resolveTarget({ arg: command.target, root, cwd: process.cwd() }, { path, realpath, isDesignFolder, platform: process.platform });
   if (!target.ok) return fail(target.message);
 

@@ -15,7 +15,7 @@ import {
   SYSTEM_SKILL_NAME,
   SystemSkillTooLongError,
 } from '../../src/shared/agent/system-skill-doc.ts';
-import { systemContractSection, SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE } from '../../src/shared/agent/system-rules.ts';
+import { BOARD_PICTURES_SENTENCE, systemContractSection, SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE } from '../../src/shared/agent/system-rules.ts';
 import { LIVING_PAGE_FORAPPLIED_WAIT_MS, SKILL_DESCRIPTION_MAX, SYSTEM_SKILL_TEXT_MAX } from '../../src/shared/limits.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..', '..');
@@ -162,6 +162,20 @@ describe('the body: the rev 3 protocol', () => {
     assert.ok(body.includes('design_check tool with { "system": "<id>" }'));
     assert.ok(body.includes('--system <id>'));
     assert.ok(body.includes(`${SYSTEM_INJECTION_SENTENCE} ${SYSTEM_INJECTION_REPO_TAIL}`));
+  });
+
+  test('board layout and pictures: the contract names all four layouts and the sections that take them; the check section says it draws the board', () => {
+    const contract = systemContractSection().join('\n');
+    for (const value of ['`card`', '`compact`', '`full`', '`table`']) assert.ok(contract.includes(value), value);
+    assert.ok(contract.includes('a top-level `layout` object keyed by section'));
+    // Notes are listed under notes[], so the section default the agent writes is `notes` (KI-32).
+    assert.ok(contract.includes('"notes": "full"'));
+    assert.ok(contract.includes("values a place doesn't take, are ignored with a warning that says what the place takes"));
+    assert.ok(contract.includes('Colours, spacing, radius, shadows and sizes take card, compact or table; typography, layers and assets take none.'));
+    assert.ok(contract.includes('no `100vw`, no `position: fixed`'));
+    assert.ok(body.includes(contract), 'the skill carries the same contract');
+    assert.ok(body.includes(BOARD_PICTURES_SENTENCE));
+    assert.ok(BOARD_PICTURES_SENTENCE.includes('`.chamber/check/`'));
   });
 
   test('recording: BUILD.json after round one, the id rule, the home rule, the overview sentence', () => {
