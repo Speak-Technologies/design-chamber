@@ -55,17 +55,17 @@ if (hasCC) {
     const c = read(P('CLAUDE.md'));
     check(/@AGENTS\.md/.test(c) && /@\.agents\/rules\/claude-agent-protocol\.md/.test(c), 'CLAUDE.md imports AGENTS.md and the protocol');
   }
-  check(exists(P('.claude', 'settings.json')), '.claude/settings.json exists (permission tier for Claude Code)');
+  check(exists(P('.claude', 'settings.json')), '.claude/settings.json exists (open permissions for Claude Code)');
 }
-if (hasOC) check(exists(ocConfigPath), 'opencode.json exists (permission tier for OpenCode 2)');
+if (hasOC) check(exists(ocConfigPath), 'opencode.json exists (open permissions for OpenCode 2)');
 for (const d of [ccDir, ocDir, neutralDir]) {
   if (exists(d)) check(!exists(path.join(d, 'project-manager.md')), `no ${relOf(d)}/project-manager.md (the main agent leads; there is no PM file)`);
 }
 
 // ---------------------------------------------------------------- 2. placeholders
-// Unfilled generator placeholders are ALL-CAPS tokens in braces. Fenced code blocks are
-// skipped (roles copy output templates from them); {ROLE} is the protocol's generic token;
-// lowercase {var} is i18n syntax.
+// Unfilled placeholders are ALL-CAPS tokens in braces (hand-written custom roles) or an
+// unrendered {{#section}} tag. Fenced code blocks are skipped (roles copy output templates
+// from them); {ROLE} is the protocol's generic token; lowercase {var} / {{var}} is i18n syntax.
 const PLACEHOLDER = /\{[A-Z][A-Z0-9_]+(?:[\s,—–-][^}]*)?\}/g;
 const ALLOWED = new Set(['{ROLE}']);
 
@@ -99,7 +99,9 @@ const generated = [
 ].filter(exists);
 
 for (const f of generated) {
-  const hits = findPlaceholders(read(f));
+  const text = read(f);
+  const hits = findPlaceholders(text);
+  if (/\{\{[#^/>]/.test(text)) hits.push('unrendered {{#section}} tag');
   check(hits.length === 0, `${relOf(f)}: no unfilled placeholders${hits.length ? ` (${hits.slice(0, 3).join('; ')}${hits.length > 3 ? '; …' : ''})` : ''}`);
 }
 
@@ -166,8 +168,7 @@ if (hasOC) {
   for (const a of ocFiles) {
     check(fmValue(a.fm, 'mode') === 'subagent', `${a.rel}: mode: subagent`);
     const model = fmValue(a.fm, 'model');
-    // Unpinned is allowed: the model is chosen when the agent is started.
-    check(model === null || /^[\w.-]+\/[\w.:\/-]+(#[\w.-]+)?$/.test(model), `${a.rel}: model, when pinned, is provider/model with an optional #variant (${model || 'unpinned'})`);
+    if (model !== null) check(/^[\w.-]+\/[\w.:\/-]+(#[\w.-]+)?$/.test(model), `${a.rel}: model is provider/model with an optional #variant (${model})`);
     const v1 = ['permission', 'tools', 'temperature', 'name', 'maxSteps', 'options'].filter((k) => new RegExp(`^${k}:`, 'm').test(a.fm));
     check(v1.length === 0, `${a.rel}: no OpenCode 1 frontmatter keys${v1.length ? ` (found: ${v1.join(', ')})` : ''}`);
     check(!/^permissions:/m.test(a.fm), `${a.rel}: no per-agent permissions list (one policy, in opencode.json)`);
@@ -186,42 +187,24 @@ if (hasOC) {
     const legacy = rules.filter((r) => r && ['bash', 'task'].includes(r.action)).map((r) => r.action);
     check(legacy.length === 0, `permission rules use OpenCode 2 action names (shell, subagent)${legacy.length ? ` — found ${[...new Set(legacy)].join(', ')}` : ''}`);
     const first = rules[0] || {};
-    check(first.action === '*' && first.resource === '*' && first.effect === 'allow', 'first permission rule is the allow-all default (edits stay open for every agent)');
-    const lastAskIdx = rules.map((r) => r.effect === 'ask').lastIndexOf(true);
-    const firstDenyIdx = rules.findIndex((r) => r.effect === 'deny');
-    check(firstDenyIdx === -1 || lastAskIdx === -1 || firstDenyIdx > lastAskIdx, 'permission rules: deny rules come after ask rules (OpenCode: last match wins)');
-    const editDeny = rules.some((r) => r.action === 'edit' && r.effect === 'deny');
-    check(!editDeny, 'no edit deny rule (edit access is open; lanes are held by each agent\'s Scope & focus)');
-    const autonomous = rules.every((r) => r.effect === 'allow');
-    if (autonomous) warn('Autonomous tier: nothing is blocked mechanically — protocol §6 (user-gated actions) is the guard; the hand-over must say so');
-
-    // Claude Code settings carry the same shell denies, if CC is also generated.
-    if (hasCC && exists(P('.claude', 'settings.json'))) {
-      const settings = readJson(P('.claude', 'settings.json'));
-      check(settings && settings.permissions, '.claude/settings.json is valid JSON with a permissions key');
-      if (settings && settings.permissions) {
-        const allow = settings.permissions.allow || [];
-        check(allow.includes('Edit') || allow.includes('Edit(**)'), '.claude/settings.json allows Edit (edit access is open)');
-        // Compare shapes, not spacing: `git push * --force*` and `Bash(git push * --force *)`
-        // both normalise to `gitpush--force`.
-        const norm = (x) => x.replace(/^Bash\((.*)\)$/, '$1').replace(/[\s*]/g, '');
-        const ccDeny = (settings.permissions.deny || []).map(norm);
-        const ocDenies = rules.filter((r) => r.action === 'shell' && r.effect === 'deny').map((r) => r.resource);
-        const missing = ocDenies.filter((d) => !ccDeny.some((c) => c === norm(d)));
-        check(missing.length === 0, `.claude/settings.json deny covers every OpenCode shell deny${missing.length ? ` (missing: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ', …' : ''})` : ''}`);
-      }
-    }
+    check(first.action === '*' && first.resource === '*' && first.effect === 'allow', 'first permission rule is the allow-all default (open permissions; protocol §6 is the guard)');
+    check(!rules.some((r) => r.action === 'edit' && r.effect === 'deny'), 'no edit deny rule (edit access is open; lanes are held by each agent\'s Scope & focus)');
   }
-} else if (hasCC && exists(P('.claude', 'settings.json'))) {
+}
+if (hasCC && exists(P('.claude', 'settings.json'))) {
   const settings = readJson(P('.claude', 'settings.json'));
   check(settings && settings.permissions, '.claude/settings.json is valid JSON with a permissions key');
+  if (settings && settings.permissions) {
+    const allow = settings.permissions.allow || [];
+    check(allow.includes('Edit') && allow.includes('Bash'), '.claude/settings.json allows Edit and Bash (open permissions; protocol §6 is the guard)');
+  }
 }
 
 // ---------------------------------------------------------------- 6b. behavioural guard present
 // With open permissions the user-gated list is the guard, so it must exist where agents read it.
 if (exists(protocolPath)) {
   const proto = read(protocolPath);
-  check(/^## 6\. Autonomy & User-Gated Actions/m.test(proto), 'protocol has §6 Autonomy & User-Gated Actions');
+  check(/^## 6\. Autonomy & user-gated actions/mi.test(proto), 'protocol has §6 Autonomy & user-gated actions');
   check(/senior ladder/i.test(proto), 'protocol embeds the senior ladder');
 }
 check(/^## How we work/m.test(agentsMd) && /user-gated/i.test(agentsMd), 'AGENTS.md has "How we work" with the user-gated rule');
