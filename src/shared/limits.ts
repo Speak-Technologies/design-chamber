@@ -510,8 +510,10 @@ export const LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
 /** One font or logo embedded into the living page. */
 export const LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
 export const LIVING_PAGE_OMITTED_MAX = 50;
-/** rev 3: PNG examples (S8's 1 is superseded). */
-export const LIVING_PAGE_GENERATOR_VERSION = 2;
+/** rev 3: PNG examples (S8's 1 is superseded); rev 4 (value 3): markdown bodies. */
+export const LIVING_PAGE_GENERATOR_VERSION = 3;
+/** The example pictures' own generator: their inputs (component HTML, tokens, fonts) did not change with markdown, so the PNG cache survives a page-generator bump. */
+export const LIVING_EXAMPLE_GENERATOR_VERSION = 2;
 export const LIVING_PAGE_MARK_NAME = 'dc-living-page';
 /** `.chamber/scan.json`, the build scan's certain values for the agent. */
 export const SCAN_JSON_MAX_BYTES = 2 * 1024 * 1024;

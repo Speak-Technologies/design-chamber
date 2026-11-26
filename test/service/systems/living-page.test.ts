@@ -16,6 +16,7 @@ import { registerSystemsRoutes } from '../../../src/service/routes/systems.ts';
 import { configureLivingExamples } from '../../../src/service/systems/living-examples.ts';
 import { FONTS_EMBEDDED_LINE, FONTS_FALLBACK_LINE } from '../../../src/service/systems/living-html.ts';
 import {
+  committedStateOf,
   dropLivingPages,
   LIVING_CHANGED_SENTENCE,
   livingFreshSentence,
@@ -370,4 +371,39 @@ test('a proposal preview has the band and no mark; one with a secret shape is ne
   await regenerateLivingPage(rig.ctx, id, { source: 'proposal' });
   assert.equal(await rig.preview(id), null);
   assert.deepEqual((await rig.record(id))?.preview, { proposal: 'p_abcd1234', sha256: null, problem: 'secret' });
+});
+
+test('the start sweep regenerates a staged page whose record is from an older generator (KI-34)', async (t) => {
+  const rig = await setup(t);
+  const id = await rig.repoSystem();
+  await rig.refresh(id);
+  const before = await rig.record(id);
+  assert.ok(before !== null);
+  const revision = (await rig.systems.readState(id)).revision.n;
+  assert.equal(before.revision, revision);
+  // Pretend the record was written by the pre-markdown generator, at the same revision.
+  const recordPath = path.join(await rig.systems.dir(id), '.chamber', 'living-page.json');
+  await writeFile(recordPath, JSON.stringify({ ...before, generator: 2 }));
+  const stop = startLivingPages(rig.ctx);
+  t.after(stop);
+  for (let tries = 0; tries < 200 && (await rig.record(id))?.generator !== 3; tries += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+  await livingPagesIdle(rig.ctx);
+  const after = await rig.record(id);
+  assert.equal(after?.generator, 3, 'the sweep regenerated at the current revision');
+  assert.equal(after?.revision, revision, 'without touching the revision');
+  assert.ok((await rig.staged(id)) !== null);
+});
+
+test('a committed page is judged by its own mark and hash, never by the generator that wrote it', async (t) => {
+  const rig = await setup(t);
+  const id = await rig.repoSystem();
+  await rig.refresh(id);
+  const staged = await rig.staged(id);
+  assert.ok(staged !== null);
+  const revision = (await rig.systems.readState(id)).revision.n;
+  const name = (await rig.systems.readState(id)).name;
+  // A page committed by any generator: same revision, its own hash intact -> fresh, not drifted.
+  const view = committedStateOf(staged, { id, name, revision });
+  assert.equal(view.state, 'fresh');
+  assert.deepEqual(view.reasons, []);
 });

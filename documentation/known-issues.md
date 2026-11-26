@@ -102,15 +102,6 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Why not fixed now:** intended additive-schema behaviour (P26 R-3); the older version cannot know about a key it never had. Documented in `docs/SPEC.md` §6.9 and the technical spec §8.
 **Fix prompt:** none. Re-file the designs under their projects after upgrading again; the picker lists projects and folders for exactly this.
 
-### KI-34 — Existing repo-backed systems keep an unformatted staged living page until their next revision
-🟣 Minor · found 2026-11-26 · `src/shared/limits.ts:514` (`LIVING_PAGE_GENERATOR_VERSION` still 2) · `src/service/systems/living-page.ts:720` · owner: fullstack-developer
-**What:** PR #29 changed what the living page generator writes (markdown bodies) but kept `LIVING_PAGE_GENERATOR_VERSION` at 2, so the start-up sweep skips every repo-backed system whose staged record is at the current revision. Their staged `living-page.html` (and the "Preview living page" view) keeps the old plain paragraphs until the system next changes.
-**Who:** end user with a repo-backed design system made before PR #29 · **Seen:** visible: the board shows formatted notes, the living page preview shows the raw `#` and `**` text
-**Happens:** every such system after the update, until any edit bumps its revision · common for that group, temporary · **Effect:** two views of the same system disagree; the committed page in the repo is unaffected (its state is checked against its own hash, so it is not marked changed or out of date)
-**Why not fixed now:** cosmetic and self-healing; bumping the constant also re-renders every example PNG at start (it is part of the example cache key in `living-examples.ts:91`), so it is a deliberate cost call
-**Fix prompt:**
-> In Design Chamber, decide whether the markdown living-page change should regenerate staged pages at start. If yes: bump `LIVING_PAGE_GENERATOR_VERSION` in `src/shared/limits.ts` to 3 with a comment ("markdown bodies"), and confirm in a test that `startLivingPages` regenerates a repo-backed system whose record has `generator: 2` at the current revision, and that `committedStateOf` still answers `fresh` for a page committed by generator 2 (its own hash, same revision). If the PNG re-render cost is too high, split the example cache key off its own constant so only the HTML regenerates. Run `npm run check`.
-
 ### KI-35 — Links in system notes on the board look clickable but only select the card
 🟣 Minor · found 2026-11-26 · `src/service/systems/markdown-html.ts:294` · `src/ui/systems/system-board.ts` (click overlay → `hit-test`) · owner: fullstack-developer
 **What:** the board now draws markdown links as underlined `<a>` elements, but the system board puts a click overlay over the frame that turns every click into an entry hit-test, and `system-board.ts` has no `open-external` handling. Clicking a link selects the note instead of opening anything.

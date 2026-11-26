@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import { buildBoardHtml } from '../../../src/service/systems/board-html.ts';
 import { livingCssProblems } from '../../../src/service/systems/living-safe.ts';
 import { escapeHtml, markdownCss, markdownLinkUrl, renderMarkdown, withoutLeadingTitle } from '../../../src/service/systems/markdown-html.ts';
+import type { SystemDetail } from '../../../src/shared/types.ts';
 import { boardFixture } from './board-fixture.ts';
 
 const md = (source: string): string => renderMarkdown(source, 'board');
@@ -137,55 +138,79 @@ test('the living profile stays inside the allowlist vocabulary', () => {
   assert.ok(!out.includes('<a class="dc-md-link" href="https:'), out);
 });
 
-test('nesting past the cap is escaped text, never a stack overflow, and stays quick', () => {
-  const timed = (fn: () => void): number => {
+/**
+ * Growth, not wall clock: time at 4n against time at n, normalised by how much the input itself
+ * grew. Linear tracks the input (ratio ~1); quadratic in the input runs ~4x ahead of it on a 4x
+ * input. The additive term keeps sub-millisecond measurements from flaking on slow runners.
+ */
+const growth = (make: (n: number) => string, n: number, label: string, render: (source: string) => void): void => {
+  const smallSource = make(n);
+  const bigSource = make(4 * n);
+  const time = (source: string): number => {
     const started = performance.now();
-    fn();
+    render(source);
     return performance.now() - started;
   };
+  const small = time(smallSource);
+  const big = time(bigSource);
+  const inputRatio = bigSource.length / smallSource.length;
+  assert.ok(big < 2 * inputRatio * Math.max(small, 1) + 8, `${label}: ${Math.round(small)} ms -> ${Math.round(big)} ms for ${inputRatio.toFixed(1)}x input`);
+  assert.ok(big < 4000, `${label}: ${Math.round(big)} ms absolute`);
+};
+
+const bothProfiles = (source: string): void => {
+  renderMarkdown(source, 'board');
+  renderMarkdown(source, 'living');
+};
+
+const LS = String.fromCharCode(0x2028);
+const PS = String.fromCharCode(0x2029);
+const deepList = (n: number): string => Array.from({ length: n }, (_, i) => `${'  '.repeat(i)}- item${i}`).join('\n');
+
+test('nesting past the cap is escaped text, never a stack overflow, and grows with the input', () => {
   const quotes = `${'>'.repeat(20000)}x`;
-  const lists = Array.from({ length: 2000 }, (_, i) => `${'  '.repeat(i)}- item${i}`).join('\n');
   const emphasis = `${'**'.repeat(20000)}x${'**'.repeat(20000)}`;
-  for (const [name, source] of [['quotes', quotes], ['lists', lists], ['emphasis', emphasis]] as const) {
-    const elapsed = timed(() => {
-      assert.doesNotThrow(() => renderMarkdown(source, 'board'));
-      assert.doesNotThrow(() => renderMarkdown(source, 'living'));
-    });
-    assert.ok(elapsed < 300, `${name}: ${Math.round(elapsed)} ms`);
+  for (const source of [quotes, emphasis, deepList(2000)]) {
+    assert.doesNotThrow(() => renderMarkdown(source, 'board'));
+    assert.doesNotThrow(() => renderMarkdown(source, 'living'));
   }
   assert.ok(md(quotes).includes('x'));
-  assert.ok(md(lists).includes('item1999'));
+  assert.ok(md(deepList(2000)).includes('item1999'));
   assert.ok(md(emphasis).includes('x'));
+  growth((n) => `${'>'.repeat(n)}x`, 5000, '20 000-deep quotes', bothProfiles);
+  growth((n) => `${'**'.repeat(n)}x${'**'.repeat(n)}`, 5000, '20 000-deep emphasis', bothProfiles);
+  growth(deepList, 500, '2 000-deep list', bothProfiles);
 });
 
-test('adversarial lines at the service caps render in milliseconds', () => {
-  const timed = (source: string): number => {
-    const started = performance.now();
-    renderMarkdown(source, 'board');
-    renderMarkdown(source, 'living');
-    return performance.now() - started;
-  };
+test('adversarial lines at the service caps grow with the input, not with its square', () => {
   // The overview cap is 4 000 characters, a note's 20 000: every case below sits at one of them.
-  assert.ok(timed(`# a${' '.repeat(3994)}#x`) < 100, 'heading with a 4 000-space run');
-  assert.ok(timed(`para\n## Title${'\t '.repeat(1500)}more`) < 100, 'heading with a tab/space run');
-  assert.ok(timed('['.repeat(20000)) < 100, 'unclosed brackets');
-  assert.ok(timed('!['.repeat(10000)) < 100, 'unclosed images');
-  assert.ok(timed('[]('.repeat(6000)) < 100, 'links with no closing paren');
-  assert.ok(timed('[x](a'.repeat(4000)) < 100, 'links with no closing paren at all');
-  assert.ok(timed(`${'*a'.repeat(10000)}\n`) < 100, 'emphasis openers with no closer on the line');
-  assert.ok(timed(`**${'a,'.repeat(5000)}`) < 100, 'one strong opener, no closer');
+  growth((n) => `# a${' '.repeat(n)}#x`, 1000, 'heading space run', bothProfiles);
+  growth((n) => `para\n## Title${'\t '.repeat(n)}more`, 375, 'heading tab/space run', bothProfiles);
+  growth((n) => `# ${' '.repeat(n)}${LS}`, 5000, 'heading ending in U+2028', bothProfiles);
+  growth((n) => `# ${' '.repeat(n)}${PS}`, 5000, 'heading ending in U+2029', bothProfiles);
+  growth((n) => `- ${' '.repeat(n)}${LS}`, 5000, 'list marker ending in U+2028', bothProfiles);
+  growth((n) => `${'`'.repeat(n)}${LS}`, 5000, 'backtick run ending in U+2028', bothProfiles);
+  growth((n) => `${'~'.repeat(n)}${LS}`, 5000, 'tilde run ending in U+2028', bothProfiles);
+  growth((n) => '['.repeat(n), 5000, 'unclosed brackets', bothProfiles);
+  growth((n) => '!['.repeat(n), 2500, 'unclosed images', bothProfiles);
+  growth((n) => '[]('.repeat(n), 1500, 'links with no closing paren', bothProfiles);
+  growth((n) => '[x](a'.repeat(n), 1000, 'links with no closing paren at all', bothProfiles);
+  growth((n) => `${'*a'.repeat(n)}\n`, 2500, 'emphasis openers with no closer on the line', bothProfiles);
 });
 
-test('a whole board of hostile 20 000-char notes builds well under half a second', () => {
-  const bracketNotes = Array.from({ length: 50 }, (_, i) => ({ id: `n${i}`, title: `Note ${i}`, text: '['.repeat(20000), problem: null }));
-  const headingNotes = Array.from({ length: 50 }, (_, i) => ({ id: `n${i}`, title: `Note ${i}`, text: `# a${' '.repeat(3994)}#x`, problem: null }));
-  const tableNotes = Array.from({ length: 3 }, (_, i) => ({ id: `n${i}`, title: `Note ${i}`, text: `${'|a'.repeat(2500)}\n${'|-'.repeat(2500)}\n${Array(5000).fill('|').join('\n')}`, problem: null }));
-  for (const [name, notes] of [['brackets', bracketNotes], ['headings', headingNotes], ['tables', tableNotes]] as const) {
-    const started = performance.now();
-    const html = buildBoardHtml({ ...boardFixture(), notes }, { scheme: 'dark' });
-    const elapsed = performance.now() - started;
-    assert.ok(html.includes('id="dc-section-overview"'), name);
-    assert.ok(elapsed < 500, `${name}: ${Math.round(elapsed)} ms`);
+test('a whole board of hostile notes grows with the notes, not with their square', () => {
+  const kinds: ReadonlyArray<readonly [string, (n: number) => string]> = [
+    ['brackets', () => '['.repeat(20000)],
+    ['headings', () => `# a${' '.repeat(3994)}#x`],
+    ['line separators', () => `# ${' '.repeat(19990)}${LS}`],
+    ['tables', () => `${'|a'.repeat(2500)}\n${'|-'.repeat(2500)}\n${Array(5000).fill('|').join('\n')}`],
+  ];
+  for (const [name, text] of kinds) {
+    const notesOf = (count: number): string => JSON.stringify(Array.from({ length: count }, (_, i) => ({ id: `n${i}`, title: `Note ${i}`, text: text(0), problem: null })));
+    growth(notesOf, 12, `board of ${name} notes`, (json) => {
+      const html = buildBoardHtml({ ...boardFixture(), notes: JSON.parse(json) as SystemDetail['notes'] }, { scheme: 'dark' });
+      assert.ok(html.includes('id="dc-section-overview"'), name);
+    });
   }
 });
 
@@ -262,21 +287,15 @@ test('a refused link with markup in its label stays escaped text in both profile
 });
 
 test('a wide or cell-hungry table cannot multiply the source', () => {
-  const timed = (source: string): number => {
-    const started = performance.now();
-    renderMarkdown(source, 'board');
-    renderMarkdown(source, 'living');
-    return performance.now() - started;
-  };
   // 2 500 columns over 5 000 bare "|" rows: 15 000 characters, inside the note cap.
   const wide = `${'|a'.repeat(2500)}\n${'|-'.repeat(2500)}\n${Array(5000).fill('|').join('\n')}`;
-  assert.ok(timed(wide) < 100, 'wide table');
+  growth((n) => `${'|a'.repeat(2500)}\n${'|-'.repeat(2500)}\n${Array(n).fill('|').join('\n')}`, 1250, 'wide table rows', bothProfiles);
   const wideOut = md(wide);
   assert.ok(!wideOut.includes('<table'), 'past the column cap it is text');
   assert.ok(wideOut.length < wide.length * 4, `${wideOut.length} chars from ${wide.length}`);
   // 64 columns over the same rows: a table, but only as many cells as the source budgets.
   const dense = `${'|a'.repeat(64)}\n${'|-'.repeat(64)}\n${Array(5000).fill('|').join('\n')}`;
-  assert.ok(timed(dense) < 100, 'dense table');
+  growth((n) => `${'|a'.repeat(64)}\n${'|-'.repeat(64)}\n${Array(n).fill('|').join('\n')}`, 1250, 'dense table rows', bothProfiles);
   const denseOut = md(dense);
   assert.ok(denseOut.includes('<table'), 'within the cap it is a table');
   assert.ok(denseOut.length < dense.length * 12, `${denseOut.length} chars from ${dense.length}`);

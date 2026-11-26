@@ -21,7 +21,7 @@ import {
   LIVING_EXAMPLES_BUDGET_MS,
   LIVING_EXAMPLES_CACHE_MAX,
   LIVING_PAGE_ASSET_MAX_BYTES,
-  LIVING_PAGE_GENERATOR_VERSION,
+  LIVING_EXAMPLE_GENERATOR_VERSION,
   SYSTEM_COMPONENTS_MAX,
   SYSTEM_ENTRY_ID_PATTERN,
 } from '../../shared/limits.ts';
@@ -88,7 +88,7 @@ export type PlannedShot = { component: string; scheme: 'light' | 'dark'; key: st
 /** The cache key (§5.11 step 2): every input of the picture, each length-prefixed so no two inputs run together. */
 export const exampleCacheKey = (input: { exampleHtml: string; tokensCss: string; fontsCss: string; scheme: 'light' | 'dark' }): string => {
   const hash = createHash('sha256');
-  for (const part of [input.exampleHtml, input.tokensCss, input.fontsCss, input.scheme, String(LIVING_EXAMPLE_WIDTH), String(LIVING_EXAMPLE_SCALE), String(LIVING_PAGE_GENERATOR_VERSION)]) {
+  for (const part of [input.exampleHtml, input.tokensCss, input.fontsCss, input.scheme, String(LIVING_EXAMPLE_WIDTH), String(LIVING_EXAMPLE_SCALE), String(LIVING_EXAMPLE_GENERATOR_VERSION)]) {
     const bytes = Buffer.from(part, 'utf8');
     hash.update(`${bytes.length}:`).update(bytes);
   }
