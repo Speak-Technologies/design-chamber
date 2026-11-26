@@ -193,6 +193,8 @@ body { margin: 0; background: #f7f7f8; color: #1d1d1f; font-family: system-ui, -
 .dc-components { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
 .dc-components.dc-run-compact { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 .dc-run-full { display: grid; grid-template-columns: 1fr; gap: 16px; }
+:is(.dc-grid, .dc-run-full, .dc-run-table, .dc-card) + :is(.dc-grid, .dc-run-full, .dc-run-table) { margin-top: 16px; }
+:is(.dc-grid, .dc-run-full, .dc-run-table) + .dc-card { margin-top: 16px; }
 .dc-grid.dc-run-compact { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
 .dc-grid.dc-text-grid.dc-run-compact { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 .dc-run-compact .dc-swatch { height: 32px; }

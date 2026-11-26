@@ -99,6 +99,9 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
 /* Light and dark grounds stack in every run, each as wide as the card, so a wide preview never has to share the row. */
 .dc-components .dc-grounds { flex-direction: column; margin-bottom: 12px; }
 .dc-components .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
+/* Neighbouring runs stand 16px apart (a column flow drops its last card's bottom margin, so two runs would touch). */
+:is(.dc-grid, .dc-run-full, .dc-run-table, .dc-card) + :is(.dc-grid, .dc-run-full, .dc-run-table) { margin-top: 16px; }
+:is(.dc-grid, .dc-run-full, .dc-run-table) + .dc-card { margin-top: 16px; }
 /* Compact: the same column flow with smaller pieces, for buttons, badges, pills and avatars. */
 .dc-components.dc-run-compact { column-width: 280px; }
 .dc-run-compact > .dc-card { padding: 12px; }

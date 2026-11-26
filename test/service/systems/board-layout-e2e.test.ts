@@ -330,7 +330,9 @@ test('board layouts in Chrome: compact packs small pieces, full spans the sectio
   assert.ok(rows.every((row) => row.run.includes('dc-run-table')));
   assert.ok(last.run.includes('dc-run-card'));
   const bottom = (entries: readonly EntryReport[]): number => Math.max(...entries.map((e) => e.box.bottom));
-  assert.ok(bottom(pills) <= nav.box.top && hero.box.bottom <= rowA.box.top && rowC.box.bottom <= last.box.top, 'runs in the agent order, top to bottom');
+  // In the agent order, top to bottom, and neighbouring runs stand apart (never touching borders).
+  const gaps = [nav.box.top - bottom(pills), rowA.box.top - hero.box.bottom, last.box.top - rowC.box.bottom];
+  assert.ok(gaps.every((gap) => gap >= 15), `gaps between runs: ${JSON.stringify(gaps)}`);
 
   // Compact: 280 px columns, so the four pills sit side by side in one band (at least three columns), none widened.
   assert.ok(new Set(pills.map((pill) => Math.round(pill.box.left))).size >= 3, `compact columns: ${JSON.stringify(pills.map((p) => p.box))}`);
