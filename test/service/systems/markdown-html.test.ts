@@ -316,6 +316,45 @@ test('a note body opening with its own title drops the duplicate heading', () =>
   assert.equal(withoutLeadingTitle('# Accessibility ##\n\nx', 'Accessibility'), '\nx');
 });
 
+test('dropping the title never lengthens the note, whatever its tabs and line breaks', () => {
+  assert.equal(withoutLeadingTitle('# T\n\t- a\n\t\t- b', 'T'), '\t- a\n\t\t- b');
+  assert.equal(withoutLeadingTitle('\n \t\r\n# T\r\n\tx\r\ny', 'T'), '\tx\r\ny');
+  assert.equal(withoutLeadingTitle('# T', 'T'), '');
+  assert.equal(withoutLeadingTitle('# T\r', 'T'), '');
+  const random = seeded(8675309);
+  const parts = ['# T', '## T ##', '#T', '# Other', '', ' ', '\t', '\t\t- b', '- a', 'text', '\tcode', '> q'] as const;
+  const breaks = ['\n', '\n', '\r\n', '\r', LS, PS, NEL] as const;
+  let dropped = 0;
+  for (let k = 0; k < 4000; k += 1) {
+    let source = '';
+    for (let n = random.rnd(8); n >= 0; n -= 1) source += random.pick(parts) + (n > 0 || random.rnd(2) === 0 ? random.pick(breaks) : '');
+    const out = withoutLeadingTitle(source, 'T');
+    assert.ok(out.length <= source.length, JSON.stringify(source));
+    assert.ok(source.endsWith(out), `the rest is the source's own tail: ${JSON.stringify(source)}`);
+    if (out !== source) dropped += 1;
+  }
+  assert.ok(dropped > 500, `${dropped} titles dropped`);
+});
+
+test('a note at the cap that opens with its title and indents with tabs still renders as structure', () => {
+  const head = '# Spacing\n\n';
+  const item = '- a\n\t- b\n';
+  const note = (head + item.repeat(Math.ceil(SYSTEM_NOTE_MAX / item.length))).slice(0, SYSTEM_NOTE_MAX);
+  assert.equal(note.length, SYSTEM_NOTE_MAX);
+  const body = withoutLeadingTitle(note, 'Spacing');
+  assert.equal(body, note.slice(head.length - 1));
+  assert.ok(body.length <= MARKDOWN_SOURCE_MAX);
+  // The same note under another title keeps its heading; apart from that the two render the same.
+  const kept = withoutLeadingTitle(note, 'Rhythm');
+  assert.equal(kept, note);
+  for (const profile of ['board', 'living'] as const) {
+    const out = render(body, profile);
+    assert.ok(out.startsWith('<ul class="dc-md-list"><li><p>a</p><ul class="dc-md-list"><li><p>b</p></li></ul></li>'), `${profile}: ${out.slice(0, 120)}`);
+    assert.ok(!out.includes('<p>- '), `${profile}: no raw list text`);
+    assert.equal(render(kept, profile), `<h3 class="dc-md-h3">Spacing</h3>${out}`, profile);
+  }
+});
+
 test('markdownLinkUrl answers the allowlist directly', () => {
   assert.equal(markdownLinkUrl('  https://example.com  '), 'https://example.com');
   assert.equal(markdownLinkUrl('HTTPS://EXAMPLE.COM'), 'HTTPS://EXAMPLE.COM');

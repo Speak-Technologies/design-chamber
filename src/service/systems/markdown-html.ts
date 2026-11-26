@@ -510,6 +510,8 @@ const blocks = (lines: readonly string[], profile: MarkdownProfile, depth: numbe
  * the splitter left behind (a `(.*)$` that cannot reach the end backtracks quadratically).
  */
 const LINE_BREAK = new RegExp(`\\r\\n?|[${String.fromCharCode(0x2028, 0x2029, 0x85)}]`, 'g');
+/** Every break `sourceLines` splits on, LF included: one match per line end in the original text. */
+const ANY_LINE_BREAK = new RegExp(`\\n|${LINE_BREAK.source}`, 'g');
 
 /** Source lines with every line terminator normalised to LF and leading tabs expanded, the one place both happen. */
 const sourceLines = (source: string): string[] =>
@@ -531,7 +533,9 @@ export const renderMarkdown = (source: string, profile: MarkdownProfile = 'board
 /**
  * A note body that opens with its own title as a heading (the service derives the title from that
  * heading) shows the title once: the card's label, not twice. Only an exact, leading heading match
- * is dropped; anything else is left as written.
+ * is dropped; anything else is left as written. The normalised lines only find the heading: what
+ * comes back is the original text after that line, so it is never longer than the source (expanded
+ * tabs would push a note at the cap past `MARKDOWN_SOURCE_MAX`, and it would render as raw text).
  */
 export const withoutLeadingTitle = (source: string, title: string): string => {
   const lines = sourceLines(source);
@@ -539,7 +543,16 @@ export const withoutLeadingTitle = (source: string, title: string): string => {
   while (i < lines.length && (lines[i] ?? '').trim() === '') i += 1;
   const heading = HEADING.exec(lines[i] ?? '');
   if (heading === null || headingText(heading[2] ?? '') !== title.trim()) return source;
-  return lines.slice(i + 1).join('\n');
+  // The heading is line `i`: skip `i + 1` line breaks of the original text.
+  let after = 0;
+  let skipped = 0;
+  for (const match of source.matchAll(ANY_LINE_BREAK)) {
+    after = match.index + match[0].length;
+    skipped += 1;
+    if (skipped > i) return source.slice(after);
+  }
+  // No break after the heading: it was the last line.
+  return '';
 };
 
 // ---- the CSS the two documents carry ----
