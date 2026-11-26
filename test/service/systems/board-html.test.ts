@@ -166,6 +166,17 @@ test('a component example is escaped text inside a template, so it can neither r
   assert.ok(buildBoardHtml(makeDetail(), { scheme: 'light' }).includes('This example couldn&#39;t be shown.'));
 });
 
+test('component cards are laid out in content-sized columns, and a preview wider than its column widens its card', () => {
+  const html = buildBoardHtml(makeDetail(), { scheme: 'light', examples: { button: '<p>Hi</p>' } });
+  // Columns, not grid rows: no card is stretched to a neighbour's row height, and the track is wide enough for a table or tab strip.
+  assert.match(html, /\.dc-components \{ display: block; column-width: \d{3}px;/);
+  assert.match(html, /\.dc-components > \.dc-card \{[^}]*break-inside: avoid/);
+  assert.match(html, /\.dc-components > \.dc-card\.dc-wide \{ column-span: all; \}/);
+  // The static board script measures each example and flags the wide ones (still one script, no markup from the system in it).
+  assert.ok(html.includes("classList.add('dc-wide')"));
+  assert.equal(scriptCount(html), 1);
+});
+
 test('every entry element carries a well-formed key, and the expected keys are there', () => {
   const html = buildBoardHtml(makeDetail(), { scheme: 'dark' });
   const keys = entries(html);

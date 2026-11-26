@@ -15,7 +15,7 @@ import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss } fro
 export { escapeHtml } from './specimen-html.ts';
 
 /** Bumped when the generated document changes shape, so cached boards are not reused. */
-export const BOARD_GENERATOR_VERSION = 2;
+export const BOARD_GENERATOR_VERSION = 3;
 
 /** The virtual entry the board is bundled from (never a file on disk). */
 export const BOARD_ENTRY_FILE = '__board.html';
@@ -78,6 +78,16 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
 .dc-area-title { margin: 24px 0 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dc-board-muted, ${f.muted}); }
 .dc-text-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
 .dc-body { margin-top: 8px; }
+/* Components: columns, not grid rows, so each card is as tall as its own content (a short card never stretches to a tall
+   neighbour's row, a long preview never gets a fixed-height box). The 560px minimum gives a table, a KPI row or a tab strip room to
+   fit: two columns on a full-screen page, one in a narrow stage. A card whose preview is still wider than its column (the board script
+   measures it) takes the full width instead (the dc-wide class); only a preview wider than the whole board scrolls, inside its own ground. */
+.dc-components { display: block; column-width: 600px; column-gap: 16px; }
+.dc-components > .dc-card { display: block; break-inside: avoid; margin: 0 0 16px; padding: 16px; overflow: hidden; }
+.dc-components > .dc-card.dc-wide { column-span: all; }
+.dc-components .dc-grounds { flex-wrap: wrap; margin-bottom: 12px; }
+.dc-components .dc-ground { flex: 1 1 240px; min-width: 0; padding: 12px; }
+.dc-components .dc-example { overflow-x: auto; overflow-y: visible; }
 `;
 };
 
@@ -125,6 +135,38 @@ const BOARD_SCRIPT = `(function () {
       try { hosts[j].attachShadow({ mode: 'open' }).innerHTML = markup; } catch (error) { hosts[j].textContent = 'This example could not be shown.'; }
     }
   }
+  // A component card whose example is wider than its column spans the board instead (measured with the card narrow, again on resize).
+  var cards = document.querySelectorAll('.dc-components > .dc-card');
+  var wider = function (host) {
+    var root = host.shadowRoot;
+    if (!root) return false;
+    if (host.scrollWidth > host.clientWidth + 1) return true;
+    var edge = host.getBoundingClientRect().right + 1;
+    var all = root.querySelectorAll('*');
+    for (var k = 0; k < all.length; k += 1) {
+      var box = all[k].getBoundingClientRect();
+      if (box.width > 0 && box.right > edge) return true;
+    }
+    return false;
+  };
+  var widen = function () {
+    var k;
+    for (k = 0; k < cards.length; k += 1) cards[k].classList.remove('dc-wide');
+    var flagged = [];
+    for (k = 0; k < cards.length; k += 1) {
+      var inside = cards[k].querySelectorAll('[data-dc-example-host]');
+      for (var m = 0; m < inside.length; m += 1) {
+        if (wider(inside[m])) { flagged.push(cards[k]); break; }
+      }
+    }
+    for (k = 0; k < flagged.length; k += 1) flagged[k].classList.add('dc-wide');
+  };
+  var frame = 0;
+  window.addEventListener('resize', function () {
+    if (frame) cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(function () { frame = 0; widen(); });
+  });
+  if (cards.length > 0) widen();
 })();`;
 
 // ---- the document ----
