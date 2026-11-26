@@ -81,6 +81,29 @@ Each summary also carries when the system was made and up to six of its light co
 - Files by picking or dropping work inside the sandboxed frame (spike SP-1); **Add from a folder…** is the way for a folder.
 - Text from a system, a scan or a file name is always shown as text, never as markup.
 
+## Board layout hints
+The agent that writes a system says how the specimen board lays out each entry; Design Chamber still draws the board and picks from a closed set. In `system.json`, a component, note, pattern or brand entry can carry `"layout"`, and a top-level `"layout"` object gives section defaults, for example `{ "components": "compact", "colours": "table" }`. An entry's own value wins, then its section's, then `card`.
+
+| Layout | Looks like | For |
+|---|---|---|
+| `card` (default) | today's cards: components in columns at least 600 px wide, a too-wide preview takes the full width | most entries |
+| `compact` | narrower columns (about 280 px) and smaller token swatches | buttons, badges, pills, avatars |
+| `full` | one entry per row across the whole board | tables, navigation, toolbars, page headers |
+| `table` | aligned rows with a header; stacks below 760 px of section width | long lists read row by row |
+
+Components, notes (the overview's `layout`), patterns and brand entries take all four. Colours, spacing, radius, shadows and sizes take a section default of card, compact or table. Typography, layers and assets take none. An unknown value, or one a section doesn't take, is ignored (that entry uses the default) and the check warns "system.json asks for N board layouts Design Chamber doesn't know"; it never makes an entry unreadable.
+
+Rules the board holds:
+- **Order is the agent's.** Neighbouring entries with the same layout form one group; nothing is reordered.
+- **Light and dark grounds stack** in every layout, so a preview always has the card's full width.
+- **Presentation only.** A layout change doesn't reset a section's "Looks good" review. It is still a change to `system.json`, so it is a new revision: linked designs see that a newer system exists, and a repo's living page reads out of date until it is regenerated.
+- **The living page follows the hints too**, with the same groups and table rows (its examples are pictures that scale down, so it needs no measuring).
+- The panel has no layout control: the brief makes this the agent's job.
+
+The visual system check draws the board with these hints and says when a hint is too small for an entry ("set to compact but needed the full width. Set its layout to full.") ([Design checks: drawing the board](design-checks.md#drawing-the-board)).
+
+Code: `src/shared/system-json.ts` (`readItemLayout`, `readSectionLayouts`, `effectiveLayout`), `src/service/systems/specimen-html.ts` (runs and table markup), `src/service/systems/board-html.ts` (board CSS and script), `src/service/systems/living-html.ts` (living page CSS). Tests: `test/shared/system-json.test.ts`, `test/service/systems/specimen-html.test.ts`, `board-html.test.ts`, and the Chrome layout test `board-layout-e2e.test.ts`.
+
 ## Using a system from a design
 A design shows its system as a chip in the viewer, with an update banner, a review sheet, Change… and Undo ([Viewer: a design's system](../pages/viewer.md)). Rows and cards in the designs list carry a **System updated** badge when the system has a newer revision than the design's copy, and a **chip** naming the system: one click opens it (Draft is marked, a deleted system reads "(deleted)" and says so when pressed). Defaults and project pins live in Settings, and the New design dialog preselects from them ([Settings: Design systems](../pages/settings.md)). Code: `src/ui/components/system-chip.ts`, `src/ui/model/design-system-model.ts`.
 

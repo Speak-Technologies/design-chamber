@@ -1,6 +1,8 @@
 # System board layout hints and the visual system check (technical design)
 
-Status: design, for one PR on `feat/system-board-layout-and-visual-check` (stacked on `12b4b8d`, which put
+Status: built (main-agent decisions on the Open Questions: no `wide`; visual findings stay off the system page's
+Checks badge; the waiting proposal's board is drawn; a layout-only edit is a new revision; the living page follows
+the hints; widths 1526 and 1046). Deviations found while building are marked **Built** below. One PR on `feat/system-board-layout-and-visual-check` (stacked on `12b4b8d`, which put
 board components in 600px-min content-sized columns and added the board script that widens a card whose
 preview is too wide). Two user-approved features:
 
@@ -136,7 +138,7 @@ marks it strips). Text entries and token entries carry no `dc-fit` (no live prev
 
 ### A.4 Board CSS and script (`src/service/systems/board-html.ts`, presentation, same builder)
 
-Bump `BOARD_GENERATOR_VERSION` to 4 (cached boards are re-made). Colours, type and radius come only from the
+Bump `BOARD_GENERATOR_VERSION` to 5 (cached boards are re-made; the base branch's grounds and re-measure fix took 4). Colours, type and radius come only from the
 board variables the page sends from the host theme (`--dc-board-bg`, `--dc-board-card`, `--dc-board-fg`,
 `--dc-board-muted`, `--dc-board-border`, `--dc-board-radius`, `--dc-board-font`, with the existing
 `FALLBACKS`); no new colour or typeface.
@@ -153,17 +155,22 @@ Rules (the builder writes the CSS; these are the acceptance points):
    `container-type: inline-size`) rows stack their cells.
 5. A widened table row (`.dc-trow.dc-wide`) leaves the subgrid: name and notes cells side by side on top, the
    preview cell under them spanning the row.
-6. Light and dark grounds sit side by side only in an unwidened `card`-run card. In compact cards, full
-   cards, widened cards and table rows they stack (`flex-direction: column`), so each preview gets the
-   whole width.
+6. Light and dark grounds stack (`flex-direction: column`) in every run, so each preview gets the whole
+   width. (Built: the base fix 64c0687 stacked them everywhere and that decision was kept over an earlier
+   "side by side in an unwidened card-run card".)
+6a. Neighbouring runs stand 16px apart (`margin-top` on a run that follows a run or a loose card, and on a
+   loose card that follows a run): a column flow drops its last card's bottom margin, so two runs touched.
+   The living page carries the same rule. The first `.dc-body` in a table cell drops its top margin so a
+   text table's guidance starts level with its title.
 7. Cards in every component run keep `overflow: hidden` and `.dc-example { overflow-x: auto }` (12b4b8d).
 
 Board script (`BOARD_SCRIPT`), changed:
 
 - Measures `.dc-fit` elements (was `.dc-components > .dc-card`) with the same `wider()` rule.
 - Runs `widen()` at script time, again on `window` `load` (images inside examples finish loading after the
-  script ran) and again after `document.fonts.ready` (a late font changes widths), and on resize as today.
-  Today it only re-measures on resize, so a font or image that lands late can leave a preview overflowing.
+  script ran), after `document.fonts.ready` (a late font changes widths), when `<html>`'s inline style
+  changes (the host sets tokens there), and on resize, coalesced into one animation frame (built on the base
+  branch, 22c5621).
 
 ### A.5 Agent-facing docs
 
@@ -327,9 +334,17 @@ type BoardProbe = {
 - `textOut` scans the entry's own text nodes (not shadow content) with `Range.getClientRects`, like
   `textLines`, and takes the furthest any line reaches past the entry's box.
 
-The probe runs after settle (fonts, two frames, 400ms), so after the board script's last `widen()`. Rects of
-sections styled `content-visibility: auto` are read with forced layout, which Chrome performs for script
-queries; the e2e test in §T puts a faulty example below the fold to prove it.
+The probe runs after settle (fonts, two frames, 400ms), so after the board script's last `widen()`.
+**Built differently:** forced layout lays out the entries of a `content-visibility: auto` section but leaves
+the section itself at its 480px placeholder and unpainted, so on a real system (nexus) the Components area
+measured 571px and its first tile was blank. The check therefore builds the board with
+`BoardHtmlOptions.eager` (`.dc-section { content-visibility: visible; }` after the chrome CSS); the page keeps
+`auto`. The e2e puts Components below the fold and asserts a full first tile and no blank tile.
+
+`textOut` measures the whole text node first; only when that reaches past the box are the node's words
+(runs of non-space characters, at most 400 per node, past which the whole figure stands) measured one by
+one. A `pre-wrap` line that wraps at a space leaves the space hanging past the line, which in a table row's
+last cell (no right padding) read as 1 to 2px of text outside.
 
 **New file** `src/service/check/board-analyze.ts` (pure): `sanitizeBoardProbe(value): BoardProbe | null`
 (types, finite numbers within ±1e7, strings clipped, arrays capped; anything else → null) and
@@ -544,7 +559,7 @@ the table uses divs, so the `table`/`td` attribute rules are untouched); new CSS
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Forced layout under `content-visibility: auto` not measured for off-screen sections | Medium | e2e test with a faulty example at the end of a long board; fallback if it fails: the probe scrolls each area into view before measuring it |
+| Forced layout under `content-visibility: auto` not measured for off-screen sections | Medium | Happened (section heights and tiles); resolved by drawing the check's board with every section laid out (`eager`), e2e-tested |
 | `Page.captureScreenshot` `clip` semantics differ between Chrome versions | Medium | e2e asserts each PNG's height equals the clip height and is not blank; fallback: capture the viewport without `clip` |
 | Check uses `system-ui`, the app uses the host font: widths differ by a few px | Low | 1px thresholds; findings are about tens of px; documented in the CLI text ("light scheme") |
 | Layout-only edits bump the revision, so linked designs and the living page say "newer" | Low | Same as any system.json edit; Open Question 4 |
@@ -565,8 +580,10 @@ the table uses divs, so the `table`/`td` attribute rules are untouched); new CSS
 3. `test/service/systems/specimen-html.test.ts`: runs keep agent order (`compact, compact, full, compact` →
    three runs); table rows carry `data-dc-entry` and roles; escaping in table cells; colour groups form runs
    inside each group; `dc-fit` only on component cards/rows.
-4. `test/service/systems/board-html.test.ts`: generator version 4; the script selects `.dc-fit` and re-measures
-   on `load` and `fonts.ready`.
+4. `test/service/systems/board-html.test.ts`: generator version 5; the script selects `.dc-fit` and re-measures
+   on `load`, `fonts.ready` and `<html>` style; `eager` only in the check's board. `board-layout-e2e.test.ts`
+   (real Chrome): compact, full and table runs, the table stacking under 760px, gaps between runs, and the probe's
+   hanging-space case.
 5. `test/service/systems/living-html.test.ts` + `living-safe.test.ts`: a page with all four layouts in every
    section that takes them passes `scanLivingPage`; every FRAME_CSS line passes `livingCssProblems`; no
    `data-` attribute survives.
@@ -643,7 +660,8 @@ Then, in order (each step with its tests from §T):
 
 Acceptance: every §T test exists and passes; on `_systems/nexus` (read-only, copy it into a temp designs root
 first, never touch the real one) `dc check --system nexus` writes ≤ 32 PNGs and its findings point at real
-problems (its `navigation.html` uses `100vw`/fixed positioning and should be reported); the system page shows
+problems (by the time this was built, nexus's `navigation.html` already contained its sidebar in a stage, so
+nothing is reported there; a planted `100vw` strip and a `position: fixed` element were reported); the system page shows
 the same board as before for a system with no hints; light and dark host themes still colour the board.
 
 ---

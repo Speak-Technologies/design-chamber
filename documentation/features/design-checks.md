@@ -129,18 +129,46 @@ exists" is never a finding; the viewer's banner says that.
 ## Checking a design system
 `dc check --system <id> [--json]` and `design_check { "system": "<id>" }` check one system in
 `<designs folder>/_systems/<id>`. The id must be a system id (never a path, never `none` or `ask`),
-and the folder must be a real folder, not a link. The check reads files only (no browser), writes its
-report to `<system>/.chamber/check.json`, and exits 0, 1 or 2 as for a design. `--screen` doesn't
-apply, and giving a design and a system together is refused. `GET /systems/:id/checks` answers the
-same findings for the system page, behind the service token, and writes nothing.
+and the folder must be a real folder, not a link. The check reads the files, then draws the system's
+specimen board in headless Chrome (below), writes its report to `<system>/.chamber/check.json`, and
+exits 0, 1 or 2 as for a design. `--static` (tool: `static: true`) checks the files only and writes
+nothing. `--screen` doesn't apply, and giving a design and a system together is refused.
+`GET /systems/:id/checks` answers the file findings for the system page, behind the service token,
+and writes nothing: it never draws the board, so the page's Checks badge shows the file findings only.
 
 | Severity | Finding |
 |---|---|
 | Error | `system.json` isn't valid JSON (only this is said then) · a `tokens.css` value isn't valid for its section · a listed font file is missing · a component example loads files from the internet |
-| Warning | entries in `system.json` Design Chamber can't read (up to three named) · no overview · an overview over 4 000 characters · a note over 20 000 characters · a component names a token the system doesn't define · more than 2 000 tokens |
+| Warning | entries in `system.json` Design Chamber can't read (up to three named) · board layouts in `system.json` Design Chamber doesn't know (up to three named; those entries use the default) · no overview · an overview over 4 000 characters · a note over 20 000 characters · a component names a token the system doesn't define · more than 2 000 tokens |
 
-A finding about an area the system doesn't cover (its `coverage`) isn't raised. The repo-backed
-findings (living page, code drift) come later.
+A finding about an area the system doesn't cover (its `coverage`) isn't raised; the unknown-layout
+warning is raised whatever the coverage.
+
+### Drawing the board
+Unless `--static`, the check draws the same specimen board the system page shows (same generator,
+same layout hints) in the light scheme at two board widths: **wide** 1526 px (a 1920 px window with
+the side panel open) and **narrow** 1046 px (a 1440 px window). A repo-backed system with a proposal
+waiting for the user's approval is drawn from that proposal; otherwise from the system's files. It
+runs offline in the design check's browser set-up (same CSP, no network, a throwaway profile), with
+45 seconds per width and 110 seconds for the whole drawing. Every board section is laid out before
+it is measured, so nothing below the first screen is skipped.
+
+It saves pictures per area (Foundations, Components, Patterns & voice, Brand & marketing), in tiles
+900 px tall, at most 4 per area per width and 32 in all, under
+`<system>/.chamber/check/<run>/` (for example `components@wide.png`, `components@wide-2.png`). The
+text output lists them under "Board pictures (light scheme)" and asks the agent to open them; `--json`
+adds their absolute paths. Older run folders are removed once a newer report names its own.
+
+Measured findings, each named once (at the widest width that raised it):
+
+| Severity | Finding |
+|---|---|
+| Warning | the board is wider than the width it has, so it scrolls sideways · an example is wider than its card can give it · part of an example sits outside its card (`position: fixed`, negative margins) · text runs outside its card |
+| Note | an entry set to card, compact or table needed the full width at the wide board ("Set its layout to full") · only the first 3 600 px of an area were pictured (all of it was measured) · no browser was found, so only the files were checked |
+
+A text line that wraps at a space leaves that space hanging past the line; the check measures the
+words, so the hanging space is never "text outside". The check draws with the system font, not the
+host's, so widths can differ from the app by a few pixels; the findings are about tens of pixels.
 
 ## What counts as overlapping text
 Overlap is judged on the boxes text actually paints, one line at a time, not on one big box around
