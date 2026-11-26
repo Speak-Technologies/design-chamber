@@ -30,6 +30,9 @@ export const RAIL_TABS: ReadonlyArray<{ id: Exclude<ListTab, 'system'>; label: s
   { id: 'page', label: 'Pages' },
 ];
 
+/** A stored tab read back; anything unknown or malformed is All. */
+export const tabFromStored = (raw: unknown): ListTab => LIST_TABS.find((entry) => entry.id === raw)?.id ?? 'all';
+
 /** The rail's pinned entry under the designs list: the accessible name says how many systems there are and what the entry does; unknown while they load or failed to load. */
 export const systemsEntryLabel = (count: number | null): string => (count === null ? 'Design systems. Show them' : `Design systems, ${count}. Show them`);
 
@@ -419,7 +422,10 @@ export const RAIL_VIEWS: ReadonlyArray<{ id: RailView; label: string; hint: stri
 ];
 
 export const railViewStorageKey = 'rail-view:panel';
-export const railSystemStorageKey = 'list-system:panel';
+/** The System filter and the kind tab are remembered per surface, like the sort (`list-sort:<surface>`). */
+export const systemFilterStorageKey = (surface: 'panel' | 'page'): string => `list-system:${surface}`;
+export const tabStorageKey = (surface: 'panel' | 'page'): string => `list-tab:${surface}`;
+export const railSystemStorageKey = systemFilterStorageKey('panel');
 /** What the rail does with no stored choice: the rows it always had. */
 export const DEFAULT_RAIL_VIEW: RailView = 'list';
 export const DEFAULT_SORT: ListSort = 'updated';

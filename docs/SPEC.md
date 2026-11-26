@@ -2971,10 +2971,20 @@ radii and spacing from the kit scale); swatch strips paint system content, never
 - **Library view** (P26 §6.4, §6.5 as amended by §20):
   - **Preferences in `host.storage`**, never `settings.json`: `library-view:page` (`tiles` | `list`, default
     tiles), `list-sort:panel` / `list-sort:page` (`updated` | `created` | `title`, default updated); garbage falls
-    back to the default. Search, kind tab and System filter are session-only on the page. The rail has its own
+    back to the default. **Both surfaces remember where the user was** (owner decision 2026-11-26, replacing the
+    earlier session-only rule): the scope (`list-scope:<surface>`), the kind tab (`list-tab:<surface>`, one of
+    `all` | `canvas` | `page` | `system`, default all, the page's Systems tab included), the System filter
+    (`list-system:<surface>`, `all` | `none` | `system:<id>`; on the page it is also the selected Design systems row
+    in the sidebar), the sort and, on the page, the view. Search text stays session-only. Nothing that is gone is
+    kept alive: a deleted system reads as All systems and a deleted folder or project as All designs, once the
+    lists have loaded (until then the remembered choice stays as chosen, so a slow load never wipes it), and the
+    stored value is left alone. A remembered system the failed systems list cannot name shows as "One system",
+    never "All systems" while the list is narrowed. The rail has its own
     **Filters** area (header button, closed by default): System, Sort and View (`titles` | `list`, default list),
     remembered as `list-system:panel` (`all` | `none` | `system:<id>`), `list-sort:panel` and `rail-view:panel`;
-    a dot on the button shows a system filter while the area is closed (`railFilterState`).
+    a dot on the button and a removable chip under the header show a system filter while the area is closed
+    (`railFilterState`); the Show select also lists a "System · <name>" entry per system, which sets the System
+    filter and leaves the scope alone, like the page's sidebar rows. The rail does not remember its kind tab.
   - **Filter order** (pure `libraryItems`): scope → System filter → search → tab counts → tab → sort. One pure
     empty state names every active filter and offers **Clear filters** (search, tab, system; the scope stays).
     "No project" means neither a derived nor a manual project. A project scope shows derived ∪ manual members.

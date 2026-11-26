@@ -106,16 +106,23 @@ const pageViews = async (h, theme) => {
   await h.checkSoon(async () => (await rowCount(p)) === 6, `${tag}: Clear filters brings every design back`);
   h.check(await p.guest('return doc.querySelector(".dc-system-select button")?.getAttribute("aria-label") === "System: All systems"'), `${tag}: the select reads All systems again`);
 
-  // Search, the kind tab and the System filter are session-only (S5-5): a reload resets all three,
-  // while the view and the sort stay remembered. Nothing of the three is ever written to storage.
+  // Search is session-only; the kind tab and the System filter are remembered per surface like the sort
+  // and the view (`list-tab:page`, `list-system:page`).
   await p.type('.dc-search input', 'zzz');
   await p.click('.dc-tabs [role=tab]', { text: 'Pages' });
-  await pickOption(p, '.dc-system-select', 'Acme');
-  h.check((await storageGet(p, 'library-view:page')) === '"tiles"' && (await storageGet(p, 'list-sort:page')) === '"created"', `${tag}: the filters write nothing to storage`);
+  await pickOption(p, '.dc-system-select', 'Tidepool');
+  h.check((await storageGet(p, 'list-tab:page')) === '"page"' && (await storageGet(p, 'list-system:page')) === '"system:tidepool"', `${tag}: the tab and the System filter are written to their own page keys`);
+  h.check((await storageGet(p, 'library-view:page')) === '"tiles"' && (await storageGet(p, 'list-sort:page')) === '"created"', `${tag}: the view and the sort are untouched`);
   await reload(p);
-  await h.listReady(p);
-  h.check(await p.guest('return doc.querySelector(".dc-search input").value === "" && doc.querySelector(".dc-tabs [role=tab][aria-selected=true]")?.dataset.id === "all" && doc.querySelector(".dc-system-select button")?.getAttribute("aria-label") === "System: All systems"'), `${tag}: search, tab and System filter reset on reload (session-only)`);
+  await p.waitFor('return doc.querySelectorAll(".dc-card[data-slug], .dc-list-row[data-slug]").length >= 1', 'the library to list again');
+  await p.settle(400);
+  h.check(await p.guest('return doc.querySelector(".dc-search input").value === "" && doc.querySelector(".dc-tabs [role=tab][aria-selected=true]")?.dataset.id === "page" && doc.querySelector(".dc-system-select button")?.getAttribute("aria-label") === "System: Tidepool"'), `${tag}: the tab and the System filter survive the reload; search does not`);
+  h.check(await p.guest('return doc.querySelector(".dc-side-row[data-scope=\\"system:tidepool\\"]")?.getAttribute("data-selected") === "true"'), `${tag}: the sidebar's Design systems row for Tidepool is selected again`);
   h.check(await p.guest('return doc.querySelector(".dc-view-toggle-btn[aria-label=\\"View as tiles\\"]")?.getAttribute("aria-pressed") === "true"'), `${tag}: the view still survives the reload`);
+  await p.click('.dc-tabs [role=tab]', { text: 'All' });
+  await pickOption(p, '.dc-system-select', 'All systems');
+  await h.listReady(p);
+  h.check((await storageGet(p, 'list-tab:page')) === '"all"' && (await storageGet(p, 'list-system:page')) === '"all"', `${tag}: choosing All and All systems writes them back`);
   h.check((await firstTitle(p, 'page')) === 'Onboarding flow', `${tag}: the sort still survives the reload`);
 
   // Every active filter at once: folder scope, search, kind tab, system. The sentence names them

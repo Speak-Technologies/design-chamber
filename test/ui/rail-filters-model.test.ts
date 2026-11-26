@@ -19,6 +19,9 @@ import {
   sortFromStored,
   showSystemOptions,
   sortStorageKey,
+  systemFilterStorageKey,
+  tabFromStored,
+  tabStorageKey,
   systemFilterLabel,
   systemSelectOptions,
   systemFilterFromId,
@@ -181,4 +184,18 @@ test('KI-30: a remembered system the list cannot name still gets a select entry,
   assert.equal(systemSelectOptions([summary('tidepool', 'Tidepool')], remembered).filter((entry) => entry.id === 'system:tidepool').length, 1);
   assert.deepEqual(systemSelectOptions([], ALL_SYSTEMS).map((entry) => entry.id), ['all', 'none']);
   assert.deepEqual(systemSelectOptions([], { kind: 'none' }).map((entry) => entry.id), ['all', 'none']);
+});
+
+test('the page remembers its tab and System filter under its own keys, the rail keeps the one it had', () => {
+  assert.equal(tabStorageKey('page'), 'list-tab:page');
+  assert.equal(tabStorageKey('panel'), 'list-tab:panel');
+  assert.equal(systemFilterStorageKey('page'), 'list-system:page');
+  // The rail's key is the same string as before: nothing already stored is lost.
+  assert.equal(systemFilterStorageKey('panel'), railSystemStorageKey);
+  assert.equal(railSystemStorageKey, 'list-system:panel');
+});
+
+test('a stored tab reads back; anything unknown or malformed is All', () => {
+  for (const tab of ['all', 'canvas', 'page', 'system'] as const) assert.equal(tabFromStored(tab), tab);
+  for (const junk of [undefined, null, '', 'bogus', 'Canvas', 4, {}, ['page']]) assert.equal(tabFromStored(junk), 'all');
 });
