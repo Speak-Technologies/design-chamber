@@ -27,6 +27,12 @@ export type BoardHtmlOptions = {
   examples?: Readonly<Record<string, string>>;
   /** Font and logo files (`assets/…`) the service's `checkAsset` refused. */
   unusable?: ReadonlySet<string>;
+  /**
+   * Lay every section out now instead of leaving off-screen ones to `content-visibility: auto`. The visual check sets it: a
+   * skipped section keeps its 480px placeholder height and paints nothing, so areas would measure short and tiles come out
+   * blank. The page leaves it off (a long board stays fast to open); the layout once drawn is the same.
+   */
+  eager?: boolean;
 };
 
 // ---- the board's own chrome ----
@@ -214,9 +220,12 @@ const BOARD_SCRIPT = `(function () {
 
 // ---- the document ----
 
-const documentOf = (title: string, scheme: 'light' | 'dark', css: string, body: string, script: boolean): string =>
+/** The visual check's override (see `BoardHtmlOptions.eager`). */
+export const EAGER_SECTIONS_CSS = '.dc-section { content-visibility: visible; }';
+
+const documentOf = (title: string, scheme: 'light' | 'dark', css: string, body: string, script: boolean, eager = false): string =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>` +
-  `<style>${chromeCss(scheme)}</style><style>${css}</style></head>` +
+  `<style>${chromeCss(scheme)}${eager ? `\n${EAGER_SECTIONS_CSS}\n` : ''}</style><style>${css}</style></head>` +
   `<body>${body}${script ? `<script>${BOARD_SCRIPT}</script>` : ''}</body></html>`;
 
 /** The whole board for one system (§5.7). */
@@ -234,5 +243,5 @@ export const buildBoardHtml = (detail: SystemDetail, options: BoardHtmlOptions):
   const specimen = { unusable, example: boardExample(examples, hasDark(detail)) };
   const areas = AREA_SECTIONS.map(({ area, sections }) => areaBlock(area, sections.map((section) => renderSpecimenSection(detail, section, specimen)).join('')));
   const body = [heading, sub, ...areas].join('');
-  return documentOf(title, options.scheme, specimenSystemCss(detail, unusable), body, true);
+  return documentOf(title, options.scheme, specimenSystemCss(detail, unusable), body, true, options.eager === true);
 };

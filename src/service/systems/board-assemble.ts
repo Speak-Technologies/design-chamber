@@ -91,6 +91,7 @@ export const assembleBoardHtml = async (
   detail: SystemDetail,
   source: FileSource,
   scheme: 'light' | 'dark',
+  options: { eager?: boolean } = {},
 ): Promise<{ html: string; components: SystemComponent[]; assetKeys: string[] }> => {
   const examples: Record<string, string> = {};
   const assetKeys: string[] = [];
@@ -111,7 +112,7 @@ export const assembleBoardHtml = async (
     else assetKeys.push(`${file}:${sha256Of(bytes.bytes)}`);
   }
 
-  const html = buildBoardHtml({ ...detail, components }, { scheme, examples, unusable });
+  const html = buildBoardHtml({ ...detail, components }, { scheme, examples, unusable, ...(options.eager === true ? { eager: true } : {}) });
   return { html, components, assetKeys };
 };
 

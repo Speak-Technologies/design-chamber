@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:net';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { inflateSync } from 'node:zlib';
 import { test, type TestContext } from 'node:test';
 
 import { cliSystemStore, runSystemCheck } from '../../../src/service/check/system-run.ts';
@@ -28,7 +29,20 @@ const listen = async (t: TestContext): Promise<{ port: number; hits: string[]; s
   return { port: typeof address === 'object' && address !== null ? address.port : 0, hits, server };
 };
 
-const TOKENS = ':root {\n  --brand: #1a73e8;\n  --space-2: 8px;\n}\n';
+// Eighty colours put the Components area well below the first 900px, where `content-visibility: auto` would leave a section at
+// its placeholder height and unpainted if the check did not lay every section out.
+const TOKENS = `:root {\n  --brand: #1a73e8;\n  --space-2: 8px;\n${Array.from({ length: 80 }, (_, i) => `  --c-${i}: #${(0x102030 + i * 0x020304).toString(16).padStart(6, '0')};`).join('\n')}\n}\n`;
+
+/** Distinct bytes in a PNG's inflated image data: a blank tile has a handful (filter types and one colour), a drawn one hundreds. */
+const distinctImageBytes = (png: Buffer): number => {
+  const parts: Buffer[] = [];
+  for (let at = 8; at + 8 <= png.length; ) {
+    const length = png.readUInt32BE(at);
+    if (png.toString('latin1', at + 4, at + 8) === 'IDAT') parts.push(png.subarray(at + 8, at + 8 + length));
+    at += 12 + length;
+  }
+  return new Set(inflateSync(Buffer.concat(parts))).size;
+};
 
 const fixture = (port: number): Record<string, string> => ({
   'tokens.css': TOKENS,
@@ -48,7 +62,8 @@ const fixture = (port: number): Record<string, string> => ({
   '.chamber/state.json': JSON.stringify({ name: 'Acme', status: 'ready' }),
   'components/table.html': '<div style="overflow:auto"><div style="width:1800px;height:40px;background:#ccc">Wide table</div></div>',
   'components/fixed.html': '<div style="position:fixed;left:-60px;top:0;width:100px;height:20px;background:#c00">escapes</div><p>Normal text.</p>',
-  'components/tall.html': '<div style="height:4500px;background:linear-gradient(#fff,#ccf)">tall</div>',
+  // About 4500px of numbered rows: tall, and every tile it covers has something drawn on it.
+  'components/tall.html': `<ol style="margin:0">${Array.from({ length: 200 }, (_, i) => `<li style="height:22px">Row ${i + 1}</li>`).join('')}</ol>`,
   'components/last.html': '<div style="position:fixed;left:-60px;top:0;width:100px;height:20px;background:#c00">escapes</div><p>Normal text.</p>',
   'components/button.html': '<button style="padding:6px 12px">Save</button>',
   'components/compact-wide.html': '<div style="width:700px;height:30px;background:#ccc">700px</div>',
@@ -127,6 +142,13 @@ test('the board check finds the wide, escaping and small-hint examples, pictures
       const height = bytes.readUInt32BE(20);
       assert.ok(width === 1526 || width === 1046, `width ${width} of ${rel}`);
       assert.ok(height >= 1 && height <= 900, `height ${height} of ${rel}`);
+      assert.ok(distinctImageBytes(bytes) > 32, `${rel} is drawn, not blank (${distinctImageBytes(bytes)} distinct bytes)`);
+    }
+    // The Components area starts below the first screen and is still pictured in full tiles: its first tile is a whole 900px.
+    for (const width of ['wide', 'narrow']) {
+      const first = pngRels.find((rel) => rel.endsWith(`components@${width}.png`));
+      assert.ok(first, `components@${width}.png`);
+      assert.equal((await readFile(tmp.at(`_systems/acme/${first}`))).readUInt32BE(20), 900, `components@${width}.png is a full tile`);
     }
     // The report names exactly the files that exist, and the run folder is the only one kept.
     assert.deepEqual(result.pngs.map((png) => path.relative(tmp.at('_systems/acme'), png).split(path.sep).join('/')), pngRels);

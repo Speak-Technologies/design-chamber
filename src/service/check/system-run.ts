@@ -171,7 +171,8 @@ export const runSystemCheck = async (
   let bundledHtml: string;
   let components: SystemComponent[];
   try {
-    const assembled = await assembleBoardHtml(drawDetail, drawSource, 'light');
+    // Every section laid out now (eager), so the areas measure their real height and every tile paints.
+    const assembled = await assembleBoardHtml(drawDetail, drawSource, 'light', { eager: true });
     components = assembled.components;
     bundledHtml = (await bundleDocument(overlaySource(drawSource, assembled.html), BOARD_ENTRY_FILE, { mode: 'export' })).html;
   } catch (error) {

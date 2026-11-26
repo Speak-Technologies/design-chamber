@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { buildSystemDetail, parseSystemState } from '../../../src/shared/system-json.ts';
 import { BOARD_ENTRY_PATTERN, darkVarOf, entryKeyOf, isBoardEntryKey, parseEntryKey, sectionOfEntry, typeVarOf } from '../../../src/shared/system-board.ts';
 import type { SystemDetail, SystemToken } from '../../../src/shared/types.ts';
-import { BOARD_GENERATOR_VERSION, buildBoardHtml, escapeHtml } from '../../../src/service/systems/board-html.ts';
+import { BOARD_GENERATOR_VERSION, buildBoardHtml, EAGER_SECTIONS_CSS, escapeHtml } from '../../../src/service/systems/board-html.ts';
 
 const NOW = '2026-11-20T10:00:00.000Z';
 
@@ -235,6 +235,16 @@ test('entry keys: build, parse, sections and the custom property names', () => {
 });
 
 // ---- layout runs: the board CSS and script (system-board-layout-and-visual-check.md §A.4) ----
+
+test('eager: the check lays every section out; the page leaves off-screen sections to content-visibility', () => {
+  const page = buildBoardHtml(makeDetail(), { scheme: 'light' });
+  const check = buildBoardHtml(makeDetail(), { scheme: 'light', eager: true });
+  assert.match(page, /\.dc-section \{[^}]*content-visibility: auto;/);
+  assert.ok(!page.includes(EAGER_SECTIONS_CSS));
+  assert.ok(check.includes(EAGER_SECTIONS_CSS));
+  // The override comes after the rule it overrides, in the same sheet.
+  assert.ok(check.indexOf(EAGER_SECTIONS_CSS) > check.indexOf('content-visibility: auto'));
+});
 
 test('the generator version is 5, so boards cached before the layout runs are made again', () => {
   assert.equal(BOARD_GENERATOR_VERSION, 5);
