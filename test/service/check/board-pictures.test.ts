@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { overviewScaleOf, planBoardPictures, type PicturePlanInput } from '../../../src/service/check/board-pictures.ts';
+import { overviewScaleOf, pictureCoverage, planBoardPictures, type PicturePlanInput } from '../../../src/service/check/board-pictures.ts';
 import {
   SYSTEM_CHECK_BOARD_WIDTHS,
   SYSTEM_CHECK_ENTRY_TILES_MAX,
@@ -109,4 +109,30 @@ test('an empty area has no bands and no overview cost', () => {
   const plans = planBoardPictures(input({ areas: [{ area: 'brand', top: 500, height: 0 }, { area: 'components', top: 500, height: 900 }], pngs: 2 }));
   assert.deepEqual(plans.map((plan) => plan.bands.length), [0, 1]);
   assert.equal(plans[1]?.bands[0]?.tile, true, 'one overview + one tile fit two PNGs');
+});
+
+// ---- what the pictures cover, for the one honest note ----
+
+test('pictureCoverage: one kind per area, the gaps exact', () => {
+  const tiles = (count: number, from = 0) => Array.from({ length: count }, (_, index) => ({ y: (from + index) * 900, height: 900 }));
+  assert.deepEqual(pictureCoverage({ heightPx: 2700, overview: { coversPx: 2700 }, tiles: tiles(3) }), { kind: 'whole', gaps: [] });
+  assert.deepEqual(pictureCoverage({ heightPx: 2700, overview: { coversPx: 2700 }, tiles: tiles(1) }), { kind: 'tiles', gaps: [] });
+  assert.deepEqual(pictureCoverage({ heightPx: 2700, overview: { coversPx: 900 }, tiles: tiles(3) }), { kind: 'overview', gaps: [] });
+  assert.deepEqual(pictureCoverage({ heightPx: 2700, overview: null, tiles: tiles(3) }), { kind: 'no-overview', gaps: [] });
+  // No overview and the tiles stop: the end is in no picture.
+  assert.deepEqual(pictureCoverage({ heightPx: 2700, overview: null, tiles: tiles(2) }), { kind: 'gap', gaps: [[1800, 2700]] });
+  // Overview to 900, tiles for the last band only: the middle is in no picture.
+  assert.deepEqual(pictureCoverage({ heightPx: 2700, overview: { coversPx: 900 }, tiles: tiles(1, 2) }), { kind: 'gap', gaps: [[900, 1800]] });
+  // A last band shorter than 900 still counts as covered to the end.
+  assert.deepEqual(pictureCoverage({ heightPx: 2000, overview: null, tiles: [{ y: 0, height: 900 }, { y: 900, height: 900 }, { y: 1800, height: 200 }] }), { kind: 'no-overview', gaps: [] });
+});
+
+test('an area past the overview reach whose tile budget runs out is a gap, from where the pictures stop to its end', () => {
+  // 40 000px at 1526px: the overview reaches 20 000px; a 10-tile budget reaches 9 000px.
+  const [plan] = planBoardPictures(input({ areas: [{ area: 'foundations', top: 0, height: 40_000 }], tilePixels: 10 * 900 * 1526 }));
+  assert.ok(plan);
+  assert.equal(plan.coversPx, 20_000);
+  const tiles = plan.bands.filter((band) => band.tile).map((band) => ({ y: band.y - plan.top, height: band.height }));
+  assert.equal(tiles.length, 10);
+  assert.deepEqual(pictureCoverage({ heightPx: plan.height, overview: { coversPx: plan.coversPx }, tiles }), { kind: 'gap', gaps: [[20_000, 40_000]] });
 });

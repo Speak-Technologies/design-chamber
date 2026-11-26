@@ -181,7 +181,7 @@ Measured findings, each named once (at the widest width that raised it):
 | Severity | Finding |
 |---|---|
 | Warning | the board is wider than the width it has, so it scrolls sideways · an example is wider than its card can give it · part of an example sits outside its card (`position: fixed`, negative margins) · text runs outside its card |
-| Note | an entry set to card, compact or table needed the full width at the wide board ("Set its layout to full"; not said when the example is too wide even for the whole board, since then the example has to change) · some areas have full-size pictures for only part of their length, or an overview stops early (one note each, naming the areas; all of the board is still measured) · no browser was found, so only the files were checked |
+| Note | an entry set to card, compact or table needed the full width at the wide board ("Set its layout to full"; not said when the example is too wide even for the whole board, since then the example has to change) · what the pictures leave out, one note per kind and each area once, naming the areas: full-size pictures stop but the overview shows the rest; the overview stops early but full-size pictures show the rest; the overview couldn't be made; or part of an area is in no picture at all (with the exact px ranges). All of the board is still measured · no browser was found, so only the files were checked |
 
 The unknown-layout warning tells an unknown word ("huge") apart from a known layout in a place that
 doesn't take it (`compact` on typography), and lists up to three with what each place takes, for

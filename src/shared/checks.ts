@@ -372,10 +372,21 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
   'system-board-partial': {
     severity: 'info',
     sentence: (f) => {
-      if (f.params?.pictured === 'entries') return `Only the first ${num(f.params?.max)} entries were measured.`;
-      if (f.params?.pictured === 'overview')
-        return `The overview pictures of ${num(f.params?.count)} areas stop after ${num(f.params?.max)}px of board; the full-size pictures go further, and all of the board was measured.`;
-      return `${num(f.params?.count)} areas have full-size pictures only for part of their length (the picture limit for one check); their overview pictures show all of them, and all of the board was measured.`;
+      const count = Math.round(f.params?.count ?? 0);
+      const areas = count === 1 ? '1 area' : `${num(count)} areas`;
+      const its = count === 1 ? 'its' : 'their';
+      switch (f.params?.pictured) {
+        case 'entries':
+          return `Only the first ${num(f.params?.max)} entries were measured.`;
+        case 'gap':
+          return `${count === 1 ? 'Part of 1 area is' : `Parts of ${areas} are`} in no picture (the picture limit for one check); the parts are listed. All of the board was measured, so the findings cover them.`;
+        case 'no-overview':
+          return `${areas} ${count === 1 ? 'has' : 'have'} no overview picture (it couldn't be made); ${its} full-size pictures show all of ${count === 1 ? 'it' : 'them'}.`;
+        case 'overview':
+          return `The overview of ${areas} stops early; ${its} full-size pictures show the rest, and all of the board was measured.`;
+        default:
+          return `${areas} ${count === 1 ? 'has' : 'have'} full-size pictures for only part of ${its} length (the picture limit for one check); ${its} overview shows the rest, and all of the board was measured.`;
+      }
     },
   },
 };
@@ -517,6 +528,7 @@ const PROPOSAL_REASONS: readonly ProposalProblemReason[] = [
   'describe-change', 'internal-parts', 'none-fixes', 'rewritten', 'unreadable',
   'preview-too-large', 'preview-unsafe', 'preview-secret',
 ];
+const PICTURED: readonly NonNullable<CheckParams['pictured']>[] = ['tiles', 'overview', 'no-overview', 'gap', 'entries'];
 const LIVING_FAILED: readonly NonNullable<CheckParams['failed']>[] = ['too-large', 'bundle', 'unsafe', 'no-snapshot', 'secret'];
 
 /** One of a closed enum, else null: a forged param never reaches a sentence. */
@@ -564,7 +576,8 @@ const parseParams = (value: unknown): CheckParams | undefined => {
   if (proposal !== null) out.proposal = proposal;
   const layout = oneOf(value.layout, BOARD_LAYOUTS);
   if (layout !== null) out.layout = layout;
-  if (value.pictured === 'tiles' || value.pictured === 'overview' || value.pictured === 'entries') out.pictured = value.pictured;
+  const pictured = oneOf(value.pictured, PICTURED);
+  if (pictured !== null) out.pictured = pictured;
   return Object.keys(out).length > 0 ? out : undefined;
 };
 

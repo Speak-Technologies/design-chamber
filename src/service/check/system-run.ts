@@ -34,7 +34,7 @@ import { committedStateOf, readCommitted, readRecord } from '../systems/living-p
 import { readProposalProblem } from '../systems/proposal-record.ts';
 import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/store.ts';
 import { analyzeBoard, boardFindings, sanitizeBoardProbe } from './board-analyze.ts';
-import { planBoardPictures } from './board-pictures.ts';
+import { pictureCoverage, planBoardPictures, type PictureCoverage } from './board-pictures.ts';
 import { browserClassOf, openCheckRun } from './engine.ts';
 import { checkBrowserArgs, openCdp } from './cdp.ts';
 import { ensureChamberDir } from './output.ts';
@@ -201,8 +201,8 @@ export const runSystemCheck = async (
   const shots: SystemCheckRender['shots'] = [];
   const entryShots: SystemCheckRender['entryShots'] = [];
   // What the pictures leave out, across both widths: one note per kind, not one per area and width.
-  const tilesShort: string[] = [];
-  const overviewShort: { label: string; coversPx: number }[] = [];
+  // What the pictures leave out, by kind (pictureCoverage): each area at each width counts once, in one note per kind.
+  const short: Record<Exclude<PictureCoverage['kind'], 'whole'>, string[]> = { gap: [], 'no-overview': [], overview: [], tiles: [] };
   const boardMs = renderInput.budgets?.boardMs ?? SYSTEM_CHECK_BOARD_TIMEOUT_MS;
   const inspect = async (page: InspectPage, art: PlannedArtboard): Promise<InspectResult | null> => {
     const started = Date.now();
@@ -262,9 +262,13 @@ export const runSystemCheck = async (
       }
       pngs.push(...areaPngs);
       const label = `${plan.area} at ${width.width}px`;
-      if (tiles.length < plan.bands.length) tilesShort.push(`${label}: ${tiles.length} of ${plan.bands.length} full-size tiles`);
-      if (plan.coversPx < plan.height) overviewShort.push({ label, coversPx: plan.coversPx });
-      shots.push({ width: width.id, area: plan.area, heightPx: plan.height, overview, tiles });
+      const shot: SystemBoardShot = { width: width.id, area: plan.area, heightPx: plan.height, overview, tiles };
+      const coverage = pictureCoverage(shot);
+      if (coverage.kind === 'gap') short.gap.push(`${label}, ${coverage.gaps.map(([from, to]) => `${from} to ${to}px`).join(' and ')}`);
+      else if (coverage.kind === 'overview') short.overview.push(`${label}, overview to ${plan.coversPx}px`);
+      else if (coverage.kind === 'tiles') short.tiles.push(`${label}, ${tiles.length} of ${plan.bands.length} full-size tiles`);
+      else if (coverage.kind === 'no-overview') short['no-overview'].push(label);
+      shots.push(shot);
     }
     for (const box of flagged) {
       const showing = tilesTaken.filter((tile) => tile.top < box.bottom && tile.bottom > box.top).map((tile) => tile.png);
@@ -298,12 +302,11 @@ export const runSystemCheck = async (
     await space.checkAborted(renderInput.signal?.aborted === true || outcome.stoppedBy === 'aborted');
 
     const findings: CheckFindingData[] = boardFindings(outcome.findings, CHECK_FINDINGS_MAX);
-    if (tilesShort.length > 0) {
-      findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: null, params: { pictured: 'tiles', count: tilesShort.length }, detail: cleanDetail(tilesShort.join('; '), CHECK_DETAIL_MAX) });
-    }
-    if (overviewShort.length > 0) {
-      const coversPx = Math.min(...overviewShort.map((short) => short.coversPx));
-      findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: null, params: { pictured: 'overview', count: overviewShort.length, max: coversPx }, detail: cleanDetail(overviewShort.map((short) => short.label).join('; '), CHECK_DETAIL_MAX) });
+    for (const kind of ['gap', 'no-overview', 'overview', 'tiles'] as const) {
+      const areas = short[kind];
+      if (areas.length > 0) {
+        findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: null, params: { pictured: kind, count: areas.length }, detail: cleanDetail(areas.join('; '), CHECK_DETAIL_MAX) });
+      }
     }
     if (outcome.unavailable) {
       findings.push({ code: 'render-failed', file: null, screen: null, viewport: null, detail: "This browser build can't be driven. Set another browser in Settings." });

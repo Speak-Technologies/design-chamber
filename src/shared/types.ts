@@ -531,11 +531,12 @@ export type CheckParams = {
   /** `system-layout-invalid` only: how many of `count` are known layouts in a place that doesn't take them. */
   misplaced?: number;
   /**
-   * `system-board-partial` only: what was left out. `tiles` = some areas have no full-size pictures past a
-   * point (their overview shows them), `overview` = an area's overview stops early, `entries` = entries past
-   * `max` weren't measured.
+   * `system-board-partial` only: what was left out (one note per kind, each area once). `tiles` = full-size
+   * pictures stop but the overview shows the rest; `overview` = the overview stops but full-size pictures show
+   * the rest; `no-overview` = the overview couldn't be made, the full-size pictures show all of it; `gap` = part
+   * of the area is in no picture; `entries` = entries past `max` weren't measured.
    */
-  pictured?: 'tiles' | 'overview' | 'entries';
+  pictured?: 'tiles' | 'overview' | 'no-overview' | 'gap' | 'entries';
 };
 
 /** A finding as `check.json` stores it. `detail` and `selector` are untrusted design text. */

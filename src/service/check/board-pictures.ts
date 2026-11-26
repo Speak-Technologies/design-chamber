@@ -103,3 +103,32 @@ export const planBoardPictures = (input: PicturePlanInput): AreaPicturePlan[] =>
   for (const band of all) take(band);
   return plans;
 };
+
+/**
+ * How one area at one width came out in pictures, for the single honest note about what is left out. Exactly one kind:
+ * `gap` = some of the area is in no picture (both the overview and the full-size tiles stop short, or there
+ * is no overview and the tiles stop); `no-overview` = the overview couldn't be made but the tiles show all of
+ * it; `overview` = the overview stops early but the tiles show the rest; `tiles` = the tiles stop but the
+ * overview shows the rest; `whole` = nothing to say. `gaps` are the unpictured ranges, px from the area's top.
+ */
+export type PictureCoverage = { kind: 'whole' | 'tiles' | 'overview' | 'no-overview' | 'gap'; gaps: [number, number][] };
+
+export const pictureCoverage = (shot: { heightPx: number; overview: { coversPx: number } | null; tiles: readonly { y: number; height: number }[] }): PictureCoverage => {
+  const covered: [number, number][] = [...shot.tiles.map((tile): [number, number] => [tile.y, tile.y + tile.height])];
+  if (shot.overview !== null) covered.push([0, shot.overview.coversPx]);
+  covered.sort((a, b) => a[0] - b[0]);
+  const gaps: [number, number][] = [];
+  let reached = 0;
+  for (const [from, to] of covered) {
+    if (from > reached) gaps.push([reached, Math.min(from, shot.heightPx)]);
+    reached = Math.max(reached, to);
+    if (reached >= shot.heightPx) break;
+  }
+  if (reached < shot.heightPx) gaps.push([reached, shot.heightPx]);
+  const real = gaps.filter(([from, to]) => to - from >= 1);
+  if (real.length > 0) return { kind: 'gap', gaps: real };
+  if (shot.overview === null) return { kind: 'no-overview', gaps: [] };
+  if (shot.overview.coversPx < shot.heightPx) return { kind: 'overview', gaps: [] };
+  const tiled = shot.tiles.reduce((sum, tile) => sum + tile.height, 0);
+  return { kind: tiled < shot.heightPx ? 'tiles' : 'whole', gaps: [] };
+};
