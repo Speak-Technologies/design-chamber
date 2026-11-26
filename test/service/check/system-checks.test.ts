@@ -315,12 +315,12 @@ test('parseArgs: --system checks a system, --static means files only; it does no
 });
 
 test('parseToolInput: system is an id, never with design or screens; the child gets --system', () => {
-  assert.deepEqual(parseToolInput({ system: 'acme' }), { ok: true, system: 'acme' });
-  assert.deepEqual(parseToolInput({ system: 'acme', static: true }), { ok: true, system: 'acme' });
+  assert.deepEqual(parseToolInput({ system: 'acme' }), { ok: true, system: 'acme', static: false });
+  assert.deepEqual(parseToolInput({ system: 'acme', static: true }), { ok: true, system: 'acme', static: true });
   for (const input of [{ system: '../acme' }, { system: 'C:\\x' }, { system: 'none' }, { system: 7 }, { system: 'acme', design: 'demo' }, { system: 'acme', screens: ['home'] }]) {
     assert.equal(parseToolInput(input).ok, false, JSON.stringify(input));
   }
-  assert.deepEqual(buildChildArgs('/x/dc.mjs', { system: 'acme' }), ['/x/dc.mjs', 'check', '--system', 'acme']);
+  assert.deepEqual(buildChildArgs('/x/dc.mjs', { system: 'acme', static: false }), ['/x/dc.mjs', 'check', '--system', 'acme']);
   assert.deepEqual(parseToolInput({ design: 'pricing' }), { ok: true, design: 'pricing', screens: [], static: false });
 });
 

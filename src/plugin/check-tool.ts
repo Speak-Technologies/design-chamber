@@ -40,6 +40,7 @@ export const LAUNCHER_SENTENCE = "The design_check tool can't run in this setup.
 const CLI_MISSING_SENTENCE = "Design Chamber's check program is missing from its extension folder. Reinstall Design Chamber, then try again.";
 const STOPPED_SENTENCE = 'The check was stopped before it finished, so no report was saved.';
 const TIMEOUT_SENTENCE = 'The check took longer than 3 minutes and was stopped. Try one screen with screens: ["<id>"].';
+const SYSTEM_TIMEOUT_SENTENCE = 'The check took longer than 3 minutes and was stopped. Run it again with static: true to check the files only.';
 const COULD_NOT_RUN = 'The check could not run: ';
 
 /** runtime.json is a few hundred bytes; anything far bigger is not ours and is not read whole. */
@@ -55,9 +56,9 @@ export const TOOL_INPUT = {
   // One of design or system (Phase 2.5 §10.2); parseToolInput enforces it.
   properties: {
     design: { type: 'string', description: 'The design folder name, such as pricing-page' },
-    system: { type: 'string', description: 'Instead of design: a design system id, such as acme (files only)' },
+    system: { type: 'string', description: 'Instead of design: a design system id, such as acme. Draws its board at two widths and saves PNGs to look at' },
     screens: { type: 'array', items: { type: 'string' }, description: 'Canvas only: check just these screen ids' },
-    static: { type: 'boolean', description: 'Check the files only, without a browser' },
+    static: { type: 'boolean', description: 'Check the files only, without a browser (designs and systems)' },
   },
 } as const;
 
@@ -68,10 +69,18 @@ const answer = (content: string, exit: 0 | 1 | 2): ToolAnswer => ({ content, met
 // ---- 1. tool input ----
 
 export type DesignCheckInput = { design: string; screens: string[]; static: boolean };
-/** A design system: files only, no screens (Phase 2.5 §10.2). */
-export type SystemCheckInput = { system: string };
+/** A design system: no screens; `static` checks the files only (Phase 2.5 §10.2, visual check §B.7). */
+export type SystemCheckInput = { system: string; static: boolean };
 export type CheckInput = DesignCheckInput | SystemCheckInput;
 export type ParsedInput = ({ ok: true } & CheckInput) | { ok: false; message: string };
+
+/** `static` as a boolean or its text; null when it is neither (absent reads as false). */
+const staticValue = (value: unknown): boolean | null => {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'boolean') return value;
+  if (value === 'true' || value === 'false') return value === 'true';
+  return null;
+};
 
 /** Screens as an array, a stringified array or a comma-separated string (models send all three). */
 const screenList = (value: unknown): unknown[] | null => {
@@ -103,8 +112,9 @@ export const parseToolInput = (input: unknown): ParsedInput => {
     if (typeof value.system !== 'string' || !SYSTEM_ID_PATTERN.test(value.system) || value.system === 'none' || value.system === 'ask') return { ok: false, message: NOT_A_SYSTEM_SENTENCE };
     const screens = screenList(value.screens);
     if (screens === null || screens.length > 0) return { ok: false, message: SYSTEM_SCREENS_SENTENCE };
-    // `static` is allowed and changes nothing: a system check is files only.
-    return { ok: true, system: value.system };
+    const systemStatic = staticValue(value.static);
+    if (systemStatic === null) return { ok: false, message: NOT_STATIC_SENTENCE };
+    return { ok: true, system: value.system, static: systemStatic };
   }
   if (typeof value.design !== 'string' || !SLUG_PATTERN.test(value.design)) return { ok: false, message: NOT_A_DESIGN_SENTENCE };
 
@@ -115,11 +125,8 @@ export const parseToolInput = (input: unknown): ParsedInput => {
   const screens = [...new Set(list)];
   if (screens.length > CHECK_TOOL_SCREENS_MAX) return { ok: false, message: TOO_MANY_SCREENS_SENTENCE };
 
-  let staticOnly: boolean;
-  if (value.static === undefined || value.static === null) staticOnly = false;
-  else if (typeof value.static === 'boolean') staticOnly = value.static;
-  else if (value.static === 'true' || value.static === 'false') staticOnly = value.static === 'true';
-  else return { ok: false, message: NOT_STATIC_SENTENCE };
+  const staticOnly = staticValue(value.static);
+  if (staticOnly === null) return { ok: false, message: NOT_STATIC_SENTENCE };
 
   return { ok: true, design: value.design, screens, static: staticOnly };
 };
@@ -194,7 +201,7 @@ export const runtimeRecordFile = (env: Readonly<Record<string, string | undefine
 
 export const buildChildArgs = (cliPath: string, input: CheckInput): string[] =>
   'system' in input
-    ? [cliPath, 'check', '--system', input.system]
+    ? [cliPath, 'check', '--system', input.system, ...(input.static ? ['--static'] : [])]
     : [cliPath, 'check', input.design, ...input.screens.flatMap((screen) => ['--screen', screen]), ...(input.static ? ['--static'] : [])];
 
 /**
@@ -359,8 +366,8 @@ const runChild = (deps: ToolDeps, execPath: string, args: readonly string[], env
 
 // ---- 7. the answer ----
 
-export const toolResult = (outcome: ChildOutcome): ToolAnswer => {
-  if (outcome.kind === 'timeout') return answer(TIMEOUT_SENTENCE, 2);
+export const toolResult = (outcome: ChildOutcome, system = false): ToolAnswer => {
+  if (outcome.kind === 'timeout') return answer(system ? SYSTEM_TIMEOUT_SENTENCE : TIMEOUT_SENTENCE, 2);
   if (outcome.kind === 'spawn-error') return answer(`Design Chamber could not start its check (${outcome.code}).`, 2);
   if (outcome.code === 0 || outcome.code === 1) {
     const note = outcome.stdoutCut ? `\n(The rest of the check output was cut at ${Math.round(CHECK_TOOL_STDOUT_MAX_BYTES / 1_048_576)} MB.)\n` : '';
@@ -417,7 +424,7 @@ export const runDesignCheck = async (input: unknown, signal: AbortSignal | undef
     if (signal?.aborted) return answer(STOPPED_SENTENCE, 2);
 
     const outcome = await runChild(deps, runtime.execPath, buildChildArgs(deps.cliPath, parsed), childEnv(deps.env, deps.platform), signal);
-    return toolResult(outcome);
+    return toolResult(outcome, 'system' in parsed);
   } catch (error) {
     return answer(`Design Chamber could not start its check (${errorCode(error)}).`, 2);
   }
