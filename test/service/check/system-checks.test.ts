@@ -13,6 +13,7 @@ import { test, type TestContext } from 'node:test';
 import { designSystemFindings, runStaticChecks, type DesignSystemInput } from '../../../src/service/check/static.ts';
 import { exitCodeOf, formatSystemCheckText, parseArgs, systemFindingsOf } from '../../../src/service/check/report-text.ts';
 import { cliSystemStore, runSystemCheck, writeSystemCheckReport } from '../../../src/service/check/system-run.ts';
+import { CHECK_RUN_DEADLINE_MS, type RenderDeps } from '../../../src/service/check/render.ts';
 import { systemCheckReport, systemFindings } from '../../../src/service/check/system-static.ts';
 import { resolveSystemTarget } from '../../../src/service/check/target.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
@@ -375,6 +376,43 @@ test('runSystemCheck with no browser: the render is unavailable with the note, t
   } finally {
     await store.dispose();
   }
+});
+
+test('runSystemCheck: the run deadline starts at entry and reaches the render loop with the abort signal', async (t) => {
+  const tmp = await useTmpRoot(t);
+  await tmp.write('_systems/acme/tokens.css', SYSTEM_TOKENS);
+  await tmp.write('_systems/acme/system.json', '{ "version": 1, "tokens": {} }');
+  await tmp.write('_systems/acme/.chamber/state.json', { name: 'Acme', status: 'ready' });
+  const store = cliSystemStore(tmp.root, { version: 1 });
+  const entryAt = 1_800_000_000_000;
+  // Every read of the clock moves it on, so anything after entry sees a later time than the run's first read.
+  let reads = 0;
+  t.mock.method(Date, 'now', () => entryAt + 1000 * reads++);
+  const controller = new AbortController();
+  let seen: RenderDeps | null = null;
+  try {
+    await runSystemCheck(store, 'acme', {
+      now: new Date(AT),
+      tool: 'cli',
+      render: {
+        browserPath: '/never-started',
+        probeSource: '',
+        platform: process.platform,
+        isRoot: false,
+        signal: controller.signal,
+        renderLoop: (deps) => {
+          seen = deps;
+          return Promise.resolve({ artboards: [], findings: [], notRendered: deps.plan.length, stoppedBy: 'budget', unavailable: false });
+        },
+      },
+    });
+  } finally {
+    await store.dispose();
+  }
+  assert.ok(seen !== null, 'the run called the render loop');
+  const deps = seen as RenderDeps;
+  assert.equal(deps.deadlineAt, entryAt + CHECK_RUN_DEADLINE_MS);
+  assert.equal(deps.signal, controller.signal);
 });
 
 test('the board pictures block: the run folder once, an overview and the full-size pictures per area, the picture on each finding', () => {

@@ -36,10 +36,10 @@ import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/sto
 import { analyzeBoard, boardFindings, sanitizeBoardProbe } from './board-analyze.ts';
 import { pictureCoverage, planBoardPictures, type PictureCoverage } from './board-pictures.ts';
 import { browserClassOf, openCheckRun } from './engine.ts';
-import { checkBrowserArgs, openCdp } from './cdp.ts';
+import { checkBrowserArgs, launchOpenOptions, openCdp } from './cdp.ts';
 import { ensureChamberDir } from './output.ts';
 import { PngStitchError, stitchPngs } from './png-stitch.ts';
-import { renderArtboards, type InspectPage, type InspectResult, type PlannedArtboard } from './render.ts';
+import { CHECK_RUN_DEADLINE_MS, renderArtboards, type InspectPage, type InspectResult, type PlannedArtboard } from './render.ts';
 import { areaEmpty, s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemBoardShot, type SystemCheckRender, type SystemCheckReport } from './system-static.ts';
 
 export type SystemCheckRun = {
@@ -62,6 +62,8 @@ export type SystemRenderInput = {
   tmpdir?: string;
   /** Time limits; the defaults are SYSTEM_CHECK_BOARD_TIMEOUT_MS and SYSTEM_CHECK_RENDER_BUDGET_MS. Tests shorten them. */
   budgets?: { boardMs?: number; runMs?: number };
+  /** Test seam: replaces the render loop (so a test can see what the run hands it), as `RunCheckInput.render`. */
+  renderLoop?: typeof renderArtboards;
 };
 
 const SYSTEM_OWNER = "This design system's" as const;
@@ -135,6 +137,8 @@ export const runSystemCheck = async (
   id: string,
   input: { now: Date; tool: SystemCheckReport['tool']; render?: SystemRenderInput },
 ): Promise<SystemCheckRun> => {
+  // As the design check: the whole run (static pass, assembly, launches, both widths) ends before the tool's kill; the clock starts here.
+  const deadlineAt = Date.now() + CHECK_RUN_DEADLINE_MS;
   const source = await store.get(id);
   const detail = buildSystemDetail(source);
   const facts = await readS8Facts(store, id, source);
@@ -285,8 +289,11 @@ export const runSystemCheck = async (
     owner: SYSTEM_OWNER,
   });
   try {
-    const outcome = await renderArtboards({
-      openBrowser: () => openCdp(browserPath, checkBrowserArgs({ workDir: space.workDir, platform: renderInput.platform, isRoot: renderInput.isRoot, join: path.join }), { timeoutMs: BROWSER_START_MS }),
+    const outcome = await (renderInput.renderLoop ?? renderArtboards)({
+      // The launch options carry the abort signal and, for a restart, only what is left of the run.
+      openBrowser: (launch) =>
+        openCdp(browserPath, checkBrowserArgs({ workDir: space.workDir, platform: renderInput.platform, isRoot: renderInput.isRoot, join: path.join }), launchOpenOptions(launch, BROWSER_START_MS)),
+      deadlineAt,
       plan: SYSTEM_CHECK_BOARD_WIDTHS.map((width) => ({ file: BOARD_FILE, screen: null, viewport: { id: width.id, label: width.label, width: width.width, height: width.height } })),
       kind: 'page',
       loadDocument: async (file) => (file === BOARD_FILE ? { ok: true, html: bundledHtml } : { ok: false, reason: 'missing' }),
