@@ -61,6 +61,11 @@ describe('a design deleted mid-mutation (7c20ced)', () => {
   test('a design whose .chamber/ is a file reports the error instead of writing elsewhere', async (t) => {
     const { store } = await makeStore(t);
     const created = await store.create({ kind: 'canvas', title: 'Odd' });
+    // Settle the create's hub-driven reconcile before touching .chamber: it is fire-and-forget
+    // (store.ts subscribes to `added`), and under suite load its mkdir('.chamber') landed between
+    // the rm and the writeFile below, recreating the directory so the writeFile threw EISDIR
+    // (full-suite flake). reconcile takes the same per-slug lock, so awaiting one drains it.
+    await store.reconcile(created.slug);
     await rm(path.join(created.path, '.chamber'), { recursive: true, force: true });
     await writeFile(path.join(created.path, '.chamber'), 'a file, not a folder');
     await assert.rejects(store.patch(created.slug, { title: 'x' }), (error: unknown) => !(error instanceof ApiError && error.code === 'not-found'));
