@@ -123,6 +123,7 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
 .dc-trow { border-bottom: 1px solid var(--dc-board-border, ${f.border}); }
 .dc-tcell { padding: 12px 12px 12px 0; min-width: 0; }
 .dc-tcell:last-child { padding-right: 0; }
+.dc-tcell > .dc-body:first-child { margin-top: 0; }
 .dc-trow .dc-grounds { flex-direction: column; }
 .dc-trow .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
 .dc-trow.dc-wide { grid-template-columns: 1fr 1fr; }

@@ -205,6 +205,7 @@ body { margin: 0; background: #f7f7f8; color: #1d1d1f; font-family: system-ui, -
 .dc-trow { border-bottom: 1px solid #d8d8dc; }
 .dc-tcell { padding: 12px 12px 12px 0; min-width: 0; }
 .dc-tcell:last-child { padding-right: 0; }
+.dc-tcell > .dc-body:first-child { margin-top: 0; }
 @media (max-width: 720px) {
   .dc-run-table { grid-template-columns: 1fr; }
 }
