@@ -104,35 +104,24 @@ export type WheelRoute = 'zoom' | 'scroll-frame' | 'pan' | 'none';
 
 /**
  * A wheel turn over the wall surface. A page never zooms or pans: the wheel scrolls the design
- * when it is over the loaded frame and does nothing otherwise. On the wall Ctrl/Cmd zooms; a
- * plain wheel scrolls the design under the pointer in Edit mode (when it is loaded, and neither
- * Space nor the pan tool is active) and pans the wall everywhere else.
+ * when it is over the loaded frame and does nothing otherwise. On the wall a plain wheel pans
+ * everywhere, over artboards and empty wall alike (an Edit-mode frame takes no pointer input,
+ * so the wheel never reaches the design); Ctrl/Cmd zooms around the cursor.
  */
-export const wheelRoute = (input: {
-  pageMode: boolean;
-  ctrlOrMeta: boolean;
-  mode: BridgeMode;
-  readOnly: boolean;
-  overReadyBoard: boolean;
-  spaceDown: boolean;
-  panTool: boolean;
-}): WheelRoute => {
+export const wheelRoute = (input: { pageMode: boolean; ctrlOrMeta: boolean; overReadyBoard: boolean }): WheelRoute => {
   if (input.pageMode) return !input.ctrlOrMeta && input.overReadyBoard ? 'scroll-frame' : 'none';
-  if (input.ctrlOrMeta) return 'zoom';
-  if (input.mode === 'edit' && !input.readOnly && input.overReadyBoard && !input.spaceDown && !input.panTool) return 'scroll-frame';
-  return 'pan';
+  return input.ctrlOrMeta ? 'zoom' : 'pan';
 };
 
 /**
- * A wheel turn a design frame forwarded (it only forwards what it did not use itself). On the
- * wall Ctrl zooms, and a plain wheel scrolls the design in Edit mode or pans the wall in Play
- * mode and on a saved version. A page only scrolls the design, and only in Edit mode.
+ * A wheel turn a design frame forwarded (Ctrl/Meta in any mode, a plain wheel only in Edit mode).
+ * On the wall it pans, or zooms with Ctrl: the same answer the surface gives, so a forwarded
+ * wheel never scrolls the design in Edit mode. A page only scrolls the design, and only in
+ * Edit mode.
  */
 export const frameWheelRoute = (input: { pageMode: boolean; ctrl: boolean; mode: BridgeMode; readOnly: boolean }): WheelRoute => {
-  const scrolls = input.mode === 'edit' && !input.readOnly;
-  if (input.pageMode) return !input.ctrl && scrolls ? 'scroll-frame' : 'none';
-  if (input.ctrl) return 'zoom';
-  return scrolls ? 'scroll-frame' : 'pan';
+  if (input.pageMode) return !input.ctrl && input.mode === 'edit' && !input.readOnly ? 'scroll-frame' : 'none';
+  return input.ctrl ? 'zoom' : 'pan';
 };
 
 /**

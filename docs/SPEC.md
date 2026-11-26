@@ -1112,8 +1112,9 @@ forwarded), `key {key, ctrl, meta, shift}` (only Escape, Space, +, −, 0, 1 for
 Bridge behaviour:
 - Edit mode: the artboard `<iframe>` has `pointer-events:none`; the page owns pointer input and
   asks `hit-test` on hover (rAF) and click; bridge answers with `document.elementFromPoint`.
-  Wheel over an artboard in Edit mode scrolls that artboard (`scroll-by`) unless Ctrl/Meta (zoom)
-  or Space/middle-drag/pan tool (pan) — design-canvas B3 behaviour.
+  Wheel over an artboard in Edit mode pans the wall, exactly like wheel over empty wall; Ctrl/Meta
+  (and trackpad pinch) zooms around the cursor. The design never scrolls in Edit mode; Play mode
+  is how to scroll and use a design (owner decision, follows Claude Design).
 - Play mode: frame receives input. Bridge intercepts `click` on `a[href]` (capture phase):
   `#frag` → `scrollIntoView`; relative `*.html` resolved against a virtual
   `https://design.invalid/<file>` → `navigate` (page swaps that artboard's document to the target

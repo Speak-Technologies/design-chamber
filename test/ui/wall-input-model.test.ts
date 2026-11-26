@@ -86,37 +86,28 @@ test('pageKeyAction: arrows, Page Up/Down, Home, End and Escape', () => {
   assert.equal(p('constructor'), null);
 });
 
-const modes: BridgeMode[] = ['edit', 'play'];
-
-test('wheelRoute on the wall: Ctrl/Cmd zooms; Edit scrolls the design under the pointer; everything else pans', () => {
-  const base = { pageMode: false, ctrlOrMeta: false, mode: 'edit' as BridgeMode, readOnly: false, overReadyBoard: true, spaceDown: false, panTool: false };
-  assert.equal(wheelRoute(base), 'scroll-frame');
+test('wheelRoute on the wall: Ctrl/Cmd zooms; a plain wheel pans everywhere, over an artboard too', () => {
+  const base = { pageMode: false, ctrlOrMeta: false, overReadyBoard: true };
+  assert.equal(wheelRoute(base), 'pan', 'Edit mode over a ready artboard pans the wall; the design does not scroll');
+  assert.equal(wheelRoute({ ...base, overReadyBoard: false }), 'pan', 'empty wall or a frame still loading pans the same');
   assert.equal(wheelRoute({ ...base, ctrlOrMeta: true }), 'zoom');
-  assert.equal(wheelRoute({ ...base, ctrlOrMeta: true, mode: 'play' }), 'zoom');
-  assert.equal(wheelRoute({ ...base, ctrlOrMeta: true, readOnly: true, overReadyBoard: false }), 'zoom');
-  assert.equal(wheelRoute({ ...base, mode: 'play' }), 'pan', 'Play mode pans');
-  assert.equal(wheelRoute({ ...base, readOnly: true }), 'pan', 'a saved version pans');
-  assert.equal(wheelRoute({ ...base, overReadyBoard: false }), 'pan', 'empty wall or a frame still loading pans');
-  assert.equal(wheelRoute({ ...base, spaceDown: true }), 'pan');
-  assert.equal(wheelRoute({ ...base, panTool: true }), 'pan');
+  assert.equal(wheelRoute({ ...base, ctrlOrMeta: true, overReadyBoard: false }), 'zoom');
 });
 
 test('wheelRoute on a page: scrolls the design over the loaded frame, never zooms or pans', () => {
-  const base = { pageMode: true, ctrlOrMeta: false, mode: 'edit' as BridgeMode, readOnly: false, overReadyBoard: true, spaceDown: false, panTool: false };
+  const base = { pageMode: true, ctrlOrMeta: false, overReadyBoard: true };
   assert.equal(wheelRoute(base), 'scroll-frame');
   assert.equal(wheelRoute({ ...base, ctrlOrMeta: true }), 'none');
   assert.equal(wheelRoute({ ...base, overReadyBoard: false }), 'none');
-  for (const mode of modes) for (const readOnly of [false, true]) assert.equal(wheelRoute({ ...base, mode, readOnly }), 'scroll-frame', `${mode} readOnly=${readOnly}: the page wheel ignores the mode`);
-  assert.equal(wheelRoute({ ...base, spaceDown: true, panTool: true }), 'scroll-frame');
 });
 
-test('frameWheelRoute: what a design frame forwards', () => {
+test('frameWheelRoute: a forwarded wheel pans the wall in every mode, Ctrl zooms; a page only scrolls the design', () => {
   const wall = { pageMode: false, ctrl: false, mode: 'edit' as BridgeMode, readOnly: false };
-  assert.equal(frameWheelRoute(wall), 'scroll-frame');
-  assert.equal(frameWheelRoute({ ...wall, ctrl: true }), 'zoom');
+  assert.equal(frameWheelRoute(wall), 'pan', 'Edit mode: a forwarded wheel pans, the design does not scroll');
   assert.equal(frameWheelRoute({ ...wall, mode: 'play' }), 'pan');
   assert.equal(frameWheelRoute({ ...wall, readOnly: true }), 'pan');
-  assert.equal(frameWheelRoute({ ...wall, ctrl: true, readOnly: true }), 'zoom');
+  assert.equal(frameWheelRoute({ ...wall, ctrl: true }), 'zoom');
+  assert.equal(frameWheelRoute({ ...wall, ctrl: true, mode: 'play', readOnly: true }), 'zoom');
   const page = { ...wall, pageMode: true };
   assert.equal(frameWheelRoute(page), 'scroll-frame');
   assert.equal(frameWheelRoute({ ...page, ctrl: true }), 'none');
