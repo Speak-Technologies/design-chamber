@@ -141,11 +141,7 @@ export const createInputController = (ctx: WallContext, deps: InputDeps): InputC
       const route = wheelRoute({
         pageMode,
         ctrlOrMeta: event.ctrlKey || event.metaKey,
-        mode: ctx.mode,
-        readOnly: ctx.readOnly(),
         overReadyBoard: board !== null && board.main.state() === 'ready',
-        spaceDown,
-        panTool,
       });
       // Every route owns the wheel: the surface never lets the page behind it scroll.
       event.preventDefault();

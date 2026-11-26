@@ -80,8 +80,9 @@ export const createFrameMessageHandler = (ctx: WallContext, deps: FrameMessageDe
         options.onExternal(message.url);
         return;
       case 'wheel': {
-        // A plain wheel reaches us only from Edit mode: scroll the design, as over the wall.
-        // On a page there is no zoom; a plain wheel scrolls the design, as in a browser tab.
+        // A plain wheel reaches us only from Edit mode: it pans the wall, the same as a wheel over
+        // the wall surface, so the design never scrolls under it. On a page there is no zoom; a
+        // plain wheel scrolls the design, as in a browser tab.
         const route = frameWheelRoute({ pageMode: ctx.pageMode, ctrl: message.ctrl, mode: ctx.mode, readOnly: ctx.readOnly() });
         if (route === 'scroll-frame') board.main.post({ type: 'scroll-by', dx: message.deltaX, dy: message.deltaY });
         else if (route === 'zoom') camera.set(wheelZoom(camera.get(), message.deltaY, frameToScreen(camera.get(), board.art.rect, { x: message.x, y: message.y })), true);
