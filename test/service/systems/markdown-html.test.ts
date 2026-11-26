@@ -4,10 +4,13 @@
 // that must stay escaped text. The renderer is pure, so every case here is a string in, string out.
 
 import assert from 'node:assert/strict';
+import { performance } from 'node:perf_hooks';
 import { test } from 'node:test';
 
+import { buildBoardHtml } from '../../../src/service/systems/board-html.ts';
 import { livingCssProblems } from '../../../src/service/systems/living-safe.ts';
-import { escapeHtml, markdownCss, markdownLinkUrl, renderMarkdown } from '../../../src/service/systems/markdown-html.ts';
+import { escapeHtml, markdownCss, markdownLinkUrl, renderMarkdown, withoutLeadingTitle } from '../../../src/service/systems/markdown-html.ts';
+import { boardFixture } from './board-fixture.ts';
 
 const md = (source: string): string => renderMarkdown(source, 'board');
 const living = (source: string): string => renderMarkdown(source, 'living');
@@ -72,12 +75,12 @@ test('lists, nested lists and ordered lists', () => {
 test('links: http, https, mailto and relative carry; everything else stays text', () => {
   assert.equal(
     md('[docs](https://example.com/a?b=1&c=2)'),
-    '<p><a href="https://example.com/a?b=1&amp;c=2" rel="noopener noreferrer" target="_blank">docs</a></p>',
+    '<p><a class="dc-md-link" href="https://example.com/a?b=1&amp;c=2" rel="noopener noreferrer" target="_blank">docs</a></p>',
   );
-  assert.ok(md('[mail](mailto:studio@pentima.example)').includes('<a href="mailto:studio@pentima.example" rel="noopener noreferrer" target="_blank">mail</a>'));
-  assert.ok(md('[notes](notes/colour-usage.md)').includes('<a href="notes/colour-usage.md" rel="noopener noreferrer" target="_blank">notes</a>'));
-  assert.ok(md('[top](#dc-section-overview)').includes('<a href="#dc-section-overview" rel="noopener noreferrer" target="_blank">top</a>'));
-  assert.ok(md('[**bold** label](https://example.com)').includes('<a href="https://example.com" rel="noopener noreferrer" target="_blank"><strong>bold</strong> label</a>'));
+  assert.ok(md('[mail](mailto:studio@pentima.example)').includes('<a class="dc-md-link" href="mailto:studio@pentima.example" rel="noopener noreferrer" target="_blank">mail</a>'));
+  assert.ok(md('[notes](notes/colour-usage.md)').includes('<a class="dc-md-link" href="notes/colour-usage.md" rel="noopener noreferrer" target="_blank">notes</a>'));
+  assert.ok(md('[top](#dc-section-overview)').includes('<a class="dc-md-link" href="#dc-section-overview" rel="noopener noreferrer" target="_blank">top</a>'));
+  assert.ok(md('[**bold** label](https://example.com)').includes('<a class="dc-md-link" href="https://example.com" rel="noopener noreferrer" target="_blank"><strong>bold</strong> label</a>'));
   for (const url of ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', 'data:text/html;base64,PHNjcmlwdD4=', 'vbscript:msgbox(1)', 'file:///etc/passwd', 'java\tscript:alert(1)', 'java\nscript:alert(1)', '//evil.example/x', 'https://example.com/a b', 'C:\\Users\\you', '']) {
     const out = md(`[x](${url})`);
     assert.ok(!out.includes('<a '), `no link for ${JSON.stringify(url)}: ${out}`);
@@ -130,19 +133,84 @@ test('the living profile stays inside the allowlist vocabulary', () => {
   assert.ok(out.includes('<div class="dc-md-pre"><code>a { b: c; }</code></div>'), out);
   assert.ok(out.includes('out (https://example.com)'), out);
   assert.ok(out.includes('mail (mailto:x@y.z)'), out);
-  assert.ok(out.includes('<a href="#dc-section-overview">in</a>'), out);
-  assert.ok(!out.includes('<a href="https:'), out);
+  assert.ok(out.includes('<a class="dc-md-link" href="#dc-section-overview">in</a>'), out);
+  assert.ok(!out.includes('<a class="dc-md-link" href="https:'), out);
 });
 
-test('nesting past the cap is escaped text, never a stack overflow', () => {
-  const quotes = `${'> '.repeat(40)}deep`;
-  assert.ok(md(quotes).includes(escapeHtml('deep')));
-  const lists = Array.from({ length: 40 }, (_, i) => `${'  '.repeat(i)}- item${i}`).join('\n');
-  assert.ok(md(lists).includes('item39'));
-  const emphasis = `${'**'.repeat(40)}x${'**'.repeat(40)}`;
+test('nesting past the cap is escaped text, never a stack overflow, and stays quick', () => {
+  const timed = (fn: () => void): number => {
+    const started = performance.now();
+    fn();
+    return performance.now() - started;
+  };
+  const quotes = `${'>'.repeat(20000)}x`;
+  const lists = Array.from({ length: 2000 }, (_, i) => `${'  '.repeat(i)}- item${i}`).join('\n');
+  const emphasis = `${'**'.repeat(20000)}x${'**'.repeat(20000)}`;
+  for (const [name, source] of [['quotes', quotes], ['lists', lists], ['emphasis', emphasis]] as const) {
+    const elapsed = timed(() => {
+      assert.doesNotThrow(() => renderMarkdown(source, 'board'));
+      assert.doesNotThrow(() => renderMarkdown(source, 'living'));
+    });
+    assert.ok(elapsed < 300, `${name}: ${Math.round(elapsed)} ms`);
+  }
+  assert.ok(md(quotes).includes('x'));
+  assert.ok(md(lists).includes('item1999'));
   assert.ok(md(emphasis).includes('x'));
-  const links = `${'[a]('.repeat(40)}https://example.com${')'.repeat(40)}`;
-  assert.ok(typeof md(links) === 'string');
+});
+
+test('adversarial lines at the service caps render in milliseconds', () => {
+  const timed = (source: string): number => {
+    const started = performance.now();
+    renderMarkdown(source, 'board');
+    renderMarkdown(source, 'living');
+    return performance.now() - started;
+  };
+  // The overview cap is 4 000 characters, a note's 20 000: every case below sits at one of them.
+  assert.ok(timed(`# a${' '.repeat(3994)}#x`) < 100, 'heading with a 4 000-space run');
+  assert.ok(timed(`para\n## Title${'\t '.repeat(1500)}more`) < 100, 'heading with a tab/space run');
+  assert.ok(timed('['.repeat(20000)) < 100, 'unclosed brackets');
+  assert.ok(timed('!['.repeat(10000)) < 100, 'unclosed images');
+  assert.ok(timed('[]('.repeat(6000)) < 100, 'links with no closing paren');
+  assert.ok(timed('[x](a'.repeat(4000)) < 100, 'links with no closing paren at all');
+  assert.ok(timed(`${'*a'.repeat(10000)}\n`) < 100, 'emphasis openers with no closer on the line');
+  assert.ok(timed(`**${'a,'.repeat(5000)}`) < 100, 'one strong opener, no closer');
+});
+
+test('a whole board of hostile 20 000-char notes builds well under half a second', () => {
+  const bracketNotes = Array.from({ length: 50 }, (_, i) => ({ id: `n${i}`, title: `Note ${i}`, text: '['.repeat(20000), problem: null }));
+  const headingNotes = Array.from({ length: 50 }, (_, i) => ({ id: `n${i}`, title: `Note ${i}`, text: `# a${' '.repeat(3994)}#x`, problem: null }));
+  for (const [name, notes] of [['brackets', bracketNotes], ['headings', headingNotes]] as const) {
+    const started = performance.now();
+    const html = buildBoardHtml({ ...boardFixture(), notes }, { scheme: 'dark' });
+    const elapsed = performance.now() - started;
+    assert.ok(html.includes('id="dc-section-overview"'), name);
+    assert.ok(elapsed < 500, `${name}: ${Math.round(elapsed)} ms`);
+  }
+});
+
+test('horizontal rules, strikethrough and ordered-list starts', () => {
+  assert.equal(md('---'), '<hr class="dc-md-hr">');
+  assert.equal(md('***'), '<hr class="dc-md-hr">');
+  assert.equal(md('___'), '<hr class="dc-md-hr">');
+  assert.equal(md('- - -'), '<hr class="dc-md-hr">');
+  assert.equal(md('a\n\n---\n\nb'), '<p>a</p><hr class="dc-md-hr"><p>b</p>');
+  assert.equal(md('--'), '<p>--</p>');
+  assert.equal(md('a --- b'), '<p>a --- b</p>');
+  assert.equal(living('---'), '<hr class="dc-md-hr">');
+  assert.equal(md('~~gone~~'), '<p><del class="dc-md-del">gone</del></p>');
+  assert.equal(living('~~gone~~'), '<p><span class="dc-md-del">gone</span></p>');
+  assert.equal(md('3. three\n4. four'), '<ol class="dc-md-list" start="3"><li><p>three</p></li><li><p>four</p></li></ol>');
+  assert.equal(md('1. one'), '<ol class="dc-md-list"><li><p>one</p></li></ol>');
+  assert.equal(living('3. three'), '<ol class="dc-md-list"><li><p>three</p></li></ol>');
+  assert.equal(md('## a##'), '<h4 class="dc-md-h4">a##</h4>');
+});
+
+test('a note body opening with its own title drops the duplicate heading', () => {
+  assert.equal(withoutLeadingTitle('# Accessibility\n\nText keeps contrast.', 'Accessibility'), '\nText keeps contrast.');
+  assert.equal(withoutLeadingTitle('## Accessibility\n\nx', 'Accessibility'), '\nx');
+  assert.equal(withoutLeadingTitle('# Other\n\nx', 'Accessibility'), '# Other\n\nx');
+  assert.equal(withoutLeadingTitle('plain text', 'Accessibility'), 'plain text');
+  assert.equal(withoutLeadingTitle('# Accessibility ##\n\nx', 'Accessibility'), '\nx');
 });
 
 test('markdownLinkUrl answers the allowlist directly', () => {
@@ -168,6 +236,7 @@ test('the markdown CSS is scoped, theme-aware on the board, and allowlist-safe o
   assert.ok(board.includes('.dc-section .dc-md-h3'), 'heading classes outrank the card label rule');
   assert.ok(board.includes('var(--dc-board-card,'), 'the board markdown follows the host theme');
   assert.ok(board.includes('var(--dc-board-border,'), board);
+  assert.ok(board.includes('.dc-md-link {'), 'the link rule matches the class the renderer writes');
   assert.ok(!markdownCss('living', 'light').includes('var('), 'the living page greys are fixed');
   assert.ok(!board.includes('url('), board);
 });

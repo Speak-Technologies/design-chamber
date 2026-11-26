@@ -33,7 +33,7 @@ import type {
   TokenSection,
   TypeStyle,
 } from '../../shared/types.ts';
-import { escapeHtml, renderMarkdown, type MarkdownProfile } from './markdown-html.ts';
+import { escapeHtml, renderMarkdown, withoutLeadingTitle, type MarkdownProfile } from './markdown-html.ts';
 
 export { escapeHtml };
 
@@ -197,7 +197,7 @@ const overviewParts = (detail: SystemDetail, markdown: MarkdownProfile): Section
   for (const note of detail.notes) {
     const key = SYSTEM_ENTRY_ID_PATTERN.test(note.id) ? entryAttr('note', note.id) : '';
     parts.push(
-      `<div class="dc-card dc-text"${key}><h3>${escapeHtml(note.title)}</h3>${renderMarkdown(note.text, markdown)}` +
+      `<div class="dc-card dc-text"${key}><h3>${escapeHtml(note.title)}</h3>${renderMarkdown(withoutLeadingTitle(note.text, note.title), markdown)}` +
         (note.problem !== null ? `<div class="dc-problem">${escapeHtml(note.problem)}</div>` : '') +
         '</div>',
     );

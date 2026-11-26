@@ -8,14 +8,21 @@
 //
 // Two profiles, because the two documents have different contracts:
 // - `board` runs in the sandboxed artboard frame and gets the full vocabulary (pre, blockquote,
-//   h3-h6, links that leave the page with rel/target);
+//   h3-h6, del, ol start, links that leave the page with rel/target);
 // - `living` is served outside OpenChamber and must pass `scanLivingPage` (living-safe.ts): only
 //   elements and attributes on that allowlist, so code blocks are a pre-wrap div, quotes a div,
-//   headings stop at h4, and a link that leaves the page is shown as its text and address.
+//   strikethrough a span, headings stop at h4, ordered lists lose their start number, and a link
+//   that leaves the page is shown as its text and address.
 //
 // Headings enter the document outline under the section's h2: markdown `#` becomes h3, `##` h4,
 // and so on (the living page caps at h4). Nesting (quotes, lists, emphasis) is depth-capped so a
 // hostile file cannot exhaust the stack; past the cap the stretch is shown as escaped text.
+//
+// Time is linear in the source: every delimiter lookup goes through a table built in one pass
+// (`nextOf`, `stopUrlOf`, `ticksOf`), never a regex that rescans to the end of the text from each
+// opener, and the block grammar's regexes are anchored without nested quantifiers over the same
+// characters. A 20 000-character note of unclosed brackets or a heading line of 4 000 spaces
+// renders in milliseconds, so one hostile file cannot freeze the service's main thread.
 // Pure: no service imports, so the CLI check can bundle it.
 
 import { LIVING_HREF } from './living-safe.ts';
@@ -57,22 +64,105 @@ export const markdownLinkUrl = (raw: string): string | null => {
   return url;
 };
 
+// ---- linear-time lookup tables ----
+
+/** Next position at or after `i` where `needle` starts, else -1: one backward pass, O(1) lookups. */
+const nextOf = (text: string, needle: string): Int32Array => {
+  const table = new Int32Array(text.length + 1);
+  table[text.length] = -1;
+  for (let i = text.length - 1; i >= 0; i -= 1) table[i] = text.startsWith(needle, i) ? i : (table[i + 1] ?? -1);
+  return table;
+};
+
+const isSpaceTab = (ch: string): boolean => ch === ' ' || ch === '\t';
+
+/** Next position at or after `i` that ends a link URL (whitespace or `)`), else the length. */
+const stopUrlOf = (text: string): Int32Array => {
+  const table = new Int32Array(text.length + 1);
+  table[text.length] = text.length;
+  for (let i = text.length - 1; i >= 0; i -= 1) {
+    const ch = text[i] ?? '';
+    table[i] = ch === ')' || /\s/.test(ch) ? i : (table[i + 1] ?? text.length);
+  }
+  return table;
+};
+
+/** Next position at or after `i` that is not a space or tab, else the length. */
+const skipSpaceTabOf = (text: string): Int32Array => {
+  const table = new Int32Array(text.length + 1);
+  table[text.length] = text.length;
+  for (let i = text.length - 1; i >= 0; i -= 1) table[i] = isSpaceTab(text[i] ?? '') ? (table[i + 1] ?? text.length) : i;
+  return table;
+};
+
+/** Backtick runs: `nextRun[i]` the next run start at or after i, `runLen[start]` its length. */
+const ticksOf = (text: string): { nextRun: Int32Array; runLen: Int32Array } => {
+  const n = text.length;
+  const nextRun = new Int32Array(n + 1);
+  const runLen = new Int32Array(n + 1);
+  nextRun[n] = -1;
+  for (let i = n - 1; i >= 0; i -= 1) {
+    if (text[i] === '`' && (i === 0 || text[i - 1] !== '`')) {
+      let len = 0;
+      while (i + len < n && text[i + len] === '`') len += 1;
+      runLen[i] = len;
+      nextRun[i] = i;
+    } else {
+      nextRun[i] = nextRun[i + 1] ?? -1;
+    }
+  }
+  return { nextRun, runLen };
+};
+
 // ---- the block grammar ----
 
 /** Nesting cap for quotes, lists and emphasis: past it a stretch is escaped text, never a deeper parse. */
 const MAX_DEPTH = 6;
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
-const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*#*[ \t]*$/;
+// Greedy rest, no trailing quantifiers over the same characters: a long space run cannot backtrack.
+const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/;
 const QUOTE = /^ {0,3}>[ \t]?(.*)$/;
 const ITEM = /^( *)([-*+]|\d{1,9}[.)])([ \t]+)(.*)$/;
 const SEP_CELL = /^:?-+:?$/;
 const EMPHASIS_END = /[A-Za-z0-9_]/;
 
+/** Trailing spaces and tabs off, by plain loop: a regex with a trailing quantifier races long runs. */
+const trimSpaceTab = (text: string): string => {
+  let end = text.length;
+  while (end > 0 && isSpaceTab(text[end - 1] ?? '')) end -= 1;
+  return end === text.length ? text : text.slice(0, end);
+};
+
 const indentOf = (line: string): number => {
   let n = 0;
   while (n < line.length && line[n] === ' ') n += 1;
   return n;
+};
+
+/** A heading's text without its closing #s and trailing whitespace, by plain loop (never a regex race). */
+const headingText = (raw: string): string => {
+  const text = trimSpaceTab(raw);
+  let end = text.length;
+  while (end > 0 && text[end - 1] === '#') end -= 1;
+  if (end === text.length) return text;
+  if (end === 0) return '';
+  if (isSpaceTab(text[end - 1] ?? '')) return trimSpaceTab(text.slice(0, end));
+  return text;
+};
+
+/** A horizontal rule: three or more of one of - * _ , spaces and tabs between, at most three leading spaces. */
+const isHorizontalRule = (line: string): boolean => {
+  if (indentOf(line) > 3) return false;
+  const text = line.trim();
+  const ch = text[0];
+  if (ch !== '-' && ch !== '*' && ch !== '_') return false;
+  let count = 0;
+  for (const c of text) {
+    if (c === ch) count += 1;
+    else if (!isSpaceTab(c)) return false;
+  }
+  return count >= 3;
 };
 
 /** A table row's cells: boundary pipes dropped, escaped pipes kept as pipes. */
@@ -108,22 +198,49 @@ const tableBlock = (header: readonly string[], rows: readonly (readonly string[]
 
 // ---- inline ----
 
-const CODE_SPAN = /^(`+)([\s\S]*?)\1(?!`)/;
-const IMAGE = /^!\[[^\]]*\]\([^\s)]*(?:[ \t]+"[^"\n]*")?\)/;
-const LINK = /^\[([^\]]*)\]\(([^\s)]*)(?:[ \t]+"[^"\n]*")?\)/;
-const TRIPLE = /^(\*\*\*|___)([\s\S]+?)\1/;
-const DOUBLE = /^(\*\*|__)([\s\S]+?)\1/;
-const SINGLE_STAR = /^\*([^*\n]+?)\*/;
-const SINGLE_UNDER = /^_([^_\n]+?)_/;
 const BACKSLASH_PUNCT = /[\\`*_{}[\]()#+\-.!|>~"']/;
 
 /**
- * Inline markdown as escaped HTML: code spans (literal inside), links, strong, em, backslash
- * escapes; everything else is text. `depth` caps nesting. A link the profile or the URL allowlist
- * refuses stays visible as the words and address the agent wrote, inert.
+ * Inline markdown as escaped HTML: code spans (literal inside), links, strong, em, strikethrough,
+ * backslash escapes; everything else is text. Every delimiter is found through a lookup table, so
+ * a failed scan costs O(1) and never rescans the rest of the text. `depth` caps nesting. A link the
+ * profile or the URL allowlist refuses stays visible as the words and address the agent wrote, inert.
  */
 const inline = (text: string, profile: MarkdownProfile, depth: number): string => {
   if (depth > MAX_DEPTH) return escapeHtml(text);
+  const n = text.length;
+  const bracket = nextOf(text, ']');
+  const stopUrl = stopUrlOf(text);
+  const skipWs = skipSpaceTabOf(text);
+  const quote = nextOf(text, '"');
+  const newline = nextOf(text, '\n');
+  const doubleStar = nextOf(text, '**');
+  const doubleUnder = nextOf(text, '__');
+  const tripleStar = nextOf(text, '***');
+  const tripleUnder = nextOf(text, '___');
+  const singleStar = nextOf(text, '*');
+  const singleUnder = nextOf(text, '_');
+  const strike = nextOf(text, '~~');
+  const { nextRun, runLen } = ticksOf(text);
+  // Per opener length, how far the search for a closing backtick run has already got: monotonic,
+  // because openers are visited left to right, so a run ruled out once is never re-examined.
+  const tickCursor = new Map<number, number>();
+
+  /** The link starting at `open` ('['): its url, label end and whole end, or null. All O(1). */
+  const linkAt = (open: number): { url: string; labelEnd: number; end: number } | null => {
+    const j = bracket[open + 1] ?? -1;
+    if (j === -1 || text[j + 1] !== '(') return null;
+    const u = j + 2;
+    const e = stopUrl[u] ?? n;
+    if (e === n) return null;
+    if (text[e] === ')') return { url: text.slice(u, e), labelEnd: j, end: e + 1 };
+    const q = skipWs[e] ?? n;
+    if (text[q] !== '"') return null;
+    const c = quote[q + 1] ?? -1;
+    if (c === -1 || (newline[q + 1] ?? -1) < c || text[c + 1] !== ')') return null;
+    return { url: text.slice(u, e), labelEnd: j, end: c + 2 };
+  };
+
   let out = '';
   let plain = '';
   const flush = (): void => {
@@ -133,71 +250,76 @@ const inline = (text: string, profile: MarkdownProfile, depth: number): string =
     }
   };
   let i = 0;
-  while (i < text.length) {
-    const rest = text.slice(i);
+  while (i < n) {
     const ch = text[i] ?? '';
     if (ch === '\\' && BACKSLASH_PUNCT.test(text[i + 1] ?? '')) {
       plain += text[i + 1] ?? '';
       i += 2;
       continue;
     }
-    if (ch === '`') {
-      const m = CODE_SPAN.exec(rest);
-      if (m !== null && m[2] !== undefined) {
+    if (ch === '`' && (runLen[i] ?? 0) > 0) {
+      const len = runLen[i] ?? 0;
+      let p = nextRun[Math.max(i + len, tickCursor.get(len) ?? 0)] ?? -1;
+      while (p !== -1 && (runLen[p] ?? 0) !== len) p = nextRun[p + (runLen[p] ?? 0)] ?? -1;
+      if (p !== -1) {
+        tickCursor.set(len, p + (runLen[p] ?? 0));
         flush();
-        out += `<code class="dc-md-code">${escapeHtml(m[2].replace(/\n/g, ' '))}</code>`;
-        i += m[0].length;
+        out += `<code class="dc-md-code">${escapeHtml(text.slice(i + len, p).replace(/\n/g, ' '))}</code>`;
+        i = p + len;
         continue;
       }
+      tickCursor.set(len, n);
     }
-    if (ch === '!') {
-      const m = IMAGE.exec(rest);
+    if (ch === '!' && text[i + 1] === '[') {
+      const m = linkAt(i + 1);
       if (m !== null) {
-        plain += m[0];
-        i += m[0].length;
+        // Images are never drawn: the whole span stays visible as written text.
+        plain += text.slice(i, m.end);
+        i = m.end;
         continue;
       }
     }
     if (ch === '[') {
-      const m = LINK.exec(rest);
-      if (m !== null && m[1] !== undefined && m[2] !== undefined) {
-        const url = markdownLinkUrl(m[2]);
-        const label = inline(m[1], profile, depth + 1);
+      const m = linkAt(i);
+      if (m !== null) {
+        const url = markdownLinkUrl(m.url);
+        const label = inline(text.slice(i + 1, m.labelEnd), profile, depth + 1);
+        flush();
         if (url !== null && (profile === 'board' || LIVING_HREF.test(url))) {
-          flush();
-          out += profile === 'board' ? `<a href="${escapeHtml(url)}" rel="noopener noreferrer" target="_blank">${label}</a>` : `<a href="${escapeHtml(url)}">${label}</a>`;
+          out +=
+            profile === 'board'
+              ? `<a class="dc-md-link" href="${escapeHtml(url)}" rel="noopener noreferrer" target="_blank">${label}</a>`
+              : `<a class="dc-md-link" href="${escapeHtml(url)}">${label}</a>`;
         } else {
           // Not a link this document may carry: the words and the address, as text.
-          flush();
-          out += url === null ? escapeHtml(m[0]) : `${label}${escapeHtml(` (${m[2]})`)}`;
+          out += url === null ? escapeHtml(text.slice(i, m.end)) : `${label}${escapeHtml(` (${m.url})`)}`;
         }
-        i += m[0].length;
+        i = m.end;
         continue;
       }
     }
-    if (ch === '*' || ch === '_') {
-      const boundaryOk = (end: number): boolean =>
-        ch === '*' || (!EMPHASIS_END.test(text[i - 1] ?? '') && !EMPHASIS_END.test(text[end] ?? ''));
-      const triple = TRIPLE.exec(rest);
-      if (triple !== null && triple[2] !== undefined && boundaryOk(i + triple[0].length)) {
+    if (ch === '*' || ch === '_' || ch === '~') {
+      const flanked = (end: number): boolean => !EMPHASIS_END.test(text[i - 1] ?? '') && !EMPHASIS_END.test(text[end] ?? '');
+      const take = (table: Int32Array, marker: string, wrap: (inner: string) => string, single: boolean): boolean => {
+        const p = table[i + marker.length] ?? -1;
+        if (p === -1 || p === i + marker.length) return false;
+        if (single && (newline[i + 1] ?? -1) !== -1 && (newline[i + 1] ?? -1) < p) return false;
+        if (ch === '_' && !flanked(p + marker.length)) return false;
         flush();
-        out += `<strong><em>${inline(triple[2], profile, depth + 1)}</em></strong>`;
-        i += triple[0].length;
-        continue;
-      }
-      const double = DOUBLE.exec(rest);
-      if (double !== null && double[2] !== undefined && boundaryOk(i + double[0].length)) {
-        flush();
-        out += `<strong>${inline(double[2], profile, depth + 1)}</strong>`;
-        i += double[0].length;
-        continue;
-      }
-      const single = ch === '*' ? SINGLE_STAR.exec(rest) : SINGLE_UNDER.exec(rest);
-      if (single !== null && single[1] !== undefined && boundaryOk(i + single[0].length)) {
-        flush();
-        out += `<em>${inline(single[1], profile, depth + 1)}</em>`;
-        i += single[0].length;
-        continue;
+        out += wrap(inline(text.slice(i + marker.length, p), profile, depth + 1));
+        i = p + marker.length;
+        return true;
+      };
+      if (ch === '~') {
+        if (take(strike, '~~', (s) => (profile === 'board' ? `<del class="dc-md-del">${s}</del>` : `<span class="dc-md-del">${s}</span>`), false)) continue;
+      } else if (ch === '*') {
+        if (take(tripleStar, '***', (s) => `<strong><em>${s}</em></strong>`, false)) continue;
+        if (take(doubleStar, '**', (s) => `<strong>${s}</strong>`, false)) continue;
+        if (take(singleStar, '*', (s) => `<em>${s}</em>`, true)) continue;
+      } else {
+        if (take(tripleUnder, '___', (s) => `<strong><em>${s}</em></strong>`, false)) continue;
+        if (take(doubleUnder, '__', (s) => `<strong>${s}</strong>`, false)) continue;
+        if (take(singleUnder, '_', (s) => `<em>${s}</em>`, true)) continue;
       }
     }
     plain += ch;
@@ -215,8 +337,12 @@ const listRun = (lines: readonly string[], start: number, profile: MarkdownProfi
   // The caller only enters on a list item line.
   if (first === null) return { html: '', next: start + 1 };
   const base = (first[1] ?? '').length;
-  const ordered = /^\d/.test(first[2] ?? '');
+  const marker = first[2] ?? '';
+  const ordered = /^\d/.test(marker);
   const tag = ordered ? 'ol' : 'ul';
+  // The first number is the list's start; the living page's allowlist has no start attribute.
+  const from = ordered ? Number(marker.replace(/[.)]$/, '')) : 1;
+  const startAttr = ordered && from !== 1 && profile === 'board' ? ` start="${from}"` : '';
   const items: string[] = [];
   let i = start;
   while (i < lines.length) {
@@ -250,10 +376,10 @@ const listRun = (lines: readonly string[], start: number, profile: MarkdownProfi
     }
     items.push(`<li>${blocks(li, profile, depth + 1)}</li>`);
   }
-  return { html: `<${tag} class="dc-md-list">${items.join('')}</${tag}>`, next: i };
+  return { html: `<${tag} class="dc-md-list"${startAttr}>${items.join('')}</${tag}>`, next: i };
 };
 
-/** The block grammar over whole lines: fences, headings, quotes, lists, tables, paragraphs. */
+/** The block grammar over whole lines: fences, headings, rules, quotes, lists, tables, paragraphs. */
 const blocks = (lines: readonly string[], profile: MarkdownProfile, depth: number): string => {
   if (depth > MAX_DEPTH) return `<p>${escapeHtml(lines.join('\n').trim())}</p>`;
   const out: string[] = [];
@@ -281,7 +407,12 @@ const blocks = (lines: readonly string[], profile: MarkdownProfile, depth: numbe
     const heading = HEADING.exec(line);
     if (heading !== null) {
       const tag = headingTag(heading[1]?.length ?? 1, profile);
-      out.push(`<${tag} class="dc-md-${tag}">${inline((heading[2] ?? '').trim(), profile, depth)}</${tag}>`);
+      out.push(`<${tag} class="dc-md-${tag}">${inline(headingText(heading[2] ?? ''), profile, depth)}</${tag}>`);
+      i += 1;
+      continue;
+    }
+    if (isHorizontalRule(line)) {
+      out.push('<hr class="dc-md-hr">');
       i += 1;
       continue;
     }
@@ -322,7 +453,7 @@ const blocks = (lines: readonly string[], profile: MarkdownProfile, depth: numbe
     i += 1;
     while (i < lines.length) {
       const cur = lines[i] ?? '';
-      if (cur.trim() === '' || FENCE.test(cur) || HEADING.test(cur) || QUOTE.test(cur) || ITEM.test(cur)) break;
+      if (cur.trim() === '' || FENCE.test(cur) || HEADING.test(cur) || isHorizontalRule(cur) || QUOTE.test(cur) || ITEM.test(cur)) break;
       paragraph.push(cur);
       i += 1;
     }
@@ -331,18 +462,33 @@ const blocks = (lines: readonly string[], profile: MarkdownProfile, depth: numbe
   return out.join('');
 };
 
+/** Source lines with CR normalised and leading tabs expanded, the one place both happen. */
+const sourceLines = (source: string): string[] =>
+  source
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/^\t+/, (tabs) => '    '.repeat(tabs.length)));
+
 /**
  * Agent-written markdown as HTML for one of the two system documents. Every text stretch is
  * escaped; the markup is only the vocabulary above. Empty source answers '' (the caller shows its
  * own empty line). Leading tabs become four spaces so indent reads the same everywhere; a code
  * fence keeps them as spaces too.
  */
-export const renderMarkdown = (source: string, profile: MarkdownProfile = 'board'): string => {
-  const lines = source
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map((line) => line.replace(/^\t+/, (tabs) => '    '.repeat(tabs.length)));
-  return blocks(lines, profile, 0);
+export const renderMarkdown = (source: string, profile: MarkdownProfile = 'board'): string => blocks(sourceLines(source), profile, 0);
+
+/**
+ * A note body that opens with its own title as a heading (the service derives the title from that
+ * heading) shows the title once: the card's label, not twice. Only an exact, leading heading match
+ * is dropped; anything else is left as written.
+ */
+export const withoutLeadingTitle = (source: string, title: string): string => {
+  const lines = sourceLines(source);
+  let i = 0;
+  while (i < lines.length && (lines[i] ?? '').trim() === '') i += 1;
+  const heading = HEADING.exec(lines[i] ?? '');
+  if (heading === null || headingText(heading[2] ?? '') !== title.trim()) return source;
+  return lines.slice(i + 1).join('\n');
 };
 
 // ---- the CSS the two documents carry ----
@@ -382,11 +528,13 @@ export const markdownCss = (profile: MarkdownProfile, scheme: 'light' | 'dark' =
 .dc-md-list .dc-md-list { margin: 4px 0 0; }
 .dc-md-list li + li { margin-top: 4px; }
 .dc-md-list li > p { margin: 0; }
+.dc-md-hr { margin: 16px 0; border: 0; border-top: 1px solid ${border}; }
+.dc-md-del { text-decoration: line-through; }
 .dc-md-tablewrap { margin: 8px 0; overflow-x: auto; }
 .dc-md-table { border-collapse: collapse; font-size: 13px; }
 .dc-md-table th, .dc-md-table td { padding: 4px 8px; border: 1px solid ${border}; text-align: left; vertical-align: top; }
 .dc-md-table th { background: ${card}; font-weight: 600; }
-.dc-md a { color: ${profile === 'living' ? g.fg : 'inherit'}; text-decoration: underline; }
+.dc-md-link { color: ${profile === 'living' ? g.fg : 'inherit'}; text-decoration: underline; }
 .dc-body p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 `;
 };

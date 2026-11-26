@@ -177,5 +177,5 @@ test('markdown bodies stay inside the allowlist: no pre, blockquote, h5/h6 or li
   for (const forbidden of ['<pre', '<blockquote', '<h5', '<h6', 'target=', 'rel=']) assert.ok(!html.includes(forbidden), forbidden);
   assert.ok(html.includes('<div class="dc-md-pre"><code>a { b: c; }</code></div>'), 'code block as a pre-wrap div');
   assert.ok(html.includes('out (https://example.com)'), 'a link that leaves is text and address');
-  assert.ok(html.includes('<a href="#note-anchor">in</a>'), 'a fragment link stays a link');
+  assert.ok(html.includes('<a class="dc-md-link" href="#note-anchor">in</a>'), 'a fragment link stays a link');
 });

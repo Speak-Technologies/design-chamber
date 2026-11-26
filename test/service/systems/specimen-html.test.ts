@@ -145,7 +145,7 @@ test('overview, notes and pattern bodies render as markdown on the board', () =>
   assert.ok(overview.includes('<strong>Pentima Nexus</strong>'), overview);
   assert.ok(overview.includes('<h4 class="dc-md-h4">The look</h4>'), overview);
   assert.ok(overview.includes('<ul class="dc-md-list"><li><p>Brand blue <code class="dc-md-code">#00A0E0</code> for links.</p></li>'), overview);
-  assert.ok(overview.includes('<a href="https://example.com/look" rel="noopener noreferrer" target="_blank">the docs</a>'), overview);
+  assert.ok(overview.includes('<a class="dc-md-link" href="https://example.com/look" rel="noopener noreferrer" target="_blank">the docs</a>'), overview);
   assert.ok(overview.includes('<h4 class="dc-md-h4">Contrast</h4>'), overview);
   assert.ok(overview.includes('<pre class="dc-md-pre"><code>--old: #1a73e8;</code></pre>'), overview);
   const patterns = sectionOf(html, 'patterns');
@@ -164,4 +164,14 @@ test('hostile markdown in a note stays escaped text on the board', () => {
   assert.ok(!html.includes('<img src=x'));
   assert.ok(!html.includes('href="javascript:'));
   assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+});
+
+test('a note whose body opens with its own title shows that heading once', () => {
+  const detail: SystemDetail = {
+    ...boardFixture(),
+    notes: [{ id: 'history', title: 'Why the palette changed', text: '# Why the palette changed\n\nThe old blue failed contrast.', problem: null }],
+  };
+  const overview = sectionOf(buildBoardHtml(detail, { scheme: 'light' }), 'overview');
+  assert.equal((overview.match(/Why the palette changed/g) ?? []).length, 1, overview);
+  assert.ok(overview.includes('<p>The old blue failed contrast.</p>'), overview);
 });
