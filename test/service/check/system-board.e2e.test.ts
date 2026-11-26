@@ -13,6 +13,7 @@ import { inflateSync } from 'node:zlib';
 import { test, type TestContext } from 'node:test';
 
 import { cliSystemStore, runSystemCheck } from '../../../src/service/check/system-run.ts';
+import { SYSTEM_CHECK_PNGS_MAX } from '../../../src/shared/limits.ts';
 import { chromeOrSkip } from '../../helpers/chrome-or-skip.ts';
 import { probeSource } from '../../helpers/probe-source.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
@@ -56,6 +57,7 @@ const fixture = (port: number): Record<string, string> => ({
       { id: 'last', name: 'Last', example: 'components/last.html' },
       { id: 'button', name: 'Button', layout: 'compact', example: 'components/button.html' },
       { id: 'compact-wide', name: 'Wide compact', layout: 'compact', example: 'components/compact-wide.html' },
+      { id: 'compact-huge', name: 'Huge compact', layout: 'compact', example: 'components/compact-huge.html' },
       { id: 'remote', name: 'Remote', example: 'components/remote.html' },
     ],
   }),
@@ -67,6 +69,8 @@ const fixture = (port: number): Record<string, string> => ({
   'components/last.html': '<div style="position:fixed;left:-60px;top:0;width:100px;height:20px;background:#c00">escapes</div><p>Normal text.</p>',
   'components/button.html': '<button style="padding:6px 12px">Save</button>',
   'components/compact-wide.html': '<div style="width:700px;height:30px;background:#ccc">700px</div>',
+  // Too wide even for the whole board: the example must shrink, so no "set its layout to full" hint.
+  'components/compact-huge.html': '<div style="width:2000px;height:30px;background:#ccc">2000px</div>',
   'components/remote.html': `<img alt="x" src="http://127.0.0.1:${port}/x.png">`,
 });
 
@@ -117,10 +121,12 @@ test('the board check finds the wide, escaping and small-hint examples, pictures
     assert.equal(hint[0]?.viewport, 'wide');
     assert.deepEqual(hint[0]?.params, { layout: 'compact' });
 
-    // The tall components area is pictured to 3600px and measured in full: a partial note.
-    const partial = found('system-board-partial').filter((finding) => finding.params?.area === 'components');
-    assert.ok(partial.length >= 1, JSON.stringify(render.findings));
-    assert.equal(partial[0]?.params?.max, 3600);
+    // A compact example too wide for the whole board: preview-wide, and no hint (a bigger layout wouldn't help).
+    assert.equal(found('system-board-preview-wide', 'component:compact-huge').length, 1, JSON.stringify(render.findings));
+    assert.equal(found('system-board-hint-small', 'component:compact-huge').length, 0, JSON.stringify(render.findings));
+
+    // Within the picture budget the whole board is pictured at full size: no partial note at all.
+    assert.deepEqual(found('system-board-partial'), [], JSON.stringify(render.findings));
 
     // (f) The http:// image: no connection reached the listener, and no request-blocked duplicate.
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -129,7 +135,24 @@ test('the board check finds the wide, escaping and small-hint examples, pictures
 
     // The tiles: named by area and width, bounded, and the right size.
     const pngRels = render.widths.flatMap((width) => width.pngs);
-    assert.ok(pngRels.length > 0 && pngRels.length <= 32, `${pngRels.length} PNGs`);
+    assert.ok(pngRels.length > 0 && pngRels.length <= SYSTEM_CHECK_PNGS_MAX, `${pngRels.length} PNGs`);
+    // Every area at both widths: an overview, and full-size tiles from the top of the area to its bottom, none missing.
+    const overviews = new Map<string, number>();
+    for (const shot of render.shots) {
+      assert.ok(shot.overview !== null, `${shot.area}@${shot.width} has an overview`);
+      overviews.set(shot.overview.png, Math.round((shot.width === 'wide' ? 1526 : 1046) * shot.overview.scale));
+      assert.equal(shot.overview.coversPx, shot.heightPx, 'the overview shows the whole area');
+      assert.deepEqual(
+        shot.tiles.map((tile) => tile.y),
+        Array.from({ length: Math.ceil(shot.heightPx / 900) }, (_, index) => index * 900),
+        `${shot.area}@${shot.width} tiled whole`,
+      );
+    }
+    assert.equal(render.shots.length, 8, 'four areas at two widths');
+    // The last component (below the fold of a tall board) has a finding; the report names the full-size picture that shows it.
+    const lastShot = render.entryShots.find((shot) => shot.entry === 'component:last' && shot.width === 'wide');
+    assert.ok(lastShot !== undefined && lastShot.pngs.length >= 1, JSON.stringify(render.entryShots));
+    assert.ok(lastShot.pngs.every((rel) => /components@wide(-\d+)?\.png$/.test(rel)), lastShot.pngs.join(', '));
     assert.ok(pngRels.some((rel) => rel.endsWith('foundations@wide.png')), pngRels.join(', '));
     assert.ok(pngRels.some((rel) => rel.endsWith('components@wide.png')));
     assert.ok(pngRels.some((rel) => rel.endsWith('components@wide-2.png')), 'the tall area tiles');
@@ -140,8 +163,14 @@ test('the board check finds the wide, escaping and small-hint examples, pictures
       assert.deepEqual([...bytes.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
       const width = bytes.readUInt32BE(16);
       const height = bytes.readUInt32BE(20);
-      assert.ok(width === 1526 || width === 1046, `width ${width} of ${rel}`);
-      assert.ok(height >= 1 && height <= 900, `height ${height} of ${rel}`);
+      const overviewWidth = overviews.get(rel);
+      if (overviewWidth !== undefined) {
+        assert.equal(width, overviewWidth, `overview ${rel} drawn at its scale`);
+        assert.ok(height >= 1 && height <= 4000, `overview height ${height} of ${rel}`);
+      } else {
+        assert.ok(width === 1526 || width === 1046, `width ${width} of ${rel}`);
+        assert.ok(height >= 1 && height <= 900, `height ${height} of ${rel}`);
+      }
       assert.ok(distinctImageBytes(bytes) > 32, `${rel} is drawn, not blank (${distinctImageBytes(bytes)} distinct bytes)`);
     }
     // The Components area starts below the first screen and is still pictured in full tiles: its first tile is a whole 900px.

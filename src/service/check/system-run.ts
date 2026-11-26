@@ -8,17 +8,19 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { normalizeExternalUrl } from '../../shared/checks.ts';
+import { cleanDetail, normalizeExternalUrl } from '../../shared/checks.ts';
 import {
   CHECK_FINDINGS_MAX,
   SYSTEM_CHECK_BOARD_TIMEOUT_MS,
   SYSTEM_CHECK_BOARD_WIDTHS,
+  CHECK_DETAIL_MAX,
+  SYSTEM_CHECK_OPTIONAL_TILES_TIME_SHARE,
   SYSTEM_CHECK_PNGS_MAX,
   SYSTEM_CHECK_RENDER_BUDGET_MS,
-  SYSTEM_CHECK_TILES_PER_AREA,
+  SYSTEM_CHECK_TILE_PIXELS_MAX,
 } from '../../shared/limits.ts';
 import { findSecretShapes } from '../../shared/secret-shapes.ts';
-import { parseEntryKey } from '../../shared/system-board.ts';
+import { isBoardEntryKey, parseEntryKey } from '../../shared/system-board.ts';
 import { buildSystemDetail, effectiveLayout, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
 import type { BoardLayout, CheckFindingData, RenderCheckState, SettingsFile, SystemComponent, SystemDetail } from '../../shared/types.ts';
 import { BundleTooLarge, bundleDocument, createLiveFileSource, type FileSource } from '../bundle.ts';
@@ -32,11 +34,13 @@ import { committedStateOf, readCommitted, readRecord } from '../systems/living-p
 import { readProposalProblem } from '../systems/proposal-record.ts';
 import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/store.ts';
 import { analyzeBoard, boardFindings, sanitizeBoardProbe } from './board-analyze.ts';
+import { planBoardPictures } from './board-pictures.ts';
 import { browserClassOf, openCheckRun } from './engine.ts';
 import { checkBrowserArgs, openCdp } from './cdp.ts';
 import { ensureChamberDir } from './output.ts';
+import { PngStitchError, stitchPngs } from './png-stitch.ts';
 import { renderArtboards, type InspectPage, type InspectResult, type PlannedArtboard } from './render.ts';
-import { areaEmpty, s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemCheckRender, type SystemCheckReport } from './system-static.ts';
+import { areaEmpty, s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemBoardShot, type SystemCheckRender, type SystemCheckReport } from './system-static.ts';
 
 export type SystemCheckRun = {
   report: SystemCheckReport;
@@ -162,6 +166,7 @@ export const runSystemCheck = async (
       drawn,
       widths: [],
       shots: [],
+      entryShots: [],
       findings: [{ code: 'browser-missing', file: null, screen: null, viewport: null }],
     });
   }
@@ -183,6 +188,7 @@ export const runSystemCheck = async (
         drawn,
         widths: [],
         shots: [],
+        entryShots: [],
         findings: [{ code: 'render-failed', file: BOARD_FILE, screen: null, viewport: null, detail: 'over 60 MB' }],
       });
     }
@@ -193,39 +199,76 @@ export const runSystemCheck = async (
   const knownExternal = new Set(components.flatMap((component) => component.example?.remote ?? []).map((url) => normalizeExternalUrl(url) ?? url));
 
   const shots: SystemCheckRender['shots'] = [];
-  let pngCount = 0;
+  const entryShots: SystemCheckRender['entryShots'] = [];
+  // What the pictures leave out, across both widths: one note per kind, not one per area and width.
+  const tilesShort: string[] = [];
+  const overviewShort: { label: string; coversPx: number }[] = [];
+  const boardMs = renderInput.budgets?.boardMs ?? SYSTEM_CHECK_BOARD_TIMEOUT_MS;
   const inspect = async (page: InspectPage, art: PlannedArtboard): Promise<InspectResult | null> => {
+    const started = Date.now();
     const raw = await page.evaluate(`${renderInput.probeSource};__dcProbe.collectBoard()`, { awaitPromise: false });
     const probe = sanitizeBoardProbe(raw);
     if (probe === null) return null;
     const width = SYSTEM_CHECK_BOARD_WIDTHS.find((candidate) => candidate.id === art.viewport.id);
     if (width === undefined) return null;
     const findings = analyzeBoard(probe, { width, widest: width.id === 'wide', layoutOf: (entry) => layoutOfEntry(drawDetail, entry), fileOf: fileOfEntry });
-    const pngs: string[] = [];
-    for (const area of SYSTEM_AREAS) {
-      // An uncovered empty area only says "Not covered"; nothing to picture.
-      if (!drawDetail.coverage.includes(area) && areaEmpty(drawDetail, area)) continue;
+
+    // Entries with a finding at this width, with their boxes: their bands are pictured first.
+    const flaggedKeys = new Set(findings.map((finding) => finding.detail).filter((key): key is string => key !== undefined && isBoardEntryKey(key)));
+    const flagged = probe.items.filter((item) => flaggedKeys.has(item.entry)).map((item) => ({ entry: item.entry, top: item.box.y, bottom: item.box.y + item.box.h }));
+    const shown = SYSTEM_AREAS.filter((area) => drawDetail.coverage.includes(area) || !areaEmpty(drawDetail, area)).flatMap((area) => {
       const measured = probe.areas.find((candidate) => candidate.area === area);
-      const top = measured?.top ?? 0;
-      const height = measured?.height ?? 0;
-      const tileHeight = width.height;
-      const tiles = Math.min(SYSTEM_CHECK_TILES_PER_AREA, Math.max(1, Math.ceil(height / tileHeight)));
-      if (height > SYSTEM_CHECK_TILES_PER_AREA * tileHeight) {
-        findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: width.id, params: { area, max: SYSTEM_CHECK_TILES_PER_AREA * tileHeight, width: width.width } });
-      }
+      return measured === undefined ? [] : [{ area, top: measured.top, height: measured.height }];
+    });
+    const plans = planBoardPictures({
+      areas: shown,
+      flagged,
+      viewportWidth: width.width,
+      tileHeight: width.height,
+      tilePixels: Math.floor(SYSTEM_CHECK_TILE_PIXELS_MAX / SYSTEM_CHECK_BOARD_WIDTHS.length),
+      pngs: Math.floor(SYSTEM_CHECK_PNGS_MAX / SYSTEM_CHECK_BOARD_WIDTHS.length),
+    });
+
+    // Past this point only overview strips and finding tiles are still taken, so the width finishes in time.
+    const softDeadline = started + boardMs * SYSTEM_CHECK_OPTIONAL_TILES_TIME_SHARE;
+    const pngs: string[] = [];
+    const tilesTaken: { png: string; top: number; bottom: number }[] = [];
+    for (const plan of plans) {
+      const strips: Buffer[] = [];
+      const tiles: SystemBoardShot['tiles'] = [];
       const areaPngs: string[] = [];
-      for (let n = 1; n <= tiles && pngCount < SYSTEM_CHECK_PNGS_MAX; n += 1) {
-        const tileTop = top + (n - 1) * tileHeight;
-        const clipHeight = Math.min(tileHeight, top + height - tileTop);
-        if (clipHeight < 1) break;
-        await page.scrollTo(tileTop);
-        const bytes = await page.capture({ y: tileTop, height: clipHeight });
-        const rel = await page.save(area, n, tiles, bytes);
-        areaPngs.push(rel);
-        pngs.push(rel);
-        pngCount += 1;
+      for (const band of plan.bands) {
+        const tile = band.tile && (band.priority || Date.now() < softDeadline);
+        if (band.strip < 1 && !tile) continue;
+        await page.scrollTo(band.y);
+        if (band.strip >= 1) strips.push(await page.capture({ y: band.y, height: band.strip, scale: plan.scale }));
+        if (tile) {
+          const rel = await page.save(plan.area, band.index, plan.bands.length, await page.capture({ y: band.y, height: band.height }));
+          tiles.push({ png: rel, y: band.y - plan.top, height: band.height });
+          tilesTaken.push({ png: rel, top: band.y, bottom: band.y + band.height });
+          areaPngs.push(rel);
+        }
       }
-      if (areaPngs.length > 0) shots.push({ width: width.id, area, pngs: areaPngs });
+      let overview: SystemBoardShot['overview'] = null;
+      if (strips.length > 0) {
+        try {
+          const rel = await page.save(`${plan.area}-overview`, 1, 1, stitchPngs(strips));
+          overview = { png: rel, scale: plan.scale, coversPx: plan.coversPx };
+          areaPngs.unshift(rel);
+        } catch (error) {
+          // A strip Chrome drew that can't be stacked leaves this area with its tiles only; anything else is a real failure.
+          if (!(error instanceof PngStitchError)) throw error;
+        }
+      }
+      pngs.push(...areaPngs);
+      const label = `${plan.area} at ${width.width}px`;
+      if (tiles.length < plan.bands.length) tilesShort.push(`${label}: ${tiles.length} of ${plan.bands.length} full-size tiles`);
+      if (plan.coversPx < plan.height) overviewShort.push({ label, coversPx: plan.coversPx });
+      shots.push({ width: width.id, area: plan.area, heightPx: plan.height, overview, tiles });
+    }
+    for (const box of flagged) {
+      const showing = tilesTaken.filter((tile) => tile.top < box.bottom && tile.bottom > box.top).map((tile) => tile.png);
+      if (showing.length > 0) entryShots.push({ width: width.id, entry: box.entry, pngs: showing });
     }
     return { findings, docHeight: probe.scrollHeight, pngs };
   };
@@ -255,6 +298,13 @@ export const runSystemCheck = async (
     await space.checkAborted(renderInput.signal?.aborted === true || outcome.stoppedBy === 'aborted');
 
     const findings: CheckFindingData[] = boardFindings(outcome.findings, CHECK_FINDINGS_MAX);
+    if (tilesShort.length > 0) {
+      findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: null, params: { pictured: 'tiles', count: tilesShort.length }, detail: cleanDetail(tilesShort.join('; '), CHECK_DETAIL_MAX) });
+    }
+    if (overviewShort.length > 0) {
+      const coversPx = Math.min(...overviewShort.map((short) => short.coversPx));
+      findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: null, params: { pictured: 'overview', count: overviewShort.length, max: coversPx }, detail: cleanDetail(overviewShort.map((short) => short.label).join('; '), CHECK_DETAIL_MAX) });
+    }
     if (outcome.unavailable) {
       findings.push({ code: 'render-failed', file: null, screen: null, viewport: null, detail: "This browser build can't be driven. Set another browser in Settings." });
     }
@@ -262,8 +312,11 @@ export const runSystemCheck = async (
     const state: RenderCheckState = outcome.unavailable || okCount === 0 ? 'failed' : okCount < SYSTEM_CHECK_BOARD_WIDTHS.length ? 'partial' : 'done';
     // A width that failed after saving tiles names none of them: the report keeps only what it pictures.
     const kept = new Set(outcome.artboards.flatMap((artboard) => artboard.pngs));
-    const keptShots = shots.map((shot) => ({ ...shot, pngs: shot.pngs.filter((rel) => kept.has(rel)) })).filter((shot) => shot.pngs.length > 0);
-    const render: SystemCheckRender = { state, browser: browserClassOf(browserPath), drawn, widths: outcome.artboards, shots: keptShots, findings };
+    const keptShots = shots
+      .map((shot) => ({ ...shot, overview: shot.overview !== null && kept.has(shot.overview.png) ? shot.overview : null, tiles: shot.tiles.filter((tile) => kept.has(tile.png)) }))
+      .filter((shot) => shot.overview !== null || shot.tiles.length > 0);
+    const keptEntryShots = entryShots.map((shot) => ({ ...shot, pngs: shot.pngs.filter((rel) => kept.has(rel)) })).filter((shot) => shot.pngs.length > 0);
+    const render: SystemCheckRender = { state, browser: browserClassOf(browserPath), drawn, widths: outcome.artboards, shots: keptShots, entryShots: keptEntryShots, findings };
     const report = systemCheckReport({ ...base, render });
     const reportPath = await writeSystemCheckReport(systemDir, report);
     const keptRels = outcome.artboards.flatMap((artboard) => artboard.pngs);

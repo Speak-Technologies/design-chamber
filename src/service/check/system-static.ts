@@ -11,7 +11,7 @@
 
 import { cleanDetail, isDesignRelativeFile } from '../../shared/checks.ts';
 import { CHECK_DETAIL_MAX, CHECK_FINDINGS_MAX, SYSTEM_NOTE_MAX, SYSTEM_OVERVIEW_MAX } from '../../shared/limits.ts';
-import { AREA_OF_SECTION, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
+import { AREA_OF_SECTION, layoutPlaceTakes, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
 import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, RenderCheckState, SecretShapeKind, SystemArea, SystemDetail } from '../../shared/types.ts';
 import { capPerCode } from './analyze.ts';
 
@@ -27,6 +27,9 @@ const NOWHERE = { file: null, screen: null, viewport: null } as const;
 const namesDetail = (names: readonly string[]): string => cleanDetail(names.slice(0, 3).join(', '), CHECK_DETAIL_MAX);
 
 const covers = (detail: SystemDetail, area: SystemArea): boolean => detail.coverage.includes(area);
+
+/** Ignored hints that are known layouts in a place that doesn't take them. The listed ones are counted; past the list's cap the rest count as unknown. */
+const misplacedCount = (detail: SystemDetail): number => detail.boardLayout.ignored.filter((problem) => problem.reason === 'not-here').length;
 
 /**
  * Every static finding of one system, capped per code and in total like a design's. `source` is the
@@ -66,8 +69,16 @@ export const systemFindings = (source: Pick<SystemDetailSource, 'texts' | 'tooLa
       file: 'system.json',
       screen: null,
       viewport: null,
-      params: { count: detail.boardLayout.ignoredCount },
-      detail: namesDetail(detail.boardLayout.ignored.map((problem) => `${problem.entry}: ${problem.value}`)),
+      params: { count: detail.boardLayout.ignoredCount, misplaced: misplacedCount(detail) },
+      // Each one with what its place takes, so the agent knows what to write instead (an unknown word and a known
+      // layout in the wrong place read differently in the sentence; the detail names the fix for each).
+      detail: cleanDetail(
+        detail.boardLayout.ignored
+          .slice(0, 3)
+          .map((problem) => `${problem.entry}: ${problem.value} (${layoutPlaceTakes(problem.entry)})`)
+          .join('; '),
+        CHECK_DETAIL_MAX,
+      ),
     });
   }
 
@@ -278,9 +289,23 @@ export type SystemCheckRender = {
   drawn: { from: 'system' | 'proposal'; proposal: string | null };
   /** One artboard per width, `screen` null, in plan order. */
   widths: ArtboardCheck[];
-  /** The tiles by width and area, in area order; paths system-relative. */
-  shots: { width: SystemBoardWidthId; area: SystemArea; pngs: string[] }[];
+  /** The pictures by width and area, in area order; paths system-relative. */
+  shots: SystemBoardShot[];
+  /** For each entry with a finding: the full-size pictures that show it, by width. */
+  entryShots: { width: SystemBoardWidthId; entry: string; pngs: string[] }[];
   findings: CheckFindingData[];
+};
+
+/** One area at one width: its overview (the whole area scaled down) and its full-size tiles. */
+export type SystemBoardShot = {
+  width: SystemBoardWidthId;
+  area: SystemArea;
+  /** The area's height on the board, px. */
+  heightPx: number;
+  /** The area scaled to `scale`, covering its first `coversPx` (all of it unless the area is very tall); null if it couldn't be made. */
+  overview: { png: string; scale: number; coversPx: number } | null;
+  /** Full-size tiles, top to bottom; `y` is the tile's offset from the top of the area. */
+  tiles: { png: string; y: number; height: number }[];
 };
 
 /**

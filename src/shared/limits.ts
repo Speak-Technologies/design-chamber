@@ -503,10 +503,23 @@ export const SYSTEM_CHECK_BOARD_WIDTHS = [
   { id: 'wide', label: 'Wide board', width: 1526, height: 900 },
   { id: 'narrow', label: 'Narrow board', width: 1046, height: 900 },
 ] as const;
-/** Viewport-height tiles pictured per area per width (≤ 3 600px of an area). */
-export const SYSTEM_CHECK_TILES_PER_AREA = 4;
-/** PNGs per system check run: 2 widths × 4 areas × 4 tiles. */
-export const SYSTEM_CHECK_PNGS_MAX = 32;
+/**
+ * Full-size board pictures per run, in pixels, split evenly between the widths: about 32 000px of board
+ * at 1526px and 47 000px at 1046px, so a system the size of a full product (nexus: 25 000px) is pictured
+ * whole. Tiles around entries with a finding are taken first; past the budget the overview carries on.
+ */
+export const SYSTEM_CHECK_TILE_PIXELS_MAX = 100_000_000;
+/** Full-size tiles taken first around one entry with a finding (its top tiles). */
+export const SYSTEM_CHECK_ENTRY_TILES_MAX = 2;
+/** PNGs per system check run (overviews and full-size tiles), split evenly between the widths. */
+export const SYSTEM_CHECK_PNGS_MAX = 120;
+/** An area overview's height in pixels: the whole area, scaled to fit, within the scale bounds below. */
+export const SYSTEM_CHECK_OVERVIEW_HEIGHT_MAX = 4000;
+/** Overview scale bounds: never larger than half size; below a fifth an area's overview stops early. */
+export const SYSTEM_CHECK_OVERVIEW_SCALE_MAX = 0.5;
+export const SYSTEM_CHECK_OVERVIEW_SCALE_MIN = 0.2;
+/** Share of one width's time after which only overviews and finding tiles are still captured. */
+export const SYSTEM_CHECK_OPTIONAL_TILES_TIME_SHARE = 0.6;
 /** One board width's render budget. */
 export const SYSTEM_CHECK_BOARD_TIMEOUT_MS = 45_000;
 /** The whole system render's budget; the tool kills at CHECK_TOOL_TIMEOUT_MS (180s). */

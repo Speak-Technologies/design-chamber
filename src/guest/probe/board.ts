@@ -5,7 +5,7 @@
 // verdict; `sanitizeBoardProbe` and `analyzeBoard` (src/service/check/board-analyze.ts) re-check every
 // number and decide. It reads the DOM and never writes; the engine scrolls between tiles.
 
-import { SYSTEM_BOARD_ITEMS_MEASURED_MAX, SYSTEM_BOARD_PREVIEW_ELEMENTS_MAX, SYSTEM_BOARD_TEXT_NODES_PER_ITEM } from '../../shared/limits.ts';
+import { BOARD_ENTRY_MAX, SYSTEM_BOARD_ITEMS_MEASURED_MAX, SYSTEM_BOARD_PREVIEW_ELEMENTS_MAX, SYSTEM_BOARD_TEXT_NODES_PER_ITEM } from '../../shared/limits.ts';
 import type { BoardProbe, BoardProbeItem, BoardProbePreview } from '../../service/check/board-analyze.ts';
 import { visuallyHidden } from './probe.ts';
 
@@ -61,7 +61,7 @@ export const collectBoard = (): BoardProbe => {
     const element = areaElements[index];
     if (!element) continue;
     const rect = element.getBoundingClientRect();
-    areas.push({ area: element.getAttribute('data-dc-area') ?? '', top: rect.top + window.scrollY, height: rect.height });
+    areas.push({ area: (element.getAttribute('data-dc-area') ?? '').slice(0, 40), top: rect.top + window.scrollY, height: rect.height });
   }
 
   const items: BoardProbeItem[] = [];
@@ -125,7 +125,8 @@ export const collectBoard = (): BoardProbe => {
     }
 
     items.push({
-      entry: entry.getAttribute('data-dc-entry') ?? '',
+      // Clipped here, before the answer leaves the page: page script could set a huge attribute value.
+      entry: (entry.getAttribute('data-dc-entry') ?? '').slice(0, BOARD_ENTRY_MAX),
       widened: entry.classList.contains('dc-wide'),
       box,
       previews,

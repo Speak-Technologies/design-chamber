@@ -157,9 +157,11 @@ export const analyzeBoard = (probe: BoardProbe, ctx: BoardAnalyzeContext): Check
     // A forged or malformed key never reaches a sentence: it is shown as data only when well-formed.
     if (!isBoardEntryKey(item.entry)) continue;
     const at = { file: ctx.fileOf(item.entry), screen: null, viewport: ctx.width.id };
+    let previewTooWide = false;
     for (const preview of item.previews) {
       const wide = Math.max(preview.scrollW, preview.contentRight);
       if (wide > preview.w + 1) {
+        previewTooWide = true;
         findings.push({ code: 'system-board-preview-wide', ...at, params: { px: Math.round(wide), width: Math.round(preview.w) }, detail: item.entry });
       }
       const outside = Math.max(preview.outLeft, preview.outTop, preview.outBottom);
@@ -170,14 +172,15 @@ export const analyzeBoard = (probe: BoardProbe, ctx: BoardAnalyzeContext): Check
     if (item.textOut > 1) {
       findings.push({ code: 'system-board-text-outside', ...at, params: { px: Math.round(item.textOut) }, detail: item.entry });
     }
-    if (item.widened && ctx.widest) {
+    // A preview still too wide after widening needs a smaller example, not a bigger layout: no hint then.
+    if (item.widened && ctx.widest && !previewTooWide) {
       const layout = ctx.layoutOf(item.entry);
       if (layout !== 'full') findings.push({ code: 'system-board-hint-small', ...at, params: { layout }, detail: item.entry });
     }
   }
 
   if (probe.truncated) {
-    findings.push({ code: 'system-board-partial', ...where, params: { max: SYSTEM_BOARD_ITEMS_MEASURED_MAX } });
+    findings.push({ code: 'system-board-partial', ...where, params: { pictured: 'entries', max: SYSTEM_BOARD_ITEMS_MEASURED_MAX } });
   }
   return findings;
 };

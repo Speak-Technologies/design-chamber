@@ -18,7 +18,7 @@ import {
   withMessage,
 } from '../../src/shared/checks.ts';
 import { CHECK_DETAIL_MAX, CHECK_FILE_MAX_BYTES, CHECK_FINDINGS_MAX, CHECK_SELECTOR_MAX } from '../../src/shared/limits.ts';
-import type { CheckFindingData, Viewport } from '../../src/shared/types.ts';
+import type { CheckFindingData, CheckParams, Viewport } from '../../src/shared/types.ts';
 
 const viewports: Viewport[] = [
   { id: 'laptop', label: 'Laptop', width: 1280, height: 800 },
@@ -422,18 +422,45 @@ test('the seven board codes: severity and sentence come from the table only', ()
     findingMessage(board('system-board-hint-small', { params: { layout: 'compact' } }), boardWidths),
     'components/table.html @ Wide board 1526×900: this entry is set to compact but needed the full width. Set its layout to full.',
   );
+  const partial = (params: CheckParams): string => findingMessage({ code: 'system-board-partial', file: 'board.html', screen: null, viewport: null, params }, boardWidths);
   assert.equal(
-    findingMessage(board('system-board-partial', { file: 'board.html', params: { area: 'components', max: 3600, width: 1526 } }), boardWidths),
-    'Only the first 3600px of Components were pictured at 1526px; all of it was measured.',
+    partial({ pictured: 'tiles', count: 2 }),
+    '2 areas have full-size pictures only for part of their length (the picture limit for one check); their overview pictures show all of them, and all of the board was measured.',
   );
   assert.equal(
-    findingMessage(board('system-board-partial', { file: 'board.html', params: { max: 1000 } }), boardWidths),
-    'Only the first 1000 entries were measured.',
+    partial({ pictured: 'overview', count: 1, max: 20000 }),
+    'The overview pictures of 1 areas stop after 20000px of board; the full-size pictures go further, and all of the board was measured.',
   );
+  assert.equal(partial({ pictured: 'entries', max: 1000 }), 'Only the first 1000 entries were measured.');
+  const layout = (params: CheckParams): string => findingMessage({ code: 'system-layout-invalid', file: 'system.json', screen: null, viewport: null, params });
+  assert.equal(layout({ count: 2 }), "system.json asks for 2 board layouts Design Chamber doesn't know, so those entries use the default. Each one listed says what its place takes.");
+  assert.equal(layout({ count: 2, misplaced: 2 }), "system.json asks for 2 board layouts in places that don't take them, so those entries use the default. Each one listed says what its place takes.");
   assert.equal(
-    findingMessage({ code: 'system-layout-invalid', file: 'system.json', screen: null, viewport: null, params: { count: 2 } }),
-    "system.json asks for 2 board layouts Design Chamber doesn't know, so those entries use the default.",
+    layout({ count: 3, misplaced: 1 }),
+    "system.json asks for 3 board layouts it can't use (2 Design Chamber doesn't know, 1 in places that don't take them), so those entries use the default. Each one listed says what its place takes.",
   );
+  // A forged misplaced count above the total is held to it.
+  assert.equal(layout({ count: 1, misplaced: 9 }), "system.json asks for 1 board layouts in places that don't take them, so those entries use the default. Each one listed says what its place takes.");
+});
+
+test('parseParams keeps misplaced as a number and pictured only from its closed set', () => {
+  const report = parseCheckReport({
+    version: 1,
+    slug: 'demo',
+    kind: 'page',
+    createdAt: '2026-11-08T10:15:00.000Z',
+    tool: 'cli',
+    static: {
+      findings: [
+        { code: 'system-layout-invalid', file: 'system.json', screen: null, viewport: null, params: { count: 2, misplaced: 1 } },
+        { code: 'system-board-partial', file: 'board.html', screen: null, viewport: null, params: { pictured: 'tiles', count: 1 } },
+        { code: 'system-board-partial', file: 'board.html', screen: null, viewport: null, params: { pictured: 'everything', count: 1 } },
+      ],
+    },
+    render: null,
+  });
+  assert.ok(report !== null);
+  assert.deepEqual(report.static.findings.map((finding) => finding.params), [{ count: 2, misplaced: 1 }, { pictured: 'tiles', count: 1 }, { count: 1 }]);
 });
 
 test('parseParams keeps layout only from the closed set; a forged value never reaches the sentence', () => {

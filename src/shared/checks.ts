@@ -60,7 +60,7 @@ const systemNameOf = (f: CheckFindingData): string => f.params?.system ?? 'the d
 /** The repo folder's base name ("shop" in the spec's examples). */
 const repoNameOf = (f: CheckFindingData): string => f.params?.repo ?? 'the repo';
 
-const AREA_LABELS: Readonly<Record<SystemArea, string>> = {
+export const AREA_LABELS: Readonly<Record<SystemArea, string>> = {
   foundations: 'Foundations',
   components: 'Components',
   patterns: 'Patterns & voice',
@@ -340,7 +340,14 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
   // Board layout hints and the visual system check (documentation/specs/system-board-layout-and-visual-check.md §B.6).
   'system-layout-invalid': {
     severity: 'warning',
-    sentence: (f) => `system.json asks for ${num(f.params?.count)} board layouts Design Chamber doesn't know, so those entries use the default.`,
+    sentence: (f) => {
+      const count = Math.round(f.params?.count ?? 0);
+      const misplaced = Math.min(count, Math.round(f.params?.misplaced ?? 0));
+      const tail = 'so those entries use the default. Each one listed says what its place takes.';
+      if (misplaced === 0) return `system.json asks for ${num(count)} board layouts Design Chamber doesn't know, ${tail}`;
+      if (misplaced === count) return `system.json asks for ${num(count)} board layouts in places that don't take them, ${tail}`;
+      return `system.json asks for ${num(count)} board layouts it can't use (${num(count - misplaced)} Design Chamber doesn't know, ${num(misplaced)} in places that don't take them), ${tail}`;
+    },
   },
   'system-board-overflow': {
     severity: 'warning',
@@ -364,10 +371,12 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
   },
   'system-board-partial': {
     severity: 'info',
-    sentence: (f) =>
-      f.params?.area !== undefined
-        ? `Only the first ${num(f.params?.max)}px of ${AREA_LABELS[f.params.area]} were pictured at ${num(f.params?.width)}px; all of it was measured.`
-        : `Only the first ${num(f.params?.max)} entries were measured.`,
+    sentence: (f) => {
+      if (f.params?.pictured === 'entries') return `Only the first ${num(f.params?.max)} entries were measured.`;
+      if (f.params?.pictured === 'overview')
+        return `The overview pictures of ${num(f.params?.count)} areas stop after ${num(f.params?.max)}px of board; the full-size pictures go further, and all of the board was measured.`;
+      return `${num(f.params?.count)} areas have full-size pictures only for part of their length (the picture limit for one check); their overview pictures show all of them, and all of the board was measured.`;
+    },
   },
 };
 
@@ -493,7 +502,7 @@ const PNGS_MAX = 4;
 const ENTRIES_MAX = 200;
 const PX_MAX = 1_000_000;
 
-const PARAM_NUMBERS = ['px', 'width', 'ratio', 'min', 'count', 'max', 'revision', 'from', 'unread'] as const;
+const PARAM_NUMBERS = ['px', 'width', 'ratio', 'min', 'count', 'max', 'revision', 'from', 'unread', 'misplaced'] as const;
 
 const AREAS: readonly SystemArea[] = ['foundations', 'components', 'patterns', 'brand'];
 const SECRET_KINDS: readonly SecretShapeKind[] = ['aws-key', 'github-token', 'openai-style-key', 'slack-token', 'google-key', 'private-key'];
@@ -555,6 +564,7 @@ const parseParams = (value: unknown): CheckParams | undefined => {
   if (proposal !== null) out.proposal = proposal;
   const layout = oneOf(value.layout, BOARD_LAYOUTS);
   if (layout !== null) out.layout = layout;
+  if (value.pictured === 'tiles' || value.pictured === 'overview' || value.pictured === 'entries') out.pictured = value.pictured;
   return Object.keys(out).length > 0 ? out : undefined;
 };
 

@@ -46,7 +46,8 @@ export type LoadedDocument = { ok: true; html: string } | { ok: false; reason: '
 export type InspectPage = {
   evaluate: (expression: string, options: { awaitPromise: boolean }) => Promise<unknown>;
   scrollTo: (y: number) => Promise<void>;
-  capture: (clip: { y: number; height: number }) => Promise<Buffer>;
+  /** A PNG of the clip (document coordinates, the viewport's width); `scale` below 1 draws it smaller (overview strips). */
+  capture: (clip: { y: number; height: number; scale?: number }) => Promise<Buffer>;
   save: (label: string, part: number, parts: number, bytes: Buffer) => Promise<string>;
 };
 
@@ -272,7 +273,7 @@ const renderOne = async (
           guard();
         },
         capture: async (clip) => {
-          const shot = await page.send<{ data: string }>('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: clip.y, width: viewport.width, height: clip.height, scale: 1 } });
+          const shot = await page.send<{ data: string }>('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: clip.y, width: viewport.width, height: clip.height, scale: clip.scale ?? 1 } });
           guard();
           return Buffer.from(shot.data, 'base64');
         },

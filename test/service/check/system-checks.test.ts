@@ -13,7 +13,7 @@ import { test, type TestContext } from 'node:test';
 import { designSystemFindings, runStaticChecks, type DesignSystemInput } from '../../../src/service/check/static.ts';
 import { exitCodeOf, formatSystemCheckText, parseArgs, systemFindingsOf } from '../../../src/service/check/report-text.ts';
 import { cliSystemStore, runSystemCheck, writeSystemCheckReport } from '../../../src/service/check/system-run.ts';
-import { systemFindings } from '../../../src/service/check/system-static.ts';
+import { systemCheckReport, systemFindings } from '../../../src/service/check/system-static.ts';
 import { resolveSystemTarget } from '../../../src/service/check/target.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
 import { registerSystemChecksRoutes } from '../../../src/service/routes/system-checks.ts';
@@ -273,9 +273,17 @@ test('systemFindings: ignored layout hints are one warning with the true count a
   const layout = findings.filter((finding) => finding.code === 'system-layout-invalid');
   assert.equal(layout.length, 1);
   assert.equal(layout[0]?.params?.count, 5, 'two section defaults and three entry hints');
-  assert.equal(layout[0]?.detail, 'layout.typography: card, layout.colours: full, components.a: wide');
+  assert.equal(layout[0]?.params?.misplaced, 2, 'typography: card and colours: full are known layouts in the wrong place');
+  // Each one says what its place takes, so the agent knows what to write instead.
+  assert.equal(
+    layout[0]?.detail,
+    'layout.typography: card (typography takes no layout); layout.colours: full (takes card, compact or table); components.a: wide (takes card, compact, full or table)',
+  );
   assert.equal(layout[0]?.file, 'system.json');
-  assert.equal(findingMessage(layout[0] as CheckFindingData), "system.json asks for 5 board layouts Design Chamber doesn't know, so those entries use the default.");
+  assert.equal(
+    findingMessage(layout[0] as CheckFindingData),
+    "system.json asks for 5 board layouts it can't use (3 Design Chamber doesn't know, 2 in places that don't take them), so those entries use the default. Each one listed says what its place takes.",
+  );
   // The entries themselves are fine: no system-entry-invalid for the hints.
   assert.ok(!findings.some((finding) => finding.code === 'system-entry-invalid'));
   // A sound hint raises nothing.
@@ -367,6 +375,45 @@ test('runSystemCheck with no browser: the render is unavailable with the note, t
   } finally {
     await store.dispose();
   }
+});
+
+test('the board pictures block: the run folder once, an overview and the full-size pictures per area, the picture on each finding', () => {
+  const run = '.chamber/check/r-20261126101500-a1b2c3';
+  const tiles = (area: string, width: string, count: number) =>
+    Array.from({ length: count }, (_, index) => ({ png: `${run}/${area}@${width}${index === 0 ? '' : `-${index + 1}`}.png`, y: index * 900, height: 900 }));
+  const report = systemCheckReport({
+    id: 'acme',
+    findings: [],
+    now: new Date(AT),
+    tool: 'cli',
+    render: {
+      state: 'done',
+      browser: 'chrome',
+      drawn: { from: 'system', proposal: null },
+      widths: [],
+      shots: [
+        { width: 'wide', area: 'foundations', heightPx: 2700, overview: { png: `${run}/foundations-overview@wide.png`, scale: 0.5, coversPx: 2700 }, tiles: tiles('foundations', 'wide', 3) },
+        // Over the budget: only some tiles, so each is named and the overview is pointed at.
+        { width: 'wide', area: 'components', heightPx: 2700, overview: { png: `${run}/components-overview@wide.png`, scale: 0.4, coversPx: 2000 }, tiles: [tiles('components', 'wide', 3)[2] as { png: string; y: number; height: number }] },
+        { width: 'narrow', area: 'foundations', heightPx: 400, overview: null, tiles: tiles('foundations', 'narrow', 1) },
+      ],
+      entryShots: [{ width: 'wide', entry: 'component:table', pngs: [`${run}/components@wide-3.png`] }],
+      findings: [
+        { code: 'system-board-preview-wide', file: 'components/table.html', screen: null, viewport: 'wide', params: { px: 1800, width: 1396 }, detail: 'component:table' },
+        { code: 'system-board-text-outside', file: 'board.html', screen: null, viewport: 'narrow', params: { px: 4 }, detail: 'token:--brand' },
+      ],
+    },
+  });
+  const text = formatSystemCheckText({ report, name: 'Acme', reportPath: null, runDir: '/d/_systems/acme/.chamber/check/r-20261126101500-a1b2c3' });
+  assert.ok(text.includes('Board pictures (light scheme) in /d/_systems/acme/.chamber/check/r-20261126101500-a1b2c3. Open them and look before you say you are done.'));
+  assert.ok(text.includes('  Wide board 1526px:\n    Foundations, 2700px tall: overview foundations-overview@wide.png (50%); full size foundations@wide.png to foundations@wide-3.png\n'));
+  assert.ok(text.includes('    Components, 2700px tall: overview components-overview@wide.png (40%, its first 2000px); full size components@wide-3.png (the rest of the area only in its overview)'));
+  assert.ok(text.includes('  Narrow board 1046px:\n    Foundations, 400px tall: no overview; full size foundations@narrow.png'));
+  // The folder is printed once; pictures are named inside it.
+  assert.equal(text.split('/d/_systems/acme/.chamber/check/').length - 1, 1);
+  // A finding about an entry names the full-size picture that shows it; one without a picture says nothing more.
+  assert.match(text, /this example is 1800px wide but the board can give it 1396px, so it scrolls sideways in its card\. "component:table" Picture: components@wide-3\.png\./);
+  assert.match(text, /text runs 4px outside its card\. "token:--brand"\n/);
 });
 
 // ---- the route ----

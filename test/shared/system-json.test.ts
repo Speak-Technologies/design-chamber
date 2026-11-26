@@ -22,6 +22,7 @@ import {
   parseSystemJson,
   parseSystemState,
   readItemLayout,
+  layoutPlaceTakes,
   readSectionLayouts,
   safeAssetName,
   sectionFingerprints,
@@ -614,6 +615,29 @@ describe('board layout hints (system-board-layout-and-visual-check.md §A)', () 
       { entry: 'layout.spacing', value: 'number', reason: 'unknown' },
     ]);
     assert.equal(s.ignoredCount, 8);
+  });
+
+  test('readSectionLayouts: notes is another name for the overview default; an explicit overview wins', () => {
+    const s = sink();
+    assert.deepEqual(readSectionLayouts({ layout: { notes: 'full' } }, s), { overview: 'full' });
+    assert.deepEqual(readSectionLayouts({ layout: { notes: 'full', overview: 'table' } }, s), { overview: 'table' });
+    assert.deepEqual(readSectionLayouts({ layout: { overview: 'table', notes: 'full' } }, s), { overview: 'table' });
+    assert.deepEqual(s.ignored, [], 'a superseded alias is not a problem');
+    // A bad notes value is reported under the name the agent wrote.
+    assert.deepEqual(readSectionLayouts({ layout: { notes: 'huge' } }, s), {});
+    assert.deepEqual(s.ignored, [{ entry: 'layout.notes', value: 'huge', reason: 'unknown' }]);
+  });
+
+  test('layoutPlaceTakes: what each place takes, for the warning', () => {
+    assert.equal(layoutPlaceTakes('layout.typography'), 'typography takes no layout');
+    assert.equal(layoutPlaceTakes('layout.colours'), 'takes card, compact or table');
+    assert.equal(layoutPlaceTakes('layout.notes'), 'takes card, compact, full or table');
+    assert.equal(layoutPlaceTakes('layout.components'), 'takes card, compact, full or table');
+    assert.equal(layoutPlaceTakes('layout.nope'), 'not a section that takes a layout');
+    assert.equal(layoutPlaceTakes('layout.__proto__'), 'not a section that takes a layout');
+    assert.equal(layoutPlaceTakes('layout'), 'layout must be an object of section defaults');
+    assert.equal(layoutPlaceTakes('components.table'), 'takes card, compact, full or table');
+    assert.equal(layoutPlaceTakes('patterns[3]'), 'takes card, compact, full or table');
   });
 
   test('readSectionLayouts: a __proto__ key is an ordinary ignored key, and a long key is clipped to 40', () => {

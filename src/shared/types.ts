@@ -528,6 +528,14 @@ export type CheckParams = {
   proposal?: ProposalProblemReason;
   /** `system-board-hint-small` only: the entry's effective board layout (a `BOARD_LAYOUTS` value). */
   layout?: BoardLayout;
+  /** `system-layout-invalid` only: how many of `count` are known layouts in a place that doesn't take them. */
+  misplaced?: number;
+  /**
+   * `system-board-partial` only: what was left out. `tiles` = some areas have no full-size pictures past a
+   * point (their overview shows them), `overview` = an area's overview stops early, `entries` = entries past
+   * `max` weren't measured.
+   */
+  pictured?: 'tiles' | 'overview' | 'entries';
 };
 
 /** A finding as `check.json` stores it. `detail` and `selector` are untrusted design text. */

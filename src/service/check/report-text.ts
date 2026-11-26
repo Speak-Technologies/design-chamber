@@ -3,10 +3,10 @@
 // messages), so it says once, up front, that those are data.
 
 import { codeSpan } from '../../shared/agent/context.ts';
-import { cleanDetail, countFindings, sortFindings, withMessage } from '../../shared/checks.ts';
+import { AREA_LABELS, cleanDetail, countFindings, sortFindings, withMessage } from '../../shared/checks.ts';
 import { CHECK_TEXT_SHOWN, SCREEN_ID_PATTERN, SYSTEM_CHECK_BOARD_WIDTHS, SYSTEM_ID_PATTERN } from '../../shared/limits.ts';
 import type { CheckFinding, CheckReport, DesignJson, SystemArea } from '../../shared/types.ts';
-import type { SystemCheckReport } from './system-static.ts';
+import type { SystemBoardShot, SystemCheckReport } from './system-static.ts';
 
 // ---- arguments ----
 
@@ -190,8 +190,8 @@ export type SystemTextInput = {
   reportPath: string | null;
   /** Absolute PNG paths in width and area order (as the run saved them). */
   pngs?: readonly string[];
-  /** The board pictures by width and area, absolute paths (the text block). */
-  shots?: readonly { width: string; area: SystemArea; pngs: string[] }[];
+  /** The run folder the pictures are in, absolute (printed once; the pictures are named inside it). */
+  runDir?: string | null;
 };
 
 /** The two board widths as viewports, so a board finding's sentence names "Wide board 1526×900". */
@@ -200,6 +200,52 @@ const BOARD_WIDTH_VIEWPORTS = SYSTEM_CHECK_BOARD_WIDTHS.map((width) => ({ id: wi
 /** The system's findings (static and measured) with severity and sentence, errors first. */
 export const systemFindingsOf = (report: SystemCheckReport): CheckFinding[] =>
   sortFindings([...report.static.findings, ...(report.render?.findings ?? [])].map((finding) => withMessage(finding, BOARD_WIDTH_VIEWPORTS)));
+
+/** A picture's file name (the run folder is printed once). */
+const fileName = (rel: string): string => rel.slice(rel.lastIndexOf('/') + 1);
+
+/** " Picture: components@wide-4.png." for a board finding about one entry, when a full-size tile shows it. */
+const pictureNote = (finding: CheckFinding, render: SystemCheckReport['render']): string => {
+  if (render === null || finding.detail === undefined || finding.viewport === null) return '';
+  const shot = render.entryShots.find((candidate) => candidate.width === finding.viewport && candidate.entry === finding.detail);
+  if (shot === undefined || shot.pngs.length === 0) return '';
+  return ` ${shot.pngs.length > 1 ? 'Pictures' : 'Picture'}: ${shot.pngs.map(fileName).join(', ')}.`;
+};
+
+/** The full-size tiles of one area: "a.png to b.png" when they run unbroken from the top, else each name. */
+const tileList = (shot: SystemBoardShot, tileHeight: number): string => {
+  if (shot.tiles.length === 0) return 'no full-size pictures (the overview shows it)';
+  const names = shot.tiles.map((tile) => fileName(tile.png));
+  const unbroken = shot.tiles.every((tile, index) => tile.y === index * tileHeight);
+  const all = shot.tiles.length === Math.ceil(shot.heightPx / tileHeight);
+  const first = names[0] ?? '';
+  const last = names[names.length - 1] ?? '';
+  if (unbroken && all) return names.length === 1 ? `full size ${first}` : `full size ${first} to ${last}`;
+  return `full size ${names.join(', ')} (the rest of the area only in its overview)`;
+};
+
+/** The board pictures block: the run folder once, then per width and area the overview and the tiles. */
+const boardPictureLines = (render: NonNullable<SystemCheckReport['render']>, runDir: string | null): string[] => {
+  if (render.shots.length === 0) return ['', 'No board pictures were saved.'];
+  const lines = [
+    '',
+    `Board pictures (light scheme)${runDir === null ? '' : ` in ${runDir}`}. Open them and look before you say you are done.`,
+    'Each area has an overview (the whole area scaled down: open it first to see the layout) and full-size pictures 900px tall, top to bottom, for detail. A finding above names the picture that shows it.',
+  ];
+  for (const width of SYSTEM_CHECK_BOARD_WIDTHS) {
+    const ofWidth = render.shots.filter((shot) => shot.width === width.id);
+    if (ofWidth.length === 0) continue;
+    lines.push(`  ${width.label} ${width.width}px:`);
+    for (const shot of ofWidth) {
+      const overview =
+        shot.overview === null
+          ? 'no overview'
+          : `overview ${fileName(shot.overview.png)} (${Math.round(shot.overview.scale * 100)}%${shot.overview.coversPx < shot.heightPx ? `, its first ${shot.overview.coversPx}px` : ''})`;
+      lines.push(`    ${AREA_LABELS[shot.area]}, ${shot.heightPx}px tall: ${overview}; ${tileList(shot, width.height)}`);
+    }
+  }
+  return lines;
+};
 
 /** The text `dc check --system` prints: the findings, then the board pictures to look at. */
 export const formatSystemCheckText = (input: SystemTextInput): string => {
@@ -221,7 +267,7 @@ export const formatSystemCheckText = (input: SystemTextInput): string => {
     lines.push('', title);
     for (const finding of group) {
       number += 1;
-      lines.push(`  ${number}. ${lineOf(finding)}`);
+      lines.push(`  ${number}. ${lineOf(finding)}${pictureNote(finding, input.report.render)}`);
     }
   }
   if (findings.length > CHECK_TEXT_SHOWN) lines.push('', `and ${findings.length - CHECK_TEXT_SHOWN} more in ${input.reportPath ?? 'the report'}`);
@@ -233,18 +279,7 @@ export const formatSystemCheckText = (input: SystemTextInput): string => {
     lines.push('', "No Chrome, Edge or Chromium was found, so the board wasn't drawn. Only the files were checked.");
   } else {
     if (render.drawn.from === 'proposal') lines.push('', `Drew the proposed board (proposal ${render.drawn.proposal ?? 'unknown'}).`);
-    const shots = input.shots ?? [];
-    if (shots.length === 0) {
-      lines.push('', 'No board pictures were saved.');
-    } else {
-      lines.push('', 'Board pictures (light scheme). Open them and look before you say you are done:');
-      for (const width of SYSTEM_CHECK_BOARD_WIDTHS) {
-        const ofWidth = shots.filter((shot) => shot.width === width.id);
-        if (ofWidth.length === 0) continue;
-        const pngs = ofWidth.flatMap((shot) => shot.pngs);
-        lines.push(`  ${width.label} ${width.width}px: ${pngs.join(', ')}`);
-      }
-    }
+    lines.push(...boardPictureLines(render, input.runDir ?? null));
   }
 
   if (input.reportPath !== null) lines.push('', `Full report: ${input.reportPath}`);

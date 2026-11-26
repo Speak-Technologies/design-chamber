@@ -14,6 +14,7 @@ import { test } from 'node:test';
 
 import { build } from 'esbuild';
 
+import { SYSTEM_CHECK_PNGS_MAX } from '../../src/shared/limits.ts';
 import { findTestBrowser } from '../helpers/chrome-or-skip.ts';
 import { probeSource } from '../helpers/probe-source.ts';
 import { useTmpRoot, type TmpRoot } from '../helpers/tmp-root.ts';
@@ -150,27 +151,42 @@ test('the visual check draws the board at two widths, saves pictures and lists t
 
   const drawn = await dc(tmp, ['check', '--system', 'acme']);
   assert.equal(drawn.code, 0, drawn.err);
-  assert.match(drawn.out, /Board pictures \(light scheme\)\. Open them and look before you say you are done:/);
-  assert.match(drawn.out, /Wide board 1526px: /);
-  assert.match(drawn.out, /Narrow board 1046px: /);
-  assert.match(drawn.out, /foundations@wide\.png/);
+  // The run folder once, then per width and area the overview and the full-size pictures, by name.
+  const runDir = /Board pictures \(light scheme\) in (\S+)\. Open them and look before you say you are done\./.exec(drawn.out)?.[1];
+  assert.ok(runDir !== undefined && runDir.startsWith(tmp.at('_systems/acme/.chamber/check/r-')), drawn.out);
+  assert.match(drawn.out, /Each area has an overview \(the whole area scaled down: open it first to see the layout\)/);
+  assert.match(drawn.out, /\n {2}Wide board 1526px:\n {4}Foundations, \d+px tall: overview foundations-overview@wide\.png \(50%\); full size foundations@wide\.png/);
+  assert.match(drawn.out, /\n {2}Narrow board 1046px:\n/);
+  assert.ok(!drawn.out.includes(`${runDir}${path.sep}foundations`), 'names, not a repeated folder');
 
   const report = JSON.parse(await tmp.read('_systems/acme/.chamber/check.json')) as {
-    render: { state: string; drawn: { from: string }; widths: { viewport: string; ok: boolean; pngs: string[] }[]; shots: { width: string; area: string; pngs: string[] }[]; findings: unknown[] };
+    render: {
+      state: string;
+      drawn: { from: string };
+      widths: { viewport: string; ok: boolean; pngs: string[] }[];
+      shots: { width: string; area: string; heightPx: number; overview: { png: string; scale: number; coversPx: number } | null; tiles: { png: string; y: number; height: number }[] }[];
+      findings: unknown[];
+    };
   };
   assert.equal(report.render.state, 'done');
   assert.deepEqual(report.render.drawn, { from: 'system', proposal: null });
   assert.deepEqual(report.render.widths.map((width) => width.viewport), ['wide', 'narrow']);
   assert.ok(report.render.widths.every((width) => width.ok));
   const pngRels = report.render.widths.flatMap((width) => width.pngs);
-  assert.ok(pngRels.length > 0 && pngRels.length <= 32, `${pngRels.length} PNGs`);
+  assert.ok(pngRels.length > 0 && pngRels.length <= SYSTEM_CHECK_PNGS_MAX, `${pngRels.length} PNGs`);
+  const overviews = new Set(report.render.shots.flatMap((shot) => (shot.overview === null ? [] : [shot.overview.png])));
+  assert.equal(overviews.size, report.render.shots.length, 'every pictured area has an overview');
   for (const rel of pngRels) {
     const bytes = await readFile(tmp.at(`_systems/acme/${rel}`));
     assert.deepEqual([...bytes.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const width = bytes.readUInt32BE(16);
     const height = bytes.readUInt32BE(20);
-    assert.ok(width === 1526 || width === 1046, `width ${width}`);
-    assert.ok(height >= 1 && height <= 900, `height ${height}`);
+    if (overviews.has(rel)) {
+      assert.ok(width === 763 || width === 523, `overview width ${width} (half of 1526 or 1046)`);
+    } else {
+      assert.ok(width === 1526 || width === 1046, `width ${width}`);
+      assert.ok(height >= 1 && height <= 900, `height ${height}`);
+    }
   }
 
   const json = await dc(tmp, ['check', '--system', 'acme', '--json']);

@@ -559,6 +559,15 @@ export const readSectionLayouts = (raw: JsonObject | null, sink: LayoutIgnoredSi
   }
   for (const key of Object.keys(value)) {
     const entryValue = own(value, key) ?? null;
+    const alias = Object.hasOwn(SECTION_LAYOUT_ALIASES, key) ? SECTION_LAYOUT_ALIASES[key] : undefined;
+    if (alias !== undefined) {
+      if (!isBoardLayout(entryValue) || LAYOUTS_OF_SECTION[alias]?.includes(entryValue) !== true) {
+        noteIgnored(sink, { entry: `layout.${key}`, value: layoutValueText(entryValue), reason: isBoardLayout(entryValue) ? 'not-here' : 'unknown' });
+      } else if (own(value, alias) === undefined) {
+        out[alias] = entryValue;
+      }
+      continue;
+    }
     if (!isSystemSection(key)) {
       const shown = key.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').trim().slice(0, 40);
       noteIgnored(sink, { entry: `layout.${shown}`, value: layoutValueText(entryValue), reason: 'unknown' });
@@ -573,6 +582,27 @@ export const readSectionLayouts = (raw: JsonObject | null, sink: LayoutIgnoredSi
     }
   }
   return out;
+};
+
+/** `notes` is another name for the `overview` section default (notes are listed under `notes[]`); an explicit `overview` wins. */
+const SECTION_LAYOUT_ALIASES: Readonly<Record<string, SystemSection>> = Object.freeze({ notes: 'overview' });
+
+const orList = (values: readonly string[]): string => (values.length < 2 ? values.join('') : `${values.slice(0, -1).join(', ')} or ${values[values.length - 1] ?? ''}`);
+
+/**
+ * What the place an ignored hint was written in takes, for the check's detail (one short phrase):
+ * `layout.typography` → "typography takes no layout", `components.table` → "takes card, compact, full or table".
+ */
+export const layoutPlaceTakes = (entry: string): string => {
+  if (entry === 'layout') return 'layout must be an object of section defaults';
+  if (entry.startsWith('layout.')) {
+    const key = entry.slice('layout.'.length);
+    const section = isSystemSection(key) ? key : Object.hasOwn(SECTION_LAYOUT_ALIASES, key) ? SECTION_LAYOUT_ALIASES[key] : undefined;
+    if (section === undefined) return 'not a section that takes a layout';
+    const allowed = LAYOUTS_OF_SECTION[section];
+    return allowed === undefined ? `${key} takes no layout` : `takes ${orList(allowed)}`;
+  }
+  return `takes ${orList(BOARD_LAYOUTS)}`;
 };
 
 /** An entry's effective layout: its own valid hint, else the section's valid default, else `card`. */

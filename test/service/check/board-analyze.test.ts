@@ -94,6 +94,14 @@ test('hint-small: only at the wide width, only for a widened entry whose layout 
   assert.deepEqual(codes(analyzeBoard(probe({ items: [widened] }), ctx({ layoutOf: () => 'table' }))), ['system-board-hint-small']);
 });
 
+test('hint-small: not raised when the preview is still too wide after widening (the example must shrink, not the layout grow)', () => {
+  const tooWide = item({ widened: true, previews: [{ w: 1396, scrollW: 1800, contentRight: 1800, outLeft: 0, outTop: 0, outBottom: 0 }] });
+  assert.deepEqual(codes(analyzeBoard(probe({ items: [tooWide] }), ctx({ layoutOf: () => 'compact' }))), ['system-board-preview-wide']);
+  // At the 1px boundary the preview fits, so the hint is back.
+  const fits = item({ widened: true, previews: [{ w: 1396, scrollW: 1397, contentRight: 1397, outLeft: 0, outTop: 0, outBottom: 0 }] });
+  assert.deepEqual(codes(analyzeBoard(probe({ items: [fits] }), ctx({ layoutOf: () => 'compact' }))), ['system-board-hint-small']);
+});
+
 test('entry keys off the pattern are never named; a non-component entry names board.html', () => {
   const forged = item({ entry: 'component:../evil' });
   assert.deepEqual(codes(analyzeBoard(probe({ items: [forged], scrollWidth: 9999 }), ctx())).filter((code) => code !== 'system-board-overflow'), []);
@@ -108,7 +116,7 @@ test('entry keys off the pattern are never named; a non-component entry names bo
 test('truncated measurement is one partial note with the entry cap', () => {
   const found = analyzeBoard(probe({ truncated: true }), ctx());
   assert.deepEqual(codes(found), ['system-board-partial']);
-  assert.deepEqual(found[0]?.params, { max: SYSTEM_BOARD_ITEMS_MEASURED_MAX });
+  assert.deepEqual(found[0]?.params, { pictured: 'entries', max: SYSTEM_BOARD_ITEMS_MEASURED_MAX });
 });
 
 test('dedupe keeps the widest width per (code, entry); narrow-only findings stay; board codes stay per width', () => {

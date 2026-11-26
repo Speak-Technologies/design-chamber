@@ -77,8 +77,10 @@ const checkSystem = async (input: { root: string; settings: SettingsFile; id: st
             },
           }),
     });
-    const shots = (result.report.render?.shots ?? []).map((shot) => ({ ...shot, pngs: shot.pngs.map((rel) => path.join(target.dir, ...rel.split('/'))) }));
-    const text = { report: result.report, name: result.detail.name, reportPath: result.reportPath, pngs: result.pngs, shots };
+    // Every picture of a run sits in one run folder: printed once, the pictures by name inside it.
+    const firstPng = result.pngs[0];
+    const runDir = firstPng === undefined ? null : path.dirname(firstPng);
+    const text = { report: result.report, name: result.detail.name, reportPath: result.reportPath, pngs: result.pngs, runDir };
     out(input.json ? systemJsonOutput(text) : formatSystemCheckText(text));
     return exitCodeOf(systemFindingsOf(result.report));
   } catch (error) {
