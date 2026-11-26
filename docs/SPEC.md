@@ -2971,7 +2971,10 @@ radii and spacing from the kit scale); swatch strips paint system content, never
 - **Library view** (P26 §6.4, §6.5 as amended by §20):
   - **Preferences in `host.storage`**, never `settings.json`: `library-view:page` (`tiles` | `list`, default
     tiles), `list-sort:panel` / `list-sort:page` (`updated` | `created` | `title`, default updated); garbage falls
-    back to the default. Search, kind tab and System filter are session-only.
+    back to the default. Search, kind tab and System filter are session-only on the page. The rail has its own
+    **Filters** area (header button, closed by default): System, Sort and View (`titles` | `list`, default list),
+    remembered as `list-system:panel` (`all` | `none` | `system:<id>`), `list-sort:panel` and `rail-view:panel`;
+    a dot on the button shows a system filter while the area is closed (`railFilterState`).
   - **Filter order** (pure `libraryItems`): scope → System filter → search → tab counts → tab → sort. One pure
     empty state names every active filter and offers **Clear filters** (search, tab, system; the scope stays).
     "No project" means neither a derived nor a manual project. A project scope shows derived ∪ manual members.

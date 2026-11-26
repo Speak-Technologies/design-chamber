@@ -6689,3 +6689,82 @@ button.dc-sp-value:focus-visible {
   margin-left: auto;
 }
 /* ===== end Phase 2.6 rail systems entry ===== */
+
+/* ===== Rail filters: the Filters button, its compact area, and the one-line Titles view ===== */
+/* The button keeps the icon-button size of its neighbours; a dot in the corner says the list is narrowed. */
+.dc-filters-btn {
+  position: relative;
+}
+.dc-filters-btn[aria-expanded='true'] {
+  background: var(--oc-hover);
+  color: var(--oc-fg);
+}
+.dc-filters-btn[data-filtered='true'] {
+  color: var(--oc-fg);
+}
+.dc-filters-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--oc-primary);
+  box-shadow: 0 0 0 2px var(--oc-bg);
+}
+.dc-filters-dot[hidden] {
+  display: none;
+}
+
+/* The area: System on its own line, then Sort beside the View toggle. Hidden until the button opens it. */
+.dc-rail-filter-area {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  padding: var(--dc-s2);
+  border-radius: calc(var(--dc-r) + 2px);
+  background: var(--oc-muted-surface);
+}
+.dc-rail-filter-area[hidden] {
+  display: none;
+}
+.dc-rail-filter-area .dc-rail-pair {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+.dc-rail-view-toggle {
+  margin-left: 0;
+}
+.dc-rail-filter-reset {
+  display: flex;
+  justify-content: flex-end;
+}
+.dc-rail-filter-reset[hidden] {
+  display: none;
+}
+
+/* Titles view: one line per design, tighter than the thumbnail rows. */
+.dc-rows[data-view='titles'] {
+  gap: 0;
+}
+.dc-row-titles .dc-row-main {
+  min-height: 32px;
+  padding: 4px 6px 4px 10px;
+}
+.dc-row-titles .dc-row-title {
+  min-width: 0;
+}
+
+/* At the narrowest rail the header has four controls beside a title that keeps its 120 px budget: the icon buttons shrink to 28 px and the gaps close up so New is never clipped. */
+@media (max-width: 380px) {
+  .dc-rail-head {
+    gap: 2px;
+    padding-right: var(--dc-s2);
+  }
+  .dc-rail-head > .dc-iconbtn {
+    width: 28px;
+  }
+  .dc-rail-head > .dc-iconbtn + .oc-sdk-btn {
+    margin-left: var(--dc-s1);
+  }
+}

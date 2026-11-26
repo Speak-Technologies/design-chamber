@@ -1,11 +1,13 @@
-// R1, the rail's designs list: header (Design systems, Settings, New), search, the Show select,
-// the System and Sort pair, three kind tabs (All counts designs only, no system rows among them),
-// thumbnail rows with badges, a system chip and a row menu, a pinned "Design systems" entry under the
-// list (and the header icon) that opens the systems list, an empty state
-// that names every active filter, a notice when an earlier folder still holds designs, and the
-// offer to import loose HTML files saved straight into the designs folder. Sort is remembered
-// (host.storage `list-sort:panel`); search, tab and the System filter live for the session.
-// At 320 px the title keeps its 120 px budget and the pair truncates its values, never the title.
+// R1, the rail's designs list: header (Filters, Design systems, Settings, New), search, the Show select,
+// three kind tabs (All counts designs only, no system rows among them), rows (thumbnails with badges, a
+// system chip and a row menu, or one line per design in the Titles view), a pinned "Design systems"
+// entry under the list (and the header icon) that opens the systems list, an empty state that names every
+// active filter, a notice when an earlier folder still holds designs, and the offer to import loose HTML
+// files saved straight into the designs folder. The Filters button opens a compact area (hidden until
+// asked for) with the System filter, Sort and the View (Titles or List); a dot on the button says the
+// list is narrowed while it is closed. Those three are remembered (host.storage `list-system:panel`,
+// `list-sort:panel`, `rail-view:panel`); search and tab live for the session.
+// At 320 px the title keeps its 120 px budget and the selects truncate their values, never the title.
 
 import { mountBanner, mountSearchField, mountSelect, mountTabs } from '@openchamber/sdk/ui';
 
@@ -28,11 +30,19 @@ import { middlePath } from '../model/format.ts';
 import {
   ALL_SCOPE,
   ALL_SYSTEMS,
+  DEFAULT_RAIL_VIEW,
+  DEFAULT_SORT,
   LIST_SORTS,
+  RAIL_FILTER_DEFAULTS,
   RAIL_TABS,
+  RAIL_VIEWS,
   emptyStateOf,
   libraryItems,
   projectGroups,
+  railFilterState,
+  railSystemStorageKey,
+  railViewFromStored,
+  railViewStorageKey,
   resolveScope,
   resolveSystemFilter,
   scopeCounts,
@@ -53,6 +63,7 @@ import {
   type ManualProjects,
   type ProjectGroup,
   type ProjectInfo,
+  type RailView,
   type SystemFilter,
 } from '../model/list-model.ts';
 import { designCountLabel } from '../model/settings-model.ts';
@@ -91,8 +102,11 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   const scope = createScope();
   let query = '';
   let tab: ListTab = 'all';
-  let sort: ListSort = 'updated';
+  let sort: ListSort = DEFAULT_SORT;
   let systemFilter: SystemFilter = ALL_SYSTEMS;
+  /** Titles (one line) or List (thumbnails), remembered with the sort and the System filter (`host.storage`). */
+  let railView: RailView = DEFAULT_RAIL_VIEW;
+  let filtersOpen = false;
   /** The remembered view; the one shown is `resolveScope` of it (a project or folder that is gone reads as All designs). */
   let chosen: ListScope = ALL_SCOPE;
   let projects: ProjectInfo[] = [];
@@ -122,7 +136,14 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     systemsOpener = 'icon';
     options.onSystems();
   } });
-  const head = h('header', { class: 'dc-rail-head' }, h('h1', { class: 'dc-rail-title' }, 'Designs'), h('span', { class: 'dc-spacer' }), systemsButton, settingsButton, newButton.el);
+  // Filters: opens the compact area (System, Sort, View). The dot says the list is narrowed while it is closed.
+  const filtersButton = iconBtn({ icon: 'tune', label: 'Filters', onClick: () => setFiltersOpen(!filtersOpen) });
+  filtersButton.classList.add('dc-filters-btn');
+  filtersButton.setAttribute('aria-expanded', 'false');
+  filtersButton.setAttribute('aria-controls', 'dc-rail-filter-area');
+  const filtersDot = h('span', { class: 'dc-filters-dot', 'aria-hidden': 'true', hidden: true });
+  filtersButton.append(filtersDot);
+  const head = h('header', { class: 'dc-rail-head' }, h('h1', { class: 'dc-rail-title' }, 'Designs'), h('span', { class: 'dc-spacer' }), filtersButton, systemsButton, settingsButton, newButton.el);
 
   // filters
   const searchHost = h('div', { class: 'dc-search' });
@@ -175,20 +196,31 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   // System and Sort side by side, each half width; at 320 px their values truncate, the title never does.
   const systemHost = h('div', { class: 'dc-inline-select dc-rail-pair-select dc-system-select' });
   const systemSelect = mountSelect(systemHost, { label: 'System', value: 'all', options: [{ id: 'all', label: 'All systems' }, { id: 'none', label: 'No system' }], onChange: (id) => {
-    systemFilter = systemFilterFromId(id);
-    paintList();
+    setSystemFilter(systemFilterFromId(id));
   } });
   const sortHost = h('div', { class: 'dc-inline-select dc-rail-pair-select dc-sort-select' });
   const sortSelect = mountSelect(sortHost, { label: 'Sort', value: sort, options: LIST_SORTS.map(({ id, label }) => ({ id, label })), onChange: (id) => {
-    sort = LIST_SORTS.find((entry) => entry.id === id)?.id ?? 'updated';
-    sortSelect.update({ value: sort });
-    void host.storage.set(sortStorageKey('panel'), sort);
-    paintList();
+    setSort(LIST_SORTS.find((entry) => entry.id === id)?.id ?? DEFAULT_SORT);
   } });
-  const pairRow = h('div', { class: 'dc-rail-pair' }, systemHost, sortHost);
+  // View: the page's segmented toggle, two choices.
+  const viewButtons = RAIL_VIEWS.map((entry) => {
+    const button = h('button', { type: 'button', class: 'dc-view-toggle-btn', 'data-view': entry.id, 'aria-pressed': 'false', 'aria-label': `View as ${entry.label.toLowerCase()}. ${entry.hint}`, title: entry.hint }, entry.label);
+    button.addEventListener('click', () => setRailView(entry.id));
+    return button;
+  });
+  const viewToggle = h('div', { class: 'dc-view-toggle dc-rail-view-toggle', role: 'group', 'aria-label': 'View' }, ...viewButtons);
+  const resetFilters = btn({ label: 'Reset filters', variant: 'ghost', size: 'xs', onClick: () => resetRailFilters() });
+  const resetRow = h('div', { class: 'dc-rail-filter-reset', hidden: true }, resetFilters.el);
+  const filterArea = h(
+    'section',
+    { class: 'dc-rail-filter-area', id: 'dc-rail-filter-area', 'aria-label': 'Filters', hidden: true },
+    systemHost,
+    h('div', { class: 'dc-rail-pair' }, sortHost, viewToggle),
+    resetRow,
+  );
   // Folders that can't be read: projects still work, and the way out sits next to the select.
   const foldersNote = h('div', { class: 'dc-rail-folders-note', hidden: true }, h('p', { class: 'dc-form-error' }, 'Folders couldn’t load. Try again.'), btn({ label: 'Try again', variant: 'outline', size: 'xs', onClick: () => void folderStore.load() }).el);
-  const filters = h('div', { class: 'dc-rail-filters' }, searchHost, showRow, pairRow, foldersNote, tabsHost);
+  const filters = h('div', { class: 'dc-rail-filters' }, filterArea, searchHost, showRow, foldersNote, tabsHost);
 
   // First-run tip (feat/findability): where the full-screen page is. The rail cannot open it
   // from code (an extension has no such API), so it points at the sidebar menu that does.
@@ -279,24 +311,65 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
 
   const newSystem = (source?: 'existing'): void => openNewSystemSheet(options.actions.host, { ...(source ? { source } : {}), onMade: (result) => options.actions.onOpenSystem?.(result.id) });
 
+  const setFiltersOpen = (open: boolean): void => {
+    filtersOpen = open;
+    filterArea.hidden = !open;
+    filtersButton.setAttribute('aria-expanded', String(open));
+  };
+
+  const setSystemFilter = (next: SystemFilter): void => {
+    systemFilter = next;
+    void host.storage.set(railSystemStorageKey, systemFilterToId(next));
+    paintList();
+  };
+  const setSort = (next: ListSort): void => {
+    sort = next;
+    void host.storage.set(sortStorageKey('panel'), next);
+    paintList();
+  };
+  const setRailView = (next: RailView): void => {
+    if (railView === next) return;
+    railView = next;
+    void host.storage.set(railViewStorageKey, next);
+    paintList();
+  };
+  const resetRailFilters = (): void => {
+    systemFilter = RAIL_FILTER_DEFAULTS.system;
+    sort = RAIL_FILTER_DEFAULTS.sort;
+    railView = RAIL_FILTER_DEFAULTS.view;
+    void host.storage.set(railSystemStorageKey, systemFilterToId(systemFilter));
+    void host.storage.set(sortStorageKey('panel'), sort);
+    void host.storage.set(railViewStorageKey, railView);
+    paintList();
+  };
+
+  /** The dot on the Filters button, the View toggle's pressed state and the Reset offer. */
+  const paintFilterControls = (systemList: Parameters<typeof railFilterState>[0]['systems']): void => {
+    const state = railFilterState({ system: systemFilter, sort, view: railView, systems: systemList });
+    filtersDot.hidden = !state.filtering;
+    filtersButton.setAttribute('aria-label', state.buttonLabel);
+    filtersButton.title = state.filtering ? state.summary : 'Filters';
+    filtersButton.dataset.filtered = state.filtering ? 'true' : 'false';
+    for (const button of viewButtons) button.setAttribute('aria-pressed', String(button.dataset.view === railView));
+    resetRow.hidden = state.changed === 0;
+  };
+
   /** A used-by link or a chip: every design that uses this system, nothing else in the way. */
   const filterBySystem = (id: string): void => {
     chosen = ALL_SCOPE;
     query = '';
     tab = 'all';
-    systemFilter = { kind: 'system', id };
     search.update({ value: '' });
     tabsHandle.update({ activeId: 'all' });
-    paintList();
+    setSystemFilter({ kind: 'system', id });
   };
 
   const clearFilters = (): void => {
     query = '';
     tab = 'all';
-    systemFilter = ALL_SYSTEMS;
     search.update({ value: '' });
     tabsHandle.update({ activeId: 'all' });
-    paintList();
+    setSystemFilter(ALL_SYSTEMS);
   };
 
   const paintNotices = (): void => {
@@ -379,12 +452,16 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     const systemsState = systemStore.get();
     const systemList = systemsState.status === 'error' ? [] : systemsState.systems ?? [];
     const systemsFailed = systemsState.status === 'error' && systemsState.systems === null;
-    systemFilter = resolveSystemFilter(systemFilter, systemList);
+    // A remembered system waits for the list before it can read as gone; until then it stays as chosen.
+    if (systemsState.systems !== null && !systemsFailed) systemFilter = resolveSystemFilter(systemFilter, systemList);
     swatches = swatchLookup(systemList);
     const systemEntries = systemOptions(systemList);
     systemSelect.update({ value: systemFilterToId(systemFilter), options: systemEntries });
     nameSelect(systemHost, 'System', systemEntries.find((entry) => entry.id === systemFilterToId(systemFilter))?.label ?? 'All systems');
+    sortSelect.update({ value: sort });
     nameSelect(sortHost, 'Sort', LIST_SORTS.find((entry) => entry.id === sort)?.label ?? 'Updated');
+    paintFilterControls(systemList);
+    list.dataset.view = railView;
 
     if (foldersPending) {
       showLoading();
@@ -412,13 +489,17 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
           else clearFilters();
         },
         onClearChip: (id) => {
+          if (id === 'system') {
+            setSystemFilter(ALL_SYSTEMS);
+            return;
+          }
           if (id === 'search') {
             query = '';
             search.update({ value: '' });
           } else if (id === 'tab') {
             tab = 'all';
             tabsHandle.update({ activeId: 'all' });
-          } else systemFilter = ALL_SYSTEMS;
+          }
           paintList();
         },
       });
@@ -426,7 +507,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     } else {
       const rowView: DesignRowView = { scope: effective, groups, root, manual: manualProjects, menu: { folder: null, project: null } };
       // The rail lists designs only: a system is reached through its chip on a row, the entry under the list or the header icon.
-      list.append(...items.flatMap((item) => (item.kind === 'design' ? [mountDesignRow(item.design, { variant: 'rail', view: { ...rowView, menu: menuFor(item.design) }, actions: options.actions, onOpen: options.onOpen, thumbs, swatchOf: swatches })] : [])));
+      list.append(...items.flatMap((item) => (item.kind === 'design' ? [mountDesignRow(item.design, { variant: railView === 'titles' ? 'titles' : 'rail', view: { ...rowView, menu: menuFor(item.design) }, actions: options.actions, onOpen: options.onOpen, thumbs, swatchOf: swatches })] : [])));
     }
     const live = new Set(all.map((design) => design.slug));
     for (const [slug, handle] of thumbs) {
@@ -462,6 +543,15 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   void host.storage.get(sortStorageKey('panel')).then((stored) => {
     sort = sortFromStored(stored);
     sortSelect.update({ value: sort });
+    paintList();
+  });
+  void host.storage.get(railViewStorageKey).then((stored) => {
+    railView = railViewFromStored(stored);
+    paintList();
+  });
+  void host.storage.get(railSystemStorageKey).then((stored) => {
+    // Only an untouched filter takes the remembered one: a choice made while this was loading wins.
+    if (systemFilter.kind === 'all') systemFilter = systemFilterFromId(stored);
     paintList();
   });
   void guestHost.client.listProjects().then(

@@ -408,6 +408,49 @@ export const systemFilterFromId = (raw: unknown): SystemFilter => {
 export const resolveSystemFilter = (filter: SystemFilter, systems: readonly Pick<SystemSummary, 'id'>[]): SystemFilter =>
   filter.kind === 'system' && !systems.some((system) => system.id === filter.id) ? ALL_SYSTEMS : filter;
 
+// -- The rail's Filters area: System filter, Sort and the view (titles or list), hidden until asked for --
+
+/** `titles`: one line per design, the title only. `list`: the richer rows with thumbnails (the rail's original look). */
+export type RailView = 'titles' | 'list';
+
+export const RAIL_VIEWS: ReadonlyArray<{ id: RailView; label: string; hint: string }> = [
+  { id: 'titles', label: 'Titles', hint: 'One line per design' },
+  { id: 'list', label: 'List', hint: 'Thumbnails and details' },
+];
+
+export const railViewStorageKey = 'rail-view:panel';
+export const railSystemStorageKey = 'list-system:panel';
+/** What the rail does with no stored choice: the rows it always had. */
+export const DEFAULT_RAIL_VIEW: RailView = 'list';
+export const DEFAULT_SORT: ListSort = 'updated';
+
+/** Stored value read back; anything unknown or malformed is the default list. */
+export const railViewFromStored = (raw: unknown): RailView => (raw === 'titles' ? 'titles' : DEFAULT_RAIL_VIEW);
+
+export type RailFilterState = {
+  /** The list is narrowed by a system filter. Sort and view change the look and the order, never what is listed. */
+  filtering: boolean;
+  /** How many of System, Sort and View differ from the defaults, for the area's own "Reset" offer. */
+  changed: number;
+  /** The Filters button's accessible name. */
+  buttonLabel: string;
+  /** The words next to the dot, for a screen reader and the tooltip; empty when nothing is filtered. */
+  summary: string;
+};
+
+/** What the Filters button shows while its area is closed: a dot when the list is narrowed, and a name that says so. */
+export const railFilterState = (input: { system: SystemFilter; sort: ListSort; view: RailView; systems: readonly Pick<SystemSummary, 'id' | 'name'>[] }): RailFilterState => {
+  const filter = input.system;
+  const filtering = filter.kind !== 'all';
+  const changed = (filtering ? 1 : 0) + (input.sort !== DEFAULT_SORT ? 1 : 0) + (input.view !== DEFAULT_RAIL_VIEW ? 1 : 0);
+  const named = filter.kind === 'system' ? input.systems.find((system) => system.id === filter.id)?.name : undefined;
+  const summary = filter.kind === 'all' ? '' : filter.kind === 'none' ? 'Showing designs with no system' : named ? `Showing designs that use ${named}` : 'Showing designs that use one system';
+  return { filtering, changed, buttonLabel: filtering ? `Filters, on. ${summary}` : 'Filters', summary };
+};
+
+/** Back to the rail's defaults for the three controls in the area (System all, Updated, List). */
+export const RAIL_FILTER_DEFAULTS: { system: SystemFilter; sort: ListSort; view: RailView } = { system: ALL_SYSTEMS, sort: DEFAULT_SORT, view: DEFAULT_RAIL_VIEW };
+
 /** A deleted system counts as no system: the design keeps its own copy, but the link is gone. */
 export const matchesSystem = (design: Pick<DesignSummary, 'system'>, filter: SystemFilter): boolean => {
   const link = design.system ?? null;

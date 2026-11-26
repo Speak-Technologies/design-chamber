@@ -28,8 +28,8 @@ export type DesignRowView = {
 };
 
 export type DesignRowOptions = {
-  /** `rail`: one button with thumb and text. `list`: the page's column row with a whole-row hit button. */
-  variant: 'rail' | 'list';
+  /** `rail`: one button with thumb and text. `list`: the page's column row with a whole-row hit button. `titles`: the rail's one-line row. */
+  variant: 'rail' | 'list' | 'titles';
   view: DesignRowView;
   actions: ActionContext;
   onOpen: (slug: string) => void;
@@ -85,6 +85,23 @@ const rowFlags = (design: DesignSummary): HTMLElement => {
 
 export const mountDesignRow = (design: DesignSummary, options: DesignRowOptions): HTMLElement => {
   const { variant, view, actions, onOpen, thumbs } = options;
+
+  if (variant === 'titles') {
+    // The rail's compact view: the title on one line and the ⋯ menu, nothing else. No thumbnail is
+    // mounted, so a long list costs no screenshots. The kind, system and flags are in the accessible
+    // name and the tooltip, and the richer List view is one press away in Filters.
+    const menu = iconBtn({ icon: 'more', label: `Actions for ${design.title}`, size: 'sm', onClick: () => undefined });
+    const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
+    attachMenu(menu, () => listDesignMenu(view.menu), (id) => runListAction(id, ref, actions, view.menu));
+    const main = h(
+      'button',
+      { type: 'button', class: 'dc-row-main dc-row-main-title', 'aria-label': rowAriaLabel(design), title: `${design.title}\n${kindSummary(design)}` },
+      h('span', { class: 'dc-row-title' }, design.title),
+    );
+    main.addEventListener('click', () => onOpen(design.slug));
+    return h('li', { class: 'dc-row dc-row-titles', 'data-pending': design.pending ? 'true' : 'false', 'data-slug': design.slug }, main, menu);
+  }
+
   let thumb = thumbs.get(design.slug);
   if (thumb) thumb.update(design);
   else {
