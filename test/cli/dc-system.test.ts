@@ -101,6 +101,23 @@ test('dc check --system refuses a linked system folder and writes nothing throug
   assert.equal(await tmp.read('outside/evil/.chamber/check.json').catch(() => null), null);
 });
 
+test('dc check --system refuses a linked .chamber/check with exit 2 and draws nothing through it', async (t) => {
+  if (findTestBrowser() === null) {
+    t.skip('Chrome/Edge/Chromium not found — install one or set DC_TEST_CHROME to run this test (without one no picture is saved).');
+    return;
+  }
+  const tmp = await useTmpRoot(t);
+  await system(tmp, 'acme', JSON.stringify({ version: 1, components: [{ id: 'button', name: 'Button', example: 'components/button.html' }] }), 'Calm.');
+  await tmp.write('_systems/acme/components/button.html', '<button>Save</button>');
+  await tmp.write('outside/.keep', '');
+  await symlink(tmp.at('outside'), tmp.at('_systems/acme/.chamber/check'), 'dir');
+  const refused = await dc(tmp, ['check', '--system', 'acme']);
+  assert.equal(refused.code, 2, refused.out);
+  assert.match(refused.err, /This design system's \.chamber\/check entry is not a normal folder, so Design Chamber cannot save the check there\./);
+  assert.deepEqual(await readdir(tmp.at('outside')), ['.keep'], 'nothing written through the link');
+  assert.equal(await tmp.read('_systems/acme/.chamber/check.json').catch(() => null), null, 'no report');
+});
+
 test('dc check --system reads the committed living page in the repo: missing is a warning, a hand-edited unsafe page is an error', async (t) => {
   const tmp = await useTmpRoot(t);
   const project = tmp.at('shop');
@@ -186,9 +203,10 @@ test('an interrupt writes no report and leaves no run folder', async (t) => {
     return;
   }
   const tmp = await useTmpRoot(t);
-  // The example busy-waits 3s, so the first width is still rendering when the interrupt lands.
+  // The example busy-waits 3s, so the first width is still rendering when the interrupt lands. A <script> set through the board's
+  // shadow-root innerHTML never runs; an inline error handler does (the same exposure as the in-app board), so it carries the wait.
   await system(tmp, 'acme', JSON.stringify({ version: 1, components: [{ id: 'slow', name: 'Slow', example: 'components/slow.html' }] }), 'Calm.');
-  await tmp.write('_systems/acme/components/slow.html', '<p>slow</p><script>var start = Date.now(); while (Date.now() - start < 3000) {}</script>');
+  await tmp.write('_systems/acme/components/slow.html', '<p>slow</p><img alt="" src="data:," onerror="var start = Date.now(); while (Date.now() - start < 3000) {}">');
   const child = spawn(process.execPath, [await cliPath(), '--root', tmp.root, 'check', '--system', 'acme'], {
     cwd: tmp.root,
     env: { ...process.env, DC_SETTINGS_PATH: tmp.at('settings.json') },
