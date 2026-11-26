@@ -79,14 +79,19 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
 .dc-text-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
 .dc-body { margin-top: 8px; }
 /* Components: columns, not grid rows, so each card is as tall as its own content (a short card never stretches to a tall
-   neighbour's row, a long preview never gets a fixed-height box). The 560px minimum gives a table, a KPI row or a tab strip room to
+   neighbour's row, a long preview never gets a fixed-height box). The 600px minimum gives a table, a KPI row or a tab strip room to
    fit: two columns on a full-screen page, one in a narrow stage. A card whose preview is still wider than its column (the board script
    measures it) takes the full width instead (the dc-wide class); only a preview wider than the whole board scrolls, inside its own ground. */
 .dc-components { display: block; column-width: 600px; column-gap: 16px; }
-.dc-components > .dc-card { display: block; break-inside: avoid; margin: 0 0 16px; padding: 16px; overflow: hidden; }
+/* One bounded group: the preview ground and the text under it share a card that stands clear of the board (a tint of the text
+   colour on the card surface, and a border between the border and text colours), so the name and notes never read as loose text. */
+.dc-components > .dc-card { display: block; break-inside: avoid; margin: 0 0 16px; padding: 16px; overflow: hidden;
+  background: color-mix(in srgb, var(--dc-board-card, ${f.card}) 94%, var(--dc-board-fg, ${f.fg}));
+  border: 1px solid color-mix(in srgb, var(--dc-board-border, ${f.border}) 70%, var(--dc-board-fg, ${f.fg})); }
 .dc-components > .dc-card.dc-wide { column-span: all; }
-.dc-components .dc-grounds { flex-wrap: wrap; margin-bottom: 12px; }
-.dc-components .dc-ground { flex: 1 1 240px; min-width: 0; padding: 12px; }
+/* Light and dark grounds stack, each as wide as the card, so a wide preview never has to share the row. */
+.dc-components .dc-grounds { flex-direction: column; margin-bottom: 12px; }
+.dc-components .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
 .dc-components .dc-example { overflow-x: auto; overflow-y: visible; }
 `;
 };
