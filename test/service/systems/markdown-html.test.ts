@@ -4,18 +4,17 @@
 // that must stay escaped text. The renderer is pure, so every case here is a string in, string out.
 
 import assert from 'node:assert/strict';
-import { performance } from 'node:perf_hooks';
 import { test } from 'node:test';
 
-import { buildBoardHtml } from '../../../src/service/systems/board-html.ts';
 import { livingCssProblems } from '../../../src/service/systems/living-safe.ts';
-import { escapeHtml, markdownCss, markdownLinkUrl, renderMarkdown, withoutLeadingTitle } from '../../../src/service/systems/markdown-html.ts';
-import type { SystemDetail } from '../../../src/shared/types.ts';
-import { boardFixture } from './board-fixture.ts';
-import { renderMarkdown as frozenRender } from './fixtures/markdown-d7453ba.ts';
+import { MARKDOWN_SOURCE_MAX, escapeHtml, markdownCss, markdownLinkUrl, walkBlocks, withoutLeadingTitle } from '../../../src/service/systems/markdown-html.ts';
+import { SYSTEM_NOTE_MAX, SYSTEM_OVERVIEW_MAX } from '../../../src/shared/limits.ts';
+import { guarded, pairDifference, render, renderFrozen, stuckWalk, timeBoard, timeRender } from './markdown-watchdog.ts';
 
-const md = (source: string): string => renderMarkdown(source, 'board');
-const living = (source: string): string => renderMarkdown(source, 'living');
+// Every render in this file runs in a worker under a deadline (markdown-watchdog.ts): a render
+// that never returns is killed and fails its test, instead of hanging the run until the heap is gone.
+const md = (source: string): string => render(source, 'board');
+const living = (source: string): string => render(source, 'living');
 
 test('headings enter the outline under the section h2, capped per profile', () => {
   assert.equal(md('# Nexus design system'), '<h3 class="dc-md-h3">Nexus design system</h3>');
@@ -139,84 +138,156 @@ test('the living profile stays inside the allowlist vocabulary', () => {
   assert.ok(!out.includes('<a class="dc-md-link" href="https:'), out);
 });
 
-/**
- * Growth, not wall clock: time at 4n against time at n, normalised by how much the input itself
- * grew. Linear tracks the input (ratio ~1); quadratic in the input runs ~4x ahead of it on a 4x
- * input. The additive term keeps sub-millisecond measurements from flaking on slow runners.
- */
-const growth = (make: (n: number) => string, n: number, label: string, render: (source: string) => void): void => {
-  const smallSource = make(n);
-  const bigSource = make(4 * n);
-  // Best of three: a GC pause in one sample must not flake the ratio on a shared runner.
-  const time = (source: string): number => {
-    let best = Infinity;
-    for (let run = 0; run < 3; run += 1) {
-      const started = performance.now();
-      render(source);
-      best = Math.min(best, performance.now() - started);
-    }
-    return best;
-  };
-  const small = time(smallSource);
-  const big = time(bigSource);
-  const inputRatio = bigSource.length / smallSource.length;
-  assert.ok(big < 2 * inputRatio * Math.max(small, 1) + 8, `${label}: ${Math.round(small)} ms -> ${Math.round(big)} ms for ${inputRatio.toFixed(1)}x input`);
-  assert.ok(big < 4000, `${label}: ${Math.round(big)} ms absolute`);
+// ---- cost at the service caps ----
+//
+// What reaches the renderer is capped: a note, pattern or brand body at SYSTEM_NOTE_MAX (20 000
+// characters), the overview at SYSTEM_OVERVIEW_MAX (4 000); `bodyOf` cuts a longer file before it
+// renders and `renderMarkdown` refuses to parse past MARKDOWN_SOURCE_MAX itself. So the tests
+// measure there, not at sizes no caller can send: each family is built at a quarter of the cap and
+// at the cap, and the time at the cap is held against the time at the quarter.
+
+/** The largest `make(k)` that fits in `chars` characters. */
+const fit = (make: (k: number) => string, chars: number): string => {
+  let low = 1;
+  while (make(low * 2).length <= chars) low *= 2;
+  let high = low * 2;
+  while (low + 1 < high) {
+    const mid = (low + high) >> 1;
+    if (make(mid).length <= chars) low = mid;
+    else high = mid;
+  }
+  return make(low);
 };
 
-const bothProfiles = (source: string): void => {
-  renderMarkdown(source, 'board');
-  renderMarkdown(source, 'living');
+/** Both profiles of one source at the cap, on a slow shared runner. Measured locally: under 10 ms. */
+const CAP_BUDGET_MS = 500;
+
+/**
+ * Growth, not wall clock: both profiles at the cap against a quarter of the cap, normalised by how
+ * much the input itself grew. Linear tracks the input (4x the text, about 4x the time); quadratic
+ * runs 16x. Best of five inside the worker, so a GC pause in one sample cannot flake the ratio, and
+ * an additive term so sub-millisecond samples cannot either.
+ */
+const growth = (label: string, make: (k: number) => string, cap: number = SYSTEM_NOTE_MAX): void => {
+  const smallSource = fit(make, cap / 4);
+  const bigSource = fit(make, cap);
+  assert.ok(bigSource.length <= cap && bigSource.length > cap * 0.9, `${label}: ${bigSource.length} characters is not at the cap of ${cap}`);
+  const small = timeRender(smallSource, 5);
+  const big = timeRender(bigSource, 5);
+  const inputRatio = bigSource.length / smallSource.length;
+  assert.ok(big < 2 * inputRatio * small + 3, `${label}: ${small.toFixed(2)} ms -> ${big.toFixed(2)} ms for ${inputRatio.toFixed(1)}x input`);
+  assert.ok(big < CAP_BUDGET_MS, `${label}: ${Math.round(big)} ms at the cap`);
 };
 
 const LS = String.fromCharCode(0x2028);
 const PS = String.fromCharCode(0x2029);
-const deepList = (n: number): string => Array.from({ length: n }, (_, i) => `${'  '.repeat(i)}- item${i}`).join('\n');
+const NEL = String.fromCharCode(0x85);
+const repeatLines = (line: string) => (k: number): string => Array(k).fill(line).join('\n');
+const deepList = (step: number) => (k: number): string => Array.from({ length: k }, (_, i) => `${' '.repeat(step * i)}- item${i}`).join('\n');
+
+test('a source past the cap is one escaped paragraph, never parsed', () => {
+  assert.equal(MARKDOWN_SOURCE_MAX, SYSTEM_NOTE_MAX);
+  const atCap = `# t\n${'a'.repeat(MARKDOWN_SOURCE_MAX - 4)}`;
+  assert.ok(md(atCap).startsWith('<h3 class="dc-md-h3">t</h3><p>a'));
+  const past = `# t\n<b>${'a'.repeat(MARKDOWN_SOURCE_MAX)}`;
+  for (const profile of ['board', 'living'] as const) {
+    assert.equal(render(past, profile), `<p># t\n&lt;b&gt;${'a'.repeat(MARKDOWN_SOURCE_MAX)}</p>`);
+  }
+});
 
 test('nesting past the cap is escaped text, never a stack overflow, and grows with the input', () => {
-  const quotes = `${'>'.repeat(20000)}x`;
-  const emphasis = `${'**'.repeat(20000)}x${'**'.repeat(20000)}`;
-  for (const source of [quotes, emphasis, deepList(2000)]) {
-    assert.doesNotThrow(() => renderMarkdown(source, 'board'));
-    assert.doesNotThrow(() => renderMarkdown(source, 'living'));
+  const quotes = `${'>'.repeat(SYSTEM_NOTE_MAX - 1)}x`;
+  const emphasis = `${'**'.repeat(4999)}x${'**'.repeat(4999)}`;
+  // The deepest lists a note can hold: the indent grows with the depth, so the text is quadratic
+  // in it. About 139 levels at two spaces a level, about 196 at one, 10 000 markers on one line.
+  const two = fit(deepList(2), SYSTEM_NOTE_MAX);
+  const one = fit(deepList(1), SYSTEM_NOTE_MAX);
+  const chain = `${'- '.repeat(SYSTEM_NOTE_MAX / 2 - 1)}x`;
+  assert.ok(two.split('\n').length >= 130 && one.split('\n').length >= 190, `${two.split('\n').length} and ${one.split('\n').length} levels`);
+  for (const source of [quotes, emphasis, two, one, chain]) {
+    assert.ok(source.length <= SYSTEM_NOTE_MAX);
+    for (const profile of ['board', 'living'] as const) {
+      const out = render(source, profile);
+      assert.ok(out.includes('x') || out.includes(`item${source.split('\n').length - 1}`), `${profile}: the innermost text is kept`);
+      // The depth cap: lists and quotes stop nesting, the rest is text.
+      assert.ok((out.match(/<(?:ul|ol|blockquote|div) class="dc-md-(?:list|quote)"/g) ?? []).length <= 8, `${profile}: nesting is capped`);
+    }
   }
-  assert.ok(md(quotes).includes('x'));
-  assert.ok(md(deepList(2000)).includes('item1999'));
-  assert.ok(md(emphasis).includes('x'));
-  growth((n) => `${'>'.repeat(n)}x`, 5000, '20 000-deep quotes', bothProfiles);
-  growth((n) => `${'**'.repeat(n)}x${'**'.repeat(n)}`, 5000, '20 000-deep emphasis', bothProfiles);
-  growth(deepList, 500, '2 000-deep list', bothProfiles);
+  growth('quotes to the cap', (k) => `${'>'.repeat(k)}x`);
+  growth('emphasis to the cap', (k) => `${'**'.repeat(k)}x${'**'.repeat(k)}`);
+  growth('list nested two spaces a level', deepList(2));
+  growth('list nested one space a level', deepList(1));
+  growth('list nested with blank lines between', (k) => Array.from({ length: k }, (_, i) => `${' '.repeat(i)}- i\n`).join('\n'));
+  growth('marker chain on one line', (k) => `${'- '.repeat(k)}x`);
+});
+
+test('list shapes at the note cap grow with the input, not with its square', () => {
+  growth('flat list', repeatLines('- a'));
+  growth('flat list with blank lines', repeatLines('- a\n'));
+  growth('ordered list with long numbers', repeatLines('123456789. x'));
+  growth('sawtooth nesting', (k) => Array.from({ length: k }, (_, i) => `${'  '.repeat(i % 7)}- i`).join('\n'));
+  growth('marker chains on every line', repeatLines('- - - - - - - x'));
+  growth('item then a long blank run', (k) => `- a${'\n'.repeat(k)}- b`);
+  growth('items with blank runs', repeatLines('- a\n\n\n\n\n\n\n'));
+  growth('one item with a long continuation', (k) => `- a\n${Array(k).fill(' b').join('\n')}`);
+  growth('continuation under seven levels', (k) => `${fit(deepList(2), 70)}\n${Array(k).fill(`${' '.repeat(14)}x`).join('\n')}`);
+  growth('quotes inside items', repeatLines('- > - > - > x'));
+  growth('items inside quotes', (k) => Array.from({ length: k }, (_, i) => `> ${' '.repeat(i % 9)}- i`).join('\n'));
+  growth('unclosed fence inside an item', (k) => `- a\n  \`\`\`\n${Array(k).fill('  x').join('\n')}`);
+  growth('deeply indented item lines', (k) => Array(40).fill(`${' '.repeat(k)}- x`).join('\n'));
+  growth('markers followed by space runs', (k) => Array(40).fill(`-${' '.repeat(k)}`).join('\n'));
 });
 
 test('adversarial lines at the service caps grow with the input, not with its square', () => {
   // The overview cap is 4 000 characters, a note's 20 000: every case below sits at one of them.
-  growth((n) => `# a${' '.repeat(n)}#x`, 1000, 'heading space run', bothProfiles);
-  growth((n) => `para\n## Title${'\t '.repeat(n)}more`, 375, 'heading tab/space run', bothProfiles);
-  growth((n) => `# ${' '.repeat(n)}${LS}`, 5000, 'heading ending in U+2028', bothProfiles);
-  growth((n) => `# ${' '.repeat(n)}${PS}`, 5000, 'heading ending in U+2029', bothProfiles);
-  growth((n) => `- ${' '.repeat(n)}${LS}`, 5000, 'list marker ending in U+2028', bothProfiles);
-  growth((n) => `${'`'.repeat(n)}${LS}`, 5000, 'backtick run ending in U+2028', bothProfiles);
-  growth((n) => `${'~'.repeat(n)}${LS}`, 5000, 'tilde run ending in U+2028', bothProfiles);
-  growth((n) => '['.repeat(n), 5000, 'unclosed brackets', bothProfiles);
-  growth((n) => '!['.repeat(n), 2500, 'unclosed images', bothProfiles);
-  growth((n) => '[]('.repeat(n), 1500, 'links with no closing paren', bothProfiles);
-  growth((n) => '[x](a'.repeat(n), 1000, 'links with no closing paren at all', bothProfiles);
-  growth((n) => `${'*a'.repeat(n)}\n`, 2500, 'emphasis openers with no closer on the line', bothProfiles);
+  growth('heading space run', (k) => `# a${' '.repeat(k)}#x`, SYSTEM_OVERVIEW_MAX);
+  growth('heading tab/space run', (k) => `para\n## Title${'\t '.repeat(k)}more`, SYSTEM_OVERVIEW_MAX);
+  growth('heading space run in a note', (k) => `# a${' '.repeat(k)}#x`);
+  growth('heading ending in U+2028', (k) => `# ${' '.repeat(k)}${LS}`);
+  growth('heading ending in U+2029', (k) => `# ${' '.repeat(k)}${PS}`);
+  growth('heading ending in NEL', (k) => `# ${' '.repeat(k)}${NEL}`);
+  growth('list marker ending in U+2028', (k) => `- ${' '.repeat(k)}${LS}`);
+  growth('backtick run ending in U+2028', (k) => `${'`'.repeat(k)}${LS}`);
+  growth('tilde run ending in U+2028', (k) => `${'~'.repeat(k)}${LS}`);
+  growth('unclosed brackets', (k) => '['.repeat(k));
+  growth('unclosed images', (k) => '!['.repeat(k));
+  growth('links with no closing paren', (k) => '[]('.repeat(k));
+  growth('links with no closing paren at all', (k) => '[x](a'.repeat(k));
+  growth('emphasis openers with no closer on the line', (k) => `${'*a'.repeat(k)}\n`);
+  growth('separator-like rows', repeatLines('|-|-|-|-'));
+  growth('pipe lines that are not a table', repeatLines('a|b'));
+});
+
+test('U+2028, U+2029 and NEL end a line exactly as a newline does', () => {
+  const source = ['# Title', '- one', '  wrapped', '- two', '', '```', 'code', '```', '> quote', 'tail'];
+  for (const profile of ['board', 'living'] as const) {
+    const expected = render(source.join('\n'), profile);
+    for (const [name, terminator] of [['U+2028', LS], ['U+2029', PS], ['NEL', NEL], ['CR', '\r'], ['CRLF', '\r\n']] as const) {
+      assert.equal(render(source.join(terminator), profile), expected, `${profile}: ${name}`);
+    }
+  }
+  assert.equal(md(`# a${LS}b`), '<h3 class="dc-md-h3">a</h3><p>b</p>');
 });
 
 test('a whole board of hostile notes grows with the notes, not with their square', () => {
-  const kinds: ReadonlyArray<readonly [string, (n: number) => string]> = [
-    ['brackets', () => '['.repeat(20000)],
-    ['headings', () => `# a${' '.repeat(3994)}#x`],
-    ['line separators', () => `# ${' '.repeat(19990)}${LS}`],
-    ['tables', () => `${'|a'.repeat(2500)}\n${'|-'.repeat(2500)}\n${Array(5000).fill('|').join('\n')}`],
+  // Every note sits at the 20 000-character cap; 48 of the 50 a system may hold.
+  const kinds: ReadonlyArray<readonly [string, string]> = [
+    ['brackets', '['.repeat(SYSTEM_NOTE_MAX)],
+    ['headings', `# a${' '.repeat(SYSTEM_NOTE_MAX - 5)}#x`],
+    ['line separators', `# ${' '.repeat(SYSTEM_NOTE_MAX - 3)}${LS}`],
+    ['flat lists', fit(repeatLines('- a\n'), SYSTEM_NOTE_MAX)],
+    ['quoted items', fit(repeatLines('- > - > - > x'), SYSTEM_NOTE_MAX)],
+    ['deep lists', fit(deepList(1), SYSTEM_NOTE_MAX)],
+    ['tables', `${'|a'.repeat(2500)}\n${'|-'.repeat(2500)}\n${Array(4999).fill('|').join('\n')}`],
   ];
   for (const [name, text] of kinds) {
-    const notesOf = (count: number): string => JSON.stringify(Array.from({ length: count }, (_, i) => ({ id: `n${i}`, title: `Note ${i}`, text: text(0), problem: null })));
-    growth(notesOf, 12, `board of ${name} notes`, (json) => {
-      const html = buildBoardHtml({ ...boardFixture(), notes: JSON.parse(json) as SystemDetail['notes'] }, { scheme: 'dark' });
-      assert.ok(html.includes('id="dc-section-overview"'), name);
-    });
+    assert.ok(text.length <= SYSTEM_NOTE_MAX, name);
+    const notesOf = (count: number): string => JSON.stringify(Array.from({ length: count }, (_, i) => ({ id: `n${i}`, title: `Note ${i}`, text, problem: null })));
+    const small = timeBoard(notesOf(12), 3);
+    const big = timeBoard(notesOf(48), 3);
+    assert.ok(small.ok && big.ok, `${name}: the board is drawn`);
+    assert.ok(big.ms < 2 * 4 * small.ms + 8, `board of ${name} notes: ${small.ms.toFixed(1)} ms -> ${big.ms.toFixed(1)} ms for 4x the notes`);
+    assert.ok(big.ms < 4000, `board of ${name} notes: ${Math.round(big.ms)} ms absolute`);
   }
 });
 
@@ -285,7 +356,7 @@ test('a link title works on a single line, mid-line and at the end of the text',
 test('a refused link with markup in its label stays escaped text in both profiles', () => {
   const hostile = '[<img src=x onerror=alert(1)>](javascript:x)';
   for (const profile of ['board', 'living'] as const) {
-    const out = renderMarkdown(hostile, profile);
+    const out = render(hostile, profile);
     assert.ok(!out.includes('<img'), out);
     assert.ok(!out.includes('<a '), out);
     assert.ok(out.includes(escapeHtml(hostile)), out);
@@ -293,15 +364,16 @@ test('a refused link with markup in its label stays escaped text in both profile
 });
 
 test('a wide or cell-hungry table cannot multiply the source', () => {
-  // 2 500 columns over 5 000 bare "|" rows: 15 000 characters, inside the note cap.
-  const wide = `${'|a'.repeat(2500)}\n${'|-'.repeat(2500)}\n${Array(5000).fill('|').join('\n')}`;
-  growth((n) => `${'|a'.repeat(2500)}\n${'|-'.repeat(2500)}\n${Array(n).fill('|').join('\n')}`, 1250, 'wide table rows', bothProfiles);
+  // 2 500 columns over 4 999 bare "|" rows: 19 999 characters, just inside the note cap.
+  const wide = `${'|a'.repeat(2500)}\n${'|-'.repeat(2500)}\n${Array(4999).fill('|').join('\n')}`;
+  assert.ok(wide.length <= SYSTEM_NOTE_MAX);
+  growth('wide table rows', (k) => `${'|a'.repeat(1200)}\n${'|-'.repeat(1200)}\n${Array(k).fill('|').join('\n')}`);
   const wideOut = md(wide);
   assert.ok(!wideOut.includes('<table'), 'past the column cap it is text');
   assert.ok(wideOut.length < wide.length * 4, `${wideOut.length} chars from ${wide.length}`);
   // 64 columns over the same rows: a table, but only as many cells as the source budgets.
   const dense = `${'|a'.repeat(64)}\n${'|-'.repeat(64)}\n${Array(5000).fill('|').join('\n')}`;
-  growth((n) => `${'|a'.repeat(64)}\n${'|-'.repeat(64)}\n${Array(n).fill('|').join('\n')}`, 1250, 'dense table rows', bothProfiles);
+  growth('dense table rows', (k) => `${'|a'.repeat(64)}\n${'|-'.repeat(64)}\n${Array(k).fill('|').join('\n')}`);
   const denseOut = md(dense);
   assert.ok(denseOut.includes('<table'), 'within the cap it is a table');
   assert.ok(denseOut.length < dense.length * 12, `${denseOut.length} chars from ${dense.length}`);
@@ -314,7 +386,7 @@ test('rows past the table cell budget stay escaped text in both profiles', () =>
   const hostile = '|<img src=x onerror=alert(1)>|[<svg onload=1>](javascript:x)|';
   const source = `${'|a'.repeat(64)}\n${'|-'.repeat(64)}\n${Array(400).fill('|').join('\n')}\n${hostile}`;
   for (const profile of ['board', 'living'] as const) {
-    const out = renderMarkdown(source, profile);
+    const out = render(source, profile);
     const overflow = out.slice(out.lastIndexOf('</table>'));
     assert.ok(overflow.includes('<p>|'), `${profile}: the hostile row is in the overflow paragraph`);
     assert.ok(!/<img/i.test(out), `${profile}: no img in ${overflow.slice(-200)}`);
@@ -324,9 +396,10 @@ test('rows past the table cell budget stay escaped text in both profiles', () =>
   }
 });
 
-// Exact outputs frozen from the pre-refactor renderer (d7453ba, fixtures/markdown-d7453ba.ts):
-// continuations indented less than the item's content, markers inside items, whitespace-only
-// lines, fences and tables inside lists. A refactor that changes any of these goes red.
+// Exact outputs frozen from the d7453ba renderer (fixtures/markdown-d7453ba.ts), whose list
+// algorithm this renderer keeps: continuations indented less than the item's content, markers
+// inside items, whitespace-only lines, fences and tables inside lists, and every block opener
+// straight after a marker (a quote there once looped forever). A change to any of these goes red.
 const FROZEN_CASES: readonly { source: string; board: string; living: string }[] = [
   { source: "1. Use the brand blue\n  for links only.", board: "<ol class=\"dc-md-list\"><li><p>Use the brand blue\nfor links only.</p></li></ol>", living: "<ol class=\"dc-md-list\"><li><p>Use the brand blue\nfor links only.</p></li></ol>" },
   { source: "10. Ten\n   wrapped", board: "<ol class=\"dc-md-list\" start=\"10\"><li><p>Ten\nwrapped</p></li></ol>", living: "<ol class=\"dc-md-list\"><li><p>Ten\nwrapped</p></li></ol>" },
@@ -342,35 +415,183 @@ const FROZEN_CASES: readonly { source: string; board: string; living: string }[]
   { source: "1. one\n   1. inner\n      1. deep\n2. two", board: "<ol class=\"dc-md-list\"><li><p>one</p><ol class=\"dc-md-list\"><li><p>inner</p><ol class=\"dc-md-list\"><li><p>deep</p></li></ol></li></ol></li><li><p>two</p></li></ol>", living: "<ol class=\"dc-md-list\"><li><p>one</p><ol class=\"dc-md-list\"><li><p>inner</p><ol class=\"dc-md-list\"><li><p>deep</p></li></ol></li></ol></li><li><p>two</p></li></ol>" },
   { source: "- a\n b\n- c", board: "<ul class=\"dc-md-list\"><li><p>a\nb</p></li><li><p>c</p></li></ul>", living: "<ul class=\"dc-md-list\"><li><p>a\nb</p></li><li><p>c</p></li></ul>" },
   { source: "  \t\n- a\n  \t\n- b\n  \t", board: "<ul class=\"dc-md-list\"><li><p>a</p></li></ul><ul class=\"dc-md-list\"><li><p>b</p></li></ul>", living: "<ul class=\"dc-md-list\"><li><p>a</p></li></ul><ul class=\"dc-md-list\"><li><p>b</p></li></ul>" },
+  // A block opener straight after the marker, nested quotes in items, fences four or more spaces
+  // past the content column (a paragraph: a fence sits at most three spaces in), and empty items.
+  { source: "- > x", board: "<ul class=\"dc-md-list\"><li><blockquote class=\"dc-md-quote\"><p>x</p></blockquote></li></ul>", living: "<ul class=\"dc-md-list\"><li><div class=\"dc-md-quote\"><p>x</p></div></li></ul>" },
+  { source: "1. > quote", board: "<ol class=\"dc-md-list\"><li><blockquote class=\"dc-md-quote\"><p>quote</p></blockquote></li></ol>", living: "<ol class=\"dc-md-list\"><li><div class=\"dc-md-quote\"><p>quote</p></div></li></ol>" },
+  { source: "1. > quote\n   > more", board: "<ol class=\"dc-md-list\"><li><blockquote class=\"dc-md-quote\"><p>quote\nmore</p></blockquote></li></ol>", living: "<ol class=\"dc-md-list\"><li><div class=\"dc-md-quote\"><p>quote\nmore</p></div></li></ol>" },
+  { source: "- > a\n- b", board: "<ul class=\"dc-md-list\"><li><blockquote class=\"dc-md-quote\"><p>a</p></blockquote></li><li><p>b</p></li></ul>", living: "<ul class=\"dc-md-list\"><li><div class=\"dc-md-quote\"><p>a</p></div></li><li><p>b</p></li></ul>" },
+  { source: "- a\n  - > b\n    > c\n  - d", board: "<ul class=\"dc-md-list\"><li><p>a</p><ul class=\"dc-md-list\"><li><blockquote class=\"dc-md-quote\"><p>b\nc</p></blockquote></li><li><p>d</p></li></ul></li></ul>", living: "<ul class=\"dc-md-list\"><li><p>a</p><ul class=\"dc-md-list\"><li><div class=\"dc-md-quote\"><p>b\nc</p></div></li><li><p>d</p></li></ul></li></ul>" },
+  { source: "- > - > deep", board: "<ul class=\"dc-md-list\"><li><blockquote class=\"dc-md-quote\"><ul class=\"dc-md-list\"><li><blockquote class=\"dc-md-quote\"><p>deep</p></blockquote></li></ul></blockquote></li></ul>", living: "<ul class=\"dc-md-list\"><li><div class=\"dc-md-quote\"><ul class=\"dc-md-list\"><li><div class=\"dc-md-quote\"><p>deep</p></div></li></ul></div></li></ul>" },
+  { source: "> - > x\n>   > y", board: "<blockquote class=\"dc-md-quote\"><ul class=\"dc-md-list\"><li><blockquote class=\"dc-md-quote\"><p>x\ny</p></blockquote></li></ul></blockquote>", living: "<div class=\"dc-md-quote\"><ul class=\"dc-md-list\"><li><div class=\"dc-md-quote\"><p>x\ny</p></div></li></ul></div>" },
+  { source: "- # h\n- ```\n  x\n  ```", board: "<ul class=\"dc-md-list\"><li><h3 class=\"dc-md-h3\">h</h3></li><li><pre class=\"dc-md-pre\"><code>x</code></pre></li></ul>", living: "<ul class=\"dc-md-list\"><li><h3 class=\"dc-md-h3\">h</h3></li><li><div class=\"dc-md-pre\"><code>x</code></div></li></ul>" },
+  { source: "- ```\n  x\n  ```\n- ~~~\n  y", board: "<ul class=\"dc-md-list\"><li><pre class=\"dc-md-pre\"><code>x</code></pre></li><li><pre class=\"dc-md-pre\"><code>y</code></pre></li></ul>", living: "<ul class=\"dc-md-list\"><li><div class=\"dc-md-pre\"><code>x</code></div></li><li><div class=\"dc-md-pre\"><code>y</code></div></li></ul>" },
+  { source: "- a\n      ```\n      x\n      ```", board: "<ul class=\"dc-md-list\"><li><p>a\n    <code class=\"dc-md-code\">     x     </code></p></li></ul>", living: "<ul class=\"dc-md-list\"><li><p>a\n    <code class=\"dc-md-code\">     x     </code></p></li></ul>" },
+  { source: "- a\n\n      ```\n      x\n      ```\n- b", board: "<ul class=\"dc-md-list\"><li><p>a</p><p><code class=\"dc-md-code\">     x     </code></p></li><li><p>b</p></li></ul>", living: "<ul class=\"dc-md-list\"><li><p>a</p><p><code class=\"dc-md-code\">     x     </code></p></li><li><p>b</p></li></ul>" },
+  { source: "1. a\n       ~~~\n       y\n       ~~~", board: "<ol class=\"dc-md-list\"><li><p>a\n    <del class=\"dc-md-del\">~\n    y\n    </del>~</p></li></ol>", living: "<ol class=\"dc-md-list\"><li><p>a\n    <span class=\"dc-md-del\">~\n    y\n    </span>~</p></li></ol>" },
+  { source: "- \n- a", board: "<ul class=\"dc-md-list\"><li></li><li><p>a</p></li></ul>", living: "<ul class=\"dc-md-list\"><li></li><li><p>a</p></li></ul>" },
+  { source: "- \n-  \n- ", board: "<ul class=\"dc-md-list\"><li></li><li></li><li></li></ul>", living: "<ul class=\"dc-md-list\"><li></li><li></li><li></li></ul>" },
+  { source: "1. \n2. two", board: "<ol class=\"dc-md-list\"><li></li><li><p>two</p></li></ol>", living: "<ol class=\"dc-md-list\"><li></li><li><p>two</p></li></ol>" },
+  { source: "- a\n  - \n  - b", board: "<ul class=\"dc-md-list\"><li><p>a</p><ul class=\"dc-md-list\"><li></li><li><p>b</p></li></ul></li></ul>", living: "<ul class=\"dc-md-list\"><li><p>a</p><ul class=\"dc-md-list\"><li></li><li><p>b</p></li></ul></li></ul>" },
+  { source: "-\n- a", board: "<p>-</p><ul class=\"dc-md-list\"><li><p>a</p></li></ul>", living: "<p>-</p><ul class=\"dc-md-list\"><li><p>a</p></li></ul>" },
+  { source: "- ---\n- ***", board: "<hr class=\"dc-md-hr\"><ul class=\"dc-md-list\"><li><hr class=\"dc-md-hr\"></li></ul>", living: "<hr class=\"dc-md-hr\"><ul class=\"dc-md-list\"><li><hr class=\"dc-md-hr\"></li></ul>" },
+  { source: "- | a | b |\n  | --- | --- |", board: "<ul class=\"dc-md-list\"><li><div class=\"dc-md-tablewrap\"><table class=\"dc-md-table\"><thead><tr><th scope=\"col\">a</th><th scope=\"col\">b</th></tr></thead></table></div></li></ul>", living: "<ul class=\"dc-md-list\"><li><div class=\"dc-md-tablewrap\"><table class=\"dc-md-table\"><thead><tr><th scope=\"col\">a</th><th scope=\"col\">b</th></tr></thead></table></div></li></ul>" },
+  { source: "- ## h2\n  text", board: "<ul class=\"dc-md-list\"><li><h4 class=\"dc-md-h4\">h2</h4><p>text</p></li></ul>", living: "<ul class=\"dc-md-list\"><li><h4 class=\"dc-md-h4\">h2</h4><p>text</p></li></ul>" },
+  { source: "- 2. x\n    deeper\n  back", board: "<ul class=\"dc-md-list\"><li><ol class=\"dc-md-list\" start=\"2\"><li><p>x\ndeeper</p></li></ol><p>back</p></li></ul>", living: "<ul class=\"dc-md-list\"><li><ol class=\"dc-md-list\"><li><p>x\ndeeper</p></li></ol><p>back</p></li></ul>" },
 ];
 
-test('list continuations, nested markers and blank lines render exactly as before the refactor', () => {
+test('list continuations, nested markers, openers after a marker and empty items render exactly as the frozen renderer did', () => {
   for (const c of FROZEN_CASES) {
-    assert.equal(renderMarkdown(c.source, 'board'), c.board, JSON.stringify(c.source));
-    assert.equal(renderMarkdown(c.source, 'living'), c.living, JSON.stringify(c.source));
+    assert.equal(render(c.source, 'board'), c.board, JSON.stringify(c.source));
+    assert.equal(render(c.source, 'living'), c.living, JSON.stringify(c.source));
+    assert.equal(renderFrozen(c.source, 'board'), c.board, `the table matches the frozen renderer: ${JSON.stringify(c.source)}`);
+    assert.equal(renderFrozen(c.source, 'living'), c.living, `the table matches the frozen renderer: ${JSON.stringify(c.source)}`);
   }
 });
 
-test('differential guard: seeded block-grammar fuzz matches the frozen pre-refactor renderer', () => {
-  let seed = 123456789;
+test('a block step that claims no line cannot spin: the line becomes text and the walk moves on', () => {
+  // Under the watchdog: without the guard in walkBlocks this never returns, and fails here in seconds.
+  assert.equal(stuckWalk(3, 'same'), '<p>line 0</p><p>line 1</p><p>line 2</p>');
+  assert.equal(stuckWalk(2, 'behind'), '<p>line 0</p><p>line 1</p>');
+  // A step that advances is used as it is, and never asked about a line it already claimed.
+  const asked: number[] = [];
+  const out = walkBlocks(
+    5,
+    (i) => {
+      asked.push(i);
+      return { html: `[${i}]`, next: i + 2 };
+    },
+    () => 'stuck',
+  );
+  assert.equal(out, '[0][2][4]');
+  assert.deepEqual(asked, [0, 2, 4]);
+  assert.equal(walkBlocks(0, () => ({ html: 'x', next: 1 }), () => 'stuck'), '');
+});
+
+test('the watchdog kills a render that does not return', () => {
+  assert.throws(() => guarded({ op: 'spin' }, 300), /did not finish in 300 ms and was killed/);
+  // The next render starts a fresh worker.
+  assert.equal(md('after'), '<p>after</p>');
+});
+
+// ---- the seeded differential against the frozen d7453ba renderer ----
+
+const BLOCK_OPENERS = [
+  '> q', '> ', '>', '>q', '>> deep', '> - qitem', '> 1. qnum', '> # qh', '> ```', '> > - x',
+  '```', '```css', '````', '~~~', '~~~~ info', '``` x ```',
+  '# h', '## h2', '###### six', '####### seven', '#', '#tag', '# h #',
+  '---', '***', '___', '- - -', '* * *', '--', '-- -',
+  '| a | b |', '| --- | --- |', '|---|:-:|', '| 1 | 2 |', 'a | b', '|', '| x \\| y |',
+  '- nested', '* star', '+ plus', '2. num', '10) ten', '-', '1.', '- ', '1. ', '- - x', '- 3. y', '1. - z',
+] as const;
+const TEXTS = ['', 'a', 'b c', 'text here', 'wrapped text', '**x**', '*e*', '_u_', '~~s~~', '`c`', '[l](u)', '![i](u)', '<b>raw</b>', '&amp;', '\\- esc', 'x  ', '\tx'] as const;
+const MARKERS = ['- ', '* ', '+ ', '1. ', '3. ', '10. ', '2) ', '-   ', '-\t', '1.\t', '-     ', '123456789. ', '1234567890. ', '0. '] as const;
+const INDENTS = ['', ' ', '  ', '   ', '    ', '     ', '      ', '        ', '\t', '\t\t', ' \t', '  \t '] as const;
+const BLANKS = ['', '', ' ', '  ', '  \t', '\t', '      '] as const;
+const JOINS = ['\n', '\n', '\n', '\n', '\r\n', '\r'] as const;
+
+/**
+ * A seeded generator (mulberry32), so a failing seed and index reproduce exactly. Not a power-of-two
+ * LCG: its low bits cycle quickly, and the choices below would then never meet in most combinations.
+ */
+const seeded = (seed: number): { rnd: (n: number) => number; pick: <T>(from: readonly T[]) => T } => {
+  let state = seed >>> 0;
   const rnd = (n: number): number => {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-    return seed % n;
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) % n;
   };
-  const pick = <T,>(a: readonly T[]): T => a[rnd(a.length)] as T;
-  const indents = ['', ' ', '  ', '   ', '    ', '      '] as const;
-  const line = (): string =>
-    pick([
-      () => pick(indents) + pick(['- ', '* ', '+ ', '1. ', '3. ', '10. ', '2) ']) + pick(['a', 'b c', '**x**', '`c`', '- nested', '2. num', 'text here', '']),
-      () => pick(indents) + pick(['continuation', 'wrapped text', 'lazy line', 'x']),
-      () => pick(['', ' ', '  ', '  \t', '\t']),
-      () => pick(indents) + pick(['> q', '> ', '>> deep', '> - qitem']),
-      () => pick(indents) + pick(['```', '```css', '~~~', 'code line', '```end']),
-      () => pick(indents) + pick(['# h', '## h2', '---', '***', '| a | b |', '| --- | --- |', '| 1 | 2 |']),
-    ])();
-  for (let i = 0; i < 2000; i += 1) {
-    const source = Array.from({ length: 1 + rnd(12) }, line).join('\n');
-    assert.equal(renderMarkdown(source, 'board'), frozenRender(source, 'board'), `board: ${JSON.stringify(source)}`);
-    assert.equal(renderMarkdown(source, 'living'), frozenRender(source, 'living'), `living: ${JSON.stringify(source)}`);
+  return { rnd, pick: <T,>(from: readonly T[]): T => from[rnd(from.length)] as T };
+};
+
+/** Free lines: every opener at every indent, alone, straight after a marker, and after a marker chain. */
+const looseSource = ({ rnd, pick }: ReturnType<typeof seeded>): string => {
+  const content = (): string => (rnd(3) === 0 ? pick(TEXTS) : pick(BLOCK_OPENERS));
+  const line = (): string => {
+    switch (rnd(8)) {
+      case 0:
+      case 1:
+        return pick(INDENTS) + pick(MARKERS) + content();
+      case 2:
+        return pick(INDENTS) + pick(MARKERS) + pick(MARKERS) + content();
+      case 3:
+      case 4:
+        return pick(INDENTS) + pick(BLOCK_OPENERS);
+      case 5:
+        return pick(INDENTS) + pick(TEXTS);
+      case 6:
+        return pick(BLANKS);
+      default:
+        return `${pick(['> ', '>', '>  ', ' > ', '>> '])}${pick(INDENTS)}${rnd(2) === 0 ? pick(MARKERS) : ''}${content()}`;
+    }
+  };
+  return Array.from({ length: 1 + rnd(14) }, line).join(pick(JOINS));
+};
+
+/**
+ * Structured lists: items whose marker sits at a tracked column, with openers after the marker and
+ * child lines placed relative to the item's content column (before it, at it, one to eight past it).
+ */
+const nestedSource = ({ rnd, pick }: ReturnType<typeof seeded>): string => {
+  const lines: string[] = [];
+  const columns: number[] = [0];
+  const count = 2 + rnd(12);
+  for (let k = 0; k < count; k += 1) {
+    const column = columns[columns.length - 1] ?? 0;
+    const marker = pick(MARKERS);
+    const width = marker.replace(/\t/g, ' ').length;
+    lines.push(`${' '.repeat(column)}${marker}${rnd(2) === 0 ? pick(BLOCK_OPENERS) : pick(TEXTS)}`);
+    const children = rnd(4);
+    for (let c = 0; c < children; c += 1) {
+      if (rnd(5) === 0) lines.push(pick(BLANKS));
+      const at = Math.max(0, column + width + pick([-3, -2, -1, 0, 0, 0, 1, 2, 3, 4, 5, 8]));
+      lines.push(`${' '.repeat(at)}${rnd(3) === 0 ? pick(TEXTS) : pick(BLOCK_OPENERS)}`);
+    }
+    const move = rnd(6);
+    if (move <= 1 && columns.length < 10) columns.push(column + pick([width, width, 1, 2, 4, width + 1, width + 4]));
+    else if (move === 2 && columns.length > 1) columns.pop();
+    else if (move === 3) columns.length = 1;
+    if (rnd(7) === 0) lines.push(pick(BLANKS));
   }
+  return lines.join(pick(JOINS));
+};
+
+/** Visible text and block boundaries only: what is left when a difference is not just markup bytes. */
+const structureOf = (html: string): string => html.replace(/<[^>]*>/g, '').replace(/\s+/g, '');
+
+test('differential guard: seeded block-grammar fuzz matches the frozen d7453ba renderer byte for byte', () => {
+  const totals = { sources: 0, bytes: 0, structural: 0 };
+  let first = '';
+  for (const seed of [123456789, 99991, 4242, 777, 31337]) {
+    const random = seeded(seed);
+    for (let i = 0; i < 6000; i += 1) {
+      const source = i % 3 === 2 ? nestedSource(random) : looseSource(random);
+      totals.sources += 1;
+      const difference = pairDifference(source);
+      if (difference === null) continue;
+      totals.bytes += 1;
+      if (structureOf(difference.board) !== structureOf(difference.frozenBoard) || structureOf(difference.living) !== structureOf(difference.frozenLiving)) totals.structural += 1;
+      if (first === '') first = `seed ${seed}, source ${i}: ${JSON.stringify(source)}\n  now:    ${difference.board}\n  frozen: ${difference.frozenBoard}`;
+    }
+  }
+  assert.equal(totals.sources, 30000);
+  assert.deepEqual({ bytes: totals.bytes, structural: totals.structural }, { bytes: 0, structural: 0 }, `${totals.bytes} of ${totals.sources} sources differ; first: ${first}`);
+});
+
+test('the differential grammar puts every block opener straight after a marker and at varied indents', () => {
+  // The blind spot that let an endless loop through: no generated item began with a quote.
+  const random = seeded(2024);
+  const loose = Array.from({ length: 6000 }, () => looseSource(random)).join('\n');
+  const nested = Array.from({ length: 3000 }, () => nestedSource(random)).join('\n');
+  const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const opener of ['> q', '>', '```', '~~~', '# h', '---', '***', '| a | b |', '| --- | --- |', '- nested', '2. num']) {
+    assert.ok(new RegExp(`^ *(?:- |1\\. )${escape(opener)}$`, 'm').test(loose), `loose: ${opener} straight after a marker`);
+    assert.ok(new RegExp(`^ *(?:- |1\\. )${escape(opener)}$`, 'm').test(nested), `nested: ${opener} straight after a marker`);
+    for (const indent of [0, 2, 4, 6, 8]) {
+      assert.ok(new RegExp(`^ {${indent}}${escape(opener)}$`, 'm').test(`${loose}\n${nested}`), `${opener} at indent ${indent}`);
+    }
+  }
+  assert.ok(/^ *- $/m.test(loose) && /^ *1\. $/m.test(nested), 'empty items');
 });

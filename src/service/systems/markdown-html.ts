@@ -23,9 +23,14 @@
 // (`nextOf`, `stopUrlOf`, `ticksOf`), never a regex that rescans to the end of the text from each
 // opener, and the block grammar's regexes are anchored without nested quantifiers over the same
 // characters. A 20 000-character note of unclosed brackets or a heading line of 4 000 spaces
-// renders in milliseconds, so one hostile file cannot freeze the service's main thread.
+// renders in milliseconds, so one hostile file cannot freeze the service's main thread. Lists copy
+// an item's lines once per nesting level, and the depth cap bounds the levels, so they are linear
+// too (measured at the 20 000-character cap in the tests). Two structural bounds back the
+// measurements: a source past `MARKDOWN_SOURCE_MAX` is not parsed, and the block loop
+// (`walkBlocks`) cannot visit a line twice, so no grammar bug can turn into an endless loop.
 // Pure: no service imports, so the CLI check can bundle it.
 
+import { SYSTEM_NOTE_MAX } from '../../shared/limits.ts';
 import { LIVING_HREF } from './living-safe.ts';
 
 export type MarkdownProfile = 'board' | 'living';
@@ -117,6 +122,13 @@ const ticksOf = (text: string): { nextRun: Int32Array; runLen: Int32Array } => {
 
 // ---- the block grammar ----
 
+/**
+ * The longest source the renderer parses: the note, pattern and brand body cap (the overview's is
+ * smaller). The service already cuts a body to its cap before it gets here (`bodyOf`,
+ * system-json.ts); this makes the bound the renderer's own, whoever calls it.
+ */
+export const MARKDOWN_SOURCE_MAX = SYSTEM_NOTE_MAX;
+
 /** Nesting cap for quotes, lists and emphasis: past it a stretch is escaped text, never a deeper parse. */
 const MAX_DEPTH = 6;
 
@@ -124,6 +136,7 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 // Greedy rest, no trailing quantifiers over the same characters: a long space run cannot backtrack.
 const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/;
 const QUOTE = /^ {0,3}>[ \t]?(.*)$/;
+const ITEM = /^( *)([-*+]|\d{1,9}[.)])([ \t]+)(.*)$/;
 const SEP_CELL = /^:?-+:?$/;
 /** Past this many columns a table is shown as text: cells are rows × columns, so width must be bounded. */
 const TABLE_COLUMNS_MAX = 64;
@@ -135,9 +148,6 @@ const trimSpaceTab = (text: string): string => {
   while (end > 0 && isSpaceTab(text[end - 1] ?? '')) end -= 1;
   return end === text.length ? text : text.slice(0, end);
 };
-
-/** A line of spaces and tabs only, tabs anywhere: what `trim() === ''` used to mean. */
-const BLANK_LINE = /^[ \t]*$/;
 
 const indentOf = (line: string): number => {
   let n = 0;
@@ -337,262 +347,171 @@ const inline = (text: string, profile: MarkdownProfile, depth: number): string =
 
 // ---- blocks ----
 
-const isDigit = (ch: string): boolean => ch >= '0' && ch <= '9';
-
-const spaceTabRun = (line: string, from: number): number => {
-  let n = 0;
-  while (from + n < line.length && isSpaceTab(line[from + n] ?? '')) n += 1;
-  return n;
-};
-
-/**
- * A list item at a known indent, parsed by hand in O(1) of the indent: a regex that consumes the
- * leading spaces would make every ancestor level re-read them, and a deep list superlinear.
- */
-const itemAt = (line: string, indent: number): { width: number; ordered: boolean; start: number } | null => {
-  const ch = line[indent];
-  if (ch === '-' || ch === '*' || ch === '+') {
-    const w = spaceTabRun(line, indent + 1);
-    return w > 0 ? { width: 1 + w, ordered: false, start: 1 } : null;
-  }
-  let d = indent;
-  let digits = 0;
-  while (digits < 9 && isDigit(line[d] ?? '')) {
-    d += 1;
-    digits += 1;
-  }
-  if (digits === 0) return null;
-  const close = line[d];
-  if (close !== '.' && close !== ')') return null;
-  const w = spaceTabRun(line, d + 1);
-  return w > 0 ? { width: digits + 1 + w, ordered: true, start: Number(line.slice(indent, d)) } : null;
-};
-
-/**
- * The line as this block level sees it: dedented by the list offset, but never past the line's own
- * indent — a continuation indented less than the item's content column keeps its first characters.
- */
-const viewOf = (lines: readonly string[], indents: readonly number[], i: number, offset: number): string => {
-  const line = lines[i] ?? '';
-  const cut = Math.min(offset, indents[i] ?? 0);
-  return cut === 0 ? line : line.slice(cut);
-};
-
-/** One list run at one indent: items and their continuation ranges, recursing by index, never copying. */
-const listRun = (
-  lines: readonly string[],
-  indents: readonly number[],
-  blank: readonly boolean[],
-  start: number,
-  to: number,
-  offset: number,
-  profile: MarkdownProfile,
-  depth: number,
-  /** The first line's text after the parent's marker, when the run starts inside an item. */
-  firstRest: string | null = null,
-): { html: string; next: number } => {
-  // Inside an item the run starts at the marker in the rest, at the child offset; otherwise at the
-  // line's own indent. Re-reading the outer indent here would recurse into the same item forever.
-  const first = firstRest !== null ? itemAt(firstRest, 0) : itemAt(lines[start] ?? '', indents[start] ?? 0);
+/** One list run at one indent: items with their continuation and nested blocks, dedented. */
+const listRun = (lines: readonly string[], start: number, profile: MarkdownProfile, depth: number): { html: string; next: number } => {
+  const first = ITEM.exec(lines[start] ?? '');
   // The caller only enters on a list item line.
   if (first === null) return { html: '', next: start + 1 };
-  const base = firstRest !== null ? 0 : Math.max(0, (indents[start] ?? 0) - offset);
-  const tag = first.ordered ? 'ol' : 'ul';
+  const base = (first[1] ?? '').length;
+  const marker = first[2] ?? '';
+  const ordered = /^\d/.test(marker);
+  const tag = ordered ? 'ol' : 'ul';
   // The first number is the list's start; the living page's allowlist has no start attribute.
-  const startAttr = first.ordered && first.start !== 1 && profile === 'board' ? ` start="${first.start}"` : '';
+  const from = ordered ? Number(marker.replace(/[.)]$/, '')) : 1;
+  const startAttr = ordered && from !== 1 && profile === 'board' ? ` start="${from}"` : '';
   const items: string[] = [];
   let i = start;
-  while (i < to) {
-    const atFirst = i === start && firstRest !== null;
-    const rel = atFirst ? 0 : Math.max(0, (indents[i] ?? 0) - offset);
-    const it = atFirst ? first : itemAt(lines[i] ?? '', indents[i] ?? 0);
-    if (it === null || rel !== base) break;
-    const childOffset = atFirst ? offset + it.width : (indents[i] ?? 0) + it.width;
-    let j = i + 1;
+  while (i < lines.length) {
+    const m = ITEM.exec(lines[i] ?? '');
+    if (m === null || (m[1] ?? '').length !== base) break;
+    const contentIndent = (m[1] ?? '').length + (m[2] ?? '').length + (m[3] ?? '').length;
+    const li: string[] = [m[4] ?? ''];
+    i += 1;
     for (;;) {
-      if (j >= to) break;
-      const cur = lines[j] ?? '';
-      if (blank[j]) {
-        let k = j;
-        while (k < to && blank[k]) k += 1;
-        if (k < to && Math.max(0, (indents[k] ?? 0) - offset) > base) {
-          j = k;
+      const cur = lines[i];
+      if (cur === undefined) break;
+      if (cur.trim() === '') {
+        let j = i;
+        while (j < lines.length && (lines[j] ?? '').trim() === '') j += 1;
+        const after = lines[j];
+        if (after !== undefined && indentOf(after) > base) {
+          li.push('');
+          i = j;
           continue;
         }
         break;
       }
-      const r = Math.max(0, (indents[j] ?? 0) - offset);
-      const it2 = itemAt(cur, indents[j] ?? 0);
-      if (it2 !== null && r <= base) break;
-      if (r > base) {
-        j += 1;
+      const nm = ITEM.exec(cur);
+      if (nm !== null && (nm[1] ?? '').length <= base) break;
+      if (indentOf(cur) > base) {
+        li.push(cur.slice(Math.min(contentIndent, indentOf(cur))));
+        i += 1;
         continue;
       }
       break;
     }
-    const itemText = atFirst ? (firstRest ?? '') : (lines[i] ?? '').slice(indents[i] ?? 0);
-    items.push(`<li>${blocks(lines, indents, blank, i, j, childOffset, profile, depth + 1, itemText.slice(it.width))}</li>`);
-    i = j;
+    items.push(`<li>${blocks(li, profile, depth + 1)}</li>`);
   }
   return { html: `<${tag} class="dc-md-list"${startAttr}>${items.join('')}</${tag}>`, next: i };
 };
 
-/** The block grammar over a line range at one indent offset: fences, headings, rules, quotes, lists, tables, paragraphs. */
-const blocks = (
-  lines: readonly string[],
-  indents: readonly number[],
-  blank: readonly boolean[],
-  from: number,
-  to: number,
-  offset: number,
-  profile: MarkdownProfile,
-  depth: number,
-  /** The first line's text after a list marker, which sits at no indent of its own. */
-  firstRest: string | null = null,
-): string => {
-  if (depth > MAX_DEPTH) {
-    // Past the cap the stretch is escaped text, one source line per line, with the indent the old
-    // progressive dedent left: spaces beyond the offset, then the content. The spaces are repeated,
-    // not copied from the source, so the fallback stays linear in the input.
-    const text: string[] = [];
-    for (let i = from; i < to; i += 1) {
-      if (i === from && firstRest !== null) {
-        text.push(firstRest);
-        continue;
-      }
-      if (blank[i] && offset > 0) {
-        text.push('');
-        while (i < to && blank[i]) i += 1;
-        continue;
-      }
-      const indent = indents[i] ?? 0;
-      const cut = Math.min(offset, indent);
-      text.push(' '.repeat(indent - cut) + (lines[i] ?? '').slice(cut));
-    }
-    return `<p>${escapeHtml(text.join('\n').trim())}</p>`;
-  }
+/**
+ * The one loop that walks a block level's lines, and the structural guarantee that it ends: `step`
+ * reads the block starting at line `i` and answers where the next block starts. A step that claims
+ * no line (`next <= i`) is never retried on the same line, which is how a parser bug becomes an
+ * endless loop and an out-of-memory crash of the service: that line is emitted by `stuck` (escaped
+ * text) and the walk moves on. A level therefore costs at most `count` steps, whatever `step` does.
+ */
+export const walkBlocks = (count: number, step: (i: number) => { html: string; next: number }, stuck: (i: number) => string): string => {
   const out: string[] = [];
-  let i = from;
-  while (i < to) {
-    const rest = i === from ? firstRest : null;
-    const line = rest ?? lines[i] ?? '';
-    const rel = rest !== null ? 0 : Math.max(0, (indents[i] ?? 0) - offset);
-    // Blank means spaces and tabs only, precomputed once per line: O(1) here at any depth.
-    if (rest === null && blank[i]) {
-      i += 1;
-      continue;
-    }
-    // Fences, headings, rules and quotes sit at most three spaces in; deeper lines skip those regexes.
-    const view = rel <= 3 ? (rest ?? viewOf(lines, indents, i, offset)) : null;
-    const fence = view === null ? null : FENCE.exec(view);
-    if (fence !== null) {
-      const marker = fence[1] ?? '```';
-      const close = new RegExp(`^ {0,3}${marker[0] === '`' ? '`' : '~'}{${marker.length},}[ \\t]*$`);
-      const content: string[] = [];
-      i += 1;
-      while (i < to && !close.test(viewOf(lines, indents, i, offset))) {
-        // Inside an item a run of blank lines is one empty line, as the old item array held it;
-        // at the top level the whitespace line is content and stays as written.
-        if (blank[i] && offset > 0) {
-          content.push('');
-          while (i < to && blank[i]) i += 1;
-          continue;
-        }
-        content.push(viewOf(lines, indents, i, offset));
-        i += 1;
-      }
-      i += 1; // the closing fence, or the end of the range
-      out.push(codeBlock(content.join('\n'), profile));
-      continue;
-    }
-    const heading = view === null ? null : HEADING.exec(view);
-    if (heading !== null) {
-      const tag = headingTag(heading[1]?.length ?? 1, profile);
-      out.push(`<${tag} class="dc-md-${tag}">${inline(headingText(heading[2] ?? ''), profile, depth)}</${tag}>`);
-      i += 1;
-      continue;
-    }
-    if (view !== null && isHorizontalRule(view)) {
-      out.push('<hr class="dc-md-hr">');
-      i += 1;
-      continue;
-    }
-    if (view !== null && QUOTE.test(view)) {
-      const inner: string[] = [];
-      while (i < to) {
-        const r = Math.max(0, (indents[i] ?? 0) - offset);
-        const q = r <= 3 ? QUOTE.exec(viewOf(lines, indents, i, offset)) : null;
-        if (q === null) break;
-        inner.push(q[1] ?? '');
-        i += 1;
-      }
-      out.push(quoteBlock(blocks(inner, inner.map(indentOf), inner.map((line) => BLANK_LINE.test(line)), 0, inner.length, 0, profile, depth + 1), profile));
-      continue;
-    }
-    if (itemAt(line, rest !== null ? 0 : (indents[i] ?? 0)) !== null) {
-      const run = listRun(lines, indents, blank, i, to, offset, profile, depth, rest);
-      out.push(run.html);
-      i = run.next;
-      continue;
-    }
-    const next = i + 1 < to ? lines[i + 1] : undefined;
-    if (line.includes('|') && next !== undefined && isSeparator(next)) {
-      const header = cellsOf(line);
-      const sep = cellsOf(next);
-      if (header.length === sep.length && header.length <= TABLE_COLUMNS_MAX) {
-        i += 2;
-        const rowLines: string[] = [];
-        while (i < to && !blank[i] && (lines[i] ?? '').includes('|')) {
-          rowLines.push(lines[i] ?? '');
-          i += 1;
-        }
-        // Every row emits one cell per header column, so a wide header over bare "|" rows would
-        // multiply the source into gigabytes. The cells a table may emit are bounded by the
-        // characters it was written from; rows past that budget stay visible as a text paragraph.
-        const budget = line.length + next.length + rowLines.reduce((total, row) => total + row.length, 0);
-        const maxRows = Math.max(1, Math.floor(budget / header.length));
-        const rows = rowLines.slice(0, maxRows).map((row) => {
-          const cells = cellsOf(row);
-          return header.map((_, column) => inline(cells[column] ?? '', profile, depth));
-        });
-        out.push(tableBlock(header.map((cell) => inline(cell, profile, depth)), rows));
-        const rowIndents = rowLines.map(indentOf);
-        const rest = rowLines.slice(maxRows).map((row, k) => row.slice(Math.min(offset, rowIndents[maxRows + k] ?? 0)));
-        if (rest.length > 0) out.push(`<p>${inline(rest.join('\n').trim(), profile, depth)}</p>`);
-        continue;
-      }
-    }
-    const paragraph: string[] = [rest ?? viewOf(lines, indents, i, offset)];
-    i += 1;
-    while (i < to) {
-      const cur = lines[i] ?? '';
-      if (blank[i]) break;
-      const r = Math.max(0, (indents[i] ?? 0) - offset);
-      if (itemAt(cur, indents[i] ?? 0) !== null) break;
-      if (r <= 3) {
-        const v = viewOf(lines, indents, i, offset);
-        if (FENCE.test(v) || HEADING.test(v) || isHorizontalRule(v) || QUOTE.test(v)) break;
-      }
-      paragraph.push(viewOf(lines, indents, i, offset));
+  let i = 0;
+  while (i < count) {
+    const block = step(i);
+    if (block.next > i) {
+      out.push(block.html);
+      i = block.next;
+    } else {
+      out.push(stuck(i));
       i += 1;
     }
-    out.push(`<p>${inline(paragraph.join('\n').trim(), profile, depth)}</p>`);
   }
   return out.join('');
 };
 
+/** The block starting at line `start` (a fence, heading, rule, quote, list, table or paragraph) and the line after it. */
+const blockAt = (lines: readonly string[], start: number, profile: MarkdownProfile, depth: number): { html: string; next: number } => {
+  let i = start;
+  const line = lines[i] ?? '';
+  if (line.trim() === '') return { html: '', next: i + 1 };
+  const fence = FENCE.exec(line);
+  if (fence !== null) {
+    const marker = fence[1] ?? '```';
+    const close = new RegExp(`^ {0,3}${marker[0] === '`' ? '`' : '~'}{${marker.length},}[ \\t]*$`);
+    const content: string[] = [];
+    i += 1;
+    while (i < lines.length && !close.test(lines[i] ?? '')) {
+      content.push(lines[i] ?? '');
+      i += 1;
+    }
+    // Past the closing fence, or the end of the file.
+    return { html: codeBlock(content.join('\n'), profile), next: i + 1 };
+  }
+  const heading = HEADING.exec(line);
+  if (heading !== null) {
+    const tag = headingTag(heading[1]?.length ?? 1, profile);
+    return { html: `<${tag} class="dc-md-${tag}">${inline(headingText(heading[2] ?? ''), profile, depth)}</${tag}>`, next: i + 1 };
+  }
+  if (isHorizontalRule(line)) return { html: '<hr class="dc-md-hr">', next: i + 1 };
+  if (QUOTE.test(line)) {
+    const inner: string[] = [];
+    while (i < lines.length) {
+      const q = QUOTE.exec(lines[i] ?? '');
+      if (q === null) break;
+      inner.push(q[1] ?? '');
+      i += 1;
+    }
+    return { html: quoteBlock(blocks(inner, profile, depth + 1), profile), next: i };
+  }
+  if (ITEM.test(line)) return listRun(lines, i, profile, depth);
+  const next = lines[i + 1];
+  if (line.includes('|') && next !== undefined && isSeparator(next)) {
+    const header = cellsOf(line);
+    const sep = cellsOf(next);
+    if (header.length === sep.length && header.length <= TABLE_COLUMNS_MAX) {
+      i += 2;
+      const rowLines: string[] = [];
+      while (i < lines.length && (lines[i] ?? '').trim() !== '' && (lines[i] ?? '').includes('|')) {
+        rowLines.push(lines[i] ?? '');
+        i += 1;
+      }
+      // Every row emits one cell per header column, so a wide header over bare "|" rows would
+      // multiply the source into gigabytes. The cells a table may emit are bounded by the
+      // characters it was written from; rows past that budget stay visible as a text paragraph.
+      const budget = line.length + next.length + rowLines.reduce((total, row) => total + row.length, 0);
+      const maxRows = Math.max(1, Math.floor(budget / header.length));
+      const rows = rowLines.slice(0, maxRows).map((row) => {
+        const cells = cellsOf(row);
+        return header.map((_, column) => inline(cells[column] ?? '', profile, depth));
+      });
+      const table = tableBlock(header.map((cell) => inline(cell, profile, depth)), rows);
+      const rest = rowLines.slice(maxRows);
+      return { html: rest.length > 0 ? `${table}<p>${inline(rest.join('\n').trim(), profile, depth)}</p>` : table, next: i };
+    }
+  }
+  const paragraph: string[] = [line];
+  i += 1;
+  while (i < lines.length) {
+    const cur = lines[i] ?? '';
+    if (cur.trim() === '' || FENCE.test(cur) || HEADING.test(cur) || isHorizontalRule(cur) || QUOTE.test(cur) || ITEM.test(cur)) break;
+    paragraph.push(cur);
+    i += 1;
+  }
+  return { html: `<p>${inline(paragraph.join('\n').trim(), profile, depth)}</p>`, next: i };
+};
+
 /**
- * Source lines: CR, CRLF and the line terminators JS regexes treat specially (U+2028, U+2029, and
- * NEL for a consistent split) all become LF before any regex runs, so `.` and `$` inside a line
- * never meet a character the splitter left behind. Leading tabs become four spaces.
+ * The block grammar over whole lines: fences, headings, rules, quotes, lists, tables, paragraphs.
+ * Each level works on its own lines (a list item's are dedented copies), so no branch ever reads a
+ * line through a different view than the one that matched it.
  */
+const blocks = (lines: readonly string[], profile: MarkdownProfile, depth: number): string => {
+  if (depth > MAX_DEPTH) return `<p>${escapeHtml(lines.join('\n').trim())}</p>`;
+  return walkBlocks(
+    lines.length,
+    (i) => blockAt(lines, i, profile, depth),
+    (i) => `<p>${escapeHtml((lines[i] ?? '').trim())}</p>`,
+  );
+};
+
 /**
  * The line terminators JS regexes treat specially: CR (with optional LF), U+2028, U+2029, and NEL
  * for a consistent split. Built from code points so no literal separator sits in this source.
+ * They all become LF before any regex runs, so `.` and `$` inside a line never meet a character
+ * the splitter left behind (a `(.*)$` that cannot reach the end backtracks quadratically).
  */
 const LINE_BREAK = new RegExp(`\\r\\n?|[${String.fromCharCode(0x2028, 0x2029, 0x85)}]`, 'g');
 
-/** Source lines with every line terminator normalised to LF and leading tabs expanded, once. */
+/** Source lines with every line terminator normalised to LF and leading tabs expanded, the one place both happen. */
 const sourceLines = (source: string): string[] =>
   source
     .replace(LINE_BREAK, '\n')
@@ -602,13 +521,12 @@ const sourceLines = (source: string): string[] =>
 /**
  * Agent-written markdown as HTML for one of the two system documents. Every text stretch is
  * escaped; the markup is only the vocabulary above. Empty source answers '' (the caller shows its
- * own empty line). Indents are measured once; nesting recurses by index and offset, so a deep
- * list costs time linear in its depth, not in depth times its own length.
+ * own empty line). Leading tabs become four spaces so indent reads the same everywhere; a code
+ * fence keeps them as spaces too. A source past `MARKDOWN_SOURCE_MAX` is not parsed at all: it is
+ * one escaped paragraph, so the cost measured at the cap is the most a single call can cost.
  */
-export const renderMarkdown = (source: string, profile: MarkdownProfile = 'board'): string => {
-  const lines = sourceLines(source);
-  return blocks(lines, lines.map(indentOf), lines.map((line) => BLANK_LINE.test(line)), 0, lines.length, 0, profile, 0);
-};
+export const renderMarkdown = (source: string, profile: MarkdownProfile = 'board'): string =>
+  source.length > MARKDOWN_SOURCE_MAX ? `<p>${escapeHtml(source.trim())}</p>` : blocks(sourceLines(source), profile, 0);
 
 /**
  * A note body that opens with its own title as a heading (the service derives the title from that
