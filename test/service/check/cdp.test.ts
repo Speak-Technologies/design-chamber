@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 
-import { checkBrowserArgs, createFrameParser, encodeMessage } from '../../../src/service/check/cdp.ts';
+import { CdpUnavailable, checkBrowserArgs, createFrameParser, encodeMessage, openCdp } from '../../../src/service/check/cdp.ts';
 import { CHECK_CSP, DOCUMENT_ORIGIN } from '../../../src/service/check/render.ts';
 import { browserClassOf, planArtboards } from '../../../src/service/check/engine.ts';
 import { parseDesignJsonText } from '../../../src/shared/design-json.ts';
@@ -95,4 +97,86 @@ test('the plan follows the wall: screens with a file, at their viewports; pages 
   const page = parseDesignJsonText(JSON.stringify({ version: 1, kind: 'page' }), { fallbackTitle: 'x', fallbackTime: iso }).design;
   assert.deepEqual(planArtboards({ design: page, entries: [{ rel: 'index.html', screen: null }] }).map((item) => `${item.file}@${item.viewport.id}`), ['index.html@laptop']);
   assert.deepEqual(planArtboards({ design: page, entries: [] }), []);
+});
+
+// ---- the launch handshake against a fake browser process ----
+
+type FakeChild = EventEmitter & { stdio: (PassThrough | null)[]; pid: number | undefined; kill: (signal?: string) => boolean };
+
+/**
+ * A `spawn` fake: a browser process that stays alive but only answers `Browser.getVersion` after
+ * `delayMs` (a cold first start). `exitAt` makes it die at that age instead. It plays just enough of
+ * a ChildProcess for `openCdp` (stdio pipes 3/4, `on`, `kill`, `pid`); `pid` is undefined so the
+ * kill falls back to `child.kill` and no real process group is signalled.
+ */
+const fakeBrowserSpawn = (delayMs: number, exitAt?: number): typeof import('node:child_process').spawn => {
+  const impl = (): FakeChild => {
+    const toBrowser = new PassThrough();
+    const fromBrowser = new PassThrough();
+    const child = new EventEmitter() as FakeChild;
+    child.stdio = [null, null, null, toBrowser, fromBrowser];
+    child.pid = undefined;
+    child.kill = () => {
+      child.emit('exit', 0, null);
+      return true;
+    };
+    let ready = false;
+    let lastVersionId: number | null = null;
+    const answer = (id: number, result: object): void => {
+      if (!fromBrowser.destroyed) fromBrowser.write(encodeMessage({ id, result }));
+    };
+    toBrowser.on('data', createFrameParser((text) => {
+      const msg = JSON.parse(text) as { id?: number; method?: string };
+      if (typeof msg.id !== 'number') return;
+      if (msg.method === 'Browser.getVersion') {
+        lastVersionId = msg.id;
+        if (ready) answer(msg.id, { product: 'FakeChrome/158.0', protocolVersion: '1.3' });
+      } else if (msg.method === 'Browser.close') {
+        answer(msg.id, {});
+        child.emit('exit', 0, null);
+      }
+    }));
+    const readyTimer = setTimeout(() => {
+      ready = true;
+      if (lastVersionId !== null) answer(lastVersionId, { product: 'FakeChrome/158.0', protocolVersion: '1.3' });
+    }, delayMs);
+    readyTimer.unref?.();
+    if (exitAt !== undefined) {
+      const exitTimer = setTimeout(() => child.emit('exit', 1, null), exitAt);
+      exitTimer.unref?.();
+    }
+    return child;
+  };
+  // Safe: openCdp only reads stdio[3]/[4], `on`, `kill` and `pid`, all of which the fake provides.
+  return impl as unknown as typeof import('node:child_process').spawn;
+};
+
+test('a slow first answer from a live browser is a slow launch, not "can\'t be driven"', async () => {
+  // The first answer lands well after one wait window: the old single-window handshake gave up here
+  // and called the browser unavailable; a live browser must be waited for.
+  const started = Date.now();
+  const session = await openCdp('/fake/chrome', [], { timeoutMs: 40, spawnImpl: fakeBrowserSpawn(150) });
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed >= 150, `waited for the live browser to answer (${elapsed} ms)`);
+  assert.equal(session.exited, false);
+  await session.close();
+});
+
+test('a browser that exits at once is still "can\'t be driven", without waiting out the launch budget', async () => {
+  const started = Date.now();
+  await assert.rejects(
+    openCdp('/fake/chrome', [], { timeoutMs: 5000, launchBudgetMs: 60_000, spawnImpl: fakeBrowserSpawn(60_000, 10) }),
+    (error: unknown) => error instanceof CdpUnavailable,
+  );
+  assert.ok(Date.now() - started < 1000, 'a dead browser fails fast, not after the whole launch budget');
+});
+
+test('a browser alive but silent for the whole launch budget is "can\'t be driven"', async () => {
+  const started = Date.now();
+  await assert.rejects(
+    openCdp('/fake/chrome', [], { timeoutMs: 30, launchBudgetMs: 120, spawnImpl: fakeBrowserSpawn(60_000) }),
+    (error: unknown) => error instanceof CdpUnavailable,
+  );
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed >= 120 && elapsed < 1000, `gave up at the launch budget (${elapsed} ms)`);
 });

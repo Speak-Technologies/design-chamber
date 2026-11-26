@@ -23,6 +23,18 @@ export class CdpUnavailable extends Error {
   }
 }
 
+/**
+ * A command got no answer in its window. Distinct from a `CdpError` the browser actually answered
+ * with: for the launch handshake, "no answer yet" from a live process means it is still starting,
+ * not that it cannot be driven.
+ */
+export class CdpTimeout extends CdpError {
+  constructor(method: string, message: string) {
+    super(method, message);
+    this.name = 'CdpTimeout';
+  }
+}
+
 // ---- framing (pure) ----
 
 export const encodeMessage = (message: object): Buffer => Buffer.from(`${JSON.stringify(message)}\0`, 'utf8');
@@ -112,16 +124,25 @@ export type CdpSession = {
 };
 
 export type OpenOptions = {
-  /** How long the first answer may take. */
+  /** One window of waiting for the first answer; a live browser that outlives it is asked again. */
   timeoutMs: number;
   /** Default timeout of one command. */
   commandTimeoutMs?: number;
+  /** Whole launch budget while the process stays alive; defaults to `DEFAULT_LAUNCH_BUDGET_MS`. Test seam. */
+  launchBudgetMs?: number;
   /** Injectable for tests. */
   spawnImpl?: typeof spawn;
 };
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 15_000;
 const CLOSE_GRACE_MS = 1500;
+/**
+ * How long a live browser is given to answer the launch handshake. A cold first start on a loaded
+ * machine can take tens of seconds (CI saw the first launch exceed 20 s while later launches were
+ * fast); a process that exits fails at once regardless, so this only bounds a live-but-silent one.
+ * Kept well under the check tool's 180 s kill so a patient launch still leaves room for the run.
+ */
+const DEFAULT_LAUNCH_BUDGET_MS = 60_000;
 
 const killTree = (child: ChildProcess, platform: NodeJS.Platform): void => {
   const { pid } = child;
@@ -215,7 +236,7 @@ export const openCdp = async (browserPath: string, args: string[], options: Open
       return new Promise<T>((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(id);
-          reject(new CdpError(method, `no answer in ${timeoutMs} ms`));
+          reject(new CdpTimeout(method, `no answer in ${timeoutMs} ms`));
         }, timeoutMs);
         pending.set(id, { method, resolve: resolve as (value: never) => void, reject, timer });
         toBrowser.write(encodeMessage({ id, method, params, ...(sendOptions.sessionId ? { sessionId: sendOptions.sessionId } : {}) }), (error) => {
@@ -264,8 +285,25 @@ export const openCdp = async (browserPath: string, args: string[], options: Open
     },
   };
 
+  // Prove the browser answers (`Browser.getVersion`). A live process that has not answered yet is
+  // still launching (a cold first start on a loaded machine can take tens of seconds), so it is
+  // asked again until the launch budget is spent. Only a process that died (failAll rejects with
+  // CdpUnavailable at once), one that answers with an error, or one silent for the whole budget is
+  // "can't be driven". A slow launch is not.
+  const launchBudgetMs = options.launchBudgetMs ?? DEFAULT_LAUNCH_BUDGET_MS;
+  const launchDeadline = Date.now() + launchBudgetMs;
   try {
-    await session.send('Browser.getVersion', {}, { timeoutMs: options.timeoutMs });
+    for (;;) {
+      const remaining = launchDeadline - Date.now();
+      if (remaining <= 0) throw new CdpTimeout('Browser.getVersion', `no answer in ${launchBudgetMs} ms`);
+      try {
+        await session.send('Browser.getVersion', {}, { timeoutMs: Math.min(options.timeoutMs, remaining) });
+        break;
+      } catch (error) {
+        if (exited || !(error instanceof CdpTimeout)) throw error;
+        // Alive but silent: still starting. Wait another window.
+      }
+    }
   } catch (error) {
     await session.close();
     throw new CdpUnavailable(error instanceof Error ? error.message : 'The browser did not answer.');
