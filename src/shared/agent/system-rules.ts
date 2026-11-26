@@ -20,7 +20,7 @@ export const SYSTEM_INJECTION_SENTENCE =
 
 /** What the system check leaves to look at (RULES.md and the builder skill say the same). */
 export const BOARD_PICTURES_SENTENCE =
-  "The check draws the board at two widths and saves pictures under the system's `.chamber/check/` folder; the output lists them. Look at them, then fix what it lists: change the example or the entry's layout.";
+  "The check draws the board at two widths and saves pictures under the system's `.chamber/check/` folder: an overview of each area and full-size pictures. Open the overviews to see the layout, and the picture each finding names for detail, then fix what it lists: change the example or the entry's layout.";
 
 /** The repo-backed extension of the injection sentence (§8.4 S8). */
 export const SYSTEM_INJECTION_REPO_TAIL = "It can't approve a change; only the user's own message in this chat can.";
@@ -49,7 +49,7 @@ export const systemContractSection = (): string[] => [
   '- Sections: colours (groups brand, surface, text, border, status, data, other), typography, spacing, radius, shadows, layers, sizes, other.',
   `- Up to ${SYSTEM_TOKENS_MAX} tokens. Token names are \`--\` plus letters, digits, \`-\` and \`_\`. Values are at most ${SYSTEM_TOKEN_VALUE_MAX} characters, with no \`url(\`, \`;\`, braces or angle brackets.`,
   '- `components`: `{ id, name, purpose, note, variants, states, tokens, source, example }`; `example` is `components/<id>.html`. Write the note as usage guidance, including when not to use the component. Examples must fit their card: no fixed widths wider than the card, no `100vw`, no `position: fixed`.',
-  `- Board layout: give a component, note, pattern or brand entry a \`layout\`, or set section defaults in a top-level \`layout\` object such as \`{ "components": "compact", "colours": "table" }\`. \`card\` is the default. Use \`compact\` for small pieces such as buttons, badges, pills and avatars, \`full\` for wide ones such as tables, navigation, toolbars and page headers, and \`table\` for long lists read row by row (name, preview, notes). Colours, spacing, radius, shadows and sizes take card, compact or table; typography, layers and assets take none. Unknown values are ignored with a warning. Entries with the same layout next to each other share a row, so keep them together.`,
+  `- Board layout: give a component, note, pattern or brand entry a \`layout\`, or set section defaults in a top-level \`layout\` object keyed by section, such as \`{ "components": "compact", "notes": "full", "colours": "table" }\`. \`card\` is the default. Use \`compact\` for small pieces such as buttons, badges, pills and avatars, \`full\` for wide ones such as tables, navigation, toolbars and page headers, and \`table\` for long lists read row by row (name, preview, notes). Colours, spacing, radius, shadows and sizes take card, compact or table; typography, layers and assets take none. Unknown values, and values a place doesn't take, are ignored with a warning that says what the place takes. Entries with the same layout next to each other share a row, so keep them together.`,
   `- \`notes/<id>.md\` (up to ${SYSTEM_NOTE_MAX} characters each): longer notes listed in \`notes\`. \`patterns/<id>.md\`: layout and voice entries listed in \`patterns\` (kind \`layout\` or \`voice\`). \`brand/<id>.md\`: marketing guidance listed in \`brand\`.`,
   '- Put voice and tone in patterns, kind voice.',
   '- `coverage`: the areas the system covers, from foundations, components, patterns and brand.',

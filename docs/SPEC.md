@@ -1786,7 +1786,8 @@ Every write goes through `systems.dir(id)` + `resolvePlainTarget` or the root's 
   `--static` (tool: `static: true`), `dc check --system <id>` also draws the specimen board (the page's own
   generator; the waiting proposal's board for a repo home with a current proposal) in headless Chrome through
   the design check's engine (`renderArtboards` with an `inspect` hook, same CSP, offline, pipe) at 1526px and
-  1046px, light scheme; saves ≤ 32 per-area PNG tiles under `_systems/<id>/.chamber/check/<runId>/`; and adds
+  1046px, light scheme; saves per area and width an overview (the whole area scaled down) and full-size 900px
+  tiles from a pixel budget (≤ 120 PNGs) under `_systems/<id>/.chamber/check/<runId>/`; and adds
   measured `system-board-*` findings (preview wider than the board, preview or text outside its card, board
   overflow, layout hint too small, partial). No browser → static findings plus `browser-missing`.
   `GET /systems/:id/checks` and the `checks` prompt stay static.

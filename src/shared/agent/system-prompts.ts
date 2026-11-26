@@ -16,7 +16,7 @@ import { CHECK_TOOL_NAME } from './guide.ts';
 import { SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE } from './system-rules.ts';
 
 /** The check saves pictures of the board (documentation/specs/system-board-layout-and-visual-check.md §A.5). */
-const BOARD_PICTURES_SHORT = 'The check saves pictures of the board at two widths; look at them before you say you are done.';
+const BOARD_PICTURES_SHORT = 'The check saves pictures of the board at two widths (an overview of each area, then full size); look at them before you say you are done.';
 
 /** What every system message knows about the system. */
 export type SystemPromptSystem = {

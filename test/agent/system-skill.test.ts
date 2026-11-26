@@ -167,7 +167,10 @@ describe('the body: the rev 3 protocol', () => {
   test('board layout and pictures: the contract names all four layouts and the sections that take them; the check section says it draws the board', () => {
     const contract = systemContractSection().join('\n');
     for (const value of ['`card`', '`compact`', '`full`', '`table`']) assert.ok(contract.includes(value), value);
-    assert.ok(contract.includes('a top-level `layout` object'));
+    assert.ok(contract.includes('a top-level `layout` object keyed by section'));
+    // Notes are listed under notes[], so the section default the agent writes is `notes` (KI-32).
+    assert.ok(contract.includes('"notes": "full"'));
+    assert.ok(contract.includes("values a place doesn't take, are ignored with a warning that says what the place takes"));
     assert.ok(contract.includes('Colours, spacing, radius, shadows and sizes take card, compact or table; typography, layers and assets take none.'));
     assert.ok(contract.includes('no `100vw`, no `position: fixed`'));
     assert.ok(body.includes(contract), 'the skill carries the same contract');

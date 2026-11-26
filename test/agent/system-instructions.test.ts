@@ -238,7 +238,7 @@ describe('system prompts (§8.5, §8.10)', () => {
     assert.ok(make.includes("Don't change anything in /home/you/code/shop. Write only in"));
     assert.ok(make.includes('(+30 more)'));
     assert.ok(make.includes(SYSTEM_INJECTION_SENTENCE));
-    assert.ok(make.endsWith('The check saves pictures of the board at two widths; look at them before you say you are done.'), 'the last line of the make prompt');
+    assert.ok(make.endsWith('The check saves pictures of the board at two widths (an overview of each area, then full size); look at them before you say you are done.'), 'the last line of the make prompt');
 
     const living = buildSystemLivingPagePrompt({ system: { ...SYSTEM, repo: { directory: '/home/you/code/shop', folder: 'design-system', livingPage: 'design-system/index.html' } }, stagedFile: '/x/living-page.html', revision: 7 });
     assert.ok(living.includes('copy /x/living-page.html byte for byte to /home/you/code/shop/design-system/index.html'));

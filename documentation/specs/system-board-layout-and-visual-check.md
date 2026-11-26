@@ -30,7 +30,7 @@ marked **new file**.
 | D5 | Agent order is kept. Neighbouring entries with the same effective layout form one **run**; each run is one container. | The agent controls order and grouping; Design Chamber never reorders. |
 | D6 | The living page honours hints in this PR. | It shares `renderSpecimenSection`; diverging board and page would confuse users. No false drift (§A.6). |
 | D7 | The visual check renders at two board widths: **wide 1526px** and **narrow 1046px**, light scheme. | The full-screen board frame is `window − 360px side panel − 2×16px margin − 2px border` (`src/ui/styles.css` `.dc-syspg-panel`, `.dc-sys-board`). 1526 = a 1920px window (two component columns); 1046 = a 1440px window (one column). The rail (300 to 460px) is a glance and is not checked. |
-| D8 | PNGs per **area** in viewport-height tiles (900px), ≤ 4 tiles per area per width, ≤ 32 per run. | An agent can open "components@narrow.png" directly; tiles stay readable; output is bounded. |
+| D8 | **Revised after QA.** Per area and width: one **overview** (the whole area scaled to about 4 000px tall, 0.2 to 0.5, stitched from per-band strips the browser draws at that scale) and full-size 900px **tiles** paid from a pixel budget (`SYSTEM_CHECK_TILE_PIXELS_MAX` 100 MP per run, half per width), bands with a finding first; ≤ 120 PNGs. Was: ≤ 4 tiles per area, ≤ 32 per run, which left two thirds of nexus unpictured. | The agent sees the whole board as the user does (overview for layout, tiles for detail); output stays bounded with an honest note. |
 | D9 | `GET /systems/:id/checks` and the `checks` chat prompt stay static. | Drawing a board costs 5 to 40s of headless Chrome per call; the route runs on every system page load. The agent gets the visual findings from the CLI, which the fix prompt already tells it to run. Open Question 2. |
 | D10 | When a repo-backed system has a current proposal waiting, the check draws the **proposed** board; otherwise the live board (`filesDir`: the internal folder or the snapshot). | During a repo build the snapshot is empty until the user approves; the proposal is what the agent is about to ask the user to approve. Open Question 3. |
 | D11 | Reuse the design check's engine: `renderArtboards` (browser, CSP, Fetch interception, timeouts, restarts) gains one optional `inspect` hook; the run-folder/PNG/cleanup code in `engine.ts` is extracted once and shared. | No second browser driver, no copied run-folder code. |
@@ -293,8 +293,11 @@ Limits (`src/shared/limits.ts`, WP0):
 | Constant | Value | Bounds |
 |---|---|---|
 | `SYSTEM_CHECK_BOARD_WIDTHS` | `[{ id: 'wide', label: 'Wide board', width: 1526, height: 900 }, { id: 'narrow', label: 'Narrow board', width: 1046, height: 900 }]` | widths drawn (D7) |
-| `SYSTEM_CHECK_TILES_PER_AREA` | 4 | ≤ 3 600px pictured per area per width |
-| `SYSTEM_CHECK_PNGS_MAX` | 32 | 2 widths × 4 areas × 4 tiles |
+| `SYSTEM_CHECK_TILE_PIXELS_MAX` (built; replaced `SYSTEM_CHECK_TILES_PER_AREA` 4) | 100 000 000 | full-size pixels per run, half per width |
+| `SYSTEM_CHECK_PNGS_MAX` (built; was 32) | 120 | overviews and tiles, half per width |
+| `SYSTEM_CHECK_OVERVIEW_HEIGHT_MAX` / `_SCALE_MIN` / `_SCALE_MAX` (built) | 4 000 / 0.2 / 0.5 | overview size |
+| `SYSTEM_CHECK_ENTRY_TILES_MAX` (built) | 2 | tiles taken first per entry with a finding |
+| `SYSTEM_CHECK_OPTIONAL_TILES_TIME_SHARE` (built) | 0.6 | after this share of a width's time, only strips and finding tiles |
 | `SYSTEM_CHECK_BOARD_TIMEOUT_MS` | 45 000 | one width |
 | `SYSTEM_CHECK_RENDER_BUDGET_MS` | 110 000 | whole render; the tool kills at 180 000 |
 | `SYSTEM_BOARD_ITEMS_MEASURED_MAX` | 1 000 | entries the probe measures |
@@ -352,6 +355,16 @@ last cell (no right padding) read as 1 to 2px of text outside.
 `fileOf` answers `components/<id>.html` for a component entry and `board.html` otherwise; `layoutOf` comes
 from the detail through `effectiveLayout`. Entry keys are kept only when `isBoardEntryKey` passes.
 
+**Built (revised after QA):** `planBoardPictures` (`src/service/check/board-pictures.ts`, pure) cuts each shown
+area into 900px bands, gives every band an overview strip (until the overview's reach) and a full-size tile
+while the width's pixel and PNG budgets last, taking the bands that show an entry with a finding first (at
+most `SYSTEM_CHECK_ENTRY_TILES_MAX` per entry). The inspect hook scrolls once per band, captures the strip
+(`clip.scale`) and the tile, and `stitchPngs` (`src/service/check/png-stitch.ts`: 8-bit RGB/RGBA, bounded,
+zlib only) stacks the strips into `<area>-overview@<width>.png`. After 60% of a width's time only strips and
+finding tiles are still taken. The report gains `shots[].{heightPx, overview, tiles}` and `entryShots`;
+the CLI text prints the run folder once and appends "Picture: …" to each entry finding. Partial notes are
+one per kind (`params.pictured`: `tiles`, `overview`, `entries`). The text below is the original plan.
+
 Tiles (`inspect` after the probe): for each area the Node side considers shown (covered, or holding entries;
 an uncovered empty area only says "Not covered"), tiles start at the area's top and step 900px, at most 4. For
 each: `scrollTo(tileTop)`, `capture({ y: tileTop, height: min(900, areaBottom − tileTop) })`, `save(area, n, parts)`.
@@ -398,12 +411,12 @@ enums; entry keys and ids go in `detail` (cleaned, ≤ `CHECK_DETAIL_MAX`, shown
 
 | Code | Severity | Raised when (per width) | Params | Sentence (final wording by the builder, same meaning) |
 |---|---|---|---|---|
-| `system-layout-invalid` | warning (static) | `boardLayout.ignoredCount > 0`; raised whatever the coverage | count | "system.json asks for {count} board layouts Design Chamber doesn't know, so those entries use the default." detail: up to 3 `entry: value` |
+| `system-layout-invalid` | warning (static) | `boardLayout.ignoredCount > 0`; raised whatever the coverage | count, misplaced | Built: tells unknown words from known layouts in a place that doesn't take them ("… it can't use (2 Design Chamber doesn't know, 1 in places that don't take them) …"); detail: up to 3 `entry: value (what the place takes)`. `layout.notes` is read as the notes default (an explicit `overview` wins; KI-32). |
 | `system-board-overflow` | warning | `scrollWidth > innerWidth + 1` | px, width | "{where}: the board is {px}px wide, wider than the {width}px it has, so it scrolls sideways." |
 | `system-board-preview-wide` | warning | `max(scrollW, contentRight) > w + 1` for a preview | px, width | "{where}: this example is {px}px wide but the board can give it {width}px, so it scrolls sideways in its card." |
 | `system-board-preview-outside` | warning | `max(outLeft, outTop, outBottom) > 1` | px | "{where}: part of this example sits {px}px outside its card, so it's cut off or covers other entries." |
 | `system-board-text-outside` | warning | `textOut > 1` | px | "{where}: text runs {px}px outside its card." |
-| `system-board-hint-small` | info | at the **wide** width only: `widened` and effective layout is card, compact or table | layout | "{where}: this entry is set to {layout} but needed the full width. Set its layout to full." |
+| `system-board-hint-small` | info | at the **wide** width only: `widened` and effective layout is card, compact or table, and (built) the entry's preview is not still too wide (`preview-wide` would say the example must shrink) | layout | "{where}: this entry is set to {layout} but needed the full width. Set its layout to full." |
 | `system-board-partial` | info | an area over 4 tiles (`area`, `max` = 3600), or `truncated` (`max` = 1000) | area?, max | "Only the first {max}px of {Area} were pictured at {width}px; all of it was measured." / "Only the first {max} entries were measured." |
 
 Reused as they are: `browser-missing` (info), `render-failed`, `render-timeout`, `console-error`,

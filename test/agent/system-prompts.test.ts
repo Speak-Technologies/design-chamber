@@ -37,7 +37,7 @@ describe('buildSystemChecksPrompt (§8.5, §8.10)', () => {
     assert.ok(text.includes('1. The system has no overview yet.'));
     assert.ok(text.includes('2. 2 token values could not be read. "--brand-500, --ink"'));
     assert.ok(text.includes("run the check again: sh '/d/.chamber/bin/dc' check --system acme"));
-    assert.ok(text.includes('The check saves pictures of the board at two widths; look at them before you say you are done.'));
+    assert.ok(text.includes('The check saves pictures of the board at two widths (an overview of each area, then full size); look at them before you say you are done.'));
     assert.equal(included, 2);
     assert.equal(omitted, 0);
   });

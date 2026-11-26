@@ -91,11 +91,12 @@ The agent that writes a system says how the specimen board lays out each entry; 
 | `full` | one entry per row across the whole board | tables, navigation, toolbars, page headers |
 | `table` | aligned rows with a header; stacks below 760 px of section width | long lists read row by row |
 
-Components, notes (the overview's `layout`), patterns and brand entries take all four. Colours, spacing, radius, shadows and sizes take a section default of card, compact or table. Typography, layers and assets take none. An unknown value, or one a section doesn't take, is ignored (that entry uses the default) and the check warns "system.json asks for N board layouts Design Chamber doesn't know"; it never makes an entry unreadable.
+Components, notes, patterns and brand entries take all four. The notes' section default is written `"notes"` (Design Chamber also reads `"overview"`, which wins when both are set). Colours, spacing, radius, shadows and sizes take a section default of card, compact or table. Typography, layers and assets take none. An unknown value, or one a section doesn't take, is ignored (that entry uses the default) and the check warns, saying for each one what its place takes; it never makes an entry unreadable.
 
 Rules the board holds:
 - **Order is the agent's.** Neighbouring entries with the same layout form one group; nothing is reordered.
 - **Light and dark grounds stack** in every layout, so a preview always has the card's full width.
+- **Tables fit their content.** A token table's Token column is as wide as its longest name and value (up to 420 px), so the note sits beside it. A text table (notes, patterns, brand) drops its Note column when no entry in it has a note.
 - **Presentation only.** A layout change doesn't reset a section's "Looks good" review. It is still a change to `system.json`, so it is a new revision: linked designs see that a newer system exists, and a repo's living page reads out of date until it is regenerated.
 - **The living page follows the hints too**, with the same groups and table rows (its examples are pictures that scale down, so it needs no measuring).
 - The panel has no layout control: the brief makes this the agent's job.
