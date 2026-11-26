@@ -11,7 +11,7 @@ import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 
 import { designSystemFindings, runStaticChecks, type DesignSystemInput } from '../../../src/service/check/static.ts';
-import { parseArgs } from '../../../src/service/check/report-text.ts';
+import { exitCodeOf, formatSystemCheckText, parseArgs, systemFindingsOf } from '../../../src/service/check/report-text.ts';
 import { cliSystemStore, runSystemCheck, writeSystemCheckReport } from '../../../src/service/check/system-run.ts';
 import { systemFindings } from '../../../src/service/check/system-static.ts';
 import { resolveSystemTarget } from '../../../src/service/check/target.ts';
@@ -306,9 +306,9 @@ test('resolveSystemTarget: only a real folder in <root>/_systems, by id', async 
   }
 });
 
-test('parseArgs: --system checks a system, files only; it does not mix with a design or screens', () => {
-  assert.deepEqual(parseArgs(['check', '--system', 'acme']), { kind: 'check-system', root: null, system: 'acme', json: false });
-  assert.deepEqual(parseArgs(['--root', '/d', 'check', '--system=acme', '--json', '--static']), { kind: 'check-system', root: '/d', system: 'acme', json: true });
+test('parseArgs: --system checks a system, --static means files only; it does not mix with a design or screens', () => {
+  assert.deepEqual(parseArgs(['check', '--system', 'acme']), { kind: 'check-system', root: null, system: 'acme', staticOnly: false, json: false });
+  assert.deepEqual(parseArgs(['--root', '/d', 'check', '--system=acme', '--json', '--static']), { kind: 'check-system', root: '/d', system: 'acme', staticOnly: true, json: true });
   for (const args of [['check', '--system'], ['check', '--system', '../x'], ['check', 'demo', '--system', 'acme'], ['check', '--system', 'acme', '--screen', 'home'], ['check', '--system', 'a', '--system', 'b']]) {
     assert.equal(parseArgs(args).kind, 'error', args.join(' '));
   }
@@ -337,6 +337,33 @@ test('runSystemCheck with the CLI store reads the system, and the report lands i
     const written = await writeSystemCheckReport(tmp.at('_systems/acme'), report);
     assert.equal(written, tmp.at('_systems/acme/.chamber/check.json'));
     assert.deepEqual(JSON.parse(await tmp.read('_systems/acme/.chamber/check.json')), report);
+  } finally {
+    await store.dispose();
+  }
+});
+
+test('runSystemCheck with no browser: the render is unavailable with the note, the report is written, the exit follows the files', async (t) => {
+  const tmp = await useTmpRoot(t);
+  await tmp.write('_systems/acme/tokens.css', SYSTEM_TOKENS);
+  await tmp.write('_systems/acme/system.json', '{ "version": 1, "tokens": {} }');
+  await tmp.write('_systems/acme/.chamber/state.json', { name: 'Acme', status: 'ready' });
+  const store = cliSystemStore(tmp.root, { version: 1 });
+  try {
+    const result = await runSystemCheck(store, 'acme', {
+      now: new Date(AT),
+      tool: 'cli',
+      render: { browserPath: null, probeSource: '', platform: process.platform, isRoot: false },
+    });
+    assert.equal(result.report.render?.state, 'unavailable');
+    assert.equal(result.report.render?.browser, null);
+    assert.deepEqual(result.report.render?.findings.map((finding) => finding.code), ['browser-missing']);
+    assert.deepEqual(result.report.render?.drawn, { from: 'system', proposal: null });
+    assert.deepEqual(result.pngs, []);
+    assert.equal(result.reportPath, tmp.at('_systems/acme/.chamber/check.json'));
+    const text = formatSystemCheckText({ report: result.report, name: 'Acme', reportPath: result.reportPath });
+    assert.match(text, /No Chrome, Edge or Chromium was found, so the board wasn't drawn\. Only the files were checked\./);
+    // The exit follows the static findings: a warning only is 0.
+    assert.equal(exitCodeOf(systemFindingsOf(result.report)), 0);
   } finally {
     await store.dispose();
   }
