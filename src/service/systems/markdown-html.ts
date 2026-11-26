@@ -136,6 +136,9 @@ const trimSpaceTab = (text: string): string => {
   return end === text.length ? text : text.slice(0, end);
 };
 
+/** A line of spaces and tabs only, tabs anywhere: what `trim() === ''` used to mean. */
+const BLANK_LINE = /^[ \t]*$/;
+
 const indentOf = (line: string): number => {
   let n = 0;
   while (n < line.length && line[n] === ' ') n += 1;
@@ -365,50 +368,60 @@ const itemAt = (line: string, indent: number): { width: number; ordered: boolean
   return w > 0 ? { width: digits + 1 + w, ordered: true, start: Number(line.slice(indent, d)) } : null;
 };
 
-/** The line as this block level sees it, dedented by the list offset; copied only when read. */
-const viewOf = (lines: readonly string[], i: number, offset: number): string => {
+/**
+ * The line as this block level sees it: dedented by the list offset, but never past the line's own
+ * indent — a continuation indented less than the item's content column keeps its first characters.
+ */
+const viewOf = (lines: readonly string[], indents: readonly number[], i: number, offset: number): string => {
   const line = lines[i] ?? '';
-  return offset === 0 ? line : line.slice(offset);
+  const cut = Math.min(offset, indents[i] ?? 0);
+  return cut === 0 ? line : line.slice(cut);
 };
 
 /** One list run at one indent: items and their continuation ranges, recursing by index, never copying. */
 const listRun = (
   lines: readonly string[],
   indents: readonly number[],
+  blank: readonly boolean[],
   start: number,
   to: number,
   offset: number,
   profile: MarkdownProfile,
   depth: number,
+  /** The first line's text after the parent's marker, when the run starts inside an item. */
+  firstRest: string | null = null,
 ): { html: string; next: number } => {
-  const first = itemAt(lines[start] ?? '', indents[start] ?? 0);
+  // Inside an item the run starts at the marker in the rest, at the child offset; otherwise at the
+  // line's own indent. Re-reading the outer indent here would recurse into the same item forever.
+  const first = firstRest !== null ? itemAt(firstRest, 0) : itemAt(lines[start] ?? '', indents[start] ?? 0);
   // The caller only enters on a list item line.
   if (first === null) return { html: '', next: start + 1 };
-  const base = (indents[start] ?? 0) - offset;
+  const base = firstRest !== null ? 0 : Math.max(0, (indents[start] ?? 0) - offset);
   const tag = first.ordered ? 'ol' : 'ul';
   // The first number is the list's start; the living page's allowlist has no start attribute.
   const startAttr = first.ordered && first.start !== 1 && profile === 'board' ? ` start="${first.start}"` : '';
   const items: string[] = [];
   let i = start;
   while (i < to) {
-    const rel = (indents[i] ?? 0) - offset;
-    const it = itemAt(lines[i] ?? '', indents[i] ?? 0);
+    const atFirst = i === start && firstRest !== null;
+    const rel = atFirst ? 0 : Math.max(0, (indents[i] ?? 0) - offset);
+    const it = atFirst ? first : itemAt(lines[i] ?? '', indents[i] ?? 0);
     if (it === null || rel !== base) break;
-    const childOffset = (indents[i] ?? 0) + it.width;
+    const childOffset = atFirst ? offset + it.width : (indents[i] ?? 0) + it.width;
     let j = i + 1;
     for (;;) {
       if (j >= to) break;
       const cur = lines[j] ?? '';
-      if (cur.length === (indents[j] ?? 0)) {
+      if (blank[j]) {
         let k = j;
-        while (k < to && (lines[k] ?? '').length === (indents[k] ?? 0)) k += 1;
-        if (k < to && (indents[k] ?? 0) - offset > base) {
+        while (k < to && blank[k]) k += 1;
+        if (k < to && Math.max(0, (indents[k] ?? 0) - offset) > base) {
           j = k;
           continue;
         }
         break;
       }
-      const r = (indents[j] ?? 0) - offset;
+      const r = Math.max(0, (indents[j] ?? 0) - offset);
       const it2 = itemAt(cur, indents[j] ?? 0);
       if (it2 !== null && r <= base) break;
       if (r > base) {
@@ -417,8 +430,8 @@ const listRun = (
       }
       break;
     }
-    const itemLine = lines[i] ?? '';
-    items.push(`<li>${blocks(lines, indents, i, j, childOffset, profile, depth + 1, itemLine.slice((indents[i] ?? 0) + it.width))}</li>`);
+    const itemText = atFirst ? (firstRest ?? '') : (lines[i] ?? '').slice(indents[i] ?? 0);
+    items.push(`<li>${blocks(lines, indents, blank, i, j, childOffset, profile, depth + 1, itemText.slice(it.width))}</li>`);
     i = j;
   }
   return { html: `<${tag} class="dc-md-list"${startAttr}>${items.join('')}</${tag}>`, next: i };
@@ -428,6 +441,7 @@ const listRun = (
 const blocks = (
   lines: readonly string[],
   indents: readonly number[],
+  blank: readonly boolean[],
   from: number,
   to: number,
   offset: number,
@@ -437,15 +451,23 @@ const blocks = (
   firstRest: string | null = null,
 ): string => {
   if (depth > MAX_DEPTH) {
-    // Past the cap the stretch is escaped text, one source line per line, indent collapsed: keeping
-    // the relative indents would make the fallback's own output grow with the square of the depth.
+    // Past the cap the stretch is escaped text, one source line per line, with the indent the old
+    // progressive dedent left: spaces beyond the offset, then the content. The spaces are repeated,
+    // not copied from the source, so the fallback stays linear in the input.
     const text: string[] = [];
     for (let i = from; i < to; i += 1) {
       if (i === from && firstRest !== null) {
         text.push(firstRest);
         continue;
       }
-      text.push((lines[i] ?? '').slice(indents[i] ?? 0));
+      if (blank[i] && offset > 0) {
+        text.push('');
+        while (i < to && blank[i]) i += 1;
+        continue;
+      }
+      const indent = indents[i] ?? 0;
+      const cut = Math.min(offset, indent);
+      text.push(' '.repeat(indent - cut) + (lines[i] ?? '').slice(cut));
     }
     return `<p>${escapeHtml(text.join('\n').trim())}</p>`;
   }
@@ -454,22 +476,29 @@ const blocks = (
   while (i < to) {
     const rest = i === from ? firstRest : null;
     const line = rest ?? lines[i] ?? '';
-    const rel = rest !== null ? 0 : (indents[i] ?? 0) - offset;
-    // A blank line is all indent: comparing lengths keeps the check O(1) at any depth.
-    if (rest === null && line.length === (indents[i] ?? 0)) {
+    const rel = rest !== null ? 0 : Math.max(0, (indents[i] ?? 0) - offset);
+    // Blank means spaces and tabs only, precomputed once per line: O(1) here at any depth.
+    if (rest === null && blank[i]) {
       i += 1;
       continue;
     }
     // Fences, headings, rules and quotes sit at most three spaces in; deeper lines skip those regexes.
-    const view = rel <= 3 ? (rest ?? viewOf(lines, i, offset)) : null;
+    const view = rel <= 3 ? (rest ?? viewOf(lines, indents, i, offset)) : null;
     const fence = view === null ? null : FENCE.exec(view);
     if (fence !== null) {
       const marker = fence[1] ?? '```';
       const close = new RegExp(`^ {0,3}${marker[0] === '`' ? '`' : '~'}{${marker.length},}[ \\t]*$`);
       const content: string[] = [];
       i += 1;
-      while (i < to && !close.test(viewOf(lines, i, offset))) {
-        content.push(viewOf(lines, i, offset));
+      while (i < to && !close.test(viewOf(lines, indents, i, offset))) {
+        // Inside an item a run of blank lines is one empty line, as the old item array held it;
+        // at the top level the whitespace line is content and stays as written.
+        if (blank[i] && offset > 0) {
+          content.push('');
+          while (i < to && blank[i]) i += 1;
+          continue;
+        }
+        content.push(viewOf(lines, indents, i, offset));
         i += 1;
       }
       i += 1; // the closing fence, or the end of the range
@@ -491,17 +520,17 @@ const blocks = (
     if (view !== null && QUOTE.test(view)) {
       const inner: string[] = [];
       while (i < to) {
-        const r = (indents[i] ?? 0) - offset;
-        const q = r <= 3 ? QUOTE.exec(viewOf(lines, i, offset)) : null;
+        const r = Math.max(0, (indents[i] ?? 0) - offset);
+        const q = r <= 3 ? QUOTE.exec(viewOf(lines, indents, i, offset)) : null;
         if (q === null) break;
         inner.push(q[1] ?? '');
         i += 1;
       }
-      out.push(quoteBlock(blocks(inner, inner.map(indentOf), 0, inner.length, 0, profile, depth + 1), profile));
+      out.push(quoteBlock(blocks(inner, inner.map(indentOf), inner.map((line) => BLANK_LINE.test(line)), 0, inner.length, 0, profile, depth + 1), profile));
       continue;
     }
     if (itemAt(line, rest !== null ? 0 : (indents[i] ?? 0)) !== null) {
-      const run = listRun(lines, indents, i, to, offset, profile, depth);
+      const run = listRun(lines, indents, blank, i, to, offset, profile, depth, rest);
       out.push(run.html);
       i = run.next;
       continue;
@@ -513,7 +542,7 @@ const blocks = (
       if (header.length === sep.length && header.length <= TABLE_COLUMNS_MAX) {
         i += 2;
         const rowLines: string[] = [];
-        while (i < to && (lines[i] ?? '').length !== (indents[i] ?? 0) && (lines[i] ?? '').includes('|')) {
+        while (i < to && !blank[i] && (lines[i] ?? '').includes('|')) {
           rowLines.push(lines[i] ?? '');
           i += 1;
         }
@@ -527,23 +556,24 @@ const blocks = (
           return header.map((_, column) => inline(cells[column] ?? '', profile, depth));
         });
         out.push(tableBlock(header.map((cell) => inline(cell, profile, depth)), rows));
-        const rest = rowLines.slice(maxRows).map((row) => row.slice(Math.min(offset, row.length)));
+        const rowIndents = rowLines.map(indentOf);
+        const rest = rowLines.slice(maxRows).map((row, k) => row.slice(Math.min(offset, rowIndents[maxRows + k] ?? 0)));
         if (rest.length > 0) out.push(`<p>${inline(rest.join('\n').trim(), profile, depth)}</p>`);
         continue;
       }
     }
-    const paragraph: string[] = [viewOf(lines, i, offset)];
+    const paragraph: string[] = [rest ?? viewOf(lines, indents, i, offset)];
     i += 1;
     while (i < to) {
       const cur = lines[i] ?? '';
-      if (cur.length === (indents[i] ?? 0)) break;
-      const r = (indents[i] ?? 0) - offset;
+      if (blank[i]) break;
+      const r = Math.max(0, (indents[i] ?? 0) - offset);
       if (itemAt(cur, indents[i] ?? 0) !== null) break;
       if (r <= 3) {
-        const v = viewOf(lines, i, offset);
+        const v = viewOf(lines, indents, i, offset);
         if (FENCE.test(v) || HEADING.test(v) || isHorizontalRule(v) || QUOTE.test(v)) break;
       }
-      paragraph.push(viewOf(lines, i, offset));
+      paragraph.push(viewOf(lines, indents, i, offset));
       i += 1;
     }
     out.push(`<p>${inline(paragraph.join('\n').trim(), profile, depth)}</p>`);
@@ -577,7 +607,7 @@ const sourceLines = (source: string): string[] =>
  */
 export const renderMarkdown = (source: string, profile: MarkdownProfile = 'board'): string => {
   const lines = sourceLines(source);
-  return blocks(lines, lines.map(indentOf), 0, lines.length, 0, profile, 0);
+  return blocks(lines, lines.map(indentOf), lines.map((line) => BLANK_LINE.test(line)), 0, lines.length, 0, profile, 0);
 };
 
 /**

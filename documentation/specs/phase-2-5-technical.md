@@ -1591,9 +1591,12 @@ stages `living-page.html` (as below); `proposal` reads `_systems/<id>/proposal/`
       `fonts.css` (fonts always available here: the PNG never carries a font file, so licences don't apply to
       the picture) and sets `color-scheme`.
    2. Cache key = sha256(bundled example bytes, tokens.css bytes, fonts.css bytes, scheme,
-      `LIVING_EXAMPLE_WIDTH`, `LIVING_EXAMPLE_SCALE`, `LIVING_PAGE_GENERATOR_VERSION`). A hit reads
+      `LIVING_EXAMPLE_WIDTH`, `LIVING_EXAMPLE_SCALE`, `LIVING_EXAMPLE_GENERATOR_VERSION`). A hit reads
       `.chamber/living-examples/<key>.png` (checked with `pngSize`, `thumbnails.ts:125`, ≤
-      `LIVING_EXAMPLE_PNG_MAX_BYTES`); misses go to one browser.
+      `LIVING_EXAMPLE_PNG_MAX_BYTES`); misses go to one browser. Two generator constants, on purpose:
+      `LIVING_PAGE_GENERATOR_VERSION` keys the staged HTML (bump it when the page's markup changes, e.g.
+      markdown bodies), `LIVING_EXAMPLE_GENERATOR_VERSION` keys the PNG cache (bump it only when the
+      pictures' own inputs or rendering change). A page-generator bump must not re-render every picture.
    3. One CDP session for the whole batch (`openCdp` with `checkBrowserArgs`, the browser from `chrome.ts`
       `resolveBrowser`, the check engine's restart-once rule), concurrency 1, each shot ≤
       `LIVING_EXAMPLE_TIMEOUT_MS` (5 s), the batch ≤ `LIVING_EXAMPLES_BUDGET_MS` (60 s), abortable. Each document
@@ -2974,7 +2977,7 @@ versioned, exported, copied into a design or logged.
 | rev 3 `LIVING_EXAMPLE_WIDTH` / `_SCALE` | 720 css px / 2 | `LIVING_EXAMPLE_HEIGHT_MAX` | 1 200 css px |
 | rev 3 `LIVING_EXAMPLE_PNG_MAX_BYTES` | 1 048 576 | `LIVING_EXAMPLE_TIMEOUT_MS` / `LIVING_EXAMPLES_BUDGET_MS` | 5 000 / 60 000 |
 | rev 3 `LIVING_EXAMPLES_CACHE_MAX` | 800 files | `SECRET_SHAPES_MAX` | 10 |
-| rev 3 `LIVING_PAGE_GENERATOR_VERSION` | 2 (PNG examples) | | |
+| rev 3 `LIVING_PAGE_GENERATOR_VERSION` | 3 (markdown bodies; bump to regenerate staged pages) | rev 4 `LIVING_EXAMPLE_GENERATOR_VERSION` | 2 (PNG cache key; bump to re-render pictures) |
 
 ---
 

@@ -12,6 +12,7 @@ import { livingCssProblems } from '../../../src/service/systems/living-safe.ts';
 import { escapeHtml, markdownCss, markdownLinkUrl, renderMarkdown, withoutLeadingTitle } from '../../../src/service/systems/markdown-html.ts';
 import type { SystemDetail } from '../../../src/shared/types.ts';
 import { boardFixture } from './board-fixture.ts';
+import { renderMarkdown as frozenRender } from './fixtures/markdown-d7453ba.ts';
 
 const md = (source: string): string => renderMarkdown(source, 'board');
 const living = (source: string): string => renderMarkdown(source, 'living');
@@ -146,10 +147,15 @@ test('the living profile stays inside the allowlist vocabulary', () => {
 const growth = (make: (n: number) => string, n: number, label: string, render: (source: string) => void): void => {
   const smallSource = make(n);
   const bigSource = make(4 * n);
+  // Best of three: a GC pause in one sample must not flake the ratio on a shared runner.
   const time = (source: string): number => {
-    const started = performance.now();
-    render(source);
-    return performance.now() - started;
+    let best = Infinity;
+    for (let run = 0; run < 3; run += 1) {
+      const started = performance.now();
+      render(source);
+      best = Math.min(best, performance.now() - started);
+    }
+    return best;
   };
   const small = time(smallSource);
   const big = time(bigSource);
@@ -315,5 +321,56 @@ test('rows past the table cell budget stay escaped text in both profiles', () =>
     assert.ok(!/<svg/i.test(out), `${profile}: no svg in ${overflow.slice(-200)}`);
     assert.ok(overflow.includes('&lt;img src=x onerror=alert(1)&gt;'), `${profile}: the img stays escaped text`);
     assert.ok(overflow.includes(escapeHtml('[<svg onload=1>](javascript:x)')), `${profile}: the refused link stays escaped text`);
+  }
+});
+
+// Exact outputs frozen from the pre-refactor renderer (d7453ba, fixtures/markdown-d7453ba.ts):
+// continuations indented less than the item's content, markers inside items, whitespace-only
+// lines, fences and tables inside lists. A refactor that changes any of these goes red.
+const FROZEN_CASES: readonly { source: string; board: string; living: string }[] = [
+  { source: "1. Use the brand blue\n  for links only.", board: "<ol class=\"dc-md-list\"><li><p>Use the brand blue\nfor links only.</p></li></ol>", living: "<ol class=\"dc-md-list\"><li><p>Use the brand blue\nfor links only.</p></li></ol>" },
+  { source: "10. Ten\n   wrapped", board: "<ol class=\"dc-md-list\" start=\"10\"><li><p>Ten\nwrapped</p></li></ol>", living: "<ol class=\"dc-md-list\"><li><p>Ten\nwrapped</p></li></ol>" },
+  { source: "-   a\n  bcd", board: "<ul class=\"dc-md-list\"><li><p>a\nbcd</p></li></ul>", living: "<ul class=\"dc-md-list\"><li><p>a\nbcd</p></li></ul>" },
+  { source: "- 2. Second\n- three", board: "<ul class=\"dc-md-list\"><li><ol class=\"dc-md-list\" start=\"2\"><li><p>Second</p></li></ol></li><li><p>three</p></li></ul>", living: "<ul class=\"dc-md-list\"><li><ol class=\"dc-md-list\"><li><p>Second</p></li></ol></li><li><p>three</p></li></ul>" },
+  { source: "- - x", board: "<ul class=\"dc-md-list\"><li><ul class=\"dc-md-list\"><li><p>x</p></li></ul></li></ul>", living: "<ul class=\"dc-md-list\"><li><ul class=\"dc-md-list\"><li><p>x</p></li></ul></li></ul>" },
+  { source: "1. - a\n   - b", board: "<ol class=\"dc-md-list\"><li><ul class=\"dc-md-list\"><li><p>a</p></li><li><p>b</p></li></ul></li></ol>", living: "<ol class=\"dc-md-list\"><li><ul class=\"dc-md-list\"><li><p>a</p></li><li><p>b</p></li></ul></li></ol>" },
+  { source: "a\n  \t\nb", board: "<p>a</p><p>b</p>", living: "<p>a</p><p>b</p>" },
+  { source: "- a\n\n  b\n- c", board: "<ul class=\"dc-md-list\"><li><p>a</p><p>b</p></li><li><p>c</p></li></ul>", living: "<ul class=\"dc-md-list\"><li><p>a</p><p>b</p></li><li><p>c</p></li></ul>" },
+  { source: "- a\n  ```\n  x\n   y\n  ```\n- b", board: "<ul class=\"dc-md-list\"><li><p>a</p><pre class=\"dc-md-pre\"><code>x\n y</code></pre></li><li><p>b</p></li></ul>", living: "<ul class=\"dc-md-list\"><li><p>a</p><div class=\"dc-md-pre\"><code>x\n y</code></div></li><li><p>b</p></li></ul>" },
+  { source: "> - a\n>   b\n> - c", board: "<blockquote class=\"dc-md-quote\"><ul class=\"dc-md-list\"><li><p>a\nb</p></li><li><p>c</p></li></ul></blockquote>", living: "<div class=\"dc-md-quote\"><ul class=\"dc-md-list\"><li><p>a\nb</p></li><li><p>c</p></li></ul></div>" },
+  { source: "- | a | b |\n  | --- | --- |\n  | 1 | 2 |", board: "<ul class=\"dc-md-list\"><li><div class=\"dc-md-tablewrap\"><table class=\"dc-md-table\"><thead><tr><th scope=\"col\">a</th><th scope=\"col\">b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table></div></li></ul>", living: "<ul class=\"dc-md-list\"><li><div class=\"dc-md-tablewrap\"><table class=\"dc-md-table\"><thead><tr><th scope=\"col\">a</th><th scope=\"col\">b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table></div></li></ul>" },
+  { source: "1. one\n   1. inner\n      1. deep\n2. two", board: "<ol class=\"dc-md-list\"><li><p>one</p><ol class=\"dc-md-list\"><li><p>inner</p><ol class=\"dc-md-list\"><li><p>deep</p></li></ol></li></ol></li><li><p>two</p></li></ol>", living: "<ol class=\"dc-md-list\"><li><p>one</p><ol class=\"dc-md-list\"><li><p>inner</p><ol class=\"dc-md-list\"><li><p>deep</p></li></ol></li></ol></li><li><p>two</p></li></ol>" },
+  { source: "- a\n b\n- c", board: "<ul class=\"dc-md-list\"><li><p>a\nb</p></li><li><p>c</p></li></ul>", living: "<ul class=\"dc-md-list\"><li><p>a\nb</p></li><li><p>c</p></li></ul>" },
+  { source: "  \t\n- a\n  \t\n- b\n  \t", board: "<ul class=\"dc-md-list\"><li><p>a</p></li></ul><ul class=\"dc-md-list\"><li><p>b</p></li></ul>", living: "<ul class=\"dc-md-list\"><li><p>a</p></li></ul><ul class=\"dc-md-list\"><li><p>b</p></li></ul>" },
+];
+
+test('list continuations, nested markers and blank lines render exactly as before the refactor', () => {
+  for (const c of FROZEN_CASES) {
+    assert.equal(renderMarkdown(c.source, 'board'), c.board, JSON.stringify(c.source));
+    assert.equal(renderMarkdown(c.source, 'living'), c.living, JSON.stringify(c.source));
+  }
+});
+
+test('differential guard: seeded block-grammar fuzz matches the frozen pre-refactor renderer', () => {
+  let seed = 123456789;
+  const rnd = (n: number): number => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed % n;
+  };
+  const pick = <T,>(a: readonly T[]): T => a[rnd(a.length)] as T;
+  const indents = ['', ' ', '  ', '   ', '    ', '      '] as const;
+  const line = (): string =>
+    pick([
+      () => pick(indents) + pick(['- ', '* ', '+ ', '1. ', '3. ', '10. ', '2) ']) + pick(['a', 'b c', '**x**', '`c`', '- nested', '2. num', 'text here', '']),
+      () => pick(indents) + pick(['continuation', 'wrapped text', 'lazy line', 'x']),
+      () => pick(['', ' ', '  ', '  \t', '\t']),
+      () => pick(indents) + pick(['> q', '> ', '>> deep', '> - qitem']),
+      () => pick(indents) + pick(['```', '```css', '~~~', 'code line', '```end']),
+      () => pick(indents) + pick(['# h', '## h2', '---', '***', '| a | b |', '| --- | --- |', '| 1 | 2 |']),
+    ])();
+  for (let i = 0; i < 2000; i += 1) {
+    const source = Array.from({ length: 1 + rnd(12) }, line).join('\n');
+    assert.equal(renderMarkdown(source, 'board'), frozenRender(source, 'board'), `board: ${JSON.stringify(source)}`);
+    assert.equal(renderMarkdown(source, 'living'), frozenRender(source, 'living'), `living: ${JSON.stringify(source)}`);
   }
 });
