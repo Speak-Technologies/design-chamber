@@ -180,3 +180,39 @@ test('a browser alive but silent for the whole launch budget is "can\'t be drive
   const elapsed = Date.now() - started;
   assert.ok(elapsed >= 120 && elapsed < 1000, `gave up at the launch budget (${elapsed} ms)`);
 });
+
+test('a live browser that answers the handshake with an error is "can\'t be driven" at once, not asked again', async () => {
+  // Only "no answer yet" means "still starting". An answer that is an error is final: re-asking it
+  // would spin until the launch budget ran out.
+  let asked = 0;
+  const spawnImpl = ((): FakeChild => {
+    const toBrowser = new PassThrough();
+    const fromBrowser = new PassThrough();
+    const child = new EventEmitter() as FakeChild;
+    child.stdio = [null, null, null, toBrowser, fromBrowser];
+    child.pid = undefined;
+    child.kill = () => {
+      child.emit('exit', 0, null);
+      return true;
+    };
+    toBrowser.on('data', createFrameParser((text) => {
+      const msg = JSON.parse(text) as { id?: number; method?: string };
+      if (typeof msg.id !== 'number') return;
+      if (msg.method === 'Browser.getVersion') {
+        asked += 1;
+        if (!fromBrowser.destroyed) fromBrowser.write(encodeMessage({ id: msg.id, error: { message: 'not allowed' } }));
+      } else if (msg.method === 'Browser.close') {
+        child.emit('exit', 0, null);
+      }
+    }));
+    return child;
+    // Safe: openCdp only reads stdio[3]/[4], `on`, `kill` and `pid`, all of which the fake provides.
+  }) as unknown as typeof import('node:child_process').spawn;
+  const started = Date.now();
+  await assert.rejects(
+    openCdp('/fake/chrome', [], { timeoutMs: 5000, launchBudgetMs: 60_000, spawnImpl }),
+    (error: unknown) => error instanceof CdpUnavailable && /not allowed/.test(error.message),
+  );
+  assert.equal(asked, 1, 'asked once');
+  assert.ok(Date.now() - started < 1000, 'failed at once');
+});
