@@ -97,10 +97,13 @@ type CardReport = { id: string | null; wide: boolean; left: number; right: numbe
 
 // Real time, not `--dump-dom` with a virtual-time budget: headless Chrome in virtual time never runs an animation frame after the
 // page has gone idle, and the board re-measures in one. The page posts its report to this server, like test/e2e/bridge.test.ts.
-const layoutAt = async (chrome: string, width: number, growLate = false): Promise<CardReport[]> => {
-  const html = buildBoardHtml(detail(), { scheme: 'dark', examples: EXAMPLES }).replace('</body>', `${probe(growLate)}</body>`);
-  let resolveResult: (value: CardReport[]) => void = () => undefined;
-  const result = new Promise<CardReport[]>((resolve) => (resolveResult = resolve));
+const layoutAt = (chrome: string, width: number, growLate = false): Promise<CardReport[]> =>
+  reportAt<CardReport[]>(chrome, width, buildBoardHtml(detail(), { scheme: 'dark', examples: EXAMPLES }).replace('</body>', `${probe(growLate)}</body>`));
+
+/** Opens `html` in headless Chrome at `width` and answers what its own script posts to /result. */
+const reportAt = async <T,>(chrome: string, width: number, html: string): Promise<T> => {
+  let resolveResult: (value: T) => void = () => undefined;
+  const result = new Promise<T>((resolve) => (resolveResult = resolve));
   const server: Server = createServer((req, res) => {
     if (req.url === '/board.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -113,7 +116,7 @@ const layoutAt = async (chrome: string, width: number, growLate = false): Promis
       req.on('end', () => {
         res.writeHead(204);
         res.end();
-        resolveResult(JSON.parse(body) as CardReport[]);
+        resolveResult(JSON.parse(body) as T);
       });
       return;
     }
@@ -202,4 +205,197 @@ test('board components: content-sized columns, a wide example widens its card, n
     [],
     `no card is widened at 1100: ${JSON.stringify(narrow)}`,
   );
+});
+
+// ---- the layout hints: compact, full and table runs (documentation/specs/system-board-layout-and-visual-check.md §A.3, §A.4) ----
+
+const LAYOUT_JSON = {
+  tokens: { '--brand': { group: 'brand' }, '--surface': { group: 'surface' }, '--ink': { group: 'brand' } },
+  layout: { colours: 'table' },
+  components: [
+    ...['pill-a', 'pill-b', 'pill-c', 'pill-d'].map((id) => ({ id, name: `Pill ${id.slice(-1)}`, purpose: 'Marks a state.', layout: 'compact', example: `components/${id}.html` })),
+    { id: 'nav', name: 'Navigation', purpose: 'Moves between pages.', layout: 'full', example: 'components/nav.html' },
+    { id: 'hero', name: 'Page header', purpose: 'Opens a page.', layout: 'full', example: 'components/hero.html' },
+    { id: 'row-a', name: 'Row A', purpose: 'A short row.', note: 'Use for one value.', layout: 'table', example: 'components/row-a.html' },
+    { id: 'row-wide', name: 'Wide row', purpose: 'A row with a wide example.', note: 'Scrolls in its own box.', layout: 'table', example: 'components/row-wide.html' },
+    { id: 'row-c', name: 'Row C', purpose: 'Another short row.', note: 'Use for two values.', layout: 'table', example: 'components/row-c.html' },
+    { id: 'card-last', name: 'Card last', purpose: 'Back to the default.', example: 'components/card-last.html' },
+  ],
+};
+
+const LAYOUT_EXAMPLES: Record<string, string> = {
+  'pill-a': '<span style="display:inline-block;padding:2px 8px;border-radius:99px;background:#ddd">New</span>',
+  'pill-b': '<span style="display:inline-block;padding:2px 8px;border-radius:99px;background:#ddd">Open</span>',
+  'pill-c': '<span style="display:inline-block;padding:2px 8px;border-radius:99px;background:#ddd">Done</span>',
+  'pill-d': '<span style="display:inline-block;padding:2px 8px;border-radius:99px;background:#ddd">Late</span>',
+  nav: '<nav style="display:flex;gap:24px;width:900px;white-space:nowrap"><a>Home</a><a>Orders</a><a>Customers</a><a>Reports</a></nav>',
+  hero: '<header style="width:400px"><h1 style="margin:0">Orders</h1></header>',
+  'row-a': '<button>One</button>',
+  // Wider than the preview column of a table at 1480 (about 800 px) but scrolling inside its own box, as a real data table does.
+  'row-wide': '<div style="overflow:auto"><div style="width:1200px;height:40px;background:#ccc">Wide table row</div></div>',
+  'row-c': '<button>Two</button>',
+  'card-last': '<button>Last</button>',
+};
+
+const layoutDetail = () =>
+  buildSystemDetail({
+    id: 'acme',
+    dir: '/tmp/_systems/acme',
+    state: { ...parseSystemState({}, 'acme', NOW), name: 'Acme' },
+    systemJson: JSON.stringify(LAYOUT_JSON),
+    tokensCss: ':root { --brand: #1a73e8; --surface: #ffffff; --ink: #1d1d1f; }\n@media (prefers-color-scheme: dark) { :root { --brand: #8ab4f8; --surface: #121212; --ink: #ececef; } }\n',
+    texts: {},
+    files: Object.keys(LAYOUT_EXAMPLES).map((id) => ({ rel: `components/${id}.html`, bytes: 10 })),
+    build: null,
+  });
+
+type Box = { left: number; right: number; top: number; bottom: number };
+type EntryReport = {
+  id: string;
+  run: string;
+  wide: boolean;
+  box: Box;
+  clipped: boolean;
+  textOutside: boolean;
+  cells: Record<string, Box>;
+};
+type LayoutReport = { section: number; entries: EntryReport[]; heads: Record<string, Box>[] };
+
+// Reports every board entry: the run it sits in, its box, its table cells, and whether an example or its text reaches past it.
+const LAYOUT_PROBE = `<script>
+window.addEventListener('load', function () {
+  setTimeout(function () {
+    var rect = function (el) { var r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; };
+    var cellsOf = function (row) {
+      var cells = {};
+      row.querySelectorAll(':scope > .dc-tcell').forEach(function (cell, index) {
+        var name = (cell.className.match(/dc-tcell-(\\w+)/) || [null, String(index)])[1];
+        cells[name] = rect(cell);
+      });
+      return cells;
+    };
+    var entries = [];
+    document.querySelectorAll('[data-dc-entry]').forEach(function (el) {
+      var box = el.getBoundingClientRect();
+      var clipped = false;
+      el.querySelectorAll('[data-dc-example-host]').forEach(function (host) {
+        var edge = host.getBoundingClientRect().right + 1;
+        if (host.scrollWidth > host.clientWidth + 1) clipped = true;
+        if (host.shadowRoot) host.shadowRoot.querySelectorAll('*').forEach(function (inner) {
+          var r = inner.getBoundingClientRect();
+          if (r.width > 0 && r.right > edge) clipped = true;
+        });
+      });
+      var textOutside = false;
+      el.querySelectorAll('.dc-note, .dc-name, strong').forEach(function (t) {
+        var r = t.getBoundingClientRect();
+        if (r.width > 0 && (r.right > box.right + 1 || r.left < box.left - 1 || r.bottom > box.bottom + 1)) textOutside = true;
+      });
+      var run = el.parentElement ? el.parentElement.className : '';
+      entries.push({ id: el.getAttribute('data-dc-entry'), run: run, wide: el.classList.contains('dc-wide'), box: rect(el), clipped: clipped, textOutside: textOutside, cells: cellsOf(el) });
+    });
+    var heads = [];
+    document.querySelectorAll('.dc-thead').forEach(function (head) { heads.push(cellsOf(head)); });
+    var section = document.querySelector('.dc-section');
+    fetch('/result', { method: 'POST', body: JSON.stringify({ section: section ? section.getBoundingClientRect().width : 0, entries: entries, heads: heads }) });
+  }, 1000);
+});
+</script>`;
+
+const layoutReportAt = (chrome: string, width: number): Promise<LayoutReport> =>
+  reportAt<LayoutReport>(chrome, width, buildBoardHtml(layoutDetail(), { scheme: 'dark', examples: LAYOUT_EXAMPLES }).replace('</body>', `${LAYOUT_PROBE}</body>`));
+
+const entryOf = (report: LayoutReport, id: string): EntryReport => {
+  const entry = report.entries.find((candidate) => candidate.id === id);
+  assert.ok(entry, `entry ${id} missing: ${JSON.stringify(report.entries.map((e) => e.id))}`);
+  return entry;
+};
+
+const near = (a: number, b: number, what: string): void => assert.ok(Math.abs(a - b) <= 1, `${what}: ${a} vs ${b}`);
+
+test('board layouts in Chrome: compact packs small pieces, full spans the section, table rows align and stack when narrow', { timeout: 120_000 }, async (t) => {
+  const chrome = chromeOrSkip(t);
+  if (!chrome) return;
+
+  const wide = await layoutReportAt(chrome, 1480);
+  const pills = ['pill-a', 'pill-b', 'pill-c', 'pill-d'].map((id) => entryOf(wide, `component:${id}`));
+  const [nav, hero] = [entryOf(wide, 'component:nav'), entryOf(wide, 'component:hero')];
+  const rows = ['row-a', 'row-wide', 'row-c'].map((id) => entryOf(wide, `component:${id}`));
+  const [rowA, rowWide, rowC] = rows as [EntryReport, EntryReport, EntryReport];
+  const last = entryOf(wide, 'component:card-last');
+
+  // The agent's order is kept: compact, then full, then table, then the card run.
+  assert.ok(pills.every((pill) => pill.run.includes('dc-run-compact')), JSON.stringify(pills.map((p) => p.run)));
+  assert.ok(nav.run.includes('dc-run-full') && hero.run.includes('dc-run-full'));
+  assert.ok(rows.every((row) => row.run.includes('dc-run-table')));
+  assert.ok(last.run.includes('dc-run-card'));
+  const bottom = (entries: readonly EntryReport[]): number => Math.max(...entries.map((e) => e.box.bottom));
+  assert.ok(bottom(pills) <= nav.box.top && hero.box.bottom <= rowA.box.top && rowC.box.bottom <= last.box.top, 'runs in the agent order, top to bottom');
+
+  // Compact: 280 px columns, so the four pills sit side by side in one band (at least three columns), none widened.
+  assert.ok(new Set(pills.map((pill) => Math.round(pill.box.left))).size >= 3, `compact columns: ${JSON.stringify(pills.map((p) => p.box))}`);
+  for (const pill of pills) {
+    assert.equal(pill.wide, false, pill.id);
+    assert.ok(pill.box.right - pill.box.left < 400, `${pill.id} is a compact card, not a full one`);
+  }
+
+  // Full: one card per row, each as wide as the section, the 900 px navigation fits without widening anything.
+  for (const card of [nav, hero]) {
+    near(card.box.right - card.box.left, wide.section, `${card.id} spans the section`);
+    near(card.box.left, nav.box.left, `${card.id} starts at the section edge`);
+  }
+  assert.ok(hero.box.top >= nav.box.bottom, 'full cards stack, one per row');
+
+  // Table: the three columns line up across rows and with the header (subgrid).
+  const head = wide.heads[0];
+  assert.ok(head, 'the components table has a header row');
+  for (const row of [rowA, rowC]) {
+    assert.equal(row.wide, false, row.id);
+    for (const cell of ['name', 'preview', 'notes']) {
+      const box = row.cells[cell];
+      assert.ok(box, `${row.id} has a ${cell} cell`);
+      near(box.left, rowA.cells[cell]?.left ?? NaN, `${row.id} ${cell} column`);
+    }
+  }
+  near(Object.values(head)[1]?.left ?? NaN, rowA.cells.preview?.left ?? NaN, 'the Preview header sits over the preview cells');
+  // The wide row's example does not fit the preview column: the row is widened, name and notes side by side on top and the preview
+  // under them across the whole row.
+  assert.equal(rowWide.wide, true, JSON.stringify(rowWide));
+  const [name, notes, preview] = [rowWide.cells.name, rowWide.cells.notes, rowWide.cells.preview];
+  assert.ok(name && notes && preview, JSON.stringify(rowWide.cells));
+  near(name.top, notes.top, 'name and notes on one line');
+  assert.ok(notes.left > name.left, 'notes to the right of the name');
+  assert.ok(preview.top >= Math.max(name.bottom, notes.bottom) - 1, 'the preview under them');
+  near(preview.left, rowWide.box.left, 'the preview starts at the row edge');
+  assert.ok(preview.right - preview.left > (rowA.cells.preview?.right ?? 0) - (rowA.cells.preview?.left ?? 0), 'wider than the preview column');
+
+  // Token tables: the colours section default puts every colour in a row with a sample, token and note cell, aligned.
+  const colours = wide.entries.filter((entry) => entry.id.startsWith('token:'));
+  assert.equal(colours.length, 3, JSON.stringify(wide.entries.map((e) => e.id)));
+  assert.ok(colours.every((entry) => entry.run.includes('dc-run-table')));
+  for (const entry of colours) assert.equal(Object.keys(entry.cells).length, 3, `${entry.id}: ${JSON.stringify(entry.cells)}`);
+
+  for (const entry of wide.entries) {
+    assert.equal(entry.clipped, false, `clipped at 1480: ${JSON.stringify(entry)}`);
+    assert.equal(entry.textOutside, false, `text outside its entry at 1480: ${JSON.stringify(entry)}`);
+  }
+
+  // Under 760 px of section width the table cells stack: each cell starts at the row edge, one under the other; still nothing clipped.
+  const narrow = await layoutReportAt(chrome, 700);
+  assert.ok(narrow.section < 760, `section ${narrow.section}`);
+  for (const id of ['component:row-a', 'component:row-wide', 'component:row-c']) {
+    const row = entryOf(narrow, id);
+    const cells = [row.cells.name, row.cells.preview, row.cells.notes];
+    assert.ok(cells.every((cell) => cell !== undefined), `${id}: ${JSON.stringify(row.cells)}`);
+    for (const cell of cells) near(cell?.left ?? NaN, row.box.left, `${id} stacked cell`);
+    assert.ok((cells[1]?.top ?? 0) >= (cells[0]?.bottom ?? Infinity) - 1 && (cells[2]?.top ?? 0) >= (cells[1]?.bottom ?? Infinity) - 1, `${id} cells one under the other`);
+  }
+  // The 900 px navigation and the 1200 px row are wider than this whole board, so they are the previews that scroll, inside their own
+  // ground (and the probe sees them, so the check below can fail).
+  const widerThanBoard = new Set(['component:nav', 'component:row-wide']);
+  for (const id of widerThanBoard) assert.equal(entryOf(narrow, id).clipped, true, `${id}: a preview wider than the board scrolls in its ground`);
+  for (const entry of narrow.entries) {
+    if (!widerThanBoard.has(entry.id)) assert.equal(entry.clipped, false, `clipped at 700: ${JSON.stringify(entry)}`);
+    assert.equal(entry.textOutside, false, `text outside its entry at 700: ${JSON.stringify(entry)}`);
+  }
 });

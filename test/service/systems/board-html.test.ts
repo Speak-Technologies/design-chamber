@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { buildSystemDetail, parseSystemState } from '../../../src/shared/system-json.ts';
 import { BOARD_ENTRY_PATTERN, darkVarOf, entryKeyOf, isBoardEntryKey, parseEntryKey, sectionOfEntry, typeVarOf } from '../../../src/shared/system-board.ts';
 import type { SystemDetail, SystemToken } from '../../../src/shared/types.ts';
-import { buildBoardHtml, escapeHtml } from '../../../src/service/systems/board-html.ts';
+import { BOARD_GENERATOR_VERSION, buildBoardHtml, escapeHtml } from '../../../src/service/systems/board-html.ts';
 
 const NOW = '2026-11-20T10:00:00.000Z';
 
@@ -236,8 +236,15 @@ test('entry keys: build, parse, sections and the custom property names', () => {
 
 // ---- layout runs: the board CSS and script (system-board-layout-and-visual-check.md §A.4) ----
 
-test('the board script measures .dc-fit (cards and table rows), and the run CSS is present', () => {
+test('the generator version is 5, so boards cached before the layout runs are made again', () => {
+  assert.equal(BOARD_GENERATOR_VERSION, 5);
+});
+
+test('the board script measures .dc-fit (cards and table rows) and re-measures on load, fonts.ready and <html> style', () => {
   const html = buildBoardHtml(makeDetail(), { scheme: 'light', examples: { button: '<p>Hi</p>' } });
+  assert.ok(html.includes("window.addEventListener('load', schedule);"));
+  assert.ok(html.includes('document.fonts.ready.then(schedule)'));
+  assert.ok(html.includes("attributeFilter: ['style']"));
   assert.ok(html.includes("document.querySelectorAll('.dc-fit')"));
   assert.ok(!html.includes("document.querySelectorAll('.dc-components > .dc-card')"));
   // Rule 1: the card run keeps the content-sized columns.
