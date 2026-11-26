@@ -730,7 +730,12 @@ parsers in `src/shared/system-json.ts`):
 - `system.json` (`design-chamber/system@1`): token metadata by name (section, group, note, breakpoint), type
   styles, fonts, logos, components, notes, sources and (S8) `coverage` (the four areas `foundations`,
   `components`, `patterns`, `brand`; absent = all), `patterns[]`, `brand[]`. Over 1 MiB or not JSON →
-  `unreadable`; a bad entry is a problem on that entry only.
+  `unreadable`; a bad entry is a problem on that entry only. **Board layout hints** (optional, presentation
+  only, outside the section fingerprints): `layout` on a component, note, pattern or brand entry, and a
+  top-level `layout` object of section defaults; values `card` (default) | `compact` | `full` | `table`
+  (token sections take card, compact or table; typography, layers and assets none). An unknown or misplaced
+  value falls back and raises the static warning `system-layout-invalid`. The board and the living page both
+  follow them (`documentation/specs/system-board-layout-and-visual-check.md` §A).
 - `tokens.css`: light values = the last declaration in a top-level `:root`; dark values = a `:root` directly
   inside `@media (prefers-color-scheme: dark)`; other contexts are listed, not used. Every value Design Chamber
   writes or shows passes `validateTokenValue` (no `url(`, no `; { } < > \`, a function allowlist, a per-section
@@ -1777,6 +1782,14 @@ Every write goes through `systems.dir(id)` + `resolvePlainTarget` or the root's 
   `_systems/<id>/.chamber/check.json`. S8 adds the living-page, snapshot, drift, build and proposal codes
   (`system-living-*`, `system-snapshot-changed`, `system-code-drift`, `system-code-differs`,
   `system-build-invalid`, `system-landed-differs`, `system-proposal-invalid`, `system-coverage-empty`).
+  **Visual system check** (`documentation/specs/system-board-layout-and-visual-check.md` §B): unless
+  `--static` (tool: `static: true`), `dc check --system <id>` also draws the specimen board (the page's own
+  generator; the waiting proposal's board for a repo home with a current proposal) in headless Chrome through
+  the design check's engine (`renderArtboards` with an `inspect` hook, same CSP, offline, pipe) at 1526px and
+  1046px, light scheme; saves ≤ 32 per-area PNG tiles under `_systems/<id>/.chamber/check/<runId>/`; and adds
+  measured `system-board-*` findings (preview wider than the board, preview or text outside its card, board
+  overflow, layout hint too small, partial). No browser → static findings plus `browser-missing`.
+  `GET /systems/:id/checks` and the `checks` prompt stay static.
 - **Export** (`export.ts` `exportIncludes`): §6.8.
 
 **Building systems with the agent (S8; P25 §5.9 to §5.14).** The service's part is to issue tickets, adopt,
