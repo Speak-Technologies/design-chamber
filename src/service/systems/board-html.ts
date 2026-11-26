@@ -15,7 +15,7 @@ import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss } fro
 export { escapeHtml } from './specimen-html.ts';
 
 /** Bumped when the generated document changes shape, so cached boards are not reused. */
-export const BOARD_GENERATOR_VERSION = 3;
+export const BOARD_GENERATOR_VERSION = 4;
 
 /** The virtual entry the board is bundled from (never a file on disk). */
 export const BOARD_ENTRY_FILE = '__board.html';
@@ -92,7 +92,6 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
 /* Light and dark grounds stack, each as wide as the card, so a wide preview never has to share the row. */
 .dc-components .dc-grounds { flex-direction: column; margin-bottom: 12px; }
 .dc-components .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
-.dc-components .dc-example { overflow-x: auto; overflow-y: visible; }
 `;
 };
 
@@ -166,11 +165,17 @@ const BOARD_SCRIPT = `(function () {
     }
     for (k = 0; k < flagged.length; k += 1) flagged[k].classList.add('dc-wide');
   };
+  // Measure again whenever something can change a preview's width after the first pass: a late font, late images, or the host
+  // setting tokens or the theme on <html> (its inline style). Calls are coalesced into one animation frame.
   var frame = 0;
-  window.addEventListener('resize', function () {
+  var schedule = function () {
     if (frame) cancelAnimationFrame(frame);
     frame = requestAnimationFrame(function () { frame = 0; widen(); });
-  });
+  };
+  window.addEventListener('resize', schedule);
+  window.addEventListener('load', schedule);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(schedule);
+  if (window.MutationObserver) new MutationObserver(schedule).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
   if (cards.length > 0) widen();
 })();`;
 
