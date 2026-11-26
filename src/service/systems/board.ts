@@ -3,11 +3,11 @@
 //
 // 1. The detail: the live one from the store, or a version's tree read through the same
 //    `buildSystemDetail` (a repo-backed system's version holds `snapshot/…`, so its source is rooted there).
-// 2. Each component example is bundled on its own (relative to `components/`), so its remote refs are
-//    reported per component; fonts and logos are checked with `checkAsset` before the board names them.
-// 3. `buildBoardHtml` (pure) writes the document; `bundleDocument` bundles it from an overlay source
-//    (the generated text at the virtual `__board.html`, everything else from the system's files), in
-//    render mode (bridge placeholder), contained against the system's files folder.
+// 2. `assembleBoardHtml` (board-assemble.ts, shared with the visual check) bundles each component
+//    example on its own, checks fonts and logos, and writes the document.
+// 3. `bundleDocument` bundles it from an overlay source (the generated text at the virtual
+//    `__board.html`, everything else from the system's files), in render mode (bridge placeholder),
+//    contained against the system's files folder.
 // 4. The result is cached by a key over the generator version, the system, the version, the scheme,
 //    the generated text and the bytes the board points at; chunked like design renders; dropped on
 //    `system` events for that system and on a root change.
@@ -19,25 +19,24 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import type { RenderMeta } from '../../shared/api.ts';
-import { RENDER_CHUNK_MAX_BYTES, SYSTEM_JSON_MAX_BYTES, SYSTEM_PROPOSAL_ID_PATTERN, SYSTEM_NOTE_MAX, SYSTEM_OVERVIEW_MAX, TOKENS_CSS_MAX_BYTES, VERSION_ID_PATTERN } from '../../shared/limits.ts';
-import { buildSystemDetail, type SystemDetailSource } from '../../shared/system-json.ts';
-import type { SystemDetail, SystemState } from '../../shared/types.ts';
-import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource, type BundleResult, type FileSource, type SourceFile } from '../bundle.ts';
+import { RENDER_CHUNK_MAX_BYTES, SYSTEM_PROPOSAL_ID_PATTERN, VERSION_ID_PATTERN } from '../../shared/limits.ts';
+import { buildSystemDetail } from '../../shared/system-json.ts';
+import type { SystemDetail } from '../../shared/types.ts';
+import { BundleTooLarge, bundleDocument, createLiveFileSource, type BundleResult, type FileSource } from '../bundle.ts';
 import type { ChangeHub, ServiceContext } from '../context.ts';
 import { ApiError } from '../http.ts';
 import { splitChunks } from '../render-cache.ts';
 import type { VersionsService } from '../versions.ts';
-import { checkAsset } from './assets.ts';
-import { BOARD_ENTRY_FILE, BOARD_GENERATOR_VERSION, buildBoardHtml } from './board-html.ts';
-import { listFiles, proposalDirOf, readProposalFile, sha256Of } from './proposal-record.ts';
+import { assembleBoardHtml, detailSourceFromTree, overlaySource, readProposalBoardSource } from './board-assemble.ts';
+import { BOARD_ENTRY_FILE, BOARD_GENERATOR_VERSION } from './board-html.ts';
 import { ensureSystemStore, type SystemStore } from './store.ts';
 import { ensureSystemVersions } from './versions.ts';
 
+// The assembly moved to board-assemble.ts (shared with the visual check); these stay importable here.
+export { detailSourceFromTree, overlaySource } from './board-assemble.ts';
+
 /** The board cache's share of memory (boards are few; design renders keep their own cache). */
 const BOARD_CACHE_MAX_BYTES = 64 * 1024 * 1024;
-const BYTES_PER_CHAR_MAX = 4;
-/** Top-level names that are never system content (store.ts `NOT_CONTENT`). */
-const NOT_CONTENT = new Set(['BUILD.json', 'PROPOSAL.json', 'proposal', 'snapshot']);
 
 export const BOARD_TOO_LARGE_MESSAGE = "This design system's board is too large to show inside OpenChamber. Ask the agent to use smaller fonts, logos or examples.";
 export const BOARD_STALE_MESSAGE = 'That board is no longer in the cache. Load the design system again.';
@@ -54,57 +53,6 @@ const prefixedSource = (inner: FileSource, prefix: string): FileSource => ({
   ...(inner.stat ? { stat: (rel: string) => inner.stat?.(`${prefix}/${rel}`) ?? Promise.resolve(null) } : {}),
 });
 
-/** A generated document at the virtual entry (the board's, or the living page's); every other path from `base`. */
-export const overlaySource = (base: FileSource, html: string, entryFile: string = BOARD_ENTRY_FILE): FileSource => {
-  const bytes = Buffer.from(html, 'utf8');
-  const entry: SourceFile = { bytes, size: bytes.length, mtimeMs: 0 };
-  return {
-    root: base.root,
-    read: (rel) => (rel === entryFile ? Promise.resolve(entry) : base.read(rel)),
-    stat: (rel) => (rel === entryFile ? Promise.resolve({ size: entry.size, mtimeMs: 0 }) : base.stat?.(rel) ?? Promise.resolve(null)),
-  };
-};
-
-const isContentRel = (rel: string): boolean => {
-  const parts = rel.split('/');
-  return !parts.some((part) => part.startsWith('.')) && !NOT_CONTENT.has(parts[0] ?? '');
-};
-
-/** A version's files read into the detail source `buildSystemDetail` takes, with the store's caps. */
-export const detailSourceFromTree = async (
-  input: { id: string; dir: string; state: SystemState; rels: readonly string[] },
-  source: FileSource,
-): Promise<SystemDetailSource> => {
-  const rels = input.rels.filter(isContentRel);
-  const files: { rel: string; bytes: number }[] = [];
-  for (const rel of rels) {
-    const info = (await source.stat?.(rel)) ?? null;
-    files.push({ rel, bytes: info?.size ?? 0 });
-  }
-  const tooLarge: string[] = [];
-  const readText = async (rel: string, max: number): Promise<string | null> => {
-    if (!rels.includes(rel)) return null;
-    const file = await source.read(rel);
-    if (file === null) return null;
-    if (file.bytes.length > max) {
-      tooLarge.push(rel);
-      return null;
-    }
-    return file.bytes.toString('utf8');
-  };
-  const systemJson = await readText('system.json', SYSTEM_JSON_MAX_BYTES);
-  const tokensCss = await readText('tokens.css', TOKENS_CSS_MAX_BYTES);
-  const texts: Record<string, string> = {};
-  const overview = await readText('OVERVIEW.md', SYSTEM_OVERVIEW_MAX * BYTES_PER_CHAR_MAX);
-  if (overview !== null) texts['OVERVIEW.md'] = overview;
-  for (const rel of rels) {
-    if (!/^(notes|patterns|brand)\/[^/]+\.md$/.test(rel)) continue;
-    const body = await readText(rel, SYSTEM_NOTE_MAX * BYTES_PER_CHAR_MAX);
-    if (body !== null) texts[rel] = body;
-  }
-  return { id: input.id, dir: input.dir, state: input.state, systemJson, tokensCss, texts, files, build: null, tooLarge };
-};
-
 // ---- the service ----
 
 type BoardEntry = { key: string; id: string; chunks: string[]; meta: RenderMeta; bytes: number };
@@ -117,16 +65,6 @@ export type BoardService = {
 };
 
 export type BoardDeps = { systems: SystemStore; versions: VersionsService; hub: ChangeHub; onDispose: (fn: () => void) => void };
-
-const bundleOrThrow = async (source: FileSource, rel: string, mode: 'render' | 'export') => {
-  try {
-    return await bundleDocument(source, rel, { mode });
-  } catch (error) {
-    if (error instanceof BundleTooLarge) return null;
-    if (error instanceof BundleMissingEntry) return null;
-    throw error;
-  }
-};
 
 export const createBoardService = (deps: BoardDeps): BoardService => {
   const cache = new Map<string, BoardEntry>(); // insertion order = LRU order
@@ -162,15 +100,9 @@ export const createBoardService = (deps: BoardDeps): BoardService => {
   /** The proposed system: `proposal/` read as a system folder, for the current PROPOSAL.json only; its sha keys the cache. */
   const readProposal = async (id: string, proposal: string): Promise<{ detail: SystemDetail; source: FileSource; sha: string }> => {
     if (!SYSTEM_PROPOSAL_ID_PATTERN.test(proposal)) throw new ApiError('bad-request', 'That is not a proposal id.');
-    const dir = await deps.systems.dir(id);
-    const state = await deps.systems.readState(id);
-    const file = state.home?.kind === 'repo' ? await readProposalFile(dir) : null;
-    const proposalDir = file !== null && file.kind !== 'absent' && file.parsed.id === proposal ? await proposalDirOf(dir) : null;
-    if (file === null || file.kind === 'absent' || proposalDir === null) throw new ApiError('not-found', BOARD_NO_PROPOSAL_MESSAGE);
-    const source = createLiveFileSource(proposalDir);
-    const rels = await listFiles(proposalDir);
-    const detail = buildSystemDetail(await detailSourceFromTree({ id, dir, state, rels }, source));
-    return { detail, source, sha: sha256Of(`${file.fileSha256}\n${rels.sort().join('\n')}`) };
+    const found = await readProposalBoardSource(deps.systems, id);
+    if (found === null || found.proposalId !== proposal) throw new ApiError('not-found', BOARD_NO_PROPOSAL_MESSAGE);
+    return { detail: found.detail, source: found.source, sha: found.sha };
   };
 
   /** The detail and the source its files come from, live or from a version. */
@@ -198,30 +130,10 @@ export const createBoardService = (deps: BoardDeps): BoardService => {
       const proposed = options.proposal !== undefined ? await readProposal(id, options.proposal) : null;
       const { detail, source } = proposed ?? (await read(id, options.version));
 
-      // Examples, one by one, relative to components/ (their remote refs per component).
-      const examples: Record<string, string> = {};
-      const keyParts: string[] = [];
-      const components = await Promise.all(
-        detail.components.map(async (component) => {
-          if (component.example === null) return component;
-          const bundled = await bundleOrThrow(source, `components/${component.id}.html`, 'export');
-          if (bundled === null) return component;
-          examples[component.id] = bundled.html;
-          return { ...component, example: { remote: bundled.external } };
-        }),
-      );
-
-      // Fonts and logos: checked by content before the board names them.
-      const unusable = new Set<string>();
-      for (const { file, kind } of [...detail.fonts.map((font) => ({ file: font.file, kind: 'font' as const })), ...detail.logos.map((logo) => ({ file: logo.file, kind: 'logo' as const }))]) {
-        const bytes = await source.read(file).catch(() => null);
-        if (bytes === null || !checkAsset(path.posix.basename(file), kind, bytes.bytes).ok) unusable.add(file);
-        else keyParts.push(`${file}:${sha256(bytes.bytes)}`);
-      }
-
-      const html = buildBoardHtml({ ...detail, components }, { scheme: options.scheme, examples, unusable });
+      // Examples bundled one by one, fonts and logos checked, the document written (shared with the check).
+      const { html, components, assetKeys } = await assembleBoardHtml(detail, source, options.scheme);
       const key = sha256(
-        JSON.stringify({ g: BOARD_GENERATOR_VERSION, id, v: options.version ?? null, p: proposed === null ? null : [options.proposal, proposed.sha], s: options.scheme, html: sha256(html), assets: keyParts.sort() }),
+        JSON.stringify({ g: BOARD_GENERATOR_VERSION, id, v: options.version ?? null, p: proposed === null ? null : [options.proposal, proposed.sha], s: options.scheme, html: sha256(html), assets: assetKeys.sort() }),
       );
       const cached = cache.get(key);
       if (cached !== undefined) {
