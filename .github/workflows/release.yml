@@ -26,10 +26,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.x'
           cache: npm
@@ -80,7 +80,9 @@ jobs:
           git -C "$worktree" add -A
           git -C "$worktree" commit --allow-empty -m "Release v$VERSION (from $source_sha)"
           git -C "$worktree" tag "release-v$VERSION"
-          git -C "$worktree" push origin "HEAD:refs/heads/release" "refs/tags/release-v$VERSION"
+          # Push from the main checkout, not the worktree: actions/checkout v6+ keeps the token in a
+          # config file included only for the main checkout's git dir. The worktree shares its refs.
+          git push origin "refs/heads/release:refs/heads/release" "refs/tags/release-v$VERSION"
       - name: GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
