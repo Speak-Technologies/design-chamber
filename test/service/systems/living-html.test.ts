@@ -203,7 +203,7 @@ test('all four layouts in every section that takes them: the page stays safe, ma
   assert.ok(!/data-dc-/.test(html), 'the entry marks are stripped from table rows too');
   assert.ok(html.includes('role="table"') && html.includes('role="row"') && html.includes('role="columnheader"'));
   // The run CSS survived addCss: a refused rule would be dropped silently.
-  for (const rule of ['.dc-run-table {', '.dc-thead, .dc-trow {', '@media (max-width: 720px) {', '.dc-components.dc-run-compact {', '.dc-run-full {', '.dc-grid.dc-run-compact {', '.dc-run-compact .dc-swatch {']) {
+  for (const rule of ['.dc-run-table {', '.dc-thead, .dc-trow {', '@media (max-width: 720px) {', '.dc-components.dc-run-compact {', '.dc-run-full {', '.dc-grid.dc-run-compact {', '.dc-run-compact .dc-swatch {', '.dc-run-table.dc-table-tokens {', '.dc-run-table.dc-table-two {', '.dc-text p, .dc-body p, .dc-note { max-width: 90ch; }']) {
     assert.ok(html.includes(rule), rule);
   }
   // Every CSS line of the page passes the allowlist on its own (the generator drops any that would not).

@@ -96,7 +96,7 @@ Components, notes, patterns and brand entries take all four. The notes' section 
 Rules the board holds:
 - **Order is the agent's.** Neighbouring entries with the same layout form one group; nothing is reordered.
 - **Light and dark grounds stack** in every layout, so a preview always has the card's full width.
-- **Tables fit their content.** A token table's Token column is as wide as its longest name and value (up to 420 px), so the note sits beside it. A text table (notes, patterns, brand) drops its Note column when no entry in it has a note.
+- **Tables fit their content.** A token table's Token column is as wide as its longest name and value (up to 420 px), so the note sits beside it. A text table (notes, patterns, brand) drops its Note column when no entry in it has a note. Guidance, overview and note text stop at about 90 characters a line, whatever the layout's width, on the board and the living page.
 - **Presentation only.** A layout change doesn't reset a section's "Looks good" review. It is still a change to `system.json`, so it is a new revision: linked designs see that a newer system exists, and a repo's living page reads out of date until it is regenerated.
 - **The living page follows the hints too**, with the same groups and table rows (its examples are pictures that scale down, so it needs no measuring).
 - The panel has no layout control: the brief makes this the agent's job.

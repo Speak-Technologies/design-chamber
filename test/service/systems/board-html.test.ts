@@ -269,6 +269,7 @@ test('the board script measures .dc-fit (cards and table rows) and re-measures o
   // Rule 3: full is one column with a 16px gap.
   assert.match(html, /\.dc-run-full \{ display: grid; grid-template-columns: 1fr; gap: 16px; \}/);
   assert.ok(html.includes(':is(.dc-grid, .dc-run-full, .dc-run-table, .dc-card) + :is(.dc-grid, .dc-run-full, .dc-run-table) { margin-top: 16px; }'), 'runs stand apart');
+  assert.ok(html.includes('.dc-text p, .dc-body p, .dc-note { max-width: 90ch; }'), 'a readable measure');
   // Rule 4: the table grid, subgrid rows, row rules, muted header, the container query.
   assert.match(html, /\.dc-run-table \{ display: grid; grid-template-columns: minmax\(160px, 1fr\) minmax\(0, 3fr\) minmax\(160px, 1\.2fr\); \}/);
   assert.match(html, /\.dc-thead, \.dc-trow \{ display: grid; grid-template-columns: subgrid; grid-column: 1 \/ -1; \}/);

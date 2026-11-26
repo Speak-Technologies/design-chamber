@@ -188,7 +188,9 @@ body { margin: 0; background: #f7f7f8; color: #1d1d1f; font-family: system-ui, -
 .dc-layer { position: absolute; width: 140px; height: 56px; padding: 6px; border-radius: 6px; font-size: 11px; background: #ffffff; border: 1px solid #d8d8dc; overflow: hidden; }
 .dc-list { margin: 0; padding-left: 18px; }
 .dc-logo { max-width: 100%; max-height: 96px; display: block; margin: 0 auto; }
-.dc-text p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dc-text p, .dc-body p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A readable measure: guidance, overview and note text stops at about 90 characters, whatever the layout's width. */
+.dc-text p, .dc-body p, .dc-note { max-width: 90ch; }
 .dc-text-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
 .dc-components { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
 .dc-components.dc-run-compact { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }

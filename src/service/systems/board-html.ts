@@ -80,7 +80,9 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
 .dc-example { display: block; min-height: 32px; overflow: auto; }
 .dc-list { margin: 0; padding-left: 18px; }
 .dc-logo { max-width: 100%; max-height: 96px; display: block; margin: 0 auto; }
-.dc-text p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dc-text p, .dc-body p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A readable measure: guidance, overview and note text stops at about 90 characters, whatever the layout's width. */
+.dc-text p, .dc-body p, .dc-note { max-width: 90ch; }
 .dc-area { padding-top: 16px; }
 .dc-area-title { margin: 24px 0 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dc-board-muted, ${f.muted}); }
 .dc-text-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }

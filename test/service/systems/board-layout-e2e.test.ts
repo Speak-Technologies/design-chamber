@@ -213,7 +213,8 @@ test('board components: content-sized columns, a wide example widens its card, n
 
 const LAYOUT_JSON = {
   tokens: { '--brand': { group: 'brand' }, '--surface': { group: 'surface' }, '--ink': { group: 'brand' } },
-  layout: { colours: 'table' },
+  layout: { colours: 'table', patterns: 'table' },
+  patterns: [{ id: 'voice', kind: 'voice', title: 'Voice' }],
   components: [
     ...['pill-a', 'pill-b', 'pill-c', 'pill-d'].map((id) => ({ id, name: `Pill ${id.slice(-1)}`, purpose: 'Marks a state.', layout: 'compact', example: `components/${id}.html` })),
     { id: 'nav', name: 'Navigation', purpose: 'Moves between pages.', layout: 'full', example: 'components/nav.html' },
@@ -246,8 +247,8 @@ const layoutDetail = () =>
     state: { ...parseSystemState({}, 'acme', NOW), name: 'Acme' },
     systemJson: JSON.stringify(LAYOUT_JSON),
     tokensCss: ':root { --brand: #1a73e8; --surface: #ffffff; --ink: #1d1d1f; }\n@media (prefers-color-scheme: dark) { :root { --brand: #8ab4f8; --surface: #121212; --ink: #ececef; } }\n',
-    texts: {},
-    files: Object.keys(LAYOUT_EXAMPLES).map((id) => ({ rel: `components/${id}.html`, bytes: 10 })),
+    texts: { 'patterns/voice.md': 'Write plainly and kindly. '.repeat(40).trim() },
+    files: [...Object.keys(LAYOUT_EXAMPLES).map((id) => ({ rel: `components/${id}.html`, bytes: 10 })), { rel: 'patterns/voice.md', bytes: 1040 }],
     build: null,
   });
 
@@ -261,7 +262,7 @@ type EntryReport = {
   textOutside: boolean;
   cells: Record<string, Box>;
 };
-type LayoutReport = { section: number; entries: EntryReport[]; heads: { label: string; cells: Record<string, Box> }[] };
+type LayoutReport = { section: number; entries: EntryReport[]; heads: { label: string; cells: Record<string, Box> }[]; measure: { width: number; ch: number }[] };
 
 // Reports every board entry: the run it sits in, its box, its table cells, and whether an example or its text reaches past it.
 const LAYOUT_PROBE = `<script>
@@ -298,8 +299,16 @@ window.addEventListener('load', function () {
     });
     var heads = [];
     document.querySelectorAll('.dc-thead').forEach(function (head) { heads.push({ label: head.parentElement ? head.parentElement.getAttribute('aria-label') : '', cells: cellsOf(head) }); });
+    var measure = [];
+    document.querySelectorAll('.dc-trow .dc-body p').forEach(function (p) {
+      var probeCh = document.createElement('span');
+      probeCh.style.cssText = 'position:absolute;visibility:hidden;width:1ch';
+      p.appendChild(probeCh);
+      measure.push({ width: p.getBoundingClientRect().width, ch: probeCh.getBoundingClientRect().width });
+      p.removeChild(probeCh);
+    });
     var section = document.querySelector('.dc-section');
-    fetch('/result', { method: 'POST', body: JSON.stringify({ section: section ? section.getBoundingClientRect().width : 0, entries: entries, heads: heads }) });
+    fetch('/result', { method: 'POST', body: JSON.stringify({ section: section ? section.getBoundingClientRect().width : 0, entries: entries, heads: heads, measure: measure }) });
   }, 1000);
 });
 </script>`;
@@ -383,6 +392,10 @@ test('board layouts in Chrome: compact packs small pieces, full spans the sectio
     const token = entry.cells.preview;
     assert.ok(token !== undefined && token.right - token.left <= 421, `${entry.id} token column ${JSON.stringify(token)}`);
   }
+
+  // A text table's guidance keeps a readable measure: about 90 characters, not the whole 1 400px column.
+  assert.ok(wide.measure.length > 0, 'the pattern guidance paragraph is there');
+  for (const line of wide.measure) assert.ok(line.width <= 90 * line.ch + 1 && line.width < wide.section * 0.75, `guidance measure ${JSON.stringify(line)} in ${wide.section}px`);
 
   for (const entry of wide.entries) {
     assert.equal(entry.clipped, false, `clipped at 1480: ${JSON.stringify(entry)}`);
