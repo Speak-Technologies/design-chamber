@@ -74,8 +74,43 @@ const frames = {
 // ---------------------------------------------------------------- static server
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
+// `?live=1` pages (README screenshots): /live/* goes to the real built service named by DC_LIVE_PORT and DC_LIVE_TOKEN,
+// with the token added here so the page never holds it. Without those variables nothing is proxied.
+const liveProxy = async (request, response, url) => {
+  const port = process.env.DC_LIVE_PORT;
+  const token = process.env.DC_LIVE_TOKEN;
+  if (!port || !token) {
+    response.writeHead(404).end();
+    return;
+  }
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  const body = Buffer.concat(chunks);
+  try {
+    const upstream = await fetch(`http://127.0.0.1:${port}/${url.pathname.slice('/live/'.length)}${url.search}`, {
+      method: request.method,
+      headers: { authorization: `Bearer ${token}`, ...(body.length ? { 'content-type': 'application/json' } : {}) },
+      ...(body.length ? { body } : {}),
+    });
+    const type = upstream.headers.get('content-type') ?? 'application/json';
+    let answer = Buffer.from(await upstream.arrayBuffer());
+    // DC_LIVE_REWRITE: {"<scratch path>": "<what a screenshot shows instead>"}, so a README picture shows no machine paths.
+    if (process.env.DC_LIVE_REWRITE && /json|text/.test(type)) {
+      let text = answer.toString('utf8');
+      for (const [from, to] of Object.entries(JSON.parse(process.env.DC_LIVE_REWRITE))) text = text.split(from).join(to);
+      answer = Buffer.from(text, 'utf8');
+    }
+    response.writeHead(upstream.status, { 'content-type': type, 'cache-control': 'no-store' }).end(answer);
+  } catch {
+    response.writeHead(502).end();
+  }
+};
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://x');
+  if (url.pathname.startsWith('/live/')) {
+    void liveProxy(request, response, url);
+    return;
+  }
   let file;
   const script = url.pathname === '/panel/main.js' ? harnessJs : frames[url.pathname];
   if (script !== undefined) {

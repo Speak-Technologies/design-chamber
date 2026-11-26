@@ -103,7 +103,7 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Fix prompt:** none. Re-file the designs under their projects after upgrading again; the picker lists projects and folders for exactly this.
 
 ### KI-35 — Links in system notes on the board look clickable but only select the card
-🟣 Minor · found 2026-11-26 · `src/service/systems/markdown-html.ts:294` · `src/ui/systems/system-board.ts` (click overlay → `hit-test`) · owner: fullstack-developer
+🟣 Minor · found 2026-11-26 · `src/service/systems/markdown-html.ts:294` · `src/ui/systems/system-board.ts` (click overlay → `hit-test`) · owner: backend-developer
 **What:** the board now draws markdown links as underlined `<a>` elements, but the system board puts a click overlay over the frame that turns every click into an entry hit-test, and `system-board.ts` has no `open-external` handling. Clicking a link selects the note instead of opening anything.
 **Who:** end user reading a system's notes on the board · **Seen:** visible: an underlined link that does nothing when clicked
 **Happens:** any note or overview with a link, clicked · common · **Effect:** mild confusion; the address is still readable by hovering in the panel's raw text
@@ -112,7 +112,7 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 > In Design Chamber's system board, choose one: (a) make links work: when the board's hit-test lands on a `.dc-md-link`, ask the host to open http(s) and mailto addresses through the same external-open path designs use (`frame-messages.ts` `open-external`), and ignore relative ones; or (b) stop them looking clickable on the board by styling `.dc-md-link` there without the underline-as-affordance and adding the address after the label as the living page does. Add a test for the chosen behaviour (a view-model or generator test), and update `documentation/pages/design-systems.md`. Run `npm run check`.
 
 ### KI-36 — Pattern and brand bodies that open with their own title show it twice
-🟣 Minor · found 2026-11-26 · `src/service/systems/specimen-html.ts` (`entryTextCard`, `entryTextRow`) · owner: fullstack-developer
+🟣 Minor · found 2026-11-26 · `src/service/systems/specimen-html.ts` (`entryTextCard`, `entryTextRow`) · owner: backend-developer
 **What:** a note whose markdown body opens with its own title as a heading shows that heading once (`withoutLeadingTitle`, from the markdown PR), in every board layout including table rows. Pattern and brand entries don't get the same treatment: a `patterns/<id>.md` that starts with `# App frame` under an entry titled "App frame" shows the title as the card's label and again as the body's first heading, and in a table row both in the Title cell and at the top of the Guidance cell.
 **Who:** the user reading a system's Patterns & voice or Brand & marketing on the board or the living page · **Seen:** yes, a repeated heading (nexus's patterns all do this)
 **Happens:** whenever the agent starts a pattern or brand file with its title, which agents commonly do · **Effect:** a little visual noise; nothing is lost or wrong

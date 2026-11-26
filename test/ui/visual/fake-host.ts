@@ -39,9 +39,24 @@ const routesFromUrl = (): Array<[RouteKey, RouteOverride]> => {
   }
 };
 
+/**
+ * `?live=1`: answer service requests from the real built service instead of the fake backend. `shoot.mjs` proxies
+ * `/live/*` to the service named by DC_LIVE_PORT and DC_LIVE_TOKEN, so the token never reaches the page. Only the
+ * README screenshot scenario uses it, against a scratch designs root.
+ */
+const liveRequest = async (request: { method: string; path: string; query?: Record<string, string>; body?: string }): Promise<{ status: number; body: string }> => {
+  const query = new URLSearchParams(request.query ?? {}).toString();
+  const response = await fetch(`/live/${request.path.replace(/^\/+/, '')}${query ? `?${query}` : ''}`, {
+    method: request.method,
+    ...(request.body ? { headers: { 'content-type': 'application/json' }, body: request.body } : {}),
+  });
+  return { status: response.status, body: await response.text() };
+};
+
 /** The real host (talking to `host.html`) with `serviceRequest` answered by the fake backend. */
 export const installFakeHost = <T extends HostLike>(real: T): T => {
   const fake = createFakeTransport();
+  const live = new URLSearchParams(location.search).get('live') === '1';
   for (const [key, override] of routesFromUrl()) fake.routes.set(key, override);
   (window as unknown as { __dcFake?: FakeHooks }).__dcFake = {
     writePending: fake.backend.writePending,
@@ -66,6 +81,6 @@ export const installFakeHost = <T extends HostLike>(real: T): T => {
     routeHits: fake.routes.hits,
   };
   return new Proxy(real, {
-    get: (target, key, receiver) => (key === 'serviceRequest' ? fake.serviceRequest : Reflect.get(target, key, receiver)),
+    get: (target, key, receiver) => (key === 'serviceRequest' ? (live ? liveRequest : fake.serviceRequest) : Reflect.get(target, key, receiver)),
   });
 };
