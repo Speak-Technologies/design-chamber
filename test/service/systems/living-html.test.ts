@@ -169,3 +169,13 @@ test('2000 tokens and 200 components stay well under the page bound', () => {
   safe(html);
   assert.ok(Date.now() - started < 30_000);
 });
+
+test('markdown bodies stay inside the allowlist: no pre, blockquote, h5/h6 or link that leaves', () => {
+  const rich = '# Title\n\n## Part\n\n### Deeper\n\n```css\na { b: c; }\n```\n\n> quote\n\n- one\n  - two\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\n[out](https://example.com) and [in](#note-anchor)';
+  const html = build({ ...fixture(), overview: { text: rich, problem: null }, notes: [{ id: 'history', title: 'Why', text: rich, problem: null }] });
+  safe(html);
+  for (const forbidden of ['<pre', '<blockquote', '<h5', '<h6', 'target=', 'rel=']) assert.ok(!html.includes(forbidden), forbidden);
+  assert.ok(html.includes('<div class="dc-md-pre"><code>a { b: c; }</code></div>'), 'code block as a pre-wrap div');
+  assert.ok(html.includes('out (https://example.com)'), 'a link that leaves is text and address');
+  assert.ok(html.includes('<a href="#note-anchor">in</a>'), 'a fragment link stays a link');
+});

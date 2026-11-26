@@ -130,3 +130,38 @@ test('without an example part a component card has no example (the living page p
   assert.ok(section.includes('data-dc-entry="component:button"'));
   assert.ok(!section.includes('<template') && !section.includes("couldn&#39;t be shown"));
 });
+
+test('overview, notes and pattern bodies render as markdown on the board', () => {
+  const base = boardFixture();
+  const detail: SystemDetail = {
+    ...base,
+    overview: { text: '# Nexus design system\n\nThe system for **Pentima Nexus**.\n\n## The look\n\n- Brand blue `#00A0E0` for links.\n- See [the docs](https://example.com/look).', problem: null },
+    notes: [{ id: 'history', title: 'Why the palette changed', text: '## Contrast\n\nThe old blue failed **AA**.\n\n```\n--old: #1a73e8;\n```', problem: null }],
+    patterns: [{ id: 'voice', kind: 'voice', title: 'Voice and tone', note: '', text: 'Plain words.\n\n> No exclamation marks.', problem: null }],
+  };
+  const html = buildBoardHtml(detail, { scheme: 'light' });
+  const overview = sectionOf(html, 'overview');
+  assert.ok(overview.includes('<h3 class="dc-md-h3">Nexus design system</h3>'), overview);
+  assert.ok(overview.includes('<strong>Pentima Nexus</strong>'), overview);
+  assert.ok(overview.includes('<h4 class="dc-md-h4">The look</h4>'), overview);
+  assert.ok(overview.includes('<ul class="dc-md-list"><li><p>Brand blue <code class="dc-md-code">#00A0E0</code> for links.</p></li>'), overview);
+  assert.ok(overview.includes('<a href="https://example.com/look" rel="noopener noreferrer" target="_blank">the docs</a>'), overview);
+  assert.ok(overview.includes('<h4 class="dc-md-h4">Contrast</h4>'), overview);
+  assert.ok(overview.includes('<pre class="dc-md-pre"><code>--old: #1a73e8;</code></pre>'), overview);
+  const patterns = sectionOf(html, 'patterns');
+  assert.ok(patterns.includes('<blockquote class="dc-md-quote"><p>No exclamation marks.</p></blockquote>'), patterns);
+  assert.ok(html.includes('.dc-section .dc-md-h3'), 'the board carries the markdown CSS');
+});
+
+test('hostile markdown in a note stays escaped text on the board', () => {
+  const base = boardFixture();
+  const detail: SystemDetail = {
+    ...base,
+    notes: [{ id: 'history', title: 'Why', text: '# Hi\n\n<script>alert(1)</script>\n\n[x](javascript:alert(2))\n\n```\n</code></pre><img src=x onerror=alert(3)>\n```', problem: null }],
+  };
+  const html = buildBoardHtml(detail, { scheme: 'light' });
+  assert.equal((html.match(/<script\b/gi) ?? []).length, 1, 'only the board script');
+  assert.ok(!html.includes('<img src=x'));
+  assert.ok(!html.includes('href="javascript:'));
+  assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+});
