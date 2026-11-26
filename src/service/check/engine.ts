@@ -85,6 +85,8 @@ export type RunCheckInput = {
   tmpdir?: string;
   /** Time limits; the defaults are `CHECK_ARTBOARD_TIMEOUT_MS` and `CHECK_RUN_BUDGET_MS`. Tests shorten them. */
   budgets?: { artboardMs?: number; runMs?: number };
+  /** Test seam: replaces the render loop (so a test can see what the engine hands it). */
+  render?: typeof renderArtboards;
 };
 
 export type RunCheckResult = {
@@ -166,7 +168,7 @@ export const runCheck = async (input: RunCheckInput): Promise<RunCheckResult> =>
 
   try {
     if (plan.length > 0) await createRunDir(designDir, runId);
-    const outcome = await renderArtboards({
+    const outcome = await (input.render ?? renderArtboards)({
       openBrowser: (launch) =>
         openCdp(browserPath, checkBrowserArgs({ workDir, platform: input.platform, isRoot: input.isRoot, join: path.join }), launchOpenOptions(launch, BROWSER_START_MS)),
       deadlineAt,

@@ -5,6 +5,7 @@ import { chmod, readdir, readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 
 import { CheckInterrupted, CheckUsageError, runCheck, type RunCheckInput } from '../../../src/service/check/engine.ts';
+import { CHECK_RUN_DEADLINE_MS, type RenderDeps } from '../../../src/service/check/render.ts';
 import { allFindings, exitCodeOf, formatCheckText, jsonOutput, parseArgs, resultLine } from '../../../src/service/check/report-text.ts';
 import { parseCheckReportText } from '../../../src/shared/checks.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
@@ -153,4 +154,26 @@ test('the text report caps at 30 findings and points at the full report', async 
   assert.equal(numbered.length, 30);
   assert.match(text, /\nand \d+ more in \/x\/check\.json\n/);
   assert.ok(jsonOutput({ report: result.report, design: result.design, pngs: [], reportPath: null }).includes('"counts"'));
+});
+
+test('the run deadline starts when runCheck starts, not after the file checks, and reaches the render loop', async (t) => {
+  const tmp = await useTmpRoot(t);
+  const dir = await tmp.writeDesign('demo', { 'design.json': designJson('canvas'), 'screens/home.html': GOOD });
+  const entryAt = 1_800_000_000_000;
+  // Every read of the clock moves it on, so the file checks (which read it for their own budget) and
+  // anything after them see a later time than the engine's first read.
+  let reads = 0;
+  t.mock.method(Date, 'now', () => entryAt + 1000 * reads++);
+  let seen: RenderDeps | null = null;
+  await runCheck(
+    input(dir, {
+      browserPath: '/never-started',
+      render: (deps) => {
+        seen = deps;
+        return Promise.resolve({ artboards: [], findings: [], notRendered: deps.plan.length, stoppedBy: 'budget', unavailable: false });
+      },
+    }),
+  );
+  assert.ok(seen !== null, 'the engine called the render loop');
+  assert.equal((seen as RenderDeps).deadlineAt, entryAt + CHECK_RUN_DEADLINE_MS);
 });
