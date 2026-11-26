@@ -232,9 +232,11 @@ test('text and token tables carry their entry keys and headers; no dc-fit (no li
     notes: [{ id: 'history', title: 'Why the palette changed' }],
   });
   const overview = renderSpecimenSection(detail, 'overview');
-  assert.ok(overview.includes('<div class="dc-run-table" role="table" aria-label="Notes">'));
+  // No note on any entry: the Note column is left out (two columns).
+  assert.ok(overview.includes('<div class="dc-run-table dc-table-two" role="table" aria-label="Notes">'));
   assert.ok(overview.includes('<div class="dc-trow" role="row" data-dc-entry="note:history">'));
-  for (const header of ['Title', 'Guidance', 'Note']) assert.ok(overview.includes(`role="columnheader">${header}</div>`), header);
+  for (const header of ['Title', 'Guidance']) assert.ok(overview.includes(`role="columnheader">${header}</div>`), header);
+  assert.ok(!overview.includes('role="columnheader">Note</div>') && !overview.includes('dc-tcell-notes'));
   assert.ok(!overview.includes('dc-fit'));
   // The overview text itself stays full width, outside the table.
   assert.ok(overview.includes('<div class="dc-text" data-dc-entry="overview">'));
@@ -248,6 +250,8 @@ test('text and token tables carry their entry keys and headers; no dc-fit (no li
 
   const colours = renderSpecimenSection(detail, 'colours');
   assert.ok(colours.includes('role="columnheader">Sample</div>') && colours.includes('role="columnheader">Token</div>') && colours.includes('role="columnheader">Note</div>'));
+  // Token tables size their token column to the names, not to three fifths of the board.
+  assert.ok(colours.includes('<div class="dc-run-table dc-table-tokens" role="table"'));
   assert.ok(colours.includes('<div class="dc-trow" role="row" data-dc-entry="token:--brand">'));
   assert.ok(!colours.includes('dc-fit'));
   const spacing = renderSpecimenSection(detail, 'spacing');
@@ -302,8 +306,24 @@ test('notes: a card run keeps the loose cards, compact a text grid, full one col
   assert.ok(section.includes('<div class="dc-card dc-text" data-dc-entry="note:n1">'), 'card run stays loose as today');
   assert.ok(section.includes('<div class="dc-grid dc-text-grid dc-run-compact"><div class="dc-card dc-text" data-dc-entry="note:n2">'));
   assert.ok(section.includes('<div class="dc-run-full"><div class="dc-card dc-text" data-dc-entry="note:n3">'));
+  // n4's body file is missing, so it carries a problem and the table keeps its Note column for it.
   assert.ok(section.includes('<div class="dc-run-table" role="table" aria-label="Notes">'));
-  assert.ok(section.includes('data-dc-entry="note:n4"'));
+  assert.ok(section.includes('data-dc-entry="note:n4"') && section.includes('dc-tcell-notes'));
+});
+
+test('a text table keeps its Note column when any entry has a note or a problem; the others get an empty cell', () => {
+  const detail = runsFixture({
+    layout: { patterns: 'table' },
+    patterns: [
+      { id: 'quiet', kind: 'voice', title: 'Quiet' },
+      { id: 'loud', kind: 'voice', title: 'Loud', note: 'Only for alerts.' },
+    ],
+  });
+  const patterns = renderSpecimenSection(detail, 'patterns');
+  assert.ok(patterns.includes('<div class="dc-run-table" role="table" aria-label="Patterns &amp; voice">'));
+  assert.ok(patterns.includes('role="columnheader">Note</div>'));
+  assert.equal((patterns.match(/dc-tcell-notes/g) ?? []).length, 2, 'every row has the cell, so the columns line up');
+  assert.ok(patterns.includes('<div class="dc-note">Only for alerts.</div>'));
 });
 
 test('an invalid hint falls back without a trace in the markup', () => {

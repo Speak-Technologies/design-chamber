@@ -117,6 +117,11 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
 /* Table runs: three aligned columns (subgrid), a rule between rows, muted header text. Under 760px of section width the
    cells stack. A widened component row leaves the subgrid: name and notes side by side on top, the preview under them. */
 .dc-run-table { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 3fr) minmax(160px, 1.2fr); }
+/* Token tables: a short sample, the token column as wide as its longest name and value (up to 420px), the note after it.
+   Text tables with no notes have two columns. */
+.dc-run-table.dc-table-tokens { grid-template-columns: minmax(120px, 240px) fit-content(420px) minmax(200px, 1fr); }
+.dc-run-table.dc-table-two { grid-template-columns: minmax(160px, 1fr) minmax(0, 4fr); }
+.dc-table-tokens .dc-tcell-preview { padding-right: 24px; }
 .dc-thead, .dc-trow { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
 .dc-thead { color: var(--dc-board-muted, ${f.muted}); font-size: 12px; font-weight: 600; }
 .dc-thead .dc-tcell { padding: 8px 12px 8px 0; }
@@ -131,7 +136,7 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
 .dc-trow.dc-wide .dc-tcell-notes { grid-column: 2; grid-row: 1; }
 .dc-trow.dc-wide .dc-tcell-preview { grid-column: 1 / -1; grid-row: 2; }
 @container (max-width: 759px) {
-  .dc-run-table { grid-template-columns: 1fr; }
+  .dc-run-table, .dc-run-table.dc-table-tokens, .dc-run-table.dc-table-two { grid-template-columns: 1fr; }
   .dc-trow.dc-wide { grid-template-columns: 1fr; }
   .dc-trow.dc-wide .dc-tcell { grid-column: 1 / -1; grid-row: auto; }
 }

@@ -112,7 +112,8 @@ const runsOf = <T>(items: readonly T[], layoutOf: (item: T) => BoardLayout): Lay
 };
 
 /** A table run: divs with ARIA roles, so the living page allowlist, hit-testing and the board script all work. */
-const tableWrap = (label: string, inner: string): string => `<div class="dc-run-table" role="table" aria-label="${escapeHtml(label)}">${inner}</div>`;
+const tableWrap = (label: string, inner: string, variant: '' | ' dc-table-tokens' | ' dc-table-two' = ''): string =>
+  `<div class="dc-run-table${variant}" role="table" aria-label="${escapeHtml(label)}">${inner}</div>`;
 
 const tableHeader = (cells: readonly string[]): string =>
   `<div class="dc-thead" role="row">${cells.map((cell) => `<div class="dc-tcell" role="columnheader">${escapeHtml(cell)}</div>`).join('')}</div>`;
@@ -216,6 +217,8 @@ const tokenTable = (tokens: readonly SystemToken[], draw: (name: string) => stri
             '</div>',
         )
         .join(''),
+    // Token cells are short: their column fits the longest name and value, so the note sits next to it (not 800px away).
+    ' dc-table-tokens',
   );
 
 /**
@@ -470,8 +473,13 @@ const entryTextCard = (kind: 'pattern' | 'brand', entry: SystemEntryText, markdo
   );
 };
 
+/** A text entry's note cell content: its note and its problem ('' when it has neither). */
+const entryTextNote = (entry: SystemEntryText | SystemDetail['notes'][number]): string =>
+  ('kind' in entry && entry.note !== '' ? `<div class="dc-note">${escapeHtml(entry.note)}</div>` : '') +
+  (entry.problem !== null ? `<div class="dc-problem">${escapeHtml(entry.problem)}</div>` : '');
+
 /** One text entry as a table row: title (and kind), the body as guidance, note and problem. */
-const entryTextRow = (kind: 'note' | 'pattern' | 'brand', entry: SystemEntryText | SystemDetail['notes'][number], markdown: MarkdownProfile): string => {
+const entryTextRow = (kind: 'note' | 'pattern' | 'brand', entry: SystemEntryText | SystemDetail['notes'][number], withNote: boolean, markdown: MarkdownProfile): string => {
   const key = SYSTEM_ENTRY_ID_PATTERN.test(entry.id) ? entryAttr(kind, entry.id) : '';
   const isEntryText = 'kind' in entry;
   const title =
@@ -480,14 +488,18 @@ const entryTextRow = (kind: 'note' | 'pattern' | 'brand', entry: SystemEntryText
   // A note's own leading heading repeats the title cell: dropped, as on the note cards.
   const body = entry.text === null ? '' : isEntryText ? entry.text : withoutLeadingTitle(entry.text, entry.title);
   const guidance = body.trim() !== '' ? `<div class="dc-body">${renderMarkdown(body, markdown)}</div>` : '';
-  const note =
-    (isEntryText && entry.note !== '' ? `<div class="dc-note">${escapeHtml(entry.note)}</div>` : '') +
-    (entry.problem !== null ? `<div class="dc-problem">${escapeHtml(entry.problem)}</div>` : '');
-  return `<div class="dc-trow" role="row"${key}>` + tableCell('name', title) + tableCell('preview', guidance) + tableCell('notes', note) + '</div>';
+  return `<div class="dc-trow" role="row"${key}>` + tableCell('name', title) + tableCell('preview', guidance) + (withNote ? tableCell('notes', entryTextNote(entry)) : '') + '</div>';
 };
 
-const entryTextTable = (kind: 'note' | 'pattern' | 'brand', entries: readonly (SystemEntryText | SystemDetail['notes'][number])[], label: string, markdown: MarkdownProfile): string =>
-  tableWrap(label, tableHeader(['Title', 'Guidance', 'Note']) + entries.map((entry) => entryTextRow(kind, entry, markdown)).join(''));
+/** A text table; when no entry in it has a note or a problem the Note column is left out (two columns). */
+const entryTextTable = (kind: 'note' | 'pattern' | 'brand', entries: readonly (SystemEntryText | SystemDetail['notes'][number])[], label: string, markdown: MarkdownProfile): string => {
+  const withNote = entries.some((entry) => entryTextNote(entry) !== '');
+  return tableWrap(
+    label,
+    tableHeader(withNote ? ['Title', 'Guidance', 'Note'] : ['Title', 'Guidance']) + entries.map((entry) => entryTextRow(kind, entry, withNote, markdown)).join(''),
+    withNote ? '' : ' dc-table-two',
+  );
+};
 
 /** Pattern and brand runs: a card run keeps today's text grid byte for byte; compact, full and table get their containers. */
 const entryTextRuns = (kind: 'pattern' | 'brand', detail: SystemDetail, entries: readonly SystemEntryText[], label: string, markdown: MarkdownProfile): string =>

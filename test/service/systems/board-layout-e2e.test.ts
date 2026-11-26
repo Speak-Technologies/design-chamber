@@ -16,6 +16,7 @@ import { buildBoardHtml } from '../../../src/service/systems/board-html.ts';
 import { buildSystemDetail, parseSystemState } from '../../../src/shared/system-json.ts';
 import { chromeOrSkip, testBrowserFlags } from '../../helpers/chrome-or-skip.ts';
 import { probeSource } from '../../helpers/probe-source.ts';
+import { BOARD_ENTRY_MAX } from '../../../src/shared/limits.ts';
 
 const NOW = '2026-11-20T10:00:00.000Z';
 
@@ -260,7 +261,7 @@ type EntryReport = {
   textOutside: boolean;
   cells: Record<string, Box>;
 };
-type LayoutReport = { section: number; entries: EntryReport[]; heads: Record<string, Box>[] };
+type LayoutReport = { section: number; entries: EntryReport[]; heads: { label: string; cells: Record<string, Box> }[] };
 
 // Reports every board entry: the run it sits in, its box, its table cells, and whether an example or its text reaches past it.
 const LAYOUT_PROBE = `<script>
@@ -296,7 +297,7 @@ window.addEventListener('load', function () {
       entries.push({ id: el.getAttribute('data-dc-entry'), run: run, wide: el.classList.contains('dc-wide'), box: rect(el), clipped: clipped, textOutside: textOutside, cells: cellsOf(el) });
     });
     var heads = [];
-    document.querySelectorAll('.dc-thead').forEach(function (head) { heads.push(cellsOf(head)); });
+    document.querySelectorAll('.dc-thead').forEach(function (head) { heads.push({ label: head.parentElement ? head.parentElement.getAttribute('aria-label') : '', cells: cellsOf(head) }); });
     var section = document.querySelector('.dc-section');
     fetch('/result', { method: 'POST', body: JSON.stringify({ section: section ? section.getBoundingClientRect().width : 0, entries: entries, heads: heads }) });
   }, 1000);
@@ -350,7 +351,7 @@ test('board layouts in Chrome: compact packs small pieces, full spans the sectio
   assert.ok(hero.box.top >= nav.box.bottom, 'full cards stack, one per row');
 
   // Table: the three columns line up across rows and with the header (subgrid).
-  const head = wide.heads[0];
+  const head = wide.heads.find((candidate) => candidate.label === 'Components')?.cells;
   assert.ok(head, 'the components table has a header row');
   for (const row of [rowA, rowC]) {
     assert.equal(row.wide, false, row.id);
@@ -376,7 +377,12 @@ test('board layouts in Chrome: compact packs small pieces, full spans the sectio
   const colours = wide.entries.filter((entry) => entry.id.startsWith('token:'));
   assert.equal(colours.length, 3, JSON.stringify(wide.entries.map((e) => e.id)));
   assert.ok(colours.every((entry) => entry.run.includes('dc-run-table')));
-  for (const entry of colours) assert.equal(Object.keys(entry.cells).length, 3, `${entry.id}: ${JSON.stringify(entry.cells)}`);
+  for (const entry of colours) {
+    assert.equal(Object.keys(entry.cells).length, 3, `${entry.id}: ${JSON.stringify(entry.cells)}`);
+    // The token column fits the names (at most 420px), so the note sits next to it rather than 800px across the board.
+    const token = entry.cells.preview;
+    assert.ok(token !== undefined && token.right - token.left <= 421, `${entry.id} token column ${JSON.stringify(token)}`);
+  }
 
   for (const entry of wide.entries) {
     assert.equal(entry.clipped, false, `clipped at 1480: ${JSON.stringify(entry)}`);
@@ -422,17 +428,21 @@ test('board probe: a hanging space at a wrap in a table row is not text outside;
   });
   // A hand-made entry whose text cannot wrap and runs 300px past its 300px box: the probe must still see it.
   const overflow = `<div data-dc-entry="component:overflow" style="width:300px;white-space:nowrap">${'Overflowing words '.repeat(20)}</div>`;
+  // Page script can set any attribute value: a megabyte-long entry key is clipped in the page, before the answer is sent.
+  const huge = `<div id="huge" style="height:10px"></div><script>document.getElementById('huge').setAttribute('data-dc-entry', 'component:' + 'x'.repeat(1000000));</script>`;
   const script = `<script>${await probeSource()}</script><script>
 window.addEventListener('load', function () {
   setTimeout(function () {
     var probe = __dcProbe.collectBoard();
-    fetch('/result', { method: 'POST', body: JSON.stringify(probe.items.map(function (item) { return { entry: item.entry, textOut: item.textOut }; })) });
+    fetch('/result', { method: 'POST', body: JSON.stringify(probe.items.map(function (item) { return { entry: item.entry, textOut: item.textOut, length: item.entry.length }; })) });
   }, 800);
 });
 </script>`;
-  const html = buildBoardHtml(tableDetail, { scheme: 'light', examples: { row: '<button>Row</button>' } }).replace('</body>', `${overflow}${script}</body>`);
+  const html = buildBoardHtml(tableDetail, { scheme: 'light', examples: { row: '<button>Row</button>' } }).replace('</body>', `${overflow}${huge}${script}</body>`);
   for (const width of [1046, 760]) {
-    const items = await reportAt<{ entry: string; textOut: number }[]>(chrome, width, html);
+    const items = await reportAt<{ entry: string; textOut: number; length: number }[]>(chrome, width, html);
+    assert.ok(items.every((item) => item.length <= BOARD_ENTRY_MAX), `entry keys clipped: ${items.map((item) => item.length).join(', ')}`);
+    assert.ok(items.some((item) => item.length === BOARD_ENTRY_MAX), 'the huge key is there, clipped');
     const row = items.find((item) => item.entry === 'component:row');
     const out = items.find((item) => item.entry === 'component:overflow');
     assert.ok(row && out, JSON.stringify(items));

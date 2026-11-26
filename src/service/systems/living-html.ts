@@ -199,6 +199,11 @@ body { margin: 0; background: #f7f7f8; color: #1d1d1f; font-family: system-ui, -
 .dc-grid.dc-text-grid.dc-run-compact { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 .dc-run-compact .dc-swatch { height: 32px; }
 .dc-run-table { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 3fr) minmax(160px, 1.2fr); }
+/* Token tables: a short sample, the token column as wide as its longest name and value (up to 420px), the note after it.
+   Text tables with no notes have two columns. */
+.dc-run-table.dc-table-tokens { grid-template-columns: minmax(120px, 240px) fit-content(420px) minmax(200px, 1fr); }
+.dc-run-table.dc-table-two { grid-template-columns: minmax(160px, 1fr) minmax(0, 4fr); }
+.dc-table-tokens .dc-tcell-preview { padding-right: 24px; }
 .dc-thead, .dc-trow { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
 .dc-thead { color: #62626a; font-size: 12px; font-weight: 600; }
 .dc-thead .dc-tcell { padding: 8px 12px 8px 0; }
@@ -207,7 +212,7 @@ body { margin: 0; background: #f7f7f8; color: #1d1d1f; font-family: system-ui, -
 .dc-tcell:last-child { padding-right: 0; }
 .dc-tcell > .dc-body:first-child { margin-top: 0; }
 @media (max-width: 720px) {
-  .dc-run-table { grid-template-columns: 1fr; }
+  .dc-run-table, .dc-run-table.dc-table-tokens, .dc-run-table.dc-table-two { grid-template-columns: 1fr; }
 }
 .dc-body { margin-top: 8px; }
 .lp-examples { display: grid; gap: 8px; margin-bottom: 8px; }
