@@ -116,17 +116,17 @@ test('the sweep and its announcement make no version', async (t) => {
   t.after(() => core.stop());
   const quietMs = 20;
   const versions = createVersionsService({ store: core.store, hub: core.ctx.hub, log: core.ctx.log, onDispose: core.ctx.onDispose, quietMs });
-  const record = await core.store.create({ kind: 'page', title: 'Checkout' });
-  // Settle the create's own snapshot before taking the baseline. Under Windows runner load the
-  // create's quiet-period snapshot and its 'versions' announcement landed past a fixed sleep(150),
-  // so the late event fell inside the assertion window below (CI flake). Waiting for the committed
-  // version, then draining three quiet periods, lets any pending timer fire and dedupe by tree
-  // hash: nothing create-related can emit after we subscribe. The assertions are unchanged.
-  await until(async () => ((await versions.list(record.slug)).versions.length > 0 ? true : undefined));
-  await sleep(quietMs * 3);
-  const before = (await versions.list(record.slug)).versions.length;
   const events: ChangeEvent[] = [];
   core.ctx.hub.subscribe((event) => void events.push(event));
+  const record = await core.store.create({ kind: 'page', title: 'Checkout' });
+  // Wait for the create's own snapshot to be announced, not just committed. snapshotNow emits
+  // 'versions' only after its garbage-collection pass (versions.ts), so under runner load the emit
+  // can trail the commit by more than any fixed sleep taken after it; the late announcement then
+  // lands in the assertion window below and reads as a version the sweep made (CI flake). Watching
+  // for the emit itself means nothing create-related can land after we clear the slate.
+  await until(async () => (events.some((event) => event.slug === record.slug && event.kind === 'versions') ? true : undefined));
+  const before = (await versions.list(record.slug)).versions.length;
+  events.length = 0;
 
   // design.json changes with no event (no watcher here); only the sweep finds it.
   await agentChooses(record.path, 'acme');
