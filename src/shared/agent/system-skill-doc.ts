@@ -9,7 +9,7 @@
 
 import { LIVING_PAGE_FORAPPLIED_WAIT_MS, SYSTEM_SKILL_TEXT_MAX } from '../limits.ts';
 import { CHECK_TOOL_NAME } from './guide.ts';
-import { SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE } from './system-rules.ts';
+import { BOARD_PICTURES_SENTENCE, SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE } from './system-rules.ts';
 
 /** The skill's name; it must never equal a command name (`design-system`), or the host hides the command (AD-16). */
 export const SYSTEM_SKILL_NAME = 'design-system-builder';
@@ -139,6 +139,7 @@ const checks = (): string[] => [
   '## Check your work',
   '',
   `Check the system with the ${CHECK_TOOL_NAME} tool with { "system": "<id>" } before you say you are done. If you don't have that tool, run the check command from Design Chamber's instructions with --system <id>.`,
+  BOARD_PICTURES_SENTENCE,
 ];
 
 /** The builder body: when it applies, the block, the interview (verbatim), recording, the files, the diff, the repo steps, access, the never list, checks. */

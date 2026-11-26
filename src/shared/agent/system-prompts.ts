@@ -15,6 +15,9 @@ import { clip, indentContinuation, joinFolder, oneLine, rulesPathOf } from './co
 import { CHECK_TOOL_NAME } from './guide.ts';
 import { SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE } from './system-rules.ts';
 
+/** The check saves pictures of the board (documentation/specs/system-board-layout-and-visual-check.md §A.5). */
+const BOARD_PICTURES_SHORT = 'The check saves pictures of the board at two widths; look at them before you say you are done.';
+
 /** What every system message knows about the system. */
 export type SystemPromptSystem = {
   id: string;
@@ -176,6 +179,7 @@ const makeLines = (input: SystemMakeInput, existing: readonly string[]): string[
     `${input.projectDirectory === null ? '' : `Don't change anything in ${input.projectDirectory}. `}Write only in ${system.folder}.`,
     SYSTEM_INJECTION_SENTENCE,
     input.checkCommand === null ? `Check the system with the design_check tool with { "system": "${system.id}" } before you say you are done.` : `Check the system before you say you are done: ${input.checkCommand}`,
+    BOARD_PICTURES_SHORT,
   ];
 };
 
@@ -328,6 +332,7 @@ export const buildSystemChecksPrompt = (input: SystemChecksPromptInput): SystemC
     input.checkCommand === null
       ? `Fix each one and change nothing else, then check again with the ${CHECK_TOOL_NAME} tool with { "system": "${system.id}" }.`
       : `Fix each one and change nothing else, then run the check again: ${input.checkCommand}`,
+    BOARD_PICTURES_SHORT,
     ...repoGate(system),
     'This message approves nothing: writing a repo needs a reviewed diff the user approves in this chat.',
   ];
