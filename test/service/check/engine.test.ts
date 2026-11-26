@@ -1,10 +1,10 @@
 // runCheck without a browser, with --static, and with bad input: the paths that never start Chrome.
 
 import assert from 'node:assert/strict';
-import { readdir } from 'node:fs/promises';
+import { chmod, readdir, readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 
-import { CheckUsageError, runCheck, type RunCheckInput } from '../../../src/service/check/engine.ts';
+import { CheckInterrupted, CheckUsageError, runCheck, type RunCheckInput } from '../../../src/service/check/engine.ts';
 import { allFindings, exitCodeOf, formatCheckText, jsonOutput, parseArgs, resultLine } from '../../../src/service/check/report-text.ts';
 import { parseCheckReportText } from '../../../src/shared/checks.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
@@ -79,6 +79,31 @@ test('a browser that cannot be driven is a "failed" render with a way forward, n
   assert.equal(failure?.file, null);
   const text = formatCheckText({ report: result.report, design: result.design, pngs: [], reportPath: result.reportPath });
   assert.match(text, /This design could not be rendered\./);
+});
+
+test('cancelling while the browser is still starting ends the run at once and leaves no browser behind', { skip: process.platform === 'win32' ? 'needs a POSIX shell script as the browser' : false }, async (t) => {
+  const tmp = await useTmpRoot(t);
+  const dir = await tmp.writeDesign('demo', { 'design.json': designJson('canvas'), 'screens/home.html': GOOD });
+  // A browser that starts, stays alive and never answers on the pipe (a cold start that never finishes).
+  const pidFile = tmp.at('browser.pid');
+  const script = await tmp.write('hung-browser.sh', `#!/bin/sh\necho $$ > '${pidFile}'\nexec sleep 300\n`);
+  await chmod(script, 0o755);
+  const controller = new AbortController();
+  const running = runCheck(input(dir, { browserPath: script, signal: controller.signal }));
+  const failure = assert.rejects(running, (error: unknown) => error instanceof CheckInterrupted);
+  let pid = 0;
+  for (let waited = 0; pid === 0 && waited < 5000; waited += 25) {
+    pid = Number((await readFile(pidFile, 'utf8').catch(() => '')).trim()) || 0;
+    if (pid === 0) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.ok(pid > 0, 'the browser started');
+  const started = Date.now();
+  controller.abort();
+  await failure;
+  assert.ok(Date.now() - started < 5000, `interrupted promptly, not after the 60 s launch window (${Date.now() - started} ms)`);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.throws(() => process.kill(pid, 0), 'the browser process is gone');
+  assert.equal(await readFile(`${dir}/.chamber/check.json`, 'utf8').catch(() => null), null, 'no report was written');
 });
 
 test('result line wording', () => {
