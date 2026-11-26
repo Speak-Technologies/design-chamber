@@ -6,7 +6,7 @@
 // files saved straight into the designs folder. The Filters button opens a compact area (hidden until
 // asked for) with the System filter, Sort and the View (Titles or List); a dot on the button says the
 // list is narrowed while it is closed. Those three are remembered (host.storage `list-system:panel`,
-// `list-sort:panel`, `rail-view:panel`); search and tab live for the session.
+// `list-sort:panel`, `rail-view:panel`) with the kind tab (`list-tab:panel`); search lives for the session.
 // At 320 px the title keeps its 120 px budget and the selects truncate their values, never the title.
 
 import { mountBanner, mountSearchField, mountSelect, mountTabs } from '@openchamber/sdk/ui';
@@ -36,6 +36,7 @@ import {
   RAIL_FILTER_DEFAULTS,
   RAIL_TABS,
   RAIL_VIEWS,
+  railTabFromStored,
   emptyStateOf,
   libraryItems,
   projectGroups,
@@ -53,8 +54,10 @@ import {
   scopeToId,
   showSystemOptions,
   systemSelectOptions,
+  systemsForFilter,
   sortFromStored,
   sortStorageKey,
+  tabStorageKey,
   systemFilterFromId,
   systemFilterToId,
   systemsEntryLabel,
@@ -166,9 +169,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   } });
   const tabsHost = h('div', { class: 'dc-tabs' });
   const tabsHandle = mountTabs(tabsHost, { items: RAIL_TABS.map(({ id, label }) => ({ id, label })), activeId: tab, trackBackground: true, onChange: (id) => {
-    tab = RAIL_TABS.find((entry) => entry.id === id)?.id ?? 'all';
-    tabsHandle.update({ activeId: tab });
-    paintList();
+    setTab(railTabFromStored(id));
   } });
   // Show: the same groups as the page's sidebar (all, each project, No project, each folder) in one select.
   const showHost = h('div', { class: 'dc-rail-show-select dc-inline-select' });
@@ -210,7 +211,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     },
   );
   const showRow = h('div', { class: 'dc-rail-show' }, showHost, folderMore);
-  // System and Sort side by side, each half width; at 320 px their values truncate, the title never does.
+  // The System select fills its line in the Filters area; at 320 px its value truncates.
   const systemHost = h('div', { class: 'dc-inline-select dc-rail-pair-select dc-system-select' });
   const systemSelect = mountSelect(systemHost, { label: 'System', value: 'all', options: [{ id: 'all', label: 'All systems' }, { id: 'none', label: 'No system' }], onChange: (id) => {
     setSystemFilter(systemFilterFromId(id));
@@ -351,6 +352,13 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     void host.storage.set(railViewStorageKey, next);
     paintList();
   };
+  /** The kind tab is remembered with the rest (`list-tab:panel`); the rail has no Systems tab. */
+  const setTab = (next: Exclude<ListTab, 'system'>): void => {
+    tab = next;
+    tabsHandle.update({ activeId: next });
+    void host.storage.set(tabStorageKey('panel'), next);
+    paintList();
+  };
   const resetRailFilters = (): void => {
     systemFilter = RAIL_FILTER_DEFAULTS.system;
     sort = RAIL_FILTER_DEFAULTS.sort;
@@ -359,6 +367,8 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     void host.storage.set(sortStorageKey('panel'), sort);
     void host.storage.set(railViewStorageKey, railView);
     paintList();
+    // The Reset row hides itself now that nothing differs, so focus moves to the first control in the area rather than to the page.
+    systemHost.querySelector('button')?.focus();
   };
 
   /** The dot on the Filters button, the View toggle's pressed state and the Reset offer. */
@@ -385,6 +395,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     chosen = ALL_SCOPE;
     query = '';
     tab = 'all';
+    void host.storage.set(tabStorageKey('panel'), 'all');
     search.update({ value: '' });
     tabsHandle.update({ activeId: 'all' });
     setSystemFilter({ kind: 'system', id });
@@ -393,6 +404,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   const clearFilters = (): void => {
     query = '';
     tab = 'all';
+    void host.storage.set(tabStorageKey('panel'), 'all');
     search.update({ value: '' });
     tabsHandle.update({ activeId: 'all' });
     setSystemFilter(ALL_SYSTEMS);
@@ -476,10 +488,10 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     // Systems: the filter's options are every system (a design in any scope can carry any
     // system's copy); a failed load leaves All systems / No system only.
     const systemsState = systemStore.get();
-    const systemList = systemsState.status === 'error' ? [] : systemsState.systems ?? [];
-    const systemsFailed = systemsState.status === 'error' && systemsState.systems === null;
+    // The last good list stays in use when a refresh fails; only a ready list can say a remembered system is gone (KI-31).
+    const { list: systemList, canResolve, failed: systemsFailed } = systemsForFilter(systemsState);
     // A remembered system waits for the list before it can read as gone; until then it stays as chosen.
-    if (systemsState.systems !== null && !systemsFailed) systemFilter = resolveSystemFilter(systemFilter, systemList);
+    if (canResolve) systemFilter = resolveSystemFilter(systemFilter, systemList);
     swatches = swatchLookup(systemList);
     paintShow(effective, groups, folderList, scopeCounts(all, folderList, root, manualProjects), foldersState, systemList);
     // A remembered system the list cannot name yet (not loaded, or failed) still gets an entry, so the select, its name and the Filters button agree.
@@ -524,11 +536,8 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
           if (id === 'search') {
             query = '';
             search.update({ value: '' });
-          } else if (id === 'tab') {
-            tab = 'all';
-            tabsHandle.update({ activeId: 'all' });
-          }
-          paintList();
+            paintList();
+          } else if (id === 'tab') setTab('all');
         },
       });
       list.append(h('li', { class: 'dc-list-message' }, wrap));
@@ -575,6 +584,14 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   });
   void host.storage.get(railViewStorageKey).then((stored) => {
     railView = railViewFromStored(stored);
+    paintList();
+  });
+  void host.storage.get(tabStorageKey('panel')).then((stored) => {
+    // Only an untouched tab takes the remembered one: a choice made while this was loading wins.
+    if (tab === 'all') {
+      tab = railTabFromStored(stored);
+      tabsHandle.update({ activeId: tab });
+    }
     paintList();
   });
   void host.storage.get(railSystemStorageKey).then((stored) => {

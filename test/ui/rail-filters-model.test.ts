@@ -17,7 +17,9 @@ import {
   railViewFromStored,
   railViewStorageKey,
   sortFromStored,
+  railTabFromStored,
   showSystemOptions,
+  systemsForFilter,
   sortStorageKey,
   systemFilterStorageKey,
   tabFromStored,
@@ -198,4 +200,34 @@ test('the page remembers its tab and System filter under its own keys, the rail 
 test('a stored tab reads back; anything unknown or malformed is All', () => {
   for (const tab of ['all', 'canvas', 'page', 'system'] as const) assert.equal(tabFromStored(tab), tab);
   for (const junk of [undefined, null, '', 'bogus', 'Canvas', 4, {}, ['page']]) assert.equal(tabFromStored(junk), 'all');
+});
+
+test('systemSelectOptions with real systems: the unnamed entry sits between the last system and No system, in A to Z order', () => {
+  const real = [summary('tidepool', 'Tidepool'), summary('acme', 'Acme')];
+  const unnamed: SystemFilter = { kind: 'system', id: 'ghost' };
+  const options = systemSelectOptions(real, unnamed);
+  assert.deepEqual(options.map((entry) => entry.id), ['all', 'system:acme', 'system:tidepool', 'system:ghost', 'none']);
+  assert.equal(options[0]?.label, 'All systems');
+  assert.equal(options[3]?.label, UNKNOWN_SYSTEM_LABEL);
+  assert.equal(options[4]?.label, 'No system');
+  // A named filter adds nothing, whatever the list holds.
+  assert.deepEqual(systemSelectOptions(real, { kind: 'system', id: 'acme' }).map((entry) => entry.id), ['all', 'system:acme', 'system:tidepool', 'none']);
+});
+
+test('KI-31: only a ready list can say a remembered system is gone; a failed refresh keeps the last good list', () => {
+  const list = [{ id: 'tidepool' }];
+  assert.deepEqual(systemsForFilter({ status: 'ready', systems: list }), { list, canResolve: true, failed: false });
+  assert.deepEqual(systemsForFilter({ status: 'loading', systems: null }), { list: [], canResolve: false, failed: false });
+  assert.deepEqual(systemsForFilter({ status: 'idle', systems: null }), { list: [], canResolve: false, failed: false });
+  // The refresh failed after a good read: the stale list stays in use and the filter is not checked against it.
+  assert.deepEqual(systemsForFilter({ status: 'error', systems: list }), { list, canResolve: false, failed: false });
+  // Never read: nothing to keep, and the read failed.
+  assert.deepEqual(systemsForFilter({ status: 'error', systems: null }), { list: [], canResolve: false, failed: true });
+  // A refresh in flight over a good list does not resolve either, until it is ready again.
+  assert.equal(systemsForFilter({ status: 'loading', systems: list }).canResolve, false);
+});
+
+test('the rail has no Systems tab: its stored tab reads All, Canvases or Pages, anything else All', () => {
+  for (const tab of ['all', 'canvas', 'page'] as const) assert.equal(railTabFromStored(tab), tab);
+  for (const junk of ['system', 'bogus', undefined, null, 3]) assert.equal(railTabFromStored(junk), 'all');
 });

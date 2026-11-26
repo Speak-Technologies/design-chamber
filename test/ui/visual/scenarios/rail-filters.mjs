@@ -133,6 +133,7 @@ const railFilters = async (h, width, theme) => {
   await p.click('.dc-rail-filter-reset .oc-sdk-btn');
   await h.checkSoon(() => p.guest('return doc.querySelectorAll(".dc-rows .dc-row-titles").length === 0 && doc.querySelector(".dc-rail-filter-reset").hidden === true'), `${tag}: Reset filters returns to List and hides itself`);
   h.check((await storageGet(p, 'rail-view:panel')) === '"list"' && (await storageGet(p, 'list-sort:panel')) === '"updated"', `${tag}: the stored view and sort are reset`);
+  h.check(await p.guest('const a = doc.activeElement; return !!a && a !== doc.body && (!!a.closest(".dc-rail-filter-area") || a.classList.contains("dc-filters-btn"))'), `${tag}: Reset filters hides itself, and focus stays in the Filters area instead of falling to the page`);
   await p.shot(`${tag}-6-reset`);
   await p.close();
 };
@@ -173,8 +174,37 @@ const failedSystems = async (h) => {
   await p.close();
 };
 
+// The kind tab is remembered like the rest (`list-tab:panel`), the rail has no Systems tab, and a failed systems
+// refresh keeps a remembered System filter (KI-31).
+const tabAndRefresh = async (h) => {
+  const tag = 'rail-filters-320-dark-tab';
+  const p = await h.openPage({ width: 320, height: 780, surface: 'panel', theme: 'dark', label: tag, storage: { 'list-tab:panel': 'page', 'list-system:panel': 'system:tidepool' } });
+  console.log(tag);
+  await p.waitFor('return doc.querySelectorAll(".dc-row[data-slug]").length >= 1', 'the list rows');
+  await p.settle(600);
+  h.check(await p.guest('return doc.querySelector(".dc-tabs [role=tab][aria-selected=true]")?.dataset.id === "page"') && (await rowCount(p)) === 1, `${tag}: the remembered Pages tab comes back (${await rowCount(p)} row)`);
+  await p.click('.dc-tabs [role=tab]', { text: 'Canvases' });
+  h.check((await storageGet(p, 'list-tab:panel')) === '"canvas"', `${tag}: picking a tab writes list-tab:panel`);
+  // A failed refresh of the systems list keeps the filter, the dot and the chip.
+  await p.host('window.frames[0].__dcFake.systems.failLoads(true)');
+  await p.host('window.frames[0].__dcFake.systems.addUnreadable()'); // a systems change event: the store re-reads, and the read fails
+  await h.checkSoon(() => p.guest('return !!doc.querySelector(".dc-rail-chiprow")'), `${tag}: the list is still there`);
+  await p.settle(900);
+  h.check((await dot(p)) && (await p.guest('return doc.querySelector(".dc-rail-chiprow").textContent.trim() === "Tidepool"')), `${tag}: a failed systems refresh keeps the System filter, the dot and the chip with the name`);
+  await p.click('.dc-tabs [role=tab]', { text: 'All' });
+  h.check((await storageGet(p, 'list-tab:panel')) === '"all"', `${tag}: All is written back`);
+  await reload(p);
+  await p.settle(300);
+  await p.close();
+  const stale = await h.openPage({ width: 320, height: 780, surface: 'panel', theme: 'dark', label: `${tag}-stale`, storage: { 'list-tab:panel': 'system' } });
+  await stale.waitFor('return doc.querySelectorAll(".dc-row[data-slug]").length >= 5', 'the list rows');
+  h.check(await stale.guest('return doc.querySelector(".dc-tabs [role=tab][aria-selected=true]")?.dataset.id === "all"'), `${tag}: a stored Systems tab reads as All on the rail`);
+  await stale.close();
+};
+
 export const run = async (helpers) => {
   for (const width of [320, 480]) for (const theme of ['dark', 'light']) await railFilters(helpers, width, theme);
   await goneSystem(helpers);
   await failedSystems(helpers);
+  await tabAndRefresh(helpers);
 };

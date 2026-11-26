@@ -6819,3 +6819,10 @@ button.dc-sp-value:focus-visible {
   outline: none;
   box-shadow: var(--dc-ring);
 }
+
+/* At the narrowest rail the header and the filters start 12 px in, so the chip does too. */
+@media (max-width: 380px) {
+  .dc-rail-chiprow {
+    padding-left: var(--dc-s3);
+  }
+}

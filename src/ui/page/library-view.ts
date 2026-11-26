@@ -47,6 +47,7 @@ import {
   sortFromStored,
   sortStorageKey,
   systemSelectOptions,
+  systemsForFilter,
   tabFromStored,
   tabStorageKey,
   systemFilterFromId,
@@ -141,7 +142,7 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
   } });
   const tabsHost = h('div', { class: 'dc-tabs' });
   const tabsHandle = mountTabs(tabsHost, { items: LIST_TABS.map(({ id, label }) => ({ id, label })), activeId: tab, trackBackground: true, onChange: (id) => {
-    setTab(tabFromStored(id));
+    setTab(LIST_TABS.find((entry) => entry.id === id)?.id ?? 'all');
   } });
   const systemHost = h('div', { class: 'dc-inline-select dc-system-select' });
   const systemSelect = mountSelect(systemHost, { label: 'System', value: 'all', options: [{ id: 'all', label: 'All systems' }, { id: 'none', label: 'No system' }], onChange: (id) => {
@@ -462,10 +463,10 @@ export const mountLibrary = (options: LibraryOptions): LibraryHandle => {
     // system's copy (the canvas draws a folder scope with a system filter active). A failed load
     // leaves All systems / No system only. The tiles themselves follow the scope (`libraryItems`).
     const systemsState = systemStore.get();
-    const systemList = systemsState.status === 'error' ? [] : systemsState.systems ?? [];
-    const systemsFailed = systemsState.status === 'error' && systemsState.systems === null;
+    // The last good list stays in use when a refresh fails; only a ready list can say a remembered system is gone (KI-31).
+    const { list: systemList, canResolve, failed: systemsFailed } = systemsForFilter(systemsState);
     // A remembered system waits for the list before it can read as gone; until then it stays as chosen.
-    if (systemsState.systems !== null && !systemsFailed) systemFilter = resolveSystemFilter(systemFilter, systemList);
+    if (canResolve) systemFilter = resolveSystemFilter(systemFilter, systemList);
     swatches = swatchLookup(systemList);
     sidebar.paint({
       scope: effective,

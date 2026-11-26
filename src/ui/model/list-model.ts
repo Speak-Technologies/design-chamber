@@ -33,6 +33,20 @@ export const RAIL_TABS: ReadonlyArray<{ id: Exclude<ListTab, 'system'>; label: s
 /** A stored tab read back; anything unknown or malformed is All. */
 export const tabFromStored = (raw: unknown): ListTab => LIST_TABS.find((entry) => entry.id === raw)?.id ?? 'all';
 
+/** The rail has no Systems tab: a stored one (or any unknown value) reads as All. */
+export const railTabFromStored = (raw: unknown): Exclude<ListTab, 'system'> => RAIL_TABS.find((entry) => entry.id === raw)?.id ?? 'all';
+
+/**
+ * What the System filter may rely on, from the systems store: the last good list (kept when a refresh fails, so a
+ * name is still known), and whether the filter may be checked against it. Only a ready list can say a system is
+ * gone; while loading, or after a failed read, the remembered filter stays as chosen (KI-31).
+ */
+export const systemsForFilter = <T>(state: { status: 'idle' | 'loading' | 'ready' | 'error'; systems: readonly T[] | null }): { list: readonly T[]; canResolve: boolean; failed: boolean } => ({
+  list: state.systems ?? [],
+  canResolve: state.status === 'ready' && state.systems !== null,
+  failed: state.status === 'error' && state.systems === null,
+});
+
 /** The rail's pinned entry under the designs list: the accessible name says how many systems there are and what the entry does; unknown while they load or failed to load. */
 export const systemsEntryLabel = (count: number | null): string => (count === null ? 'Design systems. Show them' : `Design systems, ${count}. Show them`);
 
@@ -371,7 +385,7 @@ export const foldersOfDesign = (slug: string, folders: readonly FolderLite[]): F
 // ---- Library views, sort and the System filter (Phase 2.6 L1a, technical design §2.4, §6.4) ----
 //
 // View (page only) and sort (per surface) are remembered in host.storage; search, tab and the
-// System filter live for the session only. Composition order: scope, System filter, search,
+// System filter are remembered per surface too (`list-tab:<surface>`, `list-system:<surface>`); search is not. Composition order: scope, System filter, search,
 // tab counts, tab, sort. The empty state names every active filter and offers Clear filters,
 // which clears search, tab and system but keeps the scope.
 
