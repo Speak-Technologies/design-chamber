@@ -1397,7 +1397,7 @@ when it sees a `COPY.json` with `by: "agent"` newer than the one it last showed 
 **Extended (S8).** Step 1 reads `filesDir(id)` (the snapshot for a repo-backed system; a version's tree
 holds `snapshot/…`, so the FileSource is rooted at `snapshot/` inside it). The board groups sections under
 the four area headings (§2.11), draws Patterns & voice and Brand & marketing entries as escaped text cards
-(title, kind, note, body split into paragraphs; never markup), moves logos to Brand & marketing, and draws
+(title, kind, note, body rendered as markdown by `markdown-html.ts`: every text escaped, only the renderer's own markup, links limited to http(s), mailto and relative), moves logos to Brand & marketing, and draws
 "Not covered by this system." for an uncovered area. The section renderers that do not depend on the board
 script or the bridge (colours, type, spacing to sizes, logos, text cards) move into a shared pure
 `systems/specimen-html.ts` used by both `board-html.ts` and `living-html.ts` (§5.11), so the board and the
@@ -3005,7 +3005,7 @@ versioned, exported, copied into a design or logged.
 - (rev 3) Undo of a repo re-sync (AD-33).
 - (rev 3) Entropy-based or broad secret detection: only high-confidence shapes, so a finding means something;
   secret files are already never opened.
-- (S8) Markdown rendering in the board or the living page: bodies are text split into paragraphs.
+- (S8) Markdown rendering in the board or the living page: superseded. Bodies render through the escape-all renderer `src/service/systems/markdown-html.ts` (owner request, Nov 2026).
 - (S8) A Settings status row or install step for the builder skill: it ships in `dist/skills/` and has no
   legacy copy to manage (§8.8).
 - (S8) Switching a system's home, merging two systems on one repo, hosting or gating the living page (RS out
