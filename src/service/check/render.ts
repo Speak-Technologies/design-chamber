@@ -10,11 +10,12 @@ import {
   CHECK_RUN_BUDGET_MS,
   CHECK_SLICES_MAX,
   CHECK_TEXT_ELEMENTS_MAX,
+  CHECK_TOOL_TIMEOUT_MS,
 } from '../../shared/limits.ts';
 import { cleanDetail, normalizeExternalUrl } from '../../shared/checks.ts';
 import type { ArtboardCheck, CheckFindingData, DesignKind, Viewport } from '../../shared/types.ts';
 import { analyzeProbe, capPerCode, sanitizeProbe } from './analyze.ts';
-import { CdpError, CdpUnavailable, type CdpEvent, type CdpSession } from './cdp.ts';
+import { CdpError, CdpUnavailable, DEFAULT_LAUNCH_BUDGET_MS, type CdpEvent, type CdpSession, type OpenBrowserOptions } from './cdp.ts';
 
 /** The response header every design document is served with: the guest frame's rules, offline. */
 export const CHECK_CSP = [
@@ -38,8 +39,11 @@ export type PlannedArtboard = { file: string; screen: string | null; viewport: V
 export type LoadedDocument = { ok: true; html: string } | { ok: false; reason: 'missing' | 'too-large' };
 
 export type RenderDeps = {
-  /** Start a browser (used once, and once more after repeated failures). */
-  openBrowser: () => Promise<CdpSession>;
+  /**
+   * Start a browser (used once, and once more after repeated failures). Given the run's abort signal
+   * (a launch is cancellable) and, for the restart, only what is left of the run's overall budget.
+   */
+  openBrowser: (options?: OpenBrowserOptions) => Promise<CdpSession>;
   plan: readonly PlannedArtboard[];
   kind: DesignKind;
   loadDocument: (file: string) => Promise<LoadedDocument>;
@@ -52,7 +56,23 @@ export type RenderDeps = {
   signal?: AbortSignal;
   artboardTimeoutMs?: number;
   runBudgetMs?: number;
+  /**
+   * When the whole check must be over, as `clock()` time: set at the engine's entry so the static pass
+   * and the first launch count. No artboard starts that cannot finish by it, and a restart is only
+   * started when a launch and one artboard still fit. Defaults to `CHECK_RUN_DEADLINE_MS` from now.
+   */
+  deadlineAt?: number;
 };
+
+/**
+ * The whole check (static pass, launch, artboards, a restart) must be over this long after it
+ * starts, which leaves 15 s under the `design_check` tool's 180 s kill to close the browser and write
+ * the report. Enforced at each artboard's start and before a restart; an artboard already running
+ * is held by its own timeout.
+ */
+export const CHECK_RUN_DEADLINE_MS = CHECK_TOOL_TIMEOUT_MS - 15_000;
+/** A restart launch with less than this left is not worth starting; the run ends instead. */
+export const RESTART_LAUNCH_MIN_MS = 3000;
 
 export type RenderOutcome = {
   artboards: ArtboardCheck[];
@@ -291,10 +311,17 @@ export const renderArtboards = async (deps: RenderDeps): Promise<RenderOutcome> 
   const outcome: RenderOutcome = { artboards: [], findings: [], notRendered: 0, stoppedBy: null, unavailable: false };
   if (deps.plan.length === 0) return outcome;
 
+  const overallDeadline = deps.deadlineAt ?? clock() + CHECK_RUN_DEADLINE_MS;
   let session: CdpSession;
   try {
-    session = await deps.openBrowser();
+    session = await deps.openBrowser(deps.signal ? { signal: deps.signal } : {});
   } catch (error) {
+    if (deps.signal?.aborted === true) {
+      // Cancelled while the browser was starting: not a browser that can't be driven.
+      outcome.notRendered = deps.plan.length;
+      outcome.stoppedBy = 'aborted';
+      return outcome;
+    }
     if (error instanceof CdpUnavailable || error instanceof CdpError) {
       outcome.unavailable = true;
       outcome.notRendered = deps.plan.length;
@@ -312,20 +339,26 @@ export const renderArtboards = async (deps: RenderDeps): Promise<RenderOutcome> 
 
   try {
     // Ctrl-C or a shutdown ends the browser and frees the screen it is on at once, instead of waiting out its timeout.
-    deps.signal?.addEventListener(
-      'abort',
-      () => {
-        if (live !== null) {
-          live.value = false;
-          live.wake?.();
-        }
-        void session.close();
-      },
-      { once: true },
-    );
-    await session.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => undefined);
+    const onAbort = (): void => {
+      if (live !== null) {
+        live.value = false;
+        live.wake?.();
+      }
+      void session.close();
+    };
+    deps.signal?.addEventListener('abort', onAbort, { once: true });
+    // Aborted between the launch resolving and this listener: nothing would fire it.
+    // The loop below then ends as aborted without a command to wait on.
+    if (deps.signal?.aborted === true) onAbort();
+    else await session.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => undefined);
     for (const [index, art] of deps.plan.entries()) {
-      const stop = deps.signal?.aborted ? 'aborted' : clock() - started > runMs ? 'budget' : consecutiveFailures >= 3 ? 'failures' : null;
+      const stop = deps.signal?.aborted
+        ? 'aborted'
+        : clock() - started > runMs || clock() + artboardMs > overallDeadline
+          ? 'budget'
+          : consecutiveFailures >= 3
+            ? 'failures'
+            : null;
       if (stop !== null) {
         outcome.notRendered = deps.plan.length - index;
         outcome.stoppedBy = stop;
@@ -347,8 +380,15 @@ export const renderArtboards = async (deps: RenderDeps): Promise<RenderOutcome> 
         // Twice in a row: the browser itself may be wedged. One fresh start, then a third failure ends the run.
         restarted = true;
         await session.close();
+        // A launch and one artboard must still fit before the deadline; the launch gets what is left after the artboard's share.
+        const left = overallDeadline - clock() - artboardMs;
+        if (left < RESTART_LAUNCH_MIN_MS) {
+          outcome.notRendered = deps.plan.length - index;
+          outcome.stoppedBy = deps.signal?.aborted ? 'aborted' : 'budget';
+          break;
+        }
         try {
-          session = await deps.openBrowser();
+          session = await deps.openBrowser({ launchBudgetMs: Math.min(DEFAULT_LAUNCH_BUDGET_MS, left), ...(deps.signal ? { signal: deps.signal } : {}) });
           await session.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => undefined);
           page = null;
         } catch {

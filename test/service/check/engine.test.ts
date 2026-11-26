@@ -1,10 +1,11 @@
 // runCheck without a browser, with --static, and with bad input: the paths that never start Chrome.
 
 import assert from 'node:assert/strict';
-import { readdir } from 'node:fs/promises';
+import { chmod, readdir, readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 
-import { CheckUsageError, runCheck, type RunCheckInput } from '../../../src/service/check/engine.ts';
+import { CheckInterrupted, CheckUsageError, runCheck, type RunCheckInput } from '../../../src/service/check/engine.ts';
+import { CHECK_RUN_DEADLINE_MS, type RenderDeps } from '../../../src/service/check/render.ts';
 import { allFindings, exitCodeOf, formatCheckText, jsonOutput, parseArgs, resultLine } from '../../../src/service/check/report-text.ts';
 import { parseCheckReportText } from '../../../src/shared/checks.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
@@ -81,6 +82,31 @@ test('a browser that cannot be driven is a "failed" render with a way forward, n
   assert.match(text, /This design could not be rendered\./);
 });
 
+test('cancelling while the browser is still starting ends the run at once and leaves no browser behind', { skip: process.platform === 'win32' ? 'needs a POSIX shell script as the browser' : false }, async (t) => {
+  const tmp = await useTmpRoot(t);
+  const dir = await tmp.writeDesign('demo', { 'design.json': designJson('canvas'), 'screens/home.html': GOOD });
+  // A browser that starts, stays alive and never answers on the pipe (a cold start that never finishes).
+  const pidFile = tmp.at('browser.pid');
+  const script = await tmp.write('hung-browser.sh', `#!/bin/sh\necho $$ > '${pidFile}'\nexec sleep 300\n`);
+  await chmod(script, 0o755);
+  const controller = new AbortController();
+  const running = runCheck(input(dir, { browserPath: script, signal: controller.signal }));
+  const failure = assert.rejects(running, (error: unknown) => error instanceof CheckInterrupted);
+  let pid = 0;
+  for (let waited = 0; pid === 0 && waited < 5000; waited += 25) {
+    pid = Number((await readFile(pidFile, 'utf8').catch(() => '')).trim()) || 0;
+    if (pid === 0) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.ok(pid > 0, 'the browser started');
+  const started = Date.now();
+  controller.abort();
+  await failure;
+  assert.ok(Date.now() - started < 5000, `interrupted promptly, not after the 60 s launch window (${Date.now() - started} ms)`);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.throws(() => process.kill(pid, 0), 'the browser process is gone');
+  assert.equal(await readFile(`${dir}/.chamber/check.json`, 'utf8').catch(() => null), null, 'no report was written');
+});
+
 test('result line wording', () => {
   assert.equal(resultLine({ errors: 0, warnings: 0, notes: 0 }), 'Result: no errors or warnings.');
   assert.equal(resultLine({ errors: 1, warnings: 2, notes: 0 }), 'Result: 1 error, 2 warnings.');
@@ -128,4 +154,26 @@ test('the text report caps at 30 findings and points at the full report', async 
   assert.equal(numbered.length, 30);
   assert.match(text, /\nand \d+ more in \/x\/check\.json\n/);
   assert.ok(jsonOutput({ report: result.report, design: result.design, pngs: [], reportPath: null }).includes('"counts"'));
+});
+
+test('the run deadline starts when runCheck starts, not after the file checks, and reaches the render loop', async (t) => {
+  const tmp = await useTmpRoot(t);
+  const dir = await tmp.writeDesign('demo', { 'design.json': designJson('canvas'), 'screens/home.html': GOOD });
+  const entryAt = 1_800_000_000_000;
+  // Every read of the clock moves it on, so the file checks (which read it for their own budget) and
+  // anything after them see a later time than the engine's first read.
+  let reads = 0;
+  t.mock.method(Date, 'now', () => entryAt + 1000 * reads++);
+  let seen: RenderDeps | null = null;
+  await runCheck(
+    input(dir, {
+      browserPath: '/never-started',
+      render: (deps) => {
+        seen = deps;
+        return Promise.resolve({ artboards: [], findings: [], notRendered: deps.plan.length, stoppedBy: 'budget', unavailable: false });
+      },
+    }),
+  );
+  assert.ok(seen !== null, 'the engine called the render loop');
+  assert.equal((seen as RenderDeps).deadlineAt, entryAt + CHECK_RUN_DEADLINE_MS);
 });

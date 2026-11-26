@@ -62,7 +62,11 @@ const run = async (t: TestContext, files: Record<string, string>, ids: string[],
     platform: process.platform,
     isRoot: process.getuid?.() === 0,
     now: () => new Date(),
-    budgets: { artboardMs: options.artboardMs ?? 15_000, runMs: 120_000 },
+    // A trivial artboard must still render on a loaded CI runner: under CPU stress a simple page
+    // slows several-fold, and the Windows runner (Chrome 158 image) exceeded a 15 s window for one
+    // (CI flake). The budget is headroom for that load, not a speed assertion; a real hang is still
+    // caught by the explicit short-budget timeout tests below. The product's own default is 12 s.
+    budgets: { artboardMs: options.artboardMs ?? 30_000, runMs: 120_000 },
   });
   return { result, dir, tmp };
 };
@@ -195,6 +199,8 @@ test('a script that never returns times out, and the next artboard still renders
 });
 
 test('a page that reloads itself forever does not hang the run', async (t) => {
+  // No tight artboard budget here: the benign "after" artboard must still render on a loaded
+  // runner, and a 4 s window (tighter than the product's own 12 s default) was exceeded on CI.
   const { result } = await run(
     t,
     {
@@ -202,7 +208,6 @@ test('a page that reloads itself forever does not hang the run', async (t) => {
       'screens/after.html': page('after', '<h1>Still here</h1>'),
     },
     ['reload', 'after'],
-    { artboardMs: 4000 },
   );
   assert.equal(result.report.render?.artboards.find((artboard) => artboard.screen === 'after')?.ok, true);
 });

@@ -224,8 +224,18 @@ opacity). Overlap and cut-off text are heuristics, so they are warnings.
 ## States
 - **No browser found:** the file checks run, the report says `unavailable`, the text output says
   "No Chrome, Edge or Chromium was found, so nothing was rendered", and the exit code follows the files.
-- **A browser that cannot be driven** (some Snap or Flatpak builds): the render is `failed` with
-  "This browser build can't be driven. Set another browser in Settings."
+- **A browser that cannot be driven** (some Snap or Flatpak builds, or one that exits or stays
+  silent): the render is `failed` with "This browser build can't be driven. Set another browser in
+  Settings." A slow start is not this: while the browser process is alive it is given time to answer
+  the first command (a cold first start on a loaded machine can take tens of seconds), so a slow
+  machine is not told its browser is broken. Only a process that dies, refuses, or stays silent for
+  the whole launch window is reported as un-drivable.
+  The launch window is 60 seconds and can be cancelled: Ctrl-C or the tool's stop ends a starting
+  browser at once. The whole check has 165 seconds from the moment it starts (the file checks and a
+  slow launch count), so it ends before the tool's 180-second stop and still writes a report. No
+  artboard starts that could not finish inside those 165 seconds (the rest read as not rendered, over
+  the time budget), and a restart after repeated failures only happens when a launch and one more
+  artboard still fit; its launch gets only what is left.
 - **`check.json` missing, linked, over 2 MB or invalid:** treated as "rendering not checked yet".
   A forged file cannot choose a severity or a sentence, add a path outside the design, or put
   more than its valid findings in the counts.

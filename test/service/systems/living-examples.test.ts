@@ -8,6 +8,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 
+import { CdpUnavailable, type CdpSession, type OpenBrowserOptions } from '../../../src/service/check/cdp.ts';
 import { LIVING_EXAMPLE_HEIGHT_MAX, LIVING_EXAMPLE_WIDTH } from '../../../src/shared/limits.ts';
 import type { SystemDetail } from '../../../src/shared/types.ts';
 import { createLiveFileSource } from '../../../src/service/bundle.ts';
@@ -169,4 +170,63 @@ test('the batch budget leaves the rest render-failed', async (t) => {
   const drawn = shots.filter((shot) => shot.png !== null).length;
   assert.ok(drawn > 0 && drawn < shots.length, `${drawn} of ${shots.length}`);
   for (const shot of shots) if (shot.png === null) assert.equal(shot.reason, 'render-failed');
+});
+
+test('cancelling while the browser is starting stops the batch: the run\'s signal reaches the launch, and every example reads render-failed', async (t) => {
+  const { ctx, systemDir, detail } = await rig(t);
+  const controller = new AbortController();
+  let seen: AbortSignal | undefined;
+  configureLivingExamples(ctx, {
+    settleMs: 0,
+    openBrowser: (launch) => {
+      seen = launch?.signal;
+      return new Promise<CdpSession>((_resolve, reject) => {
+        launch?.signal?.addEventListener('abort', () => reject(new CdpUnavailable('The launch was cancelled.')), { once: true });
+        setTimeout(() => controller.abort(), 10);
+      });
+    },
+  });
+  const started = Date.now();
+  const shots = await renderExamplePngs(ctx, detail, { schemes: livingSchemes(detail), signal: controller.signal, source: createLiveFileSource(systemDir), id: 'acme', systemDir });
+  assert.equal(seen, controller.signal);
+  assert.ok(Date.now() - started < 2000);
+  assert.ok(shots.length > 0 && shots.every((shot) => shot.png === null));
+});
+
+test('the restart launch gets only what is left of the batch budget', async (t) => {
+  const { run } = await rig(t);
+  let now = 0;
+  const calls: (OpenBrowserOptions | undefined)[] = [];
+  const fake = createFakeBrowser({ hangs: () => true });
+  await run({
+    openBrowser: (launch) => {
+      calls.push(launch);
+      if (calls.length === 1) now += 62_000; // a slow first launch
+      return fake.open();
+    },
+    budgetMs: 70_000,
+    clock: () => now,
+    shotTimeoutMs: 30,
+  });
+  assert.equal(calls.length, 2, 'started once, restarted once');
+  assert.equal(calls[1]?.launchBudgetMs, 8000, '70 s batch - 62 s used by the first launch');
+});
+
+test('no restart launch when the batch budget is nearly used up', async (t) => {
+  const { run } = await rig(t);
+  let now = 0;
+  let launches = 0;
+  const fake = createFakeBrowser({ hangs: () => true });
+  const shots = await run({
+    openBrowser: () => {
+      launches += 1;
+      now += 68_000; // 2 s left, under the 3 s a launch needs
+      return fake.open();
+    },
+    budgetMs: 70_000,
+    clock: () => now,
+    shotTimeoutMs: 30,
+  });
+  assert.equal(launches, 1);
+  assert.ok(shots.every((shot) => shot.png === null));
 });
