@@ -138,7 +138,7 @@ marks it strips). Text entries and token entries carry no `dc-fit` (no live prev
 
 ### A.4 Board CSS and script (`src/service/systems/board-html.ts`, presentation, same builder)
 
-Bump `BOARD_GENERATOR_VERSION` to 5 (cached boards are re-made; the base branch's grounds and re-measure fix took 4). Colours, type and radius come only from the
+Bump `BOARD_GENERATOR_VERSION` to 6 (cached boards are re-made; the base branch's grounds and re-measure fix took 4, the markdown PR #29 took 5). Colours, type and radius come only from the
 board variables the page sends from the host theme (`--dc-board-bg`, `--dc-board-card`, `--dc-board-fg`,
 `--dc-board-muted`, `--dc-board-border`, `--dc-board-radius`, `--dc-board-font`, with the existing
 `FALLBACKS`); no new colour or typeface.
@@ -206,6 +206,14 @@ matching rules to `FRAME_CSS` (fixed greys as the rest of that block; plain grid
 `minmax(200px, 1fr)`, full one column, table rows as §A.4 rule 4 with `@media (max-width: 720px)` stacking
 instead of a container query. No board script there: examples are PNG `<img>`s with `max-width: 100%`, so a
 wide one scales down and is never clipped.
+
+**Built, after merging the markdown PR (#29):** every text body in every run (note, pattern and brand cards; compact,
+full and table runs; table rows' Guidance cell) renders through `renderMarkdown` in the document's profile (`board`
+or `living`), and a note's leading title is dropped in table rows as on its card. The 90ch measure covers markdown
+lists and quotes too. `LIVING_PAGE_GENERATOR_VERSION` goes 3 → 4 because the page's CSS (run rules, table variants,
+the measure) and, for hinted systems, its markup change; the start sweep regenerates staged pages whose record is
+older. `LIVING_EXAMPLE_GENERATOR_VERSION` stays 2: the example pictures' inputs (component HTML, tokens, fonts, width,
+scale) are unchanged, so their PNG cache survives.
 
 Drift consequences, checked against `committedStateOf` (`src/service/systems/living-page.ts:213`):
 - A committed page is judged by its own mark's hash, not by regenerating it, so this generator change does not

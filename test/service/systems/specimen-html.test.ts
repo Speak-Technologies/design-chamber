@@ -332,3 +332,40 @@ test('an invalid hint falls back without a trace in the markup', () => {
   assert.ok(section.includes('<div class="dc-grid dc-components dc-run-card">'), 'falls back to card');
   assert.equal(detail.boardLayout.ignoredCount, 2);
 });
+
+// ---- markdown bodies inside every layout (the markdown renderer and the layout runs together) ----
+
+test('markdown bodies render inside card, compact, full and table runs, in both profiles; a note title is shown once', () => {
+  const md = '# Same title\n\nUse **bold** words.\n\n## Part\n\n- one\n- two\n\n```\ncode here\n```';
+  const four = ['card', 'compact', 'full', 'table'] as const;
+  const base = runsFixture({});
+  const detail: SystemDetail = {
+    ...base,
+    notes: four.map((layout) => ({ id: `n-${layout}`, title: 'Same title', text: md, problem: null, layout })),
+    patterns: four.map((layout) => ({ id: `p-${layout}`, kind: 'voice', title: `Pattern ${layout}`, note: '', text: md, problem: null, layout })),
+  };
+  // Each entry's own block: from its entry mark to the next one.
+  const blockOf = (html: string, key: string): string => {
+    const at = html.indexOf(`data-dc-entry="${key}"`);
+    assert.ok(at !== -1, key);
+    const next = html.indexOf('data-dc-entry="', at + 1);
+    return html.slice(at, next === -1 ? undefined : next);
+  };
+  for (const profile of ['board', 'living'] as const) {
+    const overview = renderSpecimenSection(detail, 'overview', { markdown: profile });
+    const patterns = renderSpecimenSection(detail, 'patterns', { markdown: profile });
+    for (const layout of four) {
+      const note = blockOf(overview, `note:n-${layout}`);
+      assert.ok(note.includes('<strong>bold</strong>'), `${profile} note ${layout}: ${note}`);
+      assert.ok(note.includes('<ul class="dc-md-list">'), `${profile} note ${layout}: a list`);
+      // The note's leading "# Same title" repeats its title: dropped in cards and table rows alike.
+      assert.equal((note.match(/Same title/g) ?? []).length, 1, `${profile} note ${layout}: ${note}`);
+      const pattern = blockOf(patterns, `pattern:p-${layout}`);
+      assert.ok(pattern.includes('<strong>bold</strong>') && pattern.includes('dc-md-list'), `${profile} pattern ${layout}: ${pattern}`);
+      if (profile === 'board') assert.ok(pattern.includes('<pre class="dc-md-pre">'), `board pattern ${layout}: a code block`);
+      else assert.ok(!pattern.includes('<pre') && pattern.includes('<div class="dc-md-pre">'), `living pattern ${layout}: the allowlist form`);
+    }
+    // Table rows put the body in the guidance cell.
+    assert.ok(/data-dc-entry="pattern:p-table"><div class="dc-tcell dc-tcell-name" role="cell">[\s\S]*?<div class="dc-tcell dc-tcell-preview" role="cell"><div class="dc-body"><h3 class="dc-md-h3">Same title<\/h3>/.test(patterns), 'a pattern keeps its own heading (only notes drop the title)');
+  }
+});

@@ -246,8 +246,8 @@ test('eager: the check lays every section out; the page leaves off-screen sectio
   assert.ok(check.indexOf(EAGER_SECTIONS_CSS) > check.indexOf('content-visibility: auto'));
 });
 
-test('the generator version is 5, so boards cached before the layout runs are made again', () => {
-  assert.equal(BOARD_GENERATOR_VERSION, 5);
+test('the generator version is 6 (the markdown board on master was 5), so boards cached before the layout runs are made again', () => {
+  assert.equal(BOARD_GENERATOR_VERSION, 6);
 });
 
 test('the board script measures .dc-fit (cards and table rows) and re-measures on load, fonts.ready and <html> style', () => {
@@ -269,7 +269,7 @@ test('the board script measures .dc-fit (cards and table rows) and re-measures o
   // Rule 3: full is one column with a 16px gap.
   assert.match(html, /\.dc-run-full \{ display: grid; grid-template-columns: 1fr; gap: 16px; \}/);
   assert.ok(html.includes(':is(.dc-grid, .dc-run-full, .dc-run-table, .dc-card) + :is(.dc-grid, .dc-run-full, .dc-run-table) { margin-top: 16px; }'), 'runs stand apart');
-  assert.ok(html.includes('.dc-text p, .dc-body p, .dc-note { max-width: 90ch; }'), 'a readable measure');
+  assert.ok(html.includes('.dc-text p, .dc-body p, .dc-md-list, .dc-md-quote, .dc-note { max-width: 90ch; }'), 'a readable measure');
   // Rule 4: the table grid, subgrid rows, row rules, muted header, the container query.
   assert.match(html, /\.dc-run-table \{ display: grid; grid-template-columns: minmax\(160px, 1fr\) minmax\(0, 3fr\) minmax\(160px, 1\.2fr\); \}/);
   assert.match(html, /\.dc-thead, \.dc-trow \{ display: grid; grid-template-columns: subgrid; grid-column: 1 \/ -1; \}/);
