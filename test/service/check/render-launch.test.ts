@@ -36,13 +36,13 @@ test('the whole run is held under the tool kill, with room to close and write', 
   assert.ok(CHECK_TOOL_TIMEOUT_MS - CHECK_RUN_DEADLINE_MS >= 10_000);
 });
 
-test('the restart launch gets only what is left of the run, not the full launch budget', async () => {
+test('the restart launch gets only what is left of the run after one artboard, not the full launch budget', async () => {
   let now = 0;
   const calls: (OpenBrowserOptions | undefined)[] = [];
   await renderArtboards(
     deps({
       clock: () => now,
-      overallBudgetMs: 100_000,
+      deadlineAt: 100_000,
       openBrowser: (options) => {
         calls.push(options);
         if (calls.length === 1) now += 70_000; // a slow first launch
@@ -51,33 +51,65 @@ test('the restart launch gets only what is left of the run, not the full launch 
     }),
   );
   assert.equal(calls.length, 2, 'started once, restarted once');
-  assert.equal(calls[1]?.launchBudgetMs, 30_000, 'clipped to the 30 s left');
+  // 100 s deadline - 70 s elapsed - 12 s for the artboard that follows the restart
+  assert.equal(calls[1]?.launchBudgetMs, 18_000);
   assert.ok((calls[1]?.launchBudgetMs ?? 0) < DEFAULT_LAUNCH_BUDGET_MS);
 });
 
 test('a restart launch is capped at the default budget when plenty of the run is left', async () => {
   const calls: (OpenBrowserOptions | undefined)[] = [];
-  await renderArtboards(deps({ clock: () => 0, overallBudgetMs: 1_000_000, openBrowser: (options) => (calls.push(options), Promise.resolve(brokenSession())) }));
+  await renderArtboards(deps({ clock: () => 0, deadlineAt: 1_000_000, openBrowser: (options) => (calls.push(options), Promise.resolve(brokenSession())) }));
   assert.equal(calls[1]?.launchBudgetMs, DEFAULT_LAUNCH_BUDGET_MS);
 });
 
-test('no restart is attempted when the run has no time left; the rest is reported as not rendered', async () => {
+test('no restart late in the run unless a launch and one more artboard still fit', async () => {
   let now = 0;
   let launches = 0;
   const outcome = await renderArtboards(
     deps({
       clock: () => now,
-      overallBudgetMs: 100_000,
-      openBrowser: () => {
-        launches += 1;
-        now += 99_000; // the first launch eats the run
-        return Promise.resolve(brokenSession());
-      },
+      deadlineAt: 100_000,
+      openBrowser: () => (launches += 1, Promise.resolve(brokenSession())),
+      loadDocument: () => ((now += 30_000), Promise.resolve({ ok: true, html: '<p>x</p>' })),
     }),
   );
+  // The third artboard is loaded at 90 s after two failures: 10 s are left, over the 3 s launch minimum but short of a launch plus a 12 s artboard.
   assert.equal(launches, 1, 'never relaunched');
   assert.equal(outcome.stoppedBy, 'budget');
   assert.ok(outcome.notRendered > 0);
+});
+
+test('no artboard starts that cannot finish before the run deadline, even inside the run budget', async () => {
+  let now = 0;
+  let loads = 0;
+  const outcome = await renderArtboards(
+    deps({
+      clock: () => now,
+      deadlineAt: 100_000,
+      plan: plan(6),
+      // Browser-free "artboards" (a missing document) that each take 30 s of the clock.
+      loadDocument: () => ((loads += 1), (now += 30_000), Promise.resolve({ ok: false, reason: 'missing' as const })),
+    }),
+  );
+  // Starts at 0, 30 and 60 s. At 90 s the 90 s run budget is not over, but 90 + 12 s artboard > 100 s.
+  assert.equal(loads, 3);
+  assert.equal(outcome.stoppedBy, 'budget');
+  assert.equal(outcome.notRendered, 3);
+});
+
+test('a first launch that uses the run up leaves no artboard to start', async () => {
+  let now = 0;
+  let launches = 0;
+  const outcome = await renderArtboards(
+    deps({
+      clock: () => now,
+      deadlineAt: 100_000,
+      openBrowser: () => ((launches += 1), (now += 95_000), Promise.resolve(brokenSession())),
+    }),
+  );
+  assert.equal(launches, 1);
+  assert.equal(outcome.stoppedBy, 'budget');
+  assert.equal(outcome.notRendered, 4);
 });
 
 test('aborting while the browser starts ends the run as aborted, not as an undrivable browser', async () => {

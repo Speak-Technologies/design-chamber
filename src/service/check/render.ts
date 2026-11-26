@@ -56,17 +56,23 @@ export type RenderDeps = {
   signal?: AbortSignal;
   artboardTimeoutMs?: number;
   runBudgetMs?: number;
-  /** Everything from the first launch to the last artboard, restart included; defaults to `CHECK_RUN_DEADLINE_MS`. Test seam. */
-  overallBudgetMs?: number;
+  /**
+   * When the whole check must be over, as `clock()` time: set at the engine's entry so the static pass
+   * and the first launch count. No artboard starts that cannot finish by it, and a restart is only
+   * started when a launch and one artboard still fit. Defaults to `CHECK_RUN_DEADLINE_MS` from now.
+   */
+  deadlineAt?: number;
 };
 
 /**
- * The whole run, launches included, must end before the `design_check` tool's kill (180 s), leaving
- * this long to close the browser and write the report. The restart launch gets what is left of it.
+ * The whole check (static pass, launch, artboards, a restart) must be over this long after it
+ * starts, which leaves 15 s under the `design_check` tool's 180 s kill to close the browser and write
+ * the report. Enforced at each artboard's start and before a restart; an artboard already running
+ * is held by its own timeout.
  */
 export const CHECK_RUN_DEADLINE_MS = CHECK_TOOL_TIMEOUT_MS - 15_000;
 /** A restart launch with less than this left is not worth starting; the run ends instead. */
-const RESTART_LAUNCH_MIN_MS = 3000;
+export const RESTART_LAUNCH_MIN_MS = 3000;
 
 export type RenderOutcome = {
   artboards: ArtboardCheck[];
@@ -305,7 +311,7 @@ export const renderArtboards = async (deps: RenderDeps): Promise<RenderOutcome> 
   const outcome: RenderOutcome = { artboards: [], findings: [], notRendered: 0, stoppedBy: null, unavailable: false };
   if (deps.plan.length === 0) return outcome;
 
-  const overallDeadline = clock() + (deps.overallBudgetMs ?? CHECK_RUN_DEADLINE_MS);
+  const overallDeadline = deps.deadlineAt ?? clock() + CHECK_RUN_DEADLINE_MS;
   let session: CdpSession;
   try {
     session = await deps.openBrowser(deps.signal ? { signal: deps.signal } : {});
@@ -346,7 +352,13 @@ export const renderArtboards = async (deps: RenderDeps): Promise<RenderOutcome> 
     if (deps.signal?.aborted === true) onAbort();
     else await session.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => undefined);
     for (const [index, art] of deps.plan.entries()) {
-      const stop = deps.signal?.aborted ? 'aborted' : clock() - started > runMs ? 'budget' : consecutiveFailures >= 3 ? 'failures' : null;
+      const stop = deps.signal?.aborted
+        ? 'aborted'
+        : clock() - started > runMs || clock() + artboardMs > overallDeadline
+          ? 'budget'
+          : consecutiveFailures >= 3
+            ? 'failures'
+            : null;
       if (stop !== null) {
         outcome.notRendered = deps.plan.length - index;
         outcome.stoppedBy = stop;
@@ -368,8 +380,8 @@ export const renderArtboards = async (deps: RenderDeps): Promise<RenderOutcome> 
         // Twice in a row: the browser itself may be wedged. One fresh start, then a third failure ends the run.
         restarted = true;
         await session.close();
-        // Only what is left of the whole run, so launch + run + restart stays under the tool's kill.
-        const left = overallDeadline - clock();
+        // A launch and one artboard must still fit before the deadline; the launch gets what is left after the artboard's share.
+        const left = overallDeadline - clock() - artboardMs;
         if (left < RESTART_LAUNCH_MIN_MS) {
           outcome.notRendered = deps.plan.length - index;
           outcome.stoppedBy = deps.signal?.aborted ? 'aborted' : 'budget';

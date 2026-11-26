@@ -123,7 +123,8 @@ const fakeBrowserSpawn = (delayMs: number, exitAt?: number, spawned?: FakeChild[
     };
     spawned?.push(child);
     let ready = false;
-    let lastVersionId: number | null = null;
+    // Real Chrome answers every `Browser.getVersion` it was sent, including the ones the client gave up on.
+    const queuedVersionIds: number[] = [];
     const answer = (id: number, result: object): void => {
       if (!fromBrowser.destroyed) fromBrowser.write(encodeMessage({ id, result }));
     };
@@ -131,8 +132,8 @@ const fakeBrowserSpawn = (delayMs: number, exitAt?: number, spawned?: FakeChild[
       const msg = JSON.parse(text) as { id?: number; method?: string };
       if (typeof msg.id !== 'number') return;
       if (msg.method === 'Browser.getVersion') {
-        lastVersionId = msg.id;
         if (ready) answer(msg.id, { product: 'FakeChrome/158.0', protocolVersion: '1.3' });
+        else queuedVersionIds.push(msg.id);
       } else if (msg.method === 'Browser.close') {
         answer(msg.id, {});
         child.emit('exit', 0, null);
@@ -140,7 +141,7 @@ const fakeBrowserSpawn = (delayMs: number, exitAt?: number, spawned?: FakeChild[
     }));
     const readyTimer = setTimeout(() => {
       ready = true;
-      if (lastVersionId !== null) answer(lastVersionId, { product: 'FakeChrome/158.0', protocolVersion: '1.3' });
+      for (const id of queuedVersionIds.splice(0)) answer(id, { product: 'FakeChrome/158.0', protocolVersion: '1.3' });
     }, delayMs);
     readyTimer.unref?.();
     if (exitAt !== undefined) {
@@ -219,8 +220,31 @@ test('a live browser that answers the handshake with an error is "can\'t be driv
   assert.ok(Date.now() - started < 1000, 'failed at once');
 });
 
-test('the default launch budget for a live-but-silent browser is 60 s', () => {
+test('a stale answer to an earlier handshake ask is dropped; the launch and later commands are unaffected', async () => {
+  // Four asks time out (40 ms windows) before the browser is ready; it then answers all of them at once.
+  const session = await openCdp('/fake/chrome', [], { timeoutMs: 40, spawnImpl: fakeBrowserSpawn(190) });
+  assert.equal(session.exited, false);
+  const version = await session.send<{ product: string }>('Browser.getVersion');
+  assert.equal(version.product, 'FakeChrome/158.0');
+  await session.close();
+});
+
+test('a live but silent browser is given 60 s by default, not less', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  let rejectedAt: number | null = null;
+  let virtual = 0;
+  const opening = openCdp('/fake/chrome', [], { timeoutMs: 5000, spawnImpl: fakeBrowserSpawn(1_000_000_000) });
+  opening.catch(() => {
+    rejectedAt = virtual;
+  });
+  while (rejectedAt === null && virtual < 120_000) {
+    t.mock.timers.tick(1000);
+    virtual += 1000;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.ok(rejectedAt !== null && rejectedAt >= DEFAULT_LAUNCH_BUDGET_MS && rejectedAt <= DEFAULT_LAUNCH_BUDGET_MS + 6000, `gave up at ${rejectedAt} ms`);
   assert.equal(DEFAULT_LAUNCH_BUDGET_MS, 60_000);
+  await assert.rejects(opening, (error: unknown) => error instanceof CdpUnavailable);
 });
 
 test('a launch budget shorter than one wait window clips that window (the restart launch gets only what is left)', async () => {

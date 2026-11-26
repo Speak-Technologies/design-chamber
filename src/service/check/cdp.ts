@@ -139,15 +139,22 @@ export type OpenOptions = {
 /** What a caller's `openBrowser` may be told: the run's abort signal, and a launch budget shorter than the default. */
 export type OpenBrowserOptions = { signal?: AbortSignal; launchBudgetMs?: number };
 
+/** `openBrowser`'s options as `openCdp`'s: the one place the optional fields are forwarded. */
+export const launchOpenOptions = (launch: OpenBrowserOptions | undefined, timeoutMs: number): OpenOptions => ({
+  timeoutMs,
+  ...(launch?.signal ? { signal: launch.signal } : {}),
+  ...(launch?.launchBudgetMs !== undefined ? { launchBudgetMs: launch.launchBudgetMs } : {}),
+});
+
 const DEFAULT_COMMAND_TIMEOUT_MS = 15_000;
 const CLOSE_GRACE_MS = 1500;
 /**
  * How long a live browser is given to answer the launch handshake. A cold first start on a loaded
  * machine can take tens of seconds (CI saw the first launch exceed 20 s while later launches were
  * fast); a process that exits fails at once regardless, so this only bounds a live-but-silent one.
- * A launch can be cancelled (`OpenOptions.signal`); the check's restart launch is also clipped to what
- * is left of the whole run (render.ts), so the first launch plus the run plus a restart stay under the
- * check tool's 180 s kill.
+ * A launch can be cancelled (`OpenOptions.signal`). The check run as a whole is held to a deadline
+ * (render.ts `CHECK_RUN_DEADLINE_MS`): a launch this slow leaves the run less time, and the restart
+ * launch is clipped to what is left, so the run ends before the check tool's 180 s kill.
  */
 export const DEFAULT_LAUNCH_BUDGET_MS = 60_000;
 

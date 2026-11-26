@@ -231,8 +231,11 @@ opacity). Overlap and cut-off text are heuristics, so they are warnings.
   machine is not told its browser is broken. Only a process that dies, refuses, or stays silent for
   the whole launch window is reported as un-drivable.
   The launch window is 60 seconds and can be cancelled: Ctrl-C or the tool's stop ends a starting
-  browser at once. A restart after repeated failures only gets what is left of the run's time, so
-  launch, run and restart stay under the tool's 180-second stop.
+  browser at once. The whole check has 165 seconds from the moment it starts (the file checks and a
+  slow launch count), so it ends before the tool's 180-second stop and still writes a report. No
+  artboard starts that could not finish inside those 165 seconds (the rest read as not rendered, over
+  the time budget), and a restart after repeated failures only happens when a launch and one more
+  artboard still fit; its launch gets only what is left.
 - **`check.json` missing, linked, over 2 MB or invalid:** treated as "rendering not checked yet".
   A forged file cannot choose a severity or a sentence, add a path outside the design, or put
   more than its valid findings in the counts.

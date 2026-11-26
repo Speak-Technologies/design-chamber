@@ -27,7 +27,7 @@ import {
 } from '../../shared/limits.ts';
 import type { SystemDetail } from '../../shared/types.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, dataUrlOf, type FileSource } from '../bundle.ts';
-import { CdpError, CdpUnavailable, checkBrowserArgs, openCdp, type CdpSession, type OpenBrowserOptions } from '../check/cdp.ts';
+import { CdpError, CdpUnavailable, checkBrowserArgs, DEFAULT_LAUNCH_BUDGET_MS, launchOpenOptions, openCdp, type CdpSession, type OpenBrowserOptions } from '../check/cdp.ts';
 import { CHECK_CSP, DOCUMENT_ORIGIN } from '../check/render.ts';
 import { resolveBrowser } from '../chrome.ts';
 import type { ServiceContext } from '../context.ts';
@@ -46,6 +46,8 @@ export type ExampleShot = { component: string; scheme: 'light' | 'dark'; png: Ui
 export const EXAMPLE_CSP = CHECK_CSP.replace(/script-src [^;]*/, "script-src 'none'");
 
 const BROWSER_START_MS = 20_000;
+/** A restart launch with less of the batch budget left than this is not started; the rest of the batch fails instead. */
+const RESTART_LAUNCH_MIN_MS = 3000;
 const WORK_PREFIX = 'dc-living-';
 const CACHE_FOLDER = 'living-examples';
 const CACHE_FILE = /^[0-9a-f]{64}\.png$/;
@@ -314,8 +316,14 @@ export const drawShots = async (
       if ((failures >= 2 || session.exited) && !restarted) {
         restarted = true;
         await session.close();
+        // The restart gets only what is left of the batch budget (a slow first launch has used some of it).
+        const left = started + budgetMs - clock();
+        if (left < RESTART_LAUNCH_MIN_MS) {
+          failRest(index, 'render-failed');
+          break;
+        }
         try {
-          session = await options.openBrowser(options.signal ? { signal: options.signal } : {});
+          session = await options.openBrowser({ launchBudgetMs: Math.min(DEFAULT_LAUNCH_BUDGET_MS, left), ...(options.signal ? { signal: options.signal } : {}) });
           await session.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => undefined);
           page = null;
         } catch {
@@ -435,11 +443,7 @@ const defaultOpenBrowser = (ctx: ServiceContext, systemDir: string, workDirs: st
     if (parent !== os.tmpdir()) await removeStaleWorkDirs(parent, WORK_PREFIX);
     const workDir = await mkdtemp(path.join(parent, WORK_PREFIX));
     workDirs.push(workDir);
-    return openCdp(browserPath, checkBrowserArgs({ workDir, platform: process.platform, isRoot: process.getuid?.() === 0, join: path.join }), {
-      timeoutMs: BROWSER_START_MS,
-      ...(launch?.signal ? { signal: launch.signal } : {}),
-      ...(launch?.launchBudgetMs !== undefined ? { launchBudgetMs: launch.launchBudgetMs } : {}),
-    });
+    return openCdp(browserPath, checkBrowserArgs({ workDir, platform: process.platform, isRoot: process.getuid?.() === 0, join: path.join }), launchOpenOptions(launch, BROWSER_START_MS));
   };
 };
 

@@ -10,9 +10,9 @@ import { CHECK_ARTBOARDS_MAX, CHECK_STATIC_BUDGET_MS } from '../../shared/limits
 import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckReport, DesignJson, RenderCheckState, Viewport } from '../../shared/types.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource } from '../bundle.ts';
 import { removeStaleWorkDirs, thumbWorkParent } from '../thumbnails.ts';
-import { checkBrowserArgs, openCdp } from './cdp.ts';
+import { checkBrowserArgs, launchOpenOptions, openCdp } from './cdp.ts';
 import { cleanupRuns, createRunDir, ensureChamberDir, newRunId, pngNames, pngRelOf, pngStem, reportPathOf, writeCheckReport, writePng } from './output.ts';
-import { renderArtboards, type LoadedDocument, type PlannedArtboard } from './render.ts';
+import { CHECK_RUN_DEADLINE_MS, renderArtboards, type LoadedDocument, type PlannedArtboard } from './render.ts';
 import { entryKeyOf, runStaticChecks, type StaticRun } from './static.ts';
 import { normalizeExternalUrl } from '../../shared/checks.ts';
 
@@ -107,6 +107,8 @@ const unavailableRender = (keys: StaticRun['keys'], planned: number): NonNullabl
 });
 
 export const runCheck = async (input: RunCheckInput): Promise<RunCheckResult> => {
+  // The whole check (static pass, launches, artboards, restart) must end before the tool's kill; the clock starts here.
+  const deadlineAt = Date.now() + CHECK_RUN_DEADLINE_MS;
   const { designDir } = input;
   const staticRun = await runStaticChecks(designDir, CHECK_STATIC_BUDGET_MS);
   const { design, kind } = staticRun;
@@ -166,11 +168,8 @@ export const runCheck = async (input: RunCheckInput): Promise<RunCheckResult> =>
     if (plan.length > 0) await createRunDir(designDir, runId);
     const outcome = await renderArtboards({
       openBrowser: (launch) =>
-        openCdp(browserPath, checkBrowserArgs({ workDir, platform: input.platform, isRoot: input.isRoot, join: path.join }), {
-          timeoutMs: BROWSER_START_MS,
-          ...(launch?.signal ? { signal: launch.signal } : {}),
-          ...(launch?.launchBudgetMs !== undefined ? { launchBudgetMs: launch.launchBudgetMs } : {}),
-        }),
+        openCdp(browserPath, checkBrowserArgs({ workDir, platform: input.platform, isRoot: input.isRoot, join: path.join }), launchOpenOptions(launch, BROWSER_START_MS)),
+      deadlineAt,
       plan,
       kind,
       loadDocument,
