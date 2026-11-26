@@ -15,6 +15,7 @@ import { test } from 'node:test';
 import { buildBoardHtml } from '../../../src/service/systems/board-html.ts';
 import { buildSystemDetail, parseSystemState } from '../../../src/shared/system-json.ts';
 import { chromeOrSkip, testBrowserFlags } from '../../helpers/chrome-or-skip.ts';
+import { probeSource } from '../../helpers/probe-source.ts';
 
 const NOW = '2026-11-20T10:00:00.000Z';
 
@@ -399,5 +400,43 @@ test('board layouts in Chrome: compact packs small pieces, full spans the sectio
   for (const entry of narrow.entries) {
     if (!widerThanBoard.has(entry.id)) assert.equal(entry.clipped, false, `clipped at 700: ${JSON.stringify(entry)}`);
     assert.equal(entry.textOutside, false, `text outside its entry at 700: ${JSON.stringify(entry)}`);
+  }
+});
+
+// ---- the check's board probe on a real table row (documentation/specs/system-board-layout-and-visual-check.md §B.4) ----
+
+test('board probe: a hanging space at a wrap in a table row is not text outside; text that really runs out is', { timeout: 60_000 }, async (t) => {
+  const chrome = chromeOrSkip(t);
+  if (!chrome) return;
+  // A long pre-wrap note in the last column of a table row (padding-right 0) wraps at spaces, as nexus's notes do at 1046px.
+  const note = 'Primary navy. Sidebar, primary buttons, headings, active tab text, and every other place the brand needs its deepest colour.';
+  const tableDetail = buildSystemDetail({
+    id: 'acme',
+    dir: '/tmp/_systems/acme',
+    state: { ...parseSystemState({}, 'acme', NOW), name: 'Acme' },
+    systemJson: JSON.stringify({ components: [{ id: 'row', name: 'Row', purpose: 'A row.', note, layout: 'table', example: 'components/row.html' }] }),
+    tokensCss: ':root { --brand: #1a73e8; }\n',
+    texts: {},
+    files: [{ rel: 'components/row.html', bytes: 10 }],
+    build: null,
+  });
+  // A hand-made entry whose text cannot wrap and runs 300px past its 300px box: the probe must still see it.
+  const overflow = `<div data-dc-entry="component:overflow" style="width:300px;white-space:nowrap">${'Overflowing words '.repeat(20)}</div>`;
+  const script = `<script>${await probeSource()}</script><script>
+window.addEventListener('load', function () {
+  setTimeout(function () {
+    var probe = __dcProbe.collectBoard();
+    fetch('/result', { method: 'POST', body: JSON.stringify(probe.items.map(function (item) { return { entry: item.entry, textOut: item.textOut }; })) });
+  }, 800);
+});
+</script>`;
+  const html = buildBoardHtml(tableDetail, { scheme: 'light', examples: { row: '<button>Row</button>' } }).replace('</body>', `${overflow}${script}</body>`);
+  for (const width of [1046, 760]) {
+    const items = await reportAt<{ entry: string; textOut: number }[]>(chrome, width, html);
+    const row = items.find((item) => item.entry === 'component:row');
+    const out = items.find((item) => item.entry === 'component:overflow');
+    assert.ok(row && out, JSON.stringify(items));
+    assert.ok(row.textOut <= 1, `the wrapped note stays inside its row at ${width}px: ${row.textOut}`);
+    assert.ok(out.textOut > 200, `the unbreakable text is measured outside at ${width}px: ${out.textOut}`);
   }
 });

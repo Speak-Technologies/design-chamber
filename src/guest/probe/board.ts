@@ -11,6 +11,41 @@ import { visuallyHidden } from './probe.ts';
 
 const AREAS_MAX = 4;
 const PREVIEWS_MAX = 2;
+/** Words measured one by one in a text node whose whole-node rects reach outside; past it the whole-node figure stands. */
+const WORDS_MEASURED_MAX = 400;
+
+type EntryBox = { x: number; y: number; w: number; h: number };
+
+/** How far any rect reaches past the entry's box on any side (document coordinates; rects under 1px skipped). */
+const rectsOut = (rects: DOMRectList, box: EntryBox): number => {
+  let out = 0;
+  for (const line of Array.from(rects)) {
+    if (line.width < 1 || line.height < 1) continue;
+    out = Math.max(
+      out,
+      line.right + window.scrollX - (box.x + box.w),
+      box.x - (line.left + window.scrollX),
+      line.bottom + window.scrollY - (box.y + box.h),
+      box.y - (line.top + window.scrollY),
+    );
+  }
+  return out;
+};
+
+/** The same measure over each run of non-space characters, so a hanging space at a wrap does not count. */
+const wordsOut = (range: Range, node: Text, box: EntryBox, whole: number): number => {
+  const pattern = /\S+/g;
+  let out = 0;
+  let words = 0;
+  for (let match = pattern.exec(node.data); match !== null; match = pattern.exec(node.data)) {
+    words += 1;
+    if (words > WORDS_MEASURED_MAX) return whole;
+    range.setStart(node, match.index);
+    range.setEnd(node, match.index + match[0].length);
+    out = Math.max(out, rectsOut(range.getClientRects(), box));
+  }
+  return out;
+};
 
 /**
  * The board's measurements. Items are the `[data-dc-entry]` elements in document order (cards and
@@ -82,16 +117,11 @@ export const collectBoard = (): BoardProbe => {
     for (let node = walker.nextNode(); node !== null && nodes < SYSTEM_BOARD_TEXT_NODES_PER_ITEM; node = walker.nextNode()) {
       nodes += 1;
       range.selectNodeContents(node);
-      for (const line of Array.from(range.getClientRects())) {
-        if (line.width < 1 || line.height < 1) continue;
-        textOut = Math.max(
-          textOut,
-          line.right + window.scrollX - (box.x + box.w),
-          box.x - (line.left + window.scrollX),
-          line.bottom + window.scrollY - (box.y + box.h),
-          box.y - (line.top + window.scrollY),
-        );
-      }
+      const whole = rectsOut(range.getClientRects(), box);
+      // A line that wraps at a space in pre-wrap text keeps that space hanging past the line's end, and the whole node's
+      // rects include it: in a table row's last cell that reads as text a few px outside. Only when the cheap measure says
+      // "outside" are the words measured on their own (ink, not whitespace), up to a bound; past it the whole figure stands.
+      textOut = Math.max(textOut, whole > 1 && node instanceof Text ? wordsOut(range, node, box, whole) : whole);
     }
 
     items.push({
