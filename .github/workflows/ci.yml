@@ -25,8 +25,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.x'
           cache: npm
@@ -57,7 +57,7 @@ jobs:
       # (`chromium-browser`) so the browser, thumbnail and e2e tests run here too.
       - name: Install Node.js, Chromium and tools
         run: dnf install -y --setopt=install_weak_deps=False nodejs npm git unzip chromium
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Tests run as a normal user, like a real desktop: no root-only --no-sandbox path, and the
       # posix permission test is not skipped.
       - name: Create a non-root user
