@@ -4511,6 +4511,13 @@ ${GUEST_UI_LOOK_CSS}`;
     { id: "canvas", label: "Canvases" },
     { id: "page", label: "Pages" }
   ];
+  var tabFromStored = (raw) => LIST_TABS.find((entry) => entry.id === raw)?.id ?? "all";
+  var railTabFromStored = (raw) => RAIL_TABS.find((entry) => entry.id === raw)?.id ?? "all";
+  var systemsForFilter = (state) => ({
+    list: state.systems ?? [],
+    canResolve: state.status === "ready" && state.systems !== null,
+    failed: state.status === "error" && state.systems === null
+  });
   var systemsEntryLabel = (count) => count === null ? "Design systems. Show them" : `Design systems, ${count}. Show them`;
   var LIST_SORTS = [
     { id: "updated", label: "Updated" },
@@ -4731,6 +4738,46 @@ ${FILED_BY_YOU}` : "";
     return ALL_SYSTEMS;
   };
   var resolveSystemFilter = (filter, systems2) => filter.kind === "system" && !systems2.some((system) => system.id === filter.id) ? ALL_SYSTEMS : filter;
+  var RAIL_VIEWS = [
+    { id: "titles", label: "Titles", hint: "One line per design" },
+    { id: "list", label: "List", hint: "Thumbnails and details" }
+  ];
+  var railViewStorageKey = "rail-view:panel";
+  var systemFilterStorageKey = (surface) => `list-system:${surface}`;
+  var tabStorageKey = (surface) => `list-tab:${surface}`;
+  var railSystemStorageKey = systemFilterStorageKey("panel");
+  var DEFAULT_RAIL_VIEW = "list";
+  var DEFAULT_SORT = "updated";
+  var railViewFromStored = (raw) => raw === "titles" ? "titles" : DEFAULT_RAIL_VIEW;
+  var UNKNOWN_SYSTEM_LABEL = "One system";
+  var systemSelectOptions = (systems2, filter) => {
+    const options = systemOptions(systems2);
+    if (filter.kind !== "system" || options.some((entry) => entry.id === systemFilterToId(filter))) return options;
+    return [...options.slice(0, -1), { id: systemFilterToId(filter), label: UNKNOWN_SYSTEM_LABEL }, ...options.slice(-1)];
+  };
+  var SHOW_SYSTEM_LABEL = "System \xB7 ";
+  var showSystemOptions = (systems2) => systemOptions(systems2).filter((entry) => entry.id.startsWith("system:")).map((entry) => ({ id: entry.id, label: `${SHOW_SYSTEM_LABEL}${entry.label}`, hint: entry.hint ?? "" }));
+  var systemFilterLabel = (filter, systems2) => {
+    if (filter.kind === "all") return null;
+    if (filter.kind === "none") return "No system";
+    return systems2.find((system) => system.id === filter.id)?.name ?? UNKNOWN_SYSTEM_LABEL;
+  };
+  var railFilterState = (input) => {
+    const filter = input.system;
+    const filtering = filter.kind !== "all";
+    const changed = (filtering ? 1 : 0) + (input.sort !== DEFAULT_SORT ? 1 : 0) + (input.view !== DEFAULT_RAIL_VIEW ? 1 : 0);
+    const named = filter.kind === "system" ? input.systems.find((system) => system.id === filter.id)?.name : void 0;
+    const summary = filter.kind === "all" ? "" : filter.kind === "none" ? "Showing designs with no system" : named ? `Showing designs that use ${named}` : "Showing designs that use one system";
+    const label = systemFilterLabel(filter, input.systems);
+    return {
+      filtering,
+      changed,
+      buttonLabel: filtering ? `Filters, on. ${summary}` : "Filters",
+      summary,
+      chip: label === null ? null : { label, removeLabel: filter.kind === "none" ? "Remove the no system filter" : label === UNKNOWN_SYSTEM_LABEL ? "Remove the system filter" : `Remove the ${label} system filter` }
+    };
+  };
+  var RAIL_FILTER_DEFAULTS = { system: ALL_SYSTEMS, sort: DEFAULT_SORT, view: DEFAULT_RAIL_VIEW };
   var matchesSystem = (design, filter) => {
     const link = design.system ?? null;
     const live = link !== null && link.state !== "deleted" ? link : null;
@@ -10512,6 +10559,295 @@ ${FILED_BY_YOU}` : "";
     };
   };
 
+  // src/shared/token-edit.ts
+  var FORMULA_SENTENCE = "This value is a formula. Ask the agent to change it.";
+  var UNREADABLE_VALUE_SENTENCE = "This value can't be read.";
+  var PLAIN_SHAPE = "Use a plain CSS value of up to 100 characters, without ; { } < > \\ : or *, and without url().";
+  var SECTION_SHAPES = {
+    colours: "Use a colour, like #1a73e8, rgb(26 115 232) or a colour name.",
+    spacing: "Use a length, like 16px or 1rem.",
+    radius: "Use a length, like 8px or 0.5rem.",
+    sizes: "Use a size, like 1200px or 40rem, or a plain number.",
+    shadows: "Use a shadow, like 0 1px 2px rgb(0 0 0 / 0.2), or none.",
+    layers: "Use a whole number, like 10, or auto.",
+    typography: PLAIN_SHAPE,
+    other: PLAIN_SHAPE
+  };
+  var FIELD_SHAPES = {
+    family: 'Use font names separated by commas, like "Inter", sans-serif.',
+    size: "Use a size, like 16px or 1rem, or normal.",
+    weight: "Use a weight from 1 to 1000, or normal or bold.",
+    lineHeight: "Use a number like 1.5, a length, or normal.",
+    letterSpacing: "Use a length, like 0.02em, or normal."
+  };
+  var ALLOWED_FUNCTIONS = /* @__PURE__ */ new Set(["rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix", "var", "calc", "min", "max", "clamp"]);
+  var FORMULA_PATTERN = /(?:^|[^A-Za-z0-9-])(?:var|calc|min|max|clamp|color-mix)\(/i;
+  var passesRuleOne = (text) => {
+    if (text.length < 1 || text.length > SYSTEM_TOKEN_VALUE_MAX || !TOKEN_PREVIEW_VALUE_PATTERN.test(text) || !isBalancedQuotes(text)) return false;
+    let depth = 0;
+    for (const char of text) {
+      if (char === "(") depth += 1;
+      else if (char === ")") {
+        depth -= 1;
+        if (depth < 0) return false;
+      }
+    }
+    if (depth !== 0) return false;
+    for (const match of text.matchAll(/([A-Za-z-][A-Za-z0-9-]*)?\(/g)) {
+      const name = match[1];
+      if (name !== void 0 && !ALLOWED_FUNCTIONS.has(name.toLowerCase())) return false;
+    }
+    return true;
+  };
+  var NUMBER = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?";
+  var NUMBER_PATTERN = new RegExp(`^${NUMBER}$`);
+  var SPACING_UNITS = ["px", "rem", "em", "%", "vw", "vh", "vmin", "vmax", "svh", "dvh", "lvh", "ch", "ex"];
+  var ALL_LENGTH_UNITS = [
+    ...SPACING_UNITS,
+    "cm",
+    "mm",
+    "q",
+    "in",
+    "pt",
+    "pc",
+    "lh",
+    "rlh",
+    "cap",
+    "ic",
+    "rex",
+    "rch",
+    "ric",
+    "rcap",
+    "vi",
+    "vb",
+    "svw",
+    "svi",
+    "svb",
+    "lvw",
+    "lvi",
+    "lvb",
+    "dvw",
+    "dvi",
+    "dvb",
+    "cqw",
+    "cqh",
+    "cqi",
+    "cqb",
+    "cqmin",
+    "cqmax"
+  ];
+  var lengthPattern = (units) => new RegExp(`^(?:[+-]?0|${NUMBER}(?:${units.join("|")}))$`, "i");
+  var SPACING_LENGTH = lengthPattern(SPACING_UNITS);
+  var ANY_LENGTH = lengthPattern(ALL_LENGTH_UNITS);
+  var INTEGER = /^[+-]?\d+$/;
+  var NAMED_COLOURS = new Set(
+    "aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen transparent currentcolor".split(" ")
+  );
+  var HEX_COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+  var COLOUR_FUNCTION = /^(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(([^()]*)\)$/i;
+  var COLOUR_SPACES = /* @__PURE__ */ new Set(["srgb", "srgb-linear", "display-p3", "a98-rgb", "prophoto-rgb", "rec2020", "xyz", "xyz-d50", "xyz-d65"]);
+  var COLOUR_ARGUMENT = new RegExp(`^(?:${NUMBER}(?:%|deg|rad|grad|turn)?|none)$`, "i");
+  var isColour = (text) => {
+    if (HEX_COLOUR.test(text) || NAMED_COLOURS.has(text.toLowerCase())) return true;
+    const match = COLOUR_FUNCTION.exec(text);
+    if (match === null) return false;
+    const name = (match[1] ?? "").toLowerCase();
+    const args = (match[2] ?? "").trim().split(/[\s,/]+/).filter((part) => part !== "");
+    if (name === "color") {
+      const space = args.shift();
+      if (space === void 0 || !COLOUR_SPACES.has(space.toLowerCase())) return false;
+    }
+    return args.length >= 3 && args.length <= 4 && args.every((arg) => COLOUR_ARGUMENT.test(arg));
+  };
+  var splitTop = (text, separator) => {
+    const parts = [];
+    let depth = 0;
+    let quote = null;
+    let current = "";
+    for (const char of text) {
+      if (quote !== null) {
+        if (char === quote) quote = null;
+        current += char;
+      } else if (char === '"' || char === "'") {
+        quote = char;
+        current += char;
+      } else if (char === "(") {
+        depth += 1;
+        current += char;
+      } else if (char === ")") {
+        depth -= 1;
+        current += char;
+      } else if (depth === 0 && separator.test(char)) {
+        if (current.trim() !== "") parts.push(current.trim());
+        current = "";
+      } else current += char;
+    }
+    if (current.trim() !== "") parts.push(current.trim());
+    return parts;
+  };
+  var isShadow = (text, needsPair) => {
+    if (text.toLowerCase() === "none") return !needsPair;
+    const layers = splitTop(text, /,/);
+    if (layers.length === 0) return false;
+    return layers.every((layer) => {
+      let lengths = 0;
+      let colours = 0;
+      let insets = 0;
+      for (const part of splitTop(layer, /\s/)) {
+        if (part.toLowerCase() === "inset") insets += 1;
+        else if (ANY_LENGTH.test(part)) lengths += 1;
+        else if (isColour(part)) colours += 1;
+        else return false;
+      }
+      return lengths >= 2 && lengths <= 4 && colours <= 1 && insets <= 1;
+    });
+  };
+  var isLayer = (text) => {
+    if (text.toLowerCase() === "auto") return true;
+    if (!INTEGER.test(text)) return false;
+    const value = Number(text);
+    return value >= -2147483647 && value <= 2147483647;
+  };
+  var FAMILY_NAME = /^(?:"[^"]+"|'[^']+'|[A-Za-z-][A-Za-z0-9-]*(?: +[A-Za-z-][A-Za-z0-9-]*)*)$/;
+  var fieldValid = (field2, text) => {
+    const lower = text.toLowerCase();
+    switch (field2) {
+      case "family": {
+        const names = text.split(",").map((name) => name.trim());
+        return names.length > 0 && names.every((name) => FAMILY_NAME.test(name));
+      }
+      case "size":
+      case "letterSpacing":
+        return lower === "normal" || ANY_LENGTH.test(text);
+      case "weight": {
+        if (lower === "normal" || lower === "bold" || lower === "lighter" || lower === "bolder") return true;
+        if (!NUMBER_PATTERN.test(text)) return false;
+        const weight = Number(text);
+        return weight >= 1 && weight <= 1e3;
+      }
+      case "lineHeight":
+        return lower === "normal" || NUMBER_PATTERN.test(text) && Number(text) >= 0 || ANY_LENGTH.test(text);
+    }
+  };
+  var sectionValid = (section2, text) => {
+    switch (section2) {
+      case "colours":
+        return isColour(text);
+      case "spacing":
+        return SPACING_LENGTH.test(text);
+      case "radius":
+        return ANY_LENGTH.test(text);
+      case "sizes":
+        return SPACING_LENGTH.test(text) || NUMBER_PATTERN.test(text);
+      case "shadows":
+        return isShadow(text, false);
+      case "layers":
+        return isLayer(text);
+      case "typography":
+      case "other":
+        return true;
+    }
+  };
+  var validateTokenValue = (section2, field2, text) => {
+    const shape = field2 === null ? SECTION_SHAPES[section2] : FIELD_SHAPES[field2];
+    if (!passesRuleOne(text)) return { ok: false, sentence: shape };
+    if (FORMULA_PATTERN.test(text)) return { ok: true, formula: true };
+    const valid = field2 === null ? sectionValid(section2, text) : fieldValid(field2, text);
+    return valid ? { ok: true, formula: false } : { ok: false, sentence: shape };
+  };
+  var classifyToken = (name, value) => {
+    const text = value.trim();
+    const lower = name.toLowerCase();
+    if (isColour(text)) return "colours";
+    if (isShadow(text, true)) return "shadows";
+    if (/radius|rounded/.test(lower)) return "radius";
+    if (/(^--z-|z-?index|layer|stack)/.test(lower) && INTEGER.test(text)) return "layers";
+    if (/space|spacing|gap|gutter|pad|margin|inset/.test(lower) && SPACING_LENGTH.test(text)) return "spacing";
+    if (/font|family|text-|leading|line-height|tracking|letter|weight|^--fs-/.test(lower)) return "typography";
+    if (/size|width|height|breakpoint|^--bp-|screen|container/.test(lower) && ANY_LENGTH.test(text)) return "sizes";
+    return "other";
+  };
+  var DARK_MEDIA = "@media(prefers-color-scheme:dark)";
+  var normaliseAtRule = (prelude) => prelude.toLowerCase().replace(/\s*([():,])\s*/g, "$1").replace(/\s+/g, " ").trim();
+  var normaliseSelector = (selector) => selector.toLowerCase().replace(/\s+/g, " ").replace(/\[\s*([a-z0-9_-]+)\s*=\s*(["']?)([a-z0-9_-]+)\2\s*\]/g, "[$1=$3]").trim();
+  var selectorList = (prelude) => prelude.split(",").map(normaliseSelector);
+  var LIGHT_EXTRACTION = /* @__PURE__ */ new Set([":root", "html", ":host", ".light", "[data-theme=light]"]);
+  var DARK_TOP_EXTRACTION = /* @__PURE__ */ new Set([".dark", ":root.dark", "html.dark", "[data-theme=dark]", ":root[data-theme=dark]", "[data-mode=dark]"]);
+  var partsOf = (ctx) => ctx.kind === "root" ? { atRules: [], selectors: [":root"] } : { atRules: ctx.atRules ?? [], selectors: ctx.selectors ?? [] };
+  var isLightParts = (atRules, selectors, rules) => {
+    const [selector] = selectors;
+    if (atRules.length === 0 && selectors.length === 1 && selector !== void 0) {
+      const list = selectorList(selector);
+      return rules === "system" ? list.length === 1 && list[0] === ":root" : list.every((one) => LIGHT_EXTRACTION.has(one));
+    }
+    const [atRule] = atRules;
+    return rules === "extraction" && atRules.length === 1 && selectors.length === 0 && atRule !== void 0 && normaliseAtRule(atRule) === "@theme";
+  };
+  var isDarkParts = (atRules, selectors, rules) => {
+    const [selector] = selectors;
+    const [atRule] = atRules;
+    if (selectors.length !== 1 || selector === void 0) return false;
+    const list = selectorList(selector);
+    if (atRules.length === 1 && atRule !== void 0 && normaliseAtRule(atRule) === DARK_MEDIA) {
+      return rules === "system" ? list.length === 1 && list[0] === ":root" : list.every((one) => one === ":root" || one === "html");
+    }
+    return rules === "extraction" && atRules.length === 0 && list.every((one) => DARK_TOP_EXTRACTION.has(one));
+  };
+  var isLightContext = (ctx, rules) => {
+    if (ctx.kind === "root") return true;
+    const { atRules, selectors } = partsOf(ctx);
+    return isLightParts(atRules, selectors, rules);
+  };
+  var isDarkContext = (ctx, rules) => {
+    if (ctx.kind === "root") return false;
+    const { atRules, selectors } = partsOf(ctx);
+    return isDarkParts(atRules, selectors, rules);
+  };
+  var TOKEN_UNDO_REMOVED_MAX = TEXT_EDIT_MAX * 8;
+
+  // src/shared/system-json.ts
+  var AREA_OF_SECTION = Object.freeze({
+    overview: "foundations",
+    colours: "foundations",
+    typography: "foundations",
+    spacing: "foundations",
+    radius: "foundations",
+    shadows: "foundations",
+    layers: "foundations",
+    sizes: "foundations",
+    components: "components",
+    patterns: "patterns",
+    brand: "brand",
+    assets: "brand"
+  });
+  var SYSTEM_AREAS = Object.freeze(["foundations", "components", "patterns", "brand"]);
+  var SYSTEM_SECTIONS = Object.freeze(Object.keys(AREA_OF_SECTION));
+  var RESERVED_SYSTEM_IDS = Object.freeze(["none", "ask"]);
+  var SYSTEM_UNREADABLE_PREFIX = "Design Chamber can't read this design system.";
+  var NOT_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json isn't valid JSON.`;
+  var TOO_LARGE_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json is larger than 1 MB.`;
+  var BOARD_LAYOUTS = Object.freeze(["card", "compact", "full", "table"]);
+  var LAYOUTS_OF_SECTION = Object.freeze({
+    components: BOARD_LAYOUTS,
+    overview: BOARD_LAYOUTS,
+    patterns: BOARD_LAYOUTS,
+    brand: BOARD_LAYOUTS,
+    colours: Object.freeze(["card", "compact", "table"]),
+    spacing: Object.freeze(["card", "compact", "table"]),
+    radius: Object.freeze(["card", "compact", "table"]),
+    shadows: Object.freeze(["card", "compact", "table"]),
+    sizes: Object.freeze(["card", "compact", "table"])
+  });
+  var SECTION_LAYOUT_ALIASES = Object.freeze({ notes: "overview" });
+  var SYSTEM_TOKEN_RULES = Object.freeze({
+    isLight: (ctx) => isLightContext(ctx, "system"),
+    isDark: (ctx) => isDarkContext(ctx, "system"),
+    classify: classifyToken,
+    validate: validateTokenValue
+  });
+  var resyncStampOf = (stamps) => `${stamps.tokens ?? "none"}:${stamps.systemJson ?? "none"}`;
+  var PROPOSAL_TOO_MANY_FILES = `PROPOSAL.json lists more than ${SYSTEM_PROPOSAL_FILES_MAX} files. Ask the agent to split the change.`;
+
   // src/shared/checks.ts
   var num = (value, digits = 0) => value === void 0 ? "?" : digits === 0 ? String(Math.round(value)) : value.toFixed(digits);
   var fileOf = (f) => f.file ?? "This design";
@@ -10770,6 +11106,58 @@ ${FILED_BY_YOU}` : "";
         const reason = f.params?.proposal;
         if (reason === void 0 || reason === "unreadable" && f.detail !== void 0) return "PROPOSAL.json can't be used. Ask the agent to fix it.";
         return `PROPOSAL.json can't be used: ${PROPOSAL_PROBLEM_SENTENCES[reason]}`;
+      }
+    },
+    // Board layout hints and the visual system check (documentation/specs/system-board-layout-and-visual-check.md §B.6).
+    "system-layout-invalid": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.round(f.params?.count ?? 0);
+        const misplaced = Math.min(count, Math.round(f.params?.misplaced ?? 0));
+        const tail = "so those entries use the default. Each one listed says what its place takes.";
+        if (misplaced === 0) return `system.json asks for ${num(count)} board layouts Design Chamber doesn't know, ${tail}`;
+        if (misplaced === count) return `system.json asks for ${num(count)} board layouts in places that don't take them, ${tail}`;
+        return `system.json asks for ${num(count)} board layouts it can't use (${num(count - misplaced)} Design Chamber doesn't know, ${num(misplaced)} in places that don't take them), ${tail}`;
+      }
+    },
+    "system-board-overflow": {
+      severity: "warning",
+      sentence: (f, where) => `${where}: the board is ${num(f.params?.px)}px wide, wider than the ${num(f.params?.width)}px it has, so it scrolls sideways.`
+    },
+    "system-board-preview-wide": {
+      severity: "warning",
+      sentence: (f, where) => `${where}: this example is ${num(f.params?.px)}px wide but the board can give it ${num(f.params?.width)}px, so it scrolls sideways in its card.`
+    },
+    "system-board-preview-outside": {
+      severity: "warning",
+      sentence: (f, where) => `${where}: part of this example sits ${num(f.params?.px)}px outside its card, so it's cut off or covers other entries.`
+    },
+    "system-board-text-outside": {
+      severity: "warning",
+      sentence: (f, where) => `${where}: text runs ${num(f.params?.px)}px outside its card.`
+    },
+    "system-board-hint-small": {
+      severity: "info",
+      sentence: (f, where) => `${where}: this entry is set to ${f.params?.layout ?? "card"} but needed the full width. Set its layout to full.`
+    },
+    "system-board-partial": {
+      severity: "info",
+      sentence: (f) => {
+        const count = Math.round(f.params?.count ?? 0);
+        const areas = count === 1 ? "1 area" : `${num(count)} areas`;
+        const its = count === 1 ? "its" : "their";
+        switch (f.params?.pictured) {
+          case "entries":
+            return `Only the first ${num(f.params?.max)} entries were measured.`;
+          case "gap":
+            return `${count === 1 ? "Part of 1 area is" : `Parts of ${areas} are`} in no picture (the picture limit for one check); the parts are listed. All of the board was measured, so the findings cover them.`;
+          case "no-overview":
+            return `${areas} ${count === 1 ? "has" : "have"} no overview picture (it couldn't be made); ${its} full-size pictures show all of ${count === 1 ? "it" : "them"}.`;
+          case "overview":
+            return `The overview of ${areas} stops early; ${its} full-size pictures show the rest, and all of the board was measured.`;
+          default:
+            return `${areas} ${count === 1 ? "has" : "have"} full-size pictures for only part of ${its} length (the picture limit for one check); ${its} overview shows the rest, and all of the board was measured.`;
+        }
       }
     }
   };
@@ -11257,15 +11645,11 @@ ${view2.error.message}` : "";
   };
   var wheelRoute = (input) => {
     if (input.pageMode) return !input.ctrlOrMeta && input.overReadyBoard ? "scroll-frame" : "none";
-    if (input.ctrlOrMeta) return "zoom";
-    if (input.mode === "edit" && !input.readOnly && input.overReadyBoard && !input.spaceDown && !input.panTool) return "scroll-frame";
-    return "pan";
+    return input.ctrlOrMeta ? "zoom" : "pan";
   };
   var frameWheelRoute = (input) => {
-    const scrolls = input.mode === "edit" && !input.readOnly;
-    if (input.pageMode) return !input.ctrl && scrolls ? "scroll-frame" : "none";
-    if (input.ctrl) return "zoom";
-    return scrolls ? "scroll-frame" : "pan";
+    if (input.pageMode) return !input.ctrl && input.mode === "edit" && !input.readOnly ? "scroll-frame" : "none";
+    return input.ctrl ? "zoom" : "pan";
   };
   var pointerDownAction = (input) => {
     if (input.pageMode) {
@@ -13946,7 +14330,7 @@ ${view2.error.message}` : "";
 
   // src/guest/frame-doc.ts
   var ARTBOARD_SANDBOX = "allow-scripts";
-  var bundledBridge = () => true ? '"use strict";(()=>{var ne=/^[a-z0-9][a-z0-9-]{0,40}$/;var k=5e3,V=200,F=5e3;var _t=30*6e4;var oe=/^[A-Za-z0-9 #%.,()+\\-\'"/]{1,100}$/;var D=1048576;var B=1e4;var w=D;var ut=100*1024*1024,Et=5*1024*1024,pt=10*1024*1024,dt=20*1024*1024;var At=10*6e4;var Tt=60*6e4;var re=512,se=/^--[A-Za-z0-9_-]{1,80}$/,le=120;var St=7*864e5;var xt=20*1024*1024,gt=4*1024*1024;var ft=2*1024*1024;var Ce=/^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\\d{1,3}|logo:\\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40})$/;var $=e=>e.length<=le&&Ce.test(e);var ce=e=>{let t=0,r=0;for(let n of e)n==="\'"?t+=1:n===\'"\'&&(r+=1);return t%2===0&&r%2===0};var C=1;var ue=["Escape"," ","+","=","-","0","1"];var j=e=>typeof e=="object"&&e!==null&&!Array.isArray(e),O=(e,t)=>typeof e=="string"&&e.length<=t,W=(e,t)=>O(e,t)&&e.length>0,y=e=>typeof e=="number"&&Number.isFinite(e)&&Math.abs(e)<=1e7;var Pe=e=>typeof e=="boolean",ke=e=>e==="edit"||e==="play";var ie=(e,t,r)=>Array.isArray(e)&&e.length<=t&&e.every(r),De=e=>j(e)&&W(e.id,100)&&O(e.selector,1e3)&&O(e.text,120)&&O(e.html,200);var Be=e=>j(e)&&typeof e.name=="string"&&se.test(e.name)&&typeof e.value=="string"&&oe.test(e.value)&&ce(e.value),we=e=>{if(!Array.isArray(e)||e.length>B)return!1;let t=0;for(let r of e){if(!Array.isArray(r)||r.length!==2)return!1;let n=r[0],s=r[1];if(typeof n!="string"||s!==null&&typeof s!="string"||(t+=n.length+(s===null?0:s.length),t>w))return!1}return!0};var He=e=>e.dc===C&&W(e.artboardId,100)&&W(e.nonce,64),Ue={"init-ack":()=>!0,"set-mode":e=>ke(e.mode),"hit-test":e=>y(e.x)&&y(e.y),"resolve-anchors":e=>ie(e.anchors,500,De),"scroll-by":e=>y(e.dx)&&y(e.dy),"scroll-to":e=>y(e.x)&&y(e.y),highlight:e=>e.selector===null||O(e.selector,1e3),"edit-probe":e=>y(e.x)&&y(e.y),"set-tokens":e=>ie(e.vars,re,Be),"storage-sync":e=>Pe(e.clear)&&we(e.changes)};var Ye=(e,t)=>{if(!j(t)||!He(t)||typeof t.type!="string"||!Object.hasOwn(e,t.type))return null;let r=e[t.type];return r!==void 0&&r(t)?t:null};var G=e=>Ye(Ue,e);var ve=["data-testid","data-screen","data-dc-id"],Ke=/^(is-|has-|js-|active|hover|focus)/,pe=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,Ve=3,h=e=>e.tagName===e.tagName.toUpperCase()?e.tagName.toLowerCase():e.tagName,de=e=>e.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),Ee=e=>e===""?null:pe.test(e)?`#${e}`:`[id="${de(e)}"]`,Fe=(e,t)=>{try{return e.querySelectorAll(t)}catch{return null}},X=(e,t,r)=>{let n=Fe(e,t);return n!==null&&n.length===1&&n[0]===r},$e=e=>{let t=[];for(let r=0;r<e.classList.length&&t.length<Ve;r+=1){let n=e.classList[r];n!==void 0&&pe.test(n)&&!Ke.test(n)&&t.push(n)}return t},We=e=>{let t=e.parentElement;if(!t)return null;let r=0,n=0;for(let s=0;s<t.children.length;s+=1){let c=t.children[s];!c||c.tagName!==e.tagName||(n+=1,c===e&&(r=n))}return n>1?r:null},ze=e=>{let t=h(e);if(t==="html"||t==="body")return t;let r=$e(e).map(s=>`.${s}`).join(""),n=We(e);return`${t}${r}${n===null?"":`:nth-of-type(${n})`}`},Q=e=>{let t=[...e];for(;t.join(" > ").length>1e3&&t.length>1;)t.shift();return t.join(" > ").slice(0,1e3)},Ae=(e,t)=>{let r=h(e);if(r==="html"||r==="body"||r==="head")return r;let n=Ee(e.id);if(n&&X(t,n,e))return n;for(let u of ve){let E=e.getAttribute(u);if(E===null||E==="")continue;let p=`[${u}="${de(E)}"]`;if(X(t,p,e))return p}let s=[],c=e;for(let u=0;c&&u<6;u+=1){s.unshift(ze(c));let E=s.join(" > ");if(X(t,E,e))return Q(s);let p=c.parentElement;if(!p)break;let _=Ee(p.id);if(_&&X(t,_,p)){let d=[_,...s];if(X(t,d.join(" > "),e))return Q(d)}c=p}return Q(s)};var je=5e3,Qe=/^[A-Za-z][A-Za-z0-9-]*$/,b=e=>e.replace(/\\s+/g," ").trim(),xe=e=>b(e.textContent??"").slice(0,120),qe=e=>e.replace(/&/g,"&amp;").replace(/"/g,"&quot;"),ge=e=>{let t=`<${h(e)}`;for(let r=0;r<e.attributes.length;r+=1){let n=e.attributes[r];n&&(t+=n.value===""?` ${n.name}`:` ${n.name}="${qe(n.value)}"`)}return t+=">",t.length<=200?t:`${t.slice(0,198)}\\u2026>`},Je=e=>{let t=/^<([A-Za-z][A-Za-z0-9:-]*)/.exec(e.trim());return t?.[1]?t[1].toLowerCase():null},Te=(e,t)=>t===null||h(e).toLowerCase()===t,Se=(e,t)=>{try{return e.querySelectorAll(t)}catch{return[]}},fe=(e,t)=>{let r={found:!1,exact:!1,element:null},n=Je(t.html);if(t.selector!==""){let p=Se(e,t.selector);for(let _=0;_<p.length;_+=1){let d=p[_];if(d&&Te(d,n))return{found:!0,exact:!0,element:d}}}let s=b(t.text);if(s.length<12)return r;let c=Se(e,n!==null&&Qe.test(n)?n:"*"),u=null,E=1/0;for(let p=0;p<c.length&&p<je;p+=1){let _=c[p];if(!_||!Te(_,n))continue;let d=b(_.textContent??"");d.startsWith(s)&&d.length<=E&&(u=_,E=d.length)}return u?{found:!0,exact:!1,element:u}:r};var et=new Set(["svg","math","template"]),tt=e=>{for(let t=e;t;t=t.parentElement)if(et.has(h(t).toLowerCase()))return!0;return!1},me=e=>e.getAttribute("data-dc-overlay")!==null,Me=(e,t,r=F)=>{if(me(e))return null;let n=h(e),s=n.toLowerCase();if(s===""||s.length>64)return null;let c=e.getAttribute("id");if(c!==null&&(c===""||c.length>V))return null;let u=b(e.textContent??""),E=u.length>k,p=e.children.length===0,_={tag:s,id:c,leaf:p,text:E?u.slice(0,k+1):u,truncated:E,sameIndex:0,sameCount:0},d=T=>T.children.length===0&&T.getAttribute("id")===c&&!me(T)&&!tt(T)&&b(T.textContent??"")===u;if(!p||!d(e))return _;let f=t.getElementsByTagName(n);if(f.length>r)return _;let R=-1,M=0;for(let T=0;T<f.length;T+=1){let g=f[T];!g||!d(g)||(g===e&&(R=M),M+=1)}return R===-1?_:{..._,sameIndex:R,sameCount:M}};var I=(e,t)=>e.length+(t===null?0:t.length),Re=e=>{if(typeof e!="object"||e===null)return;let t=e;if(typeof t.persist!="boolean"||!Array.isArray(t.items))return;let r=new Set,n=[],s=0;for(let c of t.items){if(!Array.isArray(c)||c.length!==2)return;let u=c[0],E=c[1];if(typeof u!="string"||typeof E!="string"||(s+=I(u,E),s>D))return;r.has(u)||(r.add(u),n.push([u,E]))}return{persist:t.persist,items:n}},nt=(e,t,r={changes:B,chars:w})=>{let n=[],s=[],c=0,u=()=>{n.push({clear:e&&n.length===0,changes:s}),s=[],c=0};for(let E of t){let p=I(E[0],E[1]);s.length>0&&(s.length>=r.changes||c+p>r.chars)&&u(),s.push(E),c+=p}return(s.length>0||e&&n.length===0)&&u(),n},v=e=>`${e}`,K=(e,t,r)=>{if(t.length<r)throw new TypeError(`Failed to execute \'${e}\' on \'Storage\': ${r} argument${r===1?"":"s"} required, but only ${t.length} present.`)},he=(e,t,r)=>{let n=new Map,s=0;for(let[i,l]of e)n.has(i)||(n.set(i,l),s+=I(i,l));let c=null,u=(i,l)=>{let S=n.get(i);s+=I(i,l)-(S===void 0?0:I(i,S)),S===void 0&&(c=null),n.set(i,l)},E=i=>{let l=n.get(i);l!==void 0&&(s-=I(i,l),n.delete(i),c=null)},p=(...i)=>(K("getItem",i,1),n.get(v(i[0]))??null),_=(...i)=>{K("setItem",i,2);let l=v(i[0]),S=v(i[1]),m=n.get(l);if(m===S)return;if(s+I(l,S)-(m===void 0?0:I(l,m))>D)throw t(l);u(l,S),r?.set(l,S)},d=(...i)=>{K("removeItem",i,1);let l=v(i[0]);n.has(l)&&(E(l),r?.set(l,null))},f=()=>{n.size!==0&&(n.clear(),s=0,c=null,r?.clear())},R=(...i)=>{K("key",i,1);let l=Number(i[0])>>>0;return c??(c=[...n.keys()]),c[l]??null},M=Object.create(Object.prototype,{getItem:{value:p,enumerable:!0,configurable:!0,writable:!0},setItem:{value:_,enumerable:!0,configurable:!0,writable:!0},removeItem:{value:d,enumerable:!0,configurable:!0,writable:!0},clear:{value:f,enumerable:!0,configurable:!0,writable:!0},key:{value:R,enumerable:!0,configurable:!0,writable:!0},length:{get:()=>n.size,enumerable:!0,configurable:!0},[Symbol.toStringTag]:{value:"Storage",configurable:!0}}),T=Object.create(M),g=i=>typeof i=="string"&&n.has(i)&&!(i in T);return{storage:new Proxy(T,{get:(i,l,S)=>g(l)?n.get(l):Reflect.get(i,l,S),set:(i,l,S)=>typeof l!="string"?Reflect.set(i,l,S):(_(l,S),!0),has:(i,l)=>typeof l=="string"&&n.has(l)||Reflect.has(i,l),deleteProperty:(i,l)=>g(l)?(d(l),!0):Reflect.deleteProperty(i,l),ownKeys:i=>[...[...n.keys()].filter(l=>!(l in i)),...Reflect.ownKeys(i)],getOwnPropertyDescriptor:(i,l)=>g(l)?{value:n.get(l),writable:!0,enumerable:!0,configurable:!0}:Reflect.getOwnPropertyDescriptor(i,l),defineProperty:(i,l,S)=>typeof l!="string"?Reflect.defineProperty(i,l,S):"get"in S||"set"in S?!1:(_(l,S.value),!0),preventExtensions:()=>!1}),apply:(i,l)=>{i&&(n.clear(),s=0,c=null);for(let[S,m]of l)m===null?E(S):u(S,m)}}},q=(e,t,r)=>{let n=e.DOMException??globalThis.DOMException,s=e.queueMicrotask?.bind(e)??(_=>void Promise.resolve().then(_)),c=_=>new n(`Failed to execute \'setItem\' on \'Storage\': Setting the value of \'${_}\' exceeded the quota.`,"QuotaExceededError"),u=null;if(t?.persist){let _=new Map,d=!1,f=!1,R=()=>{f=!1;let T=[..._],g=d;_=new Map,d=!1;for(let L of nt(g,T))r(L)},M=()=>{f||(f=!0,s(R))};u={set:(T,g)=>{_.delete(T),_.set(T,g),M()},clear:()=>{_.clear(),d=!0,M()}}}let E=he(t?.items??[],c,u),p=he([],c,null);for(let[_,d]of[["localStorage",E],["sessionStorage",p]])try{Object.defineProperty(e,_,{value:d.storage,configurable:!0,enumerable:!0,writable:!1})}catch{}return{sync:(_,d)=>E.apply(_,d)}};var ot=(e,t,r)=>{if(e===void 0)return;let n=G({dc:C,type:"set-tokens",artboardId:t,nonce:r,vars:e});return n?.type==="set-tokens"?n.vars:void 0},ye=e=>{if(typeof e!="object"||e===null)return null;let t=e,{artboardId:r,nonce:n,file:s,mode:c,scroll:u}=t;if(typeof r!="string"||r.length===0||r.length>100||typeof n!="string"||n.length===0||n.length>64||typeof s!="string"||c!=="edit"&&c!=="play"||typeof u!="object"||u===null)return null;let{x:E,y:p}=u;if(typeof E!="number"||typeof p!="number"||!Number.isFinite(E)||!Number.isFinite(p))return null;let _=ot(t.tokens,r,n),d=Re(t.storage);return{artboardId:r,file:s,mode:c,scroll:{x:E,y:p},nonce:n,..._?{tokens:_}:{},...d?{storage:d}:{}}};var Ie="https://design.invalid",J=e=>{try{return decodeURIComponent(e)}catch{return e}},be=(e,t)=>{let r=e.trim();if(r==="")return{kind:"blocked",reason:"empty link"};if(r.startsWith("#"))return{kind:"fragment",id:J(r.slice(1))};let n;try{n=new URL(r,`${Ie}/${t}`)}catch{return{kind:"blocked",reason:"malformed link"}}if(n.origin===Ie){let s=J(n.pathname.replace(/^\\/+/,""));return s===t||s===""?n.hash?{kind:"fragment",id:J(n.hash.slice(1))}:{kind:"blocked",reason:"same page"}:/\\.html?$/i.test(s)?s.length>2e3||n.hash.length>2e3?{kind:"blocked",reason:"link too long"}:{kind:"navigate",href:s,hash:n.hash}:{kind:"blocked",reason:"not a page of this design"}}return(n.protocol==="https:"||n.protocol==="http:")&&n.href.length<=2e3?{kind:"external",url:n.href}:{kind:"blocked",reason:`${n.protocol} links do not open from a design`}},Oe=e=>ne.test(e)?{kind:"navigate",href:`screens/${e}.html`,hash:""}:{kind:"blocked",reason:"unknown screen id"};var st=16,lt=5,ct=300,it=e=>e instanceof Element?!!e.closest(\'input, textarea, select, [contenteditable=""], [contenteditable="true"]\'):!1,at=e=>{let t=e.mode,r=!1,n=window.parent,s=n!==window,c=o=>{n.postMessage({...o,dc:C,artboardId:e.artboardId,nonce:e.nonce},"*")},u=q(window,s?e.storage:void 0,o=>c({type:"storage-batch",...o})),E=[],p=o=>{let a=document.documentElement.style,A=new Set(o.map(x=>x.name));for(let x of E)A.has(x)||a.removeProperty(x);for(let x of o)a.setProperty(x.name,x.value);E=[...A]};if(e.tokens&&p(e.tokens),!s)return;let _=()=>{let o=document.documentElement,a=document.body;return{docWidth:Math.max(o.scrollWidth,a?a.scrollWidth:0),docHeight:Math.max(o.scrollHeight,a?a.scrollHeight:0)}},d=o=>{let a=o.getBoundingClientRect();return{x:a.left+window.scrollX,y:a.top+window.scrollY,w:Math.max(0,a.width),h:Math.max(0,a.height)}},f=(o,a)=>{let A=document.elementFromPoint(o,a);return A&&A!==document.documentElement&&A!==document.body&&!A.hasAttribute("data-dc-overlay")?A:null},R=o=>{let a=o.closest("[data-dc-entry]")?.getAttribute("data-dc-entry")??null;return a!==null&&$(a)?a:null},M=o=>({entry:R(o),selector:Ae(o,document),text:xe(o),html:ge(o),rect:d(o),tag:h(o).slice(0,64)||"element"}),T=null,g=o=>{let a=null;if(o)try{a=document.querySelector(o)}catch{a=null}if(!a){T?.remove(),T=null;return}T||(T=document.createElement("div"),T.setAttribute("data-dc-overlay",""),T.setAttribute("aria-hidden","true"));let A=d(a);T.setAttribute("style",`position:absolute;left:${A.x}px;top:${A.y}px;width:${A.w}px;height:${A.h}px;outline:2px solid Highlight;outline-offset:1px;pointer-events:none;z-index:2147483647;margin:0;padding:0;border:0;background:transparent;`),T.isConnected||document.documentElement.append(T)},L=o=>{switch(o.type){case"init-ack":r=!0;return;case"set-mode":t=o.mode;return;case"hit-test":{let a=f(o.x,o.y);c({type:"hit",x:o.x,y:o.y,element:a?M(a):null});return}case"edit-probe":{let a=f(o.x,o.y),A=a?Me(a,document):null,x=a&&A?{...A,dir:getComputedStyle(a).direction==="rtl"?"rtl":"ltr",rect:d(a)}:null;c({type:"edit-probe-result",x:o.x,y:o.y,probe:x});return}case"set-tokens":p(o.vars);return;case"storage-sync":u.sync(o.clear,o.changes);return;case"resolve-anchors":{let a=o.anchors.map(A=>{let x=fe(document,A);return{id:A.id,found:x.found,exact:x.exact,rect:x.element?d(x.element):null}});c({type:"anchors",results:a});return}case"scroll-by":window.scrollBy(o.dx,o.dy);return;case"scroll-to":window.scrollTo(o.x,o.y);return;case"highlight":g(o.selector);return}};window.addEventListener("message",o=>{if(o.source!==n)return;let a=G(o.data);!a||a.artboardId!==e.artboardId||a.nonce!==e.nonce||L(a)});let i=()=>c({type:"ready",..._(),title:document.title.slice(0,200)}),l=null,S="",m=()=>{l===null&&(l=setTimeout(()=>{l=null;let o=_(),a=`${o.docWidth}x${o.docHeight}`;a!==S&&(S=a,c({type:"size",...o}))},100))},P=!1;window.addEventListener("scroll",()=>{P||(P=!0,requestAnimationFrame(()=>{P=!1,c({type:"scroll",x:window.scrollX,y:window.scrollY})}))},{passive:!0});let ee=()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),i();let o=0,a=setInterval(()=>{o+=1,r||o>lt?clearInterval(a):i()},ct);if(typeof ResizeObserver=="function"){let A=new ResizeObserver(m);A.observe(document.documentElement),document.body&&A.observe(document.body)}typeof MutationObserver=="function"&&new MutationObserver(m).observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,characterData:!0}),m()};document.readyState==="loading"?document.addEventListener("DOMContentLoaded",ee,{once:!0}):ee(),window.addEventListener("load",()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),m()});let te=o=>{switch(o.kind){case"fragment":{if(o.id===""){window.scrollTo(0,0);return}(document.getElementById(o.id)??document.getElementsByName(o.id)[0]??null)?.scrollIntoView();return}case"navigate":c({type:"navigate",href:o.href,hash:o.hash});return;case"external":c({type:"open-external",url:o.url});return;case"blocked":return}};document.addEventListener("click",o=>{let A=(o.target instanceof Element?o.target:null)?.closest("a[href], area[href], [data-dc-goto]")??null;if(!A)return;o.preventDefault();let x=A.getAttribute("data-dc-goto");if(x!==null){te(Oe(x));return}te(be(A.getAttribute("href")??"",e.file))},!0),document.addEventListener("submit",o=>o.preventDefault(),!0),window.addEventListener("wheel",o=>{let a=o.ctrlKey||o.metaKey;if(!a&&t!=="edit")return;o.preventDefault();let A=o.deltaMode===1?st:o.deltaMode===2?window.innerHeight:1;c({type:"wheel",deltaX:o.deltaX*A,deltaY:o.deltaY*A,x:o.clientX,y:o.clientY,ctrl:a})},{passive:!1,capture:!0}),window.addEventListener("keydown",o=>{it(o.target)||ue.includes(o.key)&&c({type:"key",key:o.key,ctrl:o.ctrlKey,meta:o.metaKey,shift:o.shiftKey})},!0)},Ne=ye(window.__DC);Ne?at(Ne):q(window,void 0,()=>{});})();\n' : "";
+  var bundledBridge = () => true ? '"use strict";(()=>{var ne=/^[a-z0-9][a-z0-9-]{0,40}$/;var D=5e3,V=200,W=5e3;var _t=30*6e4;var oe=/^[A-Za-z0-9 #%.,()+\\-\'"/]{1,100}$/;var k=1048576;var B=1e4;var w=k;var Et=100*1024*1024,ut=5*1024*1024,pt=10*1024*1024,Tt=20*1024*1024;var At=10*6e4;var dt=60*6e4;var re=512,se=/^--[A-Za-z0-9_-]{1,80}$/,le=120;var St=7*864e5;var xt=20*1024*1024,gt=4*1024*1024;var ft=2*1024*1024;var Ce=/^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\\d{1,3}|logo:\\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40})$/;var F=e=>e.length<=le&&Ce.test(e);var ce=e=>{let t=0,r=0;for(let n of e)n==="\'"?t+=1:n===\'"\'&&(r+=1);return t%2===0&&r%2===0};var C=1;var Ee=["Escape"," ","+","=","-","0","1"];var j=e=>typeof e=="object"&&e!==null&&!Array.isArray(e),b=(e,t)=>typeof e=="string"&&e.length<=t,$=(e,t)=>b(e,t)&&e.length>0,I=e=>typeof e=="number"&&Number.isFinite(e)&&Math.abs(e)<=1e7;var Pe=e=>typeof e=="boolean",De=e=>e==="edit"||e==="play";var ie=(e,t,r)=>Array.isArray(e)&&e.length<=t&&e.every(r),ke=e=>j(e)&&$(e.id,100)&&b(e.selector,1e3)&&b(e.text,120)&&b(e.html,200);var Be=e=>j(e)&&typeof e.name=="string"&&se.test(e.name)&&typeof e.value=="string"&&oe.test(e.value)&&ce(e.value),we=e=>{if(!Array.isArray(e)||e.length>B)return!1;let t=0;for(let r of e){if(!Array.isArray(r)||r.length!==2)return!1;let n=r[0],s=r[1];if(typeof n!="string"||s!==null&&typeof s!="string"||(t+=n.length+(s===null?0:s.length),t>w))return!1}return!0};var He=e=>e.dc===C&&$(e.artboardId,100)&&$(e.nonce,64),Ye={"init-ack":()=>!0,"set-mode":e=>De(e.mode),"hit-test":e=>I(e.x)&&I(e.y),"resolve-anchors":e=>ie(e.anchors,500,ke),"scroll-by":e=>I(e.dx)&&I(e.dy),"scroll-to":e=>I(e.x)&&I(e.y),highlight:e=>e.selector===null||b(e.selector,1e3),"edit-probe":e=>I(e.x)&&I(e.y),"set-tokens":e=>ie(e.vars,re,Be),"storage-sync":e=>Pe(e.clear)&&we(e.changes)};var Ue=(e,t)=>{if(!j(t)||!He(t)||typeof t.type!="string"||!Object.hasOwn(e,t.type))return null;let r=e[t.type];return r!==void 0&&r(t)?t:null};var G=e=>Ue(Ye,e);var Ke=["data-testid","data-screen","data-dc-id"],ve=/^(is-|has-|js-|active|hover|focus)/,pe=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,Ve=3,h=e=>e.tagName===e.tagName.toUpperCase()?e.tagName.toLowerCase():e.tagName,Te=e=>e.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),ue=e=>e===""?null:pe.test(e)?`#${e}`:`[id="${Te(e)}"]`,We=(e,t)=>{try{return e.querySelectorAll(t)}catch{return null}},X=(e,t,r)=>{let n=We(e,t);return n!==null&&n.length===1&&n[0]===r},Fe=e=>{let t=[];for(let r=0;r<e.classList.length&&t.length<Ve;r+=1){let n=e.classList[r];n!==void 0&&pe.test(n)&&!ve.test(n)&&t.push(n)}return t},$e=e=>{let t=e.parentElement;if(!t)return null;let r=0,n=0;for(let s=0;s<t.children.length;s+=1){let c=t.children[s];!c||c.tagName!==e.tagName||(n+=1,c===e&&(r=n))}return n>1?r:null},ze=e=>{let t=h(e);if(t==="html"||t==="body")return t;let r=Fe(e).map(s=>`.${s}`).join(""),n=$e(e);return`${t}${r}${n===null?"":`:nth-of-type(${n})`}`},Q=e=>{let t=[...e];for(;t.join(" > ").length>1e3&&t.length>1;)t.shift();return t.join(" > ").slice(0,1e3)},Ae=(e,t)=>{let r=h(e);if(r==="html"||r==="body"||r==="head")return r;let n=ue(e.id);if(n&&X(t,n,e))return n;for(let E of Ke){let u=e.getAttribute(E);if(u===null||u==="")continue;let p=`[${E}="${Te(u)}"]`;if(X(t,p,e))return p}let s=[],c=e;for(let E=0;c&&E<6;E+=1){s.unshift(ze(c));let u=s.join(" > ");if(X(t,u,e))return Q(s);let p=c.parentElement;if(!p)break;let _=ue(p.id);if(_&&X(t,_,p)){let T=[_,...s];if(X(t,T.join(" > "),e))return Q(T)}c=p}return Q(s)};var je=5e3,Qe=/^[A-Za-z][A-Za-z0-9-]*$/,O=e=>e.replace(/\\s+/g," ").trim(),xe=e=>O(e.textContent??"").slice(0,120),qe=e=>e.replace(/&/g,"&amp;").replace(/"/g,"&quot;"),ge=e=>{let t=`<${h(e)}`;for(let r=0;r<e.attributes.length;r+=1){let n=e.attributes[r];n&&(t+=n.value===""?` ${n.name}`:` ${n.name}="${qe(n.value)}"`)}return t+=">",t.length<=200?t:`${t.slice(0,198)}\\u2026>`},Je=e=>{let t=/^<([A-Za-z][A-Za-z0-9:-]*)/.exec(e.trim());return t?.[1]?t[1].toLowerCase():null},de=(e,t)=>t===null||h(e).toLowerCase()===t,Se=(e,t)=>{try{return e.querySelectorAll(t)}catch{return[]}},fe=(e,t)=>{let r={found:!1,exact:!1,element:null},n=Je(t.html);if(t.selector!==""){let p=Se(e,t.selector);for(let _=0;_<p.length;_+=1){let T=p[_];if(T&&de(T,n))return{found:!0,exact:!0,element:T}}}let s=O(t.text);if(s.length<12)return r;let c=Se(e,n!==null&&Qe.test(n)?n:"*"),E=null,u=1/0;for(let p=0;p<c.length&&p<je;p+=1){let _=c[p];if(!_||!de(_,n))continue;let T=O(_.textContent??"");T.startsWith(s)&&T.length<=u&&(E=_,u=T.length)}return E?{found:!0,exact:!1,element:E}:r};var et=new Set(["svg","math","template"]),tt=e=>{for(let t=e;t;t=t.parentElement)if(et.has(h(t).toLowerCase()))return!0;return!1},Me=e=>e.getAttribute("data-dc-overlay")!==null,me=(e,t,r=W)=>{if(Me(e))return null;let n=h(e),s=n.toLowerCase();if(s===""||s.length>64)return null;let c=e.getAttribute("id");if(c!==null&&(c===""||c.length>V))return null;let E=O(e.textContent??""),u=E.length>D,p=e.children.length===0,_={tag:s,id:c,leaf:p,text:u?E.slice(0,D+1):E,truncated:u,sameIndex:0,sameCount:0},T=d=>d.children.length===0&&d.getAttribute("id")===c&&!Me(d)&&!tt(d)&&O(d.textContent??"")===E;if(!p||!T(e))return _;let f=t.getElementsByTagName(n);if(f.length>r)return _;let R=-1,m=0;for(let d=0;d<f.length;d+=1){let g=f[d];!g||!T(g)||(g===e&&(R=m),m+=1)}return R===-1?_:{..._,sameIndex:R,sameCount:m}};var y=(e,t)=>e.length+(t===null?0:t.length),Re=e=>{if(typeof e!="object"||e===null)return;let t=e;if(typeof t.persist!="boolean"||!Array.isArray(t.items))return;let r=new Set,n=[],s=0;for(let c of t.items){if(!Array.isArray(c)||c.length!==2)return;let E=c[0],u=c[1];if(typeof E!="string"||typeof u!="string"||(s+=y(E,u),s>k))return;r.has(E)||(r.add(E),n.push([E,u]))}return{persist:t.persist,items:n}},nt=(e,t,r={changes:B,chars:w})=>{let n=[],s=[],c=0,E=()=>{n.push({clear:e&&n.length===0,changes:s}),s=[],c=0};for(let u of t){let p=y(u[0],u[1]);s.length>0&&(s.length>=r.changes||c+p>r.chars)&&E(),s.push(u),c+=p}return(s.length>0||e&&n.length===0)&&E(),n},K=e=>`${e}`,v=(e,t,r)=>{if(t.length<r)throw new TypeError(`Failed to execute \'${e}\' on \'Storage\': ${r} argument${r===1?"":"s"} required, but only ${t.length} present.`)},he=(e,t,r)=>{let n=new Map,s=0;for(let[i,l]of e)n.has(i)||(n.set(i,l),s+=y(i,l));let c=null,E=(i,l)=>{let S=n.get(i);s+=y(i,l)-(S===void 0?0:y(i,S)),S===void 0&&(c=null),n.set(i,l)},u=i=>{let l=n.get(i);l!==void 0&&(s-=y(i,l),n.delete(i),c=null)},p=(...i)=>(v("getItem",i,1),n.get(K(i[0]))??null),_=(...i)=>{v("setItem",i,2);let l=K(i[0]),S=K(i[1]),M=n.get(l);if(M===S)return;if(s+y(l,S)-(M===void 0?0:y(l,M))>k)throw t(l);E(l,S),r?.set(l,S)},T=(...i)=>{v("removeItem",i,1);let l=K(i[0]);n.has(l)&&(u(l),r?.set(l,null))},f=()=>{n.size!==0&&(n.clear(),s=0,c=null,r?.clear())},R=(...i)=>{v("key",i,1);let l=Number(i[0])>>>0;return c??(c=[...n.keys()]),c[l]??null},m=Object.create(Object.prototype,{getItem:{value:p,enumerable:!0,configurable:!0,writable:!0},setItem:{value:_,enumerable:!0,configurable:!0,writable:!0},removeItem:{value:T,enumerable:!0,configurable:!0,writable:!0},clear:{value:f,enumerable:!0,configurable:!0,writable:!0},key:{value:R,enumerable:!0,configurable:!0,writable:!0},length:{get:()=>n.size,enumerable:!0,configurable:!0},[Symbol.toStringTag]:{value:"Storage",configurable:!0}}),d=Object.create(m),g=i=>typeof i=="string"&&n.has(i)&&!(i in d);return{storage:new Proxy(d,{get:(i,l,S)=>g(l)?n.get(l):Reflect.get(i,l,S),set:(i,l,S)=>typeof l!="string"?Reflect.set(i,l,S):(_(l,S),!0),has:(i,l)=>typeof l=="string"&&n.has(l)||Reflect.has(i,l),deleteProperty:(i,l)=>g(l)?(T(l),!0):Reflect.deleteProperty(i,l),ownKeys:i=>[...[...n.keys()].filter(l=>!(l in i)),...Reflect.ownKeys(i)],getOwnPropertyDescriptor:(i,l)=>g(l)?{value:n.get(l),writable:!0,enumerable:!0,configurable:!0}:Reflect.getOwnPropertyDescriptor(i,l),defineProperty:(i,l,S)=>typeof l!="string"?Reflect.defineProperty(i,l,S):"get"in S||"set"in S?!1:(_(l,S.value),!0),preventExtensions:()=>!1}),apply:(i,l)=>{i&&(n.clear(),s=0,c=null);for(let[S,M]of l)M===null?u(S):E(S,M)}}},q=(e,t,r)=>{let n=e.DOMException??globalThis.DOMException,s=e.queueMicrotask?.bind(e)??(_=>void Promise.resolve().then(_)),c=_=>new n(`Failed to execute \'setItem\' on \'Storage\': Setting the value of \'${_}\' exceeded the quota.`,"QuotaExceededError"),E=null;if(t?.persist){let _=new Map,T=!1,f=!1,R=()=>{f=!1;let d=[..._],g=T;_=new Map,T=!1;for(let L of nt(g,d))r(L)},m=()=>{f||(f=!0,s(R))};E={set:(d,g)=>{_.delete(d),_.set(d,g),m()},clear:()=>{_.clear(),T=!0,m()}}}let u=he(t?.items??[],c,E),p=he([],c,null);for(let[_,T]of[["localStorage",u],["sessionStorage",p]])try{Object.defineProperty(e,_,{value:T.storage,configurable:!0,enumerable:!0,writable:!1})}catch{}return{sync:(_,T)=>u.apply(_,T)}};var ot=(e,t,r)=>{if(e===void 0)return;let n=G({dc:C,type:"set-tokens",artboardId:t,nonce:r,vars:e});return n?.type==="set-tokens"?n.vars:void 0},Ie=e=>{if(typeof e!="object"||e===null)return null;let t=e,{artboardId:r,nonce:n,file:s,mode:c,scroll:E}=t;if(typeof r!="string"||r.length===0||r.length>100||typeof n!="string"||n.length===0||n.length>64||typeof s!="string"||c!=="edit"&&c!=="play"||typeof E!="object"||E===null)return null;let{x:u,y:p}=E;if(typeof u!="number"||typeof p!="number"||!Number.isFinite(u)||!Number.isFinite(p))return null;let _=ot(t.tokens,r,n),T=Re(t.storage);return{artboardId:r,file:s,mode:c,scroll:{x:u,y:p},nonce:n,..._?{tokens:_}:{},...T?{storage:T}:{}}};var ye="https://design.invalid",J=e=>{try{return decodeURIComponent(e)}catch{return e}},Oe=(e,t)=>{let r=e.trim();if(r==="")return{kind:"blocked",reason:"empty link"};if(r.startsWith("#"))return{kind:"fragment",id:J(r.slice(1))};let n;try{n=new URL(r,`${ye}/${t}`)}catch{return{kind:"blocked",reason:"malformed link"}}if(n.origin===ye){let s=J(n.pathname.replace(/^\\/+/,""));return s===t||s===""?n.hash?{kind:"fragment",id:J(n.hash.slice(1))}:{kind:"blocked",reason:"same page"}:/\\.html?$/i.test(s)?s.length>2e3||n.hash.length>2e3?{kind:"blocked",reason:"link too long"}:{kind:"navigate",href:s,hash:n.hash}:{kind:"blocked",reason:"not a page of this design"}}return(n.protocol==="https:"||n.protocol==="http:")&&n.href.length<=2e3?{kind:"external",url:n.href}:{kind:"blocked",reason:`${n.protocol} links do not open from a design`}},be=e=>ne.test(e)?{kind:"navigate",href:`screens/${e}.html`,hash:""}:{kind:"blocked",reason:"unknown screen id"};var st=16,lt=5,ct=300,it=e=>e instanceof Element?!!e.closest(\'input, textarea, select, [contenteditable=""], [contenteditable="true"]\'):!1,at=e=>{let t=e.mode,r=!1,n=window.parent,s=n!==window,c=o=>{n.postMessage({...o,dc:C,artboardId:e.artboardId,nonce:e.nonce},"*")},E=q(window,s?e.storage:void 0,o=>c({type:"storage-batch",...o})),u=[],p=o=>{let a=document.documentElement.style,A=new Set(o.map(x=>x.name));for(let x of u)A.has(x)||a.removeProperty(x);for(let x of o)a.setProperty(x.name,x.value);u=[...A]};if(e.tokens&&p(e.tokens),!s)return;let _=()=>{let o=document.documentElement,a=document.body;return{docWidth:Math.max(o.scrollWidth,a?a.scrollWidth:0),docHeight:Math.max(o.scrollHeight,a?a.scrollHeight:0)}},T=o=>{let a=o.getBoundingClientRect();return{x:a.left+window.scrollX,y:a.top+window.scrollY,w:Math.max(0,a.width),h:Math.max(0,a.height)}},f=(o,a)=>{let A=document.elementFromPoint(o,a);return A&&A!==document.documentElement&&A!==document.body&&!A.hasAttribute("data-dc-overlay")?A:null},R=o=>{let a=o.closest("[data-dc-entry]")?.getAttribute("data-dc-entry")??null;return a!==null&&F(a)?a:null},m=o=>({entry:R(o),selector:Ae(o,document),text:xe(o),html:ge(o),rect:T(o),tag:h(o).slice(0,64)||"element"}),d=null,g=o=>{let a=null;if(o)try{a=document.querySelector(o)}catch{a=null}if(!a){d?.remove(),d=null;return}d||(d=document.createElement("div"),d.setAttribute("data-dc-overlay",""),d.setAttribute("aria-hidden","true"));let A=T(a);d.setAttribute("style",`position:absolute;left:${A.x}px;top:${A.y}px;width:${A.w}px;height:${A.h}px;outline:2px solid Highlight;outline-offset:1px;pointer-events:none;z-index:2147483647;margin:0;padding:0;border:0;background:transparent;`),d.isConnected||document.documentElement.append(d)},L=o=>{switch(o.type){case"init-ack":r=!0;return;case"set-mode":t=o.mode;return;case"hit-test":{let a=f(o.x,o.y);c({type:"hit",x:o.x,y:o.y,element:a?m(a):null});return}case"edit-probe":{let a=f(o.x,o.y),A=a?me(a,document):null,x=a&&A?{...A,dir:getComputedStyle(a).direction==="rtl"?"rtl":"ltr",rect:T(a)}:null;c({type:"edit-probe-result",x:o.x,y:o.y,probe:x});return}case"set-tokens":p(o.vars);return;case"storage-sync":E.sync(o.clear,o.changes);return;case"resolve-anchors":{let a=o.anchors.map(A=>{let x=fe(document,A);return{id:A.id,found:x.found,exact:x.exact,rect:x.element?T(x.element):null}});c({type:"anchors",results:a});return}case"scroll-by":window.scrollBy(o.dx,o.dy);return;case"scroll-to":window.scrollTo(o.x,o.y);return;case"highlight":g(o.selector);return}};window.addEventListener("message",o=>{if(o.source!==n)return;let a=G(o.data);!a||a.artboardId!==e.artboardId||a.nonce!==e.nonce||L(a)});let i=()=>c({type:"ready",..._(),title:document.title.slice(0,200)}),l=null,S="",M=()=>{l===null&&(l=setTimeout(()=>{l=null;let o=_(),a=`${o.docWidth}x${o.docHeight}`;a!==S&&(S=a,c({type:"size",...o}))},100))},P=!1;window.addEventListener("scroll",()=>{P||(P=!0,requestAnimationFrame(()=>{P=!1,c({type:"scroll",x:window.scrollX,y:window.scrollY})}))},{passive:!0});let ee=()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),i();let o=0,a=setInterval(()=>{o+=1,r||o>lt?clearInterval(a):i()},ct);if(typeof ResizeObserver=="function"){let A=new ResizeObserver(M);A.observe(document.documentElement),document.body&&A.observe(document.body)}typeof MutationObserver=="function"&&new MutationObserver(M).observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,characterData:!0}),M()};document.readyState==="loading"?document.addEventListener("DOMContentLoaded",ee,{once:!0}):ee(),window.addEventListener("load",()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),M()});let te=o=>{switch(o.kind){case"fragment":{if(o.id===""){window.scrollTo(0,0);return}(document.getElementById(o.id)??document.getElementsByName(o.id)[0]??null)?.scrollIntoView();return}case"navigate":c({type:"navigate",href:o.href,hash:o.hash});return;case"external":c({type:"open-external",url:o.url});return;case"blocked":return}};document.addEventListener("click",o=>{let A=(o.target instanceof Element?o.target:null)?.closest("a[href], area[href], [data-dc-goto]")??null;if(!A)return;o.preventDefault();let x=A.getAttribute("data-dc-goto");if(x!==null){te(be(x));return}te(Oe(A.getAttribute("href")??"",e.file))},!0),document.addEventListener("submit",o=>o.preventDefault(),!0),window.addEventListener("wheel",o=>{let a=o.ctrlKey||o.metaKey;if(!a&&t!=="edit")return;o.preventDefault();let A=o.deltaMode===1?st:o.deltaMode===2?window.innerHeight:1;c({type:"wheel",deltaX:o.deltaX*A,deltaY:o.deltaY*A,x:o.clientX,y:o.clientY,ctrl:a})},{passive:!1,capture:!0}),window.addEventListener("keydown",o=>{it(o.target)||Ee.includes(o.key)&&c({type:"key",key:o.key,ctrl:o.ctrlKey,meta:o.metaKey,shift:o.shiftKey})},!0)},Ne=Ie(window.__DC);Ne?at(Ne):q(window,void 0,()=>{});})();\n' : "";
   var newNonce = () => {
     const bytes = new Uint8Array(12);
     globalThis.crypto.getRandomValues(bytes);
@@ -15318,11 +15702,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         const route = wheelRoute({
           pageMode,
           ctrlOrMeta: event.ctrlKey || event.metaKey,
-          mode: ctx.mode,
-          readOnly: ctx.readOnly(),
-          overReadyBoard: board !== null && board.main.state() === "ready",
-          spaceDown,
-          panTool
+          overReadyBoard: board !== null && board.main.state() === "ready"
         });
         event.preventDefault();
         if (route === "zoom") camera.set(wheelZoom(camera.get(), event.deltaY, at), true);
@@ -17010,252 +17390,6 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     return `${clause.charAt(0).toUpperCase()}${clause.slice(1)}.`;
   };
   var resultToast = (name, refused, sent) => `${name} is made, but ${resultClause(refused, sent)}.`;
-
-  // src/shared/token-edit.ts
-  var FORMULA_SENTENCE = "This value is a formula. Ask the agent to change it.";
-  var UNREADABLE_VALUE_SENTENCE = "This value can't be read.";
-  var PLAIN_SHAPE = "Use a plain CSS value of up to 100 characters, without ; { } < > \\ : or *, and without url().";
-  var SECTION_SHAPES = {
-    colours: "Use a colour, like #1a73e8, rgb(26 115 232) or a colour name.",
-    spacing: "Use a length, like 16px or 1rem.",
-    radius: "Use a length, like 8px or 0.5rem.",
-    sizes: "Use a size, like 1200px or 40rem, or a plain number.",
-    shadows: "Use a shadow, like 0 1px 2px rgb(0 0 0 / 0.2), or none.",
-    layers: "Use a whole number, like 10, or auto.",
-    typography: PLAIN_SHAPE,
-    other: PLAIN_SHAPE
-  };
-  var FIELD_SHAPES = {
-    family: 'Use font names separated by commas, like "Inter", sans-serif.',
-    size: "Use a size, like 16px or 1rem, or normal.",
-    weight: "Use a weight from 1 to 1000, or normal or bold.",
-    lineHeight: "Use a number like 1.5, a length, or normal.",
-    letterSpacing: "Use a length, like 0.02em, or normal."
-  };
-  var ALLOWED_FUNCTIONS = /* @__PURE__ */ new Set(["rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix", "var", "calc", "min", "max", "clamp"]);
-  var FORMULA_PATTERN = /(?:^|[^A-Za-z0-9-])(?:var|calc|min|max|clamp|color-mix)\(/i;
-  var passesRuleOne = (text) => {
-    if (text.length < 1 || text.length > SYSTEM_TOKEN_VALUE_MAX || !TOKEN_PREVIEW_VALUE_PATTERN.test(text) || !isBalancedQuotes(text)) return false;
-    let depth = 0;
-    for (const char of text) {
-      if (char === "(") depth += 1;
-      else if (char === ")") {
-        depth -= 1;
-        if (depth < 0) return false;
-      }
-    }
-    if (depth !== 0) return false;
-    for (const match of text.matchAll(/([A-Za-z-][A-Za-z0-9-]*)?\(/g)) {
-      const name = match[1];
-      if (name !== void 0 && !ALLOWED_FUNCTIONS.has(name.toLowerCase())) return false;
-    }
-    return true;
-  };
-  var NUMBER = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?";
-  var NUMBER_PATTERN = new RegExp(`^${NUMBER}$`);
-  var SPACING_UNITS = ["px", "rem", "em", "%", "vw", "vh", "vmin", "vmax", "svh", "dvh", "lvh", "ch", "ex"];
-  var ALL_LENGTH_UNITS = [
-    ...SPACING_UNITS,
-    "cm",
-    "mm",
-    "q",
-    "in",
-    "pt",
-    "pc",
-    "lh",
-    "rlh",
-    "cap",
-    "ic",
-    "rex",
-    "rch",
-    "ric",
-    "rcap",
-    "vi",
-    "vb",
-    "svw",
-    "svi",
-    "svb",
-    "lvw",
-    "lvi",
-    "lvb",
-    "dvw",
-    "dvi",
-    "dvb",
-    "cqw",
-    "cqh",
-    "cqi",
-    "cqb",
-    "cqmin",
-    "cqmax"
-  ];
-  var lengthPattern = (units) => new RegExp(`^(?:[+-]?0|${NUMBER}(?:${units.join("|")}))$`, "i");
-  var SPACING_LENGTH = lengthPattern(SPACING_UNITS);
-  var ANY_LENGTH = lengthPattern(ALL_LENGTH_UNITS);
-  var INTEGER = /^[+-]?\d+$/;
-  var NAMED_COLOURS = new Set(
-    "aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen transparent currentcolor".split(" ")
-  );
-  var HEX_COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-  var COLOUR_FUNCTION = /^(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(([^()]*)\)$/i;
-  var COLOUR_SPACES = /* @__PURE__ */ new Set(["srgb", "srgb-linear", "display-p3", "a98-rgb", "prophoto-rgb", "rec2020", "xyz", "xyz-d50", "xyz-d65"]);
-  var COLOUR_ARGUMENT = new RegExp(`^(?:${NUMBER}(?:%|deg|rad|grad|turn)?|none)$`, "i");
-  var isColour = (text) => {
-    if (HEX_COLOUR.test(text) || NAMED_COLOURS.has(text.toLowerCase())) return true;
-    const match = COLOUR_FUNCTION.exec(text);
-    if (match === null) return false;
-    const name = (match[1] ?? "").toLowerCase();
-    const args = (match[2] ?? "").trim().split(/[\s,/]+/).filter((part) => part !== "");
-    if (name === "color") {
-      const space = args.shift();
-      if (space === void 0 || !COLOUR_SPACES.has(space.toLowerCase())) return false;
-    }
-    return args.length >= 3 && args.length <= 4 && args.every((arg) => COLOUR_ARGUMENT.test(arg));
-  };
-  var splitTop = (text, separator) => {
-    const parts = [];
-    let depth = 0;
-    let quote = null;
-    let current = "";
-    for (const char of text) {
-      if (quote !== null) {
-        if (char === quote) quote = null;
-        current += char;
-      } else if (char === '"' || char === "'") {
-        quote = char;
-        current += char;
-      } else if (char === "(") {
-        depth += 1;
-        current += char;
-      } else if (char === ")") {
-        depth -= 1;
-        current += char;
-      } else if (depth === 0 && separator.test(char)) {
-        if (current.trim() !== "") parts.push(current.trim());
-        current = "";
-      } else current += char;
-    }
-    if (current.trim() !== "") parts.push(current.trim());
-    return parts;
-  };
-  var isShadow = (text, needsPair) => {
-    if (text.toLowerCase() === "none") return !needsPair;
-    const layers = splitTop(text, /,/);
-    if (layers.length === 0) return false;
-    return layers.every((layer) => {
-      let lengths = 0;
-      let colours = 0;
-      let insets = 0;
-      for (const part of splitTop(layer, /\s/)) {
-        if (part.toLowerCase() === "inset") insets += 1;
-        else if (ANY_LENGTH.test(part)) lengths += 1;
-        else if (isColour(part)) colours += 1;
-        else return false;
-      }
-      return lengths >= 2 && lengths <= 4 && colours <= 1 && insets <= 1;
-    });
-  };
-  var isLayer = (text) => {
-    if (text.toLowerCase() === "auto") return true;
-    if (!INTEGER.test(text)) return false;
-    const value = Number(text);
-    return value >= -2147483647 && value <= 2147483647;
-  };
-  var FAMILY_NAME = /^(?:"[^"]+"|'[^']+'|[A-Za-z-][A-Za-z0-9-]*(?: +[A-Za-z-][A-Za-z0-9-]*)*)$/;
-  var fieldValid = (field2, text) => {
-    const lower = text.toLowerCase();
-    switch (field2) {
-      case "family": {
-        const names = text.split(",").map((name) => name.trim());
-        return names.length > 0 && names.every((name) => FAMILY_NAME.test(name));
-      }
-      case "size":
-      case "letterSpacing":
-        return lower === "normal" || ANY_LENGTH.test(text);
-      case "weight": {
-        if (lower === "normal" || lower === "bold" || lower === "lighter" || lower === "bolder") return true;
-        if (!NUMBER_PATTERN.test(text)) return false;
-        const weight = Number(text);
-        return weight >= 1 && weight <= 1e3;
-      }
-      case "lineHeight":
-        return lower === "normal" || NUMBER_PATTERN.test(text) && Number(text) >= 0 || ANY_LENGTH.test(text);
-    }
-  };
-  var sectionValid = (section2, text) => {
-    switch (section2) {
-      case "colours":
-        return isColour(text);
-      case "spacing":
-        return SPACING_LENGTH.test(text);
-      case "radius":
-        return ANY_LENGTH.test(text);
-      case "sizes":
-        return SPACING_LENGTH.test(text) || NUMBER_PATTERN.test(text);
-      case "shadows":
-        return isShadow(text, false);
-      case "layers":
-        return isLayer(text);
-      case "typography":
-      case "other":
-        return true;
-    }
-  };
-  var validateTokenValue = (section2, field2, text) => {
-    const shape = field2 === null ? SECTION_SHAPES[section2] : FIELD_SHAPES[field2];
-    if (!passesRuleOne(text)) return { ok: false, sentence: shape };
-    if (FORMULA_PATTERN.test(text)) return { ok: true, formula: true };
-    const valid = field2 === null ? sectionValid(section2, text) : fieldValid(field2, text);
-    return valid ? { ok: true, formula: false } : { ok: false, sentence: shape };
-  };
-  var classifyToken = (name, value) => {
-    const text = value.trim();
-    const lower = name.toLowerCase();
-    if (isColour(text)) return "colours";
-    if (isShadow(text, true)) return "shadows";
-    if (/radius|rounded/.test(lower)) return "radius";
-    if (/(^--z-|z-?index|layer|stack)/.test(lower) && INTEGER.test(text)) return "layers";
-    if (/space|spacing|gap|gutter|pad|margin|inset/.test(lower) && SPACING_LENGTH.test(text)) return "spacing";
-    if (/font|family|text-|leading|line-height|tracking|letter|weight|^--fs-/.test(lower)) return "typography";
-    if (/size|width|height|breakpoint|^--bp-|screen|container/.test(lower) && ANY_LENGTH.test(text)) return "sizes";
-    return "other";
-  };
-  var DARK_MEDIA = "@media(prefers-color-scheme:dark)";
-  var normaliseAtRule = (prelude) => prelude.toLowerCase().replace(/\s*([():,])\s*/g, "$1").replace(/\s+/g, " ").trim();
-  var normaliseSelector = (selector) => selector.toLowerCase().replace(/\s+/g, " ").replace(/\[\s*([a-z0-9_-]+)\s*=\s*(["']?)([a-z0-9_-]+)\2\s*\]/g, "[$1=$3]").trim();
-  var selectorList = (prelude) => prelude.split(",").map(normaliseSelector);
-  var LIGHT_EXTRACTION = /* @__PURE__ */ new Set([":root", "html", ":host", ".light", "[data-theme=light]"]);
-  var DARK_TOP_EXTRACTION = /* @__PURE__ */ new Set([".dark", ":root.dark", "html.dark", "[data-theme=dark]", ":root[data-theme=dark]", "[data-mode=dark]"]);
-  var partsOf = (ctx) => ctx.kind === "root" ? { atRules: [], selectors: [":root"] } : { atRules: ctx.atRules ?? [], selectors: ctx.selectors ?? [] };
-  var isLightParts = (atRules, selectors, rules) => {
-    const [selector] = selectors;
-    if (atRules.length === 0 && selectors.length === 1 && selector !== void 0) {
-      const list = selectorList(selector);
-      return rules === "system" ? list.length === 1 && list[0] === ":root" : list.every((one) => LIGHT_EXTRACTION.has(one));
-    }
-    const [atRule] = atRules;
-    return rules === "extraction" && atRules.length === 1 && selectors.length === 0 && atRule !== void 0 && normaliseAtRule(atRule) === "@theme";
-  };
-  var isDarkParts = (atRules, selectors, rules) => {
-    const [selector] = selectors;
-    const [atRule] = atRules;
-    if (selectors.length !== 1 || selector === void 0) return false;
-    const list = selectorList(selector);
-    if (atRules.length === 1 && atRule !== void 0 && normaliseAtRule(atRule) === DARK_MEDIA) {
-      return rules === "system" ? list.length === 1 && list[0] === ":root" : list.every((one) => one === ":root" || one === "html");
-    }
-    return rules === "extraction" && atRules.length === 0 && list.every((one) => DARK_TOP_EXTRACTION.has(one));
-  };
-  var isLightContext = (ctx, rules) => {
-    if (ctx.kind === "root") return true;
-    const { atRules, selectors } = partsOf(ctx);
-    return isLightParts(atRules, selectors, rules);
-  };
-  var isDarkContext = (ctx, rules) => {
-    if (ctx.kind === "root") return false;
-    const { atRules, selectors } = partsOf(ctx);
-    return isDarkParts(atRules, selectors, rules);
-  };
-  var TOKEN_UNDO_REMOVED_MAX = TEXT_EDIT_MAX * 8;
 
   // src/ui/model/system-edit-model.ts
   var STALE_TITLE2 = "changed while you were editing";
@@ -19045,36 +19179,6 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   };
   var sectionLabel = (section2) => SECTION_LABEL[section2];
 
-  // src/shared/system-json.ts
-  var AREA_OF_SECTION = Object.freeze({
-    overview: "foundations",
-    colours: "foundations",
-    typography: "foundations",
-    spacing: "foundations",
-    radius: "foundations",
-    shadows: "foundations",
-    layers: "foundations",
-    sizes: "foundations",
-    components: "components",
-    patterns: "patterns",
-    brand: "brand",
-    assets: "brand"
-  });
-  var SYSTEM_AREAS = Object.freeze(["foundations", "components", "patterns", "brand"]);
-  var SYSTEM_SECTIONS = Object.freeze(Object.keys(AREA_OF_SECTION));
-  var RESERVED_SYSTEM_IDS = Object.freeze(["none", "ask"]);
-  var SYSTEM_UNREADABLE_PREFIX = "Design Chamber can't read this design system.";
-  var NOT_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json isn't valid JSON.`;
-  var TOO_LARGE_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json is larger than 1 MB.`;
-  var SYSTEM_TOKEN_RULES = Object.freeze({
-    isLight: (ctx) => isLightContext(ctx, "system"),
-    isDark: (ctx) => isDarkContext(ctx, "system"),
-    classify: classifyToken,
-    validate: validateTokenValue
-  });
-  var resyncStampOf = (stamps) => `${stamps.tokens ?? "none"}:${stamps.systemJson ?? "none"}`;
-  var PROPOSAL_TOO_MANY_FILES = `PROPOSAL.json lists more than ${SYSTEM_PROPOSAL_FILES_MAX} files. Ask the agent to split the change.`;
-
   // src/ui/model/system-page-model.ts
   var AREA_LABEL = Object.freeze({
     foundations: "Foundations",
@@ -20435,8 +20539,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const problem = h("p", { class: "dc-sp-problem", role: "alert", hidden: true });
     const display = () => {
       root.replaceChildren();
+      const pre = options.multiline ? " dc-sp-value-pre" : "";
       if (options.lock !== null) {
-        root.append(h("span", { class: `dc-sp-value dc-sp-value-locked${options.mono ? " dc-mono" : ""}`, title: options.lock === "" ? null : options.lock }, shown ?? "Not set"));
+        root.append(h("span", { class: `dc-sp-value dc-sp-value-locked${pre}${options.mono ? " dc-mono" : ""}`, title: options.lock === "" ? null : options.lock }, shown ?? "Not set"));
         if (options.lock !== "") root.append(h("span", { class: "dc-sp-lock" }, options.lock));
         root.dataset.quiet = options.lock === "" ? "true" : "false";
         return;
@@ -20445,7 +20550,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         "button",
         {
           type: "button",
-          class: `dc-sp-value${options.mono ? " dc-mono" : ""}`,
+          class: `dc-sp-value${pre}${options.mono ? " dc-mono" : ""}`,
           "data-empty": shown === null || shown === "" ? "true" : "false",
           "data-focus-key": options.focusKey,
           "aria-label": `${options.label}: ${shown === null || shown === "" ? "empty" : shown}. Edit`,
@@ -22353,6 +22458,19 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   };
   var mountDesignRow = (design, options) => {
     const { variant, view: view2, actions, onOpen, thumbs } = options;
+    if (variant === "titles") {
+      const menu = iconBtn({ icon: "more", label: `Actions for ${design.title}`, size: "sm", onClick: () => void 0 });
+      const ref2 = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
+      attachMenu(menu, () => listDesignMenu(view2.menu), (id) => runListAction(id, ref2, actions, view2.menu));
+      const main2 = h(
+        "button",
+        { type: "button", class: "dc-row-main dc-row-main-title", "aria-label": rowAriaLabel(design), title: `${design.title}
+${kindSummary(design)}` },
+        h("span", { class: "dc-row-title" }, design.title)
+      );
+      main2.addEventListener("click", () => onOpen(design.slug));
+      return h("li", { class: "dc-row dc-row-titles", "data-pending": design.pending ? "true" : "false", "data-slug": design.slug }, main2, menu);
+    }
     let thumb = thumbs.get(design.slug);
     if (thumb) thumb.update(design);
     else {
@@ -23003,14 +23121,11 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     } });
     const tabsHost = h("div", { class: "dc-tabs" });
     const tabsHandle = mountTabs(tabsHost, { items: LIST_TABS.map(({ id, label }) => ({ id, label })), activeId: tab, trackBackground: true, onChange: (id) => {
-      tab = LIST_TABS.find((entry) => entry.id === id)?.id ?? "all";
-      tabsHandle.update({ activeId: tab });
-      paintGrid();
+      setTab(LIST_TABS.find((entry) => entry.id === id)?.id ?? "all");
     } });
     const systemHost = h("div", { class: "dc-inline-select dc-system-select" });
     const systemSelect = mountSelect(systemHost, { label: "System", value: "all", options: [{ id: "all", label: "All systems" }, { id: "none", label: "No system" }], onChange: (id) => {
-      systemFilter = systemFilterFromId(id);
-      paintGrid();
+      setSystemFilter(systemFilterFromId(id));
     } });
     const sortHost = h("div", { class: "dc-inline-select dc-sort-select" });
     const sortSelect = mountSelect(sortHost, { label: "Sort", value: sort, options: LIST_SORTS.map(({ id, label }) => ({ id, label })), onChange: (id) => {
@@ -23123,6 +23238,13 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     });
     const setSystemFilter = (next) => {
       systemFilter = next;
+      void host.storage.set(systemFilterStorageKey("page"), systemFilterToId(next));
+      paintGrid();
+    };
+    const setTab = (next) => {
+      tab = next;
+      tabsHandle.update({ activeId: next });
+      void host.storage.set(tabStorageKey("page"), next);
       paintGrid();
     };
     const newSystem = (source) => openNewSystemSheet(options.actions.host, { ...source ? { source } : {}, onMade: (result) => options.actions.onOpenSystem?.(result.id) });
@@ -23220,20 +23342,18 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     };
     const clearFilters = () => {
       query = "";
-      tab = "all";
-      systemFilter = ALL_SYSTEMS;
       search.update({ value: "" });
-      tabsHandle.update({ activeId: "all" });
-      paintGrid();
+      void host.storage.set(systemFilterStorageKey("page"), systemFilterToId(ALL_SYSTEMS));
+      systemFilter = ALL_SYSTEMS;
+      setTab("all");
     };
     const filterBySystem = (id) => {
       chosen = ALL_SCOPE;
       query = "";
-      tab = "all";
-      systemFilter = { kind: "system", id };
       search.update({ value: "" });
-      tabsHandle.update({ activeId: "all" });
-      paintGrid();
+      systemFilter = { kind: "system", id };
+      void host.storage.set(systemFilterStorageKey("page"), systemFilterToId(systemFilter));
+      setTab("all");
     };
     const paintNotices = () => {
       for (const child of [...notices.children]) if (child !== looseBanner2.el) child.remove();
@@ -23290,9 +23410,8 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       manualSlugs = new Set(effective.kind === "project" ? foldersState.projects.find((entry) => sameDirectory(entry.directory, effective.directory))?.slugs ?? [] : []);
       const counts4 = scopeCounts(all, folderList, root, manualProjects);
       const systemsState = systemStore.get();
-      const systemList = systemsState.status === "error" ? [] : systemsState.systems ?? [];
-      const systemsFailed = systemsState.status === "error" && systemsState.systems === null;
-      systemFilter = resolveSystemFilter(systemFilter, systemList);
+      const { list: systemList, canResolve, failed: systemsFailed } = systemsForFilter(systemsState);
+      if (canResolve) systemFilter = resolveSystemFilter(systemFilter, systemList);
       swatches = swatchLookup(systemList);
       sidebar.paint({
         scope: effective,
@@ -23307,7 +23426,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       });
       paintSidebarState();
       const label = scopeLabel(effective, groups, folderList);
-      const systemEntries = systemOptions(systemList);
+      const systemEntries = systemSelectOptions(systemList, systemFilter);
       systemSelect.update({ value: systemFilterToId(systemFilter), options: systemEntries });
       nameSelect(systemHost, "System", systemEntries.find((entry) => entry.id === systemFilterToId(systemFilter))?.label ?? "All systems");
       nameSelect(sortHost, "Sort", LIST_SORTS.find((entry) => entry.id === sort)?.label ?? "Updated");
@@ -23340,11 +23459,9 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
             if (id === "search") {
               query = "";
               search.update({ value: "" });
-            } else if (id === "tab") {
-              tab = "all";
-              tabsHandle.update({ activeId: "all" });
-            } else systemFilter = ALL_SYSTEMS;
-            paintGrid();
+              paintGrid();
+            } else if (id === "tab") setTab("all");
+            else setSystemFilter(ALL_SYSTEMS);
           }
         });
         activeList().append(message(wrap));
@@ -23391,6 +23508,17 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     });
     void host.storage.get(viewStorageKey).then((stored) => {
       libraryView = viewFromStored(stored);
+      paintGrid();
+    });
+    void host.storage.get(tabStorageKey("page")).then((stored) => {
+      if (tab === "all") {
+        tab = tabFromStored(stored);
+        tabsHandle.update({ activeId: tab });
+      }
+      paintGrid();
+    });
+    void host.storage.get(systemFilterStorageKey("page")).then((stored) => {
+      if (systemFilter.kind === "all") systemFilter = systemFilterFromId(stored);
       paintGrid();
     });
     void guestHost.client.listProjects().then(
@@ -23604,8 +23732,11 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     const scope = createScope();
     let query = "";
     let tab = "all";
-    let sort = "updated";
+    let sort = DEFAULT_SORT;
     let systemFilter = ALL_SYSTEMS;
+    let railView = DEFAULT_RAIL_VIEW;
+    let filtersOpen = false;
+    let chipShown = false;
     let chosen = ALL_SCOPE;
     let projects = [];
     let view2 = { scope: ALL_SCOPE, groups: [], root: "", manual: [], folder: null };
@@ -23629,7 +23760,21 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       systemsOpener = "icon";
       options.onSystems();
     } });
-    const head = h("header", { class: "dc-rail-head" }, h("h1", { class: "dc-rail-title" }, "Designs"), h("span", { class: "dc-spacer" }), systemsButton, settingsButton, newButton.el);
+    const filtersButton = iconBtn({ icon: "tune", label: "Filters", onClick: () => setFiltersOpen(!filtersOpen) });
+    filtersButton.classList.add("dc-filters-btn");
+    filtersButton.setAttribute("aria-expanded", "false");
+    filtersButton.setAttribute("aria-controls", "dc-rail-filter-area");
+    const filtersDot = h("span", { class: "dc-filters-dot", "aria-hidden": "true", hidden: true });
+    filtersButton.append(filtersDot);
+    const chipLabel2 = h("span", { class: "dc-filter-chip-name" });
+    const chipRemove = h("button", { type: "button", class: "dc-filter-chip-x" }, icon2("close", 12));
+    chipRemove.addEventListener("click", () => {
+      setSystemFilter(ALL_SYSTEMS);
+      filtersButton.focus();
+    });
+    const chip = h("span", { class: "dc-filter-chip" }, icon2("system", 12), chipLabel2, chipRemove);
+    const chipRow = h("div", { class: "dc-rail-chiprow", hidden: true }, chip);
+    const head = h("header", { class: "dc-rail-head" }, h("h1", { class: "dc-rail-title" }, "Designs"), h("span", { class: "dc-spacer" }), filtersButton, systemsButton, settingsButton, newButton.el);
     const searchHost = h("div", { class: "dc-search" });
     const search = mountSearchField(searchHost, { value: "", placeholder: "Search designs", label: "Search designs", onChange: (value) => {
       query = value;
@@ -23638,12 +23783,14 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     } });
     const tabsHost = h("div", { class: "dc-tabs" });
     const tabsHandle = mountTabs(tabsHost, { items: RAIL_TABS.map(({ id, label }) => ({ id, label })), activeId: tab, trackBackground: true, onChange: (id) => {
-      tab = RAIL_TABS.find((entry) => entry.id === id)?.id ?? "all";
-      tabsHandle.update({ activeId: tab });
-      paintList();
+      setTab(railTabFromStored(id));
     } });
     const showHost = h("div", { class: "dc-rail-show-select dc-inline-select" });
     const showSelect = mountSelect(showHost, { label: "Show", value: "all", options: [{ id: "all", label: "All designs" }], onChange: (id) => {
+      if (id.startsWith("system:")) {
+        setSystemFilter(systemFilterFromId(id));
+        return;
+      }
       if (id !== NEW_FOLDER_ID) {
         setScope(scopeFromId(id));
         return;
@@ -23676,19 +23823,29 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     const showRow = h("div", { class: "dc-rail-show" }, showHost, folderMore);
     const systemHost = h("div", { class: "dc-inline-select dc-rail-pair-select dc-system-select" });
     const systemSelect = mountSelect(systemHost, { label: "System", value: "all", options: [{ id: "all", label: "All systems" }, { id: "none", label: "No system" }], onChange: (id) => {
-      systemFilter = systemFilterFromId(id);
-      paintList();
+      setSystemFilter(systemFilterFromId(id));
     } });
     const sortHost = h("div", { class: "dc-inline-select dc-rail-pair-select dc-sort-select" });
     const sortSelect = mountSelect(sortHost, { label: "Sort", value: sort, options: LIST_SORTS.map(({ id, label }) => ({ id, label })), onChange: (id) => {
-      sort = LIST_SORTS.find((entry) => entry.id === id)?.id ?? "updated";
-      sortSelect.update({ value: sort });
-      void host.storage.set(sortStorageKey("panel"), sort);
-      paintList();
+      setSort(LIST_SORTS.find((entry) => entry.id === id)?.id ?? DEFAULT_SORT);
     } });
-    const pairRow = h("div", { class: "dc-rail-pair" }, systemHost, sortHost);
+    const viewButtons = RAIL_VIEWS.map((entry) => {
+      const button2 = h("button", { type: "button", class: "dc-view-toggle-btn", "data-view": entry.id, "aria-pressed": "false", "aria-label": `View as ${entry.label.toLowerCase()}. ${entry.hint}`, title: entry.hint }, entry.label);
+      button2.addEventListener("click", () => setRailView(entry.id));
+      return button2;
+    });
+    const viewToggle = h("div", { class: "dc-view-toggle dc-rail-view-toggle", role: "group", "aria-label": "View" }, ...viewButtons);
+    const resetFilters = btn({ label: "Reset filters", variant: "ghost", size: "xs", onClick: () => resetRailFilters() });
+    const resetRow = h("div", { class: "dc-rail-filter-reset", hidden: true }, resetFilters.el);
+    const filterArea = h(
+      "section",
+      { class: "dc-rail-filter-area", id: "dc-rail-filter-area", "aria-label": "Filters", hidden: true },
+      systemHost,
+      h("div", { class: "dc-rail-pair" }, sortHost, viewToggle),
+      resetRow
+    );
     const foldersNote = h("div", { class: "dc-rail-folders-note", hidden: true }, h("p", { class: "dc-form-error" }, "Folders couldn\u2019t load. Try again."), btn({ label: "Try again", variant: "outline", size: "xs", onClick: () => void folderStore.load() }).el);
-    const filters = h("div", { class: "dc-rail-filters" }, searchHost, showRow, pairRow, foldersNote, tabsHost);
+    const filters = h("div", { class: "dc-rail-filters" }, filterArea, searchHost, showRow, foldersNote, tabsHost);
     const tipHost = h("div", { class: "dc-rail-tip", hidden: true });
     let tipWanted = null;
     let tipHidden = false;
@@ -23740,7 +23897,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       footCount,
       icon2("chevron-right", 16)
     );
-    el2.append(head, tipHost, filters, scroller, foot);
+    el2.append(head, chipRow, tipHost, filters, scroller, foot);
     const switchBack = async (path) => {
       try {
         await store.updateSettings({ root: path });
@@ -23764,22 +23921,77 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       list.append(...skeleton(), h("li", { class: "dc-list-message dc-sr-only", role: "status" }, "Loading your designs"));
     };
     const newSystem = (source) => openNewSystemSheet(options.actions.host, { ...source ? { source } : {}, onMade: (result) => options.actions.onOpenSystem?.(result.id) });
+    const setFiltersOpen = (open) => {
+      filtersOpen = open;
+      filterArea.hidden = !open;
+      filtersButton.setAttribute("aria-expanded", String(open));
+      chipRow.hidden = open || !chipShown;
+    };
+    const setSystemFilter = (next) => {
+      systemFilter = next;
+      void host.storage.set(railSystemStorageKey, systemFilterToId(next));
+      paintList();
+    };
+    const setSort = (next) => {
+      sort = next;
+      void host.storage.set(sortStorageKey("panel"), next);
+      paintList();
+    };
+    const setRailView = (next) => {
+      if (railView === next) return;
+      railView = next;
+      void host.storage.set(railViewStorageKey, next);
+      paintList();
+    };
+    const setTab = (next) => {
+      tab = next;
+      tabsHandle.update({ activeId: next });
+      void host.storage.set(tabStorageKey("panel"), next);
+      paintList();
+    };
+    const resetRailFilters = () => {
+      systemFilter = RAIL_FILTER_DEFAULTS.system;
+      sort = RAIL_FILTER_DEFAULTS.sort;
+      railView = RAIL_FILTER_DEFAULTS.view;
+      void host.storage.set(railSystemStorageKey, systemFilterToId(systemFilter));
+      void host.storage.set(sortStorageKey("panel"), sort);
+      void host.storage.set(railViewStorageKey, railView);
+      paintList();
+      systemHost.querySelector("button")?.focus();
+    };
+    const paintFilterControls = (systemList) => {
+      const state = railFilterState({ system: systemFilter, sort, view: railView, systems: systemList });
+      filtersDot.hidden = !state.filtering;
+      filtersButton.setAttribute("aria-label", state.buttonLabel);
+      filtersButton.title = state.filtering ? state.summary : "Filters";
+      filtersButton.dataset.filtered = state.filtering ? "true" : "false";
+      for (const button2 of viewButtons) button2.setAttribute("aria-pressed", String(button2.dataset.view === railView));
+      resetRow.hidden = state.changed === 0;
+      chipShown = state.chip !== null;
+      chipRow.hidden = filtersOpen || !chipShown;
+      if (state.chip) {
+        chipLabel2.textContent = state.chip.label;
+        chip.title = state.summary;
+        chipRemove.setAttribute("aria-label", state.chip.removeLabel);
+        chipRemove.title = state.chip.removeLabel;
+      }
+    };
     const filterBySystem = (id) => {
       chosen = ALL_SCOPE;
       query = "";
       tab = "all";
-      systemFilter = { kind: "system", id };
+      void host.storage.set(tabStorageKey("panel"), "all");
       search.update({ value: "" });
       tabsHandle.update({ activeId: "all" });
-      paintList();
+      setSystemFilter({ kind: "system", id });
     };
     const clearFilters = () => {
       query = "";
       tab = "all";
-      systemFilter = ALL_SYSTEMS;
+      void host.storage.set(tabStorageKey("panel"), "all");
       search.update({ value: "" });
       tabsHandle.update({ activeId: "all" });
-      paintList();
+      setSystemFilter(ALL_SYSTEMS);
     };
     const paintNotices = () => {
       for (const child of [...notices.children]) if (child !== looseBanner2.el) child.remove();
@@ -23800,9 +24012,10 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       looseBanner2.update(state.designs.data?.loose ?? null);
       syncNotices();
     };
-    const paintShow = (scope2, groups, folderList, counts, foldersState) => {
+    const paintShow = (scope2, groups, folderList, counts, foldersState, systemList) => {
       const entries = scopeOptions(groups, counts, folderList);
-      showSelect.update({ value: scopeToId(scope2), options: [...entries.map(({ id, label, hint }) => ({ id, label, hint })), { id: NEW_FOLDER_ID, label: "New folder\u2026" }] });
+      const systemEntries = showSystemOptions(systemList);
+      showSelect.update({ value: scopeToId(scope2), options: [...entries, ...systemEntries, { id: NEW_FOLDER_ID, label: "New folder\u2026", hint: "" }].map(({ id, label, hint }) => ({ id, label, ...hint ? { hint } : {} })) });
       const current = entries.find((entry) => entry.id === scopeToId(scope2));
       nameSelect(showHost, "Show", current?.label ?? "All designs");
       folderMore.hidden = view2.folder === null;
@@ -23849,16 +24062,18 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       const folder = effective.kind === "folder" ? folderList.find((entry) => entry.id === effective.id) ?? null : null;
       view2 = { scope: effective, groups, root, manual: manualProjects, folder: folder ? { id: folder.id, name: folder.name } : null };
       manualSlugs = new Set(effective.kind === "project" ? foldersState.projects.find((entry) => sameDirectory(entry.directory, effective.directory))?.slugs ?? [] : []);
-      paintShow(effective, groups, folderList, scopeCounts(all, folderList, root, manualProjects), foldersState);
       const systemsState = systemStore.get();
-      const systemList = systemsState.status === "error" ? [] : systemsState.systems ?? [];
-      const systemsFailed = systemsState.status === "error" && systemsState.systems === null;
-      systemFilter = resolveSystemFilter(systemFilter, systemList);
+      const { list: systemList, canResolve, failed: systemsFailed } = systemsForFilter(systemsState);
+      if (canResolve) systemFilter = resolveSystemFilter(systemFilter, systemList);
       swatches = swatchLookup(systemList);
-      const systemEntries = systemOptions(systemList);
+      paintShow(effective, groups, folderList, scopeCounts(all, folderList, root, manualProjects), foldersState, systemList);
+      const systemEntries = systemSelectOptions(systemList, systemFilter);
       systemSelect.update({ value: systemFilterToId(systemFilter), options: systemEntries });
       nameSelect(systemHost, "System", systemEntries.find((entry) => entry.id === systemFilterToId(systemFilter))?.label ?? "All systems");
+      sortSelect.update({ value: sort });
       nameSelect(sortHost, "Sort", LIST_SORTS.find((entry) => entry.id === sort)?.label ?? "Updated");
+      paintFilterControls(systemList);
+      list.dataset.view = railView;
       if (foldersPending) {
         showLoading();
         return;
@@ -23884,20 +24099,21 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
             else clearFilters();
           },
           onClearChip: (id) => {
+            if (id === "system") {
+              setSystemFilter(ALL_SYSTEMS);
+              return;
+            }
             if (id === "search") {
               query = "";
               search.update({ value: "" });
-            } else if (id === "tab") {
-              tab = "all";
-              tabsHandle.update({ activeId: "all" });
-            } else systemFilter = ALL_SYSTEMS;
-            paintList();
+              paintList();
+            } else if (id === "tab") setTab("all");
           }
         });
         list.append(h("li", { class: "dc-list-message" }, wrap));
       } else {
         const rowView2 = { scope: effective, groups, root, manual: manualProjects, menu: { folder: null, project: null } };
-        list.append(...items.flatMap((item) => item.kind === "design" ? [mountDesignRow(item.design, { variant: "rail", view: { ...rowView2, menu: menuFor(item.design) }, actions: options.actions, onOpen: options.onOpen, thumbs, swatchOf: swatches })] : []));
+        list.append(...items.flatMap((item) => item.kind === "design" ? [mountDesignRow(item.design, { variant: railView === "titles" ? "titles" : "rail", view: { ...rowView2, menu: menuFor(item.design) }, actions: options.actions, onOpen: options.onOpen, thumbs, swatchOf: swatches })] : []));
       }
       const live = new Set(all.map((design) => design.slug));
       for (const [slug, handle] of thumbs) {
@@ -23928,6 +24144,21 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     void host.storage.get(sortStorageKey("panel")).then((stored) => {
       sort = sortFromStored(stored);
       sortSelect.update({ value: sort });
+      paintList();
+    });
+    void host.storage.get(railViewStorageKey).then((stored) => {
+      railView = railViewFromStored(stored);
+      paintList();
+    });
+    void host.storage.get(tabStorageKey("panel")).then((stored) => {
+      if (tab === "all") {
+        tab = railTabFromStored(stored);
+        tabsHandle.update({ activeId: tab });
+      }
+      paintList();
+    });
+    void host.storage.get(railSystemStorageKey).then((stored) => {
+      if (systemFilter.kind === "all") systemFilter = systemFilterFromId(stored);
       paintList();
     });
     void guestHost.client.listProjects().then(

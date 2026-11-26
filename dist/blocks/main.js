@@ -2231,8 +2231,11 @@ ${GUEST_UI_LOOK_CSS}`;
   var DIRECTION_LABEL_MAX = 80;
   var DIRECTION_OPTIONS_MIN = 2;
   var DIRECTION_OPTIONS_MAX = 4;
+  var TEXT_EDIT_MAX = 5e3;
   var USER_UNDO_TTL_MS = 30 * 6e4;
+  var TOKEN_PREVIEW_VALUE_PATTERN = /^[A-Za-z0-9 #%.,()+\-'"/]{1,100}$/;
   var SYSTEM_ID_PATTERN = SLUG_PATTERN;
+  var SYSTEM_TOKEN_VALUE_MAX = 100;
   var SYSTEM_BYTES_MAX = 100 * 1024 * 1024;
   var SYSTEM_FONT_MAX_BYTES = 5 * 1024 * 1024;
   var SYSTEM_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -2246,6 +2249,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
   var SCAN_JSON_MAX_BYTES = 2 * 1024 * 1024;
   var SYSTEM_PROPOSAL_ID_PATTERN = /^p_[a-z0-9]{8,16}$/;
+  var SYSTEM_PROPOSAL_FILES_MAX = 200;
   var SYSTEM_ASK_POLL_MS = 5e3;
   var SYSTEM_ASK_CALLS_MAX = 8;
   var SYSTEM_ASK_WHY_MAX = 300;
@@ -2900,6 +2904,372 @@ ${GUEST_UI_LOOK_CSS}`;
     return el2;
   };
 
+  // src/shared/agent/ownership.ts
+  var OWNERSHIP_PLACEHOLDER = "0".repeat(64);
+  var K = new Uint32Array([
+    1116352408,
+    1899447441,
+    3049323471,
+    3921009573,
+    961987163,
+    1508970993,
+    2453635748,
+    2870763221,
+    3624381080,
+    310598401,
+    607225278,
+    1426881987,
+    1925078388,
+    2162078206,
+    2614888103,
+    3248222580,
+    3835390401,
+    4022224774,
+    264347078,
+    604807628,
+    770255983,
+    1249150122,
+    1555081692,
+    1996064986,
+    2554220882,
+    2821834349,
+    2952996808,
+    3210313671,
+    3336571891,
+    3584528711,
+    113926993,
+    338241895,
+    666307205,
+    773529912,
+    1294757372,
+    1396182291,
+    1695183700,
+    1986661051,
+    2177026350,
+    2456956037,
+    2730485921,
+    2820302411,
+    3259730800,
+    3345764771,
+    3516065817,
+    3600352804,
+    4094571909,
+    275423344,
+    430227734,
+    506948616,
+    659060556,
+    883997877,
+    958139571,
+    1322822218,
+    1537002063,
+    1747873779,
+    1955562222,
+    2024104815,
+    2227730452,
+    2361852424,
+    2428436474,
+    2756734187,
+    3204031479,
+    3329325298
+  ]);
+
+  // src/shared/tokens-css.ts
+  var isBalancedQuotes = (value) => {
+    let single = 0;
+    let double = 0;
+    for (const char of value) {
+      if (char === "'") single += 1;
+      else if (char === '"') double += 1;
+    }
+    return single % 2 === 0 && double % 2 === 0;
+  };
+
+  // src/shared/token-edit.ts
+  var PLAIN_SHAPE = "Use a plain CSS value of up to 100 characters, without ; { } < > \\ : or *, and without url().";
+  var SECTION_SHAPES = {
+    colours: "Use a colour, like #1a73e8, rgb(26 115 232) or a colour name.",
+    spacing: "Use a length, like 16px or 1rem.",
+    radius: "Use a length, like 8px or 0.5rem.",
+    sizes: "Use a size, like 1200px or 40rem, or a plain number.",
+    shadows: "Use a shadow, like 0 1px 2px rgb(0 0 0 / 0.2), or none.",
+    layers: "Use a whole number, like 10, or auto.",
+    typography: PLAIN_SHAPE,
+    other: PLAIN_SHAPE
+  };
+  var FIELD_SHAPES = {
+    family: 'Use font names separated by commas, like "Inter", sans-serif.',
+    size: "Use a size, like 16px or 1rem, or normal.",
+    weight: "Use a weight from 1 to 1000, or normal or bold.",
+    lineHeight: "Use a number like 1.5, a length, or normal.",
+    letterSpacing: "Use a length, like 0.02em, or normal."
+  };
+  var ALLOWED_FUNCTIONS = /* @__PURE__ */ new Set(["rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix", "var", "calc", "min", "max", "clamp"]);
+  var FORMULA_PATTERN = /(?:^|[^A-Za-z0-9-])(?:var|calc|min|max|clamp|color-mix)\(/i;
+  var passesRuleOne = (text) => {
+    if (text.length < 1 || text.length > SYSTEM_TOKEN_VALUE_MAX || !TOKEN_PREVIEW_VALUE_PATTERN.test(text) || !isBalancedQuotes(text)) return false;
+    let depth = 0;
+    for (const char of text) {
+      if (char === "(") depth += 1;
+      else if (char === ")") {
+        depth -= 1;
+        if (depth < 0) return false;
+      }
+    }
+    if (depth !== 0) return false;
+    for (const match of text.matchAll(/([A-Za-z-][A-Za-z0-9-]*)?\(/g)) {
+      const name = match[1];
+      if (name !== void 0 && !ALLOWED_FUNCTIONS.has(name.toLowerCase())) return false;
+    }
+    return true;
+  };
+  var NUMBER = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?";
+  var NUMBER_PATTERN = new RegExp(`^${NUMBER}$`);
+  var SPACING_UNITS = ["px", "rem", "em", "%", "vw", "vh", "vmin", "vmax", "svh", "dvh", "lvh", "ch", "ex"];
+  var ALL_LENGTH_UNITS = [
+    ...SPACING_UNITS,
+    "cm",
+    "mm",
+    "q",
+    "in",
+    "pt",
+    "pc",
+    "lh",
+    "rlh",
+    "cap",
+    "ic",
+    "rex",
+    "rch",
+    "ric",
+    "rcap",
+    "vi",
+    "vb",
+    "svw",
+    "svi",
+    "svb",
+    "lvw",
+    "lvi",
+    "lvb",
+    "dvw",
+    "dvi",
+    "dvb",
+    "cqw",
+    "cqh",
+    "cqi",
+    "cqb",
+    "cqmin",
+    "cqmax"
+  ];
+  var lengthPattern = (units) => new RegExp(`^(?:[+-]?0|${NUMBER}(?:${units.join("|")}))$`, "i");
+  var SPACING_LENGTH = lengthPattern(SPACING_UNITS);
+  var ANY_LENGTH = lengthPattern(ALL_LENGTH_UNITS);
+  var INTEGER = /^[+-]?\d+$/;
+  var NAMED_COLOURS = new Set(
+    "aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen transparent currentcolor".split(" ")
+  );
+  var HEX_COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+  var COLOUR_FUNCTION = /^(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(([^()]*)\)$/i;
+  var COLOUR_SPACES = /* @__PURE__ */ new Set(["srgb", "srgb-linear", "display-p3", "a98-rgb", "prophoto-rgb", "rec2020", "xyz", "xyz-d50", "xyz-d65"]);
+  var COLOUR_ARGUMENT = new RegExp(`^(?:${NUMBER}(?:%|deg|rad|grad|turn)?|none)$`, "i");
+  var isColour = (text) => {
+    if (HEX_COLOUR.test(text) || NAMED_COLOURS.has(text.toLowerCase())) return true;
+    const match = COLOUR_FUNCTION.exec(text);
+    if (match === null) return false;
+    const name = (match[1] ?? "").toLowerCase();
+    const args = (match[2] ?? "").trim().split(/[\s,/]+/).filter((part) => part !== "");
+    if (name === "color") {
+      const space = args.shift();
+      if (space === void 0 || !COLOUR_SPACES.has(space.toLowerCase())) return false;
+    }
+    return args.length >= 3 && args.length <= 4 && args.every((arg) => COLOUR_ARGUMENT.test(arg));
+  };
+  var splitTop = (text, separator) => {
+    const parts = [];
+    let depth = 0;
+    let quote = null;
+    let current = "";
+    for (const char of text) {
+      if (quote !== null) {
+        if (char === quote) quote = null;
+        current += char;
+      } else if (char === '"' || char === "'") {
+        quote = char;
+        current += char;
+      } else if (char === "(") {
+        depth += 1;
+        current += char;
+      } else if (char === ")") {
+        depth -= 1;
+        current += char;
+      } else if (depth === 0 && separator.test(char)) {
+        if (current.trim() !== "") parts.push(current.trim());
+        current = "";
+      } else current += char;
+    }
+    if (current.trim() !== "") parts.push(current.trim());
+    return parts;
+  };
+  var isShadow = (text, needsPair) => {
+    if (text.toLowerCase() === "none") return !needsPair;
+    const layers = splitTop(text, /,/);
+    if (layers.length === 0) return false;
+    return layers.every((layer) => {
+      let lengths = 0;
+      let colours = 0;
+      let insets = 0;
+      for (const part of splitTop(layer, /\s/)) {
+        if (part.toLowerCase() === "inset") insets += 1;
+        else if (ANY_LENGTH.test(part)) lengths += 1;
+        else if (isColour(part)) colours += 1;
+        else return false;
+      }
+      return lengths >= 2 && lengths <= 4 && colours <= 1 && insets <= 1;
+    });
+  };
+  var isLayer = (text) => {
+    if (text.toLowerCase() === "auto") return true;
+    if (!INTEGER.test(text)) return false;
+    const value = Number(text);
+    return value >= -2147483647 && value <= 2147483647;
+  };
+  var FAMILY_NAME = /^(?:"[^"]+"|'[^']+'|[A-Za-z-][A-Za-z0-9-]*(?: +[A-Za-z-][A-Za-z0-9-]*)*)$/;
+  var fieldValid = (field2, text) => {
+    const lower = text.toLowerCase();
+    switch (field2) {
+      case "family": {
+        const names = text.split(",").map((name) => name.trim());
+        return names.length > 0 && names.every((name) => FAMILY_NAME.test(name));
+      }
+      case "size":
+      case "letterSpacing":
+        return lower === "normal" || ANY_LENGTH.test(text);
+      case "weight": {
+        if (lower === "normal" || lower === "bold" || lower === "lighter" || lower === "bolder") return true;
+        if (!NUMBER_PATTERN.test(text)) return false;
+        const weight = Number(text);
+        return weight >= 1 && weight <= 1e3;
+      }
+      case "lineHeight":
+        return lower === "normal" || NUMBER_PATTERN.test(text) && Number(text) >= 0 || ANY_LENGTH.test(text);
+    }
+  };
+  var sectionValid = (section, text) => {
+    switch (section) {
+      case "colours":
+        return isColour(text);
+      case "spacing":
+        return SPACING_LENGTH.test(text);
+      case "radius":
+        return ANY_LENGTH.test(text);
+      case "sizes":
+        return SPACING_LENGTH.test(text) || NUMBER_PATTERN.test(text);
+      case "shadows":
+        return isShadow(text, false);
+      case "layers":
+        return isLayer(text);
+      case "typography":
+      case "other":
+        return true;
+    }
+  };
+  var validateTokenValue = (section, field2, text) => {
+    const shape = field2 === null ? SECTION_SHAPES[section] : FIELD_SHAPES[field2];
+    if (!passesRuleOne(text)) return { ok: false, sentence: shape };
+    if (FORMULA_PATTERN.test(text)) return { ok: true, formula: true };
+    const valid = field2 === null ? sectionValid(section, text) : fieldValid(field2, text);
+    return valid ? { ok: true, formula: false } : { ok: false, sentence: shape };
+  };
+  var classifyToken = (name, value) => {
+    const text = value.trim();
+    const lower = name.toLowerCase();
+    if (isColour(text)) return "colours";
+    if (isShadow(text, true)) return "shadows";
+    if (/radius|rounded/.test(lower)) return "radius";
+    if (/(^--z-|z-?index|layer|stack)/.test(lower) && INTEGER.test(text)) return "layers";
+    if (/space|spacing|gap|gutter|pad|margin|inset/.test(lower) && SPACING_LENGTH.test(text)) return "spacing";
+    if (/font|family|text-|leading|line-height|tracking|letter|weight|^--fs-/.test(lower)) return "typography";
+    if (/size|width|height|breakpoint|^--bp-|screen|container/.test(lower) && ANY_LENGTH.test(text)) return "sizes";
+    return "other";
+  };
+  var DARK_MEDIA = "@media(prefers-color-scheme:dark)";
+  var normaliseAtRule = (prelude) => prelude.toLowerCase().replace(/\s*([():,])\s*/g, "$1").replace(/\s+/g, " ").trim();
+  var normaliseSelector = (selector) => selector.toLowerCase().replace(/\s+/g, " ").replace(/\[\s*([a-z0-9_-]+)\s*=\s*(["']?)([a-z0-9_-]+)\2\s*\]/g, "[$1=$3]").trim();
+  var selectorList = (prelude) => prelude.split(",").map(normaliseSelector);
+  var LIGHT_EXTRACTION = /* @__PURE__ */ new Set([":root", "html", ":host", ".light", "[data-theme=light]"]);
+  var DARK_TOP_EXTRACTION = /* @__PURE__ */ new Set([".dark", ":root.dark", "html.dark", "[data-theme=dark]", ":root[data-theme=dark]", "[data-mode=dark]"]);
+  var partsOf = (ctx2) => ctx2.kind === "root" ? { atRules: [], selectors: [":root"] } : { atRules: ctx2.atRules ?? [], selectors: ctx2.selectors ?? [] };
+  var isLightParts = (atRules, selectors, rules) => {
+    const [selector] = selectors;
+    if (atRules.length === 0 && selectors.length === 1 && selector !== void 0) {
+      const list = selectorList(selector);
+      return rules === "system" ? list.length === 1 && list[0] === ":root" : list.every((one) => LIGHT_EXTRACTION.has(one));
+    }
+    const [atRule] = atRules;
+    return rules === "extraction" && atRules.length === 1 && selectors.length === 0 && atRule !== void 0 && normaliseAtRule(atRule) === "@theme";
+  };
+  var isDarkParts = (atRules, selectors, rules) => {
+    const [selector] = selectors;
+    const [atRule] = atRules;
+    if (selectors.length !== 1 || selector === void 0) return false;
+    const list = selectorList(selector);
+    if (atRules.length === 1 && atRule !== void 0 && normaliseAtRule(atRule) === DARK_MEDIA) {
+      return rules === "system" ? list.length === 1 && list[0] === ":root" : list.every((one) => one === ":root" || one === "html");
+    }
+    return rules === "extraction" && atRules.length === 0 && list.every((one) => DARK_TOP_EXTRACTION.has(one));
+  };
+  var isLightContext = (ctx2, rules) => {
+    if (ctx2.kind === "root") return true;
+    const { atRules, selectors } = partsOf(ctx2);
+    return isLightParts(atRules, selectors, rules);
+  };
+  var isDarkContext = (ctx2, rules) => {
+    if (ctx2.kind === "root") return false;
+    const { atRules, selectors } = partsOf(ctx2);
+    return isDarkParts(atRules, selectors, rules);
+  };
+  var TOKEN_UNDO_REMOVED_MAX = TEXT_EDIT_MAX * 8;
+
+  // src/shared/system-json.ts
+  var AREA_OF_SECTION = Object.freeze({
+    overview: "foundations",
+    colours: "foundations",
+    typography: "foundations",
+    spacing: "foundations",
+    radius: "foundations",
+    shadows: "foundations",
+    layers: "foundations",
+    sizes: "foundations",
+    components: "components",
+    patterns: "patterns",
+    brand: "brand",
+    assets: "brand"
+  });
+  var SYSTEM_AREAS = Object.freeze(["foundations", "components", "patterns", "brand"]);
+  var SYSTEM_SECTIONS = Object.freeze(Object.keys(AREA_OF_SECTION));
+  var RESERVED_SYSTEM_IDS = Object.freeze(["none", "ask"]);
+  var SYSTEM_UNREADABLE_PREFIX = "Design Chamber can't read this design system.";
+  var NOT_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json isn't valid JSON.`;
+  var TOO_LARGE_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json is larger than 1 MB.`;
+  var BOARD_LAYOUTS = Object.freeze(["card", "compact", "full", "table"]);
+  var LAYOUTS_OF_SECTION = Object.freeze({
+    components: BOARD_LAYOUTS,
+    overview: BOARD_LAYOUTS,
+    patterns: BOARD_LAYOUTS,
+    brand: BOARD_LAYOUTS,
+    colours: Object.freeze(["card", "compact", "table"]),
+    spacing: Object.freeze(["card", "compact", "table"]),
+    radius: Object.freeze(["card", "compact", "table"]),
+    shadows: Object.freeze(["card", "compact", "table"]),
+    sizes: Object.freeze(["card", "compact", "table"])
+  });
+  var SECTION_LAYOUT_ALIASES = Object.freeze({ notes: "overview" });
+  var SYSTEM_TOKEN_RULES = Object.freeze({
+    isLight: (ctx2) => isLightContext(ctx2, "system"),
+    isDark: (ctx2) => isDarkContext(ctx2, "system"),
+    classify: classifyToken,
+    validate: validateTokenValue
+  });
+  var PROPOSAL_TOO_MANY_FILES = `PROPOSAL.json lists more than ${SYSTEM_PROPOSAL_FILES_MAX} files. Ask the agent to split the change.`;
+
   // src/shared/checks.ts
   var num = (value, digits = 0) => value === void 0 ? "?" : digits === 0 ? String(Math.round(value)) : value.toFixed(digits);
   var fileOf = (f) => f.file ?? "This design";
@@ -3158,6 +3528,58 @@ ${GUEST_UI_LOOK_CSS}`;
         const reason = f.params?.proposal;
         if (reason === void 0 || reason === "unreadable" && f.detail !== void 0) return "PROPOSAL.json can't be used. Ask the agent to fix it.";
         return `PROPOSAL.json can't be used: ${PROPOSAL_PROBLEM_SENTENCES[reason]}`;
+      }
+    },
+    // Board layout hints and the visual system check (documentation/specs/system-board-layout-and-visual-check.md §B.6).
+    "system-layout-invalid": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.round(f.params?.count ?? 0);
+        const misplaced = Math.min(count, Math.round(f.params?.misplaced ?? 0));
+        const tail = "so those entries use the default. Each one listed says what its place takes.";
+        if (misplaced === 0) return `system.json asks for ${num(count)} board layouts Design Chamber doesn't know, ${tail}`;
+        if (misplaced === count) return `system.json asks for ${num(count)} board layouts in places that don't take them, ${tail}`;
+        return `system.json asks for ${num(count)} board layouts it can't use (${num(count - misplaced)} Design Chamber doesn't know, ${num(misplaced)} in places that don't take them), ${tail}`;
+      }
+    },
+    "system-board-overflow": {
+      severity: "warning",
+      sentence: (f, where) => `${where}: the board is ${num(f.params?.px)}px wide, wider than the ${num(f.params?.width)}px it has, so it scrolls sideways.`
+    },
+    "system-board-preview-wide": {
+      severity: "warning",
+      sentence: (f, where) => `${where}: this example is ${num(f.params?.px)}px wide but the board can give it ${num(f.params?.width)}px, so it scrolls sideways in its card.`
+    },
+    "system-board-preview-outside": {
+      severity: "warning",
+      sentence: (f, where) => `${where}: part of this example sits ${num(f.params?.px)}px outside its card, so it's cut off or covers other entries.`
+    },
+    "system-board-text-outside": {
+      severity: "warning",
+      sentence: (f, where) => `${where}: text runs ${num(f.params?.px)}px outside its card.`
+    },
+    "system-board-hint-small": {
+      severity: "info",
+      sentence: (f, where) => `${where}: this entry is set to ${f.params?.layout ?? "card"} but needed the full width. Set its layout to full.`
+    },
+    "system-board-partial": {
+      severity: "info",
+      sentence: (f) => {
+        const count = Math.round(f.params?.count ?? 0);
+        const areas = count === 1 ? "1 area" : `${num(count)} areas`;
+        const its = count === 1 ? "its" : "their";
+        switch (f.params?.pictured) {
+          case "entries":
+            return `Only the first ${num(f.params?.max)} entries were measured.`;
+          case "gap":
+            return `${count === 1 ? "Part of 1 area is" : `Parts of ${areas} are`} in no picture (the picture limit for one check); the parts are listed. All of the board was measured, so the findings cover them.`;
+          case "no-overview":
+            return `${areas} ${count === 1 ? "has" : "have"} no overview picture (it couldn't be made); ${its} full-size pictures show all of ${count === 1 ? "it" : "them"}.`;
+          case "overview":
+            return `The overview of ${areas} stops early; ${its} full-size pictures show the rest, and all of the board was measured.`;
+          default:
+            return `${areas} ${count === 1 ? "has" : "have"} full-size pictures for only part of ${its} length (the picture limit for one check); ${its} overview shows the rest, and all of the board was measured.`;
+        }
       }
     }
   };

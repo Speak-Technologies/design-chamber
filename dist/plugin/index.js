@@ -68,6 +68,7 @@ var LAUNCHER_SENTENCE = "The design_check tool can't run in this setup. Run the 
 var CLI_MISSING_SENTENCE = "Design Chamber's check program is missing from its extension folder. Reinstall Design Chamber, then try again.";
 var STOPPED_SENTENCE = "The check was stopped before it finished, so no report was saved.";
 var TIMEOUT_SENTENCE = 'The check took longer than 3 minutes and was stopped. Try one screen with screens: ["<id>"].';
+var SYSTEM_TIMEOUT_SENTENCE = "The check took longer than 3 minutes and was stopped. Run it again with static: true to check the files only.";
 var COULD_NOT_RUN = "The check could not run: ";
 var RECORD_TEXT_MAX_BYTES = 16 * 1024;
 var TOOL_DESCRIPTION = "Check a design in the Designs folder before you say it is done: renders every screen at its sizes offline, saves PNGs to look at, and lists what to fix.";
@@ -77,12 +78,18 @@ var TOOL_INPUT = {
   // One of design or system (Phase 2.5 §10.2); parseToolInput enforces it.
   properties: {
     design: { type: "string", description: "The design folder name, such as pricing-page" },
-    system: { type: "string", description: "Instead of design: a design system id, such as acme (files only)" },
+    system: { type: "string", description: "Instead of design: a design system id, such as acme. Draws its board at two widths and saves PNGs to look at" },
     screens: { type: "array", items: { type: "string" }, description: "Canvas only: check just these screen ids" },
-    static: { type: "boolean", description: "Check the files only, without a browser" }
+    static: { type: "boolean", description: "Check the files only, without a browser (designs and systems)" }
   }
 };
 var answer = (content, exit) => ({ content, metadata: { designChamber: { exit } } });
+var staticValue = (value) => {
+  if (value === void 0 || value === null) return false;
+  if (typeof value === "boolean") return value;
+  if (value === "true" || value === "false") return value === "true";
+  return null;
+};
 var screenList = (value) => {
   if (value === void 0 || value === null) return [];
   if (Array.isArray(value)) return value;
@@ -106,7 +113,9 @@ var parseToolInput = (input) => {
     if (typeof value.system !== "string" || !SYSTEM_ID_PATTERN.test(value.system) || value.system === "none" || value.system === "ask") return { ok: false, message: NOT_A_SYSTEM_SENTENCE };
     const screens2 = screenList(value.screens);
     if (screens2 === null || screens2.length > 0) return { ok: false, message: SYSTEM_SCREENS_SENTENCE };
-    return { ok: true, system: value.system };
+    const systemStatic = staticValue(value.static);
+    if (systemStatic === null) return { ok: false, message: NOT_STATIC_SENTENCE };
+    return { ok: true, system: value.system, static: systemStatic };
   }
   if (typeof value.design !== "string" || !SLUG_PATTERN.test(value.design)) return { ok: false, message: NOT_A_DESIGN_SENTENCE };
   const list = screenList(value.screens);
@@ -115,11 +124,8 @@ var parseToolInput = (input) => {
   }
   const screens = [...new Set(list)];
   if (screens.length > CHECK_TOOL_SCREENS_MAX) return { ok: false, message: TOO_MANY_SCREENS_SENTENCE };
-  let staticOnly;
-  if (value.static === void 0 || value.static === null) staticOnly = false;
-  else if (typeof value.static === "boolean") staticOnly = value.static;
-  else if (value.static === "true" || value.static === "false") staticOnly = value.static === "true";
-  else return { ok: false, message: NOT_STATIC_SENTENCE };
+  const staticOnly = staticValue(value.static);
+  if (staticOnly === null) return { ok: false, message: NOT_STATIC_SENTENCE };
   return { ok: true, design: value.design, screens, static: staticOnly };
 };
 var installRootOf = (opencodeExecPath, p, platform) => {
@@ -153,7 +159,7 @@ var validateRuntime = (check, p, platform) => {
   return { ok: true, execPath: realExecPath };
 };
 var runtimeRecordFile = (env, platform, homeDir, p) => p.join(designChamberDataDir({ platform, homeDir, appData: env.APPDATA, xdgConfigHome: void 0, join: p.join }), RUNTIME_FILE);
-var buildChildArgs = (cliPath, input) => "system" in input ? [cliPath, "check", "--system", input.system] : [cliPath, "check", input.design, ...input.screens.flatMap((screen) => ["--screen", screen]), ...input.static ? ["--static"] : []];
+var buildChildArgs = (cliPath, input) => "system" in input ? [cliPath, "check", "--system", input.system, ...input.static ? ["--static"] : []] : [cliPath, "check", input.design, ...input.screens.flatMap((screen) => ["--screen", screen]), ...input.static ? ["--static"] : []];
 var CHILD_ENV_KEYS = [
   "PATH",
   "HOME",
@@ -259,8 +265,8 @@ var runChild = (deps, execPath, args, env, signal) => new Promise((resolve) => {
     finish(timedOut ? { kind: "timeout" } : { kind: "exit", code, stdout: stdout.text(), stderr: stderr.text(), stdoutCut: stdout.cut });
   });
 });
-var toolResult = (outcome) => {
-  if (outcome.kind === "timeout") return answer(TIMEOUT_SENTENCE, 2);
+var toolResult = (outcome, system = false) => {
+  if (outcome.kind === "timeout") return answer(system ? SYSTEM_TIMEOUT_SENTENCE : TIMEOUT_SENTENCE, 2);
   if (outcome.kind === "spawn-error") return answer(`Design Chamber could not start its check (${outcome.code}).`, 2);
   if (outcome.code === 0 || outcome.code === 1) {
     const note = outcome.stdoutCut ? `
@@ -309,7 +315,7 @@ var runDesignCheck = async (input, signal, deps) => {
     if (!await deps.isFile(deps.cliPath)) return answer(CLI_MISSING_SENTENCE, 2);
     if (signal?.aborted) return answer(STOPPED_SENTENCE, 2);
     const outcome = await runChild(deps, runtime.execPath, buildChildArgs(deps.cliPath, parsed), childEnv(deps.env, deps.platform), signal);
-    return toolResult(outcome);
+    return toolResult(outcome, "system" in parsed);
   } catch (error) {
     return answer(`Design Chamber could not start its check (${errorCode(error)}).`, 2);
   }
