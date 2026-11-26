@@ -212,7 +212,8 @@ test('no browser: the board is not drawn, the note says so, and the exit follows
   assert.deepEqual(report.render.findings.map((finding) => finding.code), ['browser-missing']);
 });
 
-test('an interrupt writes no report and leaves no run folder', async (t) => {
+// Windows cannot deliver SIGINT to a child process from a test (Ctrl-C is a console event there; kill() just terminates).
+test('an interrupt writes no report and leaves no run folder', { skip: process.platform === 'win32' ? 'SIGINT cannot be sent to a child process on Windows' : false }, async (t) => {
   const browser = findTestBrowser();
   if (browser === null) {
     t.skip('Chrome/Edge/Chromium not found — install one or set DC_TEST_CHROME to run this test.');
