@@ -427,6 +427,36 @@ export const DEFAULT_SORT: ListSort = 'updated';
 /** Stored value read back; anything unknown or malformed is the default list. */
 export const railViewFromStored = (raw: unknown): RailView => (raw === 'titles' ? 'titles' : DEFAULT_RAIL_VIEW);
 
+/** What the rail calls a system filter whose system it cannot name (the systems list has not loaded, or failed). */
+export const UNKNOWN_SYSTEM_LABEL = 'One system';
+
+/** The System select's entries, plus one for a filter whose system is not in the list (not loaded, or failed), so the select, its name and the Filters button agree (KI-30). */
+export const systemSelectOptions = (systems: readonly SystemSummary[], filter: SystemFilter): SystemOption[] => {
+  const options = systemOptions(systems);
+  if (filter.kind !== 'system' || options.some((entry) => entry.id === systemFilterToId(filter))) return options;
+  return [...options.slice(0, -1), { id: systemFilterToId(filter), label: UNKNOWN_SYSTEM_LABEL }, ...options.slice(-1)];
+};
+
+/** The prefix of a system entry in the Show select: "System · Tidepool", as folders read "Folder · Launch". */
+export const SHOW_SYSTEM_LABEL = 'System · ';
+
+/**
+ * The rail's "Design systems" group in the Show select: one entry per system, A to Z, with Draft or its
+ * used-by count (the same entries and ids as the System select). Empty while the systems are not known, so
+ * the group is simply left out.
+ */
+export const showSystemOptions = (systems: readonly SystemSummary[]): ScopeOption[] =>
+  systemOptions(systems)
+    .filter((entry) => entry.id.startsWith('system:'))
+    .map((entry) => ({ id: entry.id, label: `${SHOW_SYSTEM_LABEL}${entry.label}`, hint: entry.hint ?? '' }));
+
+/** The system filter in words for the chip: the system's name, "No system", or "One system" when it cannot be named. Null when not filtering. */
+export const systemFilterLabel = (filter: SystemFilter, systems: readonly Pick<SystemSummary, 'id' | 'name'>[]): string | null => {
+  if (filter.kind === 'all') return null;
+  if (filter.kind === 'none') return 'No system';
+  return systems.find((system) => system.id === filter.id)?.name ?? UNKNOWN_SYSTEM_LABEL;
+};
+
 export type RailFilterState = {
   /** The list is narrowed by a system filter. Sort and view change the look and the order, never what is listed. */
   filtering: boolean;
@@ -436,6 +466,8 @@ export type RailFilterState = {
   buttonLabel: string;
   /** The words next to the dot, for a screen reader and the tooltip; empty when nothing is filtered. */
   summary: string;
+  /** The removable chip under the header while the Filters area is closed; null when nothing is filtered. */
+  chip: { label: string; removeLabel: string } | null;
 };
 
 /** What the Filters button shows while its area is closed: a dot when the list is narrowed, and a name that says so. */
@@ -445,7 +477,14 @@ export const railFilterState = (input: { system: SystemFilter; sort: ListSort; v
   const changed = (filtering ? 1 : 0) + (input.sort !== DEFAULT_SORT ? 1 : 0) + (input.view !== DEFAULT_RAIL_VIEW ? 1 : 0);
   const named = filter.kind === 'system' ? input.systems.find((system) => system.id === filter.id)?.name : undefined;
   const summary = filter.kind === 'all' ? '' : filter.kind === 'none' ? 'Showing designs with no system' : named ? `Showing designs that use ${named}` : 'Showing designs that use one system';
-  return { filtering, changed, buttonLabel: filtering ? `Filters, on. ${summary}` : 'Filters', summary };
+  const label = systemFilterLabel(filter, input.systems);
+  return {
+    filtering,
+    changed,
+    buttonLabel: filtering ? `Filters, on. ${summary}` : 'Filters',
+    summary,
+    chip: label === null ? null : { label, removeLabel: filter.kind === 'none' ? 'Remove the no system filter' : label === UNKNOWN_SYSTEM_LABEL ? 'Remove the system filter' : `Remove the ${label} system filter` },
+  };
 };
 
 /** Back to the rail's defaults for the three controls in the area (System all, Updated, List). */

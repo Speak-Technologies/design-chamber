@@ -11,7 +11,7 @@
 
 import { mountBanner, mountSearchField, mountSelect, mountTabs } from '@openchamber/sdk/ui';
 
-import type { DesignSummary } from '../../shared/types.ts';
+import type { DesignSummary, SystemSummary } from '../../shared/types.ts';
 import { sameDirectory } from '../../shared/path-compare.ts';
 import { type ActionContext } from '../components/actions.ts';
 import { mountDesignRow, type DesignRowView } from '../components/design-row.ts';
@@ -51,11 +51,12 @@ import {
   scopeOptions,
   scopeStorageKey,
   scopeToId,
+  showSystemOptions,
+  systemSelectOptions,
   sortFromStored,
   sortStorageKey,
   systemFilterFromId,
   systemFilterToId,
-  systemOptions,
   systemsEntryLabel,
   type ListScope,
   type ListSort,
@@ -107,6 +108,8 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   /** Titles (one line) or List (thumbnails), remembered with the sort and the System filter (`host.storage`). */
   let railView: RailView = DEFAULT_RAIL_VIEW;
   let filtersOpen = false;
+  /** A system filter is on, so the chip under the header has something to say (shown only while Filters is closed). */
+  let chipShown = false;
   /** The remembered view; the one shown is `resolveScope` of it (a project or folder that is gone reads as All designs). */
   let chosen: ListScope = ALL_SCOPE;
   let projects: ProjectInfo[] = [];
@@ -143,6 +146,15 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   filtersButton.setAttribute('aria-controls', 'dc-rail-filter-area');
   const filtersDot = h('span', { class: 'dc-filters-dot', 'aria-hidden': 'true', hidden: true });
   filtersButton.append(filtersDot);
+  // The chip under the header: while Filters is closed and a system filter is on, it names the system and clears the filter.
+  const chipLabel = h('span', { class: 'dc-filter-chip-name' });
+  const chipRemove = h('button', { type: 'button', class: 'dc-filter-chip-x' }, icon('close', 12));
+  chipRemove.addEventListener('click', () => {
+    setSystemFilter(ALL_SYSTEMS);
+    filtersButton.focus();
+  });
+  const chip = h('span', { class: 'dc-filter-chip' }, icon('system', 12), chipLabel, chipRemove);
+  const chipRow = h('div', { class: 'dc-rail-chiprow', hidden: true }, chip);
   const head = h('header', { class: 'dc-rail-head' }, h('h1', { class: 'dc-rail-title' }, 'Designs'), h('span', { class: 'dc-spacer' }), filtersButton, systemsButton, settingsButton, newButton.el);
 
   // filters
@@ -161,6 +173,11 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   // Show: the same groups as the page's sidebar (all, each project, No project, each folder) in one select.
   const showHost = h('div', { class: 'dc-rail-show-select dc-inline-select' });
   const showSelect = mountSelect(showHost, { label: 'Show', value: 'all', options: [{ id: 'all', label: 'All designs' }], onChange: (id) => {
+    // A system entry is the page sidebar's system row in one select: it sets the System filter and leaves the scope as it is.
+    if (id.startsWith('system:')) {
+      setSystemFilter(systemFilterFromId(id));
+      return;
+    }
     if (id !== NEW_FOLDER_ID) {
       setScope(scopeFromId(id));
       return;
@@ -279,7 +296,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     footCount,
     icon('chevron-right', 16),
   );
-  el.append(head, tipHost, filters, scroller, foot);
+  el.append(head, chipRow, tipHost, filters, scroller, foot);
 
   const switchBack = async (path: string): Promise<void> => {
     try {
@@ -315,6 +332,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     filtersOpen = open;
     filterArea.hidden = !open;
     filtersButton.setAttribute('aria-expanded', String(open));
+    chipRow.hidden = open || !chipShown;
   };
 
   const setSystemFilter = (next: SystemFilter): void => {
@@ -352,6 +370,14 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     filtersButton.dataset.filtered = state.filtering ? 'true' : 'false';
     for (const button of viewButtons) button.setAttribute('aria-pressed', String(button.dataset.view === railView));
     resetRow.hidden = state.changed === 0;
+    chipShown = state.chip !== null;
+    chipRow.hidden = filtersOpen || !chipShown;
+    if (state.chip) {
+      chipLabel.textContent = state.chip.label;
+      chip.title = state.summary;
+      chipRemove.setAttribute('aria-label', state.chip.removeLabel);
+      chipRemove.title = state.chip.removeLabel;
+    }
   };
 
   /** A used-by link or a chip: every design that uses this system, nothing else in the way. */
@@ -392,9 +418,11 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     syncNotices();
   };
 
-  const paintShow = (scope: ListScope, groups: readonly ProjectGroup[], folderList: FoldersState['folders'], counts: ReturnType<typeof scopeCounts>, foldersState: FoldersState): void => {
+  const paintShow = (scope: ListScope, groups: readonly ProjectGroup[], folderList: FoldersState['folders'], counts: ReturnType<typeof scopeCounts>, foldersState: FoldersState, systemList: readonly SystemSummary[]): void => {
     const entries = scopeOptions(groups, counts, folderList);
-    showSelect.update({ value: scopeToId(scope), options: [...entries.map(({ id, label, hint }) => ({ id, label, hint })), { id: NEW_FOLDER_ID, label: 'New folder…' }] });
+    // The Design systems group (the page sidebar's system rows): left out while there are none or they have not loaded.
+    const systemEntries = showSystemOptions(systemList);
+    showSelect.update({ value: scopeToId(scope), options: [...entries, ...systemEntries, { id: NEW_FOLDER_ID, label: 'New folder…', hint: '' }].map(({ id, label, hint }) => ({ id, label, ...(hint ? { hint } : {}) })) });
     const current = entries.find((entry) => entry.id === scopeToId(scope));
     nameSelect(showHost, 'Show', current?.label ?? 'All designs');
     folderMore.hidden = view.folder === null;
@@ -445,8 +473,6 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     const folder = effective.kind === 'folder' ? folderList.find((entry) => entry.id === effective.id) ?? null : null;
     view = { scope: effective, groups, root, manual: manualProjects, folder: folder ? { id: folder.id, name: folder.name } : null };
     manualSlugs = new Set(effective.kind === 'project' ? foldersState.projects.find((entry) => sameDirectory(entry.directory, effective.directory))?.slugs ?? [] : []);
-    paintShow(effective, groups, folderList, scopeCounts(all, folderList, root, manualProjects), foldersState);
-
     // Systems: the filter's options are every system (a design in any scope can carry any
     // system's copy); a failed load leaves All systems / No system only.
     const systemsState = systemStore.get();
@@ -455,7 +481,9 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     // A remembered system waits for the list before it can read as gone; until then it stays as chosen.
     if (systemsState.systems !== null && !systemsFailed) systemFilter = resolveSystemFilter(systemFilter, systemList);
     swatches = swatchLookup(systemList);
-    const systemEntries = systemOptions(systemList);
+    paintShow(effective, groups, folderList, scopeCounts(all, folderList, root, manualProjects), foldersState, systemList);
+    // A remembered system the list cannot name yet (not loaded, or failed) still gets an entry, so the select, its name and the Filters button agree.
+    const systemEntries = systemSelectOptions(systemList, systemFilter);
     systemSelect.update({ value: systemFilterToId(systemFilter), options: systemEntries });
     nameSelect(systemHost, 'System', systemEntries.find((entry) => entry.id === systemFilterToId(systemFilter))?.label ?? 'All systems');
     sortSelect.update({ value: sort });

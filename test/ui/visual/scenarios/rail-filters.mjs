@@ -37,7 +37,9 @@ const railFilters = async (h, width, theme) => {
   // -- hidden by default, no dot, the button is a real disclosure
   h.check(await p.guest('const b = doc.querySelector(".dc-filters-btn"); return !!b && b.getAttribute("aria-expanded") === "false" && b.getAttribute("aria-controls") === "dc-rail-filter-area" && b.getAttribute("aria-label") === "Filters"'), `${tag}: the Filters button is collapsed and named`);
   h.check(await p.guest('return doc.querySelector(".dc-rail-filter-area").hidden === true && doc.querySelector(".dc-rail-filter-area").getBoundingClientRect().height === 0'), `${tag}: the area takes no room while closed`);
+  const all = await rowCount(p);
   h.check(!(await dot(p)), `${tag}: no dot while nothing is filtered`);
+  h.check(await p.guest('return doc.querySelector(".dc-rail-chiprow").hidden === true'), `${tag}: no chip while nothing is filtered`);
   h.check(await p.guest('return !!doc.querySelector(".dc-rail-head .dc-filters-btn")'), `${tag}: the button sits in the rail header`);
   h.check(await p.guest('const r = doc.querySelector(".dc-rail-title").getBoundingClientRect(); return r.width >= 120'), `${tag}: the title keeps its 120 px budget beside the new button`);
   h.check(await p.guest('const n = doc.querySelector(".dc-rail-head .oc-sdk-btn").getBoundingClientRect(); return n.right <= doc.documentElement.clientWidth && n.left >= 0 && [...doc.querySelectorAll(".dc-rail-head > *")].every((e) => e.getBoundingClientRect().right <= doc.documentElement.clientWidth)'), `${tag}: every header control, New included, sits inside the rail`);
@@ -54,8 +56,28 @@ const railFilters = async (h, width, theme) => {
   // A real <button> in the tab order: the browser gives it Enter and Space (a synthesized key press here does not click one).
   h.check(await p.guest('const b = doc.querySelector(".dc-filters-btn"); b.focus(); return b.tagName === "BUTTON" && b.tabIndex >= 0 && doc.activeElement === b'), `${tag}: the Filters button is a focusable button`);
 
+  // -- the Design systems group in the Show select: one step to a system's designs, the scope stays
+  await p.click('.dc-filters-btn');
+  await h.checkSoon(() => p.guest('return doc.querySelector(".dc-rail-filter-area").hidden === true'), `${tag}: the area is closed for the Show select checks`);
+  await p.click('.dc-rail-show-select button');
+  await p.waitFor('return !!doc.querySelector(".oc-sdk-popup [role=option]")', 'the Show options');
+  h.check(await p.guest('const o = [...doc.querySelectorAll(".oc-sdk-popup [role=option]")].map((n) => n.textContent.trim()); const i = o.findIndex((t) => t.startsWith("System · ")); return i > 0 && o.filter((t) => t.startsWith("System · ")).length === 5 && o[o.length - 1].startsWith("New folder")'), `${tag}: the Show select lists the systems as one group, before New folder`);
+  await p.shot(`${tag}-0-show-systems`);
+  await p.click('.oc-sdk-popup [role=option]', { text: 'System · Tidepool' });
+  await h.checkSoon(async () => (await rowCount(p)) === 2, `${tag}: picking System · Tidepool in Show leaves its two designs, in one step`);
+  h.check(await p.guest('return doc.querySelector(".dc-rail-show-select button").getAttribute("aria-label") === "Show: All designs"'), `${tag}: the scope is still All designs`);
+  h.check(await p.guest('const c = doc.querySelector(".dc-rail-chiprow"); return !c.hidden && c.textContent.trim() === "Tidepool" && !!c.querySelector("button[aria-label=\\"Remove the Tidepool system filter\\"]")'), `${tag}: a Tidepool chip sits under the header while Filters is closed`);
+  h.check((await storageGet(p, 'list-system:panel')) === '"system:tidepool"', `${tag}: the pick is remembered`);
+  await p.shot(`${tag}-0b-show-picked-chip`);
+  await p.click('.dc-filters-btn');
+  await h.checkSoon(() => p.guest('return doc.querySelector(".dc-rail-chiprow").hidden === true && doc.querySelector(".dc-system-select button").getAttribute("aria-label") === "System: Tidepool"'), `${tag}: opening Filters hides the chip and the System select already reads Tidepool`);
+  await p.click('.dc-filters-btn');
+  await p.click('.dc-filter-chip-x');
+  await h.checkSoon(async () => (await rowCount(p)) === all, `${tag}: the chip's × clears the filter`);
+  h.check(await p.guest('return doc.querySelector(".dc-rail-chiprow").hidden === true && doc.activeElement === doc.querySelector(".dc-filters-btn")') && (await storageGet(p, 'list-system:panel')) === '"all"', `${tag}: the chip goes, focus lands on Filters and the stored system is cleared`);
+  await open(p);
+
   // -- the system filter narrows the list and the dot says so while the area is closed
-  const all = await rowCount(p);
   await pickOption(p, '.dc-rail-filter-area .dc-system-select', 'Tidepool');
   await h.checkSoon(async () => (await rowCount(p)) === 2, `${tag}: Tidepool leaves its two designs (had ${all})`);
   h.check(await dot(p), `${tag}: the dot shows once a system filter is on`);
@@ -63,6 +85,7 @@ const railFilters = async (h, width, theme) => {
   await p.click('.dc-filters-btn');
   await h.checkSoon(() => p.guest('return doc.querySelector(".dc-rail-filter-area").hidden === true'), `${tag}: the area closes`);
   h.check(await dot(p), `${tag}: the dot stays while the area is closed`);
+  h.check(await p.guest('const c = doc.querySelector(".dc-rail-chiprow"); return !c.hidden && c.textContent.trim() === "Tidepool"'), `${tag}: the chip names the system while the area is closed, so the short list is explained`);
   await p.shot(`${tag}-3-filtered-closed`);
 
   // -- titles: one line, title only; persists
@@ -127,7 +150,31 @@ const goneSystem = async (h) => {
   await p.close();
 };
 
+// KI-30: the systems list cannot be read but a system filter is remembered. The select, its name and the
+// Filters button agree ("One system"), the chip says so, and the designs are still narrowed.
+const failedSystems = async (h) => {
+  const tag = 'rail-filters-320-dark-systems-failed';
+  const p = await h.openPage({
+    width: 320, height: 780, surface: 'panel', theme: 'dark', label: tag,
+    storage: { 'list-system:panel': 'system:tidepool' },
+    routes: { 'GET /systems': { status: 500, body: { error: 'internal', message: 'The design systems list could not be read.' } } },
+  });
+  console.log(tag);
+  await p.waitFor('return doc.querySelectorAll(".dc-row[data-slug]").length >= 1', 'the list rows');
+  await p.settle(600);
+  h.check(await dot(p), `${tag}: the list is still narrowed and the dot says so`);
+  h.check(await p.guest('const c = doc.querySelector(".dc-rail-chiprow"); return !c.hidden && c.textContent.trim() === "One system" && !!c.querySelector("button[aria-label=\\"Remove the system filter\\"]")'), `${tag}: the chip is honest about not knowing the name`);
+  await open(p);
+  h.check(await p.guest('return doc.querySelector(".dc-system-select button").getAttribute("aria-label") === "System: One system"'), `${tag}: the System select does not claim All systems (${await p.guest('return doc.querySelector(".dc-system-select button").getAttribute("aria-label")')})`);
+  h.check(await p.guest('return !doc.querySelector(".dc-rail-show-select button").getAttribute("aria-label").includes("System")') && (await noOverflow(p)), `${tag}: no systems group without systems, no overflow`);
+  await p.shot(`${tag}-1-open`);
+  await p.click('.dc-rail-filter-reset .oc-sdk-btn');
+  await h.checkSoon(async () => !(await dot(p)), `${tag}: Reset filters clears it`);
+  await p.close();
+};
+
 export const run = async (helpers) => {
   for (const width of [320, 480]) for (const theme of ['dark', 'light']) await railFilters(helpers, width, theme);
   await goneSystem(helpers);
+  await failedSystems(helpers);
 };

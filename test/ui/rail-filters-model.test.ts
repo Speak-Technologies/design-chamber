@@ -9,13 +9,18 @@ import {
   DEFAULT_SORT,
   RAIL_FILTER_DEFAULTS,
   RAIL_VIEWS,
+  SHOW_SYSTEM_LABEL,
+  UNKNOWN_SYSTEM_LABEL,
   libraryItems,
   railFilterState,
   railSystemStorageKey,
   railViewFromStored,
   railViewStorageKey,
   sortFromStored,
+  showSystemOptions,
   sortStorageKey,
+  systemFilterLabel,
+  systemSelectOptions,
   systemFilterFromId,
   systemFilterToId,
   type SystemFilter,
@@ -137,4 +142,43 @@ test('sort orders the filtered rail list', () => {
   assert.deepEqual(order('updated'), ['new', 'mid', 'old']);
   assert.deepEqual(order('created'), ['old', 'mid', 'new']);
   assert.deepEqual(order('title'), ['mid', 'old', 'new']);
+});
+
+const summary = (id: string, name: string, over: Partial<SystemSummary> = {}): SystemSummary =>
+  ({ id, name, status: 'ready', usedBy: 0, created: '2026-01-01T00:00:00.000Z', updated: '2026-01-01T00:00:00.000Z', home: 'internal', sources: {}, ...over }) as unknown as SystemSummary;
+
+test('the Show select gets one Design systems entry per system, A to Z, with the same ids as the System filter', () => {
+  const list = [summary('tidepool', 'Tidepool', { usedBy: 2 }), summary('acme', 'acme', { status: 'draft' }), summary('harbor', 'Harbor')];
+  const entries = showSystemOptions(list);
+  assert.deepEqual(entries.map((entry) => entry.label), [`${SHOW_SYSTEM_LABEL}acme`, `${SHOW_SYSTEM_LABEL}Harbor`, `${SHOW_SYSTEM_LABEL}Tidepool`]);
+  assert.deepEqual(entries.map((entry) => entry.hint), ['Draft', '0', '2']);
+  for (const entry of entries) assert.deepEqual(systemFilterFromId(entry.id), { kind: 'system', id: entry.id.slice('system:'.length) });
+});
+
+test('no systems, or none known yet, leaves the group out', () => {
+  assert.deepEqual(showSystemOptions([]), []);
+});
+
+test('the chip names the system, No system, or "One system" when the list cannot say', () => {
+  assert.equal(systemFilterLabel(ALL_SYSTEMS, systems), null);
+  assert.equal(systemFilterLabel({ kind: 'none' }, systems), 'No system');
+  assert.equal(systemFilterLabel({ kind: 'system', id: 'harbor' }, systems), 'Harbor');
+  assert.equal(systemFilterLabel({ kind: 'system', id: 'harbor' }, []), UNKNOWN_SYSTEM_LABEL);
+  assert.equal(railFilterState({ ...RAIL_FILTER_DEFAULTS, systems }).chip, null);
+  assert.deepEqual(railFilterState({ ...RAIL_FILTER_DEFAULTS, system: { kind: 'system', id: 'tidepool' }, systems }).chip, { label: 'Tidepool', removeLabel: 'Remove the Tidepool system filter' });
+  assert.deepEqual(railFilterState({ ...RAIL_FILTER_DEFAULTS, system: { kind: 'none' }, systems }).chip, { label: 'No system', removeLabel: 'Remove the no system filter' });
+  assert.deepEqual(railFilterState({ ...RAIL_FILTER_DEFAULTS, system: { kind: 'system', id: 'tidepool' }, systems: [] }).chip, { label: 'One system', removeLabel: 'Remove the system filter' });
+  // Sort and view alone never put a chip up.
+  assert.equal(railFilterState({ system: ALL_SYSTEMS, sort: 'title', view: 'titles', systems }).chip, null);
+});
+
+test('KI-30: a remembered system the list cannot name still gets a select entry, before No system', () => {
+  const remembered: SystemFilter = { kind: 'system', id: 'tidepool' };
+  const failed = systemSelectOptions([], remembered);
+  assert.deepEqual(failed.map((entry) => entry.id), ['all', 'system:tidepool', 'none']);
+  assert.equal(failed[1]?.label, UNKNOWN_SYSTEM_LABEL);
+  // Named by the list, no extra entry; All systems and No system never add one.
+  assert.equal(systemSelectOptions([summary('tidepool', 'Tidepool')], remembered).filter((entry) => entry.id === 'system:tidepool').length, 1);
+  assert.deepEqual(systemSelectOptions([], ALL_SYSTEMS).map((entry) => entry.id), ['all', 'none']);
+  assert.deepEqual(systemSelectOptions([], { kind: 'none' }).map((entry) => entry.id), ['all', 'none']);
 });

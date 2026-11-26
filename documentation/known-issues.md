@@ -101,12 +101,3 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Happens:** downgrade, then any folder create/rename/delete/membership change on 0.4.0 · **Effect:** manual project filing is gone; derived project grouping still works
 **Why not fixed now:** intended additive-schema behaviour (P26 R-3); the older version cannot know about a key it never had. Documented in `docs/SPEC.md` §6.9 and the technical spec §8.
 **Fix prompt:** none. Re-file the designs under their projects after upgrading again; the picker lists projects and folders for exactly this.
-
-### KI-30 — Rail Filters: a remembered system filter reads "All systems" while the systems list fails to load
-🟣 Minor · found 2026-11-26 · `src/ui/rail/list-view.ts:460` · owner: ui-ux-developer
-**What:** the rail now remembers the System filter (`list-system:panel`). When the systems list can't be read, the System select only has All systems and No system, so a remembered `system:<id>` is not among its options and the select's name falls back to "System: All systems" while the list is still narrowed to that system's designs. The Filters button says "Filters, on. Showing designs that use one system", so the two disagree.
-**Who:** a rail user who filtered by a system, then reopens Design Chamber while the service can't read the systems · **Seen:** visible in the open Filters area
-**Happens:** a stored system filter plus a failed `GET /systems` · rare · **Effect:** the select says All systems but only some designs list; Reset filters (offered) or Clear filters in the empty state fixes it, and a reload once the systems read again shows the real name
-**Why not fixed now:** rare, and a way out is on screen
-**Fix prompt:**
-> In `src/ui/rail/list-view.ts` (paintList, where `nameSelect(systemHost, 'System', …)` is set), make the System select show a remembered `system:<id>` that is not in the options while the systems list has failed or not loaded: add one entry for it with the label "One system" (or the id) so the select's value, its accessible name and the Filters button agree. Add a visual-scenario check in `test/ui/visual/scenarios/rail-filters.mjs` (storage `list-system:panel` = `system:tidepool` plus `routes: { 'GET /systems': { status: 500 … } }`) that the select name is not "System: All systems" while the dot is on. Run `npm run check` and `node test/ui/visual/shoot.mjs rail-filters`.

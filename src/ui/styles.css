@@ -6768,3 +6768,54 @@ button.dc-sp-value:focus-visible {
     margin-left: var(--dc-s1);
   }
 }
+
+/* The chip under the header while Filters is closed and a system filter is on: the empty state's chip, with a 24 px remove target. */
+.dc-rail-chiprow {
+  display: flex;
+  padding: 0 var(--dc-s3) var(--dc-s2) var(--dc-s4);
+}
+.dc-rail-chiprow[hidden] {
+  display: none;
+}
+.dc-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--dc-s1);
+  max-width: 100%;
+  padding: 2px 2px 2px var(--dc-s2);
+  border-radius: 9999px;
+  background: var(--oc-hover);
+  color: var(--oc-fg);
+  font-size: 0.75rem;
+}
+.dc-filter-chip .dc-icon {
+  flex: none;
+  color: var(--oc-muted);
+}
+.dc-filter-chip-name {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-filter-chip-x {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--oc-muted);
+  cursor: pointer;
+}
+.dc-filter-chip-x:hover {
+  background: var(--oc-active);
+  color: var(--oc-fg);
+}
+.dc-filter-chip-x:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
