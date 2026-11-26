@@ -179,7 +179,8 @@ test('adversarial lines at the service caps render in milliseconds', () => {
 test('a whole board of hostile 20 000-char notes builds well under half a second', () => {
   const bracketNotes = Array.from({ length: 50 }, (_, i) => ({ id: `n${i}`, title: `Note ${i}`, text: '['.repeat(20000), problem: null }));
   const headingNotes = Array.from({ length: 50 }, (_, i) => ({ id: `n${i}`, title: `Note ${i}`, text: `# a${' '.repeat(3994)}#x`, problem: null }));
-  for (const [name, notes] of [['brackets', bracketNotes], ['headings', headingNotes]] as const) {
+  const tableNotes = Array.from({ length: 3 }, (_, i) => ({ id: `n${i}`, title: `Note ${i}`, text: `${'|a'.repeat(2500)}\n${'|-'.repeat(2500)}\n${Array(5000).fill('|').join('\n')}`, problem: null }));
+  for (const [name, notes] of [['brackets', bracketNotes], ['headings', headingNotes], ['tables', tableNotes]] as const) {
     const started = performance.now();
     const html = buildBoardHtml({ ...boardFixture(), notes }, { scheme: 'dark' });
     const elapsed = performance.now() - started;
@@ -239,4 +240,46 @@ test('the markdown CSS is scoped, theme-aware on the board, and allowlist-safe o
   assert.ok(board.includes('.dc-md-link {'), 'the link rule matches the class the renderer writes');
   assert.ok(!markdownCss('living', 'light').includes('var('), 'the living page greys are fixed');
   assert.ok(!board.includes('url('), board);
+});
+test('a link title works on a single line, mid-line and at the end of the text', () => {
+  const linked = '<p><a class="dc-md-link" href="https://x.example" rel="noopener noreferrer" target="_blank">docs</a></p>';
+  assert.equal(md('[docs](https://x.example "Docs")'), linked);
+  assert.equal(md('[docs](https://x.example "Docs")\n'), linked);
+  assert.equal(md('see [docs](https://x.example "Docs") now'), '<p>see <a class="dc-md-link" href="https://x.example" rel="noopener noreferrer" target="_blank">docs</a> now</p>');
+  assert.equal(living('[in](#note-anchor "T")'), '<p><a class="dc-md-link" href="#note-anchor">in</a></p>');
+  // A newline inside the title still refuses the link.
+  assert.ok(md('[docs](https://x.example "Do\ncs")').includes(escapeHtml('[docs](https://x.example "Do')));
+});
+
+test('a refused link with markup in its label stays escaped text in both profiles', () => {
+  const hostile = '[<img src=x onerror=alert(1)>](javascript:x)';
+  for (const profile of ['board', 'living'] as const) {
+    const out = renderMarkdown(hostile, profile);
+    assert.ok(!out.includes('<img'), out);
+    assert.ok(!out.includes('<a '), out);
+    assert.ok(out.includes(escapeHtml(hostile)), out);
+  }
+});
+
+test('a wide or cell-hungry table cannot multiply the source', () => {
+  const timed = (source: string): number => {
+    const started = performance.now();
+    renderMarkdown(source, 'board');
+    renderMarkdown(source, 'living');
+    return performance.now() - started;
+  };
+  // 2 500 columns over 5 000 bare "|" rows: 15 000 characters, inside the note cap.
+  const wide = `${'|a'.repeat(2500)}\n${'|-'.repeat(2500)}\n${Array(5000).fill('|').join('\n')}`;
+  assert.ok(timed(wide) < 100, 'wide table');
+  const wideOut = md(wide);
+  assert.ok(!wideOut.includes('<table'), 'past the column cap it is text');
+  assert.ok(wideOut.length < wide.length * 4, `${wideOut.length} chars from ${wide.length}`);
+  // 64 columns over the same rows: a table, but only as many cells as the source budgets.
+  const dense = `${'|a'.repeat(64)}\n${'|-'.repeat(64)}\n${Array(5000).fill('|').join('\n')}`;
+  assert.ok(timed(dense) < 100, 'dense table');
+  const denseOut = md(dense);
+  assert.ok(denseOut.includes('<table'), 'within the cap it is a table');
+  assert.ok(denseOut.length < dense.length * 12, `${denseOut.length} chars from ${dense.length}`);
+  assert.ok(denseOut.includes('<p>|'), 'rows past the cell budget stay as text');
+  assert.ok(living(dense).includes('<table'), 'the living profile bounds cells the same way');
 });

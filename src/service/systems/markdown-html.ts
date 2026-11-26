@@ -125,6 +125,8 @@ const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/;
 const QUOTE = /^ {0,3}>[ \t]?(.*)$/;
 const ITEM = /^( *)([-*+]|\d{1,9}[.)])([ \t]+)(.*)$/;
 const SEP_CELL = /^:?-+:?$/;
+/** Past this many columns a table is shown as text: cells are rows × columns, so width must be bounded. */
+const TABLE_COLUMNS_MAX = 64;
 const EMPHASIS_END = /[A-Za-z0-9_]/;
 
 /** Trailing spaces and tabs off, by plain loop: a regex with a trailing quantifier races long runs. */
@@ -237,7 +239,8 @@ const inline = (text: string, profile: MarkdownProfile, depth: number): string =
     const q = skipWs[e] ?? n;
     if (text[q] !== '"') return null;
     const c = quote[q + 1] ?? -1;
-    if (c === -1 || (newline[q + 1] ?? -1) < c || text[c + 1] !== ')') return null;
+    const nl = newline[q + 1] ?? -1;
+    if (c === -1 || (nl !== -1 && nl < c) || text[c + 1] !== ')') return null;
     return { url: text.slice(u, e), labelEnd: j, end: c + 2 };
   };
 
@@ -437,15 +440,25 @@ const blocks = (lines: readonly string[], profile: MarkdownProfile, depth: numbe
     if (line.includes('|') && next !== undefined && isSeparator(next)) {
       const header = cellsOf(line);
       const sep = cellsOf(next);
-      if (header.length === sep.length) {
+      if (header.length === sep.length && header.length <= TABLE_COLUMNS_MAX) {
         i += 2;
-        const rows: string[][] = [];
+        const rowLines: string[] = [];
         while (i < lines.length && (lines[i] ?? '').trim() !== '' && (lines[i] ?? '').includes('|')) {
-          const cells = cellsOf(lines[i] ?? '');
-          rows.push(header.map((_, column) => inline(cells[column] ?? '', profile, depth)));
+          rowLines.push(lines[i] ?? '');
           i += 1;
         }
+        // Every row emits one cell per header column, so a wide header over bare "|" rows would
+        // multiply the source into gigabytes. The cells a table may emit are bounded by the
+        // characters it was written from; rows past that budget stay visible as a text paragraph.
+        const budget = line.length + next.length + rowLines.reduce((total, row) => total + row.length, 0);
+        const maxRows = Math.max(1, Math.floor(budget / header.length));
+        const rows = rowLines.slice(0, maxRows).map((row) => {
+          const cells = cellsOf(row);
+          return header.map((_, column) => inline(cells[column] ?? '', profile, depth));
+        });
         out.push(tableBlock(header.map((cell) => inline(cell, profile, depth)), rows));
+        const rest = rowLines.slice(maxRows);
+        if (rest.length > 0) out.push(`<p>${inline(rest.join('\n').trim(), profile, depth)}</p>`);
         continue;
       }
     }
