@@ -204,9 +204,9 @@ export const runSystemCheck = async (
 
   const shots: SystemCheckRender['shots'] = [];
   const entryShots: SystemCheckRender['entryShots'] = [];
-  // What the pictures leave out, across both widths: one note per kind, not one per area and width.
   // What the pictures leave out, by kind (pictureCoverage): each area at each width counts once, in one note per kind.
-  const short: Record<Exclude<PictureCoverage['kind'], 'whole'>, string[]> = { gap: [], 'no-overview': [], overview: [], tiles: [] };
+  // Kept per width, so a width that fails after its inspect ran (a timeout) adds no notes about pictures it doesn't keep.
+  const short: { width: string; kind: Exclude<PictureCoverage['kind'], 'whole'>; text: string }[] = [];
   const boardMs = renderInput.budgets?.boardMs ?? SYSTEM_CHECK_BOARD_TIMEOUT_MS;
   const inspect = async (page: InspectPage, art: PlannedArtboard): Promise<InspectResult | null> => {
     const started = Date.now();
@@ -268,10 +268,11 @@ export const runSystemCheck = async (
       const label = `${plan.area} at ${width.width}px`;
       const shot: SystemBoardShot = { width: width.id, area: plan.area, heightPx: plan.height, overview, tiles };
       const coverage = pictureCoverage(shot);
-      if (coverage.kind === 'gap') short.gap.push(`${label}, ${coverage.gaps.map(([from, to]) => `${from} to ${to}px`).join(' and ')}`);
-      else if (coverage.kind === 'overview') short.overview.push(`${label}, overview to ${plan.coversPx}px`);
-      else if (coverage.kind === 'tiles') short.tiles.push(`${label}, ${tiles.length} of ${plan.bands.length} full-size tiles`);
-      else if (coverage.kind === 'no-overview') short['no-overview'].push(label);
+      const note = (kind: (typeof short)[number]['kind'], text: string): void => void short.push({ width: width.id, kind, text });
+      if (coverage.kind === 'gap') note('gap', `${label}, ${coverage.gaps.map(([from, to]) => `${from} to ${to}px`).join(' and ')}`);
+      else if (coverage.kind === 'overview') note('overview', `${label}, overview to ${plan.coversPx}px`);
+      else if (coverage.kind === 'tiles') note('tiles', `${label}, ${tiles.length} of ${plan.bands.length} full-size tiles`);
+      else if (coverage.kind === 'no-overview') note('no-overview', label);
       shots.push(shot);
     }
     for (const box of flagged) {
@@ -309,8 +310,9 @@ export const runSystemCheck = async (
     await space.checkAborted(renderInput.signal?.aborted === true || outcome.stoppedBy === 'aborted');
 
     const findings: CheckFindingData[] = boardFindings(outcome.findings, CHECK_FINDINGS_MAX);
+    const okWidths = new Set(outcome.artboards.filter((artboard) => artboard.ok).map((artboard) => artboard.viewport));
     for (const kind of ['gap', 'no-overview', 'overview', 'tiles'] as const) {
-      const areas = short[kind];
+      const areas = short.filter((entry) => entry.kind === kind && okWidths.has(entry.width)).map((entry) => entry.text);
       if (areas.length > 0) {
         findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: null, params: { pictured: kind, count: areas.length }, detail: cleanDetail(areas.join('; '), CHECK_DETAIL_MAX) });
       }
