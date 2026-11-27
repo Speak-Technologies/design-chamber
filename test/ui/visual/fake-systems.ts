@@ -74,6 +74,7 @@ const blank = (over: Partial<SystemSummary> & Pick<SystemSummary, 'id' | 'name'>
   sharedRepoWith: null,
   livingPage: null,
   proposalWaiting: false,
+  depth: null,
   ...over,
 });
 
@@ -82,6 +83,7 @@ export const sampleSystems = (): SystemSummary[] => [
   blank({
     id: 'tidepool',
     name: 'Tidepool',
+    depth: 'core',
     swatches: ['#0f766e', '#134e4a', '#f59e0b', '#ccfbf1', '#f0fdfa'],
     status: 'ready',
     changesToReview: true,
@@ -97,6 +99,7 @@ export const sampleSystems = (): SystemSummary[] => [
   blank({
     id: 'harbor',
     name: 'Harbor',
+    depth: 'full',
     swatches: ['#1d4ed8', '#0f172a', '#e11d48', '#dbeafe'],
     status: 'ready',
     changesToReview: true,
@@ -386,6 +389,9 @@ const detailOf = (summary: SystemSummary): SystemDetail => ({
   landed: null,
   agentDrift: null,
   boardLayout: { sections: {}, ignored: [], ignoredCount: 0 },
+  depth: null,
+  pairs: [],
+  outOfScope: [],
 });
 
 
@@ -427,15 +433,62 @@ const fillIn = (detail: SystemDetail, coverage: SystemDetail['coverage']): void 
     { id: 'body', name: 'Body', family: 'Inter, sans-serif', size: '16px', weight: '400', lineHeight: '1.5', letterSpacing: '0', case: 'none', note: '' },
   ];
   detail.components = [
-    { id: 'button', name: 'Button', purpose: 'Starts or confirms one action.', note: '', variants: ['Filled', 'Outline', 'Ghost'], states: ['Hover', 'Disabled', 'Loading'], tokens: ['--brand', '--radius-md'], source: 'src/ui/Button.tsx', example: null, undefinedTokens: [], layout: null },
-    { id: 'card', name: 'Card', purpose: 'Groups related content on a raised surface.', note: 'Never nest a card in a card.', variants: ['Plain'], states: [], tokens: ['--surface-raised', '--border'], source: null, example: null, undefinedTokens: ['--card-pad'], layout: null },
+    { id: 'button', name: 'Button', purpose: 'Starts or confirms one action.', note: '', variants: ['Filled', 'Outline', 'Ghost'], sizes: [], states: ['Hover', 'Disabled', 'Loading'], tokens: ['--brand', '--radius-md'], source: 'src/ui/Button.tsx', example: null, undefinedTokens: [], layout: null },
+    { id: 'card', name: 'Card', purpose: 'Groups related content on a raised surface.', note: 'Never nest a card in a card.', variants: ['Plain'], sizes: [], states: [], tokens: ['--surface-raised', '--border'], source: null, example: null, undefinedTokens: ['--card-pad'], layout: null },
   ];
   detail.notes = [{ id: 'accessibility', title: 'Accessibility', text: 'Text keeps 4.5 to 1 contrast on its background.', problem: null, layout: null }];
-  detail.patterns = [{ id: 'forms', kind: 'pattern', title: 'Forms', note: '', text: 'Labels sit above fields. Errors sit under the field in plain words.', problem: null, layout: null }];
-  detail.brand = [{ id: 'voice', kind: 'voice', title: 'Voice', note: '', text: 'Plain and warm. Short sentences.', problem: null, layout: null }];
+  detail.patterns = [{ id: 'forms', kind: 'pattern', title: 'Forms', note: '', text: 'Labels sit above fields. Errors sit under the field in plain words.', problem: null, layout: null, example: null }];
+  detail.brand = [{ id: 'voice', kind: 'voice', title: 'Voice', note: '', text: 'Plain and warm. Short sentences.', problem: null, layout: null, example: null }];
   detail.fonts = [{ file: 'inter.woff2', family: 'Inter', weight: 400, style: 'normal' }];
   detail.logos = [{ file: 'mark.svg', variant: 'Mark', note: 'Use on light surfaces.' }];
   detail.stamps = { tokens: 'tk:1', systemJson: 'sj:1', overview: 'ov:1', notes: { accessibility: 'nt:1' } };
+};
+
+/**
+ * What system-builder-depth adds (T4): sizes, the new kinds, colour pairs and the depth. Tidepool is a core system that
+ * left two topics out; Harbor is a full one. Every other system stays as an older one: none of these fields set.
+ * The pairs cover each state the panel draws: a pair that passes, one that is too low, a formula Node can't read
+ * ("Measured by the check"), an oklch() pair it can't parse but the sample still draws, and the automatic ones.
+ */
+const deepen = (detail: SystemDetail, flavour: 'core' | 'full'): void => {
+  detail.depth = flavour;
+  detail.tokens.push(
+    tok('--brand-fg', 'colours', 'brand', '#ffffff', '#0b1f1d', 'Text on the brand colour.'),
+    tok('--accent', 'colours', 'brand', 'oklch(0.55 0.12 190)', 'oklch(0.8 0.1 190)'),
+    tok('--on-accent', 'colours', 'brand', '#ffffff', '#08201e'),
+  );
+  detail.pairs = [
+    { fg: '--text', bg: '--surface', use: 'text', note: 'Body copy on the page.', auto: false },
+    { fg: '--text-muted', bg: '--surface-raised', use: 'text', note: '', auto: false },
+    { fg: '--border', bg: '--surface', use: 'ui', note: 'Card edges. Pair it with a shadow where the edge must read.', auto: false },
+    { fg: '--brand-strong', bg: '--surface', use: 'large', note: '', auto: false },
+    { fg: '--brand-fg', bg: '--brand', use: 'text', note: '', auto: true },
+    { fg: '--on-accent', bg: '--accent', use: 'text', note: '', auto: true },
+  ];
+  const button = detail.components.find((component) => component.id === 'button');
+  if (button) button.sizes = ['Small', 'Medium', 'Large'];
+  if (flavour === 'core') {
+    detail.outOfScope = ['motion', 'marketing', 'data-display'];
+    detail.patterns = [
+      { id: 'forms', kind: 'forms', title: 'Forms', note: '', text: 'Labels sit above fields. Errors sit under the field in plain words.', problem: null, layout: null, example: null },
+      { id: 'top-bar', kind: 'navigation', title: 'Top bar and bottom bar', note: '', text: 'A top bar on a laptop, a bottom bar on a phone.', problem: null, layout: null, example: { remote: [] } },
+    ];
+    detail.brand = [
+      { id: 'voice', kind: 'voice', title: 'Voice', note: '', text: 'Plain and warm. Short sentences.', problem: null, layout: null, example: null },
+      { id: 'palette', kind: 'colour', title: 'Marketing palette', note: '', text: 'Teal leads. Amber is for one highlight per page.', problem: null, layout: null, example: null },
+    ];
+  } else {
+    detail.outOfScope = [];
+    detail.patterns = [
+      { id: 'sheets', kind: 'overlay', title: 'Sheets and modals', note: '', text: 'A bottom sheet on a phone, a centred modal on a laptop.', problem: null, layout: null, example: null },
+      { id: 'empty', kind: 'states', title: 'Screen states', note: '', text: 'Say what goes here and how to add it.', problem: null, layout: null, example: null },
+      { id: 'tables', kind: 'data-display', title: 'Tables', note: '', text: 'Right-align numbers. Keep the header in view.', problem: null, layout: null, example: null },
+    ];
+    detail.brand = [
+      { id: 'social', kind: 'social', title: 'Social cards', note: '', text: 'One headline, one mark, no photos.', problem: null, layout: null, example: null },
+      { id: 'mail', kind: 'email', title: 'Email', note: '', text: 'Plain text first, one button.', problem: null, layout: null, example: null },
+    ];
+  }
 };
 
 type Req = { params: Record<string, string> };
@@ -570,6 +623,8 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
     if (!detail) {
       detail = detailOf(row);
       if (!row.empty && !row.unreadable && row.id !== 'field-notes') fillIn(detail, row.id === 'juniper' ? ['foundations', 'components'] : ['foundations', 'components', 'patterns', 'brand']);
+      if (row.id === 'tidepool') deepen(detail, 'core');
+      if (row.id === 'harbor') deepen(detail, 'full');
       if (row.id === 'harbor') for (const section of ['colours', 'typography'] as const) detail.review[section] = { state: 'looks-good', note: null };
       details.set(row.id, detail);
     }

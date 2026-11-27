@@ -401,6 +401,7 @@ const system = (over: Partial<SystemSummary> & Pick<SystemSummary, 'id' | 'name'
   sharedRepoWith: null,
   livingPage: null,
   proposalWaiting: false,
+  depth: null,
   ...over,
 });
 const link = (id: string, state: 'ok' | 'draft' | 'deleted' = 'ok'): NonNullable<DesignSummary['system']> => ({ id, name: id, revision: 1, state, updateAvailable: false });

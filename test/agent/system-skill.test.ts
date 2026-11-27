@@ -8,11 +8,14 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, test } from 'node:test';
 
+import { parseSystemQuestions, SYSTEM_ROUND_TWO_TOPICS } from '../../src/shared/agent/system-questions.ts';
 import {
+  builderSkillContract,
   buildSystemSkill,
   buildSystemSkillBody,
   SYSTEM_SKILL_DESCRIPTION,
   SYSTEM_SKILL_NAME,
+  SYSTEM_REFERENCE_DOCS,
   SystemSkillTooLongError,
 } from '../../src/shared/agent/system-skill-doc.ts';
 import { BOARD_PICTURES_SENTENCE, systemContractSection, SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE } from '../../src/shared/agent/system-rules.ts';
@@ -20,7 +23,8 @@ import { LIVING_PAGE_FORAPPLIED_WAIT_MS, SKILL_DESCRIPTION_MAX, SYSTEM_SKILL_TEX
 
 const REPO = path.resolve(import.meta.dirname, '..', '..');
 const QUESTIONS = readFileSync(path.join(REPO, 'rules', 'SYSTEM-QUESTIONS.md'), 'utf8');
-const input = { systemQuestions: QUESTIONS, contract: systemContractSection() };
+// What the build ships: the builder contract (layout bullet as a pointer) and the docs beside the skill.
+const input = { systemQuestions: QUESTIONS, contract: builderSkillContract(), reference: 'beside' as const };
 
 describe('buildSystemSkill: frontmatter and caps', () => {
   test('frontmatter: name design-system-builder and the description, nothing else', () => {
@@ -42,11 +46,11 @@ describe('buildSystemSkill: frontmatter and caps', () => {
     assert.ok(body.length <= SYSTEM_SKILL_TEXT_MAX, `${body.length}`);
     assert.ok(skill.includes(body), 'the skill is the frontmatter plus the one body');
     assert.ok(skill.includes(QUESTIONS.trim()), 'the interview is inlined verbatim');
-    for (const line of systemContractSection()) assert.ok(skill.includes(line), 'the contract is the one RULES.md source');
+    for (const line of builderSkillContract()) assert.ok(skill.includes(line), 'the contract is the one RULES.md source');
   });
 
   test('an interview that would push the text over the cap is refused, never cut', () => {
-    const huge = { systemQuestions: 'q'.repeat(SYSTEM_SKILL_TEXT_MAX), contract: [] };
+    const huge = { systemQuestions: 'q'.repeat(SYSTEM_SKILL_TEXT_MAX), contract: [], reference: null };
     assert.throws(() => buildSystemSkillBody(huge), SystemSkillTooLongError);
     assert.throws(() => buildSystemSkill(huge), SystemSkillTooLongError);
   });
@@ -92,10 +96,10 @@ describe('the body: the rev 3 protocol', () => {
     assert.ok(body.includes("Approval is the block's Approve answer for your latest proposal id"));
   });
 
-  test('Phase 2.6 §7.5: the built skill is about 17 000 characters, well under the 24 000 cap', () => {
+  test('system-builder-depth §5: the built skill keeps 1 300 characters of headroom under the 24 000 cap', () => {
     const skill = buildSystemSkill(input);
     assert.ok(skill.length <= SYSTEM_SKILL_TEXT_MAX, `${skill.length}`);
-    assert.ok(skill.length < 20_000, `${skill.length} (spec estimate ≈ 16 900)`);
+    assert.ok(skill.length <= 22_700, `${skill.length} (soft budget 22 700, system-builder-depth §5)`);
   });
 
   test('SystemAsk: the three argument shapes, the scope, the marker lines and the typed fallback', () => {
@@ -104,7 +108,8 @@ describe('the body: the rev 3 protocol', () => {
     assert.ok(body.includes('root = Stack([SystemAsk("interview-2", "", "<system id>", "", "<calls>")])'));
     assert.ok(body.includes('root = Stack([SystemAsk("diff", "", "<system id>", "<proposal id>")])'));
     assert.ok(body.includes('at most 8 objects { "topic", "why", "proposed" }'));
-    assert.ok(body.includes('[SystemAsk ticket=sb_… round=1 home=repo mode=fix coverage=foundations,components,patterns,brand dark=not-now]'));
+    assert.ok(body.includes('[SystemAsk ticket=sb_… round=1 home=repo mode=fix coverage=foundations,components,patterns,brand depth=core dark=not-now]'));
+    assert.ok(body.includes('[SystemAsk system=acme round=2 status-colours=brand-tuned greys=brand-tinted typography=one-font navigation=keep access=dev]'));
     assert.ok(body.includes('[SystemAsk system=acme approve=p_… sha=<16 hex> parts=system-files,docs,living-page skipped=token-fixes]'));
     assert.ok(body.includes('[SystemAsk system=acme decline=p_… then=describe] or then=stop'));
     assert.ok(body.includes("If the block can't be shown or the user types instead, ask the same thing in text; a typed reply is always valid."));
@@ -173,7 +178,17 @@ describe('the body: the rev 3 protocol', () => {
     assert.ok(contract.includes("values a place doesn't take, are ignored with a warning that says what the place takes"));
     assert.ok(contract.includes('Colours, spacing, radius, shadows and sizes take card, compact or table; typography, layers and assets take none.'));
     assert.ok(contract.includes('no `100vw`, no `position: fixed`'));
-    assert.ok(body.includes(contract), 'the skill carries the same contract');
+    // RULES.md keeps the full layout bullet; the skill carries the same contract with it as a pointer (system-builder-depth §5).
+    const skillContract = builderSkillContract().join('\n');
+    assert.ok(body.includes(skillContract), 'the skill carries the builder contract');
+    assert.ok(!body.includes('"notes": "full"'), 'the long layout bullet moved out of the skill');
+    assert.ok(skillContract.includes('board-and-check.md says which places take which'));
+    for (const value of ['`card`', '`compact`', '`full`', '`table`']) assert.ok(skillContract.includes(value), value);
+    assert.deepEqual(
+      builderSkillContract().filter((line) => !line.startsWith('- Board layout:')),
+      systemContractSection().filter((line) => !line.startsWith('- Board layout:')),
+      'only the layout bullet differs',
+    );
     assert.ok(body.includes(BOARD_PICTURES_SENTENCE));
     assert.ok(BOARD_PICTURES_SENTENCE.includes('`.chamber/check/`'));
   });
@@ -184,5 +199,54 @@ describe('the body: the rev 3 protocol', () => {
     assert.ok(body.includes('A repo home must be the project folder of this chat or a folder inside it.'));
     assert.ok(body.includes('For describe only it says: Describes the intended system; the code was left unchanged.'));
     assert.ok(body.includes('Seed values from `_systems/<id>/.chamber/scan.json` when it exists'));
+  });
+});
+
+describe('system-builder-depth T3: depth, the reference docs, the new topics and the see-and-fix loop', () => {
+  const body = buildSystemSkillBody(input);
+  const pointer = 'Before you write an area, read its reference doc';
+
+  test('round two names every topic the parser knows, the six new ones included, in the same list the block bakes', () => {
+    const sentence = `topic is one of ${SYSTEM_ROUND_TWO_TOPICS.join(', ')}; why`;
+    assert.ok(body.includes(sentence));
+    for (const topic of ['platforms', 'navigation', 'overlays', 'motion', 'scales', 'brand-colour']) assert.ok(SYSTEM_ROUND_TWO_TOPICS.includes(topic), topic);
+    assert.deepEqual(parseSystemQuestions(QUESTIONS).roundTwo.map((question) => question.topic), [...SYSTEM_ROUND_TWO_TOPICS], 'the real interview has every round-two topic');
+  });
+
+  test('the built skill points at the reference folder next to it and names every doc the build ships', () => {
+    assert.ok(body.includes(`- ${pointer} in the reference folder next to this file: `));
+    for (const name of SYSTEM_REFERENCE_DOCS) assert.ok(body.includes(name), name);
+  });
+
+  test('a ticket file names the absolute folder; a missing folder leaves only the pointer out', () => {
+    const folder = '/home/you/.local/share/openchamber/extensions/design-chamber/dist/skills/design-system-builder/reference';
+    const ticket = buildSystemSkillBody({ ...input, reference: { folder } });
+    assert.ok(ticket.includes(`- ${pointer} in ${folder}: foundations.md`));
+    assert.ok(!ticket.includes('next to this file'));
+    const missing = buildSystemSkillBody({ ...input, reference: null });
+    assert.ok(!missing.includes(pointer));
+    assert.equal(missing, body.replace(/^- Before you write an area, read its reference doc .*\n/m, ''), 'nothing else changes');
+  });
+
+  test('the depth checklist, outOfScope after asking the user, and depth copied into system.json', () => {
+    assert.ok(body.includes('## Depth and the reference docs'));
+    assert.ok(body.includes('`depth` sets what the check expects. Tokens: foundations only. Core: '));
+    assert.ok(body.includes('Full adds state colours, control sizes, breakpoints, elevation, layers, motion'));
+    assert.ok(body.includes('labelling every variant, size and state'));
+    assert.ok(body.includes("A topic that doesn't fit the product: ask the user first, then list its id in `outOfScope`"));
+    assert.ok(body.includes('Never add one to clear a finding.'));
+    assert.ok(body.includes('`mode`, `depth`, `dark`'), 'BUILD.json records depth');
+    assert.ok(body.includes('Round two adds `platforms`, a list holding the platforms choice id.'));
+    assert.ok(body.includes('Copy `depth` into system.json too: the check reads it there.'));
+  });
+
+  test('the see-and-fix loop: one area with --area, dark with --scheme, the overview then the named picture, then one full check', () => {
+    assert.ok(body.includes('- Work one area at a time: write it, check it with `"area": "<area>"` (`--area <area>`; add `"scheme": "dark"` or `--scheme dark`'));
+    assert.ok(body.includes('open its overview, then the picture each finding names, fix it, check again.'));
+    assert.ok(body.includes('- Before you say done: one full check with no area.'));
+    assert.ok(body.includes('every coverage gap filled or in `outOfScope`'));
+    assert.ok(BOARD_PICTURES_SENTENCE.includes('in dark too when the system has dark values'));
+    const checks = body.indexOf('## Check your work');
+    assert.ok(checks >= 0 && body.indexOf('- Work one area at a time') > checks);
   });
 });

@@ -7,15 +7,15 @@
 import { BOARD_ENTRY_MAX, SYSTEM_ENTRY_ID_PATTERN, SYSTEM_TOKEN_NAME_PATTERN } from './limits.ts';
 import type { SystemDetail, SystemSection } from './types.ts';
 
-/** Every entry key the board may carry; `pattern:` and `brand:` are S8 (§2.11). */
+/** Every entry key the board may carry; `pattern:` and `brand:` are S8 (§2.11); `pair:<n>` is a colour pair (system-builder-depth §4.4). */
 export const BOARD_ENTRY_PATTERN =
-  /^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\d{1,3}|logo:\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40})$/;
+  /^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\d{1,3}|logo:\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40}|pair:\d{1,3})$/;
 
-export type BoardEntryKind = 'token' | 'type' | 'font' | 'logo' | 'component' | 'overview' | 'note' | 'pattern' | 'brand';
+export type BoardEntryKind = 'token' | 'type' | 'font' | 'logo' | 'component' | 'overview' | 'note' | 'pattern' | 'brand' | 'pair';
 
 export type BoardEntryKey = { kind: BoardEntryKind; key: string };
 
-const KINDS: ReadonlySet<string> = new Set<BoardEntryKind>(['token', 'type', 'font', 'logo', 'component', 'overview', 'note', 'pattern', 'brand']);
+const KINDS: ReadonlySet<string> = new Set<BoardEntryKind>(['token', 'type', 'font', 'logo', 'component', 'overview', 'note', 'pattern', 'brand', 'pair']);
 
 /** True when the text is a well-formed entry key within the length cap. */
 export const isBoardEntryKey = (text: string): boolean => text.length <= BOARD_ENTRY_MAX && BOARD_ENTRY_PATTERN.test(text);
@@ -67,6 +67,9 @@ export const sectionOfEntry = (key: BoardEntryKey, detail: SystemDetail): System
       return detail.patterns.some((entry) => entry.id === key.key) ? 'patterns' : null;
     case 'brand':
       return detail.brand.some((entry) => entry.id === key.key) ? 'brand' : null;
+    case 'pair':
+      // Pairs draw under Colours; the key is the pair's index in `detail.pairs`.
+      return Number(key.key) < detail.pairs.length ? 'colours' : null;
   }
 };
 

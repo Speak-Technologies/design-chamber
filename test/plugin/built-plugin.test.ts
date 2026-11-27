@@ -51,7 +51,8 @@ test('setup registers exactly one tool, design_check, with plain JSON Schema inp
   assert.equal(tool.input.type, 'object');
   // One of design or system (Phase 2.5 §10.2): the schema can't say "exactly one", parseToolInput does.
   assert.equal(tool.input.required, undefined);
-  assert.deepEqual(Object.keys(tool.input.properties as object).sort(), ['design', 'screens', 'static', 'system']);
+  // area and scheme are the system check's closed enums (system-builder-depth D8).
+  assert.deepEqual(Object.keys(tool.input.properties as object).sort(), ['area', 'design', 'scheme', 'screens', 'static', 'system']);
   assert.equal(typeof tool.execute, 'function');
 });
 

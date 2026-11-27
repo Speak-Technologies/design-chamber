@@ -43,6 +43,7 @@ const summary = (over: Partial<SystemSummary> = {}): SystemSummary => ({
   sharedRepoWith: null,
   livingPage: null,
   proposalWaiting: false,
+  depth: null,
   ...over,
 });
 
@@ -145,6 +146,20 @@ test('a row: name, Ready, home, badges, meta and an accessible name that says it
   assert.equal(row.home.label, 'In Design Chamber');
   assert.deepEqual(row.meta, ['From shop', 'Used by 4 designs', '2 hr. ago']);
   assert.equal(row.ariaLabel, 'Tidepool, Ready, In Design Chamber, Changes to review. From shop, Used by 4 designs, 2 hr. ago.');
+});
+
+test('a row says the depth first on its meta line, and nothing when the system has none', () => {
+  const from = { code: { directory: 'C:\\work\\shop', lastScan: ago(HOUR), partial: false }, brand: 0, description: false };
+  const core = systemRow(summary({ name: 'Tidepool', depth: 'core', usedBy: 4, sources: from }), { nowMs: NOW, locale: 'en', label });
+  assert.equal(core.metaParts.depth, 'Core system');
+  assert.deepEqual(core.meta, ['Core system', 'From shop', 'Used by 4 designs', '2 hr. ago']);
+  assert.equal(core.ariaLabel, 'Tidepool, Ready, In Design Chamber. Core system, From shop, Used by 4 designs, 2 hr. ago.');
+  assert.equal(systemRow(summary({ depth: 'full' }), { nowMs: NOW, locale: 'en', label }).metaParts.depth, 'Full system');
+  assert.equal(systemRow(summary({ depth: 'tokens' }), { nowMs: NOW, locale: 'en', label }).metaParts.depth, 'Tokens only');
+  const none = systemRow(summary({ depth: null, usedBy: 4, sources: from }), { nowMs: NOW, locale: 'en', label });
+  assert.equal(none.metaParts.depth, null);
+  assert.deepEqual(none.meta, ['From shop', 'Used by 4 designs', '2 hr. ago'], 'a row with no depth reads exactly as before');
+  assert.ok(!/Core|Full|Tokens/.test(none.ariaLabel));
 });
 
 test('a draft reads Draft in the info tone', () => {

@@ -5,7 +5,9 @@
 import { AREA_OF_SECTION, SYSTEM_AREAS, SYSTEM_SECTIONS } from '../../shared/system-json.ts';
 import { BOARD_ENTRY_PATTERN, entryKeyOf, parseEntryKey, sectionOfEntry } from '../../shared/system-board.ts';
 import { sectionLabel } from '../../shared/agent/system-prompts.ts';
-import type { ColourGroup, ReviewState, SystemArea, SystemDetail, SystemSection, SystemToken } from '../../shared/types.ts';
+import type { ColourGroup, ColourPairUse, ReviewState, SystemArea, SystemDepth, SystemDetail, SystemSection, SystemToken, SystemTopicId } from '../../shared/types.ts';
+// Pure colour maths the board's Pairs block and the checks already share (no Node imports): one judge of a pair.
+import { PAIR_LEVELS, pairSchemes, ratioText, staticPairRatio, type PairScheme } from '../../shared/pair-contrast.ts';
 import { plural } from './format.ts';
 
 export const AREA_LABEL: Readonly<Record<SystemArea, string>> = Object.freeze({
@@ -190,16 +192,214 @@ export const entrySelector = (entry: string): string => `[data-dc-entry="${entry
 
 // ---- Header ----
 
-/** "In Design Chamber · From a description · Used by 2 designs", or "Repo · shop · Used by 2 designs" (the repo is the source). */
-export const homeLine = (detail: Pick<SystemDetail, 'home' | 'sources' | 'usedBy'>, sourceText: string | null): string => {
+// ---- Depth and scope (system-builder-depth D7, §4.3) ----
+
+/** How complete the system means to be, in the interview's words. */
+export const DEPTH_LABEL: Readonly<Record<SystemDepth, string>> = Object.freeze({
+  tokens: 'Tokens only',
+  core: 'Core system',
+  full: 'Full system',
+});
+
+/** What each depth covers, as one sentence for the Overview. */
+export const DEPTH_SENTENCE: Readonly<Record<SystemDepth, string>> = Object.freeze({
+  tokens: 'Values and notes only. It has no components or patterns.',
+  core: 'The foundations, the components your code has with every state, and the patterns those screens use.',
+  full: 'A core system plus motion, navigation, overlays, forms, feedback and data display.',
+});
+
+/** The checklist topics in plain words; the record is closed, so a new topic id fails typecheck here. */
+export const TOPIC_LABEL: Readonly<Record<SystemTopicId, string>> = Object.freeze({
+  surface: 'Surface colours',
+  text: 'Text colours',
+  border: 'Border colours',
+  brand: 'Brand colours',
+  status: 'Status colours',
+  'type-styles': 'Type styles',
+  spacing: 'Spacing',
+  radius: 'Corner radius',
+  pairs: 'Colour pairs',
+  'dark-values': 'Dark values',
+  'state-colours': 'State colours',
+  'data-colours': 'Data colours',
+  'control-sizes': 'Control sizes',
+  breakpoints: 'Breakpoints',
+  elevation: 'Shadows',
+  layers: 'Layers',
+  motion: 'Motion',
+  components: 'Components',
+  examples: 'Live examples',
+  'focus-disabled': 'Focus and disabled states',
+  voice: 'Voice',
+  navigation: 'Navigation',
+  overlays: 'Overlays',
+  forms: 'Forms',
+  feedback: 'Feedback',
+  states: 'Empty, loading and error states',
+  'data-display': 'Data display',
+  accessibility: 'Accessibility',
+  responsive: 'Responsive behaviour',
+  logo: 'Logo',
+  'brand-colour': 'Brand colour',
+  imagery: 'Imagery',
+  marketing: 'Marketing',
+});
+
+/** Fields a detail from before system-builder-depth lacks; the service always sends them, tests and older fixtures may not. */
+type ScopeFacts = Partial<Pick<SystemDetail, 'depth' | 'outOfScope'>>;
+
+/** "Core system" and "3 topics left out"; nothing for a system with neither (an older one). */
+export const scopeParts = (detail: ScopeFacts): string[] => {
+  const parts: string[] = [];
+  if (detail.depth) parts.push(DEPTH_LABEL[detail.depth]);
+  const left = detail.outOfScope?.length ?? 0;
+  if (left > 0) parts.push(`${plural(left, 'topic')} left out`);
+  return parts;
+};
+
+/** "Left out on purpose: Motion, Marketing." for the tooltip; null when nothing was left out. */
+export const leftOutText = (detail: ScopeFacts): string | null => {
+  const topics = (detail.outOfScope ?? []).map((id) => TOPIC_LABEL[id] ?? id);
+  return topics.length === 0 ? null : `Left out on purpose: ${topics.join(', ')}.`;
+};
+
+export type ScopeView = { depth: { label: string; sentence: string } | null; leftOut: string[] };
+
+/** The Overview's scope block; null for a system that says neither (nothing to draw). */
+export const scopeView = (detail: ScopeFacts): ScopeView | null => {
+  const depth = detail.depth ? { label: DEPTH_LABEL[detail.depth], sentence: DEPTH_SENTENCE[detail.depth] } : null;
+  const leftOut = (detail.outOfScope ?? []).map((id) => TOPIC_LABEL[id] ?? id);
+  return depth === null && leftOut.length === 0 ? null : { depth, leftOut };
+};
+
+/**
+ * "In Design Chamber · Core system · 3 topics left out · From a description · Used by 2 designs", or "Repo · shop · Core system · Used by 2 designs"
+ * (the repo is the source). The depth comes right after where the system lives, so a narrow rail that cuts the line cuts the source first.
+ */
+export const homeLine = (detail: Pick<SystemDetail, 'home' | 'sources' | 'usedBy'> & ScopeFacts, sourceText: string | null): string => {
   const parts = detail.home.kind === 'repo' ? [`Repo · ${detail.home.label}`] : ['In Design Chamber'];
+  parts.push(...scopeParts(detail));
   if (sourceText && detail.home.kind !== 'repo') parts.push(sourceText);
   parts.push(detail.usedBy === 0 ? 'Not used yet' : `Used by ${plural(detail.usedBy, 'design')}`);
   return parts.join(' · ');
 };
 
-/** The home line's tooltip: the repo's full path, or where an internal system is kept. */
-export const homeTitle = (detail: Pick<SystemDetail, 'home'>): string => (detail.home.kind === 'repo' ? detail.home.directory : 'Kept in your Designs folder');
+/** The home line's tooltip: the repo's full path, or where an internal system is kept, then what was left out. */
+export const homeTitle = (detail: Pick<SystemDetail, 'home'> & ScopeFacts): string => {
+  const where = detail.home.kind === 'repo' ? detail.home.directory : 'Kept in your Designs folder';
+  const left = leftOutText(detail);
+  return left === null ? where : `${where}\n${left}`;
+};
+
+// ---- Kind labels of pattern and brand entries ----
+
+/** The kinds in words; the same labels the board and the living page print. */
+export const ENTRY_KIND_LABEL: Readonly<Record<string, string>> = Object.freeze({
+  layout: 'Layout',
+  'do-dont': 'Do and don’t',
+  voice: 'Voice',
+  marketing: 'Marketing',
+  imagery: 'Imagery',
+  'logo-use': 'Logo use',
+  other: 'Other',
+  navigation: 'Navigation',
+  overlay: 'Overlays',
+  forms: 'Forms',
+  'data-display': 'Data display',
+  feedback: 'Feedback',
+  states: 'Empty, loading and error',
+  page: 'Page template',
+  responsive: 'Responsive',
+  motion: 'Motion',
+  accessibility: 'Accessibility',
+  colour: 'Brand colour',
+  social: 'Social',
+  email: 'Email',
+});
+
+/** A kind as the row prints it; a kind this build doesn't know (a newer service) reads as plain words, never a raw id. */
+export const entryKindLabel = (kind: string): string => {
+  const known = Object.hasOwn(ENTRY_KIND_LABEL, kind) ? ENTRY_KIND_LABEL[kind] : undefined;
+  if (known !== undefined) return known;
+  const words = kind.replace(/[-_]+/g, ' ').trim();
+  return words === '' ? 'Other' : words.charAt(0).toUpperCase() + words.slice(1);
+};
+
+// ---- Colour pairs (system-builder-depth §4.4) ----
+
+export const PAIR_MEASURED = 'Measured by the check';
+
+const PAIR_USE_LABEL: Readonly<Record<ColourPairUse, string>> = Object.freeze({
+  text: 'Body text',
+  large: 'Large text',
+  ui: 'Interface part',
+});
+
+export type PairGround = {
+  scheme: PairScheme;
+  label: 'Light' | 'Dark';
+  /** The two values to draw the sample with (the dark ground takes dark values, falling back to light), or null. */
+  fg: string | null;
+  bg: string | null;
+  /** "7.21:1", or "Measured by the check" when Node can't parse both values. */
+  ratio: string;
+  /** True when the ratio is known and under the level the use needs. */
+  low: boolean;
+  /** What a screen reader hears: "Light, 7.21:1" or "Dark, 2.90:1, under 4.5:1". */
+  ariaLabel: string;
+};
+
+export type PairView = {
+  /** Where the pair sits in `detail.pairs`: the board entry is `pair:<index>`. */
+  index: number;
+  name: string;
+  /** "Body text, needs 4.5:1". */
+  use: string;
+  note: string;
+  /** Found from the token names, not written down. */
+  auto: boolean;
+  grounds: PairGround[];
+};
+
+const valueOf = (token: SystemToken | undefined, scheme: PairScheme): string | null => {
+  const value = scheme === 'dark' ? (token?.dark ?? token?.light ?? null) : (token?.light ?? null);
+  return value === null || value.editable !== 'ok' ? null : value.text;
+};
+
+/** One row per pair, declared first then automatic, as the service lists them. Empty for a system without any (an older one). */
+export const pairViews = (detail: Pick<SystemDetail, 'tokens'> & Partial<Pick<SystemDetail, 'pairs'>>): PairView[] => {
+  const pairs = detail.pairs ?? [];
+  if (pairs.length === 0) return [];
+  const tokens = new Map(detail.tokens.map((token) => [token.name, token]));
+  const schemes = pairSchemes(detail);
+  return pairs.map((pair, index) => {
+    const level = PAIR_LEVELS[pair.use];
+    const grounds = schemes.map((scheme): PairGround => {
+      const label = scheme === 'dark' ? 'Dark' : 'Light';
+      const ratio = staticPairRatio(detail, pair, scheme);
+      const low = ratio !== null && ratio < level;
+      const text = ratio === null ? PAIR_MEASURED : ratioText(ratio);
+      return {
+        scheme,
+        label,
+        fg: valueOf(tokens.get(pair.fg), scheme),
+        bg: valueOf(tokens.get(pair.bg), scheme),
+        ratio: text,
+        low,
+        ariaLabel: `${label}, ${text}${low ? `, under ${level}:1` : ''}`,
+      };
+    });
+    return {
+      index,
+      name: `${pair.fg} on ${pair.bg}`,
+      use: `${PAIR_USE_LABEL[pair.use]}, needs ${PAIR_LEVELS[pair.use]}:1`,
+      note: pair.note,
+      auto: pair.auto,
+      grounds,
+    };
+  });
+};
+
 
 export type LivingPill = { label: string; tone: 'success' | 'warning' | 'error' | 'info'; title: string };
 
@@ -264,6 +464,10 @@ export const entryLabel = (detail: SystemDetail, entry: string): { tag: string; 
       return { tag: 'font', text: detail.fonts[Number(parsed.key)]?.family ?? 'Font' };
     case 'logo':
       return { tag: 'logo', text: detail.logos[Number(parsed.key)]?.variant ?? 'Logo' };
+    case 'pair': {
+      const pair = detail.pairs[Number(parsed.key)];
+      return { tag: 'pair', text: pair === undefined ? 'Colour pair' : `${pair.fg} on ${pair.bg}` };
+    }
   }
 };
 

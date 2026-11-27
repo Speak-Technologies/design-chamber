@@ -22,7 +22,16 @@ import {
   SystemPromptTooLongError,
   type SystemPromptSystem,
 } from '../../src/shared/agent/system-prompts.ts';
-import { BOARD_PICTURES_SENTENCE, buildSystemRules, SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE, systemContractSection } from '../../src/shared/agent/system-rules.ts';
+import { ENTRY_KINDS } from '../../src/shared/system-json.ts';
+import {
+  BOARD_PICTURES_SENTENCE,
+  buildSystemRules,
+  SYSTEM_INJECTION_REPO_TAIL,
+  SYSTEM_INJECTION_SENTENCE,
+  SYSTEM_REFERENCE_DOCS,
+  systemContractSection,
+  systemReferenceSentence,
+} from '../../src/shared/agent/system-rules.ts';
 import { CHIP_TEXT_HARD_MAX, HOST_TEXT_MAX, SYSTEM_NAME_MAX } from '../../src/shared/limits.ts';
 import { baseContext } from './helpers.ts';
 
@@ -163,7 +172,7 @@ const REPO_SYSTEM: SystemPromptSystem = { ...SYSTEM, repo: { directory: '/home/y
 
 describe('system RULES.md (§8.4)', () => {
   test('internal: the folder, never edit .chamber, never mark ready, the injection sentence, the contract, the check', () => {
-    const text = buildSystemRules({ id: 'acme', name: 'Acme', folder: SYSTEM.folder, projectDirectory: '/home/you/code/shop', home: { kind: 'internal' }, checkCommand: null });
+    const text = buildSystemRules({ id: 'acme', name: 'Acme', folder: SYSTEM.folder, projectDirectory: '/home/you/code/shop', home: { kind: 'internal' }, checkCommand: null, referenceDir: null });
     assert.ok(text.includes(`Write only inside ${SYSTEM.folder}.`));
     assert.ok(text.includes("Don't change anything in /home/you/code/shop."));
     assert.ok(text.includes('Never mark the system ready'));
@@ -175,7 +184,7 @@ describe('system RULES.md (§8.4)', () => {
   });
 
   test('repo-backed: the diff gate, never the snapshot, the extended injection sentence', () => {
-    const text = buildSystemRules({ id: 'acme', name: 'Acme', folder: SYSTEM.folder, projectDirectory: '/home/you/code/shop', home: { kind: 'repo', directory: '/home/you/code/shop', folder: 'design-system' }, checkCommand: "sh '/x/dc' check --system acme" });
+    const text = buildSystemRules({ id: 'acme', name: 'Acme', folder: SYSTEM.folder, projectDirectory: '/home/you/code/shop', home: { kind: 'repo', directory: '/home/you/code/shop', folder: 'design-system' }, checkCommand: "sh '/x/dc' check --system acme", referenceDir: null });
     assert.ok(text.includes('The system lives in /home/you/code/shop/design-system. Change it there only after the user approves a reviewed diff in this chat.'));
     assert.ok(text.includes(`Never write ${SYSTEM.folder}/snapshot`));
     assert.ok(!text.includes("Don't change anything in"), 'superseded by the diff gate');
@@ -185,10 +194,38 @@ describe('system RULES.md (§8.4)', () => {
 
   test('the check section says the check draws the board and where the pictures go, with or without the launcher', () => {
     for (const checkCommand of [null, "sh '/x/dc' check --system acme"]) {
-      const text = buildSystemRules({ id: 'acme', name: 'Acme', folder: SYSTEM.folder, projectDirectory: null, home: { kind: 'internal' }, checkCommand });
+      const text = buildSystemRules({ id: 'acme', name: 'Acme', folder: SYSTEM.folder, projectDirectory: null, home: { kind: 'internal' }, checkCommand, referenceDir: null });
       const check = text.slice(text.indexOf('## Check your work'));
       assert.ok(check.includes(BOARD_PICTURES_SENTENCE), String(checkCommand));
     }
+  });
+
+  test('system-builder-depth T3: RULES.md names the absolute reference folder; without one the line is left out and nothing else changes', () => {
+    const folder = '/home/you/.local/share/openchamber/extensions/design-chamber/dist/skills/design-system-builder/reference';
+    const base = { id: 'acme', name: 'Acme', folder: SYSTEM.folder, projectDirectory: null, home: { kind: 'internal' as const }, checkCommand: null };
+    const withDir = buildSystemRules({ ...base, referenceDir: folder });
+    const line = `- ${systemReferenceSentence(`in ${folder}`)}`;
+    assert.ok(withDir.includes(`${line}\n`));
+    assert.ok(withDir.indexOf(line) < withDir.indexOf('## Check your work'));
+    const without = buildSystemRules({ ...base, referenceDir: null });
+    assert.ok(!without.includes('reference doc'));
+    assert.equal(withDir.replace(`${line}\n`, ''), without);
+    for (const name of SYSTEM_REFERENCE_DOCS) assert.ok(line.includes(name), name);
+  });
+
+  test('system-builder-depth T3: the contract names pairs, sizes and example labels, depth and outOfScope, and every pattern and brand kind with examples', () => {
+    const contract = systemContractSection().join('\n');
+    assert.ok(contract.includes('`pairs`, `depth` and `outOfScope`'));
+    assert.ok(contract.includes('`{ id, name, purpose, note, variants, sizes, states, tokens, source, example }`'));
+    assert.ok(contract.includes('`data-dc-variant`, `data-dc-size` or `data-dc-state`'));
+    assert.ok(contract.includes('- `pairs`: `{ fg, bg, use, note }`'));
+    assert.ok(contract.includes('`--x-fg` or `--on-x` on `--x` is a pair already.'));
+    assert.ok(contract.includes(`kind ${ENTRY_KINDS.patterns.join(', ')}.`));
+    assert.ok(contract.includes(`kind ${ENTRY_KINDS.brand.join(', ')}.`));
+    assert.ok(contract.includes('`patterns/<id>.html` or `brand/<id>.html`'));
+    assert.ok(contract.includes('`outOfScope`: checklist topic ids the user agreed to leave out.'));
+    assert.ok(contract.includes('"notes": "full"'), 'RULES.md keeps the full layout bullet');
+    assert.ok(!contract.includes('—'));
   });
 });
 
@@ -249,7 +286,7 @@ describe('system prompts (§8.5, §8.10)', () => {
     const texts = [
       buildRulesDoc(ctx(linked({ repo: '/r', complete: false, overviewEmpty: true })), FILES),
       buildChipText(ctx({ state: 'ask', choices: [{ id: 'acme', name: 'Acme', line: 'x' }], recommended: 'acme' }), 'new'),
-      buildSystemRules({ id: 'acme', name: 'Acme', folder: '/s', projectDirectory: null, home: { kind: 'internal' }, checkCommand: null }),
+      buildSystemRules({ id: 'acme', name: 'Acme', folder: '/s', projectDirectory: null, home: { kind: 'internal' }, checkCommand: null, referenceDir: null }),
       buildSystemChipText(REPO_SYSTEM),
     ];
     for (const text of texts) assert.ok(!text.includes('—'));

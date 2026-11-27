@@ -480,7 +480,12 @@ export type CheckCode =
   | 'system-board-preview-outside'
   | 'system-board-text-outside'
   | 'system-board-hint-small'
-  | 'system-board-partial';
+  | 'system-board-partial'
+  // system-builder-depth §4.5
+  | 'system-example-missing'
+  | 'system-states-missing'
+  | 'system-contrast-low'
+  | 'system-coverage-gap';
 
 export type CheckSeverity = 'error' | 'warning' | 'info';
 
@@ -537,6 +542,17 @@ export type CheckParams = {
    * of the area is in no picture; `entries` = entries past `max` weren't measured.
    */
   pictured?: 'tiles' | 'overview' | 'no-overview' | 'gap' | 'entries';
+  /** `system-example-missing` and `system-coverage-gap`: the system's depth; `full` makes them warnings. */
+  depth?: SystemDepth;
+  /** `system-contrast-low`, and a dark-pass board finding: which scheme it was found in. */
+  scheme?: 'light' | 'dark';
+  /** `system-states-missing` only: which list the unlabelled names come from. */
+  listed?: 'variants' | 'sizes' | 'states';
+  /**
+   * `system-contrast-low` only: `auto` when every pair in it was found from token names on a system with
+   * no `depth`, which makes it a note (an older system gets no new warnings; the main agent's ruling).
+   */
+  pairs?: 'auto';
 };
 
 /** A finding as `check.json` stores it. `detail` and `selector` are untrusted design text. */
@@ -705,6 +721,8 @@ export type SystemComponent = {
   purpose: string;
   note: string;
   variants: string[];
+  /** Size names (≤ 10, as `variants`); [] when not listed (system-builder-depth §4.3). */
+  sizes: string[];
   states: string[];
   /** Token names the component uses. */
   tokens: string[];
@@ -718,8 +736,44 @@ export type SystemComponent = {
   layout: BoardLayout | null;
 };
 
-/** A Patterns & voice or Brand & marketing entry; `text` is the body file, shown as text, never markup. */
-export type SystemEntryText = { id: string; kind: string; title: string; note: string; text: string | null; problem: string | null; layout: BoardLayout | null };
+/**
+ * A Patterns & voice or Brand & marketing entry; `text` is the body file, shown as text, never markup.
+ * `example` is the live example (`patterns/<id>.html` / `brand/<id>.html`), drawn exactly like a
+ * component example; null when the entry has none (system-builder-depth §4.3, D4).
+ */
+export type SystemEntryText = {
+  id: string;
+  kind: string;
+  title: string;
+  note: string;
+  text: string | null;
+  problem: string | null;
+  layout: BoardLayout | null;
+  example: { remote: string[] } | null;
+};
+
+/** How complete a system means to be (system-builder-depth D7): the completeness checklist keys on it. */
+export type SystemDepth = 'tokens' | 'core' | 'full';
+
+/** The level a colour pair must reach (WCAG): body text 4.5:1, large text and UI parts 3:1. */
+export type ColourPairUse = 'text' | 'large' | 'ui';
+
+/**
+ * A declared colour pair (`system.json` `pairs[]`), or an automatic one (`--x-fg` / `--on-x` on `--x`,
+ * `auto: true`). `fg` and `bg` are colour token names of this system.
+ */
+export type SystemColourPair = { fg: string; bg: string; use: ColourPairUse; note: string; auto: boolean };
+
+/**
+ * One completeness checklist topic (system-builder-depth §4.5): a closed list, so the check's detail
+ * and `outOfScope` never carry agent text. `SYSTEM_TOPIC_IDS` in `system-checklist.ts` lists them.
+ */
+export type SystemTopicId =
+  | 'surface' | 'text' | 'border' | 'brand' | 'status' | 'type-styles' | 'spacing' | 'radius' | 'pairs' | 'dark-values'
+  | 'state-colours' | 'data-colours' | 'control-sizes' | 'breakpoints' | 'elevation' | 'layers' | 'motion'
+  | 'components' | 'examples' | 'focus-disabled'
+  | 'voice' | 'navigation' | 'overlays' | 'forms' | 'feedback' | 'states' | 'data-display' | 'accessibility' | 'responsive'
+  | 'logo' | 'brand-colour' | 'imagery' | 'marketing';
 
 /** Where a system lives (S8, AD-14): in the Designs folder, or read from a repo folder. */
 export type SystemHomeView =
@@ -883,6 +937,8 @@ export type SystemSummary = {
   livingPage: LivingPageState | null;
   /** rev 3: a current proposal, not yet approved or declined. */
   proposalWaiting: boolean;
+  /** system-builder-depth §4.3: `system.json` `depth`; null when absent, invalid or unreadable. */
+  depth: SystemDepth | null;
 };
 
 export type SystemDetail = {
@@ -944,6 +1000,13 @@ export type SystemDetail = {
     ignored: { entry: string; value: string; reason: 'unknown' | 'not-here' }[];
     ignoredCount: number;
   };
+  // system-builder-depth §4.3 (all optional in system.json; absent reads as null or [])
+  /** `system.json` `depth`; null when absent or invalid (no completeness check then). In no fingerprint. */
+  depth: SystemDepth | null;
+  /** Declared pairs first, then automatic ones; ≤ `SYSTEM_PAIRS_MAX` in all. */
+  pairs: SystemColourPair[];
+  /** Checklist topics the agent marked out of scope (known ids only, each once). In no fingerprint. */
+  outOfScope: SystemTopicId[];
 };
 
 // ---- Phase 2.5: the system's own files (§2.5, §2.13, §2.15, §2.6, §2.8) ----
@@ -1016,6 +1079,10 @@ export type BuildJson = {
   /** Phase 2.6 AD-11: the existing-system folder the agent found, relative to the project. */
   existing?: { folder: string } | null;
   mode: 'fix' | 'describe' | 'none';
+  /** system-builder-depth §4.2: the round-one depth answer; absent when not written or not valid. */
+  depth?: SystemDepth;
+  /** system-builder-depth §4.2: the platforms choice ids (≤ 4, each once); absent when not written or not valid. */
+  platforms?: string[];
   dark: boolean;
   calls: { topic: string; choice: string; note: string }[];
   access: 'dev' | 'public' | null;

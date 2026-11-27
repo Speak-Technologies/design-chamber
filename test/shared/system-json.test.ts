@@ -7,6 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 
 import {
@@ -18,6 +19,7 @@ import {
   humaniseSystemId,
   isBoardLayout,
   isReservedSystemId,
+  isSystemContractRel,
   LAYOUTS_OF_SECTION,
   parseSystemJson,
   parseSystemState,
@@ -32,7 +34,11 @@ import {
   type SystemDetailSource,
   type SystemTokenRules,
 } from '../../src/shared/system-json.ts';
+import { SYSTEM_OUT_OF_SCOPE_MAX } from '../../src/shared/limits.ts';
+import { entryKeyOf, isBoardEntryKey, parseEntryKey, sectionOfEntry } from '../../src/shared/system-board.ts';
+import { SYSTEM_TOPIC_IDS } from '../../src/shared/system-checklist.ts';
 import type { JsonObject, SystemState } from '../../src/shared/types.ts';
+import { OLD_SYSTEM_HASHES, oldSystemSource } from './fixtures/old-system.ts';
 
 const NOW = '2026-11-19T10:00:00.000Z';
 
@@ -417,7 +423,7 @@ describe('buildSystemDetail', () => {
       brand: [{ id: 'hero', kind: 'marketing', title: 'Heroes' }],
     });
     const detail = buildSystemDetail(source({ systemJson, texts: { 'patterns/voice.md': '<b>not markup</b>' } }), RULES);
-    assert.deepEqual(detail.patterns, [{ id: 'voice', kind: 'voice', title: 'Voice', note: 'Plain.', text: '<b>not markup</b>', problem: null, layout: null }]);
+    assert.deepEqual(detail.patterns, [{ id: 'voice', kind: 'voice', title: 'Voice', note: 'Plain.', text: '<b>not markup</b>', problem: null, layout: null, example: null }]);
     assert.deepEqual(detail.brand.map((entry) => [entry.id, entry.text]), [['hero', null]]);
   });
 
@@ -726,5 +732,223 @@ describe('board layout hints (system-board-layout-and-visual-check.md §A)', () 
   test('an unreadable system.json carries no hints and no ignored records', () => {
     const detail = buildSystemDetail(source({ systemJson: '{ nope' }), RULES);
     assert.deepEqual(detail.boardLayout, { sections: {}, ignored: [], ignoredCount: 0 });
+  });
+});
+
+describe('builder depth contract (system-builder-depth.md §4.3)', () => {
+  const COLOURS = [
+    ':root {',
+    '  --accent: #2456d6;',
+    '  --accent-fg: #ffffff;',
+    '  --primary: #111111;',
+    '  --on-primary: #eeeeee;',
+    '  --lonely-fg: #000000;',
+    '  --on-nothing: #000000;',
+    '  --bg: #ffffff;',
+    '  --fg: #222222;',
+    '  --space-4: 16px;',
+    '}',
+  ].join('\n');
+  const of = (json: Record<string, unknown>, overrides: Partial<SystemDetailSource> = {}) =>
+    buildSystemDetail(source({ tokensCss: COLOURS, systemJson: JSON.stringify(json), ...overrides }), RULES);
+  const changedSections = (one: Record<string, string>, two: Record<string, string>) => SYSTEM_SECTIONS.filter((section) => one[section] !== two[section]);
+
+  test('an old system reads exactly as the 0.7.0 reader read it, plus empty new fields and only automatic pairs', () => {
+    const before = JSON.parse(readFileSync(new URL('./fixtures/old-system-detail.json', import.meta.url), 'utf8')) as { detail: Record<string, unknown>; fingerprints: Record<string, string> };
+    const detail = buildSystemDetail(oldSystemSource());
+    assert.equal(detail.depth, null);
+    assert.deepEqual(detail.outOfScope, []);
+    assert.deepEqual(detail.problems, []);
+    for (const component of detail.components) assert.deepEqual(component.sizes, []);
+    for (const entry of [...detail.patterns, ...detail.brand]) assert.equal(entry.example, null);
+    // The old fixture has on-colours, so its automatic pairs appear; nothing else is new.
+    assert.deepEqual(detail.pairs, [
+      { fg: '--accent-fg', bg: '--accent', use: 'text', note: '', auto: true },
+      { fg: '--on-brand', bg: '--brand', use: 'text', note: '', auto: true },
+    ]);
+    const { depth: _depth, pairs: _pairs, outOfScope: _outOfScope, ...rest } = detail;
+    const old = {
+      ...rest,
+      components: detail.components.map(({ sizes: _sizes, ...component }) => component),
+      patterns: detail.patterns.map(({ example: _example, ...entry }) => entry),
+      brand: detail.brand.map(({ example: _example, ...entry }) => entry),
+    };
+    assert.equal(JSON.stringify(old), JSON.stringify(before.detail));
+    // Every fingerprint is the one 0.7.0 computed, so no review and no Ready system moves.
+    assert.deepEqual(sectionFingerprints(detail, OLD_SYSTEM_HASHES), before.fingerprints);
+  });
+
+  test('depth: tokens, core and full read; absent is null; anything else is a problem on depth only', () => {
+    for (const depth of ['tokens', 'core', 'full'] as const) assert.equal(of({ depth }).depth, depth);
+    assert.equal(of({}).depth, null);
+    assert.equal(of({ depth: null }).depth, null);
+    for (const depth of ['huge', 'Full', 3, ['core'], {}]) {
+      const detail = of({ depth, components: [{ id: 'button', name: 'Button' }] });
+      assert.equal(detail.depth, null, JSON.stringify(depth));
+      assert.deepEqual(detail.problems, [{ entry: 'depth', message: 'depth must be tokens, core or full, so the completeness check is off.' }]);
+      assert.equal(detail.components.length, 1);
+    }
+  });
+
+  test('component sizes read like variants; a bad list drops only that component', () => {
+    const detail = of({
+      components: [
+        { id: 'button', name: 'Button', sizes: ['sm', 'md', 'lg'] },
+        { id: 'chip', name: 'Chip', sizes: Array.from({ length: 11 }, (_, n) => `s${n}`) },
+        { id: 'tag', name: 'Tag', sizes: 'md' },
+        { id: 'pill', name: 'Pill', sizes: ['x'.repeat(41)] },
+        { id: 'card', name: 'Card' },
+      ],
+    });
+    assert.deepEqual(detail.components.map((component) => [component.id, component.sizes]), [['button', ['sm', 'md', 'lg']], ['card', []]]);
+    assert.deepEqual(detail.problems.map((problem) => problem.entry), ['components.chip', 'components.tag', 'components.pill']);
+    assert.ok(detail.problems.every((problem) => problem.message === 'Sizes is a list of up to 10 short names.'));
+  });
+
+  test('the new pattern and brand kinds read; a brand kind in patterns is still refused', () => {
+    const patternKinds = ['navigation', 'overlay', 'forms', 'data-display', 'feedback', 'states', 'page', 'responsive', 'motion', 'accessibility'];
+    const brandKinds = ['colour', 'social', 'email'];
+    const detail = of({
+      patterns: [...patternKinds.map((kind) => ({ id: kind, kind, title: kind })), { id: 'wrong', kind: 'email', title: 'Wrong' }],
+      brand: [...brandKinds.map((kind) => ({ id: kind, kind, title: kind })), { id: 'wrong', kind: 'navigation', title: 'Wrong' }],
+    });
+    assert.deepEqual(detail.patterns.map((entry) => entry.kind), patternKinds);
+    assert.deepEqual(detail.brand.map((entry) => entry.kind), brandKinds);
+    assert.deepEqual(detail.problems.map((problem) => problem.entry), ['patterns.wrong', 'brand.wrong']);
+  });
+
+  test('pattern and brand examples: exactly <folder>/<id>.html and present; otherwise a problem and the entry stays', () => {
+    const files = [{ rel: 'patterns/nav.html', bytes: 10 }, { rel: 'brand/hero.html', bytes: 10 }, { rel: 'components/sheet.html', bytes: 10 }];
+    const detail = of(
+      {
+        patterns: [
+          { id: 'nav', kind: 'navigation', title: 'Nav', example: 'patterns/nav.html' },
+          { id: 'sheet', kind: 'overlay', title: 'Sheet', example: 'components/sheet.html' },
+          { id: 'toast', kind: 'feedback', title: 'Toast', example: 'patterns/toast.html' },
+          { id: 'up', kind: 'feedback', title: 'Up', example: '../patterns/nav.html' },
+        ],
+        brand: [{ id: 'hero', kind: 'marketing', title: 'Hero', example: 'brand/hero.html' }],
+      },
+      { files },
+    );
+    assert.deepEqual(detail.patterns.map((entry) => [entry.id, entry.example]), [['nav', { remote: [] }], ['sheet', null], ['toast', null], ['up', null]]);
+    assert.deepEqual(detail.brand[0]?.example, { remote: [] });
+    assert.deepEqual(detail.problems, [
+      { entry: 'patterns.sheet', message: 'Its example must be patterns/sheet.html.' },
+      { entry: 'patterns.toast', message: 'patterns/toast.html is missing.' },
+      { entry: 'patterns.up', message: 'Its example must be patterns/up.html.' },
+    ]);
+  });
+
+  test('automatic pairs: --x-fg on --x and --on-x on --x, only when --x is a colour this system sets', () => {
+    const detail = of({});
+    assert.deepEqual(detail.pairs, [
+      { fg: '--accent-fg', bg: '--accent', use: 'text', note: '', auto: true },
+      { fg: '--on-primary', bg: '--primary', use: 'text', note: '', auto: true },
+    ]);
+    assert.deepEqual(detail.problems, []);
+  });
+
+  test('declared pairs come first; a declared pair replaces its automatic twin; bad pairs are problems on that pair only', () => {
+    const detail = of({
+      pairs: [
+        { fg: '--fg', bg: '--bg', use: 'text', note: 'Body text.' },
+        { fg: '--accent-fg', bg: '--accent', use: 'ui' },
+        { fg: '--fg', bg: '--bg' },
+        { fg: '--fg', bg: '--space-4' },
+        { fg: '--nope', bg: '--bg' },
+        { fg: '--fg', bg: '--accent', use: 'huge' },
+        { fg: '--fg', bg: '--accent', note: 'x'.repeat(501) },
+        'junk',
+        { fg: '--fg', bg: '--primary', use: 'large' },
+      ],
+    });
+    assert.deepEqual(detail.pairs, [
+      { fg: '--fg', bg: '--bg', use: 'text', note: 'Body text.', auto: false },
+      { fg: '--accent-fg', bg: '--accent', use: 'ui', note: '', auto: false },
+      { fg: '--fg', bg: '--primary', use: 'large', note: '', auto: false },
+      { fg: '--on-primary', bg: '--primary', use: 'text', note: '', auto: true },
+    ]);
+    assert.deepEqual(detail.problems, [
+      { entry: 'pairs[2]', message: 'This pair is listed twice.' },
+      { entry: 'pairs[3]', message: 'Its fg and bg must be colour tokens this system sets.' },
+      { entry: 'pairs[4]', message: 'Its fg and bg must be colour tokens this system sets.' },
+      { entry: 'pairs[5]', message: 'Its use must be text, large or ui.' },
+      { entry: 'pairs[6]', message: 'Its note is longer than 500 characters.' },
+      { entry: 'pairs[7]', message: 'This pair is not an object.' },
+    ]);
+  });
+
+  test('pairs cap at 60 with the true count; automatic pairs stop at the cap', () => {
+    const many = Array.from({ length: 70 }, (_, n) => ({ fg: '--fg', bg: '--bg', note: `n${n}` }));
+    // Distinct declared pairs: build 70 colour tokens.
+    const css = `:root {\n${Array.from({ length: 70 }, (_, n) => `  --c${n}: #00000${n % 10};`).join('\n')}\n  --accent: #111111;\n  --accent-fg: #ffffff;\n}`;
+    const pairs = many.map((_, n) => ({ fg: `--c${n}`, bg: '--accent' }));
+    const detail = buildSystemDetail(source({ tokensCss: css, systemJson: JSON.stringify({ pairs }) }), RULES);
+    assert.equal(detail.pairs.length, 60);
+    assert.ok(detail.pairs.every((pair) => !pair.auto));
+    assert.deepEqual(detail.problems, [{ entry: 'pairs', message: "Design systems hold up to 60 colour pairs. 10 more weren't read." }]);
+  });
+
+  test('outOfScope: known topic ids each once, unknown ones one problem, capped at 40 with the true count', () => {
+    assert.deepEqual(of({ outOfScope: ['motion', 'marketing', 'motion'] }).outOfScope, ['motion', 'marketing']);
+    const odd = of({ outOfScope: ['motion', 'sparkles', 'Marketing', 7] });
+    assert.deepEqual(odd.outOfScope, ['motion']);
+    assert.deepEqual(odd.problems, [{ entry: 'outOfScope', message: '"sparkles", "Marketing", "number" aren\'t checklist topics, so they were skipped.' }]);
+    const one = of({ outOfScope: ['nope\nline'] });
+    assert.deepEqual(one.problems, [{ entry: 'outOfScope', message: '"nope line" isn\'t a checklist topic, so it was skipped.' }]);
+    const long = of({ outOfScope: Array.from({ length: 45 }, () => 'motion') });
+    assert.deepEqual(long.outOfScope, ['motion']);
+    assert.deepEqual(long.problems, [{ entry: 'outOfScope', message: "outOfScope holds up to 40 topic ids. 5 more weren't read." }]);
+    assert.deepEqual(of({ outOfScope: 'motion' }).problems, [{ entry: 'outOfScope', message: 'outOfScope in system.json is not a list, so it was skipped.' }]);
+  });
+
+  test('__proto__ keys are ordinary ignored keys for depth, pairs and outOfScope', () => {
+    const text = '{"__proto__":{"depth":"full","outOfScope":["motion"],"pairs":[{"fg":"--fg","bg":"--bg"}]},"pairs":[{"__proto__":{"fg":"--fg","bg":"--bg"}}]}';
+    const detail = buildSystemDetail(source({ tokensCss: COLOURS, systemJson: text }), RULES);
+    assert.equal(detail.depth, null);
+    assert.deepEqual(detail.outOfScope, []);
+    assert.ok(detail.pairs.every((pair) => pair.auto));
+    assert.deepEqual(detail.problems, [{ entry: 'pairs[0]', message: 'Its fg and bg must be colour tokens this system sets.' }]);
+  });
+
+  test('fingerprints: a pattern or brand example moves its own section; pairs move colours; sizes move components; depth and outOfScope move none', () => {
+    const json = {
+      patterns: [{ id: 'nav', kind: 'navigation', title: 'Nav', example: 'patterns/nav.html' }],
+      brand: [{ id: 'hero', kind: 'marketing', title: 'Hero', example: 'brand/hero.html' }],
+      components: [{ id: 'button', name: 'Button' }],
+    };
+    const files = [{ rel: 'patterns/nav.html', bytes: 1 }, { rel: 'brand/hero.html', bytes: 1 }];
+    const prints = (overrides: Record<string, unknown>, hashes: Record<string, string> = {}) => sectionFingerprints(of({ ...json, ...overrides }, { files }), hashes);
+    const base = prints({}, { 'patterns/nav.html': '1'.repeat(64), 'brand/hero.html': '1'.repeat(64) });
+    assert.deepEqual(changedSections(base, prints({}, { 'patterns/nav.html': '2'.repeat(64), 'brand/hero.html': '1'.repeat(64) })), ['patterns']);
+    assert.deepEqual(changedSections(base, prints({}, { 'patterns/nav.html': '1'.repeat(64), 'brand/hero.html': '2'.repeat(64) })), ['brand']);
+    const hashes = { 'patterns/nav.html': '1'.repeat(64), 'brand/hero.html': '1'.repeat(64) };
+    assert.deepEqual(changedSections(base, prints({ depth: 'full' }, hashes)), []);
+    assert.deepEqual(changedSections(base, prints({ depth: 'core', outOfScope: ['motion', 'marketing'] }, hashes)), []);
+    assert.deepEqual(changedSections(base, prints({ pairs: [{ fg: '--fg', bg: '--bg' }] }, hashes)), ['colours']);
+    assert.deepEqual(changedSections(base, prints({ components: [{ id: 'button', name: 'Button', sizes: ['sm'] }] }, hashes)), ['components']);
+  });
+
+  test('pattern and brand examples are contract paths; other shapes are not', () => {
+    for (const rel of ['patterns/nav.html', 'brand/hero.html', 'components/button.html']) assert.equal(isSystemContractRel(rel), true, rel);
+    for (const rel of ['patterns/Nav.html', 'patterns/../x.html', 'brand/a/b.html', 'patterns/nav.htm', 'notes/x.html']) assert.equal(isSystemContractRel(rel), false, rel);
+  });
+
+  test('the checklist topic ids are the closed list the spec names', () => {
+    assert.equal(SYSTEM_TOPIC_IDS.length, 33);
+    assert.equal(new Set(SYSTEM_TOPIC_IDS).size, 33);
+    assert.ok(SYSTEM_TOPIC_IDS.length <= SYSTEM_OUT_OF_SCOPE_MAX);
+  });
+
+  test('pair entry keys: pair:<n> parses and belongs to Colours while the pair exists', () => {
+    const detail = of({});
+    assert.equal(isBoardEntryKey('pair:1'), true);
+    assert.equal(isBoardEntryKey('pair:x'), false);
+    assert.equal(isBoardEntryKey('pair:1000'), false);
+    assert.deepEqual(parseEntryKey('pair:1'), { kind: 'pair', key: '1' });
+    assert.equal(sectionOfEntry({ kind: 'pair', key: '1' }, detail), 'colours');
+    assert.equal(sectionOfEntry({ kind: 'pair', key: '2' }, detail), null);
+    assert.equal(entryKeyOf('pair', '0'), 'pair:0');
   });
 });

@@ -19,7 +19,8 @@ import { resolveSystemTarget, resolveTarget } from '../service/check/target.ts';
 import { resolveBrowser } from '../service/chrome.ts';
 import { defaultDesignsRoot, isDesignFolder, isDirectory } from '../service/root.ts';
 import { readSettingsFile, settingsFilePath } from '../service/settings.ts';
-import type { SettingsFile } from '../shared/types.ts';
+import type { SettingsFile, SystemArea } from '../shared/types.ts';
+import type { CheckScheme } from '../service/check/report-text.ts';
 
 const out = (text: string): void => {
   process.stdout.write(text);
@@ -51,8 +52,17 @@ const isRealDirectory = async (dir: string): Promise<boolean> => {
   return info !== null && info.isDirectory() && !info.isSymbolicLink();
 };
 
-/** `dc check --system <id>`: draw the board at two widths and save its pictures, or `--static` for the files only. */
-const checkSystem = async (input: { root: string; settings: SettingsFile; id: string; json: boolean; staticOnly: boolean; chromePath: string | undefined }): Promise<number> => {
+/** `dc check --system <id>`: draw the board at two widths (and dark) and save its pictures, or `--static` for the files only. */
+const checkSystem = async (input: {
+  root: string;
+  settings: SettingsFile;
+  id: string;
+  json: boolean;
+  staticOnly: boolean;
+  chromePath: string | undefined;
+  area: SystemArea | null;
+  scheme: CheckScheme | null;
+}): Promise<number> => {
   const target = await resolveSystemTarget({ id: input.id, root: input.root }, { path, realpath, isRealDirectory, platform: process.platform });
   if (!target.ok) return fail(target.message);
   const controller = new AbortController();
@@ -74,6 +84,8 @@ const checkSystem = async (input: { root: string; settings: SettingsFile; id: st
               platform: process.platform,
               isRoot: process.getuid?.() === 0,
               signal: controller.signal,
+              area: input.area,
+              scheme: input.scheme,
             },
           }),
     });
@@ -110,7 +122,9 @@ const main = async (): Promise<number> => {
   const { root, chromePath, settings } = await rootFrom(command.root);
   if (!path.isAbsolute(root)) return fail(`The designs folder must be a full path, not ${root}.`);
   if (!(await isDirectory(root))) return fail(`The designs folder ${root} does not exist.`);
-  if (command.kind === 'check-system') return checkSystem({ root, settings, id: command.system, json: command.json, staticOnly: command.staticOnly, chromePath });
+  if (command.kind === 'check-system') {
+    return checkSystem({ root, settings, id: command.system, json: command.json, staticOnly: command.staticOnly, chromePath, area: command.area, scheme: command.scheme });
+  }
   const target = await resolveTarget({ arg: command.target, root, cwd: process.cwd() }, { path, realpath, isDesignFolder, platform: process.platform });
   if (!target.ok) return fail(target.message);
 

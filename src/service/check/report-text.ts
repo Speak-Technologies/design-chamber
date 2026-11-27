@@ -4,8 +4,9 @@
 
 import { codeSpan } from '../../shared/agent/context.ts';
 import { AREA_LABELS, cleanDetail, countFindings, sortFindings, withMessage } from '../../shared/checks.ts';
-import { CHECK_TEXT_SHOWN, SCREEN_ID_PATTERN, SYSTEM_CHECK_BOARD_WIDTHS, SYSTEM_ID_PATTERN } from '../../shared/limits.ts';
+import { CHECK_TEXT_SHOWN, SCREEN_ID_PATTERN, SYSTEM_ID_PATTERN } from '../../shared/limits.ts';
 import type { CheckFinding, CheckReport, DesignJson, SystemArea } from '../../shared/types.ts';
+import { BOARD_PASSES } from './board-analyze.ts';
 import type { SystemBoardShot, SystemCheckReport } from './system-static.ts';
 
 // ---- arguments ----
@@ -14,13 +15,22 @@ export type CliCommand =
   | { kind: 'help' }
   | { kind: 'version' }
   | { kind: 'check'; root: string | null; target: string; screens: string[]; staticOnly: boolean; json: boolean }
-  /** `dc check --system <id>`: a design system, drawn at two widths unless `--static`. */
-  | { kind: 'check-system'; root: string | null; system: string; staticOnly: boolean; json: boolean }
+  /**
+   * `dc check --system <id>`: a design system, drawn at two widths (and the dark pass) unless `--static`.
+   * `area` and `scheme` are null when not given (system-builder-depth D8).
+   */
+  | { kind: 'check-system'; root: string | null; system: string; staticOnly: boolean; json: boolean; area: SystemArea | null; scheme: CheckScheme | null }
   | { kind: 'error'; message: string };
+
+/** `--scheme`'s values. */
+export type CheckScheme = 'light' | 'dark' | 'both';
+
+const AREA_VALUES: readonly SystemArea[] = ['foundations', 'components', 'patterns', 'brand'];
+const SCHEME_VALUES: readonly CheckScheme[] = ['light', 'dark', 'both'];
 
 export const USAGE = [
   'Usage: dc [--root <designs folder>] check <design folder name | path> [--screen <id>]... [--static] [--json]',
-  '       dc [--root <designs folder>] check --system <design system id> [--static] [--json]',
+  '       dc [--root <designs folder>] check --system <design system id> [--area <area>] [--scheme <scheme>] [--static] [--json]',
   '       dc --help | --version',
   '',
   'check    Render the design at its viewports, save PNGs under <design>/.chamber/check/ and list what to fix.',
@@ -29,6 +39,9 @@ export const USAGE = [
   '--static   Check the files only: no browser, nothing written. Applies to designs and systems.',
   '--system   Check a design system in <designs folder>/_systems/ instead of a design: draw its board at two widths,',
   '         save PNGs under <system>/.chamber/check/ and list what to fix. The report goes to its .chamber/check.json.',
+  '         With dark values it also draws the board dark at the wide width (foundations, components, patterns).',
+  '--area     With --system: picture and measure one area: foundations, components, patterns or brand. The file checks still cover all of it.',
+  '--scheme   With --system: light, dark or both (the default when the system has dark values).',
   '--json     Print the findings and image paths as JSON.',
 ].join('\n');
 
@@ -40,6 +53,8 @@ export const parseArgs = (argv: readonly string[]): CliCommand => {
   let staticOnly = false;
   let json = false;
   let system: string | null = null;
+  let area: SystemArea | null = null;
+  let scheme: CheckScheme | null = null;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? '';
     const takeValue = (name: string): string | null => {
@@ -63,6 +78,16 @@ export const parseArgs = (argv: readonly string[]): CliCommand => {
       const value = takeValue('--system');
       if (value === null || !SYSTEM_ID_PATTERN.test(value)) return { kind: 'error', message: '--system needs a design system id such as acme.' };
       system = value;
+    } else if (arg === '--area' || arg.startsWith('--area=')) {
+      if (area !== null) return { kind: 'error', message: 'Give --area only once.' };
+      const value = takeValue('--area');
+      if (value === null || !(AREA_VALUES as readonly string[]).includes(value)) return { kind: 'error', message: '--area needs foundations, components, patterns or brand. Run dc --help.' };
+      area = value as SystemArea;
+    } else if (arg === '--scheme' || arg.startsWith('--scheme=')) {
+      if (scheme !== null) return { kind: 'error', message: 'Give --scheme only once.' };
+      const value = takeValue('--scheme');
+      if (value === null || !(SCHEME_VALUES as readonly string[]).includes(value)) return { kind: 'error', message: '--scheme needs light, dark or both. Run dc --help.' };
+      scheme = value as CheckScheme;
     } else if (arg === '--static') staticOnly = true;
     else if (arg === '--json') json = true;
     else if (arg.startsWith('-')) return { kind: 'error', message: `Unknown option ${cleanDetail(arg, 40)}. Run dc --help.` };
@@ -75,8 +100,9 @@ export const parseArgs = (argv: readonly string[]): CliCommand => {
   if (system !== null) {
     if (target !== null) return { kind: 'error', message: 'Check a design or a design system, not both.' };
     if (screens.length > 0) return { kind: 'error', message: 'A design system has no screens; leave out --screen.' };
-    return { kind: 'check-system', root, system, staticOnly, json };
+    return { kind: 'check-system', root, system, staticOnly, json, area, scheme };
   }
+  if (area !== null || scheme !== null) return { kind: 'error', message: '--area and --scheme are for a design system: use them with --system.' };
   if (target === null) return { kind: 'error', message: 'Say which design to check: dc check <design folder name>.' };
   return { kind: 'check', root, target, screens, staticOnly, json };
 };
@@ -194,8 +220,8 @@ export type SystemTextInput = {
   runDir?: string | null;
 };
 
-/** The two board widths as viewports, so a board finding's sentence names "Wide board 1526×900". */
-const BOARD_WIDTH_VIEWPORTS = SYSTEM_CHECK_BOARD_WIDTHS.map((width) => ({ id: width.id, label: width.label, width: width.width, height: width.height }));
+/** The board passes as viewports, so a board finding's sentence names "Wide board 1526×900" or "Wide board, dark 1526×900". */
+const BOARD_WIDTH_VIEWPORTS = BOARD_PASSES.map((width) => ({ id: width.id, label: width.label, width: width.width, height: width.height }));
 
 /** The system's findings (static and measured) with severity and sentence, errors first. */
 export const systemFindingsOf = (report: SystemCheckReport): CheckFinding[] =>
@@ -226,13 +252,22 @@ const tileList = (shot: SystemBoardShot, tileHeight: number): string => {
 
 /** The board pictures block: the run folder once, then per width and area the overview and the tiles. */
 const boardPictureLines = (render: NonNullable<SystemCheckReport['render']>, runDir: string | null): string[] => {
-  if (render.shots.length === 0) return ['', 'No board pictures were saved.'];
+  if (render.shots.length === 0) {
+    // --area brand with --scheme dark: the dark pass pictures foundations, components and patterns only (D8).
+    const brandDarkOnly = render.areas?.length === 1 && render.areas[0] === 'brand' && render.schemes?.length === 1 && render.schemes[0] === 'dark';
+    return brandDarkOnly
+      ? ['', 'No board pictures were saved: the dark pass pictures Foundations, Components and Patterns & voice, not Brand & marketing. Check Brand with --scheme light.']
+      : ['', 'No board pictures were saved.'];
+  }
+  const schemes = render.schemes ?? ['light'];
+  const drawnIn = schemes.length === 2 ? 'light and dark' : schemes[0] === 'dark' ? 'dark scheme' : 'light scheme';
   const lines = [
     '',
-    `Board pictures (light scheme)${runDir === null ? '' : ` in ${runDir}`}. Open them and look before you say you are done.`,
+    `Board pictures (${drawnIn})${runDir === null ? '' : ` in ${runDir}`}. Open them and look before you say you are done.`,
     'Each area has an overview (the whole area scaled down: open it first to see the layout) and full-size pictures 900px tall, top to bottom, for detail. A finding above names the picture that shows it.',
   ];
-  for (const width of SYSTEM_CHECK_BOARD_WIDTHS) {
+  if (render.areas !== undefined && render.areas.length === 1) lines.push(`Only ${AREA_LABELS[render.areas[0] ?? 'foundations']} was pictured and measured (--area); the file checks above cover the whole system.`);
+  for (const width of BOARD_PASSES) {
     const ofWidth = render.shots.filter((shot) => shot.width === width.id);
     if (ofWidth.length === 0) continue;
     lines.push(`  ${width.label} ${width.width}px:`);

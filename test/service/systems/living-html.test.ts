@@ -189,8 +189,8 @@ test('all four layouts in every section that takes them: the page stays safe, ma
     ...base,
     components: base.components.map((component, index) => ({ ...component, layout: four[index] ?? null })),
     notes: four.map((layout, index) => ({ id: `n${index}`, title: `Note ${index}`, text: 'Body.', problem: null, layout })),
-    patterns: four.map((layout, index) => ({ id: `p${index}`, kind: 'other', title: `Pattern ${index}`, note: '', text: 'Body.', problem: null, layout })),
-    brand: four.map((layout, index) => ({ id: `b${index}`, kind: 'other', title: `Brand ${index}`, note: '', text: 'Body.', problem: null, layout })),
+    patterns: four.map((layout, index) => ({ id: `p${index}`, kind: 'other', title: `Pattern ${index}`, note: '', text: 'Body.', problem: null, layout, example: null })),
+    brand: four.map((layout, index) => ({ id: `b${index}`, kind: 'other', title: `Brand ${index}`, note: '', text: 'Body.', problem: null, layout, example: null })),
     boardLayout: {
       sections: { components: 'table', overview: 'full', patterns: 'compact', brand: 'card', colours: 'table', spacing: 'compact', radius: 'card', shadows: 'table', sizes: 'compact' },
       ignored: [],

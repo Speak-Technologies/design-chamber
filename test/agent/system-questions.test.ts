@@ -8,8 +8,7 @@ import path from 'node:path';
 import { describe, test } from 'node:test';
 
 import { parseSystemQuestions, SYSTEM_QUESTIONS_CLOSING, SYSTEM_QUESTIONS_CONDITIONAL_LINE } from '../../src/shared/agent/system-questions.ts';
-import { buildSystemSkillBody } from '../../src/shared/agent/system-skill-doc.ts';
-import { systemContractSection } from '../../src/shared/agent/system-rules.ts';
+import { builderSkillContract, buildSystemSkillBody } from '../../src/shared/agent/system-skill-doc.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..', '..');
 const R1 = readFileSync(path.join(REPO, 'rules', 'SYSTEM-QUESTIONS.md'), 'utf8');
@@ -30,6 +29,7 @@ describe('parseSystemQuestions: R1 accepted', () => {
         ['home', false, [['repo', true], ['internal', false]]],
         ['mode', false, [['fix', true], ['describe', false]]],
         ['coverage', true, [['foundations', true], ['components', true], ['patterns', true], ['brand', true]]],
+        ['depth', false, [['core', true], ['full', false], ['tokens', false]]],
         ['dark', false, [['not-now', true], ['include', false]]],
       ],
     );
@@ -44,6 +44,12 @@ describe('parseSystemQuestions: R1 accepted', () => {
         ['access', [['dev', true], ['public', false]]],
         ['typography', [['one-font', true], ['display', false]]],
         ['dark-values', [['derive', true], ['hand-tune', false]]],
+        ['platforms', [['laptop-phone', true], ['phone-first', false], ['laptop', false], ['custom', false]]],
+        ['navigation', [['keep', true], ['top-bottom', false], ['rail-bottom', false], ['custom', false]]],
+        ['overlays', [['sheet', true], ['modal', false], ['keep', false]]],
+        ['motion', [['calm', true], ['keep', false], ['none', false]]],
+        ['scales', [['snap', true], ['keep', false]]],
+        ['brand-colour', [['split', true], ['one', false]]],
       ],
     );
     assert.ok(set.roundTwo.every((question) => !question.multiple));
@@ -76,7 +82,7 @@ describe('parseSystemQuestions: the conditional existing-system question (Phase 
   test('the parser accepts it, so the build stays green, and leaves it out of the set the block draws', () => {
     const set = parseSystemQuestions(R1);
     assert.ok(!set.roundOne.some((question) => question.topic === 'existing'));
-    assert.deepEqual(set.roundOne.map((question) => question.topic), ['home', 'mode', 'coverage', 'dark']);
+    assert.deepEqual(set.roundOne.map((question) => question.topic), ['home', 'mode', 'coverage', 'depth', 'dark']);
   });
 
   test('the same file without the conditional question parses to the same set (the question is additive)', () => {
@@ -157,7 +163,7 @@ describe('parseSystemQuestions: broken structures refused', () => {
 describe('the skill and the block read the same ids (AD-25)', () => {
   test('every topic and choice id in the parsed set appears verbatim in the skill body, and vice versa', () => {
     const set = parseSystemQuestions(R1);
-    const body = buildSystemSkillBody({ systemQuestions: R1, contract: systemContractSection() });
+    const body = buildSystemSkillBody({ systemQuestions: R1, contract: builderSkillContract(), reference: 'beside' as const });
     const ids = [...set.roundOne, ...set.roundTwo].flatMap((question) => [question.topic, ...question.options.map((option) => option.choice)]);
     for (const id of ids) assert.ok(body.includes(`{#${id}}`), `the skill carries {#${id}}`);
     // The markers in the file are exactly the ids the set holds: no extra question, no lost one.

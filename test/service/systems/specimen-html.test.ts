@@ -86,8 +86,8 @@ test('hostile pattern and brand text never becomes markup', () => {
   const base = boardFixture();
   const detail: SystemDetail = {
     ...base,
-    patterns: [{ id: 'voice', kind: hostile, title: hostile, note: hostile, text: `${hostile}\n\n${hostile}`, problem: hostile, layout: null }],
-    brand: [{ id: 'Bad Id', kind: 'other', title: hostile, note: '', text: null, problem: null, layout: null }],
+    patterns: [{ id: 'voice', kind: hostile, title: hostile, note: hostile, text: `${hostile}\n\n${hostile}`, problem: hostile, layout: null, example: null }],
+    brand: [{ id: 'Bad Id', kind: 'other', title: hostile, note: '', text: null, problem: null, layout: null, example: null }],
   };
   const html = buildBoardHtml(detail, { scheme: 'light' });
   assert.equal((html.match(/<script\b/gi) ?? []).length, 1, 'only the board script');
@@ -137,7 +137,7 @@ test('overview, notes and pattern bodies render as markdown on the board', () =>
     ...base,
     overview: { text: '# Nexus design system\n\nThe system for **Pentima Nexus**.\n\n## The look\n\n- Brand blue `#00A0E0` for links.\n- See [the docs](https://example.com/look).', problem: null },
     notes: [{ id: 'history', title: 'Why the palette changed', text: '## Contrast\n\nThe old blue failed **AA**.\n\n```\n--old: #1a73e8;\n```', problem: null, layout: null }],
-    patterns: [{ id: 'voice', kind: 'voice', title: 'Voice and tone', note: '', text: 'Plain words.\n\n> No exclamation marks.', problem: null, layout: null }],
+    patterns: [{ id: 'voice', kind: 'voice', title: 'Voice and tone', note: '', text: 'Plain words.\n\n> No exclamation marks.', problem: null, layout: null, example: null }],
   };
   const html = buildBoardHtml(detail, { scheme: 'light' });
   const overview = sectionOf(html, 'overview');
@@ -342,7 +342,7 @@ test('markdown bodies render inside card, compact, full and table runs, in both 
   const detail: SystemDetail = {
     ...base,
     notes: four.map((layout) => ({ id: `n-${layout}`, title: 'Same title', text: md, problem: null, layout })),
-    patterns: four.map((layout) => ({ id: `p-${layout}`, kind: 'voice', title: `Pattern ${layout}`, note: '', text: md, problem: null, layout })),
+    patterns: four.map((layout) => ({ id: `p-${layout}`, kind: 'voice', title: `Pattern ${layout}`, note: '', text: md, problem: null, layout, example: null })),
   };
   // Each entry's own block: from its entry mark to the next one.
   const blockOf = (html: string, key: string): string => {

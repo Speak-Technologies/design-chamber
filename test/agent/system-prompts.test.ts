@@ -17,7 +17,7 @@ import {
   SystemPromptTooLongError,
   type SystemPromptSystem,
 } from '../../src/shared/agent/system-prompts.ts';
-import { SYSTEM_INJECTION_SENTENCE } from '../../src/shared/agent/system-rules.ts';
+import { SYSTEM_INJECTION_SENTENCE, systemReferenceSentence } from '../../src/shared/agent/system-rules.ts';
 import { CHECK_PROMPT_FINDINGS_MAX, HOST_TEXT_MAX } from '../../src/shared/limits.ts';
 
 const SYSTEM: SystemPromptSystem = { id: 'acme', name: 'Acme', folder: '/d/_systems/acme', repo: null };
@@ -224,6 +224,15 @@ describe('buildSystemMakePrompt from an existing system (Phase 2.6 §5.8, AD-9)'
     const plain = buildSystemMakePrompt(base);
     assert.ok(!plain.includes('Start from the design system already in'));
     assert.equal(buildSystemMakePrompt({ ...base, existing: null }), plain);
+  });
+
+  test('system-builder-depth T3: the make message points at the reference folder when it is installed, and only then', () => {
+    const folder = '/opt/design-chamber/dist/skills/design-system-builder/reference';
+    const plain = buildSystemMakePrompt(base);
+    const text = buildSystemMakePrompt({ ...base, referenceDir: folder });
+    assert.ok(text.includes(`\n${systemReferenceSentence(`in ${folder}`)}\n`));
+    assert.equal(buildSystemMakePrompt({ ...base, referenceDir: null }), plain);
+    assert.ok(!plain.includes('reference doc'));
   });
 
   test('a project-root location and empty lists: no empty "Read these first" line', () => {

@@ -204,3 +204,36 @@ test('openCheckRun names the PNGs by label, uniquely case-insensitively, and ref
   );
   assert.deepEqual(await readdir(tmp.at('elsewhere')), []);
 });
+test('an artboard that asks for the dark scheme is emulated dark; design artboards send only the page default (system-builder-depth D8)', async () => {
+  const recorded: string[] = [];
+  const record = (session: CdpSession): CdpSession => ({
+    ...session,
+    get exited() {
+      return session.exited;
+    },
+    send: async <T>(method: string, params: object = {}, options: { sessionId?: string } = {}): Promise<T> => {
+      if (method === 'Emulation.setEmulatedMedia') recorded.push(JSON.stringify((params as { features?: unknown }).features));
+      if (method === 'Emulation.setDeviceMetricsOverride') recorded.push(`metrics ${String((params as { width?: unknown }).width)}`);
+      return session.send<T>(method, params, options);
+    },
+  });
+  const inspect = async (_page: InspectPage, art: PlannedArtboard): Promise<InspectResult> => ({ findings: [], docHeight: 900, pngs: [`${art.viewport.id}.png`] });
+  const base = {
+    kind: 'page' as const,
+    loadDocument: async () => ({ ok: true as const, html: '<p>board</p>' }),
+    probeSource: '/* probe */',
+    knownExternal: new Set<string>(),
+    savePng: async () => 'x.png',
+    inspect,
+  };
+  const dark: PlannedArtboard = { ...ART, viewport: { ...ART.viewport, id: 'wide-dark' }, scheme: 'dark' };
+  const outcome = await renderArtboards({ ...base, openBrowser: async () => record(fakeSession()), plan: [ART, dark] });
+  assert.deepEqual(outcome.artboards.map((artboard) => artboard.viewport), ['wide', 'wide-dark']);
+  const light = JSON.stringify([{ name: 'prefers-color-scheme', value: 'light' }]);
+  const darkFeatures = JSON.stringify([{ name: 'prefers-color-scheme', value: 'dark' }]);
+  assert.deepEqual(recorded, [light, 'metrics 1526', darkFeatures, 'metrics 1526']);
+
+  recorded.length = 0;
+  await renderArtboards({ ...base, openBrowser: async () => record(fakeSession()), plan: [ART, ART] });
+  assert.deepEqual(recorded, [light, 'metrics 1526', 'metrics 1526'], 'a design run emulates exactly what it did before');
+});

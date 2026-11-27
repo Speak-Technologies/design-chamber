@@ -546,14 +546,35 @@ export const BUILD_PROBLEM_VALUE_MAX = 80;
 export const REPO_REL_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}(\/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}){0,4}$/;
 export const SYSTEM_PATTERNS_MAX = 100;
 export const SYSTEM_BRAND_MAX = 100;
+
+// ---- System builder depth (documentation/specs/system-builder-depth.md §4.3, §4.5) ----
+
+/** Colour pairs per system, declared and automatic together. */
+export const SYSTEM_PAIRS_MAX = 60;
+/** Size names per component (as variants and states, which take 20). */
+export const SYSTEM_COMPONENT_SIZES_MAX = 10;
+/** `outOfScope` topic ids per system (more than the checklist has, so a full list always fits). */
+export const SYSTEM_OUT_OF_SCOPE_MAX = 40;
+/** One shipped reference doc of the builder skill, and all of them together, in characters (T3's build). */
+export const SYSTEM_REFERENCE_DOC_MAX = 12_000;
+export const SYSTEM_REFERENCE_TOTAL_MAX = 80_000;
+/** Checklist topic ids a `system-coverage-gap` finding names in its detail. */
+export const SYSTEM_GAP_TOPICS_SHOWN = 8;
+/** Example labels (`data-dc-variant|size|state`) read per example file, and characters of one value. */
+export const SYSTEM_EXAMPLE_LABELS_MAX = 500;
+export const SYSTEM_EXAMPLE_LABEL_VALUE_MAX = 40;
 /** The staged living page, in UTF-8 bytes (encoded assets included). */
 export const LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
 /** One font or logo embedded into the living page. */
 export const LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
 export const LIVING_PAGE_OMITTED_MAX = 50;
-/** rev 3: PNG examples (S8's 1 is superseded); rev 4 (value 3): markdown bodies; value 4: board layout runs and tables, the 90ch measure. */
-export const LIVING_PAGE_GENERATOR_VERSION = 4;
-/** The example pictures' own generator: their inputs (component HTML, tokens, fonts) did not change with markdown, so the PNG cache survives a page-generator bump. */
+/** rev 3: PNG examples (S8's 1 is superseded); rev 4 (value 3): markdown bodies; value 4: board layout runs and tables, the 90ch measure; value 5: pattern and brand examples, colour pairs. */
+export const LIVING_PAGE_GENERATOR_VERSION = 5;
+/**
+ * The example pictures' own generator: their inputs (example HTML, tokens, fonts) did not change with
+ * markdown, so the PNG cache survives a page-generator bump. The cache key is the picture's content
+ * only, never an entry id, so pattern and brand examples sharing it left this at 2 (system-builder-depth §4.4).
+ */
 export const LIVING_EXAMPLE_GENERATOR_VERSION = 2;
 export const LIVING_PAGE_MARK_NAME = 'dc-living-page';
 /** `.chamber/scan.json`, the build scan's certain values for the agent. */

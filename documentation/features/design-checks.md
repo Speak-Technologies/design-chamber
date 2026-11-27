@@ -14,7 +14,9 @@ session). The chat shows each call as a card titled "Design check · <design>".
 - **Input.** `design`: the design folder name, such as `pricing-page` (a bare name only: `../x`,
   `/abs/path`, `C:\x` and `a/b` are refused with "That is not a design folder name..."). `screens`:
   canvas screen ids to check (a list, or text like `"home,faq"`), at most 16. `static`: files only,
-  no browser.
+  no browser. For a design system (`system` instead of `design`): `area` (`foundations`,
+  `components`, `patterns` or `brand`) and `scheme` (`light`, `dark` or `both`), as the command's
+  `--area` and `--scheme` below; any other value, or either one with a design, is refused.
 - **Answer.** Exactly what `dc check` prints: the result line, the PNG paths to look at, the
   findings. Exit 0 or 1 answer that text; when the check cannot run the answer is "The check could
   not run: " and the CLI's own sentence. After 3 minutes the check is stopped and the answer
@@ -127,7 +129,7 @@ Tweaks panel writes, so a tweak on a system token is an override. "A newer versi
 exists" is never a finding; the viewer's banner says that.
 
 ## Checking a design system
-`dc check --system <id> [--json]` and `design_check { "system": "<id>" }` check one system in
+`dc check --system <id> [--area <area>] [--scheme <scheme>] [--json]` and `design_check { "system": "<id>" }` check one system in
 `<designs folder>/_systems/<id>`. The id must be a system id (never a path, never `none` or `ask`),
 and the folder must be a real folder, not a link. The check reads the files, then draws the system's
 specimen board in headless Chrome (below), writes its report to `<system>/.chamber/check.json`, and
@@ -138,16 +140,46 @@ and writes nothing: it never draws the board, so the page's Checks badge shows t
 
 | Severity | Finding |
 |---|---|
-| Error | `system.json` isn't valid JSON (only this is said then) · a `tokens.css` value isn't valid for its section · a listed font file is missing · a component example loads files from the internet |
+| Error | `system.json` isn't valid JSON (only this is said then) · a `tokens.css` value isn't valid for its section · a listed font file is missing · a component, pattern or brand example loads files from the internet (one per example, the first address in the detail; found by bundling each example, so `--static` and the page's Checks badge see it too) |
 | Warning | entries in `system.json` Design Chamber can't read (up to three named) · board layouts in `system.json` Design Chamber doesn't know (up to three named; those entries use the default) · no overview · an overview over 4 000 characters · a note over 20 000 characters · a component names a token the system doesn't define · more than 2 000 tokens |
 
 A finding about an area the system doesn't cover (its `coverage`) isn't raised; the unknown-layout
 warning is raised whatever the coverage.
 
+**Completeness, examples, labels and contrast** (spec: `documentation/specs/system-builder-depth.md`
+§4.5). These come from the files too, so the page's Checks badge and "Ask the agent to fix it" carry
+them with no change (only warnings and errors are sent to the agent):
+
+| Finding | Raised when | Severity |
+|---|---|---|
+| `system-example-missing` | the system sets `depth` to `core` or `full` and a component has no live example; at `full` also a pattern of a visual kind (navigation, overlay, forms, data display, feedback, states, page). The detail names the files to write | a note at `core`, a warning at `full` |
+| `system-states-missing` | the system sets `depth` to `core` or `full`, covers components, and a component lists a variant, size or state with no instance labelled `data-dc-variant`, `data-dc-size` or `data-dc-state` in its example (matched ignoring case). One finding per list; the detail names each component and the missing names | warning |
+| `system-contrast-low` | a colour pair (declared, or found from `--x-fg` / `--on-x` names) is under its level (body text 4.5:1, large text and UI parts 3:1), worked out from hex and rgb values. One finding per scheme; the detail reads `--fg on --bg 4.49:1 (light)`. Other colour formats are measured by the visual check, which folds them into the same finding for that scheme | warning, or a note on a system with no `depth` when every low pair in it was found from token names (so a system made before these checks gets no new warning) |
+| `system-coverage-gap` | the system sets `depth` and a covered area misses topics of the completeness checklist. One finding per area; the detail lists up to 8 topic ids from the closed list, never agent text. Topics listed in `system.json` `outOfScope` stop counting. A `tokens` system is asked the foundations core topics only | a note at `core` and `tokens`, a warning at `full` |
+
+The checklist (the same table is in the agent's reference doc `board-and-check.md`):
+
+| Area | Core | Full adds |
+|---|---|---|
+| Foundations | `surface`, `text`, `border`, `brand` (a colour each), `status` (3), `type-styles` (4), `spacing` (4), `radius` (1), `pairs` (1, found pairs count), `dark-values` (every colour, only when any dark value exists) | `state-colours` (a colour ending `-hover`, `-active`, `-selected` or `-disabled`), `data-colours` (when a chart or table component or a data-display pattern exists), `type-styles` (6), `control-sizes` (a `--control-*` or `--touch-*` size), `breakpoints`, `elevation` (a shadow), `layers`, `motion` (a `--duration-*` and an `--ease-*` token) |
+| Components | `components` (1), `examples` (every component) | `focus-disabled` (a component listing hover also lists focus and disabled) |
+| Patterns & voice | `voice` | `navigation`, `overlays`, `forms`, `feedback`, `states`, `data-display` (same condition), `accessibility`, `responsive`, `motion`; each counted by a pattern of that kind |
+| Brand & marketing | `logo` (a logo file or a logo-use entry) | `brand-colour`, `imagery`, `marketing` (a marketing, social or email entry) |
+
+Labels are found by a plain scan of the example's text (no page is drawn, no script runs): at most 500
+labels a file, values up to 40 characters. Without `depth` there is no completeness, example or label
+check, so a system made before these checks reads as it did.
+
 ### Drawing the board
 Unless `--static`, the check draws the same specimen board the system page shows (same generator,
 same layout hints) in the light scheme at two board widths: **wide** 1526 px (a 1920 px window with
-the side panel open) and **narrow** 1046 px (a 1440 px window). A repo-backed system with a proposal
+the side panel open) and **narrow** 1046 px (a 1440 px window). When any token has a dark value it
+then draws a third pass, the **dark pass**: the board in the dark scheme at the wide width, with the
+browser set to prefer dark, pictured for Foundations, Components and Patterns & voice (brand stays
+with the light passes). It runs last, so a run short of time drops it first, keeps the light
+results and says "1 board pass was not drawn (the check ran out of time). Check again with
+--area <area> or --scheme dark." A layout finding the light wide pass already made is not repeated
+by the dark pass. A repo-backed system with a proposal
 waiting for the user's approval is drawn from that proposal; otherwise from the system's files. It
 runs offline in the design check's browser set-up (same CSP, no network, a throwaway profile), with
 45 seconds per width and 110 seconds for the whole drawing. Every board section is laid out before
@@ -175,6 +207,31 @@ the agent opens that picture rather than hunting for it. `--json` and `check.jso
 `render.shots` (per width and area: `heightPx`, `overview`, `tiles` with their offsets) and
 `render.entryShots` (the pictures for each entry with a finding), plus the absolute paths in `pngs`.
 Older run folders are removed once a newer report names its own.
+
+The dark pass's pictures are named like the others with `wide-dark`: `components-overview@wide-dark.png`,
+`components@wide-dark-2.png`. With the dark pass the picture budget is split 0.4 (wide), 0.3
+(narrow) and 0.3 (dark) instead of half each.
+
+Two flags make the fix loop quick (the tool takes the same as `area` and `scheme`):
+
+- `--area foundations|components|patterns|brand` pictures and measures one area only. The board
+  is still drawn whole, so the layout is the same as a full check; the file checks still cover the
+  whole system. The text output says which area was pictured.
+- `--scheme light|dark|both`: `light` leaves the dark pass out, `dark` draws only it, `both` is the
+  default when the system has dark values.
+
+A value off these lists, a missing value, or either flag with a design instead of `--system` stops
+the command with exit 2 and one sentence, before anything is read. `--area brand --scheme dark`
+draws nothing to picture (the dark pass leaves Brand out), and the output says so.
+
+**Measured colour pairs.** The board's Pairs block shows each pair as "Aa Text" on the light and
+dark grounds. While measuring, the check reads each sample's text and background colour as the page
+paints them (through a 1×1 canvas the page never sees), and the service works out the ratio. That is
+how a pair in a format the files can't be judged from (`oklch()`, `color-mix()`, a formula) gets a
+`system-contrast-low` finding; a pair already judged from its hex or rgb values is not judged again,
+so each pair is reported once, and the measured pairs join the file finding of their scheme: one
+finding per scheme in all. A measured pair must be more than 0.05 under its level to count, as
+the canvas can round a channel. `--area` other than foundations skips this.
 
 Measured findings, each named once (at the widest width that raised it):
 

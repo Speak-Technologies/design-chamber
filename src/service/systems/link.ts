@@ -88,7 +88,7 @@ export const SYSTEM_CSS_TEXT = '@import "fonts.css";\n@import "tokens.css";\n';
 const FONT_FORMATS: Readonly<Record<string, string>> = { '.woff2': 'woff2', '.woff': 'woff', '.ttf': 'truetype', '.otf': 'opentype' };
 
 /** Agent reference files a copy carries (never exported): the overview, notes, patterns, brand texts, examples and system.json. */
-const REFERENCE_PATTERN = /^(?:OVERVIEW\.md|system\.json|(?:notes|patterns|brand)\/[^/]+\.md|components\/[^/]+\.html)$/;
+const REFERENCE_PATTERN = /^(?:OVERVIEW\.md|system\.json|(?:notes|patterns|brand)\/[^/]+\.md|(?:components|patterns|brand)\/[^/]+\.html)$/;
 
 /** True for a copy path that is reference for the agent only (§2.6): never in a ZIP export. */
 export const isCopyReference = (rel: string): boolean => REFERENCE_PATTERN.test(rel) || rel === COPY_JSON_FILE;

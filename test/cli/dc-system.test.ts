@@ -91,6 +91,26 @@ test('--static: files only, nothing written; exit 0 with warnings, 1 with an err
   }
 });
 
+test('--area and --scheme: a bad value exits 2 before any read, with one line; good values run (system-builder-depth D8)', async (t) => {
+  const tmp = await useTmpRoot(t);
+  await system(tmp, 'acme', '{ "version": 1, "tokens": {} }', 'Calm.');
+  for (const args of [
+    ['check', '--system', 'acme', '--area', 'colours'],
+    ['check', '--system', 'acme', '--area', '../x'],
+    ['check', '--system', 'acme', '--scheme', 'dim'],
+    ['check', '--system', 'acme', '--scheme'],
+    ['check', 'demo', '--area', 'components'],
+  ]) {
+    const refused = await dc(tmp, args);
+    assert.equal(refused.code, 2, args.join(' '));
+    assert.equal(refused.out, '', args.join(' '));
+    assert.equal(refused.err.trim().split('\n').length, 1, refused.err);
+  }
+  const ran = await dc(tmp, ['check', '--system', 'acme', '--static', '--area', 'components', '--scheme', 'light']);
+  assert.equal(ran.code, 0, ran.err);
+  assert.match(ran.out, /Only the files were checked \(--static\)\./);
+});
+
 test('dc check --system refuses a linked system folder and writes nothing through it', async (t) => {
   const tmp = await useTmpRoot(t);
   await tmp.write('outside/evil/system.json', '{ "version": 1 }');

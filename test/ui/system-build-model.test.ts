@@ -45,6 +45,7 @@ const summary = (over: Partial<SystemSummary> = {}): SystemSummary => ({
   sharedRepoWith: null,
   livingPage: null,
   proposalWaiting: false,
+  depth: null,
   ...over,
 });
 

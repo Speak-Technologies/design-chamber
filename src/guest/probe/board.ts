@@ -5,11 +5,13 @@
 // verdict; `sanitizeBoardProbe` and `analyzeBoard` (src/service/check/board-analyze.ts) re-check every
 // number and decide. It reads the DOM and never writes; the engine scrolls between tiles.
 
-import { BOARD_ENTRY_MAX, SYSTEM_BOARD_ITEMS_MEASURED_MAX, SYSTEM_BOARD_PREVIEW_ELEMENTS_MAX, SYSTEM_BOARD_TEXT_NODES_PER_ITEM } from '../../shared/limits.ts';
-import type { BoardProbe, BoardProbeItem, BoardProbePreview } from '../../service/check/board-analyze.ts';
+import { BOARD_ENTRY_MAX, SYSTEM_BOARD_ITEMS_MEASURED_MAX, SYSTEM_BOARD_PREVIEW_ELEMENTS_MAX, SYSTEM_BOARD_TEXT_NODES_PER_ITEM, SYSTEM_PAIRS_MAX } from '../../shared/limits.ts';
+import type { BoardProbe, BoardProbeItem, BoardProbePair, BoardProbePreview } from '../../service/check/board-analyze.ts';
 import { visuallyHidden } from './probe.ts';
 
 const AREAS_MAX = 4;
+/** Pair cells read per pass: a light and a dark ground for each pair (`BOARD_PAIR_CELLS_MAX`). */
+const PAIR_CELLS_MAX = SYSTEM_PAIRS_MAX * 2;
 const PREVIEWS_MAX = 2;
 /** Words measured one by one in a text node whose whole-node rects reach outside; past it the whole-node figure stands. */
 const WORDS_MEASURED_MAX = 400;
@@ -43,6 +45,44 @@ const wordsOut = (range: Range, node: Text, box: EntryBox, whole: number): numbe
     range.setStart(node, match.index);
     range.setEnd(node, match.index + match[0].length);
     out = Math.max(out, rectsOut(range.getClientRects(), box));
+  }
+  return out;
+};
+
+/**
+ * The colour pair cells (system-builder-depth §4.5): each `[data-dc-pair]` sample's computed text and
+ * background colours and its ground's, as sRGB bytes. A computed colour can be in any space (oklch,
+ * color-mix); a detached 1×1 canvas, never attached to the document, paints it and reads the bytes
+ * back, so Node judges what the board paints. Nothing in the page is written.
+ */
+const collectPairs = (): BoardProbePair[] => {
+  const cells = document.querySelectorAll('[data-dc-pair]');
+  if (cells.length === 0) return [];
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (context === null) return [];
+  const bytesOf = (colour: string): number[] => {
+    context.clearRect(0, 0, 1, 1);
+    // A colour the canvas can't parse keeps the last fill: start from transparent so it reads as nothing.
+    context.fillStyle = 'rgba(0, 0, 0, 0)';
+    context.fillStyle = colour;
+    context.fillRect(0, 0, 1, 1);
+    return Array.from(context.getImageData(0, 0, 1, 1).data);
+  };
+  const out: BoardProbePair[] = [];
+  for (let index = 0; index < cells.length && out.length < PAIR_CELLS_MAX; index += 1) {
+    const cell = cells[index];
+    if (!cell) continue;
+    const style = getComputedStyle(cell);
+    const ground = cell.closest('.dc-ground');
+    out.push({
+      key: (cell.getAttribute('data-dc-pair') ?? '').slice(0, 16),
+      fg: bytesOf(style.color),
+      bg: bytesOf(style.backgroundColor),
+      ground: bytesOf(ground === null ? 'rgb(255, 255, 255)' : getComputedStyle(ground).backgroundColor),
+    });
   }
   return out;
 };
@@ -141,5 +181,6 @@ export const collectBoard = (): BoardProbe => {
     areas,
     items,
     truncated: entries.length > SYSTEM_BOARD_ITEMS_MEASURED_MAX,
+    pairs: collectPairs(),
   };
 };

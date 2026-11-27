@@ -3,7 +3,7 @@
 // the chip and its rules file under their caps), GET /system-builds/:ticket, Stop and its Undo.
 
 import assert from 'node:assert/strict';
-import { mkdir, readdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
@@ -20,9 +20,9 @@ import { useTmpRoot } from '../../helpers/tmp-root.ts';
 
 const TOKEN = 'system-build-routes-token-0123456789';
 
-const serve = async (t: TestContext) => {
+const serve = async (t: TestContext, packageRoot?: string) => {
   const tmp = await useTmpRoot(t);
-  const ctx = createFakeContext({ root: tmp.root, overrides: { designIndex: { all: () => [], get: () => null, bySession: () => [], ready: async () => true, dispose: async () => undefined } } });
+  const ctx = createFakeContext({ root: tmp.root, ...(packageRoot === undefined ? {} : { packageRoot }), overrides: { designIndex: { all: () => [], get: () => null, bySession: () => [], ready: async () => true, dispose: async () => undefined } } });
   t.after(() => ctx.dispose());
   const router = createRouter({ token: TOKEN, log: ctx.log });
   registerSystemBuildRoutes(router, ctx);
@@ -110,6 +110,33 @@ test('POST /systems/chip: a ticket bound to the project and session, the build c
   const state = (await call('GET', `/system-builds/${ticket}`)).json as SystemBuildTicketResponse;
   assert.deepEqual(state, { state: 'waiting', project: { label: path.basename(project.root) } });
   assert.deepEqual((await call('GET', '/system-builds/sb_000000000000')).json, { state: 'expired' });
+});
+
+test('system-builder-depth T3: the ticket file names the absolute reference folder when installed; without it the line is left out', async (t) => {
+  const pkg = await useTmpRoot(t, 'dc-pkg-');
+  await pkg.write('rules/SYSTEM-QUESTIONS.md', await readFile(path.resolve(import.meta.dirname, '../../../rules/SYSTEM-QUESTIONS.md'), 'utf8'));
+  const rulesOf = async (packageRoot: string): Promise<string> => {
+    const { call } = await serve(t, packageRoot);
+    const answer = await call('POST', '/systems/chip', { brief: 'x', projectDirectory: null, sessionId: null });
+    assert.equal(answer.status, 200, JSON.stringify(answer.json));
+    return readFile(fileURLToPath((answer.json as SystemChipResponse).chip.url.replace(/#.*$/, '')), 'utf8');
+  };
+  const missing = await rulesOf(pkg.root);
+  assert.ok(!missing.includes('read its reference doc'), 'no folder, no pointer');
+  assert.ok(missing.includes('## Depth and the reference docs'), 'the rest of the skill is unchanged');
+
+  const folder = path.join(pkg.root, 'dist', 'skills', 'design-system-builder', 'reference');
+  await mkdir(folder, { recursive: true });
+  const rules = await rulesOf(pkg.root);
+  assert.ok(path.isAbsolute(folder));
+  assert.ok(rules.includes(`- Before you write an area, read its reference doc in ${folder}: foundations.md`));
+  assert.ok(!rules.includes('next to this file'));
+  assert.ok(rules.length <= SYSTEM_SKILL_TEXT_MAX + SYSTEM_BUILD_HEADER_MAX, `${rules.length}`);
+
+  // A file where the folder should be is not a folder: left out again.
+  await rm(folder, { recursive: true });
+  await writeFile(folder, 'x');
+  assert.ok(!(await rulesOf(pkg.root)).includes('read its reference doc'));
 });
 
 test('POST /systems/chip: no project, the designs folder as the project, or a missing folder build an internal system; a maximal brief fits the chip cap', async (t) => {

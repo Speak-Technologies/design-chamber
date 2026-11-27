@@ -612,6 +612,7 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
     sharedRepoWith: null,
     livingPage: detail.livingPage?.state ?? null,
     proposalWaiting: detail.proposal?.state === 'current',
+    depth: detail.depth,
   });
 
   /** A row that has no detail: an unusable folder, one over the cap, or one that can't be read. */
@@ -639,6 +640,7 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
       sharedRepoWith: null,
       livingPage: null,
       proposalWaiting: false,
+      depth: null,
     };
   };
 

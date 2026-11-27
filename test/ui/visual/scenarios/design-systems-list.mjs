@@ -71,6 +71,10 @@ const listFlow = async (h, surface, width, theme) => {
   const harborMeta = await text(p, `${row('harbor')} .dc-sys-meta`);
   h.check(harborMeta.includes('From brand files') && harborMeta.includes('Used by 2 designs'), `${tag}: the meta line says what it was made from and who uses it`);
   h.check((await text(p, `${row('acme')} .dc-sys-meta`)).includes('Not used yet'), `${tag}: an unused system says so`);
+  h.check((await text(p, `${row('tidepool')} .dc-sys-meta`)).startsWith('Core system'), `${tag}: a core system says so first on its meta line`);
+  h.check(harborMeta.startsWith('Full system'), `${tag}: a full system says so first on its meta line`);
+  h.check(!/Core system|Full system|Tokens only/.test(await text(p, `${row('juniper')} .dc-sys-meta`)), `${tag}: a system with no depth shows none`);
+  h.check((await p.guest(`return doc.querySelector('${row('tidepool')} .dc-sys-main').getAttribute('aria-label')`)).includes('Core system'), `${tag}: the row's accessible name carries the depth`);
   h.check(await p.guest('return [...doc.querySelectorAll(".dc-sys-line")].every((l) => l.querySelectorAll(".dc-sys-badge").length <= 3)'), `${tag}: never more than the home line and two badges`);
   await p.shot(`${tag}-1-list`);
 

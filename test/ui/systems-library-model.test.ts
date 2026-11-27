@@ -38,6 +38,7 @@ const summary = (over: Partial<SystemSummary> = {}): SystemSummary => ({
   sharedRepoWith: null,
   livingPage: 'fresh',
   proposalWaiting: false,
+  depth: null,
   ...over,
 });
 
@@ -81,7 +82,7 @@ test('the used-by link says where it goes, singular and plural', () => {
 
 test('a row keeps its facts apart so the used-by part can be a link', () => {
   const row = systemRow(summary({ sources: { code: { directory: 'C:\\work\\speakappi', lastScan: '2026-11-01T00:00:00Z', partial: false }, brand: 1, description: false } }), { nowMs: NOW, locale: 'en', label });
-  assert.deepEqual(row.metaParts, { source: ['From speakappi', 'From brand files'], usedBy: { count: 6, text: 'Used by 6 designs' }, updated: '5 hr. ago' });
+  assert.deepEqual(row.metaParts, { depth: null, source: ['From speakappi', 'From brand files'], usedBy: { count: 6, text: 'Used by 6 designs' }, updated: '5 hr. ago' });
   assert.deepEqual(row.meta, ['From speakappi', 'From brand files', 'Used by 6 designs', '5 hr. ago'], 'the joined line is unchanged');
   assert.equal(systemRow(summary({ usedBy: 0 }), { nowMs: NOW, locale: 'en', label }).metaParts.usedBy.text, 'Not used yet', 'zero reads Not used yet (no link to nothing)');
 });

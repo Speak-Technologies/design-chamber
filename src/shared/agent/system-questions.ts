@@ -32,9 +32,13 @@ const ROUND_ONE_HEADING = '## Round one: before you read the code';
 const ROUND_TWO_HEADING = '## Round two: after you read the code';
 const AFTER_HEADING = '## After two rounds';
 
-/** The closed topic set of each round (§8.9); the file's order is kept. */
-const ROUND_ONE_TOPICS: readonly string[] = ['home', 'mode', 'coverage', 'dark'];
-const ROUND_TWO_TOPICS: readonly string[] = ['status-colours', 'greys', 'access', 'typography', 'dark-values'];
+/** The closed topic set of each round (§8.9, system-builder-depth §4.2); the file's order is kept. */
+const ROUND_ONE_TOPICS: readonly string[] = ['home', 'mode', 'coverage', 'depth', 'dark'];
+/** Exported so the skill's round-two sentence names the same list. */
+export const SYSTEM_ROUND_TWO_TOPICS: readonly string[] = Object.freeze([
+  'status-colours', 'greys', 'access', 'typography', 'dark-values',
+  'platforms', 'navigation', 'overlays', 'motion', 'scales', 'brand-colour',
+]);
 /** Topics a round may also hold, each only with the conditional marker line, and never baked into the block's set. */
 const ROUND_ONE_CONDITIONAL: readonly string[] = ['existing'];
 
@@ -142,7 +146,7 @@ export const parseSystemQuestions = (markdown: string): SystemQuestionSet => {
   if (!(one < two && two < after)) throw fail('the round headings must come in order: round one, round two, after two rounds.');
   return {
     roundOne: parseRound(lines.slice(one + 1, two), ROUND_ONE_TOPICS, 'round one', ROUND_ONE_CONDITIONAL),
-    roundTwo: parseRound(lines.slice(two + 1, after), ROUND_TWO_TOPICS, 'round two'),
+    roundTwo: parseRound(lines.slice(two + 1, after), SYSTEM_ROUND_TWO_TOPICS, 'round two'),
     closing: SYSTEM_QUESTIONS_CLOSING,
   };
 };
