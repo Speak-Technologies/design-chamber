@@ -235,7 +235,10 @@ test('the last check: counts, stale after a change, and only PNGs that are plain
   const { tmp, root, dataDir } = await setup(t);
   const run = 'r-20261127095800-abcdef';
   await tmp.write(`designs/pricing-page/.chamber/check/${run}/home-laptop.png`, 'png');
-  await tmp.write('designs/pricing-page/.chamber/check.json', report([`.chamber/check/${run}/home-laptop.png`, `.chamber/check/${run}/gone.png`, '../../outside.png', `.chamber/check/../../x.png`]));
+  // Plain files inside the design but outside .chamber/check/<run>/: real, contained, and still not a check picture.
+  await tmp.write('designs/pricing-page/assets/hero.png', 'png');
+  await tmp.write(`designs/pricing-page/.chamber/check/${run}.png`, 'png');
+  await tmp.write('designs/pricing-page/.chamber/check.json', report([`.chamber/check/${run}/home-laptop.png`, `.chamber/check/${run}/gone.png`, '../../outside.png', `.chamber/check/../../x.png`, 'assets/hero.png', `.chamber/check/${run}.png`]));
   const result = await read(root, dataDir, 'pricing-page');
   assert.ok(result.ok);
   if (!result.ok || result.answer.check.state !== 'report') return assert.fail('expected a report');
