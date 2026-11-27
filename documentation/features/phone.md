@@ -46,6 +46,10 @@ rounded and clamped to 0 to 400 px before it reaches a style. A tablet keeps the
   the rest say "Paused" until you pan to them.
 - **Touch-sized controls.** With a coarse pointer, buttons, menu rows, list rows and the ask bar's Send are
   at least 44 px tall, and icon buttons 44 px square.
+- **No keyboard shortcuts named.** A phone has no Ctrl or Esc, so the comment card and the Edit text box show no
+  shortcut line. The Edit text box has a **Cancel** button there, and tapping away from a changed line says
+  "Tap Save to keep this change, or Cancel to discard it." Screen readers hear touch wording for the canvas, the
+  page and the ask bar.
 - **The on-screen keyboard.** The view stops above the keyboard, so the ask bar, the comment card and every
   sheet stay in sight while you type ([keyboard open](../pages/img/phone-390-dark-page-5-keyboard.png)).
   Rotation and the keyboard arrive as a new `ready`; nothing reloads and nothing you typed is lost.

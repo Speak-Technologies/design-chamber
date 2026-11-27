@@ -14,6 +14,7 @@ import type { Comment, Screen, Viewport } from '../../shared/types.ts';
 import { currentDevice } from '../components/device.ts';
 import { createScope, h, type Scope } from '../components/dom.ts';
 import { pinNumbers } from '../model/comments-model.ts';
+import { inputWords } from '../model/input-words.ts';
 import { liveBudget, pageComments, type Point } from '../model/wall-model.ts';
 import { frameModeOf } from '../model/wall-input.ts';
 import type { Artboard, WallOptions } from './wall-types.ts';
@@ -78,7 +79,7 @@ export const createWallContext = (options: WallOptions, initialDetail: DesignDet
       tabindex: '0',
       role: 'application',
       'aria-roledescription': pageMode ? 'page preview' : 'canvas wall',
-      'aria-label': pageMode ? 'Page preview. Arrow keys, Page Up and Page Down scroll the page.' : 'Design wall. Arrow keys pan, plus and minus zoom, Shift+1 fits everything. Hold Space and drag to pan.',
+      'aria-label': inputWords(currentDevice().form)[pageMode ? 'page' : 'wall'],
       'data-mode': mode,
       'data-presentation': options.presentation,
     },

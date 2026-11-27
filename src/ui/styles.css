@@ -1442,6 +1442,15 @@ body {
   color: var(--oc-muted);
   font-size: 0.6875rem;
 }
+/* A phone has no Ctrl, Enter-to-save or Esc to name. Only the card's and the text box's shortcut lines: the ask
+ * popover uses the same class for which chat the message goes to, which a phone needs as much as anyone. */
+[data-dc-form='phone'] .dc-composer .dc-pop-hint,
+[data-dc-form='phone'] .dc-editor .dc-pop-hint {
+  display: none;
+}
+[data-dc-form='phone'] .dc-composer .dc-pop-actions {
+  margin-inline-start: auto;
+}
 .dc-pin-badge {
   display: inline-grid;
   place-items: center;

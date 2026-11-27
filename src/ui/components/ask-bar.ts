@@ -17,6 +17,8 @@ import {
 import type { WallSelection } from '../wall/wall-types.ts';
 import { errorText, h, nextId } from './dom.ts';
 import { btn, iconBtn } from './kit.ts';
+import { inputWords } from '../model/input-words.ts';
+import { currentDevice } from './device.ts';
 
 /** How long "Sent to the chat." stays under the bar. */
 const STATUS_MS = 4000;
@@ -85,7 +87,7 @@ export const createAskBar = (options: AskBarOptions): AskBarHandle => {
   const target = h('span', { class: 'dc-ask-target', id: ids.target });
   const counter = h('span', { class: 'dc-ask-counter' });
   const send = btn({ label: 'Send', variant: 'default', size: 'sm', icon: 'send', emphasis: 'primary', onClick: () => void submit() });
-  const hint = h('span', { class: 'dc-ask-sr', id: ids.hint }, 'Enter sends, Shift+Enter adds a line.');
+  const hint = h('span', { class: 'dc-ask-sr', id: ids.hint }, inputWords(currentDevice().form).askBar);
 
   const el = h(
     'form',

@@ -8,7 +8,6 @@
 
 import {
   AGENT_WORKING_LINE,
-  CLICK_AWAY_LINE,
   KEY_HINT,
   counterAnnouncement,
   counterState,
@@ -19,6 +18,8 @@ import {
 } from '../model/edit-text-model.ts';
 import { h, nextId } from '../components/dom.ts';
 import { btn } from '../components/kit.ts';
+import { currentDevice } from '../components/device.ts';
+import { inputWords } from '../model/input-words.ts';
 
 const MAX_ROWS = 8;
 
@@ -71,6 +72,9 @@ export const createTextEditor = (options: TextEditorOptions): TextEditor => {
   let viewing = false;
   let counter: CounterState = 'none';
   let reminding = false;
+  // A phone has no Esc: it gets a Cancel button, and the click-away line names the buttons instead of keys.
+  const device = currentDevice().form;
+  const reminder = inputWords(device).editClickAway;
 
   const agent = h('p', { class: 'dc-editor-agent', hidden: !options.agentWorking }, AGENT_WORKING_LINE);
   const nowSays = h('p', { class: 'dc-editor-note', hidden: true });
@@ -96,6 +100,7 @@ export const createTextEditor = (options: TextEditorOptions): TextEditor => {
   // The counter is read aloud only when it crosses 4 500 and 5 000, never on every key.
   const announce = h('span', { class: 'dc-editor-sr', 'aria-live': 'polite' });
   const save = btn({ label: 'Save', variant: 'default', size: 'sm', onClick: () => options.onSave() });
+  const cancel = device === 'phone' ? btn({ label: 'Cancel', variant: 'ghost', size: 'sm', onClick: () => void (saving || options.onCancel()) }) : null;
 
   const el = h(
     'div',
@@ -106,7 +111,7 @@ export const createTextEditor = (options: TextEditorOptions): TextEditor => {
     line,
     failure,
     ways,
-    h('div', { class: 'dc-editor-foot' }, h('span', { class: 'dc-editor-meta' }, hint, count), save.el),
+    h('div', { class: 'dc-editor-foot' }, h('span', { class: 'dc-editor-meta' }, hint, count), cancel ? h('span', { class: 'dc-pop-actions' }, cancel.el, save.el) : save.el),
     announce,
   );
 
@@ -126,7 +131,7 @@ export const createTextEditor = (options: TextEditorOptions): TextEditor => {
     line.hidden = text === null;
     line.textContent = text ?? '';
     // Only the click-away reminder is a warning; the viewing and gone sentences are plain information.
-    line.dataset.tone = text === CLICK_AWAY_LINE ? 'warning' : 'plain';
+    line.dataset.tone = text === reminder ? 'warning' : 'plain';
   };
 
   const paint = (): void => {
@@ -141,6 +146,7 @@ export const createTextEditor = (options: TextEditorOptions): TextEditor => {
     area.readOnly = saving;
     el.setAttribute('aria-busy', String(saving));
     save.set({ loading: saving, disabled: next === 'over' || gone || viewing });
+    cancel?.set({ disabled: saving });
     reload.set({ disabled: saving || reloading, loading: reloading });
     ask.set({ disabled: saving || reloading });
     hint.hidden = gone;
@@ -158,7 +164,7 @@ export const createTextEditor = (options: TextEditorOptions): TextEditor => {
   };
 
   const setLine = (text: string | null): void => {
-    reminding = text === CLICK_AWAY_LINE;
+    reminding = text === reminder;
     showLine(text);
   };
 
@@ -221,7 +227,7 @@ export const createTextEditor = (options: TextEditorOptions): TextEditor => {
       paint();
     },
     remindClickAway: () => {
-      setLine(CLICK_AWAY_LINE);
+      setLine(reminder);
       area.focus();
       // The press that triggered this is still on its way to the page and moves focus there; take it back once it has landed.
       setTimeout(() => {
