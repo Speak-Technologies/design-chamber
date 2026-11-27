@@ -9,6 +9,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import { buildPinInstruction } from '../../../src/shared/agent/instructions.ts';
+import { choiceSystemsOf, projectSystemOf } from '../../../src/shared/systems.ts';
 import type { SettingsFile, SystemDetail, SystemSummary } from '../../../src/shared/types.ts';
 import { agentSystemOf, recommendedSystem } from '../../../src/service/agent-system.ts';
 import type { Logger } from '../../../src/service/context.ts';
@@ -88,16 +89,18 @@ test("agentSystemOf: a linked copy of the project's own system is marked; anothe
 });
 
 test('desiredPinTexts: a project-owned Ready system gets its line with no pin; a pin keeps its old meaning', () => {
+  // Stored folders are full paths (a realpath, or the host's project folder), so on Windows they carry a drive:
+  // build them with path.resolve, as `SHOP` is, rather than typing a drive-less `/code/shop`.
+  const BLOG = path.resolve('/code/blog');
   const systems = [
     summary('acme', 'Acme'),
-    summary('shop-ui', 'Shop UI', { home: repoHome('/code/shop') }),
-    summary('blog-ui', 'Blog UI', { sources: scannedFrom('/code/blog') }),
-    summary('wip', 'Wip', { status: 'draft', home: repoHome('/code/wip') }),
-    summary('broken', 'Broken', { unreadable: 'damaged', home: repoHome('/code/broken') }),
-    summary('inside', 'Inside', { sources: scannedFrom(`${ROOT}/sub`) }),
+    summary('shop-ui', 'Shop UI', { home: repoHome(SHOP) }),
+    summary('blog-ui', 'Blog UI', { sources: scannedFrom(BLOG) }),
+    summary('wip', 'Wip', { status: 'draft', home: repoHome(path.resolve('/code/wip')) }),
+    summary('broken', 'Broken', { unreadable: 'damaged', home: repoHome(path.resolve('/code/broken')) }),
+    summary('inside', 'Inside', { sources: scannedFrom(path.join(ROOT, 'sub')) }),
   ];
   const desired = (settings: Pick<SettingsFile, 'systemDefault' | 'systemPins'>) => desiredPinTexts({ settings, systems, designsRoot: ROOT });
-  const BLOG = path.resolve('/code/blog');
 
   // No pins: one line per project-owned Ready, readable system outside the designs folder.
   assert.deepEqual([...desired({}).entries()], [
@@ -105,17 +108,29 @@ test('desiredPinTexts: a project-owned Ready system gets its line with no pin; a
     [BLOG, buildPinInstruction('Blog UI')],
   ]);
   // A none pin takes the line away (the sync then sends "" for it); a system pin names its own system.
-  assert.deepEqual([...desired({ systemPins: [{ directory: '/code/shop', choice: 'none' }] }).keys()], [BLOG]);
-  assert.deepEqual(desired({ systemPins: [{ directory: '/code/shop', choice: 'system', id: 'acme', name: 'Acme' }] }).get(SHOP), buildPinInstruction('Acme'));
+  assert.deepEqual([...desired({ systemPins: [{ directory: SHOP, choice: 'none' }] }).keys()], [BLOG]);
+  assert.deepEqual(desired({ systemPins: [{ directory: SHOP, choice: 'system', id: 'acme', name: 'Acme' }] }).get(SHOP), buildPinInstruction('Acme'));
   // Use my default behaves as the old default pin: the default's line, or none.
-  assert.equal(desired({ systemPins: [{ directory: '/code/shop', choice: 'follow-default' }] }).has(SHOP), false);
-  assert.equal(desired({ systemPins: [{ directory: '/code/shop', choice: 'follow-default' }], systemDefault: { choice: 'system', id: 'acme', name: 'Acme' } }).get(SHOP), buildPinInstruction('Acme'));
+  assert.equal(desired({ systemPins: [{ directory: SHOP, choice: 'follow-default' }] }).has(SHOP), false);
+  assert.equal(desired({ systemPins: [{ directory: SHOP, choice: 'follow-default' }], systemDefault: { choice: 'system', id: 'acme', name: 'Acme' } }).get(SHOP), buildPinInstruction('Acme'));
 });
 
 test('desiredPinTexts: two systems for one project folder name the same pick as the chip rules', () => {
   const systems = [
-    summary('old', 'Old', { home: repoHome('/code/shop'), updated: '2026-01-01T00:00:00.000Z' }),
-    summary('new', 'New', { home: repoHome('/code/shop'), updated: '2026-11-01T00:00:00.000Z' }),
+    summary('old', 'Old', { home: repoHome(SHOP), updated: '2026-01-01T00:00:00.000Z' }),
+    summary('new', 'New', { home: repoHome(SHOP), updated: '2026-11-01T00:00:00.000Z' }),
   ];
   assert.deepEqual([...desiredPinTexts({ settings: {}, systems, designsRoot: ROOT }).entries()], [[SHOP, buildPinInstruction('New')]]);
+});
+
+test('projectSystemOf on Windows: a stored folder matches the resolved key however it is written (drive case, slashes, trailing separator)', () => {
+  // desiredPinTexts keys a line by path.resolve(belongsTo) and then asks projectSystemOf with that key; on Windows the
+  // stored folder always has a drive (a realpath or the host's folder), so these are the forms it can take.
+  const owner = (directory: string) => choiceSystemsOf([summary('shop-ui', 'Shop UI', { home: { repo: 'shop', directory } })]);
+  for (const stored of ['D:\\code\\shop', 'd:\\Code\\Shop\\', 'D:/code/shop', 'D:/code/shop/']) {
+    const key = path.win32.resolve('C:\\runner', stored);
+    assert.deepEqual(projectSystemOf(owner(stored), key, true), { id: 'shop-ui', name: 'Shop UI' }, stored);
+    assert.deepEqual(projectSystemOf(owner(stored), path.win32.join(key, 'packages', 'app'), true), { id: 'shop-ui', name: 'Shop UI' }, `${stored}, a package inside`);
+  }
+  assert.equal(projectSystemOf(owner('D:\\code\\shop'), 'E:\\code\\shop', true), null, 'another drive is another folder');
 });

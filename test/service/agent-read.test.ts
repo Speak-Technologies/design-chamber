@@ -12,6 +12,9 @@ import { designFolderOf, listDesigns, openRoot, parseViewFile, readOneDesign } f
 import { formatListText, formatReadText } from '../../src/shared/agent/read-text.ts';
 import { useTmpRoot, type TmpRoot } from '../helpers/tmp-root.ts';
 
+/** A literal path inside a RegExp. */
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const NOW = new Date('2026-11-27T10:05:00.000Z');
 const SETTINGS = { version: 1 } as const;
 
@@ -322,15 +325,17 @@ test('dc read lists the design files of the project a design follows, and says w
   if (!one.ok) return;
   assert.equal(one.answer.system.state, 'project');
   const text = formatReadText(one.answer);
-  assert.match(text, new RegExp(`\\nSystem: follows the project's own design files\\n {2}Read these first, in ${project.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: \`DESIGN\\.md\`, \`src/styles/tokens\\.css\``));
+  assert.match(text, new RegExp(`\\nSystem: follows the project's own design files\\n {2}Read these first, in ${escapeRegExp(project)}: \`DESIGN\\.md\`, \`src/styles/tokens\\.css\``));
   assert.match(text, /\n {2}Its components in `src\/components`\. Copy their structure and states into this design; don't import or run them\.\n/);
 
   // The project folder is gone: the agent is told to look itself, and nothing is invented.
-  await tmp.write('designs/pricing-page/.chamber/state.json', stateJson([], { systemDecision: 'project', projectDirectory: tmp.at('code/gone') }));
+  const goneFolder = tmp.at('code/gone');
+  await tmp.write('designs/pricing-page/.chamber/state.json', stateJson([], { systemDecision: 'project', projectDirectory: goneFolder }));
   const gone = await read(root, dataDir, 'pricing-page');
   assert.ok(gone.ok);
   if (!gone.ok) return;
-  assert.match(formatReadText(gone.answer), /\n {2}Design Chamber couldn't read .*code\/gone just now\. Look at the project's design files yourself before you draw\.\n/);
+  // The folder prints with this platform's separators (`code\gone` on Windows), so the expected path is built, not typed.
+  assert.match(formatReadText(gone.answer), new RegExp(`\\n {2}Design Chamber couldn't read ${escapeRegExp(goneFolder)} just now\\. Look at the project's design files yourself before you draw\\.\\n`));
 
   // A design with no project folder: the follow line alone.
   await tmp.write('designs/pricing-page/.chamber/state.json', stateJson([], { systemDecision: 'project', projectDirectory: null }));
