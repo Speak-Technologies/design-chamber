@@ -74,6 +74,7 @@ const blank = (over: Partial<SystemSummary> & Pick<SystemSummary, 'id' | 'name'>
   sharedRepoWith: null,
   livingPage: null,
   proposalWaiting: false,
+  depth: null,
   ...over,
 });
 

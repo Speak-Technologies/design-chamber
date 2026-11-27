@@ -6,8 +6,8 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { contrastRatio, parseCssColor } from '../../../src/service/check/color.ts';
-import { MEASURED_PAIR_TOLERANCE, PAIR_LEVELS, pairKey, ratioText, staticLowPairs, staticPairRatio } from '../../../src/service/check/pair-contrast.ts';
+import { contrastRatio, parseCssColor } from '../../../src/shared/color.ts';
+import { MEASURED_PAIR_TOLERANCE, PAIR_LEVELS, pairKey, ratioText, staticLowPairs, staticPairRatio } from '../../../src/shared/pair-contrast.ts';
 import { cliSystemStore, runSystemCheck } from '../../../src/service/check/system-run.ts';
 import { scanExampleLabels, systemFindings } from '../../../src/service/check/system-static.ts';
 import { findingMessage, parseFindingData, severityOf, withMessage } from '../../../src/shared/checks.ts';

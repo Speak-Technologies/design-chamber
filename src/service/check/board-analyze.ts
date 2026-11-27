@@ -9,8 +9,8 @@ import { BOARD_ENTRY_MAX, CHECK_DETAIL_MAX, SYSTEM_BOARD_FINDINGS_PER_CODE, SYST
 import { isBoardEntryKey } from '../../shared/system-board.ts';
 import { SYSTEM_AREAS } from '../../shared/system-json.ts';
 import type { BoardLayout, CheckCode, CheckFindingData, SystemArea, SystemDetail } from '../../shared/types.ts';
-import { compositeOver, contrastRatio, type Rgba } from './color.ts';
-import { MEASURED_PAIR_TOLERANCE, PAIR_LEVELS, ratioText, type PairScheme } from './pair-contrast.ts';
+import { compositeOver, contrastRatio, type Rgba } from '../../shared/color.ts';
+import { MEASURED_PAIR_TOLERANCE, PAIR_LEVELS, ratioText, type PairScheme } from '../../shared/pair-contrast.ts';
 
 /** A board pass's id: the two light widths, and the dark pass (system-builder-depth D8). */
 export type BoardPassId = 'wide' | 'narrow' | 'wide-dark';
@@ -92,7 +92,7 @@ export type BoardProbe = {
 /** Pair cells per pass: a light and a dark ground for each of `SYSTEM_PAIRS_MAX` pairs. */
 export const BOARD_PAIR_CELLS_MAX = SYSTEM_PAIRS_MAX * 2;
 
-/** `3-dark`: the pair's index and its ground, as the board writes `data-dc-pair` (pair-contrast.ts `pairKey`). */
+/** `3-dark`: the pair's index and its ground, as the board writes `data-dc-pair` (src/shared/pair-contrast.ts `pairKey`). */
 const PAIR_KEY = /^(\d{1,3})-(light|dark)$/;
 
 // ---- the boundary ----

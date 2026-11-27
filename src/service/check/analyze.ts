@@ -11,7 +11,7 @@ import {
 } from '../../shared/limits.ts';
 import { cleanDetail } from '../../shared/checks.ts';
 import type { CheckCode, CheckFindingData, DesignKind } from '../../shared/types.ts';
-import { contrastRatio, minContrastFor, parseCssColor, type Rgba } from './color.ts';
+import { contrastRatio, minContrastFor, parseCssColor, type Rgba } from '../../shared/color.ts';
 
 export type ProbeRect = { x: number; y: number; w: number; h: number };
 

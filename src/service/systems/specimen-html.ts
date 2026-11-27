@@ -38,7 +38,7 @@ import type {
   TokenSection,
   TypeStyle,
 } from '../../shared/types.ts';
-import { pairKey, pairSchemes, ratioText, staticPairRatio, type PairScheme } from '../check/pair-contrast.ts';
+import { pairKey, pairSchemes, ratioText, staticPairRatio, type PairScheme } from '../../shared/pair-contrast.ts';
 import { escapeHtml, renderMarkdown, withoutLeadingTitle, type MarkdownProfile } from './markdown-html.ts';
 
 export { escapeHtml };

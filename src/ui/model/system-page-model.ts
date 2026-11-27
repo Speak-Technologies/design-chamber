@@ -7,7 +7,7 @@ import { BOARD_ENTRY_PATTERN, entryKeyOf, parseEntryKey, sectionOfEntry } from '
 import { sectionLabel } from '../../shared/agent/system-prompts.ts';
 import type { ColourGroup, ColourPairUse, ReviewState, SystemArea, SystemDepth, SystemDetail, SystemSection, SystemToken, SystemTopicId } from '../../shared/types.ts';
 // Pure colour maths the board's Pairs block and the checks already share (no Node imports): one judge of a pair.
-import { PAIR_LEVELS, pairSchemes, ratioText, staticPairRatio, type PairScheme } from '../../service/check/pair-contrast.ts';
+import { PAIR_LEVELS, pairSchemes, ratioText, staticPairRatio, type PairScheme } from '../../shared/pair-contrast.ts';
 import { plural } from './format.ts';
 
 export const AREA_LABEL: Readonly<Record<SystemArea, string>> = Object.freeze({

@@ -7,7 +7,7 @@
 // anything else (oklch(), a var() formula, a named colour, a see-through ground) is left to the check
 // browser, which measures what it paints.
 
-import type { ColourPairUse, SystemColourPair, SystemDetail, SystemToken } from '../../shared/types.ts';
+import type { ColourPairUse, SystemColourPair, SystemDetail, SystemToken } from './types.ts';
 import { contrastRatio, parseCssColor, type Rgba } from './color.ts';
 
 export type PairScheme = 'light' | 'dark';

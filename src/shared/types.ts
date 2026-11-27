@@ -932,6 +932,8 @@ export type SystemSummary = {
   livingPage: LivingPageState | null;
   /** rev 3: a current proposal, not yet approved or declined. */
   proposalWaiting: boolean;
+  /** system-builder-depth §4.3: `system.json` `depth`; null when absent, invalid or unreadable. */
+  depth: SystemDepth | null;
 };
 
 export type SystemDetail = {

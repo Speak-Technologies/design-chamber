@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { analyzeProbe, capPerCode, overlapShare, sanitizeProbe, type ArtboardInfo, type ProbeResult, type ProbeText } from '../../../src/service/check/analyze.ts';
-import { compositeOver, contrastRatio, minContrastFor, parseCssColor, relativeLuminance } from '../../../src/service/check/color.ts';
+import { compositeOver, contrastRatio, minContrastFor, parseCssColor, relativeLuminance } from '../../../src/shared/color.ts';
 import { CHECK_FINDINGS_PER_CODE } from '../../../src/shared/limits.ts';
 
 const artboard: ArtboardInfo = { file: 'screens/home.html', screen: 'home', viewport: 'phone', width: 390, height: 844, kind: 'canvas' };

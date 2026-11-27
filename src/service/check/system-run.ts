@@ -34,7 +34,7 @@ import { committedStateOf, readCommitted, readRecord } from '../systems/living-p
 import { readProposalProblem } from '../systems/proposal-record.ts';
 import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/store.ts';
 import { analyzeBoard, boardFindings, boardPassesOf, DARK_PASS_AREAS, findingsInArea, measuredPairFindings, passShare, sanitizeBoardProbe, type BoardProbePair } from './board-analyze.ts';
-import { staticLowPairs } from './pair-contrast.ts';
+import { staticLowPairs } from '../../shared/pair-contrast.ts';
 import { pictureCoverage, planBoardPictures, type PictureCoverage } from './board-pictures.ts';
 import { browserClassOf, openCheckRun } from './engine.ts';
 import { checkBrowserArgs, launchOpenOptions, openCdp } from './cdp.ts';

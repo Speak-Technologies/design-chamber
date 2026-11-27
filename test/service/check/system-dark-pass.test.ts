@@ -18,7 +18,7 @@ import {
   type BoardProbe,
   type BoardProbePair,
 } from '../../../src/service/check/board-analyze.ts';
-import { staticLowPairs } from '../../../src/service/check/pair-contrast.ts';
+import { staticLowPairs } from '../../../src/shared/pair-contrast.ts';
 import { parseArgs } from '../../../src/service/check/report-text.ts';
 import { cliSystemStore, runSystemCheck } from '../../../src/service/check/system-run.ts';
 import { buildChildArgs, parseToolInput, TOOL_INPUT } from '../../../src/plugin/check-tool.ts';
