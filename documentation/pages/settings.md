@@ -22,3 +22,27 @@ A **Design system** field is preselected the way the service decides: the projec
 
 ## Code
 Service: `src/service/routes/settings.ts` (validation and the answer), `src/service/settings.ts` (the store), `src/shared/systems.ts` (`settingsSystemsView`, the states and sentences). UI: `src/ui/components/settings-view.ts`, `src/ui/components/new-dialog.ts`, pure rules in `src/ui/model/settings-model.ts` and `new-model.ts` (`test/ui/system-pickers-model.test.ts`). Screens: `test/ui/visual/scenarios/design-system-settings.mjs`.
+
+## Settings: Your agent
+A section of the same sheet, after "Earlier folders" and before "Browser for thumbnails". It replaces the older "Help your agent find your designs" section. The line under the heading is "Agents in OpenChamber know Design Chamber while it is on. Nothing to set up."
+
+### What's on it
+- **Built in.** Static text: "Design rules, the design-chamber skill, and the design_check, design_list and design_read tools." It names what ships with the extension and does not claim OpenCode has loaded them; a guest can't see that. OpenChamber's own Extensions screen says when the tools can't load.
+- **In every chat.** Whether OpenChamber kept the short note about Design Chamber that goes with every chat. A badge and a sentence, so colour is never the only signal:
+
+| State | Badge | Sentence |
+|---|---|---|
+| `saved` | Sent | Every chat gets a short note about Design Chamber. |
+| `pending` | Pending | Sent from the next message. |
+| `not-saved` | Not saved (warning) | OpenChamber didn’t save it. It is sent again when Design Chamber restarts. |
+
+  The value comes from `agent.instructions` in `GET /settings` and `PUT /settings`, read fresh each time, so opening Settings again shows the current state.
+- **Older copy.** Only when a skill file installed by an earlier version is on disk (or the service can't look, or another copy of the skill would load twice). It says where the copy is and what that means. Our own unedited copy has **Remove old copy** (`DELETE /agent/skill`); an edited copy or someone else's is left alone and offers **Copy path**. When the copy is removed the row disappears, a toast and a screen reader announcement say "Old copy removed.", and focus moves to the Built in row above it. With no old copy there is no row.
+- **Using an agent outside OpenChamber?** A collapsed disclosure (a native `<details>`: Enter or Space opens it from the keyboard). Inside: the guide row (what Design Chamber does with `<root>/AGENTS.md`) and the **Lines for AGENTS.md** with a **Copy** button, the same text as before. It stays open or closed as the person left it while the sheet repaints (Copy repaints it).
+
+### States
+Loading shows "Loading settings…" for the whole sheet; a failed load shows the "Settings didn’t load" banner with **Try again**. A failed old-copy removal shows the service's sentence under the row and keeps the button usable, with focus kept on it.
+
+### Code
+UI: `src/ui/components/settings-view.ts`, pure rules in `src/ui/model/settings-model.ts` (`instructionsRow`, `skillRow`, the section text), tests in `test/ui/settings-wall-model.test.ts`. Screens: `test/ui/visual/scenarios/agent-section.mjs` (the section, the three In every chat states, the disclosure) and `agent-skill.mjs` (every Older copy state). The harness fake answers `instructions: 'saved'` and has a hook, `setInstructions`, for the other two states; `test/service/core/settings-contract.test.ts` keeps the fake's shape equal to the real service's.
+

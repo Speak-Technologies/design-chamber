@@ -4,6 +4,7 @@
 import { SETTINGS_PATH_MAX } from '../../shared/limits.ts';
 import { sameDirectory } from '../../shared/path-compare.ts';
 import { choiceSystemsOf, projectSystemOf } from '../../shared/systems.ts';
+import type { AgentInstructionsState } from '../../shared/api.ts';
 import type { AgentGuideStatus, AgentSkillStatus, SystemChoiceView, SystemDefaultSetting, SystemPinSetting, SystemPinView, SystemSummary } from '../../shared/types.ts';
 import { folderName } from './format.ts';
 
@@ -94,7 +95,7 @@ export const guideSentence = (guide: AgentGuideStatus): PathSentence => {
   }
 };
 
-/** What the skill row offers: remove our unedited old copy, copy the path of one we leave alone, or nothing. */
+/** What the older-copy row offers: remove our unedited old copy, copy the path of one we leave alone, or nothing. */
 export type SkillControl = 'remove-old-copy' | 'copy-path' | null;
 
 export type SkillRow = {
@@ -103,24 +104,47 @@ export type SkillRow = {
 };
 
 /**
- * The skill row for each state the service reports. The skill ships inside the extension, so the
- * row says so first and only talks about an older installed copy when there is one: ours and
- * unedited (`current`, `outdated`) can be removed from here; an edited or foreign one is left
- * alone and only its path is offered.
+ * The "Older copy" row (use-the-project spec §2.6). The skill ships inside the extension and the Built in row says so,
+ * so this row exists only when there is something to say about a copy installed before: ours and unedited
+ * (`current`, `outdated`) can be removed from here; an edited or foreign one is left alone and only its path is
+ * offered; when the service can't look, it says so. Null for `not-installed`.
  */
-export const skillRow = (skill: AgentSkillStatus): SkillRow => {
+export const skillRow = (skill: AgentSkillStatus): SkillRow | null => {
   switch (skill.state) {
     case 'not-installed':
-      return { sentence: plain('Built in. Agents in OpenChamber can use it while Design Chamber is on.'), control: null };
+      return null;
     case 'current':
     case 'outdated':
-      return { sentence: withPath('Built in. An older copy is also installed at ', skill.path, ', so agents may see the skill twice.'), control: 'remove-old-copy' };
+      return { sentence: withPath('An older copy is installed at ', skill.path, ', so agents may see the skill twice.'), control: 'remove-old-copy' };
     case 'edited':
-      return { sentence: withPath('Built in. You edited the older copy at ', skill.path, ', so Design Chamber leaves it alone. Delete it if you don’t need it.'), control: 'copy-path' };
+      return { sentence: withPath('You edited the older copy at ', skill.path, ', so Design Chamber leaves it alone. Delete it if you don’t need it.'), control: 'copy-path' };
     case 'foreign':
-      return { sentence: withPath('Built in. Another design-chamber skill is installed at ', skill.path, '.'), control: 'copy-path' };
+      return { sentence: withPath('Another design-chamber skill is installed at ', skill.path, '.'), control: 'copy-path' };
     case 'unavailable':
-      return { sentence: plain(`Built in. ${skill.message ?? 'Design Chamber can’t look for an older copy on this computer.'}`), control: null };
+      return { sentence: plain(skill.message ?? 'Design Chamber can’t look for an older copy on this computer.'), control: null };
+  }
+};
+
+// ---------------------------------------------------------------- "Your agent" (use-the-project spec §2.6)
+
+export const AGENT_SECTION_TITLE = 'Your agent';
+export const AGENT_SECTION_TEXT = 'Agents in OpenChamber know Design Chamber while it is on. Nothing to set up.';
+/** Static on purpose: a guest can't see whether OpenCode loaded the plugin, so this names the tools without promising they did. */
+export const BUILT_IN_TEXT = 'Design rules, the design-chamber skill, and the design_check, design_list and design_read tools.';
+export const OUTSIDE_TITLE = 'Using an agent outside OpenChamber?';
+export const OUTSIDE_TEXT = 'Agents outside OpenChamber don’t get the note above. They can find your designs through the guide and the lines below.';
+
+export type InstructionsRow = { badge: string; tone: 'success' | 'neutral' | 'warning'; detail: string };
+
+/** "In every chat": whether the host kept the short note that goes with every chat (read fresh on every GET and PUT). */
+export const instructionsRow = (state: AgentInstructionsState): InstructionsRow => {
+  switch (state) {
+    case 'saved':
+      return { badge: 'Sent', tone: 'success', detail: 'Every chat gets a short note about Design Chamber.' };
+    case 'pending':
+      return { badge: 'Pending', tone: 'neutral', detail: 'Sent from the next message.' };
+    case 'not-saved':
+      return { badge: 'Not saved', tone: 'warning', detail: 'OpenChamber didn’t save it. It is sent again when Design Chamber restarts.' };
   }
 };
 

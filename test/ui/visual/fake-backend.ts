@@ -323,6 +323,8 @@ export type FakeBackend = {
   systems: FakeSystems['hooks'];
   /** Test hooks (Phase 2.5 U4): each design's system link (fake-design-system.ts). */
   designSystem: FakeDesignSystem['hooks'];
+  /** Test hook (use-the-project T10): what Settings shows for "In every chat" from the next read on (the real value comes from the host's last answer). */
+  setInstructions: (state: 'saved' | 'pending' | 'not-saved') => void;
   /**
    * Test hook (Phase 2.6 design warnings): what the service reports in this design's `warnings` from the next answer on
    * (`[]` clears them). Sends the `comments` change the service sends after a reconciler write, so an open view refetches.
@@ -347,6 +349,7 @@ export const createFakeBackend = (): FakeBackend => {
   /** A page the agent saved straight into the root instead of a design folder: the loose-file banner offers to import it. */
   const loose = new Map<string, { bytes: number; mtime: string }>([['pricing-v2.html', { bytes: 14_200, mtime: ago(2 * HOUR) }]]);
   let skillState: 'not-installed' | 'current' = 'not-installed';
+  let instructionsState: 'saved' | 'pending' | 'not-saved' = 'saved';
   const listeners = new Set<(event: ChangeEvent) => void>();
   let restoreFailure: string | null = null;
 
@@ -525,7 +528,7 @@ export const createFakeBackend = (): FakeBackend => {
       agent: {
         guide: { path: `${root}\\AGENTS.md`, state: 'current' },
         skill: { path: 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md', state: skillState, duplicates: [] },
-        instructions: 'saved',
+        instructions: instructionsState,
       },
       systems: designSystem.settings(),
     }),
@@ -957,6 +960,9 @@ export const createFakeBackend = (): FakeBackend => {
     folders: folderBook.hooks,
     systems: systemBook.hooks,
     designSystem: designSystem.hooks,
+    setInstructions: (state) => {
+      instructionsState = state;
+    },
     setWarnings: (slug, warnings) => {
       if (!db.has(slug)) return;
       warningBook.set(slug, structuredClone(warnings));
