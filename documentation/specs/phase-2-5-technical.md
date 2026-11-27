@@ -997,8 +997,9 @@ All in `routes/folders.ts` + `src/service/folders.ts`; every change emits `{ slu
 ### 3.4 Changed answers and events
 
 - `POST /uploads` gains `encoding?: "text" | "base64"` (§5.6); `GET /settings` gains `systems: { default:
-  ChoiceView, pins: PinView[], notices: string[] }` (each view carries `state: "ok" | "draft" | "missing" |
-  "deleted"` and the sentence when not ok, RS S5) and `PUT /settings` accepts `systemDefault` and
+  ChoiceView, pins: PinView[], notices: string[] }` (each view carries `state: "ok" | "draft" | "missing"` and the
+  sentence when not ok, RS S5; a saved system that isn't in this Designs folder reads `missing`, since a delete
+  already clears the setting) and `PUT /settings` accepts `systemDefault` and
   `systemPins` (whole list).
 - `ChangeKind` gains `system` and `folders`. A `system` event carries `system: id` and `systemChange: "added"
   | "removed" | "files" | "state" | "versions" | "checks"`, `files?`, `origin?: "user"`; `slug` is null.
