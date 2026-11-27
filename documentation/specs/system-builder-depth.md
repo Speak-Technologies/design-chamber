@@ -1,7 +1,8 @@
 # Design system builder depth (technical design)
 
-Status: proposed. Branch `feat/system-builder-depth`, cut from `master` at 0.7.0 (`e89d866`). Nothing here is
-built yet. The owner's ask, in their words: "keen to know how we can make this the best most full design
+Status: **Phase 1 built** (2026-11-27, `29c2e33` to `36eec25` on `feat/system-builder-depth`, cut from `master`
+at 0.7.0 `e89d866`); §16 records what shipped and where it differs from this design. Phase 2 (§13, revised against
+the shipped code) and Phase 3 are not built. The owner's ask, in their words: "keen to know how we can make this the best most full design
 system creator possible where our agent can actually see everything in this app and do everything as well as
 claude artifacts and design."
 
@@ -486,7 +487,7 @@ CLI and the tool, no token), the service. No role gains a capability.
   through `store.filesDir(id)` and `resolveInside`; rendered in the same sandboxed artboard frame as design
   screens; the guest never receives the token, the bridge or a route. Untrusted full documents get the same
   treatment as design screens, which is the most-tested path in the product.
-- *Icons (Phase 2).* `checkAsset` SVG rules; drawn only as `<img>`, so script inside an SVG never runs.
+- *Icons (Phase 2).* `checkAsset` checks the file is an SVG (it does not inspect its content); drawn only as `<img>`, so script inside an SVG never runs (§16).
 
 **Data exposure.** Pictures stay under `.chamber/` (never versioned, copied, exported or published), as
 today. `sources/screens/*.png` (Phase 3) are agent reference, never copied or published; the living page's
@@ -559,7 +560,7 @@ Owners: **rules** (the rules author, `rules/**`), backend-developer, ui-ux-devel
 (`src/shared/types.ts`, `src/shared/limits.ts`) are applied or authorised by the main agent, who tells every
 lane. `scripts/build-skill.mjs` is a main-agent file assigned to backend-developer for T3 only.
 
-### Phase 1 (achievable now)
+### Phase 1 (built; T1 to T9 done, see §16)
 
 Parallel groups: **A** = T1, T2, T4 at once. **B** = T3 after T2's ids are fixed (T2 and T3 land in one
 commit). **C** = T5 and T6 at once, after T4. **D** = T7 after T5 and T6. **E** = T8 after T4. T9 last.
@@ -635,35 +636,118 @@ commit). **C** = T5 and T6 at once, after T4. **D** = T7 after T5 and T6. **E** 
 **Docs:** as listed.
 **Quality gates:** `npm test` (copy scan)
 
-### Phase 2
+### Phase 2 (revised 2026-11-27 against what Phase 1 shipped)
 
-### T10 Motion section (Priority: High | Effort: L; split: types+parse / specimen / check)
-**Agent:** backend-developer, then ui-ux-developer for the panel row · **Depends on:** Phase 1
-**Files:** `src/shared/types.ts`, `src/shared/system-json.ts`, `src/service/systems/extract-rules.ts`, `specimen-html.ts`, `board-html.ts`, `living-html.ts`, `src/service/check/system-static.ts`, `src/shared/checks.ts`, `src/ui/systems/**`
-**Acceptance:** motion tokens classify, validate and draw (bar, curve, demo chip); `system-motion-no-reduced` at its boundary; a Ready system stays Ready; fingerprints for the new section; generator versions bumped.
-**Docs:** design-systems feature and page docs; `rules/system-reference/motion.md` (rules) updated for the section.
-**Quality gates:** `npm run typecheck` · `npm run build` · `npm test` pass
+Read §16 first: it lists what Phase 1 built and the corrections to §4.6 these tasks rely on. Every file below
+was checked on the branch at `36eec25` unless marked **verify**. WP0 files (`src/shared/types.ts`, `src/shared/limits.ts`,
+`src/shared/api.ts`) go through the main agent, who applies or authorises each change and tells every lane.
 
-### T11 Icons (Priority: Med | Effort: M) · **Parallel with:** T10
-**Agent:** backend-developer · **Files:** `src/shared/system-json.ts`, `src/service/systems/assets.ts`, `specimen-html.ts`, `link.ts`, `repo-read.ts`, `src/shared/limits.ts`
-**Acceptance:** an SVG with script or an external ref is refused; icons draw as `<img>` at each size token on both grounds; copied to `system/icons/`; `system-icons-mixed` at its boundary.
-**Docs:** design-systems feature doc. **Quality gates:** as above
+**Waves.**
+- **Wave 0 (main agent, one commit):** the WP0 changes of T10, T11 and T12 together (type unions, limits, the
+  two new routes' request and response types), so the three backend tasks start from one base.
+- **Wave 1 (parallel):** T10a motion contract and checks · T11 icons · T12a screens contract and route. They
+  share `src/shared/system-json.ts` and `src/service/systems/specimen-html.ts`: T10a and T11 each touch a
+  separate function there; T12a touches `system-json.ts` only. The main agent sequences their merges in
+  that order (T10a, T11, T12a) and runs the full gates after the wave.
+- **Wave 2 (parallel):** T10b motion specimens on the board and living page (after T10a and T11, because both
+  bump the generator versions; T10b does the single bump for the wave) · T12b screens in the system check
+  (after T12a) · T14r rules: screens, motion and icons in the reference docs (after T10a, T11, T12a fix the ids).
+- **Wave 3 (parallel):** T13 Screens view on the system page (after T12a) · T10c panel rows for motion and
+  icons (after T10a, T11) · T14 living page screens (after T12a, T10b).
+- **Wave 4:** T15d docs and SPEC fold-in, then qa-tester, then browser-tester for T10c and T13.
 
-### T12 System screens: contract, route, check (Priority: High | Effort: L; split route / check)
-**Agent:** backend-developer (Opus: new route and check) · **Depends on:** Phase 1
-**Files:** `src/shared/{types,api,limits}.ts`, `src/shared/system-json.ts`, **new** `src/service/routes/system-screens.ts`, `src/service/systems/store.ts`, `src/service/check/system-run.ts`, `src/guest/service-client.ts`, tests
-**Acceptance:** route refuses without the token, with a bad id, a traversal or a cased duplicate; renders in the design artboard frame; the check runs the design probe per screen per viewport with `file: 'screens/<id>.html'`; budgets and `--screen` behave as §4.6.
-**Docs:** design-systems and design-checks feature docs. **Quality gates:** as above plus route security tests
+### T10a Motion section: contract, classification and checks (Priority: High | Effort: M)
+**Agent:** backend-developer (Opus: readiness logic) · **Depends on:** Wave 0 · **Blocks:** T10b, T10c, T14r
+**Files:** `src/shared/types.ts` (Wave 0: `SystemSection` and `TokenSection` gain `motion`; `CheckCode` gains `system-motion-no-reduced`), `src/shared/system-json.ts` (`AREA_OF_SECTION` motion → foundations, after `shadows`; `LAYOUTS_OF_SECTION.motion` = card, compact, table; `TOKEN_SECTIONS`; `sectionFingerprints`; `deriveReview`), `src/shared/token-edit.ts` (`classifyToken`, `validateTokenValue` shape for motion), `src/shared/system-checklist.ts` (`motion` topic reads the section), `src/shared/checks.ts`, `src/service/check/system-static.ts`, `src/service/systems/edits.ts` and `src/shared/agent/system-prompts.ts` (their `Record<SystemSection, …>` maps), tests in `test/shared/` and `test/service/check/`
+**Description:** Tokens named `--duration-*`, `--ease-*`, `--motion-*`, or with `section: "motion"` meta, classify into the new section. Values validate as a time (`ms`/`s`, 0 to 10 000 ms) or an easing (`cubic-bezier(` four numbers `)`, `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `steps(<1..100>[, start|end])`). The static `system-motion-no-reduced` (warning, components or patterns covered) is raised when a component, pattern or brand example's text declares `transition` or `animation` and holds no `prefers-reduced-motion` media query; one finding, count and up to 3 files.
+**Acceptance:**
+- An existing system with `--duration-fast` in `other` reads it under `motion`; the Sizes section no longer lists it.
+- `deriveReview`: a section absent from `readyFingerprints` is not counted in `changesToReview` (today it would be: `ready[section] !== fingerprints[section]` with `undefined`), so a Ready system made before T10a shows no "changes to review" from the new section alone. Test fails without the change.
+- Sizes review of a system whose motion tokens lived in `other` resets once (its fingerprint changes); documented in the feature doc, pinned by a test, accepted (open question 8).
+- The `motion` checklist topic is satisfied by ≥ 1 duration and ≥ 1 easing token in the section; the old name rule still counts, so no Phase 1 system gains a gap.
+- Every exhaustive `Record<SystemSection, …>` compiles with a `motion` entry (typecheck is the test).
+- `system-motion-no-reduced` at its boundary (a `@media (prefers-reduced-motion: reduce)` block clears it; a comment holding the words does not). Changing the matched property list makes a test fail.
+**Docs:** `documentation/features/design-systems.md`, `documentation/features/design-checks.md`.
+**Quality gates:** `npm run typecheck` · `npm run build` · `npm test` pass · sandbox/CSP and path containment untouched
+
+### T10b Motion specimens, board and living page (Priority: High | Effort: M)
+**Agent:** backend-developer · **Depends on:** T10a, T11 · **Blocks:** T14
+**Files:** `src/service/systems/specimen-html.ts` (`partsOf` gains `motion`), `src/service/systems/board-html.ts` (`BOARD_GENERATOR_VERSION` 7 → 8, one bump for T10b and T11), `src/service/systems/living-html.ts` (its section `Record`, `FRAME_CSS`; `LIVING_PAGE_GENERATOR_VERSION` 5 → 6), `src/shared/limits.ts` (Wave 0), tests in `test/service/systems/`
+**Description:** A duration draws as a bar scaled to the longest duration; an easing as an inline SVG path computed in Node from its four numbers (keywords map to their standard curves, `steps()` to a staircase); a demo chip moves with the token on hover inside the board frame, with a reduced-motion rule that stops it. All values re-checked with `validateTokenValue` before they enter CSS or the path, numbers clamped, SVG built from numbers only.
+**Acceptance:** curves for `ease-out` and `cubic-bezier(0.2, 0, 0, 1)` match fixed path strings; an invalid easing draws the hatched "Can't read this value" box; the living page shows bars and curves without the chip (no hover there) and passes `scanLivingPage` and `livingCssProblems`; board CSS uses only `--dc-board-*` variables.
+**Docs:** `documentation/pages/design-systems.md` (board section; coordinate with the UI agent's in-flight edit of that file, see §16).
+**Quality gates:** as T10a
+
+### T10c Panel rows for motion and icons (Priority: Med | Effort: S)
+**Agent:** ui-ux-developer · **Depends on:** T10a, T11
+**Files:** `src/ui/model/system-page-model.ts`, `src/ui/systems/section-panel.ts`, `src/ui/systems/system-page.ts`, `test/ui/system-depth-model.test.ts`, `test/ui/visual/fake-systems.ts`, `test/ui/visual/scenarios/design-system-depth.mjs`
+**Description:** The section list shows Motion under Foundations with its tokens (hand-editable when the value is plain, like other tokens); Icons are listed under Assets with name and file. Labels from the section label map, host theme tokens only.
+**Acceptance:** rail 320 and 480 px and the page 1400 px, dark and light, in the visual harness; empty state "No motion tokens yet." / "No icons yet."; keyboard reachable; no em dash.
+**Docs:** `documentation/pages/design-systems.md`.
+**Quality gates:** as T10a · every UI state handled
+
+### T11 Icons (Priority: Med | Effort: M)
+**Agent:** backend-developer · **Depends on:** Wave 0 · **Blocks:** T10b, T10c · **Parallel with:** T10a, T12a
+**Files:** `src/shared/limits.ts` (Wave 0: `SYSTEM_FILES_MAX` 200 → 400, **new** `SYSTEM_ICONS_MAX` 150), `src/shared/types.ts` (Wave 0: `SystemDetail.icons: { file; name; note }[]`, `BoardEntryKind` `icon`), `src/shared/system-board.ts` (entry pattern `icon:\d{1,3}`), `src/shared/system-json.ts` (`icons` list key, reader), `src/shared/system-checklist.ts` (new topic `icons`, full, foundations: ≥ 1 icon), `src/service/systems/assets.ts` (`AssetKind` gains `icon`: SVG only, `assets/icons/`), `src/service/systems/specimen-html.ts` (`assetUrl` takes `icons`; an icon grid in the Assets section), `src/service/systems/link.ts` (`planCopy` copies listed icons to `system/icons/`), `src/service/systems/repo-read.ts` (`kindOf` → `icon`), `src/ui/model/new-system-model.ts` (the cap sentence reads the constant, no change expected: verify), `src/service/check/system-static.ts`, `src/shared/checks.ts`, tests
+**Description:** Icons are SVG files under `assets/icons/`, listed in `system.json` `icons`. Drawn only as `<img>` (an SVG loaded as an image runs no script), at each `--icon-*` size token, on light and dark grounds. Static `system-icons-mixed` (info) when the set's `viewBox` sizes or `stroke-width` values differ, read by a bounded attribute scan of each file (no DOM).
+**Acceptance:** a non-SVG under `assets/icons/` is refused by `checkAsset` with its sentence; icons draw as `<img>` (a test asserts no inline `<svg>` from an icon file ever reaches the board); `icons` over 150 is one problem with the true count; 400 files fit and 401 are refused in `assets.ts` and `repo-read.ts`; copies carry only listed icons; `icons` joins `SYSTEM_TOPIC_IDS` (34 ids) and `outOfScope` accepts it; `system-icons-mixed` at its boundary.
+**Docs:** `documentation/features/design-systems.md`, `documentation/features/design-checks.md`.
+**Quality gates:** as T10a
+
+### T12a System screens: contract, board service and route (Priority: High | Effort: L)
+**Agent:** backend-developer (Opus: new route on a risk surface) · **Depends on:** Wave 0 · **Blocks:** T12b, T13, T14
+**Files:** `src/shared/types.ts` (Wave 0: `SystemScreen = { id; title; kind: 'page' | 'pattern' | 'state' | 'marketing'; viewports: Viewport[] | null; problem }`, `SystemDetail.screens`, `SystemDetail.viewports`), `src/shared/api.ts` (Wave 0: `GET /systems/:id/screens/render`, `GET /systems/:id/screens/render/chunk`), `src/shared/limits.ts` (Wave 0: `SYSTEM_SCREENS_MAX` 24, `SYSTEM_SCREEN_MAX` 60 000 characters), `src/shared/system-json.ts` (readers; screens fold into the fingerprint of the area their kind belongs to: page, pattern, state → patterns; marketing → brand), `src/service/systems/board.ts` (`renderScreen(id, { screen, version?, proposal? })` beside `render`, same cache, sources and `system` event drop), **new** `src/service/routes/system-screens.ts` (registered where `registerSystemBoardRoutes` is), `src/service/systems/repo-read.ts` (`textCapOf` gains `screens/`), `src/service/systems/link.ts` (`REFERENCE_PATTERN` gains `screens/[^/]+\.html`), `src/service/systems/store.ts` (content walk already reaches depth 1; verify), `src/guest/service-client.ts` (`systemScreen(id, screen, options)` mirroring the board call at `service-client.ts:346`), tests in `test/service/systems/` (route tests beside `board-routes.test.ts`)
+**Description:** `system.json` `screens: [{ id, title, kind, viewports? }]` with files `screens/<id>.html` (full documents linking `../tokens.css`; fonts by their own `@font-face` to `../assets/fonts/…`), and top-level `viewports` in the design.json shape (default Laptop 1280×800 and Phone 390×844). A screen's own `viewports` replaces the system's, which is how social and email templates get fixed sizes (decision 5: for example 1200×630 and 600×1200). The route renders one screen like a design screen: per screen, not per viewport (the frame sets the width, as `GET /designs/:slug/render` does).
+**Acceptance:**
+- Router bearer check (an unauthenticated call is refused, test); `:id` through the store (pattern, containment, no links); `screen` must pass `SYSTEM_ENTRY_ID_PATTERN` and be listed in `screens`; `..`, a backslash, a drive letter, an encoded separator and an upper-case id are refused before any read (tests).
+- `bundleDocument` in render mode against the system's files folder (`store.filesDir(id)`, or the version or proposal source as the board does); a screen linking outside the folder gets the bundler's existing refusal.
+- A screen over 60 000 characters or a 25th screen is an entry problem; a missing file is "screens/<id>.html is missing.".
+- The answer is `RenderMeta`; chunks keyed like board chunks; one system's screen is never readable through another id.
+- Copy-on-link carries screens as agent reference; the snapshot reads them with the screen cap.
+**Docs:** `documentation/features/design-systems.md`; `docs/SPEC.md` §7 route table (T15d).
+**Quality gates:** as T10a · route security tests named in the report
+
+### T12b Screens in the system check (Priority: High | Effort: M)
+**Agent:** backend-developer (Opus: check browser) · **Depends on:** T12a
+**Files:** `src/service/check/system-run.ts`, `src/service/check/report-text.ts` (`parseArgs`: `--screen` allowed with `--system`; today line 102 refuses it), `src/cli/dc.ts`, `src/plugin/check-tool.ts` (`screens` for a system), `src/shared/limits.ts` (Wave 0: `SYSTEM_CHECK_SCREENS_BUDGET_MS`), `src/shared/system-checklist.ts` (`responsive` also satisfied by a screen of kind page with a phone viewport; `marketing` by a marketing screen), tests in `test/service/check/`, `test/cli/`, `test/plugin/`
+**Description:** After the board passes, plan one artboard per screen per viewport and call `renderArtboards` without `inspect`, so the design probe and `analyze.ts` run as for a design (contrast, overflow, clipped text, labels, alt, names); findings carry `file: 'screens/<id>.html'`. `--screen <id>` (repeatable) checks only those screens and skips the board passes.
+**Acceptance:**
+- Budget: with screens present the board passes keep 70 s and screens get 40 s of the 110 s `SYSTEM_CHECK_RENDER_BUDGET_MS`, so the tool's 180 s kill is never reached; artboards left out give `render-skipped` with "Use --screen <id> to check the rest."; ≤ `CHECK_ARTBOARDS_MAX` (24) screen artboards.
+- A phone screen wider than 390 px raises the design overflow finding with `file: 'screens/<id>.html'`.
+- Screen PNGs go to the same run folder as `screen-<id>@<viewport>.png` through `pngNames` (case-insensitively unique).
+- `--screen` with an id not in the system exits 2 before drawing; `--screen` with `--area` is refused with one sentence.
+- No screens → the run is byte-for-byte today's (existing tests unchanged).
+**Docs:** `documentation/features/design-checks.md`.
+**Quality gates:** as T10a · `CHECK_CSP` and containment untouched (named tests)
 
 ### T13 Screens view on the system page (Priority: High | Effort: M)
-**Agent:** ui-ux-developer · **Depends on:** T12
-**Files:** `src/ui/systems/**`, `src/ui/wall/**` (reuse), `test/ui/**`
-**Acceptance:** the wall shows every screen at every viewport, pan and zoom as on a canvas, empty and error states, host tokens only; browser-tester pass.
-**Docs:** `documentation/pages/design-systems.md`. **Quality gates:** as above
+**Agent:** ui-ux-developer (Opus: new view) · **Depends on:** T12a
+**Files:** `src/ui/systems/system-page.ts`, **new** `src/ui/systems/system-screens.ts`, `src/ui/model/system-page-model.ts`, `src/ui/wall/frame-slot.ts` and `src/ui/wall/camera-controller.ts` (reused, not changed), `test/ui/**` (a model test and a visual scenario with fake screens)
+**Description:** A Screens tab beside the board shows every screen at each of its viewports on a pannable, zoomable wall. Build it from `createFrameSlot` (the sandboxed artboard frame, no `allow-same-origin`) and the camera controller's pan and zoom; do not reuse `createWall`, which is bound to `DesignDetailResponse`, comments and edits.
+**Acceptance:** loading, empty ("No screens yet. Ask the agent to add page templates."), error with Try again, and a screen that fails to render; the tab is hidden for a system with no screens and no `screens` key; reloads on a `system` event and a scheme change; rail 320 and 480 px show a list that opens the page; host theme tokens only; keyboard pan and zoom as on a canvas; browser-tester pass.
+**Docs:** `documentation/pages/design-systems.md`.
+**Quality gates:** as T10a · every UI state handled
 
-### T14 Living page screens and rules for screens (Priority: Med | Effort: M)
-**Agent:** backend-developer (living page) · rules (`patterns.md`, `board-and-check.md` screens sections) · **Parallel:** yes
-**Acceptance:** screens as PNGs per viewport; page passes the allowlist; reference docs explain when a pattern belongs in a screen.
+### T14 Living page screens (Priority: Med | Effort: M)
+**Agent:** backend-developer · **Depends on:** T12a, T10b
+**Files:** `src/service/systems/living-examples.ts` (the shot takes a width and height: today the key's input list holds the constant `LIVING_EXAMPLE_WIDTH` and the height is fixed, so the key must be built from the actual width and height; component shots keep 720 and their keys, so `LIVING_EXAMPLE_GENERATOR_VERSION` stays 2), `src/service/systems/living-html.ts`, `src/service/systems/living-page.ts`, tests
+**Description:** Each screen becomes one PNG per viewport on the living page, under its area (patterns or brand by kind), with its title and viewport label. Width is the viewport width at scale 1 (a 1280 px screen at 2× would pass the picture cap).
+**Acceptance:** a two-screen system with two viewports yields four pictures; a screen that fails gives the existing "This example couldn't be shown." line; the page passes `scanLivingPage` and the secret scan; `LIVING_PAGE_GENERATOR_VERSION` 6 → 7.
+**Docs:** `documentation/features/design-systems.md`.
+**Quality gates:** as T10a
+
+### T14r Reference docs and interview for Phase 2 (Priority: Med | Effort: S)
+**Agent:** rules · **Depends on:** T10a, T11, T12a (ids) · **Parallel with:** T10b, T12b
+**Files:** `rules/system-reference/{motion,foundations,patterns,brand,board-and-check}.md`, and if the skill needs a line, `src/shared/agent/system-rules.ts` `systemContractSection` (backend-developer, under the 22 700 soft budget)
+**Description:** Motion as a section with value shapes; icons (folder, list, sizes, one stroke and grid); screens (when a pattern belongs in a screen, the viewports rule, marketing sizes for social and email, fonts by `@font-face`); the checklist table gains `icons`; every new code with its usual fix.
+**Acceptance:** caps hold (each ≤ 12 000, total ≤ 80 000); no em dash; the build passes; the skill stays ≤ 22 700.
+**Docs:** none beyond the docs themselves.
+**Quality gates:** `npm run build` · `npm test`
+
+### T15d Phase 2 docs and SPEC fold-in (Priority: Med | Effort: S)
+**Agent:** main agent with the architect · **Depends on:** Waves 1 to 3
+**Files:** `docs/SPEC.md` §6.7, §7, §9.19, §14; `documentation/features/{design-systems,design-checks}.md`; `documentation/pages/design-systems.md`; `documentation/known-issues.md` (extend KI-38 to the `motion` section and icons on older builds)
+**Acceptance:** every user-visible change described; qa-tester verifies; copy scan passes.
 
 ### Phase 3 (each designed when started)
 
@@ -698,9 +782,59 @@ frame, a component missing its `disabled` instance; the run must report each onc
 7. **Check time.** The dark pass adds roughly a third to a full check. Default on when dark values exist?
    Recommendation: yes; `--scheme light` and `--area` keep the fix loop quick.
 
+8. **Sizes review after the motion section (Phase 2).** Moving `--duration-*` and `--ease-*` tokens out of
+   `other` changes the Sizes fingerprint of systems that had them, so that one section shows "not reviewed"
+   once after the update. Accept it, or keep a compatibility fingerprint? Recommendation: accept it; a second
+   fingerprint path for one section is more risk than one re-review.
+
 ---
 
-Architecture Complete → main agent (task breakdown) | → rules (T1, T2), backend-developer (T3 to T7), ui-ux-developer (T8)
+## 16. Phase 1 as built (2026-11-27)
+
+Commits on `feat/system-builder-depth`: rules `29c2e33`, `fbcc579`, `0512514`; T4 to T7 `d589496` to `b05acfb`;
+T8 `89532d9`; follow-up `582d976`; T3 `36eec25`; T9 (this fold-in). `docs/SPEC.md` §6.7 and §9.19 carry the
+shipped contract and checks; §14 "System builder depth, Phase 1" lists the deviations in short.
+
+**Shipped as designed:** reference docs and their build caps (§4.1); `depth` plus six round-two calls (§4.2);
+`depth`, `pairs` with automatic pairs, `components[].sizes`, the new kinds, pattern and brand examples, example
+labels (§4.3); the Pairs block, examples on the board and living page, `BOARD_GENERATOR_VERSION` 7,
+`LIVING_PAGE_GENERATOR_VERSION` 5 (§4.4); the four static codes, the dark pass, measured pairs, `--area` and
+`--scheme` on the CLI and the tool (§4.5).
+
+**Where the build differs:**
+
+| Design said | Built | Why it matters for later work |
+|---|---|---|
+| `buildSystemSkillBody` takes `referenceDir: string \| null` | `reference: 'beside' \| { folder } \| null`; RULES.md and the make prompt take `referenceDir`; the folder comes from `findSystemReferenceDir(ctx.packageRoot)` in `src/service/routes/presets.ts` | New pointers use the same function |
+| `system-states-missing` with `params.part` | `params.listed` (`variants \| sizes \| states`); component examples only | Pattern examples carry no label check; a later task may add it |
+| A gap is "named as out of scope in OVERVIEW.md" | `system.json` `outOfScope`: 33 closed topic ids (`SYSTEM_TOPIC_IDS`), ≤ 40, unknown ids one problem; the agent asks the user first | New topics (T11 `icons`) extend the closed list |
+| Example checks at any depth | `system-example-missing` and `system-states-missing` only at `core` and `full` with components covered; pair contrast at any depth | |
+| Contrast maths in `src/service/check/color.ts` | `src/shared/color.ts` and `src/shared/pair-contrast.ts` (`MEASURED_PAIR_TOLERANCE` 0.05), so the panel shows the same ratios | UI can import them |
+| Example cache maybe +1 | `LIVING_EXAMPLE_GENERATOR_VERSION` stayed 2 (key is content) | T14 keeps that rule |
+| `BUILD.json` `platforms` free | closed `BUILD_PLATFORMS`: `laptop-phone phone-first laptop custom`, each once | |
+| Skill target ≤ 22 700 | ≈ 22 600; the board layout rule moved out first (`layoutDetail: 'pointer'`) as §5 planned | Phase 2 has about 100 characters of skill room: new guidance goes in reference docs |
+| `SystemSummary` unchanged | `SystemSummary.depth` added for the list rows | |
+
+**Corrections to §4.6 found while revising Phase 2** (the tasks in §13 already use these):
+- `checkAsset` does not inspect SVG content for script or external refs. Safety for icons comes from drawing them
+  only as `<img>`, as logos are; T11 does not add an SVG sanitiser, and its acceptance asserts no icon is inlined.
+- Design screens render per screen, not per viewport (`GET /designs/:slug/render?screen=`); the system screens
+  route does the same (`GET /systems/:id/screens/render?screen=`), and the frame sets the width.
+- `deriveReview` counts a section missing from `readyFingerprints` as changed, so a new section would show
+  "changes to review" on every Ready system; T10a changes that.
+- The 110 s render budget plus browser start leaves no room for a separate 60 s screen budget under the tool's
+  180 s kill; T12b splits the 110 s instead (70 board, 40 screens).
+- The canvas wall (`createWall`) is bound to `DesignDetailResponse`; T13 builds the Screens view from
+  `createFrameSlot` and the camera controller instead.
+- Screens get no review section of their own: they fold into the patterns or brand fingerprint by kind.
+
+**Open after Phase 1:** the UI agent's systems-list depth work (`src/ui/**`, `test/ui/**` and an uncommitted
+edit to `documentation/pages/design-systems.md`) is in flight and was not part of T9; KI-38 records the older
+builds' behaviour.
+
+---
+
+Architecture Complete → main agent (task breakdown) | → main agent (Wave 0), backend-developer (T10a, T11, T12a), rules (T14r), ui-ux-developer (T10c, T13)
 
 ## Decisions (the user, 2026-11-27)
 These answer the open questions above and are binding for every task.

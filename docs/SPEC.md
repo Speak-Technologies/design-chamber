@@ -736,6 +736,34 @@ parsers in `src/shared/system-json.ts`):
   (token sections take card, compact or table; typography, layers and assets none). An unknown or misplaced
   value falls back and raises the static warning `system-layout-invalid`. The board and the living page both
   follow them (`documentation/specs/system-board-layout-and-visual-check.md` §A).
+  **Builder depth** (`documentation/specs/system-builder-depth.md` §4.3; all optional, schema unchanged, a
+  system written before it reads the same detail plus empty fields, pinned by `test/shared/fixtures/old-system*`):
+  - `depth`: `tokens` | `core` | `full`, what the completeness check expects; anything else is one problem on
+    `depth` and the check is off. In no fingerprint.
+  - `outOfScope`: checklist topic ids the user agreed to leave out (closed list of 33, `SYSTEM_TOPIC_IDS` in
+    `src/shared/system-checklist.ts`: `surface text border brand status type-styles spacing radius pairs
+    dark-values state-colours data-colours control-sizes breakpoints elevation layers motion components examples
+    focus-disabled voice navigation overlays forms feedback states data-display accessibility responsive logo
+    brand-colour imagery marketing`); ≤ `SYSTEM_OUT_OF_SCOPE_MAX` (40), unknown ids are one problem naming up to
+    three. In no fingerprint.
+  - `pairs`: `{ fg, bg, use: "text" | "large" | "ui", note? }`, both colour tokens the system sets with a value;
+    plus automatic pairs (`--x-fg` or `--on-x` on an existing `--x`, `use: text`, `auto: true`) after the declared
+    ones, ≤ `SYSTEM_PAIRS_MAX` (60) in all. A bad or repeated pair is a problem on that pair only. Declared pairs
+    join the colours fingerprint; automatic ones don't.
+  - `components[].sizes`: ≤ `SYSTEM_COMPONENT_SIZES_MAX` (10) short names, as `variants` / `states`; joins the
+    components fingerprint only when non-empty.
+  - **Example labels:** inside an example, `data-dc-variant`, `data-dc-size`, `data-dc-state` set to a listed
+    name (matched ignoring case). Read by a bounded attribute scan (≤ 500 a file, values ≤ 40 characters), no DOM.
+  - **Kinds:** `patterns[].kind` adds `navigation overlay forms data-display feedback states page responsive motion
+    accessibility`; `brand[].kind` adds `colour social email` (`ENTRY_KINDS`, `src/shared/system-json.ts`).
+  - **Pattern and brand examples:** `example` is exactly `patterns/<id>.html` / `brand/<id>.html`, drawn like a
+    component example (inert template, shadow root, sandboxed board frame; the example cap); another value or a
+    missing file is a problem on that entry. A changed example changes that section's fingerprint. Copy-on-link
+    copies them as agent reference (`link.ts` `REFERENCE_PATTERN`); the repo snapshot reads them with the example
+    cap. The board draws a **Pairs** block at the end of Colours (entry keys `pair:<n>`, `data-dc-pair`, stripped
+    from the living page). `BOARD_GENERATOR_VERSION` 7, `LIVING_PAGE_GENERATOR_VERSION` 5;
+    `LIVING_EXAMPLE_GENERATOR_VERSION` stays 2 (the picture cache key is the content, never an entry id).
+  - `SystemSummary.depth` carries `depth` to the list (null when absent, invalid or unreadable).
 - `tokens.css`: light values = the last declaration in a top-level `:root`; dark values = a `:root` directly
   inside `@media (prefers-color-scheme: dark)`; other contexts are listed, not used. Every value Design Chamber
   writes or shows passes `validateTokenValue` (no `url(`, no `; { } < > \`, a function allowlist, a per-section
@@ -757,7 +785,10 @@ a user save, re-sync or restore at once, or after `SYSTEM_QUIET_MS` (8 s) of qui
   `ticket`, `name`, `home: "internal" | "repo"`, `repo { directory, folder, livingPage }`, `code { directory }`,
   `mode: "fix" | "describe" | "none"`, `dark`, `calls[]`, `access: "dev" | "public"`, `round`, `applied { at,
   parts, skipped }`, `proposal`, `drift` (the agent's own count of what Design Chamber can't read). The service
-  **adopts** it once (§9.19) and never writes it.
+  **adopts** it once (§9.19) and never writes it. Builder depth adds optional `depth` (`tokens` | `core` |
+  `full`, the round-one answer) and `platforms` (choice ids from `laptop-phone phone-first laptop custom`, each
+  once, `BUILD_PLATFORMS`); a wrong value is a problem on that field and the build is still adopted. The agent
+  copies `depth` into `system.json`, which is what the check reads.
 - `PROPOSAL.json` (`design-chamber/system-proposal@1`, ≤ 512 KiB) and, for a repo home, `proposal/` (the
   proposed system files in the contract above): the reviewed diff the user approves, with a fresh id
   (`^p_[a-z0-9]{8,16}$`) for every change. Tracked in versions, outside the revision hash.
@@ -766,6 +797,19 @@ a user save, re-sync or restore at once, or after `SYSTEM_QUIET_MS` (8 s) of qui
 written by `POST /systems/chip`: the chat's project folder and session. `<ticket>.md` beside it is the builder
 skill text with this chat's details, so an agent without the skill has the whole protocol. A ticket is consumed
 by the one `BUILD.json` adoption that names it.
+
+**Builder reference docs** (`documentation/specs/system-builder-depth.md` §4.1): seven docs written in
+`rules/system-reference/` (`foundations`, `motion`, `components`, `patterns`, `content-and-access`, `brand`,
+`board-and-check`) ship in `dist/skills/design-system-builder/reference/`. The build (`scripts/build-skill.mjs`)
+refuses a doc over `SYSTEM_REFERENCE_DOC_MAX` (12 000), all over `SYSTEM_REFERENCE_TOTAL_MAX` (80 000), a name
+off `^[a-z0-9-]{1,40}\.md$`, an em dash, or a missing doc the skill names. The skill body takes
+`reference: 'beside' | { folder } | null`: the built SKILL.md says "in the reference folder next to this file";
+the ticket file, `.chamber/RULES.md` and the make message name the absolute folder, found by
+`findSystemReferenceDir(ctx.packageRoot)` (`src/service/routes/presets.ts`; never from a request or a file); a
+missing folder leaves the line out. Nothing is written under the designs root for them. The skill carries the
+board layout rule as one line pointing at `board-and-check.md` (`builderSkillContract()` =
+`systemContractSection({ layoutDetail: 'pointer' })`); RULES.md keeps it in full. Built skill ≈ 22 600 characters,
+held by a 22 700 soft test under the 24 000 cap.
 
 **Phase 2.6 additions** (P26 §2.3; every field optional, older state reads as before):
 - `sources.code` gains `project?` (the project's realpath when the code source is a location inside it) and
@@ -1486,6 +1530,9 @@ One engine, two callers: the agent's CLI and the service's on-demand run.
   `params.field` = the var. `static.ts` runs `readTweakValues` on the tokens it already reads; the per-code
   cap of 5 applies; invalid knob definitions surface as `design-json-field` findings. CLI, `design_check`
   and the badge share it.
+- **Design system checks** use the same engine and output rules; they are specified with the systems in §9.19
+  ("Checks"): `dc check --system <id> [--area <area>] [--scheme light|dark|both] [--static] [--json]`, the
+  visual board check, the dark pass, measured colour pairs and the builder-depth codes.
 
 ### 9.10 Design index and host calls, Phase 1.5 (P15 §3.1, §3.3)
 - **`design-index.ts`** `createDesignIndex({ store, hub, log })`: `all()` (last good `DesignSummary[]`,
@@ -1791,6 +1838,29 @@ Every write goes through `systems.dir(id)` + `resolvePlainTarget` or the root's 
   measured `system-board-*` findings (preview wider than the board, preview or text outside its card, board
   overflow, layout hint too small, partial). No browser → static findings plus `browser-missing`.
   `GET /systems/:id/checks` and the `checks` prompt stay static.
+  **Builder depth** (`documentation/specs/system-builder-depth.md` §4.5, shipped Phase 1):
+  - Static codes, only for a readable system: `system-example-missing` (depth `core` or `full`, components
+    covered: a component with no example; at `full` also a pattern of kind `navigation overlay forms data-display
+    feedback states page` with none; info, warning at `full`), `system-states-missing` (same gate: a listed
+    variant, size or state with no labelled instance in its **component** example, one finding per list,
+    `params.listed`; warning), `system-contrast-low` (colours covered, any depth: a pair under 4.5 / 3 from hex or
+    rgb values, one finding per scheme, `params.scheme`; warning), `system-coverage-gap` (depth set: per covered
+    area, the missing checklist topics after `outOfScope`, detail ≤ `SYSTEM_GAP_TOPICS_SHOWN` (8) closed ids,
+    `params.area/depth/count`; info, warning at `full`). `severityOf` raises the two depth codes to warning on
+    `params.depth === 'full'`. Example texts are read from the live files folder (`readExampleTexts`).
+  - **Dark pass:** when any token has a dark value (or `--scheme dark`), a third pass `wide-dark` draws the board
+    assembled in the dark scheme at 1526px, the browser preferring dark, pictured for Foundations, Components and
+    Patterns (`DARK_PASS_AREAS`). It runs last; a short run drops it with `render-skipped` on `board.html` ("1 board
+    pass was not drawn …"). Picture budget 0.4 / 0.3 / 0.3 with three passes. Layout findings the light wide pass
+    made are not repeated. PNGs `<area>-overview@wide-dark.png`, `<area>@wide-dark[-n].png`.
+  - **Measured pairs:** the board probe reads each `[data-dc-pair]` sample's painted colours through a detached
+    1×1 canvas; Node judges pairs the files could not (`measuredPairFindings`, tolerance 0.05,
+    `src/shared/pair-contrast.ts`), so a pair is reported once. Skipped when `--area` is not foundations.
+  - **Flags:** `--area foundations|components|patterns|brand` pictures and measures one area (board drawn whole,
+    file checks whole); `--scheme light|dark|both` (default both with dark values). A bad, missing or repeated
+    value, or either flag without `--system`, exits 2 with one sentence before anything is read. `design_check`
+    takes `area` and `scheme` (closed enums; refused with a design). The report gains `render.areas` and
+    `render.schemes`.
 - **Export** (`export.ts` `exportIncludes`): §6.8.
 
 **Building systems with the agent (S8; P25 §5.9 to §5.14).** The service's part is to issue tickets, adopt,
@@ -3443,6 +3513,20 @@ sign-off §20); requirements `documentation/specs/phase-2-6-library-and-systems.
 7. In a system folder a plain `.md` is a doc, not a page; `.mdx` routes are pages.
 8. With `BUILD.json` `existing` and no code folder named, the existing folder becomes the build's code source;
    swatches skip `var()` values; the make prompt's file lists shrink 20 → 5 → none before any fixed line.
+
+### System builder depth, Phase 1 (2026-11-27), as built
+Spec: `documentation/specs/system-builder-depth.md` (§16 lists what Phase 1 changed from the design). Branch
+`feat/system-builder-depth`. Contract in §6.7, checks in §9.19, reference docs after the build tickets in §6.7.
+Where the build differs from the design:
+1. The skill input is `reference: 'beside' | { folder } | null`, not `referenceDir: string | null`; RULES.md and
+   the make message take `referenceDir: string | null`.
+2. `system-states-missing` carries `params.listed` (`variants | sizes | states`), not `part`, and checks
+   component examples only (pattern examples are not label-checked).
+3. `outOfScope` (33 topic ids) is new; the design only said a gap could be named in OVERVIEW.md.
+4. Example and label checks run only with `depth` `core` or `full`; pair contrast runs at any depth.
+5. Pair contrast and colour maths live in `src/shared/` (`pair-contrast.ts`, `color.ts`) so the panel shows the
+   same ratios.
+6. `LIVING_EXAMPLE_GENERATOR_VERSION` stayed 2: the picture cache key is content, not an entry id.
 
 ---
 
