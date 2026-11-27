@@ -33,7 +33,7 @@ type Linked = {
   invalid: boolean;
   ownTokens: number;
 };
-type State = Linked | { kind: 'none' } | { kind: 'ask' } | { kind: 'unset' };
+type State = Linked | { kind: 'none' } | { kind: 'ask' } | { kind: 'unset' } | { kind: 'project' };
 
 export type FakeDesignSystem = {
   handlers: {
@@ -51,7 +51,8 @@ export type FakeDesignSystem = {
   hooks: {
     /** Link a design to a system at a copy revision (default: the system's own). */
     link: (slug: string, id: string, options?: { revision?: number; overrides?: Override[]; missing?: string[]; drift?: string[]; by?: 'user' | 'agent' }) => void;
-    unlink: (slug: string, kind: 'none' | 'ask' | 'unset') => void;
+    /** `project`: the design follows its project's own files (use-the-project spec §1.7). */
+    unlink: (slug: string, kind: 'none' | 'ask' | 'unset' | 'project') => void;
     /** The agent switches the design to another system while it is open (a `files` event on the design). */
     agentSwitch: (slug: string, id: string) => void;
     /** A system's revision goes up (a `system` event), so linked designs have an update. */

@@ -29,6 +29,8 @@ import {
   type AppliedNotice,
 } from '../model/design-system-model.ts';
 import { RESTORE_NOTICE_MS, SHORT_NOTICE_MS } from '../model/findability-model.ts';
+import { folderName } from '../model/format.ts';
+import { foldsCaseFor } from '../model/new-model.ts';
 import { toast } from './actions.ts';
 import { createScope, debounce, errorText, h } from './dom.ts';
 import { icon } from './icons.ts';
@@ -77,8 +79,23 @@ export const mountSystemChip = (options: SystemChipOptions): SystemChipHandle =>
   const button = h('button', { type: 'button', class: 'oc-sdk oc-sdk-badge dc-system-btn', 'data-compact': compact ? 'true' : 'false', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }, glyph, label);
   const el = h('div', { class: 'dc-system', 'data-surface': options.surface, hidden: true }, button);
 
+  /** The design's project folder (design.json `projectDirectory`), read from the open design; null when it names none. */
+  const projectDirectory = (): string | null => {
+    const open = store.getState().open;
+    return open?.slug === slug ? (open.data?.design.projectDirectory ?? null) : null;
+  };
+  const projectName = (): string | null => {
+    const directory = projectDirectory();
+    return directory === null ? null : folderName(directory);
+  };
+  const projectContext = (): { directory: string; foldsCase: boolean } | null => {
+    const directory = projectDirectory();
+    if (directory === null) return null;
+    return { directory, foldsCase: foldsCaseFor(store.getState().settings.data?.root ?? directory, typeof navigator === 'undefined' ? '' : navigator.platform) };
+  };
+
   const paintChip = (): void => {
-    const chip = chipOf(view);
+    const chip = chipOf(view, projectName());
     el.hidden = hidden || chip === null;
     if (chip === null) return;
     label.textContent = chip.label;
@@ -152,7 +169,7 @@ export const mountSystemChip = (options: SystemChipOptions): SystemChipHandle =>
   };
 
   const mainPanel = (current: DesignSystemView): { body: Node[]; foot: Node[] } => {
-    const pop = popoverOf(current);
+    const pop = popoverOf(current, projectName());
     const body: Node[] = pop.lines.map((line) => h('p', { class: 'dc-sys-line' }, line));
     for (const problem of pop.problems) body.push(h('p', { class: 'dc-sys-problem' }, icon('alert', 14), h('span', {}, problem)));
     const overrides = overridesBlock(current);
@@ -232,7 +249,7 @@ export const mountSystemChip = (options: SystemChipOptions): SystemChipHandle =>
 
   const changePanel = (current: DesignSystemView): { body: Node[]; foot: Node[] } => {
     const list = systemsStore().get().systems ?? [];
-    const choices = changeOptions(current, list);
+    const choices = changeOptions(current, list, projectContext());
     const body: Node[] = [h('p', { class: 'dc-sys-line' }, 'Pick the design system this design should use.')];
     if (choices.length === 0) body.push(h('p', { class: 'dc-muted' }, NO_OTHER_SYSTEMS));
     else {

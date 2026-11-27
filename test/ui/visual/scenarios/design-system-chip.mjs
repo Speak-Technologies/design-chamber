@@ -166,6 +166,27 @@ const scenario = async ({ openPage, check, checkSoon, listReady, wallReady, thum
   await p.host(`${FAKE}.designSystem.unlink(${JSON.stringify(SLUG)}, 'ask')`);
   await checkSoon(async () => (await label()).includes('agent will ask'), `${tag}: ask reads as Ask me in chat (${await label()})`, 8000);
   await p.shot(`${tag}-10-ask`);
+
+  // follows the project (use-the-project T4): the chip names the project; Change… puts the project's own system first
+  await p.host(`${FAKE}.designSystem.unlink(${JSON.stringify(SLUG)}, 'project')`);
+  await checkSoon(async () => (await label()) === 'Design system: This design follows ember-oak’s own design files.', `${tag}: a design that follows its project names it (${await label()})`, 8000);
+  if (!rail) check((await text('.dc-system-label')) === 'Follows the project', `${tag}: the chip reads Follows the project (${await text('.dc-system-label')})`);
+  await p.host(`(() => { const f = ${FAKE}.systems; const rows = f.current(); const base = rows.find((r) => r.id === 'juniper'); f.seed([...rows, { ...base, id: 'ember-ui', name: 'Ember UI', isDefault: false, pinnedFor: [], revision: 3, home: { repo: 'ember-oak', directory: 'C:\\\\Users\\\\you\\\\Documents\\\\GitHub\\\\ember-oak' }, sources: { code: null, brand: 0, description: false } }]); })()`);
+  await p.click(CHIP);
+  await p.waitFor(`return !!doc.querySelector('${panelSel} .dc-sys-line')`, 'the system panel');
+  await p.settle(300);
+  check((await text(`${panelSel} .dc-sys-line`)) === 'This design follows ember-oak’s own design files, so it looks like the rest of the project. Pick a system to use one instead.', `${tag}: the panel says the design follows the project (${await text(`${panelSel} .dc-sys-line`)})`);
+  await p.shot(`${tag}-10b-project`);
+  await p.click(`${panelSel} .dc-sys-actions .oc-sdk-btn`, { text: 'Change…' });
+  await checkSoon(async () => (await p.guest(`return doc.querySelector('${panelSel} .dc-sys-option-name')?.textContent.trim() ?? ''`)) === 'Ember UI, this project’s', `${tag}: Change… lists the project's own system first`, 8000);
+  const projectChoices = await p.guest(`return [...doc.querySelectorAll('${panelSel} .dc-sys-option-name')].map((n) => n.textContent.trim()).join('|')`);
+  check(projectChoices.endsWith('|No design system'), `${tag}: then the others and No design system (${projectChoices})`);
+  check(await p.guest(`const r = doc.querySelector('${panelSel}').getBoundingClientRect(); return r.left >= 0 && r.right <= win.innerWidth`), `${tag}: the panel fits the window`);
+  await p.shot(`${tag}-10c-project-change`);
+  await p.key('Escape');
+  await p.waitFor(`return !doc.querySelector('${panelSel} .dc-sys-panel')`, 'the panel to close');
+  await p.host(`(() => { const f = ${FAKE}.systems; f.seed(f.current().filter((r) => r.id !== 'ember-ui')); })()`);
+
   await p.host(`${FAKE}.designSystem.link(${JSON.stringify(SLUG)}, 'harbor', { missing: ['COPY.json', 'tokens.css'] })`);
   await checkSoon(async () => (await label()).includes('missing 2 files'), `${tag}: a damaged copy is named in the chip (${await label()})`, 8000);
   await p.click(CHIP);

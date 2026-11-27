@@ -6,9 +6,12 @@ import { mountBadge, mountSelect, mountTextField } from '@openchamber/sdk/ui';
 
 import { buildAgentsSnippet } from '../../shared/agent/guide.ts';
 import type { SettingsResponse } from '../../shared/api.ts';
+import { choiceSystemsOf } from '../../shared/systems.ts';
 import { client, guestHost, host, store } from '../guest.ts';
 import { middlePath } from '../model/format.ts';
+import { foldsCaseFor } from '../model/new-model.ts';
 import {
+  DEFAULT_NOTE,
   NO_PROJECTS_TEXT,
   SYSTEMS_SECTION_TEXT,
   browserStatus,
@@ -85,12 +88,13 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
     },
   );
   void systemsStore().load();
-  // Repaint only when the choices change (which systems are Ready, and their names). The reload after a save moves badges
-  // this view doesn't draw, and a repaint would close a select the user has already opened.
+  // Repaint only when the choices or the row sentences change (each system's name, status and the project it belongs
+  // to). The reload after a save moves badges this view doesn't draw, and a repaint would close a select the user has
+  // already opened.
   let systemChoices = '';
   scope.add(
     systemsStore().subscribe((state) => {
-      const next = JSON.stringify((state.systems ?? []).filter((system) => system.status === 'ready').map((system) => [system.id, system.name]));
+      const next = state.systems === null ? 'loading' : JSON.stringify(choiceSystemsOf(state.systems).map((system) => [system.id, system.name, system.status, system.belongsTo]));
       if (next === systemChoices) return;
       systemChoices = next;
       paint();
@@ -290,16 +294,18 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
       const list = systemsStore().get().systems ?? [];
       const defaultHost = h('div', { class: 'dc-field', 'data-system-select': 'default' });
       mountSelect(defaultHost, { label: 'Default for new designs', value: defaultValue(answer.default), options: defaultOptions(list), disabled: systemBusy, onChange: (value) => void saveSystem('default', { systemDefault: defaultFrom(value, list) }) });
+      defaultHost.append(h('p', { class: 'oc-sdk-field-note' }, DEFAULT_NOTE));
       const defaultNote = defaultSentence(answer.default);
       if (defaultNote !== null) defaultHost.append(h('p', { class: 'oc-sdk-field-note' }, defaultNote));
-      const rows = projectRows(projects ?? [], answer.pins).map((row) => {
+      const foldsCase = foldsCaseFor(settings.root, typeof navigator === 'undefined' ? '' : navigator.platform);
+      const rows = projectRows(projects ?? [], answer.pins, { systems: systemsStore().get().systems, defaultView: answer.default, foldsCase }).map((row) => {
         const selectHost = h('div', { class: 'dc-sys-pin-select', 'data-system-select': `pin:${row.directory}` });
         mountSelect(selectHost, { value: row.value, options: pinOptions(list), disabled: systemBusy, onChange: (value) => void saveSystem(`pin:${row.directory}`, { systemPins: pinsAfter(answer.pins, row.directory, value, list) }) });
         selectHost.querySelector('button, [role="combobox"]')?.setAttribute('aria-label', `Design system for ${row.name}`);
         return h(
           'li',
           { class: 'dc-sys-pin' },
-          h('div', { class: 'dc-sys-pin-text' }, h('span', { class: 'dc-sys-pin-name', title: row.directory }, row.name), row.sentence !== null ? h('span', { class: 'dc-muted' }, row.sentence) : null),
+          h('div', { class: 'dc-sys-pin-text' }, h('span', { class: 'dc-sys-pin-name', title: row.directory }, row.name), row.sentence !== null ? h('span', { class: 'oc-sdk-field-note dc-sys-pin-note' }, row.sentence) : null),
           selectHost,
         );
       });

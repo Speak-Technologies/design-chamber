@@ -3,6 +3,7 @@
 
 import { SETTINGS_PATH_MAX } from '../../shared/limits.ts';
 import { sameDirectory } from '../../shared/path-compare.ts';
+import { choiceSystemsOf, projectSystemOf } from '../../shared/systems.ts';
 import type { AgentGuideStatus, AgentSkillStatus, SystemChoiceView, SystemDefaultSetting, SystemPinSetting, SystemPinView, SystemSummary } from '../../shared/types.ts';
 import { folderName } from './format.ts';
 
@@ -137,7 +138,10 @@ export type SystemSelectOption = { id: string; label: string };
 
 export const DEFAULT_ASK = 'ask';
 export const SELECT_NONE = 'none';
-export const PIN_DEFAULT = 'default';
+/** Use the project: no pin is stored for it. */
+export const PIN_PROJECT = 'project';
+/** Use my default: stored as a `follow-default` pin. */
+export const PIN_FOLLOW_DEFAULT = 'follow-default';
 const SYSTEM_PREFIX = 'system:';
 
 const readySystems = (systems: readonly SystemSummary[]): SystemSummary[] => systems.filter((system) => system.status === 'ready');
@@ -148,8 +152,10 @@ export const defaultOptions = (systems: readonly SystemSummary[]): SystemSelectO
   ...readySystems(systems).map((system) => ({ id: `${SYSTEM_PREFIX}${system.id}`, label: system.name })),
 ];
 
+/** Use-the-project spec §1.7, in this order: the project (no pin, the default), your default, none, each Ready system. */
 export const pinOptions = (systems: readonly SystemSummary[]): SystemSelectOption[] => [
-  { id: PIN_DEFAULT, label: 'Use the default' },
+  { id: PIN_PROJECT, label: 'Use the project' },
+  { id: PIN_FOLLOW_DEFAULT, label: 'Use my default' },
   { id: SELECT_NONE, label: 'No design system' },
   ...readySystems(systems).map((system) => ({ id: `${SYSTEM_PREFIX}${system.id}`, label: system.name })),
 ];
@@ -163,11 +169,12 @@ export const defaultFrom = (value: string, systems: readonly SystemSummary[]): S
   return system ? { choice: 'system', id: system.id, name: system.name } : { choice: 'ask' };
 };
 
-/** The select's value for a project; a pin that does not resolve shows as "Use the default". */
+/** The select's value for a project; a pinned system that does not resolve shows as "Use the project", which is what then applies. */
 export const pinValue = (pin: SystemPinView | null): string => {
-  if (pin === null) return PIN_DEFAULT;
+  if (pin === null) return PIN_PROJECT;
   if (pin.choice === 'none') return SELECT_NONE;
-  return pin.choice === 'system' && pin.state === 'ok' && pin.id !== undefined ? `${SYSTEM_PREFIX}${pin.id}` : PIN_DEFAULT;
+  if (pin.choice === 'follow-default') return PIN_FOLLOW_DEFAULT;
+  return pin.state === 'ok' && pin.id !== undefined ? `${SYSTEM_PREFIX}${pin.id}` : PIN_PROJECT;
 };
 
 /** A pin as the body of `PUT /settings` wants it: the view's `state` and `sentence` stay behind. */
@@ -177,12 +184,14 @@ export const pinSetting = (pin: SystemPinView): SystemPinSetting => {
 };
 
 /**
- * The whole pin list after one project's select changed (the body is the whole list). "Use the default" removes the
- * pin; every other pin is kept as it was, including ones that point at a system that is gone.
+ * The whole pin list after one project's select changed (the body is the whole list). "Use the project" removes the
+ * pin, "Use my default" stores `follow-default`; every other pin is kept as it was, including ones that point at a
+ * system that is gone.
  */
 export const pinsAfter = (pins: readonly SystemPinView[], directory: string, value: string, systems: readonly SystemSummary[]): SystemPinSetting[] => {
   const others = pins.filter((pin) => !sameDirectory(pin.directory, directory)).map(pinSetting);
-  if (value === PIN_DEFAULT) return others;
+  if (value === PIN_PROJECT) return others;
+  if (value === PIN_FOLLOW_DEFAULT) return [...others, { directory, choice: 'follow-default' }];
   if (value === SELECT_NONE) return [...others, { directory, choice: 'none' }];
   const system = value.startsWith(SYSTEM_PREFIX) ? readySystems(systems).find((one) => one.id === value.slice(SYSTEM_PREFIX.length)) : undefined;
   return system ? [...others, { directory, choice: 'system', id: system.id, name: system.name }] : others;
@@ -190,21 +199,59 @@ export const pinsAfter = (pins: readonly SystemPinView[], directory: string, val
 
 export type ProjectRow = { directory: string; name: string; value: string; sentence: string | null };
 
+/** What the rows need besides the pins: the systems list (null while it loads or when it failed), the default, case folding. */
+export type ProjectRowsContext = { systems: readonly SystemSummary[] | null; defaultView: SystemChoiceView; foldsCase: boolean };
+
+/** The default's name as its select shows it; a system that no longer resolves acts as Ask me each time. */
+export const defaultLabel = (view: SystemChoiceView): string => {
+  if (view.choice === 'none') return 'No design system';
+  if (view.choice === 'system' && view.state === 'ok') return view.name;
+  return 'Ask me each time';
+};
+
+/** The project's own system, Ready first; a draft one only when it has no Ready one. Null while the list is unknown. */
+const ownSystemOf = (systems: readonly SystemSummary[] | null, directory: string, foldsCase: boolean): { name: string; id: string; draft: boolean } | null => {
+  if (systems === null) return null;
+  const rows = choiceSystemsOf(systems);
+  const ready = projectSystemOf(rows, directory, foldsCase);
+  if (ready !== null) return { ...ready, draft: false };
+  // projectSystemOf only picks Ready systems; ask it again about the drafts alone to name one that isn't Ready yet.
+  const draft = projectSystemOf(rows.filter((row) => row.status === 'draft').map((row) => ({ ...row, status: 'ready' as const })), directory, foldsCase);
+  return draft === null ? null : { ...draft, draft: true };
+};
+
+/** Use-the-project spec §1.7: the sentence under a project's select that says what its new designs will use. */
+const rowSentence = (directory: string, pin: SystemPinView | null, context: ProjectRowsContext): string | null => {
+  if (pin !== null && pin.choice === 'system' && pin.state !== 'ok') return pin.sentence;
+  if (pin !== null && pin.choice !== 'system') return null;
+  const own = ownSystemOf(context.systems, directory, context.foldsCase);
+  if (pin !== null) {
+    // A pinned system that resolves: only worth a sentence when the project also has a system of its own.
+    const pinned = pin.name ?? pin.id ?? 'that system';
+    return own !== null && !own.draft && own.id !== pin.id ? `This project has its own system, ${own.name}. New designs use ${pinned} because you picked it.` : null;
+  }
+  if (own === null) return `Follows the project’s design files. If it has none, uses your default (${defaultLabel(context.defaultView)}).`;
+  if (own.draft) return `${own.name} is a draft. Until it is Ready, designs follow the project’s files.`;
+  return `Uses ${own.name}, this project’s design system.`;
+};
+
 /** One row per project the host knows, then one per pin whose project is not in that list (it is still a setting). */
-export const projectRows = (projects: ReadonlyArray<{ directory: string; name: string }>, pins: readonly SystemPinView[]): ProjectRow[] => {
+export const projectRows = (projects: ReadonlyArray<{ directory: string; name: string }>, pins: readonly SystemPinView[], context: ProjectRowsContext): ProjectRow[] => {
   const pinFor = (directory: string): SystemPinView | null => pins.find((pin) => sameDirectory(pin.directory, directory)) ?? null;
   const rows = projects.map((project) => {
     const pin = pinFor(project.directory);
-    return { directory: project.directory, name: project.name, value: pinValue(pin), sentence: pin !== null && pin.state !== 'ok' ? pin.sentence : null };
+    return { directory: project.directory, name: project.name, value: pinValue(pin), sentence: rowSentence(project.directory, pin, context) };
   });
   const extra = pins
     .filter((pin) => !projects.some((project) => sameDirectory(project.directory, pin.directory)))
-    .map((pin) => ({ directory: pin.directory, name: folderName(pin.directory), value: pinValue(pin), sentence: pin.state !== 'ok' ? pin.sentence : null }));
+    .map((pin) => ({ directory: pin.directory, name: folderName(pin.directory), value: pinValue(pin), sentence: rowSentence(pin.directory, pin, context) }));
   return [...rows, ...extra];
 };
 
 /** Under the default select: why a default that no longer resolves acts as "Ask me each time". */
 export const defaultSentence = (view: SystemChoiceView): string | null => (view.choice === 'system' && view.state !== 'ok' ? view.sentence : null);
 
-export const SYSTEMS_SECTION_TEXT = 'New designs follow these when you start them. Pick one per project, or let the default decide.';
+export const SYSTEMS_SECTION_TEXT = 'New designs follow their project’s own design system and files. Change it per project, or set what happens when a project has nothing.';
+/** Under "Default for new designs", always shown. */
+export const DEFAULT_NOTE = 'Used when a design has no project, or its project has no design files.';
 export const NO_PROJECTS_TEXT = 'Open a project in OpenChamber and it shows up here.';
