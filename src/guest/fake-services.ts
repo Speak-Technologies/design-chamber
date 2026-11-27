@@ -908,7 +908,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           rootExists: true,
           chrome: { path: null, source: 'none' },
           downloadsDir: 'C:\\Users\\you\\Downloads',
-          agent: { guide: { path: `${root}\\AGENTS.md`, state: 'current' }, skill },
+          agent: { guide: { path: `${root}\\AGENTS.md`, state: 'current' }, skill, instructions: 'saved' },
           systems: settingsSystemsView({ settings: { ...(systemDefault !== null ? { systemDefault } : {}), systemPins }, systems: named, notices: [] }),
         };
       }

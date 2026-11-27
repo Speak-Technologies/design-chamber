@@ -22,6 +22,10 @@
 // removal. A refusal or `unavailable` is logged and tried again on the next trigger only. Triggers:
 // the baseline, a root change, a settings change, and `system` events that may change a pinned
 // system's name or status (coalesced, 1 s).
+//
+// Settings shows whether the global note was saved (use-the-project spec §2.6): `onStatus` hears
+// `pending` before the first answer and while a new text is on its way, then `saved` or `not-saved`.
+// Only the global note counts; a pin line that was not saved is retried on its own triggers.
 
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -30,6 +34,7 @@ import path from 'node:path';
 import { buildInstructions, buildPinInstruction } from '../shared/agent/instructions.ts';
 import { SYSTEM_PINS_MAX } from '../shared/limits.ts';
 import { choiceSystemsOf, projectSystemOf } from '../shared/systems.ts';
+import type { AgentInstructionsState } from '../shared/api.ts';
 import type { ChangeEvent, SettingsFile, SystemSummary } from '../shared/types.ts';
 import type { HostCalls, Logger, SettingsStore } from './context.ts';
 import { foldsCase, isInsideOrEqual, samePath, writeFileAtomic } from './paths.ts';
@@ -43,6 +48,8 @@ export type InstructionsDeps = {
   platform?: NodeJS.Platform;
   /** Phase 2.5 per-project pins; absent → only the global note is kept. */
   pins?: PinSyncDeps;
+  /** Hears each change of the global note's state, for Settings (use-the-project spec §2.6). Starts at `pending`. */
+  onStatus?: (state: AgentInstructionsState) => void;
 };
 
 /** What the pin sync reads of a system: its name and state, and who owns it (use-the-project spec §1.5). */
@@ -146,6 +153,12 @@ export const startInstructions = (ctx: InstructionsContext, deps: InstructionsDe
   let lastSaved: string | null = null;
   /** Sends run one at a time, in trigger order, so a quick second root change can never be overtaken by the first. */
   let queue: Promise<void> = Promise.resolve();
+  let status: AgentInstructionsState = 'pending';
+  const setStatus = (next: AgentInstructionsState): void => {
+    if (stopped || next === status) return;
+    status = next;
+    deps.onStatus?.(next);
+  };
 
   const sendCurrent = async (): Promise<void> => {
     if (stopped) return;
@@ -162,15 +175,29 @@ export const startInstructions = (ctx: InstructionsContext, deps: InstructionsDe
     } catch (error) {
       // A root with a control character or an absurd length: the note is not sent rather than sent wrong.
       ctx.log.warn('instructions.build-failed', { error: errorText(error) });
+      setStatus('not-saved');
       return;
     }
-    if (stopped || text === lastSaved) return;
-    const result = await ctx.hostCalls.setInstructions(text);
+    if (stopped) return;
+    if (text === lastSaved) {
+      setStatus('saved');
+      return;
+    }
+    setStatus('pending');
+    let result: Awaited<ReturnType<HostCalls['setInstructions']>>;
+    try {
+      result = await ctx.hostCalls.setInstructions(text);
+    } catch (error) {
+      setStatus('not-saved');
+      throw error;
+    }
     if (result === 'saved') {
       lastSaved = text;
+      setStatus('saved');
       ctx.log.info('instructions.saved', { characters: text.length });
       return;
     }
+    setStatus('not-saved');
     ctx.log.info('instructions.not-saved', { result });
   };
 
@@ -236,7 +263,10 @@ export const startInstructions = (ctx: InstructionsContext, deps: InstructionsDe
       baseline = true;
       trigger();
     },
-    (error: unknown) => ctx.log.warn('instructions.start-skipped', { error: errorText(error) }),
+    (error: unknown) => {
+      ctx.log.warn('instructions.start-skipped', { error: errorText(error) });
+      setStatus('not-saved');
+    },
   );
   const offRoot = ctx.settings.onRootChange(() => trigger());
 

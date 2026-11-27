@@ -9,6 +9,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import type { TestContext } from 'node:test';
 
+import type { AgentInstructionsState } from '../../../src/shared/api.ts';
 import type { ServiceContext } from '../../../src/service/context.ts';
 import { createChangeHub } from '../../../src/service/changes.ts';
 import { unavailable, type Logger } from '../../../src/service/context.ts';
@@ -123,6 +124,8 @@ export const createCore = async (t: TestContext, options: CoreOptions = {}): Pro
 
 export type ServedCore = Core & {
   router: Router;
+  /** What GET /settings answers as `agent.instructions`; a test sets it as startInstructions' onStatus would. */
+  instructions: { state: AgentInstructionsState };
   port: number;
   request(pathname: string, init?: { method?: string; query?: Record<string, string>; body?: unknown; token?: string | null; signal?: AbortSignal }): Promise<Response>;
 };
@@ -133,7 +136,8 @@ export const serveCore = async (t: TestContext, core: Core): Promise<ServedCore>
   const router = createRouter({ token: TEST_TOKEN, log });
   registerHealthRoute(router, { version: core.ctx.version, epoch: core.ctx.epoch });
   // Skill paths under the tmp home, never the real one (XDG_CONFIG_HOME unset on purpose).
-  registerSettingsRoutes(router, core.ctx, createAgentSetup({ log: core.ctx.log, settings: core.ctx.settings, env: {}, homeDir: core.homeDir }));
+  const instructions: ServedCore['instructions'] = { state: 'pending' };
+  registerSettingsRoutes(router, core.ctx, createAgentSetup({ log: core.ctx.log, settings: core.ctx.settings, env: {}, homeDir: core.homeDir }), () => instructions.state);
   registerChangesRoutes(router, core.ctx);
   registerDesignsRoutes(router, core.ctx);
   registerCommentsRoutes(router, core.ctx);
@@ -163,7 +167,7 @@ export const serveCore = async (t: TestContext, core: Core): Promise<ServedCore>
       ...(init.signal ? { signal: init.signal } : {}),
     });
   };
-  return { ...core, router, port, request };
+  return { ...core, router, port, request, instructions };
 };
 
 /** A fresh served core (the common case). */

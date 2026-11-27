@@ -4,6 +4,8 @@
 
 import { randomUUID } from 'node:crypto';
 
+import type { AgentInstructionsState } from '../shared/api.ts';
+
 import { createActivityTracker } from './activity.ts';
 import { createAgentSetup } from './agent-setup.ts';
 import { createChangeHub } from './changes.ts';
@@ -194,10 +196,15 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   // The Design Chamber note in every agent's instructions: after the baseline and on root changes;
   // plus one line per pinned project (Phase 2.5 §8.6), also on settings and system changes.
   const systemStore = ensureSystemStore(ctx);
+  // Settings "Your agent" shows whether the host saved the note (use-the-project spec §2.6).
+  let instructionsState: AgentInstructionsState = 'pending';
   ctx.onDispose(
     startInstructions(ctx, {
       commandFor: (root) => launcher.commandFor(root, '<slug>'),
       ready: watcher.ready,
+      onStatus: (state) => {
+        instructionsState = state;
+      },
       pins: {
         settings: () => settings.read(),
         systems: () => systemStore.list(),
@@ -232,7 +239,7 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   const router = createRouter({ token: options.token, log });
   registerHealthRoute(router, { version: ctx.version, epoch: ctx.epoch });
   // WP1
-  registerSettingsRoutes(router, ctx, agent);
+  registerSettingsRoutes(router, ctx, agent, () => instructionsState);
   registerChangesRoutes(router, ctx);
   registerDesignsRoutes(router, ctx);
   registerCommentsRoutes(router, ctx);

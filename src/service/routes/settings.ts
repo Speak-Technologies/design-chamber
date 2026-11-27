@@ -1,7 +1,7 @@
 // WP1 — GET /settings, PUT /settings (docs/SPEC.md §7, §9.2; documentation/specs/agent-guidance-and-pages.md
 // §3.3), and DELETE /agent/skill (documentation/specs/phase-1-5-sdk-2-7.md §U2.4).
 
-import type { PreviousRoot, RemoveSkillResponse, SettingsResponse } from '../../shared/api.ts';
+import type { AgentInstructionsState, PreviousRoot, RemoveSkillResponse, SettingsResponse } from '../../shared/api.ts';
 import { SETTINGS_PATH_MAX, SYSTEM_PINS_MAX } from '../../shared/limits.ts';
 import { settingsSystemsView, type SettingsViewSystem } from '../../shared/systems.ts';
 import type { SystemDefaultSetting, SystemPinSetting } from '../../shared/types.ts';
@@ -36,7 +36,7 @@ const buildSystemsView = async (ctx: ServiceContext): Promise<SettingsResponse['
 };
 
 /** Assemble the §7 settings answer from the store (previousRoots carry live counts). Guide and skill state are read, never written, here. */
-const buildSettingsResponse = async (ctx: ServiceContext, agent: AgentSetup): Promise<SettingsResponse> => {
+const buildSettingsResponse = async (ctx: ServiceContext, agent: AgentSetup, instructions: () => AgentInstructionsState): Promise<SettingsResponse> => {
   const file = ctx.settings.read();
   const root = ctx.settings.root();
   const previousRoots: PreviousRoot[] = [];
@@ -53,7 +53,7 @@ const buildSettingsResponse = async (ctx: ServiceContext, agent: AgentSetup): Pr
     chrome: resolveBrowser(file),
     downloadsDir: await resolveDownloadsDir(root, file.downloadsDir),
     // A guide write queued by a root change (PUT just before) lands first, so the answer is current.
-    agent: { guide: await agent.idle().then(() => agent.guideStatus(root)), skill: await agent.skillStatus() },
+    agent: { guide: await agent.idle().then(() => agent.guideStatus(root)), skill: await agent.skillStatus(), instructions: instructions() },
     systems: await buildSystemsView(ctx),
   };
 };
@@ -116,13 +116,16 @@ const validateSystemPins = (raw: unknown): SystemPinSetting[] | null | undefined
 };
 
 /**
+ * `instructions` answers the state of the note in every chat (`startInstructions`' `onStatus`, use-the-project
+ * spec §2.6); it is read on every answer, so a note saved after the panel opened shows on the next read.
+ *
  * Registers:
  * - 'GET /settings'
  * - 'PUT /settings'
  * - 'DELETE /agent/skill'
  */
-export function registerSettingsRoutes(router: Router, ctx: ServiceContext, agent: AgentSetup): void {
-  router.on('GET /settings', async (): Promise<SettingsResponse> => buildSettingsResponse(ctx, agent));
+export function registerSettingsRoutes(router: Router, ctx: ServiceContext, agent: AgentSetup, instructions: () => AgentInstructionsState): void {
+  router.on('GET /settings', async (): Promise<SettingsResponse> => buildSettingsResponse(ctx, agent, instructions));
 
   router.on('PUT /settings', async ({ body }): Promise<SettingsResponse> => {
     if (body !== undefined && !isBodyRecord(body)) throw new ApiError('bad-request', 'The settings update must be a JSON object.');
@@ -143,7 +146,7 @@ export function registerSettingsRoutes(router: Router, ctx: ServiceContext, agen
       ...(systemDefault !== undefined ? { systemDefault } : {}),
       ...(systemPins !== undefined ? { systemPins } : {}),
     });
-    return buildSettingsResponse(ctx, agent);
+    return buildSettingsResponse(ctx, agent, instructions);
   });
 
   // The user's click on "Remove old copy" in Settings. The request carries nothing the handler

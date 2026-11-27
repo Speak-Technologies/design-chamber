@@ -9,6 +9,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 
+import type { SettingsResponse } from '../../../src/shared/api.ts';
 import { composeService, type ComposedService } from '../../../src/service/compose.ts';
 import type { Logger } from '../../../src/service/context.ts';
 import { createServiceServer, listenLoopback } from '../../../src/service/http.ts';
@@ -137,4 +138,17 @@ test('the design index on the composed service follows the real store and hub', 
   assert.deepEqual(ctx.designIndex.bySession('ses_linked'), [record.slug]);
   assert.equal(await ctx.hostCalls.setInstructions('x'), 'unavailable', 'no host callback in tests');
   assert.equal(ctx.activity.of('ses_linked'), null);
+});
+
+test('GET /settings on the composed service answers the note state from startInstructions (use-the-project spec §2.6)', async (t) => {
+  // No host callback in tests, so the host never saves the note: once the baseline is in, Settings hears not-saved.
+  const { call } = await useServed(t);
+  let state: unknown = null;
+  for (let i = 0; i < 100; i += 1) {
+    state = ((await call('/settings')).json as SettingsResponse).agent.instructions;
+    if (state === 'not-saved') break;
+    assert.equal(state, 'pending', 'before the answer the state is pending');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(state, 'not-saved');
 });

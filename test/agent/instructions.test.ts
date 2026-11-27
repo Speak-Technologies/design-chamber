@@ -281,4 +281,82 @@ describe('startInstructions (§U2.3)', () => {
     await settle();
     assert.deepEqual(sent, []);
   });
+
+  // ---- the state Settings shows (use-the-project spec §2.6) ----
+
+  test('onStatus: pending until the host answers, then saved; a refusal is not-saved and the next save clears it', async (t) => {
+    const settings = fakeSettings(POSIX_ROOT);
+    const { host } = fakeHost('refused');
+    const ready = deferred();
+    const states: string[] = [];
+    const stop = startInstructions(
+      { settings, hostCalls: host, log: quietLog() },
+      { commandFor: async () => null, ready: ready.promise, platform: 'linux', onStatus: (state) => void states.push(state) },
+    );
+    t.after(stop);
+    await settle();
+    assert.deepEqual(states, [], 'starts at pending, so nothing is heard before the baseline');
+    ready.resolve();
+    await settle();
+    assert.deepEqual(states, ['not-saved']);
+    host.answer = 'saved';
+    settings.move('/data/designs');
+    await settle();
+    assert.deepEqual(states, ['not-saved', 'pending', 'saved']);
+    settings.move('/data/designs');
+    await settle();
+    assert.deepEqual(states, ['not-saved', 'pending', 'saved'], 'the same text again stays saved and is not resent');
+  });
+
+  test('onStatus: a root no note can carry, a failed baseline or a throwing host is not-saved', async (t) => {
+    const states: string[] = [];
+    const settings = fakeSettings(POSIX_ROOT);
+    const { host } = fakeHost();
+    const stop = startInstructions(
+      { settings, hostCalls: host, log: quietLog() },
+      { commandFor: async () => null, ready: Promise.resolve(), platform: 'linux', onStatus: (state) => void states.push(state) },
+    );
+    t.after(stop);
+    await settle();
+    settings.move('/bad\nroot');
+    await settle();
+    assert.deepEqual(states, ['saved', 'not-saved']);
+
+    const failed: string[] = [];
+    const ready = deferred();
+    const stopFailed = startInstructions(
+      { settings: fakeSettings(POSIX_ROOT), hostCalls: host, log: quietLog() },
+      { commandFor: async () => null, ready: ready.promise, platform: 'linux', onStatus: (state) => void failed.push(state) },
+    );
+    t.after(stopFailed);
+    ready.reject(new Error('watcher failed'));
+    await settle();
+    assert.deepEqual(failed, ['not-saved']);
+
+    const thrown: string[] = [];
+    const events: string[] = [];
+    const throwing: HostCalls = { setInstructions: async () => { throw new Error('host gone'); } };
+    const stopThrown = startInstructions(
+      { settings: fakeSettings(POSIX_ROOT), hostCalls: throwing, log: quietLog(events) },
+      { commandFor: async () => null, ready: Promise.resolve(), platform: 'linux', onStatus: (state) => void thrown.push(state) },
+    );
+    t.after(stopThrown);
+    await settle();
+    assert.deepEqual(thrown, ['not-saved']);
+    assert.ok(events.includes('instructions.send-failed'));
+  });
+
+  test('onStatus is silent after stop', async () => {
+    const states: string[] = [];
+    const ready = deferred();
+    const { host } = fakeHost();
+    const stop = startInstructions(
+      { settings: fakeSettings(POSIX_ROOT), hostCalls: host, log: quietLog() },
+      { commandFor: async () => null, ready: ready.promise, platform: 'linux', onStatus: (state) => void states.push(state) },
+    );
+    stop();
+    ready.resolve();
+    await settle();
+    assert.deepEqual(states, []);
+  });
 });

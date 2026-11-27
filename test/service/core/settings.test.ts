@@ -382,6 +382,17 @@ describe('GET /settings agent status (agent-guidance spec §2, §3.4)', () => {
     assert.equal(existsSync(path.join(core.homeDir, '.config')), false);
   });
 
+  test('GET and PUT /settings answer the note state as it is at each read (use-the-project spec §2.6)', async (t) => {
+    const core = await useServedCore(t);
+    assert.equal((await body<SettingsResponse>(await core.request('/settings'))).agent.instructions, 'pending');
+    core.instructions.state = 'saved';
+    assert.equal((await body<SettingsResponse>(await core.request('/settings'))).agent.instructions, 'saved');
+    core.instructions.state = 'not-saved';
+    const put = await core.request('/settings', { method: 'PUT', body: { chromePath: null } });
+    assert.equal(put.status, 200);
+    assert.equal((await body<SettingsResponse>(put)).agent.instructions, 'not-saved');
+  });
+
   test('GET /settings and DELETE /agent/skill answer 401 without the token or with a wrong one, and write nothing', async (t) => {
     const core = await useServedCore(t);
     for (const token of [null, 'wrong-token', '']) {

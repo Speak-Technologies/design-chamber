@@ -525,6 +525,7 @@ export const createFakeBackend = (): FakeBackend => {
       agent: {
         guide: { path: `${root}\\AGENTS.md`, state: 'current' },
         skill: { path: 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md', state: skillState, duplicates: [] },
+        instructions: 'saved',
       },
       systems: designSystem.settings(),
     }),

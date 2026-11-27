@@ -6,7 +6,9 @@ import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { describe, test } from 'node:test';
 
-import { buildAgentGuide, buildAgentsSnippet, buildRetiredGuide, buildSkillDoc, SKILL_DESCRIPTION, SKILL_NAME } from '../../src/shared/agent/guide.ts';
+import { buildAgentGuide, buildAgentsSnippet, buildRetiredGuide, buildSkillDoc, LIST_TOOL_NAME, PROJECT_LINE, READ_TOOL_NAME, SKILL_DESCRIPTION, SKILL_NAME } from '../../src/shared/agent/guide.ts';
+import { buildInstructions } from '../../src/shared/agent/instructions.ts';
+import { LIST_TOOL_NAME as PLUGIN_LIST_TOOL_NAME, READ_TOOL_NAME as PLUGIN_READ_TOOL_NAME } from '../../src/plugin/read-tools.ts';
 import { findOwnershipMarker, OWNERSHIP_PLACEHOLDER, ownershipHash, ownershipVerifies, sha256Hex, withOwnershipHash } from '../../src/shared/agent/ownership.ts';
 import { AGENTS_SNIPPET_MAX, GUIDE_TEXT_MAX, SKILL_DESCRIPTION_MAX, SKILL_TEXT_MAX } from '../../src/shared/limits.ts';
 import { assertSnapshot } from './snapshot.ts';
@@ -131,16 +133,18 @@ describe('buildAgentGuide (§4)', () => {
       const foldersFile = `${root}${sep}.chamber${sep}folders.json`;
       const needles = [
         '## Design systems',
-        '- A project may already have a design system: a page, docs, components. When the user points at one, read its page, docs and components first, and build from what is there. Design Chamber reads the CSS and token files it can parse; you write the overview, notes and components.',
+        `- ${PROJECT_LINE}`,
+        '- When the user points at a design system a project already has (a page, docs, components), read those first and build from what is there. Design Chamber reads the CSS and token files it can parse; you write the overview, notes and components.',
         "- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff.",
         '## Folders',
         "- The user groups designs into folders in the library. Folders are tags: a design can sit in several, and grouping never moves a design's folder on disk.",
-        '- Projects group designs by the project they were made for. The user can also file a design under another project; that only groups it, and its design rules still come from the project it was made for.',
-        '- When the user asks you to put a design in a folder, add it to an existing folder by name: in its design.json set `"folderRequest": { "add": ["Q4 launch"], "at": "<the current time>" }`, or use `"remove"` to take it out. Design Chamber files it within a few seconds.',
+        '- Projects group designs by the project they were made for. Filing a design under another project only groups it; its design rules still come from its own project.',
+        '- When the user asks you to put a design in a folder, add it to an existing folder by name: in its design.json set `"folderRequest": { "add": ["Q4 launch"], "at": "<the current time>" }`, or use `"remove"` to take it out.',
         `- The folder names are in \`${foldersFile}\`. Read it, never write it. If the folder doesn't exist, say so and name the closest ones; never invent a folder.`,
         '- Never create, rename or delete folders, and never move files to organise them. The user does that in the library.',
         '## The library',
-        'The user browses designs as tiles or a list, sorts them by Updated, Created or Title, and filters them by project, folder, kind and system. Design systems show there too. Point the user at the library when they ask where a design is.',
+        'The user browses designs and design systems in the library, as tiles or a list, filtered by project, folder, kind and system. Point the user there when they ask where a design is.',
+        "To see the library, the user's pins and what they have open, use the `design_list` and `design_read` tools.",
         '## Design rules',
       ];
       let from = 0;
@@ -156,6 +160,30 @@ describe('buildAgentGuide (§4)', () => {
     const guide = buildAgentGuide({ root: POSIX_ROOT, platform: 'linux' });
     assert.ok(guide.includes('## Leave these alone\n\nNever touch `.versions/`, `.chamber/`, `.thumb.png` or `.trash/`. Design Chamber keeps versions, comments and thumbnails there.\nLeave `_systems/` alone too, unless you were asked to work on a system.\n'));
     assert.ok(guide.includes('Read it, never write it.'));
+  });
+
+  test('use-the-project §2.5: the read tools, then the launcher with list or read for an agent without them, else the files', () => {
+    const command = "sh '/home/you/Documents/Designs/.chamber/bin/dc' check <slug>";
+    const withCommand = buildAgentGuide({ root: POSIX_ROOT, platform: 'linux', checkCommand: command });
+    assert.ok(withCommand.includes("To see the library, the user's pins and what they have open, use the `design_list` and `design_read` tools.\nIf you don't have them, run the check command above with `list` or `read <slug>` in place of `check <slug>`.\n"));
+    const without = buildAgentGuide({ root: POSIX_ROOT, platform: 'linux' });
+    assert.ok(without.includes("If you don't have them, read the comments in a design's design.json and its `.chamber/check.json` yourself; never change either.\n"));
+    assert.ok(without.includes(`- ${PROJECT_LINE}\n`), 'the follow-the-project line, word for word');
+    assert.ok(buildInstructions({ root: POSIX_ROOT, platform: 'linux', checkCommand: null }).includes(`- ${PROJECT_LINE}`), 'the note says the same line');
+  });
+
+  test('use-the-project §2.5: with a 260-character Windows root and its check command the guide stays within its cap', () => {
+    const longWin = `C:\\Users\\you\\${'very-long-folder-name\\'.repeat(11)}Designs`;
+    const guide = buildAgentGuide({ root: longWin, platform: 'win32', checkCommand: `"${longWin}\\.chamber\\bin\\dc.cmd" check <slug>` });
+    assert.ok(guide.length <= GUIDE_TEXT_MAX, `guide ${guide.length}`);
+  });
+
+  test('the tool names match the plugin and the description names the words users say', () => {
+    assert.equal(LIST_TOOL_NAME, PLUGIN_LIST_TOOL_NAME);
+    assert.equal(READ_TOOL_NAME, PLUGIN_READ_TOOL_NAME);
+    for (const words of ['mockup', 'wireframe', 'landing page', 'prototype', 'look like their app', 'design_list', 'design_read', 'design_check']) {
+      assert.ok(SKILL_DESCRIPTION.includes(words), words);
+    }
   });
 
   test('the design-system lines: build with /design-system, and a design task never writes a repo (Phase 2.5 §8.11)', () => {
@@ -225,7 +253,9 @@ describe('buildSkillDoc (§5.1, §5.2)', () => {
     assert.equal(name, SKILL_NAME);
     assert.notEqual(name, 'design');
     assert.notEqual(name, 'page');
-    assert.equal(JSON.parse(fields.get('description') ?? '""'), SKILL_DESCRIPTION);
+    // The copy older versions installed keeps its own description, so it is still recognised (spec §2.5).
+    assert.ok((JSON.parse(fields.get('description') ?? '""') as string).startsWith('Use when the user asks for a design, mockup, wireframe'));
+    assert.notEqual(JSON.parse(fields.get('description') ?? '""'), SKILL_DESCRIPTION);
     assert.equal(fields.get('metadata.generator'), 'design-chamber');
     assert.equal(fields.get('metadata.version'), '"1"');
     assert.match(fields.get('metadata.sha256') ?? '', /^"[0-9a-f]{64}"$/);

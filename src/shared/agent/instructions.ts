@@ -8,7 +8,7 @@
 
 import { SERVICE_INSTRUCTIONS_MAX } from '@openchamber/sdk';
 
-import { assertRoot, capped, CHECK_TOOL_NAME, code, joinWith, SKILL_NAME } from './guide.ts';
+import { assertRoot, capped, CHECK_TOOL_NAME, code, joinWith, PROJECT_LINE, SKILL_NAME } from './guide.ts';
 
 export type InstructionsInput = {
   /** Absolute designs root. */
@@ -29,7 +29,7 @@ const checkLine = (checkCommand: string | null, platform: NodeJS.Platform): stri
 
 /** Use the project and the native agent (spec §2.5); the skill says the same, so a root too long for the note drops them. */
 const PROJECT_LINES: readonly string[] = [
-  '- A new design for a project follows the project: its own design system if Design Chamber has one, else its design files, components and screens. Read them before you draw.',
+  `- ${PROJECT_LINE}`,
   "- To see the library, the user's pins and what they have open, use design_list and design_read.",
 ];
 

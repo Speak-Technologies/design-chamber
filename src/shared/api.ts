@@ -96,6 +96,13 @@ export type HealthResponse = { ok: true; version: string; epoch: string };
 /** A root the user switched away from; designs there are never moved [§9.2]. */
 export type PreviousRoot = { path: string; exists: boolean; designCount: number };
 
+/**
+ * The Design Chamber note in every chat, this service run (use-the-project spec §2.6): `saved` the host
+ * stored the current text; `pending` not sent yet (the service is still starting, or a send is under way);
+ * `not-saved` the host did not store it (no host callback, a refusal, or a designs folder no note can carry).
+ */
+export type AgentInstructionsState = 'saved' | 'pending' | 'not-saved';
+
 export type SettingsResponse = {
   /** Absolute current designs root. */
   root: string;
@@ -107,8 +114,11 @@ export type SettingsResponse = {
   chrome: { path: string | null; source: BrowserSource };
   /** Where exports are written (`~/Downloads`, or `<root>/.exports` when missing). */
   downloadsDir: string;
-  /** Agent discovery: the `<root>/AGENTS.md` guide and the OpenCode skill, derived from disk on every read. */
-  agent: { guide: AgentGuideStatus; skill: AgentSkillStatus };
+  /**
+   * Agent discovery: the `<root>/AGENTS.md` guide and the OpenCode skill, derived from disk on every read;
+   * `instructions` is the last answer the host gave for the note in every chat (use-the-project spec §2.6).
+   */
+  agent: { guide: AgentGuideStatus; skill: AgentSkillStatus; instructions: AgentInstructionsState };
   /**
    * Phase 2.5 §3.4: the default system and project pins, each resolved against this root, and the
    * one-time notices of a deleted system ("Acme was deleted, so it is no longer your default.").
