@@ -4418,6 +4418,58 @@ button.dc-sp-value:focus-visible {
   font-size: 0.75rem;
 }
 
+/* Motion: what a value is, beside its name */
+.dc-sp-kind {
+  font-size: 0.75rem;
+}
+
+/* Icons: the picture on a pale tile in either theme (a black or currentColor icon stays visible), then name and file */
+.dc-sp-icon-row {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s3);
+  min-width: 0;
+}
+.dc-sp-icon-tile {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--oc-border);
+  border-radius: var(--dc-r);
+  background: var(--oc-bg);
+}
+:root[data-oc-theme='dark'] .dc-sp-icon-tile {
+  background: var(--oc-fg);
+}
+.dc-sp-icon-tile[data-state='loading'] {
+  background: var(--oc-muted-surface);
+}
+.dc-sp-icon-tile[data-state='error'],
+.dc-sp-icon-tile[data-state='ready']:empty {
+  background: repeating-linear-gradient(45deg, transparent 0 4px, var(--dc-hair) 4px 5px);
+}
+.dc-sp-icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+.dc-sp-icon-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dc-sp-icon-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dc-s2);
+  padding-bottom: var(--dc-s2);
+}
+
 /* Colour pairs: the use, then one ground per scheme with its sample and ratio */
 .dc-sp-pair-use {
   margin: 0;

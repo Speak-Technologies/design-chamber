@@ -67,6 +67,7 @@ import { paintRepoReview } from './repo-review.ts';
 import { openResyncSheet, type ResyncApplied } from './resync-sheet.ts';
 import { sendSystemMessage } from './system-ask.ts';
 import { mountBoard, type BoardHandle } from './system-board.ts';
+import { createIconStore } from './system-icons.ts';
 import { mountSystemBuild, type SystemBuildHandle } from './system-build.ts';
 import { renderSection, type SectionContext } from './section-panel.ts';
 import { createSystemRestore, mountSystemVersions, type SystemRestore, type SystemVersionsHandle } from './system-versions.ts';
@@ -176,6 +177,9 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     },
     onState: () => undefined,
   });
+  const icons = createIconStore(id, () => {
+    if (!disposed && section === 'assets') paintPanel();
+  });
   const askLink = (): { sessionId: string | null; selectedId: string | null; selectedTitle: string | null } => {
     const selected = guestHost.session.get();
     return { sessionId: detail?.sessionId ?? null, selectedId: selected?.id ?? null, selectedTitle: selected?.title ?? null };
@@ -284,6 +288,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       const nextLiving = await loadLiving(next);
       if (disposed || mine !== loadTicket) return;
       detail = next;
+      icons.invalidate();
       living = nextLiving;
       load = 'ready';
       if (!isCovered(next, section) && !expanded.size) section = SYSTEM_SECTIONS.find((candidate) => isCovered(next, candidate)) ?? 'overview';
@@ -980,6 +985,8 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     propose,
     removeToken,
     selectEntry: (entry) => select(section, entry),
+    icons: () => icons.view((current.icons ?? []).map((icon) => icon.file)),
+    retryIcons: () => icons.retry(),
   });
 
   /** A repo-backed system the agent hasn't stamped yet has no snapshot to draw: say where it is and offer the two ways on. */
@@ -1257,6 +1264,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     build.dispose();
     askBar.dispose();
     board.dispose();
+    icons.dispose();
     notices.dispose();
     el.remove();
   });

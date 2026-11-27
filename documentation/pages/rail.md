@@ -68,7 +68,7 @@ Screenshots: `documentation/pages/img/rail-system-<width>-<theme>-*.png`, from `
 
 - **Header:** back to the list, the name, a **Draft** or **Ready** badge and a ⋯ menu (Rename, Continue in chat, Versions). Under the name a home line says where the system lives ("In Design Chamber · From brand files · Used by 2 designs") and a repo-backed system reads "Repo · shop · Used by 4 designs".
 - **Board:** the system drawn read only at a rail height, with the **ask bar** under it. Choosing a section scrolls the board to it.
-- **Sections:** the same four areas as the page (Foundations, Components, Patterns & voice, Brand & marketing) with counts and review marks, in an accordion. There is no value editor, no unsaved bar and no inline editing in the rail.
+- **Sections:** the same four areas as the page (Foundations, Components, Patterns & voice, Brand & marketing) with counts and review marks (Motion counts its durations and easings, Assets its icons and files), in an accordion. There is no value editor, no unsaved bar and no inline editing in the rail.
 - **Foot, under the section list:** **Looks good** and **Needs work** for the chosen section (Needs work opens a note and sends it to the agent), then **Mark ready** (or **Back to draft**) and **Continue in chat**, then one line: "To edit values, open Design Chamber full screen: sidebar, Extension pages, Design Chamber." A section the system doesn’t cover says "Not covered" and has no review buttons; the two buttons and the line stay.
 
 ## A system read from a repo

@@ -26,6 +26,8 @@ import {
   type PendingChange,
   type PendingMap,
 } from '../model/system-edit-model.ts';
+import { ICONS_EMPTY, MOTION_EMPTY, motionKindLabel } from '../model/system-assets-model.ts';
+import type { IconView } from './system-icons.ts';
 import { COLOUR_GROUP_LABEL, NOT_COVERED, PAIR_MEASURED, entryKindLabel, isCovered, pairViews, scopeView, tokensOf, type PairGround, type PairView } from '../model/system-page-model.ts';
 
 export type SectionContext = {
@@ -39,6 +41,9 @@ export type SectionContext = {
   /** Remove a token from the system now (no confirm; the notice offers Undo). */
   removeToken: (name: string) => void;
   selectEntry: (entry: string) => void;
+  /** The icon pictures for the Assets section (loads them when first asked). */
+  icons: () => IconView;
+  retryIcons: () => void;
 };
 
 const GROUP_ORDER: readonly ColourGroup[] = ['brand', 'surface', 'text', 'border', 'status', 'data', 'other'];
@@ -206,6 +211,7 @@ const swatch = (value: string | null): HTMLElement => {
 
 const tokenRow = (ctx: SectionContext, token: SystemToken): HTMLElement => {
   const isColour = token.section === 'colours';
+  const isMotion = token.section === 'motion';
   const modes: Array<'light' | 'dark'> = token.dark !== null || isColour ? ['light', 'dark'] : ['light'];
   const fields = modes.map((mode) => {
     const key = tokenKey(token.name, mode);
@@ -214,10 +220,12 @@ const tokenRow = (ctx: SectionContext, token: SystemToken): HTMLElement => {
     const pendingText = change?.kind === 'token' ? change.value : null;
     const lock = ctx.locked ?? (value ? valueLock(value.editable) : null);
     const section = token.section;
+    // A duration or easing has one value, not a light one.
+    const title = isMotion && modes.length === 1 ? 'Value' : mode === 'light' ? 'Light' : 'Dark';
     return labelled(
-      mode === 'light' ? 'Light' : 'Dark',
+      title,
       fieldEditor({
-        label: `${mode === 'light' ? 'Light' : 'Dark'} value of ${token.name}`,
+        label: `${title} of ${token.name}`.replace(/^(Light|Dark) of/, '$1 value of'),
         saved: savedToken(token, mode),
         pending: pendingText,
         lock,
@@ -237,11 +245,13 @@ const tokenRow = (ctx: SectionContext, token: SystemToken): HTMLElement => {
   const remove = ctx.locked !== null
     ? null
     : iconBtn({ icon: 'trash', label: `Remove ${token.name}`, size: 'sm', onClick: () => ctx.removeToken(token.name) });
+  const edited = ctx.pending.get(tokenKey(token.name, 'light'));
+  const kind = isMotion ? motionKindLabel(edited?.kind === 'token' ? edited.value : (token.light?.text ?? null)) : null;
   const flags = h('span', { class: 'dc-sp-flags' });
   if (token.alsoSet.length > 0) flags.append(h('span', { class: 'dc-muted' }, `Also set in ${token.alsoSet.join(', ')}`));
   if (token.breakpoint) flags.append(h('span', { class: 'dc-muted' }, 'Changes with the screen size'));
   return wrapRow(ctx, entryKey('token', token.name), [
-    h('div', { class: 'dc-sp-entry-head' }, preview, h('code', { class: 'dc-sp-name' }, token.name), flags, remove),
+    h('div', { class: 'dc-sp-entry-head' }, preview, h('code', { class: 'dc-sp-name' }, token.name), kind === null ? null : h('span', { class: 'dc-muted dc-sp-kind' }, kind), flags, remove),
     token.problem ? h('p', { class: 'dc-sp-problem' }, token.problem) : null,
     h('div', { class: 'dc-sp-fields' }, ...fields),
     labelled('Note', noteField(ctx, 'tokens', token.name, token.note, token.name)),
@@ -362,14 +372,50 @@ const entryTextRows = (ctx: SectionContext, kind: 'pattern' | 'brand'): HTMLElem
   );
 };
 
-const assetRows = (ctx: SectionContext): HTMLElement[] => {
+/** One icon: its picture as an `<img>` (never inlined), name and file. */
+const iconRow = (ctx: SectionContext, view: IconView, index: number): HTMLElement | null => {
+  const icon = ctx.detail.icons?.[index];
+  if (!icon) return null;
+  const picture = view.pictures.get(icon.file);
+  const tile = h('span', { class: 'dc-sp-icon-tile', 'data-state': picture ? 'ready' : view.state }, picture ? h('img', { class: 'dc-sp-icon', alt: '', draggable: 'false', src: picture.src }) : null);
+  const missing = !picture && view.state === 'ready';
+  return wrapRow(ctx, entryKey('icon', String(index)), [
+    h(
+      'div',
+      { class: 'dc-sp-icon-row' },
+      tile,
+      h('div', { class: 'dc-sp-icon-text' }, h('span', { class: 'dc-sp-name' }, icon.name), h('code', { class: 'dc-muted dc-mono' }, icon.file)),
+    ),
+    missing ? h('p', { class: 'dc-muted dc-sp-body' }, 'No picture. The file may be too large or unreadable.') : null,
+    icon.note ? h('p', { class: 'dc-sp-body' }, icon.note) : null,
+  ]);
+};
+
+/** The Assets section: icons first (as on the board), then fonts and source files. */
+const assetGroups = (ctx: SectionContext): HTMLElement[] => {
   const { fonts, sourceFiles } = ctx.detail;
+  const icons = ctx.detail.icons ?? [];
+  const groups: HTMLElement[] = [];
+  if (icons.length === 0) {
+    groups.push(h('section', { class: 'dc-sp-group', 'aria-label': 'Icons' }, h('h3', { class: 'dc-sp-group-title' }, 'Icons'), h('p', { class: 'dc-muted dc-sp-none' }, ICONS_EMPTY)));
+  } else {
+    const view = ctx.icons();
+    const section = group('Icons', icons.map((_, index) => iconRow(ctx, view, index)).filter((row): row is HTMLElement => row !== null));
+    if (view.state === 'loading' && view.pictures.size === 0) section.setAttribute('aria-busy', 'true');
+    if (view.state === 'error') {
+      section.querySelector('ul')?.before(
+        h('div', { class: 'dc-sp-icon-error', role: 'alert' }, h('p', { class: 'dc-sp-problem' }, 'The icon pictures didn’t load.'), btn({ label: 'Try again', variant: 'outline', size: 'xs', onClick: () => ctx.retryIcons() }).el),
+      );
+    }
+    groups.push(section);
+  }
   const rows: HTMLElement[] = [];
   fonts.forEach((font, index) =>
     rows.push(wrapRow(ctx, entryKey('font', String(index)), [h('div', { class: 'dc-sp-entry-head' }, h('span', { class: 'dc-sp-name' }, font.family), h('span', { class: 'dc-muted' }, `${font.weight} ${font.style}`)), h('code', { class: 'dc-muted dc-mono' }, font.file)])),
   );
   for (const source of sourceFiles) rows.push(wrapRow(ctx, null, [h('div', { class: 'dc-sp-entry-head' }, h('code', { class: 'dc-mono' }, source.file), h('span', { class: 'dc-muted' }, 'Source file'))]));
-  return rows;
+  if (rows.length > 0) groups.push(group('Fonts and source files', rows));
+  return groups;
 };
 
 const logoRows = (ctx: SectionContext): HTMLElement[] =>
@@ -433,7 +479,6 @@ const emptyNote = (section: SystemSection): HTMLElement => {
     components: 'No components yet. Ask the agent to add the ones your designs use.',
     patterns: 'No patterns yet. Ask the agent to describe how things are put together.',
     brand: 'No brand entries yet. Ask the agent to add the voice and the logo rules.',
-    assets: 'No fonts or logos yet.',
   };
   return h('p', { class: 'dc-muted dc-sp-none' }, text[section] ?? 'Nothing here yet. Ask the agent to add some.');
 };
@@ -475,8 +520,7 @@ export const renderSection = (ctx: SectionContext, section: SystemSection): HTML
       break;
     }
     case 'assets': {
-      const rows = assetRows(ctx);
-      root.append(rows.length === 0 ? emptyNote(section) : h('ul', { class: 'dc-sp-entries' }, ...rows));
+      root.append(...assetGroups(ctx));
       break;
     }
     case 'colours': {
@@ -493,7 +537,7 @@ export const renderSection = (ctx: SectionContext, section: SystemSection): HTML
     }
     default: {
       const tokens = tokensOf(detail, section);
-      if (tokens.length === 0) root.append(h('p', { class: 'dc-muted dc-sp-none' }, 'Nothing here yet. Ask the agent to add some.'));
+      if (tokens.length === 0) root.append(h('p', { class: 'dc-muted dc-sp-none' }, section === 'motion' ? MOTION_EMPTY : 'Nothing here yet. Ask the agent to add some.'));
       else root.append(h('ul', { class: 'dc-sp-entries' }, ...tokens.map((token) => tokenRow(ctx, token))));
     }
   }

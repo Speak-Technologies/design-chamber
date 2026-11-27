@@ -9,6 +9,7 @@ import type { ColourGroup, ColourPairUse, ReviewState, SystemArea, SystemDepth, 
 // Pure colour maths the board's Pairs block and the checks already share (no Node imports): one judge of a pair.
 import { PAIR_LEVELS, pairSchemes, ratioText, staticPairRatio, type PairScheme } from '../../shared/pair-contrast.ts';
 import { plural } from './format.ts';
+import { assetsCountText, motionCountText } from './system-assets-model.ts';
 
 export const AREA_LABEL: Readonly<Record<SystemArea, string>> = Object.freeze({
   foundations: 'Foundations',
@@ -76,7 +77,7 @@ export const sectionCount = (detail: SystemDetail, section: SystemSection): numb
     case 'brand':
       return detail.brand.length + detail.logos.length;
     case 'assets':
-      return detail.fonts.length + detail.sourceFiles.length;
+      return (detail.icons?.length ?? 0) + detail.fonts.length + detail.sourceFiles.length;
     default:
       return tokensOf(detail, section).length;
   }
@@ -87,7 +88,8 @@ export const countText = (detail: SystemDetail, section: SystemSection): string 
   if (count === 0) return 'Nothing yet';
   if (section === 'overview') return plural(detail.notes.length + (detail.overview?.text ? 1 : 0), 'note');
   if (section === 'typography') return plural(count, 'style');
-  if (section === 'assets') return plural(count, 'file');
+  if (section === 'assets') return assetsCountText(detail);
+  if (section === 'motion') return motionCountText(tokensOf(detail, 'motion'));
   const noun = COUNT_NOUN[section] ?? ['entry', 'entries'];
   return count === 1 ? `1 ${noun[0]}` : `${count} ${noun[1] ?? `${noun[0]}s`}`;
 };
@@ -172,7 +174,7 @@ export const firstEntryOf = (detail: SystemDetail, section: SystemSection): stri
     case 'brand':
       return detail.brand[0] ? key('brand', detail.brand[0].id) : detail.logos.length > 0 ? key('logo', '0') : null;
     case 'assets':
-      return detail.fonts.length > 0 ? key('font', '0') : null;
+      return detail.icons?.[0] ? key('icon', '0') : detail.fonts.length > 0 ? key('font', '0') : null;
     default: {
       const first = tokensOf(detail, section)[0];
       return first ? key('token', first.name) : null;

@@ -494,6 +494,37 @@ const deepen = (detail: SystemDetail, flavour: 'core' | 'full'): void => {
   }
 };
 
+/** T10c: a full system's motion tokens (one a formula) and icons (one the board can't draw). */
+const addMotionAndIcons = (detail: SystemDetail): void => {
+  detail.tokens.push(
+    tok('--duration-fast', 'motion', null, '120ms', null, 'Hover and press.'),
+    tok('--duration-slow', 'motion', null, '0.3s'),
+    tok('--ease-standard', 'motion', null, 'cubic-bezier(0.2, 0, 0, 1)', null, 'Everything that moves on screen.'),
+    tok('--ease-out', 'motion', null, 'ease-out'),
+    tok('--motion-sheet', 'motion', null, 'var(--duration-slow)'),
+  );
+  detail.icons = [
+    { file: 'assets/icons/search.svg', name: 'Search', note: 'Top bar and filter fields.' },
+    { file: 'assets/icons/orders.svg', name: 'Orders', note: '' },
+    { file: 'assets/icons/anchor.svg', name: 'Anchor', note: '' },
+    { file: 'assets/icons/navigation-chevron-double-right-small-outline.svg', name: 'Chevron double right, small outline', note: '' },
+    { file: 'assets/icons/wave-detailed.svg', name: 'Wave, detailed', note: '' },
+  ];
+};
+
+const ICON_SHAPES = ['<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>', '<path d="M5 8h14l-1 12H6zM9 8V6a3 3 0 0 1 6 0v2"/>', '<circle cx="12" cy="5" r="2"/><path d="M12 7v13M5 13a7 7 0 0 0 14 0"/>', '<path d="M6 6l6 6-6 6M13 6l6 6-6 6"/>'];
+
+/** The icon grid the way the service's board bundles it: each icon only as an `<img>` of a data URL. The last one is left out, as a file too large to draw is. */
+const fakeIconGrid = (detail: SystemDetail): string => {
+  if (detail.icons.length === 0) return '';
+  const cards = detail.icons.map((icon, index) => {
+    const shape = ICON_SHAPES[index];
+    const picture = shape === undefined ? '' : `<img class="dc-icon dc-icon-current" style="width:32px;height:32px" src="data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${shape}</svg>`)}" alt="">`;
+    return `<div class="dc-card" data-dc-entry="icon:${index}">${picture}<div>${icon.name}</div></div>`;
+  });
+  return `<h2>Assets</h2><div class="dc-grid dc-icons">${cards.join('')}</div>`;
+};
+
 type Req = { params: Record<string, string> };
 
 export type FakeSystems = {
@@ -558,6 +589,8 @@ export type FakeSystems = {
     setSession: (id: string, sessionId: string | null) => void;
     /** Make the system's detail answer a failure until `false`. */
     failDetail: (fail: boolean) => void;
+    /** `GET /systems/:id/board` answers a failure until `false`. */
+    failBoard: (fail: boolean) => void;
     /** A system with this coverage (areas), to show the uncovered sentence. */
     setCoverage: (id: string, coverage: SystemDetail['coverage']) => void;
     /** Make the system's detail repo-backed (read only) with this living-page state (`null` = not judged yet). */
@@ -593,6 +626,7 @@ export type FakeSystems = {
 export const createFakeSystems = (deps: { emit: (slug: string | null, kind: ChangeEvent['kind']) => void; /** Systems live under the designs root: a foreign root has none of them (the rows stay, so switching back restores them). */ visible?: () => boolean }): FakeSystems => {
   let rows: SystemSummary[] = sampleSystems();
   let failing = false;
+  let boardFailure = false;
   let promptFailure: string | null = null;
   let slowPolls = 2;
   let scanN = 0;
@@ -628,6 +662,7 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
       if (!row.empty && !row.unreadable && row.id !== 'field-notes') fillIn(detail, row.id === 'juniper' ? ['foundations', 'components'] : ['foundations', 'components', 'patterns', 'brand']);
       if (row.id === 'tidepool') deepen(detail, 'core');
       if (row.id === 'harbor') deepen(detail, 'full');
+      if (row.id === 'harbor') addMotionAndIcons(detail);
       if (row.id === 'harbor') for (const section of ['colours', 'typography'] as const) detail.review[section] = { state: 'looks-good', note: null };
       details.set(row.id, detail);
     }
@@ -672,7 +707,7 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
     const parts = detail.components.map((component) => `<div data-dc-entry="component:${component.id}" class="cmp">${component.name}</div>`).join('');
     const bg = dark ? '#17191b' : '#fbfaf7';
     const fg = dark ? '#eef2f1' : '#1d2423';
-    return `<!doctype html><html><head><meta charset="utf-8"><title>${detail.name}</title><style>body{margin:0;padding:28px;background:${bg};color:${fg};font:15px system-ui,sans-serif}h1{margin:0 0 16px;font-size:26px}h2{font-size:13px;margin:26px 0 10px;opacity:.7}.row{display:flex;flex-wrap:wrap;gap:12px}.sw{margin:0;width:110px}.sw span{display:block;height:64px;border-radius:10px;border:1px solid #8884}.sw figcaption{font-size:12px;margin-top:4px}.cmp{padding:12px 18px;border:1px solid #8886;border-radius:10px}[data-dc-entry]{cursor:pointer}</style></head><body><h1>${detail.name}</h1><h2>Colours</h2><div class="row">${colours}</div><h2>Typography</h2>${types}<h2>Components</h2><div class="row">${parts}</div></body></html>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>${detail.name}</title><style>body{margin:0;padding:28px;background:${bg};color:${fg};font:15px system-ui,sans-serif}h1{margin:0 0 16px;font-size:26px}h2{font-size:13px;margin:26px 0 10px;opacity:.7}.row{display:flex;flex-wrap:wrap;gap:12px}.sw{margin:0;width:110px}.sw span{display:block;height:64px;border-radius:10px;border:1px solid #8884}.sw figcaption{font-size:12px;margin-top:4px}.cmp{padding:12px 18px;border:1px solid #8886;border-radius:10px}[data-dc-entry]{cursor:pointer}</style></head><body><h1>${detail.name}</h1><h2>Colours</h2><div class="row">${colours}</div><h2>Typography</h2>${types}<h2>Components</h2><div class="row">${parts}</div>${fakeIconGrid(detail)}</body></html>`;
   };
   const stampBump = (detail: SystemDetail): void => {
     detail.revision += 1;
@@ -1031,6 +1066,7 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
         return { ok: true };
       },
       'GET /systems/:id/board': ({ params, query }) => {
+        if (boardFailure) throw new ServiceError('internal', 'The board couldn’t be drawn.');
         const row = find(params.id);
         const detail = detailFor(row);
         const html = boardHtml(detail, query.scheme === 'dark');
@@ -1101,6 +1137,9 @@ export const createFakeSystems = (deps: { emit: (slug: string | null, kind: Chan
       },
       setSession: (id, sessionId) => {
         detailFor(find(id)).sessionId = sessionId;
+      },
+      failBoard: (fail) => {
+        boardFailure = fail;
       },
       failDetail: (fail) => {
         detailFailing = fail;
