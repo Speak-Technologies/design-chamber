@@ -26,7 +26,7 @@ const loadPlugin = async (): Promise<{ id: string; setup: (ctx: unknown) => Prom
   return module.default;
 };
 
-test('setup registers exactly one tool, design_check, with plain JSON Schema input', async () => {
+test('setup registers design_check, design_list and design_read, each with plain JSON Schema input', async () => {
   const plugin = await loadPlugin();
   assert.equal(plugin.id, 'design-chamber');
   const added: RegisteredTool[] = [];
@@ -40,7 +40,16 @@ test('setup registers exactly one tool, design_check, with plain JSON Schema inp
     },
   });
   assert.equal(transforms, 1);
-  assert.equal(added.length, 1);
+  assert.deepEqual(added.map((one) => one.name), ['design_check', 'design_list', 'design_read']);
+  for (const one of added) {
+    assert.deepEqual(one.options, { codemode: false }, one.name);
+    assert.ok(one.description.length > 0 && one.description.length <= 200 && !one.description.includes('—'), one.name);
+    assert.deepEqual(JSON.parse(JSON.stringify(one.input)), one.input, one.name);
+    assert.equal(one.input.type, 'object');
+    assert.equal(typeof one.execute, 'function');
+  }
+  assert.deepEqual(Object.keys(added[1]?.input.properties as object).sort(), ['kind', 'project', 'text']);
+  assert.deepEqual(Object.keys(added[2]?.input.properties as object), ['design']);
   const [tool] = added;
   assert.ok(tool);
   assert.equal(tool.name, 'design_check');
@@ -56,14 +65,23 @@ test('setup registers exactly one tool, design_check, with plain JSON Schema inp
   assert.equal(typeof tool.execute, 'function');
 });
 
-test('the built tool refuses a path before it reads anything', async () => {
+test('the built tools refuse a path before they read anything', async () => {
   const plugin = await loadPlugin();
-  let tool: RegisteredTool | null = null;
-  await plugin.setup({ tool: { transform: (fn: (tools: { add: (t: RegisteredTool) => void }) => void) => fn({ add: (t) => (tool = t) }) } });
-  assert.ok(tool);
-  const result = await (tool as RegisteredTool).execute({ design: '../../etc' }, { sessionID: 'ses_1' });
-  assert.equal(result.content, 'That is not a design folder name. Use the name of a folder in the Designs folder, such as pricing-page.');
-  assert.deepEqual(result.metadata, { designChamber: { exit: 2 } });
+  const tools: RegisteredTool[] = [];
+  await plugin.setup({ tool: { transform: (fn: (tools: { add: (t: RegisteredTool) => void }) => void) => fn({ add: (t) => tools.push(t) }) } });
+  const byName = (name: string): RegisteredTool => {
+    const found = tools.find((one) => one.name === name);
+    assert.ok(found, name);
+    return found;
+  };
+  for (const name of ['design_check', 'design_read']) {
+    const result = await byName(name).execute({ design: '../../etc' }, { sessionID: 'ses_1' });
+    assert.equal(result.content, 'That is not a design folder name. Use the name of a folder in the Designs folder, such as pricing-page.', name);
+    assert.deepEqual(result.metadata, { designChamber: { exit: 2 } });
+  }
+  const list = await byName('design_list').execute({ project: '../../etc' }, { sessionID: 'ses_1' });
+  assert.match(list.content, /^project must be the full path of a project folder/);
+  assert.deepEqual(list.metadata, { designChamber: { exit: 2 } });
 });
 
 test('the plugin never talks to the service: no token, no port, no fetch, in the source or the build', () => {
