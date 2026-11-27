@@ -1,8 +1,8 @@
 # Design system builder depth (technical design)
 
-Status: **Phase 1 built** (2026-11-27, `29c2e33` to `36eec25` on `feat/system-builder-depth`, cut from `master`
-at 0.7.0 `e89d866`); §16 records what shipped and where it differs from this design. Phase 2 (§13, revised against
-the shipped code) and Phase 3 are not built. The owner's ask, in their words: "keen to know how we can make this the best most full design
+Status: **Phase 1 and Phase 2 built** (2026-11-27). Phase 1: `29c2e33` to `36eec25` on `feat/system-builder-depth`,
+cut from `master` at 0.7.0 `e89d866`; §16 records it. Phase 2: `4451ad8` to `27ff325` on `feat/system-phase-2`;
+§17 records it. Phase 3 (§13, revised against the shipped code) is not built. The owner's ask, in their words: "keen to know how we can make this the best most full design
 system creator possible where our agent can actually see everything in this app and do everything as well as
 claude artifacts and design."
 
@@ -636,7 +636,7 @@ commit). **C** = T5 and T6 at once, after T4. **D** = T7 after T5 and T6. **E** 
 **Docs:** as listed.
 **Quality gates:** `npm test` (copy scan)
 
-### Phase 2 (revised 2026-11-27 against what Phase 1 shipped)
+### Phase 2 (built; see §17. Revised 2026-11-27 against what Phase 1 shipped)
 
 Read §16 first: it lists what Phase 1 built and the corrections to §4.6 these tasks rely on. Every file below
 was checked on the branch at `36eec25` unless marked **verify**. WP0 files (`src/shared/types.ts`, `src/shared/limits.ts`,
@@ -749,10 +749,91 @@ was checked on the branch at `36eec25` unless marked **verify**. WP0 files (`src
 **Files:** `docs/SPEC.md` §6.7, §7, §9.19, §14; `documentation/features/{design-systems,design-checks}.md`; `documentation/pages/design-systems.md`; `documentation/known-issues.md` (extend KI-38 to the `motion` section and icons on older builds)
 **Acceptance:** every user-visible change described; qa-tester verifies; copy scan passes.
 
-### Phase 3 (each designed when started)
+### Phase 3 (revised 2026-11-27 against what Phase 2 shipped)
 
-T15 forced pseudo-state pictures · T16 motion filmstrips · T17 compare sheets against `sources/screens/` ·
-T18 tokens export · T19 board pins. Owners: backend-developer for T15 to T18; ui-ux-developer for T19.
+Read §17 first. Task ids continue after Phase 2's T15d, so the outline's "T15 to T19" are T16 to T22 here.
+Every file was checked on `feat/system-phase-2` at `27ff325` unless marked **verify**. WP0 files go through the
+main agent as before.
+
+**Waves.**
+- **Wave 0 (main agent, one commit):** WP0 for all of Phase 3: `CheckCode` gains `system-state-unstyled`;
+  `SystemScreen.source: string | null`; the token-export and board-comment route types in `api.ts`; limits
+  `SYSTEM_STATE_SHOTS_MAX` (60), `SYSTEM_MOTION_FRAMES` (4), `SYSTEM_MOTION_SHOTS_MAX` (24),
+  `SYSTEM_COMPARE_SHEETS_MAX` (24), `SYSTEM_COMMENTS_MAX` (200), `SYSTEM_COMMENTS_FILE_MAX_BYTES` (1 MiB).
+- **Wave 1 (parallel):** T16 state pictures · T18 compare sheets · T19 token export · T20 board comments
+  (service). T16 and T18 both edit `src/service/check/system-run.ts`: T16 owns the board pass hook, T18 the
+  screen pass; the main agent merges T16 first.
+- **Wave 2 (parallel):** T17 motion frames (after T16: it reuses T16's CDP helper) · T21 pins on the board (UI,
+  after T20) · T19u export menu (UI, after T19) · T22r rules for Phase 3 (after T16 to T20 fix the ids).
+- **Wave 3:** T22 docs and SPEC fold-in, then qa-tester, then browser-tester for T19u and T21.
+
+### T16 Hover, focus and active pictures (Priority: High | Effort: M)
+**Agent:** backend-developer (Opus: check browser) · **Depends on:** Wave 0 · **Blocks:** T17
+**Files:** `src/service/check/render.ts` (`InspectPage` gains `forceState(selectorPath, states)` and `computedStyle(selectorPath)`, both over CDP `DOM.getDocument { pierce: true }`, `DOM.querySelector` and `CSS.forcePseudoState`, each through `guard()`), `src/guest/probe/board.ts` (collects instances labelled `data-dc-state` of `hover`, `focus`, `focus-visible`, `active` inside example shadow roots, ≤ `SYSTEM_STATE_SHOTS_MAX`), `src/service/check/board-analyze.ts` (sanitiser for the new list), `src/service/check/system-run.ts` (the wide light pass only), `src/shared/checks.ts`, `src/service/check/report-text.ts`, tests in `test/service/check/` (fake CDP `test/service/systems/fake-cdp.ts`, and one e2e)
+**Description:** Phase 1's labels already say which instance shows which state. For each labelled interactive instance the check forces that pseudo-class on the element the agent marked, takes a tight picture of it (`<component>-<state>@wide.png`), and compares its computed `color`, `background-color`, `border-color`, `box-shadow`, `outline` and `transform` with the forced state off. No difference raises `system-state-unstyled` (warning): the example labels a state its CSS doesn't style. `focus` and `focus-visible` with no visible change in `outline` or `box-shadow` also raise it, since a focus state must be seen.
+**Acceptance:** a button whose `:hover` changes the background yields a picture and no finding; one with no `:hover` rule yields the finding with the component and state in `detail`; a `:focus-visible` with only a colour change still counts as styled, one with `outline: none` and nothing else does not; forced state is cleared before the next element; ≤ 60 pictures, then one `system-board-partial` note; `--area` other than components skips it; the dark pass doesn't repeat it; nothing new is sent to the page (the probe stays in the isolated world; CDP commands run from Node).
+**Docs:** `documentation/features/design-checks.md`.
+**Quality gates:** `npm run typecheck` · `npm run build` · `npm test` pass · `CHECK_CSP` and containment untouched (named tests)
+
+### T17 Motion frames (Priority: Med | Effort: M)
+**Agent:** backend-developer (Opus) · **Depends on:** T16
+**Files:** `src/service/check/render.ts` (`InspectPage.animationFrames(selectorPath, trigger, frames)` over CDP `Animation.enable`, `Animation.setPlaybackRate { playbackRate: 0 }` and `Animation.seekAnimations`), `src/service/check/png-stitch.ts` (a side-by-side stitch beside `stitchPngs`, same bounds), `src/guest/probe/board.ts` (elements labelled `data-dc-motion` in examples, plus the Motion section's demo chips), `src/service/check/system-run.ts`, `src/service/check/report-text.ts`, tests
+**Description:** For each motion demo chip and each example element the agent labels `data-dc-motion` (with `data-dc-state` naming its trigger, else hover), the check starts the transition with the forced state from T16, pauses every animation, seeks to 0, 1/3, 2/3 and the end, captures each frame and stitches them side by side into `<entry>-motion@wide.png`. With reduced motion emulated (`Emulation.setEmulatedMedia` `prefers-reduced-motion: reduce`) it takes the end frame once more; if movement (`transform` or position) still runs under reduced motion, it raises nothing new but the picture shows it, and `system-motion-no-reduced` stays the static rule.
+**Acceptance:** a 200 ms ease-out chip yields four frames whose chip positions increase; an element with no transition yields one frame and a note in the text; ≤ `SYSTEM_MOTION_SHOTS_MAX` strips; stitched width within `PNG_STITCH_SIDE_MAX`; the run's budget and the tool's 180 s still hold (strips are taken only after the board's tiles, and skipped first under time pressure).
+**Docs:** `documentation/features/design-checks.md`.
+**Quality gates:** as T16
+
+### T18 Compare screens against the real app (Priority: Med | Effort: M)
+**Agent:** backend-developer · **Depends on:** Wave 0
+**Files:** `src/shared/system-json.ts` (`readScreens`: optional `source`, exactly `sources/screens/<name>.png` with a safe name, the file present and passing `checkAsset` as a PNG), `src/service/check/png-stitch.ts` (side-by-side stitch, shared with T17; whoever lands second reuses it), `src/service/check/system-run.ts` (the screen pass), `src/service/check/report-text.ts`, tests
+**Description:** The agent or the user saves a screenshot of the real app into `sources/screens/` (sources are agent reference only, never copied, exported or published, `docs/SPEC.md` §6.8) and names it as a screen's `source`. After a screen's light artboard at a viewport whose width matches the picture's width (±2 px), the check writes `compare-<id>@<viewport>.png`: the drawn screen on the left, the source on the right, each scaled to the same height. The service never opens, runs or screenshots the app.
+**Acceptance:** a source of another width gets one note ("The source picture is 1440 px wide; no viewport of this screen matches."); a missing or non-PNG source is an entry problem and the screen still draws; ≤ `SYSTEM_COMPARE_SHEETS_MAX` sheets; a `source` outside `sources/screens/` (`..`, backslash, drive letter, absolute) is refused by the reader (tests); copy-on-link and the living page never carry it.
+**Docs:** `documentation/features/design-systems.md`, `documentation/features/design-checks.md`.
+**Quality gates:** as T16 · path containment re-tested
+
+### T19 Token export (Priority: High | Effort: M)
+**Agent:** backend-developer (Opus: a new filesystem write) · **Depends on:** Wave 0 · **Blocks:** T19u
+**Files:** **new** `src/shared/token-export.ts` (pure: `toDesignTokensJson(detail)`, `toTokensCss(detail)`, `toTailwindTheme(detail)`), `src/service/export.ts` (a system form beside the design one, same destination rules: `settings.downloadsDir ?? Downloads`, else `<root>/.exports`), `src/service/routes/export.ts` (`POST /systems/:id/export`, registered with the reveal registry so `POST /reveal` takes its path), `src/shared/api.ts` (Wave 0), tests in `test/shared/` and `test/service/`
+**Description:** One ZIP, `<system id>-tokens.zip`, holding `tokens.json` in the W3C design tokens format (groups by section and colour group; `$type` color, dimension, fontFamily, fontWeight, duration, cubicBezier, shadow where the value parses, else `$type` omitted and the value kept as text; dark values under a `dark` group; `$description` from the token note), `tokens.css` (the system's light `:root` and dark media block, regenerated from validated values, not a byte copy), and, only when the project uses Tailwind, `tailwind-theme.css` (an `@theme` block). "Uses Tailwind" means the system's code source holds `tailwind.config.*` at its root (a `stat`, never a read), the last scan listed a Tailwind config for the agent, or BUILD.json `drift.kinds` names `tailwind-config`. The service never writes a project repo; the agent may propose copying a file in through the reviewed diff.
+**Acceptance:** bearer check and the system id through the store; the body is a closed set (`{ formats?: ['dtcg', 'css', 'tailwind'] }`), Tailwind refused with a plain sentence when the project doesn't use it; a formula value is exported as text with no `$type`, never evaluated; a value with `url(` is impossible (re-validated); names that would collide after the DTCG path mapping are suffixed, listed in a `README.txt` in the ZIP; written atomically, the path issued to reveal; works for repo-backed systems from the snapshot (`filesDir`); golden-file tests for all three outputs.
+**Docs:** `documentation/features/design-systems.md`; `docs/SPEC.md` §7 (T22).
+**Quality gates:** as T16 · the write path and reveal registry named in tests
+
+### T19u Export menu on the system page (Priority: Med | Effort: S)
+**Agent:** ui-ux-developer · **Depends on:** T19
+**Files:** `src/ui/systems/system-page.ts` (the ⋯ menu), `src/ui/model/system-page-model.ts`, `src/guest/service-client.ts` (the export call, backend-developer adds it in T19), `test/ui/**`
+**Description:** "Export tokens…" in the system's ⋯ menu: a small sheet with W3C JSON and CSS checked, Tailwind shown only when the service says the project uses it, then Export, then the same "Saved to Downloads. Show in folder" toast designs use.
+**Acceptance:** loading, success, failure with the service's sentence, disabled while exporting; rail and page, light and dark; host theme tokens; no em dash.
+**Docs:** `documentation/pages/design-systems.md`, `documentation/pages/rail.md`.
+**Quality gates:** as T16 · every UI state handled
+
+### T20 Board comments: storage, routes and the send (Priority: High | Effort: M)
+**Agent:** backend-developer (Opus: new routes and a service-owned file) · **Depends on:** Wave 0 · **Blocks:** T21
+**Files:** **new** `src/service/systems/comments.ts`, **new** `src/service/routes/system-comments.ts`, `src/shared/api.ts` and `src/shared/types.ts` (Wave 0: `SystemComment = { id, entry: string, body, status: 'open' | 'sent' | 'resolved', created, sentAt }`), `src/shared/agent/system-prompts.ts` (`buildSystemCommentsPrompt`, the `buildSystemAskPrompt` shape over several entries, `fitOrThrow` with the same count-to-fit loop as the checks prompt), `src/service/routes/system-chat.ts` (purpose `comments`), tests
+**Description:** A comment is anchored to a board entry key (`isBoardEntryKey`: token, type, font, logo, icon, component, note, pattern, brand, pair, screen once KI-42 lands), not to a selector, so it survives re-generation. Stored in `_systems/<id>/.chamber/comments.json` (service-owned, atomic writes, one queue per system, ≤ `SYSTEM_COMMENTS_MAX`, ≤ 1 MiB, a damaged file renamed aside on the next write as folders do). "Send comments" turns every open comment into one message to the system's linked chat and marks them sent. An entry that no longer exists keeps its comment, shown as "on an entry that's gone".
+**Acceptance:** bearer check, id through the store, entry keys validated before any write, body 1 to `COMMENT_BODY_MAX` characters, unknown fields refused; the agent never writes the file (RULES.md says so; `.chamber/` is already off-limits to it); a repo-backed system's comments stay in Design Chamber; the send for a repo-backed system carries the reviewed-diff gate (`repoGate`); retrying a send after a failure does not mark twice (ids); not in versions, copies, exports or the living page.
+**Docs:** `documentation/features/design-systems.md`.
+**Quality gates:** as T16 · route security tests named
+
+### T21 Pins on the board (Priority: High | Effort: M)
+**Agent:** ui-ux-developer (Opus: new flow) · **Depends on:** T20
+**Files:** `src/ui/systems/system-board.ts` (a comment mode over the existing hit-test), **new** `src/ui/systems/board-pins.ts` (reuse the look and keyboard model of `src/ui/wall/pin-layer.ts` and `comment-ui.ts`; not the wall itself), `src/ui/model/system-page-model.ts`, `test/ui/**`
+**Description:** A Comment toggle on the board: clicking an entry places a pin on it (the board script already reports entry boxes), a small editor takes the text, pins list in the panel, and **Send comments (N)** sends them. In the rail, pins show and can be added; the list sits under the board.
+**Acceptance:** loading, empty, error, sending, sent; pins follow their entry after a board reload and a scheme change; a pin on a gone entry is listed, not drawn; keyboard: Tab to pins, Enter to open, Escape to close; rail 320 and 480 px and the page, light and dark; browser-tester pass.
+**Docs:** `documentation/pages/design-systems.md`, `documentation/pages/rail.md`.
+**Quality gates:** as T16 · every UI state handled
+
+### T22r Rules for Phase 3 (Priority: Med | Effort: S)
+**Agent:** rules · **Depends on:** T16 to T20 (ids)
+**Files:** `rules/system-reference/{components,motion,board-and-check,patterns}.md`
+**Description:** Label interactive instances so the state pictures work and style every labelled state; label motion with `data-dc-motion`; save real-app screenshots to `sources/screens/` and name them as `source`; each new finding with its usual fix. The skill has about 100 characters of room, so nothing new goes in the skill.
+**Acceptance:** caps and the em-dash check pass at build; the skill length test stays under 22 700.
+**Quality gates:** `npm run build` · `npm test`
+
+### T22 Phase 3 docs and SPEC fold-in (Priority: Med | Effort: S)
+**Agent:** main agent with the architect · **Depends on:** Waves 1 and 2
+**Files:** `docs/SPEC.md` §6.7, §7, §9.19, §14; `documentation/features/*`; `documentation/pages/*`; `documentation/known-issues.md`
+**Acceptance:** every user-visible change described; qa-tester verifies; copy scan passes.
 
 ---
 
@@ -785,7 +866,13 @@ frame, a component missing its `disabled` instance; the run must report each onc
 8. **Sizes review after the motion section (Phase 2).** Moving `--duration-*` and `--ease-*` tokens out of
    `other` changes the Sizes fingerprint of systems that had them, so that one section shows "not reviewed"
    once after the update. Accept it, or keep a compatibility fingerprint? Recommendation: accept it; a second
-   fingerprint path for one section is more risk than one re-review.
+   fingerprint path for one section is more risk than one re-review. **Resolved:** accepted and built that way (T10a, `c291dcb`).
+
+9. **Tailwind export flavour (Phase 3).** Export a Tailwind v4 `@theme` CSS block, or a v3 `theme.extend` JS
+   preset? Recommendation: v4 `@theme` only, because it is plain CSS the service writes from validated values
+   with no JavaScript, and v3 projects can paste the variables into `extend` themselves.
+10. **Board comments for repo-backed systems (Phase 3).** Keep them in Design Chamber only, never in the repo?
+    Recommendation: yes; they are review notes for the chat, like a design's comments.
 
 ---
 
@@ -834,7 +921,47 @@ builds' behaviour.
 
 ---
 
-Architecture Complete → main agent (task breakdown) | → main agent (Wave 0), backend-developer (T10a, T11, T12a), rules (T14r), ui-ux-developer (T10c, T13)
+## 17. Phase 2 as built (2026-11-27)
+
+Commits on `feat/system-phase-2` (it contains `master` with Phase 1): Wave 0 `4451ad8`; T10a `c291dcb`; T11
+`6b54c09`; T10b `91569db` (with the `currentColor` icon filter); plain motion aliases `1336446`; T12a `dd3a5bc`;
+T12b `c01c969`, `a240d4b`; T14r `8cb02ec`, `f96df3a`; T10c `222537f`; T13 `186f07f`; T14 `27ff325`; T15d (this
+fold-in). `docs/SPEC.md` §6.7, §7, §9.19 and §14 carry what shipped.
+
+**Shipped as designed:** the Motion section with time and easing values, bars, curves and demo chips; the
+`deriveReview` fix for sections added after Ready; icons drawn only as `<img>` with the 400 file cap, the 150 icon
+cap and the `icons` topic; screens with their own fixed viewports, the route, the check with the design probe,
+the Screens view, screens on the living page; `system-motion-no-reduced` and `system-icons-mixed`.
+
+**Where the build differs:**
+
+| Design said | Built |
+|---|---|
+| The rail list opens the page for the full wall | The SDK has no `openSurface` for an extension's own full-screen page, so the rail lists the screens and shows one screen at a time; the page shows the whole wall |
+| (not stated) | Screens don't preview pending value edits; the board does |
+| Living page screens per viewport (scale not fixed) | At the viewport's size, scale 1, light only; `LIVING_PAGE_GENERATOR_VERSION` stays 6 (T10b's bump covered the wave), example cache stays 2 (a screen's key adds width, scale and height) |
+| `responsive` met by "a phone viewport" | A `page` screen with a viewport at most 480 px wide (`PHONE_VIEWPORT_MAX_WIDTH`) |
+| Budget split 70 / 40 | As designed, and `--screen` alone skips the board and gets the whole 110 s |
+| (not stated) | No route serves a single icon file; the panel reads icon pictures from the board's data URLs |
+| Board lists screens as a link row to the Screens view (§4.6) | Not built: KI-42, with a fix prompt |
+| Motion aliases not designed | A plain `var(--x)` with no fallback previews through up to four hops |
+| Icons on light and dark | Plus a filter so a `currentColor`-only icon takes the ground's text colour; files over 32 KB aren't drawn |
+| Screens check in light | Also dark (`<viewport>-dark`) when the system has dark values; a finding names only its own screen's sizes (`a240d4b`) |
+
+**Corrections to the Phase 3 outline found while revising it** (the tasks above already use them):
+- Phase 1's `data-dc-state` labels already mark which instance shows which state, so hover and focus pictures
+  force the state on those instances rather than on a new `data-dc-interactive` mark.
+- `InspectPage` has no raw CDP access (`evaluate`, `scrollTo`, `capture`, `save`); T16 adds two guarded methods
+  rather than handing CDP to the hook.
+- `stitchPngs` stacks vertically only; frames and compare sheets need a side-by-side stitch.
+- Design comments anchor to selectors and live in `design.json`; board comments anchor to entry keys and live in
+  `.chamber/`, so the wall's pin layer is reused for its look, not its model.
+- Exports already have a destination and reveal registry (`src/service/export.ts`); token export reuses them.
+- Tailwind detection needs no project read: a `stat`, the last scan's list, or the agent's BUILD.json drift kind.
+
+---
+
+Architecture Complete → main agent (task breakdown) | → main agent (Wave 0), backend-developer (T16, T18, T19, T20), ui-ux-developer (T19u, T21), rules (T22r)
 
 ## Decisions (the user, 2026-11-27)
 These answer the open questions above and are binding for every task.
