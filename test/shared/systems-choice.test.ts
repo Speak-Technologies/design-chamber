@@ -200,7 +200,7 @@ test('choiceSystemsOf: a repo home owns by its directory, else the recorded sour
   const row = (over: Partial<SystemSummary>): SystemSummary => ({
     id: 'x', name: 'X', status: 'ready', changesToReview: false, sources: { code: null, brand: 0, description: false }, created: '2026-11-01T00:00:00.000Z',
     swatches: [], usedBy: 0, isDefault: false, pinnedFor: [], updated: '2026-11-02T00:00:00.000Z', revision: 1, empty: false, unreadable: null,
-    home: 'internal', building: false, sharedRepoWith: null, livingPage: null, proposalWaiting: false, ...over,
+    home: 'internal', building: false, sharedRepoWith: null, livingPage: null, proposalWaiting: false, depth: null, ...over,
   });
   const code = (directory: string, project?: string): SystemSummary['sources'] => ({ code: { directory, lastScan: '2026-11-01T00:00:00.000Z', partial: false, ...(project === undefined ? {} : { project }) }, brand: 0, description: false });
   assert.deepEqual(choiceSystemsOf([
