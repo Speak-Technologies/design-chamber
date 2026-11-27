@@ -160,3 +160,13 @@ test('no card copy uses an em dash', () => {
     assert.ok(!text.includes('\u2014'), state);
   }
 });
+
+test('a phone leaves Reveal off the card in every state: it would open a folder on the computer', () => {
+  const states: LivingPageState[] = ['fresh', 'out-of-date', 'missing', 'changed', 'reformatted', 'unsafe', 'unreadable'];
+  for (const state of states) {
+    const desktop = ids(livingCard(view(state), context(), OPTIONS));
+    const phone = ids(livingCard(view(state), context(), { ...OPTIONS, phone: true }));
+    assert.deepEqual(phone, desktop.filter((id) => id !== 'reveal'), state);
+  }
+  assert.deepEqual(ids(livingCard(view('unreadable'), context(), { ...OPTIONS, phone: true })), []);
+});

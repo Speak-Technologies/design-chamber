@@ -227,7 +227,7 @@ const buildRow = (slug: string): RowNode => {
   const dot = h('span', { class: 'ws-dot', 'aria-hidden': 'true' });
   const title = h('span', { class: 'ws-title' });
   const meta = h('span', { class: 'ws-meta' });
-  const reason = h('span', { class: 'ws-sr', id: reasonId });
+  const reason = h('span', { class: 'ws-reason', id: reasonId });
   const check: BtnHandle = btn({ label: 'Check', variant: 'ghost', size: 'xs', onClick: () => void runCheck(slug) });
   const open: BtnHandle = btn({
     label: 'Open',
@@ -261,7 +261,7 @@ const buildRow = (slug: string): RowNode => {
       check.el.setAttribute('aria-label', `Check ${view.title}`);
       open.el.setAttribute('aria-label', `Open ${view.title}`);
       check.set({ loading: view.check.state === 'busy', disabled: view.check.state === 'disabled', title: view.check.reason ?? undefined });
-      // A disabled button gives its reason to a screen reader through this, not only a tooltip.
+      // A disabled button gives its reason through this, not only a tooltip: to a screen reader, and in words on a touch screen.
       reason.textContent = view.check.reason ?? '';
       if (view.check.state === 'disabled') check.el.setAttribute('aria-describedby', reasonId);
       else check.el.removeAttribute('aria-describedby');

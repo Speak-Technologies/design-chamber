@@ -75,8 +75,10 @@ const rounds = async ({ openPage, check }, width, theme) => {
   await p.waitFor('return !!doc.querySelector(".dcb-q") && !doc.querySelector(".dcb-ask-loading")', 'round one');
   check((await p.guest('return doc.querySelector(".dcb-ask-title")?.textContent')) === 'Before I read the code', `${base}: round one title`);
   check((await p.guest('return doc.querySelector(".dcb-ask-sub")?.textContent')) === 'Round 1 of 2', `${base}: round one subtitle`);
-  check((await p.guest('return doc.querySelectorAll(".dcb-q").length')) === 4, `${base}: four questions`);
-  check((await p.guest('return [...doc.querySelectorAll(".dcb-opt-input:checked")].length')) >= 4, `${base}: the recommended options are pre-selected`);
+  const asked = await p.guest('return [...doc.querySelectorAll(".dcb-q-label")].map((n) => n.textContent).join(" | ")');
+  check((await p.guest('return doc.querySelectorAll(".dcb-q").length')) === 5 && asked.includes('How complete should it be?'), `${base}: five questions (${asked})`);
+  const picked = await p.guest('return [...doc.querySelectorAll(".dcb-opt-input:checked")].map((n) => n.value).join(",")');
+  check(picked === 'repo,fix,foundations,components,patterns,brand,core,not-now', `${base}: the recommended options are pre-selected (${picked})`);
   check((await p.guest('return getComputedStyle(doc.querySelector(".dcb-opt-name[data-recommended]")).fontWeight')) >= '600', `${base}: the recommended option is bold`);
   check(await fits(p), `${base}: nothing wider than the column`);
   await p.settle(200);
@@ -85,6 +87,7 @@ const rounds = async ({ openPage, check }, width, theme) => {
   await p.click('.dcb-ask-foot button', { text: 'Go with these' });
   await p.waitFor('return !!doc.querySelector(".dcb-ask-done")', 'round one answered');
   const one = await answers(p);
+  check(one.length === 1 && one[0].includes('Product core') && one[0].includes('depth=core'), `${base}: the answer says how complete (${one[0]})`);
   check(one.length === 1 && one[0].includes(TICKET) && one[0].length <= 2000, `${base}: Go with these sends one answer with the marker (${one[0]?.slice(0, 60)})`);
   await p.settle(150);
   await p.shot(`${base}-2-one-answered`);
@@ -94,7 +97,7 @@ const rounds = async ({ openPage, check }, width, theme) => {
   p = await open('one-no-project', ROUND_ONE, { 'GET /system-builds/:ticket': { body: { state: 'waiting', project: null } } });
   await p.waitFor('return !!doc.querySelector(".dcb-ask-fact")', 'the no project line');
   check((await p.guest('return doc.querySelector(".dcb-ask-fact")?.textContent')) === 'No project folder is open in this chat, so the system will live in Design Chamber and your code stays untouched.', `${base}: no project says so`);
-  check((await p.guest('return doc.querySelectorAll(".dcb-q").length')) === 2, `${base}: home and mode are hidden`);
+  check((await p.guest('return [...doc.querySelectorAll(".dcb-opt-input")].every((n) => !["repo", "internal", "fix", "describe"].includes(n.value)) && doc.querySelectorAll(".dcb-q").length === 3')), `${base}: home and mode are hidden`);
   await p.shot(`${base}-3-one-no-project`);
   await p.close();
 

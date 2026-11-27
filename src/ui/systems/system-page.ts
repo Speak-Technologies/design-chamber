@@ -15,6 +15,7 @@ import type { AskOutcome } from '../../guest/flows.ts';
 import type { SystemArea, SystemDetail, SystemSection } from '../../shared/types.ts';
 import { SYSTEM_SECTIONS, AREA_OF_SECTION } from '../../shared/system-json.ts';
 import { reveal, toast, type ActionContext } from '../components/actions.ts';
+import { currentDevice } from '../components/device.ts';
 import { createScope, errorText, h } from '../components/dom.ts';
 import { attachMenu, banner, bannerWithActions, btn, iconBtn, loadingRow, openSheet, type BtnHandle } from '../components/kit.ts';
 import { createAskBar, type AskBarHandle } from '../components/ask-bar.ts';
@@ -970,7 +971,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     if (!detail || repoHome() === null) return null;
     const out = h('div', { class: 'dc-syspg-repo' });
     if (living !== null) {
-      const card = livingCard(living, detail, { now: Date.now(), locale: localeOf(), regenerating, locked: viewing ? OLD_VERSION_SENTENCE : dirty() ? 'Save or discard your changes first.' : null });
+      const card = livingCard(living, detail, { now: Date.now(), locale: localeOf(), regenerating, locked: viewing ? OLD_VERSION_SENTENCE : dirty() ? 'Save or discard your changes first.' : null, phone: currentDevice().form === 'phone' });
       out.append(renderLivingCard(card, { onAction: livingAction, onEmbedFonts: (checked) => void setEmbedFonts(checked) }));
     }
     const drift = driftLines(detail);

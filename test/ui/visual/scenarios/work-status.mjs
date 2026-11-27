@@ -79,6 +79,7 @@ export const run = async (helpers) => {
   for (const theme of THEMES) {
     for (const width of WIDTHS) await tools(helpers, width, theme);
     await phone(helpers, theme);
+    await offReasons(helpers, theme);
   }
   await onFakeService(helpers, 400, 'dark');
   await onFakeService(helpers, 280, 'light');
@@ -330,4 +331,32 @@ const phone = async (helpers, theme) => {
   const { data } = await p.send('Page.captureScreenshot', { format: 'png' });
   (await import('node:fs')).writeFileSync(`${helpers.outDir}/${tag}-not-here.png`, Buffer.from(data, 'base64'));
   await p.close();
+};
+
+/** Why a Check is off: words on a touch screen, a tooltip (and screen reader text) with a mouse. */
+const offReasons = async (helpers, theme) => {
+  const { openPage, check, PHONE } = helpers;
+  /** Each row's reason, and whether it takes up room a person can see. */
+  const reasons = (p) =>
+    p.guest(`return [...doc.querySelectorAll(".ws-row")].map((row) => {
+      const reason = row.querySelector(".ws-reason");
+      const box = reason.getBoundingClientRect();
+      return { text: reason.textContent, seen: box.width > 1 && box.height > 1, off: row.querySelector("button").disabled, below: box.top >= row.querySelector(".ws-actions").getBoundingClientRect().bottom - 1 };
+    })`);
+  for (const [name, list, rows] of [['no-browser', LIST_B, 5], ['busy', LIST_C, 3], ['waiting', LIST_A, 5]]) {
+    for (const [size, options] of [['390', PHONE], ['320', { ...PHONE, width: 320 }], ['400-mouse', { width: 400, height: 500 }]]) {
+      const tag = `ws-reason-${name}-${size}-${theme}`;
+      const p = await openPage({ ...options, surface: 'status', theme, label: tag, routes: { 'GET /status/designs': ok(list) } });
+      console.log(tag);
+      await p.waitFor(`return doc.querySelectorAll(".ws-row").length === ${rows}`, 'the rows');
+      const found = await reasons(p);
+      const withReason = found.filter((row) => row.text !== '');
+      check(withReason.length > 0 && withReason.every((row) => row.off), `${tag}: only a Check that is off has a reason (${withReason.length})`);
+      if (size === '400-mouse') check(found.every((row) => !row.seen), `${tag}: with a mouse the reason stays off screen`);
+      else check(withReason.every((row) => row.seen && row.below), `${tag}: on touch the reason is shown under the buttons ("${withReason[0]?.text}")`);
+      await fits(helpers, p, tag);
+      if (size !== '400-mouse') await p.shot(tag);
+      await p.close();
+    }
+  }
 };

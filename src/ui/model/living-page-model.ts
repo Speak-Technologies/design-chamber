@@ -4,6 +4,7 @@
 
 import type { LivingPageState, LivingPageView, SecretShapeKind, SystemDetail } from '../../shared/types.ts';
 import { fileSize, plural } from './format.ts';
+import { withoutComputerOnly } from './viewer-menu.ts';
 
 export type LivingRepoView = Extract<LivingPageView, { home: 'repo' }>;
 export type LivingKind = LivingPageState | 'problem';
@@ -50,6 +51,8 @@ export type LivingOptions = {
   regenerating?: boolean;
   /** Why every action that changes something is off right now (an old version is open, unsaved changes). */
   locked?: string | null;
+  /** On a phone: leave out the actions that act on the computer (`withoutComputerOnly`). */
+  phone?: boolean;
 };
 
 export const LIVING_TITLE = 'Living page';
@@ -222,7 +225,9 @@ export const livingCard = (view: LivingRepoView, context: LivingContext, options
     return { enabled: true, why: null };
   };
 
-  const actions = ACTIONS[kind].map((id): LivingAction => ({ id, ...ACTION_COPY[id], ...gate(id) }));
+  const all = ACTIONS[kind].map((id): LivingAction => ({ id, ...ACTION_COPY[id], ...gate(id) }));
+  // Reveal opens a folder on the computer that runs OpenChamber, which a phone's user can't see.
+  const actions = options.phone ? withoutComputerOnly(all) : all;
   const parts = [view.path];
   if (staged !== null) parts.push(fileSize(staged.bytes, options.locale), `rev ${staged.revision}`);
 

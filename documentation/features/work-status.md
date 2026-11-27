@@ -112,6 +112,8 @@ checked (`readSessionTool`) and only ever shown as text.
   "Open Design Chamber from the rail to see it." where the host cannot open the rail.
   On a phone, Open and **Show all** open Design Chamber's tab in the workspace drawer; where that fails the toast
   says "Design Chamber can't open here yet. Open it from the More menu in your chats list."
+- On a touch screen there is no tooltip to hover, so the reason Check is off is also written under that row's
+  buttons. With a mouse it stays a tooltip.
 - Keyboard: Tab goes row by row, Check then Open, then the footer link. Each button's name includes the
   design ("Check Pricing page").
 

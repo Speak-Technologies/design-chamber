@@ -37,7 +37,9 @@ rounded and clamped to 0 to 400 px before it reaches a style. A tablet keeps the
   are left out of the viewer's ⋯ menu, the list rows' menu and the design systems menus
   ([viewer menu](../pages/img/phone-390-dark-page-4-canvas-menu.png) ·
   [row menu](../pages/img/phone-390-dark-page-2-row-menu.png)). Copy HTML stays: it copies to the phone's
-  own clipboard. The service's checks are unchanged; this only hides the entries.
+  own clipboard. The service's checks are unchanged; this only hides the entries. A phone's design system page
+  uses the rail layout, which offers **Preview living page** only; the full living-page card also drops
+  **Reveal living page** on a phone.
 - **Settings** stays, with one line under the folder field: "This folder is on the computer that runs
   OpenChamber." ([Settings](../pages/img/phone-390-dark-page-8-settings.png))
 - **Two live frames.** A canvas keeps at most two artboards loaded (the rail keeps 4, the desktop page 12);
@@ -47,6 +49,25 @@ rounded and clamped to 0 to 400 px before it reaches a style. A tablet keeps the
 - **The on-screen keyboard.** The view stops above the keyboard, so the ask bar, the comment card and every
   sheet stay in sight while you type ([keyboard open](../pages/img/phone-390-dark-page-5-keyboard.png)).
   Rotation and the keyboard arrive as a new `ready`; nothing reloads and nothing you typed is lost.
+
+## Gestures on the canvas and pages
+These work with a finger on any touchscreen, tablets and touch laptops included. Mouse and trackpad work as before.
+
+| Gesture | On a canvas | On a page |
+|---|---|---|
+| Tap | Edit: comment on that element, or open the pin you tapped. Play: the design's own tap | The same |
+| Drag one finger | Moves the wall. In Play, a drag that starts on a screen goes to the design, and one that starts between screens moves the wall | Scrolls the page, in Edit and in Play |
+| Pinch two fingers | Zooms around the point between them, from 5% to 400%. Moving both fingers moves the wall | Nothing, a page doesn't zoom |
+
+- A finger can wobble up to 10 px and still count as a tap. A drag or a pinch never leaves a comment, even when you lift one finger before the other, and the finger still down carries on moving the wall.
+- As with a mouse wheel, moving or zooming the wall closes an open comment card.
+- In Play, two fingers on a screen belong to the design. Pinch between screens, or use the zoom buttons.
+- There's no outline under your finger before you tap; that hover outline is for a mouse.
+- Rotating the phone mid-gesture simply ends it.
+
+Code: `src/ui/model/wall-input.ts` (the maths), `src/ui/wall/input-controller.ts`. Checks:
+`test/ui/visual/scenarios/wall-touch.mjs`. Headless Chrome stops sending touches into design frames after a
+synthesized two-finger gesture, so Play after a pinch still needs a try on a real phone.
 
 ## Screenshots
 `test/ui/visual/scenarios/phone.mjs` shoots a 390 × 844 phone, dark and light:

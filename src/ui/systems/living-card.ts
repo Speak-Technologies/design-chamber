@@ -47,7 +47,7 @@ export const renderLivingCard = (card: LivingCard, handlers: LivingCardHandlers)
     ...card.omitted.map((line) => h('p', { class: 'dc-living-line dc-muted' }, line)),
     card.secretLine === null ? null : h('p', { class: 'dc-living-secret', role: 'alert' }, card.secretLine),
     h('p', { class: 'dc-living-path dc-muted' }, card.pathLine),
-    h('div', { class: 'dc-living-actions' }, ...card.actions.map((action) => actionButton(action, handlers))),
+    card.actions.length === 0 ? null : h('div', { class: 'dc-living-actions' }, ...card.actions.map((action) => actionButton(action, handlers))),
     ...whys.map((why) => h('p', { class: 'dc-living-why dc-muted' }, why)),
   );
 
