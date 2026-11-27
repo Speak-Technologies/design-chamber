@@ -118,7 +118,9 @@ test('--area components pictures only Components and still lists every file find
   assert.deepEqual(render.areas, ['components']);
   const pngs = render.widths.flatMap((width) => width.pngs).map((rel) => rel.slice(rel.lastIndexOf('/') + 1));
   assert.ok(pngs.length > 0);
-  assert.ok(pngs.every((name) => name.startsWith('components')), pngs.join(', '));
+  // Area pictures are Components only; the forced state pictures (T16) belong to Components too, from the wide light pass.
+  const statePngs = new Set((render.states ?? []).flatMap((one) => (one.png === null ? [] : [one.png.slice(one.png.lastIndexOf('/') + 1)])));
+  assert.ok(pngs.every((name) => name.startsWith('components') || (statePngs.has(name) && name.endsWith('@wide.png'))), pngs.join(', '));
   assert.ok(render.shots.every((shot) => shot.area === 'components'));
   // Pairs live under Foundations: not measured when only Components is checked.
   assert.ok(!render.findings.some((finding) => finding.code === 'system-contrast-low'));

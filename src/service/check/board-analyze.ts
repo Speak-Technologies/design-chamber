@@ -6,7 +6,8 @@
 
 import { cleanDetail } from '../../shared/checks.ts';
 import { BOARD_ENTRY_MAX, CHECK_DETAIL_MAX, SYSTEM_BOARD_FINDINGS_PER_CODE, SYSTEM_BOARD_ITEMS_MEASURED_MAX, SYSTEM_CHECK_BOARD_WIDTHS, SYSTEM_PAIRS_MAX } from '../../shared/limits.ts';
-import { isBoardEntryKey } from '../../shared/system-board.ts';
+import { isBoardEntryKey, parseEntryKey } from '../../shared/system-board.ts';
+import { FORCED_STATES, type ForcedState } from './render.ts';
 import { SYSTEM_AREAS } from '../../shared/system-json.ts';
 import type { BoardLayout, CheckCode, CheckFindingData, SystemArea, SystemDetail } from '../../shared/types.ts';
 import { compositeOver, contrastRatio, type Rgba } from '../../shared/color.ts';
@@ -280,6 +281,105 @@ export const dedupeBoardFindings = (findings: readonly CheckFindingData[]): Chec
     if (ENTRY_CODES.has(finding.code)) return best.get(keyOf(finding)) === finding;
     return !(finding.viewport === 'wide-dark' && atWide.has(keyOf(finding)));
   });
+};
+
+// ---- forced state pictures (system-builder-depth T16) ----
+
+/** One labelled state the probe found: the component entry, the state, where to force it, and its box. */
+export type BoardStateTarget = {
+  entry: string;
+  state: ForcedState;
+  /** Index among `[data-dc-example-host]` in the document. */
+  host: number;
+  /** Index among `*` in that host's shadow root. */
+  element: number;
+  /** The element is the instance's rest twin (same variant and size), not the labelled instance itself. */
+  twin: boolean;
+  box: { x: number; y: number; w: number; h: number };
+};
+
+export type BoardStateProbe = { states: BoardStateTarget[]; truncated: boolean };
+
+/** An index the probe could have counted: an integer from 0 to 100 000. */
+const indexOf = (value: unknown): number | null => (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100_000 ? value : null);
+
+/**
+ * The probe's state list as trusted data: a component entry key, a state from the closed set, two indexes
+ * and a finite box; anything else is dropped. A list longer than `max` is forged or broken and refused.
+ */
+export const sanitizeStateProbe = (value: unknown, max: number): BoardStateProbe => {
+  if (!isRec(value) || !Array.isArray(value.states) || value.states.length > max) return { states: [], truncated: false };
+  const states: BoardStateTarget[] = [];
+  for (const entry of value.states) {
+    if (!isRec(entry) || typeof entry.entry !== 'string' || !isBoardEntryKey(entry.entry) || parseEntryKey(entry.entry)?.kind !== 'component') continue;
+    const state = FORCED_STATES.find((candidate) => candidate === entry.state);
+    const host = indexOf(entry.host);
+    const element = indexOf(entry.element);
+    const box = parseBox(entry.box);
+    if (state === undefined || host === null || element === null || box === null) continue;
+    states.push({ entry: entry.entry, state, host, element, twin: entry.twin === true, box });
+  }
+  return { states, truncated: value.truncated === true };
+};
+
+const NONE_STYLE = new Set(['none', 'hidden']);
+const zeroWidth = (width: string | undefined): boolean => width === undefined || /^0(\.0+)?(px)?$/.test(width.trim());
+
+/**
+ * The computed values a person would see, from `STATE_STYLE_PROPERTIES`: an outline or a top border with
+ * no style or no width paints nothing, so its colour and offset don't count.
+ */
+const visibleStyle = (style: Readonly<Record<string, string>>): Record<string, string> => {
+  const out: Record<string, string> = {};
+  const outlineShown = !NONE_STYLE.has(style['outline-style'] ?? 'none') && !zeroWidth(style['outline-width']);
+  const borderShown = !NONE_STYLE.has(style['border-top-style'] ?? 'none') && !zeroWidth(style['border-top-width']);
+  for (const [name, value] of Object.entries(style)) {
+    if (name.startsWith('outline-') && !outlineShown) continue;
+    if (name.startsWith('border-') && name.endsWith('-color') && !borderShown) continue;
+    out[name] = value;
+  }
+  if (!outlineShown) out['outline-style'] = 'none';
+  return out;
+};
+
+/**
+ * Whether forcing a state changed anything a person would see on the element: any compared value, as
+ * painted (T16). A `:focus-visible` that only changes the colour counts; `outline: none` and nothing
+ * else doesn't, because the browser's own focus ring is then gone too.
+ */
+export const stateStyled = (before: Readonly<Record<string, string>>, after: Readonly<Record<string, string>>): boolean => {
+  const a = visibleStyle(before);
+  const b = visibleStyle(after);
+  const names = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const name of names) if ((a[name] ?? '') !== (b[name] ?? '')) return true;
+  return false;
+};
+
+/** One forced state as the check saw it: the picture (null when it couldn't be taken) and the verdict. */
+export type StateResult = { entry: string; state: ForcedState; png: string | null; styled: boolean };
+
+/**
+ * The `system-state-unstyled` findings: one per component whose labelled states change nothing when
+ * forced, naming the component and those states in `detail` (`button: hover, focus-visible`).
+ */
+export const stateFindings = (results: readonly StateResult[], viewport: BoardPassId): CheckFindingData[] => {
+  const unstyled = new Map<string, Set<ForcedState>>();
+  for (const result of results) {
+    if (result.styled) continue;
+    const id = parseEntryKey(result.entry)?.key;
+    if (id === undefined) continue;
+    let set = unstyled.get(id);
+    if (set === undefined) unstyled.set(id, (set = new Set()));
+    set.add(result.state);
+  }
+  return [...unstyled].map(([id, states]) => ({
+    code: 'system-state-unstyled',
+    file: `components/${id}.html`,
+    screen: null,
+    viewport,
+    params: { count: states.size },
+    detail: cleanDetail(`${id}: ${[...states].join(', ')}`, CHECK_DETAIL_MAX),
+  }));
 };
 
 // ---- one area only (`--area`) ----

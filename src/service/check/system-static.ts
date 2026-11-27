@@ -24,7 +24,7 @@ import { AREA_OF_SECTION, layoutPlaceTakes, SYSTEM_AREAS, type SystemDetailSourc
 import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, RenderCheckState, SecretShapeKind, SystemArea, SystemDetail, Viewport } from '../../shared/types.ts';
 import { findRawTextEnd, parseTagAt, RAW_TEXT_TAGS } from '../html-tags.ts';
 import { capPerCode } from './analyze.ts';
-import type { BoardPassId } from './board-analyze.ts';
+import type { BoardPassId, StateResult } from './board-analyze.ts';
 import { ratioText, staticLowPairs, type LowPair } from '../../shared/pair-contrast.ts';
 
 /** The words `buildSystemDetail` uses for the token cap (system-json.ts `TOKENS_CAP_SENTENCE`). */
@@ -583,6 +583,12 @@ export type SystemCheckRender = {
    * when the run drew no screens.
    */
   screens?: { artboards: ArtboardCheck[]; viewports: (Viewport & { screen: string })[] };
+  /**
+   * The forced state pictures (system-builder-depth T16), wide light pass only: each labelled hover, focus,
+   * focus-visible or active state forced on its element, its picture and whether the state changed anything.
+   * Absent when the pass didn't run (another `--area`, `--screen`, a report from before Phase 3).
+   */
+  states?: StateResult[];
 };
 
 /** One area at one width: its overview (the whole area scaled down) and its full-size tiles. */

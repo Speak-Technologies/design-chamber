@@ -21,6 +21,7 @@ import {
   SYSTEM_CHECK_TILE_PIXELS_MAX,
   SYSTEM_EXAMPLE_MAX,
   SYSTEM_SCREEN_MAX,
+  SYSTEM_STATE_SHOTS_MAX,
 } from '../../shared/limits.ts';
 import { findSecretShapes } from '../../shared/secret-shapes.ts';
 import { isBoardEntryKey, parseEntryKey } from '../../shared/system-board.ts';
@@ -37,14 +38,29 @@ import { exampleFileOf, exampleKeyOf, ICON_DRAWN_MAX_BYTES } from '../systems/sp
 import { committedStateOf, readCommitted, readRecord } from '../systems/living-page.ts';
 import { readProposalProblem } from '../systems/proposal-record.ts';
 import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/store.ts';
-import { analyzeBoard, boardFindings, boardPassesOf, DARK_PASS_AREAS, findingsInArea, measuredLowPairs, passShare, sanitizeBoardProbe, type BoardProbePair } from './board-analyze.ts';
+import {
+  analyzeBoard,
+  boardFindings,
+  boardPassesOf,
+  DARK_PASS_AREAS,
+  findingsInArea,
+  measuredLowPairs,
+  passShare,
+  sanitizeBoardProbe,
+  sanitizeStateProbe,
+  stateFindings,
+  stateStyled,
+  type BoardProbePair,
+  type BoardStateProbe,
+  type StateResult,
+} from './board-analyze.ts';
 import { staticLowPairs } from '../../shared/pair-contrast.ts';
 import { pictureCoverage, planBoardPictures, type PictureCoverage } from './board-pictures.ts';
 import { browserClassOf, CheckUsageError, openCheckRun } from './engine.ts';
 import { checkBrowserArgs, launchOpenOptions, openCdp } from './cdp.ts';
 import { ensureChamberDir } from './output.ts';
 import { PngStitchError, stitchPngs } from './png-stitch.ts';
-import { CHECK_RUN_DEADLINE_MS, renderArtboards, type InspectPage, type InspectResult, type LoadedDocument, type PlannedArtboard, type RenderOutcome } from './render.ts';
+import { CHECK_RUN_DEADLINE_MS, renderArtboards, type ElementPath, type InspectPage, type InspectResult, type LoadedDocument, type PlannedArtboard, type RenderOutcome } from './render.ts';
 import { dedupeDarkScreenFindings, planScreenArtboards, screenSkippedFindings, type ScreenPlan } from './system-screens.ts';
 import { areaEmpty, contrastFindings, s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemBoardShot, type SystemCheckRender, type SystemCheckReport } from './system-static.ts';
 
@@ -216,6 +232,66 @@ export const readIconTexts = async (source: FileSource, detail: SystemDetail): P
   return out;
 };
 
+/** Room around a state picture's element, so a focus ring or a shadow drawn outside its box is in the picture. */
+const STATE_SHOT_MARGIN = 16;
+/** A state picture is at most this tall: it shows one control, not a whole example. */
+const STATE_SHOT_HEIGHT_MAX = 600;
+/** The share of a board pass the state pictures may run to; past it the rest are left out with a note. */
+const STATE_PASS_TIME_SHARE = 0.85;
+
+/**
+ * The forced state pass (system-builder-depth T16), on the wide light board after its tiles: for each
+ * labelled state the probe found, the element's computed style with the state off, the state forced over
+ * CDP, the style again and a tight picture (`<component>-<state>@wide.png`), then the state cleared
+ * before the next one. A state that changes nothing is `system-state-unstyled`; a list cut at
+ * `SYSTEM_STATE_SHOTS_MAX` or by the deadline is one `system-board-partial` note. An element that has gone
+ * since the probe read it is skipped.
+ */
+export const pictureStates = async (
+  page: Pick<InspectPage, 'computedStyle' | 'forceState' | 'scrollTo' | 'capture' | 'save'>,
+  probe: BoardStateProbe,
+  input: { viewportWidth: number; deadline: number; clock?: () => number },
+): Promise<{ results: StateResult[]; pngs: string[]; findings: CheckFindingData[] }> => {
+  const clock = input.clock ?? Date.now;
+  const results: StateResult[] = [];
+  const pngs: string[] = [];
+  let cut = probe.truncated;
+  for (const target of probe.states) {
+    if (clock() >= input.deadline) {
+      cut = true;
+      break;
+    }
+    const id = parseEntryKey(target.entry)?.key ?? 'component';
+    const element: ElementPath = [
+      { selector: '[data-dc-example-host]', index: target.host },
+      { selector: '*', index: target.element },
+    ];
+    const before = await page.computedStyle(element);
+    if (before === null || !(await page.forceState(element, [target.state]))) continue;
+    let after: Record<string, string> | null = null;
+    let png: string | null = null;
+    try {
+      after = await page.computedStyle(element);
+      const { box } = target;
+      const x = Math.min(Math.max(0, Math.floor(box.x - STATE_SHOT_MARGIN)), input.viewportWidth - 1);
+      const width = Math.max(1, Math.min(input.viewportWidth, Math.ceil(box.x + box.w + STATE_SHOT_MARGIN)) - x);
+      const y = Math.max(0, Math.floor(box.y - STATE_SHOT_MARGIN));
+      const height = Math.max(1, Math.min(STATE_SHOT_HEIGHT_MAX, Math.ceil(box.h + STATE_SHOT_MARGIN * 2)));
+      await page.scrollTo(y);
+      png = await page.save(`${id}-${target.state}`, 1, 1, await page.capture({ x, y, width, height }));
+    } finally {
+      // Cleared before the next element, whatever happened to this one.
+      await page.forceState(element, []);
+    }
+    if (after === null) continue;
+    results.push({ entry: target.entry, state: target.state, png, styled: stateStyled(before, after) });
+    if (png !== null) pngs.push(png);
+  }
+  const findings = stateFindings(results, 'wide');
+  if (cut) findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: 'wide', params: { pictured: 'states', count: results.length, max: SYSTEM_STATE_SHOTS_MAX } });
+  return { results, pngs, findings };
+};
+
 const fileOfEntry = (entry: string): string => {
   const key = parseEntryKey(entry);
   return key !== null && key.kind === 'component' ? `components/${key.key}.html` : BOARD_FILE;
@@ -336,6 +412,9 @@ export const runSystemCheck = async (
   // Kept per width, so a width that fails after its inspect ran (a timeout) adds no notes about pictures it doesn't keep.
   const short: { width: string; kind: Exclude<PictureCoverage['kind'], 'whole'>; text: string }[] = [];
   const boardMs = renderInput.budgets?.boardMs ?? SYSTEM_CHECK_BOARD_TIMEOUT_MS;
+  // The forced state pictures (T16), from the wide light pass.
+  const stateResults: StateResult[] = [];
+  let statePassRan = false;
   const inspect = async (page: InspectPage, art: PlannedArtboard): Promise<InspectResult | null> => {
     const started = Date.now();
     const raw = await page.evaluate(`${renderInput.probeSource};__dcProbe.collectBoard()`, { awaitPromise: false });
@@ -412,6 +491,15 @@ export const runSystemCheck = async (
     for (const box of flagged) {
       const showing = tilesTaken.filter((tile) => tile.top < box.bottom && tile.bottom > box.top).map((tile) => tile.png);
       if (showing.length > 0) entryShots.push({ width: width.id, entry: box.entry, pngs: showing });
+    }
+    // T16: the labelled states, forced and pictured on the wide light board only (the dark pass and the narrow width don't repeat it).
+    if (width.id === 'wide' && (onlyArea === null || onlyArea === 'components')) {
+      statePassRan = true;
+      const targets = sanitizeStateProbe(await page.evaluate(`${renderInput.probeSource};__dcProbe.collectStates(${SYSTEM_STATE_SHOTS_MAX})`, { awaitPromise: false }), SYSTEM_STATE_SHOTS_MAX);
+      const pass = await pictureStates(page, targets, { viewportWidth: width.width, deadline: started + boardMs * STATE_PASS_TIME_SHARE });
+      stateResults.push(...pass.results);
+      findings.push(...pass.findings);
+      pngs.push(...pass.pngs);
     }
     return { findings, docHeight: probe.scrollHeight, pngs };
   };
@@ -532,6 +620,8 @@ export const runSystemCheck = async (
       .map((shot) => ({ ...shot, overview: shot.overview !== null && kept.has(shot.overview.png) ? shot.overview : null, tiles: shot.tiles.filter((tile) => kept.has(tile.png)) }))
       .filter((shot) => shot.overview !== null || shot.tiles.length > 0);
     const keptEntryShots = entryShots.map((shot) => ({ ...shot, pngs: shot.pngs.filter((rel) => kept.has(rel)) })).filter((shot) => shot.pngs.length > 0);
+    // A wide pass that failed after its state pass keeps none of it (its findings went with it).
+    const keptStates = okWidths.has('wide') ? stateResults.map((result) => ({ ...result, png: result.png !== null && kept.has(result.png) ? result.png : null })) : [];
     // --screen draws no board area.
     const areas = !boardRuns ? [] : SYSTEM_AREAS.filter((area) => (onlyArea === null ? drawDetail.coverage.includes(area) || !areaEmpty(drawDetail, area) : area === onlyArea));
     const render: SystemCheckRender = {
@@ -546,6 +636,7 @@ export const runSystemCheck = async (
       areas,
       schemes,
       ...(screensDrawn ? { screens: { artboards: screenOutcome.artboards, viewports: screenPlan.viewports } } : {}),
+      ...(statePassRan && okWidths.has('wide') ? { states: keptStates } : {}),
     };
     const report = systemCheckReport({ ...base, findings: reportStatic, render });
     const reportPath = await writeSystemCheckReport(systemDir, report);

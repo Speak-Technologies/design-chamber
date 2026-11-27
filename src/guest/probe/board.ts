@@ -6,7 +6,8 @@
 // number and decide. It reads the DOM and never writes; the engine scrolls between tiles.
 
 import { BOARD_ENTRY_MAX, SYSTEM_BOARD_ITEMS_MEASURED_MAX, SYSTEM_BOARD_PREVIEW_ELEMENTS_MAX, SYSTEM_BOARD_TEXT_NODES_PER_ITEM, SYSTEM_PAIRS_MAX } from '../../shared/limits.ts';
-import type { BoardProbe, BoardProbeItem, BoardProbePair, BoardProbePreview } from '../../service/check/board-analyze.ts';
+import type { BoardProbe, BoardProbeItem, BoardProbePair, BoardProbePreview, BoardStateProbe } from '../../service/check/board-analyze.ts';
+import type { ForcedState } from '../../service/check/render.ts';
 import { visuallyHidden } from './probe.ts';
 
 const AREAS_MAX = 4;
@@ -85,6 +86,58 @@ const collectPairs = (): BoardProbePair[] => {
     });
   }
   return out;
+};
+
+/** The labels the state check forces, as `data-dc-state` writes them (any case). */
+const FORCEABLE: readonly ForcedState[] = ['hover', 'focus', 'focus-visible', 'active'];
+/** Labels for an instance at rest: a forced state is tried on it first, so a static `is-hover` copy doesn't hide a real `:hover`. */
+const REST_LABELS = ['rest', 'default', 'normal', 'idle', 'enabled'];
+
+/**
+ * The labelled interactive states in component examples (system-builder-depth T16): for each instance
+ * labelled `data-dc-state` hover, focus, focus-visible or active, the element to force it on (its rest
+ * twin with the same variant and size when the example has one, else the instance itself) as a host
+ * index and an element index in that host's shadow root, with its box. Only each component's first
+ * (light ground) host; at most `max`, then `truncated`. Reads only; Node forces the states over CDP.
+ */
+export const collectStates = (max: number): BoardStateProbe => {
+  const states: BoardStateProbe['states'] = [];
+  let truncated = false;
+  const hosts = document.querySelectorAll('[data-dc-example-host]');
+  const seen = new Set<string>();
+  for (let hostIndex = 0; hostIndex < hosts.length; hostIndex += 1) {
+    const host = hosts[hostIndex];
+    const root = host?.shadowRoot;
+    if (!host || !root || host.closest('.dc-dark') !== null) continue;
+    const entry = (host.closest('[data-dc-entry]')?.getAttribute('data-dc-entry') ?? '').slice(0, BOARD_ENTRY_MAX);
+    if (!entry.startsWith('component:') || seen.has(entry)) continue;
+    seen.add(entry);
+    const all = root.querySelectorAll('*');
+    const labelled: { index: number; state: string; variant: string; size: string }[] = [];
+    for (let index = 0; index < all.length && index < SYSTEM_BOARD_PREVIEW_ELEMENTS_MAX; index += 1) {
+      const one = all[index];
+      const state = one?.getAttribute('data-dc-state');
+      if (!one || state === null || state === undefined) continue;
+      labelled.push({ index, state: state.trim().toLowerCase().slice(0, 40), variant: (one.getAttribute('data-dc-variant') ?? '').trim().toLowerCase(), size: (one.getAttribute('data-dc-size') ?? '').trim().toLowerCase() });
+    }
+    const targets = new Set<string>();
+    for (const instance of labelled) {
+      const state = FORCEABLE.find((candidate) => candidate === instance.state);
+      if (state === undefined) continue;
+      const twin = labelled.find((other) => REST_LABELS.includes(other.state) && other.variant === instance.variant && other.size === instance.size);
+      const index = twin?.index ?? instance.index;
+      // Two instances that land on one element in one state are one picture.
+      if (targets.has(`${index}|${state}`)) continue;
+      targets.add(`${index}|${state}`);
+      if (states.length >= max) {
+        truncated = true;
+        continue;
+      }
+      const rect = (all[index] ?? host).getBoundingClientRect();
+      states.push({ entry, state, host: hostIndex, element: index, twin: twin !== undefined, box: { x: rect.left + window.scrollX, y: rect.top + window.scrollY, w: rect.width, h: rect.height } });
+    }
+  }
+  return { states, truncated };
 };
 
 /**

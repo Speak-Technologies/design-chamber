@@ -15,7 +15,7 @@ import {
 import { cleanDetail, normalizeExternalUrl } from '../../shared/checks.ts';
 import type { ArtboardCheck, CheckFindingData, DesignKind, Viewport } from '../../shared/types.ts';
 import { analyzeProbe, capPerCode, sanitizeProbe } from './analyze.ts';
-import { CdpError, CdpUnavailable, DEFAULT_LAUNCH_BUDGET_MS, type CdpEvent, type CdpSession, type OpenBrowserOptions } from './cdp.ts';
+import { CdpError, CdpTimeout, CdpUnavailable, DEFAULT_LAUNCH_BUDGET_MS, type CdpEvent, type CdpSession, type OpenBrowserOptions } from './cdp.ts';
 
 /** The response header every design document is served with: the guest frame's rules, offline. */
 export const CHECK_CSP = [
@@ -63,10 +63,57 @@ export type LoadedDocument = { ok: true; html: string } | { ok: false; reason: '
 export type InspectPage = {
   evaluate: (expression: string, options: { awaitPromise: boolean }) => Promise<unknown>;
   scrollTo: (y: number) => Promise<void>;
-  /** A PNG of the clip (document coordinates, the viewport's width); `scale` below 1 draws it smaller (overview strips). */
-  capture: (clip: { y: number; height: number; scale?: number }) => Promise<Buffer>;
+  /**
+   * A PNG of the clip (document coordinates); `x` and `width` default to the viewport's full width, and
+   * `scale` below 1 draws it smaller (overview strips).
+   */
+  capture: (clip: { y: number; height: number; scale?: number; x?: number; width?: number }) => Promise<Buffer>;
   save: (label: string, part: number, parts: number, bytes: Buffer) => Promise<string>;
+  /**
+   * Force pseudo-classes on the element at `path` (system-builder-depth T16), from Node over CDP: no
+   * script reaches the page. While a state is forced, animations run fast so the picture and the
+   * computed style show where a transition ends. `[]` clears it. False when the element isn't there.
+   */
+  forceState: (path: ElementPath, states: readonly ForcedState[]) => Promise<boolean>;
+  /** The element's computed `STATE_STYLE_PROPERTIES` over CDP, or null when it isn't there. */
+  computedStyle: (path: ElementPath) => Promise<Record<string, string> | null>;
 };
+
+/** The pseudo-classes the state check forces (`CSS.forcePseudoState`). */
+export type ForcedState = 'hover' | 'focus' | 'focus-visible' | 'active';
+export const FORCED_STATES: readonly ForcedState[] = Object.freeze(['hover', 'focus', 'focus-visible', 'active']);
+
+/**
+ * One step to an element: the `index`-th match of `selector`, in the document for the first step and in
+ * the previous match's (open) shadow root after it. The caller writes the selectors; only the indexes
+ * come from the probe.
+ */
+export type ElementStep = { selector: string; index: number };
+export type ElementPath = readonly ElementStep[];
+
+/** The computed longhands the state check compares with a state forced and not (T16). */
+export const STATE_STYLE_PROPERTIES = Object.freeze([
+  'color',
+  'background-color',
+  'background-image',
+  'border-top-color',
+  'border-right-color',
+  'border-bottom-color',
+  'border-left-color',
+  'border-top-style',
+  'border-top-width',
+  'box-shadow',
+  'outline-color',
+  'outline-style',
+  'outline-width',
+  'outline-offset',
+  'transform',
+] as const);
+
+/** How fast animations run while a state is forced: a 1 s transition ends in 1 ms, within the two frames waited. */
+const FORCED_PLAYBACK_RATE = 1000;
+/** A computed value longer than this is clipped (a gradient stack can be long; equality is all that is needed). */
+const STYLE_VALUE_MAX = 400;
 
 export type InspectResult = { findings: CheckFindingData[]; docHeight: number; pngs: string[] };
 
@@ -268,6 +315,58 @@ const renderOne = async (
   const guard = (): void => {
     if (!alive.value) throw new Abandoned();
   };
+  // The DOM, CSS and Animation domains are enabled only when the inspect hook forces a state (T16), and
+  // turned off again before the artboard ends, so a page reused for the next artboard carries nothing over.
+  const dom: { enabled: boolean; root: number | null; fast: boolean } = { enabled: false, root: null, fast: false };
+  /** A command the browser answered with an error (no such node, a detached root) is null; a dead or silent browser still throws. */
+  const answered = async <T>(work: () => Promise<T>): Promise<T | null> => {
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof CdpError && !(error instanceof CdpTimeout)) return null;
+      throw error;
+    }
+  };
+  /** The node id at `path`, through each open shadow root on the way; null when a step finds nothing. */
+  const resolveElement = async (path: ElementPath): Promise<number | null> => {
+    if (path.length === 0) return null;
+    if (!dom.enabled) {
+      dom.enabled = true;
+      await page.send('DOM.enable');
+      guard();
+      await page.send('CSS.enable');
+      guard();
+      await page.send('Animation.enable');
+      guard();
+    }
+    if (dom.root === null) {
+      const document = await page.send<{ root?: { nodeId?: unknown } }>('DOM.getDocument', { depth: 0, pierce: true });
+      guard();
+      dom.root = typeof document.root?.nodeId === 'number' ? document.root.nodeId : null;
+      if (dom.root === null) return null;
+    }
+    let scope: number = dom.root;
+    for (const [step, { selector, index }] of path.entries()) {
+      if (step > 0) {
+        // Into the previous match's shadow root: described with its shadow roots, then pushed to get a node id.
+        const described = await answered(() => page.send<{ node?: { shadowRoots?: { backendNodeId?: unknown }[] } }>('DOM.describeNode', { nodeId: scope, depth: 1, pierce: true }));
+        guard();
+        const backendNodeId = described?.node?.shadowRoots?.[0]?.backendNodeId;
+        if (typeof backendNodeId !== 'number') return null;
+        const pushed = await answered(() => page.send<{ nodeIds?: unknown[] }>('DOM.pushNodesByBackendIdsToFrontend', { backendNodeIds: [backendNodeId] }));
+        guard();
+        const shadowId = pushed?.nodeIds?.[0];
+        if (typeof shadowId !== 'number' || shadowId === 0) return null;
+        scope = shadowId;
+      }
+      const found = await answered(() => page.send<{ nodeIds?: unknown[] }>('DOM.querySelectorAll', { nodeId: scope, selector }));
+      guard();
+      const nodeId = found?.nodeIds?.[index];
+      if (typeof nodeId !== 'number' || nodeId === 0) return null;
+      scope = nodeId;
+    }
+    return scope;
+  };
 
   try {
     // Only an artboard that asks for another scheme changes it, so a design's artboards send what they always did.
@@ -299,7 +398,7 @@ const renderOne = async (
           guard();
         },
         capture: async (clip) => {
-          const shot = await page.send<{ data: string }>('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: clip.y, width: viewport.width, height: clip.height, scale: clip.scale ?? 1 } });
+          const shot = await page.send<{ data: string }>('Page.captureScreenshot', { format: 'png', clip: { x: clip.x ?? 0, y: clip.y, width: clip.width ?? viewport.width, height: clip.height, scale: clip.scale ?? 1 } });
           guard();
           return Buffer.from(shot.data, 'base64');
         },
@@ -307,6 +406,36 @@ const renderOne = async (
           const rel = await deps.savePng(art, part, parts, bytes, label);
           guard();
           return rel;
+        },
+        forceState: async (path, states) => {
+          const forced = states.filter((state) => FORCED_STATES.includes(state));
+          const nodeId = await resolveElement(path);
+          if (nodeId === null) return false;
+          if (forced.length > 0 && !dom.fast) {
+            await page.send('Animation.setPlaybackRate', { playbackRate: FORCED_PLAYBACK_RATE });
+            guard();
+            dom.fast = true;
+          }
+          const done = await answered(() => page.send('CSS.forcePseudoState', { nodeId, forcedPseudoClasses: forced }));
+          guard();
+          if (done === null) return false;
+          // Two frames: the forced style is applied and a fast transition has run to its end.
+          if (forced.length > 0) await page.send('Runtime.evaluate', { expression: FRAMES_EXPRESSION, contextId: executionContextId, awaitPromise: true, returnByValue: true });
+          guard();
+          return true;
+        },
+        computedStyle: async (path) => {
+          const nodeId = await resolveElement(path);
+          if (nodeId === null) return null;
+          const computed = await answered(() => page.send<{ computedStyle?: { name?: unknown; value?: unknown }[] }>('CSS.getComputedStyleForNode', { nodeId }));
+          guard();
+          if (computed === null || !Array.isArray(computed.computedStyle)) return null;
+          const out: Record<string, string> = {};
+          for (const entry of computed.computedStyle) {
+            if (typeof entry.name !== 'string' || typeof entry.value !== 'string') continue;
+            if ((STATE_STYLE_PROPERTIES as readonly string[]).includes(entry.name)) out[entry.name] = entry.value.slice(0, STYLE_VALUE_MAX);
+          }
+          return out;
         },
       };
       const inspected = await deps.inspect(inspectPage, art);
@@ -359,6 +488,13 @@ const renderOne = async (
     };
   } finally {
     for (const off of offs) off();
+    if (dom.enabled && alive.value) {
+      // Back to normal speed and the domains off, so the next artboard on this page starts as it always did.
+      // Best effort: a page that is going away answers nothing, and that is fine.
+      for (const [method, params] of [['Animation.setPlaybackRate', { playbackRate: 1 }], ['Animation.disable', {}], ['CSS.disable', {}], ['DOM.disable', {}]] as const) {
+        await page.send(method, params, 3000).catch(() => undefined);
+      }
+    }
     // A run abandoned after its timeout can finish late: it must not clear the artboard that is rendering by then.
     if (serving.current === mine) serving.current = null;
   }

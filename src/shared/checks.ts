@@ -442,14 +442,14 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
     sentence: () => 'The icons mix viewBox sizes or stroke widths, so they may not look like one set.',
   },
   // ---- end system-builder-depth Phase 2 ----
-  // ---- system-builder-depth Phase 3, Wave 0 (§13 T16): nothing raises this yet; T16 may refine the sentence ----
+  // ---- system-builder-depth Phase 3 (§13 T16): `count` is the states in this example that changed nothing ----
   'system-state-unstyled': {
     severity: 'warning',
     sentence: (f) => {
       const count = Math.max(1, Math.round(f.params?.count ?? 1));
       return count === 1
-        ? "1 example labels a state its CSS doesn't style."
-        : `${num(count)} examples label a state their CSS doesn't style.`;
+        ? "The example labels a state its CSS doesn't style: forced on the element, it changes nothing you can see. Style it, or remove the label."
+        : `The example labels ${num(count)} states its CSS doesn't style: forced on the element, they change nothing you can see. Style them, or remove the labels.`;
     },
   },
   // ---- end system-builder-depth Phase 3 ----
@@ -462,6 +462,11 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
       switch (f.params?.pictured) {
         case 'entries':
           return `Only the first ${num(f.params?.max)} entries were measured.`;
+        case 'states':
+          if (count === 0) return 'No labelled state was forced and pictured: the check ran out of time for them.';
+          return count === 1
+            ? 'Only the first labelled state was forced and pictured; the others were not checked.'
+            : `Only the first ${num(count)} labelled states were forced and pictured; the others were not checked.`;
         case 'gap':
           return `${count === 1 ? 'Part of 1 area is' : `Parts of ${areas} are`} in no picture (the picture limit for one check); the parts are listed. All of the board was measured, so the findings cover them.`;
         case 'no-overview':
@@ -616,7 +621,7 @@ const PROPOSAL_REASONS: readonly ProposalProblemReason[] = [
   'describe-change', 'internal-parts', 'none-fixes', 'rewritten', 'unreadable',
   'preview-too-large', 'preview-unsafe', 'preview-secret',
 ];
-const PICTURED: readonly NonNullable<CheckParams['pictured']>[] = ['tiles', 'overview', 'no-overview', 'gap', 'entries'];
+const PICTURED: readonly NonNullable<CheckParams['pictured']>[] = ['tiles', 'overview', 'no-overview', 'gap', 'entries', 'states'];
 const DEPTHS: readonly SystemDepth[] = ['tokens', 'core', 'full'];
 const LISTED: readonly NonNullable<CheckParams['listed']>[] = ['variants', 'sizes', 'states'];
 const LIVING_FAILED: readonly NonNullable<CheckParams['failed']>[] = ['too-large', 'bundle', 'unsafe', 'no-snapshot', 'secret'];

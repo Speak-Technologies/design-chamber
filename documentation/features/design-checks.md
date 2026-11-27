@@ -298,12 +298,35 @@ so each pair is reported once, and the measured pairs join the file finding of t
 finding per scheme in all. A measured pair must be more than 0.05 under its level to count, as
 the canvas can round a channel. `--area` other than foundations skips this.
 
+**Hover, focus and active pictures** (spec: `documentation/specs/system-builder-depth.md` T16). On the
+wide light board, after its area pictures, the check takes each component example instance labelled
+`data-dc-state="hover"`, `"focus"`, `"focus-visible"` or `"active"` and forces that state on it, the way
+DevTools does (CDP `CSS.forcePseudoState`, sent from the service; no script is added to the page and
+nothing in it is changed). When the example also has an instance labelled `rest` (or `default`,
+`normal`, `idle`, `enabled`) with the same `data-dc-variant` and `data-dc-size`, the state is forced on
+that one instead, so a hover copy drawn with a class such as `is-hover` doesn't hide a real `:hover`.
+
+- **The picture.** A tight picture of the element with 16 px around it, the state on:
+  `button-hover@wide.png`, `button-focus-visible@wide.png` (`-b`, `-c` when one component has the same
+  state twice). Animations run fast while a state is forced, so a transition is pictured where it ends.
+- **The verdict.** The element's computed text colour, background, border colours, box shadow, outline
+  and transform with the state on are compared with the state off. Nothing visible changed is
+  `system-state-unstyled` (warning), one per component, naming the component and its states in the detail
+  ("button: hover, focus-visible") and ending with the pictures. An outline or a border that paints
+  nothing (no style or no width) doesn't count, so `:focus-visible { outline: none }` with nothing else
+  is unstyled, while one that only changes the colour is styled.
+- **Limits.** At most 60 states a run, and they stop at 85% of the pass's 45 seconds; past either, one
+  note says how many were forced and pictured. Each state is cleared before the next element. The
+  narrow width and the dark pass don't repeat it, `--area` other than components and `--screen` skip it.
+- **Where it shows.** The text output lists the state pictures after the board pictures, marking the ones
+  that change nothing. `check.json` has `render.states`: `{ entry, state, png, styled }` per state.
+
 Measured findings, each named once (at the widest width that raised it):
 
 | Severity | Finding |
 |---|---|
-| Warning | the board is wider than the width it has, so it scrolls sideways · an example is wider than its card can give it · part of an example sits outside its card (`position: fixed`, negative margins) · text runs outside its card |
-| Note | an entry set to card, compact or table needed the full width at the wide board ("Set its layout to full"; not said when the example is too wide even for the whole board, since then the example has to change) · what the pictures leave out, one note per kind and each area once, naming the areas: full-size pictures stop but the overview shows the rest; the overview stops early but full-size pictures show the rest; the overview couldn't be made; or part of an area is in no picture at all (with the exact px ranges). All of the board is still measured · no browser was found, so only the files were checked |
+| Warning | the board is wider than the width it has, so it scrolls sideways · an example is wider than its card can give it · part of an example sits outside its card (`position: fixed`, negative margins) · text runs outside its card · a labelled hover, focus or active state changes nothing when forced |
+| Note | an entry set to card, compact or table needed the full width at the wide board ("Set its layout to full"; not said when the example is too wide even for the whole board, since then the example has to change) · what the pictures leave out, one note per kind and each area once, naming the areas: full-size pictures stop but the overview shows the rest; the overview stops early but full-size pictures show the rest; the overview couldn't be made; or part of an area is in no picture at all (with the exact px ranges). All of the board is still measured · only the first labelled states were forced and pictured (the limit of 60, or the time) · no browser was found, so only the files were checked |
 
 The unknown-layout warning tells an unknown word ("huge") apart from a known layout in a place that
 doesn't take it (`compact` on typography), and lists up to three with what each place takes, for

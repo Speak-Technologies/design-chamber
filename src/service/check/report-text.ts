@@ -253,7 +253,14 @@ const fileName = (rel: string): string => rel.slice(rel.lastIndexOf('/') + 1);
 
 /** " Picture: components@wide-4.png." for a board finding about one entry, when a full-size tile shows it. */
 const pictureNote = (finding: CheckFinding, render: SystemCheckReport['render']): string => {
-  if (render === null || finding.detail === undefined || finding.viewport === null) return '';
+  if (render === null) return '';
+  if (finding.code === 'system-state-unstyled') {
+    // The pictures of this component's states that changed nothing (T16).
+    const entry = `component:${(finding.file ?? '').replace(/^components\//, '').replace(/\.html$/, '')}`;
+    const shown = (render.states ?? []).filter((result) => result.entry === entry && !result.styled && result.png !== null).map((result) => fileName(result.png ?? ''));
+    return shown.length === 0 ? '' : ` ${shown.length > 1 ? 'Pictures' : 'Picture'}: ${shown.join(', ')}.`;
+  }
+  if (finding.detail === undefined || finding.viewport === null) return '';
   const shot = render.entryShots.find((candidate) => candidate.width === finding.viewport && candidate.entry === finding.detail);
   if (shot === undefined || shot.pngs.length === 0) return '';
   return ` ${shot.pngs.length > 1 ? 'Pictures' : 'Picture'}: ${shot.pngs.map(fileName).join(', ')}.`;
@@ -300,6 +307,22 @@ const boardPictureLines = (render: NonNullable<SystemCheckReport['render']>, run
       lines.push(`    ${AREA_LABELS[shot.area]}, ${shot.heightPx}px tall: ${overview}; ${tileList(shot, width.height)}`);
     }
   }
+  return lines;
+};
+
+/** State pictures named in the text; the rest are in the report. */
+const STATE_PICTURES_SHOWN = 12;
+
+/**
+ * The state pictures block (system-builder-depth T16): each labelled state forced on its element at the
+ * wide width, by file name, those that changed nothing marked. Nothing when the pass didn't run or found none.
+ */
+const statePictureLines = (render: NonNullable<SystemCheckReport['render']>, reportPath: string | null): string[] => {
+  const pictured = (render.states ?? []).filter((result) => result.png !== null);
+  if (pictured.length === 0) return [];
+  const lines = ['', 'State pictures (each labelled hover, focus or active state forced on its element, wide board):'];
+  for (const result of pictured.slice(0, STATE_PICTURES_SHOWN)) lines.push(`  ${fileName(result.png ?? '')}${result.styled ? '' : '  (changes nothing)'}`);
+  if (pictured.length > STATE_PICTURES_SHOWN) lines.push(`  and ${pictured.length - STATE_PICTURES_SHOWN} more in ${reportPath ?? 'the report'}`);
   return lines;
 };
 
@@ -355,7 +378,7 @@ export const formatSystemCheckText = (input: SystemTextInput): string => {
     if (render.drawn.from === 'proposal') lines.push('', `Drew the proposed board (proposal ${render.drawn.proposal ?? 'unknown'}).`);
     // --screen draws no board: only the screens block, which then names the run folder.
     const boardDrawn = render.widths.length > 0 || render.screens === undefined;
-    if (boardDrawn) lines.push(...boardPictureLines(render, input.runDir ?? null));
+    if (boardDrawn) lines.push(...boardPictureLines(render, input.runDir ?? null), ...statePictureLines(render, input.reportPath));
     lines.push(...screenPictureLines(render, input.runDir ?? null, boardDrawn && render.shots.length > 0));
   }
 

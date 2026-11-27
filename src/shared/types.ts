@@ -552,9 +552,10 @@ export type CheckParams = {
    * `system-board-partial` only: what was left out (one note per kind, each area once). `tiles` = full-size
    * pictures stop but the overview shows the rest; `overview` = the overview stops but full-size pictures show
    * the rest; `no-overview` = the overview couldn't be made, the full-size pictures show all of it; `gap` = part
-   * of the area is in no picture; `entries` = entries past `max` weren't measured.
+   * of the area is in no picture; `entries` = entries past `max` weren't measured; `states` = only `count`
+   * labelled states were forced and pictured (system-builder-depth T16: the `max` limit or the time).
    */
-  pictured?: 'tiles' | 'overview' | 'no-overview' | 'gap' | 'entries';
+  pictured?: 'tiles' | 'overview' | 'no-overview' | 'gap' | 'entries' | 'states';
   /** `system-example-missing` and `system-coverage-gap`: the system's depth; `full` makes them warnings. */
   depth?: SystemDepth;
   /** `system-contrast-low`, and a dark-pass board finding: which scheme it was found in. */
