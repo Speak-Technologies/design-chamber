@@ -1,4 +1,4 @@
-// Visual scenario for KI-42 and its neighbours: on a 390 px phone nothing on screen names a key the
+// Visual scenario for KI-44 and its neighbours: on a 390 px phone nothing on screen names a key the
 // phone doesn't have. The comment card and the text box show no shortcut line, the text box has a
 // Cancel button and its click-away line names the buttons. A 480 px desktop rail is the control: it
 // keeps every shortcut line and has no extra button. With the keyboard up the text box and its buttons stay on screen,
