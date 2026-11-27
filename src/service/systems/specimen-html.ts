@@ -212,15 +212,15 @@ const tokenNote = (token: SystemToken): string =>
 /** One token's identity lines: name, values as text, note, problem. */
 const tokenText = (token: SystemToken): string => tokenIdentity(token) + tokenNote(token);
 
-/** Draws one side's sample from the token's name (its value is in CSS) and, when it needs the numbers, its text. */
-type Draw = (name: string, text: string) => string;
+/** Draws one side's sample from the token's name (its value is in CSS) and, when it needs the numbers, its text and side. */
+type Draw = (name: string, text: string, side: 'light' | 'dark') => string;
 
 /** A visual for one side (light or dark) of a token, or the hatched "can't read" box. */
 const sideVisual = (token: SystemToken, side: 'light' | 'dark', draw: Draw): string => {
   const value = side === 'light' ? token.light : token.dark;
   if (value === null) return `<div class="dc-muted dc-hatched-label">${side === 'light' ? 'No light value' : 'No dark value'}</div>`;
   if (cssValueOf(token.section, null, value.text) === null || !isTokenName(token.name)) return HATCHED(CANT_READ);
-  return draw(token.name, value.text);
+  return draw(token.name, value.text, side);
 };
 
 const grounds = (token: SystemToken, draw: Draw): string => {
@@ -485,6 +485,33 @@ const motionDemo = (name: string, kind: MotionValue['kind'], styled: Styler): st
   `<div class="dc-motion-demo" tabindex="0" role="img" aria-label="${escapeHtml(`Demo of ${name}`)}">` +
   `<div${styled('dc-motion-chip', `${kind === 'time' ? 'transition-duration' : 'transition-timing-function'}: var(${name})`)}></div></div>`;
 
+/** `var(--name)` and nothing else: no fallback, no second value, no function around it. */
+const PLAIN_ALIAS = /^var\(\s*(--[A-Za-z0-9_-]{1,60})\s*\)$/i;
+/** Aliases followed from one motion token to its value. */
+export const MOTION_ALIAS_DEPTH_MAX = 4;
+
+/**
+ * The numbers a motion token's value comes to: its own, or those a plain alias leads to, through at most
+ * `MOTION_ALIAS_DEPTH_MAX` tokens and never round a cycle. As the system's CSS resolves it: in the light
+ * scheme every hop takes the light value; in the dark one the dark value, else the light. Null for a
+ * formula that is anything more than that.
+ */
+export const resolveMotionValue = (tokens: ReadonlyMap<string, SystemToken>, name: string, text: string, scheme: 'light' | 'dark'): MotionValue | null => {
+  const followed = new Set([name]);
+  let value = text;
+  for (let hops = 0; ; hops += 1) {
+    const alias = PLAIN_ALIAS.exec(value)?.[1];
+    if (alias === undefined) return cssValueOf('motion', null, value) === null ? null : parseMotionValue(value);
+    if (hops >= MOTION_ALIAS_DEPTH_MAX || followed.has(alias)) return null;
+    followed.add(alias);
+    const target = tokens.get(alias);
+    const side = scheme === 'dark' ? (target?.dark ?? target?.light) : target?.light;
+    // The target's value is checked for its own section before it is read, as when it is written into CSS.
+    if (target === undefined || side === undefined || side === null || cssValueOf(target.section, null, side.text) === null) return null;
+    value = side.text;
+  }
+};
+
 const NO_PREVIEW_SENTENCE = "A formula, so there's no preview.";
 const DEMO_HINT = 'Hover or focus a track to play it. With reduced motion on, it stays still.';
 
@@ -496,17 +523,18 @@ const motionParts = (detail: SystemDetail, styled: Styler, still: boolean): Sect
   const tokens = tokensOf(detail, 'motion');
   const parts: SectionParts = { title: 'Motion', body: '', empty: 'No motion tokens yet.' };
   if (tokens.length === 0) return parts;
-  const read = (text: string): MotionValue | null => (cssValueOf('motion', null, text) === null ? null : parseMotionValue(text));
+  const byName = new Map(detail.tokens.map((token) => [token.name, token]));
   let longest = 0;
   for (const token of tokens) {
-    for (const side of [token.light, token.dark]) {
-      const value = side === null ? null : read(side.text);
+    for (const scheme of ['light', 'dark'] as const) {
+      const side = token[scheme];
+      const value = side === null ? null : resolveMotionValue(byName, token.name, side.text, scheme);
       if (value?.kind === 'time') longest = Math.max(longest, value.ms);
     }
   }
   let demos = false;
-  const draw: Draw = (name, text) => {
-    const value = read(text);
+  const draw: Draw = (name, text, scheme) => {
+    const value = resolveMotionValue(byName, name, text, scheme);
     if (value === null) return `<div class="dc-muted dc-hatched-label">${escapeHtml(NO_PREVIEW_SENTENCE)}</div>`;
     const drawing =
       value.kind === 'time'

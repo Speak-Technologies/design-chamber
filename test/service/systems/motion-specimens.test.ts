@@ -21,7 +21,7 @@ import { buildLivingPage, type LivingPageInput } from '../../../src/service/syst
 import { livingPagesIdle } from '../../../src/service/systems/living-page.ts';
 import { livingCssProblems, scanLivingPage } from '../../../src/service/systems/living-safe.ts';
 import { refreshSnapshot } from '../../../src/service/systems/snapshot.ts';
-import { easingPath, GROUND_TEXT, paintsOnlyCurrentColor, renderSpecimenSection } from '../../../src/service/systems/specimen-html.ts';
+import { easingPath, GROUND_TEXT, MOTION_ALIAS_DEPTH_MAX, paintsOnlyCurrentColor, renderSpecimenSection, resolveMotionValue } from '../../../src/service/systems/specimen-html.ts';
 import { chromeOrSkip, testBrowserFlags } from '../../helpers/chrome-or-skip.ts';
 import { setupRepo, SYSTEM_JSON } from './repo-fixture.ts';
 
@@ -120,7 +120,7 @@ test('a duration is a bar against the longest duration, dark values included', (
   assert.ok(boardMotion(detailOf(':root { --duration-none: 0ms; }')).includes('style="width: 0%"'));
 });
 
-test('an easing is an inline curve; an invalid one is the hatched box and a formula says it has no preview', () => {
+test('an easing is an inline curve; an invalid one is the hatched box', () => {
   const html = boardMotion();
   const out = entry(html, '--ease-out');
   assert.ok(out.includes('<svg class="dc-curve" xmlns="http://www.w3.org/2000/svg" viewBox="-4 -4 108 108" width="108" height="108" role="img" aria-label="Easing curve of --ease-out">'), out);
@@ -129,8 +129,69 @@ test('an easing is an inline curve; an invalid one is the hatched box and a form
   const broken = entry(html, '--ease-broken');
   assert.ok(broken.includes('dc-hatched') && broken.includes('Can&#39;t read this value'), broken);
   assert.ok(!broken.includes('<svg') && !broken.includes('dc-motion-demo'));
-  const alias = entry(html, '--duration-alias');
-  assert.ok(alias.includes('A formula, so there&#39;s no preview.') && !alias.includes('dc-motion-demo'), alias);
+});
+
+// ---- plain aliases ----
+
+const NO_PREVIEW = 'A formula, so there&#39;s no preview.';
+const aliasBoard = (css: string, json: Record<string, unknown> = {}): string => boardMotion(detailOf(css, { tokens: {}, ...json }));
+
+test('a plain alias is previewed from what it resolves to: a bar, a curve and the demo, on the board and the living page', () => {
+  const css = ':root { --duration-base: 200ms; --duration-slow: 400ms; --ease-curve: cubic-bezier(0.2, 0, 0, 1); --motion-enter: var(--duration-base); --ease-enter: VAR( --ease-curve ); }';
+  const html = aliasBoard(css);
+  const enter = entry(html, '--motion-enter');
+  assert.ok(enter.includes('class="dc-bar" style="width: 50%"') && !enter.includes(NO_PREVIEW), enter);
+  // The demo still names the alias, so the browser follows it too.
+  assert.ok(enter.includes('class="dc-motion-chip" style="transition-duration: var(--motion-enter)"'));
+  const ease = entry(html, '--ease-enter');
+  assert.ok(ease.includes('d="M0 100C20 100 0 0 100 0"') && ease.includes('transition-timing-function: var(--ease-enter)'), ease);
+  const detail = detailOf(css, { tokens: {} });
+  const living = buildLivingPage(detail, livingInput(detail)).html;
+  assert.ok(!living.includes(NO_PREVIEW));
+  assert.equal(living.split('alt="Easing curve of --ease-enter"').length - 1, 1);
+});
+
+test('aliases are followed through four tokens and no further', () => {
+  assert.equal(MOTION_ALIAS_DEPTH_MAX, 4);
+  const chain = ':root { --duration-1: var(--duration-2); --duration-2: var(--duration-3); --duration-3: var(--duration-4); --duration-4: var(--duration-5); --duration-5: var(--duration-6); --duration-6: 300ms; }';
+  const html = aliasBoard(chain);
+  assert.ok(entry(html, '--duration-1').includes(NO_PREVIEW), 'five hops');
+  assert.ok(entry(html, '--duration-2').includes('style="width: 100%"'), 'four hops');
+  assert.ok(!entry(html, '--duration-2').includes(NO_PREVIEW));
+});
+
+test('a cycle, a missing or unusable target and anything more than var(--x) stay a formula', () => {
+  const html = aliasBoard(`:root {
+    --duration-a: var(--duration-b); --duration-b: var(--duration-a); --duration-self: var(--duration-self);
+    --duration-gone: var(--duration-nowhere);
+    --duration-colour: var(--brand); --brand: #1a73e8;
+    --duration-fallback: var(--duration-ok, 100ms);
+    --duration-calc: calc(var(--duration-ok) + 1ms);
+    --duration-two: var(--duration-ok) var(--duration-ok);
+    --duration-dark-only: var(--duration-night);
+    --duration-ok: 100ms;
+  }
+  @media (prefers-color-scheme: dark) { :root { --duration-night: 100ms; } }`);
+  for (const name of ['a', 'b', 'self', 'gone', 'colour', 'fallback', 'calc', 'two', 'dark-only']) {
+    const card = entry(html, `--duration-${name}`);
+    assert.ok(card.includes(NO_PREVIEW) && !card.includes('dc-motion-demo') && !card.includes('dc-bar'), `${name}: ${card}`);
+  }
+  assert.ok(entry(html, '--duration-ok').includes('style="width: 100%"'));
+});
+
+test('on the dark ground every hop takes the dark value, else the light one, as the system CSS does', () => {
+  const detail = detailOf(
+    `:root { --motion-a: var(--motion-b); --motion-b: var(--motion-c); --motion-c: 100ms; }
+     @media (prefers-color-scheme: dark) { :root { --motion-a: var(--motion-b); --motion-c: 400ms; } }`,
+    { tokens: {} },
+  );
+  const a = entry(boardMotion(detail), '--motion-a');
+  const [light, dark] = a.split('class="dc-ground dc-dark"');
+  assert.ok(light?.includes('width: 25%'), a);
+  assert.ok(dark?.includes('width: 100%'), 'b has no dark value, but c does');
+  const tokens = new Map(detail.tokens.map((token) => [token.name, token]));
+  assert.deepEqual(resolveMotionValue(tokens, '--motion-b', 'var(--motion-c)', 'light'), { kind: 'time', ms: 100 });
+  assert.deepEqual(resolveMotionValue(tokens, '--motion-b', 'var(--motion-c)', 'dark'), { kind: 'time', ms: 400 });
 });
 
 test('the demo moves with its token: a duration sets the time, an easing the curve; it takes focus', () => {
@@ -338,11 +399,11 @@ test('in Chrome: a currentColor icon takes the ground text colour in both board 
     near(moving.pixels['icon:0 light'], GROUND_TEXT.light, `${scheme} board, light ground`);
     near(moving.pixels['icon:0 dark'], GROUND_TEXT.dark, `${scheme} board, dark ground`);
     assert.equal(moving.pixels['icon:1 dark'], moving.pixels['icon:1 light'], 'a coloured icon keeps its colours');
-    // fast, base, slow (light and dark), then the three easings.
-    assert.deepEqual(moving.chips, ['0.1s', '0.2s', '0.8s', '1s', '0.6s', '0.6s', '0.6s'], scheme);
+    // fast, base, slow (light and dark), the alias of base, then the three easings.
+    assert.deepEqual(moving.chips, ['0.1s', '0.2s', '0.8s', '1s', '0.2s', '0.6s', '0.6s', '0.6s'], scheme);
     if (scheme === 'dark') {
       const still = await inChrome(chrome, bundled, ['--force-prefers-reduced-motion']);
-      assert.deepEqual(still.chips, Array.from({ length: 7 }, () => '0s'));
+      assert.deepEqual(still.chips, Array.from({ length: 8 }, () => '0s'));
     }
   }
 });
