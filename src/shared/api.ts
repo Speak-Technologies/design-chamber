@@ -208,6 +208,22 @@ export type CreateCommentBody = { screen: string | null; viewport: string; ancho
 export type CommentResponse = { comment: Comment };
 export type PatchCommentBody = { body?: string; status?: CommentStatus };
 export type OkResponse = { ok: true };
+
+/**
+ * `PUT /view`: what the user has open, reported by the rail and the page (use-the-project spec §2.4).
+ * `slug` null is the list, a system page or nothing open (the rest is then null or absent). A slug the
+ * design does not have is 404; a `screen` or `viewport` it lacks is 400. The service writes `view.json`
+ * beside settings.json; no file content and no comment text goes in. Shape and caps: `src/shared/view.ts`.
+ */
+export type ViewBody = {
+  surface: 'rail' | 'page';
+  slug: string | null;
+  screen?: string | null;
+  viewport?: string | null;
+  mode?: 'edit' | 'play' | null;
+  selection?: { selector: string; text: string } | null;
+};
+
 export type MarkSentBody = { ids: string[]; version: number | null };
 export type MarkSentResponse = { comments: Comment[] };
 
@@ -847,6 +863,9 @@ export interface ApiRoutes {
   'PATCH /designs/:slug/page-state': Route<NoQuery, PageStatePatchBody, PageStatePatchResponse>;
   'DELETE /designs/:slug/page-state': Route<NoQuery, undefined, PageStateClearResponse>;
 
+  // Use the project and the native agent (documentation/specs/use-the-project-and-native-agent.md §2.4)
+  'PUT /view': Route<NoQuery, ViewBody, OkResponse>;
+
   // Phase 2.5: design systems (documentation/specs/phase-2-5-technical.md §3)
   'GET /systems': Route<NoQuery, undefined, SystemListResponse>;
   'POST /systems': Route<NoQuery, CreateSystemBody, CreateSystemResponse>;
@@ -1009,7 +1028,8 @@ export const ROUTE_OWNERS = {
   'POST /system-stops/:undoId/undo': 'P25',
   'POST /memberships': 'P26',
   'POST /systems/register': 'P26',
-} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2' | 'P25' | 'P26'>;
+  'PUT /view': 'UP',
+} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2' | 'P25' | 'P26' | 'UP'>;
 
 export const ROUTE_KEYS = Object.keys(ROUTE_OWNERS) as RouteKey[];
 

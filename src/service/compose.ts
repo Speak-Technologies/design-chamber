@@ -47,6 +47,7 @@ import { registerSystemsRoutes } from './routes/systems.ts';
 import { registerThumbnailsRoutes } from './routes/thumbnails.ts';
 import { registerUploadsRoutes } from './routes/uploads.ts';
 import { registerVersionsRoutes } from './routes/versions.ts';
+import { registerViewRoutes, viewFilePath } from './routes/view.ts';
 import { writeRuntimeRecord } from './runtime-record.ts';
 import { createSelfWrites } from './self-writes.ts';
 import { createSettingsStore, settingsFilePath, type SettingsEnv } from './settings.ts';
@@ -269,6 +270,8 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   // Phase 2.6 routes: POST /memberships (folders.ts, AD-2) and POST /systems/register (systems/register.ts, AD-10).
   registerMembershipsRoutes(router, ctx);
   registerSystemRegisterRoutes(router, ctx);
+  // Use the project and the native agent: what the user has open, in view.json beside settings.json.
+  registerViewRoutes(router, ctx, { file: viewFilePath(options.env ?? process.env, process.platform, options.homeDir) });
 
   let disposed = false;
   return {

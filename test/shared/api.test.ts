@@ -8,8 +8,9 @@ test('the route table lists every §7 route once, each with an owner lane', () =
   // Phase 2 (documentation/specs/phase-2-technical.md §10.2): 51. Phase 2.5 adds 38
   // (documentation/specs/phase-2-5-technical.md §3: 30 base, 3 for S8, 5 for rev 3): 89. The
   // Phase 2.5 review adds DELETE /uploads/:id to WP1 (KI-22): 90. Phase 2.6 adds POST /memberships
-  // and POST /systems/register (documentation/specs/phase-2-6-technical.md §3.1): 92.
-  assert.equal(ROUTE_KEYS.length, 92);
+  // and POST /systems/register (documentation/specs/phase-2-6-technical.md §3.1): 92. Use the project
+  // and the native agent adds PUT /view (documentation/specs/use-the-project-and-native-agent.md §2.4): 93.
+  assert.equal(ROUTE_KEYS.length, 93);
   assert.equal(new Set(ROUTE_KEYS).size, ROUTE_KEYS.length);
   for (const key of ROUTE_KEYS) {
     const { method, pattern } = splitRouteKey(key);
@@ -24,7 +25,8 @@ test('Phase 2.5 routes: 38, all owned by P25, each new param named as the spec n
   const p25 = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'P25');
   const p26 = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'P26');
   assert.equal(p25.length, 38);
-  assert.equal(ROUTE_KEYS.length - p25.length - p26.length, 52, 'no earlier route changed owner (51, plus WP1 DELETE /uploads/:id)');
+  const up = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'UP');
+  assert.equal(ROUTE_KEYS.length - p25.length - p26.length - up.length, 52, 'no earlier route changed owner (51, plus WP1 DELETE /uploads/:id)');
   const params = new Set(p25.flatMap((key) => splitRouteKey(key).pattern.split('/').filter((part) => part.startsWith(':'))));
   assert.deepEqual([...params].sort(), [':eid', ':folderId', ':id', ':proposalId', ':scanId', ':slug', ':ticket', ':undoId', ':vid']);
   for (const key of ['GET /systems/:id/board/chunk', 'GET /systems/:id/living-page/render/chunk'] as const) {
@@ -48,6 +50,11 @@ test('Phase 2.5 routes: 38, all owned by P25, each new param named as the spec n
 test('Phase 2.6 routes: 2, owned by P26', () => {
   const p26 = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'P26');
   assert.deepEqual([...p26].sort(), ['POST /memberships', 'POST /systems/register']);
+});
+
+test('Use the project routes: 1, owned by UP', () => {
+  const up = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'UP');
+  assert.deepEqual(up, ['PUT /view']);
 });
 
 test('a read-only refusal is a 422 (Phase 2.5 AD-20)', () => {

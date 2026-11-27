@@ -48,11 +48,14 @@ export type ViewFile = {
   selection: ViewSelection | null;
 };
 
-const CONTROL = /[\u0000-\u001f\u007f-\u009f  ]+/g;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
 
-/** One line of at most `max` characters: control characters and whitespace runs become one space, then trimmed and cut. */
+/** One line: control characters and whitespace runs become one space, then trimmed. */
+export const flattenViewText = (text: string): string => text.replace(CONTROL, ' ').replace(/\s+/g, ' ').trim();
+
+/** `flattenViewText`, cut to at most `max` characters (the guest clips before it reports; the service refuses what is still over). */
 export const clipViewText = (text: string, max: number): string => {
-  const flat = text.replace(CONTROL, ' ').replace(/\s+/g, ' ').trim();
+  const flat = flattenViewText(text);
   return flat.length <= max ? flat : `${flat.slice(0, max - 1).trimEnd()}…`;
 };
 
