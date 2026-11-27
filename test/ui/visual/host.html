@@ -103,6 +103,8 @@
         item: null,
         ...(block ? { block } : {}),
         features: { deviceStorage: true },
+        // ?device=phone: the host says it is a phone (older hosts, and the other scenarios, say nothing).
+        ...(params.get('device') ? { device: { formFactor: params.get('device'), pointer: 'coarse', insets: { top: 0, right: 0, bottom: 0, left: 0 } } } : {}),
       });
       function sendReady() { document.body.style.background = THEMES[mode].background; send({ type: 'ready', payload: ready() }); }
       const snapshotFor = (query) => {

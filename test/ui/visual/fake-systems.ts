@@ -10,6 +10,9 @@ import type {
   LivingPageResponse,
   LocationView,
   RevealBody,
+  SystemExportBody,
+  SystemExportOptionsResponse,
+  SystemExportResponse,
   CreateSystemResponse,
   CreateUploadResponse,
   DeleteSystemResponse,
@@ -39,7 +42,7 @@ import type {
   VersionListResponse,
   OkResponse as Ok,
 } from '../../../src/shared/api.ts';
-import { CHIP_PROVIDER_ID, type ChangeEvent, type RepoResyncReview, type SystemChangeKind, type SystemDetail, type SystemScreen, type SystemSection, type SystemSummary, type SystemToken, type VersionSummary } from '../../../src/shared/types.ts';
+import { CHIP_PROVIDER_ID, type ChangeEvent, type RepoResyncReview, type SystemChangeKind, type SystemDetail, type SystemScreen, type SystemSection, type SystemSummary, type SystemToken, type TokenExportFormat, type VersionSummary } from '../../../src/shared/types.ts';
 import { SYSTEM_NAME_MAX, SYSTEMS_MAX } from '../../../src/shared/limits.ts';
 import { sameDirectory } from '../../../src/shared/path-compare.ts';
 import { resyncStampOf } from '../../../src/shared/system-json.ts';
@@ -580,6 +583,9 @@ export type FakeSystems = {
     'GET /systems/:id/living-page/render': (req: Req & { query: { which?: string; scheme?: string } }) => RenderMeta;
     'GET /systems/:id/living-page/render/chunk': (req: Req & { query: { key?: string } }) => RenderChunkResponse;
     'POST /reveal': (req: { body: RevealBody }) => OkResponse;
+    // system-builder-depth T19u: tidepool's project uses Tailwind and two of its names clash; the others neither.
+    'GET /systems/:id/export': (req: Req) => SystemExportOptionsResponse;
+    'POST /systems/:id/export': (req: Req & { body: SystemExportBody }) => SystemExportResponse;
     'GET /systems/:id': (req: Req) => SystemDetail;
     'POST /systems/:id/edits': (req: Req & { body: SystemEditRequest }) => SystemEditResponse;
     'POST /systems/:id/edits/:eid/undo': (req: Req) => SystemUndoEditResponse;
@@ -633,6 +639,8 @@ export type FakeSystems = {
     patchLiving: (id: string, patch: Record<string, unknown>) => void;
     /** The review the next repo re-sync scan finds (`null` goes back to the sample). */
     setRepoResync: (review: RepoResyncReview | null) => void;
+    /** The token exports asked for, for a scenario's checks. */
+    exportLog: () => Array<{ id: string; formats: string[] }>;
     /** The reveal requests, for a scenario's checks. */
     revealLog: () => RevealBody[];
     /** What saves, undos, reviews and prompts reached the service. */
@@ -697,6 +705,8 @@ export const createFakeSystems = (deps: {
   let repoReview: RepoResyncReview | null = null;
   const livingPatch = new Map<string, Record<string, unknown>>();
   const revealed: RevealBody[] = [];
+  const exportLog: Array<{ id: string; formats: string[] }> = [];
+  const exportFormats = (id: string): TokenExportFormat[] => (id === 'tidepool' ? ['dtcg', 'css', 'tailwind'] : ['dtcg', 'css']);
   let resyncStale = false;
   let resyncFailure: string | null = null;
   let staleOnce = false;
@@ -1117,6 +1127,14 @@ export const createFakeSystems = (deps: {
         revealed.push(body);
         return { ok: true };
       },
+      'GET /systems/:id/export': ({ params }) => ({ formats: exportFormats(find(params.id).id) }),
+      'POST /systems/:id/export': ({ params, body }) => {
+        const row = find(params.id);
+        const formats = body.formats ?? exportFormats(row.id);
+        exportLog.push({ id: row.id, formats });
+        const downloads = 'C:\\Users\\you\\Downloads';
+        return { path: `${downloads}\\${row.id}-tokens.zip`, bytes: 2048, formats, renamed: row.id === 'tidepool' && formats.includes('dtcg') ? 2 : 0 };
+      },
       'GET /systems/:id/board': ({ params, query }) => {
         if (boardFailure) throw new ServiceError('internal', 'The board couldn’t be drawn.');
         const row = find(params.id);
@@ -1240,6 +1258,7 @@ export const createFakeSystems = (deps: {
       setRepoResync: (review) => {
         repoReview = review;
       },
+      exportLog: () => exportLog,
       revealLog: () => revealed,
       setScreens: (id, screens) => {
         const detail = detailFor(find(id));

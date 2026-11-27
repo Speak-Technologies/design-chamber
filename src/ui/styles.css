@@ -5171,6 +5171,37 @@ button.dc-sp-value:focus-visible {
   width: 100%;
 }
 
+/* ------------------------------------------------------------------ token export (design system) */
+
+.dc-export-formats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+/* The kit's unticked box is drawn in the border colour, too faint to read as a box here. */
+.dc-export .oc-sdk-check[aria-checked='false'] .oc-sdk-check-box {
+  border-color: var(--oc-muted);
+}
+.dc-export .dc-muted {
+  margin: 0;
+  font-size: 0.8125rem;
+}
+.dc-export .dc-form-error {
+  margin-top: var(--dc-s3);
+}
+.dc-export-notice .dc-export-path,
+.dc-export-notice .dc-export-renamed {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.dc-export-notice .dc-export-renamed {
+  margin-top: var(--dc-s1);
+}
+
 /* ------------------------------------------------------------------ re-sync sheet (design system, internal home) */
 
 .dc-sheet[data-variant='dialog'].dc-resync .dc-sheet-panel {

@@ -8,13 +8,13 @@
 
 import { mountBadge } from '@openchamber/sdk/ui';
 
-import type { SystemEditResponse } from '../../shared/api.ts';
+import type { SystemEditResponse, SystemExportResponse } from '../../shared/api.ts';
 import { sectionLabel } from '../../shared/agent/system-prompts.ts';
 import { toServiceError } from '../../guest/service-client.ts';
 import type { AskOutcome } from '../../guest/flows.ts';
 import type { SystemArea, SystemDetail, SystemSection } from '../../shared/types.ts';
 import { SYSTEM_SECTIONS, AREA_OF_SECTION } from '../../shared/system-json.ts';
-import { toast, type ActionContext } from '../components/actions.ts';
+import { reveal, toast, type ActionContext } from '../components/actions.ts';
 import { createScope, errorText, h } from '../components/dom.ts';
 import { attachMenu, banner, bannerWithActions, btn, iconBtn, loadingRow, openSheet, type BtnHandle } from '../components/kit.ts';
 import { createAskBar, type AskBarHandle } from '../components/ask-bar.ts';
@@ -63,12 +63,14 @@ import { RESYNC_NOTICE_MS } from '../model/resync-model.ts';
 import { REGENERATING_LABEL, livingCard, previewTarget, type LivingActionId, type LivingRepoView } from '../model/living-page-model.ts';
 import { driftLines, landedLine, readOnlyLine, repoHeaderLine, systemBanners, type BannerActionId, type BannerSpec } from '../model/system-home-model.ts';
 import { viewingBanner } from '../model/versions-model.ts';
+import { exportMenuEntry, exportOffered, renamedSentence } from '../model/token-export-model.ts';
 import type { WallSelection } from '../wall/wall-types.ts';
 import { renderLivingCard } from './living-card.ts';
 import { mountLivingPreview, type LivingPreviewHandle } from './living-preview.ts';
 import { paintRepoReview } from './repo-review.ts';
 import { openResyncSheet, type ResyncApplied } from './resync-sheet.ts';
 import { sendSystemMessage } from './system-ask.ts';
+import { openExportSheet } from './export-sheet.ts';
 import { mountBoard, type BoardHandle } from './system-board.ts';
 import { createIconStore } from './system-icons.ts';
 import { mountSystemScreens, type ScreensHandle } from './system-screens.ts';
@@ -100,6 +102,9 @@ export type SystemPageHandle = {
 
 type LoadState = 'loading' | 'ready' | 'error' | 'gone';
 type Viewing = { id: string; n: number; compare: boolean };
+
+/** As long as a design's "Export saved" notice stays up. */
+const EXPORT_NOTICE_MS = 15_000;
 
 const REVIEW_DOT: Record<string, string> = { 'not-reviewed': 'Not reviewed', 'looks-good': 'Looks good', 'needs-work': 'Needs work' };
 
@@ -153,6 +158,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
   let disposed = false;
   let versionsSheet: { close: () => void } | null = null;
   let versions: SystemVersionsHandle | null = null;
+  let exportSheet: { close: () => void } | null = null;
   let loadTicket = 0;
   /** A repo-backed system's living page, as the service last described it. */
   let living: LivingRepoView | null = null;
@@ -497,6 +503,23 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     if (detail.sources.code === null) return;
     openResyncSheet(sheetHost, { id, systemName: detail.name, directory: detail.sources.code.directory, onApplied: applied });
   }
+
+  // ------------------------------------------------------------ token export
+  const exported = ({ path, renamed }: SystemExportResponse): void => {
+    toast('success', `Saved to ${path}`, path);
+    if (disposed) return;
+    const changed = renamedSentence(renamed);
+    const show = btn({ label: 'Show in folder', variant: 'outline', size: 'xs', onClick: () => void reveal(path) });
+    const wrap = h('div', { class: 'dc-banner dc-restore-notice dc-export-notice', 'data-actions': 'stack' });
+    wrap.append(...bannerWithActions('success', 'Export saved', [h('span', { class: 'dc-export-path' }, path), changed === null ? null : h('span', { class: 'dc-export-renamed' }, changed)], [show.el]));
+    notices.setTransient('export', wrap, EXPORT_NOTICE_MS);
+  };
+
+  const openExport = (): void => {
+    if (!detail) return;
+    exportSheet?.close();
+    exportSheet = openExportSheet(sheetHost, { id, systemName: detail.name, empty: detail.tokens.length === 0, onExported: exported });
+  };
 
   // ------------------------------------------------------------ the agent, the folder, the living page
   const askAgent = async (purpose: 'living-page' | 'reconcile' | 'build-continue' | 'ask', extra: { text?: string } = {}): Promise<void> => {
@@ -881,12 +904,14 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
           { id: 'rename', label: 'Rename' },
           { id: 'chat', label: 'Continue in chat' },
           ...(canResync() ? [resyncEntry()] : []),
+          ...(exportOffered(host.snapshot()) ? [exportMenuEntry({ viewing: viewing !== null, dirty: dirty(), unreadable: detail?.unreadable != null })] : []),
           ...(compact ? [{ id: 'versions', label: 'Versions' }] : []),
         ],
         (choice) => {
           if (choice === 'rename') startRename();
           else if (choice === 'chat') void continueChat();
           else if (choice === 'resync') startResync();
+          else if (choice === 'export') openExport();
           else if (choice === 'versions') openVersions();
         },
       );
@@ -1312,6 +1337,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     stopFeed();
     stopSession();
     versionsSheet?.close();
+    exportSheet?.close();
     restore.dispose();
     build.dispose();
     askBar.dispose();
