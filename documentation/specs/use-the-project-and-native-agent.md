@@ -316,6 +316,14 @@ gets the owner decision line only on the user's instruction (AGENTS.md rule).
 | **AGENTS.md snippet** | `guide.ts:276` `buildAgentsSnippet`, Settings "Lines for AGENTS.md" | only where the user pastes it | manual |
 | **Settings section** | `settings-view.ts:323` "Help your agent find your designs": guide row, skill row ("Built in…", Remove old copy), snippet | the user | three rows |
 
+**Since the follow-up commit 73361c0** (after T1 to T11) two rows of this table changed. The note is short (six
+lines at most, about 750 to 1 000 characters: designs folder, where to save, load the skill and where its
+reference files are, the Use the project line, the three tools, and the check command without the tool). The
+`design-chamber` skill ships `reference/design-practice.md` (DESIGN-RULES §4) and `reference/questions.md`
+(QUESTIONS.md) beside SKILL.md, built by `buildDesignChamberSkill` in `scripts/build-skill.mjs`; SKILL.md ≤ 20 000,
+each reference doc ≤ 12 000, all ≤ 40 000. The note names the absolute reference folder from
+`findSkillReferenceDir`. `docs/SPEC.md` §11.6 has the details.
+
 **Answer to the user's question.** Design Chamber already ships a real skill with the extension, always on,
 plus an instructions note in every chat (owner decision 2026-11-10). Inside OpenChamber nobody needs to paste
 anything. The AGENTS.md lines only help an agent **outside** OpenChamber (the OpenCode TUI, Claude Code in a
@@ -795,4 +803,6 @@ The code is the authority; these are the places it differs from the text above.
     `codemode: false`, like `design_check`.
 13. **Docs outside the T11 list:** `documentation/pages/viewer.md` (the Follows the project chip and the Change…
     list) was updated too.
-
+14. **Follow-up 73361c0: a short note and a skill with `reference/`.** The note lost the lines §2.5 planned to keep
+    (page vs canvas, blocks, commands, systems, folders) and kept six; the drop order over the cap is the command
+    line, then the reference sentence. §2.1 and `docs/SPEC.md` §11.6 describe it.

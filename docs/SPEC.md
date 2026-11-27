@@ -415,7 +415,8 @@ because designs live in the designs root, not in a project. Two of four block sl
 `dist/status/` (IIFE, own `status.css`); (9) `src/ui/blocks/main.ts` → `dist/blocks/` (IIFE, own
 `blocks.css`); (10) `dist/skills/design-chamber/SKILL.md` from `buildBundledSkill`
 (`src/shared/agent/skill-doc.ts`, imported with Node's type stripping) over `rules/**`, plus
-`presets/<id>.md` copies. The new frames never touch `src/ui/styles.css`.
+`presets/<id>.md` copies and, since 73361c0, `reference/` (`buildDesignChamberSkill` in
+`scripts/build-skill.mjs`, §11.6). The new frames never touch `src/ui/styles.css`.
 
 **Checks**: `npm run guest-check` (`scripts/guest-check.mjs`) bundles the SDK's own `check-guest.ts`
 with esbuild and runs it with Node (F24); CI runs it after `npm run check`. `test/package-tree.test.ts`
@@ -2509,14 +2510,33 @@ Claude Code harness inside OpenChamber alike.
 - **Bundled skill** (`src/shared/agent/skill-doc.ts` `buildBundledSkill`, build step (10)):
   frontmatter `name: design-chamber` and `SKILL_DESCRIPTION`; a short workflow with no absolute path;
   `rules/DESIGN-RULES.md` and `rules/QUESTIONS.md` wrapped by `rules-doc.ts` `verbatim`; the offline rules
-  (`renderingSection`); the check section; `presets/<id>.md` beside it. `rules-doc.ts` exports those
+  (`renderingSection`); the check section; `presets/<id>.md` beside it. **Since the use-the-project follow-up
+  (73361c0)** the skill is SKILL.md plus a `reference/` folder, built by `buildDesignChamberSkill` in
+  `scripts/build-skill.mjs`. SKILL.md (≤ `BUNDLED_SKILL_TEXT_MAX` 20 000) holds What you can do, How to work,
+  `rules/DESIGN-RULES.md` verbatim **without §4** (`splitDesignRules`; §4 is replaced by a pointer), a short
+  Questions to ask (four rules and a pointer), the offline rules and the check. `reference/`
+  (`SKILL_REFERENCE_DOCS`, built by `buildSkillReferenceDocs`) holds `design-practice.md` (DESIGN-RULES §4
+  verbatim) and `questions.md` (`rules/QUESTIONS.md` verbatim), each ≤ `SKILL_REFERENCE_DOC_MAX` 12 000, together ≤
+  `SKILL_REFERENCE_TOTAL_MAX` 40 000. The build reads and judges every input before writing anything and fails
+  with one sentence on: a missing rules file, an invalid preset, a missing `## 4. Design best practices` heading,
+  SKILL.md over its cap or without its `name: design-chamber` line, a reference doc over its cap or with an em
+  dash, the docs over their total, or a doc SKILL.md names that was not built. `rules-doc.ts` exports those
   pieces, and `checkSection` widens to `{ tool, command }` so RULES.md and the skill name `design_check`
   first. `rules/**` stays the source of truth.
-- **Use the project additions** (`documentation/specs/use-the-project-and-native-agent.md` §2.5, §2.6): the note
-  gains two lines, the Use the project line (`PROJECT_LINE` in `guide.ts`, word for word in the note, the skill and
-  the guide) and "To see the library, the user's pins and what they have open, use design_list and design_read."
-  A root long enough to pass the cap drops the command clause first, then these two lines (the skill has them),
-  then throws. `startInstructions` reports the global note's state through `onStatus` (`pending` until the host
+- **Use the project additions** (`documentation/specs/use-the-project-and-native-agent.md` §2.5, §2.6). **The
+  note is now short** (follow-up 73361c0; about 750 characters with a usual Linux root and no reference folder,
+  about 1 000 with both paths), six lines at most: Design Chamber is on and the designs folder; save each design in
+  its own `<root>/<slug>/` folder, never loose; load the `design-chamber` skill first (design rules, the design.json
+  format, the chat blocks), plus "Its longer reference files are in `<reference folder>`." when the folder is
+  installed; `PROJECT_LINE`; one Tools line naming `design_list`, `design_read` and `design_check` ("run it before
+  you say a design is done"); and, with the launcher in place, how to check without `design_check` (Windows adds
+  "In PowerShell, put & in front."). Moved out of the note into the skill: page vs canvas, the DesignCard and
+  DirectionPick syntax, `/design` and `/page`, the design-system, repo and folder rules, and existing systems. The
+  reference folder is the absolute `<package>/dist/skills/design-chamber/reference`, found once at service start by
+  `findSkillReferenceDir` (`src/service/instructions.ts`; null when the build did not ship it, a failure logs
+  `instructions.reference-failed` and the note leaves it out) and checked by `assertRoot` like the root. Over the
+  4 096 cap the note drops the check-command line first, then the reference sentence (the skill names the folder
+  too), then throws. `startInstructions` reports the global note's state through `onStatus` (`pending` until the host
   answers or while a new text is on its way, then `saved` or `not-saved`); `GET /settings` answers it as
   `agent.instructions`, read fresh each time. The bundled skill gains a **What you can do** section (`design_list`,
   `design_read`, `design_check`, the blocks and commands, and what to read without the tools) and a description
@@ -2636,6 +2656,8 @@ Exact text: P26 §7 and `documentation/features/agent-instructions.md`. Plain im
 ```
 package.json tsconfig.json .gitignore        main agent (shared root files)
 scripts/build.mjs scripts/pack.mjs           WP0 (then main agent)
+scripts/build-skill.mjs                      main agent: both bundled skills (design-chamber with reference/,
+                                             design-system-builder), called from build.mjs steps 10 and 10b
 src/shared/types.ts api.ts limits.ts
            bridge-protocol.ts design-json.ts WP0 (types/limits/protocol; design-json parser WP0)
 src/shared/checks.ts                         check codes, sentences, parseCheckReport, counts (§9.9)
@@ -2690,7 +2712,9 @@ src/plugin/**                → dist/plugin/                            [feat/c
 src/ui/status/** model/status-model.ts → dist/status/                  [feat/work-status]
 src/ui/blocks/** model/block-args.ts model/block-view-model.ts → dist/blocks/   [feat/chat-blocks]
 src/ui/components/place-memory.ts model/place-model.ts                 [PR 1]
-dist/skills/design-chamber/  (built from rules/** by build step 10)
+dist/skills/design-chamber/  (SKILL.md, presets/, reference/; built from rules/** by build step 10,
+                              scripts/build-skill.mjs buildDesignChamberSkill, which also builds
+                              design-system-builder in step 10b)
 test/plugin/** test/shared/app-data.test.ts test/package-tree.test.ts
 test/ui/visual/scenarios/{agent-skill,work-status,chat-blocks}.mjs     each its branch
 ```
