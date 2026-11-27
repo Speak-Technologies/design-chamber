@@ -344,6 +344,22 @@ const screenPictureLines = (render: NonNullable<SystemCheckReport['render']>, ru
   return lines;
 };
 
+/**
+ * The compare sheets block (system-builder-depth T18): one line per sheet, the screen and its size, and the
+ * real-app picture it sits beside. Nothing when no sheet was made.
+ */
+const comparePictureLines = (render: NonNullable<SystemCheckReport['render']>): string[] => {
+  const sheets = render.compares ?? [];
+  if (sheets.length === 0) return [];
+  const lines = ['', 'Compare sheets (the screen as drawn on the left, the real app on the right, both at full size and top-aligned). Look for what differs:'];
+  for (const sheet of sheets) {
+    const viewport = render.screens?.viewports.find((candidate) => candidate.screen === sheet.screen && candidate.id === sheet.viewport);
+    const size = viewport === undefined ? sheet.viewport : `${viewport.label} ${viewport.width}x${viewport.height}`;
+    lines.push(`  ${fileName(sheet.png)}  ${sheet.screen} at ${size} beside ${sheet.source}`);
+  }
+  return lines;
+};
+
 /** The text `dc check --system` prints: the findings, then the board pictures to look at. */
 export const formatSystemCheckText = (input: SystemTextInput): string => {
   const findings = systemFindingsOf(input.report);
@@ -379,7 +395,7 @@ export const formatSystemCheckText = (input: SystemTextInput): string => {
     // --screen draws no board: only the screens block, which then names the run folder.
     const boardDrawn = render.widths.length > 0 || render.screens === undefined;
     if (boardDrawn) lines.push(...boardPictureLines(render, input.runDir ?? null), ...statePictureLines(render, input.reportPath));
-    lines.push(...screenPictureLines(render, input.runDir ?? null, boardDrawn && render.shots.length > 0));
+    lines.push(...screenPictureLines(render, input.runDir ?? null, boardDrawn && render.shots.length > 0), ...comparePictureLines(render));
   }
 
   if (input.reportPath !== null) lines.push('', `Full report: ${input.reportPath}`);

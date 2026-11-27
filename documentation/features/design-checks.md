@@ -288,6 +288,17 @@ Findings name `screens/<id>.html` and the viewport ("screens/home.html @ Phone 3
   `--area`, draws them.
 - **Checklist.** A `page` screen with a viewport at most 480 px wide also counts for `responsive`, and
   any `marketing` screen counts for `marketing`.
+- **Compare sheets** (T18). A screen with a `source` (a screenshot of the real app in `sources/screens/`)
+  gets `compare-<id>@<viewport>.png` for each light viewport within 2 px of the picture's width: the
+  screen as drawn on the left (all its slices stacked), a 16 px grey gap, the picture on the right, both at
+  full size and top-aligned, the shorter one padded white. A sheet is at most 20 megapixels, so a very long
+  page is cut at the bottom. A PNG is read directly; a JPEG (or a PNG Node can't read, such as a palette
+  one) is drawn once by the check's browser, offline, as the picture alone, and read back. The service
+  never opens, runs or pictures the app itself. Notes (`system-compare-skipped`): "The source picture is
+  1440 px wide; no viewport of this screen matches."; a file that isn't the PNG or JPEG its name says;
+  more than 24 sheets ("the limit is 24 per check"); or no time left in the screens' 40 seconds. The text
+  output lists each sheet with the screen, its size and the source; `check.json` has `render.compares`
+  (`{ screen, viewport, source, png }`).
 
 **Measured colour pairs.** The board's Pairs block shows each pair as "Aa Text" on the light and
 dark grounds. While measuring, the check reads each sample's text and background colour as the page

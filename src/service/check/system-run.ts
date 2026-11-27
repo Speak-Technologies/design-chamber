@@ -25,8 +25,8 @@ import {
 } from '../../shared/limits.ts';
 import { findSecretShapes } from '../../shared/secret-shapes.ts';
 import { isBoardEntryKey, parseEntryKey } from '../../shared/system-board.ts';
-import { buildSystemDetail, effectiveLayout, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
-import type { BoardLayout, CheckFindingData, RenderCheckState, SettingsFile, SystemArea, SystemDetail } from '../../shared/types.ts';
+import { buildSystemDetail, effectiveLayout, SYSTEM_AREAS, systemScreenFileOf, type SystemDetailSource } from '../../shared/system-json.ts';
+import type { ArtboardCheck, BoardLayout, CheckFindingData, RenderCheckState, SettingsFile, SystemArea, SystemDetail } from '../../shared/types.ts';
 import { BundleTooLarge, bundleDocument, createLiveFileSource, RefBlocked, type FileSource } from '../bundle.ts';
 import { createChangeHub } from '../changes.ts';
 import type { Logger, SettingsStore } from '../context.ts';
@@ -59,10 +59,12 @@ import { pictureCoverage, planBoardPictures, type PictureCoverage } from './boar
 import { browserClassOf, CheckUsageError, openCheckRun } from './engine.ts';
 import { checkBrowserArgs, launchOpenOptions, openCdp } from './cdp.ts';
 import { ensureChamberDir } from './output.ts';
-import { PngStitchError, stitchPngs } from './png-stitch.ts';
+import { decodePng, PNG_STITCH_PIXELS_MAX, PNG_STITCH_SIDE_MAX, PngStitchError, pictureSize, SIDE_BY_SIDE_GAP, stitchPngs, stitchSideBySide } from './png-stitch.ts';
+import { compareBudgetNote, planCompares, sourceDocument, type CompareSource, type CompareTarget } from './system-compare.ts';
+import { checkAsset } from '../systems/assets.ts';
 import { CHECK_RUN_DEADLINE_MS, renderArtboards, type ElementPath, type InspectPage, type InspectResult, type LoadedDocument, type PlannedArtboard, type RenderOutcome } from './render.ts';
 import { dedupeDarkScreenFindings, planScreenArtboards, screenSkippedFindings, type ScreenPlan } from './system-screens.ts';
-import { areaEmpty, contrastFindings, s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemBoardShot, type SystemCheckRender, type SystemCheckReport } from './system-static.ts';
+import { areaEmpty, contrastFindings, s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemBoardShot, type SystemCheckRender, type SystemCheckReport, type SystemCompareSheet } from './system-static.ts';
 
 export type SystemCheckRun = {
   report: SystemCheckReport;
@@ -290,6 +292,145 @@ export const pictureStates = async (
   const findings = stateFindings(results, 'wide');
   if (cut) findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: 'wide', params: { pictured: 'states', count: results.length, max: SYSTEM_STATE_SHOTS_MAX } });
   return { results, pngs, findings };
+};
+
+/**
+ * The real-app pictures of the screens the plan draws (T18), read through the draw source (contained, no
+ * link followed): a file whose bytes aren't the PNG or JPEG its name says, or whose header can't be read,
+ * is unreadable; one gone since the detail was read is left out (the next run names it missing).
+ */
+export const readCompareSources = async (source: FileSource, detail: Pick<SystemDetail, 'screens'>, plan: readonly PlannedArtboard[]): Promise<CompareSource[]> => {
+  const out: CompareSource[] = [];
+  for (const screen of detail.screens) {
+    if (screen.source === null || !plan.some((art) => art.screen === screen.id)) continue;
+    const file = await source.read(screen.source).catch((error: unknown) => {
+      if (error instanceof RefBlocked) return null;
+      throw error;
+    });
+    if (file === null) continue;
+    const size = checkAsset(screen.source, 'source', file.bytes).ok ? pictureSize(file.bytes) : null;
+    out.push(size === null ? { screen: screen.id, source: screen.source, ok: false } : { screen: screen.id, source: screen.source, ok: true, ...size, bytes: file.bytes });
+  }
+  return out;
+};
+
+/** A compare transcode's document name: the source's own path (one artboard per picture). */
+export const compareFileOf = (target: Pick<CompareTarget, 'source'>): string => target.source.source;
+
+/** The bands a source picture is read back in, px (a full-size board tile's height). */
+const COMPARE_BAND = 900;
+/** Below this much time left the browser isn't started again for the pictures Node can't read. */
+const COMPARE_TRANSCODE_MIN_MS = 3000;
+
+/**
+ * The compare sheets (T18): for each target whose light screen artboard was drawn, the screen's slices
+ * stacked, then the source at its own size beside it (`stitchSideBySide`), saved as
+ * `compare-<id>@<viewport>.png`. A source Node can't decode (a JPEG, a palette PNG) is drawn by the
+ * browser once (`transcode`, the inspect path: the picture alone, read back as PNG bands). Past `deadline`
+ * the rest are one note; a picture that can't be stitched is the unreadable note.
+ */
+export const makeCompareSheets = async (input: {
+  targets: readonly CompareTarget[];
+  artboards: readonly ArtboardCheck[];
+  slices: ReadonlyMap<string, readonly Buffer[]>;
+  budgetMs: number;
+  savePng: (art: PlannedArtboard, slice: number, slices: number, bytes: Buffer, label?: string) => Promise<string>;
+  transcode: (plan: PlannedArtboard[], inspect: (page: InspectPage, art: PlannedArtboard) => Promise<InspectResult | null>, budgetMs: number) => Promise<RenderOutcome>;
+  clock?: () => number;
+}): Promise<{ sheets: SystemCompareSheet[]; findings: CheckFindingData[] }> => {
+  const clock = input.clock ?? Date.now;
+  const deadline = clock() + input.budgetMs;
+  const sheets: SystemCompareSheet[] = [];
+  const findings: CheckFindingData[] = [];
+  const unreadable = new Set<string>();
+  const noteUnreadable = (target: CompareTarget): void => {
+    if (unreadable.has(target.screen)) return;
+    unreadable.add(target.screen);
+    findings.push({ code: 'system-compare-skipped', file: systemScreenFileOf(target.screen), screen: target.screen, viewport: null, detail: cleanDetail(`${target.screen}: ${target.source.source}`, CHECK_DETAIL_MAX) });
+  };
+  // Only artboards drawn whole: the screen's own findings say why one wasn't.
+  const ready = input.targets.flatMap((target) => {
+    const artboard = input.artboards.find((candidate) => candidate.ok && candidate.screen === target.screen && candidate.viewport === target.viewport.id);
+    const slices = input.slices.get(`${target.screen}|${target.viewport.id}`) ?? [];
+    return artboard !== undefined && slices.length > 0 && slices.length === artboard.pngs.length ? [{ target, slices, width: artboard.width }] : [];
+  });
+  const sheetHeightOf = (width: number, sourceWidth: number): number => Math.min(PNG_STITCH_SIDE_MAX, Math.floor(PNG_STITCH_PIXELS_MAX / (width + SIDE_BY_SIDE_GAP + sourceWidth)));
+
+  // Each source as a PNG Node reads: its own bytes when they decode, else the browser's picture of it.
+  const sourcePngs = new Map<string, Buffer>();
+  const toDraw = new Map<string, { target: CompareTarget; height: number }>();
+  for (const { target, width } of ready) {
+    const known = target.source.source;
+    if (sourcePngs.has(known) || toDraw.has(known)) continue;
+    let readable = false;
+    if (target.source.type === 'png') {
+      try {
+        decodePng(target.source.bytes);
+        readable = true;
+      } catch (error) {
+        if (!(error instanceof PngStitchError)) throw error;
+      }
+    }
+    if (readable) sourcePngs.set(known, target.source.bytes);
+    else toDraw.set(known, { target, height: Math.min(target.source.height, sheetHeightOf(width, target.source.width)) });
+  }
+  const notDrawn = new Set<string>();
+  if (toDraw.size > 0) {
+    const left = deadline - clock();
+    if (left < COMPARE_TRANSCODE_MIN_MS) {
+      for (const known of toDraw.keys()) notDrawn.add(known);
+    } else {
+      const plan: PlannedArtboard[] = [...toDraw.values()].map(({ target, height }) => ({
+        file: compareFileOf(target),
+        screen: target.screen,
+        viewport: { id: target.viewport.id, label: target.viewport.label, width: target.source.width, height: Math.min(height, COMPARE_BAND) },
+      }));
+      const drawn = await input.transcode(
+        plan,
+        async (page, art) => {
+          const wanted = toDraw.get(art.file);
+          if (wanted === undefined) return null;
+          const bands: Buffer[] = [];
+          for (let y = 0; y < wanted.height; y += COMPARE_BAND) {
+            await page.scrollTo(y);
+            bands.push(await page.capture({ y, height: Math.min(COMPARE_BAND, wanted.height - y) }));
+          }
+          sourcePngs.set(art.file, bands.length === 1 && bands[0] !== undefined ? bands[0] : stitchPngs(bands));
+          return { findings: [], docHeight: wanted.height, pngs: [] };
+        },
+        left,
+      );
+      // Not reached for want of time: the budget note; drawn and failed: unreadable.
+      for (const art of plan.slice(plan.length - drawn.notRendered)) notDrawn.add(art.file);
+    }
+  }
+
+  const late: CompareTarget[] = [];
+  for (const { target, slices } of ready) {
+    const known = target.source.source;
+    if (notDrawn.has(known) || clock() >= deadline) {
+      late.push(target);
+      continue;
+    }
+    const sourcePng = sourcePngs.get(known);
+    if (sourcePng === undefined) {
+      noteUnreadable(target);
+      continue;
+    }
+    let sheet: Buffer;
+    try {
+      const screenPng = slices.length === 1 && slices[0] !== undefined ? slices[0] : stitchPngs(slices);
+      sheet = stitchSideBySide([screenPng, sourcePng]);
+    } catch (error) {
+      if (!(error instanceof PngStitchError)) throw error;
+      noteUnreadable(target);
+      continue;
+    }
+    const art: PlannedArtboard = { file: systemScreenFileOf(target.screen), screen: target.screen, viewport: target.viewport };
+    sheets.push({ screen: target.screen, viewport: target.viewport.id, source: known, png: await input.savePng(art, 1, 1, sheet, `compare-${target.screen}`) });
+  }
+  findings.push(...compareBudgetNote(late));
+  return { sheets, findings };
 };
 
 const fileOfEntry = (entry: string): string => {
@@ -547,6 +688,12 @@ export const runSystemCheck = async (
 
     await space.checkAborted(renderInput.signal?.aborted === true || outcome.stoppedBy === 'aborted');
 
+    // T18: the screens' real-app pictures, read before the screens are drawn so their slices can be kept for the sheets.
+    const screensStarted = Date.now();
+    const compares = planCompares(screenPlan.plan.length === 0 || outcome.unavailable ? [] : await readCompareSources(drawSource, drawDetail, screenPlan.plan), screenPlan.plan);
+    const compareKeys = new Set(compares.targets.map((target) => `${target.screen}|${target.viewport.id}`));
+    const screenSlices = new Map<string, Buffer[]>();
+
     // The screens (T12b): the design check's own path (no inspect), so the design probe and analyze.ts judge
     // each screen at each viewport; the dark twins are emulated in `prefers-color-scheme: dark`.
     const screenDocuments = new Map<string, Promise<LoadedDocument>>();
@@ -570,13 +717,46 @@ export const runSystemCheck = async (
               probeSource: renderInput.probeSource,
               knownExternal,
               // `screen-<id>@<viewport>.png` (`-dark` for the dark twins, `-2` for a second slice).
-              savePng: (art, slice, slices, bytes) => space.savePng(art, slice, slices, bytes, `screen-${art.screen ?? 'screen'}`),
+              savePng: (art, slice, slices, bytes) => {
+                // A light artboard with a compare sheet to make keeps its slices in memory, in order (T18).
+                const key = `${art.screen ?? ''}|${art.viewport.id}`;
+                if (art.scheme !== 'dark' && compareKeys.has(key)) screenSlices.set(key, [...(slice === 1 ? [] : (screenSlices.get(key) ?? [])), bytes]);
+                return space.savePng(art, slice, slices, bytes, `screen-${art.screen ?? 'screen'}`);
+              },
               artboardTimeoutMs: renderInput.budgets?.screenMs ?? CHECK_ARTBOARD_TIMEOUT_MS,
               runBudgetMs: boardRuns ? screensMs : runMs,
               ...(renderInput.signal ? { signal: renderInput.signal } : {}),
             });
 
     await space.checkAborted(renderInput.signal?.aborted === true || screenOutcome.stoppedBy === 'aborted');
+
+    // T18: the compare sheets, in what is left of the screens' time.
+    const sheets = await makeCompareSheets({
+      targets: compares.targets,
+      artboards: screenOutcome.artboards,
+      slices: screenSlices,
+      budgetMs: (boardRuns ? screensMs : runMs) - (Date.now() - screensStarted),
+      savePng: space.savePng,
+      transcode: (plan, inspectSource, budgetMs) =>
+        loop({
+          openBrowser,
+          deadlineAt,
+          plan,
+          kind: 'page',
+          loadDocument: async (file) => {
+            const target = compares.targets.find((candidate) => compareFileOf(candidate) === file);
+            return target === undefined ? { ok: false, reason: 'missing' } : { ok: true, html: sourceDocument(target.source) };
+          },
+          probeSource: renderInput.probeSource,
+          knownExternal,
+          savePng: space.savePng,
+          inspect: inspectSource,
+          artboardTimeoutMs: renderInput.budgets?.screenMs ?? CHECK_ARTBOARD_TIMEOUT_MS,
+          runBudgetMs: budgetMs,
+          ...(renderInput.signal ? { signal: renderInput.signal } : {}),
+        }),
+    });
+    await space.checkAborted(renderInput.signal?.aborted === true);
 
     const findings: CheckFindingData[] = boardFindings(outcome.findings, CHECK_FINDINGS_MAX);
     // Pairs Node couldn't judge from the values, as the board painted them (a pair judged statically is not judged again),
@@ -605,6 +785,8 @@ export const runSystemCheck = async (
     findings.push(
       ...dedupeDarkScreenFindings(screenOutcome.findings, screenPlan.plan),
       ...screenSkippedFindings({ overLimit: screenPlan.overLimit, notRendered: screenPlan.plan.slice(screenPlan.plan.length - screenOutcome.notRendered), stoppedBy: screenOutcome.stoppedBy }),
+      ...compares.findings,
+      ...sheets.findings,
     );
     if (outcome.unavailable || screenOutcome.unavailable) {
       findings.push({ code: 'render-failed', file: null, screen: null, viewport: null, detail: "This browser build can't be driven. Set another browser in Settings." });
@@ -637,10 +819,11 @@ export const runSystemCheck = async (
       schemes,
       ...(screensDrawn ? { screens: { artboards: screenOutcome.artboards, viewports: screenPlan.viewports } } : {}),
       ...(statePassRan && okWidths.has('wide') ? { states: keptStates } : {}),
+      ...(compares.targets.length > 0 ? { compares: sheets.sheets } : {}),
     };
     const report = systemCheckReport({ ...base, findings: reportStatic, render });
     const reportPath = await writeSystemCheckReport(systemDir, report);
-    const keptRels = [...outcome.artboards, ...screenOutcome.artboards].flatMap((artboard) => artboard.pngs);
+    const keptRels = [...outcome.artboards, ...screenOutcome.artboards].flatMap((artboard) => artboard.pngs).concat(sheets.sheets.map((sheet) => sheet.png));
     await space.finish(keptRels, input.now.getTime());
     return { report, detail, reportPath, pngs: keptRels.map((rel) => path.join(systemDir, ...rel.split('/'))) };
   } finally {

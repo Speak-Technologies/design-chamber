@@ -589,7 +589,15 @@ export type SystemCheckRender = {
    * Absent when the pass didn't run (another `--area`, `--screen`, a report from before Phase 3).
    */
   states?: StateResult[];
+  /**
+   * The compare sheets (system-builder-depth T18): a screen's light artboard beside its real-app picture
+   * (`source`, under `sources/screens/`). Absent when no screen drawn has a source that matched a viewport.
+   */
+  compares?: SystemCompareSheet[];
 };
+
+/** One compare sheet: the screen, the viewport it was drawn at, the source it is set beside, the picture. */
+export type SystemCompareSheet = { screen: string; viewport: string; source: string; png: string };
 
 /** One area at one width: its overview (the whole area scaled down) and its full-size tiles. */
 export type SystemBoardShot = {

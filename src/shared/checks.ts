@@ -452,6 +452,18 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
         : `The example labels ${num(count)} states its CSS doesn't style: forced on the element, they change nothing you can see. Style them, or remove the labels.`;
     },
   },
+  // T18: `px` = the source's width when no viewport matches; `reason` limit or budget with `count` (and `max`); neither = unreadable.
+  'system-compare-skipped': {
+    severity: 'info',
+    sentence: (f) => {
+      const count = Math.max(1, Math.round(f.params?.count ?? 1));
+      const sheets = count === 1 ? '1 compare sheet was' : `${num(count)} compare sheets were`;
+      if (f.params?.reason === 'limit') return `${sheets} not made (the limit is ${num(f.params.max)} per check). Use --screen <id> to compare the rest.`;
+      if (f.params?.reason === 'budget' || f.params?.reason === 'failures') return `${sheets} not made (the check ran out of time). Use --screen <id> to compare the rest.`;
+      if (f.params?.px !== undefined) return `The source picture is ${num(f.params.px)} px wide; no viewport of this screen matches. Save a screenshot as wide as one of its viewports.`;
+      return "The source picture can't be read as a PNG or JPEG, so no compare sheet was made.";
+    },
+  },
   // ---- end system-builder-depth Phase 3 ----
   'system-board-partial': {
     severity: 'info',

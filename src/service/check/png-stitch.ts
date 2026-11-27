@@ -182,3 +182,83 @@ export const stitchPngs = (strips: readonly Buffer[]): Buffer => {
   }
   return encodePng({ width, height, channels, rows });
 };
+
+/** The gap between pictures side by side, px, and its colour (a light grey that reads on white and on a dark screen). */
+export const SIDE_BY_SIDE_GAP = 16;
+const GAP_GREY = 0xd0;
+
+/**
+ * One picture from pictures laid left to right, top-aligned at their own size (system-builder-depth T17
+ * frames, T18 compare sheets), with `gap` px of grey between them; a shorter one is padded white below.
+ * Each is cut to `maxHeight` (default: as tall as the bounds allow), so a long page still makes a sheet;
+ * the result is RGBA. Throws `PngStitchError` when a picture can't be read or the width alone is too large.
+ */
+export const stitchSideBySide = (pictures: readonly Buffer[], options: { gap?: number; maxHeight?: number } = {}): Buffer => {
+  if (pictures.length === 0) throw new PngStitchError('No pictures to stitch.');
+  const gap = Math.max(0, Math.floor(options.gap ?? SIDE_BY_SIDE_GAP));
+  const decoded = pictures.map(decodePng);
+  const width = decoded.reduce((sum, picture) => sum + picture.width, 0) + gap * (decoded.length - 1);
+  if (width > PNG_STITCH_SIDE_MAX) throw new PngStitchError('The stitched picture would be too large.');
+  const fits = Math.min(PNG_STITCH_SIDE_MAX, Math.floor(PNG_STITCH_PIXELS_MAX / width), Math.floor(options.maxHeight ?? PNG_STITCH_SIDE_MAX));
+  const height = Math.min(fits, Math.max(...decoded.map((picture) => picture.height)));
+  if (height < 1) throw new PngStitchError('The stitched picture would be too large.');
+  const rows: Buffer[] = [];
+  for (let y = 0; y < height; y += 1) {
+    const out = Buffer.alloc(width * 4, 0xff);
+    let left = 0;
+    decoded.forEach((picture, index) => {
+      const row = y < picture.height ? picture.rows[y] : undefined;
+      if (row !== undefined) {
+        for (let x = 0; x < picture.width; x += 1) {
+          const at = (left + x) * 4;
+          for (let c = 0; c < 3; c += 1) out[at + c] = row[x * picture.channels + c] ?? 0xff;
+          out[at + 3] = picture.channels === 4 ? (row[x * 4 + 3] ?? 0xff) : 0xff;
+        }
+      }
+      left += picture.width;
+      if (index < decoded.length - 1) {
+        for (let x = 0; x < gap; x += 1) {
+          const at = (left + x) * 4;
+          out[at] = GAP_GREY;
+          out[at + 1] = GAP_GREY;
+          out[at + 2] = GAP_GREY;
+        }
+        left += gap;
+      }
+    });
+    rows.push(out);
+  }
+  return encodePng({ width, height, channels: 4, rows });
+};
+
+/** A picture's kind and size from its header (PNG IHDR, JPEG SOF), or null when it is neither or broken. */
+export const pictureSize = (bytes: Buffer): { type: 'png' | 'jpeg'; width: number; height: number } | null => {
+  if (bytes.length >= 24 && bytes.subarray(0, 8).equals(SIGNATURE) && bytes.toString('latin1', 12, 16) === 'IHDR') {
+    const width = bytes.readUInt32BE(16);
+    const height = bytes.readUInt32BE(20);
+    return width > 0 && height > 0 ? { type: 'png', width, height } : null;
+  }
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  // Segments after SOI: each marker 0xFF xx, then a 2-byte length, until a start-of-frame names the size.
+  let at = 2;
+  while (at + 4 <= bytes.length) {
+    if (bytes[at] !== 0xff) return null;
+    const marker = bytes[at + 1] ?? 0;
+    if (marker === 0xff) {
+      at += 1; // fill byte
+      continue;
+    }
+    if (marker === 0xd9 || marker === 0xda) return null; // end of image or scan data before any frame header
+    const length = bytes.readUInt16BE(at + 2);
+    if (length < 2) return null;
+    const startOfFrame = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (startOfFrame) {
+      if (at + 9 > bytes.length) return null;
+      const height = bytes.readUInt16BE(at + 5);
+      const width = bytes.readUInt16BE(at + 7);
+      return width > 0 && height > 0 ? { type: 'jpeg', width, height } : null;
+    }
+    at += 2 + length;
+  }
+  return null;
+};

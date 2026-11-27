@@ -500,7 +500,9 @@ export type CheckCode =
   | 'system-icons-mixed'
   // ---- end system-builder-depth Phase 2 ----
   // ---- system-builder-depth Phase 3, Wave 0 (§13 T16) ----
-  | 'system-state-unstyled';
+  | 'system-state-unstyled'
+  // T18: a screen's compare sheet that wasn't made (the source's width, an unreadable picture, the cap or the time)
+  | 'system-compare-skipped';
   // ---- end system-builder-depth Phase 3 ----
 
 export type CheckSeverity = 'error' | 'warning' | 'info';
@@ -1069,8 +1071,8 @@ export type SystemScreen = {
   // ---- system-builder-depth Phase 3, Wave 0 (§13 T18) ----
   /**
    * `system.json` `screens[].source`: a screenshot of the real app, exactly `sources/screens/<name>.png`
-   * (relative to the system folder), for the check's compare sheet. Agent reference only: never copied,
-   * exported or put on the living page. null when absent; T18 reads and validates it (null until then).
+   * (or `.jpg`, `.jpeg`; relative to the system folder), for the check's compare sheet. Agent reference only:
+   * never copied, exported or put on the living page. null when absent or refused (an entry problem says why).
    */
   source: string | null;
   // ---- end system-builder-depth Phase 3 ----
