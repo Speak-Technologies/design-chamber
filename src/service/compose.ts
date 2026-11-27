@@ -39,6 +39,7 @@ import { registerSettingsRoutes } from './routes/settings.ts';
 import { registerStatusRoutes } from './routes/status.ts';
 import { registerSystemAssetRoutes } from './routes/system-assets.ts';
 import { registerSystemBoardRoutes } from './routes/system-board.ts';
+import { registerSystemScreenRoutes } from './routes/system-screens.ts';
 import { registerSystemBuildRoutes } from './routes/system-build.ts';
 import { registerSystemChatRoutes } from './routes/system-chat.ts';
 import { registerSystemChecksRoutes } from './routes/system-checks.ts';
@@ -279,6 +280,8 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   registerDesignSystemRoutes(router, ctx);
   registerFoldersRoutes(router, ctx);
   registerSystemBuildRoutes(router, ctx);
+  // system-builder-depth Phase 2 (§13 T12a): system screens render; a Wave 0 stub until T12a.
+  registerSystemScreenRoutes(router, ctx);
   // Phase 2.6 routes: POST /memberships (folders.ts, AD-2) and POST /systems/register (systems/register.ts, AD-10).
   registerMembershipsRoutes(router, ctx);
   registerSystemRegisterRoutes(router, ctx);

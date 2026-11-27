@@ -145,7 +145,7 @@ test('a scan of a project: tokens by section, fonts and logos, things for the ag
   const summary = summaryOf(answer);
   assert.equal(summary.directory, project.root);
   assert.equal(summary.partial, false);
-  assert.deepEqual(summary.counts, { colours: 3, typography: 0, spacing: 1, radius: 1, shadows: 0, layers: 1, sizes: 0, other: 0, fonts: 2, logos: 1 });
+  assert.deepEqual(summary.counts, { colours: 3, typography: 0, spacing: 1, radius: 1, shadows: 0, motion: 0, layers: 1, sizes: 0, other: 0, fonts: 2, logos: 1 });
   assert.deepEqual(summary.files, [
     { path: 'tokens/base.json', found: 2 },
     { path: 'src/styles/theme.css', found: 5 },

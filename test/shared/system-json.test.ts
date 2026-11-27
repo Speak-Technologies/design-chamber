@@ -484,6 +484,16 @@ describe('sectionFingerprints and deriveReview', () => {
     assert.equal(deriveReview({ ...reviewed, status: 'draft' }, changed).changesToReview, false);
   });
 
+  test('a section missing from the Ready record (added later, like motion) is not judged', () => {
+    const fingerprints = sectionFingerprints(buildSystemDetail(base(), RULES));
+    // A system marked Ready before system-builder-depth Phase 2 has no motion fingerprint recorded.
+    const { motion: _motion, ...olderReady } = fingerprints;
+    const ready = state({ status: 'ready', readyFingerprints: olderReady });
+    assert.equal(deriveReview(ready, fingerprints).changesToReview, false);
+    // A section that was recorded and changed still counts.
+    assert.equal(deriveReview(ready, { ...fingerprints, colours: '9'.repeat(64) }).changesToReview, true);
+  });
+
   test('the note of a matching review travels with it', () => {
     const fingerprints = sectionFingerprints(buildSystemDetail(base(), RULES));
     const read = deriveReview(state({ review: { spacing: { state: 'needs-work', fingerprint: fingerprints.spacing, at: NOW, note: 'Tighter.' } } }), fingerprints);
@@ -766,16 +776,24 @@ describe('builder depth contract (system-builder-depth.md §4.3)', () => {
       { fg: '--accent-fg', bg: '--accent', use: 'text', note: '', auto: true },
       { fg: '--on-brand', bg: '--brand', use: 'text', note: '', auto: true },
     ]);
-    const { depth: _depth, pairs: _pairs, outOfScope: _outOfScope, ...rest } = detail;
+    // system-builder-depth Phase 2 adds icons, screens, viewports and the motion section.
+    assert.deepEqual(detail.icons, []);
+    assert.deepEqual(detail.screens, []);
+    assert.deepEqual(detail.review.motion, { state: 'not-reviewed', note: null });
+    const { depth: _depth, pairs: _pairs, outOfScope: _outOfScope, icons: _icons, screens: _screens, viewports: _viewports, ...rest } = detail;
+    const { motion: _motionReview, ...review } = rest.review;
     const old = {
       ...rest,
+      review,
       components: detail.components.map(({ sizes: _sizes, ...component }) => component),
       patterns: detail.patterns.map(({ example: _example, ...entry }) => entry),
       brand: detail.brand.map(({ example: _example, ...entry }) => entry),
     };
     assert.equal(JSON.stringify(old), JSON.stringify(before.detail));
-    // Every fingerprint is the one 0.7.0 computed, so no review and no Ready system moves.
-    assert.deepEqual(sectionFingerprints(detail, OLD_SYSTEM_HASHES), before.fingerprints);
+    // Every fingerprint is the one 0.7.0 computed, so no review and no Ready system moves; `motion` is
+    // new in Phase 2 and absent from older Ready records, so `deriveReview` does not judge it.
+    const { motion: _motionPrint, ...prints } = sectionFingerprints(detail, OLD_SYSTEM_HASHES);
+    assert.deepEqual(prints, before.fingerprints);
   });
 
   test('depth: tokens, core and full read; absent is null; anything else is a problem on depth only', () => {
@@ -936,8 +954,9 @@ describe('builder depth contract (system-builder-depth.md §4.3)', () => {
   });
 
   test('the checklist topic ids are the closed list the spec names', () => {
-    assert.equal(SYSTEM_TOPIC_IDS.length, 33);
-    assert.equal(new Set(SYSTEM_TOPIC_IDS).size, 33);
+    // 33 in Phase 1; system-builder-depth Phase 2 adds icons (T11).
+    assert.equal(SYSTEM_TOPIC_IDS.length, 34);
+    assert.equal(new Set(SYSTEM_TOPIC_IDS).size, 34);
     assert.ok(SYSTEM_TOPIC_IDS.length <= SYSTEM_OUT_OF_SCOPE_MAX);
   });
 

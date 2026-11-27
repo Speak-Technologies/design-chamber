@@ -243,6 +243,8 @@ export const TOPIC_LABEL: Readonly<Record<SystemTopicId, string>> = Object.freez
   'brand-colour': 'Brand colour',
   imagery: 'Imagery',
   marketing: 'Marketing',
+  // system-builder-depth Phase 2 (T11).
+  icons: 'Icons',
 });
 
 /** Fields a detail from before system-builder-depth lacks; the service always sends them, tests and older fixtures may not. */

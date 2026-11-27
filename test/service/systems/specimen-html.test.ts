@@ -40,7 +40,7 @@ test('sections sit under the four area headings in board order', () => {
   const order = [...html.matchAll(/data-dc-(area|section)="([a-z]+)"/g)].map((match) => `${match[1]}:${match[2]}`);
   assert.deepEqual(order, [
     'area:foundations',
-    ...['overview', 'colours', 'typography', 'spacing', 'radius', 'shadows', 'layers', 'sizes'].map((id) => `section:${id}`),
+    ...['overview', 'colours', 'typography', 'spacing', 'radius', 'shadows', 'motion', 'layers', 'sizes'].map((id) => `section:${id}`),
     'area:components',
     'section:components',
     'area:patterns',

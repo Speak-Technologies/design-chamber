@@ -242,6 +242,7 @@ const SECTION_TITLES: Readonly<Record<SystemSection, string>> = {
   spacing: 'Spacing',
   radius: 'Radius',
   shadows: 'Shadows',
+  motion: 'Motion',
   layers: 'Layers',
   sizes: 'Sizes',
   components: 'Components',

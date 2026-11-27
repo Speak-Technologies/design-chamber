@@ -301,6 +301,7 @@ const SECTION_HEADINGS: Readonly<Record<TokenSection, string>> = {
   spacing: 'Spacing',
   radius: 'Radius',
   shadows: 'Shadows',
+  motion: 'Motion',
   layers: 'Layers',
   sizes: 'Sizes',
   other: 'Other tokens',

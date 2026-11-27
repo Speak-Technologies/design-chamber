@@ -17,6 +17,7 @@
 // on the order the two tasks land in.
 
 import { sha256Hex } from './agent/ownership.ts';
+import { defaultViewports } from './design-json.ts';
 import {
   BOARD_LAYOUT_TEXT_MAX,
   BUILD_PROBLEM_VALUE_MAX,
@@ -101,6 +102,8 @@ export const AREA_OF_SECTION: Readonly<Record<SystemSection, SystemArea>> = Obje
   spacing: 'foundations',
   radius: 'foundations',
   shadows: 'foundations',
+  // system-builder-depth Phase 2 (§13 T10a): after shadows, in board order.
+  motion: 'foundations',
   layers: 'foundations',
   sizes: 'foundations',
   components: 'components',
@@ -1348,6 +1351,10 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
     depth,
     pairs,
     outOfScope,
+    // system-builder-depth Phase 2 Wave 0 stubs: T11 reads `icons`, T12a reads `screens` and `viewports`.
+    icons: [],
+    screens: [],
+    viewports: defaultViewports('canvas'),
   };
   const derived = deriveReview(state, sectionFingerprints(detail, source.hashes ?? {}));
   detail.review = derived.review;
@@ -1413,6 +1420,7 @@ export const sectionFingerprints = (detail: SystemDetail, hashes: Readonly<Recor
     spacing: tokensOf(['spacing']),
     radius: tokensOf(['radius']),
     shadows: tokensOf(['shadows']),
+    motion: tokensOf(['motion']),
     layers: tokensOf(['layers']),
     sizes: tokensOf(['sizes', 'other']),
     components: detail.components.map((component) => ({
@@ -1449,7 +1457,10 @@ export const deriveReview = (
       recorded !== undefined && recorded.fingerprint === fingerprints[section] ? { state: recorded.state, note: recorded.note ?? null } : { state: 'not-reviewed', note: null };
   }
   const ready = state.readyFingerprints;
-  const changesToReview = state.status === 'ready' && ready !== null && SYSTEM_SECTIONS.some((section) => ready[section] !== fingerprints[section]);
+  // A section missing from the Ready record (one added after the system was marked Ready, such as
+  // `motion`) is not judged: it would otherwise show "changes to review" on every older Ready system.
+  const changesToReview =
+    state.status === 'ready' && ready !== null && SYSTEM_SECTIONS.some((section) => ready[section] !== undefined && ready[section] !== fingerprints[section]);
   return { review, changesToReview };
 };
 

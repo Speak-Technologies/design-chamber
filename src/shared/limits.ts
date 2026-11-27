@@ -421,8 +421,11 @@ export const SYSTEM_NOTE_MAX = 20_000;
 export const SYSTEM_USAGE_NOTE_MAX = 500;
 export const SYSTEM_EXAMPLE_MAX = 20_000;
 export const SYSTEM_JSON_MAX_BYTES = 1_048_576;
-/** Files and bytes across a system's assets/ and sources/. */
-export const SYSTEM_FILES_MAX = 200;
+/**
+ * Files and bytes across a system's assets/ and sources/. 400 since system-builder-depth Phase 2
+ * (owner decision 6), so a full icon set fits; it was 200.
+ */
+export const SYSTEM_FILES_MAX = 400;
 export const SYSTEM_BYTES_MAX = 100 * 1024 * 1024;
 export const SYSTEM_FONT_MAX_BYTES = 5 * 1024 * 1024;
 export const SYSTEM_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -563,6 +566,26 @@ export const SYSTEM_GAP_TOPICS_SHOWN = 8;
 /** Example labels (`data-dc-variant|size|state`) read per example file, and characters of one value. */
 export const SYSTEM_EXAMPLE_LABELS_MAX = 500;
 export const SYSTEM_EXAMPLE_LABEL_VALUE_MAX = 40;
+
+// ---- System builder depth Phase 2, Wave 0 (documentation/specs/system-builder-depth.md §13 T10 to T12) ----
+
+/** A motion duration token's value range, in milliseconds (`ms` or `s`; T10a). */
+export const SYSTEM_MOTION_DURATION_MAX_MS = 10_000;
+/** `steps(n)` easings take n from 1 to this (T10a). */
+export const SYSTEM_MOTION_STEPS_MAX = 100;
+/** Entries of `system.json` `icons` (owner decision 6; T11). */
+export const SYSTEM_ICONS_MAX = 150;
+/** Entries of `system.json` `screens` (T12a). */
+export const SYSTEM_SCREENS_MAX = 24;
+/** Characters of one `screens/<id>.html` (T12a). */
+export const SYSTEM_SCREEN_MAX = 60_000;
+/**
+ * The screen pass's share of `SYSTEM_CHECK_RENDER_BUDGET_MS` when a system has screens (T12b, §16): the
+ * board passes keep the other 70 s, so the run stays under the check tool's 180 s kill.
+ */
+export const SYSTEM_CHECK_SCREENS_BUDGET_MS = 40_000;
+
+// ---- end System builder depth Phase 2 ----
 /** The staged living page, in UTF-8 bytes (encoded assets included). */
 export const LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
 /** One font or logo embedded into the living page. */

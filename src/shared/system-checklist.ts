@@ -14,6 +14,9 @@ export const SYSTEM_TOPIC_IDS: readonly SystemTopicId[] = Object.freeze([
   'components', 'examples', 'focus-disabled',
   'voice', 'navigation', 'overlays', 'forms', 'feedback', 'states', 'data-display', 'accessibility', 'responsive',
   'logo', 'brand-colour', 'imagery', 'marketing',
+  // system-builder-depth Phase 2 Wave 0: listed so `outOfScope` accepts it; T11 adds it to TOPICS
+  // (full, foundations) with its rule. Until then no depth asks for it, so it raises no gap.
+  'icons',
 ] as const);
 
 const TOPIC_SET: ReadonlySet<string> = new Set(SYSTEM_TOPIC_IDS);

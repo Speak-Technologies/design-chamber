@@ -179,7 +179,7 @@ const readCandidate = async (file: string, maxBytes: number): Promise<Exclude<Re
   }
 };
 
-const emptyCounts = (): ScanSummary['counts'] => ({ colours: 0, typography: 0, spacing: 0, radius: 0, shadows: 0, layers: 0, sizes: 0, other: 0, fonts: 0, logos: 0 });
+const emptyCounts = (): ScanSummary['counts'] => ({ colours: 0, typography: 0, spacing: 0, radius: 0, shadows: 0, motion: 0, layers: 0, sizes: 0, other: 0, fonts: 0, logos: 0 });
 
 export type ScanInput = {
   /** The project folder's realpath (already through `validateScanFolder`). */

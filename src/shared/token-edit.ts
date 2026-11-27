@@ -39,6 +39,8 @@ const SECTION_SHAPES: Readonly<Record<TokenSection, string>> = {
   shadows: 'Use a shadow, like 0 1px 2px rgb(0 0 0 / 0.2), or none.',
   layers: 'Use a whole number, like 10, or auto.',
   typography: PLAIN_SHAPE,
+  // system-builder-depth Phase 2 Wave 0 stub: T10a gives motion its time and easing shape.
+  motion: PLAIN_SHAPE,
   other: PLAIN_SHAPE,
 };
 
@@ -218,6 +220,8 @@ const sectionValid = (section: TokenSection, text: string): boolean => {
       return isLayer(text);
     case 'typography':
     case 'other':
+    // system-builder-depth Phase 2 Wave 0 stub: T10a validates a time or an easing here.
+    case 'motion':
       return true;
   }
 };

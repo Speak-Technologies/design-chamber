@@ -689,6 +689,9 @@ const partsOf = (detail: SystemDetail, section: SystemSection, options: Specimen
       return visualParts(detail, 'radius', 'Radius', 'No radius tokens yet.', (name) => `<div${styled('dc-radius-box', `border-radius: var(${name})`)}></div>`);
     case 'shadows':
       return visualParts(detail, 'shadows', 'Shadows', 'No shadow tokens yet.', (name) => `<div${styled('dc-shadow-box', `box-shadow: var(${name})`)}></div>`);
+    case 'motion':
+      // system-builder-depth Phase 2 Wave 0 stub: T10b draws the duration bars, curves and demo chip.
+      return { title: 'Motion', body: '', empty: 'No motion tokens yet.' };
     case 'layers':
       return layersParts(detail, styled);
     case 'sizes':

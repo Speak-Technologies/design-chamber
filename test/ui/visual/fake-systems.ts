@@ -128,7 +128,7 @@ export const sampleSystems = (): SystemSummary[] => [
 /** What a scan of a real app finds (the spec's own example sentence). */
 export const sampleScan = (directory: string): ScanSummary => ({
   directory,
-  counts: { colours: 48, typography: 9, spacing: 12, radius: 4, shadows: 3, layers: 0, sizes: 0, other: 0, fonts: 3, logos: 2 },
+  counts: { colours: 48, typography: 9, spacing: 12, radius: 4, shadows: 3, motion: 0, layers: 0, sizes: 0, other: 0, fonts: 3, logos: 2 },
   files: Array.from({ length: 14 }, (_, n) => ({ path: n < 3 ? `src/styles/tokens-${n + 1}.css` : `src/components/part-${n}.module.css`, found: 20 - n })),
   skipped: [{ path: 'public/bundle.min.css', reason: 'larger than 1 MB' }],
   assets: [
@@ -151,7 +151,7 @@ export const sampleScan = (directory: string): ScanSummary => ({
 
 const EMPTY_SCAN = (directory: string): ScanSummary => ({
   directory,
-  counts: { colours: 0, typography: 0, spacing: 0, radius: 0, shadows: 0, layers: 0, sizes: 0, other: 0, fonts: 0, logos: 0 },
+  counts: { colours: 0, typography: 0, spacing: 0, radius: 0, shadows: 0, motion: 0, layers: 0, sizes: 0, other: 0, fonts: 0, logos: 0 },
   files: [],
   skipped: [],
   assets: [],
@@ -185,7 +185,7 @@ const locationSummary = (directory: string, location: { project: string; rel: st
   if (rel === 'design-system' || rel === 'full-system') {
     return {
       directory,
-      counts: { colours: 24, typography: 2, spacing: 0, radius: 0, shadows: 3, layers: 0, sizes: 0, other: 0, fonts: 1, logos: 0 },
+      counts: { colours: 24, typography: 2, spacing: 0, radius: 0, shadows: 3, motion: 0, layers: 0, sizes: 0, other: 0, fonts: 1, logos: 0 },
       // Paths here are relative to the scanned folder, as the service's walk reports them; location.read is project-relative.
       files: [
         { path: 'tokens.css', found: 18 },
@@ -210,7 +210,7 @@ const locationSummary = (directory: string, location: { project: string; rel: st
   if (/incomplete|style-guide/i.test(rel)) {
     return {
       directory,
-      counts: { colours: 8, typography: 0, spacing: 0, radius: 0, shadows: 0, layers: 0, sizes: 0, other: 0, fonts: 0, logos: 0 },
+      counts: { colours: 8, typography: 0, spacing: 0, radius: 0, shadows: 0, motion: 0, layers: 0, sizes: 0, other: 0, fonts: 0, logos: 0 },
       files: [{ path: 'tokens.css', found: 8 }],
       skipped: [],
       assets: [],
@@ -231,7 +231,7 @@ const locationSummary = (directory: string, location: { project: string; rel: st
   if (rel === 'packages/ui/tokens') {
     return {
       directory,
-      counts: { colours: 79, typography: 0, spacing: 0, radius: 0, shadows: 0, layers: 0, sizes: 64, other: 0, fonts: 0, logos: 0 },
+      counts: { colours: 79, typography: 0, spacing: 0, radius: 0, shadows: 0, motion: 0, layers: 0, sizes: 64, other: 0, fonts: 0, logos: 0 },
       files: [{ path: 'tokens.css', found: 79 }, { path: 'sizes.css', found: 64 }],
       skipped: [],
       assets: [],
@@ -252,7 +252,7 @@ const locationSummary = (directory: string, location: { project: string; rel: st
   }
   return {
     directory,
-    counts: { colours: 6, typography: 0, spacing: 0, radius: 0, shadows: 0, layers: 0, sizes: 0, other: 0, fonts: 0, logos: 0 },
+    counts: { colours: 6, typography: 0, spacing: 0, radius: 0, shadows: 0, motion: 0, layers: 0, sizes: 0, other: 0, fonts: 0, logos: 0 },
     files: [{ path: 'tokens.css', found: 6 }],
     skipped: [],
     assets: [],
@@ -346,7 +346,7 @@ const LIVING_SENTENCE: Record<NonNullable<SystemSummary['livingPage']>, string> 
   unreadable: 'Design Chamber can’t read the living page.',
 };
 
-const SECTIONS: readonly SystemSection[] = ['overview', 'colours', 'typography', 'spacing', 'radius', 'shadows', 'layers', 'sizes', 'components', 'patterns', 'brand', 'assets'];
+const SECTIONS: readonly SystemSection[] = ['overview', 'colours', 'typography', 'spacing', 'radius', 'shadows', 'motion', 'layers', 'sizes', 'components', 'patterns', 'brand', 'assets'];
 
 const detailOf = (summary: SystemSummary): SystemDetail => ({
   id: summary.id,
@@ -392,6 +392,9 @@ const detailOf = (summary: SystemSummary): SystemDetail => ({
   depth: null,
   pairs: [],
   outOfScope: [],
+  icons: [],
+  screens: [],
+  viewports: [{ id: 'laptop', label: 'Laptop', width: 1280, height: 800 }, { id: 'phone', label: 'Phone', width: 390, height: 844 }],
 });
 
 
