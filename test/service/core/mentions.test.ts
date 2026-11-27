@@ -280,7 +280,8 @@ describe('resolve', () => {
   test('a removed folder under a live root is 404, not a 500', async (t) => {
     const { call, core } = await serve(t);
     const record = await core.store.create({ kind: 'page', title: 'Gone soon', html: '<!doctype html><h1>Hi</h1>' });
-    await rm(record.path, { recursive: true, force: true });
+    // Windows can answer ENOTEMPTY while a just-closed handle lets go; rm retries those.
+    await rm(record.path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     assert.equal((await call('/mentions/resolve', { id: record.slug })).status, 404);
   });
 });
