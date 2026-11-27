@@ -26,7 +26,7 @@ import {
   type PendingChange,
   type PendingMap,
 } from '../model/system-edit-model.ts';
-import { COLOUR_GROUP_LABEL, NOT_COVERED, isCovered, tokensOf } from '../model/system-page-model.ts';
+import { COLOUR_GROUP_LABEL, NOT_COVERED, PAIR_MEASURED, entryKindLabel, isCovered, pairViews, scopeView, tokensOf, type PairGround, type PairView } from '../model/system-page-model.ts';
 
 export type SectionContext = {
   detail: SystemDetail;
@@ -316,6 +316,7 @@ const componentRow = (ctx: SectionContext, id: string): HTMLElement | null => {
     ),
     labelled('Note', noteField(ctx, 'components', component.id, component.note, component.name)),
     chips('Variants', component.variants),
+    chips('Sizes', component.sizes),
     chips('States', component.states),
     chips('Uses', component.tokens),
     component.undefinedTokens.length > 0 ? h('p', { class: 'dc-sp-problem' }, `Uses ${plural(component.undefinedTokens.length, 'value')} this system doesn’t define: ${component.undefinedTokens.join(', ')}.`) : null,
@@ -353,7 +354,7 @@ const entryTextRows = (ctx: SectionContext, kind: 'pattern' | 'brand'): HTMLElem
   const list = kind === 'pattern' ? ctx.detail.patterns : ctx.detail.brand;
   return list.map((entry) =>
     wrapRow(ctx, entryKey(kind, entry.id), [
-      h('div', { class: 'dc-sp-entry-head' }, h('span', { class: 'dc-sp-name' }, entry.title), h('span', { class: 'dc-muted' }, entry.kind)),
+      h('div', { class: 'dc-sp-entry-head' }, h('span', { class: 'dc-sp-name' }, entry.title), h('span', { class: 'dc-muted' }, entryKindLabel(entry.kind))),
       entry.problem ? h('p', { class: 'dc-sp-problem' }, entry.problem) : null,
       entry.text ? h('p', { class: 'dc-sp-body' }, entry.text) : null,
       labelled('Note', noteField(ctx, kind === 'pattern' ? 'patterns' : 'brand', entry.id, entry.note, entry.title)),
@@ -375,6 +376,53 @@ const logoRows = (ctx: SectionContext): HTMLElement[] =>
   ctx.detail.logos.map((logo, index) =>
     wrapRow(ctx, entryKey('logo', String(index)), [h('div', { class: 'dc-sp-entry-head' }, h('span', { class: 'dc-sp-name' }, logo.variant), h('span', { class: 'dc-muted' }, 'Logo')), h('code', { class: 'dc-muted dc-mono' }, logo.file), logo.note ? h('p', { class: 'dc-sp-body' }, logo.note) : null]),
   );
+
+// ---- Colour pairs and scope (system-builder-depth) ----
+
+/** A colour sample ("Aa") drawn from the system's own values; a value that isn't a plain colour is left to the check. */
+const pairSample = (ground: PairGround): HTMLElement => {
+  const node = h('span', { class: 'dc-sp-pair-sample', 'aria-hidden': 'true', 'data-scheme': ground.scheme }, 'Aa');
+  if (ground.fg !== null && ground.bg !== null && checkValue('colours', null, ground.fg).ok && checkValue('colours', null, ground.bg).ok) {
+    node.style.setProperty('color', ground.fg);
+    node.style.setProperty('background-color', ground.bg);
+  } else node.dataset.empty = 'true';
+  return node;
+};
+
+const pairGround = (ground: PairGround): HTMLElement =>
+  h(
+    'div',
+    { class: 'dc-sp-pair-ground', 'data-low': ground.low ? 'true' : 'false', role: 'group', 'aria-label': ground.ariaLabel },
+    pairSample(ground),
+    h('span', { class: 'dc-sp-label' }, ground.label),
+    // Colour is never the only sign: a low ratio says so in words as well as in the warning tone.
+    h('span', { class: `dc-sp-pair-ratio${ground.ratio === PAIR_MEASURED ? ' dc-muted' : ' dc-mono'}` }, ground.ratio, ground.low ? h('strong', { class: 'dc-sp-pair-low' }, ' Too low') : null),
+  );
+
+const pairRow = (ctx: SectionContext, pair: PairView): HTMLElement =>
+  wrapRow(ctx, entryKey('pair', String(pair.index)), [
+    h('div', { class: 'dc-sp-entry-head' }, h('code', { class: 'dc-sp-name' }, pair.name), pair.auto ? h('span', { class: 'dc-muted dc-sp-flags' }, 'Found from the token names') : null),
+    h('p', { class: 'dc-muted dc-sp-pair-use' }, pair.use),
+    h('div', { class: 'dc-sp-pair-grounds' }, ...pair.grounds.map(pairGround)),
+    pair.note !== '' ? h('p', { class: 'dc-sp-body' }, pair.note) : null,
+  ]);
+
+/** The Overview's scope block: how complete the system means to be and what it left out on purpose. Nothing for an older system. */
+const scopeBlock = (ctx: SectionContext): HTMLElement | null => {
+  const scope = scopeView(ctx.detail);
+  if (scope === null) return null;
+  return h(
+    'section',
+    { class: 'dc-sp-group dc-sp-scope', 'aria-label': 'Scope' },
+    h('h3', { class: 'dc-sp-group-title' }, 'Scope'),
+    h(
+      'div',
+      { class: 'dc-sp-entry dc-sp-scope-body' },
+      scope.depth === null ? null : h('p', { class: 'dc-sp-scope-line' }, h('strong', { class: 'dc-sp-scope-depth' }, scope.depth.label), scope.depth.sentence),
+      scope.leftOut.length === 0 ? null : chips('Left out on purpose', scope.leftOut),
+    ),
+  );
+};
 
 const group = (title: string, rows: HTMLElement[]): HTMLElement =>
   h('section', { class: 'dc-sp-group', 'aria-label': title }, h('h3', { class: 'dc-sp-group-title' }, title), h('ul', { class: 'dc-sp-entries' }, ...rows));
@@ -402,6 +450,8 @@ export const renderSection = (ctx: SectionContext, section: SystemSection): HTML
     case 'overview': {
       const rows = overviewRows(ctx);
       root.append(rows.length === 0 ? emptyNote(section) : h('ul', { class: 'dc-sp-entries' }, ...rows));
+      const scope = scopeBlock(ctx);
+      if (scope !== null) root.append(scope);
       break;
     }
     case 'typography': {
@@ -436,6 +486,9 @@ export const renderSection = (ctx: SectionContext, section: SystemSection): HTML
         const rows = tokens.filter((token) => (token.group ?? 'other') === name).map((token) => tokenRow(ctx, token));
         if (rows.length > 0) root.append(group(COLOUR_GROUP_LABEL[name], rows));
       }
+      // Pairs follow the groups, as on the board; a system without any shows nothing here (no empty heading).
+      const pairs = pairViews(detail);
+      if (pairs.length > 0) root.append(group('Pairs', pairs.map((pair) => pairRow(ctx, pair))));
       break;
     }
     default: {

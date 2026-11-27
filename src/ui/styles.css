@@ -3907,11 +3907,15 @@ button.dc-syspg-title:focus-visible {
   font-size: 0.75rem;
   color: var(--dc-warning-text);
 }
+/* Three lines at most: depth and what was left out sit on this line too, and must not be cut off on the rail. */
 .dc-syspg-home {
   font-size: 0.8125rem;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .dc-syspg-living {
   display: flex;
@@ -4363,6 +4367,67 @@ button.dc-sp-value:focus-visible {
   border: 1px solid var(--dc-hair);
   border-radius: 999px;
   font-size: 0.75rem;
+}
+
+/* Colour pairs: the use, then one ground per scheme with its sample and ratio */
+.dc-sp-pair-use {
+  margin: 0;
+  font-size: 0.75rem;
+}
+.dc-sp-pair-grounds {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--dc-s2);
+}
+.dc-sp-pair-ground {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: 'sample label' 'sample ratio';
+  align-items: center;
+  column-gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-sp-pair-ground > .dc-sp-pair-sample {
+  grid-area: sample;
+}
+.dc-sp-pair-ground > .dc-sp-label {
+  grid-area: label;
+}
+.dc-sp-pair-ground > .dc-sp-pair-ratio {
+  grid-area: ratio;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.dc-sp-pair-sample {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 28px;
+  border: 1px solid var(--oc-border);
+  border-radius: var(--dc-r);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.dc-sp-pair-sample[data-empty='true'] {
+  background: repeating-linear-gradient(45deg, transparent 0 4px, var(--dc-hair) 4px 5px);
+  color: var(--oc-muted);
+}
+.dc-sp-pair-low {
+  font-weight: 600;
+  color: var(--dc-warning-text);
+}
+
+/* The Overview's scope block */
+.dc-sp-scope-body {
+  cursor: default;
+}
+.dc-sp-scope-line {
+  margin: 0;
+  font-size: 0.8125rem;
+}
+.dc-sp-scope-depth {
+  display: block;
 }
 
 /* Edit bar and review foot */

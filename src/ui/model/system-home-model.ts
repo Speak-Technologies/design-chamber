@@ -5,6 +5,7 @@
 import type { RepoResyncReview, SystemDetail } from '../../shared/types.ts';
 import { relativeTime, plural } from './format.ts';
 import { secretLine, UNSAFE_SENTENCE } from './living-page-model.ts';
+import { homeTitle, scopeParts } from './system-page-model.ts';
 
 export type HomeDetail = Pick<SystemDetail, 'name' | 'home' | 'unreadable' | 'buildProblem' | 'snapshot' | 'landed' | 'livingPage' | 'changesToReview' | 'codeDrift' | 'agentDrift' | 'build'>;
 
@@ -96,9 +97,9 @@ export const systemBanners = (detail: HomeDetail, options: BannerOptions): Banne
 export const readOnlyLine = (detail: Pick<HomeDetail, 'name' | 'home'>): { lead: string; rest: string } | null =>
   detail.home.kind === 'repo' ? { lead: `${detail.name} lives in ${detail.home.label}.`, rest: 'Change the values there, or ask the agent here.' } : null;
 
-/** "Repo · shop · design-system/", the full path as its tooltip. */
-export const repoHeaderLine = (detail: Pick<HomeDetail, 'home'>): { text: string; title: string } | null =>
-  detail.home.kind === 'repo' ? { text: `Repo · ${detail.home.label} · ${detail.home.folder.replace(/\/+$/, '')}/`, title: detail.home.directory } : null;
+/** "Repo · shop · design-system/ · Core system", the full path (and what was left out) as its tooltip. */
+export const repoHeaderLine = (detail: Pick<HomeDetail, 'home'> & Parameters<typeof scopeParts>[0]): { text: string; title: string } | null =>
+  detail.home.kind === 'repo' ? { text: [`Repo · ${detail.home.label} · ${detail.home.folder.replace(/\/+$/, '')}/`, ...scopeParts(detail)].join(' · '), title: homeTitle(detail) } : null;
 
 // ---------------------------------------------------------------- drift (§5.12)
 
