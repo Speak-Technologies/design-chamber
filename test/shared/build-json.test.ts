@@ -5,7 +5,11 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { buildProblemSentence, parseBuildJson, parseSystemState } from '../../src/shared/system-json.ts';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
+import { parseSystemQuestions } from '../../src/shared/agent/system-questions.ts';
+import { BUILD_PLATFORMS, buildProblemSentence, parseBuildJson, parseSystemState } from '../../src/shared/system-json.ts';
 import { repoHomeShapeProblem, type OtherRepoHome, type RepoHomeRequest } from '../../src/shared/systems.ts';
 import type { BuildProblemReason } from '../../src/shared/types.ts';
 import { readLivingPageMark } from '../../src/service/systems/living-safe.ts';
@@ -179,6 +183,63 @@ describe('buildProblemSentence', () => {
     );
     const changed = { ...state, buildProblem: { reason: 'home-changed' as const, value: '' }, home: { kind: 'repo' as const, directory: '/home/you/shop', folder: 'ds', livingPage: 'ds/index.html', adoptedAt: '2026-11-20T10:00:00.000Z' } };
     assert.equal(buildProblemSentence(changed), "Acme already has files in shop, so its home can't change. Make a new system to move it.");
+  });
+});
+
+describe('system-builder-depth T3: BUILD.json depth and platforms', () => {
+  const internal = (extra: Record<string, unknown>): string => JSON.stringify({ version: 1, name: 'Acme', home: 'internal', ...extra });
+
+  test('the platforms ids BUILD.json accepts are the interview\'s own, and depth is the round-one depth choices', () => {
+    const set = parseSystemQuestions(readFileSync(path.resolve(import.meta.dirname, '../../rules/SYSTEM-QUESTIONS.md'), 'utf8'));
+    const choices = (round: typeof set.roundOne, topic: string): string[] => (round.find((question) => question.topic === topic)?.options ?? []).map((option) => option.choice);
+    assert.deepEqual([...choices(set.roundTwo, 'platforms')].sort(), [...BUILD_PLATFORMS].sort());
+    assert.deepEqual([...choices(set.roundOne, 'depth')].sort(), ['core', 'full', 'tokens']);
+  });
+
+  test('each depth and a platforms list read as written', () => {
+    for (const depth of ['tokens', 'core', 'full']) {
+      const parsed = parseBuildJson(internal({ depth, platforms: ['laptop-phone'] }));
+      assert.deepEqual(parsed.problems, [], depth);
+      assert.equal(parsed.build?.depth, depth);
+      assert.deepEqual(parsed.build?.platforms, ['laptop-phone']);
+    }
+    assert.deepEqual(parseBuildJson(internal({ platforms: ['phone-first', 'custom'] })).build?.platforms, ['phone-first', 'custom']);
+  });
+
+  test('absent or null: no key on the build, no problem (an older record reads exactly as before)', () => {
+    for (const extra of [{}, { depth: null, platforms: null }]) {
+      const parsed = parseBuildJson(internal(extra));
+      assert.deepEqual(parsed.problems, []);
+      assert.ok(parsed.build !== null && !Object.hasOwn(parsed.build, 'depth') && !Object.hasOwn(parsed.build, 'platforms'));
+    }
+  });
+
+  test('depth "huge" is a problem on depth only, and the build is still adopted', () => {
+    const parsed = parseBuildJson(internal({ depth: 'huge', mode: 'fix', dark: true }));
+    assert.equal(parsed.unreadable, null);
+    assert.notEqual(parsed.build, null);
+    assert.deepEqual(parsed.problems, [{ entry: 'depth', message: 'depth in BUILD.json must be tokens, core or full.' }]);
+    assert.ok(!Object.hasOwn(parsed.build ?? {}, 'depth'));
+    assert.equal(parsed.build?.mode, 'fix', 'the other fields stand');
+    assert.equal(parsed.build?.dark, true);
+    for (const depth of [1, 'Core', ['core'], '']) assert.deepEqual(parseBuildJson(internal({ depth })).problems.map((p) => p.entry), ['depth'], JSON.stringify(depth));
+  });
+
+  test('platforms off the closed set, repeated, over 4 or not a list is a problem on platforms only', () => {
+    for (const platforms of [['tablet'], ['laptop', 'laptop'], ['laptop-phone', 'phone-first', 'laptop', 'custom', 'laptop'], 'laptop', [1], { 0: 'laptop' }]) {
+      const parsed = parseBuildJson(internal({ platforms }));
+      assert.notEqual(parsed.build, null, JSON.stringify(platforms));
+      assert.deepEqual(parsed.problems.map((p) => p.entry), ['platforms'], JSON.stringify(platforms));
+      assert.ok(!Object.hasOwn(parsed.build ?? {}, 'platforms'));
+    }
+    assert.deepEqual(parseBuildJson(internal({ platforms: [] })).build?.platforms, []);
+  });
+
+  test('a __proto__ key is ignored, never read as depth', () => {
+    const parsed = parseBuildJson('{"version":1,"name":"Acme","home":"internal","__proto__":{"depth":"full"}}');
+    assert.deepEqual(parsed.problems, []);
+    assert.ok(!Object.hasOwn(parsed.build ?? {}, 'depth'));
+    assert.equal(parsed.build?.depth, undefined);
   });
 });
 

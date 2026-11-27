@@ -9,7 +9,10 @@
 
 import { LIVING_PAGE_FORAPPLIED_WAIT_MS, SYSTEM_SKILL_TEXT_MAX } from '../limits.ts';
 import { CHECK_TOOL_NAME } from './guide.ts';
-import { BOARD_PICTURES_SENTENCE, SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE } from './system-rules.ts';
+import { SYSTEM_ROUND_TWO_TOPICS } from './system-questions.ts';
+import { BOARD_PICTURES_SENTENCE, systemContractSection, SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE, systemReferenceSentence } from './system-rules.ts';
+
+export { SYSTEM_REFERENCE_DOCS, SYSTEM_REFERENCE_FOLDER } from './system-rules.ts';
 
 /** The skill's name; it must never equal a command name (`design-system`), or the host hides the command (AD-16). */
 export const SYSTEM_SKILL_NAME = 'design-system-builder';
@@ -22,7 +25,20 @@ export type SystemSkillInput = {
   systemQuestions: string;
   /** `systemContractSection()` lines (one source with a system's RULES.md, §8.4). */
   contract: readonly string[];
+  /**
+   * Where the reference docs are (system-builder-depth §4.1): `'beside'` in the built SKILL.md (the
+   * folder ships next to it), the absolute folder in a ticket file, null when the folder isn't
+   * installed (the pointer is left out; the rest of the skill is unchanged).
+   */
+  reference: 'beside' | { folder: string } | null;
 };
+
+/** The words that say where the reference docs are, or null to leave the pointer out. */
+const referenceWhere = (reference: SystemSkillInput['reference']): string | null =>
+  reference === null ? null : reference === 'beside' ? 'in the reference folder next to this file' : `in ${reference.folder}`;
+
+/** The contract the builder skill and every ticket file carry: RULES.md's, with the layout bullet as a pointer (system-builder-depth §5). */
+export const builderSkillContract = (): string[] => systemContractSection({ layoutDetail: 'pointer' });
 
 /** The skill text is over `SYSTEM_SKILL_TEXT_MAX`; the build and the ticket route refuse it. */
 export class SystemSkillTooLongError extends Error {
@@ -59,11 +75,11 @@ const asking = (): string[] => [
   '- Use SystemAsk only in a chat with a /design-system ticket; never for other diffs. When the block is available, ship each round and the diff as a block, and say the round or the diff in your reply as text too. If the block can\'t be shown or the user types instead, ask the same thing in text; a typed reply is always valid.',
   '- Write each block in a fenced openui-lang code block whose first line is root = Stack([...]). The arguments are positional: kind, ticket, systemId, proposalId, calls. Leave the ones a kind does not use as empty strings.',
   '  - Round one: root = Stack([SystemAsk("interview-1", "<ticket>")])',
-  '  - Round two: root = Stack([SystemAsk("interview-2", "", "<system id>", "", "<calls>")]) where <calls> is a JSON array of at most 8 objects { "topic", "why", "proposed" }: topic is one of status-colours, greys, access, typography, dark-values; why is the finding in at most 300 characters (counts and files, never file contents beyond the short values the call needs); proposed is the value you propose, at most 200 characters. Pass only the calls the findings raise.',
+  `  - Round two: root = Stack([SystemAsk("interview-2", "", "<system id>", "", "<calls>")]) where <calls> is a JSON array of at most 8 objects { "topic", "why", "proposed" }: topic is one of ${SYSTEM_ROUND_TWO_TOPICS.join(', ')}; why is the finding in at most 300 characters (counts and files, never file contents beyond the short values the call needs); proposed is the value you propose, at most 200 characters. Pass only the calls the findings raise.`,
   '  - The diff: root = Stack([SystemAsk("diff", "", "<system id>", "<proposal id>")])',
   '- The block draws the questions from the same interview text as this skill, with the recommended answers pre-selected. Each answer is one readable sentence, then one marker line you parse:',
-  '  - [SystemAsk ticket=sb_… round=1 home=repo mode=fix coverage=foundations,components,patterns,brand dark=not-now]',
-  '  - [SystemAsk system=acme round=2 status-colours=brand-tuned greys=brand-tinted typography=one-font access=dev]',
+  '  - [SystemAsk ticket=sb_… round=1 home=repo mode=fix coverage=foundations,components,patterns,brand depth=core dark=not-now]',
+  '  - [SystemAsk system=acme round=2 status-colours=brand-tuned greys=brand-tinted typography=one-font navigation=keep access=dev]',
   '  - [SystemAsk system=acme approve=p_… sha=<16 hex> parts=system-files,docs,living-page skipped=token-fixes]',
   '  - [SystemAsk system=acme decline=p_… then=describe] or then=stop',
   '- What each answer means:',
@@ -77,10 +93,19 @@ const asking = (): string[] => [
 const recording = (): string[] => [
   '## Recording the answers',
   '',
-  '- After round one, write `_systems/<id>/BUILD.json` (`version: 1`, `ticket`, `name`, `home`, `repo`, `code`, `mode`, `dark`, `calls`, `access`, `round`, `applied: null`, and `existing` when you started from an existing system). Update it after round two (`round: 2`, then `"done"`). Record the block\'s ids as the answers: the topic and choice ids of the interview, with the note the user added.',
+  '- After round one, write `_systems/<id>/BUILD.json` (`version: 1`, `ticket`, `name`, `home`, `repo`, `code`, `mode`, `depth`, `dark`, `calls`, `access`, `round`, `applied: null`, and `existing` when you started from an existing system). Update it after round two (`round: 2`, then `"done"`). Record the block\'s ids as the answers: the topic and choice ids of the interview, with the note the user added. Round two adds `platforms`, a list holding the platforms choice id. Copy `depth` into system.json too: the check reads it there.',
   '- The id: lower-case letters, digits and dashes from the name; if `_systems/<id>` exists, add -2.',
   '- `home` is `internal` (the system lives in Design Chamber) or `repo` (it lives in the project, in `repo.folder`, default `design-system/`). A repo home must be the project folder of this chat or a folder inside it.',
   '- OVERVIEW.md names the home, the mode, the covered areas and the dark-mode decision. For describe only it says: Describes the intended system; the code was left unchanged.',
+];
+
+/** How complete the system is meant to be, where the reference docs are, and outOfScope (system-builder-depth §4.1, §4.5). */
+const depth = (where: string | null): string[] => [
+  '## Depth and the reference docs',
+  '',
+  ...(where === null ? [] : [`- ${systemReferenceSentence(where)}`]),
+  '- `depth` sets what the check expects. Tokens: foundations only. Core: surface, text, border and brand colours, 3 status colours, 4 type styles, 4 spacing steps, a radius, a colour pair, dark values for every colour once any exists; each component with an example labelling every variant, size and state; voice; a logo when brand is covered. Full adds state colours, control sizes, breakpoints, elevation, layers, motion, 6 type styles, navigation, overlays, forms, feedback, states, data display, accessibility, responsive, brand colour, imagery and marketing.',
+  "- A topic that doesn't fit the product: ask the user first, then list its id in `outOfScope` and say why in OVERVIEW.md. An interview answer that rules it out (Motion: No motion) is that agreement. Never add one to clear a finding.",
 ];
 
 const files = (contract: readonly string[]): string[] => [
@@ -140,6 +165,9 @@ const checks = (): string[] => [
   '',
   `Check the system with the ${CHECK_TOOL_NAME} tool with { "system": "<id>" } before you say you are done. If you don't have that tool, run the check command from Design Chamber's instructions with --system <id>.`,
   BOARD_PICTURES_SENTENCE,
+  '',
+  '- Work one area at a time: write it, check it with `"area": "<area>"` (`--area <area>`; add `"scheme": "dark"` or `--scheme dark` for dark values only), open its overview, then the picture each finding names, fix it, check again.',
+  '- Before you say done: one full check with no area. No errors, every warning fixed or explained in OVERVIEW.md, and every coverage gap filled or in `outOfScope`.',
 ];
 
 /** The builder body: when it applies, the block, the interview (verbatim), recording, the files, the diff, the repo steps, access, the never list, checks. */
@@ -160,6 +188,8 @@ export const buildSystemSkillBody = (input: SystemSkillInput): string => {
     ...recording(),
     '',
     ...files(input.contract),
+    '',
+    ...depth(referenceWhere(input.reference)),
     '',
     ...reviewedDiff(),
     '',

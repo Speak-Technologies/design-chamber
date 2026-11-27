@@ -189,6 +189,17 @@ test('an internal home is adopted without a ticket, and the code folder only an 
   assert.equal(other.buildProblem ?? null, null);
 });
 
+test('system-builder-depth T3: BUILD.json with depth "huge" and bad platforms is still adopted; a good depth is adopted the same way', async (t) => {
+  const rig = await setup(t);
+  const bad = await rig.agent('huge', { version: 1, name: 'Huge', home: 'internal', depth: 'huge', platforms: ['tablet'] });
+  assert.deepEqual(bad.home, { kind: 'internal' });
+  assert.equal(bad.status, 'draft');
+  assert.equal(bad.buildProblem ?? null, null, 'a field problem never stops adoption');
+  const good = await rig.agent('core', { version: 1, name: 'Core', home: 'internal', depth: 'core', platforms: ['laptop-phone'] });
+  assert.deepEqual(good.home, { kind: 'internal' });
+  assert.equal(good.buildProblem ?? null, null);
+});
+
 test('a name clash ignoring case adopts "<name> 2" and says so', async (t) => {
   const rig = await setup(t);
   await rig.systems.create({ name: 'Acme' });

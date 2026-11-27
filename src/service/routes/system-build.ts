@@ -11,8 +11,7 @@
 import { pathToFileURL } from 'node:url';
 
 import { buildSystemBuildChip, buildSystemTicketHeader, buildSystemTicketRules } from '../../shared/agent/system-prompts.ts';
-import { systemContractSection } from '../../shared/agent/system-rules.ts';
-import { buildSystemSkillBody } from '../../shared/agent/system-skill-doc.ts';
+import { builderSkillContract, buildSystemSkillBody } from '../../shared/agent/system-skill-doc.ts';
 import type { ProposalResponse, RenderChunkResponse, RenderMeta, StopBuildResponse, SystemBuildTicketResponse, SystemChipResponse, UndoStopResponse } from '../../shared/api.ts';
 import { BRIEF_MAX, SESSION_ID_MAX, SHA256_PATTERN, SYSTEM_PROPOSAL_ID_PATTERN, SYSTEM_STOP_UNDO_PATTERN, SYSTEMS_MAX } from '../../shared/limits.ts';
 import { isReservedSystemId } from '../../shared/system-json.ts';
@@ -24,7 +23,7 @@ import { ensureProposals } from '../systems/proposals.ts';
 import { validateScanFolder } from '../systems/scan-folder.ts';
 import { ensureSystemStore, SYSTEMS_CAP_MESSAGE } from '../systems/store.ts';
 import { projectDirectoryOf } from './chat.ts';
-import { readSystemQuestions } from './presets.ts';
+import { findSystemReferenceDir, readSystemQuestions } from './presets.ts';
 import { parseBoardScheme } from './system-board.ts';
 
 type Rec = Record<string, unknown>;
@@ -73,7 +72,12 @@ export function registerSystemBuildRoutes(router: Router, ctx: ServiceContext): 
     const root = ctx.settings.root();
     // A chat in the designs folder, or with no usable project, builds an internal system (§2.12): no error.
     const projectDirectory = input.projectDirectory === null ? null : await validateScanFolder(input.projectDirectory, root).catch(() => null);
-    const skillBody = buildSystemSkillBody({ systemQuestions: await readSystemQuestions(ctx.packageRoot), contract: systemContractSection() });
+    const referenceDir = await findSystemReferenceDir(ctx.packageRoot);
+    const skillBody = buildSystemSkillBody({
+      systemQuestions: await readSystemQuestions(ctx.packageRoot),
+      contract: builderSkillContract(),
+      reference: referenceDir === null ? null : { folder: referenceDir },
+    });
     const { ticket, rulesFile } = await ensureBuildTickets(ctx).issue({
       projectDirectory,
       sessionId: input.sessionId,

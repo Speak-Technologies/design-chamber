@@ -47,6 +47,7 @@ import { livingPageState, regenerateLivingPage } from '../systems/living-page.ts
 import { ensureSystemStore } from '../systems/store.ts';
 import { ensureSystemVersions } from '../systems/versions.ts';
 import { writeRulesFile } from './chat.ts';
+import { findSystemReferenceDir } from './presets.ts';
 
 const PURPOSES: readonly SystemPromptBody['purpose'][] = ['make', 'ask', 'review', 'resync-notes', 'checks', 'continue', 'living-page', 'reconcile', 'build-continue'];
 
@@ -118,6 +119,7 @@ export function registerSystemChatRoutes(router: Router, ctx: ServiceContext): v
     // The system's RULES.md is refreshed on every prompt (§8.4); a failed refresh leaves the
     // earlier copy in place and the message still goes out, as for a design.
     const checkCommand = await ensureLauncherService(ctx).commandFor(ctx.settings.root(), `--system ${id}`);
+    const referenceDir = await findSystemReferenceDir(ctx.packageRoot);
     const rulesText = buildSystemRules({
       id,
       name: state.name,
@@ -125,6 +127,7 @@ export function registerSystemChatRoutes(router: Router, ctx: ServiceContext): v
       projectDirectory: state.build?.projectDirectory ?? state.sources.code?.project ?? state.sources.code?.directory ?? null,
       home: state.home?.kind === 'repo' ? { kind: 'repo', directory: state.home.directory, folder: state.home.folder } : { kind: 'internal' },
       checkCommand,
+      referenceDir,
     });
     try {
       await writeRulesFile(source.dir, rulesText, 'system');
@@ -170,6 +173,7 @@ export function registerSystemChatRoutes(router: Router, ctx: ServiceContext): v
             description: state.sources.description?.text ?? null,
             preset: state.sources.description?.preset ?? null,
             checkCommand,
+            referenceDir,
             maxChars,
           }),
         messageTooLong,

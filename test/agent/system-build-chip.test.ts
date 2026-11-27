@@ -15,8 +15,7 @@ import {
   buildSystemTicketRules,
   SystemPromptTooLongError,
 } from '../../src/shared/agent/system-prompts.ts';
-import { systemContractSection } from '../../src/shared/agent/system-rules.ts';
-import { buildSystemSkillBody, SYSTEM_SKILL_NAME, SystemSkillTooLongError } from '../../src/shared/agent/system-skill-doc.ts';
+import { builderSkillContract, buildSystemSkillBody, SYSTEM_SKILL_NAME, SystemSkillTooLongError } from '../../src/shared/agent/system-skill-doc.ts';
 import { BRIEF_MAX, CHIP_TEXT_HARD_MAX, SYSTEM_BUILD_HEADER_MAX, SYSTEM_SKILL_TEXT_MAX } from '../../src/shared/limits.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..', '..');
@@ -75,7 +74,7 @@ test('the ticket header fits SYSTEM_BUILD_HEADER_MAX even with the longest paths
 });
 
 test('the builder body with the real interview fits SYSTEM_SKILL_TEXT_MAX, and the rules file fits its cap', () => {
-  const body = buildSystemSkillBody({ systemQuestions: QUESTIONS, contract: systemContractSection() });
+  const body = buildSystemSkillBody({ systemQuestions: QUESTIONS, contract: builderSkillContract(), reference: 'beside' as const });
   assert.ok(body.length <= SYSTEM_SKILL_TEXT_MAX, `${body.length}`);
   assert.ok(body.includes(QUESTIONS.trim()), 'rules/SYSTEM-QUESTIONS.md is inlined verbatim');
   assert.ok(body.includes("No ticket file (no /design-system chip in this chat): don't start the interview."));
@@ -84,7 +83,7 @@ test('the builder body with the real interview fits SYSTEM_SKILL_TEXT_MAX, and t
 });
 
 test('an interview that would push the body over the cap is refused, never cut', () => {
-  assert.throws(() => buildSystemSkillBody({ systemQuestions: 'q'.repeat(SYSTEM_SKILL_TEXT_MAX), contract: [] }), SystemSkillTooLongError);
+  assert.throws(() => buildSystemSkillBody({ systemQuestions: 'q'.repeat(SYSTEM_SKILL_TEXT_MAX), contract: [], reference: null }), SystemSkillTooLongError);
   assert.throws(() => buildSystemTicketRules('h'.repeat(SYSTEM_BUILD_HEADER_MAX), 'b'.repeat(SYSTEM_SKILL_TEXT_MAX + 1)), SystemPromptTooLongError);
 });
 

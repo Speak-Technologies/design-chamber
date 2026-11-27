@@ -2,11 +2,13 @@
 // builders use. `rules/` is read from `ctx.packageRoot` on every call, so editing a rules file
 // needs no rebuild (§9.7).
 
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parsePreset } from '../../shared/agent/presets.ts';
 import type { RulesDocFiles } from '../../shared/agent/rules-doc.ts';
+import { SYSTEM_REFERENCE_FOLDER } from '../../shared/agent/system-rules.ts';
+import { SYSTEM_SKILL_NAME } from '../../shared/agent/system-skill-doc.ts';
 import type { PresetsResponse } from '../../shared/api.ts';
 import { PRESET_ID_PATTERN } from '../../shared/limits.ts';
 import type { Preset } from '../../shared/types.ts';
@@ -66,6 +68,17 @@ export const readSystemQuestions = (packageRoot: string): Promise<string> =>
   readRulesText(path.join(packageRoot, 'rules', 'SYSTEM-QUESTIONS.md')).catch(() => {
     throw notReadable('design system questions (rules/SYSTEM-QUESTIONS.md)');
   });
+
+/**
+ * The builder skill's reference docs folder (system-builder-depth §4.1), absolute, or null when the
+ * install has no such folder (the pointer line is then left out). The path comes from the package
+ * root only, never from a request or a file; nothing is written for it.
+ */
+export const findSystemReferenceDir = async (packageRoot: string): Promise<string | null> => {
+  const folder = path.join(packageRoot, 'dist', 'skills', SYSTEM_SKILL_NAME, SYSTEM_REFERENCE_FOLDER);
+  const info = await stat(folder).catch(() => null);
+  return info !== null && info.isDirectory() ? folder : null;
+};
 
 /**
  * Registers:

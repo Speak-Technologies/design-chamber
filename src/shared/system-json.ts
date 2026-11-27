@@ -1572,6 +1572,8 @@ const BUILD_TOO_LARGE = 'BUILD.json is larger than 64 KB.';
 const BUILD_PART_NAMES: readonly string[] = ['system-files', 'token-fixes', 'docs', 'living-page'];
 const BUILD_DRIFT_KINDS: readonly string[] = ['tailwind-config', 'js-theme', 'scss', 'less', 'other'];
 const BUILD_CALL_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
+/** The platforms call's choice ids (rules/SYSTEM-QUESTIONS.md `{#platforms}`, system-builder-depth §4.2); a test holds them equal. */
+export const BUILD_PLATFORMS: readonly string[] = Object.freeze(['laptop-phone', 'phone-first', 'laptop', 'custom']);
 
 /** A part list (`applied.parts`, `applied.skipped`): the four names, each at most once; null when not a list of them. */
 const buildParts = (value: unknown): string[] | null => {
@@ -1676,6 +1678,22 @@ export const parseBuildJson = (text: string): ParsedBuildJson => {
   const rawMode = own(value, 'mode');
   const mode = rawMode === 'fix' || rawMode === 'describe' || rawMode === 'none' ? rawMode : 'none';
   if (rawMode !== undefined && mode !== rawMode) broken('mode', 'mode in BUILD.json must be fix, describe or none.');
+  // system-builder-depth §4.2: closed sets; a wrong value is a problem on that field, never a refused build.
+  let depth: SystemDepth | null = null;
+  const rawDepth = own(value, 'depth');
+  if (rawDepth !== undefined && rawDepth !== null) {
+    if (typeof rawDepth === 'string' && (DEPTHS as readonly string[]).includes(rawDepth)) depth = rawDepth as SystemDepth; // Safe: checked against the closed list.
+    else broken('depth', 'depth in BUILD.json must be tokens, core or full.');
+  }
+  let platforms: string[] | null = null;
+  const rawPlatforms = own(value, 'platforms');
+  if (rawPlatforms !== undefined && rawPlatforms !== null) {
+    const ok =
+      Array.isArray(rawPlatforms) && rawPlatforms.length <= BUILD_PLATFORMS.length &&
+      rawPlatforms.every((item, index) => typeof item === 'string' && BUILD_PLATFORMS.includes(item) && rawPlatforms.indexOf(item) === index);
+    if (ok) platforms = [...(rawPlatforms as string[])]; // Safe: every item checked above.
+    else broken('platforms', 'platforms in BUILD.json must list choices from laptop-phone, phone-first, laptop and custom, each once.');
+  }
   const rawDark = own(value, 'dark');
   const dark = rawDark === true;
   if (rawDark !== undefined && typeof rawDark !== 'boolean') broken('dark', 'dark in BUILD.json must be true or false.');
@@ -1741,7 +1759,7 @@ export const parseBuildJson = (text: string): ParsedBuildJson => {
     }
   }
 
-  const build: BuildJson = { version: 1, ticket, name, home, repo, code, ...(existing !== null ? { existing } : {}), mode, dark, calls, access, round, applied, proposal, drift };
+  const build: BuildJson = { version: 1, ticket, name, home, repo, code, ...(existing !== null ? { existing } : {}), mode, ...(depth !== null ? { depth } : {}), ...(platforms !== null ? { platforms } : {}), dark, calls, access, round, applied, proposal, drift };
   return { build, raw: value, problems, unreadable: null, ...(existingRefused !== null ? { existingRefused } : {}) };
 };
 

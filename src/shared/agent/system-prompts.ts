@@ -13,7 +13,7 @@ import { CHIP_PROVIDER_ID, type BuildChipData, type Chip, type DesignKind, type 
 import { markChipUrl } from './chip.ts';
 import { clip, indentContinuation, joinFolder, oneLine, rulesPathOf } from './context.ts';
 import { CHECK_TOOL_NAME } from './guide.ts';
-import { SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE } from './system-rules.ts';
+import { SYSTEM_INJECTION_REPO_TAIL, SYSTEM_INJECTION_SENTENCE, systemReferenceSentence } from './system-rules.ts';
 
 /** The check saves pictures of the board (documentation/specs/system-board-layout-and-visual-check.md §A.5). */
 const BOARD_PICTURES_SHORT = 'The check saves pictures of the board at two widths (an overview of each area, then full size); look at them before you say you are done.';
@@ -127,6 +127,8 @@ export type SystemMakeInput = {
   description: string | null;
   preset: string | null;
   checkCommand: string | null;
+  /** The builder skill's reference docs folder, or null when it isn't installed (the line is left out). */
+  referenceDir?: string | null;
   /**
    * Phase 2.6 AD-9: the existing design system the user pointed at, inside `projectDirectory`: its
    * project-relative location ('' = the project root) and the files to read first (≤ 20 each, project-relative).
@@ -176,6 +178,7 @@ const makeLines = (input: SystemMakeInput, existing: readonly string[]): string[
     ...(description === '' ? [] : [`The user's words: "${indentContinuation(description, '  ')}"`]),
     ...(input.preset === null ? [] : [`Style preset: ${oneLine(input.preset)}`]),
     "Design Chamber already wrote the values it could read into tokens.css. Write OVERVIEW.md, the usage notes and components in system.json, and anything it couldn't read.",
+    ...(input.referenceDir === undefined || input.referenceDir === null ? [] : [systemReferenceSentence(`in ${input.referenceDir}`)]),
     `${input.projectDirectory === null ? '' : `Don't change anything in ${input.projectDirectory}. `}Write only in ${system.folder}.`,
     SYSTEM_INJECTION_SENTENCE,
     input.checkCommand === null ? `Check the system with the design_check tool with { "system": "${system.id}" } before you say you are done.` : `Check the system before you say you are done: ${input.checkCommand}`,

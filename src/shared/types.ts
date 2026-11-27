@@ -1074,6 +1074,10 @@ export type BuildJson = {
   /** Phase 2.6 AD-11: the existing-system folder the agent found, relative to the project. */
   existing?: { folder: string } | null;
   mode: 'fix' | 'describe' | 'none';
+  /** system-builder-depth §4.2: the round-one depth answer; absent when not written or not valid. */
+  depth?: SystemDepth;
+  /** system-builder-depth §4.2: the platforms choice ids (≤ 4, each once); absent when not written or not valid. */
+  platforms?: string[];
   dark: boolean;
   calls: { topic: string; choice: string; note: string }[];
   access: 'dev' | 'public' | null;
