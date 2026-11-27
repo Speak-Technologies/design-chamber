@@ -63,7 +63,7 @@ One entry with `kind: "marketing"` for the landing page and its sections:
 - **Avoid**: gradient blobs, three equal feature cards by default, stock icons in circles, fake dashboards, more than two typefaces, and any colour that is not in the system.
 - **Phone**: the hero stacks with the image after the text, calls to action go full width, and the page never needs sideways scrolling.
 
-The example draws a scaled-down hero and one feature band, at laptop and phone widths side by side.
+The example draws a scaled-down hero and one feature band, at laptop and phone widths side by side. For the whole page, add a screen of kind `marketing`.
 
 ## Social images
 
@@ -81,7 +81,15 @@ One entry with `kind: "social"`. The sizes and their safe areas:
 - Backgrounds from the brand palette or a calm photo with a scrim; text passes 4.5:1.
 - A template per size, with the variable parts named (headline, image, date).
 
-Draw each template scaled to fit the card: a frame with `aspect-ratio: 1200 / 630; width: 100%; container-type: inline-size; position: relative; overflow: hidden`, with type sized in `cqw` so it scales with the frame. Mark the safe area with a dashed outline in `--border` and say so in a caption.
+<!-- final check: screens (T12a) -->
+
+Make each template a screen of kind `marketing` at its real size, listed in `screens` with its own viewport (screen rules in `patterns.md`):
+
+```json
+{ "id": "social-link", "title": "Link preview", "kind": "marketing", "viewports": [{ "id": "og", "label": "Link preview", "width": 1200, "height": 630 }] }
+```
+
+Size the page to exactly that box with no scrolling. For the card on the brand entry, draw the template scaled down: a frame with `aspect-ratio: 1200 / 630; width: 100%; container-type: inline-size; position: relative; overflow: hidden`, with type sized in `cqw` so it scales with the frame. Mark the safe area with a dashed outline in `--border` and say so in a caption.
 
 ## Email
 
@@ -96,7 +104,7 @@ One entry with `kind: "email"`:
 - **Parts**: preheader text, header with logo, the message, one call to action, a footer with the company name, the postal address and an unsubscribe link.
 - **Production note**: real emails are built with tables and inline styles. The example only shows the design; say that in the body.
 
-The example draws one email at 600px (scaled to fit), with its light and dark grounds.
+Make the email template a screen of kind `marketing` with a fixed viewport, `{ "id": "email", "label": "Email", "width": 600, "height": 1200 }`. The brand entry's example shows it scaled down.
 
 ## Done for this area
 
