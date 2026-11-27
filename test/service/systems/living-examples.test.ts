@@ -156,6 +156,43 @@ test('a hung example times out; the rest are still drawn', async (t) => {
   }
 });
 
+const shotFailures = (ctx: FakeContext): Readonly<Record<string, unknown>>[] =>
+  ctx.logs.filter((line) => line.event === 'systems.living-examples.shot-failed').map((line) => line.fields ?? {});
+
+test('a picture that misses its window once is drawn on a second try, and the miss is logged', async (t) => {
+  const { ctx, run } = await rig(t);
+  let loads = 0;
+  const fake = createFakeBrowser({ hangs: () => (loads += 1) === 1 });
+  const shots = await run({ openBrowser: fake.open, shotTimeoutMs: 1000 });
+  assert.deepEqual(shots.filter((shot) => shot.png === null), []);
+  assert.equal(loads, shots.length + 1);
+  assert.equal(fake.opened, 1);
+  assert.deepEqual(shotFailures(ctx), [{ system: 'acme', picture: 'script', attempt: 1, error: 'no picture in 1000 ms' }]);
+});
+
+test('a picture that never loads is tried twice and no more, the second time with twice the window', async (t) => {
+  const { ctx, run } = await rig(t);
+  let spins = 0;
+  const fake = createFakeBrowser({ hangs: (html) => html.includes('Spinning') && ((spins += 1), true) });
+  const shots = await run({ openBrowser: fake.open, shotTimeoutMs: 1000 });
+  const spinner = shots.filter((shot) => shot.component === 'spinner');
+  assert.ok(spinner.every((shot) => shot.reason === 'render-failed'));
+  assert.equal(spins, spinner.length * 2);
+  // Two failed pictures, not four failed attempts: the browser is not restarted for one broken example.
+  assert.equal(fake.opened, 1);
+  assert.deepEqual(shotFailures(ctx).slice(0, 2).map((line) => [line.attempt, line.error]), [[1, 'no picture in 1000 ms'], [2, 'no picture in 2000 ms']]);
+});
+
+test('a browser that dies under a picture is restarted and that picture is drawn', async (t) => {
+  const { run } = await rig(t);
+  let session: CdpSession | null = null;
+  let loads = 0;
+  const fake = createFakeBrowser({ hangs: () => (loads += 1) === 1 && (void session?.close(), true) });
+  const shots = await run({ openBrowser: async () => (session = await fake.open()), shotTimeoutMs: 1000 });
+  assert.deepEqual(shots.filter((shot) => shot.png === null), []);
+  assert.equal(fake.opened, 2);
+});
+
 test('the batch budget leaves the rest render-failed', async (t) => {
   const { run } = await rig(t);
   let now = 0;

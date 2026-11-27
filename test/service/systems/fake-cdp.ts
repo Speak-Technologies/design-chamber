@@ -70,6 +70,8 @@ export type FakeBrowserOptions = {
   heightOf?: (html: string) => number;
   /** Documents whose load never fires (a hung page). */
   hangs?: (html: string) => boolean;
+  /** How long after its references a document's load fires (a slow machine). Default: at once. */
+  loadDelayMs?: (html: string) => number;
   /** Each start of the browser throws this many times first. */
   failStarts?: number;
 };
@@ -142,7 +144,7 @@ export const createFakeBrowser = (options: FakeBrowserOptions = {}): FakeBrowser
               const refs = referencesOf(doc);
               let left = refs.length;
               const loaded = (): void => {
-                if (options.hangs?.(doc) !== true) setImmediate(() => emit({ method: 'Page.loadEventFired', sessionId: sid, params: {} }));
+                if (options.hangs?.(doc) !== true) setTimeout(() => emit({ method: 'Page.loadEventFired', sessionId: sid, params: {} }), options.loadDelayMs?.(doc) ?? 0);
               };
               if (left === 0) loaded();
               for (const ref of refs) {
