@@ -280,7 +280,7 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   registerDesignSystemRoutes(router, ctx);
   registerFoldersRoutes(router, ctx);
   registerSystemBuildRoutes(router, ctx);
-  // system-builder-depth Phase 2 (§13 T12a): system screens render; a Wave 0 stub until T12a.
+  // system-builder-depth Phase 2 (§13 T12a): system screens render and its chunks.
   registerSystemScreenRoutes(router, ctx);
   // Phase 2.6 routes: POST /memberships (folders.ts, AD-2) and POST /systems/register (systems/register.ts, AD-10).
   registerMembershipsRoutes(router, ctx);
