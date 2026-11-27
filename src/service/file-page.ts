@@ -25,7 +25,7 @@ import { FILE_PAGE_COPY_BUDGET_MS, FILE_PAGE_COPY_MAX_BYTES, FILE_PAGE_DEDUPE_SC
 import { foldsCase, isStrictlyInside, samePath, type PathModule } from '../shared/path-compare.ts';
 import { COPY_DIR } from '../shared/system-copy.ts';
 import { bundleDocument, BundleTooLarge, createLiveFileSource, mimeOf, type FileSource, type SourceFile } from './bundle.ts';
-import type { DesignIndex, DesignRecord, DesignStore, Logger, SettingsStore } from './context.ts';
+import type { DesignIndex, DesignRecord, DesignStore, Logger, SelfWrites, SettingsStore } from './context.ts';
 import { ApiError } from './http.ts';
 import { looseTitleOf, readRegularFile } from './loose.ts';
 import { resolveInside, writeFileAtomic } from './paths.ts';
@@ -232,6 +232,8 @@ export const copyIntoDesign = async (
   plan: AssetPlan,
   entry: Uint8Array,
   overTime: () => boolean,
+  /** Called with each design-relative path and its bytes right before the write (the self-write record). */
+  beforeWrite: (rel: string, bytes: Uint8Array) => void = () => undefined,
 ): Promise<FromFileResponse['left']> => {
   const left = { ...plan.left };
   let total = 0;
@@ -255,9 +257,12 @@ export const copyIntoDesign = async (
       continue;
     }
     total += read.bytes.byteLength;
-    await writeFileAtomic(await resolveInside(designDir, segments), read.bytes);
+    const target = await resolveInside(designDir, segments);
+    beforeWrite(asset.rel, read.bytes);
+    await writeFileAtomic(target, read.bytes);
   }
   if (overTime()) throw new CopyStopped('time');
+  beforeWrite(ENTRY_FILE, entry);
   await writeFileAtomic(path.join(designDir, ENTRY_FILE), entry);
   return left;
 };
@@ -273,6 +278,8 @@ export type FilePageImporterOptions = {
   settings: Pick<SettingsStore, 'root'>;
   store: Pick<DesignStore, 'create' | 'trash' | 'get' | 'dir'>;
   designIndex: Pick<DesignIndex, 'all' | 'ready'>;
+  /** The copy's writes are Design Chamber's own: the watcher drops their echo, so the build strip never shows them as the agent. */
+  selfWrites: Pick<SelfWrites, 'record'>;
   log: Logger;
   /** Milliseconds clock for the copy budget; tests move it. */
   clock?: () => number;
@@ -288,7 +295,7 @@ export type FilePageImporter = {
 const NOTHING_LEFT: FromFileResponse['left'] = { outside: 0, missing: 0, other: 0 };
 
 export const createFilePageImporter = (options: FilePageImporterOptions): FilePageImporter => {
-  const { settings, store, designIndex, log } = options;
+  const { settings, store, designIndex, selfWrites, log } = options;
   const clock = options.clock ?? Date.now;
   const now = options.now ?? (() => new Date());
   const folds = foldsCase(path, process.platform);
@@ -409,7 +416,9 @@ export const createFilePageImporter = (options: FilePageImporterOptions): FilePa
     let left: FromFileResponse['left'];
     try {
       // record.path is the store's contained folder (resolveInside at create time).
-      left = await copyIntoDesign(record.path, folder, plan, entry, overTime);
+      left = await copyIntoDesign(record.path, folder, plan, entry, overTime, (rel, bytes) =>
+        selfWrites.record(record.slug, rel, createHash('sha256').update(bytes).digest('hex'), bytes.byteLength),
+      );
     } catch (error) {
       // The code only: a filesystem message carries a path, and the project's paths stay out of the log.
       log.warn('file-page.copy-failed', { slug: record.slug, code: error instanceof CopyStopped ? error.why : errorCode(error) || 'unknown' });

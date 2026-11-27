@@ -462,7 +462,7 @@ const handEditsOf = (block: HandEditsBlock | null): PromptResponse['handEdits'] 
  */
 export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
   const instructions = createInstructions(ctx);
-  const filePages = createFilePageImporter({ settings: ctx.settings, store: ctx.store, designIndex: ctx.designIndex, log: ctx.log });
+  const filePages = createFilePageImporter({ settings: ctx.settings, store: ctx.store, designIndex: ctx.designIndex, selfWrites: ctx.selfWrites, log: ctx.log });
   // One slot, taken exactly once: a newer request ("Open as page", a Work Status row, a chat block)
   // replaces an untaken older one.
   let openRequest: { request: OpenRequest; at: number } | null = null;

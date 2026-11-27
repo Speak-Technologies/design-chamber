@@ -678,7 +678,8 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
           log.warn('store.create-hook-failed', { slug: record.record.slug, error: error instanceof Error ? error.message : String(error) });
         }
       }
-      hub?.emit({ slug: record.record.slug, kind: 'added' });
+      // A page copied from a Files row is Design Chamber's own write, not the agent starting one (no "Writing" strip).
+      hub?.emit({ slug: record.record.slug, kind: 'added', ...(record.record.state.importedFrom !== undefined ? { origin: 'user' as const } : {}) });
       return record.record;
     },
 

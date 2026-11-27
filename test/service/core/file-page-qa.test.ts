@@ -35,6 +35,7 @@ const setup = async (t: TestContext) => {
     settings: core.ctx.settings,
     store: core.store,
     designIndex: { all: () => summaries, ready: async () => true },
+    selfWrites: core.ctx.selfWrites,
     log: core.ctx.log,
   });
   return { core, project, outside, importer };
@@ -104,6 +105,7 @@ describe('QA: from-file attacks', () => {
       settings: { root: () => '/nowhere' },
       store: { create: async () => assert.fail('create'), trash: async () => assert.fail('trash'), get: async () => assert.fail('get'), dir: async () => assert.fail('dir') },
       designIndex: { all: () => [], ready: async () => true },
+      selfWrites: { record: () => undefined },
       log: { info() {}, warn() {}, error() {} } as never,
     });
     for (const text of ['{"path":"/p/a.html","directory":null,"__proto__":{"x":1}}', '{"path":"/p/a.html","directory":null,"constructor":1}']) {

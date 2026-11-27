@@ -52,6 +52,12 @@ still fit in the toast.
 - The page is filed under the project the Files list belongs to (its folder becomes the design's
   project). It is linked to no chat: only a chip links a design to a chat.
 - The page appears only when the copy is complete: the files go in first and `index.html` last.
+- The copy is Design Chamber's own write, not the agent's: the build strip never shows "Writing"
+  for it. Each copied file is recorded before it is written, so the folder watcher drops its echo,
+  and the new design's `added` events (the store's, and the watcher's when it first sees a folder
+  whose state says it was copied) are marked as Design Chamber's. A file over 2 MB is not recorded
+  (the echo filter's size limit), so one the watcher sees land can still show as writing for a few
+  seconds.
 
 ## What is left out (and counted)
 The answer counts what wasn't copied, so the toast can say so (see What the user sees). In the viewer

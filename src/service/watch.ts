@@ -45,20 +45,47 @@
 // the service and never reaches the user.
 
 import { watch as fsWatch, type FSWatcher } from 'node:fs';
-import { lstat, readdir, stat } from 'node:fs/promises';
+import { lstat, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { SYSTEM_ID_PATTERN, WATCH_DEBOUNCE_MS, WATCH_POLL_MS } from '../shared/limits.ts';
 import { SYSTEMS_DIR } from '../shared/system-json.ts';
 import type { SystemChangeKind } from '../shared/types.ts';
-import type { ChangeHub, Logger, SelfWrites, SettingsStore } from './context.ts';
+import type { ChangeEmit, ChangeHub, Logger, SelfWrites, SettingsStore } from './context.ts';
 import { linuxRecursiveWatch } from './folder-watch.ts';
 import { isLooseHtmlName } from './loose.ts';
 import { isAtomicTempName, isSlug } from './paths.ts';
 import { isDirectory } from './root.ts';
+import { parseImportedFrom } from './store.ts';
 
 /** Top-level files whose mtime/size the poll backstop fingerprints (SPEC §9.4). */
 const TRACKED_TOP_FILES = ['design.json', 'index.html', 'DESIGN.md', 'tokens.css'] as const;
+
+/** A fresh design's state.json is a few hundred bytes; a larger one is not read to answer `importedFrom`. */
+const IMPORTED_STATE_READ_MAX = 1024 * 1024;
+
+/**
+ * True when the folder's state.json says Design Chamber copied it from a Files row (native-extras
+ * §3.3): the service filled the folder itself, so its first `added` is not the agent starting to
+ * write. state.json is written before anything else in the folder, so this holds however early the
+ * folder is seen. Only a yes or no comes out of the file; anything unreadable is no.
+ */
+export const isImportedFolder = async (dir: string): Promise<boolean> => {
+  const file = path.join(dir, '.chamber', 'state.json');
+  const info = await lstat(file).catch(() => null);
+  if (info === null || !info.isFile() || info.size > IMPORTED_STATE_READ_MAX) return false;
+  const text = await readFile(file, 'utf8').catch(() => null);
+  if (text === null) return false;
+  try {
+    const raw: unknown = JSON.parse(text);
+    return typeof raw === 'object' && raw !== null && parseImportedFrom((raw as { importedFrom?: unknown }).importedFrom) !== null; // Safe cast: an object, just checked.
+  } catch {
+    return false;
+  }
+};
+
+/** The `added` event for a design folder seen for the first time; Design Chamber's own copies carry `origin: 'user'`. */
+const addedEvent = async (slug: string, dir: string): Promise<ChangeEmit> => ({ slug, kind: 'added', ...((await isImportedFolder(dir)) ? { origin: 'user' as const } : {}) });
 
 /** `<design>/.chamber/check.json`, written by the check CLI or the service's own run: a `checks` event, not a `files` one. */
 const CHECK_REPORT = '.chamber/check.json';
@@ -377,7 +404,7 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     for (const slug of current) {
       if (knownSlugs.has(slug)) continue;
       fingerprints.set(slug, await fingerprint(path.join(root, slug), { nested: true }));
-      hub.emit({ slug, kind: 'added' });
+      hub.emit(await addedEvent(slug, path.join(root, slug)));
     }
     knownSlugs = current;
     for (const id of knownSystems) {
@@ -407,10 +434,22 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
   const dropEchoes = async (owner: string, dir: string, files: Set<string>): Promise<void> => {
     const selfWrites = options.selfWrites;
     if (selfWrites === undefined) return;
+    const echoed: string[] = [];
     for (const rel of [...files]) {
       if (rel === CHECK_REPORT) continue; // the check CLI's report, never a hand edit
-      if (await selfWrites.isEcho(owner, rel, dir)) files.delete(rel);
-      else selfWrites.forget(owner, rel);
+      if (rel.endsWith('/')) continue; // a folder key: judged below, by what it holds
+      if (await selfWrites.isEcho(owner, rel, dir)) {
+        files.delete(rel);
+        echoed.push(rel);
+      } else selfWrites.forget(owner, rel);
+    }
+    // A folder that appeared in this batch holding only the service's own files (a page copied from a
+    // Files row writes `img/a.png`) is the service's too. Deepest first, so `img/sub/` goes before `img/`.
+    const folders = [...files].filter((key) => key.endsWith('/')).sort((a, b) => b.length - a.length);
+    for (const folder of folders) {
+      const ours = echoed.some((rel) => rel.startsWith(folder));
+      const theirs = [...files].some((key) => key !== folder && key.startsWith(folder));
+      if (ours && !theirs) files.delete(folder);
     }
   };
 
@@ -425,7 +464,7 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     if (!knownSlugs.has(slug)) {
       knownSlugs.add(slug);
       fingerprints.set(slug, await fingerprint(dir, { nested: true }));
-      hub.emit({ slug, kind: 'added' });
+      hub.emit(await addedEvent(slug, dir));
       return;
     }
     const previous = fingerprints.get(slug);

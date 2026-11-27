@@ -11,7 +11,10 @@ import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import { describe, mock, test, type TestContext } from 'node:test';
 
-import type { DesignSummary } from '../../../src/shared/types.ts';
+import type { FSWatcher } from 'node:fs';
+
+import { batchAgentFiles } from '../../../src/guest/build-activity.ts';
+import type { ChangeEvent, DesignSummary } from '../../../src/shared/types.ts';
 import { FILE_PAGE_COPY_MAX_BYTES, FILE_PAGE_PATH_MAX, LOOSE_IMPORT_MAX_BYTES } from '../../../src/shared/limits.ts';
 import type { DesignStore } from '../../../src/service/context.ts';
 import {
@@ -38,6 +41,7 @@ import {
   skipReasonOf,
 } from '../../../src/service/file-page.ts';
 import { ApiError } from '../../../src/service/http.ts';
+import { startWatcher } from '../../../src/service/watch.ts';
 import { createCore, type Core } from './harness.ts';
 
 // ---- helpers ----
@@ -115,6 +119,7 @@ const setup = async (t: TestContext, options: EnvOptions = {}): Promise<Env> => 
       settings: core.ctx.settings,
       store: options.store?.(core.store) ?? core.store,
       designIndex: { all: () => summaries, ready: async () => true },
+      selfWrites: core.ctx.selfWrites,
       log: core.ctx.log,
       ...(options.clock ? { clock: options.clock } : {}),
       now: () => AT,
@@ -649,5 +654,62 @@ describe('open a project file as a page', () => {
     assert.deepEqual(line?.fields, { step: 'read', code: 'EIO' });
     assert.ok(!JSON.stringify(env.core.logs).includes(env.project), 'no log line names the project');
     assert.deepEqual(await designSlugs(env.core.root), []);
+  });
+});
+
+describe('the import is Design Chamber writing, not the agent (build strip)', () => {
+  test('neither added event nor any copied file reads as the agent writing, even when the watcher sees the folder mid-copy', async (t) => {
+    const core = await createCore(t);
+    t.after(() => core.stop());
+    const project = core.tmp.at('project');
+    await mkdir(path.join(project, 'img'), { recursive: true });
+    await writeFile(path.join(project, 'page.html'), '<title>Imported</title><img src="img/a.png"><link rel="stylesheet" href="site.css">');
+    await writeFile(path.join(project, 'img', 'a.png'), PNG);
+    await writeFile(path.join(project, 'site.css'), 'body{color:red}');
+
+    // A watcher on the same hub and self-write registry as the service; only `pollNow` drives it.
+    const fake = { close() {}, on: () => fake, once: () => fake, emit: () => false, ref: () => fake, unref: () => fake };
+    // Safe: the watcher only calls close() and on('error') on what fs.watch answers.
+    const watchImpl = (() => fake as unknown as FSWatcher) as unknown as typeof import('node:fs').watch;
+    const watcher = startWatcher({ settings: core.ctx.settings, hub: core.ctx.hub, log: core.ctx.log, debounceMs: 30, pollMs: 600_000, watchImpl, selfWrites: core.ctx.selfWrites });
+    t.after(() => watcher.stop());
+    await watcher.ready;
+    const events: ChangeEvent[] = [];
+    core.ctx.hub.subscribe((event) => events.push(event));
+    /** A poll, then the debounced flush of what it found. */
+    const settle = async (): Promise<void> => {
+      await watcher.pollNow({ all: true });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    };
+
+    const importer = createFilePageImporter({
+      settings: core.ctx.settings,
+      store: {
+        dir: core.store.dir,
+        get: core.store.get,
+        trash: core.store.trash,
+        create: async (input) => {
+          const record = await core.store.create(input);
+          await settle(); // the watcher finds the folder before any file is copied
+          return record;
+        },
+      },
+      designIndex: { all: () => [], ready: async () => true },
+      selfWrites: core.ctx.selfWrites,
+      log: core.ctx.log,
+    });
+    const { slug } = await importer.open({ path: path.join(project, 'page.html'), directory: project });
+    await settle(); // and then every file the copy wrote: all of them are the service's echo
+
+    // The store's added and the watcher's, from its sighting before the copy: both Design Chamber's own.
+    const added = events.filter((event) => event.slug === slug && event.kind === 'added');
+    assert.deepEqual(added.map((event) => event.origin), ['user', 'user']);
+
+    assert.deepEqual(batchAgentFiles(events, slug), { files: [], created: false, restored: false }, JSON.stringify(events));
+
+    // The agent's own later write still shows.
+    await writeFile(path.join(core.root, slug, 'img', 'b.png'), PNG);
+    await settle();
+    assert.deepEqual(batchAgentFiles(events, slug).files, ['img/b.png']);
   });
 });
