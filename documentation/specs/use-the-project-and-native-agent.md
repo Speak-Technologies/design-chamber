@@ -749,3 +749,12 @@ T10), `src/service/routes/settings.ts` (T1, then T10).
    don't remove; agents outside OpenChamber still need them.
 
 Architecture Complete → main agent (task breakdown) | → backend-developer (T1, T2, T5, T6 in wave 1) / ui-ux-developer (T4, T7, T10 UI)
+
+## Decisions (the user, 2026-11-27)
+These answer the open questions above and are binding for every task.
+1. A project with only a Tailwind config (or any thin set of its own files) still wins over a global default system: Use the project applies, the user's system is one click away on the chip.
+2. "No design system" links no system, but the agent still follows the project's own files.
+3. The open design, screen, viewport and selection are reported to agents, on, with no switch.
+4. Hand-written `default` pins quietly read as Use the project. Accepted.
+5. Worktrees: left as is for now.
+6. The AGENTS.md lines stay in Settings, collapsed under "Using an agent outside OpenChamber?".
