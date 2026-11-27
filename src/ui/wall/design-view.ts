@@ -21,6 +21,7 @@ import { mountVersions, type VersionsHandle } from '../components/versions-drawe
 import type { Camera } from '../../guest/camera.ts';
 import { renderSourceKey } from '../../guest/store.ts';
 import { askSelfContained, host, isServiceError, store } from '../guest.ts';
+import { inputWords } from '../model/input-words.ts';
 import { askRequestToast } from '../model/ask-bar-model.ts';
 import { viewportLabel, viewportSize, zoomPercent } from '../model/format.ts';
 import { readDirectionViewports } from '../model/directions-model.ts';
@@ -227,7 +228,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     // ---------------------------------------------------------------- toolbar controls
     const zoomOut = iconBtn({ icon: 'minus', label: 'Zoom out', size: 'sm', onClick: () => wall.zoomStep(1 / 1.25) });
     const zoomIn = iconBtn({ icon: 'plus', label: 'Zoom in', size: 'sm', onClick: () => wall.zoomStep(1.25) });
-    const fit = btn({ label: 'Fit', variant: 'ghost', size: 'xs', icon: 'fit', title: 'Fit everything on screen (Shift+1)', onClick: () => wall.fit() });
+    const fit = btn({ label: 'Fit', variant: 'ghost', size: 'xs', icon: 'fit', title: inputWords(currentDevice().form).fit, onClick: () => wall.fit() });
     const zoomGroup = h('div', { class: 'dc-group', role: 'group', 'aria-label': 'Zoom' }, zoomOut, zoomLabel.el, zoomIn, fit.el);
 
     const modeHost = h('div', { class: 'dc-mode' });

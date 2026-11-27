@@ -1,7 +1,8 @@
 // Visual scenario for KI-42 and its neighbours: on a 390 px phone nothing on screen names a key the
 // phone doesn't have. The comment card and the text box show no shortcut line, the text box has a
 // Cancel button and its click-away line names the buttons. A 480 px desktop rail is the control: it
-// keeps every shortcut line and has no extra button.
+// keeps every shortcut line and has no extra button. With the keyboard up the text box and its buttons stay on screen,
+// on a 390 x 844 phone and a 375 x 667 one.
 
 /** Keys a phone keyboard doesn't have, or shortcuts it can't type. */
 const KEYS = '/Ctrl|⌘|Shift\\+|\\bEsc\\b|\\bSpace\\b|[Aa]rrow keys|Enter to|Press Enter/';
@@ -10,6 +11,7 @@ export const run = async ({ PHONE, openPage, check, checkSoon, listReady, thumbs
   for (const theme of ['dark', 'light']) {
     for (const size of [
       { name: 'phone-390', ...PHONE, phone: true },
+      { name: 'phone-375', width: 375, height: 667, device: { ...PHONE.device, insets: { top: 0, right: 0, bottom: 0, left: 0 } }, phone: true },
       { name: 'rail-480', width: 480, height: 780, phone: false },
     ]) {
       const tag = `${size.name}-${theme}-hints`;
@@ -92,6 +94,17 @@ export const run = async ({ PHONE, openPage, check, checkSoon, listReady, thumbs
       await p.shot(`${tag}-2-text-box`);
 
       if (size.phone) {
+        // The keyboard comes up under the open box: the box is placed again and its text and buttons stay in sight.
+        await p.host(`window.__host.setDevice(${JSON.stringify({ ...size.device, keyboard: 300 })})`);
+        await p.settle(900);
+        const kept = await p.guest(`const w = doc.querySelector('.dc-wall').getBoundingClientRect(); const e = doc.querySelector('.dc-editor'); if (!e) return 'closed';
+          const out = [e.querySelector('textarea'), ...e.querySelectorAll('.dc-editor-foot button')].map((n) => n.getBoundingClientRect()).filter((r) => r.height < 28 || r.top < w.top - 1 || r.bottom > w.bottom + 1 || r.bottom > win.innerHeight - 300 + 1);
+          return out.length === 0 ? 'ok' : 'cut ' + JSON.stringify([out.map((r) => [Math.round(r.top), Math.round(r.bottom)]), Math.round(w.top), Math.round(w.bottom)])`);
+        check(kept === 'ok', `${tag}: keyboard 300, the text box and its buttons are on screen (${kept})`);
+        await p.shot(`${tag}-3-text-box-keyboard`);
+        await p.host(`window.__host.setDevice(${JSON.stringify(size.device)})`);
+        await p.settle(600);
+
         // Cancel is the phone's way out of a changed line: the box closes and nothing is written.
         const writes = () => p.routeHits('POST /designs/:slug/edit');
         const before = await writes();

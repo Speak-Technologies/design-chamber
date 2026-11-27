@@ -1,5 +1,5 @@
 // Puts the device on the frame's root for the stylesheets (documentation/specs/native-extras.md §2.2): data
-// attributes for form and pointer, and the safe-area insets and keyboard height as CSS variables. Call it with
+// attributes for form, pointer and whether the on-screen keyboard is up, and the safe-area insets and keyboard height as CSS variables. Call it with
 // every `applyHostReady`, so rotation and the on-screen keyboard follow. Only numbers `deviceOf` clamped reach
 // a style.
 
@@ -19,6 +19,7 @@ export const applyDevice = (device: Device, root: HTMLElement): void => {
   current = device;
   root.dataset.dcForm = device.form;
   root.dataset.dcPointer = device.coarse ? 'coarse' : 'fine';
+  root.dataset.dcKeyboard = device.keyboard > 0 ? 'up' : 'down';
   for (const side of ['top', 'right', 'bottom', 'left'] as const) root.style.setProperty(`--dc-inset-${side}`, `${device.insets[side]}px`);
   root.style.setProperty('--dc-keyboard', `${device.keyboard}px`);
 };

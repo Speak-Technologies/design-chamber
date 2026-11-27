@@ -305,6 +305,12 @@ export const mount: FeatureMount = (ctx) => {
   };
   document.addEventListener('pointerdown', onPointerDown, true);
 
+  // The viewer changed size (a phone's keyboard, a rotation): the open editor is placed again.
+  const stageResized = new ResizeObserver(() => {
+    if (open.kind === 'editor') placeEditorFor(open);
+  });
+  stageResized.observe(wall.el);
+
   const offUndoKey = wall.onUndoEdit(() => {
     // E12: with an old version on show the slot refuses (and keeps the edit); the notice says why.
     const { undo, refusal } = undoSlot.key(ctx.viewing() !== null);
@@ -335,6 +341,7 @@ export const mount: FeatureMount = (ctx) => {
     offPick();
     offSelection();
     offMoved();
+    stageResized.disconnect();
     offUndoKey();
     offViewing();
     offWatch?.();

@@ -45,14 +45,19 @@ rounded and clamped to 0 to 400 px before it reaches a style. A tablet keeps the
 - **Two live frames.** A canvas keeps at most two artboards loaded (the rail keeps 4, the desktop page 12);
   the rest say "Paused" until you pan to them.
 - **Touch-sized controls.** With a coarse pointer, buttons, menu rows, list rows and the ask bar's Send are
-  at least 44 px tall, and icon buttons 44 px square.
+  at least 44 px tall, and icon buttons 44 px square. The Checks badge and the design system button keep their
+  small look and take taps over 44 px.
 - **No keyboard shortcuts named.** A phone has no Ctrl or Esc, so the comment card and the Edit text box show no
   shortcut line. The Edit text box has a **Cancel** button there, and tapping away from a changed line says
   "Tap Save to keep this change, or Cancel to discard it." Screen readers hear touch wording for the canvas, the
   page and the ask bar.
-- **The on-screen keyboard.** The view stops above the keyboard, so the ask bar, the comment card and every
-  sheet stay in sight while you type ([keyboard open](../pages/img/phone-390-dark-page-5-keyboard.png)).
-  Rotation and the keyboard arrive as a new `ready`; nothing reloads and nothing you typed is lost.
+- **The on-screen keyboard.** The view stops above the keyboard, so the ask bar and every sheet stay in sight
+  while you type ([keyboard open](../pages/img/phone-390-dark-page-5-keyboard.png)). While a comment card, a
+  pin's thread or the Edit text box is open with the keyboard up, the ask bar, the footer hint and the banners
+  step aside to give it the room, and come back when the keyboard goes. They stay if the keyboard is up because
+  you're typing in the ask bar. On a very short screen the card also drops its heading and quote and shortens its
+  text box, so the box and its buttons are always on screen. Rotation and the keyboard arrive as a new `ready`;
+  nothing reloads and nothing you typed is lost.
 
 ## Gestures on the canvas and pages
 These work with a finger on any touchscreen, tablets and touch laptops included. Mouse and trackpad work as before.

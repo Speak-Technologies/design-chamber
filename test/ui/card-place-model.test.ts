@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { placeCardAndToolbar, type CardPlaceInput } from '../../src/ui/model/card-place-model.ts';
+import { fitsHeight, placeCardAndToolbar, type CardPlaceInput } from '../../src/ui/model/card-place-model.ts';
 
 const stage = { w: 1000, h: 700 };
 const card = { w: 300, h: 220 };
@@ -84,4 +84,9 @@ test('wherever the element is, the toolbar never overlaps the card and both stay
       }
     }
   }
+});
+
+test('fitsHeight: the card is whole only with the margin above and below it', () => {
+  assert.equal(fitsHeight(220, 236), true);
+  assert.equal(fitsHeight(221, 236), false);
 });

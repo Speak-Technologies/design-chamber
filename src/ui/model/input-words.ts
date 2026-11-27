@@ -14,6 +14,8 @@ export type InputWords = {
   askBar: string;
   /** Shown under the text box after a tap or click away from unsaved changes. */
   editClickAway: string;
+  /** The Fit button's tooltip. */
+  fit: string;
 };
 
 const KEYBOARD: InputWords = {
@@ -21,6 +23,7 @@ const KEYBOARD: InputWords = {
   page: 'Page preview. Arrow keys, Page Up and Page Down scroll the page.',
   askBar: 'Enter sends, Shift+Enter adds a line.',
   editClickAway: CLICK_AWAY_LINE,
+  fit: 'Fit everything on screen (Shift+1)',
 };
 
 const PHONE: InputWords = {
@@ -28,6 +31,7 @@ const PHONE: InputWords = {
   page: 'Page preview. Drag to scroll the page.',
   askBar: 'The return key sends.',
   editClickAway: 'Tap Save to keep this change, or Cancel to discard it.',
+  fit: 'Fit everything on screen',
 };
 
 export const inputWords = (form: Device['form']): InputWords => (form === 'phone' ? PHONE : KEYBOARD);

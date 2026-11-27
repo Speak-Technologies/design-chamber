@@ -7590,6 +7590,53 @@ button.dc-sp-value:focus-visible {
   width: calc(var(--dc-s4) * 2 + var(--dc-s3));
   height: calc(var(--dc-s4) * 2 + var(--dc-s3));
 }
+/*
+ * The Checks badge and the design system button are small pills in the header. A finger gets 44 px of room for each
+ * (so the area never lies over a neighbour) and a hit area that fills it; the pill looks as before.
+ */
+[data-dc-pointer='coarse'] :is(.dc-checks, .dc-system) {
+  justify-content: center;
+  min-width: calc(var(--dc-s4) * 2 + var(--dc-s3));
+  min-height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+}
+[data-dc-pointer='coarse'] :is(.dc-checks-badge, .dc-system-btn) {
+  position: relative;
+}
+[data-dc-pointer='coarse'] :is(.dc-checks-badge, .dc-system-btn)::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, calc(var(--dc-s4) * 2 + var(--dc-s3)));
+  height: max(100%, calc(var(--dc-s4) * 2 + var(--dc-s3)));
+  transform: translate(-50%, -50%);
+}
+
+/*
+ * Typing in the comment card, a pin's thread or the Edit text box with the phone's keyboard up: the card gets the room
+ * of everything under and over the wall. Not while the ask bar has the keyboard, which then is what is being typed in.
+ */
+[data-dc-form='phone'][data-dc-keyboard='up'] .dc-design:has(.dc-wall-overlay > :is(.dc-composer, .dc-thread, .dc-editor)):not(:has(.dc-bottom-dock:focus-within))
+  :is(.dc-bottom-dock, .dc-hint, .dc-warnings, .dc-notices) {
+  display: none;
+}
+[data-dc-form='phone'][data-dc-keyboard='up'] .dc-editor-input {
+  max-height: calc(var(--dc-s6) * 3);
+}
+/* A card the wall is too short for (popover-layer.ts): the heading and quote go, the text box is two lines. */
+[data-dc-form='phone'] .dc-pop[data-tight] :is(.dc-pop-snippet, .dc-pop-note),
+[data-dc-form='phone'] .dc-composer[data-tight] .dc-pop-head {
+  display: none;
+}
+[data-dc-form='phone'] .dc-pop[data-tight] .dc-textarea {
+  height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+  min-height: 0;
+}
+[data-dc-form='phone'] .dc-pop[data-tight] {
+  gap: var(--dc-s1);
+  padding: var(--dc-s2);
+}
+
 /* Settings: the folder line that says the path is on the computer, not the phone. */
 .dc-settings-where {
   font-size: 0.8125rem;

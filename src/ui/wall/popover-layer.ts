@@ -9,7 +9,7 @@ import type { HitElement } from '../../shared/bridge-protocol.ts';
 import { PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.ts';
 import type { Comment } from '../../shared/types.ts';
 import { h } from '../components/dom.ts';
-import { placeCardAndToolbar, type Box } from '../model/card-place-model.ts';
+import { fitsHeight, placeCardAndToolbar, type Box } from '../model/card-place-model.ts';
 import { composerDraftKey, createDraftStore, threadDraftKey } from '../model/comment-drafts.ts';
 import { viewportOf } from '../model/comments-model.ts';
 import { frameToScreen, pinFramePoint, type Point } from '../model/wall-model.ts';
@@ -85,11 +85,16 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     if (!popover || !anchorBox || ctx.surfaceSize.w === 0) return;
     const card = popover.card.el;
     const covered = camera.coveredInsets();
+    const stage = { w: ctx.surfaceSize.w - covered.right, h: ctx.surfaceSize.h - covered.bottom };
+    // A wall too short for the whole card (a phone's keyboard is up): the quote and heading go, the text box shrinks
+    // (styles.css `[data-tight]`), so the box and its buttons stay. Measured whole first, so it comes back with the room.
+    delete card.dataset.tight;
+    if (!fitsHeight(card.offsetHeight, stage.h)) card.dataset.tight = 'true';
     const place = placeCardAndToolbar({
       box: anchorBox(),
       card: { w: card.offsetWidth, h: card.offsetHeight },
       toolbar: companion ? { w: companion.offsetWidth, h: companion.offsetHeight } : null,
-      stage: { w: ctx.surfaceSize.w - covered.right, h: ctx.surfaceSize.h - covered.bottom },
+      stage,
     });
     card.style.left = `${Math.round(place.card.left)}px`;
     card.style.top = `${Math.round(place.card.top)}px`;

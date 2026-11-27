@@ -26,6 +26,7 @@ test('desktop and tablet keep the keyboard sentences', () => {
   for (const form of ['desktop', 'tablet'] as const) {
     const words = inputWords(form);
     assert.equal(words.editClickAway, CLICK_AWAY_LINE);
+    assert.equal(words.fit, 'Fit everything on screen (Shift+1)');
     assert.equal(words.askBar, 'Enter sends, Shift+Enter adds a line.');
     assert.equal(words.wall, 'Design wall. Arrow keys pan, plus and minus zoom, Shift+1 fits everything. Hold Space and drag to pan.');
     assert.equal(words.page, 'Page preview. Arrow keys, Page Up and Page Down scroll the page.');

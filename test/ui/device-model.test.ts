@@ -79,9 +79,9 @@ test('applyDevice writes the form, the pointer and pixel variables, and follows 
   const root = { dataset: {} as Record<string, string>, style: { setProperty: (name: string, value: string) => void style.set(name, value) } };
   const el = root as unknown as HTMLElement;
   applyDevice(deviceOf(device({ keyboard: 300 })), el);
-  assert.deepEqual(root.dataset, { dcForm: 'phone', dcPointer: 'coarse' });
+  assert.deepEqual(root.dataset, { dcForm: 'phone', dcPointer: 'coarse', dcKeyboard: 'up' });
   assert.deepEqual([style.get('--dc-inset-top'), style.get('--dc-inset-bottom'), style.get('--dc-keyboard')], ['47px', '34px', '300px']);
   applyDevice(deviceOf({}), el);
-  assert.deepEqual(root.dataset, { dcForm: 'desktop', dcPointer: 'fine' });
+  assert.deepEqual(root.dataset, { dcForm: 'desktop', dcPointer: 'fine', dcKeyboard: 'down' });
   assert.deepEqual([style.get('--dc-inset-bottom'), style.get('--dc-keyboard')], ['0px', '0px']);
 });

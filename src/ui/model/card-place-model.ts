@@ -25,6 +25,9 @@ const TOOLBAR_GAP = 6;
 /** An element this close to the top edge has no toolbar above it. */
 const FLIP_WITHIN = 48;
 
+/** Whether a card this tall can be whole on a wall this tall. */
+export const fitsHeight = (card: number, stage: number): boolean => card <= stage - 2 * EDGE;
+
 const clamp = (value: number, low: number, high: number): number => Math.max(low, Math.min(value, Math.max(low, high)));
 
 /**
