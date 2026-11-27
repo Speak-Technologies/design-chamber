@@ -119,3 +119,12 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Why not fixed now:** the markdown PR chose notes only; extending it to patterns and brand is a product call, not part of merging the layout hints
 **Fix prompt:**
 > In `src/service/systems/specimen-html.ts`, pass pattern and brand bodies through `withoutLeadingTitle(entry.text, entry.title)` in `entryTextCard` and `entryTextRow`, as notes already are (drop the `isEntryText` branch in `entryTextRow`). Extend the "markdown bodies render inside card, compact, full and table runs" test in `test/service/systems/specimen-html.test.ts` so a pattern shows its title once in every layout, both profiles. Update the board paragraph in `documentation/pages/design-systems.md` ("A note whose body opens with its own title…") to say notes, patterns and brand entries. Bump `BOARD_GENERATOR_VERSION` and `LIVING_PAGE_GENERATOR_VERSION`. Run `npm run check`.
+
+### KI-37 — A Default or Pinned badge on a system goes stale after a change in Settings
+🟣 Minor · found 2026-11-27 · `src/ui/components/settings-view.ts:150` · owner: ui-ux-developer
+**What:** Settings saves the default and the pins with `store.updateSettings` and never re-reads the systems list. The list's `isDefault` and `pinnedFor` come from `GET /systems`, and the service sends no change event for a settings save, so the systems store keeps the old values. The system page's own Make default goes through `systems().setDefault`, which re-reads the list, so only the Settings path is stale.
+**Who:** end user · **Seen:** visible, a badge on the wrong system in the library or the systems list
+**Happens:** choose a default (or pin a project) in Settings, then go back to the library without reloading · common once Settings works (PR #34) · **Effect:** the old system still says Default and the new one doesn't, until something else refreshes the list (a system file changes, the folder changes, the frame reloads)
+**Why not fixed now:** UI code outside PR #34's service fix; nothing is saved wrongly, only the badge
+**Fix prompt:**
+> In `src/ui/components/settings-view.ts` `saveSystem`, after `await store.updateSettings(patch)` succeeds, call `void systemsStore().load()` (as `systems-store.ts` `run` does after `setDefault`). Add a test in `test/ui/` (or a visual scenario step in `test/ui/visual/scenarios/design-system-settings.mjs`) that changes the default in Settings and checks the new system's row shows Default and the old one doesn't. Run `npm run check`.
