@@ -31,6 +31,7 @@ The whole text is at most 16 000 characters, the host's limit. Over that, the ol
 ## Rules the service enforces
 - **Search never reads the disk.** It answers from the in-memory design list the service keeps current. If that list has not loaded yet (the first keystroke right after the service starts), it waits up to 1.5 seconds, then answers with nothing; the next keystroke works.
 - **The id is the design's folder name** and must match the folder-name pattern (lower-case letters, digits and hyphens, at most 63 characters) before any path is built. `../x`, slashes, backslashes, drive letters, upper case and anything longer are refused with 400.
+- **The check counts get 1.5 seconds.** OpenChamber gives the pick 10 seconds and drops it past that, and a first check on a large canvas can take about as long. Counts that are not ready in 1.5 seconds are left out of the text (as when the check cannot be read); the check keeps going in the background, so the next pick of that design has them.
 - **The folder is read through the designs store**, which keeps it inside the designs folder. A design folder that is a link leading outside the designs folder counts as not there (404). Nothing is written.
 - Both routes need the service bearer token like every other route; a missing or wrong token is a 401 before anything runs.
 
@@ -38,6 +39,7 @@ The whole text is at most 16 000 characters, the host's limit. Over that, the ol
 - A design the agent is still writing (no files yet) lists only `design.json` and still resolves.
 - A title with line breaks shows on one line; a blank title shows the folder name.
 - A check that fails to read does not block the mention; it is left out and the service logs a warning.
+- A check that is still running after 1.5 seconds does not block the mention either; the counts are left out and the service logs `mentions.checks-late`.
 
 ## Where it lives
 `src/shared/agent/mention.ts` (ranking, subtitle, text), `src/service/mentions.ts` (index wait, store read, file checks), `src/service/routes/mentions.ts` (the two routes). Tests: `test/agent/mention.test.ts`, `test/service/core/mentions.test.ts`. Design: `documentation/specs/phase-1-5-sdk-2-7.md` §U6.
