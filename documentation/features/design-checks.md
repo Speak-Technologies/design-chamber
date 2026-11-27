@@ -16,7 +16,9 @@ session). The chat shows each call as a card titled "Design check · <design>".
   canvas screen ids to check (a list, or text like `"home,faq"`), at most 16. `static`: files only,
   no browser. For a design system (`system` instead of `design`): `area` (`foundations`,
   `components`, `patterns` or `brand`) and `scheme` (`light`, `dark` or `both`), as the command's
-  `--area` and `--scheme` below; any other value, or either one with a design, is refused.
+  `--area` and `--scheme` below; any other value, or either one with a design, is refused. A
+  system also takes `screens`: its own screen ids (as `system.json` writes them), to check only those
+  screens and skip the board; not with `area` or `static`.
 - **Answer.** Exactly what `dc check` prints: the result line, the PNG paths to look at, the
   findings. Exit 0 or 1 answer that text; when the check cannot run the answer is "The check could
   not run: " and the CLI's own sentence. After 3 minutes the check is stopped and the answer
@@ -259,6 +261,33 @@ Two flags make the fix loop quick (the tool takes the same as `area` and `scheme
 A value off these lists, a missing value, or either flag with a design instead of `--system` stops
 the command with exit 2 and one sentence, before anything is read. `--area brand --scheme dark`
 draws nothing to picture (the dark pass leaves Brand out), and the output says so.
+
+**Screens** (spec: `documentation/specs/system-builder-depth.md` §4.6, T12b). After the board, a
+full check renders every screen in `system.json` `screens` at each of its viewports (its own, else the
+system's), with the same checks as a design screen: contrast, sideways overflow, clipped or
+overlapping text, alt text, labels and names, script errors and blocked requests. Each screen is
+bundled from the system's own files, offline, in its own browser page, with the design check's CSP.
+Findings name `screens/<id>.html` and the viewport ("screens/home.html @ Phone 390×844").
+
+- **Dark too.** When the system has dark values (or `--scheme dark`), each screen is drawn again at
+  each viewport with `prefers-color-scheme: dark`, so the tokens' dark values apply (checked in a real
+  browser by a test). The dark artboards come after every light one and are named `<viewport>-dark`;
+  a finding the light artboard already has is not repeated. `--scheme light` leaves them out.
+- **Pictures.** `screen-<id>@<viewport>.png` (`-dark` for the dark ones, `-2` and on for a page taller
+  than its viewport), in the same run folder as the board's; the text lists each with its size.
+- **Limits and time.** Up to 24 screen artboards per check, light first; the rest are one note,
+  "N screen artboards were not drawn (the limit is 24 per check). Use --screen <id> to check the
+  rest." With screens to draw, the board passes keep 70 s of the 110 s render budget and the screens
+  get 40 s; screens the time cuts get the same kind of note. The whole run still ends inside the
+  tool's 3 minutes. A screen with a problem (its file missing or over 60 000 characters) is not drawn;
+  the file checks name it.
+- **`--screen <id>`** (repeatable; the tool's `screens`) checks only those screens, skips the board and
+  gets the whole 110 s. An id the system doesn't list stops the command with exit 2 before anything
+  is drawn or written. It can't be combined with `--area` or `--static`.
+- **`--area`** pictures one board area and draws no screens: the quick loop. A full check, without
+  `--area`, draws them.
+- **Checklist.** A `page` screen with a viewport at most 480 px wide also counts for `responsive`, and
+  any `marketing` screen counts for `marketing`.
 
 **Measured colour pairs.** The board's Pairs block shows each pair as "Aa Text" on the light and
 dark grounds. While measuring, the check reads each sample's text and background colour as the page

@@ -78,6 +78,16 @@ export const drawsData = (detail: SystemDetail): boolean =>
   detail.components.some((component) => DATA_COMPONENT.test(component.id) || DATA_COMPONENT.test(component.name)) || detail.patterns.some((entry) => entry.kind === 'data-display');
 
 const hasPatternKind = (detail: SystemDetail, kind: string): boolean => detail.patterns.some((entry) => entry.kind === kind);
+
+/**
+ * The widest viewport that counts as a phone for the `responsive` topic (system-builder-depth T12b): the
+ * default Phone is 390 px, and the rules' phone frames are 390; 480 takes the larger phones too.
+ */
+export const PHONE_VIEWPORT_MAX_WIDTH = 480;
+
+/** A system screen of kind `page` drawn at a phone viewport (its own sizes, else the system's): it shows the layout responds. */
+const hasPhonePageScreen = (detail: SystemDetail): boolean =>
+  detail.screens.some((screen) => screen.kind === 'page' && (screen.viewports ?? detail.viewports).some((viewport) => viewport.width <= PHONE_VIEWPORT_MAX_WIDTH));
 const hasBrandKind = (detail: SystemDetail, ...kinds: string[]): boolean => detail.brand.some((entry) => kinds.includes(entry.kind));
 
 /** Whether the system has a topic, for one area (`motion` means tokens in foundations and an entry in patterns). */
@@ -85,6 +95,7 @@ const hasTopic = (detail: SystemDetail, area: SystemArea, topic: SystemTopicId, 
   if (area === 'patterns') {
     if (topic === 'motion') return hasPatternKind(detail, 'motion');
     if (topic === 'data-display' && !drawsData(detail)) return true;
+    if (topic === 'responsive' && hasPhonePageScreen(detail)) return true;
     const kind = PATTERN_KIND_TOPIC[topic];
     return kind === undefined ? true : hasPatternKind(detail, kind);
   }
@@ -142,7 +153,8 @@ const hasTopic = (detail: SystemDetail, area: SystemArea, topic: SystemTopicId, 
     case 'imagery':
       return hasBrandKind(detail, 'imagery');
     case 'marketing':
-      return hasBrandKind(detail, 'marketing', 'social', 'email');
+      // A marketing screen counts too (system-builder-depth T12b): a whole page, a social card or an email.
+      return hasBrandKind(detail, 'marketing', 'social', 'email') || detail.screens.some((screen) => screen.kind === 'marketing');
     default:
       return true;
   }

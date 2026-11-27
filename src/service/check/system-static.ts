@@ -21,7 +21,7 @@ import {
 } from '../../shared/limits.ts';
 import { missingTopics } from '../../shared/system-checklist.ts';
 import { AREA_OF_SECTION, layoutPlaceTakes, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
-import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, RenderCheckState, SecretShapeKind, SystemArea, SystemDetail } from '../../shared/types.ts';
+import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, RenderCheckState, SecretShapeKind, SystemArea, SystemDetail, Viewport } from '../../shared/types.ts';
 import { findRawTextEnd, parseTagAt, RAW_TEXT_TAGS } from '../html-tags.ts';
 import { capPerCode } from './analyze.ts';
 import type { BoardPassId } from './board-analyze.ts';
@@ -577,6 +577,12 @@ export type SystemCheckRender = {
   areas?: SystemArea[];
   /** The schemes drawn: light (both widths), dark (the wide dark pass), or both. */
   schemes?: ('light' | 'dark')[];
+  /**
+   * The system screens drawn (system-builder-depth T12b): one artboard per screen per viewport, in plan
+   * order, dark twins named `<viewport>-dark`; `viewports` names every size, for the sentences. Absent
+   * when the run drew no screens.
+   */
+  screens?: { artboards: ArtboardCheck[]; viewports: Viewport[] };
 };
 
 /** One area at one width: its overview (the whole area scaled down) and its full-size tiles. */

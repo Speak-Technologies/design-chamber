@@ -317,18 +317,18 @@ test('resolveSystemTarget: only a real folder in <root>/_systems, by id', async 
   }
 });
 
-test('parseArgs: --system checks a system, --static means files only; it does not mix with a design or screens', () => {
-  assert.deepEqual(parseArgs(['check', '--system', 'acme']), { kind: 'check-system', root: null, system: 'acme', staticOnly: false, json: false, area: null, scheme: null });
-  assert.deepEqual(parseArgs(['--root', '/d', 'check', '--system=acme', '--json', '--static']), { kind: 'check-system', root: '/d', system: 'acme', staticOnly: true, json: true, area: null, scheme: null });
-  for (const args of [['check', '--system'], ['check', '--system', '../x'], ['check', 'demo', '--system', 'acme'], ['check', '--system', 'acme', '--screen', 'home'], ['check', '--system', 'a', '--system', 'b']]) {
+test('parseArgs: --system checks a system, --static means files only; it does not mix with a design', () => {
+  assert.deepEqual(parseArgs(['check', '--system', 'acme']), { kind: 'check-system', root: null, system: 'acme', staticOnly: false, json: false, area: null, scheme: null, screens: [] });
+  assert.deepEqual(parseArgs(['--root', '/d', 'check', '--system=acme', '--json', '--static']), { kind: 'check-system', root: '/d', system: 'acme', staticOnly: true, json: true, area: null, scheme: null, screens: [] });
+  for (const args of [['check', '--system'], ['check', '--system', '../x'], ['check', 'demo', '--system', 'acme'], ['check', '--system', 'a', '--system', 'b']]) {
     assert.equal(parseArgs(args).kind, 'error', args.join(' '));
   }
 });
 
-test('parseToolInput: system is an id, never with design or screens; the child gets --system', () => {
+test('parseToolInput: system is an id, never with design; the child gets --system', () => {
   assert.deepEqual(parseToolInput({ system: 'acme' }), { ok: true, system: 'acme', static: false });
   assert.deepEqual(parseToolInput({ system: 'acme', static: true }), { ok: true, system: 'acme', static: true });
-  for (const input of [{ system: '../acme' }, { system: 'C:\\x' }, { system: 'none' }, { system: 7 }, { system: 'acme', design: 'demo' }, { system: 'acme', screens: ['home'] }]) {
+  for (const input of [{ system: '../acme' }, { system: 'C:\\x' }, { system: 'none' }, { system: 7 }, { system: 'acme', design: 'demo' }]) {
     assert.equal(parseToolInput(input).ok, false, JSON.stringify(input));
   }
   assert.deepEqual(buildChildArgs('/x/dc.mjs', { system: 'acme', static: false }), ['/x/dc.mjs', 'check', '--system', 'acme']);
