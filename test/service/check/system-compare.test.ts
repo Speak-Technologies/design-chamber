@@ -7,11 +7,11 @@ import assert from 'node:assert/strict';
 import { mkdir, symlink, writeFile } from 'node:fs/promises';
 import { test } from 'node:test';
 
-import { decodePng, encodePng, pictureSize, PngStitchError, SIDE_BY_SIDE_GAP, stitchSideBySide } from '../../../src/service/check/png-stitch.ts';
+import { CAPTION_BAND, decodePng, encodePng, pictureSize, PngStitchError, SIDE_BY_SIDE_GAP, stitchPngs, stitchSideBySide } from '../../../src/service/check/png-stitch.ts';
 import type { PlannedArtboard, RenderOutcome } from '../../../src/service/check/render.ts';
 import { formatSystemCheckText } from '../../../src/service/check/report-text.ts';
 import { compareBudgetNote, planCompares, sourceDocument, type CompareSource } from '../../../src/service/check/system-compare.ts';
-import { cliSystemStore, makeCompareSheets, readCompareSources } from '../../../src/service/check/system-run.ts';
+import { cliSystemStore, makeCompareSheets, readCompareSources, sliceOverlaps } from '../../../src/service/check/system-run.ts';
 import { systemCheckReport } from '../../../src/service/check/system-static.ts';
 import { createLiveFileSource } from '../../../src/service/bundle.ts';
 import { buildLivingPage } from '../../../src/service/systems/living-html.ts';
@@ -219,9 +219,9 @@ test('a PNG Node reads is stitched beside the screen without the browser; slices
   assert.deepEqual(result, { sheets: [{ screen: 'home', viewport: 'phone', source: 'sources/screens/home.png', png: '.chamber/check/r-1/compare-home@phone.png' }], findings: [] });
   const sheet = decodePng(saved[0]?.bytes ?? assert.fail());
   assert.equal(sheet.width, 390 + SIDE_BY_SIDE_GAP + 390);
-  assert.equal(sheet.height, 944, 'both slices stacked');
-  assert.deepEqual([...(sheet.rows[900]?.subarray(0, 3) ?? [])], [0, 0, 200], 'the second slice under the first');
-  assert.deepEqual([...(sheet.rows[10]?.subarray((390 + SIDE_BY_SIDE_GAP) * 4, (390 + SIDE_BY_SIDE_GAP) * 4 + 3) ?? [])], [0, 128, 0], 'the source on the right');
+  assert.equal(sheet.height, CAPTION_BAND + 944, 'both slices stacked, under the captions');
+  assert.deepEqual([...(sheet.rows[CAPTION_BAND + 900]?.subarray(0, 3) ?? [])], [0, 0, 200], 'the second slice under the first');
+  assert.deepEqual([...(sheet.rows[CAPTION_BAND + 10]?.subarray((390 + SIDE_BY_SIDE_GAP) * 4, (390 + SIDE_BY_SIDE_GAP) * 4 + 3) ?? [])], [0, 128, 0], 'the source on the right');
 });
 
 test('a JPEG goes through the browser once, in bands; short of time it is a note; an artboard not drawn whole gets nothing', async () => {
@@ -305,7 +305,7 @@ test('the text lists each compare sheet with the screen, its size and the source
     },
   });
   const text = formatSystemCheckText({ report, name: 'Acme', reportPath: null });
-  assert.match(text, /Compare sheets \(the screen as drawn on the left, the real app on the right, both at full size and top-aligned\)\. Look for what differs:\n {2}compare-home@phone\.png {2}home at Phone 390x844 beside sources\/screens\/home\.png/);
+  assert.match(text, /Compare sheets: "Design" on the left is the screen as drawn, "Your app" on the right is the screenshot, both at full size and top-aligned\. Look for what differs:\n {2}compare-home@phone\.png {2}home at Phone 390x844 beside sources\/screens\/home\.png/);
   assert.ok(!text.includes('\u2014'));
 });
 
@@ -322,4 +322,38 @@ test('the living page never names or shows a source picture', () => {
   const html = buildLivingPage(detail, { revision: 1, generatedAt: NOW, coverage: ['patterns'], redact: [] }).html;
   assert.ok(html.includes('Home'), 'the screen is on the page');
   assert.ok(!html.includes('sources/screens'), 'its source is not');
+});
+
+// ---- a screen taller than its viewport ----
+
+/** A slice whose row r is green r % 256, red `tag`: each row says which slice and which row it came from. */
+const taggedSlice = (width: number, height: number, tag: number): Buffer =>
+  encodePng({ width, height, channels: 3, rows: Array.from({ length: height }, (_, r) => Buffer.from(Array.from({ length: width }, () => [tag, r % 256, 0]).flat())) });
+
+test('the last slice of a page that ends mid-screen adds only what the one above does not show', async () => {
+  // An 1840 px page at Phone 844: slices at 0, 844, then the browser stops at 996 (1840 - 844), not 1688.
+  assert.deepEqual(sliceOverlaps(3, 844, 1840), [0, 0, 692]);
+  assert.deepEqual(sliceOverlaps(3, 844, 2532), [0, 0, 0], 'whole screens: no overlap');
+  assert.deepEqual(sliceOverlaps(1, 844, 500), [0]);
+  assert.deepEqual(sliceOverlaps(2, 844, 900), [0, 788]);
+  assert.equal(decodePng(stitchPngs([taggedSlice(4, 10, 1), taggedSlice(4, 10, 2)], { skipTop: [0, 6] })).height, 14);
+
+  const saved: Buffer[] = [];
+  await makeCompareSheets({
+    targets: [{ screen: 'home', viewport: PHONE, source: okSource('home', 390, { bytes: solid(390, 50, [0, 128, 0]), height: 50 }) as Extract<CompareSource, { ok: true }> }],
+    artboards: [{ ...artboard('home', PHONE, 3), docHeight: 1840 }],
+    slices: new Map([['home|phone', [taggedSlice(390, 844, 10), taggedSlice(390, 844, 20), taggedSlice(390, 844, 30)]]]),
+    budgetMs: 10_000,
+    savePng: async (_art, _a, _b, bytes) => {
+      saved.push(bytes);
+      return 'compare-home@phone.png';
+    },
+    transcode: async () => NO_DRAW,
+  });
+  const sheet = decodePng(saved[0] ?? assert.fail());
+  assert.equal(sheet.height, CAPTION_BAND + 1840, 'the page once, not 2532 px with rows repeated');
+  const pixel = (y: number): number[] => [...(sheet.rows[CAPTION_BAND + y]?.subarray(0, 2) ?? [])];
+  assert.deepEqual(pixel(1687), [20, 843 % 256], 'the second slice ends at 1688');
+  assert.deepEqual(pixel(1688), [30, 692 % 256], 'the third goes on from its row 692 (page row 1688)');
+  assert.deepEqual(pixel(1839), [30, 843 % 256], 'and ends at the page bottom');
 });

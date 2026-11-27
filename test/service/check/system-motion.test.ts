@@ -9,7 +9,7 @@ import { test, type TestContext } from 'node:test';
 
 import { sanitizeMotionProbe, type BoardMotionProbe, type BoardMotionTarget } from '../../../src/service/check/board-analyze.ts';
 import type { CdpEvent, CdpSession } from '../../../src/service/check/cdp.ts';
-import { decodePng, encodePng, SIDE_BY_SIDE_GAP } from '../../../src/service/check/png-stitch.ts';
+import { CAPTION_BAND, decodePng, encodePng, SIDE_BY_SIDE_GAP } from '../../../src/service/check/png-stitch.ts';
 import { animationEndOf, renderArtboards, renderMediaFeatures, type CaptureClip, type ElementPath, type InspectPage, type MotionFrames, type PlannedArtboard } from '../../../src/service/check/render.ts';
 import { formatSystemCheckText } from '../../../src/service/check/report-text.ts';
 import { cliSystemStore, motionKindsOf, pictureMotion, runSystemCheck } from '../../../src/service/check/system-run.ts';
@@ -68,7 +68,7 @@ test('the probe motion list is checked: demos under tokens, example elements und
 
 type Call = { path: string; trigger: string; clip: CaptureClip; frames: number };
 
-const fakeMotionPage = (calls: Call[], answer: (path: ElementPath) => MotionFrames | null = () => ({ frames: Array.from({ length: SYSTEM_MOTION_FRAMES }, () => solid(30, 10)), moved: true, reduced: solid(30, 10), reducedMoves: false })) => {
+const fakeMotionPage = (calls: Call[], answer: (path: ElementPath) => MotionFrames | null = () => ({ frames: Array.from({ length: SYSTEM_MOTION_FRAMES }, () => solid(30, 10)), moved: true, reduced: solid(30, 10), reducedMoves: false, times: [0, 100, 200, 300] })) => {
   const saved: { label: string; bytes: Buffer }[] = [];
   return {
     saved,
@@ -86,10 +86,10 @@ const fakeMotionPage = (calls: Call[], answer: (path: ElementPath) => MotionFram
 
 test('each motion element gets one strip: its frames and the reduced end side by side, named <entry>-motion', async () => {
   const calls: Call[] = [];
-  const page = fakeMotionPage(calls, (path) => (path.length === 2 ? { frames: [solid(30, 10)], moved: false, reduced: solid(30, 10), reducedMoves: false } : { frames: Array.from({ length: SYSTEM_MOTION_FRAMES }, () => solid(30, 10)), moved: true, reduced: solid(30, 10), reducedMoves: true }));
+  const page = fakeMotionPage(calls, (path) => (path.length === 2 ? { frames: [solid(30, 10)], moved: false, reduced: solid(30, 10), reducedMoves: false, times: [0] } : { frames: Array.from({ length: SYSTEM_MOTION_FRAMES }, () => solid(30, 10)), moved: true, reduced: solid(30, 10), reducedMoves: true, times: [0, 133, 267, 400] }));
   const pass = await pictureMotion(page, { items: [demo(), example()], truncated: false }, { viewportWidth: 1526, deadline: Number.POSITIVE_INFINITY, area: null });
   assert.deepEqual(pass.results, [
-    { entry: 'token:--duration-fast', trigger: 'hover', png: '.chamber/check/r-1/--duration-fast-motion@wide.png', frames: SYSTEM_MOTION_FRAMES, moved: true, reducedMoves: true },
+    { entry: 'token:--duration-fast', trigger: 'hover', png: '.chamber/check/r-1/--duration-fast-motion@wide.png', frames: SYSTEM_MOTION_FRAMES, moved: true, reducedMoves: true, ms: 400 },
     { entry: 'component:slide', trigger: 'focus-visible', png: '.chamber/check/r-1/slide-motion@wide.png', frames: 1, moved: false, reducedMoves: false },
   ]);
   assert.deepEqual(pass.findings, []);
@@ -97,9 +97,10 @@ test('each motion element gets one strip: its frames and the reduced end side by
     ['.dc-motion-demo#0', 'hover', SYSTEM_MOTION_FRAMES],
     ['[data-dc-example-host]#2 > *#3', 'focus-visible', SYSTEM_MOTION_FRAMES],
   ]);
-  assert.deepEqual(calls[0]?.clip, { x: 76, y: 476, width: 348, height: 68 }, 'the box with 24 px around it');
+  assert.deepEqual(calls[0]?.clip, { x: 60, y: 460, width: 380, height: 100 }, 'the box with 40 px around it, room for a lift and its shadow');
   const strip = decodePng(page.saved[0]?.bytes ?? assert.fail());
   assert.equal(strip.width, 30 * (SYSTEM_MOTION_FRAMES + 1) + SIDE_BY_SIDE_GAP * SYSTEM_MOTION_FRAMES);
+  assert.equal(strip.height, 10 + CAPTION_BAND, 'a caption band above the frames');
   assert.equal(decodePng(page.saved[1]?.bytes ?? assert.fail()).width, 30 * 2 + SIDE_BY_SIDE_GAP, 'one frame and the reduced end');
 });
 
@@ -167,7 +168,7 @@ test('the motion pass runs on the wide light board only, and its strips are kept
             save: (label, part, parts, bytes) => deps.savePng(art, part, parts, bytes, label),
             forceState: async () => false,
             computedStyle: async () => null,
-            animationFrames: async () => ({ frames: [solid(20, 10), solid(20, 10)], moved: true, reduced: solid(20, 10), reducedMoves: false }),
+            animationFrames: async () => ({ frames: [solid(20, 10), solid(20, 10)], moved: true, reduced: solid(20, 10), reducedMoves: false, times: [0, 200] }),
           };
           const done = await inspect(page, art);
           assert.ok(done !== null);
@@ -277,6 +278,7 @@ test('animationFrames pauses, seeks the started animations to four even points, 
   assert.equal(result.frames.length, SYSTEM_MOTION_FRAMES);
   assert.equal(result.moved, true);
   assert.equal(result.reducedMoves, true);
+  assert.deepEqual(result.times, [0, 100, 200, 300], 'the time each frame shows');
   const during = sent.slice(mark);
   const seeks = during.filter((entry) => entry.method === 'Animation.seekAnimations').map((entry) => [entry.params.animations, entry.params.currentTime]);
   // Only this page's animation; the other session's 9 s one doesn't stretch the frames.
@@ -313,8 +315,8 @@ test('the text lists the motion strips, says when nothing moved, and marks one t
       entryShots: [],
       findings: [],
       motion: [
-        { entry: 'token:--duration-fast', trigger: 'hover', png: '.chamber/check/r-1/--duration-fast-motion@wide.png', frames: 4, moved: true, reducedMoves: false },
-        { entry: 'component:slide', trigger: 'hover', png: '.chamber/check/r-1/slide-motion@wide.png', frames: 4, moved: true, reducedMoves: true },
+        { entry: 'token:--duration-fast', trigger: 'hover', png: '.chamber/check/r-1/--duration-fast-motion@wide.png', frames: 4, moved: true, reducedMoves: false, ms: 200 },
+        { entry: 'component:slide', trigger: 'hover', png: '.chamber/check/r-1/slide-motion@wide.png', frames: 4, moved: true, reducedMoves: true, ms: 300 },
         { entry: 'component:still', trigger: 'focus', png: '.chamber/check/r-1/still-motion@wide.png', frames: 1, moved: false, reducedMoves: false },
       ],
     },
@@ -322,7 +324,7 @@ test('the text lists the motion strips, says when nothing moved, and marks one t
   const text = formatSystemCheckText({ report, name: 'Acme', reportPath: null });
   assert.match(
     text,
-    /Motion strips \(wide board\): frames from start to end, left to right, and last the end with reduced motion\.\n {2}--duration-fast-motion@wide\.png {2}--duration-fast: 4 frames on hover\n {2}slide-motion@wide\.png {2}slide: 4 frames on hover; it still moves with reduced motion\n {2}still-motion@wide\.png {2}still: nothing moved on focus, so one frame/,
+    /Motion strips \(wide board\): frames from start to end, left to right, each captioned with its time, and last the end with reduced motion\.\n {2}--duration-fast-motion@wide\.png {2}--duration-fast: 4 frames on hover over 200 ms\n {2}slide-motion@wide\.png {2}slide: 4 frames on hover over 300 ms; it still moves with reduced motion\n {2}still-motion@wide\.png {2}still: nothing moved on focus, so one frame/,
   );
   assert.ok(!text.includes('—'));
 });

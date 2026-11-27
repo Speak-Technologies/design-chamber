@@ -90,8 +90,8 @@ export type InspectPage = {
 /** A clip in document coordinates. */
 export type CaptureClip = { y: number; height: number; scale?: number; x?: number; width?: number };
 
-/** What `animationFrames` saw: the frames, whether anything moved, and the end with reduced motion. */
-export type MotionFrames = { frames: Buffer[]; moved: boolean; reduced: Buffer; reducedMoves: boolean };
+/** What `animationFrames` saw: the frames and the time each shows (ms from the start), whether anything moved, and the end with reduced motion. */
+export type MotionFrames = { frames: Buffer[]; moved: boolean; reduced: Buffer; reducedMoves: boolean; times: number[] };
 
 /** The longest motion pictured, ms: a slower one is pictured up to here (an infinite one for one iteration). */
 const MOTION_TOTAL_MAX = 10_000;
@@ -480,10 +480,11 @@ const renderOne = async (
             await waitFrames();
             return done !== null;
           };
+          const totalOf = (): number => (started.length === 0 ? 0 : Math.min(MOTION_TOTAL_MAX, Math.max(...started.map((one) => one.end))));
           /** Seek what has started to `at` (a share of the longest), then picture the clip. */
           const shotAt = async (share: number): Promise<Buffer> => {
             if (started.length > 0) {
-              const total = Math.min(MOTION_TOTAL_MAX, Math.max(...started.map((one) => one.end)));
+              const total = totalOf();
               await answered(() => page.send('Animation.seekAnimations', { animations: started.map((one) => one.id), currentTime: total * share }));
               guard();
               await waitFrames();
@@ -503,7 +504,12 @@ const renderOne = async (
             const moved = started.length > 0;
             const count = moved ? Math.max(2, Math.floor(frames)) : 1;
             const shots: Buffer[] = [];
-            for (let index = 0; index < count; index += 1) shots.push(await shotAt(count === 1 ? 1 : index / (count - 1)));
+            const times: number[] = [];
+            for (let index = 0; index < count; index += 1) {
+              const share = count === 1 ? 1 : index / (count - 1);
+              times.push(Math.round(totalOf() * share));
+              shots.push(await shotAt(share));
+            }
             await settleClear();
             // The same trigger with reduced motion: whatever still starts is sought to its end.
             reducedMedia = true;
@@ -514,7 +520,7 @@ const renderOne = async (
             await force([trigger]);
             const reducedMoves = started.length > 0;
             const reduced = await shotAt(1);
-            return { frames: shots, moved, reduced, reducedMoves };
+            return { frames: shots, moved, reduced, reducedMoves, times };
           } finally {
             off();
             await settleClear();

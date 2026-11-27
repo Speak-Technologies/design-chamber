@@ -320,8 +320,12 @@ const STATE_PICTURES_SHOWN = 12;
 const statePictureLines = (render: NonNullable<SystemCheckReport['render']>, reportPath: string | null): string[] => {
   const pictured = (render.states ?? []).filter((result) => result.png !== null);
   if (pictured.length === 0) return [];
-  const lines = ['', 'State pictures (each labelled hover, focus or active state forced on its element, wide board):'];
-  for (const result of pictured.slice(0, STATE_PICTURES_SHOWN)) lines.push(`  ${fileName(result.png ?? '')}${result.styled ? '' : '  (changes nothing)'}`);
+  const lines = ['', 'State pictures (wide board): each labelled hover, focus or active state, the element at rest on the left and forced on the right:'];
+  for (const result of pictured.slice(0, STATE_PICTURES_SHOWN)) {
+    const component = result.entry.slice(result.entry.indexOf(':') + 1);
+    const named = `${component}${result.variant === undefined ? '' : ` (${result.variant})`}, ${result.state}`;
+    lines.push(`  ${fileName(result.png ?? '')}  ${named}${result.styled ? '' : ': changes nothing'}`);
+  }
   if (pictured.length > STATE_PICTURES_SHOWN) lines.push(`  and ${pictured.length - STATE_PICTURES_SHOWN} more in ${reportPath ?? 'the report'}`);
   return lines;
 };
@@ -336,12 +340,12 @@ const MOTION_STRIPS_SHOWN = 12;
 const motionPictureLines = (render: NonNullable<SystemCheckReport['render']>, reportPath: string | null): string[] => {
   const strips = render.motion ?? [];
   if (strips.length === 0) return [];
-  const lines = ['', 'Motion strips (wide board): frames from start to end, left to right, and last the end with reduced motion.'];
+  const lines = ['', 'Motion strips (wide board): frames from start to end, left to right, each captioned with its time, and last the end with reduced motion.'];
   for (const strip of strips.slice(0, MOTION_STRIPS_SHOWN)) {
     const what = strip.entry.slice(strip.entry.indexOf(':') + 1);
     const note = !strip.moved
       ? `nothing moved on ${strip.trigger}, so one frame`
-      : `${strip.frames} frames on ${strip.trigger}${strip.reducedMoves ? '; it still moves with reduced motion' : ''}`;
+      : `${strip.frames} frames on ${strip.trigger}${strip.ms === undefined ? '' : ` over ${strip.ms} ms`}${strip.reducedMoves ? '; it still moves with reduced motion' : ''}`;
     lines.push(`  ${fileName(strip.png)}  ${what}: ${note}`);
   }
   if (strips.length > MOTION_STRIPS_SHOWN) lines.push(`  and ${strips.length - MOTION_STRIPS_SHOWN} more in ${reportPath ?? 'the report'}`);
@@ -373,7 +377,7 @@ const screenPictureLines = (render: NonNullable<SystemCheckReport['render']>, ru
 const comparePictureLines = (render: NonNullable<SystemCheckReport['render']>): string[] => {
   const sheets = render.compares ?? [];
   if (sheets.length === 0) return [];
-  const lines = ['', 'Compare sheets (the screen as drawn on the left, the real app on the right, both at full size and top-aligned). Look for what differs:'];
+  const lines = ['', 'Compare sheets: "Design" on the left is the screen as drawn, "Your app" on the right is the screenshot, both at full size and top-aligned. Look for what differs:'];
   for (const sheet of sheets) {
     const viewport = render.screens?.viewports.find((candidate) => candidate.screen === sheet.screen && candidate.id === sheet.viewport);
     const size = viewport === undefined ? sheet.viewport : `${viewport.label} ${viewport.width}x${viewport.height}`;

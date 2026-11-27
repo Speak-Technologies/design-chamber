@@ -17,6 +17,7 @@ import { findingMessage, parseFindingData } from '../../../src/shared/checks.ts'
 import { SYSTEM_STATE_SHOTS_MAX } from '../../../src/shared/limits.ts';
 import type { ArtboardCheck } from '../../../src/shared/types.ts';
 import { pngOfSize } from '../systems/fake-cdp.ts';
+import { CAPTION_BAND, decodePng, encodePng, SIDE_BY_SIDE_GAP } from '../../../src/service/check/png-stitch.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
 
 const REST: Record<string, string> = {
@@ -56,7 +57,7 @@ test('a state is styled when anything a person would see changes, and not when o
 
 // ---- the boundary ----
 
-const target = (over: Partial<BoardStateTarget> = {}): BoardStateTarget => ({ entry: 'component:button', state: 'hover', host: 0, element: 1, twin: false, box: { x: 100, y: 2000, w: 80, h: 32 }, ...over });
+const target = (over: Partial<BoardStateTarget> = {}): BoardStateTarget => ({ entry: 'component:button', state: 'hover', host: 0, element: 1, twin: false, variant: '', box: { x: 100, y: 2000, w: 80, h: 32 }, ...over });
 
 test('the probe state list is checked: component entries, the closed states, integer indexes, a finite box; a forged long list is refused', () => {
   const clean = sanitizeStateProbe(
@@ -117,8 +118,9 @@ type Call = { method: string; path?: string; states?: readonly string[]; clip?: 
 const keyOf = (path: ElementPath): string => path.map((step) => `${step.selector}#${step.index}`).join(' > ');
 
 /** A page whose forced styles come from `styled` (element index → the style while forced); `gone` elements are not found. */
-const fakeStatePage = (calls: Call[], options: { styled?: Set<number>; gone?: Set<number>; failCapture?: boolean } = {}) => {
+const fakeStatePage = (calls: Call[], options: { styled?: Set<number>; gone?: Set<number>; failCapture?: number } = {}) => {
   const forced = new Map<string, readonly string[]>();
+  let captures = 0;
   return {
     computedStyle: async (path: ElementPath) => {
       calls.push({ method: 'computedStyle', path: keyOf(path) });
@@ -136,7 +138,8 @@ const fakeStatePage = (calls: Call[], options: { styled?: Set<number>; gone?: Se
     scrollTo: async () => undefined,
     capture: async (clip: { y: number; height: number; x?: number; width?: number }) => {
       calls.push({ method: 'capture', clip });
-      if (options.failCapture === true) throw new CdpError('Page.captureScreenshot', 'broken');
+      captures += 1;
+      if (options.failCapture === captures) throw new CdpError('Page.captureScreenshot', 'broken');
       return pngOfSize(clip.width ?? 1526, clip.height);
     },
     save: async (label: string) => {
@@ -164,12 +167,14 @@ test('each state is forced, read, pictured tight and cleared before the next ele
   // The order for each element: style off, force, style on, picture, clear; then the next element.
   assert.deepEqual(
     calls.map((call) => call.method + (call.states === undefined ? '' : `[${call.states.join(',')}]`)),
-    ['computedStyle', 'forceState[hover]', 'computedStyle', 'capture', 'save', 'forceState[]', 'computedStyle', 'forceState[hover]', 'computedStyle', 'capture', 'save', 'forceState[]'],
+    ['computedStyle', 'capture', 'forceState[hover]', 'computedStyle', 'capture', 'save', 'forceState[]', 'computedStyle', 'capture', 'forceState[hover]', 'computedStyle', 'capture', 'save', 'forceState[]'],
   );
   assert.ok([...page.forced.values()].every((states) => states.length === 0), 'nothing is left forced');
   // Tight clips with a 16px margin, kept inside the board's width and the page's top.
   assert.deepEqual(calls.filter((call) => call.method === 'capture').map((call) => call.clip), [
     { x: 84, y: 1984, width: 112, height: 64 },
+    { x: 84, y: 1984, width: 112, height: 64 },
+    { x: 0, y: 284, width: 81, height: 56 },
     { x: 0, y: 284, width: 81, height: 56 },
   ]);
 });
@@ -181,7 +186,8 @@ test('an element gone since the probe is skipped; a failed picture still clears 
   assert.deepEqual(calls.map((call) => call.method), ['computedStyle'], 'never forced');
 
   const failing: Call[] = [];
-  const page = fakeStatePage(failing, { failCapture: true });
+  // The forced picture fails (the second capture): the state is still cleared.
+  const page = fakeStatePage(failing, { failCapture: 2 });
   await assert.rejects(pictureStates(page, { states: [target()], truncated: false }, { viewportWidth: 1526, deadline: Number.POSITIVE_INFINITY }), CdpError);
   assert.deepEqual(failing.at(-1), { method: 'forceState', path: '[data-dc-example-host]#0 > *#1', states: [] });
 });
@@ -423,7 +429,7 @@ test('the text names the state pictures, marks the ones that change nothing, and
   });
   const text = formatSystemCheckText({ report, name: 'Acme', reportPath: '/x/check.json' });
   assert.match(text, /forced on the element, it changes nothing you can see\. Style it, or remove the label\. "chip: hover" Picture: chip-hover@wide\.png\./);
-  assert.match(text, /State pictures \(each labelled hover, focus or active state forced on its element, wide board\):\n {2}button-hover@wide\.png\n {2}chip-hover@wide\.png {2}\(changes nothing\)/);
+  assert.match(text, /State pictures \(wide board\): each labelled hover, focus or active state, the element at rest on the left and forced on the right:\n {2}button-hover@wide\.png {2}button, hover\n {2}chip-hover@wide\.png {2}chip, hover: changes nothing/);
   assert.ok(!text.includes('—'));
 });
 
@@ -484,4 +490,44 @@ test('an unstyled state says why when the check can tell: no resting copy, or fo
   assert.equal(both?.params?.hint, 'both');
   assert.match(findingMessage(both ?? assert.fail()), /no resting copy.*labelled focus/);
   assert.equal(parseFindingData({ ...both, params: { count: 2, hint: 'forged' } })?.params?.hint, undefined, 'a forged hint never reaches a sentence');
+});
+
+// ---- the picture: rest beside forced, captioned, named with the variant ----
+
+test('a state picture is the element at rest beside it forced, captioned, and named with the component and variant', async () => {
+  const saved: { label: string; bytes: Buffer }[] = [];
+  let shot = 0;
+  const page = {
+    computedStyle: async () => ({ ...REST }),
+    forceState: async () => true,
+    scrollTo: async () => undefined,
+    // The rest picture white, the forced one black, so each side is told apart.
+    capture: async (clip: { width?: number; height: number }) => {
+      shot += 1;
+      const value = shot % 2 === 1 ? 0xff : 0x00;
+      return encodePng({ width: clip.width ?? 1, height: clip.height, channels: 3, rows: Array.from({ length: clip.height }, () => Buffer.alloc((clip.width ?? 1) * 3, value)) });
+    },
+    save: async (label: string, _part: number, _parts: number, bytes: Buffer) => {
+      saved.push({ label, bytes });
+      return `${label}@wide.png`;
+    },
+  };
+  const pass = await pictureStates(page, { states: [target({ variant: 'primary', twin: true })], truncated: false }, { viewportWidth: 1526, deadline: Number.POSITIVE_INFINITY });
+  assert.equal(saved[0]?.label, 'button-primary-hover');
+  assert.equal(pass.results[0]?.variant, 'primary');
+  const picture = decodePng(saved[0]?.bytes ?? assert.fail());
+  assert.equal(picture.width, 112 * 2 + SIDE_BY_SIDE_GAP);
+  assert.equal(picture.height, 64 + CAPTION_BAND);
+  const at = (x: number, y: number): number => picture.rows[y]?.[x * picture.channels] ?? -1;
+  assert.equal(at(50, CAPTION_BAND + 30), 0xff, 'rest on the left');
+  assert.equal(at(112 + SIDE_BY_SIDE_GAP + 50, CAPTION_BAND + 30), 0x00, 'forced on the right');
+  const ink = (from: number, to: number): number => {
+    let n = 0;
+    for (let y = 0; y < CAPTION_BAND; y += 1) for (let x = from; x < to; x += 1) if ((picture.rows[y]?.[x * picture.channels] ?? 255) < 0x80) n += 1;
+    return n;
+  };
+  assert.ok(ink(0, 112) > 20 && ink(112 + SIDE_BY_SIDE_GAP, picture.width) > 20, 'both sides captioned');
+
+  // A variant that isn't a plain short name is left out of the name.
+  assert.equal(sanitizeStateProbe({ states: [{ ...target(), variant: '../x' }, { ...target(), variant: 'Primary Large' }] }, SYSTEM_STATE_SHOTS_MAX).states.map((one) => one.variant).join('|'), '|primary-large');
 });

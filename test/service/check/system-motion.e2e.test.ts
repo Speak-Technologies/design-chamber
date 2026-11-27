@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 
-import { decodePng, PNG_STITCH_SIDE_MAX, SIDE_BY_SIDE_GAP, type DecodedPng } from '../../../src/service/check/png-stitch.ts';
+import { CAPTION_BAND, decodePng, PNG_STITCH_SIDE_MAX, SIDE_BY_SIDE_GAP, type DecodedPng } from '../../../src/service/check/png-stitch.ts';
 import { cliSystemStore, runSystemCheck } from '../../../src/service/check/system-run.ts';
 import { SYSTEM_MOTION_FRAMES, SYSTEM_MOTION_SHOTS_MAX } from '../../../src/shared/limits.ts';
 import { chromeOrSkip } from '../../helpers/chrome-or-skip.ts';
@@ -39,15 +39,19 @@ const framesOf = (strip: DecodedPng, count: number): { left: number; width: numb
   return Array.from({ length: count }, (_, index) => ({ left: index * (width + SIDE_BY_SIDE_GAP), width }));
 };
 
-/** The leftmost dark pixel in a frame's row, or -1. */
-const darkAt = (strip: DecodedPng, frame: { left: number; width: number }, y: number): number => {
-  const row = strip.rows[y];
-  if (row === undefined) return -1;
-  for (let x = 0; x < frame.width; x += 1) {
-    const at = (frame.left + x) * strip.channels;
-    if ((row[at] ?? 255) + (row[at + 1] ?? 255) + (row[at + 2] ?? 255) < 150) return x;
+/** The rightmost column where frame `b` differs from frame `a` (below the caption band), or -1 when they match. */
+const rightmostChange = (strip: DecodedPng, a: { left: number; width: number }, b: { left: number; width: number }): number => {
+  let out = -1;
+  for (let y = CAPTION_BAND; y < strip.height; y += 1) {
+    const row = strip.rows[y];
+    if (row === undefined) continue;
+    for (let x = 0; x < a.width; x += 1) {
+      const pa = (a.left + x) * strip.channels;
+      const pb = (b.left + x) * strip.channels;
+      if (Math.abs((row[pa] ?? 0) - (row[pb] ?? 0)) + Math.abs((row[pa + 1] ?? 0) - (row[pb + 1] ?? 0)) + Math.abs((row[pa + 2] ?? 0) - (row[pb + 2] ?? 0)) > 60) out = Math.max(out, x);
+    }
   }
-  return -1;
+  return out;
 };
 
 test('motion is pictured frame by frame from Node over CDP, and once more with reduced motion', { timeout: 180_000 }, async (t) => {
@@ -80,11 +84,11 @@ test('motion is pictured frame by frame from Node over CDP, and once more with r
     const demoStrip = decodePng(await readFile(tmp.at(`_systems/acme/${demo.png}`)));
     assert.ok(demoStrip.width <= PNG_STITCH_SIDE_MAX);
     const demoFrames = framesOf(demoStrip, SYSTEM_MOTION_FRAMES + 1);
-    const middle = Math.floor(demoStrip.height / 2);
-    const chipX = demoFrames.map((frame) => darkAt(demoStrip, frame, middle));
-    assert.ok(chipX.every((x) => x >= 0), `a chip in every frame: ${chipX.join(', ')}`);
-    for (let index = 1; index < SYSTEM_MOTION_FRAMES; index += 1) assert.ok((chipX[index] ?? 0) > (chipX[index - 1] ?? 0), `the chip moves right: ${chipX.join(', ')}`);
-    assert.equal(chipX[SYSTEM_MOTION_FRAMES], chipX[0], `with reduced motion the chip stays at the start: ${chipX.join(', ')}`);
+    // The chip's leading edge, from what changed since the first frame, moves right; with reduced motion nothing changed.
+    const lead = demoFrames.map((frame) => rightmostChange(demoStrip, demoFrames[0] ?? frame, frame));
+    for (let index = 2; index < SYSTEM_MOTION_FRAMES; index += 1) assert.ok((lead[index] ?? 0) > (lead[index - 1] ?? 0), `the chip moves right: ${lead.join(', ')}`);
+    assert.ok((lead[1] ?? -1) > 0, `the chip has moved by the second frame: ${lead.join(', ')}`);
+    assert.equal(lead[SYSTEM_MOTION_FRAMES], -1, `with reduced motion the chip stays at the start: ${lead.join(', ')}`);
 
     // The component's dot: 300 ms of slide, still moving with reduced motion (its CSS has no reduced rule).
     const slide = byEntry('component:slide');
@@ -92,11 +96,13 @@ test('motion is pictured frame by frame from Node over CDP, and once more with r
     assert.deepEqual([slide.moved, slide.frames, slide.reducedMoves, slide.trigger], [true, SYSTEM_MOTION_FRAMES, true, 'hover']);
     const slideStrip = decodePng(await readFile(tmp.at(`_systems/acme/${slide.png}`)));
     const slideFrames = framesOf(slideStrip, SYSTEM_MOTION_FRAMES + 1);
-    const dotY = 24 + 20;
-    const dotX = slideFrames.map((frame) => darkAt(slideStrip, frame, dotY));
-    assert.ok(dotX.every((x) => x >= 0), dotX.join(', '));
-    for (let index = 1; index < SYSTEM_MOTION_FRAMES; index += 1) assert.ok((dotX[index] ?? 0) > (dotX[index - 1] ?? 0), dotX.join(', '));
-    assert.equal(dotX[SYSTEM_MOTION_FRAMES], dotX[SYSTEM_MOTION_FRAMES - 1], `the reduced end is the end: ${dotX.join(', ')}`);
+    const dot = slideFrames.map((frame) => rightmostChange(slideStrip, slideFrames[0] ?? frame, frame));
+    for (let index = 2; index < SYSTEM_MOTION_FRAMES; index += 1) assert.ok((dot[index] ?? 0) > (dot[index - 1] ?? 0), dot.join(', '));
+    const end = slideFrames[SYSTEM_MOTION_FRAMES - 1];
+    const reduced = slideFrames[SYSTEM_MOTION_FRAMES];
+    assert.ok(end !== undefined && reduced !== undefined);
+    assert.equal(rightmostChange(slideStrip, end, reduced), -1, 'the reduced end is the end');
+    assert.equal(slide.ms, 300, 'the strip says how long it runs');
 
     // No transition: one frame, and the reduced end beside it.
     const still = byEntry('component:still');

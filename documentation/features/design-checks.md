@@ -290,8 +290,10 @@ Findings name `screens/<id>.html` and the viewport ("screens/home.html @ Phone 3
   any `marketing` screen counts for `marketing`.
 - **Compare sheets** (T18). A screen with a `source` (a screenshot of the real app in `sources/screens/`)
   gets `compare-<id>@<viewport>.png` for each light viewport within 2 px of the picture's width: the
-  screen as drawn on the left (all its slices stacked), a 16 px grey gap, the picture on the right, both at
-  full size and top-aligned, the shorter one padded white. A sheet is at most 20 megapixels, so a very long
+  screen as drawn on the left, captioned "DESIGN" (its slices stacked into the page once: the last slice,
+  which the browser scrolls only as far as the page's bottom, adds just the rows the others don't show), a
+  16 px grey gap, the picture on the right captioned "YOUR APP", both at full size and top-aligned, the
+  shorter one padded white. A sheet is at most 20 megapixels, so a very long
   page is cut at the bottom. A PNG is read directly; a JPEG (or a PNG Node can't read, such as a palette
   one) is drawn once by the check's browser, offline, as the picture alone, and read back. The service
   never opens, runs or pictures the app itself. Notes (`system-compare-skipped`): "The source picture is
@@ -317,9 +319,11 @@ nothing in it is changed). When the example also has an instance labelled `rest`
 `normal`, `idle`, `enabled`) with the same `data-dc-variant` and `data-dc-size`, the state is forced on
 that one instead, so a hover copy drawn with a class such as `is-hover` doesn't hide a real `:hover`.
 
-- **The picture.** A tight picture of the element with 16 px around it, the state on:
-  `button-hover@wide.png`, `button-focus-visible@wide.png` (`-b`, `-c` when one component has the same
-  state twice). Animations run fast while a state is forced, so a transition is pictured where it ends.
+- **The picture.** The element with 16 px around it twice, side by side: at rest on the left, the state
+  forced on the right, each captioned in the picture ("REST", or "NOT FORCED" when there is no resting copy,
+  then "HOVER", "FOCUS VISIBLE"…). It is named by component, variant and state: `button-primary-hover@wide.png`
+  (`-b`, `-c` when the same name comes twice), and the text names the component and variant too. Animations
+  run fast while a state is forced, so a transition is pictured where it ends.
 - **The verdict.** The element's computed text colour, background, border colours, box shadow, outline
   and transform with the state on are compared with the state off. Nothing visible changed is
   `system-state-unstyled` (warning), one per component, naming the component and its states in the detail
@@ -348,8 +352,11 @@ done from the service over CDP; no script is added to the page.
   and the end (a motion longer than 10 seconds is pictured up to 10 seconds), one picture each. Then the
   same once more with `prefers-reduced-motion: reduce`, taken at the end. The pictures are stitched left
   to right into `<entry>-motion@wide.png` (`--duration-fast-motion@wide.png`, `slide-motion@wide.png`),
-  16 px apart, each the element with 24 px around it. An element where nothing starts is one frame and
-  the reduced one, and the text says "nothing moved on hover, so one frame".
+  16 px apart, each the element with 40 px around it (room for a lift and its shadow); a demo chip is
+  pictured with its token's row, so the name and value show. Each frame is captioned in the picture with
+  its time ("0 MS", "67 MS", "133 MS", "200 MS"), so similar speeds read apart, and the last "REDUCED
+  MOTION". An element where nothing starts is one frame ("NO MOTION") and the reduced one, and the text
+  says "nothing moved on hover, so one frame"; otherwise it says how long ("4 frames on hover over 200 ms").
 - **Reduced motion.** It raises nothing new (`system-motion-no-reduced` stays the file rule), but the last
   frame shows it, and the text says "it still moves with reduced motion" when something still started.
   Every media setting is sent with it, and the page goes back to no-preference and full speed after.

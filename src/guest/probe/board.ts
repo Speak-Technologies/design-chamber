@@ -134,7 +134,7 @@ export const collectStates = (max: number): BoardStateProbe => {
         continue;
       }
       const rect = (all[index] ?? host).getBoundingClientRect();
-      states.push({ entry, state, host: hostIndex, element: index, twin: twin !== undefined, box: { x: rect.left + window.scrollX, y: rect.top + window.scrollY, w: rect.width, h: rect.height } });
+      states.push({ entry, state, host: hostIndex, element: index, twin: twin !== undefined, variant: instance.variant.slice(0, 40), box: { x: rect.left + window.scrollX, y: rect.top + window.scrollY, w: rect.width, h: rect.height } });
     }
   }
   return { states, truncated };
@@ -143,7 +143,8 @@ export const collectStates = (max: number): BoardStateProbe => {
 /**
  * The motion to picture (system-builder-depth T17): in each example's first (light ground) host, the
  * elements labelled `data-dc-motion` (triggered by their `data-dc-state` when it is one the check forces,
- * else hover), then the Motion section's demo chips (`.dc-motion-demo`, played by hover). Examples come
+ * else hover), then the Motion section's demo chips (`.dc-motion-demo`, played by hover, boxed with their
+ * token's row so its name shows). Examples come
  * first, so the chips take what is left of `max`; only entries of `kinds` are read (`token` for the
  * chips), so another area can't fill it. Each with its entry, where it is and its box. Reads only.
  */
@@ -182,7 +183,14 @@ export const collectMotion = (max: number, kinds: readonly string[]): BoardMotio
     const demo = demos[index];
     if (!demo) continue;
     const entry = entryOf(demo);
-    if (wanted(entry)) push({ entry, kind: 'demo', host: null, element: index, trigger: 'hover', box: boxOf(demo) });
+    if (!wanted(entry)) continue;
+    // The demo with its token's row around it, so the strip shows the token's name and value too.
+    const row = demo.closest('[data-dc-entry]');
+    const a = boxOf(demo);
+    const b = row === null ? a : boxOf(row);
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    push({ entry, kind: 'demo', host: null, element: index, trigger: 'hover', box: { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y } });
   }
   return { items, truncated };
 };

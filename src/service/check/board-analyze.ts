@@ -295,8 +295,13 @@ export type BoardStateTarget = {
   element: number;
   /** The element is the instance's rest twin (same variant and size), not the labelled instance itself. */
   twin: boolean;
+  /** The instance's `data-dc-variant`, lower case; '' when it has none or it isn't a plain short name. */
+  variant: string;
   box: { x: number; y: number; w: number; h: number };
 };
+
+/** A variant as a picture's name and the text take it: lower-case letters, digits and dashes. */
+const VARIANT_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 export type BoardStateProbe = { states: BoardStateTarget[]; truncated: boolean };
 
@@ -317,7 +322,8 @@ export const sanitizeStateProbe = (value: unknown, max: number): BoardStateProbe
     const element = indexOf(entry.element);
     const box = parseBox(entry.box);
     if (state === undefined || host === null || element === null || box === null) continue;
-    states.push({ entry: entry.entry, state, host, element, twin: entry.twin === true, box });
+    const variant = typeof entry.variant === 'string' ? entry.variant.trim().toLowerCase().replace(/\s+/g, '-') : '';
+    states.push({ entry: entry.entry, state, host, element, twin: entry.twin === true, variant: VARIANT_PATTERN.test(variant) ? variant : '', box });
   }
   return { states, truncated: value.truncated === true };
 };
@@ -359,11 +365,12 @@ export const stateStyled = (before: Readonly<Record<string, string>>, after: Rea
 export type StateHint = 'rest' | 'focus-visible';
 
 /**
- * One forced state as the check saw it: the picture (null when it couldn't be taken), the verdict, and for
+ * One forced state as the check saw it: the picture (null when it couldn't be taken; the element at rest
+ * beside it with the state forced), the verdict, the instance's variant when it names one, and for
  * an unstyled one the likely cause: `rest` when it was forced on the labelled copy itself (no resting copy
  * with the same variant and size), `focus-visible` when labelled focus but :focus-visible changes it.
  */
-export type StateResult = { entry: string; state: ForcedState; png: string | null; styled: boolean; hint?: StateHint };
+export type StateResult = { entry: string; state: ForcedState; png: string | null; styled: boolean; variant?: string; hint?: StateHint };
 
 /** The words a hint adds after its state in the finding's detail. */
 const HINT_DETAIL: Readonly<Record<StateHint, string>> = { rest: 'no resting copy beside it to force the state on', 'focus-visible': 'labelled focus but its CSS styles :focus-visible' };
@@ -447,8 +454,8 @@ export const sanitizeMotionProbe = (value: unknown, max: number): BoardMotionPro
   return { items, truncated: value.truncated === true };
 };
 
-/** One motion strip as the check took it: the picture, how many frames, whether anything moved, and with reduced motion. */
-export type MotionResult = { entry: string; trigger: ForcedState; png: string; frames: number; moved: boolean; reducedMoves: boolean };
+/** One motion strip as the check took it: the picture, how many frames, whether anything moved, with reduced motion, and how long it runs (ms). */
+export type MotionResult = { entry: string; trigger: ForcedState; png: string; frames: number; moved: boolean; reducedMoves: boolean; ms?: number };
 
 // ---- one area only (`--area`) ----
 

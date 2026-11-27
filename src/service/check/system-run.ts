@@ -69,7 +69,7 @@ import { ensureChamberDir } from './output.ts';
 import { decodePng, PNG_STITCH_PIXELS_MAX, PNG_STITCH_SIDE_MAX, PngStitchError, pictureSize, SIDE_BY_SIDE_GAP, stitchPngs, stitchSideBySide } from './png-stitch.ts';
 import { compareBudgetNote, planCompares, sourceDocument, type CompareSource, type CompareTarget } from './system-compare.ts';
 import { checkAsset } from '../systems/assets.ts';
-import { CHECK_RUN_DEADLINE_MS, renderArtboards, type ElementPath, type InspectPage, type InspectResult, type LoadedDocument, type PlannedArtboard, type RenderOutcome } from './render.ts';
+import { CHECK_RUN_DEADLINE_MS, renderArtboards, type ElementPath, type ForcedState, type InspectPage, type InspectResult, type LoadedDocument, type PlannedArtboard, type RenderOutcome } from './render.ts';
 import { dedupeDarkScreenFindings, planScreenArtboards, screenSkippedFindings, type ScreenPlan } from './system-screens.ts';
 import { areaEmpty, contrastFindings, s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemBoardShot, type SystemCheckRender, type SystemCheckReport, type SystemCompareSheet } from './system-static.ts';
 
@@ -245,6 +245,8 @@ export const readIconTexts = async (source: FileSource, detail: SystemDetail): P
 const STATE_SHOT_MARGIN = 16;
 /** A state picture is at most this tall: it shows one control, not a whole example. */
 const STATE_SHOT_HEIGHT_MAX = 600;
+/** A forced state as its picture's caption names it. */
+const STATE_CAPTIONS: Readonly<Record<ForcedState, string>> = { hover: 'Hover', focus: 'Focus', 'focus-visible': 'Focus visible', active: 'Active' };
 /** The share of a board pass the state pictures may run to; past it the rest are left out with a note. */
 const STATE_PASS_TIME_SHARE = 0.85;
 
@@ -276,18 +278,30 @@ export const pictureStates = async (
       { selector: '*', index: target.element },
     ];
     const before = await page.computedStyle(element);
-    if (before === null || !(await page.forceState(element, [target.state]))) continue;
+    if (before === null) continue;
+    // The element at rest first, the same clip as the forced picture, so the two sit side by side.
+    const { box } = target;
+    const x = Math.min(Math.max(0, Math.floor(box.x - STATE_SHOT_MARGIN)), input.viewportWidth - 1);
+    const width = Math.max(1, Math.min(input.viewportWidth, Math.ceil(box.x + box.w + STATE_SHOT_MARGIN)) - x);
+    const y = Math.max(0, Math.floor(box.y - STATE_SHOT_MARGIN));
+    const height = Math.max(1, Math.min(STATE_SHOT_HEIGHT_MAX, Math.ceil(box.h + STATE_SHOT_MARGIN * 2)));
+    await page.scrollTo(y);
+    const rest = await page.capture({ x, y, width, height });
+    if (!(await page.forceState(element, [target.state]))) continue;
     let after: Record<string, string> | null = null;
     let png: string | null = null;
     try {
       after = await page.computedStyle(element);
-      const { box } = target;
-      const x = Math.min(Math.max(0, Math.floor(box.x - STATE_SHOT_MARGIN)), input.viewportWidth - 1);
-      const width = Math.max(1, Math.min(input.viewportWidth, Math.ceil(box.x + box.w + STATE_SHOT_MARGIN)) - x);
-      const y = Math.max(0, Math.floor(box.y - STATE_SHOT_MARGIN));
-      const height = Math.max(1, Math.min(STATE_SHOT_HEIGHT_MAX, Math.ceil(box.h + STATE_SHOT_MARGIN * 2)));
-      await page.scrollTo(y);
-      png = await page.save(`${id}-${target.state}`, 1, 1, await page.capture({ x, y, width, height }));
+      const forced = await page.capture({ x, y, width, height });
+      let picture: Buffer;
+      try {
+        picture = stitchSideBySide([rest, forced], { captions: [target.twin ? 'Rest' : 'Not forced', STATE_CAPTIONS[target.state]] });
+      } catch (error) {
+        // A picture that can't be stitched is kept on its own.
+        if (!(error instanceof PngStitchError)) throw error;
+        picture = forced;
+      }
+      png = await page.save([id, target.variant, target.state].filter((part) => part !== '').join('-'), 1, 1, picture);
     } finally {
       // Cleared before the next element, whatever happened to this one.
       await page.forceState(element, []);
@@ -306,7 +320,7 @@ export const pictureStates = async (
       }
     }
     if (!styled && hint === undefined && !target.twin) hint = 'rest';
-    results.push({ entry: target.entry, state: target.state, png, styled, ...(hint !== undefined ? { hint } : {}) });
+    results.push({ entry: target.entry, state: target.state, png, styled, ...(target.variant !== '' ? { variant: target.variant } : {}), ...(hint !== undefined ? { hint } : {}) });
     if (png !== null) pngs.push(png);
   }
   const findings = stateFindings(results, 'wide');
@@ -320,8 +334,8 @@ export const motionKindsOf = (area: SystemArea | null): string[] => {
   return area === null ? ['component', 'pattern', 'brand', 'token'] : [all[area]];
 };
 
-/** Room around a motion element, so a chip that slides or an element that lifts stays in the frame. */
-const MOTION_SHOT_MARGIN = 24;
+/** Room around a motion element, so an element that lifts or grows, and its shadow, stay in the frame. */
+const MOTION_SHOT_MARGIN = 40;
 
 /**
  * The motion pass (system-builder-depth T17), on the wide light board after the state pictures: for each
@@ -362,14 +376,17 @@ export const pictureMotion = async (
     if (shot === null) continue;
     let strip: Buffer;
     try {
-      strip = stitchSideBySide([...shot.frames, shot.reduced]);
+      // Each frame captioned with its time (similar speeds read apart), or "No motion"; last the reduced end.
+      const captions = shot.moved ? shot.times.map((ms) => `${ms} ms`) : ['No motion'];
+      strip = stitchSideBySide([...shot.frames, shot.reduced], { captions: [...captions, 'Reduced motion'] });
     } catch (error) {
       if (!(error instanceof PngStitchError)) throw error;
       continue;
     }
     const label = `${parseEntryKey(target.entry)?.key ?? 'entry'}-motion`;
     const png = await page.save(label, 1, 1, strip);
-    results.push({ entry: target.entry, trigger: target.trigger, png, frames: shot.frames.length, moved: shot.moved, reducedMoves: shot.reducedMoves });
+    const ms = shot.moved ? shot.times.at(-1) : undefined;
+    results.push({ entry: target.entry, trigger: target.trigger, png, frames: shot.frames.length, moved: shot.moved, reducedMoves: shot.reducedMoves, ...(ms !== undefined ? { ms } : {}) });
   }
   const findings: CheckFindingData[] = cut ? [{ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: 'wide', params: { pictured: 'motion', count: results.length, max: SYSTEM_MOTION_SHOTS_MAX } }] : [];
   return { results, pngs: results.map((result) => result.png), findings };
@@ -392,6 +409,24 @@ export const readCompareSources = async (source: FileSource, detail: Pick<System
     const size = checkAsset(screen.source, 'source', file.bytes).ok ? pictureSize(file.bytes) : null;
     out.push(size === null ? { screen: screen.id, source: screen.source, ok: false } : { screen: screen.id, source: screen.source, ok: true, ...size, bytes: file.bytes });
   }
+  return out;
+};
+
+/** The two sides of a compare sheet, named in the picture. */
+export const COMPARE_CAPTIONS: readonly string[] = Object.freeze(['Design', 'Your app']);
+
+/**
+ * The rows each screen slice repeats from the one above, to drop before stacking them. A design check
+ * scrolls slice i to (i - 1) × the viewport's height, but the browser stops at the page's bottom, so the
+ * last slice of a page that isn't a whole number of screens tall starts higher and shows part of the slice
+ * before it again. Only that last one overlaps.
+ */
+export const sliceOverlaps = (slices: number, viewportHeight: number, docHeight: number): number[] => {
+  const out = Array.from({ length: slices }, () => 0);
+  if (slices < 2) return out;
+  const wanted = (slices - 1) * viewportHeight;
+  const actual = Math.min(wanted, Math.max(0, docHeight - viewportHeight));
+  out[slices - 1] = Math.max(0, wanted - actual);
   return out;
 };
 
@@ -433,7 +468,7 @@ export const makeCompareSheets = async (input: {
   const ready = input.targets.flatMap((target) => {
     const artboard = input.artboards.find((candidate) => candidate.ok && candidate.screen === target.screen && candidate.viewport === target.viewport.id);
     const slices = input.slices.get(`${target.screen}|${target.viewport.id}`) ?? [];
-    return artboard !== undefined && slices.length > 0 && slices.length === artboard.pngs.length ? [{ target, slices, width: artboard.width }] : [];
+    return artboard !== undefined && slices.length > 0 && slices.length === artboard.pngs.length ? [{ target, slices, width: artboard.width, skipTop: sliceOverlaps(slices.length, artboard.height, artboard.docHeight) }] : [];
   });
   const sheetHeightOf = (width: number, sourceWidth: number): number => Math.min(PNG_STITCH_SIDE_MAX, Math.floor(PNG_STITCH_PIXELS_MAX / (width + SIDE_BY_SIDE_GAP + sourceWidth)));
 
@@ -487,7 +522,7 @@ export const makeCompareSheets = async (input: {
   }
 
   const late: CompareTarget[] = [];
-  for (const { target, slices } of ready) {
+  for (const { target, slices, skipTop } of ready) {
     const known = target.source.source;
     if (notDrawn.has(known) || clock() >= deadline) {
       late.push(target);
@@ -500,8 +535,8 @@ export const makeCompareSheets = async (input: {
     }
     let sheet: Buffer;
     try {
-      const screenPng = slices.length === 1 && slices[0] !== undefined ? slices[0] : stitchPngs(slices);
-      sheet = stitchSideBySide([screenPng, sourcePng]);
+      const screenPng = slices.length === 1 && slices[0] !== undefined ? slices[0] : stitchPngs(slices, { skipTop });
+      sheet = stitchSideBySide([screenPng, sourcePng], { captions: COMPARE_CAPTIONS });
     } catch (error) {
       if (!(error instanceof PngStitchError)) throw error;
       noteUnreadable(target);
