@@ -32,10 +32,11 @@ export type ViewerMenuInput = {
 
 /**
  * Entries that act on the computer that runs OpenChamber, not on the phone in the user's hand: Reveal opens a
- * folder there, Export saves into that computer's Downloads, Copy path names a path on its disk
- * (documentation/specs/native-extras.md §2.2). The service keeps every check; this only hides them.
+ * folder there, Export (a design's ZIP or HTML, a system's tokens) saves into that computer's export folder, Copy
+ * path names a path on its disk (documentation/specs/native-extras.md §2.2). The service keeps every check; this
+ * only hides them.
  */
-const COMPUTER_ONLY: ReadonlySet<string> = new Set(['reveal', 'zip', 'html', 'path']);
+const COMPUTER_ONLY: ReadonlySet<string> = new Set(['reveal', 'zip', 'html', 'path', 'export']);
 
 const isSeparator = (entry: { id: string } | { separator: true } | undefined): boolean => entry !== undefined && 'separator' in entry;
 

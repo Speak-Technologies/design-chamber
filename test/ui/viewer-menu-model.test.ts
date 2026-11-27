@@ -122,7 +122,7 @@ test('the media query hiding the rail Tweaks button matches NARROW_RAIL_QUERY (K
 });
 
 describe('on a phone (native-extras §2.2)', () => {
-  const COMPUTER_ONLY = ['reveal', 'zip', 'html', 'path'];
+  const COMPUTER_ONLY = ['reveal', 'zip', 'html', 'path', 'export'];
 
   test('the rail menus leave out Reveal, Export and Copy path, and keep everything that works from the phone', () => {
     assert.deepEqual(shape({ compact: true, phone: true }), ['chat', '-', 'add-to-folder', 'rename', '-', 'delete']);
@@ -157,6 +157,7 @@ describe('on a phone (native-extras §2.2)', () => {
     const entries = [{ id: 'reveal' }, { separator: true as const }, { id: 'open' }, { id: 'path' }, { separator: true as const }, { separator: true as const }, { id: 'rename' }, { separator: true as const }, { id: 'zip' }];
     assert.deepEqual(withoutComputerOnly(entries), [{ id: 'open' }, { separator: true }, { id: 'rename' }]);
     assert.deepEqual(withoutComputerOnly([{ id: 'reveal' }]), []);
+    assert.deepEqual(withoutComputerOnly([{ id: 'rename' }, { id: 'export' }]), [{ id: 'rename' }], "a system's Export tokens");
     assert.deepEqual(withoutComputerOnly([]), []);
   });
 });

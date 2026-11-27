@@ -3,12 +3,9 @@
 
 import type { TokenExportFormat } from '../../shared/types.ts';
 
-/**
- * The ZIP is written on the computer that runs the service, so a phone has nowhere to find it and is not offered the
- * export. `context` is `ready` (or null before it). `feat/native-extras` brings a `Device` model with the same rule;
- * this can read that once the two branches meet.
- */
-export const exportOffered = (context: { device?: { formFactor?: unknown } } | null): boolean => context?.device?.formFactor !== 'phone';
+// The files are written on the computer that runs the service, so a phone has nowhere to find them: the system menu
+// goes through `menuOnThisDevice` (src/ui/components/device.ts), which drops the `export` entry on a phone the same way
+// it drops a design's Reveal, Export and Copy path.
 
 export type ExportMenuEntry = { id: 'export'; label: string; disabled?: true; reason?: string };
 

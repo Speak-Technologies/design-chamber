@@ -9,19 +9,19 @@ import {
   EXPORT_NOTHING,
   exportButtonLabel,
   exportMenuEntry,
-  exportOffered,
   formatChoices,
   pickedFormats,
   renamedSentence,
 } from '../../src/ui/model/token-export-model.ts';
+import { deviceOf } from '../../src/ui/model/device-model.ts';
+import { withoutComputerOnly } from '../../src/ui/model/viewer-menu.ts';
 
-test('the export is for the computer: a phone is not offered it, anything else is', () => {
-  assert.equal(exportOffered({ device: { formFactor: 'phone' } }), false);
-  assert.equal(exportOffered({ device: { formFactor: 'tablet' } }), true);
-  assert.equal(exportOffered({ device: { formFactor: 'desktop' } }), true);
-  // An older host says nothing about the device, and a frame before `ready` has no context: both are a computer.
-  assert.equal(exportOffered({}), true);
-  assert.equal(exportOffered(null), true);
+test('the export is for the computer: a phone is not offered it, a tablet, a desktop and an older host are', () => {
+  const menu = [{ id: 'rename' }, exportMenuEntry({ viewing: false, dirty: false, unreadable: false })];
+  assert.deepEqual(withoutComputerOnly(menu).map((entry) => entry.id), ['rename'], 'what menuOnThisDevice shows on a phone');
+  // The device model decides who is a phone: an older host that says nothing, and no context before `ready`, are a desktop.
+  assert.equal(deviceOf({ device: { formFactor: 'phone', pointer: 'coarse' } }).form, 'phone');
+  for (const device of [{ formFactor: 'tablet', pointer: 'coarse' }, { formFactor: 'desktop', pointer: 'fine' }, {}, undefined]) assert.notEqual(deviceOf({ device }).form, 'phone', JSON.stringify(device));
 });
 
 test('the menu entry is live on a clean current system', () => {
