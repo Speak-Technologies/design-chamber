@@ -32,9 +32,12 @@ const ROUND_ONE_HEADING = '## Round one: before you read the code';
 const ROUND_TWO_HEADING = '## Round two: after you read the code';
 const AFTER_HEADING = '## After two rounds';
 
-/** The closed topic set of each round (§8.9); the file's order is kept. */
-const ROUND_ONE_TOPICS: readonly string[] = ['home', 'mode', 'coverage', 'dark'];
-const ROUND_TWO_TOPICS: readonly string[] = ['status-colours', 'greys', 'access', 'typography', 'dark-values'];
+/** The closed topic set of each round (§8.9, system-builder-depth §4.2); the file's order is kept. */
+const ROUND_ONE_TOPICS: readonly string[] = ['home', 'mode', 'coverage', 'depth', 'dark'];
+const ROUND_TWO_TOPICS: readonly string[] = [
+  'status-colours', 'greys', 'access', 'typography', 'dark-values',
+  'platforms', 'navigation', 'overlays', 'motion', 'scales', 'brand-colour',
+];
 /** Topics a round may also hold, each only with the conditional marker line, and never baked into the block's set. */
 const ROUND_ONE_CONDITIONAL: readonly string[] = ['existing'];
 

@@ -84,11 +84,11 @@ const all = (view: CurrentProposal): Set<ProposalPartName> => new Set(view.propo
 
 test('round one: the defaults are the recommended options and Go with these sends them with the marker', () => {
   const picks = defaultPicks(roundOneQuestions(set, true));
-  assert.deepEqual(picks, { home: ['repo'], mode: ['fix'], coverage: ['foundations', 'components', 'patterns', 'brand'], dark: ['not-now'] });
+  assert.deepEqual(picks, { home: ['repo'], mode: ['fix'], coverage: ['foundations', 'components', 'patterns', 'brand'], depth: ['core'], dark: ['not-now'] });
   const text = roundOneAnswer(TICKET, set, picks, true, '');
   assert.equal(
     text,
-    `Round one: Repo + living page; Fix tokens, then document; all four areas; dark mode not now.\n[SystemAsk ticket=${TICKET} round=1 home=repo mode=fix coverage=foundations,components,patterns,brand dark=not-now]`,
+    `Round one: Repo + living page; Fix tokens, then document; all four areas; Product core; dark mode not now.\n[SystemAsk ticket=${TICKET} round=1 home=repo mode=fix coverage=foundations,components,patterns,brand depth=core dark=not-now]`,
   );
 });
 
@@ -102,8 +102,8 @@ test('round one: changed picks and a partial coverage', () => {
   picks = withPick(picks, q('dark'), 'include');
   const text = roundOneAnswer(TICKET, set, picks, true, '');
   assert.match(text, /^Round one: In Design Chamber; Describe only, never change the app’s code|^Round one: In Design Chamber; Describe only/);
-  assert.match(text, /Foundations, Brand & marketing; dark values included\./);
-  assert.match(text, /\[SystemAsk ticket=sb_abcdefghij12 round=1 home=internal mode=describe coverage=foundations,brand dark=include\]$/);
+  assert.match(text, /Foundations, Brand & marketing; Product core; dark values included\./);
+  assert.match(text, /\[SystemAsk ticket=sb_abcdefghij12 round=1 home=internal mode=describe coverage=foundations,brand depth=core dark=include\]$/);
 });
 
 test('round one: ticking in any order keeps the question order; an unknown option changes nothing', () => {
@@ -125,10 +125,10 @@ test('round one: no area picked turns Go with these off, with the reason', () =>
 
 test('round one with no project: home and mode are hidden and answered as in Design Chamber, code untouched', () => {
   const questions = roundOneQuestions(set, false);
-  assert.deepEqual(questions.map((entry) => entry.topic), ['coverage', 'dark']);
+  assert.deepEqual(questions.map((entry) => entry.topic), ['coverage', 'depth', 'dark']);
   const text = roundOneAnswer(TICKET, set, defaultPicks(questions), false, '');
-  assert.match(text, /^Round one: no project folder, so the system lives in Design Chamber; all four areas; dark mode not now\.\n/);
-  assert.match(text, /home=internal mode=describe coverage=foundations,components,patterns,brand dark=not-now\]$/);
+  assert.match(text, /^Round one: no project folder, so the system lives in Design Chamber; all four areas; Product core; dark mode not now\.\n/);
+  assert.match(text, /home=internal mode=describe coverage=foundations,components,patterns,brand depth=core dark=not-now\]$/);
 });
 
 test('round one: the note goes in the same answer, before the marker', () => {
@@ -301,8 +301,8 @@ test('every answer parses back: marker fields and the answered sentence', () => 
 
   const one = answeredView(roundOneAnswer(TICKET, set, defaultPicks(roundOneQuestions(set, true)), true, 'a note'), set);
   assert.equal(one.headline, 'You answered round one.');
-  assert.deepEqual(one.picks, { home: ['repo'], mode: ['fix'], coverage: ['foundations', 'components', 'patterns', 'brand'], dark: ['not-now'] });
-  assert.deepEqual(one.lines, ['Repo + living page', 'Fix tokens, then document', 'Foundations, Components, Patterns & voice, Brand & marketing', 'Not now']);
+  assert.deepEqual(one.picks, { home: ['repo'], mode: ['fix'], coverage: ['foundations', 'components', 'patterns', 'brand'], depth: ['core'], dark: ['not-now'] });
+  assert.deepEqual(one.lines, ['Repo + living page', 'Fix tokens, then document', 'Foundations, Components, Patterns & voice, Brand & marketing', 'Product core', 'Not now']);
 
   const { calls } = resolveCalls(CALLS, 0, set);
   const two = answeredView(roundTwoAnswer('acme', calls, defaultPicks(calls.map((c) => c.question)), ''), set);

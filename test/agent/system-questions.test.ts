@@ -30,6 +30,7 @@ describe('parseSystemQuestions: R1 accepted', () => {
         ['home', false, [['repo', true], ['internal', false]]],
         ['mode', false, [['fix', true], ['describe', false]]],
         ['coverage', true, [['foundations', true], ['components', true], ['patterns', true], ['brand', true]]],
+        ['depth', false, [['core', true], ['full', false], ['tokens', false]]],
         ['dark', false, [['not-now', true], ['include', false]]],
       ],
     );
@@ -44,6 +45,12 @@ describe('parseSystemQuestions: R1 accepted', () => {
         ['access', [['dev', true], ['public', false]]],
         ['typography', [['one-font', true], ['display', false]]],
         ['dark-values', [['derive', true], ['hand-tune', false]]],
+        ['platforms', [['laptop-phone', true], ['phone-first', false], ['laptop', false], ['custom', false]]],
+        ['navigation', [['keep', true], ['top-bottom', false], ['rail-bottom', false], ['custom', false]]],
+        ['overlays', [['sheet', true], ['modal', false], ['keep', false]]],
+        ['motion', [['calm', true], ['keep', false], ['none', false]]],
+        ['scales', [['snap', true], ['keep', false]]],
+        ['brand-colour', [['split', true], ['one', false]]],
       ],
     );
     assert.ok(set.roundTwo.every((question) => !question.multiple));
@@ -76,7 +83,7 @@ describe('parseSystemQuestions: the conditional existing-system question (Phase 
   test('the parser accepts it, so the build stays green, and leaves it out of the set the block draws', () => {
     const set = parseSystemQuestions(R1);
     assert.ok(!set.roundOne.some((question) => question.topic === 'existing'));
-    assert.deepEqual(set.roundOne.map((question) => question.topic), ['home', 'mode', 'coverage', 'dark']);
+    assert.deepEqual(set.roundOne.map((question) => question.topic), ['home', 'mode', 'coverage', 'depth', 'dark']);
   });
 
   test('the same file without the conditional question parses to the same set (the question is additive)', () => {

@@ -6,7 +6,7 @@ Name: derived from the project, stated as an assumption. The user renames it in 
 
 ## Round one: before you read the code
 
-Ask these four in one message, before you read the code in depth, and add the first question below to that message only when a location was found or named. Nothing is written until the user answers. "go", the user's own words of acceptance, or the block's Go with these accepts the defaults; apply any changes to the answers and do not ask the round again.
+Ask these five in one message, before you read the code in depth, and add the first question below to that message only when a location was found or named. Nothing is written until the user answers. "go", the user's own words of acceptance, or the block's Go with these accepts the defaults; apply any changes to the answers and do not ask the round again.
 
 Never ask what the files already answer. No project repo in the chat: don't ask the home or the mode; say the system lives in Design Chamber and the repo stays untouched. A project that is the Designs folder: the same, plus "Pick your app's folder, not the Designs folder."
 
@@ -29,6 +29,11 @@ Pick any.
 - **Components** {#components}: The components the code has, with when to use them.
 - **Patterns & voice** {#patterns}: Layout patterns and how the product speaks.
 - **Brand & marketing** {#brand}: Logos, brand guidance and marketing surfaces.
+
+### How complete should it be? {#depth}
+- **Product core** {#core}: Foundations, your components with every state, and the patterns your screens use.
+- Full system {#full}: Core plus motion, navigation, overlays, forms, feedback, data display and page templates.
+- Tokens only {#tokens}: Values and notes only.
 
 ### Dark mode as part of this? {#dark}
 - **Not now** {#not-now}: Light values only. Dark can be added later.
@@ -60,6 +65,42 @@ Read the code first, read-only. Then ask only the calls the findings raise, in o
 ### Dark values {#dark-values}
 - **Derive dark values from the light ones** {#derive}: A dark value for every colour, computed from the light set. Consistent, and quick to review.
 - Hand-tune them with me {#hand-tune}: We go through the dark values together, one group at a time.
+
+### Platforms {#platforms}
+Ask when there are no breakpoints, or separate phone code.
+- **Laptop and phone** {#laptop-phone}: Both, at the code's breakpoints.
+- Phone first {#phone-first}: Wider screens add columns.
+- Laptop only {#laptop}: No phone layouts.
+- Custom {#custom}: Say which in the note.
+
+### Navigation {#navigation}
+Ask when there are two patterns, or none for phone.
+- **Keep the code's pattern** {#keep}: Plus a phone version if it lacks one.
+- Top bar, bottom bar on phone {#top-bottom}: Up to 7 destinations on top, 3 to 5 at the bottom.
+- Side rail, bottom bar on phone {#rail-bottom}: For 8+ destinations or a deep app.
+- Custom {#custom}: Say what in the note.
+
+### Overlays {#overlays}
+Ask when modals open on phone, or overlays are mixed.
+- **Sheets on phone, modals on laptop** {#sheet}: Short tasks rise from the bottom on phone.
+- Modals everywhere {#modal}: Centred at every width.
+- Keep the code's {#keep}: Recorded as is.
+
+### Motion {#motion}
+Ask when transitions are mixed, or absent.
+- **A calm set** {#calm}: Three durations, ease-out in, ease-in out, fades under reduced motion.
+- Keep the code's values {#keep}: Recorded as is.
+- No motion {#none}: Changes are instant.
+
+### Spacing and radius {#scales}
+Ask in fix mode when values sit off any scale.
+- **Snap to one scale** {#snap}: Values move to the nearest step, listed in the diff.
+- Keep every value {#keep}: Recorded as is.
+
+### Brand colour {#brand-colour}
+Ask when brand is covered and the brand colour is the accent.
+- **Brand palette for marketing, one product accent** {#split}: The app keeps one accent for actions.
+- One colour everywhere {#one}: One accent in the app and marketing.
 
 Reply with changes, or say go to accept the defaults.
 

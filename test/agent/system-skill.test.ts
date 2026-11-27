@@ -92,10 +92,10 @@ describe('the body: the rev 3 protocol', () => {
     assert.ok(body.includes("Approval is the block's Approve answer for your latest proposal id"));
   });
 
-  test('Phase 2.6 §7.5: the built skill is about 17 000 characters, well under the 24 000 cap', () => {
+  test('system-builder-depth §5: the built skill keeps 1 300 characters of headroom under the 24 000 cap', () => {
     const skill = buildSystemSkill(input);
     assert.ok(skill.length <= SYSTEM_SKILL_TEXT_MAX, `${skill.length}`);
-    assert.ok(skill.length < 20_000, `${skill.length} (spec estimate ≈ 16 900)`);
+    assert.ok(skill.length <= 22_700, `${skill.length} (soft budget 22 700, system-builder-depth §5)`);
   });
 
   test('SystemAsk: the three argument shapes, the scope, the marker lines and the typed fallback', () => {
