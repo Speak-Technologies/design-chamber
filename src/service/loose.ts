@@ -124,28 +124,66 @@ const taken = async (target: string): Promise<boolean> => (await lstat(target).c
 // where the Dirent and fstat checks still refuse links and non-files.
 const READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
 
-/** All bytes of the loose file, refused (404/413) unless the opened entry is a regular file ≤ the cap. */
-const readLooseFile = async (source: string, name: string): Promise<Buffer> => {
+/**
+ * What `readRegularFile` found: the bytes, or why there are none. Each caller words its own
+ * sentence (a loose file and a project file are refused differently).
+ */
+export type RegularFileRead =
+  | { kind: 'ok'; bytes: Buffer }
+  | { kind: 'missing' }
+  | { kind: 'link' }
+  | { kind: 'not-file' }
+  | { kind: 'too-large' }
+  | { kind: 'denied' };
+
+/**
+ * All bytes of the file at `absPath`, only when the opened entry is a regular file of at most
+ * `maxBytes`: a link in the last step is never followed (O_NOFOLLOW, plus an lstat first where
+ * the flag does not exist), the size is checked on the open descriptor before the read and
+ * again after it (a file that grew while being read). Any other filesystem error is thrown.
+ */
+export const readRegularFile = async (absPath: string, maxBytes: number): Promise<RegularFileRead> => {
+  if ((constants.O_NOFOLLOW ?? 0) === 0) {
+    // Windows: no O_NOFOLLOW, so the link check is an lstat of the name just before the open.
+    const info = await lstat(absPath).catch(() => null);
+    if (info?.isSymbolicLink() === true) return { kind: 'link' };
+  }
   let handle: FileHandle;
   try {
-    handle = await open(source, READ_FLAGS);
+    handle = await open(absPath, READ_FLAGS);
   } catch (error) {
     const code = errorCode(error);
-    if (code === 'ENOENT' || code === 'ELOOP' || code === 'EISDIR' || code === 'ENOTDIR') throw new ApiError('not-found', NOT_HERE);
-    if (code === 'EACCES' || code === 'EPERM') {
-      throw new ApiError('internal', `Design Chamber isn't allowed to read ${name}. Check the file's permissions, then try again.`);
-    }
+    if (code === 'ELOOP') return { kind: 'link' };
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'missing' };
+    if (code === 'EISDIR') return { kind: 'not-file' };
+    if (code === 'EACCES' || code === 'EPERM') return { kind: 'denied' };
     throw error;
   }
   try {
     const info = await handle.stat();
-    if (!info.isFile()) throw new ApiError('not-found', NOT_HERE);
-    if (info.size > LOOSE_IMPORT_MAX_BYTES) throw new ApiError('too-large', TOO_LARGE);
+    if (!info.isFile()) return { kind: 'not-file' };
+    if (info.size > maxBytes) return { kind: 'too-large' };
     const bytes = await handle.readFile();
-    if (bytes.byteLength > LOOSE_IMPORT_MAX_BYTES) throw new ApiError('too-large', TOO_LARGE); // grew while being read
-    return bytes;
+    if (bytes.byteLength > maxBytes) return { kind: 'too-large' }; // grew while being read
+    return { kind: 'ok', bytes };
   } finally {
     await handle.close();
+  }
+};
+
+/** All bytes of the loose file, refused (404/413) unless the opened entry is a regular file ≤ the cap. */
+const readLooseFile = async (source: string, name: string): Promise<Buffer> => {
+  const read = await readRegularFile(source, LOOSE_IMPORT_MAX_BYTES);
+  switch (read.kind) {
+    case 'ok':
+      return read.bytes;
+    case 'too-large':
+      throw new ApiError('too-large', TOO_LARGE);
+    case 'denied':
+      throw new ApiError('internal', `Design Chamber isn't allowed to read ${name}. Check the file's permissions, then try again.`);
+    default:
+      // missing, a link, a folder or a device: as before, the file is no longer a loose page here.
+      throw new ApiError('not-found', NOT_HERE);
   }
 };
 

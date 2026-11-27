@@ -33,6 +33,7 @@ import {
   createDesignDocument,
   DESIGN_JSON_FILE,
   ENTRY_FILE,
+  isIsoDate,
   mergeServiceFields,
   normalizeDesign,
   normalizeKind,
@@ -47,6 +48,7 @@ import {
 import {
   BRIEF_MAX,
   COMMENTS_MAX,
+  FILE_PAGE_PATH_MAX,
   TITLE_MAX,
 } from '../shared/limits.ts';
 import type {
@@ -57,6 +59,7 @@ import type {
   DesignSummary,
   DesignWarning,
   FileStatus,
+  ImportedFrom,
   JsonObject,
   JsonValue,
   ServiceState,
@@ -126,6 +129,19 @@ const choiceProblemWarning = (problem: SystemChoiceProblem): DesignWarning => ({
           ? `design.json asks for the design system "${problem.value}", whose files are too large to copy into this design.`
           : `design.json asks for the design system "${problem.value}", but Design Chamber couldn't copy it. Choose it again with Change… on the design's system.`,
 });
+
+/**
+ * state.json `importedFrom` (native-extras §5.1): a path of 1 to
+ * `FILE_PAGE_PATH_MAX` characters with no control character, a lowercase sha256 and an ISO
+ * time. Anything else reads as absent (an old or hand-edited state is never fatal).
+ */
+export const parseImportedFrom = (raw: unknown): ImportedFrom | null => {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const { path: from, sha256, at } = raw as Record<string, unknown>; // Safe: a non-array object, just checked.
+  if (typeof from !== 'string' || from.length < 1 || from.length > FILE_PAGE_PATH_MAX || /[\u0000-\u001f\u007f]/.test(from)) return null;
+  if (typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256) || !isIsoDate(at)) return null;
+  return { path: from, sha256, at };
+};
 
 /** KI-30: the folders write failed (busy, disk full, refused, the file cap); the request waits for the next change. */
 export const FOLDER_REQUEST_WRITE_FAILED = "Folders couldn't be saved just now, so the agent's request wasn't applied. It will try again the next time folders change.";
@@ -268,7 +284,12 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
     let state: ServiceState | null = null;
     if (stateText !== null) {
       try {
-        state = normalizeServiceState(JSON.parse(stateText));
+        const rawState: unknown = JSON.parse(stateText);
+        state = normalizeServiceState(rawState);
+        // native-extras §5.1: kept through every later state write, which spreads this state.
+        // Safe cast: a non-null state means rawState parsed to a plain object.
+        const importedFrom = state === null ? null : parseImportedFrom((rawState as { importedFrom?: unknown }).importedFrom);
+        if (state !== null && importedFrom !== null) state.importedFrom = importedFrom;
       } catch {
         state = null;
       }
@@ -638,6 +659,9 @@ export const createDesignStore = (options: DesignStoreOptions): DesignStoreWithR
           preset: input.preset ?? null,
           now: nowIso,
         });
+        // native-extras §3.3 step 8: where a Files-row page came from, state.json only (never design.json).
+        const importedFrom = parseImportedFrom(input.importedFrom);
+        if (importedFrom !== null) state.importedFrom = importedFrom;
         await writeFileAtomic(stateFileOf(dir), serializeJson(state as unknown as JsonValue)); // Safe: ServiceState is plain JSON.
         await writeFileAtomic(path.join(dir, DESIGN_JSON_FILE), serializeJson(json));
         if (input.kind === 'page' && typeof input.html === 'string') {

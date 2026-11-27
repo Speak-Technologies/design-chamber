@@ -10,7 +10,7 @@ import { describe, test, type TestContext } from 'node:test';
 
 import type { DesignListResponse, ImportLooseResponse } from '../../../src/shared/api.ts';
 import { LOOSE_IMPORT_MAX_BYTES, LOOSE_LIST_MAX } from '../../../src/shared/limits.ts';
-import { createLooseImporter, humaniseStem, isLooseHtmlName, listLooseHtml, looseTitleOf } from '../../../src/service/loose.ts';
+import { createLooseImporter, humaniseStem, isLooseHtmlName, listLooseHtml, looseTitleOf, readRegularFile } from '../../../src/service/loose.ts';
 import { ApiError } from '../../../src/service/http.ts';
 import { createCore, useServedCore, type Core } from './harness.ts';
 
@@ -77,6 +77,30 @@ describe('the name rule', () => {
     // A <title> beyond the scanned head does not count.
     const late = Buffer.concat([Buffer.alloc(70_000, 0x20), Buffer.from('<title>Too late</title>')]);
     assert.equal(looseTitleOf('late-title.html', late), 'Late title');
+  });
+});
+
+describe('readRegularFile (shared with the Files action, native-extras §3.3 step 5)', () => {
+  test('reads a regular file within the cap, byte for byte', async (t) => {
+    const core = await createCore(t);
+    t.after(() => core.stop());
+    const bytes = Buffer.from([0xef, 0xbb, 0xbf, 0x3c, 0xff, 0x00, 0x3e]);
+    const file = await core.tmp.write('plain.html', bytes);
+    assert.deepEqual(await readRegularFile(file, bytes.byteLength), { kind: 'ok', bytes });
+  });
+
+  test('refuses what is not a regular file within the cap: missing, a folder, too large, a link', async (t) => {
+    const core = await createCore(t);
+    t.after(() => core.stop());
+    assert.deepEqual(await readRegularFile(core.tmp.at('nope.html'), 10), { kind: 'missing' });
+    assert.deepEqual(await readRegularFile(core.tmp.at('nope/inside.html'), 10), { kind: 'missing' });
+    await mkdir(core.tmp.at('folder.html'));
+    assert.deepEqual(await readRegularFile(core.tmp.at('folder.html'), 10), { kind: 'not-file' });
+    const big = await core.tmp.write('big.html', 'x'.repeat(11));
+    assert.deepEqual(await readRegularFile(big, 10), { kind: 'too-large' });
+    const target = await core.tmp.write('target.html', 'secret');
+    if (!(await symlinkOrSkip(t, target, core.tmp.at('alias.html')))) return;
+    assert.deepEqual(await readRegularFile(core.tmp.at('alias.html'), 10), { kind: 'link' }, 'the link is never followed');
   });
 });
 
