@@ -909,3 +909,14 @@ action and the phone opener.
    from your project)? **Recommendation: yes**, it is the linked agent and the file is yours.
 
 Architecture Complete → main agent (task breakdown) | → backend-developer (T1, T2, T3a, T3b, T5, then T3c, T6) / ui-ux-developer (U0, U1, then U2 to U5, then U6)
+
+## Decisions (the user, 2026-11-27)
+Binding for every task.
+1. `panel.mobile` too: yes, so Open works on the phone.
+2. The Files row label stays "Open as page in Design Chamber"; rows that aren't HTML get a one-line toast.
+3. A second click on an unchanged file opens the existing copy; a changed file makes a new copy.
+4. Copy, never a live link.
+5. Marks on design chats only, not `/design-system` chats, for now.
+6. A mark turns to warning on check errors (not warnings) or comments added but not sent.
+7. The build strip also shows what the agent does outside the design ("Reading src/styles/theme.css").
+8. QA for this work runs on Opus (medium), not Fable.
