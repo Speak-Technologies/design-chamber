@@ -416,7 +416,8 @@ describe('two-writer merge (§6.3)', () => {
   test('a mutation on a design deleted before the call is a 404 and writes nothing (the read-then-delete race is in store-vanish.test.ts)', async (t) => {
     const env = await makeEnv(t);
     const created = await env.store.create({ kind: 'canvas', title: 'Doomed' });
-    await rm(created.path, { recursive: true, force: true });
+    // Windows can answer ENOTEMPTY while a just-closed handle lets go; rm retries those.
+    await rm(created.path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     await assert.rejects(env.store.patch(created.slug, { title: 'Too late' }), (error: unknown) => error instanceof ApiError && error.code === 'not-found');
     assert.equal(await stat(created.path).then(() => true, () => false), false, 'the folder came back');
   });
