@@ -9,11 +9,12 @@
 import { commentsForArtboard } from '../../guest/anchoring.ts';
 import type { DesignDetailResponse } from '../../shared/api.ts';
 import type { BridgeMode } from '../../shared/bridge-protocol.ts';
-import { PAGE_FILL_VIEWPORT_ID, PAGE_LIVE_FRAMES_MAX, RAIL_LIVE_FRAMES_MAX } from '../../shared/limits.ts';
+import { PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.ts';
 import type { Comment, Screen, Viewport } from '../../shared/types.ts';
+import { currentDevice } from '../components/device.ts';
 import { createScope, h, type Scope } from '../components/dom.ts';
 import { pinNumbers } from '../model/comments-model.ts';
-import { pageComments, type Point } from '../model/wall-model.ts';
+import { liveBudget, pageComments, type Point } from '../model/wall-model.ts';
 import { frameModeOf } from '../model/wall-input.ts';
 import type { Artboard, WallOptions } from './wall-types.ts';
 
@@ -89,7 +90,7 @@ export const createWallContext = (options: WallOptions, initialDetail: DesignDet
   const ctx: WallContext = {
     options,
     pageMode,
-    liveBudget: options.compact ? RAIL_LIVE_FRAMES_MAX : PAGE_LIVE_FRAMES_MAX,
+    liveBudget: liveBudget(options.compact, currentDevice().form),
     scope: createScope(),
     surface,
     world,

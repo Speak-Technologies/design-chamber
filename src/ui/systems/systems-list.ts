@@ -20,6 +20,7 @@ import { EMPTY_BODY, EMPTY_TITLE, atSystemsCap, deleteSentence, loadFailure, sys
 import { BUILD_BUTTON_LABEL, openBuildWithAgent } from './build-with-agent.ts';
 import { openNewSystemSheet } from './new-system-sheet.ts';
 import { mountSystemRow } from './system-row.ts';
+import { menuOnThisDevice } from '../components/device.ts';
 
 export type SystemsListOptions = {
   surface: 'panel' | 'page';
@@ -79,7 +80,7 @@ export const mountSystemsList = (options: SystemsListOptions): SystemsListHandle
       label,
       onOpen: options.onOpen,
       onShowDesigns: options.onShowDesigns,
-      entries: () => systemMenu(summary),
+      entries: () => menuOnThisDevice(systemMenu(summary)),
       onMenu: (id) => void runAction(id as SystemMenuId, summary),
     });
 

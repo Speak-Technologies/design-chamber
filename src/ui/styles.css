@@ -7553,3 +7553,35 @@ button.dc-sp-value:focus-visible {
   flex: 0 1 auto;
   max-height: none;
 }
+
+/* ===== Phone (native extras §2.2) ===== */
+/*
+ * `applyDevice` puts data-dc-form and data-dc-pointer on the root, and the safe-area insets and the on-screen
+ * keyboard as --dc-inset-* and --dc-keyboard (px, clamped). On a phone the content stops above the keyboard, so
+ * the ask bar, the comment composer and every sheet stay in sight; the full-screen phone page also keeps clear
+ * of the home indicator. A desktop never matches any of this.
+ */
+[data-dc-form='phone'] .dc-app {
+  --dc-bottom-gap: var(--dc-keyboard, 0px);
+  padding-bottom: var(--dc-bottom-gap);
+}
+[data-dc-form='phone'] .dc-app[data-variant='phone-page'] {
+  --dc-bottom-gap: calc(var(--dc-keyboard, 0px) + var(--dc-inset-bottom, 0px));
+  padding-left: var(--dc-inset-left, 0px);
+  padding-right: var(--dc-inset-right, 0px);
+}
+[data-dc-form='phone'] .dc-app .dc-sheet {
+  bottom: var(--dc-bottom-gap);
+}
+/* A finger needs about 44 px: buttons, menu rows, list rows and the ask bar's Send (two s4 and an s3). */
+[data-dc-pointer='coarse'] :is(.oc-sdk-btn, .oc-sdk-option, .dc-row-main) {
+  min-height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+}
+[data-dc-pointer='coarse'] .dc-iconbtn {
+  width: calc(var(--dc-s4) * 2 + var(--dc-s3));
+  height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+}
+/* Settings: the folder line that says the path is on the computer, not the phone. */
+.dc-settings-where {
+  font-size: 0.8125rem;
+}

@@ -28,6 +28,7 @@ fix the doc and note what drifted.
 | [Sidebar marks](features/sidebar-marks.md) | A mark on every chat that has a design; warning on check errors or comments not sent. | Chat sidebar, Rail panel |
 | [Design mentions](features/design-mentions.md) | `@` a design in the composer to give the agent its folder, rules and open comments. | Chat composer |
 | [Open a project file as a page](features/open-file-as-page.md) | "Open as page in Design Chamber" on a Files row: copies the HTML and the local files it uses from its own folder into a new page; what is left out, re-clicks, refusals. | Files list, Rail panel |
+| [Design Chamber on the phone](features/phone.md) | The page and the drawer tab on OpenChamber's phone app: the rail layout full screen, actions hidden because they act on the computer, two live frames, touch-sized controls, the on-screen keyboard. | Rail panel, Full-screen page |
 | [Chat blocks](features/chat-blocks.md) | A design card in the agent's reply, and a pick between design directions. | Chat, Rail panel |
 | [Edit on the canvas](features/edit-on-canvas.md) | The rules every hand edit follows: only the user writes, a version first, refused when the file changed, smallest change, Undo, and what the agent is told. | Rail panel, Full-screen page |
 | [Screens and directions](features/screens-and-directions.md) | Grow and shape a canvas: the "+ Screen" board, the screen menu (Duplicate, Move up/down, Move to trash), drag reorder, and direction rows with Keep this one. | Rail panel, Full-screen page |

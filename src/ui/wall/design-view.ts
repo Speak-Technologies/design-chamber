@@ -8,6 +8,7 @@ import type { DesignDetailResponse } from '../../shared/api.ts';
 import { HOST_CLIPBOARD_MAX, PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.ts';
 import { confirmDelete, continueInChat, copyHtml, copyPath, exportDesign, renameDesign, renameDialog, reveal, revealDesign, toast, type ActionContext } from '../components/actions.ts';
 import { mountComments, type CommentsHandle } from '../components/comments-drawer.ts';
+import { currentDevice } from '../components/device.ts';
 import { createScope, debounce, errorText, h, replace } from '../components/dom.ts';
 import { openAddToFolder } from '../components/folder-actions.ts';
 import { mountDesignWarnings } from '../components/design-warnings.ts';
@@ -54,6 +55,8 @@ export type DesignViewOptions = {
    * canvases in Edit).
    */
   startIn?: 'view' | 'comment';
+  /** The compact viewer's footer line (where the full-screen page is); null or absent shows none. */
+  hint?: string | null;
 };
 
 export type DesignViewHandle = {
@@ -75,7 +78,6 @@ export type DesignViewHandle = {
 type Prefs = { hidden: string[]; camera: Camera | null; pageView: unknown; directionViewport: Record<string, string> };
 type Drawer = { kind: DrawerKind; sheet: SheetHandle; handle: CommentsHandle | VersionsHandle | DrawerContent; stop: (() => void) | null };
 
-const FULL_SCREEN_HINT = 'Full screen: sidebar → Extension pages → Design Chamber';
 /** How long the "Export saved" notice stays (it holds while the pointer or focus is on it). */
 const EXPORT_NOTICE_MS = 15_000;
 
@@ -353,6 +355,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
         askForTweaks: design().tweaks.length === 0 && viewing === null,
         railTweaks: railTweaksLabel(),
         pageData: pageData.entry(),
+        phone: currentDevice().form === 'phone',
       });
 
     const onMore = (id: string): void => {
@@ -759,7 +762,7 @@ export const mountDesignView = (options: DesignViewOptions): DesignViewHandle =>
     );
 
     const main = h('div', { class: 'dc-design-main' }, h('div', { class: 'dc-wall-col' }, stage, slots.bottomDock), dock);
-    replace(el, toolbar, warningsBand.el, notices.el, main, compact ? h('footer', { class: 'dc-hint' }, FULL_SCREEN_HINT) : null);
+    replace(el, toolbar, warningsBand.el, notices.el, main, compact && options.hint ? h('footer', { class: 'dc-hint' }, options.hint) : null);
     apply(first);
     refreshHtmlSize();
     if (isPage) {

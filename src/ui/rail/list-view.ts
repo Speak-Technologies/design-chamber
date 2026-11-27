@@ -82,6 +82,8 @@ export type ListViewOptions = {
   /** Opens the design systems list (Phase 2.5): from the header icon and from the entry under the list. */
   onSystems: () => void;
   onOpen: (slug: string) => void;
+  /** The first-run tip, in this device's words (`openHelp`); null shows none (the phone page is already full screen). */
+  firstRunTip: { title: string; body: string } | null;
 };
 
 export type ListViewHandle = {
@@ -248,17 +250,18 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   const paintTip = (): void => {
     const state = store.getState().designs;
     const failed = state.status === 'error' && !state.data;
-    const show = tipWanted === true && !tipHidden && !failed;
+    const tip = options.firstRunTip;
+    const show = tip !== null && tipWanted === true && !tipHidden && !failed;
     tipHost.hidden = !show;
-    if (!show) {
+    if (!show || tip === null) {
       tipHost.replaceChildren();
       return;
     }
     if (tipHost.firstElementChild) return;
     mountBanner(tipHost, {
       tone: 'info',
-      title: 'Open Design Chamber full screen',
-      body: 'In the sidebar, open Extension pages and pick Design Chamber. Canvases get the whole window there.',
+      title: tip.title,
+      body: tip.body,
       action: { label: 'Got it', onClick: dismissTip },
     });
   };

@@ -66,6 +66,15 @@ Screenshots: `documentation/pages/img/page-1400-<theme>-*.png` (1400 px wide, da
 
 **Tweaks (P2, P6)**: when a design lists knobs in design.json (accent hue, corner radius, density…), a **Tweaks** button sits between **Comments** and **Versions**; a small dot on it means there are values you have not saved. It opens a 360 px panel beside the wall (the same Comments/Versions slot: opening one closes the other). Each knob is a label with its value and unit ("Corner radius, 8 px") over a slider, or over a segmented choice for named options; the arrow keys step a slider, **Page Up / Page Down** move ten steps, **Home / End** go to the ends. Moving a knob changes every artboard at once, without a reload, with the scroll, Play state and camera kept; nothing is written. "Unsaved" shows next to the title and **Send** in the ask bar drops to an outline so **Save** is the one filled button on screen. **Save** writes the values to `tokens.css` and a notice reads "Tweaks saved to tokens.css" with **Undo**; **Reset** returns to the file's values and writes nothing (both are off, with the reason in the foot, until there is something to save). A knob that cannot be tuned (a formula, another unit, no such variable) is dimmed with its reason under it; a variable another rule also sets says "Also set for @media (max-width: 700px); only the default changes." and that the preview shows the value everywhere. If `tokens.css` cannot be read the panel says "Couldn't read tokens.css. <why>" with **Try again**, the knobs and buttons are off and your unsaved values are kept. If the agent rewrites `tokens.css` under your values a warning offers **Apply to the new file** or **Discard my tweaks** (Save is off until you choose). While the agent works on the design the foot says "The agent is working on this design. It may write over your edit." Unsaved values survive closing the panel and a reload of the extension frame; leaving the design with unsaved values asks **Save your tweaks?** (**Keep editing**, **Discard**, **Save**). On an old version the panel is read only ("You're viewing an old version."). A design with no knobs has **Ask for tweaks** in the ⋯ menu: it puts "Add tweaks for this design (accent hue, density, type scale, radius)." in the ask bar and sends nothing. Full description: [Tweaks](../features/tweaks.md#the-panel-what-the-user-sees). Screenshots come from `test/ui/visual/scenarios/tweaks.mjs` (`node test/ui/visual/shoot.mjs tweaks --out documentation/pages/img`).
 
+## On a phone
+OpenChamber lists the page in the phone's chats list under **More**. There it is not the library and wall
+above: it shows the [rail's layout](rail-panel.md) full screen (list, compact viewer, Settings), with no footer
+hint and no first-run tip, clear of the home indicator, and without Reveal, Export or Copy path, which act on the
+computer. It keeps `place:page` and reports itself as the page. Open requests from chat cards and Work Status go
+to the phone's drawer tab, not here. See [Design Chamber on the phone](../features/phone.md)
+([list](img/phone-390-dark-page-1-list.png) · [canvas](img/phone-390-light-page-3-canvas.png) ·
+[menu](img/phone-390-dark-page-4-canvas-menu.png)).
+
 ## Behaviour by role
 One role: the OpenChamber user. "Continue in chat" reopens the linked chat, or starts a new one. A design chip or "Open as page" that targets this page opens that design.
 
@@ -86,4 +95,4 @@ One role: the OpenChamber user. "Continue in chat" reopens the linked chat, or s
 [Rail panel](rail-panel.md) · `docs/SPEC.md` §13.2
 
 ---
-*Last updated: 2026-11-12: the ⋯ menu offers Clear saved page data (confirm, notices). Before that, 2026-11-10: keeps your place across reloads (`place:page`). Before that, 2026-11-08: ask bar, Send this, build strip, restore with Undo, Checks badge (P7).*
+*Last updated: 2026-11-27: on a phone the page shows the rail layout. Before that, 2026-11-12: the ⋯ menu offers Clear saved page data (confirm, notices). Before that, 2026-11-10: keeps your place across reloads (`place:page`). Before that, 2026-11-08: ask bar, Send this, build strip, restore with Undo, Checks badge (P7).*

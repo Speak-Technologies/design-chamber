@@ -15,6 +15,7 @@ import { relativeTime } from '../model/format.ts';
 import { librarySystemMenu, libraryTileLabel, showsLivingPageButton, systemRow, type LibrarySystemMenuId } from '../model/systems-model.ts';
 import { mountPlate } from './system-plate.ts';
 import { runLibrarySystemAction, toneBadge, usedByControl, type LibrarySystemOptions } from './system-row.ts';
+import { menuOnThisDevice } from '../components/device.ts';
 
 export type SystemTileOptions = LibrarySystemOptions & {
   /** The tile for the system the library is filtered to; it leads the grid. */
@@ -62,6 +63,6 @@ export const mountSystemTile = (summary: SystemSummary, options: SystemTileOptio
 
   const more = iconBtn({ icon: 'more', label: `Actions for ${summary.name}`, size: 'sm', onClick: () => undefined });
   more.classList.add('dc-card-more');
-  attachMenu(more, () => librarySystemMenu(summary), (id) => void runLibrarySystemAction(id as LibrarySystemMenuId, summary, options));
+  attachMenu(more, () => menuOnThisDevice(librarySystemMenu(summary)), (id) => void runLibrarySystemAction(id as LibrarySystemMenuId, summary, options));
   return h('li', { class: 'dc-card dc-sys-tile', 'data-kind': 'system', 'data-system-id': summary.id, 'data-lead': options.lead === true ? 'true' : 'false' }, main, foot.childElementCount > 0 ? foot : null, more);
 };

@@ -38,6 +38,7 @@ import {
   type PathSentence,
 } from '../model/settings-model.ts';
 import { toast } from './actions.ts';
+import { currentDevice } from './device.ts';
 import { append, createScope, errorText, h } from './dom.ts';
 import { banner, btn, loadingRow } from './kit.ts';
 import { systems as systemsStore } from './systems-store.ts';
@@ -292,7 +293,9 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
         void applyRoot(rootDraft ?? settings.root, settings);
       }
     });
-    const folder = section('Where designs live', 'Your chat agent writes each design as its own folder here.', folderHost, h('div', { class: 'dc-row-actions' }, apply.el, reset.el));
+    // On a phone the path names a folder on another machine: say which one, so nobody looks for it on the phone.
+    const onComputer = currentDevice().form === 'phone' ? h('p', { class: 'dc-muted dc-settings-where' }, 'This folder is on the computer that runs OpenChamber.') : null;
+    const folder = section('Where designs live', 'Your chat agent writes each design as its own folder here.', folderHost, onComputer, h('div', { class: 'dc-row-actions' }, apply.el, reset.el));
 
     // Design systems: the default for new designs and one row per project.
     const systemsSection = ((): HTMLElement | null => {
