@@ -307,6 +307,8 @@ export type FakeBackend = {
   writeFile: (slug: string, path: string) => void;
   /** Test hook: a design was created this long ago (milliseconds). */
   ageDesign: (slug: string, ageMs: number) => void;
+  /** Test hook (This chat): link a design to a chat, or unlink it with null. */
+  linkDesign: (slug: string, sessionId: string | null) => void;
   /** Test hook (screens): a canvas grows to `count` screens (written ones named "Extra n"), or the file of one screen goes missing. */
   padScreens: (slug: string, count: number) => void;
   unwriteScreen: (slug: string, id: string) => void;
@@ -963,6 +965,13 @@ export const createFakeBackend = (): FakeBackend => {
     emit(slug, 'design');
   };
 
+  const linkDesign = (slug: string, sessionId: string | null): void => {
+    const rec = db.get(slug);
+    if (!rec) return;
+    rec.design.sessionId = sessionId;
+    emit(slug, 'design');
+  };
+
   return {
     call,
     onChange: (listener) => {
@@ -973,6 +982,7 @@ export const createFakeBackend = (): FakeBackend => {
     checks: checks.hooks,
     writeFile,
     ageDesign,
+    linkDesign,
     padScreens,
     unwriteScreen,
     addDirections,

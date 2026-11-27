@@ -765,3 +765,47 @@ export const emptyStateOf = (input: {
     chips,
   };
 };
+
+// ---------------------------------------------------------------- This chat (native extras §4.2, U6)
+//
+// A click on a chat's sidebar mark opens the rail in that chat, and the rail cannot tell that click from a click on
+// its icon. So the list leads with the designs linked to the chat the user is in: up to three rows, then a button
+// that narrows the whole list to them.
+
+/** Rows the This chat group shows before "Show all". */
+export const THIS_CHAT_ROWS = 3;
+export const THIS_CHAT_TITLE = 'This chat';
+
+/** The designs linked to `sessionId`, newest first. None for no chat. */
+export const chatDesigns = (designs: readonly DesignSummary[], sessionId: string | null): DesignSummary[] =>
+  sessionId === null || sessionId === '' ? [] : sortDesigns(designs.filter((design) => design.sessionId === sessionId), 'updated');
+
+export type ThisChatGroup = {
+  designs: DesignSummary[];
+  total: number;
+  /** "Show all 5", or null when every linked design is already a row. */
+  showAll: { label: string; aria: string } | null;
+};
+
+/**
+ * The group above the list, or null: no chat, a chat with no designs, a search in progress (the results are what the
+ * user asked for) or the list already narrowed to this chat.
+ */
+export const thisChatGroup = (designs: readonly DesignSummary[], sessionId: string | null, state: { searching: boolean; chatOnly: boolean }): ThisChatGroup | null => {
+  if (state.searching || state.chatOnly) return null;
+  const linked = chatDesigns(designs, sessionId);
+  if (linked.length === 0) return null;
+  const more = linked.length > THIS_CHAT_ROWS;
+  return {
+    designs: linked.slice(0, THIS_CHAT_ROWS),
+    total: linked.length,
+    showAll: more ? { label: `Show all ${linked.length}`, aria: `Show all ${plural(linked.length, 'design')} from this chat` } : null,
+  };
+};
+
+/** The chip while the list is narrowed to this chat. */
+export const chatChip = (count: number): { label: string; title: string; removeLabel: string } => ({
+  label: THIS_CHAT_TITLE,
+  title: `Showing ${plural(count, 'design')} from this chat`,
+  removeLabel: 'Show all designs again',
+});

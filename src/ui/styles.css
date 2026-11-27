@@ -7585,3 +7585,38 @@ button.dc-sp-value:focus-visible {
 .dc-settings-where {
   font-size: 0.8125rem;
 }
+
+/* ===== This chat on the rail list (native extras §4.2, U6) ===== */
+/* The chat the rail is open in leads the list; a heading over it and over the rest keeps the two apart. */
+.dc-this-chat {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--dc-s3);
+}
+.dc-this-chat[hidden],
+.dc-rail-group-h[hidden] {
+  display: none;
+}
+.dc-rail-group-h {
+  margin: 0;
+  padding: var(--dc-s2) var(--dc-s2) var(--dc-s1);
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.dc-this-chat-more {
+  display: flex;
+  padding: var(--dc-s1) var(--dc-s1) 0;
+}
+.dc-this-chat-more:empty {
+  display: none;
+}
+/* The chips' × takes a finger on a touch screen: an invisible hit area an s3 past each edge, so the chip keeps its size. */
+[data-dc-pointer='coarse'] .dc-filter-chip-x {
+  position: relative;
+}
+[data-dc-pointer='coarse'] .dc-filter-chip-x::after {
+  content: '';
+  position: absolute;
+  inset: calc(var(--dc-s3) * -1);
+}

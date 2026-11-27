@@ -8,6 +8,9 @@
 // list is narrowed while it is closed. Those three are remembered (host.storage `list-system:panel`,
 // `list-sort:panel`, `rail-view:panel`) with the kind tab (`list-tab:panel`); search lives for the session.
 // At 320 px the title keeps its 120 px budget and the selects truncate their values, never the title.
+// A **This chat** group leads the list when the chat the rail is open in has linked designs (native-extras §4.2):
+// a click on that chat's sidebar mark lands here, so the designs it marks come first. Up to three rows, then
+// "Show all" narrows the list to the chat (a "This chat" chip clears it; not remembered, and dropped when the chat changes).
 
 import { mountBanner, mountSearchField, mountSelect, mountTabs } from '@openchamber/sdk/ui';
 
@@ -69,6 +72,10 @@ import {
   type ProjectInfo,
   type RailView,
   type SystemFilter,
+  chatChip,
+  chatDesigns,
+  thisChatGroup,
+  THIS_CHAT_TITLE,
 } from '../model/list-model.ts';
 import { designCountLabel } from '../model/settings-model.ts';
 import { swatchLookup } from '../model/systems-model.ts';
@@ -124,6 +131,17 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   const folderStore = foldersStore();
   const systemStore = systemsStore();
   const thumbs = new Map<string, ThumbHandle>();
+  /** The This chat rows' own thumbnails: a design there is also a row below, and one element can't sit in both. */
+  const groupThumbs = new Map<string, ThumbHandle>();
+  /** The chat the list is narrowed to ("Show all" in This chat), or null. Never remembered. */
+  let chatOnly: string | null = null;
+  /** The last open came from a This chat row, so Back focuses that row rather than its twin below. */
+  let openedFromGroup = false;
+  const currentSession = (): string | null => guestHost.session.get()?.id ?? null;
+  const fromList = (slug: string): void => {
+    openedFromGroup = false;
+    options.onOpen(slug);
+  };
 
   const el = h('div', { class: 'dc-list-view' });
 
@@ -159,6 +177,15 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     filtersButton.focus();
   });
   const chip = h('span', { class: 'dc-filter-chip' }, icon('system', 12), chipLabel, chipRemove);
+  // The chat chip: the list is narrowed to This chat; its × shows everything again.
+  const chatChipLabel = h('span', { class: 'dc-filter-chip-name' }, THIS_CHAT_TITLE);
+  const chatChipRemove = h('button', { type: 'button', class: 'dc-filter-chip-x', 'aria-label': chatChip(0).removeLabel, title: chatChip(0).removeLabel }, icon('close', 12));
+  chatChipRemove.addEventListener('click', () => {
+    setChatOnly(null);
+    searchHost.querySelector<HTMLElement>('input')?.focus();
+  });
+  const chatChipEl = h('span', { class: 'dc-filter-chip' }, icon('chat', 12), chatChipLabel, chatChipRemove);
+  const chatChipRow = h('div', { class: 'dc-rail-chiprow dc-chat-chiprow', hidden: true }, chatChipEl);
   const chipRow = h('div', { class: 'dc-rail-chiprow', hidden: true }, chip);
   const head = h('header', { class: 'dc-rail-head' }, h('h1', { class: 'dc-rail-title' }, 'Designs'), h('span', { class: 'dc-spacer' }), filtersButton, systemsButton, settingsButton, newButton.el);
 
@@ -286,7 +313,14 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   notices.append(looseBanner.el);
   const undo = mountUndoNotice();
   const list = h('ul', { class: 'dc-rows', role: 'list', 'aria-label': 'Designs' });
-  const scroller = h('div', { class: 'dc-rail-scroll' }, h('div', { class: 'dc-rail-undo' }, undo.el), notices, list);
+  // This chat: a heading, its rows and Show all, first in the scroller (a mark click came for these); the notices
+  // follow, then a heading that names what the list below shows.
+  const groupHeadingId = 'dc-this-chat-h';
+  const groupRows = h('ul', { class: 'dc-rows', role: 'list', 'aria-labelledby': groupHeadingId });
+  const groupMore = h('div', { class: 'dc-this-chat-more' });
+  const group = h('section', { class: 'dc-this-chat', 'aria-labelledby': groupHeadingId, hidden: true }, h('h2', { class: 'dc-rail-group-h', id: groupHeadingId }, THIS_CHAT_TITLE), groupRows, groupMore);
+  const restHeading = h('h2', { class: 'dc-rail-group-h dc-rail-rest-h', hidden: true });
+  const scroller = h('div', { class: 'dc-rail-scroll' }, h('div', { class: 'dc-rail-undo' }, undo.el), group, notices, restHeading, list);
   // The pinned entry under the list: systems are not rows here, so this is where a rail user finds them (the approved canvas's rail-nav).
   const footCount = h('span', { class: 'dc-rail-nav-count' });
   const foot = h(
@@ -300,7 +334,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     footCount,
     icon('chevron-right', 16),
   );
-  el.append(head, chipRow, tipHost, filters, scroller, foot);
+  el.append(head, chipRow, chatChipRow, tipHost, filters, scroller, foot);
 
   const switchBack = async (path: string): Promise<void> => {
     try {
@@ -336,7 +370,27 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     filtersOpen = open;
     filterArea.hidden = !open;
     filtersButton.setAttribute('aria-expanded', String(open));
-    chipRow.hidden = open || !chipShown;
+    syncChips();
+  };
+
+  /** The system chip shows while Filters is closed; the chat chip whenever the list is narrowed to the chat. */
+  const syncChips = (): void => {
+    chipRow.hidden = filtersOpen || !chipShown;
+    chatChipRow.hidden = chatOnly === null;
+  };
+
+  /** Narrow the list to one chat's designs ("Show all"), from the top: scope, tab, search and system as they come. */
+  const setChatOnly = (next: string | null): void => {
+    chatOnly = next;
+    if (next !== null) {
+      chosen = ALL_SCOPE;
+      query = '';
+      tab = 'all';
+      systemFilter = ALL_SYSTEMS;
+      search.update({ value: '' });
+      tabsHandle.update({ activeId: 'all' });
+    }
+    paintList();
   };
 
   const setSystemFilter = (next: SystemFilter): void => {
@@ -384,7 +438,7 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     for (const button of viewButtons) button.setAttribute('aria-pressed', String(button.dataset.view === railView));
     resetRow.hidden = state.changed === 0;
     chipShown = state.chip !== null;
-    chipRow.hidden = filtersOpen || !chipShown;
+    syncChips();
     if (state.chip) {
       chipLabel.textContent = state.chip.label;
       chip.title = state.summary;
@@ -464,6 +518,11 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
     paintFoot();
     list.replaceChildren();
     for (const handle of [...thumbs.values()]) handle.el.remove();
+    groupRows.replaceChildren();
+    groupMore.replaceChildren();
+    for (const handle of [...groupThumbs.values()]) handle.el.remove();
+    group.hidden = true;
+    restHeading.hidden = true;
     paintNotices();
     paintTip();
     scroller.removeAttribute('aria-busy');
@@ -477,7 +536,13 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
       list.append(h('li', { class: 'dc-list-message' }, wrap));
       return;
     }
-    const all = state.data.designs;
+    const everything = state.data.designs;
+    const session = currentSession();
+    // A narrowed list follows its chat: another chat, or none of its designs left, shows everything again.
+    if (chatOnly !== null && (chatOnly !== session || chatDesigns(everything, chatOnly).length === 0)) chatOnly = null;
+    syncChips();
+    const all = chatOnly === null ? everything : chatDesigns(everything, chatOnly);
+    if (chatOnly !== null) chatChipEl.title = chatChip(all.length).title;
     const root = state.data.root;
     const foldersState: FoldersState = folderStore.get();
     const folderList = foldersState.status === 'error' ? [] : foldersState.folders;
@@ -519,6 +584,25 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
       const entry = RAIL_TABS.find((item) => item.id === tabButton.dataset.id);
       if (entry) tabButton.setAttribute('aria-label', `${entry.label}, ${counts[entry.id]}`);
     }
+    const rowView: DesignRowView = { scope: effective, groups, root, manual: manualProjects, menu: { folder: null, project: null } };
+    // This chat leads whatever the list below shows, an empty filter result included.
+    const chat = thisChatGroup(everything, session, { searching: query.trim() !== '', chatOnly: chatOnly !== null });
+    if (chat) {
+      const fromGroup = (slug: string): void => {
+        openedFromGroup = true;
+        options.onOpen(slug);
+      };
+      groupRows.dataset.view = railView;
+      groupRows.append(...chat.designs.map((design) => mountDesignRow(design, { variant: railView === 'titles' ? 'titles' : 'rail', view: { ...rowView, menu: menuFor(design) }, actions: options.actions, onOpen: fromGroup, thumbs: groupThumbs, swatchOf: swatches })));
+      if (chat.showAll) {
+        const showAll = btn({ label: chat.showAll.label, variant: 'ghost', size: 'xs', onClick: () => setChatOnly(session) });
+        showAll.el.setAttribute('aria-label', chat.showAll.aria);
+        groupMore.append(showAll.el);
+      }
+      group.hidden = false;
+      restHeading.textContent = label ?? 'All designs';
+      restHeading.hidden = false;
+    }
     const empty = emptyStateOf({ all, scoped, shown: shownDesigns, scope: effective, scopeLabel: label, folderName: folder?.name ?? null, filters, systems: systemList, systemsFailed, draggable: false, surface: 'rail' });
     if (empty) {
       const wrap = h('div');
@@ -545,15 +629,21 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
       });
       list.append(h('li', { class: 'dc-list-message' }, wrap));
     } else {
-      const rowView: DesignRowView = { scope: effective, groups, root, manual: manualProjects, menu: { folder: null, project: null } };
       // The rail lists designs only: a system is reached through its chip on a row, the entry under the list or the header icon.
-      list.append(...items.flatMap((item) => (item.kind === 'design' ? [mountDesignRow(item.design, { variant: railView === 'titles' ? 'titles' : 'rail', view: { ...rowView, menu: menuFor(item.design) }, actions: options.actions, onOpen: options.onOpen, thumbs, swatchOf: swatches })] : [])));
+      list.append(...items.flatMap((item) => (item.kind === 'design' ? [mountDesignRow(item.design, { variant: railView === 'titles' ? 'titles' : 'rail', view: { ...rowView, menu: menuFor(item.design) }, actions: options.actions, onOpen: fromList, thumbs, swatchOf: swatches })] : [])));
     }
     const live = new Set(all.map((design) => design.slug));
     for (const [slug, handle] of thumbs) {
       if (!live.has(slug)) {
         handle.dispose();
         thumbs.delete(slug);
+      }
+    }
+    const inGroup = new Set([...groupRows.querySelectorAll<HTMLElement>('[data-slug]')].map((row) => row.dataset.slug));
+    for (const [slug, handle] of groupThumbs) {
+      if (!inGroup.has(slug)) {
+        handle.dispose();
+        groupThumbs.delete(slug);
       }
     }
   };
@@ -573,6 +663,16 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   scope.add(() => clearInterval(minute));
   scope.add(folderStore.subscribe(paintList));
   scope.add(systemStore.subscribe(paintList));
+  // The chat the rail is open in: a mark click opens the rail in that chat, and the user can switch chats with it open.
+  let sessionSeen = currentSession();
+  scope.add(
+    guestHost.session.subscribe((next) => {
+      const id = next?.id ?? null;
+      if (id === sessionSeen) return;
+      sessionSeen = id;
+      paintList();
+    }),
+  );
 
   // The remembered scope and sort, and the host's project names, arrive after the first paint;
   // a failure of any only costs the memory or the nicer name.
@@ -617,7 +717,10 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
   return {
     el,
     focusRow: (slug) => {
-      list.querySelector<HTMLElement>(`[data-slug="${CSS.escape(slug)}"] .dc-row-main`)?.focus();
+      const selector = `[data-slug="${CSS.escape(slug)}"] .dc-row-main`;
+      const fromGroup = openedFromGroup ? groupRows.querySelector<HTMLElement>(selector) : null;
+      openedFromGroup = false;
+      (fromGroup ?? list.querySelector<HTMLElement>(selector))?.focus();
     },
     focusSystems: () => (systemsOpener === 'foot' ? foot : systemsButton).focus(),
     focusSystemEntry: (id) => {
@@ -630,6 +733,8 @@ export const mountListView = (options: ListViewOptions): ListViewHandle => {
       looseBanner.dispose();
       for (const handle of thumbs.values()) handle.dispose();
       thumbs.clear();
+      for (const handle of groupThumbs.values()) handle.dispose();
+      groupThumbs.clear();
       search.dispose();
       tabsHandle.dispose();
       showSelect.dispose();

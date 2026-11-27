@@ -42,6 +42,8 @@
       };
       let block = surface === 'block' ? readBlock() : null;
       let device = null;
+      // ?session=<id> selects a chat, so a design linked to it gets prompts directly; ?session=none opens with no chat.
+      let session = params.get('session') === 'none' ? null : { id: params.get('session') || 'ses_current', title: params.get('session') ? 'Coffee subscription chat' : 'Pricing page', busy: false };
       try { device = JSON.parse(params.get('device') || 'null'); } catch { /* a bad value is the scenario's typo; no device */ }
       const clampHeight = (height) => (surface === 'status' ? Math.min(320, Math.max(24, height)) : Math.min(960, Math.max(0, height)));
       let mode = params.get('theme') === 'light' ? 'light' : 'dark';
@@ -81,6 +83,8 @@
         setTheme: (next) => { mode = next; sendReady(); },
         /** A new device snapshot (rotation, keyboard), sent with a new `ready`; null leaves it out. */
         setDevice: (next) => { device = next; sendReady(); },
+        /** Switch the chat the frame is open in, as the host does when the user opens another chat (null: none). */
+        setSession: (id) => { session = id ? { id, title: 'Another chat', busy: false } : null; send({ type: 'session', payload: { session } }); },
         /** Set a session's activity ('idle', 'running', 'retrying', 'waiting-permission', 'waiting-question') and outcome ('completed', 'failed' or null) and push it to every sessions subscription. `tool` is the call it is making ({name, target}), as a 2.8 host reports it. */
         setActivity: (sessionId, activity, outcome = null, tool = null) => {
           const now = Date.now();
@@ -101,8 +105,7 @@
         theme: { mode, tokens: { ...THEMES[mode], font: FONT, mono: MONO, radius: '0.5625rem' } },
         locale: 'en-US',
         directory: DIRECTORY,
-        // ?session=<id> selects a chat, so a design linked to it gets prompts directly.
-        session: { id: params.get('session') || 'ses_current', title: params.get('session') ? 'Coffee subscription chat' : 'Pricing page', busy: false },
+        session,
         surface,
         connection: { connected: false, account: '' },
         settings: {},
