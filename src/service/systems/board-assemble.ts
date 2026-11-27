@@ -83,6 +83,30 @@ const bundleOrThrow = async (source: FileSource, rel: string, mode: 'render' | '
 };
 
 /**
+ * Every live example of a detail bundled on its own (relative to its folder, export mode): the entries
+ * with their remote refs filled in (the reader leaves them empty), and each bundled document by example
+ * key. An example that is missing or too large keeps an empty list. Shared by the board and by the
+ * static check, which reports the remote refs (KI-39).
+ */
+export const bundleExamples = async (
+  detail: Pick<SystemDetail, 'components' | 'patterns' | 'brand'>,
+  source: FileSource,
+): Promise<{ components: SystemComponent[]; patterns: SystemEntryText[]; brand: SystemEntryText[]; examples: Record<string, string> }> => {
+  const examples: Record<string, string> = {};
+  const withExample = async <T extends { id: string; example: { remote: string[] } | null }>(kind: ExampleKind, entry: T): Promise<T> => {
+    if (entry.example === null) return entry;
+    const bundled = await bundleOrThrow(source, exampleFileOf(kind, entry.id), 'export');
+    if (bundled === null) return entry;
+    examples[exampleKeyOf(kind, entry.id)] = bundled.html;
+    return { ...entry, example: { remote: bundled.external } };
+  };
+  const components = await Promise.all(detail.components.map((component) => withExample('component', component)));
+  const patterns = await Promise.all(detail.patterns.map((entry) => withExample('pattern', entry)));
+  const brand = await Promise.all(detail.brand.map((entry) => withExample('brand', entry)));
+  return { components, patterns, brand, examples };
+};
+
+/**
  * The board document for one detail and file source: each live example bundled on its own (relative to
  * its folder, export mode, so its remote refs are reported per entry): components', and since
  * system-builder-depth D4 pattern and brand entries', exactly alike. Fonts and logos are checked with
@@ -95,18 +119,8 @@ export const assembleBoardHtml = async (
   scheme: 'light' | 'dark',
   options: { eager?: boolean } = {},
 ): Promise<{ html: string; components: SystemComponent[]; patterns: SystemEntryText[]; brand: SystemEntryText[]; assetKeys: string[] }> => {
-  const examples: Record<string, string> = {};
   const assetKeys: string[] = [];
-  const withExample = async <T extends { id: string; example: { remote: string[] } | null }>(kind: ExampleKind, entry: T): Promise<T> => {
-    if (entry.example === null) return entry;
-    const bundled = await bundleOrThrow(source, exampleFileOf(kind, entry.id), 'export');
-    if (bundled === null) return entry;
-    examples[exampleKeyOf(kind, entry.id)] = bundled.html;
-    return { ...entry, example: { remote: bundled.external } };
-  };
-  const components = await Promise.all(detail.components.map((component) => withExample('component', component)));
-  const patterns = await Promise.all(detail.patterns.map((entry) => withExample('pattern', entry)));
-  const brand = await Promise.all(detail.brand.map((entry) => withExample('brand', entry)));
+  const { components, patterns, brand, examples } = await bundleExamples(detail, source);
 
   const unusable = new Set<string>();
   for (const { file, kind } of [...detail.fonts.map((font) => ({ file: font.file, kind: 'font' as const })), ...detail.logos.map((logo) => ({ file: logo.file, kind: 'logo' as const }))]) {

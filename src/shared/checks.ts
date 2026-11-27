@@ -450,6 +450,8 @@ export const severityOf = (code: CheckCode, params?: CheckParams): CheckSeverity
   if (code === 'system-living-secret' && params?.access === 'dev') return 'warning';
   // The user's decision 4 (system-builder-depth): completeness warns only for full systems.
   if ((code === 'system-example-missing' || code === 'system-coverage-gap') && params?.depth === 'full') return 'warning';
+  // Automatic pairs on a system made before builder depth: a note, never a new warning.
+  if (code === 'system-contrast-low' && params?.pairs === 'auto') return 'info';
   return RULES[code].severity;
 };
 
@@ -633,6 +635,7 @@ const parseParams = (value: unknown): CheckParams | undefined => {
   if (value.scheme === 'light' || value.scheme === 'dark') out.scheme = value.scheme;
   const listed = oneOf(value.listed, LISTED);
   if (listed !== null) out.listed = listed;
+  if (value.pairs === 'auto') out.pairs = 'auto';
   return Object.keys(out).length > 0 ? out : undefined;
 };
 

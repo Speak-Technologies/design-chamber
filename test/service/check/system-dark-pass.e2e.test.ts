@@ -39,11 +39,12 @@ const files = (tokens: string): Record<string, string> => ({
     ],
     components: [{ id: 'button', name: 'Button', states: ['hover'], example: 'components/button.html' }],
     patterns: [{ id: 'nav', kind: 'navigation', title: 'Navigation', example: 'patterns/nav.html' }],
-    brand: [{ id: 'hero', kind: 'marketing', title: 'Hero' }],
+    brand: [{ id: 'hero', kind: 'marketing', title: 'Hero', example: 'brand/hero.html' }],
   }),
   '.chamber/state.json': JSON.stringify({ name: 'Acme', status: 'draft' }),
-  'components/button.html': '<button data-dc-state="hover" style="padding:6px 12px;background:var(--surface);color:var(--fg)">Save</button>',
-  'patterns/nav.html': '<nav style="display:flex;gap:12px;color:var(--fg)"><a href="#">Home</a><a href="#">Settings</a></nav>',
+  'components/button.html': '<button data-dc-state="hover" style="padding:6px 12px;background:var(--surface);color:var(--fg)">Save</button><img alt="" src="https://example.com/b.png">',
+  'patterns/nav.html': '<nav style="display:flex;gap:12px;color:var(--fg)"><a href="#">Home</a><a href="#">Settings</a><img alt="" src="https://example.com/n.png"></nav>',
+  'brand/hero.html': '<section style="color:var(--fg)">Hero<img alt="" src="https://example.com/h.png"></section>',
 });
 
 const writeSystem = async (tmp: TmpRoot, tokens: string): Promise<void> => {
@@ -85,18 +86,24 @@ test('dark values: a dark pass for three areas, the oklch pair measured, the hex
   assert.ok(pngs.includes('brand-overview@wide.png'));
   assert.deepEqual(render.shots.filter((shot) => shot.width === 'wide-dark').map((shot) => shot.area), ['foundations', 'components', 'patterns']);
 
-  // The oklch pair: only the painted board can judge it, and it is under 4.5 on the light ground.
-  const measured = render.findings.filter((finding) => finding.code === 'system-contrast-low');
-  assert.equal(measured.length, 1, JSON.stringify(measured));
-  assert.equal(measured[0]?.params?.scheme, 'light');
-  assert.match(measured[0]?.detail ?? '', /^--soft on --bg 2\.\d\d:1 \(light\)$/);
-  assert.ok(!(measured[0]?.detail ?? '').includes('--faint'), 'the hex pair is not measured again');
-  // The hex pair: found from the files, once per scheme (it has no dark value, so the dark ground shows it on the dark --bg).
-  const fromFiles = report.static.findings.filter((finding) => finding.code === 'system-contrast-low');
-  assert.deepEqual(fromFiles.map((finding) => finding.detail), ['--faint on --bg 4.47:1 (light)', '--faint on --bg 4.21:1 (dark)']);
+  // One contrast finding per scheme: the hex pair judged from the files and the oklch pair only the painted board can
+  // judge are merged (the hex pair is not measured again). --faint has no dark value, so the dark ground shows it on the dark --bg.
+  assert.ok(!render.findings.some((finding) => finding.code === 'system-contrast-low'), 'merged into the file findings');
+  const contrast = report.static.findings.filter((finding) => finding.code === 'system-contrast-low');
+  assert.deepEqual(contrast.map((finding) => [finding.params?.scheme, finding.params?.count]), [['light', 2], ['dark', 1]], JSON.stringify(contrast));
+  assert.match(contrast[0]?.detail ?? '', /^--faint on --bg 4\.47:1 \(light\); --soft on --bg 2\.\d\d:1 \(light\)$/);
+  assert.equal(contrast[1]?.detail, '--faint on --bg 4.21:1 (dark)');
+  // Written pairs on a core system: warnings, never the old-system note.
+  assert.ok(contrast.every((finding) => finding.params?.pairs === undefined));
 
   // The pattern example is drawn on the board like a component's, in both passes.
   assert.ok(!render.findings.some((finding) => finding.code === 'render-failed' || finding.code === 'render-skipped'), JSON.stringify(render.findings));
+  // KI-39: a remote image in a component, a pattern and a brand example is one error each, and the blocked request is not reported again.
+  assert.deepEqual(
+    report.static.findings.filter((finding) => finding.code === 'system-example-remote').map((finding) => [finding.file, finding.detail]),
+    [['components/button.html', 'https://example.com/b.png'], ['patterns/nav.html', 'https://example.com/n.png'], ['brand/hero.html', 'https://example.com/h.png']],
+  );
+  assert.ok(!render.findings.some((finding) => finding.code === 'request-blocked'), JSON.stringify(render.findings));
 });
 
 test('--area components pictures only Components and still lists every file finding', { timeout: 180_000 }, async (t) => {

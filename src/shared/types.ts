@@ -548,6 +548,11 @@ export type CheckParams = {
   scheme?: 'light' | 'dark';
   /** `system-states-missing` only: which list the unlabelled names come from. */
   listed?: 'variants' | 'sizes' | 'states';
+  /**
+   * `system-contrast-low` only: `auto` when every pair in it was found from token names on a system with
+   * no `depth`, which makes it a note (an older system gets no new warnings; the main agent's ruling).
+   */
+  pairs?: 'auto';
 };
 
 /** A finding as `check.json` stores it. `detail` and `selector` are untrusted design text. */

@@ -24,7 +24,7 @@ import { AREA_OF_SECTION, layoutPlaceTakes, SYSTEM_AREAS, type SystemDetailSourc
 import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, RenderCheckState, SecretShapeKind, SystemArea, SystemDetail } from '../../shared/types.ts';
 import { capPerCode } from './analyze.ts';
 import type { BoardPassId } from './board-analyze.ts';
-import { ratioText, staticLowPairs } from '../../shared/pair-contrast.ts';
+import { ratioText, staticLowPairs, type LowPair } from '../../shared/pair-contrast.ts';
 
 /** The words `buildSystemDetail` uses for the token cap (system-json.ts `TOKENS_CAP_SENTENCE`). */
 const TOKENS_CAP_MESSAGE = "Design systems hold up to 2 000 tokens. The rest weren't read.";
@@ -102,16 +102,8 @@ const depthFindings = (detail: SystemDetail, examples: Readonly<Record<string, s
     }
   }
 
-  // Pair contrast, where Node can read both values; the visual check measures the rest.
-  if (covers(detail, AREA_OF_SECTION.colours)) {
-    const { low } = staticLowPairs(detail);
-    for (const scheme of ['light', 'dark'] as const) {
-      const here = low.filter((pair) => pair.scheme === scheme);
-      if (here.length === 0) continue;
-      const shown = here.slice(0, 3).map((one) => `${one.pair.fg} on ${one.pair.bg} ${ratioText(one.ratio)} (${scheme})`);
-      out.push({ code: 'system-contrast-low', file: 'tokens.css', screen: null, viewport: null, params: { count: here.length, scheme }, detail: cleanDetail(shown.join('; '), CHECK_DETAIL_MAX) });
-    }
-  }
+  // Pair contrast, where Node can read both values; the visual check measures the rest and merges into these.
+  if (covers(detail, AREA_OF_SECTION.colours)) out.push(...contrastFindings(staticLowPairs(detail).low, detail.depth));
 
   // The completeness checklist: closed topic ids only, per covered area, never without a depth.
   if (depth !== null) {
@@ -124,6 +116,31 @@ const depthFindings = (detail: SystemDetail, examples: Readonly<Record<string, s
   }
   return out;
 };
+
+/**
+ * One `system-contrast-low` finding per scheme over every low pair of it, whether Node judged it from the
+ * values or the board measured it (each pair is judged once, so none is counted twice). The main agent's
+ * ruling (2026-11-27): on a system with no `depth` (made before builder depth), a finding of automatic
+ * pairs only carries `pairs: 'auto'`, which makes it a note; one with any pair the agent wrote stays a warning.
+ */
+export const contrastFindings = (low: readonly LowPair[], depth: SystemDetail['depth']): CheckFindingData[] => {
+  const out: CheckFindingData[] = [];
+  for (const scheme of ['light', 'dark'] as const) {
+    const here = low.filter((one) => one.scheme === scheme);
+    if (here.length === 0) continue;
+    const shown = here.slice(0, 3).map((one) => `${one.pair.fg} on ${one.pair.bg} ${ratioText(one.ratio)} (${scheme})`);
+    const autoOnly = depth === null && here.every((one) => one.pair.auto);
+    out.push({ code: 'system-contrast-low', file: 'tokens.css', screen: null, viewport: null, params: { count: here.length, scheme, ...(autoOnly ? { pairs: 'auto' as const } : {}) }, detail: cleanDetail(shown.join('; '), CHECK_DETAIL_MAX) });
+  }
+  return out;
+};
+
+/** The entries with a live example, by the file it lives in (components, patterns, brand). */
+const exampleEntries = (detail: SystemDetail): { area: SystemArea; file: string; remote: readonly string[] }[] => [
+  ...detail.components.map((entry) => ({ area: 'components' as const, file: `components/${entry.id}.html`, remote: entry.example?.remote ?? [] })),
+  ...detail.patterns.map((entry) => ({ area: 'patterns' as const, file: `patterns/${entry.id}.html`, remote: entry.example?.remote ?? [] })),
+  ...detail.brand.map((entry) => ({ area: 'brand' as const, file: `brand/${entry.id}.html`, remote: entry.example?.remote ?? [] })),
+];
 
 /** What the static check reads beside the detail: the raw texts, the over-cap files, and each live example's text by its file. */
 export type SystemStaticSource = Pick<SystemDetailSource, 'texts' | 'tooLarge'> & { examples?: Readonly<Record<string, string>> };
@@ -203,11 +220,15 @@ export const systemFindings = (source: SystemStaticSource, detail: SystemDetail)
     if (BODY_FILE.test(rel) && isDesignRelativeFile(rel)) out.push({ code: 'system-note-long', file: rel, screen: null, viewport: null });
   }
 
+  // Remote refs come from bundling each example (`bundleExamples`, which the caller runs): the reader alone leaves them empty (KI-39).
+  for (const entry of exampleEntries(detail)) {
+    if (covers(detail, entry.area) && entry.remote.length > 0 && isDesignRelativeFile(entry.file)) {
+      out.push({ code: 'system-example-remote', file: entry.file, screen: null, viewport: null, detail: cleanDetail(entry.remote[0] ?? '', CHECK_DETAIL_MAX) });
+    }
+  }
+
   if (covers(detail, 'components')) {
     for (const component of detail.components) {
-      const file = `components/${component.id}.html`;
-      const remote = component.example?.remote ?? [];
-      if (remote.length > 0 && isDesignRelativeFile(file)) out.push({ code: 'system-example-remote', file, screen: null, viewport: null, detail: cleanDetail(remote[0] ?? '', CHECK_DETAIL_MAX) });
       if (component.undefinedTokens.length > 0) {
         out.push({ code: 'system-token-undefined', file: 'system.json', screen: null, viewport: null, params: { count: component.undefinedTokens.length }, detail: cleanDetail(`${component.id}: ${component.undefinedTokens.slice(0, 3).join(', ')}`, CHECK_DETAIL_MAX) });
       }

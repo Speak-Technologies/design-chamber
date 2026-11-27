@@ -140,7 +140,7 @@ and writes nothing: it never draws the board, so the page's Checks badge shows t
 
 | Severity | Finding |
 |---|---|
-| Error | `system.json` isn't valid JSON (only this is said then) · a `tokens.css` value isn't valid for its section · a listed font file is missing · a component example loads files from the internet |
+| Error | `system.json` isn't valid JSON (only this is said then) · a `tokens.css` value isn't valid for its section · a listed font file is missing · a component, pattern or brand example loads files from the internet (one per example, the first address in the detail; found by bundling each example, so `--static` and the page's Checks badge see it too) |
 | Warning | entries in `system.json` Design Chamber can't read (up to three named) · board layouts in `system.json` Design Chamber doesn't know (up to three named; those entries use the default) · no overview · an overview over 4 000 characters · a note over 20 000 characters · a component names a token the system doesn't define · more than 2 000 tokens |
 
 A finding about an area the system doesn't cover (its `coverage`) isn't raised; the unknown-layout
@@ -154,7 +154,7 @@ them with no change (only warnings and errors are sent to the agent):
 |---|---|---|
 | `system-example-missing` | the system sets `depth` to `core` or `full` and a component has no live example; at `full` also a pattern of a visual kind (navigation, overlay, forms, data display, feedback, states, page). The detail names the files to write | a note at `core`, a warning at `full` |
 | `system-states-missing` | the system sets `depth` to `core` or `full`, covers components, and a component lists a variant, size or state with no instance labelled `data-dc-variant`, `data-dc-size` or `data-dc-state` in its example (matched ignoring case). One finding per list; the detail names each component and the missing names | warning |
-| `system-contrast-low` | a colour pair (declared, or found from `--x-fg` / `--on-x` names) is under its level (body text 4.5:1, large text and UI parts 3:1), worked out from hex and rgb values. One finding per scheme; the detail reads `--fg on --bg 4.49:1 (light)`. Other colour formats are measured by the visual check instead | warning |
+| `system-contrast-low` | a colour pair (declared, or found from `--x-fg` / `--on-x` names) is under its level (body text 4.5:1, large text and UI parts 3:1), worked out from hex and rgb values. One finding per scheme; the detail reads `--fg on --bg 4.49:1 (light)`. Other colour formats are measured by the visual check, which folds them into the same finding for that scheme | warning, or a note on a system with no `depth` when every low pair in it was found from token names (so a system made before these checks gets no new warning) |
 | `system-coverage-gap` | the system sets `depth` and a covered area misses topics of the completeness checklist. One finding per area; the detail lists up to 8 topic ids from the closed list, never agent text. Topics listed in `system.json` `outOfScope` stop counting. A `tokens` system is asked the foundations core topics only | a note at `core` and `tokens`, a warning at `full` |
 
 The checklist (the same table is in the agent's reference doc `board-and-check.md`):
@@ -221,14 +221,16 @@ Two flags make the fix loop quick (the tool takes the same as `area` and `scheme
   default when the system has dark values.
 
 A value off these lists, a missing value, or either flag with a design instead of `--system` stops
-the command with exit 2 and one sentence, before anything is read.
+the command with exit 2 and one sentence, before anything is read. `--area brand --scheme dark`
+draws nothing to picture (the dark pass leaves Brand out), and the output says so.
 
 **Measured colour pairs.** The board's Pairs block shows each pair as "Aa Text" on the light and
 dark grounds. While measuring, the check reads each sample's text and background colour as the page
 paints them (through a 1×1 canvas the page never sees), and the service works out the ratio. That is
 how a pair in a format the files can't be judged from (`oklch()`, `color-mix()`, a formula) gets a
 `system-contrast-low` finding; a pair already judged from its hex or rgb values is not judged again,
-so each pair is reported once. A measured pair must be more than 0.05 under its level to count, as
+so each pair is reported once, and the measured pairs join the file finding of their scheme: one
+finding per scheme in all. A measured pair must be more than 0.05 under its level to count, as
 the canvas can round a channel. `--area` other than foundations skips this.
 
 Measured findings, each named once (at the widest width that raised it):

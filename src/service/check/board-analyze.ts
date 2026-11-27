@@ -10,7 +10,8 @@ import { isBoardEntryKey } from '../../shared/system-board.ts';
 import { SYSTEM_AREAS } from '../../shared/system-json.ts';
 import type { BoardLayout, CheckCode, CheckFindingData, SystemArea, SystemDetail } from '../../shared/types.ts';
 import { compositeOver, contrastRatio, type Rgba } from '../../shared/color.ts';
-import { MEASURED_PAIR_TOLERANCE, PAIR_LEVELS, ratioText, type PairScheme } from '../../shared/pair-contrast.ts';
+import { MEASURED_PAIR_TOLERANCE, PAIR_LEVELS, type LowPair, type PairScheme } from '../../shared/pair-contrast.ts';
+import { contrastFindings } from './system-static.ts';
 
 /** A board pass's id: the two light widths, and the dark pass (system-builder-depth D8). */
 export type BoardPassId = 'wide' | 'narrow' | 'wide-dark';
@@ -302,11 +303,11 @@ const rgbaOf = (bytes: readonly number[]): Rgba => ({ r: bytes[0] ?? 0, g: bytes
  * The pair cells' verdicts, in Node: the text colour over the cell's background over its ground (each
  * composited as painted), against the pair's level less `MEASURED_PAIR_TOLERANCE`. A cell whose pair
  * and ground Node already judged from the values (`judged`, `pair-contrast.ts`) is skipped, so a pair
- * is reported once; so is a cell seen in an earlier pass. One finding per scheme, as the static one.
+ * is judged once; so is a cell seen in an earlier pass. The low ones, to merge with the static ones.
  */
-export const measuredPairFindings = (cells: readonly BoardProbePair[], detail: Pick<SystemDetail, 'pairs'>, judged: ReadonlySet<string>): CheckFindingData[] => {
+export const measuredLowPairs = (cells: readonly BoardProbePair[], detail: Pick<SystemDetail, 'pairs'>, judged: ReadonlySet<string>): LowPair[] => {
   const seen = new Set<string>();
-  const low: { scheme: PairScheme; text: string }[] = [];
+  const low: LowPair[] = [];
   for (const cell of cells) {
     if (seen.has(cell.key) || judged.has(cell.key)) continue;
     seen.add(cell.key);
@@ -316,16 +317,14 @@ export const measuredPairFindings = (cells: readonly BoardProbePair[], detail: P
     const scheme: PairScheme = match[2] === 'dark' ? 'dark' : 'light';
     const ground = compositeOver(rgbaOf(cell.ground), { r: 255, g: 255, b: 255, a: 1 });
     const ratio = contrastRatio(rgbaOf(cell.fg), [rgbaOf(cell.bg), ground]);
-    if (ratio < PAIR_LEVELS[pair.use] - MEASURED_PAIR_TOLERANCE) low.push({ scheme, text: `${pair.fg} on ${pair.bg} ${ratioText(ratio)} (${scheme})` });
+    if (ratio < PAIR_LEVELS[pair.use] - MEASURED_PAIR_TOLERANCE) low.push({ index: Number(match[1]), pair, scheme, ratio });
   }
-  const out: CheckFindingData[] = [];
-  for (const scheme of ['light', 'dark'] as const) {
-    const here = low.filter((one) => one.scheme === scheme);
-    if (here.length === 0) continue;
-    out.push({ code: 'system-contrast-low', file: 'tokens.css', screen: null, viewport: null, params: { count: here.length, scheme }, detail: cleanDetail(here.slice(0, 3).map((one) => one.text).join('; '), CHECK_DETAIL_MAX) });
-  }
-  return out;
+  return low;
 };
+
+/** The measured verdicts alone as findings, one per scheme (the run merges them with the static ones instead). */
+export const measuredPairFindings = (cells: readonly BoardProbePair[], detail: Pick<SystemDetail, 'pairs' | 'depth'>, judged: ReadonlySet<string>): CheckFindingData[] =>
+  contrastFindings(measuredLowPairs(cells, detail, judged), detail.depth);
 
 /**
  * The board findings after dedupe, the per-code cap and the overall cap, in that order (§B.3 step 7).

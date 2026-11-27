@@ -252,7 +252,13 @@ const tileList = (shot: SystemBoardShot, tileHeight: number): string => {
 
 /** The board pictures block: the run folder once, then per width and area the overview and the tiles. */
 const boardPictureLines = (render: NonNullable<SystemCheckReport['render']>, runDir: string | null): string[] => {
-  if (render.shots.length === 0) return ['', 'No board pictures were saved.'];
+  if (render.shots.length === 0) {
+    // --area brand with --scheme dark: the dark pass pictures foundations, components and patterns only (D8).
+    const brandDarkOnly = render.areas?.length === 1 && render.areas[0] === 'brand' && render.schemes?.length === 1 && render.schemes[0] === 'dark';
+    return brandDarkOnly
+      ? ['', 'No board pictures were saved: the dark pass pictures Foundations, Components and Patterns & voice, not Brand & marketing. Check Brand with --scheme light.']
+      : ['', 'No board pictures were saved.'];
+  }
   const schemes = render.schemes ?? ['light'];
   const drawnIn = schemes.length === 2 ? 'light and dark' : schemes[0] === 'dark' ? 'dark scheme' : 'light scheme';
   const lines = [

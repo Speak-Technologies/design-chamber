@@ -12,7 +12,8 @@ import { cliSystemStore, runSystemCheck } from '../../../src/service/check/syste
 import { scanExampleLabels, systemFindings } from '../../../src/service/check/system-static.ts';
 import { findingMessage, parseFindingData, severityOf, withMessage } from '../../../src/shared/checks.ts';
 import { buildSystemDetail, parseSystemState } from '../../../src/shared/system-json.ts';
-import type { CheckFindingData, SystemDetail } from '../../../src/shared/types.ts';
+import type { CheckFindingData, SystemArea, SystemDetail } from '../../../src/shared/types.ts';
+import { formatSystemCheckText } from '../../../src/service/check/report-text.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
 
 const NOW = '2026-11-27T10:00:00.000Z';
@@ -247,5 +248,72 @@ describe('the report path the Checks badge and "Ask the agent to fix" read', () 
     // What the badge counts and the ask sends: warnings at full, with their sentences.
     const shown = report.static.findings.map((finding) => withMessage(finding)).filter((finding) => finding.severity !== 'info');
     assert.ok(shown.some((finding) => finding.message.startsWith('1 state listed in system.json')));
+  });
+});
+
+describe('automatic pairs on a system made before builder depth (the main agent ruling, 2026-11-27)', () => {
+  // --accent-fg on --accent is 1.5:1: an automatic pair under its level.
+  const CSS = ':root {\n  --accent: #2456d6;\n  --accent-fg: #3a6ae0;\n  --bg: #ffffff;\n  --faint: #777777;\n}\n';
+  const contrast = (json: Record<string, unknown>) => ofCode(systemFindings({ texts: {} }, detailOf(CSS, json)), 'system-contrast-low');
+
+  test('no depth and only automatic pairs low: a note, never a new warning', () => {
+    const findings = contrast({});
+    assert.deepEqual(findings.map((finding) => finding.params), [{ count: 1, scheme: 'light', pairs: 'auto' }]);
+    assert.equal(severityOf('system-contrast-low', findings[0]?.params), 'info');
+  });
+
+  test('a pair the agent wrote keeps its warning, alone or beside automatic ones, and so does any pair once depth is set', () => {
+    const written = contrast({ pairs: [{ fg: '--faint', bg: '--bg' }] });
+    assert.deepEqual(written.map((finding) => [finding.params, severityOf('system-contrast-low', finding.params)]), [[{ count: 2, scheme: 'light' }, 'warning']]);
+    const withDepth = contrast({ depth: 'core' });
+    assert.deepEqual(withDepth.map((finding) => severityOf('system-contrast-low', finding.params)), ['warning']);
+  });
+
+  test('the auto marker survives the stored report, and nothing else turns it on', () => {
+    assert.deepEqual(parseFindingData({ code: 'system-contrast-low', file: 'tokens.css', screen: null, viewport: null, params: { count: 1, scheme: 'light', pairs: 'auto' } })?.params, { count: 1, scheme: 'light', pairs: 'auto' });
+    assert.equal(parseFindingData({ code: 'system-contrast-low', file: 'tokens.css', screen: null, viewport: null, params: { pairs: 'all' } })?.params, undefined);
+  });
+});
+
+describe('KI-39: remote refs in examples, on the file checks', () => {
+  test('a component, a pattern and a brand example with a remote image give one system-example-remote each, without a browser', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await tmp.write('_systems/acme/.chamber/state.json', { v: 1, id: 'acme', name: 'Acme', status: 'draft' });
+    await tmp.write('_systems/acme/tokens.css', ':root {\n  --bg: #ffffff;\n}\n');
+    await tmp.write(
+      '_systems/acme/system.json',
+      JSON.stringify({
+        components: [{ id: 'card', name: 'Card', example: 'components/card.html' }, { id: 'plain', name: 'Plain', example: 'components/plain.html' }],
+        patterns: [{ id: 'nav', kind: 'navigation', title: 'Nav', example: 'patterns/nav.html' }],
+        brand: [{ id: 'hero', kind: 'marketing', title: 'Hero', example: 'brand/hero.html' }],
+      }),
+    );
+    await tmp.write('_systems/acme/components/card.html', '<img alt="" src="https://example.com/x.png">');
+    await tmp.write('_systems/acme/components/plain.html', '<p>Local only.</p>');
+    await tmp.write('_systems/acme/patterns/nav.html', '<nav><img alt="" src="https://example.com/x.png"></nav>');
+    await tmp.write('_systems/acme/brand/hero.html', '<section><img alt="" src="https://example.com/x.png"></section>');
+    const store = cliSystemStore(tmp.root, { version: 1 });
+    try {
+      const { report } = await runSystemCheck(store, 'acme', { now: new Date(NOW), tool: 'cli' });
+      const remote = ofCode(report.static.findings, 'system-example-remote');
+      assert.deepEqual(remote.map((finding) => [finding.file, finding.detail]), [
+        ['components/card.html', 'https://example.com/x.png'],
+        ['patterns/nav.html', 'https://example.com/x.png'],
+        ['brand/hero.html', 'https://example.com/x.png'],
+      ]);
+      assert.equal(severityOf('system-example-remote'), 'error');
+    } finally {
+      await store.dispose();
+    }
+  });
+});
+
+describe('--area brand --scheme dark', () => {
+  test('the empty pictures line says why: the dark pass does not picture Brand', () => {
+    const render = { state: 'done' as const, browser: 'chrome' as const, drawn: { from: 'system' as const, proposal: null }, widths: [], shots: [], entryShots: [], findings: [] };
+    const text = (areas: SystemArea[], schemes: ('light' | 'dark')[]) =>
+      formatSystemCheckText({ report: { version: 1, system: 'acme', createdAt: NOW, tool: 'cli', static: { findings: [] }, render: { ...render, areas, schemes } }, name: 'Acme', reportPath: null });
+    assert.match(text(['brand'], ['dark']), /No board pictures were saved: the dark pass pictures Foundations, Components and Patterns & voice, not Brand & marketing\. Check Brand with --scheme light\./);
+    assert.match(text(['components'], ['dark']), /No board pictures were saved\.\n/);
   });
 });

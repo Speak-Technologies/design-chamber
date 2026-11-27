@@ -28,12 +28,12 @@ import { createChangeHub } from '../changes.ts';
 import type { Logger, SettingsStore } from '../context.ts';
 import { resolvePlainTarget, writeFileAtomic } from '../paths.ts';
 import { createSelfWrites } from '../self-writes.ts';
-import { assembleBoardHtml, overlaySource, readProposalBoardSource } from '../systems/board-assemble.ts';
+import { assembleBoardHtml, bundleExamples, overlaySource, readProposalBoardSource } from '../systems/board-assemble.ts';
 import { BOARD_ENTRY_FILE } from '../systems/board-html.ts';
 import { committedStateOf, readCommitted, readRecord } from '../systems/living-page.ts';
 import { readProposalProblem } from '../systems/proposal-record.ts';
 import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/store.ts';
-import { analyzeBoard, boardFindings, boardPassesOf, DARK_PASS_AREAS, findingsInArea, measuredPairFindings, passShare, sanitizeBoardProbe, type BoardProbePair } from './board-analyze.ts';
+import { analyzeBoard, boardFindings, boardPassesOf, DARK_PASS_AREAS, findingsInArea, measuredLowPairs, passShare, sanitizeBoardProbe, type BoardProbePair } from './board-analyze.ts';
 import { staticLowPairs } from '../../shared/pair-contrast.ts';
 import { pictureCoverage, planBoardPictures, type PictureCoverage } from './board-pictures.ts';
 import { browserClassOf, openCheckRun } from './engine.ts';
@@ -41,7 +41,7 @@ import { checkBrowserArgs, launchOpenOptions, openCdp } from './cdp.ts';
 import { ensureChamberDir } from './output.ts';
 import { PngStitchError, stitchPngs } from './png-stitch.ts';
 import { CHECK_RUN_DEADLINE_MS, renderArtboards, type InspectPage, type InspectResult, type PlannedArtboard } from './render.ts';
-import { areaEmpty, s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemBoardShot, type SystemCheckRender, type SystemCheckReport } from './system-static.ts';
+import { areaEmpty, contrastFindings, s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemBoardShot, type SystemCheckRender, type SystemCheckReport } from './system-static.ts';
 
 export type SystemCheckRun = {
   report: SystemCheckReport;
@@ -175,8 +175,11 @@ export const runSystemCheck = async (
   const source = await store.get(id);
   const detail = buildSystemDetail(source);
   const facts = await readS8Facts(store, id, source);
-  const examples = await readExampleTexts(createLiveFileSource(await store.filesDir(id)), detail);
-  const staticFindings = [...systemFindings({ ...source, examples }, detail), ...s8Findings(source, detail, facts)].slice(0, CHECK_FINDINGS_MAX);
+  const liveSource = createLiveFileSource(await store.filesDir(id));
+  const examples = await readExampleTexts(liveSource, detail);
+  // Each example bundled on its own, so its remote refs are known to the file checks too (KI-39); the reader leaves them empty.
+  const bundled = await bundleExamples(detail, liveSource);
+  const staticFindings = [...systemFindings({ ...source, examples }, { ...detail, components: bundled.components, patterns: bundled.patterns, brand: bundled.brand }), ...s8Findings(source, detail, facts)].slice(0, CHECK_FINDINGS_MAX);
   const base = { id, findings: staticFindings, now: input.now, tool: input.tool };
   const staticRun: SystemCheckRun = { report: systemCheckReport(base), detail, reportPath: null, pngs: [] };
   const renderInput = input.render;
@@ -367,8 +370,16 @@ export const runSystemCheck = async (
     await space.checkAborted(renderInput.signal?.aborted === true || outcome.stoppedBy === 'aborted');
 
     const findings: CheckFindingData[] = boardFindings(outcome.findings, CHECK_FINDINGS_MAX);
-    // Pairs Node couldn't judge from the values, as the board painted them (a pair judged statically is not judged again).
-    if (drawDetail.coverage.includes('foundations')) findings.push(...measuredPairFindings(pairCells, drawDetail, staticLowPairs(drawDetail).judged));
+    // Pairs Node couldn't judge from the values, as the board painted them (a pair judged statically is not judged again),
+    // merged with the static ones into one finding per scheme.
+    const measuredLow = drawDetail.coverage.includes('foundations') ? measuredLowPairs(pairCells, drawDetail, staticLowPairs(drawDetail).judged) : [];
+    const reportStatic =
+      measuredLow.length === 0
+        ? staticFindings
+        : [
+            ...staticFindings.filter((finding) => finding.code !== 'system-contrast-low'),
+            ...contrastFindings([...(detail.coverage.includes('foundations') ? staticLowPairs(detail).low : []), ...measuredLow], detail.depth),
+          ];
     // A pass the run had no time (or no working browser) for: said, never silent. The light passes come first, so it is the dark one.
     if (outcome.notRendered > 0 && (outcome.stoppedBy === 'budget' || outcome.stoppedBy === 'failures')) {
       const left = passes.slice(passes.length - outcome.notRendered).map((pass) => pass.label);
@@ -395,7 +406,7 @@ export const runSystemCheck = async (
     const areas = SYSTEM_AREAS.filter((area) => (onlyArea === null ? drawDetail.coverage.includes(area) || !areaEmpty(drawDetail, area) : area === onlyArea));
     const schemes = [...new Set(passes.map((pass) => pass.scheme))];
     const render: SystemCheckRender = { state, browser: browserClassOf(browserPath), drawn, widths: outcome.artboards, shots: keptShots, entryShots: keptEntryShots, findings, areas, schemes };
-    const report = systemCheckReport({ ...base, render });
+    const report = systemCheckReport({ ...base, findings: reportStatic, render });
     const reportPath = await writeSystemCheckReport(systemDir, report);
     const keptRels = outcome.artboards.flatMap((artboard) => artboard.pngs);
     await space.finish(keptRels, input.now.getTime());
