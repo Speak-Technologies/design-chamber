@@ -43,7 +43,7 @@ export type FakeDesignSystem = {
   };
   /** The settings answer's `systems` part, and what a PUT changes. */
   settings: () => NonNullable<SettingsResponse['systems']>;
-  putSettings: (body: { systemDefault?: SystemDefaultSetting; systemPins?: SystemPinSetting[] }) => void;
+  putSettings: (body: { systemDefault?: SystemDefaultSetting | null; systemPins?: SystemPinSetting[] | null }) => void;
   summary: (slug: string) => DesignSystemSummary | null;
   resetTokens: (slug: string, base: string, names: string[]) => EditResponse;
   /** The design's files were put back to a version (Undo): its system record goes back too. */
@@ -265,10 +265,11 @@ export const createFakeDesignSystem = (deps: {
     settings: () => ({ default: choiceOf(settingsDefault), pins: settingsPins.map(pinOf), notices }),
     putSettings: (body) => {
       if (body.systemDefault !== undefined) {
-        settingsDefault = body.systemDefault;
-        deps.setRows(deps.rows().map((entry) => ({ ...entry, isDefault: body.systemDefault?.choice === 'system' && body.systemDefault.id === entry.id })));
+        settingsDefault = body.systemDefault ?? { choice: 'ask' };
+        const chosen = settingsDefault;
+        deps.setRows(deps.rows().map((entry) => ({ ...entry, isDefault: chosen.choice === 'system' && chosen.id === entry.id })));
       }
-      if (body.systemPins !== undefined) settingsPins = body.systemPins;
+      if (body.systemPins !== undefined) settingsPins = body.systemPins ?? [];
       notices = [];
     },
     summary: (slug) => {

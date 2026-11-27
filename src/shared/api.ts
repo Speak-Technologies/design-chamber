@@ -112,9 +112,9 @@ export type SettingsResponse = {
   /**
    * Phase 2.5 §3.4: the default system and project pins, each resolved against this root, and the
    * one-time notices of a deleted system ("Acme was deleted, so it is no longer your default.").
-   * Optional until T9 fills it.
+   * Always present: the real service fills it on every `GET` and `PUT`.
    */
-  systems?: { default: SystemChoiceView; pins: SystemPinView[]; notices: string[] };
+  systems: { default: SystemChoiceView; pins: SystemPinView[]; notices: string[] };
 };
 
 /**
@@ -133,10 +133,10 @@ export type ImportLooseResponse = { slug: string; title: string; originalMovedTo
 export type PutSettingsBody = {
   root?: string | null;
   chromePath?: string | null;
-  /** Phase 2.5 §3.4: the default system choice. */
-  systemDefault?: SystemDefaultSetting;
-  /** Phase 2.5 §3.4: the whole pin list (≤ `SYSTEM_PINS_MAX`). */
-  systemPins?: SystemPinSetting[];
+  /** Phase 2.5 §3.4: the default system choice; `null` is the same as `{ choice: 'ask' }`. 400 `bad-request` for any other shape. */
+  systemDefault?: SystemDefaultSetting | null;
+  /** Phase 2.5 §3.4: the whole pin list (≤ `SYSTEM_PINS_MAX`); `null` is the same as `[]`. 400 `bad-request` for a bad entry, a repeated folder or too many. */
+  systemPins?: SystemPinSetting[] | null;
 };
 
 export type ChangesQuery = {

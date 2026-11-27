@@ -6,7 +6,8 @@
 // lstat, lives in `systems/homes.ts` as `verifyRepoHome`).
 
 import { BUILD_PROBLEM_VALUE_MAX, REPO_REL_PATTERN } from './limits.ts';
-import type { BuildProblemReason, EffectiveSystemChoice, SettingsFile } from './types.ts';
+import type { SettingsResponse } from './api.ts';
+import type { BuildProblemReason, EffectiveSystemChoice, SettingsFile, SystemChoiceView, SystemPinView, SystemSettingState } from './types.ts';
 
 /** A system as the choice rules see it: its id and whether it is Ready. */
 export type ChoiceSystem = { id: string; status: 'draft' | 'ready' };
@@ -68,6 +69,45 @@ export const effectiveSystemChoice = (input: EffectiveChoiceInput): EffectiveSys
   if (fallback.choice === 'none') return { choice: 'none', why: 'default' };
   if (fallback.choice === 'system' && ready(fallback.id)) return { choice: 'system', id: fallback.id, why: 'default' };
   return ask();
+};
+
+/** A system as the Settings view sees it: its name, whether it is Ready, and whether its folder can be read. */
+export type SettingsViewSystem = { id: string; name: string; status: 'draft' | 'ready'; unreadable: string | null };
+
+/** Where a setting stands against this root's systems: the state and, when it is not ok, the sentence that says why (§3.4). */
+const settingState = (
+  ref: { id: string; name: string },
+  systems: readonly SettingsViewSystem[],
+  words: { gone: string; draft: string },
+): { name: string; state: SystemSettingState; sentence: string | null } => {
+  const system = systems.find((one) => one.id === ref.id);
+  if (system === undefined) return { name: ref.name, state: 'deleted', sentence: `${ref.name} was deleted. ${words.gone}` };
+  if (system.unreadable !== null) return { name: system.name, state: 'missing', sentence: `${system.name} can’t be read right now. ${words.gone}` };
+  if (system.status === 'draft') return { name: system.name, state: 'draft', sentence: `${system.name} is a draft. ${words.draft}` };
+  return { name: system.name, state: 'ok', sentence: null };
+};
+
+/**
+ * The `systems` part of the settings answer (§3.4): the default and each pin resolved against this root, and the
+ * one-time notices. A choice that names a system which is gone, a draft or unreadable keeps its saved id (switching
+ * back to the folder that has it restores it) and says why in `sentence`; the effective rules above treat it as unset.
+ */
+export const settingsSystemsView = (input: {
+  settings: Pick<SettingsFile, 'systemDefault' | 'systemPins'>;
+  systems: readonly SettingsViewSystem[];
+  notices: readonly string[];
+}): NonNullable<SettingsResponse['systems']> => {
+  const { systems } = input;
+  const saved = input.settings.systemDefault ?? { choice: 'ask' as const };
+  const view: SystemChoiceView =
+    saved.choice === 'system'
+      ? { ...saved, ...settingState(saved, systems, { gone: 'New designs ask you in chat.', draft: 'New designs ask you in chat until it is Ready.' }) }
+      : { ...saved, state: 'ok', sentence: null };
+  const pins = (input.settings.systemPins ?? []).map((pin): SystemPinView => {
+    if (pin.choice !== 'system' || pin.id === undefined) return { ...pin, state: 'ok', sentence: null };
+    return { ...pin, ...settingState({ id: pin.id, name: pin.name ?? pin.id }, systems, { gone: 'This project uses the default.', draft: 'This project uses the default until it is Ready.' }) };
+  });
+  return { default: view, pins, notices: [...input.notices] };
 };
 
 /** The repo home a BUILD.json asks for (§2.13 `repo`). */

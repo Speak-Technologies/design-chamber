@@ -9,8 +9,15 @@ A section of the Settings sheet (rail) and Settings area (full-screen), between 
 
 Saving is immediate. Each change sends the whole setting (`PUT /settings` with `systemDefault` or `systemPins`); focus returns to the select you used.
 
+## How the service handles it
+- **What it takes.** `systemDefault` is one of `{ choice: "ask" }`, `{ choice: "none" }` or `{ choice: "system", id, name }`. `systemPins` is the whole pin list, up to 50 projects, each `{ directory, choice: "default" | "none" | "system" }` (with `id` and `name` for `system`). `null` clears either one, the same as asking each time or having no pins.
+- **What it refuses.** Any other shape answers 400 with a plain sentence, and nothing is saved, not even a valid field sent in the same request. A pin that points at a system that no longer exists is not refused: Settings sends the old pins back with every change, and the pin works again if the system comes back.
+- **What it answers.** Both `GET /settings` and `PUT /settings` return a `systems` part: the default and each pin with a `state` (`ok`, `draft`, `missing` for a system whose folder can't be read, or `deleted`) and, when it isn't ok, the sentence the sheet shows. The one-time notices ride along once and are then gone.
+- **No restart.** The change is live as soon as it is saved: the project instructions follow the pins, and new designs, chats and the "Ask me" recommendation read the new default on their next request.
+- **Drift guard.** The visual test harness has a fake backend for this sheet. `test/service/core/settings-contract.test.ts` sends the same requests to the fake and to the real route and fails if their answers differ.
+
 ## The New design dialog
 A **Design system** field is preselected the way the service decides: the project's pin, then your default, then Ask me in chat, with a short hint ("Pinned for shop", "Your default"). Its options are the Ready systems, **No design system** and **Ask me in chat**. While a system is chosen the **Style preset** field is hidden, because the system sets the style. With no Ready system the field is replaced by "No design systems yet." and a **Make one** link. The choice goes to the service as `system`.
 
 ## Code
-`src/ui/components/settings-view.ts`, `src/ui/components/new-dialog.ts`, pure rules in `src/ui/model/settings-model.ts` and `new-model.ts` (`test/ui/system-pickers-model.test.ts`). Screens: `test/ui/visual/scenarios/design-system-settings.mjs`.
+Service: `src/service/routes/settings.ts` (validation and the answer), `src/service/settings.ts` (the store), `src/shared/systems.ts` (`settingsSystemsView`, the states and sentences). UI: `src/ui/components/settings-view.ts`, `src/ui/components/new-dialog.ts`, pure rules in `src/ui/model/settings-model.ts` and `new-model.ts` (`test/ui/system-pickers-model.test.ts`). Screens: `test/ui/visual/scenarios/design-system-settings.mjs`.

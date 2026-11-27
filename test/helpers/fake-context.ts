@@ -208,11 +208,11 @@ export const createFakeContext = (options: FakeContextOptions): FakeContext => {
         else next.chromePath = patch.chromePath;
       }
       if (patch.systemDefault !== undefined) {
-        if (patch.systemDefault.choice === 'ask') delete next.systemDefault;
+        if (patch.systemDefault === null || patch.systemDefault.choice === 'ask') delete next.systemDefault;
         else next.systemDefault = patch.systemDefault;
       }
       if (patch.systemPins !== undefined) {
-        if (patch.systemPins.length === 0) delete next.systemPins;
+        if (patch.systemPins === null || patch.systemPins.length === 0) delete next.systemPins;
         else next.systemPins = patch.systemPins;
       }
       file = next;
