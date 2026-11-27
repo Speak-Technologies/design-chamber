@@ -49,7 +49,7 @@ export const createFrameMessageHandler = (ctx: WallContext, deps: FrameMessageDe
         return;
       case 'scroll':
         // The pin tracker repaints the pins; an empty card anchored to the old position closes, a half-written one stays.
-        if (popovers.current()?.board === board) popovers.closeForMove(true);
+        if (popovers.current()?.board === board) popovers.closeForMove();
         picks.notifyMoved();
         return;
       case 'hit':

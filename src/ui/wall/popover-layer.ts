@@ -1,6 +1,7 @@
 // The one card the wall floats over an artboard: the composer for a new comment, or the thread
-// of an existing one. This layer builds the card (`comment-ui.ts`), places it next to its anchor
-// inside the wall's overlay, and closes it. Saving, resolving and deleting go to `WallOptions`.
+// of an existing one. This layer builds the card (`comment-ui.ts`), keeps it beside its element or
+// pin as the wall moves (`model/card-place-model.ts`, which places the selection toolbar with it so
+// neither covers the other), and closes it. Saving, resolving and deleting go to `WallOptions`.
 // Unsaved text is never dropped by closing: `model/comment-drafts.ts` keeps it for the same card.
 
 import { anchorFromHit, docToFrame } from '../../guest/anchoring.ts';
@@ -8,6 +9,7 @@ import type { HitElement } from '../../shared/bridge-protocol.ts';
 import { PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.ts';
 import type { Comment } from '../../shared/types.ts';
 import { h } from '../components/dom.ts';
+import { placeCardAndToolbar, type Box } from '../model/card-place-model.ts';
 import { composerDraftKey, createDraftStore, threadDraftKey } from '../model/comment-drafts.ts';
 import { viewportOf } from '../model/comments-model.ts';
 import { frameToScreen, pinFramePoint, type Point } from '../model/wall-model.ts';
@@ -27,14 +29,15 @@ export type PopoverLayer = {
   close: () => void;
   /**
    * The wall or the design under the card moved (pan, zoom, scroll, or the press that starts a drag):
-   * an empty card closes, one holding text stays. `scrolled`: the design moved inside its frame, so
-   * the outline of the picked element no longer sits on it.
+   * an empty card closes, one holding text stays and follows its element (`follow`).
    */
-  closeForMove: (scrolled?: boolean) => void;
+  closeForMove: () => void;
+  /** Put the open card (and the toolbar with it) where its element is now. */
+  follow: () => void;
+  /** The selection toolbar shown with the card, to be placed clear of it; null when it goes. */
+  setCompanion: (toolbar: HTMLElement | null) => void;
   /** The open card, if any. */
   current: () => Popover | null;
-  /** Put a card in the overlay at a screen point, kept inside the wall. */
-  placeCard: (card: HTMLElement, anchorScreen: Point, below: number) => void;
   /** Seam S4: forget the selected element (the ask bar's chip was removed): closes an open composer, unless it holds text the user typed. */
   clearSelection: () => void;
   /** The comments changed: an open thread card follows its comment's status. */
@@ -71,11 +74,47 @@ const drafts = createDraftStore();
 export const createPopoverLayer = (ctx: WallContext, camera: CameraController, deps: PopoverDeps): PopoverLayer => {
   const { options } = ctx;
   let popover: Popover | null = null;
+  /** Where the open card's element is, surface px at the current camera and frame scroll. */
+  let anchorBox: (() => Box) | null = null;
+  let companion: HTMLElement | null = null;
+  // The card grows (an error line, a dragged textarea) and so does the toolbar (the Edit text reason): place them again.
+  const resized = new ResizeObserver(() => follow());
+  ctx.scope.add(() => resized.disconnect());
+
+  const follow = (): void => {
+    if (!popover || !anchorBox || ctx.surfaceSize.w === 0) return;
+    const card = popover.card.el;
+    const covered = camera.coveredInsets();
+    const place = placeCardAndToolbar({
+      box: anchorBox(),
+      card: { w: card.offsetWidth, h: card.offsetHeight },
+      toolbar: companion ? { w: companion.offsetWidth, h: companion.offsetHeight } : null,
+      stage: { w: ctx.surfaceSize.w - covered.right, h: ctx.surfaceSize.h - covered.bottom },
+    });
+    card.style.left = `${Math.round(place.card.left)}px`;
+    card.style.top = `${Math.round(place.card.top)}px`;
+    if (!companion) return;
+    // `visibility`, not `hidden`: it keeps its size for the next placement, and cannot be pressed or focused meanwhile.
+    companion.style.visibility = place.toolbar ? '' : 'hidden';
+    if (!place.toolbar) return;
+    companion.style.left = `${Math.round(place.toolbar.left)}px`;
+    companion.style.top = `${Math.round(place.toolbar.top)}px`;
+    companion.dataset.below = String(place.toolbar.below);
+  };
+
+  const setCompanion = (toolbar: HTMLElement | null): void => {
+    if (companion && companion !== toolbar) resized.unobserve(companion);
+    companion = toolbar;
+    if (toolbar) resized.observe(toolbar);
+    follow();
+  };
 
   const close = (): void => {
     if (!popover) return;
     const current = popover;
     popover = null;
+    anchorBox = null;
+    resized.unobserve(current.card.el);
     drafts.keep(current.draftKey, current.card.draft());
     current.card.el.remove();
     current.board.selected.hidden = true;
@@ -85,15 +124,8 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     if (current.commentId === null) deps.emitSelection({ type: 'cleared' });
   };
 
-  const hideMarks = (board: Board): void => {
-    board.selected.hidden = true;
-    document.querySelector('.dc-temp-pin')?.remove();
-  };
-
-  const closeForMove = (scrolled = false): void => {
-    if (!popover) return;
-    if (popover.card.draft() === null) close();
-    else if (scrolled) hideMarks(popover.board);
+  const closeForMove = (): void => {
+    if (popover && popover.card.draft() === null) close();
   };
 
   /** The card's text was saved or thrown away: forget it, and close the card if it is still the open one. */
@@ -105,25 +137,16 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     drafts.drop(draftKey);
   };
 
-  const placeCard = (card: HTMLElement, anchorScreen: Point, below: number): void => {
-    ctx.overlay.append(card);
-    const { w, h: surfaceHeight } = ctx.surfaceSize;
-    const width = Math.min(card.offsetWidth, w - 16);
-    const height = card.offsetHeight;
-    let left = anchorScreen.x;
-    let top = anchorScreen.y + below + 10;
-    if (left + width > w - 8) left = w - width - 8;
-    if (top + height > surfaceHeight - 8) top = Math.max(8, anchorScreen.y - height - 10);
-    card.style.left = `${Math.max(8, left)}px`;
-    card.style.top = `${Math.max(8, top)}px`;
-  };
-
   /** Which view a page comment was made in: "Full width" or the viewport's name. */
   const pageWhere = (comment: Comment): string =>
     comment.viewport === PAGE_FILL_VIEWPORT_ID ? 'Made at full width' : `Made at ${ctx.detail.design.viewports.find((viewport) => viewport.id === comment.viewport)?.label ?? comment.viewport} size`;
 
-  const open = (board: Board, card: CardHandle, commentId: string | null, draftKey: string): void => {
+  const open = (board: Board, card: CardHandle, commentId: string | null, draftKey: string, box: () => Box): void => {
     popover = { card, board, commentId, draftKey };
+    anchorBox = box;
+    ctx.overlay.append(card.el);
+    resized.observe(card.el);
+    follow();
   };
 
   const openThread = (board: Board, commentId: string): void => {
@@ -131,7 +154,7 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     if (!comment) return;
     close();
     const number = ctx.numbers().get(commentId) ?? 0;
-    const { point, anchorState } = pinState(board, comment);
+    const { anchorState } = pinState(board, comment);
     const sendComment = options.onSendComment;
     const draftKey = threadDraftKey(options.slug, commentId);
     const card: CardHandle = createThread({
@@ -162,9 +185,11 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
       },
       onClose: () => close(),
     });
-    open(board, card, commentId, draftKey);
-    const screenPoint = frameToScreen(camera.get(), board.art.rect, point);
-    placeCard(card.el, { x: screenPoint.x + 14, y: screenPoint.y - 10 }, 0);
+    // The card sits beside the pin: a little right of it, level with it.
+    open(board, card, commentId, draftKey, () => {
+      const pin = frameToScreen(camera.get(), board.art.rect, pinState(board, comment).point);
+      return { x: pin.x + 14, y: pin.y - 10, w: 0, h: 0 };
+    });
     board.pins.get(commentId)?.setAttribute('aria-expanded', 'true');
     card.focus();
   };
@@ -182,13 +207,9 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     const selection = selectionFor(board, element, framePoint);
     const { anchor, ...target } = selection.element;
     const { point } = anchor;
-    rectToBox(board, board.selected, element.rect);
     board.selected.hidden = false;
     board.hover.hidden = true;
     const temp = h('span', { class: 'dc-pin dc-temp-pin', 'aria-hidden': 'true' }, '+');
-    const pinAt = pinFramePoint(element.rect, point, board.scroll);
-    temp.style.left = `${pinAt.x}px`;
-    temp.style.top = `${pinAt.y}px`;
     board.overlay.append(temp);
     const draftKey = composerDraftKey({ slug: options.slug, screen: target.screen, artboard: board.art.id, selector: anchor.selector, pageMode: ctx.pageMode });
     const card: CardHandle = createComposer({
@@ -203,10 +224,17 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
         settle(card, draftKey);
       },
     });
-    open(board, card, null, draftKey);
+    open(board, card, null, draftKey, () => {
+      // The outline and the "+" pin follow the design's scroll with the card; the wall's own moves carry them already.
+      rectToBox(board, board.selected, element.rect);
+      const pinAt = pinFramePoint(element.rect, point, board.scroll);
+      temp.style.left = `${pinAt.x}px`;
+      temp.style.top = `${pinAt.y}px`;
+      const view = camera.get();
+      const at = frameToScreen(view, board.art.rect, { x: element.rect.x - board.scroll.x, y: element.rect.y - board.scroll.y });
+      return { x: at.x, y: at.y, w: element.rect.w * view.scale, h: element.rect.h * view.scale };
+    });
     deps.emitSelection({ type: 'selected', selection });
-    const base = frameToScreen(camera.get(), board.art.rect, { x: element.rect.x - board.scroll.x, y: element.rect.y - board.scroll.y });
-    placeCard(card.el, base, element.rect.h * camera.get().scale);
     card.focus();
     return selection;
   };
@@ -223,5 +251,5 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     if (comment) popover.card.setStatus?.(comment.status);
   };
 
-  return { openThread, openComposer, selectionFor, close, closeForMove, current: () => popover, placeCard, clearSelection, refresh };
+  return { openThread, openComposer, selectionFor, close, closeForMove, follow, setCompanion, current: () => popover, clearSelection, refresh };
 };

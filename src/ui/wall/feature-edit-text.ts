@@ -36,9 +36,6 @@ type Toolbar = { kind: 'toolbar'; pick: WallPick; toolbar: SelectionToolbar; che
 type Editing = { kind: 'editor'; pick: WallPick; editor: TextEditor; check: Editable; saving: boolean; resize: ResizeObserver };
 type Open = { kind: 'none' } | Toolbar | Editing;
 
-/** The toolbar's gap to the comment box it sits beside. */
-const CARD_GAP = 8;
-
 export const mount: FeatureMount = (ctx) => {
   const { wall, slug } = ctx;
   const rail = ctx.surface === 'panel';
@@ -67,19 +64,22 @@ export const mount: FeatureMount = (ctx) => {
 
   const placeToolbarFor = (current: Toolbar): void => {
     const el = current.toolbar.el;
+    // With the comment box open the wall places the two together, so the toolbar never covers its buttons.
+    if (wall.cardEl()) {
+      wall.setCardCompanion(el);
+      return;
+    }
     const stage = wall.size();
-    const box = wall.pickBox(current.pick);
-    const place = placeToolbar(box, { w: el.offsetWidth, h: el.offsetHeight }, { w: stage.width, h: stage.height });
+    const place = placeToolbar(wall.pickBox(current.pick), { w: el.offsetWidth, h: el.offsetHeight }, { w: stage.width, h: stage.height });
+    el.style.visibility = '';
     el.style.left = `${Math.round(place.left)}px`;
     el.style.top = `${Math.round(place.top)}px`;
     el.dataset.below = String(place.below);
-    // Flipped below the element, the toolbar would sit on the comment box: the box goes under it.
-    const card = wall.cardEl();
-    if (place.below && card) card.style.top = `${Math.round(Math.max(Number.parseFloat(card.style.top) || 0, place.top + el.offsetHeight + CARD_GAP))}px`;
   };
 
   const closeToolbar = (): void => {
     if (open.kind !== 'toolbar') return;
+    wall.setCardCompanion(null);
     open.toolbar.dispose();
     open = { kind: 'none' };
   };
@@ -287,17 +287,18 @@ export const mount: FeatureMount = (ctx) => {
   });
 
   // The camera or a frame's scroll moved: a box that was anchored to the element follows it (the editor)
-  // or goes with the comment box (the toolbar).
+  // or goes with the comment box (the toolbar). A half-written comment box stays and follows, and the toolbar with it.
   const offMoved = wall.onMoved(() => {
-    closeToolbar();
+    if (!wall.cardHasDraft()) closeToolbar();
     if (open.kind === 'editor') placeEditorFor(open);
   });
 
-  // A press on the wall away from the toolbar and the comment box closes the toolbar. A press away from the editor is
+  // A press on the wall away from the toolbar and the comment box closes the toolbar (unless that box holds words:
+  // the press may be the start of a pan, and the two stay together). A press away from the editor is
   // its click-away rule: unchanged text closes it (and the press goes on to the wall); changed text keeps it.
   const onPointerDown = (event: PointerEvent): void => {
     const target = event.target instanceof Element ? event.target : null;
-    if (open.kind === 'toolbar' && !target?.closest('.dc-seltoolbar, .dc-composer')) closeToolbar();
+    if (open.kind === 'toolbar' && !wall.cardHasDraft() && !target?.closest('.dc-seltoolbar, .dc-composer')) closeToolbar();
     if (open.kind !== 'editor' || open.saving || target?.closest('.dc-editor')) return;
     if (hasChange(open.check.before, open.editor.value())) open.editor.remindClickAway();
     else closeEditor();

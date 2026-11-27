@@ -106,6 +106,10 @@ export type WallHandle = {
   openComment: (pick: WallPick) => void;
   /** The open comment card, if any (the toolbar sits next to it). */
   cardEl: () => HTMLElement | null;
+  /** The open card holds unsaved text: it stays through moves, and so does what is shown with it. */
+  cardHasDraft: () => boolean;
+  /** The selection toolbar, placed with the comment card so neither covers the other; null when it goes. */
+  setCardCompanion: (toolbar: HTMLElement | null) => void;
   /** Close the open comment card unless it holds text the user typed. */
   closeEmptyCard: () => void;
   /** Close the open card whatever it holds. */
@@ -225,7 +229,11 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
     clearHover: hit.clearHover,
     bounds: boards.bounds,
     rebuildLayout: boards.rebuild,
-    placeLabels: boards.placeLabels,
+    // Every camera change and wall resize comes through here: the labels, and the open card with its element.
+    placeLabels: () => {
+      boards.placeLabels();
+      popovers.follow();
+    },
     scaleChanged: pins.scaleChanged,
     queueSync: boards.queueSync,
   });
@@ -376,6 +384,11 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
       else popovers.openComposer(pick.board, pick.element, pick.framePoint);
     },
     cardEl: () => popovers.current()?.card.el ?? null,
+    setCardCompanion: popovers.setCompanion,
+    cardHasDraft: () => {
+      const open = popovers.current();
+      return open !== null && open.card.draft() !== null;
+    },
     closeEmptyCard: () => popovers.clearSelection(),
     closeCard: () => popovers.close(),
     setEditing: (editing) => {
