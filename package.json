@@ -98,6 +98,20 @@
           "icon": "palette",
           "title": "Design check · {input.design}",
           "output": "text"
+        },
+        {
+          "match": "design_list",
+          "name": "Designs",
+          "icon": "palette",
+          "title": "Designs · {input.project}",
+          "output": "text"
+        },
+        {
+          "match": "design_read",
+          "name": "Design",
+          "icon": "palette",
+          "title": "Design · {input.design}",
+          "output": "text"
         }
       ],
       "blocks": [
