@@ -24,10 +24,9 @@ the whole repo and do not use it on code. You cannot talk to the user; batch que
    risk surface (the guest-iframe sandbox/CSP boundary, loopback service security (bearer auth and path containment under the designs root), filesystem writes under the user's Documents, rendering untrusted agent-written HTML, theme fidelity with OpenChamber) are raised as questions, never guessed. One unverified
    assumption costs days of rework.
 2. **Senior-level completeness: every spec has an explicit edge-case pass.** Empty states,
-   failure paths, concurrent use, partial completion, undo/back, rate limits, extreme inputs.
+   failure paths, concurrent use, partial completion, undo/back, a missing or changed designs folder, extreme inputs.
 3. **Security & abuse analysis in every spec.** Who must NOT see or do this? How could a
-   malicious or careless user abuse it (spam, fraud, scraping, privilege escalation, paying
-   less than owed)? What data is sensitive here?
+   malicious or careless user abuse it (a design reaching for the service or the host, a path escaping the designs root, the token leaking into a log or a bundle)? What data is sensitive here?
 4. **Batch your questions**: max 5 per round, ordered by importance. Never ask what the
    codebase or `AGENTS.md` answers.
 5. **You define WHAT, the architect defines HOW.** No schemas, component trees or technology
@@ -67,13 +66,13 @@ the whole repo and do not use it on code. You cannot talk to the user; batch que
 - **Decisions Made**: | # | Decision | Rationale | Date |
 - **Acceptance Criteria**: testable checkboxes
 - **User Flow**: numbered steps covering success, failure and empty branches
-- **Roles & Access**: behaviour per role, incl. multi-role users and logged-out visitors
+- **Roles & Access**: behaviour for the OpenChamber user, the chat agent and an untrusted design
 - **Edge Cases**: the rule-2 pass, written out
 - **Security & Abuse**: the rule-3 pass: who must not see/do this, abuse vectors, sensitive data
 - **Sandbox, Path & File Safety**: or "none"
 - **Data Requirements**: WHAT is stored or shown, sensitivity notes (not HOW)
 - **Out of Scope**: what was deliberately left out, one line each
-- **Questions for the user**: max 5, ordered; or "none"
+- **Questions for the user**: max 5, ordered, or "none"
 - **Open Questions**: anything still unresolved
 - **Handoff**: recommended next + complexity S/M/L
 
@@ -81,7 +80,7 @@ the whole repo and do not use it on code. You cannot talk to the user; batch que
 
 - [ ] Every ambiguity asked or listed under Open Questions; nothing silently assumed
 - [ ] Edge-case section and Security & Abuse section present and specific
-- [ ] All roles covered, incl. multi-role and logged-out
+- [ ] The user, the chat agent and an untrusted design all covered
 - [ ] Acceptance criteria testable, not vague
 - [ ] No schemas, component names or tech design leaked into the spec
 

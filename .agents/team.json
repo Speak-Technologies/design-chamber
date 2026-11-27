@@ -87,7 +87,7 @@
       },
       {
         "cmd": "node .agents/render.js",
-        "note": "re-render the agent team from `.agents/team.json` (the skill renderer, then the project fixes for em dashes and generic database wording), then run `node .agents/verify-team.cjs`. After a render, only the `team:start` to `team:end` block of this file is regenerated; the rest is edited by hand."
+        "note": "re-render the agent team from `.agents/team.json` (the skill renderer, then the project fixes for em dashes and generic role and database wording), then run `node .agents/verify-team.cjs`. After a render, only the `team:start` to `team:end` block of this file is regenerated; the rest is edited by hand."
       }
     ],
     "gates": [
@@ -331,7 +331,7 @@
     }
   },
   "post_render": {
-    "_note": "Applied by .agents/render.js after the skill renders. Each exact `from` must match at least once or the render stops, so a template change is noticed. Then every em dash left in a generated file is replaced.",
+    "_note": "Applied by .agents/render.js after the skill renders, in order and before the em-dash pass, so a `from` may hold the template's em dash (written \\u2014). Each `from` must match at least once or the render stops, and an empty `from` is refused, so a template change is noticed. These drop wording that does not fit this project (database, roles, payments) and fix lines that read badly once the em dash is gone. Whatever em dash is left is then replaced by context.",
     "replace": [
       {
         "from": ", migrate a shared database or delete anything",
@@ -348,6 +348,270 @@
       {
         "from": ", non-local migrations,",
         "to": ","
+      },
+      {
+        "from": "team:start \u2014 rewritten",
+        "to": "team:start: rewritten"
+      },
+      {
+        "from": "codebase \u2014 reuse it;",
+        "to": "codebase, so reuse it;"
+      },
+      {
+        "from": "that works \u2014 **never** dropping",
+        "to": "that works, and **never** dropping"
+      },
+      {
+        "from": "together \u2014 same roster, same rules.",
+        "to": "together: same roster, same rules."
+      },
+      {
+        "from": "The main session \u2014 you, with the user in front of you \u2014 is the lead.",
+        "to": "The main session (you, with the user in front of you) is the lead."
+      },
+      {
+        "from": "no design decision \u2014 a copy fix, a renamed prop, a one-line bug",
+        "to": "no design decision, such as a copy fix, a renamed prop or a one-line bug"
+      },
+      {
+        "from": "L \u2014 split it)",
+        "to": "L, split it)"
+      },
+      {
+        "from": "**Model selection \u2014 chosen on every dispatch.**",
+        "to": "**Model selection (chosen on every dispatch).**"
+      },
+      {
+        "from": "`npm test` \u2014 the test suite runs on every change; findings as",
+        "to": "`npm test` (the test suite runs on every change); findings as"
+      },
+      {
+        "from": " as well \u2014 fresh context catches",
+        "to": " as well, since fresh context catches"
+      },
+      {
+        "from": "**Outcome** \u2014 one sentence: done, blocked, or a decision needed.",
+        "to": "**Outcome**: one sentence saying done, blocked, or a decision needed."
+      },
+      {
+        "from": "Never invent paths, tables or APIs \u2014 verify, or mark `NOT FOUND \u2014 verify`.",
+        "to": "Never invent paths, files or APIs: verify, or mark `NOT FOUND: verify`."
+      },
+      {
+        "from": "Mutations safe to retry: constraints over application checks; no read-modify-write\n    without a transaction or lock; webhooks and jobs idempotent by key.",
+        "to": "Mutations safe to retry: a write that runs twice leaves one result (temp file, then rename, never a half-written file); no read-modify-write on a file without checking it is unchanged since you read it."
+      },
+      {
+        "from": "roles and what each sees, data read/written",
+        "to": "what the user sees, data read and written"
+      },
+      {
+        "from": "An end user, an admin, an operator, another system: name them.",
+        "to": "The OpenChamber user, the chat agent, an untrusted design, another process: name them."
+      },
+      {
+        "from": "a misleading admin log)",
+        "to": "a misleading log line)"
+      },
+      {
+        "from": "an admin who saves an empty form sees a 500 and loses the draft",
+        "to": "a user who saves an empty settings form sees a 500 and loses the draft"
+      },
+      {
+        "from": " · a money error · ",
+        "to": " · a write outside the designs root · "
+      },
+      {
+        "from": "loss, security, money): grade it up",
+        "to": "loss, security, a write outside the designs root): grade it up"
+      },
+      {
+        "from": "money errors are never Minor",
+        "to": "lost writes are never Minor"
+      },
+      {
+        "from": "(hosting dashboards, CI, a shared vault)",
+        "to": "(CI settings, a shared vault)"
+      },
+      {
+        "from": "reasoning \u2014 that is the point: judge",
+        "to": "reasoning, and that is the point: judge"
+      },
+      {
+        "from": "check \u2014 every one restored.",
+        "to": "check, each one restored."
+      },
+      {
+        "from": "`git diff | shasum` \u2014 you need it in step 5.",
+        "to": "`git diff | shasum`, which you need in step 5."
+      },
+      {
+        "from": "[range or feature] \u2014 [date]",
+        "to": "[range or feature], [date]"
+      },
+      {
+        "from": "**Fix prompt \u2014 required (🔴 + 🟠)** \u2014 one block",
+        "to": "**Fix prompt, required (🔴 + 🟠):** one block"
+      },
+      {
+        "from": "**Fix prompt \u2014 optional (🟡 Nits)** \u2014 same shape",
+        "to": "**Fix prompt, optional (🟡 Nits):** same shape"
+      },
+      {
+        "from": "path/file.ext:42 \u2014 what is wrong",
+        "to": "path/file.ext:42: what is wrong"
+      },
+      {
+        "from": "(data loss, security, money)",
+        "to": "(data loss, security, a write outside the designs root)"
+      },
+      {
+        "from": "a comparison operator, a role check",
+        "to": "a comparison operator, a path check"
+      },
+      {
+        "from": "Specs, pseudocode, table definitions, signatures and data shapes",
+        "to": "Specs, pseudocode, signatures and data shapes"
+      },
+      {
+        "from": "or full SQL file",
+        "to": "or a full module"
+      },
+      {
+        "from": "Never cite a file, table, hook or function",
+        "to": "Never cite a file, route, type or function"
+      },
+      {
+        "from": "Extend existing tables and patterns",
+        "to": "Extend existing modules and patterns"
+      },
+      {
+        "from": "types, hook signatures, components",
+        "to": "types, function signatures, components"
+      },
+      {
+        "from": "(rule 3) \u2014 explicitly, in writing",
+        "to": "(rule 3), explicitly and in writing"
+      },
+      {
+        "from": "Never reference a file, table or function",
+        "to": "Never reference a file, route or function"
+      },
+      {
+        "from": "component, hook and state it names",
+        "to": "component, function and state it names"
+      },
+      {
+        "from": "component, hook, route and state it names",
+        "to": "component, function, route and state it names"
+      },
+      {
+        "from": "needs \u2014 a type\nexport, one wiring line \u2014 is yours",
+        "to": "needs (a type\nexport, one wiring line) is yours"
+      },
+      {
+        "from": "needs \u2014 a\nmissing field on a type, one wiring line \u2014 is yours",
+        "to": "needs (a\nmissing field on a type, one wiring line) is yours"
+      },
+      {
+        "from": "run every gate \u2014 `npm run",
+        "to": "run every gate: `npm run"
+      },
+      {
+        "from": " \u2014 tests included, on every change",
+        "to": ", tests included, on every change"
+      },
+      {
+        "from": " as a hostile reviewer \u2014 debug code,",
+        "to": " as a hostile reviewer: debug code,"
+      },
+      {
+        "from": "is protocol §2 \u2014 read it once per session",
+        "to": "is protocol §2: read it once per session"
+      },
+      {
+        "from": "with context \u2014 an `ApiErrorBody`",
+        "to": "with context: an `ApiErrorBody`"
+      },
+      {
+        "from": "`npm test`) \u2014 output quoted",
+        "to": "`npm test`), output quoted"
+      },
+      {
+        "from": "Senior ladder climbed \u2014 nothing",
+        "to": "Senior ladder climbed: nothing"
+      },
+      {
+        "from": "if you haven't this session \u2014 §UI holds",
+        "to": "if you haven't this session. §UI holds"
+      },
+      {
+        "from": "role checks in the UI are UX only \u2014 the server enforces.",
+        "to": "checks in the UI are UX only; the service enforces them."
+      },
+      {
+        "from": "exactly \u2014 fidelity, not restyling",
+        "to": "exactly: fidelity, not restyling"
+      },
+      {
+        "from": "stop and propose one \u2014\n",
+        "to": "stop and propose one:\n"
+      },
+      {
+        "from": "a visitor should remember \u2014 get it approved",
+        "to": "a visitor should remember. Get it approved"
+      },
+      {
+        "from": "jobs have a budget \u2014 ",
+        "to": "jobs have a budget: "
+      },
+      {
+        "from": "change the designs folder \u2014 and a",
+        "to": "change the designs folder, and a"
+      },
+      {
+        "from": "where they are \u2014 page title",
+        "to": "where they are: page title"
+      },
+      {
+        "from": "**Usability bar** *(UI changes)* \u2014 walk the flow and count its steps: a step",
+        "to": "**Usability bar** *(UI changes)*: walk the flow and count its steps. A step"
+      },
+      {
+        "from": "| The final price, fees included, shown before the pay step | Reveal a fee at checkout |\n",
+        "to": ""
+      },
+      {
+        "from": "Confirm dialogs for reversible actions \u2014 keep them for money and deletion",
+        "to": "Confirm dialogs for reversible actions, kept for deletion and anything irreversible"
+      },
+      {
+        "from": "Search, forms, calendars and checkout behave",
+        "to": "Search, forms and menus behave"
+      },
+      {
+        "from": "A dashboard answers \"what do I do",
+        "to": "The designs list answers \"what do I do"
+      },
+      {
+        "from": "times, numbers and money follow",
+        "to": "times and numbers follow"
+      },
+      {
+        "from": "undo/back, rate limits, extreme inputs",
+        "to": "undo/back, a missing or changed designs folder, extreme inputs"
+      },
+      {
+        "from": "(spam, fraud, scraping, privilege escalation, paying\n   less than owed)",
+        "to": "(a design reaching for the service or the host, a path escaping the designs root, the token leaking into a log or a bundle)"
+      },
+      {
+        "from": "behaviour per role, incl. multi-role users and logged-out visitors",
+        "to": "behaviour for the OpenChamber user, the chat agent and an untrusted design"
+      },
+      {
+        "from": "All roles covered, incl. multi-role and logged-out",
+        "to": "The user, the chat agent and an untrusted design all covered"
       }
     ]
   }

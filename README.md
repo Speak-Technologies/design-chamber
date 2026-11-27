@@ -297,7 +297,7 @@ Where to read more:
 
 This repo is built by a small team of AI agents with one human owner. [`AGENTS.md`](AGENTS.md) and [`.agents/rules/claude-agent-protocol.md`](.agents/rules/claude-agent-protocol.md) say how they work. The main session leads, dispatches specialists, and reports with evidence. Pushing, opening or merging PRs and publishing stay with the owner.
 
-[`.agents/team.json`](.agents/team.json) is the source for the agent files in `.claude/agents/` and `.opencode/agents/`, the protocol and the team block of `AGENTS.md` (the part between its `team:start` and `team:end` markers; the rest of that file is edited by hand). After editing it, re-render with `node .agents/render.js`. That runs the agent-team-generator, then removes the em dashes and the generic database wording its templates add, and finally runs `node .agents/verify-team.cjs`, which should pass. The roster:
+[`.agents/team.json`](.agents/team.json) is the source for the agent files in `.claude/agents/` and `.opencode/agents/`, the protocol and the team block of `AGENTS.md` (the part between its `team:start` and `team:end` markers; the rest of that file is edited by hand). After editing it, re-render with `node .agents/render.js`. That runs the agent-team-generator, then applies the wording fixes listed under `post_render` in `team.json` (template text about databases, roles and payments that does not fit this project), replaces any em dash by context, and finally runs `node .agents/verify-team.cjs`, which should pass. The roster:
 
 | Agent | Role |
 |---|---|
