@@ -111,8 +111,9 @@ export type AgentSystemChoice = { id: string; name: string; line: string };
 
 /**
  * The design's system as the instruction builders see it (Phase 2.5 §8.1, §8.10).
- * `linked`: a valid copy in `<design>/system`. `ask`: the agent asks the user first. `none`: the
- * user said no system. `unset`: an old design with no decision (behaves exactly as before 2.5).
+ * `linked`: a valid copy in `<design>/system`. `ask`: the agent asks the user first. `project`: it
+ * follows its project's files. `none`: the user said no system. `unset`: an old design with no
+ * decision (behaves exactly as before 2.5).
  */
 export type AgentSystem =
   | {
@@ -130,8 +131,15 @@ export type AgentSystem =
       breakpoints: number[];
       /** A repo-backed system's repo folder; null for an internal home. */
       repo: string | null;
+      /** It is the design's project's own system (use-the-project spec §1.6); absent otherwise. */
+      ownedByProject?: true;
     }
   | { state: 'ask'; choices: AgentSystemChoice[]; recommended: string | null }
+  /**
+   * Use the project (use-the-project spec §1.5): no system linked, the design follows its project's own files.
+   * `draft` names the project's own system when it exists but is a Draft.
+   */
+  | { state: 'project'; draft: { id: string; name: string } | null }
   | { state: 'none' }
   | { state: 'unset' };
 

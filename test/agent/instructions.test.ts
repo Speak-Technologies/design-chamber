@@ -108,7 +108,8 @@ describe('buildInstructions (§U2.2)', () => {
       assert.ok(repo > 0);
       assert.equal(lines[repo + 1], FOLDERS_LINE);
       assert.equal(lines[repo + 2], EXISTING_LINE);
-      assert.equal(lines.length, repo + 3, 'nothing after them');
+      // Then only the two Use the project lines (test/agent/use-the-project-text.test.ts holds their text).
+      assert.equal(lines.length, repo + 5, 'nothing after them but the two Use the project lines');
     }
     const longWin = `C:\\Users\\you\\${'very-long-folder-name\\'.repeat(11)}Designs`;
     const text = buildInstructions({ root: longWin, platform: 'win32', checkCommand: winCommand(longWin) });
@@ -137,7 +138,7 @@ describe('buildInstructions (§U2.2)', () => {
     assert.ok(!text.includes('\u2014'));
     assert.equal(text, buildInstructions(input));
     assert.doesNotMatch(text, /token|bearer|OPENCHAMBER_/i);
-    assert.ok(text.split('\n').length <= 12, 'a short note');
+    assert.ok(text.split('\n').length <= 14, 'a short note');
   });
 });
 

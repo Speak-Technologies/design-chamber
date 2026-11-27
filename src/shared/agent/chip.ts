@@ -31,7 +31,19 @@ export const titleFromBrief = (brief: string, kind: DesignKind): string => {
 
 const breakpointList = (project: ProjectRules): string => [...new Set(project.breakpoints.map((breakpoint) => breakpoint.px))].slice(0, 8).join(', ');
 
-const projectStep = (project: ProjectRules): string => {
+/** Use the project (spec §1.6): at most two component and two screen folders, and the one line about the look. */
+const PATTERNS_SHOWN_MAX = 2;
+const patternsLine = (project: ProjectRules): string => {
+  const shown = (paths: readonly string[]): string => paths.slice(0, PATTERNS_SHOWN_MAX).map((one) => clip(oneLine(one), PATH_SHOWN_MAX)).join(', ');
+  const { components, screens } = project.patterns;
+  const where =
+    components.length > 0 && screens.length > 0 ? `Its components live in ${shown(components)}; its screens in ${shown(screens)}. `
+      : components.length > 0 ? `Its components live in ${shown(components)}. `
+        : screens.length > 0 ? `Its screens live in ${shown(screens)}. ` : '';
+  return `${where}Build it the way the project already looks.`;
+};
+
+const projectSources = (project: ProjectRules): string => {
   const directory = project.directory === null ? '' : clip(project.directory, DIRECTORY_SHOWN_MAX);
   switch (project.state) {
     case 'no-project':
@@ -48,6 +60,11 @@ const projectStep = (project: ProjectRules): string => {
       return `Design Chamber found these in ${directory}: ${paths}${more > 0 ? ` (+${more} more, listed in RULES.md)` : ''}. Read them yourself and follow them; also search for anything it missed (RULES.md, "Discover the project's design rules first").`;
     }
   }
+};
+
+const projectStep = (project: ProjectRules, followsProject: boolean): string => {
+  const step = projectSources(project);
+  return followsProject ? `${step} ${patternsLine(project)}` : step;
 };
 
 const DEFAULT_VIEWPORTS = `${formatViewport(VIEWPORT_LAPTOP)} + ${formatViewport(VIEWPORT_PHONE)}`;
@@ -97,7 +114,7 @@ const checkStep = (command: string): string =>
   `8. Before you say you are done, run ${command} . Fix every error it lists and open the PNGs it names to look at your work.${command.startsWith('"') ? ' (In PowerShell, put & in front.)' : ''}`;
 
 const PHASE_ZERO_ORDER = (context: AgentContext): string =>
-  `the user's words in this chat · the project's design rules (step 2) · style preset (${context.preset ? context.preset.name : 'none chosen'}) · this design's DESIGN.md + tokens.css once confirmed · the built-in rules in RULES.md.`;
+  `the user's words in this chat · ${systemOf(context).state === 'project' ? "this project's design system and patterns" : "the project's design rules"} (step 2) · style preset (${context.preset ? context.preset.name : 'none chosen'}) · this design's DESIGN.md + tokens.css once confirmed · the built-in rules in RULES.md.`;
 
 /** Step 3 (Phase 2.5 §8.2): the three variants in one line; no system or an old design reads exactly as before. */
 const precedenceStep = (context: AgentContext): string => {
@@ -146,7 +163,7 @@ export const buildChipText = (context: AgentContext, mode: ChipMode): string => 
     '',
     `1. FIRST read, in full: ${rulesPathOf(context.folder)}`,
     '   It is part of this message: the complete design rules, the ask-when-unsure protocol and the design.json contract. Design nothing before you have read it.',
-    `2. THEN look for the active project's own design rules before designing: ${projectStep(context.project)}`,
+    `2. THEN look for the active project's own design rules before designing: ${projectStep(context.project, systemOf(context).state === 'project')}`,
     precedenceStep(context),
     `4. ${viewportStep(context, mode)}`,
     '5. Unsure about anything material? Ask first: ONE message with 3–6 short numbered questions, each with a bold recommended default, then wait for the answer. Do not ask what the project files already answer; skip the questions if the user said "go" or this is a small edit.',

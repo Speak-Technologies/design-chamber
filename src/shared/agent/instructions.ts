@@ -27,7 +27,13 @@ const checkLine = (checkCommand: string | null, platform: NodeJS.Platform): stri
   return `${tool}, or, if you don't have that tool, run ${code(checkCommand)} with the design's folder name in place of <slug>.${powershell} ${after}`;
 };
 
-const compose = (root: string, platform: NodeJS.Platform, checkCommand: string | null): string => {
+/** Use the project and the native agent (spec §2.5); the skill says the same, so a root too long for the note drops them. */
+const PROJECT_LINES: readonly string[] = [
+  '- A new design for a project follows the project: its own design system if Design Chamber has one, else its design files, components and screens. Read them before you draw.',
+  "- To see the library, the user's pins and what they have open, use design_list and design_read.",
+];
+
+const compose = (root: string, platform: NodeJS.Platform, checkCommand: string | null, projectLines = true): string => {
   const sep = platform === 'win32' ? '\\' : '/';
   return [
     `Design Chamber is on. It shows the designs saved in the user's designs folder: ${code(root)}`,
@@ -42,6 +48,7 @@ const compose = (root: string, platform: NodeJS.Platform, checkCommand: string |
     "- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff.",
     '- Folders in the library are the user\'s tags. Add a design to an existing folder only when the user asks, with design.json "folderRequest" (the design-chamber skill has the format). Never create, rename or delete folders.',
     '- When the user points at a design system a project already has, read its page, docs and components before you build from it.',
+    ...(projectLines ? PROJECT_LINES : []),
   ].join('\n');
 };
 
@@ -59,13 +66,16 @@ export const buildPinInstruction = (systemName: string): string => {
 
 /**
  * The instructions text for `root`, at most `SERVICE_INSTRUCTIONS_MAX` characters. A root long
- * enough to pass the limit loses the check-command clause first (the tool is still named), and
- * past that the builder throws rather than cut a path in half.
+ * enough to pass the limit loses the check-command clause first (the tool is still named), then
+ * the two Use the project lines (the skill has them), and past that the builder throws rather than
+ * cut a path in half.
  */
 export const buildInstructions = ({ root, platform, checkCommand }: InstructionsInput): string => {
   assertRoot(root);
   if (checkCommand !== null) assertRoot(checkCommand, 'check command');
   const full = compose(root, platform, checkCommand);
   if (full.length <= SERVICE_INSTRUCTIONS_MAX) return full;
-  return capped(compose(root, platform, null), SERVICE_INSTRUCTIONS_MAX, 'instructions');
+  const noCommand = compose(root, platform, null);
+  if (noCommand.length <= SERVICE_INSTRUCTIONS_MAX) return noCommand;
+  return capped(compose(root, platform, null, false), SERVICE_INSTRUCTIONS_MAX, 'instructions');
 };
