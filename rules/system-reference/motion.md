@@ -24,7 +24,7 @@ Read this before you write duration or easing tokens, the motion pattern, or any
 - A value is one time or one easing. A time is `ms` or `s`, from 0 to 10 s. An easing is `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `cubic-bezier(x1, y1, x2, y2)` with both x from 0 to 1, or `steps(n)` with n from 1 to 100 and an optional `, start` or `, end`.
 - `cubic-bezier()` and `steps()` are valid only in the motion section. No shorthands such as `200ms ease-out` in one token.
 - The section takes the layouts `card`, `compact` and `table`.
-- The board draws a duration as a bar against the longest, and an easing as its curve, each with a chip that plays it on hover. A plain alias, `var(--x)`, previews what it leads to; other formulas get no preview.
+- The board draws a duration as a bar against the longest, and an easing as its curve, each with a demo chip that plays it on hover. A plain alias, `var(--x)`, previews what it leads to; other formulas get no preview.
 - Exits are faster than entries, about two thirds of the time. A modal enters in `--duration-slow` and leaves in `--duration-base`.
 - Nothing in product UI runs longer than 400ms. Larger distance earns a little more time; small parts never get the slow token.
 - Durations never change in dark mode. Don't give these tokens dark values.
@@ -73,8 +73,18 @@ tokens.css can't hold a `prefers-reduced-motion` block, so the rule lives in the
 ## Writing the motion pattern
 
 - An entry in `patterns` with `id: "motion"`, `kind: "motion"`, a title, a note of one or two sentences, and the body in `patterns/motion.md`: the three durations and what uses each, the three curves, the enter and exit table cut to the elements this product has, the never list, and the reduced motion rule.
-- Give it an example, `patterns/motion.html`, with `layout: "full"`. The check takes still pictures, so an animation that loops shows only one random frame. Draw each overlay's start and end side by side instead: a menu at 96 percent and faded, then at rest; a sheet below the frame edge, then up. Label each pair with its token names in plain text.
-- If the example includes a live hover demo, keep its resting state readable, since that is what the picture shows.
+- Give it an example, `patterns/motion.html`, with `layout: "full"`. Draw each overlay's start and end side by side: a menu at 96 percent and faded, then at rest; a sheet below the frame edge, then up. Label each pair with its token names in plain text.
+- Add a live demo of the main ones, marked for strips (below), with a readable resting state.
+
+## Motion strips
+
+On the wide light board the check starts a transition and takes four frames from start to end, then the end once more with reduced motion, side by side in `<entry>-motion@wide.png`.
+
+- It does this for each demo chip in the Motion section, and for each element in a component, pattern or brand example that has `data-dc-motion`.
+- The trigger is forced: the element's `data-dc-state` when it is `hover`, `focus`, `focus-visible` or `active`, else hover. So drive the movement with that real pseudo-class. A class toggled by script, or a keyframe that runs on load, isn't started: the strip is one frame and the check says nothing moved.
+- The frame is the labelled element's resting box plus 24px. For anything that travels further, label the container and let its hover move the child: `<div class="track" data-dc-motion>` with `.track:hover .sheet { transform: none; }`.
+- Read the frames: they should differ in even, sensible steps and end where the static end state shows. The check says when it still moves with reduced motion; fix that rule.
+- Up to 24 strips, the section's chips first.
 
 ## How the check sees motion
 

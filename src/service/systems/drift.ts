@@ -246,8 +246,9 @@ export const runBuildScan = async (ctx: ServiceContext, id: string, directory: s
     await guardSystemWrite(ctx.settings.root(), file, id, ctx.log);
     await writeFileAtomic(file, scanJsonOf(scanned, candidates), { createDirs: false });
     await systems.updateStateLocked(id, (current) => {
-      const code = current.sources.code;
-      if (code === null) return null;
+      if (current.sources.code === null) return null;
+      // This scan's answer replaces the last one's, so a removed import is forgotten.
+      const { tailwind: _before, ...code } = current.sources.code;
       const existing = code.existing === undefined || code.project === undefined ? code.existing : { ...code.existing, read: existingReadOf(scanned, code.project, code.existing.location) };
       return {
         ...current,
@@ -259,6 +260,7 @@ export const runBuildScan = async (ctx: ServiceContext, id: string, directory: s
             partial: scanned.summary.partial,
             scanned: scanned.scanned.slice(0, SCAN_FILES_MAX),
             forAgent: scanned.summary.forAgent.slice(0, SCAN_FOR_AGENT_MAX),
+            ...(scanned.tailwind === true ? { tailwind: true } : {}),
             ...(existing === undefined ? {} : { existing }),
           },
         },

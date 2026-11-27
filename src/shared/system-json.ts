@@ -32,6 +32,7 @@ import {
   SYSTEM_COMPONENTS_MAX,
   SYSTEM_ENTRY_ID_PATTERN,
   SYSTEM_ICONS_MAX,
+  SYSTEM_IMAGE_MAX_BYTES,
   SYSTEM_OUT_OF_SCOPE_MAX,
   SYSTEM_PAIRS_MAX,
   SYSTEM_EXAMPLE_MAX,
@@ -314,6 +315,7 @@ export const parseSources = (value: unknown): SystemState['sources'] => {
         partial: own(code, 'partial') === true,
         scanned,
         ...(forAgent !== null ? { forAgent } : {}),
+        ...(own(code, 'tailwind') === true ? { tailwind: true } : {}),
         ...(isAbsPath(project) ? { project } : {}),
         ...(existing !== null ? { existing } : {}),
       };
@@ -1259,6 +1261,38 @@ const readSystemViewports = (raw: JsonObject | null, problems: SystemProblem[]):
   return readViewportList(value, 'viewports', problems) ?? defaultViewports('canvas');
 };
 
+/** A real-app screenshot's name in `sources/screens/`: a plain file name ending .png, .jpg or .jpeg (either case; the folder as written). */
+const SCREEN_SOURCE_PATTERN = /^sources\/screens\/([A-Za-z0-9_][A-Za-z0-9._-]{0,79})\.(?:png|jpe?g|PNG|JPE?G)$/;
+
+/** The sentence for a screen `source` that isn't a picture in `sources/screens/`. */
+export const SCREEN_SOURCE_SENTENCE = 'Its source must be a PNG or JPEG in sources/screens/, such as sources/screens/home.png.';
+
+/**
+ * `screens[].source` (system-builder-depth T18): a screenshot of the real app, exactly
+ * `sources/screens/<name>.png` (or `.jpg`, `.jpeg`). The text is matched whole, so `..`, a backslash, a
+ * drive letter, an absolute path or a deeper folder is refused, and the file must be one the content walk
+ * found (a regular file, never a link) within the picture size cap. Anything else is a problem and null;
+ * the screen still draws. Its bytes are checked when the check reads it.
+ */
+const readScreenSource = (value: unknown, entry: string, sizes: ReadonlyMap<string, number>, problems: SystemProblem[]): string | null => {
+  if (value === undefined || value === null) return null;
+  const match = typeof value === 'string' ? SCREEN_SOURCE_PATTERN.exec(value) : null;
+  if (typeof value !== 'string' || match === null || (match[1] ?? '').includes('..')) {
+    problems.push({ entry, message: SCREEN_SOURCE_SENTENCE });
+    return null;
+  }
+  const bytes = sizes.get(value);
+  if (bytes === undefined) {
+    problems.push({ entry, message: `${value} is missing.` });
+    return null;
+  }
+  if (bytes > SYSTEM_IMAGE_MAX_BYTES) {
+    problems.push({ entry, message: `${value} is too large. Pictures can be up to 10 MB.` });
+    return null;
+  }
+  return value;
+};
+
 /**
  * `system.json` `screens` (§4.6): `{ id, title, kind, viewports? }`, the file always
  * `screens/<id>.html`. A bad entry is dropped with a problem; past `SYSTEM_SCREENS_MAX` each further
@@ -1295,7 +1329,7 @@ const readScreens = (raw: JsonObject | null, sizes: ReadonlyMap<string, number>,
     const rel = systemScreenFileOf(id);
     const problem = !sizes.has(rel) ? screenMissingSentence(id) : tooLarge.has(rel) ? screenTooLongSentence(id) : null;
     if (problem !== null) problems.push({ entry, message: problem });
-    out.push({ id, title, kind: kind as SystemScreenKind, viewports, problem });
+    out.push({ id, title, kind: kind as SystemScreenKind, viewports, problem, source: readScreenSource(own(item, 'source'), entry, sizes, problems) });
   });
   return out;
 };

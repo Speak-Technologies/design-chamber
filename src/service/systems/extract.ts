@@ -57,6 +57,7 @@ import {
   extractFromCss,
   extractFromTokenJson,
   forAgentByName,
+  importsTailwind,
   isCssFile,
   isFontFolderFile,
   isLogoCandidate,
@@ -146,6 +147,8 @@ export type ScanResult = {
   scanned: string[];
   assets: ScanAsset[];
   summary: ScanSummary;
+  /** A CSS file read imports Tailwind v4 (T19, the token export). */
+  tailwind?: boolean;
   /** Every file the walk listed (secret names dropped): discovery's only input besides the tokens (§5.5). */
   walked: string[];
   /** A location scan's project and what the folder holds, for the seed (§5.8). */
@@ -259,6 +262,7 @@ export const runScan = async (input: ScanInput): Promise<ScanResult> => {
   const found: { path: string; found: number }[] = [];
   const scanned: string[] = [];
   let refused = 0;
+  let tailwind = false;
   for (const rel of candidates.slice(0, limits.candidates)) {
     stopIfAborted();
     if (left() <= 0) {
@@ -276,6 +280,7 @@ export const runScan = async (input: ScanInput): Promise<ScanResult> => {
       continue;
     }
     scanned.push(rel);
+    tailwind ||= isCssFile(rel) && importsTailwind(outcome.text);
     if (isPreprocessorFile(rel)) {
       if (preprocessorHasVariables(outcome.text)) addForAgent(rel, WHY_PREPROCESSOR);
       continue;
@@ -339,6 +344,7 @@ export const runScan = async (input: ScanInput): Promise<ScanResult> => {
     scanned,
     assets,
     walked: files,
+    ...(tailwind ? { tailwind } : {}),
     summary: {
       directory,
       counts,
@@ -949,6 +955,7 @@ export const buildSystemSeed = async (ctx: ServiceContext, input: CreateSystemBo
         partial: scan.summary.partial,
         scanned: scan.scanned,
         forAgent: scan.summary.forAgent,
+        ...(scan.tailwind === true ? { tailwind: true } : {}),
         ...(location === undefined ? {} : { project: location.project, existing: { location: location.rel, marks: location.marks, read: location.read } }),
       },
       provenance,

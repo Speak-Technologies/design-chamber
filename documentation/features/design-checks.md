@@ -288,6 +288,19 @@ Findings name `screens/<id>.html` and the viewport ("screens/home.html @ Phone 3
   `--area`, draws them.
 - **Checklist.** A `page` screen with a viewport at most 480 px wide also counts for `responsive`, and
   any `marketing` screen counts for `marketing`.
+- **Compare sheets** (T18). A screen with a `source` (a screenshot of the real app in `sources/screens/`)
+  gets `compare-<id>@<viewport>.png` for each light viewport within 2 px of the picture's width: the
+  screen as drawn on the left, captioned "DESIGN" (its slices stacked into the page once: the last slice,
+  which the browser scrolls only as far as the page's bottom, adds just the rows the others don't show), a
+  16 px grey gap, the picture on the right captioned "YOUR APP", both at full size and top-aligned, the
+  shorter one padded white. A sheet is at most 20 megapixels, so a very long
+  page is cut at the bottom. A PNG is read directly; a JPEG (or a PNG Node can't read, such as a palette
+  one) is drawn once by the check's browser, offline, as the picture alone, and read back. The service
+  never opens, runs or pictures the app itself. Notes (`system-compare-skipped`): "The source picture is
+  1440 px wide; no viewport of this screen matches."; a file that isn't the PNG or JPEG its name says;
+  more than 24 sheets ("the limit is 24 per check"); or no time left in the screens' 40 seconds. The text
+  output lists each sheet with the screen, its size and the source; `check.json` has `render.compares`
+  (`{ screen, viewport, source, png }`).
 
 **Measured colour pairs.** The board's Pairs block shows each pair as "Aa Text" on the light and
 dark grounds. While measuring, the check reads each sample's text and background colour as the page
@@ -298,12 +311,68 @@ so each pair is reported once, and the measured pairs join the file finding of t
 finding per scheme in all. A measured pair must be more than 0.05 under its level to count, as
 the canvas can round a channel. `--area` other than foundations skips this.
 
+**Hover, focus and active pictures** (spec: `documentation/specs/system-builder-depth.md` T16). On the
+wide light board, after its area pictures, the check takes each component example instance labelled
+`data-dc-state="hover"`, `"focus"`, `"focus-visible"` or `"active"` and forces that state on it, the way
+DevTools does (CDP `CSS.forcePseudoState`, sent from the service; no script is added to the page and
+nothing in it is changed). When the example also has an instance labelled `rest` (or `default`,
+`normal`, `idle`, `enabled`) with the same `data-dc-variant` and `data-dc-size`, the state is forced on
+that one instead, so a hover copy drawn with a class such as `is-hover` doesn't hide a real `:hover`.
+
+- **The picture.** The element with 16 px around it twice, side by side: at rest on the left, the state
+  forced on the right, each captioned in the picture ("REST", or "NOT FORCED" when there is no resting copy,
+  then "HOVER", "FOCUS VISIBLE"…). It is named by component, variant and state: `button-primary-hover@wide.png`
+  (`-b`, `-c` when the same name comes twice), and the text names the component and variant too. Animations
+  run fast while a state is forced, so a transition is pictured where it ends.
+- **The verdict.** The element's computed text colour, background, border colours, box shadow, outline
+  and transform with the state on are compared with the state off. Nothing visible changed is
+  `system-state-unstyled` (warning), one per component, naming the component and its states in the detail
+  ("button: hover, focus-visible") and ending with the pictures. An outline or a border that paints
+  nothing (no style or no width) doesn't count, so `:focus-visible { outline: none }` with nothing else
+  is unstyled, while one that only changes the colour is styled.
+- **Why, when it can tell.** The finding names the likely cause after the state in the detail and adds a
+  sentence. A state forced on the labelled copy itself, because no resting copy with the same variant and
+  size sits beside it, says "no resting copy beside it to force the state on" (a class such as
+  `is-hover` on that copy hides the real `:hover`). A `focus` label that changes nothing, where forcing
+  `:focus-visible` on the same element does change it, says "labelled focus but its CSS styles
+  :focus-visible". `params.hint` is `rest`, `focus-visible` or `both`.
+- **Limits.** At most 60 states a run, and they stop at 85% of the pass's 45 seconds; past either, one
+  note says how many were forced and pictured. Each state is cleared before the next element. The
+  narrow width and the dark pass don't repeat it, `--area` other than components and `--screen` skip it.
+- **Where it shows.** The text output lists the state pictures after the board pictures, marking the ones
+  that change nothing. `check.json` has `render.states`: `{ entry, state, png, styled }` per state.
+
+**Motion strips** (T17). Last on the wide light board, after the state pictures, the check pictures
+what moves: each demo chip in the Motion section (played by hover, as on the board) and each element in
+a component, pattern or brand example labelled `data-dc-motion` (started by the state its
+`data-dc-state` names when that is hover, focus, focus-visible or active, else hover). Everything is
+done from the service over CDP; no script is added to the page.
+
+- **The strip.** Every animation is paused, the state forced, and what it starts is moved to 0, 1/3, 2/3
+  and the end (a motion longer than 10 seconds is pictured up to 10 seconds), one picture each. Then the
+  same once more with `prefers-reduced-motion: reduce`, taken at the end. The pictures are stitched left
+  to right into `<entry>-motion@wide.png` (`--duration-fast-motion@wide.png`, `slide-motion@wide.png`),
+  16 px apart, each the element with 40 px around it (room for a lift and its shadow); a demo chip is
+  pictured with its token's row, so the name and value show. Each frame is captioned in the picture with
+  its time ("0 MS", "67 MS", "133 MS", "200 MS"), so similar speeds read apart, and the last "REDUCED
+  MOTION". An element where nothing starts is one frame ("NO MOTION") and the reduced one, and the text
+  says "nothing moved on hover, so one frame"; otherwise it says how long ("4 frames on hover over 200 ms").
+- **Reduced motion.** It raises nothing new (`system-motion-no-reduced` stays the file rule), but the last
+  frame shows it, and the text says "it still moves with reduced motion" when something still started.
+  Every media setting is sent with it, and the page goes back to no-preference and full speed after.
+- **Limits.** At most 24 strips a run, inside the same 85% of the pass's 45 seconds as the state
+  pictures; they come last, so a pass short of time drops them first. Past either, one note says how
+  many were taken. Example elements claim the 24 first and the demo chips get what is left, so a long
+  Motion section never crowds the components out. `--area` keeps that area's (the demo chips are Foundations); the narrow width, the
+  dark pass and `--screen` don't take them. `check.json` has `render.motion`:
+  `{ entry, trigger, png, frames, moved, reducedMoves }` per strip.
+
 Measured findings, each named once (at the widest width that raised it):
 
 | Severity | Finding |
 |---|---|
-| Warning | the board is wider than the width it has, so it scrolls sideways · an example is wider than its card can give it · part of an example sits outside its card (`position: fixed`, negative margins) · text runs outside its card |
-| Note | an entry set to card, compact or table needed the full width at the wide board ("Set its layout to full"; not said when the example is too wide even for the whole board, since then the example has to change) · what the pictures leave out, one note per kind and each area once, naming the areas: full-size pictures stop but the overview shows the rest; the overview stops early but full-size pictures show the rest; the overview couldn't be made; or part of an area is in no picture at all (with the exact px ranges). All of the board is still measured · no browser was found, so only the files were checked |
+| Warning | the board is wider than the width it has, so it scrolls sideways · an example is wider than its card can give it · part of an example sits outside its card (`position: fixed`, negative margins) · text runs outside its card · a labelled hover, focus or active state changes nothing when forced |
+| Note | an entry set to card, compact or table needed the full width at the wide board ("Set its layout to full"; not said when the example is too wide even for the whole board, since then the example has to change) · what the pictures leave out, one note per kind and each area once, naming the areas: full-size pictures stop but the overview shows the rest; the overview stops early but full-size pictures show the rest; the overview couldn't be made; or part of an area is in no picture at all (with the exact px ranges). All of the board is still measured · only the first labelled states were forced and pictured (the limit of 60, or the time) · only the first motion strips were taken (the limit of 24, or the time) · no browser was found, so only the files were checked |
 
 The unknown-layout warning tells an unknown word ("huge") apart from a known layout in a place that
 doesn't take it (`compact` on typography), and lists up to three with what each place takes, for

@@ -55,7 +55,15 @@ export const isLogoCandidate = (rel: string): boolean => LOGO_EXTENSIONS.include
 /** A font file in a `fonts` folder (§7.1), offered even when no @font-face names it. */
 export const isFontFolderFile = (rel: string): boolean => FONT_EXTENSIONS.includes(extOf(rel)) && dirsOf(rel).includes('fonts');
 
-const TAILWIND_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts)$/;
+export const TAILWIND_CONFIG = /^tailwind\.config\.(js|cjs|mjs|ts)$/;
+
+/**
+ * Whether a CSS file imports Tailwind v4 (`@import "tailwindcss"` or a part of it, as `tailwindcss/theme.css`),
+ * outside comments. An unclosed comment runs to the end, which also keeps this linear on any input.
+ */
+export const importsTailwind = (css: string): boolean =>
+  css.includes('tailwindcss') &&
+  /(?:^|[;}])\s*@import\s+(?:url\(\s*)?(["'])tailwindcss(?:\/[^"'\s]*)?\1/i.test(css.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, ' '));
 
 /** Files listed for the agent by name alone (§7.1): paths and a reason, never contents. */
 export const forAgentByName = (rel: string): string | null => {

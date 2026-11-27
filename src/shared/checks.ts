@@ -442,6 +442,34 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
     sentence: () => 'The icons mix viewBox sizes or stroke widths, so they may not look like one set.',
   },
   // ---- end system-builder-depth Phase 2 ----
+  // ---- system-builder-depth Phase 3 (§13 T16): `count` is the states in this example that changed nothing ----
+  'system-state-unstyled': {
+    severity: 'warning',
+    sentence: (f) => {
+      const count = Math.max(1, Math.round(f.params?.count ?? 1));
+      const base =
+        count === 1
+          ? "The example labels a state its CSS doesn't style: forced on the element, it changes nothing you can see. Style it, or remove the label."
+          : `The example labels ${num(count)} states its CSS doesn't style: forced on the element, they change nothing you can see. Style them, or remove the labels.`;
+      const hint = f.params?.hint;
+      const rest = hint === 'rest' || hint === 'both' ? ' There is no resting copy beside the labelled one to force the state on: add one labelled data-dc-state="rest" with the same variant and size.' : '';
+      const focus = hint === 'focus-visible' || hint === 'both' ? ' It is labelled focus but its CSS styles :focus-visible: label it focus-visible, or style :focus too.' : '';
+      return `${base}${rest}${focus}`;
+    },
+  },
+  // T18: `px` = the source's width when no viewport matches; `reason` limit or budget with `count` (and `max`); neither = unreadable.
+  'system-compare-skipped': {
+    severity: 'info',
+    sentence: (f) => {
+      const count = Math.max(1, Math.round(f.params?.count ?? 1));
+      const sheets = count === 1 ? '1 compare sheet was' : `${num(count)} compare sheets were`;
+      if (f.params?.reason === 'limit') return `${sheets} not made (the limit is ${num(f.params.max)} per check). Use --screen <id> to compare the rest.`;
+      if (f.params?.reason === 'budget' || f.params?.reason === 'failures') return `${sheets} not made (the check ran out of time). Use --screen <id> to compare the rest.`;
+      if (f.params?.px !== undefined) return `The source picture is ${num(f.params.px)} px wide; no viewport of this screen matches. Save a screenshot as wide as one of its viewports.`;
+      return "The source picture can't be read as a PNG or JPEG, so no compare sheet was made.";
+    },
+  },
+  // ---- end system-builder-depth Phase 3 ----
   'system-board-partial': {
     severity: 'info',
     sentence: (f) => {
@@ -451,6 +479,16 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
       switch (f.params?.pictured) {
         case 'entries':
           return `Only the first ${num(f.params?.max)} entries were measured.`;
+        case 'motion':
+          if (count === 0) return 'No motion strip was taken: the check ran out of time for them.';
+          return count === 1
+            ? 'Only the first motion strip was taken; the other moving elements were not pictured.'
+            : `Only the first ${num(count)} motion strips were taken; the other moving elements were not pictured.`;
+        case 'states':
+          if (count === 0) return 'No labelled state was forced and pictured: the check ran out of time for them.';
+          return count === 1
+            ? 'Only the first labelled state was forced and pictured; the others were not checked.'
+            : `Only the first ${num(count)} labelled states were forced and pictured; the others were not checked.`;
         case 'gap':
           return `${count === 1 ? 'Part of 1 area is' : `Parts of ${areas} are`} in no picture (the picture limit for one check); the parts are listed. All of the board was measured, so the findings cover them.`;
         case 'no-overview':
@@ -605,7 +643,7 @@ const PROPOSAL_REASONS: readonly ProposalProblemReason[] = [
   'describe-change', 'internal-parts', 'none-fixes', 'rewritten', 'unreadable',
   'preview-too-large', 'preview-unsafe', 'preview-secret',
 ];
-const PICTURED: readonly NonNullable<CheckParams['pictured']>[] = ['tiles', 'overview', 'no-overview', 'gap', 'entries'];
+const PICTURED: readonly NonNullable<CheckParams['pictured']>[] = ['tiles', 'overview', 'no-overview', 'gap', 'entries', 'states', 'motion'];
 const DEPTHS: readonly SystemDepth[] = ['tokens', 'core', 'full'];
 const LISTED: readonly NonNullable<CheckParams['listed']>[] = ['variants', 'sizes', 'states'];
 const LIVING_FAILED: readonly NonNullable<CheckParams['failed']>[] = ['too-large', 'bundle', 'unsafe', 'no-snapshot', 'secret'];
@@ -662,6 +700,7 @@ const parseParams = (value: unknown): CheckParams | undefined => {
   if (value.scheme === 'light' || value.scheme === 'dark') out.scheme = value.scheme;
   const listed = oneOf(value.listed, LISTED);
   if (listed !== null) out.listed = listed;
+  if (value.hint === 'rest' || value.hint === 'focus-visible' || value.hint === 'both') out.hint = value.hint;
   if (value.pairs === 'auto') out.pairs = 'auto';
   return Object.keys(out).length > 0 ? out : undefined;
 };

@@ -253,7 +253,14 @@ const fileName = (rel: string): string => rel.slice(rel.lastIndexOf('/') + 1);
 
 /** " Picture: components@wide-4.png." for a board finding about one entry, when a full-size tile shows it. */
 const pictureNote = (finding: CheckFinding, render: SystemCheckReport['render']): string => {
-  if (render === null || finding.detail === undefined || finding.viewport === null) return '';
+  if (render === null) return '';
+  if (finding.code === 'system-state-unstyled') {
+    // The pictures of this component's states that changed nothing (T16).
+    const entry = `component:${(finding.file ?? '').replace(/^components\//, '').replace(/\.html$/, '')}`;
+    const shown = (render.states ?? []).filter((result) => result.entry === entry && !result.styled && result.png !== null).map((result) => fileName(result.png ?? ''));
+    return shown.length === 0 ? '' : ` ${shown.length > 1 ? 'Pictures' : 'Picture'}: ${shown.join(', ')}.`;
+  }
+  if (finding.detail === undefined || finding.viewport === null) return '';
   const shot = render.entryShots.find((candidate) => candidate.width === finding.viewport && candidate.entry === finding.detail);
   if (shot === undefined || shot.pngs.length === 0) return '';
   return ` ${shot.pngs.length > 1 ? 'Pictures' : 'Picture'}: ${shot.pngs.map(fileName).join(', ')}.`;
@@ -303,6 +310,48 @@ const boardPictureLines = (render: NonNullable<SystemCheckReport['render']>, run
   return lines;
 };
 
+/** State pictures named in the text; the rest are in the report. */
+const STATE_PICTURES_SHOWN = 12;
+
+/**
+ * The state pictures block (system-builder-depth T16): each labelled state forced on its element at the
+ * wide width, by file name, those that changed nothing marked. Nothing when the pass didn't run or found none.
+ */
+const statePictureLines = (render: NonNullable<SystemCheckReport['render']>, reportPath: string | null): string[] => {
+  const pictured = (render.states ?? []).filter((result) => result.png !== null);
+  if (pictured.length === 0) return [];
+  const lines = ['', 'State pictures (wide board): each labelled hover, focus or active state, the element at rest on the left and forced on the right:'];
+  for (const result of pictured.slice(0, STATE_PICTURES_SHOWN)) {
+    const component = result.entry.slice(result.entry.indexOf(':') + 1);
+    const named = `${component}${result.variant === undefined ? '' : ` (${result.variant})`}, ${result.state}`;
+    lines.push(`  ${fileName(result.png ?? '')}  ${named}${result.styled ? '' : ': changes nothing'}`);
+  }
+  if (pictured.length > STATE_PICTURES_SHOWN) lines.push(`  and ${pictured.length - STATE_PICTURES_SHOWN} more in ${reportPath ?? 'the report'}`);
+  return lines;
+};
+
+/** Motion strips named in the text; the rest are in the report. */
+const MOTION_STRIPS_SHOWN = 12;
+
+/**
+ * The motion block (system-builder-depth T17): each strip with what it shows, a strip where nothing moved
+ * said plainly (one frame), and one that still moves with reduced motion marked.
+ */
+const motionPictureLines = (render: NonNullable<SystemCheckReport['render']>, reportPath: string | null): string[] => {
+  const strips = render.motion ?? [];
+  if (strips.length === 0) return [];
+  const lines = ['', 'Motion strips (wide board): frames from start to end, left to right, each captioned with its time, and last the end with reduced motion.'];
+  for (const strip of strips.slice(0, MOTION_STRIPS_SHOWN)) {
+    const what = strip.entry.slice(strip.entry.indexOf(':') + 1);
+    const note = !strip.moved
+      ? `nothing moved on ${strip.trigger}, so one frame`
+      : `${strip.frames} frames on ${strip.trigger}${strip.ms === undefined ? '' : ` over ${strip.ms} ms`}${strip.reducedMoves ? '; it still moves with reduced motion' : ''}`;
+    lines.push(`  ${fileName(strip.png)}  ${what}: ${note}`);
+  }
+  if (strips.length > MOTION_STRIPS_SHOWN) lines.push(`  and ${strips.length - MOTION_STRIPS_SHOWN} more in ${reportPath ?? 'the report'}`);
+  return lines;
+};
+
 /**
  * The screen pictures block (system-builder-depth T12b): one line per artboard drawn, by file name,
  * with its size and page height. The run folder is named once (here, or by the board block above).
@@ -317,6 +366,22 @@ const screenPictureLines = (render: NonNullable<SystemCheckReport['render']>, ru
     const label = screens.viewports.find((viewport) => viewport.screen === artboard.screen && viewport.id === artboard.viewport)?.label ?? artboard.viewport;
     const more = artboard.pngs.length > 1 ? ` (${artboard.pngs.length} images, top to bottom)` : '';
     lines.push(`  ${fileName(artboard.pngs[0] ?? '')}  ${artboard.screen ?? ''} at ${label} ${artboard.width}x${artboard.height}, page ${artboard.docHeight}px tall${more}`);
+  }
+  return lines;
+};
+
+/**
+ * The compare sheets block (system-builder-depth T18): one line per sheet, the screen and its size, and the
+ * real-app picture it sits beside. Nothing when no sheet was made.
+ */
+const comparePictureLines = (render: NonNullable<SystemCheckReport['render']>): string[] => {
+  const sheets = render.compares ?? [];
+  if (sheets.length === 0) return [];
+  const lines = ['', 'Compare sheets: "Design" on the left is the screen as drawn, "Your app" on the right is the screenshot, both at full size and top-aligned. Look for what differs:'];
+  for (const sheet of sheets) {
+    const viewport = render.screens?.viewports.find((candidate) => candidate.screen === sheet.screen && candidate.id === sheet.viewport);
+    const size = viewport === undefined ? sheet.viewport : `${viewport.label} ${viewport.width}x${viewport.height}`;
+    lines.push(`  ${fileName(sheet.png)}  ${sheet.screen} at ${size} beside ${sheet.source}`);
   }
   return lines;
 };
@@ -355,8 +420,8 @@ export const formatSystemCheckText = (input: SystemTextInput): string => {
     if (render.drawn.from === 'proposal') lines.push('', `Drew the proposed board (proposal ${render.drawn.proposal ?? 'unknown'}).`);
     // --screen draws no board: only the screens block, which then names the run folder.
     const boardDrawn = render.widths.length > 0 || render.screens === undefined;
-    if (boardDrawn) lines.push(...boardPictureLines(render, input.runDir ?? null));
-    lines.push(...screenPictureLines(render, input.runDir ?? null, boardDrawn && render.shots.length > 0));
+    if (boardDrawn) lines.push(...boardPictureLines(render, input.runDir ?? null), ...statePictureLines(render, input.reportPath), ...motionPictureLines(render, input.reportPath));
+    lines.push(...screenPictureLines(render, input.runDir ?? null, boardDrawn && render.shots.length > 0), ...comparePictureLines(render));
   }
 
   if (input.reportPath !== null) lines.push('', `Full report: ${input.reportPath}`);

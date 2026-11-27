@@ -769,6 +769,7 @@ export const createSystemEditService = (deps: SystemEditDeps): SystemEditService
         partial: scan.summary.partial,
         scanned: scan.scanned,
         forAgent: scan.summary.forAgent,
+        ...(scan.tailwind === true ? { tailwind: true } : {}),
         ...(keepsProject ? { project, ...(previous?.existing !== undefined ? { existing: previous.existing } : {}) } : {}),
       },
       counts,

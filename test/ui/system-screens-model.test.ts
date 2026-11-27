@@ -26,7 +26,7 @@ const phone: Viewport = { id: 'phone', label: 'Phone', width: 390, height: 844 }
 const social: Viewport = { id: 'social', label: 'Social card', width: 1200, height: 630 };
 const system = [laptop, phone];
 
-const screen = (id: string, over: Partial<SystemScreen> = {}): SystemScreen => ({ id, title: id[0]?.toUpperCase() + id.slice(1), kind: 'page', viewports: null, problem: null, ...over });
+const screen = (id: string, over: Partial<SystemScreen> = {}): SystemScreen => ({ id, title: id[0]?.toUpperCase() + id.slice(1), kind: 'page', viewports: null, problem: null, source: null, ...over });
 const options = { gap: 96, labelHeight: 28 };
 
 test('the Screens switch shows once a system has a screen, and stays while Screens is on show', () => {

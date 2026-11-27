@@ -16,7 +16,11 @@ import {
   routePath,
   splitRouteKey,
   type ApiErrorCode,
+  type CreateSystemCommentBody,
   type LivingPageResponse,
+  type MarkSystemCommentsSentResponse,
+  type OkResponse,
+  type PatchSystemCommentBody,
   type ProposalResponse,
   type RenderMeta,
   type RouteBody,
@@ -25,9 +29,14 @@ import {
   type RouteQuery,
   type RouteResponse,
   type StopBuildResponse,
+  type SystemExportOptionsResponse,
+  type SystemExportResponse,
+  type SystemCommentResponse,
+  type SystemCommentsResponse,
   type ThumbnailResponse,
   type UndoStopResponse,
 } from '../shared/api.ts';
+import type { TokenExportFormat } from '../shared/types.ts';
 import {
   BINARY_UPLOAD_TOTAL_MAX,
   GUEST_RENDER_CACHE_MAX_BYTES,
@@ -138,6 +147,21 @@ export type ServiceClient = {
   undoStop(undoId: string): Promise<UndoStopResponse>;
   /** A repo-backed system's living-page view (state, sentence, what the preview can show). */
   loadLivingPage(systemId: string): Promise<LivingPageResponse>;
+  /** The token formats this system can export now (T19); `tailwind` only for a project that uses it. */
+  systemExportFormats(systemId: string): Promise<SystemExportOptionsResponse>;
+  /** Write the tokens ZIP to the export folder; without `formats`, every one offered. `POST /reveal` takes `path`. */
+  exportSystemTokens(systemId: string, formats?: TokenExportFormat[]): Promise<SystemExportResponse>;
+  /**
+   * Board comments of a system (system-builder-depth T20). The send is `call('POST /systems/:id/prompt',
+   * { purpose: 'comments' })`, the host send, then `markSent` with the answer's `comments.commentIds`.
+   */
+  systemComments: {
+    list(systemId: string): Promise<SystemCommentsResponse>;
+    add(systemId: string, body: CreateSystemCommentBody): Promise<SystemCommentResponse>;
+    update(systemId: string, commentId: string, patch: PatchSystemCommentBody): Promise<SystemCommentResponse>;
+    remove(systemId: string, commentId: string): Promise<OkResponse>;
+    markSent(systemId: string, ids: string[]): Promise<MarkSystemCommentsSentResponse>;
+  };
 };
 
 const queryOf = (query: Record<string, string | undefined> | undefined): Record<string, string> | undefined => {
@@ -475,6 +499,17 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
   const stopBuild = (systemId: string, proposalId: string | null = null): Promise<StopBuildResponse> => call('POST /systems/:id/build/stop', { params: { id: systemId }, body: { proposalId } });
   const undoStop = (undoId: string): Promise<UndoStopResponse> => call('POST /system-stops/:undoId/undo', { params: { undoId }, body: {} });
   const loadLivingPage = (systemId: string): Promise<LivingPageResponse> => call('GET /systems/:id/living-page', { params: { id: systemId } });
+  const systemExportFormats = (systemId: string): Promise<SystemExportOptionsResponse> => call('GET /systems/:id/export', { params: { id: systemId } });
+  const exportSystemTokens = (systemId: string, formats?: TokenExportFormat[]): Promise<SystemExportResponse> =>
+    call('POST /systems/:id/export', { params: { id: systemId }, body: formats === undefined ? {} : { formats } });
 
-  return { call, loadRender, loadBoard, systemScreen, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
+  const systemComments: ServiceClient['systemComments'] = {
+    list: (systemId) => call('GET /systems/:id/comments', { params: { id: systemId } }),
+    add: (systemId, body) => call('POST /systems/:id/comments', { params: { id: systemId }, body }),
+    update: (systemId, commentId, patch) => call('PATCH /systems/:id/comments/:commentId', { params: { id: systemId, commentId }, body: patch }),
+    remove: (systemId, commentId) => call('DELETE /systems/:id/comments/:commentId', { params: { id: systemId, commentId } }),
+    markSent: (systemId, ids) => call('POST /systems/:id/comments/mark-sent', { params: { id: systemId }, body: { ids } }),
+  };
+
+  return { call, loadRender, loadBoard, systemScreen, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage, systemExportFormats, exportSystemTokens, systemComments };
 };

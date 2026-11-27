@@ -158,15 +158,22 @@ export const encodePng = (image: DecodedPng): Buffer => {
 /**
  * One picture from strips stacked top to bottom. Every strip is cut or padded (white) to the first
  * strip's width and turned into its channel count, so a strip one pixel narrower after rounding never
- * shifts the rows. Throws `PngStitchError` when a strip can't be read or the result would be too large.
+ * shifts the rows; `skipTop` drops rows from the top of a strip (an overlap with the one above). Throws
+ * `PngStitchError` when a strip can't be read or the result would be too large.
  */
-export const stitchPngs = (strips: readonly Buffer[]): Buffer => {
+export const stitchPngs = (strips: readonly Buffer[], options: { skipTop?: readonly number[] } = {}): Buffer => {
   if (strips.length === 0) throw new PngStitchError('No strips to stitch.');
-  const decoded = strips.map(decodePng);
+  // `skipTop[i]` rows are dropped from the top of strip i: the part an earlier strip already shows.
+  const decoded = strips.map((strip, index) => {
+    const picture = decodePng(strip);
+    const skip = Math.min(picture.height, Math.max(0, Math.floor(options.skipTop?.[index] ?? 0)));
+    return skip === 0 ? picture : { ...picture, height: picture.height - skip, rows: picture.rows.slice(skip) };
+  });
   const first = decoded[0];
   if (first === undefined) throw new PngStitchError('No strips to stitch.');
   const { width, channels } = first;
   const height = decoded.reduce((sum, strip) => sum + strip.height, 0);
+  if (height < 1) throw new PngStitchError('No rows to stitch.');
   if (height > PNG_STITCH_SIDE_MAX || width * height > PNG_STITCH_PIXELS_MAX) throw new PngStitchError('The stitched picture would be too large.');
   const rows: Buffer[] = [];
   for (const strip of decoded) {
@@ -181,4 +188,150 @@ export const stitchPngs = (strips: readonly Buffer[]): Buffer => {
     }
   }
   return encodePng({ width, height, channels, rows });
+};
+
+/** The gap between pictures side by side, px, and its colour (a light grey that reads on white and on a dark screen). */
+export const SIDE_BY_SIDE_GAP = 16;
+const GAP_GREY = 0xd0;
+
+/**
+ * One picture from pictures laid left to right, top-aligned at their own size (system-builder-depth T17
+ * frames, T18 compare sheets), with `gap` px of grey between them; a shorter one is padded white below.
+ * With `captions`, a `CAPTION_BAND` band above each picture names it.
+ * Each is cut to `maxHeight` (default: as tall as the bounds allow), so a long page still makes a sheet;
+ * the result is RGBA. Throws `PngStitchError` when a picture can't be read or the width alone is too large.
+ */
+export const stitchSideBySide = (pictures: readonly Buffer[], options: { gap?: number; maxHeight?: number; captions?: readonly string[] } = {}): Buffer => {
+  if (pictures.length === 0) throw new PngStitchError('No pictures to stitch.');
+  const gap = Math.max(0, Math.floor(options.gap ?? SIDE_BY_SIDE_GAP));
+  const decoded = pictures.map(decodePng);
+  const width = decoded.reduce((sum, picture) => sum + picture.width, 0) + gap * (decoded.length - 1);
+  if (width > PNG_STITCH_SIDE_MAX) throw new PngStitchError('The stitched picture would be too large.');
+  const band = options.captions === undefined ? 0 : CAPTION_BAND;
+  const fits = Math.min(PNG_STITCH_SIDE_MAX, Math.floor(PNG_STITCH_PIXELS_MAX / width), Math.floor(options.maxHeight ?? PNG_STITCH_SIDE_MAX)) - band;
+  const height = Math.min(fits, Math.max(...decoded.map((picture) => picture.height)));
+  if (height < 1) throw new PngStitchError('The stitched picture would be too large.');
+  const rows: Buffer[] = [];
+  if (options.captions !== undefined) {
+    const captions = options.captions;
+    const bandRows = Array.from({ length: band }, () => Buffer.alloc(width * 4, 0xff));
+    let left = 0;
+    decoded.forEach((picture, index) => {
+      drawCaption(bandRows, left, picture.width, captions[index] ?? '');
+      left += picture.width + gap;
+    });
+    rows.push(...bandRows);
+  }
+  for (let y = 0; y < height; y += 1) {
+    const out = Buffer.alloc(width * 4, 0xff);
+    let left = 0;
+    decoded.forEach((picture, index) => {
+      const row = y < picture.height ? picture.rows[y] : undefined;
+      if (row !== undefined) {
+        for (let x = 0; x < picture.width; x += 1) {
+          const at = (left + x) * 4;
+          for (let c = 0; c < 3; c += 1) out[at + c] = row[x * picture.channels + c] ?? 0xff;
+          out[at + 3] = picture.channels === 4 ? (row[x * 4 + 3] ?? 0xff) : 0xff;
+        }
+      }
+      left += picture.width;
+      if (index < decoded.length - 1) {
+        for (let x = 0; x < gap; x += 1) {
+          const at = (left + x) * 4;
+          out[at] = GAP_GREY;
+          out[at + 1] = GAP_GREY;
+          out[at + 2] = GAP_GREY;
+        }
+        left += gap;
+      }
+    });
+    rows.push(out);
+  }
+  return encodePng({ width, height: height + band, channels: 4, rows });
+};
+
+/** A caption band's height above each picture, px: two-times-scaled 7 px letters with room around them. */
+export const CAPTION_BAND = 22;
+const CAPTION_INK = 0x30;
+const CAPTION_GROUND = 0xe8;
+
+/**
+ * A 5×7 letter for each character a caption uses (upper case, digits, a little punctuation): seven rows of
+ * five bits, the high bit on the left. Captions are drawn by the check itself; Node has no text renderer.
+ */
+const GLYPHS: Readonly<Record<string, readonly number[]>> = {
+  A: [14, 17, 17, 31, 17, 17, 17], B: [30, 17, 17, 30, 17, 17, 30], C: [14, 17, 16, 16, 16, 17, 14], D: [30, 17, 17, 17, 17, 17, 30],
+  E: [31, 16, 16, 30, 16, 16, 31], F: [31, 16, 16, 30, 16, 16, 16], G: [14, 17, 16, 23, 17, 17, 15], H: [17, 17, 17, 31, 17, 17, 17],
+  I: [14, 4, 4, 4, 4, 4, 14], J: [7, 2, 2, 2, 2, 18, 12], K: [17, 18, 20, 24, 20, 18, 17], L: [16, 16, 16, 16, 16, 16, 31],
+  M: [17, 27, 21, 21, 17, 17, 17], N: [17, 17, 25, 21, 19, 17, 17], O: [14, 17, 17, 17, 17, 17, 14], P: [30, 17, 17, 30, 16, 16, 16],
+  Q: [14, 17, 17, 17, 21, 18, 13], R: [30, 17, 17, 30, 20, 18, 17], S: [15, 16, 16, 14, 1, 1, 30], T: [31, 4, 4, 4, 4, 4, 4],
+  U: [17, 17, 17, 17, 17, 17, 14], V: [17, 17, 17, 17, 17, 10, 4], W: [17, 17, 17, 21, 21, 21, 10], X: [17, 17, 10, 4, 10, 17, 17],
+  Y: [17, 17, 10, 4, 4, 4, 4], Z: [31, 1, 2, 4, 8, 16, 31],
+  '0': [14, 17, 19, 21, 25, 17, 14], '1': [4, 12, 4, 4, 4, 4, 14], '2': [14, 17, 1, 2, 4, 8, 31], '3': [31, 2, 4, 2, 1, 17, 14],
+  '4': [2, 6, 10, 18, 31, 2, 2], '5': [31, 16, 30, 1, 1, 17, 14], '6': [6, 8, 16, 30, 17, 17, 14], '7': [31, 1, 2, 4, 8, 8, 8],
+  '8': [14, 17, 17, 14, 17, 17, 14], '9': [14, 17, 17, 15, 1, 2, 12],
+  ' ': [0, 0, 0, 0, 0, 0, 0], '/': [1, 2, 2, 4, 8, 8, 16], '-': [0, 0, 0, 31, 0, 0, 0], '.': [0, 0, 0, 0, 0, 12, 12],
+  ':': [0, 12, 12, 0, 12, 12, 0], '(': [2, 4, 8, 8, 8, 4, 2], ')': [8, 4, 2, 2, 2, 4, 8], ',': [0, 0, 0, 0, 12, 4, 8],
+};
+
+/**
+ * Draw `text` (upper-cased; a character without a letter is a space) on a light ground across `width`
+ * px of the band rows from `left`: at twice size when it fits, else at size one, cut to the width.
+ */
+const drawCaption = (band: Buffer[], left: number, width: number, text: string): void => {
+  for (const row of band) row.fill(CAPTION_GROUND, left * 4, (left + width) * 4);
+  for (const row of band) for (let x = left; x < left + width; x += 1) row[x * 4 + 3] = 0xff;
+  const letters = [...text.toUpperCase()].map((char) => GLYPHS[char] ?? GLYPHS[' '] ?? []);
+  const room = width - 8;
+  const scale = letters.length * 12 <= room ? 2 : 1;
+  const top = Math.floor((CAPTION_BAND - 7 * scale) / 2);
+  letters.slice(0, Math.max(0, Math.floor(room / (6 * scale)))).forEach((glyph, index) => {
+    glyph.forEach((bits, gy) => {
+      for (let gx = 0; gx < 5; gx += 1) {
+        if ((bits & (16 >> gx)) === 0) continue;
+        for (let dy = 0; dy < scale; dy += 1) {
+          for (let dx = 0; dx < scale; dx += 1) {
+            const row = band[top + gy * scale + dy];
+            const x = left + 4 + index * 6 * scale + gx * scale + dx;
+            if (row === undefined || x >= left + width) continue;
+            row[x * 4] = CAPTION_INK;
+            row[x * 4 + 1] = CAPTION_INK;
+            row[x * 4 + 2] = CAPTION_INK;
+          }
+        }
+      }
+    });
+  });
+};
+
+/** A picture's kind and size from its header (PNG IHDR, JPEG SOF), or null when it is neither or broken. */
+export const pictureSize = (bytes: Buffer): { type: 'png' | 'jpeg'; width: number; height: number } | null => {
+  if (bytes.length >= 24 && bytes.subarray(0, 8).equals(SIGNATURE) && bytes.toString('latin1', 12, 16) === 'IHDR') {
+    const width = bytes.readUInt32BE(16);
+    const height = bytes.readUInt32BE(20);
+    return width > 0 && height > 0 ? { type: 'png', width, height } : null;
+  }
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  // Segments after SOI: each marker 0xFF xx, then a 2-byte length, until a start-of-frame names the size.
+  let at = 2;
+  while (at + 4 <= bytes.length) {
+    if (bytes[at] !== 0xff) return null;
+    const marker = bytes[at + 1] ?? 0;
+    if (marker === 0xff) {
+      at += 1; // fill byte
+      continue;
+    }
+    if (marker === 0xd9 || marker === 0xda) return null; // end of image or scan data before any frame header
+    const length = bytes.readUInt16BE(at + 2);
+    if (length < 2) return null;
+    const startOfFrame = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (startOfFrame) {
+      if (at + 9 > bytes.length) return null;
+      const height = bytes.readUInt16BE(at + 5);
+      const width = bytes.readUInt16BE(at + 7);
+      return width > 0 && height > 0 ? { type: 'jpeg', width, height } : null;
+    }
+    at += 2 + length;
+  }
+  return null;
 };

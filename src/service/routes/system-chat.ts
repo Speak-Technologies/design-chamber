@@ -1,6 +1,6 @@
 // The design system's chat prompts (documentation/specs/phase-2-5-technical.md §3.1, §3.5, §8.5,
 // §8.10, T15): POST /systems/:id/prompt serves make, ask, review, resync-notes, checks, continue,
-// living-page, reconcile and build-continue, and refreshes `<system>/.chamber/RULES.md` on every
+// living-page, reconcile, build-continue and (system-builder-depth T20) comments, and refreshes `<system>/.chamber/RULES.md` on every
 // call (§8.4). The router checks the bearer token first; the id is checked and contained by the
 // system store (`SYSTEM_ID_PATTERN`, `resolveInside`, no link). No body carries a path: the names,
 // notes and versions a message cites are read from the system's own files and history.
@@ -19,6 +19,7 @@ import {
   buildSystemBuildContinuePrompt,
   buildSystemChecksPrompt,
   buildSystemChip,
+  buildSystemCommentsPrompt,
   buildSystemContinuePrompt,
   buildSystemLivingPagePrompt,
   buildSystemMakePrompt,
@@ -27,6 +28,7 @@ import {
   buildSystemReviewPrompt,
   SystemPromptTooLongError,
   withSystemHandEdits,
+  type SystemCommentsPrompt,
   type SystemPromptSystem,
 } from '../../shared/agent/system-prompts.ts';
 import { buildSystemRules } from '../../shared/agent/system-rules.ts';
@@ -42,14 +44,16 @@ import { runSystemCheck } from '../check/system-run.ts';
 import type { ServiceContext } from '../context.ts';
 import { ApiError, type Router } from '../http.ts';
 import { recomputeDrift } from '../systems/drift.ts';
+import { ensureSystemComments } from '../systems/comments.ts';
 import { ensureSystemEditService } from '../systems/edits.ts';
 import { livingPageState, regenerateLivingPage } from '../systems/living-page.ts';
 import { ensureSystemStore } from '../systems/store.ts';
 import { ensureSystemVersions } from '../systems/versions.ts';
 import { writeRulesFile } from './chat.ts';
 import { findSystemReferenceDir } from './presets.ts';
+import { parseCommentIds } from './system-comments.ts';
 
-const PURPOSES: readonly SystemPromptBody['purpose'][] = ['make', 'ask', 'review', 'resync-notes', 'checks', 'continue', 'living-page', 'reconcile', 'build-continue'];
+const PURPOSES: readonly SystemPromptBody['purpose'][] = ['make', 'ask', 'review', 'resync-notes', 'checks', 'continue', 'living-page', 'reconcile', 'build-continue', 'comments'];
 
 type Rec = Record<string, unknown>;
 const isRec = (value: unknown): value is Rec => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -64,6 +68,8 @@ type PromptInput = {
   section: SystemSection | null;
   /** Resync-notes only: the version to compare against. */
   before: string | null;
+  /** Comments only: the open comments to send, or null for every open one. */
+  commentIds: string[] | null;
 };
 
 /** `POST /systems/:id/prompt` body. Every field is untrusted. */
@@ -71,9 +77,9 @@ export const parseSystemPromptBody = (body: unknown): PromptInput => {
   if (!isRec(body)) throw new ApiError('bad-request', 'Send the prompt request as a JSON object.');
   const { purpose } = body;
   if (typeof purpose !== 'string' || !PURPOSES.includes(purpose as SystemPromptBody['purpose'])) {
-    throw new ApiError('bad-request', 'The prompt purpose must be "make", "ask", "review", "resync-notes", "checks", "continue", "living-page", "reconcile" or "build-continue".');
+    throw new ApiError('bad-request', 'The prompt purpose must be "make", "ask", "review", "resync-notes", "checks", "continue", "living-page", "reconcile", "build-continue" or "comments".');
   }
-  const base: PromptInput = { purpose: purpose as SystemPromptBody['purpose'], text: '', entry: null, section: null, before: null };
+  const base: PromptInput = { purpose: purpose as SystemPromptBody['purpose'], text: '', entry: null, section: null, before: null, commentIds: null };
   if (purpose === 'ask') {
     if (typeof body.text !== 'string' || body.text.trim() === '') throw new ApiError('bad-request', 'Write what you want the agent to do.');
     const text = body.text.trim();
@@ -91,6 +97,9 @@ export const parseSystemPromptBody = (body: unknown): PromptInput => {
   if (purpose === 'resync-notes') {
     if (typeof body.before !== 'string' || !VERSION_ID_PATTERN.test(body.before)) throw new ApiError('bad-request', 'Say which version to compare against.');
     return { ...base, before: body.before };
+  }
+  if (purpose === 'comments') {
+    return body.commentIds === undefined ? base : { ...base, commentIds: parseCommentIds(body.commentIds) };
   }
   return base;
 };
@@ -189,6 +198,40 @@ export function registerSystemChatRoutes(router: Router, ctx: ServiceContext): v
         (maxChars) => buildSystemAskPrompt({ system, text: input.text, entry: input.entry, section: null, maxChars }),
         (over) => `Your message is ${over} characters too long for the chat. Shorten it and send again.`,
       );
+    }
+
+    if (input.purpose === 'comments') {
+      // Only open comments go out, in the order they were made; a sent or resolved one named again is skipped.
+      const { comments: stored } = await ensureSystemComments(ctx).list(id);
+      const wanted = input.commentIds === null ? null : new Set(input.commentIds);
+      const picked = stored.filter((comment) => comment.status === 'open' && (wanted === null || wanted.has(comment.id)));
+      if (picked.length === 0) throw new ApiError('invalid', wanted === null ? 'There are no open comments to send.' : 'None of those comments are open any more.');
+      const items = picked.map((comment) => {
+        const key = parseEntryKey(comment.entry);
+        return { id: comment.id, entry: comment.entry, body: comment.body, gone: key === null || sectionOfEntry(key, detail) === null };
+      });
+      // The hand-edit block, then its compact form when comments had to wait, then none only when not one comment fits.
+      const attempts: (HandEditsBlock | null)[] = block === null ? [null] : [block, compactBlock(), null];
+      let over = 0;
+      for (const [index, use] of attempts.entries()) {
+        let prompt: SystemCommentsPrompt;
+        try {
+          prompt = buildSystemCommentsPrompt({ system, comments: items, maxChars: HOST_TEXT_MAX - (use === null ? 0 : use.text.length + 2) });
+        } catch (error) {
+          if (!(error instanceof SystemPromptTooLongError)) throw error;
+          over = error.over;
+          continue;
+        }
+        const next = attempts[index + 1];
+        if (prompt.omitted.length > 0 && next !== undefined && next !== null) continue;
+        return {
+          text: withSystemHandEdits(use?.text ?? null, prompt.text),
+          chip,
+          handEdits: use === null ? null : { upTo: use.upTo, count: use.count },
+          comments: { commentIds: prompt.commentIds, omitted: prompt.omitted },
+        };
+      }
+      throw new ApiError('invalid', messageTooLong(over));
     }
 
     if (input.purpose === 'review') {

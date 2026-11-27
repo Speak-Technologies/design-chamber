@@ -450,6 +450,9 @@ const fakePage = (deps: RenderDeps, art: PlannedArtboard, probe: unknown, captur
     return Promise.resolve(TINY_PNG);
   },
   save: (label, part, parts, bytes) => deps.savePng(art, part, parts, bytes, label),
+  forceState: () => Promise.resolve(false),
+  computedStyle: () => Promise.resolve(null),
+  animationFrames: () => Promise.resolve(null),
 });
 
 const artboardOf = (art: PlannedArtboard, ok: boolean, pngs: string[]): ArtboardCheck => ({ screen: null, viewport: art.viewport.id, width: art.viewport.width, height: art.viewport.height, docHeight: 0, pngs, ok, ms: 1 });

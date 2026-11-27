@@ -586,6 +586,23 @@ export const SYSTEM_SCREEN_MAX = 60_000;
 export const SYSTEM_CHECK_SCREENS_BUDGET_MS = 40_000;
 
 // ---- end System builder depth Phase 2 ----
+
+// ---- System builder depth Phase 3, Wave 0 (documentation/specs/system-builder-depth.md §13 T16 to T20) ----
+
+/** Forced-state pictures (`<component>-<state>@wide.png`) per check run; then one `system-board-partial` note (T16). */
+export const SYSTEM_STATE_SHOTS_MAX = 60;
+/** Frames per motion strip: 0, 1/3, 2/3 and the end (T17). */
+export const SYSTEM_MOTION_FRAMES = 4;
+/** Motion strips (`<entry>-motion@wide.png`) per check run (T17). */
+export const SYSTEM_MOTION_SHOTS_MAX = 24;
+/** Compare sheets (`compare-<id>@<viewport>.png`) per check run (T18). */
+export const SYSTEM_COMPARE_SHEETS_MAX = 24;
+/** Board comments per system (T20). */
+export const SYSTEM_COMMENTS_MAX = 200;
+/** `_systems/<id>/.chamber/comments.json`, in bytes (T20). */
+export const SYSTEM_COMMENTS_FILE_MAX_BYTES = 1_048_576;
+
+// ---- end System builder depth Phase 3 ----
 /** The staged living page, in UTF-8 bytes (encoded assets included). */
 export const LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
 /** One font or logo embedded into the living page. */

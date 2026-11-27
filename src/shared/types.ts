@@ -313,8 +313,11 @@ export type ChangeKind =
   | 'added' | 'removed' | 'design' | 'files' | 'thumb' | 'versions' | 'comments' | 'root' | 'loose' | 'checks' | 'open' | 'activity' | 'page-state'
   | 'system' | 'folders';
 
-/** What changed on a system (Phase 2.5 §3.4, §3.5); `build` = BUILD.json adoption or problem, `proposal` = a new, superseded, rewritten or approved proposal, or a new preview. */
-export type SystemChangeKind = 'added' | 'removed' | 'files' | 'state' | 'versions' | 'checks' | 'build' | 'living-page' | 'proposal';
+/**
+ * What changed on a system (Phase 2.5 §3.4, §3.5); `build` = BUILD.json adoption or problem, `proposal` = a new, superseded, rewritten or approved proposal, or a new preview.
+ * `comments` (system-builder-depth Phase 3, T20): a board comment was created, changed, deleted or marked sent. Nothing drawn changed, so no render cache drops on it.
+ */
+export type SystemChangeKind = 'added' | 'removed' | 'files' | 'state' | 'versions' | 'checks' | 'build' | 'living-page' | 'proposal' | 'comments';
 
 export type ChangeEvent = {
   seq: number;
@@ -494,8 +497,13 @@ export type CheckCode =
   | 'system-coverage-gap'
   // ---- system-builder-depth Phase 2, Wave 0 (§13 T10a, T11) ----
   | 'system-motion-no-reduced'
-  | 'system-icons-mixed';
+  | 'system-icons-mixed'
   // ---- end system-builder-depth Phase 2 ----
+  // ---- system-builder-depth Phase 3, Wave 0 (§13 T16) ----
+  | 'system-state-unstyled'
+  // T18: a screen's compare sheet that wasn't made (the source's width, an unreadable picture, the cap or the time)
+  | 'system-compare-skipped';
+  // ---- end system-builder-depth Phase 3 ----
 
 export type CheckSeverity = 'error' | 'warning' | 'info';
 
@@ -549,15 +557,23 @@ export type CheckParams = {
    * `system-board-partial` only: what was left out (one note per kind, each area once). `tiles` = full-size
    * pictures stop but the overview shows the rest; `overview` = the overview stops but full-size pictures show
    * the rest; `no-overview` = the overview couldn't be made, the full-size pictures show all of it; `gap` = part
-   * of the area is in no picture; `entries` = entries past `max` weren't measured.
+   * of the area is in no picture; `entries` = entries past `max` weren't measured; `states` = only `count`
+   * labelled states were forced and pictured (system-builder-depth T16: the `max` limit or the time);
+   * `motion` = only `count` motion strips were taken (T17, the same two reasons).
    */
-  pictured?: 'tiles' | 'overview' | 'no-overview' | 'gap' | 'entries';
+  pictured?: 'tiles' | 'overview' | 'no-overview' | 'gap' | 'entries' | 'states' | 'motion';
   /** `system-example-missing` and `system-coverage-gap`: the system's depth; `full` makes them warnings. */
   depth?: SystemDepth;
   /** `system-contrast-low`, and a dark-pass board finding: which scheme it was found in. */
   scheme?: 'light' | 'dark';
   /** `system-states-missing` only: which list the unlabelled names come from. */
   listed?: 'variants' | 'sizes' | 'states';
+  /**
+   * `system-state-unstyled` only (system-builder-depth T16): the likely cause the check could tell. `rest` = a
+   * state was forced on the labelled copy itself, as there is no resting copy with the same variant and size;
+   * `focus-visible` = labelled focus, but forcing :focus-visible changes it; `both` = each for some state.
+   */
+  hint?: 'rest' | 'focus-visible' | 'both';
   /**
    * `system-contrast-low` only: `auto` when every pair in it was found from token names on a system with
    * no `depth`, which makes it a note (an older system gets no new warnings; the main agent's ruling).
@@ -1059,9 +1075,42 @@ export type SystemScreen = {
   kind: SystemScreenKind;
   viewports: Viewport[] | null;
   problem: string | null;
+  // ---- system-builder-depth Phase 3, Wave 0 (§13 T18) ----
+  /**
+   * `system.json` `screens[].source`: a screenshot of the real app, exactly `sources/screens/<name>.png`
+   * (or `.jpg`, `.jpeg`; relative to the system folder), for the check's compare sheet. Agent reference only:
+   * never copied, exported or put on the living page. null when absent or refused (an entry problem says why).
+   */
+  source: string | null;
+  // ---- end system-builder-depth Phase 3 ----
 };
 
 // ---- end system-builder-depth Phase 2 ----
+
+// ---- system-builder-depth Phase 3, Wave 0 (§13 T19, T20) ----
+
+/**
+ * One token export format (T19): `dtcg` the W3C design tokens `tokens.json`, `css` a regenerated
+ * `tokens.css`, `tailwind` a Tailwind v4 `@theme` block in `tailwind-theme.css` (decision 9), only when
+ * the project uses Tailwind.
+ */
+export type TokenExportFormat = 'dtcg' | 'css' | 'tailwind';
+
+/**
+ * One board comment (T20), stored in `_systems/<id>/.chamber/comments.json` (service-owned, never in the
+ * repo, decision 10). `entry` is a board entry key (`isBoardEntryKey`), not a selector, so it survives
+ * re-generation. `id` matches `COMMENT_ID_PATTERN`; `body` is 1..`COMMENT_BODY_MAX`.
+ */
+export type SystemComment = {
+  id: string;
+  entry: string;
+  body: string;
+  status: CommentStatus;
+  created: IsoDate;
+  sentAt: IsoDate | null;
+};
+
+// ---- end system-builder-depth Phase 3 ----
 
 // ---- Phase 2.5: the system's own files (§2.5, §2.13, §2.15, §2.6, §2.8) ----
 
@@ -1088,6 +1137,8 @@ export type SystemState = {
     /** `forAgent`: the scan's files Design Chamber doesn't run, which the make prompt asks the agent to read (absent in older state). */
     code: {
       directory: string; lastScan: IsoDate; partial: boolean; scanned: string[]; forAgent?: { path: string; why: string }[];
+      /** T19: a CSS file the scan read imports `tailwindcss` (v4); absent when none did, and in older state. */
+      tailwind?: boolean;
       /** Phase 2.6 AD-9: the project's realpath when the code source is a location inside it. */
       project?: string;
       /** Phase 2.6 AD-9/AD-11: the existing-system location the system was made from or registered against. */

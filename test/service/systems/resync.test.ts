@@ -389,3 +389,13 @@ test('the route: 401 without the token, traversal refused, a malformed body is 4
   assert.equal(await tmp.read('_systems/acme/tokens.css'), before);
   assert.deepEqual(await readFile(tmp.at('_systems/acme/assets/logos/old.svg'), 'utf8'), OLD_SVG);
 });
+
+test('T19: a re-sync records a tailwindcss import the code has gained', async (t) => {
+  const { tmp, call, scan, stampOf, project } = await prepare(t);
+  assert.equal((await stateOf(tmp, 'acme')).sources.code?.tailwind, undefined);
+  await project.write('theme.css', `@import "tailwindcss";\n${SECOND}`);
+  const { scanId } = await scan(project.root, 'acme');
+  const applied = await call('POST', '/systems/acme/resync', { scanId, stamp: await stampOf('acme'), changes: ['--brand'], useCode: [], add: [], remove: [], assets: [] });
+  assert.equal(applied.status, 200, JSON.stringify(applied.json));
+  assert.equal((await stateOf(tmp, 'acme')).sources.code?.tailwind, true);
+});

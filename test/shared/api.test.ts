@@ -11,7 +11,8 @@ test('the route table lists every §7 route once, each with an owner lane', () =
   // and POST /systems/register (documentation/specs/phase-2-6-technical.md §3.1): 92. Use the project
   // and the native agent adds PUT /view (documentation/specs/use-the-project-and-native-agent.md §2.4): 93.
   // System builder depth Phase 2 adds the two system screens routes (documentation/specs/system-builder-depth.md §13 T12a): 95.
-  assert.equal(ROUTE_KEYS.length, 95);
+  // System builder depth Phase 3 adds two token export and five board comments routes (§13 T19, T20): 102.
+  assert.equal(ROUTE_KEYS.length, 102);
   assert.equal(new Set(ROUTE_KEYS).size, ROUTE_KEYS.length);
   for (const key of ROUTE_KEYS) {
     const { method, pattern } = splitRouteKey(key);
@@ -28,7 +29,8 @@ test('Phase 2.5 routes: 38, all owned by P25, each new param named as the spec n
   assert.equal(p25.length, 38);
   const up = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'UP');
   const sbd = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'SBD');
-  assert.equal(ROUTE_KEYS.length - p25.length - p26.length - up.length - sbd.length, 52, 'no earlier route changed owner (51, plus WP1 DELETE /uploads/:id)');
+  const sbd3 = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'SBD3');
+  assert.equal(ROUTE_KEYS.length - p25.length - p26.length - up.length - sbd.length - sbd3.length, 52, 'no earlier route changed owner (51, plus WP1 DELETE /uploads/:id)');
   const params = new Set(p25.flatMap((key) => splitRouteKey(key).pattern.split('/').filter((part) => part.startsWith(':'))));
   assert.deepEqual([...params].sort(), [':eid', ':folderId', ':id', ':proposalId', ':scanId', ':slug', ':ticket', ':undoId', ':vid']);
   for (const key of ['GET /systems/:id/board/chunk', 'GET /systems/:id/living-page/render/chunk'] as const) {
@@ -88,3 +90,21 @@ test('system builder depth Phase 2 routes: the two system screens routes, owned 
   assert.ok(!RAW_TEXT_ROUTES.has('GET /systems/:id/screens/render'));
   assert.equal(routePath('GET /systems/:id/screens/render', { id: 'acme' }), '/systems/acme/screens/render');
 });
+
+// ---- system-builder-depth Phase 3, Wave 0 ----
+test('system builder depth Phase 3 routes: token export and board comments, owned by SBD3, all JSON', () => {
+  const sbd3 = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'SBD3');
+  assert.deepEqual([...sbd3].sort(), [
+    'DELETE /systems/:id/comments/:commentId',
+    'GET /systems/:id/comments',
+    'GET /systems/:id/export',
+    'PATCH /systems/:id/comments/:commentId',
+    'POST /systems/:id/comments',
+    'POST /systems/:id/comments/mark-sent',
+    'POST /systems/:id/export',
+  ]);
+  for (const key of sbd3) assert.ok(!RAW_TEXT_ROUTES.has(key), key);
+  assert.equal(routePath('PATCH /systems/:id/comments/:commentId', { id: 'acme', commentId: 'c_abcd1234' }), '/systems/acme/comments/c_abcd1234');
+  assert.equal(routePath('POST /systems/:id/export', { id: 'acme' }), '/systems/acme/export');
+});
+// ---- end system-builder-depth Phase 3 ----

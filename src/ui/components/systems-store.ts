@@ -6,6 +6,7 @@ import type { SystemListResponse } from '../../shared/api.ts';
 import type { SystemSummary } from '../../shared/types.ts';
 import { toServiceError, type ServiceError } from '../../guest/service-client.ts';
 import { client, feed, store } from '../guest.ts';
+import { systemsListShouldRefresh } from '../model/system-events-model.ts';
 import { debounce, errorText } from './dom.ts';
 
 export type SystemsState = {
@@ -70,7 +71,8 @@ const createSystemsStore = (): SystemsStore => {
   // A system changed (the agent wrote a file, a revision settled), one was added or removed, or the folder changed.
   const refresh = debounce(() => void load(), 200);
   feed.subscribe((batch) => {
-    if (batch.reset || batch.events.some((event) => event.kind === 'system' || event.kind === 'root')) refresh();
+    // A board comment changes no row, so it doesn't read the list again.
+    if (systemsListShouldRefresh(batch)) refresh();
   });
 
   return {

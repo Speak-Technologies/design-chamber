@@ -7,6 +7,9 @@
 //         design system's copy, Phase 2.5 §2.6) only what the pages use, never the agent's reference
 //   HTML: bundleDocument output WITHOUT the bridge — page index.html, or the chosen screen
 //
+//   Tokens: `<system id>-tokens.zip` of a design system's token files, written by Design Chamber
+//         (system-builder-depth T19); same destination, naming and reveal rules
+//
 // Names get ` (2)`, ` (3)`… on collision (also between exports running at the same time);
 // writes are atomic (tmp + rename in the same folder). The ZIP is written file by file as it goes.
 
@@ -16,6 +19,7 @@ import path from 'node:path';
 
 import type { ExportBody, ExportResponse } from '../shared/api.ts';
 import { DESIGN_JSON_FILE, screenFileOf } from '../shared/design-json.ts';
+import { SYSTEM_ID_PATTERN } from '../shared/limits.ts';
 import { ApiError } from './http.ts';
 import type { DesignRecord, DesignStore, Logger, SettingsStore } from './context.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource } from './bundle.ts';
@@ -40,8 +44,13 @@ export type ExportDeps = {
   zipMaxEntryBytes?: number;
 };
 
+/** One file of a token export; `name` is a plain file name at the top of the ZIP. */
+export type SystemExportFile = { name: string; text: string };
+
 export type ExportService = {
   export(slug: string, body: ExportBody): Promise<ExportResponse>;
+  /** Write `<system id>-tokens.zip` holding `files` (T19) and issue its path for /reveal. */
+  systemTokens(id: string, files: readonly SystemExportFile[]): Promise<{ path: string; bytes: number }>;
 };
 
 const defaultDownloads = (): string => userDir('DOWNLOAD');
@@ -180,6 +189,17 @@ export const createExportService = (deps: ExportDeps): ExportService => {
   };
 
   return {
+    async systemTokens(id, files) {
+      // The id names the file, so it is checked here as well as by the system store.
+      if (!SYSTEM_ID_PATTERN.test(id)) throw new ApiError('bad-slug', 'That is not a design system id.');
+      const sources: ZipSource[] = files.map((file) => ({ name: file.name, read: async () => Buffer.from(file.text, 'utf8') }));
+      const dir = await destinationDir(deps);
+      const written = await deliver(dir, `${id}-tokens.zip`, async (tmp) => (await writeZipFile(tmp, sources)).bytes);
+      deps.issue(written.target);
+      deps.log.info('export.tokens-written', { id, files: files.length, bytes: written.bytes });
+      return { path: written.target, bytes: written.bytes };
+    },
+
     async export(slug: string, body: ExportBody): Promise<ExportResponse> {
       if (body.format !== 'zip' && body.format !== 'html') {
         throw new ApiError('bad-request', 'The export format must be "zip" or "html".');

@@ -21,11 +21,14 @@ import {
   SYSTEM_CHECK_TILE_PIXELS_MAX,
   SYSTEM_EXAMPLE_MAX,
   SYSTEM_SCREEN_MAX,
+  SYSTEM_MOTION_FRAMES,
+  SYSTEM_MOTION_SHOTS_MAX,
+  SYSTEM_STATE_SHOTS_MAX,
 } from '../../shared/limits.ts';
 import { findSecretShapes } from '../../shared/secret-shapes.ts';
 import { isBoardEntryKey, parseEntryKey } from '../../shared/system-board.ts';
-import { buildSystemDetail, effectiveLayout, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
-import type { BoardLayout, CheckFindingData, RenderCheckState, SettingsFile, SystemArea, SystemDetail } from '../../shared/types.ts';
+import { buildSystemDetail, effectiveLayout, SYSTEM_AREAS, systemScreenFileOf, type SystemDetailSource } from '../../shared/system-json.ts';
+import type { ArtboardCheck, BoardLayout, CheckFindingData, RenderCheckState, SettingsFile, SystemArea, SystemDetail } from '../../shared/types.ts';
 import { BundleTooLarge, bundleDocument, createLiveFileSource, RefBlocked, type FileSource } from '../bundle.ts';
 import { createChangeHub } from '../changes.ts';
 import type { Logger, SettingsStore } from '../context.ts';
@@ -37,16 +40,38 @@ import { exampleFileOf, exampleKeyOf, ICON_DRAWN_MAX_BYTES } from '../systems/sp
 import { committedStateOf, readCommitted, readRecord } from '../systems/living-page.ts';
 import { readProposalProblem } from '../systems/proposal-record.ts';
 import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/store.ts';
-import { analyzeBoard, boardFindings, boardPassesOf, DARK_PASS_AREAS, findingsInArea, measuredLowPairs, passShare, sanitizeBoardProbe, type BoardProbePair } from './board-analyze.ts';
+import {
+  analyzeBoard,
+  boardFindings,
+  boardPassesOf,
+  DARK_PASS_AREAS,
+  findingsInArea,
+  measuredLowPairs,
+  passShare,
+  sanitizeBoardProbe,
+  motionAreaOf,
+  sanitizeMotionProbe,
+  sanitizeStateProbe,
+  stateFindings,
+  stateStyled,
+  type BoardProbePair,
+  type BoardMotionProbe,
+  type BoardStateProbe,
+  type MotionResult,
+  type StateHint,
+  type StateResult,
+} from './board-analyze.ts';
 import { staticLowPairs } from '../../shared/pair-contrast.ts';
 import { pictureCoverage, planBoardPictures, type PictureCoverage } from './board-pictures.ts';
 import { browserClassOf, CheckUsageError, openCheckRun } from './engine.ts';
 import { checkBrowserArgs, launchOpenOptions, openCdp } from './cdp.ts';
 import { ensureChamberDir } from './output.ts';
-import { PngStitchError, stitchPngs } from './png-stitch.ts';
-import { CHECK_RUN_DEADLINE_MS, renderArtboards, type InspectPage, type InspectResult, type LoadedDocument, type PlannedArtboard, type RenderOutcome } from './render.ts';
+import { decodePng, PNG_STITCH_PIXELS_MAX, PNG_STITCH_SIDE_MAX, PngStitchError, pictureSize, SIDE_BY_SIDE_GAP, stitchPngs, stitchSideBySide } from './png-stitch.ts';
+import { compareBudgetNote, planCompares, sourceDocument, type CompareSource, type CompareTarget } from './system-compare.ts';
+import { checkAsset } from '../systems/assets.ts';
+import { CHECK_RUN_DEADLINE_MS, renderArtboards, type ElementPath, type ForcedState, type InspectPage, type InspectResult, type LoadedDocument, type PlannedArtboard, type RenderOutcome } from './render.ts';
 import { dedupeDarkScreenFindings, planScreenArtboards, screenSkippedFindings, type ScreenPlan } from './system-screens.ts';
-import { areaEmpty, contrastFindings, s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemBoardShot, type SystemCheckRender, type SystemCheckReport } from './system-static.ts';
+import { areaEmpty, contrastFindings, s8Findings, systemCheckReport, systemFindings, type S8Facts, type SystemBoardShot, type SystemCheckRender, type SystemCheckReport, type SystemCompareSheet } from './system-static.ts';
 
 export type SystemCheckRun = {
   report: SystemCheckReport;
@@ -216,6 +241,314 @@ export const readIconTexts = async (source: FileSource, detail: SystemDetail): P
   return out;
 };
 
+/** Room around a state picture's element, so a focus ring or a shadow drawn outside its box is in the picture. */
+const STATE_SHOT_MARGIN = 16;
+/** A state picture is at most this tall: it shows one control, not a whole example. */
+const STATE_SHOT_HEIGHT_MAX = 600;
+/** A forced state as its picture's caption names it. */
+const STATE_CAPTIONS: Readonly<Record<ForcedState, string>> = { hover: 'Hover', focus: 'Focus', 'focus-visible': 'Focus visible', active: 'Active' };
+/** The share of a board pass the state pictures may run to; past it the rest are left out with a note. */
+const STATE_PASS_TIME_SHARE = 0.85;
+
+/**
+ * The forced state pass (system-builder-depth T16), on the wide light board after its tiles: for each
+ * labelled state the probe found, the element's computed style with the state off, the state forced over
+ * CDP, the style again and a tight picture (`<component>-<state>@wide.png`), then the state cleared
+ * before the next one. A state that changes nothing is `system-state-unstyled`; a list cut at
+ * `SYSTEM_STATE_SHOTS_MAX` or by the deadline is one `system-board-partial` note. An element that has gone
+ * since the probe read it is skipped.
+ */
+export const pictureStates = async (
+  page: Pick<InspectPage, 'computedStyle' | 'forceState' | 'scrollTo' | 'capture' | 'save'>,
+  probe: BoardStateProbe,
+  input: { viewportWidth: number; deadline: number; clock?: () => number },
+): Promise<{ results: StateResult[]; pngs: string[]; findings: CheckFindingData[] }> => {
+  const clock = input.clock ?? Date.now;
+  const results: StateResult[] = [];
+  const pngs: string[] = [];
+  let cut = probe.truncated;
+  for (const target of probe.states) {
+    if (clock() >= input.deadline) {
+      cut = true;
+      break;
+    }
+    const id = parseEntryKey(target.entry)?.key ?? 'component';
+    const element: ElementPath = [
+      { selector: '[data-dc-example-host]', index: target.host },
+      { selector: '*', index: target.element },
+    ];
+    const before = await page.computedStyle(element);
+    if (before === null) continue;
+    // The element at rest first, the same clip as the forced picture, so the two sit side by side.
+    const { box } = target;
+    const x = Math.min(Math.max(0, Math.floor(box.x - STATE_SHOT_MARGIN)), input.viewportWidth - 1);
+    const width = Math.max(1, Math.min(input.viewportWidth, Math.ceil(box.x + box.w + STATE_SHOT_MARGIN)) - x);
+    const y = Math.max(0, Math.floor(box.y - STATE_SHOT_MARGIN));
+    const height = Math.max(1, Math.min(STATE_SHOT_HEIGHT_MAX, Math.ceil(box.h + STATE_SHOT_MARGIN * 2)));
+    await page.scrollTo(y);
+    const rest = await page.capture({ x, y, width, height });
+    if (!(await page.forceState(element, [target.state]))) continue;
+    let after: Record<string, string> | null = null;
+    let png: string | null = null;
+    try {
+      after = await page.computedStyle(element);
+      const forced = await page.capture({ x, y, width, height });
+      let picture: Buffer;
+      try {
+        picture = stitchSideBySide([rest, forced], { captions: [target.twin ? 'Rest' : 'Not forced', STATE_CAPTIONS[target.state]] });
+      } catch (error) {
+        // A picture that can't be stitched is kept on its own.
+        if (!(error instanceof PngStitchError)) throw error;
+        picture = forced;
+      }
+      png = await page.save([id, target.variant, target.state].filter((part) => part !== '').join('-'), 1, 1, picture);
+    } finally {
+      // Cleared before the next element, whatever happened to this one.
+      await page.forceState(element, []);
+    }
+    if (after === null) continue;
+    const styled = stateStyled(before, after);
+    // An unstyled state's likely cause: focus whose CSS styles :focus-visible instead (forced once more to tell),
+    // else a state forced on the labelled copy itself, there being no resting copy beside it.
+    let hint: StateHint | undefined;
+    if (!styled && target.state === 'focus' && (await page.forceState(element, ['focus-visible']))) {
+      try {
+        const visible = await page.computedStyle(element);
+        if (visible !== null && stateStyled(before, visible)) hint = 'focus-visible';
+      } finally {
+        await page.forceState(element, []);
+      }
+    }
+    if (!styled && hint === undefined && !target.twin) hint = 'rest';
+    results.push({ entry: target.entry, state: target.state, png, styled, ...(target.variant !== '' ? { variant: target.variant } : {}), ...(hint !== undefined ? { hint } : {}) });
+    if (png !== null) pngs.push(png);
+  }
+  const findings = stateFindings(results, 'wide');
+  if (cut) findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: 'wide', params: { pictured: 'states', count: results.length, max: SYSTEM_STATE_SHOTS_MAX } });
+  return { results, pngs, findings };
+};
+
+/** The entry kinds the motion probe reads for `--area` (examples first, then the `token` demo chips; null: all). */
+export const motionKindsOf = (area: SystemArea | null): string[] => {
+  const all: Record<SystemArea, string> = { components: 'component', patterns: 'pattern', brand: 'brand', foundations: 'token' };
+  return area === null ? ['component', 'pattern', 'brand', 'token'] : [all[area]];
+};
+
+/** Room around a motion element, so an element that lifts or grows, and its shadow, stay in the frame. */
+const MOTION_SHOT_MARGIN = 40;
+
+/**
+ * The motion pass (system-builder-depth T17), on the wide light board after the state pictures: for each
+ * demo chip and `data-dc-motion` element the probe found (only `area`'s when one is given), its trigger
+ * forced with every animation paused and `SYSTEM_MOTION_FRAMES` frames from start to end, then the end
+ * once more with reduced motion, stitched left to right into `<entry>-motion@wide.png`. Nothing started
+ * is one frame. A list cut at `SYSTEM_MOTION_SHOTS_MAX` or by the deadline is one `system-board-partial`
+ * note; a strip that can't be stitched, or an element gone since the probe, is skipped.
+ */
+export const pictureMotion = async (
+  page: Pick<InspectPage, 'animationFrames' | 'scrollTo' | 'save'>,
+  probe: BoardMotionProbe,
+  input: { viewportWidth: number; deadline: number; area: SystemArea | null; clock?: () => number },
+): Promise<{ results: MotionResult[]; pngs: string[]; findings: CheckFindingData[] }> => {
+  const clock = input.clock ?? Date.now;
+  const results: MotionResult[] = [];
+  let cut = probe.truncated;
+  for (const target of probe.items) {
+    if (input.area !== null && motionAreaOf(target.entry) !== input.area) continue;
+    if (clock() >= input.deadline) {
+      cut = true;
+      break;
+    }
+    const element: ElementPath =
+      target.kind === 'demo' || target.host === null
+        ? [{ selector: '.dc-motion-demo', index: target.element }]
+        : [
+            { selector: '[data-dc-example-host]', index: target.host },
+            { selector: '*', index: target.element },
+          ];
+    const { box } = target;
+    const x = Math.min(Math.max(0, Math.floor(box.x - MOTION_SHOT_MARGIN)), input.viewportWidth - 1);
+    const width = Math.max(1, Math.min(input.viewportWidth, Math.ceil(box.x + box.w + MOTION_SHOT_MARGIN)) - x);
+    const y = Math.max(0, Math.floor(box.y - MOTION_SHOT_MARGIN));
+    const height = Math.max(1, Math.min(STATE_SHOT_HEIGHT_MAX, Math.ceil(box.h + MOTION_SHOT_MARGIN * 2)));
+    await page.scrollTo(y);
+    const shot = await page.animationFrames(element, target.trigger, { x, y, width, height }, SYSTEM_MOTION_FRAMES);
+    if (shot === null) continue;
+    let strip: Buffer;
+    try {
+      // Each frame captioned with its time (similar speeds read apart), or "No motion"; last the reduced end.
+      const captions = shot.moved ? shot.times.map((ms) => `${ms} ms`) : ['No motion'];
+      strip = stitchSideBySide([...shot.frames, shot.reduced], { captions: [...captions, 'Reduced motion'] });
+    } catch (error) {
+      if (!(error instanceof PngStitchError)) throw error;
+      continue;
+    }
+    const label = `${parseEntryKey(target.entry)?.key ?? 'entry'}-motion`;
+    const png = await page.save(label, 1, 1, strip);
+    const ms = shot.moved ? shot.times.at(-1) : undefined;
+    results.push({ entry: target.entry, trigger: target.trigger, png, frames: shot.frames.length, moved: shot.moved, reducedMoves: shot.reducedMoves, ...(ms !== undefined ? { ms } : {}) });
+  }
+  const findings: CheckFindingData[] = cut ? [{ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: 'wide', params: { pictured: 'motion', count: results.length, max: SYSTEM_MOTION_SHOTS_MAX } }] : [];
+  return { results, pngs: results.map((result) => result.png), findings };
+};
+
+/**
+ * The real-app pictures of the screens the plan draws (T18), read through the draw source (contained, no
+ * link followed): a file whose bytes aren't the PNG or JPEG its name says, or whose header can't be read,
+ * is unreadable; one gone since the detail was read is left out (the next run names it missing).
+ */
+export const readCompareSources = async (source: FileSource, detail: Pick<SystemDetail, 'screens'>, plan: readonly PlannedArtboard[]): Promise<CompareSource[]> => {
+  const out: CompareSource[] = [];
+  for (const screen of detail.screens) {
+    if (screen.source === null || !plan.some((art) => art.screen === screen.id)) continue;
+    const file = await source.read(screen.source).catch((error: unknown) => {
+      if (error instanceof RefBlocked) return null;
+      throw error;
+    });
+    if (file === null) continue;
+    const size = checkAsset(screen.source, 'source', file.bytes).ok ? pictureSize(file.bytes) : null;
+    out.push(size === null ? { screen: screen.id, source: screen.source, ok: false } : { screen: screen.id, source: screen.source, ok: true, ...size, bytes: file.bytes });
+  }
+  return out;
+};
+
+/** The two sides of a compare sheet, named in the picture. */
+export const COMPARE_CAPTIONS: readonly string[] = Object.freeze(['Design', 'Your app']);
+
+/**
+ * The rows each screen slice repeats from the one above, to drop before stacking them. A design check
+ * scrolls slice i to (i - 1) × the viewport's height, but the browser stops at the page's bottom, so the
+ * last slice of a page that isn't a whole number of screens tall starts higher and shows part of the slice
+ * before it again. Only that last one overlaps.
+ */
+export const sliceOverlaps = (slices: number, viewportHeight: number, docHeight: number): number[] => {
+  const out = Array.from({ length: slices }, () => 0);
+  if (slices < 2) return out;
+  const wanted = (slices - 1) * viewportHeight;
+  const actual = Math.min(wanted, Math.max(0, docHeight - viewportHeight));
+  out[slices - 1] = Math.max(0, wanted - actual);
+  return out;
+};
+
+/** A compare transcode's document name: the source's own path (one artboard per picture). */
+export const compareFileOf = (target: Pick<CompareTarget, 'source'>): string => target.source.source;
+
+/** The bands a source picture is read back in, px (a full-size board tile's height). */
+const COMPARE_BAND = 900;
+/** Below this much time left the browser isn't started again for the pictures Node can't read. */
+const COMPARE_TRANSCODE_MIN_MS = 3000;
+
+/**
+ * The compare sheets (T18): for each target whose light screen artboard was drawn, the screen's slices
+ * stacked, then the source at its own size beside it (`stitchSideBySide`), saved as
+ * `compare-<id>@<viewport>.png`. A source Node can't decode (a JPEG, a palette PNG) is drawn by the
+ * browser once (`transcode`, the inspect path: the picture alone, read back as PNG bands). Past `deadline`
+ * the rest are one note; a picture that can't be stitched is the unreadable note.
+ */
+export const makeCompareSheets = async (input: {
+  targets: readonly CompareTarget[];
+  artboards: readonly ArtboardCheck[];
+  slices: ReadonlyMap<string, readonly Buffer[]>;
+  budgetMs: number;
+  savePng: (art: PlannedArtboard, slice: number, slices: number, bytes: Buffer, label?: string) => Promise<string>;
+  transcode: (plan: PlannedArtboard[], inspect: (page: InspectPage, art: PlannedArtboard) => Promise<InspectResult | null>, budgetMs: number) => Promise<RenderOutcome>;
+  clock?: () => number;
+}): Promise<{ sheets: SystemCompareSheet[]; findings: CheckFindingData[] }> => {
+  const clock = input.clock ?? Date.now;
+  const deadline = clock() + input.budgetMs;
+  const sheets: SystemCompareSheet[] = [];
+  const findings: CheckFindingData[] = [];
+  const unreadable = new Set<string>();
+  const noteUnreadable = (target: CompareTarget): void => {
+    if (unreadable.has(target.screen)) return;
+    unreadable.add(target.screen);
+    findings.push({ code: 'system-compare-skipped', file: systemScreenFileOf(target.screen), screen: target.screen, viewport: null, detail: cleanDetail(`${target.screen}: ${target.source.source}`, CHECK_DETAIL_MAX) });
+  };
+  // Only artboards drawn whole: the screen's own findings say why one wasn't.
+  const ready = input.targets.flatMap((target) => {
+    const artboard = input.artboards.find((candidate) => candidate.ok && candidate.screen === target.screen && candidate.viewport === target.viewport.id);
+    const slices = input.slices.get(`${target.screen}|${target.viewport.id}`) ?? [];
+    return artboard !== undefined && slices.length > 0 && slices.length === artboard.pngs.length ? [{ target, slices, width: artboard.width, skipTop: sliceOverlaps(slices.length, artboard.height, artboard.docHeight) }] : [];
+  });
+  const sheetHeightOf = (width: number, sourceWidth: number): number => Math.min(PNG_STITCH_SIDE_MAX, Math.floor(PNG_STITCH_PIXELS_MAX / (width + SIDE_BY_SIDE_GAP + sourceWidth)));
+
+  // Each source as a PNG Node reads: its own bytes when they decode, else the browser's picture of it.
+  const sourcePngs = new Map<string, Buffer>();
+  const toDraw = new Map<string, { target: CompareTarget; height: number }>();
+  for (const { target, width } of ready) {
+    const known = target.source.source;
+    if (sourcePngs.has(known) || toDraw.has(known)) continue;
+    let readable = false;
+    if (target.source.type === 'png') {
+      try {
+        decodePng(target.source.bytes);
+        readable = true;
+      } catch (error) {
+        if (!(error instanceof PngStitchError)) throw error;
+      }
+    }
+    if (readable) sourcePngs.set(known, target.source.bytes);
+    else toDraw.set(known, { target, height: Math.min(target.source.height, sheetHeightOf(width, target.source.width)) });
+  }
+  const notDrawn = new Set<string>();
+  if (toDraw.size > 0) {
+    const left = deadline - clock();
+    if (left < COMPARE_TRANSCODE_MIN_MS) {
+      for (const known of toDraw.keys()) notDrawn.add(known);
+    } else {
+      const plan: PlannedArtboard[] = [...toDraw.values()].map(({ target, height }) => ({
+        file: compareFileOf(target),
+        screen: target.screen,
+        viewport: { id: target.viewport.id, label: target.viewport.label, width: target.source.width, height: Math.min(height, COMPARE_BAND) },
+      }));
+      const drawn = await input.transcode(
+        plan,
+        async (page, art) => {
+          const wanted = toDraw.get(art.file);
+          if (wanted === undefined) return null;
+          const bands: Buffer[] = [];
+          for (let y = 0; y < wanted.height; y += COMPARE_BAND) {
+            await page.scrollTo(y);
+            bands.push(await page.capture({ y, height: Math.min(COMPARE_BAND, wanted.height - y) }));
+          }
+          sourcePngs.set(art.file, bands.length === 1 && bands[0] !== undefined ? bands[0] : stitchPngs(bands));
+          return { findings: [], docHeight: wanted.height, pngs: [] };
+        },
+        left,
+      );
+      // Not reached for want of time: the budget note; drawn and failed: unreadable.
+      for (const art of plan.slice(plan.length - drawn.notRendered)) notDrawn.add(art.file);
+    }
+  }
+
+  const late: CompareTarget[] = [];
+  for (const { target, slices, skipTop } of ready) {
+    const known = target.source.source;
+    if (notDrawn.has(known) || clock() >= deadline) {
+      late.push(target);
+      continue;
+    }
+    const sourcePng = sourcePngs.get(known);
+    if (sourcePng === undefined) {
+      noteUnreadable(target);
+      continue;
+    }
+    let sheet: Buffer;
+    try {
+      const screenPng = slices.length === 1 && slices[0] !== undefined ? slices[0] : stitchPngs(slices, { skipTop });
+      sheet = stitchSideBySide([screenPng, sourcePng], { captions: COMPARE_CAPTIONS });
+    } catch (error) {
+      if (!(error instanceof PngStitchError)) throw error;
+      noteUnreadable(target);
+      continue;
+    }
+    const art: PlannedArtboard = { file: systemScreenFileOf(target.screen), screen: target.screen, viewport: target.viewport };
+    sheets.push({ screen: target.screen, viewport: target.viewport.id, source: known, png: await input.savePng(art, 1, 1, sheet, `compare-${target.screen}`) });
+  }
+  findings.push(...compareBudgetNote(late));
+  return { sheets, findings };
+};
+
 const fileOfEntry = (entry: string): string => {
   const key = parseEntryKey(entry);
   return key !== null && key.kind === 'component' ? `components/${key.key}.html` : BOARD_FILE;
@@ -336,6 +669,12 @@ export const runSystemCheck = async (
   // Kept per width, so a width that fails after its inspect ran (a timeout) adds no notes about pictures it doesn't keep.
   const short: { width: string; kind: Exclude<PictureCoverage['kind'], 'whole'>; text: string }[] = [];
   const boardMs = renderInput.budgets?.boardMs ?? SYSTEM_CHECK_BOARD_TIMEOUT_MS;
+  // The forced state pictures (T16), from the wide light pass.
+  const stateResults: StateResult[] = [];
+  let statePassRan = false;
+  // The motion strips (T17), from the same pass.
+  const motionResults: MotionResult[] = [];
+  let motionPassRan = false;
   const inspect = async (page: InspectPage, art: PlannedArtboard): Promise<InspectResult | null> => {
     const started = Date.now();
     const raw = await page.evaluate(`${renderInput.probeSource};__dcProbe.collectBoard()`, { awaitPromise: false });
@@ -413,6 +752,25 @@ export const runSystemCheck = async (
       const showing = tilesTaken.filter((tile) => tile.top < box.bottom && tile.bottom > box.top).map((tile) => tile.png);
       if (showing.length > 0) entryShots.push({ width: width.id, entry: box.entry, pngs: showing });
     }
+    // T16: the labelled states, forced and pictured on the wide light board only (the dark pass and the narrow width don't repeat it).
+    if (width.id === 'wide' && (onlyArea === null || onlyArea === 'components')) {
+      statePassRan = true;
+      const targets = sanitizeStateProbe(await page.evaluate(`${renderInput.probeSource};__dcProbe.collectStates(${SYSTEM_STATE_SHOTS_MAX})`, { awaitPromise: false }), SYSTEM_STATE_SHOTS_MAX);
+      const pass = await pictureStates(page, targets, { viewportWidth: width.width, deadline: started + boardMs * STATE_PASS_TIME_SHARE });
+      stateResults.push(...pass.results);
+      findings.push(...pass.findings);
+      pngs.push(...pass.pngs);
+    }
+    // T17: motion strips, last on the wide light board, so a pass short of time drops them first.
+    if (width.id === 'wide') {
+      motionPassRan = true;
+      // Example elements claim the cap first, then the demo chips; only the kinds --area keeps are collected.
+      const targets = sanitizeMotionProbe(await page.evaluate(`${renderInput.probeSource};__dcProbe.collectMotion(${SYSTEM_MOTION_SHOTS_MAX}, ${JSON.stringify(motionKindsOf(onlyArea))})`, { awaitPromise: false }), SYSTEM_MOTION_SHOTS_MAX);
+      const pass = await pictureMotion(page, targets, { viewportWidth: width.width, deadline: started + boardMs * STATE_PASS_TIME_SHARE, area: onlyArea });
+      motionResults.push(...pass.results);
+      findings.push(...pass.findings);
+      pngs.push(...pass.pngs);
+    }
     return { findings, docHeight: probe.scrollHeight, pngs };
   };
 
@@ -459,6 +817,12 @@ export const runSystemCheck = async (
 
     await space.checkAborted(renderInput.signal?.aborted === true || outcome.stoppedBy === 'aborted');
 
+    // T18: the screens' real-app pictures, read before the screens are drawn so their slices can be kept for the sheets.
+    const screensStarted = Date.now();
+    const compares = planCompares(screenPlan.plan.length === 0 || outcome.unavailable ? [] : await readCompareSources(drawSource, drawDetail, screenPlan.plan), screenPlan.plan);
+    const compareKeys = new Set(compares.targets.map((target) => `${target.screen}|${target.viewport.id}`));
+    const screenSlices = new Map<string, Buffer[]>();
+
     // The screens (T12b): the design check's own path (no inspect), so the design probe and analyze.ts judge
     // each screen at each viewport; the dark twins are emulated in `prefers-color-scheme: dark`.
     const screenDocuments = new Map<string, Promise<LoadedDocument>>();
@@ -482,13 +846,46 @@ export const runSystemCheck = async (
               probeSource: renderInput.probeSource,
               knownExternal,
               // `screen-<id>@<viewport>.png` (`-dark` for the dark twins, `-2` for a second slice).
-              savePng: (art, slice, slices, bytes) => space.savePng(art, slice, slices, bytes, `screen-${art.screen ?? 'screen'}`),
+              savePng: (art, slice, slices, bytes) => {
+                // A light artboard with a compare sheet to make keeps its slices in memory, in order (T18).
+                const key = `${art.screen ?? ''}|${art.viewport.id}`;
+                if (art.scheme !== 'dark' && compareKeys.has(key)) screenSlices.set(key, [...(slice === 1 ? [] : (screenSlices.get(key) ?? [])), bytes]);
+                return space.savePng(art, slice, slices, bytes, `screen-${art.screen ?? 'screen'}`);
+              },
               artboardTimeoutMs: renderInput.budgets?.screenMs ?? CHECK_ARTBOARD_TIMEOUT_MS,
               runBudgetMs: boardRuns ? screensMs : runMs,
               ...(renderInput.signal ? { signal: renderInput.signal } : {}),
             });
 
     await space.checkAborted(renderInput.signal?.aborted === true || screenOutcome.stoppedBy === 'aborted');
+
+    // T18: the compare sheets, in what is left of the screens' time.
+    const sheets = await makeCompareSheets({
+      targets: compares.targets,
+      artboards: screenOutcome.artboards,
+      slices: screenSlices,
+      budgetMs: (boardRuns ? screensMs : runMs) - (Date.now() - screensStarted),
+      savePng: space.savePng,
+      transcode: (plan, inspectSource, budgetMs) =>
+        loop({
+          openBrowser,
+          deadlineAt,
+          plan,
+          kind: 'page',
+          loadDocument: async (file) => {
+            const target = compares.targets.find((candidate) => compareFileOf(candidate) === file);
+            return target === undefined ? { ok: false, reason: 'missing' } : { ok: true, html: sourceDocument(target.source) };
+          },
+          probeSource: renderInput.probeSource,
+          knownExternal,
+          savePng: space.savePng,
+          inspect: inspectSource,
+          artboardTimeoutMs: renderInput.budgets?.screenMs ?? CHECK_ARTBOARD_TIMEOUT_MS,
+          runBudgetMs: budgetMs,
+          ...(renderInput.signal ? { signal: renderInput.signal } : {}),
+        }),
+    });
+    await space.checkAborted(renderInput.signal?.aborted === true);
 
     const findings: CheckFindingData[] = boardFindings(outcome.findings, CHECK_FINDINGS_MAX);
     // Pairs Node couldn't judge from the values, as the board painted them (a pair judged statically is not judged again),
@@ -517,6 +914,8 @@ export const runSystemCheck = async (
     findings.push(
       ...dedupeDarkScreenFindings(screenOutcome.findings, screenPlan.plan),
       ...screenSkippedFindings({ overLimit: screenPlan.overLimit, notRendered: screenPlan.plan.slice(screenPlan.plan.length - screenOutcome.notRendered), stoppedBy: screenOutcome.stoppedBy }),
+      ...compares.findings,
+      ...sheets.findings,
     );
     if (outcome.unavailable || screenOutcome.unavailable) {
       findings.push({ code: 'render-failed', file: null, screen: null, viewport: null, detail: "This browser build can't be driven. Set another browser in Settings." });
@@ -532,6 +931,8 @@ export const runSystemCheck = async (
       .map((shot) => ({ ...shot, overview: shot.overview !== null && kept.has(shot.overview.png) ? shot.overview : null, tiles: shot.tiles.filter((tile) => kept.has(tile.png)) }))
       .filter((shot) => shot.overview !== null || shot.tiles.length > 0);
     const keptEntryShots = entryShots.map((shot) => ({ ...shot, pngs: shot.pngs.filter((rel) => kept.has(rel)) })).filter((shot) => shot.pngs.length > 0);
+    // A wide pass that failed after its state pass keeps none of it (its findings went with it).
+    const keptStates = okWidths.has('wide') ? stateResults.map((result) => ({ ...result, png: result.png !== null && kept.has(result.png) ? result.png : null })) : [];
     // --screen draws no board area.
     const areas = !boardRuns ? [] : SYSTEM_AREAS.filter((area) => (onlyArea === null ? drawDetail.coverage.includes(area) || !areaEmpty(drawDetail, area) : area === onlyArea));
     const render: SystemCheckRender = {
@@ -546,10 +947,13 @@ export const runSystemCheck = async (
       areas,
       schemes,
       ...(screensDrawn ? { screens: { artboards: screenOutcome.artboards, viewports: screenPlan.viewports } } : {}),
+      ...(statePassRan && okWidths.has('wide') ? { states: keptStates } : {}),
+      ...(motionPassRan && okWidths.has('wide') ? { motion: motionResults.filter((result) => kept.has(result.png)) } : {}),
+      ...(compares.targets.length > 0 ? { compares: sheets.sheets } : {}),
     };
     const report = systemCheckReport({ ...base, findings: reportStatic, render });
     const reportPath = await writeSystemCheckReport(systemDir, report);
-    const keptRels = [...outcome.artboards, ...screenOutcome.artboards].flatMap((artboard) => artboard.pngs);
+    const keptRels = [...outcome.artboards, ...screenOutcome.artboards].flatMap((artboard) => artboard.pngs).concat(sheets.sheets.map((sheet) => sheet.png));
     await space.finish(keptRels, input.now.getTime());
     return { report, detail, reportPath, pngs: keptRels.map((rel) => path.join(systemDir, ...rel.split('/'))) };
   } finally {

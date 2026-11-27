@@ -6,7 +6,8 @@
 
 import { cleanDetail } from '../../shared/checks.ts';
 import { BOARD_ENTRY_MAX, CHECK_DETAIL_MAX, SYSTEM_BOARD_FINDINGS_PER_CODE, SYSTEM_BOARD_ITEMS_MEASURED_MAX, SYSTEM_CHECK_BOARD_WIDTHS, SYSTEM_PAIRS_MAX } from '../../shared/limits.ts';
-import { isBoardEntryKey } from '../../shared/system-board.ts';
+import { isBoardEntryKey, parseEntryKey } from '../../shared/system-board.ts';
+import { FORCED_STATES, type ForcedState } from './render.ts';
 import { SYSTEM_AREAS } from '../../shared/system-json.ts';
 import type { BoardLayout, CheckCode, CheckFindingData, SystemArea, SystemDetail } from '../../shared/types.ts';
 import { compositeOver, contrastRatio, type Rgba } from '../../shared/color.ts';
@@ -281,6 +282,180 @@ export const dedupeBoardFindings = (findings: readonly CheckFindingData[]): Chec
     return !(finding.viewport === 'wide-dark' && atWide.has(keyOf(finding)));
   });
 };
+
+// ---- forced state pictures (system-builder-depth T16) ----
+
+/** One labelled state the probe found: the component entry, the state, where to force it, and its box. */
+export type BoardStateTarget = {
+  entry: string;
+  state: ForcedState;
+  /** Index among `[data-dc-example-host]` in the document. */
+  host: number;
+  /** Index among `*` in that host's shadow root. */
+  element: number;
+  /** The element is the instance's rest twin (same variant and size), not the labelled instance itself. */
+  twin: boolean;
+  /** The instance's `data-dc-variant`, lower case; '' when it has none or it isn't a plain short name. */
+  variant: string;
+  box: { x: number; y: number; w: number; h: number };
+};
+
+/** A variant as a picture's name and the text take it: lower-case letters, digits and dashes. */
+const VARIANT_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+export type BoardStateProbe = { states: BoardStateTarget[]; truncated: boolean };
+
+/** An index the probe could have counted: an integer from 0 to 100 000. */
+const indexOf = (value: unknown): number | null => (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100_000 ? value : null);
+
+/**
+ * The probe's state list as trusted data: a component entry key, a state from the closed set, two indexes
+ * and a finite box; anything else is dropped. A list longer than `max` is forged or broken and refused.
+ */
+export const sanitizeStateProbe = (value: unknown, max: number): BoardStateProbe => {
+  if (!isRec(value) || !Array.isArray(value.states) || value.states.length > max) return { states: [], truncated: false };
+  const states: BoardStateTarget[] = [];
+  for (const entry of value.states) {
+    if (!isRec(entry) || typeof entry.entry !== 'string' || !isBoardEntryKey(entry.entry) || parseEntryKey(entry.entry)?.kind !== 'component') continue;
+    const state = FORCED_STATES.find((candidate) => candidate === entry.state);
+    const host = indexOf(entry.host);
+    const element = indexOf(entry.element);
+    const box = parseBox(entry.box);
+    if (state === undefined || host === null || element === null || box === null) continue;
+    const variant = typeof entry.variant === 'string' ? entry.variant.trim().toLowerCase().replace(/\s+/g, '-') : '';
+    states.push({ entry: entry.entry, state, host, element, twin: entry.twin === true, variant: VARIANT_PATTERN.test(variant) ? variant : '', box });
+  }
+  return { states, truncated: value.truncated === true };
+};
+
+const NONE_STYLE = new Set(['none', 'hidden']);
+const zeroWidth = (width: string | undefined): boolean => width === undefined || /^0(\.0+)?(px)?$/.test(width.trim());
+
+/**
+ * The computed values a person would see, from `STATE_STYLE_PROPERTIES`: an outline or a top border with
+ * no style or no width paints nothing, so its colour and offset don't count.
+ */
+const visibleStyle = (style: Readonly<Record<string, string>>): Record<string, string> => {
+  const out: Record<string, string> = {};
+  const outlineShown = !NONE_STYLE.has(style['outline-style'] ?? 'none') && !zeroWidth(style['outline-width']);
+  const borderShown = !NONE_STYLE.has(style['border-top-style'] ?? 'none') && !zeroWidth(style['border-top-width']);
+  for (const [name, value] of Object.entries(style)) {
+    if (name.startsWith('outline-') && !outlineShown) continue;
+    if (name.startsWith('border-') && name.endsWith('-color') && !borderShown) continue;
+    out[name] = value;
+  }
+  if (!outlineShown) out['outline-style'] = 'none';
+  return out;
+};
+
+/**
+ * Whether forcing a state changed anything a person would see on the element: any compared value, as
+ * painted (T16). A `:focus-visible` that only changes the colour counts; `outline: none` and nothing
+ * else doesn't, because the browser's own focus ring is then gone too.
+ */
+export const stateStyled = (before: Readonly<Record<string, string>>, after: Readonly<Record<string, string>>): boolean => {
+  const a = visibleStyle(before);
+  const b = visibleStyle(after);
+  const names = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const name of names) if ((a[name] ?? '') !== (b[name] ?? '')) return true;
+  return false;
+};
+
+/** Why a forced state likely changed nothing, when the check can tell (`CheckParams.hint`). */
+export type StateHint = 'rest' | 'focus-visible';
+
+/**
+ * One forced state as the check saw it: the picture (null when it couldn't be taken; the element at rest
+ * beside it with the state forced), the verdict, the instance's variant when it names one, and for
+ * an unstyled one the likely cause: `rest` when it was forced on the labelled copy itself (no resting copy
+ * with the same variant and size), `focus-visible` when labelled focus but :focus-visible changes it.
+ */
+export type StateResult = { entry: string; state: ForcedState; png: string | null; styled: boolean; variant?: string; hint?: StateHint };
+
+/** The words a hint adds after its state in the finding's detail. */
+const HINT_DETAIL: Readonly<Record<StateHint, string>> = { rest: 'no resting copy beside it to force the state on', 'focus-visible': 'labelled focus but its CSS styles :focus-visible' };
+
+/**
+ * The `system-state-unstyled` findings: one per component whose labelled states change nothing when
+ * forced, naming the component and those states in `detail` (`button: hover, focus-visible`).
+ */
+export const stateFindings = (results: readonly StateResult[], viewport: BoardPassId): CheckFindingData[] => {
+  // Per component, each unstyled state once, with the first hint any of its instances gave.
+  const unstyled = new Map<string, Map<ForcedState, StateHint | undefined>>();
+  for (const result of results) {
+    if (result.styled) continue;
+    const id = parseEntryKey(result.entry)?.key;
+    if (id === undefined) continue;
+    let states = unstyled.get(id);
+    if (states === undefined) unstyled.set(id, (states = new Map()));
+    if (!states.has(result.state) || states.get(result.state) === undefined) states.set(result.state, result.hint);
+  }
+  return [...unstyled].map(([id, states]) => {
+    const hints = new Set([...states.values()].filter((hint): hint is StateHint => hint !== undefined));
+    const hint = hints.size === 2 ? 'both' : [...hints][0];
+    const named = [...states].map(([state, why]) => (why === undefined ? state : `${state} (${HINT_DETAIL[why]})`));
+    return {
+      code: 'system-state-unstyled',
+      file: `components/${id}.html`,
+      screen: null,
+      viewport,
+      params: { count: states.size, ...(hint !== undefined ? { hint } : {}) },
+      detail: cleanDetail(`${id}: ${named.join(', ')}`, CHECK_DETAIL_MAX),
+    };
+  });
+};
+
+// ---- motion frames (system-builder-depth T17) ----
+
+/** One element to picture in motion: a Motion section demo chip, or an example element labelled `data-dc-motion`. */
+export type BoardMotionTarget = {
+  /** A token entry for a demo, a component, pattern or brand entry for an example element. */
+  entry: string;
+  kind: 'demo' | 'example';
+  /** The example host's index among `[data-dc-example-host]`; null for a demo. */
+  host: number | null;
+  /** A demo's index among `.dc-motion-demo`, or the element's index among `*` in the host's shadow root. */
+  element: number;
+  trigger: ForcedState;
+  box: { x: number; y: number; w: number; h: number };
+};
+
+export type BoardMotionProbe = { items: BoardMotionTarget[]; truncated: boolean };
+
+/** The entry kinds motion is read from, and the area each is in (for `--area`). */
+const MOTION_ENTRY_AREAS: Readonly<Record<string, SystemArea>> = { token: 'foundations', component: 'components', pattern: 'patterns', brand: 'brand' };
+
+/** The area a motion entry belongs to, or null for a kind motion isn't read from. */
+export const motionAreaOf = (entry: string): SystemArea | null => {
+  const kind = parseEntryKey(entry)?.kind;
+  return kind === undefined ? null : (MOTION_ENTRY_AREAS[kind] ?? null);
+};
+
+/**
+ * The probe's motion list as trusted data: a well-formed entry of a kind motion is read from (a demo
+ * under a token, an example element under a component, pattern or brand), the closed triggers, whole
+ * indexes and a finite box. A list longer than `max` is forged or broken and refused.
+ */
+export const sanitizeMotionProbe = (value: unknown, max: number): BoardMotionProbe => {
+  if (!isRec(value) || !Array.isArray(value.items) || value.items.length > max) return { items: [], truncated: false };
+  const items: BoardMotionTarget[] = [];
+  for (const item of value.items) {
+    if (!isRec(item) || typeof item.entry !== 'string' || !isBoardEntryKey(item.entry)) continue;
+    const kind = item.kind === 'demo' || item.kind === 'example' ? item.kind : null;
+    const entryKind = parseEntryKey(item.entry)?.kind;
+    if (kind === null || (kind === 'demo') !== (entryKind === 'token') || motionAreaOf(item.entry) === null) continue;
+    const host = kind === 'demo' ? (item.host === null ? null : undefined) : (indexOf(item.host) ?? undefined);
+    const element = indexOf(item.element);
+    const trigger = FORCED_STATES.find((candidate) => candidate === item.trigger);
+    const box = parseBox(item.box);
+    if (host === undefined || element === null || trigger === undefined || box === null) continue;
+    items.push({ entry: item.entry, kind, host, element, trigger, box });
+  }
+  return { items, truncated: value.truncated === true };
+};
+
+/** One motion strip as the check took it: the picture, how many frames, whether anything moved, with reduced motion, and how long it runs (ms). */
+export type MotionResult = { entry: string; trigger: ForcedState; png: string; frames: number; moved: boolean; reducedMoves: boolean; ms?: number };
 
 // ---- one area only (`--area`) ----
 

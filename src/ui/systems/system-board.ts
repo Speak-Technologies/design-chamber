@@ -3,10 +3,13 @@
 // `allow-same-origin`. The page reads the frame's messages as advice only: a click asks the frame which board
 // entry is under the pointer (`hit-test`), a section chosen in the panel asks it to scroll to one (`resolve-anchors`
 // then `scroll-to` and `highlight`), and the host theme and the pending edits reach it as `set-tokens`.
-// Nothing here writes a file.
+// In comment mode (system-builder-depth T21) a click asks the same `hit-test`, and the entry goes to the comment layer
+// instead; the boxes of the entries that have comments come back through `resolve-anchors`, so pins follow their entry
+// after every reload, scheme change and resize. Nothing here writes a file.
 
 import { artboardIdOf, type FrameToPageMessage, type TokenVar } from '../../shared/bridge-protocol.ts';
-import { TOKEN_PREVIEW_NAME_PATTERN, TOKEN_PREVIEW_VALUE_PATTERN, TOKEN_PREVIEW_VARS_MAX } from '../../shared/limits.ts';
+import type { Rect } from '../../shared/types.ts';
+import { BRIDGE_ANCHORS_MAX, TOKEN_PREVIEW_NAME_PATTERN, TOKEN_PREVIEW_VALUE_PATTERN, TOKEN_PREVIEW_VARS_MAX } from '../../shared/limits.ts';
 import { h } from '../components/dom.ts';
 import { btn, loadingRow } from '../components/kit.ts';
 import { client, host } from '../guest.ts';
@@ -25,8 +28,25 @@ export type BoardHandle = {
   setPreview: (vars: readonly TokenVar[]) => void;
   /** Scroll to an entry and outline it (`null` clears the outline). */
   focusEntry: (entry: string | null) => void;
+  /** The layer over the board where the comment pins and cards go (it lets clicks through where it is empty). */
+  pinLayer: HTMLElement;
+  /** Comment mode: a click on the board reports its entry to `onComment` instead of selecting it. */
+  setCommentMode: (on: boolean) => void;
+  /** Who hears a comment-mode click: the entry under it (or undefined) and the point, in the board element's pixels. */
+  setCommentHandler: (handler: ((entry: string | undefined, at: { x: number; y: number }) => void) | null) => void;
+  /** The entries whose boxes to follow; every new layout (load, resize, scroll) goes to `onLayout`. */
+  trackEntries: (entries: readonly string[]) => void;
+  onLayout: (listener: (layout: BoardLayout) => void) => () => void;
+  /** The last layout (null until the board is ready). */
+  layout: () => BoardLayout | null;
   dispose: () => void;
 };
+
+/**
+ * Where the tracked entries are: `rects` in the board document's pixels (an entry the board doesn't draw is missing),
+ * `scroll` the document's scroll, `frame` the frame's box inside the board element.
+ */
+export type BoardLayout = { rects: ReadonlyMap<string, Rect>; scroll: { x: number; y: number }; frame: { x: number; y: number; width: number; height: number } };
 
 export type BoardOptions = {
   id: string;
@@ -66,6 +86,15 @@ export const mountBoard = (options: BoardOptions): BoardHandle => {
   /** Where the pointer is over the board (frame px), sent with the tokens so a motion demo can play under it. */
   let pointer: TokenVar | null = null;
   let pointerFrame = 0;
+  let commenting = false;
+  let commentHandler: ((entry: string | undefined, at: { x: number; y: number }) => void) | null = null;
+  /** A comment-mode click waiting for its `hit`, with where it was in the board element. */
+  let commentHit: { x: number; y: number; at: { x: number; y: number } } | null = null;
+  let tracked: string[] = [];
+  let rects = new Map<string, Rect>();
+  let frameScroll = { x: 0, y: 0 };
+  let ready = false;
+  const layoutListeners = new Set<(layout: BoardLayout) => void>();
 
   const slot = createFrameSlot({
     slug: key,
@@ -83,7 +112,32 @@ export const mountBoard = (options: BoardOptions): BoardHandle => {
 
   const overlay = h('div', { class: 'dc-sys-hit', 'aria-hidden': 'true' });
   const status = h('div', { class: 'dc-sys-board-state' });
-  const el = h('div', { class: 'dc-sys-board', 'data-state': 'idle' }, slot.iframe, overlay, status);
+  const pinLayer = h('div', { class: 'dc-bc-layer' });
+  const el = h('div', { class: 'dc-sys-board', 'data-state': 'idle' }, slot.iframe, overlay, pinLayer, status);
+
+  const frameBox = (): BoardLayout['frame'] => {
+    const outer = el.getBoundingClientRect();
+    const inner = slot.iframe.getBoundingClientRect();
+    return { x: inner.left - outer.left, y: inner.top - outer.top, width: inner.width, height: inner.height };
+  };
+  const currentLayout = (): BoardLayout | null => (ready ? { rects, scroll: frameScroll, frame: frameBox() } : null);
+  const emitLayout = (): void => {
+    const now = currentLayout();
+    if (now === null) return;
+    for (const listener of layoutListeners) listener(now);
+  };
+  /** Ask the frame where the tracked entries are; the answer comes back as `anchors` with `pin<n>` ids. */
+  const resolveTracked = (): void => {
+    if (!ready) return;
+    if (tracked.length === 0) {
+      rects = new Map();
+      emitLayout();
+      return;
+    }
+    slot.post({ type: 'resolve-anchors', anchors: tracked.map((entry, index) => ({ id: `pin${index}`, selector: entrySelector(entry), text: '', html: '' })) });
+  };
+  const resizes = typeof ResizeObserver === 'function' ? new ResizeObserver(() => emitLayout()) : null;
+  resizes?.observe(el);
 
   const vars = (): TokenVar[] => [...themeVars(), ...preview].slice(0, TOKEN_PREVIEW_VARS_MAX - 1);
   const sendTokens = (): void => {
@@ -119,15 +173,38 @@ export const mountBoard = (options: BoardOptions): BoardHandle => {
 
   const unsubscribe = slot.channel.subscribe((message: FrameToPageMessage) => {
     if (message.type === 'ready') {
+      ready = true;
+      frameScroll = { x: 0, y: 0 };
       sendTokens();
       if (waiting) scrollTo?.(waiting.entry);
+      resolveTracked();
+    } else if (message.type === 'size') {
+      resolveTracked();
+    } else if (message.type === 'scroll') {
+      frameScroll = { x: message.x, y: message.y };
+      emitLayout();
     } else if (message.type === 'hit') {
+      if (commentHit && commentHit.x === message.x && commentHit.y === message.y) {
+        const at = commentHit.at;
+        commentHit = null;
+        commentHandler?.(message.element?.entry ?? undefined, at);
+        return;
+      }
       if (!hit || hit.x !== message.x || hit.y !== message.y) return;
       hit = null;
       options.onEntry(message.element?.entry ?? undefined);
     } else if (message.type === 'anchors') {
       const found = message.results.find((result) => result.id === 'entry' && result.found && result.rect);
       if (found?.rect) slot.post({ type: 'scroll-to', x: 0, y: Math.max(0, Math.round(found.rect.y) - 72) });
+      const pins = message.results.filter((result) => result.id.startsWith('pin'));
+      if (pins.length === 0) return;
+      const next = new Map<string, Rect>();
+      for (const result of pins) {
+        const entry = tracked[Number(result.id.slice(3))];
+        if (entry !== undefined && result.found && result.rect) next.set(entry, result.rect);
+      }
+      rects = next;
+      emitLayout();
     }
   });
 
@@ -158,24 +235,30 @@ export const mountBoard = (options: BoardOptions): BoardHandle => {
   overlay.addEventListener('click', (event) => {
     if (slot.state() !== 'ready') return;
     const rect = slot.iframe.getBoundingClientRect();
-    hit = { x: Math.round(event.clientX - rect.left), y: Math.round(event.clientY - rect.top) };
-    slot.post({ type: 'hit-test', x: hit.x, y: hit.y });
+    const point = { x: Math.round(event.clientX - rect.left), y: Math.round(event.clientY - rect.top) };
+    if (commenting && commentHandler) {
+      const outer = el.getBoundingClientRect();
+      commentHit = { ...point, at: { x: Math.round(event.clientX - outer.left), y: Math.round(event.clientY - outer.top) } };
+      hit = null;
+    } else hit = point;
+    slot.post({ type: 'hit-test', x: point.x, y: point.y });
   });
-  overlay.addEventListener(
-    'wheel',
-    (event) => {
-      if (slot.state() !== 'ready' || event.ctrlKey || event.metaKey) return;
-      event.preventDefault();
-      slot.post({ type: 'scroll-by', dx: Math.round(event.deltaX), dy: Math.round(event.deltaY) });
-    },
-    { passive: false },
-  );
+  // The wheel scrolls the board over the click layer and over the pins, which sit on top of it.
+  const forwardWheel = (event: WheelEvent): void => {
+    if (slot.state() !== 'ready' || event.ctrlKey || event.metaKey) return;
+    if (event.target instanceof Element && event.target.closest('.dc-pop')) return;
+    event.preventDefault();
+    slot.post({ type: 'scroll-by', dx: Math.round(event.deltaX), dy: Math.round(event.deltaY) });
+  };
+  overlay.addEventListener('wheel', forwardWheel, { passive: false });
+  pinLayer.addEventListener('wheel', forwardWheel, { passive: false });
 
   // The scheme follows the host: a switch loads the board again in the other one; a colour change in the same scheme only moves the variables.
   const stopReady = host.onReady((context) => {
     const next = boardScheme(context.theme.mode);
     if (next !== scheme) {
       scheme = next;
+      ready = false;
       load();
     } else if (slot.state() === 'ready') sendTokens();
   });
@@ -183,13 +266,19 @@ export const mountBoard = (options: BoardOptions): BoardHandle => {
   paintState();
   load();
 
+  const loadAgain = (): void => {
+    ready = false;
+    rects = new Map();
+    load();
+  };
+
   return {
     el,
     state: () => slot.state(),
-    reload: () => load(),
+    reload: () => loadAgain(),
     setVersion: (next) => {
       version = next;
-      load();
+      loadAgain();
     },
     setPreview: (next) => {
       preview = next;
@@ -205,7 +294,29 @@ export const mountBoard = (options: BoardOptions): BoardHandle => {
       waiting = { entry };
       if (slot.state() === 'ready') scrollTo?.(entry);
     },
+    pinLayer,
+    setCommentMode: (on) => {
+      commenting = on;
+      el.dataset.commenting = String(on);
+      if (!on) commentHit = null;
+    },
+    setCommentHandler: (handler) => {
+      commentHandler = handler;
+    },
+    trackEntries: (entries) => {
+      const next = [...new Set(entries)].slice(0, BRIDGE_ANCHORS_MAX);
+      if (next.length === tracked.length && next.every((entry, index) => entry === tracked[index])) return;
+      tracked = next;
+      resolveTracked();
+    },
+    onLayout: (listener) => {
+      layoutListeners.add(listener);
+      return () => void layoutListeners.delete(listener);
+    },
+    layout: currentLayout,
     dispose: () => {
+      resizes?.disconnect();
+      layoutListeners.clear();
       if (pointerFrame !== 0) cancelAnimationFrame(pointerFrame);
       unsubscribe();
       stopReady();

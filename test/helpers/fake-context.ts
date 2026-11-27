@@ -25,6 +25,8 @@ import {
   type UploadStore,
 } from '../../src/service/context.ts';
 import { createActivityTracker } from '../../src/service/activity.ts';
+import { configureReveal } from '../../src/service/routes/export.ts';
+import type { RevealCommand } from '../../src/service/reveal.ts';
 import { ApiError } from '../../src/service/http.ts';
 import { createSelfWrites } from '../../src/service/self-writes.ts';
 import { screensStampOf } from '../../src/service/store.ts';
@@ -35,6 +37,8 @@ export type FakeContext = ServiceContext & {
   logs: LogLine[];
   /** Every event emitted on the hub, in order. */
   events: ChangeEvent[];
+  /** Every file-manager launch /reveal asked for, recorded instead of spawned. */
+  reveals: RevealCommand[];
   /** Store a complete upload; answers its id for `uploads.take`. */
   seedUpload(text: string): string;
   /** Run the `onDispose` callbacks (reverse order). */
@@ -190,7 +194,9 @@ export const createFakeContext = (options: FakeContextOptions): FakeContext => {
     error: (event, fields) => void logs.push({ level: 'error', event, fields }),
   };
 
-  let file: SettingsFile = { version: 1, root: options.root, ...options.settings };
+  // Exports land inside the tmp root unless a test names its own folder, never in the real Downloads.
+  const reveals: RevealCommand[] = [];
+  let file: SettingsFile = { version: 1, root: options.root, downloadsDir: path.join(options.root, '.downloads'), ...options.settings };
   const rootListeners = new Set<(root: string, previous: string) => void>();
   const settings: SettingsStore = {
     root: () => file.root ?? options.root,
@@ -265,11 +271,12 @@ export const createFakeContext = (options: FakeContextOptions): FakeContext => {
     onDispose: (fn) => void disposers.push(fn),
   };
 
-  return {
+  const ctx: FakeContext = {
     ...base,
     ...options.overrides,
     logs,
     events,
+    reveals,
     seedUpload(text) {
       const id = `u_${randomUUID().replace(/-/g, '')}`;
       uploadsById.set(id, text);
@@ -279,4 +286,12 @@ export const createFakeContext = (options: FakeContextOptions): FakeContext => {
       for (const fn of disposers.reverse()) await fn();
     },
   };
+  // /reveal never spawns a file manager in a test; a test that checks the launch passes its own LaunchFn.
+  configureReveal(ctx, {
+    launch: async (step) => {
+      reveals.push(step);
+      return true;
+    },
+  });
+  return ctx;
 };

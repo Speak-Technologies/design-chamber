@@ -114,6 +114,8 @@ export const createBoardService = (deps: BoardDeps): BoardService => {
         return;
       }
       if (event.kind !== 'system' || event.system === undefined) return;
+      // A board comment changes nothing the board or a screen draws (T20): the documents stay.
+      if (event.systemChange === 'comments') return;
       for (const [key, entry] of [...cache]) if (entry.id === event.system) drop(key);
     }),
   );

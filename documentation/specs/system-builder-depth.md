@@ -1,8 +1,9 @@
 # Design system builder depth (technical design)
 
-Status: **Phase 1 and Phase 2 built** (2026-11-27). Phase 1: `29c2e33` to `36eec25` on `feat/system-builder-depth`,
+Status: **Phases 1, 2 and 3 built** (2026-11-27). Phase 1: `29c2e33` to `36eec25` on `feat/system-builder-depth`,
 cut from `master` at 0.7.0 `e89d866`; §16 records it. Phase 2: `4451ad8` to `27ff325` on `feat/system-phase-2`;
-§17 records it. Phase 3 (§13, revised against the shipped code) is not built. The owner's ask, in their words: "keen to know how we can make this the best most full design
+§17 records it. Phase 3: `3ab22b7` to `7fccb2e` on `feat/system-phase-3`; §18 records it. §19 says what the builder
+covers now and what it still doesn't. The owner's ask, in their words: "keen to know how we can make this the best most full design
 system creator possible where our agent can actually see everything in this app and do everything as well as
 claude artifacts and design."
 
@@ -749,7 +750,7 @@ was checked on the branch at `36eec25` unless marked **verify**. WP0 files (`src
 **Files:** `docs/SPEC.md` §6.7, §7, §9.19, §14; `documentation/features/{design-systems,design-checks}.md`; `documentation/pages/design-systems.md`; `documentation/known-issues.md` (extend KI-38 to the `motion` section and icons on older builds)
 **Acceptance:** every user-visible change described; qa-tester verifies; copy scan passes.
 
-### Phase 3 (revised 2026-11-27 against what Phase 2 shipped)
+### Phase 3 (built; see §18. Revised 2026-11-27 against what Phase 2 shipped)
 
 Read §17 first. Task ids continue after Phase 2's T15d, so the outline's "T15 to T19" are T16 to T22 here.
 Every file was checked on `feat/system-phase-2` at `27ff325` unless marked **verify**. WP0 files go through the
@@ -959,9 +960,76 @@ the Screens view, screens on the living page; `system-motion-no-reduced` and `sy
 - Exports already have a destination and reveal registry (`src/service/export.ts`); token export reuses them.
 - Tailwind detection needs no project read: a `stat`, the last scan's list, or the agent's BUILD.json drift kind.
 
+## 18. Phase 3 as built (2026-11-27)
+
+Commits on `feat/system-phase-3`: Wave 0 `3ab22b7`; T19 `b80c155`, `1d91143`; T20 `9389b67`, `3149d3e`; T16
+`2178351`; T19u `3f8945a`; T18 `96a51c8`; T17 `9825022`; T21 `30cbc06`; T22r `7fccb2e`; the backend follow-up
+`846f561` (hints on `system-state-unstyled`, examples first in the motion cap); T22 `1e2e4a9`. The hints are in
+the table below. `docs/SPEC.md` §6.7, §7, §9.19 and §14 carry what shipped.
+
+**Shipped as designed:** forced hover, focus, focus-visible and active pictures with `system-state-unstyled`;
+motion strips; compare sheets from `sources/screens/`; the token ZIP (W3C design tokens 2025.10, regenerated
+CSS, Tailwind v4 `@theme` only when the project uses Tailwind, decision 9) to the export folder with Show in
+folder; board comments in `.chamber/` for every home (decision 10) with five routes, the `comments` prompt and
+pins on the board in the rail and the page.
+
+**Where the build differs:**
+
+| Design said | Built |
+|---|---|
+| `POST /systems/:id/export` | Also `GET /systems/:id/export`, which answers the formats a system offers, so the sheet shows Tailwind only when it applies |
+| Tailwind found by a config stat, the last scan's list or BUILD.json drift | A fourth way: a CSS file the scan read with `@import "tailwindcss"`, recorded as `sources.code.tailwind` |
+| PNG sources | PNG or JPEG; a JPEG (or a PNG Node can't decode) is decoded by the check browser, offline, from a data URL |
+| Compare sides scaled to one height | Full size and top-aligned, the shorter side padded, ≤ 20 megapixels |
+| Four motion frames | Four, plus a fifth at the end under `prefers-reduced-motion: reduce` |
+| WP0 as listed | Plus `'states'` and `'motion'` in `CheckParams.pictured`, `system-compare-skipped`, `'comments'` in `SystemChangeKind`, `sources.code.tailwind` |
+| Comments marked sent after the send | Marked when handed over: sent, appended to a busy chat's box, or queued in the outbox (KI-43) |
+| States forced on the labelled instance | On its rest twin (same variant and size) when the example has one, so an `is-hover` copy can't hide a missing `:hover` |
+| `system-state-unstyled` names the component and its states | Also `params.hint` when the check can tell why: `rest` (no rest twin, so the state was forced on the labelled copy), `focus-visible` (labelled focus but only `:focus-visible` is styled) or `both`; the sentence adds the matching fix |
+| (not stated) `PATCH` comment status open, sent or resolved | Open or resolved only; sent is set by mark-sent alone, so a sent comment always has its `sentAt` |
+
 ---
 
-Architecture Complete → main agent (task breakdown) | → main agent (Wave 0), backend-developer (T16, T18, T19, T20), ui-ux-developer (T19u, T21), rules (T22r)
+## 19. Where the builder stands after three phases
+
+**What it covers now.** The interview asks how complete a system should be and raises platforms,
+navigation, overlays, motion, scales and brand colour only when the code does. Seven reference docs carry the
+depth the skill can't. A system holds:
+- colour groups with pairs whose contrast is checked in light and dark;
+- type, spacing, sizing, radius, elevation, layers, breakpoints, a Motion section and an icon set;
+- components whose variants, sizes and states are labelled, counted, and forced and pictured in their real
+  hover, focus and active styles;
+- ten pattern kinds and three new brand kinds with live examples;
+- page, pattern, state and marketing screens at the system's or their own fixed sizes;
+- a completeness checklist of 34 topics, with `outOfScope` for what the user agreed to leave out.
+
+The agent sees the board at two widths and in dark, every screen at every viewport with the design checks,
+state pictures, motion strips and side-by-side comparisons with the real app, and fixes one area at a time with
+`--area`, `--scheme` and `--screen`. The user reviews on the board, pins comments to entries and sends them to
+the chat, and exports tokens as W3C JSON, CSS and, when used, Tailwind.
+
+**What it still doesn't cover, most valuable first:**
+1. **Accessibility inside component and pattern examples.** The board check measures layout, pair contrast and
+   forced states. It never runs the contrast, label, name or alt checks inside an example, and nothing checks
+   keyboard order or focus traps in overlays. Screens get those checks; examples don't.
+2. **Capturing the real app.** Comparison needs a screenshot someone saved into `sources/screens/`, and the
+   sheet is side by side with no measured difference. Design Chamber never opens the app.
+3. **States and motion beyond components.** Labels are counted and states forced on component examples only.
+   Pattern examples and screens (a menu open, a sheet half up, a form in error) aren't state-checked.
+4. **Comments on screens.** Pins sit on board entries only; a screen can't take a pin.
+5. **The board doesn't point to screens** (KI-42), so templates are easy to miss there.
+6. **More export targets.** No Style Dictionary platforms, Figma variables, iOS or Android, and no Tailwind v3
+   preset. Getting tokens back into the project is still the agent's reviewed diff.
+7. **Comment delivery** reads Sent before the agent has the message in two cases (KI-43).
+8. **Data display beyond colours.** Charts and tables are patterns the agent writes; there is no chart specimen,
+   and "draws data" is guessed from names.
+9. **Voice and content are words only.** Nothing checks button verbs, error message shape or reading level.
+10. **Smaller gaps.** The living page draws screens in light only; the rail shows one screen at a time; screens
+    don't preview pending value edits; the dark pass runs at the wide width only; rail widths are never checked.
+
+---
+
+Architecture Complete → main agent (task breakdown) | → main agent (relay §19 to the user)
 
 ## Decisions (the user, 2026-11-27)
 These answer the open questions above and are binding for every task.
@@ -973,3 +1041,7 @@ These answer the open questions above and are binding for every task.
 6. System file limit 200 to 400, icons capped at 150.
 7. The dark pass is on by default whenever a system has dark values.
 8. Scope: all three phases are built in this run, one PR per phase, each merged before the next starts.
+
+## Decisions for Phase 3 (the main agent, 2026-11-27)
+9. Tailwind export: a v4 `@theme` CSS block only, written from checked values.
+10. Board comments on repo-backed systems stay in Design Chamber, never in the repo, the same as a design's comments.
