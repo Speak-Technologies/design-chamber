@@ -20,7 +20,7 @@ Read this before you write `components` in `system.json` or any `components/<id>
   "note": "Use primary once per view, for the main action. Use a link, not a button, to go to another page.",
   "variants": ["primary", "secondary", "ghost", "danger"],
   "sizes": ["sm", "md", "lg"],
-  "states": ["rest", "hover", "focus", "active", "disabled", "loading"],
+  "states": ["rest", "hover", "focus-visible", "active", "disabled", "loading"],
   "tokens": ["--accent", "--accent-fg", "--accent-hover", "--radius-md", "--control-md", "--focus-ring"],
   "source": "src/components/Button.tsx",
   "example": "components/button.html",
@@ -38,32 +38,32 @@ Read this before you write `components` in `system.json` or any `components/<id>
 
 - Variants: `primary`, `secondary`, `ghost`, `danger`, `link`; for containers `outline`, `filled`, `elevated`.
 - Sizes: `sm`, `md`, `lg`. Add `xs` or `xl` only when the code has them.
-- States: `rest`, `hover`, `focus`, `active` (pressed), `disabled`, `loading`, `error`, `selected`, `checked`, `indeterminate`, `open`, `read-only`.
+- States: `rest`, `hover`, `focus-visible` (keyboard ring), `focus` (text fields), `active` (pressed), `disabled`, `loading`, `error`, `selected`, `checked`, `indeterminate`, `open`, `read-only`.
 
 ## 4. What each common component needs
 
 | Component | Variants | Sizes | States |
 |---|---|---|---|
-| Button | primary, secondary, ghost, danger | sm, md, lg | rest, hover, focus, active, disabled, loading |
-| Icon button | ghost, secondary | sm, md, lg | rest, hover, focus, active, disabled |
-| Link | inline, standalone | | rest, hover, focus, visited where it matters |
+| Button | primary, secondary, ghost, danger | sm, md, lg | rest, hover, focus-visible, active, disabled, loading |
+| Icon button | ghost, secondary | sm, md, lg | rest, hover, focus-visible, active, disabled |
+| Link | inline, standalone | | rest, hover, focus-visible, visited where it matters |
 | Text input, textarea | | sm, md, lg | rest, hover, focus, disabled, read-only, error |
 | Select | | sm, md, lg | rest, hover, focus, open, disabled, error |
-| Checkbox | | | rest, hover, focus, checked, indeterminate, disabled, error |
-| Radio | | | rest, hover, focus, checked, disabled |
-| Switch | | sm, md | rest, focus, checked, disabled |
-| Tag, badge | neutral, accent and each status | sm, md | rest, and removable tags: hover, focus |
+| Checkbox | | | rest, hover, focus-visible, checked, indeterminate, disabled, error |
+| Radio | | | rest, hover, focus-visible, checked, disabled |
+| Switch | | sm, md | rest, focus-visible, checked, disabled |
+| Tag, badge | neutral, accent and each status | sm, md | rest, and removable tags: hover, focus-visible |
 | Avatar | image, initials, icon | sm, md, lg | rest |
-| Card | outline, filled, elevated | | rest, and clickable cards: hover, focus, selected |
-| Tabs | line, pill | sm, md | rest, hover, focus, selected, disabled |
-| Menu | | | open, item hover, item focus, item disabled, item selected |
+| Card | outline, filled, elevated | | rest, and clickable cards: hover, focus-visible, selected |
+| Tabs | line, pill | sm, md | rest, hover, focus-visible, selected, disabled |
+| Menu | | | open, hover, focus-visible, disabled, selected (on an item) |
 | Tooltip | | | open |
-| Table | | compact, default | header, row hover, row selected, sorted, empty |
+| Table | | compact, default | header, hover, selected (a row), sorted, empty |
 | Dialog, sheet | | sm, md, lg | open, with a scrim |
 | Toast, banner, inline message | info, success, warning, danger | | rest, with action, dismissible |
 | Progress, spinner | bar, circle | sm, md | determinate, indeterminate |
 
-Any component that lists `hover` also lists `disabled` and a focus state (`focus` or `focus-visible`). A full system's check looks for that. For a link, list `disabled` too and draw it as plain text, which is how a link with no destination should look.
+Any component that lists `hover` also lists `disabled` and a focus state (`focus-visible`, or `focus` for text fields). A full system's check looks for that. For a link, list `disabled` too and draw it as plain text, which is how a link with no destination should look.
 
 ## 5. The example contract
 
@@ -81,16 +81,16 @@ One example per component, showing every variant, size and state you listed as a
   .btn { height: var(--control-md); padding: 0 var(--space-4); border: 0; border-radius: var(--radius-md); font: inherit; font-weight: 600; }
   .btn.primary { background: var(--accent); color: var(--accent-fg); }
   .btn.primary:hover, .btn.primary.is-hover { background: var(--accent-hover); }
-  .btn:focus-visible, .btn.is-focus { outline: var(--focus-ring-width) solid var(--focus-ring); outline-offset: var(--focus-ring-offset); }
+  .btn:focus-visible, .btn.is-focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring); outline-offset: var(--focus-ring-offset); }
   .btn:disabled { background: var(--surface-disabled); color: var(--fg-disabled); }
   .btn.sm { height: var(--control-sm); } .btn.lg { height: var(--control-lg); }
 </style>
 <div class="grid">
-  <span></span><span class="head">Rest</span><span class="head">Hover</span><span class="head">Focus</span><span class="head">Disabled</span>
+  <span></span><span class="head">Rest</span><span class="head">Hover</span><span class="head">Focus visible</span><span class="head">Disabled</span>
   <span class="head">Primary</span>
   <button class="btn primary" data-dc-variant="primary" data-dc-state="rest">Save</button>
   <button class="btn primary is-hover" data-dc-variant="primary" data-dc-state="hover">Save</button>
-  <button class="btn primary is-focus" data-dc-variant="primary" data-dc-state="focus">Save</button>
+  <button class="btn primary is-focus-visible" data-dc-variant="primary" data-dc-state="focus-visible">Save</button>
   <button class="btn primary" disabled data-dc-variant="primary" data-dc-state="disabled">Save</button>
 </div>
 <div class="grid">
@@ -105,7 +105,16 @@ This is cut short: the real example has a row for each of the four variants and 
 
 ### Drawing states that need a pointer
 
-Hover, focus and pressed can't happen in a picture. Write each such rule twice in one selector, the real pseudo-class and a class (`:hover, .is-hover`), and put the class on the labelled instance. The example then shows the state and still behaves for real. Disabled uses the real `disabled` attribute (or `aria-disabled="true"` on non-form parts). Loading shows a static spinner and keeps the label width so the button doesn't jump. Error shows the error border and the message under the field, as the form pattern says.
+Hover, focus and pressed can't happen in a still picture. Write each such rule twice in one selector, the real pseudo-class and a class (`.btn:hover, .btn.is-hover`), and put the class on the labelled instance. The board shows the copy; the check then forces the real pseudo-class and pictures that (`button-hover@wide.png`). For this to work:
+
+- **A rest twin.** Beside every such instance, have one labelled `data-dc-state="rest"` (or `default`, `normal`, `idle`, `enabled`) with the same `data-dc-variant` and `data-dc-size`. The check forces the state on the twin. Without one it forces the static copy, which already has the class, so nothing changes.
+- **The exact name.** `hover`, `focus`, `focus-visible` and `active` are forced, each as itself. A `focus` label doesn't trigger `:focus-visible` CSS. Use the name your CSS uses, in the label and in `states`.
+- **The labelled element changes.** Put the labels on the element your rule styles, not on a wrapper, and not only on a child or `::after`.
+- **A change the check compares:** text colour, background, border, box shadow, outline or `transform`. An underline or opacity change alone counts as nothing. `outline: none` on its own is nothing too.
+
+`system-state-unstyled` names the component and states that changed nothing. Check each picture matches its static copy. Only component examples are forced, on the light ground, up to 60 pictures.
+
+Disabled uses the real `disabled` attribute (or `aria-disabled="true"` on non-form parts). Loading shows a static spinner and keeps the label width. Error shows the error border and the message under the field.
 
 ## 6. How examples are drawn
 

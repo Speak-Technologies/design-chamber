@@ -2,19 +2,19 @@
 
 Read this before you write `patterns` or `screens` in `system.json`. A pattern says how components solve one recurring problem, and when to pick one solution over another. Record the choice the product made, and why.
 
-## The pattern entry
+## The entry
 
 ```json
 { "id": "navigation", "kind": "navigation", "title": "Navigation", "note": "Top bar on laptop, bottom bar on phone.", "example": "patterns/navigation.html", "layout": "full" }
 ```
 
 - Kinds: `navigation`, `overlay`, `forms`, `data-display`, `feedback`, `states`, `page`, `responsive`, `motion`, `accessibility`, `voice`, `layout`, `do-dont`, `other`. Use the specific kind; the checklist counts by kind.
-- The body goes in `patterns/<id>.md`: the rules, the decision, the exceptions. The `note` (up to 500 characters) is the summary shown on the card.
-- The example is exactly `patterns/<id>.html` and follows the component example rules in `components.md`: a fragment, tokens only, no scripts, no remote files, labelled instances. Pattern examples are usually wide, so give them `layout: "full"`.
+- Body in `patterns/<id>.md`: rules, decision, exceptions. The `note` (up to 500 characters) is the card's summary.
+- The example is exactly `patterns/<id>.html`, written as `components.md` says: a fragment, tokens only, no scripts or remote files, labelled instances. Usually `layout: "full"`.
 
 ## Drawing a phone pattern
 
-In an example, draw a 390px phone: a frame `width: 390px; max-width: 100%; height: 640px; position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg)`. Everything inside uses `position: absolute` against the frame, never `fixed`. Show laptop and phone side by side when the pattern changes between them, a laptop frame first (about 720px wide, scaled down content is fine), then the phone, each with a plain text caption.
+Draw a 390px phone as: a frame `width: 390px; max-width: 100%; height: 640px; position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg)`. Everything inside uses `position: absolute` against the frame, never `fixed`. When the pattern differs, show a laptop frame (about 720px, scaled content is fine) beside it, each captioned.
 
 ## Navigation
 
@@ -29,7 +29,7 @@ Pick by the number of top destinations and the app's depth.
 | Breadcrumbs | 3 or more levels of hierarchy the user moves up through | Flat apps, or as the only navigation | Collapse to a back link with the parent's name |
 
 Rules for all of them:
-- The current location is marked with more than colour: weight, an indicator bar, or a filled icon, and `aria-current="page"`.
+- Mark the current location with more than colour (weight, a bar, a filled icon) and `aria-current="page"`.
 - Labels are one or two words. Icons alone only in a bottom bar where every icon also has its label.
 - One primary navigation per screen. Tabs inside a page are fine; two bars competing are not.
 - Bottom bar items are at least `--touch-min` tall and wide. The bar sits above the phone's home indicator (16 to 34px of safe area).
@@ -72,7 +72,7 @@ Every interactive part is at least 44 by 44px on phone (`--touch-min`), with at 
 - Validate on blur and on submit, not on each keystroke. Clear an error as soon as the value is fixed.
 - Errors sit under the field in `--danger` with an icon, say what to do ("Enter a date after today"), and are tied to the field with `aria-describedby`. On submit with errors, show a summary at the top that links to each field, and move focus to it.
 - Submit button: one primary per form, labelled with the action ("Create account"). While submitting it shows loading and is disabled; the form keeps its values on failure.
-- Help text under the label or under the field, in `--fg-muted`, at most two lines.
+- Help text in `--fg-muted`, at most two lines.
 
 ## Data display
 
@@ -89,13 +89,13 @@ Every interactive part is at least 44 by 44px on phone (`--touch-min`), with at 
 | Inline message | A problem or hint tied to one part of the page | While it applies | Under a form section |
 | Dialog | The user must decide before going on | Until answered | "Delete 3 files? This can't be undone." |
 
-- Toasts stack at the bottom on phone and bottom-left or top-right on laptop, at most 3. They use `role="status"`; errors that block use a banner or dialog, not a toast.
+- At most 3 toasts, at the bottom on phone, bottom-left or top-right on laptop. They use `role="status"`; errors that block use a banner or dialog, not a toast.
 - Destructive dialogs name the thing and the result, with the danger button labelled with the verb ("Delete files"), never "OK".
-- Prefer Undo over a confirm for actions that can be reversed.
+- Prefer Undo to a confirm for reversible actions.
 
 ## States
 
-Every screen and every component that loads or holds data designs these states:
+Everything that loads or holds data designs these:
 
 - **Empty**: what will be here, why it is empty, and the next action as a button. First-use empty differs from no-results empty ("No invoices match 'acme'. Clear the search.").
 - **Loading**: a skeleton that matches the real layout (same rows, same heights) for waits over about 300ms; a spinner only inside a button or for a small area. No skeleton for under 300ms.
@@ -103,11 +103,11 @@ Every screen and every component that loads or holds data designs these states:
 - **Partial**: some data loaded, some failed. Show what loaded and an inline message where the rest would be.
 - **Skeleton** blocks use `--surface-2` with `--radius-sm`, and their pulse stops under reduced motion.
 
-Label each in the example: `data-dc-state="empty"`, `"loading"`, `"error"`, `"partial"`.
+Label them `data-dc-state="empty"`, `"loading"`, `"error"`, `"partial"`.
 
 ## Page types, templates and responsive rules
 
-List the page types the product has (`kind: "page"`: list, detail, settings, dashboard, editor, sign-in, onboarding). For each: its regions, which pattern fills each, the container width and the primary action's place.
+For each page type (`kind: "page"`: list, detail, settings, dashboard, editor, sign-in): regions, which pattern fills each, container width, primary action's place.
 
 One entry with `kind: "responsive"` says what changes at each breakpoint: navigation, modal to sheet or full screen, tables to cards, 12 to 8 to 4 columns, side panels stacking, hover-only controls made visible on touch. Record the platforms answer here.
 
@@ -116,7 +116,7 @@ One entry with `kind: "responsive"` says what changes at each breakpoint: naviga
 A screen is a full HTML page in the system folder, drawn at real device widths. An example is a fragment in a card.
 
 - **Make an example** to show one pattern and its states.
-- **Make a screen** when the layout depends on window width (media queries don't answer inside an example), or for a whole page.
+- **Make a screen** for whole pages and anything that depends on window width.
 
 ```json
 "screens": [{ "id": "settings", "title": "Settings", "kind": "page" }],
@@ -129,6 +129,14 @@ A screen is a full HTML page in the system folder, drawn at real device widths. 
 - One file serves every viewport: use media queries at the system's breakpoints, never a file per device.
 - A whole document: doctype, `<html lang>`, charset, viewport meta, title. Link `<link rel="stylesheet" href="../tokens.css">` and use `var(--token)`; dark values come with it. Declare fonts with your own `@font-face` pointing at `../assets/fonts/`. Reach logos and pictures with `../assets/` paths. Nothing from the internet.
 - Screens aren't examples: no `data-dc-*` labels, and the component still needs its own example.
+
+### Compare with the real app
+
+For a screen that copies a real page, save its screenshot as `sources/screens/<name>.png` (or `.jpg`) and give the screen `"source": "sources/screens/<name>.png"`.
+
+- Its width must match a viewport within 2px: capture at 1x (390px for the phone, not 1170px). Up to 10 MB.
+- Take it with your own browser tools or ask the user. Use test data.
+- Sources are for you only: never copied to designs or published.
 
 ## Done for this area
 
