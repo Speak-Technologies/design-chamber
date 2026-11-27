@@ -7,7 +7,7 @@ A section of the Settings sheet (rail) and Settings area (full-screen), between 
 - **Projects.** One row per project OpenChamber has open (plus any project with a saved pin that is no longer open): the project name (the full path in its tooltip) and a select with **Use the default**, **No design system** and the Ready systems. A pin that no longer resolves acts as the default and shows its reason under the name.
 - **Notices.** Sentences the service sends once, for example when a pinned system was deleted, appear as info banners at the top of the section and stay until the sheet is closed.
 
-Saving is immediate. Each change sends the whole setting (`PUT /settings` with `systemDefault` or `systemPins`); focus returns to the select you used.
+Saving is immediate. Each change sends the whole setting (`PUT /settings` with `systemDefault` or `systemPins`); focus returns to the select you used. A saved change also re-reads the design systems list, so the Default and Pinned badges in the library and the systems list follow right away. If the save fails, nothing reloads and the error shows under the section.
 
 ## How the service handles it
 - **What it takes.** `systemDefault` is one of `{ choice: "ask" }`, `{ choice: "none" }` or `{ choice: "system", id, name }`. `systemPins` is the whole pin list, up to 50 projects, each `{ directory, choice: "default" | "none" | "system" }` (with `id` and `name` for `system`). `null` clears either one, the same as asking each time or having no pins.

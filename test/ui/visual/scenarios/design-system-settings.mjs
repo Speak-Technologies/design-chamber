@@ -9,6 +9,31 @@ const FIELD = '.dc-system-field .oc-sdk-trigger';
 
 export const run = async (helpers) => {
   for (const theme of ['dark', 'light']) for (const width of [320, 480]) await scenario(helpers, { width, theme });
+  for (const theme of ['dark', 'light']) await staleBadgeFlow(helpers, theme);
+};
+
+// KI-37: the library stays open under the Settings sheet, and a settings save sends no change event, so the systems
+// tile's Default badge only moves if Settings re-reads the list itself.
+const staleBadgeFlow = async ({ openPage, check, checkSoon, listReady }, theme) => {
+  const tag = `syssettings-page-1400-${theme}`;
+  console.log(tag);
+  const p = await openPage({ width: 1400, height: 900, surface: 'page', theme, label: tag, storage: { 'library-view:page': 'tiles' } });
+  await listReady(p);
+  const tileFlag = (id) => p.guest(`return (doc.querySelector('.dc-sys-tile[data-system-id="${id}"] .dc-flag')?.textContent ?? '').trim()`);
+  await p.click('.dc-tabs [role=tab]', { text: 'Systems' });
+  await checkSoon(async () => (await p.guest(`return doc.querySelectorAll('.dc-sys-tile').length`)) === 5, `${tag}: the Systems tab lists the five systems`);
+  check((await tileFlag('field-notes')) === '', `${tag}: Field notes starts with no badge (${await tileFlag('field-notes')})`);
+
+  await p.click('.dc-library-bar .dc-iconbtn[aria-label="Settings"]');
+  await p.waitFor(`return !!doc.querySelector('${DEFAULT}')`, 'the design systems section');
+  await p.click(DEFAULT);
+  await p.waitFor(`return !!doc.querySelector('.oc-sdk-popup [role=option]')`, 'the default options');
+  await p.click('.oc-sdk-popup [role=option]', { text: 'Field notes' });
+  await checkSoon(async () => ((await p.guest(`return (doc.querySelector('${DEFAULT}')?.textContent ?? '').trim()`)) === 'Field notes'), `${tag}: Settings saves Field notes as the default`);
+  await p.key('Escape');
+  await p.waitFor('return !doc.querySelector(".dc-settings")', 'settings to close');
+  await checkSoon(async () => (await tileFlag('field-notes')) === 'Default', `${tag}: the Field notes tile now says Default without a reload`);
+  await p.shot(`${tag}-1-default-moved`);
 };
 
 const scenario = async ({ openPage, check, checkSoon, listReady }, { width, theme }) => {
