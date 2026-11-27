@@ -148,8 +148,8 @@ body {
   }
 }
 
-/* Read by a screen reader only: why a button is off. */
-.ws-sr {
+/* Why Check is off. With a mouse the button's tooltip shows it, so this is read by a screen reader only. */
+.ws-reason {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -211,6 +211,58 @@ body {
 .ws-frame .oc-sdk-btn:focus-visible {
   outline: none;
   box-shadow: var(--ws-ring);
+}
+
+/* A touch screen (components/device.ts): Check, Open, Show all and Try again are at least 44 px tall. */
+[data-dc-pointer='coarse'] .ws-frame .oc-sdk-btn {
+  min-height: calc(var(--ws-s3) * 3 + var(--ws-s2));
+}
+
+/* A finger can't hover for a tooltip: the reason is a line of its own, under the buttons. */
+[data-dc-pointer='coarse'] .ws-reason:not(:empty) {
+  position: static;
+  grid-column: 2 / -1;
+  grid-row: 3;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip-path: none;
+  white-space: normal;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  text-align: end;
+}
+
+/* Narrow: the status line has the full width, so the reason lines up with it. */
+@container (max-width: 340px) {
+  [data-dc-pointer='coarse'] .ws-reason:not(:empty) {
+    text-align: start;
+  }
+}
+
+/* The taller buttons make the row taller than its words: keep the name and its line together, in the middle. */
+[data-dc-pointer='coarse'] .ws-title {
+  align-self: center;
+}
+
+@container (min-width: 341px) {
+  [data-dc-pointer='coarse'] .ws-title,
+  [data-dc-pointer='coarse'] .ws-dot {
+    align-self: end;
+  }
+  [data-dc-pointer='coarse'] .ws-dot {
+    margin-bottom: calc((1.4em - 8px) / 2);
+  }
+  [data-dc-pointer='coarse'] .ws-meta {
+    align-self: start;
+  }
+  [data-dc-pointer='coarse'] .ws-row:has(.ws-meta[hidden]) :is(.ws-title, .ws-dot) {
+    grid-row: 1 / span 2;
+    align-self: center;
+    margin-bottom: 0;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

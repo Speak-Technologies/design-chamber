@@ -82,7 +82,7 @@
       root2.style.setProperty(hostName, value);
     }
     root2.style.setProperty("font-family", theme.tokens.font);
-    root2.style.setProperty("font-size", "0.875rem");
+    root2.style.setProperty("font-size", theme.tokens.fontSize ?? "0.875rem");
     root2.style.setProperty("line-height", "1.45");
     root2.style.setProperty("color", theme.tokens.foreground);
   };
@@ -236,6 +236,7 @@
     return `
 .oc-sdk[data-tone="${name}"], .oc-sdk [data-tone="${name}"] { --oc-sdk-tone: ${color}; --oc-sdk-tone-text: ${v(`${name}-text`, "inherit")}; }`;
   };
+  var len = (px2) => `calc(${px2}rem / 14)`;
   var UI_SIZE_CSS = `
 .oc-sdk { box-sizing: border-box; font-size: 0.875rem; line-height: 1.45; }
 .oc-sdk *, .oc-sdk *::before, .oc-sdk *::after { box-sizing: border-box; }
@@ -244,95 +245,106 @@
 :where(.oc-sdk) :where(button), :where(button.oc-sdk) { cursor: pointer; background: none; border: 0; padding: 0; }
 .oc-sdk button:disabled, button.oc-sdk:disabled, .oc-sdk[aria-disabled="true"], .oc-sdk [aria-disabled="true"] { opacity: .5; pointer-events: none; }
 
-.oc-sdk-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid transparent; font-size: 0.875rem; font-weight: 500; line-height: 1; white-space: nowrap; }
-.oc-sdk-btn[data-size="sm"] { gap: 6px; height: 28px; padding: 0 10px; font-size: 0.8125rem; }
-.oc-sdk-btn[data-size="xs"] { gap: 4px; height: 24px; padding: 0 8px; font-size: 0.75rem; }
+.oc-sdk-btn { display: inline-flex; align-items: center; justify-content: center; gap: ${len(8)}; height: ${len(32)}; padding: 0 ${len(12)}; border: 1px solid transparent; font-size: 0.875rem; font-weight: 500; line-height: 1; white-space: nowrap; }
+.oc-sdk-btn[data-size="sm"] { gap: ${len(6)}; height: ${len(28)}; padding: 0 ${len(10)}; font-size: 0.8125rem; }
+.oc-sdk-btn[data-size="xs"] { gap: ${len(4)}; height: ${len(24)}; padding: 0 ${len(8)}; font-size: 0.75rem; }
 .oc-sdk-btn[data-loading="true"] { opacity: .5; pointer-events: none; }
-.oc-sdk-btn > .oc-sdk-spinner-ring { width: 14px; height: 14px; }
+.oc-sdk-btn > .oc-sdk-spinner-ring { width: ${len(14)}; height: ${len(14)}; }
 
-.oc-sdk-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.oc-sdk-field { display: flex; flex-direction: column; gap: ${len(4)}; min-width: 0; }
 .oc-sdk-field-label { font-size: 0.8125rem; font-weight: 500; }
 .oc-sdk-field-note { font-size: 0.75rem; }
-.oc-sdk-input { display: block; width: 100%; min-width: 0; height: 32px; padding: 0 10px; border: 0; font-size: 0.875rem; line-height: 1.45; appearance: none; }
-textarea.oc-sdk-input { height: auto; padding: 8px 10px; resize: vertical; }
+.oc-sdk-input { display: block; width: 100%; min-width: 0; height: ${len(32)}; padding: 0 ${len(10)}; border: 0; font-size: 0.875rem; line-height: 1.45; appearance: none; }
+textarea.oc-sdk-input { height: auto; padding: ${len(8)} ${len(10)}; resize: vertical; }
 
 .oc-sdk-search { position: relative; min-width: 0; }
-.oc-sdk-search .oc-sdk-input { padding-left: 34px; padding-right: 34px; }
-.oc-sdk-search-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); pointer-events: none; }
-.oc-sdk-search-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: none; align-items: center; justify-content: center; width: 24px; height: 24px; }
+.oc-sdk-search .oc-sdk-input { padding-left: ${len(34)}; padding-right: ${len(34)}; }
+.oc-sdk-search-icon { position: absolute; left: ${len(11)}; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.oc-sdk-search-clear { position: absolute; right: ${len(6)}; top: 50%; transform: translateY(-50%); display: none; align-items: center; justify-content: center; width: ${len(24)}; height: ${len(24)}; }
 .oc-sdk-search[data-active="true"] .oc-sdk-search-clear { display: inline-flex; }
 
-.oc-sdk-select { position: relative; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.oc-sdk-trigger { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; width: auto; max-width: 100%; min-width: 0; height: 28px; padding: 0 10px; border: 1px solid transparent; font-size: 0.8125rem; text-align: left; }
+.oc-sdk-select { position: relative; display: flex; flex-direction: column; gap: ${len(4)}; min-width: 0; }
+.oc-sdk-trigger { display: inline-flex; align-items: center; gap: ${len(6)}; align-self: flex-start; width: auto; max-width: 100%; min-width: 0; height: ${len(28)}; padding: 0 ${len(10)}; border: 1px solid transparent; font-size: 0.8125rem; text-align: left; }
 .oc-sdk-trigger-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdk-trigger-chevron { flex: 0 0 auto; }
-.oc-sdk-popup { position: fixed; z-index: 50; display: flex; flex-direction: column; gap: 2px; min-width: 160px; max-width: calc(100vw - 16px); max-height: min(320px, calc(100vh - 16px)); overflow: auto; padding: 4px; border: 1px solid transparent; }
-.oc-sdk-popup-search { flex: 0 0 auto; padding: 2px 2px 4px; }
-.oc-sdk-popup-search .oc-sdk-input { height: 28px; font-size: 0.8125rem; }
-.oc-sdk-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; font-size: 0.8125rem; text-align: left; }
+.oc-sdk-popup { position: fixed; z-index: 50; display: flex; flex-direction: column; gap: ${len(2)}; min-width: ${len(160)}; max-width: calc(100vw - ${len(16)}); max-height: min(${len(320)}, calc(100vh - ${len(16)})); overflow: auto; padding: ${len(4)}; border: 1px solid transparent; }
+.oc-sdk-popup-search { flex: 0 0 auto; padding: ${len(2)} ${len(2)} ${len(4)}; }
+.oc-sdk-popup-search .oc-sdk-input { height: ${len(28)}; font-size: 0.8125rem; }
+.oc-sdk-option { display: flex; align-items: center; gap: ${len(8)}; width: 100%; padding: ${len(6)} ${len(8)}; font-size: 0.8125rem; text-align: left; }
 .oc-sdk-option-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdk-option-hint { flex: 0 0 auto; font-size: 0.75rem; }
-.oc-sdk-option-check { flex: 0 0 auto; display: inline-flex; width: 14px; visibility: hidden; }
+.oc-sdk-option-check { flex: 0 0 auto; display: inline-flex; width: ${len(14)}; visibility: hidden; }
 .oc-sdk-option[aria-selected="true"] > .oc-sdk-option-check { visibility: visible; }
-.oc-sdk-popup-empty { padding: 8px; font-size: 0.8125rem; }
+.oc-sdk-popup-empty { padding: ${len(8)}; font-size: 0.8125rem; }
 
-.oc-sdk-check { display: inline-flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; }
-.oc-sdk-check-box { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; margin-top: 3px; border: 1px solid transparent; }
+.oc-sdk-check { display: inline-flex; align-items: flex-start; gap: ${len(8)}; width: 100%; text-align: left; }
+.oc-sdk-check-box { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: ${len(14)}; height: ${len(14)}; margin-top: ${len(3)}; border: 1px solid transparent; }
 .oc-sdk-check-box > svg { display: none; }
 .oc-sdk-check[aria-checked="true"] .oc-sdk-check-box > svg { display: block; }
-.oc-sdk-check-thumb { flex: 0 0 auto; position: relative; width: 36px; height: 20px; }
-.oc-sdk-check-thumb::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; }
+.oc-sdk-check-thumb { flex: 0 0 auto; position: relative; width: ${len(36)}; height: ${len(20)}; --oc-sdk-thumb-travel: ${len(16)}; }
+.oc-sdk-check-thumb::after { content: ""; position: absolute; top: ${len(2)}; left: ${len(2)}; width: ${len(16)}; height: ${len(16)}; }
 .oc-sdk-check-text { display: flex; flex-direction: column; min-width: 0; }
 .oc-sdk-check-label { font-size: 0.875rem; }
 .oc-sdk-check-desc { font-size: 0.75rem; }
 
-.oc-sdk-tabs { display: inline-flex; gap: 2px; padding: 2px; max-width: 100%; overflow: auto; }
-.oc-sdk-tab { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid transparent; font-size: 0.8125rem; font-weight: 500; white-space: nowrap; }
+.oc-sdk-tabs { display: inline-flex; gap: ${len(2)}; padding: ${len(2)}; max-width: 100%; overflow: auto; }
+.oc-sdk-tab { display: inline-flex; align-items: center; gap: ${len(6)}; height: ${len(28)}; padding: 0 ${len(10)}; border: 1px solid transparent; font-size: 0.8125rem; font-weight: 500; white-space: nowrap; }
 .oc-sdk-tab-count { font-size: 0.75rem; font-variant-numeric: tabular-nums; }
 
-.oc-sdk-badge { display: inline-flex; align-items: center; padding: 1px 6px; font-size: 11px; font-weight: 500; line-height: 16px; white-space: nowrap; }
+.oc-sdk-badge { display: inline-flex; align-items: center; padding: ${len(1)} ${len(6)}; font-size: ${len(11)}; font-weight: 500; line-height: ${len(16)}; white-space: nowrap; }
 
 .oc-sdk-list { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.oc-sdk-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; text-align: left; }
-.oc-sdk-row-lead { flex: 0 0 auto; width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
+.oc-sdk-row { display: flex; align-items: center; gap: ${len(8)}; width: 100%; padding: ${len(6)} ${len(8)}; text-align: left; }
+.oc-sdk-row-lead { flex: 0 0 auto; width: ${len(64)}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
 .oc-sdk-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 .oc-sdk-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdk-row-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
 .oc-sdk-row-meta { flex: 0 0 auto; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-.oc-sdk-list-empty { padding: 16px 8px; text-align: center; font-size: 0.8125rem; }
+.oc-sdk-list-empty { padding: ${len(16)} ${len(8)}; text-align: center; font-size: 0.8125rem; }
 
-.oc-sdk-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 40px 16px; text-align: center; }
+.oc-sdk-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: ${len(4)}; padding: ${len(40)} ${len(16)}; text-align: center; }
 .oc-sdk-empty-title { margin: 0; font-size: 0.8125rem; font-weight: 600; }
 .oc-sdk-empty-body { margin: 0; max-width: 32rem; font-size: 0.8125rem; }
-.oc-sdk-empty-action { margin-top: 12px; }
+.oc-sdk-empty-action { margin-top: ${len(12)}; }
 
 @keyframes oc-sdk-spin { to { transform: rotate(360deg); } }
-.oc-sdk-spinner { display: inline-flex; align-items: center; gap: 8px; font-size: 0.8125rem; }
-.oc-sdk-spinner-ring { width: 16px; height: 16px; border: 2px solid transparent; animation: oc-sdk-spin .8s linear infinite; }
-.oc-sdk-spinner[data-size="sm"] .oc-sdk-spinner-ring { width: 12px; height: 12px; }
+.oc-sdk-spinner { display: inline-flex; align-items: center; gap: ${len(8)}; font-size: 0.8125rem; }
+.oc-sdk-spinner-ring { width: ${len(16)}; height: ${len(16)}; border: 2px solid transparent; animation: oc-sdk-spin .8s linear infinite; }
+.oc-sdk-spinner[data-size="sm"] .oc-sdk-spinner-ring { width: ${len(12)}; height: ${len(12)}; }
 
-.oc-sdk-banner { display: flex; align-items: flex-start; gap: 12px; padding: 8px 12px; border: 1px solid transparent; }
-.oc-sdk-banner-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.oc-sdk-banner { display: flex; align-items: flex-start; gap: ${len(12)}; padding: ${len(8)} ${len(12)}; border: 1px solid transparent; }
+.oc-sdk-banner-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: ${len(2)}; }
 .oc-sdk-banner-title { font-size: 0.8125rem; font-weight: 500; }
 .oc-sdk-banner-body { font-size: 0.8125rem; }
 .oc-sdk-banner-action { flex: 0 0 auto; }
 
-.oc-sdk-separator { display: flex; align-items: center; gap: 8px; width: 100%; margin: 8px 0; font-size: 0.75rem; }
+.oc-sdk-separator { display: flex; align-items: center; gap: ${len(8)}; width: 100%; margin: ${len(8)} 0; font-size: 0.75rem; }
 .oc-sdk-separator::before, .oc-sdk-separator::after { content: ""; flex: 1 1 auto; height: 1px; }
 .oc-sdk-separator[data-labeled="false"]::after { display: none; }
-.oc-sdk-popup > .oc-sdk-separator { margin: 4px 0; }
+.oc-sdk-popup > .oc-sdk-separator { margin: ${len(4)} 0; }
 
-.oc-sdk-progress { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.oc-sdk-progress { display: flex; flex-direction: column; gap: ${len(4)}; min-width: 0; }
 .oc-sdk-progress-label { display: flex; justify-content: space-between; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-.oc-sdk-progress-track { height: 6px; overflow: hidden; }
+.oc-sdk-progress-track { height: ${len(6)}; overflow: hidden; }
 .oc-sdk-progress-fill { height: 100%; transform-origin: left; transition: transform 200ms ease-out; }
-.oc-sdk-progress-value { display: inline-flex; align-items: center; gap: 2px; }
+.oc-sdk-progress-value { display: inline-flex; align-items: center; gap: ${len(2)}; }
 .oc-sdk-progress[data-done="true"] .oc-sdk-progress-value { font-weight: 600; }
 
 .oc-sdk-menu { position: relative; display: inline-flex; }
 
 .oc-sdk-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.oc-sdk-text img { display: block; max-width: 100%; margin: 8px 0; }
+.oc-sdk-text img { display: block; max-width: 100%; margin: ${len(8)} 0; }
+
+/* Under a finger the controls reach the app's touch sizes: rows and options 44px like its sheets, every other
+   control at least 36px. Inputs keep 16px text, below which iOS zooms the page on focus. */
+@media (pointer: coarse) {
+  .oc-sdk-btn, .oc-sdk-input { height: ${len(40)}; }
+  .oc-sdk-btn[data-size="sm"], .oc-sdk-btn[data-size="xs"], .oc-sdk-trigger, .oc-sdk-tab, .oc-sdk-popup-search .oc-sdk-input { height: ${len(36)}; }
+  .oc-sdk-input, .oc-sdk-popup-search .oc-sdk-input { font-size: max(16px, 0.875rem); }
+  .oc-sdk-search-clear { width: ${len(36)}; height: ${len(36)}; right: 0; }
+  .oc-sdk-row, .oc-sdk-option { min-height: ${len(44)}; }
+  .oc-sdk-check { min-height: ${len(36)}; padding: ${len(8)} 0; }
+}
 `;
   var GUEST_UI_LOOK_CSS = `${THEME_VARS}
 .oc-sdk { color: ${fg}; font-family: ${font}; }
@@ -399,7 +411,7 @@ ${tone("success")}${tone("warning")}${tone("error")}${tone("info")}
 .oc-sdk-check-thumb { border-radius: 9999px; background: ${border}; transition: background 150ms ease-out; }
 .oc-sdk-check-thumb::after { border-radius: 9999px; background: ${bg}; transition: transform 150ms ease-out; }
 .oc-sdk-check[aria-checked="true"] .oc-sdk-check-thumb { background: ${primary}; }
-.oc-sdk-check[aria-checked="true"] .oc-sdk-check-thumb::after { transform: translateX(16px); }
+.oc-sdk-check[aria-checked="true"] .oc-sdk-check-thumb::after { transform: translateX(var(--oc-sdk-thumb-travel, 16px)); }
 .oc-sdk-check:focus-visible { box-shadow: none; }
 .oc-sdk-check:focus-visible .oc-sdk-check-box, .oc-sdk-check:focus-visible .oc-sdk-check-thumb { ${focusFill} }
 .oc-sdk-check-desc { color: ${muted}; }
@@ -513,6 +525,10 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/shared/limits.ts
+  var VIEWPORT_WIDTH_MIN = 200;
+  var VIEWPORT_WIDTH_MAX = 3840;
+  var VIEWPORT_HEIGHT_MIN = 200;
+  var VIEWPORT_HEIGHT_MAX = 4320;
   var SNAPSHOT_BYTES_MAX = 100 * 1024 * 1024;
   var TURN_PROMOTE_AUTO_MS = 30 * 6e4;
   var UPLOAD_TOTAL_MAX = 2e6;
@@ -546,10 +562,16 @@ ${GUEST_UI_LOOK_CSS}`;
   var SCAN_TTL_MS = 10 * 6e4;
   var FOLDER_UNDO_MS = 60 * 6e4;
   var SYSTEM_BUILD_TTL_MS = 7 * 864e5;
+  var SYSTEM_MOTION_DURATION_MAX_MS = 1e4;
+  var SYSTEM_MOTION_STEPS_MAX = 100;
   var LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
   var LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
   var SCAN_JSON_MAX_BYTES = 2 * 1024 * 1024;
   var SYSTEM_PROPOSAL_FILES_MAX = 200;
+  var SESSION_TOOL_NAME_MAX = 128;
+  var SESSION_TOOL_TARGET_MAX = 1024;
+  var TOOL_REPAINT_MS = 1e3;
+  var FILE_PAGE_COPY_MAX_BYTES = 50 * 1024 * 1024;
 
   // node_modules/@openchamber/sdk/dist/api-version.js
   var OPENCHAMBER_SDK_CHANNEL = "openchamber.sdk";
@@ -562,6 +584,51 @@ ${GUEST_UI_LOOK_CSS}`;
   // node_modules/@openchamber/sdk/dist/shells.js
   var GUEST_SHELL_ID_MAX = 128;
   var GUEST_SHELL_OUTPUT_TAIL_MAX = 65536;
+
+  // node_modules/@openchamber/sdk/dist/microphone.js
+  var GUEST_MICROPHONE_SAMPLE_RATE_MIN = 8e3;
+  var GUEST_MICROPHONE_SAMPLE_RATE_MAX = 192e3;
+  var GUEST_MICROPHONE_OPEN_TIMEOUT_MS = 12e4;
+  var createSampleQueue = (capacity) => {
+    const chunks = [];
+    let offset = 0;
+    let queued = 0;
+    return {
+      push: (samples) => {
+        chunks.push(samples);
+        queued += samples.length;
+        while (queued - offset > capacity && chunks.length > 1) {
+          const dropped = chunks.shift();
+          queued -= dropped?.length ?? 0;
+          offset = 0;
+        }
+      },
+      pull: (out) => {
+        let written = 0;
+        while (written < out.length && chunks.length > 0) {
+          const head = chunks[0];
+          const count = Math.min(out.length - written, head.length - offset);
+          out.set(head.subarray(offset, offset + count), written);
+          written += count;
+          offset += count;
+          if (offset >= head.length) {
+            chunks.shift();
+            queued -= head.length;
+            offset = 0;
+          }
+        }
+        out.fill(0, written);
+      },
+      clear: () => {
+        chunks.length = 0;
+        offset = 0;
+        queued = 0;
+      },
+      get size() {
+        return queued - offset;
+      }
+    };
+  };
 
   // node_modules/@openchamber/sdk/dist/status-controls.js
   var GUEST_STATUS_CONTROLS_MAX = 4;
@@ -607,6 +674,7 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // node_modules/@openchamber/sdk/dist/manifest.js
+  var GUEST_PROVIDER_LOGO_BYTES_MAX = 1024 * 1024;
   var TRACKER_URL_TOKENS = ["{id}", "{segment}", "{segments+}"];
   var TRACKER_URL_TOKEN_SET = new Set(TRACKER_URL_TOKENS);
 
@@ -690,13 +758,25 @@ ${GUEST_UI_LOOK_CSS}`;
     }
   };
 
+  // node_modules/@openchamber/sdk/dist/navigation.js
+  var GUEST_COMMIT_SHA = /^[0-9a-f]{7,64}$/i;
+  var isGuestCommitSha = (value) => GUEST_COMMIT_SHA.test(value);
+  var GUEST_WALKTHROUGH_BASE_MAX = 255;
+  var guestNavigationCalls = (request, nextId3, refuse) => ({
+    openCommit: (sha) => isGuestCommitSha(sha) ? request({ channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION, type: "open-commit", id: nextId3(), payload: { sha } }) : refuse("Commit id must be 7 to 64 hex characters."),
+    openWalkthrough: ({ base }) => {
+      const trimmed = base.trim();
+      if (!trimmed || trimmed.length > GUEST_WALKTHROUGH_BASE_MAX)
+        return refuse(`Base must contain 1 to ${GUEST_WALKTHROUGH_BASE_MAX} characters.`);
+      return request({ channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION, type: "open-walkthrough", id: nextId3(), payload: { base: trimmed } });
+    }
+  });
+
   // node_modules/@openchamber/sdk/dist/contract.js
   var GUEST_BLOCK_ANSWER_MAX = 2e3;
   var GUEST_FILE_STAT_KINDS = ["file", "directory", "other", "missing"];
   var isStartSessionResult = (value) => Boolean(value && "sessionId" in value);
   var isPromptResult = (value) => Boolean(value && "sent" in value && !("sessionId" in value));
-  var GUEST_COMMIT_SHA = /^[0-9a-f]{7,64}$/i;
-  var isGuestCommitSha = (value) => GUEST_COMMIT_SHA.test(value);
   var GUEST_TOAST_MAX = 500;
   var GUEST_CLIPBOARD_TEXT_MAX = 32e3;
   var GUEST_COMPOSE_TEXT_MAX = 16e3;
@@ -863,7 +943,9 @@ ${GUEST_UI_LOOK_CSS}`;
     "file-open",
     "file-snapshot",
     "file-saved",
-    "generate-late"
+    "generate-late",
+    "microphone-audio",
+    "microphone-ended"
   ]);
   var asWireRecord = (data2) => Object(data2) === data2 ? data2 : null;
   var isNonEmptyString = (value) => String(value) === value && value.length > 0;
@@ -969,6 +1051,7 @@ ${GUEST_UI_LOOK_CSS}`;
     let popoverPointerActive = false;
     let popoverFocusActive = false;
     let popoverActivityReported = null;
+    let microphone = null;
     const lifecycleFromSession = (session) => {
       if (!session)
         return null;
@@ -1012,6 +1095,19 @@ ${GUEST_UI_LOOK_CSS}`;
         const listener = shellsListeners.get(message.payload.subscriptionId);
         if (listener)
           emit([listener], message.payload.snapshot);
+        return;
+      }
+      if (message.type === "microphone-audio") {
+        microphone?.queue.push(message.payload.samples);
+        return;
+      }
+      if (message.type === "microphone-ended") {
+        const open = microphone;
+        if (!open)
+          return;
+        microphone = null;
+        open.release();
+        emit(open.endedListeners, message.payload.reason);
         return;
       }
       if (message.type === "ready") {
@@ -1217,6 +1313,76 @@ ${GUEST_UI_LOOK_CSS}`;
         post(message);
     };
     const requestFileSave = () => notify({ ...envelope, type: "file-save" });
+    const postMicrophoneClose = () => {
+      if (!disposed && target.parent !== target)
+        post({ ...envelope, type: "microphone-close", id: nextId(ids) });
+    };
+    const openMicrophone = async () => {
+      if (microphone)
+        throw new HostRequestError("HOST_REJECTED", "The microphone is already open in this frame.");
+      if (lastReady?.features?.microphone !== true) {
+        throw new HostRequestError("UNSUPPORTED", "This OpenChamber cannot share the microphone with extensions.");
+      }
+      const AudioContextCtor = globalThis.AudioContext;
+      if (typeof AudioContextCtor !== "function")
+        throw new HostRequestError("UNSUPPORTED", "This frame has no Web Audio.");
+      const context = new AudioContextCtor();
+      if (context.sampleRate < GUEST_MICROPHONE_SAMPLE_RATE_MIN || context.sampleRate > GUEST_MICROPHONE_SAMPLE_RATE_MAX) {
+        void context.close().catch(() => void 0);
+        throw new HostRequestError("UNSUPPORTED", `Audio at ${context.sampleRate} Hz is not supported.`);
+      }
+      const resumed = context.state === "suspended" ? context.resume().catch(() => void 0) : void 0;
+      const queue = createSampleQueue(Math.round(context.sampleRate / 4));
+      const processor = context.createScriptProcessor(1024, 1, 1);
+      processor.onaudioprocess = (event) => queue.pull(event.outputBuffer.getChannelData(0));
+      const destination = context.createMediaStreamDestination();
+      processor.connect(destination);
+      const endedListeners = /* @__PURE__ */ new Set();
+      const open = {
+        queue,
+        endedListeners,
+        release: () => {
+          processor.onaudioprocess = null;
+          processor.disconnect();
+          queue.clear();
+          for (const track of destination.stream.getTracks())
+            track.stop();
+          void context.close().catch(() => void 0);
+        }
+      };
+      microphone = open;
+      try {
+        const result = await send({ ...envelope, type: "microphone-open", id: nextId(ids), payload: { sampleRate: context.sampleRate } }, GUEST_MICROPHONE_OPEN_TIMEOUT_MS);
+        if (!result || !("opened" in result) || result.opened !== true) {
+          throw new HostRequestError("HOST_REJECTED", "Host did not open the microphone.");
+        }
+        await resumed;
+        if (microphone !== open)
+          throw new HostRequestError("DISCONNECTED", "The microphone closed while it was opening.");
+      } catch (error) {
+        if (microphone === open)
+          microphone = null;
+        open.release();
+        postMicrophoneClose();
+        throw error;
+      }
+      return {
+        stream: destination.stream,
+        close: () => {
+          if (microphone !== open)
+            return;
+          microphone = null;
+          open.release();
+          postMicrophoneClose();
+        },
+        onEnded: (listener) => {
+          endedListeners.add(listener);
+          return () => {
+            endedListeners.delete(listener);
+          };
+        }
+      };
+    };
     const onSaveShortcut = (event) => {
       if (!isKeyEvent(event) || !isSaveShortcut(event))
         return;
@@ -1575,13 +1741,7 @@ ${GUEST_UI_LOOK_CSS}`;
         id: nextId(ids),
         payload: { url }
       }),
-      openCommit: (sha) => isGuestCommitSha(sha) ? request({
-        channel: OPENCHAMBER_SDK_CHANNEL,
-        v: OPENCHAMBER_SDK_API_VERSION,
-        type: "open-commit",
-        id: nextId(ids),
-        payload: { sha }
-      }) : Promise.reject(new HostRequestError("HOST_REJECTED", "Commit id must be 7 to 64 hex characters.")),
+      ...guestNavigationCalls(request, () => nextId(ids), (message) => Promise.reject(new HostRequestError("HOST_REJECTED", message))),
       answerBlock: (text) => request({
         channel: OPENCHAMBER_SDK_CHANNEL,
         v: OPENCHAMBER_SDK_API_VERSION,
@@ -1811,6 +1971,7 @@ ${GUEST_UI_LOOK_CSS}`;
           lateGenerateListeners.delete(listener);
         };
       },
+      openMicrophone,
       setBadge: (count) => request({
         channel: OPENCHAMBER_SDK_CHANNEL,
         v: OPENCHAMBER_SDK_API_VERSION,
@@ -1862,6 +2023,11 @@ ${GUEST_UI_LOOK_CSS}`;
           post({ ...envelope, type: "shells-unsubscribe", id: nextId(ids), payload: { subscriptionId } });
         }
         shellsListeners.clear();
+        if (microphone) {
+          postMicrophoneClose();
+          microphone.release();
+          microphone = null;
+        }
         disposed = true;
         resolveHandler = null;
         actionHandler = null;
@@ -1981,6 +2147,7 @@ ${GUEST_UI_LOOK_CSS}`;
     "POST /chip": "WP3",
     "POST /designs/:slug/prompt": "WP3",
     "POST /pages/from-message": "WP3",
+    "POST /pages/from-file": "WP3",
     "DELETE /open-request": "WP3",
     "POST /open-request": "WP3",
     "POST /session-events": "U4",
@@ -2033,13 +2200,27 @@ ${GUEST_UI_LOOK_CSS}`;
     "POST /systems/:id/build/stop": "P25",
     "POST /system-stops/:undoId/undo": "P25",
     "POST /memberships": "P26",
-    "POST /systems/register": "P26"
+    "POST /systems/register": "P26",
+    "PUT /view": "UP",
+    // system-builder-depth Phase 2 (§13 T12a)
+    "GET /systems/:id/screens/render": "SBD",
+    "GET /systems/:id/screens/render/chunk": "SBD",
+    // system-builder-depth Phase 3 (§13 T19, T20)
+    "GET /systems/:id/export": "SBD3",
+    "POST /systems/:id/export": "SBD3",
+    "GET /systems/:id/comments": "SBD3",
+    "POST /systems/:id/comments": "SBD3",
+    "PATCH /systems/:id/comments/:commentId": "SBD3",
+    "DELETE /systems/:id/comments/:commentId": "SBD3",
+    "POST /systems/:id/comments/mark-sent": "SBD3"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
   var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set([
     "GET /designs/:slug/render/chunk",
     "GET /systems/:id/board/chunk",
-    "GET /systems/:id/living-page/render/chunk"
+    "GET /systems/:id/living-page/render/chunk",
+    // system-builder-depth Phase 2 (§13 T12a)
+    "GET /systems/:id/screens/render/chunk"
   ]);
   var splitRouteKey = (key) => {
     const space = key.indexOf(" ");
@@ -2281,6 +2462,42 @@ ${GUEST_UI_LOOK_CSS}`;
       inflight.set(key, task);
       return task;
     };
+    const fetchSystemScreen = async (id, screen, options2) => {
+      const query = { screen, scheme: options2.scheme ?? "light" };
+      if (options2.version) query.version = options2.version;
+      if (options2.proposal) query.proposal = options2.proposal;
+      const meta = await call("GET /systems/:id/screens/render", { params: { id }, query });
+      const cached = renders.get(meta.key);
+      if (cached) {
+        renders.delete(meta.key);
+        renders.set(meta.key, cached);
+        return cached;
+      }
+      const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
+      const parts = await mapLimit(
+        indexes,
+        RENDER_CHUNK_CONCURRENCY,
+        (n) => call("GET /systems/:id/screens/render/chunk", { params: { id }, query: { key: meta.key, n: String(n) } })
+      );
+      const doc = { meta, html: parts.join("") };
+      remember(doc);
+      return doc;
+    };
+    const systemScreen = (id, screen, options2 = {}) => {
+      const key = `screen\0${id}\0${screen}\0${options2.version ?? ""}\0${options2.proposal ?? ""}\0${options2.scheme ?? "light"}`;
+      const running = inflight.get(key);
+      if (running) return running;
+      const task = (async () => {
+        try {
+          return await fetchSystemScreen(id, screen, options2);
+        } catch (error) {
+          if (isServiceError(error, "stale")) return fetchSystemScreen(id, screen, options2);
+          throw error;
+        }
+      })().finally(() => inflight.delete(key));
+      inflight.set(key, task);
+      return task;
+    };
     const upload = async (text) => {
       if (text.length > UPLOAD_TOTAL_MAX) {
         throw new ServiceError("too-large", `This text is too long to send to Design Chamber (over ${UPLOAD_TOTAL_MAX.toLocaleString("en-US")} characters).`);
@@ -2329,7 +2546,16 @@ ${GUEST_UI_LOOK_CSS}`;
     const stopBuild = (systemId, proposalId = null) => call("POST /systems/:id/build/stop", { params: { id: systemId }, body: { proposalId } });
     const undoStop = (undoId) => call("POST /system-stops/:undoId/undo", { params: { undoId }, body: {} });
     const loadLivingPage = (systemId) => call("GET /systems/:id/living-page", { params: { id: systemId } });
-    return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
+    const systemExportFormats = (systemId) => call("GET /systems/:id/export", { params: { id: systemId } });
+    const exportSystemTokens = (systemId, formats) => call("POST /systems/:id/export", { params: { id: systemId }, body: formats === void 0 ? {} : { formats } });
+    const systemComments = {
+      list: (systemId) => call("GET /systems/:id/comments", { params: { id: systemId } }),
+      add: (systemId, body) => call("POST /systems/:id/comments", { params: { id: systemId }, body }),
+      update: (systemId, commentId, patch) => call("PATCH /systems/:id/comments/:commentId", { params: { id: systemId, commentId }, body: patch }),
+      remove: (systemId, commentId) => call("DELETE /systems/:id/comments/:commentId", { params: { id: systemId, commentId } }),
+      markSent: (systemId, ids) => call("POST /systems/:id/comments/mark-sent", { params: { id: systemId }, body: { ids } })
+    };
+    return { call, loadRender, loadBoard, systemScreen, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage, systemExportFormats, exportSystemTokens, systemComments };
   };
 
   // src/guest/changes.ts
@@ -2344,7 +2570,7 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
   var defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  var nextBackoff = (current) => Math.min(CHANGES_BACKOFF_MAX_MS, Math.max(CHANGES_BACKOFF_MIN_MS, current * 2));
+  var nextBackoff = (current2) => Math.min(CHANGES_BACKOFF_MAX_MS, Math.max(CHANGES_BACKOFF_MIN_MS, current2 * 2));
   var createChangeFeed = (client2, options = {}) => {
     const wait = Math.min(options.waitMs ?? CHANGES_WAIT_MAX_MS, CHANGES_WAIT_MAX_MS);
     const sleep = options.sleep ?? defaultSleep;
@@ -2433,6 +2659,10 @@ ${GUEST_UI_LOOK_CSS}`;
   var VIEWPORT_TABLET = Object.freeze({ id: "tablet", label: "Tablet", width: 768, height: 1024 });
   var VIEWPORT_DESKTOP = Object.freeze({ id: "desktop", label: "Desktop", width: 1440, height: 900 });
 
+  // src/shared/display-text.ts
+  var DISPLAY_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+  var stripDisplayControls = (text) => text.replace(DISPLAY_CONTROLS, "");
+
   // src/shared/types.ts
   var CHIP_PROVIDER_ID = "design-chamber";
 
@@ -2443,6 +2673,45 @@ ${GUEST_UI_LOOK_CSS}`;
     const right = norm(b);
     const windows = /^[A-Za-z]:\//.test(left) || /^[A-Za-z]:\//.test(right);
     return windows ? left.toLowerCase() === right.toLowerCase() : left === right;
+  };
+
+  // src/ui/model/device-model.ts
+  var PX_MAX = 400;
+  var NO_INSETS = { top: 0, right: 0, bottom: 0, left: 0 };
+  var DESKTOP_DEVICE = { form: "desktop", coarse: false, insets: NO_INSETS, keyboard: 0 };
+  var record = (value) => typeof value === "object" && value !== null ? value : {};
+  var px = (value) => typeof value === "number" && Number.isFinite(value) ? Math.min(PX_MAX, Math.max(0, Math.round(value))) : 0;
+  var deviceOf = (context) => {
+    const raw = record(context.device);
+    const { formFactor, pointer } = raw;
+    if (formFactor !== "phone" && formFactor !== "tablet" && formFactor !== "desktop") return DESKTOP_DEVICE;
+    if (pointer !== "coarse" && pointer !== "fine") return DESKTOP_DEVICE;
+    const insets = record(raw.insets);
+    return {
+      form: formFactor,
+      coarse: pointer === "coarse",
+      insets: { top: px(insets.top), right: px(insets.right), bottom: px(insets.bottom), left: px(insets.left) },
+      keyboard: px(raw.keyboard)
+    };
+  };
+  var TIP_TITLE = "Open Design Chamber full screen";
+  var openHelp = (device2, panelOnPhone) => {
+    if (device2.form !== "phone") {
+      return {
+        notHere: "Open Design Chamber from the rail to see it.",
+        serviceDown: "Design Chamber isn\u2019t responding.",
+        fullScreenHint: "Full screen: sidebar \u2192 Extension pages \u2192 Design Chamber",
+        firstRunTip: { title: TIP_TITLE, body: "In the sidebar, open Extension pages and pick Design Chamber. Canvases get the whole window there." }
+      };
+    }
+    const serviceDown = "Design Chamber isn\u2019t responding on your computer. Try again in a moment.";
+    if (!panelOnPhone) return { notHere: "Open Design Chamber from the More menu in your chats list.", serviceDown, fullScreenHint: null, firstRunTip: null };
+    return {
+      notHere: "Design Chamber can\u2019t open here yet. Open it from the More menu in your chats list.",
+      serviceDown,
+      fullScreenHint: "Full screen: chats list \u2192 More \u2192 Design Chamber",
+      firstRunTip: { title: TIP_TITLE, body: "In your chats list, open More and pick Design Chamber." }
+    };
   };
 
   // src/guest/flows.ts
@@ -2521,8 +2790,8 @@ ${GUEST_UI_LOOK_CSS}`;
         return () => lifecycle.delete(listener);
       },
       whenReady: () => {
-        const current = ready2.get();
-        return current ? Promise.resolve(current) : new Promise((resolve) => readyWaiters.push(resolve));
+        const current2 = ready2.get();
+        return current2 ? Promise.resolve(current2) : new Promise((resolve) => readyWaiters.push(resolve));
       },
       dispose: () => {
         for (const unsubscribe of unsubscribers) unsubscribe();
@@ -2534,6 +2803,65 @@ ${GUEST_UI_LOOK_CSS}`;
   var getGuestHost = () => {
     shared ?? (shared = createGuestHost(connectHost()));
     return shared;
+  };
+
+  // src/shared/tokens-css.ts
+  var isBalancedQuotes = (value) => {
+    let single = 0;
+    let double = 0;
+    for (const char of value) {
+      if (char === "'") single += 1;
+      else if (char === '"') double += 1;
+    }
+    return single % 2 === 0 && double % 2 === 0;
+  };
+
+  // src/shared/source-edit.ts
+  var NAMED_REFS = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    nbsp: "\xA0",
+    copy: "\xA9",
+    reg: "\xAE",
+    // The mdash value is decode data (the character &mdash; names), not copy; written as a code
+    // point so the KI-7 copy guard, which reads every string literal, stays unbroken.
+    trade: "\u2122",
+    hellip: "\u2026",
+    mdash: String.fromCharCode(8212),
+    ndash: "\u2013",
+    lsquo: "\u2018",
+    rsquo: "\u2019",
+    ldquo: "\u201C",
+    rdquo: "\u201D",
+    laquo: "\xAB",
+    raquo: "\xBB",
+    bull: "\u2022",
+    middot: "\xB7",
+    times: "\xD7",
+    divide: "\xF7",
+    deg: "\xB0",
+    plusmn: "\xB1",
+    euro: "\u20AC",
+    pound: "\xA3",
+    yen: "\xA5",
+    cent: "\xA2",
+    sect: "\xA7",
+    para: "\xB6",
+    shy: "\xAD"
+  };
+
+  // src/ui/components/device.ts
+  var current = DESKTOP_DEVICE;
+  var applyDevice = (device2, root2) => {
+    current = device2;
+    root2.dataset.dcForm = device2.form;
+    root2.dataset.dcPointer = device2.coarse ? "coarse" : "fine";
+    root2.dataset.dcKeyboard = device2.keyboard > 0 ? "up" : "down";
+    for (const side of ["top", "right", "bottom", "left"]) root2.style.setProperty(`--dc-inset-${side}`, `${device2.insets[side]}px`);
+    root2.style.setProperty("--dc-keyboard", `${device2.keyboard}px`);
   };
 
   // src/ui/components/dom.ts
@@ -2680,6 +3008,20 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
 
+  // src/guest/session-tool.ts
+  var NAME_PATTERN = /^[A-Za-z0-9_.:-]+$/;
+  var readTarget = (raw) => {
+    if (typeof raw !== "string") return null;
+    const target = stripDisplayControls(raw).trim();
+    return target.length >= 1 && target.length <= SESSION_TOOL_TARGET_MAX ? target : null;
+  };
+  var readSessionTool = (raw) => {
+    if (typeof raw !== "object" || raw === null || !("name" in raw) || typeof raw.name !== "string") return null;
+    const name = raw.name.trim();
+    if (name.length > SESSION_TOOL_NAME_MAX || !NAME_PATTERN.test(name)) return null;
+    return { name, target: readTarget("target" in raw ? raw.target : null) };
+  };
+
   // src/ui/model/format.ts
   var SECOND = 1e3;
   var MINUTE = 60 * SECOND;
@@ -2705,13 +3047,82 @@ ${GUEST_UI_LOOK_CSS}`;
     return last.length + 2 <= max ? `\u2026${sep}${last}` : `${last.slice(0, Math.max(1, max - 1))}\u2026`;
   };
 
-  // src/ui/model/build-strip-model.ts
-  var basename = (path) => path.split("/").filter((part) => part !== "").at(-1) ?? path;
+  // src/ui/model/tool-model.ts
+  var FULL_PATH_MAX = 48;
   var NAME_MAX = 24;
+  var basename = (path) => path.split(/[\\/]+/).filter((part) => part !== "").at(-1) ?? path;
+  var KINDS = /* @__PURE__ */ new Map([
+    ["edit", "edit"],
+    ["multiedit", "edit"],
+    ["patch", "edit"],
+    ["apply_patch", "edit"],
+    ["str_replace_based_edit_tool", "edit"],
+    ["write", "write"],
+    ["read", "read"],
+    ["glob", "search"],
+    ["grep", "search"],
+    ["list", "search"],
+    ["ls", "search"],
+    ["codesearch", "search"],
+    ["bash", "run"],
+    ["shell", "run"],
+    ["webfetch", "web"],
+    ["websearch", "web"],
+    ["todowrite", "plan"],
+    ["todoread", "plan"],
+    ["task", "helper"],
+    ["design_check", "check"],
+    ["design_list", "designs"],
+    ["design_read", "designs"]
+  ]);
+  var WITH_PATH = {
+    edit: { verb: "Editing", none: "Editing a file" },
+    write: { verb: "Writing", none: "Writing a file" },
+    read: { verb: "Reading", none: "Reading a file" },
+    search: { verb: "Looking through", none: "Searching the files" }
+  };
+  var FIXED = {
+    run: ["Running a command", "Running a command"],
+    web: ["Looking something up online", "Looking something up online"],
+    plan: ["Planning the next steps", "Planning"],
+    helper: ["A helper agent is working", "Helper agent working"],
+    check: ["Checking the design", "Checking"],
+    designs: ["Reading your designs", "Reading designs"]
+  };
+  var toolName = (name) => name.toLowerCase().replace(/^mcp__.+?__/, "").replace(/^(?:[^.]+\.)+(?=.)/, "");
+  var toolPath = (target, design) => {
+    const shown = stripDisplayControls(target ?? "").trim();
+    if (shown === "" || shown === "." || shown === "./") return null;
+    if (design === null) return shown;
+    const files = [...new Set(design.entry === null ? design.files : [design.entry, ...design.files])];
+    const slashed = shown.replaceAll("\\", "/");
+    if (!slashed.includes("/")) {
+      const named = files.filter((file) => basename(file) === slashed);
+      return named.length === 1 ? named[0] ?? shown : shown;
+    }
+    return files.find((file) => slashed === file || slashed === `${design.slug}/${file}` || slashed.endsWith(`/${design.slug}/${file}`)) ?? shown;
+  };
+  var describeTool = (tool, design) => {
+    const kind = KINDS.get(toolName(tool.name));
+    if (kind === void 0) return null;
+    const naming = WITH_PATH[kind];
+    if (naming === void 0) {
+      const [full, short] = FIXED[kind];
+      return { kind, full, short, path: null };
+    }
+    const path = toolPath(tool.target, design);
+    if (path === null) return { kind, full: naming.none, short: naming.none, path: null };
+    return { kind, full: `${naming.verb} ${middlePath(path, FULL_PATH_MAX)}`, short: `${naming.verb} ${middlePath(basename(path), NAME_MAX)}`, path };
+  };
+
+  // src/ui/model/build-strip-model.ts
+  var shownPath = (path) => stripDisplayControls(path ?? "") || null;
   var pillText = (phase, file) => {
     switch (phase) {
-      case "writing":
-        return file ? `Writing ${middlePath(basename(file), NAME_MAX)}` : "Writing";
+      case "writing": {
+        const name = shownPath(file);
+        return name ? `Writing ${middlePath(basename(name), NAME_MAX)}` : "Writing";
+      }
       case "working":
         return "Agent is working";
       case "failed":
@@ -2790,16 +3201,29 @@ ${GUEST_UI_LOOK_CSS}`;
     3329325298
   ]);
 
-  // src/shared/tokens-css.ts
-  var isBalancedQuotes = (value) => {
-    let single = 0;
-    let double = 0;
-    for (const char of value) {
-      if (char === "'") single += 1;
-      else if (char === '"') double += 1;
-    }
-    return single % 2 === 0 && double % 2 === 0;
-  };
+  // src/shared/design-json.ts
+  var VIEWPORT_LAPTOP = Object.freeze({ id: "laptop", label: "Laptop", width: 1280, height: 800 });
+  var VIEWPORT_PHONE = Object.freeze({ id: "phone", label: "Phone", width: 390, height: 844 });
+  var CANONICAL_ORDER = [
+    "version",
+    "kind",
+    "title",
+    "created",
+    "updated",
+    "brief",
+    "sessionId",
+    "projectDirectory",
+    "preset",
+    "entry",
+    "viewports",
+    "screens",
+    "designSystem",
+    "tweaks",
+    "systemChoice",
+    "folderRequest",
+    "comments"
+  ];
+  var KNOWN_FIELDS = new Set(CANONICAL_ORDER);
 
   // src/shared/token-edit.ts
   var PLAIN_SHAPE = "Use a plain CSS value of up to 100 characters, without ; { } < > \\ : or *, and without url().";
@@ -2811,6 +3235,7 @@ ${GUEST_UI_LOOK_CSS}`;
     shadows: "Use a shadow, like 0 1px 2px rgb(0 0 0 / 0.2), or none.",
     layers: "Use a whole number, like 10, or auto.",
     typography: PLAIN_SHAPE,
+    motion: "Use a time, like 200ms or 0.2s, or an easing, like ease-out, cubic-bezier(0.2, 0, 0, 1) or steps(4, end).",
     other: PLAIN_SHAPE
   };
   var FIELD_SHAPES = {
@@ -2822,7 +3247,8 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var ALLOWED_FUNCTIONS = /* @__PURE__ */ new Set(["rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix", "var", "calc", "min", "max", "clamp"]);
   var FORMULA_PATTERN = /(?:^|[^A-Za-z0-9-])(?:var|calc|min|max|clamp|color-mix)\(/i;
-  var passesRuleOne = (text) => {
+  var MOTION_FUNCTIONS = /* @__PURE__ */ new Set(["cubic-bezier", "steps"]);
+  var passesRuleOne = (text, extra) => {
     if (text.length < 1 || text.length > SYSTEM_TOKEN_VALUE_MAX || !TOKEN_PREVIEW_VALUE_PATTERN.test(text) || !isBalancedQuotes(text)) return false;
     let depth = 0;
     for (const char of text) {
@@ -2835,7 +3261,7 @@ ${GUEST_UI_LOOK_CSS}`;
     if (depth !== 0) return false;
     for (const match of text.matchAll(/([A-Za-z-][A-Za-z0-9-]*)?\(/g)) {
       const name = match[1];
-      if (name !== void 0 && !ALLOWED_FUNCTIONS.has(name.toLowerCase())) return false;
+      if (name !== void 0 && !ALLOWED_FUNCTIONS.has(name.toLowerCase()) && extra?.has(name.toLowerCase()) !== true) return false;
     }
     return true;
   };
@@ -2903,26 +3329,26 @@ ${GUEST_UI_LOOK_CSS}`;
     const parts = [];
     let depth = 0;
     let quote = null;
-    let current = "";
+    let current2 = "";
     for (const char of text) {
       if (quote !== null) {
         if (char === quote) quote = null;
-        current += char;
+        current2 += char;
       } else if (char === '"' || char === "'") {
         quote = char;
-        current += char;
+        current2 += char;
       } else if (char === "(") {
         depth += 1;
-        current += char;
+        current2 += char;
       } else if (char === ")") {
         depth -= 1;
-        current += char;
+        current2 += char;
       } else if (depth === 0 && separator.test(char)) {
-        if (current.trim() !== "") parts.push(current.trim());
-        current = "";
-      } else current += char;
+        if (current2.trim() !== "") parts.push(current2.trim());
+        current2 = "";
+      } else current2 += char;
     }
-    if (current.trim() !== "") parts.push(current.trim());
+    if (current2.trim() !== "") parts.push(current2.trim());
     return parts;
   };
   var isShadow = (text, needsPair) => {
@@ -2948,6 +3374,38 @@ ${GUEST_UI_LOOK_CSS}`;
     const value = Number(text);
     return value >= -2147483647 && value <= 2147483647;
   };
+  var TIME = new RegExp(`^(${NUMBER})(ms|s)$`, "i");
+  var EASING_KEYWORDS = /* @__PURE__ */ new Set(["linear", "ease", "ease-in", "ease-out", "ease-in-out"]);
+  var CUBIC_BEZIER = new RegExp(`^cubic-bezier\\(\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*\\)$`, "i");
+  var STEPS = /^steps\(\s*(\d{1,4})\s*(?:,\s*(start|end)\s*)?\)$/i;
+  var isTime = (text) => {
+    const match = TIME.exec(text);
+    if (match === null) return false;
+    const ms = Number(match[1]) * ((match[2] ?? "").toLowerCase() === "s" ? 1e3 : 1);
+    return Number.isFinite(ms) && ms >= 0 && ms <= SYSTEM_MOTION_DURATION_MAX_MS;
+  };
+  var isEasing = (text) => {
+    if (EASING_KEYWORDS.has(text.toLowerCase())) return true;
+    const bezier = CUBIC_BEZIER.exec(text);
+    if (bezier !== null) {
+      const [x1, y1, x2, y2] = bezier.slice(1, 5).map(Number);
+      if (x1 === void 0 || y1 === void 0 || x2 === void 0 || y2 === void 0) return false;
+      return [x1, y1, x2, y2].every(Number.isFinite) && x1 >= 0 && x1 <= 1 && x2 >= 0 && x2 <= 1;
+    }
+    const steps = STEPS.exec(text);
+    if (steps === null) return false;
+    const count = Number(steps[1]);
+    return count >= 1 && count <= SYSTEM_MOTION_STEPS_MAX;
+  };
+  var isMotionValue = (text) => isTime(text) || isEasing(text);
+  var EASING_CURVES = Object.freeze({
+    linear: [0, 0, 1, 1],
+    ease: [0.25, 0.1, 0.25, 1],
+    "ease-in": [0.42, 0, 1, 1],
+    "ease-out": [0, 0, 0.58, 1],
+    "ease-in-out": [0.42, 0, 0.58, 1]
+  });
+  var MOTION_NAME = /^--(?:duration|ease|motion)-/i;
   var FAMILY_NAME = /^(?:"[^"]+"|'[^']+'|[A-Za-z-][A-Za-z0-9-]*(?: +[A-Za-z-][A-Za-z0-9-]*)*)$/;
   var fieldValid = (field2, text) => {
     const lower = text.toLowerCase();
@@ -2983,6 +3441,8 @@ ${GUEST_UI_LOOK_CSS}`;
         return isShadow(text, false);
       case "layers":
         return isLayer(text);
+      case "motion":
+        return isMotionValue(text);
       case "typography":
       case "other":
         return true;
@@ -2990,7 +3450,7 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var validateTokenValue = (section, field2, text) => {
     const shape = field2 === null ? SECTION_SHAPES[section] : FIELD_SHAPES[field2];
-    if (!passesRuleOne(text)) return { ok: false, sentence: shape };
+    if (!passesRuleOne(text, field2 === null && section === "motion" ? MOTION_FUNCTIONS : void 0)) return { ok: false, sentence: shape };
     if (FORMULA_PATTERN.test(text)) return { ok: true, formula: true };
     const valid = field2 === null ? sectionValid(section, text) : fieldValid(field2, text);
     return valid ? { ok: true, formula: false } : { ok: false, sentence: shape };
@@ -2998,6 +3458,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var classifyToken = (name, value) => {
     const text = value.trim();
     const lower = name.toLowerCase();
+    if (MOTION_NAME.test(name) && (text === "" || FORMULA_PATTERN.test(text) || isMotionValue(text))) return "motion";
     if (isColour(text)) return "colours";
     if (isShadow(text, true)) return "shadows";
     if (/radius|rounded/.test(lower)) return "radius";
@@ -3045,6 +3506,67 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var TOKEN_UNDO_REMOVED_MAX = TEXT_EDIT_MAX * 8;
 
+  // src/shared/system-checklist.ts
+  var SYSTEM_TOPIC_IDS = Object.freeze([
+    "surface",
+    "text",
+    "border",
+    "brand",
+    "status",
+    "type-styles",
+    "spacing",
+    "radius",
+    "pairs",
+    "dark-values",
+    "state-colours",
+    "data-colours",
+    "control-sizes",
+    "breakpoints",
+    "elevation",
+    "layers",
+    "motion",
+    "components",
+    "examples",
+    "focus-disabled",
+    "voice",
+    "navigation",
+    "overlays",
+    "forms",
+    "feedback",
+    "states",
+    "data-display",
+    "accessibility",
+    "responsive",
+    "logo",
+    "brand-colour",
+    "imagery",
+    "marketing",
+    // system-builder-depth Phase 2 (T11): a full system's foundations ask for at least one icon.
+    "icons"
+  ]);
+  var TOPIC_SET = new Set(SYSTEM_TOPIC_IDS);
+  var CHECKLIST_MIN = Object.freeze({ status: 3, typeStylesCore: 4, typeStylesFull: 6, spacing: 4 });
+  var TOPICS = Object.freeze({
+    foundations: {
+      core: ["surface", "text", "border", "brand", "status", "type-styles", "spacing", "radius", "pairs", "dark-values"],
+      full: ["state-colours", "data-colours", "control-sizes", "breakpoints", "elevation", "layers", "motion", "icons"]
+    },
+    components: { core: ["components", "examples"], full: ["focus-disabled"] },
+    patterns: { core: ["voice"], full: ["navigation", "overlays", "forms", "feedback", "states", "data-display", "accessibility", "responsive", "motion"] },
+    brand: { core: ["logo"], full: ["brand-colour", "imagery", "marketing"] }
+  });
+  var PATTERN_KIND_TOPIC = Object.freeze({
+    voice: "voice",
+    navigation: "navigation",
+    overlays: "overlay",
+    forms: "forms",
+    feedback: "feedback",
+    states: "states",
+    "data-display": "data-display",
+    accessibility: "accessibility",
+    responsive: "responsive"
+  });
+
   // src/shared/system-json.ts
   var AREA_OF_SECTION = Object.freeze({
     overview: "foundations",
@@ -3053,6 +3575,8 @@ ${GUEST_UI_LOOK_CSS}`;
     spacing: "foundations",
     radius: "foundations",
     shadows: "foundations",
+    // system-builder-depth Phase 2 (§13 T10a): after shadows, in board order.
+    motion: "foundations",
     layers: "foundations",
     sizes: "foundations",
     components: "components",
@@ -3076,6 +3600,8 @@ ${GUEST_UI_LOOK_CSS}`;
     spacing: Object.freeze(["card", "compact", "table"]),
     radius: Object.freeze(["card", "compact", "table"]),
     shadows: Object.freeze(["card", "compact", "table"]),
+    // system-builder-depth Phase 2 (§13 T10a).
+    motion: Object.freeze(["card", "compact", "table"]),
     sizes: Object.freeze(["card", "compact", "table"])
   });
   var SECTION_LAYOUT_ALIASES = Object.freeze({ notes: "overview" });
@@ -3085,6 +3611,27 @@ ${GUEST_UI_LOOK_CSS}`;
     classify: classifyToken,
     validate: validateTokenValue
   });
+  var ENTRY_KINDS = Object.freeze({
+    patterns: Object.freeze([
+      "layout",
+      "do-dont",
+      "voice",
+      "other",
+      "navigation",
+      "overlay",
+      "forms",
+      "data-display",
+      "feedback",
+      "states",
+      "page",
+      "responsive",
+      "motion",
+      "accessibility"
+    ]),
+    brand: Object.freeze(["marketing", "imagery", "logo-use", "other", "colour", "social", "email"])
+  });
+  var VIEWPORT_SENTENCE = `Each viewport needs an id (letters, digits, - or _), and a whole-number width from ${VIEWPORT_WIDTH_MIN} to ${VIEWPORT_WIDTH_MAX} and height from ${VIEWPORT_HEIGHT_MIN} to ${VIEWPORT_HEIGHT_MAX}.`;
+  var BUILD_PLATFORMS = Object.freeze(["laptop-phone", "phone-first", "laptop", "custom"]);
   var PROPOSAL_TOO_MANY_FILES = `PROPOSAL.json lists more than ${SYSTEM_PROPOSAL_FILES_MAX} files. Ask the agent to split the change.`;
 
   // src/shared/checks.ts
@@ -3092,6 +3639,16 @@ ${GUEST_UI_LOOK_CSS}`;
   var fileOf = (f) => f.file ?? "This design";
   var skippedSentence = (f) => {
     const count = Math.round(f.params?.count ?? 0);
+    if (f.file === "board.html") {
+      const passes = count === 1 ? "1 board pass was" : `${count} board passes were`;
+      if (f.params?.reason === "failures") return `${passes} not drawn (the browser failed three times in a row).`;
+      return `${passes} not drawn (the check ran out of time). Check again with --area <area> or --scheme dark.`;
+    }
+    if (f.file !== null && f.file.startsWith("screens/")) {
+      const screens = count === 1 ? "1 screen artboard was" : `${count} screen artboards were`;
+      const why = f.params?.reason === "failures" ? "the browser failed three times in a row" : f.params?.reason === "budget" ? "the check ran out of time" : `the limit is ${num(f.params?.max)} per check`;
+      return `${screens} not drawn (${why}). Use --screen <id> to check the rest.`;
+    }
     const what = `${count} ${count === 1 ? "artboard was" : "artboards were"} not rendered`;
     if (f.params?.reason === "budget") return `${what} (the run took longer than ${Math.round(CHECK_RUN_BUDGET_MS / 1e3)} seconds).`;
     if (f.params?.reason === "failures") return `${what} (the browser failed three times in a row).`;
@@ -3099,6 +3656,8 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var systemNameOf = (f) => f.params?.system ?? "the design system";
   var repoNameOf = (f) => f.params?.repo ?? "the repo";
+  var DEPTH_LABELS = { tokens: "tokens only", core: "product core", full: "full" };
+  var LISTED_SINGULAR = { variants: "variant", sizes: "size", states: "state" };
   var AREA_LABELS = {
     foundations: "Foundations",
     components: "Components",
@@ -3379,6 +3938,78 @@ ${GUEST_UI_LOOK_CSS}`;
       severity: "info",
       sentence: (f, where) => `${where}: this entry is set to ${f.params?.layout ?? "card"} but needed the full width. Set its layout to full.`
     },
+    // system-builder-depth §4.5: what the files say about completeness, labels and contrast.
+    "system-example-missing": {
+      // Info for a core system, a warning for a full one: `severityOf` reads the validated `depth` param.
+      severity: "info",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        return count === 1 ? "1 entry has no live example yet, so the board shows only its words." : `${num(count)} entries have no live example yet, so the board shows only their words.`;
+      }
+    },
+    "system-states-missing": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const listed = f.params?.listed ?? "states";
+        const what = count === 1 ? `1 ${LISTED_SINGULAR[listed]} listed in system.json has` : `${num(count)} ${listed} listed in system.json have`;
+        return `${what} no labelled instance in ${count === 1 ? "its" : "their"} example. Label each one with data-dc-${LISTED_SINGULAR[listed]}.`;
+      }
+    },
+    "system-contrast-low": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const scheme = f.params?.scheme === "dark" ? "dark" : "light";
+        return count === 1 ? `1 colour pair is under its contrast level on the ${scheme} scheme.` : `${num(count)} colour pairs are under their contrast level on the ${scheme} scheme.`;
+      }
+    },
+    "system-coverage-gap": {
+      // Info for a core system, a warning for a full one, as `system-example-missing`.
+      severity: "info",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        return `${AREA_LABELS[f.params?.area ?? "foundations"]} is missing ${count === 1 ? "1 thing" : `${num(count)} things`} a ${DEPTH_LABELS[f.params?.depth ?? "core"]} system covers.`;
+      }
+    },
+    // ---- system-builder-depth Phase 2, Wave 0 (§13 T10a, T11): nothing raises these yet ----
+    "system-motion-no-reduced": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        return count === 1 ? "1 example moves but has no prefers-reduced-motion rule." : `${num(count)} examples move but have no prefers-reduced-motion rule.`;
+      }
+    },
+    "system-icons-mixed": {
+      severity: "info",
+      sentence: () => "The icons mix viewBox sizes or stroke widths, so they may not look like one set."
+    },
+    // ---- end system-builder-depth Phase 2 ----
+    // ---- system-builder-depth Phase 3 (§13 T16): `count` is the states in this example that changed nothing ----
+    "system-state-unstyled": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const base = count === 1 ? "The example labels a state its CSS doesn't style: forced on the element, it changes nothing you can see. Style it, or remove the label." : `The example labels ${num(count)} states its CSS doesn't style: forced on the element, they change nothing you can see. Style them, or remove the labels.`;
+        const hint = f.params?.hint;
+        const rest = hint === "rest" || hint === "both" ? ' There is no resting copy beside the labelled one to force the state on: add one labelled data-dc-state="rest" with the same variant and size.' : "";
+        const focus = hint === "focus-visible" || hint === "both" ? " It is labelled focus but its CSS styles :focus-visible: label it focus-visible, or style :focus too." : "";
+        return `${base}${rest}${focus}`;
+      }
+    },
+    // T18: `px` = the source's width when no viewport matches; `reason` limit or budget with `count` (and `max`); neither = unreadable.
+    "system-compare-skipped": {
+      severity: "info",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const sheets = count === 1 ? "1 compare sheet was" : `${num(count)} compare sheets were`;
+        if (f.params?.reason === "limit") return `${sheets} not made (the limit is ${num(f.params.max)} per check). Use --screen <id> to compare the rest.`;
+        if (f.params?.reason === "budget" || f.params?.reason === "failures") return `${sheets} not made (the check ran out of time). Use --screen <id> to compare the rest.`;
+        if (f.params?.px !== void 0) return `The source picture is ${num(f.params.px)} px wide; no viewport of this screen matches. Save a screenshot as wide as one of its viewports.`;
+        return "The source picture can't be read as a PNG or JPEG, so no compare sheet was made.";
+      }
+    },
+    // ---- end system-builder-depth Phase 3 ----
     "system-board-partial": {
       severity: "info",
       sentence: (f) => {
@@ -3388,6 +4019,12 @@ ${GUEST_UI_LOOK_CSS}`;
         switch (f.params?.pictured) {
           case "entries":
             return `Only the first ${num(f.params?.max)} entries were measured.`;
+          case "motion":
+            if (count === 0) return "No motion strip was taken: the check ran out of time for them.";
+            return count === 1 ? "Only the first motion strip was taken; the other moving elements were not pictured." : `Only the first ${num(count)} motion strips were taken; the other moving elements were not pictured.`;
+          case "states":
+            if (count === 0) return "No labelled state was forced and pictured: the check ran out of time for them.";
+            return count === 1 ? "Only the first labelled state was forced and pictured; the others were not checked." : `Only the first ${num(count)} labelled states were forced and pictured; the others were not checked.`;
           case "gap":
             return `${count === 1 ? "Part of 1 area is" : `Parts of ${areas} are`} in no picture (the picture limit for one check); the parts are listed. All of the board was measured, so the findings cover them.`;
           case "no-overview":
@@ -3442,7 +4079,12 @@ ${GUEST_UI_LOOK_CSS}`;
     notHere: "Open Design Chamber from the rail to see it."
   };
   var CHECK_TONE = { success: "success", warning: "warning", error: "error", neutral: "muted" };
-  var agentPart = (row) => {
+  var agentPart = (row, tools2) => {
+    if (row.agent === "writing" || row.agent === "working") {
+      const tool = row.sessionId === null ? void 0 : tools2?.get(row.sessionId);
+      const words = tool ? describeTool(tool, null) : null;
+      if (words) return { text: words.short, tone: "info" };
+    }
     if (row.agent === "writing") return { text: pillText("writing", row.lastFile), tone: "info" };
     if (row.agent === "working") return { text: pillText("working", null), tone: "info" };
     if (row.agent === "failed") return { text: pillText("failed", null), tone: "error" };
@@ -3459,7 +4101,7 @@ ${GUEST_UI_LOOK_CSS}`;
     return { state: "ready", reason: null };
   };
   var statusRowView = (row, context) => {
-    const agent = agentPart(row);
+    const agent = agentPart(row, context.tools);
     const badge = row.checks !== null && !row.pending ? badgeOf(row.checks, null, context.checking) : null;
     const parts = [];
     if (agent) parts.push({ kind: "agent", text: agent.text });
@@ -3477,15 +4119,15 @@ ${GUEST_UI_LOOK_CSS}`;
       check: checkButton(row, context)
     };
   };
-  var noticeOf = (error, failingMs) => {
+  var noticeOf = (error, failingMs, unresponsive) => {
     if (error.code === "NO_SERVICE" || error.code === "SERVICE_FAILED") {
-      return failingMs >= STATUS_STARTING_GIVE_UP_MS ? { kind: "unresponsive", text: STATUS_COPY.unresponsive, retry: true } : { kind: "starting", text: STATUS_COPY.starting, retry: false };
+      return failingMs >= STATUS_STARTING_GIVE_UP_MS ? { kind: "unresponsive", text: unresponsive, retry: true } : { kind: "starting", text: STATUS_COPY.starting, retry: false };
     }
     if (error.code === "DISABLED") return { kind: "paused", text: STATUS_COPY.paused, retry: false };
     return { kind: "error", text: `${STATUS_COPY.loadFailed} ${error.message}`, retry: true };
   };
   var statusSectionOf = (input) => {
-    const notice2 = input.error ? noticeOf(input.error, input.failingMs) : null;
+    const notice2 = input.error ? noticeOf(input.error, input.failingMs, input.serviceDown ?? STATUS_COPY.unresponsive) : null;
     const base = { loadingLabel: STATUS_COPY.loading, emptyText: null, notice: notice2, rows: [], more: null };
     const { data: data2 } = input;
     if (data2 === null) return { ...base, kind: notice2 ? "problem" : "loading" };
@@ -3496,7 +4138,7 @@ ${GUEST_UI_LOOK_CSS}`;
     return {
       ...base,
       kind: "list",
-      rows: data2.rows.map((row) => statusRowView(row, { checking: input.checking.has(row.slug) })),
+      rows: data2.rows.map((row) => statusRowView(row, { checking: input.checking.has(row.slug), tools: input.tools })),
       more: data2.total > data2.rows.length ? `Show all ${data2.total} designs` : null
     };
   };
@@ -3504,6 +4146,21 @@ ${GUEST_UI_LOOK_CSS}`;
     if (directory2 === null) return null;
     if (projects === null) return directory2;
     return projects.some((project) => sameDirectory(project.directory, directory2)) ? directory2 : null;
+  };
+  var projectOf = (directory2, projects) => directory2 === null ? null : projects?.find((project) => sameDirectory(project.directory, directory2)) ?? null;
+  var toolsOf = (sessions) => {
+    const tools2 = /* @__PURE__ */ new Map();
+    for (const session of sessions) {
+      const tool = session.activity === "running" ? readSessionTool(session.tool) : null;
+      if (tool) tools2.set(session.id, tool);
+    }
+    return tools2;
+  };
+  var sameTools = (a, b) => a.size === b.size && [...a].every(([id, tool]) => b.get(id)?.name === tool.name && b.get(id)?.target === tool.target);
+  var holdTools = (held, tools2, now) => {
+    if (held && sameTools(held.tools, tools2)) return { held, wait: null };
+    if (held && now >= held.since && now - held.since < TOOL_REPAINT_MS) return { held, wait: held.since + TOOL_REPAINT_MS - now };
+    return { held: { tools: tools2, since: now }, wait: null };
   };
   var REFETCH_KINDS = /* @__PURE__ */ new Set(["added", "removed", "design", "files", "comments", "checks", "activity", "root"]);
   var shouldRefetchStatus = (batch) => batch.reset || batch.events.some((event) => REFETCH_KINDS.has(event.kind));
@@ -3527,6 +4184,13 @@ ${GUEST_UI_LOOK_CSS}`;
   var sessionId = null;
   var ready = false;
   var latest = 0;
+  var device = DESKTOP_DEVICE;
+  var help = () => openHelp(device, true);
+  var toolsProject = null;
+  var stopSessions = null;
+  var tools = /* @__PURE__ */ new Map();
+  var heldTools = null;
+  var toolTimer;
   var checking = /* @__PURE__ */ new Set();
   var queryOf2 = () => ({
     ...projectDirectory === null ? {} : { directory: projectDirectory },
@@ -3553,6 +4217,27 @@ ${GUEST_UI_LOOK_CSS}`;
       clearTimeout(timer);
     }
   };
+  var watchSessions = async (projectId) => {
+    if (projectId === toolsProject) return;
+    toolsProject = projectId;
+    stopSessions?.();
+    stopSessions = null;
+    tools = /* @__PURE__ */ new Map();
+    heldTools = null;
+    if (projectId === null) return;
+    try {
+      const stop = await guestHost.client.onSessions(projectId, (snapshot) => {
+        if (projectId !== toolsProject || snapshot.state === "loading") return;
+        if (snapshot.state === "error") console.warn("Design Chamber: the chats of this project can\u2019t be read");
+        tools = toolsOf(snapshot.state === "error" ? [] : snapshot.sessions);
+        paint();
+      });
+      if (projectId !== toolsProject) stop();
+      else stopSessions = stop;
+    } catch (error) {
+      console.warn("Design Chamber: Work Status cannot read chat activity", error);
+    }
+  };
   var resolveProject = async () => {
     resolveSeq += 1;
     const mine = resolveSeq;
@@ -3560,6 +4245,7 @@ ${GUEST_UI_LOOK_CSS}`;
     if (mine !== resolveSeq) return;
     projectDirectory = projectDirectoryOf(directory, projects);
     hasProject = projectDirectory !== null;
+    void watchSessions(projectOf(directory, projects)?.id ?? null);
     paint();
     await load();
   };
@@ -3607,7 +4293,7 @@ ${GUEST_UI_LOOK_CSS}`;
       if (outcome === "gone") {
         toast("error", STATUS_COPY.gone);
         void load();
-      } else if (outcome === "not-here") toast("info", STATUS_COPY.notHere);
+      } else if (outcome === "not-here") toast("info", help().notHere);
     } catch (error) {
       toast("error", `Couldn\u2019t open that design. ${errorText2(error)}`);
     }
@@ -3616,7 +4302,7 @@ ${GUEST_UI_LOOK_CSS}`;
     try {
       await guestHost.client.openSurface(PANEL_SURFACE_ID);
     } catch (error) {
-      if (isRailUnavailable(error)) toast("info", STATUS_COPY.notHere);
+      if (isRailUnavailable(error)) toast("info", help().notHere);
       else toast("error", `Couldn\u2019t open Design Chamber. ${errorText2(error)}`);
     }
   };
@@ -3629,7 +4315,7 @@ ${GUEST_UI_LOOK_CSS}`;
     const dot = h("span", { class: "ws-dot", "aria-hidden": "true" });
     const title = h("span", { class: "ws-title" });
     const meta = h("span", { class: "ws-meta" });
-    const reason = h("span", { class: "ws-sr", id: reasonId });
+    const reason = h("span", { class: "ws-reason", id: reasonId });
     const check = btn({ label: "Check", variant: "ghost", size: "xs", onClick: () => void runCheck(slug) });
     const open = btn({
       label: "Open",
@@ -3730,19 +4416,27 @@ ${view.tooltip}` : view.title;
   };
   var paint = () => {
     if (!ready) return;
+    const shown = holdTools(heldTools, tools, Date.now());
+    heldTools = shown.held;
+    clearTimeout(toolTimer);
+    if (shown.wait !== null) toolTimer = setTimeout(paint, shown.wait);
     draw(
       statusSectionOf({
         data,
         error: failure,
         failingMs: failingSince === null ? 0 : Date.now() - failingSince,
         hasProject,
-        checking
+        checking,
+        tools: shown.held.tools,
+        serviceDown: help().serviceDown
       })
     );
   };
   guestHost.ready.subscribe((context) => {
     if (!context) return;
     applyHostReady(context, document.documentElement);
+    device = deviceOf(context);
+    applyDevice(device, document.documentElement);
     document.documentElement.lang = context.locale;
     if (ready) return;
     ready = true;
@@ -3782,5 +4476,7 @@ ${view.tooltip}` : view.title;
     feed.stop();
     sizeObserver?.disconnect();
     clearTimeout(giveUpTimer);
+    clearTimeout(toolTimer);
+    void watchSessions(null);
   });
 })();

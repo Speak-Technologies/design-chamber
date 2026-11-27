@@ -1442,6 +1442,15 @@ body {
   color: var(--oc-muted);
   font-size: 0.6875rem;
 }
+/* A phone has no Ctrl, Enter-to-save or Esc to name. Only the card's and the text box's shortcut lines: the ask
+ * popover uses the same class for which chat the message goes to, which a phone needs as much as anyone. */
+[data-dc-form='phone'] .dc-composer .dc-pop-hint,
+[data-dc-form='phone'] .dc-editor .dc-pop-hint {
+  display: none;
+}
+[data-dc-form='phone'] .dc-composer .dc-pop-actions {
+  margin-inline-start: auto;
+}
 .dc-pin-badge {
   display: inline-grid;
   place-items: center;
@@ -1706,6 +1715,55 @@ body {
   color: var(--oc-muted);
   font-size: 0.8125rem;
 }
+.dc-more {
+  min-width: 0;
+}
+.dc-more-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  padding: var(--dc-s1) 0;
+  cursor: pointer;
+  list-style: none;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  border-radius: var(--dc-r);
+}
+.dc-more-summary::-webkit-details-marker {
+  display: none;
+}
+.dc-more-summary::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease-out;
+}
+.dc-more[open] > .dc-more-summary::before {
+  transform: rotate(45deg);
+}
+.dc-more-summary:hover {
+  color: var(--oc-fg);
+}
+.dc-more-summary:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-more-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  padding-top: var(--dc-s2);
+  min-width: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dc-more-summary::before {
+    transition: none;
+  }
+}
 .dc-row-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1854,7 +1912,7 @@ body {
   gap: var(--dc-s1);
   font-size: 0.75rem;
 }
-.dc-build-live {
+.dc-build-main {
   display: inline-flex;
   align-items: center;
   gap: var(--dc-s2);
@@ -3907,11 +3965,15 @@ button.dc-syspg-title:focus-visible {
   font-size: 0.75rem;
   color: var(--dc-warning-text);
 }
+/* Three lines at most: depth and what was left out sit on this line too, and must not be cut off on the rail. */
 .dc-syspg-home {
   font-size: 0.8125rem;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 .dc-syspg-living {
   display: flex;
@@ -4043,6 +4105,255 @@ button.dc-syspg-title:focus-visible {
   padding: 0;
   font-size: 0.8125rem;
   overflow-wrap: anywhere;
+}
+
+/* The Screens view (system-builder-depth T13): a switch over the stage, then a small wall of the system's screens. */
+.dc-syspg-views {
+  display: flex;
+  flex: none;
+  align-self: flex-start;
+  gap: 2px;
+  margin: var(--dc-s3) var(--dc-s4) 0;
+  padding: 2px;
+  border-radius: calc(var(--dc-r) + 2px);
+  background: color-mix(in srgb, var(--oc-fg) 8%, transparent);
+}
+.dc-syspg-views[hidden] {
+  display: none;
+}
+/* With the switch on show, the switch and the build strip share one row, the strip wrapping under the switch when the row is
+   too narrow for both. Without it the head has no box of its own and the strip floats over the board as before. */
+.dc-syspg[data-views='true'] .dc-syspg-stagehead {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dc-s2);
+  margin: var(--dc-s3) var(--dc-s4) 0;
+}
+.dc-syspg[data-views='true'] .dc-syspg-stagehead > .dc-syspg-views {
+  margin: 0;
+}
+/* Only a strip on show joins the row; a hidden one stays the out-of-flow live region it always is, so nothing is announced late. */
+.dc-syspg[data-views='true'] .dc-syspg-build:has(> .dc-build:not([data-phase='hidden'])) {
+  position: static;
+  display: flex;
+  flex: 1 1 12rem;
+  min-width: 0;
+  height: auto;
+}
+.dc-syspg[data-views='true'] .dc-syspg-build > .dc-build:not([data-phase='hidden']) {
+  position: static;
+  max-width: 100%;
+  margin: 0;
+}
+.dc-syspg-view {
+  min-height: 28px;
+  padding: 0 var(--dc-s3);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: none;
+  color: var(--oc-muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.dc-syspg-view:hover {
+  color: var(--oc-fg);
+}
+.dc-syspg-view[aria-pressed='true'] {
+  background: var(--oc-elevated);
+  color: var(--oc-fg);
+  font-weight: 600;
+}
+.dc-syspg-view:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--oc-primary) 60%, transparent);
+  outline-offset: 1px;
+}
+.dc-syspg[data-previewing='true'] .dc-syspg-views,
+.dc-syspg[data-previewing='true'] .dc-sysscr,
+.dc-syspg[data-state='error'] .dc-sysscr,
+.dc-syspg[data-state='gone'] .dc-sysscr {
+  display: none;
+}
+.dc-sysscr {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  margin: var(--dc-s3) var(--dc-s4) var(--dc-s4);
+  overflow: hidden;
+  border: 1px solid var(--dc-hair);
+  border-radius: var(--dc-r-lg);
+  background: var(--oc-bg);
+}
+.dc-sysscr[hidden] {
+  display: none;
+}
+.dc-sysscr-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--dc-s1);
+  min-height: 36px;
+  padding: var(--dc-s1) var(--dc-s2) var(--dc-s1) var(--dc-s3);
+  border-bottom: 1px solid var(--dc-hair);
+}
+.dc-sysscr-bar[hidden] {
+  display: none;
+}
+.dc-sysscr-count {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+}
+/* The rail is too narrow for the screen's name beside the controls: the name takes the first line, whole, and they the second. */
+.dc-sysscr[data-surface='panel'] .dc-sysscr-bar {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.dc-sysscr[data-surface='panel'] .dc-sysscr-count {
+  order: -1;
+  flex: 1 0 100%;
+  padding-top: var(--dc-s1);
+  color: var(--oc-fg);
+  font-weight: 600;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.dc-sysscr[data-surface='panel'] .dc-sysscr-bar .dc-group {
+  margin-left: auto;
+}
+.dc-sysscr-wall {
+  position: relative;
+  inset: auto;
+  flex: 1;
+  min-height: 0;
+  cursor: grab;
+}
+.dc-sysscr-wall[data-panning='true'] {
+  cursor: grabbing;
+}
+.dc-sysscr-board {
+  /* A screen's own background shows through; where it sets none, the frame's scheme decides (light or dark). */
+  background: Canvas;
+  cursor: inherit;
+}
+.dc-sysscr-board .dc-frame {
+  background: Canvas;
+}
+.dc-sysscr-board .dc-placeholder {
+  background: var(--oc-subtle);
+  color-scheme: normal;
+}
+.dc-sysscr-board[data-tiny='true'] .dc-placeholder-title,
+.dc-sysscr-board[data-tiny='true'] .dc-placeholder-sub,
+.dc-sysscr-board[data-tiny='true'] .oc-sdk-spinner > span:not(.oc-sdk-spinner-ring) {
+  display: none;
+}
+.dc-sysscr[data-state='loading'] .dc-sysscr-wall,
+.dc-sysscr[data-state='empty'] .dc-sysscr-wall,
+.dc-sysscr[data-state='unreadable'] .dc-sysscr-wall,
+.dc-sysscr[data-state='unreadable'] .dc-sysscr-listwrap,
+.dc-sysscr[data-view='list'] .dc-sysscr-wall,
+.dc-sysscr:not([data-view='list']) .dc-sysscr-listwrap,
+.dc-sysscr[data-state='loading'] .dc-sysscr-listwrap,
+.dc-sysscr[data-state='empty'] .dc-sysscr-listwrap {
+  display: none;
+}
+.dc-sysscr-message {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--dc-s3);
+  padding: var(--dc-s5);
+  text-align: center;
+}
+.dc-sysscr-message:empty {
+  display: none;
+}
+.dc-sysscr-listwrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.dc-sysscr-list {
+  margin: 0;
+  padding: var(--dc-s1) 0;
+  list-style: none;
+}
+.dc-sysscr-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: var(--dc-s2);
+  width: 100%;
+  min-height: 44px;
+  padding: var(--dc-s2) var(--dc-s3);
+  border: 0;
+  background: none;
+  color: var(--oc-fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-sysscr-row:hover {
+  background: var(--oc-hover);
+}
+.dc-sysscr-row:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--oc-primary) 60%, transparent);
+  outline-offset: -2px;
+}
+.dc-sysscr-row-name {
+  grid-column: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.dc-sysscr-row-meta {
+  grid-column: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+.dc-sysscr-row-flag {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: var(--dc-warning-text);
+}
+.dc-sysscr-hint {
+  margin: 0;
+  padding: var(--dc-s2) var(--dc-s3) var(--dc-s3);
+  font-size: 0.75rem;
+}
+.dc-syspg[data-surface='panel'] .dc-syspg-views,
+.dc-syspg[data-surface='panel'][data-views='true'] .dc-syspg-stagehead {
+  margin: var(--dc-s2) var(--dc-s2) 0;
+}
+.dc-syspg[data-surface='panel'] .dc-sysscr {
+  margin: var(--dc-s2);
+}
+/* The rail's stage grows while it shows screens: a list worth scrolling, or a screen worth looking at. */
+.dc-syspg[data-surface='panel'][data-stage-view='screens'] .dc-syspg-stage {
+  flex-basis: 66%;
+}
+@media (max-width: 620px) {
+  .dc-syspg[data-surface='page'] .dc-syspg-views,
+  .dc-syspg[data-surface='page'][data-views='true'] .dc-syspg-stagehead {
+    margin: var(--dc-s2) var(--dc-s3) 0;
+  }
+  .dc-syspg[data-surface='page'] .dc-sysscr {
+    margin: var(--dc-s2) var(--dc-s3);
+  }
 }
 
 /* A system that didn't load has no board to show */
@@ -4363,6 +4674,119 @@ button.dc-sp-value:focus-visible {
   border: 1px solid var(--dc-hair);
   border-radius: 999px;
   font-size: 0.75rem;
+}
+
+/* Motion: what a value is, beside its name */
+.dc-sp-kind {
+  font-size: 0.75rem;
+}
+
+/* Icons: the picture on a pale tile in either theme (a black or currentColor icon stays visible), then name and file */
+.dc-sp-icon-row {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s3);
+  min-width: 0;
+}
+.dc-sp-icon-tile {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--oc-border);
+  border-radius: var(--dc-r);
+  background: var(--oc-bg);
+}
+:root[data-oc-theme='dark'] .dc-sp-icon-tile {
+  background: var(--oc-fg);
+}
+.dc-sp-icon-tile[data-state='loading'] {
+  background: var(--oc-muted-surface);
+}
+.dc-sp-icon-tile[data-state='error'],
+.dc-sp-icon-tile[data-state='ready']:empty {
+  background: repeating-linear-gradient(45deg, transparent 0 4px, var(--dc-hair) 4px 5px);
+}
+.dc-sp-icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+.dc-sp-icon-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dc-sp-icon-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dc-s2);
+  padding-bottom: var(--dc-s2);
+}
+
+/* Colour pairs: the use, then one ground per scheme with its sample and ratio */
+.dc-sp-pair-use {
+  margin: 0;
+  font-size: 0.75rem;
+}
+.dc-sp-pair-grounds {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--dc-s2);
+}
+.dc-sp-pair-ground {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: 'sample label' 'sample ratio';
+  align-items: center;
+  column-gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-sp-pair-ground > .dc-sp-pair-sample {
+  grid-area: sample;
+}
+.dc-sp-pair-ground > .dc-sp-label {
+  grid-area: label;
+}
+.dc-sp-pair-ground > .dc-sp-pair-ratio {
+  grid-area: ratio;
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.dc-sp-pair-sample {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 28px;
+  border: 1px solid var(--oc-border);
+  border-radius: var(--dc-r);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.dc-sp-pair-sample[data-empty='true'] {
+  background: repeating-linear-gradient(45deg, transparent 0 4px, var(--dc-hair) 4px 5px);
+  color: var(--oc-muted);
+}
+.dc-sp-pair-low {
+  font-weight: 600;
+  color: var(--dc-warning-text);
+}
+
+/* The Overview's scope block */
+.dc-sp-scope-body {
+  cursor: default;
+}
+.dc-sp-scope-line {
+  margin: 0;
+  font-size: 0.8125rem;
+}
+.dc-sp-scope-depth {
+  display: block;
 }
 
 /* Edit bar and review foot */
@@ -4754,6 +5178,37 @@ button.dc-sp-value:focus-visible {
 }
 .dc-app[data-surface='panel'] .dc-sys-pin-select {
   width: 100%;
+}
+
+/* ------------------------------------------------------------------ token export (design system) */
+
+.dc-export-formats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+/* The kit's unticked box is drawn in the border colour, too faint to read as a box here. */
+.dc-export .oc-sdk-check[aria-checked='false'] .oc-sdk-check-box {
+  border-color: var(--oc-muted);
+}
+.dc-export .dc-muted {
+  margin: 0;
+  font-size: 0.8125rem;
+}
+.dc-export .dc-form-error {
+  margin-top: var(--dc-s3);
+}
+.dc-export-notice .dc-export-path,
+.dc-export-notice .dc-export-renamed {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.dc-export-notice .dc-export-renamed {
+  margin-top: var(--dc-s1);
 }
 
 /* ------------------------------------------------------------------ re-sync sheet (design system, internal home) */
@@ -6833,4 +7288,425 @@ button.dc-sp-value:focus-visible {
   .dc-rail-chiprow {
     padding-left: var(--dc-s3);
   }
+}
+
+/* ------------------------------------------------------------------ comments on a system's board (system-builder-depth T21) */
+
+/* Pins and cards float over the board; the layer lets clicks through to the board where it is empty. */
+.dc-bc-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.dc-bc-layer > * {
+  pointer-events: auto;
+}
+.dc-bc-layer > .dc-temp-pin {
+  pointer-events: none;
+}
+.dc-sys-board:not([data-state='ready']) .dc-bc-layer {
+  display: none;
+}
+.dc-bc-pin {
+  z-index: 1;
+}
+.dc-bc-pin[data-open='true'] {
+  box-shadow: 0 0 0 2px var(--oc-bg), 0 0 0 4px var(--oc-primary), 0 3px 8px rgb(0 0 0 / 0.35);
+}
+.dc-bc-layer[data-locked='true'] .dc-bc-pin {
+  display: none;
+}
+.dc-sys-board[data-commenting='true'] .dc-sys-hit {
+  cursor: crosshair;
+}
+.dc-bc-tools {
+  position: absolute;
+  top: var(--dc-s2);
+  right: var(--dc-s2);
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap-reverse;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--dc-s2);
+  max-width: calc(100% - var(--dc-s4));
+  pointer-events: none;
+}
+.dc-bc-tools > * {
+  pointer-events: auto;
+}
+.dc-bc-toggle {
+  background: var(--oc-elevated);
+  box-shadow: var(--oc-sdk-float);
+}
+.dc-bc-toggle[aria-pressed='true'] {
+  border-color: transparent;
+  background: var(--oc-primary);
+  color: var(--oc-primary-fg);
+}
+.dc-bc-hint {
+  margin: 0;
+  padding: var(--dc-s1) var(--dc-s3);
+  border: 1px solid var(--oc-sdk-float-edge);
+  border-radius: 999px;
+  background: var(--oc-elevated);
+  color: var(--oc-elevated-fg);
+  box-shadow: var(--oc-sdk-float);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+.dc-bc-hint[hidden] {
+  display: none;
+}
+.dc-bc-card {
+  z-index: 4;
+}
+
+/* The list: at the top of the panel, its own scroll when long, so the sections stay in reach. */
+.dc-bc {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  max-height: 45%;
+  min-height: 0;
+  border-bottom: 1px solid var(--dc-hair);
+}
+.dc-bc[hidden] {
+  display: none;
+}
+.dc-bc-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dc-s1) var(--dc-s2);
+  padding: var(--dc-s2) var(--dc-s3);
+}
+.dc-bc-headbtn {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--dc-s2);
+  min-width: 0;
+  min-height: 32px;
+  padding: var(--dc-s1) var(--dc-s2);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-bc-headbtn:hover {
+  background: var(--oc-hover);
+}
+.dc-bc-headbtn:focus-visible,
+.dc-bc-more:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-bc-headbtn[aria-expanded='true'] .dc-syspg-chev {
+  transform: rotate(45deg);
+}
+.dc-bc-title {
+  font-weight: 600;
+}
+.dc-bc-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+.dc-bc-on:empty {
+  display: none;
+}
+.dc-bc-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 var(--dc-s2) var(--dc-s3);
+}
+.dc-bc-body[hidden] {
+  display: none;
+}
+.dc-bc-body > .dc-banner,
+.dc-bc-body > .dc-loading {
+  padding: 0 var(--dc-s2);
+}
+.dc-bc-empty {
+  margin: 0;
+  padding: 0 var(--dc-s2);
+  font-size: 0.8125rem;
+}
+.dc-bc-list .dc-comment-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.dc-bc-list .dc-comment[data-status='resolved'] .dc-comment-body {
+  color: var(--oc-muted);
+}
+.dc-bc-list .dc-comment[data-gone='true'] .dc-comment-where {
+  color: var(--dc-warning-text);
+}
+.dc-bc-state {
+  padding: 0 var(--dc-s1);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--oc-primary) 14%, transparent);
+  color: var(--oc-primary-text);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.dc-bc-more {
+  align-self: flex-start;
+  margin: 0 var(--dc-s2);
+  padding: var(--dc-s1) var(--dc-s2);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: none;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.dc-bc-more:hover {
+  background: var(--oc-hover);
+  color: var(--oc-fg);
+}
+.dc-bc-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  padding: var(--dc-s1) var(--dc-s2) 0;
+}
+.dc-bc-foot .dc-form-error,
+.dc-bc-foot .dc-foot-note {
+  margin: 0;
+}
+/* In the rail the panel is short: the list gets a little less of it. */
+.dc-syspg[data-surface='panel'] .dc-bc {
+  max-height: 50%;
+}
+@media (max-width: 620px) {
+  .dc-syspg[data-surface='page'] .dc-bc-headbtn {
+    min-height: 44px;
+  }
+}
+/* A thread card has four actions: room for them on one row. */
+.dc-bc-card.dc-thread {
+  width: 360px;
+}
+/* The rail: the card docks at the top of the list, under the board, at the list's width. */
+.dc-bc-dock:empty {
+  display: none;
+}
+.dc-bc-dock {
+  padding: 0 var(--dc-s2) var(--dc-s2);
+}
+.dc-bc-card[data-docked='true'] {
+  position: static;
+  width: auto;
+  max-width: none;
+  box-shadow: none;
+}
+.dc-bc-card[data-docked='true'] .dc-pop-foot {
+  flex-wrap: wrap;
+}
+/* While a card is docked in the rail the rows step aside: the list's own scroll box is too short to show both, and
+   its bottom padding would otherwise let a row's badge show through above Sections. */
+.dc-bc-dock:not(:empty) ~ .dc-bc-body {
+  display: none;
+}
+/* The rail's hint is a line under the list's head, not a pill on the short board. */
+.dc-bc > .dc-bc-hint {
+  margin: 0 var(--dc-s3) var(--dc-s2);
+  padding: 0 var(--dc-s2);
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--oc-muted);
+}
+.dc-bc-damaged:empty {
+  display: none;
+}
+.dc-bc-damaged {
+  padding: 0 var(--dc-s3) var(--dc-s2);
+}
+.dc-bc-on {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: flex-end;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-bc-on[hidden] {
+  display: none;
+}
+.dc-syspg[data-surface='page'] .dc-bc-on {
+  flex-basis: auto;
+}
+.dc-bc-chooser {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* A docked card takes the panel's room (the sections wait under it) and scrolls inside the list when even that is short,
+   so nothing spills over Sections. */
+.dc-bc {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.dc-syspg[data-surface='panel'] .dc-bc:has(.dc-bc-dock:not(:empty)) {
+  flex: 0 1 auto;
+  max-height: none;
+}
+
+/* ===== Phone (native extras §2.2) ===== */
+/*
+ * `applyDevice` puts data-dc-form and data-dc-pointer on the root, and the safe-area insets and the on-screen
+ * keyboard as --dc-inset-* and --dc-keyboard (px, clamped). On a phone the content stops above the keyboard, so
+ * the ask bar, the comment composer and every sheet stay in sight; the full-screen phone page also keeps clear
+ * of the home indicator. A desktop never matches any of this.
+ */
+[data-dc-form='phone'] .dc-app {
+  --dc-bottom-gap: var(--dc-keyboard, 0px);
+  padding-bottom: var(--dc-bottom-gap);
+}
+[data-dc-form='phone'] .dc-app[data-variant='phone-page'] {
+  --dc-bottom-gap: calc(var(--dc-keyboard, 0px) + var(--dc-inset-bottom, 0px));
+  padding-left: var(--dc-inset-left, 0px);
+  padding-right: var(--dc-inset-right, 0px);
+}
+[data-dc-form='phone'] .dc-app .dc-sheet {
+  bottom: var(--dc-bottom-gap);
+}
+/* A finger needs about 44 px: buttons, menu rows, list rows and the ask bar's Send (two s4 and an s3). */
+[data-dc-pointer='coarse'] :is(.oc-sdk-btn, .oc-sdk-option, .dc-row-main) {
+  min-height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+}
+[data-dc-pointer='coarse'] .dc-iconbtn {
+  width: calc(var(--dc-s4) * 2 + var(--dc-s3));
+  height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+}
+/*
+ * The Checks badge and the design system button are small pills in the header. A finger gets 44 px of room for each
+ * (so the area never lies over a neighbour) and a hit area that fills it; the pill looks as before.
+ */
+[data-dc-pointer='coarse'] :is(.dc-checks, .dc-system) {
+  justify-content: center;
+  min-width: calc(var(--dc-s4) * 2 + var(--dc-s3));
+  min-height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+}
+[data-dc-pointer='coarse'] :is(.dc-checks-badge, .dc-system-btn) {
+  position: relative;
+}
+[data-dc-pointer='coarse'] :is(.dc-checks-badge, .dc-system-btn)::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, calc(var(--dc-s4) * 2 + var(--dc-s3)));
+  height: max(100%, calc(var(--dc-s4) * 2 + var(--dc-s3)));
+  transform: translate(-50%, -50%);
+}
+
+/*
+ * Typing in the comment card, a pin's thread or the Edit text box with the phone's keyboard up: the card gets the room
+ * of everything under and over the wall. Not while the ask bar has the keyboard, which then is what is being typed in.
+ */
+[data-dc-form='phone'][data-dc-keyboard='up'] .dc-design:has(.dc-wall-overlay > :is(.dc-composer, .dc-thread, .dc-editor)):not(:has(.dc-bottom-dock:focus-within))
+  :is(.dc-bottom-dock, .dc-hint, .dc-warnings, .dc-notices) {
+  display: none;
+}
+[data-dc-form='phone'][data-dc-keyboard='up'] .dc-editor-input {
+  max-height: calc(var(--dc-s6) * 3);
+}
+/* A card the wall is too short for (popover-layer.ts): the heading and quote go, the text box is two lines. */
+[data-dc-form='phone'] .dc-pop[data-tight] :is(.dc-pop-snippet, .dc-pop-note),
+[data-dc-form='phone'] .dc-composer[data-tight] .dc-pop-head {
+  display: none;
+}
+[data-dc-form='phone'] .dc-pop[data-tight] .dc-textarea {
+  height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+  min-height: 0;
+}
+[data-dc-form='phone'] .dc-pop[data-tight] {
+  gap: var(--dc-s1);
+  padding: var(--dc-s2);
+}
+
+/* Settings: the folder line that says the path is on the computer, not the phone. */
+.dc-settings-where {
+  font-size: 0.8125rem;
+}
+
+/* ===== This chat on the rail list (native extras §4.2, U6) ===== */
+/* The chat the rail is open in leads the list; a heading over it and over the rest keeps the two apart. */
+.dc-this-chat {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--dc-s3);
+}
+.dc-this-chat[hidden],
+.dc-rail-group-h[hidden] {
+  display: none;
+}
+.dc-rail-group-h {
+  margin: 0;
+  padding: var(--dc-s2) var(--dc-s2) var(--dc-s1);
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.dc-this-chat-more {
+  display: flex;
+  padding: var(--dc-s1) var(--dc-s1) 0;
+}
+.dc-this-chat-more:empty {
+  display: none;
+}
+/* The chips' × takes a finger on a touch screen: an invisible hit area an s3 past each edge, so the chip keeps its size. */
+[data-dc-pointer='coarse'] .dc-filter-chip-x {
+  position: relative;
+}
+[data-dc-pointer='coarse'] .dc-filter-chip-x::after {
+  content: '';
+  position: absolute;
+  inset: calc(var(--dc-s3) * -1);
+}
+/* The rail: "Comment on…" shares the head row with the title, and the chooser opens under it only when asked for. */
+.dc-bc-reveal {
+  flex: none;
+}
+.dc-bc-reveal[hidden] {
+  display: none;
+}
+/* Send comments stays in view under the rows; only the rows scroll when the panel is short (a 700 px rail). */
+.dc-bc-body {
+  overflow: hidden;
+}
+.dc-bc-scroll {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.dc-bc-scroll > .dc-banner,
+.dc-bc-scroll > .dc-loading {
+  padding: 0 var(--dc-s2);
+}
+.dc-bc-foothost {
+  flex: none;
+}
+.dc-bc-foothost:empty {
+  display: none;
+}
+/* Never a sliver: with the chooser open in a short rail the rows keep at least part of one row, and the list scrolls. */
+.dc-bc-scroll:has(.dc-bc-list) {
+  min-height: 56px;
 }

@@ -1,6 +1,6 @@
 {
   "name": "design-chamber",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Design Chamber: design canvases and pages written by your chat agent, rendered inside OpenChamber.",
   "license": "MIT",
   "private": true,
@@ -8,18 +8,20 @@
   "openchamber": {
     "apiVersion": 1,
     "engines": {
-      "openchamber": ">=2.7.0"
+      "openchamber": ">=2.8.0"
     },
     "contributes": {
       "panel": {
         "id": "design-chamber",
         "name": "Design Chamber",
         "icon": "palette",
-        "entry": "dist/panel/index.html"
+        "entry": "dist/panel/index.html",
+        "mobile": true
       },
       "page": {
         "entry": "dist/panel/index.html",
-        "title": "Design Chamber"
+        "title": "Design Chamber",
+        "mobile": true
       },
       "background": {
         "entry": "dist/background/index.html"
@@ -48,6 +50,13 @@
             "assistant"
           ],
           "mode": "background"
+        },
+        {
+          "id": "open-file-as-page",
+          "label": "Open as page in Design Chamber",
+          "icon": "palette",
+          "where": "file",
+          "mode": "background"
         }
       ],
       "capabilities": [
@@ -69,7 +78,8 @@
             "gio",
             "gdbus"
           ]
-        }
+        },
+        "keepRunning": true
       },
       "statusSection": {
         "entry": "dist/status/index.html",
@@ -86,6 +96,7 @@
         ]
       },
       "instructions": true,
+      "marks": true,
       "skills": "dist/skills",
       "opencodePlugin": "dist/plugin",
       "mentions": {
@@ -97,6 +108,21 @@
           "name": "Design check",
           "icon": "palette",
           "title": "Design check · {input.design}",
+          "output": "text"
+        },
+        {
+          "match": "design_list",
+          "name": "Designs",
+          "icon": "palette",
+          "title": "Designs",
+          "output": "text",
+          "subtitle": "{input.project}"
+        },
+        {
+          "match": "design_read",
+          "name": "Design",
+          "icon": "palette",
+          "title": "Design · {input.design}",
           "output": "text"
         }
       ],
@@ -148,7 +174,7 @@
     "guest-check": "node scripts/guest-check.mjs"
   },
   "devDependencies": {
-    "@openchamber/sdk": "2.7.0",
+    "@openchamber/sdk": "2.8.1",
     "@types/node": "^22.10.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.8.0"

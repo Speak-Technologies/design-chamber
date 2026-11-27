@@ -76,6 +76,51 @@
   var GUEST_SHELL_ID_MAX = 128;
   var GUEST_SHELL_OUTPUT_TAIL_MAX = 65536;
 
+  // node_modules/@openchamber/sdk/dist/microphone.js
+  var GUEST_MICROPHONE_SAMPLE_RATE_MIN = 8e3;
+  var GUEST_MICROPHONE_SAMPLE_RATE_MAX = 192e3;
+  var GUEST_MICROPHONE_OPEN_TIMEOUT_MS = 12e4;
+  var createSampleQueue = (capacity) => {
+    const chunks = [];
+    let offset = 0;
+    let queued = 0;
+    return {
+      push: (samples) => {
+        chunks.push(samples);
+        queued += samples.length;
+        while (queued - offset > capacity && chunks.length > 1) {
+          const dropped = chunks.shift();
+          queued -= dropped?.length ?? 0;
+          offset = 0;
+        }
+      },
+      pull: (out) => {
+        let written = 0;
+        while (written < out.length && chunks.length > 0) {
+          const head = chunks[0];
+          const count = Math.min(out.length - written, head.length - offset);
+          out.set(head.subarray(offset, offset + count), written);
+          written += count;
+          offset += count;
+          if (offset >= head.length) {
+            chunks.shift();
+            queued -= head.length;
+            offset = 0;
+          }
+        }
+        out.fill(0, written);
+      },
+      clear: () => {
+        chunks.length = 0;
+        offset = 0;
+        queued = 0;
+      },
+      get size() {
+        return queued - offset;
+      }
+    };
+  };
+
   // node_modules/@openchamber/sdk/dist/status-controls.js
   var GUEST_STATUS_CONTROLS_MAX = 4;
   var GUEST_STATUS_CONTROL_ID = /^[a-z][a-z0-9-]{0,39}$/;
@@ -120,6 +165,7 @@
   };
 
   // node_modules/@openchamber/sdk/dist/manifest.js
+  var GUEST_PROVIDER_LOGO_BYTES_MAX = 1024 * 1024;
   var TRACKER_URL_TOKENS = ["{id}", "{segment}", "{segments+}"];
   var TRACKER_URL_TOKEN_SET = new Set(TRACKER_URL_TOKENS);
 
@@ -203,6 +249,20 @@
     }
   };
 
+  // node_modules/@openchamber/sdk/dist/navigation.js
+  var GUEST_COMMIT_SHA = /^[0-9a-f]{7,64}$/i;
+  var isGuestCommitSha = (value) => GUEST_COMMIT_SHA.test(value);
+  var GUEST_WALKTHROUGH_BASE_MAX = 255;
+  var guestNavigationCalls = (request, nextId2, refuse) => ({
+    openCommit: (sha) => isGuestCommitSha(sha) ? request({ channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION, type: "open-commit", id: nextId2(), payload: { sha } }) : refuse("Commit id must be 7 to 64 hex characters."),
+    openWalkthrough: ({ base }) => {
+      const trimmed = base.trim();
+      if (!trimmed || trimmed.length > GUEST_WALKTHROUGH_BASE_MAX)
+        return refuse(`Base must contain 1 to ${GUEST_WALKTHROUGH_BASE_MAX} characters.`);
+      return request({ channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION, type: "open-walkthrough", id: nextId2(), payload: { base: trimmed } });
+    }
+  });
+
   // node_modules/@openchamber/sdk/dist/contract.js
   var GUEST_BLOCK_ANSWER_MAX = 2e3;
   var GUEST_FILE_STAT_KINDS = ["file", "directory", "other", "missing"];
@@ -210,8 +270,6 @@
   var isPromptResult = (value) => Boolean(value && "sent" in value && !("sessionId" in value));
   var isGuestMessageItem = (item) => item !== null && item.kind === "message";
   var isGuestAttachItem = (item) => item !== null && (item.kind === void 0 || item.kind === "issue" || item.kind === "pull");
-  var GUEST_COMMIT_SHA = /^[0-9a-f]{7,64}$/i;
-  var isGuestCommitSha = (value) => GUEST_COMMIT_SHA.test(value);
   var GUEST_TOAST_MAX = 500;
   var GUEST_CLIPBOARD_TEXT_MAX = 32e3;
   var GUEST_COMPOSE_TEXT_MAX = 16e3;
@@ -378,7 +436,9 @@
     "file-open",
     "file-snapshot",
     "file-saved",
-    "generate-late"
+    "generate-late",
+    "microphone-audio",
+    "microphone-ended"
   ]);
   var asWireRecord = (data) => Object(data) === data ? data : null;
   var isNonEmptyString = (value) => String(value) === value && value.length > 0;
@@ -484,6 +544,7 @@
     let popoverPointerActive = false;
     let popoverFocusActive = false;
     let popoverActivityReported = null;
+    let microphone = null;
     const lifecycleFromSession = (session) => {
       if (!session)
         return null;
@@ -527,6 +588,19 @@
         const listener = shellsListeners.get(message.payload.subscriptionId);
         if (listener)
           emit([listener], message.payload.snapshot);
+        return;
+      }
+      if (message.type === "microphone-audio") {
+        microphone?.queue.push(message.payload.samples);
+        return;
+      }
+      if (message.type === "microphone-ended") {
+        const open = microphone;
+        if (!open)
+          return;
+        microphone = null;
+        open.release();
+        emit(open.endedListeners, message.payload.reason);
         return;
       }
       if (message.type === "ready") {
@@ -732,6 +806,76 @@
         post(message);
     };
     const requestFileSave = () => notify({ ...envelope, type: "file-save" });
+    const postMicrophoneClose = () => {
+      if (!disposed && target.parent !== target)
+        post({ ...envelope, type: "microphone-close", id: nextId(ids) });
+    };
+    const openMicrophone = async () => {
+      if (microphone)
+        throw new HostRequestError("HOST_REJECTED", "The microphone is already open in this frame.");
+      if (lastReady?.features?.microphone !== true) {
+        throw new HostRequestError("UNSUPPORTED", "This OpenChamber cannot share the microphone with extensions.");
+      }
+      const AudioContextCtor = globalThis.AudioContext;
+      if (typeof AudioContextCtor !== "function")
+        throw new HostRequestError("UNSUPPORTED", "This frame has no Web Audio.");
+      const context = new AudioContextCtor();
+      if (context.sampleRate < GUEST_MICROPHONE_SAMPLE_RATE_MIN || context.sampleRate > GUEST_MICROPHONE_SAMPLE_RATE_MAX) {
+        void context.close().catch(() => void 0);
+        throw new HostRequestError("UNSUPPORTED", `Audio at ${context.sampleRate} Hz is not supported.`);
+      }
+      const resumed = context.state === "suspended" ? context.resume().catch(() => void 0) : void 0;
+      const queue = createSampleQueue(Math.round(context.sampleRate / 4));
+      const processor = context.createScriptProcessor(1024, 1, 1);
+      processor.onaudioprocess = (event) => queue.pull(event.outputBuffer.getChannelData(0));
+      const destination = context.createMediaStreamDestination();
+      processor.connect(destination);
+      const endedListeners = /* @__PURE__ */ new Set();
+      const open = {
+        queue,
+        endedListeners,
+        release: () => {
+          processor.onaudioprocess = null;
+          processor.disconnect();
+          queue.clear();
+          for (const track of destination.stream.getTracks())
+            track.stop();
+          void context.close().catch(() => void 0);
+        }
+      };
+      microphone = open;
+      try {
+        const result = await send({ ...envelope, type: "microphone-open", id: nextId(ids), payload: { sampleRate: context.sampleRate } }, GUEST_MICROPHONE_OPEN_TIMEOUT_MS);
+        if (!result || !("opened" in result) || result.opened !== true) {
+          throw new HostRequestError("HOST_REJECTED", "Host did not open the microphone.");
+        }
+        await resumed;
+        if (microphone !== open)
+          throw new HostRequestError("DISCONNECTED", "The microphone closed while it was opening.");
+      } catch (error) {
+        if (microphone === open)
+          microphone = null;
+        open.release();
+        postMicrophoneClose();
+        throw error;
+      }
+      return {
+        stream: destination.stream,
+        close: () => {
+          if (microphone !== open)
+            return;
+          microphone = null;
+          open.release();
+          postMicrophoneClose();
+        },
+        onEnded: (listener) => {
+          endedListeners.add(listener);
+          return () => {
+            endedListeners.delete(listener);
+          };
+        }
+      };
+    };
     const onSaveShortcut = (event) => {
       if (!isKeyEvent(event) || !isSaveShortcut(event))
         return;
@@ -1090,13 +1234,7 @@
         id: nextId(ids),
         payload: { url }
       }),
-      openCommit: (sha) => isGuestCommitSha(sha) ? request({
-        channel: OPENCHAMBER_SDK_CHANNEL,
-        v: OPENCHAMBER_SDK_API_VERSION,
-        type: "open-commit",
-        id: nextId(ids),
-        payload: { sha }
-      }) : Promise.reject(new HostRequestError("HOST_REJECTED", "Commit id must be 7 to 64 hex characters.")),
+      ...guestNavigationCalls(request, () => nextId(ids), (message) => Promise.reject(new HostRequestError("HOST_REJECTED", message))),
       answerBlock: (text) => request({
         channel: OPENCHAMBER_SDK_CHANNEL,
         v: OPENCHAMBER_SDK_API_VERSION,
@@ -1326,6 +1464,7 @@
           lateGenerateListeners.delete(listener);
         };
       },
+      openMicrophone,
       setBadge: (count) => request({
         channel: OPENCHAMBER_SDK_CHANNEL,
         v: OPENCHAMBER_SDK_API_VERSION,
@@ -1377,6 +1516,11 @@
           post({ ...envelope, type: "shells-unsubscribe", id: nextId(ids), payload: { subscriptionId } });
         }
         shellsListeners.clear();
+        if (microphone) {
+          postMicrophoneClose();
+          microphone.release();
+          microphone = null;
+        }
         disposed = true;
         resolveHandler = null;
         actionHandler = null;
@@ -1539,10 +1683,13 @@
   var LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
   var LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
   var SCAN_JSON_MAX_BYTES = 2 * 1024 * 1024;
+  var FILE_PAGE_COPY_MAX_BYTES = 50 * 1024 * 1024;
 
   // src/shared/agent/context.ts
   var VIEWPORT_TABLET = Object.freeze({ id: "tablet", label: "Tablet", width: 768, height: 1024 });
   var VIEWPORT_DESKTOP = Object.freeze({ id: "desktop", label: "Desktop", width: 1440, height: 900 });
+  var clip = (text, max) => text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1)).trimEnd()}\u2026`;
+  var oneLine = (text) => text.replace(/[\s\u0085]+/g, " ").trim();
 
   // src/shared/agent/html-extract.ts
   var parseOpen = (line) => {
@@ -1586,6 +1733,10 @@
     return best;
   };
 
+  // src/shared/display-text.ts
+  var DISPLAY_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+  var stripDisplayControls = (text) => text.replace(DISPLAY_CONTROLS, "");
+
   // src/shared/types.ts
   var CHIP_PROVIDER_ID = "design-chamber";
 
@@ -1596,6 +1747,45 @@
     const right = norm(b);
     const windows = /^[A-Za-z]:\//.test(left) || /^[A-Za-z]:\//.test(right);
     return windows ? left.toLowerCase() === right.toLowerCase() : left === right;
+  };
+
+  // src/ui/model/device-model.ts
+  var PX_MAX = 400;
+  var NO_INSETS = { top: 0, right: 0, bottom: 0, left: 0 };
+  var DESKTOP_DEVICE = { form: "desktop", coarse: false, insets: NO_INSETS, keyboard: 0 };
+  var record = (value) => typeof value === "object" && value !== null ? value : {};
+  var px = (value) => typeof value === "number" && Number.isFinite(value) ? Math.min(PX_MAX, Math.max(0, Math.round(value))) : 0;
+  var deviceOf = (context) => {
+    const raw = record(context.device);
+    const { formFactor, pointer } = raw;
+    if (formFactor !== "phone" && formFactor !== "tablet" && formFactor !== "desktop") return DESKTOP_DEVICE;
+    if (pointer !== "coarse" && pointer !== "fine") return DESKTOP_DEVICE;
+    const insets = record(raw.insets);
+    return {
+      form: formFactor,
+      coarse: pointer === "coarse",
+      insets: { top: px(insets.top), right: px(insets.right), bottom: px(insets.bottom), left: px(insets.left) },
+      keyboard: px(raw.keyboard)
+    };
+  };
+  var TIP_TITLE = "Open Design Chamber full screen";
+  var openHelp = (device, panelOnPhone) => {
+    if (device.form !== "phone") {
+      return {
+        notHere: "Open Design Chamber from the rail to see it.",
+        serviceDown: "Design Chamber isn\u2019t responding.",
+        fullScreenHint: "Full screen: sidebar \u2192 Extension pages \u2192 Design Chamber",
+        firstRunTip: { title: TIP_TITLE, body: "In the sidebar, open Extension pages and pick Design Chamber. Canvases get the whole window there." }
+      };
+    }
+    const serviceDown = "Design Chamber isn\u2019t responding on your computer. Try again in a moment.";
+    if (!panelOnPhone) return { notHere: "Open Design Chamber from the More menu in your chats list.", serviceDown, fullScreenHint: null, firstRunTip: null };
+    return {
+      notHere: "Design Chamber can\u2019t open here yet. Open it from the More menu in your chats list.",
+      serviceDown,
+      fullScreenHint: "Full screen: chats list \u2192 More \u2192 Design Chamber",
+      firstRunTip: { title: TIP_TITLE, body: "In your chats list, open More and pick Design Chamber." }
+    };
   };
 
   // src/shared/api.ts
@@ -1654,6 +1844,7 @@
     "POST /chip": "WP3",
     "POST /designs/:slug/prompt": "WP3",
     "POST /pages/from-message": "WP3",
+    "POST /pages/from-file": "WP3",
     "DELETE /open-request": "WP3",
     "POST /open-request": "WP3",
     "POST /session-events": "U4",
@@ -1706,13 +1897,27 @@
     "POST /systems/:id/build/stop": "P25",
     "POST /system-stops/:undoId/undo": "P25",
     "POST /memberships": "P26",
-    "POST /systems/register": "P26"
+    "POST /systems/register": "P26",
+    "PUT /view": "UP",
+    // system-builder-depth Phase 2 (§13 T12a)
+    "GET /systems/:id/screens/render": "SBD",
+    "GET /systems/:id/screens/render/chunk": "SBD",
+    // system-builder-depth Phase 3 (§13 T19, T20)
+    "GET /systems/:id/export": "SBD3",
+    "POST /systems/:id/export": "SBD3",
+    "GET /systems/:id/comments": "SBD3",
+    "POST /systems/:id/comments": "SBD3",
+    "PATCH /systems/:id/comments/:commentId": "SBD3",
+    "DELETE /systems/:id/comments/:commentId": "SBD3",
+    "POST /systems/:id/comments/mark-sent": "SBD3"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
   var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set([
     "GET /designs/:slug/render/chunk",
     "GET /systems/:id/board/chunk",
-    "GET /systems/:id/living-page/render/chunk"
+    "GET /systems/:id/living-page/render/chunk",
+    // system-builder-depth Phase 2 (§13 T12a)
+    "GET /systems/:id/screens/render/chunk"
   ]);
   var splitRouteKey = (key) => {
     const space = key.indexOf(" ");
@@ -1954,6 +2159,42 @@
       inflight.set(key, task);
       return task;
     };
+    const fetchSystemScreen = async (id, screen, options2) => {
+      const query = { screen, scheme: options2.scheme ?? "light" };
+      if (options2.version) query.version = options2.version;
+      if (options2.proposal) query.proposal = options2.proposal;
+      const meta = await call("GET /systems/:id/screens/render", { params: { id }, query });
+      const cached = renders.get(meta.key);
+      if (cached) {
+        renders.delete(meta.key);
+        renders.set(meta.key, cached);
+        return cached;
+      }
+      const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
+      const parts = await mapLimit(
+        indexes,
+        RENDER_CHUNK_CONCURRENCY,
+        (n) => call("GET /systems/:id/screens/render/chunk", { params: { id }, query: { key: meta.key, n: String(n) } })
+      );
+      const doc = { meta, html: parts.join("") };
+      remember(doc);
+      return doc;
+    };
+    const systemScreen = (id, screen, options2 = {}) => {
+      const key = `screen\0${id}\0${screen}\0${options2.version ?? ""}\0${options2.proposal ?? ""}\0${options2.scheme ?? "light"}`;
+      const running = inflight.get(key);
+      if (running) return running;
+      const task = (async () => {
+        try {
+          return await fetchSystemScreen(id, screen, options2);
+        } catch (error) {
+          if (isServiceError(error, "stale")) return fetchSystemScreen(id, screen, options2);
+          throw error;
+        }
+      })().finally(() => inflight.delete(key));
+      inflight.set(key, task);
+      return task;
+    };
     const upload = async (text) => {
       if (text.length > UPLOAD_TOTAL_MAX) {
         throw new ServiceError("too-large", `This text is too long to send to Design Chamber (over ${UPLOAD_TOTAL_MAX.toLocaleString("en-US")} characters).`);
@@ -2002,12 +2243,22 @@
     const stopBuild = (systemId, proposalId = null) => call("POST /systems/:id/build/stop", { params: { id: systemId }, body: { proposalId } });
     const undoStop = (undoId) => call("POST /system-stops/:undoId/undo", { params: { undoId }, body: {} });
     const loadLivingPage = (systemId) => call("GET /systems/:id/living-page", { params: { id: systemId } });
-    return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
+    const systemExportFormats = (systemId) => call("GET /systems/:id/export", { params: { id: systemId } });
+    const exportSystemTokens = (systemId, formats) => call("POST /systems/:id/export", { params: { id: systemId }, body: formats === void 0 ? {} : { formats } });
+    const systemComments = {
+      list: (systemId) => call("GET /systems/:id/comments", { params: { id: systemId } }),
+      add: (systemId, body) => call("POST /systems/:id/comments", { params: { id: systemId }, body }),
+      update: (systemId, commentId, patch) => call("PATCH /systems/:id/comments/:commentId", { params: { id: systemId, commentId }, body: patch }),
+      remove: (systemId, commentId) => call("DELETE /systems/:id/comments/:commentId", { params: { id: systemId, commentId } }),
+      markSent: (systemId, ids) => call("POST /systems/:id/comments/mark-sent", { params: { id: systemId }, body: { ids } })
+    };
+    return { call, loadRender, loadBoard, systemScreen, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage, systemExportFormats, exportSystemTokens, systemComments };
   };
 
   // src/guest/flows.ts
   var PANEL_SURFACE_ID = `plugin:${CHIP_PROVIDER_ID}`;
   var OPEN_AS_PAGE_ACTION = "open-as-page";
+  var OPEN_FILE_AS_PAGE_ACTION = "open-file-as-page";
   var CHIP_ID_PREFIX = "design:";
   var MESSAGES = {
     noProject: "Open a project first, then try again.",
@@ -2021,7 +2272,27 @@
     noSessionSelected: "Open a chat first, then try again.",
     markFailed: "Sent, but the comments could not be marked as sent. Resolve them by hand so they are not sent again.",
     savedPage: (title) => `Saved as page \u201C${title}\u201D.`,
-    savedPageClosed: (title) => `Saved as page \u201C${title}\u201D. Open Design Chamber to see it.`
+    savedPageClosed: (title) => `Saved as page \u201C${title}\u201D. Open Design Chamber to see it.`,
+    // The Files-row action (native-extras §3.3, §3.4). The service's own sentences are shown as they are.
+    fileFolder: "Pick an .html file to open it as a page.",
+    fileNotHtml: "Only .html and .htm files open as pages.",
+    fileSaved: (title) => `Saved \u201C${title}\u201D as a page in Design Chamber.`,
+    fileSavedClosed: (title) => `Saved \u201C${title}\u201D as a page.`,
+    fileReused: (title) => `\u201C${title}\u201D is already in Design Chamber. Opening it.`,
+    fileReusedClosed: (title) => `\u201C${title}\u201D is already in Design Chamber.`,
+    openToSee: "Open Design Chamber to see it.",
+    fileServiceDown: "Design Chamber isn\u2019t responding. Try again in a moment.",
+    fileFailed: "Design Chamber couldn't open that file. Try again."
+  };
+  var TOAST_TITLE_MAX = 80;
+  var NO_ANSWER = ["SERVICE_FAILED", "HOST_TIMEOUT", "REQUEST_FAILED", "HOST_UNAVAILABLE"];
+  var leftOutSentences = ({ outside, missing, other }) => {
+    const files = (n) => n === 1 ? "1 file it uses" : `${n} files it uses`;
+    const sentences = [];
+    if (outside > 0) sentences.push(`${files(outside)} ${outside === 1 ? "is outside its folder, so it wasn\u2019t" : "are outside its folder, so they weren\u2019t"} copied.`);
+    if (missing > 0) sentences.push(`${files(missing)} ${missing === 1 ? "is" : "are"} missing.`);
+    if (other > 0) sentences.push(`${files(other)} can\u2019t be copied into a page, so ${other === 1 ? "it was" : "they were"} left out.`);
+    return sentences;
   };
   var FlowError = class extends Error {
     constructor(code, message) {
@@ -2066,7 +2337,7 @@
   };
   var BUILD_SYSTEM_DEFAULT_TEXT = "Let's build a design system.";
   var takesOpenRequest = (batch) => batch.reset || batch.events.some((event) => event.kind === "added" || event.kind === "open");
-  var createFlows = ({ host: host2, client, now = Date.now }) => {
+  var createFlows = ({ host: host2, client, now = Date.now, panelOnPhone = true }) => {
     const api = host2.client;
     const lastTurn = /* @__PURE__ */ new Map();
     let delivering = false;
@@ -2075,6 +2346,34 @@
         await api.toast({ kind, message });
       } catch {
       }
+    };
+    const showRail = async () => {
+      try {
+        await api.openSurface(PANEL_SURFACE_ID);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const openFileAsPage = async (item) => {
+      if (item.isDirectory) return toast("info", MESSAGES.fileFolder);
+      if (!/\.html?$/i.test(item.path)) return toast("info", MESSAGES.fileNotHtml);
+      const ready = host2.ready.get();
+      const device = deviceOf(ready ?? {});
+      const help = openHelp(device, panelOnPhone);
+      let answer;
+      try {
+        answer = await client.call("POST /pages/from-file", { body: { path: item.path, directory: item.directory || null } });
+      } catch (error) {
+        if (!isServiceError(error)) return toast("error", MESSAGES.fileFailed);
+        if (NO_ANSWER.includes(error.code)) return toast("error", device.form === "phone" ? help.serviceDown : MESSAGES.fileServiceDown);
+        return toast(error.code === "conflict" ? "info" : "error", error.message);
+      }
+      const opened = await showRail();
+      const title = clip(stripDisplayControls(oneLine(answer.title)), TOAST_TITLE_MAX);
+      const lead = answer.reused ? (opened ? MESSAGES.fileReused : MESSAGES.fileReusedClosed)(title) : (opened ? MESSAGES.fileSaved : MESSAGES.fileSavedClosed)(title);
+      const where = opened ? [] : [device.form === "phone" && !panelOnPhone ? help.notHere : MESSAGES.openToSee];
+      await toast(answer.reused ? "info" : "success", [lead, ...where, ...leftOutSentences(answer.left)].join(" "));
     };
     const latestVersion = async (slug) => {
       try {
@@ -2340,15 +2639,11 @@
         }
       },
       runAction: async (item) => {
+        if (item.kind === "file" && item.action === OPEN_FILE_AS_PAGE_ACTION) return openFileAsPage(item);
         if (!isGuestMessageItem(item) || item.action !== OPEN_AS_PAGE_ACTION) return;
         const created = await flows2.openAsPage(item, { open: true });
         if (!created) return;
-        let opened = true;
-        try {
-          await api.openSurface(PANEL_SURFACE_ID);
-        } catch {
-          opened = false;
-        }
+        const opened = await showRail();
         await toast("success", opened ? MESSAGES.savedPage(created.title) : MESSAGES.savedPageClosed(created.title));
       },
       handleItem: async (item) => {
@@ -2479,10 +2774,14 @@
   // src/guest/background-main.ts
   var READY_WAIT_MS = 2e3;
   var host = getGuestHost();
-  var flows = createFlows({ host, client: createServiceClient(host.client) });
+  var flows = createFlows({ host, client: createServiceClient(host.client), panelOnPhone: true });
+  var readyOrTimeout = () => Promise.race([host.whenReady(), new Promise((resolve) => setTimeout(resolve, READY_WAIT_MS))]);
   host.client.onResolve(async (request) => {
-    await Promise.race([host.whenReady(), new Promise((resolve) => setTimeout(resolve, READY_WAIT_MS))]);
+    await readyOrTimeout();
     return flows.resolveSlashCommand(request);
   });
-  host.client.onAction((item) => flows.runAction(item));
+  host.client.onAction(async (item) => {
+    if (item.kind === "file") await readyOrTimeout();
+    await flows.runAction(item);
+  });
 })();

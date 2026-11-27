@@ -5,7 +5,7 @@
   var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
   // <define:__DC_SYSTEM_QUESTIONS__>
-  var define_DC_SYSTEM_QUESTIONS_default = { roundOne: [{ topic: "home", label: "Where should the design system live?", multiple: false, options: [{ choice: "repo", label: "Repo + living page", why: "The system and its living page ship with your repo, next to the code.", recommended: true }, { choice: "internal", label: "In Design Chamber", why: "Stays in the Designs folder. No page in the repo.", recommended: false }] }, { topic: "mode", label: "Should building it also fix the code, or only describe what should be?", multiple: false, options: [{ choice: "fix", label: "Fix tokens, then document", why: "I change the token definitions in your code after you approve a diff.", recommended: true }, { choice: "describe", label: "Describe only, never change the app's code", why: "The system documents the target and your code keeps its values. New system files are still created after you approve a diff.", recommended: false }] }, { topic: "coverage", label: "Which parts should it cover?", multiple: true, options: [{ choice: "foundations", label: "Foundations", why: "Colour, type, space, radius, shadows, layers and sizes.", recommended: true }, { choice: "components", label: "Components", why: "The components the code has, with when to use them.", recommended: true }, { choice: "patterns", label: "Patterns & voice", why: "Layout patterns and how the product speaks.", recommended: true }, { choice: "brand", label: "Brand & marketing", why: "Logos, brand guidance and marketing surfaces.", recommended: true }] }, { topic: "dark", label: "Dark mode as part of this?", multiple: false, options: [{ choice: "not-now", label: "Not now", why: "Light values only. Dark can be added later.", recommended: true }, { choice: "include", label: "Include dark values", why: "I derive a dark value for every colour, and round two asks how.", recommended: false }] }], roundTwo: [{ topic: "status-colours", label: "Status colours", multiple: false, options: [{ choice: "brand-tuned", label: "Brand-tuned set", why: "One warning, one danger, one success, tuned to your brand. The proposed values are shown with this call.", recommended: true }, { choice: "stock", label: "Keep the stock set", why: "The code keeps its current status colours. The system records them as they are.", recommended: false }, { choice: "custom", label: "Custom", why: "Say what you want in the note.", recommended: false }] }, { topic: "greys", label: "Greys", multiple: false, options: [{ choice: "brand-tinted", label: "Brand-tinted greys", why: "The neutral ramp leans a few degrees toward the brand hue.", recommended: true }, { choice: "neutral", label: "Keep neutral grey", why: "The current greys stay; only the colours change.", recommended: false }] }, { topic: "access", label: "Who can open the living page", multiple: false, options: [{ choice: "dev", label: "Dev builds only", why: "The page ships in the repo and is not published.", recommended: true }, { choice: "public", label: "Public", why: "GitHub Pages or a similar host. Fonts fall back unless you turn on Embed fonts.", recommended: false }] }, { topic: "typography", label: "Typography", multiple: false, options: [{ choice: "one-font", label: "One font only", why: "The same font everywhere, including marketing headings.", recommended: true }, { choice: "display", label: "Add a display font", why: "A second face for marketing headings. Specimens fall back where the face is missing.", recommended: false }] }, { topic: "dark-values", label: "Dark values", multiple: false, options: [{ choice: "derive", label: "Derive dark values from the light ones", why: "A dark value for every colour, computed from the light set. Consistent, and quick to review.", recommended: true }, { choice: "hand-tune", label: "Hand-tune them with me", why: "We go through the dark values together, one group at a time.", recommended: false }] }], closing: "Reply with changes, or say go to accept the defaults." };
+  var define_DC_SYSTEM_QUESTIONS_default = { roundOne: [{ topic: "home", label: "Where should the design system live?", multiple: false, options: [{ choice: "repo", label: "Repo + living page", why: "The system and its living page ship with your repo, next to the code.", recommended: true }, { choice: "internal", label: "In Design Chamber", why: "Stays in the Designs folder. No page in the repo.", recommended: false }] }, { topic: "mode", label: "Should building it also fix the code, or only describe what should be?", multiple: false, options: [{ choice: "fix", label: "Fix tokens, then document", why: "I change the token definitions in your code after you approve a diff.", recommended: true }, { choice: "describe", label: "Describe only, never change the app's code", why: "The system documents the target and your code keeps its values. New system files are still created after you approve a diff.", recommended: false }] }, { topic: "coverage", label: "Which parts should it cover?", multiple: true, options: [{ choice: "foundations", label: "Foundations", why: "Colour, type, space, radius, shadows, layers and sizes.", recommended: true }, { choice: "components", label: "Components", why: "The components the code has, with when to use them.", recommended: true }, { choice: "patterns", label: "Patterns & voice", why: "Layout patterns and how the product speaks.", recommended: true }, { choice: "brand", label: "Brand & marketing", why: "Logos, brand guidance and marketing surfaces.", recommended: true }] }, { topic: "depth", label: "How complete should it be?", multiple: false, options: [{ choice: "core", label: "Product core", why: "Foundations, your components with every state, and the patterns your screens use.", recommended: true }, { choice: "full", label: "Full system", why: "Core plus motion, navigation, overlays, forms, feedback, data display and page templates.", recommended: false }, { choice: "tokens", label: "Tokens only", why: "Values and notes only.", recommended: false }] }, { topic: "dark", label: "Dark mode as part of this?", multiple: false, options: [{ choice: "not-now", label: "Not now", why: "Light values only. Dark can be added later.", recommended: true }, { choice: "include", label: "Include dark values", why: "I derive a dark value for every colour, and round two asks how.", recommended: false }] }], roundTwo: [{ topic: "status-colours", label: "Status colours", multiple: false, options: [{ choice: "brand-tuned", label: "Brand-tuned set", why: "One warning, one danger, one success, tuned to your brand. The proposed values are shown with this call.", recommended: true }, { choice: "stock", label: "Keep the stock set", why: "The code keeps its current status colours. The system records them as they are.", recommended: false }, { choice: "custom", label: "Custom", why: "Say what you want in the note.", recommended: false }] }, { topic: "greys", label: "Greys", multiple: false, options: [{ choice: "brand-tinted", label: "Brand-tinted greys", why: "The neutral ramp leans a few degrees toward the brand hue.", recommended: true }, { choice: "neutral", label: "Keep neutral grey", why: "The current greys stay; only the colours change.", recommended: false }] }, { topic: "access", label: "Who can open the living page", multiple: false, options: [{ choice: "dev", label: "Dev builds only", why: "The page ships in the repo and is not published.", recommended: true }, { choice: "public", label: "Public", why: "GitHub Pages or a similar host. Fonts fall back unless you turn on Embed fonts.", recommended: false }] }, { topic: "typography", label: "Typography", multiple: false, options: [{ choice: "one-font", label: "One font only", why: "The same font everywhere, including marketing headings.", recommended: true }, { choice: "display", label: "Add a display font", why: "A second face for marketing headings. Specimens fall back where the face is missing.", recommended: false }] }, { topic: "dark-values", label: "Dark values", multiple: false, options: [{ choice: "derive", label: "Derive dark values from the light ones", why: "A dark value for every colour, computed from the light set. Consistent, and quick to review.", recommended: true }, { choice: "hand-tune", label: "Hand-tune them with me", why: "We go through the dark values together, one group at a time.", recommended: false }] }, { topic: "platforms", label: "Platforms", multiple: false, options: [{ choice: "laptop-phone", label: "Laptop and phone", why: "Both, at the code's breakpoints.", recommended: true }, { choice: "phone-first", label: "Phone first", why: "Wider screens add columns.", recommended: false }, { choice: "laptop", label: "Laptop only", why: "No phone layouts.", recommended: false }, { choice: "custom", label: "Custom", why: "Say which in the note.", recommended: false }] }, { topic: "navigation", label: "Navigation", multiple: false, options: [{ choice: "keep", label: "Keep the code's pattern", why: "Plus a phone version if it lacks one.", recommended: true }, { choice: "top-bottom", label: "Top bar, bottom bar on phone", why: "Up to 7 destinations on top, 3 to 5 at the bottom.", recommended: false }, { choice: "rail-bottom", label: "Side rail, bottom bar on phone", why: "For 8+ destinations or a deep app.", recommended: false }, { choice: "custom", label: "Custom", why: "Say what in the note.", recommended: false }] }, { topic: "overlays", label: "Overlays", multiple: false, options: [{ choice: "sheet", label: "Sheets on phone, modals on laptop", why: "Short tasks rise from the bottom on phone.", recommended: true }, { choice: "modal", label: "Modals everywhere", why: "Centred at every width.", recommended: false }, { choice: "keep", label: "Keep the code's", why: "Recorded as is.", recommended: false }] }, { topic: "motion", label: "Motion", multiple: false, options: [{ choice: "calm", label: "A calm set", why: "Three durations, ease-out in, ease-in out, fades under reduced motion.", recommended: true }, { choice: "keep", label: "Keep the code's values", why: "Recorded as is.", recommended: false }, { choice: "none", label: "No motion", why: "Changes are instant.", recommended: false }] }, { topic: "scales", label: "Spacing and radius", multiple: false, options: [{ choice: "snap", label: "Snap to one scale", why: "Values move to the nearest step, listed in the diff.", recommended: true }, { choice: "keep", label: "Keep every value", why: "Recorded as is.", recommended: false }] }, { topic: "brand-colour", label: "Brand colour", multiple: false, options: [{ choice: "split", label: "Brand palette for marketing, one product accent", why: "The app keeps one accent for actions.", recommended: true }, { choice: "one", label: "One colour everywhere", why: "One accent in the app and marketing.", recommended: false }] }], closing: "Reply with changes, or say go to accept the defaults." };
 
   // node_modules/@openchamber/sdk/dist/api-version.js
   var OPENCHAMBER_SDK_CHANNEL = "openchamber.sdk";
@@ -79,6 +79,51 @@
   var GUEST_SHELL_ID_MAX = 128;
   var GUEST_SHELL_OUTPUT_TAIL_MAX = 65536;
 
+  // node_modules/@openchamber/sdk/dist/microphone.js
+  var GUEST_MICROPHONE_SAMPLE_RATE_MIN = 8e3;
+  var GUEST_MICROPHONE_SAMPLE_RATE_MAX = 192e3;
+  var GUEST_MICROPHONE_OPEN_TIMEOUT_MS = 12e4;
+  var createSampleQueue = (capacity) => {
+    const chunks = [];
+    let offset = 0;
+    let queued = 0;
+    return {
+      push: (samples) => {
+        chunks.push(samples);
+        queued += samples.length;
+        while (queued - offset > capacity && chunks.length > 1) {
+          const dropped = chunks.shift();
+          queued -= dropped?.length ?? 0;
+          offset = 0;
+        }
+      },
+      pull: (out) => {
+        let written = 0;
+        while (written < out.length && chunks.length > 0) {
+          const head = chunks[0];
+          const count = Math.min(out.length - written, head.length - offset);
+          out.set(head.subarray(offset, offset + count), written);
+          written += count;
+          offset += count;
+          if (offset >= head.length) {
+            chunks.shift();
+            queued -= head.length;
+            offset = 0;
+          }
+        }
+        out.fill(0, written);
+      },
+      clear: () => {
+        chunks.length = 0;
+        offset = 0;
+        queued = 0;
+      },
+      get size() {
+        return queued - offset;
+      }
+    };
+  };
+
   // node_modules/@openchamber/sdk/dist/status-controls.js
   var GUEST_STATUS_CONTROLS_MAX = 4;
   var GUEST_STATUS_CONTROL_ID = /^[a-z][a-z0-9-]{0,39}$/;
@@ -123,6 +168,7 @@
   };
 
   // node_modules/@openchamber/sdk/dist/manifest.js
+  var GUEST_PROVIDER_LOGO_BYTES_MAX = 1024 * 1024;
   var TRACKER_URL_TOKENS = ["{id}", "{segment}", "{segments+}"];
   var TRACKER_URL_TOKEN_SET = new Set(TRACKER_URL_TOKENS);
   var GUEST_BLOCK_ARGS_TEXT_MAX = 16e3;
@@ -208,13 +254,25 @@
     }
   };
 
+  // node_modules/@openchamber/sdk/dist/navigation.js
+  var GUEST_COMMIT_SHA = /^[0-9a-f]{7,64}$/i;
+  var isGuestCommitSha = (value) => GUEST_COMMIT_SHA.test(value);
+  var GUEST_WALKTHROUGH_BASE_MAX = 255;
+  var guestNavigationCalls = (request, nextId2, refuse) => ({
+    openCommit: (sha) => isGuestCommitSha(sha) ? request({ channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION, type: "open-commit", id: nextId2(), payload: { sha } }) : refuse("Commit id must be 7 to 64 hex characters."),
+    openWalkthrough: ({ base }) => {
+      const trimmed = base.trim();
+      if (!trimmed || trimmed.length > GUEST_WALKTHROUGH_BASE_MAX)
+        return refuse(`Base must contain 1 to ${GUEST_WALKTHROUGH_BASE_MAX} characters.`);
+      return request({ channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION, type: "open-walkthrough", id: nextId2(), payload: { base: trimmed } });
+    }
+  });
+
   // node_modules/@openchamber/sdk/dist/contract.js
   var GUEST_BLOCK_ANSWER_MAX = 2e3;
   var GUEST_FILE_STAT_KINDS = ["file", "directory", "other", "missing"];
   var isStartSessionResult = (value) => Boolean(value && "sessionId" in value);
   var isPromptResult = (value) => Boolean(value && "sent" in value && !("sessionId" in value));
-  var GUEST_COMMIT_SHA = /^[0-9a-f]{7,64}$/i;
-  var isGuestCommitSha = (value) => GUEST_COMMIT_SHA.test(value);
   var GUEST_TOAST_MAX = 500;
   var GUEST_CLIPBOARD_TEXT_MAX = 32e3;
   var GUEST_COMPOSE_TEXT_MAX = 16e3;
@@ -381,7 +439,9 @@
     "file-open",
     "file-snapshot",
     "file-saved",
-    "generate-late"
+    "generate-late",
+    "microphone-audio",
+    "microphone-ended"
   ]);
   var asWireRecord = (data) => Object(data) === data ? data : null;
   var isNonEmptyString = (value) => String(value) === value && value.length > 0;
@@ -487,6 +547,7 @@
     let popoverPointerActive = false;
     let popoverFocusActive = false;
     let popoverActivityReported = null;
+    let microphone = null;
     const lifecycleFromSession = (session) => {
       if (!session)
         return null;
@@ -530,6 +591,19 @@
         const listener = shellsListeners.get(message.payload.subscriptionId);
         if (listener)
           emit([listener], message.payload.snapshot);
+        return;
+      }
+      if (message.type === "microphone-audio") {
+        microphone?.queue.push(message.payload.samples);
+        return;
+      }
+      if (message.type === "microphone-ended") {
+        const open = microphone;
+        if (!open)
+          return;
+        microphone = null;
+        open.release();
+        emit(open.endedListeners, message.payload.reason);
         return;
       }
       if (message.type === "ready") {
@@ -735,6 +809,76 @@
         post(message);
     };
     const requestFileSave = () => notify({ ...envelope, type: "file-save" });
+    const postMicrophoneClose = () => {
+      if (!disposed && target.parent !== target)
+        post({ ...envelope, type: "microphone-close", id: nextId(ids) });
+    };
+    const openMicrophone = async () => {
+      if (microphone)
+        throw new HostRequestError("HOST_REJECTED", "The microphone is already open in this frame.");
+      if (lastReady?.features?.microphone !== true) {
+        throw new HostRequestError("UNSUPPORTED", "This OpenChamber cannot share the microphone with extensions.");
+      }
+      const AudioContextCtor = globalThis.AudioContext;
+      if (typeof AudioContextCtor !== "function")
+        throw new HostRequestError("UNSUPPORTED", "This frame has no Web Audio.");
+      const context = new AudioContextCtor();
+      if (context.sampleRate < GUEST_MICROPHONE_SAMPLE_RATE_MIN || context.sampleRate > GUEST_MICROPHONE_SAMPLE_RATE_MAX) {
+        void context.close().catch(() => void 0);
+        throw new HostRequestError("UNSUPPORTED", `Audio at ${context.sampleRate} Hz is not supported.`);
+      }
+      const resumed = context.state === "suspended" ? context.resume().catch(() => void 0) : void 0;
+      const queue = createSampleQueue(Math.round(context.sampleRate / 4));
+      const processor = context.createScriptProcessor(1024, 1, 1);
+      processor.onaudioprocess = (event) => queue.pull(event.outputBuffer.getChannelData(0));
+      const destination = context.createMediaStreamDestination();
+      processor.connect(destination);
+      const endedListeners = /* @__PURE__ */ new Set();
+      const open = {
+        queue,
+        endedListeners,
+        release: () => {
+          processor.onaudioprocess = null;
+          processor.disconnect();
+          queue.clear();
+          for (const track of destination.stream.getTracks())
+            track.stop();
+          void context.close().catch(() => void 0);
+        }
+      };
+      microphone = open;
+      try {
+        const result = await send({ ...envelope, type: "microphone-open", id: nextId(ids), payload: { sampleRate: context.sampleRate } }, GUEST_MICROPHONE_OPEN_TIMEOUT_MS);
+        if (!result || !("opened" in result) || result.opened !== true) {
+          throw new HostRequestError("HOST_REJECTED", "Host did not open the microphone.");
+        }
+        await resumed;
+        if (microphone !== open)
+          throw new HostRequestError("DISCONNECTED", "The microphone closed while it was opening.");
+      } catch (error) {
+        if (microphone === open)
+          microphone = null;
+        open.release();
+        postMicrophoneClose();
+        throw error;
+      }
+      return {
+        stream: destination.stream,
+        close: () => {
+          if (microphone !== open)
+            return;
+          microphone = null;
+          open.release();
+          postMicrophoneClose();
+        },
+        onEnded: (listener) => {
+          endedListeners.add(listener);
+          return () => {
+            endedListeners.delete(listener);
+          };
+        }
+      };
+    };
     const onSaveShortcut = (event) => {
       if (!isKeyEvent(event) || !isSaveShortcut(event))
         return;
@@ -1093,13 +1237,7 @@
         id: nextId(ids),
         payload: { url }
       }),
-      openCommit: (sha) => isGuestCommitSha(sha) ? request({
-        channel: OPENCHAMBER_SDK_CHANNEL,
-        v: OPENCHAMBER_SDK_API_VERSION,
-        type: "open-commit",
-        id: nextId(ids),
-        payload: { sha }
-      }) : Promise.reject(new HostRequestError("HOST_REJECTED", "Commit id must be 7 to 64 hex characters.")),
+      ...guestNavigationCalls(request, () => nextId(ids), (message) => Promise.reject(new HostRequestError("HOST_REJECTED", message))),
       answerBlock: (text) => request({
         channel: OPENCHAMBER_SDK_CHANNEL,
         v: OPENCHAMBER_SDK_API_VERSION,
@@ -1329,6 +1467,7 @@
           lateGenerateListeners.delete(listener);
         };
       },
+      openMicrophone,
       setBadge: (count) => request({
         channel: OPENCHAMBER_SDK_CHANNEL,
         v: OPENCHAMBER_SDK_API_VERSION,
@@ -1380,6 +1519,11 @@
           post({ ...envelope, type: "shells-unsubscribe", id: nextId(ids), payload: { subscriptionId } });
         }
         shellsListeners.clear();
+        if (microphone) {
+          postMicrophoneClose();
+          microphone.release();
+          microphone = null;
+        }
         disposed = true;
         resolveHandler = null;
         actionHandler = null;
@@ -1521,7 +1665,7 @@
       root2.style.setProperty(hostName, value);
     }
     root2.style.setProperty("font-family", theme.tokens.font);
-    root2.style.setProperty("font-size", "0.875rem");
+    root2.style.setProperty("font-size", theme.tokens.fontSize ?? "0.875rem");
     root2.style.setProperty("line-height", "1.45");
     root2.style.setProperty("color", theme.tokens.foreground);
   };
@@ -1615,6 +1759,7 @@
     return `
 .oc-sdk[data-tone="${name}"], .oc-sdk [data-tone="${name}"] { --oc-sdk-tone: ${color}; --oc-sdk-tone-text: ${v(`${name}-text`, "inherit")}; }`;
   };
+  var len = (px2) => `calc(${px2}rem / 14)`;
   var UI_SIZE_CSS = `
 .oc-sdk { box-sizing: border-box; font-size: 0.875rem; line-height: 1.45; }
 .oc-sdk *, .oc-sdk *::before, .oc-sdk *::after { box-sizing: border-box; }
@@ -1623,95 +1768,106 @@
 :where(.oc-sdk) :where(button), :where(button.oc-sdk) { cursor: pointer; background: none; border: 0; padding: 0; }
 .oc-sdk button:disabled, button.oc-sdk:disabled, .oc-sdk[aria-disabled="true"], .oc-sdk [aria-disabled="true"] { opacity: .5; pointer-events: none; }
 
-.oc-sdk-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid transparent; font-size: 0.875rem; font-weight: 500; line-height: 1; white-space: nowrap; }
-.oc-sdk-btn[data-size="sm"] { gap: 6px; height: 28px; padding: 0 10px; font-size: 0.8125rem; }
-.oc-sdk-btn[data-size="xs"] { gap: 4px; height: 24px; padding: 0 8px; font-size: 0.75rem; }
+.oc-sdk-btn { display: inline-flex; align-items: center; justify-content: center; gap: ${len(8)}; height: ${len(32)}; padding: 0 ${len(12)}; border: 1px solid transparent; font-size: 0.875rem; font-weight: 500; line-height: 1; white-space: nowrap; }
+.oc-sdk-btn[data-size="sm"] { gap: ${len(6)}; height: ${len(28)}; padding: 0 ${len(10)}; font-size: 0.8125rem; }
+.oc-sdk-btn[data-size="xs"] { gap: ${len(4)}; height: ${len(24)}; padding: 0 ${len(8)}; font-size: 0.75rem; }
 .oc-sdk-btn[data-loading="true"] { opacity: .5; pointer-events: none; }
-.oc-sdk-btn > .oc-sdk-spinner-ring { width: 14px; height: 14px; }
+.oc-sdk-btn > .oc-sdk-spinner-ring { width: ${len(14)}; height: ${len(14)}; }
 
-.oc-sdk-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.oc-sdk-field { display: flex; flex-direction: column; gap: ${len(4)}; min-width: 0; }
 .oc-sdk-field-label { font-size: 0.8125rem; font-weight: 500; }
 .oc-sdk-field-note { font-size: 0.75rem; }
-.oc-sdk-input { display: block; width: 100%; min-width: 0; height: 32px; padding: 0 10px; border: 0; font-size: 0.875rem; line-height: 1.45; appearance: none; }
-textarea.oc-sdk-input { height: auto; padding: 8px 10px; resize: vertical; }
+.oc-sdk-input { display: block; width: 100%; min-width: 0; height: ${len(32)}; padding: 0 ${len(10)}; border: 0; font-size: 0.875rem; line-height: 1.45; appearance: none; }
+textarea.oc-sdk-input { height: auto; padding: ${len(8)} ${len(10)}; resize: vertical; }
 
 .oc-sdk-search { position: relative; min-width: 0; }
-.oc-sdk-search .oc-sdk-input { padding-left: 34px; padding-right: 34px; }
-.oc-sdk-search-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); pointer-events: none; }
-.oc-sdk-search-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: none; align-items: center; justify-content: center; width: 24px; height: 24px; }
+.oc-sdk-search .oc-sdk-input { padding-left: ${len(34)}; padding-right: ${len(34)}; }
+.oc-sdk-search-icon { position: absolute; left: ${len(11)}; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.oc-sdk-search-clear { position: absolute; right: ${len(6)}; top: 50%; transform: translateY(-50%); display: none; align-items: center; justify-content: center; width: ${len(24)}; height: ${len(24)}; }
 .oc-sdk-search[data-active="true"] .oc-sdk-search-clear { display: inline-flex; }
 
-.oc-sdk-select { position: relative; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.oc-sdk-trigger { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; width: auto; max-width: 100%; min-width: 0; height: 28px; padding: 0 10px; border: 1px solid transparent; font-size: 0.8125rem; text-align: left; }
+.oc-sdk-select { position: relative; display: flex; flex-direction: column; gap: ${len(4)}; min-width: 0; }
+.oc-sdk-trigger { display: inline-flex; align-items: center; gap: ${len(6)}; align-self: flex-start; width: auto; max-width: 100%; min-width: 0; height: ${len(28)}; padding: 0 ${len(10)}; border: 1px solid transparent; font-size: 0.8125rem; text-align: left; }
 .oc-sdk-trigger-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdk-trigger-chevron { flex: 0 0 auto; }
-.oc-sdk-popup { position: fixed; z-index: 50; display: flex; flex-direction: column; gap: 2px; min-width: 160px; max-width: calc(100vw - 16px); max-height: min(320px, calc(100vh - 16px)); overflow: auto; padding: 4px; border: 1px solid transparent; }
-.oc-sdk-popup-search { flex: 0 0 auto; padding: 2px 2px 4px; }
-.oc-sdk-popup-search .oc-sdk-input { height: 28px; font-size: 0.8125rem; }
-.oc-sdk-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; font-size: 0.8125rem; text-align: left; }
+.oc-sdk-popup { position: fixed; z-index: 50; display: flex; flex-direction: column; gap: ${len(2)}; min-width: ${len(160)}; max-width: calc(100vw - ${len(16)}); max-height: min(${len(320)}, calc(100vh - ${len(16)})); overflow: auto; padding: ${len(4)}; border: 1px solid transparent; }
+.oc-sdk-popup-search { flex: 0 0 auto; padding: ${len(2)} ${len(2)} ${len(4)}; }
+.oc-sdk-popup-search .oc-sdk-input { height: ${len(28)}; font-size: 0.8125rem; }
+.oc-sdk-option { display: flex; align-items: center; gap: ${len(8)}; width: 100%; padding: ${len(6)} ${len(8)}; font-size: 0.8125rem; text-align: left; }
 .oc-sdk-option-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdk-option-hint { flex: 0 0 auto; font-size: 0.75rem; }
-.oc-sdk-option-check { flex: 0 0 auto; display: inline-flex; width: 14px; visibility: hidden; }
+.oc-sdk-option-check { flex: 0 0 auto; display: inline-flex; width: ${len(14)}; visibility: hidden; }
 .oc-sdk-option[aria-selected="true"] > .oc-sdk-option-check { visibility: visible; }
-.oc-sdk-popup-empty { padding: 8px; font-size: 0.8125rem; }
+.oc-sdk-popup-empty { padding: ${len(8)}; font-size: 0.8125rem; }
 
-.oc-sdk-check { display: inline-flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; }
-.oc-sdk-check-box { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; margin-top: 3px; border: 1px solid transparent; }
+.oc-sdk-check { display: inline-flex; align-items: flex-start; gap: ${len(8)}; width: 100%; text-align: left; }
+.oc-sdk-check-box { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: ${len(14)}; height: ${len(14)}; margin-top: ${len(3)}; border: 1px solid transparent; }
 .oc-sdk-check-box > svg { display: none; }
 .oc-sdk-check[aria-checked="true"] .oc-sdk-check-box > svg { display: block; }
-.oc-sdk-check-thumb { flex: 0 0 auto; position: relative; width: 36px; height: 20px; }
-.oc-sdk-check-thumb::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; }
+.oc-sdk-check-thumb { flex: 0 0 auto; position: relative; width: ${len(36)}; height: ${len(20)}; --oc-sdk-thumb-travel: ${len(16)}; }
+.oc-sdk-check-thumb::after { content: ""; position: absolute; top: ${len(2)}; left: ${len(2)}; width: ${len(16)}; height: ${len(16)}; }
 .oc-sdk-check-text { display: flex; flex-direction: column; min-width: 0; }
 .oc-sdk-check-label { font-size: 0.875rem; }
 .oc-sdk-check-desc { font-size: 0.75rem; }
 
-.oc-sdk-tabs { display: inline-flex; gap: 2px; padding: 2px; max-width: 100%; overflow: auto; }
-.oc-sdk-tab { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid transparent; font-size: 0.8125rem; font-weight: 500; white-space: nowrap; }
+.oc-sdk-tabs { display: inline-flex; gap: ${len(2)}; padding: ${len(2)}; max-width: 100%; overflow: auto; }
+.oc-sdk-tab { display: inline-flex; align-items: center; gap: ${len(6)}; height: ${len(28)}; padding: 0 ${len(10)}; border: 1px solid transparent; font-size: 0.8125rem; font-weight: 500; white-space: nowrap; }
 .oc-sdk-tab-count { font-size: 0.75rem; font-variant-numeric: tabular-nums; }
 
-.oc-sdk-badge { display: inline-flex; align-items: center; padding: 1px 6px; font-size: 11px; font-weight: 500; line-height: 16px; white-space: nowrap; }
+.oc-sdk-badge { display: inline-flex; align-items: center; padding: ${len(1)} ${len(6)}; font-size: ${len(11)}; font-weight: 500; line-height: ${len(16)}; white-space: nowrap; }
 
 .oc-sdk-list { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.oc-sdk-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; text-align: left; }
-.oc-sdk-row-lead { flex: 0 0 auto; width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
+.oc-sdk-row { display: flex; align-items: center; gap: ${len(8)}; width: 100%; padding: ${len(6)} ${len(8)}; text-align: left; }
+.oc-sdk-row-lead { flex: 0 0 auto; width: ${len(64)}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
 .oc-sdk-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 .oc-sdk-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdk-row-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
 .oc-sdk-row-meta { flex: 0 0 auto; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-.oc-sdk-list-empty { padding: 16px 8px; text-align: center; font-size: 0.8125rem; }
+.oc-sdk-list-empty { padding: ${len(16)} ${len(8)}; text-align: center; font-size: 0.8125rem; }
 
-.oc-sdk-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 40px 16px; text-align: center; }
+.oc-sdk-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: ${len(4)}; padding: ${len(40)} ${len(16)}; text-align: center; }
 .oc-sdk-empty-title { margin: 0; font-size: 0.8125rem; font-weight: 600; }
 .oc-sdk-empty-body { margin: 0; max-width: 32rem; font-size: 0.8125rem; }
-.oc-sdk-empty-action { margin-top: 12px; }
+.oc-sdk-empty-action { margin-top: ${len(12)}; }
 
 @keyframes oc-sdk-spin { to { transform: rotate(360deg); } }
-.oc-sdk-spinner { display: inline-flex; align-items: center; gap: 8px; font-size: 0.8125rem; }
-.oc-sdk-spinner-ring { width: 16px; height: 16px; border: 2px solid transparent; animation: oc-sdk-spin .8s linear infinite; }
-.oc-sdk-spinner[data-size="sm"] .oc-sdk-spinner-ring { width: 12px; height: 12px; }
+.oc-sdk-spinner { display: inline-flex; align-items: center; gap: ${len(8)}; font-size: 0.8125rem; }
+.oc-sdk-spinner-ring { width: ${len(16)}; height: ${len(16)}; border: 2px solid transparent; animation: oc-sdk-spin .8s linear infinite; }
+.oc-sdk-spinner[data-size="sm"] .oc-sdk-spinner-ring { width: ${len(12)}; height: ${len(12)}; }
 
-.oc-sdk-banner { display: flex; align-items: flex-start; gap: 12px; padding: 8px 12px; border: 1px solid transparent; }
-.oc-sdk-banner-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.oc-sdk-banner { display: flex; align-items: flex-start; gap: ${len(12)}; padding: ${len(8)} ${len(12)}; border: 1px solid transparent; }
+.oc-sdk-banner-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: ${len(2)}; }
 .oc-sdk-banner-title { font-size: 0.8125rem; font-weight: 500; }
 .oc-sdk-banner-body { font-size: 0.8125rem; }
 .oc-sdk-banner-action { flex: 0 0 auto; }
 
-.oc-sdk-separator { display: flex; align-items: center; gap: 8px; width: 100%; margin: 8px 0; font-size: 0.75rem; }
+.oc-sdk-separator { display: flex; align-items: center; gap: ${len(8)}; width: 100%; margin: ${len(8)} 0; font-size: 0.75rem; }
 .oc-sdk-separator::before, .oc-sdk-separator::after { content: ""; flex: 1 1 auto; height: 1px; }
 .oc-sdk-separator[data-labeled="false"]::after { display: none; }
-.oc-sdk-popup > .oc-sdk-separator { margin: 4px 0; }
+.oc-sdk-popup > .oc-sdk-separator { margin: ${len(4)} 0; }
 
-.oc-sdk-progress { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.oc-sdk-progress { display: flex; flex-direction: column; gap: ${len(4)}; min-width: 0; }
 .oc-sdk-progress-label { display: flex; justify-content: space-between; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-.oc-sdk-progress-track { height: 6px; overflow: hidden; }
+.oc-sdk-progress-track { height: ${len(6)}; overflow: hidden; }
 .oc-sdk-progress-fill { height: 100%; transform-origin: left; transition: transform 200ms ease-out; }
-.oc-sdk-progress-value { display: inline-flex; align-items: center; gap: 2px; }
+.oc-sdk-progress-value { display: inline-flex; align-items: center; gap: ${len(2)}; }
 .oc-sdk-progress[data-done="true"] .oc-sdk-progress-value { font-weight: 600; }
 
 .oc-sdk-menu { position: relative; display: inline-flex; }
 
 .oc-sdk-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.oc-sdk-text img { display: block; max-width: 100%; margin: 8px 0; }
+.oc-sdk-text img { display: block; max-width: 100%; margin: ${len(8)} 0; }
+
+/* Under a finger the controls reach the app's touch sizes: rows and options 44px like its sheets, every other
+   control at least 36px. Inputs keep 16px text, below which iOS zooms the page on focus. */
+@media (pointer: coarse) {
+  .oc-sdk-btn, .oc-sdk-input { height: ${len(40)}; }
+  .oc-sdk-btn[data-size="sm"], .oc-sdk-btn[data-size="xs"], .oc-sdk-trigger, .oc-sdk-tab, .oc-sdk-popup-search .oc-sdk-input { height: ${len(36)}; }
+  .oc-sdk-input, .oc-sdk-popup-search .oc-sdk-input { font-size: max(16px, 0.875rem); }
+  .oc-sdk-search-clear { width: ${len(36)}; height: ${len(36)}; right: 0; }
+  .oc-sdk-row, .oc-sdk-option { min-height: ${len(44)}; }
+  .oc-sdk-check { min-height: ${len(36)}; padding: ${len(8)} 0; }
+}
 `;
   var GUEST_UI_LOOK_CSS = `${THEME_VARS}
 .oc-sdk { color: ${fg}; font-family: ${font}; }
@@ -1778,7 +1934,7 @@ ${tone("success")}${tone("warning")}${tone("error")}${tone("info")}
 .oc-sdk-check-thumb { border-radius: 9999px; background: ${border}; transition: background 150ms ease-out; }
 .oc-sdk-check-thumb::after { border-radius: 9999px; background: ${bg}; transition: transform 150ms ease-out; }
 .oc-sdk-check[aria-checked="true"] .oc-sdk-check-thumb { background: ${primary}; }
-.oc-sdk-check[aria-checked="true"] .oc-sdk-check-thumb::after { transform: translateX(16px); }
+.oc-sdk-check[aria-checked="true"] .oc-sdk-check-thumb::after { transform: translateX(var(--oc-sdk-thumb-travel, 16px)); }
 .oc-sdk-check:focus-visible { box-shadow: none; }
 .oc-sdk-check:focus-visible .oc-sdk-check-box, .oc-sdk-check:focus-visible .oc-sdk-check-thumb { ${focusFill} }
 .oc-sdk-check-desc { color: ${muted}; }
@@ -1983,6 +2139,8 @@ ${GUEST_UI_LOOK_CSS}`;
     node.setAttribute("viewBox", "0 0 24 24");
     node.setAttribute("width", String(size));
     node.setAttribute("height", String(size));
+    node.style.width = len(size);
+    node.style.height = len(size);
     node.setAttribute("aria-hidden", "true");
     node.setAttribute("fill", "currentColor");
     if (className) {
@@ -2189,8 +2347,8 @@ ${GUEST_UI_LOOK_CSS}`;
         return () => lifecycle.delete(listener);
       },
       whenReady: () => {
-        const current = ready.get();
-        return current ? Promise.resolve(current) : new Promise((resolve) => readyWaiters.push(resolve));
+        const current2 = ready.get();
+        return current2 ? Promise.resolve(current2) : new Promise((resolve) => readyWaiters.push(resolve));
       },
       dispose: () => {
         for (const unsubscribe of unsubscribers) unsubscribe();
@@ -2206,6 +2364,10 @@ ${GUEST_UI_LOOK_CSS}`;
 
   // src/shared/limits.ts
   var SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+  var VIEWPORT_WIDTH_MIN = 200;
+  var VIEWPORT_WIDTH_MAX = 3840;
+  var VIEWPORT_HEIGHT_MIN = 200;
+  var VIEWPORT_HEIGHT_MAX = 4320;
   var SNAPSHOT_BYTES_MAX = 100 * 1024 * 1024;
   var TURN_PROMOTE_AUTO_MS = 30 * 6e4;
   var UPLOAD_TOTAL_MAX = 2e6;
@@ -2245,6 +2407,8 @@ ${GUEST_UI_LOOK_CSS}`;
   var FOLDER_UNDO_MS = 60 * 6e4;
   var SYSTEM_BUILD_TICKET_PATTERN = /^sb_[a-z0-9]{12}$/;
   var SYSTEM_BUILD_TTL_MS = 7 * 864e5;
+  var SYSTEM_MOTION_DURATION_MAX_MS = 1e4;
+  var SYSTEM_MOTION_STEPS_MAX = 100;
   var LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
   var LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
   var SCAN_JSON_MAX_BYTES = 2 * 1024 * 1024;
@@ -2254,6 +2418,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var SYSTEM_ASK_CALLS_MAX = 8;
   var SYSTEM_ASK_WHY_MAX = 300;
   var SYSTEM_ASK_PROPOSED_MAX = 200;
+  var FILE_PAGE_COPY_MAX_BYTES = 50 * 1024 * 1024;
 
   // src/shared/agent/context.ts
   var VIEWPORT_TABLET = Object.freeze({ id: "tablet", label: "Tablet", width: 768, height: 1024 });
@@ -2261,6 +2426,45 @@ ${GUEST_UI_LOOK_CSS}`;
 
   // src/shared/types.ts
   var CHIP_PROVIDER_ID = "design-chamber";
+
+  // src/ui/model/device-model.ts
+  var PX_MAX = 400;
+  var NO_INSETS = { top: 0, right: 0, bottom: 0, left: 0 };
+  var DESKTOP_DEVICE = { form: "desktop", coarse: false, insets: NO_INSETS, keyboard: 0 };
+  var record = (value) => typeof value === "object" && value !== null ? value : {};
+  var px = (value) => typeof value === "number" && Number.isFinite(value) ? Math.min(PX_MAX, Math.max(0, Math.round(value))) : 0;
+  var deviceOf = (context) => {
+    const raw = record(context.device);
+    const { formFactor, pointer } = raw;
+    if (formFactor !== "phone" && formFactor !== "tablet" && formFactor !== "desktop") return DESKTOP_DEVICE;
+    if (pointer !== "coarse" && pointer !== "fine") return DESKTOP_DEVICE;
+    const insets = record(raw.insets);
+    return {
+      form: formFactor,
+      coarse: pointer === "coarse",
+      insets: { top: px(insets.top), right: px(insets.right), bottom: px(insets.bottom), left: px(insets.left) },
+      keyboard: px(raw.keyboard)
+    };
+  };
+  var TIP_TITLE = "Open Design Chamber full screen";
+  var openHelp = (device2, panelOnPhone) => {
+    if (device2.form !== "phone") {
+      return {
+        notHere: "Open Design Chamber from the rail to see it.",
+        serviceDown: "Design Chamber isn\u2019t responding.",
+        fullScreenHint: "Full screen: sidebar \u2192 Extension pages \u2192 Design Chamber",
+        firstRunTip: { title: TIP_TITLE, body: "In the sidebar, open Extension pages and pick Design Chamber. Canvases get the whole window there." }
+      };
+    }
+    const serviceDown = "Design Chamber isn\u2019t responding on your computer. Try again in a moment.";
+    if (!panelOnPhone) return { notHere: "Open Design Chamber from the More menu in your chats list.", serviceDown, fullScreenHint: null, firstRunTip: null };
+    return {
+      notHere: "Design Chamber can\u2019t open here yet. Open it from the More menu in your chats list.",
+      serviceDown,
+      fullScreenHint: "Full screen: chats list \u2192 More \u2192 Design Chamber",
+      firstRunTip: { title: TIP_TITLE, body: "In your chats list, open More and pick Design Chamber." }
+    };
+  };
 
   // src/shared/api.ts
   var API_ERROR_STATUS = {
@@ -2318,6 +2522,7 @@ ${GUEST_UI_LOOK_CSS}`;
     "POST /chip": "WP3",
     "POST /designs/:slug/prompt": "WP3",
     "POST /pages/from-message": "WP3",
+    "POST /pages/from-file": "WP3",
     "DELETE /open-request": "WP3",
     "POST /open-request": "WP3",
     "POST /session-events": "U4",
@@ -2370,13 +2575,27 @@ ${GUEST_UI_LOOK_CSS}`;
     "POST /systems/:id/build/stop": "P25",
     "POST /system-stops/:undoId/undo": "P25",
     "POST /memberships": "P26",
-    "POST /systems/register": "P26"
+    "POST /systems/register": "P26",
+    "PUT /view": "UP",
+    // system-builder-depth Phase 2 (§13 T12a)
+    "GET /systems/:id/screens/render": "SBD",
+    "GET /systems/:id/screens/render/chunk": "SBD",
+    // system-builder-depth Phase 3 (§13 T19, T20)
+    "GET /systems/:id/export": "SBD3",
+    "POST /systems/:id/export": "SBD3",
+    "GET /systems/:id/comments": "SBD3",
+    "POST /systems/:id/comments": "SBD3",
+    "PATCH /systems/:id/comments/:commentId": "SBD3",
+    "DELETE /systems/:id/comments/:commentId": "SBD3",
+    "POST /systems/:id/comments/mark-sent": "SBD3"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
   var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set([
     "GET /designs/:slug/render/chunk",
     "GET /systems/:id/board/chunk",
-    "GET /systems/:id/living-page/render/chunk"
+    "GET /systems/:id/living-page/render/chunk",
+    // system-builder-depth Phase 2 (§13 T12a)
+    "GET /systems/:id/screens/render/chunk"
   ]);
   var splitRouteKey = (key) => {
     const space = key.indexOf(" ");
@@ -2618,6 +2837,42 @@ ${GUEST_UI_LOOK_CSS}`;
       inflight.set(key, task);
       return task;
     };
+    const fetchSystemScreen = async (id, screen, options2) => {
+      const query = { screen, scheme: options2.scheme ?? "light" };
+      if (options2.version) query.version = options2.version;
+      if (options2.proposal) query.proposal = options2.proposal;
+      const meta = await call("GET /systems/:id/screens/render", { params: { id }, query });
+      const cached = renders.get(meta.key);
+      if (cached) {
+        renders.delete(meta.key);
+        renders.set(meta.key, cached);
+        return cached;
+      }
+      const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
+      const parts = await mapLimit(
+        indexes,
+        RENDER_CHUNK_CONCURRENCY,
+        (n) => call("GET /systems/:id/screens/render/chunk", { params: { id }, query: { key: meta.key, n: String(n) } })
+      );
+      const doc = { meta, html: parts.join("") };
+      remember(doc);
+      return doc;
+    };
+    const systemScreen = (id, screen, options2 = {}) => {
+      const key = `screen\0${id}\0${screen}\0${options2.version ?? ""}\0${options2.proposal ?? ""}\0${options2.scheme ?? "light"}`;
+      const running = inflight.get(key);
+      if (running) return running;
+      const task = (async () => {
+        try {
+          return await fetchSystemScreen(id, screen, options2);
+        } catch (error) {
+          if (isServiceError(error, "stale")) return fetchSystemScreen(id, screen, options2);
+          throw error;
+        }
+      })().finally(() => inflight.delete(key));
+      inflight.set(key, task);
+      return task;
+    };
     const upload = async (text) => {
       if (text.length > UPLOAD_TOTAL_MAX) {
         throw new ServiceError("too-large", `This text is too long to send to Design Chamber (over ${UPLOAD_TOTAL_MAX.toLocaleString("en-US")} characters).`);
@@ -2666,7 +2921,16 @@ ${GUEST_UI_LOOK_CSS}`;
     const stopBuild = (systemId, proposalId = null) => call("POST /systems/:id/build/stop", { params: { id: systemId }, body: { proposalId } });
     const undoStop = (undoId) => call("POST /system-stops/:undoId/undo", { params: { undoId }, body: {} });
     const loadLivingPage = (systemId) => call("GET /systems/:id/living-page", { params: { id: systemId } });
-    return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
+    const systemExportFormats = (systemId) => call("GET /systems/:id/export", { params: { id: systemId } });
+    const exportSystemTokens = (systemId, formats) => call("POST /systems/:id/export", { params: { id: systemId }, body: formats === void 0 ? {} : { formats } });
+    const systemComments = {
+      list: (systemId) => call("GET /systems/:id/comments", { params: { id: systemId } }),
+      add: (systemId, body) => call("POST /systems/:id/comments", { params: { id: systemId }, body }),
+      update: (systemId, commentId, patch) => call("PATCH /systems/:id/comments/:commentId", { params: { id: systemId, commentId }, body: patch }),
+      remove: (systemId, commentId) => call("DELETE /systems/:id/comments/:commentId", { params: { id: systemId, commentId } }),
+      markSent: (systemId, ids) => call("POST /systems/:id/comments/mark-sent", { params: { id: systemId }, body: { ids } })
+    };
+    return { call, loadRender, loadBoard, systemScreen, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage, systemExportFormats, exportSystemTokens, systemComments };
   };
 
   // src/guest/flows.ts
@@ -2692,6 +2956,65 @@ ${GUEST_UI_LOOK_CSS}`;
       if (isHostError(error, "NO_DIRECTORY") || isHostError(error, "UNSUPPORTED")) return "not-here";
       throw error;
     }
+  };
+
+  // src/shared/tokens-css.ts
+  var isBalancedQuotes = (value) => {
+    let single = 0;
+    let double = 0;
+    for (const char of value) {
+      if (char === "'") single += 1;
+      else if (char === '"') double += 1;
+    }
+    return single % 2 === 0 && double % 2 === 0;
+  };
+
+  // src/shared/source-edit.ts
+  var NAMED_REFS = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    nbsp: "\xA0",
+    copy: "\xA9",
+    reg: "\xAE",
+    // The mdash value is decode data (the character &mdash; names), not copy; written as a code
+    // point so the KI-7 copy guard, which reads every string literal, stays unbroken.
+    trade: "\u2122",
+    hellip: "\u2026",
+    mdash: String.fromCharCode(8212),
+    ndash: "\u2013",
+    lsquo: "\u2018",
+    rsquo: "\u2019",
+    ldquo: "\u201C",
+    rdquo: "\u201D",
+    laquo: "\xAB",
+    raquo: "\xBB",
+    bull: "\u2022",
+    middot: "\xB7",
+    times: "\xD7",
+    divide: "\xF7",
+    deg: "\xB0",
+    plusmn: "\xB1",
+    euro: "\u20AC",
+    pound: "\xA3",
+    yen: "\xA5",
+    cent: "\xA2",
+    sect: "\xA7",
+    para: "\xB6",
+    shy: "\xAD"
+  };
+
+  // src/ui/components/device.ts
+  var current = DESKTOP_DEVICE;
+  var applyDevice = (device2, root2) => {
+    current = device2;
+    root2.dataset.dcForm = device2.form;
+    root2.dataset.dcPointer = device2.coarse ? "coarse" : "fine";
+    root2.dataset.dcKeyboard = device2.keyboard > 0 ? "up" : "down";
+    for (const side of ["top", "right", "bottom", "left"]) root2.style.setProperty(`--dc-inset-${side}`, `${device2.insets[side]}px`);
+    root2.style.setProperty("--dc-keyboard", `${device2.keyboard}px`);
   };
 
   // src/ui/model/block-args.ts
@@ -2973,16 +3296,29 @@ ${GUEST_UI_LOOK_CSS}`;
     3329325298
   ]);
 
-  // src/shared/tokens-css.ts
-  var isBalancedQuotes = (value) => {
-    let single = 0;
-    let double = 0;
-    for (const char of value) {
-      if (char === "'") single += 1;
-      else if (char === '"') double += 1;
-    }
-    return single % 2 === 0 && double % 2 === 0;
-  };
+  // src/shared/design-json.ts
+  var VIEWPORT_LAPTOP = Object.freeze({ id: "laptop", label: "Laptop", width: 1280, height: 800 });
+  var VIEWPORT_PHONE = Object.freeze({ id: "phone", label: "Phone", width: 390, height: 844 });
+  var CANONICAL_ORDER = [
+    "version",
+    "kind",
+    "title",
+    "created",
+    "updated",
+    "brief",
+    "sessionId",
+    "projectDirectory",
+    "preset",
+    "entry",
+    "viewports",
+    "screens",
+    "designSystem",
+    "tweaks",
+    "systemChoice",
+    "folderRequest",
+    "comments"
+  ];
+  var KNOWN_FIELDS = new Set(CANONICAL_ORDER);
 
   // src/shared/token-edit.ts
   var PLAIN_SHAPE = "Use a plain CSS value of up to 100 characters, without ; { } < > \\ : or *, and without url().";
@@ -2994,6 +3330,7 @@ ${GUEST_UI_LOOK_CSS}`;
     shadows: "Use a shadow, like 0 1px 2px rgb(0 0 0 / 0.2), or none.",
     layers: "Use a whole number, like 10, or auto.",
     typography: PLAIN_SHAPE,
+    motion: "Use a time, like 200ms or 0.2s, or an easing, like ease-out, cubic-bezier(0.2, 0, 0, 1) or steps(4, end).",
     other: PLAIN_SHAPE
   };
   var FIELD_SHAPES = {
@@ -3005,7 +3342,8 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var ALLOWED_FUNCTIONS = /* @__PURE__ */ new Set(["rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix", "var", "calc", "min", "max", "clamp"]);
   var FORMULA_PATTERN = /(?:^|[^A-Za-z0-9-])(?:var|calc|min|max|clamp|color-mix)\(/i;
-  var passesRuleOne = (text) => {
+  var MOTION_FUNCTIONS = /* @__PURE__ */ new Set(["cubic-bezier", "steps"]);
+  var passesRuleOne = (text, extra) => {
     if (text.length < 1 || text.length > SYSTEM_TOKEN_VALUE_MAX || !TOKEN_PREVIEW_VALUE_PATTERN.test(text) || !isBalancedQuotes(text)) return false;
     let depth = 0;
     for (const char of text) {
@@ -3018,7 +3356,7 @@ ${GUEST_UI_LOOK_CSS}`;
     if (depth !== 0) return false;
     for (const match of text.matchAll(/([A-Za-z-][A-Za-z0-9-]*)?\(/g)) {
       const name = match[1];
-      if (name !== void 0 && !ALLOWED_FUNCTIONS.has(name.toLowerCase())) return false;
+      if (name !== void 0 && !ALLOWED_FUNCTIONS.has(name.toLowerCase()) && extra?.has(name.toLowerCase()) !== true) return false;
     }
     return true;
   };
@@ -3086,26 +3424,26 @@ ${GUEST_UI_LOOK_CSS}`;
     const parts = [];
     let depth = 0;
     let quote = null;
-    let current = "";
+    let current2 = "";
     for (const char of text) {
       if (quote !== null) {
         if (char === quote) quote = null;
-        current += char;
+        current2 += char;
       } else if (char === '"' || char === "'") {
         quote = char;
-        current += char;
+        current2 += char;
       } else if (char === "(") {
         depth += 1;
-        current += char;
+        current2 += char;
       } else if (char === ")") {
         depth -= 1;
-        current += char;
+        current2 += char;
       } else if (depth === 0 && separator.test(char)) {
-        if (current.trim() !== "") parts.push(current.trim());
-        current = "";
-      } else current += char;
+        if (current2.trim() !== "") parts.push(current2.trim());
+        current2 = "";
+      } else current2 += char;
     }
-    if (current.trim() !== "") parts.push(current.trim());
+    if (current2.trim() !== "") parts.push(current2.trim());
     return parts;
   };
   var isShadow = (text, needsPair) => {
@@ -3131,6 +3469,38 @@ ${GUEST_UI_LOOK_CSS}`;
     const value = Number(text);
     return value >= -2147483647 && value <= 2147483647;
   };
+  var TIME = new RegExp(`^(${NUMBER})(ms|s)$`, "i");
+  var EASING_KEYWORDS = /* @__PURE__ */ new Set(["linear", "ease", "ease-in", "ease-out", "ease-in-out"]);
+  var CUBIC_BEZIER = new RegExp(`^cubic-bezier\\(\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*\\)$`, "i");
+  var STEPS = /^steps\(\s*(\d{1,4})\s*(?:,\s*(start|end)\s*)?\)$/i;
+  var isTime = (text) => {
+    const match = TIME.exec(text);
+    if (match === null) return false;
+    const ms = Number(match[1]) * ((match[2] ?? "").toLowerCase() === "s" ? 1e3 : 1);
+    return Number.isFinite(ms) && ms >= 0 && ms <= SYSTEM_MOTION_DURATION_MAX_MS;
+  };
+  var isEasing = (text) => {
+    if (EASING_KEYWORDS.has(text.toLowerCase())) return true;
+    const bezier = CUBIC_BEZIER.exec(text);
+    if (bezier !== null) {
+      const [x1, y1, x2, y2] = bezier.slice(1, 5).map(Number);
+      if (x1 === void 0 || y1 === void 0 || x2 === void 0 || y2 === void 0) return false;
+      return [x1, y1, x2, y2].every(Number.isFinite) && x1 >= 0 && x1 <= 1 && x2 >= 0 && x2 <= 1;
+    }
+    const steps = STEPS.exec(text);
+    if (steps === null) return false;
+    const count = Number(steps[1]);
+    return count >= 1 && count <= SYSTEM_MOTION_STEPS_MAX;
+  };
+  var isMotionValue = (text) => isTime(text) || isEasing(text);
+  var EASING_CURVES = Object.freeze({
+    linear: [0, 0, 1, 1],
+    ease: [0.25, 0.1, 0.25, 1],
+    "ease-in": [0.42, 0, 1, 1],
+    "ease-out": [0, 0, 0.58, 1],
+    "ease-in-out": [0.42, 0, 0.58, 1]
+  });
+  var MOTION_NAME = /^--(?:duration|ease|motion)-/i;
   var FAMILY_NAME = /^(?:"[^"]+"|'[^']+'|[A-Za-z-][A-Za-z0-9-]*(?: +[A-Za-z-][A-Za-z0-9-]*)*)$/;
   var fieldValid = (field2, text) => {
     const lower = text.toLowerCase();
@@ -3166,6 +3536,8 @@ ${GUEST_UI_LOOK_CSS}`;
         return isShadow(text, false);
       case "layers":
         return isLayer(text);
+      case "motion":
+        return isMotionValue(text);
       case "typography":
       case "other":
         return true;
@@ -3173,7 +3545,7 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var validateTokenValue = (section, field2, text) => {
     const shape = field2 === null ? SECTION_SHAPES[section] : FIELD_SHAPES[field2];
-    if (!passesRuleOne(text)) return { ok: false, sentence: shape };
+    if (!passesRuleOne(text, field2 === null && section === "motion" ? MOTION_FUNCTIONS : void 0)) return { ok: false, sentence: shape };
     if (FORMULA_PATTERN.test(text)) return { ok: true, formula: true };
     const valid = field2 === null ? sectionValid(section, text) : fieldValid(field2, text);
     return valid ? { ok: true, formula: false } : { ok: false, sentence: shape };
@@ -3181,6 +3553,7 @@ ${GUEST_UI_LOOK_CSS}`;
   var classifyToken = (name, value) => {
     const text = value.trim();
     const lower = name.toLowerCase();
+    if (MOTION_NAME.test(name) && (text === "" || FORMULA_PATTERN.test(text) || isMotionValue(text))) return "motion";
     if (isColour(text)) return "colours";
     if (isShadow(text, true)) return "shadows";
     if (/radius|rounded/.test(lower)) return "radius";
@@ -3228,6 +3601,67 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var TOKEN_UNDO_REMOVED_MAX = TEXT_EDIT_MAX * 8;
 
+  // src/shared/system-checklist.ts
+  var SYSTEM_TOPIC_IDS = Object.freeze([
+    "surface",
+    "text",
+    "border",
+    "brand",
+    "status",
+    "type-styles",
+    "spacing",
+    "radius",
+    "pairs",
+    "dark-values",
+    "state-colours",
+    "data-colours",
+    "control-sizes",
+    "breakpoints",
+    "elevation",
+    "layers",
+    "motion",
+    "components",
+    "examples",
+    "focus-disabled",
+    "voice",
+    "navigation",
+    "overlays",
+    "forms",
+    "feedback",
+    "states",
+    "data-display",
+    "accessibility",
+    "responsive",
+    "logo",
+    "brand-colour",
+    "imagery",
+    "marketing",
+    // system-builder-depth Phase 2 (T11): a full system's foundations ask for at least one icon.
+    "icons"
+  ]);
+  var TOPIC_SET = new Set(SYSTEM_TOPIC_IDS);
+  var CHECKLIST_MIN = Object.freeze({ status: 3, typeStylesCore: 4, typeStylesFull: 6, spacing: 4 });
+  var TOPICS = Object.freeze({
+    foundations: {
+      core: ["surface", "text", "border", "brand", "status", "type-styles", "spacing", "radius", "pairs", "dark-values"],
+      full: ["state-colours", "data-colours", "control-sizes", "breakpoints", "elevation", "layers", "motion", "icons"]
+    },
+    components: { core: ["components", "examples"], full: ["focus-disabled"] },
+    patterns: { core: ["voice"], full: ["navigation", "overlays", "forms", "feedback", "states", "data-display", "accessibility", "responsive", "motion"] },
+    brand: { core: ["logo"], full: ["brand-colour", "imagery", "marketing"] }
+  });
+  var PATTERN_KIND_TOPIC = Object.freeze({
+    voice: "voice",
+    navigation: "navigation",
+    overlays: "overlay",
+    forms: "forms",
+    feedback: "feedback",
+    states: "states",
+    "data-display": "data-display",
+    accessibility: "accessibility",
+    responsive: "responsive"
+  });
+
   // src/shared/system-json.ts
   var AREA_OF_SECTION = Object.freeze({
     overview: "foundations",
@@ -3236,6 +3670,8 @@ ${GUEST_UI_LOOK_CSS}`;
     spacing: "foundations",
     radius: "foundations",
     shadows: "foundations",
+    // system-builder-depth Phase 2 (§13 T10a): after shadows, in board order.
+    motion: "foundations",
     layers: "foundations",
     sizes: "foundations",
     components: "components",
@@ -3259,6 +3695,8 @@ ${GUEST_UI_LOOK_CSS}`;
     spacing: Object.freeze(["card", "compact", "table"]),
     radius: Object.freeze(["card", "compact", "table"]),
     shadows: Object.freeze(["card", "compact", "table"]),
+    // system-builder-depth Phase 2 (§13 T10a).
+    motion: Object.freeze(["card", "compact", "table"]),
     sizes: Object.freeze(["card", "compact", "table"])
   });
   var SECTION_LAYOUT_ALIASES = Object.freeze({ notes: "overview" });
@@ -3268,6 +3706,27 @@ ${GUEST_UI_LOOK_CSS}`;
     classify: classifyToken,
     validate: validateTokenValue
   });
+  var ENTRY_KINDS = Object.freeze({
+    patterns: Object.freeze([
+      "layout",
+      "do-dont",
+      "voice",
+      "other",
+      "navigation",
+      "overlay",
+      "forms",
+      "data-display",
+      "feedback",
+      "states",
+      "page",
+      "responsive",
+      "motion",
+      "accessibility"
+    ]),
+    brand: Object.freeze(["marketing", "imagery", "logo-use", "other", "colour", "social", "email"])
+  });
+  var VIEWPORT_SENTENCE = `Each viewport needs an id (letters, digits, - or _), and a whole-number width from ${VIEWPORT_WIDTH_MIN} to ${VIEWPORT_WIDTH_MAX} and height from ${VIEWPORT_HEIGHT_MIN} to ${VIEWPORT_HEIGHT_MAX}.`;
+  var BUILD_PLATFORMS = Object.freeze(["laptop-phone", "phone-first", "laptop", "custom"]);
   var PROPOSAL_TOO_MANY_FILES = `PROPOSAL.json lists more than ${SYSTEM_PROPOSAL_FILES_MAX} files. Ask the agent to split the change.`;
 
   // src/shared/checks.ts
@@ -3275,6 +3734,16 @@ ${GUEST_UI_LOOK_CSS}`;
   var fileOf = (f) => f.file ?? "This design";
   var skippedSentence = (f) => {
     const count = Math.round(f.params?.count ?? 0);
+    if (f.file === "board.html") {
+      const passes = count === 1 ? "1 board pass was" : `${count} board passes were`;
+      if (f.params?.reason === "failures") return `${passes} not drawn (the browser failed three times in a row).`;
+      return `${passes} not drawn (the check ran out of time). Check again with --area <area> or --scheme dark.`;
+    }
+    if (f.file !== null && f.file.startsWith("screens/")) {
+      const screens = count === 1 ? "1 screen artboard was" : `${count} screen artboards were`;
+      const why = f.params?.reason === "failures" ? "the browser failed three times in a row" : f.params?.reason === "budget" ? "the check ran out of time" : `the limit is ${num(f.params?.max)} per check`;
+      return `${screens} not drawn (${why}). Use --screen <id> to check the rest.`;
+    }
     const what = `${count} ${count === 1 ? "artboard was" : "artboards were"} not rendered`;
     if (f.params?.reason === "budget") return `${what} (the run took longer than ${Math.round(CHECK_RUN_BUDGET_MS / 1e3)} seconds).`;
     if (f.params?.reason === "failures") return `${what} (the browser failed three times in a row).`;
@@ -3282,6 +3751,8 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var systemNameOf = (f) => f.params?.system ?? "the design system";
   var repoNameOf = (f) => f.params?.repo ?? "the repo";
+  var DEPTH_LABELS = { tokens: "tokens only", core: "product core", full: "full" };
+  var LISTED_SINGULAR = { variants: "variant", sizes: "size", states: "state" };
   var AREA_LABELS = {
     foundations: "Foundations",
     components: "Components",
@@ -3562,6 +4033,78 @@ ${GUEST_UI_LOOK_CSS}`;
       severity: "info",
       sentence: (f, where) => `${where}: this entry is set to ${f.params?.layout ?? "card"} but needed the full width. Set its layout to full.`
     },
+    // system-builder-depth §4.5: what the files say about completeness, labels and contrast.
+    "system-example-missing": {
+      // Info for a core system, a warning for a full one: `severityOf` reads the validated `depth` param.
+      severity: "info",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        return count === 1 ? "1 entry has no live example yet, so the board shows only its words." : `${num(count)} entries have no live example yet, so the board shows only their words.`;
+      }
+    },
+    "system-states-missing": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const listed = f.params?.listed ?? "states";
+        const what = count === 1 ? `1 ${LISTED_SINGULAR[listed]} listed in system.json has` : `${num(count)} ${listed} listed in system.json have`;
+        return `${what} no labelled instance in ${count === 1 ? "its" : "their"} example. Label each one with data-dc-${LISTED_SINGULAR[listed]}.`;
+      }
+    },
+    "system-contrast-low": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const scheme = f.params?.scheme === "dark" ? "dark" : "light";
+        return count === 1 ? `1 colour pair is under its contrast level on the ${scheme} scheme.` : `${num(count)} colour pairs are under their contrast level on the ${scheme} scheme.`;
+      }
+    },
+    "system-coverage-gap": {
+      // Info for a core system, a warning for a full one, as `system-example-missing`.
+      severity: "info",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        return `${AREA_LABELS[f.params?.area ?? "foundations"]} is missing ${count === 1 ? "1 thing" : `${num(count)} things`} a ${DEPTH_LABELS[f.params?.depth ?? "core"]} system covers.`;
+      }
+    },
+    // ---- system-builder-depth Phase 2, Wave 0 (§13 T10a, T11): nothing raises these yet ----
+    "system-motion-no-reduced": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        return count === 1 ? "1 example moves but has no prefers-reduced-motion rule." : `${num(count)} examples move but have no prefers-reduced-motion rule.`;
+      }
+    },
+    "system-icons-mixed": {
+      severity: "info",
+      sentence: () => "The icons mix viewBox sizes or stroke widths, so they may not look like one set."
+    },
+    // ---- end system-builder-depth Phase 2 ----
+    // ---- system-builder-depth Phase 3 (§13 T16): `count` is the states in this example that changed nothing ----
+    "system-state-unstyled": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const base = count === 1 ? "The example labels a state its CSS doesn't style: forced on the element, it changes nothing you can see. Style it, or remove the label." : `The example labels ${num(count)} states its CSS doesn't style: forced on the element, they change nothing you can see. Style them, or remove the labels.`;
+        const hint = f.params?.hint;
+        const rest = hint === "rest" || hint === "both" ? ' There is no resting copy beside the labelled one to force the state on: add one labelled data-dc-state="rest" with the same variant and size.' : "";
+        const focus = hint === "focus-visible" || hint === "both" ? " It is labelled focus but its CSS styles :focus-visible: label it focus-visible, or style :focus too." : "";
+        return `${base}${rest}${focus}`;
+      }
+    },
+    // T18: `px` = the source's width when no viewport matches; `reason` limit or budget with `count` (and `max`); neither = unreadable.
+    "system-compare-skipped": {
+      severity: "info",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const sheets = count === 1 ? "1 compare sheet was" : `${num(count)} compare sheets were`;
+        if (f.params?.reason === "limit") return `${sheets} not made (the limit is ${num(f.params.max)} per check). Use --screen <id> to compare the rest.`;
+        if (f.params?.reason === "budget" || f.params?.reason === "failures") return `${sheets} not made (the check ran out of time). Use --screen <id> to compare the rest.`;
+        if (f.params?.px !== void 0) return `The source picture is ${num(f.params.px)} px wide; no viewport of this screen matches. Save a screenshot as wide as one of its viewports.`;
+        return "The source picture can't be read as a PNG or JPEG, so no compare sheet was made.";
+      }
+    },
+    // ---- end system-builder-depth Phase 3 ----
     "system-board-partial": {
       severity: "info",
       sentence: (f) => {
@@ -3571,6 +4114,12 @@ ${GUEST_UI_LOOK_CSS}`;
         switch (f.params?.pictured) {
           case "entries":
             return `Only the first ${num(f.params?.max)} entries were measured.`;
+          case "motion":
+            if (count === 0) return "No motion strip was taken: the check ran out of time for them.";
+            return count === 1 ? "Only the first motion strip was taken; the other moving elements were not pictured." : `Only the first ${num(count)} motion strips were taken; the other moving elements were not pictured.`;
+          case "states":
+            if (count === 0) return "No labelled state was forced and pictured: the check ran out of time for them.";
+            return count === 1 ? "Only the first labelled state was forced and pictured; the others were not checked." : `Only the first ${num(count)} labelled states were forced and pictured; the others were not checked.`;
           case "gap":
             return `${count === 1 ? "Part of 1 area is" : `Parts of ${areas} are`} in no picture (the picture limit for one check); the parts are listed. All of the board was measured, so the findings cover them.`;
           case "no-overview":
@@ -3674,6 +4223,7 @@ ${GUEST_UI_LOOK_CSS}`;
       badge: checks === null ? null : badgeOf(checks, null, false)
     };
   };
+  var commentOffered = (device2, panelOnPhone) => device2.form !== "phone" || panelOnPhone;
   var pickerView = (state, options) => {
     const answered = state.phase === "answered";
     const tiles = options.map(
@@ -3704,17 +4254,17 @@ ${GUEST_UI_LOOK_CSS}`;
     }
   };
   var createPicker = (answer, options, onChange) => {
-    let current = { phase: "open", picked: null, sending: null };
-    const phase = () => current.phase;
+    let current2 = { phase: "open", picked: null, sending: null };
+    const phase = () => current2.phase;
     const set = (next) => {
-      current = next;
+      current2 = next;
       onChange(next);
     };
     return {
-      state: () => current,
+      state: () => current2,
       pick: async (index) => {
         const option = options[index];
-        if (current.phase !== "open" || option === void 0) return "ignored";
+        if (current2.phase !== "open" || option === void 0) return "ignored";
         const sent = answer(answerText(option));
         set({ phase: "sending", picked: null, sending: index });
         try {
@@ -3806,9 +4356,11 @@ ${GUEST_UI_LOOK_CSS}`;
     };
     const showError = (paused) => {
       clear();
+      const device2 = ctx2.device();
+      const down = device2.form === "phone" ? { text: openHelp(device2, ctx2.panelOnPhone).serviceDown } : { text: "Design Chamber isn\u2019t responding.", detail: "It may still be starting." };
       root2.append(
         notice(
-          paused ? { icon: "alert", text: "Design Chamber is paused.", detail: "Turn it back on in Settings \u2192 Extensions, then try again.", action: { label: "Try again", onClick: load } } : { icon: "alert", text: "Design Chamber isn\u2019t responding.", detail: "It may still be starting.", action: { label: "Try again", onClick: load } }
+          paused ? { icon: "alert", text: "Design Chamber is paused.", detail: "Turn it back on in Settings \u2192 Extensions, then try again.", action: { label: "Try again", onClick: load } } : { icon: "alert", ...down, action: { label: "Try again", onClick: load } }
         )
       );
     };
@@ -3844,7 +4396,7 @@ ${GUEST_UI_LOOK_CSS}`;
         mountBadge(visible, { label: view2.badge.label, tone: TONES[view2.badge.tone] });
       }
       const openSlot = h("span", { class: "dcb-action" });
-      const commentSlot = h("span", { class: "dcb-action" });
+      const commentSlot = commentOffered(ctx2.device(), ctx2.panelOnPhone) ? h("span", { class: "dcb-action" }) : null;
       const article = h(
         "article",
         { class: "dcb-block dcb-card", "data-state": "ready", "aria-labelledby": titleId },
@@ -3874,7 +4426,7 @@ ${GUEST_UI_LOOK_CSS}`;
             showGone();
             return;
           }
-          if (outcome === "not-here") ctx2.toast("info", "Open Design Chamber from the rail to see it.");
+          if (outcome === "not-here") ctx2.toast("info", openHelp(ctx2.device(), ctx2.panelOnPhone).notHere);
         } catch (error) {
           ctx2.toast("error", `Couldn\u2019t open the design. ${errorText2(error)}`);
         } finally {
@@ -3884,10 +4436,10 @@ ${GUEST_UI_LOOK_CSS}`;
         }
       };
       buttons.open = mountButton(openSlot, { label: "Open", variant: "default", size: "sm", onClick: () => void open("view") });
-      buttons.comment = mountButton(commentSlot, { label: "Comment", variant: "outline", size: "sm", onClick: () => void open("comment") });
+      if (commentSlot) buttons.comment = mountButton(commentSlot, { label: "Comment", variant: "outline", size: "sm", onClick: () => void open("comment") });
       openSlot.querySelector("button")?.setAttribute("data-emphasis", "primary");
       openSlot.querySelector("button")?.setAttribute("aria-describedby", titleId);
-      commentSlot.querySelector("button")?.setAttribute("aria-describedby", titleId);
+      commentSlot?.querySelector("button")?.setAttribute("aria-describedby", titleId);
     };
     function load() {
       const mine = ++generation;
@@ -4083,6 +4635,11 @@ ${GUEST_UI_LOOK_CSS}`;
     });
     return composeAnswer(`Round two: ${parts.join("; ")}.`, markerLine(fields), note2);
   };
+  var roundTwoVerdict = (detail) => {
+    if (detail === null || detail.build?.round === "done") return "done";
+    return detail.build?.round === 2 ? "again" : "later";
+  };
+  var ticketVerdict = (state) => state === "waiting" ? "again" : "done";
   var PART_LABELS = {
     "system-files": "System files",
     "token-fixes": "Token fixes",
@@ -4109,6 +4666,7 @@ ${GUEST_UI_LOOK_CSS}`;
         return view2.sentence;
     }
   };
+  var proposalVerdict = (view2) => view2.state === "approved" || view2.state === "declined" || view2.state === "superseded" || view2.state === "unknown" ? "done" : "again";
   var partCountText = (part) => `${part.files.length} ${part.files.length === 1 ? "file" : "files"}`;
   var partStat = (part) => {
     const added = part.files.reduce((sum, file) => sum + file.added, 0);
@@ -4245,6 +4803,62 @@ ${GUEST_UI_LOOK_CSS}`;
   var SYSTEM_GONE = "This design system is no longer in your Designs folder. Reply in the chat if the agent still needs something.";
   var OUT_OF_DATE = "This question is out of date. Reply in the chat if the agent still needs something.";
   var TICKET_EXPIRED = "This build has expired. Run /design-system again to start over.";
+  var askCopy = (device2, panelOnPhone) => {
+    const phone = device2.form === "phone";
+    const help = openHelp(device2, panelOnPhone);
+    const where = phone ? "Design Chamber" : "the rail";
+    return {
+      serviceDown: phone ? help.serviceDown : SERVICE_DOWN,
+      previewOpened: (which) => which === "living-page-preview" ? `The living page preview is open in ${where}.` : `The board is open in ${where}.`,
+      previewNotHere: phone ? help.notHere : "Open Design Chamber from the rail to see the preview.",
+      previewFailed: phone ? `Couldn\u2019t open the preview. ${help.notHere}` : "Couldn\u2019t open the preview. Open Design Chamber from the rail."
+    };
+  };
+
+  // src/ui/model/ask-poll.ts
+  var ASK_POLL_BACKOFF_MAX_MS = 6e4;
+  var startAskPoll = (read, ms, visible) => {
+    let delay = ms;
+    let timer;
+    let busy = false;
+    let over = false;
+    const stop = () => {
+      over = true;
+      clearTimeout(timer);
+    };
+    const schedule = () => {
+      clearTimeout(timer);
+      if (!over) timer = setTimeout(tick, delay);
+    };
+    const run = () => {
+      if (over || busy) return;
+      busy = true;
+      clearTimeout(timer);
+      read().catch((error) => {
+        console.warn("Design Chamber: refetch failed", error);
+        return "later";
+      }).then((verdict) => {
+        busy = false;
+        if (verdict === "done") {
+          stop();
+          return;
+        }
+        delay = verdict === "later" ? Math.min(delay * 2, ASK_POLL_BACKOFF_MAX_MS) : ms;
+        schedule();
+      });
+    };
+    const tick = () => {
+      if (visible()) run();
+      else schedule();
+    };
+    run();
+    return {
+      now: () => {
+        if (visible()) run();
+      },
+      stop
+    };
+  };
 
   // src/ui/blocks/system-ask-shared.ts
   var counter = 0;
@@ -4290,22 +4904,17 @@ ${GUEST_UI_LOOK_CSS}`;
     });
     return { el: h("div", { class: "dcb-ask-cannot" }, status, slot), dispose: () => handle?.dispose() };
   };
-  var startRefetch = (tick, ms) => {
-    let busy = false;
-    const run = () => {
-      if (busy || document.visibilityState === "hidden") return;
-      busy = true;
-      tick().catch((error) => console.warn("Design Chamber: refetch failed", error)).finally(() => {
-        busy = false;
-      });
-    };
-    const timer = setInterval(run, ms);
-    window.addEventListener("focus", run);
-    document.addEventListener("visibilitychange", run);
-    return () => {
-      clearInterval(timer);
-      window.removeEventListener("focus", run);
-      document.removeEventListener("visibilitychange", run);
+  var startRefetch = (read, ms) => {
+    const poll = startAskPoll(read, ms, () => document.visibilityState !== "hidden");
+    window.addEventListener("focus", poll.now);
+    document.addEventListener("visibilitychange", poll.now);
+    return {
+      now: poll.now,
+      stop: () => {
+        poll.stop();
+        window.removeEventListener("focus", poll.now);
+        document.removeEventListener("visibilitychange", poll.now);
+      }
     };
   };
   var primaryOf = (slot) => {
@@ -4341,10 +4950,11 @@ ${GUEST_UI_LOOK_CSS}`;
     let footOwned = [];
     let footEl = null;
     let bodyEl = null;
-    let stopRefetch = null;
+    let poll = null;
     let disposed = false;
     const title = () => systemName(name, ask.systemId);
-    const current = () => isCurrent(view2) ? view2 : null;
+    const copy = () => askCopy(ctx2.device(), ctx2.panelOnPhone);
+    const current2 = () => isCurrent(view2) ? view2 : null;
     const slotButton = (label, variant, onClick, state = {}) => {
       const slot = h("span", { class: "dcb-ask-btn" });
       const handle = mountButton(slot, { label, variant, size: "default", disabled: state.disabled === true, loading: state.loading === true, onClick });
@@ -4362,8 +4972,7 @@ ${GUEST_UI_LOOK_CSS}`;
         busy = false;
         if (outcome === "sent") {
           answeredText = text;
-          stopRefetch?.();
-          stopRefetch = null;
+          poll?.stop();
           renderAll();
         } else if (outcome === "host-rejected") {
           cannot = text;
@@ -4393,8 +5002,7 @@ ${GUEST_UI_LOOK_CSS}`;
       const text = stopAnswer(ask.systemId, title(), proposal.proposal.id);
       const outcome = await sendAnswer(ctx2, text);
       busy = false;
-      stopRefetch?.();
-      stopRefetch = null;
+      poll?.stop();
       if (outcome === "sent") answeredText = text;
       else stoppedText = text;
       renderAll();
@@ -4436,7 +5044,7 @@ ${GUEST_UI_LOOK_CSS}`;
       if (!footEl) return;
       for (const handle of footOwned) handle.dispose();
       footOwned = [];
-      const proposal = current();
+      const proposal = current2();
       const approve = approveView(view2, on, ask.proposalId, busy);
       const reason = proposal === null ? null : approve.reason;
       if (cannot !== null) {
@@ -4467,7 +5075,7 @@ ${GUEST_UI_LOOK_CSS}`;
           footEl?.querySelector("button")?.focus();
         }, { disabled: proposal === null || busy }),
         slotButton(approve.label, "default", () => {
-          const now = current();
+          const now = current2();
           if (now !== null && approveView(now, on, ask.proposalId).enabled) submit(approveAnswer(ask.systemId, now, on));
         }, { disabled: !approve.enabled, loading: busy && !declining, primary: true })
       ];
@@ -4539,11 +5147,11 @@ ${GUEST_UI_LOOK_CSS}`;
             onClick: () => {
               ctx2.openSystemPreview(ask.systemId, which).then(
                 (outcome) => {
-                  if (outcome === "opened") ctx2.toast("info", which === "living-page-preview" ? "The living page preview is open in the rail." : "The board is open in the rail.");
+                  if (outcome === "opened") ctx2.toast("info", copy().previewOpened(which));
                   else if (outcome === "gone") ctx2.toast("error", "This design system is no longer in your Designs folder.");
-                  else ctx2.toast("error", "Open Design Chamber from the rail to see the preview.");
+                  else ctx2.toast("error", copy().previewNotHere);
                 },
-                () => ctx2.toast("error", "Couldn\u2019t open the preview. Open Design Chamber from the rail.")
+                () => ctx2.toast("error", copy().previewFailed)
               );
             }
           })
@@ -4610,7 +5218,7 @@ ${GUEST_UI_LOOK_CSS}`;
       owned = [];
       footOwned = [];
       undoButton = null;
-      const proposal = current();
+      const proposal = current2();
       const settled = answeredText !== null || stoppedText !== null;
       const head = proposal ? diffTitle(proposal) : { target: "Proposed changes", mode: null };
       const f = frame({
@@ -4625,25 +5233,28 @@ ${GUEST_UI_LOOK_CSS}`;
       if (answeredText !== null) answeredBody(f.body, answeredText);
       else if (stoppedText !== null) stoppedBody(f.body, stoppedText);
       else if (load === "loading") loadingBody(f.body);
-      else if (load === "down") f.body.append(banner("warning", SERVICE_DOWN, { label: "Try again", onClick: () => void readProposal(true) }));
+      else if (load === "down") f.body.append(banner("warning", copy().serviceDown, { label: "Try again", onClick: retry }));
       else if (proposal) proposalBody(f.body, proposal);
       else if (view2 !== null) f.body.append(banner("info", proposalStateSentence(view2) ?? ""));
       root2.replaceChildren(f.el);
       f.body.scrollTop = scroll;
       paintFoot();
     };
-    const readProposal = async (retry = false) => {
-      if (answeredText !== null || stoppedText !== null || busy) return;
-      if (retry && load === "down") {
+    const retry = () => {
+      if (load === "down") {
         load = "loading";
         renderAll();
       }
+      poll?.now();
+    };
+    const readProposal = async () => {
+      if (answeredText !== null || stoppedText !== null || busy) return "again";
       try {
         const [next, detail] = await Promise.all([
           ctx2.client.getProposal(ask.systemId, ask.proposalId),
           nameTried ? Promise.resolve(name) : ctx2.client.call("GET /systems/:id", { params: { id: ask.systemId } }).then((system) => system.name, () => null)
         ]);
-        if (answeredText !== null || stoppedText !== null || busy || disposed) return;
+        if (answeredText !== null || stoppedText !== null || busy || disposed) return "again";
         const key = JSON.stringify(next);
         const changedName = detail !== name;
         name = detail;
@@ -4652,50 +5263,49 @@ ${GUEST_UI_LOOK_CSS}`;
           on = new Set(next.proposal.parts.map((part) => part.name));
           partsKnown = true;
         }
-        if (load === "ready" && key === viewKey && !changedName) return;
+        const verdict = proposalVerdict(next);
+        if (load === "ready" && key === viewKey && !changedName) return verdict;
         load = "ready";
         view2 = next;
         viewKey = key;
         renderAll();
+        return verdict;
       } catch (error) {
         if (isServiceError(error, "not-found")) {
-          if (answeredText !== null || stoppedText !== null || busy || disposed) return;
+          if (answeredText !== null || stoppedText !== null || busy || disposed) return "again";
           const gone = { state: "unknown" };
           const goneKey = JSON.stringify(gone);
-          if (load === "ready" && viewKey === goneKey) return;
+          if (load === "ready" && viewKey === goneKey) return "done";
           load = "ready";
           view2 = gone;
           viewKey = goneKey;
           declining = false;
           stopError = null;
           renderAll();
-          return;
+          return "done";
         }
-        if (load === "ready" && view2 !== null) return;
+        if (load === "ready" && view2 !== null) return "later";
         if (!isServiceError(error)) console.warn("Design Chamber: reading the proposal failed", error);
-        if (load === "down") return;
+        if (load === "down") return "later";
         load = "down";
         renderAll();
+        return "later";
       }
     };
     renderAll();
-    if (answered === null) {
-      void readProposal();
-      stopRefetch = startRefetch(() => readProposal(), SYSTEM_ASK_POLL_MS);
-    }
+    if (answered === null) poll = startRefetch(readProposal, SYSTEM_ASK_POLL_MS);
     return {
       update: (next) => {
         if (next === null || next === answeredText) return;
         answeredText = next;
         cannot = null;
-        stopRefetch?.();
-        stopRefetch = null;
+        poll?.stop();
         renderAll();
       },
       dispose: () => {
         disposed = true;
         clearUndoTimer();
-        stopRefetch?.();
+        poll?.stop();
         for (const handle of owned) handle.dispose();
         for (const handle of footOwned) handle.dispose();
         owned = [];
@@ -4722,7 +5332,7 @@ ${GUEST_UI_LOOK_CSS}`;
     let cannot = null;
     let answeredText = answered;
     let owned = [];
-    let stopRefetch = null;
+    let poll = null;
     let goHandle = null;
     let reasonEl = null;
     let refusedEl = null;
@@ -4805,8 +5415,7 @@ ${GUEST_UI_LOOK_CSS}`;
         sending = false;
         if (outcome === "sent") {
           if (answeredText === null) answeredText = text;
-          stopRefetch?.();
-          stopRefetch = null;
+          poll?.stop();
           render();
         } else if (outcome === "host-rejected") {
           cannot = text;
@@ -4888,7 +5497,7 @@ ${GUEST_UI_LOOK_CSS}`;
       const slot = h("div", { class: "dcb-ask-banner" });
       body.append(slot);
       if (phase === "down") {
-        own(mountBanner(slot, { tone: "warning", title: SERVICE_DOWN, action: { label: "Try again", onClick: () => void read() } }));
+        own(mountBanner(slot, { tone: "warning", title: askCopy(ctx2.device(), ctx2.panelOnPhone).serviceDown, action: { label: "Try again", onClick: () => poll?.now() } }));
       } else {
         own(mountBanner(slot, { tone: "info", title: phase === "expired" ? TICKET_EXPIRED : phase === "gone" ? SYSTEM_GONE : OUT_OF_DATE }));
       }
@@ -4911,64 +5520,69 @@ ${GUEST_UI_LOOK_CSS}`;
       paint();
     };
     const readTicket = async () => {
-      if (!roundOne || answeredText !== null || sending) return;
+      if (!roundOne || answeredText !== null || sending) return "again";
       let next;
+      let verdict = "later";
       let project = hasProject;
       try {
         const answer = await ctx2.client.call("GET /system-builds/:ticket", { params: { ticket: ask.ticket } });
         next = answer.state === "waiting" ? "form" : answer.state === "made" ? "stale" : "expired";
+        verdict = ticketVerdict(answer.state);
         if (answer.state === "waiting") project = answer.project !== null;
       } catch (error) {
-        if (phase === "form") return;
+        if (phase === "form") return "later";
         next = "down";
         if (!isServiceError(error)) console.warn("Design Chamber: reading the build ticket failed", error);
       }
-      if (disposed || answeredText !== null || sending || next === phase && project === hasProject) return;
+      if (disposed || answeredText !== null || sending) return "again";
+      if (next === phase && project === hasProject) return verdict;
       phase = next;
       hasProject = project;
       render();
+      return verdict;
     };
     const readSystem = async () => {
-      if (roundOne || answeredText !== null || sending) return;
+      if (roundOne || answeredText !== null || sending) return "again";
       let next;
+      let verdict = "later";
       let name = systemNameNow;
       try {
         const detail = await ctx2.client.call("GET /systems/:id", { params: { id: ask.systemId } });
         const result = roundTwoRead(detail);
         next = result.phase;
         name = result.name;
+        verdict = roundTwoVerdict(detail);
       } catch (error) {
         if (isServiceError(error, "not-found")) {
           next = roundTwoRead(null).phase;
           name = null;
+          verdict = roundTwoVerdict(null);
         } else {
-          if (phase !== "loading" && phase !== "down") return;
+          if (phase !== "loading" && phase !== "down") return "later";
           next = "down";
           if (!isServiceError(error)) console.warn("Design Chamber: reading the system failed", error);
         }
       }
-      if (disposed || answeredText !== null || sending || next === phase && name === systemNameNow) return;
+      if (disposed || answeredText !== null || sending) return "again";
+      if (next === phase && name === systemNameNow) return verdict;
       phase = next;
       systemNameNow = name;
       render();
+      return verdict;
     };
     const read = () => roundOne ? readTicket() : readSystem();
     render();
-    if (answeredText === null) {
-      void read();
-      stopRefetch = startRefetch(read, SYSTEM_ASK_POLL_MS);
-    }
+    if (answeredText === null) poll = startRefetch(read, SYSTEM_ASK_POLL_MS);
     return {
       update: (next) => {
         if (next === null || next === answeredText) return;
         answeredText = next;
-        stopRefetch?.();
-        stopRefetch = null;
+        poll?.stop();
         render();
       },
       dispose: () => {
         disposed = true;
-        stopRefetch?.();
+        poll?.stop();
         for (const handle of owned) handle.dispose();
         owned = [];
         root2.replaceChildren();
@@ -4985,18 +5599,23 @@ ${GUEST_UI_LOOK_CSS}`;
   var blockRoot = root;
   var guestHost = getGuestHost();
   var serviceClient = createServiceClient(guestHost.client);
+  var device = DESKTOP_DEVICE;
   var ctx = {
     client: serviceClient,
     host: guestHost.client,
     toast: (kind, message) => {
       guestHost.client.toast({ kind, message, dismiss: kind === "error" }).catch((error) => console.warn("Design Chamber: toast failed", error));
     },
-    openSystemPreview: (systemId, which) => openSystemInRail({ client: serviceClient, host: guestHost.client }, systemId, which === "living-page-preview" ? "preview" : "board")
+    openSystemPreview: (systemId, which) => openSystemInRail({ client: serviceClient, host: guestHost.client }, systemId, which === "living-page-preview" ? "preview" : "board"),
+    device: () => device,
+    panelOnPhone: true
   };
   mountSpinner(document.createElement("div")).dispose();
   guestHost.ready.subscribe((context) => {
     if (!context) return;
     applyHostReady(context, document.documentElement);
+    device = deviceOf(context);
+    applyDevice(device, document.documentElement);
     document.documentElement.lang = context.locale;
   });
   var lastHeight = -1;

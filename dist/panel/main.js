@@ -76,6 +76,51 @@
   var GUEST_SHELL_ID_MAX = 128;
   var GUEST_SHELL_OUTPUT_TAIL_MAX = 65536;
 
+  // node_modules/@openchamber/sdk/dist/microphone.js
+  var GUEST_MICROPHONE_SAMPLE_RATE_MIN = 8e3;
+  var GUEST_MICROPHONE_SAMPLE_RATE_MAX = 192e3;
+  var GUEST_MICROPHONE_OPEN_TIMEOUT_MS = 12e4;
+  var createSampleQueue = (capacity) => {
+    const chunks = [];
+    let offset = 0;
+    let queued = 0;
+    return {
+      push: (samples) => {
+        chunks.push(samples);
+        queued += samples.length;
+        while (queued - offset > capacity && chunks.length > 1) {
+          const dropped = chunks.shift();
+          queued -= dropped?.length ?? 0;
+          offset = 0;
+        }
+      },
+      pull: (out) => {
+        let written = 0;
+        while (written < out.length && chunks.length > 0) {
+          const head = chunks[0];
+          const count = Math.min(out.length - written, head.length - offset);
+          out.set(head.subarray(offset, offset + count), written);
+          written += count;
+          offset += count;
+          if (offset >= head.length) {
+            chunks.shift();
+            queued -= head.length;
+            offset = 0;
+          }
+        }
+        out.fill(0, written);
+      },
+      clear: () => {
+        chunks.length = 0;
+        offset = 0;
+        queued = 0;
+      },
+      get size() {
+        return queued - offset;
+      }
+    };
+  };
+
   // node_modules/@openchamber/sdk/dist/status-controls.js
   var GUEST_STATUS_CONTROLS_MAX = 4;
   var GUEST_STATUS_CONTROL_ID = /^[a-z][a-z0-9-]{0,39}$/;
@@ -120,6 +165,7 @@
   };
 
   // node_modules/@openchamber/sdk/dist/manifest.js
+  var GUEST_PROVIDER_LOGO_BYTES_MAX = 1024 * 1024;
   var TRACKER_URL_TOKENS = ["{id}", "{segment}", "{segments+}"];
   var TRACKER_URL_TOKEN_SET = new Set(TRACKER_URL_TOKENS);
 
@@ -203,6 +249,20 @@
     }
   };
 
+  // node_modules/@openchamber/sdk/dist/navigation.js
+  var GUEST_COMMIT_SHA = /^[0-9a-f]{7,64}$/i;
+  var isGuestCommitSha = (value) => GUEST_COMMIT_SHA.test(value);
+  var GUEST_WALKTHROUGH_BASE_MAX = 255;
+  var guestNavigationCalls = (request, nextId3, refuse2) => ({
+    openCommit: (sha) => isGuestCommitSha(sha) ? request({ channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION, type: "open-commit", id: nextId3(), payload: { sha } }) : refuse2("Commit id must be 7 to 64 hex characters."),
+    openWalkthrough: ({ base }) => {
+      const trimmed = base.trim();
+      if (!trimmed || trimmed.length > GUEST_WALKTHROUGH_BASE_MAX)
+        return refuse2(`Base must contain 1 to ${GUEST_WALKTHROUGH_BASE_MAX} characters.`);
+      return request({ channel: OPENCHAMBER_SDK_CHANNEL, v: OPENCHAMBER_SDK_API_VERSION, type: "open-walkthrough", id: nextId3(), payload: { base: trimmed } });
+    }
+  });
+
   // node_modules/@openchamber/sdk/dist/contract.js
   var GUEST_BLOCK_ANSWER_MAX = 2e3;
   var GUEST_FILE_STAT_KINDS = ["file", "directory", "other", "missing"];
@@ -210,8 +270,6 @@
   var isPromptResult = (value) => Boolean(value && "sent" in value && !("sessionId" in value));
   var isGuestMessageItem = (item) => item !== null && item.kind === "message";
   var isGuestAttachItem = (item) => item !== null && (item.kind === void 0 || item.kind === "issue" || item.kind === "pull");
-  var GUEST_COMMIT_SHA = /^[0-9a-f]{7,64}$/i;
-  var isGuestCommitSha = (value) => GUEST_COMMIT_SHA.test(value);
   var GUEST_TOAST_MAX = 500;
   var GUEST_CLIPBOARD_TEXT_MAX = 32e3;
   var GUEST_COMPOSE_TEXT_MAX = 16e3;
@@ -378,7 +436,9 @@
     "file-open",
     "file-snapshot",
     "file-saved",
-    "generate-late"
+    "generate-late",
+    "microphone-audio",
+    "microphone-ended"
   ]);
   var asWireRecord = (data) => Object(data) === data ? data : null;
   var isNonEmptyString = (value) => String(value) === value && value.length > 0;
@@ -484,6 +544,7 @@
     let popoverPointerActive = false;
     let popoverFocusActive = false;
     let popoverActivityReported = null;
+    let microphone = null;
     const lifecycleFromSession = (session) => {
       if (!session)
         return null;
@@ -527,6 +588,19 @@
         const listener = shellsListeners.get(message.payload.subscriptionId);
         if (listener)
           emit([listener], message.payload.snapshot);
+        return;
+      }
+      if (message.type === "microphone-audio") {
+        microphone?.queue.push(message.payload.samples);
+        return;
+      }
+      if (message.type === "microphone-ended") {
+        const open = microphone;
+        if (!open)
+          return;
+        microphone = null;
+        open.release();
+        emit(open.endedListeners, message.payload.reason);
         return;
       }
       if (message.type === "ready") {
@@ -732,6 +806,76 @@
         post(message);
     };
     const requestFileSave = () => notify({ ...envelope, type: "file-save" });
+    const postMicrophoneClose = () => {
+      if (!disposed && target.parent !== target)
+        post({ ...envelope, type: "microphone-close", id: nextId(ids) });
+    };
+    const openMicrophone = async () => {
+      if (microphone)
+        throw new HostRequestError("HOST_REJECTED", "The microphone is already open in this frame.");
+      if (lastReady?.features?.microphone !== true) {
+        throw new HostRequestError("UNSUPPORTED", "This OpenChamber cannot share the microphone with extensions.");
+      }
+      const AudioContextCtor = globalThis.AudioContext;
+      if (typeof AudioContextCtor !== "function")
+        throw new HostRequestError("UNSUPPORTED", "This frame has no Web Audio.");
+      const context = new AudioContextCtor();
+      if (context.sampleRate < GUEST_MICROPHONE_SAMPLE_RATE_MIN || context.sampleRate > GUEST_MICROPHONE_SAMPLE_RATE_MAX) {
+        void context.close().catch(() => void 0);
+        throw new HostRequestError("UNSUPPORTED", `Audio at ${context.sampleRate} Hz is not supported.`);
+      }
+      const resumed = context.state === "suspended" ? context.resume().catch(() => void 0) : void 0;
+      const queue = createSampleQueue(Math.round(context.sampleRate / 4));
+      const processor = context.createScriptProcessor(1024, 1, 1);
+      processor.onaudioprocess = (event) => queue.pull(event.outputBuffer.getChannelData(0));
+      const destination = context.createMediaStreamDestination();
+      processor.connect(destination);
+      const endedListeners = /* @__PURE__ */ new Set();
+      const open = {
+        queue,
+        endedListeners,
+        release: () => {
+          processor.onaudioprocess = null;
+          processor.disconnect();
+          queue.clear();
+          for (const track of destination.stream.getTracks())
+            track.stop();
+          void context.close().catch(() => void 0);
+        }
+      };
+      microphone = open;
+      try {
+        const result = await send({ ...envelope, type: "microphone-open", id: nextId(ids), payload: { sampleRate: context.sampleRate } }, GUEST_MICROPHONE_OPEN_TIMEOUT_MS);
+        if (!result || !("opened" in result) || result.opened !== true) {
+          throw new HostRequestError("HOST_REJECTED", "Host did not open the microphone.");
+        }
+        await resumed;
+        if (microphone !== open)
+          throw new HostRequestError("DISCONNECTED", "The microphone closed while it was opening.");
+      } catch (error) {
+        if (microphone === open)
+          microphone = null;
+        open.release();
+        postMicrophoneClose();
+        throw error;
+      }
+      return {
+        stream: destination.stream,
+        close: () => {
+          if (microphone !== open)
+            return;
+          microphone = null;
+          open.release();
+          postMicrophoneClose();
+        },
+        onEnded: (listener) => {
+          endedListeners.add(listener);
+          return () => {
+            endedListeners.delete(listener);
+          };
+        }
+      };
+    };
     const onSaveShortcut = (event) => {
       if (!isKeyEvent(event) || !isSaveShortcut(event))
         return;
@@ -1090,13 +1234,7 @@
         id: nextId(ids),
         payload: { url }
       }),
-      openCommit: (sha) => isGuestCommitSha(sha) ? request({
-        channel: OPENCHAMBER_SDK_CHANNEL,
-        v: OPENCHAMBER_SDK_API_VERSION,
-        type: "open-commit",
-        id: nextId(ids),
-        payload: { sha }
-      }) : Promise.reject(new HostRequestError("HOST_REJECTED", "Commit id must be 7 to 64 hex characters.")),
+      ...guestNavigationCalls(request, () => nextId(ids), (message) => Promise.reject(new HostRequestError("HOST_REJECTED", message))),
       answerBlock: (text) => request({
         channel: OPENCHAMBER_SDK_CHANNEL,
         v: OPENCHAMBER_SDK_API_VERSION,
@@ -1326,6 +1464,7 @@
           lateGenerateListeners.delete(listener);
         };
       },
+      openMicrophone,
       setBadge: (count) => request({
         channel: OPENCHAMBER_SDK_CHANNEL,
         v: OPENCHAMBER_SDK_API_VERSION,
@@ -1377,6 +1516,11 @@
           post({ ...envelope, type: "shells-unsubscribe", id: nextId(ids), payload: { subscriptionId } });
         }
         shellsListeners.clear();
+        if (microphone) {
+          postMicrophoneClose();
+          microphone.release();
+          microphone = null;
+        }
         disposed = true;
         resolveHandler = null;
         actionHandler = null;
@@ -1492,8 +1636,8 @@
         return () => lifecycle.delete(listener);
       },
       whenReady: () => {
-        const current = ready.get();
-        return current ? Promise.resolve(current) : new Promise((resolve) => readyWaiters.push(resolve));
+        const current2 = ready.get();
+        return current2 ? Promise.resolve(current2) : new Promise((resolve) => readyWaiters.push(resolve));
       },
       dispose: () => {
         for (const unsubscribe of unsubscribers) unsubscribe();
@@ -1563,6 +1707,7 @@
     "POST /chip": "WP3",
     "POST /designs/:slug/prompt": "WP3",
     "POST /pages/from-message": "WP3",
+    "POST /pages/from-file": "WP3",
     "DELETE /open-request": "WP3",
     "POST /open-request": "WP3",
     "POST /session-events": "U4",
@@ -1615,13 +1760,27 @@
     "POST /systems/:id/build/stop": "P25",
     "POST /system-stops/:undoId/undo": "P25",
     "POST /memberships": "P26",
-    "POST /systems/register": "P26"
+    "POST /systems/register": "P26",
+    "PUT /view": "UP",
+    // system-builder-depth Phase 2 (§13 T12a)
+    "GET /systems/:id/screens/render": "SBD",
+    "GET /systems/:id/screens/render/chunk": "SBD",
+    // system-builder-depth Phase 3 (§13 T19, T20)
+    "GET /systems/:id/export": "SBD3",
+    "POST /systems/:id/export": "SBD3",
+    "GET /systems/:id/comments": "SBD3",
+    "POST /systems/:id/comments": "SBD3",
+    "PATCH /systems/:id/comments/:commentId": "SBD3",
+    "DELETE /systems/:id/comments/:commentId": "SBD3",
+    "POST /systems/:id/comments/mark-sent": "SBD3"
   };
   var ROUTE_KEYS = Object.keys(ROUTE_OWNERS);
   var RAW_TEXT_ROUTES = /* @__PURE__ */ new Set([
     "GET /designs/:slug/render/chunk",
     "GET /systems/:id/board/chunk",
-    "GET /systems/:id/living-page/render/chunk"
+    "GET /systems/:id/living-page/render/chunk",
+    // system-builder-depth Phase 2 (§13 T12a)
+    "GET /systems/:id/screens/render/chunk"
   ]);
   var splitRouteKey = (key) => {
     const space = key.indexOf(" ");
@@ -1640,6 +1799,10 @@
   var SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
   var TITLE_MAX = 120;
   var BRIEF_MAX = 2e3;
+  var VIEWPORT_WIDTH_MIN = 200;
+  var VIEWPORT_WIDTH_MAX = 3840;
+  var VIEWPORT_HEIGHT_MIN = 200;
+  var VIEWPORT_HEIGHT_MAX = 4320;
   var SCREENS_MAX = 40;
   var COMMENT_BODY_MAX = 2e3;
   var ANCHOR_TEXT_MAX = 120;
@@ -1707,7 +1870,7 @@
   var SYSTEM_ENTRY_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
   var SYSTEM_NOTE_MAX = 2e4;
   var SYSTEM_USAGE_NOTE_MAX = 500;
-  var SYSTEM_FILES_MAX = 200;
+  var SYSTEM_FILES_MAX = 400;
   var SYSTEM_BYTES_MAX = 100 * 1024 * 1024;
   var SYSTEM_FONT_MAX_BYTES = 5 * 1024 * 1024;
   var SYSTEM_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -1726,11 +1889,17 @@
   var BOARD_ENTRY_MAX = 120;
   var SYSTEM_BUILD_TICKET_PATTERN = /^sb_[a-z0-9]{12}$/;
   var SYSTEM_BUILD_TTL_MS = 7 * 864e5;
+  var SYSTEM_MOTION_DURATION_MAX_MS = 1e4;
+  var SYSTEM_MOTION_STEPS_MAX = 100;
   var LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
   var LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
   var SCAN_JSON_MAX_BYTES = 2 * 1024 * 1024;
   var SYSTEM_BUILD_POLL_MS = 3e3;
   var SYSTEM_PROPOSAL_FILES_MAX = 200;
+  var SESSION_TOOL_NAME_MAX = 128;
+  var SESSION_TOOL_TARGET_MAX = 1024;
+  var TOOL_REPAINT_MS = 1e3;
+  var FILE_PAGE_COPY_MAX_BYTES = 50 * 1024 * 1024;
 
   // src/guest/service-client.ts
   var ServiceError = class extends Error {
@@ -1960,6 +2129,42 @@
       inflight.set(key, task);
       return task;
     };
+    const fetchSystemScreen = async (id, screen, options2) => {
+      const query = { screen, scheme: options2.scheme ?? "light" };
+      if (options2.version) query.version = options2.version;
+      if (options2.proposal) query.proposal = options2.proposal;
+      const meta = await call("GET /systems/:id/screens/render", { params: { id }, query });
+      const cached = renders.get(meta.key);
+      if (cached) {
+        renders.delete(meta.key);
+        renders.set(meta.key, cached);
+        return cached;
+      }
+      const indexes = Array.from({ length: meta.chunks }, (_, n) => n);
+      const parts = await mapLimit(
+        indexes,
+        RENDER_CHUNK_CONCURRENCY,
+        (n) => call("GET /systems/:id/screens/render/chunk", { params: { id }, query: { key: meta.key, n: String(n) } })
+      );
+      const doc = { meta, html: parts.join("") };
+      remember(doc);
+      return doc;
+    };
+    const systemScreen = (id, screen, options2 = {}) => {
+      const key = `screen\0${id}\0${screen}\0${options2.version ?? ""}\0${options2.proposal ?? ""}\0${options2.scheme ?? "light"}`;
+      const running = inflight.get(key);
+      if (running) return running;
+      const task = (async () => {
+        try {
+          return await fetchSystemScreen(id, screen, options2);
+        } catch (error) {
+          if (isServiceError(error, "stale")) return fetchSystemScreen(id, screen, options2);
+          throw error;
+        }
+      })().finally(() => inflight.delete(key));
+      inflight.set(key, task);
+      return task;
+    };
     const upload = async (text) => {
       if (text.length > UPLOAD_TOTAL_MAX) {
         throw new ServiceError("too-large", `This text is too long to send to Design Chamber (over ${UPLOAD_TOTAL_MAX.toLocaleString("en-US")} characters).`);
@@ -2008,7 +2213,16 @@
     const stopBuild = (systemId, proposalId = null) => call("POST /systems/:id/build/stop", { params: { id: systemId }, body: { proposalId } });
     const undoStop = (undoId) => call("POST /system-stops/:undoId/undo", { params: { undoId }, body: {} });
     const loadLivingPage = (systemId) => call("GET /systems/:id/living-page", { params: { id: systemId } });
-    return { call, loadRender, loadBoard, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
+    const systemExportFormats = (systemId) => call("GET /systems/:id/export", { params: { id: systemId } });
+    const exportSystemTokens = (systemId, formats) => call("POST /systems/:id/export", { params: { id: systemId }, body: formats === void 0 ? {} : { formats } });
+    const systemComments = {
+      list: (systemId) => call("GET /systems/:id/comments", { params: { id: systemId } }),
+      add: (systemId, body) => call("POST /systems/:id/comments", { params: { id: systemId }, body }),
+      update: (systemId, commentId, patch) => call("PATCH /systems/:id/comments/:commentId", { params: { id: systemId, commentId }, body: patch }),
+      remove: (systemId, commentId) => call("DELETE /systems/:id/comments/:commentId", { params: { id: systemId, commentId } }),
+      markSent: (systemId, ids) => call("POST /systems/:id/comments/mark-sent", { params: { id: systemId }, body: { ids } })
+    };
+    return { call, loadRender, loadBoard, systemScreen, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage, systemExportFormats, exportSystemTokens, systemComments };
   };
 
   // node_modules/@openchamber/sdk/dist/ui/theme.js
@@ -2089,7 +2303,7 @@
       root.style.setProperty(hostName, value);
     }
     root.style.setProperty("font-family", theme.tokens.font);
-    root.style.setProperty("font-size", "0.875rem");
+    root.style.setProperty("font-size", theme.tokens.fontSize ?? "0.875rem");
     root.style.setProperty("line-height", "1.45");
     root.style.setProperty("color", theme.tokens.foreground);
   };
@@ -2183,6 +2397,7 @@
     return `
 .oc-sdk[data-tone="${name}"], .oc-sdk [data-tone="${name}"] { --oc-sdk-tone: ${color}; --oc-sdk-tone-text: ${v(`${name}-text`, "inherit")}; }`;
   };
+  var len = (px2) => `calc(${px2}rem / 14)`;
   var UI_SIZE_CSS = `
 .oc-sdk { box-sizing: border-box; font-size: 0.875rem; line-height: 1.45; }
 .oc-sdk *, .oc-sdk *::before, .oc-sdk *::after { box-sizing: border-box; }
@@ -2191,95 +2406,106 @@
 :where(.oc-sdk) :where(button), :where(button.oc-sdk) { cursor: pointer; background: none; border: 0; padding: 0; }
 .oc-sdk button:disabled, button.oc-sdk:disabled, .oc-sdk[aria-disabled="true"], .oc-sdk [aria-disabled="true"] { opacity: .5; pointer-events: none; }
 
-.oc-sdk-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid transparent; font-size: 0.875rem; font-weight: 500; line-height: 1; white-space: nowrap; }
-.oc-sdk-btn[data-size="sm"] { gap: 6px; height: 28px; padding: 0 10px; font-size: 0.8125rem; }
-.oc-sdk-btn[data-size="xs"] { gap: 4px; height: 24px; padding: 0 8px; font-size: 0.75rem; }
+.oc-sdk-btn { display: inline-flex; align-items: center; justify-content: center; gap: ${len(8)}; height: ${len(32)}; padding: 0 ${len(12)}; border: 1px solid transparent; font-size: 0.875rem; font-weight: 500; line-height: 1; white-space: nowrap; }
+.oc-sdk-btn[data-size="sm"] { gap: ${len(6)}; height: ${len(28)}; padding: 0 ${len(10)}; font-size: 0.8125rem; }
+.oc-sdk-btn[data-size="xs"] { gap: ${len(4)}; height: ${len(24)}; padding: 0 ${len(8)}; font-size: 0.75rem; }
 .oc-sdk-btn[data-loading="true"] { opacity: .5; pointer-events: none; }
-.oc-sdk-btn > .oc-sdk-spinner-ring { width: 14px; height: 14px; }
+.oc-sdk-btn > .oc-sdk-spinner-ring { width: ${len(14)}; height: ${len(14)}; }
 
-.oc-sdk-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.oc-sdk-field { display: flex; flex-direction: column; gap: ${len(4)}; min-width: 0; }
 .oc-sdk-field-label { font-size: 0.8125rem; font-weight: 500; }
 .oc-sdk-field-note { font-size: 0.75rem; }
-.oc-sdk-input { display: block; width: 100%; min-width: 0; height: 32px; padding: 0 10px; border: 0; font-size: 0.875rem; line-height: 1.45; appearance: none; }
-textarea.oc-sdk-input { height: auto; padding: 8px 10px; resize: vertical; }
+.oc-sdk-input { display: block; width: 100%; min-width: 0; height: ${len(32)}; padding: 0 ${len(10)}; border: 0; font-size: 0.875rem; line-height: 1.45; appearance: none; }
+textarea.oc-sdk-input { height: auto; padding: ${len(8)} ${len(10)}; resize: vertical; }
 
 .oc-sdk-search { position: relative; min-width: 0; }
-.oc-sdk-search .oc-sdk-input { padding-left: 34px; padding-right: 34px; }
-.oc-sdk-search-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); pointer-events: none; }
-.oc-sdk-search-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: none; align-items: center; justify-content: center; width: 24px; height: 24px; }
+.oc-sdk-search .oc-sdk-input { padding-left: ${len(34)}; padding-right: ${len(34)}; }
+.oc-sdk-search-icon { position: absolute; left: ${len(11)}; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.oc-sdk-search-clear { position: absolute; right: ${len(6)}; top: 50%; transform: translateY(-50%); display: none; align-items: center; justify-content: center; width: ${len(24)}; height: ${len(24)}; }
 .oc-sdk-search[data-active="true"] .oc-sdk-search-clear { display: inline-flex; }
 
-.oc-sdk-select { position: relative; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.oc-sdk-trigger { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; width: auto; max-width: 100%; min-width: 0; height: 28px; padding: 0 10px; border: 1px solid transparent; font-size: 0.8125rem; text-align: left; }
+.oc-sdk-select { position: relative; display: flex; flex-direction: column; gap: ${len(4)}; min-width: 0; }
+.oc-sdk-trigger { display: inline-flex; align-items: center; gap: ${len(6)}; align-self: flex-start; width: auto; max-width: 100%; min-width: 0; height: ${len(28)}; padding: 0 ${len(10)}; border: 1px solid transparent; font-size: 0.8125rem; text-align: left; }
 .oc-sdk-trigger-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdk-trigger-chevron { flex: 0 0 auto; }
-.oc-sdk-popup { position: fixed; z-index: 50; display: flex; flex-direction: column; gap: 2px; min-width: 160px; max-width: calc(100vw - 16px); max-height: min(320px, calc(100vh - 16px)); overflow: auto; padding: 4px; border: 1px solid transparent; }
-.oc-sdk-popup-search { flex: 0 0 auto; padding: 2px 2px 4px; }
-.oc-sdk-popup-search .oc-sdk-input { height: 28px; font-size: 0.8125rem; }
-.oc-sdk-option { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; font-size: 0.8125rem; text-align: left; }
+.oc-sdk-popup { position: fixed; z-index: 50; display: flex; flex-direction: column; gap: ${len(2)}; min-width: ${len(160)}; max-width: calc(100vw - ${len(16)}); max-height: min(${len(320)}, calc(100vh - ${len(16)})); overflow: auto; padding: ${len(4)}; border: 1px solid transparent; }
+.oc-sdk-popup-search { flex: 0 0 auto; padding: ${len(2)} ${len(2)} ${len(4)}; }
+.oc-sdk-popup-search .oc-sdk-input { height: ${len(28)}; font-size: 0.8125rem; }
+.oc-sdk-option { display: flex; align-items: center; gap: ${len(8)}; width: 100%; padding: ${len(6)} ${len(8)}; font-size: 0.8125rem; text-align: left; }
 .oc-sdk-option-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdk-option-hint { flex: 0 0 auto; font-size: 0.75rem; }
-.oc-sdk-option-check { flex: 0 0 auto; display: inline-flex; width: 14px; visibility: hidden; }
+.oc-sdk-option-check { flex: 0 0 auto; display: inline-flex; width: ${len(14)}; visibility: hidden; }
 .oc-sdk-option[aria-selected="true"] > .oc-sdk-option-check { visibility: visible; }
-.oc-sdk-popup-empty { padding: 8px; font-size: 0.8125rem; }
+.oc-sdk-popup-empty { padding: ${len(8)}; font-size: 0.8125rem; }
 
-.oc-sdk-check { display: inline-flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; }
-.oc-sdk-check-box { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; margin-top: 3px; border: 1px solid transparent; }
+.oc-sdk-check { display: inline-flex; align-items: flex-start; gap: ${len(8)}; width: 100%; text-align: left; }
+.oc-sdk-check-box { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: ${len(14)}; height: ${len(14)}; margin-top: ${len(3)}; border: 1px solid transparent; }
 .oc-sdk-check-box > svg { display: none; }
 .oc-sdk-check[aria-checked="true"] .oc-sdk-check-box > svg { display: block; }
-.oc-sdk-check-thumb { flex: 0 0 auto; position: relative; width: 36px; height: 20px; }
-.oc-sdk-check-thumb::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; }
+.oc-sdk-check-thumb { flex: 0 0 auto; position: relative; width: ${len(36)}; height: ${len(20)}; --oc-sdk-thumb-travel: ${len(16)}; }
+.oc-sdk-check-thumb::after { content: ""; position: absolute; top: ${len(2)}; left: ${len(2)}; width: ${len(16)}; height: ${len(16)}; }
 .oc-sdk-check-text { display: flex; flex-direction: column; min-width: 0; }
 .oc-sdk-check-label { font-size: 0.875rem; }
 .oc-sdk-check-desc { font-size: 0.75rem; }
 
-.oc-sdk-tabs { display: inline-flex; gap: 2px; padding: 2px; max-width: 100%; overflow: auto; }
-.oc-sdk-tab { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid transparent; font-size: 0.8125rem; font-weight: 500; white-space: nowrap; }
+.oc-sdk-tabs { display: inline-flex; gap: ${len(2)}; padding: ${len(2)}; max-width: 100%; overflow: auto; }
+.oc-sdk-tab { display: inline-flex; align-items: center; gap: ${len(6)}; height: ${len(28)}; padding: 0 ${len(10)}; border: 1px solid transparent; font-size: 0.8125rem; font-weight: 500; white-space: nowrap; }
 .oc-sdk-tab-count { font-size: 0.75rem; font-variant-numeric: tabular-nums; }
 
-.oc-sdk-badge { display: inline-flex; align-items: center; padding: 1px 6px; font-size: 11px; font-weight: 500; line-height: 16px; white-space: nowrap; }
+.oc-sdk-badge { display: inline-flex; align-items: center; padding: ${len(1)} ${len(6)}; font-size: ${len(11)}; font-weight: 500; line-height: ${len(16)}; white-space: nowrap; }
 
 .oc-sdk-list { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.oc-sdk-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; text-align: left; }
-.oc-sdk-row-lead { flex: 0 0 auto; width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
+.oc-sdk-row { display: flex; align-items: center; gap: ${len(8)}; width: 100%; padding: ${len(6)} ${len(8)}; text-align: left; }
+.oc-sdk-row-lead { flex: 0 0 auto; width: ${len(64)}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
 .oc-sdk-row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 .oc-sdk-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdk-row-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
 .oc-sdk-row-meta { flex: 0 0 auto; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-.oc-sdk-list-empty { padding: 16px 8px; text-align: center; font-size: 0.8125rem; }
+.oc-sdk-list-empty { padding: ${len(16)} ${len(8)}; text-align: center; font-size: 0.8125rem; }
 
-.oc-sdk-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 40px 16px; text-align: center; }
+.oc-sdk-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: ${len(4)}; padding: ${len(40)} ${len(16)}; text-align: center; }
 .oc-sdk-empty-title { margin: 0; font-size: 0.8125rem; font-weight: 600; }
 .oc-sdk-empty-body { margin: 0; max-width: 32rem; font-size: 0.8125rem; }
-.oc-sdk-empty-action { margin-top: 12px; }
+.oc-sdk-empty-action { margin-top: ${len(12)}; }
 
 @keyframes oc-sdk-spin { to { transform: rotate(360deg); } }
-.oc-sdk-spinner { display: inline-flex; align-items: center; gap: 8px; font-size: 0.8125rem; }
-.oc-sdk-spinner-ring { width: 16px; height: 16px; border: 2px solid transparent; animation: oc-sdk-spin .8s linear infinite; }
-.oc-sdk-spinner[data-size="sm"] .oc-sdk-spinner-ring { width: 12px; height: 12px; }
+.oc-sdk-spinner { display: inline-flex; align-items: center; gap: ${len(8)}; font-size: 0.8125rem; }
+.oc-sdk-spinner-ring { width: ${len(16)}; height: ${len(16)}; border: 2px solid transparent; animation: oc-sdk-spin .8s linear infinite; }
+.oc-sdk-spinner[data-size="sm"] .oc-sdk-spinner-ring { width: ${len(12)}; height: ${len(12)}; }
 
-.oc-sdk-banner { display: flex; align-items: flex-start; gap: 12px; padding: 8px 12px; border: 1px solid transparent; }
-.oc-sdk-banner-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.oc-sdk-banner { display: flex; align-items: flex-start; gap: ${len(12)}; padding: ${len(8)} ${len(12)}; border: 1px solid transparent; }
+.oc-sdk-banner-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: ${len(2)}; }
 .oc-sdk-banner-title { font-size: 0.8125rem; font-weight: 500; }
 .oc-sdk-banner-body { font-size: 0.8125rem; }
 .oc-sdk-banner-action { flex: 0 0 auto; }
 
-.oc-sdk-separator { display: flex; align-items: center; gap: 8px; width: 100%; margin: 8px 0; font-size: 0.75rem; }
+.oc-sdk-separator { display: flex; align-items: center; gap: ${len(8)}; width: 100%; margin: ${len(8)} 0; font-size: 0.75rem; }
 .oc-sdk-separator::before, .oc-sdk-separator::after { content: ""; flex: 1 1 auto; height: 1px; }
 .oc-sdk-separator[data-labeled="false"]::after { display: none; }
-.oc-sdk-popup > .oc-sdk-separator { margin: 4px 0; }
+.oc-sdk-popup > .oc-sdk-separator { margin: ${len(4)} 0; }
 
-.oc-sdk-progress { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.oc-sdk-progress { display: flex; flex-direction: column; gap: ${len(4)}; min-width: 0; }
 .oc-sdk-progress-label { display: flex; justify-content: space-between; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-.oc-sdk-progress-track { height: 6px; overflow: hidden; }
+.oc-sdk-progress-track { height: ${len(6)}; overflow: hidden; }
 .oc-sdk-progress-fill { height: 100%; transform-origin: left; transition: transform 200ms ease-out; }
-.oc-sdk-progress-value { display: inline-flex; align-items: center; gap: 2px; }
+.oc-sdk-progress-value { display: inline-flex; align-items: center; gap: ${len(2)}; }
 .oc-sdk-progress[data-done="true"] .oc-sdk-progress-value { font-weight: 600; }
 
 .oc-sdk-menu { position: relative; display: inline-flex; }
 
 .oc-sdk-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.oc-sdk-text img { display: block; max-width: 100%; margin: 8px 0; }
+.oc-sdk-text img { display: block; max-width: 100%; margin: ${len(8)} 0; }
+
+/* Under a finger the controls reach the app's touch sizes: rows and options 44px like its sheets, every other
+   control at least 36px. Inputs keep 16px text, below which iOS zooms the page on focus. */
+@media (pointer: coarse) {
+  .oc-sdk-btn, .oc-sdk-input { height: ${len(40)}; }
+  .oc-sdk-btn[data-size="sm"], .oc-sdk-btn[data-size="xs"], .oc-sdk-trigger, .oc-sdk-tab, .oc-sdk-popup-search .oc-sdk-input { height: ${len(36)}; }
+  .oc-sdk-input, .oc-sdk-popup-search .oc-sdk-input { font-size: max(16px, 0.875rem); }
+  .oc-sdk-search-clear { width: ${len(36)}; height: ${len(36)}; right: 0; }
+  .oc-sdk-row, .oc-sdk-option { min-height: ${len(44)}; }
+  .oc-sdk-check { min-height: ${len(36)}; padding: ${len(8)} 0; }
+}
 `;
   var GUEST_UI_LOOK_CSS = `${THEME_VARS}
 .oc-sdk { color: ${fg}; font-family: ${font}; }
@@ -2346,7 +2572,7 @@ ${tone("success")}${tone("warning")}${tone("error")}${tone("info")}
 .oc-sdk-check-thumb { border-radius: 9999px; background: ${border}; transition: background 150ms ease-out; }
 .oc-sdk-check-thumb::after { border-radius: 9999px; background: ${bg}; transition: transform 150ms ease-out; }
 .oc-sdk-check[aria-checked="true"] .oc-sdk-check-thumb { background: ${primary}; }
-.oc-sdk-check[aria-checked="true"] .oc-sdk-check-thumb::after { transform: translateX(16px); }
+.oc-sdk-check[aria-checked="true"] .oc-sdk-check-thumb::after { transform: translateX(var(--oc-sdk-thumb-travel, 16px)); }
 .oc-sdk-check:focus-visible { box-shadow: none; }
 .oc-sdk-check:focus-visible .oc-sdk-check-box, .oc-sdk-check:focus-visible .oc-sdk-check-thumb { ${focusFill} }
 .oc-sdk-check-desc { color: ${muted}; }
@@ -2568,6 +2794,8 @@ ${GUEST_UI_LOOK_CSS}`;
     node.setAttribute("viewBox", "0 0 24 24");
     node.setAttribute("width", String(size));
     node.setAttribute("height", String(size));
+    node.style.width = len(size);
+    node.style.height = len(size);
     node.setAttribute("aria-hidden", "true");
     node.setAttribute("fill", "currentColor");
     if (className) {
@@ -2881,9 +3109,9 @@ ${GUEST_UI_LOOK_CSS}`;
     const paint = () => {
       setText(caption, props.label);
       caption.hidden = !props.label;
-      const current = props.options.find((option) => option.id === props.value);
-      setText(value, current?.label ?? props.placeholder ?? "Select");
-      value.dataset.empty = current ? "false" : "true";
+      const current2 = props.options.find((option) => option.id === props.value);
+      setText(value, current2?.label ?? props.placeholder ?? "Select");
+      value.dataset.empty = current2 ? "false" : "true";
       trigger.disabled = Boolean(props.disabled);
       if (closePopup)
         paintOptions();
@@ -3169,7 +3397,7 @@ ${GUEST_UI_LOOK_CSS}`;
     };
   };
   var defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  var nextBackoff = (current) => Math.min(CHANGES_BACKOFF_MAX_MS, Math.max(CHANGES_BACKOFF_MIN_MS, current * 2));
+  var nextBackoff = (current2) => Math.min(CHANGES_BACKOFF_MAX_MS, Math.max(CHANGES_BACKOFF_MIN_MS, current2 * 2));
   var createChangeFeed = (client2, options = {}) => {
     const wait = Math.min(options.waitMs ?? CHANGES_WAIT_MAX_MS, CHANGES_WAIT_MAX_MS);
     const sleep = options.sleep ?? defaultSleep;
@@ -3303,6 +3531,10 @@ ${GUEST_UI_LOOK_CSS}`;
     return best;
   };
 
+  // src/shared/display-text.ts
+  var DISPLAY_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+  var stripDisplayControls = (text) => text.replace(DISPLAY_CONTROLS, "");
+
   // src/shared/types.ts
   var CHIP_PROVIDER_ID = "design-chamber";
 
@@ -3315,9 +3547,49 @@ ${GUEST_UI_LOOK_CSS}`;
     return windows ? left.toLowerCase() === right.toLowerCase() : left === right;
   };
 
+  // src/ui/model/device-model.ts
+  var PX_MAX = 400;
+  var NO_INSETS = { top: 0, right: 0, bottom: 0, left: 0 };
+  var DESKTOP_DEVICE = { form: "desktop", coarse: false, insets: NO_INSETS, keyboard: 0 };
+  var record = (value) => typeof value === "object" && value !== null ? value : {};
+  var px = (value) => typeof value === "number" && Number.isFinite(value) ? Math.min(PX_MAX, Math.max(0, Math.round(value))) : 0;
+  var deviceOf = (context) => {
+    const raw = record(context.device);
+    const { formFactor, pointer } = raw;
+    if (formFactor !== "phone" && formFactor !== "tablet" && formFactor !== "desktop") return DESKTOP_DEVICE;
+    if (pointer !== "coarse" && pointer !== "fine") return DESKTOP_DEVICE;
+    const insets = record(raw.insets);
+    return {
+      form: formFactor,
+      coarse: pointer === "coarse",
+      insets: { top: px(insets.top), right: px(insets.right), bottom: px(insets.bottom), left: px(insets.left) },
+      keyboard: px(raw.keyboard)
+    };
+  };
+  var TIP_TITLE = "Open Design Chamber full screen";
+  var openHelp = (device, panelOnPhone) => {
+    if (device.form !== "phone") {
+      return {
+        notHere: "Open Design Chamber from the rail to see it.",
+        serviceDown: "Design Chamber isn\u2019t responding.",
+        fullScreenHint: "Full screen: sidebar \u2192 Extension pages \u2192 Design Chamber",
+        firstRunTip: { title: TIP_TITLE, body: "In the sidebar, open Extension pages and pick Design Chamber. Canvases get the whole window there." }
+      };
+    }
+    const serviceDown = "Design Chamber isn\u2019t responding on your computer. Try again in a moment.";
+    if (!panelOnPhone) return { notHere: "Open Design Chamber from the More menu in your chats list.", serviceDown, fullScreenHint: null, firstRunTip: null };
+    return {
+      notHere: "Design Chamber can\u2019t open here yet. Open it from the More menu in your chats list.",
+      serviceDown,
+      fullScreenHint: "Full screen: chats list \u2192 More \u2192 Design Chamber",
+      firstRunTip: { title: TIP_TITLE, body: "In your chats list, open More and pick Design Chamber." }
+    };
+  };
+
   // src/guest/flows.ts
   var PANEL_SURFACE_ID = `plugin:${CHIP_PROVIDER_ID}`;
   var OPEN_AS_PAGE_ACTION = "open-as-page";
+  var OPEN_FILE_AS_PAGE_ACTION = "open-file-as-page";
   var CHIP_ID_PREFIX = "design:";
   var MESSAGES = {
     noProject: "Open a project first, then try again.",
@@ -3331,7 +3603,27 @@ ${GUEST_UI_LOOK_CSS}`;
     noSessionSelected: "Open a chat first, then try again.",
     markFailed: "Sent, but the comments could not be marked as sent. Resolve them by hand so they are not sent again.",
     savedPage: (title2) => `Saved as page \u201C${title2}\u201D.`,
-    savedPageClosed: (title2) => `Saved as page \u201C${title2}\u201D. Open Design Chamber to see it.`
+    savedPageClosed: (title2) => `Saved as page \u201C${title2}\u201D. Open Design Chamber to see it.`,
+    // The Files-row action (native-extras §3.3, §3.4). The service's own sentences are shown as they are.
+    fileFolder: "Pick an .html file to open it as a page.",
+    fileNotHtml: "Only .html and .htm files open as pages.",
+    fileSaved: (title2) => `Saved \u201C${title2}\u201D as a page in Design Chamber.`,
+    fileSavedClosed: (title2) => `Saved \u201C${title2}\u201D as a page.`,
+    fileReused: (title2) => `\u201C${title2}\u201D is already in Design Chamber. Opening it.`,
+    fileReusedClosed: (title2) => `\u201C${title2}\u201D is already in Design Chamber.`,
+    openToSee: "Open Design Chamber to see it.",
+    fileServiceDown: "Design Chamber isn\u2019t responding. Try again in a moment.",
+    fileFailed: "Design Chamber couldn't open that file. Try again."
+  };
+  var TOAST_TITLE_MAX = 80;
+  var NO_ANSWER = ["SERVICE_FAILED", "HOST_TIMEOUT", "REQUEST_FAILED", "HOST_UNAVAILABLE"];
+  var leftOutSentences = ({ outside, missing, other }) => {
+    const files = (n) => n === 1 ? "1 file it uses" : `${n} files it uses`;
+    const sentences = [];
+    if (outside > 0) sentences.push(`${files(outside)} ${outside === 1 ? "is outside its folder, so it wasn\u2019t" : "are outside its folder, so they weren\u2019t"} copied.`);
+    if (missing > 0) sentences.push(`${files(missing)} ${missing === 1 ? "is" : "are"} missing.`);
+    if (other > 0) sentences.push(`${files(other)} can\u2019t be copied into a page, so ${other === 1 ? "it was" : "they were"} left out.`);
+    return sentences;
   };
   var FlowError = class extends Error {
     constructor(code, message) {
@@ -3352,7 +3644,7 @@ ${GUEST_UI_LOOK_CSS}`;
   });
   var planReconciliation = (snapshot, designs) => {
     if (snapshot.state !== "ready") return [];
-    const known = new Set(snapshot.sessions.map((session) => session.id));
+    const known2 = new Set(snapshot.sessions.map((session) => session.id));
     const newest = /* @__PURE__ */ new Map();
     for (const session of snapshot.sessions) {
       for (const item of session.items) {
@@ -3366,7 +3658,7 @@ ${GUEST_UI_LOOK_CSS}`;
     for (const design of designs) {
       const best = newest.get(design.slug);
       if (!best || best.id === design.sessionId) continue;
-      if (design.sessionId === null || !known.has(design.sessionId)) patches.push({ slug: design.slug, sessionId: best.id });
+      if (design.sessionId === null || !known2.has(design.sessionId)) patches.push({ slug: design.slug, sessionId: best.id });
     }
     return patches;
   };
@@ -3376,7 +3668,7 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var BUILD_SYSTEM_DEFAULT_TEXT = "Let's build a design system.";
   var takesOpenRequest = (batch) => batch.reset || batch.events.some((event) => event.kind === "added" || event.kind === "open");
-  var createFlows = ({ host: host2, client: client2, now = Date.now }) => {
+  var createFlows = ({ host: host2, client: client2, now = Date.now, panelOnPhone = true }) => {
     const api = host2.client;
     const lastTurn = /* @__PURE__ */ new Map();
     let delivering = false;
@@ -3385,6 +3677,34 @@ ${GUEST_UI_LOOK_CSS}`;
         await api.toast({ kind, message });
       } catch {
       }
+    };
+    const showRail = async () => {
+      try {
+        await api.openSurface(PANEL_SURFACE_ID);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const openFileAsPage = async (item) => {
+      if (item.isDirectory) return toast2("info", MESSAGES.fileFolder);
+      if (!/\.html?$/i.test(item.path)) return toast2("info", MESSAGES.fileNotHtml);
+      const ready = host2.ready.get();
+      const device = deviceOf(ready ?? {});
+      const help = openHelp(device, panelOnPhone);
+      let answer;
+      try {
+        answer = await client2.call("POST /pages/from-file", { body: { path: item.path, directory: item.directory || null } });
+      } catch (error) {
+        if (!isServiceError(error)) return toast2("error", MESSAGES.fileFailed);
+        if (NO_ANSWER.includes(error.code)) return toast2("error", device.form === "phone" ? help.serviceDown : MESSAGES.fileServiceDown);
+        return toast2(error.code === "conflict" ? "info" : "error", error.message);
+      }
+      const opened = await showRail();
+      const title2 = clip(stripDisplayControls(oneLine(answer.title)), TOAST_TITLE_MAX);
+      const lead = answer.reused ? (opened ? MESSAGES.fileReused : MESSAGES.fileReusedClosed)(title2) : (opened ? MESSAGES.fileSaved : MESSAGES.fileSavedClosed)(title2);
+      const where = opened ? [] : [device.form === "phone" && !panelOnPhone ? help.notHere : MESSAGES.openToSee];
+      await toast2(answer.reused ? "info" : "success", [lead, ...where, ...leftOutSentences(answer.left)].join(" "));
     };
     const latestVersion = async (slug) => {
       try {
@@ -3650,15 +3970,11 @@ ${GUEST_UI_LOOK_CSS}`;
         }
       },
       runAction: async (item) => {
+        if (item.kind === "file" && item.action === OPEN_FILE_AS_PAGE_ACTION) return openFileAsPage(item);
         if (!isGuestMessageItem(item) || item.action !== OPEN_AS_PAGE_ACTION) return;
         const created = await flows2.openAsPage(item, { open: true });
         if (!created) return;
-        let opened = true;
-        try {
-          await api.openSurface(PANEL_SURFACE_ID);
-        } catch {
-          opened = false;
-        }
+        const opened = await showRail();
         await toast2("success", opened ? MESSAGES.savedPage(created.title) : MESSAGES.savedPageClosed(created.title));
       },
       handleItem: async (item) => {
@@ -3990,13 +4306,13 @@ ${GUEST_UI_LOOK_CSS}`;
       ),
       refreshDesigns: (query) => {
         if (query) lastQuery = query;
-        const current = {};
-        if (lastQuery.q) current.q = lastQuery.q;
-        if (lastQuery.kind) current.kind = lastQuery.kind;
+        const current2 = {};
+        if (lastQuery.q) current2.q = lastQuery.q;
+        if (lastQuery.kind) current2.kind = lastQuery.kind;
         return load(
           () => state.designs,
           (designs) => set({ designs }),
-          () => client2.call("GET /designs", { query: current })
+          () => client2.call("GET /designs", { query: current2 })
         );
       },
       openDesign: async (slug) => {
@@ -4155,9 +4471,9 @@ ${GUEST_UI_LOOK_CSS}`;
               if (event.slug && event.slug === openSlug && openDesign) {
                 detail = true;
                 const touched = affectedSources(openDesign, event.files ?? []);
-                const known = revs.get(event.slug);
-                if (touched === "all" || known === "all") revs.set(event.slug, "all");
-                else revs.set(event.slug, /* @__PURE__ */ new Set([...known ?? [], ...touched]));
+                const known2 = revs.get(event.slug);
+                if (touched === "all" || known2 === "all") revs.set(event.slug, "all");
+                else revs.set(event.slug, /* @__PURE__ */ new Set([...known2 ?? [], ...touched]));
               }
               break;
             case "thumb":
@@ -4247,6 +4563,1077 @@ ${GUEST_UI_LOOK_CSS}`;
   };
   var askAgent = async (slug, purpose, before) => (await flows.askAgent(slug, purpose, before)).outcome;
   var askSelfContained = (slug) => askAgent(slug, "offline");
+
+  // src/shared/page-state.ts
+  var pageStateChars = (items) => {
+    let chars = 0;
+    for (const [key, value] of items) chars += key.length + value.length;
+    return chars;
+  };
+  var PAGE_STATE_GEN_MAX = 120;
+  var GEN_PATTERN = /^([A-Za-z0-9_-]{1,100}):(0|[1-9][0-9]{0,15})$/;
+  var parseGen = (gen) => {
+    if (typeof gen !== "string" || gen.length > PAGE_STATE_GEN_MAX) return null;
+    const match = GEN_PATTERN.exec(gen);
+    if (match === null) return null;
+    const clears = Number(match[2]);
+    if (!Number.isSafeInteger(clears)) return null;
+    return { epoch: match[1], clears };
+  };
+  var isOlderClear = (gen, current2) => {
+    const mine = parseGen(gen);
+    const theirs = parseGen(current2);
+    if (mine === null || theirs === null) return false;
+    return mine.epoch === theirs.epoch && mine.clears < theirs.clears;
+  };
+
+  // src/guest/page-state.ts
+  var PAGE_STATE_LOAD_TIMEOUT_MS = 2e3;
+  var PAGE_STATE_REFETCH_DEBOUNCE_MS = 500;
+  var PAGE_STATE_FAIL_NOTICE = 3;
+  var PAGE_STATE_UNSAVED_SENTENCE = "Page data can't be saved right now. Changes last until you close this design.";
+  var PAGE_STATE_CAP_SENTENCE = "This design tried to save more than 1 MB of page data. The extra wasn't saved.";
+  var PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE = "Saved page data was cleared.";
+  var defaultSchedule = (run, ms) => {
+    const timer = setTimeout(run, ms);
+    return () => clearTimeout(timer);
+  };
+  var documentVisibility2 = () => {
+    if (typeof document === "undefined") return null;
+    return {
+      hidden: () => document.hidden,
+      onChange: (listener) => {
+        document.addEventListener("visibilitychange", listener);
+        return () => document.removeEventListener("visibilitychange", listener);
+      }
+    };
+  };
+  var splitPageStateDelta = (gen, clear, changes2) => {
+    const dropped = [];
+    const groups = [];
+    let current2 = [];
+    let length = JSON.stringify({ gen, clear, changes: [] }).length;
+    const close = () => {
+      if (current2.length > 0) groups.push(current2);
+      current2 = [];
+      length = JSON.stringify({ gen, clear: false, changes: [] }).length;
+    };
+    for (const change of changes2) {
+      const cost = JSON.stringify(change).length + (current2.length === 0 ? 0 : 1);
+      if (current2.length === 0 && length + cost > UPLOAD_TOTAL_MAX) {
+        dropped.push(change);
+        continue;
+      }
+      if (current2.length > 0 && (current2.length >= PAGE_STATE_CHANGES_MAX || length + cost > UPLOAD_TOTAL_MAX)) close();
+      current2.push(change);
+      length += cost;
+    }
+    close();
+    if (groups.length === 0) return { deltas: clear ? [{ clear, changes: [] }] : [], dropped };
+    return { deltas: groups.map((group2, index) => ({ clear: clear && index === 0, changes: group2 })), dropped };
+  };
+  var pageStateDiff = (before, after, dirty) => {
+    const changes2 = [];
+    for (const [key, value] of after) {
+      if (dirty.has(key)) continue;
+      if (before.get(key) !== value) changes2.push([key, value]);
+    }
+    for (const key of before.keys()) {
+      if (dirty.has(key) || after.has(key)) continue;
+      changes2.push([key, null]);
+    }
+    return changes2;
+  };
+  var sizeOf = (key, value) => key.length + (value === null ? 0 : value.length);
+  var createPageStateController = (deps) => {
+    const { client: client2, slug, onNotice, syncFrames, reloadFrames } = deps;
+    const now = deps.now ?? Date.now;
+    const schedule = deps.schedule ?? defaultSchedule;
+    const visibility = deps.visibility === void 0 ? documentVisibility2() : deps.visibility;
+    const loadTimeoutMs = deps.loadTimeoutMs ?? PAGE_STATE_LOAD_TIMEOUT_MS;
+    let items = /* @__PURE__ */ new Map();
+    let chars = 0;
+    let gen = "";
+    let persist = false;
+    let disposed = false;
+    let dirty = /* @__PURE__ */ new Map();
+    let dirtyClear = false;
+    let failures = 0;
+    let lastFlushAt = null;
+    let flushTimer = null;
+    let inflight = null;
+    let clearing = false;
+    let refetchTimer = null;
+    let unwatchVisibility = null;
+    const shown = /* @__PURE__ */ new Set();
+    const noticeOnce = (kind, message) => {
+      if (shown.has(kind)) return;
+      shown.add(kind);
+      onNotice({ id: "page-data", kind, message });
+    };
+    const adopt = (answer) => {
+      items = new Map(answer.items);
+      chars = answer.chars;
+      gen = answer.gen;
+    };
+    const load = () => new Promise((resolve) => {
+      let settled2 = false;
+      let cancelTimeout = null;
+      const finish = (answer) => {
+        if (settled2 || disposed) return;
+        settled2 = true;
+        cancelTimeout?.();
+        if (answer) {
+          adopt(answer);
+          persist = true;
+        } else {
+          items = /* @__PURE__ */ new Map();
+          chars = 0;
+          persist = false;
+          noticeOnce("unsaved", PAGE_STATE_UNSAVED_SENTENCE);
+        }
+        resolve();
+      };
+      cancelTimeout = schedule(() => finish(null), loadTimeoutMs);
+      client2.call("GET /designs/:slug/page-state", { params: { slug } }).then((answer) => finish(answer)).catch(() => finish(null));
+    });
+    const cancelFlushTimer = () => {
+      flushTimer?.();
+      flushTimer = null;
+    };
+    const scheduleFlush = () => {
+      if (flushTimer !== null || disposed || !persist) return;
+      const wait = lastFlushAt === null ? 0 : Math.max(0, lastFlushAt + PAGE_STATE_FLUSH_MS - now());
+      flushTimer = schedule(() => {
+        flushTimer = null;
+        void runFlush();
+      }, wait);
+    };
+    const sendDelta = async (delta) => {
+      const json = JSON.stringify({ gen, ...delta });
+      let body;
+      if (fitsOneRequest(json)) body = { gen, ...delta };
+      else {
+        const uploadId = await client2.upload(json);
+        body = { gen, uploadId };
+      }
+      const answer = await client2.call("PATCH /designs/:slug/page-state", { params: { slug }, body });
+      gen = answer.gen;
+    };
+    const dropDirty = () => {
+      dirty.clear();
+      dirtyClear = false;
+      cancelFlushTimer();
+    };
+    const handleStaleClear = async () => {
+      dropDirty();
+      try {
+        const answer = await client2.call("GET /designs/:slug/page-state", { params: { slug } });
+        adopt(answer);
+        persist = true;
+      } catch {
+        persist = false;
+        noticeOnce("unsaved", PAGE_STATE_UNSAVED_SENTENCE);
+      }
+      dropDirty();
+      reloadFrames();
+      noticeOnce("cleared-elsewhere", PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE);
+    };
+    const runFlush = async () => {
+      if (inflight) return;
+      if (disposed || !persist || dirty.size === 0 && !dirtyClear) return;
+      const clear2 = dirtyClear;
+      const changes2 = [...dirty];
+      dirty = /* @__PURE__ */ new Map();
+      dirtyClear = false;
+      lastFlushAt = now();
+      const { deltas, dropped } = splitPageStateDelta(gen, clear2, changes2);
+      if (dropped.length > 0) noticeOnce("cap", PAGE_STATE_CAP_SENTENCE);
+      const task = (async () => {
+        for (const delta of deltas) await sendDelta(delta);
+      })();
+      inflight = task;
+      try {
+        await task;
+        failures = 0;
+      } catch (error) {
+        if (isServiceError(error, "stale")) {
+          await handleStaleClear();
+        } else if (isServiceError(error, "too-large")) {
+          noticeOnce("cap", PAGE_STATE_CAP_SENTENCE);
+        } else if (!clearing) {
+          dirtyClear = dirtyClear || clear2;
+          for (const [key, value] of changes2) if (!dirty.has(key)) dirty.set(key, value);
+          failures += 1;
+          if (failures >= PAGE_STATE_FAIL_NOTICE) noticeOnce("unsaved", PAGE_STATE_UNSAVED_SENTENCE);
+        }
+      } finally {
+        inflight = null;
+      }
+      if (dirty.size > 0 || dirtyClear) scheduleFlush();
+    };
+    const flush = async () => {
+      cancelFlushTimer();
+      if (inflight) await inflight.catch(() => void 0);
+      await runFlush();
+    };
+    const apply = (board, batch) => {
+      if (disposed || !persist) return;
+      if (batch.clear) {
+        items.clear();
+        chars = 0;
+        dirty.clear();
+        dirtyClear = true;
+      }
+      const accepted = [];
+      let capped2 = false;
+      for (const [key, value] of batch.changes) {
+        const old = items.get(key);
+        const before = old === void 0 ? 0 : sizeOf(key, old);
+        const next = chars + sizeOf(key, value) - before;
+        if (next > PAGE_STATE_MAX_CHARS) {
+          capped2 = true;
+          continue;
+        }
+        if (value === null) items.delete(key);
+        else items.set(key, value);
+        chars = next;
+        dirty.set(key, value);
+        accepted.push([key, value]);
+      }
+      if (capped2) noticeOnce("cap", PAGE_STATE_CAP_SENTENCE);
+      if (batch.clear || accepted.length > 0) syncFrames({ clear: batch.clear, changes: accepted }, board);
+      scheduleFlush();
+    };
+    const refetch = async () => {
+      if (disposed) return;
+      let answer;
+      try {
+        answer = await client2.call("GET /designs/:slug/page-state", { params: { slug } });
+      } catch {
+        return;
+      }
+      if (disposed) return;
+      if (isOlderClear(gen, answer.gen)) {
+        dirty.clear();
+        dirtyClear = false;
+        cancelFlushTimer();
+        adopt(answer);
+        persist = true;
+        reloadFrames();
+        noticeOnce("cleared-elsewhere", PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE);
+        return;
+      }
+      gen = answer.gen;
+      if (dirtyClear) return;
+      const before = items;
+      const fetched = new Map(answer.items);
+      const changes2 = pageStateDiff(before, fetched, dirty);
+      items = fetched;
+      for (const [key, value] of dirty) {
+        if (value === null) items.delete(key);
+        else items.set(key, value);
+      }
+      chars = pageStateChars(items);
+      if (changes2.length > 0) syncFrames({ clear: false, changes: changes2 }, null);
+    };
+    const scheduleRefetch = () => {
+      refetchTimer?.();
+      refetchTimer = schedule(() => {
+        refetchTimer = null;
+        void refetch();
+      }, PAGE_STATE_REFETCH_DEBOUNCE_MS);
+    };
+    const applyChanges = (batch) => {
+      if (disposed) return;
+      if (batch.reset) {
+        scheduleRefetch();
+        return;
+      }
+      for (const event of batch.events) {
+        if (event.kind === "page-state" && event.slug === slug) {
+          scheduleRefetch();
+          return;
+        }
+      }
+    };
+    const clear = async () => {
+      cancelFlushTimer();
+      clearing = true;
+      try {
+        if (inflight) await inflight.catch(() => void 0);
+        dirty.clear();
+        dirtyClear = false;
+        const answer = await client2.call("DELETE /designs/:slug/page-state", { params: { slug } });
+        gen = answer.gen;
+        items.clear();
+        chars = 0;
+        reloadFrames();
+        return answer;
+      } finally {
+        clearing = false;
+      }
+    };
+    if (visibility) {
+      unwatchVisibility = visibility.onChange(() => {
+        if (visibility.hidden()) void flush();
+      });
+    }
+    return {
+      load,
+      init: () => ({ persist, items: [...items] }),
+      apply,
+      applyChanges,
+      flush,
+      clear,
+      chars: () => chars,
+      persisting: () => persist,
+      dispose: async () => {
+        if (disposed) return;
+        await flush();
+        disposed = true;
+        cancelFlushTimer();
+        refetchTimer?.();
+        refetchTimer = null;
+        unwatchVisibility?.();
+        unwatchVisibility = null;
+      }
+    };
+  };
+
+  // src/ui/model/page-state-model.ts
+  var PAGE_DATA_CLEAR_LABEL = "Clear saved page data";
+  var pageDataEntry = (input) => {
+    if (!input.persisting || input.chars <= 0) return "hidden";
+    return input.viewing ? "disabled" : "enabled";
+  };
+  var PAGE_DATA_DISABLED_REASON = "Not while viewing a version";
+  var clearDialogTitle = (designTitle) => `Clear saved page data for ${designTitle}?`;
+  var CLEAR_DIALOG_BODY = "Ticks, toggles and filters this design saved will be reset. This can't be undone.";
+  var CLEAR_DIALOG_CONFIRM = "Clear";
+  var clearFailureText = (reason) => `Couldn\u2019t clear the saved page data. ${reason}`;
+  var BACKGROUND_MS = 1e4;
+  var CLEARED_MS = 5e3;
+  var UNSAVED_TITLE = "Page data can't be saved right now.";
+  var UNSAVED_BODY = "Changes last until you close this design.";
+  var CLEARED_SENTENCE = "Saved page data cleared.";
+  var pageDataNotice = (kind) => {
+    switch (kind) {
+      case "unsaved":
+        return { tone: "warning", title: UNSAVED_TITLE, body: UNSAVED_BODY, ttlMs: BACKGROUND_MS };
+      case "cap":
+        return { tone: "warning", title: PAGE_STATE_CAP_SENTENCE, ttlMs: BACKGROUND_MS };
+      case "cleared-elsewhere":
+        return { tone: "info", title: PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE, ttlMs: BACKGROUND_MS };
+      case "cleared":
+        return { tone: "success", title: CLEARED_SENTENCE, ttlMs: CLEARED_MS };
+    }
+  };
+
+  // src/shared/tokens-css.ts
+  var isBalancedQuotes = (value) => {
+    let single = 0;
+    let double = 0;
+    for (const char of value) {
+      if (char === "'") single += 1;
+      else if (char === '"') double += 1;
+    }
+    return single % 2 === 0 && double % 2 === 0;
+  };
+  var unitWords = (unit) => unit === "" ? "no unit" : unit;
+  var tweakStateSentence = (state, tweak) => {
+    switch (state.state) {
+      case "ok":
+      case "value":
+        return null;
+      case "missing":
+        return `tokens.css has no ${tweak.var}.`;
+      case "formula":
+        return "This value is a formula. Ask the agent to change it.";
+      case "unit": {
+        const fileUnit = state.fileUnit ?? "";
+        const knobUnit = tweak.kind === "number" ? tweak.unit : "";
+        const file = fileUnit === "" ? `sets ${tweak.var} without a unit` : `sets ${tweak.var} in ${fileUnit}`;
+        return `tokens.css ${file}, but this tweak uses ${unitWords(knobUnit)}. Ask the agent to fix it.`;
+      }
+      case "no-file":
+        return "This design has no tokens.css.";
+    }
+  };
+  var stepDecimals = (step) => {
+    const fraction = String(step).split(".")[1];
+    return fraction === void 0 ? 0 : Math.min(fraction.length, 4);
+  };
+  var formatTweakNumber = (value, step) => {
+    const decimals = stepDecimals(step);
+    const factor = 10 ** decimals;
+    let text = (Math.round(value * factor) / factor).toFixed(decimals);
+    if (text.includes(".")) text = text.replace(/0+$/, "").replace(/\.$/, "");
+    return text === "-0" ? "0" : text;
+  };
+  var tweakNumberText = (value, tweak) => `${formatTweakNumber(value, tweak.step)}${tweak.unit}`;
+
+  // src/shared/source-edit.ts
+  var isAsciiWs = (code) => code === 32 || code === 9 || code === 10 || code === 12 || code === 13;
+  var isAsciiLetter = (code) => code >= 65 && code <= 90 || code >= 97 && code <= 122;
+  var isAsciiLetterOrDigit = (code) => isAsciiLetter(code) || code >= 48 && code <= 57;
+  var isDigit = (code) => code >= 48 && code <= 57;
+  var isHexDigit = (code) => isDigit(code) || code >= 65 && code <= 70 || code >= 97 && code <= 102;
+  var NAMED_REFS = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    nbsp: "\xA0",
+    copy: "\xA9",
+    reg: "\xAE",
+    // The mdash value is decode data (the character &mdash; names), not copy; written as a code
+    // point so the KI-7 copy guard, which reads every string literal, stays unbroken.
+    trade: "\u2122",
+    hellip: "\u2026",
+    mdash: String.fromCharCode(8212),
+    ndash: "\u2013",
+    lsquo: "\u2018",
+    rsquo: "\u2019",
+    ldquo: "\u201C",
+    rdquo: "\u201D",
+    laquo: "\xAB",
+    raquo: "\xBB",
+    bull: "\u2022",
+    middot: "\xB7",
+    times: "\xD7",
+    divide: "\xF7",
+    deg: "\xB0",
+    plusmn: "\xB1",
+    euro: "\u20AC",
+    pound: "\xA3",
+    yen: "\xA5",
+    cent: "\xA2",
+    sect: "\xA7",
+    para: "\xB6",
+    shy: "\xAD"
+  };
+  var commentLikeEnd = (raw, at, to) => {
+    if (raw.startsWith("<!--", at)) {
+      const end = raw.indexOf("-->", at + 4);
+      return end === -1 || end + 3 > to ? to : end + 3;
+    }
+    if (raw.startsWith("<![CDATA[", at)) {
+      const end = raw.indexOf("]]>", at + 9);
+      return end === -1 || end + 3 > to ? to : end + 3;
+    }
+    const gt = raw.indexOf(">", at);
+    return gt === -1 || gt + 1 > to ? to : gt + 1;
+  };
+  var tagLikeEnd = (raw, at, to) => {
+    let i = at + 1;
+    let quote = "";
+    while (i < to) {
+      const c = raw.charAt(i);
+      if (quote !== "") {
+        if (c === quote) quote = "";
+      } else if (c === '"' || c === "'") {
+        quote = c;
+      } else if (c === ">") {
+        return i + 1;
+      }
+      i += 1;
+    }
+    return to;
+  };
+  var decodeReferences = (raw, from, to, skipMarkup) => {
+    let text = "";
+    const map = [];
+    let i = from;
+    while (i < to) {
+      if (skipMarkup && raw.charAt(i) === "<") {
+        if (raw.startsWith("<!--", i) || raw.startsWith("<![CDATA[", i) || raw.startsWith("<?", i) || raw.startsWith("<!", i)) {
+          i = commentLikeEnd(raw, i, to);
+          continue;
+        }
+        if (raw.startsWith("</", i) || isAsciiLetter(raw.charCodeAt(i + 1))) {
+          i = tagLikeEnd(raw, i, to);
+          continue;
+        }
+      }
+      if (raw.charAt(i) !== "&") {
+        text += raw.charAt(i);
+        map.push([i, i + 1]);
+        i += 1;
+        continue;
+      }
+      const next = i + 1 < to ? raw.charCodeAt(i + 1) : NaN;
+      if (!isAsciiLetter(next) && next !== 35) {
+        text += "&";
+        map.push([i, i + 1]);
+        i += 1;
+        continue;
+      }
+      if (next === 35) {
+        let j2 = i + 2;
+        const hex = raw.charAt(j2) === "x" || raw.charAt(j2) === "X";
+        if (hex) j2 += 1;
+        const digitsStart = j2;
+        while (j2 < to && (hex ? isHexDigit(raw.charCodeAt(j2)) : isDigit(raw.charCodeAt(j2)))) j2 += 1;
+        if (j2 === digitsStart || j2 >= to || raw.charAt(j2) !== ";") return null;
+        const value2 = parseInt(raw.slice(digitsStart, j2), hex ? 16 : 10);
+        if (value2 >= 128 && value2 <= 159) return null;
+        const char = value2 === 0 || value2 > 1114111 || value2 >= 55296 && value2 <= 57343 ? "\uFFFD" : String.fromCodePoint(value2);
+        const ref = [i, j2 + 1];
+        for (let k = 0; k < char.length; k += 1) map.push(ref);
+        text += char;
+        i = j2 + 1;
+        continue;
+      }
+      let j = i + 1;
+      while (j < to && isAsciiLetterOrDigit(raw.charCodeAt(j))) j += 1;
+      if (j >= to || raw.charAt(j) !== ";") return null;
+      const value = NAMED_REFS[raw.slice(i + 1, j)];
+      if (value === void 0) return null;
+      text += value;
+      map.push([i, j + 1]);
+      i = j + 1;
+    }
+    return { text, map };
+  };
+  var decodeText = (raw, from, to) => decodeReferences(raw, from, to, true);
+  var decodeAttrValue = (raw) => {
+    const decoded = decodeReferences(raw, 0, raw.length, false);
+    return decoded === null ? null : decoded.text;
+  };
+  var editorTextOf = (decoded) => {
+    const { text } = decoded;
+    const len2 = text.length;
+    let out = "";
+    const outMap = [];
+    let i = 0;
+    while (i < len2 && isAsciiWs(text.charCodeAt(i))) i += 1;
+    while (i < len2) {
+      if (isAsciiWs(text.charCodeAt(i))) {
+        const start = i;
+        while (i < len2 && isAsciiWs(text.charCodeAt(i))) i += 1;
+        if (i < len2) {
+          out += " ";
+          outMap.push([start, i]);
+        }
+      } else {
+        out += text.charAt(i);
+        outMap.push([i, i + 1]);
+        i += 1;
+      }
+    }
+    return { text: out, map: outMap };
+  };
+  var normalizeText = (text) => text.replace(/\s+/g, " ").trim();
+  var VOID_TAGS = /* @__PURE__ */ new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+  var RAW_TEXT_TAGS = /* @__PURE__ */ new Set(["script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "plaintext", "noscript"]);
+  var INERT_ANCESTORS = /* @__PURE__ */ new Set(["template", "noscript", "head"]);
+  var FOREIGN_ROOTS = /* @__PURE__ */ new Set(["svg", "math"]);
+  var parseStartTag = (text, lt) => {
+    const nameMatch = /^[A-Za-z][^\s/>]*/.exec(text.slice(lt + 1, lt + 128));
+    if (!nameMatch) return null;
+    const tag = nameMatch[0].toLowerCase();
+    const len2 = text.length;
+    let i = lt + 1 + nameMatch[0].length;
+    let selfClosing = false;
+    let idRaw = null;
+    for (; ; ) {
+      while (i < len2 && isAsciiWs(text.charCodeAt(i))) i += 1;
+      const c = text.charAt(i);
+      if (i >= len2) return { tag, end: len2, selfClosing: false, idRaw };
+      if (c === ">") {
+        i += 1;
+        break;
+      }
+      if (c === "/" && text.charAt(i + 1) === ">") {
+        selfClosing = true;
+        i += 2;
+        break;
+      }
+      if (c === "/") {
+        i += 1;
+        continue;
+      }
+      const attrStart = i;
+      while (i < len2 && !isAsciiWs(text.charCodeAt(i)) && text.charAt(i) !== "=" && text.charAt(i) !== ">" && !(text.charAt(i) === "/" && text.charAt(i + 1) === ">")) i += 1;
+      const attrName = text.slice(attrStart, i);
+      if (attrName === "") {
+        i += 1;
+        continue;
+      }
+      let j = i;
+      while (j < len2 && isAsciiWs(text.charCodeAt(j))) j += 1;
+      let value = null;
+      if (text.charAt(j) === "=") {
+        j += 1;
+        while (j < len2 && isAsciiWs(text.charCodeAt(j))) j += 1;
+        const quote = text.charAt(j);
+        if (quote === '"' || quote === "'") {
+          const close = text.indexOf(quote, j + 1);
+          value = text.slice(j + 1, close === -1 ? len2 : close);
+          i = close === -1 ? len2 : close + 1;
+        } else {
+          const valueStart = j;
+          while (j < len2 && !isAsciiWs(text.charCodeAt(j)) && text.charAt(j) !== ">") j += 1;
+          value = text.slice(valueStart, j);
+          i = j;
+        }
+      } else {
+        i = attrStart + attrName.length;
+      }
+      if (attrName.toLowerCase() === "id" && idRaw === null) idRaw = value ?? "";
+    }
+    return { tag, end: i, selfClosing, idRaw };
+  };
+  var findRawTextEnd = (text, from, tag) => {
+    const re = new RegExp(`</${tag}(?=[\\s>/]|$)`, "gi");
+    re.lastIndex = from;
+    const match = re.exec(text);
+    return match ? match.index : text.length;
+  };
+  var scanHtml = (text) => {
+    const elements = [];
+    const stack = [];
+    const len2 = text.length;
+    let pos = 0;
+    const markComment = () => {
+      for (const idx of stack) {
+        const open = elements[idx];
+        if (open) open.hasComment = true;
+      }
+    };
+    while (pos < len2) {
+      const lt = text.indexOf("<", pos);
+      if (lt === -1) break;
+      pos = lt;
+      if (text.startsWith("<!--", lt)) {
+        const end2 = text.indexOf("-->", lt + 4);
+        pos = end2 === -1 ? len2 : end2 + 3;
+        markComment();
+        continue;
+      }
+      if (text.startsWith("<![CDATA[", lt)) {
+        const end2 = text.indexOf("]]>", lt + 9);
+        pos = end2 === -1 ? len2 : end2 + 3;
+        markComment();
+        continue;
+      }
+      if (text.startsWith("<!", lt) || text.startsWith("<?", lt)) {
+        const gt = text.indexOf(">", lt);
+        pos = gt === -1 ? len2 : gt + 1;
+        if (!/^<!doctype/i.test(text.slice(lt, lt + 10))) markComment();
+        continue;
+      }
+      if (text.startsWith("</", lt)) {
+        const nameMatch = /^<\/([A-Za-z][^\s/>]*)/.exec(text.slice(lt, lt + 128));
+        const gt = text.indexOf(">", lt);
+        const stop = gt === -1 ? len2 : gt + 1;
+        pos = stop;
+        if (!nameMatch) continue;
+        const name = (nameMatch[1] ?? "").toLowerCase();
+        if (VOID_TAGS.has(name)) continue;
+        let at = -1;
+        for (let k = stack.length - 1; k >= 0; k -= 1) {
+          const open = elements[stack[k] ?? -1];
+          if (open && open.tag === name) {
+            at = k;
+            break;
+          }
+        }
+        if (at === -1) continue;
+        while (stack.length > at + 1) {
+          const idx3 = stack.pop();
+          const closed = idx3 === void 0 ? void 0 : elements[idx3];
+          if (closed) closed.inner = [closed.startTag[1], lt];
+        }
+        const idx2 = stack.pop();
+        const el3 = idx2 === void 0 ? void 0 : elements[idx2];
+        if (el3) {
+          el3.endTag = [lt, stop];
+          el3.inner = [el3.startTag[1], lt];
+        }
+        continue;
+      }
+      const parsed = parseStartTag(text, lt);
+      if (parsed === null) {
+        pos = lt + 1;
+        continue;
+      }
+      const { tag, end, selfClosing, idRaw } = parsed;
+      pos = end;
+      const parent = stack.length > 0 ? stack[stack.length - 1] ?? -1 : -1;
+      const parentEl = parent === -1 ? void 0 : elements[parent];
+      const foreign = parentEl !== void 0 && parentEl.foreign || FOREIGN_ROOTS.has(tag);
+      const inert = parentEl !== void 0 && (parentEl.inert || INERT_ANCESTORS.has(parentEl.tag)) || RAW_TEXT_TAGS.has(tag) || tag === "template";
+      const idDecoded = idRaw === null ? null : decodeAttrValue(idRaw);
+      const el2 = {
+        tag,
+        startTag: [lt, end],
+        inner: [end, end],
+        endTag: null,
+        id: idRaw === null ? null : { raw: idRaw, decoded: idDecoded },
+        parent,
+        childElements: [],
+        hasComment: false,
+        foreign,
+        inert
+      };
+      const idx = elements.length;
+      elements.push(el2);
+      if (parentEl) parentEl.childElements.push(idx);
+      if (VOID_TAGS.has(tag)) continue;
+      if (RAW_TEXT_TAGS.has(tag)) {
+        const contentEnd = tag === "plaintext" ? len2 : findRawTextEnd(text, end, tag);
+        el2.inner = [end, contentEnd];
+        if (contentEnd < len2) {
+          const gt = text.indexOf(">", contentEnd);
+          const stop = gt === -1 ? len2 : gt + 1;
+          el2.endTag = [contentEnd, stop];
+          pos = stop;
+        } else {
+          pos = len2;
+        }
+        continue;
+      }
+      if (selfClosing && foreign) continue;
+      stack.push(idx);
+    }
+    for (const idx of stack) {
+      const el2 = elements[idx];
+      if (el2) el2.inner = [el2.startTag[1], len2];
+    }
+    return { text, elements };
+  };
+  var locateTextTarget = (scan, target) => {
+    if (!target.leaf) return { reason: "formatted" };
+    if (target.truncated) return { reason: "too-long" };
+    const matches = [];
+    let anyUndecodable = false;
+    for (const e of scan.elements) {
+      if (e.tag !== target.tag || e.foreign || e.inert) continue;
+      if (target.id === null) {
+        if (e.id !== null) continue;
+      } else {
+        if (e.id === null) continue;
+        if (e.id.decoded === null) {
+          anyUndecodable = true;
+          continue;
+        }
+        if (e.id.decoded !== target.id) continue;
+      }
+      if (e.inner[1] - e.inner[0] < target.text.length) continue;
+      const decoded = decodeText(scan.text, e.inner[0], e.inner[1]);
+      if (decoded === null) {
+        anyUndecodable = true;
+        continue;
+      }
+      if (normalizeText(decoded.text) === target.text) matches.push(e);
+    }
+    if (matches.length === 0) return { reason: anyUndecodable ? "unclear" : "not-in-source" };
+    const leaves = matches.filter((e) => e.childElements.length === 0 && !e.hasComment && e.endTag !== null);
+    if (leaves.length === 0) {
+      const anyFormatted = matches.some((e) => e.childElements.length > 0 || e.hasComment);
+      return { reason: anyFormatted ? "formatted" : "unclear" };
+    }
+    const only = leaves.length === 1 ? leaves[0] : void 0;
+    if (only) return { element: only };
+    if (target.sameCount > 0 && leaves.length === target.sameCount) {
+      const picked = leaves[target.sameIndex];
+      if (picked) return { element: picked };
+    }
+    return { reason: "ambiguous" };
+  };
+  var sourceFileReason = (input) => {
+    if (input.link) return "link";
+    if (input.charLength > SOURCE_TEXT_MAX) return "file-too-large";
+    if (!input.utf8) return "not-utf8";
+    return null;
+  };
+
+  // src/ui/model/edit-text-model.ts
+  var REASON_TEXT = {
+    "not-in-source": "This text is made by the page's script. Ask the agent to change it.",
+    formatted: "This has formatting inside. Ask the agent to change it.",
+    ambiguous: "This text appears more than once and the exact one can't be found. Ask the agent to change it.",
+    viewing: "You're viewing an old version.",
+    "file-too-large": "This file is too large to edit here.",
+    "too-long": "That's too long to edit here. Ask the agent instead.",
+    "not-utf8": "This file isn't plain UTF-8 text, so it can't be edited here. Ask the agent instead.",
+    unclear: "Design Chamber can't find this text in the file exactly. Ask the agent to change it.",
+    "no-file": "Nothing to edit until the agent writes this screen.",
+    link: "This file is a link, so Design Chamber can't edit it here. Ask the agent instead."
+  };
+  var reasonSentence = (reason, detail) => reason === "loading-failed" ? `Couldn't read this file. ${detail ?? "Try clicking the element again."}`.trim() : REASON_TEXT[reason];
+  var refuse = (reason, detail) => detail === void 0 ? { editable: false, reason } : { editable: false, reason, detail };
+  var checkPick = (input) => {
+    if (input.viewing) return refuse("viewing");
+    const { source, probe } = input;
+    if (!source.ok) return source.kind === "no-file" ? refuse("no-file") : refuse("loading-failed", source.message);
+    const file = sourceFileReason({ link: source.source.link, charLength: source.source.text.length, utf8: source.source.utf8 });
+    if (file !== null) return refuse(file);
+    if (probe === null) return refuse("loading-failed", "The design didn't answer. Click the element again.");
+    const target = { tag: probe.tag, id: probe.id, text: probe.text, sameIndex: probe.sameIndex, sameCount: probe.sameCount };
+    const located = locateTextTarget(scanHtml(source.source.text), { ...target, leaf: probe.leaf, truncated: probe.truncated });
+    if ("reason" in located) return refuse(located.reason);
+    const decoded = decodeText(source.source.text, located.element.inner[0], located.element.inner[1]);
+    if (decoded === null) return refuse("unclear");
+    return { editable: true, base: source.source.sha256, target, before: editorTextOf(decoded).text, dir: probe.dir };
+  };
+  var CONTROL_CHARS = /[\u0000-\u0008\u000b\u000e-\u001f\u007f]/g;
+  var normalizeTyped = (typed) => typed.replace(CONTROL_CHARS, "").replace(/[\t\n\f\r ]+/g, " ").replace(/^ | $/g, "");
+  var saveDecision = (before, typed) => {
+    const after = normalizeTyped(typed);
+    if (after === before) return { kind: "unchanged" };
+    if (after.length > TEXT_EDIT_MAX) return { kind: "too-long", length: after.length };
+    return { kind: "save", after };
+  };
+  var hasChange = (before, typed) => normalizeTyped(typed) !== before;
+  var COUNTER_NEAR = 4500;
+  var counterState = (length) => length > TEXT_EDIT_MAX ? "over" : length >= COUNTER_NEAR ? "near" : "none";
+  var counterText = (length, state) => state === "over" ? `${TEXT_EDIT_MAX.toLocaleString()} characters at most` : `${length.toLocaleString()} / ${TEXT_EDIT_MAX.toLocaleString()}`;
+  var counterAnnouncement = (previous, next) => {
+    if (next === previous) return null;
+    if (next === "near") return previous === "none" ? "Close to the limit of 5,000 characters." : null;
+    if (next === "over") return "Over the limit of 5,000 characters. Shorten the text to save.";
+    return null;
+  };
+  var KEY_HINT = "Enter to save \xB7 Esc to cancel";
+  var CLICK_AWAY_LINE = "Press Enter to save or Esc to discard.";
+  var AGENT_WORKING_LINE = "The agent is working on this design. It may write over your edit.";
+  var STALE_TEXT = "This file changed while you were editing. Nothing was saved.";
+  var agentIsWorking = (phase) => phase === "working" || phase === "writing" || phase === "retrying";
+  var toolbarName = (tag, text) => {
+    const flat = text.replace(/\s+/g, " ").trim();
+    const clipped = flat.length > 40 ? `${flat.slice(0, 39).trimEnd()}\u2026` : flat;
+    return clipped === "" ? `Actions for ${tag}` : `Actions for ${tag} '${clipped}'`;
+  };
+  var UNDONE_TEXT = "Undone";
+  var SERVICE_SENTENCE_CODES = /* @__PURE__ */ new Set(["bad-request", "bad-path", "bad-slug", "not-found", "conflict", "stale", "too-large", "no-html", "invalid", "internal"]);
+  var refusalOf = (error) => {
+    if (error.code === "stale") return { text: STALE_TEXT, stale: true, askAgent: false };
+    if (SERVICE_SENTENCE_CODES.has(error.code)) {
+      const fileRefusal = error.status === 413 || error.status === 422 || error.code === "too-large" || error.code === "invalid";
+      const keeps = error.code === "internal" || error.code === "conflict";
+      return { text: keeps ? `${error.message} Your text is still here.` : error.message, stale: false, askAgent: fileRefusal };
+    }
+    return { text: `Couldn't save your change. ${error.message} Your text is still here.`, stale: false, askAgent: false };
+  };
+  var reloadOutcome = (previousBefore, check) => {
+    if (!check.editable) return { kind: "gone", sentence: reasonSentence(check.reason, check.detail) };
+    return { kind: "ready", check, fileNowSays: check.before === previousBefore ? null : check.before };
+  };
+  var TOOLBAR_ICONS_BELOW = 300;
+  var toolbarLabels = (stageWidth) => stageWidth >= TOOLBAR_ICONS_BELOW;
+  var EDGE = 8;
+  var GAP = 6;
+  var FLIP_WITHIN = 48;
+  var clamp = (value, low, high) => Math.max(low, Math.min(value, Math.max(low, high)));
+  var placeToolbar = (box, size, stage) => {
+    const below = box.y < Math.max(FLIP_WITHIN, size.h + GAP + EDGE);
+    const top = below ? box.y + box.h + GAP : box.y - size.h - GAP;
+    return { left: clamp(box.x, EDGE, stage.w - size.w - EDGE), top: clamp(top, EDGE, stage.h - size.h - EDGE), below };
+  };
+  var editorWidth = (input) => input.surface === "page" ? clamp(Math.round(input.boxWidth), 260, 480) : Math.min(input.stageWidth - 2 * EDGE, Math.max(240, Math.round(input.boxWidth)));
+  var placeEditor = (box, size, stage, surface) => ({
+    left: surface === "rail" ? EDGE : clamp(box.x, EDGE, stage.w - size.w - EDGE),
+    // Taller than the viewer: its foot stays in view, since that is where Save is.
+    top: size.h > stage.h - 2 * EDGE ? stage.h - EDGE - size.h : clamp(box.y, EDGE, stage.h - size.h - EDGE)
+  });
+  var answerSource = async (read) => {
+    try {
+      return { ok: true, source: await read() };
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+      const message = error instanceof Error && error.message !== "" ? error.message : "Try clicking the element again.";
+      return code === "no-html" || code === "not-found" ? { ok: false, kind: "no-file", message } : { ok: false, kind: "failed", message };
+    }
+  };
+
+  // src/ui/model/tweaks-model.ts
+  var TWEAKS_TITLE = "Tweaks";
+  var TWEAKS_SUBTITLE = "Change a value to preview it. Save writes the values to tokens.css.";
+  var UNSAVED_BADGE = "Unsaved";
+  var TWEAKS_VIEWING_TEXT = "You're viewing an old version.";
+  var ASK_FOR_TWEAKS_LABEL = "Ask for tweaks";
+  var ASK_FOR_TWEAKS_TEXT = "Add tweaks for this design (accent hue, density, type scale, radius).";
+  var TOKENS_LOADING_TEXT = "Reading tokens.css\u2026";
+  var NOTHING_TO_SAVE_TEXT = "Nothing to save yet.";
+  var NO_TOKENS_TEXT = "This design has no tokens.css.";
+  var TOKENS_READ_ONLY_TEXT = "tokens.css can't be edited here. Ask the agent instead.";
+  var VALUES_KEPT_TEXT = "Your unsaved values are kept.";
+  var DESIGN_GONE_TEXT = "That design is no longer in your Designs folder. Your unsaved values were:";
+  var PREVIEW_NOTE = "The preview shows this value everywhere; saved, it applies only where tokens.css doesn't set it again.";
+  var STALE_TITLE = "tokens.css changed since you started.";
+  var STALE_BODY = "Your values are still shown.";
+  var STALE_SAVE_TITLE = "Choose Apply to the new file or Discard my tweaks first.";
+  var LEAVE_TITLE = "Save your tweaks?";
+  var LEAVE_BODY = "Your tweak values aren't saved to tokens.css yet.";
+  var readFailedText = (message) => `Couldn't read tokens.css. ${message}`;
+  var saveFailedText = (error) => error.code === "stale" || error.code === "not-found" ? error.message : `Couldn't save your tweaks. ${error.message} Your values are still here.`;
+  var tweaksButtonLabel = (dirty) => dirty ? "Tweaks, unsaved changes" : "Tweaks";
+  var TWEAKS_SHEET_MIN_HOST_HEIGHT = 560;
+  var tweaksSheetVariant = (hostHeight) => hostHeight < TWEAKS_SHEET_MIN_HOST_HEIGHT ? "full" : "bottom";
+  var bottomSheetMax = (hostHeight) => Math.max(0, Math.floor(hostHeight / 2));
+  var panelMode = (state) => {
+    if (state.gone || state.saveError?.code === "not-found") return "gone";
+    if (state.status === "error") return "error";
+    if (state.tokens === null) return "loading";
+    return "rows";
+  };
+  var panelBanners = (state, tweaks, context) => {
+    const banners = [];
+    if (context.viewing) banners.push({ kind: "viewing", title: TWEAKS_VIEWING_TEXT });
+    if (state.tokens !== null && !state.tokens.exists) banners.push({ kind: "no-tokens", title: NO_TOKENS_TEXT });
+    else if (state.tokens !== null && !state.tokens.editable) banners.push({ kind: "not-editable", title: TOKENS_READ_ONLY_TEXT });
+    if (state.stale) {
+      const labelOf = (name) => tweaks.find((knob) => knob.var === name)?.label ?? name;
+      const left = state.staleExcluded.map(labelOf);
+      banners.push({ kind: "stale", title: STALE_TITLE, body: left.length === 0 ? STALE_BODY : `${STALE_BODY} ${left.join(", ")} can't be applied to the new file and will be left out.` });
+    }
+    return banners;
+  };
+  var NO_VALUE = "\u2013";
+  var numberText = (value, tweak) => `${formatTweakNumber(value, tweak.step)}${tweak.unit === "" ? "" : ` ${tweak.unit}`}`;
+  var alsoSetNote = (contexts) => `Also set for ${contexts.join(", ")}; only the default changes.`;
+  var knobRow = (tweak, file, state, locked, fileProblem) => {
+    const pending = state.pending.get(tweak.var);
+    const fileValue = file?.value ?? null;
+    const brokenState = file !== void 0 && file.state !== "ok" && file.state !== "value";
+    const reason = !fileProblem && brokenState && file ? tweakStateSentence(file, tweak) : null;
+    const disabled = locked || brokenState;
+    const changed = pending !== void 0;
+    const notes = [];
+    if (file && file.alsoSet.length > 0 && !brokenState) notes.push(alsoSetNote(file.alsoSet), PREVIEW_NOTE);
+    if (tweak.kind === "number") {
+      const current3 = typeof pending === "number" ? pending : typeof fileValue === "number" ? fileValue : null;
+      return {
+        var: tweak.var,
+        label: tweak.label,
+        kind: "number",
+        disabled,
+        reason,
+        changed,
+        valueText: current3 === null ? NO_VALUE : numberText(current3, tweak),
+        number: { min: tweak.min, max: tweak.max, step: tweak.step, value: current3 ?? (tweak.min + tweak.max) / 2 },
+        choice: null,
+        notes
+      };
+    }
+    const current2 = typeof pending === "string" ? pending : typeof fileValue === "string" ? fileValue : null;
+    const options = tweak.options.map((option) => ({ id: option.value, label: option.label }));
+    const match = options.find((option) => option.id === current2);
+    if (current2 !== null && match === void 0 && file?.state === "value" && !changed) notes.unshift(`tokens.css sets another value: ${current2}`);
+    return {
+      var: tweak.var,
+      label: tweak.label,
+      kind: "choice",
+      disabled,
+      reason,
+      changed,
+      valueText: match?.label ?? (current2 ?? NO_VALUE),
+      number: null,
+      choice: { options, active: match?.id ?? "" },
+      notes
+    };
+  };
+  var knobRows = (tweaks, state, context) => {
+    const tokens = state.tokens;
+    const fileProblem = tokens === null || !tokens.exists || !tokens.editable;
+    const locked = context.viewing || state.status !== "ready" || state.gone || fileProblem;
+    return tweaks.map((tweak) => knobRow(tweak, tokens?.knobs.find((knob) => knob.var === tweak.var), state, locked, fileProblem));
+  };
+  var unsavedLines = (tweaks, state) => tweaks.flatMap((tweak) => {
+    const value = state.pending.get(tweak.var);
+    if (value === void 0) return [];
+    if (tweak.kind === "number") return [`${tweak.label}: ${typeof value === "number" ? numberText(value, tweak) : String(value)}`];
+    return [`${tweak.label}: ${tweak.options.find((option) => option.value === value)?.label ?? String(value)}`];
+  });
+  var footView = (state, context) => {
+    const saving = state.status === "saving";
+    const ready = state.status === "ready" && !state.gone && state.tokens !== null;
+    let saveTitle = null;
+    if (context.viewing) saveTitle = TWEAKS_VIEWING_TEXT;
+    else if (state.stale) saveTitle = STALE_SAVE_TITLE;
+    else if (ready && !state.dirty) saveTitle = NOTHING_TO_SAVE_TEXT;
+    const saveDisabled = context.viewing || !ready || !state.dirty || state.stale;
+    const resetDisabled = context.viewing || !ready || !state.dirty;
+    let note = null;
+    if (state.saveError && state.saveError.code !== "not-found" && !(state.saveError.code === "stale" && state.stale)) note = { tone: "error", text: saveFailedText(state.saveError) };
+    else if (context.agentWorking) note = { tone: "warning", text: AGENT_WORKING_LINE };
+    else if (ready && !state.dirty && !context.viewing) note = { tone: "muted", text: NOTHING_TO_SAVE_TEXT };
+    return { resetDisabled, saveDisabled, saving, saveTitle: saveDisabled ? saveTitle : null, note };
+  };
+  var leaveDecision = (state) => state.dirty && !state.gone ? "ask" : "leave";
+
+  // src/ui/model/viewer-menu.ts
+  var NARROW_RAIL_QUERY = "(max-width: 359.98px)";
+  var COMPUTER_ONLY = /* @__PURE__ */ new Set(["reveal", "zip", "html", "path", "export"]);
+  var isSeparator = (entry) => entry !== void 0 && "separator" in entry;
+  var withoutComputerOnly = (entries) => {
+    const kept = [];
+    for (const entry of entries) {
+      if ("id" in entry && COMPUTER_ONLY.has(entry.id)) continue;
+      if (isSeparator(entry) && (kept.length === 0 || isSeparator(kept.at(-1)))) continue;
+      kept.push(entry);
+    }
+    while (isSeparator(kept.at(-1))) kept.pop();
+    return kept;
+  };
+  var reveal = { id: "reveal", label: "Reveal in folder" };
+  var addToFolder = { id: "add-to-folder", label: "Add to folder\u2026" };
+  var copyPath = { id: "path", label: "Copy path" };
+  var rename = { id: "rename", label: "Rename" };
+  var remove = { id: "delete", label: "Delete\u2026", destructive: true };
+  var askTweaks = { id: "ask-tweaks", label: ASK_FOR_TWEAKS_LABEL };
+  var clearPageData = (state) => state === "enabled" || state === "disabled" ? [{ id: "page-data", label: PAGE_DATA_CLEAR_LABEL, ...state === "disabled" ? { disabled: true, reason: PAGE_DATA_DISABLED_REASON } : {} }] : [];
+  var baseEntries = (pageData) => [addToFolder, reveal, copyPath, ...clearPageData(pageData), rename, { separator: true }, remove];
+  var viewerMenuEntries = (input) => {
+    const entries = allViewerEntries(input);
+    return input.phone ? withoutComputerOnly(entries) : entries;
+  };
+  var allViewerEntries = (input) => {
+    const ask = input.askForTweaks ? [askTweaks] : [];
+    if (input.compact) {
+      return [
+        { id: "chat", label: "Continue in chat" },
+        ...input.railTweaks ? [{ id: "tweaks", label: input.railTweaks }] : [],
+        ...ask,
+        { separator: true },
+        { id: "zip", label: "Export ZIP" },
+        { id: "html", label: input.isPage ? "Export single-file HTML" : "Export screen as HTML\u2026" },
+        ...input.isPage ? [{ id: "copy-html", label: "Copy HTML", disabled: input.copyHtmlTooLarge, hint: input.copyHtmlTooLarge ? "too large" : void 0 }] : [],
+        copyPath,
+        addToFolder,
+        reveal,
+        ...clearPageData(input.pageData),
+        rename,
+        { separator: true },
+        remove
+      ];
+    }
+    const rest = input.isPage ? baseEntries(input.pageData) : [{ id: "zip", label: "Export ZIP" }, { id: "html", label: "Export screen as HTML\u2026" }, { separator: true }, ...baseEntries(input.pageData)];
+    return input.askForTweaks ? [askTweaks, { separator: true }, ...rest] : rest;
+  };
+
+  // src/ui/components/device.ts
+  var current = DESKTOP_DEVICE;
+  var currentDevice = () => current;
+  var menuOnThisDevice = (entries) => current.form === "phone" ? withoutComputerOnly(entries) : [...entries];
+  var applyDevice = (device, root) => {
+    current = device;
+    root.dataset.dcForm = device.form;
+    root.dataset.dcPointer = device.coarse ? "coarse" : "fine";
+    root.dataset.dcKeyboard = device.keyboard > 0 ? "up" : "down";
+    for (const side of ["top", "right", "bottom", "left"]) root.style.setProperty(`--dc-inset-${side}`, `${device.insets[side]}px`);
+    root.style.setProperty("--dc-keyboard", `${device.keyboard}px`);
+  };
+
+  // src/ui/model/system-events-model.ts
+  var isBoardCommentsEvent = (event) => event.kind === "system" && event.systemChange === "comments";
+  var systemsListShouldRefresh = (batch) => batch.reset || batch.events.some((event) => event.kind === "system" && !isBoardCommentsEvent(event) || event.kind === "root");
+  var boardCommentsChanged = (batch, systemId) => batch.reset || batch.events.some((event) => event.system === systemId && isBoardCommentsEvent(event));
+  var systemDetailChanged = (batch, systemId) => batch.reset || batch.events.some((event) => event.system === systemId && !isBoardCommentsEvent(event));
 
   // src/ui/components/dom.ts
   var h = (tag, attrs = null, ...children) => {
@@ -4341,7 +5728,7 @@ ${GUEST_UI_LOOK_CSS}`;
     };
     const refresh = debounce(() => void load(), 200);
     feed.subscribe((batch) => {
-      if (batch.reset || batch.events.some((event) => event.kind === "system" || event.kind === "root")) refresh();
+      if (systemsListShouldRefresh(batch)) refresh();
     });
     return {
       get: () => state,
@@ -4372,6 +5759,16 @@ ${GUEST_UI_LOOK_CSS}`;
   };
 
   // src/shared/systems.ts
+  var PROJECT_CHOICE = "@project";
+  var choiceSystemsOf = (rows) => rows.filter((row2) => row2.unreadable === null).map((row2) => ({
+    id: row2.id,
+    status: row2.status,
+    name: row2.name,
+    // A repo home is the project's own (a registered system has no code source); else the folder it was scanned from.
+    belongsTo: row2.home !== "internal" ? row2.home.directory : row2.sources.code === null ? null : row2.sources.code.project ?? row2.sources.code.directory,
+    repo: row2.home !== "internal",
+    updated: row2.updated
+  }));
   var folderKey = (value, foldsCase) => {
     const norm = value.replace(/\\/g, "/").replace(/\/+$/, "");
     return foldsCase || /^[A-Za-z]:\//.test(norm) ? norm.toLowerCase() : norm;
@@ -4381,26 +5778,52 @@ ${GUEST_UI_LOOK_CSS}`;
     const target = folderKey(dir, foldsCase);
     return target === base || target.startsWith(`${base}/`);
   };
+  var projectSystemOf = (systems2, projectDirectory, foldsCase) => {
+    const depth = (folder) => folderKey(folder, foldsCase).split("/").length;
+    const candidates2 = systems2.flatMap((system) => {
+      const owner = system.belongsTo;
+      if (system.status !== "ready" || owner === null || owner.trim() === "") return [];
+      const related = isSameOrInside(projectDirectory, owner, foldsCase) || isSameOrInside(owner, projectDirectory, foldsCase);
+      return related ? [{ system, depth: depth(owner) }] : [];
+    });
+    candidates2.sort((a, b) => b.depth - a.depth || Number(b.system.repo) - Number(a.system.repo) || (a.system.updated < b.system.updated ? 1 : a.system.updated > b.system.updated ? -1 : 0) || (a.system.id < b.system.id ? -1 : a.system.id > b.system.id ? 1 : 0));
+    const pick = candidates2[0]?.system;
+    return pick === void 0 ? null : { id: pick.id, name: pick.name };
+  };
   var effectiveSystemChoice = (input) => {
     const ready = (id) => id !== void 0 && input.systems.some((system) => system.id === id && system.status === "ready");
     const anyReady = input.systems.some((system) => system.status === "ready");
     const ask = () => anyReady ? { choice: "ask" } : { choice: "none-silent" };
+    const project = input.projectDirectory;
+    const isProject = project !== null && project.trim() !== "" && !isSameOrInside(input.designsRoot, project, input.foldsCase);
+    const useProject = (why) => {
+      if (!isProject || input.project?.state === "no-project") return null;
+      const own = projectSystemOf(input.systems, project, input.foldsCase);
+      if (own !== null) return { choice: "system", id: own.id, why: "project" };
+      const scan = input.project;
+      if (scan === null || scan.state === "unreadable" || scan.found) return { choice: "project", why };
+      return null;
+    };
+    const byDefault = () => {
+      const fallback = input.settings.systemDefault ?? { choice: "ask" };
+      if (fallback.choice === "none") return { choice: "none", why: "default" };
+      if (fallback.choice === "system" && ready(fallback.id)) return { choice: "system", id: fallback.id, why: "default" };
+      return ask();
+    };
     const { explicit } = input;
     if (explicit === "none") return { choice: "none", why: "explicit" };
     if (explicit === "ask") return ask();
+    if (explicit === PROJECT_CHOICE) return useProject("explicit") ?? byDefault();
     if (explicit !== null && ready(explicit)) return { choice: "system", id: explicit, why: "explicit" };
-    const project = input.projectDirectory;
-    if (project !== null && project !== "" && !isSameOrInside(input.designsRoot, project, input.foldsCase)) {
+    if (isProject) {
       const pin = (input.settings.systemPins ?? []).find((one) => folderKey(one.directory, input.foldsCase) === folderKey(project, input.foldsCase));
-      if (pin !== void 0) {
-        if (pin.choice === "none") return { choice: "none", why: "pinned" };
-        if (pin.choice === "system" && ready(pin.id)) return { choice: "system", id: pin.id, why: "pinned" };
-      }
+      if (pin?.choice === "none") return { choice: "none", why: "pinned" };
+      if (pin?.choice === "system" && ready(pin.id)) return { choice: "system", id: pin.id, why: "pinned" };
+      if (pin?.choice === "follow-default") return byDefault();
+      const fromProject = useProject("default");
+      if (fromProject !== null) return fromProject;
     }
-    const fallback = input.settings.systemDefault ?? { choice: "ask" };
-    if (fallback.choice === "none") return { choice: "none", why: "default" };
-    if (fallback.choice === "system" && ready(fallback.id)) return { choice: "system", id: fallback.id, why: "default" };
-    return ask();
+    return byDefault();
   };
 
   // src/ui/model/format.ts
@@ -4473,27 +5896,41 @@ ${GUEST_UI_LOOK_CSS}`;
   var foldsCaseFor = (root, platform) => /^[A-Za-z]:|^\\\\/.test(root) || /mac|darwin/i.test(platform);
   var systemFieldOf = (input, chosen, foldsCase) => {
     const ready = input.systems.filter((system) => system.status === "ready");
-    const effective = effectiveSystemChoice({
-      explicit: chosen,
+    const decide = (explicit) => effectiveSystemChoice({
+      explicit,
       projectDirectory: input.projectDirectory,
+      // The dialog runs no scan, so Use the project answers "follow the project" whenever no own system exists.
+      project: null,
       designsRoot: input.designsRoot,
       settings: { systemDefault: input.settings?.default, systemPins: input.settings?.pins },
-      systems: input.systems.map((system) => ({ id: system.id, status: system.status })),
+      systems: choiceSystemsOf(input.systems),
       foldsCase
     });
-    if (ready.length === 0 || effective.choice === "none-silent") return { empty: ready.length === 0, options: [], value: SYSTEM_NONE, hint: null, showPreset: true, send: void 0 };
+    const effective = decide(chosen);
+    if (ready.length === 0 || effective.choice === "none-silent") return { empty: ready.length === 0, options: [], value: SYSTEM_NONE, hint: null, showPreset: true, presetHint: null, send: void 0 };
+    const asProject = decide(PROJECT_CHOICE);
+    const fromProject = (choice) => choice.choice === "project" || choice.choice === "system" && choice.why === "project";
+    const projectOffered = fromProject(asProject);
+    const projectName = input.projectDirectory === null ? "this project" : folderName(input.projectDirectory);
     const options = [
+      ...projectOffered ? [{ id: PROJECT_CHOICE, label: "Use the project" }] : [],
       ...ready.map((system) => ({ id: system.id, label: system.name, hint: `Revision ${system.revision}` })),
       { id: SYSTEM_NONE, label: "No design system" },
       { id: SYSTEM_ASK, label: "Ask me in chat" }
     ];
-    const value = effective.choice === "system" ? effective.id : effective.choice === "none" ? SYSTEM_NONE : SYSTEM_ASK;
+    const pickedProject = chosen === PROJECT_CHOICE && projectOffered;
+    let value;
+    if (pickedProject || effective.choice === "project") value = PROJECT_CHOICE;
+    else value = effective.choice === "system" ? effective.id : effective.choice === "none" ? SYSTEM_NONE : SYSTEM_ASK;
     let hint = null;
-    if (chosen === null && (effective.choice === "system" || effective.choice === "none")) {
-      if (effective.why === "pinned") hint = `Pinned for ${input.projectDirectory === null ? "this project" : folderName(input.projectDirectory)}`;
+    if (effective.choice === "system" && effective.why === "project") hint = `From ${projectName}`;
+    else if (effective.choice === "project") hint = `Reads ${projectName}\u2019s design files first`;
+    else if (chosen === null && (effective.choice === "system" || effective.choice === "none")) {
+      if (effective.why === "pinned") hint = `Pinned for ${projectName}`;
       else if (effective.why === "default") hint = "Your default";
     }
-    return { empty: false, options, value, hint, showPreset: effective.choice !== "system", send: value };
+    const showPreset = effective.choice !== "system";
+    return { empty: false, options, value, hint, showPreset, presetHint: showPreset && value === PROJECT_CHOICE ? "Used only where the project\u2019s files say nothing." : null, send: value };
   };
   var NO_SYSTEMS_LINE = "No design systems yet.";
   var FOLDER_FIELD_LABEL = "Folder or project";
@@ -4908,6 +6345,25 @@ ${FILED_BY_YOU}` : "";
       chips: chips2
     };
   };
+  var THIS_CHAT_ROWS = 3;
+  var THIS_CHAT_TITLE = "This chat";
+  var chatDesigns = (designs, sessionId) => sessionId === null || sessionId === "" ? [] : sortDesigns(designs.filter((design) => design.sessionId === sessionId), "updated");
+  var thisChatGroup = (designs, sessionId, state) => {
+    if (state.searching || state.chatOnly) return null;
+    const linked = chatDesigns(designs, sessionId);
+    if (linked.length === 0) return null;
+    const more = linked.length > THIS_CHAT_ROWS;
+    return {
+      designs: linked.slice(0, THIS_CHAT_ROWS),
+      total: linked.length,
+      showAll: more ? { label: `Show all ${linked.length}`, aria: `Show all ${plural(linked.length, "design")} from this chat` } : null
+    };
+  };
+  var chatChip = (count) => ({
+    label: THIS_CHAT_TITLE,
+    title: `Showing ${plural(count, "design")} from this chat`,
+    removeLabel: "Show all designs again"
+  });
 
   // src/ui/model/folder-picker-model.ts
   var keyOfTarget = (target) => target.kind === "folder" ? `folder:${target.id}` : `project:${target.directory}`;
@@ -5546,8 +7002,8 @@ ${FILED_BY_YOU}` : "";
     };
     const replaceOne = (folder) => {
       ticket += 1;
-      const known = state.folders.some((entry) => entry.id === folder.id);
-      set({ ...state, status: "ready", error: null, folders: known ? state.folders.map((entry) => entry.id === folder.id ? folder : entry) : [...state.folders, folder] });
+      const known2 = state.folders.some((entry) => entry.id === folder.id);
+      set({ ...state, status: "ready", error: null, folders: known2 ? state.folders.map((entry) => entry.id === folder.id ? folder : entry) : [...state.folders, folder] });
     };
     const run = async (request) => {
       try {
@@ -6049,7 +7505,7 @@ ${FILED_BY_YOU}` : "";
       toast("error", `Couldn\u2019t open the chat. ${errorText2(error)}`);
     }
   };
-  var reveal = async (path) => {
+  var reveal2 = async (path) => {
     try {
       await store.reveal(path);
     } catch (error) {
@@ -6059,12 +7515,12 @@ ${FILED_BY_YOU}` : "";
   var folderOf = async (slug) => (await client.call("GET /designs/:slug", { params: { slug } })).path;
   var revealDesign = async (slug) => {
     try {
-      await reveal(await folderOf(slug));
+      await reveal2(await folderOf(slug));
     } catch (error) {
       toast("error", `Couldn\u2019t find that folder. ${errorText2(error)}`);
     }
   };
-  var copyPath = async (slug) => {
+  var copyPath2 = async (slug) => {
     try {
       const path = await folderOf(slug);
       if (await host.writeClipboard(path)) toast("success", "Folder path copied.");
@@ -6275,7 +7731,8 @@ ${FILED_BY_YOU}` : "";
     const presetHost = h("div", { class: "dc-field" });
     const presetSelect = mountSelect(presetHost, { label: "Style preset", value: "", options: presetOptions([]), disabled: true, onChange: (id) => void (preset = id) });
     const presetNote = h("p", { class: "oc-sdk-field-note", hidden: true });
-    presetHost.append(presetNote);
+    const presetHint = h("p", { class: "oc-sdk-field-note dc-preset-hint", hidden: true });
+    presetHost.append(presetHint, presetNote);
     const paintPresets = () => {
       const state = store.getState().presets;
       if (state.status === "ready" && state.data) presetSelect.update({ options: presetOptions(state.data.presets), disabled: false, value: preset });
@@ -6302,6 +7759,8 @@ ${FILED_BY_YOU}` : "";
         systemNote.hidden = view2.hint === null;
       }
       presetHost.hidden = !view2.showPreset;
+      presetHint.textContent = view2.presetHint ?? "";
+      presetHint.hidden = view2.presetHint === null;
     };
     unsubscribeSystems = systems().subscribe(paintSystem);
     unsubscribe = store.subscribe(() => {
@@ -6431,6 +7890,155 @@ ${FILED_BY_YOU}` : "";
     return designs.some((design) => design.slug === slug) ? { action: "open", slug } : { action: "drop" };
   };
 
+  // src/shared/view.ts
+  var VIEW_SELECTOR_MAX = 300;
+  var VIEW_SELECTION_TEXT_MAX = 120;
+  var VIEW_REPORT_DEBOUNCE_MS = 500;
+  var VIEW_HEARTBEAT_MS = 6e4;
+  var CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+  var flattenViewText = (text) => text.replace(CONTROL, " ").replace(/\s+/g, " ").trim();
+  var clipViewText = (text, max) => {
+    const flat = flattenViewText(text);
+    return flat.length <= max ? flat : `${flat.slice(0, max - 1).trimEnd()}\u2026`;
+  };
+
+  // src/guest/view-report.ts
+  var pageTimers = {
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (handle) => clearTimeout(handle),
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: (handle) => clearInterval(handle)
+  };
+  var viewBodyOf = (surface, state) => {
+    if (state.slug === null) return { surface, slug: null };
+    const selector = state.selection ? clipViewText(state.selection.selector, VIEW_SELECTOR_MAX) : "";
+    return {
+      surface,
+      slug: state.slug,
+      screen: state.screen ?? null,
+      viewport: state.viewport ?? null,
+      mode: state.mode ?? null,
+      selection: state.selection && selector !== "" ? { selector, text: clipViewText(state.selection.text, VIEW_SELECTION_TEXT_MAX) } : null
+    };
+  };
+  var createViewReporter = (options) => {
+    const timers = options.timers ?? pageTimers;
+    let current2 = null;
+    let sent = null;
+    let debounce2 = null;
+    let disposed = false;
+    const cancelDebounce = () => {
+      if (debounce2 !== null) timers.clearTimeout(debounce2);
+      debounce2 = null;
+    };
+    const transmit = (body) => {
+      if (disposed) return;
+      sent = JSON.stringify(body);
+      options.send(body).catch(() => void 0);
+    };
+    const heartbeat = timers.setInterval(() => {
+      if (current2 !== null && current2.slug !== null && debounce2 === null && options.isVisible()) transmit(current2);
+    }, VIEW_HEARTBEAT_MS);
+    return {
+      report(state) {
+        if (disposed) return;
+        const body = viewBodyOf(options.surface, state);
+        current2 = body;
+        cancelDebounce();
+        if (JSON.stringify(body) === sent) return;
+        debounce2 = timers.setTimeout(() => {
+          debounce2 = null;
+          transmit(body);
+        }, VIEW_REPORT_DEBOUNCE_MS);
+      },
+      leave() {
+        if (disposed) return;
+        cancelDebounce();
+        transmit({ surface: options.surface, slug: null });
+      },
+      resume() {
+        if (disposed || current2 === null) return;
+        cancelDebounce();
+        transmit(current2);
+      },
+      dispose() {
+        disposed = true;
+        cancelDebounce();
+        timers.clearInterval(heartbeat);
+      }
+    };
+  };
+  var attachViewReporter = (reporter2, win) => {
+    const onPageHide = () => reporter2.leave();
+    const onVisibility = () => {
+      if (win.document.visibilityState === "visible") reporter2.resume();
+    };
+    win.addEventListener("pagehide", onPageHide);
+    win.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      win.removeEventListener("pagehide", onPageHide);
+      win.removeEventListener("visibilitychange", onVisibility);
+    };
+  };
+
+  // src/ui/model/view-report-model.ts
+  var known = (id, ids) => id !== null && ids.includes(id);
+  var viewStateOf = (facts) => {
+    const { slug, mode } = facts;
+    const selectionPlace = facts.selection && mode === "edit" ? facts.selection : null;
+    const selection2 = selectionPlace && (facts.isPage || known(selectionPlace.screen, facts.screenIds)) ? { selector: selectionPlace.anchor.selector, text: selectionPlace.anchor.text } : null;
+    if (facts.isPage) {
+      const viewport2 = facts.pageView === PAGE_FILL_VIEWPORT_ID || facts.viewportIds.includes(facts.pageView) ? facts.pageView : PAGE_FILL_VIEWPORT_ID;
+      return { slug, screen: null, viewport: viewport2, mode, selection: selection2 };
+    }
+    const place = selection2 ? selectionPlace : facts.focus;
+    const screen = known(place?.screen ?? null, facts.screenIds) ? place?.screen ?? null : facts.screenIds.length === 1 ? facts.screenIds[0] ?? null : null;
+    const viewport = place && known(place.viewport, facts.viewportIds) ? place.viewport : null;
+    return { slug, screen, viewport, mode, selection: selection2 };
+  };
+  var quietSender = (send, warn) => {
+    let warned = false;
+    return async (body) => {
+      try {
+        await send(body);
+      } catch (error) {
+        if (warned) return;
+        warned = true;
+        warn(`Design Chamber: could not tell the service what is open (${error instanceof Error ? error.message : "unknown error"}); trying again on the next change.`);
+      }
+    };
+  };
+
+  // src/ui/components/view-report.ts
+  var reporter = null;
+  var lastWall = null;
+  var startViewReport = (surface) => {
+    reporter?.dispose();
+    const next = createViewReporter({
+      surface: surface === "panel" ? "rail" : "page",
+      send: quietSender((body) => client.call("PUT /view", { body }), (message) => console.warn(message)),
+      isVisible: () => document.visibilityState === "visible"
+    });
+    reporter = next;
+    lastWall = null;
+    const detach = attachViewReporter(next, window);
+    return () => {
+      detach();
+      next.dispose();
+      if (reporter === next) reporter = null;
+    };
+  };
+  var reportOpen = (slug) => {
+    lastWall = null;
+    reporter?.report({ slug });
+  };
+  var reportReturn = (slug) => reporter?.report(lastWall?.slug === slug ? lastWall : { slug });
+  var reportNothingOpen = () => reporter?.report({ slug: null });
+  var reportWall = (state) => {
+    lastWall = state;
+    reporter?.report(state);
+  };
+
   // src/ui/components/place-memory.ts
   var keepPlace = ({ surface, isOpen, open }) => {
     const key = placeKey(surface);
@@ -6460,10 +8068,12 @@ ${FILED_BY_YOU}` : "";
       remember: (slug) => {
         settle();
         void host.storage.set(key, storedPlace(slug));
+        reportOpen(slug);
       },
       clear: () => {
         settle();
         void host.storage.set(key, null);
+        reportNothingOpen();
       }
     };
   };
@@ -6624,22 +8234,38 @@ ${FILED_BY_YOU}` : "";
   var skillRow = (skill) => {
     switch (skill.state) {
       case "not-installed":
-        return { sentence: plain("Built in. Agents in OpenChamber can use it while Design Chamber is on."), control: null };
+        return null;
       case "current":
       case "outdated":
-        return { sentence: withPath("Built in. An older copy is also installed at ", skill.path, ", so agents may see the skill twice."), control: "remove-old-copy" };
+        return { sentence: withPath("An older copy is installed at ", skill.path, ", so agents may see the skill twice."), control: "remove-old-copy" };
       case "edited":
-        return { sentence: withPath("Built in. You edited the older copy at ", skill.path, ", so Design Chamber leaves it alone. Delete it if you don\u2019t need it."), control: "copy-path" };
+        return { sentence: withPath("You edited the older copy at ", skill.path, ", so Design Chamber leaves it alone. Delete it if you don\u2019t need it."), control: "copy-path" };
       case "foreign":
-        return { sentence: withPath("Built in. Another design-chamber skill is installed at ", skill.path, "."), control: "copy-path" };
+        return { sentence: withPath("Another design-chamber skill is installed at ", skill.path, "."), control: "copy-path" };
       case "unavailable":
-        return { sentence: plain(`Built in. ${skill.message ?? "Design Chamber can\u2019t look for an older copy on this computer."}`), control: null };
+        return { sentence: plain(skill.message ?? "Design Chamber can\u2019t look for an older copy on this computer."), control: null };
+    }
+  };
+  var AGENT_SECTION_TITLE = "Your agent";
+  var AGENT_SECTION_TEXT = "Agents in OpenChamber know Design Chamber while it is on. Nothing to set up.";
+  var BUILT_IN_TEXT = "Design rules, the design-chamber skill, and the design_check, design_list and design_read tools.";
+  var OUTSIDE_TITLE = "Using an agent outside OpenChamber?";
+  var OUTSIDE_TEXT = "Agents outside OpenChamber don\u2019t get the note above. They can find your designs through the guide and the lines below.";
+  var instructionsRow = (state) => {
+    switch (state) {
+      case "saved":
+        return { badge: "Sent", tone: "success", detail: "Every chat gets a short note about Design Chamber." };
+      case "pending":
+        return { badge: "Pending", tone: "neutral", detail: "Sent from the next message." };
+      case "not-saved":
+        return { badge: "Not saved", tone: "warning", detail: "OpenChamber didn\u2019t save it. It is sent again when Design Chamber restarts." };
     }
   };
   var duplicateSentences = (skill) => skill.duplicates.map((path) => withPath("Another copy is at ", path, ". OpenCode needs one copy, so remove the other."));
   var DEFAULT_ASK = "ask";
   var SELECT_NONE = "none";
-  var PIN_DEFAULT = "default";
+  var PIN_PROJECT = "project";
+  var PIN_FOLLOW_DEFAULT = "follow-default";
   var SYSTEM_PREFIX = "system:";
   var readySystems = (systems2) => systems2.filter((system) => system.status === "ready");
   var defaultOptions = (systems2) => [
@@ -6648,7 +8274,8 @@ ${FILED_BY_YOU}` : "";
     ...readySystems(systems2).map((system) => ({ id: `${SYSTEM_PREFIX}${system.id}`, label: system.name }))
   ];
   var pinOptions = (systems2) => [
-    { id: PIN_DEFAULT, label: "Use the default" },
+    { id: PIN_PROJECT, label: "Use the project" },
+    { id: PIN_FOLLOW_DEFAULT, label: "Use my default" },
     { id: SELECT_NONE, label: "No design system" },
     ...readySystems(systems2).map((system) => ({ id: `${SYSTEM_PREFIX}${system.id}`, label: system.name }))
   ];
@@ -6659,9 +8286,10 @@ ${FILED_BY_YOU}` : "";
     return system ? { choice: "system", id: system.id, name: system.name } : { choice: "ask" };
   };
   var pinValue = (pin) => {
-    if (pin === null) return PIN_DEFAULT;
+    if (pin === null) return PIN_PROJECT;
     if (pin.choice === "none") return SELECT_NONE;
-    return pin.choice === "system" && pin.state === "ok" && pin.id !== void 0 ? `${SYSTEM_PREFIX}${pin.id}` : PIN_DEFAULT;
+    if (pin.choice === "follow-default") return PIN_FOLLOW_DEFAULT;
+    return pin.state === "ok" && pin.id !== void 0 ? `${SYSTEM_PREFIX}${pin.id}` : PIN_PROJECT;
   };
   var pinSetting = (pin) => {
     const { state: _state, sentence: _sentence, ...setting } = pin;
@@ -6669,22 +8297,49 @@ ${FILED_BY_YOU}` : "";
   };
   var pinsAfter = (pins, directory, value, systems2) => {
     const others = pins.filter((pin) => !sameDirectory(pin.directory, directory)).map(pinSetting);
-    if (value === PIN_DEFAULT) return others;
+    if (value === PIN_PROJECT) return others;
+    if (value === PIN_FOLLOW_DEFAULT) return [...others, { directory, choice: "follow-default" }];
     if (value === SELECT_NONE) return [...others, { directory, choice: "none" }];
     const system = value.startsWith(SYSTEM_PREFIX) ? readySystems(systems2).find((one) => one.id === value.slice(SYSTEM_PREFIX.length)) : void 0;
     return system ? [...others, { directory, choice: "system", id: system.id, name: system.name }] : others;
   };
-  var projectRows = (projects, pins) => {
+  var defaultLabel = (view2) => {
+    if (view2.choice === "none") return "No design system";
+    if (view2.choice === "system" && view2.state === "ok") return view2.name;
+    return "Ask me each time";
+  };
+  var ownSystemOf = (systems2, directory, foldsCase) => {
+    if (systems2 === null) return null;
+    const rows = choiceSystemsOf(systems2);
+    const ready = projectSystemOf(rows, directory, foldsCase);
+    if (ready !== null) return { ...ready, draft: false };
+    const draft = projectSystemOf(rows.filter((row2) => row2.status === "draft").map((row2) => ({ ...row2, status: "ready" })), directory, foldsCase);
+    return draft === null ? null : { ...draft, draft: true };
+  };
+  var rowSentence = (directory, pin, context) => {
+    if (pin !== null && pin.choice === "system" && pin.state !== "ok") return pin.sentence;
+    if (pin !== null && pin.choice !== "system") return null;
+    const own = ownSystemOf(context.systems, directory, context.foldsCase);
+    if (pin !== null) {
+      const pinned = pin.name ?? pin.id ?? "that system";
+      return own !== null && !own.draft && own.id !== pin.id ? `This project has its own system, ${own.name}. New designs use ${pinned} because you picked it.` : null;
+    }
+    if (own === null) return `Follows the project\u2019s design files. If it has none, uses your default (${defaultLabel(context.defaultView)}).`;
+    if (own.draft) return `${own.name} is a draft. Until it is Ready, designs follow the project\u2019s files.`;
+    return `Uses ${own.name}, this project\u2019s design system.`;
+  };
+  var projectRows = (projects, pins, context) => {
     const pinFor = (directory) => pins.find((pin) => sameDirectory(pin.directory, directory)) ?? null;
     const rows = projects.map((project) => {
       const pin = pinFor(project.directory);
-      return { directory: project.directory, name: project.name, value: pinValue(pin), sentence: pin !== null && pin.state !== "ok" ? pin.sentence : null };
+      return { directory: project.directory, name: project.name, value: pinValue(pin), sentence: rowSentence(project.directory, pin, context) };
     });
-    const extra = pins.filter((pin) => !projects.some((project) => sameDirectory(project.directory, pin.directory))).map((pin) => ({ directory: pin.directory, name: folderName(pin.directory), value: pinValue(pin), sentence: pin.state !== "ok" ? pin.sentence : null }));
+    const extra = pins.filter((pin) => !projects.some((project) => sameDirectory(project.directory, pin.directory))).map((pin) => ({ directory: pin.directory, name: folderName(pin.directory), value: pinValue(pin), sentence: rowSentence(pin.directory, pin, context) }));
     return [...rows, ...extra];
   };
   var defaultSentence = (view2) => view2.choice === "system" && view2.state !== "ok" ? view2.sentence : null;
-  var SYSTEMS_SECTION_TEXT = "New designs follow these when you start them. Pick one per project, or let the default decide.";
+  var SYSTEMS_SECTION_TEXT = "New designs follow their project\u2019s own design system and files. Change it per project, or set what happens when a project has nothing.";
+  var DEFAULT_NOTE = "Used when a design has no project, or its project has no design files.";
   var NO_PROJECTS_TEXT = "Open a project in OpenChamber and it shows up here.";
 
   // src/ui/components/settings-view.ts
@@ -6727,7 +8382,15 @@ ${FILED_BY_YOU}` : "";
       }
     );
     void systems().load();
-    scope.add(systems().subscribe(() => paint()));
+    let systemChoices = "";
+    scope.add(
+      systems().subscribe((state) => {
+        const next = state.systems === null ? "loading" : JSON.stringify(choiceSystemsOf(state.systems).map((system) => [system.id, system.name, system.status, system.belongsTo]));
+        if (next === systemChoices) return;
+        systemChoices = next;
+        paint();
+      })
+    );
     const systemNotices = [];
     let systemError = null;
     let systemBusy = false;
@@ -6741,6 +8404,7 @@ ${FILED_BY_YOU}` : "";
     let chromeBusy = false;
     let skillError = null;
     let skillBusy = false;
+    let outsideOpen = false;
     let skillFocus = null;
     const copied = { permissions: false, agents: false, skill: false };
     const timers = /* @__PURE__ */ new Set();
@@ -6751,12 +8415,12 @@ ${FILED_BY_YOU}` : "";
       }, ms);
       timers.add(timer);
     };
-    const applyRoot = async (value, current) => {
+    const applyRoot = async (value, current2) => {
       if (value !== null) {
-        if (isSameRootInput(value, current.root)) return;
+        if (isSameRootInput(value, current2.root)) return;
         rootError = validateRootInput(value);
         if (rootError !== null) return paint();
-      } else if (current.root === current.defaultRoot) return;
+      } else if (current2.root === current2.defaultRoot) return;
       rootBusy = true;
       rootError = null;
       paint();
@@ -6784,6 +8448,7 @@ ${FILED_BY_YOU}` : "";
       paint();
       try {
         await store.updateSettings(patch);
+        void systems().load();
       } catch (error) {
         systemError = `Couldn\u2019t save that. ${errorText2(error)}`;
       } finally {
@@ -6894,24 +8559,27 @@ ${FILED_BY_YOU}` : "";
           void applyRoot(rootDraft ?? settings.root, settings);
         }
       });
-      const folder = section("Where designs live", "Your chat agent writes each design as its own folder here.", folderHost, h("div", { class: "dc-row-actions" }, apply.el, reset.el));
+      const onComputer = currentDevice().form === "phone" ? h("p", { class: "dc-muted dc-settings-where" }, "This folder is on the computer that runs OpenChamber.") : null;
+      const folder = section("Where designs live", "Your chat agent writes each design as its own folder here.", folderHost, onComputer, h("div", { class: "dc-row-actions" }, apply.el, reset.el));
       const systemsSection = (() => {
         const answer = settings.systems;
         if (answer === void 0) return null;
-        for (const note of answer.notices) if (!systemNotices.includes(note)) systemNotices.push(note);
+        for (const note2 of answer.notices) if (!systemNotices.includes(note2)) systemNotices.push(note2);
         const list = systems().get().systems ?? [];
         const defaultHost = h("div", { class: "dc-field", "data-system-select": "default" });
         mountSelect(defaultHost, { label: "Default for new designs", value: defaultValue(answer.default), options: defaultOptions(list), disabled: systemBusy, onChange: (value) => void saveSystem("default", { systemDefault: defaultFrom(value, list) }) });
+        defaultHost.append(h("p", { class: "oc-sdk-field-note" }, DEFAULT_NOTE));
         const defaultNote = defaultSentence(answer.default);
         if (defaultNote !== null) defaultHost.append(h("p", { class: "oc-sdk-field-note" }, defaultNote));
-        const rows = projectRows(projects ?? [], answer.pins).map((row3) => {
-          const selectHost = h("div", { class: "dc-sys-pin-select", "data-system-select": `pin:${row3.directory}` });
-          mountSelect(selectHost, { value: row3.value, options: pinOptions(list), disabled: systemBusy, onChange: (value) => void saveSystem(`pin:${row3.directory}`, { systemPins: pinsAfter(answer.pins, row3.directory, value, list) }) });
-          selectHost.querySelector('button, [role="combobox"]')?.setAttribute("aria-label", `Design system for ${row3.name}`);
+        const foldsCase = foldsCaseFor(settings.root, typeof navigator === "undefined" ? "" : navigator.platform);
+        const rows = projectRows(projects ?? [], answer.pins, { systems: systems().get().systems, defaultView: answer.default, foldsCase }).map((row2) => {
+          const selectHost = h("div", { class: "dc-sys-pin-select", "data-system-select": `pin:${row2.directory}` });
+          mountSelect(selectHost, { value: row2.value, options: pinOptions(list), disabled: systemBusy, onChange: (value) => void saveSystem(`pin:${row2.directory}`, { systemPins: pinsAfter(answer.pins, row2.directory, value, list) }) });
+          selectHost.querySelector('button, [role="combobox"]')?.setAttribute("aria-label", `Design system for ${row2.name}`);
           return h(
             "li",
             { class: "dc-sys-pin" },
-            h("div", { class: "dc-sys-pin-text" }, h("span", { class: "dc-sys-pin-name", title: row3.directory }, row3.name), row3.sentence !== null ? h("span", { class: "dc-muted" }, row3.sentence) : null),
+            h("div", { class: "dc-sys-pin-text" }, h("span", { class: "dc-sys-pin-name", title: row2.directory }, row2.name), row2.sentence !== null ? h("span", { class: "oc-sdk-field-note dc-sys-pin-note" }, row2.sentence) : null),
             selectHost
           );
         });
@@ -6919,7 +8587,7 @@ ${FILED_BY_YOU}` : "";
         return section(
           "Design systems",
           SYSTEMS_SECTION_TEXT,
-          ...systemNotices.map((note) => banner({ tone: "info", title: note })),
+          ...systemNotices.map((note2) => banner({ tone: "info", title: note2 })),
           defaultHost,
           projectsBlock,
           systemError !== null ? h("p", { class: "dc-form-error", role: "alert" }, systemError) : null
@@ -6938,25 +8606,35 @@ ${FILED_BY_YOU}` : "";
         });
         previous = section("Earlier folders", "Designs in these folders were left in place. Switch back to see them again.", h("ul", { class: "dc-prev-list" }, ...rows));
       }
+      const builtIn = h("div", { class: "dc-field", role: "group", "aria-label": "Built in", tabindex: "-1", "data-agent-built-in": "" }, h("span", { class: "oc-sdk-field-label" }, "Built in"), h("p", { class: "dc-settings-p" }, BUILT_IN_TEXT));
+      const note = instructionsRow(settings.agent.instructions);
+      const noteBadge = h("span");
+      mountBadge(noteBadge, { label: note.badge, tone: note.tone });
+      const inEveryChat = h("div", { class: "dc-field", "data-agent-note": settings.agent.instructions }, h("span", { class: "oc-sdk-field-label" }, "In every chat"), h("div", { class: "dc-status-line" }, noteBadge, h("span", { class: "dc-muted dc-status-detail" }, note.detail)));
+      const older = skillRow(settings.agent.skill);
+      const duplicates = duplicateSentences(settings.agent.skill);
+      let olderCopy = null;
+      if (older !== null || duplicates.length > 0) {
+        olderCopy = h("div", { class: "dc-field", role: "group", "aria-label": "Older copy", tabindex: "-1", "data-skill-row": "" }, h("span", { class: "oc-sdk-field-label" }, "Older copy"));
+        if (older !== null) olderCopy.append(sentence(older.sentence));
+        if (older?.control === "remove-old-copy") {
+          const remove2 = btn({ label: "Remove old copy", variant: "outline", size: "xs", loading: skillBusy, onClick: () => void removeOldCopy() });
+          remove2.el.dataset.skillAction = "";
+          olderCopy.append(h("div", { class: "dc-row-actions" }, remove2.el));
+        } else if (older?.control === "copy-path") {
+          const skillPath = settings.agent.skill.path;
+          const copyPath3 = btn({ label: copied.skill ? "Copied" : "Copy path", variant: "outline", size: "xs", icon: copied.skill ? "check" : "copy", onClick: () => void copySnippet(skillPath, "skill") });
+          copyPath3.el.setAttribute("aria-label", copied.skill ? "Copied the path of the older copy" : "Copy the path of the older copy");
+          olderCopy.append(h("div", { class: "dc-row-actions" }, copyPath3.el));
+        }
+        if (skillError !== null) olderCopy.append(h("p", { class: "dc-form-error", role: "alert" }, skillError));
+        for (const duplicate of duplicates) {
+          const badge = h("span");
+          mountBadge(badge, { label: "Duplicate", tone: "warning" });
+          olderCopy.append(h("div", { class: "dc-status-line" }, badge, sentence(duplicate, true)));
+        }
+      }
       const guide = h("div", { class: "dc-field" }, h("span", { class: "oc-sdk-field-label" }, "Guide in your designs folder"), sentence(guideSentence(settings.agent.guide)));
-      const row2 = skillRow(settings.agent.skill);
-      const skill = h("div", { class: "dc-field", role: "group", "aria-label": "Agent skill", tabindex: "-1", "data-skill-row": "" }, h("span", { class: "oc-sdk-field-label" }, "Agent skill"), sentence(row2.sentence));
-      if (row2.control === "remove-old-copy") {
-        const remove2 = btn({ label: "Remove old copy", variant: "outline", size: "xs", loading: skillBusy, onClick: () => void removeOldCopy() });
-        remove2.el.dataset.skillAction = "";
-        skill.append(h("div", { class: "dc-row-actions" }, remove2.el));
-      } else if (row2.control === "copy-path") {
-        const skillPath = settings.agent.skill.path;
-        const copyPath3 = btn({ label: copied.skill ? "Copied" : "Copy path", variant: "outline", size: "xs", icon: copied.skill ? "check" : "copy", onClick: () => void copySnippet(skillPath, "skill") });
-        copyPath3.el.setAttribute("aria-label", copied.skill ? "Copied the path of the older copy" : "Copy the path of the older copy");
-        skill.append(h("div", { class: "dc-row-actions" }, copyPath3.el));
-      }
-      if (skillError !== null) skill.append(h("p", { class: "dc-form-error", role: "alert" }, skillError));
-      for (const duplicate of duplicateSentences(settings.agent.skill)) {
-        const badge = h("span");
-        mountBadge(badge, { label: "Duplicate", tone: "warning" });
-        skill.append(h("div", { class: "dc-status-line" }, badge, sentence(duplicate, true)));
-      }
       const agentsSnippet = agentsSnippetFor(settings.root);
       let snippetBlock = null;
       if (agentsSnippet !== null) {
@@ -6971,7 +8649,12 @@ ${FILED_BY_YOU}` : "";
           h("div", { class: "dc-row-actions" }, copyAgents.el)
         );
       }
-      const agents = section("Help your agent find your designs", "Chats that don\u2019t start with /design or /page can still find your designs folder through these.", guide, skill, snippetBlock);
+      const outside = h("details", { class: "dc-more", "data-agent-outside": "" }, h("summary", { class: "dc-more-summary" }, OUTSIDE_TITLE), h("div", { class: "dc-more-body" }, h("p", { class: "dc-settings-p" }, OUTSIDE_TEXT), guide, snippetBlock));
+      outside.open = outsideOpen;
+      outside.addEventListener("toggle", () => {
+        outsideOpen = outside.open;
+      });
+      const agents = section(AGENT_SECTION_TITLE, AGENT_SECTION_TEXT, builtIn, inEveryChat, olderCopy, outside);
       const status = browserStatus(settings.chrome.path, settings.chrome.source);
       const statusBadge2 = h("span");
       mountBadge(statusBadge2, { label: status.title, tone: status.tone });
@@ -7022,7 +8705,8 @@ ${FILED_BY_YOU}` : "";
         systemFocus = null;
       }
       if (skillFocus !== null) {
-        body.querySelector(skillFocus === "action" ? "[data-skill-action]" : "[data-skill-row]")?.focus();
+        const target = skillFocus === "action" ? "[data-skill-action]" : "[data-skill-row]";
+        (body.querySelector(target) ?? body.querySelector("[data-agent-built-in]"))?.focus();
         skillFocus = null;
       }
     };
@@ -7065,17 +8749,17 @@ ${FILED_BY_YOU}` : "";
   var removedGroupTitle = (screenId) => `${screenId} \xB7 Screen removed`;
   var groupComments = (comments, screens, pageTitle) => {
     const groups = [];
-    const known = /* @__PURE__ */ new Set();
+    const known2 = /* @__PURE__ */ new Set();
     const onPage = comments.filter((comment) => comment.screen === null);
     if (onPage.length > 0) groups.push({ key: "page", title: pageTitle, comments: onPage });
     for (const screen of screens) {
-      known.add(screen.id);
+      known2.add(screen.id);
       const mine = comments.filter((comment) => comment.screen === screen.id);
       if (mine.length > 0) groups.push({ key: screen.id, title: screen.title, comments: mine });
     }
     const gone = /* @__PURE__ */ new Map();
     for (const comment of comments) {
-      if (comment.screen === null || known.has(comment.screen)) continue;
+      if (comment.screen === null || known2.has(comment.screen)) continue;
       const list = gone.get(comment.screen);
       if (list) list.push(comment);
       else gone.set(comment.screen, [comment]);
@@ -7168,12 +8852,12 @@ ${FILED_BY_YOU}` : "";
   var sendOneComment = async (slug, id, body, anchorStates) => {
     const open = store.getState().open;
     const comments = open?.slug === slug ? open.data?.design.comments : void 0;
-    const current = comments?.find((comment) => comment.id === id);
+    const current2 = comments?.find((comment) => comment.id === id);
     if (comments !== void 0) {
-      const problem = sendThisProblem(current);
+      const problem = sendThisProblem(current2);
       if (problem !== null) throw new Error(problem);
     }
-    if (current !== void 0 && body.trim() !== current.body.trim()) await store.updateComment(slug, id, { body });
+    if (current2 !== void 0 && body.trim() !== current2.body.trim()) await store.updateComment(slug, id, { body });
     await sendComments(slug, [id], anchorStates);
   };
 
@@ -7447,9 +9131,9 @@ ${FILED_BY_YOU}` : "";
       toast("error", `Couldn\u2019t remove it from ${project.label}. ${errorText2(error)}`);
     }
   };
-  var addToFolder = async (folder, design) => {
-    const current = folders().get().folders.find((entry) => entry.id === folder.id);
-    if (current?.slugs.includes(design.slug)) {
+  var addToFolder2 = async (folder, design) => {
+    const current2 = folders().get().folders.find((entry) => entry.id === folder.id);
+    if (current2?.slugs.includes(design.slug)) {
       toast("info", `\u201C${design.title}\u201D is already in ${folder.name}.`);
       return;
     }
@@ -7741,10 +9425,10 @@ ${FILED_BY_YOU}` : "";
     let statics = [];
     const transients = /* @__PURE__ */ new Map();
     const drop = (id) => {
-      const current = transients.get(id);
-      if (!current) return;
-      current.timer?.cancel();
-      current.node.remove();
+      const current2 = transients.get(id);
+      if (!current2) return;
+      current2.timer?.cancel();
+      current2.node.remove();
       transients.delete(id);
     };
     const nextAfter = (id) => {
@@ -7789,641 +9473,6 @@ ${FILED_BY_YOU}` : "";
       }
     };
   };
-
-  // src/shared/tokens-css.ts
-  var isBalancedQuotes = (value) => {
-    let single = 0;
-    let double = 0;
-    for (const char of value) {
-      if (char === "'") single += 1;
-      else if (char === '"') double += 1;
-    }
-    return single % 2 === 0 && double % 2 === 0;
-  };
-  var unitWords = (unit) => unit === "" ? "no unit" : unit;
-  var tweakStateSentence = (state, tweak) => {
-    switch (state.state) {
-      case "ok":
-      case "value":
-        return null;
-      case "missing":
-        return `tokens.css has no ${tweak.var}.`;
-      case "formula":
-        return "This value is a formula. Ask the agent to change it.";
-      case "unit": {
-        const fileUnit = state.fileUnit ?? "";
-        const knobUnit = tweak.kind === "number" ? tweak.unit : "";
-        const file = fileUnit === "" ? `sets ${tweak.var} without a unit` : `sets ${tweak.var} in ${fileUnit}`;
-        return `tokens.css ${file}, but this tweak uses ${unitWords(knobUnit)}. Ask the agent to fix it.`;
-      }
-      case "no-file":
-        return "This design has no tokens.css.";
-    }
-  };
-  var stepDecimals = (step) => {
-    const fraction = String(step).split(".")[1];
-    return fraction === void 0 ? 0 : Math.min(fraction.length, 4);
-  };
-  var formatTweakNumber = (value, step) => {
-    const decimals = stepDecimals(step);
-    const factor = 10 ** decimals;
-    let text = (Math.round(value * factor) / factor).toFixed(decimals);
-    if (text.includes(".")) text = text.replace(/0+$/, "").replace(/\.$/, "");
-    return text === "-0" ? "0" : text;
-  };
-  var tweakNumberText = (value, tweak) => `${formatTweakNumber(value, tweak.step)}${tweak.unit}`;
-
-  // src/shared/source-edit.ts
-  var isAsciiWs = (code) => code === 32 || code === 9 || code === 10 || code === 12 || code === 13;
-  var isAsciiLetter = (code) => code >= 65 && code <= 90 || code >= 97 && code <= 122;
-  var isAsciiLetterOrDigit = (code) => isAsciiLetter(code) || code >= 48 && code <= 57;
-  var isDigit = (code) => code >= 48 && code <= 57;
-  var isHexDigit = (code) => isDigit(code) || code >= 65 && code <= 70 || code >= 97 && code <= 102;
-  var NAMED_REFS = {
-    amp: "&",
-    lt: "<",
-    gt: ">",
-    quot: '"',
-    apos: "'",
-    nbsp: "\xA0",
-    copy: "\xA9",
-    reg: "\xAE",
-    // The mdash value is decode data (the character &mdash; names), not copy; written as a code
-    // point so the KI-7 copy guard, which reads every string literal, stays unbroken.
-    trade: "\u2122",
-    hellip: "\u2026",
-    mdash: String.fromCharCode(8212),
-    ndash: "\u2013",
-    lsquo: "\u2018",
-    rsquo: "\u2019",
-    ldquo: "\u201C",
-    rdquo: "\u201D",
-    laquo: "\xAB",
-    raquo: "\xBB",
-    bull: "\u2022",
-    middot: "\xB7",
-    times: "\xD7",
-    divide: "\xF7",
-    deg: "\xB0",
-    plusmn: "\xB1",
-    euro: "\u20AC",
-    pound: "\xA3",
-    yen: "\xA5",
-    cent: "\xA2",
-    sect: "\xA7",
-    para: "\xB6",
-    shy: "\xAD"
-  };
-  var commentLikeEnd = (raw, at, to) => {
-    if (raw.startsWith("<!--", at)) {
-      const end = raw.indexOf("-->", at + 4);
-      return end === -1 || end + 3 > to ? to : end + 3;
-    }
-    if (raw.startsWith("<![CDATA[", at)) {
-      const end = raw.indexOf("]]>", at + 9);
-      return end === -1 || end + 3 > to ? to : end + 3;
-    }
-    const gt = raw.indexOf(">", at);
-    return gt === -1 || gt + 1 > to ? to : gt + 1;
-  };
-  var tagLikeEnd = (raw, at, to) => {
-    let i = at + 1;
-    let quote = "";
-    while (i < to) {
-      const c = raw.charAt(i);
-      if (quote !== "") {
-        if (c === quote) quote = "";
-      } else if (c === '"' || c === "'") {
-        quote = c;
-      } else if (c === ">") {
-        return i + 1;
-      }
-      i += 1;
-    }
-    return to;
-  };
-  var decodeReferences = (raw, from, to, skipMarkup) => {
-    let text = "";
-    const map = [];
-    let i = from;
-    while (i < to) {
-      if (skipMarkup && raw.charAt(i) === "<") {
-        if (raw.startsWith("<!--", i) || raw.startsWith("<![CDATA[", i) || raw.startsWith("<?", i) || raw.startsWith("<!", i)) {
-          i = commentLikeEnd(raw, i, to);
-          continue;
-        }
-        if (raw.startsWith("</", i) || isAsciiLetter(raw.charCodeAt(i + 1))) {
-          i = tagLikeEnd(raw, i, to);
-          continue;
-        }
-      }
-      if (raw.charAt(i) !== "&") {
-        text += raw.charAt(i);
-        map.push([i, i + 1]);
-        i += 1;
-        continue;
-      }
-      const next = i + 1 < to ? raw.charCodeAt(i + 1) : NaN;
-      if (!isAsciiLetter(next) && next !== 35) {
-        text += "&";
-        map.push([i, i + 1]);
-        i += 1;
-        continue;
-      }
-      if (next === 35) {
-        let j2 = i + 2;
-        const hex = raw.charAt(j2) === "x" || raw.charAt(j2) === "X";
-        if (hex) j2 += 1;
-        const digitsStart = j2;
-        while (j2 < to && (hex ? isHexDigit(raw.charCodeAt(j2)) : isDigit(raw.charCodeAt(j2)))) j2 += 1;
-        if (j2 === digitsStart || j2 >= to || raw.charAt(j2) !== ";") return null;
-        const value2 = parseInt(raw.slice(digitsStart, j2), hex ? 16 : 10);
-        if (value2 >= 128 && value2 <= 159) return null;
-        const char = value2 === 0 || value2 > 1114111 || value2 >= 55296 && value2 <= 57343 ? "\uFFFD" : String.fromCodePoint(value2);
-        const ref = [i, j2 + 1];
-        for (let k = 0; k < char.length; k += 1) map.push(ref);
-        text += char;
-        i = j2 + 1;
-        continue;
-      }
-      let j = i + 1;
-      while (j < to && isAsciiLetterOrDigit(raw.charCodeAt(j))) j += 1;
-      if (j >= to || raw.charAt(j) !== ";") return null;
-      const value = NAMED_REFS[raw.slice(i + 1, j)];
-      if (value === void 0) return null;
-      text += value;
-      map.push([i, j + 1]);
-      i = j + 1;
-    }
-    return { text, map };
-  };
-  var decodeText = (raw, from, to) => decodeReferences(raw, from, to, true);
-  var decodeAttrValue = (raw) => {
-    const decoded = decodeReferences(raw, 0, raw.length, false);
-    return decoded === null ? null : decoded.text;
-  };
-  var editorTextOf = (decoded) => {
-    const { text } = decoded;
-    const len = text.length;
-    let out = "";
-    const outMap = [];
-    let i = 0;
-    while (i < len && isAsciiWs(text.charCodeAt(i))) i += 1;
-    while (i < len) {
-      if (isAsciiWs(text.charCodeAt(i))) {
-        const start = i;
-        while (i < len && isAsciiWs(text.charCodeAt(i))) i += 1;
-        if (i < len) {
-          out += " ";
-          outMap.push([start, i]);
-        }
-      } else {
-        out += text.charAt(i);
-        outMap.push([i, i + 1]);
-        i += 1;
-      }
-    }
-    return { text: out, map: outMap };
-  };
-  var normalizeText = (text) => text.replace(/\s+/g, " ").trim();
-  var VOID_TAGS = /* @__PURE__ */ new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
-  var RAW_TEXT_TAGS = /* @__PURE__ */ new Set(["script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "plaintext", "noscript"]);
-  var INERT_ANCESTORS = /* @__PURE__ */ new Set(["template", "noscript", "head"]);
-  var FOREIGN_ROOTS = /* @__PURE__ */ new Set(["svg", "math"]);
-  var parseStartTag = (text, lt) => {
-    const nameMatch = /^[A-Za-z][^\s/>]*/.exec(text.slice(lt + 1, lt + 128));
-    if (!nameMatch) return null;
-    const tag = nameMatch[0].toLowerCase();
-    const len = text.length;
-    let i = lt + 1 + nameMatch[0].length;
-    let selfClosing = false;
-    let idRaw = null;
-    for (; ; ) {
-      while (i < len && isAsciiWs(text.charCodeAt(i))) i += 1;
-      const c = text.charAt(i);
-      if (i >= len) return { tag, end: len, selfClosing: false, idRaw };
-      if (c === ">") {
-        i += 1;
-        break;
-      }
-      if (c === "/" && text.charAt(i + 1) === ">") {
-        selfClosing = true;
-        i += 2;
-        break;
-      }
-      if (c === "/") {
-        i += 1;
-        continue;
-      }
-      const attrStart = i;
-      while (i < len && !isAsciiWs(text.charCodeAt(i)) && text.charAt(i) !== "=" && text.charAt(i) !== ">" && !(text.charAt(i) === "/" && text.charAt(i + 1) === ">")) i += 1;
-      const attrName = text.slice(attrStart, i);
-      if (attrName === "") {
-        i += 1;
-        continue;
-      }
-      let j = i;
-      while (j < len && isAsciiWs(text.charCodeAt(j))) j += 1;
-      let value = null;
-      if (text.charAt(j) === "=") {
-        j += 1;
-        while (j < len && isAsciiWs(text.charCodeAt(j))) j += 1;
-        const quote = text.charAt(j);
-        if (quote === '"' || quote === "'") {
-          const close = text.indexOf(quote, j + 1);
-          value = text.slice(j + 1, close === -1 ? len : close);
-          i = close === -1 ? len : close + 1;
-        } else {
-          const valueStart = j;
-          while (j < len && !isAsciiWs(text.charCodeAt(j)) && text.charAt(j) !== ">") j += 1;
-          value = text.slice(valueStart, j);
-          i = j;
-        }
-      } else {
-        i = attrStart + attrName.length;
-      }
-      if (attrName.toLowerCase() === "id" && idRaw === null) idRaw = value ?? "";
-    }
-    return { tag, end: i, selfClosing, idRaw };
-  };
-  var findRawTextEnd = (text, from, tag) => {
-    const re = new RegExp(`</${tag}(?=[\\s>/]|$)`, "gi");
-    re.lastIndex = from;
-    const match = re.exec(text);
-    return match ? match.index : text.length;
-  };
-  var scanHtml = (text) => {
-    const elements = [];
-    const stack = [];
-    const len = text.length;
-    let pos = 0;
-    const markComment = () => {
-      for (const idx of stack) {
-        const open = elements[idx];
-        if (open) open.hasComment = true;
-      }
-    };
-    while (pos < len) {
-      const lt = text.indexOf("<", pos);
-      if (lt === -1) break;
-      pos = lt;
-      if (text.startsWith("<!--", lt)) {
-        const end2 = text.indexOf("-->", lt + 4);
-        pos = end2 === -1 ? len : end2 + 3;
-        markComment();
-        continue;
-      }
-      if (text.startsWith("<![CDATA[", lt)) {
-        const end2 = text.indexOf("]]>", lt + 9);
-        pos = end2 === -1 ? len : end2 + 3;
-        markComment();
-        continue;
-      }
-      if (text.startsWith("<!", lt) || text.startsWith("<?", lt)) {
-        const gt = text.indexOf(">", lt);
-        pos = gt === -1 ? len : gt + 1;
-        if (!/^<!doctype/i.test(text.slice(lt, lt + 10))) markComment();
-        continue;
-      }
-      if (text.startsWith("</", lt)) {
-        const nameMatch = /^<\/([A-Za-z][^\s/>]*)/.exec(text.slice(lt, lt + 128));
-        const gt = text.indexOf(">", lt);
-        const stop = gt === -1 ? len : gt + 1;
-        pos = stop;
-        if (!nameMatch) continue;
-        const name = (nameMatch[1] ?? "").toLowerCase();
-        if (VOID_TAGS.has(name)) continue;
-        let at = -1;
-        for (let k = stack.length - 1; k >= 0; k -= 1) {
-          const open = elements[stack[k] ?? -1];
-          if (open && open.tag === name) {
-            at = k;
-            break;
-          }
-        }
-        if (at === -1) continue;
-        while (stack.length > at + 1) {
-          const idx3 = stack.pop();
-          const closed = idx3 === void 0 ? void 0 : elements[idx3];
-          if (closed) closed.inner = [closed.startTag[1], lt];
-        }
-        const idx2 = stack.pop();
-        const el3 = idx2 === void 0 ? void 0 : elements[idx2];
-        if (el3) {
-          el3.endTag = [lt, stop];
-          el3.inner = [el3.startTag[1], lt];
-        }
-        continue;
-      }
-      const parsed = parseStartTag(text, lt);
-      if (parsed === null) {
-        pos = lt + 1;
-        continue;
-      }
-      const { tag, end, selfClosing, idRaw } = parsed;
-      pos = end;
-      const parent = stack.length > 0 ? stack[stack.length - 1] ?? -1 : -1;
-      const parentEl = parent === -1 ? void 0 : elements[parent];
-      const foreign = parentEl !== void 0 && parentEl.foreign || FOREIGN_ROOTS.has(tag);
-      const inert = parentEl !== void 0 && (parentEl.inert || INERT_ANCESTORS.has(parentEl.tag)) || RAW_TEXT_TAGS.has(tag) || tag === "template";
-      const idDecoded = idRaw === null ? null : decodeAttrValue(idRaw);
-      const el2 = {
-        tag,
-        startTag: [lt, end],
-        inner: [end, end],
-        endTag: null,
-        id: idRaw === null ? null : { raw: idRaw, decoded: idDecoded },
-        parent,
-        childElements: [],
-        hasComment: false,
-        foreign,
-        inert
-      };
-      const idx = elements.length;
-      elements.push(el2);
-      if (parentEl) parentEl.childElements.push(idx);
-      if (VOID_TAGS.has(tag)) continue;
-      if (RAW_TEXT_TAGS.has(tag)) {
-        const contentEnd = tag === "plaintext" ? len : findRawTextEnd(text, end, tag);
-        el2.inner = [end, contentEnd];
-        if (contentEnd < len) {
-          const gt = text.indexOf(">", contentEnd);
-          const stop = gt === -1 ? len : gt + 1;
-          el2.endTag = [contentEnd, stop];
-          pos = stop;
-        } else {
-          pos = len;
-        }
-        continue;
-      }
-      if (selfClosing && foreign) continue;
-      stack.push(idx);
-    }
-    for (const idx of stack) {
-      const el2 = elements[idx];
-      if (el2) el2.inner = [el2.startTag[1], len];
-    }
-    return { text, elements };
-  };
-  var locateTextTarget = (scan, target) => {
-    if (!target.leaf) return { reason: "formatted" };
-    if (target.truncated) return { reason: "too-long" };
-    const matches = [];
-    let anyUndecodable = false;
-    for (const e of scan.elements) {
-      if (e.tag !== target.tag || e.foreign || e.inert) continue;
-      if (target.id === null) {
-        if (e.id !== null) continue;
-      } else {
-        if (e.id === null) continue;
-        if (e.id.decoded === null) {
-          anyUndecodable = true;
-          continue;
-        }
-        if (e.id.decoded !== target.id) continue;
-      }
-      if (e.inner[1] - e.inner[0] < target.text.length) continue;
-      const decoded = decodeText(scan.text, e.inner[0], e.inner[1]);
-      if (decoded === null) {
-        anyUndecodable = true;
-        continue;
-      }
-      if (normalizeText(decoded.text) === target.text) matches.push(e);
-    }
-    if (matches.length === 0) return { reason: anyUndecodable ? "unclear" : "not-in-source" };
-    const leaves = matches.filter((e) => e.childElements.length === 0 && !e.hasComment && e.endTag !== null);
-    if (leaves.length === 0) {
-      const anyFormatted = matches.some((e) => e.childElements.length > 0 || e.hasComment);
-      return { reason: anyFormatted ? "formatted" : "unclear" };
-    }
-    const only = leaves.length === 1 ? leaves[0] : void 0;
-    if (only) return { element: only };
-    if (target.sameCount > 0 && leaves.length === target.sameCount) {
-      const picked = leaves[target.sameIndex];
-      if (picked) return { element: picked };
-    }
-    return { reason: "ambiguous" };
-  };
-  var sourceFileReason = (input) => {
-    if (input.link) return "link";
-    if (input.charLength > SOURCE_TEXT_MAX) return "file-too-large";
-    if (!input.utf8) return "not-utf8";
-    return null;
-  };
-
-  // src/ui/model/edit-text-model.ts
-  var REASON_TEXT = {
-    "not-in-source": "This text is made by the page's script. Ask the agent to change it.",
-    formatted: "This has formatting inside. Ask the agent to change it.",
-    ambiguous: "This text appears more than once and the exact one can't be found. Ask the agent to change it.",
-    viewing: "You're viewing an old version.",
-    "file-too-large": "This file is too large to edit here.",
-    "too-long": "That's too long to edit here. Ask the agent instead.",
-    "not-utf8": "This file isn't plain UTF-8 text, so it can't be edited here. Ask the agent instead.",
-    unclear: "Design Chamber can't find this text in the file exactly. Ask the agent to change it.",
-    "no-file": "Nothing to edit until the agent writes this screen.",
-    link: "This file is a link, so Design Chamber can't edit it here. Ask the agent instead."
-  };
-  var reasonSentence = (reason, detail) => reason === "loading-failed" ? `Couldn't read this file. ${detail ?? "Try clicking the element again."}`.trim() : REASON_TEXT[reason];
-  var refuse = (reason, detail) => detail === void 0 ? { editable: false, reason } : { editable: false, reason, detail };
-  var checkPick = (input) => {
-    if (input.viewing) return refuse("viewing");
-    const { source, probe } = input;
-    if (!source.ok) return source.kind === "no-file" ? refuse("no-file") : refuse("loading-failed", source.message);
-    const file = sourceFileReason({ link: source.source.link, charLength: source.source.text.length, utf8: source.source.utf8 });
-    if (file !== null) return refuse(file);
-    if (probe === null) return refuse("loading-failed", "The design didn't answer. Click the element again.");
-    const target = { tag: probe.tag, id: probe.id, text: probe.text, sameIndex: probe.sameIndex, sameCount: probe.sameCount };
-    const located = locateTextTarget(scanHtml(source.source.text), { ...target, leaf: probe.leaf, truncated: probe.truncated });
-    if ("reason" in located) return refuse(located.reason);
-    const decoded = decodeText(source.source.text, located.element.inner[0], located.element.inner[1]);
-    if (decoded === null) return refuse("unclear");
-    return { editable: true, base: source.source.sha256, target, before: editorTextOf(decoded).text, dir: probe.dir };
-  };
-  var CONTROL_CHARS = /[\u0000-\u0008\u000b\u000e-\u001f\u007f]/g;
-  var normalizeTyped = (typed) => typed.replace(CONTROL_CHARS, "").replace(/[\t\n\f\r ]+/g, " ").replace(/^ | $/g, "");
-  var saveDecision = (before, typed) => {
-    const after = normalizeTyped(typed);
-    if (after === before) return { kind: "unchanged" };
-    if (after.length > TEXT_EDIT_MAX) return { kind: "too-long", length: after.length };
-    return { kind: "save", after };
-  };
-  var hasChange = (before, typed) => normalizeTyped(typed) !== before;
-  var COUNTER_NEAR = 4500;
-  var counterState = (length) => length > TEXT_EDIT_MAX ? "over" : length >= COUNTER_NEAR ? "near" : "none";
-  var counterText = (length, state) => state === "over" ? `${TEXT_EDIT_MAX.toLocaleString()} characters at most` : `${length.toLocaleString()} / ${TEXT_EDIT_MAX.toLocaleString()}`;
-  var counterAnnouncement = (previous, next) => {
-    if (next === previous) return null;
-    if (next === "near") return previous === "none" ? "Close to the limit of 5,000 characters." : null;
-    if (next === "over") return "Over the limit of 5,000 characters. Shorten the text to save.";
-    return null;
-  };
-  var KEY_HINT = "Enter to save \xB7 Esc to cancel";
-  var CLICK_AWAY_LINE = "Press Enter to save or Esc to discard.";
-  var AGENT_WORKING_LINE = "The agent is working on this design. It may write over your edit.";
-  var STALE_TEXT = "This file changed while you were editing. Nothing was saved.";
-  var agentIsWorking = (phase) => phase === "working" || phase === "writing" || phase === "retrying";
-  var toolbarName = (tag, text) => {
-    const flat = text.replace(/\s+/g, " ").trim();
-    const clipped = flat.length > 40 ? `${flat.slice(0, 39).trimEnd()}\u2026` : flat;
-    return clipped === "" ? `Actions for ${tag}` : `Actions for ${tag} '${clipped}'`;
-  };
-  var UNDONE_TEXT = "Undone";
-  var SERVICE_SENTENCE_CODES = /* @__PURE__ */ new Set(["bad-request", "bad-path", "bad-slug", "not-found", "conflict", "stale", "too-large", "no-html", "invalid", "internal"]);
-  var refusalOf = (error) => {
-    if (error.code === "stale") return { text: STALE_TEXT, stale: true, askAgent: false };
-    if (SERVICE_SENTENCE_CODES.has(error.code)) {
-      const fileRefusal = error.status === 413 || error.status === 422 || error.code === "too-large" || error.code === "invalid";
-      const keeps = error.code === "internal" || error.code === "conflict";
-      return { text: keeps ? `${error.message} Your text is still here.` : error.message, stale: false, askAgent: fileRefusal };
-    }
-    return { text: `Couldn't save your change. ${error.message} Your text is still here.`, stale: false, askAgent: false };
-  };
-  var reloadOutcome = (previousBefore, check) => {
-    if (!check.editable) return { kind: "gone", sentence: reasonSentence(check.reason, check.detail) };
-    return { kind: "ready", check, fileNowSays: check.before === previousBefore ? null : check.before };
-  };
-  var TOOLBAR_ICONS_BELOW = 300;
-  var toolbarLabels = (stageWidth) => stageWidth >= TOOLBAR_ICONS_BELOW;
-  var EDGE = 8;
-  var GAP = 6;
-  var FLIP_WITHIN = 48;
-  var clamp = (value, low, high) => Math.max(low, Math.min(value, Math.max(low, high)));
-  var placeToolbar = (box, size, stage) => {
-    const below = box.y < Math.max(FLIP_WITHIN, size.h + GAP + EDGE);
-    const top = below ? box.y + box.h + GAP : box.y - size.h - GAP;
-    return { left: clamp(box.x, EDGE, stage.w - size.w - EDGE), top: clamp(top, EDGE, stage.h - size.h - EDGE), below };
-  };
-  var editorWidth = (input) => input.surface === "page" ? clamp(Math.round(input.boxWidth), 260, 480) : Math.min(input.stageWidth - 2 * EDGE, Math.max(240, Math.round(input.boxWidth)));
-  var placeEditor = (box, size, stage, surface) => ({
-    left: surface === "rail" ? EDGE : clamp(box.x, EDGE, stage.w - size.w - EDGE),
-    top: clamp(box.y, EDGE, stage.h - size.h - EDGE)
-  });
-  var answerSource = async (read) => {
-    try {
-      return { ok: true, source: await read() };
-    } catch (error) {
-      const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
-      const message = error instanceof Error && error.message !== "" ? error.message : "Try clicking the element again.";
-      return code === "no-html" || code === "not-found" ? { ok: false, kind: "no-file", message } : { ok: false, kind: "failed", message };
-    }
-  };
-
-  // src/ui/model/tweaks-model.ts
-  var TWEAKS_TITLE = "Tweaks";
-  var TWEAKS_SUBTITLE = "Change a value to preview it. Save writes the values to tokens.css.";
-  var UNSAVED_BADGE = "Unsaved";
-  var TWEAKS_VIEWING_TEXT = "You're viewing an old version.";
-  var ASK_FOR_TWEAKS_LABEL = "Ask for tweaks";
-  var ASK_FOR_TWEAKS_TEXT = "Add tweaks for this design (accent hue, density, type scale, radius).";
-  var TOKENS_LOADING_TEXT = "Reading tokens.css\u2026";
-  var NOTHING_TO_SAVE_TEXT = "Nothing to save yet.";
-  var NO_TOKENS_TEXT = "This design has no tokens.css.";
-  var TOKENS_READ_ONLY_TEXT = "tokens.css can't be edited here. Ask the agent instead.";
-  var VALUES_KEPT_TEXT = "Your unsaved values are kept.";
-  var DESIGN_GONE_TEXT = "That design is no longer in your Designs folder. Your unsaved values were:";
-  var PREVIEW_NOTE = "The preview shows this value everywhere; saved, it applies only where tokens.css doesn't set it again.";
-  var STALE_TITLE = "tokens.css changed since you started.";
-  var STALE_BODY = "Your values are still shown.";
-  var STALE_SAVE_TITLE = "Choose Apply to the new file or Discard my tweaks first.";
-  var LEAVE_TITLE = "Save your tweaks?";
-  var LEAVE_BODY = "Your tweak values aren't saved to tokens.css yet.";
-  var readFailedText = (message) => `Couldn't read tokens.css. ${message}`;
-  var saveFailedText = (error) => error.code === "stale" || error.code === "not-found" ? error.message : `Couldn't save your tweaks. ${error.message} Your values are still here.`;
-  var tweaksButtonLabel = (dirty) => dirty ? "Tweaks, unsaved changes" : "Tweaks";
-  var TWEAKS_SHEET_MIN_HOST_HEIGHT = 560;
-  var tweaksSheetVariant = (hostHeight) => hostHeight < TWEAKS_SHEET_MIN_HOST_HEIGHT ? "full" : "bottom";
-  var bottomSheetMax = (hostHeight) => Math.max(0, Math.floor(hostHeight / 2));
-  var panelMode = (state) => {
-    if (state.gone || state.saveError?.code === "not-found") return "gone";
-    if (state.status === "error") return "error";
-    if (state.tokens === null) return "loading";
-    return "rows";
-  };
-  var panelBanners = (state, tweaks, context) => {
-    const banners = [];
-    if (context.viewing) banners.push({ kind: "viewing", title: TWEAKS_VIEWING_TEXT });
-    if (state.tokens !== null && !state.tokens.exists) banners.push({ kind: "no-tokens", title: NO_TOKENS_TEXT });
-    else if (state.tokens !== null && !state.tokens.editable) banners.push({ kind: "not-editable", title: TOKENS_READ_ONLY_TEXT });
-    if (state.stale) {
-      const labelOf = (name) => tweaks.find((knob) => knob.var === name)?.label ?? name;
-      const left = state.staleExcluded.map(labelOf);
-      banners.push({ kind: "stale", title: STALE_TITLE, body: left.length === 0 ? STALE_BODY : `${STALE_BODY} ${left.join(", ")} can't be applied to the new file and will be left out.` });
-    }
-    return banners;
-  };
-  var NO_VALUE = "\u2013";
-  var numberText = (value, tweak) => `${formatTweakNumber(value, tweak.step)}${tweak.unit === "" ? "" : ` ${tweak.unit}`}`;
-  var alsoSetNote = (contexts) => `Also set for ${contexts.join(", ")}; only the default changes.`;
-  var knobRow = (tweak, file, state, locked, fileProblem) => {
-    const pending = state.pending.get(tweak.var);
-    const fileValue = file?.value ?? null;
-    const brokenState = file !== void 0 && file.state !== "ok" && file.state !== "value";
-    const reason = !fileProblem && brokenState && file ? tweakStateSentence(file, tweak) : null;
-    const disabled = locked || brokenState;
-    const changed = pending !== void 0;
-    const notes = [];
-    if (file && file.alsoSet.length > 0 && !brokenState) notes.push(alsoSetNote(file.alsoSet), PREVIEW_NOTE);
-    if (tweak.kind === "number") {
-      const current2 = typeof pending === "number" ? pending : typeof fileValue === "number" ? fileValue : null;
-      return {
-        var: tweak.var,
-        label: tweak.label,
-        kind: "number",
-        disabled,
-        reason,
-        changed,
-        valueText: current2 === null ? NO_VALUE : numberText(current2, tweak),
-        number: { min: tweak.min, max: tweak.max, step: tweak.step, value: current2 ?? (tweak.min + tweak.max) / 2 },
-        choice: null,
-        notes
-      };
-    }
-    const current = typeof pending === "string" ? pending : typeof fileValue === "string" ? fileValue : null;
-    const options = tweak.options.map((option) => ({ id: option.value, label: option.label }));
-    const match = options.find((option) => option.id === current);
-    if (current !== null && match === void 0 && file?.state === "value" && !changed) notes.unshift(`tokens.css sets another value: ${current}`);
-    return {
-      var: tweak.var,
-      label: tweak.label,
-      kind: "choice",
-      disabled,
-      reason,
-      changed,
-      valueText: match?.label ?? (current ?? NO_VALUE),
-      number: null,
-      choice: { options, active: match?.id ?? "" },
-      notes
-    };
-  };
-  var knobRows = (tweaks, state, context) => {
-    const tokens = state.tokens;
-    const fileProblem = tokens === null || !tokens.exists || !tokens.editable;
-    const locked = context.viewing || state.status !== "ready" || state.gone || fileProblem;
-    return tweaks.map((tweak) => knobRow(tweak, tokens?.knobs.find((knob) => knob.var === tweak.var), state, locked, fileProblem));
-  };
-  var unsavedLines = (tweaks, state) => tweaks.flatMap((tweak) => {
-    const value = state.pending.get(tweak.var);
-    if (value === void 0) return [];
-    if (tweak.kind === "number") return [`${tweak.label}: ${typeof value === "number" ? numberText(value, tweak) : String(value)}`];
-    return [`${tweak.label}: ${tweak.options.find((option) => option.value === value)?.label ?? String(value)}`];
-  });
-  var footView = (state, context) => {
-    const saving = state.status === "saving";
-    const ready = state.status === "ready" && !state.gone && state.tokens !== null;
-    let saveTitle = null;
-    if (context.viewing) saveTitle = TWEAKS_VIEWING_TEXT;
-    else if (state.stale) saveTitle = STALE_SAVE_TITLE;
-    else if (ready && !state.dirty) saveTitle = NOTHING_TO_SAVE_TEXT;
-    const saveDisabled = context.viewing || !ready || !state.dirty || state.stale;
-    const resetDisabled = context.viewing || !ready || !state.dirty;
-    let note = null;
-    if (state.saveError && state.saveError.code !== "not-found" && !(state.saveError.code === "stale" && state.stale)) note = { tone: "error", text: saveFailedText(state.saveError) };
-    else if (context.agentWorking) note = { tone: "warning", text: AGENT_WORKING_LINE };
-    else if (ready && !state.dirty && !context.viewing) note = { tone: "muted", text: NOTHING_TO_SAVE_TEXT };
-    return { resetDisabled, saveDisabled, saving, saveTitle: saveDisabled ? saveTitle : null, note };
-  };
-  var leaveDecision = (state) => state.dirty && !state.gone ? "ask" : "leave";
 
   // src/ui/components/bottom-sheet.ts
   var trackBottomSheet = (host2, sheet, onResize) => {
@@ -8759,6 +9808,23 @@ ${FILED_BY_YOU}` : "";
     };
   };
 
+  // src/ui/model/input-words.ts
+  var KEYBOARD = {
+    wall: "Design wall. Arrow keys pan, plus and minus zoom, Shift+1 fits everything. Hold Space and drag to pan.",
+    page: "Page preview. Arrow keys, Page Up and Page Down scroll the page.",
+    askBar: "Enter sends, Shift+Enter adds a line.",
+    editClickAway: CLICK_AWAY_LINE,
+    fit: "Fit everything on screen (Shift+1)"
+  };
+  var PHONE = {
+    wall: "Design wall. Drag to move it and pinch to zoom.",
+    page: "Page preview. Drag to scroll the page.",
+    askBar: "The return key sends.",
+    editClickAway: "Tap Save to keep this change, or Cancel to discard it.",
+    fit: "Fit everything on screen"
+  };
+  var inputWords = (form) => form === "phone" ? PHONE : KEYBOARD;
+
   // src/ui/model/ask-bar-model.ts
   var ASK_COUNTER_FROM = 1e4;
   var CHIP_TEXT_MAX = 40;
@@ -8813,8 +9879,8 @@ ${FILED_BY_YOU}` : "";
   var askFailureText = (reason) => `Couldn't send. ${reason.trim()} Your message is still here.`;
 
   // src/shared/system-board.ts
-  var BOARD_ENTRY_PATTERN = /^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\d{1,3}|logo:\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40})$/;
-  var KINDS = /* @__PURE__ */ new Set(["token", "type", "font", "logo", "component", "overview", "note", "pattern", "brand"]);
+  var BOARD_ENTRY_PATTERN = /^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\d{1,3}|logo:\d{1,3}|icon:\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40}|pair:\d{1,3})$/;
+  var KINDS = /* @__PURE__ */ new Set(["token", "type", "font", "logo", "icon", "component", "overview", "note", "pattern", "brand", "pair"]);
   var isBoardEntryKey = (text) => text.length <= BOARD_ENTRY_MAX && BOARD_ENTRY_PATTERN.test(text);
   var entryKeyOf = (kind, key) => {
     const text = kind === "overview" ? "overview" : `${kind}:${key}`;
@@ -8842,6 +9908,8 @@ ${FILED_BY_YOU}` : "";
         return Number(key.key) < detail.fonts.length ? "typography" : null;
       case "logo":
         return Number(key.key) < detail.logos.length ? "brand" : null;
+      case "icon":
+        return Number(key.key) < detail.icons.length ? "assets" : null;
       case "component":
         return detail.components.some((component) => component.id === key.key) ? "components" : null;
       case "overview":
@@ -8852,6 +9920,8 @@ ${FILED_BY_YOU}` : "";
         return detail.patterns.some((entry) => entry.id === key.key) ? "patterns" : null;
       case "brand":
         return detail.brand.some((entry) => entry.id === key.key) ? "brand" : null;
+      case "pair":
+        return Number(key.key) < detail.pairs.length ? "colours" : null;
     }
   };
   var darkVarOf = (name) => {
@@ -8920,6 +9990,7 @@ ${FILED_BY_YOU}` : "";
 
   // src/guest/camera.ts
   var DEFAULT_CAMERA = Object.freeze({ x: 0, y: 0, scale: 1 });
+  var ZOOM_STEP = 1.25;
   var FIT_PADDING = 48;
   var FIT_MIN_WIDTH = 240;
   var clamp2 = (value, min, max) => Math.min(max, Math.max(min, value));
@@ -8938,6 +10009,7 @@ ${FILED_BY_YOU}` : "";
     const world = screenToWorld(camera, point);
     return clampCamera({ x: point.x - world.x * next, y: point.y - world.y * next, scale: next });
   };
+  var zoomBy = (camera, factor, point) => zoomAt(camera, camera.scale * factor, point);
   var wheelZoom = (camera, deltaY, point) => Number.isFinite(deltaY) ? zoomAt(camera, camera.scale * Math.exp(-deltaY * WHEEL_ZOOM_RATE), point) : camera;
   var panBy = (camera, dx, dy) => Number.isFinite(dx) && Number.isFinite(dy) ? clampCamera({ ...camera, x: camera.x + dx, y: camera.y + dy }) : camera;
   var unionBoxes = (boxes) => {
@@ -9322,406 +10394,6 @@ ${FILED_BY_YOU}` : "";
     return { layout: { artboards, ...ghost ? { ghost } : {}, bounds }, heads };
   };
 
-  // src/shared/page-state.ts
-  var pageStateChars = (items) => {
-    let chars = 0;
-    for (const [key, value] of items) chars += key.length + value.length;
-    return chars;
-  };
-  var PAGE_STATE_GEN_MAX = 120;
-  var GEN_PATTERN = /^([A-Za-z0-9_-]{1,100}):(0|[1-9][0-9]{0,15})$/;
-  var parseGen = (gen) => {
-    if (typeof gen !== "string" || gen.length > PAGE_STATE_GEN_MAX) return null;
-    const match = GEN_PATTERN.exec(gen);
-    if (match === null) return null;
-    const clears = Number(match[2]);
-    if (!Number.isSafeInteger(clears)) return null;
-    return { epoch: match[1], clears };
-  };
-  var isOlderClear = (gen, current) => {
-    const mine = parseGen(gen);
-    const theirs = parseGen(current);
-    if (mine === null || theirs === null) return false;
-    return mine.epoch === theirs.epoch && mine.clears < theirs.clears;
-  };
-
-  // src/guest/page-state.ts
-  var PAGE_STATE_LOAD_TIMEOUT_MS = 2e3;
-  var PAGE_STATE_REFETCH_DEBOUNCE_MS = 500;
-  var PAGE_STATE_FAIL_NOTICE = 3;
-  var PAGE_STATE_UNSAVED_SENTENCE = "Page data can't be saved right now. Changes last until you close this design.";
-  var PAGE_STATE_CAP_SENTENCE = "This design tried to save more than 1 MB of page data. The extra wasn't saved.";
-  var PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE = "Saved page data was cleared.";
-  var defaultSchedule = (run, ms) => {
-    const timer = setTimeout(run, ms);
-    return () => clearTimeout(timer);
-  };
-  var documentVisibility2 = () => {
-    if (typeof document === "undefined") return null;
-    return {
-      hidden: () => document.hidden,
-      onChange: (listener) => {
-        document.addEventListener("visibilitychange", listener);
-        return () => document.removeEventListener("visibilitychange", listener);
-      }
-    };
-  };
-  var splitPageStateDelta = (gen, clear, changes2) => {
-    const dropped = [];
-    const groups = [];
-    let current = [];
-    let length = JSON.stringify({ gen, clear, changes: [] }).length;
-    const close = () => {
-      if (current.length > 0) groups.push(current);
-      current = [];
-      length = JSON.stringify({ gen, clear: false, changes: [] }).length;
-    };
-    for (const change of changes2) {
-      const cost = JSON.stringify(change).length + (current.length === 0 ? 0 : 1);
-      if (current.length === 0 && length + cost > UPLOAD_TOTAL_MAX) {
-        dropped.push(change);
-        continue;
-      }
-      if (current.length > 0 && (current.length >= PAGE_STATE_CHANGES_MAX || length + cost > UPLOAD_TOTAL_MAX)) close();
-      current.push(change);
-      length += cost;
-    }
-    close();
-    if (groups.length === 0) return { deltas: clear ? [{ clear, changes: [] }] : [], dropped };
-    return { deltas: groups.map((group2, index) => ({ clear: clear && index === 0, changes: group2 })), dropped };
-  };
-  var pageStateDiff = (before, after, dirty) => {
-    const changes2 = [];
-    for (const [key, value] of after) {
-      if (dirty.has(key)) continue;
-      if (before.get(key) !== value) changes2.push([key, value]);
-    }
-    for (const key of before.keys()) {
-      if (dirty.has(key) || after.has(key)) continue;
-      changes2.push([key, null]);
-    }
-    return changes2;
-  };
-  var sizeOf = (key, value) => key.length + (value === null ? 0 : value.length);
-  var createPageStateController = (deps) => {
-    const { client: client2, slug, onNotice, syncFrames, reloadFrames } = deps;
-    const now = deps.now ?? Date.now;
-    const schedule = deps.schedule ?? defaultSchedule;
-    const visibility = deps.visibility === void 0 ? documentVisibility2() : deps.visibility;
-    const loadTimeoutMs = deps.loadTimeoutMs ?? PAGE_STATE_LOAD_TIMEOUT_MS;
-    let items = /* @__PURE__ */ new Map();
-    let chars = 0;
-    let gen = "";
-    let persist = false;
-    let disposed = false;
-    let dirty = /* @__PURE__ */ new Map();
-    let dirtyClear = false;
-    let failures = 0;
-    let lastFlushAt = null;
-    let flushTimer = null;
-    let inflight = null;
-    let clearing = false;
-    let refetchTimer = null;
-    let unwatchVisibility = null;
-    const shown = /* @__PURE__ */ new Set();
-    const noticeOnce = (kind, message) => {
-      if (shown.has(kind)) return;
-      shown.add(kind);
-      onNotice({ id: "page-data", kind, message });
-    };
-    const adopt = (answer) => {
-      items = new Map(answer.items);
-      chars = answer.chars;
-      gen = answer.gen;
-    };
-    const load = () => new Promise((resolve) => {
-      let settled2 = false;
-      let cancelTimeout = null;
-      const finish = (answer) => {
-        if (settled2 || disposed) return;
-        settled2 = true;
-        cancelTimeout?.();
-        if (answer) {
-          adopt(answer);
-          persist = true;
-        } else {
-          items = /* @__PURE__ */ new Map();
-          chars = 0;
-          persist = false;
-          noticeOnce("unsaved", PAGE_STATE_UNSAVED_SENTENCE);
-        }
-        resolve();
-      };
-      cancelTimeout = schedule(() => finish(null), loadTimeoutMs);
-      client2.call("GET /designs/:slug/page-state", { params: { slug } }).then((answer) => finish(answer)).catch(() => finish(null));
-    });
-    const cancelFlushTimer = () => {
-      flushTimer?.();
-      flushTimer = null;
-    };
-    const scheduleFlush = () => {
-      if (flushTimer !== null || disposed || !persist) return;
-      const wait = lastFlushAt === null ? 0 : Math.max(0, lastFlushAt + PAGE_STATE_FLUSH_MS - now());
-      flushTimer = schedule(() => {
-        flushTimer = null;
-        void runFlush();
-      }, wait);
-    };
-    const sendDelta = async (delta) => {
-      const json = JSON.stringify({ gen, ...delta });
-      let body;
-      if (fitsOneRequest(json)) body = { gen, ...delta };
-      else {
-        const uploadId = await client2.upload(json);
-        body = { gen, uploadId };
-      }
-      const answer = await client2.call("PATCH /designs/:slug/page-state", { params: { slug }, body });
-      gen = answer.gen;
-    };
-    const dropDirty = () => {
-      dirty.clear();
-      dirtyClear = false;
-      cancelFlushTimer();
-    };
-    const handleStaleClear = async () => {
-      dropDirty();
-      try {
-        const answer = await client2.call("GET /designs/:slug/page-state", { params: { slug } });
-        adopt(answer);
-        persist = true;
-      } catch {
-        persist = false;
-        noticeOnce("unsaved", PAGE_STATE_UNSAVED_SENTENCE);
-      }
-      dropDirty();
-      reloadFrames();
-      noticeOnce("cleared-elsewhere", PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE);
-    };
-    const runFlush = async () => {
-      if (inflight) return;
-      if (disposed || !persist || dirty.size === 0 && !dirtyClear) return;
-      const clear2 = dirtyClear;
-      const changes2 = [...dirty];
-      dirty = /* @__PURE__ */ new Map();
-      dirtyClear = false;
-      lastFlushAt = now();
-      const { deltas, dropped } = splitPageStateDelta(gen, clear2, changes2);
-      if (dropped.length > 0) noticeOnce("cap", PAGE_STATE_CAP_SENTENCE);
-      const task = (async () => {
-        for (const delta of deltas) await sendDelta(delta);
-      })();
-      inflight = task;
-      try {
-        await task;
-        failures = 0;
-      } catch (error) {
-        if (isServiceError(error, "stale")) {
-          await handleStaleClear();
-        } else if (isServiceError(error, "too-large")) {
-          noticeOnce("cap", PAGE_STATE_CAP_SENTENCE);
-        } else if (!clearing) {
-          dirtyClear = dirtyClear || clear2;
-          for (const [key, value] of changes2) if (!dirty.has(key)) dirty.set(key, value);
-          failures += 1;
-          if (failures >= PAGE_STATE_FAIL_NOTICE) noticeOnce("unsaved", PAGE_STATE_UNSAVED_SENTENCE);
-        }
-      } finally {
-        inflight = null;
-      }
-      if (dirty.size > 0 || dirtyClear) scheduleFlush();
-    };
-    const flush = async () => {
-      cancelFlushTimer();
-      if (inflight) await inflight.catch(() => void 0);
-      await runFlush();
-    };
-    const apply = (board, batch) => {
-      if (disposed || !persist) return;
-      if (batch.clear) {
-        items.clear();
-        chars = 0;
-        dirty.clear();
-        dirtyClear = true;
-      }
-      const accepted = [];
-      let capped2 = false;
-      for (const [key, value] of batch.changes) {
-        const old = items.get(key);
-        const before = old === void 0 ? 0 : sizeOf(key, old);
-        const next = chars + sizeOf(key, value) - before;
-        if (next > PAGE_STATE_MAX_CHARS) {
-          capped2 = true;
-          continue;
-        }
-        if (value === null) items.delete(key);
-        else items.set(key, value);
-        chars = next;
-        dirty.set(key, value);
-        accepted.push([key, value]);
-      }
-      if (capped2) noticeOnce("cap", PAGE_STATE_CAP_SENTENCE);
-      if (batch.clear || accepted.length > 0) syncFrames({ clear: batch.clear, changes: accepted }, board);
-      scheduleFlush();
-    };
-    const refetch = async () => {
-      if (disposed) return;
-      let answer;
-      try {
-        answer = await client2.call("GET /designs/:slug/page-state", { params: { slug } });
-      } catch {
-        return;
-      }
-      if (disposed) return;
-      if (isOlderClear(gen, answer.gen)) {
-        dirty.clear();
-        dirtyClear = false;
-        cancelFlushTimer();
-        adopt(answer);
-        persist = true;
-        reloadFrames();
-        noticeOnce("cleared-elsewhere", PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE);
-        return;
-      }
-      gen = answer.gen;
-      if (dirtyClear) return;
-      const before = items;
-      const fetched = new Map(answer.items);
-      const changes2 = pageStateDiff(before, fetched, dirty);
-      items = fetched;
-      for (const [key, value] of dirty) {
-        if (value === null) items.delete(key);
-        else items.set(key, value);
-      }
-      chars = pageStateChars(items);
-      if (changes2.length > 0) syncFrames({ clear: false, changes: changes2 }, null);
-    };
-    const scheduleRefetch = () => {
-      refetchTimer?.();
-      refetchTimer = schedule(() => {
-        refetchTimer = null;
-        void refetch();
-      }, PAGE_STATE_REFETCH_DEBOUNCE_MS);
-    };
-    const applyChanges = (batch) => {
-      if (disposed) return;
-      if (batch.reset) {
-        scheduleRefetch();
-        return;
-      }
-      for (const event of batch.events) {
-        if (event.kind === "page-state" && event.slug === slug) {
-          scheduleRefetch();
-          return;
-        }
-      }
-    };
-    const clear = async () => {
-      cancelFlushTimer();
-      clearing = true;
-      try {
-        if (inflight) await inflight.catch(() => void 0);
-        dirty.clear();
-        dirtyClear = false;
-        const answer = await client2.call("DELETE /designs/:slug/page-state", { params: { slug } });
-        gen = answer.gen;
-        items.clear();
-        chars = 0;
-        reloadFrames();
-        return answer;
-      } finally {
-        clearing = false;
-      }
-    };
-    if (visibility) {
-      unwatchVisibility = visibility.onChange(() => {
-        if (visibility.hidden()) void flush();
-      });
-    }
-    return {
-      load,
-      init: () => ({ persist, items: [...items] }),
-      apply,
-      applyChanges,
-      flush,
-      clear,
-      chars: () => chars,
-      persisting: () => persist,
-      dispose: async () => {
-        if (disposed) return;
-        await flush();
-        disposed = true;
-        cancelFlushTimer();
-        refetchTimer?.();
-        refetchTimer = null;
-        unwatchVisibility?.();
-        unwatchVisibility = null;
-      }
-    };
-  };
-
-  // src/ui/model/page-state-model.ts
-  var PAGE_DATA_CLEAR_LABEL = "Clear saved page data";
-  var pageDataEntry = (input) => {
-    if (!input.persisting || input.chars <= 0) return "hidden";
-    return input.viewing ? "disabled" : "enabled";
-  };
-  var PAGE_DATA_DISABLED_REASON = "Not while viewing a version";
-  var clearDialogTitle = (designTitle) => `Clear saved page data for ${designTitle}?`;
-  var CLEAR_DIALOG_BODY = "Ticks, toggles and filters this design saved will be reset. This can't be undone.";
-  var CLEAR_DIALOG_CONFIRM = "Clear";
-  var clearFailureText = (reason) => `Couldn\u2019t clear the saved page data. ${reason}`;
-  var BACKGROUND_MS = 1e4;
-  var CLEARED_MS = 5e3;
-  var UNSAVED_TITLE = "Page data can't be saved right now.";
-  var UNSAVED_BODY = "Changes last until you close this design.";
-  var CLEARED_SENTENCE = "Saved page data cleared.";
-  var pageDataNotice = (kind) => {
-    switch (kind) {
-      case "unsaved":
-        return { tone: "warning", title: UNSAVED_TITLE, body: UNSAVED_BODY, ttlMs: BACKGROUND_MS };
-      case "cap":
-        return { tone: "warning", title: PAGE_STATE_CAP_SENTENCE, ttlMs: BACKGROUND_MS };
-      case "cleared-elsewhere":
-        return { tone: "info", title: PAGE_STATE_CLEARED_ELSEWHERE_SENTENCE, ttlMs: BACKGROUND_MS };
-      case "cleared":
-        return { tone: "success", title: CLEARED_SENTENCE, ttlMs: CLEARED_MS };
-    }
-  };
-
-  // src/ui/model/viewer-menu.ts
-  var NARROW_RAIL_QUERY = "(max-width: 359.98px)";
-  var reveal2 = { id: "reveal", label: "Reveal in folder" };
-  var addToFolder2 = { id: "add-to-folder", label: "Add to folder\u2026" };
-  var copyPath2 = { id: "path", label: "Copy path" };
-  var rename = { id: "rename", label: "Rename" };
-  var remove = { id: "delete", label: "Delete\u2026", destructive: true };
-  var askTweaks = { id: "ask-tweaks", label: ASK_FOR_TWEAKS_LABEL };
-  var clearPageData = (state) => state === "enabled" || state === "disabled" ? [{ id: "page-data", label: PAGE_DATA_CLEAR_LABEL, ...state === "disabled" ? { disabled: true, reason: PAGE_DATA_DISABLED_REASON } : {} }] : [];
-  var baseEntries = (pageData) => [addToFolder2, reveal2, copyPath2, ...clearPageData(pageData), rename, { separator: true }, remove];
-  var viewerMenuEntries = (input) => {
-    const ask = input.askForTweaks ? [askTweaks] : [];
-    if (input.compact) {
-      return [
-        { id: "chat", label: "Continue in chat" },
-        ...input.railTweaks ? [{ id: "tweaks", label: input.railTweaks }] : [],
-        ...ask,
-        { separator: true },
-        { id: "zip", label: "Export ZIP" },
-        { id: "html", label: input.isPage ? "Export single-file HTML" : "Export screen as HTML\u2026" },
-        ...input.isPage ? [{ id: "copy-html", label: "Copy HTML", disabled: input.copyHtmlTooLarge, hint: input.copyHtmlTooLarge ? "too large" : void 0 }] : [],
-        copyPath2,
-        addToFolder2,
-        reveal2,
-        ...clearPageData(input.pageData),
-        rename,
-        { separator: true },
-        remove
-      ];
-    }
-    const rest = input.isPage ? baseEntries(input.pageData) : [{ id: "zip", label: "Export ZIP" }, { id: "html", label: "Export screen as HTML\u2026" }, { separator: true }, ...baseEntries(input.pageData)];
-    return input.askForTweaks ? [askTweaks, { separator: true }, ...rest] : rest;
-  };
-
   // src/ui/model/wall-model.ts
   var screenToFrame = (camera, board, screen) => ({
     x: (screen.x - camera.x) / camera.scale - board.x,
@@ -9748,6 +10420,8 @@ ${FILED_BY_YOU}` : "";
     x: rect.x + rect.w * point.x - scroll.x,
     y: rect.y + rect.h * point.y - scroll.y
   });
+  var PHONE_LIVE_FRAMES_MAX = 2;
+  var liveBudget = (compact, form) => form === "phone" ? PHONE_LIVE_FRAMES_MAX : compact ? RAIL_LIVE_FRAMES_MAX : PAGE_LIVE_FRAMES_MAX;
   var liveBoards = (boards, camera, surface, budget, margin) => {
     const left = -surface.w * margin;
     const top = -surface.h * margin;
@@ -9878,7 +10552,7 @@ ${FILED_BY_YOU}` : "";
     const target = h("span", { class: "dc-ask-target", id: ids.target });
     const counter = h("span", { class: "dc-ask-counter" });
     const send = btn({ label: "Send", variant: "default", size: "sm", icon: "send", emphasis: "primary", onClick: () => void submit() });
-    const hint = h("span", { class: "dc-ask-sr", id: ids.hint }, "Enter sends, Shift+Enter adds a line.");
+    const hint = h("span", { class: "dc-ask-sr", id: ids.hint }, inputWords(currentDevice().form).askBar);
     const el2 = h(
       "form",
       { class: "dc-ask", "data-surface": options.surface, "aria-label": "Ask the agent", novalidate: true },
@@ -10084,6 +10758,20 @@ ${FILED_BY_YOU}` : "";
     ...new Set(files.filter((file) => file !== "design.json" && !file.endsWith(".tmp") && !SERVICE_FOLDERS.some((folder) => file.startsWith(folder))))
   ];
 
+  // src/guest/session-tool.ts
+  var NAME_PATTERN = /^[A-Za-z0-9_.:-]+$/;
+  var readTarget = (raw) => {
+    if (typeof raw !== "string") return null;
+    const target = stripDisplayControls(raw).trim();
+    return target.length >= 1 && target.length <= SESSION_TOOL_TARGET_MAX ? target : null;
+  };
+  var readSessionTool = (raw) => {
+    if (typeof raw !== "object" || raw === null || !("name" in raw) || typeof raw.name !== "string") return null;
+    const name = raw.name.trim();
+    if (name.length > SESSION_TOOL_NAME_MAX || !NAME_PATTERN.test(name)) return null;
+    return { name, target: readTarget("target" in raw ? raw.target : null) };
+  };
+
   // src/guest/build-activity.ts
   var QUIET_MS = 12e4;
   var DONE_LINGER_MS = 8e3;
@@ -10095,6 +10783,7 @@ ${FILED_BY_YOU}` : "";
   var initialTrack = (now) => ({
     activity: "none",
     outcome: null,
+    tool: null,
     turnStartedAt: null,
     turnSeen: false,
     idleAt: null,
@@ -10132,7 +10821,8 @@ ${FILED_BY_YOU}` : "";
   var isLinkLost = (activity) => activity === "none" || activity === "gone";
   var turnOver = (track) => track.turnSeen && track.activity === "idle";
   var showsWriting = (track) => track.lastFile !== null && !turnOver(track) && track.activity !== "idle";
-  var mergeFiles = (known, more) => [.../* @__PURE__ */ new Set([...known, ...more])].slice(0, TURN_FILES_MAX);
+  var sameTool = (a, b) => a === b || a !== null && b !== null && a.name === b.name && a.target === b.target;
+  var mergeFiles = (known2, more) => [.../* @__PURE__ */ new Set([...known2, ...more])].slice(0, TURN_FILES_MAX);
   var reduceBuild = (track, input) => {
     switch (input.kind) {
       case "files": {
@@ -10142,12 +10832,15 @@ ${FILED_BY_YOU}` : "";
         return { ...track, lastFile: { path, at: input.at }, turnFiles: mergeFiles(track.turnFiles, input.files), pending: false, dismissedAt: null };
       }
       case "session": {
+        const tool = input.activity === "running" ? input.tool : null;
         if (input.activity === "unknown") {
-          return track.unknownSince !== null ? track : { ...track, unknownSince: input.at };
+          return track.unknownSince !== null ? track : { ...track, unknownSince: input.at, tool };
         }
         const held = track.unknownSince !== null;
-        if (track.activity === input.activity && track.outcome === input.outcome) return held ? { ...track, unknownSince: null } : track;
-        let next = { ...track, activity: input.activity, outcome: input.outcome, unknownSince: null };
+        if (track.activity === input.activity && track.outcome === input.outcome && sameTool(track.tool, tool)) {
+          return held ? { ...track, unknownSince: null } : track;
+        }
+        let next = { ...track, activity: input.activity, outcome: input.outcome, tool, unknownSince: null };
         const wasActive = isActive(track.activity);
         const nowActive = isActive(input.activity);
         if (!wasActive && nowActive) {
@@ -10230,14 +10923,14 @@ ${FILED_BY_YOU}` : "";
       if (timer !== null) clearTimeout(timer);
       timer = null;
       if (disposed) return;
-      const current = now();
-      const deadline = nextDeadline(track, current);
+      const current2 = now();
+      const deadline = nextDeadline(track, current2);
       if (deadline === null) return;
       timer = setTimeout(() => {
         timer = null;
         notify();
         schedule();
-      }, Math.max(0, deadline - current));
+      }, Math.max(0, deadline - current2));
     };
     const notify = () => {
       for (const listener of [...listeners]) listener(track);
@@ -10250,7 +10943,7 @@ ${FILED_BY_YOU}` : "";
       schedule();
       notify();
     };
-    const applySession = (activity, outcome = null) => apply({ kind: "session", at: now(), activity, outcome });
+    const applySession = (activity, outcome = null, tool = null) => apply({ kind: "session", at: now(), activity, outcome, tool });
     const applyFallback = () => {
       const selected = host2.session.get();
       if (link.sessionId !== null && selected?.id === link.sessionId) applySession(selected.busy ? "running" : "idle");
@@ -10268,7 +10961,7 @@ ${FILED_BY_YOU}` : "";
       }
       fallback = false;
       const found = snapshot.sessions.find((session) => session.id === sessionId);
-      if (found) applySession(found.activity, found.outcome);
+      if (found) applySession(found.activity, found.outcome, readSessionTool(found.tool));
       else applySession("gone");
     };
     const subscribeSessions = async (mine, sessionId, projectDirectory) => {
@@ -10362,38 +11055,77 @@ ${FILED_BY_YOU}` : "";
     };
   };
 
-  // src/ui/components/build-strip.ts
-  var mountBuildStrip = (host2, options) => {
-    const dot = h("span", { class: "dc-build-dot", "aria-hidden": "true" });
-    const text = h("span", { class: "dc-build-text" });
-    const elapsed = h("span", { class: "dc-build-elapsed", "aria-hidden": "true", hidden: true });
-    const live = h("span", { class: "dc-build-live", role: "status", "aria-live": "polite", "aria-atomic": "true" }, dot, text, elapsed);
-    const detail = h("span", { class: "dc-build-detail", hidden: true });
-    const openChat = options.compact ? iconBtn({ icon: "chat", label: "Open chat", size: "sm", onClick: () => options.onOpenChat() }) : btn({ label: "Open chat", icon: "chat", variant: "ghost", size: "xs", onClick: () => options.onOpenChat() }).el;
-    const dismiss = options.compact ? iconBtn({ icon: "close", label: "Dismiss", size: "sm", onClick: () => options.onDismiss() }) : btn({ label: "Dismiss", variant: "ghost", size: "xs", onClick: () => options.onDismiss() }).el;
-    const actions = h("span", { class: "dc-build-actions", hidden: true }, openChat, dismiss);
-    const root = h("div", { class: "dc-build", "data-phase": "hidden", "data-compact": String(options.compact) }, live, detail, actions);
-    host2.append(root);
-    let announced = null;
-    return {
-      update: (view2) => {
-        root.dataset.phase = view2.phase;
-        root.dataset.tone = view2.tone;
-        if (view2.announce !== announced) {
-          text.textContent = view2.announce === null ? "" : options.compact ? view2.pill : view2.text;
-          announced = view2.announce;
-        }
-        text.title = view2.announce === null ? "" : view2.title ?? view2.text;
-        elapsed.textContent = view2.elapsed ?? "";
-        elapsed.hidden = view2.elapsed === null;
-        detail.textContent = options.compact ? "" : view2.detail ?? "";
-        detail.hidden = options.compact || view2.detail === null;
-        openChat.hidden = !view2.actions.includes("open-chat");
-        dismiss.hidden = !view2.actions.includes("dismiss");
-        actions.hidden = view2.actions.length === 0;
-      },
-      dispose: () => root.remove()
-    };
+  // src/ui/model/tool-model.ts
+  var FULL_PATH_MAX = 48;
+  var NAME_MAX = 24;
+  var basename = (path) => path.split(/[\\/]+/).filter((part) => part !== "").at(-1) ?? path;
+  var toolDesignOf = (slug, design) => ({
+    slug,
+    entry: design.entry,
+    files: [...design.screens.map((screen) => screen.file), "tokens.css", "DESIGN.md"]
+  });
+  var KINDS2 = /* @__PURE__ */ new Map([
+    ["edit", "edit"],
+    ["multiedit", "edit"],
+    ["patch", "edit"],
+    ["apply_patch", "edit"],
+    ["str_replace_based_edit_tool", "edit"],
+    ["write", "write"],
+    ["read", "read"],
+    ["glob", "search"],
+    ["grep", "search"],
+    ["list", "search"],
+    ["ls", "search"],
+    ["codesearch", "search"],
+    ["bash", "run"],
+    ["shell", "run"],
+    ["webfetch", "web"],
+    ["websearch", "web"],
+    ["todowrite", "plan"],
+    ["todoread", "plan"],
+    ["task", "helper"],
+    ["design_check", "check"],
+    ["design_list", "designs"],
+    ["design_read", "designs"]
+  ]);
+  var WITH_PATH = {
+    edit: { verb: "Editing", none: "Editing a file" },
+    write: { verb: "Writing", none: "Writing a file" },
+    read: { verb: "Reading", none: "Reading a file" },
+    search: { verb: "Looking through", none: "Searching the files" }
+  };
+  var FIXED = {
+    run: ["Running a command", "Running a command"],
+    web: ["Looking something up online", "Looking something up online"],
+    plan: ["Planning the next steps", "Planning"],
+    helper: ["A helper agent is working", "Helper agent working"],
+    check: ["Checking the design", "Checking"],
+    designs: ["Reading your designs", "Reading designs"]
+  };
+  var toolName = (name) => name.toLowerCase().replace(/^mcp__.+?__/, "").replace(/^(?:[^.]+\.)+(?=.)/, "");
+  var toolPath = (target, design) => {
+    const shown = stripDisplayControls(target ?? "").trim();
+    if (shown === "" || shown === "." || shown === "./") return null;
+    if (design === null) return shown;
+    const files = [...new Set(design.entry === null ? design.files : [design.entry, ...design.files])];
+    const slashed = shown.replaceAll("\\", "/");
+    if (!slashed.includes("/")) {
+      const named = files.filter((file) => basename(file) === slashed);
+      return named.length === 1 ? named[0] ?? shown : shown;
+    }
+    return files.find((file) => slashed === file || slashed === `${design.slug}/${file}` || slashed.endsWith(`/${design.slug}/${file}`)) ?? shown;
+  };
+  var describeTool = (tool, design) => {
+    const kind = KINDS2.get(toolName(tool.name));
+    if (kind === void 0) return null;
+    const naming = WITH_PATH[kind];
+    if (naming === void 0) {
+      const [full, short] = FIXED[kind];
+      return { kind, full, short, path: null };
+    }
+    const path = toolPath(tool.target, design);
+    if (path === null) return { kind, full: naming.none, short: naming.none, path: null };
+    return { kind, full: `${naming.verb} ${middlePath(path, FULL_PATH_MAX)}`, short: `${naming.verb} ${middlePath(basename(path), NAME_MAX)}`, path };
   };
 
   // src/ui/model/build-strip-model.ts
@@ -10405,13 +11137,13 @@ ${FILED_BY_YOU}` : "";
     const seconds = String(total % 60).padStart(2, "0");
     return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}` : `${minutes}:${seconds}`;
   };
-  var basename = (path) => path.split("/").filter((part) => part !== "").at(-1) ?? path;
-  var FULL_PATH_MAX = 48;
-  var NAME_MAX = 24;
+  var shownPath = (path) => stripDisplayControls(path ?? "") || null;
   var pillText = (phase, file) => {
     switch (phase) {
-      case "writing":
-        return file ? `Writing ${middlePath(basename(file), NAME_MAX)}` : "Writing";
+      case "writing": {
+        const name = shownPath(file);
+        return name ? `Writing ${middlePath(basename(name), NAME_MAX)}` : "Writing";
+      }
       case "working":
         return "Agent is working";
       case "failed":
@@ -10432,7 +11164,13 @@ ${FILED_BY_YOU}` : "";
     actions: copy.actions ?? [],
     announce: copy.text
   });
-  var buildView = (track, now, locale = "en") => {
+  var withTool = (shown, track, design) => {
+    const words = track.tool ? describeTool(track.tool, design) : null;
+    if (!words) return shown;
+    const said = words.kind === "edit" || words.kind === "write" ? words.full : shown.announce;
+    return { ...shown, text: words.full, pill: words.short, title: words.path, announce: said };
+  };
+  var buildView = (track, now, locale = "en", design = null) => {
     const phase = phaseOf(track, now);
     const last = track.lastFile;
     switch (phase) {
@@ -10447,15 +11185,15 @@ ${FILED_BY_YOU}` : "";
       case "failed":
         return view(phase, track, now, { text: "The agent stopped with an error", pill: pillText("failed", null), tone: "error", actions: ["open-chat", "dismiss"] });
       case "writing": {
-        const path = last?.path ?? null;
-        return view(phase, track, now, {
+        const path = shownPath(last?.path ?? null);
+        return withTool(view(phase, track, now, {
           text: path ? `Writing ${middlePath(path, FULL_PATH_MAX)}` : "The agent is writing",
           pill: pillText("writing", path),
           detail: track.isCanvas && track.screensTotal > 1 ? `${track.screensWritten} of ${track.screensTotal} screens written` : null,
           title: path,
           tone: "info",
           elapsed: true
-        });
+        }), track, design);
       }
       case "retrying":
         return view(phase, track, now, { text: "The agent hit a problem and is retrying", pill: "Agent is retrying", tone: "warning", elapsed: true });
@@ -10465,9 +11203,10 @@ ${FILED_BY_YOU}` : "";
         if (since !== null && now - since >= QUIET_MS) detail = "Nothing saved in the last 2 minutes";
         else if (last) {
           const when = relativeTime(new Date(last.at).toISOString(), now, locale);
-          detail = last.path ? `Last saved ${middlePath(basename(last.path), NAME_MAX)} ${when}` : `Last saved ${when}`;
+          const path = shownPath(last.path);
+          detail = path ? `Last saved ${middlePath(basename(path), NAME_MAX)} ${when}` : `Last saved ${when}`;
         }
-        return view(phase, track, now, { text: "The agent is working", pill: pillText("working", null), detail, tone: "info", elapsed: true });
+        return withTool(view(phase, track, now, { text: "The agent is working", pill: pillText("working", null), detail, tone: "info", elapsed: true }), track, design);
       }
       case "done": {
         const count = track.turnFiles.length;
@@ -10482,9 +11221,83 @@ ${FILED_BY_YOU}` : "";
         return view(phase, track, now, { text: "Nothing written yet. Check the chat for a question.", pill: "Nothing written yet", tone: "warning", actions: ["open-chat", "dismiss"] });
     }
   };
+  var sameTool2 = (a, b) => a?.name === b?.name && a?.target === b?.target;
+  var paintTrack = (held, track, now) => {
+    const phase = phaseOf(track, now);
+    if (held && sameTool2(held.tool, track.tool)) return { track, held: { ...held, phase }, wait: null };
+    if (held && held.phase === phase && now >= held.since && now - held.since < TOOL_REPAINT_MS) {
+      return { track: { ...track, tool: held.tool }, held, wait: held.since + TOOL_REPAINT_MS - now };
+    }
+    return { track, held: { phase, tool: track.tool, since: now }, wait: null };
+  };
+
+  // src/ui/components/build-strip.ts
+  var REPAINT_MS = 1e3;
+  var mountBuildStrip = (host2, options) => {
+    const dot = h("span", { class: "dc-build-dot", "aria-hidden": "true" });
+    const text = h("span", { class: "dc-build-text" });
+    const elapsed = h("span", { class: "dc-build-elapsed", "aria-hidden": "true", hidden: true });
+    const main = h("span", { class: "dc-build-main" }, dot, text, elapsed);
+    const live = h("span", { class: "dc-build-live dc-sr-only", role: "status", "aria-live": "polite", "aria-atomic": "true" });
+    const detail = h("span", { class: "dc-build-detail", hidden: true });
+    const openChat = options.compact ? iconBtn({ icon: "chat", label: "Open chat", size: "sm", onClick: () => options.onOpenChat() }) : btn({ label: "Open chat", icon: "chat", variant: "ghost", size: "xs", onClick: () => options.onOpenChat() }).el;
+    const dismiss = options.compact ? iconBtn({ icon: "close", label: "Dismiss", size: "sm", onClick: () => options.onDismiss() }) : btn({ label: "Dismiss", variant: "ghost", size: "xs", onClick: () => options.onDismiss() }).el;
+    const actions = h("span", { class: "dc-build-actions", hidden: true }, openChat, dismiss);
+    const root = h("div", { class: "dc-build", "data-phase": "hidden", "data-compact": String(options.compact) }, main, live, detail, actions);
+    host2.append(root);
+    return {
+      update: (view2) => {
+        root.dataset.phase = view2.phase;
+        root.dataset.tone = view2.tone;
+        const shown = view2.announce === null ? "" : options.compact ? view2.pill : view2.text;
+        if (text.textContent !== shown) text.textContent = shown;
+        const spoken = view2.announce === null ? "" : view2.announce === view2.text ? shown : view2.announce;
+        if (live.textContent !== spoken) live.textContent = spoken;
+        if (shown === spoken) text.setAttribute("aria-hidden", "true");
+        else text.removeAttribute("aria-hidden");
+        text.title = view2.announce === null ? "" : view2.title ?? view2.text;
+        elapsed.textContent = view2.elapsed ?? "";
+        elapsed.hidden = view2.elapsed === null;
+        detail.textContent = options.compact ? "" : view2.detail ?? "";
+        detail.hidden = options.compact || view2.detail === null;
+        openChat.hidden = !view2.actions.includes("open-chat");
+        dismiss.hidden = !view2.actions.includes("dismiss");
+        actions.hidden = view2.actions.length === 0;
+      },
+      dispose: () => root.remove()
+    };
+  };
+  var driveBuildStrip = (strip, watcher, options) => {
+    let tick = null;
+    let held = null;
+    let release = null;
+    const render = () => {
+      const now = Date.now();
+      const painted = paintTrack(held, watcher.get(), now);
+      held = painted.held;
+      if (release !== null) clearTimeout(release);
+      release = painted.wait === null ? null : setTimeout(render, painted.wait);
+      const view2 = buildView(painted.track, now, options.locale(), options.design());
+      strip.update(view2);
+      const wantsTick = view2.elapsed !== null && !document.hidden;
+      if (wantsTick && tick === null) tick = setInterval(render, REPAINT_MS);
+      else if (!wantsTick && tick !== null) {
+        clearInterval(tick);
+        tick = null;
+      }
+    };
+    const unwatch = watcher.subscribe(render);
+    document.addEventListener("visibilitychange", render);
+    render();
+    return () => {
+      unwatch();
+      document.removeEventListener("visibilitychange", render);
+      if (tick !== null) clearInterval(tick);
+      if (release !== null) clearTimeout(release);
+    };
+  };
 
   // src/ui/wall/feature-build-strip.ts
-  var REPAINT_MS = 1e3;
   var watchers = /* @__PURE__ */ new WeakMap();
   var buildActivityFor = (wall) => watchers.get(wall);
   var sameSet2 = (a, b) => a === b || a !== null && b !== null && a.size === b.size && [...a].every((value) => b.has(value));
@@ -10501,21 +11314,13 @@ ${FILED_BY_YOU}` : "";
         ctx.wall.focus();
       }
     });
-    let tick = null;
-    const render = () => {
-      const view2 = buildView(watcher.get(), Date.now(), host.snapshot()?.locale ?? "en");
-      strip.update(view2);
-      const wantsTick = view2.elapsed !== null && !document.hidden;
-      if (wantsTick && tick === null) tick = setInterval(render, REPAINT_MS);
-      else if (!wantsTick && tick !== null) {
-        clearInterval(tick);
-        tick = null;
-      }
-    };
-    const unwatch = watcher.subscribe(render);
-    const onVisibility = () => render();
-    document.addEventListener("visibilitychange", onVisibility);
-    render();
+    const stopPaint = driveBuildStrip(strip, watcher, {
+      design: () => {
+        const detail = ctx.detail();
+        return detail ? toolDesignOf(ctx.slug, detail.design) : null;
+      },
+      locale: () => host.snapshot()?.locale ?? "en"
+    });
     let recentFiles = [];
     let recentTimer = null;
     let lit = null;
@@ -10550,9 +11355,7 @@ ${FILED_BY_YOU}` : "";
       watchers.delete(ctx.wall);
       unfeed();
       undetail();
-      unwatch();
-      document.removeEventListener("visibilitychange", onVisibility);
-      if (tick !== null) clearInterval(tick);
+      stopPaint();
       clearRecent();
       strip.dispose();
       watcher.dispose();
@@ -10571,6 +11374,7 @@ ${FILED_BY_YOU}` : "";
     shadows: "Use a shadow, like 0 1px 2px rgb(0 0 0 / 0.2), or none.",
     layers: "Use a whole number, like 10, or auto.",
     typography: PLAIN_SHAPE,
+    motion: "Use a time, like 200ms or 0.2s, or an easing, like ease-out, cubic-bezier(0.2, 0, 0, 1) or steps(4, end).",
     other: PLAIN_SHAPE
   };
   var FIELD_SHAPES = {
@@ -10582,7 +11386,8 @@ ${FILED_BY_YOU}` : "";
   };
   var ALLOWED_FUNCTIONS = /* @__PURE__ */ new Set(["rgb", "rgba", "hsl", "hsla", "hwb", "lab", "lch", "oklab", "oklch", "color", "color-mix", "var", "calc", "min", "max", "clamp"]);
   var FORMULA_PATTERN = /(?:^|[^A-Za-z0-9-])(?:var|calc|min|max|clamp|color-mix)\(/i;
-  var passesRuleOne = (text) => {
+  var MOTION_FUNCTIONS = /* @__PURE__ */ new Set(["cubic-bezier", "steps"]);
+  var passesRuleOne = (text, extra) => {
     if (text.length < 1 || text.length > SYSTEM_TOKEN_VALUE_MAX || !TOKEN_PREVIEW_VALUE_PATTERN.test(text) || !isBalancedQuotes(text)) return false;
     let depth = 0;
     for (const char of text) {
@@ -10595,7 +11400,7 @@ ${FILED_BY_YOU}` : "";
     if (depth !== 0) return false;
     for (const match of text.matchAll(/([A-Za-z-][A-Za-z0-9-]*)?\(/g)) {
       const name = match[1];
-      if (name !== void 0 && !ALLOWED_FUNCTIONS.has(name.toLowerCase())) return false;
+      if (name !== void 0 && !ALLOWED_FUNCTIONS.has(name.toLowerCase()) && extra?.has(name.toLowerCase()) !== true) return false;
     }
     return true;
   };
@@ -10663,26 +11468,26 @@ ${FILED_BY_YOU}` : "";
     const parts = [];
     let depth = 0;
     let quote = null;
-    let current = "";
+    let current2 = "";
     for (const char of text) {
       if (quote !== null) {
         if (char === quote) quote = null;
-        current += char;
+        current2 += char;
       } else if (char === '"' || char === "'") {
         quote = char;
-        current += char;
+        current2 += char;
       } else if (char === "(") {
         depth += 1;
-        current += char;
+        current2 += char;
       } else if (char === ")") {
         depth -= 1;
-        current += char;
+        current2 += char;
       } else if (depth === 0 && separator.test(char)) {
-        if (current.trim() !== "") parts.push(current.trim());
-        current = "";
-      } else current += char;
+        if (current2.trim() !== "") parts.push(current2.trim());
+        current2 = "";
+      } else current2 += char;
     }
-    if (current.trim() !== "") parts.push(current.trim());
+    if (current2.trim() !== "") parts.push(current2.trim());
     return parts;
   };
   var isShadow = (text, needsPair) => {
@@ -10708,6 +11513,39 @@ ${FILED_BY_YOU}` : "";
     const value = Number(text);
     return value >= -2147483647 && value <= 2147483647;
   };
+  var TIME = new RegExp(`^(${NUMBER})(ms|s)$`, "i");
+  var EASING_KEYWORDS = /* @__PURE__ */ new Set(["linear", "ease", "ease-in", "ease-out", "ease-in-out"]);
+  var CUBIC_BEZIER = new RegExp(`^cubic-bezier\\(\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*\\)$`, "i");
+  var STEPS = /^steps\(\s*(\d{1,4})\s*(?:,\s*(start|end)\s*)?\)$/i;
+  var isTime = (text) => {
+    const match = TIME.exec(text);
+    if (match === null) return false;
+    const ms = Number(match[1]) * ((match[2] ?? "").toLowerCase() === "s" ? 1e3 : 1);
+    return Number.isFinite(ms) && ms >= 0 && ms <= SYSTEM_MOTION_DURATION_MAX_MS;
+  };
+  var isEasing = (text) => {
+    if (EASING_KEYWORDS.has(text.toLowerCase())) return true;
+    const bezier = CUBIC_BEZIER.exec(text);
+    if (bezier !== null) {
+      const [x1, y1, x2, y2] = bezier.slice(1, 5).map(Number);
+      if (x1 === void 0 || y1 === void 0 || x2 === void 0 || y2 === void 0) return false;
+      return [x1, y1, x2, y2].every(Number.isFinite) && x1 >= 0 && x1 <= 1 && x2 >= 0 && x2 <= 1;
+    }
+    const steps = STEPS.exec(text);
+    if (steps === null) return false;
+    const count = Number(steps[1]);
+    return count >= 1 && count <= SYSTEM_MOTION_STEPS_MAX;
+  };
+  var isMotionValue = (text) => isTime(text) || isEasing(text);
+  var motionValueKind = (text) => isTime(text) ? "time" : isEasing(text) ? "easing" : null;
+  var EASING_CURVES = Object.freeze({
+    linear: [0, 0, 1, 1],
+    ease: [0.25, 0.1, 0.25, 1],
+    "ease-in": [0.42, 0, 1, 1],
+    "ease-out": [0, 0, 0.58, 1],
+    "ease-in-out": [0.42, 0, 0.58, 1]
+  });
+  var MOTION_NAME = /^--(?:duration|ease|motion)-/i;
   var FAMILY_NAME = /^(?:"[^"]+"|'[^']+'|[A-Za-z-][A-Za-z0-9-]*(?: +[A-Za-z-][A-Za-z0-9-]*)*)$/;
   var fieldValid = (field2, text) => {
     const lower = text.toLowerCase();
@@ -10743,6 +11581,8 @@ ${FILED_BY_YOU}` : "";
         return isShadow(text, false);
       case "layers":
         return isLayer(text);
+      case "motion":
+        return isMotionValue(text);
       case "typography":
       case "other":
         return true;
@@ -10750,7 +11590,7 @@ ${FILED_BY_YOU}` : "";
   };
   var validateTokenValue = (section2, field2, text) => {
     const shape = field2 === null ? SECTION_SHAPES[section2] : FIELD_SHAPES[field2];
-    if (!passesRuleOne(text)) return { ok: false, sentence: shape };
+    if (!passesRuleOne(text, field2 === null && section2 === "motion" ? MOTION_FUNCTIONS : void 0)) return { ok: false, sentence: shape };
     if (FORMULA_PATTERN.test(text)) return { ok: true, formula: true };
     const valid = field2 === null ? sectionValid(section2, text) : fieldValid(field2, text);
     return valid ? { ok: true, formula: false } : { ok: false, sentence: shape };
@@ -10758,6 +11598,7 @@ ${FILED_BY_YOU}` : "";
   var classifyToken = (name, value) => {
     const text = value.trim();
     const lower = name.toLowerCase();
+    if (MOTION_NAME.test(name) && (text === "" || FORMULA_PATTERN.test(text) || isMotionValue(text))) return "motion";
     if (isColour(text)) return "colours";
     if (isShadow(text, true)) return "shadows";
     if (/radius|rounded/.test(lower)) return "radius";
@@ -10805,6 +11646,67 @@ ${FILED_BY_YOU}` : "";
   };
   var TOKEN_UNDO_REMOVED_MAX = TEXT_EDIT_MAX * 8;
 
+  // src/shared/system-checklist.ts
+  var SYSTEM_TOPIC_IDS = Object.freeze([
+    "surface",
+    "text",
+    "border",
+    "brand",
+    "status",
+    "type-styles",
+    "spacing",
+    "radius",
+    "pairs",
+    "dark-values",
+    "state-colours",
+    "data-colours",
+    "control-sizes",
+    "breakpoints",
+    "elevation",
+    "layers",
+    "motion",
+    "components",
+    "examples",
+    "focus-disabled",
+    "voice",
+    "navigation",
+    "overlays",
+    "forms",
+    "feedback",
+    "states",
+    "data-display",
+    "accessibility",
+    "responsive",
+    "logo",
+    "brand-colour",
+    "imagery",
+    "marketing",
+    // system-builder-depth Phase 2 (T11): a full system's foundations ask for at least one icon.
+    "icons"
+  ]);
+  var TOPIC_SET = new Set(SYSTEM_TOPIC_IDS);
+  var CHECKLIST_MIN = Object.freeze({ status: 3, typeStylesCore: 4, typeStylesFull: 6, spacing: 4 });
+  var TOPICS = Object.freeze({
+    foundations: {
+      core: ["surface", "text", "border", "brand", "status", "type-styles", "spacing", "radius", "pairs", "dark-values"],
+      full: ["state-colours", "data-colours", "control-sizes", "breakpoints", "elevation", "layers", "motion", "icons"]
+    },
+    components: { core: ["components", "examples"], full: ["focus-disabled"] },
+    patterns: { core: ["voice"], full: ["navigation", "overlays", "forms", "feedback", "states", "data-display", "accessibility", "responsive", "motion"] },
+    brand: { core: ["logo"], full: ["brand-colour", "imagery", "marketing"] }
+  });
+  var PATTERN_KIND_TOPIC = Object.freeze({
+    voice: "voice",
+    navigation: "navigation",
+    overlays: "overlay",
+    forms: "forms",
+    feedback: "feedback",
+    states: "states",
+    "data-display": "data-display",
+    accessibility: "accessibility",
+    responsive: "responsive"
+  });
+
   // src/shared/system-json.ts
   var AREA_OF_SECTION = Object.freeze({
     overview: "foundations",
@@ -10813,6 +11715,8 @@ ${FILED_BY_YOU}` : "";
     spacing: "foundations",
     radius: "foundations",
     shadows: "foundations",
+    // system-builder-depth Phase 2 (§13 T10a): after shadows, in board order.
+    motion: "foundations",
     layers: "foundations",
     sizes: "foundations",
     components: "components",
@@ -10836,6 +11740,8 @@ ${FILED_BY_YOU}` : "";
     spacing: Object.freeze(["card", "compact", "table"]),
     radius: Object.freeze(["card", "compact", "table"]),
     shadows: Object.freeze(["card", "compact", "table"]),
+    // system-builder-depth Phase 2 (§13 T10a).
+    motion: Object.freeze(["card", "compact", "table"]),
     sizes: Object.freeze(["card", "compact", "table"])
   });
   var SECTION_LAYOUT_ALIASES = Object.freeze({ notes: "overview" });
@@ -10845,7 +11751,28 @@ ${FILED_BY_YOU}` : "";
     classify: classifyToken,
     validate: validateTokenValue
   });
+  var ENTRY_KINDS = Object.freeze({
+    patterns: Object.freeze([
+      "layout",
+      "do-dont",
+      "voice",
+      "other",
+      "navigation",
+      "overlay",
+      "forms",
+      "data-display",
+      "feedback",
+      "states",
+      "page",
+      "responsive",
+      "motion",
+      "accessibility"
+    ]),
+    brand: Object.freeze(["marketing", "imagery", "logo-use", "other", "colour", "social", "email"])
+  });
+  var VIEWPORT_SENTENCE = `Each viewport needs an id (letters, digits, - or _), and a whole-number width from ${VIEWPORT_WIDTH_MIN} to ${VIEWPORT_WIDTH_MAX} and height from ${VIEWPORT_HEIGHT_MIN} to ${VIEWPORT_HEIGHT_MAX}.`;
   var resyncStampOf = (stamps) => `${stamps.tokens ?? "none"}:${stamps.systemJson ?? "none"}`;
+  var BUILD_PLATFORMS = Object.freeze(["laptop-phone", "phone-first", "laptop", "custom"]);
   var PROPOSAL_TOO_MANY_FILES = `PROPOSAL.json lists more than ${SYSTEM_PROPOSAL_FILES_MAX} files. Ask the agent to split the change.`;
 
   // src/shared/checks.ts
@@ -10853,6 +11780,16 @@ ${FILED_BY_YOU}` : "";
   var fileOf = (f) => f.file ?? "This design";
   var skippedSentence = (f) => {
     const count = Math.round(f.params?.count ?? 0);
+    if (f.file === "board.html") {
+      const passes = count === 1 ? "1 board pass was" : `${count} board passes were`;
+      if (f.params?.reason === "failures") return `${passes} not drawn (the browser failed three times in a row).`;
+      return `${passes} not drawn (the check ran out of time). Check again with --area <area> or --scheme dark.`;
+    }
+    if (f.file !== null && f.file.startsWith("screens/")) {
+      const screens = count === 1 ? "1 screen artboard was" : `${count} screen artboards were`;
+      const why = f.params?.reason === "failures" ? "the browser failed three times in a row" : f.params?.reason === "budget" ? "the check ran out of time" : `the limit is ${num(f.params?.max)} per check`;
+      return `${screens} not drawn (${why}). Use --screen <id> to check the rest.`;
+    }
     const what = `${count} ${count === 1 ? "artboard was" : "artboards were"} not rendered`;
     if (f.params?.reason === "budget") return `${what} (the run took longer than ${Math.round(CHECK_RUN_BUDGET_MS / 1e3)} seconds).`;
     if (f.params?.reason === "failures") return `${what} (the browser failed three times in a row).`;
@@ -10860,6 +11797,8 @@ ${FILED_BY_YOU}` : "";
   };
   var systemNameOf2 = (f) => f.params?.system ?? "the design system";
   var repoNameOf = (f) => f.params?.repo ?? "the repo";
+  var DEPTH_LABELS = { tokens: "tokens only", core: "product core", full: "full" };
+  var LISTED_SINGULAR = { variants: "variant", sizes: "size", states: "state" };
   var AREA_LABELS = {
     foundations: "Foundations",
     components: "Components",
@@ -11140,6 +12079,78 @@ ${FILED_BY_YOU}` : "";
       severity: "info",
       sentence: (f, where) => `${where}: this entry is set to ${f.params?.layout ?? "card"} but needed the full width. Set its layout to full.`
     },
+    // system-builder-depth §4.5: what the files say about completeness, labels and contrast.
+    "system-example-missing": {
+      // Info for a core system, a warning for a full one: `severityOf` reads the validated `depth` param.
+      severity: "info",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        return count === 1 ? "1 entry has no live example yet, so the board shows only its words." : `${num(count)} entries have no live example yet, so the board shows only their words.`;
+      }
+    },
+    "system-states-missing": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const listed = f.params?.listed ?? "states";
+        const what = count === 1 ? `1 ${LISTED_SINGULAR[listed]} listed in system.json has` : `${num(count)} ${listed} listed in system.json have`;
+        return `${what} no labelled instance in ${count === 1 ? "its" : "their"} example. Label each one with data-dc-${LISTED_SINGULAR[listed]}.`;
+      }
+    },
+    "system-contrast-low": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const scheme = f.params?.scheme === "dark" ? "dark" : "light";
+        return count === 1 ? `1 colour pair is under its contrast level on the ${scheme} scheme.` : `${num(count)} colour pairs are under their contrast level on the ${scheme} scheme.`;
+      }
+    },
+    "system-coverage-gap": {
+      // Info for a core system, a warning for a full one, as `system-example-missing`.
+      severity: "info",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        return `${AREA_LABELS[f.params?.area ?? "foundations"]} is missing ${count === 1 ? "1 thing" : `${num(count)} things`} a ${DEPTH_LABELS[f.params?.depth ?? "core"]} system covers.`;
+      }
+    },
+    // ---- system-builder-depth Phase 2, Wave 0 (§13 T10a, T11): nothing raises these yet ----
+    "system-motion-no-reduced": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        return count === 1 ? "1 example moves but has no prefers-reduced-motion rule." : `${num(count)} examples move but have no prefers-reduced-motion rule.`;
+      }
+    },
+    "system-icons-mixed": {
+      severity: "info",
+      sentence: () => "The icons mix viewBox sizes or stroke widths, so they may not look like one set."
+    },
+    // ---- end system-builder-depth Phase 2 ----
+    // ---- system-builder-depth Phase 3 (§13 T16): `count` is the states in this example that changed nothing ----
+    "system-state-unstyled": {
+      severity: "warning",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const base = count === 1 ? "The example labels a state its CSS doesn't style: forced on the element, it changes nothing you can see. Style it, or remove the label." : `The example labels ${num(count)} states its CSS doesn't style: forced on the element, they change nothing you can see. Style them, or remove the labels.`;
+        const hint = f.params?.hint;
+        const rest = hint === "rest" || hint === "both" ? ' There is no resting copy beside the labelled one to force the state on: add one labelled data-dc-state="rest" with the same variant and size.' : "";
+        const focus = hint === "focus-visible" || hint === "both" ? " It is labelled focus but its CSS styles :focus-visible: label it focus-visible, or style :focus too." : "";
+        return `${base}${rest}${focus}`;
+      }
+    },
+    // T18: `px` = the source's width when no viewport matches; `reason` limit or budget with `count` (and `max`); neither = unreadable.
+    "system-compare-skipped": {
+      severity: "info",
+      sentence: (f) => {
+        const count = Math.max(1, Math.round(f.params?.count ?? 1));
+        const sheets = count === 1 ? "1 compare sheet was" : `${num(count)} compare sheets were`;
+        if (f.params?.reason === "limit") return `${sheets} not made (the limit is ${num(f.params.max)} per check). Use --screen <id> to compare the rest.`;
+        if (f.params?.reason === "budget" || f.params?.reason === "failures") return `${sheets} not made (the check ran out of time). Use --screen <id> to compare the rest.`;
+        if (f.params?.px !== void 0) return `The source picture is ${num(f.params.px)} px wide; no viewport of this screen matches. Save a screenshot as wide as one of its viewports.`;
+        return "The source picture can't be read as a PNG or JPEG, so no compare sheet was made.";
+      }
+    },
+    // ---- end system-builder-depth Phase 3 ----
     "system-board-partial": {
       severity: "info",
       sentence: (f) => {
@@ -11149,6 +12160,12 @@ ${FILED_BY_YOU}` : "";
         switch (f.params?.pictured) {
           case "entries":
             return `Only the first ${num(f.params?.max)} entries were measured.`;
+          case "motion":
+            if (count === 0) return "No motion strip was taken: the check ran out of time for them.";
+            return count === 1 ? "Only the first motion strip was taken; the other moving elements were not pictured." : `Only the first ${num(count)} motion strips were taken; the other moving elements were not pictured.`;
+          case "states":
+            if (count === 0) return "No labelled state was forced and pictured: the check ran out of time for them.";
+            return count === 1 ? "Only the first labelled state was forced and pictured; the others were not checked." : `Only the first ${num(count)} labelled states were forced and pictured; the others were not checked.`;
           case "gap":
             return `${count === 1 ? "Part of 1 area is" : `Parts of ${areas} are`} in no picture (the picture limit for one check); the parts are listed. All of the board was measured, so the findings cover them.`;
           case "no-overview":
@@ -11226,14 +12243,14 @@ ${FILED_BY_YOU}` : "";
   var groupsOf = (response) => {
     const counted = rendersCounted(response);
     const render = response.render.findings;
-    const current = sortFindings([...response.static.findings, ...counted ? render.filter((finding) => !isRenderLineFinding(finding)) : []]);
+    const current2 = sortFindings([...response.static.findings, ...counted ? render.filter((finding) => !isRenderLineFinding(finding)) : []]);
     const groups = [];
     const add = (group2, items) => {
       if (items.length > 0) groups.push({ ...group2, items });
     };
-    add({ id: "errors", title: GROUP_TITLES.errors, tone: "error", collapsed: false }, current.filter((finding) => finding.severity === "error"));
-    add({ id: "warnings", title: GROUP_TITLES.warnings, tone: "warning", collapsed: false }, current.filter((finding) => finding.severity === "warning"));
-    add({ id: "notes", title: GROUP_TITLES.notes, tone: "info", collapsed: true }, current.filter((finding) => finding.severity === "info"));
+    add({ id: "errors", title: GROUP_TITLES.errors, tone: "error", collapsed: false }, current2.filter((finding) => finding.severity === "error"));
+    add({ id: "warnings", title: GROUP_TITLES.warnings, tone: "warning", collapsed: false }, current2.filter((finding) => finding.severity === "warning"));
+    add({ id: "notes", title: GROUP_TITLES.notes, tone: "info", collapsed: true }, current2.filter((finding) => finding.severity === "info"));
     if (!counted) {
       const title2 = response.render.state === "running" ? GROUP_TITLES.running : GROUP_TITLES.stale;
       add({ id: "earlier", title: title2, tone: "muted", collapsed: true }, sortFindings(render));
@@ -11661,7 +12678,28 @@ ${view2.error.message}` : "";
     return wantsPan ? "pan" : "press";
   };
   var DRAG_THRESHOLD_PX = 4;
-  var isDrag = (from, to) => Math.hypot(to.x - from.x, to.y - from.y) > DRAG_THRESHOLD_PX;
+  var TOUCH_DRAG_THRESHOLD_PX = 10;
+  var dragThreshold = (pointerType) => pointerType === "touch" ? TOUCH_DRAG_THRESHOLD_PX : DRAG_THRESHOLD_PX;
+  var isDrag = (from, to, threshold = DRAG_THRESHOLD_PX) => Math.hypot(to.x - from.x, to.y - from.y) > threshold;
+  var PINCH_MIN_DISTANCE = 1;
+  var middle = ([a, b]) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  var apart = ([a, b]) => Math.hypot(b.x - a.x, b.y - a.y);
+  var pinchStep = (prev, next) => {
+    const before = apart(prev);
+    const after = apart(next);
+    const from = middle(prev);
+    const at = middle(next);
+    const factor = before < PINCH_MIN_DISTANCE || after < PINCH_MIN_DISTANCE ? 1 : after / before;
+    return { factor, at, dx: at.x - from.x, dy: at.y - from.y };
+  };
+  var pinchCamera = (camera, prev, next) => {
+    const step = pinchStep(prev, next);
+    return zoomBy(panBy(camera, step.dx, step.dy), step.factor, step.at);
+  };
+  var touchScrollDelta = (from, to, scale) => {
+    const by = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    return { dx: (from.x - to.x) / by, dy: (from.y - to.y) / by };
+  };
   var hitMatches = (pending, board, x, y) => pending !== null && pending.board === board && pending.frame.x === x && pending.frame.y === y;
   var frameModeOf = (mode, readOnly) => readOnly ? "play" : mode;
   var UNDO_VIEWING_TEXT = "You're viewing an old version.";
@@ -11873,18 +12911,18 @@ ${view2.error.message}` : "";
     if (commentItem) commentItem.handle.el.dataset.current = "true";
     const row2 = h("div", { class: "dc-seltoolbar-row", role: "toolbar", "aria-label": options.name, "aria-orientation": "horizontal" }, ...items.map((item) => item.handle.el));
     const el2 = h("div", { class: "dc-seltoolbar", "data-labels": String(options.labels) }, row2, reason);
-    let current = 0;
+    let current2 = 0;
     const setCurrent = (index, focus) => {
-      current = (index + items.length) % items.length;
+      current2 = (index + items.length) % items.length;
       items.forEach((item, at) => {
-        item.handle.el.tabIndex = at === current ? 0 : -1;
+        item.handle.el.tabIndex = at === current2 ? 0 : -1;
       });
-      if (focus) items[current]?.handle.el.focus();
+      if (focus) items[current2]?.handle.el.focus();
     };
     setCurrent(0, false);
     row2.addEventListener("keydown", (event) => {
-      if (event.key === "ArrowRight") setCurrent(current + 1, true);
-      else if (event.key === "ArrowLeft") setCurrent(current - 1, true);
+      if (event.key === "ArrowRight") setCurrent(current2 + 1, true);
+      else if (event.key === "ArrowLeft") setCurrent(current2 - 1, true);
       else if (event.key === "Home") setCurrent(0, true);
       else if (event.key === "End") setCurrent(items.length - 1, true);
       else if (event.key === "Escape") options.onEscape();
@@ -11894,7 +12932,7 @@ ${view2.error.message}` : "";
     });
     row2.addEventListener("focusin", (event) => {
       const at = items.findIndex((item) => item.handle.el === event.target);
-      if (at >= 0 && at !== current) setCurrent(at, false);
+      if (at >= 0 && at !== current2) setCurrent(at, false);
     });
     const setEdit = (state) => {
       edit = state;
@@ -11925,7 +12963,7 @@ ${view2.error.message}` : "";
       el: el2,
       setEdit,
       setLabels,
-      focus: () => items[current]?.handle.el.focus(),
+      focus: () => items[current2]?.handle.el.focus(),
       dispose: () => el2.remove()
     };
   };
@@ -11940,6 +12978,8 @@ ${view2.error.message}` : "";
     let viewing = false;
     let counter = "none";
     let reminding = false;
+    const device = currentDevice().form;
+    const reminder = inputWords(device).editClickAway;
     const agent = h("p", { class: "dc-editor-agent", hidden: !options.agentWorking }, AGENT_WORKING_LINE);
     const nowSays = h("p", { class: "dc-editor-note", hidden: true });
     const area = h("textarea", {
@@ -11962,6 +13002,7 @@ ${view2.error.message}` : "";
     const count = h("span", { class: "dc-editor-count", "aria-hidden": "true", hidden: true });
     const announce = h("span", { class: "dc-editor-sr", "aria-live": "polite" });
     const save = btn({ label: "Save", variant: "default", size: "sm", onClick: () => options.onSave() });
+    const cancel = device === "phone" ? btn({ label: "Cancel", variant: "ghost", size: "sm", onClick: () => void (saving || options.onCancel()) }) : null;
     const el2 = h(
       "div",
       { class: "dc-editor", role: "group", "aria-label": "Edit text", style: `width:${options.width}px` },
@@ -11971,7 +13012,7 @@ ${view2.error.message}` : "";
       line,
       failure,
       ways,
-      h("div", { class: "dc-editor-foot" }, h("span", { class: "dc-editor-meta" }, hint, count), save.el),
+      h("div", { class: "dc-editor-foot" }, h("span", { class: "dc-editor-meta" }, hint, count), cancel ? h("span", { class: "dc-pop-actions" }, cancel.el, save.el) : save.el),
       announce
     );
     const fit = () => {
@@ -11987,7 +13028,7 @@ ${view2.error.message}` : "";
     const showLine = (text) => {
       line.hidden = text === null;
       line.textContent = text ?? "";
-      line.dataset.tone = text === CLICK_AWAY_LINE ? "warning" : "plain";
+      line.dataset.tone = text === reminder ? "warning" : "plain";
     };
     const paint = () => {
       const length = area.value.length;
@@ -12001,6 +13042,7 @@ ${view2.error.message}` : "";
       area.readOnly = saving;
       el2.setAttribute("aria-busy", String(saving));
       save.set({ loading: saving, disabled: next === "over" || gone || viewing });
+      cancel?.set({ disabled: saving });
       reload.set({ disabled: saving || reloading, loading: reloading });
       ask.set({ disabled: saving || reloading });
       hint.hidden = gone;
@@ -12015,7 +13057,7 @@ ${view2.error.message}` : "";
       ways.hidden = !withReload && !withAsk;
     };
     const setLine = (text) => {
-      reminding = text === CLICK_AWAY_LINE;
+      reminding = text === reminder;
       showLine(text);
     };
     area.addEventListener("input", () => {
@@ -12071,7 +13113,7 @@ ${view2.error.message}` : "";
         paint();
       },
       remindClickAway: () => {
-        setLine(CLICK_AWAY_LINE);
+        setLine(reminder);
         area.focus();
         setTimeout(() => {
           if (area.isConnected && reminding) area.focus();
@@ -12106,7 +13148,6 @@ ${view2.error.message}` : "";
   };
 
   // src/ui/wall/feature-edit-text.ts
-  var CARD_GAP = 8;
   var mount5 = (ctx) => {
     const { wall, slug } = ctx;
     const rail = ctx.surface === "panel";
@@ -12127,26 +13168,29 @@ ${view2.error.message}` : "";
       const watcher2 = buildActivityFor(wall);
       return watcher2 !== void 0 && agentIsWorking(phaseOf(watcher2.get(), Date.now()));
     };
-    const placeToolbarFor = (current) => {
-      const el2 = current.toolbar.el;
+    const placeToolbarFor = (current2) => {
+      const el2 = current2.toolbar.el;
+      if (wall.cardEl()) {
+        wall.setCardCompanion(el2);
+        return;
+      }
       const stage = wall.size();
-      const box = wall.pickBox(current.pick);
-      const place = placeToolbar(box, { w: el2.offsetWidth, h: el2.offsetHeight }, { w: stage.width, h: stage.height });
+      const place = placeToolbar(wall.pickBox(current2.pick), { w: el2.offsetWidth, h: el2.offsetHeight }, { w: stage.width, h: stage.height });
+      el2.style.visibility = "";
       el2.style.left = `${Math.round(place.left)}px`;
       el2.style.top = `${Math.round(place.top)}px`;
       el2.dataset.below = String(place.below);
-      const card = wall.cardEl();
-      if (place.below && card) card.style.top = `${Math.round(Math.max(Number.parseFloat(card.style.top) || 0, place.top + el2.offsetHeight + CARD_GAP))}px`;
     };
     const closeToolbar = () => {
       if (open.kind !== "toolbar") return;
+      wall.setCardCompanion(null);
       open.toolbar.dispose();
       open = { kind: "none" };
     };
-    const applyCheck = (current, check) => {
-      current.check = check;
-      current.toolbar.setEdit(check.editable ? { kind: "ready" } : { kind: "disabled", reason: reasonSentence(check.reason, check.detail) });
-      placeToolbarFor(current);
+    const applyCheck = (current2, check) => {
+      current2.check = check;
+      current2.toolbar.setEdit(check.editable ? { kind: "ready" } : { kind: "disabled", reason: reasonSentence(check.reason, check.detail) });
+      placeToolbarFor(current2);
     };
     const onAction = (action2) => {
       if (open.kind !== "toolbar") return;
@@ -12190,21 +13234,21 @@ ${view2.error.message}` : "";
       open = { kind: "toolbar", pick, toolbar, check: null };
       placeToolbarFor(open);
     };
-    const placeEditorFor = (current) => {
-      const el2 = current.editor.el;
+    const placeEditorFor = (current2) => {
+      const el2 = current2.editor.el;
       const stage = wall.size();
-      const box = wall.pickBox(current.pick);
-      current.editor.setWidth(editorWidth({ surface: rail ? "rail" : "page", boxWidth: box.w, stageWidth: stage.width }));
+      const box = wall.pickBox(current2.pick);
+      current2.editor.setWidth(editorWidth({ surface: rail ? "rail" : "page", boxWidth: box.w, stageWidth: stage.width }));
       const place = placeEditor(box, { w: el2.offsetWidth, h: el2.offsetHeight }, { w: stage.width, h: stage.height }, rail ? "rail" : "page");
       el2.style.left = `${Math.round(place.left)}px`;
       el2.style.top = `${Math.round(place.top)}px`;
     };
     const closeEditor = () => {
       if (open.kind !== "editor") return;
-      const current = open;
+      const current2 = open;
       open = { kind: "none" };
-      current.resize.disconnect();
-      current.editor.dispose();
+      current2.resize.disconnect();
+      current2.editor.dispose();
       wall.setEditing(false);
       wall.ringPick(null);
     };
@@ -12242,23 +13286,23 @@ ${view2.error.message}` : "";
     };
     const save = async () => {
       if (open.kind !== "editor" || open.saving || ctx.viewing() !== null) return;
-      const current = open;
-      const decision = saveDecision(current.check.before, current.editor.value());
+      const current2 = open;
+      const decision = saveDecision(current2.check.before, current2.editor.value());
       if (decision.kind === "unchanged") {
         closeEditor();
         wall.focus();
         return;
       }
       if (decision.kind === "too-long") return;
-      current.saving = true;
-      current.editor.setSaving(true);
+      current2.saving = true;
+      current2.editor.setSaving(true);
       try {
         const response = await store.applyEdit(slug, {
           op: "text",
-          screen: current.pick.screen,
-          base: current.check.base,
-          target: current.check.target,
-          before: current.check.before,
+          screen: current2.pick.screen,
+          base: current2.check.base,
+          target: current2.check.target,
+          before: current2.check.before,
           after: decision.after
         });
         if (disposed) return;
@@ -12267,27 +13311,27 @@ ${view2.error.message}` : "";
         notice.saved(response.edit);
         wall.focus();
       } catch (error) {
-        if (disposed || open.kind !== "editor" || open !== current) return;
-        current.saving = false;
-        current.editor.setSaving(false);
-        current.editor.setRefusal(refusalOf(describe(error)));
-        current.editor.focus();
+        if (disposed || open.kind !== "editor" || open !== current2) return;
+        current2.saving = false;
+        current2.editor.setSaving(false);
+        current2.editor.setRefusal(refusalOf(describe(error)));
+        current2.editor.focus();
       }
     };
     const reload = async () => {
       if (open.kind !== "editor" || open.saving) return;
-      const current = open;
-      current.editor.setReloading(true);
-      const next = await wall.recheckPick(current.pick);
-      if (disposed || open !== current) return;
-      current.editor.setReloading(false);
-      const outcome = reloadOutcome(current.check.before, next);
+      const current2 = open;
+      current2.editor.setReloading(true);
+      const next = await wall.recheckPick(current2.pick);
+      if (disposed || open !== current2) return;
+      current2.editor.setReloading(false);
+      const outcome = reloadOutcome(current2.check.before, next);
       if (outcome.kind === "ready") {
-        current.check = outcome.check;
-        current.editor.setRefusal(null);
-        current.editor.setFileNowSays(outcome.fileNowSays);
+        current2.check = outcome.check;
+        current2.editor.setRefusal(null);
+        current2.editor.setFileNowSays(outcome.fileNowSays);
       } else {
-        current.editor.setGone(outcome.sentence);
+        current2.editor.setGone(outcome.sentence);
       }
     };
     const askAgent2 = () => {
@@ -12319,17 +13363,21 @@ ${view2.error.message}` : "";
       if (event.type === "cleared") closeToolbar();
     });
     const offMoved = wall.onMoved(() => {
-      closeToolbar();
+      if (!wall.cardHasDraft()) closeToolbar();
       if (open.kind === "editor") placeEditorFor(open);
     });
     const onPointerDown = (event) => {
       const target = event.target instanceof Element ? event.target : null;
-      if (open.kind === "toolbar" && !target?.closest(".dc-seltoolbar, .dc-composer")) closeToolbar();
+      if (open.kind === "toolbar" && !wall.cardHasDraft() && !target?.closest(".dc-seltoolbar, .dc-composer")) closeToolbar();
       if (open.kind !== "editor" || open.saving || target?.closest(".dc-editor")) return;
       if (hasChange(open.check.before, open.editor.value())) open.editor.remindClickAway();
       else closeEditor();
     };
     document.addEventListener("pointerdown", onPointerDown, true);
+    const stageResized = new ResizeObserver(() => {
+      if (open.kind === "editor") placeEditorFor(open);
+    });
+    stageResized.observe(wall.el);
     const offUndoKey = wall.onUndoEdit(() => {
       const { undo, refusal } = undoSlot.key(ctx.viewing() !== null);
       if (refusal !== null) notice.refused(refusal);
@@ -12354,6 +13402,7 @@ ${view2.error.message}` : "";
       offPick();
       offSelection();
       offMoved();
+      stageResized.disconnect();
       offUndoKey();
       offViewing();
       offWatch?.();
@@ -12756,7 +13805,8 @@ ${view2.error.message}` : "";
     return out;
   };
   var revisionOf = (view2) => view2.link?.revision ?? null;
-  var chipOf = (view2) => {
+  var projectFiles = (projectName) => projectName === null ? "its project\u2019s own design files" : `${projectName}\u2019s own design files`;
+  var chipOf = (view2, projectName = null) => {
     if (view2 === null) return null;
     const { status } = view2;
     switch (status.state) {
@@ -12776,12 +13826,14 @@ ${view2.error.message}` : "";
         return { label: "Design system", title: "This design\u2019s system record can\u2019t be read.", tone: "warning" };
       case "ask":
         return { label: "Ask me in chat", title: "The agent will ask which design system to use.", tone: "neutral" };
+      case "project":
+        return { label: "Follows the project", title: `This design follows ${projectFiles(projectName)}.`, tone: "neutral" };
       case "none":
       case "unset":
         return { label: "No design system", title: "This design has no design system.", tone: "neutral" };
     }
   };
-  var popoverOf = (view2) => {
+  var popoverOf = (view2, projectName = null) => {
     const { status } = view2;
     const lines = [];
     let openId = null;
@@ -12798,17 +13850,20 @@ ${view2.error.message}` : "";
       }
     } else if (status.state === "invalid") lines.push("This design\u2019s system record can\u2019t be read, so Design Chamber can\u2019t tell which system it uses.");
     else if (status.state === "ask") lines.push("The agent will ask which design system to use when it works on this design.");
+    else if (status.state === "project") lines.push(`This design follows ${projectFiles(projectName)}, so it looks like the rest of the project. Pick a system to use one instead.`);
     else lines.push("This design styles itself. Pick a system to give it shared colors, type and components.");
     return { lines, problems: copyProblems(view2), overrides: view2.overrides, openId, update };
   };
   var POPOVER_OVERRIDES_MAX = 4;
   var overridesHeading = (count) => `${plural(count, "override")} in this design`;
   var NO_SYSTEM = "none";
-  var changeOptions = (view2, systems2) => {
+  var changeOptions = (view2, systems2, project = null) => {
     const currentId = view2.status.state === "linked" ? view2.status.id : null;
-    const ready = systems2.filter((system) => system.status === "ready" && system.id !== currentId).map((system) => ({ id: system.id, label: system.name, hint: `Revision ${system.revision}` }));
+    const own = view2.status.state === "project" && project !== null ? projectSystemOf(choiceSystemsOf(systems2), project.directory, project.foldsCase) : null;
+    const ready = systems2.filter((system) => system.status === "ready" && system.id !== currentId).map((system) => ({ id: system.id, label: system.id === own?.id ? `${system.name}, this project\u2019s` : system.name, hint: `Revision ${system.revision}` }));
+    const ordered = own === null ? ready : [...ready.filter((option) => option.id === own.id), ...ready.filter((option) => option.id !== own.id)];
     const none = view2.status.state === "none" || view2.status.state === "unset" ? [] : [{ id: NO_SYSTEM, label: "No design system", hint: null }];
-    return [...ready, ...none];
+    return [...ordered, ...none];
   };
   var NO_OTHER_SYSTEMS = "There are no other design systems to switch to yet.";
   var previewLine = (preview, to) => {
@@ -12869,7 +13924,7 @@ ${view2.error.message}` : "";
     }
   };
   var SYSTEM_REFRESH_KINDS = /* @__PURE__ */ new Set(["files", "design", "versions", "added"]);
-  var shouldRefetchSystem = (batch, slug) => batch.reset || batch.events.some((event) => event.slug === slug && SYSTEM_REFRESH_KINDS.has(event.kind) || event.kind === "system" || event.kind === "root");
+  var shouldRefetchSystem = (batch, slug) => batch.reset || batch.events.some((event) => event.slug === slug && SYSTEM_REFRESH_KINDS.has(event.kind) || event.kind === "system" && !isBoardCommentsEvent(event) || event.kind === "root");
   var agentSwitchOf = (before, after) => {
     if (before === null || after.status.state !== "linked" || after.link === null) return null;
     if (after.link.by !== "agent" || after.link.before === null) return null;
@@ -12893,8 +13948,21 @@ ${view2.error.message}` : "";
     const label = h("span", { class: "dc-system-label" });
     const button2 = h("button", { type: "button", class: "oc-sdk oc-sdk-badge dc-system-btn", "data-compact": compact ? "true" : "false", "aria-haspopup": "dialog", "aria-expanded": "false" }, glyph, label);
     const el2 = h("div", { class: "dc-system", "data-surface": options.surface, hidden: true }, button2);
+    const projectDirectory = () => {
+      const open = store.getState().open;
+      return open?.slug === slug ? open.data?.design.projectDirectory ?? null : null;
+    };
+    const projectName = () => {
+      const directory = projectDirectory();
+      return directory === null ? null : folderName(directory);
+    };
+    const projectContext = () => {
+      const directory = projectDirectory();
+      if (directory === null) return null;
+      return { directory, foldsCase: foldsCaseFor(store.getState().settings.data?.root ?? directory, typeof navigator === "undefined" ? "" : navigator.platform) };
+    };
     const paintChip = () => {
-      const chip = chipOf(view2);
+      const chip = chipOf(view2, projectName());
       el2.hidden = hidden || chip === null;
       if (chip === null) return;
       label.textContent = chip.label;
@@ -12946,21 +14014,21 @@ ${view2.error.message}` : "";
         reset.el
       );
     };
-    const overridesBlock = (current) => {
-      if (current.overrides.length === 0) return null;
-      const shown = showAllOverrides ? current.overrides : current.overrides.slice(0, POPOVER_OVERRIDES_MAX);
-      const hiddenCount = current.overrides.length - shown.length;
+    const overridesBlock = (current2) => {
+      if (current2.overrides.length === 0) return null;
+      const shown = showAllOverrides ? current2.overrides : current2.overrides.slice(0, POPOVER_OVERRIDES_MAX);
+      const hiddenCount = current2.overrides.length - shown.length;
       const more = hiddenCount > 0 ? h("button", { type: "button", class: "dc-link", onclick: () => {
         showAllOverrides = true;
         paintPanel(true);
       } }, `Show ${hiddenCount} more`) : null;
-      return h("section", { class: "dc-sys-block" }, h("h3", { class: "dc-sys-h" }, overridesHeading(current.overrides.length)), h("ul", { class: "dc-sys-list" }, ...shown.map(overrideRow)), more);
+      return h("section", { class: "dc-sys-block" }, h("h3", { class: "dc-sys-h" }, overridesHeading(current2.overrides.length)), h("ul", { class: "dc-sys-list" }, ...shown.map(overrideRow)), more);
     };
-    const mainPanel = (current) => {
-      const pop = popoverOf(current);
+    const mainPanel = (current2) => {
+      const pop = popoverOf(current2, projectName());
       const body = pop.lines.map((line) => h("p", { class: "dc-sys-line" }, line));
       for (const problem of pop.problems) body.push(h("p", { class: "dc-sys-problem" }, icon2("alert", 14), h("span", {}, problem)));
-      const overrides = overridesBlock(current);
+      const overrides = overridesBlock(current2);
       if (overrides) body.push(overrides);
       const foot = [];
       if (pop.update) foot.push(btn({ label: "Review update", variant: "default", emphasis: "primary", size: "sm", onClick: () => openUpdate() }).el);
@@ -13030,9 +14098,9 @@ ${view2.error.message}` : "";
         paintPanel(true);
       }
     };
-    const changePanel = (current) => {
+    const changePanel = (current2) => {
       const list = systems().get().systems ?? [];
-      const choices = changeOptions(current, list);
+      const choices = changeOptions(current2, list, projectContext());
       const body = [h("p", { class: "dc-sys-line" }, "Pick the design system this design should use.")];
       if (choices.length === 0) body.push(h("p", { class: "dc-muted" }, NO_OTHER_SYSTEMS));
       else {
@@ -13056,7 +14124,7 @@ ${view2.error.message}` : "";
         const toNone = changeTo === NO_SYSTEM;
         const named = choices.find((choice) => choice.id === changeTo)?.label ?? "this system";
         applyLabel = toNone ? "Remove the system" : `Use ${named}`;
-        body.push(h("p", { class: "dc-sys-preview", role: "status" }, previewLine(preview, { none: toNone, fromName: current.status.state === "linked" ? current.status.name : null })));
+        body.push(h("p", { class: "dc-sys-preview", role: "status" }, previewLine(preview, { none: toNone, fromName: current2.status.state === "linked" ? current2.status.name : null })));
       }
       const failed = failureLine(applyError, applyError === STALE_TEXT2 ? () => void refreshChange() : void 0);
       if (failed) body.push(failed);
@@ -13127,10 +14195,10 @@ ${view2.error.message}` : "";
     });
     let closeUpdate = null;
     const openUpdate = () => {
-      const current = view2;
-      if (current === null || current.status.state !== "linked" || closeUpdate) return;
-      const systemName = current.status.name;
-      const systemId = current.status.id;
+      const current2 = view2;
+      if (current2 === null || current2.status.state !== "linked" || closeUpdate) return;
+      const systemName = current2.status.name;
+      const systemId = current2.status.id;
       closePanel?.(false);
       const sheet = openSheet(options.host, { title: "Review update", variant: compact ? "full" : "side", onClose: () => {
         closeUpdate = null;
@@ -13392,11 +14460,11 @@ ${view2.error.message}` : "";
   };
   var readStoredTweaks = (value) => {
     if (typeof value !== "object" || value === null) return null;
-    const record = value;
-    const sha256 = typeof record.sha256 === "string" || record.sha256 === null ? record.sha256 : null;
-    if (!Array.isArray(record.values)) return null;
+    const record2 = value;
+    const sha256 = typeof record2.sha256 === "string" || record2.sha256 === null ? record2.sha256 : null;
+    if (!Array.isArray(record2.values)) return null;
     const values = [];
-    for (const entry of record.values) {
+    for (const entry of record2.values) {
       if (typeof entry !== "object" || entry === null) continue;
       const item = entry;
       if (typeof item.var !== "string" || typeof item.value !== "number" && typeof item.value !== "string") continue;
@@ -13991,10 +15059,10 @@ ${view2.error.message}` : "";
       return created;
     };
     const commit = async (run) => {
-      const current = controller;
-      if (!current || ctx.viewing() !== null) return;
+      const current2 = controller;
+      if (!current2 || ctx.viewing() !== null) return;
       try {
-        const response = await run(current);
+        const response = await run(current2);
         if (disposed) return;
         if (response.edit.undoable) undoSlot.edited(response.edit.id);
         notice.saved(response.edit);
@@ -14003,10 +15071,10 @@ ${view2.error.message}` : "";
       }
     };
     const unregister = ctx.drawers.register("tweaks", (sheet) => {
-      const current = ensureController();
+      const current2 = ensureController();
       const opened = mountTweaksPanel({
         sheet,
-        controller: current,
+        controller: current2,
         tweaks: knobs,
         viewing: () => ctx.viewing() !== null,
         agentWorking,
@@ -14050,14 +15118,14 @@ ${view2.error.message}` : "";
     };
     wall.el.addEventListener("keydown", onWallKey);
     const offGuard = ctx.onBeforeLeave(async () => {
-      const current = controller;
-      if (!current || leaveDecision(current.getState()) === "leave") return true;
+      const current2 = controller;
+      if (!current2 || leaveDecision(current2.getState()) === "leave") return true;
       return askToSaveTweaks({
         host: ctx.actions.host,
         save: async () => {
-          await current.save();
+          await current2.save();
         },
-        discard: () => current.discard()
+        discard: () => current2.discard()
       });
     });
     const watcher = buildActivityFor(wall);
@@ -14127,7 +15195,7 @@ ${view2.error.message}` : "";
       }
     };
   };
-  var trackPins = (channel, initial = []) => {
+  var trackPins = (channel2, initial = []) => {
     let comments = initial;
     let results = null;
     let scroll = { x: 0, y: 0 };
@@ -14146,9 +15214,9 @@ ${view2.error.message}` : "";
         emit();
         return;
       }
-      channel.send({ type: "resolve-anchors", anchors: anchorQueriesOf(comments) });
+      channel2.send({ type: "resolve-anchors", anchors: anchorQueriesOf(comments) });
     };
-    const unsubscribe = channel.subscribe((message) => {
+    const unsubscribe = channel2.subscribe((message) => {
       switch (message.type) {
         case "ready":
           ready = true;
@@ -14330,7 +15398,7 @@ ${view2.error.message}` : "";
 
   // src/guest/frame-doc.ts
   var ARTBOARD_SANDBOX = "allow-scripts";
-  var bundledBridge = () => true ? '"use strict";(()=>{var ne=/^[a-z0-9][a-z0-9-]{0,40}$/;var D=5e3,V=200,W=5e3;var _t=30*6e4;var oe=/^[A-Za-z0-9 #%.,()+\\-\'"/]{1,100}$/;var k=1048576;var B=1e4;var w=k;var Et=100*1024*1024,ut=5*1024*1024,pt=10*1024*1024,Tt=20*1024*1024;var At=10*6e4;var dt=60*6e4;var re=512,se=/^--[A-Za-z0-9_-]{1,80}$/,le=120;var St=7*864e5;var xt=20*1024*1024,gt=4*1024*1024;var ft=2*1024*1024;var Ce=/^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\\d{1,3}|logo:\\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40})$/;var F=e=>e.length<=le&&Ce.test(e);var ce=e=>{let t=0,r=0;for(let n of e)n==="\'"?t+=1:n===\'"\'&&(r+=1);return t%2===0&&r%2===0};var C=1;var Ee=["Escape"," ","+","=","-","0","1"];var j=e=>typeof e=="object"&&e!==null&&!Array.isArray(e),b=(e,t)=>typeof e=="string"&&e.length<=t,$=(e,t)=>b(e,t)&&e.length>0,I=e=>typeof e=="number"&&Number.isFinite(e)&&Math.abs(e)<=1e7;var Pe=e=>typeof e=="boolean",De=e=>e==="edit"||e==="play";var ie=(e,t,r)=>Array.isArray(e)&&e.length<=t&&e.every(r),ke=e=>j(e)&&$(e.id,100)&&b(e.selector,1e3)&&b(e.text,120)&&b(e.html,200);var Be=e=>j(e)&&typeof e.name=="string"&&se.test(e.name)&&typeof e.value=="string"&&oe.test(e.value)&&ce(e.value),we=e=>{if(!Array.isArray(e)||e.length>B)return!1;let t=0;for(let r of e){if(!Array.isArray(r)||r.length!==2)return!1;let n=r[0],s=r[1];if(typeof n!="string"||s!==null&&typeof s!="string"||(t+=n.length+(s===null?0:s.length),t>w))return!1}return!0};var He=e=>e.dc===C&&$(e.artboardId,100)&&$(e.nonce,64),Ye={"init-ack":()=>!0,"set-mode":e=>De(e.mode),"hit-test":e=>I(e.x)&&I(e.y),"resolve-anchors":e=>ie(e.anchors,500,ke),"scroll-by":e=>I(e.dx)&&I(e.dy),"scroll-to":e=>I(e.x)&&I(e.y),highlight:e=>e.selector===null||b(e.selector,1e3),"edit-probe":e=>I(e.x)&&I(e.y),"set-tokens":e=>ie(e.vars,re,Be),"storage-sync":e=>Pe(e.clear)&&we(e.changes)};var Ue=(e,t)=>{if(!j(t)||!He(t)||typeof t.type!="string"||!Object.hasOwn(e,t.type))return null;let r=e[t.type];return r!==void 0&&r(t)?t:null};var G=e=>Ue(Ye,e);var Ke=["data-testid","data-screen","data-dc-id"],ve=/^(is-|has-|js-|active|hover|focus)/,pe=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,Ve=3,h=e=>e.tagName===e.tagName.toUpperCase()?e.tagName.toLowerCase():e.tagName,Te=e=>e.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),ue=e=>e===""?null:pe.test(e)?`#${e}`:`[id="${Te(e)}"]`,We=(e,t)=>{try{return e.querySelectorAll(t)}catch{return null}},X=(e,t,r)=>{let n=We(e,t);return n!==null&&n.length===1&&n[0]===r},Fe=e=>{let t=[];for(let r=0;r<e.classList.length&&t.length<Ve;r+=1){let n=e.classList[r];n!==void 0&&pe.test(n)&&!ve.test(n)&&t.push(n)}return t},$e=e=>{let t=e.parentElement;if(!t)return null;let r=0,n=0;for(let s=0;s<t.children.length;s+=1){let c=t.children[s];!c||c.tagName!==e.tagName||(n+=1,c===e&&(r=n))}return n>1?r:null},ze=e=>{let t=h(e);if(t==="html"||t==="body")return t;let r=Fe(e).map(s=>`.${s}`).join(""),n=$e(e);return`${t}${r}${n===null?"":`:nth-of-type(${n})`}`},Q=e=>{let t=[...e];for(;t.join(" > ").length>1e3&&t.length>1;)t.shift();return t.join(" > ").slice(0,1e3)},Ae=(e,t)=>{let r=h(e);if(r==="html"||r==="body"||r==="head")return r;let n=ue(e.id);if(n&&X(t,n,e))return n;for(let E of Ke){let u=e.getAttribute(E);if(u===null||u==="")continue;let p=`[${E}="${Te(u)}"]`;if(X(t,p,e))return p}let s=[],c=e;for(let E=0;c&&E<6;E+=1){s.unshift(ze(c));let u=s.join(" > ");if(X(t,u,e))return Q(s);let p=c.parentElement;if(!p)break;let _=ue(p.id);if(_&&X(t,_,p)){let T=[_,...s];if(X(t,T.join(" > "),e))return Q(T)}c=p}return Q(s)};var je=5e3,Qe=/^[A-Za-z][A-Za-z0-9-]*$/,O=e=>e.replace(/\\s+/g," ").trim(),xe=e=>O(e.textContent??"").slice(0,120),qe=e=>e.replace(/&/g,"&amp;").replace(/"/g,"&quot;"),ge=e=>{let t=`<${h(e)}`;for(let r=0;r<e.attributes.length;r+=1){let n=e.attributes[r];n&&(t+=n.value===""?` ${n.name}`:` ${n.name}="${qe(n.value)}"`)}return t+=">",t.length<=200?t:`${t.slice(0,198)}\\u2026>`},Je=e=>{let t=/^<([A-Za-z][A-Za-z0-9:-]*)/.exec(e.trim());return t?.[1]?t[1].toLowerCase():null},de=(e,t)=>t===null||h(e).toLowerCase()===t,Se=(e,t)=>{try{return e.querySelectorAll(t)}catch{return[]}},fe=(e,t)=>{let r={found:!1,exact:!1,element:null},n=Je(t.html);if(t.selector!==""){let p=Se(e,t.selector);for(let _=0;_<p.length;_+=1){let T=p[_];if(T&&de(T,n))return{found:!0,exact:!0,element:T}}}let s=O(t.text);if(s.length<12)return r;let c=Se(e,n!==null&&Qe.test(n)?n:"*"),E=null,u=1/0;for(let p=0;p<c.length&&p<je;p+=1){let _=c[p];if(!_||!de(_,n))continue;let T=O(_.textContent??"");T.startsWith(s)&&T.length<=u&&(E=_,u=T.length)}return E?{found:!0,exact:!1,element:E}:r};var et=new Set(["svg","math","template"]),tt=e=>{for(let t=e;t;t=t.parentElement)if(et.has(h(t).toLowerCase()))return!0;return!1},Me=e=>e.getAttribute("data-dc-overlay")!==null,me=(e,t,r=W)=>{if(Me(e))return null;let n=h(e),s=n.toLowerCase();if(s===""||s.length>64)return null;let c=e.getAttribute("id");if(c!==null&&(c===""||c.length>V))return null;let E=O(e.textContent??""),u=E.length>D,p=e.children.length===0,_={tag:s,id:c,leaf:p,text:u?E.slice(0,D+1):E,truncated:u,sameIndex:0,sameCount:0},T=d=>d.children.length===0&&d.getAttribute("id")===c&&!Me(d)&&!tt(d)&&O(d.textContent??"")===E;if(!p||!T(e))return _;let f=t.getElementsByTagName(n);if(f.length>r)return _;let R=-1,m=0;for(let d=0;d<f.length;d+=1){let g=f[d];!g||!T(g)||(g===e&&(R=m),m+=1)}return R===-1?_:{..._,sameIndex:R,sameCount:m}};var y=(e,t)=>e.length+(t===null?0:t.length),Re=e=>{if(typeof e!="object"||e===null)return;let t=e;if(typeof t.persist!="boolean"||!Array.isArray(t.items))return;let r=new Set,n=[],s=0;for(let c of t.items){if(!Array.isArray(c)||c.length!==2)return;let E=c[0],u=c[1];if(typeof E!="string"||typeof u!="string"||(s+=y(E,u),s>k))return;r.has(E)||(r.add(E),n.push([E,u]))}return{persist:t.persist,items:n}},nt=(e,t,r={changes:B,chars:w})=>{let n=[],s=[],c=0,E=()=>{n.push({clear:e&&n.length===0,changes:s}),s=[],c=0};for(let u of t){let p=y(u[0],u[1]);s.length>0&&(s.length>=r.changes||c+p>r.chars)&&E(),s.push(u),c+=p}return(s.length>0||e&&n.length===0)&&E(),n},K=e=>`${e}`,v=(e,t,r)=>{if(t.length<r)throw new TypeError(`Failed to execute \'${e}\' on \'Storage\': ${r} argument${r===1?"":"s"} required, but only ${t.length} present.`)},he=(e,t,r)=>{let n=new Map,s=0;for(let[i,l]of e)n.has(i)||(n.set(i,l),s+=y(i,l));let c=null,E=(i,l)=>{let S=n.get(i);s+=y(i,l)-(S===void 0?0:y(i,S)),S===void 0&&(c=null),n.set(i,l)},u=i=>{let l=n.get(i);l!==void 0&&(s-=y(i,l),n.delete(i),c=null)},p=(...i)=>(v("getItem",i,1),n.get(K(i[0]))??null),_=(...i)=>{v("setItem",i,2);let l=K(i[0]),S=K(i[1]),M=n.get(l);if(M===S)return;if(s+y(l,S)-(M===void 0?0:y(l,M))>k)throw t(l);E(l,S),r?.set(l,S)},T=(...i)=>{v("removeItem",i,1);let l=K(i[0]);n.has(l)&&(u(l),r?.set(l,null))},f=()=>{n.size!==0&&(n.clear(),s=0,c=null,r?.clear())},R=(...i)=>{v("key",i,1);let l=Number(i[0])>>>0;return c??(c=[...n.keys()]),c[l]??null},m=Object.create(Object.prototype,{getItem:{value:p,enumerable:!0,configurable:!0,writable:!0},setItem:{value:_,enumerable:!0,configurable:!0,writable:!0},removeItem:{value:T,enumerable:!0,configurable:!0,writable:!0},clear:{value:f,enumerable:!0,configurable:!0,writable:!0},key:{value:R,enumerable:!0,configurable:!0,writable:!0},length:{get:()=>n.size,enumerable:!0,configurable:!0},[Symbol.toStringTag]:{value:"Storage",configurable:!0}}),d=Object.create(m),g=i=>typeof i=="string"&&n.has(i)&&!(i in d);return{storage:new Proxy(d,{get:(i,l,S)=>g(l)?n.get(l):Reflect.get(i,l,S),set:(i,l,S)=>typeof l!="string"?Reflect.set(i,l,S):(_(l,S),!0),has:(i,l)=>typeof l=="string"&&n.has(l)||Reflect.has(i,l),deleteProperty:(i,l)=>g(l)?(T(l),!0):Reflect.deleteProperty(i,l),ownKeys:i=>[...[...n.keys()].filter(l=>!(l in i)),...Reflect.ownKeys(i)],getOwnPropertyDescriptor:(i,l)=>g(l)?{value:n.get(l),writable:!0,enumerable:!0,configurable:!0}:Reflect.getOwnPropertyDescriptor(i,l),defineProperty:(i,l,S)=>typeof l!="string"?Reflect.defineProperty(i,l,S):"get"in S||"set"in S?!1:(_(l,S.value),!0),preventExtensions:()=>!1}),apply:(i,l)=>{i&&(n.clear(),s=0,c=null);for(let[S,M]of l)M===null?u(S):E(S,M)}}},q=(e,t,r)=>{let n=e.DOMException??globalThis.DOMException,s=e.queueMicrotask?.bind(e)??(_=>void Promise.resolve().then(_)),c=_=>new n(`Failed to execute \'setItem\' on \'Storage\': Setting the value of \'${_}\' exceeded the quota.`,"QuotaExceededError"),E=null;if(t?.persist){let _=new Map,T=!1,f=!1,R=()=>{f=!1;let d=[..._],g=T;_=new Map,T=!1;for(let L of nt(g,d))r(L)},m=()=>{f||(f=!0,s(R))};E={set:(d,g)=>{_.delete(d),_.set(d,g),m()},clear:()=>{_.clear(),T=!0,m()}}}let u=he(t?.items??[],c,E),p=he([],c,null);for(let[_,T]of[["localStorage",u],["sessionStorage",p]])try{Object.defineProperty(e,_,{value:T.storage,configurable:!0,enumerable:!0,writable:!1})}catch{}return{sync:(_,T)=>u.apply(_,T)}};var ot=(e,t,r)=>{if(e===void 0)return;let n=G({dc:C,type:"set-tokens",artboardId:t,nonce:r,vars:e});return n?.type==="set-tokens"?n.vars:void 0},Ie=e=>{if(typeof e!="object"||e===null)return null;let t=e,{artboardId:r,nonce:n,file:s,mode:c,scroll:E}=t;if(typeof r!="string"||r.length===0||r.length>100||typeof n!="string"||n.length===0||n.length>64||typeof s!="string"||c!=="edit"&&c!=="play"||typeof E!="object"||E===null)return null;let{x:u,y:p}=E;if(typeof u!="number"||typeof p!="number"||!Number.isFinite(u)||!Number.isFinite(p))return null;let _=ot(t.tokens,r,n),T=Re(t.storage);return{artboardId:r,file:s,mode:c,scroll:{x:u,y:p},nonce:n,..._?{tokens:_}:{},...T?{storage:T}:{}}};var ye="https://design.invalid",J=e=>{try{return decodeURIComponent(e)}catch{return e}},Oe=(e,t)=>{let r=e.trim();if(r==="")return{kind:"blocked",reason:"empty link"};if(r.startsWith("#"))return{kind:"fragment",id:J(r.slice(1))};let n;try{n=new URL(r,`${ye}/${t}`)}catch{return{kind:"blocked",reason:"malformed link"}}if(n.origin===ye){let s=J(n.pathname.replace(/^\\/+/,""));return s===t||s===""?n.hash?{kind:"fragment",id:J(n.hash.slice(1))}:{kind:"blocked",reason:"same page"}:/\\.html?$/i.test(s)?s.length>2e3||n.hash.length>2e3?{kind:"blocked",reason:"link too long"}:{kind:"navigate",href:s,hash:n.hash}:{kind:"blocked",reason:"not a page of this design"}}return(n.protocol==="https:"||n.protocol==="http:")&&n.href.length<=2e3?{kind:"external",url:n.href}:{kind:"blocked",reason:`${n.protocol} links do not open from a design`}},be=e=>ne.test(e)?{kind:"navigate",href:`screens/${e}.html`,hash:""}:{kind:"blocked",reason:"unknown screen id"};var st=16,lt=5,ct=300,it=e=>e instanceof Element?!!e.closest(\'input, textarea, select, [contenteditable=""], [contenteditable="true"]\'):!1,at=e=>{let t=e.mode,r=!1,n=window.parent,s=n!==window,c=o=>{n.postMessage({...o,dc:C,artboardId:e.artboardId,nonce:e.nonce},"*")},E=q(window,s?e.storage:void 0,o=>c({type:"storage-batch",...o})),u=[],p=o=>{let a=document.documentElement.style,A=new Set(o.map(x=>x.name));for(let x of u)A.has(x)||a.removeProperty(x);for(let x of o)a.setProperty(x.name,x.value);u=[...A]};if(e.tokens&&p(e.tokens),!s)return;let _=()=>{let o=document.documentElement,a=document.body;return{docWidth:Math.max(o.scrollWidth,a?a.scrollWidth:0),docHeight:Math.max(o.scrollHeight,a?a.scrollHeight:0)}},T=o=>{let a=o.getBoundingClientRect();return{x:a.left+window.scrollX,y:a.top+window.scrollY,w:Math.max(0,a.width),h:Math.max(0,a.height)}},f=(o,a)=>{let A=document.elementFromPoint(o,a);return A&&A!==document.documentElement&&A!==document.body&&!A.hasAttribute("data-dc-overlay")?A:null},R=o=>{let a=o.closest("[data-dc-entry]")?.getAttribute("data-dc-entry")??null;return a!==null&&F(a)?a:null},m=o=>({entry:R(o),selector:Ae(o,document),text:xe(o),html:ge(o),rect:T(o),tag:h(o).slice(0,64)||"element"}),d=null,g=o=>{let a=null;if(o)try{a=document.querySelector(o)}catch{a=null}if(!a){d?.remove(),d=null;return}d||(d=document.createElement("div"),d.setAttribute("data-dc-overlay",""),d.setAttribute("aria-hidden","true"));let A=T(a);d.setAttribute("style",`position:absolute;left:${A.x}px;top:${A.y}px;width:${A.w}px;height:${A.h}px;outline:2px solid Highlight;outline-offset:1px;pointer-events:none;z-index:2147483647;margin:0;padding:0;border:0;background:transparent;`),d.isConnected||document.documentElement.append(d)},L=o=>{switch(o.type){case"init-ack":r=!0;return;case"set-mode":t=o.mode;return;case"hit-test":{let a=f(o.x,o.y);c({type:"hit",x:o.x,y:o.y,element:a?m(a):null});return}case"edit-probe":{let a=f(o.x,o.y),A=a?me(a,document):null,x=a&&A?{...A,dir:getComputedStyle(a).direction==="rtl"?"rtl":"ltr",rect:T(a)}:null;c({type:"edit-probe-result",x:o.x,y:o.y,probe:x});return}case"set-tokens":p(o.vars);return;case"storage-sync":E.sync(o.clear,o.changes);return;case"resolve-anchors":{let a=o.anchors.map(A=>{let x=fe(document,A);return{id:A.id,found:x.found,exact:x.exact,rect:x.element?T(x.element):null}});c({type:"anchors",results:a});return}case"scroll-by":window.scrollBy(o.dx,o.dy);return;case"scroll-to":window.scrollTo(o.x,o.y);return;case"highlight":g(o.selector);return}};window.addEventListener("message",o=>{if(o.source!==n)return;let a=G(o.data);!a||a.artboardId!==e.artboardId||a.nonce!==e.nonce||L(a)});let i=()=>c({type:"ready",..._(),title:document.title.slice(0,200)}),l=null,S="",M=()=>{l===null&&(l=setTimeout(()=>{l=null;let o=_(),a=`${o.docWidth}x${o.docHeight}`;a!==S&&(S=a,c({type:"size",...o}))},100))},P=!1;window.addEventListener("scroll",()=>{P||(P=!0,requestAnimationFrame(()=>{P=!1,c({type:"scroll",x:window.scrollX,y:window.scrollY})}))},{passive:!0});let ee=()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),i();let o=0,a=setInterval(()=>{o+=1,r||o>lt?clearInterval(a):i()},ct);if(typeof ResizeObserver=="function"){let A=new ResizeObserver(M);A.observe(document.documentElement),document.body&&A.observe(document.body)}typeof MutationObserver=="function"&&new MutationObserver(M).observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,characterData:!0}),M()};document.readyState==="loading"?document.addEventListener("DOMContentLoaded",ee,{once:!0}):ee(),window.addEventListener("load",()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),M()});let te=o=>{switch(o.kind){case"fragment":{if(o.id===""){window.scrollTo(0,0);return}(document.getElementById(o.id)??document.getElementsByName(o.id)[0]??null)?.scrollIntoView();return}case"navigate":c({type:"navigate",href:o.href,hash:o.hash});return;case"external":c({type:"open-external",url:o.url});return;case"blocked":return}};document.addEventListener("click",o=>{let A=(o.target instanceof Element?o.target:null)?.closest("a[href], area[href], [data-dc-goto]")??null;if(!A)return;o.preventDefault();let x=A.getAttribute("data-dc-goto");if(x!==null){te(be(x));return}te(Oe(A.getAttribute("href")??"",e.file))},!0),document.addEventListener("submit",o=>o.preventDefault(),!0),window.addEventListener("wheel",o=>{let a=o.ctrlKey||o.metaKey;if(!a&&t!=="edit")return;o.preventDefault();let A=o.deltaMode===1?st:o.deltaMode===2?window.innerHeight:1;c({type:"wheel",deltaX:o.deltaX*A,deltaY:o.deltaY*A,x:o.clientX,y:o.clientY,ctrl:a})},{passive:!1,capture:!0}),window.addEventListener("keydown",o=>{it(o.target)||Ee.includes(o.key)&&c({type:"key",key:o.key,ctrl:o.ctrlKey,meta:o.metaKey,shift:o.shiftKey})},!0)},Ne=Ie(window.__DC);Ne?at(Ne):q(window,void 0,()=>{});})();\n' : "";
+  var bundledBridge = () => true ? '"use strict";(()=>{var ne=/^[a-z0-9][a-z0-9-]{0,40}$/;var D=5e3,V=200,F=5e3;var at=30*6e4;var oe=/^[A-Za-z0-9 #%.,()+\\-\'"/]{1,100}$/;var k=1048576;var B=1e4;var H=k;var Et=100*1024*1024,ut=5*1024*1024,pt=10*1024*1024,Tt=20*1024*1024;var At=10*6e4;var St=60*6e4;var re=512,se=/^--[A-Za-z0-9_-]{1,80}$/,ce=120;var dt=7*864e5;var xt=20*1024*1024,Mt=4*1024*1024;var gt=2*1024*1024;var ft=50*1024*1024;var be=/^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\\d{1,3}|logo:\\d{1,3}|icon:\\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40}|pair:\\d{1,3})$/;var W=e=>e.length<=ce&&be.test(e);var le=e=>{let t=0,r=0;for(let n of e)n==="\'"?t+=1:n===\'"\'&&(r+=1);return t%2===0&&r%2===0};var b=1;var Ee=["Escape"," ","+","=","-","0","1"];var Q=e=>typeof e=="object"&&e!==null&&!Array.isArray(e),N=(e,t)=>typeof e=="string"&&e.length<=t,$=(e,t)=>N(e,t)&&e.length>0,I=e=>typeof e=="number"&&Number.isFinite(e)&&Math.abs(e)<=1e7;var Pe=e=>typeof e=="boolean",De=e=>e==="edit"||e==="play";var ie=(e,t,r)=>Array.isArray(e)&&e.length<=t&&e.every(r),ke=e=>Q(e)&&$(e.id,100)&&N(e.selector,1e3)&&N(e.text,120)&&N(e.html,200);var Be=e=>Q(e)&&typeof e.name=="string"&&se.test(e.name)&&typeof e.value=="string"&&oe.test(e.value)&&le(e.value),He=e=>{if(!Array.isArray(e)||e.length>B)return!1;let t=0;for(let r of e){if(!Array.isArray(r)||r.length!==2)return!1;let n=r[0],s=r[1];if(typeof n!="string"||s!==null&&typeof s!="string"||(t+=n.length+(s===null?0:s.length),t>H))return!1}return!0};var we=e=>e.dc===b&&$(e.artboardId,100)&&$(e.nonce,64),Ye={"init-ack":()=>!0,"set-mode":e=>De(e.mode),"hit-test":e=>I(e.x)&&I(e.y),"resolve-anchors":e=>ie(e.anchors,500,ke),"scroll-by":e=>I(e.dx)&&I(e.dy),"scroll-to":e=>I(e.x)&&I(e.y),highlight:e=>e.selector===null||N(e.selector,1e3),"edit-probe":e=>I(e.x)&&I(e.y),"set-tokens":e=>ie(e.vars,re,Be),"storage-sync":e=>Pe(e.clear)&&He(e.changes)};var Ue=(e,t)=>{if(!Q(t)||!we(t)||typeof t.type!="string"||!Object.hasOwn(e,t.type))return null;let r=e[t.type];return r!==void 0&&r(t)?t:null};var G=e=>Ue(Ye,e);var Ke=["data-testid","data-screen","data-dc-id"],ve=/^(is-|has-|js-|active|hover|focus)/,pe=/^-?[A-Za-z_][A-Za-z0-9_-]*$/,Ve=3,R=e=>e.tagName===e.tagName.toUpperCase()?e.tagName.toLowerCase():e.tagName,Te=e=>e.replace(/\\\\/g,"\\\\\\\\").replace(/"/g,\'\\\\"\').replace(/\\n/g,"\\\\a ").replace(/\\r/g,"\\\\d ").replace(/\\f/g,"\\\\c "),ue=e=>e===""?null:pe.test(e)?`#${e}`:`[id="${Te(e)}"]`,Fe=(e,t)=>{try{return e.querySelectorAll(t)}catch{return null}},X=(e,t,r)=>{let n=Fe(e,t);return n!==null&&n.length===1&&n[0]===r},We=e=>{let t=[];for(let r=0;r<e.classList.length&&t.length<Ve;r+=1){let n=e.classList[r];n!==void 0&&pe.test(n)&&!ve.test(n)&&t.push(n)}return t},$e=e=>{let t=e.parentElement;if(!t)return null;let r=0,n=0;for(let s=0;s<t.children.length;s+=1){let l=t.children[s];!l||l.tagName!==e.tagName||(n+=1,l===e&&(r=n))}return n>1?r:null},ze=e=>{let t=R(e);if(t==="html"||t==="body")return t;let r=We(e).map(s=>`.${s}`).join(""),n=$e(e);return`${t}${r}${n===null?"":`:nth-of-type(${n})`}`},j=e=>{let t=[...e];for(;t.join(" > ").length>1e3&&t.length>1;)t.shift();return t.join(" > ").slice(0,1e3)},Ae=(e,t)=>{let r=R(e);if(r==="html"||r==="body"||r==="head")return r;let n=ue(e.id);if(n&&X(t,n,e))return n;for(let E of Ke){let u=e.getAttribute(E);if(u===null||u==="")continue;let p=`[${E}="${Te(u)}"]`;if(X(t,p,e))return p}let s=[],l=e;for(let E=0;l&&E<6;E+=1){s.unshift(ze(l));let u=s.join(" > ");if(X(t,u,e))return j(s);let p=l.parentElement;if(!p)break;let a=ue(p.id);if(a&&X(t,a,p)){let T=[a,...s];if(X(t,T.join(" > "),e))return j(T)}l=p}return j(s)};var Qe=5e3,je=/^[A-Za-z][A-Za-z0-9-]*$/,y=e=>e.replace(/\\s+/g," ").trim(),xe=e=>y(e.textContent??"").slice(0,120),qe=e=>e.replace(/&/g,"&amp;").replace(/"/g,"&quot;"),Me=e=>{let t=`<${R(e)}`;for(let r=0;r<e.attributes.length;r+=1){let n=e.attributes[r];n&&(t+=n.value===""?` ${n.name}`:` ${n.name}="${qe(n.value)}"`)}return t+=">",t.length<=200?t:`${t.slice(0,198)}\\u2026>`},Je=e=>{let t=/^<([A-Za-z][A-Za-z0-9:-]*)/.exec(e.trim());return t?.[1]?t[1].toLowerCase():null},Se=(e,t)=>t===null||R(e).toLowerCase()===t,de=(e,t)=>{try{return e.querySelectorAll(t)}catch{return[]}},ge=(e,t)=>{let r={found:!1,exact:!1,element:null},n=Je(t.html);if(t.selector!==""){let p=de(e,t.selector);for(let a=0;a<p.length;a+=1){let T=p[a];if(T&&Se(T,n))return{found:!0,exact:!0,element:T}}}let s=y(t.text);if(s.length<12)return r;let l=de(e,n!==null&&je.test(n)?n:"*"),E=null,u=1/0;for(let p=0;p<l.length&&p<Qe;p+=1){let a=l[p];if(!a||!Se(a,n))continue;let T=y(a.textContent??"");T.startsWith(s)&&T.length<=u&&(E=a,u=T.length)}return E?{found:!0,exact:!1,element:E}:r};var et=new Set(["svg","math","template"]),tt=e=>{for(let t=e;t;t=t.parentElement)if(et.has(R(t).toLowerCase()))return!0;return!1},fe=e=>e.getAttribute("data-dc-overlay")!==null,me=(e,t,r=F)=>{if(fe(e))return null;let n=R(e),s=n.toLowerCase();if(s===""||s.length>64)return null;let l=e.getAttribute("id");if(l!==null&&(l===""||l.length>V))return null;let E=y(e.textContent??""),u=E.length>D,p=e.children.length===0,a={tag:s,id:l,leaf:p,text:u?E.slice(0,D+1):E,truncated:u,sameIndex:0,sameCount:0},T=S=>S.children.length===0&&S.getAttribute("id")===l&&!fe(S)&&!tt(S)&&y(S.textContent??"")===E;if(!p||!T(e))return a;let g=t.getElementsByTagName(n);if(g.length>r)return a;let h=-1,m=0;for(let S=0;S<g.length;S+=1){let M=g[S];!M||!T(M)||(M===e&&(h=m),m+=1)}return h===-1?a:{...a,sameIndex:h,sameCount:m}};var O=(e,t)=>e.length+(t===null?0:t.length),he=e=>{if(typeof e!="object"||e===null)return;let t=e;if(typeof t.persist!="boolean"||!Array.isArray(t.items))return;let r=new Set,n=[],s=0;for(let l of t.items){if(!Array.isArray(l)||l.length!==2)return;let E=l[0],u=l[1];if(typeof E!="string"||typeof u!="string"||(s+=O(E,u),s>k))return;r.has(E)||(r.add(E),n.push([E,u]))}return{persist:t.persist,items:n}},nt=(e,t,r={changes:B,chars:H})=>{let n=[],s=[],l=0,E=()=>{n.push({clear:e&&n.length===0,changes:s}),s=[],l=0};for(let u of t){let p=O(u[0],u[1]);s.length>0&&(s.length>=r.changes||l+p>r.chars)&&E(),s.push(u),l+=p}return(s.length>0||e&&n.length===0)&&E(),n},K=e=>`${e}`,v=(e,t,r)=>{if(t.length<r)throw new TypeError(`Failed to execute \'${e}\' on \'Storage\': ${r} argument${r===1?"":"s"} required, but only ${t.length} present.`)},Re=(e,t,r)=>{let n=new Map,s=0;for(let[i,c]of e)n.has(i)||(n.set(i,c),s+=O(i,c));let l=null,E=(i,c)=>{let d=n.get(i);s+=O(i,c)-(d===void 0?0:O(i,d)),d===void 0&&(l=null),n.set(i,c)},u=i=>{let c=n.get(i);c!==void 0&&(s-=O(i,c),n.delete(i),l=null)},p=(...i)=>(v("getItem",i,1),n.get(K(i[0]))??null),a=(...i)=>{v("setItem",i,2);let c=K(i[0]),d=K(i[1]),f=n.get(c);if(f===d)return;if(s+O(c,d)-(f===void 0?0:O(c,f))>k)throw t(c);E(c,d),r?.set(c,d)},T=(...i)=>{v("removeItem",i,1);let c=K(i[0]);n.has(c)&&(u(c),r?.set(c,null))},g=()=>{n.size!==0&&(n.clear(),s=0,l=null,r?.clear())},h=(...i)=>{v("key",i,1);let c=Number(i[0])>>>0;return l??(l=[...n.keys()]),l[c]??null},m=Object.create(Object.prototype,{getItem:{value:p,enumerable:!0,configurable:!0,writable:!0},setItem:{value:a,enumerable:!0,configurable:!0,writable:!0},removeItem:{value:T,enumerable:!0,configurable:!0,writable:!0},clear:{value:g,enumerable:!0,configurable:!0,writable:!0},key:{value:h,enumerable:!0,configurable:!0,writable:!0},length:{get:()=>n.size,enumerable:!0,configurable:!0},[Symbol.toStringTag]:{value:"Storage",configurable:!0}}),S=Object.create(m),M=i=>typeof i=="string"&&n.has(i)&&!(i in S);return{storage:new Proxy(S,{get:(i,c,d)=>M(c)?n.get(c):Reflect.get(i,c,d),set:(i,c,d)=>typeof c!="string"?Reflect.set(i,c,d):(a(c,d),!0),has:(i,c)=>typeof c=="string"&&n.has(c)||Reflect.has(i,c),deleteProperty:(i,c)=>M(c)?(T(c),!0):Reflect.deleteProperty(i,c),ownKeys:i=>[...[...n.keys()].filter(c=>!(c in i)),...Reflect.ownKeys(i)],getOwnPropertyDescriptor:(i,c)=>M(c)?{value:n.get(c),writable:!0,enumerable:!0,configurable:!0}:Reflect.getOwnPropertyDescriptor(i,c),defineProperty:(i,c,d)=>typeof c!="string"?Reflect.defineProperty(i,c,d):"get"in d||"set"in d?!1:(a(c,d.value),!0),preventExtensions:()=>!1}),apply:(i,c)=>{i&&(n.clear(),s=0,l=null);for(let[d,f]of c)f===null?u(d):E(d,f)}}},q=(e,t,r)=>{let n=e.DOMException??globalThis.DOMException,s=e.queueMicrotask?.bind(e)??(a=>void Promise.resolve().then(a)),l=a=>new n(`Failed to execute \'setItem\' on \'Storage\': Setting the value of \'${a}\' exceeded the quota.`,"QuotaExceededError"),E=null;if(t?.persist){let a=new Map,T=!1,g=!1,h=()=>{g=!1;let S=[...a],M=T;a=new Map,T=!1;for(let L of nt(M,S))r(L)},m=()=>{g||(g=!0,s(h))};E={set:(S,M)=>{a.delete(S),a.set(S,M),m()},clear:()=>{a.clear(),T=!0,m()}}}let u=Re(t?.items??[],l,E),p=Re([],l,null);for(let[a,T]of[["localStorage",u],["sessionStorage",p]])try{Object.defineProperty(e,a,{value:T.storage,configurable:!0,enumerable:!0,writable:!1})}catch{}return{sync:(a,T)=>u.apply(a,T)}};var ot=(e,t,r)=>{if(e===void 0)return;let n=G({dc:b,type:"set-tokens",artboardId:t,nonce:r,vars:e});return n?.type==="set-tokens"?n.vars:void 0},Ie=e=>{if(typeof e!="object"||e===null)return null;let t=e,{artboardId:r,nonce:n,file:s,mode:l,scroll:E}=t;if(typeof r!="string"||r.length===0||r.length>100||typeof n!="string"||n.length===0||n.length>64||typeof s!="string"||l!=="edit"&&l!=="play"||typeof E!="object"||E===null)return null;let{x:u,y:p}=E;if(typeof u!="number"||typeof p!="number"||!Number.isFinite(u)||!Number.isFinite(p))return null;let a=ot(t.tokens,r,n),T=he(t.storage);return{artboardId:r,file:s,mode:l,scroll:{x:u,y:p},nonce:n,...a?{tokens:a}:{},...T?{storage:T}:{}}};var Oe="https://design.invalid",J=e=>{try{return decodeURIComponent(e)}catch{return e}},ye=(e,t)=>{let r=e.trim();if(r==="")return{kind:"blocked",reason:"empty link"};if(r.startsWith("#"))return{kind:"fragment",id:J(r.slice(1))};let n;try{n=new URL(r,`${Oe}/${t}`)}catch{return{kind:"blocked",reason:"malformed link"}}if(n.origin===Oe){let s=J(n.pathname.replace(/^\\/+/,""));return s===t||s===""?n.hash?{kind:"fragment",id:J(n.hash.slice(1))}:{kind:"blocked",reason:"same page"}:/\\.html?$/i.test(s)?s.length>2e3||n.hash.length>2e3?{kind:"blocked",reason:"link too long"}:{kind:"navigate",href:s,hash:n.hash}:{kind:"blocked",reason:"not a page of this design"}}return(n.protocol==="https:"||n.protocol==="http:")&&n.href.length<=2e3?{kind:"external",url:n.href}:{kind:"blocked",reason:`${n.protocol} links do not open from a design`}},Ne=e=>ne.test(e)?{kind:"navigate",href:`screens/${e}.html`,hash:""}:{kind:"blocked",reason:"unknown screen id"};var st=16,ct=5,lt=300,it=e=>e instanceof Element?!!e.closest(\'input, textarea, select, [contenteditable=""], [contenteditable="true"]\'):!1,_t=e=>{let t=e.mode,r=!1,n=window.parent,s=n!==window,l=o=>{n.postMessage({...o,dc:b,artboardId:e.artboardId,nonce:e.nonce},"*")},E=q(window,s?e.storage:void 0,o=>l({type:"storage-batch",...o})),u=[],p=o=>{let _=document.documentElement.style,A=new Set(o.map(x=>x.name));for(let x of u)A.has(x)||_.removeProperty(x);for(let x of o)_.setProperty(x.name,x.value);u=[...A]};if(e.tokens&&p(e.tokens),!s)return;let a=()=>{let o=document.documentElement,_=document.body;return{docWidth:Math.max(o.scrollWidth,_?_.scrollWidth:0),docHeight:Math.max(o.scrollHeight,_?_.scrollHeight:0)}},T=o=>{let _=o.getBoundingClientRect();return{x:_.left+window.scrollX,y:_.top+window.scrollY,w:Math.max(0,_.width),h:Math.max(0,_.height)}},g=(o,_)=>{let A=document.elementFromPoint(o,_);return A&&A!==document.documentElement&&A!==document.body&&!A.hasAttribute("data-dc-overlay")?A:null},h=o=>{let _=o.closest("[data-dc-entry]")?.getAttribute("data-dc-entry")??null;return _!==null&&W(_)?_:null},m=o=>({entry:h(o),selector:Ae(o,document),text:xe(o),html:Me(o),rect:T(o),tag:R(o).slice(0,64)||"element"}),S=null,M=o=>{let _=null;if(o)try{_=document.querySelector(o)}catch{_=null}if(!_){S?.remove(),S=null;return}S||(S=document.createElement("div"),S.setAttribute("data-dc-overlay",""),S.setAttribute("aria-hidden","true"));let A=T(_);S.setAttribute("style",`position:absolute;left:${A.x}px;top:${A.y}px;width:${A.w}px;height:${A.h}px;outline:2px solid Highlight;outline-offset:1px;pointer-events:none;z-index:2147483647;margin:0;padding:0;border:0;background:transparent;`),S.isConnected||document.documentElement.append(S)},L=o=>{switch(o.type){case"init-ack":r=!0;return;case"set-mode":t=o.mode;return;case"hit-test":{let _=g(o.x,o.y);l({type:"hit",x:o.x,y:o.y,element:_?m(_):null});return}case"edit-probe":{let _=g(o.x,o.y),A=_?me(_,document):null,x=_&&A?{...A,dir:getComputedStyle(_).direction==="rtl"?"rtl":"ltr",rect:T(_)}:null;l({type:"edit-probe-result",x:o.x,y:o.y,probe:x});return}case"set-tokens":p(o.vars);return;case"storage-sync":E.sync(o.clear,o.changes);return;case"resolve-anchors":{let _=o.anchors.map(A=>{let x=ge(document,A);return{id:A.id,found:x.found,exact:x.exact,rect:x.element?T(x.element):null}});l({type:"anchors",results:_});return}case"scroll-by":window.scrollBy(o.dx,o.dy);return;case"scroll-to":window.scrollTo(o.x,o.y);return;case"highlight":M(o.selector);return}};window.addEventListener("message",o=>{if(o.source!==n)return;let _=G(o.data);!_||_.artboardId!==e.artboardId||_.nonce!==e.nonce||L(_)});let i=()=>l({type:"ready",...a(),title:document.title.slice(0,200)}),c=null,d="",f=()=>{c===null&&(c=setTimeout(()=>{c=null;let o=a(),_=`${o.docWidth}x${o.docHeight}`;_!==d&&(d=_,l({type:"size",...o}))},100))},P=!1;window.addEventListener("scroll",()=>{P||(P=!0,requestAnimationFrame(()=>{P=!1,l({type:"scroll",x:window.scrollX,y:window.scrollY})}))},{passive:!0});let ee=()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),i();let o=0,_=setInterval(()=>{o+=1,r||o>ct?clearInterval(_):i()},lt);if(typeof ResizeObserver=="function"){let A=new ResizeObserver(f);A.observe(document.documentElement),document.body&&A.observe(document.body)}typeof MutationObserver=="function"&&new MutationObserver(f).observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,characterData:!0}),f()};document.readyState==="loading"?document.addEventListener("DOMContentLoaded",ee,{once:!0}):ee(),window.addEventListener("load",()=>{(e.scroll.x!==0||e.scroll.y!==0)&&window.scrollTo(e.scroll.x,e.scroll.y),f()});let te=o=>{switch(o.kind){case"fragment":{if(o.id===""){window.scrollTo(0,0);return}(document.getElementById(o.id)??document.getElementsByName(o.id)[0]??null)?.scrollIntoView();return}case"navigate":l({type:"navigate",href:o.href,hash:o.hash});return;case"external":l({type:"open-external",url:o.url});return;case"blocked":return}};document.addEventListener("click",o=>{let A=(o.target instanceof Element?o.target:null)?.closest("a[href], area[href], [data-dc-goto]")??null;if(!A)return;o.preventDefault();let x=A.getAttribute("data-dc-goto");if(x!==null){te(Ne(x));return}te(ye(A.getAttribute("href")??"",e.file))},!0),document.addEventListener("submit",o=>o.preventDefault(),!0),window.addEventListener("wheel",o=>{let _=o.ctrlKey||o.metaKey;if(!_&&t!=="edit")return;o.preventDefault();let A=o.deltaMode===1?st:o.deltaMode===2?window.innerHeight:1;l({type:"wheel",deltaX:o.deltaX*A,deltaY:o.deltaY*A,x:o.clientX,y:o.clientY,ctrl:_})},{passive:!1,capture:!0}),window.addEventListener("keydown",o=>{it(o.target)||Ee.includes(o.key)&&l({type:"key",key:o.key,ctrl:o.ctrlKey,meta:o.metaKey,shift:o.shiftKey})},!0)},Ce=Ie(window.__DC);Ce?_t(Ce):q(window,void 0,()=>{});})();\n' : "";
   var newNonce = () => {
     const bytes = new Uint8Array(12);
     globalThis.crypto.getRandomValues(bytes);
@@ -14405,7 +15473,7 @@ ${bridge}
     let meta = null;
     let error = null;
     let doc = null;
-    let current = null;
+    let current2 = null;
     let token = 0;
     const listeners = /* @__PURE__ */ new Set();
     const setState = (next) => {
@@ -14413,17 +15481,17 @@ ${bridge}
       options.onState(next);
     };
     const drop = () => {
-      current?.dispose();
-      current = null;
+      current2?.dispose();
+      current2 = null;
       doc?.revoke();
       doc = null;
       iframe.removeAttribute("src");
     };
-    const channel = {
+    const channel2 = {
       get identity() {
-        return current?.identity ?? { artboardId: options.artboardId, nonce: "" };
+        return current2?.identity ?? { artboardId: options.artboardId, nonce: "" };
       },
-      send: (body) => current?.send(body),
+      send: (body) => current2?.send(body),
       subscribe: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -14435,7 +15503,7 @@ ${bridge}
       state: () => state,
       meta: () => meta,
       error: () => error,
-      channel,
+      channel: channel2,
       load: async (screenId, version, file) => {
         token += 1;
         const mine = token;
@@ -14459,7 +15527,7 @@ ${bridge}
             if (message.type === "ready" && state === "loading") setState("ready");
             for (const listener of [...listeners]) listener(message);
           });
-          current = next;
+          current2 = next;
           iframe.src = doc.url;
         } catch (failure) {
           if (mine !== token) return;
@@ -14468,7 +15536,7 @@ ${bridge}
           setState(isServiceError(failure, "no-html") || isServiceError(failure, "not-found") ? "missing" : "error");
         }
       },
-      post: (message) => current?.send(message),
+      post: (message) => current2?.send(message),
       unload: () => {
         token += 1;
         drop();
@@ -14541,40 +15609,40 @@ ${bridge}
         board.label.hidden = true;
         return;
       }
-      const current = camera.get();
+      const current2 = camera.get();
       const { rect } = board.art;
-      const x = current.x + rect.x * current.scale;
-      const y = current.y + rect.y * current.scale;
-      const width = rect.w * current.scale;
+      const x = current2.x + rect.x * current2.scale;
+      const y = current2.y + rect.y * current2.scale;
+      const width = rect.w * current2.scale;
       const next = layout.boards.reduce((nearest, other) => other.rect.x > rect.x && (nearest === null || other.rect.x < nearest) ? other.rect.x : nearest, null);
       board.label.style.transform = `translate(${x}px, ${y - LABEL_LIFT}px)`;
-      board.label.style.width = `${Math.max(0, Math.min(labelWidth(rect, next, current.scale), Math.max(width, ctx.surfaceSize.w - x - 8)))}px`;
+      board.label.style.width = `${Math.max(0, Math.min(labelWidth(rect, next, current2.scale), Math.max(width, ctx.surfaceSize.w - x - 8)))}px`;
       const direction = directionOf(board);
       const line = board.art.cell.line ?? 0;
       const room = direction === null ? 0 : line > 0 ? DIRECTION_LINE_ROOM : heads.get(direction.row.root.id)?.h ?? 0;
-      const crowded = (board.art.cell.row > 0 || line > 0) && (ARTBOARD_LABEL_HEIGHT + WALL_GAP + room) * current.scale < LABEL_GAP_MIN;
+      const crowded = (board.art.cell.row > 0 || line > 0) && (ARTBOARD_LABEL_HEIGHT + WALL_GAP + room) * current2.scale < LABEL_GAP_MIN;
       board.label.hidden = width < 32 || crowded;
     };
     const placeHead = (rootId, head) => {
       const row2 = plan.rows.get(rootId);
-      const current = row2 === void 0 ? void 0 : boards.get(artboardIdOf(rootId, row2.viewport.id));
-      if (current === void 0) {
+      const current2 = row2 === void 0 ? void 0 : boards.get(artboardIdOf(rootId, row2.viewport.id));
+      if (current2 === void 0) {
         head.root.hidden = true;
         return;
       }
       head.root.hidden = false;
       delete head.root.dataset.tight;
       const view2 = camera.get();
-      const x = view2.x + current.art.rect.x * view2.scale;
+      const x = view2.x + current2.art.rect.x * view2.scale;
       head.root.style.maxWidth = `${Math.max(0, ctx.surfaceSize.w - x - 8)}px`;
       const above = heads.get(rootId);
-      const room = above === void 0 ? Infinity : (current.art.rect.y - (above.y - WALL_GAP)) * view2.scale - LABEL_LIFT - HEAD_GAP;
+      const room = above === void 0 ? Infinity : (current2.art.rect.y - (above.y - WALL_GAP)) * view2.scale - LABEL_LIFT - HEAD_GAP;
       if (head.root.offsetHeight > room) head.root.dataset.tight = "true";
       if (head.root.offsetHeight > room) {
         head.root.hidden = true;
         return;
       }
-      const y = view2.y + current.art.rect.y * view2.scale - LABEL_LIFT - head.root.offsetHeight - HEAD_GAP;
+      const y = view2.y + current2.art.rect.y * view2.scale - LABEL_LIFT - head.root.offsetHeight - HEAD_GAP;
       head.root.style.left = `${x}px`;
       head.root.style.top = `${y}px`;
     };
@@ -14781,6 +15849,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         board.placements = placements;
         board.scroll = scroll;
         pins.paint(board);
+        if (popovers.current()?.board === board) popovers.follow();
         options.onStatus();
       });
       main.channel.subscribe((message) => {
@@ -15176,7 +16245,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           board.main.post({ type: "set-mode", mode: ctx.frameMode() });
           return;
         case "scroll":
-          if (popovers.current()?.board === board) popovers.close();
+          if (popovers.current()?.board === board) popovers.closeForMove();
           picks.notifyMoved();
           return;
         case "hit":
@@ -15220,6 +16289,47 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
   };
 
+  // src/ui/model/card-place-model.ts
+  var EDGE2 = 8;
+  var CARD_GAP = 10;
+  var TOOLBAR_GAP = 6;
+  var FLIP_WITHIN2 = 48;
+  var fitsHeight = (card, stage) => card <= stage - 2 * EDGE2;
+  var clamp3 = (value, low, high) => Math.max(low, Math.min(value, Math.max(low, high)));
+  var placeCardAndToolbar = ({ box, card, toolbar, stage }) => {
+    const across = (width) => clamp3(box.x, EDGE2, stage.w - width - EDGE2);
+    const room = stage.h - 2 * EDGE2;
+    const under = box.y + box.h;
+    const down = (height, gap) => {
+      if (height > room) return stage.h - EDGE2 - height;
+      const wanted = under + gap + height <= stage.h - EDGE2 ? under + gap : box.y - CARD_GAP - height;
+      return clamp3(wanted, EDGE2, stage.h - EDGE2 - height);
+    };
+    const alone = { card: { left: across(card.w), top: down(card.h, CARD_GAP) }, toolbar: null };
+    if (!toolbar) return alone;
+    const over = box.y - toolbar.h - TOOLBAR_GAP;
+    const cardUnder = under + CARD_GAP;
+    const split = box.y >= Math.max(FLIP_WITHIN2, toolbar.h + TOOLBAR_GAP + EDGE2) && over + toolbar.h <= stage.h - EDGE2 && cardUnder + card.h <= stage.h - EDGE2;
+    if (split) return { card: { left: across(card.w), top: cardUnder }, toolbar: { left: across(toolbar.w), top: over, below: false } };
+    const stack = toolbar.h + TOOLBAR_GAP + card.h;
+    if (stack > room) return alone;
+    const top = down(stack, TOOLBAR_GAP);
+    return { card: { left: across(card.w), top: top + toolbar.h + TOOLBAR_GAP }, toolbar: { left: across(toolbar.w), top, below: top > box.y } };
+  };
+
+  // src/ui/model/comment-drafts.ts
+  var unsavedText = (value, saved = "") => value.trim() === "" || value.trim() === saved.trim() ? null : value;
+  var composerDraftKey = (at) => JSON.stringify(["new", at.slug, at.pageMode ? at.screen : at.artboard, at.selector]);
+  var threadDraftKey = (slug, commentId) => JSON.stringify(["thread", slug, commentId]);
+  var createDraftStore = () => {
+    const drafts3 = /* @__PURE__ */ new Map();
+    return {
+      get: (key) => drafts3.get(key) ?? null,
+      keep: (key, text) => void (text === null ? drafts3.delete(key) : drafts3.set(key, text)),
+      drop: (key) => void drafts3.delete(key)
+    };
+  };
+
   // src/ui/wall/comment-ui.ts
   var isMac = () => /Mac|iPhone|iPad/.test(navigator.platform);
   var submitKey = () => isMac() ? "\u2318\u21B5" : "Ctrl+\u21B5";
@@ -15234,7 +16344,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     return area;
   };
   var createComposer = (options) => {
-    const area = textarea("Comment", "", "What should change here?");
+    const area = textarea("Comment", options.draft ?? "", "What should change here?");
     const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
     const cancel = btn({ label: "Cancel", variant: "ghost", size: "sm", onClick: () => options.onCancel() });
     const submit = btn({
@@ -15272,7 +16382,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       } else if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        options.onCancel();
+        options.onDismiss();
       }
     });
     const el2 = h(
@@ -15284,7 +16394,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       failure,
       h("div", { class: "dc-pop-foot" }, h("span", { class: "dc-pop-hint" }, `${submitKey()} to add`), h("span", { class: "dc-pop-actions" }, cancel.el, submit.el))
     );
-    return { el: el2, focus: () => area.focus(), hasDraft: () => area.value.trim() !== "" };
+    return { el: el2, focus: () => area.focus(), draft: () => unsavedText(area.value) };
   };
   var ANCHOR_NOTE = {
     exact: null,
@@ -15294,7 +16404,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   };
   var createThread = (options) => {
     const { comment } = options;
-    const area = textarea("Comment text", comment.body, "");
+    const draft = options.readOnly ? null : options.draft;
+    const area = textarea("Comment text", draft ?? comment.body, "");
     area.disabled = options.readOnly;
     const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
     const badgeHost = h("span");
@@ -15319,7 +16430,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       label: "Save",
       variant: "default",
       size: "sm",
-      disabled: true,
+      disabled: draft === null,
       onClick: () => {
         const problem = validateBody(area.value);
         if (problem !== null) {
@@ -15408,7 +16519,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       toggle.set({ label: status === "resolved" ? "Reopen" : "Resolve", icon: status === "resolved" ? "restore" : "check" });
       if (sendThis) sendThis.el.hidden = status !== "open";
     };
-    return { el: el2, focus: () => area.focus(), setStatus };
+    return { el: el2, focus: () => area.focus(), setStatus, draft: () => options.readOnly ? null : unsavedText(area.value, comment.body) };
   };
 
   // src/ui/wall/popover-layer.ts
@@ -15423,43 +16534,83 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     el2.style.width = `${rect.w}px`;
     el2.style.height = `${rect.h}px`;
   };
+  var drafts = createDraftStore();
   var createPopoverLayer = (ctx, camera, deps) => {
     const { options } = ctx;
     let popover = null;
+    let anchorBox = null;
+    let companion = null;
+    const resized = new ResizeObserver(() => follow());
+    ctx.scope.add(() => resized.disconnect());
+    const follow = () => {
+      if (!popover || !anchorBox || ctx.surfaceSize.w === 0) return;
+      const card = popover.card.el;
+      const covered = camera.coveredInsets();
+      const stage = { w: ctx.surfaceSize.w - covered.right, h: ctx.surfaceSize.h - covered.bottom };
+      delete card.dataset.tight;
+      if (!fitsHeight(card.offsetHeight, stage.h)) card.dataset.tight = "true";
+      const place = placeCardAndToolbar({
+        box: anchorBox(),
+        card: { w: card.offsetWidth, h: card.offsetHeight },
+        toolbar: companion ? { w: companion.offsetWidth, h: companion.offsetHeight } : null,
+        stage
+      });
+      card.style.left = `${Math.round(place.card.left)}px`;
+      card.style.top = `${Math.round(place.card.top)}px`;
+      if (!companion) return;
+      companion.style.visibility = place.toolbar ? "" : "hidden";
+      if (!place.toolbar) return;
+      companion.style.left = `${Math.round(place.toolbar.left)}px`;
+      companion.style.top = `${Math.round(place.toolbar.top)}px`;
+      companion.dataset.below = String(place.toolbar.below);
+    };
+    const setCompanion = (toolbar) => {
+      if (companion && companion !== toolbar) resized.unobserve(companion);
+      companion = toolbar;
+      if (toolbar) resized.observe(toolbar);
+      follow();
+    };
     const close = () => {
       if (!popover) return;
-      const current = popover;
+      const current2 = popover;
       popover = null;
-      current.card.el.remove();
-      current.board.selected.hidden = true;
-      for (const pin of current.board.pins.values()) pin.removeAttribute("aria-expanded");
+      anchorBox = null;
+      resized.unobserve(current2.card.el);
+      drafts.keep(current2.draftKey, current2.card.draft());
+      current2.card.el.remove();
+      current2.board.selected.hidden = true;
+      for (const pin of current2.board.pins.values()) pin.removeAttribute("aria-expanded");
       document.querySelector(".dc-temp-pin")?.remove();
-      if (current.commentId === null) deps.emitSelection({ type: "cleared" });
+      if (current2.commentId === null) deps.emitSelection({ type: "cleared" });
     };
-    const placeCard = (card, anchorScreen, below) => {
-      ctx.overlay.append(card);
-      const { w, h: surfaceHeight } = ctx.surfaceSize;
-      const width = Math.min(card.offsetWidth, w - 16);
-      const height = card.offsetHeight;
-      let left = anchorScreen.x;
-      let top = anchorScreen.y + below + 10;
-      if (left + width > w - 8) left = w - width - 8;
-      if (top + height > surfaceHeight - 8) top = Math.max(8, anchorScreen.y - height - 10);
-      card.style.left = `${Math.max(8, left)}px`;
-      card.style.top = `${Math.max(8, top)}px`;
+    const closeForMove = () => {
+      if (popover && popover.card.draft() === null) close();
+    };
+    const settle = (card, draftKey) => {
+      if (card && popover?.card === card) {
+        popover = { ...popover, card: { ...card, draft: () => null } };
+        close();
+      }
+      drafts.drop(draftKey);
     };
     const pageWhere = (comment) => comment.viewport === PAGE_FILL_VIEWPORT_ID ? "Made at full width" : `Made at ${ctx.detail.design.viewports.find((viewport) => viewport.id === comment.viewport)?.label ?? comment.viewport} size`;
-    const open = (board, card, commentId) => {
-      popover = { card, board, commentId };
+    const open = (board, card, commentId, draftKey, box) => {
+      popover = { card, board, commentId, draftKey };
+      anchorBox = box;
+      ctx.overlay.append(card.el);
+      resized.observe(card.el);
+      follow();
     };
     const openThread = (board, commentId) => {
       const comment = ctx.comments().find((candidate) => candidate.id === commentId);
       if (!comment) return;
       close();
       const number = ctx.numbers().get(commentId) ?? 0;
-      const { point, anchorState } = pinState(board, comment);
+      const { anchorState } = pinState(board, comment);
       const sendComment = options.onSendComment;
+      const draftKey = threadDraftKey(options.slug, commentId);
       const card = createThread({
+        draft: drafts.get(draftKey),
         comment,
         number,
         where: ctx.pageMode ? pageWhere(comment) : `${board.art.screen?.title ?? "Page"} \xB7 ${board.art.viewport.label}`,
@@ -15467,12 +16618,12 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         readOnly: ctx.readOnly(),
         onSave: async (body) => {
           await options.updateComment(commentId, { body });
-          close();
+          settle(card, draftKey);
         },
         // Seam S6: the card shows "Send this" only when the view passed a sender.
         onSend: sendComment ? async (body) => {
           await sendComment(commentId, body);
-          close();
+          settle(card, draftKey);
         } : void 0,
         onStatus: async (status) => {
           await options.updateComment(commentId, { status });
@@ -15480,13 +16631,14 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         },
         onDelete: async () => {
           await options.deleteComment(commentId);
-          close();
+          settle(card, draftKey);
         },
         onClose: () => close()
       });
-      open(board, card, commentId);
-      const screenPoint = frameToScreen(camera.get(), board.art.rect, point);
-      placeCard(card.el, { x: screenPoint.x + 14, y: screenPoint.y - 10 }, 0);
+      open(board, card, commentId, draftKey, () => {
+        const pin = frameToScreen(camera.get(), board.art.rect, pinState(board, comment).point);
+        return { x: pin.x + 14, y: pin.y - 10, w: 0, h: 0 };
+      });
       board.pins.get(commentId)?.setAttribute("aria-expanded", "true");
       card.focus();
     };
@@ -15501,33 +16653,38 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const selection2 = selectionFor(board, element, framePoint);
       const { anchor, ...target } = selection2.element;
       const { point } = anchor;
-      rectToBox(board, board.selected, element.rect);
       board.selected.hidden = false;
       board.hover.hidden = true;
       const temp = h("span", { class: "dc-pin dc-temp-pin", "aria-hidden": "true" }, "+");
-      const pinAt = pinFramePoint(element.rect, point, board.scroll);
-      temp.style.left = `${pinAt.x}px`;
-      temp.style.top = `${pinAt.y}px`;
       board.overlay.append(temp);
+      const draftKey = composerDraftKey({ slug: options.slug, screen: target.screen, artboard: board.art.id, selector: anchor.selector, pageMode: ctx.pageMode });
       const card = createComposer({
         tag: element.tag,
         snippet: element.text.length > 80 ? `${element.text.slice(0, 77)}\u2026` : element.text,
-        onCancel: () => close(),
+        draft: drafts.get(draftKey),
+        onCancel: () => settle(card, draftKey),
+        onDismiss: () => close(),
         onSubmit: async (body) => {
           await options.createComment({ ...target, anchor, body });
           deps.emitSelection({ type: "commented", key: selection2.key });
-          close();
+          settle(card, draftKey);
         }
       });
-      open(board, card, null);
+      open(board, card, null, draftKey, () => {
+        rectToBox(board, board.selected, element.rect);
+        const pinAt = pinFramePoint(element.rect, point, board.scroll);
+        temp.style.left = `${pinAt.x}px`;
+        temp.style.top = `${pinAt.y}px`;
+        const view2 = camera.get();
+        const at = frameToScreen(view2, board.art.rect, { x: element.rect.x - board.scroll.x, y: element.rect.y - board.scroll.y });
+        return { x: at.x, y: at.y, w: element.rect.w * view2.scale, h: element.rect.h * view2.scale };
+      });
       deps.emitSelection({ type: "selected", selection: selection2 });
-      const base = frameToScreen(camera.get(), board.art.rect, { x: element.rect.x - board.scroll.x, y: element.rect.y - board.scroll.y });
-      placeCard(card.el, base, element.rect.h * camera.get().scale);
       card.focus();
       return selection2;
     };
     const clearSelection = () => {
-      if (popover?.commentId === null && popover.card.hasDraft?.() !== true) close();
+      if (popover?.commentId === null && popover.card.draft() === null) close();
     };
     const refresh = () => {
       if (popover?.commentId == null) return;
@@ -15535,7 +16692,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const comment = ctx.comments().find((candidate) => candidate.id === id);
       if (comment) popover.card.setStatus?.(comment.status);
     };
-    return { openThread, openComposer, selectionFor, close, current: () => popover, placeCard, clearSelection, refresh };
+    return { openThread, openComposer, selectionFor, close, closeForMove, follow, setCompanion, current: () => popover, clearSelection, refresh };
   };
 
   // src/ui/wall/hit-controller.ts
@@ -15615,6 +16772,19 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     let spaceDown = false;
     let panTool = false;
     let downAt = null;
+    const touches = /* @__PURE__ */ new Map();
+    let pinching = false;
+    let scrolling = null;
+    const touchPair = () => {
+      const [first, second] = touches.values();
+      return first && second ? [first, second] : null;
+    };
+    const capture = (id) => {
+      try {
+        surface.setPointerCapture(id);
+      } catch {
+      }
+    };
     const setTool = () => {
       surface.dataset.tool = spaceDown || panTool ? "pan" : "none";
     };
@@ -15711,7 +16881,43 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       },
       { passive: false }
     );
+    scope.listen(
+      surface,
+      "pointerdown",
+      (event) => {
+        if (event.pointerType !== "touch") return;
+        if (event.isPrimary) {
+          if (pinching) {
+            panning = null;
+            delete surface.dataset.panning;
+          }
+          touches.clear();
+          pinching = false;
+          scrolling = null;
+        }
+        if (ctx.editing || event.target instanceof Element && event.target.closest(".dc-pop, .dc-seltoolbar, .dc-editor")) return;
+        if (deps.reorder.active()) return;
+        const at = ctx.local(event);
+        touches.set(event.pointerId, at);
+        if (touches.size < 2) {
+          if (event.target instanceof Element && event.target.closest(".dc-pin")) downAt = { point: at, board: boards.at(at), pin: true };
+          return;
+        }
+        pinching = true;
+        deps.reorder.dispose();
+        downAt = null;
+        panning = null;
+        scrolling = null;
+        hit.clearHover();
+        for (const id of touches.keys()) capture(id);
+        if (!pageMode) surface.dataset.panning = "true";
+        event.preventDefault();
+        event.stopPropagation();
+      },
+      { capture: true }
+    );
     scope.listen(surface, "pointerdown", (event) => {
+      if (pinching && event.pointerType === "touch") return;
       if (event.target instanceof Element && event.target.closest(".dc-ghost-add")) {
         if (event.button === 0 && !ctx.readOnly()) downAt = { point: ctx.local(event), board: null };
         return;
@@ -15723,7 +16929,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const board = boards.at(at);
       const action2 = pointerDownAction({ pageMode, button: event.button, spaceDown, panTool, onBoard: board !== null, mode: ctx.mode, readOnly: ctx.readOnly() });
       if (action2 === "ignore") return;
-      if (popovers.current()) popovers.close();
+      popovers.closeForMove();
       if (action2 === "pan") {
         panning = { id: event.pointerId, last: at };
         surface.setPointerCapture(event.pointerId);
@@ -15737,14 +16943,34 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         return;
       }
       const at = ctx.local(event);
-      hit.setPointer(at);
+      const touch = event.pointerType === "touch";
+      if (touch && touches.has(event.pointerId)) {
+        const before = touchPair();
+        touches.set(event.pointerId, at);
+        const after = touchPair();
+        if (before && after) {
+          if (!pageMode) camera.set(pinchCamera(camera.get(), before, after), true);
+          return;
+        }
+      }
+      if (!touch) hit.setPointer(at);
+      if (scrolling && scrolling.id === event.pointerId) {
+        const { dx, dy } = touchScrollDelta(scrolling.last, at, camera.get().scale);
+        scrolling.board.main.post({ type: "scroll-by", dx, dy });
+        scrolling.last = at;
+        return;
+      }
       if (panning && panning.id === event.pointerId) {
         camera.set(panBy(camera.get(), at.x - panning.last.x, at.y - panning.last.y), true);
         panning.last = at;
         return;
       }
-      if (downAt && isDrag(downAt.point, at)) {
+      if (downAt && isDrag(downAt.point, at, dragThreshold(event.pointerType))) {
         if (pageMode) {
+          if (touch && downAt.board && downAt.board.main.state() === "ready") {
+            scrolling = { id: event.pointerId, last: downAt.point, board: downAt.board };
+            capture(event.pointerId);
+          }
           downAt = null;
         } else {
           panning = { id: event.pointerId, last: downAt.point };
@@ -15755,9 +16981,29 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           return;
         }
       }
-      hit.scheduleHover();
+      if (!touch) hit.scheduleHover();
     });
+    const endPinch = () => {
+      panning = null;
+      const rest = [...touches];
+      const [last] = rest;
+      if (rest.length === 0) {
+        pinching = false;
+        delete surface.dataset.panning;
+      } else if (rest.length === 1 && last && !pageMode) panning = { id: last[0], last: last[1] };
+    };
     const endPointer = (event) => {
+      if (event.pointerType === "touch") {
+        touches.delete(event.pointerId);
+        if (pinching) {
+          endPinch();
+          return;
+        }
+        if (scrolling?.id === event.pointerId) {
+          scrolling = null;
+          return;
+        }
+      }
       if (panning && panning.id === event.pointerId) {
         panning = null;
         delete surface.dataset.panning;
@@ -15765,7 +17011,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       }
       const press = downAt;
       downAt = null;
-      if (press && press.board && event.type === "pointerup" && ctx.mode === "edit" && !ctx.readOnly()) {
+      if (press && press.board && !press.pin && event.type === "pointerup" && ctx.mode === "edit" && !ctx.readOnly()) {
         hit.requestHit(press.board, screenToFrame(camera.get(), press.board.art.rect, press.point), "click");
       }
     };
@@ -15802,7 +17048,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         if (board.label === target) camera.focusBoard(board);
       }
     });
-    return { shortcut, isPanning: () => panning !== null };
+    return { shortcut, isPanning: () => panning !== null || pinching };
   };
 
   // src/ui/wall/pick-layer.ts
@@ -15887,9 +17133,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   var createPinLayer = (ctx, camera, popovers, boards) => {
     let pinScale = camera.get().scale;
     const openCluster = (board, spots, anchor) => {
-      const current = camera.get();
-      const target = separatingScale(spots, current.scale, ctx.pinSize());
-      camera.set(zoomAt(current, target, frameToScreen(current, board.art.rect, anchor)), true);
+      const current2 = camera.get();
+      const target = separatingScale(spots, current2.scale, ctx.pinSize());
+      camera.set(zoomAt(current2, target, frameToScreen(current2, board.art.rect, anchor)), true);
     };
     const paint = (board) => {
       const scale = camera.get().scale;
@@ -15991,11 +17237,11 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   var createReorderController = (ctx, deps) => {
     let press = null;
     const allowed = () => !ctx.pageMode && !ctx.options.compact && ctx.mode === "edit" && !ctx.readOnly() && ctx.screensBusy === null && !ctx.editing;
-    const place = (current, at) => {
-      if (current.chip) current.chip.style.transform = `translate(${Math.round(at.x + 14)}px, ${Math.round(at.y + 10)}px)`;
+    const place = (current2, at) => {
+      if (current2.chip) current2.chip.style.transform = `translate(${Math.round(at.x + 14)}px, ${Math.round(at.y + 10)}px)`;
       const world = screenToWorld2(deps.camera.get(), at);
-      current.target = dropTarget(deps.boards.rows(), world.y, current.id);
-      const { line, target } = current;
+      current2.target = dropTarget(deps.boards.rows(), world.y, current2.id);
+      const { line, target } = current2;
       if (!line) return;
       line.hidden = target === null || target.noop;
       if (target === null) return;
@@ -16014,60 +17260,60 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         }
       }
     };
-    const finish = (current, drop) => {
-      if (press !== current) return;
+    const finish = (current2, drop) => {
+      if (press !== current2) return;
       press = null;
-      const target = current.target;
-      current.cleanup();
+      const target = current2.target;
+      current2.cleanup();
       if (!drop || target === null || target.noop) return;
       const order = moveRowToGap(
         ctx.screens().map((screen) => screen.id),
         deps.boards.rows().map((row2) => row2.id),
-        current.id,
-        deps.boards.rowScreenIds(current.id),
+        current2.id,
+        deps.boards.rowScreenIds(current2.id),
         target.gap
       );
-      if (order !== null) deps.onDrop({ id: current.id, order });
+      if (order !== null) deps.onDrop({ id: current2.id, order });
     };
-    const startDrag = (current, board) => {
+    const startDrag = (current2, board) => {
       const screen = board.art.screen;
-      current.chip = h("div", { class: "dc-drag-chip", "aria-hidden": "true" }, h("strong", null, screen?.title ?? ""), h("span", null, board.art.viewport.label));
-      current.line = h("div", { class: "dc-drop", "aria-hidden": "true", hidden: true });
-      ctx.overlay.append(current.chip);
-      ctx.world.append(current.line);
+      current2.chip = h("div", { class: "dc-drag-chip", "aria-hidden": "true" }, h("strong", null, screen?.title ?? ""), h("span", null, board.art.viewport.label));
+      current2.line = h("div", { class: "dc-drop", "aria-hidden": "true", hidden: true });
+      ctx.overlay.append(current2.chip);
+      ctx.world.append(current2.line);
       ctx.surface.dataset.reordering = "true";
-      markDragging(current.id, true);
+      markDragging(current2.id, true);
     };
     const begin = (board, event) => {
       const screen = board.art.screen;
       if (press || screen === null || event.button !== 0 || !allowed() || !deps.boards.isFirstOfRow(board)) return;
       const label = board.label;
       const from = ctx.local(event);
-      const current = { id: screen.id, pointerId: event.pointerId, from, at: from, chip: null, line: null, target: null, cleanup: () => void 0 };
+      const current2 = { id: screen.id, pointerId: event.pointerId, from, at: from, chip: null, line: null, target: null, cleanup: () => void 0 };
       let dragging = false;
       const onMove = (move) => {
-        if (move.pointerId !== current.pointerId) return;
+        if (move.pointerId !== current2.pointerId) return;
         const at = ctx.local(move);
-        current.at = at;
+        current2.at = at;
         if (!dragging) {
-          if (!isDrag(current.from, at)) return;
+          if (!isDrag(current2.from, at)) return;
           dragging = true;
-          startDrag(current, board);
+          startDrag(current2, board);
         }
-        place(current, at);
+        place(current2, at);
       };
       const onUp = (up) => {
-        if (up.pointerId === current.pointerId) finish(current, dragging);
+        if (up.pointerId === current2.pointerId) finish(current2, dragging);
       };
-      const onCancel = () => finish(current, false);
+      const onCancel = () => finish(current2, false);
       const onKey = (key) => {
         if (key.key !== "Escape" || !dragging) return;
         key.preventDefault();
         key.stopPropagation();
-        finish(current, false);
+        finish(current2, false);
       };
       const onWheel = () => {
-        if (dragging) place(current, current.at);
+        if (dragging) place(current2, current2.at);
       };
       label.addEventListener("pointermove", onMove);
       label.addEventListener("pointerup", onUp);
@@ -16079,20 +17325,20 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         label.setPointerCapture(event.pointerId);
       } catch {
       }
-      current.cleanup = () => {
+      current2.cleanup = () => {
         label.removeEventListener("pointermove", onMove);
         label.removeEventListener("pointerup", onUp);
         label.removeEventListener("pointercancel", onCancel);
         label.removeEventListener("lostpointercapture", onCancel);
         document.removeEventListener("keydown", onKey, true);
         ctx.surface.removeEventListener("wheel", onWheel);
-        if (label.hasPointerCapture(current.pointerId)) label.releasePointerCapture(current.pointerId);
-        current.chip?.remove();
-        current.line?.remove();
+        if (label.hasPointerCapture(current2.pointerId)) label.releasePointerCapture(current2.pointerId);
+        current2.chip?.remove();
+        current2.line?.remove();
         delete ctx.surface.dataset.reordering;
-        markDragging(current.id, false);
+        markDragging(current2.id, false);
       };
-      press = current;
+      press = current2;
     };
     return {
       begin,
@@ -16117,7 +17363,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         tabindex: "0",
         role: "application",
         "aria-roledescription": pageMode ? "page preview" : "canvas wall",
-        "aria-label": pageMode ? "Page preview. Arrow keys, Page Up and Page Down scroll the page." : "Design wall. Arrow keys pan, plus and minus zoom, Shift+1 fits everything. Hold Space and drag to pan.",
+        "aria-label": inputWords(currentDevice().form)[pageMode ? "page" : "wall"],
         "data-mode": mode,
         "data-presentation": options.presentation
       },
@@ -16128,7 +17374,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const ctx = {
       options,
       pageMode,
-      liveBudget: options.compact ? RAIL_LIVE_FRAMES_MAX : PAGE_LIVE_FRAMES_MAX,
+      liveBudget: liveBudget(options.compact, currentDevice().form),
       scope: createScope(),
       surface,
       world,
@@ -16185,8 +17431,41 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const boardLookup = late("the board set");
     const input = late("the input controller");
     const frameMessage = late("the frame message handler");
-    const camera = createCameraController(ctx, hooks);
+    let focused = null;
+    let selected = null;
+    const reportView = () => {
+      if (ctx.disposed) return;
+      const { design } = ctx.detail;
+      reportWall(
+        viewStateOf({
+          slug: options.slug,
+          isPage: pageMode,
+          mode: ctx.mode,
+          pageView: ctx.pageView,
+          screenIds: design.screens.map((screen) => screen.id),
+          viewportIds: design.viewports.map((viewport) => viewport.id),
+          focus: focused,
+          selection: selected?.element ?? null
+        })
+      );
+    };
+    const cameraBase = createCameraController(ctx, hooks);
+    const camera = {
+      ...cameraBase,
+      focusBoard: (board) => {
+        cameraBase.focusBoard(board);
+        focused = { screen: board.art.screen?.id ?? null, viewport: board.art.viewport.id };
+        reportView();
+      }
+    };
     const selection2 = createListeners();
+    ctx.scope.add(
+      selection2.add((event) => {
+        if (event.type === "selected") selected = event.selection;
+        else if (event.type === "cleared" || selected?.key === event.key) selected = null;
+        reportView();
+      })
+    );
     const popovers = createPopoverLayer(ctx, camera, { emitSelection: selection2.emit });
     const sources = createSourceCache({ load: (slug, screen) => store.loadSource(slug, screen) });
     ctx.scope.add(feed.subscribe((batch) => sources.applyChanges(batch)));
@@ -16215,13 +17494,17 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const reorder = createReorderController(ctx, { camera, boards, onDrop: reorders.emit });
     hooks.bind({
       closePopover: () => {
-        popovers.close();
+        popovers.closeForMove();
         picks.notifyMoved();
       },
       clearHover: hit.clearHover,
       bounds: boards.bounds,
       rebuildLayout: boards.rebuild,
-      placeLabels: boards.placeLabels,
+      // Every camera change and wall resize comes through here: the labels, and the open card with its element.
+      placeLabels: () => {
+        boards.placeLabels();
+        popovers.follow();
+      },
       scaleChanged: pins.scaleChanged,
       queueSync: boards.queueSync
     });
@@ -16232,6 +17515,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     );
     boards.rebuild();
     camera.apply();
+    reportView();
     let previewFrame = 0;
     return {
       el: surface,
@@ -16244,6 +17528,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           boards.rebuild();
           if (ctx.surfaceSize.w > 0) camera.quietFit();
           camera.apply();
+          reportView();
         }
         pins.paintAll();
         for (const board of boards.values()) boards.paintLabel(board);
@@ -16255,6 +17540,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         surface.dataset.mode = ctx.mode;
         popovers.close();
         hit.clearHover();
+        reportView();
         for (const board of boards.values()) {
           if (ctx.mode === "edit" && board.screenId !== (board.art.screen?.id ?? null)) boards.reset(board);
           board.main.post({ type: "set-mode", mode: ctx.frameMode() });
@@ -16288,6 +17574,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         popovers.close();
         hit.clearHover();
         if (ctx.surfaceSize.w > 0) camera.layoutPage();
+        reportView();
       },
       externalRefs: () => [...new Set([...boards.values()].flatMap((board) => board.main.meta()?.external ?? []))],
       detachedIds: () => {
@@ -16359,6 +17646,11 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         else popovers.openComposer(pick.board, pick.element, pick.framePoint);
       },
       cardEl: () => popovers.current()?.card.el ?? null,
+      setCardCompanion: popovers.setCompanion,
+      cardHasDraft: () => {
+        const open = popovers.current();
+        return open !== null && open.card.draft() !== null;
+      },
       closeEmptyCard: () => popovers.clearSelection(),
       closeCard: () => popovers.close(),
       setEditing: (editing) => {
@@ -16394,14 +17686,14 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       revealScreen: (id) => {
         const box = boards.rowBox(id);
         if (!box || ctx.surfaceSize.w === 0) return;
-        const current = camera.get();
+        const current2 = camera.get();
         const covered = camera.coveredInsets();
         const pan = revealPan(
-          { x: current.x + box.x * current.scale, y: current.y + box.y * current.scale, w: box.w * current.scale, h: box.h * current.scale },
+          { x: current2.x + box.x * current2.scale, y: current2.y + box.y * current2.scale, w: box.w * current2.scale, h: box.h * current2.scale },
           { w: ctx.surfaceSize.w - covered.right, h: ctx.surfaceSize.h - covered.bottom },
           options.compact ? 12 : 32
         );
-        if (pan.dx !== 0 || pan.dy !== 0) camera.set(panBy(current, pan.dx, pan.dy), true);
+        if (pan.dx !== 0 || pan.dy !== 0) camera.set(panBy(current2, pan.dx, pan.dy), true);
       },
       dispose: () => {
         ctx.disposed = true;
@@ -16420,7 +17712,6 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   };
 
   // src/ui/wall/design-view.ts
-  var FULL_SCREEN_HINT = "Full screen: sidebar \u2192 Extension pages \u2192 Design Chamber";
   var EXPORT_NOTICE_MS = 15e3;
   var hiddenRemote = /* @__PURE__ */ new Map();
   var isRecord2 = (value) => typeof value === "object" && value !== null;
@@ -16540,7 +17831,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       if (!isPage) wall.setHiddenViewports([...hidden]);
       const zoomOut = iconBtn({ icon: "minus", label: "Zoom out", size: "sm", onClick: () => wall.zoomStep(1 / 1.25) });
       const zoomIn = iconBtn({ icon: "plus", label: "Zoom in", size: "sm", onClick: () => wall.zoomStep(1.25) });
-      const fit = btn({ label: "Fit", variant: "ghost", size: "xs", icon: "fit", title: "Fit everything on screen (Shift+1)", onClick: () => wall.fit() });
+      const fit = btn({ label: "Fit", variant: "ghost", size: "xs", icon: "fit", title: inputWords(currentDevice().form).fit, onClick: () => wall.fit() });
       const zoomGroup = h("div", { class: "dc-group", role: "group", "aria-label": "Zoom" }, zoomOut, zoomLabel.el, zoomIn, fit.el);
       const modeHost = h("div", { class: "dc-mode" });
       const modeTabs = mountTabs(modeHost, {
@@ -16628,7 +17919,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         const done = await exportDesign(slug, format, screen);
         if (!done) return;
         const { path } = done;
-        notices.setTransient("export", banner({ tone: "success", title: "Export saved", body: path, action: { label: "Show in folder", onClick: () => void reveal(path) } }), EXPORT_NOTICE_MS);
+        notices.setTransient("export", banner({ tone: "success", title: "Export saved", body: path, action: { label: "Show in folder", onClick: () => void reveal2(path) } }), EXPORT_NOTICE_MS);
       };
       const pickScreenThenExport = (anchor) => {
         const screens = design().screens;
@@ -16651,7 +17942,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         copyHtmlTooLarge: htmlChars !== null && htmlChars > HOST_CLIPBOARD_MAX,
         askForTweaks: design().tweaks.length === 0 && viewing === null,
         railTweaks: railTweaksLabel(),
-        pageData: pageData.entry()
+        pageData: pageData.entry(),
+        phone: currentDevice().form === "phone"
       });
       const onMore = (id) => {
         switch (id) {
@@ -16681,7 +17973,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
             pageData.confirmClear();
             return;
           case "path":
-            void copyPath(slug);
+            void copyPath2(slug);
             return;
           case "add-to-folder":
             openAddToFolder(options.actions.host, ref());
@@ -16715,7 +18007,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
             { id: "path", label: "Copy path" }
           ];
         },
-        (id) => void (id === "html" ? copyHtml(slug) : copyPath(slug))
+        (id) => void (id === "html" ? copyHtml(slug) : copyPath2(slug))
       );
       const titleInput = h("input", { class: "dc-title-input", type: "text", "aria-label": "Design name", spellcheck: "false", maxlength: "120" });
       titleInput.value = first.design.title;
@@ -16825,15 +18117,15 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         askButton = null;
         notices.setStatic([...viewing ? [versionsRow(viewing)] : [], ...showRemote ? [remoteBanner(remote)] : []]);
       };
-      const versionsRow = (current) => {
-        const number = Number(current.id.slice(1));
-        const compareBtn = btn({ label: current.compare ? `View v${number} only` : "Compare with current", variant: "outline", size: "xs", icon: "compare", onClick: () => viewVersion(current.id, !current.compare) });
+      const versionsRow = (current2) => {
+        const number = Number(current2.id.slice(1));
+        const compareBtn = btn({ label: current2.compare ? `View v${number} only` : "Compare with current", variant: "outline", size: "xs", icon: "compare", onClick: () => viewVersion(current2.id, !current2.compare) });
         const restoring = restoreFlow.busyId();
-        const restoreBtn = btn({ label: "Restore", variant: "outline", size: "xs", loading: restoring === current.id, disabled: restoring !== null && restoring !== current.id, onClick: () => void restoreVersion({ id: current.id, n: number }) });
-        restoreBtn.el.dataset.restore = current.id;
+        const restoreBtn = btn({ label: "Restore", variant: "outline", size: "xs", loading: restoring === current2.id, disabled: restoring !== null && restoring !== current2.id, onClick: () => void restoreVersion({ id: current2.id, n: number }) });
+        restoreBtn.el.dataset.restore = current2.id;
         const backBtn = btn({ label: "Back to current", variant: "default", size: "xs", onClick: () => leaveVersion() });
         const listBtn = compact ? btn({ label: "Versions", variant: "ghost", size: "xs", onClick: () => toggleDrawer("versions") }) : null;
-        return h("div", { class: "dc-viewing", role: "status" }, icon_(), h("span", { class: "dc-viewing-text" }, viewingBanner(number, current.compare)), h("span", { class: "dc-viewing-actions" }, compareBtn.el, restoreBtn.el, listBtn?.el ?? null, backBtn.el));
+        return h("div", { class: "dc-viewing", role: "status" }, icon_(), h("span", { class: "dc-viewing-text" }, viewingBanner(number, current2.compare)), h("span", { class: "dc-viewing-actions" }, compareBtn.el, restoreBtn.el, listBtn?.el ?? null, backBtn.el));
       };
       const icon_ = () => h("span", { class: "dc-viewing-dot", "aria-hidden": "true" });
       const restoreFlow = createRestoreFlow({
@@ -16878,16 +18170,16 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       };
       const dock = h("aside", { class: "dc-dock", hidden: true });
       dockEl = dock;
-      const release = (current) => {
-        current.handle.dispose();
-        current.stop?.();
+      const release = (current2) => {
+        current2.handle.dispose();
+        current2.stop?.();
       };
       let tweaksFill = null;
       const closeDrawer = () => {
-        const current = drawer;
+        const current2 = drawer;
         drawer = null;
-        if (current) release(current);
-        current?.sheet.close();
+        if (current2) release(current2);
+        current2?.sheet.close();
         commentsButton.set({ pressed: false });
         versionsButton.set({ pressed: false });
         dock.hidden = true;
@@ -17008,7 +18300,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         })
       );
       const main = h("div", { class: "dc-design-main" }, h("div", { class: "dc-wall-col" }, stage, slots2.bottomDock), dock);
-      replace(el2, toolbar, warningsBand.el, notices.el, main, compact ? h("footer", { class: "dc-hint" }, FULL_SCREEN_HINT) : null);
+      replace(el2, toolbar, warningsBand.el, notices.el, main, compact && options.hint ? h("footer", { class: "dc-hint" }, options.hint) : null);
       apply(first);
       refreshHtmlSize();
       if (isPage) {
@@ -17161,8 +18453,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     { id: "description", label: "A description", hint: "Say what it should look like, or start from a style preset." },
     { id: "existing", label: "Existing design system", hint: "Your project already has a system? Point at where it lives. Design Chamber reads its token files; the agent reads its page, docs and components." }
   ];
-  var nextSources = (current, id, checked, context) => {
-    const next = { ...current, [id]: checked };
+  var nextSources = (current2, id, checked, context) => {
+    const next = { ...current2, [id]: checked };
     if (checked && (id === "code" || id === "existing")) next[id === "code" ? "existing" : "code"] = false;
     if (checked && id === "existing" && context.description.trim() === "" && context.preset === "") next.description = false;
     return next;
@@ -17585,6 +18877,595 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   };
   var sheetSubtitle = (system) => `Read the project again and update ${system} from it.`;
 
+  // src/shared/agent/chip.ts
+  var DEFAULT_VIEWPORTS = `${formatViewport(VIEWPORT_LAPTOP)} + ${formatViewport(VIEWPORT_PHONE)}`;
+
+  // src/shared/agent/system-rules.ts
+  var SYSTEM_REFERENCE_DOCS = Object.freeze([
+    "foundations.md",
+    "motion.md",
+    "components.md",
+    "patterns.md",
+    "content-and-access.md",
+    "brand.md",
+    "board-and-check.md"
+  ]);
+
+  // src/shared/agent/system-prompts.ts
+  var SECTION_LABEL = {
+    overview: "Overview",
+    colours: "Colours",
+    typography: "Typography",
+    spacing: "Spacing",
+    radius: "Radius",
+    shadows: "Shadows",
+    motion: "Motion",
+    layers: "Layers",
+    sizes: "Sizes",
+    components: "Components",
+    patterns: "Patterns & voice",
+    brand: "Brand & marketing",
+    assets: "Assets"
+  };
+  var sectionLabel = (section2) => SECTION_LABEL[section2];
+
+  // src/shared/color.ts
+  var clamp4 = (value, min, max) => Math.min(max, Math.max(min, value));
+  var channel = (text) => {
+    const trimmed = text.trim();
+    if (trimmed === "" || trimmed === "none") return trimmed === "none" ? 0 : null;
+    const value = trimmed.endsWith("%") ? Number.parseFloat(trimmed) / 100 * 255 : Number.parseFloat(trimmed);
+    return Number.isFinite(value) ? clamp4(value, 0, 255) : null;
+  };
+  var alphaOf = (text) => {
+    if (text === void 0) return 1;
+    const trimmed = text.trim();
+    const value = trimmed.endsWith("%") ? Number.parseFloat(trimmed) / 100 : Number.parseFloat(trimmed);
+    return Number.isFinite(value) ? clamp4(value, 0, 1) : null;
+  };
+  var parseHex = (hex) => {
+    if (!/^[0-9a-f]+$/i.test(hex)) return null;
+    const expand = (digits) => [...digits].map((digit) => digit + digit).join("");
+    const full = hex.length === 3 || hex.length === 4 ? expand(hex) : hex;
+    if (full.length !== 6 && full.length !== 8) return null;
+    return {
+      r: Number.parseInt(full.slice(0, 2), 16),
+      g: Number.parseInt(full.slice(2, 4), 16),
+      b: Number.parseInt(full.slice(4, 6), 16),
+      a: full.length === 8 ? Number.parseInt(full.slice(6, 8), 16) / 255 : 1
+    };
+  };
+  var parseCssColor = (text) => {
+    const value = text.trim().toLowerCase();
+    if (value === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
+    if (value.startsWith("#")) return parseHex(value.slice(1));
+    const fn = /^(rgba?|color)\(\s*([^)]*)\)$/.exec(value);
+    if (!fn) return null;
+    const body = fn[2] ?? "";
+    if (fn[1] === "color") {
+      const srgb = /^srgb\s+([^/]+?)(?:\s*\/\s*(.+))?$/.exec(body);
+      if (!srgb) return null;
+      const parts2 = (srgb[1] ?? "").trim().split(/\s+/);
+      if (parts2.length !== 3) return null;
+      const rgb2 = parts2.map((part) => {
+        const n = Number.parseFloat(part);
+        return Number.isFinite(n) ? clamp4(part.endsWith("%") ? n / 100 * 255 : n * 255, 0, 255) : null;
+      });
+      const a2 = alphaOf(srgb[2]);
+      if (rgb2.some((n) => n === null) || a2 === null) return null;
+      return { r: rgb2[0] ?? 0, g: rgb2[1] ?? 0, b: rgb2[2] ?? 0, a: a2 };
+    }
+    const [colors, slashAlpha] = body.split("/");
+    const parts = (colors ?? "").split(/[\s,]+/).filter((part) => part !== "");
+    const commaAlpha = parts.length === 4 ? parts[3] : void 0;
+    if (parts.length < 3 || parts.length > 4) return null;
+    const rgb = parts.slice(0, 3).map(channel);
+    const a = alphaOf(slashAlpha ?? commaAlpha);
+    if (rgb.some((n) => n === null) || a === null) return null;
+    return { r: rgb[0] ?? 0, g: rgb[1] ?? 0, b: rgb[2] ?? 0, a };
+  };
+  var compositeOver = (top, bottom) => {
+    const a = top.a + bottom.a * (1 - top.a);
+    if (a <= 0) return { r: 0, g: 0, b: 0, a: 0 };
+    const mix2 = (t, b) => (t * top.a + b * bottom.a * (1 - top.a)) / a;
+    return { r: mix2(top.r, bottom.r), g: mix2(top.g, bottom.g), b: mix2(top.b, bottom.b), a };
+  };
+  var linear = (channel8) => {
+    const c = channel8 / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  var relativeLuminance = (color) => 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b);
+  var WHITE = Object.freeze({ r: 255, g: 255, b: 255, a: 1 });
+  var backdropOf = (chain) => {
+    let backdrop = { ...WHITE };
+    for (let index = chain.length - 1; index >= 0; index -= 1) {
+      const layer = chain[index];
+      if (layer !== void 0) backdrop = compositeOver(layer, backdrop);
+    }
+    return backdrop;
+  };
+  var contrastRatio = (fg2, bgChain) => {
+    const backdrop = backdropOf(bgChain);
+    const text = fg2.a >= 1 ? fg2 : compositeOver(fg2, backdrop);
+    const a = relativeLuminance(text);
+    const b = relativeLuminance(backdrop);
+    const [light, dark] = a >= b ? [a, b] : [b, a];
+    return (light + 0.05) / (dark + 0.05);
+  };
+
+  // src/shared/pair-contrast.ts
+  var PAIR_LEVELS = Object.freeze({ text: 4.5, large: 3, ui: 3 });
+  var pairSchemes = (detail) => detail.tokens.some((token) => token.dark !== null) ? ["light", "dark"] : ["light"];
+  var valueOf = (token, scheme) => {
+    if (token === void 0) return null;
+    const value = scheme === "dark" ? token.dark ?? token.light : token.light;
+    return value === null || value.editable !== "ok" ? null : value.text;
+  };
+  var parsedPair = (tokens, pair, scheme) => {
+    const fgText = valueOf(tokens.get(pair.fg), scheme);
+    const bgText = valueOf(tokens.get(pair.bg), scheme);
+    if (fgText === null || bgText === null) return null;
+    const fg2 = parseCssColor(fgText);
+    const bg2 = parseCssColor(bgText);
+    if (fg2 === null || bg2 === null || bg2.a < 1) return null;
+    return { fg: fg2, bg: bg2 };
+  };
+  var tokenMap = (detail) => new Map(detail.tokens.map((token) => [token.name, token]));
+  var staticPairRatio = (detail, pair, scheme) => {
+    const colours = parsedPair(tokenMap(detail), pair, scheme);
+    return colours === null ? null : contrastRatio(colours.fg, [colours.bg]);
+  };
+  var ratioText = (ratio) => `${(Math.floor(ratio * 100) / 100).toFixed(2)}:1`;
+
+  // src/ui/model/system-assets-model.ts
+  var MOTION_EMPTY = "No motion tokens yet. Ask the agent to add some.";
+  var ICONS_EMPTY = "No icons yet. Ask the agent to add some.";
+  var motionKindLabel = (text) => {
+    const kind = text === null ? null : motionValueKind(text);
+    return kind === null ? null : kind === "time" ? "Duration" : "Easing";
+  };
+  var motionCountText = (tokens) => {
+    const kinds = tokens.map((token) => motionKindLabel(token.light?.text ?? null));
+    if (kinds.includes(null)) return plural(tokens.length, "motion value");
+    const durations = kinds.filter((kind) => kind === "Duration").length;
+    const easings = kinds.length - durations;
+    return [durations > 0 ? plural(durations, "duration") : null, easings > 0 ? plural(easings, "easing") : null].filter((part) => part !== null).join(", ");
+  };
+  var assetsCountText = (detail) => {
+    const icons = detail.icons?.length ?? 0;
+    const files = detail.fonts.length + detail.sourceFiles.length;
+    return [icons > 0 ? plural(icons, "icon") : null, files > 0 ? plural(files, "file") : null].filter((part) => part !== null).join(", ");
+  };
+  var ICON_GRID = 'class="dc-grid dc-icons"';
+  var CARD = /<div class="dc-card" data-dc-entry="icon:(\d{1,3})">/g;
+  var PICTURE = /<img class="dc-icon(?: [^"]*)?"[^>]*? src="(data:image\/svg\+xml;base64,[A-Za-z0-9+/]+={0,2})"/;
+  var iconPictures = (boardHtml) => {
+    const pictures = /* @__PURE__ */ new Map();
+    const start = boardHtml.lastIndexOf(ICON_GRID);
+    if (start < 0) return pictures;
+    const grid = boardHtml.slice(start);
+    const cards = [...grid.matchAll(CARD)];
+    cards.forEach((card, position) => {
+      const from = card.index + card[0].length;
+      const body = grid.slice(from, cards[position + 1]?.index ?? grid.length);
+      const end = body.indexOf("</section>");
+      const src = PICTURE.exec(end < 0 ? body : body.slice(0, end))?.[1];
+      if (src !== void 0) pictures.set(Number(card[1]), { src });
+    });
+    return pictures;
+  };
+
+  // src/ui/model/system-page-model.ts
+  var AREA_LABEL = Object.freeze({
+    foundations: "Foundations",
+    components: "Components",
+    patterns: "Patterns & voice",
+    brand: "Brand & marketing"
+  });
+  var COLOUR_GROUP_LABEL = Object.freeze({
+    brand: "Brand",
+    surface: "Surfaces",
+    text: "Text",
+    border: "Borders",
+    status: "Status",
+    data: "Data",
+    other: "Other"
+  });
+  var REVIEW_LABEL = Object.freeze({
+    "not-reviewed": "Not reviewed",
+    "looks-good": "Looks good",
+    "needs-work": "Needs work"
+  });
+  var NOT_COVERED = "Not covered by this system.";
+  var tokensOf = (detail, section2) => detail.tokens.filter((token) => (token.section === "other" ? "sizes" : token.section) === section2);
+  var COUNT_NOUN = {
+    colours: ["colour"],
+    spacing: ["value"],
+    radius: ["value"],
+    shadows: ["shadow"],
+    layers: ["layer"],
+    sizes: ["size"],
+    components: ["component"],
+    patterns: ["entry", "entries"],
+    brand: ["entry", "entries"]
+  };
+  var sectionCount = (detail, section2) => {
+    switch (section2) {
+      case "overview":
+        return (detail.overview?.text ? 1 : 0) + detail.notes.length;
+      case "typography":
+        return detail.type.length;
+      case "components":
+        return detail.components.length;
+      case "patterns":
+        return detail.patterns.length;
+      case "brand":
+        return detail.brand.length + detail.logos.length;
+      case "assets":
+        return (detail.icons?.length ?? 0) + detail.fonts.length + detail.sourceFiles.length;
+      default:
+        return tokensOf(detail, section2).length;
+    }
+  };
+  var countText = (detail, section2) => {
+    const count = sectionCount(detail, section2);
+    if (count === 0) return "Nothing yet";
+    if (section2 === "overview") return plural(detail.notes.length + (detail.overview?.text ? 1 : 0), "note");
+    if (section2 === "typography") return plural(count, "style");
+    if (section2 === "assets") return assetsCountText(detail);
+    if (section2 === "motion") return motionCountText(tokensOf(detail, "motion"));
+    const noun = COUNT_NOUN[section2] ?? ["entry", "entries"];
+    return count === 1 ? `1 ${noun[0]}` : `${count} ${noun[1] ?? `${noun[0]}s`}`;
+  };
+  var isCovered = (detail, section2) => detail.coverage.includes(AREA_OF_SECTION[section2]);
+  var sectionRow = (detail, section2) => {
+    const covered = isCovered(detail, section2);
+    const review = detail.review[section2]?.state ?? "not-reviewed";
+    const count = covered ? countText(detail, section2) : "Not covered";
+    return { section: section2, label: sectionLabel(section2), count, covered, review, ariaLabel: `${sectionLabel(section2)}, ${count}${covered ? `, ${REVIEW_LABEL[review]}` : ""}` };
+  };
+  var areaGroups = (detail) => SYSTEM_AREAS.map((area) => {
+    const rows = SYSTEM_SECTIONS.filter((section2) => AREA_OF_SECTION[section2] === area).map((section2) => sectionRow(detail, section2));
+    const covered = detail.coverage.includes(area);
+    return { area, label: AREA_LABEL[area], covered, meta: covered ? plural(rows.length, "section") : "Not covered", rows };
+  });
+  var reviewProgress = (detail) => {
+    const covered = SYSTEM_SECTIONS.filter((section2) => isCovered(detail, section2));
+    const done = covered.filter((section2) => detail.review[section2]?.state !== void 0 && detail.review[section2]?.state !== "not-reviewed").length;
+    const total = covered.length;
+    return { text: `${done} of ${total} reviewed`, done, total, percent: total === 0 ? 0 : Math.round(done / total * 100) };
+  };
+  var unreviewedSections = (detail) => SYSTEM_SECTIONS.filter((section2) => isCovered(detail, section2) && (detail.review[section2]?.state ?? "not-reviewed") === "not-reviewed");
+  var reviewFoot = (detail, section2) => {
+    if (!isCovered(detail, section2)) return { kind: "uncovered", text: NOT_COVERED };
+    const state = detail.review[section2]?.state ?? "not-reviewed";
+    if (state === "looks-good") return { kind: "state", state, text: "Looks good", actions: ["needs-work"] };
+    if (state === "needs-work") return { kind: "state", state, text: "Needs work", actions: ["looks-good"] };
+    return { kind: "ask", text: `Does ${sectionLabel(section2)} look right?`, actions: ["looks-good", "needs-work"] };
+  };
+  var REVIEW_BUTTON = Object.freeze({ "looks-good": "Looks good", "needs-work": "Needs work" });
+  var readyControl = (detail) => detail.status === "draft" ? { label: "Mark ready", emphasis: "primary", state: "draft" } : { label: "Back to draft", emphasis: "none", state: "ready" };
+  var readyNotice = (name, unreviewed) => unreviewed > 0 ? { title: `${name} is ready.`, body: `${plural(unreviewed, "section")} ${unreviewed === 1 ? "wasn\u2019t" : "weren\u2019t"} reviewed.`, action: unreviewed === 1 ? "Review it" : `Review the ${unreviewed}` } : { title: `${name} is ready.`, body: "", action: null };
+  var firstEntryOf = (detail, section2) => {
+    const key = (kind, id) => {
+      try {
+        return entryKeyOf(kind, id);
+      } catch {
+        return null;
+      }
+    };
+    switch (section2) {
+      case "overview":
+        return detail.overview?.text ? "overview" : detail.notes[0] ? key("note", detail.notes[0].id) : null;
+      case "typography":
+        return detail.type[0] ? key("type", detail.type[0].id) : detail.fonts.length > 0 ? key("font", "0") : null;
+      case "components":
+        return detail.components[0] ? key("component", detail.components[0].id) : null;
+      case "patterns":
+        return detail.patterns[0] ? key("pattern", detail.patterns[0].id) : null;
+      case "brand":
+        return detail.brand[0] ? key("brand", detail.brand[0].id) : detail.logos.length > 0 ? key("logo", "0") : null;
+      case "assets":
+        return detail.icons?.[0] ? key("icon", "0") : detail.fonts.length > 0 ? key("font", "0") : null;
+      default: {
+        const first = tokensOf(detail, section2)[0];
+        return first ? key("token", first.name) : null;
+      }
+    }
+  };
+  var sectionOfHit = (detail, entry) => {
+    if (entry === void 0 || !BOARD_ENTRY_PATTERN.test(entry)) return null;
+    const parsed = parseEntryKey(entry);
+    return parsed === null ? null : sectionOfEntry(parsed, detail);
+  };
+  var entrySelector = (entry) => `[data-dc-entry="${entry.replace(/["\\]/g, "\\$&")}"]`;
+  var DEPTH_LABEL = Object.freeze({
+    tokens: "Tokens only",
+    core: "Core system",
+    full: "Full system"
+  });
+  var DEPTH_SENTENCE = Object.freeze({
+    tokens: "Values and notes only. It has no components or patterns.",
+    core: "The foundations, the components your code has with every state, and the patterns those screens use.",
+    full: "A core system plus motion, navigation, overlays, forms, feedback and data display."
+  });
+  var TOPIC_LABEL = Object.freeze({
+    surface: "Surface colours",
+    text: "Text colours",
+    border: "Border colours",
+    brand: "Brand colours",
+    status: "Status colours",
+    "type-styles": "Type styles",
+    spacing: "Spacing",
+    radius: "Corner radius",
+    pairs: "Colour pairs",
+    "dark-values": "Dark values",
+    "state-colours": "State colours",
+    "data-colours": "Data colours",
+    "control-sizes": "Control sizes",
+    breakpoints: "Breakpoints",
+    elevation: "Shadows",
+    layers: "Layers",
+    motion: "Motion",
+    components: "Components",
+    examples: "Live examples",
+    "focus-disabled": "Focus and disabled states",
+    voice: "Voice",
+    navigation: "Navigation",
+    overlays: "Overlays",
+    forms: "Forms",
+    feedback: "Feedback",
+    states: "Empty, loading and error states",
+    "data-display": "Data display",
+    accessibility: "Accessibility",
+    responsive: "Responsive behaviour",
+    logo: "Logo",
+    "brand-colour": "Brand colour",
+    imagery: "Imagery",
+    marketing: "Marketing",
+    // system-builder-depth Phase 2 (T11).
+    icons: "Icons"
+  });
+  var scopeParts = (detail) => {
+    const parts = [];
+    if (detail.depth) parts.push(DEPTH_LABEL[detail.depth]);
+    const left = detail.outOfScope?.length ?? 0;
+    if (left > 0) parts.push(`${plural(left, "topic")} left out`);
+    return parts;
+  };
+  var leftOutText = (detail) => {
+    const topics = (detail.outOfScope ?? []).map((id) => TOPIC_LABEL[id] ?? id);
+    return topics.length === 0 ? null : `Left out on purpose: ${topics.join(", ")}.`;
+  };
+  var scopeView = (detail) => {
+    const depth = detail.depth ? { label: DEPTH_LABEL[detail.depth], sentence: DEPTH_SENTENCE[detail.depth] } : null;
+    const leftOut = (detail.outOfScope ?? []).map((id) => TOPIC_LABEL[id] ?? id);
+    return depth === null && leftOut.length === 0 ? null : { depth, leftOut };
+  };
+  var homeLine = (detail, sourceText2) => {
+    const parts = detail.home.kind === "repo" ? [`Repo \xB7 ${detail.home.label}`] : ["In Design Chamber"];
+    parts.push(...scopeParts(detail));
+    if (sourceText2 && detail.home.kind !== "repo") parts.push(sourceText2);
+    parts.push(detail.usedBy === 0 ? "Not used yet" : `Used by ${plural(detail.usedBy, "design")}`);
+    return parts.join(" \xB7 ");
+  };
+  var homeTitle = (detail) => {
+    const where = detail.home.kind === "repo" ? detail.home.directory : "Kept in your Designs folder";
+    const left = leftOutText(detail);
+    return left === null ? where : `${where}
+${left}`;
+  };
+  var ENTRY_KIND_LABEL = Object.freeze({
+    layout: "Layout",
+    "do-dont": "Do and don\u2019t",
+    voice: "Voice",
+    marketing: "Marketing",
+    imagery: "Imagery",
+    "logo-use": "Logo use",
+    other: "Other",
+    navigation: "Navigation",
+    overlay: "Overlays",
+    forms: "Forms",
+    "data-display": "Data display",
+    feedback: "Feedback",
+    states: "Empty, loading and error",
+    page: "Page template",
+    responsive: "Responsive",
+    motion: "Motion",
+    accessibility: "Accessibility",
+    colour: "Brand colour",
+    social: "Social",
+    email: "Email"
+  });
+  var entryKindLabel = (kind) => {
+    const known2 = Object.hasOwn(ENTRY_KIND_LABEL, kind) ? ENTRY_KIND_LABEL[kind] : void 0;
+    if (known2 !== void 0) return known2;
+    const words = kind.replace(/[-_]+/g, " ").trim();
+    return words === "" ? "Other" : words.charAt(0).toUpperCase() + words.slice(1);
+  };
+  var PAIR_MEASURED = "Measured by the check";
+  var PAIR_USE_LABEL = Object.freeze({
+    text: "Body text",
+    large: "Large text",
+    ui: "Interface part"
+  });
+  var valueOf2 = (token, scheme) => {
+    const value = scheme === "dark" ? token?.dark ?? token?.light ?? null : token?.light ?? null;
+    return value === null || value.editable !== "ok" ? null : value.text;
+  };
+  var pairViews = (detail) => {
+    const pairs = detail.pairs ?? [];
+    if (pairs.length === 0) return [];
+    const tokens = new Map(detail.tokens.map((token) => [token.name, token]));
+    const schemes = pairSchemes(detail);
+    return pairs.map((pair, index) => {
+      const level = PAIR_LEVELS[pair.use];
+      const grounds = schemes.map((scheme) => {
+        const label = scheme === "dark" ? "Dark" : "Light";
+        const ratio = staticPairRatio(detail, pair, scheme);
+        const low = ratio !== null && ratio < level;
+        const text = ratio === null ? PAIR_MEASURED : ratioText(ratio);
+        return {
+          scheme,
+          label,
+          fg: valueOf2(tokens.get(pair.fg), scheme),
+          bg: valueOf2(tokens.get(pair.bg), scheme),
+          ratio: text,
+          low,
+          ariaLabel: `${label}, ${text}${low ? `, under ${level}:1` : ""}`
+        };
+      });
+      return {
+        index,
+        name: `${pair.fg} on ${pair.bg}`,
+        use: `${PAIR_USE_LABEL[pair.use]}, needs ${PAIR_LEVELS[pair.use]}:1`,
+        note: pair.note,
+        auto: pair.auto,
+        grounds
+      };
+    });
+  };
+  var livingPagePill = (detail) => {
+    if (detail.home.kind !== "repo" || detail.livingPage === null || detail.livingPage.state === null) return null;
+    const repo = detail.home.label;
+    const title2 = detail.livingPage.sentence ?? "";
+    switch (detail.livingPage.state) {
+      case "fresh":
+        return { label: "Living page up to date", tone: "success", title: title2 };
+      case "out-of-date":
+        return { label: "Living page out of date", tone: "warning", title: title2 };
+      case "missing":
+        return { label: `Living page not in ${repo} yet`, tone: "warning", title: title2 };
+      case "changed":
+        return { label: `Living page changed in ${repo}`, tone: "warning", title: title2 };
+      case "reformatted":
+        return { label: "Living page reformatted", tone: "info", title: title2 };
+      case "unsafe":
+        return { label: "Living page can\u2019t be checked as safe", tone: "error", title: title2 };
+      case "unreadable":
+        return { label: "Living page can\u2019t be read", tone: "error", title: title2 };
+    }
+  };
+  var railHint = (detail, phone = false) => detail.home.kind === "repo" ? `${detail.name} lives in ${detail.home.label}. Change the values there, or ask the agent here.` : phone ? "To edit values, open Design Chamber on your computer." : "To edit values, open Design Chamber full screen: sidebar, Extension pages, Design Chamber.";
+  var BOARD_POINTER_NAME = "--dc-board-pointer";
+  var boardPointerVar = (x, y) => Number.isFinite(x) && Number.isFinite(y) && x >= 0 && y >= 0 ? { name: BOARD_POINTER_NAME, value: `${Math.round(x)} ${Math.round(y)}` } : null;
+  var boardScheme = (mode) => mode === "dark" ? "dark" : "light";
+  var entryLabel = (detail, entry) => {
+    const parsed = parseEntryKey(entry);
+    if (parsed === null) return { tag: "entry", text: "" };
+    switch (parsed.kind) {
+      case "token":
+        return { tag: "token", text: parsed.key };
+      case "type":
+        return { tag: "type", text: detail.type.find((style) => style.id === parsed.key)?.name ?? parsed.key };
+      case "component":
+        return { tag: "component", text: detail.components.find((component) => component.id === parsed.key)?.name ?? parsed.key };
+      case "overview":
+        return { tag: "overview", text: "Overview" };
+      case "note":
+        return { tag: "note", text: detail.notes.find((note) => note.id === parsed.key)?.title ?? parsed.key };
+      case "pattern":
+        return { tag: "pattern", text: detail.patterns.find((entry2) => entry2.id === parsed.key)?.title ?? parsed.key };
+      case "brand":
+        return { tag: "brand", text: detail.brand.find((entry2) => entry2.id === parsed.key)?.title ?? parsed.key };
+      case "font":
+        return { tag: "font", text: detail.fonts[Number(parsed.key)]?.family ?? "Font" };
+      case "logo":
+        return { tag: "logo", text: detail.logos[Number(parsed.key)]?.variant ?? "Logo" };
+      case "icon":
+        return { tag: "icon", text: detail.icons?.[Number(parsed.key)]?.name ?? "Icon" };
+      case "pair": {
+        const pair = detail.pairs[Number(parsed.key)];
+        return { tag: "pair", text: pair === void 0 ? "Colour pair" : `${pair.fg} on ${pair.bg}` };
+      }
+    }
+  };
+  var sourceText = (sources, folder, ago) => {
+    if (sources.code) {
+      const when = ago ? ago(sources.code.lastScan) : "";
+      return when === "" ? `From ${folder(sources.code.directory)}` : `Synced with ${folder(sources.code.directory)} ${when}`;
+    }
+    if (sources.brand > 0) return "From brand files";
+    if (sources.description) return "From a description";
+    return null;
+  };
+  var SCREEN_KIND_LABEL = Object.freeze({
+    page: "Page template",
+    pattern: "Pattern",
+    state: "Screen state",
+    marketing: "Marketing"
+  });
+  var SCREENS_EMPTY = "No screens yet. Ask the agent to add page templates.";
+  var SCREEN_GONE = "That screen isn\u2019t in this system any more.";
+  var SCREENS_RAIL_HINT = "To see every screen side by side, open Design Chamber full screen: sidebar, Extension pages, Design Chamber.";
+  var screensTabShown = (detail, view2) => detail.screens.length > 0 || view2 === "screens";
+  var screensSource = (next, lastReadable) => next.unreadable !== null && lastReadable !== null ? { ...next, screens: lastReadable.screens, viewports: lastReadable.viewports } : next;
+  var SCREENS_UNREADABLE = "This system can\u2019t be read right now, so its screens can\u2019t be shown. They come back once the agent\u2019s files are valid again.";
+  var screenViewports = (screen, system) => screen.viewports !== null && screen.viewports.length > 0 ? screen.viewports : system;
+  var viewportText = (viewport) => `${viewport.label} ${viewport.width}\xD7${viewport.height}`;
+  var screenRowMeta = (screen, system) => [SCREEN_KIND_LABEL[screen.kind], screenViewports(screen, system).map((viewport) => viewport.label).join(", ")].join(" \xB7 ");
+  var screenRowLabel = (screen, system) => {
+    const sizes = screenViewports(screen, system).map(viewportText);
+    const joined = sizes.length <= 1 ? sizes[0] ?? "" : `${sizes.slice(0, -1).join(", ")} and ${sizes[sizes.length - 1] ?? ""}`;
+    return `${screen.title}, ${SCREEN_KIND_LABEL[screen.kind].toLowerCase()} at ${joined}`;
+  };
+  var screenWall = (screens, system, options) => {
+    const rowGap = options.rowGap ?? options.gap;
+    const wrap = options.wrap ?? 0;
+    const cells = [];
+    let x = 0;
+    let y = 0;
+    let lineHeight = 0;
+    let right = 0;
+    for (const screen of screens) {
+      const sizes = screenViewports(screen, system);
+      if (sizes.length === 0) continue;
+      const width = sizes.reduce((sum, viewport) => sum + viewport.width, 0) + options.gap * (sizes.length - 1);
+      if (x > 0 && x + width > wrap) {
+        y += lineHeight + rowGap;
+        x = 0;
+        lineHeight = 0;
+      }
+      for (const viewport of sizes) {
+        const label = { x, y, w: viewport.width, h: options.labelHeight };
+        const frame = { x, y: y + options.labelHeight, w: viewport.width, h: viewport.height };
+        cells.push({ id: `${screen.id}@${viewport.id}`, screen: screen.id, title: screen.title, kind: screen.kind, viewport, problem: screen.problem, label, frame, rect: { x, y, w: viewport.width, h: options.labelHeight + viewport.height } });
+        x += viewport.width + options.gap;
+      }
+      right = Math.max(right, x - options.gap);
+      lineHeight = Math.max(lineHeight, options.labelHeight + Math.max(...sizes.map((viewport) => viewport.height)));
+    }
+    return { cells, bounds: cells.length === 0 ? null : { x: 0, y: 0, width: right, height: y + lineHeight } };
+  };
+  var bestWrap = (screens, system, options, stage) => {
+    if (stage.w <= 0 || stage.h <= 0) return 0;
+    const widths = screens.map((screen) => {
+      const sizes = screenViewports(screen, system);
+      return sizes.reduce((sum, viewport) => sum + viewport.width, 0) + options.gap * Math.max(0, sizes.length - 1);
+    });
+    const candidates2 = /* @__PURE__ */ new Set([0]);
+    let run = 0;
+    for (const [index, width] of widths.entries()) {
+      run += (index > 0 ? options.gap : 0) + width;
+      candidates2.add(Math.max(width, run));
+      candidates2.add(width);
+    }
+    let best = 0;
+    let bestScale = -1;
+    for (const wrap of [...candidates2].sort((a, b) => a - b)) {
+      const bounds = screenWall(screens, system, { ...options, wrap }).bounds;
+      if (bounds === null) return 0;
+      const scale = Math.min(stage.w / bounds.width, stage.h / bounds.height);
+      if (scale > bestScale + 1e-9) {
+        best = wrap;
+        bestScale = scale;
+      }
+    }
+    return best;
+  };
+  var cellsOf = (wall, screen) => screen === null ? wall.cells : wall.cells.filter((cell) => cell.screen === screen);
+  var zoomText = (scale) => `${Math.round(scale * 100)}%`;
+
   // src/ui/model/systems-model.ts
   var SYSTEM_ROW_BADGES_MAX = 2;
   var pinnedLabel = (directories, label) => {
@@ -17612,14 +19493,15 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     ...sources.description ? ["Described"] : []
   ];
   var usedByLine = (count) => count === 0 ? "Not used yet" : `Used by ${plural(count, "design")}`;
-  var homeLine = (summary) => summary.home === "internal" ? { label: "In Design Chamber", title: "Kept in your Designs folder" } : { label: `Repo \xB7 ${summary.home.repo}`, title: summary.home.directory };
+  var homeLine2 = (summary) => summary.home === "internal" ? { label: "In Design Chamber", title: "Kept in your Designs folder" } : { label: `Repo \xB7 ${summary.home.repo}`, title: summary.home.directory };
   var sharedRepoNotice = (summary) => summary.home !== "internal" && summary.sharedRepoWith !== null ? `${summary.home.repo} already has a repo-backed system (${summary.sharedRepoWith}).` : null;
   var systemRow = (summary, context) => {
     const badges = systemRowBadges(summary, context.label);
-    const home = homeLine(summary);
+    const home = homeLine2(summary);
     const updated = relativeTime(summary.updated, context.nowMs, context.locale);
     const source = sourceLine(summary.sources, context.label);
-    const meta = [...source, usedByLine(summary.usedBy), ...updated === "" ? [] : [updated]];
+    const [depth = null] = scopeParts(summary);
+    const meta = [...depth === null ? [] : [depth], ...source, usedByLine(summary.usedBy), ...updated === "" ? [] : [updated]];
     const status = summary.status === "ready" ? { label: "Ready", tone: "success" } : { label: "Draft", tone: "info" };
     const notice = sharedRepoNotice(summary);
     const hiddenLabels = badges.hidden.map((badge) => badge.label);
@@ -17634,7 +19516,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       more: badges.hidden.length > 0 ? { text: `+${badges.hidden.length}`, title: hiddenLabels.join(", ") } : null,
       notice,
       meta,
-      metaParts: { source, usedBy: { count: summary.usedBy, text: usedByLine(summary.usedBy) }, updated: updated === "" ? null : updated },
+      metaParts: { depth, source, usedBy: { count: summary.usedBy, text: usedByLine(summary.usedBy) }, updated: updated === "" ? null : updated },
       ariaLabel: summary.unreadable !== null ? `${summary.name}, can\u2019t be read` : `${spoken.join(", ")}. ${meta.join(", ")}.`
     };
   };
@@ -17676,7 +19558,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     if (summary.unreadable !== null) return `${summary.name}, design system, can\u2019t be read`;
     const updated = relativeTime(summary.updated, context.nowMs, context.locale);
     const used = summary.usedBy === 0 ? "not used yet" : `used by ${plural(summary.usedBy, "design")}`;
-    return [summary.name, "design system", summary.status === "ready" ? "Ready" : "Draft", homeLine(summary).label, used, ...updated === "" ? [] : [`updated ${updated}`]].join(", ");
+    return [summary.name, "design system", summary.status === "ready" ? "Ready" : "Draft", homeLine2(summary).label, used, ...updated === "" ? [] : [`updated ${updated}`]].join(", ");
   };
   var usedByLinkLabel = (count) => `${usedByLine(count)}. Show ${count === 1 ? "it" : "them"}`;
   var sidebarSystems = (systems2) => [...systems2].sort((a, b) => a.name.localeCompare(b.name, void 0, { sensitivity: "base" })).map((system) => ({ id: system.id, name: system.name, draft: system.status === "draft", usedBy: system.usedBy, swatch: plateSwatches(system)[0] ?? null }));
@@ -18833,8 +20715,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       (answer) => {
         if (closed) return;
         projects = answer.projects.map((project) => ({ directory: project.directory, name: project.name }));
-        const current = host.snapshot()?.directory ?? null;
-        const match = current === null ? void 0 : projects.find((project) => sameDirectory(project.directory, current));
+        const current2 = host.snapshot()?.directory ?? null;
+        const match = current2 === null ? void 0 : projects.find((project) => sameDirectory(project.directory, current2));
         if (match && projectChoice === "") projectChoice = match.directory;
         else if (projects.length === 0 && projectChoice === "") projectChoice = OTHER_FOLDER;
         paintProject();
@@ -18911,7 +20793,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       body.push(badges);
       if (model.notice) body.push(h("span", { class: "dc-sys-notice" }, model.notice));
       const meta = h("span", { class: "dc-sys-meta" });
-      const parts = [...model.metaParts.source.map((text) => h("span", null, text)), usedByControl(summary, model.metaParts.usedBy.text, options.onShowDesigns), ...model.metaParts.updated === null ? [] : [h("span", null, model.metaParts.updated)]];
+      const parts = [...model.metaParts.depth === null ? [] : [h("span", null, model.metaParts.depth)], ...model.metaParts.source.map((text) => h("span", null, text)), usedByControl(summary, model.metaParts.usedBy.text, options.onShowDesigns), ...model.metaParts.updated === null ? [] : [h("span", null, model.metaParts.updated)]];
       parts.forEach((part, index) => {
         if (index > 0) meta.append(h("span", { class: "dc-sys-dot", "aria-hidden": "true" }, "\xB7"));
         meta.append(part);
@@ -18939,7 +20821,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     mountBadge(kind, { label: "System", tone: "primary" });
     const home = h("span", { class: "dc-card-project", title: model.home.title }, icon2(summary.home === "internal" ? "system" : "repo", 12), h("span", { class: "dc-row-project-name" }, model.home.label));
     const more = iconBtn({ icon: "more", label: `Actions for ${summary.name}`, size: "sm", onClick: () => void 0 });
-    attachMenu(more, () => librarySystemMenu(summary), (id) => void runLibrarySystemAction(id, summary, options));
+    attachMenu(more, () => menuOnThisDevice(librarySystemMenu(summary)), (id) => void runLibrarySystemAction(id, summary, options));
     const updated = relativeTime(summary.updated, Date.now(), locale);
     return h(
       "li",
@@ -18995,7 +20877,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       label,
       onOpen: options.onOpen,
       onShowDesigns: options.onShowDesigns,
-      entries: () => systemMenu(summary),
+      entries: () => menuOnThisDevice(systemMenu(summary)),
       onMenu: (id) => void runAction(id, summary)
     });
     const skeleton = () => Array.from(
@@ -19159,213 +21041,6 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
   };
 
-  // src/shared/agent/chip.ts
-  var DEFAULT_VIEWPORTS = `${formatViewport(VIEWPORT_LAPTOP)} + ${formatViewport(VIEWPORT_PHONE)}`;
-
-  // src/shared/agent/system-prompts.ts
-  var SECTION_LABEL = {
-    overview: "Overview",
-    colours: "Colours",
-    typography: "Typography",
-    spacing: "Spacing",
-    radius: "Radius",
-    shadows: "Shadows",
-    layers: "Layers",
-    sizes: "Sizes",
-    components: "Components",
-    patterns: "Patterns & voice",
-    brand: "Brand & marketing",
-    assets: "Assets"
-  };
-  var sectionLabel = (section2) => SECTION_LABEL[section2];
-
-  // src/ui/model/system-page-model.ts
-  var AREA_LABEL = Object.freeze({
-    foundations: "Foundations",
-    components: "Components",
-    patterns: "Patterns & voice",
-    brand: "Brand & marketing"
-  });
-  var COLOUR_GROUP_LABEL = Object.freeze({
-    brand: "Brand",
-    surface: "Surfaces",
-    text: "Text",
-    border: "Borders",
-    status: "Status",
-    data: "Data",
-    other: "Other"
-  });
-  var REVIEW_LABEL = Object.freeze({
-    "not-reviewed": "Not reviewed",
-    "looks-good": "Looks good",
-    "needs-work": "Needs work"
-  });
-  var NOT_COVERED = "Not covered by this system.";
-  var tokensOf = (detail, section2) => detail.tokens.filter((token) => (token.section === "other" ? "sizes" : token.section) === section2);
-  var COUNT_NOUN = {
-    colours: ["colour"],
-    spacing: ["value"],
-    radius: ["value"],
-    shadows: ["shadow"],
-    layers: ["layer"],
-    sizes: ["size"],
-    components: ["component"],
-    patterns: ["entry", "entries"],
-    brand: ["entry", "entries"]
-  };
-  var sectionCount = (detail, section2) => {
-    switch (section2) {
-      case "overview":
-        return (detail.overview?.text ? 1 : 0) + detail.notes.length;
-      case "typography":
-        return detail.type.length;
-      case "components":
-        return detail.components.length;
-      case "patterns":
-        return detail.patterns.length;
-      case "brand":
-        return detail.brand.length + detail.logos.length;
-      case "assets":
-        return detail.fonts.length + detail.sourceFiles.length;
-      default:
-        return tokensOf(detail, section2).length;
-    }
-  };
-  var countText = (detail, section2) => {
-    const count = sectionCount(detail, section2);
-    if (count === 0) return "Nothing yet";
-    if (section2 === "overview") return plural(detail.notes.length + (detail.overview?.text ? 1 : 0), "note");
-    if (section2 === "typography") return plural(count, "style");
-    if (section2 === "assets") return plural(count, "file");
-    const noun = COUNT_NOUN[section2] ?? ["entry", "entries"];
-    return count === 1 ? `1 ${noun[0]}` : `${count} ${noun[1] ?? `${noun[0]}s`}`;
-  };
-  var isCovered = (detail, section2) => detail.coverage.includes(AREA_OF_SECTION[section2]);
-  var sectionRow = (detail, section2) => {
-    const covered = isCovered(detail, section2);
-    const review = detail.review[section2]?.state ?? "not-reviewed";
-    const count = covered ? countText(detail, section2) : "Not covered";
-    return { section: section2, label: sectionLabel(section2), count, covered, review, ariaLabel: `${sectionLabel(section2)}, ${count}${covered ? `, ${REVIEW_LABEL[review]}` : ""}` };
-  };
-  var areaGroups = (detail) => SYSTEM_AREAS.map((area) => {
-    const rows = SYSTEM_SECTIONS.filter((section2) => AREA_OF_SECTION[section2] === area).map((section2) => sectionRow(detail, section2));
-    const covered = detail.coverage.includes(area);
-    return { area, label: AREA_LABEL[area], covered, meta: covered ? plural(rows.length, "section") : "Not covered", rows };
-  });
-  var reviewProgress = (detail) => {
-    const covered = SYSTEM_SECTIONS.filter((section2) => isCovered(detail, section2));
-    const done = covered.filter((section2) => detail.review[section2]?.state !== void 0 && detail.review[section2]?.state !== "not-reviewed").length;
-    const total = covered.length;
-    return { text: `${done} of ${total} reviewed`, done, total, percent: total === 0 ? 0 : Math.round(done / total * 100) };
-  };
-  var unreviewedSections = (detail) => SYSTEM_SECTIONS.filter((section2) => isCovered(detail, section2) && (detail.review[section2]?.state ?? "not-reviewed") === "not-reviewed");
-  var reviewFoot = (detail, section2) => {
-    if (!isCovered(detail, section2)) return { kind: "uncovered", text: NOT_COVERED };
-    const state = detail.review[section2]?.state ?? "not-reviewed";
-    if (state === "looks-good") return { kind: "state", state, text: "Looks good", actions: ["needs-work"] };
-    if (state === "needs-work") return { kind: "state", state, text: "Needs work", actions: ["looks-good"] };
-    return { kind: "ask", text: `Does ${sectionLabel(section2)} look right?`, actions: ["looks-good", "needs-work"] };
-  };
-  var REVIEW_BUTTON = Object.freeze({ "looks-good": "Looks good", "needs-work": "Needs work" });
-  var readyControl = (detail) => detail.status === "draft" ? { label: "Mark ready", emphasis: "primary", state: "draft" } : { label: "Back to draft", emphasis: "none", state: "ready" };
-  var readyNotice = (name, unreviewed) => unreviewed > 0 ? { title: `${name} is ready.`, body: `${plural(unreviewed, "section")} ${unreviewed === 1 ? "wasn\u2019t" : "weren\u2019t"} reviewed.`, action: unreviewed === 1 ? "Review it" : `Review the ${unreviewed}` } : { title: `${name} is ready.`, body: "", action: null };
-  var firstEntryOf = (detail, section2) => {
-    const key = (kind, id) => {
-      try {
-        return entryKeyOf(kind, id);
-      } catch {
-        return null;
-      }
-    };
-    switch (section2) {
-      case "overview":
-        return detail.overview?.text ? "overview" : detail.notes[0] ? key("note", detail.notes[0].id) : null;
-      case "typography":
-        return detail.type[0] ? key("type", detail.type[0].id) : detail.fonts.length > 0 ? key("font", "0") : null;
-      case "components":
-        return detail.components[0] ? key("component", detail.components[0].id) : null;
-      case "patterns":
-        return detail.patterns[0] ? key("pattern", detail.patterns[0].id) : null;
-      case "brand":
-        return detail.brand[0] ? key("brand", detail.brand[0].id) : detail.logos.length > 0 ? key("logo", "0") : null;
-      case "assets":
-        return detail.fonts.length > 0 ? key("font", "0") : null;
-      default: {
-        const first = tokensOf(detail, section2)[0];
-        return first ? key("token", first.name) : null;
-      }
-    }
-  };
-  var sectionOfHit = (detail, entry) => {
-    if (entry === void 0 || !BOARD_ENTRY_PATTERN.test(entry)) return null;
-    const parsed = parseEntryKey(entry);
-    return parsed === null ? null : sectionOfEntry(parsed, detail);
-  };
-  var entrySelector = (entry) => `[data-dc-entry="${entry.replace(/["\\]/g, "\\$&")}"]`;
-  var homeLine2 = (detail, sourceText2) => {
-    const parts = detail.home.kind === "repo" ? [`Repo \xB7 ${detail.home.label}`] : ["In Design Chamber"];
-    if (sourceText2 && detail.home.kind !== "repo") parts.push(sourceText2);
-    parts.push(detail.usedBy === 0 ? "Not used yet" : `Used by ${plural(detail.usedBy, "design")}`);
-    return parts.join(" \xB7 ");
-  };
-  var homeTitle = (detail) => detail.home.kind === "repo" ? detail.home.directory : "Kept in your Designs folder";
-  var livingPagePill = (detail) => {
-    if (detail.home.kind !== "repo" || detail.livingPage === null || detail.livingPage.state === null) return null;
-    const repo = detail.home.label;
-    const title2 = detail.livingPage.sentence ?? "";
-    switch (detail.livingPage.state) {
-      case "fresh":
-        return { label: "Living page up to date", tone: "success", title: title2 };
-      case "out-of-date":
-        return { label: "Living page out of date", tone: "warning", title: title2 };
-      case "missing":
-        return { label: `Living page not in ${repo} yet`, tone: "warning", title: title2 };
-      case "changed":
-        return { label: `Living page changed in ${repo}`, tone: "warning", title: title2 };
-      case "reformatted":
-        return { label: "Living page reformatted", tone: "info", title: title2 };
-      case "unsafe":
-        return { label: "Living page can\u2019t be checked as safe", tone: "error", title: title2 };
-      case "unreadable":
-        return { label: "Living page can\u2019t be read", tone: "error", title: title2 };
-    }
-  };
-  var railHint = (detail) => detail.home.kind === "repo" ? `${detail.name} lives in ${detail.home.label}. Change the values there, or ask the agent here.` : "To edit values, open Design Chamber full screen: sidebar, Extension pages, Design Chamber.";
-  var boardScheme = (mode) => mode === "dark" ? "dark" : "light";
-  var entryLabel = (detail, entry) => {
-    const parsed = parseEntryKey(entry);
-    if (parsed === null) return { tag: "entry", text: "" };
-    switch (parsed.kind) {
-      case "token":
-        return { tag: "token", text: parsed.key };
-      case "type":
-        return { tag: "type", text: detail.type.find((style) => style.id === parsed.key)?.name ?? parsed.key };
-      case "component":
-        return { tag: "component", text: detail.components.find((component) => component.id === parsed.key)?.name ?? parsed.key };
-      case "overview":
-        return { tag: "overview", text: "Overview" };
-      case "note":
-        return { tag: "note", text: detail.notes.find((note) => note.id === parsed.key)?.title ?? parsed.key };
-      case "pattern":
-        return { tag: "pattern", text: detail.patterns.find((entry2) => entry2.id === parsed.key)?.title ?? parsed.key };
-      case "brand":
-        return { tag: "brand", text: detail.brand.find((entry2) => entry2.id === parsed.key)?.title ?? parsed.key };
-      case "font":
-        return { tag: "font", text: detail.fonts[Number(parsed.key)]?.family ?? "Font" };
-      case "logo":
-        return { tag: "logo", text: detail.logos[Number(parsed.key)]?.variant ?? "Logo" };
-    }
-  };
-  var sourceText = (sources, folder, ago) => {
-    if (sources.code) {
-      const when = ago ? ago(sources.code.lastScan) : "";
-      return when === "" ? `From ${folder(sources.code.directory)}` : `Synced with ${folder(sources.code.directory)} ${when}`;
-    }
-    if (sources.brand > 0) return "From brand files";
-    if (sources.description) return "From a description";
-    return null;
-  };
-
   // src/ui/model/living-page-model.ts
   var LIVING_TITLE = "Living page";
   var REGENERATING_LABEL = "Regenerating\u2026";
@@ -19399,6 +21074,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   var NOUN = {
     font: ["font", "fonts", "embedded"],
     logo: ["logo", "logos", "embedded"],
+    icon: ["icon", "icons", "embedded"],
     example: ["example picture", "example pictures", "included"]
   };
   var LABEL = {
@@ -19511,7 +21187,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       if (id === "ask" && kind === "problem") return { enabled: false, why: CANT_ASK_PROBLEM };
       return { enabled: true, why: null };
     };
-    const actions = ACTIONS[kind].map((id) => ({ id, ...ACTION_COPY[id], ...gate(id) }));
+    const all = ACTIONS[kind].map((id) => ({ id, ...ACTION_COPY[id], ...gate(id) }));
+    const actions = options.phone ? withoutComputerOnly(all) : all;
     const parts = [view2.path];
     if (staged !== null) parts.push(fileSize(staged.bytes, options.locale), `rev ${staged.revision}`);
     const access = context.build?.access ?? null;
@@ -19586,7 +21263,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     return { shown, more, moreLabel: more.length === 0 ? null : `+${more.length} more` };
   };
   var readOnlyLine = (detail) => detail.home.kind === "repo" ? { lead: `${detail.name} lives in ${detail.home.label}.`, rest: "Change the values there, or ask the agent here." } : null;
-  var repoHeaderLine = (detail) => detail.home.kind === "repo" ? { text: `Repo \xB7 ${detail.home.label} \xB7 ${detail.home.folder.replace(/\/+$/, "")}/`, title: detail.home.directory } : null;
+  var repoHeaderLine = (detail) => detail.home.kind === "repo" ? { text: [`Repo \xB7 ${detail.home.label} \xB7 ${detail.home.folder.replace(/\/+$/, "")}/`, ...scopeParts(detail)].join(" \xB7 "), title: homeTitle(detail) } : null;
   var NAME_MAX2 = 80;
   var clip4 = (text, max) => {
     const flat = text.replace(/\s+/g, " ").trim();
@@ -19654,6 +21331,27 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
   };
 
+  // src/ui/model/token-export-model.ts
+  var exportMenuEntry = (facts) => {
+    const entry = { id: "export", label: "Export tokens\u2026" };
+    const reason = facts.viewing ? "Go back to the current version first." : facts.dirty ? "Save or discard your changes first." : facts.unreadable ? "This system can\u2019t be read right now." : null;
+    return reason === null ? entry : { ...entry, disabled: true, reason };
+  };
+  var CHOICES = [
+    { format: "dtcg", label: "Design tokens (W3C)", file: "tokens.json" },
+    { format: "css", label: "CSS variables", file: "tokens.css" },
+    { format: "tailwind", label: "Tailwind theme", file: "tailwind-theme.css" }
+  ];
+  var formatChoices = (offered) => CHOICES.filter((choice) => offered.includes(choice.format));
+  var pickedFormats = (offered, ticked) => formatChoices(offered).map((choice) => choice.format).filter((format) => ticked.has(format));
+  var PICK_A_FORMAT = "Pick at least one format.";
+  var EXPORT_NOTHING = "This design system has no tokens to export yet. Ask the agent to add some.";
+  var renamedSentence = (renamed) => {
+    if (renamed <= 0) return null;
+    return renamed === 1 ? "1 name was changed so it doesn\u2019t clash in tokens.json. README.txt in the ZIP lists it." : `${renamed} names were changed so they don\u2019t clash in tokens.json. README.txt in the ZIP lists them.`;
+  };
+  var exportButtonLabel = (state) => state.busy ? "Exporting\u2026" : state.failed ? "Try again" : "Export ZIP";
+
   // src/ui/systems/living-card.ts
   var ICON = { ask: "chat", fix: "chat", preview: "eye" };
   var actionButton = (action2, handlers) => {
@@ -19684,7 +21382,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       ...card.omitted.map((line) => h("p", { class: "dc-living-line dc-muted" }, line)),
       card.secretLine === null ? null : h("p", { class: "dc-living-secret", role: "alert" }, card.secretLine),
       h("p", { class: "dc-living-path dc-muted" }, card.pathLine),
-      h("div", { class: "dc-living-actions" }, ...card.actions.map((action2) => actionButton(action2, handlers))),
+      card.actions.length === 0 ? null : h("div", { class: "dc-living-actions" }, ...card.actions.map((action2) => actionButton(action2, handlers))),
       ...whys.map((why) => h("p", { class: "dc-living-why dc-muted" }, why))
     );
     if (card.fonts !== null) {
@@ -20104,14 +21802,14 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       }
       if (review !== null) paintReview(review);
     }
-    function paintReview(current) {
+    function paintReview(current2) {
       const boxes = /* @__PURE__ */ new Map();
       const pairs = /* @__PURE__ */ new Map();
       const toggles = /* @__PURE__ */ new Map();
       const busy = phase === "applying";
-      const groups = reviewGroups(current);
-      const changed = new Map(changedRows(current).map((row2) => [row2.name, row2]));
-      const conflicts = new Map(conflictRows(current).map((row2) => [row2.name, row2]));
+      const groups = reviewGroups(current2);
+      const changed = new Map(changedRows(current2).map((row2) => [row2.name, row2]));
+      const conflicts = new Map(conflictRows(current2).map((row2) => [row2.name, row2]));
       const keyOf3 = (group2, id) => `${group2}:${id}`;
       const syncTicks = () => {
         for (const [key, box] of boxes) {
@@ -20171,7 +21869,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       };
       const plainRow = (group2, id) => {
         if (group2 === "assets") {
-          const asset = current.assets.find((one) => one.path === id);
+          const asset = current2.assets.find((one) => one.path === id);
           return tickRow(group2, id, `${asset?.kind === "logo" ? "Logo" : "Font"}: ${folderName(id)}`, h("p", { class: "dc-resync-line dc-muted" }, h("span", { class: "dc-path" }, id)));
         }
         return tickRow(group2, id, id, null);
@@ -20219,7 +21917,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const selection2 = h("p", { class: "dc-resync-sel", "aria-live": "polite" });
       const applyButton = btn({ label: "Apply", variant: "default", emphasis: "primary", loading: busy, onClick: () => void apply() });
       const intro = h("div", { class: "dc-resync-intro" }, h("p", { class: "dc-muted" }, KEPT_LINE));
-      if (current.partial) intro.append(h("p", { class: "dc-resync-note" }, PARTIAL_NOTE));
+      if (current2.partial) intro.append(h("p", { class: "dc-resync-note" }, PARTIAL_NOTE));
       if (applyProblem !== "") sheet.body.append(banner({ tone: "error", title: "Nothing was changed", body: applyProblem }));
       sheet.body.append(intro, ...groups.map(groupView));
       sheet.body.append(h("p", { class: "dc-muted dc-resync-foot-note" }, AGENT_TOKENS_NOTE));
@@ -20255,7 +21953,23 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       console.warn("Design Chamber: the design system could not be linked to its chat", error);
     }
   };
-  var sendSystemMessage = async (id, chat, body) => {
+  var sendSystemMessage = async (id, chat, body) => (await deliverSystemMessage(id, chat, body)).outcome;
+  var sendSystemComments = async (id, chat, commentIds) => {
+    const { outcome, prompt } = await deliverSystemMessage(id, chat, { purpose: "comments", ...commentIds ? { commentIds } : {} });
+    const sent = prompt.comments?.commentIds ?? [];
+    const omitted = prompt.comments?.omitted ?? [];
+    let markFailed = false;
+    if (sent.length > 0) {
+      try {
+        await client.systemComments.markSent(id, sent);
+      } catch (error) {
+        console.warn("Design Chamber: board comments were sent but could not be marked as sent", error);
+        markFailed = true;
+      }
+    }
+    return { outcome, commentIds: sent, omitted, markFailed };
+  };
+  var deliverSystemMessage = async (id, chat, body) => {
     const api = guestHost.client;
     const prompt = await client.call("POST /systems/:id/prompt", { params: { id }, body });
     const selected = guestHost.session.get();
@@ -20308,7 +22022,115 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         console.warn("Design Chamber: the hand-edit ledger could not be cleared after the message was delivered", error);
       }
     }
-    return outcome;
+    return { outcome, prompt };
+  };
+
+  // src/ui/systems/export-sheet.ts
+  var openExportSheet = (hostEl, options) => {
+    const scope = createScope();
+    let closed = false;
+    const sheet = openSheet(hostEl, {
+      title: "Export tokens",
+      subtitle: `Saves ${options.systemName} as one ZIP file in your export folder, Downloads unless you changed it. Your project isn\u2019t changed.`,
+      variant: "dialog",
+      onClose: () => {
+        closed = true;
+        scope.dispose();
+      }
+    });
+    sheet.el.classList.add("dc-export");
+    const cancel = btn({ label: "Cancel", variant: "ghost", onClick: () => sheet.close() });
+    const say = (...nodes) => {
+      sheet.body.replaceChildren(...nodes);
+    };
+    const form = (offered) => {
+      const ticked = new Set(offered);
+      const boxes = [];
+      let busy = false;
+      let failed = false;
+      const problem = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+      const fieldset = h("fieldset", { class: "dc-export-formats" }, h("legend", { class: "dc-sr-only" }, "Formats"));
+      const submit = btn({ label: exportButtonLabel({ busy, failed }), variant: "default", emphasis: "primary", onClick: () => void run() });
+      const paint = () => {
+        submit.set({ label: exportButtonLabel({ busy, failed }), loading: busy });
+        cancel.set({ disabled: busy });
+        for (const box of boxes) box.update({ disabled: busy });
+      };
+      const fail = (sentence2) => {
+        problem.textContent = sentence2;
+        problem.hidden = false;
+      };
+      const run = async () => {
+        if (busy) return;
+        const formats = pickedFormats(offered, ticked);
+        if (formats.length === 0) {
+          fail(PICK_A_FORMAT);
+          fieldset.querySelector("input,button")?.focus();
+          return;
+        }
+        busy = true;
+        problem.hidden = true;
+        paint();
+        try {
+          const result = await client.exportSystemTokens(options.id, formats);
+          sheet.close();
+          options.onExported(result);
+        } catch (error) {
+          const sentence2 = `Couldn\u2019t export. ${errorText2(error)}`;
+          if (closed) {
+            toast("error", sentence2);
+            return;
+          }
+          busy = false;
+          failed = true;
+          paint();
+          fail(sentence2);
+          submit.el.focus();
+        }
+      };
+      for (const choice of formatChoices(offered)) {
+        const holder = h("div", { class: "dc-export-format", "data-format": choice.format });
+        const box = mountCheckbox(holder, {
+          label: choice.label,
+          description: choice.file,
+          checked: true,
+          onChange: (on) => {
+            box.update({ checked: on });
+            if (on) ticked.add(choice.format);
+            else ticked.delete(choice.format);
+            if (ticked.size > 0 && problem.textContent === PICK_A_FORMAT) problem.hidden = true;
+          }
+        });
+        scope.add(() => box.dispose());
+        boxes.push(box);
+        fieldset.append(holder);
+      }
+      say(fieldset, problem);
+      sheet.foot.replaceChildren(cancel.el, submit.el);
+      fieldset.querySelector("input,button")?.focus();
+    };
+    const load = async () => {
+      say(loadingRow("Checking the formats\u2026"));
+      sheet.foot.replaceChildren(cancel.el);
+      try {
+        const { formats } = await client.systemExportFormats(options.id);
+        if (closed) return;
+        if (formatChoices(formats).length === 0) say(h("p", { class: "dc-muted" }, EXPORT_NOTHING));
+        else form(formats);
+      } catch (error) {
+        if (closed) return;
+        const again = btn({ label: "Try again", variant: "default", onClick: () => void load() });
+        say(h("p", { class: "dc-form-error", role: "alert" }, `Couldn\u2019t check the formats. ${errorText2(error)}`));
+        sheet.foot.replaceChildren(cancel.el, again.el);
+        again.el.focus();
+      }
+    };
+    if (options.empty) {
+      say(h("p", { class: "dc-muted" }, EXPORT_NOTHING));
+      cancel.set({ label: "Close" });
+      sheet.foot.replaceChildren(cancel.el);
+    } else void load();
+    return { close: sheet.close };
   };
 
   // src/ui/systems/system-board.ts
@@ -20336,6 +22158,16 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     let waiting = null;
     let scrollTo = null;
     let hit = null;
+    let pointer = null;
+    let pointerFrame = 0;
+    let commenting = false;
+    let commentHandler = null;
+    let commentHit = null;
+    let tracked = [];
+    let rects = /* @__PURE__ */ new Map();
+    let frameScroll = { x: 0, y: 0 };
+    let ready = false;
+    const layoutListeners = /* @__PURE__ */ new Set();
     const slot = createFrameSlot({
       slug: key,
       loadDoc: (_screen, versionId) => client.loadBoard(options.id, versionId, scheme),
@@ -20351,12 +22183,40 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     slot.iframe.classList.add("dc-sys-frame");
     const overlay = h("div", { class: "dc-sys-hit", "aria-hidden": "true" });
     const status = h("div", { class: "dc-sys-board-state" });
-    const el2 = h("div", { class: "dc-sys-board", "data-state": "idle" }, slot.iframe, overlay, status);
-    const vars = () => [...themeVars(), ...preview].slice(0, TOKEN_PREVIEW_VARS_MAX);
+    const pinLayer = h("div", { class: "dc-bc-layer" });
+    const el2 = h("div", { class: "dc-sys-board", "data-state": "idle" }, slot.iframe, overlay, pinLayer, status);
+    const frameBox = () => {
+      const outer = el2.getBoundingClientRect();
+      const inner = slot.iframe.getBoundingClientRect();
+      return { x: inner.left - outer.left, y: inner.top - outer.top, width: inner.width, height: inner.height };
+    };
+    const currentLayout = () => ready ? { rects, scroll: frameScroll, frame: frameBox() } : null;
+    const emitLayout = () => {
+      const now = currentLayout();
+      if (now === null) return;
+      for (const listener of layoutListeners) listener(now);
+    };
+    const resolveTracked = () => {
+      if (!ready) return;
+      if (tracked.length === 0) {
+        rects = /* @__PURE__ */ new Map();
+        emitLayout();
+        return;
+      }
+      slot.post({ type: "resolve-anchors", anchors: tracked.map((entry, index) => ({ id: `pin${index}`, selector: entrySelector(entry), text: "", html: "" })) });
+    };
+    const resizes = typeof ResizeObserver === "function" ? new ResizeObserver(() => emitLayout()) : null;
+    resizes?.observe(el2);
+    const vars = () => [...themeVars(), ...preview].slice(0, TOKEN_PREVIEW_VARS_MAX - 1);
     const sendTokens = () => {
       const all = vars();
       setSlotTokens(key, all);
-      slot.post({ type: "set-tokens", vars: all });
+      slot.post({ type: "set-tokens", vars: pointer === null ? all : [...all, pointer] });
+    };
+    const movePointer = (next) => {
+      if (next?.value === pointer?.value) return;
+      pointer = next;
+      if (slot.state() === "ready") sendTokens();
     };
     const load = () => {
       setSlotTokens(key, vars());
@@ -20377,15 +22237,38 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     }
     const unsubscribe = slot.channel.subscribe((message) => {
       if (message.type === "ready") {
+        ready = true;
+        frameScroll = { x: 0, y: 0 };
         sendTokens();
         if (waiting) scrollTo?.(waiting.entry);
+        resolveTracked();
+      } else if (message.type === "size") {
+        resolveTracked();
+      } else if (message.type === "scroll") {
+        frameScroll = { x: message.x, y: message.y };
+        emitLayout();
       } else if (message.type === "hit") {
+        if (commentHit && commentHit.x === message.x && commentHit.y === message.y) {
+          const at = commentHit.at;
+          commentHit = null;
+          commentHandler?.(message.element?.entry ?? void 0, at);
+          return;
+        }
         if (!hit || hit.x !== message.x || hit.y !== message.y) return;
         hit = null;
         options.onEntry(message.element?.entry ?? void 0);
       } else if (message.type === "anchors") {
         const found = message.results.find((result) => result.id === "entry" && result.found && result.rect);
         if (found?.rect) slot.post({ type: "scroll-to", x: 0, y: Math.max(0, Math.round(found.rect.y) - 72) });
+        const pins = message.results.filter((result) => result.id.startsWith("pin"));
+        if (pins.length === 0) return;
+        const next = /* @__PURE__ */ new Map();
+        for (const result of pins) {
+          const entry = tracked[Number(result.id.slice(3))];
+          if (entry !== void 0 && result.found && result.rect) next.set(entry, result.rect);
+        }
+        rects = next;
+        emitLayout();
       }
     });
     scrollTo = (entry) => {
@@ -20393,37 +22276,63 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       slot.post({ type: "resolve-anchors", anchors: [{ id: "entry", selector, text: "", html: "" }] });
       slot.post({ type: "highlight", selector });
     };
+    overlay.addEventListener("pointermove", (event) => {
+      if (event.pointerType === "touch") return;
+      const rect = slot.iframe.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      if (pointerFrame !== 0) cancelAnimationFrame(pointerFrame);
+      pointerFrame = requestAnimationFrame(() => {
+        pointerFrame = 0;
+        movePointer(boardPointerVar(x, y));
+      });
+    });
+    overlay.addEventListener("pointerleave", () => {
+      if (pointerFrame !== 0) cancelAnimationFrame(pointerFrame);
+      pointerFrame = 0;
+      movePointer(null);
+    });
     overlay.addEventListener("click", (event) => {
       if (slot.state() !== "ready") return;
       const rect = slot.iframe.getBoundingClientRect();
-      hit = { x: Math.round(event.clientX - rect.left), y: Math.round(event.clientY - rect.top) };
-      slot.post({ type: "hit-test", x: hit.x, y: hit.y });
+      const point = { x: Math.round(event.clientX - rect.left), y: Math.round(event.clientY - rect.top) };
+      if (commenting && commentHandler) {
+        const outer = el2.getBoundingClientRect();
+        commentHit = { ...point, at: { x: Math.round(event.clientX - outer.left), y: Math.round(event.clientY - outer.top) } };
+        hit = null;
+      } else hit = point;
+      slot.post({ type: "hit-test", x: point.x, y: point.y });
     });
-    overlay.addEventListener(
-      "wheel",
-      (event) => {
-        if (slot.state() !== "ready" || event.ctrlKey || event.metaKey) return;
-        event.preventDefault();
-        slot.post({ type: "scroll-by", dx: Math.round(event.deltaX), dy: Math.round(event.deltaY) });
-      },
-      { passive: false }
-    );
+    const forwardWheel = (event) => {
+      if (slot.state() !== "ready" || event.ctrlKey || event.metaKey) return;
+      if (event.target instanceof Element && event.target.closest(".dc-pop")) return;
+      event.preventDefault();
+      slot.post({ type: "scroll-by", dx: Math.round(event.deltaX), dy: Math.round(event.deltaY) });
+    };
+    overlay.addEventListener("wheel", forwardWheel, { passive: false });
+    pinLayer.addEventListener("wheel", forwardWheel, { passive: false });
     const stopReady = host.onReady((context) => {
       const next = boardScheme(context.theme.mode);
       if (next !== scheme) {
         scheme = next;
+        ready = false;
         load();
       } else if (slot.state() === "ready") sendTokens();
     });
     paintState();
     load();
+    const loadAgain = () => {
+      ready = false;
+      rects = /* @__PURE__ */ new Map();
+      load();
+    };
     return {
       el: el2,
       state: () => slot.state(),
-      reload: () => load(),
+      reload: () => loadAgain(),
       setVersion: (next) => {
         version = next;
-        load();
+        loadAgain();
       },
       setPreview: (next) => {
         preview = next;
@@ -20439,7 +22348,30 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         waiting = { entry };
         if (slot.state() === "ready") scrollTo?.(entry);
       },
+      pinLayer,
+      setCommentMode: (on) => {
+        commenting = on;
+        el2.dataset.commenting = String(on);
+        if (!on) commentHit = null;
+      },
+      setCommentHandler: (handler) => {
+        commentHandler = handler;
+      },
+      trackEntries: (entries) => {
+        const next = [...new Set(entries)].slice(0, BRIDGE_ANCHORS_MAX);
+        if (next.length === tracked.length && next.every((entry, index) => entry === tracked[index])) return;
+        tracked = next;
+        resolveTracked();
+      },
+      onLayout: (listener) => {
+        layoutListeners.add(listener);
+        return () => void layoutListeners.delete(listener);
+      },
+      layout: currentLayout,
       dispose: () => {
+        resizes?.disconnect();
+        layoutListeners.clear();
+        if (pointerFrame !== 0) cancelAnimationFrame(pointerFrame);
         unsubscribe();
         stopReady();
         slot.dispose();
@@ -20449,8 +22381,1286 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
   };
 
+  // src/ui/model/board-comments-model.ts
+  var boardPinNumbers = (comments) => {
+    const ordered = comments.map((comment, index) => ({ comment, index })).sort((a, b) => Date.parse(a.comment.created) - Date.parse(b.comment.created) || a.index - b.index);
+    return new Map(ordered.map(({ comment }, position) => [comment.id, position + 1]));
+  };
+  var entryInSystem = (detail, entry) => sectionOfHit(detail, entry) !== null;
+  var entriesOf = (detail, section2) => {
+    const keys = [];
+    const add = (kind, key) => {
+      try {
+        keys.push(entryKeyOf(kind, key));
+      } catch {
+      }
+    };
+    for (const token of detail.tokens) add("token", token.name);
+    detail.pairs.forEach((_pair, index) => add("pair", String(index)));
+    if (detail.overview?.text) add("overview", "");
+    for (const note of detail.notes) add("note", note.id);
+    for (const style of detail.type) add("type", style.id);
+    detail.fonts.forEach((_font, index) => add("font", String(index)));
+    for (const component of detail.components) add("component", component.id);
+    for (const pattern of detail.patterns) add("pattern", pattern.id);
+    for (const entry of detail.brand) add("brand", entry.id);
+    detail.logos.forEach((_logo, index) => add("logo", String(index)));
+    (detail.icons ?? []).forEach((_icon, index) => add("icon", String(index)));
+    return keys.filter((key) => sectionOfHit(detail, key) === section2);
+  };
+  var GONE_ENTRY = "On an entry that\u2019s gone";
+  var boardCommentRows = (comments, detail) => {
+    const numbers = boardPinNumbers(comments);
+    return comments.map((comment) => {
+      const gone = detail !== null && !entryInSystem(detail, comment.entry);
+      const label = detail === null || gone ? null : entryLabel(detail, comment.entry).text;
+      return { comment, number: numbers.get(comment.id) ?? 0, where: gone ? GONE_ENTRY : label || comment.entry, gone };
+    }).sort((a, b) => a.number - b.number);
+  };
+  var boardCommentCounts = (comments) => ({
+    open: comments.filter((comment) => comment.status === "open").length,
+    sent: comments.filter((comment) => comment.status === "sent").length,
+    resolved: comments.filter((comment) => comment.status === "resolved").length
+  });
+  var splitRows = (rows) => ({
+    live: [...rows.filter((row2) => row2.comment.status === "open"), ...rows.filter((row2) => row2.comment.status === "sent")],
+    resolved: rows.filter((row2) => row2.comment.status === "resolved")
+  });
+  var commentStatusLabel = (status) => status === "open" ? "Open" : status === "sent" ? "Sent to chat" : "Resolved";
+  var boardPinLabel = (row2) => {
+    const body = row2.comment.body.length > 60 ? `${row2.comment.body.slice(0, 57)}\u2026` : row2.comment.body;
+    return `Comment ${row2.number} on ${row2.where}: ${body} (${commentStatusLabel(row2.comment.status).toLowerCase()})`;
+  };
+  var boardPinGlyph = (row2) => row2.comment.status === "resolved" ? "\u2713" : String(row2.number);
+  var sendAllState = (comments, linked, locked) => {
+    const open = boardCommentCounts(comments).open;
+    const label = open > 0 ? `Send comments (${open})` : "Send comments";
+    if (locked !== null) return { enabled: false, label, reason: locked };
+    if (open === 0) return { enabled: false, label, reason: comments.length === 0 ? null : "Every comment has been sent or resolved. Reopen one to send it again." };
+    return { enabled: true, label, reason: linked ? null : "No chat is linked yet, so a new chat will start." };
+  };
+  var MARK_FAILED = "Sent, but the comments could not be marked as sent. Resolve them by hand so they are not sent again.";
+  var boardSendResult = (input) => {
+    const { outcome, sent, omitted, number } = input;
+    if (sent === 0) return { kind: "info", message: "There are no open comments to send." };
+    if (input.markFailed === true) return { kind: "info", message: MARK_FAILED };
+    if (omitted > 0) return { kind: "info", message: `${sent} of ${sent + omitted} comments sent. Send again for the rest.` };
+    const what = sent === 1 && number !== null ? `comment ${number}` : plural(sent, "comment");
+    if (outcome === "new-session") return { kind: "success", message: `Started a new chat with ${what}.` };
+    if (outcome === "composed") return { kind: "info", message: `The agent is busy, so ${what} ${sent === 1 ? "is" : "are"} waiting in the composer.` };
+    if (outcome === "outbox") return { kind: "success", message: `Opening the system\u2019s chat with ${what}.` };
+    return { kind: "success", message: `${what.charAt(0).toUpperCase()}${what.slice(1)} sent to the chat.` };
+  };
+  var sendOneProblem = (comment) => {
+    if (comment === void 0) return "That comment is gone, so there is nothing to send.";
+    if (comment.status === "sent") return "That comment was already sent to the chat.";
+    if (comment.status === "resolved") return "That comment is resolved, so it was not sent. Reopen it first.";
+    return null;
+  };
+  var commentBodyProblem = (body) => {
+    if (body.trim() === "") return "Write what should change, then add the comment.";
+    if (body.trim().length > COMMENT_BODY_MAX) return `Keep a comment under ${COMMENT_BODY_MAX} characters.`;
+    return null;
+  };
+  var DAMAGED_TITLE = "Some comments couldn\u2019t be read";
+  var DAMAGED_BODY = "The comments file was damaged. These are the comments that could be read. The next comment you add or change saves them in a new file and keeps the old one aside.";
+  var DAMAGED_NONE = "None of the comments could be read. The next comment you add starts a new file and keeps the damaged one aside.";
+  var DAMAGED_COUNT = "File damaged";
+  var EMPTY_COMMENTS = "No comments yet. Turn on Comment and click an entry on the board to pin a note to it.";
+  var CORNER_INSET = 4;
+  var entrySpot = (rect, scroll, index = 0, pin = 24) => ({
+    x: Math.max(rect.x + CORNER_INSET, rect.x + rect.w - CORNER_INSET - index * (pin + 4)) - scroll.x,
+    y: rect.y + CORNER_INSET - scroll.y
+  });
+  var boardPinSpots = (rows, rects, scroll, view2, pin = 24) => {
+    const perEntry = /* @__PURE__ */ new Map();
+    const spots = [];
+    for (const row2 of rows) {
+      if (row2.gone) continue;
+      const rect = rects.get(row2.comment.entry);
+      if (rect === void 0) continue;
+      const index = perEntry.get(row2.comment.entry) ?? 0;
+      perEntry.set(row2.comment.entry, index + 1);
+      const { x, y } = entrySpot(rect, scroll, index, pin);
+      const inView = x >= 0 && y >= 0 && x <= view2.width && y <= view2.height;
+      spots.push({ id: row2.comment.id, x, y, inView });
+    }
+    return spots;
+  };
+  var cardPlacement = (at, card, box, gap = 14) => {
+    const fitsRight = at.x + gap + card.width <= box.width - 8;
+    const left = fitsRight ? at.x + gap : at.x - gap - card.width;
+    const fitsBelow = at.y + card.height <= box.height - 8;
+    const top = fitsBelow ? at.y - 12 : at.y - card.height + 12;
+    return { left: Math.round(Math.min(Math.max(8, left), Math.max(8, box.width - card.width - 8))), top: Math.round(Math.min(Math.max(8, top), Math.max(8, box.height - card.height - 8))) };
+  };
+  var boardComposerKey = (systemId, entry) => JSON.stringify(["board-new", systemId, entry]);
+  var boardThreadKey = (systemId, commentId) => JSON.stringify(["board-thread", systemId, commentId]);
+
+  // src/ui/systems/board-pins.ts
+  var drafts2 = createDraftStore();
+  var PIN = 24;
+  var MISS_MS = 2600;
+  var mountBoardComments = (options) => {
+    const { id, board } = options;
+    let comments = [];
+    let damaged = false;
+    let load = "loading";
+    let loadError = "";
+    let ticket = 0;
+    let commenting = false;
+    let card = null;
+    let expanded = null;
+    let showResolved = false;
+    let sendingAll = false;
+    let sendError = null;
+    const inFlight2 = /* @__PURE__ */ new Set();
+    let missTimer;
+    let disposed = false;
+    const doc = board.el.ownerDocument;
+    let chosen = null;
+    let lastSelected = null;
+    const pins = /* @__PURE__ */ new Map();
+    const tempPin = h("span", { class: "dc-pin dc-temp-pin dc-bc-pin", "aria-hidden": "true", hidden: true }, "+");
+    const hint = h("p", { class: "dc-bc-hint", role: "status", hidden: true });
+    const toggle = btn({ label: "Comment", variant: "outline", size: options.compact ? "xs" : "sm", icon: "comment", onClick: () => setCommenting(!commenting) });
+    toggle.el.classList.add("dc-bc-toggle");
+    toggle.el.setAttribute("aria-pressed", "false");
+    const tools = h("div", { class: "dc-bc-tools" }, options.compact ? null : hint, toggle.el);
+    board.pinLayer.append(tools, tempPin);
+    board.pinLayer.setAttribute("role", "group");
+    board.pinLayer.setAttribute("aria-label", "Comments on the board");
+    const headCount = h("span", { class: "dc-bc-count dc-muted" });
+    const headButton = h(
+      "button",
+      { type: "button", class: "dc-bc-headbtn", "aria-expanded": "false", "aria-controls": `dc-bc-body-${id}`, onClick: () => {
+        expanded = !isExpanded();
+        paintList();
+      } },
+      h("span", { class: "dc-syspg-chev", "aria-hidden": "true" }),
+      h("span", { class: "dc-bc-title" }, "Comments"),
+      headCount
+    );
+    const commentOn = h("div", { class: "dc-bc-on" });
+    const scroller = h("div", { class: "dc-bc-scroll" });
+    const footHost = h("div", { class: "dc-bc-foothost" });
+    const body = h("div", { class: "dc-bc-body", id: `dc-bc-body-${id}` }, scroller, footHost);
+    const dock = h("div", { class: "dc-bc-dock" });
+    const damagedHost = h("div", { class: "dc-bc-damaged" });
+    const el2 = h("section", { class: "dc-bc", "aria-label": "Comments on the board" }, h("div", { class: "dc-bc-head" }, headButton, commentOn), options.compact ? hint : null, damagedHost, dock, body);
+    const commentOnButton = btn({ label: "Write comment", variant: "outline", size: "sm", icon: "plus", onClick: () => startFromKeyboard() });
+    const chooserHost = h("div", { class: "dc-bc-chooser" });
+    const chooser = mountSelect(chooserHost, { label: "Comment on", value: null, options: [], searchable: true, searchPlaceholder: "Find an entry", onChange: (entry) => {
+      chosen = entry;
+      paintCommentOn();
+    } });
+    commentOn.append(chooserHost, commentOnButton.el);
+    let chooserOpen = !options.compact;
+    const reveal3 = btn({
+      label: "Comment on\u2026",
+      variant: "ghost",
+      size: "xs",
+      icon: "plus",
+      title: "Choose an entry to comment on",
+      onClick: () => {
+        chooserOpen = !chooserOpen;
+        paintCommentOn();
+        if (chooserOpen) chooserHost.querySelector(".oc-sdk-trigger")?.focus();
+      }
+    });
+    reveal3.el.classList.add("dc-bc-reveal");
+    reveal3.el.setAttribute("aria-controls", `dc-bc-on-${id}`);
+    commentOn.id = `dc-bc-on-${id}`;
+    if (options.compact) commentOn.before(reveal3.el);
+    const cardHost = () => options.compact ? dock : board.pinLayer;
+    const rows = () => boardCommentRows(comments, options.detail());
+    const isExpanded = () => expanded ?? (comments.length > 0 || commenting || damaged || load !== "ready");
+    const focusComment = (commentId) => {
+      if (disposed) return;
+      if (commentId !== null) {
+        const pin = pins.get(commentId);
+        if (pin !== void 0 && !pin.hidden && pin.isConnected && pin.getClientRects().length > 0) return pin.focus();
+        const row2 = el2.querySelector(`[data-focus-key="${CSS.escape(`row:${commentId}`)}"]`);
+        if (row2 !== null && row2.getClientRects().length > 0) return row2.focus();
+      }
+      toggle.el.focus();
+    };
+    const neighbourOf = (commentId) => {
+      const ordered = rows().map((row2) => row2.comment.id);
+      const at = ordered.indexOf(commentId);
+      if (at === -1) return null;
+      return ordered[at + 1] ?? ordered[at - 1] ?? null;
+    };
+    const refresh = async () => {
+      ticket += 1;
+      const mine = ticket;
+      try {
+        const answer = await client.systemComments.list(id);
+        if (disposed || mine !== ticket) return;
+        comments = answer.comments;
+        damaged = answer.damaged === true;
+        load = "ready";
+      } catch (error) {
+        if (disposed || mine !== ticket) return;
+        if (load !== "ready") {
+          load = "error";
+          loadError = errorText2(error);
+        } else toast("error", `Couldn\u2019t refresh the comments. ${errorText2(error)}`);
+      }
+      paintAll();
+    };
+    const replace2 = (next) => {
+      comments = comments.some((comment) => comment.id === next.id) ? comments.map((comment) => comment.id === next.id ? next : comment) : [...comments, next];
+    };
+    function setCommenting(on) {
+      if (on && options.locked() !== null) return;
+      commenting = on;
+      board.setCommentMode(on);
+      toggle.el.setAttribute("aria-pressed", String(on));
+      toggle.set({ label: on ? "Done" : "Comment", icon: on ? "check" : "comment" });
+      clearTimeout(missTimer);
+      hint.hidden = !on;
+      hint.textContent = on ? "Click an entry to comment on it. Esc to stop." : "";
+      paintList();
+    }
+    board.setCommentHandler((entry, at) => {
+      if (!commenting) return;
+      if (entry === void 0 || !isBoardEntryKey(entry)) {
+        hint.textContent = "That spot isn\u2019t an entry. Click a swatch, a type style or a component.";
+        clearTimeout(missTimer);
+        missTimer = setTimeout(() => {
+          if (commenting) hint.textContent = "Click an entry to comment on it. Esc to stop.";
+        }, MISS_MS);
+        return;
+      }
+      openComposer(entry, at);
+    });
+    const textarea2 = (label, value, placeholder) => {
+      const area = h("textarea", { class: "oc-sdk oc-sdk-input dc-textarea", rows: 3, "aria-label": label, placeholder });
+      area.value = value;
+      return area;
+    };
+    const closeCard = (returnTo) => {
+      if (card === null) return;
+      const closing = card;
+      card = null;
+      if (closing.kind === "new") drafts2.keep(boardComposerKey(id, closing.entry), unsavedText(closing.area.value));
+      else drafts2.keep(boardThreadKey(id, closing.id), unsavedText(closing.area.value, comments.find((comment) => comment.id === closing.id)?.body ?? ""));
+      closing.el.remove();
+      tempPin.hidden = true;
+      paintPins();
+      if (returnTo === null) return;
+      if (returnTo !== void 0) return returnTo.focus();
+      if (closing.kind === "new" && closing.opener !== null && closing.opener.isConnected && !closing.opener.hidden && closing.opener.getClientRects().length > 0) return closing.opener.focus();
+      focusComment(closing.kind === "thread" ? closing.id : null);
+    };
+    const placeCard = () => {
+      if (card === null) return;
+      const layout = board.layout();
+      const box = { width: board.el.clientWidth, height: board.el.clientHeight };
+      let at = card.fallback;
+      if (layout !== null) {
+        const entry = card.kind === "new" ? card.entry : comments.find((comment) => comment.id === card.id)?.entry;
+        const rect = entry === void 0 ? void 0 : layout.rects.get(entry);
+        if (rect !== void 0) {
+          const index = card.kind === "new" ? comments.filter((comment) => comment.entry === entry).length : 0;
+          const pin = card.kind === "thread" ? pins.get(card.id) : void 0;
+          const spot = pin !== void 0 && !pin.hidden ? { x: pin.offsetLeft - layout.frame.x, y: pin.offsetTop - layout.frame.y } : entrySpot(rect, layout.scroll, index, PIN);
+          at = { x: layout.frame.x + spot.x, y: layout.frame.y + spot.y };
+        }
+      }
+      if (card.kind === "new") {
+        tempPin.hidden = false;
+        tempPin.style.left = `${at.x}px`;
+        tempPin.style.top = `${at.y}px`;
+      }
+      if (options.compact) return;
+      const place = cardPlacement(at, { width: card.el.offsetWidth || 300, height: card.el.offsetHeight || 180 }, box);
+      card.el.style.left = `${place.left}px`;
+      card.el.style.top = `${place.top}px`;
+    };
+    const cardFoot = (...children) => h("div", { class: "dc-pop-foot" }, ...children);
+    function openComposer(entry, at, opener = null) {
+      closeCard(null);
+      const detail = options.detail();
+      const label = detail === null ? { tag: "entry", text: entry } : entryLabel(detail, entry);
+      const key = boardComposerKey(id, entry);
+      const area = textarea2(`Comment on ${label.text || entry}`, drafts2.get(key) ?? "", "What should change here?");
+      const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+      const cancel = btn({
+        label: "Cancel",
+        variant: "ghost",
+        size: "sm",
+        onClick: () => {
+          area.value = "";
+          drafts2.drop(key);
+          closeCard();
+        }
+      });
+      const submit = btn({ label: "Add comment", variant: "default", size: "sm", onClick: () => void add() });
+      const add = async () => {
+        const problem = commentBodyProblem(area.value);
+        failure.hidden = problem === null;
+        if (problem !== null) {
+          failure.textContent = problem;
+          area.focus();
+          return;
+        }
+        submit.set({ loading: true });
+        cancel.set({ disabled: true });
+        area.disabled = true;
+        try {
+          const { comment } = await client.systemComments.add(id, { entry, body: area.value.trim() });
+          replace2(comment);
+          drafts2.drop(key);
+          area.value = "";
+          load = "ready";
+          closeCard(null);
+          paintAll();
+          focusComment(comment.id);
+        } catch (error) {
+          failure.textContent = `Couldn\u2019t add the comment. ${errorText2(error)} Your text is still here.`;
+          failure.hidden = false;
+          submit.set({ loading: false });
+          cancel.set({ disabled: false });
+          area.disabled = false;
+          area.focus();
+        }
+      };
+      area.addEventListener("input", () => drafts2.keep(key, unsavedText(area.value)));
+      area.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+          event.preventDefault();
+          void add();
+        }
+      });
+      const cardEl = h(
+        "div",
+        { class: "dc-pop dc-composer dc-bc-card", "data-docked": String(options.compact), role: "dialog", "aria-label": `New comment on ${label.text || entry}` },
+        h("div", { class: "dc-pop-head" }, h("span", { class: "dc-pop-title" }, "Comment on"), h("code", { class: "dc-chip-code" }, label.tag)),
+        label.text ? h("p", { class: "dc-pop-snippet" }, label.text) : null,
+        area,
+        failure,
+        cardFoot(h("span", { class: "dc-pop-hint" }, `${/Mac|iPhone|iPad/.test(navigator.platform) ? "\u2318\u21B5" : "Ctrl+\u21B5"} to add`), h("span", { class: "dc-pop-actions" }, cancel.el, submit.el))
+      );
+      card = { kind: "new", entry, el: cardEl, area, fallback: at, opener };
+      wireCard(cardEl);
+      cardHost().append(cardEl);
+      if (options.compact) cardEl.scrollIntoView({ block: "nearest" });
+      trackEntries();
+      placeCard();
+      area.focus();
+      area.setSelectionRange(area.value.length, area.value.length);
+    }
+    function openThread(commentId) {
+      const found = comments.find((comment) => comment.id === commentId);
+      if (found === void 0) return;
+      closeCard(null);
+      const row2 = rows().find((candidate) => candidate.comment.id === commentId);
+      const key = boardThreadKey(id, commentId);
+      let current2 = found;
+      const area = textarea2(`Comment ${row2?.number ?? ""} text`, drafts2.get(key) ?? current2.body, "");
+      const failure = h("p", { class: "dc-form-error", role: "alert", hidden: true });
+      const badgeHost = h("span");
+      const paintBadge = () => {
+        badgeHost.replaceChildren();
+        mountBadge(badgeHost, { label: commentStatusLabel(current2.status), tone: current2.status === "open" ? "primary" : current2.status === "sent" ? "info" : "neutral" });
+      };
+      paintBadge();
+      const guard = async (button2, action2) => {
+        button2.set({ loading: true });
+        failure.hidden = true;
+        try {
+          await action2();
+        } catch (error) {
+          failure.textContent = errorText2(error);
+          failure.hidden = false;
+        } finally {
+          button2.set({ loading: false });
+        }
+        if (card?.el === cardEl && !cardEl.contains(doc.activeElement)) {
+          if (button2.el.isConnected && !button2.el.hidden && !button2.el.disabled) button2.el.focus();
+          else area.focus();
+        }
+      };
+      const checked = () => {
+        const problem = commentBodyProblem(area.value);
+        if (problem !== null) {
+          failure.textContent = problem;
+          failure.hidden = false;
+        }
+        return problem;
+      };
+      const saveIfEdited = async () => {
+        if (area.value.trim() === current2.body.trim()) return;
+        const { comment } = await client.systemComments.update(id, commentId, { body: area.value.trim() });
+        current2 = comment;
+        replace2(comment);
+        drafts2.drop(key);
+      };
+      const save = btn({
+        label: "Save",
+        variant: "default",
+        size: "sm",
+        disabled: area.value.trim() === current2.body.trim(),
+        onClick: () => {
+          if (checked() !== null) return;
+          void guard(save, async () => {
+            await saveIfEdited();
+            save.set({ disabled: true });
+            paintAll();
+            area.focus();
+          });
+        }
+      });
+      area.addEventListener("input", () => {
+        save.set({ disabled: area.value.trim() === current2.body.trim() });
+        drafts2.keep(key, unsavedText(area.value, current2.body));
+      });
+      const sendThis = btn({
+        label: "Send this",
+        variant: "outline",
+        size: "sm",
+        icon: "send",
+        title: "Send only this comment to the chat",
+        onClick: () => {
+          if (checked() !== null) return;
+          void guard(sendThis, async () => {
+            const problem = sendOneProblem(comments.find((comment) => comment.id === commentId));
+            if (problem !== null) throw new Error(problem);
+            if (options.locked() !== null) throw new Error(options.locked() ?? "");
+            await saveIfEdited();
+            await send([commentId], row2?.number ?? null);
+          });
+        }
+      });
+      const toggleStatus = btn({
+        label: current2.status === "resolved" ? "Reopen" : "Resolve",
+        variant: "outline",
+        size: "sm",
+        icon: current2.status === "resolved" ? "restore" : "check",
+        onClick: () => void guard(toggleStatus, async () => {
+          await saveIfEdited();
+          const { comment } = await client.systemComments.update(id, commentId, { status: current2.status === "resolved" ? "open" : "resolved" });
+          current2 = comment;
+          replace2(comment);
+          setStatus(comment);
+          paintAll();
+        })
+      });
+      let armed = false;
+      let armTimer;
+      const remove2 = btn({
+        label: "Delete",
+        variant: "ghost",
+        size: "sm",
+        icon: "trash",
+        onClick: () => {
+          if (!armed) {
+            armed = true;
+            remove2.set({ label: "Delete comment?" });
+            remove2.el.dataset.variant = "destructive";
+            armTimer = setTimeout(() => {
+              armed = false;
+              remove2.set({ label: "Delete" });
+              remove2.el.dataset.variant = "ghost";
+            }, 4e3);
+            return;
+          }
+          clearTimeout(armTimer);
+          void guard(remove2, async () => {
+            const next = neighbourOf(commentId);
+            await client.systemComments.remove(id, commentId);
+            comments = comments.filter((comment) => comment.id !== commentId);
+            drafts2.drop(key);
+            area.value = "";
+            closeCard(null);
+            paintAll();
+            focusComment(next);
+            toast("success", row2 ? `Comment ${row2.number} deleted.` : "Comment deleted.");
+          });
+        }
+      });
+      const close = iconBtn({ icon: "close", label: "Close comment", size: "sm", onClick: () => closeCard() });
+      const gone = row2?.gone === true;
+      const cardEl = h(
+        "div",
+        { class: "dc-pop dc-thread dc-bc-card", "data-docked": String(options.compact), role: "dialog", "aria-label": `Comment ${row2?.number ?? ""}` },
+        h("div", { class: "dc-pop-head" }, h("span", { class: "dc-pin-badge", "data-status": current2.status, "aria-hidden": "true" }, row2 ? boardPinGlyph(row2) : ""), badgeHost, h("span", { class: "dc-pop-where" }, row2?.where ?? ""), close),
+        gone ? h("p", { class: "dc-pop-note" }, "This entry isn\u2019t in the system any more. The comment stays, and is still sent.") : null,
+        area,
+        failure,
+        cardFoot(remove2.el, h("span", { class: "dc-pop-actions" }, toggleStatus.el, sendThis.el, save.el))
+      );
+      const setStatus = (comment) => {
+        current2 = comment;
+        paintBadge();
+        cardEl.querySelector(".dc-pin-badge")?.setAttribute("data-status", comment.status);
+        toggleStatus.set({ label: comment.status === "resolved" ? "Reopen" : "Resolve", icon: comment.status === "resolved" ? "restore" : "check" });
+        sendThis.el.hidden = comment.status !== "open" || options.locked() !== null;
+      };
+      setStatus(current2);
+      const spot = pins.get(commentId);
+      const fallback = spot && !spot.hidden ? { x: spot.offsetLeft, y: spot.offsetTop } : { x: 16, y: 16 };
+      card = { kind: "thread", id: commentId, el: cardEl, area, fallback, setStatus };
+      wireCard(cardEl);
+      cardHost().append(cardEl);
+      if (options.compact) cardEl.scrollIntoView({ block: "nearest" });
+      placeCard();
+      area.focus();
+    }
+    const wireCard = (cardEl) => {
+      cardEl.addEventListener("pointerdown", (event) => event.stopPropagation());
+      cardEl.addEventListener("click", (event) => event.stopPropagation());
+      cardEl.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          closeCard();
+        }
+      });
+    };
+    const send = async (ids, number) => {
+      const busy = ids.find((candidate) => inFlight2.has(candidate));
+      if (busy !== void 0) throw new Error(ids.length === 1 ? "That comment is already on its way to the chat." : "One of these comments is already on its way. Try again in a moment.");
+      for (const candidate of ids) inFlight2.add(candidate);
+      paintList();
+      try {
+        const result = await sendSystemComments(id, options.chat(), ids);
+        const copy = boardSendResult({ outcome: result.outcome, sent: result.commentIds.length, omitted: result.omitted.length, number, markFailed: result.markFailed });
+        toast(copy.kind, copy.message);
+        options.afterSend();
+        await refresh();
+        if (card?.kind === "thread") {
+          const now = comments.find((comment) => comment.id === card.id);
+          if (now !== void 0) card.setStatus(now);
+        }
+      } finally {
+        for (const candidate of ids) inFlight2.delete(candidate);
+        paintList();
+      }
+    };
+    const sendAll = async () => {
+      const open = comments.filter((comment) => comment.status === "open").map((comment) => comment.id);
+      sendingAll = true;
+      sendError = null;
+      paintList();
+      try {
+        await send(open, open.length === 1 ? rows().find((row2) => row2.comment.id === open[0])?.number ?? null : null);
+      } catch (error) {
+        sendError = `Couldn\u2019t send. ${errorText2(error)} Your comments are still here.`;
+      } finally {
+        sendingAll = false;
+        paintList();
+      }
+      focusAfterSend(null);
+    };
+    const focusAfterSend = (commentId) => {
+      if (disposed || doc.activeElement !== null && doc.activeElement !== doc.body) return;
+      const again = body.querySelector(commentId === null ? '[data-focus-key="send-all"]:not(:disabled)' : `[data-focus-key="${CSS.escape(`send:${commentId}`)}"]:not(:disabled)`);
+      if (again !== null) return again.focus();
+      const row2 = commentId === null ? null : body.querySelector(`[data-focus-key="${CSS.escape(`row:${commentId}`)}"]`);
+      (row2 ?? body.querySelector(".dc-comment-main") ?? headButton).focus();
+    };
+    const sendRow = async (row2) => {
+      try {
+        await send([row2.comment.id], row2.number);
+      } catch (error) {
+        toast("error", `Couldn\u2019t send comment ${row2.number}. ${errorText2(error)} It is still open.`);
+      }
+      focusAfterSend(row2.comment.id);
+    };
+    const setRowStatus = async (row2, status) => {
+      try {
+        const { comment } = await client.systemComments.update(id, row2.comment.id, { status });
+        replace2(comment);
+        if (card?.kind === "thread" && card.id === comment.id) card.setStatus(comment);
+        paintAll();
+      } catch (error) {
+        toast("error", `Couldn\u2019t update comment ${row2.number}. ${errorText2(error)}`);
+      }
+    };
+    const trackEntries = () => {
+      const entries = rows().filter((row2) => !row2.gone).map((row2) => row2.comment.entry);
+      if (card?.kind === "new") entries.push(card.entry);
+      board.trackEntries(entries);
+    };
+    function paintPins(layout = board.layout()) {
+      const locked = options.locked() !== null;
+      board.pinLayer.dataset.locked = String(locked);
+      const all = rows();
+      const keep = new Set(all.map((row2) => row2.comment.id));
+      for (const [commentId, pin] of pins) {
+        if (keep.has(commentId)) continue;
+        pin.remove();
+        pins.delete(commentId);
+      }
+      const spots = layout === null ? [] : boardPinSpots(all, layout.rects, layout.scroll, layout.frame, PIN);
+      const spotOf = new Map(spots.map((spot) => [spot.id, spot]));
+      for (const row2 of all) {
+        let pin = pins.get(row2.comment.id);
+        if (pin === void 0) {
+          const commentId = row2.comment.id;
+          const created = h("button", { type: "button", class: "dc-pin dc-bc-pin" });
+          created.addEventListener("pointerdown", (event) => event.stopPropagation());
+          created.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (card?.kind === "thread" && card.id === commentId) closeCard();
+            else openThread(commentId);
+          });
+          pins.set(commentId, created);
+          pin = created;
+        }
+        if (!pin.isConnected) board.pinLayer.insertBefore(pin, tempPin);
+        const spot = spotOf.get(row2.comment.id);
+        pin.textContent = boardPinGlyph(row2);
+        pin.dataset.status = row2.comment.status;
+        pin.setAttribute("aria-label", boardPinLabel(row2));
+        pin.title = `${row2.number}. ${row2.where}`;
+        pin.dataset.open = String(card?.kind === "thread" && card.id === row2.comment.id);
+        pin.hidden = locked || spot === void 0 || !spot.inView || layout === null;
+        if (spot !== void 0 && layout !== null) {
+          pin.style.left = `${layout.frame.x + spot.x}px`;
+          pin.style.top = `${layout.frame.y + spot.y}px`;
+        }
+      }
+      if (card !== null) placeCard();
+    }
+    function paintToggle() {
+      const locked = options.locked();
+      toggle.set({ disabled: locked !== null });
+      toggle.el.title = locked ?? (commenting ? "Stop adding comments" : "Click an entry on the board to comment on it");
+      if (locked !== null && commenting) setCommenting(false);
+      if (locked !== null && card !== null) closeCard(null);
+    }
+    const rowEl = (row2) => {
+      const { comment, number } = row2;
+      const resolved = comment.status === "resolved";
+      const sending = inFlight2.has(comment.id);
+      const main = h(
+        "button",
+        {
+          type: "button",
+          class: "dc-comment-main",
+          "data-focus-key": `row:${comment.id}`,
+          "aria-label": row2.gone ? `Comment ${number}, on an entry that\u2019s gone. Open it` : `Show comment ${number} on the board`
+        },
+        h("span", { class: "dc-pin-badge", "data-status": comment.status, "aria-hidden": "true" }, boardPinGlyph(row2)),
+        h(
+          "span",
+          { class: "dc-comment-text" },
+          h("span", { class: "dc-comment-where" }, row2.where, comment.status === "sent" ? h("span", { class: "dc-bc-state" }, "Sent") : null),
+          h("span", { class: "dc-comment-body" }, comment.body)
+        )
+      );
+      main.addEventListener("click", () => {
+        options.showBoard();
+        if (!row2.gone) board.focusEntry(comment.entry);
+        openThread(comment.id);
+      });
+      const sendNow = comment.status !== "open" || options.locked() !== null ? null : iconBtn({ icon: "send", label: `Send comment ${number} to chat`, size: "sm", disabled: sending, onClick: () => void sendRow(row2) });
+      if (sendNow && sending) sendNow.setAttribute("aria-busy", "true");
+      sendNow?.setAttribute("data-focus-key", `send:${comment.id}`);
+      const statusBtn = iconBtn({
+        icon: resolved ? "restore" : "check",
+        label: resolved ? `Reopen comment ${number}` : `Mark comment ${number} resolved`,
+        size: "sm",
+        onClick: () => void setRowStatus(row2, resolved ? "open" : "resolved")
+      });
+      statusBtn.setAttribute("data-focus-key", `status:${comment.id}`);
+      return h("li", { class: "dc-comment", "data-gone": row2.gone ? "true" : null, "data-status": comment.status }, main, sendNow, statusBtn);
+    };
+    function paintList() {
+      const open = isExpanded();
+      headButton.setAttribute("aria-expanded", String(open));
+      body.hidden = !open;
+      const counts = boardCommentCounts(comments);
+      headCount.textContent = load !== "ready" ? "" : comments.length === 0 ? damaged ? DAMAGED_COUNT : "None yet" : [counts.open > 0 ? `${counts.open} open` : null, counts.sent > 0 ? `${counts.sent} sent` : null, counts.resolved > 0 ? `${counts.resolved} resolved` : null].filter(Boolean).join(" \xB7 ");
+      paintCommentOn();
+      damagedHost.replaceChildren();
+      if (load === "ready" && damaged) damagedHost.append(banner({ tone: "warning", title: DAMAGED_TITLE, body: comments.length === 0 ? DAMAGED_NONE : DAMAGED_BODY }));
+      const active2 = doc.activeElement;
+      const focusKey = active2 instanceof HTMLElement && body.contains(active2) ? active2.dataset.focusKey ?? null : null;
+      scroller.replaceChildren();
+      footHost.replaceChildren();
+      if (load === "loading") {
+        scroller.append(loadingRow("Loading comments\u2026"));
+        return;
+      }
+      if (load === "error") {
+        scroller.append(banner({ tone: "error", title: "Comments didn\u2019t load", body: loadError || "The local service didn\u2019t answer.", action: { label: "Try again", onClick: () => {
+          load = "loading";
+          paintList();
+          void refresh();
+        } } }));
+        return;
+      }
+      if (comments.length === 0) {
+        if (!damaged) scroller.append(h("p", { class: "dc-bc-empty dc-muted" }, EMPTY_COMMENTS));
+        return;
+      }
+      const split = splitRows(rows());
+      const list = h("ul", { class: "dc-comment-items dc-bc-list" }, ...split.live.map(rowEl));
+      scroller.append(list);
+      if (split.resolved.length > 0) {
+        scroller.append(
+          h(
+            "button",
+            { type: "button", class: "dc-bc-more", "aria-expanded": String(showResolved), onClick: () => {
+              showResolved = !showResolved;
+              paintList();
+            } },
+            showResolved ? "Hide resolved" : `Show ${split.resolved.length} resolved`
+          )
+        );
+        if (showResolved) scroller.append(h("ul", { class: "dc-comment-items dc-bc-list", "data-resolved": "true" }, ...split.resolved.map(rowEl)));
+      }
+      const state = sendAllState(comments, options.chat().sessionId !== null, options.locked());
+      const submit = btn({ label: state.label, variant: "default", size: "sm", icon: "send", loading: sendingAll, disabled: !state.enabled || sendingAll, onClick: () => void sendAll() });
+      submit.el.dataset.focusKey = "send-all";
+      submit.el.classList.add("dc-block");
+      footHost.append(
+        h(
+          "div",
+          { class: "dc-bc-foot" },
+          sendError === null ? null : h("p", { class: "dc-form-error", role: "alert" }, sendError),
+          submit.el,
+          state.reason === null ? null : h("p", { class: "dc-foot-note" }, state.reason)
+        )
+      );
+      if (focusKey !== null && !body.contains(doc.activeElement)) {
+        const [, commentId = ""] = focusKey.split(":");
+        const target = body.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]:not(:disabled)`) ?? body.querySelector(`[data-focus-key="${CSS.escape(`row:${commentId}`)}"]`);
+        target?.focus();
+      }
+    }
+    function paintCommentOn() {
+      const current2 = options.detail();
+      const detail = load === "ready" && options.locked() === null ? current2 : null;
+      const entries = detail === null ? [] : entriesOf(detail, options.section());
+      const selected = options.selectedEntry();
+      if (selected !== null && selected !== lastSelected && entries.includes(selected)) chosen = selected;
+      lastSelected = selected;
+      if (chosen === null || !entries.includes(chosen)) chosen = selected !== null && entries.includes(selected) ? selected : entries[0] ?? null;
+      chooser.update({ value: chosen, options: detail === null ? [] : entries.map((entry) => ({ id: entry, label: entryLabel(detail, entry).text || entry })) });
+      commentOn.hidden = entries.length === 0 || !chooserOpen;
+      reveal3.el.hidden = entries.length === 0;
+      reveal3.el.setAttribute("aria-expanded", String(chooserOpen));
+      reveal3.set({ label: chooserOpen ? "Hide" : "Comment on\u2026", icon: chooserOpen ? "close" : "plus" });
+      commentOnButton.set({ title: "Write a comment on the chosen entry" });
+    }
+    function startFromKeyboard() {
+      const entry = chosen;
+      const detail = options.detail();
+      if (entry === null || detail === null || !entryInSystem(detail, entry)) return;
+      options.showBoard();
+      board.focusEntry(entry);
+      openComposer(entry, { x: 16, y: 16 }, commentOnButton.el);
+    }
+    function paintAll() {
+      if (disposed) return;
+      paintToggle();
+      trackEntries();
+      paintPins();
+      paintList();
+    }
+    const stopLayout = board.onLayout((layout) => paintPins(layout));
+    const onKey = (event) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (card !== null) {
+        event.preventDefault();
+        closeCard();
+        return;
+      }
+      if (!commenting) return;
+      setCommenting(false);
+      toggle.el.focus();
+    };
+    doc.addEventListener("keydown", onKey);
+    paintAll();
+    void refresh();
+    return {
+      el: el2,
+      refresh,
+      sync: paintAll,
+      dispose: () => {
+        disposed = true;
+        closeCard(null);
+        clearTimeout(missTimer);
+        chooser.dispose();
+        stopLayout();
+        doc.removeEventListener("keydown", onKey);
+        board.setCommentHandler(null);
+        board.setCommentMode(false);
+        el2.remove();
+      }
+    };
+  };
+
+  // src/ui/systems/system-icons.ts
+  var createIconStore = (id, onChange) => {
+    let state = "loading";
+    let pictures = /* @__PURE__ */ new Map();
+    let stale = true;
+    let running = false;
+    let disposed = false;
+    const load = (files) => {
+      stale = false;
+      running = true;
+      client.loadBoard(id, null, boardScheme(host.snapshot()?.theme.mode)).then(
+        (doc) => {
+          const found = iconPictures(doc.html);
+          pictures = new Map(files.flatMap((file, index) => {
+            const picture = found.get(index);
+            return picture === void 0 ? [] : [[file, picture]];
+          }));
+          state = "ready";
+          running = false;
+          if (!disposed) onChange();
+        },
+        (error) => {
+          console.warn("Design Chamber: icon pictures failed", error);
+          state = "error";
+          running = false;
+          if (!disposed) onChange();
+        }
+      );
+    };
+    return {
+      view: (files) => {
+        if (stale && !running) {
+          if (state === "error") state = "loading";
+          load(files);
+        }
+        return { state, pictures };
+      },
+      invalidate: () => {
+        stale = true;
+      },
+      retry: () => {
+        stale = true;
+        state = "loading";
+        onChange();
+      },
+      dispose: () => {
+        disposed = true;
+      }
+    };
+  };
+
+  // src/ui/systems/system-screens.ts
+  var LABEL_LIFT2 = 4;
+  var LABEL_ROOM_MIN = 20;
+  var SYNC_MS = 120;
+  var ROW_GAP = 160;
+  var FIT_PADDING_PAGE = 48;
+  var TINY_WIDTH = 150;
+  var FIT_PADDING_RAIL = 12;
+  var structureOf = (detail) => detail === null ? "" : JSON.stringify([detail.screens.map((screen) => [screen.id, screen.title, screen.kind, screen.viewports, screen.problem]), detail.viewports]);
+  var mountSystemScreens = (options) => {
+    const { id, compact } = options;
+    let detail = null;
+    let structure = "";
+    let wall = { cells: [], bounds: null };
+    let wrap = 0;
+    let cells = [];
+    let camera = { ...DEFAULT_CAMERA };
+    let userMoved = false;
+    let size = { w: 0, h: 0 };
+    let version = null;
+    let scheme = boardScheme(host.snapshot()?.theme.mode);
+    let active2 = false;
+    let picked = null;
+    let syncTimer = null;
+    let drag = null;
+    let disposed = false;
+    const count = h("span", { class: "dc-sysscr-count dc-muted" });
+    const zoomLabel = btn({ label: "100%", variant: "ghost", size: "xs", title: "Reset zoom to 100% (Shift+0)", onClick: () => setCamera(zoomAt(camera, 1, centre()), true) });
+    zoomLabel.el.classList.add("dc-zoom-label");
+    const zoomGroup = h(
+      "div",
+      { class: "dc-group", role: "group", "aria-label": "Zoom" },
+      iconBtn({ icon: "minus", label: "Zoom out", size: "sm", onClick: () => zoomStep(1 / ZOOM_STEP) }),
+      zoomLabel.el,
+      iconBtn({ icon: "plus", label: "Zoom in", size: "sm", onClick: () => zoomStep(ZOOM_STEP) }),
+      // The rail is short of width: Fit keeps its icon and tooltip, so the screen's name has the room.
+      compact ? iconBtn({ icon: "fit", label: "Fit the screen (Shift+1)", size: "sm", onClick: () => fit() }) : btn({ label: "Fit", variant: "ghost", size: "xs", icon: "fit", title: "Fit every screen (Shift+1)", onClick: () => fit() }).el
+    );
+    const back = btn({ label: "All screens", variant: "ghost", size: "xs", icon: "back", onClick: () => pick(null) });
+    const bar = h("div", { class: "dc-sysscr-bar" }, back.el, count, zoomGroup);
+    const world = h("div", { class: "dc-wall-world" });
+    const labels = h("div", { class: "dc-wall-labels" });
+    const surface = h(
+      "div",
+      {
+        class: "dc-wall dc-sysscr-wall",
+        tabindex: "0",
+        role: "application",
+        "aria-roledescription": "screens wall",
+        "aria-label": "Screens of this design system. Arrow keys pan, plus and minus zoom, Shift+1 fits every screen."
+      },
+      world,
+      labels
+    );
+    const list = h("ul", { class: "dc-sysscr-list", role: "list", "aria-label": "Screens" });
+    const listWrap = h("div", { class: "dc-sysscr-listwrap" }, list, h("p", { class: "dc-muted dc-sysscr-hint" }, SCREENS_RAIL_HINT));
+    const message = h("div", { class: "dc-sysscr-message" });
+    const el2 = h("div", { class: "dc-sysscr", "data-surface": compact ? "panel" : "page", "data-state": "loading", hidden: true }, bar, surface, listWrap, message);
+    const centre = () => ({ x: size.w / 2, y: size.h / 2 });
+    const shown = () => cellsOf(wall, compact ? picked : null);
+    const boundsOf = (arts) => {
+      if (arts.length === 0) return null;
+      const left = Math.min(...arts.map((art) => art.rect.x));
+      const top = Math.min(...arts.map((art) => art.rect.y));
+      const right = Math.max(...arts.map((art) => art.rect.x + art.rect.w));
+      const bottom = Math.max(...arts.map((art) => art.rect.y + art.rect.h));
+      return { x: left, y: top, width: right - left, height: bottom - top };
+    };
+    const fitView = () => {
+      const bounds = boundsOf(shown());
+      if (bounds === null || size.w === 0 || size.h === 0) return { ...DEFAULT_CAMERA };
+      return fitBox(bounds, { width: size.w, height: size.h }, { padding: compact ? FIT_PADDING_RAIL : FIT_PADDING_PAGE });
+    };
+    const placeLabels = () => {
+      for (const cell of cells) {
+        const { frame } = cell.art;
+        const x = camera.x + frame.x * camera.scale;
+        const y = camera.y + frame.y * camera.scale;
+        const crowded = frame.y > ARTBOARD_LABEL_HEIGHT && (ARTBOARD_LABEL_HEIGHT + ROW_GAP) * camera.scale < LABEL_ROOM_MIN;
+        cell.label.hidden = crowded || cell.root.hidden;
+        cell.label.style.transform = `translate(${Math.round(x)}px, ${Math.round(y - LABEL_LIFT2 - 22)}px)`;
+        cell.label.style.width = `${Math.max(0, Math.min(frame.w * camera.scale, size.w - x - 8))}px`;
+        cell.root.dataset.tiny = String(frame.w * camera.scale < TINY_WIDTH);
+      }
+    };
+    const apply = () => {
+      world.style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})`;
+      surface.style.setProperty("--dc-inv", String(1 / camera.scale));
+      surface.style.setProperty("--dc-scale", String(camera.scale));
+      surface.style.setProperty("--dc-grid", `${Math.max(8, 24 * camera.scale)}px`);
+      surface.style.setProperty("--dc-grid-x", `${camera.x}px`);
+      surface.style.setProperty("--dc-grid-y", `${camera.y}px`);
+      surface.dataset.dense = camera.scale < 0.3 ? "true" : "false";
+      zoomLabel.set({ label: zoomText(camera.scale) });
+      placeLabels();
+      queueSync();
+    };
+    function setCamera(next, user) {
+      camera = next;
+      if (user) userMoved = true;
+      apply();
+    }
+    function zoomStep(factor) {
+      setCamera(zoomAt(camera, camera.scale * factor, centre()), true);
+    }
+    function fit() {
+      userMoved = false;
+      camera = fitView();
+      apply();
+    }
+    const layoutOptions = { gap: WALL_GAP, rowGap: ROW_GAP, labelHeight: ARTBOARD_LABEL_HEIGHT };
+    const wrapFor = () => compact || detail === null ? 0 : bestWrap(detail.screens, detail.viewports, layoutOptions, size);
+    const layOut = () => {
+      wall = detail === null ? { cells: [], bounds: null } : screenWall(detail.screens, detail.viewports, { ...layoutOptions, wrap });
+    };
+    const reflow = () => {
+      const next = wrapFor();
+      if (next === wrap) return;
+      wrap = next;
+      layOut();
+      const byId = new Map(wall.cells.map((art) => [art.id, art]));
+      for (const cell of cells) {
+        const art = byId.get(cell.art.id);
+        if (!art) continue;
+        cell.art = art;
+        cell.root.style.transform = `translate(${art.frame.x}px, ${art.frame.y}px)`;
+      }
+    };
+    const paintPlaceholder = (cell) => {
+      const state = cell.art.problem !== null ? "problem" : !cell.live ? "paused" : cell.slot?.state() ?? "idle";
+      cell.root.dataset.state = state === "ready" ? "ready" : state === "problem" || state === "paused" ? "idle" : state;
+      cell.placeholder.replaceChildren();
+      const inner = h("div", { class: "dc-placeholder-inner" });
+      const retry = () => btn({ label: "Try again", variant: "outline", size: "sm", onClick: () => void loadCell(cell) }).el;
+      if (state === "problem") {
+        append(inner, icon2("warning", 20), h("p", { class: "dc-placeholder-title" }, "This screen can\u2019t be shown"), h("p", { class: "dc-placeholder-sub" }, `${cell.art.problem ?? ""} Ask the agent to fix it.`));
+      } else if (state === "paused") {
+        append(inner, icon2("layers", 20), h("p", { class: "dc-placeholder-title" }, "Paused"), h("p", { class: "dc-placeholder-sub" }, "Not loaded. Pan here to load it."));
+      } else if (state === "idle" || state === "loading") {
+        mountSpinner(inner, { label: `Loading ${cell.art.title}\u2026` });
+      } else if (state === "missing") {
+        const said = cell.slot?.error() ?? "";
+        append(inner, icon2("layers", 20), h("p", { class: "dc-placeholder-title" }, SCREEN_GONE), said === "" || said === SCREEN_GONE ? null : h("p", { class: "dc-placeholder-sub" }, said), retry());
+      } else if (state === "error") {
+        append(inner, icon2("warning", 20), h("p", { class: "dc-placeholder-title" }, "This screen didn\u2019t load"), h("p", { class: "dc-placeholder-sub" }, cell.slot?.error() ?? "Try again in a moment."), retry());
+      }
+      cell.placeholder.append(inner);
+    };
+    const slotFor = (cell) => {
+      if (cell.slot) return cell.slot;
+      const slot = createFrameSlot({
+        // No token preview and no saved page data: a system screen wears only its own tokens.css.
+        slug: `system-screen:${id}`,
+        loadDoc: (_screen, versionId) => client.systemScreen(id, cell.art.screen, { version: versionId, scheme }),
+        artboardId: artboardIdOf(cell.art.screen, cell.art.viewport.id),
+        title: `${cell.art.title} at ${viewportText(cell.art.viewport)}`,
+        mode: () => "edit",
+        scroll: () => ({ x: 0, y: 0 }),
+        onState: () => paintPlaceholder(cell)
+      });
+      slot.iframe.style.colorScheme = scheme;
+      cell.root.prepend(slot.iframe);
+      cell.slot = slot;
+      return slot;
+    };
+    async function loadCell(cell) {
+      if (cell.art.problem !== null || !cell.live) return;
+      await slotFor(cell).load(cell.art.screen, version, `screens/${cell.art.screen}.html`);
+    }
+    const sync = () => {
+      syncTimer = null;
+      if (disposed || !active2 || size.w === 0) return;
+      const visible = new Set(cellsOf(wall, compact ? picked : null).map((art) => art.id));
+      const candidates2 = cells.filter((cell) => visible.has(cell.art.id) && cell.art.problem === null).map((cell) => ({ cell, id: cell.art.id, rect: cell.art.rect }));
+      const live = new Set(liveBoards(candidates2, camera, size, compact ? RAIL_LIVE_FRAMES_MAX : PAGE_LIVE_FRAMES_MAX, FRAME_UNLOAD_MARGIN).map((entry) => entry.id));
+      for (const cell of cells) {
+        const next = live.has(cell.art.id);
+        if (next === cell.live) continue;
+        cell.live = next;
+        if (next) void loadCell(cell);
+        else {
+          cell.slot?.unload();
+          paintPlaceholder(cell);
+        }
+      }
+    };
+    function queueSync() {
+      if (syncTimer !== null) clearTimeout(syncTimer);
+      syncTimer = setTimeout(sync, SYNC_MS);
+    }
+    const dropCells = () => {
+      for (const cell of cells) {
+        cell.slot?.dispose();
+        cell.root.remove();
+        cell.label.remove();
+      }
+      cells = [];
+    };
+    const buildCells = () => {
+      dropCells();
+      for (const art of wall.cells) {
+        const placeholder = h("div", { class: "dc-placeholder" });
+        const root = h("div", { class: "dc-board dc-sysscr-board", "data-board": art.id, "data-state": "idle" }, placeholder);
+        root.style.transform = `translate(${art.frame.x}px, ${art.frame.y}px)`;
+        root.style.width = `${art.frame.w}px`;
+        root.style.height = `${art.frame.h}px`;
+        root.style.colorScheme = scheme;
+        const label = h(
+          "div",
+          { class: "dc-label", title: `${art.title} \xB7 ${SCREEN_KIND_LABEL[art.kind]} \xB7 ${viewportText(art.viewport)}` },
+          h("span", { class: "dc-label-text" }, h("span", { class: "dc-label-name" }, art.title), h("span", { class: "dc-label-sep", "aria-hidden": "true" }, "\xB7"), h("span", { class: "dc-label-dims" }, viewportText(art.viewport)))
+        );
+        const cell = { art, root, label, placeholder, slot: null, live: false };
+        world.append(root);
+        labels.append(label);
+        cells.push(cell);
+        paintPlaceholder(cell);
+      }
+    };
+    const paintList = () => {
+      list.replaceChildren();
+      if (!detail) return;
+      for (const screen of detail.screens) {
+        list.append(
+          h(
+            "li",
+            null,
+            h(
+              "button",
+              { type: "button", class: "dc-sysscr-row", "data-screen": screen.id, "aria-label": screenRowLabel(screen, detail.viewports), onClick: () => pick(screen.id) },
+              h("span", { class: "dc-sysscr-row-name" }, screen.title),
+              h("span", { class: "dc-sysscr-row-meta dc-muted" }, screen.problem === null ? screenRowMeta(screen, detail.viewports) : screen.problem),
+              screen.problem === null ? null : h("span", { class: "dc-sysscr-row-flag" }, icon2("warning", 14))
+            )
+          )
+        );
+      }
+    };
+    const paint = () => {
+      const screens = detail?.screens ?? [];
+      const state = detail === null ? "loading" : screens.length === 0 ? detail.unreadable !== null ? "unreadable" : "empty" : "ready";
+      el2.dataset.state = state;
+      const listing = compact && picked === null && state === "ready";
+      el2.dataset.view = listing ? "list" : "wall";
+      message.replaceChildren();
+      if (state === "loading") mountSpinner(message, { label: "Loading the screens\u2026" });
+      else if (state === "unreadable") message.append(h("p", { class: "dc-sys-board-message" }, SCREENS_UNREADABLE));
+      else if (state === "empty") {
+        message.append(h("p", { class: "dc-sys-board-message" }, SCREENS_EMPTY), btn({ label: "Back to the board", variant: "outline", size: "sm", onClick: () => options.onBoard() }).el);
+      }
+      const pickedScreen = picked === null ? null : screens.find((screen) => screen.id === picked);
+      back.el.hidden = !compact || picked === null;
+      count.textContent = pickedScreen ? pickedScreen.title : screens.length === 1 ? "1 screen" : `${screens.length} screens`;
+      bar.hidden = state !== "ready" || listing;
+      for (const cell of cells) cell.root.hidden = compact && cell.art.screen !== picked;
+    };
+    function pick(screen) {
+      const opened = picked;
+      picked = screen;
+      paint();
+      if (screen !== null) {
+        userMoved = false;
+        requestAnimationFrame(() => {
+          if (disposed) return;
+          measure();
+          fit();
+          surface.focus();
+        });
+      } else {
+        for (const cell of cells) {
+          cell.live = false;
+          cell.slot?.unload();
+          paintPlaceholder(cell);
+        }
+        const rows = [...list.querySelectorAll(".dc-sysscr-row")];
+        (rows.find((row2) => row2.dataset.screen === opened) ?? rows[0])?.focus();
+      }
+    }
+    surface.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 && event.button !== 1) return;
+      if (event.target instanceof Element && event.target.closest("button") !== null) return;
+      surface.focus();
+      drag = { pointer: event.pointerId, x: event.clientX, y: event.clientY };
+      surface.setPointerCapture(event.pointerId);
+      surface.dataset.panning = "true";
+    });
+    surface.addEventListener("pointermove", (event) => {
+      if (drag === null || event.pointerId !== drag.pointer) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      drag = { ...drag, x: event.clientX, y: event.clientY };
+      setCamera(panBy(camera, dx, dy), true);
+    });
+    const endDrag = (event) => {
+      if (drag === null || event.pointerId !== drag.pointer) return;
+      drag = null;
+      delete surface.dataset.panning;
+    };
+    surface.addEventListener("pointerup", endDrag);
+    surface.addEventListener("pointercancel", endDrag);
+    surface.addEventListener(
+      "wheel",
+      (event) => {
+        event.preventDefault();
+        const rect = surface.getBoundingClientRect();
+        if (event.ctrlKey || event.metaKey) setCamera(wheelZoom(camera, event.deltaY, { x: event.clientX - rect.left, y: event.clientY - rect.top }), true);
+        else setCamera(panBy(camera, -event.deltaX, -event.deltaY), true);
+      },
+      { passive: false }
+    );
+    surface.addEventListener("keydown", (event) => {
+      const action2 = wallKeyAction({ key: event.key, code: event.code, shift: event.shiftKey, pageMode: false, ctrl: event.ctrlKey, meta: event.metaKey, alt: event.altKey });
+      if (action2 === null) return;
+      if (action2.type === "zoom") zoomStep(action2.factor);
+      else if (action2.type === "zoom-reset") setCamera(zoomAt(camera, 1, centre()), true);
+      else if (action2.type === "fit") fit();
+      else if (action2.type === "pan") setCamera(panBy(camera, action2.dx, action2.dy), true);
+      else if (action2.type === "escape" && compact && picked !== null) pick(null);
+      else return;
+      event.preventDefault();
+    });
+    const measure = () => {
+      const rect = surface.getBoundingClientRect();
+      size = { w: Math.round(rect.width), h: Math.round(rect.height) };
+    };
+    const observer = new ResizeObserver(() => {
+      measure();
+      if (size.w === 0 || size.h === 0) return;
+      if (!userMoved) {
+        reflow();
+        camera = fitView();
+      }
+      apply();
+    });
+    observer.observe(surface);
+    const stopReady = host.onReady((context) => {
+      const next = boardScheme(context.theme.mode);
+      if (next === scheme) return;
+      scheme = next;
+      for (const cell of cells) {
+        cell.root.style.colorScheme = scheme;
+        if (cell.slot) cell.slot.iframe.style.colorScheme = scheme;
+        if (cell.live) void loadCell(cell);
+      }
+    });
+    const reloadLive = () => {
+      if (detail?.unreadable != null) return;
+      for (const cell of cells) if (cell.live) void loadCell(cell);
+    };
+    paint();
+    return {
+      el: el2,
+      setDetail: (next) => {
+        const wasUnreadable = detail?.unreadable != null;
+        detail = next;
+        const nextStructure = structureOf(next);
+        if (nextStructure !== structure) {
+          structure = nextStructure;
+          wrap = wrapFor();
+          layOut();
+          if (picked !== null && !(next?.screens.some((screen) => screen.id === picked) ?? false)) picked = null;
+          buildCells();
+          if (!userMoved) camera = fitView();
+          paintList();
+          paint();
+          apply();
+        } else {
+          paintList();
+          paint();
+        }
+        if (wasUnreadable && next !== null && next.unreadable === null) reloadLive();
+      },
+      reload: reloadLive,
+      setVersion: (next) => {
+        if (next === version) return;
+        version = next;
+        reloadLive();
+      },
+      setActive: (next) => {
+        if (next === active2) return;
+        active2 = next;
+        el2.hidden = !next;
+        if (next) {
+          requestAnimationFrame(() => {
+            if (disposed) return;
+            measure();
+            if (!userMoved) {
+              reflow();
+              camera = fitView();
+            }
+            apply();
+          });
+          return;
+        }
+        for (const cell of cells) {
+          cell.live = false;
+          cell.slot?.unload();
+          paintPlaceholder(cell);
+        }
+      },
+      focus: () => (el2.dataset.view === "list" ? list.querySelector(".dc-sysscr-row") : surface)?.focus(),
+      dispose: () => {
+        disposed = true;
+        if (syncTimer !== null) clearTimeout(syncTimer);
+        observer.disconnect();
+        stopReady();
+        dropCells();
+        el2.remove();
+      }
+    };
+  };
+
   // src/ui/systems/system-build.ts
-  var REPAINT_MS2 = 1e3;
   var systemEvents = (events, id) => events.flatMap((event) => {
     if (event.system !== id) return [];
     if (event.systemChange === "files") return [{ ...event, slug: id, kind: "files" }];
@@ -20491,20 +23701,10 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       onOpenChat: () => options.onOpenChat(),
       onDismiss: () => watcher.dismiss()
     });
-    let tick = null;
-    const render = () => {
-      const view2 = buildView(watcher.get(), Date.now(), host.snapshot()?.locale ?? "en");
-      strip.update(view2);
-      const wantsTick = view2.elapsed !== null && !document.hidden;
-      if (wantsTick && tick === null) tick = setInterval(render, REPAINT_MS2);
-      else if (!wantsTick && tick !== null) {
-        clearInterval(tick);
-        tick = null;
-      }
-    };
-    const unwatch = watcher.subscribe(render);
-    document.addEventListener("visibilitychange", render);
-    render();
+    const stopPaint = driveBuildStrip(strip, watcher, {
+      design: () => ({ slug: options.id, entry: null, files: ["system.json", "tokens.css", "DESIGN.md"] }),
+      locale: () => host.snapshot()?.locale ?? "en"
+    });
     const relink = () => {
       for (const listener of [...listeners]) listener();
     };
@@ -20513,10 +23713,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       watcher,
       relink,
       dispose: () => {
-        unwatch();
+        stopPaint();
         stopSession();
-        document.removeEventListener("visibilitychange", render);
-        if (tick !== null) clearInterval(tick);
         watcher.dispose();
         strip.dispose();
       }
@@ -20650,6 +23848,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   };
   var tokenRow = (ctx, token) => {
     const isColour2 = token.section === "colours";
+    const isMotion = token.section === "motion";
     const modes = token.dark !== null || isColour2 ? ["light", "dark"] : ["light"];
     const fields = modes.map((mode) => {
       const key = tokenKey(token.name, mode);
@@ -20658,10 +23857,11 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const pendingText = change?.kind === "token" ? change.value : null;
       const lock = ctx.locked ?? (value ? valueLock(value.editable) : null);
       const section2 = token.section;
+      const title2 = isMotion && modes.length === 1 ? "Value" : mode === "light" ? "Light" : "Dark";
       return labelled(
-        mode === "light" ? "Light" : "Dark",
+        title2,
         fieldEditor({
-          label: `${mode === "light" ? "Light" : "Dark"} value of ${token.name}`,
+          label: `${title2} of ${token.name}`.replace(/^(Light|Dark) of/, "$1 value of"),
           saved: savedToken(token, mode),
           pending: pendingText,
           lock,
@@ -20679,11 +23879,13 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     });
     const preview = isColour2 ? swatch(ctx.pending.get(tokenKey(token.name, "light"))?.kind === "token" ? ctx.pending.get(tokenKey(token.name, "light")).value : token.light?.text ?? null) : null;
     const remove2 = ctx.locked !== null ? null : iconBtn({ icon: "trash", label: `Remove ${token.name}`, size: "sm", onClick: () => ctx.removeToken(token.name) });
+    const edited = ctx.pending.get(tokenKey(token.name, "light"));
+    const kind = isMotion ? motionKindLabel(edited?.kind === "token" ? edited.value : token.light?.text ?? null) : null;
     const flags = h("span", { class: "dc-sp-flags" });
     if (token.alsoSet.length > 0) flags.append(h("span", { class: "dc-muted" }, `Also set in ${token.alsoSet.join(", ")}`));
     if (token.breakpoint) flags.append(h("span", { class: "dc-muted" }, "Changes with the screen size"));
     return wrapRow(ctx, entryKey("token", token.name), [
-      h("div", { class: "dc-sp-entry-head" }, preview, h("code", { class: "dc-sp-name" }, token.name), flags, remove2),
+      h("div", { class: "dc-sp-entry-head" }, preview, h("code", { class: "dc-sp-name" }, token.name), kind === null ? null : h("span", { class: "dc-muted dc-sp-kind" }, kind), flags, remove2),
       token.problem ? h("p", { class: "dc-sp-problem" }, token.problem) : null,
       h("div", { class: "dc-sp-fields" }, ...fields),
       labelled("Note", noteField(ctx, "tokens", token.name, token.note, token.name))
@@ -20749,6 +23951,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       ),
       labelled("Note", noteField(ctx, "components", component.id, component.note, component.name)),
       chips("Variants", component.variants),
+      chips("Sizes", component.sizes),
       chips("States", component.states),
       chips("Uses", component.tokens),
       component.undefinedTokens.length > 0 ? h("p", { class: "dc-sp-problem" }, `Uses ${plural(component.undefinedTokens.length, "value")} this system doesn\u2019t define: ${component.undefinedTokens.join(", ")}.`) : null
@@ -20783,33 +23986,102 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const list = kind === "pattern" ? ctx.detail.patterns : ctx.detail.brand;
     return list.map(
       (entry) => wrapRow(ctx, entryKey(kind, entry.id), [
-        h("div", { class: "dc-sp-entry-head" }, h("span", { class: "dc-sp-name" }, entry.title), h("span", { class: "dc-muted" }, entry.kind)),
+        h("div", { class: "dc-sp-entry-head" }, h("span", { class: "dc-sp-name" }, entry.title), h("span", { class: "dc-muted" }, entryKindLabel(entry.kind))),
         entry.problem ? h("p", { class: "dc-sp-problem" }, entry.problem) : null,
         entry.text ? h("p", { class: "dc-sp-body" }, entry.text) : null,
         labelled("Note", noteField(ctx, kind === "pattern" ? "patterns" : "brand", entry.id, entry.note, entry.title))
       ])
     );
   };
-  var assetRows = (ctx) => {
+  var iconRow = (ctx, view2, index) => {
+    const icon3 = ctx.detail.icons?.[index];
+    if (!icon3) return null;
+    const picture = view2.pictures.get(icon3.file);
+    const tile = h("span", { class: "dc-sp-icon-tile", "data-state": picture ? "ready" : view2.state }, picture ? h("img", { class: "dc-sp-icon", alt: "", draggable: "false", src: picture.src }) : null);
+    const missing = !picture && view2.state === "ready";
+    return wrapRow(ctx, entryKey("icon", String(index)), [
+      h(
+        "div",
+        { class: "dc-sp-icon-row" },
+        tile,
+        h("div", { class: "dc-sp-icon-text" }, h("span", { class: "dc-sp-name" }, icon3.name), h("code", { class: "dc-muted dc-mono" }, icon3.file))
+      ),
+      missing ? h("p", { class: "dc-muted dc-sp-body" }, "No picture. The file may be too large or unreadable.") : null,
+      icon3.note ? h("p", { class: "dc-sp-body" }, icon3.note) : null
+    ]);
+  };
+  var assetGroups = (ctx) => {
     const { fonts, sourceFiles } = ctx.detail;
+    const icons = ctx.detail.icons ?? [];
+    const groups = [];
+    if (icons.length === 0) {
+      groups.push(h("section", { class: "dc-sp-group", "aria-label": "Icons" }, h("h3", { class: "dc-sp-group-title" }, "Icons"), h("p", { class: "dc-muted dc-sp-none" }, ICONS_EMPTY)));
+    } else {
+      const view2 = ctx.icons();
+      const section2 = group("Icons", icons.map((_, index) => iconRow(ctx, view2, index)).filter((row2) => row2 !== null));
+      if (view2.state === "loading" && view2.pictures.size === 0) section2.setAttribute("aria-busy", "true");
+      if (view2.state === "error") {
+        section2.querySelector("ul")?.before(
+          h("div", { class: "dc-sp-icon-error", role: "alert" }, h("p", { class: "dc-sp-problem" }, "The icon pictures didn\u2019t load."), btn({ label: "Try again", variant: "outline", size: "xs", onClick: () => ctx.retryIcons() }).el)
+        );
+      }
+      groups.push(section2);
+    }
     const rows = [];
     fonts.forEach(
       (font2, index) => rows.push(wrapRow(ctx, entryKey("font", String(index)), [h("div", { class: "dc-sp-entry-head" }, h("span", { class: "dc-sp-name" }, font2.family), h("span", { class: "dc-muted" }, `${font2.weight} ${font2.style}`)), h("code", { class: "dc-muted dc-mono" }, font2.file)]))
     );
     for (const source of sourceFiles) rows.push(wrapRow(ctx, null, [h("div", { class: "dc-sp-entry-head" }, h("code", { class: "dc-mono" }, source.file), h("span", { class: "dc-muted" }, "Source file"))]));
-    return rows;
+    if (rows.length > 0) groups.push(group("Fonts and source files", rows));
+    return groups;
   };
   var logoRows = (ctx) => ctx.detail.logos.map(
     (logo, index) => wrapRow(ctx, entryKey("logo", String(index)), [h("div", { class: "dc-sp-entry-head" }, h("span", { class: "dc-sp-name" }, logo.variant), h("span", { class: "dc-muted" }, "Logo")), h("code", { class: "dc-muted dc-mono" }, logo.file), logo.note ? h("p", { class: "dc-sp-body" }, logo.note) : null])
   );
+  var pairSample = (ground) => {
+    const node = h("span", { class: "dc-sp-pair-sample", "aria-hidden": "true", "data-scheme": ground.scheme }, "Aa");
+    if (ground.fg !== null && ground.bg !== null && checkValue("colours", null, ground.fg).ok && checkValue("colours", null, ground.bg).ok) {
+      node.style.setProperty("color", ground.fg);
+      node.style.setProperty("background-color", ground.bg);
+    } else node.dataset.empty = "true";
+    return node;
+  };
+  var pairGround = (ground) => h(
+    "div",
+    { class: "dc-sp-pair-ground", "data-low": ground.low ? "true" : "false", role: "group", "aria-label": ground.ariaLabel },
+    pairSample(ground),
+    h("span", { class: "dc-sp-label" }, ground.label),
+    // Colour is never the only sign: a low ratio says so in words as well as in the warning tone.
+    h("span", { class: `dc-sp-pair-ratio${ground.ratio === PAIR_MEASURED ? " dc-muted" : " dc-mono"}` }, ground.ratio, ground.low ? h("strong", { class: "dc-sp-pair-low" }, " Too low") : null)
+  );
+  var pairRow = (ctx, pair) => wrapRow(ctx, entryKey("pair", String(pair.index)), [
+    h("div", { class: "dc-sp-entry-head" }, h("code", { class: "dc-sp-name" }, pair.name), pair.auto ? h("span", { class: "dc-muted dc-sp-flags" }, "Found from the token names") : null),
+    h("p", { class: "dc-muted dc-sp-pair-use" }, pair.use),
+    h("div", { class: "dc-sp-pair-grounds" }, ...pair.grounds.map(pairGround)),
+    pair.note !== "" ? h("p", { class: "dc-sp-body" }, pair.note) : null
+  ]);
+  var scopeBlock = (ctx) => {
+    const scope = scopeView(ctx.detail);
+    if (scope === null) return null;
+    return h(
+      "section",
+      { class: "dc-sp-group dc-sp-scope", "aria-label": "Scope" },
+      h("h3", { class: "dc-sp-group-title" }, "Scope"),
+      h(
+        "div",
+        { class: "dc-sp-entry dc-sp-scope-body" },
+        scope.depth === null ? null : h("p", { class: "dc-sp-scope-line" }, h("strong", { class: "dc-sp-scope-depth" }, scope.depth.label), scope.depth.sentence),
+        scope.leftOut.length === 0 ? null : chips("Left out on purpose", scope.leftOut)
+      )
+    );
+  };
   var group = (title2, rows) => h("section", { class: "dc-sp-group", "aria-label": title2 }, h("h3", { class: "dc-sp-group-title" }, title2), h("ul", { class: "dc-sp-entries" }, ...rows));
   var emptyNote = (section2) => {
     const text = {
       overview: "No overview or notes yet. Ask the agent to write them.",
       components: "No components yet. Ask the agent to add the ones your designs use.",
       patterns: "No patterns yet. Ask the agent to describe how things are put together.",
-      brand: "No brand entries yet. Ask the agent to add the voice and the logo rules.",
-      assets: "No fonts or logos yet."
+      brand: "No brand entries yet. Ask the agent to add the voice and the logo rules."
     };
     return h("p", { class: "dc-muted dc-sp-none" }, text[section2] ?? "Nothing here yet. Ask the agent to add some.");
   };
@@ -20824,6 +24096,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       case "overview": {
         const rows = overviewRows(ctx);
         root.append(rows.length === 0 ? emptyNote(section2) : h("ul", { class: "dc-sp-entries" }, ...rows));
+        const scope = scopeBlock(ctx);
+        if (scope !== null) root.append(scope);
         break;
       }
       case "typography": {
@@ -20847,8 +24121,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         break;
       }
       case "assets": {
-        const rows = assetRows(ctx);
-        root.append(rows.length === 0 ? emptyNote(section2) : h("ul", { class: "dc-sp-entries" }, ...rows));
+        root.append(...assetGroups(ctx));
         break;
       }
       case "colours": {
@@ -20858,11 +24131,13 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           const rows = tokens.filter((token) => (token.group ?? "other") === name).map((token) => tokenRow(ctx, token));
           if (rows.length > 0) root.append(group(COLOUR_GROUP_LABEL[name], rows));
         }
+        const pairs = pairViews(detail);
+        if (pairs.length > 0) root.append(group("Pairs", pairs.map((pair) => pairRow(ctx, pair))));
         break;
       }
       default: {
         const tokens = tokensOf(detail, section2);
-        if (tokens.length === 0) root.append(h("p", { class: "dc-muted dc-sp-none" }, "Nothing here yet. Ask the agent to add some."));
+        if (tokens.length === 0) root.append(h("p", { class: "dc-muted dc-sp-none" }, section2 === "motion" ? MOTION_EMPTY : "Nothing here yet. Ask the agent to add some."));
         else root.append(h("ul", { class: "dc-sp-entries" }, ...tokens.map((token) => tokenRow(ctx, token))));
       }
     }
@@ -21063,6 +24338,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   };
 
   // src/ui/systems/system-page.ts
+  var EXPORT_NOTICE_MS2 = 15e3;
   var REVIEW_DOT = { "not-reviewed": "Not reviewed", "looks-good": "Looks good", "needs-work": "Needs work" };
   var statusBadge = (status) => {
     const holder = h("span", { class: "dc-sys-badge" });
@@ -21104,9 +24380,12 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     let askingNote = false;
     let reviewBusy = false;
     let phoneView = "board";
+    let stageView = "board";
+    let lastReadable = null;
     let disposed = false;
     let versionsSheet = null;
     let versions = null;
+    let exportSheet = null;
     let loadTicket = 0;
     let living = null;
     let regenerating = false;
@@ -21133,6 +24412,13 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       },
       onState: () => void 0
     });
+    const icons = createIconStore(id, () => {
+      if (!disposed && section2 === "assets") paintPanel();
+    });
+    const reloadStage = () => {
+      board.reload();
+      screens.reload();
+    };
     const askLink = () => {
       const selected = guestHost.session.get();
       return { sessionId: detail?.sessionId ?? null, selectedId: selected?.id ?? null, selectedTitle: selected?.title ?? null };
@@ -21151,9 +24437,28 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       },
       onLeave: () => (board.el.querySelector("iframe") ?? board.el).focus()
     });
-    stage.append(board.el, askBar.el);
+    const screens = mountSystemScreens({ id, compact, onBoard: () => setStageView("board") });
+    const boardComments = mountBoardComments({
+      id,
+      board,
+      compact,
+      detail: () => detail,
+      chat: () => ({ sessionId: detail?.sessionId ?? null }),
+      locked: () => viewing ? OLD_VERSION_SENTENCE : null,
+      selectedEntry: () => selectedEntry,
+      section: () => section2,
+      showBoard: () => showBoard(),
+      afterSend: () => void reload()
+    });
+    panel.prepend(boardComments.el);
+    const viewButtons = {
+      board: h("button", { type: "button", class: "dc-syspg-view", "aria-pressed": "true", onClick: () => setStageView("board") }, "Board"),
+      screens: h("button", { type: "button", class: "dc-syspg-view", "aria-pressed": "false", onClick: () => setStageView("screens") }, "Screens")
+    };
+    const views = h("div", { class: "dc-syspg-views oc-segmented", role: "group", "aria-label": "Show on the stage", hidden: true }, viewButtons.board, viewButtons.screens);
     const buildHost = h("div", { class: "dc-syspg-build" });
-    stage.prepend(buildHost);
+    const stageHead = h("div", { class: "dc-syspg-stagehead" }, views, buildHost);
+    stage.append(stageHead, board.el, screens.el, askBar.el);
     const build = mountSystemBuild({
       id,
       host: buildHost,
@@ -21228,8 +24533,11 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         const nextLiving = await loadLiving(next);
         if (disposed || mine !== loadTicket) return;
         detail = next;
+        icons.invalidate();
         living = nextLiving;
         load = "ready";
+        if (next.unreadable === null) lastReadable = next;
+        screens.setDetail(screensSource(next, lastReadable));
         if (!isCovered(next, section2) && !expanded.size) section2 = SYSTEM_SECTIONS.find((candidate) => isCovered(next, candidate)) ?? "overview";
         expanded.add(AREA_OF_SECTION[section2]);
       } catch (error) {
@@ -21247,8 +24555,15 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       build.relink();
       applyWanted();
     };
+    function setStageView(next) {
+      if (next === stageView) return;
+      stageView = next;
+      paintViews();
+      if (next === "screens") screens.focus();
+    }
     const showBoard = () => {
       preview.close();
+      setStageView("board");
       phoneView = "board";
       el2.dataset.phoneView = phoneView;
       paintMobile();
@@ -21313,7 +24628,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         await client.call("POST /systems/:id/edits/:eid/undo", { params: { id, eid: editId }, body: {} });
         showEditNotice("Undone", "", [], SHORT_NOTICE_MS);
         await reload();
-        board.reload();
+        reloadStage();
       } catch (error) {
         notices.setTransient("edit", banner({ tone: "error", title: "Couldn\u2019t undo that", body: errorText2(error) }));
       }
@@ -21368,7 +24683,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       if (!detail || !canResync()) return;
       const applied = (result) => {
         resyncedNotice(result);
-        void reload().then(() => board.reload());
+        void reload().then(() => reloadStage());
       };
       const repo = repoHome();
       if (repo !== null) {
@@ -21380,7 +24695,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
           directory: repo.directory,
           title: hasSnapshot ? `Re-sync ${systemName} from ${repo.label}` : `Read ${systemName} from ${repo.label}`,
           subtitle: null,
-          stampOf: (current) => current.snapshot?.treeHash ?? "none",
+          stampOf: (current2) => current2.snapshot?.treeHash ?? "none",
           ...choose.askFolder ? { askFolder: true } : {},
           repoReview: (context) => paintRepoReview(context, { id, systemName, repo: repo.label, folder: repo.folder, hasSnapshot, onApplied: applied }),
           onApplied: applied
@@ -21390,6 +24705,20 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       if (detail.sources.code === null) return;
       openResyncSheet(sheetHost, { id, systemName: detail.name, directory: detail.sources.code.directory, onApplied: applied });
     }
+    const exported = ({ path, renamed }) => {
+      toast("success", `Saved to ${path}`, path);
+      if (disposed) return;
+      const changed = renamedSentence(renamed);
+      const show = btn({ label: "Show in folder", variant: "outline", size: "xs", onClick: () => void reveal2(path) });
+      const wrap = h("div", { class: "dc-banner dc-restore-notice dc-export-notice", "data-actions": "stack" });
+      wrap.append(...bannerWithActions("success", "Export saved", [h("span", { class: "dc-export-path" }, path), changed === null ? null : h("span", { class: "dc-export-renamed" }, changed)], [show.el]));
+      notices.setTransient("export", wrap, EXPORT_NOTICE_MS2);
+    };
+    const openExport = () => {
+      if (!detail) return;
+      exportSheet?.close();
+      exportSheet = openExportSheet(sheetHost, { id, systemName: detail.name, empty: detail.tokens.length === 0, onExported: exported });
+    };
     const askAgent2 = async (purpose, extra = {}) => {
       try {
         const outcome = await sendSystemMessage(id, { sessionId: detail?.sessionId ?? null }, { purpose, ...extra });
@@ -21410,6 +24739,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       if (!detail || !living) return;
       const target = previewTarget(living, detail);
       if (target === null) return;
+      setStageView("board");
       phoneView = "board";
       el2.dataset.phoneView = phoneView;
       el2.dataset.previewing = "true";
@@ -21477,7 +24807,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
             again.set({ loading: true });
             void reload().then(() => {
               editBase = detail;
-              board.reload();
+              reloadStage();
               notices.setTransient("edit", null);
             });
           }
@@ -21503,7 +24833,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         paint();
         savedNotice(answer, "");
         await reload();
-        board.reload();
+        reloadStage();
         return true;
       } catch (error) {
         saving = false;
@@ -21532,7 +24862,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         await reload();
         editBase = pending.size > 0 ? detail : null;
         board.setPreview(previewVars(pending));
-        board.reload();
+        reloadStage();
       }).catch((error) => {
         saving = false;
         failedSave(error);
@@ -21644,6 +24974,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const setViewing = (next) => {
       viewing = next;
       board.setVersion(next?.id ?? null);
+      screens.setVersion(next?.id ?? null);
       syncAsk();
       paint();
     };
@@ -21653,11 +24984,12 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       refresh: async () => {
         await reload();
         editBase = pending.size > 0 ? detail : null;
-        board.reload();
+        reloadStage();
       },
       onRestored: () => {
         viewing = null;
         board.setVersion(null);
+        screens.setVersion(null);
         syncAsk();
         paint();
         versions?.load().catch(() => void 0);
@@ -21708,7 +25040,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       const pencil = detail && !compact ? iconBtn({ icon: "pencil", label: `Rename ${titleText}`, onClick: () => startRename() }) : null;
       const titleWrap = h("div", { class: "dc-syspg-titlewrap" }, h("h1", { class: "dc-syspg-h1" }, title2), pencil, detail ? statusBadge(detail.status) : null, dirty() ? h("span", { class: "dc-syspg-unsaved" }, "Unsaved") : null);
       const repoLine = detail && !compact ? repoHeaderLine(detail) : null;
-      const home = detail ? repoLine !== null ? h("p", { class: "dc-syspg-home dc-muted", title: repoLine.title }, repoLine.text) : h("p", { class: "dc-syspg-home dc-muted", title: homeTitle(detail) }, homeLine2(detail, sourceText(detail.sources, folderName, (iso) => relativeTime(iso, Date.now(), localeOf())))) : null;
+      const home = detail ? repoLine !== null ? h("p", { class: "dc-syspg-home dc-muted", title: repoLine.title }, repoLine.text) : h("p", { class: "dc-syspg-home dc-muted", title: homeTitle(detail) }, homeLine(detail, sourceText(detail.sources, folderName, (iso) => relativeTime(iso, Date.now(), localeOf())))) : null;
       const living2 = detail ? livingPagePill(detail) : null;
       const livingEl = living2 ? h("span", { class: "dc-syspg-living", title: living2.title }) : null;
       if (livingEl && living2) mountBadge(livingEl, { label: living2.label, tone: living2.tone });
@@ -21731,16 +25063,19 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         const more = iconBtn({ icon: "more", label: "More", onClick: () => void 0 });
         attachMenu(
           more,
-          () => [
+          // A phone's menu has no Export: the tokens would be saved on the computer (menuOnThisDevice drops `export`).
+          () => menuOnThisDevice([
             { id: "rename", label: "Rename" },
             { id: "chat", label: "Continue in chat" },
             ...canResync() ? [resyncEntry()] : [],
+            exportMenuEntry({ viewing: viewing !== null, dirty: dirty(), unreadable: detail?.unreadable != null }),
             ...compact ? [{ id: "versions", label: "Versions" }] : []
-          ],
+          ]),
           (choice) => {
             if (choice === "rename") startRename();
             else if (choice === "chat") void continueChat();
             else if (choice === "resync") startResync();
+            else if (choice === "export") openExport();
             else if (choice === "versions") openVersions();
           }
         );
@@ -21780,7 +25115,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       if (!detail || repoHome() === null) return null;
       const out = h("div", { class: "dc-syspg-repo" });
       if (living !== null) {
-        const card = livingCard(living, detail, { now: Date.now(), locale: localeOf(), regenerating, locked: viewing ? OLD_VERSION_SENTENCE : dirty() ? "Save or discard your changes first." : null });
+        const card = livingCard(living, detail, { now: Date.now(), locale: localeOf(), regenerating, locked: viewing ? OLD_VERSION_SENTENCE : dirty() ? "Save or discard your changes first." : null, phone: currentDevice().form === "phone" });
         out.append(renderLivingCard(card, { onAction: livingAction, onEmbedFonts: (checked) => void setEmbedFonts(checked) }));
       }
       const drift = driftLines(detail);
@@ -21840,14 +25175,14 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         );
         const rows = h("ul", { class: "dc-syspg-rows", id: rowsId, hidden: !open });
         for (const row2 of group2.rows) {
-          const current = row2.section === section2;
+          const current2 = row2.section === section2;
           rows.append(
             h(
               "li",
               null,
               h(
                 "button",
-                { type: "button", class: "dc-syspg-row", "aria-current": current ? "true" : null, "aria-label": row2.ariaLabel, "data-focus-key": `row:${row2.section}`, onClick: () => select(row2.section) },
+                { type: "button", class: "dc-syspg-row", "aria-current": current2 ? "true" : null, "aria-label": row2.ariaLabel, "data-focus-key": `row:${row2.section}`, onClick: () => select(row2.section) },
                 h("span", { class: "dc-syspg-row-name" }, row2.label),
                 h("span", { class: "dc-syspg-row-count dc-muted" }, row2.count),
                 row2.covered ? h("span", { class: "dc-syspg-row-state", "data-state": row2.review, title: REVIEW_DOT[row2.review] }, row2.review === "not-reviewed" ? "" : REVIEW_LABEL[row2.review]) : null
@@ -21859,20 +25194,35 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       }
       return root;
     }
-    const sectionContext = (current) => ({
-      detail: current,
+    const sectionContext = (current2) => ({
+      detail: current2,
       pending,
       locked: locked(),
       selectedEntry,
       propose,
       removeToken,
-      selectEntry: (entry) => select(section2, entry)
+      selectEntry: (entry) => select(section2, entry),
+      icons: () => icons.view((current2.icons ?? []).map((icon3) => icon3.file)),
+      retryIcons: () => icons.retry()
     });
+    function paintViews(building = load === "ready" && detail !== null && repoHome() !== null && detail.snapshot === null) {
+      const shown = detail === null ? null : screensSource(detail, lastReadable);
+      const showTabs = !building && load === "ready" && shown !== null && screensTabShown(shown, stageView);
+      if (!showTabs && stageView === "screens" && (building || load !== "ready")) stageView = "board";
+      el2.dataset.stageView = stageView;
+      el2.dataset.views = String(showTabs);
+      views.hidden = !showTabs;
+      viewButtons.board.setAttribute("aria-pressed", String(stageView === "board"));
+      viewButtons.screens.setAttribute("aria-pressed", String(stageView === "screens"));
+      viewButtons.screens.textContent = shown !== null && shown.screens.length > 0 ? `Screens (${shown.screens.length})` : "Screens";
+      board.el.hidden = building || stageView !== "board";
+      screens.setActive(!building && stageView === "screens");
+    }
     function paintStage() {
       const repo = repoHome();
       const building = load === "ready" && detail !== null && repo !== null && detail.snapshot === null;
       buildingEl.hidden = !building;
-      board.el.hidden = building;
+      paintViews(building);
       buildingEl.replaceChildren();
       if (!building || detail === null || repo === null) return;
       const waiting = detail.proposal !== null && detail.proposal.state === "current";
@@ -21943,6 +25293,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       }
       panelScroll.scrollTop = scrollTop;
       if (focused) panelScroll.querySelector(`[data-focus-key="${CSS.escape(focused)}"]`)?.focus();
+      boardComments.el.hidden = load !== "ready" || detail === null || buildingEl.hidden === false;
+      boardComments.sync();
       paintFoot();
     }
     function paintFoot() {
@@ -21972,7 +25324,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
             btn({ label: control.label, variant: control.emphasis === "primary" ? "default" : "outline", size: "sm", ...control.emphasis === "primary" ? { emphasis: "primary" } : {}, disabled: viewing !== null, onClick: () => void toggleReady() }).el,
             btn({ label: "Continue in chat", variant: "outline", size: "sm", icon: "chat", onClick: () => void openChat() }).el
           ),
-          ...detail.home.kind === "repo" ? [] : [h("p", { class: "dc-muted dc-syspg-railhint" }, railHint(detail))]
+          ...detail.home.kind === "repo" ? [] : [h("p", { class: "dc-muted dc-syspg-railhint" }, railHint(detail, document.documentElement.dataset.dcForm === "phone"))]
         );
       };
       if (foot.kind === "uncovered") {
@@ -22105,8 +25457,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     }
     let refreshTimer = null;
     const stopFeed = feed.subscribe((batch) => {
+      if (boardCommentsChanged(batch, id)) void boardComments.refresh();
+      if (!systemDetailChanged(batch, id)) return;
       const mine = batch.events.filter((event) => event.system === id);
-      if (!batch.reset && mine.length === 0) return;
       if (mine.some((event) => event.systemChange === "removed")) {
         load = "gone";
         paint();
@@ -22117,8 +25470,9 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       if (refreshTimer !== null) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
-        void reload();
-        if (files && viewing === null) board.reload();
+        void reload().then(() => {
+          if (files && viewing === null && !disposed) reloadStage();
+        });
       }, 300);
     });
     const stopSession = guestHost.session.subscribe(() => syncAsk());
@@ -22130,10 +25484,14 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
       stopFeed();
       stopSession();
       versionsSheet?.close();
+      exportSheet?.close();
       restore.dispose();
       build.dispose();
       askBar.dispose();
+      boardComments.dispose();
       board.dispose();
+      icons.dispose();
+      screens.dispose();
       notices.dispose();
       el2.remove();
     });
@@ -22310,7 +25668,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
   };
   var modeOf = (summary) => summary.pending ? "pending" : summary.thumb.state === "ready" ? "image" : "live";
   var mountThumb = (summary, aspect = "rail") => {
-    let current = summary;
+    let current2 = summary;
     const el2 = h("div", { class: "dc-thumb", "data-aspect": aspect, "data-state": "loading", "aria-hidden": "true" });
     let disposed = false;
     let teardown = null;
@@ -22328,13 +25686,13 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     };
     const showPending = () => {
       el2.dataset.state = "pending";
-      el2.append(icon2(current.kind === "canvas" ? "canvas" : "page", aspect === "card" ? 28 : 18));
+      el2.append(icon2(current2.kind === "canvas" ? "canvas" : "page", aspect === "card" ? 28 : 18));
     };
     const showImage = () => {
       el2.dataset.state = "loading";
       const mine = token;
-      const key = current.thumb.key;
-      client.thumbnail(current.slug, key).then(
+      const key = current2.thumb.key;
+      client.thumbnail(current2.slug, key).then(
         (answer) => {
           if (disposed || mine !== token) return;
           if (answer.state === "ready" && answer.png) {
@@ -22356,11 +25714,11 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
         let doc = null;
         let release = null;
         const start = () => {
-          const vp = current.viewports[0] ?? { width: 1280, height: 800, id: "laptop", label: "Laptop" };
-          client.loadRender(current.slug, null, null).then(
+          const vp = current2.viewports[0] ?? { width: 1280, height: 800, id: "laptop", label: "Laptop" };
+          client.loadRender(current2.slug, null, null).then(
             ({ html }) => {
               if (disposed || mine !== token) return;
-              doc = createFrameDocument(html, { artboardId: "thumb", file: current.kind === "page" ? "index.html" : "thumb", mode: "play" });
+              doc = createFrameDocument(html, { artboardId: "thumb", file: current2.kind === "page" ? "index.html" : "thumb", mode: "play" });
               const frame = h("iframe", { class: "dc-thumb-frame", sandbox: "", tabindex: "-1", title: "", src: doc.url, loading: "eager" });
               frame.style.width = `${vp.width}px`;
               frame.style.height = `${vp.height}px`;
@@ -22398,7 +25756,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     const render = () => {
       token += 1;
       clear();
-      const mode = modeOf(current);
+      const mode = modeOf(current2);
       if (mode === "pending") showPending();
       else if (mode === "image") showImage();
       else showLive();
@@ -22407,8 +25765,8 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     return {
       el: el2,
       update: (next) => {
-        const changed = modeOf(next) !== modeOf(current) || next.thumb.key !== current.thumb.key || next.slug !== current.slug;
-        current = next;
+        const changed = modeOf(next) !== modeOf(current2) || next.thumb.key !== current2.thumb.key || next.slug !== current2.slug;
+        current2 = next;
         if (changed) render();
       },
       dispose: () => {
@@ -22461,7 +25819,7 @@ ${meta.external.join("\n")}`, tabindex: "0", role: "img", "aria-label": `${meta.
     if (variant === "titles") {
       const menu = iconBtn({ icon: "more", label: `Actions for ${design.title}`, size: "sm", onClick: () => void 0 });
       const ref2 = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
-      attachMenu(menu, () => listDesignMenu(view2.menu), (id) => runListAction(id, ref2, actions, view2.menu));
+      attachMenu(menu, () => menuOnThisDevice(listDesignMenu(view2.menu)), (id) => runListAction(id, ref2, actions, view2.menu));
       const main2 = h(
         "button",
         { type: "button", class: "dc-row-main dc-row-main-title", "aria-label": rowAriaLabel(design), title: `${design.title}
@@ -22483,7 +25841,7 @@ ${kindSummary(design)}` },
     const flags = rowFlags(design);
     const more = iconBtn({ icon: "more", label: `Actions for ${design.title}`, size: "sm", onClick: () => void 0 });
     const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
-    attachMenu(more, () => listDesignMenu(view2.menu), (id) => runListAction(id, ref, actions, view2.menu));
+    attachMenu(more, () => menuOnThisDevice(listDesignMenu(view2.menu)), (id) => runListAction(id, ref, actions, view2.menu));
     const chip = designSystemChip(design, { actions, swatchOf: options.swatchOf });
     const pending = design.pending ? "true" : "false";
     if (variant === "list") {
@@ -22573,8 +25931,8 @@ ${kindSummary(design)}` },
   var looseKey = (files) => files.map((file) => file.name).sort();
   var isDismissed = (files, dismissed) => {
     if (dismissed === null) return false;
-    const current = looseKey(files);
-    return current.length === dismissed.length && current.every((name, index) => name === dismissed[index]);
+    const current2 = looseKey(files);
+    return current2.length === dismissed.length && current2.every((name, index) => name === dismissed[index]);
   };
   var parseDismissed2 = (value) => Array.isArray(value) && value.every((entry) => typeof entry === "string") ? [...value].sort() : null;
   var looseBanner = (loose, dismissed) => {
@@ -22768,7 +26126,7 @@ ${kindSummary(design)}` },
     }
     const more = iconBtn({ icon: "more", label: `Actions for ${summary.name}`, size: "sm", onClick: () => void 0 });
     more.classList.add("dc-card-more");
-    attachMenu(more, () => librarySystemMenu(summary), (id) => void runLibrarySystemAction(id, summary, options));
+    attachMenu(more, () => menuOnThisDevice(librarySystemMenu(summary)), (id) => void runLibrarySystemAction(id, summary, options));
     return h("li", { class: "dc-card dc-sys-tile", "data-kind": "system", "data-system-id": summary.id, "data-lead": options.lead === true ? "true" : "false" }, main, foot.childElementCount > 0 ? foot : null, more);
   };
 
@@ -22868,11 +26226,11 @@ ${kindSummary(design)}` },
       return h("li", { class: "dc-side-row", "data-scope": scopeToId(config.scope), "data-selected": config.selected ? "true" : "false" }, main);
     };
     const heading = (text, ...trailing) => h("div", { class: "dc-side-heading" }, h("h2", { class: "dc-side-title" }, text), ...trailing);
-    const systemsSection = (current) => {
-      const total = current.systems.length;
+    const systemsSection = (current2) => {
+      const total = current2.systems.length;
       const headingButton = h(
         "button",
-        { type: "button", class: "dc-side-heading-link", "aria-label": current.systemsStatus === "ready" ? `Design systems, ${total}. Open the list` : "Design systems. Open the list" },
+        { type: "button", class: "dc-side-heading-link", "aria-label": current2.systemsStatus === "ready" ? `Design systems, ${total}. Open the list` : "Design systems. Open the list" },
         "Design systems",
         icon2("chevron-right", 12)
       );
@@ -22880,19 +26238,19 @@ ${kindSummary(design)}` },
       const newButton = btn({ label: "New", variant: "ghost", size: "xs", icon: "plus", onClick: () => options.onNewSystem() }).el;
       newButton.setAttribute("aria-label", "New design system");
       const out = [h("div", { class: "dc-side-heading" }, h("h2", { class: "dc-side-title" }, headingButton), newButton)];
-      if (current.systemsStatus === "loading" && total === 0) {
+      if (current2.systemsStatus === "loading" && total === 0) {
         out.push(h("ul", { class: "dc-side-list", "aria-hidden": "true" }, ...Array.from({ length: FOLDER_SKELETONS }, () => h("li", { class: "dc-side-skeleton" }, h("span", { class: "dc-skel dc-skel-line" })))));
-      } else if (current.systemsStatus === "error" && total === 0) {
+      } else if (current2.systemsStatus === "error" && total === 0) {
         out.push(h("div", { class: "dc-side-note" }, h("p", { class: "dc-form-error" }, "Design systems couldn\u2019t load. Try again."), btn({ label: "Try again", variant: "outline", size: "xs", onClick: options.onRetrySystems }).el));
       } else if (total === 0) {
         out.push(h("p", { class: "dc-side-hint" }, "No design systems yet."));
       } else {
-        out.push(h("ul", { class: "dc-side-list", role: "list", "aria-label": "Design systems" }, ...current.systems.map((system) => systemRowFor(system, current))));
+        out.push(h("ul", { class: "dc-side-list", role: "list", "aria-label": "Design systems" }, ...current2.systems.map((system) => systemRowFor(system, current2))));
       }
       return out;
     };
-    const systemRowFor = (system, current) => {
-      const selected = current.systemFilter.kind === "system" && current.systemFilter.id === system.id;
+    const systemRowFor = (system, current2) => {
+      const selected = current2.systemFilter.kind === "system" && current2.systemFilter.id === system.id;
       const main = h(
         "button",
         { type: "button", class: "dc-side-main", "aria-current": selected ? "true" : null, title: system.name, "aria-label": `${system.name}${system.draft ? ", Draft" : ""}, ${system.usedBy === 0 ? "not used yet" : `used by ${plural(system.usedBy, "design")}`}. Show its designs` },
@@ -22904,9 +26262,9 @@ ${kindSummary(design)}` },
       main.addEventListener("click", () => options.onFilterSystem(system.id));
       return h("li", { class: "dc-side-row", "data-scope": `system:${system.id}`, "data-selected": selected ? "true" : "false" }, main);
     };
-    const folderRow = (folder, current) => {
-      const selected = sameScope(current.scope, { kind: "folder", id: folder.id });
-      const count = current.counts.folders[folder.id] ?? 0;
+    const folderRow = (folder, current2) => {
+      const selected = sameScope(current2.scope, { kind: "folder", id: folder.id });
+      const count = current2.counts.folders[folder.id] ?? 0;
       if (renaming?.id === folder.id) return renameRow(folder);
       const row2 = rowFor({ scope: { kind: "folder", id: folder.id }, label: folder.name, count, glyph: "folder", title: folder.name, selected });
       const more = iconBtn({ icon: "more", label: `Actions for folder ${folder.name}`, size: "sm", onClick: () => void 0 });
@@ -22921,7 +26279,7 @@ ${kindSummary(design)}` },
         (id) => {
           if (id === "rename") {
             renaming = { id: folder.id, draft: folder.name, error: null, busy: false };
-            paint(current, true);
+            paint(current2, true);
           } else if (id === "new-folder") openNewFolder(el2.closest(".dc-app") ?? document.body);
           else options.onDelete(folder);
         }
@@ -23179,7 +26537,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       },
       onDrop: (folder, slug) => {
         const design = store.getState().designs.data?.designs.find((entry) => entry.slug === slug);
-        if (design) void addToFolder(folder, { slug, title: design.title });
+        if (design) void addToFolder2(folder, { slug, title: design.title });
       },
       onRetryFolders: () => void folderStore.load(),
       onCreate: async (name) => {
@@ -23564,10 +26922,15 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
   var mountPage = (root) => {
     const app = h("div", { class: "dc-app", "data-surface": "page" });
     root.replaceChildren(app);
+    startViewReport("page");
     let open = null;
     let systemsView = null;
     let systemPage = null;
     let buildView2 = null;
+    const syncView = () => {
+      if (!open || systemPage || systemsView || buildView2) reportNothingOpen();
+      else reportReturn(open.slug);
+    };
     const closeDesign = () => {
       const slug = open?.slug;
       open?.handle.dispose();
@@ -23591,18 +26954,18 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       app.append(handle.el);
     };
     const leaveDesign = () => {
-      const current = open;
-      if (!current) return;
-      void current.handle.beforeLeave().then((leave) => {
-        if (leave && open === current) closeDesign();
+      const current2 = open;
+      if (!current2) return;
+      void current2.handle.beforeLeave().then((leave) => {
+        if (leave && open === current2) closeDesign();
       });
     };
     const openDesign = (slug) => {
       if (open?.slug === slug) return;
-      const current = open;
-      if (current) {
-        void current.handle.beforeLeave().then((leave) => {
-          if (leave && open === current) showDesign(slug);
+      const current2 = open;
+      if (current2) {
+        void current2.handle.beforeLeave().then((leave) => {
+          if (leave && open === current2) showDesign(slug);
         });
         return;
       }
@@ -23616,10 +26979,10 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         if (open?.slug === slug) closeDesign();
       },
       onOpenSystem: (id, target) => {
-        const current = open;
-        if (!current) return openSystem(id, target);
-        void current.handle.beforeLeave().then((leave) => {
-          if (!leave || open !== current) return;
+        const current2 = open;
+        if (!current2) return openSystem(id, target);
+        void current2.handle.beforeLeave().then((leave) => {
+          if (!leave || open !== current2) return;
           closeDesign();
           openSystem(id, target);
         });
@@ -23634,6 +26997,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       buildView2?.handle.dispose();
       buildView2 = null;
       library.el.hidden = false;
+      syncView();
     };
     const showBuild = (ticket) => {
       systemPage?.handle.dispose();
@@ -23646,13 +27010,14 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       library.el.hidden = true;
       app.append(handle.el);
       handle.focus();
+      syncView();
     };
     const openBuild = (ticket) => {
       if (buildView2?.ticket === ticket) return;
-      const current = open;
-      if (!current) return showBuild(ticket);
-      void current.handle.beforeLeave().then((leave) => {
-        if (!leave || open !== current) return;
+      const current2 = open;
+      if (!current2) return showBuild(ticket);
+      void current2.handle.beforeLeave().then((leave) => {
+        if (!leave || open !== current2) return;
         closeDesign();
         showBuild(ticket);
       });
@@ -23663,6 +27028,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       systemsView?.dispose();
       systemsView = null;
       library.el.hidden = false;
+      syncView();
       if (focus === "button") library.focusSystems();
     };
     const showSystems = () => {
@@ -23673,6 +27039,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       library.el.hidden = true;
       app.append(systemsView.el);
       systemsView.focus();
+      syncView();
     };
     const showDesignsOf = (id) => {
       closeSystems("none");
@@ -23744,6 +27111,14 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     const folderStore = folders();
     const systemStore = systems();
     const thumbs = /* @__PURE__ */ new Map();
+    const groupThumbs = /* @__PURE__ */ new Map();
+    let chatOnly = null;
+    let openedFromGroup = false;
+    const currentSession = () => guestHost.session.get()?.id ?? null;
+    const fromList = (slug) => {
+      openedFromGroup = false;
+      options.onOpen(slug);
+    };
     const el2 = h("div", { class: "dc-list-view" });
     const newButton = btn({ label: "New", variant: "default", size: "sm", icon: "plus", chevron: true, onClick: () => void 0 });
     attachMenu(
@@ -23773,6 +27148,14 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       filtersButton.focus();
     });
     const chip = h("span", { class: "dc-filter-chip" }, icon2("system", 12), chipLabel2, chipRemove);
+    const chatChipLabel = h("span", { class: "dc-filter-chip-name" }, THIS_CHAT_TITLE);
+    const chatChipRemove = h("button", { type: "button", class: "dc-filter-chip-x", "aria-label": chatChip(0).removeLabel, title: chatChip(0).removeLabel }, icon2("close", 12));
+    chatChipRemove.addEventListener("click", () => {
+      setChatOnly(null);
+      searchHost.querySelector("input")?.focus();
+    });
+    const chatChipEl = h("span", { class: "dc-filter-chip" }, icon2("chat", 12), chatChipLabel, chatChipRemove);
+    const chatChipRow = h("div", { class: "dc-rail-chiprow dc-chat-chiprow", hidden: true }, chatChipEl);
     const chipRow = h("div", { class: "dc-rail-chiprow", hidden: true }, chip);
     const head = h("header", { class: "dc-rail-head" }, h("h1", { class: "dc-rail-title" }, "Designs"), h("span", { class: "dc-spacer" }), filtersButton, systemsButton, settingsButton, newButton.el);
     const searchHost = h("div", { class: "dc-search" });
@@ -23852,17 +27235,18 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     const paintTip = () => {
       const state = store.getState().designs;
       const failed = state.status === "error" && !state.data;
-      const show = tipWanted === true && !tipHidden && !failed;
+      const tip = options.firstRunTip;
+      const show = tip !== null && tipWanted === true && !tipHidden && !failed;
       tipHost.hidden = !show;
-      if (!show) {
+      if (!show || tip === null) {
         tipHost.replaceChildren();
         return;
       }
       if (tipHost.firstElementChild) return;
       mountBanner(tipHost, {
         tone: "info",
-        title: "Open Design Chamber full screen",
-        body: "In the sidebar, open Extension pages and pick Design Chamber. Canvases get the whole window there.",
+        title: tip.title,
+        body: tip.body,
         action: { label: "Got it", onClick: dismissTip }
       });
     };
@@ -23884,7 +27268,12 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     notices.append(looseBanner2.el);
     const undo = mountUndoNotice();
     const list = h("ul", { class: "dc-rows", role: "list", "aria-label": "Designs" });
-    const scroller = h("div", { class: "dc-rail-scroll" }, h("div", { class: "dc-rail-undo" }, undo.el), notices, list);
+    const groupHeadingId = "dc-this-chat-h";
+    const groupRows = h("ul", { class: "dc-rows", role: "list", "aria-labelledby": groupHeadingId });
+    const groupMore = h("div", { class: "dc-this-chat-more" });
+    const group2 = h("section", { class: "dc-this-chat", "aria-labelledby": groupHeadingId, hidden: true }, h("h2", { class: "dc-rail-group-h", id: groupHeadingId }, THIS_CHAT_TITLE), groupRows, groupMore);
+    const restHeading = h("h2", { class: "dc-rail-group-h dc-rail-rest-h", hidden: true });
+    const scroller = h("div", { class: "dc-rail-scroll" }, h("div", { class: "dc-rail-undo" }, undo.el), group2, notices, restHeading, list);
     const footCount = h("span", { class: "dc-rail-nav-count" });
     const foot = h(
       "button",
@@ -23897,7 +27286,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       footCount,
       icon2("chevron-right", 16)
     );
-    el2.append(head, chipRow, tipHost, filters, scroller, foot);
+    el2.append(head, chipRow, chatChipRow, tipHost, filters, scroller, foot);
     const switchBack = async (path) => {
       try {
         await store.updateSettings({ root: path });
@@ -23925,7 +27314,23 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       filtersOpen = open;
       filterArea.hidden = !open;
       filtersButton.setAttribute("aria-expanded", String(open));
-      chipRow.hidden = open || !chipShown;
+      syncChips();
+    };
+    const syncChips = () => {
+      chipRow.hidden = filtersOpen || !chipShown;
+      chatChipRow.hidden = chatOnly === null;
+    };
+    const setChatOnly = (next) => {
+      chatOnly = next;
+      if (next !== null) {
+        chosen = ALL_SCOPE;
+        query = "";
+        tab = "all";
+        systemFilter = ALL_SYSTEMS;
+        search.update({ value: "" });
+        tabsHandle.update({ activeId: "all" });
+      }
+      paintList();
     };
     const setSystemFilter = (next) => {
       systemFilter = next;
@@ -23968,7 +27373,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       for (const button2 of viewButtons) button2.setAttribute("aria-pressed", String(button2.dataset.view === railView));
       resetRow.hidden = state.changed === 0;
       chipShown = state.chip !== null;
-      chipRow.hidden = filtersOpen || !chipShown;
+      syncChips();
       if (state.chip) {
         chipLabel2.textContent = state.chip.label;
         chip.title = state.summary;
@@ -24016,8 +27421,8 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       const entries = scopeOptions(groups, counts, folderList);
       const systemEntries = showSystemOptions(systemList);
       showSelect.update({ value: scopeToId(scope2), options: [...entries, ...systemEntries, { id: NEW_FOLDER_ID, label: "New folder\u2026", hint: "" }].map(({ id, label, hint }) => ({ id, label, ...hint ? { hint } : {} })) });
-      const current = entries.find((entry) => entry.id === scopeToId(scope2));
-      nameSelect(showHost, "Show", current?.label ?? "All designs");
+      const current2 = entries.find((entry) => entry.id === scopeToId(scope2));
+      nameSelect(showHost, "Show", current2?.label ?? "All designs");
       folderMore.hidden = view2.folder === null;
       showRow.dataset.folders = foldersState.status === "error" ? "error" : "ok";
       foldersNote.hidden = foldersState.status !== "error";
@@ -24038,6 +27443,11 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       paintFoot();
       list.replaceChildren();
       for (const handle of [...thumbs.values()]) handle.el.remove();
+      groupRows.replaceChildren();
+      groupMore.replaceChildren();
+      for (const handle of [...groupThumbs.values()]) handle.el.remove();
+      group2.hidden = true;
+      restHeading.hidden = true;
       paintNotices();
       paintTip();
       scroller.removeAttribute("aria-busy");
@@ -24051,7 +27461,12 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         list.append(h("li", { class: "dc-list-message" }, wrap));
         return;
       }
-      const all = state.data.designs;
+      const everything = state.data.designs;
+      const session = currentSession();
+      if (chatOnly !== null && (chatOnly !== session || chatDesigns(everything, chatOnly).length === 0)) chatOnly = null;
+      syncChips();
+      const all = chatOnly === null ? everything : chatDesigns(everything, chatOnly);
+      if (chatOnly !== null) chatChipEl.title = chatChip(all.length).title;
       const root = state.data.root;
       const foldersState = folderStore.get();
       const folderList = foldersState.status === "error" ? [] : foldersState.folders;
@@ -24086,6 +27501,24 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         const entry = RAIL_TABS.find((item) => item.id === tabButton.dataset.id);
         if (entry) tabButton.setAttribute("aria-label", `${entry.label}, ${counts[entry.id]}`);
       }
+      const rowView2 = { scope: effective, groups, root, manual: manualProjects, menu: { folder: null, project: null } };
+      const chat = thisChatGroup(everything, session, { searching: query.trim() !== "", chatOnly: chatOnly !== null });
+      if (chat) {
+        const fromGroup = (slug) => {
+          openedFromGroup = true;
+          options.onOpen(slug);
+        };
+        groupRows.dataset.view = railView;
+        groupRows.append(...chat.designs.map((design) => mountDesignRow(design, { variant: railView === "titles" ? "titles" : "rail", view: { ...rowView2, menu: menuFor(design) }, actions: options.actions, onOpen: fromGroup, thumbs: groupThumbs, swatchOf: swatches })));
+        if (chat.showAll) {
+          const showAll = btn({ label: chat.showAll.label, variant: "ghost", size: "xs", onClick: () => setChatOnly(session) });
+          showAll.el.setAttribute("aria-label", chat.showAll.aria);
+          groupMore.append(showAll.el);
+        }
+        group2.hidden = false;
+        restHeading.textContent = label ?? "All designs";
+        restHeading.hidden = false;
+      }
       const empty = emptyStateOf({ all, scoped, shown: shownDesigns, scope: effective, scopeLabel: label, folderName: folder?.name ?? null, filters: filters2, systems: systemList, systemsFailed, draggable: false, surface: "rail" });
       if (empty) {
         const wrap = h("div");
@@ -24112,14 +27545,20 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         });
         list.append(h("li", { class: "dc-list-message" }, wrap));
       } else {
-        const rowView2 = { scope: effective, groups, root, manual: manualProjects, menu: { folder: null, project: null } };
-        list.append(...items.flatMap((item) => item.kind === "design" ? [mountDesignRow(item.design, { variant: railView === "titles" ? "titles" : "rail", view: { ...rowView2, menu: menuFor(item.design) }, actions: options.actions, onOpen: options.onOpen, thumbs, swatchOf: swatches })] : []));
+        list.append(...items.flatMap((item) => item.kind === "design" ? [mountDesignRow(item.design, { variant: railView === "titles" ? "titles" : "rail", view: { ...rowView2, menu: menuFor(item.design) }, actions: options.actions, onOpen: fromList, thumbs, swatchOf: swatches })] : []));
       }
       const live = new Set(all.map((design) => design.slug));
       for (const [slug, handle] of thumbs) {
         if (!live.has(slug)) {
           handle.dispose();
           thumbs.delete(slug);
+        }
+      }
+      const inGroup = new Set([...groupRows.querySelectorAll("[data-slug]")].map((row2) => row2.dataset.slug));
+      for (const [slug, handle] of groupThumbs) {
+        if (!inGroup.has(slug)) {
+          handle.dispose();
+          groupThumbs.delete(slug);
         }
       }
     };
@@ -24137,6 +27576,15 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     scope.add(() => clearInterval(minute));
     scope.add(folderStore.subscribe(paintList));
     scope.add(systemStore.subscribe(paintList));
+    let sessionSeen = currentSession();
+    scope.add(
+      guestHost.session.subscribe((next) => {
+        const id = next?.id ?? null;
+        if (id === sessionSeen) return;
+        sessionSeen = id;
+        paintList();
+      })
+    );
     void host.storage.get(scopeStorageKey("panel")).then((stored) => {
       chosen = scopeFromId(stored);
       paintList();
@@ -24174,7 +27622,10 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     return {
       el: el2,
       focusRow: (slug) => {
-        list.querySelector(`[data-slug="${CSS.escape(slug)}"] .dc-row-main`)?.focus();
+        const selector = `[data-slug="${CSS.escape(slug)}"] .dc-row-main`;
+        const fromGroup = openedFromGroup ? groupRows.querySelector(selector) : null;
+        openedFromGroup = false;
+        (fromGroup ?? list.querySelector(selector))?.focus();
       },
       focusSystems: () => (systemsOpener === "foot" ? foot : systemsButton).focus(),
       focusSystemEntry: (id) => {
@@ -24187,6 +27638,8 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         looseBanner2.dispose();
         for (const handle of thumbs.values()) handle.dispose();
         thumbs.clear();
+        for (const handle of groupThumbs.values()) handle.dispose();
+        groupThumbs.clear();
         search.dispose();
         tabsHandle.dispose();
         showSelect.dispose();
@@ -24199,13 +27652,21 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
   };
 
   // src/ui/rail/rail-app.ts
-  var mountRail = (root) => {
-    const app = h("div", { class: "dc-app", "data-surface": "panel" });
+  var mountRail = (root, rail) => {
+    const phonePage = rail.variant === "phone-page";
+    const surface = phonePage ? "page" : "panel";
+    const app = h("div", { class: "dc-app", "data-surface": "panel", "data-variant": rail.variant });
     root.replaceChildren(app);
+    startViewReport(surface);
+    const hint = phonePage ? null : rail.help.fullScreenHint;
     let viewer = null;
     let systemsView = null;
     let systemPage = null;
     let buildView2 = null;
+    const syncView = () => {
+      if (!viewer || systemPage || systemsView || buildView2) reportNothingOpen();
+      else reportReturn(viewer.slug);
+    };
     const closeViewer = () => {
       const slug = viewer?.slug;
       viewer?.handle.dispose();
@@ -24222,17 +27683,17 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       systemsView = null;
       buildView2?.handle.dispose();
       buildView2 = null;
-      const handle = mountDesignView({ slug, surface: "panel", actions, onBack: leaveViewer, startIn: options.startIn });
+      const handle = mountDesignView({ slug, surface: "panel", actions, onBack: leaveViewer, startIn: options.startIn, hint });
       viewer = { slug, handle };
       place.remember(slug);
       list.el.hidden = true;
       app.append(handle.el);
     };
     const leaveViewer = () => {
-      const current = viewer;
-      if (!current) return;
-      void current.handle.beforeLeave().then((leave) => {
-        if (leave && viewer === current) closeViewer();
+      const current2 = viewer;
+      if (!current2) return;
+      void current2.handle.beforeLeave().then((leave) => {
+        if (leave && viewer === current2) closeViewer();
       });
     };
     const openViewer = (slug, options = {}) => {
@@ -24240,16 +27701,16 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         if (options.startIn === "comment") viewer.handle.startComment();
         return;
       }
-      const current = viewer;
-      if (current) {
-        void current.handle.beforeLeave().then((leave) => {
-          if (leave && viewer === current) showViewer(slug, options);
+      const current2 = viewer;
+      if (current2) {
+        void current2.handle.beforeLeave().then((leave) => {
+          if (leave && viewer === current2) showViewer(slug, options);
         });
         return;
       }
       showViewer(slug, options);
     };
-    const place = keepPlace({ surface: "panel", isOpen: () => viewer !== null, open: (slug) => openViewer(slug) });
+    const place = keepPlace({ surface, isOpen: () => viewer !== null, open: (slug) => openViewer(slug) });
     const actions = {
       host: app,
       onOpen: openViewer,
@@ -24257,10 +27718,10 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
         if (viewer?.slug === slug) closeViewer();
       },
       onOpenSystem: (id, target) => {
-        const current = viewer;
-        if (!current) return openSystem(id, target);
-        void current.handle.beforeLeave().then((leave) => {
-          if (!leave || viewer !== current) return;
+        const current2 = viewer;
+        if (!current2) return openSystem(id, target);
+        void current2.handle.beforeLeave().then((leave) => {
+          if (!leave || viewer !== current2) return;
           closeViewer();
           openSystem(id, target);
         });
@@ -24275,6 +27736,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       buildView2?.handle.dispose();
       buildView2 = null;
       list.el.hidden = false;
+      syncView();
     };
     const showBuild = (ticket) => {
       systemPage?.handle.dispose();
@@ -24287,13 +27749,14 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       list.el.hidden = true;
       app.append(handle.el);
       handle.focus();
+      syncView();
     };
     const openBuild = (ticket) => {
       if (buildView2?.ticket === ticket) return;
-      const current = viewer;
-      if (!current) return showBuild(ticket);
-      void current.handle.beforeLeave().then((leave) => {
-        if (!leave || viewer !== current) return;
+      const current2 = viewer;
+      if (!current2) return showBuild(ticket);
+      void current2.handle.beforeLeave().then((leave) => {
+        if (!leave || viewer !== current2) return;
         closeViewer();
         showBuild(ticket);
       });
@@ -24304,6 +27767,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       systemsView?.dispose();
       systemsView = null;
       list.el.hidden = false;
+      syncView();
       if (focus === "button") list.focusSystems();
     };
     const showSystems = () => {
@@ -24314,6 +27778,7 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       list.el.hidden = true;
       app.append(systemsView.el);
       systemsView.focus();
+      syncView();
     };
     const showDesignsOf = (id) => {
       closeSystems("none");
@@ -24355,13 +27820,15 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
       onOpen: openViewer,
       onSystems: showSystems,
       onSettings: openSettings,
-      onNew: (kind) => openNewDialog(app, { kind, onCreated: openViewer, onSystems: showSystems })
+      onNew: (kind) => openNewDialog(app, { kind, onCreated: openViewer, onSystems: showSystems }),
+      firstRunTip: phonePage ? null : rail.help.firstRunTip
     });
     app.append(list.el);
     flows.watchItems(
       (target) => target.kind === "open-build" ? openBuild(target.ticket) : target.kind === "open-system" ? openSystem(target.system, target.target) : openViewer(target.slug),
       (error) => toast("error", `Couldn\u2019t open that design. ${errorText2(error)}`)
     );
+    if (phonePage) return;
     flows.watchOpenRequests(
       (listener) => feed.subscribe(listener),
       (target) => openViewer(target.slug, { startIn: target.intent }),
@@ -24380,12 +27847,16 @@ Folder not found` : group2.title, missing: group2.missing, selected: sameScope(s
     host.onReady((context) => {
       if (context.surface === "background") return;
       applyHostReady(context, document.documentElement);
+      const device = deviceOf(context);
+      applyDevice(device, document.documentElement);
       document.documentElement.lang = context.locale;
       if (mounted) return;
       mounted = true;
-      if (context.surface === "page") mountPage(appRoot);
+      const help = openHelp(device, true);
+      if (context.surface === "page" && device.form === "phone") mountRail(appRoot, { variant: "phone-page", help });
+      else if (context.surface === "page") mountPage(appRoot);
       else {
-        mountRail(appRoot);
+        mountRail(appRoot, { variant: "panel", help });
         flows.watchOutbox();
       }
       flows.watchTurns();
