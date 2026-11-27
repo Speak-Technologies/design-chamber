@@ -160,7 +160,8 @@ test('a slow first answer from a live browser is a slow launch, not "can\'t be d
   const started = Date.now();
   const session = await openCdp('/fake/chrome', [], { timeoutMs: 40, spawnImpl: fakeBrowserSpawn(150) });
   const elapsed = Date.now() - started;
-  assert.ok(elapsed >= 150, `waited for the live browser to answer (${elapsed} ms)`);
+  // Timers may fire a millisecond or two early, so allow a small margin under the 150 ms answer.
+  assert.ok(elapsed >= 140, `waited for the live browser to answer (${elapsed} ms)`);
   assert.equal(session.exited, false);
   await session.close();
 });
