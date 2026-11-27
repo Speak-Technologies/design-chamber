@@ -130,4 +130,4 @@ export type BoardLookup = {
 };
 
 /** The one open card (a composer or a comment thread) and the artboard it floats over. */
-export type Popover = { card: CardHandle; board: Board; commentId: string | null };
+export type Popover = { card: CardHandle; board: Board; commentId: string | null; draftKey: string };

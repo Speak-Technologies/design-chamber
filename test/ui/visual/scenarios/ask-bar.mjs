@@ -180,6 +180,13 @@ export const run = async (helpers) => {
     // Esc with a chip removes the chip; Esc without one hands the keyboard back to the wall.
     await p.clickAt(...pick);
     await p.waitFor('return !!doc.querySelector(".dc-ask-chip:not([hidden])")', 'the chip again');
+    // The words typed before Esc are back (they are never lost to a closed card); Cancel throws them away.
+    await checkSoon(async () => (await p.guest('return doc.querySelector(".dc-composer textarea")?.value ?? null')) === 'Another draft', `${tag}: a draft closed with Esc is back on the same element`);
+    // Pressed through the DOM: in a 320 px rail the selection toolbar sits over the card's buttons (a placement issue of its own).
+    await p.guest('[...doc.querySelectorAll(".dc-composer button")].find((n) => n.textContent.trim() === "Cancel").click(); return true');
+    await p.waitFor('return !doc.querySelector(".dc-composer")', 'the cancelled composer to close');
+    await p.clickAt(...pick);
+    await p.waitFor('return doc.querySelector(".dc-composer textarea")?.value === ""', 'an empty composer after Cancel');
     // A loaded browser sometimes drops the synthesized key, so a press that did nothing is repeated (retry); the assertions stay.
     check(await p.retry(() => p.key('Escape', { focus: INPUT }), async () => !(await visible('.dc-ask-chip')), 'Esc to remove the chip'), `${tag}: Esc in the box removes the chip`);
     await checkSoon(async () => !(await p.guest('return !!doc.querySelector(".dc-composer")')), `${tag}: removing the chip closes its composer`);

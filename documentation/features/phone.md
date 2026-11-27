@@ -60,7 +60,7 @@ These work with a finger on any touchscreen, tablets and touch laptops included.
 | Pinch two fingers | Zooms around the point between them, from 5% to 400%. Moving both fingers moves the wall | Nothing, a page doesn't zoom |
 
 - A finger can wobble up to 10 px and still count as a tap. A drag or a pinch never leaves a comment, even when you lift one finger before the other, and the finger still down carries on moving the wall.
-- As with a mouse wheel, moving or zooming the wall closes an open comment card.
+- Moving or zooming closes an empty comment card. One you've typed in stays open (see [the viewer](../pages/full-screen-page.md)).
 - In Play, two fingers on a screen belong to the design. Pinch between screens, or use the zoom buttons.
 - There's no outline under your finger before you tap; that hover outline is for a mouse.
 - Rotating the phone mid-gesture simply ends it.

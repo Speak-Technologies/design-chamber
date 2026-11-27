@@ -219,7 +219,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
   const reorder = createReorderController(ctx, { camera, boards, onDrop: reorders.emit });
   hooks.bind({
     closePopover: () => {
-      popovers.close();
+      popovers.closeForMove();
       picks.notifyMoved();
     },
     clearHover: hit.clearHover,

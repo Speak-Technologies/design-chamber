@@ -240,7 +240,8 @@ export const createInputController = (ctx: WallContext, deps: InputDeps): InputC
     const board = boards.at(at);
     const action = pointerDownAction({ pageMode, button: event.button, spaceDown, panTool, onBoard: board !== null, mode: ctx.mode, readOnly: ctx.readOnly() });
     if (action === 'ignore') return;
-    if (popovers.current()) popovers.close();
+    // This press may be the start of a pan or a pinch: a half-written card stays.
+    popovers.closeForMove();
     if (action === 'pan') {
       panning = { id: event.pointerId, last: at };
       surface.setPointerCapture(event.pointerId);

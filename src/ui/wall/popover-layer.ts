@@ -1,12 +1,14 @@
 // The one card the wall floats over an artboard: the composer for a new comment, or the thread
 // of an existing one. This layer builds the card (`comment-ui.ts`), places it next to its anchor
 // inside the wall's overlay, and closes it. Saving, resolving and deleting go to `WallOptions`.
+// Unsaved text is never dropped by closing: `model/comment-drafts.ts` keeps it for the same card.
 
 import { anchorFromHit, docToFrame } from '../../guest/anchoring.ts';
 import type { HitElement } from '../../shared/bridge-protocol.ts';
 import { PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.ts';
 import type { Comment } from '../../shared/types.ts';
 import { h } from '../components/dom.ts';
+import { composerDraftKey, createDraftStore, threadDraftKey } from '../model/comment-drafts.ts';
 import { viewportOf } from '../model/comments-model.ts';
 import { frameToScreen, pinFramePoint, type Point } from '../model/wall-model.ts';
 import { createComposer, createThread, type CardHandle } from './comment-ui.ts';
@@ -21,7 +23,14 @@ export type PopoverLayer = {
   openComposer: (board: Board, element: HitElement, framePoint: Point) => WallSelection;
   /** What a click on this element selects (key, where it is, the anchor the comment would carry), without opening anything. */
   selectionFor: (board: Board, element: HitElement, framePoint: Point) => WallSelection;
+  /** Close the card; unsaved text is kept for the next time it opens. */
   close: () => void;
+  /**
+   * The wall or the design under the card moved (pan, zoom, scroll, or the press that starts a drag):
+   * an empty card closes, one holding text stays. `scrolled`: the design moved inside its frame, so
+   * the outline of the picked element no longer sits on it.
+   */
+  closeForMove: (scrolled?: boolean) => void;
   /** The open card, if any. */
   current: () => Popover | null;
   /** Put a card in the overlay at a screen point, kept inside the wall. */
@@ -56,6 +65,9 @@ export const rectToBox = (board: Board, el: HTMLElement, rect: Rect): void => {
   el.style.height = `${rect.h}px`;
 };
 
+/** One store for every wall, so leaving a design and coming back keeps what was typed. */
+const drafts = createDraftStore();
+
 export const createPopoverLayer = (ctx: WallContext, camera: CameraController, deps: PopoverDeps): PopoverLayer => {
   const { options } = ctx;
   let popover: Popover | null = null;
@@ -64,12 +76,33 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     if (!popover) return;
     const current = popover;
     popover = null;
+    drafts.keep(current.draftKey, current.card.draft());
     current.card.el.remove();
     current.board.selected.hidden = true;
     for (const pin of current.board.pins.values()) pin.removeAttribute('aria-expanded');
     document.querySelector('.dc-temp-pin')?.remove();
     // A composer is a selection in progress; a thread is not.
     if (current.commentId === null) deps.emitSelection({ type: 'cleared' });
+  };
+
+  const hideMarks = (board: Board): void => {
+    board.selected.hidden = true;
+    document.querySelector('.dc-temp-pin')?.remove();
+  };
+
+  const closeForMove = (scrolled = false): void => {
+    if (!popover) return;
+    if (popover.card.draft() === null) close();
+    else if (scrolled) hideMarks(popover.board);
+  };
+
+  /** The card's text was saved or thrown away: forget it, and close the card if it is still the open one. */
+  const settle = (card: CardHandle | null, draftKey: string): void => {
+    if (card && popover?.card === card) {
+      popover = { ...popover, card: { ...card, draft: () => null } };
+      close();
+    }
+    drafts.drop(draftKey);
   };
 
   const placeCard = (card: HTMLElement, anchorScreen: Point, below: number): void => {
@@ -89,8 +122,8 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
   const pageWhere = (comment: Comment): string =>
     comment.viewport === PAGE_FILL_VIEWPORT_ID ? 'Made at full width' : `Made at ${ctx.detail.design.viewports.find((viewport) => viewport.id === comment.viewport)?.label ?? comment.viewport} size`;
 
-  const open = (board: Board, card: CardHandle, commentId: string | null): void => {
-    popover = { card, board, commentId };
+  const open = (board: Board, card: CardHandle, commentId: string | null, draftKey: string): void => {
+    popover = { card, board, commentId, draftKey };
   };
 
   const openThread = (board: Board, commentId: string): void => {
@@ -100,7 +133,9 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     const number = ctx.numbers().get(commentId) ?? 0;
     const { point, anchorState } = pinState(board, comment);
     const sendComment = options.onSendComment;
-    const card = createThread({
+    const draftKey = threadDraftKey(options.slug, commentId);
+    const card: CardHandle = createThread({
+      draft: drafts.get(draftKey),
       comment,
       number,
       where: ctx.pageMode ? pageWhere(comment) : `${board.art.screen?.title ?? 'Page'} · ${board.art.viewport.label}`,
@@ -108,13 +143,13 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
       readOnly: ctx.readOnly(),
       onSave: async (body) => {
         await options.updateComment(commentId, { body });
-        close();
+        settle(card, draftKey);
       },
       // Seam S6: the card shows "Send this" only when the view passed a sender.
       onSend: sendComment
         ? async (body) => {
             await sendComment(commentId, body);
-            close();
+            settle(card, draftKey);
           }
         : undefined,
       onStatus: async (status) => {
@@ -123,11 +158,11 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
       },
       onDelete: async () => {
         await options.deleteComment(commentId);
-        close();
+        settle(card, draftKey);
       },
       onClose: () => close(),
     });
-    open(board, card, commentId);
+    open(board, card, commentId, draftKey);
     const screenPoint = frameToScreen(camera.get(), board.art.rect, point);
     placeCard(card.el, { x: screenPoint.x + 14, y: screenPoint.y - 10 }, 0);
     board.pins.get(commentId)?.setAttribute('aria-expanded', 'true');
@@ -155,17 +190,20 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     temp.style.left = `${pinAt.x}px`;
     temp.style.top = `${pinAt.y}px`;
     board.overlay.append(temp);
-    const card = createComposer({
+    const draftKey = composerDraftKey({ slug: options.slug, screen: target.screen, artboard: board.art.id, selector: anchor.selector, pageMode: ctx.pageMode });
+    const card: CardHandle = createComposer({
       tag: element.tag,
       snippet: element.text.length > 80 ? `${element.text.slice(0, 77)}…` : element.text,
-      onCancel: () => close(),
+      draft: drafts.get(draftKey),
+      onCancel: () => settle(card, draftKey),
+      onDismiss: () => close(),
       onSubmit: async (body) => {
         await options.createComment({ ...target, anchor, body });
         deps.emitSelection({ type: 'commented', key: selection.key });
-        close();
+        settle(card, draftKey);
       },
     });
-    open(board, card, null);
+    open(board, card, null, draftKey);
     deps.emitSelection({ type: 'selected', selection });
     const base = frameToScreen(camera.get(), board.art.rect, { x: element.rect.x - board.scroll.x, y: element.rect.y - board.scroll.y });
     placeCard(card.el, base, element.rect.h * camera.get().scale);
@@ -175,7 +213,7 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
 
   const clearSelection = (): void => {
     // A half-written comment is the user's work; removing the chip must not throw it away.
-    if (popover?.commentId === null && popover.card.hasDraft?.() !== true) close();
+    if (popover?.commentId === null && popover.card.draft() === null) close();
   };
 
   const refresh = (): void => {
@@ -185,5 +223,5 @@ export const createPopoverLayer = (ctx: WallContext, camera: CameraController, d
     if (comment) popover.card.setStatus?.(comment.status);
   };
 
-  return { openThread, openComposer, selectionFor, close, current: () => popover, placeCard, clearSelection, refresh };
+  return { openThread, openComposer, selectionFor, close, closeForMove, current: () => popover, placeCard, clearSelection, refresh };
 };
