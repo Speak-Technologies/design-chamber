@@ -6,9 +6,10 @@
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, symlink, truncate, writeFile } from 'node:fs/promises';
+import fsPromises, { mkdir, readdir, readFile, symlink, truncate, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
-import { describe, test, type TestContext } from 'node:test';
+import { describe, mock, test, type TestContext } from 'node:test';
 
 import type { DesignSummary } from '../../../src/shared/types.ts';
 import { FILE_PAGE_COPY_MAX_BYTES, FILE_PAGE_PATH_MAX, LOOSE_IMPORT_MAX_BYTES } from '../../../src/shared/limits.ts';
@@ -625,5 +626,28 @@ describe('open a project file as a page', () => {
     assert.deepEqual(await designSlugs(env.core.root), ['once']);
     // The lock is released: the next click opens the copy.
     assert.equal((await env.importer.open(body)).reused, true);
+  });
+
+  test('a filesystem error while reading the project is the plain copy sentence, logged by code only, never the path', async (t) => {
+    const env = await setup(t);
+    const file = path.join(env.project, 'page.html');
+    await writeFile(file, '<title>Flaky disk</title>');
+    const realOpen = fsPromises.open;
+    // An EIO whose message names the project file, as Node's would.
+    const failing = mock.method(fsPromises, 'open', (target: Parameters<typeof realOpen>[0], ...rest: [flags?: string | number, mode?: number]) =>
+      target === file ? Promise.reject(Object.assign(new Error(`EIO: i/o error, open '${file}'`), { code: 'EIO' })) : realOpen(target, ...rest),
+    );
+    syncBuiltinESMExports(); // the service imports `open` by name
+    try {
+      await assert.rejects(env.importer.open({ path: file, directory: env.project }), isApiError('internal', FILE_PAGE_COPY_FAILED));
+    } finally {
+      failing.mock.restore();
+      syncBuiltinESMExports();
+    }
+    assert.ok(failing.mock.callCount() > 0, 'the entry read went through the failing open');
+    const line = env.core.logs.find((entry) => entry.event === 'file-page.read-failed');
+    assert.deepEqual(line?.fields, { step: 'read', code: 'EIO' });
+    assert.ok(!JSON.stringify(env.core.logs).includes(env.project), 'no log line names the project');
+    assert.deepEqual(await designSlugs(env.core.root), []);
   });
 });

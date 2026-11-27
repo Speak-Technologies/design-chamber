@@ -1,4 +1,4 @@
-// WP3 — POST /chip, POST /designs/:slug/prompt, POST /pages/from-message, POST /pages/from-file, POST and DELETE /open-request
+// WP3: POST /chip, POST /designs/:slug/prompt, POST /pages/from-message, POST /pages/from-file, POST and DELETE /open-request
 // (docs/SPEC.md §7, §10, §11; documentation/specs/phase-1-5-sdk-2-7.md §3.2),
 // and the `onCreate` hook that writes `<design>/.chamber/RULES.md`. Revision and offline prompts
 // list the remote URLs the viewer blocks, taken from the bundler's static scan of the design's

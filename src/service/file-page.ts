@@ -365,6 +365,22 @@ export const createFilePageImporter = (options: FilePageImporterOptions): FilePa
 
   const stoppedError = (error: CopyStopped): ApiError => new ApiError('too-large', error.why === 'size' ? FILE_PAGE_COPY_TOO_LARGE : FILE_PAGE_TOO_SLOW);
 
+  /**
+   * A step that reads the project: its own refusals pass through, anything else (EIO mid-scan, a
+   * bug) becomes the plain copy sentence and is logged by code only. Left to `http.ts`, the stack
+   * would reach the log, and a filesystem message names the project's path.
+   */
+  const guarded = async <T>(step: 'read' | 'scan', run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run();
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      if (error instanceof CopyStopped) throw stoppedError(error);
+      log.warn('file-page.read-failed', { step, code: errorCode(error) || 'unknown' });
+      throw new ApiError('internal', FILE_PAGE_COPY_FAILED);
+    }
+  };
+
   const openLocked = async (file: FileTarget): Promise<FromFileResponse> => {
     const deadline = clock() + FILE_PAGE_COPY_BUDGET_MS;
     const overTime = (): boolean => clock() > deadline;
@@ -372,19 +388,13 @@ export const createFilePageImporter = (options: FilePageImporterOptions): FilePa
     const inside = await insideRoot(file.target);
     if (inside !== null) return inside;
 
-    const entry = await readEntry(file.target);
+    const entry = await guarded('read', () => readEntry(file.target));
     const sha256 = createHash('sha256').update(entry).digest('hex');
     const existing = await findCopy(file.target, sha256);
     if (existing !== null) return reused(existing);
 
     const folder = path.dirname(file.target);
-    let plan: AssetPlan;
-    try {
-      plan = await planAssets(folder, file.name, entry, { overTime, caseFolds: folds });
-    } catch (error) {
-      if (error instanceof CopyStopped) throw stoppedError(error);
-      throw error;
-    }
+    const plan = await guarded('scan', () => planAssets(folder, file.name, entry, { overTime, caseFolds: folds }));
 
     const record = await store.create({
       kind: 'page',
