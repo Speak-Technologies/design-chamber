@@ -778,7 +778,7 @@ parsers in `src/shared/system-json.ts`):
     missing file is a problem on that entry. A changed example changes that section's fingerprint. Copy-on-link
     copies them as agent reference (`link.ts` `REFERENCE_PATTERN`); the repo snapshot reads them with the example
     cap. The board draws a **Pairs** block at the end of Colours (entry keys `pair:<n>`, `data-dc-pair`, stripped
-    from the living page). Phase 1 set `BOARD_GENERATOR_VERSION` 7 and `LIVING_PAGE_GENERATOR_VERSION` 5 (Phase 2: 8 and 6);
+    from the living page). Phase 1 set `BOARD_GENERATOR_VERSION` 7 and `LIVING_PAGE_GENERATOR_VERSION` 5 (Phase 2: 9 and 6);
     `LIVING_EXAMPLE_GENERATOR_VERSION` stays 2 (the picture cache key is the content, never an entry id).
   - `SystemSummary.depth` carries `depth` to the list (null when absent, invalid or unreadable).
   **Builder depth, Phase 2** (`documentation/specs/system-builder-depth.md` §13, §17):
@@ -808,7 +808,7 @@ parsers in `src/shared/system-json.ts`):
     viewport's size and scale 1 (`LIVING_PAGE_GENERATOR_VERSION` stays 6, example cache 2).
   - Checklist: `icons` is a 34th topic (full, foundations); `responsive` is also met by a `page` screen with a
     viewport ≤ `PHONE_VIEWPORT_MAX_WIDTH` (480 px), `marketing` by any marketing screen.
-  - Generator versions after Phase 2: `BOARD_GENERATOR_VERSION` 8, `LIVING_PAGE_GENERATOR_VERSION` 6,
+  - Generator versions after Phase 2: `BOARD_GENERATOR_VERSION` 9 (8 for motion and icons, 9 for hover demos from the page pointer), `LIVING_PAGE_GENERATOR_VERSION` 6,
     `LIVING_EXAMPLE_GENERATOR_VERSION` 2.
 - `tokens.css`: light values = the last declaration in a top-level `:root`; dark values = a `:root` directly
   inside `@media (prefers-color-scheme: dark)`; other contexts are listed, not used. Every value Design Chamber
