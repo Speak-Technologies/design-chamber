@@ -4,6 +4,7 @@
 
 import type { ApiRoutes, EditRequest, OpenRequest, RouteBody, RouteKey, RouteResponse, SettingsResponse, StatusDesignRow } from '../../../src/shared/api.ts';
 import { SCREENS_MAX, STATUS_ROWS_MAX } from '../../../src/shared/limits.ts';
+import { mentionUrlOf } from '../../../src/shared/agent/mention.ts';
 import { copyTitle, describeMove, directionGroups, freeCopyId, SCREEN_LIST_STALE_MESSAGE } from '../../../src/shared/screen-ops.ts';
 import type {
   ChangeEvent,
@@ -588,7 +589,7 @@ export const createFakeBackend = (): FakeBackend => {
         .map(([slug, rec]) => {
           const open = rec.design.comments.filter((c) => c.status === 'open').length;
           const kind = rec.design.kind === 'canvas' ? `Canvas · ${rec.design.screens.length} screen${rec.design.screens.length === 1 ? '' : 's'}` : 'Page';
-          return { id: slug, title: rec.design.title, subtitle: open > 0 ? `${kind} · ${open} open comment${open === 1 ? '' : 's'}` : kind };
+          return { id: slug, title: rec.design.title, subtitle: open > 0 ? `${kind} · ${open} open comment${open === 1 ? '' : 's'}` : kind, url: mentionUrlOf(slug) };
         });
       return { items };
     },
