@@ -14,7 +14,7 @@ export type HostCallsDeps = {
   env: Record<string, string | undefined>;
   log: Logger;
   /** Test seam: the host client; defaults to the SDK's `createServiceHost`. */
-  connect?: (env: Record<string, string | undefined>) => Pick<ServiceHost, 'setInstructions'>;
+  connect?: (env: Record<string, string | undefined>) => Pick<ServiceHost, 'setInstructions' | 'setMark'>;
 };
 
 export const createHostCalls = ({ env, log, connect = (callEnv) => createServiceHost({ env: callEnv }) }: HostCallsDeps): HostCalls => {
@@ -47,9 +47,35 @@ export const createHostCalls = ({ env, log, connect = (callEnv) => createService
         return 'refused';
       }
     },
-    // T0a stub (native-extras §4.2): marks are not sent yet. T3b replaces this with the SDK call.
-    async setMark() {
-      return 'unavailable';
+    // One chat's sidebar mark (native-extras §4.2). Same rules as setInstructions: never throws,
+    // only the error code is logged (never the mark's text, the host message or the token).
+    async setMark(target, mark) {
+      if (host === null) {
+        if (!loggedUnavailable) {
+          loggedUnavailable = true;
+          log.info('host-calls.unavailable', { reason: 'no host callback address' });
+        }
+        return 'unavailable';
+      }
+      try {
+        await host.setMark(target, mark);
+        return 'saved';
+      } catch (error) {
+        const code = error instanceof ServiceHostError ? error.code : error instanceof Error ? error.name : 'unknown';
+        // The host's limits: 429 `TOO_MANY_EVENTS` (rate) and 409 `TOO_MANY_MARKS` (cap), also when a
+        // proxy answered the status without the code.
+        const status = error instanceof ServiceHostError ? error.status : 0;
+        if (code === 'TOO_MANY_EVENTS' || code === 'TOO_MANY_MARKS' || status === 429 || status === 409) {
+          log.warn('host-calls.limited', { call: 'setMark', code });
+          return 'limited';
+        }
+        if (code === 'HOST_UNAVAILABLE') {
+          log.warn('host-calls.unavailable', { call: 'setMark', code });
+          return 'unavailable';
+        }
+        log.warn('host-calls.refused', { call: 'setMark', code });
+        return 'refused';
+      }
     },
   };
 };

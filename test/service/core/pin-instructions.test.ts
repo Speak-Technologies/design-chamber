@@ -213,6 +213,7 @@ test('host calls pass the directory to the SDK (SP-2), null by default', async (
         sent.push([directory, text]);
         return { saved: true as const };
       },
+      setMark: async () => ({ saved: true as const }),
     }),
   });
   assert.equal(await calls.setInstructions('pin', '/code/shop'), 'saved');
