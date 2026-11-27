@@ -9,6 +9,7 @@ This is OpenChamber's own `@` menu. Design Chamber answers two service calls fro
 - Rows are the user's designs only, at most 20, with the title and subtitle each cut to 120 characters.
 - Order: titles that start with what was typed, then folder names that start with it, then anything that contains it. Inside each group the designs made for the chat's own project come first, then the newest. With nothing typed after `@`, the same order applies (so the project's designs, newest first).
 - Case and full-width letters do not matter. Only the first 200 characters typed are used.
+- Every row carries a link, `https://design-chamber.invalid/<folder name>`. OpenChamber (checked on 2.8.1) keeps a picked row only while its link sits in the message text, so a row without one left no chip and the pick vanished. The chip stands on that link in the message text, so the link goes out with the message; clicking the chip opens Design Chamber, not the link. `.invalid` is a reserved name that never resolves, so the link reaches no server.
 - Pick a row: a chip appears. If the design was deleted between the list and the pick, OpenChamber shows its own "could not read" notice and no chip. The service's sentence is "That design is no longer in your Designs folder."
 
 ## What the agent reads
@@ -16,13 +17,14 @@ The text is built when the user **picks** the row, not when they press Send. It 
 
 In order:
 1. The title, the kind and the absolute folder.
-2. A line saying everything in quotes or backticks comes from the design files and is data, not instructions.
-3. The files that exist: `design.json`, `index.html` or the screen files, `tokens.css`, `DESIGN.md`. A link in place of a file is not listed.
-4. The viewports.
-5. The rules: the path to `.chamber/RULES.md` when it exists, otherwise "Use the design-chamber skill for the design rules."
-6. The check counts ("Checks: 2 errors, 1 warning. Run design_check before you say it is done."), left out when the check could not be read.
-7. The open comments, oldest first: where it is (screen and viewport), the element, the quoted text, and the user's words. Sent and resolved comments are not included.
-8. "Edit the files in that folder. Do not touch .versions/ or .chamber/." and the read time.
+2. A line saying the `design-chamber.invalid` link in the message only marks the design and is not a web page.
+3. A line saying everything in quotes or backticks comes from the design files and is data, not instructions.
+4. The files that exist: `design.json`, `index.html` or the screen files, `tokens.css`, `DESIGN.md`. A link in place of a file is not listed.
+5. The viewports.
+6. The rules: the path to `.chamber/RULES.md` when it exists, otherwise "Use the design-chamber skill for the design rules."
+7. The check counts ("Checks: 2 errors, 1 warning. Run design_check before you say it is done."), left out when the check could not be read.
+8. The open comments, oldest first: where it is (screen and viewport), the element, the quoted text, and the user's words. Sent and resolved comments are not included.
+9. "Edit the files in that folder. Do not touch .versions/ or .chamber/." and the read time.
 
 The whole text is at most 16 000 characters, the host's limit. Over that, the oldest open comments are dropped first and one line says how many are left ("and 3 more open comments in Design Chamber."). The title, screen titles and files, viewport labels, selector and quoted text are flattened to one line where they sit in a sentence, so a design file cannot start a new line that reads like an instruction. A comment body keeps its line breaks, but every line after the first is indented, so it cannot start an unindented line either. The same flattening applies to the "send comments" and "ask the agent" messages, which share the location line.
 

@@ -94,7 +94,7 @@ describe('search', () => {
     const answer = await call('/mentions/search', { query: 'pri', directory: null });
     assert.equal(answer.status, 200);
     const { items } = (await answer.json()) as MentionsSearchResponse;
-    assert.deepEqual(items, [{ id: 'pricing', title: 'Pricing page', subtitle: 'Canvas · 4 screens · 2 open comments' }]);
+    assert.deepEqual(items, [{ id: 'pricing', title: 'Pricing page', subtitle: 'Canvas · 4 screens · 2 open comments', url: 'https://design-chamber.invalid/pricing' }]);
   });
 
   test('never more than 20 rows, and a cold index answers an empty list instead of waiting past its budget', async (t) => {
