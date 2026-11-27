@@ -810,6 +810,24 @@ parsers in `src/shared/system-json.ts`):
     viewport ≤ `PHONE_VIEWPORT_MAX_WIDTH` (480 px), `marketing` by any marketing screen.
   - Generator versions after Phase 2: `BOARD_GENERATOR_VERSION` 9 (8 for motion and icons, 9 for hover demos from the page pointer), `LIVING_PAGE_GENERATOR_VERSION` 6,
     `LIVING_EXAMPLE_GENERATOR_VERSION` 2.
+  **Builder depth, Phase 3** (`documentation/specs/system-builder-depth.md` §13, §18):
+  - `screens[].source`: a screenshot of the real app, exactly `sources/screens/<name>.png|.jpg|.jpeg` (no `..`,
+    backslash, drive letter, absolute path or deeper folder), a regular file the content walk found, ≤ 10 MB;
+    else a problem on the screen, which still draws. Sources stay agent reference: never copied, exported or on
+    the living page.
+  - Example labels gain two uses: `data-dc-state` of `hover | focus | focus-visible | active` is forced and
+    pictured by the check (a `rest`, `default`, `normal`, `idle` or `enabled` twin with the same variant and size is
+    forced instead when present); `data-dc-motion` marks an element the check pictures in motion.
+  - `sources.code.tailwind` (state, set by the build scan, create-from-scan and re-sync): a CSS file the scan read
+    holds `@import "tailwindcss"` (Tailwind v4 with no config file).
+  - **Board comments** in `_systems/<id>/.chamber/comments.json` (service-owned, every home; a repo-backed
+    system's comments never go to the repo): `SystemComment { id, entry, body, status: open | sent | resolved,
+    created, sentAt }`, anchored to a board entry key (validated against the current detail on create), ≤
+    `SYSTEM_COMMENTS_MAX` (200), file ≤ `SYSTEM_COMMENTS_FILE_MAX_BYTES` (1 MiB), body 1 to `COMMENT_BODY_MAX`.
+    One queue per system, temp-then-rename; a file that doesn't validate reads as damaged with what did and is
+    renamed aside (`comments.damaged-<stamp>-<rand>.json`) by the next user write. Not content: no version,
+    copy, export, living page or revision. Each landed write sends a `system` change with `systemChange:
+    'comments'` (`SystemChangeKind` gains it); the board, screens and living page caches skip it.
 - `tokens.css`: light values = the last declaration in a top-level `:root`; dark values = a `:root` directly
   inside `@media (prefers-color-scheme: dark)`; other contexts are listed, not used. Every value Design Chamber
   writes or shows passes `validateTokenValue` (no `url(`, no `; { } < > \`, a function allowlist, a per-section
@@ -1029,6 +1047,8 @@ shapes: P25 §3.1 to §3.5.
 | Brand files | `POST /systems/:id/assets` (an upload taken once, type checked by extension and content) · `POST /systems/:id/assets/from-folder` | `routes/system-assets.ts`, `systems/assets.ts` |
 | Board | `GET /systems/:id/board` (`?version=&scheme=`, `RenderMeta`) · `GET /systems/:id/board/chunk` (raw text) | `routes/system-board.ts`, `systems/board.ts` |
 | Screens | `GET /systems/:id/screens/render` (`?screen=&version=|proposal=&scheme=`, `RenderMeta`; a listed `SYSTEM_ENTRY_ID_PATTERN` screen only, checked before any read, bundled in render mode from the board's contained source) · `GET /systems/:id/screens/render/chunk` (raw text; board-cache entries are kind-tagged, so neither chunk route serves the other's) | `routes/system-screens.ts`, `systems/board.ts` `renderScreen` |
+| Token export | `GET /systems/:id/export` (the formats this system offers) · `POST /systems/:id/export` (`{ formats?: ('dtcg'\|'css'\|'tailwind')[] }`; writes `<id>-tokens.zip` to the export folder, else `<root>/.exports`, issued to `POST /reveal`; Tailwind refused when the project doesn't use it) | `routes/export.ts` `registerSystemExportRoutes`, `export.ts` `systemTokens`, `src/shared/token-export.ts` |
+| Board comments | `GET` / `POST /systems/:id/comments` · `PATCH` / `DELETE /systems/:id/comments/:commentId` · `POST /systems/:id/comments/mark-sent` (closed bodies; entry keys pattern-checked then checked against the detail; `COMMENT_ID_PATTERN` ids) · purpose `comments` on `POST /systems/:id/prompt` (`commentIds?`; answer `comments { commentIds, omitted }`) | `routes/system-comments.ts`, `systems/comments.ts`, `routes/system-chat.ts` |
 | History | `GET /systems/:id/versions` · `GET /systems/:id/versions/:vid/diff` · `POST /systems/:id/versions/:vid/restore` | `routes/system-versions.ts`, `systems/versions.ts` |
 | Chat and checks | `POST /systems/:id/prompt` (`make`, `ask`, `review`, `resync-notes`, `checks`, `continue`, `living-page`, `reconcile`, `build-continue`) · `GET /systems/:id/checks` | `routes/system-chat.ts`, `routes/system-checks.ts` |
 | Scans and re-sync | `POST /system-scans` · `GET` / `DELETE /system-scans/:scanId` · `POST /systems/:id/resync` | `routes/system-scans.ts` (`systems/extract.ts` jobs), resync in `routes/system-edits.ts` |
@@ -1591,7 +1611,8 @@ One engine, two callers: the agent's CLI and the service's on-demand run.
   and the badge share it.
 - **Design system checks** use the same engine and output rules; they are specified with the systems in §9.19
   ("Checks"): `dc check --system <id> [--area <area> | --screen <id>…] [--scheme light|dark|both] [--static] [--json]`,
-  the visual board check, the dark pass, measured colour pairs, system screens and the builder-depth codes.
+  the visual board check, the dark pass, measured colour pairs, system screens, state pictures, motion strips,
+  compare sheets and the builder-depth codes.
 
 ### 9.10 Design index and host calls, Phase 1.5 (P15 §3.1, §3.3)
 - **`design-index.ts`** `createDesignIndex({ store, hub, log })`: `all()` (last good `DesignSummary[]`,
@@ -1963,6 +1984,26 @@ Every write goes through `systems.dir(id)` + `resolvePlainTarget` or the root's 
     (40 s), one run deadline under the tool's 180 s. `--screen <id>` (repeatable; the tool's `screens` for a
     system) draws only those, skips the board and gets the whole 110 s; an unknown id, or `--screen` with `--area`
     or `--static`, exits 2 before anything is drawn. `--area` draws no screens.
+  **Builder depth, Phase 3:**
+  - **State pictures** (T16), wide light pass only: each component instance labelled `hover`, `focus`,
+    `focus-visible` or `active` (or its rest twin) is forced over CDP `CSS.forcePseudoState` from Node
+    (`InspectPage.forceState`, `computedStyle`; DOM, CSS and Animation domains on only while forcing, animations
+    at 1000×, reset before the artboard ends), pictured tight as `<component>-<state>@wide.png`, and compared
+    on colour, background, border colours, box shadow, outline and transform. No visible change is
+    `system-state-unstyled` (warning, one per component); an outline or border that paints nothing doesn't count.
+    ≤ `SYSTEM_STATE_SHOTS_MAX` (60) within 85% of the pass's time, then `system-board-partial` with `pictured:
+    'states'`. Narrow, dark, `--screen` and `--area` other than components skip it. `render.states`.
+  - **Motion strips** (T17), last on the wide light pass: each Motion demo chip (hover) and each
+    `data-dc-motion` element (its `data-dc-state` trigger when forceable, else hover); `animationFrames` pauses
+    every animation, forces the trigger, seeks to 0, 1/3, 2/3 and the end (`SYSTEM_MOTION_FRAMES` 4, capped at
+    10 s), then a fifth frame at the end with `prefers-reduced-motion: reduce` (the full media feature list), and
+    `stitchSideBySide` joins them into `<entry>-motion@wide.png`. Nothing started is one frame plus the reduced
+    one. ≤ `SYSTEM_MOTION_SHOTS_MAX` (24) inside the same 85%, then `pictured: 'motion'`. `render.motion`.
+  - **Compare sheets** (T18), in the screens' 40 s: for each light artboard within 2 px of a screen's `source`
+    width, `compare-<id>@<viewport>.png`, the screen's slices stacked beside the picture, both full size and
+    top-aligned, ≤ 20 megapixels. A PNG Node reads is used as is; a JPEG (or a PNG it can't read) is drawn once by
+    the check browser from a data URL, offline, and read back. ≤ `SYSTEM_COMPARE_SHEETS_MAX` (24). Another width,
+    an unreadable picture, the cap and the time are `system-compare-skipped` (info). `render.compares`.
 - **Export** (`export.ts` `exportIncludes`): §6.8.
 
 **Building systems with the agent (S8; P25 §5.9 to §5.14).** The service's part is to issue tickets, adopt,
@@ -3695,6 +3736,19 @@ in §7, checks in §9.19. Where the build differs from the design:
 5. Check budget: 70 s board, 40 s screens; `--screen` alone gets the whole 110 s.
 6. No icon file route; the panel reads icon pictures from the board's data URLs.
 7. The board does not list screens as a link to the Screens view (design §4.6): KI-42.
+
+### System builder depth, Phase 3 (2026-11-27), as built
+Branch `feat/system-phase-3` (`3ab22b7` to `7fccb2e`); the spec's §18 has the full list. Where the build differs:
+1. An extra route, `GET /systems/:id/export`, answers the formats a system offers before the export.
+2. Tailwind detection has a fourth way: a CSS file the scan read with `@import "tailwindcss"`
+   (`sources.code.tailwind`), beside a root `tailwind.config.*` stat, the last scan's list and BUILD.json drift.
+3. A JPEG source (or a PNG Node can't decode) is decoded by the check browser.
+4. Compare sheets are full size and top-aligned, not scaled to one height.
+5. Motion strips have a fifth frame: the end under `prefers-reduced-motion: reduce`.
+6. WP0 additions beyond the design: `'states'` and `'motion'` in `CheckParams.pictured`, the code
+   `system-compare-skipped`, `'comments'` in `SystemChangeKind`, and `sources.code.tailwind`.
+7. Board comments are marked sent when the message is handed over (sent, appended to a busy chat's box, or
+   queued in the outbox for another chat), not when the agent receives it: KI-43.
 
 ---
 
