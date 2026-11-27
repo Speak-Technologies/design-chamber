@@ -7,6 +7,7 @@ import path from 'node:path';
 import { describe, test } from 'node:test';
 
 import { checkCommandFor } from '../../src/shared/agent/check-command.ts';
+import { noProject } from '../../src/shared/agent/context.ts';
 import { buildChipText } from '../../src/shared/agent/chip.ts';
 import { buildAgentGuide, buildSkillDoc } from '../../src/shared/agent/guide.ts';
 import { buildChecksPrompt, type ChecksFinding } from '../../src/shared/agent/revision-prompt.ts';
@@ -66,7 +67,7 @@ describe('RULES.md', () => {
   });
 
   test('golden sample with the command', async () => {
-    await assertSnapshot('rules.check-command.md', buildRulesDoc(baseContext({ checkCommand: POSIX, project: { state: 'no-project', directory: null, note: 'none', sources: [], sourcesOmitted: 0, breakpoints: [], viewports: [], truncated: false } }), { designRules: '(design rules)', questions: '(questions)' }));
+    await assertSnapshot('rules.check-command.md', buildRulesDoc(baseContext({ checkCommand: POSIX, project: noProject('none') }), { designRules: '(design rules)', questions: '(questions)' }));
   });
 });
 

@@ -379,3 +379,112 @@ describe('@media frequencies → breakpoints → viewports', () => {
     assert.deepEqual(rules.breakpoints[0], { px: 768, directions: ['min', 'max'], origin: 'tailwind', count: 3, name: 'md' });
   });
 });
+
+// ---- project patterns (documentation/specs/use-the-project-and-native-agent.md §1.4) ----
+
+describe('project patterns', () => {
+  const EMPTY = { components: [], screens: [], stories: 0 };
+
+  test('a project with src/components, app/**/page.tsx and stories reports them', async (t) => {
+    const root = await project(t, {
+      'DESIGN.md': '# Brand',
+      'src/components/Button.tsx': 'export {}',
+      'src/components/Button.stories.tsx': 'export {}',
+      'src/components/Card.stories.mdx': '#',
+      'app/page.tsx': 'export {}',
+      'app/pricing/page.tsx': 'export {}',
+    });
+    assert.deepEqual((await discoverProjectRules(root)).patterns, { components: ['src/components'], screens: ['app'], stories: 2 });
+  });
+
+  test('pattern files never change the sources (the Phase 0 text stays byte-identical)', async (t) => {
+    const base = { 'DESIGN.md': '# Brand', 'tailwind.config.ts': 'export default {}', 'AGENTS.md': '## UI rules\n' };
+    const plain = await discoverProjectRules(await project(t, base));
+    const rich = await discoverProjectRules(await project(t, { ...base, 'src/components/A.tsx': '', 'src/ui/B.stories.tsx': '', 'pages/index.tsx': '', 'home.html': '<p>' }));
+    assert.deepEqual(rich.sources, plain.sources);
+    assert.deepEqual(rich.breakpoints, plain.breakpoints);
+    assert.deepEqual(plain.patterns, EMPTY);
+    assert.notDeepEqual(rich.patterns, EMPTY);
+  });
+
+  test('components: components, ui or design-system folders at depth 3 or less, any case, shallowest first, at most 4', async (t) => {
+    const root = await project(t, {
+      'packages/web/Components/A.tsx': '',
+      'UI/B.tsx': '',
+      'src/design-system/C.tsx': '',
+      'a/b/c/components/too-deep.tsx': '',
+      'lib/ui/D.tsx': '',
+      'web/components/E.tsx': '',
+      'more/components/F.tsx': '',
+      'src/widgets/G.tsx': '',
+    });
+    assert.deepEqual((await discoverProjectRules(root)).patterns.components, ['UI', 'lib/ui', 'more/components', 'src/design-system']);
+  });
+
+  test('a folder inside one already listed is not listed again', async (t) => {
+    const root = await project(t, { 'src/components/A.tsx': '', 'src/components/ui/B.tsx': '' });
+    assert.deepEqual((await discoverProjectRules(root)).patterns.components, ['src/components']);
+  });
+
+  test('with no named folder, the folders that hold stories are the components', async (t) => {
+    const root = await project(t, {
+      'src/widgets/Button.stories.tsx': '',
+      'src/widgets/Card.stories.jsx': '',
+      'lib/Nav.stories.js': '',
+      'notes.stories.txt': '',
+      'src/widgets/Button.tsx': '',
+    });
+    assert.deepEqual((await discoverProjectRules(root)).patterns, { components: ['lib', 'src/widgets'], screens: [], stories: 3 });
+  });
+
+  test('stories at the project top level count, but name no folder', async (t) => {
+    const root = await project(t, { 'Intro.stories.mdx': '#' });
+    assert.deepEqual((await discoverProjectRules(root)).patterns, { components: [], screens: [], stories: 1 });
+  });
+
+  test('screens: app/ only with page files, the route folders in order, then .html files at depth 2 or less', async (t) => {
+    const root = await project(t, {
+      'app/layout.tsx': '',
+      'pages/index.tsx': '',
+      'src/routes/+page.svelte': '',
+      'src/views/Home.vue': '',
+      'index.html': '<p>',
+    });
+    assert.deepEqual((await discoverProjectRules(root)).patterns.screens, ['pages', 'src/routes', 'src/views', 'index.html']);
+    const next = await project(t, { 'app/(shop)/cart/page.jsx': '', 'src/pages/a.tsx': '', 'src/screens/b.tsx': '', 'public/a.html': '', 'x/y/z/deep.html': '' });
+    assert.deepEqual((await discoverProjectRules(next)).patterns.screens, ['app', 'src/pages', 'src/screens', 'public/a.html']);
+  });
+
+  test('screens: at most 4, and never an .html file inside the designs folder', async (t) => {
+    const root = await project(t, { 'Designs/shop/index.html': '<p>', 'a.html': '', 'b.html': '', 'site/c.html': '' });
+    assert.deepEqual((await discoverProjectRules(root, { designsRoot: `${root}/Designs` })).patterns.screens, ['a.html', 'b.html', 'site/c.html']);
+    const many = await project(t, { 'pages/a.tsx': '', 'src/pages/a.tsx': '', 'src/routes/a.tsx': '', 'src/screens/a.tsx': '', 'src/views/a.tsx': '', 'a.html': '' });
+    assert.deepEqual((await discoverProjectRules(many)).patterns.screens, ['pages', 'src/pages', 'src/routes', 'src/screens']);
+  });
+
+  test('skipped folders and symlinks give no patterns', async (t) => {
+    const root = await project(t, { 'node_modules/lib/components/A.tsx': '', 'dist/pages/a.js': '', '.storybook/components/B.stories.tsx': '' });
+    const elsewhere = await useTmpRoot(t, 'dc-disc-outside-');
+    await elsewhere.write('components/A.tsx', '');
+    await elsewhere.write('pages/index.tsx', '');
+    try {
+      await symlink(elsewhere.root, `${root}/linked`, 'junction');
+      await symlink(`${elsewhere.root}/components`, `${root}/components`, 'junction');
+    } catch (error) {
+      t.skip(`cannot create a link here: ${(error as NodeJS.ErrnoException).code}`);
+      return;
+    }
+    assert.deepEqual((await discoverProjectRules(root)).patterns, EMPTY);
+  });
+
+  test('a name with a control character or a backtick is never reported', async (t) => {
+    const root = await project(t, { 'odd`name/components/A.tsx': '', 'ok/components/B.tsx': '' });
+    assert.deepEqual((await discoverProjectRules(root)).patterns.components, ['ok/components']);
+  });
+
+  test('no project, an unreadable one and an empty one have no patterns', async (t) => {
+    assert.deepEqual((await discoverProjectRules(null)).patterns, EMPTY);
+    assert.deepEqual((await discoverProjectRules('/definitely/not/here/dc')).patterns, EMPTY);
+    assert.deepEqual((await discoverProjectRules(await project(t, {}))).patterns, EMPTY);
+  });
+});

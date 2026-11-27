@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, test } from 'node:test';
 
-import { noProject, type ProjectRules } from '../../src/shared/agent/context.ts';
+import { noPatterns, noProject, type ProjectRules } from '../../src/shared/agent/context.ts';
 import { CHECK_TOOL_NAME } from '../../src/shared/agent/guide.ts';
 import { buildRulesDoc, checkSection } from '../../src/shared/agent/rules-doc.ts';
 import { baseContext, REPO_RULES } from './helpers.ts';
@@ -30,6 +30,7 @@ const project: ProjectRules = {
     { id: 'tablet', label: 'Tablet', width: 768, height: 1024 },
   ],
   truncated: true,
+  patterns: noPatterns(),
 };
 
 const indexOf = (text: string, needle: string): number => {

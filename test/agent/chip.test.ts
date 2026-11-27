@@ -3,7 +3,7 @@ import { describe, test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 
 import { buildChip, buildChipText, chipMarkerInUrl, chipMarkerOf, markChipUrl, titleFromBrief } from '../../src/shared/agent/chip.ts';
-import { rulesPathOf, type ProjectRules, type ProjectSource } from '../../src/shared/agent/context.ts';
+import { noPatterns, rulesPathOf, type ProjectRules, type ProjectSource } from '../../src/shared/agent/context.ts';
 import { BRIEF_MAX, CHIP_PROJECT_PATHS_MAX, CHIP_TEXT_HARD_MAX, CHIP_TEXT_TARGET, HOST_ATTACH_ID_MAX, HOST_ATTACH_TITLE_MAX, HOST_ATTACH_URL_MAX, HOST_TEXT_MAX } from '../../src/shared/limits.ts';
 import { baseContext } from './helpers.ts';
 import { assertSnapshot } from './snapshot.ts';
@@ -17,6 +17,7 @@ const scanned = (sources: ProjectSource[], extra: Partial<ProjectRules> = {}): P
   breakpoints: [],
   viewports: [],
   truncated: false,
+  patterns: noPatterns(),
   ...extra,
 });
 
