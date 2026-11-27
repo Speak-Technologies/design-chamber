@@ -85,7 +85,17 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
     },
   );
   void systemsStore().load();
-  scope.add(systemsStore().subscribe(() => paint()));
+  // Repaint only when the choices change (which systems are Ready, and their names). The reload after a save moves badges
+  // this view doesn't draw, and a repaint would close a select the user has already opened.
+  let systemChoices = '';
+  scope.add(
+    systemsStore().subscribe((state) => {
+      const next = JSON.stringify((state.systems ?? []).filter((system) => system.status === 'ready').map((system) => [system.id, system.name]));
+      if (next === systemChoices) return;
+      systemChoices = next;
+      paint();
+    }),
+  );
   const systemNotices: string[] = [];
   let systemError: string | null = null;
   let systemBusy = false;
@@ -148,6 +158,8 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
     paint();
     try {
       await store.updateSettings(patch);
+      // The Default and Pinned badges come from `GET /systems`, and a settings save sends no change event, so re-read the list.
+      void systemsStore().load();
     } catch (error) {
       systemError = `Couldn’t save that. ${errorText(error)}`;
     } finally {
