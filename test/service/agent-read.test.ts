@@ -297,6 +297,16 @@ test('dc list names the design systems with their state, and never lists _system
   assert.match(formatListText(listed), /Design systems: (acme "Acme" \(Ready\), beta "Beta" \(Draft\)|beta "Beta" \(Draft\), acme "Acme" \(Ready\))\n$/);
 });
 
+test('a design made to follow its project says so in the list and in the read', async (t) => {
+  const { tmp, root, dataDir } = await setup(t);
+  await tmp.write('designs/pricing-page/.chamber/state.json', stateJson([], { systemDecision: 'project' }));
+  assert.match(formatListText(await list(root, dataDir)), /- pricing-page · canvas · "Pricing" · project shop · updated [^·]+ · follows the project\n/);
+  const one = await read(root, dataDir, 'pricing-page');
+  assert.ok(one.ok);
+  if (!one.ok) return;
+  assert.match(formatReadText(one.answer), /\nSystem: follows the project's own design files\n/);
+});
+
 test('an empty designs folder says so', async (t) => {
   const tmp = await useTmpRoot(t, 'dc-agent-read-empty-');
   await tmp.write('designs/.keep', '');
