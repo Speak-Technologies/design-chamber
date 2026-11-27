@@ -1,6 +1,8 @@
 # Use the project, and a native agent
 
-Status: technical spec, for the owner's review. Branch `feat/use-the-project`, cut from `master` at 0.7.0.
+Status: **built** on `feat/use-the-project` (T1 to T11, 2026-11-27), cut from `master` at 0.7.0. The owner's
+decisions are at the end, then **As built**, which lists where the code differs from this text. Folded into
+`docs/SPEC.md` §6.5, §7, §9.12, §11.1, §11.6 and §11.8.
 Author: architect. Authority for architecture stays `docs/SPEC.md`; the §-references below are to it unless
 another file is named.
 
@@ -758,3 +760,39 @@ These answer the open questions above and are binding for every task.
 4. Hand-written `default` pins quietly read as Use the project. Accepted.
 5. Worktrees: left as is for now.
 6. The AGENTS.md lines stay in Settings, collapsed under "Using an agent outside OpenChamber?".
+
+## As built (T1 to T11)
+The code is the authority; these are the places it differs from the text above.
+
+1. **Systems list for the rules.** `POST /chip` builds the rules' systems from `ensureSystemStore(ctx).list()`
+   through `choiceSystemsOf` (unreadable systems left out), not `indexed(true)`. `ChoiceSystem` carries `belongsTo`,
+   `repo`, `name` and `updated` as specced.
+2. **The New dialog and `project: null`.** With no scan, the rules answer `project` when there is no own system,
+   so the dialog preselects Use the project and the service decides after its scan (nothing found → the default).
+   An explicit `@project` with no project, or with a scan that found nothing, also falls to the default.
+3. **`dc read` for a design that follows its project** lists up to 8 of the project's design files and its
+   component and screen folders (read through discovery, the one read outside the root). The spec named the
+   system line only.
+4. **`PUT /view` is stricter and throttled.** Unknown keys are refused; with `slug: null` every other field must be
+   absent or null; a changed report is written at most every 250 ms (newest wins) and an unchanged one refreshes
+   `at` at most every 10 s. A write failure is a 500 with its own sentence. The heartbeat never repeats a null slug.
+5. **Where the reporter lives.** `src/guest/view-report.ts` (backend) plus `src/ui/components/view-report.ts` and
+   `src/ui/model/view-report-model.ts` (UI wiring), called from `place-memory.ts`, `wall.ts`, `rail-app.ts` and
+   `page-app.ts`.
+6. **The route owner** in `ROUTE_OWNERS` is `'UP'`; the route count is 93 (52 + 38 P25 + 2 P26 + 1 UP).
+7. **Instructions cap ladder.** A root too long for the note drops the check-command clause, then the two Use the
+   project lines, then throws.
+8. **Shared text.** `PROJECT_LINE`, `LIST_TOOL_NAME` and `READ_TOOL_NAME` live in `src/shared/agent/guide.ts`; the
+   plugin's names are held equal by a test.
+9. **Agent view details.** A linked copy of the project's own system is marked `ownedByProject` (the extra RULES.md
+   sentence); for a design that follows its project, a Draft own system is named only when the project has no Ready
+   one.
+10. **Pin sentences.** A pinned system that is gone, a draft or unreadable says "…this project uses the project’s
+    own design files, or your default", and the select shows Use the project.
+11. **Settings "In every chat"** shows a badge (Sent, Pending, Not saved) beside the sentence, so colour is never
+    the only signal.
+12. **Manifest titles**: "Designs · {input.project}" and "Design · {input.design}"; both tools are
+    `codemode: false`, like `design_check`.
+13. **Docs outside the T11 list:** `documentation/pages/viewer.md` (the Follows the project chip and the Change…
+    list) was updated too.
+

@@ -127,3 +127,12 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Happens:** downgrade or mixed versions only · rare · **Effect:** those entries are hidden until the user upgrades again; the files are untouched, and the sections whose fingerprints include the new facts may read as not reviewed on the older build
 **Why not fixed now:** an older build can't know kinds it never had; the change is additive and nothing is rewritten. Documented in `docs/SPEC.md` §6.7.
 **Fix prompt:** none. Upgrade again; every entry reads as before.
+
+### KI-40: Going back to 0.7.0 forgets "Use my default" on a project
+🟣 Minor · found 2026-11-27 · `src/service/settings.ts:71` (`normalizeSystemPins`) · owner: backend-developer
+**What:** this version stores a project set to **Use my default** as a `follow-default` pin. Design Chamber 0.7.0 does not know that choice and drops the pin when it reads the settings file, and its next settings save writes the file without it. (Same pattern as P26 R-3 for manual project members.)
+**Who:** end user who downgrades · **Seen:** silent until they look at Settings or notice new designs using the project's files
+**Happens:** set a project to Use my default, then install 0.7.0 or older and change any setting · rare (downgrades only) · **Effect:** under 0.7.0 the project uses the default anyway (that was 0.7.0's behaviour with no pin), so nothing looks wrong there; after upgrading again the project is back on Use the project and the user has to pick Use my default again
+**Why not fixed now:** an older build can't be taught a new value; keeping the pin would need the old parser to keep unknown entries, which it never did
+**Fix prompt:**
+> Nothing to fix in this version. If a future release changes the pin format again, have `normalizeSystemPins` in `src/service/settings.ts` keep unknown well-formed pins (an absolute `directory` and a string `choice`) as they are, ignore them in `effectiveSystemChoice`, and write them back on save, so a newer build's choice survives a downgrade. Add a test in `test/service/core/settings-systems.test.ts` that a pin with an unknown `choice` survives a read and a `PUT /settings` round trip. Run `npm run check`.
