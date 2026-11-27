@@ -213,6 +213,11 @@ body {
   box-shadow: var(--ws-ring);
 }
 
+/* A touch screen (components/device.ts): Check, Open, Show all and Try again are at least 44 px tall. */
+[data-dc-pointer='coarse'] .ws-frame .oc-sdk-btn {
+  min-height: calc(var(--ws-s3) * 3 + var(--ws-s2));
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ws-row[data-tone='info'] .ws-dot {
     animation: none;
