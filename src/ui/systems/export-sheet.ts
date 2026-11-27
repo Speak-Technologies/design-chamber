@@ -25,7 +25,7 @@ export const openExportSheet = (hostEl: HTMLElement, options: ExportSheetOptions
   let closed = false;
   const sheet = openSheet(hostEl, {
     title: 'Export tokens',
-    subtitle: `Saves ${options.systemName} as one ZIP file in your Downloads folder. Your project isn’t changed.`,
+    subtitle: `Saves ${options.systemName} as one ZIP file in your export folder, Downloads unless you changed it. Your project isn’t changed.`,
     variant: 'dialog',
     onClose: () => {
       closed = true;
