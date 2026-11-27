@@ -1,286 +1,316 @@
 # Design Chamber
 
-**Design canvases and HTML pages, inside OpenChamber.** Ask your own chat agent for a
-design; it writes plain files to `~/Documents/Designs`; Design Chamber renders them live in a
-rail panel and a full-screen page — with a pannable multi-screen wall, element-anchored comment
-pins, version history and export.
+Design canvases, HTML pages and design systems, drawn inside OpenChamber. You ask your own chat agent for a design. It writes plain files to a folder. Design Chamber shows them live, lets you comment on them, version them, check them and export them.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![OpenChamber](https://img.shields.io/badge/openchamber-%E2%89%A5%202.7.0-4b5563)](#install)
 
-![A Design Chamber canvas wall in OpenChamber's dark theme: two screens (Landing, Prices) at Laptop 1280×800 and Phone 390×844 as artboards, two numbered comment pins on the page, and the Comments drawer with a "Send 2 comments to chat" button](docs/img/hero-wall-pins.png)
+![A canvas wall in OpenChamber's dark theme: three screens (Home, Plans, Checkout) at Laptop and Phone sizes, numbered comment pins on the artboards, the Comments drawer with a Send 4 comments to chat button, and the ask bar along the bottom](docs/img/hero-wall-pins.png)
 
 ## What it is
 
-- A **Claude-Design-style canvas**: an infinite wall where every screen of a design sits next
-  to every device size you care about (Laptop, Phone, …) as live artboards. Edit mode to pin
-  comments, Play mode to click through the prototype.
-- **Pages**: one self-contained HTML page shown full screen like a browser tab (no wall),
-  exportable as a ZIP or a single HTML file.
-- **Inside OpenChamber.** No external browser window, no dev server. A rail panel lists your
-  designs; a full-screen page opens them. Colours follow your OpenChamber theme, light or dark.
-- **Written by your own chat agent** — any model OpenChamber can run. Design Chamber doesn't
-  generate anything; it gives your agent the rules (and a place to write) and shows the result.
-- **Plain local files.** One folder per design under `~/Documents/Designs` (changeable). Open
-  them in an editor, commit them to git, zip them.
-
-## How it compares
-
-Claude rows are "as of Oct 2026, from public docs"; `—` means no equivalent that I can point
-to, and `?` means I couldn't confirm it. Corrections welcome.
-
-| | **Design Chamber** | **Claude artifacts** (claude.ai) | **Claude Design** (Anthropic) |
-|---|---|---|---|
-| Where it runs | Inside OpenChamber (desktop app), local | In Claude's apps / claude.ai | Hosted by Anthropic |
-| Who generates | **Your** chat agent — any model | Claude | Claude |
-| Where the files live | Your disk: `~/Documents/Designs/<slug>/` | In the conversation / your Claude account | In the product |
-| Multi-screen, multi-viewport canvas | ✅ screens × viewports wall, pan/zoom | — (one artifact) | ✅ multi-artboard canvas |
-| Click-through prototype | ✅ Play mode | partial (the page's own JS runs) | ✅ |
-| Element-anchored comments | ✅ pins on canvases **and** pages; send to chat as one revision request | — | ✅ pinned comments |
-| Versions | ✅ auto + after each agent turn; view, compare (split), restore | ✅ per-artifact version selector | ? |
-| Export | ZIP (HTML + assets) · single-file HTML | copy / download the code | PDF, image and others ? |
-| Design system / project rules | Reads your project's `DESIGN.md`, tokens, `AGENTS.md`/`CLAUDE.md` first; 10 style presets; per-design `DESIGN.md` + `tokens.css` | — | Hosted design-system artifact |
-| Works offline / private | ✅ loopback-only helper; designs never touch the network (only your chat model sees what you send it) | — hosted | — hosted |
-| Theme | Follows OpenChamber's theme live | Claude's UI | Claude's UI |
-| Model choice | Whatever your chat uses | Claude | Claude |
-| Source / licence | Open source, MIT | Closed | Closed |
-
-The difference in one sentence: Claude Design and artifacts generate *on Anthropic's surface*;
-Design Chamber makes *your* agent design *on your machine*, as files you own.
+- **Canvases.** An infinite wall where every screen of a design sits next to every device size you care about. Edit mode to comment and edit, Play mode to click through the prototype.
+- **Pages.** One self-contained HTML page shown full screen, exportable as a ZIP or a single HTML file.
+- **Design systems.** Tokens, type, components, notes and brand files, written by the agent, reviewed by you, and used by new designs.
+- **Inside OpenChamber.** A rail panel lists your designs and a full-screen page opens them. No external browser window and no dev server. Colours follow your OpenChamber theme, light or dark.
+- **Written by your own agent.** Design Chamber generates nothing. It gives your agent the design rules and a place to write, then shows the result.
+- **Plain local files.** One folder per design. Open them in an editor, commit them to git, zip them.
 
 ## Install
 
-**Requirements:** OpenChamber 2.7.0 or later · Windows, macOS or Linux · optional Chrome, Edge or
-Chromium (for PNG thumbnails; without one, the library uses live previews).
+**You need:** OpenChamber 2.7.0 or later. Linux, Windows or macOS (macOS is not in CI, see [`docs/testing/MACOS.md`](docs/testing/MACOS.md)). Optional: Chrome, Edge or Chromium, used to draw thumbnails and run checks. Without one, the library falls back to live previews and checks cannot render.
 
-**Before v0.2.0 is released**, use **From source** below: the one-click link and the Git URL
-install from the `release` branch, which the first tagged release creates.
+**One click:** [Install in OpenChamber](openchamber://extensions/install?url=https%3A%2F%2Fgithub.com%2FSpeak-Technologies%2Fdesign-chamber%23release). OpenChamber asks before it adds anything.
 
-**One click:** [Install in OpenChamber](openchamber://extensions/install?url=https%3A%2F%2Fgithub.com%2FSpeak-Technologies%2Fdesign-chamber%23release).
-OpenChamber asks before it adds anything.
-
-**By hand:** open **Settings → Extensions → Add from Git** and paste
+**By hand:** open **Settings → Extensions → Add from Git** and paste:
 
 ```text
 https://github.com/Speak-Technologies/design-chamber#release
 ```
 
-GitHub may not turn the one-click link into a button, so the line above always works. The
-`release` branch holds the built extension from the latest release. To stay on one version, use
-`#release-v0.2.0` (swap in the version you want) instead of `#release`. Settings → Extensions
-offers **Update** when a newer release is out.
+GitHub may not turn the one-click link into a button, so the line above always works. The `release` branch holds the built extension from the latest release. To stay on one version, use `#release-v0.6.0` (or the version you want). **Settings → Extensions** offers **Update** when a newer release is out.
 
-**From source** (to change the code): `npm install && npm run build`, then add the repo folder in
-**Settings → Extensions**. `dist/` is gitignored, so build first. `npm run build && npm run pack`
-makes `design-chamber-<version>.zip` if you would rather install that; each GitHub release also
-carries one.
+**From source:** `npm install && npm run build`, then add the repo folder in **Settings → Extensions**. `dist/` is not committed, so build first. `npm run build && npm run pack` makes `design-chamber-<version>.zip` if you would rather install that. Each GitHub release carries one too.
 
-After the install, OpenChamber asks you to approve the permissions. Design Chamber runs a small
-local helper (the "service") that reads and writes your designs folder and launches the browser
-for thumbnails. From v0.2.0 it also adds instructions, a skill and a tool so your agent knows where
-designs go.
-Until you approve, the new features stay off and everything from before keeps working.
+After the install, OpenChamber asks you to approve permissions: sending prompts, reading sessions and running Design Chamber's local helper (the "service"). The same install adds instructions, a skill, a `design_check` tool and chat blocks so your agent knows where designs go.
 
 ## Quick start
 
-1. **Start a design.** In any chat type:
+1. **Start a canvas.** In any chat, begin a message with:
+   ```text
+   /design a landing page and plans screen for a coffee subscription, laptop and phone
    ```
-   /design a landing page and price list for a volunteer bike co-op, laptop + phone
-   ```
-   Your agent reads your project's design rules, may ask a few questions, then writes the
-   files. The design appears in the panel and starts rendering the moment its first file lands.
-2. **Or just a page:** `/page a one-page repair-cost estimator widget`.
-3. **Already have HTML in a chat?** On an assistant message that contains an HTML code block,
-   use the **⋯** menu → **Open as page**. It's saved into Designs and opens in the viewer.
-4. **Go full screen:** the rail viewer is compact; for the full library and wall use OpenChamber's
-   **sidebar → Extension pages → Design Chamber**. (Extensions can't open their own full-screen
-   page from code, so the rail points you there.)
-5. **One-time permission setting** so your agent can write outside the project without asking
-   each time — see [Let the agent write to Designs](#let-the-agent-write-to-designs).
+   Your agent reads your project's design rules, may ask a few questions, then writes the files. The design appears in the panel the moment its first file lands.
+2. **Or a single page:** `/page a one-page repair-cost estimator`.
+3. **Or a design system:** `/design-system`. The agent interviews you, reads your code, and builds the system (see [Design systems](#design-systems)).
+4. **Already have HTML in a chat?** On an assistant message with an HTML code block, open the **⋯** menu and pick **Open as page**.
+5. **Go full screen.** The rail viewer is compact. For the library and the full wall, use OpenChamber's **sidebar → Extension pages → Design Chamber**. An extension cannot open its own full-screen page from code, so the rail points you there.
+6. **Let the agent write to your Designs folder** without asking every time: see [Let your agent write here](#let-your-agent-write-here).
 
-## Using it well
+`/design` and `/page` only run when they start the message. Agents that never see them still find your designs folder through [the guide and the skill](#help-your-agent-find-your-designs).
 
-**Writing a good brief.** Say what it is, who it's for, the main task, the tone, and the
-screens you want — plus anything real you have (copy, logo, photos in the project). One or two
-sentences is fine; the agent will ask for the rest. Briefs are capped at 2 000 characters.
+## Features
 
-**The agent reads your project first.** Before designing, it looks for your project's own rules —
-`DESIGN.md`, token and theme files (`tokens.css`, Tailwind config, `:root` blocks), and the design
-sections of `AGENTS.md` / `CLAUDE.md` — and follows them. Precedence, highest first:
+### Browse your designs
 
-1. what you say in chat
-2. your project's design rules
-3. the style preset you picked
-4. this design's own `DESIGN.md` + `tokens.css` (once you've confirmed them)
-5. the built-in anti-"generic AI look" rules
+The rail shows a compact list with search, All / Canvases / Pages tabs and a **Show** select for projects, folders and design systems. The full-screen library adds a sidebar, a System filter, sorting and tiles or a list.
 
-**It asks before it builds.** For anything open-ended the agent sends one message with 3–6
-questions, each with a **bold recommended default**. Reply with changes, or say **go** to accept
-the defaults. Say "go" (or "just do it") in your brief to skip the questions.
+| | |
+|---|---|
+| ![The rail panel at about 400 px in dark theme: three designs with thumbnails, project names, pin counts and design system chips, and a Design systems entry at the bottom](docs/img/rail-list-dark.png) | ![The full-screen library in dark theme: a sidebar with projects, folders and design systems, tabs for All, Canvases, Pages and Systems, a System filter, and tiles for three designs and two design systems](docs/img/library-dark.png) |
+| **Rail.** The same designs, compact. | **Library.** Projects, folders, design systems, filters. |
 
-**Viewports.** Taken from your project's breakpoints when it has them; otherwise the agent asks,
-recommending **Laptop 1280×800 + Phone 390×844**. Each screen × viewport becomes an artboard.
+**Projects and folders.** Designs group by the project folder their chat was opened in. You can also make your own folders, and a design can sit in several. Grouping never moves anything on disk: folders live in `.chamber/folders.json` in the designs folder. Deleting a folder never deletes its designs, and Undo works for an hour.
 
-**Style presets.** Pick one in the New dialog (or let the agent offer directions): `editorial`,
-`minimal-saas`, `brutalist`, `warm-craft`, `data-dense-dashboard`, `playful`, `luxury`,
-`technical-mono`, `poster-print`, `nocturne`. Your project's own rules still outrank a preset.
+### The canvas wall
 
-**Canvas or page?** A **canvas** is an infinite wall of several screens (a flow, a responsive set,
-two directions) at one or more viewports, like Claude Design. A **page** is one self-contained HTML
-page shown full screen like a browser tab: a widget, a landing page, a card. Use `/design` for the
-first and `/page` for the second. A very tall page made of many board-like sections works better
-as a canvas with one screen per board.
+Screens are rows and device sizes are columns. The wall pans and zooms freely. **Edit** mode picks elements to comment on or change. **Play** mode lets you click through the prototype inside its artboard. In the rail the same wall fits to the panel width.
 
-**When you forget the slash command.** `/design` and `/page` only run when they start the
-message. So agents can still find their way, Design Chamber keeps an `AGENTS.md` guide at the root
-of your designs folder (it never overwrites one you edited), and **Settings → Help your agent find
-your designs** gives you lines to paste into your own `AGENTS.md`. Settings no longer installs a
-skill: from v0.2.0 the `design-chamber` skill ships with the extension. Loose `.html` files dropped straight into the designs
-folder show a banner offering to import them as pages.
+![The compact viewer in the rail in light theme: two dashboard screens as artboards, a toolbar with Edit and Play, zoom controls and a Screen button, and the ask bar below](docs/img/rail-viewer-light.png)
 
-**Commenting with pins.** In **Edit** mode click any element, write a note, and a numbered pin
-is dropped on it (the element's selector and text travel with the comment, so it survives edits;
-if the element moved or vanished the pin shows dashed and is listed under *Detached*). Pins work
-on pages too. Open **Comments** and press **Send N comments to chat** — all of them go to the
-design's linked chat as one revision request. Use **Play** to click through the prototype.
+**Screens and directions.** In Edit mode, a **⋯** menu on each screen offers Duplicate, Move up, Move down, Move to trash and **Try 3 directions…**. On the full-screen page you can drag screens to reorder them. When the agent makes variations of a screen, they show as a row (Current, A, B, C) and **Keep this one** picks the winner. A canvas holds up to 40 screens. Every one of these is a hand edit: a version is saved first and Undo is offered.
 
-**Versions.** A snapshot is saved automatically after a quiet period and after each agent turn.
-In **Versions** you can **View** an old one, **Compare** it with the current design (every artboard
-splits version | current, with the list of changed files), or **Restore** it — the current state
-is saved as a version first, so a restore is never destructive.
+### Pages and export
 
-**Exports.** From a page: **Export → Download ZIP** (HTML + assets) or **Download
-single-file HTML** (assets inlined). From a canvas: **⋯ → Export ZIP / Export screen as HTML**.
-Files land in `~/Downloads` and a toast offers **Show in folder**. **Copy ▾** copies the HTML.
+A page opens full screen like a browser tab, at full width or at a fixed device width.
 
-**Continue in chat.** Every design remembers the chat that made it. **Continue in chat** reopens
-it (or starts a new one if the old chat is gone), so revisions stay in context.
+![A page open in the viewer in light theme with the Export menu showing Download ZIP (HTML and assets) and Download single-file HTML (assets inlined)](docs/img/page-export-menu.png)
 
-**Delete** moves a design to `<designs folder>/.trash/` — never a hard delete.
+From a page, **Export** gives a ZIP (HTML and assets) or a single HTML file with assets inlined. From a canvas, the **⋯** menu offers **Export ZIP** and **Export screen as HTML…**. Files go to your Downloads folder with a **Show in folder** toast, or to `.exports/` in the designs folder if Downloads is missing. **Copy** copies the HTML.
 
-### Let the agent write to Designs
+### Comments, the ask bar and the build strip
 
-OpenCode asks before an agent writes outside the project folder. To allow your Designs folder
-once, add this to your `opencode.json` (**Settings → Let your agent write here** shows it with
-your actual path and a Copy button; Design Chamber never edits your config):
+In Edit mode, click any element, write a note, and a numbered pin lands on it. The element's selector and text travel with the comment, so it survives edits. If the element moves or disappears the pin turns dashed and is listed as detached. Pins work on pages too.
+
+Open **Comments** to see them all. **Send N comments to chat** posts them to the design's linked chat as one revision request, or you can send one pin at a time.
+
+![The wall in dark theme with an element picked: the ask bar shows an h1 chip and typed text, and a strip over the wall says The agent is working](docs/img/ask-bar-build-strip.png)
+
+The **ask bar** under the wall sends your own words to the linked chat, optionally about one picked element. The **build strip** over the wall shows what that agent is doing: working, writing a file (the matching artboard lights up), waiting on a question, done or failed. Every design remembers its chat. **Continue in chat** reopens it, or starts a new one if the old chat is gone.
+
+### Edit on the canvas
+
+You can fix small things without a chat round trip. Click an element in Edit mode to get the selection toolbar: **Edit text**, **Comment** and **Ask agent**. Double-click text to edit it in place.
+
+![Edit mode in light theme: a headline is selected on the Home artboard, a selection toolbar above it shows Edit text, Comment and Ask agent, and a comment box is open below](docs/img/edit-toolbar.png)
+
+Hand edits follow the same rules everywhere. A version called "Before your edits" is saved first. Only the edited part of the file changes. If the agent or another program changed the file in the meantime, nothing is written and your text stays. Undo works for 30 minutes. The agent is told about your hand edits in the next message Design Chamber sends to its chat.
+
+**Tweaks.** The agent can declare up to 12 knobs (a slider or a few named choices), each tied to one variable in the design's `tokens.css`. Move a knob and every screen updates live. **Save** writes only those values into `tokens.css`.
+
+![The Tweaks drawer in light theme: a Card corners slider set to 14 px next to the wall, with Reset and Save at the bottom](docs/img/tweaks.png)
+
+### Versions
+
+A snapshot is saved after a quiet moment and after every agent turn on a linked design, even with no Design Chamber window open. In **Versions** you can **View** an old one, **Compare** it with the current design (every artboard splits version and current, with a list of changed files), or **Restore** it. A restore saves the current state first and offers Undo, so it is never destructive. The newest 100 versions are kept.
+
+![Versions compare in dark theme: every artboard split by a divider into v1 and current, with the Versions drawer listing four versions and the changed files](docs/img/versions-compare.png)
+
+### Checks
+
+Before an agent says a design is done, it checks it. Design Chamber renders every screen at every viewport in headless Chrome, offline, saves pictures and lists what is wrong:
+
+- **Errors:** missing files, links to the internet, content wider than the viewport, low text contrast, images without `alt`, form fields without labels, script errors.
+- **Warnings:** tokens redefined in a screen, ignored `design.json` fields, missing doctype, `lang`, viewport meta or title, cut-off text.
+- **Notes:** hardcoded colours although `tokens.css` defines them, page height, no browser found.
+
+Agents inside OpenChamber use the `design_check` tool. Every other agent runs the same check from a shell:
+
+```sh
+sh '<designs folder>/.chamber/bin/dc' check <slug>
+```
+
+(`dc.cmd` on Windows.) Options are `--screen <id>`, `--static` (files only, no browser) and `--json`. Exit code 0 means no errors, 1 means errors were found and 2 means the check could not run. The launcher needs no token and no Node on your PATH.
+
+![The Checks panel in dark theme opened from a 3 issues badge: Needs fixing lists a missing file and a blocked web font, Worth a look lists a missing title, with Ask the agent to fix and Check again buttons](docs/img/checks-badge.png)
+
+The same findings feed the **Checks badge** in the viewer. **Ask the agent to fix** sends them to the linked chat. Chat blocks and Work Status show the badge too.
+
+### Design systems
+
+A design system is its own item in the designs folder: colours, type, spacing, radii, shadows, components with usage notes, patterns, brand files, and an overview. Notes and overviews are written in markdown and render as markdown, tables included. A system covers four areas: Foundations, Components, Patterns and voice, and Brand and marketing.
+
+![The Design systems list in light theme: two cards, Ledger UI and Brewline, each with a colour strip, a Ready badge, where it lives and how many designs use it](docs/img/systems-list.png)
+
+**Making one.** Type `/design-system` in a chat for an interview in two rounds: where the system lives, whether to fix the project's token code or only describe it, which areas to cover, then the calls it found in your code. The agent can "fix tokens, then document": it shows a reviewed diff first and writes the repo only after you approve it. Design Chamber itself never writes your repo. You can also start from the **New design system** sheet: from project code, from brand files, from a description, or from an existing system folder (register it as it is, or make a new one from it).
+
+**Where it lives.** An **internal** system lives in `_systems/<id>/` in the designs folder. A **repo-backed** system lives in your project, with a generated living page (one self-contained HTML file, no scripts) that the agent commits. Repo-backed systems are read-only in Design Chamber: ask the agent to change them and it proposes a diff.
+
+**The specimen board.** Every system gets a board that draws each component on light and dark grounds. The agent can set a layout hint per entry in `system.json`: `card` (the default), `compact` (buttons, badges), `full` (navigation, toolbars) or `table` (long lists read row by row).
+
+![A design system page in light theme: the specimen board on the left with Button and Badge in the compact layout and a Plan card in the card layout, and the section list with a Does Components look right review prompt on the right](docs/img/system-page.png)
+
+**Using one.** A new design can start from a system you pick in the New dialog, or the agent asks which one. Each design keeps its own copy, so it never changes under you. When the system changes, the design's chip offers **Review update**. Your tweaks stay as overrides on top, each with **Reset to system**. Systems can be reviewed section by section (**Looks good**, **Needs work**), edited by hand, and re-synced when the code they were read from changes.
+
+**System checks.** `dc check --system <id>` checks a system's files and draws its board at a wide and a narrow width. The pictures are what the agent looks at before it says the system is done. It warns when a layout hint is too small for an entry, for example a `compact` entry that needed the full width.
+
+![The check picture of the Brewline system's components section: Button and Badge in compact cards, a Plan card, a Top nav across the full width and a Delivery table, each on a light and a dark ground](docs/img/system-check-board.png)
+
+### In the chat
+
+When an agent finishes a design it can put a **DesignCard** in its reply: a preview, the screens, the Checks badge, and **Open** and **Comment** buttons. When it wants you to choose between directions it asks with a **DirectionPick**. In a `/design-system` chat the interview and the diff to approve arrive as a **SystemAsk** block.
+
+| | |
+|---|---|
+| ![A DesignCard in a chat: a preview of a coffee subscription canvas, its screens, a 3 issues badge, and Open and Comment buttons](docs/img/chat-block-design-card.png) | ![A DirectionPick in a chat: a question and three tiles labelled A, B and C, each with a preview](docs/img/chat-block-direction-pick.png) |
+
+OpenChamber's Work Status shows recent designs, what the agent is writing and check results. Type `@` in the composer to give the agent a design's folder, its rules and its open comments.
+
+### Help your agent find your designs
+
+Four channels carry the same core rules, so an agent finds Design Chamber without a slash command:
+
+1. A short note in every agent's instructions, while the extension is on.
+2. The built-in `design-chamber` skill, with the full design rules and the style presets.
+3. `AGENTS.md` in the designs folder, for agents that run outside OpenChamber. Design Chamber keeps it current and never overwrites one you edited.
+4. A snippet you can paste into your own `AGENTS.md`.
+
+![The Settings sheet in dark theme: the designs folder field with Apply folder and Use default, the agent guide, the built-in agent skill, a copyable AGENTS.md snippet and the browser used for thumbnails](docs/img/settings.png)
+
+### Let your agent write here
+
+OpenCode asks before an agent writes outside the project folder. To allow your designs folder once, add this to your `opencode.json`. **Settings → Let your agent write here** shows it with your real path and a Copy button. Design Chamber never edits your config.
 
 ```json
 {
   "permission": {
     "external_directory": {
-      "C:/Users/you/Documents/Designs/**": "allow"
+      "/home/you/Documents/Designs/**": "allow"
     }
   }
 }
 ```
 
-### Change the Designs folder
+### Change the designs folder
 
-**Settings (the sliders icon) → Designs folder → Apply folder.** Existing designs are *not*
-moved; earlier folders are listed with **Switch back**. **Use default** returns to
-`~/Documents/Designs`.
+**Settings → Designs folder → Apply folder.** Existing designs are not moved. Earlier folders are listed with **Switch back**, and **Use default** returns to `~/Documents/Designs`.
 
-## Gallery
+### Write a good brief
 
-| | |
-|---|---|
-| ![Library (dark theme): grid of design cards with thumbnails, kind badges and search, tabs and sort](docs/img/library-dark.png) | ![Rail panel in dark theme: list of three designs with thumbnails, search and All / Canvases / Pages tabs](docs/img/rail-list-dark.png) |
-| **Library** (full-screen page, light theme): thumbnail cards, search, All / Canvases / Pages, sort. | **Rail list** (320–480 px, dark): the same designs, compact. |
-| ![The wall in light theme with pins 1 and 2 on the Landing and Prices laptop artboards](docs/img/wall-light.png) | ![Rail viewer in light theme: the compact canvas wall with a dashed detached pin and the "Full screen: sidebar → Extension pages" hint](docs/img/rail-viewer-light.png) |
-| **The wall in Edit mode, light theme.** Screens are rows, viewports are columns; click an element to pin a comment. | **Compact viewer in the rail.** Same wall, fit to width; a dashed pin means its element moved. |
-| ![Versions: split compare of v16 against the current design with a divider on every artboard and a list of changed files](docs/img/versions-compare.png) | ![Page viewer with the Export menu open: Download ZIP (HTML + assets) and Download single-file HTML (assets inlined)](docs/img/artifact-export-menu.png) |
-| **Versions → Compare.** Each artboard splits version vs. current; changed files are listed; Restore saves the current state first. | **Page viewer + Export menu**: ZIP or single-file HTML; Comment mode, Versions, Copy, Continue in chat. |
-| ![An assistant message's ⋯ menu with Copy link, Save as image, Save as plan and Open as page (older screenshot shows the previous name)](docs/img/open-as-artifact-action.png) | ![Settings sheet: Designs folder, earlier folders, browser for thumbnails and the copyable opencode.json permission snippet](docs/img/settings.png) |
-| **Open as page** on any assistant message with an HTML block. | **Settings**: designs folder, thumbnail browser, and the `opencode.json` snippet. |
+Say what it is, who it is for, the main task, the tone and the screens you want, plus anything real you have (copy, a logo, photos). One or two sentences is fine, up to 2,000 characters. For anything open-ended the agent sends one message with 3 to 6 questions, each with a recommended default. Reply with changes, or say **go**. Put "go" in your brief to skip the questions.
+
+The agent reads your project first: `DESIGN.md`, token and theme files, and the design sections of `AGENTS.md` or `CLAUDE.md`. Rules apply in this order, highest first:
+
+1. What you say in chat.
+2. Your project's design rules.
+3. The style preset you picked.
+4. This design's own `DESIGN.md` and `tokens.css`, once you confirm them.
+5. The built-in rules against a generic look.
+
+When a design is linked to a design system, the order is your words, then the system, then your project's files for whatever the system does not cover, then the built-in rules. The preset picker is hidden while a system is chosen.
+
+Viewports come from your project's breakpoints when it has them, otherwise Laptop 1280×800 and Phone 390×844. Presets: `editorial`, `minimal-saas`, `brutalist`, `warm-craft`, `data-dense-dashboard`, `playful`, `luxury`, `technical-mono`, `poster-print` and `nocturne`.
 
 ## Keyboard shortcuts on the wall
 
 | Key | Action |
 |---|---|
-| Wheel / trackpad over the background | Pan (both axes) |
-| `Space` + drag · middle-drag · `H` | Pan tool (`H` toggles it) |
+| Wheel or trackpad over the background | Pan |
+| `Space` and drag, middle-drag, `H` | Pan tool (`H` toggles it) |
 | Arrow keys | Nudge the view |
-| `Ctrl`/`⌘` + wheel · pinch | Zoom around the cursor (5–400 %) |
-| `+` / `−` | Zoom in / out |
+| `Ctrl` or `⌘` and wheel, pinch | Zoom around the cursor (5 to 400 %) |
+| `+` and `-` | Zoom in and out |
 | `Shift+0` | 100 % |
 | `Shift+1` | Fit all |
 | Double-click an artboard label | Focus that artboard |
-| Click an element (Edit) | Open the comment composer on it |
-| `Ctrl`/`⌘` + `Enter` · `Esc` | Add the comment · cancel / close popovers and drawers |
+| Click an element (Edit) | Open the selection toolbar and comment box |
+| `Ctrl` or `⌘` and `Enter`, `Esc` | Add the comment, cancel and close popovers |
 
 ## On disk
 
 ```text
-~/Documents/Designs/
-└── <slug>/                  one folder per design (slug: lowercase letters, digits, hyphens)
-    ├── design.json          kind ("page" | "canvas"), title, dates, linked chat,
-    │                        viewports, screens, comments
-    ├── index.html           page entry file
-    ├── screens/<id>.html    canvas screens (one file per screen)
-    ├── assets/              images, fonts, CSS, scripts the pages use (relative paths)
-    ├── DESIGN.md            this design's design system, in words
-    ├── tokens.css           …and as CSS variables
-    ├── .versions/           snapshots (content-addressed, newest 100 kept)
-    └── .chamber/            Design Chamber's own state and the agent's RULES.md — not exported
+<designs folder>/                  ~/Documents/Designs by default
+├── AGENTS.md                      guide for agents, kept by Design Chamber
+├── <slug>/                        one folder per design (lowercase letters, digits, hyphens)
+│   ├── design.json                kind ("page" or "canvas"), title, dates, linked chat,
+│   │                              viewports, screens, tweaks, comments
+│   ├── index.html                 a page's entry file
+│   ├── screens/<id>.html          a canvas's screens, one file each
+│   ├── assets/                    images, fonts, CSS and scripts, by relative path
+│   ├── DESIGN.md, tokens.css      this design's design system, in words and as variables
+│   ├── system/                    the design's own copy of its design system
+│   ├── .versions/                 snapshots, newest 100 kept
+│   └── .chamber/                  Design Chamber's own state: check report and pictures,
+│                                  undo records, saved page data, the agent's RULES.md
+├── _systems/<id>/                 a design system (never listed as a design)
+│   ├── system.json, tokens.css    structured part and token values
+│   ├── OVERVIEW.md                what the system is for
+│   ├── notes/, patterns/, brand/  markdown, rendered on the board
+│   ├── components/<id>.html       one example per component
+│   └── assets/, .versions/, .chamber/
+├── .chamber/                      folders.json and the check launcher (bin/dc, bin/dc.cmd)
+├── .trash/                        deleted designs and systems, never hard-deleted
+└── .exports/                      export fallback when there is no Downloads folder
 ```
 
-`.trash/` and `.exports/` at the root hold deleted designs and an export fallback. Fonts go in
-`assets/` — designs can't load Google Fonts or CDNs (see below). The exact schema is in
-[`docs/SPEC.md`](docs/SPEC.md) §6.
+A folder counts as a design when it holds `design.json`, `.chamber/state.json`, an `index.html` or a `screens/` folder. Any other folder is yours and is left alone. Loose `.html` files in the root are offered for import as pages. Fonts go in `assets/`: designs cannot load Google Fonts or CDNs. The exact schema is in [`docs/SPEC.md`](docs/SPEC.md) §6.
 
 ## Privacy and security
 
-- The helper service listens on **127.0.0.1 only** and requires a **bearer token** on every
-  request; panels never see the token.
-- **Agent-written HTML is untrusted.** It renders only in sandboxed iframes (never
-  `allow-scripts` together with `allow-same-origin`), cut off from the host and from the token.
-- **Designs get no network.** Remote scripts, web fonts and remote images are blocked — that's
-  what the "N remote" badge and the remote-files banner tell you (with an **Ask the agent** button). Local files and inline JS work.
-- Every path is resolved and checked to stay **inside the Designs folder** before use.
-- Nothing leaves your machine except what *your chat model* sees (your brief, comments you send,
-  the files your agent reads). Design Chamber itself uploads nothing.
-- It never edits your OpenCode/OpenChamber config. Outside the designs folder it writes only its
-  own settings folder. From v0.2.0 it can also remove an old `design-chamber` skill copy, only
-  when you click **Remove old copy** in Settings.
+- The service listens on **127.0.0.1 only** and needs a **bearer token** on every request. Panels and designs never see the token.
+- **Agent-written HTML is untrusted.** It renders only in sandboxed iframes with a content security policy, and never with `allow-scripts` and `allow-same-origin` together. A design cannot reach the host, the service or the token.
+- **Designs get no network.** Remote scripts, web fonts and remote images are blocked. A banner says what was blocked and offers **Ask the agent to fix it**. Local files and inline scripts work.
+- Every path is resolved and checked to stay **inside the designs folder** before it is read or written.
+- Nothing leaves your machine except what your chat model sees: your brief, the comments you send, and the files your agent reads. Checks render offline.
+- Design Chamber never edits your OpenCode or OpenChamber config. Outside the designs folder it writes its own settings folder, exports to your Downloads folder when you export, and, only when you click **Remove old copy** in Settings, deletes an old `design-chamber` skill copy that an earlier version installed.
+- It starts a headless Chrome, Edge or Chromium for thumbnails and checks, and uses your system's file manager for **Show in folder**.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| Cards show a live preview instead of a PNG thumbnail (Settings says **Live previews**) | No Chrome, Edge or Chromium was found. **Settings → Browser for thumbnails → Use a different browser** → paste the path → **Test and save**. |
-| The agent asks permission every time it writes a file | Add the `external_directory` snippet from [Let the agent write to Designs](#let-the-agent-write-to-designs) to your `opencode.json`. |
-| An artboard says *screens/x.html not written yet* | `design.json` lists a screen the agent hasn't written (or has misnamed). It appears the moment the file lands; if not, ask the agent to finish or fix the screen file. |
-| A design looks unstyled / images or fonts missing, or a "N remote" badge appears | The page references a CDN, web font or remote image — blocked by design. Ask the agent to inline the CSS and put fonts and images in `assets/` with relative paths. |
-| My designs vanished | The Designs folder was changed. **Settings → Earlier folders → Switch back.** |
-| A design I created by hand isn't listed | A folder needs `design.json` (or at least an `index.html`, shown as a page with a warning). Loose `.html` files in the root get an import banner instead. Hidden folders starting with `.` are ignored. |
-| Nothing happens after `/design` | Make sure the extension's permissions were approved and OpenChamber is 2.7.0 or later; check **Settings → Extensions**. |
+| Cards show a live preview instead of a PNG thumbnail | No Chrome, Edge or Chromium was found. **Settings → Browser for thumbnails → Use a different browser**, paste the path, then **Test and save**. |
+| The agent asks permission every time it writes a file | Add the `external_directory` snippet from [Let your agent write here](#let-your-agent-write-here) to your `opencode.json`. |
+| An artboard says a screen "isn't written yet" | `design.json` lists a screen the agent has not written, or has misnamed. It appears the moment the file lands. If not, ask the agent to finish or fix it. |
+| A design looks unstyled, or a banner says it loads files from the internet | The page references a CDN, web font or remote image, which is blocked by design. Ask the agent to inline the CSS and put fonts and images in `assets/` with relative paths. |
+| My designs vanished | The designs folder was changed. **Settings → Earlier folders → Switch back.** |
+| A folder I made by hand is not listed | It needs `design.json`, an `index.html` or a `screens/` folder, and a name of lowercase letters, digits and hyphens that starts with a letter or digit. Hidden folders are ignored. Loose `.html` files in the root get an import banner instead. |
+| The agent says the check could not run | Open the Design Chamber panel once so it can record where OpenChamber's runtime is, then try again. Where `design_check` is not available (a remote OpenCode, a terminal agent), run the `dc` command from `AGENTS.md` in the designs folder. |
+| Nothing happens after `/design` | Check that the extension's permissions were approved and that OpenChamber is 2.7.0 or later, in **Settings → Extensions**. `/design` only runs at the very start of a message. |
 
-More known limits: [`documentation/known-issues.md`](documentation/known-issues.md).
+More known limits are in [`documentation/known-issues.md`](documentation/known-issues.md).
 
 ## Development
 
 ```bash
 npm install
-npm run build       # dist/panel + dist/background (IIFE guests) and dist/service/main.js (Node ESM)
-npm run typecheck   # tsc --noEmit, strict
-npm test            # 513 tests (node:test, Node ≥ 22.18)
-npm run check       # typecheck + build + test — all three must pass before any change is done
-npm run guest-check # OpenChamber's own package check on the built extension (build first)
-npm run pack        # release zip: design-chamber-<version>.zip (build first)
+npm run build        # dist/: panel and page, background, status, blocks (IIFE), service and CLI (Node ESM), plugin, skills
+npm run typecheck    # tsc --noEmit, strict
+npm test             # node:test, Node 22.18 or later
+npm run check        # typecheck, build and test: all three pass before a change is done
+npm run guest-check  # OpenChamber's own package checker on the built extension (build first)
+npm run pack         # release zip, design-chamber-<version>.zip (build first)
 ```
 
 There is no dev server by design: rebuild with `npm run build` and reload the extension.
 
-- Product decisions: [`docs/BRIEF.md`](docs/BRIEF.md) · technical spec and layout:
-  [`docs/SPEC.md`](docs/SPEC.md) (§12 repository layout)
-- Working agreements for contributors and agents: [`AGENTS.md`](AGENTS.md)
-- Product documentation (pages, features, known issues): [`documentation/`](documentation/README.md)
-- Agent-facing design rules and presets: [`rules/`](rules/README.md)
+To look at the built UI, `node test/ui/visual/shoot.mjs <filter> --out <folder>` runs it behind a mock OpenChamber host and an in-memory fake service in headless Chrome, at rail widths and full-screen, in light and dark. Always pass `--out`; the default writes into tracked docs. Most pictures in this README come from `test/ui/visual/scenarios/readme-shots.mjs`, which points the same UI at the real built service on a scratch designs folder of fake projects. Two do not: `docs/img/checks-badge.png` was taken from the harness's `checks.mjs` scenario on the in-memory fake service, and `docs/img/system-check-board.png` is the picture `dc check --system` writes.
 
-Design Chamber reuses ideas from an earlier project, `openchamber-design-canvas` (Chrome
-discovery, pan/zoom math, prompt rules, presets), but is a different design: it renders in-app and
-needs no external window or dev server.
+Where to read more:
+
+- Product decisions: [`docs/BRIEF.md`](docs/BRIEF.md). Technical spec and layout: [`docs/SPEC.md`](docs/SPEC.md) (§12 is the repository layout).
+- Plain-English docs for every page and feature: [`documentation/`](documentation/README.md).
+- Agent-facing design rules and presets: [`rules/`](rules/README.md).
+- Working agreements: [`AGENTS.md`](AGENTS.md).
+
+### The agent team
+
+This repo is built by a small team of AI agents with one human owner. [`AGENTS.md`](AGENTS.md) and [`.agents/rules/claude-agent-protocol.md`](.agents/rules/claude-agent-protocol.md) say how they work. The main session leads, dispatches specialists, and reports with evidence. Pushing, opening or merging PRs and publishing stay with the owner.
+
+[`.agents/team.json`](.agents/team.json) is the source for the agent files in `.claude/agents/` and `.opencode/agents/`, the protocol and the team block of `AGENTS.md` (the part between its `team:start` and `team:end` markers; the rest of that file is edited by hand). After editing it, re-render with `node .agents/render.js`. That runs the agent-team-generator, then removes the em dashes and the generic database wording its templates add, and finally runs `node .agents/verify-team.cjs`, which should pass. The roster:
+
+| Agent | Role |
+|---|---|
+| product-specialist | Requirement specs for features and flows. No code. |
+| architect | Technical designs and threat models. No production code. |
+| backend-developer | The local service, shared types, the guest core, the `dc` command and the OpenCode plugin, and their tests. |
+| ui-ux-developer | The panel, page, wall, blocks and design-system screens, plus the visual harness scenarios. |
+| qa-tester | Verification after M and L tasks, changes on a risk surface and anything the user will see, plus regression tests and minor issues in `known-issues.md`. Small tasks off a risk surface get the author's own QA pass. Never fixes production code. |
+| browser-tester | The second QA step for UI changes. Walks the flow in the visual harness or a folder-installed OpenChamber, always on a scratch designs folder, rail and full-screen, dark and light. Never fixes code. |
+| code-reviewer | Independent review of a diff, on request. |
+
+`openchamber-design-canvas` (an earlier project by the same owner) is where some ideas came from: Chrome discovery, pan and zoom math, prompt rules and presets. Design Chamber is a different design: it renders in-app and needs no external window or dev server.
 
 ## Licence
 
-MIT — see [`LICENSE`](LICENSE).
+MIT. See [`LICENSE`](LICENSE).

@@ -22329,6 +22329,33 @@ var effectiveSystemChoice = (input) => {
   if (fallback.choice === "system" && ready(fallback.id)) return { choice: "system", id: fallback.id, why: "default" };
   return ask();
 };
+var settingState = (ref, systems, words) => {
+  const system = systems.find((one) => one.id === ref.id);
+  if (system === void 0) return { name: ref.name, state: "missing", sentence: words.absent(ref.name) };
+  if (system.unreadable !== null) return { name: system.name, state: "missing", sentence: `${system.name} can\u2019t be read right now. ${words.unset}` };
+  if (system.status === "draft") return { name: system.name, state: "draft", sentence: `${system.name} is a draft. ${words.draftUntil}` };
+  return { name: system.name, state: "ok", sentence: null };
+};
+var DEFAULT_WORDS = {
+  absent: () => "Your default design system isn\u2019t in this Designs folder.",
+  unset: "New designs ask you in chat.",
+  draftUntil: "New designs ask you in chat until it is Ready."
+};
+var PIN_WORDS = {
+  absent: (name) => `${name} isn\u2019t in this Designs folder. This project uses the default.`,
+  unset: "This project uses the default.",
+  draftUntil: "This project uses the default until it is Ready."
+};
+var settingsSystemsView = (input) => {
+  const { systems } = input;
+  const saved = input.settings.systemDefault ?? { choice: "ask" };
+  const view = saved.choice === "system" ? { ...saved, ...settingState(saved, systems, DEFAULT_WORDS) } : { ...saved, state: "ok", sentence: null };
+  const pins = (input.settings.systemPins ?? []).map((pin) => {
+    if (pin.choice !== "system" || pin.id === void 0) return { ...pin, state: "ok", sentence: null };
+    return { ...pin, ...settingState({ id: pin.id, name: pin.name ?? pin.id }, systems, PIN_WORDS) };
+  });
+  return { default: view, pins, notices: [...input.notices] };
+};
 var under2 = (base2, segments) => `${base2.replace(/[\\/]+$/, "")}/${segments.join("/")}`;
 var problemValue = (value) => value.slice(0, BUILD_PROBLEM_VALUE_MAX);
 var repoHomeShapeProblem = (request, context) => {
@@ -26658,8 +26685,208 @@ function registerSessionEventsRoutes(router, ctx, turnEvents, links = sessionLin
   });
 }
 
+// src/service/settings.ts
+import { readFile as readFile24 } from "node:fs/promises";
+import os9 from "node:os";
+import path50 from "node:path";
+
+// src/shared/app-data.ts
+var RUNTIME_FILE = "runtime.json";
+var given = (value) => typeof value === "string" && value.trim() !== "";
+var designChamberDataDir = ({ platform, homeDir, appData, xdgConfigHome, join }) => {
+  if (platform === "win32") return join(given(appData) ? appData : join(homeDir, "AppData", "Roaming"), "Design Chamber");
+  if (platform === "darwin") return join(homeDir, "Library", "Application Support", "Design Chamber");
+  return join(given(xdgConfigHome) ? xdgConfigHome : join(homeDir, ".config"), "design-chamber");
+};
+
+// src/service/settings.ts
+var settingsFilePath = (env = process.env, platform = process.platform, homeDir = os9.homedir()) => {
+  const override = env.DC_SETTINGS_PATH;
+  if (typeof override === "string" && override.trim() !== "") return path50.resolve(override.trim());
+  const dir = designChamberDataDir({ platform, homeDir, appData: env.APPDATA, xdgConfigHome: env.XDG_CONFIG_HOME, join: path50.join });
+  return path50.join(dir, "settings.json");
+};
+var isRecord9 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var systemRef = (id, name) => typeof id === "string" && SYSTEM_ID_PATTERN.test(id) && typeof name === "string" && name.trim() !== "" && name.length <= SYSTEM_NAME_MAX && !/[\u0000-\u001f\u007f]/.test(name) ? { id, name } : null;
+var normalizeSystemDefault = (raw) => {
+  if (!isRecord9(raw)) return null;
+  if (raw.choice === "ask") return { choice: "ask" };
+  if (raw.choice === "none") return { choice: "none" };
+  if (raw.choice !== "system") return null;
+  const ref = systemRef(raw.id, raw.name);
+  return ref === null ? null : { choice: "system", ...ref };
+};
+var normalizeSystemPins = (raw, platform = process.platform) => {
+  if (!Array.isArray(raw)) return [];
+  const p = platform === "win32" ? path50.win32 : path50.posix;
+  const pins = [];
+  for (const entry of raw) {
+    if (pins.length >= SYSTEM_PINS_MAX) break;
+    if (!isRecord9(entry)) continue;
+    const { directory, choice } = entry;
+    if (typeof directory !== "string" || directory.length > SETTINGS_PATH_MAX || /[\u0000-\u001f\u007f]/.test(directory) || !p.isAbsolute(directory)) continue;
+    if (pins.some((pin) => samePath2(pin.directory, directory, p, platform))) continue;
+    if (choice === "default" || choice === "none") pins.push({ directory, choice });
+    else if (choice === "system") {
+      const ref = systemRef(entry.id, entry.name);
+      if (ref !== null) pins.push({ directory, choice, ...ref });
+    }
+  }
+  return pins;
+};
+var normalizeSettings = (raw) => {
+  const out = { version: SETTINGS_FILE_VERSION };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  const value = raw;
+  const text3 = (candidate) => typeof candidate === "string" && candidate.trim() !== "" && candidate.length <= SETTINGS_PATH_MAX ? candidate : null;
+  const root = text3(value.root);
+  if (root !== null) out.root = root;
+  const chromePath = text3(value.chromePath);
+  if (chromePath !== null) out.chromePath = chromePath;
+  const downloadsDir = text3(value.downloadsDir);
+  if (downloadsDir !== null) out.downloadsDir = downloadsDir;
+  if (Array.isArray(value.previousRoots)) {
+    const roots = value.previousRoots.filter((entry) => typeof entry === "string" && entry.trim() !== "");
+    if (roots.length > 0) out.previousRoots = roots.slice(0, PREVIOUS_ROOTS_MAX);
+  }
+  const systemDefault = normalizeSystemDefault(value.systemDefault);
+  if (systemDefault !== null && systemDefault.choice !== "ask") out.systemDefault = systemDefault;
+  const systemPins = normalizeSystemPins(value.systemPins);
+  if (systemPins.length > 0) out.systemPins = systemPins;
+  return out;
+};
+var parseSettings = (text3) => {
+  try {
+    return normalizeSettings(JSON.parse(text3));
+  } catch {
+    return null;
+  }
+};
+var readSettingsFile = async (file) => {
+  let text3;
+  try {
+    text3 = await readFile24(file, "utf8");
+  } catch {
+    return { settings: { version: SETTINGS_FILE_VERSION }, corrupt: false };
+  }
+  const parsed = parseSettings(text3);
+  if (parsed === null) return { settings: { version: SETTINGS_FILE_VERSION }, corrupt: true };
+  return { settings: parsed, corrupt: false };
+};
+var writeSettingsFile = async (file, settings) => {
+  await writeFileAtomic(file, `${JSON.stringify(normalizeSettings(settings), null, 2)}
+`);
+};
+var createSettingsStore = async (options) => {
+  const { log: log2, packageRoot: packageRoot2 } = options;
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const homeDir = options.homeDir ?? os9.homedir();
+  const file = settingsFilePath(env, platform, homeDir);
+  const initial = await readSettingsFile(file);
+  if (initial.corrupt) log2.warn("settings.corrupt", { file, message: "The settings file could not be read; defaults are used." });
+  let current = initial.settings;
+  const rootHost = { platform, env };
+  const defaultRoot = defaultDesignsRoot(homeDir, rootHost);
+  const rootListeners = /* @__PURE__ */ new Set();
+  const changeListeners = /* @__PURE__ */ new Set();
+  const rootOf = (candidate) => typeof candidate.root === "string" && candidate.root.trim() !== "" ? path50.resolve(candidate.root) : defaultRoot;
+  const store = {
+    root: () => rootOf(current),
+    defaultRoot: () => defaultRoot,
+    read: () => current,
+    async update(patch) {
+      const previousRoot = store.root();
+      const next = { ...current };
+      let rootChanges = false;
+      if (patch.root !== void 0) {
+        if (patch.root === null) {
+          delete next.root;
+        } else {
+          const validated = await validateRootCandidate(patch.root, { packageRoot: packageRoot2, homeDir, host: rootHost });
+          if (!validated.ok) throw new ApiError("bad-path", validated.message);
+          next.root = validated.root;
+        }
+        rootChanges = !sameRoot(rootOf(next), previousRoot);
+        const nextRoot = rootOf(next);
+        const previous = (next.previousRoots ?? []).filter((entry) => !sameRoot(entry, nextRoot) && !sameRoot(entry, previousRoot));
+        if (rootChanges) next.previousRoots = [previousRoot, ...previous].slice(0, PREVIOUS_ROOTS_MAX);
+        else if (previous.length > 0) next.previousRoots = previous;
+        else delete next.previousRoots;
+      }
+      if (patch.chromePath !== void 0) {
+        if (patch.chromePath === null) {
+          delete next.chromePath;
+        } else {
+          const value = patch.chromePath.trim();
+          if (value === "" || value.includes("\0") || value.length > SETTINGS_PATH_MAX) {
+            throw new ApiError("bad-path", "That browser path does not work. Give the full path to the browser program.");
+          }
+          next.chromePath = value;
+        }
+      }
+      if (patch.systemDefault !== void 0) {
+        if (patch.systemDefault === null) delete next.systemDefault;
+        else next.systemDefault = patch.systemDefault;
+      }
+      if (patch.systemPins !== void 0) {
+        if (patch.systemPins === null) delete next.systemPins;
+        else next.systemPins = patch.systemPins;
+      }
+      try {
+        await writeSettingsFile(file, next);
+      } catch (error) {
+        throw new ApiError("internal", `Could not save the settings file: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      current = normalizeSettings(next);
+      if (rootChanges) {
+        const newRoot = store.root();
+        log2.info("settings.root-changed", { from: previousRoot, to: newRoot });
+        for (const listener of [...rootListeners]) {
+          try {
+            listener(newRoot, previousRoot);
+          } catch (error) {
+            log2.error("settings.root-listener-failed", { error: error instanceof Error ? error.message : String(error) });
+          }
+        }
+      }
+      for (const listener of [...changeListeners]) {
+        try {
+          listener();
+        } catch (error) {
+          log2.error("settings.change-listener-failed", { error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+      return current;
+    },
+    onRootChange(listener) {
+      rootListeners.add(listener);
+      return () => rootListeners.delete(listener);
+    },
+    onChange(listener) {
+      changeListeners.add(listener);
+      return () => changeListeners.delete(listener);
+    }
+  };
+  return store;
+};
+
 // src/service/routes/settings.ts
 var isBodyRecord4 = (body) => typeof body === "object" && body !== null && !Array.isArray(body);
+var buildSystemsView = async (ctx) => {
+  const store = ensureSystemStore(ctx);
+  const file = ctx.settings.read();
+  let systems;
+  try {
+    systems = (await store.list()).map(({ id, name, status, unreadable: unreadable2 }) => ({ id, name, status, unreadable: unreadable2 }));
+  } catch (error) {
+    ctx.log.warn("settings.systems-unlistable", { error: error instanceof Error ? error.message : String(error) });
+    systems = [file.systemDefault, ...file.systemPins ?? []].flatMap(
+      (entry) => entry?.choice === "system" && entry.id !== void 0 ? [{ id: entry.id, name: entry.name ?? entry.id, status: "ready", unreadable: null }] : []
+    );
+  }
+  return settingsSystemsView({ settings: file, systems, notices: store.takeNotices() });
+};
 var buildSettingsResponse = async (ctx, agent) => {
   const file = ctx.settings.read();
   const root = ctx.settings.root();
@@ -26677,9 +26904,11 @@ var buildSettingsResponse = async (ctx, agent) => {
     chrome: resolveBrowser(file),
     downloadsDir: await resolveDownloadsDir(root, file.downloadsDir),
     // A guide write queued by a root change (PUT just before) lands first, so the answer is current.
-    agent: { guide: await agent.idle().then(() => agent.guideStatus(root)), skill: await agent.skillStatus() }
+    agent: { guide: await agent.idle().then(() => agent.guideStatus(root)), skill: await agent.skillStatus() },
+    systems: await buildSystemsView(ctx)
   };
 };
+var SETTINGS_FIELDS = ["root", "chromePath", "systemDefault", "systemPins"];
 var validateRoot = (raw) => {
   if (raw === void 0) return void 0;
   if (raw === null) return null;
@@ -26696,19 +26925,43 @@ var validateChromePath = (raw) => {
   }
   return raw;
 };
+var validateSystemDefault = (raw) => {
+  if (raw === void 0) return void 0;
+  if (raw === null) return null;
+  const choice = normalizeSystemDefault(raw);
+  if (choice === null) {
+    throw new ApiError("bad-request", 'The default design system must be { "choice": "ask" }, { "choice": "none" } or { "choice": "system", "id": \u2026, "name": \u2026 } naming a system by its id and name.');
+  }
+  return choice;
+};
+var validateSystemPins = (raw) => {
+  if (raw === void 0) return void 0;
+  if (raw === null) return null;
+  if (!Array.isArray(raw)) throw new ApiError("bad-request", 'The project pins must be a list of { "directory", "choice" } entries.');
+  if (raw.length > SYSTEM_PINS_MAX) throw new ApiError("bad-request", `You can pin at most ${SYSTEM_PINS_MAX} projects. Remove one first.`);
+  const pins = normalizeSystemPins(raw);
+  if (pins.length !== raw.length) {
+    throw new ApiError("bad-request", 'Each project pin needs a full folder path, a choice of "default", "none" or "system", and a system id and name for "system". A folder can be pinned once.');
+  }
+  return pins;
+};
 function registerSettingsRoutes(router, ctx, agent) {
   router.on("GET /settings", async () => buildSettingsResponse(ctx, agent));
   router.on("PUT /settings", async ({ body }) => {
     if (body !== void 0 && !isBodyRecord4(body)) throw new ApiError("bad-request", "The settings update must be a JSON object.");
     const record = body ?? {};
-    if (!("root" in record) && !("chromePath" in record)) {
-      throw new ApiError("bad-request", 'Say what to change: "root" and/or "chromePath".');
+    if (!SETTINGS_FIELDS.some((field) => field in record)) {
+      throw new ApiError("bad-request", 'Say what to change: "root", "chromePath", "systemDefault" and/or "systemPins".');
     }
     const root = validateRoot(record.root);
     const chromePath = validateChromePath(record.chromePath);
+    const systemDefault = validateSystemDefault(record.systemDefault);
+    const systemPins = validateSystemPins(record.systemPins);
     await ctx.settings.update({
       ...root !== void 0 ? { root } : {},
-      ...chromePath !== void 0 ? { chromePath } : {}
+      ...chromePath !== void 0 ? { chromePath } : {},
+      ...systemDefault !== void 0 ? { systemDefault } : {},
+      ...systemPins !== void 0 ? { systemPins } : {}
     });
     return buildSettingsResponse(ctx, agent);
   });
@@ -27128,12 +27381,12 @@ import { pathToFileURL as pathToFileURL5 } from "node:url";
 
 // src/service/check/system-run.ts
 import { mkdir as mkdir21 } from "node:fs/promises";
-import path51 from "node:path";
+import path52 from "node:path";
 
 // src/service/self-writes.ts
 import { createHash as createHash23 } from "node:crypto";
-import { readFile as readFile24, stat as stat23 } from "node:fs/promises";
-import path50 from "node:path";
+import { readFile as readFile25, stat as stat23 } from "node:fs/promises";
+import path51 from "node:path";
 var keyOf2 = (slug, rel) => `${slug}\0${rel}`;
 var sha256Of4 = (bytes) => createHash23("sha256").update(bytes).digest("hex");
 var createSelfWrites = () => {
@@ -27154,7 +27407,7 @@ var createSelfWrites = () => {
     async isEcho(slug, rel, dir) {
       const entry = entries.get(keyOf2(slug, rel));
       if (entry === void 0) return false;
-      const file = path50.join(dir, rel);
+      const file = path51.join(dir, rel);
       if (entry.sha256 === null) {
         return stat23(file).then(
           () => false,
@@ -27169,7 +27422,7 @@ var createSelfWrites = () => {
       }
       if (entry.size !== null && info.size !== entry.size) return false;
       try {
-        return sha256Of4(await readFile24(file)) === entry.sha256;
+        return sha256Of4(await readFile25(file)) === entry.sha256;
       } catch {
         return false;
       }
@@ -27919,7 +28172,7 @@ var runSystemCheck = async (store, id, input) => {
   try {
     const outcome = await (renderInput.renderLoop ?? renderArtboards)({
       // The launch options carry the abort signal and, for a restart, only what is left of the run.
-      openBrowser: (launch) => openCdp(browserPath, checkBrowserArgs({ workDir: space.workDir, platform: renderInput.platform, isRoot: renderInput.isRoot, join: path51.join }), launchOpenOptions(launch, BROWSER_START_MS3)),
+      openBrowser: (launch) => openCdp(browserPath, checkBrowserArgs({ workDir: space.workDir, platform: renderInput.platform, isRoot: renderInput.isRoot, join: path52.join }), launchOpenOptions(launch, BROWSER_START_MS3)),
       deadlineAt,
       plan: SYSTEM_CHECK_BOARD_WIDTHS.map((width) => ({ file: BOARD_FILE2, screen: null, viewport: { id: width.id, label: width.label, width: width.width, height: width.height } })),
       kind: "page",
@@ -27954,14 +28207,14 @@ var runSystemCheck = async (store, id, input) => {
     const reportPath = await writeSystemCheckReport(systemDir, report);
     const keptRels = outcome.artboards.flatMap((artboard) => artboard.pngs);
     await space.finish(keptRels, input.now.getTime());
-    return { report, detail, reportPath, pngs: keptRels.map((rel) => path51.join(systemDir, ...rel.split("/"))) };
+    return { report, detail, reportPath, pngs: keptRels.map((rel) => path52.join(systemDir, ...rel.split("/"))) };
   } finally {
     await space.close();
   }
 };
 var writeSystemCheckReport = async (systemDir, report) => {
   try {
-    await mkdir21(path51.join(systemDir, ".chamber"));
+    await mkdir21(path52.join(systemDir, ".chamber"));
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
   }
@@ -28410,186 +28663,6 @@ function registerVersionsRoutes(router, ctx) {
 import { readFile as readFile26 } from "node:fs/promises";
 import os10 from "node:os";
 import path53 from "node:path";
-
-// src/shared/app-data.ts
-var RUNTIME_FILE = "runtime.json";
-var given = (value) => typeof value === "string" && value.trim() !== "";
-var designChamberDataDir = ({ platform, homeDir, appData, xdgConfigHome, join }) => {
-  if (platform === "win32") return join(given(appData) ? appData : join(homeDir, "AppData", "Roaming"), "Design Chamber");
-  if (platform === "darwin") return join(homeDir, "Library", "Application Support", "Design Chamber");
-  return join(given(xdgConfigHome) ? xdgConfigHome : join(homeDir, ".config"), "design-chamber");
-};
-
-// src/service/settings.ts
-import { readFile as readFile25 } from "node:fs/promises";
-import os9 from "node:os";
-import path52 from "node:path";
-var settingsFilePath = (env = process.env, platform = process.platform, homeDir = os9.homedir()) => {
-  const override = env.DC_SETTINGS_PATH;
-  if (typeof override === "string" && override.trim() !== "") return path52.resolve(override.trim());
-  const dir = designChamberDataDir({ platform, homeDir, appData: env.APPDATA, xdgConfigHome: env.XDG_CONFIG_HOME, join: path52.join });
-  return path52.join(dir, "settings.json");
-};
-var isRecord9 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-var systemRef = (id, name) => typeof id === "string" && SYSTEM_ID_PATTERN.test(id) && typeof name === "string" && name.trim() !== "" && name.length <= SYSTEM_NAME_MAX && !/[\u0000-\u001f\u007f]/.test(name) ? { id, name } : null;
-var normalizeSystemDefault = (raw) => {
-  if (!isRecord9(raw)) return null;
-  if (raw.choice === "ask") return { choice: "ask" };
-  if (raw.choice === "none") return { choice: "none" };
-  if (raw.choice !== "system") return null;
-  const ref = systemRef(raw.id, raw.name);
-  return ref === null ? null : { choice: "system", ...ref };
-};
-var normalizeSystemPins = (raw, platform = process.platform) => {
-  if (!Array.isArray(raw)) return [];
-  const p = platform === "win32" ? path52.win32 : path52.posix;
-  const pins = [];
-  for (const entry of raw) {
-    if (pins.length >= SYSTEM_PINS_MAX) break;
-    if (!isRecord9(entry)) continue;
-    const { directory, choice } = entry;
-    if (typeof directory !== "string" || directory.length > SETTINGS_PATH_MAX || /[\u0000-\u001f\u007f]/.test(directory) || !p.isAbsolute(directory)) continue;
-    if (pins.some((pin) => samePath2(pin.directory, directory, p, platform))) continue;
-    if (choice === "default" || choice === "none") pins.push({ directory, choice });
-    else if (choice === "system") {
-      const ref = systemRef(entry.id, entry.name);
-      if (ref !== null) pins.push({ directory, choice, ...ref });
-    }
-  }
-  return pins;
-};
-var normalizeSettings = (raw) => {
-  const out = { version: SETTINGS_FILE_VERSION };
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
-  const value = raw;
-  const text3 = (candidate) => typeof candidate === "string" && candidate.trim() !== "" && candidate.length <= SETTINGS_PATH_MAX ? candidate : null;
-  const root = text3(value.root);
-  if (root !== null) out.root = root;
-  const chromePath = text3(value.chromePath);
-  if (chromePath !== null) out.chromePath = chromePath;
-  const downloadsDir = text3(value.downloadsDir);
-  if (downloadsDir !== null) out.downloadsDir = downloadsDir;
-  if (Array.isArray(value.previousRoots)) {
-    const roots = value.previousRoots.filter((entry) => typeof entry === "string" && entry.trim() !== "");
-    if (roots.length > 0) out.previousRoots = roots.slice(0, PREVIOUS_ROOTS_MAX);
-  }
-  const systemDefault = normalizeSystemDefault(value.systemDefault);
-  if (systemDefault !== null && systemDefault.choice !== "ask") out.systemDefault = systemDefault;
-  const systemPins = normalizeSystemPins(value.systemPins);
-  if (systemPins.length > 0) out.systemPins = systemPins;
-  return out;
-};
-var parseSettings = (text3) => {
-  try {
-    return normalizeSettings(JSON.parse(text3));
-  } catch {
-    return null;
-  }
-};
-var readSettingsFile = async (file) => {
-  let text3;
-  try {
-    text3 = await readFile25(file, "utf8");
-  } catch {
-    return { settings: { version: SETTINGS_FILE_VERSION }, corrupt: false };
-  }
-  const parsed = parseSettings(text3);
-  if (parsed === null) return { settings: { version: SETTINGS_FILE_VERSION }, corrupt: true };
-  return { settings: parsed, corrupt: false };
-};
-var writeSettingsFile = async (file, settings) => {
-  await writeFileAtomic(file, `${JSON.stringify(normalizeSettings(settings), null, 2)}
-`);
-};
-var createSettingsStore = async (options) => {
-  const { log: log2, packageRoot: packageRoot2 } = options;
-  const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
-  const homeDir = options.homeDir ?? os9.homedir();
-  const file = settingsFilePath(env, platform, homeDir);
-  const initial = await readSettingsFile(file);
-  if (initial.corrupt) log2.warn("settings.corrupt", { file, message: "The settings file could not be read; defaults are used." });
-  let current = initial.settings;
-  const rootHost = { platform, env };
-  const defaultRoot = defaultDesignsRoot(homeDir, rootHost);
-  const rootListeners = /* @__PURE__ */ new Set();
-  const changeListeners = /* @__PURE__ */ new Set();
-  const rootOf = (candidate) => typeof candidate.root === "string" && candidate.root.trim() !== "" ? path52.resolve(candidate.root) : defaultRoot;
-  const store = {
-    root: () => rootOf(current),
-    defaultRoot: () => defaultRoot,
-    read: () => current,
-    async update(patch) {
-      const previousRoot = store.root();
-      const next = { ...current };
-      let rootChanges = false;
-      if (patch.root !== void 0) {
-        if (patch.root === null) {
-          delete next.root;
-        } else {
-          const validated = await validateRootCandidate(patch.root, { packageRoot: packageRoot2, homeDir, host: rootHost });
-          if (!validated.ok) throw new ApiError("bad-path", validated.message);
-          next.root = validated.root;
-        }
-        rootChanges = !sameRoot(rootOf(next), previousRoot);
-        const nextRoot = rootOf(next);
-        const previous = (next.previousRoots ?? []).filter((entry) => !sameRoot(entry, nextRoot) && !sameRoot(entry, previousRoot));
-        if (rootChanges) next.previousRoots = [previousRoot, ...previous].slice(0, PREVIOUS_ROOTS_MAX);
-        else if (previous.length > 0) next.previousRoots = previous;
-        else delete next.previousRoots;
-      }
-      if (patch.chromePath !== void 0) {
-        if (patch.chromePath === null) {
-          delete next.chromePath;
-        } else {
-          const value = patch.chromePath.trim();
-          if (value === "" || value.includes("\0") || value.length > SETTINGS_PATH_MAX) {
-            throw new ApiError("bad-path", "That browser path does not work. Give the full path to the browser program.");
-          }
-          next.chromePath = value;
-        }
-      }
-      if (patch.systemDefault !== void 0) next.systemDefault = patch.systemDefault;
-      if (patch.systemPins !== void 0) next.systemPins = patch.systemPins;
-      try {
-        await writeSettingsFile(file, next);
-      } catch (error) {
-        throw new ApiError("internal", `Could not save the settings file: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      current = normalizeSettings(next);
-      if (rootChanges) {
-        const newRoot = store.root();
-        log2.info("settings.root-changed", { from: previousRoot, to: newRoot });
-        for (const listener of [...rootListeners]) {
-          try {
-            listener(newRoot, previousRoot);
-          } catch (error) {
-            log2.error("settings.root-listener-failed", { error: error instanceof Error ? error.message : String(error) });
-          }
-        }
-      }
-      for (const listener of [...changeListeners]) {
-        try {
-          listener();
-        } catch (error) {
-          log2.error("settings.change-listener-failed", { error: error instanceof Error ? error.message : String(error) });
-        }
-      }
-      return current;
-    },
-    onRootChange(listener) {
-      rootListeners.add(listener);
-      return () => rootListeners.delete(listener);
-    },
-    onChange(listener) {
-      changeListeners.add(listener);
-      return () => changeListeners.delete(listener);
-    }
-  };
-  return store;
-};
-
-// src/service/runtime-record.ts
 var runtimeRecordPath = (env = process.env, platform = process.platform, homeDir = os10.homedir()) => path53.join(path53.dirname(settingsFilePath(env, platform, homeDir)), RUNTIME_FILE);
 var buildRuntimeRecord = (input) => ({
   v: 1,
