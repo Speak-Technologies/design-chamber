@@ -106,3 +106,72 @@ export const buildBuilderSkill = async ({ packageRoot, distDir }) => {
   }
   return set;
 };
+
+// Build step (10) (use-the-project spec §2.5 follow-up): the design-chamber skill. SKILL.md keeps the
+// core and stays within BUNDLED_SKILL_TEXT_MAX; the longer detail ships beside it in reference/, each
+// doc checked for its size and for em dashes. The presets are copied beside it as they are. Every
+// input is read and judged before anything is written, so a bad one ships nothing.
+
+/**
+ * Writes `dist/skills/design-chamber/` (SKILL.md, presets/, reference/). `packageRoot` holds `rules/`.
+ * Refused with one sentence: an invalid preset, a skill over its cap, a reference doc over its cap or
+ * all of them over theirs, an em dash in a reference doc, or a doc the skill names that is not built.
+ */
+export const buildDesignChamberSkill = async ({ packageRoot, distDir }) => {
+  const { buildBundledSkill, buildSkillReferenceDocs, BUNDLED_SKILL_TEXT_MAX, SKILL_REFERENCE_DOC_MAX, SKILL_REFERENCE_DOCS, SKILL_REFERENCE_FOLDER, SKILL_REFERENCE_TOTAL_MAX } =
+    await import('../src/shared/agent/skill-doc.ts');
+  const { parsePreset } = await import('../src/shared/agent/presets.ts');
+  const { SKILL_NAME } = await import('../src/shared/agent/guide.ts');
+  const rules = (...parts) => path.join(packageRoot, 'rules', ...parts);
+  const readRule = async (name) => {
+    try {
+      return await readFile(rules(name), 'utf8');
+    } catch {
+      throw new Error(`build: rules/${name} is missing.`);
+    }
+  };
+
+  const presets = [];
+  for (const name of (await readdir(rules('presets'))).filter((entry) => entry.endsWith('.md')).sort()) {
+    const id = name.slice(0, -'.md'.length);
+    const text = await readFile(rules('presets', name), 'utf8');
+    const preset = parsePreset(id, text);
+    if (!preset) throw new Error(`build: rules/presets/${name} is not a valid preset (a "# Name" heading and an "**id:** ${id} · **best for:** ..." line).`);
+    presets.push({ id: preset.id, title: preset.name, name, text });
+  }
+  const designRules = await readRule('DESIGN-RULES.md');
+  const questions = await readRule('QUESTIONS.md');
+
+  let skill;
+  let references;
+  try {
+    skill = buildBundledSkill({ designRules, presets: presets.map(({ id, title }) => ({ id, title })) });
+    references = buildSkillReferenceDocs({ designRules, questions });
+  } catch (error) {
+    throw new Error(`build: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!/^---\r?\nname: design-chamber\r?\n/.test(skill)) {
+    throw new Error('build: dist/skills/design-chamber/SKILL.md must start with a frontmatter line "name: design-chamber".');
+  }
+  if (skill.length > BUNDLED_SKILL_TEXT_MAX) {
+    throw new Error(`build: the design-chamber skill is ${skill.length} characters; the cap is ${BUNDLED_SKILL_TEXT_MAX}. Move detail into a reference doc.`);
+  }
+  let total = 0;
+  for (const { name, text } of references) {
+    const where = `${SKILL_REFERENCE_FOLDER}/${name}`;
+    if (text.length > SKILL_REFERENCE_DOC_MAX) throw new Error(`build: the design-chamber skill's ${where} is ${text.length} characters; the cap is ${SKILL_REFERENCE_DOC_MAX}.`);
+    if (text.includes('\u2014')) throw new Error(`build: the design-chamber skill's ${where} has an em dash; use a colon, a comma or two sentences.`);
+    total += text.length;
+  }
+  if (total > SKILL_REFERENCE_TOTAL_MAX) throw new Error(`build: the design-chamber skill's reference docs are ${total} characters together; the cap is ${SKILL_REFERENCE_TOTAL_MAX}.`);
+  for (const name of SKILL_REFERENCE_DOCS) {
+    if (!references.some((doc) => doc.name === name)) throw new Error(`build: ${SKILL_REFERENCE_FOLDER}/${name} was not built; the skill points at it.`);
+  }
+
+  const folder = path.join(distDir, 'skills', SKILL_NAME);
+  await mkdir(path.join(folder, 'presets'), { recursive: true });
+  await mkdir(path.join(folder, SKILL_REFERENCE_FOLDER), { recursive: true });
+  for (const { name, text } of presets) await writeFile(path.join(folder, 'presets', name), text);
+  for (const { name, text } of references) await writeFile(path.join(folder, SKILL_REFERENCE_FOLDER, name), text);
+  await writeFile(path.join(folder, 'SKILL.md'), skill);
+};

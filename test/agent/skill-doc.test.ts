@@ -12,7 +12,7 @@ import { CHECK_TOOL_NAME, LIST_TOOL_NAME, PROJECT_LINE, READ_TOOL_NAME, SKILL_DE
 import { buildInstructions } from '../../src/shared/agent/instructions.ts';
 import { findOwnershipMarker } from '../../src/shared/agent/ownership.ts';
 import { checkSection, renderingSection, verbatim } from '../../src/shared/agent/rules-doc.ts';
-import { buildBundledSkill } from '../../src/shared/agent/skill-doc.ts';
+import { BUNDLED_SKILL_TEXT_MAX, buildBundledSkill, buildSkillReferenceDocs, SKILL_REFERENCE_DOC_MAX, SKILL_REFERENCE_DOCS, splitDesignRules } from '../../src/shared/agent/skill-doc.ts';
 import { SKILL_TEXT_MAX_MERGED } from '../../src/shared/limits.ts';
 import { REPO_RULES } from './helpers.ts';
 import { assertSnapshot } from './snapshot.ts';
@@ -45,14 +45,35 @@ describe('buildBundledSkill (§U2.4)', () => {
     assert.equal(findOwnershipMarker(skill).kind, 'none', 'the shipped skill is never mistaken for an installed copy of ours');
   });
 
-  test('carries the whole of DESIGN-RULES.md and QUESTIONS.md, inside the RULES.md markers', async () => {
+  test('carries DESIGN-RULES.md verbatim but its §4, which with QUESTIONS.md ships in reference/ (use-the-project §2.5 follow-up)', async () => {
     const input = await realInput();
     const skill = buildBundledSkill(input);
-    assert.ok(skill.includes(input.designRules.replace(/\n$/, '')), 'DESIGN-RULES.md in full');
-    assert.ok(skill.includes(input.questions.replace(/\n$/, '')), 'QUESTIONS.md in full');
-    assert.ok(skill.includes(lines(verbatim('rules/DESIGN-RULES.md', input.designRules))));
-    assert.ok(skill.includes(lines(verbatim('rules/QUESTIONS.md', input.questions))));
+    const { core, practice } = splitDesignRules(input.designRules);
+    assert.ok(skill.includes(lines(verbatim('rules/DESIGN-RULES.md, §4 in reference/design-practice.md', core))));
+    assert.ok(practice.startsWith('## 4. Design best practices\n') && practice.length > 1000);
+    assert.ok(!skill.includes(practice.trim()), 'the section itself is not inline');
+    assert.ok(core.includes('## 4. Design best practices\n\nIn reference/design-practice.md next to this file:'), 'a pointer stands in its place');
+    for (const heading of ['## 1. Precedence', '## 2. Discover', '## 3. Anti-slop', '## 5. File & technical rules', '## 6. Self-check']) assert.ok(skill.includes(heading), heading);
+    const docs = buildSkillReferenceDocs({ designRules: input.designRules, questions: input.questions });
+    assert.deepEqual(docs.map((doc) => doc.name), [...SKILL_REFERENCE_DOCS]);
+    assert.ok(docs[0]?.text.endsWith(practice), 'design-practice.md is §4 word for word');
+    assert.equal(docs[1]?.text, input.questions, 'questions.md is QUESTIONS.md word for word');
+    assert.ok(!skill.includes(input.questions.split('\n').slice(2, 6).join('\n')), 'QUESTIONS.md is not inline');
+    assert.ok(skill.includes('read reference/questions.md next to this file'));
     assert.ok(skill.indexOf('## Design rules') < skill.indexOf('## Questions to ask'));
+    for (const doc of docs) {
+      assert.ok(doc.text.length <= SKILL_REFERENCE_DOC_MAX, `${doc.name} ${doc.text.length}`);
+      assert.ok(!doc.text.includes('\u2014'), doc.name);
+    }
+  });
+
+  test('splitDesignRules: the heading on the first line or later; a missing heading throws a sentence', () => {
+    const later = splitDesignRules('# R\n\n## 3. A\n\nx\n\n## 4. Design best practices\n\nbody\n\n## 5. B\n\ny\n');
+    assert.equal(later.practice, '## 4. Design best practices\n\nbody\n');
+    assert.ok(later.core.startsWith('# R\n\n## 3. A\n\nx\n\n## 4. Design best practices\n\nIn reference/'));
+    assert.ok(later.core.endsWith('## 5. B\n\ny\n'));
+    assert.equal(splitDesignRules('## 4. Design best practices\n\nlast\n').practice, '## 4. Design best practices\n\nlast\n');
+    assert.throws(() => splitDesignRules('# R\n\n## 4. Best practices\n'), /has no "## 4\. Design best practices" heading/);
   });
 
   test('reuses the RULES.md offline rules and check section word for word; the check names design_check and has no command', async () => {
@@ -102,9 +123,10 @@ describe('buildBundledSkill (§U2.4)', () => {
     assert.ok(buildInstructions({ root: '/home/you/Documents/Designs', platform: 'linux', checkCommand: null }).includes(`- ${PROJECT_LINE}`));
   });
 
-  test('the built skill, with the real rules and presets, stays within 24 000 characters', async () => {
+  test('the built skill, with the real rules and presets, stays within BUNDLED_SKILL_TEXT_MAX (20 000)', async () => {
+    assert.equal(BUNDLED_SKILL_TEXT_MAX, 20_000);
     const skill = buildBundledSkill(await realInput());
-    assert.ok(skill.length <= 24_000, `${skill.length} characters`);
+    assert.ok(skill.length <= BUNDLED_SKILL_TEXT_MAX, `${skill.length} characters`);
   });
 
   test('no absolute path, no path from this machine', async () => {
@@ -125,7 +147,7 @@ describe('buildBundledSkill (§U2.4)', () => {
   });
 
   test('our own wording has no em dash; deterministic', async () => {
-    const stub = { designRules: 'rules\n', questions: 'questions\n', presets: [{ id: 'minimal-saas', title: 'Minimal SaaS' }] };
+    const stub = { designRules: '# Design rules\n\n## 3. Anti-slop\n\n(rules text)\n\n## 4. Design best practices\n\n(moved)\n\n## 5. File & technical rules\n\n(rules text)\n', presets: [{ id: 'minimal-saas', title: 'Minimal SaaS' }] };
     assert.ok(!buildBundledSkill(stub).includes('—'));
     assert.equal(buildBundledSkill(stub), buildBundledSkill(stub));
   });
@@ -134,8 +156,7 @@ describe('buildBundledSkill (§U2.4)', () => {
     await assertSnapshot(
       'skill.bundled.md',
       buildBundledSkill({
-        designRules: '(rules/DESIGN-RULES.md text appears here)\n',
-        questions: '(rules/QUESTIONS.md text appears here)\n',
+        designRules: '(rules/DESIGN-RULES.md text appears here)\n\n## 4. Design best practices\n\n(this section ships in reference/design-practice.md)\n\n## 5. File & technical rules\n\n(the rest appears here)\n',
         presets: [{ id: 'minimal-saas', title: 'Minimal SaaS' }, { id: 'editorial', title: 'Editorial' }],
       }),
     );

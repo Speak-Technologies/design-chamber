@@ -13,7 +13,7 @@ import { unavailable, type Logger, type ServiceContext } from './context.ts';
 import { createDesignIndex } from './design-index.ts';
 import { createHostCalls } from './host-calls.ts';
 import { createRouter, registerHealthRoute, type Router } from './http.ts';
-import { instructionsFileOf, startInstructions } from './instructions.ts';
+import { findSkillReferenceDir, instructionsFileOf, startInstructions } from './instructions.ts';
 import { createOutboxStore } from './outbox.ts';
 import { ensureRenderService } from './render-cache.ts';
 import { ensureLauncherService } from './check/launcher.ts';
@@ -202,6 +202,11 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
     startInstructions(ctx, {
       commandFor: (root) => launcher.commandFor(root, '<slug>'),
       ready: watcher.ready,
+      // Looked up once: the package does not change while the service runs.
+      referenceDir: (() => {
+        const found = findSkillReferenceDir(ctx.packageRoot);
+        return () => found;
+      })(),
       onStatus: (state) => {
         instructionsState = state;
       },

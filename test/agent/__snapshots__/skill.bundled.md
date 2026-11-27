@@ -22,6 +22,7 @@ Design Chamber shows the user's designs inside OpenChamber. Follow this skill wh
 - Write design.json first, then the HTML, then tokens.css, DESIGN.md and assets/. design.json holds "version": 1, "kind" ("page" or "canvas"), "title", "updated", "viewports", and "screens" for a canvas. In an existing design.json change only title, updated, viewports, screens, designSystem, tweaks and folderRequest, and keep every other key as it is.
 - Set "updated" (and "created" for a new design.json) to the real current time. Write the title in plain words, with no em dashes.
 - A new design for a project follows the project: its own design system if Design Chamber has one, else its design files, components and screens. Read them before you draw.
+- When the user points at a design system a project already has (a page, docs, components), read those first and build from what is there.
 - When a design is ready, show it with a DesignCard block. To let the user pick between directions you made as separate design folders, ask with DirectionPick. Directions of one canvas screen are screens you mark in design.json instead; the user keeps one on the wall. Write each in a fenced openui-lang code block whose first line is root = Stack([...]): root = Stack([DesignCard("<slug>")]) or root = Stack([DirectionPick("Which direction?", "Bold|Calm", "pricing-a|pricing-b")]).
 - Never touch .versions/, .chamber/, .thumb.png or .trash/ in a design folder.
 - Design systems live in _systems/<id>/. Write there only when the user or Design Chamber asks you to make or change a system; never set its status. A design's copy of its system is its system/ folder: read it, never change it.
@@ -31,15 +32,26 @@ Design Chamber shows the user's designs inside OpenChamber. Follow this skill wh
 
 ## Design rules
 
-<!-- BEGIN rules/DESIGN-RULES.md (verbatim) -->
+<!-- BEGIN rules/DESIGN-RULES.md, §4 in reference/design-practice.md (verbatim) -->
 (rules/DESIGN-RULES.md text appears here)
-<!-- END rules/DESIGN-RULES.md -->
+
+## 4. Design best practices
+
+In reference/design-practice.md next to this file: hierarchy, type, spacing, colour and contrast, layout, responsive, states, accessibility, motion, real content and character. Read it before your first screen.
+
+## 5. File & technical rules
+
+(the rest appears here)
+<!-- END rules/DESIGN-RULES.md, §4 in reference/design-practice.md -->
 
 ## Questions to ask
 
-<!-- BEGIN rules/QUESTIONS.md (verbatim) -->
-(rules/QUESTIONS.md text appears here)
-<!-- END rules/QUESTIONS.md -->
+Before a new design, read reference/questions.md next to this file: when to ask, how, and a first-reply template. In short:
+
+- Read the brief, the project and the design folder first. Never ask what the files already answer.
+- When a missing answer would change the design, ask once: 3 to 6 numbered questions in one message, each with a bold recommended default, then wait. Go ahead with an "Assumptions" list when the user said go, for a small edit, or when the project already settles it.
+- Always settle the viewports: from the project, else recommend Laptop 1280×800 and Phone 390×844, and record them in design.json.
+- When the look is open, offer two or three named directions in the same message and recommend one.
 
 ## Rendering constraints
 

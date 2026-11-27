@@ -28,10 +28,12 @@
 // Only the global note counts; a pin line that was not saved is retried on its own triggers.
 
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { SKILL_NAME } from '../shared/agent/guide.ts';
 import { buildInstructions, buildPinInstruction } from '../shared/agent/instructions.ts';
+import { SKILL_REFERENCE_FOLDER } from '../shared/agent/skill-doc.ts';
 import { SYSTEM_PINS_MAX } from '../shared/limits.ts';
 import { choiceSystemsOf, projectSystemOf } from '../shared/systems.ts';
 import type { AgentInstructionsState } from '../shared/api.ts';
@@ -48,6 +50,8 @@ export type InstructionsDeps = {
   platform?: NodeJS.Platform;
   /** Phase 2.5 per-project pins; absent → only the global note is kept. */
   pins?: PinSyncDeps;
+  /** The bundled skill's absolute reference/ folder, or `null` when it is not installed (`findSkillReferenceDir`); absent → not named. */
+  referenceDir?: () => Promise<string | null>;
   /** Hears each change of the global note's state, for Settings (use-the-project spec §2.6). Starts at `pending`. */
   onStatus?: (state: AgentInstructionsState) => void;
 };
@@ -67,6 +71,12 @@ export type PinSyncDeps = {
   subscribe: (listener: (event: ChangeEvent) => void) => () => void;
   /** `system` events are coalesced this long (test seam, 1 s outside tests). */
   coalesceMs?: number;
+};
+
+/** The design-chamber skill's reference/ folder under the extension package, absolute, or `null` when the build did not ship it. */
+export const findSkillReferenceDir = async (packageRoot: string): Promise<string | null> => {
+  const folder = path.join(packageRoot, 'dist', 'skills', SKILL_NAME, SKILL_REFERENCE_FOLDER);
+  return (await stat(folder).then((info) => info.isDirectory(), () => false)) ? folder : null;
 };
 
 /** `instructions.json` beside the settings file (§2.9). */
@@ -169,9 +179,15 @@ export const startInstructions = (ctx: InstructionsContext, deps: InstructionsDe
     } catch (error) {
       ctx.log.warn('instructions.command-failed', { error: errorText(error) });
     }
+    let referenceDir: string | null = null;
+    try {
+      referenceDir = (await deps.referenceDir?.()) ?? null;
+    } catch (error) {
+      ctx.log.warn('instructions.reference-failed', { error: errorText(error) });
+    }
     let text: string;
     try {
-      text = buildInstructions({ root, platform, checkCommand });
+      text = buildInstructions({ root, platform, checkCommand, referenceDir });
     } catch (error) {
       // A root with a control character or an absurd length: the note is not sent rather than sent wrong.
       ctx.log.warn('instructions.build-failed', { error: errorText(error) });

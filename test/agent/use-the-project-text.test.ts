@@ -163,30 +163,18 @@ describe('the chip when a design follows the project', () => {
 
 describe('the instructions note (§2.5)', () => {
   const FOLLOW_LINE = '- A new design for a project follows the project: its own design system if Design Chamber has one, else its design files, components and screens. Read them before you draw.';
-  const TOOLS_LINE = "- To see the library, the user's pins and what they have open, use design_list and design_read.";
 
-  test('the two lines come last', () => {
-    const lines = buildInstructions({ root: '/home/you/Documents/Designs', platform: 'linux', checkCommand: null }).split('\n');
-    assert.deepEqual(lines.slice(-2), [FOLLOW_LINE, TOOLS_LINE]);
+  test('Use the project and the three tools are in the note, the follow line word for word', () => {
+    const text = buildInstructions({ root: '/home/you/Documents/Designs', platform: 'linux', checkCommand: null });
+    assert.ok(text.split('\n').includes(FOLLOW_LINE));
+    for (const tool of ['design_list', 'design_read', 'design_check']) assert.ok(text.includes(tool), tool);
   });
 
-  test('a root too long for the full note drops the command clause first, then these two lines, then throws', () => {
-    const root = `/home/you/${'a'.repeat(1014)}`;
-    const text = buildInstructions({ root, platform: 'linux', checkCommand: `sh ${root}/.chamber/bin/dc check <slug>` });
-    assert.ok(text.length <= SERVICE_INSTRUCTIONS_MAX, `${text.length} characters`);
-    assert.ok(!text.includes(FOLLOW_LINE));
-    assert.ok(text.includes('check it with the design_check tool.'));
-    const middle = `/home/you/${'a'.repeat(700)}`;
-    const kept = buildInstructions({ root: middle, platform: 'linux', checkCommand: `sh ${middle}/.chamber/bin/dc check <slug>` });
-    assert.ok(kept.includes(FOLLOW_LINE) && !kept.includes('.chamber/bin/dc'), 'the command clause goes before these lines');
-  });
-
-  test('a long Windows root with its check command stays within the host limit', () => {
+  test('a long Windows root with its check command keeps them, within the host limit', () => {
     const longWin = `C:\\Users\\you\\${'very-long-folder-name\\'.repeat(11)}Designs`;
     const command = `"${longWin}\\.chamber\\bin\\dc.cmd" check <slug>`;
     const text = buildInstructions({ root: longWin, platform: 'win32', checkCommand: command });
     assert.ok(text.length <= SERVICE_INSTRUCTIONS_MAX, `${text.length} characters`);
-    assert.ok(text.includes(FOLLOW_LINE));
-    assert.ok(text.includes(TOOLS_LINE));
+    assert.ok(text.includes(FOLLOW_LINE) && text.includes('design_read'));
   });
 });

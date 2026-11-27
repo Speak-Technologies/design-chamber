@@ -3,19 +3,59 @@
 // agent while the extension is on. Pure and deterministic, no Node imports; the build runs it
 // under Node's type stripping.
 //
-// It is static and shipped to everyone, so it holds no absolute path: the designs folder is in
-// the instructions note (src/shared/agent/instructions.ts). The rule text stays in `rules/**`;
-// the verbatim wrapper, the offline rules and the check section are the same pieces RULES.md
-// uses (src/shared/agent/rules-doc.ts), so the two never drift apart.
+// It is static and shipped to everyone, so it holds no absolute path: the designs folder and the
+// absolute reference folder are in the instructions note (src/shared/agent/instructions.ts). The
+// rule text stays in `rules/**`; the verbatim wrapper, the offline rules and the check section are
+// the same pieces RULES.md uses (src/shared/agent/rules-doc.ts), so the two never drift apart.
+//
+// SKILL.md keeps the core (the workflow, DESIGN-RULES.md, the offline rules, the check) within
+// BUNDLED_SKILL_TEXT_MAX; longer detail ships beside it in reference/ (`SKILL_REFERENCE_DOCS`,
+// copied and capped by scripts/build-skill.mjs), and SKILL.md says in a few lines what each holds.
 
 import { CHECK_TOOL_NAME, LIST_TOOL_NAME, PROJECT_LINE, READ_TOOL_NAME, SKILL_DESCRIPTION, SKILL_NAME } from './guide.ts';
 import { checkSection, renderingSection, verbatim } from './rules-doc.ts';
 
+/** The built SKILL.md's cap; the build refuses a longer one. */
+export const BUNDLED_SKILL_TEXT_MAX = 20_000;
+
+/** The folder beside SKILL.md that holds the reference docs. */
+export const SKILL_REFERENCE_FOLDER = 'reference';
+
+/** One reference doc's cap, and all of them together. */
+export const SKILL_REFERENCE_DOC_MAX = 12_000;
+export const SKILL_REFERENCE_TOTAL_MAX = 40_000;
+
+/** The reference docs SKILL.md points at, by file name. */
+export const SKILL_REFERENCE_DOCS = ['design-practice.md', 'questions.md'] as const;
+
+/** The DESIGN-RULES.md section that ships as reference/design-practice.md instead of inline. */
+const PRACTICE_HEADING = '## 4. Design best practices';
+
+/**
+ * rules/DESIGN-RULES.md without its §4, and §4 on its own, both verbatim. Throws when the heading is
+ * gone (the rules author renamed it), so the build fails with a plain sentence rather than ship a
+ * skill that points at an empty doc.
+ */
+export const splitDesignRules = (designRules: string): { core: string; practice: string } => {
+  const text = designRules.replace(/\r\n?/g, '\n');
+  // Where the heading line starts in `text` (the leading newline lets it match on the first line too).
+  const start = `\n${text}`.indexOf(`\n${PRACTICE_HEADING}\n`);
+  if (start === -1) throw new Error(`rules/DESIGN-RULES.md has no "${PRACTICE_HEADING}" heading; the skill ships that section as ${SKILL_REFERENCE_FOLDER}/design-practice.md.`);
+  const next = text.indexOf('\n## ', start + PRACTICE_HEADING.length);
+  const end = next === -1 ? text.length : next + 1;
+  const pointer = `${PRACTICE_HEADING}\n\nIn ${SKILL_REFERENCE_FOLDER}/design-practice.md next to this file: hierarchy, type, spacing, colour and contrast, layout, responsive, states, accessibility, motion, real content and character. Read it before your first screen.\n\n`;
+  return { core: `${text.slice(0, start)}${pointer}${text.slice(end)}`, practice: text.slice(start, end).replace(/\n+$/, '\n') };
+};
+
+/** The reference docs as they ship, in SKILL_REFERENCE_DOCS order: the build checks each and writes them beside SKILL.md. */
+export const buildSkillReferenceDocs = ({ designRules, questions }: { designRules: string; questions: string }): Array<{ name: (typeof SKILL_REFERENCE_DOCS)[number]; text: string }> => [
+  { name: 'design-practice.md', text: `# Design best practices\n\nPart of Design Chamber's design rules (rules/DESIGN-RULES.md §4).\n\n${splitDesignRules(designRules).practice}` },
+  { name: 'questions.md', text: questions.replace(/\r\n?/g, '\n') },
+];
+
 export type BundledSkillInput = {
   /** `rules/DESIGN-RULES.md`, verbatim. */
   designRules: string;
-  /** `rules/QUESTIONS.md`, verbatim. */
-  questions: string;
   /** One entry per `presets/<id>.md` that ships beside the skill. */
   presets: ReadonlyArray<{ id: string; title: string }>;
 };
@@ -44,6 +84,7 @@ const workflow = (presets: BundledSkillInput['presets']): string[] => [
   '- Write design.json first, then the HTML, then tokens.css, DESIGN.md and assets/. design.json holds "version": 1, "kind" ("page" or "canvas"), "title", "updated", "viewports", and "screens" for a canvas. In an existing design.json change only title, updated, viewports, screens, designSystem, tweaks and folderRequest, and keep every other key as it is.',
   '- Set "updated" (and "created" for a new design.json) to the real current time. Write the title in plain words, with no em dashes.',
   `- ${PROJECT_LINE}`,
+  '- When the user points at a design system a project already has (a page, docs, components), read those first and build from what is there.',
   '- When a design is ready, show it with a DesignCard block. To let the user pick between directions you made as separate design folders, ask with DirectionPick. Directions of one canvas screen are screens you mark in design.json instead; the user keeps one on the wall. Write each in a fenced openui-lang code block whose first line is root = Stack([...]): root = Stack([DesignCard("<slug>")]) or root = Stack([DirectionPick("Which direction?", "Bold|Calm", "pricing-a|pricing-b")]).',
   '- Never touch .versions/, .chamber/, .thumb.png or .trash/ in a design folder.',
   "- Design systems live in _systems/<id>/. Write there only when the user or Design Chamber asks you to make or change a system; never set its status. A design's copy of its system is its system/ folder: read it, never change it.",
@@ -52,7 +93,19 @@ const workflow = (presets: BundledSkillInput['presets']): string[] => [
   presetsLine(presets),
 ];
 
-export const buildBundledSkill = ({ designRules, questions, presets }: BundledSkillInput): string =>
+/** rules/QUESTIONS.md in short; the whole protocol is reference/questions.md. */
+const questionsSection = (): string[] => [
+  '## Questions to ask',
+  '',
+  `Before a new design, read ${SKILL_REFERENCE_FOLDER}/questions.md next to this file: when to ask, how, and a first-reply template. In short:`,
+  '',
+  "- Read the brief, the project and the design folder first. Never ask what the files already answer.",
+  '- When a missing answer would change the design, ask once: 3 to 6 numbered questions in one message, each with a bold recommended default, then wait. Go ahead with an "Assumptions" list when the user said go, for a small edit, or when the project already settles it.',
+  '- Always settle the viewports: from the project, else recommend Laptop 1280×800 and Phone 390×844, and record them in design.json.',
+  '- When the look is open, offer two or three named directions in the same message and recommend one.',
+];
+
+export const buildBundledSkill = ({ designRules, presets }: BundledSkillInput): string =>
   [
     '---',
     `name: ${SKILL_NAME}`,
@@ -72,11 +125,9 @@ export const buildBundledSkill = ({ designRules, questions, presets }: BundledSk
     '',
     '## Design rules',
     '',
-    ...verbatim('rules/DESIGN-RULES.md', designRules),
+    ...verbatim(`rules/DESIGN-RULES.md, §4 in ${SKILL_REFERENCE_FOLDER}/design-practice.md`, splitDesignRules(designRules).core),
     '',
-    '## Questions to ask',
-    '',
-    ...verbatim('rules/QUESTIONS.md', questions),
+    ...questionsSection(),
     '',
     ...renderingSection(),
     '',

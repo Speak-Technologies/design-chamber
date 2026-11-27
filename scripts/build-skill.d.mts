@@ -3,3 +3,6 @@ import type { SystemQuestionSet } from '../src/shared/types.ts';
 
 /** Writes dist/skills/design-system-builder/SKILL.md and returns the parsed interview (§8.8 rev 3). */
 export function buildBuilderSkill(input: { packageRoot: string; distDir: string }): Promise<SystemQuestionSet>;
+
+/** Writes dist/skills/design-chamber/ (SKILL.md within its cap, presets/ and the capped reference/ docs); throws one sentence on a bad input. */
+export function buildDesignChamberSkill(input: { packageRoot: string; distDir: string }): Promise<void>;

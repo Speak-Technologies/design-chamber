@@ -39,11 +39,19 @@ test('dist/plugin is an OpenCode plugin folder that imports nothing', () => {
   assert.deepEqual(exports, { '.': './index.js' });
 });
 
-test('dist/skills/design-chamber/SKILL.md has the frontmatter and the rules, and ships the presets', () => {
+test('dist/skills/design-chamber/SKILL.md has the frontmatter and the rules, and ships the presets and reference docs', () => {
   const skill = read('dist/skills/design-chamber/SKILL.md');
   assert.match(skill, /^---\r?\nname: design-chamber\r?\ndescription: .+\r?\n---\r?\n/, 'SKILL.md needs name and description frontmatter');
-  assert.ok(skill.includes(read('rules/DESIGN-RULES.md').trim()), 'SKILL.md must carry rules/DESIGN-RULES.md in full');
-  assert.ok(skill.includes(read('rules/QUESTIONS.md').trim()), 'SKILL.md must carry rules/QUESTIONS.md in full');
+  // DESIGN-RULES.md ships whole across SKILL.md (all but §4) and reference/design-practice.md (§4); QUESTIONS.md is reference/questions.md.
+  const rules = read('rules/DESIGN-RULES.md').replace(/\r\n?/g, '\n');
+  const practiceAt = rules.indexOf('## 4. Design best practices');
+  const afterPractice = rules.indexOf('\n## ', practiceAt + 1) + 1;
+  assert.ok(practiceAt > 0 && afterPractice > practiceAt);
+  assert.ok(skill.includes(rules.slice(0, practiceAt).trim()), 'SKILL.md carries DESIGN-RULES.md up to §4');
+  assert.ok(skill.includes(rules.slice(afterPractice).trim()), 'SKILL.md carries DESIGN-RULES.md after §4');
+  assert.ok(read('dist/skills/design-chamber/reference/design-practice.md').includes(rules.slice(practiceAt, afterPractice).trim()), 'reference/design-practice.md is §4');
+  assert.equal(read('dist/skills/design-chamber/reference/questions.md'), read('rules/QUESTIONS.md').replace(/\r\n?/g, '\n'));
+  assert.ok(skill.length <= 20_000, `SKILL.md is ${skill.length} characters`);
   assert.doesNotMatch(skill, /\/home\/|\/Users\/|[A-Za-z]:\\Users\\/, 'the skill is static and ships to everyone: no absolute path');
   for (const preset of ['editorial', 'minimal-saas', 'nocturne']) {
     assert.ok(existsSync(at(`dist/skills/design-chamber/presets/${preset}.md`)), `presets/${preset}.md is missing`);

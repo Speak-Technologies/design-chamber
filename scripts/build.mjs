@@ -13,7 +13,7 @@
 // The design-frame bridge is bundled first, in memory, and injected into the panel bundle
 // as the string constant `__DC_BRIDGE__` (src/guest/globals.d.ts).
 import { build } from 'esbuild';
-import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -129,35 +129,16 @@ await build({ ...browser, entryPoints: [at('src', 'ui', 'status', 'main.ts')], o
 await copyFile(at('src', 'ui', 'status', 'index.html'), at('dist', 'status', 'index.html'));
 await copyFile(at('src', 'ui', 'status', 'status.css'), at('dist', 'status', 'status.css'));
 
-// (10) Bundled skill. skill-doc.ts and presets.ts are pure TypeScript with no Node imports, so
-// Node (>= 22.18) loads them directly by stripping the types; nothing is bundled twice.
-const { buildBundledSkill } = await import('../src/shared/agent/skill-doc.ts');
-const { parsePreset } = await import('../src/shared/agent/presets.ts');
-const presetFiles = (await readdir(at('rules', 'presets'))).filter((name) => name.endsWith('.md')).sort();
-const presets = [];
-for (const name of presetFiles) {
-  const id = name.slice(0, -'.md'.length);
-  const text = await readFile(at('rules', 'presets', name), 'utf8');
-  const preset = parsePreset(id, text);
-  if (!preset) throw new Error(`build: rules/presets/${name} is not a valid preset (a "# Name" heading and an "**id:** ${id} · **best for:** ..." line).`);
-  presets.push({ id: preset.id, title: preset.name });
-  await writeFile(at('dist', 'skills', 'design-chamber', 'presets', name), text);
-}
-const skill = buildBundledSkill({
-  designRules: await readFile(at('rules', 'DESIGN-RULES.md'), 'utf8'),
-  questions: await readFile(at('rules', 'QUESTIONS.md'), 'utf8'),
-  presets,
-});
-if (!/^---\r?\nname: design-chamber\r?\n/.test(skill)) {
-  throw new Error('build: dist/skills/design-chamber/SKILL.md must start with a frontmatter line "name: design-chamber".');
-}
-await writeFile(at('dist', 'skills', 'design-chamber', 'SKILL.md'), skill);
+// (10) Bundled skill: SKILL.md within its cap, the presets and the reference docs beside it
+// (scripts/build-skill.mjs). skill-doc.ts and presets.ts are pure TypeScript with no Node imports,
+// so Node (>= 22.18) loads them directly by stripping the types; nothing is bundled twice.
+const { buildBuilderSkill, buildDesignChamberSkill } = await import('./build-skill.mjs');
+await buildDesignChamberSkill({ packageRoot: root, distDir: dist });
 
 // (10b) The design-system-builder skill and the interview the SystemAsk block bakes (§8.8 rev 3).
 // One file feeds both: rules/SYSTEM-QUESTIONS.md is inlined verbatim into the skill and parsed
 // into the set the blocks bundle gets below. A missing or broken file, an over-cap skill or a
 // skill named like a command fails the build here.
-const { buildBuilderSkill } = await import('./build-skill.mjs');
 const systemQuestions = await buildBuilderSkill({ packageRoot: root, distDir: dist });
 
 // (10c) Chat block frame, with the interview baked in as __DC_SYSTEM_QUESTIONS__ (the __DC_BRIDGE__
