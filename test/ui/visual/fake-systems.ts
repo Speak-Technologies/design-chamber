@@ -530,10 +530,10 @@ const fakeIconGrid = (detail: SystemDetail): string => {
  * at its own fixed size, and one entry the reader refused (its file is missing), so the Screens view shows each case.
  */
 export const sampleScreens = (): SystemScreen[] => [
-  { id: 'dashboard', title: 'Dashboard', kind: 'page', viewports: null, problem: null },
-  { id: 'orders-empty', title: 'No orders yet', kind: 'state', viewports: [{ id: 'phone', label: 'Phone', width: 390, height: 844 }], problem: null },
-  { id: 'launch-card', title: 'Launch card', kind: 'marketing', viewports: [{ id: 'social', label: 'Social card', width: 1200, height: 630 }], problem: null },
-  { id: 'checkout', title: 'Checkout', kind: 'page', viewports: null, problem: 'screens/checkout.html is missing.' },
+  { id: 'dashboard', title: 'Dashboard', kind: 'page', viewports: null, problem: null, source: null },
+  { id: 'orders-empty', title: 'No orders yet', kind: 'state', viewports: [{ id: 'phone', label: 'Phone', width: 390, height: 844 }], problem: null, source: null },
+  { id: 'launch-card', title: 'Launch card', kind: 'marketing', viewports: [{ id: 'social', label: 'Social card', width: 1200, height: 630 }], problem: null, source: null },
+  { id: 'checkout', title: 'Checkout', kind: 'page', viewports: null, problem: 'screens/checkout.html is missing.', source: null },
 ];
 
 /** A screen document like an agent writes one: its own tokens, with dark values under `prefers-color-scheme`. */

@@ -50,10 +50,10 @@ describe('screens', () => {
     );
     assert.deepEqual(detail.problems, []);
     assert.deepEqual(detail.screens, [
-      { id: 'home', title: 'Home page', kind: 'page', viewports: null, problem: null },
-      { id: 'og-card', title: 'Social card', kind: 'marketing', viewports: [{ id: 'og', label: 'Open Graph', width: 1200, height: 630 }], problem: null },
+      { id: 'home', title: 'Home page', kind: 'page', viewports: null, problem: null, source: null },
+      { id: 'og-card', title: 'Social card', kind: 'marketing', viewports: [{ id: 'og', label: 'Open Graph', width: 1200, height: 630 }], problem: null, source: null },
       // A missing label reads as the id.
-      { id: 'email', title: 'Welcome email', kind: 'marketing', viewports: [{ id: 'email', label: 'email', width: 600, height: 1200 }], problem: null },
+      { id: 'email', title: 'Welcome email', kind: 'marketing', viewports: [{ id: 'email', label: 'email', width: 600, height: 1200 }], problem: null, source: null },
     ]);
     assert.deepEqual(detail.viewports, [LAPTOP, PHONE]);
   });

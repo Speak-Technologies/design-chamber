@@ -47,6 +47,7 @@ import { livingPageState, regenerateLivingPage } from '../systems/living-page.ts
 import { ensureSystemStore } from '../systems/store.ts';
 import { ensureSystemVersions } from '../systems/versions.ts';
 import { writeRulesFile } from './chat.ts';
+import { SYSTEM_COMMENTS_NOT_READY } from './system-comments.ts';
 import { findSystemReferenceDir } from './presets.ts';
 
 const PURPOSES: readonly SystemPromptBody['purpose'][] = ['make', 'ask', 'review', 'resync-notes', 'checks', 'continue', 'living-page', 'reconcile', 'build-continue'];
@@ -70,6 +71,8 @@ type PromptInput = {
 export const parseSystemPromptBody = (body: unknown): PromptInput => {
   if (!isRec(body)) throw new ApiError('bad-request', 'Send the prompt request as a JSON object.');
   const { purpose } = body;
+  // system-builder-depth Phase 3, Wave 0 (§13 T20): the comments message is T20's; until then it isn't ready.
+  if (purpose === 'comments') throw new ApiError('internal', SYSTEM_COMMENTS_NOT_READY);
   if (typeof purpose !== 'string' || !PURPOSES.includes(purpose as SystemPromptBody['purpose'])) {
     throw new ApiError('bad-request', 'The prompt purpose must be "make", "ask", "review", "resync-notes", "checks", "continue", "living-page", "reconcile" or "build-continue".');
   }

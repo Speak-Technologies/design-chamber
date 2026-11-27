@@ -442,6 +442,17 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
     sentence: () => 'The icons mix viewBox sizes or stroke widths, so they may not look like one set.',
   },
   // ---- end system-builder-depth Phase 2 ----
+  // ---- system-builder-depth Phase 3, Wave 0 (§13 T16): nothing raises this yet; T16 may refine the sentence ----
+  'system-state-unstyled': {
+    severity: 'warning',
+    sentence: (f) => {
+      const count = Math.max(1, Math.round(f.params?.count ?? 1));
+      return count === 1
+        ? "1 example labels a state its CSS doesn't style."
+        : `${num(count)} examples label a state their CSS doesn't style.`;
+    },
+  },
+  // ---- end system-builder-depth Phase 3 ----
   'system-board-partial': {
     severity: 'info',
     sentence: (f) => {

@@ -494,8 +494,11 @@ export type CheckCode =
   | 'system-coverage-gap'
   // ---- system-builder-depth Phase 2, Wave 0 (§13 T10a, T11) ----
   | 'system-motion-no-reduced'
-  | 'system-icons-mixed';
+  | 'system-icons-mixed'
   // ---- end system-builder-depth Phase 2 ----
+  // ---- system-builder-depth Phase 3, Wave 0 (§13 T16) ----
+  | 'system-state-unstyled';
+  // ---- end system-builder-depth Phase 3 ----
 
 export type CheckSeverity = 'error' | 'warning' | 'info';
 
@@ -1059,9 +1062,42 @@ export type SystemScreen = {
   kind: SystemScreenKind;
   viewports: Viewport[] | null;
   problem: string | null;
+  // ---- system-builder-depth Phase 3, Wave 0 (§13 T18) ----
+  /**
+   * `system.json` `screens[].source`: a screenshot of the real app, exactly `sources/screens/<name>.png`
+   * (relative to the system folder), for the check's compare sheet. Agent reference only: never copied,
+   * exported or put on the living page. null when absent; T18 reads and validates it (null until then).
+   */
+  source: string | null;
+  // ---- end system-builder-depth Phase 3 ----
 };
 
 // ---- end system-builder-depth Phase 2 ----
+
+// ---- system-builder-depth Phase 3, Wave 0 (§13 T19, T20) ----
+
+/**
+ * One token export format (T19): `dtcg` the W3C design tokens `tokens.json`, `css` a regenerated
+ * `tokens.css`, `tailwind` a Tailwind v4 `@theme` block in `tailwind-theme.css` (decision 9), only when
+ * the project uses Tailwind.
+ */
+export type TokenExportFormat = 'dtcg' | 'css' | 'tailwind';
+
+/**
+ * One board comment (T20), stored in `_systems/<id>/.chamber/comments.json` (service-owned, never in the
+ * repo, decision 10). `entry` is a board entry key (`isBoardEntryKey`), not a selector, so it survives
+ * re-generation. `id` matches `COMMENT_ID_PATTERN`; `body` is 1..`COMMENT_BODY_MAX`.
+ */
+export type SystemComment = {
+  id: string;
+  entry: string;
+  body: string;
+  status: CommentStatus;
+  created: IsoDate;
+  sentAt: IsoDate | null;
+};
+
+// ---- end system-builder-depth Phase 3 ----
 
 // ---- Phase 2.5: the system's own files (§2.5, §2.13, §2.15, §2.6, §2.8) ----
 

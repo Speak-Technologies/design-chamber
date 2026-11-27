@@ -1295,7 +1295,8 @@ const readScreens = (raw: JsonObject | null, sizes: ReadonlyMap<string, number>,
     const rel = systemScreenFileOf(id);
     const problem = !sizes.has(rel) ? screenMissingSentence(id) : tooLarge.has(rel) ? screenTooLongSentence(id) : null;
     if (problem !== null) problems.push({ entry, message: problem });
-    out.push({ id, title, kind: kind as SystemScreenKind, viewports, problem });
+    // `source` (system-builder-depth Phase 3, T18) reads as null until T18 validates it.
+    out.push({ id, title, kind: kind as SystemScreenKind, viewports, problem, source: null });
   });
   return out;
 };

@@ -48,6 +48,9 @@ import type {
   SystemSummary,
   ThumbState,
   TokenSection,
+  // system-builder-depth Phase 3
+  SystemComment,
+  TokenExportFormat,
   VersionFileChange,
   VersionSummary,
 } from './types.ts';
@@ -641,9 +644,43 @@ export type SystemBoardQuery = { version?: string; proposal?: string; scheme?: '
 export type SystemScreenRenderQuery = { screen: string; version?: string; proposal?: string; scheme?: 'light' | 'dark' };
 // ---- end system-builder-depth Phase 2 ----
 
+// ---- system-builder-depth Phase 3, Wave 0 (§13 T19, T20) ----
+
+/**
+ * GET /systems/:id/export (T19): what this system can export now, for the export sheet. `dtcg` and `css`
+ * always; `tailwind` only when the project uses Tailwind (a `tailwind.config.*` at the code source's root,
+ * the last scan's list, or BUILD.json `drift.kinds` naming `tailwind-config`).
+ */
+export type SystemExportOptionsResponse = { formats: TokenExportFormat[] };
+/**
+ * POST /systems/:id/export (T19): a closed body; `formats` absent means every format the system can export.
+ * Each listed once; `tailwind` on a project that doesn't use it is refused with a plain sentence (422).
+ */
+export type SystemExportBody = { formats?: TokenExportFormat[] };
+/**
+ * `path`: the written `<system id>-tokens.zip`, issued to the reveal registry so `POST /reveal` takes it;
+ * `formats`: what the ZIP holds; `renamed`: token names suffixed after a DTCG path clash (also in README.txt).
+ */
+export type SystemExportResponse = { path: string; bytes: number; formats: TokenExportFormat[]; renamed: number };
+
+/** GET /systems/:id/comments (T20). `damaged`: comments.json couldn't be read; it is set aside on the next write. */
+export type SystemCommentsResponse = { comments: SystemComment[]; damaged?: true };
+/** POST /systems/:id/comments (T20): `entry` a board entry key in this system, `body` 1..`COMMENT_BODY_MAX`. */
+export type CreateSystemCommentBody = { entry: string; body: string };
+export type SystemCommentResponse = { comment: SystemComment };
+/** PATCH /systems/:id/comments/:commentId (T20); unknown fields refused. */
+export type PatchSystemCommentBody = { body?: string; status?: CommentStatus };
+/** POST /systems/:id/comments/mark-sent (T20): after the host sent the message; ids already sent stay as they are. */
+export type MarkSystemCommentsSentBody = { ids: string[] };
+export type MarkSystemCommentsSentResponse = { comments: SystemComment[] };
+
+// ---- end system-builder-depth Phase 3 ----
+
 export type SystemPromptPurpose =
   | 'make' | 'ask' | 'review' | 'resync-notes' | 'checks' | 'continue'
-  | 'living-page' | 'reconcile' | 'build-continue';
+  | 'living-page' | 'reconcile' | 'build-continue'
+  // system-builder-depth Phase 3 (§13 T20): every open board comment as one message
+  | 'comments';
 export type SystemPromptBody = {
   purpose: SystemPromptPurpose;
   /** Ask only: the user's words. */
@@ -654,8 +691,19 @@ export type SystemPromptBody = {
   section?: SystemSection;
   /** Resync-notes / checks: the version to compare against. */
   before?: string;
+  /** Comments only (system-builder-depth Phase 3, T20): the open comments to send; absent means every open one. */
+  commentIds?: string[];
 };
-export type SystemPromptResponse = { text: string; chip: Chip<SystemChipData>; handEdits: { upTo: number; count: number } | null };
+export type SystemPromptResponse = {
+  text: string;
+  chip: Chip<SystemChipData>;
+  handEdits: { upTo: number; count: number } | null;
+  /**
+   * Comments only (system-builder-depth Phase 3, T20): the comments in `text`, and those the length cap left
+   * out (they stay open, "K of N sent"), as `PromptResponse` does for a design.
+   */
+  comments?: { commentIds: string[]; omitted: string[] };
+};
 
 /** Static system findings only (§10.3, §10.4); no browser runs for a system check. */
 export type SystemChecksResponse = { findings: CheckFinding[]; counts: { errors: number; warnings: number; notes: number }; at: IsoDate };
@@ -935,6 +983,15 @@ export interface ApiRoutes {
   'GET /systems/:id/screens/render': Route<SystemScreenRenderQuery, undefined, RenderMeta>;
   'GET /systems/:id/screens/render/chunk': Route<RenderChunkQuery, undefined, RenderChunkResponse>;
   // ---- end system-builder-depth Phase 2 ----
+  // ---- system-builder-depth Phase 3 (§13 T19, T20) ----
+  'GET /systems/:id/export': Route<NoQuery, undefined, SystemExportOptionsResponse>;
+  'POST /systems/:id/export': Route<NoQuery, SystemExportBody, SystemExportResponse>;
+  'GET /systems/:id/comments': Route<NoQuery, undefined, SystemCommentsResponse>;
+  'POST /systems/:id/comments': Route<NoQuery, CreateSystemCommentBody, SystemCommentResponse>;
+  'PATCH /systems/:id/comments/:commentId': Route<NoQuery, PatchSystemCommentBody, SystemCommentResponse>;
+  'DELETE /systems/:id/comments/:commentId': Route<NoQuery, undefined, OkResponse>;
+  'POST /systems/:id/comments/mark-sent': Route<NoQuery, MarkSystemCommentsSentBody, MarkSystemCommentsSentResponse>;
+  // ---- end system-builder-depth Phase 3 ----
 }
 
 export type RouteKey = keyof ApiRoutes;
@@ -960,6 +1017,7 @@ export type RouteResponse<K extends RouteKey> = ApiRoutes[K]['response'];
  * `P2`: the Phase 2 task that fills the route (documentation/specs/phase-2-technical.md §16).
  * `P25`: the Phase 2.5 task that fills the route (documentation/specs/phase-2-5-technical.md §18).
  * `SBD`: the system-builder-depth Phase 2 task that fills the route (documentation/specs/system-builder-depth.md §13).
+ * `SBD3`: the system-builder-depth Phase 3 task that fills the route (T19 export, T20 comments; same spec §13).
  */
 export const ROUTE_OWNERS = {
   'GET /health': 'WP0',
@@ -1058,7 +1116,15 @@ export const ROUTE_OWNERS = {
   // system-builder-depth Phase 2 (§13 T12a)
   'GET /systems/:id/screens/render': 'SBD',
   'GET /systems/:id/screens/render/chunk': 'SBD',
-} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2' | 'P25' | 'P26' | 'UP' | 'SBD'>;
+  // system-builder-depth Phase 3 (§13 T19, T20)
+  'GET /systems/:id/export': 'SBD3',
+  'POST /systems/:id/export': 'SBD3',
+  'GET /systems/:id/comments': 'SBD3',
+  'POST /systems/:id/comments': 'SBD3',
+  'PATCH /systems/:id/comments/:commentId': 'SBD3',
+  'DELETE /systems/:id/comments/:commentId': 'SBD3',
+  'POST /systems/:id/comments/mark-sent': 'SBD3',
+} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2' | 'P25' | 'P26' | 'UP' | 'SBD' | 'SBD3'>;
 
 export const ROUTE_KEYS = Object.keys(ROUTE_OWNERS) as RouteKey[];
 
