@@ -62,14 +62,14 @@ Read this before you write `components` in `system.json` or any `components/<id>
 | Toast, banner, inline message | info, success, warning, danger | | rest, with action, dismissible |
 | Progress, spinner | bar, circle | sm, md | determinate, indeterminate |
 
-Any component that lists `hover` also lists `focus` and `disabled`, unless it can't be disabled (a link). A full system's check looks for that.
+Any component that lists `hover` also lists `disabled` and a focus state (`focus` or `focus-visible`). A full system's check looks for that. For a link, list `disabled` too and draw it as plain text, which is how a link with no destination should look.
 
 ## 5. The example contract
 
 One example per component, showing every variant, size and state you listed as a labelled matrix: rows by variant, columns by state, and one more row for sizes. Label each instance so the check can count it:
 
 - `data-dc-variant="<name>"`, `data-dc-size="<name>"` and `data-dc-state="<name>"` on the element that shows it. One element may carry all three.
-- Every name in `variants`, `sizes` and `states` needs at least one labelled instance. Values match without regard to case. A name with no instance is a `system-states-missing` finding.
+- Every name in `variants`, `sizes` and `states` needs at least one labelled instance. Values match without regard to case. For a core or full system, a name with no instance is a `system-states-missing` finding, one per list.
 - Add a small visible text label to each row and column (in `--fg-muted`, `--text-xs`), so people reading the board know what they see. The check reads the attributes, not the text.
 
 ```html

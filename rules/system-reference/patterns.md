@@ -115,4 +115,4 @@ One entry with `kind: "responsive"`: what changes at each breakpoint. Navigation
 
 ## Done for this area
 
-Core: a voice entry, plus the patterns the code already uses. Full: navigation, overlays, forms, feedback, states, data display (when the product shows tables or charts), accessibility, responsive and motion, each as its own kind, the visual ones with examples.
+Core: a voice entry, plus the patterns the code already uses. Full: navigation, overlay, forms, feedback, states, data display (when the system has a chart or table component), accessibility, responsive and motion, each as its own kind. At full, every pattern of kind navigation, overlay, forms, data-display, feedback, states or page needs an example.

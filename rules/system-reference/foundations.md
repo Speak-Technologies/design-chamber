@@ -53,11 +53,11 @@ Build every surface, text and border colour from one grey ramp of 10 to 12 steps
 
 ### Interactive state colours
 
-Name them by suffix so the check can find them: `--accent-hover`, `--accent-active` (pressed), `--surface-hover`, `--surface-selected`, `--fg-disabled`, `--surface-disabled`. Hover moves lightness 4 to 8 percent, pressed moves twice that, both in the same direction. Selected uses a tint of the accent, not the accent fill. Disabled must look disabled without using opacity on text. Keep it legible (3:1 or more) but clearly quieter.
+Name them by suffix, which is how the check finds them: `--accent-hover`, `--accent-active` (pressed), `--surface-hover`, `--surface-selected`, `--fg-disabled`, `--surface-disabled`. Hover moves lightness 4 to 8 percent, pressed moves twice that, both in the same direction. Selected uses a tint of the accent, not the accent fill. Disabled must look disabled without using opacity on text. Keep it legible (3:1 or more) but clearly quieter.
 
 ### Data colours
 
-- At least 6 categorical colours, `--data-1` first. Order them by how often a series appears, so two-series charts use the two most distinct.
+- At least 6 categorical colours, `--data-1` first (the check asks for one when the system has a chart or table component or a data display pattern; 6 is the bar for a usable chart). Order them by how often a series appears, so two-series charts use the two most distinct.
 - Vary lightness as well as hue, so the set still works for red-green colour blindness and in greyscale. Neighbours in the order must differ in lightness by at least 10 points (oklch L).
 - Give every data colour a dark value and check it against `--surface` in dark.
 - Add a sequential ramp (`--data-seq-1` to `-5`) only when the code draws heatmaps or choropleths.
@@ -68,7 +68,7 @@ A pair says what text or part is meant to sit on what. List pairs in `system.jso
 
 ### Dark mode
 
-- Once any token has a dark value, every colour needs one. The check lists colours with none.
+- Once any token has a dark value, every colour needs one. On the dark ground the check judges a colour with no dark value by its light value, so its pairs can fail there too.
 - Surfaces get lighter as they rise: `--bg` darkest (around #111 to #16181b), `--surface` a step up, `--surface-2` another. Avoid pure black unless the brand asks for it.
 - Text is off-white (#e8e8ea range), muted text no darker than 60 percent lightness.
 - Accents and status colours get lighter and slightly less saturated. Re-check every pair; never invert the ramp and assume it works.

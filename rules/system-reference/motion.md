@@ -6,7 +6,7 @@ Read this before you write duration or easing tokens, the motion pattern, or any
 
 - `calm` (the default): three durations, ease-out to enter, ease-in to leave, ease-in-out to move, and fades only under reduced motion. Use the values below.
 - `keep`: record the code's own values. Map each to the nearest of the three names and put the code's original value in the note ("Code uses 180ms and 220ms; both map here").
-- `none`: no motion tokens. Write the motion pattern with one line, "State changes are instant." The user's answer is their approval, so add `motion` to `outOfScope` in `system.json`.
+- `none`: no motion tokens. Write the motion pattern with one line, "State changes are instant." The user's answer is their approval, so add `motion` to `outOfScope` in `system.json`. That one id clears both the motion tokens and the motion pattern.
 - Not asked (the code had nothing to raise it): use `calm` and state it as an assumption in OVERVIEW.md.
 
 ## Tokens

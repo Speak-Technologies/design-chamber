@@ -100,4 +100,4 @@ The example draws one email at 600px (scaled to fit), with its light and dark gr
 
 ## Done for this area
 
-Core: a logo file or a `logo-use` entry. Full: logo use, the brand colour entry, imagery and marketing. Add social and email entries when the company posts or sends them; the checklist doesn't count them, so skip them otherwise and say so in OVERVIEW.md.
+Core: a logo file or a `logo-use` entry. Full: logo use, the brand colour entry, imagery, and marketing, which a `marketing`, `social` or `email` entry satisfies. Add social and email entries when the company posts or sends them.
