@@ -163,3 +163,12 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Why not fixed now:** the outbox has no delivery receipt for system messages, and the busy case leaves sending to the user by design
 **Fix prompt:**
 > In Design Chamber, mark board comments sent only when the agent will get them. In `src/ui/systems/system-ask.ts` `sendSystemComments`, call `markSent` only when the outcome is `sent` or a new chat started. For `composed`, leave the comments open and show "Added to the chat's message box. Send it there, then mark these sent." with a **Mark sent** action. For `outbox`, put the comment ids in the `PUT /outbox` body's `commentIds` (today `[]`) and have the outbox delivery path mark them sent through `POST /systems/:id/comments/mark-sent` when it delivers, as design comments do. Add model tests for the three outcomes and update `documentation/features/design-systems.md` ("Send comments") and `documentation/pages/design-systems.md`. Run `npm run check`.
+
+### KI-44: The comment card on a phone says "Ctrl+↵ to add"
+🟣 Minor · found 2026-11-27 · `src/ui/wall/comment-ui.ts:101` · owner: ui-ux-developer
+**What:** the new-comment card's foot always shows the keyboard shortcut hint (`${submitKey()} to add`). On the phone layout added by native-extras there is no Ctrl key, so the hint names a shortcut the person can't use (seen in the harness shots `phone-390-*-wall-touch-2-tap-comment`, `phone-390-dark-comment-draft-1-kept-after-pinch`).
+**Who:** end user on a phone · **Seen:** visible in the comment card
+**Happens:** tap an element in Edit mode on the phone page or the phone panel tab · common on a phone · **Effect:** a stray, misleading hint; **Add comment** still works
+**Why not fixed now:** cosmetic, found in QA of feat/native-extras; nothing else in the flow is affected
+**Fix prompt:**
+> In `src/ui/wall/comment-ui.ts`, hide the `.dc-pop-hint` shortcut line when the frame's device is a phone (`currentDevice().form === 'phone'` from `src/ui/components/device.ts`), or under `[data-dc-form="phone"]` in `src/ui/styles.css`. Re-shoot `node test/ui/visual/shoot.mjs 'wall-touch|comment-draft' --out <scratch>` and confirm that desktop still shows the hint. Gates: `npm run typecheck` · `npm run build` · `npm test`.
