@@ -558,9 +558,10 @@ export type CheckParams = {
    * pictures stop but the overview shows the rest; `overview` = the overview stops but full-size pictures show
    * the rest; `no-overview` = the overview couldn't be made, the full-size pictures show all of it; `gap` = part
    * of the area is in no picture; `entries` = entries past `max` weren't measured; `states` = only `count`
-   * labelled states were forced and pictured (system-builder-depth T16: the `max` limit or the time).
+   * labelled states were forced and pictured (system-builder-depth T16: the `max` limit or the time);
+   * `motion` = only `count` motion strips were taken (T17, the same two reasons).
    */
-  pictured?: 'tiles' | 'overview' | 'no-overview' | 'gap' | 'entries' | 'states';
+  pictured?: 'tiles' | 'overview' | 'no-overview' | 'gap' | 'entries' | 'states' | 'motion';
   /** `system-example-missing` and `system-coverage-gap`: the system's depth; `full` makes them warnings. */
   depth?: SystemDepth;
   /** `system-contrast-low`, and a dark-pass board finding: which scheme it was found in. */

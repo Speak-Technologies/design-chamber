@@ -248,6 +248,7 @@ test('a JPEG goes through the browser once, in bands; short of time it is a note
             save: async () => 'x',
             forceState: async () => false,
             computedStyle: async () => null,
+            animationFrames: async () => null,
           },
           art,
         );

@@ -251,6 +251,7 @@ const runHooked = async (store: Awaited<ReturnType<typeof hookedSystem>>, over: 
             save: (label, part, parts, bytes) => deps.savePng(art, part, parts, bytes, label),
             forceState: async () => true,
             computedStyle: async () => ({ ...REST }),
+            animationFrames: async () => null,
           };
           const done = await inspect(page, art);
           assert.ok(done !== null);

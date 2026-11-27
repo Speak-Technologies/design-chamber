@@ -77,7 +77,24 @@ export type InspectPage = {
   forceState: (path: ElementPath, states: readonly ForcedState[]) => Promise<boolean>;
   /** The element's computed `STATE_STYLE_PROPERTIES` over CDP, or null when it isn't there. */
   computedStyle: (path: ElementPath) => Promise<Record<string, string> | null>;
+  /**
+   * Motion frames (system-builder-depth T17), over CDP only: every animation paused, `trigger` forced on
+   * the element at `path`, the animations it starts sought to `frames` evenly spaced points from 0 to their
+   * end and the clip pictured at each; then once more with `prefers-reduced-motion: reduce` (the full media
+   * list, as every render sends), sought to the end. With nothing started, one frame. The state is cleared
+   * and the media put back before it answers. Null when the element isn't there.
+   */
+  animationFrames: (path: ElementPath, trigger: ForcedState, clip: CaptureClip, frames: number) => Promise<MotionFrames | null>;
 };
+
+/** A clip in document coordinates. */
+export type CaptureClip = { y: number; height: number; scale?: number; x?: number; width?: number };
+
+/** What `animationFrames` saw: the frames, whether anything moved, and the end with reduced motion. */
+export type MotionFrames = { frames: Buffer[]; moved: boolean; reduced: Buffer; reducedMoves: boolean };
+
+/** The longest motion pictured, ms: a slower one is pictured up to here (an infinite one for one iteration). */
+const MOTION_TOTAL_MAX = 10_000;
 
 /** The pseudo-classes the state check forces (`CSS.forcePseudoState`). */
 export type ForcedState = 'hover' | 'focus' | 'focus-visible' | 'active';
@@ -109,6 +126,19 @@ export const STATE_STYLE_PROPERTIES = Object.freeze([
   'outline-offset',
   'transform',
 ] as const);
+
+/**
+ * An `Animation.animationStarted` animation's id and where it ends, ms (delay plus one iteration), or null
+ * when the event isn't that shape. CDP data: checked, never trusted.
+ */
+export const animationEndOf = (value: unknown): { id: string; end: number } | null => {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as { id?: unknown; source?: { delay?: unknown; duration?: unknown } };
+  const delay = typeof record.source?.delay === 'number' && Number.isFinite(record.source.delay) ? Math.max(0, record.source.delay) : 0;
+  const duration = typeof record.source?.duration === 'number' && Number.isFinite(record.source.duration) ? Math.max(0, record.source.duration) : 0;
+  if (typeof record.id !== 'string' || record.id === '' || delay + duration <= 0) return null;
+  return { id: record.id, end: delay + duration };
+};
 
 /** How fast animations run while a state is forced: a 1 s transition ends in 1 ms, within the two frames waited. */
 const FORCED_PLAYBACK_RATE = 1000;
@@ -387,6 +417,11 @@ const renderOne = async (
     guard();
     if (deps.inspect !== undefined) {
       // The board path: the hook measures and tiles; the console, dialog and blocked-request findings still apply.
+      const captureClip = async (clip: CaptureClip): Promise<Buffer> => {
+        const shot = await page.send<{ data: string }>('Page.captureScreenshot', { format: 'png', clip: { x: clip.x ?? 0, y: clip.y, width: clip.width ?? viewport.width, height: clip.height, scale: clip.scale ?? 1 } });
+        guard();
+        return Buffer.from(shot.data, 'base64');
+      };
       const inspectPage: InspectPage = {
         evaluate: async (expression, { awaitPromise }) => {
           const evaluated = await page.send<{ result?: { value?: unknown }; exceptionDetails?: unknown }>('Runtime.evaluate', { expression, contextId: executionContextId, awaitPromise, returnByValue: true, timeout: 8000 });
@@ -397,11 +432,7 @@ const renderOne = async (
           await page.send('Runtime.evaluate', { expression: `window.scrollTo({ top: ${y}, behavior: 'instant' }); ${FRAMES_EXPRESSION}`, contextId: executionContextId, awaitPromise: true, returnByValue: true });
           guard();
         },
-        capture: async (clip) => {
-          const shot = await page.send<{ data: string }>('Page.captureScreenshot', { format: 'png', clip: { x: clip.x ?? 0, y: clip.y, width: clip.width ?? viewport.width, height: clip.height, scale: clip.scale ?? 1 } });
-          guard();
-          return Buffer.from(shot.data, 'base64');
-        },
+        capture: captureClip,
         save: async (label, part, parts, bytes) => {
           const rel = await deps.savePng(art, part, parts, bytes, label);
           guard();
@@ -423,6 +454,76 @@ const renderOne = async (
           if (forced.length > 0) await page.send('Runtime.evaluate', { expression: FRAMES_EXPRESSION, contextId: executionContextId, awaitPromise: true, returnByValue: true });
           guard();
           return true;
+        },
+        animationFrames: async (path, trigger, clip, frames) => {
+          if (!FORCED_STATES.includes(trigger)) return null;
+          const nodeId = await resolveElement(path);
+          if (nodeId === null) return null;
+          const started: { id: string; end: number }[] = [];
+          const off = session.on('Animation.animationStarted', (event) => {
+            if (event.sessionId !== page.sessionId) return;
+            const seen = animationEndOf(event.params.animation);
+            if (seen !== null) started.push(seen);
+          });
+          const waitFrames = async (): Promise<void> => {
+            await page.send('Runtime.evaluate', { expression: FRAMES_EXPRESSION, contextId: executionContextId, awaitPromise: true, returnByValue: true });
+            guard();
+          };
+          const rate = async (playbackRate: number): Promise<void> => {
+            await page.send('Animation.setPlaybackRate', { playbackRate });
+            guard();
+            dom.fast = playbackRate === FORCED_PLAYBACK_RATE;
+          };
+          const force = async (states: readonly ForcedState[]): Promise<boolean> => {
+            const done = await answered(() => page.send('CSS.forcePseudoState', { nodeId, forcedPseudoClasses: states }));
+            guard();
+            await waitFrames();
+            return done !== null;
+          };
+          /** Seek what has started to `at` (a share of the longest), then picture the clip. */
+          const shotAt = async (share: number): Promise<Buffer> => {
+            if (started.length > 0) {
+              const total = Math.min(MOTION_TOTAL_MAX, Math.max(...started.map((one) => one.end)));
+              await answered(() => page.send('Animation.seekAnimations', { animations: started.map((one) => one.id), currentTime: total * share }));
+              guard();
+              await waitFrames();
+            }
+            return captureClip(clip);
+          };
+          /** Clear the state with animations at full speed, so a transition back ends at once instead of holding. */
+          const settleClear = async (): Promise<void> => {
+            await rate(FORCED_PLAYBACK_RATE);
+            await force([]);
+            await waitFrames();
+          };
+          let reducedMedia = false;
+          try {
+            await rate(0);
+            if (!(await force([trigger]))) return null;
+            const moved = started.length > 0;
+            const count = moved ? Math.max(2, Math.floor(frames)) : 1;
+            const shots: Buffer[] = [];
+            for (let index = 0; index < count; index += 1) shots.push(await shotAt(count === 1 ? 1 : index / (count - 1)));
+            await settleClear();
+            // The same trigger with reduced motion: whatever still starts is sought to its end.
+            reducedMedia = true;
+            await page.send('Emulation.setEmulatedMedia', { features: renderMediaFeatures(page.scheme, 'reduce') });
+            guard();
+            await rate(0);
+            started.length = 0;
+            await force([trigger]);
+            const reducedMoves = started.length > 0;
+            const reduced = await shotAt(1);
+            return { frames: shots, moved, reduced, reducedMoves };
+          } finally {
+            off();
+            await settleClear();
+            if (reducedMedia) {
+              await page.send('Emulation.setEmulatedMedia', { features: renderMediaFeatures(page.scheme) });
+              guard();
+            }
+            await rate(1);
+          }
         },
         computedStyle: async (path) => {
           const nodeId = await resolveElement(path);

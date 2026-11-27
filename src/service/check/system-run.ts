@@ -21,6 +21,8 @@ import {
   SYSTEM_CHECK_TILE_PIXELS_MAX,
   SYSTEM_EXAMPLE_MAX,
   SYSTEM_SCREEN_MAX,
+  SYSTEM_MOTION_FRAMES,
+  SYSTEM_MOTION_SHOTS_MAX,
   SYSTEM_STATE_SHOTS_MAX,
 } from '../../shared/limits.ts';
 import { findSecretShapes } from '../../shared/secret-shapes.ts';
@@ -47,11 +49,15 @@ import {
   measuredLowPairs,
   passShare,
   sanitizeBoardProbe,
+  motionAreaOf,
+  sanitizeMotionProbe,
   sanitizeStateProbe,
   stateFindings,
   stateStyled,
   type BoardProbePair,
+  type BoardMotionProbe,
   type BoardStateProbe,
+  type MotionResult,
   type StateResult,
 } from './board-analyze.ts';
 import { staticLowPairs } from '../../shared/pair-contrast.ts';
@@ -292,6 +298,61 @@ export const pictureStates = async (
   const findings = stateFindings(results, 'wide');
   if (cut) findings.push({ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: 'wide', params: { pictured: 'states', count: results.length, max: SYSTEM_STATE_SHOTS_MAX } });
   return { results, pngs, findings };
+};
+
+/** Room around a motion element, so a chip that slides or an element that lifts stays in the frame. */
+const MOTION_SHOT_MARGIN = 24;
+
+/**
+ * The motion pass (system-builder-depth T17), on the wide light board after the state pictures: for each
+ * demo chip and `data-dc-motion` element the probe found (only `area`'s when one is given), its trigger
+ * forced with every animation paused and `SYSTEM_MOTION_FRAMES` frames from start to end, then the end
+ * once more with reduced motion, stitched left to right into `<entry>-motion@wide.png`. Nothing started
+ * is one frame. A list cut at `SYSTEM_MOTION_SHOTS_MAX` or by the deadline is one `system-board-partial`
+ * note; a strip that can't be stitched, or an element gone since the probe, is skipped.
+ */
+export const pictureMotion = async (
+  page: Pick<InspectPage, 'animationFrames' | 'scrollTo' | 'save'>,
+  probe: BoardMotionProbe,
+  input: { viewportWidth: number; deadline: number; area: SystemArea | null; clock?: () => number },
+): Promise<{ results: MotionResult[]; pngs: string[]; findings: CheckFindingData[] }> => {
+  const clock = input.clock ?? Date.now;
+  const results: MotionResult[] = [];
+  let cut = probe.truncated;
+  for (const target of probe.items) {
+    if (input.area !== null && motionAreaOf(target.entry) !== input.area) continue;
+    if (clock() >= input.deadline) {
+      cut = true;
+      break;
+    }
+    const element: ElementPath =
+      target.kind === 'demo' || target.host === null
+        ? [{ selector: '.dc-motion-demo', index: target.element }]
+        : [
+            { selector: '[data-dc-example-host]', index: target.host },
+            { selector: '*', index: target.element },
+          ];
+    const { box } = target;
+    const x = Math.min(Math.max(0, Math.floor(box.x - MOTION_SHOT_MARGIN)), input.viewportWidth - 1);
+    const width = Math.max(1, Math.min(input.viewportWidth, Math.ceil(box.x + box.w + MOTION_SHOT_MARGIN)) - x);
+    const y = Math.max(0, Math.floor(box.y - MOTION_SHOT_MARGIN));
+    const height = Math.max(1, Math.min(STATE_SHOT_HEIGHT_MAX, Math.ceil(box.h + MOTION_SHOT_MARGIN * 2)));
+    await page.scrollTo(y);
+    const shot = await page.animationFrames(element, target.trigger, { x, y, width, height }, SYSTEM_MOTION_FRAMES);
+    if (shot === null) continue;
+    let strip: Buffer;
+    try {
+      strip = stitchSideBySide([...shot.frames, shot.reduced]);
+    } catch (error) {
+      if (!(error instanceof PngStitchError)) throw error;
+      continue;
+    }
+    const label = `${parseEntryKey(target.entry)?.key ?? 'entry'}-motion`;
+    const png = await page.save(label, 1, 1, strip);
+    results.push({ entry: target.entry, trigger: target.trigger, png, frames: shot.frames.length, moved: shot.moved, reducedMoves: shot.reducedMoves });
+  }
+  const findings: CheckFindingData[] = cut ? [{ code: 'system-board-partial', file: BOARD_FILE, screen: null, viewport: 'wide', params: { pictured: 'motion', count: results.length, max: SYSTEM_MOTION_SHOTS_MAX } }] : [];
+  return { results, pngs: results.map((result) => result.png), findings };
 };
 
 /**
@@ -556,6 +617,9 @@ export const runSystemCheck = async (
   // The forced state pictures (T16), from the wide light pass.
   const stateResults: StateResult[] = [];
   let statePassRan = false;
+  // The motion strips (T17), from the same pass.
+  const motionResults: MotionResult[] = [];
+  let motionPassRan = false;
   const inspect = async (page: InspectPage, art: PlannedArtboard): Promise<InspectResult | null> => {
     const started = Date.now();
     const raw = await page.evaluate(`${renderInput.probeSource};__dcProbe.collectBoard()`, { awaitPromise: false });
@@ -639,6 +703,15 @@ export const runSystemCheck = async (
       const targets = sanitizeStateProbe(await page.evaluate(`${renderInput.probeSource};__dcProbe.collectStates(${SYSTEM_STATE_SHOTS_MAX})`, { awaitPromise: false }), SYSTEM_STATE_SHOTS_MAX);
       const pass = await pictureStates(page, targets, { viewportWidth: width.width, deadline: started + boardMs * STATE_PASS_TIME_SHARE });
       stateResults.push(...pass.results);
+      findings.push(...pass.findings);
+      pngs.push(...pass.pngs);
+    }
+    // T17: motion strips, last on the wide light board, so a pass short of time drops them first.
+    if (width.id === 'wide') {
+      motionPassRan = true;
+      const targets = sanitizeMotionProbe(await page.evaluate(`${renderInput.probeSource};__dcProbe.collectMotion(${SYSTEM_MOTION_SHOTS_MAX})`, { awaitPromise: false }), SYSTEM_MOTION_SHOTS_MAX);
+      const pass = await pictureMotion(page, targets, { viewportWidth: width.width, deadline: started + boardMs * STATE_PASS_TIME_SHARE, area: onlyArea });
+      motionResults.push(...pass.results);
       findings.push(...pass.findings);
       pngs.push(...pass.pngs);
     }
@@ -819,6 +892,7 @@ export const runSystemCheck = async (
       schemes,
       ...(screensDrawn ? { screens: { artboards: screenOutcome.artboards, viewports: screenPlan.viewports } } : {}),
       ...(statePassRan && okWidths.has('wide') ? { states: keptStates } : {}),
+      ...(motionPassRan && okWidths.has('wide') ? { motion: motionResults.filter((result) => kept.has(result.png)) } : {}),
       ...(compares.targets.length > 0 ? { compares: sheets.sheets } : {}),
     };
     const report = systemCheckReport({ ...base, findings: reportStatic, render });

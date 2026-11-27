@@ -332,12 +332,33 @@ that one instead, so a hover copy drawn with a class such as `is-hover` doesn't 
 - **Where it shows.** The text output lists the state pictures after the board pictures, marking the ones
   that change nothing. `check.json` has `render.states`: `{ entry, state, png, styled }` per state.
 
+**Motion strips** (T17). Last on the wide light board, after the state pictures, the check pictures
+what moves: each demo chip in the Motion section (played by hover, as on the board) and each element in
+a component, pattern or brand example labelled `data-dc-motion` (started by the state its
+`data-dc-state` names when that is hover, focus, focus-visible or active, else hover). Everything is
+done from the service over CDP; no script is added to the page.
+
+- **The strip.** Every animation is paused, the state forced, and what it starts is moved to 0, 1/3, 2/3
+  and the end (a motion longer than 10 seconds is pictured up to 10 seconds), one picture each. Then the
+  same once more with `prefers-reduced-motion: reduce`, taken at the end. The pictures are stitched left
+  to right into `<entry>-motion@wide.png` (`--duration-fast-motion@wide.png`, `slide-motion@wide.png`),
+  16 px apart, each the element with 24 px around it. An element where nothing starts is one frame and
+  the reduced one, and the text says "nothing moved on hover, so one frame".
+- **Reduced motion.** It raises nothing new (`system-motion-no-reduced` stays the file rule), but the last
+  frame shows it, and the text says "it still moves with reduced motion" when something still started.
+  Every media setting is sent with it, and the page goes back to no-preference and full speed after.
+- **Limits.** At most 24 strips a run, inside the same 85% of the pass's 45 seconds as the state
+  pictures; they come last, so a pass short of time drops them first. Past either, one note says how
+  many were taken. `--area` keeps that area's (the demo chips are Foundations); the narrow width, the
+  dark pass and `--screen` don't take them. `check.json` has `render.motion`:
+  `{ entry, trigger, png, frames, moved, reducedMoves }` per strip.
+
 Measured findings, each named once (at the widest width that raised it):
 
 | Severity | Finding |
 |---|---|
 | Warning | the board is wider than the width it has, so it scrolls sideways · an example is wider than its card can give it · part of an example sits outside its card (`position: fixed`, negative margins) · text runs outside its card · a labelled hover, focus or active state changes nothing when forced |
-| Note | an entry set to card, compact or table needed the full width at the wide board ("Set its layout to full"; not said when the example is too wide even for the whole board, since then the example has to change) · what the pictures leave out, one note per kind and each area once, naming the areas: full-size pictures stop but the overview shows the rest; the overview stops early but full-size pictures show the rest; the overview couldn't be made; or part of an area is in no picture at all (with the exact px ranges). All of the board is still measured · only the first labelled states were forced and pictured (the limit of 60, or the time) · no browser was found, so only the files were checked |
+| Note | an entry set to card, compact or table needed the full width at the wide board ("Set its layout to full"; not said when the example is too wide even for the whole board, since then the example has to change) · what the pictures leave out, one note per kind and each area once, naming the areas: full-size pictures stop but the overview shows the rest; the overview stops early but full-size pictures show the rest; the overview couldn't be made; or part of an area is in no picture at all (with the exact px ranges). All of the board is still measured · only the first labelled states were forced and pictured (the limit of 60, or the time) · only the first motion strips were taken (the limit of 24, or the time) · no browser was found, so only the files were checked |
 
 The unknown-layout warning tells an unknown word ("huge") apart from a known layout in a place that
 doesn't take it (`compact` on typography), and lists up to three with what each place takes, for

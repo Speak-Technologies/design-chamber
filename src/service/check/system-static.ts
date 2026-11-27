@@ -24,7 +24,7 @@ import { AREA_OF_SECTION, layoutPlaceTakes, SYSTEM_AREAS, type SystemDetailSourc
 import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, RenderCheckState, SecretShapeKind, SystemArea, SystemDetail, Viewport } from '../../shared/types.ts';
 import { findRawTextEnd, parseTagAt, RAW_TEXT_TAGS } from '../html-tags.ts';
 import { capPerCode } from './analyze.ts';
-import type { BoardPassId, StateResult } from './board-analyze.ts';
+import type { BoardPassId, MotionResult, StateResult } from './board-analyze.ts';
 import { ratioText, staticLowPairs, type LowPair } from '../../shared/pair-contrast.ts';
 
 /** The words `buildSystemDetail` uses for the token cap (system-json.ts `TOKENS_CAP_SENTENCE`). */
@@ -594,6 +594,11 @@ export type SystemCheckRender = {
    * (`source`, under `sources/screens/`). Absent when no screen drawn has a source that matched a viewport.
    */
   compares?: SystemCompareSheet[];
+  /**
+   * The motion strips (system-builder-depth T17), wide light pass only: each demo chip and `data-dc-motion`
+   * element with its trigger, the strip (frames left to right, the last with reduced motion), and what moved.
+   */
+  motion?: MotionResult[];
 };
 
 /** One compare sheet: the screen, the viewport it was drawn at, the source it is set beside, the picture. */

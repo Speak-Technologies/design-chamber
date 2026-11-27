@@ -450,7 +450,7 @@ const listOf = (selector: string, keep: (element: Element) => boolean): string[]
 
 // The board probe rides in the same bundle (no build change): the check engine calls
 // `__dcProbe.collectBoard()` for a system board, `__dcProbe.collect()` for a design.
-export { collectBoard, collectStates } from './board.ts';
+export { collectBoard, collectMotion, collectStates } from './board.ts';
 
 export const collect = (options: CollectOptions = {}): ProbeResult => {
   const scroller = document.scrollingElement ?? document.documentElement;

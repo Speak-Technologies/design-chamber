@@ -326,6 +326,28 @@ const statePictureLines = (render: NonNullable<SystemCheckReport['render']>, rep
   return lines;
 };
 
+/** Motion strips named in the text; the rest are in the report. */
+const MOTION_STRIPS_SHOWN = 12;
+
+/**
+ * The motion block (system-builder-depth T17): each strip with what it shows, a strip where nothing moved
+ * said plainly (one frame), and one that still moves with reduced motion marked.
+ */
+const motionPictureLines = (render: NonNullable<SystemCheckReport['render']>, reportPath: string | null): string[] => {
+  const strips = render.motion ?? [];
+  if (strips.length === 0) return [];
+  const lines = ['', 'Motion strips (wide board): frames from start to end, left to right, and last the end with reduced motion.'];
+  for (const strip of strips.slice(0, MOTION_STRIPS_SHOWN)) {
+    const what = strip.entry.slice(strip.entry.indexOf(':') + 1);
+    const note = !strip.moved
+      ? `nothing moved on ${strip.trigger}, so one frame`
+      : `${strip.frames} frames on ${strip.trigger}${strip.reducedMoves ? '; it still moves with reduced motion' : ''}`;
+    lines.push(`  ${fileName(strip.png)}  ${what}: ${note}`);
+  }
+  if (strips.length > MOTION_STRIPS_SHOWN) lines.push(`  and ${strips.length - MOTION_STRIPS_SHOWN} more in ${reportPath ?? 'the report'}`);
+  return lines;
+};
+
 /**
  * The screen pictures block (system-builder-depth T12b): one line per artboard drawn, by file name,
  * with its size and page height. The run folder is named once (here, or by the board block above).
@@ -394,7 +416,7 @@ export const formatSystemCheckText = (input: SystemTextInput): string => {
     if (render.drawn.from === 'proposal') lines.push('', `Drew the proposed board (proposal ${render.drawn.proposal ?? 'unknown'}).`);
     // --screen draws no board: only the screens block, which then names the run folder.
     const boardDrawn = render.widths.length > 0 || render.screens === undefined;
-    if (boardDrawn) lines.push(...boardPictureLines(render, input.runDir ?? null), ...statePictureLines(render, input.reportPath));
+    if (boardDrawn) lines.push(...boardPictureLines(render, input.runDir ?? null), ...statePictureLines(render, input.reportPath), ...motionPictureLines(render, input.reportPath));
     lines.push(...screenPictureLines(render, input.runDir ?? null, boardDrawn && render.shots.length > 0), ...comparePictureLines(render));
   }
 

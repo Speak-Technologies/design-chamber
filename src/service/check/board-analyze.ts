@@ -382,6 +382,58 @@ export const stateFindings = (results: readonly StateResult[], viewport: BoardPa
   }));
 };
 
+// ---- motion frames (system-builder-depth T17) ----
+
+/** One element to picture in motion: a Motion section demo chip, or an example element labelled `data-dc-motion`. */
+export type BoardMotionTarget = {
+  /** A token entry for a demo, a component, pattern or brand entry for an example element. */
+  entry: string;
+  kind: 'demo' | 'example';
+  /** The example host's index among `[data-dc-example-host]`; null for a demo. */
+  host: number | null;
+  /** A demo's index among `.dc-motion-demo`, or the element's index among `*` in the host's shadow root. */
+  element: number;
+  trigger: ForcedState;
+  box: { x: number; y: number; w: number; h: number };
+};
+
+export type BoardMotionProbe = { items: BoardMotionTarget[]; truncated: boolean };
+
+/** The entry kinds motion is read from, and the area each is in (for `--area`). */
+const MOTION_ENTRY_AREAS: Readonly<Record<string, SystemArea>> = { token: 'foundations', component: 'components', pattern: 'patterns', brand: 'brand' };
+
+/** The area a motion entry belongs to, or null for a kind motion isn't read from. */
+export const motionAreaOf = (entry: string): SystemArea | null => {
+  const kind = parseEntryKey(entry)?.kind;
+  return kind === undefined ? null : (MOTION_ENTRY_AREAS[kind] ?? null);
+};
+
+/**
+ * The probe's motion list as trusted data: a well-formed entry of a kind motion is read from (a demo
+ * under a token, an example element under a component, pattern or brand), the closed triggers, whole
+ * indexes and a finite box. A list longer than `max` is forged or broken and refused.
+ */
+export const sanitizeMotionProbe = (value: unknown, max: number): BoardMotionProbe => {
+  if (!isRec(value) || !Array.isArray(value.items) || value.items.length > max) return { items: [], truncated: false };
+  const items: BoardMotionTarget[] = [];
+  for (const item of value.items) {
+    if (!isRec(item) || typeof item.entry !== 'string' || !isBoardEntryKey(item.entry)) continue;
+    const kind = item.kind === 'demo' || item.kind === 'example' ? item.kind : null;
+    const entryKind = parseEntryKey(item.entry)?.kind;
+    if (kind === null || (kind === 'demo') !== (entryKind === 'token') || motionAreaOf(item.entry) === null) continue;
+    const host = kind === 'demo' ? (item.host === null ? null : undefined) : (indexOf(item.host) ?? undefined);
+    const element = indexOf(item.element);
+    const trigger = FORCED_STATES.find((candidate) => candidate === item.trigger);
+    const box = parseBox(item.box);
+    if (host === undefined || element === null || trigger === undefined || box === null) continue;
+    items.push({ entry: item.entry, kind, host, element, trigger, box });
+  }
+  return { items, truncated: value.truncated === true };
+};
+
+/** One motion strip as the check took it: the picture, how many frames, whether anything moved, and with reduced motion. */
+export type MotionResult = { entry: string; trigger: ForcedState; png: string; frames: number; moved: boolean; reducedMoves: boolean };
+
 // ---- one area only (`--area`) ----
 
 /**

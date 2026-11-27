@@ -474,6 +474,11 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
       switch (f.params?.pictured) {
         case 'entries':
           return `Only the first ${num(f.params?.max)} entries were measured.`;
+        case 'motion':
+          if (count === 0) return 'No motion strip was taken: the check ran out of time for them.';
+          return count === 1
+            ? 'Only the first motion strip was taken; the other moving elements were not pictured.'
+            : `Only the first ${num(count)} motion strips were taken; the other moving elements were not pictured.`;
         case 'states':
           if (count === 0) return 'No labelled state was forced and pictured: the check ran out of time for them.';
           return count === 1
@@ -633,7 +638,7 @@ const PROPOSAL_REASONS: readonly ProposalProblemReason[] = [
   'describe-change', 'internal-parts', 'none-fixes', 'rewritten', 'unreadable',
   'preview-too-large', 'preview-unsafe', 'preview-secret',
 ];
-const PICTURED: readonly NonNullable<CheckParams['pictured']>[] = ['tiles', 'overview', 'no-overview', 'gap', 'entries', 'states'];
+const PICTURED: readonly NonNullable<CheckParams['pictured']>[] = ['tiles', 'overview', 'no-overview', 'gap', 'entries', 'states', 'motion'];
 const DEPTHS: readonly SystemDepth[] = ['tokens', 'core', 'full'];
 const LISTED: readonly NonNullable<CheckParams['listed']>[] = ['variants', 'sizes', 'states'];
 const LIVING_FAILED: readonly NonNullable<CheckParams['failed']>[] = ['too-large', 'bundle', 'unsafe', 'no-snapshot', 'secret'];
