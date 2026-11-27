@@ -973,3 +973,7 @@ These answer the open questions above and are binding for every task.
 6. System file limit 200 to 400, icons capped at 150.
 7. The dark pass is on by default whenever a system has dark values.
 8. Scope: all three phases are built in this run, one PR per phase, each merged before the next starts.
+
+## Decisions for Phase 3 (the main agent, 2026-11-27)
+9. Tailwind export: a v4 `@theme` CSS block only, written from checked values.
+10. Board comments on repo-backed systems stay in Design Chamber, never in the repo, the same as a design's comments.
