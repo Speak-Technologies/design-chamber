@@ -11,8 +11,9 @@
 //   `<style>` element; a refused value is shown as text beside a hatched "can't read" swatch;
 // - names enter CSS only after `SYSTEM_TOKEN_NAME_PATTERN`, ids only after `SYSTEM_ENTRY_ID_PATTERN`;
 //   class names are ours, never the system's;
-// - logos are only ever `<img src="assets/logos/…">` (the bundler makes a data: URL, and an SVG as an
-//   image never runs script);
+// - logos and icons are only ever `<img src="assets/logos/…">` or `assets/icons/…` (the bundler makes a
+//   data: URL, and an SVG as an image never runs script). An SVG file's content is never put in the
+//   document as markup: nothing checks what is inside it;
 // - a live example (a component's, and a pattern or brand entry's) is not drawn here: the caller passes
 //   `example` (the board puts it in an inert template, the living page a PNG), because that part
 //   depends on the board script;
@@ -142,7 +143,7 @@ const tableCell = (name: 'name' | 'preview' | 'notes', inner: string): string =>
 
 /** A file name inside one contract folder, as a URL path the bundler decodes back. */
 const assetUrl = (rel: string): string | null => {
-  const match = /^assets\/(fonts|logos)\/([A-Za-z0-9_][A-Za-z0-9._ -]{0,79})$/.exec(rel);
+  const match = /^assets\/(fonts|logos|icons)\/([A-Za-z0-9_][A-Za-z0-9._ -]{0,79})$/.exec(rel);
   if (match === null || match[2] === undefined || match[2].includes('..')) return null;
   return `assets/${match[1] ?? ''}/${encodeURIComponent(match[2])}`;
 };
@@ -661,9 +662,78 @@ const brandParts = (detail: SystemDetail, unusable: ReadonlySet<string>, markdow
   return { title: 'Brand & marketing', body: parts.join(''), empty: 'No brand guidance or logos yet.' };
 };
 
-/** Assets keeps the font files and the source files (§2.11); fonts are drawn as specimens under Typography. */
-const assetsParts = (detail: SystemDetail): SectionParts => {
+// ---- icons (system-builder-depth §4.6) ----
+
+/** `--icon-*` size tokens each icon is drawn at; more are left out, so the board stays within its size. */
+export const ICON_SIZES_SHOWN = 4;
+/**
+ * An icon file over this is not drawn: each is embedded once per size and ground, so large files would
+ * push the board past its render limit (`SYSTEM_ICONS_MAX` × 8 copies × 32 KB stays under it).
+ */
+export const ICON_DRAWN_MAX_BYTES = 32 * 1024;
+const ICON_DEFAULT_SIZE = '24px';
+/** A drawn icon never grows past this, whatever its size token says. */
+const ICON_BOX_MAX = '96px';
+
+/** The `--icon-*` tokens that give a size: not colours, not stroke widths, with a value a size can take. */
+const iconSizeTokens = (detail: SystemDetail): SystemToken[] =>
+  detail.tokens.filter(
+    (token) =>
+      token.name.startsWith('--icon-') &&
+      isTokenName(token.name) &&
+      token.section !== 'colours' &&
+      !token.name.includes('stroke') &&
+      cssValueOf('sizes', null, token.light?.text) !== null &&
+      cssValueOf(token.section, null, token.light?.text) !== null,
+  );
+
+/** How many times the board embeds one icon file: each size on the light and the dark ground. */
+export const iconCopies = (detail: SystemDetail): number => 2 * Math.max(1, Math.min(iconSizeTokens(detail).length, ICON_SIZES_SHOWN));
+
+/** The icon grid: each icon at each size, on light and dark, only ever as `<img>`. */
+const iconsBlock = (detail: SystemDetail, unusable: ReadonlySet<string>, styled: Styler): string => {
+  if (detail.icons.length === 0) return '';
+  const all = iconSizeTokens(detail);
+  const sizes = all.slice(0, ICON_SIZES_SHOWN).map((token) => `var(${token.name})`);
+  const shownNames = all.slice(0, ICON_SIZES_SHOWN).map((token) => token.name).join(', ');
+  const sizesLine =
+    all.length === 0
+      ? `Shown at ${ICON_DEFAULT_SIZE}. No --icon-* size tokens yet.`
+      : all.length > ICON_SIZES_SHOWN
+        ? `Shown at the first ${ICON_SIZES_SHOWN} of ${all.length} icon sizes: ${shownNames}.`
+        : `Shown at ${shownNames}.`;
+  const cards = detail.icons
+    .map((icon, index) => {
+      const url = unusable.has(icon.file) ? null : assetUrl(icon.file);
+      const pictures =
+        url === null
+          ? ''
+          : (sizes.length === 0 ? [ICON_DEFAULT_SIZE] : sizes)
+              .map(
+                (size) =>
+                  `<img${styled('dc-icon', `width: ${size}; height: ${size}; max-width: ${ICON_BOX_MAX}; max-height: ${ICON_BOX_MAX}; margin-right: 8px; vertical-align: middle`)} src="${escapeHtml(url)}" alt="${escapeHtml(icon.name)}">`,
+              )
+              .join('');
+      const grounds =
+        url === null
+          ? `<div class="dc-muted">${escapeHtml("This icon file can't be drawn.")}</div>`
+          : `<div class="dc-grounds"><div class="dc-ground dc-light">${pictures}</div><div class="dc-ground dc-dark">${pictures}</div></div>`;
+      return (
+        `<div class="dc-card"${entryAttr('icon', String(index))}>${grounds}<div>${escapeHtml(icon.name)}</div>` +
+        `<div class="dc-value">${escapeHtml(baseName(icon.file))}</div>` +
+        (icon.note !== '' ? `<div class="dc-note">${escapeHtml(icon.note)}</div>` : '') +
+        '</div>'
+      );
+    })
+    .join('');
+  return `<h3>Icons</h3><div class="dc-value">${escapeHtml(sizesLine)}</div><div class="dc-grid dc-run-compact">${cards}</div>`;
+};
+
+/** Assets keeps the icons, the font files and the source files (§2.11); fonts are drawn as specimens under Typography. */
+const assetsParts = (detail: SystemDetail, unusable: ReadonlySet<string>, styled: Styler): SectionParts => {
   const parts: string[] = [];
+  const icons = iconsBlock(detail, unusable, styled);
+  if (icons !== '') parts.push(icons);
   const list = (items: readonly string[]): string => `<ul class="dc-list">${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
   if (detail.fonts.length > 0) parts.push(`<h3>Font files</h3>${list(detail.fonts.map((font) => baseName(font.file)))}`);
   if (detail.sourceFiles.length > 0) parts.push(`<h3>Sources</h3>${list(detail.sourceFiles.map((file) => baseName(file.file)))}`);
@@ -703,7 +773,7 @@ const partsOf = (detail: SystemDetail, section: SystemSection, options: Specimen
     case 'brand':
       return brandParts(detail, unusable, markdown, options.example);
     case 'assets':
-      return assetsParts(detail);
+      return assetsParts(detail, unusable, styled);
   }
 };
 

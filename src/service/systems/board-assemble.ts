@@ -13,7 +13,7 @@ import type { SystemComponent, SystemDetail, SystemEntryText, SystemState } from
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource, type FileSource, type SourceFile } from '../bundle.ts';
 import { checkAsset } from './assets.ts';
 import { BOARD_ENTRY_FILE, buildBoardHtml } from './board-html.ts';
-import { exampleFileOf, exampleKeyOf, type ExampleKind } from './specimen-html.ts';
+import { exampleFileOf, exampleKeyOf, ICON_DRAWN_MAX_BYTES, type ExampleKind } from './specimen-html.ts';
 import { listFiles, proposalDirOf, readProposalFile, readProposalsRecord, sha256Of } from './proposal-record.ts';
 import type { SystemStore } from './store.ts';
 
@@ -109,8 +109,8 @@ export const bundleExamples = async (
 /**
  * The board document for one detail and file source: each live example bundled on its own (relative to
  * its folder, export mode, so its remote refs are reported per entry): components', and since
- * system-builder-depth D4 pattern and brand entries', exactly alike. Fonts and logos are checked with
- * `checkAsset` before the board names them, then `buildBoardHtml`. `assetKeys` are the `file:sha256`
+ * system-builder-depth D4 pattern and brand entries', exactly alike. Fonts, logos and icons are checked
+ * with `checkAsset` before the board names them, then `buildBoardHtml`. `assetKeys` are the `file:sha256`
  * parts the board cache keys on. `components`, `patterns` and `brand` carry the remote refs found.
  */
 export const assembleBoardHtml = async (
@@ -123,9 +123,15 @@ export const assembleBoardHtml = async (
   const { components, patterns, brand, examples } = await bundleExamples(detail, source);
 
   const unusable = new Set<string>();
-  for (const { file, kind } of [...detail.fonts.map((font) => ({ file: font.file, kind: 'font' as const })), ...detail.logos.map((logo) => ({ file: logo.file, kind: 'logo' as const }))]) {
+  const assets = [
+    ...detail.fonts.map((font) => ({ file: font.file, kind: 'font' as const })),
+    ...detail.logos.map((logo) => ({ file: logo.file, kind: 'logo' as const })),
+    ...detail.icons.map((icon) => ({ file: icon.file, kind: 'icon' as const })),
+  ];
+  for (const { file, kind } of assets) {
     const bytes = await source.read(file).catch(() => null);
-    if (bytes === null || !checkAsset(path.posix.basename(file), kind, bytes.bytes).ok) unusable.add(file);
+    const tooBigToDraw = kind === 'icon' && bytes !== null && bytes.bytes.length > ICON_DRAWN_MAX_BYTES;
+    if (bytes === null || tooBigToDraw || !checkAsset(path.posix.basename(file), kind, bytes.bytes).ok) unusable.add(file);
     else assetKeys.push(`${file}:${sha256Of(bytes.bytes)}`);
   }
 

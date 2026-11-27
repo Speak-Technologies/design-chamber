@@ -230,6 +230,16 @@ test('per-system caps: SYSTEM_FILES_MAX (400) files and 100 MB across assets/ an
   assert.equal(SYSTEM_FILES_MAX, 400);
   assert.equal(messageOf(full), 'This design system already holds 400 files.');
   await assert.rejects(readdir(at('assets/logos')), { code: 'ENOENT' });
+  // One fewer, with an icon among them (assets/icons/ counts too): the 400th still fits.
+  await rm(at('sources/n0.md'));
+  await rm(at('sources/n1.md'));
+  await mkdir(at('assets/icons'), { recursive: true });
+  await writeFile(at('assets/icons/add.svg'), SVG);
+  assert.equal((await add(SVG, 'a.svg', 'logo')).status, 200);
+  assert.equal(messageOf(await add(SVG, 'b.svg', 'logo')), 'This design system already holds 400 files.');
+  // An icon is never uploaded: the route takes fonts, logos and sources.
+  assert.equal((await add(SVG, 'c.svg', 'icon' as 'logo')).status, 400);
+  await rm(at('assets'), { recursive: true, force: true });
 
   // Bytes: one large (sparse) file, then one that would cross the line, then one at it.
   await rm(at('sources'), { recursive: true, force: true });

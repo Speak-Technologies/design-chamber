@@ -9,13 +9,13 @@ import type { SystemDetail, SystemSection } from './types.ts';
 
 /** Every entry key the board may carry; `pattern:` and `brand:` are S8 (§2.11); `pair:<n>` is a colour pair (system-builder-depth §4.4). */
 export const BOARD_ENTRY_PATTERN =
-  /^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\d{1,3}|logo:\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40}|pair:\d{1,3})$/;
+  /^(token:--[A-Za-z0-9_-]{1,60}|type:[a-z0-9-]{1,40}|font:\d{1,3}|logo:\d{1,3}|icon:\d{1,3}|component:[a-z0-9-]{1,40}|overview|note:[a-z0-9-]{1,40}|pattern:[a-z0-9-]{1,40}|brand:[a-z0-9-]{1,40}|pair:\d{1,3})$/;
 
-export type BoardEntryKind = 'token' | 'type' | 'font' | 'logo' | 'component' | 'overview' | 'note' | 'pattern' | 'brand' | 'pair';
+export type BoardEntryKind = 'token' | 'type' | 'font' | 'logo' | 'icon' | 'component' | 'overview' | 'note' | 'pattern' | 'brand' | 'pair';
 
 export type BoardEntryKey = { kind: BoardEntryKind; key: string };
 
-const KINDS: ReadonlySet<string> = new Set<BoardEntryKind>(['token', 'type', 'font', 'logo', 'component', 'overview', 'note', 'pattern', 'brand', 'pair']);
+const KINDS: ReadonlySet<string> = new Set<BoardEntryKind>(['token', 'type', 'font', 'logo', 'icon', 'component', 'overview', 'note', 'pattern', 'brand', 'pair']);
 
 /** True when the text is a well-formed entry key within the length cap. */
 export const isBoardEntryKey = (text: string): boolean => text.length <= BOARD_ENTRY_MAX && BOARD_ENTRY_PATTERN.test(text);
@@ -57,6 +57,9 @@ export const sectionOfEntry = (key: BoardEntryKey, detail: SystemDetail): System
     case 'logo':
       // Logos show under Brand & marketing (§2.11); Assets keeps fonts and source files.
       return Number(key.key) < detail.logos.length ? 'brand' : null;
+    case 'icon':
+      // Icons draw in the Assets section; their review is Brand & marketing's, as the logos'.
+      return Number(key.key) < detail.icons.length ? 'assets' : null;
     case 'component':
       return detail.components.some((component) => component.id === key.key) ? 'components' : null;
     case 'overview':

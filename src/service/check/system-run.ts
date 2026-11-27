@@ -30,7 +30,7 @@ import { resolvePlainTarget, writeFileAtomic } from '../paths.ts';
 import { createSelfWrites } from '../self-writes.ts';
 import { assembleBoardHtml, bundleExamples, overlaySource, readProposalBoardSource } from '../systems/board-assemble.ts';
 import { BOARD_ENTRY_FILE } from '../systems/board-html.ts';
-import { exampleFileOf, exampleKeyOf } from '../systems/specimen-html.ts';
+import { exampleFileOf, exampleKeyOf, ICON_DRAWN_MAX_BYTES } from '../systems/specimen-html.ts';
 import { committedStateOf, readCommitted, readRecord } from '../systems/living-page.ts';
 import { readProposalProblem } from '../systems/proposal-record.ts';
 import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/store.ts';
@@ -156,6 +156,25 @@ export const readExampleTexts = async (source: FileSource, detail: SystemDetail)
   return out;
 };
 
+/**
+ * Each listed icon's text by its file, for the mixed-set scan (system-builder-depth §4.6). Read like the
+ * examples, through the live file source; a file too large to be drawn, missing or refused is left out.
+ */
+export const readIconTexts = async (source: FileSource, detail: SystemDetail): Promise<Record<string, string>> => {
+  const out: Record<string, string> = {};
+  for (const { file: rel } of detail.icons) {
+    try {
+      const info = (await source.stat?.(rel)) ?? null;
+      if (info === null || info.size > ICON_DRAWN_MAX_BYTES) continue;
+      const file = await source.read(rel);
+      if (file !== null && file.bytes.length <= ICON_DRAWN_MAX_BYTES) out[rel] = file.bytes.toString('utf8');
+    } catch (error) {
+      if (!(error instanceof RefBlocked)) throw error;
+    }
+  }
+  return out;
+};
+
 const fileOfEntry = (entry: string): string => {
   const key = parseEntryKey(entry);
   return key !== null && key.kind === 'component' ? `components/${key.key}.html` : BOARD_FILE;
@@ -188,7 +207,8 @@ export const runSystemCheck = async (
       if (html !== undefined) bundledByFile[exampleFileOf(kind, entry.id)] = html;
     }
   }
-  const staticFindings = [...systemFindings({ ...source, examples, bundled: bundledByFile }, { ...detail, components: bundled.components, patterns: bundled.patterns, brand: bundled.brand }), ...s8Findings(source, detail, facts)].slice(0, CHECK_FINDINGS_MAX);
+  const icons = await readIconTexts(liveSource, detail);
+  const staticFindings = [...systemFindings({ ...source, examples, bundled: bundledByFile, icons }, { ...detail, components: bundled.components, patterns: bundled.patterns, brand: bundled.brand }), ...s8Findings(source, detail, facts)].slice(0, CHECK_FINDINGS_MAX);
   const base = { id, findings: staticFindings, now: input.now, tool: input.tool };
   const staticRun: SystemCheckRun = { report: systemCheckReport(base), detail, reportPath: null, pngs: [] };
   const renderInput = input.render;

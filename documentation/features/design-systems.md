@@ -133,6 +133,19 @@ Durations and easings have their own section, **Motion**, under Foundations afte
 
 Code: `src/shared/token-edit.ts` (`classifyToken`, `validateTokenValue`, `resolveTokenSection`, `motionValueKind`), `src/shared/system-json.ts` (`TOKEN_SECTIONS`, `LAYOUTS_OF_SECTION`), `src/shared/system-checklist.ts`. Tests: `test/shared/system-motion.test.ts`.
 
+## Icons
+A system can hold its own icon set (spec: `documentation/specs/system-builder-depth.md` §4.6, T11).
+
+- **Files.** SVG files in `assets/icons/`, listed in `system.json` `icons` as `{ "file", "name", "note" }`. Without a `name` the file's name is used. Up to 150 icons; more are one problem with the true count. A listed file that isn't an SVG in that folder, is missing or is listed twice is a problem on that entry only. A system holds at most 400 files across `assets/` and `sources/`, icons included.
+- **Always a picture.** Design Chamber checks that an icon file is an SVG but doesn't look inside it, so an icon is only ever drawn as `<img>`, where script in an SVG never runs. Its markup is never put into the board or the living page.
+- **Drawing.** An **Icons** grid at the top of Assets shows each icon at each `--icon-*` size token (the first four; stroke width and colour tokens aren't sizes), on a light and a dark ground. With no size tokens, at 24px. An icon that draws with `currentColor` shows black, also on the dark ground. A file over 32 KB, or one that isn't really an SVG, says "This icon file can't be drawn."; the living page also records it as left out.
+- **Review.** Icons count toward the **Brand & marketing** review, with the logos. A system without icons keeps every fingerprint it had.
+- **Copies and repo systems.** A design's copy carries the listed icons in `system/icons/`, and a ZIP export includes the ones its pages use. A repo-backed system's snapshot reads `assets/icons/*.svg`.
+- **Checks.** A `full` system with no icons misses the `icons` topic, and `system-icons-mixed` notes a set that doesn't match ([Design checks](design-checks.md)).
+- **Not yet.** The panel doesn't list icons yet (T10c).
+
+Code: `src/shared/system-json.ts` (`readIcons`), `src/service/systems/specimen-html.ts` (the grid), `board-assemble.ts`, `living-page.ts`, `link.ts`, `src/service/check/system-static.ts`. Tests: `test/service/systems/icons.test.ts`.
+
 ## Using a system from a design
 A design shows its system as a chip in the viewer, with an update banner, a review sheet, Change… and Undo ([Viewer: a design's system](../pages/viewer.md)). Rows and cards in the designs list carry a **System updated** badge when the system has a newer revision than the design's copy, and a **chip** naming the system: one click opens it (Draft is marked, a deleted system reads "(deleted)" and says so when pressed). Defaults and project pins live in Settings, and the New design dialog preselects from them ([Settings: Design systems](../pages/settings.md)).
 

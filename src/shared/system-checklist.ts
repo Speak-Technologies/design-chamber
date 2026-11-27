@@ -15,8 +15,7 @@ export const SYSTEM_TOPIC_IDS: readonly SystemTopicId[] = Object.freeze([
   'components', 'examples', 'focus-disabled',
   'voice', 'navigation', 'overlays', 'forms', 'feedback', 'states', 'data-display', 'accessibility', 'responsive',
   'logo', 'brand-colour', 'imagery', 'marketing',
-  // system-builder-depth Phase 2 Wave 0: listed so `outOfScope` accepts it; T11 adds it to TOPICS
-  // (full, foundations) with its rule. Until then no depth asks for it, so it raises no gap.
+  // system-builder-depth Phase 2 (T11): a full system's foundations ask for at least one icon.
   'icons',
 ] as const);
 
@@ -31,7 +30,7 @@ export const CHECKLIST_MIN = Object.freeze({ status: 3, typeStylesCore: 4, typeS
 const TOPICS: Readonly<Record<SystemArea, { core: readonly SystemTopicId[]; full: readonly SystemTopicId[] }>> = Object.freeze({
   foundations: {
     core: ['surface', 'text', 'border', 'brand', 'status', 'type-styles', 'spacing', 'radius', 'pairs', 'dark-values'],
-    full: ['state-colours', 'data-colours', 'control-sizes', 'breakpoints', 'elevation', 'layers', 'motion'],
+    full: ['state-colours', 'data-colours', 'control-sizes', 'breakpoints', 'elevation', 'layers', 'motion', 'icons'],
   },
   components: { core: ['components', 'examples'], full: ['focus-disabled'] },
   patterns: { core: ['voice'], full: ['navigation', 'overlays', 'forms', 'feedback', 'states', 'data-display', 'accessibility', 'responsive', 'motion'] },
@@ -125,6 +124,8 @@ const hasTopic = (detail: SystemDetail, area: SystemArea, topic: SystemTopicId, 
     case 'motion':
       // The Phase 1 name rule still counts, so no older system gains a gap; else one time and one easing in the section.
       return (named(detail, /^--duration-/) && named(detail, /^--ease-/)) || (motionOfKind(detail, 'time') && motionOfKind(detail, 'easing'));
+    case 'icons':
+      return detail.icons.length >= 1;
     case 'components':
       return detail.components.length >= 1;
     case 'examples':

@@ -466,6 +466,8 @@ export const entryLabel = (detail: SystemDetail, entry: string): { tag: string; 
       return { tag: 'font', text: detail.fonts[Number(parsed.key)]?.family ?? 'Font' };
     case 'logo':
       return { tag: 'logo', text: detail.logos[Number(parsed.key)]?.variant ?? 'Logo' };
+    case 'icon':
+      return { tag: 'icon', text: detail.icons?.[Number(parsed.key)]?.name ?? 'Icon' };
     case 'pair': {
       const pair = detail.pairs[Number(parsed.key)];
       return { tag: 'pair', text: pair === undefined ? 'Colour pair' : `${pair.fg} on ${pair.bg}` };

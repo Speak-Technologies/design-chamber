@@ -115,12 +115,12 @@ const extensionOf = (rel: string): string => {
  * What a copy holds (§2.6), from the system's content files and its parsed detail:
  * `tokens.css` byte for byte (empty when the system has none), a generated `fonts.css` with one
  * `@font-face` per font whose family a type style or a typography token names, the `system.css`
- * entry, those font files, every logo, and the agent reference. Never `sources/**`, `.chamber/**`,
+ * entry, those font files, every logo, every listed icon, and the agent reference. Never `sources/**`, `.chamber/**`,
  * `.versions/**`, `BUILD.json`, `SNAPSHOT.json` or an unused font. Every value written into
  * `fonts.css` already passed system.json's patterns (family, safe file name, weight, style), and
  * the file names are checked again here, so nothing from the system can break out of a rule.
  */
-export const planCopy = (files: readonly string[], detail: Pick<SystemDetail, 'fonts' | 'logos' | 'type' | 'tokens'>): CopyPlan => {
+export const planCopy = (files: readonly string[], detail: Pick<SystemDetail, 'fonts' | 'logos' | 'icons' | 'type' | 'tokens'>): CopyPlan => {
   const present = new Set(files);
   const entries: CopyPlanEntry[] = [];
   const taken = new Set<string>();
@@ -152,6 +152,8 @@ export const planCopy = (files: readonly string[], detail: Pick<SystemDetail, 'f
   add({ to: 'fonts.css', text: rules.join('\n') });
   add({ to: 'system.css', text: SYSTEM_CSS_TEXT });
   for (const logo of detail.logos) if (present.has(logo.file)) add({ to: `logos/${baseName(logo.file)}`, from: logo.file });
+  // Listed icons only: a file in assets/icons/ that `icons` does not name is not copied.
+  for (const icon of detail.icons) if (present.has(icon.file)) add({ to: `icons/${baseName(icon.file)}`, from: icon.file });
   for (const rel of [...files].sort()) if (REFERENCE_PATTERN.test(rel)) add({ to: rel, from: rel });
   return { entries };
 };

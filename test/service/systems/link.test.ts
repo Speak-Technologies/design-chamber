@@ -155,13 +155,13 @@ describe('planCopy (pure)', () => {
 
   test('pattern and brand bodies travel as agent reference; other files in those folders do not (S8, §2.11)', () => {
     const files = ['patterns/voice.md', 'brand/hero.md', 'patterns/deep/x.md', 'brand/hero.png', 'patterns/voice.txt', 'sources/brand.pdf'];
-    const plan = planCopy(files, { fonts: [], logos: [], type: [], tokens: [] });
+    const plan = planCopy(files, { fonts: [], logos: [], icons: [], type: [], tokens: [] });
     assert.deepEqual(plan.entries.map((one) => one.to).sort(), ['brand/hero.md', 'fonts.css', 'patterns/voice.md', 'system.css', 'tokens.css']);
     for (const rel of ['patterns/voice.md', 'brand/hero.md']) assert.equal(isCopyReference(rel), true, rel);
   });
 
   test('a system without tokens.css still gets one (empty), so system.css always resolves', () => {
-    const plan = planCopy([], { fonts: [], logos: [], type: [], tokens: [] });
+    const plan = planCopy([], { fonts: [], logos: [], icons: [], type: [], tokens: [] });
     assert.deepEqual(plan.entries.map((one) => one.to).sort(), ['fonts.css', 'system.css', 'tokens.css']);
   });
 

@@ -38,13 +38,14 @@ import { checkAsset } from './assets.ts';
 import { detailSourceFromTree, overlaySource } from './board.ts';
 import { listFiles, proposalDirOf, readProposalFile } from './proposal-record.ts';
 import { renderExamplePngs, type ExampleShot } from './living-examples.ts';
+import { ICON_DRAWN_MAX_BYTES, iconCopies } from './specimen-html.ts';
 import { buildLivingPage, LIVING_ENTRY_FILE, livingSchemes, type ExampleReason, type LivingExampleShot, type LivingPageDocument, type LivingPageInput, entryAt } from './living-html.ts';
 import { LIVING_PAGE_SCAN_MAX_BYTES, LIVING_PAGE_TOO_LARGE_REASON, normaliseForHash, scanLivingPage } from './living-safe.ts';
 import { ensureSystemStore, guardSystemWrite } from './store.ts';
 
 export type LivingProblem = 'too-large' | 'bundle' | 'unsafe' | 'no-snapshot' | 'secret';
 export type OmittedReason = 'too-large' | 'unsafe' | 'budget' | 'no-browser' | 'render-failed' | 'licence';
-export type Omitted = { what: 'font' | 'logo' | 'example'; name: string; reason: OmittedReason };
+export type Omitted = { what: 'font' | 'logo' | 'icon' | 'example'; name: string; reason: OmittedReason };
 
 /** `.chamber/living-page.json` (§2.14). `generator` is this build's addition: a new generator regenerates at start. */
 export type LivingPageRecord = {
@@ -101,7 +102,7 @@ export const parseLivingRecord = (text: string): LivingPageRecord | null => {
   if (!isRecord(raw) || raw.v !== 1 || typeof raw.revision !== 'number' || !Number.isInteger(raw.revision) || typeof raw.generatedAt !== 'string') return null;
   const omitted = Array.isArray(raw.omitted)
     ? raw.omitted
-        .filter((item): item is Omitted => isRecord(item) && ['font', 'logo', 'example'].includes(String(item.what)) && typeof item.name === 'string' && (OMITTED_REASONS as readonly string[]).includes(String(item.reason)))
+        .filter((item): item is Omitted => isRecord(item) && ['font', 'logo', 'icon', 'example'].includes(String(item.what)) && typeof item.name === 'string' && (OMITTED_REASONS as readonly string[]).includes(String(item.reason)))
         .slice(0, LIVING_PAGE_OMITTED_MAX)
         .map((item) => ({ what: item.what, name: item.name, reason: item.reason }))
     : [];
@@ -343,7 +344,7 @@ const generate = async (
   };
 
   // The text alone sets the asset budget: every asset file left out, no pictures.
-  const allAssets = new Set([...detail.fonts.map((font) => font.file), ...detail.logos.map((logo) => logo.file)]);
+  const allAssets = new Set([...detail.fonts.map((font) => font.file), ...detail.logos.map((logo) => logo.file), ...detail.icons.map((icon) => icon.file)]);
   const textBytes = Buffer.byteLength(buildLivingPage(detail, { ...base, fonts: 'fallback', unusable: allAssets }).html, 'utf8');
   let budget = LIVING_PAGE_MAX_BYTES - textBytes;
 
@@ -362,6 +363,24 @@ const generate = async (
       unusable.add(logo.file);
       pushOmitted(omitted, { what: 'logo', name, reason: 'budget' });
     } else budget -= encodedSize(file.bytes.length);
+  }
+  // Then icons: each is embedded once per size and ground it is drawn on.
+  const copies = iconCopies(detail);
+  for (const icon of detail.icons) {
+    const file = await source.read(icon.file).catch(() => null);
+    const name = path.posix.basename(icon.file);
+    const reason: OmittedReason | null =
+      file === null || !checkAsset(name, 'icon', file.bytes).ok
+        ? 'unsafe'
+        : file.bytes.length > ICON_DRAWN_MAX_BYTES
+          ? 'too-large'
+          : encodedSize(file.bytes.length) * copies > budget
+            ? 'budget'
+            : null;
+    if (reason !== null || file === null) {
+      unusable.add(icon.file);
+      pushOmitted(omitted, { what: 'icon', name, reason: reason ?? 'unsafe' });
+    } else budget -= encodedSize(file.bytes.length) * copies;
   }
   // Then fonts in type-style order, only when they may be embedded (AD-32).
   const fontData: Record<string, string> = {};

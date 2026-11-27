@@ -66,8 +66,9 @@ const FULL = (() => {
       { id: 'hero', kind: 'marketing', title: 'Hero' },
     ],
     logos: [{ file: 'assets/logos/mark.svg' }],
+    icons: [{ file: 'assets/icons/add.svg' }],
   };
-  return { lines, json, files: ['components/button.html', 'components/table.html', 'assets/logos/mark.svg'] };
+  return { lines, json, files: ['components/button.html', 'components/table.html', 'assets/logos/mark.svg', 'assets/icons/add.svg'] };
 })();
 
 const full = (over: Record<string, unknown> = {}, lines: readonly string[] = FULL.lines, dark: readonly string[] = []): SystemDetail => system(lines, { ...FULL.json, ...over }, dark, FULL.files);
@@ -81,7 +82,7 @@ const missing = (detail: SystemDetail): Record<SystemArea, string[]> => ({
 describe('the checklist table', () => {
   test('core and full topics per area, in the table order; tokens asks the foundations core set only', () => {
     assert.deepEqual(checklistTopics('core', 'foundations'), ['surface', 'text', 'border', 'brand', 'status', 'type-styles', 'spacing', 'radius', 'pairs', 'dark-values']);
-    assert.deepEqual(checklistTopics('full', 'foundations').slice(10), ['state-colours', 'data-colours', 'control-sizes', 'breakpoints', 'elevation', 'layers', 'motion']);
+    assert.deepEqual(checklistTopics('full', 'foundations').slice(10), ['state-colours', 'data-colours', 'control-sizes', 'breakpoints', 'elevation', 'layers', 'motion', 'icons']);
     assert.deepEqual(checklistTopics('core', 'components'), ['components', 'examples']);
     assert.deepEqual(checklistTopics('full', 'components'), ['components', 'examples', 'focus-disabled']);
     assert.deepEqual(checklistTopics('core', 'patterns'), ['voice']);
@@ -176,6 +177,14 @@ describe('missingTopics', () => {
     assert.deepEqual(drop('--duration-'), ['motion']);
     assert.deepEqual(drop('--ease-'), ['motion']);
     assert.ok(!missing(full({}, [...FULL.lines.filter((line) => !line.startsWith('--control-')), '--touch-min: 44px;'])).foundations.includes('control-sizes'));
+  });
+
+  test('icons: asked of a full system\'s foundations only, satisfied by one listed icon, and stopped by outOfScope', () => {
+    assert.equal(SYSTEM_TOPIC_IDS.length, 34);
+    assert.deepEqual(missing(full({ icons: [] })).foundations, ['icons']);
+    assert.deepEqual(missing(full({ icons: [], outOfScope: ['icons'] })).foundations, []);
+    assert.ok(!missing(full({ icons: [], depth: 'core' })).foundations.includes('icons'));
+    assert.deepEqual(full({ outOfScope: ['icons'] }).outOfScope, ['icons']);
   });
 
   test('components: at least one, every one with an example, and hover implies focus and disabled at full', () => {

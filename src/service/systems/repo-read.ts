@@ -97,7 +97,8 @@ const textCapOf = (rel: string): number | null => {
   return null;
 };
 
-const kindOf = (rel: string): AssetKind => (rel.startsWith('assets/fonts/') ? 'font' : rel.startsWith('assets/logos/') ? 'logo' : 'source');
+const kindOf = (rel: string): AssetKind =>
+  rel.startsWith('assets/fonts/') ? 'font' : rel.startsWith('assets/logos/') ? 'logo' : rel.startsWith('assets/icons/') ? 'icon' : 'source';
 
 const isPlainText = (bytes: Buffer): boolean => {
   if (bytes.includes(0)) return false;

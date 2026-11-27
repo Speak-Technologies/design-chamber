@@ -31,6 +31,7 @@ import {
   SYSTEM_COMPONENT_SIZES_MAX,
   SYSTEM_COMPONENTS_MAX,
   SYSTEM_ENTRY_ID_PATTERN,
+  SYSTEM_ICONS_MAX,
   SYSTEM_OUT_OF_SCOPE_MAX,
   SYSTEM_PAIRS_MAX,
   SYSTEM_EXAMPLE_MAX,
@@ -82,6 +83,7 @@ import type {
   SystemDetail,
   SystemEntryText,
   SystemHomeView,
+  SystemIcon,
   SystemSection,
   SystemState,
   SystemToken,
@@ -170,7 +172,7 @@ const NOT_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json isn't valid JSON.`;
 const TOO_LARGE_JSON = `${SYSTEM_UNREADABLE_PREFIX} system.json is larger than 1 MB.`;
 
 /** The list keys of system.json; each must be a list when present. */
-const LIST_KEYS = ['type', 'fonts', 'logos', 'components', 'notes', 'sources', 'patterns', 'brand', 'pairs', 'outOfScope'] as const;
+const LIST_KEYS = ['type', 'fonts', 'logos', 'icons', 'components', 'notes', 'sources', 'patterns', 'brand', 'pairs', 'outOfScope'] as const;
 
 export const parseSystemJson = (text: string): ParsedSystemJson => {
   // A cheap bound first: every UTF-16 unit is at most 3 UTF-8 bytes.
@@ -887,6 +889,36 @@ const readLogos = (raw: JsonObject | null, files: ReadonlySet<string>, problems:
   return out;
 };
 
+/**
+ * `icons` (system-builder-depth §4.6): SVG files in `assets/icons/`, each once, ≤ `SYSTEM_ICONS_MAX`
+ * entries read (the rest are one problem with the true count). A missing `name` reads as the file's
+ * name without `.svg`. The file's content is not looked at here: icons are only ever drawn as `<img>`.
+ */
+const readIcons = (raw: JsonObject | null, files: ReadonlySet<string>, problems: SystemProblem[]): SystemIcon[] => {
+  const out: SystemIcon[] = [];
+  const seen = new Set<string>();
+  const list = listOf(raw, 'icons');
+  list.slice(0, SYSTEM_ICONS_MAX).forEach((value, index) => {
+    const entry = `icons[${index}]`;
+    if (!isObject(value)) return void problems.push({ entry, message: 'This icon is not an object.' });
+    const file = assetFile(own(value, 'file'), 'assets/icons');
+    if (file === null || !/\.svg$/i.test(file)) return void problems.push({ entry, message: 'An icon file must be an SVG in assets/icons/.' });
+    if (!files.has(file)) return void problems.push({ entry, message: `${file} is missing.` });
+    if (seen.has(file)) return void problems.push({ entry, message: 'This icon is listed twice.' });
+    const rawName = own(value, 'name') ?? file.slice('assets/icons/'.length, -'.svg'.length);
+    const name = lineText(rawName, 60);
+    if (name === null) return void problems.push({ entry, message: 'This icon needs a name of 1 to 60 characters.' });
+    const note = noteText(own(value, 'note'), SYSTEM_USAGE_NOTE_MAX);
+    if (note === null) return void problems.push({ entry, message: 'Its note is longer than 500 characters.' });
+    seen.add(file);
+    out.push({ file, name, note });
+  });
+  if (list.length > SYSTEM_ICONS_MAX) {
+    problems.push({ entry: 'icons', message: `Design systems hold up to ${SYSTEM_ICONS_MAX} icons. ${groupDigits(list.length - SYSTEM_ICONS_MAX)} more weren't read.` });
+  }
+  return out;
+};
+
 const readSourceFiles = (raw: JsonObject | null, sizes: ReadonlyMap<string, number>, problems: SystemProblem[]): { file: string; bytes: number }[] => {
   const out: { file: string; bytes: number }[] = [];
   listOf(raw, 'sources').forEach((value, index) => {
@@ -1267,6 +1299,7 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
   const type = readTypeStyles(raw, rules, problems);
   const fonts = readFonts(raw, files, problems);
   const logos = readLogos(raw, files, problems);
+  const icons = readIcons(raw, files, problems);
   const sourceFiles = readSourceFiles(raw, sizes, problems);
   const layoutSink: LayoutIgnoredSink = { ignored: [], ignoredCount: 0 };
   const sectionLayouts = readSectionLayouts(raw, layoutSink);
@@ -1297,6 +1330,7 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
     type.length === 0 &&
     fonts.length === 0 &&
     logos.length === 0 &&
+    icons.length === 0 &&
     sourceFiles.length === 0 &&
     components.length === 0 &&
     notes.length === 0 &&
@@ -1354,8 +1388,8 @@ export const buildSystemDetail = (source: SystemDetailSource, rules: SystemToken
     depth,
     pairs,
     outOfScope,
-    // system-builder-depth Phase 2 Wave 0 stubs: T11 reads `icons`, T12a reads `screens` and `viewports`.
-    icons: [],
+    // system-builder-depth Phase 2 Wave 0 stubs: T12a reads `screens` and `viewports`.
+    icons,
     screens: [],
     viewports: defaultViewports('canvas'),
   };
@@ -1404,6 +1438,8 @@ export const sectionFingerprints = (detail: SystemDetail, hashes: Readonly<Recor
       .map(tokenFacts);
   const textHash = (text: string | null): string | null => (text === null ? null : sha256Hex(text));
   const logos = detail.logos.map((logo) => ({ ...logo, hash: fileHash(logo.file) }));
+  // Icons are reviewed with the logos, under Brand & marketing; they join only when there are some.
+  const icons = detail.icons.map((icon) => ({ ...icon, hash: fileHash(icon.file) }));
   // system-builder-depth §4.3: the new facts join only when present, so a system written before them
   // keeps every fingerprint (and its reviews). Automatic pairs come from tokens already counted, and
   // `depth` and `outOfScope` are about the checklist, not content: none of them joins.
@@ -1439,7 +1475,7 @@ export const sectionFingerprints = (detail: SystemDetail, hashes: Readonly<Recor
       ...(component.sizes.length === 0 ? {} : { sizes: component.sizes }),
     })),
     patterns: detail.patterns.map((entry) => entryFacts('patterns', entry)),
-    brand: { entries: detail.brand.map((entry) => entryFacts('brand', entry)), logos },
+    brand: { entries: detail.brand.map((entry) => entryFacts('brand', entry)), logos, ...(icons.length === 0 ? {} : { icons }) },
     assets: {
       fonts: detail.fonts.map((font) => ({ ...font, hash: fileHash(font.file) })),
       sources: detail.sourceFiles.map((file) => ({ file: file.file, hash: fileHash(file.file) })),
@@ -1556,7 +1592,8 @@ export const isSystemContractRel = (rel: string): boolean => {
   // Live examples: components, and pattern and brand entries (system-builder-depth D4).
   const example = /^(components|patterns|brand)\/([^/]+)\.html$/.exec(rel);
   if (example !== null) return SYSTEM_ENTRY_ID_PATTERN.test(example[2] ?? '');
-  const asset = /^(assets\/fonts|assets\/logos|sources)\/([^/]+)$/.exec(rel);
+  if (/^assets\/icons\//.test(rel) && !/\.svg$/i.test(rel)) return false;
+  const asset = /^(assets\/fonts|assets\/logos|assets\/icons|sources)\/([^/]+)$/.exec(rel);
   return asset !== null && SAFE_FILE_PATTERN.test(asset[2] ?? '') && !(asset[2] ?? '').includes('..');
 };
 

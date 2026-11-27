@@ -36,7 +36,7 @@ service enforces).
   NUL. A renamed file is refused ("logo.png isn't a real PNG file.", "This font file can't be used.").
 - Any other type is refused by its name and never opened ("brand.key isn't a file type design systems
   use."), so key files and `.env` files in a brand folder stay unread.
-- A system holds at most 200 files and 100 MB across `assets/` and `sources/`.
+- A system holds at most 400 files and 100 MB across `assets/` and `sources/`.
 - Each refused file is named with its reason; the others are still added.
 
 ## Names

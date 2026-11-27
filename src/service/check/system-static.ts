@@ -43,6 +43,72 @@ const covers = (detail: SystemDetail, area: SystemArea): boolean => detail.cover
 /** Ignored hints that are known layouts in a place that doesn't take them. The listed ones are counted; past the list's cap the rest count as unknown. */
 const misplacedCount = (detail: SystemDetail): number => detail.boardLayout.ignored.filter((problem) => problem.reason === 'not-here').length;
 
+// ---- icons (system-builder-depth §4.6) ----
+
+/** `stroke-width` as an attribute or a style declaration; a value that is not a number is not read. */
+const STROKE_WIDTH = /(?<![\w-])stroke-width\s*(?:=\s*(?:["']\s*)?|:\s*)(\d{0,6}\.?\d{1,6})/gi;
+const VIEW_BOX = /(?<![\w-])viewBox\s*=\s*["']([^"']{1,100})["']/;
+/** Stroke widths read per icon file. */
+const ICON_STROKES_READ = 100;
+/** Different values named in the finding's detail, per kind. */
+const ICON_VALUES_SHOWN = 4;
+
+/** The text without its XML comments, by index (no backtracking over hostile input). */
+const withoutComments = (text: string): string => {
+  let out = '';
+  let from = 0;
+  for (;;) {
+    const open = text.indexOf('<!--', from);
+    if (open < 0) return out + text.slice(from);
+    out += `${text.slice(from, open)} `;
+    const close = text.indexOf('-->', open + 4);
+    if (close < 0) return out;
+    from = close + 3;
+  }
+};
+
+/**
+ * One icon's `viewBox` size (the root element's, as `24x24`) and stroke widths: a bounded attribute
+ * scan of the text, no DOM. The file is untrusted; only numbers come out of it.
+ */
+export const scanIcon = (svg: string): { viewBox: string | null; strokes: number[] } => {
+  const text = withoutComments(svg);
+  // Found by index: a pattern up to `>` would rescan the file from every unclosed `<svg`.
+  const open = text.search(/<svg\b/);
+  const close = open < 0 ? -1 : text.indexOf('>', open);
+  const root = close < 0 ? '' : text.slice(open, close);
+  const box = (VIEW_BOX.exec(root)?.[1] ?? '').trim().split(/[\s,]+/).map(Number);
+  const viewBox = box.length === 4 && box.every(Number.isFinite) ? `${box[2]}x${box[3]}` : null;
+  const strokes: number[] = [];
+  let read = 0;
+  for (const match of text.matchAll(STROKE_WIDTH)) {
+    if (read >= ICON_STROKES_READ) break;
+    read += 1;
+    const value = Number(match[1]);
+    if (Number.isFinite(value) && !strokes.includes(value)) strokes.push(value);
+  }
+  return { viewBox, strokes };
+};
+
+/** `system-icons-mixed`: the listed icons that could be read use more than one viewBox size or stroke width. */
+const iconFindings = (detail: SystemDetail, texts: Readonly<Record<string, string>>): CheckFindingData[] => {
+  // Icons are asked for with the foundations and drawn with the brand assets: either area covers them.
+  if (!covers(detail, 'foundations') && !covers(detail, 'brand')) return [];
+  const boxes = new Set<string>();
+  const strokes = new Set<number>();
+  for (const icon of detail.icons) {
+    const text = Object.hasOwn(texts, icon.file) ? texts[icon.file] : undefined;
+    if (text === undefined) continue;
+    const scanned = scanIcon(text);
+    if (scanned.viewBox !== null) boxes.add(scanned.viewBox);
+    for (const width of scanned.strokes) strokes.add(width);
+  }
+  const parts: string[] = [];
+  if (boxes.size > 1) parts.push(`viewBox ${[...boxes].slice(0, ICON_VALUES_SHOWN).join(', ')}`);
+  if (strokes.size > 1) parts.push(`stroke-width ${[...strokes].slice(0, ICON_VALUES_SHOWN).join(', ')}`);
+  return parts.length === 0 ? [] : [{ code: 'system-icons-mixed', file: 'system.json', screen: null, viewport: null, detail: cleanDetail(parts.join('; '), CHECK_DETAIL_MAX) }];
+};
+
 // ---- example labels (system-builder-depth D5, §4.5) ----
 
 /** The labels an example marks its instances with, by list. */
@@ -231,6 +297,8 @@ export type SystemStaticSource = Pick<SystemDetailSource, 'texts' | 'tooLarge'> 
   examples?: Readonly<Record<string, string>>;
   /** Each live example bundled with its stylesheets inlined, by its file (the motion check reads these first). */
   bundled?: Readonly<Record<string, string>>;
+  /** Each listed icon's text by its file (the mixed-set scan). */
+  icons?: Readonly<Record<string, string>>;
 };
 
 /**
@@ -324,6 +392,7 @@ export const systemFindings = (source: SystemStaticSource, detail: SystemDetail)
   }
 
   out.push(...motionFindings(detail, { ...source.examples, ...source.bundled }));
+  out.push(...iconFindings(detail, source.icons ?? {}));
 
   if (detail.unreadable === null) out.push(...depthFindings(detail, source.examples ?? {}));
 
@@ -377,7 +446,7 @@ export const areaEmpty = (detail: SystemDetail, area: SystemArea): boolean => {
     case 'patterns':
       return detail.patterns.length === 0;
     case 'brand':
-      return detail.brand.length === 0 && detail.logos.length === 0;
+      return detail.brand.length === 0 && detail.logos.length === 0 && detail.icons.length === 0;
   }
 };
 
