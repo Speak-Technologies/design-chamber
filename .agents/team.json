@@ -84,6 +84,10 @@
       {
         "cmd": "node test/ui/visual/shoot.mjs <filter> --out <scratch folder>",
         "note": "the visual harness, after `npm run build`: the built UI behind a mock host and the in-memory fake service, in headless Chrome, rail at 320 and 480 px and the page at 1400 px, dark and light; every `test/ui/visual/scenarios/*.mjs` runs, `<filter>` is a regex on the name. Not part of `npm test`. Always pass `--out`: the default writes into the tracked `documentation/pages/img/`. Chrome not at the usual path → set `DC_TEST_CHROME`."
+      },
+      {
+        "cmd": "node .agents/render.js",
+        "note": "re-render the agent team from `.agents/team.json` (the skill renderer, then the project fixes for em dashes and generic database wording), then run `node .agents/verify-team.cjs`. After a render, only the `team:start` to `team:end` block of this file is regenerated; the rest is edited by hand."
       }
     ],
     "gates": [
@@ -268,7 +272,15 @@
         "await fs.writeFile(target, data);",
         "iframe.setAttribute('sandbox', 'allow-scripts');",
         "```"
-      ]
+      ],
+      "template": "backend-developer-design-chamber",
+      "body_file": ".agents/roles/backend-developer.md",
+      "kind": "builder",
+      "cc_model": "sonnet",
+      "escalate": "up to opus for {{risk.escalation}} or a change across several modules",
+      "work_type": "Data layer, server logic, auth, types",
+      "color": "#2ECC71",
+      "description": "Use when building or modifying {{stack.data_layer_summary}}. Frontend UI and pages belong to ui-ux-developer."
     },
     "ui-ux-developer": {
       "focus": "Presentation: `src/ui/**` (`index.html`, `main.ts`, `styles.css`, `rail/**`, `page/**`, `wall/**`, `components/**`, `model/**`, `status/**`, `blocks/**`, `systems/**`: panel and page markup, styles, viewer chrome around the iframes) and `test/ui/**` (pure view-model tests and the visual harness scenarios); layout per `docs/SPEC.md` §12; carries the Design and Usability bars",
@@ -289,10 +301,19 @@
         "frame.setAttribute('sandbox', ARTBOARD_SANDBOX); // 'allow-scripts' only, blob: document from frame-doc",
         "badge.classList.add('oc-sdk-badge'); // colours from --oc-* host tokens, follows the theme live",
         "```"
-      ]
+      ],
+      "description": "Use when building or modifying UI components, pages, styling, layouts, or any visual or accessibility work, to a designed, non-generic standard. The data layer ({{stack.data_layer_summary}}) belongs to backend-developer."
     },
     "qa-tester": {
-      "focus": "Verification after M/L tasks, risk-surface changes and user-visible features; regression tests (`test/**`); 🟣 entries in `documentation/known-issues.md`; never fixes production code"
+      "focus": "Verification after M/L tasks, risk-surface changes and user-visible features; regression tests (`test/**`); 🟣 entries in `documentation/known-issues.md`; never fixes production code",
+      "template": "qa-tester-design-chamber",
+      "body_file": ".agents/roles/qa-tester.md",
+      "kind": "reporter",
+      "cc_model": "opus",
+      "escalate": "the strongest model available for a high-stakes change on a risk surface, or a task that has already failed QA once",
+      "work_type": "Verification, review of a finished task",
+      "color": "#F39C12",
+      "description": "Use when reviewing code for correctness, verifying bug fixes, running quality gates, or auditing a feature for security, edge cases and quality issues. Use PROACTIVELY after any M or L implementation task, any task on a risk surface, and any user-visible feature. Reports findings, never fixes production code."
     },
     "browser-tester": {
       "template": "browser-tester-design-chamber",
@@ -308,5 +329,26 @@
     "code-reviewer": {
       "focus": "Independent review of a diff, on the user's request; logs minor issues to `documentation/known-issues.md`"
     }
+  },
+  "post_render": {
+    "_note": "Applied by .agents/render.js after the skill renders. Each exact `from` must match at least once or the render stops, so a template change is noticed. Then every em dash left in a generated file is replaced.",
+    "replace": [
+      {
+        "from": ", migrate a shared database or delete anything",
+        "to": " or delete anything"
+      },
+      {
+        "from": ";\n  migrations against a non-local database",
+        "to": ""
+      },
+      {
+        "from": "; dropping tables or data",
+        "to": ""
+      },
+      {
+        "from": ", non-local migrations,",
+        "to": ","
+      }
+    ]
   }
 }

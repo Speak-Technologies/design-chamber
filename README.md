@@ -284,7 +284,7 @@ npm run pack         # release zip, design-chamber-<version>.zip (build first)
 
 There is no dev server by design: rebuild with `npm run build` and reload the extension.
 
-To look at the built UI, `node test/ui/visual/shoot.mjs <filter> --out <folder>` runs it behind a mock OpenChamber host and an in-memory fake service in headless Chrome, at rail widths and full-screen, in light and dark. Always pass `--out`; the default writes into tracked docs. The pictures in this README come from `test/ui/visual/scenarios/readme-shots.mjs`, which points the same UI at the real built service on a scratch designs folder of fake projects.
+To look at the built UI, `node test/ui/visual/shoot.mjs <filter> --out <folder>` runs it behind a mock OpenChamber host and an in-memory fake service in headless Chrome, at rail widths and full-screen, in light and dark. Always pass `--out`; the default writes into tracked docs. Most pictures in this README come from `test/ui/visual/scenarios/readme-shots.mjs`, which points the same UI at the real built service on a scratch designs folder of fake projects. Two do not: `docs/img/checks-badge.png` was taken from the harness's `checks.mjs` scenario on the in-memory fake service, and `docs/img/system-check-board.png` is the picture `dc check --system` writes.
 
 Where to read more:
 
@@ -297,7 +297,7 @@ Where to read more:
 
 This repo is built by a small team of AI agents with one human owner. [`AGENTS.md`](AGENTS.md) and [`.agents/rules/claude-agent-protocol.md`](.agents/rules/claude-agent-protocol.md) say how they work. The main session leads, dispatches specialists, and reports with evidence. Pushing, opening or merging PRs and publishing stay with the owner.
 
-[`.agents/team.json`](.agents/team.json) is the source for `AGENTS.md` and for the agent files in `.claude/agents/` and `.opencode/agents/`. After editing it, re-render those files and run `node .agents/verify-team.js`. The script currently exits 1 on two known false positives, which are curly-brace sets in dated specs that it reads as unfilled placeholders: `documentation/specs/agent-guidance-and-pages.md` (`{API,DOCUMENTATION}`) and `documentation/specs/phase-2-technical.md` (task lists such as `{T1, T2a, T7a}`). Any other failure is real. The roster:
+[`.agents/team.json`](.agents/team.json) is the source for the agent files in `.claude/agents/` and `.opencode/agents/`, the protocol and the team block of `AGENTS.md` (the part between its `team:start` and `team:end` markers; the rest of that file is edited by hand). After editing it, re-render with `node .agents/render.js`. That runs the agent-team-generator, then removes the em dashes and the generic database wording its templates add, and finally runs `node .agents/verify-team.cjs`, which should pass. The roster:
 
 | Agent | Role |
 |---|---|
@@ -305,7 +305,7 @@ This repo is built by a small team of AI agents with one human owner. [`AGENTS.m
 | architect | Technical designs and threat models. No production code. |
 | backend-developer | The local service, shared types, the guest core, the `dc` command and the OpenCode plugin, and their tests. |
 | ui-ux-developer | The panel, page, wall, blocks and design-system screens, plus the visual harness scenarios. |
-| qa-tester | Verification after every implementation, regression tests, minor issues in `known-issues.md`. Never fixes production code. |
+| qa-tester | Verification after M and L tasks, changes on a risk surface and anything the user will see, plus regression tests and minor issues in `known-issues.md`. Small tasks off a risk surface get the author's own QA pass. Never fixes production code. |
 | browser-tester | The second QA step for UI changes. Walks the flow in the visual harness or a folder-installed OpenChamber, always on a scratch designs folder, rail and full-screen, dark and light. Never fixes code. |
 | code-reviewer | Independent review of a diff, on request. |
 

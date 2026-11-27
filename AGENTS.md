@@ -1,28 +1,29 @@
-# Design Chamber — Agent Guide
+# Design Chamber. Agent Guide
 
 ## Product context
 - an OpenChamber desktop-app extension that renders Claude-Design-style design canvases and full-screen HTML pages inside OpenChamber, from plain files the user's own chat agent writes to `~/Documents/Designs`
 - Personas: **The OpenChamber user** (designer-developer who chats with an agent to produce designs and wants to see, comment on, version and export them without leaving OpenChamber) · **The chat agent** (the user's own agent in OpenChamber, the author of every design file)
 
+<!-- team:start; rewritten by render-team.cjs on every run; edit .agents/team.json instead -->
 ## How we work
-**Full process: `.agents/rules/claude-agent-protocol.md` — read it before your first task.**
+**Full process: `.agents/rules/claude-agent-protocol.md`: read it before your first task.**
 (Claude Code loads it through `CLAUDE.md`; every other harness reads it explicitly.) The short version, which holds even if you read nothing else:
 
 - **The main agent leads.** No project-manager agent: the session talking to the user plans,
   dispatches the specialists below, tracks their evidence and reports back. Prefer
   dispatching; a small, quick, single-discipline change with no risk surface may be done
-  directly — after reading that specialist's file and following its rules and self-check.
+  directly; after reading that specialist's file and following its rules and self-check.
 - **Open permissions, user-gated actions.** Agents edit any file, run any command the task
   needs, and commit freely. They `git push`, open or merge PRs, deploy
-  (publishing or releasing the extension (`npm publish`, tags, GitHub releases), `gh repo create`, `gh pr create` / `gh pr merge`, uninstalling or deleting any OpenChamber extension the agent did not install itself, deleting anything under `~/Documents/Designs` the agent did not create, `rm -rf` outside this repo, any edit to the OpenChamber source (`~/Documents/GitHub/openchamber`) or `~/Documents/GitHub/openchamber-design-canvas` (both read-only references)), migrate a shared database or delete anything **only when the
-  user has said so in this conversation** — and then without asking again. Not asked yet →
+  (publishing or releasing the extension (`npm publish`, tags, GitHub releases), `gh repo create`, `gh pr create` / `gh pr merge`, uninstalling or deleting any OpenChamber extension the agent did not install itself, deleting anything under `~/Documents/Designs` the agent did not create, `rm -rf` outside this repo, any edit to the OpenChamber source (`~/Documents/GitHub/openchamber`) or `~/Documents/GitHub/openchamber-design-canvas` (both read-only references)) or delete anything **only when the
+  user has said so in this conversation**; and then without asking again. Not asked yet →
   finish, commit, offer the exact command. `.env` (if one is ever created; none is expected) may be read and updated;
   its values never reach a commit, a log or a report.
 - **Stay in your lane.** Each agent focuses on what it owns (table below). A small adjacent
   edit the task needs is fine and is named in the report; anything larger goes to its owner.
 - **Senior ladder before any code:** (1) does this need to exist? (2) already in this
-  codebase — reuse it; (3) does an installed dependency do it; (4) can it be one line;
-  (5) only then the minimum that works — **never** dropping error handling, graceful
+  codebase, reuse it; (3) does an installed dependency do it; (4) can it be one line;
+  (5) only then the minimum that works, **never** dropping error handling, graceful
   user-facing errors or any part of the user experience.
 - **Evidence, not claims.** Gates are run and their output quoted. Unknown business rules are
   asked, never guessed.
@@ -31,7 +32,7 @@
 ## Agent team
 | Agent | Focus (owns) | Hands off to |
 |---|---|---|
-| **Main agent** (the session itself — no file) | Plans, dispatch, tracking, small direct changes; `AGENTS.md`, agent files, roadmaps; **shared root files** — `.agents/**` (incl. `team.json`; re-render after editing it), root `package.json` (with the extension manifest under `openchamber`), lockfile, `tsconfig.json`, `.gitignore`, the esbuild config (`scripts/build.mjs`), `scripts/pack.mjs`, `scripts/guest-check.mjs`, `.github/workflows/**`, `opencode.json`, `.claude/settings.json` — edited itself or assigned to one builder at a time | all agents |
+| **Main agent** (the session itself: no file) | Plans, dispatch, tracking, small direct changes; `AGENTS.md`, agent files, roadmaps; **shared root files**: `.agents/**` (incl. `team.json`; re-render after editing it), root `package.json` (with the extension manifest under `openchamber`), lockfile, `tsconfig.json`, `.gitignore`, the esbuild config (`scripts/build.mjs`), `scripts/pack.mjs`, `scripts/guest-check.mjs`, `.github/workflows/**`, `opencode.json`, `.claude/settings.json`; edited itself or assigned to one builder at a time | all agents |
 | product-specialist | Requirement specs for features and flows (returned as a report; persisted to `documentation/specs/<feature>.md` on request); no code, no technical decisions | architect |
 | architect | Technical designs and threat models; `documentation/specs/**`; keeps `docs/SPEC.md` current on the main agent's request; no production code | backend-developer, ui-ux-developer |
 | backend-developer | All non-presentation code: `src/shared/**` (`types.ts`, `api.ts`, `limits.ts`, `bridge-protocol.ts`, `design-json.ts`, `agent/**`), `src/service/**` (`main.ts`, `http.ts`, `context.ts`, `routes/*.ts` and the lane modules), `src/guest/**` (host, service-client, changes, store, camera, frame-doc, `bridge/**`, anchoring, flows, `background-main.ts`, `globals.d.ts`), `src/cli/**`, `src/plugin/**`, `test/**` except `test/ui/**`; layout per `docs/SPEC.md` §12 | qa-tester |
@@ -43,17 +44,19 @@
 Claude Code: agents live in `.claude/agents/*.md`, permissions in `.claude/settings.json`.
 OpenCode: the same team in `.opencode/agents/*.md`, permissions in `opencode.json`; the main
 agent is OpenCode's default `build` agent. When a convention changes, update both sets
-together — same roster, same rules.
+together; same roster, same rules.
+<!-- team:end -->
 
 ## Dev commands
-- `npm run build` — `scripts/build.mjs` (esbuild): `dist/panel/` (panel + page guest, IIFE), `dist/background/` (slash-command guest, IIFE), `dist/status/` and `dist/blocks/` (Work Status and chat-block frames), `dist/service/main.js` (Node ESM), `dist/cli/dc.mjs` (the agent's check command, Node ESM), `dist/plugin/` and `dist/skills/`. `dist/` is gitignored, so build before a folder install.
-- `npm run typecheck` — `tsc --noEmit`, strict.
-- `npm test` — `node --test --test-concurrency=1 "test/**/*.test.ts"` (Node ≥ 22.18 strips the types; one file: `node --test test/shared/design-json.test.ts`).
-- `npm run check` — typecheck + build + test.
-- `npm run guest-check` — the SDK's own package checker on the built manifest, HTML entries and service (run `npm run build` first); CI runs it after `npm run check`.
-- `npm run pack` — release zip `design-chamber-<version>.zip` (run `npm run build` first; publishing it is user-gated).
-- `node test/ui/visual/shoot.mjs <filter> --out <scratch folder>` — the visual harness, after `npm run build`: the built UI behind a mock host and the in-memory fake service, in headless Chrome, rail at 320 and 480 px and the page at 1400 px, dark and light; every `test/ui/visual/scenarios/*.mjs` runs, `<filter>` is a regex on the name. Not part of `npm test`. Always pass `--out`: the default writes into the tracked `documentation/pages/img/`. Chrome not at the usual path → set `DC_TEST_CHROME`.
-- **Quality gates: `npm run typecheck` · `npm run build` · `npm test` — all three pass before any task is done; `npm run check` runs them together. No dev or watch command: there is no dev server by design (`docs/SPEC.md` §1); rebuild with `npm run build`.**
+- `npm run build`, `scripts/build.mjs` (esbuild): `dist/panel/` (panel + page guest, IIFE), `dist/background/` (slash-command guest, IIFE), `dist/status/` and `dist/blocks/` (Work Status and chat-block frames), `dist/service/main.js` (Node ESM), `dist/cli/dc.mjs` (the agent's check command, Node ESM), `dist/plugin/` and `dist/skills/`. `dist/` is gitignored, so build before a folder install.
+- `npm run typecheck`, `tsc --noEmit`, strict.
+- `npm test`, `node --test --test-concurrency=1 "test/**/*.test.ts"` (Node ≥ 22.18 strips the types; one file: `node --test test/shared/design-json.test.ts`).
+- `npm run check`, typecheck + build + test.
+- `npm run guest-check`, the SDK's own package checker on the built manifest, HTML entries and service (run `npm run build` first); CI runs it after `npm run check`.
+- `npm run pack`, release zip `design-chamber-<version>.zip` (run `npm run build` first; publishing it is user-gated).
+- `node test/ui/visual/shoot.mjs <filter> --out <scratch folder>`, the visual harness, after `npm run build`: the built UI behind a mock host and the in-memory fake service, in headless Chrome, rail at 320 and 480 px and the page at 1400 px, dark and light; every `test/ui/visual/scenarios/*.mjs` runs, `<filter>` is a regex on the name. Not part of `npm test`. Always pass `--out`: the default writes into the tracked `documentation/pages/img/`. Chrome not at the usual path → set `DC_TEST_CHROME`.
+- `node .agents/render.js`: re-render the agent team from `.agents/team.json` (the skill renderer, then the project fixes for em dashes and generic database wording), then run `node .agents/verify-team.cjs`. Only the `team:start` to `team:end` block of this file is regenerated; the rest is edited by hand.
+- **Quality gates: `npm run typecheck` · `npm run build` · `npm test`, all three pass before any task is done; `npm run check` runs them together. No dev or watch command: there is no dev server by design (`docs/SPEC.md` §1); rebuild with `npm run build`.**
 
 ## Critical gotchas
 - **Sources of truth:** `docs/BRIEF.md` (owner decisions; anything not listed there is open, so ask, don't guess; edit it only on the user's instruction) and `docs/SPEC.md` (the technical spec, the authority for architecture and lanes; changes go through the architect).

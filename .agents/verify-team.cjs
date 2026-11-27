@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * verify-team.js — mechanical checks for a generated agent team.
+ * verify-team.cjs — mechanical checks for a generated agent team.
  *
  * Run from the target project's root after generation (SKILL.md Step 6), and again whenever
  * the roster or a convention changes:
  *
- *   node .agents/verify-team.js            # after the skill copies it there
- *   node <skill-dir>/scripts/verify-team.js [target-root]
+ *   node .agents/verify-team.cjs            # after the skill copies it there
+ *   node <skill-dir>/scripts/verify-team.cjs [target-root]
  *
  * Plain Node, no dependencies. Exit 1 on any FAIL. Warnings do not fail the run.
  */
@@ -92,14 +92,27 @@ function walk(dir, out = []) {
   return out;
 }
 
-const generated = [
-  P('AGENTS.md'), P('CLAUDE.md'), P('GEMINI.md'), protocolPath, P('.claude', 'settings.json'), ocConfigPath,
-  ...walk(ccDir), ...walk(ocDir), ...walk(neutralDir), ...walk(P('documentation')),
-  ...walk(P('.opencode', 'commands')),
-].filter(exists);
+// Only files the skill rendered: hand-written docs and specs legitimately contain braces.
+// .agents/.rendered.json (written by render-team.cjs) is the list; without it, the generated
+// set below, which leaves out documentation/ except the seeded files.
+const manifestPath = P('.agents', '.rendered.json');
+let manifest = null;
+if (exists(manifestPath)) {
+  try { manifest = JSON.parse(read(manifestPath)).files; } catch (e) { fail(`.agents/.rendered.json is valid JSON (${e.message})`); }
+}
+const generated = (Array.isArray(manifest)
+  ? manifest.map((rel) => P(...rel.split('/'))).filter((p) => /\.(md|json|mdc)$/.test(p))
+  : [
+    P('AGENTS.md'), P('CLAUDE.md'), P('GEMINI.md'), protocolPath, P('.claude', 'settings.json'), ocConfigPath,
+    ...walk(ccDir), ...walk(ocDir), ...walk(neutralDir),
+    P('documentation', 'README.md'), P('documentation', 'known-issues.md'),
+  ]).filter(exists);
 
+// In a file with a team block (AGENTS.md), only the block is the skill's.
+const TEAM_BLOCK = /<!-- team:start[^>]*-->[\s\S]*?<!-- team:end -->/;
 for (const f of generated) {
-  const text = read(f);
+  const full = read(f);
+  const text = (full.match(TEAM_BLOCK) || [full])[0];
   const hits = findPlaceholders(text);
   if (/\{\{[#^/>]/.test(text)) hits.push('unrendered {{#section}} tag');
   check(hits.length === 0, `${relOf(f)}: no unfilled placeholders${hits.length ? ` (${hits.slice(0, 3).join('; ')}${hits.length > 3 ? '; …' : ''})` : ''}`);

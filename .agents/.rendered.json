@@ -1,0 +1,24 @@
+{
+  "note": "Written by render-team.cjs. Files this skill rendered; verify-team.cjs checks only these.",
+  "files": [
+    ".agents/rules/claude-agent-protocol.md",
+    ".claude/agents/architect.md",
+    ".claude/agents/backend-developer.md",
+    ".claude/agents/browser-tester.md",
+    ".claude/agents/code-reviewer.md",
+    ".claude/agents/product-specialist.md",
+    ".claude/agents/qa-tester.md",
+    ".claude/agents/ui-ux-developer.md",
+    ".claude/settings.json",
+    ".opencode/agents/architect.md",
+    ".opencode/agents/backend-developer.md",
+    ".opencode/agents/browser-tester.md",
+    ".opencode/agents/code-reviewer.md",
+    ".opencode/agents/product-specialist.md",
+    ".opencode/agents/qa-tester.md",
+    ".opencode/agents/ui-ux-developer.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "opencode.json"
+  ]
+}

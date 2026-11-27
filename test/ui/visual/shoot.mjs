@@ -22,6 +22,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -54,7 +55,10 @@ const browser = { bundle: true, format: 'iife', platform: 'browser', target: ['e
 const bridge = (await build({ ...browser, entryPoints: [path.join(root, 'src', 'guest', 'bridge', 'bridge.ts')], minify: true })).outputFiles[0].text;
 // The blocks bundle has the interview questions baked in, as the real build does (scripts/build.mjs 10c).
 const systemQuestions = parseSystemQuestions(readFileSync(path.join(root, 'rules', 'SYSTEM-QUESTIONS.md'), 'utf8'));
-const define = { __DC_BRIDGE__: JSON.stringify(bridge), __DC_SYSTEM_QUESTIONS__: JSON.stringify(systemQuestions) };
+// Per-run secret for the live proxy below: baked into the harness bundle (fake-host.ts sends it), so only code of the
+// harness's own UI can use /live/*, not a script in a design frame or another tab that guesses the port.
+const liveSecret = randomBytes(24).toString('hex');
+const define = { __DC_BRIDGE__: JSON.stringify(bridge), __DC_SYSTEM_QUESTIONS__: JSON.stringify(systemQuestions), __DC_LIVE_SECRET__: JSON.stringify(liveSecret) };
 const harnessJs = (await build({ ...browser, entryPoints: [path.join(here, 'fake-main.ts')], define })).outputFiles[0].text;
 
 // A frame's real entry point, with `@openchamber/sdk` swapped for fake-sdk.ts (the real SDK with
@@ -75,12 +79,23 @@ const frames = {
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' };
 // `?live=1` pages (README screenshots): /live/* goes to the real built service named by DC_LIVE_PORT and DC_LIVE_TOKEN,
-// with the token added here so the page never holds it. Without those variables nothing is proxied.
+// with the token added here so the page never holds it. Without those variables nothing is proxied. The service trusts
+// the token alone, so a request is forwarded only with this run's secret in `x-dc-live` (compared in constant time):
+// a cross-origin caller cannot send that header without a preflight, which is refused here, and cannot read it.
+const liveAllowed = (request) => {
+  const given = Buffer.from(String(request.headers['x-dc-live'] ?? ''));
+  const want = Buffer.from(liveSecret);
+  return given.length === want.length && timingSafeEqual(given, want);
+};
 const liveProxy = async (request, response, url) => {
   const port = process.env.DC_LIVE_PORT;
   const token = process.env.DC_LIVE_TOKEN;
   if (!port || !token) {
     response.writeHead(404).end();
+    return;
+  }
+  if (!liveAllowed(request)) {
+    response.writeHead(403).end();
     return;
   }
   const chunks = [];

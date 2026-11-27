@@ -41,14 +41,17 @@ const routesFromUrl = (): Array<[RouteKey, RouteOverride]> => {
 
 /**
  * `?live=1`: answer service requests from the real built service instead of the fake backend. `shoot.mjs` proxies
- * `/live/*` to the service named by DC_LIVE_PORT and DC_LIVE_TOKEN, so the token never reaches the page. Only the
- * README screenshot scenario uses it, against a scratch designs root.
+ * `/live/*` to the service named by DC_LIVE_PORT and DC_LIVE_TOKEN, so the token never reaches the page. The call carries
+ * this run's secret (`__DC_LIVE_SECRET__`, baked in by shoot.mjs) or the proxy refuses it. Only the README screenshot
+ * scenario uses it, against a scratch designs root.
  */
+declare const __DC_LIVE_SECRET__: string | undefined;
 const liveRequest = async (request: { method: string; path: string; query?: Record<string, string>; body?: string }): Promise<{ status: number; body: string }> => {
   const query = new URLSearchParams(request.query ?? {}).toString();
   const response = await fetch(`/live/${request.path.replace(/^\/+/, '')}${query ? `?${query}` : ''}`, {
     method: request.method,
-    ...(request.body ? { headers: { 'content-type': 'application/json' }, body: request.body } : {}),
+    headers: { 'x-dc-live': typeof __DC_LIVE_SECRET__ === 'string' ? __DC_LIVE_SECRET__ : '', ...(request.body ? { 'content-type': 'application/json' } : {}) },
+    ...(request.body ? { body: request.body } : {}),
   });
   return { status: response.status, body: await response.text() };
 };
