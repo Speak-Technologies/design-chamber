@@ -842,6 +842,14 @@ export const renderLivingPage = async (ctx: ServiceContext, id: string, options:
   return meta;
 };
 
+/** Forget every rendered page (quiet mode, native-extras §4.3). A later chunk answers `stale`; a render rebuilds. */
+export const dropLivingRenders = (ctx: ServiceContext): void => {
+  const state = shared.get(ctx);
+  if (state === undefined) return;
+  state.renders.clear();
+  state.renderBytes = 0;
+};
+
 /** One chunk of a rendered living page; `stale` when the key was dropped or belongs to another system. */
 export const livingPageChunk = (ctx: ServiceContext, id: string, key: string, n: number): string => {
   const entry = sharedOf(ctx).renders.get(key);

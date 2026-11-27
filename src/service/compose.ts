@@ -15,8 +15,10 @@ import { createHostCalls } from './host-calls.ts';
 import { createRouter, registerHealthRoute, type Router } from './http.ts';
 import { findSkillReferenceDir, instructionsFileOf, startInstructions } from './instructions.ts';
 import { createOutboxStore } from './outbox.ts';
+import { createPace } from './pace.ts';
 import { ensureRenderService } from './render-cache.ts';
 import { ensureLauncherService } from './check/launcher.ts';
+import { ensureChecksService } from './check/service.ts';
 import { registerChangesRoutes } from './routes/changes.ts';
 import { registerChecksRoutes } from './routes/checks.ts';
 import { registerChatRoutes } from './routes/chat.ts';
@@ -54,6 +56,7 @@ import { registerVersionsRoutes } from './routes/versions.ts';
 import { registerViewRoutes, viewFilePath } from './routes/view.ts';
 import { writeRuntimeRecord } from './runtime-record.ts';
 import { createSelfWrites } from './self-writes.ts';
+import { createSessionMarks } from './session-marks.ts';
 import { createSettingsStore, settingsFilePath, type SettingsEnv } from './settings.ts';
 import { createDesignStore } from './store.ts';
 import { startChoiceReconciler } from './systems/choice.ts';
@@ -61,7 +64,7 @@ import { startFolderRequests } from './folder-requests.ts';
 import { ensureLinkService } from './systems/link.ts';
 import { ensureBuildTickets } from './systems/builds.ts';
 import { startHomes } from './systems/homes.ts';
-import { startLivingPages } from './systems/living-page.ts';
+import { dropLivingRenders, startLivingPages } from './systems/living-page.ts';
 import { startProposals } from './systems/proposals.ts';
 import { startSnapshots } from './systems/snapshot.ts';
 import { ensureSystemStore } from './systems/store.ts';
@@ -134,8 +137,8 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
     hostCalls: createHostCalls({ env: options.env ?? process.env, log }),
     activity: createActivityTracker(),
     selfWrites,
-    // T0a stub (native-extras §4.3): always active until T3c wires `createPace`.
-    pace: { touch: () => undefined },
+    // Replaced as soon as the watcher it slows has started.
+    pace: unavailable('quiet mode'),
     onDispose: (fn) => {
       disposers.push(fn);
     },
@@ -157,6 +160,28 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
 
   const watcher = startWatcher({ settings, hub, log, selfWrites, ...options.watch });
   ctx.onDispose(() => watcher.stop());
+
+  // Quiet mode (native-extras §4.3): with no window asking for changes, the watcher's backstop
+  // slows and the rendered documents are let go. It has no timer of its own, so nothing to dispose.
+  const renders = ensureRenderService(ctx);
+  ctx.pace = createPace({
+    watcher,
+    renders: {
+      dropAll: () => {
+        renders.dropAll();
+        dropLivingRenders(ctx);
+      },
+    },
+    log,
+  });
+
+  // Sidebar marks on linked design chats (native-extras §4.2): set once the watcher's baseline is
+  // seeded; from then on they follow the change hub.
+  const marks = createSessionMarks({ index: designIndex, checks: ensureChecksService(ctx), activity: ctx.activity, hostCalls: ctx.hostCalls, hub, log });
+  ctx.onDispose(() => marks.dispose());
+  void watcher.ready
+    .then(() => marks.start())
+    .catch((error: unknown) => log.warn('session-marks.start-failed', { error: error instanceof Error ? error.name : 'unknown' }));
 
   // Phase 2.5 §5.4, §5.5: a copy swap a restart interrupted is finished or undone, and the agent's
   // recorded `systemChoice` is acted on from the first design event on, plus one sweep once the

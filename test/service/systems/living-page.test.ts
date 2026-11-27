@@ -18,14 +18,17 @@ import { FONTS_EMBEDDED_LINE, FONTS_FALLBACK_LINE } from '../../../src/service/s
 import {
   committedStateOf,
   dropLivingPages,
+  dropLivingRenders,
   LIVING_CHANGED_SENTENCE,
   livingFreshSentence,
   livingMissingSentence,
   livingOutOfDateSentence,
+  livingPageChunk,
   livingPagesIdle,
   livingPageState,
   parseLivingRecord,
   regenerateLivingPage,
+  renderLivingPage,
   startLivingPages,
   type LivingPageRecord,
 } from '../../../src/service/systems/living-page.ts';
@@ -327,6 +330,23 @@ test('a home change drops the staged page, the preview and the record', async (t
   await dropLivingPages(rig.ctx, id);
   assert.equal(await rig.staged(id), null);
   assert.equal(await rig.record(id), null);
+});
+
+test('dropping the rendered pages (quiet mode) forgets them all; rendering again builds the same one', async (t) => {
+  const rig = await setup(t);
+  dropLivingRenders(rig.ctx); // nothing rendered yet: nothing to do
+  const id = await rig.repoSystem();
+  await rig.refresh(id);
+  const first = await renderLivingPage(rig.ctx, id, { which: 'staged', scheme: 'light' });
+  const dark = await renderLivingPage(rig.ctx, id, { which: 'staged', scheme: 'dark' });
+  const text = livingPageChunk(rig.ctx, id, first.key, 0);
+
+  dropLivingRenders(rig.ctx);
+  for (const meta of [first, dark]) assert.throws(() => livingPageChunk(rig.ctx, id, meta.key, 0), { code: 'stale' });
+
+  const again = await renderLivingPage(rig.ctx, id, { which: 'staged', scheme: 'light' });
+  assert.equal(again.key, first.key);
+  assert.equal(livingPageChunk(rig.ctx, id, again.key, 0), text);
 });
 
 test('the service start regenerates a page whose record is missing', async (t) => {
