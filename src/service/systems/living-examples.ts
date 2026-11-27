@@ -67,6 +67,8 @@ export const EXAMPLE_CSP = CHECK_CSP.replace(/script-src [^;]*/, "script-src 'no
 const BROWSER_START_MS = 20_000;
 /** A restart launch with less of the batch budget left than this is not started; the rest of the batch fails instead. */
 const RESTART_LAUNCH_MIN_MS = 3000;
+/** A picture that fails is tried once more with this many times its window: a slow machine's or a cold browser's can miss the first. */
+const RETRY_WINDOW_FACTOR = 2;
 const WORK_PREFIX = 'dc-living-';
 const CACHE_FOLDER = 'living-examples';
 const CACHE_FILE = /^[0-9a-f]{64}\.png$/;
@@ -306,13 +308,24 @@ const withTimeout = async <T>(work: Promise<T>, ms: number, onTimeout: () => voi
 };
 
 /**
- * Draws the planned shots that have no cached picture, one at a time on one browser. A browser that
- * fails twice in a row is restarted once (the check engine's rule); a third failure in a row, the
- * batch budget or an abort leaves the rest `render-failed`. Answers the PNG bytes or a reason per key.
+ * Draws the planned shots that have no cached picture, one at a time on one browser. A shot that fails
+ * is tried a second time with a longer window before it counts as failed. A browser that fails two
+ * shots in a row is restarted once (the check engine's rule), as is one that exited; a third failed
+ * shot in a row, the batch budget or an abort leaves the rest `render-failed`. Answers the PNG bytes or
+ * a reason per key, and tells `onFailure` why each attempt (or the browser's start) failed.
  */
 export const drawShots = async (
   shots: readonly PlannedShot[],
-  options: { openBrowser: (launch?: OpenBrowserOptions) => Promise<CdpSession>; signal?: AbortSignal; clock?: () => number; shotTimeoutMs?: number; budgetMs?: number; settleMs?: number },
+  options: {
+    openBrowser: (launch?: OpenBrowserOptions) => Promise<CdpSession>;
+    signal?: AbortSignal;
+    clock?: () => number;
+    shotTimeoutMs?: number;
+    budgetMs?: number;
+    settleMs?: number;
+    /** `shot` is null when the browser itself did not start (or restart); `attempt` is 1 or 2. */
+    onFailure?: (failure: { shot: PlannedShot | null; attempt: number; error: string }) => void;
+  },
 ): Promise<Map<string, { png: Buffer } | { reason: ExampleReason }>> => {
   const out = new Map<string, { png: Buffer } | { reason: ExampleReason }>();
   if (shots.length === 0) return out;
@@ -330,6 +343,7 @@ export const drawShots = async (
     session = await options.openBrowser(options.signal ? { signal: options.signal } : {});
   } catch (error) {
     if (error instanceof CdpUnavailable || error instanceof CdpError) {
+      options.onFailure?.({ shot: null, attempt: 1, error: error.message });
       failRest(0, 'render-failed');
       return out;
     }
@@ -348,8 +362,14 @@ export const drawShots = async (
   options.signal?.addEventListener('abort', onAbort, { once: true });
   try {
     await session.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => undefined);
-    for (const [index, shot] of shots.entries()) {
-      if (out.has(shot.key)) continue; // the same picture twice in one batch
+    let index = 0;
+    let attempt = 1;
+    while (index < shots.length) {
+      const shot = shots[index] as PlannedShot; // safe: index < length
+      if (out.has(shot.key)) {
+        index += 1; // the same picture twice in one batch
+        continue;
+      }
       if (options.signal?.aborted === true || clock() - started > budgetMs || failures >= 3) {
         failRest(index, 'render-failed');
         break;
@@ -367,7 +387,8 @@ export const drawShots = async (
           session = await options.openBrowser({ launchBudgetMs: Math.min(DEFAULT_LAUNCH_BUDGET_MS, left), ...(options.signal ? { signal: options.signal } : {}) });
           await session.send('Browser.setDownloadBehavior', { behavior: 'deny' }).catch(() => undefined);
           page = null;
-        } catch {
+        } catch (error) {
+          options.onFailure?.({ shot: null, attempt: 2, error: error instanceof Error ? error.message : 'the browser did not restart' });
           failRest(index, 'render-failed');
           break;
         }
@@ -377,11 +398,12 @@ export const drawShots = async (
       }
       const alive = { value: true };
       live = alive;
+      const windowMs = attempt === 1 ? shotMs : shotMs * RETRY_WINDOW_FACTOR;
       try {
-        page ??= await openPage(session, serving, shotMs);
+        page ??= await openPage(session, serving, windowMs);
         counter += 1;
         const current = page;
-        const png = await withTimeout(shoot(session, current, serving, shot, counter, settleMs, alive), shotMs, () => {
+        const png = await withTimeout(shoot(session, current, serving, shot, counter, settleMs, alive), windowMs, () => {
           alive.value = false;
         });
         failures = 0;
@@ -390,12 +412,19 @@ export const drawShots = async (
         else out.set(shot.key, { png });
       } catch (error) {
         if (!(error instanceof ShotTimeout || error instanceof CdpError || error instanceof CdpUnavailable)) throw error;
-        failures += 1;
-        out.set(shot.key, { reason: 'render-failed' });
+        options.onFailure?.({ shot, attempt, error: error instanceof ShotTimeout ? `no picture in ${windowMs} ms` : error.message });
         const stale = page;
         page = null;
         if (stale !== null) await session.send('Target.closeTarget', { targetId: stale.targetId }, { timeoutMs: 3000 }).catch(() => undefined);
+        if (attempt === 1) {
+          attempt = 2; // the same shot again, on a new page
+          continue;
+        }
+        failures += 1;
+        out.set(shot.key, { reason: 'render-failed' });
       }
+      attempt = 1;
+      index += 1;
     }
   } finally {
     options.signal?.removeEventListener('abort', onAbort);
@@ -589,6 +618,14 @@ export const renderExamplePngs = async (
           ...(deps.shotTimeoutMs !== undefined ? { shotTimeoutMs: deps.shotTimeoutMs } : {}),
           ...(deps.budgetMs !== undefined ? { budgetMs: deps.budgetMs } : {}),
           ...(deps.settleMs !== undefined ? { settleMs: deps.settleMs } : {}),
+          // Browser and timing text only: never the document or its path.
+          onFailure: ({ shot, attempt, error }) =>
+            ctx.log.warn(shot === null ? 'systems.living-examples.browser-failed' : 'systems.living-examples.shot-failed', {
+              system: options.id,
+              ...(shot === null ? {} : { picture: shot.component }),
+              attempt,
+              error,
+            }),
         });
         for (const [key, result] of drawn) {
           if ('reason' in result) {

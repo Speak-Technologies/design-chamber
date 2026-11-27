@@ -206,6 +206,14 @@ test('a repo system stages its screens as pictures, records the one that failed,
   assert.ok(blocked?.secrets.every((hit) => hit.where === 'screen:home'), JSON.stringify(blocked?.secrets));
 });
 
+test('screens on a slow machine are drawn: each misses the first window and fits the second', async (t) => {
+  const { run } = await rig(t);
+  const fake = createFakeBrowser({ loadDelayMs: () => 1400 });
+  const detail = detailOf({ viewports: [{ id: 'laptop', label: 'Laptop', width: 1280, height: 800 }, { id: 'phone', label: 'Phone', width: 390, height: 844 }], screens: [SCREENS[0]] });
+  const shots = await run(detail, { openBrowser: fake.open, shotTimeoutMs: 1000 });
+  assert.deepEqual(shots.map((shot) => [shot.width, shot.height, shot.reason]), [[1280, 800, null], [390, 844, null]]);
+});
+
 // ---- in Chrome ----
 
 test('in Chrome: each screen is drawn at its viewport size with its linked tokens, and its script does not run', async (t) => {
@@ -217,9 +225,12 @@ test('in Chrome: each screen is drawn at its viewport size with its linked token
   };
   const { ctx, systemDir } = await rig(t, files);
   assert.ok(resolveBrowser(ctx.settings.read()).path !== null);
+  // This test is about the pictures, not their timing: a CI runner can stall one past the product's window.
+  configureLivingExamples(ctx, { shotTimeoutMs: 20_000 });
   const detail = detailOf({ viewports: [{ id: 'laptop', label: 'Laptop', width: 1280, height: 800 }, { id: 'phone', label: 'Phone', width: 390, height: 844 }], screens: [SCREENS[0]] }, files);
   const shots = await renderExamplePngs(ctx, detail, { schemes: ['light'], signal: new AbortController().signal, source: createLiveFileSource(systemDir), id: 'acme', systemDir });
-  assert.deepEqual(shots.map((shot) => [shot.width, shot.height, shot.reason]), [[1280, 800, null], [390, 844, null]]);
+  const logged = ctx.logs.filter((line) => line.event.startsWith('systems.living-examples.')).map((line) => JSON.stringify(line.fields)).join('\n');
+  assert.deepEqual(shots.map((shot) => [shot.width, shot.height, shot.reason]), [[1280, 800, null], [390, 844, null]], logged);
   for (const shot of shots) {
     assert.ok(shot.png !== null);
     const image = decodePng(Buffer.from(shot.png));

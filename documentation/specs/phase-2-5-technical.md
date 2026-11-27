@@ -1600,7 +1600,7 @@ stages `living-page.html` (as below); `proposal` reads `_systems/<id>/proposal/`
       pictures' own inputs or rendering change). A page-generator bump must not re-render every picture.
    3. One CDP session for the whole batch (`openCdp` with `checkBrowserArgs`, the browser from `chrome.ts`
       `resolveBrowser`, the check engine's restart-once rule), concurrency 1, each shot ≤
-      `LIVING_EXAMPLE_TIMEOUT_MS` (5 s), the batch ≤ `LIVING_EXAMPLES_BUDGET_MS` (60 s), abortable. Each document
+      `LIVING_EXAMPLE_TIMEOUT_MS` (5 s, and one retry on a new page with 10 s; only a picture that fails both counts), the batch ≤ `LIVING_EXAMPLES_BUDGET_MS` (60 s), abortable. Each document
       is served from memory at `DOCUMENT_ORIGIN` with the response header `EXAMPLE_CSP` = `CHECK_CSP` with
       `script-src 'none'` (no other change); every other request fails (as `render.ts`); before navigation
       `Emulation.setScriptExecutionDisabled { value: true }`, `Emulation.setEmulatedMedia` for the scheme and
