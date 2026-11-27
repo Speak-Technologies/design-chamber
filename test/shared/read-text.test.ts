@@ -234,6 +234,15 @@ describe('formatReadText', () => {
     assert.match(text, /element: `` a`b c ``\n/);
   });
 
+  test('a design that follows its project names the project files, capped, as code spans', () => {
+    const files = Array.from({ length: 12 }, (_, n) => `docs/design-${n}.md`);
+    const found = formatReadText(baseRead({ system: { state: 'project', files: { state: 'found', directory: '/home/u/code/shop', files: ['evil`\nname.md', ...files], more: 2, components: ['src/components'], screens: ['app', 'src/pages'] } } }));
+    assert.match(found, /\n {2}Read these first, in \/home\/u\/code\/shop: `` evil` name\.md ``, `docs\/design-0\.md`/);
+    assert.match(found, /`docs\/design-6\.md`, and 7 more\n {2}Its components in `src\/components`; screens in `app`, `src\/pages`\./);
+    const empty = formatReadText(baseRead({ system: { state: 'project', files: { state: 'empty', directory: '/home/u/code/shop', components: [], screens: [] } } }));
+    assert.match(empty, /\nSystem: follows the project's own design files\n {2}Design Chamber found no design docs or token files in \/home\/u\/code\/shop\. Follow how the project already looks\.\nOpen now:/);
+  });
+
   test('hand edits, the open view, a damaged design.json and a stale check each have their line', () => {
     const text = formatReadText(
       baseRead({

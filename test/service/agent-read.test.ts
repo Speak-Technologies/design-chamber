@@ -307,6 +307,36 @@ test('a design made to follow its project says so in the list and in the read', 
   assert.match(formatReadText(one.answer), /\nSystem: follows the project's own design files\n/);
 });
 
+test('dc read lists the design files of the project a design follows, and says when the folder cannot be read', async (t) => {
+  const { tmp, root, dataDir } = await setup(t);
+  const project = tmp.at('code/shop');
+  await tmp.write('code/shop/DESIGN.md', '# Shop design\n');
+  await tmp.write('code/shop/src/styles/tokens.css', ':root { --brand: #0a5; --ink: #111; --paper: #fff; --line: #ddd; --muted: #666; }\n');
+  await tmp.write('code/shop/src/components/Button.tsx', 'export const Button = () => null;\n');
+  await tmp.write('designs/pricing-page/.chamber/state.json', stateJson([], { systemDecision: 'project', projectDirectory: project }));
+  const one = await read(root, dataDir, 'pricing-page');
+  assert.ok(one.ok);
+  if (!one.ok) return;
+  assert.equal(one.answer.system.state, 'project');
+  const text = formatReadText(one.answer);
+  assert.match(text, new RegExp(`\\nSystem: follows the project's own design files\\n {2}Read these first, in ${project.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}: \`DESIGN\\.md\`, \`src/styles/tokens\\.css\``));
+  assert.match(text, /\n {2}Its components in `src\/components`\. Copy their structure and states into this design; don't import or run them\.\n/);
+
+  // The project folder is gone: the agent is told to look itself, and nothing is invented.
+  await tmp.write('designs/pricing-page/.chamber/state.json', stateJson([], { systemDecision: 'project', projectDirectory: tmp.at('code/gone') }));
+  const gone = await read(root, dataDir, 'pricing-page');
+  assert.ok(gone.ok);
+  if (!gone.ok) return;
+  assert.match(formatReadText(gone.answer), /\n {2}Design Chamber couldn't read .*code\/gone just now\. Look at the project's design files yourself before you draw\.\n/);
+
+  // A design with no project folder: the follow line alone.
+  await tmp.write('designs/pricing-page/.chamber/state.json', stateJson([], { systemDecision: 'project', projectDirectory: null }));
+  const bare = await read(root, dataDir, 'pricing-page');
+  assert.ok(bare.ok);
+  if (!bare.ok) return;
+  assert.match(formatReadText(bare.answer), /\nSystem: follows the project's own design files\nOpen now:/);
+});
+
 test('an empty designs folder says so', async (t) => {
   const tmp = await useTmpRoot(t, 'dc-agent-read-empty-');
   await tmp.write('designs/.keep', '');

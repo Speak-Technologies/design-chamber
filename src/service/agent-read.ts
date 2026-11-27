@@ -10,13 +10,15 @@
 //     only), checked again on the open handle and read bounded;
 //   - no path taken from file content is opened, except check PNG names, which must have the shape
 //     a check writes (`.chamber/check/<run>/<name>.png`) and are re-resolved the same way;
-//   - view.json's slug is re-checked and re-resolved under the current root.
+//   - view.json's slug is re-checked and re-resolved under the current root;
+//   - the one read outside the root is a design's project folder, when the design follows it, and
+//     only through discovery (bounded, read-only, links never followed, paths and headings only).
 
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import { clip, oneLine } from '../shared/agent/context.ts';
-import type { DesignSystemLine, ListAnswer, ListRow, ListSystem, OpenView, ReadAnswer, ReadCheck } from '../shared/agent/read-text.ts';
+import type { DesignSystemLine, ListAnswer, ListRow, ListSystem, OpenView, ProjectFiles, ReadAnswer, ReadCheck } from '../shared/agent/read-text.ts';
 import { viewportLabel } from '../shared/agent/revision-prompt.ts';
 import { countFindings, parseCheckReportText, sortFindings, withMessage } from '../shared/checks.ts';
 import { applyServiceState, DESIGN_JSON_FILE, ENTRY_FILE, normalizeKind, normalizeServiceState, parseDesignJsonText, serviceStateOf } from '../shared/design-json.ts';
@@ -28,6 +30,7 @@ import type { DesignJson, DesignKind, HandEdit, ServiceState, SettingsFile, Syst
 import { isViewFresh, VIEW_FILE, VIEW_SELECTION_TEXT_MAX, VIEW_SELECTOR_MAX, type ViewFile } from '../shared/view.ts';
 import { isRunId } from './check/output.ts';
 import { renderIsFresh } from './check/service.ts';
+import { discoverProjectRules } from './discovery.ts';
 import { runStaticChecks } from './check/static.ts';
 import { cliSystemStore } from './check/system-run.ts';
 import { parseEditsFile } from './edits/file.ts';
@@ -190,6 +193,21 @@ const systemLineOf = async (folder: DesignFolder, state: ServiceState, systems: 
   if (copy.kind === 'absent' && state.systemDecision === 'project') return { state: 'project' };
   if (copy.kind === 'absent' && state.systemDecision === 'ask') return { state: 'ask' };
   return { state: 'none' };
+};
+
+/**
+ * The project's own design files for a design that follows it: discovery's bounded, read-only scan
+ * (paths and headings only, links never followed, the designs folder never scanned as a project).
+ * Null when the design has no project folder or the folder is not a project (inside the designs root).
+ */
+export const projectFilesOf = async (projectDirectory: string | null, designsRoot: string): Promise<ProjectFiles | null> => {
+  if (projectDirectory === null) return null;
+  const rules = await discoverProjectRules(projectDirectory, { designsRoot });
+  if (rules.state === 'unreadable') return { state: 'unreadable', directory: projectDirectory };
+  if (rules.state !== 'scanned') return null;
+  const { components, screens } = rules.patterns;
+  if (rules.sources.length === 0) return { state: 'empty', directory: projectDirectory, components, screens };
+  return { state: 'found', directory: projectDirectory, files: rules.sources.map((source) => source.path), more: rules.sourcesOmitted, components, screens };
 };
 
 // ---- what the user has open (§2.4) ----
@@ -372,6 +390,9 @@ export const readOneDesign = async (input: ReadInput): Promise<ReadResult> => {
   // The systems list only names a linked copy (a renamed system); without a copy folder it isn't read.
   const hasCopy = (await lstat(path.join(folder.dir, COPY_DIR)).catch(() => null)) !== null;
   const systems = hasCopy ? await systemsOf(root.real, input.settings) : null;
+  const followed = await systemLineOf(folder, state, systems, true);
+  // A design that follows its project: name the project's own design files, as RULES.md layer 2 does.
+  const system: DesignSystemLine = followed.state === 'project' ? { state: 'project', files: await projectFilesOf(design.projectDirectory, root.real) } : followed;
 
   const editsRaw = jsonOf(await readPlainBounded(folder.dir, ['.chamber', 'edits.json'], EDITS_FILE_MAX_BYTES));
   const edits = editsRaw === null ? null : parseEditsFile(editsRaw, folder.slug).file;
@@ -395,7 +416,7 @@ export const readOneDesign = async (input: ReadInput): Promise<ReadResult> => {
       readable,
       screens: design.screens,
       viewports: design.viewports,
-      system: await systemLineOf(folder, state, systems, true),
+      system,
       open,
       comments: design.comments,
       handEdits: edits === null ? { count: 0, kinds: [] } : { count: edits.ledger.length + edits.dropped, kinds: handEditKinds(edits.ledger) },
