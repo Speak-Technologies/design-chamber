@@ -638,6 +638,7 @@ export const createFakeBackend = (): FakeBackend => {
         checks: checks.summary(slug),
         pending: isPending(rec),
         openComments: rec.design.comments.filter((c) => c.status === 'open').length,
+        sessionId: rec.design.sessionId,
       }));
       return { rows, total: matched.length };
     },

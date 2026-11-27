@@ -56,6 +56,7 @@ const fakeHost = () => {
       calls.push([directory, text]);
       return host.answer;
     },
+    setMark: async () => 'unavailable',
   };
   return { host, calls };
 };

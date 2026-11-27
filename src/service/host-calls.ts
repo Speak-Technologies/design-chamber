@@ -47,5 +47,9 @@ export const createHostCalls = ({ env, log, connect = (callEnv) => createService
         return 'refused';
       }
     },
+    // T0a stub (native-extras §4.2): marks are not sent yet. T3b replaces this with the SDK call.
+    async setMark() {
+      return 'unavailable';
+    },
   };
 };

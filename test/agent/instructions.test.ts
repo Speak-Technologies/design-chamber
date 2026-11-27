@@ -172,6 +172,7 @@ const fakeHost = (answer: Awaited<ReturnType<HostCalls['setInstructions']>> = 's
       sent.push(text);
       return host.answer;
     },
+    setMark: async () => 'unavailable',
   };
   return { host, sent };
 };
@@ -331,7 +332,7 @@ describe('startInstructions (§U2.3)', () => {
 
     const thrown: string[] = [];
     const events: string[] = [];
-    const throwing: HostCalls = { setInstructions: async () => { throw new Error('host gone'); } };
+    const throwing: HostCalls = { setInstructions: async () => { throw new Error('host gone'); }, setMark: async () => 'unavailable' };
     const stopThrown = startInstructions(
       { settings: fakeSettings(POSIX_ROOT), hostCalls: throwing, log: quietLog(events) },
       { commandFor: async () => null, ready: Promise.resolve(), platform: 'linux', onStatus: (state) => void thrown.push(state) },

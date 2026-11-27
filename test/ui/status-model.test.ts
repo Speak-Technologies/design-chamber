@@ -35,6 +35,7 @@ const row = (over: Partial<StatusDesignRow> = {}): StatusDesignRow => ({
   checks: null,
   pending: false,
   openComments: 0,
+  sessionId: null,
   ...over,
 });
 

@@ -1,4 +1,4 @@
-// WP3 — POST /chip, POST /designs/:slug/prompt, POST /pages/from-message, POST and DELETE /open-request
+// WP3 — POST /chip, POST /designs/:slug/prompt, POST /pages/from-message, POST /pages/from-file, POST and DELETE /open-request
 // (docs/SPEC.md §7, §10, §11; documentation/specs/phase-1-5-sdk-2-7.md §3.2),
 // and the `onCreate` hook that writes `<design>/.chamber/RULES.md`. Revision and offline prompts
 // list the remote URLs the viewer blocks, taken from the bundler's static scan of the design's
@@ -22,6 +22,7 @@ import { normalizeExternalUrl, sortFindings } from '../../shared/checks.ts';
 import type {
   AskElement,
   ChipResponse,
+  FromFileResponse,
   FromMessageResponse,
   MembershipResult,
   MembershipTarget,
@@ -451,6 +452,7 @@ const handEditsOf = (block: HandEditsBlock | null): PromptResponse['handEdits'] 
  * - 'POST /chip'
  * - 'POST /designs/:slug/prompt'
  * - 'POST /pages/from-message'
+ * - 'POST /pages/from-file' (a stub until native-extras T5)
  * - 'POST /open-request'
  * - 'DELETE /open-request'
  * and hooks design creation so every new design gets its `.chamber/RULES.md`.
@@ -718,6 +720,12 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
     // The background action opens the rail next; the rail takes this on mount or on `added`.
     if (input.open) leaveOpenRequest(record.slug, 'view');
     return { slug: record.slug, title: record.design.title };
+  });
+
+  // T0a stub (native-extras §3.3): "Open as page in Design Chamber" on a Files row. Reads and
+  // writes nothing until T5 replaces it with the real route (src/service/file-page.ts).
+  router.on('POST /pages/from-file', (): FromFileResponse => {
+    throw new ApiError('invalid', "This isn't ready yet.");
   });
 
   // A Work Status row or a chat block: open an existing design in the rail. The `open` event

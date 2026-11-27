@@ -220,6 +220,8 @@ test('a row carries the counts, render state, comments and linked flag from memo
         checks: { counts: { errors: 1, warnings: 2, notes: 0 }, render: { state: 'stale' }, canRun: true, browser: true },
         pending: false,
         openComments: 2,
+        // T0a stub (native-extras §1.2); T2 makes this 'ses_me'.
+        sessionId: null,
       },
     ],
   });

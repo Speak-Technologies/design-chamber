@@ -134,6 +134,8 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
     hostCalls: createHostCalls({ env: options.env ?? process.env, log }),
     activity: createActivityTracker(),
     selfWrites,
+    // T0a stub (native-extras §4.3): always active until T3c wires `createPace`.
+    pace: { touch: () => undefined },
     onDispose: (fn) => {
       disposers.push(fn);
     },

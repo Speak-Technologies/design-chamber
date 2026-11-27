@@ -12,7 +12,8 @@ test('the route table lists every §7 route once, each with an owner lane', () =
   // and the native agent adds PUT /view (documentation/specs/use-the-project-and-native-agent.md §2.4): 93.
   // System builder depth Phase 2 adds the two system screens routes (documentation/specs/system-builder-depth.md §13 T12a): 95.
   // System builder depth Phase 3 adds two token export and five board comments routes (§13 T19, T20): 102.
-  assert.equal(ROUTE_KEYS.length, 102);
+  // Native extras adds POST /pages/from-file to WP3 (documentation/specs/native-extras.md §3.3): 103.
+  assert.equal(ROUTE_KEYS.length, 103);
   assert.equal(new Set(ROUTE_KEYS).size, ROUTE_KEYS.length);
   for (const key of ROUTE_KEYS) {
     const { method, pattern } = splitRouteKey(key);
@@ -30,7 +31,7 @@ test('Phase 2.5 routes: 38, all owned by P25, each new param named as the spec n
   const up = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'UP');
   const sbd = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'SBD');
   const sbd3 = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'SBD3');
-  assert.equal(ROUTE_KEYS.length - p25.length - p26.length - up.length - sbd.length - sbd3.length, 52, 'no earlier route changed owner (51, plus WP1 DELETE /uploads/:id)');
+  assert.equal(ROUTE_KEYS.length - p25.length - p26.length - up.length - sbd.length - sbd3.length, 53, 'no earlier route changed owner (51, plus WP1 DELETE /uploads/:id, plus WP3 POST /pages/from-file)');
   const params = new Set(p25.flatMap((key) => splitRouteKey(key).pattern.split('/').filter((part) => part.startsWith(':'))));
   assert.deepEqual([...params].sort(), [':eid', ':folderId', ':id', ':proposalId', ':scanId', ':slug', ':ticket', ':undoId', ':vid']);
   for (const key of ['GET /systems/:id/board/chunk', 'GET /systems/:id/living-page/render/chunk'] as const) {
@@ -59,6 +60,12 @@ test('Phase 2.6 routes: 2, owned by P26', () => {
 test('Use the project routes: 1, owned by UP', () => {
   const up = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'UP');
   assert.deepEqual(up, ['PUT /view']);
+});
+
+test('native extras: POST /pages/from-file is WP3, beside POST /pages/from-message', () => {
+  assert.equal(ROUTE_OWNERS['POST /pages/from-file'], 'WP3');
+  assert.equal(ROUTE_OWNERS['POST /pages/from-message'], 'WP3');
+  assert.equal(RAW_TEXT_ROUTES.has('POST /pages/from-file'), false);
 });
 
 test('a read-only refusal is a 422 (Phase 2.5 AD-20)', () => {

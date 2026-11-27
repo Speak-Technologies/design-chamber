@@ -662,3 +662,33 @@ export const LIVING_EXAMPLES_BUDGET_MS = 60_000;
 export const LIVING_EXAMPLES_CACHE_MAX = 800;
 /** Secret-shape hits recorded per page (kind and entry key, never the value). */
 export const SECRET_SHAPES_MAX = 10;
+
+// ---- Native extras on OpenChamber 2.8 (documentation/specs/native-extras.md §5.1) ----
+// SERVICE_MARKS_MAX and SERVICE_MARK_TEXT_MAX are the SDK's: import them from `@openchamber/sdk`.
+
+/** A session record's `tool.name`, after trimming (§1.2). */
+export const SESSION_TOOL_NAME_MAX = 128;
+/** A session record's `tool.target`, after control characters are stripped and it is trimmed (§1.2). */
+export const SESSION_TOOL_TARGET_MAX = 1024;
+/** A strip or Work Status change that differs only in the tool repaints at most this often (trailing). */
+export const TOOL_REPAINT_MS = 1000;
+/** `POST /pages/from-file`: `path` and `directory`, in characters (§3.3). */
+export const FILE_PAGE_PATH_MAX = 4096;
+/** The local files copied with a page from a Files row, entry excluded (§3.3 step 7). */
+export const FILE_PAGE_COPY_MAX_BYTES = 50 * 1024 * 1024;
+/** A copy still running after this stops, trashes the half-made design and answers 413 (§3.5). */
+export const FILE_PAGE_COPY_BUDGET_MS = 12_000;
+/** Pages scanned, newest first, for a copy of the same file with the same bytes (§3.3 step 6). */
+export const FILE_PAGE_DEDUPE_SCAN_MAX = 50;
+/** Sidebar mark changes sent a minute; under the host's SERVICE_MARK_RATE_MAX (§4.2). */
+export const MARKS_RATE_PER_MIN = 50;
+/** At most one marks reconcile this often, never two in flight (§4.2). */
+export const MARKS_DEBOUNCE_MS = 2000;
+/** One design's check read for its mark loses after this; the last count is kept (§4.2). */
+export const MARK_CHECK_READ_MS = 5000;
+/** A design's check count is recomputed only after it has been quiet this long (§4.2). */
+export const MARK_SETTLE_MS = 5000;
+/** No `GET /changes` for this long puts the service in quiet mode (§4.3). */
+export const QUIET_AFTER_MS = 600_000;
+/** The watcher's backstop poll in quiet mode (§4.3); WATCH_POLL_MS while active. */
+export const WATCH_POLL_QUIET_MS = 60_000;

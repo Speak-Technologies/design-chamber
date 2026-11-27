@@ -545,6 +545,7 @@ describe('auth and traversal on every route', () => {
     { route: '/designs/some-design/prompt', body: { purpose: 'continue' } },
     { route: '/designs/some-design/prompt', body: { purpose: 'ask', text: 'Make it bigger' } },
     { route: '/pages/from-message', body: { uploadId: 'u_0123456789abcdef', sessionId: 's', sessionTitle: 't', messageId: 'm', directory: null } },
+    { route: '/pages/from-file', body: { path: '/home/me/project/index.html', directory: null } },
   ];
 
   test('a missing or wrong bearer token is refused before anything runs', async (t) => {
@@ -556,6 +557,22 @@ describe('auth and traversal on every route', () => {
       assertError(await call(route, { body, token: 'wrong-token' }), 401, 'unauthorized');
       assertError(await call(route, { body, token: `${TOKEN}x` }), 401, 'unauthorized');
       assertError(await call(route, { body, token: TOKEN.slice(0, -1) }), 401, 'unauthorized');
+    }
+    assert.equal(ctx.creates.length, 0);
+    assert.deepEqual(await readdir(tmp.root), [], 'nothing was written');
+  });
+
+  test('POST /pages/from-file is a stub until native-extras T5: 422, nothing read or written, traversal included', async (t) => {
+    const tmp = await useTmpRoot(t);
+    const ctx = createChatContext(tmp);
+    const { call } = await serveRoutes(t, ctx);
+    for (const body of [
+      { path: '/home/me/project/index.html', directory: null },
+      { path: '../../etc/passwd.html', directory: tmp.root },
+      { path: '..\\..\\windows\\x.html', directory: 'C:\\Users\\me' },
+      { path: '\\\\server\\share\\a.html', directory: null },
+    ]) {
+      assertError(await call('/pages/from-file', { body }), 422, 'invalid');
     }
     assert.equal(ctx.creates.length, 0);
     assert.deepEqual(await readdir(tmp.root), [], 'nothing was written');
@@ -627,7 +644,7 @@ describe('RULES.md writer and the onCreate hook', () => {
     const router = createRouter({ token: TOKEN, log: ctx.log });
     assert.doesNotThrow(() => registerChatRoutes(router, ctx));
     assert.ok(ctx.logs.some((line) => line.level === 'warn' && line.event === 'agent.rules-hook-unavailable'));
-    assert.deepEqual(router.registered().sort(), ['DELETE /open-request', 'POST /chip', 'POST /designs/:slug/prompt', 'POST /open-request', 'POST /pages/from-message']);
+    assert.deepEqual(router.registered().sort(), ['DELETE /open-request', 'POST /chip', 'POST /designs/:slug/prompt', 'POST /open-request', 'POST /pages/from-file', 'POST /pages/from-message']);
   });
 });
 
