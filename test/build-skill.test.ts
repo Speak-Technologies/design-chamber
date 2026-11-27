@@ -13,7 +13,8 @@ import { promisify } from 'node:util';
 import { parseSystemQuestions } from '../src/shared/agent/system-questions.ts';
 import { SYSTEM_REFERENCE_DOCS, SYSTEM_REFERENCE_FOLDER, SYSTEM_SKILL_NAME } from '../src/shared/agent/system-skill-doc.ts';
 import { SYSTEM_REFERENCE_DOC_MAX, SYSTEM_REFERENCE_TOTAL_MAX, SYSTEM_SKILL_TEXT_MAX } from '../src/shared/limits.ts';
-import { buildBuilderSkill } from '../scripts/build-skill.mjs';
+import { buildBuilderSkill, buildDesignChamberSkill } from '../scripts/build-skill.mjs';
+import { BUNDLED_SKILL_TEXT_MAX, SKILL_REFERENCE_DOC_MAX, SKILL_REFERENCE_DOCS, SKILL_REFERENCE_FOLDER } from '../src/shared/agent/skill-doc.ts';
 import { useTmpRoot } from './helpers/tmp-root.ts';
 
 const REPO = path.resolve(import.meta.dirname, '..');
@@ -152,4 +153,49 @@ test('the real build ships both skills, disjoint from the commands, and bakes th
   // esbuild leaves a "// <define:NAME>" comment above a replaced value; only a use left in code counts.
   assert.ok(!blocks.replace(/^\s*\/\/ <define:__DC_SYSTEM_QUESTIONS__>\s*$/gm, '').includes('__DC_SYSTEM_QUESTIONS__'), 'the define was replaced');
   t.diagnostic(`builder skill ${builder.length} characters; blocks bundle ${blocks.length} bytes`);
+});
+
+// ---- step (10): the design-chamber skill, its presets and reference docs ----
+
+/** A package root holding a copy of the real rules/, with optional replacements. */
+const rulesFixture = async (t: TestContext, change: { designRules?: string; questions?: string } = {}): Promise<string> => {
+  const tmp = await useTmpRoot(t, 'dc-build-dc-skill-');
+  await tmp.write('rules/DESIGN-RULES.md', change.designRules ?? (await readFile(path.join(REPO, 'rules', 'DESIGN-RULES.md'), 'utf8')));
+  await tmp.write('rules/QUESTIONS.md', change.questions ?? (await readFile(path.join(REPO, 'rules', 'QUESTIONS.md'), 'utf8')));
+  for (const name of await readdir(path.join(REPO, 'rules', 'presets'))) {
+    await tmp.write(`rules/presets/${name}`, await readFile(path.join(REPO, 'rules', 'presets', name), 'utf8'));
+  }
+  return tmp.root;
+};
+
+test('the design-chamber skill ships SKILL.md within 20 000, the presets and both reference docs', async (t) => {
+  const distDir = await distWith(t, []);
+  await buildDesignChamberSkill({ packageRoot: REPO, distDir });
+  const folder = path.join(distDir, 'skills', 'design-chamber');
+  const skill = await readFile(path.join(folder, 'SKILL.md'), 'utf8');
+  assert.ok(skill.startsWith('---\nname: design-chamber\n'));
+  assert.ok(skill.length <= BUNDLED_SKILL_TEXT_MAX, `${skill.length}`);
+  assert.deepEqual((await readdir(path.join(folder, SKILL_REFERENCE_FOLDER))).sort(), [...SKILL_REFERENCE_DOCS].sort());
+  const questions = await readFile(path.join(folder, SKILL_REFERENCE_FOLDER, 'questions.md'), 'utf8');
+  assert.equal(questions, (await readFile(path.join(REPO, 'rules', 'QUESTIONS.md'), 'utf8')).replace(/\r\n?/g, '\n'));
+  const practice = await readFile(path.join(folder, SKILL_REFERENCE_FOLDER, 'design-practice.md'), 'utf8');
+  assert.ok(practice.includes('## 4. Design best practices'));
+  assert.deepEqual((await readdir(path.join(folder, 'presets'))).sort(), (await readdir(path.join(REPO, 'rules', 'presets'))).sort());
+  t.diagnostic(`design-chamber skill ${skill.length} characters; reference ${questions.length + practice.length}`);
+});
+
+test('the design-chamber skill refuses, with one sentence and nothing written: an over-cap SKILL.md, an over-cap or em-dash reference doc, a missing §4 heading', async (t) => {
+  const rules = await readFile(path.join(REPO, 'rules', 'DESIGN-RULES.md'), 'utf8');
+  const cases: Array<[{ designRules?: string; questions?: string }, RegExp]> = [
+    [{ designRules: rules.replace('## 1. Precedence', `${'x'.repeat(BUNDLED_SKILL_TEXT_MAX)}\n\n## 1. Precedence`) }, /build: the design-chamber skill is \d+ characters; the cap is 20000\. Move detail into a reference doc\./],
+    [{ questions: `# Q\n\n${'q'.repeat(SKILL_REFERENCE_DOC_MAX)}\n` }, /build: the design-chamber skill's reference\/questions\.md is \d+ characters; the cap is 12000\./],
+    [{ questions: '# Q\n\nAsk — then wait.\n' }, /build: the design-chamber skill's reference\/questions\.md has an em dash/],
+    [{ designRules: rules.replace('## 4. Design best practices', '## 4. Best practices') }, /build: rules\/DESIGN-RULES\.md has no "## 4\. Design best practices" heading/],
+  ];
+  for (const [change, expected] of cases) {
+    const packageRoot = await rulesFixture(t, change);
+    const distDir = await distWith(t, []);
+    await assert.rejects(buildDesignChamberSkill({ packageRoot, distDir }), expected);
+    await assert.rejects(readdir(path.join(distDir, 'skills', 'design-chamber')), 'nothing written');
+  }
 });

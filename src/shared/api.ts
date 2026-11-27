@@ -96,6 +96,13 @@ export type HealthResponse = { ok: true; version: string; epoch: string };
 /** A root the user switched away from; designs there are never moved [§9.2]. */
 export type PreviousRoot = { path: string; exists: boolean; designCount: number };
 
+/**
+ * The Design Chamber note in every chat, this service run (use-the-project spec §2.6): `saved` the host
+ * stored the current text; `pending` not sent yet (the service is still starting, or a send is under way);
+ * `not-saved` the host did not store it (no host callback, a refusal, or a designs folder no note can carry).
+ */
+export type AgentInstructionsState = 'saved' | 'pending' | 'not-saved';
+
 export type SettingsResponse = {
   /** Absolute current designs root. */
   root: string;
@@ -107,8 +114,11 @@ export type SettingsResponse = {
   chrome: { path: string | null; source: BrowserSource };
   /** Where exports are written (`~/Downloads`, or `<root>/.exports` when missing). */
   downloadsDir: string;
-  /** Agent discovery: the `<root>/AGENTS.md` guide and the OpenCode skill, derived from disk on every read. */
-  agent: { guide: AgentGuideStatus; skill: AgentSkillStatus };
+  /**
+   * Agent discovery: the `<root>/AGENTS.md` guide and the OpenCode skill, derived from disk on every read;
+   * `instructions` is the last answer the host gave for the note in every chat (use-the-project spec §2.6).
+   */
+  agent: { guide: AgentGuideStatus; skill: AgentSkillStatus; instructions: AgentInstructionsState };
   /**
    * Phase 2.5 §3.4: the default system and project pins, each resolved against this root, and the
    * one-time notices of a deleted system ("Acme was deleted, so it is no longer your default.").
@@ -208,6 +218,22 @@ export type CreateCommentBody = { screen: string | null; viewport: string; ancho
 export type CommentResponse = { comment: Comment };
 export type PatchCommentBody = { body?: string; status?: CommentStatus };
 export type OkResponse = { ok: true };
+
+/**
+ * `PUT /view`: what the user has open, reported by the rail and the page (use-the-project spec §2.4).
+ * `slug` null is the list, a system page or nothing open (the rest is then null or absent). A slug the
+ * design does not have is 404; a `screen` or `viewport` it lacks is 400. The service writes `view.json`
+ * beside settings.json; no file content and no comment text goes in. Shape and caps: `src/shared/view.ts`.
+ */
+export type ViewBody = {
+  surface: 'rail' | 'page';
+  slug: string | null;
+  screen?: string | null;
+  viewport?: string | null;
+  mode?: 'edit' | 'play' | null;
+  selection?: { selector: string; text: string } | null;
+};
+
 export type MarkSentBody = { ids: string[]; version: number | null };
 export type MarkSentResponse = { comments: Comment[] };
 
@@ -651,12 +677,16 @@ export type SystemResyncResponse = SystemEditResponse & {
 
 // ---- Phase 2.5: a design's system (§3.2, §2.7) ----
 
-/** What the design shows about its system (§2.7 `designSystemStatus`). */
+/**
+ * What the design shows about its system (§2.7 `designSystemStatus`). `project`: no system linked, the design
+ * follows its project's own design files (use-the-project spec §1.7).
+ */
 export type DesignSystemViewStatus =
   | { state: 'linked'; id: string; name: string; linkState: 'ok' | 'draft' | 'deleted' }
   | { state: 'invalid' }
   | { state: 'none' }
   | { state: 'ask' }
+  | { state: 'project' }
   | { state: 'unset' };
 
 /** COPY.json as the route answers it: the record without its file map. */
@@ -843,6 +873,9 @@ export interface ApiRoutes {
   'PATCH /designs/:slug/page-state': Route<NoQuery, PageStatePatchBody, PageStatePatchResponse>;
   'DELETE /designs/:slug/page-state': Route<NoQuery, undefined, PageStateClearResponse>;
 
+  // Use the project and the native agent (documentation/specs/use-the-project-and-native-agent.md §2.4)
+  'PUT /view': Route<NoQuery, ViewBody, OkResponse>;
+
   // Phase 2.5: design systems (documentation/specs/phase-2-5-technical.md §3)
   'GET /systems': Route<NoQuery, undefined, SystemListResponse>;
   'POST /systems': Route<NoQuery, CreateSystemBody, CreateSystemResponse>;
@@ -1005,7 +1038,8 @@ export const ROUTE_OWNERS = {
   'POST /system-stops/:undoId/undo': 'P25',
   'POST /memberships': 'P26',
   'POST /systems/register': 'P26',
-} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2' | 'P25' | 'P26'>;
+  'PUT /view': 'UP',
+} as const satisfies Record<RouteKey, 'WP0' | 'WP1' | 'WP2' | 'WP3' | 'U2' | 'U4' | 'U5' | 'U6' | 'P2' | 'P25' | 'P26' | 'UP'>;
 
 export const ROUTE_KEYS = Object.keys(ROUTE_OWNERS) as RouteKey[];
 

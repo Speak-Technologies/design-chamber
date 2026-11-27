@@ -60,7 +60,7 @@ test('the fake backend and the real service answer the settings the same way, st
         systemPins: [
           { directory: '/work/shop', choice: 'system', id: tidepool.id, name: tidepool.name },
           { directory: '/work/blog', choice: 'none' },
-          { directory: '/work/docs', choice: 'default' },
+          { directory: '/work/docs', choice: 'follow-default' },
           { directory: '/work/wip', choice: 'system', id: draft.id, name: draft.name },
           { directory: '/work/old', choice: 'system', id: 'gone', name: 'Gone' },
         ],

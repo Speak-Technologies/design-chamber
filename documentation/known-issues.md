@@ -127,3 +127,21 @@ KI-6 and KI-7 were fixed on 2026-11-01 (kind inferred on take-over; no em dashes
 **Happens:** downgrade or mixed versions only · rare · **Effect:** those entries are hidden until the user upgrades again; the files are untouched, and the sections whose fingerprints include the new facts may read as not reviewed on the older build
 **Why not fixed now:** an older build can't know kinds it never had; the change is additive and nothing is rewritten. Documented in `docs/SPEC.md` §6.7.
 **Fix prompt:** none. Upgrade again; every entry reads as before.
+
+### KI-40: Going back to 0.7.0 forgets "Use my default" on a project
+🟣 Minor · found 2026-11-27 · `src/service/settings.ts:71` (`normalizeSystemPins`) · owner: backend-developer
+**What:** this version stores a project set to **Use my default** as a `follow-default` pin. Design Chamber 0.7.0 does not know that choice and drops the pin when it reads the settings file, and its next settings save writes the file without it. (Same pattern as P26 R-3 for manual project members.)
+**Who:** end user who downgrades · **Seen:** silent until they look at Settings or notice new designs using the project's files
+**Happens:** set a project to Use my default, then install 0.7.0 or older and change any setting · rare (downgrades only) · **Effect:** under 0.7.0 the project uses the default anyway (that was 0.7.0's behaviour with no pin), so nothing looks wrong there; after upgrading again the project is back on Use the project and the user has to pick Use my default again
+**Why not fixed now:** an older build can't be taught a new value; keeping the pin would need the old parser to keep unknown entries, which it never did
+**Fix prompt:**
+> Nothing to fix in this version. If a future release changes the pin format again, have `normalizeSystemPins` in `src/service/settings.ts` keep unknown well-formed pins (an absolute `directory` and a string `choice`) as they are, ignore them in `effectiveSystemChoice`, and write them back on save, so a newer build's choice survives a downgrade. Add a test in `test/service/core/settings-systems.test.ts` that a pin with an unknown `choice` survives a read and a `PUT /settings` round trip. Run `npm run check`.
+
+### KI-41: A repo's own system line reaches a package the user set to No design system or Use my default
+🟣 Minor · found 2026-11-27 · `src/service/instructions.ts:141` (`desiredPinTexts`) · owner: backend-developer
+**What:** the per-project note line for a project's own Ready system ("Designs for this project use the design system "Shop UI"…") is keyed by the folder the system belongs to (the repo), and the host sends it to every session under that folder. A pin stops the line only when the pin is on exactly that folder (`samePath`), so a pin on a package inside the repo leaves the repo-wide line in place.
+**Who:** end user with a monorepo whose system is registered at the repo root and who opens a package as its own project · **Seen:** silent, in what the agent reads
+**Happens:** pin `/work/shop/packages/app` to No design system or Use my default while Shop UI belongs to `/work/shop`, then ask for a design in that package's chat · edge case · **Effect:** the chip and RULES.md correctly link nothing (or the default), but the note beside every chat in that package still says designs use Shop UI, so the agent gets two answers and may ask or pick the wrong one
+**Why not fixed now:** the design's own RULES.md, which the agent reads first, is right; the note is one line
+**Fix prompt:**
+> In `desiredPinTexts` (`src/service/instructions.ts`), for every pin under a project-owned system's folder (`isInsideOrEqual(directory, pin.directory)`) whose choice is `none` or `follow-default`, or names another system, give that pin's folder its own line (`""` for none, the default's or the pinned system's `buildPinInstruction` otherwise), so the narrower folder overrides the repo-wide line in its sessions. Check in `GUEST_SERVICES.md` that a deeper directory's instructions win or are both shown; if both are shown, add a line such as "This package uses no design system." instead of `""`. Add a test in `test/service/core/pin-instructions.test.ts`: a system owned by `/work/shop`, a `none` pin on `/work/shop/packages/app`, and assert the package folder gets a text that does not name the system. Run `npm run check`.

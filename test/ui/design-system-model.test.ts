@@ -34,7 +34,7 @@ const linked = (over: Partial<DesignSystemView> = {}, status: { name?: string; l
   stamp: 'copysha:tokenssha',
   ...over,
 });
-const bare = (state: 'none' | 'ask' | 'unset' | 'invalid'): DesignSystemView => ({
+const bare = (state: 'none' | 'ask' | 'unset' | 'invalid' | 'project'): DesignSystemView => ({
   status: { state },
   link: null,
   systemRevision: null,
@@ -102,6 +102,23 @@ test('Change… lists Ready systems but the current one, then No design system',
   assert.deepEqual(changeOptions(linked(), list).map((o) => o.id), ['shop', 'none']);
   assert.deepEqual(changeOptions(bare('none'), list).map((o) => o.id), ['acme', 'shop']);
   assert.equal(changeOptions(bare('ask'), list).at(-1)?.id, 'none');
+});
+
+test('a design that follows its project: the chip names the project, the popover says so', () => {
+  const follows = bare('project');
+  assert.deepEqual(chipOf(follows, 'shop'), { label: 'Follows the project', title: 'This design follows shop’s own design files.', tone: 'neutral' });
+  assert.equal(chipOf(follows)?.title, 'This design follows its project’s own design files.');
+  assert.deepEqual(popoverOf(follows, 'shop').lines, ['This design follows shop’s own design files, so it looks like the rest of the project. Pick a system to use one instead.']);
+  assert.equal(popoverOf(follows, 'shop').openId, null);
+});
+
+test('Change… on a design that follows its project lists the project’s own system first, then the rest and No design system', () => {
+  const own = { ...sys('shop-ui', 'Shop UI', 'ready', 2), unreadable: null, updated: '2026-11-20T10:00:00.000Z', home: { repo: 'shop', directory: '/work/shop' }, sources: { code: null, brand: 0, description: false } } as SystemSummary;
+  const others = [sys('acme', 'Acme', 'ready'), sys('wip', 'Wip', 'draft')].map((row) => ({ ...row, unreadable: null, updated: '2026-11-20T10:00:00.000Z', home: 'internal' as const, sources: { code: null, brand: 0, description: false } }) as SystemSummary);
+  const options = changeOptions(bare('project'), [...others, own], { directory: '/work/shop', foldsCase: false });
+  assert.deepEqual(options.map((o) => [o.id, o.label]), [['shop-ui', 'Shop UI, this project’s'], ['acme', 'Acme'], ['none', 'No design system']]);
+  // Without the project folder, nothing is marked and the order is the list's.
+  assert.deepEqual(changeOptions(bare('project'), [...others, own]).map((o) => o.label), ['Acme', 'Shop UI', 'No design system']);
 });
 
 test('the preview line says what moves and what the design keeps', () => {

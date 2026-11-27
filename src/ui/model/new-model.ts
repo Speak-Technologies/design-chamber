@@ -1,8 +1,8 @@
 // View-model of the New dialog: what is required, and the sentence that says what is missing.
 
-import type { DesignKind, SystemDefaultSetting, SystemPinSetting, SystemSummary } from '../../shared/types.ts';
+import type { DesignKind, EffectiveSystemChoice, SystemDefaultSetting, SystemPinSetting, SystemSummary } from '../../shared/types.ts';
 import { BRIEF_MAX } from '../../shared/limits.ts';
-import { effectiveSystemChoice } from '../../shared/systems.ts';
+import { PROJECT_CHOICE, choiceSystemsOf, effectiveSystemChoice } from '../../shared/systems.ts';
 import { folderName } from './format.ts';
 
 export type Destination = 'new-chat' | 'current-chat';
@@ -51,12 +51,17 @@ export type SystemFieldView = {
   /** No Ready system exists: the field is replaced by a line that points to the systems list. */
   empty: boolean;
   options: Array<{ id: string; label: string; hint?: string }>;
-  /** The id the select shows: a system id, `none` or `ask`. */
+  /** The id the select shows: a system id, `none`, `ask` or `PROJECT_CHOICE`. */
   value: string;
-  /** Why it is preselected: "Pinned for shop", "Your default"; null when it is the person's own pick or a plain ask. */
+  /**
+   * Why it is preselected, or what Use the project does: "From shop", "Reads shop’s design files first", "Pinned for
+   * shop", "Your default"; null for a plain ask or the person's own pick of a system or none.
+   */
   hint: string | null;
   /** The style preset only matters while no system decides the look. */
   showPreset: boolean;
+  /** The note under the preset while the design follows the project; null otherwise. */
+  presetHint: string | null;
   /** What goes to `POST /chip` as `system`: undefined when the dialog has nothing to say (no Ready system). */
   send: string | undefined;
 };
@@ -66,31 +71,52 @@ export const foldsCaseFor = (root: string, platform: string): boolean => /^[A-Za
 
 /**
  * The field's state. `chosen` is what the person picked in the select (null until they do); until then the
- * same rules the service uses decide: a pin for the project, the default, else ask.
+ * same rules the service uses decide (use-the-project spec §1.3): a pin for the project, then Use the project (its
+ * own Ready system, else its files), then the default, else ask.
  */
 export const systemFieldOf = (input: SystemFieldInput, chosen: string | null, foldsCase: boolean): SystemFieldView => {
   const ready = input.systems.filter((system) => system.status === 'ready');
-  const effective = effectiveSystemChoice({
-    explicit: chosen,
-    projectDirectory: input.projectDirectory,
-    designsRoot: input.designsRoot,
-    settings: { systemDefault: input.settings?.default, systemPins: input.settings?.pins },
-    systems: input.systems.map((system) => ({ id: system.id, status: system.status })),
-    foldsCase,
-  });
-  if (ready.length === 0 || effective.choice === 'none-silent') return { empty: ready.length === 0, options: [], value: SYSTEM_NONE, hint: null, showPreset: true, send: undefined };
+  const decide = (explicit: string | null): EffectiveSystemChoice =>
+    effectiveSystemChoice({
+      explicit,
+      projectDirectory: input.projectDirectory,
+      // The dialog runs no scan, so Use the project answers "follow the project" whenever no own system exists.
+      project: null,
+      designsRoot: input.designsRoot,
+      settings: { systemDefault: input.settings?.default, systemPins: input.settings?.pins },
+      systems: choiceSystemsOf(input.systems),
+      foldsCase,
+    });
+  const effective = decide(chosen);
+  if (ready.length === 0 || effective.choice === 'none-silent') return { empty: ready.length === 0, options: [], value: SYSTEM_NONE, hint: null, showPreset: true, presetHint: null, send: undefined };
+
+  // The rules answer from the project only for a real project folder (not the designs root or inside it): asking
+  // them about Use the project tells the dialog whether to offer it, with no second copy of that test here.
+  const asProject = decide(PROJECT_CHOICE);
+  const fromProject = (choice: EffectiveSystemChoice): boolean => choice.choice === 'project' || (choice.choice === 'system' && choice.why === 'project');
+  const projectOffered = fromProject(asProject);
+  const projectName = input.projectDirectory === null ? 'this project' : folderName(input.projectDirectory);
+
   const options = [
+    ...(projectOffered ? [{ id: PROJECT_CHOICE, label: 'Use the project' }] : []),
     ...ready.map((system) => ({ id: system.id, label: system.name, hint: `Revision ${system.revision}` })),
     { id: SYSTEM_NONE, label: 'No design system' },
     { id: SYSTEM_ASK, label: 'Ask me in chat' },
   ];
-  const value = effective.choice === 'system' ? effective.id : effective.choice === 'none' ? SYSTEM_NONE : SYSTEM_ASK;
+  const pickedProject = chosen === PROJECT_CHOICE && projectOffered;
+  let value: string;
+  if (pickedProject || effective.choice === 'project') value = PROJECT_CHOICE;
+  else value = effective.choice === 'system' ? effective.id : effective.choice === 'none' ? SYSTEM_NONE : SYSTEM_ASK;
+
   let hint: string | null = null;
-  if (chosen === null && (effective.choice === 'system' || effective.choice === 'none')) {
-    if (effective.why === 'pinned') hint = `Pinned for ${input.projectDirectory === null ? 'this project' : folderName(input.projectDirectory)}`;
+  if (effective.choice === 'system' && effective.why === 'project') hint = `From ${projectName}`;
+  else if (effective.choice === 'project') hint = `Reads ${projectName}’s design files first`;
+  else if (chosen === null && (effective.choice === 'system' || effective.choice === 'none')) {
+    if (effective.why === 'pinned') hint = `Pinned for ${projectName}`;
     else if (effective.why === 'default') hint = 'Your default';
   }
-  return { empty: false, options, value, hint, showPreset: effective.choice !== 'system', send: value };
+  const showPreset = effective.choice !== 'system';
+  return { empty: false, options, value, hint, showPreset, presetHint: showPreset && value === PROJECT_CHOICE ? 'Used only where the project’s files say nothing.' : null, send: value };
 };
 
 export const NO_SYSTEMS_LINE = 'No design systems yet.';

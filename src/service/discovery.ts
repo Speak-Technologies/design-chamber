@@ -14,7 +14,9 @@ import {
   oneLine,
   VIEWPORT_DESKTOP,
   VIEWPORT_TABLET,
+  PROJECT_PATTERNS_MAX,
   type ProjectBreakpoint,
+  type ProjectPatterns,
   type ProjectRules,
   type ProjectSource,
 } from '../shared/agent/context.ts';
@@ -215,6 +217,58 @@ export const designHeadings = (markdown: string): string[] => {
     if (found.length >= HEADINGS_MAX) break;
   }
   return found;
+};
+
+// ---- components and screens (pure; use-the-project spec §1.4) ----
+
+const COMPONENT_DIRS: ReadonlySet<string> = new Set(['components', 'ui', 'design-system']);
+const COMPONENT_DIR_DEPTH_MAX = 3;
+const STORY_FILE = /\.stories\.(?:ts|tsx|js|jsx|mdx)$/i;
+const APP_PAGE_FILE = /^page\.(?:tsx|jsx|ts|js)$/i;
+const SCREEN_DIRS: readonly string[] = ['pages', 'src/pages', 'src/routes', 'src/screens', 'src/views'];
+const HTML_SCREEN_DEPTH_MAX = 2;
+/** A path the instructions print in backticks: one line, no backtick, not absurdly long. */
+const PATTERN_PATH_MAX = 200;
+const printable = (relative: string): boolean => relative.length <= PATTERN_PATH_MAX && !/[\u0000-\u001f\u007f`]/.test(relative);
+
+/** Each folder a file sits in, outermost first (`a/b/c.tsx` → `a`, `a/b`). */
+const foldersOf = (relative: string): string[] => {
+  const segments = relative.split('/').slice(0, -1);
+  return segments.map((_segment, index) => segments.slice(0, index + 1).join('/'));
+};
+
+/** Shallowest first, at most the cap, a folder inside one already kept dropped. */
+const pickFolders = (folders: Iterable<string>): string[] => {
+  const kept: string[] = [];
+  for (const folder of [...new Set(folders)].sort(bySpot)) {
+    if (kept.length >= PROJECT_PATTERNS_MAX) break;
+    if (kept.some((outer) => folder.startsWith(`${outer}/`))) continue;
+    kept.push(folder);
+  }
+  return kept;
+};
+
+/**
+ * Components, screens and stories from the walked file list (no second walk). `excluded` drops a file the
+ * patterns must not name (one inside the designs folder).
+ */
+export const projectPatterns = (files: readonly string[], excluded: (relative: string) => boolean = () => false): ProjectPatterns => {
+  const usable = files.filter((file) => printable(file) && !excluded(file));
+  const named = usable.flatMap((file) => foldersOf(file).filter((folder) => depthOf(folder) < COMPONENT_DIR_DEPTH_MAX && COMPONENT_DIRS.has(split(folder).base)));
+  const stories = usable.filter((file) => STORY_FILE.test(file));
+  const components = pickFolders(named.length > 0 ? named : stories.flatMap((file) => foldersOf(file).slice(-1)));
+
+  const lowerFiles = usable.map((file) => file.toLowerCase());
+  const screens: string[] = [];
+  const appDir = usable.find((file, index) => (lowerFiles[index] ?? '').startsWith('app/') && APP_PAGE_FILE.test(split(file).base));
+  if (appDir !== undefined) screens.push(appDir.slice(0, 3));
+  for (const dir of SCREEN_DIRS) {
+    const index = lowerFiles.findIndex((file) => file.startsWith(`${dir}/`));
+    const file = usable[index];
+    if (file !== undefined) screens.push(file.slice(0, dir.length));
+  }
+  screens.push(...usable.filter((file) => /\.html$/i.test(file) && depthOf(file) <= HTML_SCREEN_DEPTH_MAX).sort(bySpot));
+  return { components, screens: screens.slice(0, PROJECT_PATTERNS_MAX), stories: stories.length };
 };
 
 // ---- breakpoints (pure) ----
@@ -468,6 +522,8 @@ export const discoverProjectRules = async (projectDirectory: string | null | und
   const ordered = [...docSources, ...tokenSources, ...agentSources].filter((source) => !seen.has(source.path) && seen.add(source.path));
 
   const breakpoints = mergeBreakpoints(screens, media);
+  const { designsRoot } = options;
+  const insideDesigns = (relative: string): boolean => designsRoot !== undefined && isInsideOrEqual(designsRoot, path.join(directory, ...relative.split('/')));
   return {
     state: 'scanned',
     directory,
@@ -477,5 +533,6 @@ export const discoverProjectRules = async (projectDirectory: string | null | und
     breakpoints,
     viewports: suggestViewports(breakpoints),
     truncated,
+    patterns: projectPatterns(files, insideDesigns),
   };
 };

@@ -1,10 +1,12 @@
-// The Design Chamber OpenCode plugin (documentation/specs/phase-1-5-sdk-2-7.md §U3.3): one tool,
-// `design_check`. Built to dist/plugin/index.js by scripts/build.mjs, which fails if the output
+// The Design Chamber OpenCode plugin (documentation/specs/phase-1-5-sdk-2-7.md §U3.3): three tools,
+// `design_check`, and the read-only `design_list` and `design_read` (use-the-project spec §2.3). Built to dist/plugin/index.js by scripts/build.mjs, which fails if the output
 // imports anything: OpenCode loads it with a bare import() where nothing is installed. Node
 // built-ins therefore come from `process.getBuiltinModule`, and only when the tool runs, so a
 // runtime without them fails that one call with a sentence instead of failing to load.
 
-import { createDesignCheckTool, type SpawnedChild, type ToolDeps } from './check-tool.ts';
+import { createDesignCheckTool } from './check-tool.ts';
+import { createDesignListTool, createDesignReadTool } from './read-tools.ts';
+import type { SpawnedChild, ToolDeps } from './run-cli.ts';
 
 type ToolRegistry = { add(tool: unknown): unknown };
 type PluginContext = { tool: { transform(edit: (tools: ToolRegistry) => void): unknown } };
@@ -59,6 +61,8 @@ export default {
   setup: async (ctx: PluginContext): Promise<void> => {
     await ctx.tool.transform((tools) => {
       tools.add(createDesignCheckTool(nodeDeps));
+      tools.add(createDesignListTool(nodeDeps));
+      tools.add(createDesignReadTool(nodeDeps));
     });
   },
 };

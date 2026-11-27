@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import type { Screen } from '../../src/shared/types.ts';
 import { validateBrief, presetOptions } from '../../src/ui/model/new-model.ts';
 import type { AgentSkillStatus, SkillState } from '../../src/shared/types.ts';
-import { browserStatus, duplicateSentences, guideSentence, isAbsolutePath, isSameRootInput, permissionSnippet, skillRow, validateRootInput } from '../../src/ui/model/settings-model.ts';
+import { AGENT_SECTION_TEXT, AGENT_SECTION_TITLE, BUILT_IN_TEXT, OUTSIDE_TEXT, OUTSIDE_TITLE, browserStatus, instructionsRow, duplicateSentences, guideSentence, isAbsolutePath, isSameRootInput, permissionSnippet, skillRow, validateRootInput } from '../../src/ui/model/settings-model.ts';
 import { artboardLabel } from '../../src/ui/model/format.ts';
 import { LABEL_TAIL_MAX, PIN_FAN_SCALE, alignTop, boardAt, clusterPins, fanOut, frameToScreen, labelWidth, liveBoards, pinFramePoint, screenToFrame, separatingScale } from '../../src/ui/model/wall-model.ts';
 
@@ -58,38 +58,59 @@ const SKILL_PATH = '/home/you/.config/opencode/skills/design-chamber/SKILL.md';
 const skill = (state: SkillState, over: Partial<AgentSkillStatus> = {}): AgentSkillStatus => ({ path: SKILL_PATH, state, duplicates: [], ...over });
 const flat = (parts: { before: string; path: string | null; after: string }): string => `${parts.before}${parts.path ?? ''}${parts.after}`;
 
-test('skillRow: built in first, then what to do about an older installed copy', () => {
-  const none = skillRow(skill('not-installed'));
-  assert.equal(flat(none.sentence), 'Built in. Agents in OpenChamber can use it while Design Chamber is on.');
-  assert.equal(none.sentence.path, null);
-  assert.equal(none.control, null);
+/** The older-copy row, which must exist for every state but `not-installed`. */
+const older = (state: SkillState, extra: Partial<AgentSkillStatus> = {}): NonNullable<ReturnType<typeof skillRow>> => {
+  const row = skillRow(skill(state, extra));
+  assert.notEqual(row, null, state);
+  return row as NonNullable<typeof row>; // asserted just above
+};
+
+test('skillRow: only an older installed copy gets a row, and the Built in row carries the rest', () => {
+  // The skill ships inside the extension; with no old copy there is nothing to say here.
+  assert.equal(skillRow(skill('not-installed')), null);
 
   // Ours and unedited, for this folder or an earlier one: removable from Settings.
   for (const state of ['current', 'outdated'] as const) {
-    const row = skillRow(skill(state));
-    assert.equal(flat(row.sentence), `Built in. An older copy is also installed at ${SKILL_PATH}, so agents may see the skill twice.`, state);
+    const row = older(state);
+    assert.equal(flat(row.sentence), `An older copy is installed at ${SKILL_PATH}, so agents may see the skill twice.`, state);
     assert.equal(row.sentence.path, SKILL_PATH, state);
     assert.equal(row.control, 'remove-old-copy', state);
   }
 
   // Edited or someone else's: never removed by us, so only the path is offered.
-  const edited = skillRow(skill('edited'));
-  assert.equal(flat(edited.sentence), `Built in. You edited the older copy at ${SKILL_PATH}, so Design Chamber leaves it alone. Delete it if you don’t need it.`);
+  const edited = older('edited');
+  assert.equal(flat(edited.sentence), `You edited the older copy at ${SKILL_PATH}, so Design Chamber leaves it alone. Delete it if you don’t need it.`);
   assert.equal(edited.control, 'copy-path');
-  const foreign = skillRow(skill('foreign'));
-  assert.equal(flat(foreign.sentence), `Built in. Another design-chamber skill is installed at ${SKILL_PATH}.`);
+  const foreign = older('foreign');
+  assert.equal(flat(foreign.sentence), `Another design-chamber skill is installed at ${SKILL_PATH}.`);
   assert.equal(foreign.control, 'copy-path');
 
   // The service could not look: say so as written, offer nothing.
-  const unavailable = skillRow(skill('unavailable', { message: 'Your home folder could not be found.' }));
-  assert.equal(flat(unavailable.sentence), 'Built in. Your home folder could not be found.');
+  const unavailable = older('unavailable', { message: 'Your home folder could not be found.' });
+  assert.equal(flat(unavailable.sentence), 'Your home folder could not be found.');
   assert.equal(unavailable.control, null);
-  assert.match(flat(skillRow(skill('unavailable')).sentence), /can’t look for an older copy/);
+  assert.match(flat(older('unavailable').sentence), /can’t look for an older copy/);
 
-  // No state may still word itself as something to install.
-  for (const state of ['not-installed', 'outdated', 'current', 'edited', 'foreign', 'unavailable'] as const) {
-    assert.doesNotMatch(flat(skillRow(skill(state)).sentence), /\b(Install skill|Update skill|Replace skill|Adds a)\b/, state);
+  // No state may still word itself as something to install, or repeat the Built in row.
+  for (const state of ['outdated', 'current', 'edited', 'foreign', 'unavailable'] as const) {
+    assert.doesNotMatch(flat(older(state).sentence), /\b(Install skill|Update skill|Replace skill|Adds a|Built in)\b/, state);
   }
+});
+
+test('the Your agent section says what is built in and does not promise the tools loaded', () => {
+  assert.equal(AGENT_SECTION_TITLE, 'Your agent');
+  assert.equal(AGENT_SECTION_TEXT, 'Agents in OpenChamber know Design Chamber while it is on. Nothing to set up.');
+  assert.equal(BUILT_IN_TEXT, 'Design rules, the design-chamber skill, and the design_check, design_list and design_read tools.');
+  assert.doesNotMatch(BUILT_IN_TEXT, /\b(loaded|installed|ready)\b/i);
+  assert.equal(OUTSIDE_TITLE, 'Using an agent outside OpenChamber?');
+});
+
+test('instructionsRow: In every chat reads Sent, Sent from the next message, or the not-saved sentence', () => {
+  assert.deepEqual(instructionsRow('saved'), { badge: 'Sent', tone: 'success', detail: 'Every chat gets a short note about Design Chamber.' });
+  assert.deepEqual(instructionsRow('pending'), { badge: 'Pending', tone: 'neutral', detail: 'Sent from the next message.' });
+  assert.deepEqual(instructionsRow('not-saved'), { badge: 'Not saved', tone: 'warning', detail: 'OpenChamber didn’t save it. It is sent again when Design Chamber restarts.' });
+  // Colour is never the only signal: every state has its own word.
+  assert.equal(new Set((['saved', 'pending', 'not-saved'] as const).map((state) => instructionsRow(state).badge)).size, 3);
 });
 
 test('duplicateSentences warns once per extra copy', () => {
@@ -113,7 +134,12 @@ test('guideSentence covers every guide state', () => {
 test('settings copy has no em dashes', () => {
   const texts = [
     browserStatus(null, 'none').detail,
-    ...(['not-installed', 'outdated', 'current', 'edited', 'foreign', 'unavailable'] as const).map((state) => flat(skillRow(skill(state)).sentence)),
+    ...(['outdated', 'current', 'edited', 'foreign', 'unavailable'] as const).map((state) => flat(older(state).sentence)),
+    AGENT_SECTION_TEXT,
+    BUILT_IN_TEXT,
+    OUTSIDE_TITLE,
+    OUTSIDE_TEXT,
+    ...(['saved', 'pending', 'not-saved'] as const).map((state) => instructionsRow(state).detail),
     ...(['current', 'edited', 'foreign', 'missing', 'no-root', 'failed'] as const).map((state) => flat(guideSentence({ path: '/d/AGENTS.md', state }))),
   ];
   for (const text of texts) assert.doesNotMatch(text, /\u2014/, text);

@@ -78,7 +78,9 @@ export const normalizeSystemPins = (raw: unknown, platform: NodeJS.Platform = pr
     const { directory, choice } = entry;
     if (typeof directory !== 'string' || directory.length > SETTINGS_PATH_MAX || /[\u0000-\u001f\u007f]/.test(directory) || !p.isAbsolute(directory)) continue;
     if (pins.some((pin) => samePath(pin.directory, directory, p, platform))) continue;
-    if (choice === 'default' || choice === 'none') pins.push({ directory, choice });
+    // A legacy `default` pin (never written by a Design Chamber screen) is dropped: it reads as Use the project
+    // (use-the-project spec §1.4), and the next settings write leaves it out.
+    if (choice === 'follow-default' || choice === 'none') pins.push({ directory, choice });
     else if (choice === 'system') {
       const ref = systemRef(entry.id, entry.name);
       if (ref !== null) pins.push({ directory, choice, ...ref });

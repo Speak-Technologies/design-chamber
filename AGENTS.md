@@ -89,7 +89,7 @@ Product decisions are in `docs/BRIEF.md`; anything not listed there is open: ask
 
 | Topic | Rule |
 |---|---|
-| Design-rules precedence (highest first) | 1 the user's words in chat · 2 the active project's design rules (DESIGN.md, token/theme files, AGENTS.md / CLAUDE.md design sections, existing breakpoints) · 3 chosen bundled style preset · 4 per-design `DESIGN.md` + `tokens.css` once confirmed · 5 built-in anti-slop rules |
+| Design-rules precedence (highest first) | 1 the user's words in chat · 2 the active project's design rules (DESIGN.md, token/theme files, AGENTS.md / CLAUDE.md design sections, existing breakpoints). A new design for a project uses the project by default: its own Ready design system if it has one, else its design files, components and screens; a per-project choice or the New dialog's pick overrides it, and the global default applies only when the project has neither · 3 chosen bundled style preset · 4 per-design `DESIGN.md` + `tokens.css` once confirmed · 5 built-in anti-slop rules |
 | Default viewports | Laptop 1280×800, Phone 390×844; derive from the project first; ask when unsure |
 | Page export | ZIP (html + assets) and single-file HTML (assets inlined) |
 | Design canvas | infinite wall, pan/zoom, multiple screens × viewports as artboards; Edit/Play modes; element-anchored comment pins (selector/snippet travels with the comment); "send comments" = one revision request to the linked chat; version snapshot per agent turn, compare/restore |

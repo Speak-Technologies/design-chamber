@@ -1706,6 +1706,55 @@ body {
   color: var(--oc-muted);
   font-size: 0.8125rem;
 }
+.dc-more {
+  min-width: 0;
+}
+.dc-more-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--dc-s2);
+  padding: var(--dc-s1) 0;
+  cursor: pointer;
+  list-style: none;
+  color: var(--oc-muted);
+  font-size: 0.8125rem;
+  border-radius: var(--dc-r);
+}
+.dc-more-summary::-webkit-details-marker {
+  display: none;
+}
+.dc-more-summary::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease-out;
+}
+.dc-more[open] > .dc-more-summary::before {
+  transform: rotate(45deg);
+}
+.dc-more-summary:hover {
+  color: var(--oc-fg);
+}
+.dc-more-summary:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-more-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s3);
+  padding-top: var(--dc-s2);
+  min-width: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dc-more-summary::before {
+    transition: none;
+  }
+}
 .dc-row-actions {
   display: flex;
   flex-wrap: wrap;

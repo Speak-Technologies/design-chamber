@@ -6,7 +6,7 @@ import { isIsoDate } from './design-json.ts';
 import { SHA256_PATTERN, SYSTEM_ID_PATTERN, SYSTEM_NAME_MAX, VERSION_ID_PATTERN } from './limits.ts';
 import { isDarkContext, isLightContext } from './token-edit.ts';
 import { scanTokens, type Declaration } from './tokens-css.ts';
-import type { CopyRecord, DesignSystemSummary } from './types.ts';
+import type { CopyRecord, DesignSystemSummary, ServiceState } from './types.ts';
 
 /** The folder of a design that holds its copy, and the link record inside it. */
 export const COPY_DIR = 'system';
@@ -196,6 +196,7 @@ export type DesignSystemStatusValue =
   | { state: 'invalid' }
   | { state: 'none' }
   | { state: 'ask' }
+  | { state: 'project' }
   | { state: 'unset' };
 
 /** A system as the status rules see it, from the systems index. */
@@ -204,12 +205,13 @@ export type IndexedSystem = { id: string; name: string; status: 'draft' | 'ready
 /**
  * A valid copy names the link (`deleted` when the id is not in this root); an invalid one says so;
  * without a copy the recorded decision answers (`system` with no copy: a restore went back before
- * the link, so "No design system"); an old design without a decision is `unset`.
+ * the link, so "No design system"; `project`: it follows its project's files); an old design without
+ * a decision is `unset`.
  */
 export const designSystemStatus = (input: {
   copy: CopyRecord | null;
   copyInvalid: boolean;
-  decision: 'ask' | 'none' | 'system' | undefined;
+  decision: ServiceState['systemDecision'];
   systems: readonly IndexedSystem[];
 }): DesignSystemStatusValue => {
   if (input.copy !== null) {
@@ -220,6 +222,7 @@ export const designSystemStatus = (input: {
   }
   if (input.copyInvalid) return { state: 'invalid' };
   if (input.decision === 'ask') return { state: 'ask' };
+  if (input.decision === 'project') return { state: 'project' };
   if (input.decision === 'none' || input.decision === 'system') return { state: 'none' };
   return { state: 'unset' };
 };

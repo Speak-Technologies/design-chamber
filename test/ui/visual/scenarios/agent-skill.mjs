@@ -1,6 +1,7 @@
-// Visual scenario for the Settings "Agent skill" row (feat/agent-skill, spec phase-1-5-sdk-2-7 §U2.5):
-// the rail Settings sheet at 320 and 480 px, dark and light. Walks every row of the §U2.5 table with the
-// fake backend plus route overrides: no old copy, an old copy that is ours (current and outdated),
+// Visual scenario for the Settings "Older copy" row (feat/agent-skill, spec phase-1-5-sdk-2-7 §U2.5, reworked by
+// use-the-project spec §2.6: the skill is built in, so the row exists only for an older installed copy):
+// the rail Settings sheet at 320 and 480 px, dark and light. Walks every state with the
+// fake backend plus route overrides: no old copy (no row), an old copy that is ours (current and outdated),
 // one the user edited, a foreign one, the service not being able to look, the duplicate warning, a
 // remove that fails (500 and 409, the row stays usable), a remove in flight (disabled, busy) and
 // the removal itself (toast, announcement, row back to the first state, focus kept).
@@ -28,7 +29,7 @@ const settingsWith = (skill) => ({
     rootExists: true,
     chrome: { path: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', source: 'detected' },
     downloadsDir: 'C:\\Users\\you\\Downloads',
-    agent: { guide: { path: `${ROOT}\\AGENTS.md`, state: 'current' }, skill: { path: SKILL_PATH, duplicates: [], ...skill } },
+    agent: { guide: { path: `${ROOT}\\AGENTS.md`, state: 'current' }, skill: { path: SKILL_PATH, duplicates: [], ...skill }, instructions: 'saved' },
     systems: { default: { choice: 'ask', state: 'ok', sentence: null }, pins: [], notices: [] },
   },
 });
@@ -49,8 +50,8 @@ export const run = async ({ openPage, check, sleep }) => {
     // Close and reopen the sheet: opening it asks the service for the settings again.
     const openSettings = async () => {
       await p.click('.dc-rail-head .dc-iconbtn[aria-label="Settings"]');
-      await p.waitFor(`return !!doc.querySelector('${ROW}')`, 'the skill row');
-      await p.guest(`doc.querySelector('${ROW}').scrollIntoView({ block: 'center' })`);
+      await p.waitFor(`return !!doc.querySelector('[data-agent-built-in]')`, 'the Your agent section');
+      await p.guest(`(doc.querySelector('${ROW}') ?? doc.querySelector('[data-agent-built-in]')).scrollIntoView({ block: 'center' })`);
       await p.settle(250);
     };
     const closeSettings = async () => {
@@ -63,21 +64,23 @@ export const run = async ({ openPage, check, sleep }) => {
     };
     const noOverflow = () => p.guest('const b = doc.querySelector(".dc-sheet-body"); return !b || (b.scrollWidth <= b.clientWidth && doc.documentElement.scrollWidth <= doc.documentElement.clientWidth)');
 
-    // ---- no old copy (the fake backend's own answer): built in, no control
+    const builtInText = () => p.guest(`return doc.querySelector('[data-agent-built-in] .dc-settings-p')?.textContent ?? ''`);
+
+    // ---- no old copy (the fake backend's own answer): the Built in row says it all, there is no Older copy row
     await openSettings();
-    check((await rowText()) === 'Built in. Agents in OpenChamber can use it while Design Chamber is on.', `${tag}: no old copy says the skill is built in`);
-    check((await buttons()).length === 0, `${tag}: no old copy has no control`);
-    check(await p.guest(`return doc.querySelector('${ROW} .oc-sdk-field-label')?.textContent === 'Agent skill'`), `${tag}: the field is named Agent skill`);
+    check((await builtInText()) === 'Design rules, the design-chamber skill, and the design_check, design_list and design_read tools.', `${tag}: the Built in row names the skill and the tools`);
+    check(await p.guest(`return !doc.querySelector('${ROW}')`), `${tag}: no old copy means no Older copy row`);
+    check(await p.guest(`return !/Agent skill/.test(doc.querySelector('.dc-settings')?.textContent ?? '')`), `${tag}: the old Agent skill row is gone`);
     check(await noOverflow(), `${tag}: no horizontal overflow`);
     await p.shot(`${tag}-1-built-in`);
     await closeSettings();
 
     // ---- an old copy that is ours and unedited: Remove old copy
     await showState({ state: 'current' });
-    check((await rowText()) === `Built in. An older copy is also installed at ${SKILL_PATH}, so agents may see the skill twice.`, `${tag}: an old copy of ours says agents may see the skill twice`);
+    check((await rowText()) === `An older copy is installed at ${SKILL_PATH}, so agents may see the skill twice.`, `${tag}: an old copy of ours says agents may see the skill twice`);
     check(JSON.stringify(await buttons()) === '["Remove old copy"]', `${tag}: the control is Remove old copy, and only that`);
     check(await p.guest(`return doc.querySelector('${ACTION}')?.dataset.variant === 'outline' && doc.querySelector('${ACTION}')?.dataset.size === 'xs' && doc.querySelector('${ACTION}')?.dataset.emphasis === undefined`), `${tag}: it is a small outline button, not a second primary`);
-    check(await p.guest(`return doc.querySelector('${ROW}')?.getAttribute('role') === 'group' && doc.querySelector('${ROW}')?.getAttribute('aria-label') === 'Agent skill'`), `${tag}: the row is a labelled group`);
+    check(await p.guest(`return doc.querySelector('${ROW}')?.getAttribute('role') === 'group' && doc.querySelector('${ROW}')?.getAttribute('aria-label') === 'Older copy'`), `${tag}: the row is a labelled group`);
     check(await noOverflow(), `${tag}: no horizontal overflow with the path and button`);
     await p.shot(`${tag}-2-old-copy`);
     await closeSettings();
@@ -116,17 +119,17 @@ export const run = async ({ openPage, check, sleep }) => {
     check(await p.guest(`return !doc.querySelector('${ROW} .dc-form-error')`), `${tag}: a new attempt clears the earlier error`);
     await p.shot(`${tag}-5-removing`);
     await p.waitFor(`return !doc.querySelector('${ACTION}')`, 'the old copy to go', 8000);
-    check((await rowText()) === 'Built in. Agents in OpenChamber can use it while Design Chamber is on.', `${tag}: after removal the row is back to the built-in line`);
+    check(await p.guest(`return !doc.querySelector('${ROW}')`), `${tag}: after removal the Older copy row is gone`);
     check(await p.host('JSON.stringify(window.__host.toasts.map((t) => [t.kind, t.message])) === JSON.stringify([["success", "Old copy removed."]])'), `${tag}: one success toast, "Old copy removed."`);
     check((await p.guest(`return doc.querySelector('.dc-settings')?.parentElement.querySelector('[role=status].dc-sr-only')?.textContent`)) === 'Old copy removed.', `${tag}: a screen reader is told the old copy was removed`);
-    check(await p.guest(`return doc.activeElement === doc.querySelector('${ROW}')`), `${tag}: focus moves to the row, not lost to the page`);
+    check(await p.guest(`return doc.activeElement === doc.querySelector('[data-agent-built-in]')`), `${tag}: focus moves to the Built in row above it, not lost to the page`);
     await p.shot(`${tag}-6-removed`);
     await p.route('DELETE /agent/skill', null);
     await closeSettings();
 
     // ---- an old copy the user edited: left alone, Copy path
     await showState({ state: 'edited' });
-    check((await rowText()) === `Built in. You edited the older copy at ${SKILL_PATH}, so Design Chamber leaves it alone. Delete it if you don’t need it.`, `${tag}: an edited copy says it is left alone`);
+    check((await rowText()) === `You edited the older copy at ${SKILL_PATH}, so Design Chamber leaves it alone. Delete it if you don’t need it.`, `${tag}: an edited copy says it is left alone`);
     check(JSON.stringify(await buttons()) === '["Copy path"]', `${tag}: the control is Copy path, never Remove`);
     await p.host('window.__host.clipboard.length = 0');
     await p.click(`${ROW} .oc-sdk-btn`);
@@ -139,12 +142,12 @@ export const run = async ({ openPage, check, sleep }) => {
 
     // ---- a different skill with our name
     await showState({ state: 'foreign' });
-    check((await rowText()) === `Built in. Another design-chamber skill is installed at ${SKILL_PATH}.`, `${tag}: a foreign copy is named as another skill`);
+    check((await rowText()) === `Another design-chamber skill is installed at ${SKILL_PATH}.`, `${tag}: a foreign copy is named as another skill`);
     check(JSON.stringify(await buttons()) === '["Copy path"]', `${tag}: a foreign copy offers Copy path`);
     await p.shot(`${tag}-8-foreign`);
     await closeSettings();
 
-    // ---- the duplicate warning still shows, beside the built-in line
+    // ---- the duplicate warning still shows, in an Older copy row of its own
     await showState({ state: 'not-installed', duplicates: ['C:\\Users\\you\\.claude\\skills\\design-chamber\\SKILL.md'] });
     check(await p.guest(`return doc.querySelectorAll('${ROW} .dc-status-line').length === 1 && doc.querySelector('${ROW} .dc-status-line').textContent.includes('Duplicate')`), `${tag}: an extra copy is still flagged as a duplicate`);
     check(await noOverflow(), `${tag}: no horizontal overflow with the duplicate`);
@@ -153,7 +156,7 @@ export const run = async ({ openPage, check, sleep }) => {
 
     // ---- the service could not look
     await showState({ state: 'unavailable', message: 'Your home folder could not be found.' });
-    check((await rowText()) === 'Built in. Your home folder could not be found.', `${tag}: when the service can't look, it says so after "Built in."`);
+    check((await rowText()) === 'Your home folder could not be found.', `${tag}: when the service can't look, it says so`);
     check((await buttons()).length === 0, `${tag}: and offers nothing`);
     await closeSettings();
 

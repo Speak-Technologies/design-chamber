@@ -55,7 +55,7 @@ test('the manifest carries every SDK 2.7 key, so users approve once', () => {
   assert.equal(contributes.skills, 'dist/skills');
   assert.equal(contributes.opencodePlugin, 'dist/plugin');
   assert.deepEqual(contributes.mentions, { label: 'Designs' });
-  assert.deepEqual(contributes.tools?.map((tool) => tool.match), ['design_check']);
+  assert.deepEqual(contributes.tools?.map((tool) => tool.match), ['design_check', 'design_list', 'design_read']);
   assert.deepEqual(contributes.blocks?.map((block) => block.name), ['DesignCard', 'DirectionPick', 'SystemAsk']);
   assert.deepEqual(contributes.blocks?.map((block) => block.entry), ['dist/blocks/index.html', 'dist/blocks/index.html', 'dist/blocks/index.html']);
   assert.equal(contributes.blocks?.find((block) => block.name === 'DirectionPick')?.answers, true);

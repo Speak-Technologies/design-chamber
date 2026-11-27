@@ -20,10 +20,25 @@ export const GUIDE_FILE = 'AGENTS.md';
 /** The OpenCode tool Design Chamber's plugin adds (documentation/specs/phase-1-5-sdk-2-7.md §U3): named first wherever an agent is told to check its work. */
 export const CHECK_TOOL_NAME = 'design_check';
 
+/** The plugin's read tools (src/plugin/read-tools.ts names them the same; a test holds the two together). */
+export const LIST_TOOL_NAME = 'design_list';
+export const READ_TOOL_NAME = 'design_read';
+
+/** The bundled skill's description: the host reads it to decide when to load the skill, so it names the words users say. */
 export const SKILL_DESCRIPTION: string =
+  'Use when the user asks for a design, mockup, wireframe, UI screen, landing page, prototype or design canvas, wants ' +
+  'something to look like their app, or mentions Design Chamber, the Designs folder, a design system or their pins. ' +
+  'Covers where designs go, following the project, and design_list, design_read and design_check.';
+
+/** The description older versions installed from Settings carried: `buildSkillDoc` must rebuild that copy byte for byte. */
+const SETTINGS_SKILL_DESCRIPTION =
   'Use when the user asks for a design, mockup, wireframe, UI screen, landing page, prototype, HTML page or design canvas, ' +
   'or mentions the Designs folder, Design Chamber or a design studio. Explains where to save designs so Design Chamber ' +
   'shows them inside OpenChamber, and how to lay out pages and canvases.';
+
+/** Use the project (use-the-project spec §2.5), word for word as the instructions note says it. */
+export const PROJECT_LINE =
+  'A new design for a project follows the project: its own design system if Design Chamber has one, else its design files, components and screens. Read them before you draw.';
 
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
 
@@ -108,6 +123,14 @@ const checkSectionLines = (checkCommand: string | null): string[] => [
   '',
 ];
 
+/** The read tools (use-the-project spec §2.5); outside OpenChamber, the same launcher with another verb, or the files themselves. */
+const libraryToolLines = (checkCommand: string | null): string[] => [
+  `To see the library, the user's pins and what they have open, use the ${code(LIST_TOOL_NAME)} and ${code(READ_TOOL_NAME)} tools.`,
+  checkCommand === null
+    ? "If you don't have them, read the comments in a design's design.json and its `.chamber/check.json` yourself; never change either."
+    : `If you don't have them, run the check command above with ${code('list')} or ${code('read <slug>')} in place of ${code('check <slug>')}.`,
+];
+
 export type AgentGuideInput = {
   root: string;
   platform: NodeJS.Platform;
@@ -178,8 +201,9 @@ export const buildAgentGuide = ({ root, platform, checkCommand = null }: AgentGu
     '',
     '## Design systems',
     '',
+    `- ${PROJECT_LINE}`,
     '- Design systems live in `_systems/<id>/` in the designs folder. Write there only when the user or Design Chamber asks you to make or change a system; never set its status.',
-    '- A project may already have a design system: a page, docs, components. When the user points at one, read its page, docs and components first, and build from what is there. Design Chamber reads the CSS and token files it can parse; you write the overview, notes and components.',
+    '- When the user points at a design system a project already has (a page, docs, components), read those first and build from what is there. Design Chamber reads the CSS and token files it can parse; you write the overview, notes and components.',
     "- A design's copy of its system is its `system/` folder: read it, never change it.",
     '- To build a design system with the user, use /design-system or the design-system-builder skill.',
     "- A design task never writes a project's repo; a system's repo changes only from its own chat, after the user approves a diff.",
@@ -187,14 +211,16 @@ export const buildAgentGuide = ({ root, platform, checkCommand = null }: AgentGu
     '## Folders',
     '',
     "- The user groups designs into folders in the library. Folders are tags: a design can sit in several, and grouping never moves a design's folder on disk.",
-    '- Projects group designs by the project they were made for. The user can also file a design under another project; that only groups it, and its design rules still come from the project it was made for.',
-    '- When the user asks you to put a design in a folder, add it to an existing folder by name: in its design.json set `"folderRequest": { "add": ["Q4 launch"], "at": "<the current time>" }`, or use `"remove"` to take it out. Design Chamber files it within a few seconds.',
+    '- Projects group designs by the project they were made for. Filing a design under another project only groups it; its design rules still come from its own project.',
+    '- When the user asks you to put a design in a folder, add it to an existing folder by name: in its design.json set `"folderRequest": { "add": ["Q4 launch"], "at": "<the current time>" }`, or use `"remove"` to take it out.',
     `- The folder names are in ${code(foldersFile)}. Read it, never write it. If the folder doesn't exist, say so and name the closest ones; never invent a folder.`,
     '- Never create, rename or delete folders, and never move files to organise them. The user does that in the library.',
     '',
     '## The library',
     '',
-    'The user browses designs as tiles or a list, sorts them by Updated, Created or Title, and filters them by project, folder, kind and system. Design systems show there too. Point the user at the library when they ask where a design is.',
+    'The user browses designs and design systems in the library, as tiles or a list, filtered by project, folder, kind and system. Point the user there when they ask where a design is.',
+    '',
+    ...libraryToolLines(checkCommand),
     '',
     '## Design rules',
     '',
@@ -240,7 +266,7 @@ export const buildSkillDoc = ({ root, guidePath, checkCommand = null }: SkillDoc
   const lines = [
     '---',
     `name: ${SKILL_NAME}`,
-    `description: ${JSON.stringify(capped(SKILL_DESCRIPTION, SKILL_DESCRIPTION_MAX, 'skill description'))}`,
+    `description: ${JSON.stringify(capped(SETTINGS_SKILL_DESCRIPTION, SKILL_DESCRIPTION_MAX, 'skill description'))}`,
     'metadata:',
     `  generator: ${SKILL_NAME}`,
     '  version: "1"',

@@ -40,6 +40,24 @@ export type ProjectRulesState =
   | 'unreadable'
   | 'scanned';
 
+/**
+ * Where the project keeps its components and screens (use-the-project spec §1.4), found during the same walk.
+ * Paths are project-relative with `/` separators. Kept apart from `sources` so the Phase 0 text does not change.
+ */
+export type ProjectPatterns = {
+  /** ≤ `PROJECT_PATTERNS_MAX` folders. */
+  components: string[];
+  /** ≤ `PROJECT_PATTERNS_MAX` folders or `.html` files. */
+  screens: string[];
+  /** `*.stories.*` files seen; 0 when none. */
+  stories: number;
+};
+
+/** The most component and screen paths kept each (use-the-project spec §1.4). */
+export const PROJECT_PATTERNS_MAX = 4;
+
+export const noPatterns = (): ProjectPatterns => ({ components: [], screens: [], stories: 0 });
+
 export type ProjectRules = {
   state: ProjectRulesState;
   /** Absolute project folder as given (null for `no-project` without a folder). */
@@ -55,6 +73,7 @@ export type ProjectRules = {
   viewports: Viewport[];
   /** A size or time limit stopped the scan early. */
   truncated: boolean;
+  patterns: ProjectPatterns;
 };
 
 export const noProject = (note: string, directory: string | null = null): ProjectRules => ({
@@ -66,6 +85,7 @@ export const noProject = (note: string, directory: string | null = null): Projec
   breakpoints: [],
   viewports: [],
   truncated: false,
+  patterns: noPatterns(),
 });
 
 // ---- Viewports beyond the two defaults (rules/QUESTIONS.md §4) ----
@@ -91,8 +111,9 @@ export type AgentSystemChoice = { id: string; name: string; line: string };
 
 /**
  * The design's system as the instruction builders see it (Phase 2.5 §8.1, §8.10).
- * `linked`: a valid copy in `<design>/system`. `ask`: the agent asks the user first. `none`: the
- * user said no system. `unset`: an old design with no decision (behaves exactly as before 2.5).
+ * `linked`: a valid copy in `<design>/system`. `ask`: the agent asks the user first. `project`: it
+ * follows its project's files. `none`: the user said no system. `unset`: an old design with no
+ * decision (behaves exactly as before 2.5).
  */
 export type AgentSystem =
   | {
@@ -110,8 +131,15 @@ export type AgentSystem =
       breakpoints: number[];
       /** A repo-backed system's repo folder; null for an internal home. */
       repo: string | null;
+      /** It is the design's project's own system (use-the-project spec §1.6); absent otherwise. */
+      ownedByProject?: true;
     }
   | { state: 'ask'; choices: AgentSystemChoice[]; recommended: string | null }
+  /**
+   * Use the project (use-the-project spec §1.5): no system linked, the design follows its project's own files.
+   * `draft` names the project's own system when it exists but is a Draft.
+   */
+  | { state: 'project'; draft: { id: string; name: string } | null }
   | { state: 'none' }
   | { state: 'unset' };
 

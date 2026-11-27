@@ -4,6 +4,8 @@
 
 import { randomUUID } from 'node:crypto';
 
+import type { AgentInstructionsState } from '../shared/api.ts';
+
 import { createActivityTracker } from './activity.ts';
 import { createAgentSetup } from './agent-setup.ts';
 import { createChangeHub } from './changes.ts';
@@ -11,7 +13,7 @@ import { unavailable, type Logger, type ServiceContext } from './context.ts';
 import { createDesignIndex } from './design-index.ts';
 import { createHostCalls } from './host-calls.ts';
 import { createRouter, registerHealthRoute, type Router } from './http.ts';
-import { instructionsFileOf, startInstructions } from './instructions.ts';
+import { findSkillReferenceDir, instructionsFileOf, startInstructions } from './instructions.ts';
 import { createOutboxStore } from './outbox.ts';
 import { ensureRenderService } from './render-cache.ts';
 import { ensureLauncherService } from './check/launcher.ts';
@@ -47,6 +49,7 @@ import { registerSystemsRoutes } from './routes/systems.ts';
 import { registerThumbnailsRoutes } from './routes/thumbnails.ts';
 import { registerUploadsRoutes } from './routes/uploads.ts';
 import { registerVersionsRoutes } from './routes/versions.ts';
+import { registerViewRoutes, viewFilePath } from './routes/view.ts';
 import { writeRuntimeRecord } from './runtime-record.ts';
 import { createSelfWrites } from './self-writes.ts';
 import { createSettingsStore, settingsFilePath, type SettingsEnv } from './settings.ts';
@@ -193,10 +196,20 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   // The Design Chamber note in every agent's instructions: after the baseline and on root changes;
   // plus one line per pinned project (Phase 2.5 §8.6), also on settings and system changes.
   const systemStore = ensureSystemStore(ctx);
+  // Settings "Your agent" shows whether the host saved the note (use-the-project spec §2.6).
+  let instructionsState: AgentInstructionsState = 'pending';
   ctx.onDispose(
     startInstructions(ctx, {
       commandFor: (root) => launcher.commandFor(root, '<slug>'),
       ready: watcher.ready,
+      // Looked up once: the package does not change while the service runs.
+      referenceDir: (() => {
+        const found = findSkillReferenceDir(ctx.packageRoot);
+        return () => found;
+      })(),
+      onStatus: (state) => {
+        instructionsState = state;
+      },
       pins: {
         settings: () => settings.read(),
         systems: () => systemStore.list(),
@@ -231,7 +244,7 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   const router = createRouter({ token: options.token, log });
   registerHealthRoute(router, { version: ctx.version, epoch: ctx.epoch });
   // WP1
-  registerSettingsRoutes(router, ctx, agent);
+  registerSettingsRoutes(router, ctx, agent, () => instructionsState);
   registerChangesRoutes(router, ctx);
   registerDesignsRoutes(router, ctx);
   registerCommentsRoutes(router, ctx);
@@ -269,6 +282,8 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
   // Phase 2.6 routes: POST /memberships (folders.ts, AD-2) and POST /systems/register (systems/register.ts, AD-10).
   registerMembershipsRoutes(router, ctx);
   registerSystemRegisterRoutes(router, ctx);
+  // Use the project and the native agent: what the user has open, in view.json beside settings.json.
+  registerViewRoutes(router, ctx, { file: viewFilePath(options.env ?? process.env, process.platform, options.homeDir) });
 
   let disposed = false;
   return {

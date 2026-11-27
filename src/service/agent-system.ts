@@ -10,12 +10,12 @@ import { open } from 'node:fs/promises';
 import path from 'node:path';
 
 import { AGENT_SYSTEM_CHOICES_MAX, AGENT_SYSTEM_MISSING_MAX, overviewLineOf, type AgentSystem, type AgentSystemChoice } from '../shared/agent/context.ts';
-import { sameDirectory } from '../shared/path-compare.ts';
 import { COPY_DIR, COPY_JSON_FILE } from '../shared/system-copy.ts';
+import { choiceSystemsOf, projectSystemOf } from '../shared/systems.ts';
 import { SYSTEM_OVERVIEW_MAX } from '../shared/limits.ts';
 import type { SettingsFile, SystemDetail, SystemSummary } from '../shared/types.ts';
 import type { DesignRecord, Logger } from './context.ts';
-import { isPlainTarget, resolvePlainTarget } from './paths.ts';
+import { foldsCase, isPlainTarget, resolvePlainTarget } from './paths.ts';
 import { readCopyRecord } from './store.ts';
 import type { SystemStore } from './systems/store.ts';
 
@@ -51,23 +51,36 @@ export const breakpointsOf = (detail: Pick<SystemDetail, 'tokens'>): number[] =>
   return [...values].sort((a, b) => a - b);
 };
 
+/** What the rules read of a system row (use-the-project spec §1.2: who owns it). */
+type OwnedRow = Pick<SystemSummary, 'id' | 'name' | 'status' | 'unreadable' | 'home' | 'sources' | 'updated'>;
+
 /**
- * The system the ask recommends (§8.1): the Ready system made from this design's project, else
- * the default when it is Ready, else none. A system made from a folder inside a project (Phase 2.6
- * AD-9) belongs to that project, not to the folder.
+ * The system the ask recommends (§8.1): the project's own Ready system (`projectSystemOf`, use-the-project spec
+ * §1.2: a registered repo system counts, a repo inside the project and a project inside the repo both do), else the
+ * default when it is Ready, else none. A system made from a folder inside a project (Phase 2.6 AD-9) belongs to that
+ * project, not to the folder.
  */
 export const recommendedSystem = (
-  rows: readonly Pick<SystemSummary, 'id' | 'status' | 'unreadable' | 'sources'>[],
+  rows: readonly OwnedRow[],
   projectDirectory: string | null,
   settings: Pick<SettingsFile, 'systemDefault'>,
+  fold: boolean = foldsCase(),
 ): string | null => {
   const ready = rows.filter((row) => row.status === 'ready' && row.unreadable === null);
   if (projectDirectory !== null) {
-    const fromProject = ready.find((row) => row.sources.code !== null && sameDirectory(row.sources.code.project ?? row.sources.code.directory, projectDirectory));
-    if (fromProject !== undefined) return fromProject.id;
+    const own = projectSystemOf(choiceSystemsOf(ready), projectDirectory, fold);
+    if (own !== null) return own.id;
   }
   const fallback = settings.systemDefault;
   return fallback?.choice === 'system' && ready.some((row) => row.id === fallback.id) ? fallback.id : null;
+};
+
+/** The project's own system among `rows` with this status, or null (no project, or none of that status). */
+const ownOf = (rows: readonly OwnedRow[], projectDirectory: string | null, status: 'draft' | 'ready'): { id: string; name: string } | null => {
+  if (projectDirectory === null) return null;
+  // projectSystemOf considers Ready systems only; a Draft is looked up the same way by reading it as one.
+  const pool = choiceSystemsOf(rows).filter((one) => one.status === status).map((one) => ({ ...one, status: 'ready' as const }));
+  return projectSystemOf(pool, projectDirectory, foldsCase());
 };
 
 export type AgentSystemDeps = {
@@ -104,6 +117,7 @@ const linkedOf = async (deps: AgentSystemDeps, record: DesignRecord, copy: { id:
     overviewEmpty: overview === null || overview.trim() === '',
     breakpoints,
     repo: row !== undefined && row.home !== 'internal' ? row.home.directory : null,
+    ...(ownOf(rows, record.design.projectDirectory, 'ready')?.id === copy.id ? { ownedByProject: true as const } : {}),
   };
 };
 
@@ -131,7 +145,8 @@ const askOf = async (deps: AgentSystemDeps, record: DesignRecord, rows: readonly
 export const agentSystemOf = async (deps: AgentSystemDeps, record: DesignRecord): Promise<AgentSystem> => {
   const copy = await readCopyRecord(record.path).catch(() => ({ kind: 'invalid' as const }));
   const decision = record.state.systemDecision;
-  if (copy.kind !== 'ok' && decision !== 'ask') return copy.kind === 'invalid' || decision !== undefined ? { state: 'none' } : { state: 'unset' };
+  const followsProject = decision === 'project' && copy.kind === 'absent';
+  if (copy.kind !== 'ok' && decision !== 'ask' && !followsProject) return copy.kind === 'invalid' || decision !== undefined ? { state: 'none' } : { state: 'unset' };
   let rows: SystemSummary[] = [];
   try {
     rows = await deps.systems.list();
@@ -139,5 +154,11 @@ export const agentSystemOf = async (deps: AgentSystemDeps, record: DesignRecord)
     deps.log.warn('agent.systems-list-failed', { error: error instanceof Error ? error.message : String(error) });
   }
   if (copy.kind === 'ok') return linkedOf(deps, record, copy.record, rows);
+  // Use the project (spec §1.5): a Draft own system is named so the agent can say why nothing is linked.
+  // A Ready own system (one that appeared after the design was made) is the project's own, so no Draft is named then.
+  if (followsProject) {
+    const project = record.design.projectDirectory;
+    return { state: 'project', draft: ownOf(rows, project, 'ready') === null ? ownOf(rows, project, 'draft') : null };
+  }
   return askOf(deps, record, rows);
 };

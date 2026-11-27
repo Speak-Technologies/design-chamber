@@ -144,7 +144,8 @@ export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): v
   const presetHost = h('div', { class: 'dc-field' });
   const presetSelect = mountSelect(presetHost, { label: 'Style preset', value: '', options: presetOptions([]), disabled: true, onChange: (id) => void (preset = id) });
   const presetNote = h('p', { class: 'oc-sdk-field-note', hidden: true });
-  presetHost.append(presetNote);
+  const presetHint = h('p', { class: 'oc-sdk-field-note dc-preset-hint', hidden: true });
+  presetHost.append(presetHint, presetNote);
   const paintPresets = (): void => {
     const state = store.getState().presets;
     if (state.status === 'ready' && state.data) presetSelect.update({ options: presetOptions(state.data.presets), disabled: false, value: preset });
@@ -172,6 +173,8 @@ export const openNewDialog = (hostEl: HTMLElement, options: NewDialogOptions): v
       systemNote.hidden = view.hint === null;
     }
     presetHost.hidden = !view.showPreset;
+    presetHint.textContent = view.presetHint ?? '';
+    presetHint.hidden = view.presetHint === null;
   };
   unsubscribeSystems = systemsStore().subscribe(paintSystem);
   unsubscribe = store.subscribe(() => {

@@ -4,6 +4,7 @@
 // this only chooses the words and which controls make sense.
 
 import type { DesignSystemActionResponse, DesignSystemView, Override, SystemPreviewResponse } from '../../shared/api.ts';
+import { choiceSystemsOf, projectSystemOf } from '../../shared/systems.ts';
 import type { SystemSummary } from '../../shared/types.ts';
 import { plural } from './format.ts';
 
@@ -32,8 +33,14 @@ export const copyProblems = (view: DesignSystemView): string[] => {
 
 const revisionOf = (view: DesignSystemView): number | null => view.link?.revision ?? null;
 
-/** Null while the answer has not arrived, so the header shows nothing rather than a guess. */
-export const chipOf = (view: DesignSystemView | null): ChipView | null => {
+/** "shop’s own design files", or "its project’s own design files" when the design names no project. */
+const projectFiles = (projectName: string | null): string => (projectName === null ? 'its project’s own design files' : `${projectName}’s own design files`);
+
+/**
+ * Null while the answer has not arrived, so the header shows nothing rather than a guess. `projectName` is the
+ * folder name of the design's project (design.json `projectDirectory`), for the "Follows the project" title.
+ */
+export const chipOf = (view: DesignSystemView | null, projectName: string | null = null): ChipView | null => {
   if (view === null) return null;
   const { status } = view;
   switch (status.state) {
@@ -53,6 +60,8 @@ export const chipOf = (view: DesignSystemView | null): ChipView | null => {
       return { label: 'Design system', title: 'This design’s system record can’t be read.', tone: 'warning' };
     case 'ask':
       return { label: 'Ask me in chat', title: 'The agent will ask which design system to use.', tone: 'neutral' };
+    case 'project':
+      return { label: 'Follows the project', title: `This design follows ${projectFiles(projectName)}.`, tone: 'neutral' };
     case 'none':
     case 'unset':
       return { label: 'No design system', title: 'This design has no design system.', tone: 'neutral' };
@@ -73,7 +82,7 @@ export type PopoverView = {
   update: { revision: number } | null;
 };
 
-export const popoverOf = (view: DesignSystemView): PopoverView => {
+export const popoverOf = (view: DesignSystemView, projectName: string | null = null): PopoverView => {
   const { status } = view;
   const lines: string[] = [];
   let openId: string | null = null;
@@ -90,6 +99,7 @@ export const popoverOf = (view: DesignSystemView): PopoverView => {
     }
   } else if (status.state === 'invalid') lines.push('This design’s system record can’t be read, so Design Chamber can’t tell which system it uses.');
   else if (status.state === 'ask') lines.push('The agent will ask which design system to use when it works on this design.');
+  else if (status.state === 'project') lines.push(`This design follows ${projectFiles(projectName)}, so it looks like the rest of the project. Pick a system to use one instead.`);
   else lines.push('This design styles itself. Pick a system to give it shared colors, type and components.');
   return { lines, problems: copyProblems(view), overrides: view.overrides, openId, update };
 };
@@ -109,13 +119,19 @@ export const NO_SYSTEM = 'none';
 
 /**
  * What the Change… list offers: every Ready system but the one in use, and "No design system" unless that is
- * already the state. Drafts are not offered (the service refuses them).
+ * already the state. Drafts are not offered (the service refuses them). A design that follows its project lists the
+ * project's own Ready system first, as "Shop UI, this project’s" (one that appeared after the design was made);
+ * picking it is the same switch as any other, so nothing links by itself.
  */
-export const changeOptions = (view: DesignSystemView, systems: readonly SystemSummary[]): ChangeOption[] => {
+export const changeOptions = (view: DesignSystemView, systems: readonly SystemSummary[], project: { directory: string; foldsCase: boolean } | null = null): ChangeOption[] => {
   const currentId = view.status.state === 'linked' ? view.status.id : null;
-  const ready = systems.filter((system) => system.status === 'ready' && system.id !== currentId).map((system) => ({ id: system.id, label: system.name, hint: `Revision ${system.revision}` }));
+  const own = view.status.state === 'project' && project !== null ? projectSystemOf(choiceSystemsOf(systems), project.directory, project.foldsCase) : null;
+  const ready = systems
+    .filter((system) => system.status === 'ready' && system.id !== currentId)
+    .map((system) => ({ id: system.id, label: system.id === own?.id ? `${system.name}, this project’s` : system.name, hint: `Revision ${system.revision}` }));
+  const ordered = own === null ? ready : [...ready.filter((option) => option.id === own.id), ...ready.filter((option) => option.id !== own.id)];
   const none = view.status.state === 'none' || view.status.state === 'unset' ? [] : [{ id: NO_SYSTEM, label: 'No design system', hint: null }];
-  return [...ready, ...none];
+  return [...ordered, ...none];
 };
 
 /** Why the Change… list is empty. */

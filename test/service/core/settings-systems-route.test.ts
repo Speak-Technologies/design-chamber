@@ -93,7 +93,7 @@ describe('PUT /settings with systemDefault', () => {
 describe('PUT /settings with systemPins', () => {
   test('the whole list is saved, in order, and each pin is resolved', async (t) => {
     const { core, acme, wip } = await serve(t);
-    const pins = [pin('/work/shop', 'system', { id: acme, name: 'Acme' }), pin('/work/blog', 'none'), pin('/work/docs', 'default'), pin('/work/wip', 'system', { id: wip, name: 'Wip' }), pin('/work/old', 'system', { id: 'gone', name: 'Gone' })];
+    const pins = [pin('/work/shop', 'system', { id: acme, name: 'Acme' }), pin('/work/blog', 'none'), pin('/work/docs', 'follow-default'), pin('/work/wip', 'system', { id: wip, name: 'Wip' }), pin('/work/old', 'system', { id: 'gone', name: 'Gone' })];
     const answer = await put(core, { systemPins: pins });
     assert.equal(answer.status, 200);
     assert.deepEqual(
@@ -101,9 +101,9 @@ describe('PUT /settings with systemPins', () => {
       [
         ['/work/shop', 'system', 'ok', null],
         ['/work/blog', 'none', 'ok', null],
-        ['/work/docs', 'default', 'ok', null],
-        ['/work/wip', 'system', 'draft', 'Wip is a draft. This project uses the default until it is Ready.'],
-        ['/work/old', 'system', 'missing', 'Gone isn’t in this Designs folder. This project uses the default.'],
+        ['/work/docs', 'follow-default', 'ok', null],
+        ['/work/wip', 'system', 'draft', 'Wip is a draft. Until it is Ready, this project uses the project’s own design files, or your default.'],
+        ['/work/old', 'system', 'missing', 'Gone isn’t in this Designs folder. This project uses the project’s own design files, or your default.'],
       ],
     );
     assert.deepEqual((await settingsFileOf(core)).systemPins, pins);
@@ -153,7 +153,7 @@ describe('PUT /settings with systemPins', () => {
       [{ directory: '/work/shop', choice: 'maybe' }],
       [{ directory: '/work/shop', choice: 'system' }],
       [{ directory: '/work/shop', choice: 'system', id: 'Not Valid', name: 'X' }],
-      [pin('/work/shop'), pin('/work/shop', 'default')],
+      [pin('/work/shop'), pin('/work/shop', 'follow-default')],
       [pin('/work/ok'), { directory: 7, choice: 'none' }],
     ];
     for (const value of bad) {
@@ -163,6 +163,29 @@ describe('PUT /settings with systemPins', () => {
       assert.match(answer.json.message, /project pins?/);
     }
     assert.deepEqual(await settingsFileOf(core), before);
+  });
+});
+
+describe('PUT /settings and Use the project (use-the-project spec §1.4, §1.5)', () => {
+  test('a legacy default pin is refused with the four choices, and nothing is saved', async (t) => {
+    const { core } = await serve(t);
+    await put(core, { systemPins: [pin('/work/keep', 'follow-default')] });
+    const before = await settingsFileOf(core);
+    for (const value of [[{ directory: '/work/shop', choice: 'default' }], [pin('/work/ok'), { directory: '/work/shop', choice: 'default' }]]) {
+      const answer = await put(core, { systemPins: value });
+      assert.equal(answer.status, 400, JSON.stringify(value));
+      assert.equal(answer.json.error, 'bad-request');
+      assert.equal(answer.json.message, 'Pick Use the project, Use my default, No design system or a design system.');
+    }
+    assert.deepEqual(await settingsFileOf(core), before);
+  });
+
+  test('follow-default is stored and answered as it was sent', async (t) => {
+    const { core } = await serve(t);
+    const answer = await put(core, { systemPins: [pin('/work/shop', 'follow-default')] });
+    assert.equal(answer.status, 200);
+    assert.deepEqual(answer.json.systems.pins, [{ directory: '/work/shop', choice: 'follow-default', state: 'ok', sentence: null }]);
+    assert.deepEqual((await settingsFileOf(core)).systemPins, [{ directory: '/work/shop', choice: 'follow-default' }]);
   });
 });
 
@@ -235,7 +258,7 @@ describe('switching the designs folder (spec: Changed designs folder)', () => {
     assert.deepEqual(away.json.systems.default, { ...first, state: 'missing', sentence: 'Your default design system isn’t in this Designs folder.' });
     assert.deepEqual(
       away.json.systems.pins.map((one) => [one.state, one.sentence]),
-      [['missing', 'Acme isn’t in this Designs folder. This project uses the default.']],
+      [['missing', 'Acme isn’t in this Designs folder. This project uses the project’s own design files, or your default.']],
     );
     assert.deepEqual(away.json.systems.notices, [], 'nothing was deleted, so there is no deleted notice');
     const file = await settingsFileOf(core);

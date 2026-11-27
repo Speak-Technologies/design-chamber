@@ -1,14 +1,22 @@
-// Settings (rail R3 and page P5): the designs folder, folders you used before, how agents find
-// your designs (guide, skill, AGENTS.md snippet), the browser that makes thumbnails, and the
+// Settings (rail R3 and page P5): the designs folder, folders you used before, your agent (what is built in,
+// the note in every chat, an older skill copy, and the guide and AGENTS.md lines for agents outside OpenChamber), the browser that makes thumbnails, and the
 // opencode.json tip. Same content in the rail sheet and the page sheet.
 
 import { mountBadge, mountSelect, mountTextField } from '@openchamber/sdk/ui';
 
 import { buildAgentsSnippet } from '../../shared/agent/guide.ts';
 import type { SettingsResponse } from '../../shared/api.ts';
+import { choiceSystemsOf } from '../../shared/systems.ts';
 import { client, guestHost, host, store } from '../guest.ts';
 import { middlePath } from '../model/format.ts';
+import { foldsCaseFor } from '../model/new-model.ts';
 import {
+  AGENT_SECTION_TEXT,
+  AGENT_SECTION_TITLE,
+  BUILT_IN_TEXT,
+  DEFAULT_NOTE,
+  OUTSIDE_TEXT,
+  OUTSIDE_TITLE,
   NO_PROJECTS_TEXT,
   SYSTEMS_SECTION_TEXT,
   browserStatus,
@@ -19,6 +27,7 @@ import {
   designCountLabel,
   duplicateSentences,
   guideSentence,
+  instructionsRow,
   isSameRootInput,
   permissionSnippet,
   pinOptions,
@@ -85,12 +94,13 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
     },
   );
   void systemsStore().load();
-  // Repaint only when the choices change (which systems are Ready, and their names). The reload after a save moves badges
-  // this view doesn't draw, and a repaint would close a select the user has already opened.
+  // Repaint only when the choices or the row sentences change (each system's name, status and the project it belongs
+  // to). The reload after a save moves badges this view doesn't draw, and a repaint would close a select the user has
+  // already opened.
   let systemChoices = '';
   scope.add(
     systemsStore().subscribe((state) => {
-      const next = JSON.stringify((state.systems ?? []).filter((system) => system.status === 'ready').map((system) => [system.id, system.name]));
+      const next = state.systems === null ? 'loading' : JSON.stringify(choiceSystemsOf(state.systems).map((system) => [system.id, system.name, system.status, system.belongsTo]));
       if (next === systemChoices) return;
       systemChoices = next;
       paint();
@@ -112,6 +122,8 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
   let chromeBusy = false;
   let skillError: string | null = null;
   let skillBusy = false;
+  /** The collapsed "outside OpenChamber" part stays as the person left it across repaints. */
+  let outsideOpen = false;
   /** Where focus goes after the next repaint, because the control that had it was rebuilt. */
   let skillFocus: 'action' | 'row' | null = null;
   const copied = { permissions: false, agents: false, skill: false };
@@ -290,16 +302,18 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
       const list = systemsStore().get().systems ?? [];
       const defaultHost = h('div', { class: 'dc-field', 'data-system-select': 'default' });
       mountSelect(defaultHost, { label: 'Default for new designs', value: defaultValue(answer.default), options: defaultOptions(list), disabled: systemBusy, onChange: (value) => void saveSystem('default', { systemDefault: defaultFrom(value, list) }) });
+      defaultHost.append(h('p', { class: 'oc-sdk-field-note' }, DEFAULT_NOTE));
       const defaultNote = defaultSentence(answer.default);
       if (defaultNote !== null) defaultHost.append(h('p', { class: 'oc-sdk-field-note' }, defaultNote));
-      const rows = projectRows(projects ?? [], answer.pins).map((row) => {
+      const foldsCase = foldsCaseFor(settings.root, typeof navigator === 'undefined' ? '' : navigator.platform);
+      const rows = projectRows(projects ?? [], answer.pins, { systems: systemsStore().get().systems, defaultView: answer.default, foldsCase }).map((row) => {
         const selectHost = h('div', { class: 'dc-sys-pin-select', 'data-system-select': `pin:${row.directory}` });
         mountSelect(selectHost, { value: row.value, options: pinOptions(list), disabled: systemBusy, onChange: (value) => void saveSystem(`pin:${row.directory}`, { systemPins: pinsAfter(answer.pins, row.directory, value, list) }) });
         selectHost.querySelector('button, [role="combobox"]')?.setAttribute('aria-label', `Design system for ${row.name}`);
         return h(
           'li',
           { class: 'dc-sys-pin' },
-          h('div', { class: 'dc-sys-pin-text' }, h('span', { class: 'dc-sys-pin-name', title: row.directory }, row.name), row.sentence !== null ? h('span', { class: 'dc-muted' }, row.sentence) : null),
+          h('div', { class: 'dc-sys-pin-text' }, h('span', { class: 'dc-sys-pin-name', title: row.directory }, row.name), row.sentence !== null ? h('span', { class: 'oc-sdk-field-note dc-sys-pin-note' }, row.sentence) : null),
           selectHost,
         );
       });
@@ -332,28 +346,40 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
       previous = section('Earlier folders', 'Designs in these folders were left in place. Switch back to see them again.', h('ul', { class: 'dc-prev-list' }, ...rows));
     }
 
-    // Agent discovery: the guide the service keeps, the skill's status, the snippet to paste.
+    // Your agent (use-the-project spec §2.6): what is built in, whether the note in every chat was kept, an older
+    // installed copy of the skill when there is one, and, folded away, what an agent outside OpenChamber needs.
+    const builtIn = h('div', { class: 'dc-field', role: 'group', 'aria-label': 'Built in', tabindex: '-1', 'data-agent-built-in': '' }, h('span', { class: 'oc-sdk-field-label' }, 'Built in'), h('p', { class: 'dc-settings-p' }, BUILT_IN_TEXT));
+
+    const note = instructionsRow(settings.agent.instructions);
+    const noteBadge = h('span');
+    mountBadge(noteBadge, { label: note.badge, tone: note.tone });
+    const inEveryChat = h('div', { class: 'dc-field', 'data-agent-note': settings.agent.instructions }, h('span', { class: 'oc-sdk-field-label' }, 'In every chat'), h('div', { class: 'dc-status-line' }, noteBadge, h('span', { class: 'dc-muted dc-status-detail' }, note.detail)));
+
+    const older = skillRow(settings.agent.skill);
+    const duplicates = duplicateSentences(settings.agent.skill);
+    let olderCopy: HTMLElement | null = null;
+    if (older !== null || duplicates.length > 0) {
+      olderCopy = h('div', { class: 'dc-field', role: 'group', 'aria-label': 'Older copy', tabindex: '-1', 'data-skill-row': '' }, h('span', { class: 'oc-sdk-field-label' }, 'Older copy'));
+      if (older !== null) olderCopy.append(sentence(older.sentence));
+      if (older?.control === 'remove-old-copy') {
+        const remove = btn({ label: 'Remove old copy', variant: 'outline', size: 'xs', loading: skillBusy, onClick: () => void removeOldCopy() });
+        remove.el.dataset.skillAction = '';
+        olderCopy.append(h('div', { class: 'dc-row-actions' }, remove.el));
+      } else if (older?.control === 'copy-path') {
+        const skillPath = settings.agent.skill.path;
+        const copyPath = btn({ label: copied.skill ? 'Copied' : 'Copy path', variant: 'outline', size: 'xs', icon: copied.skill ? 'check' : 'copy', onClick: () => void copySnippet(skillPath, 'skill') });
+        copyPath.el.setAttribute('aria-label', copied.skill ? 'Copied the path of the older copy' : 'Copy the path of the older copy');
+        olderCopy.append(h('div', { class: 'dc-row-actions' }, copyPath.el));
+      }
+      if (skillError !== null) olderCopy.append(h('p', { class: 'dc-form-error', role: 'alert' }, skillError));
+      for (const duplicate of duplicates) {
+        const badge = h('span');
+        mountBadge(badge, { label: 'Duplicate', tone: 'warning' });
+        olderCopy.append(h('div', { class: 'dc-status-line' }, badge, sentence(duplicate, true)));
+      }
+    }
+
     const guide = h('div', { class: 'dc-field' }, h('span', { class: 'oc-sdk-field-label' }, 'Guide in your designs folder'), sentence(guideSentence(settings.agent.guide)));
-
-    const row = skillRow(settings.agent.skill);
-    const skill = h('div', { class: 'dc-field', role: 'group', 'aria-label': 'Agent skill', tabindex: '-1', 'data-skill-row': '' }, h('span', { class: 'oc-sdk-field-label' }, 'Agent skill'), sentence(row.sentence));
-    if (row.control === 'remove-old-copy') {
-      const remove = btn({ label: 'Remove old copy', variant: 'outline', size: 'xs', loading: skillBusy, onClick: () => void removeOldCopy() });
-      remove.el.dataset.skillAction = '';
-      skill.append(h('div', { class: 'dc-row-actions' }, remove.el));
-    } else if (row.control === 'copy-path') {
-      const skillPath = settings.agent.skill.path;
-      const copyPath = btn({ label: copied.skill ? 'Copied' : 'Copy path', variant: 'outline', size: 'xs', icon: copied.skill ? 'check' : 'copy', onClick: () => void copySnippet(skillPath, 'skill') });
-      copyPath.el.setAttribute('aria-label', copied.skill ? 'Copied the path of the older copy' : 'Copy the path of the older copy');
-      skill.append(h('div', { class: 'dc-row-actions' }, copyPath.el));
-    }
-    if (skillError !== null) skill.append(h('p', { class: 'dc-form-error', role: 'alert' }, skillError));
-    for (const duplicate of duplicateSentences(settings.agent.skill)) {
-      const badge = h('span');
-      mountBadge(badge, { label: 'Duplicate', tone: 'warning' });
-      skill.append(h('div', { class: 'dc-status-line' }, badge, sentence(duplicate, true)));
-    }
-
     const agentsSnippet = agentsSnippetFor(settings.root);
     let snippetBlock: HTMLElement | null = null;
     if (agentsSnippet !== null) {
@@ -368,7 +394,13 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
         h('div', { class: 'dc-row-actions' }, copyAgents.el),
       );
     }
-    const agents = section('Help your agent find your designs', 'Chats that don’t start with /design or /page can still find your designs folder through these.', guide, skill, snippetBlock);
+    // Native <details>: keyboard and screen reader behaviour for free. Its open state survives a repaint (Copy repaints).
+    const outside = h('details', { class: 'dc-more', 'data-agent-outside': '' }, h('summary', { class: 'dc-more-summary' }, OUTSIDE_TITLE), h('div', { class: 'dc-more-body' }, h('p', { class: 'dc-settings-p' }, OUTSIDE_TEXT), guide, snippetBlock));
+    outside.open = outsideOpen;
+    outside.addEventListener('toggle', () => {
+      outsideOpen = outside.open;
+    });
+    const agents = section(AGENT_SECTION_TITLE, AGENT_SECTION_TEXT, builtIn, inEveryChat, olderCopy, outside);
 
     // Browser
     const status = browserStatus(settings.chrome.path, settings.chrome.source);
@@ -427,7 +459,9 @@ export const mountSettings = (container: HTMLElement): SettingsHandle => {
 
     // The remove button was rebuilt (and is gone once the copy is): put focus back where the user was.
     if (skillFocus !== null) {
-      body.querySelector<HTMLElement>(skillFocus === 'action' ? '[data-skill-action]' : '[data-skill-row]')?.focus();
+      // The old copy's row is gone once it is removed: focus then goes to the Built in row just above it.
+      const target = skillFocus === 'action' ? '[data-skill-action]' : '[data-skill-row]';
+      (body.querySelector<HTMLElement>(target) ?? body.querySelector<HTMLElement>('[data-agent-built-in]'))?.focus();
       skillFocus = null;
     }
   };

@@ -2,7 +2,7 @@
 // `ApiRoutes`, so the real UI and guest core can be screenshot-tested without OpenChamber.
 // `fake-transport.ts` puts it behind the host's `serviceRequest`. Sample designs, comments, versions and thumbnails; every mutation emits a change event.
 
-import type { ApiRoutes, EditRequest, OpenRequest, RouteBody, RouteKey, RouteResponse, SettingsResponse, StatusDesignRow } from '../../../src/shared/api.ts';
+import type { ApiRoutes, EditRequest, OpenRequest, RouteBody, RouteKey, RouteResponse, SettingsResponse, StatusDesignRow, ViewBody } from '../../../src/shared/api.ts';
 import { SCREENS_MAX, STATUS_ROWS_MAX } from '../../../src/shared/limits.ts';
 import { mentionUrlOf } from '../../../src/shared/agent/mention.ts';
 import { copyTitle, describeMove, directionGroups, freeCopyId, SCREEN_LIST_STALE_MESSAGE } from '../../../src/shared/screen-ops.ts';
@@ -323,6 +323,8 @@ export type FakeBackend = {
   systems: FakeSystems['hooks'];
   /** Test hooks (Phase 2.5 U4): each design's system link (fake-design-system.ts). */
   designSystem: FakeDesignSystem['hooks'];
+  /** Test hook (use-the-project T10): what Settings shows for "In every chat" from the next read on (the real value comes from the host's last answer). */
+  setInstructions: (state: 'saved' | 'pending' | 'not-saved') => void;
   /**
    * Test hook (Phase 2.6 design warnings): what the service reports in this design's `warnings` from the next answer on
    * (`[]` clears them). Sends the `comments` change the service sends after a reconciler write, so an open view refetches.
@@ -331,6 +333,8 @@ export type FakeBackend = {
   /** Test hook (G1): which project folder a design was made for (`null`: none), and which project folders are gone from disk. */
   setProject: (slug: string, directory: string | null) => void;
   setMissingProjects: (directories: string[]) => void;
+  /** Test hook (view report): every `PUT /view` body the rail or the page sent, oldest first. */
+  views: () => ViewBody[];
   /** Leaves an open request for a system, as the service does for a chat block's preview button. */
   requestSystemOpen: (system: string, target: 'page' | 'board' | 'preview') => void;
 };
@@ -345,6 +349,7 @@ export const createFakeBackend = (): FakeBackend => {
   /** A page the agent saved straight into the root instead of a design folder: the loose-file banner offers to import it. */
   const loose = new Map<string, { bytes: number; mtime: string }>([['pricing-v2.html', { bytes: 14_200, mtime: ago(2 * HOUR) }]]);
   let skillState: 'not-installed' | 'current' = 'not-installed';
+  let instructionsState: 'saved' | 'pending' | 'not-saved' = 'saved';
   const listeners = new Set<(event: ChangeEvent) => void>();
   let restoreFailure: string | null = null;
 
@@ -509,6 +514,7 @@ export const createFakeBackend = (): FakeBackend => {
   type Handlers = { [K in RouteKey]?: (req: Req<K>) => RouteResponse<K> | Promise<RouteResponse<K>> };
 
   let outbox: Outbox | null = null;
+  const views: ViewBody[] = [];
   let openRequest: OpenRequest | null = null;
   const handlers: Handlers = {
     'GET /health': () => ({ ok: true, version: '0.1.0', epoch: 'dev' }),
@@ -522,6 +528,7 @@ export const createFakeBackend = (): FakeBackend => {
       agent: {
         guide: { path: `${root}\\AGENTS.md`, state: 'current' },
         skill: { path: 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md', state: skillState, duplicates: [] },
+        instructions: instructionsState,
       },
       systems: designSystem.settings(),
     }),
@@ -771,6 +778,10 @@ export const createFakeBackend = (): FakeBackend => {
       ],
     }),
     // The page hands a message for a chat that is not selected to the rail through the outbox.
+    'PUT /view': ({ body }) => {
+      views.push(structuredClone(body));
+      return { ok: true };
+    },
     'GET /outbox': () => ({ outbox }),
     'PUT /outbox': ({ body }) => {
       outbox = { ...body, created: new Date().toISOString() };
@@ -944,10 +955,14 @@ export const createFakeBackend = (): FakeBackend => {
       restoreFailure = message;
     },
     touchTokens: (slug) => tokens.touch(slug),
+    views: () => views,
     pageState: pageState.hooks,
     folders: folderBook.hooks,
     systems: systemBook.hooks,
     designSystem: designSystem.hooks,
+    setInstructions: (state) => {
+      instructionsState = state;
+    },
     setWarnings: (slug, warnings) => {
       if (!db.has(slug)) return;
       warningBook.set(slug, structuredClone(warnings));

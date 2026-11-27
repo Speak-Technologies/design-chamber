@@ -7,7 +7,7 @@
 import { BRIEF_MAX, DIRECTION_NAME_MAX, DIRECTION_OPTIONS_MAX, DIRECTION_OPTIONS_MIN, FOLDER_REQUEST_NAMES_MAX, SCREEN_DESCRIPTION_MAX, SCREENS_MAX, TITLE_MAX, TWEAKS_MAX, TWEAK_CHOICES_MAX, TWEAK_CHOICES_MIN, VIEWPORT_HEIGHT_MAX, VIEWPORT_HEIGHT_MIN, VIEWPORT_WIDTH_MAX, VIEWPORT_WIDTH_MIN, VIEWPORTS_MAX } from '../limits.ts';
 import { VIEWPORT_LAPTOP, VIEWPORT_PHONE } from '../design-json.ts';
 import type { DesignKind, Viewport } from '../types.ts';
-import { clip, designFilePath, formatViewport, joinFolder, oneLine, SYSTEM_GUIDANCE_ONLY, systemOf, VIEWPORT_DESKTOP, VIEWPORT_TABLET, type AgentContext, type AgentSystem, type ProjectBreakpoint, type ProjectRules } from './context.ts';
+import { clip, codeSpan, designFilePath, formatViewport, joinFolder, oneLine, SYSTEM_GUIDANCE_ONLY, systemOf, VIEWPORT_DESKTOP, VIEWPORT_TABLET, type AgentContext, type AgentSystem, type ProjectBreakpoint, type ProjectRules } from './context.ts';
 import { CHECK_TOOL_NAME } from './guide.ts';
 
 /** The two bundled rules files, exactly as read from `rules/`. */
@@ -43,6 +43,13 @@ const kindMeaning = (kind: DesignKind): string =>
     ? 'a canvas is an infinite wall of screens, each shown at every viewport side by side, like Claude Design'
     : 'a page is one index.html shown full screen, like a browser tab';
 
+const stepTwo = (context: AgentContext): string => {
+  const { state } = systemOf(context);
+  if (state === 'linked') return '2. Read the design system\'s OVERVIEW.md FIRST (Precedence, layer 2), then look for the active project\'s design rules for anything it does not cover (layer 3). Tell the user what you found in 2–4 lines, citing files.';
+  if (state === 'project') return "2. Read the project's design files FIRST (Precedence, layer 2), then its components and screens. Tell the user what you are following in 2 to 4 lines, citing files.";
+  return '2. Look for the active project\'s design rules FIRST (Precedence, layer 2). Tell the user what you found in 2–4 lines, citing files, or say "no project context".';
+};
+
 const headerSection = (context: AgentContext): string[] => {
   const brief = clip(context.brief.trim(), BRIEF_MAX);
   const project = context.project;
@@ -65,9 +72,7 @@ const headerSection = (context: AgentContext): string[] => {
     '## Do this, in this order',
     '',
     '1. Read this whole file. Read it again at the start of every new request about this design: it may have been refreshed.',
-    systemOf(context).state === 'linked'
-      ? '2. Read the design system\'s OVERVIEW.md FIRST (Precedence, layer 2), then look for the active project\'s design rules for anything it does not cover (layer 3). Tell the user what you found in 2–4 lines, citing files.'
-      : '2. Look for the active project\'s design rules FIRST (Precedence, layer 2). Tell the user what you found in 2–4 lines, citing files, or say "no project context".',
+    stepTwo(context),
     '3. Settle the viewports (Viewports).',
     '4. If anything material is unclear, ask before you build: one message, then wait (Ask when unsure). Skip the questions only if the user said "go" or the request is a small edit.',
     '5. Build only inside the folder above. Write design.json first, then the HTML. Write DESIGN.md and tokens.css before the second screen. Update design.json in the same turn as the files it describes.',
@@ -169,6 +174,54 @@ const phaseZeroOrder = (context: AgentContext): string[] => [
   ...builtInLayer(),
 ];
 
+type ProjectSystem = Extract<AgentSystem, { state: 'project' }>;
+
+/** The last folder name of a project path, either separator ("shop"). */
+const folderNameOf = (directory: string | null): string => (directory ?? '').split(/[\\/]/).filter((part) => part !== '').pop() ?? 'the project';
+
+/** Project paths as code spans, so a name from the project can't break the line. */
+const spans = (paths: readonly string[]): string => paths.map(codeSpan).join(', ');
+
+/**
+ * Layer 2 when the design follows its project (use-the-project spec §1.6): what discovery found, then where the
+ * project keeps its components and screens. Paths and counts only; the agent reads the files itself.
+ */
+const projectFollowLayer = (project: ProjectRules, system: ProjectSystem): string[] => {
+  const found = projectLayer(project);
+  // The found list without the heading and the closing discovery paragraph; every other state keeps its one sentence.
+  const what = project.state === 'scanned' && project.sources.length > 0 ? found.slice(2, -2) : found.slice(2, 3);
+  const { components, screens, stories } = project.patterns;
+  return [
+    "### Layer 2: this project's design system and patterns (this design follows the project)",
+    '',
+    `This design follows ${project.directory ?? 'the project'}. Build it the way the project already looks.`,
+    '',
+    ...what,
+    '',
+    ...(components.length === 0 ? [] : [`Its components live in: ${spans(components)}. Read the ones you need and copy their structure, class names and states into this design's HTML. Don't import or run them.`]),
+    ...(screens.length === 0 ? [] : [`Its existing screens live in: ${spans(screens)}. Match their layout, spacing and copy tone unless the user asks for something new.`]),
+    ...(stories === 0 ? [] : [`It has ${stories} Storybook ${stories === 1 ? 'story' : 'stories'}; read a component's story before you draw it.`]),
+    ...(system.draft === null ? [] : [`The project's design system ${oneLine(system.draft.name)} is still a draft, so it isn't linked. Follow the files above; don't read _systems/${system.draft.id}/.`]),
+    'Copy the values you use into tokens.css with a comment naming the source file.',
+    SYSTEM_GUIDANCE_ONLY,
+  ];
+};
+
+/** The Phase 0 layers with layer 2 rewritten for a design that follows its project. */
+const projectOrder = (context: AgentContext, system: ProjectSystem): string[] => [
+  PRECEDENCE_INTRO,
+  '',
+  ...userLayer(),
+  '',
+  ...projectFollowLayer(context.project, system),
+  '',
+  ...presetLayer(context),
+  '',
+  ...designSystemLayer(context),
+  '',
+  ...builtInLayer(),
+];
+
 type LinkedSystem = Extract<AgentSystem, { state: 'linked' }>;
 
 /** A system path as the agent sees it, in the design folder's separator style. */
@@ -192,6 +245,14 @@ export const linkedSystemLines = (system: LinkedSystem): string[] => {
   ];
 };
 
+/** The system lines, with the reason after the first when it is the project's own (use-the-project spec §1.6). */
+const linkedLayerLines = (context: AgentContext, system: LinkedSystem): string[] => {
+  const lines = linkedSystemLines(system);
+  if (system.ownedByProject !== true) return lines;
+  const why = `Design Chamber picked this system because it is ${oneLine(folderNameOf(context.project.directory))}'s own design system.`;
+  return [...lines.slice(0, 1), why, ...lines.slice(1)];
+};
+
 const linkedOrder = (context: AgentContext, system: LinkedSystem): string[] => [
   PRECEDENCE_INTRO,
   '',
@@ -199,7 +260,7 @@ const linkedOrder = (context: AgentContext, system: LinkedSystem): string[] => [
   '',
   '### Layer 2: this design\'s design system',
   '',
-  ...linkedSystemLines(system).flatMap((line, index) => (index === 0 ? [line] : ['', line])),
+  ...linkedLayerLines(context, system).flatMap((line, index) => (index === 0 ? [line] : ['', line])),
   '',
   ...projectLayer(context.project, '### Layer 3: the active project\'s design rules, for anything the design system doesn\'t cover'),
   '',
@@ -230,7 +291,7 @@ const precedenceSection = (context: AgentContext): string[] => {
     '## Precedence',
     '',
     ...(system.state === 'ask' ? [askSystemLine(context, system), ''] : []),
-    ...(system.state === 'linked' ? linkedOrder(context, system) : phaseZeroOrder(context)),
+    ...(system.state === 'linked' ? linkedOrder(context, system) : system.state === 'project' ? projectOrder(context, system) : phaseZeroOrder(context)),
   ];
 };
 

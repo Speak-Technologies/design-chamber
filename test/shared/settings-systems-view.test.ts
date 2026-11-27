@@ -24,12 +24,12 @@ test('a default is ok, draft or missing (not in this folder, or unreadable), and
   assert.deepEqual(view('gone'), { choice: 'system', id: 'gone', name: 'Saved name', state: 'missing', sentence: 'Your default design system isn’t in this Designs folder.' });
 });
 
-test('pins: none and default are always ok; a system pin follows the same three states', () => {
+test('pins: none and follow-default are always ok; a system pin follows the same three states', () => {
   const view = settingsSystemsView({
     settings: {
       systemPins: [
         { directory: '/a', choice: 'none' },
-        { directory: '/b', choice: 'default' },
+        { directory: '/b', choice: 'follow-default' },
         { directory: '/c', choice: 'system', id: 'wip', name: 'Wip' },
         { directory: '/d', choice: 'system', id: 'broken', name: 'Broken' },
         { directory: '/e', choice: 'system', id: 'gone' },
@@ -43,9 +43,9 @@ test('pins: none and default are always ok; a system pin follows the same three 
     [
       ['/a', 'ok', null],
       ['/b', 'ok', null],
-      ['/c', 'draft', 'Wip is a draft. This project uses the default until it is Ready.'],
-      ['/d', 'missing', 'Broken can’t be read right now. This project uses the default.'],
-      ['/e', 'missing', 'gone isn’t in this Designs folder. This project uses the default.'],
+      ['/c', 'draft', 'Wip is a draft. Until it is Ready, this project uses the project’s own design files, or your default.'],
+      ['/d', 'missing', 'Broken can’t be read right now. This project uses the project’s own design files, or your default.'],
+      ['/e', 'missing', 'gone isn’t in this Designs folder. This project uses the project’s own design files, or your default.'],
     ],
   );
   assert.deepEqual(view.notices, ['One notice.']);

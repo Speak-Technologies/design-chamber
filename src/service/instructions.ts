@@ -22,16 +22,24 @@
 // removal. A refusal or `unavailable` is logged and tried again on the next trigger only. Triggers:
 // the baseline, a root change, a settings change, and `system` events that may change a pinned
 // system's name or status (coalesced, 1 s).
+//
+// Settings shows whether the global note was saved (use-the-project spec §2.6): `onStatus` hears
+// `pending` before the first answer and while a new text is on its way, then `saved` or `not-saved`.
+// Only the global note counts; a pin line that was not saved is retried on its own triggers.
 
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { SKILL_NAME } from '../shared/agent/guide.ts';
 import { buildInstructions, buildPinInstruction } from '../shared/agent/instructions.ts';
+import { SKILL_REFERENCE_FOLDER } from '../shared/agent/skill-doc.ts';
 import { SYSTEM_PINS_MAX } from '../shared/limits.ts';
+import { choiceSystemsOf, projectSystemOf } from '../shared/systems.ts';
+import type { AgentInstructionsState } from '../shared/api.ts';
 import type { ChangeEvent, SettingsFile, SystemSummary } from '../shared/types.ts';
 import type { HostCalls, Logger, SettingsStore } from './context.ts';
-import { isInsideOrEqual, writeFileAtomic } from './paths.ts';
+import { foldsCase, isInsideOrEqual, samePath, writeFileAtomic } from './paths.ts';
 
 export type InstructionsDeps = {
   /** The launcher's check command for `root` with the literal `<slug>`, or `null` when it is not in place. */
@@ -42,20 +50,33 @@ export type InstructionsDeps = {
   platform?: NodeJS.Platform;
   /** Phase 2.5 per-project pins; absent → only the global note is kept. */
   pins?: PinSyncDeps;
+  /** The bundled skill's absolute reference/ folder, or `null` when it is not installed (`findSkillReferenceDir`); absent → not named. */
+  referenceDir?: () => Promise<string | null>;
+  /** Hears each change of the global note's state, for Settings (use-the-project spec §2.6). Starts at `pending`. */
+  onStatus?: (state: AgentInstructionsState) => void;
 };
+
+/** What the pin sync reads of a system: its name and state, and who owns it (use-the-project spec §1.5). */
+export type PinSystemRow = Pick<SystemSummary, 'id' | 'name' | 'status' | 'unreadable' | 'home' | 'sources' | 'updated'>;
 
 /** What the pin sync reads and listens to (§8.6). */
 export type PinSyncDeps = {
   /** The pins and the default, as last saved. */
   settings: () => Pick<SettingsFile, 'systemDefault' | 'systemPins'>;
   /** Every system in the current root (read now, not the index: an index still loading would remove every pin). */
-  systems: () => Promise<readonly Pick<SystemSummary, 'id' | 'name' | 'status' | 'unreadable'>[]>;
+  systems: () => Promise<readonly PinSystemRow[]>;
   /** `instructions.json`. */
   file: string;
   onSettingsChange: (listener: () => void) => () => void;
   subscribe: (listener: (event: ChangeEvent) => void) => () => void;
   /** `system` events are coalesced this long (test seam, 1 s outside tests). */
   coalesceMs?: number;
+};
+
+/** The design-chamber skill's reference/ folder under the extension package, absolute, or `null` when the build did not ship it. */
+export const findSkillReferenceDir = async (packageRoot: string): Promise<string | null> => {
+  const folder = path.join(packageRoot, 'dist', 'skills', SKILL_NAME, SKILL_REFERENCE_FOLDER);
+  return (await stat(folder).then((info) => info.isDirectory(), () => false)) ? folder : null;
 };
 
 /** `instructions.json` beside the settings file (§2.9). */
@@ -89,24 +110,37 @@ export const parsePinRecord = (text: string | null): PinRecord => {
 const serializePinRecord = (record: PinRecord): string => `${JSON.stringify({ v: 1, dirs: Object.fromEntries(record) }, null, 2)}\n`;
 
 /**
- * The text each pinned project should have (§8.6): a pin whose effective target (§2.9: `system`
- * names one, `default` follows the default) is a Ready, readable system of this root. A pin on the
- * designs folder or inside it is skipped (it is not a project, as in `effectiveSystemChoice`).
- * Keys are resolved paths.
+ * The text each project folder should have (§8.6): a pin whose effective target (§2.9: `system`
+ * names one, `follow-default` follows the default) is a Ready, readable system of this root; then,
+ * for a folder no pin speaks for, the line of the project's own Ready system (use-the-project spec
+ * §1.5, the same pick as the chip rules), keyed by the folder the system belongs to. A pin of any
+ * kind, `none` included, speaks for its folder. The designs folder or a folder inside it is skipped
+ * (it is not a project, as in `effectiveSystemChoice`). Keys are resolved paths.
  */
 export const desiredPinTexts = (input: {
   settings: Pick<SettingsFile, 'systemDefault' | 'systemPins'>;
-  systems: readonly Pick<SystemSummary, 'id' | 'name' | 'status' | 'unreadable'>[];
+  systems: readonly PinSystemRow[];
   designsRoot: string;
 }): Map<string, string> => {
   const out = new Map<string, string>();
   const fallback = input.settings.systemDefault;
+  const pinned: string[] = [];
   for (const pin of input.settings.systemPins ?? []) {
     const directory = path.resolve(pin.directory);
     if (out.has(directory) || isInsideOrEqual(input.designsRoot, directory)) continue;
-    const target = pin.choice === 'system' ? pin.id : pin.choice === 'default' && fallback?.choice === 'system' ? fallback.id : undefined;
+    pinned.push(directory);
+    const target = pin.choice === 'system' ? pin.id : pin.choice === 'follow-default' && fallback?.choice === 'system' ? fallback.id : undefined;
     const system = target === undefined ? undefined : input.systems.find((one) => one.id === target && one.status === 'ready' && one.unreadable === null);
     if (system !== undefined) out.set(directory, buildPinInstruction(system.name));
+  }
+  // `belongsTo` comes from a system's adopted home or recorded scan source (validated when it was set), never a request.
+  const owned = choiceSystemsOf(input.systems).filter((one) => one.status === 'ready');
+  for (const system of owned) {
+    if (system.belongsTo === null || !path.isAbsolute(system.belongsTo)) continue;
+    const directory = path.resolve(system.belongsTo);
+    if (out.has(directory) || pinned.some((one) => samePath(one, directory)) || isInsideOrEqual(input.designsRoot, directory)) continue;
+    const pick = projectSystemOf(owned, directory, foldsCase());
+    if (pick !== null) out.set(directory, buildPinInstruction(pick.name));
   }
   return out;
 };
@@ -129,6 +163,12 @@ export const startInstructions = (ctx: InstructionsContext, deps: InstructionsDe
   let lastSaved: string | null = null;
   /** Sends run one at a time, in trigger order, so a quick second root change can never be overtaken by the first. */
   let queue: Promise<void> = Promise.resolve();
+  let status: AgentInstructionsState = 'pending';
+  const setStatus = (next: AgentInstructionsState): void => {
+    if (stopped || next === status) return;
+    status = next;
+    deps.onStatus?.(next);
+  };
 
   const sendCurrent = async (): Promise<void> => {
     if (stopped) return;
@@ -139,21 +179,41 @@ export const startInstructions = (ctx: InstructionsContext, deps: InstructionsDe
     } catch (error) {
       ctx.log.warn('instructions.command-failed', { error: errorText(error) });
     }
+    let referenceDir: string | null = null;
+    try {
+      referenceDir = (await deps.referenceDir?.()) ?? null;
+    } catch (error) {
+      ctx.log.warn('instructions.reference-failed', { error: errorText(error) });
+    }
     let text: string;
     try {
-      text = buildInstructions({ root, platform, checkCommand });
+      text = buildInstructions({ root, platform, checkCommand, referenceDir });
     } catch (error) {
       // A root with a control character or an absurd length: the note is not sent rather than sent wrong.
       ctx.log.warn('instructions.build-failed', { error: errorText(error) });
+      setStatus('not-saved');
       return;
     }
-    if (stopped || text === lastSaved) return;
-    const result = await ctx.hostCalls.setInstructions(text);
+    if (stopped) return;
+    if (text === lastSaved) {
+      setStatus('saved');
+      return;
+    }
+    setStatus('pending');
+    let result: Awaited<ReturnType<HostCalls['setInstructions']>>;
+    try {
+      result = await ctx.hostCalls.setInstructions(text);
+    } catch (error) {
+      setStatus('not-saved');
+      throw error;
+    }
     if (result === 'saved') {
       lastSaved = text;
+      setStatus('saved');
       ctx.log.info('instructions.saved', { characters: text.length });
       return;
     }
+    setStatus('not-saved');
     ctx.log.info('instructions.not-saved', { result });
   };
 
@@ -219,7 +279,10 @@ export const startInstructions = (ctx: InstructionsContext, deps: InstructionsDe
       baseline = true;
       trigger();
     },
-    (error: unknown) => ctx.log.warn('instructions.start-skipped', { error: errorText(error) }),
+    (error: unknown) => {
+      ctx.log.warn('instructions.start-skipped', { error: errorText(error) });
+      setStatus('not-saved');
+    },
   );
   const offRoot = ctx.settings.onRootChange(() => trigger());
 

@@ -739,7 +739,8 @@ export const normalizeServiceState = (raw: unknown): ServiceState | null => {
   // Only a literal `true` marks a provisional seed; any other value means final.
   if (raw.provisional === true) state.provisional = true;
   // Phase 2.5 §2.7: service-owned system fields; an unusable value is dropped, never fatal.
-  if (raw.systemDecision === 'ask' || raw.systemDecision === 'none' || raw.systemDecision === 'system') state.systemDecision = raw.systemDecision;
+  // `project` (use-the-project spec §1.4): an older build reads it as absent and shows Phase 0 text.
+  if (raw.systemDecision === 'ask' || raw.systemDecision === 'none' || raw.systemDecision === 'system' || raw.systemDecision === 'project') state.systemDecision = raw.systemDecision;
   if (typeof raw.systemChoiceSeen === 'string' && (raw.systemChoiceSeen === 'none' || SYSTEM_ID_PATTERN.test(raw.systemChoiceSeen))) {
     state.systemChoiceSeen = raw.systemChoiceSeen;
   }
