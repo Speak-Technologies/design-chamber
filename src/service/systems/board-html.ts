@@ -17,9 +17,10 @@ export { escapeHtml } from './specimen-html.ts';
 
 /**
  * Bumped when the generated document changes shape, so cached boards are not reused (8: motion specimens, the icon grid;
- * 9: a motion demo plays under the pointer the page reports, `BOARD_POINTER_VAR`).
+ * 9: a motion demo plays under the pointer the page reports, `BOARD_POINTER_VAR`; 10: an example's box has room around
+ * it, so a card that lifts on hover isn't clipped).
  */
-export const BOARD_GENERATOR_VERSION = 9;
+export const BOARD_GENERATOR_VERSION = 10;
 
 /**
  * The page's click layer lies over the board's frame, so the frame never sees the pointer and `:hover` never matches. The page
@@ -90,7 +91,10 @@ ${CURRENT_COLOR_CSS}
 .dc-stack { position: relative; height: 120px; }
 .dc-layer { position: absolute; width: 140px; height: 56px; padding: 6px; border-radius: 6px; font-size: 11px;
   background: var(--dc-board-card, ${f.card}); border: 1px solid var(--dc-board-border, ${f.border}); overflow: hidden; }
-.dc-example { display: block; min-height: 32px; overflow: auto; }
+/* The example scrolls in its own box when it is wider than the board, and that box clips. A card that lifts or casts a shadow
+   on hover needs room past its edge, so the box carries 8 px of padding inside a matching negative margin: what the example
+   lays out in, and the card around it, stay the same size. */
+.dc-example { display: block; min-height: calc(32px + 16px); margin: -8px; padding: 8px; overflow: auto; }
 .dc-list { margin: 0; padding-left: 18px; }
 /* An icon card's two grounds stack, so every size fits the card's width (they wrap inside a ground). */
 .dc-icons .dc-grounds { flex-direction: column; }
@@ -237,7 +241,8 @@ const BOARD_SCRIPT = `(function () {
     var root = host.shadowRoot;
     if (!root) return false;
     if (host.scrollWidth > host.clientWidth + 1) return true;
-    var edge = host.getBoundingClientRect().right + 1;
+    // The example lays out inside the padding: past its content box is past what the column gives it.
+    var edge = host.getBoundingClientRect().right - (parseFloat(getComputedStyle(host).paddingRight) || 0) + 1;
     var all = root.querySelectorAll('*');
     for (var k = 0; k < all.length; k += 1) {
       var box = all[k].getBoundingClientRect();

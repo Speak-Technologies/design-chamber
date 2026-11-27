@@ -463,3 +463,61 @@ window.addEventListener('load', function () {
     assert.ok(out.textOut > 200, `the unbreakable text is measured outside at ${width}px: ${out.textOut}`);
   }
 });
+
+// ---- a card that lifts on hover (PR #43 browser re-test): the example's clip leaves it room ----
+
+const LIFT_JSON = {
+  tokens: { '--brand': { group: 'brand' } },
+  components: [
+    { id: 'lift', name: 'Lifting card', purpose: 'Rises on hover.', variants: ['plain'], example: 'components/lift.html' },
+    { id: 'buttons', name: 'Buttons', purpose: 'Starts an action.', variants: ['primary'], example: 'components/buttons.html' },
+    { id: 'table', name: 'Table', purpose: 'Lists records.', variants: ['plain'], example: 'components/table.html' },
+  ],
+};
+// Shown lifted (as the check forces :hover): 6 px up, with a shadow above and around it.
+const LIFT_EXAMPLES: Record<string, string> = {
+  lift: '<div class="card" style="width:240px;height:60px;background:#fff;border-radius:8px;transform:translateY(-6px);box-shadow:0 -2px 6px rgb(0 0 0 / 0.4)">Card</div>',
+  buttons: EXAMPLES.buttons ?? '',
+  table: EXAMPLES.table ?? '',
+};
+const LIFT_PROBE = `<script>
+window.addEventListener('load', function () {
+  setTimeout(function () {
+    var out = [];
+    document.querySelectorAll('.dc-components > .dc-card').forEach(function (card) {
+      var host = card.querySelector('[data-dc-example-host]');
+      var clip = host.getBoundingClientRect();
+      var inner = host.shadowRoot && host.shadowRoot.querySelector('.card');
+      var r = inner ? inner.getBoundingClientRect() : null;
+      out.push({ id: card.getAttribute('data-dc-entry'), wide: card.classList.contains('dc-wide'), clipTop: clip.top, clipLeft: clip.left, innerTop: r ? r.top : null, innerLeft: r ? r.left : null, scrolls: host.scrollHeight > host.clientHeight + 1 || host.scrollWidth > host.clientWidth + 1 });
+    });
+    fetch('/result', { method: 'POST', body: JSON.stringify(out) });
+  }, 1000);
+});
+</script>`;
+
+test('board components: a lifted example stays inside its clip, and wide examples still widen their card', { timeout: 120_000 }, async (t) => {
+  const chrome = chromeOrSkip(t);
+  if (!chrome) return;
+  const liftDetail = buildSystemDetail({
+    id: 'acme',
+    dir: '/tmp/_systems/acme',
+    state: { ...parseSystemState({}, 'acme', NOW), name: 'Acme' },
+    systemJson: JSON.stringify(LIFT_JSON),
+    tokensCss: ':root { --brand: #1a73e8; }\n',
+    texts: {},
+    files: Object.keys(LIFT_EXAMPLES).map((id) => ({ rel: `components/${id}.html`, bytes: 10 })),
+    build: null,
+  });
+  type LiftReport = { id: string; wide: boolean; clipTop: number; clipLeft: number; innerTop: number | null; innerLeft: number | null; scrolls: boolean };
+  for (const width of [1480, 1100]) {
+    const cards: LiftReport[] = await reportAt<LiftReport[]>(chrome, width, buildBoardHtml(liftDetail, { scheme: 'light', examples: LIFT_EXAMPLES }).replace('</body>', `${LIFT_PROBE}</body>`));
+    const lift = cards.find((card) => card.id === 'component:lift');
+    assert.ok(lift && lift.innerTop !== null && lift.innerLeft !== null, JSON.stringify(cards));
+    // The card's top edge, 6 px above where it lays out, is still inside the box that clips it; nothing scrolls for it.
+    assert.ok(lift.innerTop - lift.clipTop >= 2, `the lift is inside the clip, with room for its shadow, at ${width}: ${JSON.stringify(lift)}`);
+    assert.equal(lift.scrolls, false, `a lift doesn't make the example scroll at ${width}`);
+    assert.equal(lift.wide, false, `a lift doesn't widen its card at ${width}`);
+    if (width === 1480) assert.equal(cards.find((card) => card.id === 'component:table')?.wide, true, `the wide table still widens its card: ${JSON.stringify(cards)}`);
+  }
+});

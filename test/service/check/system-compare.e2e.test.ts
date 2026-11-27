@@ -34,7 +34,7 @@ const makeJpeg = async (browserPath: string): Promise<Buffer> => {
     return Buffer.from(shot.data, 'base64');
   } finally {
     await session.close();
-    await rm(workDir, { recursive: true, force: true });
+    await rm(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 };
 

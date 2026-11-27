@@ -229,6 +229,12 @@ export const collectBoard = (): BoardProbe => {
       const root = host.shadowRoot;
       if (!root) continue;
       const hostRect = host.getBoundingClientRect();
+      // The board gives the example's box padding (room for a lift on hover, board-html.ts): measure from its content box, so
+      // the widths and the "wider than its card" figures are the example's own, as before the padding.
+      const hostStyle = getComputedStyle(host);
+      const padLeft = parseFloat(hostStyle.paddingLeft) || 0;
+      const padRight = parseFloat(hostStyle.paddingRight) || 0;
+      const contentLeft = hostRect.left + (parseFloat(hostStyle.borderLeftWidth) || 0) + padLeft;
       let contentRight = 0;
       let outLeft = 0;
       let outTop = 0;
@@ -243,14 +249,14 @@ export const collectBoard = (): BoardProbe => {
         const oneRect = one.getBoundingClientRect();
         // No box, or under 1px in both directions: paints nothing.
         if (oneRect.width < 1 && oneRect.height < 1) continue;
-        contentRight = Math.max(contentRight, oneRect.right - hostRect.left);
+        contentRight = Math.max(contentRight, oneRect.right - contentLeft);
         outLeft = Math.max(outLeft, box.x - (oneRect.left + window.scrollX));
         outTop = Math.max(outTop, box.y - (oneRect.top + window.scrollY));
         outBottom = Math.max(outBottom, oneRect.bottom + window.scrollY - (box.y + box.h));
       }
       previews.push({
-        w: host.clientWidth,
-        scrollW: host.scrollWidth,
+        w: Math.max(0, host.clientWidth - padLeft - padRight),
+        scrollW: Math.max(0, host.scrollWidth - padLeft - padRight),
         contentRight: Math.max(0, contentRight),
         outLeft: Math.max(0, outLeft),
         outTop: Math.max(0, outTop),

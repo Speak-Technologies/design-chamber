@@ -66,7 +66,7 @@ describe('creating a system', () => {
 
   test('creates the designs folder and _systems on first run', async (t) => {
     const { tmp, store } = await setup(t);
-    await rm(tmp.root, { recursive: true, force: true });
+    await rm(tmp.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     await store.create({ name: 'First' });
     assert.deepEqual(await readdir(tmp.at('_systems')), ['first']);
   });
