@@ -72,6 +72,8 @@ import { openResyncSheet, type ResyncApplied } from './resync-sheet.ts';
 import { sendSystemMessage } from './system-ask.ts';
 import { openExportSheet } from './export-sheet.ts';
 import { mountBoard, type BoardHandle } from './system-board.ts';
+import { mountBoardComments, type BoardCommentsHandle } from './board-pins.ts';
+import { boardCommentsChanged, systemDetailChanged } from '../model/system-events-model.ts';
 import { createIconStore } from './system-icons.ts';
 import { mountSystemScreens, type ScreensHandle } from './system-screens.ts';
 import { mountSystemBuild, type SystemBuildHandle } from './system-build.ts';
@@ -221,6 +223,19 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
   });
 
   const screens: ScreensHandle = mountSystemScreens({ id, compact, onBoard: () => setStageView('board') });
+  // Comments on the board (T21): pins on the board, the list at the top of the panel (in the rail, right under the board).
+  const boardComments: BoardCommentsHandle = mountBoardComments({
+    id,
+    board,
+    compact,
+    detail: () => detail,
+    chat: () => ({ sessionId: detail?.sessionId ?? null }),
+    locked: () => (viewing ? OLD_VERSION_SENTENCE : null),
+    selectedEntry: () => selectedEntry,
+    showBoard: () => showBoard(),
+    afterSend: () => void reload(),
+  });
+  panel.prepend(boardComments.el);
   // Built once and only relabelled, so a panel repaint never takes keyboard focus off the switch.
   const viewButtons = {
     board: h('button', { type: 'button', class: 'dc-syspg-view', 'aria-pressed': 'true', onClick: () => setStageView('board') }, 'Board'),
@@ -1141,6 +1156,8 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     }
     panelScroll.scrollTop = scrollTop;
     if (focused) panelScroll.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(focused)}"]`)?.focus();
+    boardComments.el.hidden = load !== 'ready' || detail === null || buildingEl.hidden === false;
+    boardComments.sync();
     paintFoot();
   }
 
@@ -1309,8 +1326,10 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
   // ------------------------------------------------------------ live updates
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   const stopFeed = feed.subscribe((batch) => {
+    // A comment changes nothing the system or its board shows: the comments are read again on their own.
+    if (boardCommentsChanged(batch, id)) void boardComments.refresh();
+    if (!systemDetailChanged(batch, id)) return;
     const mine = batch.events.filter((event) => event.system === id);
-    if (!batch.reset && mine.length === 0) return;
     if (mine.some((event) => event.systemChange === 'removed')) {
       load = 'gone';
       paint();
@@ -1341,6 +1360,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     restore.dispose();
     build.dispose();
     askBar.dispose();
+    boardComments.dispose();
     board.dispose();
     icons.dispose();
     screens.dispose();

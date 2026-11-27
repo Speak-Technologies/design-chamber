@@ -7,6 +7,7 @@ import type { DesignSystemActionResponse, DesignSystemView, Override, SystemPrev
 import { choiceSystemsOf, projectSystemOf } from '../../shared/systems.ts';
 import type { SystemSummary } from '../../shared/types.ts';
 import { plural } from './format.ts';
+import { isBoardCommentsEvent } from './system-events-model.ts';
 
 // ---------------------------------------------------------------- the chip
 
@@ -244,8 +245,10 @@ export const appliedNotice = (notice: DesignSystemActionResponse['notice'], name
 /** Change batches that can change a design's system: its own files and record, a system's files, or a new root. */
 const SYSTEM_REFRESH_KINDS: ReadonlySet<string> = new Set(['files', 'design', 'versions', 'added']);
 
-export const shouldRefetchSystem = (batch: { reset: boolean; events: ReadonlyArray<{ slug: string | null; kind: string }> }, slug: string): boolean =>
-  batch.reset || batch.events.some((event) => (event.slug === slug && SYSTEM_REFRESH_KINDS.has(event.kind)) || event.kind === 'system' || event.kind === 'root');
+/** A board comment (`systemChange: 'comments'`) changes nothing a design shows of its system, so it is skipped. */
+export const shouldRefetchSystem = (batch: { reset: boolean; events: ReadonlyArray<{ slug: string | null; kind: string; systemChange?: string | undefined }> }, slug: string): boolean =>
+  batch.reset ||
+  batch.events.some((event) => (event.slug === slug && SYSTEM_REFRESH_KINDS.has(event.kind)) || (event.kind === 'system' && !isBoardCommentsEvent(event)) || event.kind === 'root');
 
 // ---------------------------------------------------------------- the agent switched it
 

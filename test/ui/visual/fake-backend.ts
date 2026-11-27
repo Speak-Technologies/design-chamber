@@ -21,6 +21,7 @@ import type {
 } from '../../../src/shared/types.ts';
 import { createFakeFolders, type FakeFolders } from './fake-folders.ts';
 import { createFakeSystems, type FakeSystems } from './fake-systems.ts';
+import { createFakeSystemComments, type FakeSystemComments } from './fake-system-comments.ts';
 import { createFakeDesignSystem, type FakeDesignSystem } from './fake-design-system.ts';
 import { createFakeChecks, type FakeChecks } from './fake-checks.ts';
 import { createFakePageState, type FakePageState } from './fake-page-state.ts';
@@ -321,6 +322,8 @@ export type FakeBackend = {
   folders: FakeFolders['hooks'];
   /** Test hooks (Phase 2.5 U1): the design systems book (fake-systems.ts). */
   systems: FakeSystems['hooks'];
+  /** Test hooks (system-builder-depth T21): board comments (fake-system-comments.ts). */
+  systemComments: FakeSystemComments['hooks'];
   /** Test hooks (Phase 2.5 U4): each design's system link (fake-design-system.ts). */
   designSystem: FakeDesignSystem['hooks'];
   /** Test hook (use-the-project T10): what Settings shows for "In every chat" from the next read on (the real value comes from the host's last answer). */
@@ -502,6 +505,15 @@ export const createFakeBackend = (): FakeBackend => {
   const missingProjects = new Set<string>();
   const folderBook: FakeFolders = createFakeFolders({ emit: (slug, kind) => emit(slug, kind), exists: (slug) => db.has(slug) });
   const systemBook: FakeSystems = createFakeSystems({ emit: (slug, kind) => emit(slug, kind), emitSystem, visible: rootVisible });
+  const boardComments: FakeSystemComments = createFakeSystemComments({
+    // As the service sends it after a comment write: origin user, nothing drawn changed.
+    emitComments: (system) => {
+      seq += 1;
+      const event: ChangeEvent = { seq, slug: null, kind: 'system', system, systemChange: 'comments', origin: 'user' };
+      for (const listener of listeners) listener(event);
+    },
+    exists: (id) => systemBook.hooks.current().some((row) => row.id === id),
+  });
   const designSystem: FakeDesignSystem = createFakeDesignSystem({
     emit: (slug, kind, files) => emit(slug, kind, files),
     rows: () => systemBook.hooks.current(),
@@ -861,6 +873,12 @@ export const createFakeBackend = (): FakeBackend => {
     ...folderBook.handlers,
     ...systemBook.handlers,
     ...designSystem.handlers,
+    ...boardComments.handlers,
+    // The comments purpose names the comments it carries (T20); every other purpose is the systems book's.
+    'POST /systems/:id/prompt': (req) => {
+      const answer = systemBook.handlers['POST /systems/:id/prompt'](req);
+      return req.body.purpose === 'comments' ? boardComments.prompt(req.params.id ?? '', req.body.commentIds, answer) : answer;
+    },
   };
 
   const checks = createFakeChecks({
@@ -965,6 +983,7 @@ export const createFakeBackend = (): FakeBackend => {
     pageState: pageState.hooks,
     folders: folderBook.hooks,
     systems: systemBook.hooks,
+    systemComments: boardComments.hooks,
     designSystem: designSystem.hooks,
     setInstructions: (state) => {
       instructionsState = state;

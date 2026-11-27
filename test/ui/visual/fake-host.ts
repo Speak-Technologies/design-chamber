@@ -13,7 +13,7 @@ import { ROUTE_KEYS, type RouteKey } from '../../../src/shared/api.ts';
 import type { HostLike } from '../../../src/guest/host.ts';
 import { createFakeTransport, type FakeTransport, type RouteOverride } from './fake-transport.ts';
 
-export type FakeHooks = Pick<FakeTransport['backend'], 'writePending' | 'writeFile' | 'ageDesign' | 'padScreens' | 'unwriteScreen' | 'addDirections' | 'failNextRestore' | 'touchTokens' | 'checks' | 'pageState' | 'folders' | 'systems' | 'designSystem' | 'setProject' | 'setWarnings' | 'setMissingProjects' | 'requestSystemOpen' | 'views' | 'setInstructions'> & {
+export type FakeHooks = Pick<FakeTransport['backend'], 'writePending' | 'writeFile' | 'ageDesign' | 'padScreens' | 'unwriteScreen' | 'addDirections' | 'failNextRestore' | 'touchTokens' | 'checks' | 'pageState' | 'folders' | 'systems' | 'systemComments' | 'designSystem' | 'setProject' | 'setWarnings' | 'setMissingProjects' | 'requestSystemOpen' | 'views' | 'setInstructions'> & {
   route: FakeTransport['routes']['set'];
   clearRoutes: FakeTransport['routes']['clear'];
   routeHits: FakeTransport['routes']['hits'];
@@ -74,6 +74,7 @@ export const installFakeHost = <T extends HostLike>(real: T): T => {
     pageState: fake.backend.pageState,
     folders: fake.backend.folders,
     systems: fake.backend.systems,
+    systemComments: fake.backend.systemComments,
     designSystem: fake.backend.designSystem,
     setWarnings: fake.backend.setWarnings,
     setProject: fake.backend.setProject,

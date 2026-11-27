@@ -5,7 +5,7 @@
 
 import type { AttachIssueRequest } from '@openchamber/sdk';
 
-import type { SystemPromptBody } from '../../shared/api.ts';
+import type { SystemPromptBody, SystemPromptResponse } from '../../shared/api.ts';
 import { sameDirectory } from '../../shared/path-compare.ts';
 import type { Chip } from '../../shared/types.ts';
 import { isHostError, PANEL_SURFACE_ID, type AskOutcome } from '../../guest/flows.ts';
@@ -40,7 +40,32 @@ const linkSession = async (id: string, sessionId: string): Promise<void> => {
  * Deliver `body` about system `id`. Resolves with how it went; rejects with a sentence the ask bar shows
  * under the box (the user's words stay in it).
  */
-export const sendSystemMessage = async (id: string, chat: SystemChat, body: SystemPromptBody): Promise<AskOutcome> => {
+export const sendSystemMessage = async (id: string, chat: SystemChat, body: SystemPromptBody): Promise<AskOutcome> => (await deliverSystemMessage(id, chat, body)).outcome;
+
+export type SystemCommentsSent = { outcome: AskOutcome; commentIds: string[]; omitted: string[]; markFailed: boolean };
+
+/**
+ * Send board comments (system-builder-depth T21): the named ones, or every open one when `commentIds` is absent. Once the
+ * message is delivered (or handed to the linked chat's outbox) the comments the service put in it are marked sent; the ones
+ * the length cap left out stay open. Rejects with a sentence, nothing marked, when the message didn't go.
+ */
+export const sendSystemComments = async (id: string, chat: SystemChat, commentIds?: string[]): Promise<SystemCommentsSent> => {
+  const { outcome, prompt } = await deliverSystemMessage(id, chat, { purpose: 'comments', ...(commentIds ? { commentIds } : {}) });
+  const sent = prompt.comments?.commentIds ?? [];
+  const omitted = prompt.comments?.omitted ?? [];
+  let markFailed = false;
+  if (sent.length > 0) {
+    try {
+      await client.systemComments.markSent(id, sent);
+    } catch (error) {
+      console.warn('Design Chamber: board comments were sent but could not be marked as sent', error);
+      markFailed = true;
+    }
+  }
+  return { outcome, commentIds: sent, omitted, markFailed };
+};
+
+const deliverSystemMessage = async (id: string, chat: SystemChat, body: SystemPromptBody): Promise<{ outcome: AskOutcome; prompt: SystemPromptResponse }> => {
   const api = guestHost.client;
   const prompt = await client.call('POST /systems/:id/prompt', { params: { id }, body });
   const selected = guestHost.session.get();
@@ -96,5 +121,5 @@ export const sendSystemMessage = async (id: string, chat: SystemChat, body: Syst
       console.warn('Design Chamber: the hand-edit ledger could not be cleared after the message was delivered', error);
     }
   }
-  return outcome;
+  return { outcome, prompt };
 };

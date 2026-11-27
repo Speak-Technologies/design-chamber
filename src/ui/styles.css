@@ -7280,3 +7280,229 @@ button.dc-sp-value:focus-visible {
     padding-left: var(--dc-s3);
   }
 }
+
+/* ------------------------------------------------------------------ comments on a system's board (system-builder-depth T21) */
+
+/* Pins and cards float over the board; the layer lets clicks through to the board where it is empty. */
+.dc-bc-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.dc-bc-layer > * {
+  pointer-events: auto;
+}
+.dc-bc-layer > .dc-temp-pin {
+  pointer-events: none;
+}
+.dc-sys-board:not([data-state='ready']) .dc-bc-layer {
+  display: none;
+}
+.dc-bc-pin {
+  z-index: 1;
+}
+.dc-bc-pin[data-open='true'] {
+  box-shadow: 0 0 0 2px var(--oc-bg), 0 0 0 4px var(--oc-primary), 0 3px 8px rgb(0 0 0 / 0.35);
+}
+.dc-bc-layer[data-locked='true'] .dc-bc-pin {
+  display: none;
+}
+.dc-sys-board[data-commenting='true'] .dc-sys-hit {
+  cursor: crosshair;
+}
+.dc-bc-tools {
+  position: absolute;
+  top: var(--dc-s2);
+  right: var(--dc-s2);
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap-reverse;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--dc-s2);
+  max-width: calc(100% - var(--dc-s4));
+  pointer-events: none;
+}
+.dc-bc-tools > * {
+  pointer-events: auto;
+}
+.dc-bc-toggle {
+  background: var(--oc-elevated);
+  box-shadow: var(--oc-sdk-float);
+}
+.dc-bc-toggle[aria-pressed='true'] {
+  border-color: transparent;
+  background: var(--oc-primary);
+  color: var(--oc-primary-fg);
+}
+.dc-bc-hint {
+  margin: 0;
+  padding: var(--dc-s1) var(--dc-s3);
+  border: 1px solid var(--oc-sdk-float-edge);
+  border-radius: 999px;
+  background: var(--oc-elevated);
+  color: var(--oc-elevated-fg);
+  box-shadow: var(--oc-sdk-float);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+.dc-bc-hint[hidden] {
+  display: none;
+}
+.dc-bc-card {
+  z-index: 4;
+}
+
+/* The list: at the top of the panel, its own scroll when long, so the sections stay in reach. */
+.dc-bc {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  max-height: 45%;
+  min-height: 0;
+  border-bottom: 1px solid var(--dc-hair);
+}
+.dc-bc[hidden] {
+  display: none;
+}
+.dc-bc-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dc-s1) var(--dc-s2);
+  padding: var(--dc-s2) var(--dc-s3);
+}
+.dc-bc-headbtn {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--dc-s2);
+  min-width: 0;
+  min-height: 32px;
+  padding: var(--dc-s1) var(--dc-s2);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.dc-bc-headbtn:hover {
+  background: var(--oc-hover);
+}
+.dc-bc-headbtn:focus-visible,
+.dc-bc-more:focus-visible {
+  outline: none;
+  box-shadow: var(--dc-ring);
+}
+.dc-bc-headbtn[aria-expanded='true'] .dc-syspg-chev {
+  transform: rotate(45deg);
+}
+.dc-bc-title {
+  font-weight: 600;
+}
+.dc-bc-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+.dc-bc-on:empty {
+  display: none;
+}
+.dc-bc-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 var(--dc-s2) var(--dc-s3);
+}
+.dc-bc-body[hidden] {
+  display: none;
+}
+.dc-bc-body > .dc-banner,
+.dc-bc-body > .dc-loading {
+  padding: 0 var(--dc-s2);
+}
+.dc-bc-empty {
+  margin: 0;
+  padding: 0 var(--dc-s2);
+  font-size: 0.8125rem;
+}
+.dc-bc-list .dc-comment-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.dc-bc-list .dc-comment[data-status='resolved'] .dc-comment-body {
+  color: var(--oc-muted);
+}
+.dc-bc-list .dc-comment[data-gone='true'] .dc-comment-where {
+  color: var(--dc-warning-text);
+}
+.dc-bc-state {
+  padding: 0 var(--dc-s1);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--oc-primary) 14%, transparent);
+  color: var(--oc-primary-text);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.dc-bc-more {
+  align-self: flex-start;
+  margin: 0 var(--dc-s2);
+  padding: var(--dc-s1) var(--dc-s2);
+  border: 0;
+  border-radius: var(--dc-r);
+  background: none;
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.dc-bc-more:hover {
+  background: var(--oc-hover);
+  color: var(--oc-fg);
+}
+.dc-bc-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  padding: var(--dc-s1) var(--dc-s2) 0;
+}
+.dc-bc-foot .dc-form-error,
+.dc-bc-foot .dc-foot-note {
+  margin: 0;
+}
+/* In the rail the panel is short: the list gets a little less of it. */
+.dc-syspg[data-surface='panel'] .dc-bc {
+  max-height: 50%;
+}
+@media (max-width: 620px) {
+  .dc-syspg[data-surface='page'] .dc-bc-headbtn {
+    min-height: 44px;
+  }
+}
+/* A thread card has four actions: room for them on one row. */
+.dc-bc-card.dc-thread {
+  width: 360px;
+}
+/* The rail: the card docks at the top of the list, under the board, at the list's width. */
+.dc-bc-dock:empty {
+  display: none;
+}
+.dc-bc-dock {
+  padding: 0 var(--dc-s2) var(--dc-s2);
+}
+.dc-bc-card[data-docked='true'] {
+  position: static;
+  width: auto;
+  max-width: none;
+  box-shadow: none;
+}
+.dc-bc-card[data-docked='true'] .dc-pop-foot {
+  flex-wrap: wrap;
+}
