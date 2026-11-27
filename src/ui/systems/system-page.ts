@@ -232,6 +232,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     chat: () => ({ sessionId: detail?.sessionId ?? null }),
     locked: () => (viewing ? OLD_VERSION_SENTENCE : null),
     selectedEntry: () => selectedEntry,
+    section: () => section,
     showBoard: () => showBoard(),
     afterSend: () => void reload(),
   });

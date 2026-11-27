@@ -7506,3 +7506,50 @@ button.dc-sp-value:focus-visible {
 .dc-bc-card[data-docked='true'] .dc-pop-foot {
   flex-wrap: wrap;
 }
+/* While a card is docked in the rail the rows step aside: the list's own scroll box is too short to show both, and
+   its bottom padding would otherwise let a row's badge show through above Sections. */
+.dc-bc-dock:not(:empty) ~ .dc-bc-body {
+  display: none;
+}
+/* The rail's hint is a line under the list's head, not a pill on the short board. */
+.dc-bc > .dc-bc-hint {
+  margin: 0 var(--dc-s3) var(--dc-s2);
+  padding: 0 var(--dc-s2);
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--oc-muted);
+}
+.dc-bc-damaged:empty {
+  display: none;
+}
+.dc-bc-damaged {
+  padding: 0 var(--dc-s3) var(--dc-s2);
+}
+.dc-bc-on {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: flex-end;
+  gap: var(--dc-s2);
+  min-width: 0;
+}
+.dc-bc-on[hidden] {
+  display: none;
+}
+.dc-syspg[data-surface='page'] .dc-bc-on {
+  flex-basis: auto;
+}
+.dc-bc-chooser {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* A docked card takes the panel's room (the sections wait under it) and scrolls inside the list when even that is short,
+   so nothing spills over Sections. */
+.dc-bc {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.dc-syspg[data-surface='panel'] .dc-bc:has(.dc-bc-dock:not(:empty)) {
+  flex: 0 1 auto;
+  max-height: none;
+}

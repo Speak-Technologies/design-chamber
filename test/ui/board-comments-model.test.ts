@@ -23,6 +23,7 @@ import {
   commentBodyProblem,
   createDraftStore,
   entrySpot,
+  entriesOf,
   sendAllState,
   sendOneProblem,
   splitRows,
@@ -217,4 +218,23 @@ test('a comment event reads only the comments again: not the system, its board, 
   // A feed restart reads everything again.
   assert.equal(boardCommentsChanged(one(comments, true), 'tidepool'), true);
   assert.equal(systemsListShouldRefresh(one(comments, true)), true);
+});
+
+test('the keyboard can reach every entry of a section, not only the first', () => {
+  const full = {
+    ...detail(),
+    overview: { text: 'Calm.', problem: null },
+    notes: [{ id: 'tone', title: 'Tone' }],
+    tokens: [token('--brand'), token('--danger'), { ...token('--space-2'), section: 'spacing' as const }],
+    pairs: [{}, {}],
+    type: [{ id: 'heading', name: 'Heading' }, { id: 'body', name: 'Body' }],
+    fonts: [{ family: 'Inter' }],
+    components: [{ id: 'button', name: 'Button' }, { id: 'card', name: 'Card' }],
+  } as unknown as SystemDetail;
+  assert.deepEqual(entriesOf(full, 'colours'), ['token:--brand', 'token:--danger', 'pair:0', 'pair:1']);
+  assert.deepEqual(entriesOf(full, 'spacing'), ['token:--space-2']);
+  assert.deepEqual(entriesOf(full, 'typography'), ['type:heading', 'type:body', 'font:0']);
+  assert.deepEqual(entriesOf(full, 'components'), ['component:button', 'component:card']);
+  assert.deepEqual(entriesOf(full, 'overview'), ['overview', 'note:tone']);
+  assert.deepEqual(entriesOf(full, 'patterns'), []);
 });

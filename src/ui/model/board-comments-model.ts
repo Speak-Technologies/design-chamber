@@ -2,7 +2,8 @@
 // entry key (`token:--brand`, `component:button`), not to a selector, so it survives the board being drawn again; where
 // its pin sits comes from the entry's box as the board frame reports it. Pure: no DOM, no service.
 
-import type { CommentStatus, SystemComment, SystemDetail } from '../../shared/types.ts';
+import type { CommentStatus, SystemComment, SystemDetail, SystemSection } from '../../shared/types.ts';
+import { entryKeyOf, type BoardEntryKind } from '../../shared/system-board.ts';
 import { COMMENT_BODY_MAX } from '../../shared/limits.ts';
 import type { Rect } from '../../shared/types.ts';
 import { plural } from './format.ts';
@@ -20,6 +21,33 @@ export const boardPinNumbers = (comments: readonly SystemComment[]): Map<string,
 
 /** The entry is in the system as it is now (a token, a component, a pair it still has). */
 export const entryInSystem = (detail: SystemDetail, entry: string): boolean => sectionOfHit(detail, entry) !== null;
+
+/**
+ * Every entry of one section, in the board's order (tokens, then pairs; styles, then fonts; ...), as entry keys. The
+ * rail has no value list to pick an entry from, so the keyboard chooses here which entry to comment on.
+ */
+export const entriesOf = (detail: SystemDetail, section: SystemSection): string[] => {
+  const keys: string[] = [];
+  const add = (kind: BoardEntryKind, key: string): void => {
+    try {
+      keys.push(entryKeyOf(kind, key));
+    } catch {
+      // A name off the entry pattern isn't on the board either, so it can't be commented on.
+    }
+  };
+  for (const token of detail.tokens) add('token', token.name);
+  detail.pairs.forEach((_pair, index) => add('pair', String(index)));
+  if (detail.overview?.text) add('overview', '');
+  for (const note of detail.notes) add('note', note.id);
+  for (const style of detail.type) add('type', style.id);
+  detail.fonts.forEach((_font, index) => add('font', String(index)));
+  for (const component of detail.components) add('component', component.id);
+  for (const pattern of detail.patterns) add('pattern', pattern.id);
+  for (const entry of detail.brand) add('brand', entry.id);
+  detail.logos.forEach((_logo, index) => add('logo', String(index)));
+  (detail.icons ?? []).forEach((_icon, index) => add('icon', String(index)));
+  return keys.filter((key) => sectionOfHit(detail, key) === section);
+};
 
 export const GONE_ENTRY = 'On an entry that’s gone';
 
@@ -116,6 +144,8 @@ export const commentBodyProblem = (body: string): string | null => {
 
 export const DAMAGED_TITLE = 'Some comments couldn’t be read';
 export const DAMAGED_BODY = 'The comments file was damaged. These are the comments that could be read. The next comment you add or change saves them in a new file and keeps the old one aside.';
+export const DAMAGED_NONE = 'None of the comments could be read. The next comment you add starts a new file and keeps the damaged one aside.';
+export const DAMAGED_COUNT = 'File damaged';
 
 export const EMPTY_COMMENTS = 'No comments yet. Turn on Comment and click an entry on the board to pin a note to it.';
 

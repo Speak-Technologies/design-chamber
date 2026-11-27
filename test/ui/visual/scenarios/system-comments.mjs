@@ -19,6 +19,20 @@ const pressEnter = async (p, focus) => {
   await p.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
   await p.settle(120);
 };
+/** Enter at whatever has focus now (no refocus first): what a user's next key press does. */
+const enterHere = async (p) => {
+  await p.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+  await p.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await p.settle(150);
+};
+const escapeHere = async (p) => {
+  await p.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await p.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await p.settle(150);
+};
+const inCard = (p) => p.guest('return !!doc.activeElement?.closest(".dc-bc-card")');
+const focusOnBody = (p) => p.guest('return doc.activeElement === doc.body || doc.activeElement === null');
+const cardOpen = (p) => p.guest('return !!doc.querySelector(".dc-bc-card")');
 const current = async (p, id) => JSON.parse(await p.host(`JSON.stringify(${FAKE}.systemComments.current(${JSON.stringify(id)}))`));
 
 /** Evaluate in one DevTools target over its own socket (the board frame is sandboxed and runs out of process). */
@@ -103,6 +117,7 @@ const flow = async (h, surface, width, theme) => {
   await p.click('.dc-bc-card .oc-sdk-btn', { text: 'Add comment' });
   await h.checkSoon(async () => (await shownPins(p)).includes('4'), `${tag}: the new comment gets pin 4`);
   h.check((await current(p, 'harbor')).length === 4, `${tag}: the service has it`);
+  h.check(await p.guest('const a = doc.activeElement; return !!a && (a.classList.contains("dc-bc-pin") || a.dataset.focusKey === "row:c_new101")'), `${tag}: after Add comment focus is on the new pin (or its row)`);
   await p.click('.dc-bc-toggle');
   await p.shot(`${tag}-3-added`);
 
@@ -117,6 +132,35 @@ const flow = async (h, surface, width, theme) => {
   await p.key('Escape', { focus: '.dc-bc-card textarea' });
   await h.checkSoon(() => p.guest('return !doc.querySelector(".dc-bc-card") && doc.activeElement?.classList.contains("dc-bc-pin")'), `${tag}: Escape closes it and focus is back on the pin`);
 
+  // ---- focus stays in the card after Save, Resolve, Reopen and Send this, and Escape still closes it (browser test #2)
+  const statusOf = async (cid) => (await current(p, 'harbor')).find((entry) => entry.id === cid);
+  const openRow = async (cid, what) => {
+    await p.click(`.dc-comment-main[data-focus-key="row:${cid}"]`);
+    await h.checkSoon(() => p.guest('return !!doc.querySelector(".dc-bc-card.dc-thread") && doc.activeElement?.tagName === "TEXTAREA"'), `${tag}: ${what}: the row opens the comment with focus in it`);
+  };
+  const escapeCloses = async (what) => {
+    await escapeHere(p);
+    await h.checkSoon(async () => !(await cardOpen(p)), `${tag}: ${what}: Escape closes the card`);
+    h.check(!(await focusOnBody(p)), `${tag}: ${what}: focus is not dropped on the page after Escape`);
+  };
+  await openRow('c_harbor01', 'save');
+  await p.type('.dc-bc-card textarea', 'The primary button reads heavy. Try the softer radius.');
+  await p.click('.dc-bc-card .oc-sdk-btn', { text: 'Save' });
+  await h.checkSoon(async () => (await statusOf('c_harbor01'))?.body === 'The primary button reads heavy. Try the softer radius.' && (await inCard(p)), `${tag}: after Save focus stays in the card`);
+  await p.shot(`${tag}-4b-saved`);
+  await escapeCloses('save');
+  await openRow('c_harbor01', 'resolve');
+  await p.click('.dc-bc-card .oc-sdk-btn', { text: 'Resolve' });
+  await h.checkSoon(async () => (await statusOf('c_harbor01'))?.status === 'resolved' && (await inCard(p)), `${tag}: after Resolve focus stays in the card`);
+  await p.click('.dc-bc-card .oc-sdk-btn', { text: 'Reopen' });
+  await h.checkSoon(async () => (await statusOf('c_harbor01'))?.status === 'open' && (await inCard(p)), `${tag}: after Reopen focus stays in the card`);
+  await escapeCloses('resolve');
+  await openRow('c_harbor01', 'send this');
+  await p.click('.dc-bc-card .oc-sdk-btn', { text: 'Send this' });
+  await h.checkSoon(async () => (await statusOf('c_harbor01'))?.status === 'sent' && (await inCard(p)), `${tag}: after Send this focus stays in the card (the button hides)`);
+  await p.shot(`${tag}-4c-sent-one`);
+  await escapeCloses('send this');
+
   // ---- resolve from the list
   await p.click('.dc-bc-list .dc-iconbtn[aria-label="Mark comment 2 resolved"]');
   await h.checkSoon(async () => (await current(p, 'harbor')).find((entry) => entry.id === 'c_harbor02')?.status === 'resolved', `${tag}: comment 2 is resolved`);
@@ -126,9 +170,30 @@ const flow = async (h, surface, width, theme) => {
   await p.click('.dc-bc-foot .oc-sdk-btn', { text: 'Send comments' });
   await h.checkSoon(async () => (await current(p, 'harbor')).filter((entry) => entry.status === 'open').length === 0, `${tag}: every open comment is marked sent`);
   const marked = JSON.parse(await p.host(`JSON.stringify(${FAKE}.systemComments.marked())`));
-  h.check(marked.at(-1)?.sort().join(',') === 'c_harbor01,c_new101', `${tag}: mark-sent named exactly the two that went (${marked.at(-1)})`);
+  h.check(marked.at(-2)?.join(',') === 'c_harbor01' && marked.at(-1)?.join(',') === 'c_new101', `${tag}: mark-sent named exactly what went each time (${JSON.stringify(marked)})`);
   await h.checkSoon(async () => (await text(p, '.dc-bc-count')) === '3 sent · 1 resolved', `${tag}: the list says they were sent`);
   await p.shot(`${tag}-5-sent`);
+
+  // ---- delete: focus moves to a neighbour, never to the page (browser test #2)
+  await openRow('c_harbor03', 'delete');
+  await p.click('.dc-bc-card .oc-sdk-btn', { text: 'Delete' });
+  await p.click('.dc-bc-card .oc-sdk-btn', { text: 'Delete comment?' });
+  await h.checkSoon(async () => (await statusOf('c_harbor03')) === undefined && !(await cardOpen(p)), `${tag}: delete removes the comment and the card`);
+  h.check(!(await focusOnBody(p)), `${tag}: after Delete focus is on a neighbour, not the page (${await p.guest('return doc.activeElement?.getAttribute("aria-label") ?? doc.activeElement?.textContent')})`);
+
+  // ---- the keyboard reaches any entry of a section, not only the first (browser test #5)
+  await p.click('.dc-syspg-row', { text: 'Colours' });
+  await p.settle(300);
+  await pressEnter(p, '.dc-bc-chooser .oc-sdk-trigger');
+  await h.checkSoon(() => p.guest('return [...doc.querySelectorAll("[role=listbox] [role=option]")].length > 3'), `${tag}: Enter opens the entry list with every colour`);
+  await p.send('Input.insertText', { text: '--danger' });
+  await p.settle(150);
+  await enterHere(p);
+  await h.checkSoon(async () => (await text(p, '.dc-bc-chooser .oc-sdk-trigger-value')) === '--danger', `${tag}: a later colour, --danger, is chosen from the keyboard`);
+  await pressEnter(p, '.dc-bc-on .oc-sdk-btn');
+  await h.checkSoon(async () => (await text(p, '.dc-bc-card .dc-pop-snippet')) === '--danger' && (await p.guest('return doc.activeElement?.tagName')) === 'TEXTAREA', `${tag}: Write comment opens the card on --danger with focus in it`);
+  await p.shot(`${tag}-5b-keyboard-entry`);
+  await escapeCloses('keyboard entry');
 
   // ---- the board reloads (an agent turn), then the scheme switches: the pins come back on their entries
   await p.host(`${FAKE}.systems.redrawScreens('harbor')`);
@@ -140,6 +205,15 @@ const flow = async (h, surface, width, theme) => {
   await p.settle(900);
   await h.checkSoon(onButton, `${tag}: after a scheme switch it is back too`);
   await p.shot(`${tag}-6-scheme`);
+
+  // ---- a damaged file with nothing readable: the banner shows, however the list is folded (browser test #1)
+  await p.host(`${FAKE}.systemComments.seed('harbor', [], true)`);
+  const bannerSeen = () => p.guest('const b = doc.querySelector(".dc-bc-damaged .dc-banner"); if (!b) return false; const r = b.getBoundingClientRect(); return r.height > 0 && r.top >= 0 && r.bottom <= win.innerHeight');
+  await h.checkSoon(bannerSeen, `${tag}: the damaged banner is on screen with no comment readable`);
+  h.check((await text(p, '.dc-bc-count')) === 'File damaged', `${tag}: the head says the file is damaged, not "None yet"`);
+  await p.shot(`${tag}-7-damaged-empty`);
+  if ((await p.guest('return doc.querySelector(".dc-bc-headbtn").getAttribute("aria-expanded")')) === 'true') await p.click('.dc-bc-headbtn');
+  await h.checkSoon(bannerSeen, `${tag}: folded, the banner still shows`);
   await p.close();
 };
 

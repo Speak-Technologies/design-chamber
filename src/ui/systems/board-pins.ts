@@ -9,9 +9,9 @@
 // Words typed into a card and not saved are kept in memory (one store for every system page), so closing a card,
 // clicking another entry or leaving the page never loses them; the same card shows them again.
 
-import { mountBadge } from '@openchamber/sdk/ui';
+import { mountBadge, mountSelect } from '@openchamber/sdk/ui';
 
-import type { SystemComment, SystemDetail } from '../../shared/types.ts';
+import type { SystemComment, SystemDetail, SystemSection } from '../../shared/types.ts';
 import { isBoardEntryKey } from '../../shared/system-board.ts';
 import { toast } from '../components/actions.ts';
 import { errorText, h } from '../components/dom.ts';
@@ -19,6 +19,8 @@ import { banner, btn, iconBtn, loadingRow, type BtnHandle } from '../components/
 import { client } from '../guest.ts';
 import {
   DAMAGED_BODY,
+  DAMAGED_COUNT,
+  DAMAGED_NONE,
   DAMAGED_TITLE,
   EMPTY_COMMENTS,
   boardCommentCounts,
@@ -33,6 +35,7 @@ import {
   commentBodyProblem,
   commentStatusLabel,
   createDraftStore,
+  entriesOf,
   entryInSystem,
   entrySpot,
   sendAllState,
@@ -56,6 +59,8 @@ export type BoardCommentsOptions = {
   locked: () => string | null;
   /** The entry selected on the page, so a keyboard user can comment on it from the list. */
   selectedEntry: () => string | null;
+  /** The section chosen in the panel: in the rail the keyboard picks any of its entries to comment on. */
+  section: () => SystemSection;
   /** Bring the board forward (it may be behind the Screens view or the phone's Sections view). */
   showBoard: () => void;
   /** A send went out: the page reads the system again (a new chat may be linked now). */
@@ -98,15 +103,21 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
   const inFlight = new Set<string>();
   let missTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
+  const doc = board.el.ownerDocument;
+  /** The choice in "Comment on" (an entry key of the chosen section), kept across repaints. */
+  let chosen: string | null = null;
+  /** The page's selection last time, so a new click on the board moves the choice but a repaint doesn't undo the user's pick. */
+  let lastSelected: string | null = null;
 
   // ------------------------------------------------------------ the board's own parts
   const pins = new Map<string, HTMLButtonElement>();
   const tempPin = h('span', { class: 'dc-pin dc-temp-pin dc-bc-pin', 'aria-hidden': 'true', hidden: true }, '+');
   const hint = h('p', { class: 'dc-bc-hint', role: 'status', hidden: true });
-  const toggle = btn({ label: 'Comment', variant: 'outline', size: 'sm', icon: 'comment', onClick: () => setCommenting(!commenting) });
+  const toggle = btn({ label: 'Comment', variant: 'outline', size: options.compact ? 'xs' : 'sm', icon: 'comment', onClick: () => setCommenting(!commenting) });
   toggle.el.classList.add('dc-bc-toggle');
   toggle.el.setAttribute('aria-pressed', 'false');
-  const tools = h('div', { class: 'dc-bc-tools' }, hint, toggle.el);
+  // In the rail the board is too short to carry the hint as well: it goes on the list, right under the board.
+  const tools = h('div', { class: 'dc-bc-tools' }, options.compact ? null : hint, toggle.el);
   board.pinLayer.append(tools, tempPin);
   board.pinLayer.setAttribute('role', 'group');
   board.pinLayer.setAttribute('aria-label', 'Comments on the board');
@@ -123,12 +134,42 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
   const commentOn = h('div', { class: 'dc-bc-on' });
   const body = h('div', { class: 'dc-bc-body', id: `dc-bc-body-${id}` });
   const dock = h('div', { class: 'dc-bc-dock' });
-  const el = h('section', { class: 'dc-bc', 'aria-label': 'Comments on the board' }, h('div', { class: 'dc-bc-head' }, headButton, commentOn), dock, body);
+  // The damaged-file banner sits outside the folding body, so it is seen however the list is folded.
+  const damagedHost = h('div', { class: 'dc-bc-damaged' });
+  const el = h('section', { class: 'dc-bc', 'aria-label': 'Comments on the board' }, h('div', { class: 'dc-bc-head' }, headButton, commentOn), options.compact ? hint : null, damagedHost, dock, body);
+
+  // "Comment on …": the keyboard's way to add one. Built once and only updated, so a repaint between pointer down and
+  // click (a value box losing focus repaints the panel) never swallows the press.
+  const commentOnButton = btn({ label: 'Write comment', variant: 'outline', size: 'sm', icon: 'plus', onClick: () => startFromKeyboard() });
+  const chooserHost = h('div', { class: 'dc-bc-chooser' });
+  // Entry rows in the sections are chosen by pointer, so the keyboard picks any entry of the chosen section here.
+  const chooser = mountSelect(chooserHost, { label: 'Comment on', value: null, options: [], searchable: true, searchPlaceholder: 'Find an entry', onChange: (entry) => { chosen = entry; paintCommentOn(); } });
+  commentOn.append(chooserHost, commentOnButton.el);
   /** Where a card goes: on the board, or docked under it in the rail. */
   const cardHost = (): HTMLElement => (options.compact ? dock : board.pinLayer);
 
   const rows = (): BoardCommentRow[] => boardCommentRows(comments, options.detail());
-  const isExpanded = (): boolean => expanded ?? (comments.length > 0 || commenting || load !== 'ready');
+  const isExpanded = (): boolean => expanded ?? (comments.length > 0 || commenting || damaged || load !== 'ready');
+
+  /** Where focus goes when what had it went away: the comment's pin when it shows, else its row, else the Comment switch. */
+  const focusComment = (commentId: string | null): void => {
+    if (disposed) return;
+    if (commentId !== null) {
+      const pin = pins.get(commentId);
+      if (pin !== undefined && !pin.hidden && pin.isConnected && pin.getClientRects().length > 0) return pin.focus();
+      const row = el.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(`row:${commentId}`)}"]`);
+      if (row !== null && row.getClientRects().length > 0) return row.focus();
+    }
+    toggle.el.focus();
+  };
+
+  /** The comment after this one in number order (or the one before, for the last), for focus after a delete. */
+  const neighbourOf = (commentId: string): string | null => {
+    const ordered = rows().map((row) => row.comment.id);
+    const at = ordered.indexOf(commentId);
+    if (at === -1) return null;
+    return ordered[at + 1] ?? ordered[at - 1] ?? null;
+  };
 
   // ------------------------------------------------------------ loading
   const refresh = async (): Promise<void> => {
@@ -198,8 +239,10 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
     closing.el.remove();
     tempPin.hidden = true;
     paintPins();
-    const target = returnTo === undefined ? (closing.kind === 'thread' ? (pins.get(closing.id) ?? null) : commenting ? toggle.el : null) : returnTo;
-    target?.focus();
+    if (returnTo === null) return;
+    if (returnTo !== undefined) return returnTo.focus();
+    // Escape, Cancel or the close button: back to the comment's pin (or row), or to the Comment switch.
+    focusComment(closing.kind === 'thread' ? closing.id : null);
   };
 
   const placeCard = (): void => {
@@ -269,7 +312,7 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
         load = 'ready';
         closeCard(null);
         paintAll();
-        pins.get(comment.id)?.focus();
+        focusComment(comment.id);
       } catch (error) {
         failure.textContent = `Couldn’t add the comment. ${errorText(error)} Your text is still here.`;
         failure.hidden = false;
@@ -332,6 +375,11 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
       } finally {
         button.set({ loading: false });
       }
+      // A busy button can't hold focus, and Send this hides once sent: keep focus in the card, so Escape still closes it.
+      if (card?.el === cardEl && !cardEl.contains(doc.activeElement)) {
+        if (button.el.isConnected && !button.el.hidden && !button.el.disabled) button.el.focus();
+        else area.focus();
+      }
     };
     const checked = (): string | null => {
       const problem = commentBodyProblem(area.value);
@@ -361,6 +409,7 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
           await saveIfEdited();
           save.set({ disabled: true });
           paintAll();
+          area.focus();
         });
       },
     });
@@ -425,12 +474,14 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
         }
         clearTimeout(armTimer);
         void guard(remove, async () => {
+          const next = neighbourOf(commentId);
           await client.systemComments.remove(id, commentId);
           comments = comments.filter((comment) => comment.id !== commentId);
           drafts.drop(key);
           area.value = '';
-          closeCard(commenting ? toggle.el : null);
+          closeCard(null);
           paintAll();
+          focusComment(next);
           toast('success', row ? `Comment ${row.number} deleted.` : 'Comment deleted.');
         });
       },
@@ -553,7 +604,6 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
     }
     const spots = layout === null ? [] : boardPinSpots(all, layout.rects, layout.scroll, layout.frame, PIN);
     const spotOf = new Map(spots.map((spot) => [spot.id, spot]));
-    // Pins go in number order, so Tab walks them 1, 2, 3.
     for (const row of all) {
       let pin = pins.get(row.comment.id);
       if (pin === undefined) {
@@ -568,7 +618,9 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
         pins.set(commentId, created);
         pin = created;
       }
-      board.pinLayer.insertBefore(pin, tempPin);
+      // Only a new pin is placed: moving a node in the DOM takes focus off it. New comments have the highest numbers, so
+      // Tab order stays the number order.
+      if (!pin.isConnected) board.pinLayer.insertBefore(pin, tempPin);
       const spot = spotOf.get(row.comment.id);
       pin.textContent = boardPinGlyph(row);
       pin.dataset.status = row.comment.status;
@@ -601,6 +653,7 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
       {
         type: 'button',
         class: 'dc-comment-main',
+        'data-focus-key': `row:${comment.id}`,
         'aria-label': row.gone ? `Comment ${number}, on an entry that’s gone. Open it` : `Show comment ${number} on the board`,
       },
       h('span', { class: 'dc-pin-badge', 'data-status': comment.status, 'aria-hidden': 'true' }, boardPinGlyph(row)),
@@ -621,12 +674,14 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
         ? null
         : iconBtn({ icon: 'send', label: `Send comment ${number} to chat`, size: 'sm', disabled: sending, onClick: () => void sendRow(row) });
     if (sendNow && sending) sendNow.setAttribute('aria-busy', 'true');
+    sendNow?.setAttribute('data-focus-key', `send:${comment.id}`);
     const statusBtn = iconBtn({
       icon: resolved ? 'restore' : 'check',
       label: resolved ? `Reopen comment ${number}` : `Mark comment ${number} resolved`,
       size: 'sm',
       onClick: () => void setRowStatus(row, resolved ? 'open' : 'resolved'),
     });
+    statusBtn.setAttribute('data-focus-key', `status:${comment.id}`);
     return h('li', { class: 'dc-comment', 'data-gone': row.gone ? 'true' : null, 'data-status': comment.status }, main, sendNow, statusBtn);
   };
 
@@ -635,30 +690,15 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
     headButton.setAttribute('aria-expanded', String(open));
     body.hidden = !open;
     const counts = boardCommentCounts(comments);
-    headCount.textContent = load !== 'ready' ? '' : comments.length === 0 ? 'None yet' : [counts.open > 0 ? `${counts.open} open` : null, counts.sent > 0 ? `${counts.sent} sent` : null, counts.resolved > 0 ? `${counts.resolved} resolved` : null].filter(Boolean).join(' · ');
+    headCount.textContent = load !== 'ready' ? '' : comments.length === 0 ? (damaged ? DAMAGED_COUNT : 'None yet') : [counts.open > 0 ? `${counts.open} open` : null, counts.sent > 0 ? `${counts.sent} sent` : null, counts.resolved > 0 ? `${counts.resolved} resolved` : null].filter(Boolean).join(' · ');
 
-    // "Comment on <entry>": the keyboard's way to add one, for the entry chosen in the sections.
-    commentOn.replaceChildren();
-    const detail = options.detail();
-    const selected = options.selectedEntry();
-    if (load === 'ready' && detail !== null && selected !== null && options.locked() === null && entryInSystem(detail, selected)) {
-      const label = entryLabel(detail, selected).text || selected;
-      commentOn.append(
-        btn({
-          label: `Comment on ${label}`,
-          variant: 'ghost',
-          size: 'xs',
-          icon: 'plus',
-          title: `Write a comment on ${label}`,
-          onClick: () => {
-            options.showBoard();
-            board.focusEntry(selected);
-            openComposer(selected, { x: 16, y: 16 });
-          },
-        }).el,
-      );
-    }
+    paintCommentOn();
+    damagedHost.replaceChildren();
+    if (load === 'ready' && damaged) damagedHost.append(banner({ tone: 'warning', title: DAMAGED_TITLE, body: comments.length === 0 ? DAMAGED_NONE : DAMAGED_BODY }));
 
+    // A repaint rebuilds the rows: focus on one of them comes back to the same control (or its row, once the control is gone).
+    const active = doc.activeElement;
+    const focusKey = active instanceof HTMLElement && body.contains(active) ? (active.dataset.focusKey ?? null) : null;
     body.replaceChildren();
     if (load === 'loading') {
       body.append(loadingRow('Loading comments…'));
@@ -668,9 +708,8 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
       body.append(banner({ tone: 'error', title: 'Comments didn’t load', body: loadError || 'The local service didn’t answer.', action: { label: 'Try again', onClick: () => { load = 'loading'; paintList(); void refresh(); } } }));
       return;
     }
-    if (damaged) body.append(banner({ tone: 'warning', title: DAMAGED_TITLE, body: DAMAGED_BODY }));
     if (comments.length === 0) {
-      body.append(h('p', { class: 'dc-bc-empty dc-muted' }, EMPTY_COMMENTS));
+      if (!damaged) body.append(h('p', { class: 'dc-bc-empty dc-muted' }, EMPTY_COMMENTS));
       return;
     }
     const split = splitRows(rows());
@@ -698,6 +737,35 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
         state.reason === null ? null : h('p', { class: 'dc-foot-note' }, state.reason),
       ),
     );
+    if (focusKey !== null && !body.contains(doc.activeElement)) {
+      const [, commentId = ''] = focusKey.split(':');
+      const target = body.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(focusKey)}"]:not(:disabled)`) ?? body.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(`row:${commentId}`)}"]`);
+      target?.focus();
+    }
+  }
+
+  /** The entries the keyboard can comment on now: every entry of the chosen section, the selected one first in line. */
+  function paintCommentOn(): void {
+    const current = options.detail();
+    const detail = load === 'ready' && options.locked() === null ? current : null;
+    const entries = detail === null ? [] : entriesOf(detail, options.section());
+    const selected = options.selectedEntry();
+    if (selected !== null && selected !== lastSelected && entries.includes(selected)) chosen = selected;
+    lastSelected = selected;
+    if (chosen === null || !entries.includes(chosen)) chosen = selected !== null && entries.includes(selected) ? selected : (entries[0] ?? null);
+    chooser.update({ value: chosen, options: detail === null ? [] : entries.map((entry) => ({ id: entry, label: entryLabel(detail, entry).text || entry })) });
+    commentOn.hidden = entries.length === 0;
+    commentOnButton.set({ title: 'Write a comment on the chosen entry' });
+  }
+
+  /** "Comment on …" pressed: the composer for the rail's chosen entry, or the page's selected one. */
+  function startFromKeyboard(): void {
+    const entry = chosen;
+    const detail = options.detail();
+    if (entry === null || detail === null || !entryInSystem(detail, entry)) return;
+    options.showBoard();
+    board.focusEntry(entry);
+    openComposer(entry, { x: 16, y: 16 });
   }
 
   function paintAll(): void {
@@ -709,12 +777,19 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
   }
 
   const stopLayout = board.onLayout((layout) => paintPins(layout));
+  // Escape always has a way out: a card open with focus outside it (on the page body after a click elsewhere) closes, and
+  // with no card it leaves comment mode. The card's own Escape is handled on the card and doesn't reach here.
   const onKey = (event: KeyboardEvent): void => {
-    if (event.key !== 'Escape' || !commenting || card !== null || event.defaultPrevented) return;
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    if (card !== null) {
+      event.preventDefault();
+      closeCard();
+      return;
+    }
+    if (!commenting) return;
     setCommenting(false);
     toggle.el.focus();
   };
-  const doc = board.el.ownerDocument;
   doc.addEventListener('keydown', onKey);
 
   paintAll();
@@ -728,6 +803,7 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
       disposed = true;
       closeCard(null);
       clearTimeout(missTimer);
+      chooser.dispose();
       stopLayout();
       doc.removeEventListener('keydown', onKey);
       board.setCommentHandler(null);
