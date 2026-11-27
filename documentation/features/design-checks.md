@@ -14,7 +14,9 @@ session). The chat shows each call as a card titled "Design check · <design>".
 - **Input.** `design`: the design folder name, such as `pricing-page` (a bare name only: `../x`,
   `/abs/path`, `C:\x` and `a/b` are refused with "That is not a design folder name..."). `screens`:
   canvas screen ids to check (a list, or text like `"home,faq"`), at most 16. `static`: files only,
-  no browser.
+  no browser. For a design system (`system` instead of `design`): `area` (`foundations`,
+  `components`, `patterns` or `brand`) and `scheme` (`light`, `dark` or `both`), as the command's
+  `--area` and `--scheme` below; any other value, or either one with a design, is refused.
 - **Answer.** Exactly what `dc check` prints: the result line, the PNG paths to look at, the
   findings. Exit 0 or 1 answer that text; when the check cannot run the answer is "The check could
   not run: " and the CLI's own sentence. After 3 minutes the check is stopped and the answer
@@ -127,7 +129,7 @@ Tweaks panel writes, so a tweak on a system token is an override. "A newer versi
 exists" is never a finding; the viewer's banner says that.
 
 ## Checking a design system
-`dc check --system <id> [--json]` and `design_check { "system": "<id>" }` check one system in
+`dc check --system <id> [--area <area>] [--scheme <scheme>] [--json]` and `design_check { "system": "<id>" }` check one system in
 `<designs folder>/_systems/<id>`. The id must be a system id (never a path, never `none` or `ask`),
 and the folder must be a real folder, not a link. The check reads the files, then draws the system's
 specimen board in headless Chrome (below), writes its report to `<system>/.chamber/check.json`, and
@@ -171,7 +173,13 @@ check, so a system made before these checks reads as it did.
 ### Drawing the board
 Unless `--static`, the check draws the same specimen board the system page shows (same generator,
 same layout hints) in the light scheme at two board widths: **wide** 1526 px (a 1920 px window with
-the side panel open) and **narrow** 1046 px (a 1440 px window). A repo-backed system with a proposal
+the side panel open) and **narrow** 1046 px (a 1440 px window). When any token has a dark value it
+then draws a third pass, the **dark pass**: the board in the dark scheme at the wide width, with the
+browser set to prefer dark, pictured for Foundations, Components and Patterns & voice (brand stays
+with the light passes). It runs last, so a run short of time drops it first, keeps the light
+results and says "1 board pass was not drawn (the check ran out of time). Check again with
+--area <area> or --scheme dark." A layout finding the light wide pass already made is not repeated
+by the dark pass. A repo-backed system with a proposal
 waiting for the user's approval is drawn from that proposal; otherwise from the system's files. It
 runs offline in the design check's browser set-up (same CSP, no network, a throwaway profile), with
 45 seconds per width and 110 seconds for the whole drawing. Every board section is laid out before
@@ -199,6 +207,29 @@ the agent opens that picture rather than hunting for it. `--json` and `check.jso
 `render.shots` (per width and area: `heightPx`, `overview`, `tiles` with their offsets) and
 `render.entryShots` (the pictures for each entry with a finding), plus the absolute paths in `pngs`.
 Older run folders are removed once a newer report names its own.
+
+The dark pass's pictures are named like the others with `wide-dark`: `components-overview@wide-dark.png`,
+`components@wide-dark-2.png`. With the dark pass the picture budget is split 0.4 (wide), 0.3
+(narrow) and 0.3 (dark) instead of half each.
+
+Two flags make the fix loop quick (the tool takes the same as `area` and `scheme`):
+
+- `--area foundations|components|patterns|brand` pictures and measures one area only. The board
+  is still drawn whole, so the layout is the same as a full check; the file checks still cover the
+  whole system. The text output says which area was pictured.
+- `--scheme light|dark|both`: `light` leaves the dark pass out, `dark` draws only it, `both` is the
+  default when the system has dark values.
+
+A value off these lists, a missing value, or either flag with a design instead of `--system` stops
+the command with exit 2 and one sentence, before anything is read.
+
+**Measured colour pairs.** The board's Pairs block shows each pair as "Aa Text" on the light and
+dark grounds. While measuring, the check reads each sample's text and background colour as the page
+paints them (through a 1×1 canvas the page never sees), and the service works out the ratio. That is
+how a pair in a format the files can't be judged from (`oklch()`, `color-mix()`, a formula) gets a
+`system-contrast-low` finding; a pair already judged from its hex or rgb values is not judged again,
+so each pair is reported once. A measured pair must be more than 0.05 under its level to count, as
+the canvas can round a channel. `--area` other than foundations skips this.
 
 Measured findings, each named once (at the widest width that raised it):
 

@@ -12,7 +12,6 @@ import { cleanDetail, normalizeExternalUrl } from '../../shared/checks.ts';
 import {
   CHECK_FINDINGS_MAX,
   SYSTEM_CHECK_BOARD_TIMEOUT_MS,
-  SYSTEM_CHECK_BOARD_WIDTHS,
   CHECK_DETAIL_MAX,
   SYSTEM_CHECK_OPTIONAL_TILES_TIME_SHARE,
   SYSTEM_CHECK_PNGS_MAX,
@@ -23,7 +22,7 @@ import {
 import { findSecretShapes } from '../../shared/secret-shapes.ts';
 import { isBoardEntryKey, parseEntryKey } from '../../shared/system-board.ts';
 import { buildSystemDetail, effectiveLayout, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
-import type { BoardLayout, CheckFindingData, RenderCheckState, SettingsFile, SystemComponent, SystemDetail } from '../../shared/types.ts';
+import type { BoardLayout, CheckFindingData, RenderCheckState, SettingsFile, SystemArea, SystemDetail } from '../../shared/types.ts';
 import { BundleTooLarge, bundleDocument, createLiveFileSource, RefBlocked, type FileSource } from '../bundle.ts';
 import { createChangeHub } from '../changes.ts';
 import type { Logger, SettingsStore } from '../context.ts';
@@ -34,7 +33,8 @@ import { BOARD_ENTRY_FILE } from '../systems/board-html.ts';
 import { committedStateOf, readCommitted, readRecord } from '../systems/living-page.ts';
 import { readProposalProblem } from '../systems/proposal-record.ts';
 import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/store.ts';
-import { analyzeBoard, boardFindings, sanitizeBoardProbe } from './board-analyze.ts';
+import { analyzeBoard, boardFindings, boardPassesOf, DARK_PASS_AREAS, findingsInArea, measuredPairFindings, passShare, sanitizeBoardProbe, type BoardProbePair } from './board-analyze.ts';
+import { staticLowPairs } from './pair-contrast.ts';
 import { pictureCoverage, planBoardPictures, type PictureCoverage } from './board-pictures.ts';
 import { browserClassOf, openCheckRun } from './engine.ts';
 import { checkBrowserArgs, launchOpenOptions, openCdp } from './cdp.ts';
@@ -65,11 +65,17 @@ export type SystemRenderInput = {
   budgets?: { boardMs?: number; runMs?: number };
   /** Test seam: replaces the render loop (so a test can see what the run hands it), as `RunCheckInput.render`. */
   renderLoop?: typeof renderArtboards;
+  /** `--area`: picture and measure one area only (the board is still drawn whole). Absent or null: every area. */
+  area?: SystemArea | null;
+  /** `--scheme`: which passes to draw. Absent or null: both when the system has a dark value, else light. */
+  scheme?: 'light' | 'dark' | 'both' | null;
 };
 
 const SYSTEM_OWNER = "This design system's" as const;
 const BROWSER_START_MS = 20_000;
 const BOARD_FILE = 'board.html';
+/** The dark pass's document (the board assembled in the dark scheme); its findings still name `board.html`. */
+const DARK_BOARD_FILE = 'board-dark.html';
 
 /**
  * What S8 needs from outside the system's files (§10.4): the COMMITTED living page in the repo, read
@@ -204,14 +210,20 @@ export const runSystemCheck = async (
   }
   const browserPath = renderInput.browserPath;
 
-  // The board document, bundled like the design check's (export mode, no bridge placeholder).
-  let bundledHtml: string;
-  let components: SystemComponent[];
+  // The passes (D8): both light widths, then the dark pass when the system has a dark value and --scheme allows it.
+  const passes = boardPassesOf(renderInput.scheme ?? null, drawDetail.tokens.some((token) => token.dark !== null));
+  const onlyArea = renderInput.area ?? null;
+
+  // The board documents, bundled like the design check's (export mode, no bridge placeholder): one per scheme drawn.
+  const documents = new Map<string, string>();
+  const remote: string[] = [];
   try {
-    // Every section laid out now (eager), so the areas measure their real height and every tile paints.
-    const assembled = await assembleBoardHtml(drawDetail, drawSource, 'light', { eager: true });
-    components = assembled.components;
-    bundledHtml = (await bundleDocument(overlaySource(drawSource, assembled.html), BOARD_ENTRY_FILE, { mode: 'export' })).html;
+    for (const scheme of [...new Set(passes.map((pass) => pass.scheme))]) {
+      // Every section laid out now (eager), so the areas measure their real height and every tile paints.
+      const assembled = await assembleBoardHtml(drawDetail, drawSource, scheme, { eager: true });
+      remote.push(...[...assembled.components, ...assembled.patterns, ...assembled.brand].flatMap((entry) => entry.example?.remote ?? []));
+      documents.set(scheme === 'dark' ? DARK_BOARD_FILE : BOARD_FILE, (await bundleDocument(overlaySource(drawSource, assembled.html), BOARD_ENTRY_FILE, { mode: 'export' })).html);
+    }
   } catch (error) {
     if (error instanceof BundleTooLarge) {
       return writeStaticRender({
@@ -228,7 +240,9 @@ export const runSystemCheck = async (
   }
 
   // Every example's remote refs are already reported statically; a blocked request for one is not reported twice.
-  const knownExternal = new Set(components.flatMap((component) => component.example?.remote ?? []).map((url) => normalizeExternalUrl(url) ?? url));
+  const knownExternal = new Set(remote.map((url) => normalizeExternalUrl(url) ?? url));
+  // The pair cells each pass measured (system-builder-depth §4.5); judged in Node once the passes are done.
+  const pairCells: BoardProbePair[] = [];
 
   const shots: SystemCheckRender['shots'] = [];
   const entryShots: SystemCheckRender['entryShots'] = [];
@@ -241,14 +255,19 @@ export const runSystemCheck = async (
     const raw = await page.evaluate(`${renderInput.probeSource};__dcProbe.collectBoard()`, { awaitPromise: false });
     const probe = sanitizeBoardProbe(raw);
     if (probe === null) return null;
-    const width = SYSTEM_CHECK_BOARD_WIDTHS.find((candidate) => candidate.id === art.viewport.id);
+    const width = passes.find((candidate) => candidate.id === art.viewport.id);
     if (width === undefined) return null;
-    const findings = analyzeBoard(probe, { width, widest: width.id === 'wide', layoutOf: (entry) => layoutOfEntry(drawDetail, entry), fileOf: fileOfEntry });
+    const measuredAll = analyzeBoard(probe, { width, widest: width.id === 'wide', layoutOf: (entry) => layoutOfEntry(drawDetail, entry), fileOf: fileOfEntry });
+    // --area: the board is drawn whole (the same layout), but only that area's entries are named and pictured.
+    const findings = onlyArea === null ? measuredAll : findingsInArea(measuredAll, probe, onlyArea);
+    if (onlyArea === null || onlyArea === 'foundations') pairCells.push(...(probe.pairs ?? []));
 
     // Entries with a finding at this width, with their boxes: their bands are pictured first.
     const flaggedKeys = new Set(findings.map((finding) => finding.detail).filter((key): key is string => key !== undefined && isBoardEntryKey(key)));
     const flagged = probe.items.filter((item) => flaggedKeys.has(item.entry)).map((item) => ({ entry: item.entry, top: item.box.y, bottom: item.box.y + item.box.h }));
-    const shown = SYSTEM_AREAS.filter((area) => drawDetail.coverage.includes(area) || !areaEmpty(drawDetail, area)).flatMap((area) => {
+    const shown = SYSTEM_AREAS.filter((area) => drawDetail.coverage.includes(area) || !areaEmpty(drawDetail, area))
+      .filter((area) => (onlyArea === null || area === onlyArea) && (width.scheme === 'light' || DARK_PASS_AREAS.includes(area)))
+      .flatMap((area) => {
       const measured = probe.areas.find((candidate) => candidate.area === area);
       return measured === undefined ? [] : [{ area, top: measured.top, height: measured.height }];
     });
@@ -257,8 +276,9 @@ export const runSystemCheck = async (
       flagged,
       viewportWidth: width.width,
       tileHeight: width.height,
-      tilePixels: Math.floor(SYSTEM_CHECK_TILE_PIXELS_MAX / SYSTEM_CHECK_BOARD_WIDTHS.length),
-      pngs: Math.floor(SYSTEM_CHECK_PNGS_MAX / SYSTEM_CHECK_BOARD_WIDTHS.length),
+      // The budgets split by pass: half each for two widths, 0.4 / 0.3 / 0.3 with the dark pass.
+      tilePixels: Math.floor(SYSTEM_CHECK_TILE_PIXELS_MAX * passShare(passes, width)),
+      pngs: Math.floor(SYSTEM_CHECK_PNGS_MAX * passShare(passes, width)),
     });
 
     // Past this point only overview strips and finding tiles are still taken, so the width finishes in time.
@@ -293,7 +313,7 @@ export const runSystemCheck = async (
         }
       }
       pngs.push(...areaPngs);
-      const label = `${plan.area} at ${width.width}px`;
+      const label = `${plan.area} at ${width.width}px${width.scheme === 'dark' ? ' (dark)' : ''}`;
       const shot: SystemBoardShot = { width: width.id, area: plan.area, heightPx: plan.height, overview, tiles };
       const coverage = pictureCoverage(shot);
       const note = (kind: (typeof short)[number]['kind'], text: string): void => void short.push({ width: width.id, kind, text });
@@ -323,9 +343,18 @@ export const runSystemCheck = async (
       openBrowser: (launch) =>
         openCdp(browserPath, checkBrowserArgs({ workDir: space.workDir, platform: renderInput.platform, isRoot: renderInput.isRoot, join: path.join }), launchOpenOptions(launch, BROWSER_START_MS)),
       deadlineAt,
-      plan: SYSTEM_CHECK_BOARD_WIDTHS.map((width) => ({ file: BOARD_FILE, screen: null, viewport: { id: width.id, label: width.label, width: width.width, height: width.height } })),
+      // The dark pass runs last, so a run out of time cuts it first and keeps the light results.
+      plan: passes.map((pass) => ({
+        file: pass.scheme === 'dark' ? DARK_BOARD_FILE : BOARD_FILE,
+        screen: null,
+        viewport: { id: pass.id, label: pass.label, width: pass.width, height: pass.height },
+        ...(pass.scheme === 'dark' ? { scheme: 'dark' as const } : {}),
+      })),
       kind: 'page',
-      loadDocument: async (file) => (file === BOARD_FILE ? { ok: true, html: bundledHtml } : { ok: false, reason: 'missing' }),
+      loadDocument: async (file) => {
+        const html = documents.get(file);
+        return html === undefined ? { ok: false, reason: 'missing' } : { ok: true, html };
+      },
       probeSource: renderInput.probeSource,
       knownExternal,
       savePng: space.savePng,
@@ -338,6 +367,13 @@ export const runSystemCheck = async (
     await space.checkAborted(renderInput.signal?.aborted === true || outcome.stoppedBy === 'aborted');
 
     const findings: CheckFindingData[] = boardFindings(outcome.findings, CHECK_FINDINGS_MAX);
+    // Pairs Node couldn't judge from the values, as the board painted them (a pair judged statically is not judged again).
+    if (drawDetail.coverage.includes('foundations')) findings.push(...measuredPairFindings(pairCells, drawDetail, staticLowPairs(drawDetail).judged));
+    // A pass the run had no time (or no working browser) for: said, never silent. The light passes come first, so it is the dark one.
+    if (outcome.notRendered > 0 && (outcome.stoppedBy === 'budget' || outcome.stoppedBy === 'failures')) {
+      const left = passes.slice(passes.length - outcome.notRendered).map((pass) => pass.label);
+      findings.push({ code: 'render-skipped', file: BOARD_FILE, screen: null, viewport: null, params: { count: outcome.notRendered, reason: outcome.stoppedBy }, detail: cleanDetail(left.join(', '), CHECK_DETAIL_MAX) });
+    }
     const okWidths = new Set(outcome.artboards.filter((artboard) => artboard.ok).map((artboard) => artboard.viewport));
     for (const kind of ['gap', 'no-overview', 'overview', 'tiles'] as const) {
       const areas = short.filter((entry) => entry.kind === kind && okWidths.has(entry.width)).map((entry) => entry.text);
@@ -349,14 +385,16 @@ export const runSystemCheck = async (
       findings.push({ code: 'render-failed', file: null, screen: null, viewport: null, detail: "This browser build can't be driven. Set another browser in Settings." });
     }
     const okCount = outcome.artboards.filter((artboard) => artboard.ok).length;
-    const state: RenderCheckState = outcome.unavailable || okCount === 0 ? 'failed' : okCount < SYSTEM_CHECK_BOARD_WIDTHS.length ? 'partial' : 'done';
+    const state: RenderCheckState = outcome.unavailable || okCount === 0 ? 'failed' : okCount < passes.length ? 'partial' : 'done';
     // A width that failed after saving tiles names none of them: the report keeps only what it pictures.
     const kept = new Set(outcome.artboards.flatMap((artboard) => artboard.pngs));
     const keptShots = shots
       .map((shot) => ({ ...shot, overview: shot.overview !== null && kept.has(shot.overview.png) ? shot.overview : null, tiles: shot.tiles.filter((tile) => kept.has(tile.png)) }))
       .filter((shot) => shot.overview !== null || shot.tiles.length > 0);
     const keptEntryShots = entryShots.map((shot) => ({ ...shot, pngs: shot.pngs.filter((rel) => kept.has(rel)) })).filter((shot) => shot.pngs.length > 0);
-    const render: SystemCheckRender = { state, browser: browserClassOf(browserPath), drawn, widths: outcome.artboards, shots: keptShots, entryShots: keptEntryShots, findings };
+    const areas = SYSTEM_AREAS.filter((area) => (onlyArea === null ? drawDetail.coverage.includes(area) || !areaEmpty(drawDetail, area) : area === onlyArea));
+    const schemes = [...new Set(passes.map((pass) => pass.scheme))];
+    const render: SystemCheckRender = { state, browser: browserClassOf(browserPath), drawn, widths: outcome.artboards, shots: keptShots, entryShots: keptEntryShots, findings, areas, schemes };
     const report = systemCheckReport({ ...base, render });
     const reportPath = await writeSystemCheckReport(systemDir, report);
     const keptRels = outcome.artboards.flatMap((artboard) => artboard.pngs);

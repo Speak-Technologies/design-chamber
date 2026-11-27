@@ -23,6 +23,7 @@ import { missingTopics } from '../../shared/system-checklist.ts';
 import { AREA_OF_SECTION, layoutPlaceTakes, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
 import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, RenderCheckState, SecretShapeKind, SystemArea, SystemDetail } from '../../shared/types.ts';
 import { capPerCode } from './analyze.ts';
+import type { BoardPassId } from './board-analyze.ts';
 import { ratioText, staticLowPairs } from './pair-contrast.ts';
 
 /** The words `buildSystemDetail` uses for the token cap (system-json.ts `TOKENS_CAP_SENTENCE`). */
@@ -372,8 +373,8 @@ export const s8Findings = (source: Pick<SystemDetailSource, 'state' | 'systemJso
 
 // ---- the report (`<system>/.chamber/check.json`) ----
 
-/** The board widths the visual check draws (ids of `SYSTEM_CHECK_BOARD_WIDTHS`). */
-export type SystemBoardWidthId = 'wide' | 'narrow';
+/** The board passes the visual check draws: the two widths of `SYSTEM_CHECK_BOARD_WIDTHS`, and the dark pass. */
+export type SystemBoardWidthId = BoardPassId;
 
 /**
  * The visual check's part (documentation/specs/system-board-layout-and-visual-check.md §B.5): the
@@ -392,6 +393,10 @@ export type SystemCheckRender = {
   /** For each entry with a finding: the full-size pictures that show it, by width. */
   entryShots: { width: SystemBoardWidthId; entry: string; pngs: string[] }[];
   findings: CheckFindingData[];
+  /** The areas pictured and measured (`--area`: one; else every area shown). Absent in reports before builder depth. */
+  areas?: SystemArea[];
+  /** The schemes drawn: light (both widths), dark (the wide dark pass), or both. */
+  schemes?: ('light' | 'dark')[];
 };
 
 /** One area at one width: its overview (the whole area scaled down) and its full-size tiles. */

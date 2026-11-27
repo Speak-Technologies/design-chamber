@@ -48,6 +48,12 @@ const fileOf = (f: CheckFindingData): string => f.file ?? 'This design';
 /** Why artboards were left out, in the reason's own words; the limit case says how to check the rest. */
 const skippedSentence = (f: CheckFindingData): string => {
   const count = Math.round(f.params?.count ?? 0);
+  // A system board pass (system-builder-depth D8): the dark pass runs last, so it is the one a short run leaves out.
+  if (f.file === 'board.html') {
+    const passes = count === 1 ? '1 board pass was' : `${count} board passes were`;
+    if (f.params?.reason === 'failures') return `${passes} not drawn (the browser failed three times in a row).`;
+    return `${passes} not drawn (the check ran out of time). Check again with --area <area> or --scheme dark.`;
+  }
   const what = `${count} ${count === 1 ? 'artboard was' : 'artboards were'} not rendered`;
   if (f.params?.reason === 'budget') return `${what} (the run took longer than ${Math.round(CHECK_RUN_BUDGET_MS / 1000)} seconds).`;
   if (f.params?.reason === 'failures') return `${what} (the browser failed three times in a row).`;

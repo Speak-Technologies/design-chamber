@@ -34,7 +34,11 @@ export const CHECK_CSP = [
 /** The synthetic origin documents are served from. `.invalid` never resolves. */
 export const DOCUMENT_ORIGIN = 'https://design.invalid';
 
-export type PlannedArtboard = { file: string; screen: string | null; viewport: Viewport };
+/**
+ * One artboard to render. `scheme` is the colour scheme the page is emulated in (absent: light, as every
+ * design artboard); the system board's dark pass sets `dark` (system-builder-depth D8).
+ */
+export type PlannedArtboard = { file: string; screen: string | null; viewport: Viewport; scheme?: 'light' | 'dark' };
 
 export type LoadedDocument = { ok: true; html: string } | { ok: false; reason: 'missing' | 'too-large' };
 
@@ -109,6 +113,8 @@ type Page = {
   targetId: string;
   sessionId: string;
   send: <T = Record<string, unknown>>(method: string, params?: object, timeoutMs?: number) => Promise<T>;
+  /** The `prefers-color-scheme` the page is emulated in now. */
+  scheme: 'light' | 'dark';
 };
 
 type Serving = { url: string; html: Buffer; served: boolean; blocked: string[] };
@@ -116,7 +122,7 @@ type Serving = { url: string; html: Buffer; served: boolean; blocked: string[] }
 const openPage = async (session: CdpSession, serving: { current: Serving | null }): Promise<Page> => {
   const { targetId } = await session.send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await session.send<{ sessionId: string }>('Target.attachToTarget', { targetId, flatten: true });
-  const page: Page = { targetId, sessionId, send: (method, params, timeoutMs) => session.send(method, params, { sessionId, ...(timeoutMs ? { timeoutMs } : {}) }) };
+  const page: Page = { targetId, sessionId, send: (method, params, timeoutMs) => session.send(method, params, { sessionId, ...(timeoutMs ? { timeoutMs } : {}) }), scheme: 'light' };
   await page.send('Page.enable');
   await page.send('Runtime.enable');
   await page.send('Log.enable');
@@ -251,6 +257,13 @@ const renderOne = async (
   };
 
   try {
+    // Only an artboard that asks for another scheme changes it, so a design's artboards send what they always did.
+    const scheme = art.scheme ?? 'light';
+    if (scheme !== page.scheme) {
+      await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] });
+      guard();
+      page.scheme = scheme;
+    }
     await page.send('Emulation.setDeviceMetricsOverride', { width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: false });
     const navigation = await page.send<{ frameId: string; errorText?: string }>('Page.navigate', { url });
     guard();

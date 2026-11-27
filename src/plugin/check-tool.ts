@@ -35,6 +35,9 @@ const NOT_STATIC_SENTENCE = 'static takes true or false.';
 export const NOT_A_SYSTEM_SENTENCE = 'That is not a design system id. Use the name of a folder in the Designs folder\'s _systems folder, such as acme.';
 const BOTH_SENTENCE = 'Check a design or a design system, not both: give design or system.';
 const SYSTEM_SCREENS_SENTENCE = 'A design system has no screens; leave screens out.';
+const NOT_AREA_SENTENCE = 'area takes foundations, components, patterns or brand.';
+const NOT_SCHEME_SENTENCE = 'scheme takes light, dark or both.';
+const DESIGN_AREA_SENTENCE = 'area and scheme are for a design system: give system instead of design.';
 export const SETUP_SENTENCE = "Design Chamber hasn't set up its check tool yet. Open the Design Chamber panel once, then try again.";
 export const LAUNCHER_SENTENCE = "The design_check tool can't run in this setup. Run the check command from the AGENTS.md file in the Designs folder instead.";
 const CLI_MISSING_SENTENCE = "Design Chamber's check program is missing from its extension folder. Reinstall Design Chamber, then try again.";
@@ -56,7 +59,9 @@ export const TOOL_INPUT = {
   // One of design or system (Phase 2.5 §10.2); parseToolInput enforces it.
   properties: {
     design: { type: 'string', description: 'The design folder name, such as pricing-page' },
-    system: { type: 'string', description: 'Instead of design: a design system id, such as acme. Draws its board at two widths and saves PNGs to look at' },
+    system: { type: 'string', description: 'Instead of design: a design system id, such as acme. Draws its board at two widths and saves PNGs to look at, dark too when it has dark values' },
+    area: { type: 'string', enum: ['foundations', 'components', 'patterns', 'brand'], description: 'Design systems only: picture and measure just this area (the file checks still cover all of it)' },
+    scheme: { type: 'string', enum: ['light', 'dark', 'both'], description: 'Design systems only: which schemes to draw (default both when it has dark values)' },
     screens: { type: 'array', items: { type: 'string' }, description: 'Canvas only: check just these screen ids' },
     static: { type: 'boolean', description: 'Check the files only, without a browser (designs and systems)' },
   },
@@ -69,8 +74,20 @@ const answer = (content: string, exit: 0 | 1 | 2): ToolAnswer => ({ content, met
 // ---- 1. tool input ----
 
 export type DesignCheckInput = { design: string; screens: string[]; static: boolean };
-/** A design system: no screens; `static` checks the files only (Phase 2.5 §10.2, visual check §B.7). */
-export type SystemCheckInput = { system: string; static: boolean };
+/**
+ * A design system: no screens; `static` checks the files only (Phase 2.5 §10.2, visual check §B.7);
+ * `area` and `scheme` are present only when given (system-builder-depth D8).
+ */
+export type SystemCheckInput = { system: string; static: boolean; area?: 'foundations' | 'components' | 'patterns' | 'brand'; scheme?: 'light' | 'dark' | 'both' };
+
+const AREAS: readonly NonNullable<SystemCheckInput['area']>[] = ['foundations', 'components', 'patterns', 'brand'];
+const SCHEMES: readonly NonNullable<SystemCheckInput['scheme']>[] = ['light', 'dark', 'both'];
+
+/** One of a closed list, absent, or `false` when it is something else (a forged value never reaches the CLI). */
+const closedValue = <T extends string>(value: unknown, options: readonly T[]): T | undefined | false => {
+  if (value === undefined || value === null) return undefined;
+  return typeof value === 'string' && (options as readonly string[]).includes(value) ? (value as T) : false;
+};
 export type CheckInput = DesignCheckInput | SystemCheckInput;
 export type ParsedInput = ({ ok: true } & CheckInput) | { ok: false; message: string };
 
@@ -106,7 +123,7 @@ const screenList = (value: unknown): unknown[] | null => {
  */
 export const parseToolInput = (input: unknown): ParsedInput => {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return { ok: false, message: NOT_A_DESIGN_SENTENCE };
-  const value = input as { design?: unknown; system?: unknown; screens?: unknown; static?: unknown };
+  const value = input as { design?: unknown; system?: unknown; screens?: unknown; static?: unknown; area?: unknown; scheme?: unknown };
   if (value.system !== undefined && value.system !== null) {
     if (value.design !== undefined && value.design !== null) return { ok: false, message: BOTH_SENTENCE };
     if (typeof value.system !== 'string' || !SYSTEM_ID_PATTERN.test(value.system) || value.system === 'none' || value.system === 'ask') return { ok: false, message: NOT_A_SYSTEM_SENTENCE };
@@ -114,8 +131,13 @@ export const parseToolInput = (input: unknown): ParsedInput => {
     if (screens === null || screens.length > 0) return { ok: false, message: SYSTEM_SCREENS_SENTENCE };
     const systemStatic = staticValue(value.static);
     if (systemStatic === null) return { ok: false, message: NOT_STATIC_SENTENCE };
-    return { ok: true, system: value.system, static: systemStatic };
+    const area = closedValue(value.area, AREAS);
+    if (area === false) return { ok: false, message: NOT_AREA_SENTENCE };
+    const scheme = closedValue(value.scheme, SCHEMES);
+    if (scheme === false) return { ok: false, message: NOT_SCHEME_SENTENCE };
+    return { ok: true, system: value.system, static: systemStatic, ...(area !== undefined ? { area } : {}), ...(scheme !== undefined ? { scheme } : {}) };
   }
+  if ((value.area !== undefined && value.area !== null) || (value.scheme !== undefined && value.scheme !== null)) return { ok: false, message: DESIGN_AREA_SENTENCE };
   if (typeof value.design !== 'string' || !SLUG_PATTERN.test(value.design)) return { ok: false, message: NOT_A_DESIGN_SENTENCE };
 
   const list = screenList(value.screens);
@@ -201,7 +223,15 @@ export const runtimeRecordFile = (env: Readonly<Record<string, string | undefine
 
 export const buildChildArgs = (cliPath: string, input: CheckInput): string[] =>
   'system' in input
-    ? [cliPath, 'check', '--system', input.system, ...(input.static ? ['--static'] : [])]
+    ? [
+        cliPath,
+        'check',
+        '--system',
+        input.system,
+        ...(input.area !== undefined ? ['--area', input.area] : []),
+        ...(input.scheme !== undefined ? ['--scheme', input.scheme] : []),
+        ...(input.static ? ['--static'] : []),
+      ]
     : [cliPath, 'check', input.design, ...input.screens.flatMap((screen) => ['--screen', screen]), ...(input.static ? ['--static'] : [])];
 
 /**

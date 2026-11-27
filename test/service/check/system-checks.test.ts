@@ -318,8 +318,8 @@ test('resolveSystemTarget: only a real folder in <root>/_systems, by id', async 
 });
 
 test('parseArgs: --system checks a system, --static means files only; it does not mix with a design or screens', () => {
-  assert.deepEqual(parseArgs(['check', '--system', 'acme']), { kind: 'check-system', root: null, system: 'acme', staticOnly: false, json: false });
-  assert.deepEqual(parseArgs(['--root', '/d', 'check', '--system=acme', '--json', '--static']), { kind: 'check-system', root: '/d', system: 'acme', staticOnly: true, json: true });
+  assert.deepEqual(parseArgs(['check', '--system', 'acme']), { kind: 'check-system', root: null, system: 'acme', staticOnly: false, json: false, area: null, scheme: null });
+  assert.deepEqual(parseArgs(['--root', '/d', 'check', '--system=acme', '--json', '--static']), { kind: 'check-system', root: '/d', system: 'acme', staticOnly: true, json: true, area: null, scheme: null });
   for (const args of [['check', '--system'], ['check', '--system', '../x'], ['check', 'demo', '--system', 'acme'], ['check', '--system', 'acme', '--screen', 'home'], ['check', '--system', 'a', '--system', 'b']]) {
     assert.equal(parseArgs(args).kind, 'error', args.join(' '));
   }
