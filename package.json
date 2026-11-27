@@ -103,8 +103,9 @@
           "match": "design_list",
           "name": "Designs",
           "icon": "palette",
-          "title": "Designs · {input.project}",
-          "output": "text"
+          "title": "Designs",
+          "output": "text",
+          "subtitle": "{input.project}"
         },
         {
           "match": "design_read",
