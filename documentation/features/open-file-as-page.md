@@ -3,9 +3,8 @@
 Right-click an `.html` or `.htm` file in OpenChamber's Files list (a long press on the phone) and pick
 **Open as page in Design Chamber**. Design Chamber copies the file into a new page design and opens it
 in the rail. It is always a copy: later edits to the project file don't follow it, and the page never
-points back into the project. This page describes what gets copied, what is left out and why, when a
-click opens a copy that already exists, and every refusal. The toasts the user sees are the background
-action's (§3.4 of `documentation/specs/native-extras.md`); this page covers what the service decides.
+points back into the project. This page describes what the user is told, what gets copied, what is
+left out and why, when a click opens a copy that already exists, and every refusal.
 
 ## Where it shows
 - OpenChamber puts the entry on every Files row, folders included; it has no file-type filter. A row
@@ -13,6 +12,31 @@ action's (§3.4 of `documentation/specs/native-extras.md`); this page covers wha
   pages." or, for a folder, "Pick an .html file to open it as a page.") and nothing else happens.
 - It runs as a background action, so it works on the phone too.
 - Only a click on a Files row can start it. A design, a chat block or a model can't.
+
+## What the user sees
+Every click ends in one toast. There is no automatic retry: click again.
+
+| What happened | Toast |
+|---|---|
+| Copied, rail opened | Saved “Pricing” as a page in Design Chamber. |
+| Copied, rail couldn't open | Saved “Pricing” as a page. Open Design Chamber to see it. |
+| Already there (same file unchanged, or a file of a design) | “Pricing” is already in Design Chamber. Opening it. |
+| Already there, rail couldn't open | “Pricing” is already in Design Chamber. Open Design Chamber to see it. |
+| A folder row | Pick an .html file to open it as a page. |
+| Another file type | Only .html and .htm files open as pages. |
+| The service refused | Its own sentence (see Refusals below). |
+| The service didn't answer | Design Chamber isn’t responding. Try again in a moment. (On a phone: “…isn’t responding on your computer…”) |
+| The service isn't allowed or the extension is paused | The same advice the rail shows (allow the service, or turn the extension back on). |
+
+When local files were left out, the success or "already there" toast adds a sentence for each reason,
+with the count:
+- "2 files it uses are outside its folder, so they weren’t copied."
+- "1 file it uses is missing."
+- "1 file it uses can’t be copied into a page, so it was left out."
+
+On a phone whose build has no Design Chamber tab, "Open Design Chamber to see it." becomes "Open Design
+Chamber from the More menu in your chats list." A long title is cut to 80 characters so the counts
+still fit in the toast.
 
 ## What gets copied
 - **The HTML, byte for byte**, as the new page's `index.html`. Nothing in it is decoded, rewritten or
@@ -30,8 +54,8 @@ action's (§3.4 of `documentation/specs/native-extras.md`); this page covers wha
 - The page appears only when the copy is complete: the files go in first and `index.html` last.
 
 ## What is left out (and counted)
-The answer counts what wasn't copied, so the toast can say so ("2 files it uses are outside its
-folder, so they weren't copied."). In the viewer the page then shows its usual badges.
+The answer counts what wasn't copied, so the toast can say so (see What the user sees). In the viewer
+the page then shows its usual badges.
 - **Outside its folder:** a reference that climbs out of the HTML file's folder (`../shared/logo.png`),
   a link inside the folder that points out of it, an absolute drive path, a `file:` URL. These are
   never read. Copying them would need rewriting the HTML, which Design Chamber doesn't do.
@@ -95,6 +119,8 @@ Each answers a plain sentence the toast shows as is. Nothing is created in any o
 - Log lines carry the design name and counts, never the file's path or contents.
 
 ## Where it lives in the code
+The click and the toasts: `runAction` in `src/guest/flows.ts`, wired in
+`src/guest/background-main.ts` (tests: `test/guest/flows.test.ts`). The service:
 `src/service/file-page.ts` (body, target, scan, copy), `POST /pages/from-file` in
 `src/service/routes/chat.ts` (leaves the open request for the rail), `readRegularFile` in
 `src/service/loose.ts` (shared with the loose-file import), `importedFrom` in `src/service/store.ts`.

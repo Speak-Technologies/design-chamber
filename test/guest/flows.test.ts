@@ -2,11 +2,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { HostRequestError, type ComposeRequest, type GuestMessageItem, type GuestSessionRecord, type PromptRequest, type StartSessionRequest } from '@openchamber/sdk';
+import { HostRequestError, type ComposeRequest, type GuestFileItem, type GuestMessageItem, type GuestSessionRecord, type PromptRequest, type StartSessionRequest } from '@openchamber/sdk';
 
 import { createFakeServices, createFakeService, type FakeServices } from '../../src/guest/fake-services.ts';
 import type { ChangeBatch } from '../../src/guest/changes.ts';
-import { createFlows, FlowError, MESSAGES, openInRail, openSystemInRail, planReconciliation, takesOpenRequest, type Flows, type ItemTarget } from '../../src/guest/flows.ts';
+import { createFlows, FlowError, MESSAGES, OPEN_FILE_AS_PAGE_ACTION, openInRail, openSystemInRail, planReconciliation, takesOpenRequest, type Flows, type ItemTarget } from '../../src/guest/flows.ts';
 import type { ChangeKind } from '../../src/shared/types.ts';
 import { sameDirectory } from '../../src/shared/path-compare.ts';
 import { createGuestHost } from '../../src/guest/host.ts';
@@ -778,6 +778,155 @@ test('open as artifact (background action): no side panel → the toast says whe
   // Other actions are not ours to run.
   await t.flows.runAction({ ...message('```html\n<html></html>\n```'), action: 'something-else' });
   assert.deepEqual(t.host.callsOf('openSurface'), []);
+});
+
+// ---- native-extras §3: "Open as page in Design Chamber" on a Files row ----
+
+const fileItem = (patch: Partial<GuestFileItem> = {}): GuestFileItem => ({
+  kind: 'file',
+  action: OPEN_FILE_AS_PAGE_ACTION,
+  directory: 'C:\\Users\\you\\projects\\shop',
+  path: 'docs/launch.html',
+  isDirectory: false,
+  ...patch,
+});
+const toastKinds = (s: Setup) => s.host.callsOf('toast').map(([request]) => (request as { kind: string }).kind);
+const fromFileBodies = (s: Setup) => s.service.requests.filter((request) => request.path === '/pages/from-file').map((request) => JSON.parse(request.body ?? '{}'));
+
+/** A background frame whose service answers `POST /pages/from-file` with `answer` (or throws it). */
+const fileFrame = (
+  answer: { status: number; body: unknown } | Error,
+  options: { device?: 'phone' | 'desktop'; panelOnPhone?: boolean; noPanel?: boolean } = {},
+) => {
+  const fakes = createFakeServices({ surface: 'background' });
+  const device = options.device === 'phone' ? { formFactor: 'phone' as const, pointer: 'coarse' as const, insets: { top: 0, right: 0, bottom: 0, left: 0 }, keyboard: 0 } : undefined;
+  fakes.host.emitReady(device ? { device } : {});
+  if (options.noPanel) {
+    fakes.host.behavior.openSurface = async () => {
+      throw new HostRequestError('UNSUPPORTED', 'This OpenChamber surface has no side panel.');
+    };
+  }
+  const client = createServiceClient({
+    serviceRequest: async () => {
+      if (answer instanceof Error) throw answer;
+      return { status: answer.status, body: JSON.stringify(answer.body) };
+    },
+  });
+  const flows = createFlows({ host: fakes.guestHost, client, ...(options.panelOnPhone === undefined ? {} : { panelOnPhone: options.panelOnPhone }) });
+  return { ...fakes, flows };
+};
+const shown = (host: FakeServices['host']) => host.callsOf('toast').map(([request]) => request);
+const pageAnswer = (patch: Record<string, unknown> = {}) => ({ status: 200, body: { slug: 'pricing', title: 'Pricing', reused: false, left: { outside: 0, missing: 0, other: 0 }, ...patch } });
+
+test('file action: sends path and directory, opens the rail, says the page was saved; a repeat says it is already there', async () => {
+  const s = setup({ surface: 'background' });
+  await s.flows.runAction(fileItem());
+  await s.flows.runAction(fileItem());
+  assert.deepEqual(fromFileBodies(s)[0], { path: 'docs/launch.html', directory: 'C:\\Users\\you\\projects\\shop' });
+  assert.deepEqual(s.host.callsOf('openSurface'), [['plugin:design-chamber'], ['plugin:design-chamber']]);
+  assert.deepEqual(toasts(s), ['Saved “launch” as a page in Design Chamber.', '“launch” is already in Design Chamber. Opening it.']);
+  assert.deepEqual(toastKinds(s), ['success', 'info']);
+  assert.equal(s.service.requests.filter((request) => request.path === '/pages/from-message').length, 0);
+});
+
+test('file action: `directory` is sent as null, never left out; .HTM counts', async () => {
+  const s = setup({ surface: 'background' });
+  await s.flows.runAction(fileItem({ directory: null, path: '/home/you/site/INDEX.HTM' }));
+  assert.deepEqual(fromFileBodies(s), [{ path: '/home/you/site/INDEX.HTM', directory: null }]);
+  assert.deepEqual(toastKinds(s), ['success']);
+});
+
+test('file action: a folder or a non-HTML row gets one sentence and nothing else happens', async () => {
+  const s = setup({ surface: 'background' });
+  await s.flows.runAction(fileItem({ isDirectory: true, path: 'docs.html' }));
+  await s.flows.runAction(fileItem({ path: 'notes.md' }));
+  await s.flows.runAction(fileItem({ path: 'page.html.bak' }));
+  assert.deepEqual(toasts(s), [MESSAGES.fileFolder, MESSAGES.fileNotHtml, MESSAGES.fileNotHtml]);
+  assert.deepEqual(toastKinds(s), ['info', 'info', 'info']);
+  assert.deepEqual(fromFileBodies(s), []);
+  assert.deepEqual(s.host.callsOf('openSurface'), []);
+  // A file item under another action id is not ours.
+  await s.flows.runAction(fileItem({ action: 'open-as-page' }));
+  assert.equal(toasts(s).length, 3);
+  assert.deepEqual(fromFileBodies(s), []);
+});
+
+test('file action: every kind of left-out file is counted in the toast', async () => {
+  const s = setup({ surface: 'background' });
+  s.service.fromFileLeft = { outside: 2, missing: 1, other: 3 };
+  await s.flows.runAction(fileItem());
+  assert.deepEqual(toasts(s), [
+    'Saved “launch” as a page in Design Chamber. 2 files it uses are outside its folder, so they weren’t copied. 1 file it uses is missing. 3 files it uses can’t be copied into a page, so they were left out.',
+  ]);
+
+  const one = fileFrame(pageAnswer({ left: { outside: 1, missing: 2, other: 1 } }));
+  await one.flows.runAction(fileItem());
+  assert.deepEqual(shown(one.host), [
+    {
+      kind: 'success',
+      message:
+        'Saved “Pricing” as a page in Design Chamber. 1 file it uses is outside its folder, so it wasn’t copied. 2 files it uses are missing. 1 file it uses can’t be copied into a page, so it was left out.',
+    },
+  ]);
+});
+
+test('file action: the rail cannot open → the toast says where to find the page, by device', async () => {
+  const cases = [
+    { options: { noPanel: true }, answer: pageAnswer(), expected: 'Saved “Pricing” as a page. Open Design Chamber to see it.' },
+    { options: { noPanel: true }, answer: pageAnswer({ reused: true }), expected: '“Pricing” is already in Design Chamber. Open Design Chamber to see it.' },
+    { options: { noPanel: true, device: 'phone' as const }, answer: pageAnswer(), expected: 'Saved “Pricing” as a page. Open Design Chamber to see it.' },
+    {
+      options: { noPanel: true, device: 'phone' as const, panelOnPhone: false },
+      answer: pageAnswer({ left: { outside: 0, missing: 1, other: 0 } }),
+      expected: 'Saved “Pricing” as a page. Open Design Chamber from the More menu in your chats list. 1 file it uses is missing.',
+    },
+  ];
+  for (const { options, answer, expected } of cases) {
+    const s = fileFrame(answer, options);
+    await s.flows.runAction(fileItem());
+    assert.deepEqual(shown(s.host).map((toast) => (toast as { message: string }).message), [expected]);
+  }
+});
+
+test('file action: the title is cleaned and cut, so the counts still fit under the toast limit', async () => {
+  const s = fileFrame(pageAnswer({ title: `Evil\u202e\nname ${'x'.repeat(400)}`, left: { outside: 12, missing: 12, other: 12 } }));
+  await s.flows.runAction(fileItem());
+  const text = (shown(s.host)[0] as { message: string }).message;
+  assert.ok(text.startsWith('Saved “Evil name xxx'));
+  assert.ok(!text.includes('\u202e') && !text.includes('\n'));
+  assert.ok(text.includes('…”'));
+  assert.ok(text.endsWith('left out.'));
+  assert.ok(text.length <= 500, String(text.length));
+});
+
+test('file action: the service sentence reaches the user as it is; busy is info, the rest are errors', async () => {
+  const cases = [
+    { status: 422, error: 'invalid', message: 'That file is a link. Open the file it points to instead.', kind: 'error' },
+    { status: 413, error: 'too-large', message: 'That file is over 20 MB, so it can\'t be opened as a page.', kind: 'error' },
+    { status: 404, error: 'not-found', message: "That file isn't there any more.", kind: 'error' },
+    { status: 409, error: 'conflict', message: 'That file is being opened already.', kind: 'info' },
+  ];
+  for (const { status, error, message: sentence, kind } of cases) {
+    const s = fileFrame({ status, body: { error, message: sentence } });
+    await s.flows.runAction(fileItem());
+    assert.deepEqual(shown(s.host), [{ kind, message: sentence }]);
+    assert.deepEqual(s.host.callsOf('openSurface'), []);
+  }
+});
+
+test('file action: no answer from the service → "isn’t responding"; a service that is off keeps its own advice; nothing is thrown', async () => {
+  for (const code of ['SERVICE_FAILED', 'HOST_TIMEOUT', 'REQUEST_FAILED'] as const) {
+    const s = fileFrame(new HostRequestError(code, 'raw host text'));
+    await s.flows.runAction(fileItem());
+    assert.deepEqual(shown(s.host), [{ kind: 'error', message: MESSAGES.fileServiceDown }]);
+  }
+  const phone = fileFrame(new HostRequestError('SERVICE_FAILED', 'raw'), { device: 'phone' });
+  await phone.flows.runAction(fileItem());
+  assert.deepEqual(shown(phone.host), [{ kind: 'error', message: 'Design Chamber isn’t responding on your computer. Try again in a moment.' }]);
+
+  const off = fileFrame(new HostRequestError('NO_SERVICE', 'raw'));
+  await off.flows.runAction(fileItem());
+  assert.match((shown(off.host)[0] as { message: string }).message, /Allow the local service in Settings/);
 });
 
 test('items: our chip opens its design; foreign chips and bad slugs are ignored; replays are deduped', async () => {
