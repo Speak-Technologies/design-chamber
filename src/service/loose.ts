@@ -11,6 +11,7 @@
 // fstat is re-checked, so a file swapped for a symlink after the listing is not followed. The
 // bytes are copied as bytes, never decoded (only the title scan decodes a copy of the head).
 
+import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, rename, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
@@ -19,10 +20,11 @@ import type { ImportLooseResponse } from '../shared/api.ts';
 import { ENTRY_FILE } from '../shared/design-json.ts';
 import { LOOSE_IMPORT_MAX_BYTES, LOOSE_LIST_MAX, LOOSE_SCAN_MAX, LOOSE_TITLE_SCAN_BYTES } from '../shared/limits.ts';
 import type { LooseHtmlFile } from '../shared/types.ts';
-import type { DesignStore, Logger, SettingsStore } from './context.ts';
+import type { DesignStore, Logger, SelfWrites, SettingsStore } from './context.ts';
 import { ApiError } from './http.ts';
 import { resolveInside, writeFileAtomic } from './paths.ts';
 import { extractTitle } from './render-cache.ts';
+import { recordOwnWrite } from './self-writes.ts';
 
 /** Longest file name most filesystems accept (NTFS, ext4, APFS: 255). */
 export const LOOSE_NAME_MAX = 255;
@@ -190,6 +192,8 @@ const readLooseFile = async (source: string, name: string): Promise<Buffer> => {
 export type LooseImporterOptions = {
   settings: Pick<SettingsStore, 'root'>;
   store: Pick<DesignStore, 'create' | 'trash'>;
+  /** The copy is Design Chamber's own write: the watcher drops its echo, so the build strip never shows it as the agent. */
+  selfWrites: Pick<SelfWrites, 'record'>;
   log: Logger;
   /** Clock for the trash name; tests pin it. */
   now?: () => Date;
@@ -201,7 +205,7 @@ export type LooseImporter = {
 };
 
 export const createLooseImporter = (options: LooseImporterOptions): LooseImporter => {
-  const { settings, store, log } = options;
+  const { settings, store, selfWrites, log } = options;
   const now = options.now ?? (() => new Date());
   /** Names being imported right now: a second click (rail and page both open) gets 409. */
   const inFlight = new Set<string>();
@@ -229,8 +233,12 @@ export const createLooseImporter = (options: LooseImporterOptions): LooseImporte
     const source = await resolveInside(root, [name]);
     const bytes = await readLooseFile(source, name);
 
-    const record = await store.create({ kind: 'page', title: looseTitleOf(name, bytes), brief: '' });
+    // `importedFrom` says where the page came from, and marks the new folder as Design Chamber's own copy:
+    // its `added` events carry `origin: 'user'`, so the build strip doesn't show the agent writing.
+    const importedFrom = { path: source, sha256: createHash('sha256').update(bytes).digest('hex'), at: now().toISOString() };
+    const record = await store.create({ kind: 'page', title: looseTitleOf(name, bytes), brief: '', importedFrom });
     try {
+      recordOwnWrite(selfWrites, record.slug, ENTRY_FILE, bytes);
       // record.path is the store's contained folder (resolveInside at create time).
       await writeFileAtomic(path.join(record.path, ENTRY_FILE), bytes);
     } catch (error) {

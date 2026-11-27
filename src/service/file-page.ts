@@ -29,6 +29,7 @@ import type { DesignIndex, DesignRecord, DesignStore, Logger, SelfWrites, Settin
 import { ApiError } from './http.ts';
 import { looseTitleOf, readRegularFile } from './loose.ts';
 import { resolveInside, writeFileAtomic } from './paths.ts';
+import { recordOwnWrite } from './self-writes.ts';
 
 // ---- sentences (the background frame shows them as the toast) ----
 
@@ -416,9 +417,7 @@ export const createFilePageImporter = (options: FilePageImporterOptions): FilePa
     let left: FromFileResponse['left'];
     try {
       // record.path is the store's contained folder (resolveInside at create time).
-      left = await copyIntoDesign(record.path, folder, plan, entry, overTime, (rel, bytes) =>
-        selfWrites.record(record.slug, rel, createHash('sha256').update(bytes).digest('hex'), bytes.byteLength),
-      );
+      left = await copyIntoDesign(record.path, folder, plan, entry, overTime, (rel, bytes) => recordOwnWrite(selfWrites, record.slug, rel, bytes));
     } catch (error) {
       // The code only: a filesystem message carries a path, and the project's paths stay out of the log.
       log.warn('file-page.copy-failed', { slug: record.slug, code: error instanceof CopyStopped ? error.why : errorCode(error) || 'unknown' });

@@ -15,7 +15,7 @@ import type { FSWatcher } from 'node:fs';
 
 import { batchAgentFiles } from '../../../src/guest/build-activity.ts';
 import type { ChangeEvent, DesignSummary } from '../../../src/shared/types.ts';
-import { FILE_PAGE_COPY_MAX_BYTES, FILE_PAGE_PATH_MAX, LOOSE_IMPORT_MAX_BYTES } from '../../../src/shared/limits.ts';
+import { FILE_PAGE_COPY_MAX_BYTES, FILE_PAGE_PATH_MAX, LOOSE_IMPORT_MAX_BYTES, SOURCE_TEXT_MAX } from '../../../src/shared/limits.ts';
 import type { DesignStore } from '../../../src/service/context.ts';
 import {
   copyIntoDesign,
@@ -711,5 +711,52 @@ describe('the import is Design Chamber writing, not the agent (build strip)', ()
     await writeFile(path.join(core.root, slug, 'img', 'b.png'), PNG);
     await settle();
     assert.deepEqual(batchAgentFiles(events, slug).files, ['img/b.png']);
+  });
+
+  test(`a copied file over the echo filter's ${SOURCE_TEXT_MAX / 1_000_000} MB size limit is the echo too; the agent rewriting it, same size, still shows`, async (t) => {
+    const core = await createCore(t);
+    t.after(() => core.stop());
+    const project = core.tmp.at('project');
+    await mkdir(path.join(project, 'img'), { recursive: true });
+    await writeFile(path.join(project, 'page.html'), '<title>Big</title><img src="img/big.png">');
+    const big = Buffer.alloc(SOURCE_TEXT_MAX + 1_000_000, 1);
+    await writeFile(path.join(project, 'img', 'big.png'), big);
+
+    const fake = { close() {}, on: () => fake, once: () => fake, emit: () => false, ref: () => fake, unref: () => fake };
+    // Safe: the watcher only calls close() and on('error') on what fs.watch answers.
+    const watchImpl = (() => fake as unknown as FSWatcher) as unknown as typeof import('node:fs').watch;
+    const watcher = startWatcher({ settings: core.ctx.settings, hub: core.ctx.hub, log: core.ctx.log, debounceMs: 30, pollMs: 600_000, watchImpl, selfWrites: core.ctx.selfWrites });
+    t.after(() => watcher.stop());
+    await watcher.ready;
+    const events: ChangeEvent[] = [];
+    core.ctx.hub.subscribe((event) => events.push(event));
+    const settle = async (): Promise<void> => {
+      await watcher.pollNow({ all: true });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    };
+    const importer = createFilePageImporter({
+      settings: core.ctx.settings,
+      store: {
+        dir: core.store.dir,
+        get: core.store.get,
+        trash: core.store.trash,
+        create: async (input) => {
+          const record = await core.store.create(input);
+          await settle(); // seen before the big file lands, so its arrival is a change the filter must judge
+          return record;
+        },
+      },
+      designIndex: { all: () => [], ready: async () => true },
+      selfWrites: core.ctx.selfWrites,
+      log: core.ctx.log,
+    });
+    const { slug } = await importer.open({ path: path.join(project, 'page.html'), directory: project });
+    await settle();
+    assert.deepEqual(batchAgentFiles(events, slug), { files: [], created: false, restored: false }, JSON.stringify(events));
+
+    // Same size, other bytes: matched by content, so it is the agent's write.
+    await writeFile(path.join(core.root, slug, 'img', 'big.png'), Buffer.alloc(big.byteLength, 2));
+    await settle();
+    assert.deepEqual(batchAgentFiles(events, slug).files, ['img/big.png']);
   });
 });

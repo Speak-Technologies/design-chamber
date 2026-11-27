@@ -55,9 +55,10 @@ still fit in the toast.
 - The copy is Design Chamber's own write, not the agent's: the build strip never shows "Writing"
   for it. Each copied file is recorded before it is written, so the folder watcher drops its echo,
   and the new design's `added` events (the store's, and the watcher's when it first sees a folder
-  whose state says it was copied) are marked as Design Chamber's. A file over 2 MB is not recorded
-  (the echo filter's size limit), so one the watcher sees land can still show as writing for a few
-  seconds.
+  whose state says it was copied) are marked as Design Chamber's. A new folder that holds only
+  copied files is Design Chamber's too. A large file is matched by its content (a sha256), not its
+  size or time, so an agent that later rewrites a copied file, even with the same size, still shows
+  as writing.
 
 ## What is left out (and counted)
 The answer counts what wasn't copied, so the toast can say so (see What the user sees). In the viewer

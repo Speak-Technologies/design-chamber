@@ -5,13 +5,17 @@
 
 import assert from 'node:assert/strict';
 import { mkdir, open, readdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import type { FSWatcher } from 'node:fs';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
 
+import { batchAgentFiles } from '../../../src/guest/build-activity.ts';
 import type { DesignListResponse, ImportLooseResponse } from '../../../src/shared/api.ts';
+import type { ChangeEvent } from '../../../src/shared/types.ts';
 import { LOOSE_IMPORT_MAX_BYTES, LOOSE_LIST_MAX } from '../../../src/shared/limits.ts';
 import { createLooseImporter, humaniseStem, isLooseHtmlName, listLooseHtml, looseTitleOf, readRegularFile } from '../../../src/service/loose.ts';
 import { ApiError } from '../../../src/service/http.ts';
+import { startWatcher } from '../../../src/service/watch.ts';
 import { createCore, useServedCore, type Core } from './harness.ts';
 
 const json = async <T>(answer: Response): Promise<T> => {
@@ -38,7 +42,7 @@ const designSlugs = async (root: string): Promise<string[]> =>
 const trashEntries = async (root: string): Promise<string[]> => (await readdir(path.join(root, '.trash')).catch(() => [])).sort();
 
 const coreImporter = (core: Core, now?: () => Date) =>
-  createLooseImporter({ settings: core.ctx.settings, store: core.store, log: core.ctx.log, ...(now ? { now } : {}) });
+  createLooseImporter({ settings: core.ctx.settings, store: core.store, selfWrites: core.ctx.selfWrites, log: core.ctx.log, ...(now ? { now } : {}) });
 
 describe('the name rule', () => {
   test('accepts plain .html/.htm names in any case and refuses everything that could leave the root', () => {
@@ -377,5 +381,53 @@ describe('POST /loose/import', () => {
     }
     assert.ok((await readdir(core.root)).includes('locked.html'));
     assert.deepEqual(await designSlugs(core.root), []);
+  });
+});
+
+describe('the import is Design Chamber writing, not the agent (build strip)', () => {
+  test('neither added event nor the copied index.html reads as the agent writing, even when the watcher sees the folder mid-copy', async (t) => {
+    const core = await createCore(t);
+    t.after(() => core.stop());
+    await writeFile(path.join(core.root, 'pricing.html'), '<title>Pricing</title><p>plans</p>');
+
+    // A watcher on the same hub and self-write registry as the service; only `pollNow` drives it.
+    const fake = { close() {}, on: () => fake, once: () => fake, emit: () => false, ref: () => fake, unref: () => fake };
+    // Safe: the watcher only calls close() and on('error') on what fs.watch answers.
+    const watchImpl = (() => fake as unknown as FSWatcher) as unknown as typeof import('node:fs').watch;
+    const watcher = startWatcher({ settings: core.ctx.settings, hub: core.ctx.hub, log: core.ctx.log, debounceMs: 30, pollMs: 600_000, watchImpl, selfWrites: core.ctx.selfWrites });
+    t.after(() => watcher.stop());
+    await watcher.ready;
+    const events: ChangeEvent[] = [];
+    core.ctx.hub.subscribe((event) => events.push(event));
+    /** A poll, then the debounced flush of what it found. */
+    const settle = async (): Promise<void> => {
+      await watcher.pollNow({ all: true });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    };
+
+    const importer = createLooseImporter({
+      settings: core.ctx.settings,
+      store: {
+        trash: core.store.trash,
+        create: async (input) => {
+          const record = await core.store.create(input);
+          await settle(); // the watcher finds the folder before index.html is copied
+          return record;
+        },
+      },
+      selfWrites: core.ctx.selfWrites,
+      log: core.ctx.log,
+    });
+    const { slug } = await importer.importFile('pricing.html');
+    await settle(); // and then the copied index.html
+
+    assert.deepEqual(batchAgentFiles(events, slug), { files: [], created: false, restored: false }, JSON.stringify(events));
+    const added = events.filter((event) => event.slug === slug && event.kind === 'added');
+    assert.deepEqual(added.map((event) => event.origin), ['user', 'user'], 'the store\'s added and the watcher\'s');
+
+    // The agent's own later write still shows.
+    await writeFile(path.join(core.root, slug, 'index.html'), '<title>Pricing</title><p>the agent changed it</p>');
+    await settle();
+    assert.deepEqual(batchAgentFiles(events, slug).files, ['index.html']);
   });
 });

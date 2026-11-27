@@ -185,7 +185,9 @@ a sentence asking the user to move it by hand. If the copy fails, the half-made 
 `.trash/` and the original stays where it was. If only the move to `.trash/` fails, the page is
 still made and the original stays in the folder (the user ends up with two copies, never none).
 Sibling files the HTML refers to (images, CSS) are not copied; the page's missing-files status
-shows them.
+shows them. The copy is Design Chamber's own write, so the build strip never shows it as the agent
+writing; an agent's later change to the page still shows. The page's `.chamber/state.json` notes the
+file it came from (`importedFrom`: its old path, a sha256 of its bytes and the time).
 
 ## Edge cases
 - If the service restarts, the panel's next poll sees a new run id and reloads everything.
