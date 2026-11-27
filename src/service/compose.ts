@@ -62,6 +62,7 @@ import { createDesignStore } from './store.ts';
 import { startChoiceReconciler } from './systems/choice.ts';
 import { startFolderRequests } from './folder-requests.ts';
 import { ensureLinkService } from './systems/link.ts';
+import { dropBoardRenders } from './systems/board.ts';
 import { ensureBuildTickets } from './systems/builds.ts';
 import { startHomes } from './systems/homes.ts';
 import { dropLivingRenders, startLivingPages } from './systems/living-page.ts';
@@ -86,8 +87,8 @@ export type ComposeOptions = {
    */
   env?: SettingsEnv;
   homeDir?: string;
-  /** Watcher timing seams for tests. */
-  watch?: Pick<WatcherOptions, 'pollMs' | 'debounceMs'>;
+  /** Watcher seams for tests: timing, and the fingerprint (holding it holds back the baseline). */
+  watch?: Pick<WatcherOptions, 'pollMs' | 'debounceMs' | 'fingerprint'>;
 };
 
 export type ComposedService = {
@@ -170,6 +171,7 @@ export const composeService = async (options: ComposeOptions): Promise<ComposedS
       dropAll: () => {
         renders.dropAll();
         dropLivingRenders(ctx);
+        dropBoardRenders(ctx);
       },
     },
     log,

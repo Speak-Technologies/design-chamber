@@ -5,6 +5,9 @@
 // added and has not sent. Only the design index is read, so `/design-system` chats (which link
 // systems, never designs) get no mark (the user's decision 5).
 //
+// Triggers: the change hub, and the design index each time its list lands (a slow listing can
+// finish after the debounce a change started, and nothing else would look at the new list).
+//
 // All in memory: marks live as long as the process (N13), so nothing is persisted and a restart
 // sets them again from the files. Quiet and cheap: one reconcile at most every
 // `MARKS_DEBOUNCE_MS`, never two at once; a design's check counts are read again only after it
@@ -20,7 +23,8 @@ import { DESIGN_INDEX_TURN_WAIT_MS, MARK_CHECK_READ_MS, MARK_SETTLE_MS, MARKS_DE
 import { stripDisplayControls } from '../shared/display-text.ts';
 import { flattenViewText } from '../shared/view.ts';
 import type { ChangeEvent, ChangeKind, DesignSummary } from '../shared/types.ts';
-import type { ActivityTracker, ChangeHub, DesignIndex, HostCalls, Logger } from './context.ts';
+import type { ActivityTracker, ChangeHub, HostCalls, Logger } from './context.ts';
+import type { RefreshingDesignIndex } from './design-index.ts';
 
 /** The one icon every mark uses (Remixicon). */
 export const MARK_ICON = 'palette';
@@ -170,7 +174,7 @@ export type MarkTimers = {
 };
 
 export type SessionMarksDeps = {
-  index: Pick<DesignIndex, 'all' | 'ready'>;
+  index: Pick<RefreshingDesignIndex, 'all' | 'ready' | 'onRefresh'>;
   /** The design checks (`ensureChecksService(ctx)`); only `counts.errors` is read. */
   checks: { get(slug: string): Promise<{ counts: { errors: number } }> };
   activity: Pick<ActivityTracker, 'of'>;
@@ -228,6 +232,7 @@ export const createSessionMarks = ({
   let everSaved = false;
   let waitForTrigger = false; // the host was unavailable: send again on the next event or retry, not on every plan
   let unsubscribe: (() => void) | null = null;
+  let unsubscribeIndex: (() => void) | null = null;
 
   let reconcileTimer: unknown = null;
   let reconcileAt = 0;
@@ -420,6 +425,8 @@ export const createSessionMarks = ({
       if (started || disposed) return;
       started = true;
       unsubscribe = hub.subscribe(onEvent);
+      // A reconcile already planned for sooner covers this one, so a quick listing adds none.
+      unsubscribeIndex = index.onRefresh(() => scheduleReconcile(MARKS_DEBOUNCE_MS));
       await index.ready(DESIGN_INDEX_TURN_WAIT_MS);
       if (disposed) return;
       runReconcile();
@@ -429,6 +436,8 @@ export const createSessionMarks = ({
       disposed = true;
       unsubscribe?.();
       unsubscribe = null;
+      unsubscribeIndex?.();
+      unsubscribeIndex = null;
       cancelTimers();
       await reconciling;
       await sending;

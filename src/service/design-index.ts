@@ -6,6 +6,9 @@
 // event, with every event in that window folded in. Never two lists in flight: an event during a
 // list marks the index dirty and one more refresh follows. A list that fails keeps the last good
 // one and logs; the next event tries again.
+//
+// `onRefresh` says when a list has landed, for readers that follow the change hub too (sidebar
+// marks): a list slower than their own debounce would otherwise leave them on the old one.
 
 import { DESIGN_INDEX_REFRESH_MS } from '../shared/limits.ts';
 import type { ChangeEvent, ChangeKind, DesignSummary } from '../shared/types.ts';
@@ -22,6 +25,11 @@ export type DesignIndexDeps = {
   refreshMs?: number;
 };
 
+export type RefreshingDesignIndex = DesignIndex & {
+  /** Called after every list that succeeds, with `all()` already the new one. Returns the unsubscribe. */
+  onRefresh(listener: () => void): () => void;
+};
+
 const timeOf = (iso: string): number => {
   const at = Date.parse(iso);
   return Number.isNaN(at) ? 0 : at;
@@ -31,7 +39,7 @@ const timeOf = (iso: string): number => {
 const newestFirst = (designs: readonly DesignSummary[]): DesignSummary[] =>
   [...designs].sort((a, b) => timeOf(b.updated) - timeOf(a.updated) || a.slug.localeCompare(b.slug));
 
-export const createDesignIndex = ({ store, hub, log, refreshMs = DESIGN_INDEX_REFRESH_MS }: DesignIndexDeps): DesignIndex => {
+export const createDesignIndex = ({ store, hub, log, refreshMs = DESIGN_INDEX_REFRESH_MS }: DesignIndexDeps): RefreshingDesignIndex => {
   let designs: readonly DesignSummary[] = [];
   let bySlug = new Map<string, DesignSummary>();
   let loaded = false;
@@ -40,6 +48,7 @@ export const createDesignIndex = ({ store, hub, log, refreshMs = DESIGN_INDEX_RE
   let dirty = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const readyWaiters = new Set<() => void>();
+  const refreshListeners = new Set<() => void>();
 
   const schedule = (): void => {
     if (disposed || timer !== null) return;
@@ -70,6 +79,13 @@ export const createDesignIndex = ({ store, hub, log, refreshMs = DESIGN_INDEX_RE
           if (!loaded) {
             loaded = true;
             for (const wake of [...readyWaiters]) wake();
+          }
+          for (const listener of [...refreshListeners]) {
+            try {
+              listener();
+            } catch (error) {
+              log.warn('design-index.listener-failed', { error: error instanceof Error ? error.name : 'unknown' });
+            }
           }
         },
         (error: unknown) => {
@@ -108,6 +124,10 @@ export const createDesignIndex = ({ store, hub, log, refreshMs = DESIGN_INDEX_RE
         }, Math.max(0, timeoutMs));
         readyWaiters.add(wake);
       });
+    },
+    onRefresh: (listener) => {
+      refreshListeners.add(listener);
+      return () => void refreshListeners.delete(listener);
     },
     dispose: async () => {
       disposed = true;

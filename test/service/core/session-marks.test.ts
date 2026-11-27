@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import { SERVICE_MARK_TEXT_MAX, SERVICE_MARKS_MAX, type ServiceMark } from '@openchamber/sdk';
 
 import type { Logger, SessionActivity, SetMarkResult } from '../../../src/service/context.ts';
+import { createDesignIndex } from '../../../src/service/design-index.ts';
 import {
   createSessionMarks,
   createRateWindow,
@@ -225,7 +226,7 @@ const rig = (designs: DesignSummary[], options: { errors?: Map<string, number>; 
   let listener: ((event: ChangeEvent) => void) | null = null;
   let calls = 0;
   const marks = createSessionMarks({
-    index: { all: () => state.designs, ready: async () => options.ready ?? true },
+    index: { all: () => state.designs, ready: async () => options.ready ?? true, onRefresh: () => () => undefined },
     checks: {
       get: async (slug) => {
         reads.push(slug);
@@ -473,4 +474,120 @@ test('a new root forgets the old counts: a design with the same slug is read aga
   await r.marks.idle();
   assert.equal(r.sent.at(-1)?.mark?.tone, 'neutral', 'no stale warning from the old root');
   await r.marks.dispose();
+});
+
+// ---- a listing slower than the debounce ----
+
+/** The real design index over a store whose every list the test answers by hand, with real marks on a fake clock. */
+const slowIndex = (options: { readyTimesOut?: boolean } = {}) => {
+  const clock = fakeClock();
+  const lists: ((designs: DesignSummary[]) => void)[] = [];
+  const listeners = new Set<(event: ChangeEvent) => void>();
+  const hub = {
+    subscribe: (listener: (event: ChangeEvent) => void) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+  };
+  const log: Logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
+  const index = createDesignIndex({ store: { list: () => new Promise<DesignSummary[]>((resolve) => void lists.push(resolve)) }, hub, log, refreshMs: 1 });
+  const sent: [string, string | null][] = [];
+  const marks = createSessionMarks({
+    // The host side of `ready`'s timeout, without waiting the real five seconds.
+    index: options.readyTimesOut ? { all: index.all, onRefresh: index.onRefresh, ready: async () => false } : index,
+    checks: { get: async () => ({ counts: { errors: 0 } }) },
+    activity: { of: () => null },
+    hostCalls: {
+      setMark: async (target, mark) => {
+        sent.push([target.sessionId, mark === null ? null : mark.tone]);
+        return 'saved';
+      },
+    },
+    hub,
+    log,
+    now: clock.now,
+    timers: clock.timers,
+  });
+  let seq = 0;
+  return {
+    clock,
+    marks,
+    sent,
+    emit: (event: Omit<ChangeEvent, 'seq'>): void => {
+      for (const listener of [...listeners]) listener({ ...event, seq: (seq += 1) });
+    },
+    /** Wait for the index to ask for list `n` (its refresh timer is a real one). */
+    async asked(n: number): Promise<void> {
+      for (let i = 0; i < 400 && lists.length < n; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.equal(lists.length, n, `the index asked for ${n} lists`);
+    },
+    async answer(n: number, designs: DesignSummary[]): Promise<void> {
+      lists[n - 1]?.(designs);
+      await clock.flush();
+    },
+    async dispose(): Promise<void> {
+      await marks.dispose();
+      for (const resolve of lists) resolve([]);
+      await index.dispose();
+    },
+  };
+};
+
+test('slow listing after comments are sent: the mark goes back to neutral once the list lands', async (t) => {
+  const r = slowIndex();
+  t.after(() => r.dispose());
+  const start = r.marks.start();
+  await r.answer(1, [summary('pricing', { sessionId: 'ses_a', openComments: 2 })]);
+  await start;
+  await r.clock.advance(0);
+  assert.deepEqual(r.sent, [['ses_a', 'warning']]);
+
+  r.emit({ slug: 'pricing', kind: 'comments' });
+  await r.asked(2);
+  await r.clock.advance(MARKS_DEBOUNCE_MS * 3); // the debounce runs out while the list is still going
+  await r.answer(2, [summary('pricing', { sessionId: 'ses_a', openComments: 0 })]);
+  await r.clock.advance(MARKS_DEBOUNCE_MS);
+  assert.deepEqual(r.sent, [['ses_a', 'warning'], ['ses_a', 'neutral']]);
+});
+
+test('slow listing after a folder change: the old folder\'s marks go and the new one\'s appear', async (t) => {
+  const r = slowIndex();
+  t.after(() => r.dispose());
+  const start = r.marks.start();
+  await r.answer(1, [summary('old', { sessionId: 'ses_old' })]);
+  await start;
+  await r.clock.advance(0);
+
+  r.emit({ slug: null, kind: 'root' });
+  await r.asked(2);
+  await r.clock.advance(MARKS_DEBOUNCE_MS * 3);
+  await r.answer(2, [summary('new', { sessionId: 'ses_new' })]);
+  await r.clock.advance(MARKS_DEBOUNCE_MS);
+  assert.deepEqual(r.sent, [['ses_old', 'neutral'], ['ses_new', 'neutral'], ['ses_old', null]]);
+});
+
+test('a first listing slower than the start wait still gets its marks, with no further change', async (t) => {
+  const r = slowIndex({ readyTimesOut: true });
+  t.after(() => r.dispose());
+  await r.marks.start();
+  await r.clock.advance(MARKS_DEBOUNCE_MS * 3);
+  assert.deepEqual(r.sent, []);
+  await r.answer(1, [summary('pricing', { sessionId: 'ses_a' })]);
+  await r.clock.advance(MARKS_DEBOUNCE_MS);
+  assert.deepEqual(r.sent, [['ses_a', 'neutral']]);
+});
+
+test('a list that lands after dispose sends nothing', async () => {
+  const r = slowIndex();
+  const start = r.marks.start();
+  await r.answer(1, [summary('pricing', { sessionId: 'ses_a' })]);
+  await start;
+  await r.clock.advance(0);
+  r.emit({ slug: 'pricing', kind: 'comments' });
+  await r.asked(2);
+  await r.marks.dispose();
+  await r.answer(2, [summary('pricing', { sessionId: 'ses_a', openComments: 1 })]);
+  await r.clock.advance(MARKS_DEBOUNCE_MS * 3);
+  assert.deepEqual(r.sent, [['ses_a', 'neutral']]);
+  await r.dispose();
 });

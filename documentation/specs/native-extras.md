@@ -579,10 +579,22 @@ connected, today's 3 s poll:
 | Cold static checks for all 14 designs, serial | 397 ms total, slowest 103 ms |
 | RSS after that sweep | 188 MB (V8 keeps the high-water mark) |
 
-So the price of `keepRunning` is mostly memory: about 100 MB all the time, more after heavy viewing until quiet
-mode drops the render cache. CPU stays near zero; quiet mode cuts the backstop's wakeups from 20 a minute to 1.
-Marks add one small reconcile per design change and a few host calls a minute at most. Re-measure after build with
-quiet mode on and report it in the QA notes.
+So the price of `keepRunning` is mostly memory. CPU stays near zero; quiet mode cuts the backstop's wakeups from
+20 a minute to 1. Marks add one small reconcile per design change and a few host calls a minute at most.
+
+**Re-measured after the build** (2026-11-27, Node 26.13, built service with marks and quiet mode, a copy of the real
+Designs folder: 14 designs, 107 MB, two linked chats; a stand-in host; one run):
+
+| Measure | No view ever opened | After rendering all 164 documents (54.7 MB) |
+|---|---|---|
+| RSS before quiet mode | 111 to 114 MB | 214 MB (306 MB just after rendering) |
+| RSS in quiet mode, over 160 s | 111 MB | 214 MB |
+| CPU per minute, active then quiet | 0.05 s then 0.01 s | 0.05 s then 0.01 s |
+
+Quiet mode does **not** lower resident memory straight away. Dropping the caches releases the documents for
+collection, but an idle Node has no reason to collect, so RSS stayed where it was for as long as it was watched.
+A collection forced in a separate run took the heap in use from 119 MB to 21 MB and RSS from 302 MB to 207 MB.
+The service does not force one (decided 2026-11-27): the memory is reused by the next work that needs it.
 
 ### 4.8 Tests
 - `test/service/core/session-marks.test.ts` (new): `planMarks` (grouping, order, cap, tones from errors and open
@@ -643,7 +655,7 @@ quiet mode on and report it in the QA notes.
 | `ready.device` | host | `deviceOf` clamps, defaults | none | numbers only reach CSS variables |
 | `POST /pages/from-file` (new) | bearer in `http.ts`; called only by the background frame from a host `onAction` on a user's click; design iframes and blocks never | `parseFromFileBody`, `resolveFileTarget` (pure, posix + win32), O_NOFOLLOW reader, `resolveInside(folder)` for every asset, MIME allowlist, caps, per-path lock | reads one picked `.html` and its local files; writes only a new design folder | no model trigger; escapes and links refused; half-made design trashed |
 | `setMark` (new host call) | service token through the SDK; `marks` grant | `markText`, closed tone and icon, no `url` | a design title and counts on the user's own sidebar | cap 200, bucket 50/min, chips-only linking |
-| `keepRunning` | host | n/a | a resident process holding no secret but the token | crash loop backed off by the host; quiet mode trims memory and wakeups |
+| `keepRunning` | host | n/a | a resident process holding no secret but the token | crash loop backed off by the host; quiet mode trims wakeups and releases the render caches (RSS falls only at a later collection, §4.7) |
 
 ### 5.4 Edge cases (rule 3 walk)
 - **Concurrency and races:** two background frames for the same file → per-path lock 409; two different files →
@@ -687,7 +699,7 @@ quiet mode on and report it in the QA notes.
 | Tool words flicker during fast reads | Low | 1 s repaint throttle; announce only edits and writes |
 | `GuestFileItem.path` turns out relative to something other than `directory` (N10) | Medium | `resolveFileTarget` handles absolute and directory-relative; live check in QA before merge |
 | Phone docs disagree on marks and mark taps (N17) | Low | nothing depends on it; record what the device does |
-| Resident memory (about 100 MB) on low-memory machines | Medium | quiet mode drops the 256 MB render cache; numbers in §4.7; the owner accepted the trade |
+| Resident memory (about 110 MB, more after heavy viewing) on low-memory machines | Medium | quiet mode drops the render caches (designs 256 MB cap, living pages and boards 64 MB each), which frees them for reuse but does not lower RSS until Node next collects (§4.7); the owner accepted the trade |
 | `engines >=2.8.0` strands 2.7 users | Low | owner accepted; README and release notes say so |
 | Marks cold start takes minutes with many linked chats | Low | newest first, 50 a minute |
 | Static checks on many linked designs at start | Low | serial, 5 s cap each, measured 0.4 s for 14 designs |

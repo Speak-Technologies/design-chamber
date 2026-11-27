@@ -21,6 +21,7 @@ import { createRouter, createServiceServer, listenLoopback } from '../../../src/
 import { registerSystemBoardRoutes } from '../../../src/service/routes/system-board.ts';
 import { registerSystemsRoutes } from '../../../src/service/routes/systems.ts';
 import { EAGER_SECTIONS_CSS } from '../../../src/service/systems/board-html.ts';
+import { dropBoardRenders } from '../../../src/service/systems/board.ts';
 import { ensureSystemVersions } from '../../../src/service/systems/versions.ts';
 import { chromeOrSkip, testBrowserFlags } from '../../helpers/chrome-or-skip.ts';
 import { createFakeContext } from '../../helpers/fake-context.ts';
@@ -135,6 +136,24 @@ test('a traversal or invalid id, scheme, version, key or chunk number is refused
   const stale = await call('GET', `/systems/acme/board/chunk?key=${'0'.repeat(64)}&n=0`);
   assert.equal(stale.status, 409);
   assert.equal(errorOf(stale), 'stale');
+});
+
+test('dropping the rendered boards (quiet mode) forgets them all; asking again builds the same one', async (t) => {
+  const { ctx, call, board } = await serve(t);
+  dropBoardRenders(ctx); // nothing rendered yet: nothing to do
+  const light = await board();
+  const dark = await board('?scheme=dark');
+
+  dropBoardRenders(ctx);
+  for (const { meta } of [light, dark]) {
+    const gone = await call('GET', `/systems/acme/board/chunk?key=${meta.key}&n=0`);
+    assert.equal(gone.status, 409);
+    assert.equal(errorOf(gone), 'stale');
+  }
+
+  const again = await board();
+  assert.equal(again.meta.key, light.meta.key);
+  assert.equal(again.html, light.html);
 });
 
 test('a board render: bundled, with the bridge placeholder, data: assets and example remote refs reported', async (t) => {

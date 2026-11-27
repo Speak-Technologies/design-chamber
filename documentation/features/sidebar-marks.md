@@ -25,7 +25,8 @@ sidebar".
 
 ## When it changes
 - A comment added or sent, a design added, deleted, renamed or moved to another chat, or the
-  designs folder changed: about 2 seconds.
+  designs folder changed: about 2 seconds. When reading the designs list takes longer than that
+  (a large or slow folder), the marks follow about 2 seconds after the list has been read.
 - Check errors: a design's checks are read again only after it has been quiet for 5 seconds and
   its chat is not working, so a mark does not flicker while the agent is writing. The turn's end
   triggers the read.

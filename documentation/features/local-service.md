@@ -25,8 +25,8 @@ stops asking). After **10 minutes** without any such request, counted from the s
 no view ever opens, the service goes quiet:
 - the folder check that backs up the live watcher runs every **60 seconds** instead of every 3,
   and looks at every design each time;
-- the rendered documents it was holding for the views are dropped, both for designs and for a
-  design system's living page. A view that opens later gets them built again.
+- the rendered documents it was holding for the views are dropped: designs, design system
+  specimen boards and living pages. A view that opens later gets them built again.
 
 The live watcher stays on, so a change still shows at once and the sidebar marks stay current. A
 change the watcher missed is found within a minute (edits deep in `assets/` can take up to ten),

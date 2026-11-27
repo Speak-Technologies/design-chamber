@@ -10,11 +10,13 @@ import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 
 import { ROUTE_KEYS } from '../../../src/shared/api.ts';
-import { composeService, type ComposedService } from '../../../src/service/compose.ts';
+import { composeService, type ComposedService, type ComposeOptions } from '../../../src/service/compose.ts';
 import type { Logger } from '../../../src/service/context.ts';
 import { createServiceServer, listenLoopback } from '../../../src/service/http.ts';
+import { ensureBoardService } from '../../../src/service/systems/board.ts';
 import { livingPageChunk, renderLivingPage } from '../../../src/service/systems/living-page.ts';
 import { ensureSystemStore } from '../../../src/service/systems/store.ts';
+import { takeFingerprint } from '../../../src/service/watch.ts';
 import { QUIET_AFTER_MS } from '../../../src/shared/limits.ts';
 import { useTmpRoot } from '../../helpers/tmp-root.ts';
 
@@ -27,6 +29,8 @@ type ComposedOptions = {
   designs?: Record<string, { sessionId: string; title: string; html: string }>;
   /** Extra environment (the host callback). */
   env?: Record<string, string>;
+  /** Watcher seams. */
+  watch?: ComposeOptions['watch'];
 };
 
 const useComposed = async (t: TestContext, options: ComposedOptions = {}): Promise<{ service: ComposedService; root: string; logs: LogLine[] }> => {
@@ -53,6 +57,7 @@ const useComposed = async (t: TestContext, options: ComposedOptions = {}): Promi
     packageRoot: REPO_ROOT,
     version: '0.0.0-test',
     env: { DC_SETTINGS_PATH: settingsPath, ...options.env },
+    ...(options.watch ? { watch: options.watch } : {}),
     homeDir: tmp.at('home'),
   });
   t.after(() => service.dispose());
@@ -153,6 +158,37 @@ test('a linked chat gets its mark from the composed service; check errors and un
   assert.deepEqual(host.marks.slice(sentSoFar), [], 'no mark is sent after the service is disposed');
 });
 
+test('marks wait for the watcher baseline: nothing is sent while it is still being seeded', async (t) => {
+  const host = await useFakeHost(t);
+  let release = (): void => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // The baseline fingerprints every design, so holding the fingerprint holds the baseline back.
+  const { service } = await useComposed(t, {
+    env: host.env,
+    designs: { pricing: { sessionId: 'ses_pricing', title: 'Pricing', html: '<h1>Plans</h1>' } },
+    watch: {
+      fingerprint: async (dir, { nested }) => {
+        await held;
+        return takeFingerprint(dir, undefined, nested);
+      },
+    },
+  });
+  // Registered after the service's own dispose, so it runs first: shutdown must not wait on the gate.
+  t.after(() => release());
+  try {
+    // The index has the design, so marks started now would send at once.
+    await until(() => (service.ctx.designIndex.get('pricing') ? true : undefined), 'the design in the index');
+    await pause(750);
+    assert.deepEqual(host.marks, [], 'no mark before the baseline');
+  } finally {
+    release();
+  }
+  const sent = await until(() => host.marks[0], 'the mark once the baseline is seeded');
+  assert.equal(sent.target.sessionId, 'ses_pricing');
+});
+
 test('with no host callback the service starts, and says unavailable once however often the marks change', async (t) => {
   const { service, logs } = await useComposed(t, {
     designs: { pricing: { sessionId: 'ses_pricing', title: 'Pricing', html: '<h1>Plans</h1>' } },
@@ -164,7 +200,7 @@ test('with no host callback the service starts, and says unavailable once howeve
   assert.deepEqual(logs.filter((line) => line.event.startsWith('session-marks.')), []);
 });
 
-test('quiet mode is wired: both render caches are dropped after 10 idle minutes, and GET /changes wakes it', async (t) => {
+test('quiet mode is wired: the design, living-page and board caches are dropped after 10 idle minutes, and GET /changes wakes it', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.now() });
   const { service, root, logs } = await useComposed(t, { designs: { pricing: { sessionId: 'ses_pricing', title: 'Pricing', html: '<h1>Plans</h1>' } } });
   const { ctx } = service;
@@ -179,16 +215,20 @@ test('quiet mode is wired: both render caches are dropped after 10 idle minutes,
   );
   await mkdir(path.join(await systems.dir(id), '.chamber'), { recursive: true });
   await writeFile(path.join(await systems.dir(id), '.chamber', 'living-page.html'), '<!doctype html><title>Acme</title><p>living</p>', 'utf8');
-  await new Promise((resolve) => setTimeout(resolve, 800)); // the watcher's events for the new system pass first
+  const { id: boardId } = await systems.create({ name: 'Boards' });
+  await new Promise((resolve) => setTimeout(resolve, 800)); // the watcher's events for the new systems pass first
 
+  const board = await ensureBoardService(ctx).render(boardId, { scheme: 'light' });
   const design = await ctx.renders.render('pricing', {});
   const living = await renderLivingPage(ctx, id, { which: 'staged', scheme: 'light' });
-  // No await between these and the tick, so nothing but quiet mode can drop the two documents.
+  // No await between these and the tick, so nothing but quiet mode can drop the three documents.
   assert.ok(ctx.renders.chunk(design.key, 0).includes('Plans'));
   assert.ok(livingPageChunk(ctx, id, living.key, 0).includes('living'));
+  assert.ok(ensureBoardService(ctx).chunk(boardId, board.key, 0).length > 0);
   t.mock.timers.tick(QUIET_AFTER_MS);
   assert.throws(() => ctx.renders.chunk(design.key, 0), { code: 'stale' });
   assert.throws(() => livingPageChunk(ctx, id, living.key, 0), { code: 'stale' });
+  assert.throws(() => ensureBoardService(ctx).chunk(boardId, board.key, 0), { code: 'stale' });
   assert.equal(logs.filter((line) => line.event === 'pace.quiet').length, 1);
 
   const server = createServiceServer(service.router);
