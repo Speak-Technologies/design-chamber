@@ -193,6 +193,17 @@ A system's tokens can be saved as files to use outside Design Chamber (spec: `do
 
 Code: `src/shared/token-export.ts`, `src/service/export.ts` (`systemTokens`), `src/service/routes/export.ts` (`GET` and `POST /systems/:id/export`), `src/guest/service-client.ts`. Tests: `test/shared/token-export.test.ts`, `test/service/systems/system-export-routes.test.ts`.
 
+## Board comments
+A comment sits on one entry of the board (a token, type style, font, logo, icon, component, note, pattern, brand entry or colour pair), not on a spot in the page, so it stays put when the agent redraws the board (spec: `documentation/specs/system-builder-depth.md` T20). The pins themselves are T21.
+
+- **Where they are kept.** `_systems/<id>/.chamber/comments.json` in the Designs folder, written only by Design Chamber. A system that lives in a project repo keeps its comments here too: they never go into the repo. They are not part of the system's files, so they are in no version, copy, export or living page, and they never raise the revision. The agent is told never to touch `.chamber/`.
+- **Rules.** Up to 200 comments per system and 1 MiB for the file. The text is 1 to 2000 characters. A new comment must be on an entry the board has now. If that entry later goes away, the comment stays and is flagged as being on an entry that's gone.
+- **Send comments.** Every open comment goes to the system's chat as one message, oldest first, numbered, each under its entry. The user's words are quoted, and the agent is told to treat them as data. A repo-backed system's message adds the reviewed-diff rule. If they don't all fit, the newest wait for the next message and stay open. Comments are marked sent once the message is sent. A retry never marks a comment twice and never changes the time it was first sent.
+- **A damaged file.** A file that can't be read whole (not JSON, too large, a link, a bad comment) shows as damaged, with the comments that could be read. Nothing replaces it until you change a comment. Then it is renamed to `comments.damaged-<time>-<code>.json` beside the new file, never deleted, and the comments that could be read are carried over.
+- **Two windows at once.** Changes queue per system, and each is written to a temp file that is then renamed into place, so none are lost.
+
+Code: `src/service/systems/comments.ts` (the file), `src/service/routes/system-comments.ts` (`GET` and `POST /systems/:id/comments`, `PATCH` and `DELETE /systems/:id/comments/:commentId`, `POST /systems/:id/comments/mark-sent`), the `comments` purpose in `src/service/routes/system-chat.ts`, `buildSystemCommentsPrompt` in `src/shared/agent/system-prompts.ts`, `systemComments` in `src/guest/service-client.ts`. Tests: `test/service/systems/system-comments-routes.test.ts`, `test/service/systems/system-comments.test.ts`, `test/agent/system-prompts.test.ts`.
+
 ## Asking in chat (the SystemAsk block)
 A `/design-system` chat asks its questions in place, as one chat block with three views (spec §8.12). It sits in the chat's reply and answers the chat with one message.
 

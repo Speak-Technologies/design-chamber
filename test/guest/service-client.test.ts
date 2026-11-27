@@ -227,3 +227,19 @@ test('system wrappers: getProposal, stopBuild, undoStop and loadLivingPage call 
   const failing = recording(() => json(404, { error: 'not-found', message: 'That design system is no longer in your Designs folder.' }));
   await rejects(failing.client.loadLivingPage('gone'), 'not-found', /no longer/, 404);
 });
+
+test('systemComments wrappers call the board comment routes (system-builder-depth T20)', async () => {
+  const { requests, client } = recording(() => json(200, { ok: true }));
+  await client.systemComments.list('acme');
+  await client.systemComments.add('acme', { entry: 'token:--brand', body: 'Darker.' });
+  await client.systemComments.update('acme', 'c_abcd1234', { status: 'resolved' });
+  await client.systemComments.remove('acme', 'c_abcd1234');
+  await client.systemComments.markSent('acme', ['c_abcd1234']);
+  assert.deepEqual(requests, [
+    { method: 'GET', path: '/systems/acme/comments' },
+    { method: 'POST', path: '/systems/acme/comments', body: '{"entry":"token:--brand","body":"Darker."}' },
+    { method: 'PATCH', path: '/systems/acme/comments/c_abcd1234', body: '{"status":"resolved"}' },
+    { method: 'DELETE', path: '/systems/acme/comments/c_abcd1234' },
+    { method: 'POST', path: '/systems/acme/comments/mark-sent', body: '{"ids":["c_abcd1234"]}' },
+  ]);
+});

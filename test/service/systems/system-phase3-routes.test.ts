@@ -12,7 +12,7 @@ import type { Logger, ServiceContext } from '../../../src/service/context.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
 import { registerSystemExportRoutes } from '../../../src/service/routes/export.ts';
 import { parseSystemPromptBody } from '../../../src/service/routes/system-chat.ts';
-import { registerSystemCommentRoutes, SYSTEM_COMMENTS_NOT_READY } from '../../../src/service/routes/system-comments.ts';
+import { registerSystemCommentRoutes } from '../../../src/service/routes/system-comments.ts';
 
 const TOKEN = 'system-phase3-token-0123456789';
 const SBD3 = ROUTE_KEYS.filter((key) => ROUTE_OWNERS[key] === 'SBD3');
@@ -78,18 +78,12 @@ test('each Phase 3 route refuses an encoded separator or NUL in :id or :commentI
   }
 });
 
-// T19 is built (system-export-routes.test.ts covers its answers).
-test("with the token, each stub answers 500 \"isn't ready yet\" until T20", async (t) => {
-  const { call } = await serve(t);
-  for (const key of SBD3.filter((one) => !EXPORT_ROUTES.includes(one))) {
-    const answer = await call(key, { id: 'acme' });
-    assert.equal(answer.status, 500, key);
-    assert.deepEqual(await answer.json(), { error: 'internal', message: SYSTEM_COMMENTS_NOT_READY }, key);
-  }
-});
+// T19 and T20 are built: system-export-routes.test.ts and system-comments-routes.test.ts cover their answers.
 
-test("the comments prompt purpose isn't ready yet until T20; other purposes are unchanged", () => {
-  assert.throws(() => parseSystemPromptBody({ purpose: 'comments' }), { code: 'internal', message: SYSTEM_COMMENTS_NOT_READY });
+test('the comments prompt purpose is taken (T20); other purposes are unchanged', () => {
+  assert.equal(parseSystemPromptBody({ purpose: 'comments' }).purpose, 'comments');
+  assert.deepEqual(parseSystemPromptBody({ purpose: 'comments', commentIds: ['c_abcd1234'] }).commentIds, ['c_abcd1234']);
+  assert.throws(() => parseSystemPromptBody({ purpose: 'comments', commentIds: ['../x'] }), { code: 'bad-request' });
   assert.equal(parseSystemPromptBody({ purpose: 'continue' }).purpose, 'continue');
   assert.throws(() => parseSystemPromptBody({ purpose: 'nope' }), { code: 'bad-request' });
 });
