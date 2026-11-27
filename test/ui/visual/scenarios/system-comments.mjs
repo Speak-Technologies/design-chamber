@@ -166,9 +166,17 @@ const flow = async (h, surface, width, theme) => {
   await h.checkSoon(async () => (await current(p, 'harbor')).find((entry) => entry.id === 'c_harbor02')?.status === 'resolved', `${tag}: comment 2 is resolved`);
   await h.checkSoon(() => p.guest('return [...doc.querySelectorAll(".dc-bc-pin")].some((n) => n.getAttribute("aria-label")?.startsWith("Comment 2 ") && n.textContent === "✓")'), `${tag}: its pin shows a check`);
 
-  // ---- send
-  await p.click('.dc-bc-foot .oc-sdk-btn', { text: 'Send comments' });
+  // ---- send: first a send that fails, then one that works; focus is never dropped on the page (re-test #3)
+  const focusName = () => p.guest('return doc.activeElement === doc.body ? "(page)" : (doc.activeElement?.getAttribute("aria-label") || doc.activeElement?.textContent || "").trim()');
+  await p.host(`${FAKE}.route('POST /systems/:id/prompt', { status: 500, body: { error: 'internal', message: 'The service stopped answering.' } })`);
+  await pressEnter(p, '.dc-bc-foot [data-focus-key="send-all"]');
+  await h.checkSoon(async () => (await text(p, '.dc-bc-foot .dc-form-error')).includes('Your comments are still here'), `${tag}: a failed send says so`);
+  await h.checkSoon(() => p.guest('return doc.activeElement?.dataset.focusKey === "send-all"'), `${tag}: after a failed send focus is back on Send comments (${await focusName()})`);
+  await p.shot(`${tag}-5a-send-failed`);
+  await p.host(`${FAKE}.clearRoutes()`);
+  await enterHere(p);
   await h.checkSoon(async () => (await current(p, 'harbor')).filter((entry) => entry.status === 'open').length === 0, `${tag}: every open comment is marked sent`);
+  await h.checkSoon(async () => !(await focusOnBody(p)) && (await p.guest('return !!doc.activeElement?.closest(".dc-bc")')), `${tag}: after the send focus is in the list, not on the page (${await focusName()})`);
   const marked = JSON.parse(await p.host(`JSON.stringify(${FAKE}.systemComments.marked())`));
   h.check(marked.at(-2)?.join(',') === 'c_harbor01' && marked.at(-1)?.join(',') === 'c_new101', `${tag}: mark-sent named exactly what went each time (${JSON.stringify(marked)})`);
   await h.checkSoon(async () => (await text(p, '.dc-bc-count')) === '3 sent · 1 resolved', `${tag}: the list says they were sent`);
@@ -184,6 +192,12 @@ const flow = async (h, surface, width, theme) => {
   // ---- the keyboard reaches any entry of a section, not only the first (browser test #5)
   await p.click('.dc-syspg-row', { text: 'Colours' });
   await p.settle(300);
+  if (surface === 'panel') {
+    // The rail keeps the chooser behind "Comment on…" in the head row (re-test #2); opening it puts focus on the chooser.
+    h.check(await p.guest('return doc.querySelector(".dc-bc-on").hidden === true'), `${tag}: the rail's chooser starts folded`);
+    await pressEnter(p, '.dc-bc-reveal');
+    await h.checkSoon(() => p.guest('return doc.querySelector(".dc-bc-reveal").getAttribute("aria-expanded") === "true" && !!doc.activeElement?.closest(".dc-bc-chooser")'), `${tag}: Comment on… opens the chooser with focus on it`);
+  }
   await pressEnter(p, '.dc-bc-chooser .oc-sdk-trigger');
   await h.checkSoon(() => p.guest('return [...doc.querySelectorAll("[role=listbox] [role=option]")].length > 3'), `${tag}: Enter opens the entry list with every colour`);
   await p.send('Input.insertText', { text: '--danger' });
@@ -194,6 +208,8 @@ const flow = async (h, surface, width, theme) => {
   await h.checkSoon(async () => (await text(p, '.dc-bc-card .dc-pop-snippet')) === '--danger' && (await p.guest('return doc.activeElement?.tagName')) === 'TEXTAREA', `${tag}: Write comment opens the card on --danger with focus in it`);
   await p.shot(`${tag}-5b-keyboard-entry`);
   await escapeCloses('keyboard entry');
+  // Escape on a card opened from Write comment goes back to Write comment (re-test #4).
+  h.check((await p.guest('return doc.activeElement?.textContent?.trim()')) === 'Write comment', `${tag}: Escape returns focus to Write comment (${await focusName()})`);
 
   // ---- the board reloads (an agent turn), then the scheme switches: the pins come back on their entries
   await p.host(`${FAKE}.systems.redrawScreens('harbor')`);
@@ -214,6 +230,35 @@ const flow = async (h, surface, width, theme) => {
   await p.shot(`${tag}-7-damaged-empty`);
   if ((await p.guest('return doc.querySelector(".dc-bc-headbtn").getAttribute("aria-expanded")')) === 'true') await p.click('.dc-bc-headbtn');
   await h.checkSoon(bannerSeen, `${tag}: folded, the banner still shows`);
+  await p.close();
+};
+
+/**
+ * The rail at 700 px tall with two comments (re-test #2): the list keeps its room with the chooser folded, and Send comments
+ * shows at the bottom of the list without scrolling it (the rows scroll above it); the chooser opens and folds again.
+ */
+const railRoom = async (h, width, theme) => {
+  const tag = `syscomments-room-${width}-${theme}`;
+  const p = await h.openPage({ width, height: 700, surface: 'panel', theme, label: tag });
+  console.log(tag);
+  await h.listReady(p);
+  await p.host(`${FAKE}.systemComments.seed('harbor', ${JSON.stringify([
+    { id: 'c_room01', entry: 'component:button', body: 'The primary button reads heavy next to the cards. Try the softer radius.', status: 'open', created: '2026-11-27T09:00:00.000Z', sentAt: null },
+    { id: 'c_room02', entry: 'token:--brand', body: 'Brand blue fails contrast on the dark ground. Lift it a step.', status: 'open', created: '2026-11-27T09:05:00.000Z', sentAt: null },
+  ])})`);
+  await openSystem(h, p, 'panel', 'harbor', tag);
+  await h.checkSoon(async () => (await listRows(p)).length === 2, `${tag}: two comments listed`);
+  const room = () => p.guest('const list = doc.querySelector(".dc-bc"); const send = doc.querySelector(".dc-bc-foot [data-focus-key=\\"send-all\\"]"); const body = doc.querySelector(".dc-bc-body"); if (!list || !send || !body) return null; const l = list.getBoundingClientRect(); const s = send.getBoundingClientRect(); return { list: Math.round(l.height), body: Math.round(body.getBoundingClientRect().height), sendVisible: s.bottom <= l.bottom + 0.5 && s.bottom <= win.innerHeight, rowsShown: [...doc.querySelectorAll(".dc-bc-list .dc-comment")].every((r) => r.getBoundingClientRect().bottom <= l.bottom + 0.5) }');
+  const folded = await room();
+  h.check(folded !== null && folded.sendVisible, `${tag}: Send comments shows without scrolling, at the bottom of the list (${JSON.stringify(folded)})`);
+  // Before, the chooser row took the list down to 85 px; folded, the list keeps the room it has.
+  h.check(folded !== null && folded.body >= 130, `${tag}: the list keeps its room (${folded?.body} px)`);
+  await p.shot(`${tag}-1-folded`);
+  await p.click('.dc-bc-reveal');
+  await h.checkSoon(() => p.guest('return doc.querySelector(".dc-bc-on").hidden === false'), `${tag}: Comment on… shows the chooser`);
+  await p.shot(`${tag}-2-chooser`);
+  await p.click('.dc-bc-reveal');
+  await h.checkSoon(() => p.guest('return doc.querySelector(".dc-bc-on").hidden === true'), `${tag}: Hide folds it again`);
   await p.close();
 };
 
@@ -259,6 +304,7 @@ export const run = async (h) => {
     for (const [surface, width] of [['panel', 320], ['panel', 480], ['page', 1400]]) {
       if (only && !only.test(`${surfaceName(surface)}-${width}-${theme}`)) continue;
       await flow(h, surface, width, theme);
+      if (surface === 'panel') await railRoom(h, width, theme);
     }
   }
   if (!only || only.test('states')) await states(h);

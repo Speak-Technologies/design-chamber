@@ -206,5 +206,5 @@ test('restart recovery mirrors the copy: a complete staging is published, else t
   await recoverSnapshot(systemDir);
   assert.equal(await lstat(stray).catch(() => null), null);
   assert.equal(await readFile(path.join(live, 'tokens.css'), 'utf8'), ':root { --whole: 2px; }\n');
-  await rm(live, { recursive: true, force: true });
+  await rm(live, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });

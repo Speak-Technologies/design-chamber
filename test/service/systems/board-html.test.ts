@@ -246,8 +246,8 @@ test('eager: the check lays every section out; the page leaves off-screen sectio
   assert.ok(check.indexOf(EAGER_SECTIONS_CSS) > check.indexOf('content-visibility: auto'));
 });
 
-test('the generator version is 9 (8 brought motion specimens and the icon grid), so boards cached before the demo could play under the reported pointer are made again', () => {
-  assert.equal(BOARD_GENERATOR_VERSION, 9);
+test('the generator version is 10 (9 played the motion demo under the reported pointer), so boards cached before an example had room to lift are made again', () => {
+  assert.equal(BOARD_GENERATOR_VERSION, 10);
 });
 
 test('the board script measures .dc-fit (cards and table rows) and re-measures on load, fonts.ready and <html> style', () => {
@@ -287,7 +287,7 @@ test('the board script measures .dc-fit (cards and table rows) and re-measures o
   assert.match(html, /\.dc-trow \.dc-grounds \{ flex-direction: column; \}/);
   // Rule 7: every component run keeps the bounded card and the scrolling example.
   assert.match(html, /\.dc-run-full > \.dc-card \{ overflow: hidden; \}/);
-  assert.match(html, /\.dc-example \{ display: block; min-height: 32px; overflow: auto; \}/);
+  assert.match(html, /\.dc-example \{ display: block; min-height: calc\(32px \+ 16px\); margin: -8px; padding: 8px; overflow: auto; \}/);
 });
 
 test('a system with no hints renders the card run: dc-run-card on the container, dc-fit on the cards', () => {
@@ -317,4 +317,11 @@ test('a motion demo plays under the pointer the page reports: the script reads t
   assert.match(html, /@media \(prefers-reduced-motion: reduce\) \{\n {2}\.dc-motion-demo\.dc-playing \.dc-motion-chip \{ left: 2px; \}\n\}/);
   // The pointer alone never measures the cards again.
   assert.ok(html.includes('new MutationObserver(styleChanged)'));
+});
+
+test('an example box has room for a lift inside its clip, and its footprint is unchanged (padding inside a matching negative margin)', () => {
+  const html = buildBoardHtml(makeDetail(), { scheme: 'light', examples: { button: '<p>Hi</p>' } });
+  assert.match(html, /\.dc-example \{ display: block; min-height: calc\(32px \+ 16px\); margin: -8px; padding: 8px; overflow: auto; \}/);
+  // The board script's "wider than its column" edge is the content box, so the padding never hides a wide example.
+  assert.ok(html.includes("getBoundingClientRect().right - (parseFloat(getComputedStyle(host).paddingRight) || 0) + 1"));
 });

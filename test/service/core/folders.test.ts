@@ -311,7 +311,7 @@ describe('folders: service', () => {
       t.skip('settings refuse a missing root here');
       return;
     }
-    await rm(gone, { recursive: true, force: true });
+    await rm(gone, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     assert.deepEqual(await folders.list(), { folders: [], projects: [] });
     await assert.rejects(folders.create('X'), { code: 'bad-path' });
     await assert.rejects(readdir(gone), { code: 'ENOENT' });

@@ -7676,3 +7676,37 @@ button.dc-sp-value:focus-visible {
   position: absolute;
   inset: calc(var(--dc-s3) * -1);
 }
+/* The rail: "Comment on…" shares the head row with the title, and the chooser opens under it only when asked for. */
+.dc-bc-reveal {
+  flex: none;
+}
+.dc-bc-reveal[hidden] {
+  display: none;
+}
+/* Send comments stays in view under the rows; only the rows scroll when the panel is short (a 700 px rail). */
+.dc-bc-body {
+  overflow: hidden;
+}
+.dc-bc-scroll {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: var(--dc-s2);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.dc-bc-scroll > .dc-banner,
+.dc-bc-scroll > .dc-loading {
+  padding: 0 var(--dc-s2);
+}
+.dc-bc-foothost {
+  flex: none;
+}
+.dc-bc-foothost:empty {
+  display: none;
+}
+/* Never a sliver: with the chooser open in a short rail the rows keep at least part of one row, and the list scrolls. */
+.dc-bc-scroll:has(.dc-bc-list) {
+  min-height: 56px;
+}

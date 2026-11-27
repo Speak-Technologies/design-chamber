@@ -50,7 +50,7 @@ describe('a design deleted mid-mutation (7c20ced)', () => {
   test('a design whose .chamber/ was deleted (folder kept) gets its state.json back on the next mutation', async (t) => {
     const { store } = await makeStore(t);
     const created = await store.create({ kind: 'canvas', title: 'Kept' });
-    await rm(path.join(created.path, '.chamber'), { recursive: true, force: true });
+    await rm(path.join(created.path, '.chamber'), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     await store.patch(created.slug, { title: 'Renamed' });
     const state = JSON.parse(await readFile(path.join(created.path, '.chamber', 'state.json'), 'utf8')) as Record<string, unknown>;
     assert.equal(state.kind, 'canvas');
@@ -66,7 +66,7 @@ describe('a design deleted mid-mutation (7c20ced)', () => {
     // the rm and the writeFile below, recreating the directory so the writeFile threw EISDIR
     // (full-suite flake). reconcile takes the same per-slug lock, so awaiting one drains it.
     await store.reconcile(created.slug);
-    await rm(path.join(created.path, '.chamber'), { recursive: true, force: true });
+    await rm(path.join(created.path, '.chamber'), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     await writeFile(path.join(created.path, '.chamber'), 'a file, not a folder');
     await assert.rejects(store.patch(created.slug, { title: 'x' }), (error: unknown) => !(error instanceof ApiError && error.code === 'not-found'));
     assert.equal(await readFile(path.join(created.path, '.chamber'), 'utf8'), 'a file, not a folder');

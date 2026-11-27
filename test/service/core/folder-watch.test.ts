@@ -47,7 +47,7 @@ describe('watchFolders', () => {
     // Poll the live array from `mark` on: a `seen.slice(mark)` copy would miss an event that lands after it.
     await waitFor(seen, (name, index) => index >= mark && name === 'neu/design.json', 'an in-place write after a rename-over');
 
-    await rm(tmp.at('neu'), { recursive: true, force: true });
+    await rm(tmp.at('neu'), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     await waitFor(seen, (name) => name === 'neu', 'the removed folder');
   });
 

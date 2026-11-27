@@ -507,7 +507,7 @@ describe('list', () => {
 
   test('a root that does not exist yet lists as empty', async (t) => {
     const env = await makeEnv(t);
-    await rm(env.tmp.root, { recursive: true, force: true });
+    await rm(env.tmp.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     assert.deepEqual(await env.store.list(), []);
   });
 

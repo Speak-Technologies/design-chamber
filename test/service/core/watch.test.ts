@@ -141,7 +141,7 @@ describe('watcher events', () => {
     const nested = await env.waitForEvent((event) => event.slug === 'demo' && event.kind === 'files' && (event.files ?? []).includes('screens/home.html'));
     assert.ok(nested.seq > files.seq);
 
-    await rm(env.tmp.at('demo'), { recursive: true, force: true });
+    await rm(env.tmp.at('demo'), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     await env.waitForEvent((event) => event.slug === 'demo' && event.kind === 'removed');
   });
 

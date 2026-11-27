@@ -301,12 +301,12 @@ describe('QA 0a: restore without state.json', () => {
     const { tmp, versions } = await setup(t);
     const comment = { id: 'c_keep', screen: null, viewport: 'laptop', anchor: { selector: 'h1', text: 'hello', html: '<h1>', rect: { x: 0, y: 0, w: 1, h: 1 }, point: { x: 0, y: 0 } }, body: 'keep', status: 'open', created: '2026-10-26T12:00:00.000Z', sentAt: null, sentVersion: null };
     await tmp.writeDesign('art', pageDesign({ 'design.json': { version: 1, kind: 'page', title: 'T', created: '2026-10-26T10:00:00.000Z', updated: '2026-10-26T10:00:00.000Z', comments: [comment] } }));
-    await rm(tmp.at('art/.chamber'), { recursive: true, force: true });
+    await rm(tmp.at('art/.chamber'), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     const v1 = await versions.create('art', 'manual');
     assert.ok(v1);
     await tmp.write('art/index.html', '<p>later</p>');
     await versions.create('art', 'manual');
-    await rm(tmp.at('art/.chamber'), { recursive: true, force: true });
+    await rm(tmp.at('art/.chamber'), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     await versions.restore('art', 'v1');
     const onDisk = JSON.parse(await readFile(tmp.at('art/design.json'), 'utf8')) as { comments: { id: string }[] };
     assert.deepEqual(onDisk.comments.map((c) => c.id), ['c_keep']);

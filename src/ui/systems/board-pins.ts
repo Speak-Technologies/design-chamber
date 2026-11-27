@@ -84,7 +84,7 @@ const PIN = 24;
 const MISS_MS = 2600;
 
 type Card =
-  | { kind: 'new'; entry: string; el: HTMLElement; area: HTMLTextAreaElement; fallback: { x: number; y: number } }
+  | { kind: 'new'; entry: string; el: HTMLElement; area: HTMLTextAreaElement; fallback: { x: number; y: number }; opener: HTMLElement | null }
   | { kind: 'thread'; id: string; el: HTMLElement; area: HTMLTextAreaElement; fallback: { x: number; y: number }; setStatus: (comment: SystemComment) => void };
 
 export const mountBoardComments = (options: BoardCommentsOptions): BoardCommentsHandle => {
@@ -132,7 +132,10 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
     headCount,
   );
   const commentOn = h('div', { class: 'dc-bc-on' });
-  const body = h('div', { class: 'dc-bc-body', id: `dc-bc-body-${id}` });
+  // The rows scroll; Send comments sits under them, outside the scroll, so a short rail never pushes it out of view.
+  const scroller = h('div', { class: 'dc-bc-scroll' });
+  const footHost = h('div', { class: 'dc-bc-foothost' });
+  const body = h('div', { class: 'dc-bc-body', id: `dc-bc-body-${id}` }, scroller, footHost);
   const dock = h('div', { class: 'dc-bc-dock' });
   // The damaged-file banner sits outside the folding body, so it is seen however the list is folded.
   const damagedHost = h('div', { class: 'dc-bc-damaged' });
@@ -145,6 +148,24 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
   // Entry rows in the sections are chosen by pointer, so the keyboard picks any entry of the chosen section here.
   const chooser = mountSelect(chooserHost, { label: 'Comment on', value: null, options: [], searchable: true, searchPlaceholder: 'Find an entry', onChange: (entry) => { chosen = entry; paintCommentOn(); } });
   commentOn.append(chooserHost, commentOnButton.el);
+  // In the rail the chooser row would take the list's room, so it waits behind "Comment on…" in the head row until asked for.
+  let chooserOpen = !options.compact;
+  const reveal = btn({
+    label: 'Comment on…',
+    variant: 'ghost',
+    size: 'xs',
+    icon: 'plus',
+    title: 'Choose an entry to comment on',
+    onClick: () => {
+      chooserOpen = !chooserOpen;
+      paintCommentOn();
+      if (chooserOpen) chooserHost.querySelector<HTMLElement>('.oc-sdk-trigger')?.focus();
+    },
+  });
+  reveal.el.classList.add('dc-bc-reveal');
+  reveal.el.setAttribute('aria-controls', `dc-bc-on-${id}`);
+  commentOn.id = `dc-bc-on-${id}`;
+  if (options.compact) commentOn.before(reveal.el);
   /** Where a card goes: on the board, or docked under it in the rail. */
   const cardHost = (): HTMLElement => (options.compact ? dock : board.pinLayer);
 
@@ -241,7 +262,9 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
     paintPins();
     if (returnTo === null) return;
     if (returnTo !== undefined) return returnTo.focus();
-    // Escape, Cancel or the close button: back to the comment's pin (or row), or to the Comment switch.
+    // Escape, Cancel or the close button: back to what opened a new comment (Write comment), else the comment's pin (or
+    // row), else the Comment switch.
+    if (closing.kind === 'new' && closing.opener !== null && closing.opener.isConnected && !closing.opener.hidden && closing.opener.getClientRects().length > 0) return closing.opener.focus();
     focusComment(closing.kind === 'thread' ? closing.id : null);
   };
 
@@ -274,7 +297,7 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
 
   const cardFoot = (...children: Array<HTMLElement | null>): HTMLElement => h('div', { class: 'dc-pop-foot' }, ...children);
 
-  function openComposer(entry: string, at: { x: number; y: number }): void {
+  function openComposer(entry: string, at: { x: number; y: number }, opener: HTMLElement | null = null): void {
     closeCard(null);
     const detail = options.detail();
     const label = detail === null ? { tag: 'entry', text: entry } : entryLabel(detail, entry);
@@ -338,7 +361,7 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
       failure,
       cardFoot(h('span', { class: 'dc-pop-hint' }, `${/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘↵' : 'Ctrl+↵'} to add`), h('span', { class: 'dc-pop-actions' }, cancel.el, submit.el)),
     );
-    card = { kind: 'new', entry, el: cardEl, area, fallback: at };
+    card = { kind: 'new', entry, el: cardEl, area, fallback: at, opener };
     wireCard(cardEl);
     cardHost().append(cardEl);
     if (options.compact) cardEl.scrollIntoView({ block: 'nearest' });
@@ -564,6 +587,19 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
       sendingAll = false;
       paintList();
     }
+    focusAfterSend(null);
+  };
+
+  /**
+   * After a send the button that started it was busy (so it lost focus) and may be gone or off: focus goes back to it when
+   * it can be pressed again (a failed send), else to the comment's row (one comment), else to the first row of the list.
+   */
+  const focusAfterSend = (commentId: string | null): void => {
+    if (disposed || (doc.activeElement !== null && doc.activeElement !== doc.body)) return;
+    const again = body.querySelector<HTMLElement>(commentId === null ? '[data-focus-key="send-all"]:not(:disabled)' : `[data-focus-key="${CSS.escape(`send:${commentId}`)}"]:not(:disabled)`);
+    if (again !== null) return again.focus();
+    const row = commentId === null ? null : body.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(`row:${commentId}`)}"]`);
+    (row ?? body.querySelector<HTMLElement>('.dc-comment-main') ?? headButton).focus();
   };
 
   const sendRow = async (row: BoardCommentRow): Promise<void> => {
@@ -572,6 +608,7 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
     } catch (error) {
       toast('error', `Couldn’t send comment ${row.number}. ${errorText(error)} It is still open.`);
     }
+    focusAfterSend(row.comment.id);
   };
 
   const setRowStatus = async (row: BoardCommentRow, status: 'open' | 'resolved'): Promise<void> => {
@@ -699,36 +736,38 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
     // A repaint rebuilds the rows: focus on one of them comes back to the same control (or its row, once the control is gone).
     const active = doc.activeElement;
     const focusKey = active instanceof HTMLElement && body.contains(active) ? (active.dataset.focusKey ?? null) : null;
-    body.replaceChildren();
+    scroller.replaceChildren();
+    footHost.replaceChildren();
     if (load === 'loading') {
-      body.append(loadingRow('Loading comments…'));
+      scroller.append(loadingRow('Loading comments…'));
       return;
     }
     if (load === 'error') {
-      body.append(banner({ tone: 'error', title: 'Comments didn’t load', body: loadError || 'The local service didn’t answer.', action: { label: 'Try again', onClick: () => { load = 'loading'; paintList(); void refresh(); } } }));
+      scroller.append(banner({ tone: 'error', title: 'Comments didn’t load', body: loadError || 'The local service didn’t answer.', action: { label: 'Try again', onClick: () => { load = 'loading'; paintList(); void refresh(); } } }));
       return;
     }
     if (comments.length === 0) {
-      if (!damaged) body.append(h('p', { class: 'dc-bc-empty dc-muted' }, EMPTY_COMMENTS));
+      if (!damaged) scroller.append(h('p', { class: 'dc-bc-empty dc-muted' }, EMPTY_COMMENTS));
       return;
     }
     const split = splitRows(rows());
     const list = h('ul', { class: 'dc-comment-items dc-bc-list' }, ...split.live.map(rowEl));
-    body.append(list);
+    scroller.append(list);
     if (split.resolved.length > 0) {
-      body.append(
+      scroller.append(
         h(
           'button',
           { type: 'button', class: 'dc-bc-more', 'aria-expanded': String(showResolved), onClick: () => { showResolved = !showResolved; paintList(); } },
           showResolved ? 'Hide resolved' : `Show ${split.resolved.length} resolved`,
         ),
       );
-      if (showResolved) body.append(h('ul', { class: 'dc-comment-items dc-bc-list', 'data-resolved': 'true' }, ...split.resolved.map(rowEl)));
+      if (showResolved) scroller.append(h('ul', { class: 'dc-comment-items dc-bc-list', 'data-resolved': 'true' }, ...split.resolved.map(rowEl)));
     }
     const state = sendAllState(comments, options.chat().sessionId !== null, options.locked());
     const submit = btn({ label: state.label, variant: 'default', size: 'sm', icon: 'send', loading: sendingAll, disabled: !state.enabled || sendingAll, onClick: () => void sendAll() });
+    submit.el.dataset.focusKey = 'send-all';
     submit.el.classList.add('dc-block');
-    body.append(
+    footHost.append(
       h(
         'div',
         { class: 'dc-bc-foot' },
@@ -754,7 +793,10 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
     lastSelected = selected;
     if (chosen === null || !entries.includes(chosen)) chosen = selected !== null && entries.includes(selected) ? selected : (entries[0] ?? null);
     chooser.update({ value: chosen, options: detail === null ? [] : entries.map((entry) => ({ id: entry, label: entryLabel(detail, entry).text || entry })) });
-    commentOn.hidden = entries.length === 0;
+    commentOn.hidden = entries.length === 0 || !chooserOpen;
+    reveal.el.hidden = entries.length === 0;
+    reveal.el.setAttribute('aria-expanded', String(chooserOpen));
+    reveal.set({ label: chooserOpen ? 'Hide' : 'Comment on…', icon: chooserOpen ? 'close' : 'plus' });
     commentOnButton.set({ title: 'Write a comment on the chosen entry' });
   }
 
@@ -765,7 +807,7 @@ export const mountBoardComments = (options: BoardCommentsOptions): BoardComments
     if (entry === null || detail === null || !entryInSystem(detail, entry)) return;
     options.showBoard();
     board.focusEntry(entry);
-    openComposer(entry, { x: 16, y: 16 });
+    openComposer(entry, { x: 16, y: 16 }, commentOnButton.el);
   }
 
   function paintAll(): void {

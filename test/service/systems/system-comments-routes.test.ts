@@ -296,7 +296,7 @@ test('a link at comments.json is never followed; a .chamber link refuses every w
   const outsideDir = path.join(path.dirname(tmp.root), `outside-dir-${path.basename(tmp.root)}`);
   await mkdir(outsideDir, { recursive: true });
   t.after(() => rm(outsideDir, { recursive: true, force: true }));
-  await rm(tmp.at(`_systems/${other}/.chamber`), { recursive: true, force: true });
+  await rm(tmp.at(`_systems/${other}/.chamber`), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   await symlink(outsideDir, tmp.at(`_systems/${other}/.chamber`));
   const refused = await call('POST', `/systems/${other}/comments`, { entry: ENTRY, body: 'x' });
   assert.equal(refused.status, 400, JSON.stringify(refused.json));
@@ -307,7 +307,7 @@ test('a link at comments.json is never followed; a .chamber link refuses every w
   const third = await seed(tmp, systems, 'Gamma');
   await mkdir(tmp.at(`_systems/${third}/inner`), { recursive: true });
   await tmp.write(`_systems/${third}/inner/comments.json`, '{ not json');
-  await rm(tmp.at(`_systems/${third}/.chamber`), { recursive: true, force: true });
+  await rm(tmp.at(`_systems/${third}/.chamber`), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   await symlink(tmp.at(`_systems/${third}/inner`), tmp.at(`_systems/${third}/.chamber`));
   const inner = await call('POST', `/systems/${third}/comments`, { entry: ENTRY, body: 'x' });
   assert.equal(inner.status, 422, JSON.stringify(inner.json));
