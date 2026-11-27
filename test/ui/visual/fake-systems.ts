@@ -83,6 +83,7 @@ export const sampleSystems = (): SystemSummary[] => [
   blank({
     id: 'tidepool',
     name: 'Tidepool',
+    depth: 'core',
     swatches: ['#0f766e', '#134e4a', '#f59e0b', '#ccfbf1', '#f0fdfa'],
     status: 'ready',
     changesToReview: true,
@@ -98,6 +99,7 @@ export const sampleSystems = (): SystemSummary[] => [
   blank({
     id: 'harbor',
     name: 'Harbor',
+    depth: 'full',
     swatches: ['#1d4ed8', '#0f172a', '#e11d48', '#dbeafe'],
     status: 'ready',
     changesToReview: true,

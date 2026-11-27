@@ -63,7 +63,7 @@ export const mountSystemRow = (summary: SystemSummary, options: SystemRowOptions
     body.push(badges);
     if (model.notice) body.push(h('span', { class: 'dc-sys-notice' }, model.notice));
     const meta = h('span', { class: 'dc-sys-meta' });
-    const parts: Node[] = [...model.metaParts.source.map((text) => h('span', null, text)), usedByControl(summary, model.metaParts.usedBy.text, options.onShowDesigns), ...(model.metaParts.updated === null ? [] : [h('span', null, model.metaParts.updated)])];
+    const parts: Node[] = [...(model.metaParts.depth === null ? [] : [h('span', null, model.metaParts.depth)]), ...model.metaParts.source.map((text) => h('span', null, text)), usedByControl(summary, model.metaParts.usedBy.text, options.onShowDesigns), ...(model.metaParts.updated === null ? [] : [h('span', null, model.metaParts.updated)])];
     parts.forEach((part, index) => {
       if (index > 0) meta.append(h('span', { class: 'dc-sys-dot', 'aria-hidden': 'true' }, '·'));
       meta.append(part);

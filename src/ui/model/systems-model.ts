@@ -6,6 +6,7 @@ import { SYSTEM_SWATCHES_MAX } from '../../shared/limits.ts';
 import type { SystemSummary } from '../../shared/types.ts';
 import { folderName, plural, relativeTime } from './format.ts';
 import { swatchable } from './resync-model.ts';
+import { scopeParts } from './system-page-model.ts';
 
 export type RowTone = 'neutral' | 'info' | 'warning' | 'success' | 'error';
 
@@ -67,10 +68,10 @@ export type SystemRowModel = {
   more: { text: string; title: string } | null;
   /** The shared-repo sentence ("shop already has a repo-backed system (Acme)."), a muted line, never a badge. */
   notice: string | null;
-  /** Source line, used by, updated: joined with a dot on screen. */
+  /** Depth, source line, used by, updated: joined with a dot on screen. */
   meta: string[];
-  /** The same facts apart, so the used-by part can be a link into the filtered library. */
-  metaParts: { source: string[]; usedBy: { count: number; text: string }; updated: string | null };
+  /** The same facts apart, so the used-by part can be a link into the filtered library. `depth` is "Core system" and the like, null when the system doesn't say. */
+  metaParts: { depth: string | null; source: string[]; usedBy: { count: number; text: string }; updated: string | null };
   /** The row button's accessible name; hidden badges are in it too. */
   ariaLabel: string;
 };
@@ -88,7 +89,9 @@ export const systemRow = (summary: SystemSummary, context: { nowMs: number; loca
   const home = homeLine(summary);
   const updated = relativeTime(summary.updated, context.nowMs, context.locale);
   const source = sourceLine(summary.sources, context.label);
-  const meta = [...source, usedByLine(summary.usedBy), ...(updated === '' ? [] : [updated])];
+  // The depth leads the meta line, right under where the system lives, as on the system page's summary line.
+  const [depth = null] = scopeParts(summary);
+  const meta = [...(depth === null ? [] : [depth]), ...source, usedByLine(summary.usedBy), ...(updated === '' ? [] : [updated])];
   const status: SystemRowModel['status'] = summary.status === 'ready' ? { label: 'Ready', tone: 'success' } : { label: 'Draft', tone: 'info' };
   const notice = sharedRepoNotice(summary);
   const hiddenLabels = badges.hidden.map((badge) => badge.label);
@@ -103,7 +106,7 @@ export const systemRow = (summary: SystemSummary, context: { nowMs: number; loca
     more: badges.hidden.length > 0 ? { text: `+${badges.hidden.length}`, title: hiddenLabels.join(', ') } : null,
     notice,
     meta,
-    metaParts: { source, usedBy: { count: summary.usedBy, text: usedByLine(summary.usedBy) }, updated: updated === '' ? null : updated },
+    metaParts: { depth, source, usedBy: { count: summary.usedBy, text: usedByLine(summary.usedBy) }, updated: updated === '' ? null : updated },
     ariaLabel: summary.unreadable !== null ? `${summary.name}, can’t be read` : `${spoken.join(', ')}. ${meta.join(', ')}.`,
   };
 };
