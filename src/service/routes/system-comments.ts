@@ -36,7 +36,9 @@ import { ensureSystemStore } from '../systems/store.ts';
 type Rec = Record<string, unknown>;
 const isRec = (value: unknown): value is Rec => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const STATUSES: readonly CommentStatus[] = ['open', 'sent', 'resolved'];
+/** What a PATCH may set. `sent` is mark-sent's alone, so a sent comment always carries its `sentAt`. */
+const PATCH_STATUSES: readonly CommentStatus[] = ['open', 'resolved'];
+export const COMMENT_STATUS_SENTENCE = 'The status is "open" or "resolved". A comment is marked sent when it is sent to the chat.';
 
 export const COMMENT_BODY_SENTENCE = `Write the comment in 1 to ${COMMENT_BODY_MAX} characters.`;
 export const COMMENT_FIELDS_SENTENCE = "The request has a field Design Chamber doesn't take.";
@@ -67,7 +69,7 @@ export const parsePatchSystemComment = (body: unknown): PatchSystemCommentBody =
     patch.body = body.body;
   }
   if (body.status !== undefined) {
-    if (typeof body.status !== 'string' || !STATUSES.includes(body.status as CommentStatus)) throw new ApiError('bad-request', 'The status is "open", "sent" or "resolved".');
+    if (typeof body.status !== 'string' || !PATCH_STATUSES.includes(body.status as CommentStatus)) throw new ApiError('bad-request', COMMENT_STATUS_SENTENCE);
     patch.status = body.status as CommentStatus;
   }
   if (patch.body === undefined && patch.status === undefined) throw new ApiError('bad-request', 'Say what to change: "body", "status" or both.');

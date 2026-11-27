@@ -16,7 +16,7 @@ import type { ServiceContext } from '../../../src/service/context.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
 import { LINK_SENTENCE } from '../../../src/service/paths.ts';
 import { registerSystemChatRoutes } from '../../../src/service/routes/system-chat.ts';
-import { COMMENT_BODY_SENTENCE, COMMENT_ENTRY_GONE_SENTENCE, COMMENT_FIELDS_SENTENCE, registerSystemCommentRoutes } from '../../../src/service/routes/system-comments.ts';
+import { COMMENT_BODY_SENTENCE, COMMENT_ENTRY_GONE_SENTENCE, COMMENT_FIELDS_SENTENCE, COMMENT_STATUS_SENTENCE, registerSystemCommentRoutes } from '../../../src/service/routes/system-comments.ts';
 import { serializeSystemComments, SYSTEM_COMMENT_GONE, SYSTEM_COMMENTS_FILE_FULL, SYSTEM_COMMENTS_FULL } from '../../../src/service/systems/comments.ts';
 import { refreshSnapshot } from '../../../src/service/systems/snapshot.ts';
 import { ensureSystemStore, SYSTEM_GONE_MESSAGE } from '../../../src/service/systems/store.ts';
@@ -192,6 +192,16 @@ test('create, list, patch, delete and mark-sent; a retried mark never marks twic
   const retry = await call('POST', `/systems/${id}/comments/mark-sent`, { ids: [comment.id] });
   assert.deepEqual((retry.json as MarkSystemCommentsSentResponse).comments, [sent]);
   assert.equal((await stat(file)).mtimeMs, mtime, 'nothing new to mark: the file is not rewritten');
+
+  // `sent` is mark-sent's alone: a PATCH can't store a sent comment with no sentAt.
+  const fileBefore = await tmp.read(fileOf(id));
+  const patchSent = await call('PATCH', `/systems/${id}/comments/${second.id}`, { status: 'sent' });
+  assert.equal(patchSent.status, 400);
+  assert.equal((patchSent.json as { message: string }).message, COMMENT_STATUS_SENTENCE);
+  assert.equal(await tmp.read(fileOf(id)), fileBefore);
+  const reopened = await call('PATCH', `/systems/${id}/comments/${comment.id}`, { status: 'open' });
+  assert.deepEqual((reopened.json as SystemCommentResponse).comment, { ...sent, status: 'open' }, 'reopening keeps the first sentAt');
+  await call('POST', `/systems/${id}/comments/mark-sent`, { ids: [comment.id] });
 
   const resolved = await call('PATCH', `/systems/${id}/comments/${second.id}`, { status: 'resolved' });
   assert.equal((resolved.json as SystemCommentResponse).comment.status, 'resolved');

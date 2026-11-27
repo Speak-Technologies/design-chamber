@@ -824,7 +824,7 @@ parsers in `src/shared/system-json.ts`):
     system's comments never go to the repo): `SystemComment { id, entry, body, status: open | sent | resolved,
     created, sentAt }`, anchored to a board entry key (validated against the current detail on create), ≤
     `SYSTEM_COMMENTS_MAX` (200), file ≤ `SYSTEM_COMMENTS_FILE_MAX_BYTES` (1 MiB), body 1 to `COMMENT_BODY_MAX`.
-    One queue per system, temp-then-rename; a file that doesn't validate reads as damaged with what did and is
+    `PATCH` sets status open or resolved only; sent comes from mark-sent alone, with its `sentAt`. One queue per system, temp-then-rename; a file that doesn't validate reads as damaged with what did and is
     renamed aside (`comments.damaged-<stamp>-<rand>.json`) by the next user write. Not content: no version,
     copy, export, living page or revision. Each landed write sends a `system` change with `systemChange:
     'comments'` (`SystemChangeKind` gains it); the board, screens and living page caches skip it.
@@ -1991,6 +1991,9 @@ Every write goes through `systems.dir(id)` + `resolvePlainTarget` or the root's 
     at 1000×, reset before the artboard ends), pictured tight as `<component>-<state>@wide.png`, and compared
     on colour, background, border colours, box shadow, outline and transform. No visible change is
     `system-state-unstyled` (warning, one per component); an outline or border that paints nothing doesn't count.
+    `params.hint` names the likely cause when the check can tell, and the sentence adds its fix: `rest` (forced on
+    the labelled copy itself, with no rest twin of the same variant and size), `focus-visible` (labelled focus,
+    but only `:focus-visible` changes it) or `both` (the component's instances gave both).
     ≤ `SYSTEM_STATE_SHOTS_MAX` (60) within 85% of the pass's time, then `system-board-partial` with `pictured:
     'states'`. Narrow, dark, `--screen` and `--area` other than components skip it. `render.states`.
   - **Motion strips** (T17), last on the wide light pass: each Motion demo chip (hover) and each

@@ -10,7 +10,7 @@ import type { SystemDetail, SystemState, TokenExportFormat } from '../../shared/
 import { ApiError, type Router } from '../http.ts';
 import type { ServiceContext } from '../context.ts';
 import { createExportService, type ExportService, type SystemExportFile } from '../export.ts';
-import { createRevealRegistry, createRevealService, type RevealService } from '../reveal.ts';
+import { createRevealRegistry, createRevealService, type LaunchFn, type RevealService } from '../reveal.ts';
 import { TAILWIND_CONFIG } from '../systems/extract-rules.ts';
 import { ensureSystemStore } from '../systems/store.ts';
 
@@ -18,6 +18,15 @@ type ExportLane = { exports: ExportService; reveal: RevealService };
 
 // One registry per context: /reveal accepts exactly the paths THIS service's /export issued.
 const lanes = new WeakMap<ServiceContext, ExportLane>();
+const launchers = new WeakMap<ServiceContext, LaunchFn>();
+
+/**
+ * Test seam: how this context's /reveal opens a file manager. Set before the export routes are
+ * registered; the test helpers' fake context sets a no-op so no test opens a window on the desktop.
+ */
+export const configureReveal = (ctx: ServiceContext, deps: { launch: LaunchFn }): void => {
+  launchers.set(ctx, deps.launch);
+};
 
 const laneOf = (ctx: ServiceContext): ExportLane => {
   const existing = lanes.get(ctx);
@@ -25,7 +34,10 @@ const laneOf = (ctx: ServiceContext): ExportLane => {
   const registry = createRevealRegistry();
   const lane: ExportLane = {
     exports: createExportService({ store: ctx.store, settings: ctx.settings, log: ctx.log, issue: registry.issue }),
-    reveal: createRevealService({ store: ctx.store, log: ctx.log, registry, systems: ensureSystemStore(ctx) }),
+    reveal: (() => {
+      const launch = launchers.get(ctx);
+      return createRevealService({ store: ctx.store, log: ctx.log, registry, systems: ensureSystemStore(ctx), ...(launch !== undefined ? { launch } : {}) });
+    })(),
   };
   lanes.set(ctx, lane);
   return lane;

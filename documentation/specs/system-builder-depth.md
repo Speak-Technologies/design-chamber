@@ -963,9 +963,9 @@ the Screens view, screens on the living page; `system-motion-no-reduced` and `sy
 ## 18. Phase 3 as built (2026-11-27)
 
 Commits on `feat/system-phase-3`: Wave 0 `3ab22b7`; T19 `b80c155`, `1d91143`; T20 `9389b67`, `3149d3e`; T16
-`2178351`; T19u `3f8945a`; T18 `96a51c8`; T17 `9825022`; T21 `30cbc06`; T22r `7fccb2e`; T22 (this fold-in). A
-backend follow-up (hints on `system-state-unstyled`, strip priority) was in progress at this fold-in and is not
-described here. `docs/SPEC.md` §6.7, §7, §9.19 and §14 carry what shipped.
+`2178351`; T19u `3f8945a`; T18 `96a51c8`; T17 `9825022`; T21 `30cbc06`; T22r `7fccb2e`; the backend follow-up
+`846f561` (hints on `system-state-unstyled`, examples first in the motion cap); T22 `1e2e4a9`. The hints are in
+the table below. `docs/SPEC.md` §6.7, §7, §9.19 and §14 carry what shipped.
 
 **Shipped as designed:** forced hover, focus, focus-visible and active pictures with `system-state-unstyled`;
 motion strips; compare sheets from `sources/screens/`; the token ZIP (W3C design tokens 2025.10, regenerated
@@ -985,6 +985,8 @@ pins on the board in the rail and the page.
 | WP0 as listed | Plus `'states'` and `'motion'` in `CheckParams.pictured`, `system-compare-skipped`, `'comments'` in `SystemChangeKind`, `sources.code.tailwind` |
 | Comments marked sent after the send | Marked when handed over: sent, appended to a busy chat's box, or queued in the outbox (KI-43) |
 | States forced on the labelled instance | On its rest twin (same variant and size) when the example has one, so an `is-hover` copy can't hide a missing `:hover` |
+| `system-state-unstyled` names the component and its states | Also `params.hint` when the check can tell why: `rest` (no rest twin, so the state was forced on the labelled copy), `focus-visible` (labelled focus but only `:focus-visible` is styled) or `both`; the sentence adds the matching fix |
+| (not stated) `PATCH` comment status open, sent or resolved | Open or resolved only; sent is set by mark-sent alone, so a sent comment always has its `sentAt` |
 
 ---
 
