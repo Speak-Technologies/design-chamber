@@ -29,6 +29,7 @@ const settingsWith = (skill) => ({
     chrome: { path: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', source: 'detected' },
     downloadsDir: 'C:\\Users\\you\\Downloads',
     agent: { guide: { path: `${ROOT}\\AGENTS.md`, state: 'current' }, skill: { path: SKILL_PATH, duplicates: [], ...skill } },
+    systems: { default: { choice: 'ask', state: 'ok', sentence: null }, pins: [], notices: [] },
   },
 });
 

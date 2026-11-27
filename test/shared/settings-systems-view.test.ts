@@ -16,15 +16,15 @@ test('nothing saved reads as ask with no pins', () => {
   assert.deepEqual(settingsSystemsView({ settings: {}, systems, notices: [] }), { default: { choice: 'ask', state: 'ok', sentence: null }, pins: [], notices: [] });
 });
 
-test('a default is ok, draft, missing or deleted, and the saved name is replaced by the current one', () => {
+test('a default is ok, draft or missing (not in this folder, or unreadable), and the saved name is replaced by the current one', () => {
   const view = (id: string) => settingsSystemsView({ settings: { systemDefault: { choice: 'system', id, name: 'Saved name' } }, systems, notices: [] }).default;
   assert.deepEqual(view('acme'), { choice: 'system', id: 'acme', name: 'Acme', state: 'ok', sentence: null });
   assert.deepEqual(view('wip'), { choice: 'system', id: 'wip', name: 'Wip', state: 'draft', sentence: 'Wip is a draft. New designs ask you in chat until it is Ready.' });
   assert.deepEqual(view('broken'), { choice: 'system', id: 'broken', name: 'Broken', state: 'missing', sentence: 'Broken can’t be read right now. New designs ask you in chat.' });
-  assert.deepEqual(view('gone'), { choice: 'system', id: 'gone', name: 'Saved name', state: 'deleted', sentence: 'Saved name was deleted. New designs ask you in chat.' });
+  assert.deepEqual(view('gone'), { choice: 'system', id: 'gone', name: 'Saved name', state: 'missing', sentence: 'Your default design system isn’t in this Designs folder.' });
 });
 
-test('pins: none and default are always ok; a system pin follows the same four states', () => {
+test('pins: none and default are always ok; a system pin follows the same three states', () => {
   const view = settingsSystemsView({
     settings: {
       systemPins: [
@@ -45,7 +45,7 @@ test('pins: none and default are always ok; a system pin follows the same four s
       ['/b', 'ok', null],
       ['/c', 'draft', 'Wip is a draft. This project uses the default until it is Ready.'],
       ['/d', 'missing', 'Broken can’t be read right now. This project uses the default.'],
-      ['/e', 'deleted', 'gone was deleted. This project uses the default.'],
+      ['/e', 'missing', 'gone isn’t in this Designs folder. This project uses the default.'],
     ],
   );
   assert.deepEqual(view.notices, ['One notice.']);

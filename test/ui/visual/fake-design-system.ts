@@ -201,14 +201,14 @@ export const createFakeDesignSystem = (deps: {
   const choiceOf = (setting: SystemDefaultSetting): SystemChoiceView => {
     if (setting.choice !== 'system') return { ...setting, state: 'ok', sentence: null };
     const system = row(setting.id);
-    if (system === undefined) return { ...setting, state: 'deleted', sentence: `${setting.name} was deleted. New designs ask you in chat.` };
+    if (system === undefined) return { ...setting, state: 'missing', sentence: 'Your default design system isn’t in this Designs folder.' };
     if (system.status === 'draft') return { ...setting, name: system.name, state: 'draft', sentence: `${system.name} is a draft. New designs ask you in chat until it is Ready.` };
     return { ...setting, name: system.name, state: 'ok', sentence: null };
   };
   const pinOf = (pin: SystemPinSetting): SystemPinView => {
     if (pin.choice !== 'system' || pin.id === undefined) return { ...pin, state: 'ok', sentence: null };
     const system = row(pin.id);
-    if (system === undefined) return { ...pin, state: 'deleted', sentence: `${pin.name ?? pin.id} was deleted. This project uses the default.` };
+    if (system === undefined) return { ...pin, state: 'missing', sentence: `${pin.name ?? pin.id} isn’t in this Designs folder. This project uses the default.` };
     if (system.status === 'draft') return { ...pin, name: system.name, state: 'draft', sentence: `${system.name} is a draft. This project uses the default until it is Ready.` };
     return { ...pin, name: system.name, state: 'ok', sentence: null };
   };

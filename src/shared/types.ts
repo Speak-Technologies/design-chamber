@@ -285,8 +285,8 @@ export type SystemDefaultSetting = { choice: 'ask' } | { choice: 'none' } | { ch
 /** A project pin (§2.9): `default` follows the default, `none` never links, `system` names one. */
 export type SystemPinSetting = { directory: string; choice: 'default' | 'none' | 'system'; id?: string; name?: string };
 
-/** Whether a setting's system still resolves in this root (§3.4); `sentence` says why when not ok. */
-export type SystemSettingState = 'ok' | 'draft' | 'missing' | 'deleted';
+/** Whether a setting's system still resolves in this root (§3.4); `sentence` says why when not ok. `missing`: not in this Designs folder, or unreadable. */
+export type SystemSettingState = 'ok' | 'draft' | 'missing';
 export type SystemChoiceView = SystemDefaultSetting & { state: SystemSettingState; sentence: string | null };
 export type SystemPinView = SystemPinSetting & { state: SystemSettingState; sentence: string | null };
 

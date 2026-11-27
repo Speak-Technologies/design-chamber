@@ -45,12 +45,13 @@ import {
   type TweakState,
   type UndoEditResponse,
 } from '../shared/api.ts';
-import { CHIP_PROVIDER_ID, type AgentSkillStatus, type ChangeEvent, type ChangeKind, type Comment, type DesignJson, type DesignKind, type DesignSummary, type HandEdit, type HandEditBase, type LooseHtmlFile, type Outbox, type Preset, type Screen, type VersionSummary, type Viewport } from '../shared/types.ts';
+import { CHIP_PROVIDER_ID, type AgentSkillStatus, type ChangeEvent, type ChangeKind, type Comment, type DesignJson, type DesignKind, type DesignSummary, type HandEdit, type HandEditBase, type LooseHtmlFile, type Outbox, type Preset, type Screen, type SystemDefaultSetting, type SystemPinSetting, type VersionSummary, type Viewport } from '../shared/types.ts';
 import { CHANGES_RING_SIZE, EDIT_ID_PATTERN, FOLDER_DESIGNS_MAX, HAND_EDITS_LEDGER_MAX, HAND_EDIT_QUOTE_MAX, LOOSE_LIST_MAX, SCREENS_MAX, SLUG_PATTERN, SYSTEM_ID_PATTERN, STATUS_ROWS_MAX, TEXT_EDIT_MAX, USER_EDIT_COALESCE_MS, USER_UNDO_KEEP } from '../shared/limits.ts';
 import { sameDirectory } from '../shared/path-compare.ts';
 import { ENTRY_FILE, screenFileOf } from '../shared/design-json.ts';
 import { copyTitle, describeMove, directionGroups, freeCopyId, SCREEN_LIST_STALE_MESSAGE, SCREENS_CAP_MESSAGE } from '../shared/screen-ops.ts';
 import { clip, oneLine } from '../shared/agent/context.ts';
+import { settingsSystemsView } from '../shared/systems.ts';
 import { createGuestHost, type GuestHost, type HostLike } from './host.ts';
 import { createServiceClient, type ServiceClient } from './service-client.ts';
 
@@ -323,6 +324,9 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
   );
   const skillPath = 'C:\\Users\\you\\.config\\opencode\\skills\\design-chamber\\SKILL.md';
   let skill: AgentSkillStatus = { path: skillPath, state: 'not-installed', duplicates: [] };
+  /** What a PUT /settings saved for design systems; every saved system reads as Ready here, so nothing is flagged. */
+  let systemDefault: SystemDefaultSetting | null = null;
+  let systemPins: SystemPinSetting[] = [];
   // F1 (Phase 2.6): seeded folders and manual project members.
   const folders = new Map<string, FakeFolder>();
   const projectMembers = new Map<string, Set<string>>();
@@ -891,6 +895,11 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           root = body.root;
           emit(null, 'root');
         }
+        if (key === 'PUT /settings') {
+          if ('systemDefault' in body) systemDefault = (body.systemDefault ?? null) as SystemDefaultSetting | null;
+          if ('systemPins' in body) systemPins = (body.systemPins ?? []) as SystemPinSetting[];
+        }
+        const named = [systemDefault, ...systemPins].flatMap((entry) => (entry?.choice === 'system' && entry.id !== undefined ? [{ id: entry.id, name: entry.name ?? entry.id, status: 'ready' as const, unreadable: null }] : []));
         return {
           root,
           defaultRoot: 'C:\\Users\\you\\Documents\\Designs',
@@ -899,6 +908,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           chrome: { path: null, source: 'none' },
           downloadsDir: 'C:\\Users\\you\\Downloads',
           agent: { guide: { path: `${root}\\AGENTS.md`, state: 'current' }, skill },
+          systems: settingsSystemsView({ settings: { ...(systemDefault !== null ? { systemDefault } : {}), systemPins }, systems: named, notices: [] }),
         };
       }
       case 'DELETE /agent/skill':

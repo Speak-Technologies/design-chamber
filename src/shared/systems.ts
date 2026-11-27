@@ -74,23 +74,41 @@ export const effectiveSystemChoice = (input: EffectiveChoiceInput): EffectiveSys
 /** A system as the Settings view sees it: its name, whether it is Ready, and whether its folder can be read. */
 export type SettingsViewSystem = { id: string; name: string; status: 'draft' | 'ready'; unreadable: string | null };
 
-/** Where a setting stands against this root's systems: the state and, when it is not ok, the sentence that says why (§3.4). */
+/** What each setting says when its system does not apply here; `unset` is what then happens (the effective rules above). */
+type SettingWords = { absent: (name: string) => string; unset: string; draftUntil: string };
+
+/**
+ * Where a setting stands against this root's systems: the state and, when it is not ok, the sentence that says why (§3.4).
+ * `missing` is a system that is not in this Designs folder (a folder switch; a real delete already clears the setting)
+ * or whose folder cannot be read. Both keep the saved id, so switching back restores it.
+ */
 const settingState = (
   ref: { id: string; name: string },
   systems: readonly SettingsViewSystem[],
-  words: { gone: string; draft: string },
+  words: SettingWords,
 ): { name: string; state: SystemSettingState; sentence: string | null } => {
   const system = systems.find((one) => one.id === ref.id);
-  if (system === undefined) return { name: ref.name, state: 'deleted', sentence: `${ref.name} was deleted. ${words.gone}` };
-  if (system.unreadable !== null) return { name: system.name, state: 'missing', sentence: `${system.name} can’t be read right now. ${words.gone}` };
-  if (system.status === 'draft') return { name: system.name, state: 'draft', sentence: `${system.name} is a draft. ${words.draft}` };
+  if (system === undefined) return { name: ref.name, state: 'missing', sentence: words.absent(ref.name) };
+  if (system.unreadable !== null) return { name: system.name, state: 'missing', sentence: `${system.name} can’t be read right now. ${words.unset}` };
+  if (system.status === 'draft') return { name: system.name, state: 'draft', sentence: `${system.name} is a draft. ${words.draftUntil}` };
   return { name: system.name, state: 'ok', sentence: null };
+};
+
+const DEFAULT_WORDS: SettingWords = {
+  absent: () => 'Your default design system isn’t in this Designs folder.',
+  unset: 'New designs ask you in chat.',
+  draftUntil: 'New designs ask you in chat until it is Ready.',
+};
+const PIN_WORDS: SettingWords = {
+  absent: (name) => `${name} isn’t in this Designs folder. This project uses the default.`,
+  unset: 'This project uses the default.',
+  draftUntil: 'This project uses the default until it is Ready.',
 };
 
 /**
  * The `systems` part of the settings answer (§3.4): the default and each pin resolved against this root, and the
- * one-time notices. A choice that names a system which is gone, a draft or unreadable keeps its saved id (switching
- * back to the folder that has it restores it) and says why in `sentence`; the effective rules above treat it as unset.
+ * one-time notices. A choice that names a system which is not here, a draft or unreadable keeps its saved id and says
+ * why in `sentence`; the effective rules above treat it as unset.
  */
 export const settingsSystemsView = (input: {
   settings: Pick<SettingsFile, 'systemDefault' | 'systemPins'>;
@@ -99,13 +117,10 @@ export const settingsSystemsView = (input: {
 }): NonNullable<SettingsResponse['systems']> => {
   const { systems } = input;
   const saved = input.settings.systemDefault ?? { choice: 'ask' as const };
-  const view: SystemChoiceView =
-    saved.choice === 'system'
-      ? { ...saved, ...settingState(saved, systems, { gone: 'New designs ask you in chat.', draft: 'New designs ask you in chat until it is Ready.' }) }
-      : { ...saved, state: 'ok', sentence: null };
+  const view: SystemChoiceView = saved.choice === 'system' ? { ...saved, ...settingState(saved, systems, DEFAULT_WORDS) } : { ...saved, state: 'ok', sentence: null };
   const pins = (input.settings.systemPins ?? []).map((pin): SystemPinView => {
     if (pin.choice !== 'system' || pin.id === undefined) return { ...pin, state: 'ok', sentence: null };
-    return { ...pin, ...settingState({ id: pin.id, name: pin.name ?? pin.id }, systems, { gone: 'This project uses the default.', draft: 'This project uses the default until it is Ready.' }) };
+    return { ...pin, ...settingState({ id: pin.id, name: pin.name ?? pin.id }, systems, PIN_WORDS) };
   });
   return { default: view, pins, notices: [...input.notices] };
 };

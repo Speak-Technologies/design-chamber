@@ -72,9 +72,9 @@ test('the default round-trips and an unresolved one shows as Ask me each time', 
   assert.deepEqual(defaultFrom('system:acme', LIST), { choice: 'system', id: 'acme', name: 'Acme' });
   assert.deepEqual(defaultFrom('none', LIST), { choice: 'none' });
   assert.deepEqual(defaultFrom('system:wip', LIST), { choice: 'ask' });
-  const gone: SystemChoiceView = { choice: 'system', id: 'old', name: 'Old', state: 'deleted', sentence: 'Old was deleted.' };
+  const gone: SystemChoiceView = { choice: 'system', id: 'old', name: 'Old', state: 'missing', sentence: 'Your default design system isn’t in this Designs folder.' };
   assert.equal(defaultValue(gone), 'ask');
-  assert.equal(defaultSentence(gone), 'Old was deleted.');
+  assert.equal(defaultSentence(gone), 'Your default design system isn’t in this Designs folder.');
   assert.equal(defaultSentence(ok), null);
 });
 

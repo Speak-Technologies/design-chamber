@@ -52,15 +52,15 @@ describe('PUT /settings with systemDefault', () => {
     assert.deepEqual((await get(core)).systems.default, answer.json.systems.default);
   });
 
-  test('none is saved; a draft shows its sentence; a system that is not in this root shows deleted', async (t) => {
+  test('none is saved; a draft shows its sentence; a system that is not in this folder shows missing', async (t) => {
     const { core, wip } = await serve(t);
     assert.deepEqual((await put(core, { systemDefault: { choice: 'none' } })).json.systems.default, { choice: 'none', state: 'ok', sentence: null });
     const draft = (await put(core, { systemDefault: { choice: 'system', id: wip, name: 'Wip' } })).json.systems.default;
     assert.equal(draft.choice === 'system' && draft.state, 'draft');
     assert.equal(draft.sentence, 'Wip is a draft. New designs ask you in chat until it is Ready.');
     const gone = (await put(core, { systemDefault: { choice: 'system', id: 'gone', name: 'Gone' } })).json.systems.default;
-    assert.equal(gone.state, 'deleted');
-    assert.equal(gone.sentence, 'Gone was deleted. New designs ask you in chat.');
+    assert.equal(gone.state, 'missing');
+    assert.equal(gone.sentence, 'Your default design system isn’t in this Designs folder.');
   });
 
   test('ask and null both reset it, and neither leaves a key in the file', async (t) => {
@@ -103,7 +103,7 @@ describe('PUT /settings with systemPins', () => {
         ['/work/blog', 'none', 'ok', null],
         ['/work/docs', 'default', 'ok', null],
         ['/work/wip', 'system', 'draft', 'Wip is a draft. This project uses the default until it is Ready.'],
-        ['/work/old', 'system', 'deleted', 'Gone was deleted. This project uses the default.'],
+        ['/work/old', 'system', 'missing', 'Gone isn’t in this Designs folder. This project uses the default.'],
       ],
     );
     assert.deepEqual((await settingsFileOf(core)).systemPins, pins);
@@ -220,6 +220,31 @@ describe('saving is live, without a restart', () => {
     await put(core, { systemDefault: null });
     assert.equal(core.ctx.settings.read().systemDefault, undefined);
     assert.equal(heard.length, 2);
+  });
+});
+
+describe('switching the designs folder (spec: Changed designs folder)', () => {
+  test('a default and a pin naming a system from the old folder say so, are kept, and work again on switch-back', async (t) => {
+    const { core, acme } = await serve(t);
+    const first = { choice: 'system', id: acme, name: 'Acme' };
+    await put(core, { systemDefault: first, systemPins: [pin('/work/shop', 'system', { id: acme, name: 'Acme' })] });
+    const other = core.tmp.at('other-designs');
+
+    const away = await put(core, { root: other });
+    assert.equal(away.status, 200);
+    assert.deepEqual(away.json.systems.default, { ...first, state: 'missing', sentence: 'Your default design system isn’t in this Designs folder.' });
+    assert.deepEqual(
+      away.json.systems.pins.map((one) => [one.state, one.sentence]),
+      [['missing', 'Acme isn’t in this Designs folder. This project uses the default.']],
+    );
+    assert.deepEqual(away.json.systems.notices, [], 'nothing was deleted, so there is no deleted notice');
+    const file = await settingsFileOf(core);
+    assert.deepEqual(file.systemDefault, first, 'the default stays in the file');
+    assert.equal((file.systemPins as unknown[]).length, 1);
+
+    const back = await put(core, { root: core.root });
+    assert.deepEqual(back.json.systems.default, { ...first, state: 'ok', sentence: null });
+    assert.equal(back.json.systems.pins[0]?.state, 'ok');
   });
 });
 
