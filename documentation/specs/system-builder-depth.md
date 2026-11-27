@@ -701,3 +701,14 @@ frame, a component missing its `disabled` instance; the run must report each onc
 ---
 
 Architecture Complete → main agent (task breakdown) | → rules (T1, T2), backend-developer (T3 to T7), ui-ux-developer (T8)
+
+## Decisions (the user, 2026-11-27)
+These answer the open questions above and are binding for every task.
+1. Default depth: recommend the core set, and the interview asks whether the user wants the full system instead.
+2. Responsive patterns and page templates live as screens inside the system folder.
+3. Token export (Phase 3): W3C design tokens JSON plus CSS first; Tailwind only when the project uses it.
+4. Completeness check: warnings only for full systems; a gap the agent marks out of scope stops counting.
+5. Social and email templates: fixed-size screens in Phase 2.
+6. System file limit 200 to 400, icons capped at 150.
+7. The dark pass is on by default whenever a system has dark values.
+8. Scope: all three phases are built in this run, one PR per phase, each merged before the next starts.
