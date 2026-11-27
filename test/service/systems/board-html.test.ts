@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { buildSystemDetail, parseSystemState } from '../../../src/shared/system-json.ts';
 import { BOARD_ENTRY_PATTERN, darkVarOf, entryKeyOf, isBoardEntryKey, parseEntryKey, sectionOfEntry, typeVarOf } from '../../../src/shared/system-board.ts';
 import type { SystemDetail, SystemToken } from '../../../src/shared/types.ts';
-import { BOARD_GENERATOR_VERSION, buildBoardHtml, EAGER_SECTIONS_CSS, escapeHtml } from '../../../src/service/systems/board-html.ts';
+import { BOARD_GENERATOR_VERSION, BOARD_POINTER_VAR, buildBoardHtml, EAGER_SECTIONS_CSS, escapeHtml } from '../../../src/service/systems/board-html.ts';
 
 const NOW = '2026-11-20T10:00:00.000Z';
 
@@ -246,8 +246,8 @@ test('eager: the check lays every section out; the page leaves off-screen sectio
   assert.ok(check.indexOf(EAGER_SECTIONS_CSS) > check.indexOf('content-visibility: auto'));
 });
 
-test('the generator version is 8 (builder depth Phase 1 was 7), so boards cached before motion specimens and the icon grid are made again', () => {
-  assert.equal(BOARD_GENERATOR_VERSION, 8);
+test('the generator version is 9 (8 brought motion specimens and the icon grid), so boards cached before the demo could play under the reported pointer are made again', () => {
+  assert.equal(BOARD_GENERATOR_VERSION, 9);
 });
 
 test('the board script measures .dc-fit (cards and table rows) and re-measures on load, fonts.ready and <html> style', () => {
@@ -306,4 +306,15 @@ test('table and full runs render their containers; compact components keep dc-co
   assert.ok(!full.includes('class="dc-card dc-fit"'), 'a full card is already the whole width');
   const compact = buildBoardHtml({ ...base, components: base.components.map((component) => ({ ...component, layout: 'compact' as const })) }, { scheme: 'light' });
   assert.ok(compact.includes('<div class="dc-grid dc-components dc-run-compact">'));
+});
+
+test('a motion demo plays under the pointer the page reports: the script reads the variable and the CSS moves a playing chip', () => {
+  const html = buildBoardHtml(makeDetail(), { scheme: 'light' });
+  assert.ok(html.includes(`getPropertyValue('${BOARD_POINTER_VAR}')`));
+  assert.ok(html.includes("closest('.dc-motion-demo')"));
+  assert.match(html, /\.dc-motion-demo\.dc-playing \.dc-motion-chip \{ left: calc\(100% - 18px\); \}/);
+  // Reduced motion: a playing chip stays where it is, as a hovered one does.
+  assert.match(html, /@media \(prefers-reduced-motion: reduce\) \{\n {2}\.dc-motion-demo\.dc-playing \.dc-motion-chip \{ left: 2px; \}\n\}/);
+  // The pointer alone never measures the cards again.
+  assert.ok(html.includes('new MutationObserver(styleChanged)'));
 });

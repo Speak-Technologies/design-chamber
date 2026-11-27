@@ -15,8 +15,18 @@ import { AREA_TITLES, CURRENT_COLOR_CSS, escapeHtml, GROUND_TEXT, renderSpecimen
 
 export { escapeHtml } from './specimen-html.ts';
 
-/** Bumped when the generated document changes shape, so cached boards are not reused (8: motion specimens, the icon grid). */
-export const BOARD_GENERATOR_VERSION = 8;
+/**
+ * Bumped when the generated document changes shape, so cached boards are not reused (8: motion specimens, the icon grid;
+ * 9: a motion demo plays under the pointer the page reports, `BOARD_POINTER_VAR`).
+ */
+export const BOARD_GENERATOR_VERSION = 9;
+
+/**
+ * The page's click layer lies over the board's frame, so the frame never sees the pointer and `:hover` never matches. The page
+ * reports where the pointer is (frame px, "x y") as this custom property on `<html>`, through the same token preview message it
+ * uses for the host theme; the board script plays the motion demo under that point. Advisory only: it moves a chip.
+ */
+export const BOARD_POINTER_VAR = '--dc-board-pointer';
 
 /** The virtual entry the board is bundled from (never a file on disk). */
 export const BOARD_ENTRY_FILE = '__board.html';
@@ -96,6 +106,11 @@ ${CURRENT_COLOR_CSS}
 @media (prefers-reduced-motion: reduce) {
   .dc-motion-chip { transition: none !important; }
   .dc-motion-demo:hover .dc-motion-chip, .dc-motion-demo:focus .dc-motion-chip { left: 2px; }
+}
+/* Played under the pointer the page reports (BOARD_POINTER_VAR), as on hover; still under reduced motion. */
+.dc-motion-demo.dc-playing .dc-motion-chip { left: calc(100% - 18px); }
+@media (prefers-reduced-motion: reduce) {
+  .dc-motion-demo.dc-playing .dc-motion-chip { left: 2px; }
 }
 .dc-logo { max-width: 100%; max-height: 96px; display: block; margin: 0 auto; }
 .dc-text p, .dc-body p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -252,7 +267,29 @@ const BOARD_SCRIPT = `(function () {
   window.addEventListener('resize', schedule);
   window.addEventListener('load', schedule);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(schedule);
-  if (window.MutationObserver) new MutationObserver(schedule).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+  // The motion demo under the pointer the page reports (BOARD_POINTER_VAR) plays, as it would on hover.
+  var playing = null;
+  var play = function () {
+    var raw = getComputedStyle(document.documentElement).getPropertyValue('${BOARD_POINTER_VAR}').trim().split(/\\s+/);
+    var x = Number(raw[0]);
+    var y = Number(raw[1]);
+    var under = raw.length === 2 && isFinite(x) && isFinite(y) ? document.elementFromPoint(x, y) : null;
+    var demo = under && under.closest ? under.closest('.dc-motion-demo') : null;
+    if (demo === playing) return;
+    if (playing) playing.classList.remove('dc-playing');
+    playing = demo;
+    if (playing) playing.classList.add('dc-playing');
+  };
+  // Only a change other than the pointer can move a preview's width, so the pointer alone never measures again.
+  var pointerFree = function () { return (document.documentElement.getAttribute('style') || '').replace(/${BOARD_POINTER_VAR}:[^;]*;?/, ''); };
+  var lastStyle = pointerFree();
+  var styleChanged = function () {
+    var next = pointerFree();
+    if (next !== lastStyle) { lastStyle = next; schedule(); }
+    play();
+  };
+  if (window.MutationObserver) new MutationObserver(styleChanged).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+  play();
   if (cards.length > 0) widen();
 })();`;
 

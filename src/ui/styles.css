@@ -4112,6 +4112,32 @@ button.dc-syspg-title:focus-visible {
 .dc-syspg-views[hidden] {
   display: none;
 }
+/* With the switch on show, the switch and the build strip share one row, the strip wrapping under the switch when the row is
+   too narrow for both. Without it the head has no box of its own and the strip floats over the board as before. */
+.dc-syspg[data-views='true'] .dc-syspg-stagehead {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--dc-s2);
+  margin: var(--dc-s3) var(--dc-s4) 0;
+}
+.dc-syspg[data-views='true'] .dc-syspg-stagehead > .dc-syspg-views {
+  margin: 0;
+}
+/* Only a strip on show joins the row; a hidden one stays the out-of-flow live region it always is, so nothing is announced late. */
+.dc-syspg[data-views='true'] .dc-syspg-build:has(> .dc-build:not([data-phase='hidden'])) {
+  position: static;
+  display: flex;
+  flex: 1 1 12rem;
+  min-width: 0;
+  height: auto;
+}
+.dc-syspg[data-views='true'] .dc-syspg-build > .dc-build:not([data-phase='hidden']) {
+  position: static;
+  max-width: 100%;
+  margin: 0;
+}
 .dc-syspg-view {
   min-height: 28px;
   padding: 0 var(--dc-s3);
@@ -4176,6 +4202,23 @@ button.dc-syspg-title:focus-visible {
   white-space: nowrap;
   font-size: 0.8125rem;
 }
+/* The rail is too narrow for the screen's name beside the controls: the name takes the first line, whole, and they the second. */
+.dc-sysscr[data-surface='panel'] .dc-sysscr-bar {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+.dc-sysscr[data-surface='panel'] .dc-sysscr-count {
+  order: -1;
+  flex: 1 0 100%;
+  padding-top: var(--dc-s1);
+  color: var(--oc-fg);
+  font-weight: 600;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.dc-sysscr[data-surface='panel'] .dc-sysscr-bar .dc-group {
+  margin-left: auto;
+}
 .dc-sysscr-wall {
   position: relative;
   inset: auto;
@@ -4205,6 +4248,8 @@ button.dc-syspg-title:focus-visible {
 }
 .dc-sysscr[data-state='loading'] .dc-sysscr-wall,
 .dc-sysscr[data-state='empty'] .dc-sysscr-wall,
+.dc-sysscr[data-state='unreadable'] .dc-sysscr-wall,
+.dc-sysscr[data-state='unreadable'] .dc-sysscr-listwrap,
 .dc-sysscr[data-view='list'] .dc-sysscr-wall,
 .dc-sysscr:not([data-view='list']) .dc-sysscr-listwrap,
 .dc-sysscr[data-state='loading'] .dc-sysscr-listwrap,
@@ -4281,7 +4326,8 @@ button.dc-syspg-title:focus-visible {
   padding: var(--dc-s2) var(--dc-s3) var(--dc-s3);
   font-size: 0.75rem;
 }
-.dc-syspg[data-surface='panel'] .dc-syspg-views {
+.dc-syspg[data-surface='panel'] .dc-syspg-views,
+.dc-syspg[data-surface='panel'][data-views='true'] .dc-syspg-stagehead {
   margin: var(--dc-s2) var(--dc-s2) 0;
 }
 .dc-syspg[data-surface='panel'] .dc-sysscr {
@@ -4292,7 +4338,8 @@ button.dc-syspg-title:focus-visible {
   flex-basis: 66%;
 }
 @media (max-width: 620px) {
-  .dc-syspg[data-surface='page'] .dc-syspg-views {
+  .dc-syspg[data-surface='page'] .dc-syspg-views,
+  .dc-syspg[data-surface='page'][data-views='true'] .dc-syspg-stagehead {
     margin: var(--dc-s2) var(--dc-s3) 0;
   }
   .dc-syspg[data-surface='page'] .dc-sysscr {

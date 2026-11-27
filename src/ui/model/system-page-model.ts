@@ -439,6 +439,14 @@ export const railHint = (detail: Pick<SystemDetail, 'home' | 'name'>): string =>
     ? `${detail.name} lives in ${detail.home.label}. Change the values there, or ask the agent here.`
     : 'To edit values, open Design Chamber full screen: sidebar, Extension pages, Design Chamber.';
 
+/**
+ * The pointer over the board as the board's own variable (`BOARD_POINTER_VAR` in the board document): frame px, whole, "x y".
+ * The board plays the motion demo under it, since the page's click layer keeps real hover from the frame.
+ */
+export const BOARD_POINTER_NAME = '--dc-board-pointer';
+export const boardPointerVar = (x: number, y: number): { name: string; value: string } | null =>
+  Number.isFinite(x) && Number.isFinite(y) && x >= 0 && y >= 0 ? { name: BOARD_POINTER_NAME, value: `${Math.round(x)} ${Math.round(y)}` } : null;
+
 /** The colour scheme the board is drawn in follows the host. */
 export const boardScheme = (mode: 'light' | 'dark' | undefined): 'light' | 'dark' => (mode === 'dark' ? 'dark' : 'light');
 
@@ -511,6 +519,15 @@ export const SCREENS_RAIL_HINT = 'To see every screen side by side, open Design 
  * empty state has somewhere to live when the agent removes the last screen and the way back to the board stays put.
  */
 export const screensTabShown = (detail: Pick<SystemDetail, 'screens'>, view: StageView): boolean => detail.screens.length > 0 || view === 'screens';
+
+/**
+ * What the Screens view and its switch are given. While `system.json` can't be read the detail lists no screens; the last
+ * readable list stands in, so a moment of invalid JSON mid-write never reads as "no screens".
+ */
+export const screensSource = (next: SystemDetail, lastReadable: SystemDetail | null): SystemDetail =>
+  next.unreadable !== null && lastReadable !== null ? { ...next, screens: lastReadable.screens, viewports: lastReadable.viewports } : next;
+
+export const SCREENS_UNREADABLE = 'This system can’t be read right now, so its screens can’t be shown. They come back once the agent’s files are valid again.';
 
 /** A screen's own sizes replace the system's (fixed-size social and email templates, owner decision 5). */
 export const screenViewports = (screen: Pick<SystemScreen, 'viewports'>, system: readonly Viewport[]): readonly Viewport[] =>

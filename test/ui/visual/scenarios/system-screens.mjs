@@ -14,6 +14,9 @@ const surfaceName = (surface) => (surface === 'panel' ? 'rail' : 'page');
 const READY = '.dc-sysscr-board[data-state="ready"]';
 const zoom = (p) => text(p, '.dc-sysscr .dc-zoom-label');
 const world = (p) => p.guest('return doc.querySelector(".dc-sysscr .dc-wall-world")?.style.transform ?? ""');
+const box = (p, selector) => p.guest(`const n = doc.querySelector(${JSON.stringify(selector)}); if (!n) return null; const r = n.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom }`);
+const overlaps = (a, b) => a !== null && b !== null && a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b;
+const SESSION = 'ses_harbor';
 
 const openList = async (p, surface) => {
   if (surface === 'panel') await p.click('.dc-rail-head .dc-iconbtn[aria-label="Design systems"]');
@@ -50,6 +53,32 @@ const flow = async (h, surface, width, theme) => {
   await openSystem(h, p, 'harbor', tag);
   const tabs = await p.guest('return [...doc.querySelectorAll(".dc-syspg-view")].map((b) => b.textContent.trim() + ":" + b.getAttribute("aria-pressed")).join("|")');
   h.check(tabs === 'Board:true|Screens (4):false', `${tag}: the switch reads Board, Screens (4) (${tabs})`);
+
+  // ---- the agent is writing: its strip and the switch share the head and never overlap, and Screens still takes the click
+  await p.host(`${FAKE}.systems.setSession('harbor', '${SESSION}')`);
+  // The page learns the link on its next load of the system (an event), then hears the chat start.
+  await p.host(`${FAKE}.systems.redrawScreens('harbor')`);
+  await p.settle(800);
+  await p.host(`window.__host.setActivity('${SESSION}', 'running')`);
+  await h.checkSoon(async () => (await p.guest('return doc.querySelector(".dc-syspg .dc-build")?.dataset.phase ?? "hidden"')) !== 'hidden', `${tag}: the build strip shows while the agent works`);
+  await p.host(`${FAKE}.systems.redrawScreens('harbor')`);
+  await p.settle(500);
+  const strip = await box(p, '.dc-syspg .dc-build');
+  const views = await box(p, '.dc-syspg-views');
+  h.check(!overlaps(strip, views), `${tag}: the strip doesn't cover the switch (${JSON.stringify(strip)} vs ${JSON.stringify(views)})`);
+  const stage = await box(p, '.dc-syspg-stage');
+  h.check(strip !== null && stage !== null && strip.l >= stage.l && strip.r <= stage.r + 0.5, `${tag}: the strip stays inside the stage`);
+  h.check(await noOverflow(p), `${tag}: nothing scrolls sideways while the agent works`);
+  await p.shot(`${tag}-0-writing`);
+  const target = await p.rect('.dc-syspg-view', 1);
+  const under = await p.guest(`const n = doc.elementFromPoint(${target.x + target.w / 2}, ${target.y + target.h / 2}); return n ? n.closest(".dc-syspg-view")?.textContent ?? n.className : ""`);
+  h.check(under.startsWith('Screens'), `${tag}: the Screens button is what lies under its own middle (${under})`);
+  await p.clickAt(target.x + target.w / 2, target.y + target.h / 2);
+  await h.checkSoon(async () => (await p.guest('return doc.querySelector(".dc-syspg")?.dataset.stageView')) === 'screens', `${tag}: Screens takes the click mid-write`);
+  await p.click('.dc-syspg-view', { text: 'Board' });
+  await p.host(`window.__host.setActivity('${SESSION}', 'idle', 'completed')`);
+  await p.settle(300);
+
   await p.click('.dc-syspg-view', { text: 'Screens' });
   await h.checkSoon(async () => (await p.guest('return doc.querySelector(".dc-syspg")?.dataset.stageView')) === 'screens', `${tag}: Screens is on the stage`);
   h.check(!(await visible(p, '.dc-sys-board')), `${tag}: the board steps aside`);
@@ -65,6 +94,17 @@ const flow = async (h, surface, width, theme) => {
     await p.click('.dc-sysscr-row[data-screen="dashboard"]');
     await h.checkSoon(async () => (await count(p, READY)) === 2, `${tag}: Dashboard opens at its two sizes`);
     h.check((await text(p, '.dc-sysscr-count')) === 'Dashboard', `${tag}: the bar names the screen`);
+    const nameFits = await p.guest('const n = doc.querySelector(".dc-sysscr-count"); return !!n && n.scrollWidth <= n.clientWidth + 1');
+    h.check(nameFits, `${tag}: the screen's name is shown whole`);
+    // Back to the list: focus returns to the row that was opened, not the first one.
+    await p.click('.dc-sysscr-bar button', { text: 'All screens' });
+    await h.checkSoon(async () => (await p.guest('return doc.activeElement?.dataset?.screen ?? ""')) === 'dashboard', `${tag}: All screens puts focus back on Dashboard`);
+    await p.click('.dc-sysscr-row[data-screen="launch-card"]');
+    await h.checkSoon(async () => (await count(p, READY)) === 1, `${tag}: Launch card opens`);
+    await p.key('Escape', { focus: '.dc-sysscr-wall' });
+    await h.checkSoon(async () => (await p.guest('return doc.activeElement?.dataset?.screen ?? ""')) === 'launch-card', `${tag}: Escape puts focus back on Launch card, the row that was opened`);
+    await p.click('.dc-sysscr-row[data-screen="dashboard"]');
+    await h.checkSoon(async () => (await count(p, READY)) === 2, `${tag}: Dashboard opens again`);
   } else {
     await h.checkSoon(async () => (await count(p, READY)) >= 4, `${tag}: the screens draw (${await count(p, READY)} ready)`);
     h.check((await count(p, '.dc-sysscr-board')) === 6, `${tag}: six artboards: Dashboard at two sizes, one each for the state and the card, two for the refused one (${await count(p, '.dc-sysscr-board')})`);
@@ -124,6 +164,17 @@ const flow = async (h, surface, width, theme) => {
   await p.host(`window.__host.setTheme(${JSON.stringify(theme)})`);
   await p.settle(500);
 
+  // ---- system.json is half written for a moment: the last good screens stay, never "no screens"
+  await p.host(`${FAKE}.systems.patchDetail('harbor', { unreadable: 'system.json isn’t valid JSON.', screens: [] })`);
+  await p.host(`${FAKE}.systems.redrawScreens('harbor')`);
+  await p.settle(800);
+  h.check(!(await text(p, '.dc-sysscr-message')).includes('No screens yet'), `${tag}: an unreadable system.json never reads as no screens`);
+  h.check((await p.guest('return [...doc.querySelectorAll(".dc-syspg-view")].map((b) => b.textContent.trim()).join("|")')) === 'Board|Screens (4)', `${tag}: the switch keeps the last good count`);
+  h.check((await count(p, '.dc-sysscr-board')) > 0 || (await count(p, '.dc-sysscr-row')) === 4, `${tag}: the last good screens stay on show`);
+  await p.shot(`${tag}-4b-unreadable`);
+  await p.host(`${FAKE}.systems.restoreScreens('harbor')`);
+  await p.settle(800);
+
   // ---- the agent removes every screen
   await p.host(`${FAKE}.systems.setScreens('harbor', [])`);
   await h.checkSoon(async () => (await text(p, '.dc-sysscr-message')).includes('No screens yet. Ask the agent to add page templates.'), `${tag}: the empty state says what goes here`);
@@ -136,7 +187,7 @@ const flow = async (h, surface, width, theme) => {
 };
 
 export const run = async (h) => {
-  for (const [surface, width] of [['page', 1400], ['panel', 320], ['panel', 480]]) {
+  for (const [surface, width] of [['page', 1400], ['panel', 320], ['panel', 360], ['panel', 480]]) {
     for (const theme of ['light', 'dark']) await flow(h, surface, width, theme);
   }
 };

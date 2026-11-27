@@ -23,6 +23,7 @@ import { liveBoards } from '../model/wall-model.ts';
 import {
   SCREENS_EMPTY,
   SCREENS_RAIL_HINT,
+  SCREENS_UNREADABLE,
   SCREEN_GONE,
   SCREEN_KIND_LABEL,
   bestWrap,
@@ -233,7 +234,8 @@ export const mountSystemScreens = (options: ScreensOptions): ScreensHandle => {
     } else if (state === 'idle' || state === 'loading') {
       mountSpinner(inner, { label: `Loading ${cell.art.title}…` });
     } else if (state === 'missing') {
-      append(inner, icon('layers', 20), h('p', { class: 'dc-placeholder-title' }, SCREEN_GONE), h('p', { class: 'dc-placeholder-sub' }, cell.slot?.error() ?? ''), retry());
+      const said = cell.slot?.error() ?? '';
+      append(inner, icon('layers', 20), h('p', { class: 'dc-placeholder-title' }, SCREEN_GONE), said === '' || said === SCREEN_GONE ? null : h('p', { class: 'dc-placeholder-sub' }, said), retry());
     } else if (state === 'error') {
       append(inner, icon('warning', 20), h('p', { class: 'dc-placeholder-title' }, 'This screen didn’t load'), h('p', { class: 'dc-placeholder-sub' }, cell.slot?.error() ?? 'Try again in a moment.'), retry());
     }
@@ -340,12 +342,13 @@ export const mountSystemScreens = (options: ScreensOptions): ScreensHandle => {
 
   const paint = (): void => {
     const screens = detail?.screens ?? [];
-    const state = detail === null ? 'loading' : screens.length === 0 ? 'empty' : 'ready';
+    const state = detail === null ? 'loading' : screens.length === 0 ? (detail.unreadable !== null ? 'unreadable' : 'empty') : 'ready';
     el.dataset.state = state;
     const listing = compact && picked === null && state === 'ready';
     el.dataset.view = listing ? 'list' : 'wall';
     message.replaceChildren();
     if (state === 'loading') mountSpinner(message, { label: 'Loading the screens…' });
+    else if (state === 'unreadable') message.append(h('p', { class: 'dc-sys-board-message' }, SCREENS_UNREADABLE));
     else if (state === 'empty') {
       message.append(h('p', { class: 'dc-sys-board-message' }, SCREENS_EMPTY), btn({ label: 'Back to the board', variant: 'outline', size: 'sm', onClick: () => options.onBoard() }).el);
     }
@@ -357,6 +360,7 @@ export const mountSystemScreens = (options: ScreensOptions): ScreensHandle => {
   };
 
   function pick(screen: string | null): void {
+    const opened = picked;
     picked = screen;
     paint();
     if (screen !== null) {
@@ -373,7 +377,9 @@ export const mountSystemScreens = (options: ScreensOptions): ScreensHandle => {
         cell.slot?.unload();
         paintPlaceholder(cell);
       }
-      list.querySelector<HTMLElement>('.dc-sysscr-row')?.focus();
+      // Back where the user was: the row they opened, else the first one.
+      const rows = [...list.querySelectorAll<HTMLElement>('.dc-sysscr-row')];
+      (rows.find((row) => row.dataset.screen === opened) ?? rows[0])?.focus();
     }
   }
 
@@ -450,7 +456,9 @@ export const mountSystemScreens = (options: ScreensOptions): ScreensHandle => {
     }
   });
 
+  // While system.json can't be read the screens on show are the last good ones; the route can't serve them until it reads again.
   const reloadLive = (): void => {
+    if (detail?.unreadable != null) return;
     for (const cell of cells) if (cell.live) void loadCell(cell);
   };
 
@@ -459,6 +467,7 @@ export const mountSystemScreens = (options: ScreensOptions): ScreensHandle => {
   return {
     el,
     setDetail: (next) => {
+      const wasUnreadable = detail?.unreadable != null;
       detail = next;
       const nextStructure = structureOf(next);
       if (nextStructure !== structure) {
@@ -475,6 +484,8 @@ export const mountSystemScreens = (options: ScreensOptions): ScreensHandle => {
         paintList();
         paint();
       }
+      // Readable again after a half-written system.json: draw the loaded screens from the files as they are now.
+      if (wasUnreadable && next !== null && next.unreadable === null) reloadLive();
     },
     reload: reloadLive,
     setVersion: (next) => {

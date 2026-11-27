@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import type { SystemScreen, Viewport } from '../../src/shared/types.ts';
+import type { SystemDetail, SystemScreen, Viewport } from '../../src/shared/types.ts';
+import { BOARD_POINTER_VAR } from '../../src/service/systems/board-html.ts';
 import {
   SCREENS_EMPTY,
   SCREEN_KIND_LABEL,
+  BOARD_POINTER_NAME,
   bestWrap,
+  boardPointerVar,
+  screensSource,
   cellsOf,
   screenRowLabel,
   screenRowMeta,
@@ -123,4 +127,26 @@ test('the live-frame budget keeps the screens nearest the centre (the wall’s o
 test('the zoom reads as a whole percentage', () => {
   assert.equal(zoomText(1), '100%');
   assert.equal(zoomText(0.4567), '46%');
+});
+
+test('while system.json can’t be read, the last readable screens stand in; never "no screens"', () => {
+  const good = { unreadable: null, screens: [screen('home')], viewports: system } as unknown as SystemDetail;
+  const broken = { unreadable: 'system.json isn’t valid JSON.', screens: [], viewports: [] } as unknown as SystemDetail;
+  const shown = screensSource(broken, good);
+  assert.deepEqual(shown.screens.map((entry) => entry.id), ['home']);
+  assert.deepEqual(shown.viewports, system);
+  // It stays unreadable, so the view knows not to ask the route for files it can't read yet.
+  assert.equal(shown.unreadable, 'system.json isn’t valid JSON.');
+  // Readable: the detail as it is, even when the agent removed every screen.
+  const emptied = { unreadable: null, screens: [], viewports: system } as unknown as SystemDetail;
+  assert.equal(screensSource(emptied, good), emptied);
+  // Never readable yet: nothing to stand in.
+  assert.equal(screensSource(broken, null), broken);
+});
+
+test('the pointer reaches the board as whole frame px under the name the board script reads', () => {
+  assert.equal(BOARD_POINTER_NAME, BOARD_POINTER_VAR);
+  assert.deepEqual(boardPointerVar(120.4, 33.6), { name: BOARD_POINTER_VAR, value: '120 34' });
+  assert.equal(boardPointerVar(-1, 10), null);
+  assert.equal(boardPointerVar(Number.NaN, 10), null);
 });

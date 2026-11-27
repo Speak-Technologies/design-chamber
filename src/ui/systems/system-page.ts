@@ -52,6 +52,7 @@ import {
   reviewFoot,
   reviewProgress,
   sectionOfHit,
+  screensSource,
   screensTabShown,
   sourceText,
   unreviewedSections,
@@ -147,6 +148,8 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
   let phoneView: PhoneView = 'board';
   /** The stage shows the specimen board or the system's screens (T13). */
   let stageView: StageView = 'board';
+  /** The last detail whose `system.json` could be read: its screens stand in while the agent's write is half done. */
+  let lastReadable: SystemDetail | null = null;
   let disposed = false;
   let versionsSheet: { close: () => void } | null = null;
   let versions: SystemVersionsHandle | null = null;
@@ -218,9 +221,11 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     screens: h('button', { type: 'button', class: 'dc-syspg-view', 'aria-pressed': 'false', onClick: () => setStageView('screens') }, 'Screens'),
   };
   const views = h('div', { class: 'dc-syspg-views oc-segmented', role: 'group', 'aria-label': 'Show on the stage', hidden: true }, viewButtons.board, viewButtons.screens);
-  stage.append(views, board.el, screens.el, askBar.el);
+  // The build strip floats over the board; with the switch on show it shares the switch's row instead (and wraps under it when
+  // the rail is too narrow for both), so it never covers the switch.
   const buildHost = h('div', { class: 'dc-syspg-build' });
-  stage.prepend(buildHost);
+  const stageHead = h('div', { class: 'dc-syspg-stagehead' }, views, buildHost);
+  stage.append(stageHead, board.el, screens.el, askBar.el);
   const build: SystemBuildHandle = mountSystemBuild({
     id,
     host: buildHost,
@@ -308,7 +313,8 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       icons.invalidate();
       living = nextLiving;
       load = 'ready';
-      screens.setDetail(next);
+      if (next.unreadable === null) lastReadable = next;
+      screens.setDetail(screensSource(next, lastReadable));
       if (!isCovered(next, section) && !expanded.size) section = SYSTEM_SECTIONS.find((candidate) => isCovered(next, candidate)) ?? 'overview';
       expanded.add(AREA_OF_SECTION[section]);
     } catch (error) {
@@ -1020,13 +1026,15 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
 
   /** The Board and Screens switch, and which of the two is on the stage. */
   function paintViews(building = load === 'ready' && detail !== null && repoHome() !== null && detail.snapshot === null): void {
-    const showTabs = !building && load === 'ready' && detail !== null && screensTabShown(detail, stageView);
+    const shown = detail === null ? null : screensSource(detail, lastReadable);
+    const showTabs = !building && load === 'ready' && shown !== null && screensTabShown(shown, stageView);
     if (!showTabs && stageView === 'screens' && (building || load !== 'ready')) stageView = 'board';
     el.dataset.stageView = stageView;
+    el.dataset.views = String(showTabs);
     views.hidden = !showTabs;
     viewButtons.board.setAttribute('aria-pressed', String(stageView === 'board'));
     viewButtons.screens.setAttribute('aria-pressed', String(stageView === 'screens'));
-    viewButtons.screens.textContent = detail !== null && detail.screens.length > 0 ? `Screens (${detail.screens.length})` : 'Screens';
+    viewButtons.screens.textContent = shown !== null && shown.screens.length > 0 ? `Screens (${shown.screens.length})` : 'Screens';
     board.el.hidden = building || stageView !== 'board';
     screens.setActive(!building && stageView === 'screens');
   }
@@ -1288,10 +1296,10 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     if (refreshTimer !== null) clearTimeout(refreshTimer);
     refreshTimer = setTimeout(() => {
       refreshTimer = null;
-      void reload();
-      if (files && viewing === null) {
-        reloadStage();
-      }
+      // The board and screens draw once the system is read again, so a half-written system.json is known before they ask.
+      void reload().then(() => {
+        if (files && viewing === null && !disposed) reloadStage();
+      });
     }, 300);
   });
   const stopSession = guestHost.session.subscribe(() => syncAsk());

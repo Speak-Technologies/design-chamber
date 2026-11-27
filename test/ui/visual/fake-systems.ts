@@ -655,6 +655,8 @@ export type FakeSystems = {
     // ---- system-builder-depth T13 hooks ----
     /** The system's screens from now on, then a `system` files event for it (the Screens view lays out again). */
     setScreens: (id: string, screens: SystemScreen[]) => void;
+    /** The sample screens and a readable system.json again (after a scenario made it unreadable), with a files event. */
+    restoreScreens: (id: string) => void;
     /** A `system` files event for the system, as an agent turn sends one (loaded screens draw again). */
     redrawScreens: (id: string) => void;
     /** Screen renders answer a failure until `null` (every screen, or only this id). */
@@ -1242,6 +1244,14 @@ export const createFakeSystems = (deps: {
       setScreens: (id, screens) => {
         const detail = detailFor(find(id));
         detail.screens = structuredClone(screens);
+        detail.revision += 1;
+        if (deps.emitSystem) deps.emitSystem(id, 'files');
+        else deps.emit(null, 'system');
+      },
+      restoreScreens: (id) => {
+        const detail = detailFor(find(id));
+        detail.unreadable = null;
+        detail.screens = sampleScreens();
         detail.revision += 1;
         if (deps.emitSystem) deps.emitSystem(id, 'files');
         else deps.emit(null, 'system');
