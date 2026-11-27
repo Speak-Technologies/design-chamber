@@ -9,10 +9,11 @@ import path from 'node:path';
 
 import { SYSTEM_JSON_MAX_BYTES, SYSTEM_NOTE_MAX, SYSTEM_OVERVIEW_MAX, TOKENS_CSS_MAX_BYTES } from '../../shared/limits.ts';
 import { buildSystemDetail, type SystemDetailSource } from '../../shared/system-json.ts';
-import type { SystemComponent, SystemDetail, SystemState } from '../../shared/types.ts';
+import type { SystemComponent, SystemDetail, SystemEntryText, SystemState } from '../../shared/types.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource, type FileSource, type SourceFile } from '../bundle.ts';
 import { checkAsset } from './assets.ts';
 import { BOARD_ENTRY_FILE, buildBoardHtml } from './board-html.ts';
+import { exampleFileOf, exampleKeyOf, type ExampleKind } from './specimen-html.ts';
 import { listFiles, proposalDirOf, readProposalFile, readProposalsRecord, sha256Of } from './proposal-record.ts';
 import type { SystemStore } from './store.ts';
 
@@ -82,28 +83,30 @@ const bundleOrThrow = async (source: FileSource, rel: string, mode: 'render' | '
 };
 
 /**
- * The board document for one detail and file source: each component example bundled on its own
- * (relative to `components/`, export mode, so its remote refs are reported per component), fonts and
- * logos checked with `checkAsset` before the board names them, then `buildBoardHtml`. `assetKeys`
- * are the `file:sha256` parts the board cache keys on. Moved from the board service, not copied.
+ * The board document for one detail and file source: each live example bundled on its own (relative to
+ * its folder, export mode, so its remote refs are reported per entry): components', and since
+ * system-builder-depth D4 pattern and brand entries', exactly alike. Fonts and logos are checked with
+ * `checkAsset` before the board names them, then `buildBoardHtml`. `assetKeys` are the `file:sha256`
+ * parts the board cache keys on. `components`, `patterns` and `brand` carry the remote refs found.
  */
 export const assembleBoardHtml = async (
   detail: SystemDetail,
   source: FileSource,
   scheme: 'light' | 'dark',
   options: { eager?: boolean } = {},
-): Promise<{ html: string; components: SystemComponent[]; assetKeys: string[] }> => {
+): Promise<{ html: string; components: SystemComponent[]; patterns: SystemEntryText[]; brand: SystemEntryText[]; assetKeys: string[] }> => {
   const examples: Record<string, string> = {};
   const assetKeys: string[] = [];
-  const components = await Promise.all(
-    detail.components.map(async (component) => {
-      if (component.example === null) return component;
-      const bundled = await bundleOrThrow(source, `components/${component.id}.html`, 'export');
-      if (bundled === null) return component;
-      examples[component.id] = bundled.html;
-      return { ...component, example: { remote: bundled.external } };
-    }),
-  );
+  const withExample = async <T extends { id: string; example: { remote: string[] } | null }>(kind: ExampleKind, entry: T): Promise<T> => {
+    if (entry.example === null) return entry;
+    const bundled = await bundleOrThrow(source, exampleFileOf(kind, entry.id), 'export');
+    if (bundled === null) return entry;
+    examples[exampleKeyOf(kind, entry.id)] = bundled.html;
+    return { ...entry, example: { remote: bundled.external } };
+  };
+  const components = await Promise.all(detail.components.map((component) => withExample('component', component)));
+  const patterns = await Promise.all(detail.patterns.map((entry) => withExample('pattern', entry)));
+  const brand = await Promise.all(detail.brand.map((entry) => withExample('brand', entry)));
 
   const unusable = new Set<string>();
   for (const { file, kind } of [...detail.fonts.map((font) => ({ file: font.file, kind: 'font' as const })), ...detail.logos.map((logo) => ({ file: logo.file, kind: 'logo' as const }))]) {
@@ -112,8 +115,8 @@ export const assembleBoardHtml = async (
     else assetKeys.push(`${file}:${sha256Of(bytes.bytes)}`);
   }
 
-  const html = buildBoardHtml({ ...detail, components }, { scheme, examples, unusable, ...(options.eager === true ? { eager: true } : {}) });
-  return { html, components, assetKeys };
+  const html = buildBoardHtml({ ...detail, components, patterns, brand }, { scheme, examples, unusable, ...(options.eager === true ? { eager: true } : {}) });
+  return { html, components, patterns, brand, assetKeys };
 };
 
 /**

@@ -22,8 +22,10 @@ import {
   LIVING_EXAMPLES_CACHE_MAX,
   LIVING_PAGE_ASSET_MAX_BYTES,
   LIVING_EXAMPLE_GENERATOR_VERSION,
+  SYSTEM_BRAND_MAX,
   SYSTEM_COMPONENTS_MAX,
   SYSTEM_ENTRY_ID_PATTERN,
+  SYSTEM_PATTERNS_MAX,
 } from '../../shared/limits.ts';
 import type { SystemDetail } from '../../shared/types.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, dataUrlOf, type FileSource } from '../bundle.ts';
@@ -35,12 +37,19 @@ import { resolveInside, writeFileAtomic } from '../paths.ts';
 import { pngSize, removeStaleWorkDirs, thumbWorkParent } from '../thumbnails.ts';
 import { checkAsset } from './assets.ts';
 import type { ExampleReason } from './living-html.ts';
+import { exampleFileOf, exampleKeyOf, type ExampleKind } from './specimen-html.ts';
 import { guardSystemWrite } from './store.ts';
 
 export type { ExampleReason };
 
-/** One example picture; `width`/`height` are the PNG's own pixels (0 when there is none). */
+/**
+ * One example picture; `width`/`height` are the PNG's own pixels (0 when there is none). `component` is
+ * the example key (`exampleKeyOf`): a component's id, or `pattern:<id>` / `brand:<id>`.
+ */
 export type ExampleShot = { component: string; scheme: 'light' | 'dark'; png: Uint8Array | null; width: number; height: number; reason: ExampleReason | null };
+
+/** Examples a living page pictures at most: every component, pattern and brand entry. */
+export const LIVING_EXAMPLES_MAX = SYSTEM_COMPONENTS_MAX + SYSTEM_PATTERNS_MAX + SYSTEM_BRAND_MAX;
 
 /** `CHECK_CSP` with `script-src 'none'` and no other change (§5.11 step 3). */
 export const EXAMPLE_CSP = CHECK_CSP.replace(/script-src [^;]*/, "script-src 'none'");
@@ -97,7 +106,7 @@ export const exampleCacheKey = (input: { exampleHtml: string; tokensCss: string;
   return hash.digest('hex');
 };
 
-/** One shot per example per scheme, in component order then light before dark; at most `SYSTEM_COMPONENTS_MAX` examples. */
+/** One shot per example per scheme, in entry order then light before dark; at most `LIVING_EXAMPLES_MAX` examples. */
 export const planExampleShots = (
   examples: readonly { component: string; html: string }[],
   shell: { tokensCss: string; fontsCss: string },
@@ -105,7 +114,7 @@ export const planExampleShots = (
 ): PlannedShot[] => {
   const order = (['light', 'dark'] as const).filter((scheme) => schemes.includes(scheme));
   const out: PlannedShot[] = [];
-  for (const example of examples.slice(0, SYSTEM_COMPONENTS_MAX)) {
+  for (const example of examples.slice(0, LIVING_EXAMPLES_MAX)) {
     for (const scheme of order) {
       out.push({
         component: example.component,
@@ -203,7 +212,8 @@ const openPage = async (session: CdpSession, serving: { current: Serving | null 
 };
 
 const shoot = async (session: CdpSession, page: Page, serving: { current: Serving | null }, shot: PlannedShot, counter: number, settleMs: number, alive: { value: boolean }): Promise<Buffer> => {
-  const url = `${DOCUMENT_ORIGIN}/living/${counter}/${shot.component}-${shot.scheme}.html`;
+  // The counter keeps every URL unique; `pattern:nav` keys read as `pattern-nav` in the path.
+  const url = `${DOCUMENT_ORIGIN}/living/${counter}/${shot.component.replace(':', '-')}-${shot.scheme}.html`;
   serving.current = { url, html: Buffer.from(shot.html, 'utf8'), served: false };
   let loaded: () => void = () => undefined;
   const loadFired = new Promise<void>((resolve) => {
@@ -460,14 +470,20 @@ export const renderExamplePngs = async (
   const deps = configured.get(ctx) ?? {};
   const examples: { component: string; html: string }[] = [];
   const failed: string[] = [];
-  for (const component of detail.components.slice(0, SYSTEM_COMPONENTS_MAX)) {
-    if (component.example === null || !SYSTEM_ENTRY_ID_PATTERN.test(component.id)) continue;
+  const entries: { kind: ExampleKind; id: string; example: { remote: string[] } | null }[] = [
+    ...detail.components.slice(0, SYSTEM_COMPONENTS_MAX).map((entry) => ({ kind: 'component' as const, id: entry.id, example: entry.example })),
+    ...detail.patterns.slice(0, SYSTEM_PATTERNS_MAX).map((entry) => ({ kind: 'pattern' as const, id: entry.id, example: entry.example })),
+    ...detail.brand.slice(0, SYSTEM_BRAND_MAX).map((entry) => ({ kind: 'brand' as const, id: entry.id, example: entry.example })),
+  ];
+  for (const entry of entries) {
+    if (entry.example === null || !SYSTEM_ENTRY_ID_PATTERN.test(entry.id)) continue;
+    const key = exampleKeyOf(entry.kind, entry.id);
     try {
-      const bundled = await bundleDocument(options.source, `components/${component.id}.html`, { mode: 'export' });
-      examples.push({ component: component.id, html: bundled.html });
+      const bundled = await bundleDocument(options.source, exampleFileOf(entry.kind, entry.id), { mode: 'export' });
+      examples.push({ component: key, html: bundled.html });
     } catch (error) {
       if (!(error instanceof BundleTooLarge || error instanceof BundleMissingEntry)) throw error;
-      failed.push(component.id);
+      failed.push(key);
     }
   }
   const tokens = await options.source.read('tokens.css').catch(() => null);

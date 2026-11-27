@@ -568,9 +568,13 @@ export const LIVING_PAGE_MAX_BYTES = 20 * 1024 * 1024;
 /** One font or logo embedded into the living page. */
 export const LIVING_PAGE_ASSET_MAX_BYTES = 4 * 1024 * 1024;
 export const LIVING_PAGE_OMITTED_MAX = 50;
-/** rev 3: PNG examples (S8's 1 is superseded); rev 4 (value 3): markdown bodies; value 4: board layout runs and tables, the 90ch measure. */
-export const LIVING_PAGE_GENERATOR_VERSION = 4;
-/** The example pictures' own generator: their inputs (component HTML, tokens, fonts) did not change with markdown, so the PNG cache survives a page-generator bump. */
+/** rev 3: PNG examples (S8's 1 is superseded); rev 4 (value 3): markdown bodies; value 4: board layout runs and tables, the 90ch measure; value 5: pattern and brand examples, colour pairs. */
+export const LIVING_PAGE_GENERATOR_VERSION = 5;
+/**
+ * The example pictures' own generator: their inputs (example HTML, tokens, fonts) did not change with
+ * markdown, so the PNG cache survives a page-generator bump. The cache key is the picture's content
+ * only, never an entry id, so pattern and brand examples sharing it left this at 2 (system-builder-depth §4.4).
+ */
 export const LIVING_EXAMPLE_GENERATOR_VERSION = 2;
 export const LIVING_PAGE_MARK_NAME = 'dc-living-page';
 /** `.chamber/scan.json`, the build scan's certain values for the agent. */

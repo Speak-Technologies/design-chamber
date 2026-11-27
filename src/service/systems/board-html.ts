@@ -9,21 +9,21 @@
 // `<script>` elements and keeps the example's CSS scoped (§5.7, §11.4).
 
 import { AREA_OF_SECTION, SYSTEM_AREAS, SYSTEM_SECTIONS } from '../../shared/system-json.ts';
-import type { SystemArea, SystemComponent, SystemDetail, SystemSection } from '../../shared/types.ts';
+import type { SystemArea, SystemDetail, SystemSection } from '../../shared/types.ts';
 import { markdownCss } from './markdown-html.ts';
-import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss } from './specimen-html.ts';
+import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss, type ExampleEntry } from './specimen-html.ts';
 
 export { escapeHtml } from './specimen-html.ts';
 
-/** Bumped when the generated document changes shape, so cached boards are not reused. */
-export const BOARD_GENERATOR_VERSION = 6;
+/** Bumped when the generated document changes shape, so cached boards are not reused (7: pattern and brand examples, colour pairs). */
+export const BOARD_GENERATOR_VERSION = 7;
 
 /** The virtual entry the board is bundled from (never a file on disk). */
 export const BOARD_ENTRY_FILE = '__board.html';
 
 export type BoardHtmlOptions = {
   scheme: 'light' | 'dark';
-  /** Each component's example document, already bundled by the service, by component id. */
+  /** Each example document, already bundled by the service, by example key (`exampleKeyOf`: a component's id, `pattern:<id>`, `brand:<id>`). */
   examples?: Readonly<Record<string, string>>;
   /** Font and logo files (`assets/…`) the service's `checkAsset` refused. */
   unusable?: ReadonlySet<string>;
@@ -98,6 +98,13 @@ body { margin: 0; padding: 32px 40px 64px; background: var(--dc-board-bg, ${f.bg
   background: color-mix(in srgb, var(--dc-board-card, ${f.card}) 94%, var(--dc-board-fg, ${f.fg}));
   border: 1px solid color-mix(in srgb, var(--dc-board-border, ${f.border}) 70%, var(--dc-board-fg, ${f.fg})); }
 .dc-components > .dc-card.dc-wide { column-span: all; }
+/* A pattern or brand card with a live example: its grounds stack like a component's, and a wide example takes the whole row. */
+.dc-text.dc-fit .dc-grounds { flex-direction: column; margin: 8px 0 12px; }
+.dc-text.dc-fit .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
+.dc-text-grid > .dc-card.dc-wide { grid-column: 1 / -1; }
+/* Colour pairs: "Aa Text" in the pair's colours on each ground, the ratio under it. */
+.dc-pair-grounds { flex-direction: column; }
+.dc-pair-sample { padding: 10px 12px; border-radius: 4px; font-size: 16px; font-weight: 500; border: 1px solid rgb(127 127 127 / 0.3); margin-bottom: 4px; }
 /* Light and dark grounds stack in every run, each as wide as the card, so a wide preview never has to share the row. */
 .dc-components .dc-grounds { flex-direction: column; margin-bottom: 12px; }
 .dc-components .dc-ground { flex: 0 0 auto; min-width: 0; padding: 12px; }
@@ -149,17 +156,19 @@ ${markdownCss('board', scheme)}`;
 
 const hasDark = (detail: SystemDetail): boolean => detail.tokens.some((token) => token.dark !== null);
 
-/** A component example as escaped text in an inert template, attached to shadow roots by the board script. */
+/** A live example (a component's, a pattern's or a brand entry's) as escaped text in an inert template, attached to shadow roots by the board script. */
 const boardExample =
   (examples: Readonly<Record<string, string>>, dark: boolean) =>
-  (component: SystemComponent, id: string | null): string => {
-    const markup = id === null ? undefined : examples[id];
-    if (markup === undefined || id === null || component.example === null) return `<div class="dc-muted">${escapeHtml("This example couldn't be shown.")}</div>`;
-    // Escaped as text: inert, and it can't close the template (§5.7).
-    const host = (ground: string): string => `<div class="dc-ground ${ground}"><div class="dc-example" data-dc-example-host="${id}"></div></div>`;
-    let html = `<template data-dc-example="${id}">${escapeHtml(markup)}</template><div class="dc-grounds">${host('dc-light')}${dark ? host('dc-dark') : ''}</div>`;
-    if (component.example.remote.length > 0) {
-      html += `<div class="dc-note">${escapeHtml("This example asks for files from the internet, which don't load here:")} ${component.example.remote.map(escapeHtml).join(', ')}</div>`;
+  (entry: ExampleEntry): string => {
+    const key = entry.key;
+    const markup = key === null || !Object.hasOwn(examples, key) ? undefined : examples[key];
+    if (markup === undefined || key === null) return `<div class="dc-muted">${escapeHtml("This example couldn't be shown.")}</div>`;
+    // Escaped as text: inert, and it can't close the template (§5.7). The key is an id or `kind:id`, escaped all the same.
+    const attr = escapeHtml(key);
+    const host = (ground: string): string => `<div class="dc-ground ${ground}"><div class="dc-example" data-dc-example-host="${attr}"></div></div>`;
+    let html = `<template data-dc-example="${attr}">${escapeHtml(markup)}</template><div class="dc-grounds">${host('dc-light')}${dark ? host('dc-dark') : ''}</div>`;
+    if (entry.remote.length > 0) {
+      html += `<div class="dc-note">${escapeHtml("This example asks for files from the internet, which don't load here:")} ${entry.remote.map(escapeHtml).join(', ')}</div>`;
     }
     return html;
   };

@@ -131,7 +131,7 @@ export const createBoardService = (deps: BoardDeps): BoardService => {
       const { detail, source } = proposed ?? (await read(id, options.version));
 
       // Examples bundled one by one, fonts and logos checked, the document written (shared with the check).
-      const { html, components, assetKeys } = await assembleBoardHtml(detail, source, options.scheme);
+      const { html, components, patterns, brand, assetKeys } = await assembleBoardHtml(detail, source, options.scheme);
       const key = sha256(
         JSON.stringify({ g: BOARD_GENERATOR_VERSION, id, v: options.version ?? null, p: proposed === null ? null : [options.proposal, proposed.sha], s: options.scheme, html: sha256(html), assets: assetKeys.sort() }),
       );
@@ -158,7 +158,7 @@ export const createBoardService = (deps: BoardDeps): BoardService => {
         title: proposed === null ? `${detail.name}: specimen board` : `${detail.name}: proposed specimen board`,
         missing: result.missing,
         blocked: result.blocked,
-        external: [...new Set([...result.external, ...components.flatMap((component) => component.example?.remote ?? [])])],
+        external: [...new Set([...result.external, ...[...components, ...patterns, ...brand].flatMap((entry) => entry.example?.remote ?? [])])],
         warnings: result.warnings,
       };
       put({ key, id, chunks, meta, bytes });

@@ -13,8 +13,10 @@
 //   class names are ours, never the system's;
 // - logos are only ever `<img src="assets/logos/…">` (the bundler makes a data: URL, and an SVG as an
 //   image never runs script);
-// - a component's example is not drawn here: the caller passes `example` (the board puts it in an inert
-//   template, the living page a PNG), because that part depends on the board script.
+// - a live example (a component's, and a pattern or brand entry's) is not drawn here: the caller passes
+//   `example` (the board puts it in an inert template, the living page a PNG), because that part
+//   depends on the board script;
+// - a colour pair's sample takes its colours only as `var(--name)` of two validated token names.
 
 import { SYSTEM_ENTRY_ID_PATTERN, SYSTEM_TOKEN_NAME_PATTERN } from '../../shared/limits.ts';
 import { darkVarOf, entryKeyOf, isBoardEntryKey, typeVarOf, type BoardEntryKind } from '../../shared/system-board.ts';
@@ -23,9 +25,11 @@ import { validateTokenValue, type TypeField } from '../../shared/token-edit.ts';
 import type {
   BoardLayout,
   ColourGroup,
+  ColourPairUse,
   FontAsset,
   LogoAsset,
   SystemArea,
+  SystemColourPair,
   SystemComponent,
   SystemDetail,
   SystemEntryText,
@@ -34,18 +38,34 @@ import type {
   TokenSection,
   TypeStyle,
 } from '../../shared/types.ts';
+import { pairKey, pairSchemes, ratioText, staticPairRatio, type PairScheme } from '../check/pair-contrast.ts';
 import { escapeHtml, renderMarkdown, withoutLeadingTitle, type MarkdownProfile } from './markdown-html.ts';
 
 export { escapeHtml };
 
+/** Which kind of entry a live example belongs to. */
+export type ExampleKind = 'component' | 'pattern' | 'brand';
+
+/**
+ * One live example the caller draws. `key` names it among all examples (`exampleKeyOf`); null when the
+ * entry's id is off the pattern. `remote` are the refs found while bundling it.
+ */
+export type ExampleEntry = { kind: ExampleKind; key: string | null; name: string; remote: readonly string[] };
+
+/**
+ * An example's key among every example of a system: a component's id as it always was, `pattern:<id>`
+ * and `brand:<id>` for the others (`:` is never in an id, so a pattern and a component may share one).
+ */
+export const exampleKeyOf = (kind: ExampleKind, id: string): string => (kind === 'component' ? id : `${kind}:${id}`);
+
+/** The example's file in the system folder. */
+export const exampleFileOf = (kind: ExampleKind, id: string): string => `${kind === 'component' ? 'components' : kind === 'pattern' ? 'patterns' : 'brand'}/${id}.html`;
+
 export type SpecimenOptions = {
   /** Font and logo files (`assets/…`) the service's `checkAsset` refused. */
   unusable?: ReadonlySet<string>;
-  /**
-   * The example part of a component card, called only for a component that names an example; `id` is
-   * null when the component's id is off the pattern. Absent → no example part.
-   */
-  example?: (component: SystemComponent, id: string | null) => string;
+  /** The example part of a card, called only for an entry that names an example. Absent → no example part. */
+  example?: (entry: ExampleEntry) => string;
   /**
    * The living page (§5.11) allows no `style` attribute: when given, each element's own declarations
    * go to this callback, which answers a class name the caller defines in its one `<style>`. Absent
@@ -299,7 +319,59 @@ const colourParts = (detail: SystemDetail, styled: Styler): SectionParts => {
     // Runs form inside each colour group; the group keeps its heading.
     return `<h3>${escapeHtml(title)}</h3>${tokenRuns(detail, members, 'colours', swatch, `Colours: ${title}`)}`;
   }).join('');
-  return { title: 'Colours', body, empty: 'No colour tokens yet.' };
+  return { title: 'Colours', body: body + pairsBlock(detail, styled), empty: 'No colour tokens yet.' };
+};
+
+// ---- colour pairs (system-builder-depth §4.4) ----
+
+const PAIR_USE_LABELS: Readonly<Record<ColourPairUse, string>> = Object.freeze({ text: 'Body text, needs 4.5:1', large: 'Large text, needs 3:1', ui: 'Interface part, needs 3:1' });
+export const PAIR_MEASURED_SENTENCE = 'Measured by the check';
+
+/** One ground of a pair: "Aa Text" in `fg` on `bg` (the dark ground takes the dark values), and its ratio. */
+const pairGround = (detail: SystemDetail, pair: SystemColourPair, index: number, scheme: PairScheme, styled: Styler): string => {
+  const tokens = new Map(detail.tokens.map((token) => [token.name, token]));
+  const usable = (name: string): boolean => {
+    const token = tokens.get(name);
+    return isTokenName(name) && token !== undefined && cssValueOf(token.section, null, token.light?.text ?? token.dark?.text) !== null;
+  };
+  const ground = scheme === 'dark' ? 'dc-dark' : 'dc-light';
+  if (!usable(pair.fg) || !usable(pair.bg)) return `<div class="dc-ground ${ground}">${HATCHED(CANT_READ)}</div>`;
+  const ratio = staticPairRatio(detail, pair, scheme);
+  return (
+    `<div class="dc-ground ${ground}">` +
+    `<div${styled('dc-pair-sample', `color: var(${pair.fg}); background: var(${pair.bg})`)} data-dc-pair="${pairKey(index, scheme)}">Aa Text</div>` +
+    `<div class="dc-value">${escapeHtml(ratio === null ? PAIR_MEASURED_SENTENCE : ratioText(ratio))}</div></div>`
+  );
+};
+
+const pairGrounds = (detail: SystemDetail, pair: SystemColourPair, index: number, styled: Styler): string =>
+  `<div class="dc-grounds dc-pair-grounds">${pairSchemes(detail).map((scheme) => pairGround(detail, pair, index, scheme, styled)).join('')}</div>`;
+
+const pairIdentity = (pair: SystemColourPair): string =>
+  `<div class="dc-name">${escapeHtml(`${pair.fg} on ${pair.bg}`)}</div><div class="dc-value">${escapeHtml(PAIR_USE_LABELS[pair.use])}</div>`;
+
+const pairNote = (pair: SystemColourPair): string =>
+  (pair.note !== '' ? `<div class="dc-note">${escapeHtml(pair.note)}</div>` : '') + (pair.auto ? `<div class="dc-note">${escapeHtml('Found from the token names.')}</div>` : '');
+
+/** The Pairs block under Colours: the colours section's layout (card, compact or table), one cell per pair. */
+const pairsBlock = (detail: SystemDetail, styled: Styler): string => {
+  if (detail.pairs.length === 0) return '';
+  const layout = effectiveLayout(detail, 'colours', null);
+  if (layout === 'table') {
+    const rows = detail.pairs
+      .map(
+        (pair, index) =>
+          `<div class="dc-trow" role="row"${entryAttr('pair', String(index))}>` +
+          tableCell('name', pairGrounds(detail, pair, index, styled)) +
+          tableCell('preview', pairIdentity(pair)) +
+          tableCell('notes', pairNote(pair)) +
+          '</div>',
+      )
+      .join('');
+    return `<h3>Pairs</h3>${tableWrap('Colours: Pairs', tableHeader(['Sample', 'Pair', 'Note']) + rows, ' dc-table-tokens')}`;
+  }
+  const cards = detail.pairs.map((pair, index) => `<div class="dc-card"${entryAttr('pair', String(index))}>${pairGrounds(detail, pair, index, styled)}${pairIdentity(pair)}${pairNote(pair)}</div>`).join('');
+  return `<h3>Pairs</h3><div class="dc-grid${layout === 'compact' ? ' dc-run-compact' : ''}">${cards}</div>`;
 };
 
 const caseOf = (style: TypeStyle): string => ({ none: 'none', upper: 'uppercase', lower: 'lowercase', title: 'capitalize' })[style.case] ?? 'none';
@@ -395,6 +467,7 @@ const componentLists = (component: SystemComponent): string => {
   return (
     (component.note !== '' ? `<div class="dc-note">${escapeHtml(component.note)}</div>` : '') +
     list('Variants', component.variants) +
+    list('Sizes', component.sizes) +
     list('States', component.states) +
     (tokens.length > 0 ? `<div class="dc-note">Tokens: ${tokens.join(', ')}</div>` : '') +
     (component.source !== null ? `<div class="dc-value">${escapeHtml(component.source)}</div>` : '')
@@ -404,10 +477,17 @@ const componentLists = (component: SystemComponent): string => {
 const componentName = (component: SystemComponent): string =>
   `<div><strong>${escapeHtml(component.name)}</strong></div>` + (component.purpose !== '' ? `<div class="dc-note">${escapeHtml(component.purpose)}</div>` : '');
 
+/** An entry's example part: '' when it names none or the caller draws none. */
+const examplePart = (kind: ExampleKind, entry: { id: string; example: { remote: string[] } | null }, name: string, example: SpecimenOptions['example']): string => {
+  if (entry.example === null || example === undefined) return '';
+  const key = SYSTEM_ENTRY_ID_PATTERN.test(entry.id) ? exampleKeyOf(kind, entry.id) : null;
+  return example({ kind, key, name, remote: entry.example.remote });
+};
+
 /** `fit` marks the card for the board script's widen measurement (card and compact runs only). */
 const componentCard = (component: SystemComponent, example: SpecimenOptions['example'], fit: boolean): string => {
   const id = SYSTEM_ENTRY_ID_PATTERN.test(component.id) ? component.id : null;
-  const exampleHtml = component.example !== null && example !== undefined ? example(component, id) : '';
+  const exampleHtml = examplePart('component', component, component.name, example);
   return (
     `<div class="dc-card${fit ? ' dc-fit' : ''}"${id === null ? '' : entryAttr('component', id)}>${exampleHtml}` +
     componentName(component) +
@@ -424,7 +504,7 @@ const componentTable = (components: readonly SystemComponent[], example: Specime
       components
         .map((component) => {
           const id = SYSTEM_ENTRY_ID_PATTERN.test(component.id) ? component.id : null;
-          const exampleHtml = component.example !== null && example !== undefined ? example(component, id) : '';
+          const exampleHtml = examplePart('component', component, component.name, example);
           return (
             `<div class="dc-trow dc-fit" role="row"${id === null ? '' : entryAttr('component', id)}>` +
             tableCell('name', componentName(component)) +
@@ -458,15 +538,34 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
   imagery: 'Imagery',
   'logo-use': 'Logo use',
   other: 'Other',
+  // system-builder-depth §4.3
+  navigation: 'Navigation',
+  overlay: 'Overlays',
+  forms: 'Forms',
+  'data-display': 'Data display',
+  feedback: 'Feedback',
+  states: 'Empty, loading and error',
+  page: 'Page template',
+  responsive: 'Responsive',
+  motion: 'Motion',
+  accessibility: 'Accessibility',
+  colour: 'Brand colour',
+  social: 'Social',
+  email: 'Email',
 };
 
-/** One pattern or brand entry as a text card: title, kind, note, then the body as markdown. */
-const entryTextCard = (kind: 'pattern' | 'brand', entry: SystemEntryText, markdown: MarkdownProfile): string => {
+/**
+ * One pattern or brand entry as a text card: title, kind, note, the live example (when it has one), then
+ * the body as markdown. `fit` marks a card with an example for the board script's widen measurement.
+ */
+const entryTextCard = (kind: 'pattern' | 'brand', entry: SystemEntryText, markdown: MarkdownProfile, example: SpecimenOptions['example'], fit: boolean): string => {
   const key = SYSTEM_ENTRY_ID_PATTERN.test(entry.id) ? entryAttr(kind, entry.id) : '';
+  const exampleHtml = examplePart(kind, entry, entry.title, example);
   return (
-    `<div class="dc-card dc-text"${key}><h3>${escapeHtml(entry.title)}</h3>` +
+    `<div class="dc-card dc-text${fit && exampleHtml !== '' ? ' dc-fit' : ''}"${key}><h3>${escapeHtml(entry.title)}</h3>` +
     `<div class="dc-value">${escapeHtml(KIND_LABELS[entry.kind] ?? entry.kind)}</div>` +
     (entry.note !== '' ? `<div class="dc-note">${escapeHtml(entry.note)}</div>` : '') +
+    exampleHtml +
     (entry.text !== null && entry.text.trim() !== '' ? `<div class="dc-body">${renderMarkdown(entry.text, markdown)}</div>` : '') +
     (entry.problem !== null ? `<div class="dc-problem">${escapeHtml(entry.problem)}</div>` : '') +
     '</div>'
@@ -478,8 +577,17 @@ const entryTextNote = (entry: SystemEntryText | SystemDetail['notes'][number]): 
   ('kind' in entry && entry.note !== '' ? `<div class="dc-note">${escapeHtml(entry.note)}</div>` : '') +
   (entry.problem !== null ? `<div class="dc-problem">${escapeHtml(entry.problem)}</div>` : '');
 
-/** One text entry as a table row: title (and kind), the body as guidance, note and problem. */
-const entryTextRow = (kind: 'note' | 'pattern' | 'brand', entry: SystemEntryText | SystemDetail['notes'][number], withNote: boolean, markdown: MarkdownProfile): string => {
+/**
+ * One text entry as a table row: title (and kind), the example (when it has one) above the body as
+ * guidance, note and problem. A row with an example carries `dc-fit`, as a component row does.
+ */
+const entryTextRow = (
+  kind: 'note' | 'pattern' | 'brand',
+  entry: SystemEntryText | SystemDetail['notes'][number],
+  withNote: boolean,
+  markdown: MarkdownProfile,
+  example: SpecimenOptions['example'],
+): string => {
   const key = SYSTEM_ENTRY_ID_PATTERN.test(entry.id) ? entryAttr(kind, entry.id) : '';
   const isEntryText = 'kind' in entry;
   const title =
@@ -488,33 +596,46 @@ const entryTextRow = (kind: 'note' | 'pattern' | 'brand', entry: SystemEntryText
   // A note's own leading heading repeats the title cell: dropped, as on the note cards.
   const body = entry.text === null ? '' : isEntryText ? entry.text : withoutLeadingTitle(entry.text, entry.title);
   const guidance = body.trim() !== '' ? `<div class="dc-body">${renderMarkdown(body, markdown)}</div>` : '';
-  return `<div class="dc-trow" role="row"${key}>` + tableCell('name', title) + tableCell('preview', guidance) + (withNote ? tableCell('notes', entryTextNote(entry)) : '') + '</div>';
+  const exampleHtml = isEntryText && kind !== 'note' ? examplePart(kind, entry, entry.title, example) : '';
+  return (
+    `<div class="dc-trow${exampleHtml === '' ? '' : ' dc-fit'}" role="row"${key}>` +
+    tableCell('name', title) +
+    tableCell('preview', exampleHtml + guidance) +
+    (withNote ? tableCell('notes', entryTextNote(entry)) : '') +
+    '</div>'
+  );
 };
 
 /** A text table; when no entry in it has a note or a problem the Note column is left out (two columns). */
-const entryTextTable = (kind: 'note' | 'pattern' | 'brand', entries: readonly (SystemEntryText | SystemDetail['notes'][number])[], label: string, markdown: MarkdownProfile): string => {
+const entryTextTable = (
+  kind: 'note' | 'pattern' | 'brand',
+  entries: readonly (SystemEntryText | SystemDetail['notes'][number])[],
+  label: string,
+  markdown: MarkdownProfile,
+  example?: SpecimenOptions['example'],
+): string => {
   const withNote = entries.some((entry) => entryTextNote(entry) !== '');
   return tableWrap(
     label,
-    tableHeader(withNote ? ['Title', 'Guidance', 'Note'] : ['Title', 'Guidance']) + entries.map((entry) => entryTextRow(kind, entry, withNote, markdown)).join(''),
+    tableHeader(withNote ? ['Title', 'Guidance', 'Note'] : ['Title', 'Guidance']) + entries.map((entry) => entryTextRow(kind, entry, withNote, markdown, example)).join(''),
     withNote ? '' : ' dc-table-two',
   );
 };
 
 /** Pattern and brand runs: a card run keeps today's text grid byte for byte; compact, full and table get their containers. */
-const entryTextRuns = (kind: 'pattern' | 'brand', detail: SystemDetail, entries: readonly SystemEntryText[], label: string, markdown: MarkdownProfile): string =>
+const entryTextRuns = (kind: 'pattern' | 'brand', detail: SystemDetail, entries: readonly SystemEntryText[], label: string, markdown: MarkdownProfile, example: SpecimenOptions['example']): string =>
   runsOf(entries, (entry) => effectiveLayout(detail, kind === 'pattern' ? 'patterns' : 'brand', entry.layout))
     .map((run) => {
-      if (run.layout === 'table') return entryTextTable(kind, run.items, label, markdown);
-      const cards = run.items.map((entry) => entryTextCard(kind, entry, markdown)).join('');
+      if (run.layout === 'table') return entryTextTable(kind, run.items, label, markdown, example);
+      const cards = run.items.map((entry) => entryTextCard(kind, entry, markdown, example, run.layout !== 'full')).join('');
       if (run.layout === 'full') return `<div class="dc-run-full">${cards}</div>`;
       return `<div class="dc-grid dc-text-grid${run.layout === 'compact' ? ' dc-run-compact' : ''}">${cards}</div>`;
     })
     .join('');
 
-const patternsParts = (detail: SystemDetail, markdown: MarkdownProfile): SectionParts => ({
+const patternsParts = (detail: SystemDetail, markdown: MarkdownProfile, example: SpecimenOptions['example']): SectionParts => ({
   title: 'Patterns & voice',
-  body: entryTextRuns('pattern', detail, detail.patterns, 'Patterns & voice', markdown),
+  body: entryTextRuns('pattern', detail, detail.patterns, 'Patterns & voice', markdown, example),
   empty: 'No patterns or voice guidance yet.',
 });
 
@@ -532,9 +653,9 @@ const logoCard = (logo: LogoAsset, index: number, unusable: ReadonlySet<string>)
   );
 };
 
-const brandParts = (detail: SystemDetail, unusable: ReadonlySet<string>, markdown: MarkdownProfile): SectionParts => {
+const brandParts = (detail: SystemDetail, unusable: ReadonlySet<string>, markdown: MarkdownProfile, example: SpecimenOptions['example']): SectionParts => {
   const parts: string[] = [];
-  const entries = entryTextRuns('brand', detail, detail.brand, 'Brand & marketing', markdown);
+  const entries = entryTextRuns('brand', detail, detail.brand, 'Brand & marketing', markdown, example);
   if (entries !== '') parts.push(entries);
   if (detail.logos.length > 0) parts.push(`<h3>Logos</h3><div class="dc-grid">${detail.logos.map((logo, index) => logoCard(logo, index, unusable)).join('')}</div>`);
   return { title: 'Brand & marketing', body: parts.join(''), empty: 'No brand guidance or logos yet.' };
@@ -575,9 +696,9 @@ const partsOf = (detail: SystemDetail, section: SystemSection, options: Specimen
     case 'components':
       return componentsParts(detail, options.example);
     case 'patterns':
-      return patternsParts(detail, markdown);
+      return patternsParts(detail, markdown, options.example);
     case 'brand':
-      return brandParts(detail, unusable, markdown);
+      return brandParts(detail, unusable, markdown, options.example);
     case 'assets':
       return assetsParts(detail);
   }

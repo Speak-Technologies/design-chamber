@@ -90,6 +90,8 @@ const textCapOf = (rel: string): number | null => {
   if (rel === 'system.json') return SYSTEM_JSON_MAX_BYTES;
   if (rel === 'tokens.css') return TOKENS_CSS_MAX_BYTES;
   if (rel === 'OVERVIEW.md') return SYSTEM_OVERVIEW_MAX * BYTES_PER_CHAR_MAX;
+  // Live examples, components' and (system-builder-depth D4) pattern and brand entries': the example cap.
+  if (/^(components|patterns|brand)\/[^/]+\.html$/.test(rel)) return SYSTEM_EXAMPLE_MAX * BYTES_PER_CHAR_MAX;
   if (/^(notes|patterns|brand)\//.test(rel)) return SYSTEM_NOTE_MAX * BYTES_PER_CHAR_MAX;
   if (rel.startsWith('components/')) return SYSTEM_EXAMPLE_MAX * BYTES_PER_CHAR_MAX;
   return null;

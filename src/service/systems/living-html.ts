@@ -15,10 +15,10 @@
 import { LIVING_PAGE_MARK_NAME, SYSTEM_ENTRY_ID_PATTERN, SYSTEM_TOKEN_NAME_PATTERN } from '../../shared/limits.ts';
 import { darkVarOf, typeVarOf } from '../../shared/system-board.ts';
 import { AREA_OF_SECTION, SYSTEM_AREAS, SYSTEM_SECTIONS } from '../../shared/system-json.ts';
-import type { SystemArea, SystemComponent, SystemDetail, SystemSection } from '../../shared/types.ts';
+import type { SystemArea, SystemDetail, SystemSection } from '../../shared/types.ts';
 import { LIVING_VIEWPORT, livingCssProblems } from './living-safe.ts';
 import { markdownCss } from './markdown-html.ts';
-import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss } from './specimen-html.ts';
+import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss, type ExampleEntry } from './specimen-html.ts';
 
 /** The virtual entry the living page is bundled from (never a file on disk). */
 export const LIVING_ENTRY_FILE = '__living.html';
@@ -61,7 +61,7 @@ export type LivingPageInput = {
   fontsLeftOut?: readonly { file: string; reason: 'too-large' | 'budget' | 'unsafe' }[];
   /** Font and logo files (`assets/…`) that can't be used (refused by `checkAsset`, a type the page can't carry, over budget). */
   unusable?: ReadonlySet<string>;
-  /** Each component's example pictures, by component id. */
+  /** Each example's pictures, by example key (`exampleKeyOf`: a component's id, `pattern:<id>`, `brand:<id>`). */
   examples?: Readonly<Record<string, readonly LivingExampleShot[]>>;
   /** A proposal preview (§5.14): no mark, and a band naming the proposal and the home it isn't from yet. */
   preview?: { proposal: string; home: string };
@@ -217,6 +217,8 @@ body { margin: 0; background: #f7f7f8; color: #1d1d1f; font-family: system-ui, -
   .dc-run-table, .dc-run-table.dc-table-tokens, .dc-run-table.dc-table-two { grid-template-columns: 1fr; }
 }
 .dc-body { margin-top: 8px; }
+.dc-pair-grounds { flex-direction: column; }
+.dc-pair-sample { padding: 10px 12px; border-radius: 4px; font-size: 16px; font-weight: 500; border: 1px solid rgb(127 127 127 / 0.3); margin-bottom: 4px; }
 .lp-examples { display: grid; gap: 8px; margin-bottom: 8px; }
 .lp-example { margin: 0; }
 .lp-example img { display: block; max-width: 100%; height: auto; border: 1px solid #d8d8dc; border-radius: 6px; background: #ffffff; }
@@ -313,11 +315,12 @@ const cssEntryMap = (detail: SystemDetail): Map<string, string> => {
   return map;
 };
 
-const ENTRY_MARKS = / data-dc-(entry|section)="([^"]*)"|<\/section>/g;
+const ENTRY_MARKS = / data-dc-(entry|section|pair)="([^"]*)"|<\/section>/g;
 
 /**
- * Drops the board's `data-dc-entry` / `data-dc-section` attributes (not on the allowlist) and answers the
- * ranges each entry's text covers: from its attribute to the next entry, section or section end.
+ * Drops the board's `data-dc-entry` / `data-dc-section` / `data-dc-pair` attributes (not on the
+ * allowlist) and answers the ranges each entry's text covers: from its attribute to the next entry,
+ * section or section end. A pair sample's mark sits inside its entry, so it is dropped without closing it.
  */
 const stripEntryMarks = (body: string): { text: string; marks: { start: number; end: number; where: string }[] } => {
   let text = '';
@@ -331,6 +334,7 @@ const stripEntryMarks = (body: string): { text: string; marks: { start: number; 
   for (const match of body.matchAll(ENTRY_MARKS)) {
     text += body.slice(pos, match.index);
     pos = match.index + match[0].length;
+    if (match[1] === 'pair') continue;
     close();
     if (match[0] === '</section>') {
       text += match[0];
@@ -345,8 +349,8 @@ const stripEntryMarks = (body: string): { text: string; marks: { start: number; 
 
 const exampleFigures =
   (examples: Readonly<Record<string, readonly LivingExampleShot[]>>) =>
-  (component: SystemComponent, id: string | null): string => {
-    const shots = id === null ? [] : (examples[id] ?? []);
+  (entry: ExampleEntry): string => {
+    const shots = entry.key === null || !Object.hasOwn(examples, entry.key) ? [] : (examples[entry.key] ?? []);
     if (shots.length === 0) return `<p class="dc-muted">${escapeHtml(`No picture of this example: ${EXAMPLE_REASON_SENTENCES['render-failed']}`)}</p>`;
     const figures: string[] = [];
     const missing: string[] = [];
@@ -355,7 +359,7 @@ const exampleFigures =
       const png = shot.png;
       if (png !== null && /^[A-Za-z0-9+/]+={0,2}$/.test(png.base64) && Number.isInteger(png.width) && Number.isInteger(png.height)) {
         figures.push(
-          `<figure class="lp-example"><img src="data:image/png;base64,${png.base64}" alt="${escapeHtml(`${component.name} example, ${label}`)}" width="${png.width}" height="${png.height}">` +
+          `<figure class="lp-example"><img src="data:image/png;base64,${png.base64}" alt="${escapeHtml(`${entry.name} example, ${label}`)}" width="${png.width}" height="${png.height}">` +
             `<figcaption>${label === 'dark' ? 'Dark' : 'Light'}</figcaption></figure>`,
         );
         continue;

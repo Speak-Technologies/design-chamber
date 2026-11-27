@@ -391,7 +391,13 @@ const generate = async (
   const examples: Record<string, LivingExampleShot[]> = {};
   for (const shot of shots) (examples[shot.component] ??= []).push(toLivingShot(shot));
 
-  const nameOf = (component: string): string => detail.components.find((candidate) => candidate.id === component)?.name ?? component;
+  // An example key is a component's id, or `pattern:<id>` / `brand:<id>` (exampleKeyOf).
+  const nameOf = (key: string): string =>
+    key.startsWith('pattern:')
+      ? (detail.patterns.find((entry) => `pattern:${entry.id}` === key)?.title ?? key)
+      : key.startsWith('brand:')
+        ? (detail.brand.find((entry) => `brand:${entry.id}` === key)?.title ?? key)
+        : (detail.components.find((candidate) => candidate.id === key)?.name ?? key);
   const exampleOmissions = (): void => {
     for (const [component, list] of Object.entries(examples)) {
       for (const shot of list) if (shot.png === null) pushOmitted(omitted, { what: 'example', name: nameOf(component), reason: shot.reason ?? 'render-failed' });
@@ -418,7 +424,10 @@ const generate = async (
     const drop = picturesToDrop(examples, bundled.excess);
     if (drop.length === 0) break;
     for (const key of drop) {
-      const [component = '', scheme] = key.split(':');
+      // `<example key>:<scheme>`; the example key may hold a colon itself (`pattern:nav`).
+      const at = key.lastIndexOf(':');
+      const component = key.slice(0, at);
+      const scheme = key.slice(at + 1);
       examples[component] = (examples[component] ?? []).map((shot) => (shot.scheme === scheme ? { scheme: shot.scheme, png: null, reason: 'budget' as ExampleReason } : shot));
     }
     doc = buildLivingPage(detail, pageInput());
