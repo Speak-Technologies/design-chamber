@@ -8,8 +8,11 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
 
+import { MENTIONS_RESOLVE_TIMEOUT_MS } from '@openchamber/sdk';
+
 import { HOST_TEXT_MAX } from '../../../src/shared/limits.ts';
-import type { MentionsResolveResponse, MentionsSearchResponse } from '../../../src/shared/api.ts';
+import type { ChecksResponse, MentionsResolveResponse, MentionsSearchResponse } from '../../../src/shared/api.ts';
+import { MENTION_CHECKS_WAIT_MS, resolveMention } from '../../../src/service/mentions.ts';
 import type { DesignSummary } from '../../../src/shared/types.ts';
 import { unavailable, type DesignIndex, type DesignStore, type ServiceContext } from '../../../src/service/context.ts';
 import { createDesignIndex } from '../../../src/service/design-index.ts';
@@ -94,7 +97,7 @@ describe('search', () => {
     const answer = await call('/mentions/search', { query: 'pri', directory: null });
     assert.equal(answer.status, 200);
     const { items } = (await answer.json()) as MentionsSearchResponse;
-    assert.deepEqual(items, [{ id: 'pricing', title: 'Pricing page', subtitle: 'Canvas · 4 screens · 2 open comments' }]);
+    assert.deepEqual(items, [{ id: 'pricing', title: 'Pricing page', subtitle: 'Canvas · 4 screens · 2 open comments', url: 'https://design-chamber.invalid/pricing' }]);
   });
 
   test('never more than 20 rows, and a cold index answers an empty list instead of waiting past its budget', async (t) => {
@@ -226,6 +229,52 @@ describe('resolve', () => {
     assert.ok(/and \d+ more open comments in Design Chamber\./.test(text), text);
     assert.ok(text.includes('→ 29: long'));
     assert.ok(text.includes(record.path));
+  });
+
+  test('the check counts get a short wait: late ones are left out, so resolve answers well inside the host budget', async (t) => {
+    // A cold static check may take CHECK_STATIC_BUDGET_MS, the whole MENTIONS_RESOLVE_TIMEOUT_MS the host gives
+    // resolve; past that the host drops the pick. The wait leaves room for the store read and the transfer.
+    assert.ok(MENTION_CHECKS_WAIT_MS * 4 <= MENTIONS_RESOLVE_TIMEOUT_MS, String(MENTION_CHECKS_WAIT_MS));
+    const { ctx, core } = await serve(t);
+    const record = await core.store.create({ kind: 'page', title: 'Big canvas', html: '<!doctype html><h1>Hi</h1>' });
+    const lateCounts = { errors: 7, warnings: 0, notes: 0 };
+    let lateTimer: NodeJS.Timeout | undefined;
+    t.after(() => clearTimeout(lateTimer));
+    // The real `get` shape, answering after 4 s: a cold check on a large canvas.
+    const slow = (counts: typeof lateCounts) => async () =>
+      new Promise<ChecksResponse>((resolve) => {
+        lateTimer = setTimeout(() => resolve({ counts } as ChecksResponse), 4000);
+      });
+    const started = performance.now();
+    const { text } = await resolveMention(ctx, record.slug, { checks: { get: slow(lateCounts) } });
+    const took = performance.now() - started;
+    assert.ok(took < MENTION_CHECKS_WAIT_MS + 1000, `${Math.round(took)} ms`);
+    assert.ok(!text.includes('Checks:'), text);
+    assert.ok(!text.includes('7 errors'), text);
+    assert.ok(text.includes(record.path) && /\nRead at \d\d:\d\d\./.test(text), text);
+
+    // Counts that arrive in time are still in the text.
+    const quick = await resolveMention(ctx, record.slug, { checks: { get: async () => ({ counts: lateCounts }) as ChecksResponse } });
+    assert.ok(quick.text.includes('Checks: 7 errors. Run design_check'), quick.text);
+  });
+
+  test('a check that fails after the wait is still caught: no unhandled rejection, the text has no counts', async (t) => {
+    const { ctx, core } = await serve(t);
+    const record = await core.store.create({ kind: 'page', title: 'Flaky', html: '<!doctype html><h1>Hi</h1>' });
+    let lateTimer: NodeJS.Timeout | undefined;
+    t.after(() => clearTimeout(lateTimer));
+    let rejected!: Promise<void>; // set synchronously by `get` below, before it is awaited
+    const get = (): Promise<ChecksResponse> => {
+      const answer = new Promise<ChecksResponse>((_, reject) => {
+        lateTimer = setTimeout(() => reject(new Error('check blew up late')), MENTION_CHECKS_WAIT_MS + 200);
+      });
+      rejected = answer.then(() => undefined, () => undefined);
+      return answer;
+    };
+    const { text } = await resolveMention(ctx, record.slug, { checks: { get } });
+    assert.ok(!text.includes('Checks:'), text);
+    await rejected; // the late failure lands; node:test fails the file on an unhandled rejection
+    await new Promise((resolve) => setImmediate(resolve));
   });
 
   test('a removed folder under a live root is 404, not a 500', async (t) => {

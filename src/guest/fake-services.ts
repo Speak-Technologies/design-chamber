@@ -51,6 +51,7 @@ import { sameDirectory } from '../shared/path-compare.ts';
 import { ENTRY_FILE, screenFileOf } from '../shared/design-json.ts';
 import { copyTitle, describeMove, directionGroups, freeCopyId, SCREEN_LIST_STALE_MESSAGE, SCREENS_CAP_MESSAGE } from '../shared/screen-ops.ts';
 import { clip, oneLine } from '../shared/agent/context.ts';
+import { mentionUrlOf } from '../shared/agent/mention.ts';
 import { settingsSystemsView } from '../shared/systems.ts';
 import { createGuestHost, type GuestHost, type HostLike } from './host.ts';
 import { createServiceClient, type ServiceClient } from './service-client.ts';
@@ -1091,7 +1092,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           .filter(([name, entry]) => wanted === '' || name.includes(wanted) || entry.design.title.toLowerCase().includes(wanted))
           .sort(([, a], [, b]) => b.design.updated.localeCompare(a.design.updated))
           .slice(0, 20)
-          .map(([name, entry]) => ({ id: name, title: entry.design.title, subtitle: mentionSubtitle(entry) }));
+          .map(([name, entry]) => ({ id: name, title: entry.design.title, subtitle: mentionSubtitle(entry), url: mentionUrlOf(name) }));
         return { items };
       }
       case 'POST /mentions/resolve': {
