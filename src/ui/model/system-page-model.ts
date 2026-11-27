@@ -5,7 +5,7 @@
 import { AREA_OF_SECTION, SYSTEM_AREAS, SYSTEM_SECTIONS } from '../../shared/system-json.ts';
 import { BOARD_ENTRY_PATTERN, entryKeyOf, parseEntryKey, sectionOfEntry } from '../../shared/system-board.ts';
 import { sectionLabel } from '../../shared/agent/system-prompts.ts';
-import type { ColourGroup, ColourPairUse, ReviewState, SystemArea, SystemDepth, SystemDetail, SystemSection, SystemToken, SystemTopicId } from '../../shared/types.ts';
+import type { ColourGroup, ColourPairUse, ReviewState, SystemArea, SystemDepth, SystemDetail, SystemScreen, SystemScreenKind, SystemSection, SystemToken, SystemTopicId, Viewport } from '../../shared/types.ts';
 // Pure colour maths the board's Pairs block and the checks already share (no Node imports): one judge of a pair.
 import { PAIR_LEVELS, pairSchemes, ratioText, staticPairRatio, type PairScheme } from '../../shared/pair-contrast.ts';
 import { plural } from './format.ts';
@@ -487,3 +487,144 @@ export const sourceText = (sources: SystemDetail['sources'], folder: (path: stri
   if (sources.description) return 'From a description';
   return null;
 };
+
+// ---- The Screens view (system-builder-depth T13) ----
+
+/** Which view the system page's stage shows: the specimen board or the system's screens. */
+export type StageView = 'board' | 'screens';
+
+/** What each kind of screen is called in the list and on its label. */
+export const SCREEN_KIND_LABEL: Readonly<Record<SystemScreenKind, string>> = Object.freeze({
+  page: 'Page template',
+  pattern: 'Pattern',
+  state: 'Screen state',
+  marketing: 'Marketing',
+});
+
+export const SCREENS_EMPTY = 'No screens yet. Ask the agent to add page templates.';
+export const SCREEN_GONE = 'That screen isn’t in this system any more.';
+/** The rail can't open the full-screen page from code (the SDK has no opener for it), so it says where it is. */
+export const SCREENS_RAIL_HINT = 'To see every screen side by side, open Design Chamber full screen: sidebar, Extension pages, Design Chamber.';
+
+/**
+ * The Board and Screens switch shows once the system has a screen. It also stays while Screens is on show, so the
+ * empty state has somewhere to live when the agent removes the last screen and the way back to the board stays put.
+ */
+export const screensTabShown = (detail: Pick<SystemDetail, 'screens'>, view: StageView): boolean => detail.screens.length > 0 || view === 'screens';
+
+/** A screen's own sizes replace the system's (fixed-size social and email templates, owner decision 5). */
+export const screenViewports = (screen: Pick<SystemScreen, 'viewports'>, system: readonly Viewport[]): readonly Viewport[] =>
+  screen.viewports !== null && screen.viewports.length > 0 ? screen.viewports : system;
+
+/** "Laptop 1280×800". */
+export const viewportText = (viewport: Viewport): string => `${viewport.label} ${viewport.width}×${viewport.height}`;
+
+/** The list row's second line: "Page template · Laptop, Phone". */
+export const screenRowMeta = (screen: SystemScreen, system: readonly Viewport[]): string =>
+  [SCREEN_KIND_LABEL[screen.kind], screenViewports(screen, system).map((viewport) => viewport.label).join(', ')].join(' · ');
+
+/** The list row's accessible name: "Pricing, page template at Laptop 1280×800 and Phone 390×844". */
+export const screenRowLabel = (screen: SystemScreen, system: readonly Viewport[]): string => {
+  const sizes = screenViewports(screen, system).map(viewportText);
+  const joined = sizes.length <= 1 ? (sizes[0] ?? '') : `${sizes.slice(0, -1).join(', ')} and ${sizes[sizes.length - 1] ?? ''}`;
+  return `${screen.title}, ${SCREEN_KIND_LABEL[screen.kind].toLowerCase()} at ${joined}`;
+};
+
+/** One screen at one size on the wall. World px; the label strip sits over the frame. */
+export type ScreenCell = {
+  /** `<screen>@<viewport>`, unique on the wall. */
+  id: string;
+  screen: string;
+  title: string;
+  kind: SystemScreenKind;
+  viewport: Viewport;
+  /** The reader's sentence when the entry can't be drawn (a missing or over-long file); the cell says it instead. */
+  problem: string | null;
+  label: { x: number; y: number; w: number; h: number };
+  frame: { x: number; y: number; w: number; h: number };
+  /** The label and frame together, for fitting and the live-frame budget. */
+  rect: { x: number; y: number; w: number; h: number };
+};
+
+export type ScreenWall = { cells: ScreenCell[]; bounds: { x: number; y: number; width: number; height: number } | null };
+
+export type ScreenWallOptions = {
+  /** World px between the sizes of one screen, and between screens on a line. */
+  gap: number;
+  /** World px between lines (default `gap`). */
+  rowGap?: number;
+  labelHeight: number;
+  /** Widest a line may grow, world px, before the next screen starts a new one; 0 (the default) puts every screen on its own line. */
+  wrap?: number;
+};
+
+/**
+ * Screens in system order, each one's sizes left to right as a group. A screen's sizes are its own, so columns don't line up
+ * across screens the way a canvas's do (a 1200×630 social card beside a laptop page); groups pack from the left edge and
+ * flow onto a new line past `wrap`. A line is as tall as its label plus its tallest size.
+ */
+export const screenWall = (screens: readonly SystemScreen[], system: readonly Viewport[], options: ScreenWallOptions): ScreenWall => {
+  const rowGap = options.rowGap ?? options.gap;
+  const wrap = options.wrap ?? 0;
+  const cells: ScreenCell[] = [];
+  let x = 0;
+  let y = 0;
+  let lineHeight = 0;
+  let right = 0;
+  for (const screen of screens) {
+    const sizes = screenViewports(screen, system);
+    if (sizes.length === 0) continue;
+    const width = sizes.reduce((sum, viewport) => sum + viewport.width, 0) + options.gap * (sizes.length - 1);
+    if (x > 0 && x + width > wrap) {
+      y += lineHeight + rowGap;
+      x = 0;
+      lineHeight = 0;
+    }
+    for (const viewport of sizes) {
+      const label = { x, y, w: viewport.width, h: options.labelHeight };
+      const frame = { x, y: y + options.labelHeight, w: viewport.width, h: viewport.height };
+      cells.push({ id: `${screen.id}@${viewport.id}`, screen: screen.id, title: screen.title, kind: screen.kind, viewport, problem: screen.problem, label, frame, rect: { x, y, w: viewport.width, h: options.labelHeight + viewport.height } });
+      x += viewport.width + options.gap;
+    }
+    right = Math.max(right, x - options.gap);
+    lineHeight = Math.max(lineHeight, options.labelHeight + Math.max(...sizes.map((viewport) => viewport.height)));
+  }
+  return { cells, bounds: cells.length === 0 ? null : { x: 0, y: 0, width: right, height: y + lineHeight } };
+};
+
+/**
+ * The line width that lets the whole wall be drawn largest in a `stage` of this size: every screen on its own line, every
+ * screen on one line, and each width between that a line break can fall at, tried in turn. Ties keep the narrower wall.
+ */
+export const bestWrap = (screens: readonly SystemScreen[], system: readonly Viewport[], options: Omit<ScreenWallOptions, 'wrap'>, stage: { w: number; h: number }): number => {
+  if (stage.w <= 0 || stage.h <= 0) return 0;
+  const widths = screens.map((screen) => {
+    const sizes = screenViewports(screen, system);
+    return sizes.reduce((sum, viewport) => sum + viewport.width, 0) + options.gap * Math.max(0, sizes.length - 1);
+  });
+  const candidates = new Set<number>([0]);
+  let run = 0;
+  for (const [index, width] of widths.entries()) {
+    run += (index > 0 ? options.gap : 0) + width;
+    candidates.add(Math.max(width, run));
+    candidates.add(width);
+  }
+  let best = 0;
+  let bestScale = -1;
+  for (const wrap of [...candidates].sort((a, b) => a - b)) {
+    const bounds = screenWall(screens, system, { ...options, wrap }).bounds;
+    if (bounds === null) return 0;
+    const scale = Math.min(stage.w / bounds.width, stage.h / bounds.height);
+    if (scale > bestScale + 1e-9) {
+      best = wrap;
+      bestScale = scale;
+    }
+  }
+  return best;
+};
+
+/** Only this screen's cells (the rail shows one screen at a time); every cell when `screen` is null. */
+export const cellsOf = (wall: ScreenWall, screen: string | null): ScreenCell[] => (screen === null ? wall.cells : wall.cells.filter((cell) => cell.screen === screen));
+
+/** "Zoom 45%". */
+export const zoomText = (scale: number): string => `${Math.round(scale * 100)}%`;
