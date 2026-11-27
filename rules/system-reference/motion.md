@@ -24,6 +24,7 @@ Read this before you write duration or easing tokens, the motion pattern, or any
 - A value is one time or one easing. A time is `ms` or `s`, from 0 to 10 s. An easing is `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `cubic-bezier(x1, y1, x2, y2)` with both x from 0 to 1, or `steps(n)` with n from 1 to 100 and an optional `, start` or `, end`.
 - `cubic-bezier()` and `steps()` are valid only in the motion section. No shorthands such as `200ms ease-out` in one token.
 - The section takes the layouts `card`, `compact` and `table`.
+- The board draws a duration as a bar against the longest, and an easing as its curve, each with a chip that plays it on hover. A plain alias, `var(--x)`, previews what it leads to; other formulas get no preview.
 - Exits are faster than entries, about two thirds of the time. A modal enters in `--duration-slow` and leaves in `--duration-base`.
 - Nothing in product UI runs longer than 400ms. Larger distance earns a little more time; small parts never get the slow token.
 - Durations never change in dark mode. Don't give these tokens dark values.

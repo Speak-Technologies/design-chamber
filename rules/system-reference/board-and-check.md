@@ -1,6 +1,6 @@
 # The board and the check
 
-Read this before your first check, and when a finding is unclear. The check draws the board (the page Design Chamber makes from the system's files) offline, measures it, reads the files and lists what to fix.
+Read this before your first check. The check draws the board (the page Design Chamber makes from the system's files) offline, measures it, reads the files and lists what to fix.
 
 ## What the board shows
 
@@ -30,35 +30,36 @@ Components, overview, patterns and brand take all four. Colours, spacing, radius
 
 ## Running the check
 
-- Tool: `design_check` with `{ "system": "<id>" }`, plus `"area": "foundations" | "components" | "patterns" | "brand"` or `"scheme": "light" | "dark" | "both"`.
+- Tool: `design_check`, `{ "system": "<id>" }`, plus `"area": "foundations" | "components" | "patterns" | "brand"` or `"scheme": "light" | "dark" | "both"`.
 - Without the tool: Design Chamber's check command with `--system <id>`, plus `--area`, `--scheme`, `--static` (files only) or `--json`. Exit 0: no errors; 1: errors; 2: it couldn't run.
 - `--area` pictures and measures one area; the file checks still run on the whole system.
-- `--scheme` defaults to `both` when any token has a dark value, and to `light` when none does. `--scheme dark` draws it even with no dark values.
+- `--scheme` defaults to `both` with dark values, else `light`. `--scheme dark` draws dark either way.
 
 ## Checking screens
 
-<!-- final check: system screen check (T12b) -->
+After the board, a full check runs the design check on every screen at each viewport: contrast, overflow, text, alt text, labels, names. Findings name `screens/<id>.html`.
 
-A full check also renders every screen at each of its viewports, after the board, with the design check: contrast, sideways overflow, clipped or overlapping text, alt text, labels and names. Findings name `screens/<id>.html`. Up to 24 screen artboards run per check; `render-skipped` means the rest were left out. `--screen <id>` (repeatable; the tool takes `screens`) checks only those screens and skips the board. It can't be combined with `--area`. A `page` screen with a phone viewport also counts for `responsive`, a `marketing` screen for `marketing`.
+- With dark values each screen is drawn again in the dark scheme, named `<viewport>-dark`; `--scheme light` leaves those out.
+- Up to 24 screen artboards per check, dark ones counted, light first. `render-skipped` names what was left out.
+- `--area` draws no screens; only a full check does.
+- `--screen <id>` (repeatable; the tool takes `screens`) checks only those screens and skips the board. It can't be combined with `--area` or `--static`.
+- A `page` screen with a phone viewport (a viewport at most 480px wide) also counts for `responsive`, a `marketing` screen for `marketing`.
+- A missing or too long screen isn't drawn: `system-entry-invalid`.
 
 ## Reading the pictures
 
-Pictures go under the system's `.chamber/check/<run>/`; the check prints every name.
+Pictures go in `.chamber/check/<run>/` in the system folder.
 
-- Overviews, like `components-overview@wide.png`: the whole area at 1526px (wide) and 1046px (narrow). Open these first.
-- Tiles, like `components@wide-4.png`. Each finding about one entry names its tile.
+- Overviews, like `components-overview@wide.png`: a whole area at 1526px (wide) and 1046px (narrow). Open first.
+- Tiles, like `components@wide-4.png`; findings name them.
 - The dark pass, like `components-overview@wide-dark.png` and `components@wide-dark-2.png`: Foundations, Components and Patterns, wide only.
-- Screens, like `screen-<id>@<viewport>.png`.
+- Screens: `screen-<id>@<viewport>.png` and `screen-<id>@<viewport>-dark.png`, with `-2` and up for a page taller than its viewport.
 
-Look at every overview and screen before you say done: only you can see a hover state that looks wrong.
+Look at every overview and screen before you say done.
 
 ## The loop
 
-1. Write one area.
-2. Check it with `--area`.
-3. Open the overview, then each picture a finding names.
-4. Fix, and check again.
-5. Before you say done: one full check, no `--area`. No errors; warnings fixed or explained in OVERVIEW.md; no coverage gap left beyond what the user agreed is `outOfScope`.
+Write one area, check it with `--area`, open the overview and each picture a finding names, fix, check again. Before you say done: one full check, no `--area`. No errors; warnings fixed or explained in OVERVIEW.md; no coverage gap left beyond what the user agreed is `outOfScope`.
 
 ## Completeness
 
@@ -86,11 +87,11 @@ Only covered areas are checked. An area's missing topics are one `system-coverag
 
 ### Out of scope
 
-Some topics don't apply. List those ids in `system.json` as `outOfScope: ["navigation", "data-display"]` (at most 40 entries). A listed topic stops counting in every area, so `motion` drops the tokens and the pattern. Only these 34 ids count; any other value is skipped with a `system-entry-invalid` problem:
+List topics that don't apply in `system.json` as `outOfScope: ["navigation", "data-display"]` (at most 40 entries). A listed topic stops counting in every area, so `motion` drops the tokens and the pattern. Only these 34 ids count; any other value is skipped with a `system-entry-invalid` problem:
 
 `surface`, `text`, `border`, `brand`, `status`, `type-styles`, `spacing`, `radius`, `pairs`, `dark-values`, `state-colours`, `data-colours`, `control-sizes`, `breakpoints`, `elevation`, `layers`, `motion`, `components`, `examples`, `focus-disabled`, `voice`, `navigation`, `overlays`, `forms`, `feedback`, `states`, `data-display`, `accessibility`, `responsive`, `logo`, `brand-colour`, `imagery`, `marketing`, `icons`.
 
-Ask the user before you add a topic, in one short question with the reason. An interview answer that rules it out, such as Motion: No motion, is that agreement. Never add a topic just to clear a warning. Say in OVERVIEW.md what is out of scope and why.
+Ask the user before you add a topic, in one short question with the reason. An interview answer that rules it out, such as Motion: No motion, is that agreement. Never add a topic just to clear a warning. Note it and why in OVERVIEW.md.
 
 ### Examples, labels and contrast
 
@@ -105,7 +106,7 @@ Ask the user before you add a topic, in one short question with the reason. An i
 | `system-unreadable` | system.json isn't valid JSON, or is over 1 MB | Fix it; nothing else is read until then |
 | `system-entry-invalid` | Entries couldn't be read, screens and icons too; the detail names each | Fix id, kind, file path, list lengths, pair names, viewports, `depth`, `outOfScope` |
 | `system-value-invalid` | A token value doesn't fit its section | Use the shape given; no `url()` or `:`; easings only in motion |
-| `system-token-cap` | Over 2 000 tokens | Remove unused tokens |
+| `system-token-cap` | Over 2 000 tokens | Remove some |
 | `system-token-undefined` | A component names an undefined token | Define it, or fix the name |
 | `system-font-missing` | A listed font file is missing or unusable | Add it to `assets/fonts/` or drop the entry |
 | `system-example-remote` | An example loads files from the internet | Inline SVG, system fonts, no links |
@@ -123,12 +124,12 @@ Ask the user before you add a topic, in one short question with the reason. An i
 | `system-board-preview-wide` | An example is wider than its card | Remove fixed widths and let it wrap, or use `layout: "full"` |
 | `system-board-preview-outside` | Part of an example escapes its card | Frame absolute parts (`relative`, `overflow: hidden`); never `fixed` |
 | `system-board-text-outside` | Text runs out of its card | Wrap long words and ids, or shorten the text |
-| `system-board-hint-small` | The entry needed the full width | Set its layout to `full` |
+| `system-board-hint-small` | The entry needed the full width | Use `full` |
 | `system-board-partial` | Some parts weren't pictured or measured | Check one area at a time |
-| `render-skipped` | A pass ran out of time; earlier results are kept | Use `--area`, `--scheme dark` or `--screen` |
-| `browser-missing` | No Chrome, Edge or Chromium | File checks still ran; tell the user |
+| `render-skipped` | Something wasn't drawn; other results are kept | Use `--area`, `--scheme dark` or `--screen` |
+| `browser-missing` | No Chrome, Edge or Chromium | Tell the user |
 | `system-build-invalid` | BUILD.json can't be used | Fix the field the sentence names |
-| `system-proposal-invalid` | PROPOSAL.json can't be used | Write a new one with a new id |
+| `system-proposal-invalid` | PROPOSAL.json can't be used | New file, new id |
 | `system-living-missing`, `-stale`, `-failed`, `-changed`, `-unsafe`, `-reformatted` | The repo's living page is missing, behind or altered | Follow the living page steps in the skill; never edit the page |
 | `system-living-secret` | The living page shows something shaped like a secret | Remove it from the system |
 | `system-repo-unreadable`, `-snapshot-changed` | The repo folder can't be read, or its copy changed | Tell the user; they choose the folder or re-sync |

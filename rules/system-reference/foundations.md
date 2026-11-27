@@ -14,7 +14,7 @@ Read this before you write `tokens.css`, token notes or icons: what to decide, g
 
 ### Role vocabulary
 
-These are the preset names. Use them unless the code already has its own.
+Preset names. Use them unless the code has its own.
 
 | Token | Group | For |
 |---|---|---|
@@ -131,7 +131,7 @@ Use the set the code already has. Draw or add icons only for what the product sh
 - File names are lower-case words with dashes, named for what the icon shows (`trash`), not one use of it (`delete-invoice`).
 - One grid and one stroke: the same `viewBox` (usually `0 0 24 24`) and `stroke-width` (1.5 or 2) in every file, outline or filled, not mixed. Differences raise `system-icons-mixed`.
 - Paint with `currentColor`, so the product can colour an inlined icon. No scripts, links or embedded images. Keep each file under 32 KB, or it isn't drawn.
-- Sizes are the `--icon-*` tokens; the board shows the first four, or 24px with none. Design Chamber draws icon files only as `<img>`, where `currentColor` comes out black, also on the dark ground.
+- Sizes are the `--icon-*` tokens; the board shows the first four, or 24px with none. Design Chamber draws icon files only as `<img>`: one painted with `currentColor` alone takes each ground's text colour.
 - In component examples, copy the icon in as inline SVG so it takes the text colour.
 - Icons show under Assets, reviewed with Brand.
 

@@ -81,8 +81,6 @@ One entry with `kind: "social"`. The sizes and their safe areas:
 - Backgrounds from the brand palette or a calm photo with a scrim; text passes 4.5:1.
 - A template per size, with the variable parts named (headline, image, date).
 
-<!-- final check: screens (T12a) -->
-
 Make each template a screen of kind `marketing` at its real size, listed in `screens` with its own viewport (screen rules in `patterns.md`):
 
 ```json

@@ -113,21 +113,19 @@ One entry with `kind: "responsive"` says what changes at each breakpoint: naviga
 
 ## Screens
 
-<!-- final check: screens (T12a) -->
-
 A screen is a full HTML page in the system folder, drawn at real device widths. An example is a fragment in a card.
 
-- **Make an example** to show one pattern and its states, side by side if it helps.
-- **Make a screen** when the layout depends on the window width (media queries don't answer inside an example), or for a whole page: a page template, a responsive pattern, a full-page empty or error state, a landing page.
+- **Make an example** to show one pattern and its states.
+- **Make a screen** when the layout depends on window width (media queries don't answer inside an example), or for a whole page.
 
 ```json
 "screens": [{ "id": "settings", "title": "Settings", "kind": "page" }],
 "viewports": [{ "id": "laptop", "label": "Laptop", "width": 1280, "height": 800 }, { "id": "phone", "label": "Phone", "width": 390, "height": 844 }]
 ```
 
-- The file is always `screens/<id>.html`. Up to 24 screens, each up to 60 000 characters. `title` up to 80.
+- The file is always `screens/<id>.html` in the system folder. `id`: lower-case letters, digits and dashes. `title` up to 80. Up to 24 screens, each up to 60 000 characters.
 - Kinds: `page` (a page template), `pattern` (a responsive pattern), `state` (empty, loading, error as a whole page), `marketing` (landing, social, email). The first three are reviewed with Patterns, `marketing` with Brand.
-- `viewports` at the top sets the sizes for every screen; without it, Laptop 1280×800 and Phone 390×844. Follow the platforms answer. A screen's own `viewports` replaces them. Up to 8, width 200 to 3840, height 200 to 4320.
+- `viewports` at the top sets the sizes for every screen; without it, Laptop 1280×800 and Phone 390×844. Follow the platforms answer. A screen's own `viewports` replaces them. Up to 8, each with an `id`, a `label` and whole numbers for width (200 to 3840) and height (200 to 4320). One id means one size across the system.
 - One file serves every viewport: use media queries at the system's breakpoints, never a file per device.
 - A whole document: doctype, `<html lang>`, charset, viewport meta, title. Link `<link rel="stylesheet" href="../tokens.css">` and use `var(--token)`; dark values come with it. Declare fonts with your own `@font-face` pointing at `../assets/fonts/`. Reach logos and pictures with `../assets/` paths. Nothing from the internet.
 - Screens aren't examples: no `data-dc-*` labels, and the component still needs its own example.
