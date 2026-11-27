@@ -4,17 +4,17 @@
 // Also the icon grid's `currentColor` tint: an icon stays an `<img>`, so the tint is a filter.
 
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
 
 import { buildSystemDetail, parseSystemState } from '../../../src/shared/system-json.ts';
 import { parseMotionValue } from '../../../src/shared/token-edit.ts';
 import type { SystemDetail } from '../../../src/shared/types.ts';
 import { bundleDocument, type FileSource } from '../../../src/service/bundle.ts';
+import { checkBrowserArgs, launchOpenOptions, openCdp } from '../../../src/service/check/cdp.ts';
 import { assembleBoardHtml, overlaySource } from '../../../src/service/systems/board-assemble.ts';
 import { BOARD_ENTRY_FILE, buildBoardHtml } from '../../../src/service/systems/board-html.ts';
 import { buildLivingPage, type LivingPageInput } from '../../../src/service/systems/living-html.ts';
@@ -22,7 +22,7 @@ import { livingPagesIdle } from '../../../src/service/systems/living-page.ts';
 import { livingCssProblems, scanLivingPage } from '../../../src/service/systems/living-safe.ts';
 import { refreshSnapshot } from '../../../src/service/systems/snapshot.ts';
 import { easingPath, GROUND_TEXT, MOTION_ALIAS_DEPTH_MAX, paintsOnlyCurrentColor, renderSpecimenSection, resolveMotionValue } from '../../../src/service/systems/specimen-html.ts';
-import { chromeOrSkip, testBrowserFlags } from '../../helpers/chrome-or-skip.ts';
+import { chromeOrSkip } from '../../helpers/chrome-or-skip.ts';
 import { setupRepo, SYSTEM_JSON } from './repo-fixture.ts';
 
 const NOW = '2026-11-27T10:00:00.000Z';
@@ -316,67 +316,54 @@ test('the living page tints the same icons', async (t) => {
 
 type Report = { pixels: Record<string, string>; chips: string[] };
 
-// Appended to the board: each icon drawn with the filter Chrome computed for it, and each chip's transition.
-const PROBE = `<script>
-window.addEventListener('load', function () {
-  setTimeout(function () {
-    var pixels = {};
-    document.querySelectorAll('img.dc-icon').forEach(function (img) {
-      var canvas = document.createElement('canvas');
-      canvas.width = canvas.height = 24;
-      var context = canvas.getContext('2d');
-      var filter = getComputedStyle(img).filter;
-      context.filter = filter === 'none' ? 'none' : filter;
-      context.drawImage(img, 0, 0, 24, 24);
-      var entry = img.closest('[data-dc-entry]').getAttribute('data-dc-entry');
-      var ground = img.closest('.dc-ground').classList.contains('dc-dark') ? 'dark' : 'light';
-      pixels[entry + ' ' + ground] = Array.prototype.slice.call(context.getImageData(12, 12, 1, 1).data, 0, 3).join(',');
-    });
-    var chips = [];
-    document.querySelectorAll('.dc-motion-chip').forEach(function (chip) { chips.push(getComputedStyle(chip).transitionDuration); });
-    fetch('/result', { method: 'POST', body: JSON.stringify({ pixels: pixels, chips: chips }) });
-  }, 500);
-});
-</script>`;
-
-const inChrome = async (chrome: string, html: string, flags: readonly string[]): Promise<Report> => {
-  let answer: (value: Report) => void = () => undefined;
-  const result = new Promise<Report>((resolve) => (answer = resolve));
-  const server = createServer((req, res) => {
-    if (req.url === '/result' && req.method === 'POST') {
-      let body = '';
-      req.on('data', (chunk: Buffer) => (body += chunk.toString('utf8')));
-      req.on('end', () => {
-        res.writeHead(204).end();
-        answer(JSON.parse(body) as Report);
-      });
-      return;
-    }
-    res.writeHead(req.url === '/board.html' ? 200 : 404, { 'content-type': 'text/html; charset=utf-8' }).end(req.url === '/board.html' ? html : '');
+// Run in the board: each icon drawn with the filter Chrome computed for it, and each chip's transition.
+const MEASURE = `(async () => {
+  await Promise.all(Array.from(document.querySelectorAll('img.dc-icon'), (img) => img.decode()));
+  var pixels = {};
+  document.querySelectorAll('img.dc-icon').forEach(function (img) {
+    var canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 24;
+    var context = canvas.getContext('2d');
+    var filter = getComputedStyle(img).filter;
+    context.filter = filter === 'none' ? 'none' : filter;
+    context.drawImage(img, 0, 0, 24, 24);
+    var entry = img.closest('[data-dc-entry]').getAttribute('data-dc-entry');
+    var ground = img.closest('.dc-ground').classList.contains('dc-dark') ? 'dark' : 'light';
+    pixels[entry + ' ' + ground] = Array.prototype.slice.call(context.getImageData(12, 12, 1, 1).data, 0, 3).join(',');
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  const port = typeof address === 'object' && address ? address.port : 0;
-  const profile = await mkdtemp(path.join(os.tmpdir(), 'dc-motion-'));
-  const child = spawn(
-    chrome,
-    ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--mute-audio', '--force-color-profile=srgb', ...testBrowserFlags(), ...flags, `--user-data-dir=${profile}`, '--window-size=1200,1400', `http://127.0.0.1:${port}/board.html`],
-    { stdio: 'ignore' },
-  );
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  var chips = Array.from(document.querySelectorAll('.dc-motion-chip'), (chip) => getComputedStyle(chip).transitionDuration);
+  return { pixels: pixels, chips: chips };
+})()`;
+
+/**
+ * The board in one headless Chrome, measured with motion allowed and again with reduced motion, each
+ * set by name: the machine's own setting is not relied on, and is forced to reduce here, as on a
+ * Windows machine with animations off.
+ */
+const inChrome = async (chrome: string, html: string): Promise<{ moving: Report; still: Report }> => {
+  const workDir = await mkdtemp(path.join(os.tmpdir(), 'dc-motion-'));
+  const file = path.join(workDir, 'board.html');
+  await writeFile(file, html);
+  const args = checkBrowserArgs({ workDir, platform: process.platform, isRoot: process.getuid?.() === 0, join: path.join });
+  const session = await openCdp(chrome, ['--force-prefers-reduced-motion', ...args], launchOpenOptions(undefined, 20_000));
   try {
-    return await Promise.race([
-      result,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error('motion specimens e2e: no report within 30 s')), 30_000);
-      }),
-    ]);
+    const { targetId } = await session.send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' });
+    const { sessionId } = await session.send<{ sessionId: string }>('Target.attachToTarget', { targetId, flatten: true });
+    const send = <T,>(method: string, params: object = {}): Promise<T> => session.send<T>(method, params, { sessionId });
+    const measure = async (motion: 'no-preference' | 'reduce'): Promise<Report> => {
+      await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: motion }] });
+      const evaluated = await send<{ result: { value?: Report } }>('Runtime.evaluate', { expression: MEASURE, awaitPromise: true, returnByValue: true });
+      assert.ok(evaluated.result.value, `${motion}: the board could not be measured`);
+      return evaluated.result.value;
+    };
+    await send('Page.enable');
+    const loaded = new Promise<void>((resolve) => session.on('Page.loadEventFired', () => resolve()));
+    await send('Page.navigate', { url: pathToFileURL(file).href });
+    await loaded;
+    return { moving: await measure('no-preference'), still: await measure('reduce') };
   } finally {
-    clearTimeout(timer);
-    child.kill();
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    server.close();
-    await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => undefined);
+    await session.close();
+    await rm(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => undefined);
   }
 };
 
@@ -394,16 +381,13 @@ test('in Chrome: a currentColor icon takes the ground text colour in both board 
   for (const scheme of ['light', 'dark'] as const) {
     const source = memorySource(ICONS);
     const { html } = await assembleBoardHtml(detail, source, scheme);
-    const bundled = (await bundleDocument(overlaySource(source, html), BOARD_ENTRY_FILE, { mode: 'render' })).html.replace('</body>', () => `${PROBE}</body>`);
-    const moving = await inChrome(chrome, bundled, []);
+    const bundled = (await bundleDocument(overlaySource(source, html), BOARD_ENTRY_FILE, { mode: 'render' })).html;
+    const { moving, still } = await inChrome(chrome, bundled);
     near(moving.pixels['icon:0 light'], GROUND_TEXT.light, `${scheme} board, light ground`);
     near(moving.pixels['icon:0 dark'], GROUND_TEXT.dark, `${scheme} board, dark ground`);
     assert.equal(moving.pixels['icon:1 dark'], moving.pixels['icon:1 light'], 'a coloured icon keeps its colours');
     // fast, base, slow (light and dark), the alias of base, then the three easings.
     assert.deepEqual(moving.chips, ['0.1s', '0.2s', '0.8s', '1s', '0.2s', '0.6s', '0.6s', '0.6s'], scheme);
-    if (scheme === 'dark') {
-      const still = await inChrome(chrome, bundled, ['--force-prefers-reduced-motion']);
-      assert.deepEqual(still.chips, Array.from({ length: 8 }, () => '0s'));
-    }
+    assert.deepEqual(still.chips, Array.from({ length: 8 }, () => '0s'), scheme);
   }
 });

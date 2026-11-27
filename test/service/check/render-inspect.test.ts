@@ -229,8 +229,17 @@ test('an artboard that asks for the dark scheme is emulated dark; design artboar
   const dark: PlannedArtboard = { ...ART, viewport: { ...ART.viewport, id: 'wide-dark' }, scheme: 'dark' };
   const outcome = await renderArtboards({ ...base, openBrowser: async () => record(fakeSession()), plan: [ART, dark] });
   assert.deepEqual(outcome.artboards.map((artboard) => artboard.viewport), ['wide', 'wide-dark']);
-  const light = JSON.stringify([{ name: 'prefers-color-scheme', value: 'light' }]);
-  const darkFeatures = JSON.stringify([{ name: 'prefers-color-scheme', value: 'dark' }]);
+  // Every call names every feature: one left out would go back to the machine's own setting.
+  const featuresFor = (scheme: string): string =>
+    JSON.stringify([
+      { name: 'prefers-color-scheme', value: scheme },
+      { name: 'prefers-reduced-motion', value: 'no-preference' },
+      { name: 'prefers-reduced-transparency', value: 'no-preference' },
+      { name: 'prefers-contrast', value: 'no-preference' },
+      { name: 'forced-colors', value: 'none' },
+    ]);
+  const light = featuresFor('light');
+  const darkFeatures = featuresFor('dark');
   assert.deepEqual(recorded, [light, 'metrics 1526', darkFeatures, 'metrics 1526']);
 
   recorded.length = 0;

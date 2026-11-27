@@ -8,6 +8,7 @@ import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 
 import { decodePng } from '../../../src/service/check/png-stitch.ts';
+import { renderMediaFeatures } from '../../../src/service/check/render.ts';
 import { createLiveFileSource } from '../../../src/service/bundle.ts';
 import { configureLivingExamples, exampleCacheKey, planScreenShot, renderExamplePngs, type ExampleDeps, type ExampleShot } from '../../../src/service/systems/living-examples.ts';
 import { buildLivingPage, screenShotKey, type LivingExampleShot } from '../../../src/service/systems/living-html.ts';
@@ -99,6 +100,9 @@ test('two screens at two viewports are four pictures: light, at the viewport siz
   ]);
   assert.ok(!fake.sends.some((send) => send.method === 'Page.getLayoutMetrics'), 'a screen is its viewport, not its content height');
   assert.ok(fake.sends.some((send) => send.method === 'Emulation.setScriptExecutionDisabled' && send.params.value === true));
+  // Every picture is taken with the media features set, still: never the machine's own.
+  assert.deepEqual(fake.sends.find((send) => send.method === 'Emulation.setEmulatedMedia')?.params, { media: 'screen', features: renderMediaFeatures('light', 'reduce') });
+  assert.equal(renderMediaFeatures('light', 'reduce').length, 5);
   // The linked tokens travel inside the one document; the remote picture is asked for and refused.
   assert.ok(fake.served.every((doc) => doc.html.includes('--brand: #1a73e8')));
   assert.ok(fake.requests.some((request) => request.url === 'https://example.com/track.png' && request.answer === 'fail'));

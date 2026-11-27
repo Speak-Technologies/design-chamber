@@ -378,6 +378,9 @@ uses the same flags. The browser is driven over
 a pipe (no debugging port is opened), killed when the run ends, and limited to 12 seconds per
 screen and 90 seconds per run. A screen that hangs, crashes or reloads forever is a finding;
 the next screen still renders. Renders use the light scheme, as the wall does.
+A check also sets the other display preferences itself (motion allowed, normal contrast, no forced
+colours, transparency allowed), so its findings and pictures are the same on a machine with
+animations off or high contrast on.
 
 **Empty, unsaved storage.** Checks run with empty page storage. Every artboard gets a fresh
 stand-in for `localStorage` and `sessionStorage`, installed before the design's own scripts, so a

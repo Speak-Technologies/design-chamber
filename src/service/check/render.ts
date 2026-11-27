@@ -31,6 +31,19 @@ export const CHECK_CSP = [
   "form-action 'none'",
 ].join('; ');
 
+/**
+ * The media features a render sets, so what it draws and reports never follows the machine's own settings:
+ * Windows with animations off has Chrome report reduced motion, and high contrast forces colours. Chrome
+ * puts a feature left out of a later call back to the machine's value, so every call sends them all.
+ */
+export const renderMediaFeatures = (scheme: 'light' | 'dark', motion: 'no-preference' | 'reduce' = 'no-preference'): { name: string; value: string }[] => [
+  { name: 'prefers-color-scheme', value: scheme },
+  { name: 'prefers-reduced-motion', value: motion },
+  { name: 'prefers-reduced-transparency', value: 'no-preference' },
+  { name: 'prefers-contrast', value: 'no-preference' },
+  { name: 'forced-colors', value: 'none' },
+];
+
 /** The synthetic origin documents are served from. `.invalid` never resolves. */
 export const DOCUMENT_ORIGIN = 'https://design.invalid';
 
@@ -127,7 +140,7 @@ const openPage = async (session: CdpSession, serving: { current: Serving | null 
   await page.send('Runtime.enable');
   await page.send('Log.enable');
   await page.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
-  await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
+  await page.send('Emulation.setEmulatedMedia', { features: renderMediaFeatures('light') });
   // The storage stand-in (Phase 2 technical design §8.5): every artboard runs with empty, unsaved
   // localStorage/sessionStorage, in place before any design script so a design that legitimately
   // uses storage renders instead of failing with a console error. Registered once per page: it runs
@@ -260,7 +273,7 @@ const renderOne = async (
     // Only an artboard that asks for another scheme changes it, so a design's artboards send what they always did.
     const scheme = art.scheme ?? 'light';
     if (scheme !== page.scheme) {
-      await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] });
+      await page.send('Emulation.setEmulatedMedia', { features: renderMediaFeatures(scheme) });
       guard();
       page.scheme = scheme;
     }

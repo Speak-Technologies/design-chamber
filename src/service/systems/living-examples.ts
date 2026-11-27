@@ -35,7 +35,7 @@ import { systemScreenFileOf } from '../../shared/system-json.ts';
 import type { SystemDetail, Viewport } from '../../shared/types.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, dataUrlOf, RefBlocked, type FileSource } from '../bundle.ts';
 import { CdpError, CdpUnavailable, checkBrowserArgs, DEFAULT_LAUNCH_BUDGET_MS, launchOpenOptions, openCdp, type CdpSession, type OpenBrowserOptions } from '../check/cdp.ts';
-import { CHECK_CSP, DOCUMENT_ORIGIN } from '../check/render.ts';
+import { CHECK_CSP, DOCUMENT_ORIGIN, renderMediaFeatures } from '../check/render.ts';
 import { resolveBrowser } from '../chrome.ts';
 import type { ServiceContext } from '../context.ts';
 import { resolveInside, writeFileAtomic } from '../paths.ts';
@@ -256,13 +256,8 @@ const shoot = async (session: CdpSession, page: Page, serving: { current: Servin
     if (!alive.value) throw new ShotTimeout();
   };
   try {
-    await page.send('Emulation.setEmulatedMedia', {
-      media: 'screen',
-      features: [
-        { name: 'prefers-color-scheme', value: shot.scheme },
-        { name: 'prefers-reduced-motion', value: 'reduce' },
-      ],
-    });
+    // Reduced motion on purpose: a picture holds still (`STILL_CSS` does the rest).
+    await page.send('Emulation.setEmulatedMedia', { media: 'screen', features: renderMediaFeatures(shot.scheme, 'reduce') });
     const width = shot.size?.width ?? LIVING_EXAMPLE_WIDTH;
     const scale = shot.size === undefined ? LIVING_EXAMPLE_SCALE : LIVING_SCREEN_SCALE;
     await page.send('Emulation.setDeviceMetricsOverride', { width, height: shot.size?.height ?? VIEWPORT_HEIGHT, deviceScaleFactor: scale, mobile: false });
