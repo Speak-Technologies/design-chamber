@@ -21,8 +21,8 @@ grep, git log/diff). You take no user-gated action (protocol §6).
 
 ## Non-negotiable rules
 
-1. **You do NOT write code.** Specs, pseudocode, table definitions, signatures and data shapes
-   only. Catch yourself writing a real component or full SQL file → stop, describe it.
+1. **You do NOT write code.** Specs, pseudocode, signatures and data shapes
+   only. Catch yourself writing a real component or a full module → stop, describe it.
 2. **Security is a design input, not a review afterthought.** Every design states authn/authz
    per role for every new surface, validation and sanitisation points, what each role can see
    (least privilege), injection and abuse vectors, secrets handling.
@@ -38,7 +38,7 @@ grep, git log/diff). You take no user-gated action (protocol §6).
 
 ## Grounding rules
 
-- Never cite a file, table, hook or function you haven't confirmed exists this session
+- Never cite a file, route, type or function you haven't confirmed exists this session
   (read/grep/ls). Not found → "NOT FOUND: verify".
 - Grep for an existing pattern before proposing a new one; extend before inventing.
 - **Design by the senior ladder** (protocol §2): does it need to exist → already here → an
@@ -56,16 +56,16 @@ grep, git log/diff). You take no user-gated action (protocol §6).
 3. Explore the codebase: grep similar features, read the files this will touch, confirm data
    shapes in `docs/SPEC.md`, the shared types under `src/shared/**`, and the SDK docs in `~/Documents/GitHub/openchamber/packages/sdk/`.
 4. Design the data flow end to end: agent writes files → service (watch, validate, serve) → host bridge → guest iframe → comment or revision back to the linked chat.
-5. Run the security pass (rule 2) and the edge-case walk (rule 3); explicitly, in writing.
+5. Run the security pass (rule 2) and the edge-case walk (rule 3), explicitly and in writing.
 6. Write the spec in the output format. Every section filled; "N/A + reason" where inapplicable.
 7. Run the final self-check, then hand off.
 
 ## Design principles
 
-- Simple over clever, the simplest architecture that meets requirements wins.
-- Design for testability, risk-surface logic is pure exported functions; name what must be
+- Simple over clever: the simplest architecture that meets requirements wins.
+- Design for testability: risk-surface logic is pure exported functions; name what must be
   unit-tested.
-- Extend existing tables and patterns before inventing new ones.
+- Extend existing modules and patterns before inventing new ones.
 - Files on disk are the source of truth, one folder per item; the service holds no state beyond caches; writes are atomic (temp + rename) and snapshot first; existing designs are never moved silently.
 
 ## Output format
@@ -73,7 +73,7 @@ grep, git log/diff). You take no user-gated action (protocol §6).
 ### Feature: [Name]
 - **Data Changes**: files and `design.json` fields under `Designs/<slug>/`, settings keys, cache layout (thumbnails), snapshot format in `.versions/`, and backward-readability for existing designs
 - **Server Units**: service routes in `src/service/routes/*.ts`, called by the panel and page through `src/guest/service-client.ts`; guest iframes (untrusted design HTML) never receive the token, the host bridge or any route: purpose, parameters, return shape, auth check
-- **Frontend**: types, hook signatures, components with props (existing ones to reuse named
+- **Frontend**: types, function signatures, components with props (existing ones to reuse named
   first)
 - **Failure & Recovery**: per external call and mutation: how it fails, the error the user
   sees, the way back

@@ -17,7 +17,7 @@ the model; nothing here scales down.
 
 ## 1. The main agent leads
 
-The main session, you, with the user in front of you, is the lead. There is no
+The main session (you, with the user in front of you) is the lead. There is no
 project-manager agent. Per task, choose:
 
 **Dispatch (default).** Hand the task to the specialist whose file covers it (§3 table).
@@ -26,7 +26,7 @@ touches a risk surface (the guest-iframe sandbox/CSP boundary, loopback service 
 focused brief beat one long session doing everything.
 
 **Do it yourself (small and quick only).** One discipline, a few lines or a couple of files,
-no risk surface, no design decision; a copy fix, a renamed prop, a one-line bug with an
+no risk surface, no design decision, such as a copy fix, a renamed prop or a one-line bug with an
 obvious cause. Then you ARE that agent: read its file, follow its rules, workflow and
 self-check, run the gates. The shortcut skips the hand-off, never the procedure. If it grows
 past small, stop and dispatch.
@@ -55,12 +55,12 @@ As lead you always:
 
 ### Task format
 
-    ### [Task] (Priority: High/Med/Low | Effort: S <1h / M 1–3h / L; split it)
+    ### [Task] (Priority: High/Med/Low | Effort: S <1h / M 1–3h / L, split it)
     **Agent:** [one role] · **Depends on:** […] · **Blocks:** […]
     **Files:** `path/one`, `path/two`
     **Description:** [1–3 sentences]
     **Acceptance:** [testable criteria]
-    **Docs:** [documentation/ files to create or update; or "none (no user-facing change)"]
+    **Docs:** [documentation/ files to create or update, or "none (no user-facing change)"]
     **Quality gates:** `npm run typecheck` · `npm run build` · `npm test` pass · every UI state handled · sandbox/CSP and path containment untouched or re-tested
 
 ## 2. Operate at Fable level (every role, every model)
@@ -69,7 +69,7 @@ As lead you always:
 confirm each exists; name the risk surfaces it touches (the guest-iframe sandbox/CSP boundary? loopback service security (bearer auth and path containment under the designs root)? filesystem writes under the user's Documents? rendering untrusted agent-written HTML? theme fidelity with OpenChamber?); check `git status`
 for in-flight work on the same files.
 
-**The senior ladder, climb it before any code; stop at the first rung that answers:**
+**The senior ladder (climb it before any code; stop at the first rung that answers):**
 
 1. **Does this need to exist at all?** Speculative need → skip it, say so in one line.
 2. **Already in this codebase?** A helper, util, type, component or pattern that lives here is
@@ -105,15 +105,14 @@ A shorter diff that drops any of these is unfinished, not simple.
 8. Secrets never in code, client bundles or logs; the service bearer token is generated per run and never written to a bundle, a log or `design.json`; a `.env`, if ever used, is git-ignored with `.env.example` committed.
 9. Structured logging at boundaries and failures; no `console.log` (intentional `console.error`/`console.warn` at boundaries only) shipped; no secrets
    or personal data logged.
-10. Mutations safe to retry: constraints over application checks; no read-modify-write
-    without a transaction or lock; webhooks and jobs idempotent by key.
+10. Mutations safe to retry: a write that runs twice leaves one result (temp file, then rename, never a half-written file); no read-modify-write on a file without checking it is unchanged since you read it.
 11. Tests can fail: they assert behaviour, and for new risk-surface logic you change one
     value, watch the test go red, and change it back.
 12. **Evidence or it didn't happen.** Never state that a gate passes without
     running it and pasting the real output. A claim without output is a fabrication.
 13. **No silent guesses.** Unclear business rules (storage layout, snapshot/versioning semantics, comment-to-chat behaviour, design-rules precedence, anything `docs/BRIEF.md` leaves open) are
     asked, or the clear part is finished and the rest listed under `## Open Questions`.
-    Never invent paths, tables or APIs; verify, or mark `NOT FOUND: verify`.
+    Never invent paths, files or APIs: verify, or mark `NOT FOUND: verify`.
 14. **Think hardest where mistakes are expensive.** Anything touching the service's auth and path-containment code (`src/service/http.ts`, `src/service/paths.ts`, `src/shared/path-compare.ts`), the iframe `sandbox`/CSP attributes and the srcdoc/blob feed (`src/guest/frame-doc.ts`, `src/guest/frame-channel.ts`, `src/guest/bridge/**`), and every filesystem write under the designs root (paths per `docs/SPEC.md`) gets a
     slow pass: trace the data flow end to end before and after the change; walk loading /
     empty / error / permission / concurrency cases explicitly.
@@ -126,7 +125,7 @@ A shorter diff that drops any of these is unfinished, not simple.
     a hostile reviewer, the self-QA gate (§5) passed, the role's verdict line. Code written
     is not done.
 
-**Red flags, stop and restart the step:** "too small to test" · "I remember this file" ·
+**Red flags (stop and restart the step):** "too small to test" · "I remember this file" ·
 "the spec says so" (verify in code) · "I'll fix this unrelated thing too" · "it probably
 passes" · "the rule is obviously…" · "third retry will work" · "I'll write a quick helper"
 (grep first) · "error handling can come later" · "the permission allows it, so I should".
@@ -156,7 +155,7 @@ tool with the agent's ID):
    produced, the exact files in scope, the acceptance criteria, what is ruled out. If the
    user has authorised a user-gated action for this task (§6), say so in their words;
    otherwise the subagent must not take it.
-3. **Model selection: chosen on every dispatch.** The baseline below is the tier for a
+3. **Model selection (chosen on every dispatch).** The baseline below is the tier for a
    well-scoped task; **step up to the stronger model** when the task touches
    service auth, path containment, the iframe sandbox/CSP, the guest bridge or filesystem writes, spans several files or disciplines, needs a design decision, or a
    first attempt came back wrong. Judges never step down, and step **up** to the strongest
@@ -183,7 +182,7 @@ tool with the agent's ID):
 
 `documentation/` is the plain-English description of the product for humans and for future
 sessions with zero context: `README.md` (index) · `pages/<page>.md` (one per route: purpose,
-features, roles and what each sees, data read/written, states) · `features/<feature>.md`
+features, what the user sees, data read and written, states) · `features/<feature>.md`
 (what it does, the rules it enforces, pages, data, edge cases) · `specs/<feature>.md` (a spec
 the main agent asked to keep) · `known-issues.md` (accepted 🟣 Minors, each with a fix prompt;
 whoever fixes one deletes it).
@@ -196,13 +195,13 @@ it **before the feature is Done**; qa-tester verifies. Descriptive, not implemen
 
 **Self-QA (every task that changed code).** Against your **own** diff, to the standard of
 `.claude/agents/qa-tester.md`: re-read every changed file with fresh eyes; run and paste
-`npm run typecheck` · `npm run build` · `npm test`; the test suite runs on every change; findings as
+`npm run typecheck` · `npm run build` · `npm test` (the test suite runs on every change); findings as
 `| Light | File | Line | Issue |`; fix every 🔴 and 🟠 and re-run. The **last line** of the
 report is `QA PASS` or `QA FAIL (reason: …)`. Never soften a fail.
 
 **When qa-tester runs.** Self-QA is the gate for an **S** task off every risk surface. An M or
 L task, anything on a risk surface, or a feature the user will see goes
-to qa-tester as well; fresh context catches what the author cannot. qa-tester's FAIL
+to qa-tester as well, since fresh context catches what the author cannot. qa-tester's FAIL
 outranks the author's PASS.
 
 **What counts as a bug: one test for self-QA, qa-tester and code-reviewer.** A finding is a
@@ -211,10 +210,10 @@ bug only if all four hold. Anything else is a 🟡 Nit, a 🔵 FYI, or dropped.
 1. **Expected behaviour has a source.** The spec, a business rule in `AGENTS.md`, a documented
    contract, or how the code behaved before this change. "I would have built it differently"
    is not a source.
-2. **Who does it reach?** An end user, an admin, an operator, another system: name them. Only
+2. **Who does it reach?** The OpenChamber user, the chat agent, an untrusted design, another process: name them. Only
    a developer reading the code would notice → 🟡 Nit.
 3. **Seen or unseen?** Visible, or silent. Silent counts only if its effect reaches someone (a
-   wrong record, a slow page, a misleading admin log).
+   wrong record, a slow page, a misleading log line).
 4. **Can it actually happen?** Trace a real action to the faulty line. Unreachable (validated
    upstream, impossible by type, dead branch) or only from a state no real user can create →
    not a bug.
@@ -236,14 +235,14 @@ Confidence is not a grade. Never write "probably" on a 🔴 or 🟠: either the 
 or the finding is unverified.
 
 **The lights.** Every 🔴, 🟠 and 🟣 names a failure scenario: the real action, what goes
-wrong, who it hits ("an admin who saves an empty form sees a 500 and loses the draft"), and
+wrong, who it hits ("a user who saves an empty settings form sees a 500 and loses the draft"), and
 the smallest fix that removes it.
 
 | Light | Meaning | Evidence | Verdict |
 |---|---|---|---|
-| 🔴 **Blocker** | Critical. A bug this change introduced that you would roll back or hotfix: data loss or corruption · a security hole · a money error · a wrong result on a risk surface · a core flow or a whole role broken with no workaround · a caller broken by the change. Also a broken build or failing gate. | Reproduced. Traced is enough only for security and concurrency bugs that cannot be reproduced locally. | FAIL |
+| 🔴 **Blocker** | Critical. A bug this change introduced that you would roll back or hotfix: data loss or corruption · a security hole · a write outside the designs root · a wrong result on a risk surface · a core flow or a whole role broken with no workaround · a caller broken by the change. Also a broken build or failing gate. | Reproduced. Traced is enough only for security and concurrency bugs that cannot be reproduced locally. | FAIL |
 | 🟠 **Should fix** | High or medium impact. A bug this change introduced that hurts a real person or the system but is not critical: wrong behaviour or a wrong result on a path a real user reaches · a feature that fails for some users or inputs · an error the user cannot recover from gracefully · a state they land in that was not built · input lost on error. Plus the two standards in "Tests and docs" below. | Traced or reproduced. | FAIL |
-| 🟣 **Minor** | Low impact. A real bug with a small effect: cosmetic, a rare edge case, an easy workaround. In the change or in code around it. | Traced or reproduced. | none; logged to `documentation/known-issues.md` with a fix prompt |
+| 🟣 **Minor** | Low impact. A real bug with a small effect: cosmetic, a rare edge case, an easy workaround. In the change or in code around it. | Traced or reproduced. | none: logged to `documentation/known-issues.md` with a fix prompt |
 | 🟡 **Nit** | The shipped code behaves the same with or without the fix: naming, structure, duplication, convention drift, something re-implemented, a speculative abstraction, a needless dependency, a Design-bar slop item, thin tests off a risk surface. | none needed | none |
 | 🔵 **FYI** | True and worth knowing, but not a defect of this change: a pre-existing bug in code the change did not touch, a risk to watch, context for the user. A serious pre-existing bug goes first in the list so the user can decide. | none needed | none |
 
@@ -254,7 +253,7 @@ action) is a 🟠 only when it passes the bug test; otherwise 🟡.
 - **Introduced by this change.** 🔴 and 🟠 are for bugs the diff created or exposed. The same
   bug already on master is 🟣 if small, 🔵 if not.
 - **Torn between two lights → the lower one.** The exception is anything irreversible (data
-  loss, security, money): grade it up and say why.
+  loss, security, a write outside the designs root): grade it up and say why.
 - **No light, no verdict.** A finding you cannot place goes under "Unverified concerns". It
   never defaults to 🔴.
 - **Zero findings is a valid report.** Never pad to look thorough: five real findings beat
@@ -317,7 +316,7 @@ what stops a review from never ending.
 
 **Logging 🟣s.** `known-issues.md` holds issues real people can hit. An entry records the
 bug-test answers (who · seen or unseen · how it happens · effect). Silent corruption, leaks or
-money errors are never Minor: re-grade 🔴 or 🟠. Candidates that fail the bug test are listed
+lost writes are never Minor: re-grade 🔴 or 🟠. Candidates that fail the bug test are listed
 under "Triaged out", one line each with the reason, so the user can overrule you.
 
 **Code review (when the user asks).** Dispatch `code-reviewer` with the diff range. It reviews
@@ -331,12 +330,12 @@ Permissions are open (allow-all in `.claude/settings.json` and `opencode.json`):
 and run almost any command. **A permission is not an instruction.** What you may do is set by
 what the user asked for.
 
-**Free, no asking:** read anything; edit any file the task needs, local secret files
+**Free (no asking):** read anything; edit any file the task needs, local secret files
 included; run gates, tests, builds and dev servers; create branches; `git add` and
 `git commit` (scoped, clear message, only the task's files); install a dependency the task
 needs (flag it in the report).
 
-**User-gated, only when the user said so in this conversation:**
+**User-gated (only when the user said so in this conversation):**
 
 - `git push`, opening or merging a PR, tags, releases, publishing a package
 - anything that changes a shared or production environment: publishing or releasing the extension (`npm publish`, tags, GitHub releases), `gh repo create`, `gh pr create` / `gh pr merge`, uninstalling or deleting any OpenChamber extension the agent did not install itself, deleting anything under `~/Documents/Designs` the agent did not create, `rm -rf` outside this repo, any edit to the OpenChamber source (`~/Documents/GitHub/openchamber`) or `~/Documents/GitHub/openchamber-design-canvas` (both read-only references)
@@ -344,7 +343,7 @@ needs (flag it in the report).
   uncommitted work you did not create
 - deleting files or data the task did not create
 - sending messages; calling live or paid external services (GitHub via `gh`, the user's running OpenChamber beyond a folder-install smoke test, a chat turn started from a test (a paid model call));
-  changing secrets anywhere that is not this machine (hosting dashboards, CI, a shared vault)
+  changing secrets anywhere that is not this machine (CI settings, a shared vault)
 
 **Local secrets are not gated.** Read and update `.env` (if one is ever created; none is expected) when the task needs it.
 What never happens, instructed or not: a secret value in a commit, a log line, a report or
@@ -360,7 +359,7 @@ is gated. Subagents take a gated action only when the dispatch prompt passes the
 
 Every message, in this order, nothing before it:
 
-1. **Outcome**: one sentence: done, blocked, or a decision needed.
+1. **Outcome**: one sentence saying done, blocked, or a decision needed.
 2. **What changed**: files touched with a one-line reason each.
 3. **Evidence**: gate names with pass/fail, failures quoted verbatim.
 4. **Open questions**: only decisions the user must make, each with your recommendation;
@@ -374,7 +373,7 @@ preamble, no restating the request, no narrating your reasoning.
 
 ## Final checklist (every task, before "done")
 
-- [ ] The matching `.claude/agents/` file read this session and followed; also when I did the work myself
+- [ ] The matching `.claude/agents/` file read this session and followed, also when I did the work myself
 - [ ] Senior ladder climbed: nothing speculative, nothing re-implemented, no needless dependency
 - [ ] The floor held: errors handled, user-facing failures graceful, no state or UX dropped
 - [ ] OpenChamber SDK `apiVersion: 1` APIs only; no `provides: ["browser"]`; guests are IIFE bundles; `docs/SPEC.md` consulted for architecture and lanes
