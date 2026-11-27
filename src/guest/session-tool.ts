@@ -12,10 +12,12 @@ export type SessionTool = { name: string; target: string | null };
 const NAME_PATTERN = /^[A-Za-z0-9_.:-]+$/;
 /** C0, DEL, C1, and the two Unicode separators that would break a line. */
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+/** The marks, embeddings, overrides and isolates that reorder text on screen: a file name must read as it is written. */
+const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 const readTarget = (raw: unknown): string | null => {
   if (typeof raw !== 'string') return null;
-  const target = raw.replace(CONTROL_CHARS, '').trim();
+  const target = raw.replace(CONTROL_CHARS, '').replace(BIDI_CONTROLS, '').trim();
   return target.length >= 1 && target.length <= SESSION_TOOL_TARGET_MAX ? target : null;
 };
 

@@ -59,6 +59,23 @@ test('a target loses C0, DEL, C1 and the line and paragraph separators, then is 
   assert.equal(aimed('a\u00a0b.css')?.target, 'a\u00a0b.css', 'U+00A0 is the first character past C1');
 });
 
+test('a target loses every bidi control, so a crafted file name never reads reordered', () => {
+  const bidi = [0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069];
+  for (const code of bidi) {
+    assert.equal(aimed(`the${String.fromCharCode(code)}me.css`)?.target, 'theme.css', `U+${code.toString(16)}`);
+  }
+  // The classic spoof: an override that would show this as "invoice-exe.css".
+  assert.equal(aimed('invoice-\u202essc.exe')?.target, 'invoice-ssc.exe');
+  assert.deepEqual(aimed('\u2066\u202e\u202c\u2069'), { name: 'read', target: null }, 'nothing left');
+  assert.equal(aimed(`${'a'.repeat(1024)}\u200f`)?.target?.length, 1024, 'measured after stripping');
+  // Right-to-left letters themselves, and the neighbours of each range, are not controls.
+  assert.equal(aimed('עיצוב/تصميم.css')?.target, 'עיצוב/تصميم.css');
+  for (const code of [0x061b, 0x061d, 0x200d, 0x2010, 0x2027, 0x202f, 0x2065, 0x206a]) {
+    assert.equal(aimed(`a${String.fromCharCode(code)}b`)?.target, `a${String.fromCharCode(code)}b`, `U+${code.toString(16)}`);
+  }
+  assert.equal(named('rea\u202ed'), null, 'the name pattern already refuses them');
+});
+
 test(`a target of ${SESSION_TOOL_TARGET_MAX} characters is kept, one more becomes null; the tool stays`, () => {
   assert.equal(SESSION_TOOL_TARGET_MAX, 1024);
   assert.equal(aimed('a'.repeat(1024))?.target?.length, 1024);
