@@ -13,7 +13,7 @@ Four areas, in this order. Each section appears only when it has something in it
 | Patterns | patterns | A card per entry with its body and example |
 | Brand | brand, assets | Brand entries like patterns; a card per logo file with its variant and note; font specimens |
 
-Examples are fragments in shadow roots. Scripts never run, and the dark ground swaps in the dark token values, so examples use `var(--token)` for every colour.
+Examples are fragments in shadow roots. `<script>` doesn't run (inline handlers can; don't use them). The dark ground swaps in dark values, so use `var(--token)` for every colour.
 
 ## Layout hints
 
@@ -22,7 +22,7 @@ Give an entry a `layout`, or set section defaults in a top-level `layout` object
 | Layout | Use for |
 |---|---|
 | `card` | Most entries |
-| `compact` | Small pieces: buttons, badges, tags, avatars, switches; short swatch lists |
+| `compact` | Small pieces without labels; short swatch lists |
 | `full` | Wide entries: tables, navigation, toolbars, page headers, phone frames, examples with two frames side by side |
 | `table` | Long lists read row by row, such as 40 colours or 30 small components |
 

@@ -24,14 +24,15 @@ Read this before you write `components` in `system.json` or any `components/<id>
   "tokens": ["--accent", "--accent-fg", "--accent-hover", "--radius-md", "--control-md", "--focus-ring"],
   "source": "src/components/Button.tsx",
   "example": "components/button.html",
-  "layout": "compact"
+  "layout": "full"
 }
 ```
 
 - `purpose` is one sentence. `note` is usage guidance: when to use it, when not to, and what to use instead. Both are up to 500 characters.
 - `variants` and `states` take up to 20 short names each, `sizes` up to 10. `tokens` names up to 40 tokens this system defines. An undefined name is a finding.
 - `example` is exactly `components/<id>.html`.
-- `layout`: `compact` for small parts (buttons, badges, tags, avatars, switches), `full` for wide ones (tables, navigation bars, toolbars, page headers), `card` for the rest.
+- `layout`: `full` for wide ones (labelled matrices, tables, navigation bars, toolbars, page headers), `card` for the rest.
+- `compact` is only for small parts shown without labels, such as a row of avatars; a labelled matrix doesn't fit it.
 
 ## 3. Names to use
 
@@ -109,7 +110,7 @@ Hover, focus and pressed can't happen in a picture. Write each such rule twice i
 ## 6. How examples are drawn
 
 - The example is a fragment, not a document: no `<html>`, `<head>` or `<body>`. It is set into a shadow root inside the board, so its `<style>` only applies inside it and `:host` styles the box around it.
-- Scripts never run. Interactive behaviour must be shown as states, not built.
+- `<script>` elements don't run. Inline handlers such as `onclick` or `onerror` can, in the sandboxed frame, but never add them: show behaviour as states, not code.
 - It is drawn twice when the system has dark values: once on a light ground with the light tokens, once on a dark ground with the dark tokens. Use `var(--token)` for every colour, size and font, and never write your own `prefers-color-scheme` rule. A hardcoded colour shows up wrong on one of the two grounds.
 - Nothing loads from the internet. Draw icons as inline SVG with `stroke="currentColor"`. Fonts come from the system's own `fonts`. Images are inline SVG or left out.
 - Up to 20 000 characters per file.
