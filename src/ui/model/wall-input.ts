@@ -1,8 +1,10 @@
 // The wall's input decisions as pure functions: which key does what, where a wheel turn goes,
-// what a pointer press starts. The DOM side (`src/ui/wall/input-controller.ts`) reads the event,
-// asks one of these, and acts on the answer. The rules are exactly the ones the wall always
-// had; changing a shortcut or a gesture means changing it here, where a table test can see it.
+// what a pointer press starts, what two fingers do. The DOM side (`src/ui/wall/input-controller.ts`)
+// reads the event, asks one of these, and acts on the answer. Mouse and keyboard rules are exactly
+// the ones the wall always had; changing a shortcut or a gesture means changing it here, where a
+// table test can see it.
 
+import { panBy, zoomBy, type Camera } from '../../guest/camera.ts';
 import type { BridgeMode } from '../../shared/bridge-protocol.ts';
 import { nudgeStep, type Point } from './wall-model.ts';
 
@@ -154,8 +156,52 @@ export const pointerDownAction = (input: {
 
 /** A press that moved more than this many screen px is a drag, not a click. */
 export const DRAG_THRESHOLD_PX = 4;
+/** A finger wobbles more than a mouse: a tap may move this far and still be a tap. */
+export const TOUCH_DRAG_THRESHOLD_PX = 10;
 
-export const isDrag = (from: Point, to: Point): boolean => Math.hypot(to.x - from.x, to.y - from.y) > DRAG_THRESHOLD_PX;
+/** The drag threshold for a pointer, by `PointerEvent.pointerType`. Only touch differs. */
+export const dragThreshold = (pointerType: string): number => (pointerType === 'touch' ? TOUCH_DRAG_THRESHOLD_PX : DRAG_THRESHOLD_PX);
+
+export const isDrag = (from: Point, to: Point, threshold: number = DRAG_THRESHOLD_PX): boolean => Math.hypot(to.x - from.x, to.y - from.y) > threshold;
+
+// ---- Touch (native extras §2.2). A mouse and a trackpad never reach these. ----
+
+/** Where two fingers are, surface px. */
+export type TouchPair = readonly [Point, Point];
+
+/** Fingers closer than this give no usable distance to take a ratio of. */
+const PINCH_MIN_DISTANCE = 1;
+
+const middle = ([a, b]: TouchPair): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+const apart = ([a, b]: TouchPair): number => Math.hypot(b.x - a.x, b.y - a.y);
+
+/**
+ * One move of a pinch: how much to zoom (`factor`), around which point (`at`, the fingers' new
+ * midpoint), and how far the midpoint travelled (`dx`, `dy`: two fingers also pan).
+ */
+export const pinchStep = (prev: TouchPair, next: TouchPair): { factor: number; at: Point; dx: number; dy: number } => {
+  const before = apart(prev);
+  const after = apart(next);
+  const from = middle(prev);
+  const at = middle(next);
+  const factor = before < PINCH_MIN_DISTANCE || after < PINCH_MIN_DISTANCE ? 1 : after / before;
+  return { factor, at, dx: at.x - from.x, dy: at.y - from.y };
+};
+
+/** The camera after one move of a pinch: what was under the fingers stays under them; zoom keeps the wall's 5 % to 400 %. */
+export const pinchCamera = (camera: Camera, prev: TouchPair, next: TouchPair): Camera => {
+  const step = pinchStep(prev, next);
+  return zoomBy(panBy(camera, step.dx, step.dy), step.factor, step.at);
+};
+
+/**
+ * A finger dragging a page in Edit mode (its frame takes no input there): how far to scroll the
+ * design so it follows the finger. `scale` is the frame's size on screen against its own px.
+ */
+export const touchScrollDelta = (from: Point, to: Point, scale: number): { dx: number; dy: number } => {
+  const by = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  return { dx: (from.x - to.x) / by, dy: (from.y - to.y) / by };
+};
 
 /**
  * Whether a frame's answer to `hit-test` belongs to the request still waiting: same artboard

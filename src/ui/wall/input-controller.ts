@@ -1,11 +1,23 @@
-// The wall surface's input: keyboard, wheel, pointer, label double-click and a double-click on an
-// element (edit its text). This module reads
+// The wall surface's input: keyboard, wheel, pointer (mouse and touch), label double-click and a
+// double-click on an element (edit its text). This module reads
 // the event, asks `model/wall-input.ts` what it means, and acts on the answer. It owns the
-// gesture state: a pan in progress, the Space key, the pan tool and the press that may become a
-// comment.
+// gesture state: a pan in progress, the Space key, the pan tool, the press that may become a
+// comment, the fingers on the glass (two pinch) and a finger scrolling a page.
 
 import { panBy, wheelZoom } from '../../guest/camera.ts';
-import { isDrag, pageKeyAction, pointerDownAction, shortcutAction, wallKeyAction, wheelRoute, type WallKeyAction } from '../model/wall-input.ts';
+import {
+  dragThreshold,
+  isDrag,
+  pageKeyAction,
+  pinchCamera,
+  pointerDownAction,
+  shortcutAction,
+  touchScrollDelta,
+  wallKeyAction,
+  wheelRoute,
+  type TouchPair,
+  type WallKeyAction,
+} from '../model/wall-input.ts';
 import { screenToFrame, type Point } from '../model/wall-model.ts';
 import type { BoardSet } from './board-set.ts';
 import type { CameraController } from './camera-controller.ts';
@@ -18,7 +30,7 @@ import type { Board } from './wall-types.ts';
 export type InputController = {
   /** A wall-wide shortcut (also what a key forwarded from a frame does); returns whether it was used. */
   shortcut: (key: string, shift: boolean) => boolean;
-  /** Whether the user is dragging the wall. */
+  /** Whether the user is dragging or pinching the wall. */
   isPanning: () => boolean;
 };
 
@@ -30,7 +42,7 @@ export type InputDeps = {
   /** Ctrl/⌘+Z on the wall: the edit feature decides whether there is anything to undo. */
   onUndoEdit: () => void;
   /** A screen label dragged into a new place (full-screen page, Edit mode); the press starts here, the controller does the rest. */
-  reorder: Pick<ReorderController, 'begin' | 'active'>;
+  reorder: Pick<ReorderController, 'begin' | 'active' | 'dispose'>;
 };
 
 export const createInputController = (ctx: WallContext, deps: InputDeps): InputController => {
@@ -39,8 +51,27 @@ export const createInputController = (ctx: WallContext, deps: InputDeps): InputC
   let panning: { id: number; last: Point } | null = null;
   let spaceDown = false;
   let panTool = false;
-  /** A primary press that may become a comment click (or a pan, if it drags). */
-  let downAt: { point: Point; board: Board | null } | null = null;
+  /** A primary press that may become a comment click (or a pan, if it drags). `pin`: a finger on a pin, whose tap is the pin's own. */
+  let downAt: { point: Point; board: Board | null; pin?: true } | null = null;
+  /** The fingers on the wall (touch only; a mouse is never in here), in the order they landed. */
+  const touches = new Map<number, Point>();
+  /** A second finger landed: until every finger is up, nothing is a tap. */
+  let pinching = false;
+  /** A finger dragging a page in Edit mode, where the frame takes no input of its own. */
+  let scrolling: { id: number; last: Point; board: Board } | null = null;
+
+  const touchPair = (): TouchPair | null => {
+    const [first, second] = touches.values();
+    return first && second ? [first, second] : null;
+  };
+
+  const capture = (id: number): void => {
+    try {
+      surface.setPointerCapture(id);
+    } catch {
+      // The finger is already up: its pointerup or pointercancel follows and ends the gesture.
+    }
+  };
 
   const setTool = (): void => {
     surface.dataset.tool = spaceDown || panTool ? 'pan' : 'none';
@@ -152,7 +183,50 @@ export const createInputController = (ctx: WallContext, deps: InputDeps): InputC
     { passive: false },
   );
 
+  // Fingers are counted before anything else sees them (a pin or a label keeps its own press), so a second one always pinches.
+  scope.listen<PointerEvent>(
+    surface,
+    'pointerdown',
+    (event) => {
+      if (event.pointerType !== 'touch') return;
+      // The first finger down: anything still remembered is from a gesture whose end never reached us.
+      if (event.isPrimary) {
+        if (pinching) {
+          panning = null;
+          delete surface.dataset.panning;
+        }
+        touches.clear();
+        pinching = false;
+        scrolling = null;
+      }
+      // Cards, the toolbar and the text editor float over the wall and keep their own touches.
+      if (ctx.editing || (event.target instanceof Element && event.target.closest('.dc-pop, .dc-seltoolbar, .dc-editor'))) return;
+      // A screen is being dragged by its label: another finger changes nothing.
+      if (deps.reorder.active()) return;
+      const at = ctx.local(event);
+      touches.set(event.pointerId, at);
+      if (touches.size < 2) {
+        // A pin keeps its press to itself, so a swipe that starts on one would move nothing; remember it here.
+        if (event.target instanceof Element && event.target.closest('.dc-pin')) downAt = { point: at, board: boards.at(at), pin: true };
+        return;
+      }
+      pinching = true;
+      deps.reorder.dispose();
+      downAt = null;
+      panning = null;
+      scrolling = null;
+      hit.clearHover();
+      for (const id of touches.keys()) capture(id);
+      // In Play the frames stop taking input while the wall is held, so a third touch lands here too.
+      if (!pageMode) surface.dataset.panning = 'true';
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    { capture: true },
+  );
+
   scope.listen<PointerEvent>(surface, 'pointerdown', (event) => {
+    if (pinching && event.pointerType === 'touch') return;
     // The "+ Screen" board is a button on the wall: a press is a click, and a drag that starts on it pans like any empty wall.
     if (event.target instanceof Element && event.target.closest('.dc-ghost-add')) {
       if (event.button === 0 && !ctx.readOnly()) downAt = { point: ctx.local(event), board: null };
@@ -182,15 +256,37 @@ export const createInputController = (ctx: WallContext, deps: InputDeps): InputC
       return;
     }
     const at = ctx.local(event);
-    hit.setPointer(at);
+    const touch = event.pointerType === 'touch';
+    if (touch && touches.has(event.pointerId)) {
+      const before = touchPair();
+      touches.set(event.pointerId, at);
+      const after = touchPair();
+      if (before && after) {
+        // A page never pans or zooms, with two fingers as with Ctrl+wheel.
+        if (!pageMode) camera.set(pinchCamera(camera.get(), before, after), true);
+        return;
+      }
+    }
+    // A finger has no hover: the outline follows a mouse or a pen only.
+    if (!touch) hit.setPointer(at);
+    if (scrolling && scrolling.id === event.pointerId) {
+      const { dx, dy } = touchScrollDelta(scrolling.last, at, camera.get().scale);
+      scrolling.board.main.post({ type: 'scroll-by', dx, dy });
+      scrolling.last = at;
+      return;
+    }
     if (panning && panning.id === event.pointerId) {
       camera.set(panBy(camera.get(), at.x - panning.last.x, at.y - panning.last.y), true);
       panning.last = at;
       return;
     }
-    if (downAt && isDrag(downAt.point, at)) {
+    if (downAt && isDrag(downAt.point, at, dragThreshold(event.pointerType))) {
       if (pageMode) {
-        // A drag on a page is not a click: no comment, and no pan either.
+        // A drag on a page is not a click: no comment, and no pan either. A finger scrolls the design, as it would a web page.
+        if (touch && downAt.board && downAt.board.main.state() === 'ready') {
+          scrolling = { id: event.pointerId, last: downAt.point, board: downAt.board };
+          capture(event.pointerId);
+        }
         downAt = null;
       } else {
         // A drag that started on an artboard in Edit mode pans the wall instead of commenting.
@@ -202,10 +298,32 @@ export const createInputController = (ctx: WallContext, deps: InputDeps): InputC
         return;
       }
     }
-    hit.scheduleHover();
+    if (!touch) hit.scheduleHover();
   });
 
+  /** A finger lifted or was cancelled during a pinch: nothing taps; one finger left over carries on panning from where it is. */
+  const endPinch = (): void => {
+    panning = null;
+    const rest = [...touches];
+    const [last] = rest;
+    if (rest.length === 0) {
+      pinching = false;
+      delete surface.dataset.panning;
+    } else if (rest.length === 1 && last && !pageMode) panning = { id: last[0], last: last[1] };
+  };
+
   const endPointer = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch') {
+      touches.delete(event.pointerId);
+      if (pinching) {
+        endPinch();
+        return;
+      }
+      if (scrolling?.id === event.pointerId) {
+        scrolling = null;
+        return;
+      }
+    }
     if (panning && panning.id === event.pointerId) {
       panning = null;
       delete surface.dataset.panning;
@@ -213,7 +331,7 @@ export const createInputController = (ctx: WallContext, deps: InputDeps): InputC
     }
     const press = downAt;
     downAt = null;
-    if (press && press.board && event.type === 'pointerup' && ctx.mode === 'edit' && !ctx.readOnly()) {
+    if (press && press.board && !press.pin && event.type === 'pointerup' && ctx.mode === 'edit' && !ctx.readOnly()) {
       hit.requestHit(press.board, screenToFrame(camera.get(), press.board.art.rect, press.point), 'click');
     }
   };
@@ -258,5 +376,5 @@ export const createInputController = (ctx: WallContext, deps: InputDeps): InputC
     }
   });
 
-  return { shortcut, isPanning: () => panning !== null };
+  return { shortcut, isPanning: () => panning !== null || pinching };
 };

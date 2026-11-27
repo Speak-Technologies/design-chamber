@@ -260,3 +260,71 @@ test('nextUndoSlot E12: refused with an empty slot still says why, and recording
   assert.equal(nextUndoSlot(null, { type: 'undo-key' }, true).refusal, UNDO_VIEWING_TEXT);
   assert.deepEqual(nextUndoSlot('e_old', { type: 'edited', id: 'e_new' }, true), { slot: 'e_new', undo: null, refusal: null });
 });
+
+// ---- Touch (documentation/specs/native-extras.md §2.2): pinch, finger taps, dragging a page ----
+
+import { CAMERA_SCALE_MAX, CAMERA_SCALE_MIN } from '../../src/shared/limits.ts';
+import { screenToWorld, worldToScreen } from '../../src/guest/camera.ts';
+import { TOUCH_DRAG_THRESHOLD_PX, dragThreshold, pinchCamera, pinchStep, touchScrollDelta } from '../../src/ui/model/wall-input.ts';
+
+const pair = (ax: number, ay: number, bx: number, by: number) => [{ x: ax, y: ay }, { x: bx, y: by }] as const;
+const close = (actual: number, expected: number, message?: string) => assert.ok(Math.abs(actual - expected) < 1e-9, `${message ?? ''} ${actual} ≠ ${expected}`);
+
+test('dragThreshold: a finger gets more room than a mouse; mouse and pen are as before', () => {
+  assert.equal(dragThreshold('mouse'), DRAG_THRESHOLD_PX);
+  assert.equal(dragThreshold('pen'), DRAG_THRESHOLD_PX);
+  assert.equal(dragThreshold(''), DRAG_THRESHOLD_PX);
+  assert.equal(dragThreshold('touch'), TOUCH_DRAG_THRESHOLD_PX);
+  assert.equal(TOUCH_DRAG_THRESHOLD_PX, 10);
+  const from = { x: 0, y: 0 };
+  assert.equal(isDrag(from, { x: 8, y: 0 }, dragThreshold('touch')), false, 'a finger that wobbles 8 px is still a tap');
+  assert.equal(isDrag(from, { x: 8, y: 0 }, dragThreshold('mouse')), true);
+  assert.equal(isDrag(from, { x: 10.1, y: 0 }, dragThreshold('touch')), true);
+});
+
+test('pinchStep: the factor is the change in finger distance, around the new midpoint, with the midpoint’s travel', () => {
+  assert.deepEqual(pinchStep(pair(100, 100, 200, 100), pair(50, 100, 250, 100)), { factor: 2, at: { x: 150, y: 100 }, dx: 0, dy: 0 });
+  assert.deepEqual(pinchStep(pair(0, 0, 100, 0), pair(25, 0, 75, 0)), { factor: 0.5, at: { x: 50, y: 0 }, dx: 0, dy: 0 });
+  assert.deepEqual(pinchStep(pair(0, 0, 100, 0), pair(30, 20, 130, 20)), { factor: 1, at: { x: 80, y: 20 }, dx: 30, dy: 20 }, 'two fingers moving together only pan');
+});
+
+test('pinchStep: fingers on top of each other never produce a zero, infinite or NaN factor', () => {
+  for (const [prev, next] of [
+    [pair(5, 5, 5, 5), pair(0, 0, 100, 0)],
+    [pair(0, 0, 100, 0), pair(5, 5, 5, 5)],
+    [pair(5, 5, 5, 5), pair(5, 5, 5, 5)],
+  ] as const) assert.equal(pinchStep(prev, next).factor, 1);
+});
+
+test('pinchCamera: what was under the fingers stays under them', () => {
+  const camera = { x: 40, y: -20, scale: 0.5 };
+  const prev = pair(100, 200, 200, 200);
+  const next = pair(90, 230, 290, 230);
+  const after = pinchCamera(camera, prev, next);
+  close(after.scale, 1, 'scale doubles');
+  const held = screenToWorld(camera, { x: 150, y: 200 });
+  const shown = worldToScreen(after, held);
+  close(shown.x, 190, 'midpoint x');
+  close(shown.y, 230, 'midpoint y');
+});
+
+test('pinchCamera: zoom stops at 5 % and 400 %, still anchored under the fingers', () => {
+  assert.equal(CAMERA_SCALE_MIN, 0.05);
+  assert.equal(CAMERA_SCALE_MAX, 4);
+  const out = pinchCamera({ x: 0, y: 0, scale: 0.1 }, pair(0, 100, 400, 100), pair(190, 100, 210, 100));
+  assert.equal(out.scale, CAMERA_SCALE_MIN);
+  const camera = { x: 10, y: 10, scale: 3 };
+  const inwards = pinchCamera(camera, pair(190, 100, 210, 100), pair(0, 100, 400, 100));
+  assert.equal(inwards.scale, CAMERA_SCALE_MAX);
+  const shown = worldToScreen(inwards, screenToWorld(camera, { x: 200, y: 100 }));
+  close(shown.x, 200);
+  close(shown.y, 100);
+  // At the limit a further spread changes nothing but the pan.
+  assert.deepEqual(pinchCamera(inwards, pair(150, 100, 250, 100), pair(100, 100, 300, 100)), inwards);
+});
+
+test('touchScrollDelta: the design follows the finger, in the frame’s own pixels', () => {
+  assert.deepEqual(touchScrollDelta({ x: 10, y: 100 }, { x: 10, y: 60 }, 1), { dx: 0, dy: 40 }, 'finger up scrolls down');
+  assert.deepEqual(touchScrollDelta({ x: 50, y: 0 }, { x: 20, y: 30 }, 0.5), { dx: 60, dy: -60 }, 'a shrunk frame scrolls further per screen px');
+  for (const scale of [0, -1, Number.NaN]) assert.deepEqual(touchScrollDelta({ x: 0, y: 10 }, { x: 0, y: 0 }, scale), { dx: 0, dy: 10 }, `scale ${scale} reads as 1`);
+});
