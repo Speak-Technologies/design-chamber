@@ -161,6 +161,19 @@ A new design for a project picks its system in this order: the New dialog's pick
 - Agents in a project with its own Ready system and no pin also get the line "Designs for this project use the design system "<name>" in Design Chamber." ([Agent instructions](agent-instructions.md)).
 - Code: `src/shared/systems.ts` (`effectiveSystemChoice`, `projectSystemOf`, `choiceSystemsOf`), `src/service/routes/chat.ts` (`POST /chip`), `src/service/agent-system.ts`. Spec: `documentation/specs/use-the-project-and-native-agent.md` §1. Code: `src/ui/components/system-chip.ts`, `src/ui/model/design-system-model.ts`.
 
+## System screens
+A system can hold full page templates, patterns shown as a whole page, states and marketing pieces as **screens** (spec: `documentation/specs/system-builder-depth.md` §4.6, T12a; owner decisions 2 and 5).
+
+- **Files.** Each screen is `screens/<id>.html` inside the system folder: a full HTML document that links `../tokens.css` and loads its fonts with its own `@font-face` rules pointing at `../assets/fonts/…`. `system.json` lists them in `screens`: `{ "id", "title", "kind", "viewports"? }`. The kind is `page`, `pattern`, `state` or `marketing`.
+- **Sizes.** Top-level `viewports` in `system.json` (the design.json shape: id, label, width, height) are the sizes every screen shows at; without them, Laptop 1280×800 and Phone 390×844. A screen with its own `viewports` uses only those, which is how a social card (1200×630) or an email (600 wide) gets its fixed size.
+- **Limits.** Up to 24 screens; each further entry is a problem. A screen file is at most 60 000 characters: a longer one stays listed with "screens/<id>.html is longer than 60 000 characters." and is not shown. A listed screen without its file says "screens/<id>.html is missing.". A bad entry (an id that isn't lower-case letters, digits and dashes, a missing title, an unknown kind, a `file` other than its own path) is dropped with a problem naming it.
+- **Showing one.** The page loads a screen through its own route, one screen at a time (the frame sets the width, as for a design screen), in the same sandboxed frame as a design's artboards. Only a listed screen is served; a file in `screens/` that `screens` doesn't list is not. Its references are bundled from the system's own files: a reference out of the system folder, or a link that points out of it, is never followed. The render is cached and dropped whenever the system's files change. The colour scheme keys the render, so the page loads it again on a scheme change; the screen's document itself is not rewritten.
+- **Reviews.** Screens have no review section of their own. Page, pattern and state screens count toward **Patterns**, marketing screens toward **Brand & marketing**: a change to a screen's file, title, kind or sizes shows that section as not reviewed again. A system without screens keeps every fingerprint it had.
+- **Copies and repo systems.** A design's copy of the system carries the screens as agent reference (never exported). A repo-backed system's snapshot reads `screens/<id>.html` with the 60 000 character cap.
+- **Not yet.** The Screens view on the system page (T13), screens in the system check (T12b) and on the living page (T14).
+
+Code: `src/shared/system-json.ts` (`readScreens`, `readSystemViewports`, `screenAreaOf`, the fingerprints), `src/service/systems/board.ts` (`renderScreen`), `src/service/routes/system-screens.ts`, `src/guest/service-client.ts` (`systemScreen`). Tests: `test/shared/system-screens.test.ts`, `test/service/systems/system-screens-routes.test.ts`.
+
 ## Asking in chat (the SystemAsk block)
 A `/design-system` chat asks its questions in place, as one chat block with three views (spec §8.12). It sits in the chat's reply and answers the chat with one message.
 

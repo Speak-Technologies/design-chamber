@@ -30,6 +30,7 @@ import {
   SYSTEM_JSON_MAX_BYTES,
   SYSTEM_NOTE_MAX,
   SYSTEM_OVERVIEW_MAX,
+  SYSTEM_SCREEN_MAX,
   TOKENS_CSS_MAX_BYTES,
 } from '../../shared/limits.ts';
 import { tokenValues } from '../../shared/system-copy.ts';
@@ -94,6 +95,8 @@ const textCapOf = (rel: string): number | null => {
   if (/^(components|patterns|brand)\/[^/]+\.html$/.test(rel)) return SYSTEM_EXAMPLE_MAX * BYTES_PER_CHAR_MAX;
   if (/^(notes|patterns|brand)\//.test(rel)) return SYSTEM_NOTE_MAX * BYTES_PER_CHAR_MAX;
   if (rel.startsWith('components/')) return SYSTEM_EXAMPLE_MAX * BYTES_PER_CHAR_MAX;
+  // System screens (system-builder-depth T12a): the screen cap.
+  if (rel.startsWith('screens/')) return SYSTEM_SCREEN_MAX * BYTES_PER_CHAR_MAX;
   return null;
 };
 

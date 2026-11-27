@@ -43,6 +43,7 @@ import {
   SYSTEM_NOTE_MAX,
   SYSTEM_OVERVIEW_MAX,
   SYSTEM_QUIET_MS,
+  SYSTEM_SCREEN_MAX,
   SYSTEM_SWATCHES_MAX,
   SYSTEMS_MAX,
   TOKENS_CSS_MAX_BYTES,
@@ -553,6 +554,13 @@ export const createSystemStore = (deps: SystemStoreDeps): SystemStore => {
       if (!/^(notes|patterns|brand)\/[^/]+\.md$/.test(file.rel)) continue;
       const body = await readText(filesDir, file.rel, SYSTEM_NOTE_MAX * BYTES_PER_CHAR_MAX);
       if (body !== null) texts[file.rel] = body.text;
+    }
+    // System screens (system-builder-depth T12a): a file within SYSTEM_SCREEN_MAX bytes is within the
+    // character cap, so only a larger one is read, to count its characters. Its text is not kept.
+    for (const file of content.files) {
+      if (!/^screens\/[^/]+\.html$/.test(file.rel) || file.bytes <= SYSTEM_SCREEN_MAX) continue;
+      const screen = await readText(filesDir, file.rel, SYSTEM_SCREEN_MAX * BYTES_PER_CHAR_MAX);
+      if (screen !== null && (screen.over || screen.text.length > SYSTEM_SCREEN_MAX)) tooLarge.push(file.rel);
     }
     return {
       id,

@@ -7,7 +7,7 @@
 
 import path from 'node:path';
 
-import { SYSTEM_JSON_MAX_BYTES, SYSTEM_NOTE_MAX, SYSTEM_OVERVIEW_MAX, TOKENS_CSS_MAX_BYTES } from '../../shared/limits.ts';
+import { SYSTEM_JSON_MAX_BYTES, SYSTEM_NOTE_MAX, SYSTEM_OVERVIEW_MAX, SYSTEM_SCREEN_MAX, TOKENS_CSS_MAX_BYTES } from '../../shared/limits.ts';
 import { buildSystemDetail, type SystemDetailSource } from '../../shared/system-json.ts';
 import type { SystemComponent, SystemDetail, SystemEntryText, SystemState } from '../../shared/types.ts';
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource, type FileSource, type SourceFile } from '../bundle.ts';
@@ -68,6 +68,13 @@ export const detailSourceFromTree = async (
     if (!/^(notes|patterns|brand)\/[^/]+\.md$/.test(rel)) continue;
     const body = await readText(rel, SYSTEM_NOTE_MAX * BYTES_PER_CHAR_MAX);
     if (body !== null) texts[rel] = body;
+  }
+  // System screens (system-builder-depth T12a), as the store: only a file past SYSTEM_SCREEN_MAX bytes can
+  // be past the character cap, so only those are read to count.
+  for (const file of files) {
+    if (!/^screens\/[^/]+\.html$/.test(file.rel) || file.bytes <= SYSTEM_SCREEN_MAX) continue;
+    const read = await source.read(file.rel).catch(() => null);
+    if (read !== null && read.bytes.toString('utf8').length > SYSTEM_SCREEN_MAX) tooLarge.push(file.rel);
   }
   return { id: input.id, dir: input.dir, state: input.state, systemJson, tokensCss, texts, files, build: null, tooLarge };
 };

@@ -635,8 +635,10 @@ export type SystemBoardQuery = { version?: string; proposal?: string; scheme?: '
  * One system screen's render: `screen` is a `SYSTEM_ENTRY_ID_PATTERN` id listed in `system.json` `screens`;
  * a version (default live) or the proposal waiting now, not both, as the board. Per screen, not per
  * viewport: the frame sets the width, as `GET /designs/:slug/render` does. Answers `RenderMeta`.
+ * `scheme` (default light), as the board: it keys the render, so the page loads it again on a scheme
+ * change; the screen's own document is not rewritten (its `prefers-color-scheme` rules follow the frame).
  */
-export type SystemScreenRenderQuery = { screen: string; version?: string; proposal?: string };
+export type SystemScreenRenderQuery = { screen: string; version?: string; proposal?: string; scheme?: 'light' | 'dark' };
 // ---- end system-builder-depth Phase 2 ----
 
 export type SystemPromptPurpose =
