@@ -313,8 +313,11 @@ export type ChangeKind =
   | 'added' | 'removed' | 'design' | 'files' | 'thumb' | 'versions' | 'comments' | 'root' | 'loose' | 'checks' | 'open' | 'activity' | 'page-state'
   | 'system' | 'folders';
 
-/** What changed on a system (Phase 2.5 §3.4, §3.5); `build` = BUILD.json adoption or problem, `proposal` = a new, superseded, rewritten or approved proposal, or a new preview. */
-export type SystemChangeKind = 'added' | 'removed' | 'files' | 'state' | 'versions' | 'checks' | 'build' | 'living-page' | 'proposal';
+/**
+ * What changed on a system (Phase 2.5 §3.4, §3.5); `build` = BUILD.json adoption or problem, `proposal` = a new, superseded, rewritten or approved proposal, or a new preview.
+ * `comments` (system-builder-depth Phase 3, T20): a board comment was created, changed, deleted or marked sent. Nothing drawn changed, so no render cache drops on it.
+ */
+export type SystemChangeKind = 'added' | 'removed' | 'files' | 'state' | 'versions' | 'checks' | 'build' | 'living-page' | 'proposal' | 'comments';
 
 export type ChangeEvent = {
   seq: number;

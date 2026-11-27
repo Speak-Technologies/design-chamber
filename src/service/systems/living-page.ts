@@ -266,6 +266,8 @@ const sharedOf = (ctx: ServiceContext): Shared => {
     ctx.onDispose(
       ctx.hub.subscribe((event) => {
         if (event.kind !== 'root' && (event.kind !== 'system' || event.system === undefined)) return;
+        // Board comments are never on the living page (T20): its renders stay.
+        if (event.kind === 'system' && event.systemChange === 'comments') return;
         for (const [key, entry] of [...state.renders]) {
           if (event.kind === 'system' && entry.id !== event.system) continue;
           state.renders.delete(key);

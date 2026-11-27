@@ -25,7 +25,7 @@ import path from 'node:path';
 import { COMMENT_BODY_MAX, COMMENT_ID_PATTERN, SYSTEM_COMMENTS_FILE_MAX_BYTES, SYSTEM_COMMENTS_MAX } from '../../shared/limits.ts';
 import { isBoardEntryKey } from '../../shared/system-board.ts';
 import type { CommentStatus, IsoDate, SystemComment } from '../../shared/types.ts';
-import type { Logger, ServiceContext, SettingsStore } from '../context.ts';
+import type { ChangeHub, Logger, ServiceContext, SettingsStore } from '../context.ts';
 import { ApiError } from '../http.ts';
 import { LINK_SENTENCE, resolveInside, resolvePlainTarget, samePath, writeFileAtomic } from '../paths.ts';
 import { ensureSystemStore, guardSystemWrite, SYSTEM_GONE_MESSAGE, type SystemStore } from './store.ts';
@@ -154,6 +154,8 @@ export type SystemCommentsDeps = {
   systems: Pick<SystemStore, 'dir'>;
   settings: Pick<SettingsStore, 'root'>;
   log: Logger;
+  /** Every write that lands sends `{ kind: 'system', system, systemChange: 'comments', origin: 'user' }`. */
+  hub: Pick<ChangeHub, 'emit'>;
   /** Test seam. */
   now?: () => Date;
 };
@@ -162,7 +164,7 @@ const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoExc
 const stampOf = (date: Date): string => date.toISOString().replace(/[-:T]/g, '').slice(0, 14);
 
 export const createSystemCommentsStore = (deps: SystemCommentsDeps): SystemCommentsStore => {
-  const { systems, settings, log } = deps;
+  const { systems, settings, log, hub } = deps;
   const now = deps.now ?? ((): Date => new Date());
   const queues = new Map<string, Promise<unknown>>();
 
@@ -271,6 +273,8 @@ export const createSystemCommentsStore = (deps: SystemCommentsDeps): SystemComme
         if (Buffer.byteLength(text, 'utf8') > SYSTEM_COMMENTS_FILE_MAX_BYTES) throw new ApiError('conflict', SYSTEM_COMMENTS_FILE_FULL);
         if (got.kind === 'damaged') await setAside(id, dir);
         await write(id, dir, text);
+        // After the rename only: a refused or failed write, or `write: false`, sends nothing.
+        hub.emit({ slug: null, kind: 'system', system: id, systemChange: 'comments', origin: 'user' });
         return result;
       });
     },
@@ -284,7 +288,7 @@ const instances = new WeakMap<ServiceContext, SystemCommentsStore>();
 export const ensureSystemComments = (ctx: ServiceContext): SystemCommentsStore => {
   const existing = instances.get(ctx);
   if (existing !== undefined) return existing;
-  const created = createSystemCommentsStore({ systems: ensureSystemStore(ctx), settings: ctx.settings, log: ctx.log });
+  const created = createSystemCommentsStore({ systems: ensureSystemStore(ctx), settings: ctx.settings, log: ctx.log, hub: ctx.hub });
   instances.set(ctx, created);
   return created;
 };
