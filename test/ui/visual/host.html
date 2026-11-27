@@ -81,14 +81,14 @@
         setTheme: (next) => { mode = next; sendReady(); },
         /** A new device snapshot (rotation, keyboard), sent with a new `ready`; null leaves it out. */
         setDevice: (next) => { device = next; sendReady(); },
-        /** Set a session's activity ('idle', 'running', 'retrying', 'waiting-permission', 'waiting-question') and outcome ('completed', 'failed' or null) and push it to every sessions subscription. */
-        setActivity: (sessionId, activity, outcome = null) => {
+        /** Set a session's activity ('idle', 'running', 'retrying', 'waiting-permission', 'waiting-question') and outcome ('completed', 'failed' or null) and push it to every sessions subscription. `tool` is the call it is making ({name, target}), as a 2.8 host reports it. */
+        setActivity: (sessionId, activity, outcome = null, tool = null) => {
           const now = Date.now();
           const existing = sessions.get(sessionId);
           sessions.set(sessionId, {
             id: sessionId, title: existing ? existing.title : 'Pricing page', projectId: PROJECT.id, directory: DIRECTORY, parentId: null,
             createdAt: existing ? existing.createdAt : now, updatedAt: now, archivedAt: null, worktree: null,
-            activity, outcome, items: [],
+            activity, outcome, tool, items: [],
           });
           pushSessions();
         },

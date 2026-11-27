@@ -1,4 +1,5 @@
-// Visual scenario for the live build strip (feat/build-strip): working, writing (the written
+// Visual scenario for the live build strip (feat/build-strip): working, the agent's current tool
+// (editing a screen, reading a project file, at most one change a second), writing (the written
 // board lights up), a question, retrying, done, failed (and Dismiss), and a design that is
 // still waiting for its first file. `helpers` is what the other scenarios use: openPage, check,
 // listReady, thumbsReady, wallReady, menuItem, scaleLabel, sleep, outDir.
@@ -49,6 +50,45 @@ const scenario = async ({ surface, width, theme }, h) => {
   check(h, (await wallBox()) === idleWall, `${tag}: the strip does not move the wall (${idleWall})`);
   check(h, /^\d+:\d\d$/.test(await p.guest('return doc.querySelector(".dc-build-elapsed")?.textContent ?? ""')), `${tag}: working shows the elapsed time`);
   await p.shot(`${tag}-1-working`);
+
+  // the agent's current call (native-extras §1.3): a bare name the design knows shows its path
+  const setTool = (name, target) => p.host(`window.__host.setActivity("${SESSION}", "running", null, ${JSON.stringify({ name, target })})`);
+  const textIs = (value, what) => p.waitFor(`return doc.querySelector(".dc-build-text")?.textContent === ${JSON.stringify(value)}`, what ?? value, 8000);
+  const spoken = () => p.guest('return doc.querySelector(".dc-build-live")?.textContent ?? ""');
+  const full = surface === 'page';
+  await setTool('edit', 'pricing.html');
+  await textIs(full ? 'Editing screens/pricing.html' : 'Editing pricing.html');
+  check(h, (await spoken()) === (full ? 'Editing screens/pricing.html' : 'Editing pricing.html'), `${tag}: an edit is announced ("${await spoken()}")`);
+  check(h, (await p.guest('return doc.querySelector(".dc-build-text").title')) === 'screens/pricing.html', `${tag}: the tooltip holds the screen's path`);
+  await p.settle(300);
+  await p.shot(`${tag}-1b-editing-screen`);
+
+  // work outside the design, held back until the edit has had its second on screen
+  await h.sleep(1100);
+  await setTool('edit', 'home.html');
+  await textIs(full ? 'Editing screens/home.html' : 'Editing home.html');
+  await setTool('read', 'src/styles/theme.css');
+  await p.settle(150);
+  check(h, (await stripText()).startsWith('Editing'), `${tag}: a new call waits out the second ("${await stripText()}")`);
+  await textIs(full ? 'Reading src/styles/theme.css' : 'Reading theme.css');
+  check(h, (await spoken()) === 'The agent is working', `${tag}: a read is not announced ("${await spoken()}")`);
+  check(h, await p.guest('return !doc.querySelector(".dc-build-text").hasAttribute("aria-hidden")'), `${tag}: what is shown but not announced can still be read`);
+  await p.settle(300);
+  await p.shot(`${tag}-1c-reading-project-file`);
+  check(h, (await wallBox()) === idleWall, `${tag}: the tool words do not move the wall`);
+
+  // a hostile, very long name stays one clean line inside the pill
+  await setTool('write', `src/${'nested-folder/'.repeat(8)}\u202Egnp.${'very-long-name-'.repeat(6)}.html`);
+  await p.waitFor('return doc.querySelector(".dc-build-text")?.textContent.startsWith("Writing")', 'the long name', 8000);
+  check(h, !/[\u202A-\u202E\u2066-\u2069\u200E\u200F]/.test(await stripText()), `${tag}: no bidi control reaches the strip`);
+  check(h, await p.guest('const r = doc.querySelector(".dc-build").getBoundingClientRect(); const s = doc.querySelector(".dc-stage").getBoundingClientRect(); return r.left >= s.left && r.right <= s.right && r.height < 48'), `${tag}: the pill stays inside the stage`);
+  await p.settle(300);
+  await p.shot(`${tag}-1d-long-name`);
+
+  // back to a call with no words of its own
+  await h.sleep(1100);
+  await p.host('window.__host.setActivity("' + SESSION + '", "running")');
+  await textIs(full ? 'The agent is working' : 'Agent is working');
 
   // writing: one screen is saved, its board lights up and the others do not
   await p.guest('win.__dcFake.writeFile("' + COFFEE + '", "screens/pricing.html")');

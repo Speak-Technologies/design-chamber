@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { QUIET_MS, initialTrack, reduceBuild, type BuildInput, type BuildTrack, type LinkedActivity } from '../../src/guest/build-activity.ts';
-import { buildView, formatElapsed, pillText } from '../../src/ui/model/build-strip-model.ts';
+import { TOOL_REPAINT_MS } from '../../src/shared/limits.ts';
+import { buildView, formatElapsed, paintTrack, pillText, type ToolHold } from '../../src/ui/model/build-strip-model.ts';
+import type { ToolDesign } from '../../src/ui/model/tool-model.ts';
 
 const T0 = 1_700_000_000_000;
 const SEC = 1000;
@@ -227,4 +229,130 @@ test('pillText words: the four phases a status row shows', () => {
     [pillText('writing', 'screens/pricing.html'), pillText('writing', null), pillText('working', null), pillText('failed', null), pillText('done', null)],
     ['Writing pricing.html', 'Writing', 'Agent is working', 'Agent stopped', 'Done'],
   );
+});
+
+// ---- the agent's current tool (native-extras §1.2) ----
+
+const COFFEE: ToolDesign = { slug: 'coffee', entry: null, files: ['screens/home.html', 'screens/pricing.html'] };
+const running = (at: number, name: string, target: string | null = null): BuildInput => ({ kind: 'session', at, activity: 'running', outcome: null, tool: { name, target } });
+
+test('working with a tool: the words, the pill and the tooltip name it; the detail line stays', () => {
+  const track = run(running(T0, 'edit', 'pricing.html'), files(T0, ['screens/home.html']));
+  const at = T0 + WRITING_MS + 5 * SEC;
+  const view = buildView(track, at, 'en', COFFEE);
+  assert.equal(view.phase, 'working');
+  assert.equal(view.text, 'Editing screens/pricing.html');
+  assert.equal(view.pill, 'Editing pricing.html');
+  assert.equal(view.title, 'screens/pricing.html');
+  assert.equal(view.announce, 'Editing screens/pricing.html', 'an edit is worth saying aloud');
+  assert.match(view.detail ?? '', /^Last saved home\.html /);
+  assert.equal(view.elapsed, '0:20');
+  assert.equal(view.tone, 'info');
+});
+
+test('writing with a tool: the tool words, with the screens line kept', () => {
+  const track = run(running(T0, 'read', 'src/styles/theme.css'), detail({ isCanvas: true, screensTotal: 4, screensWritten: 2 }), files(T0, ['screens/home.html']));
+  const view = buildView(track, T0 + SEC, 'en', COFFEE);
+  assert.equal(view.phase, 'writing');
+  assert.equal(view.text, 'Reading src/styles/theme.css');
+  assert.equal(view.pill, 'Reading theme.css');
+  assert.equal(view.detail, '2 of 4 screens written');
+  assert.equal(view.announce, 'Writing screens/home.html', 'a read is not announced: the phase keeps its own sentence');
+});
+
+test('announce: writes and edits only; every other kind keeps the phase sentence', () => {
+  assert.equal(buildView(run(running(T0, 'write', 'screens/home.html')), T0 + SEC, 'en', COFFEE).announce, 'Writing screens/home.html');
+  for (const [name, target] of [['read', 'a.css'], ['grep', 'src'], ['bash', 'ls'], ['webfetch', null], ['todowrite', null], ['task', null], ['design_check', null], ['design_list', null]] as const) {
+    const view = buildView(run(running(T0, name, target)), T0 + SEC, 'en', COFFEE);
+    assert.equal(view.announce, 'The agent is working', name);
+    assert.notEqual(view.text, 'The agent is working', name);
+  }
+});
+
+test('an unknown tool, or none, keeps today’s words', () => {
+  const unknown = buildView(run(running(T0, 'question', 'a.css')), T0 + SEC, 'en', COFFEE);
+  assert.deepEqual([unknown.text, unknown.pill, unknown.announce, unknown.title], ['The agent is working', 'Agent is working', 'The agent is working', null]);
+});
+
+test('without a design (the system strip) the target shows as the host gave it', () => {
+  assert.equal(buildView(run(running(T0, 'edit', 'tokens.css')), T0 + SEC).text, 'Editing tokens.css');
+});
+
+test('other phases ignore the tool', () => {
+  const track = run(running(T0, 'edit', 'a.css'), { kind: 'feed', at: T0 + SEC, state: 'retrying' });
+  assert.equal(buildView(track, T0 + 10 * SEC, 'en', COFFEE).text, 'Reconnecting to the local service');
+});
+
+test('a saved file name is cleaned before it is shortened: text, pill, detail, tooltip and announcement', () => {
+  const nasty = `screens/${'\u200E'.repeat(40)}price\u202Elmth.\u2066gnp\u0007`;
+  const clean = 'screens/pricelmth.gnp';
+  const writing = buildView(run(sess(T0, 'running'), files(T0, [nasty])), T0 + SEC);
+  assert.deepEqual([writing.text, writing.pill, writing.title, writing.announce], [`Writing ${clean}`, 'Writing pricelmth.gnp', clean, `Writing ${clean}`]);
+  const working = buildView(run(sess(T0, 'running'), files(T0, [nasty])), T0 + WRITING_MS + SEC);
+  assert.match(working.detail ?? '', /^Last saved pricelmth\.gnp /);
+  assert.equal(pillText('writing', nasty), 'Writing pricelmth.gnp', 'Work Status gets the same words');
+  assert.equal(pillText('writing', '\u202E'), 'Writing', 'nothing left to name');
+  assert.equal(buildView(run(sess(T0, 'running'), files(T0, ['\u202E'])), T0 + SEC).text, 'The agent is writing');
+  const edited = buildView(run(running(T0, 'edit', 'screens/\u202Egnp.html')), T0 + SEC, 'en', COFFEE);
+  assert.deepEqual([edited.text, edited.pill, edited.title, edited.announce], ['Editing screens/gnp.html', 'Editing gnp.html', 'screens/gnp.html', 'Editing screens/gnp.html']);
+});
+
+// ---- paintTrack: tool words change at most once a second ----
+
+/** Paint each (time, track) in turn and report the tool target on screen after each, with the wait. */
+const painter = () => {
+  let held: ToolHold | null = null;
+  return (track: BuildTrack, now: number): [string | null, number | null] => {
+    const painted = paintTrack(held, track, now);
+    held = painted.held;
+    return [painted.track.tool?.target ?? null, painted.wait];
+  };
+};
+const reading = (target: string, from: BuildTrack = initialTrack(T0), at = T0): BuildTrack => reduceBuild(from, running(at, 'read', target));
+
+test('paintTrack: the first tool shows at once; the next waits out the second, then the latest shows', () => {
+  const paint = painter();
+  const a = reading('a');
+  assert.deepEqual(paint(a, T0), ['a', null]);
+  const b = reading('b', a, T0 + 100);
+  assert.deepEqual(paint(b, T0 + 100), ['a', TOOL_REPAINT_MS - 100]);
+  const c = reading('c', b, T0 + 400);
+  assert.deepEqual(paint(c, T0 + 400), ['a', TOOL_REPAINT_MS - 400], 'the wait runs from the last change on screen, not from the newest tool');
+  assert.deepEqual(paint(c, T0 + TOOL_REPAINT_MS - 1), ['a', 1], 'a repaint for the elapsed time does not let it through early');
+  assert.deepEqual(paint(c, T0 + TOOL_REPAINT_MS), ['c', null]);
+  const d = reading('d', c, T0 + TOOL_REPAINT_MS + 10);
+  assert.deepEqual(paint(d, T0 + TOOL_REPAINT_MS + 10), ['c', TOOL_REPAINT_MS - 10]);
+});
+
+test('paintTrack: a change after a quiet second shows at once, and no timer is asked for', () => {
+  const paint = painter();
+  const a = reading('a');
+  paint(a, T0);
+  assert.deepEqual(paint(reading('b', a, T0 + 5 * SEC), T0 + 5 * SEC), ['b', null]);
+});
+
+test('paintTrack: a phase change paints at once', () => {
+  const paint = painter();
+  const a = reading('a');
+  paint(a, T0);
+  const writing = reduceBuild(reading('b', a, T0 + 100), files(T0 + 100, ['screens/home.html']));
+  assert.deepEqual(paint(writing, T0 + 100), ['b', null]);
+  const question = reduceBuild(writing, sess(T0 + 200, 'waiting-question'));
+  assert.deepEqual(paint(question, T0 + 200), [null, null]);
+});
+
+test('paintTrack: other news paints while the tool is still held back', () => {
+  let held: ToolHold | null = null;
+  const a = reading('a');
+  held = paintTrack(held, a, T0).held;
+  const b = reduceBuild(reading('b', a, T0 + 100), detail({ isCanvas: true, screensTotal: 3, screensWritten: 1 }));
+  const painted = paintTrack(held, b, T0 + 100);
+  assert.deepEqual([painted.track.tool?.target, painted.track.screensWritten], ['a', 1]);
+});
+
+test('paintTrack: a clock stepped back never holds the words for longer than a second', () => {
+  const paint = painter();
+  const a = reading('a');
+  paint(a, T0);
+  assert.deepEqual(paint(reading('b', a, T0 - 60 * SEC), T0 - 60 * SEC), ['b', null]);
 });

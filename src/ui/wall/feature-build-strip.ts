@@ -1,19 +1,16 @@
 // Phase 1 feature mount (seam S9): the live build strip. It watches what the linked agent is
 // doing to this design (file events + the chat's activity, src/guest/build-activity.ts), draws
 // it as a pill over the wall (the stage overlay, S2: short on the rail, full text on the
-// full-screen page), and lights the board the agent just wrote. A 1 s repaint runs only while an elapsed time is showing and
-// the document is visible; otherwise the watcher's own deadline timer is all there is.
+// full-screen page), and lights the board the agent just wrote. When it repaints is `driveBuildStrip`'s business.
 
 import { RECENT_MS, batchAgentFiles, inRestoreQuiet, watchBuildActivity, type BuildActivity } from '../../guest/build-activity.ts';
 import { affectedSources } from '../../guest/store.ts';
 import { continueInChat } from '../components/actions.ts';
-import { mountBuildStrip } from '../components/build-strip.ts';
+import { driveBuildStrip, mountBuildStrip } from '../components/build-strip.ts';
 import { feed, guestHost, host } from '../guest.ts';
-import { buildView } from '../model/build-strip-model.ts';
+import { toolDesignOf } from '../model/tool-model.ts';
 import type { FeatureMount } from './view-context.ts';
 import type { WallHandle } from './wall.ts';
-
-const REPAINT_MS = 1000;
 
 /** The watcher each open view mounted, so a sibling feature (Edit text's agent-working hint) reads the same phase the strip shows. */
 const watchers = new WeakMap<WallHandle, BuildActivity>();
@@ -44,21 +41,13 @@ export const mount: FeatureMount = (ctx) => {
 
   // ---- paint ----
 
-  let tick: ReturnType<typeof setInterval> | null = null;
-  const render = (): void => {
-    const view = buildView(watcher.get(), Date.now(), host.snapshot()?.locale ?? 'en');
-    strip.update(view);
-    const wantsTick = view.elapsed !== null && !document.hidden;
-    if (wantsTick && tick === null) tick = setInterval(render, REPAINT_MS);
-    else if (!wantsTick && tick !== null) {
-      clearInterval(tick);
-      tick = null;
-    }
-  };
-  const unwatch = watcher.subscribe(render);
-  const onVisibility = (): void => render();
-  document.addEventListener('visibilitychange', onVisibility);
-  render();
+  const stopPaint = driveBuildStrip(strip, watcher, {
+    design: () => {
+      const detail = ctx.detail();
+      return detail ? toolDesignOf(ctx.slug, detail.design) : null;
+    },
+    locale: () => host.snapshot()?.locale ?? 'en',
+  });
 
   // ---- the board the agent just wrote ----
 
@@ -104,9 +93,7 @@ export const mount: FeatureMount = (ctx) => {
     watchers.delete(ctx.wall);
     unfeed();
     undetail();
-    unwatch();
-    document.removeEventListener('visibilitychange', onVisibility);
-    if (tick !== null) clearInterval(tick);
+    stopPaint();
     clearRecent();
     strip.dispose();
     watcher.dispose();

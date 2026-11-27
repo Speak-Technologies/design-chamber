@@ -1903,7 +1903,7 @@ body {
   gap: var(--dc-s1);
   font-size: 0.75rem;
 }
-.dc-build-live {
+.dc-build-main {
   display: inline-flex;
   align-items: center;
   gap: var(--dc-s2);
