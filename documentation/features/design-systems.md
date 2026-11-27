@@ -177,6 +177,22 @@ A system can hold full page templates, patterns shown as a whole page, states an
 
 Code: `src/shared/system-json.ts` (`readScreens`, `readSystemViewports`, `screenAreaOf`, the fingerprints), `src/service/systems/board.ts` (`renderScreen`), `living-examples.ts` and `living-html.ts` (the living page's pictures), `src/service/routes/system-screens.ts`, `src/guest/service-client.ts` (`systemScreen`). Tests: `test/shared/system-screens.test.ts`, `test/service/systems/system-screens-routes.test.ts`, `living-screens.test.ts`.
 
+## Token export
+A system's tokens can be saved as files to use outside Design Chamber (spec: `documentation/specs/system-builder-depth.md` §13 T19, decisions 3 and 9). The service side is built; the **Export tokens…** menu on the system page is a separate task (T19u).
+
+- **One ZIP.** `<system id>-tokens.zip` goes where design exports go: your Downloads folder (or the folder set in Settings), else `<Designs folder>/.exports/`. A second export gets ` (2)`; nothing is overwritten. "Show in folder" opens it. Nothing is written in your project.
+- **`tokens.json`** follows the W3C design tokens format (2025.10). Tokens are grouped by section, colours also by colour group, and dark values sit under `dark`. A token's note is its `$description`.
+- **What gets a type.** Colours (hex, `rgb()`, `hsl()`, `hwb()`, `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, `black`, `white`, `transparent`), lengths in `px` or `rem`, font families, font weights, durations, easing curves and shadows that name a colour. Everything else (formulas, other units, other colour names, `steps()`, layers, plain numbers) is kept as its CSS text with no `$type`. A formula is never worked out.
+- **Names.** A token is its custom property without `--`. Two names in one group that differ only by capitals get `-2`, `-3` on the later one.
+- **`tokens.css`** is written again from the values (it isn't a copy of your file): a `:root` block, then the dark values in a `prefers-color-scheme: dark` block.
+- **`tailwind-theme.css`** is a Tailwind v4 `@theme` block with the light values, under the names the system uses (Tailwind only makes utility classes for names such as `--color-*` or `--spacing-*`). It is offered only when the project uses Tailwind: a `tailwind.config.js`, `.cjs`, `.mjs` or `.ts` at the root of the code folder (checked for, never opened), one the last scan listed, or the agent's `BUILD.json` drift report naming it. A Tailwind v4 project with no config file is only found through that report.
+- **Only checked values.** Every name and value is checked again before it is written, so nothing in a system can break out of its line. A value that can't be read (or holds `url()`) is in no file.
+- **`README.txt`** is in the ZIP when a name was changed or a value left out, and lists them.
+- **Repo-backed systems** export what Design Chamber's snapshot holds.
+- **Refusals.** A system with no readable tokens, or whose `system.json` can't be read, says so and writes nothing.
+
+Code: `src/shared/token-export.ts`, `src/service/export.ts` (`systemTokens`), `src/service/routes/export.ts` (`GET` and `POST /systems/:id/export`), `src/guest/service-client.ts`. Tests: `test/shared/token-export.test.ts`, `test/service/systems/system-export-routes.test.ts`.
+
 ## Asking in chat (the SystemAsk block)
 A `/design-system` chat asks its questions in place, as one chat block with three views (spec §8.12). It sits in the chat's reply and answers the chat with one message.
 

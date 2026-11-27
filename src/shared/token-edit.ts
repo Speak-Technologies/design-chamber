@@ -140,7 +140,7 @@ const isColour = (text: string): boolean => {
 };
 
 /** `text` split on `separator` outside brackets and quotes; empty parts dropped. */
-const splitTop = (text: string, separator: RegExp): string[] => {
+export const splitTop = (text: string, separator: RegExp): string[] => {
   const parts: string[] = [];
   let depth = 0;
   let quote: string | null = null;

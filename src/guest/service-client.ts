@@ -25,9 +25,12 @@ import {
   type RouteQuery,
   type RouteResponse,
   type StopBuildResponse,
+  type SystemExportOptionsResponse,
+  type SystemExportResponse,
   type ThumbnailResponse,
   type UndoStopResponse,
 } from '../shared/api.ts';
+import type { TokenExportFormat } from '../shared/types.ts';
 import {
   BINARY_UPLOAD_TOTAL_MAX,
   GUEST_RENDER_CACHE_MAX_BYTES,
@@ -138,6 +141,10 @@ export type ServiceClient = {
   undoStop(undoId: string): Promise<UndoStopResponse>;
   /** A repo-backed system's living-page view (state, sentence, what the preview can show). */
   loadLivingPage(systemId: string): Promise<LivingPageResponse>;
+  /** The token formats this system can export now (T19); `tailwind` only for a project that uses it. */
+  systemExportFormats(systemId: string): Promise<SystemExportOptionsResponse>;
+  /** Write the tokens ZIP to the export folder; without `formats`, every one offered. `POST /reveal` takes `path`. */
+  exportSystemTokens(systemId: string, formats?: TokenExportFormat[]): Promise<SystemExportResponse>;
 };
 
 const queryOf = (query: Record<string, string | undefined> | undefined): Record<string, string> | undefined => {
@@ -475,6 +482,9 @@ export const createServiceClient = (transport: ServiceTransport, options: Servic
   const stopBuild = (systemId: string, proposalId: string | null = null): Promise<StopBuildResponse> => call('POST /systems/:id/build/stop', { params: { id: systemId }, body: { proposalId } });
   const undoStop = (undoId: string): Promise<UndoStopResponse> => call('POST /system-stops/:undoId/undo', { params: { undoId }, body: {} });
   const loadLivingPage = (systemId: string): Promise<LivingPageResponse> => call('GET /systems/:id/living-page', { params: { id: systemId } });
+  const systemExportFormats = (systemId: string): Promise<SystemExportOptionsResponse> => call('GET /systems/:id/export', { params: { id: systemId } });
+  const exportSystemTokens = (systemId: string, formats?: TokenExportFormat[]): Promise<SystemExportResponse> =>
+    call('POST /systems/:id/export', { params: { id: systemId }, body: formats === undefined ? {} : { formats } });
 
-  return { call, loadRender, loadBoard, systemScreen, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage };
+  return { call, loadRender, loadBoard, systemScreen, upload, uploadBinary, thumbnail, getProposal, stopBuild, undoStop, loadLivingPage, systemExportFormats, exportSystemTokens };
 };

@@ -10,7 +10,7 @@ import { test, type TestContext } from 'node:test';
 import { ROUTE_KEYS, ROUTE_OWNERS, splitRouteKey, type RouteKey } from '../../../src/shared/api.ts';
 import type { Logger, ServiceContext } from '../../../src/service/context.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
-import { registerSystemExportRoutes, SYSTEM_EXPORT_NOT_READY } from '../../../src/service/routes/export.ts';
+import { registerSystemExportRoutes } from '../../../src/service/routes/export.ts';
 import { parseSystemPromptBody } from '../../../src/service/routes/system-chat.ts';
 import { registerSystemCommentRoutes, SYSTEM_COMMENTS_NOT_READY } from '../../../src/service/routes/system-comments.ts';
 
@@ -21,7 +21,7 @@ const EXPORT_ROUTES: RouteKey[] = ['GET /systems/:id/export', 'POST /systems/:id
 const serve = async (t: TestContext) => {
   const quiet: Logger = { info: () => undefined, warn: () => undefined, error: () => undefined };
   const router = createRouter({ token: TOKEN, log: quiet });
-  // Safe: the stubs never read the context.
+  // Safe: the stubs never read the context, and T19's handlers read it only past the refusals tested here.
   registerSystemExportRoutes(router, {} as ServiceContext);
   registerSystemCommentRoutes(router, {} as ServiceContext);
   const server = createServiceServer(router);
@@ -78,13 +78,13 @@ test('each Phase 3 route refuses an encoded separator or NUL in :id or :commentI
   }
 });
 
-test("with the token, each stub answers 500 \"isn't ready yet\" until T19 and T20", async (t) => {
+// T19 is built (system-export-routes.test.ts covers its answers).
+test("with the token, each stub answers 500 \"isn't ready yet\" until T20", async (t) => {
   const { call } = await serve(t);
-  for (const key of SBD3) {
+  for (const key of SBD3.filter((one) => !EXPORT_ROUTES.includes(one))) {
     const answer = await call(key, { id: 'acme' });
     assert.equal(answer.status, 500, key);
-    const message = EXPORT_ROUTES.includes(key) ? SYSTEM_EXPORT_NOT_READY : SYSTEM_COMMENTS_NOT_READY;
-    assert.deepEqual(await answer.json(), { error: 'internal', message }, key);
+    assert.deepEqual(await answer.json(), { error: 'internal', message: SYSTEM_COMMENTS_NOT_READY }, key);
   }
 });
 
