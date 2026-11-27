@@ -83,6 +83,8 @@ export type BoardService = {
    * belongs to another system or is the other kind.
    */
   chunk(id: string, key: string, n: number, kind?: CachedKind): string;
+  /** Forget every cached board and screen (a root change, quiet mode). A later chunk answers `stale`; a render rebuilds. */
+  dropAll(): void;
 };
 
 export type BoardDeps = { systems: SystemStore; versions: VersionsService; hub: ChangeHub; onDispose: (fn: () => void) => void };
@@ -107,10 +109,14 @@ export const createBoardService = (deps: BoardDeps): BoardService => {
     }
   };
 
+  const dropAll = (): void => {
+    for (const key of [...cache.keys()]) drop(key);
+  };
+
   deps.onDispose(
     deps.hub.subscribe((event) => {
       if (event.kind === 'root') {
-        for (const key of [...cache.keys()]) drop(key);
+        dropAll();
         return;
       }
       if (event.kind !== 'system' || event.system === undefined) return;
@@ -157,6 +163,8 @@ export const createBoardService = (deps: BoardDeps): BoardService => {
   };
 
   return {
+    dropAll,
+
     async render(id, options) {
       if (options.proposal !== undefined && options.version !== undefined) throw new ApiError('bad-request', 'Ask for a version or a proposal, not both.');
       const proposed = options.proposal !== undefined ? await readProposal(id, options.proposal) : null;
@@ -267,6 +275,9 @@ export const ensureBoardService = (ctx: ServiceContext): BoardService => {
   instances.set(ctx, created);
   return created;
 };
+
+/** Forget every rendered board (quiet mode, native-extras §4.3); nothing to do before the first one. */
+export const dropBoardRenders = (ctx: ServiceContext): void => instances.get(ctx)?.dropAll();
 
 /** The T0 entry point (§5.7). */
 export const renderBoard = (ctx: ServiceContext, id: string, options: { version?: string; proposal?: string; scheme: 'light' | 'dark' }): Promise<RenderMeta> =>

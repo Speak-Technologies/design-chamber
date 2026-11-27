@@ -711,6 +711,115 @@ describe('rotating sweep while the live watcher is healthy (phase 0b)', () => {
   });
 });
 
+describe('the backstop pace (native-extras §4.3)', () => {
+  /** A healthy but mute fs.watch, so only the poll looks at anything; counts how often it is opened and closed. */
+  const muteWatch = () => {
+    const calls = { opened: 0, closed: 0 };
+    const impl = (() => {
+      calls.opened += 1;
+      const fake = { close: () => void (calls.closed += 1), on: () => fake };
+      return fake as unknown as FSWatcher;
+    }) as unknown as typeof import('node:fs').watch;
+    return { impl, calls };
+  };
+
+  const seeded = async (t: TestContext, pollMs: number) => {
+    const watch = muteWatch();
+    const looked: string[] = [];
+    const env = await makeWatchEnv(t, {
+      watchImpl: watch.impl,
+      pollMs,
+      sweepTicks: 10,
+      fingerprint: async (dir, options) => {
+        looked.push(path.basename(dir));
+        return takeFingerprint(dir, undefined, options.nested);
+      },
+    });
+    for (const slug of ['aa', 'bb', 'cc']) await env.tmp.write(`${slug}/index.html`, '<p>x</p>');
+    await env.watcher.pollNow(); // adopts the three folders as `added`
+    /** Run one poll and answer which designs it looked at. */
+    const poll = async (options?: { all?: boolean }): Promise<string[]> => {
+      looked.length = 0;
+      await env.watcher.pollNow(options);
+      return [...looked].sort();
+    };
+    return { env, watch, looked, poll };
+  };
+
+  test('a poll slower than the active one looks at every design; back at the active pace it takes a slice again', async (t) => {
+    const { env, watch, poll } = await seeded(t, 600_000);
+    assert.equal((await poll()).length, 1, 'healthy and active: a rotating tenth');
+    env.watcher.setPollMs(700_000);
+    assert.deepEqual(await poll(), ['aa', 'bb', 'cc']);
+    env.watcher.setPollMs(600_000);
+    assert.equal((await poll()).length, 1);
+    assert.deepEqual(await poll({ all: true }), ['aa', 'bb', 'cc']);
+    assert.deepEqual(watch.calls, { opened: 1, closed: 0 }, 'fs.watch is untouched');
+  });
+
+  test('setPollMs changes how often the timer fires; the same value again does not put the next tick off', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    const { env } = await seeded(t, 3000);
+    let ticks = 0;
+    const off = env.watcher.onTick(() => void (ticks += 1));
+    const run = (ms: number): number => {
+      ticks = 0;
+      t.mock.timers.tick(ms);
+      return ticks;
+    };
+    assert.equal(run(2999), 0);
+    assert.equal(run(1), 1);
+    env.watcher.setPollMs(60_000);
+    assert.equal(run(59_999), 0);
+    env.watcher.setPollMs(60_000);
+    assert.equal(run(1), 1);
+    env.watcher.setPollMs(3000);
+    assert.equal(run(3000), 1);
+    off();
+    assert.equal(run(3000), 0, 'unsubscribed');
+  });
+
+  test('after stop, setPollMs starts no timer', async (t) => {
+    t.mock.timers.enable({ apis: ['setInterval'] });
+    const { env } = await seeded(t, 3000);
+    let ticks = 0;
+    env.watcher.onTick(() => void (ticks += 1));
+    env.watcher.stop();
+    env.watcher.setPollMs(10);
+    t.mock.timers.tick(1000);
+    assert.equal(ticks, 0);
+  });
+
+  test('pollNow waits for a poll under way instead of running beside it, so nothing is announced twice', async (t) => {
+    let gate: Promise<void> = Promise.resolve();
+    let release = (): void => undefined;
+    let active = 0;
+    let maxActive = 0;
+    const env = await makeWatchEnv(t, {
+      watchImpl: muteWatch().impl,
+      pollMs: 600_000,
+      fingerprint: async (dir, options) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await gate;
+        active -= 1;
+        return takeFingerprint(dir, undefined, options.nested);
+      },
+    });
+    await env.tmp.write('aa/index.html', '<p>x</p>');
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = env.watcher.pollNow();
+    const second = env.watcher.pollNow({ all: true });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    release();
+    await Promise.all([first, second]);
+    assert.equal(maxActive, 1);
+    assert.equal(env.events.filter((event) => event.kind === 'added' && event.slug === 'aa').length, 1);
+  });
+});
+
 describe('takeFingerprint (capped, sorted walk)', () => {
   const walkedKeys = (fingerprint: Fingerprint, top: string): string[] =>
     [...fingerprint.keys()].filter((key) => key.startsWith(`${top}/`) && key !== `${top}/` && key !== `${top}/…`);

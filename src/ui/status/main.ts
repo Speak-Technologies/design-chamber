@@ -16,13 +16,20 @@ import { createChangeFeed } from '../../guest/changes.ts';
 import { PANEL_SURFACE_ID, isHostError, openInRail } from '../../guest/flows.ts';
 import { getGuestHost } from '../../guest/host.ts';
 import { createServiceClient, isServiceError, toServiceError } from '../../guest/service-client.ts';
+import { applyDevice } from '../components/device.ts';
 import { debounce, errorText, h } from '../components/dom.ts';
 import { btn, type BtnHandle } from '../components/kit.ts';
+import { DESKTOP_DEVICE, deviceOf, openHelp, type DeviceHelp } from '../model/device-model.ts';
 import {
   STATUS_COPY,
+  holdTools,
   projectDirectoryOf,
+  projectOf,
   shouldRefetchStatus,
   statusSectionOf,
+  toolsOf,
+  type HeldTools,
+  type SessionTools,
   type StatusNotice,
   type StatusRowView,
   type StatusSectionView,
@@ -54,6 +61,14 @@ let resolveSeq = 0;
 let sessionId: string | null = null;
 let ready = false;
 let latest = 0;
+let device = DESKTOP_DEVICE;
+const help = (): DeviceHelp => openHelp(device, __DC_PANEL_MOBILE__);
+/** The project whose sessions are read, and the call each running one is making. */
+let toolsProject: string | null = null;
+let stopSessions: (() => void) | null = null;
+let tools: SessionTools = new Map();
+let heldTools: HeldTools | null = null;
+let toolTimer: ReturnType<typeof setTimeout> | undefined;
 /** Designs the person pressed Check on, until the service reports the run itself. */
 const checking = new Set<string>();
 
@@ -77,7 +92,7 @@ const isRailUnavailable = (error: unknown): boolean => isHostError(error, 'NO_DI
 /** Longest wait for the host's project list; past it the folder is taken for a project, as it was before the list was asked. */
 const PROJECTS_WAIT_MS = 3000;
 
-const readProjects = async (): Promise<ReadonlyArray<{ directory: string }> | null> => {
+const readProjects = async (): Promise<ReadonlyArray<{ id: string; directory: string }> | null> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const timeout = new Promise<never>((_, reject) => {
@@ -92,6 +107,33 @@ const readProjects = async (): Promise<ReadonlyArray<{ directory: string }> | nu
   }
 };
 
+/**
+ * Follow the sessions of one project (or none), for the "what the agent is doing" words. No project, no grant
+ * or a failing subscription leaves the map empty, and the lines read as they do without it.
+ */
+const watchSessions = async (projectId: string | null): Promise<void> => {
+  if (projectId === toolsProject) return;
+  toolsProject = projectId;
+  stopSessions?.();
+  stopSessions = null;
+  tools = new Map();
+  heldTools = null;
+  if (projectId === null) return;
+  try {
+    const stop = await guestHost.client.onSessions(projectId, (snapshot) => {
+      // A snapshot of a project the frame has since left is dropped.
+      if (projectId !== toolsProject || snapshot.state === 'loading') return;
+      if (snapshot.state === 'error') console.warn('Design Chamber: the chats of this project can’t be read');
+      tools = toolsOf(snapshot.state === 'error' ? [] : snapshot.sessions);
+      paint();
+    });
+    if (projectId !== toolsProject) stop();
+    else stopSessions = stop;
+  } catch (error) {
+    console.warn('Design Chamber: Work Status cannot read chat activity', error);
+  }
+};
+
 /** Decide whether the host's folder is a project, then read the list for it. Redone whenever the folder changes. */
 const resolveProject = async (): Promise<void> => {
   resolveSeq += 1;
@@ -100,6 +142,7 @@ const resolveProject = async (): Promise<void> => {
   if (mine !== resolveSeq) return;
   projectDirectory = projectDirectoryOf(directory, projects);
   hasProject = projectDirectory !== null;
+  void watchSessions(projectOf(directory, projects)?.id ?? null);
   paint();
   await load();
 };
@@ -155,7 +198,7 @@ const openDesign = async (slug: string): Promise<void> => {
     if (outcome === 'gone') {
       toast('error', STATUS_COPY.gone);
       void load();
-    } else if (outcome === 'not-here') toast('info', STATUS_COPY.notHere);
+    } else if (outcome === 'not-here') toast('info', help().notHere);
   } catch (error) {
     toast('error', `Couldn’t open that design. ${errorText(error)}`);
   }
@@ -165,7 +208,7 @@ const openAll = async (): Promise<void> => {
   try {
     await guestHost.client.openSurface(PANEL_SURFACE_ID);
   } catch (error) {
-    if (isRailUnavailable(error)) toast('info', STATUS_COPY.notHere);
+    if (isRailUnavailable(error)) toast('info', help().notHere);
     else toast('error', `Couldn’t open Design Chamber. ${errorText(error)}`);
   }
 };
@@ -184,7 +227,7 @@ const buildRow = (slug: string): RowNode => {
   const dot = h('span', { class: 'ws-dot', 'aria-hidden': 'true' });
   const title = h('span', { class: 'ws-title' });
   const meta = h('span', { class: 'ws-meta' });
-  const reason = h('span', { class: 'ws-sr', id: reasonId });
+  const reason = h('span', { class: 'ws-reason', id: reasonId });
   const check: BtnHandle = btn({ label: 'Check', variant: 'ghost', size: 'xs', onClick: () => void runCheck(slug) });
   const open: BtnHandle = btn({
     label: 'Open',
@@ -218,7 +261,7 @@ const buildRow = (slug: string): RowNode => {
       check.el.setAttribute('aria-label', `Check ${view.title}`);
       open.el.setAttribute('aria-label', `Open ${view.title}`);
       check.set({ loading: view.check.state === 'busy', disabled: view.check.state === 'disabled', title: view.check.reason ?? undefined });
-      // A disabled button gives its reason to a screen reader through this, not only a tooltip.
+      // A disabled button gives its reason through this, not only a tooltip: to a screen reader, and in words on a touch screen.
       reason.textContent = view.check.reason ?? '';
       if (view.check.state === 'disabled') check.el.setAttribute('aria-describedby', reasonId);
       else check.el.removeAttribute('aria-describedby');
@@ -299,6 +342,10 @@ const reportHeight = (): void => {
 
 const paint = (): void => {
   if (!ready) return;
+  const shown = holdTools(heldTools, tools, Date.now());
+  heldTools = shown.held;
+  clearTimeout(toolTimer);
+  if (shown.wait !== null) toolTimer = setTimeout(paint, shown.wait);
   draw(
     statusSectionOf({
       data,
@@ -306,6 +353,8 @@ const paint = (): void => {
       failingMs: failingSince === null ? 0 : Date.now() - failingSince,
       hasProject,
       checking,
+      tools: shown.held.tools,
+      serviceDown: help().serviceDown,
     }),
   );
 };
@@ -316,6 +365,8 @@ guestHost.ready.subscribe((context) => {
   if (!context) return;
   // Every ready snapshot, theme switches included: the host's tokens are the only palette.
   applyHostReady(context, document.documentElement);
+  device = deviceOf(context);
+  applyDevice(device, document.documentElement);
   document.documentElement.lang = context.locale;
   if (ready) return;
   ready = true;
@@ -360,4 +411,6 @@ window.addEventListener('pagehide', () => {
   feed.stop();
   sizeObserver?.disconnect();
   clearTimeout(giveUpTimer);
+  clearTimeout(toolTimer);
+  void watchSessions(null);
 });

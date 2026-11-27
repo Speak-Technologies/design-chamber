@@ -15,6 +15,7 @@ import type { AskOutcome } from '../../guest/flows.ts';
 import type { SystemArea, SystemDetail, SystemSection } from '../../shared/types.ts';
 import { SYSTEM_SECTIONS, AREA_OF_SECTION } from '../../shared/system-json.ts';
 import { reveal, toast, type ActionContext } from '../components/actions.ts';
+import { currentDevice, menuOnThisDevice } from '../components/device.ts';
 import { createScope, errorText, h } from '../components/dom.ts';
 import { attachMenu, banner, bannerWithActions, btn, iconBtn, loadingRow, openSheet, type BtnHandle } from '../components/kit.ts';
 import { createAskBar, type AskBarHandle } from '../components/ask-bar.ts';
@@ -63,7 +64,7 @@ import { RESYNC_NOTICE_MS } from '../model/resync-model.ts';
 import { REGENERATING_LABEL, livingCard, previewTarget, type LivingActionId, type LivingRepoView } from '../model/living-page-model.ts';
 import { driftLines, landedLine, readOnlyLine, repoHeaderLine, systemBanners, type BannerActionId, type BannerSpec } from '../model/system-home-model.ts';
 import { viewingBanner } from '../model/versions-model.ts';
-import { exportMenuEntry, exportOffered, renamedSentence } from '../model/token-export-model.ts';
+import { exportMenuEntry, renamedSentence } from '../model/token-export-model.ts';
 import type { WallSelection } from '../wall/wall-types.ts';
 import { renderLivingCard } from './living-card.ts';
 import { mountLivingPreview, type LivingPreviewHandle } from './living-preview.ts';
@@ -916,13 +917,14 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
       const more = iconBtn({ icon: 'more', label: 'More', onClick: () => undefined });
       attachMenu(
         more,
-        () => [
+        // A phone's menu has no Export: the tokens would be saved on the computer (menuOnThisDevice drops `export`).
+        () => menuOnThisDevice([
           { id: 'rename', label: 'Rename' },
           { id: 'chat', label: 'Continue in chat' },
           ...(canResync() ? [resyncEntry()] : []),
-          ...(exportOffered(host.snapshot()) ? [exportMenuEntry({ viewing: viewing !== null, dirty: dirty(), unreadable: detail?.unreadable != null })] : []),
+          exportMenuEntry({ viewing: viewing !== null, dirty: dirty(), unreadable: detail?.unreadable != null }),
           ...(compact ? [{ id: 'versions', label: 'Versions' }] : []),
-        ],
+        ]),
         (choice) => {
           if (choice === 'rename') startRename();
           else if (choice === 'chat') void continueChat();
@@ -970,7 +972,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
     if (!detail || repoHome() === null) return null;
     const out = h('div', { class: 'dc-syspg-repo' });
     if (living !== null) {
-      const card = livingCard(living, detail, { now: Date.now(), locale: localeOf(), regenerating, locked: viewing ? OLD_VERSION_SENTENCE : dirty() ? 'Save or discard your changes first.' : null });
+      const card = livingCard(living, detail, { now: Date.now(), locale: localeOf(), regenerating, locked: viewing ? OLD_VERSION_SENTENCE : dirty() ? 'Save or discard your changes first.' : null, phone: currentDevice().form === 'phone' });
       out.append(renderLivingCard(card, { onAction: livingAction, onEmbedFonts: (checked) => void setEmbedFonts(checked) }));
     }
     const drift = driftLines(detail);
@@ -1190,7 +1192,7 @@ export const mountSystemPage = (options: SystemPageOptions): SystemPageHandle =>
           btn({ label: control.label, variant: control.emphasis === 'primary' ? 'default' : 'outline', size: 'sm', ...(control.emphasis === 'primary' ? { emphasis: 'primary' as const } : {}), disabled: viewing !== null, onClick: () => void toggleReady() }).el,
           btn({ label: 'Continue in chat', variant: 'outline', size: 'sm', icon: 'chat', onClick: () => void openChat() }).el,
         ),
-        ...(detail.home.kind === 'repo' ? [] : [h('p', { class: 'dc-muted dc-syspg-railhint' }, railHint(detail))]),
+        ...(detail.home.kind === 'repo' ? [] : [h('p', { class: 'dc-muted dc-syspg-railhint' }, railHint(detail, document.documentElement.dataset.dcForm === 'phone'))]),
       );
     };
     if (foot.kind === 'uncovered') {

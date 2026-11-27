@@ -3,7 +3,7 @@
 Design canvases, HTML pages and design systems, drawn inside OpenChamber. You ask your own chat agent for a design. It writes plain files to a folder. Design Chamber shows them live, lets you comment on them, version them, check them and export them.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![OpenChamber](https://img.shields.io/badge/openchamber-%E2%89%A5%202.7.0-4b5563)](#install)
+[![OpenChamber](https://img.shields.io/badge/openchamber-%E2%89%A5%202.8.0-4b5563)](#install)
 
 ![A canvas wall in OpenChamber's dark theme: three screens (Home, Plans, Checkout) at Laptop and Phone sizes, numbered comment pins on the artboards, the Comments drawer with a Send 4 comments to chat button, and the ask bar along the bottom](docs/img/hero-wall-pins.png)
 
@@ -18,7 +18,7 @@ Design canvases, HTML pages and design systems, drawn inside OpenChamber. You as
 
 ## Install
 
-**You need:** OpenChamber 2.7.0 or later. Linux, Windows or macOS (macOS is not in CI, see [`docs/testing/MACOS.md`](docs/testing/MACOS.md)). Optional: Chrome, Edge or Chromium, used to draw thumbnails and run checks. Without one, the library falls back to live previews and checks cannot render.
+**You need:** OpenChamber 2.8.0 or later. Older versions stop getting Design Chamber updates; the last release for 2.7 keeps working there. Linux, Windows or macOS (macOS is not in CI, see [`docs/testing/MACOS.md`](docs/testing/MACOS.md)). Optional: Chrome, Edge or Chromium, used to draw thumbnails and run checks. Without one, the library falls back to live previews and checks cannot render.
 
 **One click:** [Install in OpenChamber](openchamber://extensions/install?url=https%3A%2F%2Fgithub.com%2FSpeak-Technologies%2Fdesign-chamber%23release). OpenChamber asks before it adds anything.
 
@@ -32,7 +32,7 @@ GitHub may not turn the one-click link into a button, so the line above always w
 
 **From source:** `npm install && npm run build`, then add the repo folder in **Settings → Extensions**. `dist/` is not committed, so build first. `npm run build && npm run pack` makes `design-chamber-<version>.zip` if you would rather install that. Each GitHub release carries one too.
 
-After the install, OpenChamber asks you to approve permissions: sending prompts, reading sessions and running Design Chamber's local helper (the "service"). The same install adds instructions, a skill, a `design_check` tool and chat blocks so your agent knows where designs go.
+After the install, OpenChamber asks you to approve permissions: sending prompts, reading sessions, running Design Chamber's local helper (the "service") and showing marks in the sidebar. Updating from an older version asks once more for the new ones. The helper starts with OpenChamber and keeps running while it is open, so chats that made a design get their mark in the sidebar; it uses about 100 MB of memory and next to no CPU while nothing is open. The same install adds instructions, a skill, a `design_check` tool and chat blocks so your agent knows where designs go.
 
 ## Quick start
 
@@ -266,7 +266,7 @@ A folder counts as a design when it holds `design.json`, `.chamber/state.json`, 
 | My designs vanished | The designs folder was changed. **Settings → Earlier folders → Switch back.** |
 | A folder I made by hand is not listed | It needs `design.json`, an `index.html` or a `screens/` folder, and a name of lowercase letters, digits and hyphens that starts with a letter or digit. Hidden folders are ignored. Loose `.html` files in the root get an import banner instead. |
 | The agent says the check could not run | Open the Design Chamber panel once so it can record where OpenChamber's runtime is, then try again. Where `design_check` is not available (a remote OpenCode, a terminal agent), run the `dc` command from `AGENTS.md` in the designs folder. |
-| Nothing happens after `/design` | Check that the extension's permissions were approved and that OpenChamber is 2.7.0 or later, in **Settings → Extensions**. `/design` only runs at the very start of a message. |
+| Nothing happens after `/design` | Check that the extension's permissions were approved and that OpenChamber is 2.8.0 or later, in **Settings → Extensions**. `/design` only runs at the very start of a message. |
 
 More known limits are in [`documentation/known-issues.md`](documentation/known-issues.md).
 

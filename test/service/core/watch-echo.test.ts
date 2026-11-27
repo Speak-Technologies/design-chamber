@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import type { FSWatcher } from 'node:fs';
-import { rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { test, type TestContext } from 'node:test';
 
 import { createChangeHub } from '../../../src/service/changes.ts';
@@ -184,4 +184,25 @@ test('without a registry the watcher reports every change as before', async (t) 
   await watcher.pollNow();
   await sleep(DEBOUNCE_MS * 4);
   assert.ok(events.some((event) => event.kind === 'files' && (event.files ?? []).includes('index.html')));
+});
+
+test('a new folder holding only the service\'s own files is the service\'s too, nested folders included', async (t) => {
+  const rig = await setup(t);
+  const mark = seqOf(rig);
+  await mkdir(rig.tmp.at('art/img/icons'), { recursive: true });
+  await rig.userWrite('img/a.png', 'png bytes');
+  await rig.userWrite('img/icons/b.svg', '<svg/>');
+  await rig.watcher.pollNow({ all: true });
+  assert.deepEqual(await rig.settle(mark), []);
+});
+
+test('a new folder with an agent file in it still shows, the folder and that file', async (t) => {
+  const rig = await setup(t);
+  const mark = seqOf(rig);
+  await mkdir(rig.tmp.at('art/img'), { recursive: true });
+  await rig.userWrite('img/a.png', 'png bytes');
+  await writeFile(rig.tmp.at('art/img/agent.png'), 'the agent wrote this');
+  await rig.watcher.pollNow({ all: true });
+  const events = await rig.settle(mark);
+  assert.deepEqual(events.map((event) => [event.kind, event.files]), [['files', ['img/', 'img/agent.png']]]);
 });

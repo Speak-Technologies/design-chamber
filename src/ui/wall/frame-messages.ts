@@ -48,8 +48,8 @@ export const createFrameMessageHandler = (ctx: WallContext, deps: FrameMessageDe
         board.main.post({ type: 'set-mode', mode: ctx.frameMode() });
         return;
       case 'scroll':
-        // The pin tracker repaints the pins; a card anchored to the old position closes.
-        if (popovers.current()?.board === board) popovers.close();
+        // The pin tracker repaints the pins; an empty card anchored to the old position closes, a half-written one stays.
+        if (popovers.current()?.board === board) popovers.closeForMove();
         picks.notifyMoved();
         return;
       case 'hit':

@@ -395,6 +395,19 @@ export type FromMessageBody = {
 export type FromMessageResponse = { slug: string; title: string };
 
 /**
+ * `POST /pages/from-file` (native-extras §3.3): the background action on a Files row. Exactly these
+ * keys; `path` 1..`FILE_PAGE_PATH_MAX` with no control character, absolute or relative to
+ * `directory`; `directory` null or an absolute folder under the same rules.
+ */
+export type FromFileBody = { path: string; directory: string | null };
+/**
+ * `reused`: the file was already a page with the same bytes, or a file of an existing design, so
+ * nothing was written. `left`: local files the page uses that were not copied (outside its folder,
+ * missing, or of a type that is never copied).
+ */
+export type FromFileResponse = { slug: string; title: string; reused: boolean; left: { outside: number; missing: number; other: number } };
+
+/**
  * Design checks. `static` is computed by the service on every change; `render` comes from the last
  * `.chamber/check.json` (written by the agent's CLI or by `POST .../checks/run`).
  * `render.state`: `none` = never checked or unreadable file; `running` = a service run is under way;
@@ -459,6 +472,8 @@ export type StatusDesignRow = {
   checks: ChecksSummary | null;
   pending: boolean;
   openComments: number;
+  /** The design's linked chat (`DesignSummary.sessionId`), so the status frame can match a session record's `tool` (native-extras §1.2). */
+  sessionId: string | null;
 };
 /** `rows` ≤ `STATUS_ROWS_MAX`; `total` counts every design that matched. */
 export type StatusDesignsResponse = { rows: StatusDesignRow[]; total: number };
@@ -914,6 +929,7 @@ export interface ApiRoutes {
   'POST /chip': Route<NoQuery, ChipBody, ChipResponse>;
   'POST /designs/:slug/prompt': Route<NoQuery, PromptBody, PromptResponse>;
   'POST /pages/from-message': Route<NoQuery, FromMessageBody, FromMessageResponse>;
+  'POST /pages/from-file': Route<NoQuery, FromFileBody, FromFileResponse>;
   'DELETE /open-request': Route<NoQuery, undefined, OpenRequestResponse>;
   'POST /open-request': Route<NoQuery, OpenRequestBody, OkResponse>;
 
@@ -1059,6 +1075,7 @@ export const ROUTE_OWNERS = {
   'POST /chip': 'WP3',
   'POST /designs/:slug/prompt': 'WP3',
   'POST /pages/from-message': 'WP3',
+  'POST /pages/from-file': 'WP3',
   'DELETE /open-request': 'WP3',
   'POST /open-request': 'WP3',
   'POST /session-events': 'U4',

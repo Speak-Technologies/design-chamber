@@ -1,12 +1,13 @@
 // What the SystemAsk block's views share (documentation/specs/phase-2-5-technical.md §8.12, SP-4):
 // the frame (head, scrolling body, pinned footer), the one place an answer leaves the block, the
-// "host cannot take an answer" state with Copy my answer, and the refetch timer.
+// "host cannot take an answer" state with Copy my answer, and the refetch.
 
 import { mountButton, type ButtonHandle } from '@openchamber/sdk/ui';
 
 import { isHostError } from '../../guest/flows.ts';
 import { h } from '../components/dom.ts';
 import { icon, type IconName } from '../components/icons.ts';
+import { startAskPoll, type AskPoll, type PollVerdict } from '../model/ask-poll.ts';
 import { HOST_CANNOT_TAKE, REFUSED_ANSWER } from '../model/system-ask-model.ts';
 import type { BlockContext } from './block-view.ts';
 
@@ -86,25 +87,18 @@ export const cannotTake = (ctx: BlockContext, text: string): { el: HTMLElement; 
   return { el: h('div', { class: 'dcb-ask-cannot' }, status, slot), dispose: () => handle?.dispose() };
 };
 
-/** Runs `tick` on window focus and every `ms` while the frame is visible; one at a time. */
-export const startRefetch = (tick: () => Promise<void>, ms: number): (() => void) => {
-  let busy = false;
-  const run = (): void => {
-    if (busy || document.visibilityState === 'hidden') return;
-    busy = true;
-    tick()
-      .catch((error: unknown) => console.warn('Design Chamber: refetch failed', error))
-      .finally(() => {
-        busy = false;
-      });
-  };
-  const timer = setInterval(run, ms);
-  window.addEventListener('focus', run);
-  document.addEventListener('visibilitychange', run);
-  return () => {
-    clearInterval(timer);
-    window.removeEventListener('focus', run);
-    document.removeEventListener('visibilitychange', run);
+/** `startAskPoll` for a frame: hidden frames send nothing, and coming back to the frame reads at once. */
+export const startRefetch = (read: () => Promise<PollVerdict>, ms: number): AskPoll => {
+  const poll = startAskPoll(read, ms, () => document.visibilityState !== 'hidden');
+  window.addEventListener('focus', poll.now);
+  document.addEventListener('visibilitychange', poll.now);
+  return {
+    now: poll.now,
+    stop: () => {
+      poll.stop();
+      window.removeEventListener('focus', poll.now);
+      document.removeEventListener('visibilitychange', poll.now);
+    },
   };
 };
 

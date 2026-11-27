@@ -1,6 +1,9 @@
 // The rail panel app (320–480 px): the list (R1), the compact viewer (R2) and settings (R3) as
 // views of one stack, plus the New dialog. Chat links ("Open as page", a chip click) open
 // the viewer here, because an extension cannot open the full-screen page from code.
+// On a phone the full-screen page is this app too (`phone-page`, documentation/specs/native-extras.md
+// §2.2): the layout is already built for 320 to 480 px. It reports and remembers as the page, shows no
+// footer hint and no first-run tip, and leaves open requests to the panel tab, which takes them.
 
 import type { SystemOpenTarget } from '../../shared/api.ts';
 import { openNewDialog } from '../components/new-dialog.ts';
@@ -11,17 +14,31 @@ import { keepPlace } from '../components/place-memory.ts';
 import { reportNothingOpen, reportReturn, startViewReport } from '../components/view-report.ts';
 import { mountSettings, type SettingsHandle } from '../components/settings-view.ts';
 import { feed, flows } from '../guest.ts';
+import type { DeviceHelp } from '../model/device-model.ts';
 import { mountDesignView, type DesignViewHandle } from '../wall/design-view.ts';
 import { mountSystemsList, type SystemsListHandle } from '../systems/systems-list.ts';
 import { mountBuildChipView, type BuildChipViewHandle } from '../systems/build-chip-view.ts';
 import { mountSystemPage, type SystemPageHandle } from '../systems/system-page.ts';
 import { mountListView } from './list-view.ts';
 
-export const mountRail = (root: HTMLElement): void => {
-  const app = h('div', { class: 'dc-app', 'data-surface': 'panel' });
+export type RailOptions = {
+  /** `panel`: the rail (or the phone's workspace drawer tab). `phone-page`: the full-screen page on a phone. */
+  variant: 'panel' | 'phone-page';
+  /** Where the full-screen page is, in this device's words (`openHelp`). */
+  help: DeviceHelp;
+};
+
+export const mountRail = (root: HTMLElement, rail: RailOptions): void => {
+  const phonePage = rail.variant === 'phone-page';
+  /** The surface the host opened: what the service is told is on screen, and the place-memory key. */
+  const surface = phonePage ? 'page' : 'panel';
+  // `data-surface` stays `panel`: it picks the compact layout in styles.css. `data-variant` adds the phone page's insets.
+  const app = h('div', { class: 'dc-app', 'data-surface': 'panel', 'data-variant': rail.variant });
   root.replaceChildren(app);
   // Always on: the service learns which design is open, so the user's agent can answer "this one" (spec §2.4).
-  startViewReport('panel');
+  startViewReport(surface);
+  // The phone page is already full screen, so it points nowhere.
+  const hint = phonePage ? null : rail.help.fullScreenHint;
 
   let viewer: { slug: string; handle: DesignViewHandle } | null = null;
   /** The design systems list, while it is the view on screen. */
@@ -55,7 +72,7 @@ export const mountRail = (root: HTMLElement): void => {
     systemsView = null;
     buildView?.handle.dispose();
     buildView = null;
-    const handle = mountDesignView({ slug, surface: 'panel', actions, onBack: leaveViewer, startIn: options.startIn });
+    const handle = mountDesignView({ slug, surface: 'panel', actions, onBack: leaveViewer, startIn: options.startIn, hint });
     viewer = { slug, handle };
     place.remember(slug);
     list.el.hidden = true;
@@ -89,7 +106,7 @@ export const mountRail = (root: HTMLElement): void => {
   };
 
   // The frame reloads when the extension updates; reopen the design that was open (an open request or the user's own choice wins).
-  const place = keepPlace({ surface: 'panel', isOpen: () => viewer !== null, open: (slug) => openViewer(slug) });
+  const place = keepPlace({ surface, isOpen: () => viewer !== null, open: (slug) => openViewer(slug) });
 
   const actions: ActionContext = {
     host: app,
@@ -210,6 +227,7 @@ export const mountRail = (root: HTMLElement): void => {
     onSystems: showSystems,
     onSettings: openSettings,
     onNew: (kind) => openNewDialog(app, { kind, onCreated: openViewer, onSystems: showSystems }),
+    firstRunTip: phonePage ? null : rail.help.firstRunTip,
   });
   app.append(list.el);
 
@@ -220,6 +238,8 @@ export const mountRail = (root: HTMLElement): void => {
   );
   // "Open as page" (background frame), a Work Status row or a chat block leaves a design for us to open.
   // A system request opens the system page, then jumps to its board or the living page preview when it asked for one.
+  // Only the panel takes them: on a phone the drawer tab is opened for the request, and the page must not take it first.
+  if (phonePage) return;
   flows.watchOpenRequests(
     (listener) => feed.subscribe(listener),
     (target) => openViewer(target.slug, { startIn: target.intent }),

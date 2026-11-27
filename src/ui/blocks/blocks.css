@@ -862,6 +862,11 @@ body {
   }
 }
 
+/* A touch screen (components/device.ts): every control in a block is at least 44 px tall. */
+[data-dc-pointer='coarse'] :is(.oc-sdk-btn, .dcb-opt, .dcb-file) {
+  min-height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+}
+
 @media (prefers-reduced-motion: reduce) {
   .dcb-file-chev {
     transition: none;

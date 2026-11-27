@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, readdir, readFile, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { describe, test, type TestContext } from 'node:test';
 import { pathToFileURL } from 'node:url';
@@ -10,7 +10,7 @@ import { buildRevisionPrompt } from '../../src/shared/agent/revision-prompt.ts';
 import { ASK_TEXT_MAX, BRIEF_MAX, CHIP_TEXT_HARD_MAX, HAND_EDITS_BLOCK_MAX, PROMPT_EXTERNAL_MAX, PROMPT_EXTERNAL_URL_MAX, REVISION_TEXT_MAX } from '../../src/shared/limits.ts';
 import type { RenderMeta, RenderQuery } from '../../src/shared/api.ts';
 import type { DesignChip, HandEdit } from '../../src/shared/types.ts';
-import { unavailable, type DesignStore, type RenderService } from '../../src/service/context.ts';
+import { unavailable, type DesignIndex, type DesignStore, type RenderService } from '../../src/service/context.ts';
 import { ensureEditService } from '../../src/service/edits/pipeline.ts';
 import type { HandEditBody } from '../../src/service/edits/op-module.ts';
 import { createRouter } from '../../src/service/http.ts';
@@ -31,6 +31,20 @@ const makeProject = async (tmp: TmpRoot): Promise<string> => {
   await writeFile(path.join(dir, 'tailwind.config.ts'), "export default { theme: { screens: { sm: '640px', lg: '1024px' } } }");
   return dir;
 };
+
+/** A project folder beside the root for the Files action: a page using one image that is there and one that is not. */
+const makeFilesProject = async (t: TestContext, tmp: TmpRoot): Promise<string> => {
+  const dir = path.join(path.dirname(tmp.root), `${path.basename(tmp.root)}-files`);
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await mkdir(path.join(dir, 'img'), { recursive: true });
+  await writeFile(path.join(dir, 'page.html'), '<title>From files</title><img src="img/a.png"><img src="img/gone.png">');
+  await writeFile(path.join(dir, 'img', 'a.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff]));
+  await writeFile(path.join(dir, 'notes.txt'), 'notes');
+  return dir;
+};
+
+/** A design index with nothing in it yet: the Files action then finds copies only by its own memory. */
+const emptyIndex: DesignIndex = { all: () => [], get: () => null, bySession: () => [], ready: async () => true, dispose: async () => undefined };
 
 describe('project discovery cache key', () => {
   test('macOS and Windows fold case, so a re-cased project folder shares one scan', () => {
@@ -545,6 +559,7 @@ describe('auth and traversal on every route', () => {
     { route: '/designs/some-design/prompt', body: { purpose: 'continue' } },
     { route: '/designs/some-design/prompt', body: { purpose: 'ask', text: 'Make it bigger' } },
     { route: '/pages/from-message', body: { uploadId: 'u_0123456789abcdef', sessionId: 's', sessionTitle: 't', messageId: 'm', directory: null } },
+    { route: '/pages/from-file', body: { path: '/home/me/project/index.html', directory: null } },
   ];
 
   test('a missing or wrong bearer token is refused before anything runs', async (t) => {
@@ -559,6 +574,73 @@ describe('auth and traversal on every route', () => {
     }
     assert.equal(ctx.creates.length, 0);
     assert.deepEqual(await readdir(tmp.root), [], 'nothing was written');
+  });
+
+  test('POST /pages/from-file refuses traversal, network paths and bad bodies before anything is read or written', async (t) => {
+    const tmp = await useTmpRoot(t);
+    const project = await makeFilesProject(t, tmp);
+    const ctx = createChatContext(tmp, { designIndex: emptyIndex });
+    const { call } = await serveRoutes(t, ctx);
+    for (const [body, status, code] of [
+      [{ path: '../../etc/passwd.html', directory: project }, 422, 'invalid'],
+      [{ path: '../outside.html', directory: project }, 422, 'invalid'],
+      // A Windows folder is not absolute on posix (400); on Windows the walk leaves it (422).
+      [{ path: '..\\..\\windows\\x.html', directory: 'C:\\Users\\me' }, process.platform === 'win32' ? 422 : 400, process.platform === 'win32' ? 'invalid' : 'bad-path'],
+      [{ path: '\\\\server\\share\\a.html', directory: null }, 422, 'invalid'],
+      [{ path: '//server/share/a.html', directory: null }, 422, 'invalid'],
+      [{ path: 'page.html', directory: null }, 422, 'invalid'],
+      [{ path: path.join(project, 'notes.txt'), directory: null }, 422, 'invalid'],
+      [{ path: '%2e%2e/%2e%2e/x.html', directory: project }, 404, 'not-found'],
+      [{ path: path.join(project, 'gone.html'), directory: null }, 404, 'not-found'],
+      [{ path: path.join(project, 'page.html') }, 400, 'bad-request'],
+      [{ path: path.join(project, 'page.html'), directory: null, open: true }, 400, 'bad-request'],
+      [{ path: 'a\u0000.html', directory: project }, 400, 'bad-request'],
+      ['text', 400, 'bad-request'],
+    ] as const) {
+      assertError(await call('/pages/from-file', { body }), status, code);
+    }
+    assert.equal(ctx.creates.length, 0);
+    assert.deepEqual(await readdir(tmp.root), [], 'nothing was written');
+    assert.deepEqual((await call('/open-request', { method: 'DELETE' })).json, { request: null }, 'no open request was left');
+  });
+
+  test('POST /pages/from-file copies the file into a new page and leaves an open request for the rail', async (t) => {
+    const tmp = await useTmpRoot(t);
+    const project = await makeFilesProject(t, tmp);
+    const ctx = createChatContext(tmp, { designIndex: emptyIndex });
+    const { call } = await serveRoutes(t, ctx);
+    const reply = await call('/pages/from-file', { body: { path: 'page.html', directory: project } });
+    assert.equal(reply.status, 200, JSON.stringify(reply.json));
+    const slug = reply.json.slug as string;
+    assert.deepEqual(reply.json, { slug, title: 'From files', reused: false, left: { outside: 0, missing: 1, other: 0 } });
+    assert.equal(ctx.creates.length, 1);
+    const created = ctx.creates[0];
+    assert.equal(created?.kind, 'page');
+    assert.equal(created?.sessionId, null);
+    assert.equal(created?.projectDirectory, project);
+    assert.equal(created?.importedFrom?.path, path.join(project, 'page.html'));
+    assert.match(created?.importedFrom?.sha256 ?? '', /^[0-9a-f]{64}$/);
+    assert.deepEqual(await readFile(tmp.at(`${slug}/index.html`)), await readFile(path.join(project, 'page.html')));
+    assert.deepEqual(await readFile(tmp.at(`${slug}/img/a.png`)), await readFile(path.join(project, 'img', 'a.png')));
+    assert.ok(ctx.events.some((event) => event.slug === slug && event.kind === 'open'), 'a rail that is already up is told');
+    const request = (await call('/open-request', { method: 'DELETE' })).json.request as Record<string, unknown>;
+    assert.equal(request.slug, slug);
+    assert.equal(request.intent, 'view');
+  });
+
+  test('POST /pages/from-file on a file of an existing design opens it without a copy', async (t) => {
+    const tmp = await useTmpRoot(t);
+    await seedDesign(tmp, 'checkout', { kind: 'page', title: 'Checkout' });
+    await tmp.write('checkout/index.html', '<p>checkout</p>');
+    const ctx = createChatContext(tmp, { designIndex: emptyIndex });
+    const { call } = await serveRoutes(t, ctx);
+    const reply = await call('/pages/from-file', { body: { path: tmp.at('checkout/index.html'), directory: null } });
+    assert.equal(reply.status, 200, JSON.stringify(reply.json));
+    assert.deepEqual(reply.json, { slug: 'checkout', title: 'Checkout', reused: true, left: { outside: 0, missing: 0, other: 0 } });
+    assert.equal(ctx.creates.length, 0);
+    const request = (await call('/open-request', { method: 'DELETE' })).json.request as Record<string, unknown>;
+    assert.equal(request.slug, 'checkout');
+    assert.equal(request.intent, 'view');
   });
 
   test('traversal in the slug never reaches the filesystem', async (t) => {
@@ -627,7 +709,7 @@ describe('RULES.md writer and the onCreate hook', () => {
     const router = createRouter({ token: TOKEN, log: ctx.log });
     assert.doesNotThrow(() => registerChatRoutes(router, ctx));
     assert.ok(ctx.logs.some((line) => line.level === 'warn' && line.event === 'agent.rules-hook-unavailable'));
-    assert.deepEqual(router.registered().sort(), ['DELETE /open-request', 'POST /chip', 'POST /designs/:slug/prompt', 'POST /open-request', 'POST /pages/from-message']);
+    assert.deepEqual(router.registered().sort(), ['DELETE /open-request', 'POST /chip', 'POST /designs/:slug/prompt', 'POST /open-request', 'POST /pages/from-file', 'POST /pages/from-message']);
   });
 });
 

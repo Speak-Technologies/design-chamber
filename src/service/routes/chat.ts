@@ -1,4 +1,4 @@
-// WP3 — POST /chip, POST /designs/:slug/prompt, POST /pages/from-message, POST and DELETE /open-request
+// WP3: POST /chip, POST /designs/:slug/prompt, POST /pages/from-message, POST /pages/from-file, POST and DELETE /open-request
 // (docs/SPEC.md §7, §10, §11; documentation/specs/phase-1-5-sdk-2-7.md §3.2),
 // and the `onCreate` hook that writes `<design>/.chamber/RULES.md`. Revision and offline prompts
 // list the remote URLs the viewer blocks, taken from the bundler's static scan of the design's
@@ -22,6 +22,7 @@ import { normalizeExternalUrl, sortFindings } from '../../shared/checks.ts';
 import type {
   AskElement,
   ChipResponse,
+  FromFileResponse,
   FromMessageResponse,
   MembershipResult,
   MembershipTarget,
@@ -70,6 +71,7 @@ import type { DesignRecord, ServiceContext } from '../context.ts';
 import { ensureChecksService } from '../check/service.ts';
 import { ensureLauncherService } from '../check/launcher.ts';
 import { discoverProjectRules, withDeadline } from '../discovery.ts';
+import { createFilePageImporter } from '../file-page.ts';
 import { ensureFoldersService } from '../folders.ts';
 import { readTokensFile } from '../edits/ops-tokens.ts';
 import { ensureEditService } from '../edits/pipeline.ts';
@@ -451,6 +453,7 @@ const handEditsOf = (block: HandEditsBlock | null): PromptResponse['handEdits'] 
  * - 'POST /chip'
  * - 'POST /designs/:slug/prompt'
  * - 'POST /pages/from-message'
+ * - 'POST /pages/from-file' (native-extras §3.3)
  * - 'POST /open-request'
  * - 'DELETE /open-request'
  * and hooks design creation so every new design gets its `.chamber/RULES.md`.
@@ -459,6 +462,7 @@ const handEditsOf = (block: HandEditsBlock | null): PromptResponse['handEdits'] 
  */
 export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
   const instructions = createInstructions(ctx);
+  const filePages = createFilePageImporter({ settings: ctx.settings, store: ctx.store, designIndex: ctx.designIndex, selfWrites: ctx.selfWrites, log: ctx.log });
   // One slot, taken exactly once: a newer request ("Open as page", a Work Status row, a chat block)
   // replaces an untaken older one.
   let openRequest: { request: OpenRequest; at: number } | null = null;
@@ -718,6 +722,17 @@ export function registerChatRoutes(router: Router, ctx: ServiceContext): void {
     // The background action opens the rail next; the rail takes this on mount or on `added`.
     if (input.open) leaveOpenRequest(record.slug, 'view');
     return { slug: record.slug, title: record.design.title };
+  });
+
+  // native-extras §3.3: "Open as page in Design Chamber" on a Files row. The importer checks the
+  // body, reads only the picked file and the local files it uses from its own folder, and writes
+  // only a new design (src/service/file-page.ts). Here: the open request, as for a message, plus
+  // `open` so a rail that is already up takes it (a reused page fires no `added`).
+  router.on('POST /pages/from-file', async ({ body }): Promise<FromFileResponse> => {
+    const result = await filePages.open(body);
+    leaveOpenRequest(result.slug, 'view');
+    ctx.hub.emit({ slug: result.slug, kind: 'open' });
+    return result;
   });
 
   // A Work Status row or a chat block: open an existing design in the rail. The `open` event

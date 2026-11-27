@@ -26,6 +26,7 @@ export function registerChangesRoutes(router: Router, ctx: ServiceContext): void
     const since = parseCount(query.get('since'), 0, 'since cursor');
     const wait = parseCount(query.get('wait'), 0, 'wait time', CHANGES_WAIT_MAX_MS);
     const epoch = query.get('epoch') ?? '';
+    ctx.pace.touch(); // a window is open: leave, or stay out of, quiet mode (pace.ts)
     return ctx.hub.waitFor(since, epoch, wait, signal);
   });
 }

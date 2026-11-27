@@ -4,7 +4,7 @@
 // (a stand-in for `connectHost`) for the frames whose real entry point calls `getGuestHost()`.
 //
 // Scenario hooks, all on `window.__dcFake` of the frame:
-//   - the fake backend's own (writePending, writeFile, ageDesign, padScreens, unwriteScreen, addDirections, failNextRestore, touchTokens, checks, pageState);
+//   - the fake backend's own (writePending, writeFile, ageDesign, linkDesign, padScreens, unwriteScreen, addDirections, failNextRestore, touchTokens, checks, pageState);
 //   - `route(key, override)` / `clearRoutes()`: answer one route yourself (see `RouteOverride`);
 //   - the page URL's `?routes=<json>` sets overrides before the first request, which `route()` cannot:
 //     {"GET /status/designs": {"status": 200, "body": {"rows": [], "total": 0}}}.
@@ -13,7 +13,7 @@ import { ROUTE_KEYS, type RouteKey } from '../../../src/shared/api.ts';
 import type { HostLike } from '../../../src/guest/host.ts';
 import { createFakeTransport, type FakeTransport, type RouteOverride } from './fake-transport.ts';
 
-export type FakeHooks = Pick<FakeTransport['backend'], 'writePending' | 'writeFile' | 'ageDesign' | 'padScreens' | 'unwriteScreen' | 'addDirections' | 'failNextRestore' | 'touchTokens' | 'checks' | 'pageState' | 'folders' | 'systems' | 'systemComments' | 'designSystem' | 'setProject' | 'setWarnings' | 'setMissingProjects' | 'requestSystemOpen' | 'views' | 'setInstructions'> & {
+export type FakeHooks = Pick<FakeTransport['backend'], 'writePending' | 'writeFile' | 'ageDesign' | 'linkDesign' | 'padScreens' | 'unwriteScreen' | 'addDirections' | 'failNextRestore' | 'touchTokens' | 'checks' | 'pageState' | 'folders' | 'systems' | 'systemComments' | 'designSystem' | 'setProject' | 'setWarnings' | 'setMissingProjects' | 'requestSystemOpen' | 'views' | 'setInstructions'> & {
   route: FakeTransport['routes']['set'];
   clearRoutes: FakeTransport['routes']['clear'];
   routeHits: FakeTransport['routes']['hits'];
@@ -65,6 +65,7 @@ export const installFakeHost = <T extends HostLike>(real: T): T => {
     writePending: fake.backend.writePending,
     writeFile: fake.backend.writeFile,
     ageDesign: fake.backend.ageDesign,
+    linkDesign: fake.backend.linkDesign,
     padScreens: fake.backend.padScreens,
     unwriteScreen: fake.backend.unwriteScreen,
     addDirections: fake.backend.addDirections,

@@ -36,6 +36,7 @@ import {
   type EditStamps,
   type EditResponse,
   type FolderListResponse,
+  type FromFileResponse,
   type MembershipResult,
   type MembershipTarget,
   type OpenRequest,
@@ -300,6 +301,8 @@ export type FakeService = {
   readonly folders: Map<string, FakeFolder>;
   /** F1: manual project members, by directory. */
   readonly projectMembers: Map<string, Set<string>>;
+  /** What the next new `POST /pages/from-file` copy reports as left out; a test sets it. */
+  fromFileLeft: FromFileResponse['left'];
 };
 
 /** F1: a seeded folder in the fake service. */
@@ -319,6 +322,9 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
   let counter = 0;
   const outbox: { value: Outbox | null } = { value: null };
   const openRequest: { value: OpenRequest | null } = { value: null };
+  /** `POST /pages/from-file`: picked path → the page already made of it. */
+  const filePages = new Map<string, string>();
+  const fromFile: { left: FromFileResponse['left'] } = { left: { outside: 0, missing: 0, other: 0 } };
   /** Loose html files in the fake root, by name. */
   const loose = new Map<string, { text: string; mtime: string }>(
     options.empty ? [] : [['pricing-v2.html', { text: page('Pricing v2', '<main><h1>Pricing v2</h1><p>Two plans, billed monthly.</p></main>'), mtime: iso(90) }]],
@@ -1125,6 +1131,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           checks: { counts: { errors: 0, warnings: 0, notes: 0 }, render: { state: 'none' }, canRun: false, browser: false },
           pending: pending(entry),
           openComments: entry.design.comments.filter((comment) => comment.status === 'open').length,
+          sessionId: entry.design.sessionId,
         }));
         return { rows, total: matched.length };
       }
@@ -1297,6 +1304,18 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
         if (body.open === true) openRequest.value = { slug: created, intent: 'view', created: new Date().toISOString() };
         return { slug: created, title };
       }
+      case 'POST /pages/from-file': {
+        // As the service: exactly `{ path, directory }`. A repeat of the same path opens the first copy;
+        // a test sets `fromFileLeft` to stand for local files that were not copied.
+        if (Object.keys(body).sort().join() !== 'directory,path') throw new FakeHttpError('bad-request', 'Send the file path and its folder, and nothing else.');
+        const filePath = String(body.path);
+        const known = filePages.get(filePath);
+        const slug = known ?? createDesign('page', /([^\\/]+)\.html?$/i.exec(filePath)?.[1] ?? 'Page', '', {});
+        filePages.set(filePath, slug);
+        openRequest.value = { slug, intent: 'view', created: new Date().toISOString() };
+        const left = known === undefined ? fromFile.left : { outside: 0, missing: 0, other: 0 };
+        return { slug, title: designs.get(slug)?.design.title ?? slug, reused: known !== undefined, left: { ...left } };
+      }
       // Phase 2 hand edits (T11a): real fake answers over the in-memory designs.
       case 'POST /designs/:slug/edits':
         return applyFakeEdit(slug, body);
@@ -1373,6 +1392,12 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
     },
     folders,
     projectMembers,
+    get fromFileLeft() {
+      return fromFile.left;
+    },
+    set fromFileLeft(value: FromFileResponse['left']) {
+      fromFile.left = value;
+    },
   };
 };
 

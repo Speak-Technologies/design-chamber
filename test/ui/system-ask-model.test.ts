@@ -11,8 +11,10 @@ import { parseSystemQuestions } from '../../src/shared/agent/system-questions.ts
 import type { ProposalFile, ProposalPart, ProposalPartName, ProposalView, SystemQuestionSet } from '../../src/shared/types.ts';
 import {
   answeredView,
+  SERVICE_DOWN,
   approveAnswer,
   approveView,
+  askCopy,
   composeAnswer,
   defaultPicks,
   describeAnswer,
@@ -25,6 +27,7 @@ import {
   patchView,
   previewButtons,
   proposalStateSentence,
+  proposalVerdict,
   resolveCalls,
   roundOneAnswer,
   roundOneBlock,
@@ -32,13 +35,16 @@ import {
   roundTwoAnswer,
   roundTwoRead,
   roundTwoSub,
+  roundTwoVerdict,
   stopAnswer,
+  ticketVerdict,
   undoWindow,
   unlistedUses,
   usesLine,
   withPick,
   type CurrentProposal,
 } from '../../src/ui/model/system-ask-model.ts';
+import { DESKTOP_DEVICE, type Device } from '../../src/ui/model/device-model.ts';
 
 const set: SystemQuestionSet = parseSystemQuestions(readFileSync(new URL('../../rules/SYSTEM-QUESTIONS.md', import.meta.url), 'utf8'));
 const TICKET = 'sb_abcdefghij12';
@@ -381,4 +387,46 @@ test('the longest possible answers stay within the host limit and keep their mar
 
 test('a marker leaves out any value that is not plain id text', () => {
   assert.equal(markerLine([['system', 'acme'], ['sha', 'has space'], ['x', 'a]b'], ['parts', 'a,b']]), '[SystemAsk system=acme parts=a,b]');
+});
+
+// ---------------------------------------------------------------- when to stop asking (review finding F4)
+
+test('a ticket that expired or made its system is never asked about again', () => {
+  assert.equal(ticketVerdict('waiting'), 'again');
+  assert.equal(ticketVerdict('expired'), 'done');
+  assert.equal(ticketVerdict('made'), 'done');
+});
+
+test('round two stops for a gone system or a finished build, and slows down while the round is not there', () => {
+  assert.equal(roundTwoVerdict(null), 'done');
+  assert.equal(roundTwoVerdict({ build: { round: 'done' } }), 'done');
+  assert.equal(roundTwoVerdict({ build: { round: 2 } }), 'again');
+  assert.equal(roundTwoVerdict({ build: { round: 1 } }), 'later');
+  assert.equal(roundTwoVerdict({ build: null }), 'later');
+});
+
+test('a proposal that was answered, replaced or can’t be found is final', () => {
+  const final: ProposalView[] = [{ state: 'approved', at: 'x' }, { state: 'declined', at: 'x' }, { state: 'superseded', by: null }, { state: 'unknown' }];
+  for (const view of final) assert.equal(proposalVerdict(view), 'done', view.state);
+  assert.equal(proposalVerdict({ state: 'rewritten' }), 'again');
+  assert.equal(proposalVerdict({ state: 'unreadable', sentence: 'Half written.' }), 'again');
+});
+
+// ---------------------------------------------------------------- phone copy (native-extras §2.2)
+
+const PHONE: Device = { form: 'phone', coarse: true, insets: { top: 0, right: 0, bottom: 34, left: 0 }, keyboard: 0 };
+
+test('a desktop keeps its sentences; a phone never says "rail"', () => {
+  const desktop = askCopy(DESKTOP_DEVICE, true);
+  assert.equal(desktop.serviceDown, SERVICE_DOWN);
+  assert.equal(desktop.previewOpened('board-preview'), 'The board is open in the rail.');
+  assert.equal(desktop.previewNotHere, 'Open Design Chamber from the rail to see the preview.');
+  for (const panel of [true, false]) {
+    const phone = askCopy(PHONE, panel);
+    for (const line of [phone.serviceDown, phone.previewOpened('board-preview'), phone.previewOpened('living-page-preview'), phone.previewNotHere, phone.previewFailed]) {
+      assert.doesNotMatch(line, /rail/);
+    }
+    assert.match(phone.serviceDown, /on your computer/);
+    assert.match(phone.previewNotHere, /More menu/);
+  }
 });

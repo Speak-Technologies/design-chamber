@@ -15,6 +15,8 @@ import {
   GUEST_STATUS_SECTION_HEIGHT_MIN,
   GUEST_STATUS_SECTION_TITLE_MAX,
   GUEST_TOOL_MATCH,
+  GUEST_ACTION_LABEL_MAX,
+  GUEST_ACTIONS_MAX,
   GUEST_TOOLS_MAX,
 } from '@openchamber/sdk';
 import { parseManifestJson } from '@openchamber/sdk/schemas';
@@ -30,12 +32,16 @@ test('the manifest parses with the SDK host parser', () => {
   if (!result.ok) return;
   const { contributes } = result.manifest;
   assert.equal(result.manifest.apiVersion, 1);
-  assert.equal(result.manifest.engines?.openchamber, '>=2.7.0');
+  // Marks ship after 2.7.0; an older host would ignore the key and refuse the call (native-extras N16).
+  assert.equal(result.manifest.engines?.openchamber, '>=2.8.0');
   assert.equal(contributes.panel.entry, 'dist/panel/index.html');
   assert.equal(contributes.background?.entry, 'dist/background/index.html');
   assert.equal(contributes.service?.entry, 'dist/service/main.js');
   assert.deepEqual(contributes.commands?.map((command) => command.name), ['design', 'page', 'design-system']);
-  assert.deepEqual(contributes.actions?.map((action) => [action.id, action.label]), [['open-as-page', 'Open as page']]);
+  assert.deepEqual(contributes.actions?.map((action) => [action.id, action.label]), [
+    ['open-as-page', 'Open as page'],
+    ['open-file-as-page', 'Open as page in Design Chamber'],
+  ]);
   assert.deepEqual(contributes.capabilities, ['prompt', 'sessions']);
 });
 
@@ -122,6 +128,27 @@ test('no string the user or an agent reads in the manifest has an em dash', () =
   ];
   assert.ok(strings.length > 0);
   for (const value of strings) assert.doesNotMatch(value, /[—–]/, `dash in: ${value}`);
+});
+
+test('the native extras keys (documentation/specs/native-extras.md §2.1, §3.2, §4.1)', () => {
+  const result = parseManifestJson(text);
+  if (!result.ok) return assert.fail(JSON.stringify(result));
+  const { contributes } = result.manifest;
+  // Phone: the panel is a tab of the phone's workspace drawer (so every Open works there), the page is in More.
+  assert.equal(contributes.panel.mobile, true);
+  assert.deepEqual(contributes.page, { entry: 'dist/panel/index.html', title: 'Design Chamber', mobile: true });
+  // Files rows: a background action, so it runs on the phone without the panel.
+  const fileAction = contributes.actions?.find((action) => action.id === 'open-file-as-page');
+  assert.deepEqual(fileAction, { id: 'open-file-as-page', label: 'Open as page in Design Chamber', icon: 'palette', where: 'file', mode: 'background' });
+  assert.ok((fileAction?.label.length ?? 0) <= GUEST_ACTION_LABEL_MAX);
+  assert.ok((contributes.actions?.length ?? 0) <= GUEST_ACTIONS_MAX);
+  // The message action is unchanged.
+  const messageAction = contributes.actions?.find((action) => action.id === 'open-as-page');
+  assert.deepEqual(messageAction, { id: 'open-as-page', label: 'Open as page', icon: 'palette', where: 'message', roles: ['assistant'], mode: 'background' });
+  // Sidebar marks need a service that stays up.
+  assert.equal(contributes.marks, true);
+  assert.equal(contributes.service?.keepRunning, true);
+  assert.equal(contributes.service?.runtime, 'host');
 });
 
 test('the manifest never claims the browser role (it would fight Design Canvas)', () => {

@@ -31,6 +31,18 @@ Edit mode and Comment pressed. Where the rail cannot open (a chat with no projec
 "Open Design Chamber from the rail to see it." If the design was deleted in the meantime, the card
 turns into the "no longer in your Designs folder" sentence.
 
+## On a phone
+
+Blocks show in the phone's chat as they do on the desktop, with controls at least 44 px tall.
+
+- **Open** and **Comment** open Design Chamber's tab in the workspace drawer. Where that fails, the toast says
+  "Design Chamber can't open here yet. Open it from the More menu in your chats list." (never "the rail").
+- If a build of the extension did not open its panel on phones, the card would have no **Comment**, and **Open**
+  would say "Open Design Chamber from the More menu in your chats list."
+- A card or a SystemAsk that can't reach the service says "Design Chamber isn't responding on your computer. Try
+  again in a moment.": the service runs on the computer, not the phone.
+- DirectionPick reads the same; a pick answers the chat as usual.
+
 ## DirectionPick
 
 The agent writes `DirectionPick` with `question`, `options` and `slugs`. `options` and `slugs` are
@@ -79,5 +91,6 @@ On a click: `POST /open-request` then the rail opens (and `DELETE /open-request`
 
 `test/ui/block-args.test.ts`, `test/ui/blocks-model.test.ts`, and the visual scenario
 `test/ui/visual/scenarios/chat-blocks.mjs` (every state above at 360 and 640 px, light and dark,
-plus a theme switch). Checked live in OpenChamber 2.7.0 on 2026-11-10: both cards draw from `root = Stack([...])`, Open and
+plus a theme switch, a 390 px phone, and how often an unanswered SystemAsk asks). The phone has only been seen in
+the harness, not on a device. Checked live in OpenChamber 2.7.0 on 2026-11-10: both cards draw from `root = Stack([...])`, Open and
 Comment open the rail, a tile pick answers the agent, and a note alone answers and survives a reload.

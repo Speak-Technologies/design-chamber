@@ -14,6 +14,7 @@ import {
   HostRequestError,
   isGuestAttachItem,
   type GuestActionItem,
+  type GuestFileItem,
   isGuestMessageItem,
   type AttachIssueRequest,
   type GuestItem,
@@ -25,17 +26,22 @@ import {
 } from '@openchamber/sdk';
 
 import { extractHtml } from '../shared/agent/html-extract.ts';
-import type { AskElement, ChipFiling, MembershipResult, OpenIntent, PromptBody, PromptResponse, SystemOpenTarget } from '../shared/api.ts';
+import { clip, oneLine } from '../shared/agent/context.ts';
+import type { AskElement, ChipFiling, FromFileResponse, MembershipResult, OpenIntent, PromptBody, PromptResponse, SystemOpenTarget } from '../shared/api.ts';
+import { stripDisplayControls } from '../shared/display-text.ts';
 import type { AnchorState, BuildChipData, Chip, DesignChip, DesignKind, Outbox } from '../shared/types.ts';
 import { CHIP_PROVIDER_ID } from '../shared/types.ts';
 import { OUTBOX_TTL_MS, SLUG_PATTERN, SYSTEM_BUILD_TICKET_PATTERN, SYSTEM_ID_PATTERN, TURN_SNAPSHOT_DEDUPE_MS } from '../shared/limits.ts';
 import { sameDirectory } from '../shared/path-compare.ts';
+import { deviceOf, openHelp } from '../ui/model/device-model.ts';
 import type { ChangeBatch } from './changes.ts';
 import type { GuestHost, HostLike } from './host.ts';
-import { isServiceError, type ServiceClient } from './service-client.ts';
+import { isServiceError, type ServiceClient, type ServiceErrorCode } from './service-client.ts';
 
 export const PANEL_SURFACE_ID = `plugin:${CHIP_PROVIDER_ID}`;
 export const OPEN_AS_PAGE_ACTION = 'open-as-page';
+/** The Files-row action (documentation/specs/native-extras.md §3.2), its own id beside the message one. */
+export const OPEN_FILE_AS_PAGE_ACTION = 'open-file-as-page';
 export const CHIP_ID_PREFIX = 'design:';
 
 export const MESSAGES = {
@@ -51,7 +57,33 @@ export const MESSAGES = {
   markFailed: 'Sent, but the comments could not be marked as sent. Resolve them by hand so they are not sent again.',
   savedPage: (title: string) => `Saved as page “${title}”.`,
   savedPageClosed: (title: string) => `Saved as page “${title}”. Open Design Chamber to see it.`,
+  // The Files-row action (native-extras §3.3, §3.4). The service's own sentences are shown as they are.
+  fileFolder: 'Pick an .html file to open it as a page.',
+  fileNotHtml: 'Only .html and .htm files open as pages.',
+  fileSaved: (title: string) => `Saved “${title}” as a page in Design Chamber.`,
+  fileSavedClosed: (title: string) => `Saved “${title}” as a page.`,
+  fileReused: (title: string) => `“${title}” is already in Design Chamber. Opening it.`,
+  fileReusedClosed: (title: string) => `“${title}” is already in Design Chamber.`,
+  openToSee: 'Open Design Chamber to see it.',
+  fileServiceDown: 'Design Chamber isn’t responding. Try again in a moment.',
+  fileFailed: "Design Chamber couldn't open that file. Try again.",
 } as const;
+
+/** A title in a toast: a toast holds 500 characters (the SDK's limit), and the counts come after the title. */
+const TOAST_TITLE_MAX = 80;
+
+/** The service never answered, as opposed to answering with a sentence of its own. */
+const NO_ANSWER: readonly ServiceErrorCode[] = ['SERVICE_FAILED', 'HOST_TIMEOUT', 'REQUEST_FAILED', 'HOST_UNAVAILABLE'];
+
+/** What was not copied, one sentence per reason; empty when everything was. */
+const leftOutSentences = ({ outside, missing, other }: FromFileResponse['left']): string[] => {
+  const files = (n: number): string => (n === 1 ? '1 file it uses' : `${n} files it uses`);
+  const sentences: string[] = [];
+  if (outside > 0) sentences.push(`${files(outside)} ${outside === 1 ? 'is outside its folder, so it wasn’t' : 'are outside its folder, so they weren’t'} copied.`);
+  if (missing > 0) sentences.push(`${files(missing)} ${missing === 1 ? 'is' : 'are'} missing.`);
+  if (other > 0) sentences.push(`${files(other)} can’t be copied into a page, so ${other === 1 ? 'it was' : 'they were'} left out.`);
+  return sentences;
+};
 
 export type FlowErrorCode = 'no-project' | 'start-failed' | 'send-failed' | 'nothing-to-send' | 'unknown-command' | 'no-session';
 
@@ -268,7 +300,9 @@ export type Flows = {
   /**
    * Background frame (`onAction`): "Open as page" saves the page, opens the rail (which
    * takes the open request and shows the viewer) and confirms with a host toast, so the user
-   * sees the result whether or not the rail was open.
+   * sees the result whether or not the rail was open. On a Files row it asks the service to
+   * copy the file into a page; every end of that path, refusals and failures included, is a
+   * toast, and it never throws. Not retried (the user clicks again).
    */
   runAction(item: GuestActionItem): Promise<void>;
   /** Chip click or "Open as page": what to open, or null. */
@@ -298,9 +332,15 @@ export type Flows = {
   ): () => void;
 };
 
-export type FlowDeps = { host: GuestHost; client: ServiceClient; now?: () => number };
+export type FlowDeps = {
+  host: GuestHost;
+  client: ServiceClient;
+  now?: () => number;
+  /** `__DC_PANEL_MOBILE__` from the frame's entry: whether the rail can open on a phone at all. */
+  panelOnPhone?: boolean;
+};
 
-export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows => {
+export const createFlows = ({ host, client, now = Date.now, panelOnPhone = true }: FlowDeps): Flows => {
   const api = host.client;
   const lastTurn = new Map<string, number>();
   let delivering = false;
@@ -311,6 +351,44 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
     } catch {
       // A toast that cannot show must not fail the flow it reports on.
     }
+  };
+
+  /** Shows the rail, which takes the open request the service left. False where it cannot open. */
+  const showRail = async (): Promise<boolean> => {
+    try {
+      await api.openSurface(PANEL_SURFACE_ID);
+      return true;
+    } catch {
+      // No side panel here (or the rail cannot open): the toast says where to find it.
+      return false;
+    }
+  };
+
+  /** native-extras §3.3 frame branch and §3.4 toasts. */
+  const openFileAsPage = async (item: GuestFileItem): Promise<void> => {
+    // The host puts the entry on every Files row, folders included.
+    if (item.isDirectory) return toast('info', MESSAGES.fileFolder);
+    if (!/\.html?$/i.test(item.path)) return toast('info', MESSAGES.fileNotHtml);
+    const ready = host.ready.get();
+    const device = deviceOf(ready ?? {});
+    const help = openHelp(device, panelOnPhone);
+    let answer: FromFileResponse;
+    try {
+      // Both keys, always: the route refuses a body without `directory`.
+      answer = await client.call('POST /pages/from-file', { body: { path: item.path, directory: item.directory || null } });
+    } catch (error) {
+      if (!isServiceError(error)) return toast('error', MESSAGES.fileFailed);
+      if (NO_ANSWER.includes(error.code)) return toast('error', device.form === 'phone' ? help.serviceDown : MESSAGES.fileServiceDown);
+      return toast(error.code === 'conflict' ? 'info' : 'error', error.message);
+    }
+    const opened = await showRail();
+    const title = clip(stripDisplayControls(oneLine(answer.title)), TOAST_TITLE_MAX);
+    const lead = answer.reused
+      ? (opened ? MESSAGES.fileReused : MESSAGES.fileReusedClosed)(title)
+      : (opened ? MESSAGES.fileSaved : MESSAGES.fileSavedClosed)(title);
+    // A phone without the panel has only the More menu to point at.
+    const where = opened ? [] : [device.form === 'phone' && !panelOnPhone ? help.notHere : MESSAGES.openToSee];
+    await toast(answer.reused ? 'info' : 'success', [lead, ...where, ...leftOutSentences(answer.left)].join(' '));
   };
 
   const latestVersion = async (slug: string): Promise<number | null> => {
@@ -657,16 +735,11 @@ export const createFlows = ({ host, client, now = Date.now }: FlowDeps): Flows =
     },
 
     runAction: async (item) => {
+      if (item.kind === 'file' && item.action === OPEN_FILE_AS_PAGE_ACTION) return openFileAsPage(item);
       if (!isGuestMessageItem(item) || item.action !== OPEN_AS_PAGE_ACTION) return;
       const created = await flows.openAsPage(item, { open: true });
       if (!created) return;
-      let opened = true;
-      try {
-        await api.openSurface(PANEL_SURFACE_ID);
-      } catch {
-        // No side panel here (or the rail cannot open): the toast says where to find it.
-        opened = false;
-      }
+      const opened = await showRail();
       await toast('success', opened ? MESSAGES.savedPage(created.title) : MESSAGES.savedPageClosed(created.title));
     },
 

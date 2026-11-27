@@ -464,6 +464,8 @@ export const createBoardSet = (ctx: WallContext, deps: BoardSetDeps): BoardSet =
       board.placements = placements;
       board.scroll = scroll;
       pins.paint(board);
+      // A kept comment card follows its element as the design scrolls, like the pins.
+      if (popovers.current()?.board === board) popovers.follow();
       options.onStatus();
     });
     main.channel.subscribe((message) => {

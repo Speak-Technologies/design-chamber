@@ -25,6 +25,10 @@
 // walking 300 files in each of 300 designs every 3 s cost over a second of CPU per tick.
 // A tick never starts while the previous one is still running (slow SMB shares).
 //
+// Quiet mode (pace.ts) slows the poll with `setPollMs`; fs.watch is left alone. A rotating tenth
+// per slow tick would take ten of them to reach a dropped change, so a poll slower than the one the
+// watcher started with looks at every design (the cheap fingerprint, nested walk still rotating).
+//
 // Design systems (Phase 2.5 AD-1, technical design §5.1) live in `<root>/_systems/<id>/`. `_systems`
 // fails the slug pattern, so the design branch never sees it; a branch of its own mirrors the
 // design one: `added` / `removed` per system folder (a real folder, not a link, whose name passes
@@ -41,20 +45,47 @@
 // the service and never reaches the user.
 
 import { watch as fsWatch, type FSWatcher } from 'node:fs';
-import { lstat, readdir, stat } from 'node:fs/promises';
+import { lstat, readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { SYSTEM_ID_PATTERN, WATCH_DEBOUNCE_MS, WATCH_POLL_MS } from '../shared/limits.ts';
 import { SYSTEMS_DIR } from '../shared/system-json.ts';
 import type { SystemChangeKind } from '../shared/types.ts';
-import type { ChangeHub, Logger, SelfWrites, SettingsStore } from './context.ts';
+import type { ChangeEmit, ChangeHub, Logger, SelfWrites, SettingsStore } from './context.ts';
 import { linuxRecursiveWatch } from './folder-watch.ts';
 import { isLooseHtmlName } from './loose.ts';
 import { isAtomicTempName, isSlug } from './paths.ts';
 import { isDirectory } from './root.ts';
+import { parseImportedFrom } from './store.ts';
 
 /** Top-level files whose mtime/size the poll backstop fingerprints (SPEC §9.4). */
 const TRACKED_TOP_FILES = ['design.json', 'index.html', 'DESIGN.md', 'tokens.css'] as const;
+
+/** A fresh design's state.json is a few hundred bytes; a larger one is not read to answer `importedFrom`. */
+const IMPORTED_STATE_READ_MAX = 1024 * 1024;
+
+/**
+ * True when the folder's state.json says Design Chamber copied it from a Files row (native-extras
+ * §3.3): the service filled the folder itself, so its first `added` is not the agent starting to
+ * write. state.json is written before anything else in the folder, so this holds however early the
+ * folder is seen. Only a yes or no comes out of the file; anything unreadable is no.
+ */
+export const isImportedFolder = async (dir: string): Promise<boolean> => {
+  const file = path.join(dir, '.chamber', 'state.json');
+  const info = await lstat(file).catch(() => null);
+  if (info === null || !info.isFile() || info.size > IMPORTED_STATE_READ_MAX) return false;
+  const text = await readFile(file, 'utf8').catch(() => null);
+  if (text === null) return false;
+  try {
+    const raw: unknown = JSON.parse(text);
+    return typeof raw === 'object' && raw !== null && parseImportedFrom((raw as { importedFrom?: unknown }).importedFrom) !== null; // Safe cast: an object, just checked.
+  } catch {
+    return false;
+  }
+};
+
+/** The `added` event for a design folder seen for the first time; Design Chamber's own copies carry `origin: 'user'`. */
+const addedEvent = async (slug: string, dir: string): Promise<ChangeEmit> => ({ slug, kind: 'added', ...((await isImportedFolder(dir)) ? { origin: 'user' as const } : {}) });
 
 /** `<design>/.chamber/check.json`, written by the check CLI or the service's own run: a `checks` event, not a `files` one. */
 const CHECK_REPORT = '.chamber/check.json';
@@ -224,8 +255,15 @@ export type Watcher = {
    * switch); a folder created before then is part of it, not `added`.
    */
   readonly ready: Promise<void>;
-  /** Run one poll tick now (test seam: deterministic, no timers). Rejects if the tick fails. */
-  pollNow(): Promise<void>;
+  /**
+   * Run one poll tick now, after any tick under way. `all` looks at every design even while
+   * fs.watch is healthy (waking from quiet mode). Rejects if the tick fails.
+   */
+  pollNow(options?: { all?: boolean }): Promise<void>;
+  /** Change the backstop's interval; the same value again leaves the running timer alone. */
+  setPollMs(ms: number): void;
+  /** Called each time the backstop timer fires, so quiet mode needs no timer of its own. Returns the unsubscribe. */
+  onTick(listener: () => void): () => void;
 };
 
 /** Pending debounced batch per slug (`ROOT_KEY` = a whole-root rescan). */
@@ -285,6 +323,9 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
   let sweepCursor = 0;
   const pending = new Map<string, PendingEntry>();
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  /** The backstop's interval now; `pollMs` is the active one. */
+  let intervalMs = pollMs;
+  const tickListeners = new Set<() => void>();
 
   const schedule = (key: string, files: string[]): void => {
     if (stopped) return;
@@ -363,7 +404,7 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     for (const slug of current) {
       if (knownSlugs.has(slug)) continue;
       fingerprints.set(slug, await fingerprint(path.join(root, slug), { nested: true }));
-      hub.emit({ slug, kind: 'added' });
+      hub.emit(await addedEvent(slug, path.join(root, slug)));
     }
     knownSlugs = current;
     for (const id of knownSystems) {
@@ -393,10 +434,22 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
   const dropEchoes = async (owner: string, dir: string, files: Set<string>): Promise<void> => {
     const selfWrites = options.selfWrites;
     if (selfWrites === undefined) return;
+    const echoed: string[] = [];
     for (const rel of [...files]) {
       if (rel === CHECK_REPORT) continue; // the check CLI's report, never a hand edit
-      if (await selfWrites.isEcho(owner, rel, dir)) files.delete(rel);
-      else selfWrites.forget(owner, rel);
+      if (rel.endsWith('/')) continue; // a folder key: judged below, by what it holds
+      if (await selfWrites.isEcho(owner, rel, dir)) {
+        files.delete(rel);
+        echoed.push(rel);
+      } else selfWrites.forget(owner, rel);
+    }
+    // A folder that appeared in this batch holding only the service's own files (a page copied from a
+    // Files row writes `img/a.png`) is the service's too. Deepest first, so `img/sub/` goes before `img/`.
+    const folders = [...files].filter((key) => key.endsWith('/')).sort((a, b) => b.length - a.length);
+    for (const folder of folders) {
+      const ours = echoed.some((rel) => rel.startsWith(folder));
+      const theirs = [...files].some((key) => key !== folder && key.startsWith(folder));
+      if (ours && !theirs) files.delete(folder);
     }
   };
 
@@ -411,7 +464,7 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     if (!knownSlugs.has(slug)) {
       knownSlugs.add(slug);
       fingerprints.set(slug, await fingerprint(dir, { nested: true }));
-      hub.emit({ slug, kind: 'added' });
+      hub.emit(await addedEvent(slug, dir));
       return;
     }
     const previous = fingerprints.get(slug);
@@ -541,15 +594,16 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     }
   };
 
-  const pollTick = async (): Promise<void> => {
+  const pollTick = async (all: boolean): Promise<void> => {
     if (stopped) return;
     // Judged BEFORE a restart below: a watcher that was down since the last tick missed events, and
     // a fresh one does not replay them, so this tick must look at every design.
     const healthy = watcher !== null && !pollOnly;
+    const everything = all || intervalMs > pollMs;
     if (watcher === null && !pollOnly && (await isDirectory(currentRoot))) startFsWatch();
     await scanRoot();
-    // A healthy live watcher reports changes itself, so the poll only re-checks a rotating slice,
-    // fully, as the net under events the platform dropped. Without one (never started, died,
+    // A healthy live watcher reports changes itself, so an active poll only re-checks a rotating
+    // slice, fully, as the net under events the platform dropped. Without one (never started, died,
     // poll-only root) every design gets the cheap fingerprint and the rotating slice also gets the
     // nested walk: that walk is what costs, and every design still gets it within `sweepTicks` ticks.
     // Designs first, then systems (their keys start with NUL, so they never mix with slugs).
@@ -557,7 +611,7 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     const swept = sweepSlice(sorted, sweepCursor, Math.ceil(sorted.length / sweepTicks));
     sweepCursor = swept.next;
     const deep = new Set(swept.slice);
-    for (const key of healthy ? swept.slice : sorted) {
+    for (const key of healthy && !everything ? swept.slice : sorted) {
       const systemId = systemIdOf(key);
       const dir = systemId === null ? path.join(currentRoot, key) : systemDirOf(currentRoot, systemId);
       const nested = deep.has(key);
@@ -604,23 +658,44 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
 
   startFsWatch();
   let ready = seedScan().catch((error) => log.warn('watch.seed-failed', { error: error instanceof Error ? error.message : String(error) }));
-  let tickRunning = false;
-  pollTimer = setInterval(() => {
-    if (tickRunning) return; // a slow share: let the running tick finish instead of stacking another
-    tickRunning = true;
-    pollTick()
-      .catch((error) => log.warn('watch.poll-failed', { error: error instanceof Error ? error.message : String(error) }))
-      .finally(() => {
-        tickRunning = false;
-      });
-  }, pollMs);
-  pollTimer.unref?.();
+
+  /** The last poll asked for, until it settles. Polls run one at a time: two would both announce the same new design. */
+  let polling: Promise<void> | null = null;
+  const queuePoll = (all: boolean): Promise<void> => {
+    const run = (polling ?? Promise.resolve()).catch(() => undefined).then(() => pollTick(all));
+    polling = run;
+    const release = (): void => {
+      if (polling === run) polling = null;
+    };
+    void run.then(release, release);
+    return run;
+  };
+
+  const startPollTimer = (): void => {
+    if (pollTimer !== null) clearInterval(pollTimer);
+    pollTimer = setInterval(() => {
+      for (const listener of [...tickListeners]) listener();
+      if (polling !== null) return; // a slow share: let the running tick finish instead of stacking another
+      queuePoll(false).catch((error) => log.warn('watch.poll-failed', { error: error instanceof Error ? error.message : String(error) }));
+    }, intervalMs);
+    pollTimer.unref?.();
+  };
+  startPollTimer();
 
   return {
     get ready() {
       return ready;
     },
-    pollNow: () => pollTick(),
+    pollNow: (poll) => queuePoll(poll?.all === true),
+    setPollMs(ms) {
+      if (stopped || ms === intervalMs) return;
+      intervalMs = ms;
+      startPollTimer();
+    },
+    onTick(listener) {
+      tickListeners.add(listener);
+      return () => void tickListeners.delete(listener);
+    },
     stop() {
       if (stopped) return;
       stopped = true;

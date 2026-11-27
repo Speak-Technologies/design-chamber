@@ -200,31 +200,13 @@ export const cardPlacement = (at: { x: number; y: number }, card: { width: numbe
 
 // ---------------------------------------------------------------- drafts
 
-// The same behaviour as the wall's comment drafts (native-extras `comment-drafts`): the words typed into a card and not
-// saved are kept for as long as Design Chamber is open, and the same card shows them again. Only a save, a send, a delete
-// or emptying the box throws them away.
-
-/** The text worth keeping: what differs from the saved words (`''` for a new comment), as typed. Null: nothing to lose. */
-export const unsavedText = (value: string, saved = ''): string | null => (value.trim() === '' || value.trim() === saved.trim() ? null : value);
+// The wall's comment drafts (`comment-drafts.ts`, native extras), shared: the words typed into a card and not saved
+// are kept for as long as Design Chamber is open, and the same card shows them again. Only a save, a send, a delete
+// or emptying the box throws them away. The board has its own keys.
+export { createDraftStore, unsavedText, type DraftStore } from './comment-drafts.ts';
 
 /** The new-comment card on one entry of one system. */
 export const boardComposerKey = (systemId: string, entry: string): string => JSON.stringify(['board-new', systemId, entry]);
 
 /** The card of one existing board comment. */
 export const boardThreadKey = (systemId: string, commentId: string): string => JSON.stringify(['board-thread', systemId, commentId]);
-
-export type DraftStore = {
-  get: (key: string) => string | null;
-  /** What a card holds now; null forgets anything older. */
-  keep: (key: string, text: string | null) => void;
-  drop: (key: string) => void;
-};
-
-export const createDraftStore = (): DraftStore => {
-  const drafts = new Map<string, string>();
-  return {
-    get: (key) => drafts.get(key) ?? null,
-    keep: (key, text) => void (text === null ? drafts.delete(key) : drafts.set(key, text)),
-    drop: (key) => void drafts.delete(key),
-  };
-};

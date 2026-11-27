@@ -1,7 +1,7 @@
 // Pure wall geometry the UI adds on top of the guest camera: mapping between screen, world
 // and frame pixels, pin placement and clustering, label room, and focus rules.
 
-import { PAGE_FILL_VIEWPORT_ID } from '../../shared/limits.ts';
+import { PAGE_FILL_VIEWPORT_ID, PAGE_LIVE_FRAMES_MAX, RAIL_LIVE_FRAMES_MAX } from '../../shared/limits.ts';
 import type { Comment, Rect, RelPoint, Viewport } from '../../shared/types.ts';
 
 export type CameraLike = { x: number; y: number; scale: number };
@@ -43,6 +43,13 @@ export const pinFramePoint = (rect: Rect, point: RelPoint, scroll: Point): Point
   x: rect.x + rect.w * point.x - scroll.x,
   y: rect.y + rect.h * point.y - scroll.y,
 });
+
+/** Live design frames on a phone: its memory and battery are the tightest (documentation/specs/native-extras.md §2.2). */
+export const PHONE_LIVE_FRAMES_MAX = 2;
+
+/** How many artboards stay loaded: the page 12, the rail 4, a phone 2 whichever layout it shows. */
+export const liveBudget = (compact: boolean, form: 'phone' | 'tablet' | 'desktop'): number =>
+  form === 'phone' ? PHONE_LIVE_FRAMES_MAX : compact ? RAIL_LIVE_FRAMES_MAX : PAGE_LIVE_FRAMES_MAX;
 
 /**
  * Artboards the live-frame budget keeps loaded: those nearest the wall's centre, among the visible ones. Distances count

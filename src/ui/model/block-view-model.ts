@@ -9,6 +9,7 @@ import { GUEST_BLOCK_ANSWER_MAX } from '@openchamber/sdk';
 import { isServiceError } from '../../guest/service-client.ts';
 import { clipText, OPTION_LETTERS, type DirectionOption } from './block-args.ts';
 import { badgeOf, type BadgeView } from './checks-model.ts';
+import type { Device } from './device-model.ts';
 
 // ---------------------------------------------------------------- answers
 
@@ -121,6 +122,9 @@ export const cardView = (detail: DesignDetailResponse, checks: ChecksSummary | n
     badge: checks === null ? null : badgeOf(checks, null, false),
   };
 };
+
+/** Comment opens the rail on the design, so a phone without the panel has nowhere to put it. */
+export const commentOffered = (device: Device, panelOnPhone: boolean): boolean => device.form !== 'phone' || panelOnPhone;
 
 // ---------------------------------------------------------------- the picker
 

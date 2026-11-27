@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import type { MenuEntry } from '../../src/ui/components/kit.ts';
-import { NARROW_RAIL_QUERY, viewerMenuEntries, type ViewerMenuInput } from '../../src/ui/model/viewer-menu.ts';
+import { NARROW_RAIL_QUERY, viewerMenuEntries, withoutComputerOnly, type ViewerMenuInput } from '../../src/ui/model/viewer-menu.ts';
 
 type Action = Extract<MenuEntry, { id: string }>;
 const find = (entries: readonly MenuEntry[], id: string): Action | undefined => entries.find((entry): entry is Action => 'id' in entry && entry.id === id);
@@ -119,4 +119,45 @@ test('the media query hiding the rail Tweaks button matches NARROW_RAIL_QUERY (K
   const open = css.indexOf('{', media);
   const condition = css.slice(media + '@media'.length, open).trim();
   assert.equal(condition, NARROW_RAIL_QUERY);
+});
+
+describe('on a phone (native-extras §2.2)', () => {
+  const COMPUTER_ONLY = ['reveal', 'zip', 'html', 'path', 'export'];
+
+  test('the rail menus leave out Reveal, Export and Copy path, and keep everything that works from the phone', () => {
+    assert.deepEqual(shape({ compact: true, phone: true }), ['chat', '-', 'add-to-folder', 'rename', '-', 'delete']);
+    assert.deepEqual(shape({ compact: true, isPage: true, phone: true }), ['chat', '-', 'copy-html', 'add-to-folder', 'rename', '-', 'delete']);
+    assert.deepEqual(shape({ compact: true, isPage: true, phone: true, askForTweaks: true, pageData: 'enabled' }), ['chat', 'ask-tweaks', '-', 'copy-html', 'add-to-folder', 'page-data', 'rename', '-', 'delete']);
+    assert.deepEqual(shape({ compact: true, phone: true, railTweaks: 'Tweaks' }), ['chat', 'tweaks', '-', 'add-to-folder', 'rename', '-', 'delete']);
+  });
+
+  test('no combination shows a computer-only entry, starts or ends on a separator, or doubles one', () => {
+    for (const compact of [false, true]) {
+      for (const isPage of [false, true]) {
+        for (const askForTweaks of [false, true]) {
+          for (const pageData of [undefined, 'enabled', 'disabled'] as const) {
+            const ids = shape({ compact, isPage, askForTweaks, pageData, phone: true });
+            const label = JSON.stringify({ compact, isPage, askForTweaks, pageData });
+            for (const id of COMPUTER_ONLY) assert.ok(!ids.includes(id), `${id} hidden ${label}`);
+            assert.notEqual(ids[0], '-', label);
+            assert.notEqual(ids.at(-1), '-', label);
+            assert.ok(!ids.join(',').includes('-,-'), label);
+            assert.equal(ids.at(-1), 'delete', label);
+          }
+        }
+      }
+    }
+  });
+
+  test('without the phone flag every menu is exactly as before', () => {
+    for (const compact of [false, true]) for (const isPage of [false, true]) assert.deepEqual(shape({ compact, isPage, phone: false }), shape({ compact, isPage }));
+  });
+
+  test('withoutComputerOnly works on any menu (list rows, systems) and tidies the separators', () => {
+    const entries = [{ id: 'reveal' }, { separator: true as const }, { id: 'open' }, { id: 'path' }, { separator: true as const }, { separator: true as const }, { id: 'rename' }, { separator: true as const }, { id: 'zip' }];
+    assert.deepEqual(withoutComputerOnly(entries), [{ id: 'open' }, { separator: true }, { id: 'rename' }]);
+    assert.deepEqual(withoutComputerOnly([{ id: 'reveal' }]), []);
+    assert.deepEqual(withoutComputerOnly([{ id: 'rename' }, { id: 'export' }]), [{ id: 'rename' }], "a system's Export tokens");
+    assert.deepEqual(withoutComputerOnly([]), []);
+  });
 });

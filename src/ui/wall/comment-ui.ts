@@ -7,6 +7,7 @@ import { COMMENT_BODY_MAX } from '../../shared/limits.ts';
 import type { Comment, CommentStatus } from '../../shared/types.ts';
 import { btn, iconBtn } from '../components/kit.ts';
 import { errorText, h } from '../components/dom.ts';
+import { unsavedText } from '../model/comment-drafts.ts';
 import { statusLabel } from '../model/comments-model.ts';
 
 const isMac = (): boolean => /Mac|iPhone|iPad/.test(navigator.platform);
@@ -23,15 +24,20 @@ export type CardHandle = {
   focus: () => void;
   /** Thread card: the comment's status changed under it (sent from the list, resolved, reopened). */
   setStatus?: (status: CommentStatus) => void;
-  /** Composer: it holds text the user typed. Closing it would lose that. */
-  hasDraft?: () => boolean;
+  /** Text typed here and not saved, or null. A card holding some is not closed by moving the wall. */
+  draft: () => string | null;
 };
 
 export type ComposerOptions = {
   tag: string;
   snippet: string;
+  /** Unsaved text from the last time this element's card was open. */
+  draft: string | null;
   onSubmit: (body: string) => Promise<void>;
+  /** The Cancel button: the user throws the text away. */
   onCancel: () => void;
+  /** Escape: the card closes, the text is kept. */
+  onDismiss: () => void;
 };
 
 const textarea = (label: string, value: string, placeholder: string): HTMLTextAreaElement => {
@@ -41,7 +47,7 @@ const textarea = (label: string, value: string, placeholder: string): HTMLTextAr
 };
 
 export const createComposer = (options: ComposerOptions): CardHandle => {
-  const area = textarea('Comment', '', 'What should change here?');
+  const area = textarea('Comment', options.draft ?? '', 'What should change here?');
   const failure = h('p', { class: 'dc-form-error', role: 'alert', hidden: true });
   const cancel = btn({ label: 'Cancel', variant: 'ghost', size: 'sm', onClick: () => options.onCancel() });
   const submit = btn({
@@ -81,7 +87,7 @@ export const createComposer = (options: ComposerOptions): CardHandle => {
     } else if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
-      options.onCancel();
+      options.onDismiss();
     }
   });
 
@@ -94,7 +100,7 @@ export const createComposer = (options: ComposerOptions): CardHandle => {
     failure,
     h('div', { class: 'dc-pop-foot' }, h('span', { class: 'dc-pop-hint' }, `${submitKey()} to add`), h('span', { class: 'dc-pop-actions' }, cancel.el, submit.el)),
   );
-  return { el, focus: () => area.focus(), hasDraft: () => area.value.trim() !== '' };
+  return { el, focus: () => area.focus(), draft: () => unsavedText(area.value) };
 };
 
 export type ThreadOptions = {
@@ -104,6 +110,8 @@ export type ThreadOptions = {
   /** `exact` = matched by selector, `moved` = matched by text, `detached` = not found. */
   anchorState: 'exact' | 'moved' | 'detached' | 'unknown';
   readOnly: boolean;
+  /** An edit of this comment that was never saved. */
+  draft: string | null;
   onSave: (body: string) => Promise<void>;
   /** Seam S6: send this comment alone (saving an edited body first). Shown as "Send this" on an open comment when set. */
   onSend?: (body: string) => Promise<void>;
@@ -121,7 +129,8 @@ const ANCHOR_NOTE: Record<ThreadOptions['anchorState'], string | null> = {
 
 export const createThread = (options: ThreadOptions): CardHandle => {
   const { comment } = options;
-  const area = textarea('Comment text', comment.body, '');
+  const draft = options.readOnly ? null : options.draft;
+  const area = textarea('Comment text', draft ?? comment.body, '');
   area.disabled = options.readOnly;
   const failure = h('p', { class: 'dc-form-error', role: 'alert', hidden: true });
   const badgeHost = h('span');
@@ -149,7 +158,7 @@ export const createThread = (options: ThreadOptions): CardHandle => {
     label: 'Save',
     variant: 'default',
     size: 'sm',
-    disabled: true,
+    disabled: draft === null,
     onClick: () => {
       const problem = validateBody(area.value);
       if (problem !== null) {
@@ -244,5 +253,5 @@ export const createThread = (options: ThreadOptions): CardHandle => {
     toggle.set({ label: status === 'resolved' ? 'Reopen' : 'Resolve', icon: status === 'resolved' ? 'restore' : 'check' });
     if (sendThis) sendThis.el.hidden = status !== 'open';
   };
-  return { el, focus: () => area.focus(), setStatus };
+  return { el, focus: () => area.focus(), setStatus, draft: () => (options.readOnly ? null : unsavedText(area.value, comment.body)) };
 };

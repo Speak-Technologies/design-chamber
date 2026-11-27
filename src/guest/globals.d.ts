@@ -14,6 +14,13 @@ declare global {
 
   /** The interview parsed from `rules/SYSTEM-QUESTIONS.md` at build time (step 10b), baked into the blocks bundle: the SystemAsk block's fixed wording (§8.9, AD-25). */
   const __DC_SYSTEM_QUESTIONS__: SystemQuestionSet;
+
+  /**
+   * `contributes.panel.mobile === true` in the shipped manifest, set in every frame bundle (panel, background,
+   * status, blocks), so phone copy matches what was shipped (native-extras §2.2). Not defined under `node --test`:
+   * read it at a frame's entry and pass it in, never inside a pure model.
+   */
+  const __DC_PANEL_MOBILE__: boolean;
 }
 
 export {};

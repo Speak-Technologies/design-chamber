@@ -123,7 +123,7 @@ const validatePatch = (body: unknown): PatchDesignBody => {
  * store before any filesystem access.
  */
 export function registerDesignsRoutes(router: Router, ctx: ServiceContext): void {
-  const looseImporter = createLooseImporter({ settings: ctx.settings, store: ctx.store, log: ctx.log });
+  const looseImporter = createLooseImporter({ settings: ctx.settings, store: ctx.store, selfWrites: ctx.selfWrites, log: ctx.log });
   const projectFolders = createProjectFolderStats();
 
   router.on('GET /designs', async ({ query }): Promise<DesignListResponse> => {

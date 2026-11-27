@@ -7,6 +7,7 @@ import { mountButton } from '@openchamber/sdk/ui';
 import type { OpenInRailOutcome } from '../../guest/flows.ts';
 import type { HostLike } from '../../guest/host.ts';
 import type { ServiceClient } from '../../guest/service-client.ts';
+import type { Device } from '../model/device-model.ts';
 import { h } from '../components/dom.ts';
 import { icon, type IconName } from '../components/icons.ts';
 
@@ -17,6 +18,10 @@ export type BlockContext = {
   toast: (kind: ToastKind, message: string) => void;
   /** Opens a system's living-page preview or board in the rail; `'not-here'` when the host has no rail to open, `'gone'` when the system is no longer in the folder. */
   openSystemPreview: (systemId: string, which: 'living-page-preview' | 'board-preview') => Promise<OpenInRailOutcome>;
+  /** The device of the latest `ready`; a desktop until the host says otherwise. */
+  device: () => Device;
+  /** Whether the shipped manifest opens the Design Chamber panel on a phone. */
+  panelOnPhone: boolean;
 };
 
 export type BlockView = {

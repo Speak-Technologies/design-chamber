@@ -14,6 +14,7 @@ import { client, host } from '../guest.ts';
 import { relativeTime } from '../model/format.ts';
 import { libraryTileLabel, librarySystemMenu, systemRow, usedByLinkLabel, type LibrarySystemMenuId, type ProjectLabel, type RowTone } from '../model/systems-model.ts';
 import { mountPlate } from './system-plate.ts';
+import { menuOnThisDevice } from '../components/device.ts';
 
 export const toneBadge = (label: string, tone: RowTone, title?: string): HTMLElement => {
   const holder = h('span', { class: 'dc-sys-badge', title: title ?? null });
@@ -108,7 +109,7 @@ export const mountSystemListRow = (summary: SystemSummary, options: LibrarySyste
   mountBadge(kind, { label: 'System', tone: 'primary' });
   const home = h('span', { class: 'dc-card-project', title: model.home.title }, icon(summary.home === 'internal' ? 'system' : 'repo', 12), h('span', { class: 'dc-row-project-name' }, model.home.label));
   const more = iconBtn({ icon: 'more', label: `Actions for ${summary.name}`, size: 'sm', onClick: () => undefined });
-  attachMenu(more, () => librarySystemMenu(summary), (id) => void runLibrarySystemAction(id as LibrarySystemMenuId, summary, options));
+  attachMenu(more, () => menuOnThisDevice(librarySystemMenu(summary)), (id) => void runLibrarySystemAction(id as LibrarySystemMenuId, summary, options));
   const updated = relativeTime(summary.updated, Date.now(), locale);
   return h(
     'li',

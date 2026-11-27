@@ -333,12 +333,29 @@ const openRequestFlow = async (h, surface, width, theme) => { // the rail only: 
   await p.close();
 };
 
+// ---------------------------------------------------------------- a repo system on a phone: nothing offers Reveal
+const phoneFlow = async (h, theme) => {
+  const tag = `sysrepo-phone-390-${theme}`;
+  const p = await h.openPage({ ...h.PHONE, surface: 'page', theme, label: tag });
+  console.log(tag);
+  await h.listReady(p);
+  await set(p, `setRepoHome('tidepool', 'fresh')`);
+  // The phone's page is the rail layout, so it opens a system the rail's way.
+  await openSystem(h, p, 'panel', 'tidepool', tag);
+  const offered = await p.guest('return [...doc.querySelectorAll(".dc-syspg button")].map((b) => `${b.textContent.trim()} ${b.getAttribute("aria-label") ?? ""}`.trim()).filter(Boolean).join("|")');
+  h.check(offered.includes('Preview living page') && !offered.includes('Reveal'), `${tag}: Preview living page and no Reveal (${offered})`);
+  h.check(await noOverflow(p), `${tag}: nothing scrolls sideways`);
+  await p.shot(tag);
+  await p.close();
+};
+
 export const run = async (h) => {
   const only = process.env.DC_SYSREPO_ONLY ? new RegExp(process.env.DC_SYSREPO_ONLY) : null;
   const go = (tag, fn) => (only && !only.test(tag) ? Promise.resolve() : fn());
   for (const theme of ['light', 'dark']) {
     await go(`page-${theme}`, () => pageFlow(h, theme));
     await go(`living-${theme}`, () => livingFlow(h, theme));
+    await go(`phone-${theme}`, () => phoneFlow(h, theme));
     await go(`banners-${theme}`, () => bannerFlow(h, theme));
     await go(`uncovered-${theme}`, () => uncoveredFlow(h, theme));
     await go(`drift-${theme}`, () => driftFlow(h, theme));

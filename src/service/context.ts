@@ -2,6 +2,8 @@
 // `ServiceContext`; each interface below is implemented by the lane named on it and faked in
 // tests by `test/helpers/fake-context.ts`. Modules throw `ApiError` for user-facing failures.
 
+import type { ServiceMark, ServiceMarkTarget } from '@openchamber/sdk';
+
 import type {
   ChangesResponse,
   CreateCommentBody,
@@ -23,6 +25,7 @@ import type {
   DesignKind,
   DesignSummary,
   DesignWarning,
+  ImportedFrom,
   JsonObject,
   JsonValue,
   Outbox,
@@ -90,8 +93,12 @@ export type DesignRecord = {
 
 export type DesignFilter = { q?: string; kind?: DesignKind };
 
-/** `POST /designs` input after validation; `html` already joined from an upload when one was used. */
-export type CreateDesignInput = Omit<CreateDesignBody, 'uploadId'>;
+/**
+ * `POST /designs` input after validation; `html` already joined from an upload when one was used.
+ * `importedFrom` is service-internal (native-extras §3.3 step 8, `POST /pages/from-file`), never on
+ * `CreateDesignBody`; the store writes it to state.json only.
+ */
+export type CreateDesignInput = Omit<CreateDesignBody, 'uploadId'> & { importedFrom?: ImportedFrom };
 
 /** `linked`: done · `has-chat`: it already had a chat (never moved) · `other-design`: the chip was made for an earlier design with this slug. */
 export type LinkIfUnlinkedOutcome = 'linked' | 'has-chat' | 'other-design';
@@ -228,6 +235,24 @@ export type HostCalls = {
    * (tests, an old host, the host did not answer); `refused`: the host said no.
    */
   setInstructions(text: string, directory?: string | null): Promise<'saved' | 'unavailable' | 'refused'>;
+  /**
+   * The sidebar mark on one chat's row (native-extras §4.2; SDK `setMark`), `null` removes it.
+   * Sessions only: we never mark a project or branch. `limited`: the host's `TOO_MANY_EVENTS` or
+   * `TOO_MANY_MARKS`; `unavailable` and `refused` as for `setInstructions`. Never throws.
+   */
+  setMark(target: SessionMarkTarget, mark: ServiceMark | null): Promise<SetMarkResult>;
+};
+
+/** The one `ServiceMarkTarget` shape Design Chamber uses: a chat's row. */
+export type SessionMarkTarget = Extract<ServiceMarkTarget, { sessionId: string }>;
+export type SetMarkResult = 'saved' | 'unavailable' | 'refused' | 'limited';
+
+// ---- Native extras: quiet mode (documentation/specs/native-extras.md §4.3) ----
+
+/** The resident service's pace: active while frames ask for changes, quiet after `QUIET_AFTER_MS` without. */
+export type Pace = {
+  /** A frame asked for `GET /changes`: stay (or become) active. */
+  touch(): void;
 };
 
 /** The three session events Design Chamber subscribes to (manifest `contributes.sessionEvents`). */
@@ -286,6 +311,8 @@ export type ServiceContext = {
   activity: ActivityTracker;
   /** Shared by the watcher (echo filter) and the edit service (records its writes); one registry per process. */
   selfWrites: SelfWrites;
+  /** Quiet mode for the resident service; `routes/changes.ts` touches it. */
+  pace: Pace;
   /** Register teardown (watchers, timers, child processes); run on shutdown in reverse order. */
   onDispose(fn: () => void | Promise<void>): void;
 };

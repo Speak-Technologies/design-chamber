@@ -7,11 +7,8 @@ import { watchBuildActivity, type BuildActivity } from '../../guest/build-activi
 import type { ChangeBatch, ChangeFeed } from '../../guest/changes.ts';
 import type { DesignDetailResponse } from '../../shared/api.ts';
 import type { ChangeEvent } from '../../shared/types.ts';
-import { mountBuildStrip } from '../components/build-strip.ts';
+import { driveBuildStrip, mountBuildStrip } from '../components/build-strip.ts';
 import { feed, guestHost, host } from '../guest.ts';
-import { buildView } from '../model/build-strip-model.ts';
-
-const REPAINT_MS = 1000;
 
 /** The system's own events, shaped like a design's (`files` and `added` for the system id). */
 const systemEvents = (events: readonly ChangeEvent[], id: string): ChangeEvent[] =>
@@ -74,20 +71,11 @@ export const mountSystemBuild = (options: SystemBuildOptions): SystemBuildHandle
     onDismiss: () => watcher.dismiss(),
   });
 
-  let tick: ReturnType<typeof setInterval> | null = null;
-  const render = (): void => {
-    const view = buildView(watcher.get(), Date.now(), host.snapshot()?.locale ?? 'en');
-    strip.update(view);
-    const wantsTick = view.elapsed !== null && !document.hidden;
-    if (wantsTick && tick === null) tick = setInterval(render, REPAINT_MS);
-    else if (!wantsTick && tick !== null) {
-      clearInterval(tick);
-      tick = null;
-    }
-  };
-  const unwatch = watcher.subscribe(render);
-  document.addEventListener('visibilitychange', render);
-  render();
+  // A tool that names a file of this system shows it from the system's folder, whatever path the agent took.
+  const stopPaint = driveBuildStrip(strip, watcher, {
+    design: () => ({ slug: options.id, entry: null, files: ['system.json', 'tokens.css', 'DESIGN.md'] }),
+    locale: () => host.snapshot()?.locale ?? 'en',
+  });
   // A change of link (the first message creates the chat) reaches the watcher through `onDetail`.
   const relink = (): void => {
     for (const listener of [...listeners]) listener();
@@ -98,10 +86,8 @@ export const mountSystemBuild = (options: SystemBuildOptions): SystemBuildHandle
     watcher,
     relink,
     dispose: () => {
-      unwatch();
+      stopPaint();
       stopSession();
-      document.removeEventListener('visibilitychange', render);
-      if (tick !== null) clearInterval(tick);
       watcher.dispose();
       strip.dispose();
     },

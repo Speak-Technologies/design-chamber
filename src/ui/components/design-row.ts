@@ -16,6 +16,7 @@ import { h } from './dom.ts';
 import { icon } from './icons.ts';
 import { attachMenu, iconBtn } from './kit.ts';
 import { mountThumb, type ThumbHandle } from './thumb.ts';
+import { menuOnThisDevice } from './device.ts';
 
 export type DesignRowView = {
   scope: ListScope;
@@ -92,7 +93,7 @@ export const mountDesignRow = (design: DesignSummary, options: DesignRowOptions)
     // name and the tooltip, and the richer List view is one press away in Filters.
     const menu = iconBtn({ icon: 'more', label: `Actions for ${design.title}`, size: 'sm', onClick: () => undefined });
     const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
-    attachMenu(menu, () => listDesignMenu(view.menu), (id) => runListAction(id, ref, actions, view.menu));
+    attachMenu(menu, () => menuOnThisDevice(listDesignMenu(view.menu)), (id) => runListAction(id, ref, actions, view.menu));
     const main = h(
       'button',
       { type: 'button', class: 'dc-row-main dc-row-main-title', 'aria-label': rowAriaLabel(design), title: `${design.title}\n${kindSummary(design)}` },
@@ -114,7 +115,7 @@ export const mountDesignRow = (design: DesignSummary, options: DesignRowOptions)
   const flags = rowFlags(design);
   const more = iconBtn({ icon: 'more', label: `Actions for ${design.title}`, size: 'sm', onClick: () => undefined });
   const ref = { slug: design.slug, title: design.title, kind: design.kind, sessionId: design.sessionId };
-  attachMenu(more, () => listDesignMenu(view.menu), (id) => runListAction(id, ref, actions, view.menu));
+  attachMenu(more, () => menuOnThisDevice(listDesignMenu(view.menu)), (id) => runListAction(id, ref, actions, view.menu));
   const chip = designSystemChip(design, { actions, swatchOf: options.swatchOf });
   const pending = design.pending ? 'true' : 'false';
 

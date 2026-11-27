@@ -193,3 +193,37 @@ test('a store that throws synchronously is a failed list, not a crash', async ()
   assert.deepEqual(lines, ['design-index.refresh-failed']);
   await index.dispose();
 });
+
+test('onRefresh is called after each list that succeeds, with the new list; not after a failed one; a throwing listener is logged', async (t) => {
+  const s = setup(10);
+  t.after(() => s.close());
+  const seen: string[][] = [];
+  s.index.onRefresh(() => {
+    throw new Error('a listener broke');
+  });
+  const off = s.index.onRefresh(() => void seen.push(s.index.all().map((design) => design.slug)));
+  s.lists[0]?.resolve([summary('a')]);
+  await s.index.ready(1000);
+  await sleep(0);
+  assert.deepEqual(seen, [['a']], 'the first list');
+  assert.ok(s.logs.some((line) => line.level === 'warn' && line.event === 'design-index.listener-failed'));
+
+  s.emit('files');
+  await sleep(30);
+  s.lists[1]?.reject(new Error('EACCES'));
+  await sleep(0);
+  assert.equal(seen.length, 1, 'a failed list changes nothing');
+
+  s.emit('removed');
+  await sleep(30);
+  s.lists[2]?.resolve([summary('b')]);
+  await sleep(0);
+  assert.deepEqual(seen, [['a'], ['b']]);
+
+  off();
+  s.emit('added');
+  await sleep(30);
+  s.lists[3]?.resolve([summary('c')]);
+  await sleep(0);
+  assert.equal(seen.length, 2, 'unsubscribed');
+});

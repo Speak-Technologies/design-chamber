@@ -4,6 +4,8 @@
 //   loading · list (three mixes of agent, check and comment parts) · empty with and without a project ·
 //   a failed read with Try again
 //
+// then what the agent is doing (the host's `tool` for the row's chat: editing a screen, reading a project file),
+// the phone (390 x 844, coarse pointer: 44 px buttons, its own "not here" words),
 // then, on the fake service itself: the linked design first, Check (Checking, then the result, and the 409
 // toast), Open (the rail opens; "deleted" and "not here" toasts), the frame's height, the Tab order and a
 // live theme switch. Rows for the state shots come from `routes`, so the fake backend stays untouched.
@@ -73,6 +75,11 @@ export const run = async (helpers) => {
       await noProject(helpers, width, theme);
       await chatFolder(helpers, width, theme);
     }
+  }
+  for (const theme of THEMES) {
+    for (const width of WIDTHS) await tools(helpers, width, theme);
+    await phone(helpers, theme);
+    await offReasons(helpers, theme);
   }
   await onFakeService(helpers, 400, 'dark');
   await onFakeService(helpers, 280, 'light');
@@ -263,4 +270,93 @@ const onFakeService = async (helpers, width, theme) => {
   check((await p.guest('return getComputedStyle(doc.body).backgroundColor')) === BACKGROUND[theme === 'dark' ? 'light' : 'dark'], `${tag}: a theme switch repaints from the new host tokens`);
   await p.shot(`${tag}-switched`);
   await p.close();
+};
+
+// Two linked chats mid-turn and one with no tool, as the host's `onSessions` records say.
+const LIST_TOOLS = {
+  rows: [
+    row('pricing-page', 'Pricing page', { here: true, agent: 'writing', lastFile: 'home.html', sessionId: 'ses_edit', checks: checks('fresh') }),
+    row('coffee-subscription', 'Coffee subscription', { kind: 'canvas', agent: 'working', sessionId: 'ses_read', checks: checks('stale', { counts: { errors: 1 } }), openComments: 2 }),
+    row('onboarding-flow', 'Onboarding flow', { kind: 'canvas', agent: 'working', sessionId: 'ses_quiet' }),
+  ],
+  total: 3,
+};
+
+const startTools = async (p) => {
+  await p.waitFor('return doc.querySelectorAll(".ws-row").length === 3', 'the rows');
+  await p.host('window.__host.setActivity("ses_edit", "running", null, { name: "edit", target: "screens/pricing.html" })');
+  await p.host('window.__host.setActivity("ses_read", "running", null, { name: "read", target: "src/styles/theme.css" })');
+  await p.waitFor('return doc.querySelectorAll(".ws-meta")[0]?.textContent.startsWith("Editing")', 'the editing line', 4000);
+  await p.waitFor('return doc.querySelectorAll(".ws-meta")[1]?.textContent.startsWith("Reading")', 'the reading line', 4000);
+};
+
+const tools = async ({ openPage, check, checkSoon }, width, theme) => {
+  const tag = `ws-tools-${width}-${theme}`;
+  const p = await openPage({ width, height: 380, surface: 'status', theme, label: tag, routes: { 'GET /status/designs': ok(LIST_TOOLS) } });
+  console.log(tag);
+  await startTools(p);
+  const metas = await text(p, '.ws-meta');
+  check(metas[0] === 'Editing pricing.html · No issues', `${tag}: editing a screen reads "${metas[0]}"`);
+  check(metas[1] === 'Reading theme.css · 1 issue · 2 open comments', `${tag}: reading a project file reads "${metas[1]}"`);
+  check(metas[2] === 'Agent is working', `${tag}: a chat with no tool keeps today's words ("${metas[2]}")`);
+  await p.settle(250);
+  await p.shot(tag);
+  // A burst is held to one change a second, and the last one still lands.
+  await p.host('window.__host.setActivity("ses_edit", "running", null, { name: "bash", target: null })');
+  await checkSoon(async () => (await text(p, '.ws-meta'))[0] === 'Running a command · No issues', `${tag}: a command never shows its target`);
+  // The chat goes idle: the line falls back at once or within the second.
+  await p.host('window.__host.setActivity("ses_edit", "idle")');
+  await checkSoon(async () => (await text(p, '.ws-meta'))[0] === 'Writing home.html · No issues', `${tag}: an idle chat drops its tool`);
+  await p.close();
+};
+
+const phone = async (helpers, theme) => {
+  const { openPage, check, checkSoon, PHONE } = helpers;
+  const tag = `ws-phone-390-${theme}`;
+  const p = await openPage({ ...PHONE, surface: 'status', theme, label: tag, routes: { 'GET /status/designs': ok(LIST_TOOLS) } });
+  console.log(tag);
+  await startTools(p);
+  const small = await p.guest('return [...doc.querySelectorAll(".ws-row button")].filter((b) => b.getBoundingClientRect().height < 44).length');
+  check(small === 0, `${tag}: Check and Open are at least 44 px tall`);
+  await fits(helpers, p, tag);
+  await p.shot(tag);
+  // Open where the host has no rail: the phone's own words (review finding F5).
+  await p.route('POST /open-request', { status: 200, body: {} });
+  await p.route('DELETE /open-request', { status: 200, body: {} });
+  await p.host('window.__host.openSurfaceFails = "UNSUPPORTED"');
+  await p.click('.ws-row[data-slug="pricing-page"] button', { text: 'Open' });
+  await checkSoon(async () => (await p.host('window.__host.toasts.map((t) => t.message)')).some((m) => m.includes('More menu in your chats list')), `${tag}: "not here" points at the More menu`);
+  const said = await p.host('JSON.stringify(window.__host.toasts.map((t) => t.message))');
+  check(!said.includes('rail'), `${tag}: and never says "rail" (${said})`);
+  const { data } = await p.send('Page.captureScreenshot', { format: 'png' });
+  (await import('node:fs')).writeFileSync(`${helpers.outDir}/${tag}-not-here.png`, Buffer.from(data, 'base64'));
+  await p.close();
+};
+
+/** Why a Check is off: words on a touch screen, a tooltip (and screen reader text) with a mouse. */
+const offReasons = async (helpers, theme) => {
+  const { openPage, check, PHONE } = helpers;
+  /** Each row's reason, and whether it takes up room a person can see. */
+  const reasons = (p) =>
+    p.guest(`return [...doc.querySelectorAll(".ws-row")].map((row) => {
+      const reason = row.querySelector(".ws-reason");
+      const box = reason.getBoundingClientRect();
+      return { text: reason.textContent, seen: box.width > 1 && box.height > 1, off: row.querySelector("button").disabled, below: box.top >= row.querySelector(".ws-actions").getBoundingClientRect().bottom - 1 };
+    })`);
+  for (const [name, list, rows] of [['no-browser', LIST_B, 5], ['busy', LIST_C, 3], ['waiting', LIST_A, 5]]) {
+    for (const [size, options] of [['390', PHONE], ['320', { ...PHONE, width: 320 }], ['400-mouse', { width: 400, height: 500 }]]) {
+      const tag = `ws-reason-${name}-${size}-${theme}`;
+      const p = await openPage({ ...options, surface: 'status', theme, label: tag, routes: { 'GET /status/designs': ok(list) } });
+      console.log(tag);
+      await p.waitFor(`return doc.querySelectorAll(".ws-row").length === ${rows}`, 'the rows');
+      const found = await reasons(p);
+      const withReason = found.filter((row) => row.text !== '');
+      check(withReason.length > 0 && withReason.every((row) => row.off), `${tag}: only a Check that is off has a reason (${withReason.length})`);
+      if (size === '400-mouse') check(found.every((row) => !row.seen), `${tag}: with a mouse the reason stays off screen`);
+      else check(withReason.every((row) => row.seen && row.below), `${tag}: on touch the reason is shown under the buttons ("${withReason[0]?.text}")`);
+      await fits(helpers, p, tag);
+      if (size !== '400-mouse') await p.shot(tag);
+      await p.close();
+    }
+  }
 };

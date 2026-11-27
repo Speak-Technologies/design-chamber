@@ -1442,6 +1442,15 @@ body {
   color: var(--oc-muted);
   font-size: 0.6875rem;
 }
+/* A phone has no Ctrl, Enter-to-save or Esc to name. Only the card's and the text box's shortcut lines: the ask
+ * popover uses the same class for which chat the message goes to, which a phone needs as much as anyone. */
+[data-dc-form='phone'] .dc-composer .dc-pop-hint,
+[data-dc-form='phone'] .dc-editor .dc-pop-hint {
+  display: none;
+}
+[data-dc-form='phone'] .dc-composer .dc-pop-actions {
+  margin-inline-start: auto;
+}
 .dc-pin-badge {
   display: inline-grid;
   place-items: center;
@@ -1903,7 +1912,7 @@ body {
   gap: var(--dc-s1);
   font-size: 0.75rem;
 }
-.dc-build-live {
+.dc-build-main {
   display: inline-flex;
   align-items: center;
   gap: var(--dc-s2);
@@ -7552,4 +7561,118 @@ button.dc-sp-value:focus-visible {
 .dc-syspg[data-surface='panel'] .dc-bc:has(.dc-bc-dock:not(:empty)) {
   flex: 0 1 auto;
   max-height: none;
+}
+
+/* ===== Phone (native extras §2.2) ===== */
+/*
+ * `applyDevice` puts data-dc-form and data-dc-pointer on the root, and the safe-area insets and the on-screen
+ * keyboard as --dc-inset-* and --dc-keyboard (px, clamped). On a phone the content stops above the keyboard, so
+ * the ask bar, the comment composer and every sheet stay in sight; the full-screen phone page also keeps clear
+ * of the home indicator. A desktop never matches any of this.
+ */
+[data-dc-form='phone'] .dc-app {
+  --dc-bottom-gap: var(--dc-keyboard, 0px);
+  padding-bottom: var(--dc-bottom-gap);
+}
+[data-dc-form='phone'] .dc-app[data-variant='phone-page'] {
+  --dc-bottom-gap: calc(var(--dc-keyboard, 0px) + var(--dc-inset-bottom, 0px));
+  padding-left: var(--dc-inset-left, 0px);
+  padding-right: var(--dc-inset-right, 0px);
+}
+[data-dc-form='phone'] .dc-app .dc-sheet {
+  bottom: var(--dc-bottom-gap);
+}
+/* A finger needs about 44 px: buttons, menu rows, list rows and the ask bar's Send (two s4 and an s3). */
+[data-dc-pointer='coarse'] :is(.oc-sdk-btn, .oc-sdk-option, .dc-row-main) {
+  min-height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+}
+[data-dc-pointer='coarse'] .dc-iconbtn {
+  width: calc(var(--dc-s4) * 2 + var(--dc-s3));
+  height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+}
+/*
+ * The Checks badge and the design system button are small pills in the header. A finger gets 44 px of room for each
+ * (so the area never lies over a neighbour) and a hit area that fills it; the pill looks as before.
+ */
+[data-dc-pointer='coarse'] :is(.dc-checks, .dc-system) {
+  justify-content: center;
+  min-width: calc(var(--dc-s4) * 2 + var(--dc-s3));
+  min-height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+}
+[data-dc-pointer='coarse'] :is(.dc-checks-badge, .dc-system-btn) {
+  position: relative;
+}
+[data-dc-pointer='coarse'] :is(.dc-checks-badge, .dc-system-btn)::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, calc(var(--dc-s4) * 2 + var(--dc-s3)));
+  height: max(100%, calc(var(--dc-s4) * 2 + var(--dc-s3)));
+  transform: translate(-50%, -50%);
+}
+
+/*
+ * Typing in the comment card, a pin's thread or the Edit text box with the phone's keyboard up: the card gets the room
+ * of everything under and over the wall. Not while the ask bar has the keyboard, which then is what is being typed in.
+ */
+[data-dc-form='phone'][data-dc-keyboard='up'] .dc-design:has(.dc-wall-overlay > :is(.dc-composer, .dc-thread, .dc-editor)):not(:has(.dc-bottom-dock:focus-within))
+  :is(.dc-bottom-dock, .dc-hint, .dc-warnings, .dc-notices) {
+  display: none;
+}
+[data-dc-form='phone'][data-dc-keyboard='up'] .dc-editor-input {
+  max-height: calc(var(--dc-s6) * 3);
+}
+/* A card the wall is too short for (popover-layer.ts): the heading and quote go, the text box is two lines. */
+[data-dc-form='phone'] .dc-pop[data-tight] :is(.dc-pop-snippet, .dc-pop-note),
+[data-dc-form='phone'] .dc-composer[data-tight] .dc-pop-head {
+  display: none;
+}
+[data-dc-form='phone'] .dc-pop[data-tight] .dc-textarea {
+  height: calc(var(--dc-s4) * 2 + var(--dc-s3));
+  min-height: 0;
+}
+[data-dc-form='phone'] .dc-pop[data-tight] {
+  gap: var(--dc-s1);
+  padding: var(--dc-s2);
+}
+
+/* Settings: the folder line that says the path is on the computer, not the phone. */
+.dc-settings-where {
+  font-size: 0.8125rem;
+}
+
+/* ===== This chat on the rail list (native extras §4.2, U6) ===== */
+/* The chat the rail is open in leads the list; a heading over it and over the rest keeps the two apart. */
+.dc-this-chat {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--dc-s3);
+}
+.dc-this-chat[hidden],
+.dc-rail-group-h[hidden] {
+  display: none;
+}
+.dc-rail-group-h {
+  margin: 0;
+  padding: var(--dc-s2) var(--dc-s2) var(--dc-s1);
+  color: var(--oc-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.dc-this-chat-more {
+  display: flex;
+  padding: var(--dc-s1) var(--dc-s1) 0;
+}
+.dc-this-chat-more:empty {
+  display: none;
+}
+/* The chips' × takes a finger on a touch screen: an invisible hit area an s3 past each edge, so the chip keeps its size. */
+[data-dc-pointer='coarse'] .dc-filter-chip-x {
+  position: relative;
+}
+[data-dc-pointer='coarse'] .dc-filter-chip-x::after {
+  content: '';
+  position: absolute;
+  inset: calc(var(--dc-s3) * -1);
 }

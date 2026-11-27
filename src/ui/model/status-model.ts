@@ -1,14 +1,18 @@
 // What the Work Status frame says (documentation/specs/phase-1-5-sdk-2-7.md §U5.2), as data. Pure: no DOM,
 // no host calls. A design's line reads like it does everywhere else because its words come from exactly two
 // places: the agent part from `pillText` (the rail pill) and the check part from `badgeOf` (the Checks badge).
+// While the linked chat runs, its current call takes the agent part's place, in the strip's words (`describeTool`).
 // This file only decides which parts show, in what order, with which dot colour and which button state.
 
+import type { SessionTool } from '../../guest/session-tool.ts';
+import { readSessionTool } from '../../guest/session-tool.ts';
 import type { StatusDesignRow, StatusDesignsResponse } from '../../shared/api.ts';
-import { STATUS_STARTING_GIVE_UP_MS } from '../../shared/limits.ts';
+import { STATUS_STARTING_GIVE_UP_MS, TOOL_REPAINT_MS } from '../../shared/limits.ts';
 import { sameDirectory } from '../../shared/path-compare.ts';
 import { pillText } from './build-strip-model.ts';
 import { badgeOf, type BadgeTone } from './checks-model.ts';
 import { plural } from './format.ts';
+import { describeTool } from './tool-model.ts';
 
 /** Every sentence of the frame that is not built from a row; the frame draws these and nothing else of its own. */
 export const STATUS_COPY = {
@@ -50,14 +54,24 @@ export type StatusRowView = {
   check: CheckButtonView;
 };
 
+/** The call each running chat of the project is making, by session id. */
+export type SessionTools = ReadonlyMap<string, SessionTool>;
+
 export type StatusRowContext = {
   /** The person pressed Check on this row and the service has not yet said "running". */
   checking: boolean;
+  tools?: SessionTools;
 };
 
 const CHECK_TONE: Readonly<Record<BadgeTone, StatusTone>> = { success: 'success', warning: 'warning', error: 'error', neutral: 'muted' };
 
-const agentPart = (row: StatusDesignRow): { text: string; tone: StatusTone } | null => {
+const agentPart = (row: StatusDesignRow, tools: SessionTools | undefined): { text: string; tone: StatusTone } | null => {
+  if (row.agent === 'writing' || row.agent === 'working') {
+    // The linked chat's current call, in the build strip's short words. An unknown tool says nothing.
+    const tool = row.sessionId === null ? undefined : tools?.get(row.sessionId);
+    const words = tool ? describeTool(tool, null) : null;
+    if (words) return { text: words.short, tone: 'info' };
+  }
   if (row.agent === 'writing') return { text: pillText('writing', row.lastFile), tone: 'info' };
   if (row.agent === 'working') return { text: pillText('working', null), tone: 'info' };
   if (row.agent === 'failed') return { text: pillText('failed', null), tone: 'error' };
@@ -77,7 +91,7 @@ const checkButton = (row: StatusDesignRow, context: StatusRowContext): CheckButt
 };
 
 export const statusRowView = (row: StatusDesignRow, context: StatusRowContext): StatusRowView => {
-  const agent = agentPart(row);
+  const agent = agentPart(row, context.tools);
   // Nothing is written yet, so there is nothing to have checks about.
   const badge = row.checks !== null && !row.pending ? badgeOf(row.checks, null, context.checking) : null;
   const parts: StatusPart[] = [];
@@ -123,12 +137,15 @@ export type StatusSectionInput = {
   hasProject: boolean;
   /** Designs the person pressed Check on, until the service says "running". */
   checking: ReadonlySet<string>;
+  tools?: SessionTools;
+  /** "Isn't responding" as this device says it (`openHelp`); the desktop's words without it. */
+  serviceDown?: string;
 };
 
-const noticeOf = (error: NonNullable<StatusSectionInput['error']>, failingMs: number): StatusNotice => {
+const noticeOf = (error: NonNullable<StatusSectionInput['error']>, failingMs: number, unresponsive: string): StatusNotice => {
   if (error.code === 'NO_SERVICE' || error.code === 'SERVICE_FAILED') {
     return failingMs >= STATUS_STARTING_GIVE_UP_MS
-      ? { kind: 'unresponsive', text: STATUS_COPY.unresponsive, retry: true }
+      ? { kind: 'unresponsive', text: unresponsive, retry: true }
       : { kind: 'starting', text: STATUS_COPY.starting, retry: false };
   }
   if (error.code === 'DISABLED') return { kind: 'paused', text: STATUS_COPY.paused, retry: false };
@@ -136,7 +153,7 @@ const noticeOf = (error: NonNullable<StatusSectionInput['error']>, failingMs: nu
 };
 
 export const statusSectionOf = (input: StatusSectionInput): StatusSectionView => {
-  const notice = input.error ? noticeOf(input.error, input.failingMs) : null;
+  const notice = input.error ? noticeOf(input.error, input.failingMs, input.serviceDown ?? STATUS_COPY.unresponsive) : null;
   const base = { loadingLabel: STATUS_COPY.loading, emptyText: null, notice, rows: [], more: null };
   const { data } = input;
   if (data === null) return { ...base, kind: notice ? 'problem' : 'loading' };
@@ -147,7 +164,7 @@ export const statusSectionOf = (input: StatusSectionInput): StatusSectionView =>
   return {
     ...base,
     kind: 'list',
-    rows: data.rows.map((row) => statusRowView(row, { checking: input.checking.has(row.slug) })),
+    rows: data.rows.map((row) => statusRowView(row, { checking: input.checking.has(row.slug), tools: input.tools })),
     more: data.total > data.rows.length ? `Show all ${data.total} designs` : null,
   };
 };
@@ -164,6 +181,39 @@ export const projectDirectoryOf = (directory: string | null, projects: ReadonlyA
   if (directory === null) return null;
   if (projects === null) return directory;
   return projects.some((project) => sameDirectory(project.directory, directory)) ? directory : null;
+};
+
+/** The registered project the chat's folder is, with the id its sessions are read by; null when it is none. */
+export const projectOf = <P extends { directory: string }>(directory: string | null, projects: ReadonlyArray<P> | null): P | null =>
+  directory === null ? null : (projects?.find((project) => sameDirectory(project.directory, directory)) ?? null);
+
+// ---- what the agents are doing ----
+
+/** From a sessions snapshot: only a running session has a current call, and the call is read as untrusted. */
+export const toolsOf = (sessions: ReadonlyArray<{ id: string; activity: string; tool?: unknown }>): SessionTools => {
+  const tools = new Map<string, SessionTool>();
+  for (const session of sessions) {
+    const tool = session.activity === 'running' ? readSessionTool(session.tool) : null;
+    if (tool) tools.set(session.id, tool);
+  }
+  return tools;
+};
+
+const sameTools = (a: SessionTools, b: SessionTools): boolean =>
+  a.size === b.size && [...a].every(([id, tool]) => b.get(id)?.name === tool.name && b.get(id)?.target === tool.target);
+
+/** The tools on screen, and since when. */
+export type HeldTools = { tools: SessionTools; since: number };
+
+/**
+ * The tools to draw at `now`: they change at most once per `TOOL_REPAINT_MS`, so the lines stay readable while
+ * an agent opens ten files a second. `wait` is how long until the held-back ones may show; null when none are.
+ */
+export const holdTools = (held: HeldTools | null, tools: SessionTools, now: number): { held: HeldTools; wait: number | null } => {
+  if (held && sameTools(held.tools, tools)) return { held, wait: null };
+  // A clock stepped back counts as time passed, so nothing is held for longer than the limit.
+  if (held && now >= held.since && now - held.since < TOOL_REPAINT_MS) return { held, wait: held.since + TOOL_REPAINT_MS - now };
+  return { held: { tools, since: now }, wait: null };
 };
 
 // ---- live updates ----

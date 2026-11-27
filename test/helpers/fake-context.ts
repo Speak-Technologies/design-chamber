@@ -268,6 +268,7 @@ export const createFakeContext = (options: FakeContextOptions): FakeContext => {
     hostCalls: unavailable('fake host calls, pass it in overrides'),
     activity: createActivityTracker(),
     selfWrites: createSelfWrites(),
+    pace: { touch: () => undefined },
     onDispose: (fn) => void disposers.push(fn),
   };
 

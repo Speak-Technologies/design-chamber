@@ -222,7 +222,8 @@ export const editorWidth = (input: { surface: 'page' | 'rail'; boxWidth: number;
 /** Over the element, its top edge at the element's top; the rail card is pinned to the stage's side margins. */
 export const placeEditor = (box: Box, size: Size, stage: Size, surface: 'page' | 'rail'): { left: number; top: number } => ({
   left: surface === 'rail' ? EDGE : clamp(box.x, EDGE, stage.w - size.w - EDGE),
-  top: clamp(box.y, EDGE, stage.h - size.h - EDGE),
+  // Taller than the viewer: its foot stays in view, since that is where Save is.
+  top: size.h > stage.h - 2 * EDGE ? stage.h - EDGE - size.h : clamp(box.y, EDGE, stage.h - size.h - EDGE),
 });
 
 // ---- Reading the file ----

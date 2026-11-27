@@ -4,7 +4,11 @@
 // speaks: it changes only with the phase or the file, never as seconds or minutes tick.
 
 import { QUIET_MS, phaseOf, type BuildPhase, type BuildTrack } from '../../guest/build-activity.ts';
+import type { SessionTool } from '../../guest/session-tool.ts';
+import { stripDisplayControls } from '../../shared/display-text.ts';
+import { TOOL_REPAINT_MS } from '../../shared/limits.ts';
 import { middlePath, plural, relativeTime } from './format.ts';
+import { FULL_PATH_MAX, NAME_MAX, basename, describeTool, type ToolDesign } from './tool-model.ts';
 
 export type BuildAction = 'open-chat' | 'dismiss';
 export type BuildTone = 'info' | 'success' | 'warning' | 'error';
@@ -37,11 +41,8 @@ export const formatElapsed = (ms: number): string => {
   return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}` : `${minutes}:${seconds}`;
 };
 
-const basename = (path: string): string => path.split('/').filter((part) => part !== '').at(-1) ?? path;
-
-/** The full path fits what a toolbar line can hold; the pill gets room for the basename only. */
-const FULL_PATH_MAX = 48;
-const NAME_MAX = 24;
+/** A file name as it may be shown: no display controls, and null when nothing is left of it. */
+const shownPath = (path: string | null): string | null => stripDisplayControls(path ?? '') || null;
 
 /**
  * The rail pill's words for the four phases a Work Status row can show. `file` is the path (or just
@@ -50,8 +51,10 @@ const NAME_MAX = 24;
  */
 export const pillText = (phase: 'writing' | 'working' | 'failed' | 'done', file: string | null): string => {
   switch (phase) {
-    case 'writing':
-      return file ? `Writing ${middlePath(basename(file), NAME_MAX)}` : 'Writing';
+    case 'writing': {
+      const name = shownPath(file);
+      return name ? `Writing ${middlePath(basename(name), NAME_MAX)}` : 'Writing';
+    }
     case 'working':
       return 'Agent is working';
     case 'failed':
@@ -77,7 +80,19 @@ const view = (phase: BuildPhase, track: BuildTrack, now: number, copy: Copy): Bu
   announce: copy.text,
 });
 
-export const buildView = (track: BuildTrack, now: number, locale = 'en'): BuildView => {
+/**
+ * While the agent works, the call it is making says more than the phase does. Only edits and writes are
+ * announced: the live region must not read out every file the agent opens.
+ */
+const withTool = (shown: BuildView, track: BuildTrack, design: ToolDesign | null): BuildView => {
+  const words = track.tool ? describeTool(track.tool, design) : null;
+  if (!words) return shown;
+  const said = words.kind === 'edit' || words.kind === 'write' ? words.full : shown.announce;
+  return { ...shown, text: words.full, pill: words.short, title: words.path, announce: said };
+};
+
+/** `design` maps a tool's target to the open design's own paths; null shows the target as the host gave it. */
+export const buildView = (track: BuildTrack, now: number, locale = 'en', design: ToolDesign | null = null): BuildView => {
   const phase = phaseOf(track, now);
   const last = track.lastFile;
   switch (phase) {
@@ -92,15 +107,15 @@ export const buildView = (track: BuildTrack, now: number, locale = 'en'): BuildV
     case 'failed':
       return view(phase, track, now, { text: 'The agent stopped with an error', pill: pillText('failed', null), tone: 'error', actions: ['open-chat', 'dismiss'] });
     case 'writing': {
-      const path = last?.path ?? null;
-      return view(phase, track, now, {
+      const path = shownPath(last?.path ?? null);
+      return withTool(view(phase, track, now, {
         text: path ? `Writing ${middlePath(path, FULL_PATH_MAX)}` : 'The agent is writing',
         pill: pillText('writing', path),
         detail: track.isCanvas && track.screensTotal > 1 ? `${track.screensWritten} of ${track.screensTotal} screens written` : null,
         title: path,
         tone: 'info',
         elapsed: true,
-      });
+      }), track, design);
     }
     case 'retrying':
       return view(phase, track, now, { text: 'The agent hit a problem and is retrying', pill: 'Agent is retrying', tone: 'warning', elapsed: true });
@@ -110,9 +125,10 @@ export const buildView = (track: BuildTrack, now: number, locale = 'en'): BuildV
       if (since !== null && now - since >= QUIET_MS) detail = 'Nothing saved in the last 2 minutes';
       else if (last) {
         const when = relativeTime(new Date(last.at).toISOString(), now, locale);
-        detail = last.path ? `Last saved ${middlePath(basename(last.path), NAME_MAX)} ${when}` : `Last saved ${when}`;
+        const path = shownPath(last.path);
+        detail = path ? `Last saved ${middlePath(basename(path), NAME_MAX)} ${when}` : `Last saved ${when}`;
       }
-      return view(phase, track, now, { text: 'The agent is working', pill: pillText('working', null), detail, tone: 'info', elapsed: true });
+      return withTool(view(phase, track, now, { text: 'The agent is working', pill: pillText('working', null), detail, tone: 'info', elapsed: true }), track, design);
     }
     case 'done': {
       const count = track.turnFiles.length;
@@ -126,4 +142,26 @@ export const buildView = (track: BuildTrack, now: number, locale = 'en'): BuildV
     case 'stalled':
       return view(phase, track, now, { text: 'Nothing written yet. Check the chat for a question.', pill: 'Nothing written yet', tone: 'warning', actions: ['open-chat', 'dismiss'] });
   }
+};
+
+// ---- repaint rate ----
+
+/** What of the tool is on screen, and since when. */
+export type ToolHold = { phase: BuildPhase; tool: SessionTool | null; since: number };
+
+const sameTool = (a: SessionTool | null, b: SessionTool | null): boolean => a?.name === b?.name && a?.target === b?.target;
+
+/**
+ * The track to paint at `now`. An agent can open ten files a second, so within one phase the tool changes at
+ * most once per `TOOL_REPAINT_MS` and the words stay readable; everything else, a phase change included,
+ * paints at once. `wait` is how long until the held-back tool may show; null when nothing is held back.
+ */
+export const paintTrack = (held: ToolHold | null, track: BuildTrack, now: number): { track: BuildTrack; held: ToolHold; wait: number | null } => {
+  const phase = phaseOf(track, now);
+  if (held && sameTool(held.tool, track.tool)) return { track, held: { ...held, phase }, wait: null };
+  // A clock stepped back counts as time passed, so nothing is held for longer than the limit.
+  if (held && held.phase === phase && now >= held.since && now - held.since < TOOL_REPAINT_MS) {
+    return { track: { ...track, tool: held.tool }, held, wait: held.since + TOOL_REPAINT_MS - now };
+  }
+  return { track, held: { phase, tool: track.tool, since: now }, wait: null };
 };

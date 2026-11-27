@@ -179,6 +179,7 @@ export const createStatusDesigns = (ctx: StatusContext, deps: StatusDesignsDeps)
               checks: await checksOf(design),
               pending: design.pending,
               openComments: design.openComments,
+              sessionId: design.sessionId,
             };
           }),
         );

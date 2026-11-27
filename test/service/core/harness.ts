@@ -97,6 +97,7 @@ export const createCore = async (t: TestContext, options: CoreOptions = {}): Pro
     hostCalls: unavailable('host calls (not in the WP1 core)'),
     activity: unavailable('activity (not in the WP1 core)'),
     selfWrites: createSelfWrites(),
+    pace: { touch: () => undefined },
     onDispose: (fn) => void disposers.push(fn),
   };
 

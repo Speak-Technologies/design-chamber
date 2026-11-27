@@ -16,7 +16,7 @@ import { createDesignStore } from '../../../src/service/store.ts';
 import type { ChangeHub, Logger, SettingsStore } from '../../../src/service/context.ts';
 import { COMMENTS_MAX } from '../../../src/shared/limits.ts';
 import { serializeJson } from '../../../src/shared/design-json.ts';
-import type { ChangeEvent, Comment, ServiceState } from '../../../src/shared/types.ts';
+import type { ChangeEvent, Comment, JsonValue, ServiceState } from '../../../src/shared/types.ts';
 import { refuseRenames } from '../../helpers/refuse-rename.ts';
 import { useTmpRoot, type TmpRoot } from '../../helpers/tmp-root.ts';
 import type { LogLine } from './harness.ts';
@@ -213,6 +213,49 @@ describe('get / read tolerance', () => {
     const healed = await readJson(path.join(record.path, '.chamber', 'state.json'));
     assert.equal(healed.kind, 'canvas');
     assert.equal((healed.comments as unknown[]).length, 1);
+  });
+});
+
+describe('importedFrom (native-extras §5.1)', () => {
+  const from = { path: '/home/me/project/page.html', sha256: 'a'.repeat(64), at: '2026-11-27T10:00:00.000Z' };
+
+  test('create writes it to state.json only; get reads it; a rename, a comment and a reconcile keep it', async (t) => {
+    const env = await makeEnv(t);
+    const created = await env.store.create({ kind: 'page', title: 'Copied', importedFrom: from });
+    assert.deepEqual(created.state.importedFrom, from);
+    assert.deepEqual((await readJson(path.join(created.path, '.chamber', 'state.json'))).importedFrom, from);
+    assert.equal(Object.hasOwn(await readJson(path.join(created.path, 'design.json')), 'importedFrom'), false, 'never mirrored into design.json');
+
+    await env.store.patch(created.slug, { title: 'Renamed' });
+    await env.store.addComment(created.slug, { screen: null, viewport: 'laptop', anchor: commentFixture('c_x').anchor, body: 'Hi' });
+    await env.store.reconcile(created.slug);
+    assert.deepEqual((await env.store.get(created.slug)).state.importedFrom, from);
+    assert.deepEqual((await readJson(path.join(created.path, '.chamber', 'state.json'))).importedFrom, from);
+  });
+
+  test('a design made without it has none; a malformed value reads as absent and the design still reads', async (t) => {
+    const env = await makeEnv(t);
+    const plain = await env.store.create({ kind: 'page', title: 'Plain' });
+    assert.equal(plain.state.importedFrom, undefined);
+    assert.equal(Object.hasOwn(await readJson(path.join(plain.path, '.chamber', 'state.json')), 'importedFrom'), false);
+
+    for (const [index, bad] of [
+      'a string',
+      { ...from, sha256: 'A'.repeat(64) },
+      { ...from, sha256: 'a'.repeat(63) },
+      { ...from, path: '' },
+      { ...from, path: 'x'.repeat(4097) },
+      { ...from, path: '/a\u0000b.html' },
+      { ...from, at: 'yesterday' },
+      [from],
+    ].entries()) {
+      const slug = `bad-${index}`;
+      await env.tmp.write(`${slug}/.chamber/state.json`, serializeJson({ ...seededState({ kind: 'page', entry: 'index.html' }), importedFrom: bad } as unknown as JsonValue)); // a hand-edited state.json
+      await env.tmp.write(`${slug}/design.json`, { version: 1, kind: 'page', title: 'Bad' });
+      const record = await env.store.get(slug);
+      assert.equal(record.state.importedFrom, undefined, JSON.stringify(bad));
+      assert.equal(record.design.kind, 'page');
+    }
   });
 });
 

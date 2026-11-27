@@ -87,6 +87,17 @@ section is expanded; the frame itself keeps nothing it cannot rebuild.
 - Rows beyond the service's five are summed into a footer link, "Show all 12 designs", which opens the
   rail's list.
 
+### What the agent is doing
+
+While a row's agent is writing or working, the agent part names the call its linked chat is making, in the
+build strip's short words (`describeTool`): `Editing pricing.html`, `Reading theme.css`, `Running a command`,
+`Checking`. So a line reads `Pricing page · Editing pricing.html · No issues`. A command's target is never
+shown. The frame reads the project's chats itself (`onSessions`, one subscription for the project the chat is
+in) and matches them to rows by `sessionId`; the service sends no tool. The words change at most once a second.
+An unknown tool, an older OpenChamber without `tool`, a chat with no project or a failed subscription all read as
+before (`Writing pricing.html`, `Agent is working`). A tool name and target come from the model, so they are
+checked (`readSessionTool`) and only ever shown as text.
+
 ### Buttons
 
 - **Check** (ghost, small) runs the rendering check through `POST /designs/:slug/checks/run`. The line says
@@ -99,6 +110,10 @@ section is expanded; the frame itself keeps nothing it cannot rebuild.
 - **Open** (outline, small) asks the service to open the design (`POST /open-request`) and then opens the
   Design Chamber rail, which takes the request. "That design was deleted." when the design is gone;
   "Open Design Chamber from the rail to see it." where the host cannot open the rail.
+  On a phone, Open and **Show all** open Design Chamber's tab in the workspace drawer; where that fails the toast
+  says "Design Chamber can't open here yet. Open it from the More menu in your chats list."
+- On a touch screen there is no tooltip to hover, so the reason Check is off is also written under that row's
+  buttons. With a mouse it stays a tooltip.
 - Keyboard: Tab goes row by row, Check then Open, then the footer link. Each button's name includes the
   design ("Check Pricing page").
 
@@ -110,6 +125,7 @@ section is expanded; the frame itself keeps nothing it cannot rebuild.
 | No designs, a project open | "No designs for this project yet. Ask the agent for one, or type /design." |
 | No designs, no project | "No designs in the last 7 days. Ask the agent for one, or type /design." |
 | Service not running (`NO_SERVICE`, `SERVICE_FAILED`) | "Design Chamber is starting." After 10 s still failing: "Design Chamber isn't responding." with **Try again** |
+| The same, on a phone, still failing after 10 s | "Design Chamber isn't responding on your computer. Try again in a moment." with **Try again** |
 | Extension paused (`DISABLED`) | "Design Chamber is paused. Turn it on in Settings → Extensions." |
 | Any other failed read | "Couldn't load your designs." plus the service's own sentence, with **Try again** |
 | A refresh fails while rows are showing | the rows stay and the notice sits above them |
@@ -132,8 +148,9 @@ The frame reports its content height to the host (`setHeight`, from a `ResizeObs
 it to 24 to 320 px and the section scrolls past that. Colours, type and radius come from the host theme
 tokens and the SDK kit's classes, on the Work Status panel colour; a theme switch repaints live. Under
 about 340 px wide the buttons stay on the title's row and the meta line takes the full width, so five
-rows and the footer fit in 320 px at 280 px wide. Checked in the visual harness at 280 and 400 px, light
-and dark (`test/ui/visual/scenarios/work-status.mjs`). "Starting", "isn't responding" and "paused" cannot be
+rows and the footer fit in 320 px at 280 px wide. On a touch screen the buttons are at least 44 px
+tall, so rows are taller and the section scrolls sooner. Checked in the visual harness at 280 and 400 px and on a
+390 px phone, light and dark (`test/ui/visual/scenarios/work-status.mjs`). "Starting", "isn't responding" and "paused" cannot be
 produced there (they come from a host error, which a route override cannot send), so their words and
 rules are pinned in `test/ui/status-model.test.ts` and they are not yet seen on screen.
 

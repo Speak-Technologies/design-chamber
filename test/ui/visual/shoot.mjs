@@ -58,7 +58,9 @@ const systemQuestions = parseSystemQuestions(readFileSync(path.join(root, 'rules
 // Per-run secret for the live proxy below: baked into the harness bundle (fake-host.ts sends it), so only code of the
 // harness's own UI can use /live/*, not a script in a design frame or another tab that guesses the port.
 const liveSecret = randomBytes(24).toString('hex');
-const define = { __DC_BRIDGE__: JSON.stringify(bridge), __DC_SYSTEM_QUESTIONS__: JSON.stringify(systemQuestions), __DC_LIVE_SECRET__: JSON.stringify(liveSecret) };
+// What scripts/build.mjs reads from the manifest (whether the panel opens on the phone), so the harness copy matches.
+const panelMobile = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).openchamber?.contributes?.panel?.mobile === true;
+const define = { __DC_BRIDGE__: JSON.stringify(bridge), __DC_SYSTEM_QUESTIONS__: JSON.stringify(systemQuestions), __DC_LIVE_SECRET__: JSON.stringify(liveSecret), __DC_PANEL_MOBILE__: JSON.stringify(panelMobile) };
 const harnessJs = (await build({ ...browser, entryPoints: [path.join(here, 'fake-main.ts')], define })).outputFiles[0].text;
 
 // A frame's real entry point, with `@openchamber/sdk` swapped for fake-sdk.ts (the real SDK with
@@ -195,8 +197,9 @@ const openPages = new Set();
 
 // `routes`: route answers in place from the first request (see the header). `storage`: values the
 // host's storage starts with. `block`: the call a block frame draws. `entry: 'probe'`: the harness probe frame. `mount`: the selector that says the frame drew.
-const openPage = async ({ width, height, surface, theme, label, query = '', routes = null, block = null, entry = null, mount = null, storage = null }) => {
-  const extra = `${storage ? `&storage=${encodeURIComponent(JSON.stringify(storage))}` : ''}${routes ? `&routes=${encodeURIComponent(JSON.stringify(routes))}` : ''}${block ? `&block=${encodeURIComponent(JSON.stringify(block))}` : ''}${entry ? `&entry=${entry}` : ''}`;
+// `device`: `ready.device` as a phone or tablet host sends it (see PHONE); a coarse pointer also turns on touch.
+const openPage = async ({ width, height, surface, theme, label, query = '', routes = null, block = null, entry = null, mount = null, storage = null, device = null }) => {
+  const extra = `${device ? `&device=${encodeURIComponent(JSON.stringify(device))}` : ''}${storage ? `&storage=${encodeURIComponent(JSON.stringify(storage))}` : ''}${routes ? `&routes=${encodeURIComponent(JSON.stringify(routes))}` : ''}${block ? `&block=${encodeURIComponent(JSON.stringify(block))}` : ''}${entry ? `&entry=${entry}` : ''}`;
   const target = await (await fetch(`http://127.0.0.1:${debugPort}/json/new?about:blank`, { method: 'PUT' })).json();
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
@@ -228,6 +231,7 @@ const openPage = async ({ width, height, surface, theme, label, query = '', rout
   await send('Page.enable');
   await send('Page.bringToFront');
   await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+  if (device?.pointer === 'coarse') await send('Emulation.setTouchEmulationEnabled', { enabled: true });
   await send('Page.navigate', { url: `${base}/host.html?surface=${surface}&theme=${theme}${query}${extra}` });
 
   // Run `code` inside the guest document. `doc` and `win` are the guest's document and window.
@@ -666,9 +670,12 @@ const emptyAndErrors = async () => {
   await p.close();
 };
 
+// A 390 x 844 phone: `openPage({ ...PHONE, surface, theme, label })`.
+const PHONE = { width: 390, height: 844, device: { formFactor: 'phone', pointer: 'coarse', insets: { top: 0, right: 0, bottom: 34, left: 0 }, keyboard: 0 } };
+
 // What the scenario modules (test/ui/visual/scenarios) use.
 // `debugPort`: a scenario that must look inside a sandboxed frame (its own process) attaches to that frame's DevTools target.
-const helpers = { openPage, check, checkSoon, listReady, thumbsReady, wallReady, menuItem, scaleLabel, sleep, outDir, root, debugPort };
+const helpers = { PHONE, openPage, check, checkSoon, listReady, thumbsReady, wallReady, menuItem, scaleLabel, sleep, outDir, root, debugPort };
 
 const plan = [];
 for (const theme of ['dark', 'light']) {

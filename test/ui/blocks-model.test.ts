@@ -12,7 +12,8 @@ import type { DesignJson, Screen } from '../../src/shared/types.ts';
 import { ServiceError } from '../../src/guest/service-client.ts';
 import { createPicker, readCard, type CardClient } from '../../src/ui/blocks/block-data.ts';
 import type { DirectionOption } from '../../src/ui/model/block-args.ts';
-import { answeredOption, answerText, cardView, pickerView, previewOf, thumbSrc } from '../../src/ui/model/block-view-model.ts';
+import { answeredOption, answerText, cardView, commentOffered, pickerView, previewOf, thumbSrc } from '../../src/ui/model/block-view-model.ts';
+import { DESKTOP_DEVICE, openHelp, type Device } from '../../src/ui/model/device-model.ts';
 import { badgeOf } from '../../src/ui/model/checks-model.ts';
 
 // ---------------------------------------------------------------- answeredOption
@@ -321,4 +322,21 @@ test('pickerView: captions and tile states for each phase', () => {
   const note = pickerView({ phase: 'answered', picked: null, sending: null }, OPTIONS);
   assert.equal(note.caption, 'You answered with a note.');
   assert.ok(note.tiles.every((t) => t.disabled && !t.pressed));
+});
+
+// ---------------------------------------------------------------- phone (native-extras §2.2, review finding F5)
+
+const PHONE: Device = { form: 'phone', coarse: true, insets: { top: 0, right: 0, bottom: 34, left: 0 }, keyboard: 0 };
+
+test('Comment is hidden only on a phone whose panel can’t open', () => {
+  assert.equal(commentOffered(PHONE, false), false);
+  assert.equal(commentOffered(PHONE, true), true);
+  assert.equal(commentOffered(DESKTOP_DEVICE, false), true);
+  assert.equal(commentOffered({ ...PHONE, form: 'tablet' }, false), true);
+});
+
+test('where the card can’t open on a phone, it points at the More menu, never at a rail', () => {
+  assert.equal(openHelp(PHONE, true).notHere, 'Design Chamber can’t open here yet. Open it from the More menu in your chats list.');
+  assert.equal(openHelp(PHONE, false).notHere, 'Open Design Chamber from the More menu in your chats list.');
+  assert.equal(openHelp(DESKTOP_DEVICE, true).notHere, 'Open Design Chamber from the rail to see it.');
 });

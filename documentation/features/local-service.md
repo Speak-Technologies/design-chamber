@@ -6,13 +6,56 @@ writes the designs folder, notices when the chat agent changes a file, and answe
 versions, exports, thumbnails and agent instructions (see the other feature pages).
 
 ## How it runs
-- OpenChamber starts it when the extension loads and talks to it only from this machine
+- OpenChamber starts it when OpenChamber starts (or when the extension is approved) and keeps it
+  running for as long as OpenChamber is open, so it can keep the sidebar marks on design chats
+  current. If it stops or crashes, OpenChamber brings it back within about 15 seconds, and waits
+  longer between tries if it keeps crashing. When no Design Chamber view has been open for a while
+  it goes into quiet mode (below). This needs OpenChamber 2.8.0 or later.
+- OpenChamber talks to it only from this machine
   (`127.0.0.1`), with a secret token generated for that run. A request without the token is
   refused. The token is never written to a log, a design file or the panel's code.
 - One process holds everything: the settings, the designs list, the change feed, uploads and the
   outbox, rendering, versions and thumbnails, and the agent-instruction routes. If it cannot start
   (no port or token from OpenChamber, an unreadable settings file location) it exits with a log
   line saying why.
+
+## Quiet mode
+A view that is on screen asks the service for changes at least every 15 seconds (a hidden one
+stops asking). After **10 minutes** without any such request, counted from the service's start if
+no view ever opens, the service goes quiet:
+- the folder check that backs up the live watcher runs every **60 seconds** instead of every 3,
+  and looks at every design each time;
+- the rendered documents it was holding for the views are dropped: designs, design system
+  specimen boards and living pages. A view that opens later gets them built again.
+
+The live watcher stays on, so a change still shows at once and the sidebar marks stay current. A
+change the watcher missed is found within a minute (edits deep in `assets/` can take up to ten),
+and so is every change on a folder it cannot watch.
+The next request from a view returns the check to every 3 seconds and looks at every design once.
+
+## What staying on costs
+Measured on 2026-11-27 on the built service: Linux, Node 26.13, a copy of a real designs folder
+(14 designs, 107 MB, two linked chats), a stand-in for OpenChamber receiving the marks, one run.
+
+| Measure | No view ever opened | After rendering all 164 documents (54.7 MB) |
+|---|---|---|
+| Resident memory, first 30 seconds | 127 MB | 306 MB just after rendering |
+| Resident memory before quiet mode | 111 to 114 MB | 214 MB |
+| Resident memory in quiet mode | 111 MB | 214 MB |
+| CPU over a minute, active | 0.05 s | 0.05 s |
+| CPU over a minute, quiet | 0.01 s | 0.01 s |
+| Open file descriptors | 23 | 23 to 25 |
+
+So the price is mostly memory, about 110 MB all the time. CPU is close to nothing.
+
+Dropping the rendered documents does not shrink resident memory straight away: it stayed at
+214 MB for the 160 seconds of quiet that were measured. The memory is released for reuse, but
+Node had no reason to collect it while idle. With a collection forced in a separate run, the
+heap in use fell from 119 MB to 21 MB and resident memory from 302 MB to 207 MB.
+
+## Sidebar marks
+While it runs, the service also keeps a mark on the sidebar row of every chat that has a design.
+See [Sidebar marks](sidebar-marks.md).
 
 ## The designs folder and settings
 - Designs live in `<Documents>/Designs` unless the user picks another folder in Settings.
@@ -57,6 +100,8 @@ regard to letter case on Windows and macOS (their disks ignore case by default) 
 Linux.
 
 ## Live updates
+The timings here are for when a view is open; see Quiet mode for the rest.
+
 The service watches the designs folder (with a 3-second check as a backstop, because OneDrive and
 network folders can miss notifications) and publishes a change feed the panel and page
 long-poll: a design added or removed, its `design.json` changed, its files changed, a new
@@ -140,7 +185,9 @@ a sentence asking the user to move it by hand. If the copy fails, the half-made 
 `.trash/` and the original stays where it was. If only the move to `.trash/` fails, the page is
 still made and the original stays in the folder (the user ends up with two copies, never none).
 Sibling files the HTML refers to (images, CSS) are not copied; the page's missing-files status
-shows them.
+shows them. The copy is Design Chamber's own write, so the build strip never shows it as the agent
+writing; an agent's later change to the page still shows. The page's `.chamber/state.json` notes the
+file it came from (`importedFrom`: its old path, a sha256 of its bytes and the time).
 
 ## Edge cases
 - If the service restarts, the panel's next poll sees a new run id and reloads everything.
@@ -167,5 +214,6 @@ Two routes: `GET /designs/:slug/checks` and `POST /designs/:slug/checks/run` (an
 ## Where it lives
 `src/service/compose.ts` (wiring), `src/service/main.ts` (process entry), `src/service/paths.ts`
 (containment and folder names), `settings.ts` / `root.ts`, `store.ts`, `watch.ts` / `changes.ts`,
+`pace.ts` (quiet mode), `session-marks.ts` (sidebar marks),
 `uploads.ts`, `outbox.ts`, `loose.ts` (loose HTML files), and the routes in `src/service/routes/`. Tests: `test/service/**`
 (`test/service/integration/` runs the built service end to end).

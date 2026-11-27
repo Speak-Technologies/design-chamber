@@ -26,6 +26,30 @@ export type ViewerMenuInput = {
   railTweaks?: string | null;
   /** Saved page data: `enabled` or `disabled` shows "Clear saved page data" (before Rename), `hidden` or absent leaves it out. */
   pageData?: PageDataEntry;
+  /** On a phone: leave out what acts on the computer that runs OpenChamber (see `withoutComputerOnly`). */
+  phone?: boolean;
+};
+
+/**
+ * Entries that act on the computer that runs OpenChamber, not on the phone in the user's hand: Reveal opens a
+ * folder there, Export (a design's ZIP or HTML, a system's tokens) saves into that computer's export folder, Copy
+ * path names a path on its disk (documentation/specs/native-extras.md §2.2). The service keeps every check; this
+ * only hides them.
+ */
+const COMPUTER_ONLY: ReadonlySet<string> = new Set(['reveal', 'zip', 'html', 'path', 'export']);
+
+const isSeparator = (entry: { id: string } | { separator: true } | undefined): boolean => entry !== undefined && 'separator' in entry;
+
+/** A menu without the computer-only entries, and without the separators their removal leaves doubled or at an end. */
+export const withoutComputerOnly = <T extends { id: string } | { separator: true }>(entries: readonly T[]): T[] => {
+  const kept: T[] = [];
+  for (const entry of entries) {
+    if ('id' in entry && COMPUTER_ONLY.has(entry.id)) continue;
+    if (isSeparator(entry) && (kept.length === 0 || isSeparator(kept.at(-1)))) continue;
+    kept.push(entry);
+  }
+  while (isSeparator(kept.at(-1))) kept.pop();
+  return kept;
 };
 
 const reveal: MenuEntry = { id: 'reveal', label: 'Reveal in folder' };
@@ -45,6 +69,11 @@ const clearPageData = (state: PageDataEntry | undefined): MenuEntry[] =>
 const baseEntries = (pageData: PageDataEntry | undefined): MenuEntry[] => [addToFolder, reveal, copyPath, ...clearPageData(pageData), rename, { separator: true }, remove];
 
 export const viewerMenuEntries = (input: ViewerMenuInput): MenuEntry[] => {
+  const entries = allViewerEntries(input);
+  return input.phone ? withoutComputerOnly(entries) : entries;
+};
+
+const allViewerEntries = (input: ViewerMenuInput): MenuEntry[] => {
   // A design with no knobs gets one way to ask for some, right after the chat link in the rail and first on the page.
   const ask: MenuEntry[] = input.askForTweaks ? [askTweaks] : [];
   if (input.compact) {

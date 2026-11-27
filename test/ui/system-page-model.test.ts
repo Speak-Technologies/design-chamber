@@ -188,6 +188,8 @@ test('every living page state has a pill, none uses a dash, and the hint never o
   }
   assert.equal(railHint({ name: 'Tidepool', home: { kind: 'internal' } } as never), 'To edit values, open Design Chamber full screen: sidebar, Extension pages, Design Chamber.');
   assert.equal(railHint({ name: 'Shop', home: repoHome } as never), 'Shop lives in shop. Change the values there, or ask the agent here.');
+  assert.equal(railHint({ name: 'Tidepool', home: { kind: 'internal' } } as never, true), 'To edit values, open Design Chamber on your computer.');
+  assert.equal(railHint({ name: 'Shop', home: repoHome } as never, true), 'Shop lives in shop. Change the values there, or ask the agent here.');
 });
 
 test('the board follows the host colour scheme', () => {

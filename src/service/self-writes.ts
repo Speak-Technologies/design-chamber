@@ -85,3 +85,13 @@ export const createSelfWrites = (): SelfWrites => {
     },
   };
 };
+
+/**
+ * Record bytes the service is about to write as its own, so the watcher drops their echo. A file over
+ * `SOURCE_TEXT_MAX` is recorded without a size (as the system snapshot does): `record` would skip it
+ * otherwise, and with no size the echo test compares the file's sha256, so an agent's later bytes,
+ * even of the same size, are never taken for the echo. Size and modification time alone would not be
+ * enough: a coarse clock (FAT, HFS+) or a tool that keeps the time could hide a rewrite.
+ */
+export const recordOwnWrite = (selfWrites: Pick<SelfWrites, 'record'>, key: string, rel: string, bytes: Uint8Array): void =>
+  selfWrites.record(key, rel, sha256Of(bytes), bytes.byteLength > SOURCE_TEXT_MAX ? null : bytes.byteLength);
