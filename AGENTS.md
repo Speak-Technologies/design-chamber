@@ -60,7 +60,7 @@ together: same roster, same rules.
 
 ## Critical gotchas
 - **Sources of truth:** `docs/BRIEF.md` (owner decisions; anything not listed there is open, so ask, don't guess; edit it only on the user's instruction) and `docs/SPEC.md` (the technical spec, the authority for architecture and lanes; changes go through the architect).
-- **OpenChamber SDK `apiVersion: 1`, target OpenChamber >= 2.7.0 (SDK 2.7.0, pinned in `package.json`).** Reference docs live in `~/Documents/GitHub/openchamber/packages/sdk/` (`DOCUMENTATION.md`, `API.md`, `GUEST_SERVICES.md`, `examples/`), read-only; verify an API there before using it.
+- **OpenChamber SDK `apiVersion: 1`, target OpenChamber >= 2.7.0 (SDK 2.8.1, pinned in `package.json`; raise `engines` only when a 2.8-only manifest key ships).** Reference docs: `node_modules/@openchamber/sdk/` (`API.md`, `GUEST_SERVICES.md`), or `~/Documents/GitHub/openchamber/packages/sdk/` when that checkout exists, read-only; verify an API there before using it.
 - **Never declare `provides: ["browser"]`.** It would fight Design Canvas.
 - **`openchamber-design-canvas` (v0.3.0, MIT, same owner) is a parts bin, not a base.** Reuse Chrome discovery, wall pan/zoom math, design-system precedence, prompt rules, presets and gates; do not inherit its external-Chrome-window + Vite-dev-server architecture. Read-only. Design Chamber is not that tool: rendering is in-app.
 - **Agent-written HTML is untrusted.** It renders only in a sandboxed srcdoc/blob iframe with a CSP; never combine `allow-scripts` with `allow-same-origin`; `postMessage` source and origin are checked both ways; guests never see the bearer token or host bridge; agent HTML never goes into the host DOM.

@@ -148,7 +148,7 @@
     "guest-check": "node scripts/guest-check.mjs"
   },
   "devDependencies": {
-    "@openchamber/sdk": "2.7.0",
+    "@openchamber/sdk": "2.8.1",
     "@types/node": "^22.10.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.8.0"
