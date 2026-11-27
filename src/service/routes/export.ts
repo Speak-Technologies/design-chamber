@@ -77,12 +77,14 @@ const isFile = async (file: string): Promise<boolean> => (await stat(file).catch
 
 /**
  * Whether the system's project uses Tailwind, without reading a project file: a `tailwind.config.*` at the
- * root of the code source (a `stat`), one the last scan listed for the agent, or BUILD.json's drift kinds.
+ * root of the code source (a `stat`), one the last scan listed for the agent, a CSS file that scan read that
+ * imports `tailwindcss` (v4 has no config file), or BUILD.json's drift kinds.
  */
 export const usesTailwind = async (state: SystemState, detail: Pick<SystemDetail, 'agentDrift'>): Promise<boolean> => {
   if (detail.agentDrift?.kinds.includes('tailwind-config') === true) return true;
   const code = state.sources.code;
   if (code === null) return false;
+  if (code.tailwind === true) return true;
   if (code.forAgent?.some((file) => TAILWIND_CONFIG.test(file.path.split(/[\\/]/).at(-1) ?? '')) === true) return true;
   // The folder the scan read, and the project when that folder is a location inside one.
   for (const folder of [code.directory, code.project]) {

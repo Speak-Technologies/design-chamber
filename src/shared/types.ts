@@ -1124,6 +1124,8 @@ export type SystemState = {
     /** `forAgent`: the scan's files Design Chamber doesn't run, which the make prompt asks the agent to read (absent in older state). */
     code: {
       directory: string; lastScan: IsoDate; partial: boolean; scanned: string[]; forAgent?: { path: string; why: string }[];
+      /** T19: a CSS file the scan read imports `tailwindcss` (v4); absent when none did, and in older state. */
+      tailwind?: boolean;
       /** Phase 2.6 AD-9: the project's realpath when the code source is a location inside it. */
       project?: string;
       /** Phase 2.6 AD-9/AD-11: the existing-system location the system was made from or registered against. */

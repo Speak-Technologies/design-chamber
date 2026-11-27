@@ -314,6 +314,7 @@ export const parseSources = (value: unknown): SystemState['sources'] => {
         partial: own(code, 'partial') === true,
         scanned,
         ...(forAgent !== null ? { forAgent } : {}),
+        ...(own(code, 'tailwind') === true ? { tailwind: true } : {}),
         ...(isAbsPath(project) ? { project } : {}),
         ...(existing !== null ? { existing } : {}),
       };

@@ -13,6 +13,7 @@ import {
   extractFromCss,
   extractFromTokenJson,
   forAgentByName,
+  importsTailwind,
   isCssFile,
   isFontFolderFile,
   isLogoCandidate,
@@ -370,5 +371,38 @@ describe('resyncReview (§7.3)', () => {
     );
     assert.deepEqual(review.removed, []);
     assert.equal(review.partial, true);
+  });
+});
+
+describe('importsTailwind (T19)', () => {
+  test('the Tailwind v4 import forms count', () => {
+    for (const css of [
+      '@import "tailwindcss";',
+      "@import 'tailwindcss' prefix(tw);",
+      '\uFEFF@import "tailwindcss";',
+      '@charset "utf-8";\n@import "./base.css";\n  @IMPORT "tailwindcss/theme.css" layer(theme);',
+      '/* app */ @import url("tailwindcss");',
+      '@import "tailwindcss/utilities";',
+    ]) assert.equal(importsTailwind(css), true, css);
+  });
+
+  test('a comment, a string, another package or a mention does not', () => {
+    for (const css of [
+      '/* @import "tailwindcss"; */',
+      '/* never closed\n@import "tailwindcss";',
+      '.a::after { content: \'@import "tailwindcss"\'; }',
+      '@import "tailwindcss-animate";',
+      '@import "./tailwindcss.css";',
+      '@import "tailwindcss\';',
+      '@tailwind base;',
+      '.tailwindcss { color: red; }',
+      '',
+    ]) assert.equal(importsTailwind(css), false, css);
+  });
+
+  test('a megabyte of unclosed comment openers is read in linear time', () => {
+    const started = performance.now();
+    assert.equal(importsTailwind(`tailwindcss ${'/* '.repeat(350_000)}`), false);
+    assert.ok(performance.now() - started < 2000);
   });
 });

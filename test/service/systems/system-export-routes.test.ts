@@ -13,6 +13,7 @@ import type { SystemExportOptionsResponse, SystemExportResponse } from '../../..
 import { createServiceClient } from '../../../src/guest/service-client.ts';
 import type { BuildJson, SystemState } from '../../../src/shared/types.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
+import { runBuildScan } from '../../../src/service/systems/drift.ts';
 import { NO_TOKENS_TO_EXPORT, registerExportRoutes, TAILWIND_NOT_USED, usesTailwind } from '../../../src/service/routes/export.ts';
 import { ensureSystemStore } from '../../../src/service/systems/store.ts';
 import { createFakeContext } from '../../helpers/fake-context.ts';
@@ -226,6 +227,22 @@ test('what counts as using Tailwind: the config at the root, the project of a lo
   assert.equal(await usesTailwind(state({ forAgent: [{ path: 'src/theme.ts', why: 'Tailwind config' }] }), none), false);
   assert.equal(await usesTailwind(state(null), drift(['tailwind-config'])), true);
   assert.equal(await usesTailwind(state(null), drift(['js-theme', 'scss'])), false);
+});
+
+test('Tailwind v4 with no config file: the build scan notes the CSS import, and forgets it once it is gone', async (t) => {
+  const { ctx, project, fromCode, formats, systems } = await serve(t);
+  await project.write('src/app.css', '@import "tailwindcss";\n@theme { --color-brand: #111111; }\n');
+  // package.json is not one of the files the scan opens, so it decides nothing.
+  await project.write('package.json', { dependencies: { tailwindcss: '^4' } });
+  await fromCode(project.root);
+  assert.deepEqual(await formats(), ['dtcg', 'css']);
+  await runBuildScan(ctx, 'acme', project.root);
+  assert.equal((await systems.readState('acme')).sources.code?.tailwind, true);
+  assert.deepEqual(await formats(), ['dtcg', 'css', 'tailwind']);
+  await project.write('src/app.css', ':root { --color-brand: #111111; }\n');
+  await runBuildScan(ctx, 'acme', project.root);
+  assert.equal((await systems.readState('acme')).sources.code?.tailwind, undefined);
+  assert.deepEqual(await formats(), ['dtcg', 'css']);
 });
 
 test("BUILD.json's drift kind reaches the route", async (t) => {

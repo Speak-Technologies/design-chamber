@@ -347,3 +347,16 @@ test('re-sync review: changed, conflicts, new and gone against the code the syst
     partial: false,
   });
 });
+
+test('T19: a system made from a project whose CSS imports tailwindcss records it; one without does not', async (t) => {
+  const { tmp, call, scan } = await serve(t);
+  const codeOf = async (name: string, css: string) => {
+    const project = await useTmpRoot(t, 'dc-project-');
+    await project.write('src/app.css', css);
+    const made = await call('POST', '/systems', { name, code: { scanId: (await scan(project.root)).scanId, assets: [] } });
+    assert.equal(made.status, 200, JSON.stringify(made.json));
+    return (JSON.parse(await tmp.read(`_systems/${(made.json as CreateSystemResponse).id}/.chamber/state.json`)) as SystemState).sources.code;
+  };
+  assert.equal((await codeOf('V4', '@import "tailwindcss";\n:root { --brand: #111111; }'))?.tailwind, true);
+  assert.equal((await codeOf('Plain', ':root { --brand: #111111; }'))?.tailwind, undefined);
+});
