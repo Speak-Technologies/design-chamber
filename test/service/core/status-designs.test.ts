@@ -10,6 +10,8 @@ import type { ChecksResponse, StatusDesignsResponse } from '../../../src/shared/
 import { STATUS_RECENT_MS, STATUS_ROWS_MAX, WRITING_WINDOW_MS } from '../../../src/shared/limits.ts';
 import type { ChangeEvent, DesignSummary } from '../../../src/shared/types.ts';
 import { RESTORE_QUIET_MS } from '../../../src/guest/build-activity.ts';
+import { createFakeServices } from '../../../src/guest/fake-services.ts';
+import { createServiceClient } from '../../../src/guest/service-client.ts';
 import type { ActivityTracker, DesignIndex, SessionActivity } from '../../../src/service/context.ts';
 import { createRouter, createServiceServer, listenLoopback } from '../../../src/service/http.ts';
 import { registerStatusRoutes } from '../../../src/service/routes/status.ts';
@@ -220,11 +222,32 @@ test('a row carries the counts, render state, comments and linked flag from memo
         checks: { counts: { errors: 1, warnings: 2, notes: 0 }, render: { state: 'stale' }, canRun: true, browser: true },
         pending: false,
         openComments: 2,
-        // T0a stub (native-extras §1.2); T2 makes this 'ses_me'.
-        sessionId: null,
+        sessionId: 'ses_me',
       },
     ],
   });
+});
+
+test('each row carries its own linked chat, this one or not, and null when it has none (native-extras §1.2)', async () => {
+  const r = rig([summary('mine', { sessionId: 'ses_me' }), summary('theirs', { sessionId: 'ses_other' }), summary('solo')]);
+  const rows = (await r.status.answer({ session: 'ses_me' })).rows;
+  assert.deepEqual(Object.fromEntries(rows.map((row) => [row.slug, row.sessionId])), { mine: 'ses_me', theirs: 'ses_other', solo: null });
+  // The link moved: the next answer follows the index, nothing is remembered here.
+  r.setIndex([summary('mine', { sessionId: 'ses_new' })]);
+  assert.equal((await r.status.answer({ session: 'ses_me' })).rows[0]?.sessionId, 'ses_new');
+});
+
+test('the fake service\'s status rows carry the linked chat too, null when unlinked', async () => {
+  const client = createServiceClient(createFakeServices().host);
+  const listed = (await client.call('GET /designs')).designs;
+  const { rows } = await client.call('GET /status/designs', { query: {} });
+  assert.ok(rows.length > 0);
+  assert.deepEqual(
+    Object.fromEntries(rows.map((row) => [row.slug, row.sessionId])),
+    Object.fromEntries(rows.map((row) => [row.slug, listed.find((design) => design.slug === row.slug)?.sessionId])),
+  );
+  assert.ok(rows.some((row) => row.sessionId !== null), 'the sample content has a linked design');
+  assert.ok(rows.some((row) => row.sessionId === null), 'and an unlinked one');
 });
 
 test('Writing: a file event for a working agent names its base name; it fades after the window', async () => {
@@ -424,7 +447,7 @@ test('GET /status/designs answers rows for the project and chat in the query', a
   const answer = await s.get(`?directory=${encodeURIComponent('/home/me/shop')}&session=ses_me`);
   assert.equal(answer.status, 200);
   const body = (await answer.json()) as StatusDesignsResponse;
-  assert.deepEqual(body.rows.map((row) => [row.slug, row.here]), [['mine', true]]);
+  assert.deepEqual(body.rows.map((row) => [row.slug, row.here, row.sessionId]), [['mine', true, 'ses_me']]);
   assert.equal(body.total, 1);
 });
 

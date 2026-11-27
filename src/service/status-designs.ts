@@ -179,8 +179,7 @@ export const createStatusDesigns = (ctx: StatusContext, deps: StatusDesignsDeps)
               checks: await checksOf(design),
               pending: design.pending,
               openComments: design.openComments,
-              // T0a stub (native-extras §1.2): T2 fills it from `design.sessionId`.
-              sessionId: null,
+              sessionId: design.sessionId,
             };
           }),
         );

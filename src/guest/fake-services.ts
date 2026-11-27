@@ -1125,8 +1125,7 @@ export const createFakeService = (options: FakeServiceOptions = {}): FakeService
           checks: { counts: { errors: 0, warnings: 0, notes: 0 }, render: { state: 'none' }, canRun: false, browser: false },
           pending: pending(entry),
           openComments: entry.design.comments.filter((comment) => comment.status === 'open').length,
-          // T0a stub (native-extras §1.2): T2 fills it from the design's sessionId.
-          sessionId: null,
+          sessionId: entry.design.sessionId,
         }));
         return { rows, total: matched.length };
       }
