@@ -98,8 +98,10 @@ export const createViewReporter = (options: ViewReporterOptions): ViewReporter =
     options.send(body).catch(() => undefined);
   };
 
+  // A null slug is sent once, on change. Repeating it would let an idle surface on the list overwrite the
+  // design another surface has open; the reader's stale rule already reads a missing report as nothing open.
   const heartbeat = timers.setInterval(() => {
-    if (current !== null && debounce === null && options.isVisible()) transmit(current);
+    if (current !== null && current.slug !== null && debounce === null && options.isVisible()) transmit(current);
   }, VIEW_HEARTBEAT_MS);
 
   return {

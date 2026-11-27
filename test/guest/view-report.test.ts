@@ -99,6 +99,23 @@ test('the heartbeat repeats the last state every minute while visible, and not w
   assert.equal(sent.length, 2, 'a hidden surface stays quiet');
 });
 
+test('the heartbeat never repeats a null slug, so an idle list cannot overwrite another surface', () => {
+  const { sent, reporter, tick } = rig();
+  reporter.report({ slug: 'demo', screen: 'home' });
+  tick(VIEW_REPORT_DEBOUNCE_MS);
+  reporter.report({ slug: null });
+  tick(VIEW_REPORT_DEBOUNCE_MS);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1]?.slug, null, 'the null is sent once, on change');
+  tick(VIEW_HEARTBEAT_MS * 3);
+  assert.equal(sent.length, 2, 'and not again');
+  // Back to a design: the heartbeat resumes.
+  reporter.report({ slug: 'demo', screen: 'home' });
+  tick(VIEW_REPORT_DEBOUNCE_MS);
+  tick(VIEW_HEARTBEAT_MS);
+  assert.equal(sent.length, 4);
+});
+
 test('leaving sends slug null at once and drops a report still waiting', () => {
   const { sent, reporter, tick } = rig();
   reporter.report({ slug: 'demo', screen: 'home' });
