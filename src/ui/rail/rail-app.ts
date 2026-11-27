@@ -8,6 +8,7 @@ import { toast, type ActionContext } from '../components/actions.ts';
 import { errorText, h } from '../components/dom.ts';
 import { openSheet } from '../components/kit.ts';
 import { keepPlace } from '../components/place-memory.ts';
+import { reportNothingOpen, reportReturn, startViewReport } from '../components/view-report.ts';
 import { mountSettings, type SettingsHandle } from '../components/settings-view.ts';
 import { feed, flows } from '../guest.ts';
 import { mountDesignView, type DesignViewHandle } from '../wall/design-view.ts';
@@ -19,6 +20,8 @@ import { mountListView } from './list-view.ts';
 export const mountRail = (root: HTMLElement): void => {
   const app = h('div', { class: 'dc-app', 'data-surface': 'panel' });
   root.replaceChildren(app);
+  // Always on: the service learns which design is open, so the user's agent can answer "this one" (spec §2.4).
+  startViewReport('panel');
 
   let viewer: { slug: string; handle: DesignViewHandle } | null = null;
   /** The design systems list, while it is the view on screen. */
@@ -27,6 +30,12 @@ export const mountRail = (root: HTMLElement): void => {
   let systemPage: { id: string; handle: SystemPageHandle; /** Opened straight from the library (a chip, a tile): Back returns there, not to the systems list. */ fromLibrary: boolean } | null = null;
   /** How a design system build is going, opened by its chip in the chat. */
   let buildView: { ticket: string; handle: BuildChipViewHandle } | null = null;
+
+  /** What the service is told is on screen: the open design, unless a system page, the systems list or a build covers it. */
+  const syncView = (): void => {
+    if (!viewer || systemPage || systemsView || buildView) reportNothingOpen();
+    else reportReturn(viewer.slug);
+  };
 
   const closeViewer = (): void => {
     const slug = viewer?.slug;
@@ -109,6 +118,7 @@ export const mountRail = (root: HTMLElement): void => {
     buildView?.handle.dispose();
     buildView = null;
     list.el.hidden = false;
+    syncView();
   };
   const showBuild = (ticket: string): void => {
     systemPage?.handle.dispose();
@@ -121,6 +131,7 @@ export const mountRail = (root: HTMLElement): void => {
     list.el.hidden = true;
     app.append(handle.el);
     handle.focus();
+    syncView();
   };
   /** A build chip opened from the chat. An open design with unsaved tweaks asks first, like going back. */
   const openBuild = (ticket: string): void => {
@@ -140,6 +151,7 @@ export const mountRail = (root: HTMLElement): void => {
     systemsView?.dispose();
     systemsView = null;
     list.el.hidden = false;
+    syncView();
     if (focus === 'button') list.focusSystems();
   };
   const showSystems = (): void => {
@@ -150,6 +162,7 @@ export const mountRail = (root: HTMLElement): void => {
     list.el.hidden = true;
     app.append(systemsView.el);
     systemsView.focus();
+    syncView();
   };
 
   /** A used-by link in the systems list: back to the library, filtered to that system. */

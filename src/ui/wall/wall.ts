@@ -27,7 +27,7 @@ import type { DesignDetailResponse } from '../../shared/api.ts';
 import type { AnchorState } from '../../shared/types.ts';
 import type { BridgeMode, FrameToPageMessage, TokenVar } from '../../shared/bridge-protocol.ts';
 import { createBoardSet } from './board-set.ts';
-import { createCameraController, type CameraHooks } from './camera-controller.ts';
+import { createCameraController, type CameraController, type CameraHooks } from './camera-controller.ts';
 import { createFrameMessageHandler } from './frame-messages.ts';
 import { setSlotTokens, slotTokens } from '../model/slot-seed.ts';
 import { createHitController } from './hit-controller.ts';
@@ -37,11 +37,13 @@ import { createPinLayer } from './pin-layer.ts';
 import { createPopoverLayer } from './popover-layer.ts';
 import { createReorderController } from './reorder-controller.ts';
 import { createListeners } from '../model/listeners.ts';
+import { viewStateOf, type ViewFocus } from '../model/view-report-model.ts';
+import { reportWall } from '../components/view-report.ts';
 import { panBy } from '../../guest/camera.ts';
 import { revealPan } from '../model/screens-model.ts';
 import { feed, store } from '../guest.ts';
 import { createWallContext, late } from './wall-context.ts';
-import type { Rect, Board, BoardLookup, ScreenMenuPress, ScreenMove, WallOptions, WallPick, WallSelectionEvent } from './wall-types.ts';
+import type { Rect, Board, BoardLookup, ScreenMenuPress, ScreenMove, WallOptions, WallPick, WallSelection, WallSelectionEvent } from './wall-types.ts';
 import type { PickCheck } from '../model/edit-text-model.ts';
 
 export type { ScreenMenuPress, ScreenMove, WallOptions, WallPick, WallSelection, WallSelectionEvent } from './wall-types.ts';
@@ -149,8 +151,45 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
   const input = late<InputController>('the input controller');
   const frameMessage = late<(board: Board, message: FrameToPageMessage) => void>('the frame message handler');
 
-  const camera = createCameraController(ctx, hooks);
+  // What the user has in view, told to the service so the agent can answer "this one" (components/view-report.ts).
+  // The picture is decided by model/view-report-model.ts; the wall only says when it may have changed.
+  let focused: ViewFocus | null = null;
+  let selected: WallSelection | null = null;
+  const reportView = (): void => {
+    if (ctx.disposed) return;
+    const { design } = ctx.detail;
+    reportWall(
+      viewStateOf({
+        slug: options.slug,
+        isPage: pageMode,
+        mode: ctx.mode,
+        pageView: ctx.pageView,
+        screenIds: design.screens.map((screen) => screen.id),
+        viewportIds: design.viewports.map((viewport) => viewport.id),
+        focus: focused,
+        selection: selected?.element ?? null,
+      }),
+    );
+  };
+
+  const cameraBase = createCameraController(ctx, hooks);
+  // A board centred by its label (or by a comment's pin) is the screen the user is looking at.
+  const camera: CameraController = {
+    ...cameraBase,
+    focusBoard: (board) => {
+      cameraBase.focusBoard(board);
+      focused = { screen: board.art.screen?.id ?? null, viewport: board.art.viewport.id };
+      reportView();
+    },
+  };
   const selection = createListeners<[WallSelectionEvent]>();
+  ctx.scope.add(
+    selection.add((event) => {
+      if (event.type === 'selected') selected = event.selection;
+      else if (event.type === 'cleared' || selected?.key === event.key) selected = null;
+      reportView();
+    }),
+  );
   const popovers = createPopoverLayer(ctx, camera, { emitSelection: selection.emit });
   // The source behind an Edit text check: one fetch per selection burst, dropped when the file changes (guest/source-cache.ts).
   const sources = createSourceCache({ load: (slug, screen) => store.loadSource(slug, screen) });
@@ -199,6 +238,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
 
   boards.rebuild();
   camera.apply();
+  reportView();
 
   let previewFrame = 0;
 
@@ -216,6 +256,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
         boards.rebuild();
         if (ctx.surfaceSize.w > 0) camera.quietFit();
         camera.apply();
+        reportView();
       }
       pins.paintAll();
       for (const board of boards.values()) boards.paintLabel(board);
@@ -227,6 +268,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
       surface.dataset.mode = ctx.mode;
       popovers.close();
       hit.clearHover();
+      reportView();
       for (const board of boards.values()) {
         if (ctx.mode === 'edit' && board.screenId !== (board.art.screen?.id ?? null)) boards.reset(board);
         board.main.post({ type: 'set-mode', mode: ctx.frameMode() });
@@ -262,6 +304,7 @@ export const createWall = (options: WallOptions, initialDetail: DesignDetailResp
       popovers.close();
       hit.clearHover();
       if (ctx.surfaceSize.w > 0) camera.layoutPage();
+      reportView();
     },
     externalRefs: () => [...new Set([...boards.values()].flatMap((board) => board.main.meta()?.external ?? []))],
     detachedIds: () => {

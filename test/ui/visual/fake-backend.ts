@@ -2,7 +2,7 @@
 // `ApiRoutes`, so the real UI and guest core can be screenshot-tested without OpenChamber.
 // `fake-transport.ts` puts it behind the host's `serviceRequest`. Sample designs, comments, versions and thumbnails; every mutation emits a change event.
 
-import type { ApiRoutes, EditRequest, OpenRequest, RouteBody, RouteKey, RouteResponse, SettingsResponse, StatusDesignRow } from '../../../src/shared/api.ts';
+import type { ApiRoutes, EditRequest, OpenRequest, RouteBody, RouteKey, RouteResponse, SettingsResponse, StatusDesignRow, ViewBody } from '../../../src/shared/api.ts';
 import { SCREENS_MAX, STATUS_ROWS_MAX } from '../../../src/shared/limits.ts';
 import { mentionUrlOf } from '../../../src/shared/agent/mention.ts';
 import { copyTitle, describeMove, directionGroups, freeCopyId, SCREEN_LIST_STALE_MESSAGE } from '../../../src/shared/screen-ops.ts';
@@ -331,6 +331,8 @@ export type FakeBackend = {
   /** Test hook (G1): which project folder a design was made for (`null`: none), and which project folders are gone from disk. */
   setProject: (slug: string, directory: string | null) => void;
   setMissingProjects: (directories: string[]) => void;
+  /** Test hook (view report): every `PUT /view` body the rail or the page sent, oldest first. */
+  views: () => ViewBody[];
   /** Leaves an open request for a system, as the service does for a chat block's preview button. */
   requestSystemOpen: (system: string, target: 'page' | 'board' | 'preview') => void;
 };
@@ -509,6 +511,7 @@ export const createFakeBackend = (): FakeBackend => {
   type Handlers = { [K in RouteKey]?: (req: Req<K>) => RouteResponse<K> | Promise<RouteResponse<K>> };
 
   let outbox: Outbox | null = null;
+  const views: ViewBody[] = [];
   let openRequest: OpenRequest | null = null;
   const handlers: Handlers = {
     'GET /health': () => ({ ok: true, version: '0.1.0', epoch: 'dev' }),
@@ -771,6 +774,10 @@ export const createFakeBackend = (): FakeBackend => {
       ],
     }),
     // The page hands a message for a chat that is not selected to the rail through the outbox.
+    'PUT /view': ({ body }) => {
+      views.push(structuredClone(body));
+      return { ok: true };
+    },
     'GET /outbox': () => ({ outbox }),
     'PUT /outbox': ({ body }) => {
       outbox = { ...body, created: new Date().toISOString() };
@@ -944,6 +951,7 @@ export const createFakeBackend = (): FakeBackend => {
       restoreFailure = message;
     },
     touchTokens: (slug) => tokens.touch(slug),
+    views: () => views,
     pageState: pageState.hooks,
     folders: folderBook.hooks,
     systems: systemBook.hooks,

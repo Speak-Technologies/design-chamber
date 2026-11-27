@@ -1,10 +1,12 @@
 // Keeps the open design across a reload of the panel or page frame (spec §3.8). The app tells it
 // when a design opens (`remember`) and when the user goes back to the list (`clear`); on start it
 // reads the stored place once, waits for the design list, and reopens the design when it is still
-// there. The decision is `decideRestore` (model/place-model.ts); this file is only the wiring.
+// there. The decision is `decideRestore` (model/place-model.ts); this file is only the wiring. The same
+// two moments tell the service what is open (components/view-report.ts): a design, or the list.
 
 import { host, store } from '../guest.ts';
 import { decideRestore, placeKey, storedPlace, type PlaceSurface } from '../model/place-model.ts';
+import { reportNothingOpen, reportOpen } from './view-report.ts';
 
 export type PlaceMemory = {
   /** A design is now open: keep it, and stop waiting to restore an older one. */
@@ -54,10 +56,12 @@ export const keepPlace = ({ surface, isOpen, open }: PlaceMemoryOptions): PlaceM
     remember: (slug) => {
       settle();
       void host.storage.set(key, storedPlace(slug));
+      reportOpen(slug);
     },
     clear: () => {
       settle();
       void host.storage.set(key, null);
+      reportNothingOpen();
     },
   };
 };
