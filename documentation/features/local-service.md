@@ -6,7 +6,13 @@ writes the designs folder, notices when the chat agent changes a file, and answe
 versions, exports, thumbnails and agent instructions (see the other feature pages).
 
 ## How it runs
-- OpenChamber starts it when the extension loads and talks to it only from this machine
+- OpenChamber starts it when OpenChamber starts (or when the extension is approved) and keeps it
+  running for as long as OpenChamber is open, so it can keep the sidebar marks on design chats
+  current. If it stops or crashes, OpenChamber brings it back within about 15 seconds, and waits
+  longer between tries if it keeps crashing. A quiet mode for when no Design Chamber view is open
+  is coming next; until then it behaves the same whether a view is open or not. This needs
+  OpenChamber 2.8.0 or later.
+- OpenChamber talks to it only from this machine
   (`127.0.0.1`), with a secret token generated for that run. A request without the token is
   refused. The token is never written to a log, a design file or the panel's code.
 - One process holds everything: the settings, the designs list, the change feed, uploads and the

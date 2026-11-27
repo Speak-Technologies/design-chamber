@@ -21,7 +21,13 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const at = (...parts) => path.join(root, ...parts);
 const dist = at('dist');
 
-const browser = { bundle: true, format: 'iife', platform: 'browser', target: ['es2020'], sourcemap: false, logLevel: 'warning', legalComments: 'none' };
+// `__DC_PANEL_MOBILE__` (src/guest/globals.d.ts): whether the shipped manifest opts the panel into the
+// phone (`contributes.panel.mobile`), so the phone copy says what was shipped (native-extras §2.2).
+const manifest = JSON.parse(await readFile(at('package.json'), 'utf8'));
+const panelMobile = manifest?.openchamber?.contributes?.panel?.mobile === true;
+const uiDefines = { __DC_PANEL_MOBILE__: JSON.stringify(panelMobile) };
+
+const browser = { bundle: true, format: 'iife', platform: 'browser', target: ['es2020'], sourcemap: false, logLevel: 'warning', legalComments: 'none', define: uiDefines };
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(at('dist', 'panel'), { recursive: true });
@@ -64,7 +70,7 @@ const storageShim = storageShimFile.text;
 if (Buffer.byteLength(storageShim) < 512) throw new Error(`build: the storage shim bundle is only ${Buffer.byteLength(storageShim)} bytes — is src/guest/bridge/storage-shim-entry.ts real?`);
 
 // (2) Panel + page guest.
-await build({ ...browser, entryPoints: [at('src', 'ui', 'main.ts')], outfile: at('dist', 'panel', 'main.js'), define: { __DC_BRIDGE__: JSON.stringify(bridge) } });
+await build({ ...browser, entryPoints: [at('src', 'ui', 'main.ts')], outfile: at('dist', 'panel', 'main.js'), define: { ...uiDefines, __DC_BRIDGE__: JSON.stringify(bridge) } });
 if ((await readFile(at('dist', 'panel', 'main.js'), 'utf8')).includes('__DC_BRIDGE__')) {
   throw new Error('build: __DC_BRIDGE__ was not replaced in the panel bundle.');
 }
@@ -143,13 +149,20 @@ const systemQuestions = await buildBuilderSkill({ packageRoot: root, distDir: di
 
 // (10c) Chat block frame, with the interview baked in as __DC_SYSTEM_QUESTIONS__ (the __DC_BRIDGE__
 // pattern): the block's fixed wording and the skill's interview are the same file at the same build.
-await build({ ...browser, entryPoints: [at('src', 'ui', 'blocks', 'main.ts')], outfile: at('dist', 'blocks', 'main.js'), define: { __DC_SYSTEM_QUESTIONS__: JSON.stringify(systemQuestions) } });
+await build({ ...browser, entryPoints: [at('src', 'ui', 'blocks', 'main.ts')], outfile: at('dist', 'blocks', 'main.js'), define: { ...uiDefines, __DC_SYSTEM_QUESTIONS__: JSON.stringify(systemQuestions) } });
 // esbuild leaves a "// <define:NAME>" comment above a replaced value; only a use left in code counts.
 if ((await readFile(at('dist', 'blocks', 'main.js'), 'utf8')).replace(/^\s*\/\/ <define:__DC_SYSTEM_QUESTIONS__>\s*$/gm, '').includes('__DC_SYSTEM_QUESTIONS__')) {
   throw new Error('build: __DC_SYSTEM_QUESTIONS__ was not replaced in the blocks bundle.');
 }
 await copyFile(at('src', 'ui', 'blocks', 'index.html'), at('dist', 'blocks', 'index.html'));
 await copyFile(at('src', 'ui', 'blocks', 'blocks.css'), at('dist', 'blocks', 'blocks.css'));
+
+// Every frame bundle that can read __DC_PANEL_MOBILE__ must have it replaced.
+for (const file of ['panel/main.js', 'background/main.js', 'status/main.js', 'blocks/main.js']) {
+  if ((await readFile(at('dist', file), 'utf8')).replace(/^\s*\/\/ <define:__DC_PANEL_MOBILE__>\s*$/gm, '').includes('__DC_PANEL_MOBILE__')) {
+    throw new Error(`build: __DC_PANEL_MOBILE__ was not replaced in dist/${file}.`);
+  }
+}
 
 const outputs = ['panel/index.html', 'panel/styles.css', 'panel/main.js', 'background/index.html', 'background/main.js', 'service/main.js', 'cli/dc.mjs', 'plugin/index.js', 'status/main.js', 'blocks/main.js', 'skills/design-chamber/SKILL.md', 'skills/design-system-builder/SKILL.md'];
 const sizes = await Promise.all(outputs.map(async (file) => `${file} ${((await stat(at('dist', file))).size / 1024).toFixed(1)} kB`));
