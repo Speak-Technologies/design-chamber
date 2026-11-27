@@ -217,8 +217,15 @@ export const createSettingsStore = async (options: SettingsStoreOptions): Promis
 
       // Phase 2.5 §2.9: the default system and the pins arrive validated as a whole; normalizeSettings
       // keeps the valid parts. Deleting a system clears what names it through this same door (§5.1).
-      if (patch.systemDefault !== undefined) next.systemDefault = patch.systemDefault;
-      if (patch.systemPins !== undefined) next.systemPins = patch.systemPins;
+      // `null` resets to the default (ask, no pins), the same as the other fields.
+      if (patch.systemDefault !== undefined) {
+        if (patch.systemDefault === null) delete next.systemDefault;
+        else next.systemDefault = patch.systemDefault;
+      }
+      if (patch.systemPins !== undefined) {
+        if (patch.systemPins === null) delete next.systemPins;
+        else next.systemPins = patch.systemPins;
+      }
 
       try {
         await writeSettingsFile(file, next);

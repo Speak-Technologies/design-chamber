@@ -43,7 +43,7 @@ export type FakeDesignSystem = {
   };
   /** The settings answer's `systems` part, and what a PUT changes. */
   settings: () => NonNullable<SettingsResponse['systems']>;
-  putSettings: (body: { systemDefault?: SystemDefaultSetting; systemPins?: SystemPinSetting[] }) => void;
+  putSettings: (body: { systemDefault?: SystemDefaultSetting | null; systemPins?: SystemPinSetting[] | null }) => void;
   summary: (slug: string) => DesignSystemSummary | null;
   resetTokens: (slug: string, base: string, names: string[]) => EditResponse;
   /** The design's files were put back to a version (Undo): its system record goes back too. */
@@ -201,14 +201,14 @@ export const createFakeDesignSystem = (deps: {
   const choiceOf = (setting: SystemDefaultSetting): SystemChoiceView => {
     if (setting.choice !== 'system') return { ...setting, state: 'ok', sentence: null };
     const system = row(setting.id);
-    if (system === undefined) return { ...setting, state: 'deleted', sentence: `${setting.name} was deleted. New designs ask you in chat.` };
+    if (system === undefined) return { ...setting, state: 'missing', sentence: 'Your default design system isn’t in this Designs folder.' };
     if (system.status === 'draft') return { ...setting, name: system.name, state: 'draft', sentence: `${system.name} is a draft. New designs ask you in chat until it is Ready.` };
     return { ...setting, name: system.name, state: 'ok', sentence: null };
   };
   const pinOf = (pin: SystemPinSetting): SystemPinView => {
     if (pin.choice !== 'system' || pin.id === undefined) return { ...pin, state: 'ok', sentence: null };
     const system = row(pin.id);
-    if (system === undefined) return { ...pin, state: 'deleted', sentence: `${pin.name ?? pin.id} was deleted. This project uses the default.` };
+    if (system === undefined) return { ...pin, state: 'missing', sentence: `${pin.name ?? pin.id} isn’t in this Designs folder. This project uses the default.` };
     if (system.status === 'draft') return { ...pin, name: system.name, state: 'draft', sentence: `${system.name} is a draft. This project uses the default until it is Ready.` };
     return { ...pin, name: system.name, state: 'ok', sentence: null };
   };
@@ -265,10 +265,11 @@ export const createFakeDesignSystem = (deps: {
     settings: () => ({ default: choiceOf(settingsDefault), pins: settingsPins.map(pinOf), notices }),
     putSettings: (body) => {
       if (body.systemDefault !== undefined) {
-        settingsDefault = body.systemDefault;
-        deps.setRows(deps.rows().map((entry) => ({ ...entry, isDefault: body.systemDefault?.choice === 'system' && body.systemDefault.id === entry.id })));
+        settingsDefault = body.systemDefault ?? { choice: 'ask' };
+        const chosen = settingsDefault;
+        deps.setRows(deps.rows().map((entry) => ({ ...entry, isDefault: chosen.choice === 'system' && chosen.id === entry.id })));
       }
-      if (body.systemPins !== undefined) settingsPins = body.systemPins;
+      if (body.systemPins !== undefined) settingsPins = body.systemPins ?? [];
       notices = [];
     },
     summary: (slug) => {
