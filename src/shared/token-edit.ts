@@ -198,7 +198,7 @@ const isLayer = (text: string): boolean => {
 const TIME = new RegExp(`^(${NUMBER})(ms|s)$`, 'i');
 const EASING_KEYWORDS: ReadonlySet<string> = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out']);
 const CUBIC_BEZIER = new RegExp(`^cubic-bezier\\(\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*\\)$`, 'i');
-const STEPS = /^steps\(\s*(\d{1,4})\s*(?:,\s*(?:start|end)\s*)?\)$/i;
+const STEPS = /^steps\(\s*(\d{1,4})\s*(?:,\s*(start|end)\s*)?\)$/i;
 
 /** A duration from 0 to `SYSTEM_MOTION_DURATION_MAX_MS`, in `ms` or `s`. */
 const isTime = (text: string): boolean => {
@@ -230,6 +230,39 @@ const isMotionValue = (text: string): boolean => isTime(text) || isEasing(text);
 
 /** Whether a motion value is a time or an easing (the checklist counts one of each); null for anything else. */
 export const motionValueKind = (text: string): 'time' | 'easing' | null => (isTime(text) ? 'time' : isEasing(text) ? 'easing' : null);
+
+/** The curves the easing keywords stand for (CSS Easing Functions), as `cubic-bezier` control points. */
+const EASING_CURVES: Readonly<Record<string, readonly [number, number, number, number]>> = Object.freeze({
+  linear: [0, 0, 1, 1],
+  ease: [0.25, 0.1, 0.25, 1],
+  'ease-in': [0.42, 0, 1, 1],
+  'ease-out': [0, 0, 0.58, 1],
+  'ease-in-out': [0.42, 0, 0.58, 1],
+});
+
+/** A motion value read into numbers, for a specimen to draw. */
+export type MotionValue =
+  | { kind: 'time'; ms: number }
+  | { kind: 'bezier'; points: readonly [number, number, number, number] }
+  | { kind: 'steps'; count: number; at: 'start' | 'end' };
+
+/** The numbers of a motion value; null for anything the rules above refuse (a formula included). */
+export const parseMotionValue = (text: string): MotionValue | null => {
+  const kind = motionValueKind(text);
+  if (kind === null) return null;
+  if (kind === 'time') {
+    const match = TIME.exec(text);
+    // `+ 0`: "-0ms" reads as 0.
+    return match === null ? null : { kind: 'time', ms: Number(match[1]) * ((match[2] ?? '').toLowerCase() === 's' ? 1000 : 1) + 0 };
+  }
+  const keyword = text.toLowerCase();
+  const curve = Object.hasOwn(EASING_CURVES, keyword) ? EASING_CURVES[keyword] : undefined;
+  if (curve !== undefined) return { kind: 'bezier', points: curve };
+  const bezier = CUBIC_BEZIER.exec(text);
+  if (bezier !== null) return { kind: 'bezier', points: [Number(bezier[1]), Number(bezier[2]), Number(bezier[3]), Number(bezier[4])] };
+  const steps = STEPS.exec(text);
+  return steps === null ? null : { kind: 'steps', count: Number(steps[1]), at: (steps[2] ?? '').toLowerCase() === 'start' ? 'start' : 'end' };
+};
 
 /** Names that are motion tokens (`--duration-*`, `--ease-*`, `--motion-*`). */
 const MOTION_NAME = /^--(?:duration|ease|motion)-/i;

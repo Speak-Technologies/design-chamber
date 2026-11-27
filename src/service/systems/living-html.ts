@@ -18,7 +18,7 @@ import { AREA_OF_SECTION, SYSTEM_AREAS, SYSTEM_SECTIONS } from '../../shared/sys
 import type { SystemArea, SystemDetail, SystemSection } from '../../shared/types.ts';
 import { LIVING_VIEWPORT, livingCssProblems } from './living-safe.ts';
 import { markdownCss } from './markdown-html.ts';
-import { AREA_TITLES, escapeHtml, renderSpecimenSection, specimenSystemCss, type ExampleEntry } from './specimen-html.ts';
+import { AREA_TITLES, CURRENT_COLOR_CSS, escapeHtml, GROUND_TEXT, renderSpecimenSection, specimenSystemCss, type ExampleEntry } from './specimen-html.ts';
 
 /** The virtual entry the living page is bundled from (never a file on disk). */
 export const LIVING_ENTRY_FILE = '__living.html';
@@ -61,6 +61,8 @@ export type LivingPageInput = {
   fontsLeftOut?: readonly { file: string; reason: 'too-large' | 'budget' | 'unsafe' }[];
   /** Font and logo files (`assets/…`) that can't be used (refused by `checkAsset`, a type the page can't carry, over budget). */
   unusable?: ReadonlySet<string>;
+  /** Icon files tinted to the ground's text colour (`paintsOnlyCurrentColor`). */
+  tinted?: ReadonlySet<string>;
   /** Each example's pictures, by example key (`exampleKeyOf`: a component's id, `pattern:<id>`, `brand:<id>`). */
   examples?: Readonly<Record<string, readonly LivingExampleShot[]>>;
   /** A proposal preview (§5.14): no mark, and a band naming the proposal and the home it isn't from yet. */
@@ -173,8 +175,9 @@ body { margin: 0; background: #f7f7f8; color: #1d1d1f; font-family: system-ui, -
 .dc-note { margin-top: 4px; font-size: 12px; color: #62626a; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dc-problem { margin-top: 4px; font-size: 12px; }
 .dc-grounds { display: flex; gap: 8px; margin-bottom: 8px; }
-.dc-ground { flex: 1; padding: 8px; border-radius: 6px; background: #ffffff; color: #1d1d1f; }
-.dc-ground.dc-dark { background: #18181b; color: #ececef; }
+.dc-ground { flex: 1; padding: 8px; border-radius: 6px; background: #ffffff; color: ${GROUND_TEXT.light}; }
+.dc-ground.dc-dark { background: #18181b; color: ${GROUND_TEXT.dark}; }
+${CURRENT_COLOR_CSS}
 .dc-swatch { height: 48px; border-radius: 4px; border: 1px solid rgb(127 127 127 / 0.3); }
 .dc-hatched { background: repeating-linear-gradient(45deg, rgb(127 127 127 / 0.45) 0 2px, transparent 2px 8px); }
 .dc-hatched-label { font-size: 11px; }
@@ -187,6 +190,11 @@ body { margin: 0; background: #f7f7f8; color: #1d1d1f; font-family: system-ui, -
 .dc-stack { position: relative; height: 120px; }
 .dc-layer { position: absolute; width: 140px; height: 56px; padding: 6px; border-radius: 6px; font-size: 11px; background: #ffffff; border: 1px solid #d8d8dc; overflow: hidden; }
 .dc-list { margin: 0; padding-left: 18px; }
+/* An icon card's two grounds stack, so every size fits the card's width (they wrap inside a ground). */
+.dc-icons .dc-grounds { flex-direction: column; }
+.dc-icons .dc-ground { flex: 0 0 auto; min-width: 0; }
+.dc-curve { display: block; width: 96px; max-width: 100%; height: auto; margin: 0 auto; }
+.dc-motion-track { padding: 4px 0; }
 .dc-logo { max-width: 100%; max-height: 96px; display: block; margin: 0 auto; }
 .dc-text p, .dc-body p { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* A readable measure: guidance, overview and note text (paragraphs, markdown lists and quotes) stops at about 90 characters, whatever the layout's width. */
@@ -402,7 +410,7 @@ export const buildLivingPage = (detail: SystemDetail, input: LivingPageInput): L
   // The body, with the board's entry marks, then the marks turned into ranges.
   const areas: string[] = [];
   for (const { area, sections } of AREA_SECTIONS) {
-    const rendered = sections.map((section) => renderSpecimenSection(shown, section, { unusable, styleClass, markdown: 'living', example: exampleFigures(input.examples ?? {}) })).join('\n');
+    const rendered = sections.map((section) => renderSpecimenSection(shown, section, { unusable, tinted: input.tinted ?? new Set<string>(), still: true, styleClass, markdown: 'living', example: exampleFigures(input.examples ?? {}) })).join('\n');
     areas.push(`<div class="lp-area" id="lp-area-${area}" role="group" aria-label="${escapeHtml(AREA_TITLES[area])}"><p class="lp-area-title" aria-hidden="true">${escapeHtml(AREA_TITLES[area])}</p>\n${rendered}\n</div>`);
   }
   const { text: body, marks } = stripEntryMarks(redact(areas.join('\n')));

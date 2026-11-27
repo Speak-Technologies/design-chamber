@@ -17,12 +17,14 @@
 // - a live example (a component's, and a pattern or brand entry's) is not drawn here: the caller passes
 //   `example` (the board puts it in an inert template, the living page a PNG), because that part
 //   depends on the board script;
-// - a colour pair's sample takes its colours only as `var(--name)` of two validated token names.
+// - a colour pair's sample takes its colours only as `var(--name)` of two validated token names;
+// - an easing curve is our own SVG, built from the numbers of a validated value and nothing else
+//   (inline on the board, a data: picture on the living page).
 
-import { SYSTEM_ENTRY_ID_PATTERN, SYSTEM_TOKEN_NAME_PATTERN } from '../../shared/limits.ts';
+import { SYSTEM_ENTRY_ID_PATTERN, SYSTEM_MOTION_STEPS_MAX, SYSTEM_TOKEN_NAME_PATTERN } from '../../shared/limits.ts';
 import { darkVarOf, entryKeyOf, isBoardEntryKey, typeVarOf, type BoardEntryKind } from '../../shared/system-board.ts';
 import { AREA_OF_SECTION, effectiveLayout } from '../../shared/system-json.ts';
-import { validateTokenValue, type TypeField } from '../../shared/token-edit.ts';
+import { parseMotionValue, validateTokenValue, type MotionValue, type TypeField } from '../../shared/token-edit.ts';
 import type {
   BoardLayout,
   ColourGroup,
@@ -65,6 +67,10 @@ export const exampleFileOf = (kind: ExampleKind, id: string): string => `${kind 
 export type SpecimenOptions = {
   /** Font and logo files (`assets/…`) the service's `checkAsset` refused. */
   unusable?: ReadonlySet<string>;
+  /** Icon files whose only paint is `currentColor` (`paintsOnlyCurrentColor`), tinted to the ground's text colour. */
+  tinted?: ReadonlySet<string>;
+  /** A page with no `<svg>` element and nothing to hover (the living page): curves as pictures, no motion demo. */
+  still?: boolean;
   /** The example part of a card, called only for an entry that names an example. Absent → no example part. */
   example?: (entry: ExampleEntry) => string;
   /**
@@ -206,25 +212,28 @@ const tokenNote = (token: SystemToken): string =>
 /** One token's identity lines: name, values as text, note, problem. */
 const tokenText = (token: SystemToken): string => tokenIdentity(token) + tokenNote(token);
 
+/** Draws one side's sample from the token's name (its value is in CSS) and, when it needs the numbers, its text. */
+type Draw = (name: string, text: string) => string;
+
 /** A visual for one side (light or dark) of a token, or the hatched "can't read" box. */
-const sideVisual = (token: SystemToken, side: 'light' | 'dark', draw: (name: string) => string): string => {
+const sideVisual = (token: SystemToken, side: 'light' | 'dark', draw: Draw): string => {
   const value = side === 'light' ? token.light : token.dark;
   if (value === null) return `<div class="dc-muted dc-hatched-label">${side === 'light' ? 'No light value' : 'No dark value'}</div>`;
   if (cssValueOf(token.section, null, value.text) === null || !isTokenName(token.name)) return HATCHED(CANT_READ);
-  return draw(token.name);
+  return draw(token.name, value.text);
 };
 
-const grounds = (token: SystemToken, draw: (name: string) => string): string => {
+const grounds = (token: SystemToken, draw: Draw): string => {
   const light = `<div class="dc-ground dc-light">${sideVisual(token, 'light', draw)}</div>`;
   const dark = token.dark !== null ? `<div class="dc-ground dc-dark">${sideVisual(token, 'dark', draw)}</div>` : '';
   return `<div class="dc-grounds">${light}${dark}</div>`;
 };
 
-const tokenCard = (token: SystemToken, draw: (name: string) => string): string =>
+const tokenCard = (token: SystemToken, draw: Draw): string =>
   `<div class="dc-card"${entryAttr('token', token.name)}>${grounds(token, draw)}${tokenText(token)}</div>`;
 
 /** A table run of tokens: the grounds in the sample cell, the name and values in the token cell, note and problem in the note cell. */
-const tokenTable = (tokens: readonly SystemToken[], draw: (name: string) => string, label: string): string =>
+const tokenTable = (tokens: readonly SystemToken[], draw: Draw, label: string): string =>
   tableWrap(
     label,
     tableHeader(['Sample', 'Token', 'Note']) +
@@ -246,13 +255,13 @@ const tokenTable = (tokens: readonly SystemToken[], draw: (name: string) => stri
  * One run of token cards. `card` keeps today's grid byte for byte; `compact` denser; `table` rows.
  * `full` is not a token layout (the parser refuses it); it falls back to the card grid.
  */
-const tokenRun = (run: LayoutRun<SystemToken>, draw: (name: string) => string, label: string): string => {
+const tokenRun = (run: LayoutRun<SystemToken>, draw: Draw, label: string): string => {
   if (run.layout === 'table') return tokenTable(run.items, draw, label);
   const cards = run.items.map((token) => tokenCard(token, draw)).join('');
   return `<div class="dc-grid${run.layout === 'compact' ? ' dc-run-compact' : ''}">${cards}</div>`;
 };
 
-const tokenRuns = (detail: SystemDetail, tokens: readonly SystemToken[], section: SystemSection, draw: (name: string) => string, label: string): string =>
+const tokenRuns = (detail: SystemDetail, tokens: readonly SystemToken[], section: SystemSection, draw: Draw, label: string): string =>
   runsOf(tokens, () => effectiveLayout(detail, section, null))
     .map((run) => tokenRun(run, draw, label))
     .join('');
@@ -425,6 +434,90 @@ const typographyParts = (detail: SystemDetail, unusable: ReadonlySet<string>, st
 const visualParts = (detail: SystemDetail, which: 'spacing' | 'radius' | 'shadows', title: string, empty: string, draw: (name: string) => string): SectionParts => {
   const tokens = tokensOf(detail, which);
   return { title, body: tokens.length > 0 ? tokenRuns(detail, tokens, which, draw, title) : '', empty };
+};
+
+// ---- motion (system-builder-depth §4.6) ----
+
+/** A control point's height is drawn within these (an overshoot past them is cut off at the edge). */
+const CURVE_Y_MIN = -1;
+const CURVE_Y_MAX = 2;
+const CURVE_PAD = 4;
+
+const round2 = (value: number): number => Math.round(value * 100) / 100 + 0;
+const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+
+/**
+ * An easing's path in a 100 by 100 box, time rightwards and progress upwards: a cubic for a bezier, a
+ * staircase for `steps()`. Built from numbers only.
+ */
+export const easingPath = (value: Exclude<MotionValue, { kind: 'time' }>): { d: string; top: number; bottom: number } => {
+  if (value.kind === 'steps') {
+    const count = Math.round(clamp(value.count, 1, SYSTEM_MOTION_STEPS_MAX));
+    let d = 'M0 100';
+    for (let step = 1; step <= count; step += 1) {
+      const x = `H${round2((step * 100) / count)}`;
+      const y = `V${round2(100 - (step * 100) / count)}`;
+      d += value.at === 'start' ? y + x : x + y;
+    }
+    return { d, top: 0, bottom: 100 };
+  }
+  const [x1, y1, x2, y2] = value.points;
+  const x = (point: number): number => round2(clamp(point, 0, 1) * 100);
+  const y = (point: number): number => round2((1 - clamp(point, CURVE_Y_MIN, CURVE_Y_MAX)) * 100);
+  return { d: `M0 100C${x(x1)} ${y(y1)} ${x(x2)} ${y(y2)} 100 0`, top: Math.min(0, y(y1), y(y2)), bottom: Math.max(100, y(y1), y(y2)) };
+};
+
+/** The curve as an element: inline on the board (it takes the ground's text colour), a picture on a still page. */
+const curveDrawing = (value: Exclude<MotionValue, { kind: 'time' }>, name: string, still: boolean): string => {
+  const { d, top, bottom } = easingPath(value);
+  const width = 100 + 2 * CURVE_PAD;
+  const height = round2(bottom - top + 2 * CURVE_PAD);
+  const box = `xmlns="http://www.w3.org/2000/svg" viewBox="${-CURVE_PAD} ${round2(top - CURVE_PAD)} ${width} ${height}" width="${width}" height="${height}"`;
+  const path = `<path d="${d}" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`;
+  const label = escapeHtml(`Easing curve of ${name}`);
+  if (!still) return `<svg class="dc-curve" ${box} role="img" aria-label="${label}">${path}</svg>`;
+  // In a picture `currentColor` is black, so it is tinted like a `currentColor` icon.
+  return `<img class="dc-curve dc-icon-current" src="data:image/svg+xml;base64,${Buffer.from(`<svg ${box}>${path}</svg>`, 'utf8').toString('base64')}" alt="${label}">`;
+};
+
+/** A track whose chip moves with the token while hovered or focused; the board's CSS stops it under reduced motion. */
+const motionDemo = (name: string, kind: MotionValue['kind'], styled: Styler): string =>
+  `<div class="dc-motion-demo" tabindex="0" role="img" aria-label="${escapeHtml(`Demo of ${name}`)}">` +
+  `<div${styled('dc-motion-chip', `${kind === 'time' ? 'transition-duration' : 'transition-timing-function'}: var(${name})`)}></div></div>`;
+
+const NO_PREVIEW_SENTENCE = "A formula, so there's no preview.";
+const DEMO_HINT = 'Hover or focus a track to play it. With reduced motion on, it stays still.';
+
+/**
+ * Motion tokens: a duration as a bar against the system's longest duration, an easing as its curve, and
+ * on the board a demo that moves with the token. Every value is re-checked before it is read.
+ */
+const motionParts = (detail: SystemDetail, styled: Styler, still: boolean): SectionParts => {
+  const tokens = tokensOf(detail, 'motion');
+  const parts: SectionParts = { title: 'Motion', body: '', empty: 'No motion tokens yet.' };
+  if (tokens.length === 0) return parts;
+  const read = (text: string): MotionValue | null => (cssValueOf('motion', null, text) === null ? null : parseMotionValue(text));
+  let longest = 0;
+  for (const token of tokens) {
+    for (const side of [token.light, token.dark]) {
+      const value = side === null ? null : read(side.text);
+      if (value?.kind === 'time') longest = Math.max(longest, value.ms);
+    }
+  }
+  let demos = false;
+  const draw: Draw = (name, text) => {
+    const value = read(text);
+    if (value === null) return `<div class="dc-muted dc-hatched-label">${escapeHtml(NO_PREVIEW_SENTENCE)}</div>`;
+    const drawing =
+      value.kind === 'time'
+        ? `<div class="dc-motion-track"><div${styled('dc-bar', `width: ${round2(longest > 0 ? clamp((value.ms / longest) * 100, 0, 100) : 0)}%`)}></div></div>`
+        : curveDrawing(value, name, still);
+    if (still) return drawing;
+    demos = true;
+    return drawing + motionDemo(name, value.kind, styled);
+  };
+  const body = tokenRuns(detail, tokens, 'motion', draw, 'Motion');
+  return { ...parts, body: (demos ? `<div class="dc-value dc-motion-hint">${escapeHtml(DEMO_HINT)}</div>` : '') + body };
 };
 
 const layerOrder = (token: SystemToken): number => {
@@ -664,6 +757,47 @@ const brandParts = (detail: SystemDetail, unusable: ReadonlySet<string>, markdow
 
 // ---- icons (system-builder-depth §4.6) ----
 
+/** The text colour of the specimen grounds, on the board and the living page alike. */
+export const GROUND_TEXT = Object.freeze({ light: '#1d1d1f', dark: '#ececef' });
+
+/** The `invert()` amount that turns black into a near-grey colour (the mean of its channels). */
+const invertTo = (hex: string): number => Math.round(([1, 3, 5].reduce((sum, at) => sum + parseInt(hex.slice(at, at + 2), 16), 0) / 3 / 255) * 10000) / 10000;
+
+/**
+ * An `<img>` can't inherit the page's colour: its `currentColor` is black. These filters take that black
+ * to the ground's text colour, on pictures marked `dc-icon-current` only.
+ */
+export const CURRENT_COLOR_CSS =
+  `.dc-ground .dc-icon-current { filter: invert(${invertTo(GROUND_TEXT.light)}); }\n` +
+  `.dc-ground.dc-dark .dc-icon-current { filter: invert(${invertTo(GROUND_TEXT.dark)}); }`;
+
+const PAINT = /(?<![\w-])(?:fill|stroke|color|stop-color|flood-color|lighting-color)\s*(?:=\s*(?:"([^"]*)"|'([^']*)')|:\s*([^;"'{}<>]*))/gi;
+const NO_PAINT_OF_ITS_OWN: ReadonlySet<string> = new Set(['', 'currentcolor', 'none', 'transparent', 'inherit', 'context-fill', 'context-stroke']);
+
+/**
+ * Whether an SVG paints with `currentColor` and no colour of its own, so tinting it changes nothing else.
+ * A scan of its attributes and CSS declarations, comments skipped; any other paint, an embedded picture
+ * or foreign content says no. The file is untrusted: only the yes or no comes out.
+ */
+export const paintsOnlyCurrentColor = (svg: string): boolean => {
+  const text = svg
+    .split('<!--')
+    .map((part, index) => {
+      if (index === 0) return part;
+      const close = part.indexOf('-->');
+      return close < 0 ? '' : part.slice(close + 3);
+    })
+    .join(' ');
+  if (/<(?:image|foreignObject)[\s/>]/i.test(text)) return false;
+  let current = false;
+  for (const match of text.matchAll(PAINT)) {
+    const value = (match[1] ?? match[2] ?? match[3] ?? '').replace('!important', '').trim().toLowerCase();
+    if (!NO_PAINT_OF_ITS_OWN.has(value)) return false;
+    if (value === 'currentcolor') current = true;
+  }
+  return current;
+};
+
 /** `--icon-*` size tokens each icon is drawn at; more are left out, so the board stays within its size. */
 export const ICON_SIZES_SHOWN = 4;
 /**
@@ -691,7 +825,7 @@ const iconSizeTokens = (detail: SystemDetail): SystemToken[] =>
 export const iconCopies = (detail: SystemDetail): number => 2 * Math.max(1, Math.min(iconSizeTokens(detail).length, ICON_SIZES_SHOWN));
 
 /** The icon grid: each icon at each size, on light and dark, only ever as `<img>`. */
-const iconsBlock = (detail: SystemDetail, unusable: ReadonlySet<string>, styled: Styler): string => {
+const iconsBlock = (detail: SystemDetail, unusable: ReadonlySet<string>, styled: Styler, tinted: ReadonlySet<string>): string => {
   if (detail.icons.length === 0) return '';
   const all = iconSizeTokens(detail);
   const sizes = all.slice(0, ICON_SIZES_SHOWN).map((token) => `var(${token.name})`);
@@ -711,7 +845,7 @@ const iconsBlock = (detail: SystemDetail, unusable: ReadonlySet<string>, styled:
           : (sizes.length === 0 ? [ICON_DEFAULT_SIZE] : sizes)
               .map(
                 (size) =>
-                  `<img${styled('dc-icon', `width: ${size}; height: ${size}; max-width: ${ICON_BOX_MAX}; max-height: ${ICON_BOX_MAX}; margin-right: 8px; vertical-align: middle`)} src="${escapeHtml(url)}" alt="${escapeHtml(icon.name)}">`,
+                  `<img${styled(tinted.has(icon.file) ? 'dc-icon dc-icon-current' : 'dc-icon', `width: ${size}; height: ${size}; max-width: ${ICON_BOX_MAX}; max-height: ${ICON_BOX_MAX}; margin-right: 8px; vertical-align: middle`)} src="${escapeHtml(url)}" alt="${escapeHtml(icon.name)}">`,
               )
               .join('');
       const grounds =
@@ -726,13 +860,13 @@ const iconsBlock = (detail: SystemDetail, unusable: ReadonlySet<string>, styled:
       );
     })
     .join('');
-  return `<h3>Icons</h3><div class="dc-value">${escapeHtml(sizesLine)}</div><div class="dc-grid dc-run-compact">${cards}</div>`;
+  return `<h3>Icons</h3><div class="dc-value">${escapeHtml(sizesLine)}</div><div class="dc-grid dc-icons">${cards}</div>`;
 };
 
 /** Assets keeps the icons, the font files and the source files (§2.11); fonts are drawn as specimens under Typography. */
-const assetsParts = (detail: SystemDetail, unusable: ReadonlySet<string>, styled: Styler): SectionParts => {
+const assetsParts = (detail: SystemDetail, unusable: ReadonlySet<string>, styled: Styler, tinted: ReadonlySet<string>): SectionParts => {
   const parts: string[] = [];
-  const icons = iconsBlock(detail, unusable, styled);
+  const icons = iconsBlock(detail, unusable, styled, tinted);
   if (icons !== '') parts.push(icons);
   const list = (items: readonly string[]): string => `<ul class="dc-list">${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
   if (detail.fonts.length > 0) parts.push(`<h3>Font files</h3>${list(detail.fonts.map((font) => baseName(font.file)))}`);
@@ -760,8 +894,7 @@ const partsOf = (detail: SystemDetail, section: SystemSection, options: Specimen
     case 'shadows':
       return visualParts(detail, 'shadows', 'Shadows', 'No shadow tokens yet.', (name) => `<div${styled('dc-shadow-box', `box-shadow: var(${name})`)}></div>`);
     case 'motion':
-      // system-builder-depth Phase 2 Wave 0 stub: T10b draws the duration bars, curves and demo chip.
-      return { title: 'Motion', body: '', empty: 'No motion tokens yet.' };
+      return motionParts(detail, styled, options.still === true);
     case 'layers':
       return layersParts(detail, styled);
     case 'sizes':
@@ -773,7 +906,7 @@ const partsOf = (detail: SystemDetail, section: SystemSection, options: Specimen
     case 'brand':
       return brandParts(detail, unusable, markdown, options.example);
     case 'assets':
-      return assetsParts(detail, unusable, styled);
+      return assetsParts(detail, unusable, styled, options.tinted ?? new Set<string>());
   }
 };
 

@@ -13,7 +13,7 @@ import type { SystemComponent, SystemDetail, SystemEntryText, SystemState } from
 import { BundleMissingEntry, BundleTooLarge, bundleDocument, createLiveFileSource, type FileSource, type SourceFile } from '../bundle.ts';
 import { checkAsset } from './assets.ts';
 import { BOARD_ENTRY_FILE, buildBoardHtml } from './board-html.ts';
-import { exampleFileOf, exampleKeyOf, ICON_DRAWN_MAX_BYTES, type ExampleKind } from './specimen-html.ts';
+import { exampleFileOf, exampleKeyOf, ICON_DRAWN_MAX_BYTES, paintsOnlyCurrentColor, type ExampleKind } from './specimen-html.ts';
 import { listFiles, proposalDirOf, readProposalFile, readProposalsRecord, sha256Of } from './proposal-record.ts';
 import type { SystemStore } from './store.ts';
 
@@ -130,6 +130,7 @@ export const assembleBoardHtml = async (
   const { components, patterns, brand, examples } = await bundleExamples(detail, source);
 
   const unusable = new Set<string>();
+  const tinted = new Set<string>();
   const assets = [
     ...detail.fonts.map((font) => ({ file: font.file, kind: 'font' as const })),
     ...detail.logos.map((logo) => ({ file: logo.file, kind: 'logo' as const })),
@@ -139,10 +140,13 @@ export const assembleBoardHtml = async (
     const bytes = await source.read(file).catch(() => null);
     const tooBigToDraw = kind === 'icon' && bytes !== null && bytes.bytes.length > ICON_DRAWN_MAX_BYTES;
     if (bytes === null || tooBigToDraw || !checkAsset(path.posix.basename(file), kind, bytes.bytes).ok) unusable.add(file);
-    else assetKeys.push(`${file}:${sha256Of(bytes.bytes)}`);
+    else {
+      assetKeys.push(`${file}:${sha256Of(bytes.bytes)}`);
+      if (kind === 'icon' && paintsOnlyCurrentColor(bytes.bytes.toString('utf8'))) tinted.add(file);
+    }
   }
 
-  const html = buildBoardHtml({ ...detail, components, patterns, brand }, { scheme, examples, unusable, ...(options.eager === true ? { eager: true } : {}) });
+  const html = buildBoardHtml({ ...detail, components, patterns, brand }, { scheme, examples, unusable, tinted, ...(options.eager === true ? { eager: true } : {}) });
   return { html, components, patterns, brand, assetKeys };
 };
 

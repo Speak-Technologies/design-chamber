@@ -38,7 +38,7 @@ import { checkAsset } from './assets.ts';
 import { detailSourceFromTree, overlaySource } from './board.ts';
 import { listFiles, proposalDirOf, readProposalFile } from './proposal-record.ts';
 import { renderExamplePngs, type ExampleShot } from './living-examples.ts';
-import { ICON_DRAWN_MAX_BYTES, iconCopies } from './specimen-html.ts';
+import { ICON_DRAWN_MAX_BYTES, iconCopies, paintsOnlyCurrentColor } from './specimen-html.ts';
 import { buildLivingPage, LIVING_ENTRY_FILE, livingSchemes, type ExampleReason, type LivingExampleShot, type LivingPageDocument, type LivingPageInput, entryAt } from './living-html.ts';
 import { LIVING_PAGE_SCAN_MAX_BYTES, LIVING_PAGE_TOO_LARGE_REASON, normaliseForHash, scanLivingPage } from './living-safe.ts';
 import { ensureSystemStore, guardSystemWrite } from './store.ts';
@@ -366,6 +366,7 @@ const generate = async (
   }
   // Then icons: each is embedded once per size and ground it is drawn on.
   const copies = iconCopies(detail);
+  const tinted = new Set<string>();
   for (const icon of detail.icons) {
     const file = await source.read(icon.file).catch(() => null);
     const name = path.posix.basename(icon.file);
@@ -380,7 +381,10 @@ const generate = async (
     if (reason !== null || file === null) {
       unusable.add(icon.file);
       pushOmitted(omitted, { what: 'icon', name, reason: reason ?? 'unsafe' });
-    } else budget -= encodedSize(file.bytes.length) * copies;
+    } else {
+      budget -= encodedSize(file.bytes.length) * copies;
+      if (paintsOnlyCurrentColor(file.bytes.toString('utf8'))) tinted.add(icon.file);
+    }
   }
   // Then fonts in type-style order, only when they may be embedded (AD-32).
   const fontData: Record<string, string> = {};
@@ -423,7 +427,7 @@ const generate = async (
     }
   };
 
-  const pageInput = (): LivingPageInput => ({ ...base, unusable, fontData, fontsLeftOut, examples });
+  const pageInput = (): LivingPageInput => ({ ...base, unusable, tinted, fontData, fontsLeftOut, examples });
   const bundle = async (doc: LivingPageDocument): Promise<{ kind: 'ok'; html: string } | { kind: 'problem'; problem: LivingProblem } | { kind: 'over'; excess: number }> => {
     try {
       const result = await bundleDocument(overlaySource(source, doc.html, LIVING_ENTRY_FILE), LIVING_ENTRY_FILE, { mode: 'export' });

@@ -246,8 +246,8 @@ test('eager: the check lays every section out; the page leaves off-screen sectio
   assert.ok(check.indexOf(EAGER_SECTIONS_CSS) > check.indexOf('content-visibility: auto'));
 });
 
-test('the generator version is 7 (0.7.0 was 6), so boards cached before pattern and brand examples and colour pairs are made again', () => {
-  assert.equal(BOARD_GENERATOR_VERSION, 7);
+test('the generator version is 8 (builder depth Phase 1 was 7), so boards cached before motion specimens and the icon grid are made again', () => {
+  assert.equal(BOARD_GENERATOR_VERSION, 8);
 });
 
 test('the board script measures .dc-fit (cards and table rows) and re-measures on load, fonts.ready and <html> style', () => {
