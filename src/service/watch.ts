@@ -25,6 +25,10 @@
 // walking 300 files in each of 300 designs every 3 s cost over a second of CPU per tick.
 // A tick never starts while the previous one is still running (slow SMB shares).
 //
+// Quiet mode (pace.ts) slows the poll with `setPollMs`; fs.watch is left alone. A rotating tenth
+// per slow tick would take ten of them to reach a dropped change, so a poll slower than the one the
+// watcher started with looks at every design (the cheap fingerprint, nested walk still rotating).
+//
 // Design systems (Phase 2.5 AD-1, technical design §5.1) live in `<root>/_systems/<id>/`. `_systems`
 // fails the slug pattern, so the design branch never sees it; a branch of its own mirrors the
 // design one: `added` / `removed` per system folder (a real folder, not a link, whose name passes
@@ -224,8 +228,15 @@ export type Watcher = {
    * switch); a folder created before then is part of it, not `added`.
    */
   readonly ready: Promise<void>;
-  /** Run one poll tick now (test seam: deterministic, no timers). Rejects if the tick fails. */
-  pollNow(): Promise<void>;
+  /**
+   * Run one poll tick now, after any tick under way. `all` looks at every design even while
+   * fs.watch is healthy (waking from quiet mode). Rejects if the tick fails.
+   */
+  pollNow(options?: { all?: boolean }): Promise<void>;
+  /** Change the backstop's interval; the same value again leaves the running timer alone. */
+  setPollMs(ms: number): void;
+  /** Called each time the backstop timer fires, so quiet mode needs no timer of its own. Returns the unsubscribe. */
+  onTick(listener: () => void): () => void;
 };
 
 /** Pending debounced batch per slug (`ROOT_KEY` = a whole-root rescan). */
@@ -285,6 +296,9 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
   let sweepCursor = 0;
   const pending = new Map<string, PendingEntry>();
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  /** The backstop's interval now; `pollMs` is the active one. */
+  let intervalMs = pollMs;
+  const tickListeners = new Set<() => void>();
 
   const schedule = (key: string, files: string[]): void => {
     if (stopped) return;
@@ -541,15 +555,16 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     }
   };
 
-  const pollTick = async (): Promise<void> => {
+  const pollTick = async (all: boolean): Promise<void> => {
     if (stopped) return;
     // Judged BEFORE a restart below: a watcher that was down since the last tick missed events, and
     // a fresh one does not replay them, so this tick must look at every design.
     const healthy = watcher !== null && !pollOnly;
+    const everything = all || intervalMs > pollMs;
     if (watcher === null && !pollOnly && (await isDirectory(currentRoot))) startFsWatch();
     await scanRoot();
-    // A healthy live watcher reports changes itself, so the poll only re-checks a rotating slice,
-    // fully, as the net under events the platform dropped. Without one (never started, died,
+    // A healthy live watcher reports changes itself, so an active poll only re-checks a rotating
+    // slice, fully, as the net under events the platform dropped. Without one (never started, died,
     // poll-only root) every design gets the cheap fingerprint and the rotating slice also gets the
     // nested walk: that walk is what costs, and every design still gets it within `sweepTicks` ticks.
     // Designs first, then systems (their keys start with NUL, so they never mix with slugs).
@@ -557,7 +572,7 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
     const swept = sweepSlice(sorted, sweepCursor, Math.ceil(sorted.length / sweepTicks));
     sweepCursor = swept.next;
     const deep = new Set(swept.slice);
-    for (const key of healthy ? swept.slice : sorted) {
+    for (const key of healthy && !everything ? swept.slice : sorted) {
       const systemId = systemIdOf(key);
       const dir = systemId === null ? path.join(currentRoot, key) : systemDirOf(currentRoot, systemId);
       const nested = deep.has(key);
@@ -604,23 +619,44 @@ export const startWatcher = (options: WatcherOptions): Watcher => {
 
   startFsWatch();
   let ready = seedScan().catch((error) => log.warn('watch.seed-failed', { error: error instanceof Error ? error.message : String(error) }));
-  let tickRunning = false;
-  pollTimer = setInterval(() => {
-    if (tickRunning) return; // a slow share: let the running tick finish instead of stacking another
-    tickRunning = true;
-    pollTick()
-      .catch((error) => log.warn('watch.poll-failed', { error: error instanceof Error ? error.message : String(error) }))
-      .finally(() => {
-        tickRunning = false;
-      });
-  }, pollMs);
-  pollTimer.unref?.();
+
+  /** The last poll asked for, until it settles. Polls run one at a time: two would both announce the same new design. */
+  let polling: Promise<void> | null = null;
+  const queuePoll = (all: boolean): Promise<void> => {
+    const run = (polling ?? Promise.resolve()).catch(() => undefined).then(() => pollTick(all));
+    polling = run;
+    const release = (): void => {
+      if (polling === run) polling = null;
+    };
+    void run.then(release, release);
+    return run;
+  };
+
+  const startPollTimer = (): void => {
+    if (pollTimer !== null) clearInterval(pollTimer);
+    pollTimer = setInterval(() => {
+      for (const listener of [...tickListeners]) listener();
+      if (polling !== null) return; // a slow share: let the running tick finish instead of stacking another
+      queuePoll(false).catch((error) => log.warn('watch.poll-failed', { error: error instanceof Error ? error.message : String(error) }));
+    }, intervalMs);
+    pollTimer.unref?.();
+  };
+  startPollTimer();
 
   return {
     get ready() {
       return ready;
     },
-    pollNow: () => pollTick(),
+    pollNow: (poll) => queuePoll(poll?.all === true),
+    setPollMs(ms) {
+      if (stopped || ms === intervalMs) return;
+      intervalMs = ms;
+      startPollTimer();
+    },
+    onTick(listener) {
+      tickListeners.add(listener);
+      return () => void tickListeners.delete(listener);
+    },
     stop() {
       if (stopped) return;
       stopped = true;

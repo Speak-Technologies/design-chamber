@@ -131,7 +131,11 @@ type CacheEntry = {
   inputs: BundleInput[];
 };
 
-export type BrandedRenderService = RenderService & { __dcRenderService?: true };
+export type BrandedRenderService = RenderService & {
+  __dcRenderService?: true;
+  /** Forget every cached document (a root change, quiet mode). A later chunk answers `stale`; a render rebuilds. */
+  dropAll(): void;
+};
 
 export type RenderDeps = {
   store: DesignStore;
@@ -174,9 +178,13 @@ export const createRenderService = (deps: RenderDeps): BrandedRenderService => {
     }
   };
 
+  const dropAll = (): void => {
+    for (const cacheId of [...cache.keys()]) drop(cacheId);
+  };
+
   const unsubscribe = hub.subscribe((event) => {
     if (event.kind === 'root') {
-      for (const cacheId of [...cache.keys()]) drop(cacheId);
+      dropAll();
       return;
     }
     if (event.slug === null) return;
@@ -196,6 +204,7 @@ export const createRenderService = (deps: RenderDeps): BrandedRenderService => {
 
   const service: BrandedRenderService = {
     __dcRenderService: true,
+    dropAll,
 
     async render(slug: string, query: RenderQuery): Promise<RenderMeta> {
       const record: DesignRecord = await store.get(slug);
