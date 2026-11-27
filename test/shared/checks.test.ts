@@ -302,6 +302,11 @@ test('Phase 2.5: every system code is in the closed table, with the spec severit
     'system-board-text-outside': 'warning',
     'system-board-hint-small': 'info',
     'system-board-partial': 'info',
+    // system-builder-depth §4.5: example-missing and coverage-gap are warnings only with `depth: full` (severityOf).
+    'system-example-missing': 'info',
+    'system-states-missing': 'warning',
+    'system-contrast-low': 'warning',
+    'system-coverage-gap': 'info',
   };
   for (const [code, severity] of Object.entries(expected)) {
     assert.ok(isCheckCode(code), code);

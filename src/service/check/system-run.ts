@@ -18,12 +18,13 @@ import {
   SYSTEM_CHECK_PNGS_MAX,
   SYSTEM_CHECK_RENDER_BUDGET_MS,
   SYSTEM_CHECK_TILE_PIXELS_MAX,
+  SYSTEM_EXAMPLE_MAX,
 } from '../../shared/limits.ts';
 import { findSecretShapes } from '../../shared/secret-shapes.ts';
 import { isBoardEntryKey, parseEntryKey } from '../../shared/system-board.ts';
 import { buildSystemDetail, effectiveLayout, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
 import type { BoardLayout, CheckFindingData, RenderCheckState, SettingsFile, SystemComponent, SystemDetail } from '../../shared/types.ts';
-import { BundleTooLarge, bundleDocument, createLiveFileSource, type FileSource } from '../bundle.ts';
+import { BundleTooLarge, bundleDocument, createLiveFileSource, RefBlocked, type FileSource } from '../bundle.ts';
 import { createChangeHub } from '../changes.ts';
 import type { Logger, SettingsStore } from '../context.ts';
 import { resolvePlainTarget, writeFileAtomic } from '../paths.ts';
@@ -122,6 +123,32 @@ const layoutOfEntry = (detail: SystemDetail, entry: string): BoardLayout => {
   }
 };
 
+/** A component example is read up to 4 bytes per character of its cap, as the store reads text. */
+const EXAMPLE_READ_MAX_BYTES = SYSTEM_EXAMPLE_MAX * 4;
+
+/**
+ * Each component example's text by its file, for the label scan (system-builder-depth §4.5). Read
+ * through the live file source (`resolveInside`: no escape, no link out); a file over the example cap,
+ * missing or refused is left out, so its labels are simply not judged.
+ */
+export const readExampleTexts = async (source: FileSource, detail: SystemDetail): Promise<Record<string, string>> => {
+  const out: Record<string, string> = {};
+  for (const component of detail.components) {
+    if (component.example === null) continue;
+    const rel = `components/${component.id}.html`;
+    try {
+      const info = (await source.stat?.(rel)) ?? null;
+      if (info === null || info.size > EXAMPLE_READ_MAX_BYTES) continue;
+      const file = await source.read(rel);
+      if (file !== null && file.bytes.length <= EXAMPLE_READ_MAX_BYTES) out[rel] = file.bytes.toString('utf8');
+    } catch (error) {
+      // A refused path (a link out of the system) is not read; anything else is a real failure.
+      if (!(error instanceof RefBlocked)) throw error;
+    }
+  }
+  return out;
+};
+
 const fileOfEntry = (entry: string): string => {
   const key = parseEntryKey(entry);
   return key !== null && key.kind === 'component' ? `components/${key.key}.html` : BOARD_FILE;
@@ -142,7 +169,8 @@ export const runSystemCheck = async (
   const source = await store.get(id);
   const detail = buildSystemDetail(source);
   const facts = await readS8Facts(store, id, source);
-  const staticFindings = [...systemFindings(source, detail), ...s8Findings(source, detail, facts)].slice(0, CHECK_FINDINGS_MAX);
+  const examples = await readExampleTexts(createLiveFileSource(await store.filesDir(id)), detail);
+  const staticFindings = [...systemFindings({ ...source, examples }, detail), ...s8Findings(source, detail, facts)].slice(0, CHECK_FINDINGS_MAX);
   const base = { id, findings: staticFindings, now: input.now, tool: input.tool };
   const staticRun: SystemCheckRun = { report: systemCheckReport(base), detail, reportPath: null, pngs: [] };
   const renderInput = input.render;

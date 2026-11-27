@@ -144,6 +144,30 @@ and writes nothing: it never draws the board, so the page's Checks badge shows t
 A finding about an area the system doesn't cover (its `coverage`) isn't raised; the unknown-layout
 warning is raised whatever the coverage.
 
+**Completeness, examples, labels and contrast** (spec: `documentation/specs/system-builder-depth.md`
+§4.5). These come from the files too, so the page's Checks badge and "Ask the agent to fix it" carry
+them with no change (only warnings and errors are sent to the agent):
+
+| Finding | Raised when | Severity |
+|---|---|---|
+| `system-example-missing` | the system sets `depth` to `core` or `full` and a component has no live example; at `full` also a pattern of a visual kind (navigation, overlay, forms, data display, feedback, states, page). The detail names the files to write | a note at `core`, a warning at `full` |
+| `system-states-missing` | the system sets `depth` and a component lists a variant, size or state with no instance labelled `data-dc-variant`, `data-dc-size` or `data-dc-state` in its example (matched ignoring case). One finding per list; the detail names each component and the missing names | warning |
+| `system-contrast-low` | a colour pair (declared, or found from `--x-fg` / `--on-x` names) is under its level (body text 4.5:1, large text and UI parts 3:1), worked out from hex and rgb values. One finding per scheme; the detail reads `--fg on --bg 4.49:1 (light)`. Other colour formats are measured by the visual check instead | warning |
+| `system-coverage-gap` | the system sets `depth` and a covered area misses topics of the completeness checklist. One finding per area; the detail lists up to 8 topic ids from the closed list, never agent text. Topics listed in `system.json` `outOfScope` stop counting. A `tokens` system is asked the foundations core topics only | a note at `core` and `tokens`, a warning at `full` |
+
+The checklist (the same table is in the agent's reference doc `board-and-check.md`):
+
+| Area | Core | Full adds |
+|---|---|---|
+| Foundations | `surface`, `text`, `border`, `brand` (a colour each), `status` (3), `type-styles` (4), `spacing` (4), `radius` (1), `pairs` (1, found pairs count), `dark-values` (every colour, only when any dark value exists) | `state-colours` (a colour ending `-hover`, `-active`, `-selected` or `-disabled`), `data-colours` (when a chart or table component or a data-display pattern exists), `type-styles` (6), `control-sizes` (a `--control-*` or `--touch-*` size), `breakpoints`, `elevation` (a shadow), `layers`, `motion` (a `--duration-*` and an `--ease-*` token) |
+| Components | `components` (1), `examples` (every component) | `focus-disabled` (a component listing hover also lists focus and disabled) |
+| Patterns & voice | `voice` | `navigation`, `overlays`, `forms`, `feedback`, `states`, `data-display` (same condition), `accessibility`, `responsive`, `motion`; each counted by a pattern of that kind |
+| Brand & marketing | `logo` (a logo file or a logo-use entry) | `brand-colour`, `imagery`, `marketing` (a marketing, social or email entry) |
+
+Labels are found by a plain scan of the example's text (no page is drawn, no script runs): at most 500
+labels a file, values up to 40 characters. Without `depth` there is no completeness, example or label
+check, so a system made before these checks reads as it did.
+
 ### Drawing the board
 Unless `--static`, the check draws the same specimen board the system page shows (same generator,
 same layout hints) in the light scheme at two board widths: **wide** 1526 px (a 1920 px window with

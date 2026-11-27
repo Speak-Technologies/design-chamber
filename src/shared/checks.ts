@@ -34,6 +34,7 @@ import type {
   RenderCheckState,
   SecretShapeKind,
   SystemArea,
+  SystemDepth,
   Viewport,
 } from './types.ts';
 
@@ -59,6 +60,11 @@ const skippedSentence = (f: CheckFindingData): string => {
 const systemNameOf = (f: CheckFindingData): string => f.params?.system ?? 'the design system';
 /** The repo folder's base name ("shop" in the spec's examples). */
 const repoNameOf = (f: CheckFindingData): string => f.params?.repo ?? 'the repo';
+
+/** How the coverage gap names a depth ("a full system", "a product core system"). */
+const DEPTH_LABELS: Readonly<Record<SystemDepth, string>> = { tokens: 'tokens only', core: 'product core', full: 'full' };
+/** `data-dc-variant`, `data-dc-size`, `data-dc-state`: the label attribute each list is matched by. */
+const LISTED_SINGULAR: Readonly<Record<NonNullable<CheckParams['listed']>, string>> = { variants: 'variant', sizes: 'size', states: 'state' };
 
 export const AREA_LABELS: Readonly<Record<SystemArea, string>> = {
   foundations: 'Foundations',
@@ -369,6 +375,40 @@ const RULES: Readonly<Record<CheckCode, CodeRule>> = {
     severity: 'info',
     sentence: (f, where) => `${where}: this entry is set to ${f.params?.layout ?? 'card'} but needed the full width. Set its layout to full.`,
   },
+  // system-builder-depth §4.5: what the files say about completeness, labels and contrast.
+  'system-example-missing': {
+    // Info for a core system, a warning for a full one: `severityOf` reads the validated `depth` param.
+    severity: 'info',
+    sentence: (f) => {
+      const count = Math.max(1, Math.round(f.params?.count ?? 1));
+      return count === 1 ? '1 entry has no live example yet, so the board shows only its words.' : `${num(count)} entries have no live example yet, so the board shows only their words.`;
+    },
+  },
+  'system-states-missing': {
+    severity: 'warning',
+    sentence: (f) => {
+      const count = Math.max(1, Math.round(f.params?.count ?? 1));
+      const listed = f.params?.listed ?? 'states';
+      const what = count === 1 ? `1 ${LISTED_SINGULAR[listed]} listed in system.json has` : `${num(count)} ${listed} listed in system.json have`;
+      return `${what} no labelled instance in ${count === 1 ? 'its' : 'their'} example. Label each one with data-dc-${LISTED_SINGULAR[listed]}.`;
+    },
+  },
+  'system-contrast-low': {
+    severity: 'warning',
+    sentence: (f) => {
+      const count = Math.max(1, Math.round(f.params?.count ?? 1));
+      const scheme = f.params?.scheme === 'dark' ? 'dark' : 'light';
+      return count === 1 ? `1 colour pair is under its contrast level on the ${scheme} scheme.` : `${num(count)} colour pairs are under their contrast level on the ${scheme} scheme.`;
+    },
+  },
+  'system-coverage-gap': {
+    // Info for a core system, a warning for a full one, as `system-example-missing`.
+    severity: 'info',
+    sentence: (f) => {
+      const count = Math.max(1, Math.round(f.params?.count ?? 1));
+      return `${AREA_LABELS[f.params?.area ?? 'foundations']} is missing ${count === 1 ? '1 thing' : `${num(count)} things`} a ${DEPTH_LABELS[f.params?.depth ?? 'core']} system covers.`;
+    },
+  },
   'system-board-partial': {
     severity: 'info',
     sentence: (f) => {
@@ -402,6 +442,8 @@ export const isCheckCode = (value: unknown): value is CheckCode => typeof value 
  */
 export const severityOf = (code: CheckCode, params?: CheckParams): CheckSeverity => {
   if (code === 'system-living-secret' && params?.access === 'dev') return 'warning';
+  // The user's decision 4 (system-builder-depth): completeness warns only for full systems.
+  if ((code === 'system-example-missing' || code === 'system-coverage-gap') && params?.depth === 'full') return 'warning';
   return RULES[code].severity;
 };
 
@@ -529,6 +571,8 @@ const PROPOSAL_REASONS: readonly ProposalProblemReason[] = [
   'preview-too-large', 'preview-unsafe', 'preview-secret',
 ];
 const PICTURED: readonly NonNullable<CheckParams['pictured']>[] = ['tiles', 'overview', 'no-overview', 'gap', 'entries'];
+const DEPTHS: readonly SystemDepth[] = ['tokens', 'core', 'full'];
+const LISTED: readonly NonNullable<CheckParams['listed']>[] = ['variants', 'sizes', 'states'];
 const LIVING_FAILED: readonly NonNullable<CheckParams['failed']>[] = ['too-large', 'bundle', 'unsafe', 'no-snapshot', 'secret'];
 
 /** One of a closed enum, else null: a forged param never reaches a sentence. */
@@ -578,6 +622,11 @@ const parseParams = (value: unknown): CheckParams | undefined => {
   if (layout !== null) out.layout = layout;
   const pictured = oneOf(value.pictured, PICTURED);
   if (pictured !== null) out.pictured = pictured;
+  const depth = oneOf(value.depth, DEPTHS);
+  if (depth !== null) out.depth = depth;
+  if (value.scheme === 'light' || value.scheme === 'dark') out.scheme = value.scheme;
+  const listed = oneOf(value.listed, LISTED);
+  if (listed !== null) out.listed = listed;
   return Object.keys(out).length > 0 ? out : undefined;
 };
 

@@ -480,7 +480,12 @@ export type CheckCode =
   | 'system-board-preview-outside'
   | 'system-board-text-outside'
   | 'system-board-hint-small'
-  | 'system-board-partial';
+  | 'system-board-partial'
+  // system-builder-depth §4.5
+  | 'system-example-missing'
+  | 'system-states-missing'
+  | 'system-contrast-low'
+  | 'system-coverage-gap';
 
 export type CheckSeverity = 'error' | 'warning' | 'info';
 
@@ -537,6 +542,12 @@ export type CheckParams = {
    * of the area is in no picture; `entries` = entries past `max` weren't measured.
    */
   pictured?: 'tiles' | 'overview' | 'no-overview' | 'gap' | 'entries';
+  /** `system-example-missing` and `system-coverage-gap`: the system's depth; `full` makes them warnings. */
+  depth?: SystemDepth;
+  /** `system-contrast-low`, and a dark-pass board finding: which scheme it was found in. */
+  scheme?: 'light' | 'dark';
+  /** `system-states-missing` only: which list the unlabelled names come from. */
+  listed?: 'variants' | 'sizes' | 'states';
 };
 
 /** A finding as `check.json` stores it. `detail` and `selector` are untrusted design text. */

@@ -10,10 +10,20 @@
 // are `s8Findings`, over the same detail plus what the caller read from the repo (`S8Facts`).
 
 import { cleanDetail, isDesignRelativeFile } from '../../shared/checks.ts';
-import { CHECK_DETAIL_MAX, CHECK_FINDINGS_MAX, SYSTEM_NOTE_MAX, SYSTEM_OVERVIEW_MAX } from '../../shared/limits.ts';
+import {
+  CHECK_DETAIL_MAX,
+  CHECK_FINDINGS_MAX,
+  SYSTEM_EXAMPLE_LABEL_VALUE_MAX,
+  SYSTEM_EXAMPLE_LABELS_MAX,
+  SYSTEM_GAP_TOPICS_SHOWN,
+  SYSTEM_NOTE_MAX,
+  SYSTEM_OVERVIEW_MAX,
+} from '../../shared/limits.ts';
+import { missingTopics } from '../../shared/system-checklist.ts';
 import { AREA_OF_SECTION, layoutPlaceTakes, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
 import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, RenderCheckState, SecretShapeKind, SystemArea, SystemDetail } from '../../shared/types.ts';
 import { capPerCode } from './analyze.ts';
+import { ratioText, staticLowPairs } from './pair-contrast.ts';
 
 /** The words `buildSystemDetail` uses for the token cap (system-json.ts `TOKENS_CAP_SENTENCE`). */
 const TOKENS_CAP_MESSAGE = "Design systems hold up to 2 000 tokens. The rest weren't read.";
@@ -31,11 +41,97 @@ const covers = (detail: SystemDetail, area: SystemArea): boolean => detail.cover
 /** Ignored hints that are known layouts in a place that doesn't take them. The listed ones are counted; past the list's cap the rest count as unknown. */
 const misplacedCount = (detail: SystemDetail): number => detail.boardLayout.ignored.filter((problem) => problem.reason === 'not-here').length;
 
+// ---- example labels (system-builder-depth D5, §4.5) ----
+
+/** The labels an example marks its instances with, by list. */
+export type ExampleLabels = { variants: Set<string>; sizes: Set<string>; states: Set<string> };
+
+const LABEL_ATTRIBUTE = /\bdata-dc-(variant|size|state)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi;
+const LIST_OF_LABEL = { variant: 'variants', size: 'sizes', state: 'states' } as const;
+
+/**
+ * The `data-dc-variant|size|state` values in an example's text: a bounded attribute scan, no DOM and
+ * no script. At most `SYSTEM_EXAMPLE_LABELS_MAX` labels are read per file; a value over
+ * `SYSTEM_EXAMPLE_LABEL_VALUE_MAX` characters is skipped. Values are trimmed and lower-cased, as the
+ * lists in system.json are matched case-insensitively.
+ */
+export const scanExampleLabels = (html: string): ExampleLabels => {
+  const out: ExampleLabels = { variants: new Set(), sizes: new Set(), states: new Set() };
+  let read = 0;
+  for (const match of html.matchAll(LABEL_ATTRIBUTE)) {
+    if (read >= SYSTEM_EXAMPLE_LABELS_MAX) break;
+    read += 1;
+    const value = (match[2] ?? match[3] ?? match[4] ?? '').trim();
+    if (value === '' || value.length > SYSTEM_EXAMPLE_LABEL_VALUE_MAX) continue;
+    const kind = (match[1] ?? '').toLowerCase() as keyof typeof LIST_OF_LABEL;
+    out[LIST_OF_LABEL[kind]].add(value.toLowerCase());
+  }
+  return out;
+};
+
+/** Pattern kinds that are visual, so a full system shows them with a live example. */
+export const EXAMPLE_PATTERN_KINDS: readonly string[] = Object.freeze(['navigation', 'overlay', 'forms', 'data-display', 'feedback', 'states', 'page']);
+
+/** The builder-depth findings (§4.5): examples, labels, pair contrast in Node, the coverage gap. */
+const depthFindings = (detail: SystemDetail, examples: Readonly<Record<string, string>>): CheckFindingData[] => {
+  const out: CheckFindingData[] = [];
+  const depth = detail.depth;
+
+  // Examples and their labels belong to the builder's contract: asked only of a system that set a depth.
+  if (depth !== null && depth !== 'tokens' && covers(detail, 'components')) {
+    const missing = detail.components.filter((component) => component.example === null).map((component) => `components/${component.id}.html`);
+    if (depth === 'full' && covers(detail, 'patterns')) {
+      for (const entry of detail.patterns) if (entry.example === null && EXAMPLE_PATTERN_KINDS.includes(entry.kind)) missing.push(`patterns/${entry.id}.html`);
+    }
+    if (missing.length > 0) out.push({ code: 'system-example-missing', file: 'system.json', screen: null, viewport: null, params: { count: missing.length, depth }, detail: namesDetail(missing) });
+
+    for (const listed of ['variants', 'sizes', 'states'] as const) {
+      let count = 0;
+      const shown: string[] = [];
+      for (const component of detail.components) {
+        const text = component.example === null ? undefined : examples[`components/${component.id}.html`];
+        if (text === undefined) continue;
+        const labels = scanExampleLabels(text)[listed];
+        const unlabelled = component[listed].filter((name) => !labels.has(name.trim().toLowerCase()));
+        if (unlabelled.length === 0) continue;
+        count += unlabelled.length;
+        if (shown.length < 3) shown.push(`${component.id}: ${unlabelled.slice(0, 3).join(', ')}`);
+      }
+      if (count > 0) out.push({ code: 'system-states-missing', file: 'system.json', screen: null, viewport: null, params: { count, listed }, detail: cleanDetail(shown.join('; '), CHECK_DETAIL_MAX) });
+    }
+  }
+
+  // Pair contrast, where Node can read both values; the visual check measures the rest.
+  if (covers(detail, AREA_OF_SECTION.colours)) {
+    const { low } = staticLowPairs(detail);
+    for (const scheme of ['light', 'dark'] as const) {
+      const here = low.filter((pair) => pair.scheme === scheme);
+      if (here.length === 0) continue;
+      const shown = here.slice(0, 3).map((one) => `${one.pair.fg} on ${one.pair.bg} ${ratioText(one.ratio)} (${scheme})`);
+      out.push({ code: 'system-contrast-low', file: 'tokens.css', screen: null, viewport: null, params: { count: here.length, scheme }, detail: cleanDetail(shown.join('; '), CHECK_DETAIL_MAX) });
+    }
+  }
+
+  // The completeness checklist: closed topic ids only, per covered area, never without a depth.
+  if (depth !== null) {
+    for (const area of SYSTEM_AREAS) {
+      if (!covers(detail, area)) continue;
+      const missing = missingTopics(detail, area);
+      if (missing.length === 0) continue;
+      out.push({ code: 'system-coverage-gap', file: 'system.json', screen: null, viewport: null, params: { area, count: missing.length, depth }, detail: missing.slice(0, SYSTEM_GAP_TOPICS_SHOWN).join(', ') });
+    }
+  }
+  return out;
+};
+
+/** What the static check reads beside the detail: the raw texts, the over-cap files, and each live example's text by its file. */
+export type SystemStaticSource = Pick<SystemDetailSource, 'texts' | 'tooLarge'> & { examples?: Readonly<Record<string, string>> };
+
 /**
  * Every static finding of one system, capped per code and in total like a design's. `source` is the
  * input `detail` was built from (the raw texts tell "over the cap" apart from "at the cap").
  */
-export const systemFindings = (source: Pick<SystemDetailSource, 'texts' | 'tooLarge'>, detail: SystemDetail): CheckFindingData[] => {
+export const systemFindings = (source: SystemStaticSource, detail: SystemDetail): CheckFindingData[] => {
   const out: CheckFindingData[] = [];
   if (detail.unreadable !== null) {
     // Nothing in system.json can be trusted: say only that, and what tokens.css alone shows.
@@ -116,6 +212,8 @@ export const systemFindings = (source: Pick<SystemDetailSource, 'texts' | 'tooLa
       }
     }
   }
+
+  if (detail.unreadable === null) out.push(...depthFindings(detail, source.examples ?? {}));
 
   return capPerCode(out).slice(0, CHECK_FINDINGS_MAX);
 };
