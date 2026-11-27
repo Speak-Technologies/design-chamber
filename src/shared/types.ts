@@ -183,12 +183,12 @@ export type ServiceState = Pick<DesignJson, Exclude<ServiceOwnedField, 'version'
    * retry; `reason: 'write'` when the registry write failed (busy, disk full), absent when it couldn't load.
    */
   folderRequestProblem?: { unknown: string[]; waiting?: true; reason?: 'write' };
-  /** The project file a page was copied from by "Open as page in Design Chamber" on a Files row (native-extras §3.3, §5.1). */
+  /** The file a page was copied from: a project file opened from a Files row (native-extras §3.3, §5.1), or a loose HTML file imported from the Designs folder. */
   importedFrom?: ImportedFrom;
 };
 
 /**
- * Where a page copied from a Files row came from (native-extras §3.3 step 6): the absolute source
+ * Where a copied page came from (a Files row, native-extras §3.3 step 6, or a loose-file import): the absolute source
  * path (≤ `FILE_PAGE_PATH_MAX`), the sha256 of the entry bytes (lowercase hex, 64), and when.
  * Service-owned, state.json only; never in design.json.
  */
