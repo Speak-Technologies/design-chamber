@@ -204,7 +204,8 @@ describe('classifyToken: the section of a token without metadata', () => {
     ['--leading-tight', '1.2', 'typography'],
     ['--bp-tablet', '768px', 'sizes'],
     ['--container-max', '1200px', 'sizes'],
-    ['--motion-fast', '120ms', 'other'],
+    // system-builder-depth T10a: motion names with a motion value read as motion.
+    ['--motion-fast', '120ms', 'motion'],
   ];
   for (const [name, value, section] of cases) {
     test(`${name}: ${value} → ${section}`, () => assert.equal(classifyToken(name, value), section));

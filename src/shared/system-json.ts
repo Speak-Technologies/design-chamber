@@ -53,7 +53,7 @@ import {
   SYSTEM_USAGE_NOTE_MAX,
 } from './limits.ts';
 import { isSystemTopicId } from './system-checklist.ts';
-import { classifyToken, isDarkContext, isLightContext, validateTokenValue, type TypeField, type ValueCheck } from './token-edit.ts';
+import { classifyToken, isDarkContext, isLightContext, resolveTokenSection, validateTokenValue, type TypeField, type ValueCheck } from './token-edit.ts';
 import { ALSO_SET_MAX, scanTokens, type Declaration, type TokenContext } from './tokens-css.ts';
 import type {
   BoardLayout,
@@ -521,6 +521,8 @@ export const LAYOUTS_OF_SECTION: Readonly<Partial<Record<SystemSection, readonly
   spacing: Object.freeze(['card', 'compact', 'table'] as const),
   radius: Object.freeze(['card', 'compact', 'table'] as const),
   shadows: Object.freeze(['card', 'compact', 'table'] as const),
+  // system-builder-depth Phase 2 (§13 T10a).
+  motion: Object.freeze(['card', 'compact', 'table'] as const),
   sizes: Object.freeze(['card', 'compact', 'table'] as const),
 });
 
@@ -663,7 +665,7 @@ export const SYSTEM_TOKEN_RULES: SystemTokenRules = Object.freeze({
   validate: validateTokenValue,
 });
 
-const TOKEN_SECTIONS: readonly TokenSection[] = ['colours', 'typography', 'spacing', 'radius', 'shadows', 'layers', 'sizes', 'other'];
+const TOKEN_SECTIONS: readonly TokenSection[] = ['colours', 'typography', 'spacing', 'radius', 'shadows', 'motion', 'layers', 'sizes', 'other'];
 const isTokenSection = (value: unknown): value is TokenSection => typeof value === 'string' && (TOKEN_SECTIONS as readonly string[]).includes(value);
 const COLOUR_GROUPS: readonly ColourGroup[] = ['brand', 'surface', 'text', 'border', 'status', 'data', 'other'];
 const isColourGroup = (value: unknown): value is ColourGroup => typeof value === 'string' && (COLOUR_GROUPS as readonly string[]).includes(value);
@@ -753,7 +755,8 @@ const readTokens = (
     const first = light ?? dark;
     // `css` is non-null here: declarations only come from a scanned file.
     const firstText = first === null || css === null ? '' : css.slice(first.from, first.to);
-    const section = entry?.section ?? (first === null ? 'other' : rules.classify(name, firstText));
+    // A recorded `other` on a motion token reads as motion (system-builder-depth T10a, `resolveTokenSection`).
+    const section = first === null ? entry?.section ?? 'other' : resolveTokenSection(entry?.section, rules.classify(name, firstText));
     const lightValue = light === null || css === null ? null : tokenValueOf(css, light, section, rules);
     const darkValue = dark === null || css === null ? null : tokenValueOf(css, dark, section, rules);
     tokens.push({

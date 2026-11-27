@@ -22,6 +22,7 @@ import {
 import { missingTopics } from '../../shared/system-checklist.ts';
 import { AREA_OF_SECTION, layoutPlaceTakes, SYSTEM_AREAS, type SystemDetailSource } from '../../shared/system-json.ts';
 import type { ArtboardCheck, CheckBrowser, CheckFindingData, CheckParams, CheckReport, LivingPageState, ProposalPartName, ProposalProblemReason, RenderCheckState, SecretShapeKind, SystemArea, SystemDetail } from '../../shared/types.ts';
+import { findRawTextEnd, parseTagAt, RAW_TEXT_TAGS } from '../html-tags.ts';
 import { capPerCode } from './analyze.ts';
 import type { BoardPassId } from './board-analyze.ts';
 import { ratioText, staticLowPairs, type LowPair } from '../../shared/pair-contrast.ts';
@@ -72,6 +73,89 @@ export const scanExampleLabels = (html: string): ExampleLabels => {
 
 /** Pattern kinds that are visual, so a full system shows them with a live example. */
 export const EXAMPLE_PATTERN_KINDS: readonly string[] = Object.freeze(['navigation', 'overlay', 'forms', 'data-display', 'feedback', 'states', 'page']);
+
+// ---- motion without a reduced-motion rule (system-builder-depth T10a) ----
+
+/** The properties that move something: a declaration of one, its longhands or a vendor form is motion. */
+export const MOTION_PROPERTIES: readonly string[] = Object.freeze(['transition', 'animation']);
+
+const MOTION_DECLARATION = new RegExp(`(?:^|[\\s{;])(?:-webkit-|-moz-|-o-)?(?:${MOTION_PROPERTIES.join('|')})(-[a-z]+)*\\s*:\\s*([^;}]*)`, 'gi');
+/** An `@media` prelude naming `prefers-reduced-motion` (either value: `reduce` undoes motion, `no-preference` adds it only when wanted). */
+const REDUCED_MEDIA = /@media\b[^{;]{0,500}prefers-reduced-motion/i;
+const REDUCED_ATTRIBUTE = /prefers-reduced-motion/i;
+
+/** `text` with its CSS comments cut out (an unclosed one runs to the end), in one pass. */
+const withoutCssComments = (text: string): string => {
+  let out = '';
+  let at = 0;
+  for (;;) {
+    const open = text.indexOf('/*', at);
+    if (open === -1) return out + text.slice(at);
+    out += `${text.slice(at, open)} `;
+    const close = text.indexOf('*/', open + 2);
+    if (close === -1) return out;
+    at = close + 2;
+  }
+};
+
+/**
+ * What an example's markup says about motion: the CSS of its `<style>` elements and `style` attributes
+ * (comments cut out, HTML comments and script text skipped), and whether a `<style media>` names reduced
+ * motion. One forward walk with the bundler's tag reader, so a hostile file costs linear time.
+ */
+const exampleCss = (html: string): { css: string[]; reducedMedia: boolean } => {
+  const css: string[] = [];
+  let reducedMedia = false;
+  let at = 0;
+  while (at < html.length) {
+    const lt = html.indexOf('<', at);
+    if (lt === -1) break;
+    if (html.startsWith('<!--', lt)) {
+      const close = html.indexOf('-->', lt + 4);
+      if (close === -1) break;
+      at = close + 3;
+      continue;
+    }
+    const tag = parseTagAt(html, lt);
+    if (tag === null) {
+      at = lt + 1;
+      continue;
+    }
+    for (const attr of tag.attrs) if (attr.name === 'style' && attr.value !== null) css.push(withoutCssComments(attr.value));
+    at = tag.end;
+    if (RAW_TEXT_TAGS.has(tag.lower) && !tag.selfClosing) {
+      const end = findRawTextEnd(html, at, tag.lower);
+      if (tag.lower === 'style') {
+        css.push(withoutCssComments(html.slice(at, end)));
+        if (tag.attrs.some((attr) => attr.name === 'media' && attr.value !== null && REDUCED_ATTRIBUTE.test(attr.value))) reducedMedia = true;
+      }
+      at = end;
+    }
+  }
+  return { css, reducedMedia };
+};
+
+/** Whether one example moves something (a motion declaration other than `none`) with no reduced-motion media query. */
+export const movesWithoutReducedMotion = (html: string): boolean => {
+  const { css, reducedMedia } = exampleCss(html);
+  const moves = css.some((chunk) => [...chunk.matchAll(MOTION_DECLARATION)].some((match) => (match[2] ?? '').trim().toLowerCase() !== 'none'));
+  return moves && !reducedMedia && !css.some((chunk) => REDUCED_MEDIA.test(chunk));
+};
+
+/**
+ * `system-motion-no-reduced`: one finding over every component, pattern or brand example of a covered
+ * area that moves without a reduced-motion rule; the count and up to three files. Each text is the
+ * bundled example (its stylesheets inlined) where the caller has it, else the file as written.
+ */
+const motionFindings = (detail: SystemDetail, texts: Readonly<Record<string, string>>): CheckFindingData[] => {
+  const files: string[] = [];
+  for (const entry of exampleEntries(detail)) {
+    const text = texts[entry.file];
+    if (text !== undefined && covers(detail, entry.area) && isDesignRelativeFile(entry.file) && movesWithoutReducedMotion(text)) files.push(entry.file);
+  }
+  const [first] = files;
+  return first === undefined ? [] : [{ code: 'system-motion-no-reduced', file: first, screen: null, viewport: null, params: { count: files.length }, detail: namesDetail(files) }];
+};
 
 /** The builder-depth findings (§4.5): examples, labels, pair contrast in Node, the coverage gap. */
 const depthFindings = (detail: SystemDetail, examples: Readonly<Record<string, string>>): CheckFindingData[] => {
@@ -143,7 +227,11 @@ const exampleEntries = (detail: SystemDetail): { area: SystemArea; file: string;
 ];
 
 /** What the static check reads beside the detail: the raw texts, the over-cap files, and each live example's text by its file. */
-export type SystemStaticSource = Pick<SystemDetailSource, 'texts' | 'tooLarge'> & { examples?: Readonly<Record<string, string>> };
+export type SystemStaticSource = Pick<SystemDetailSource, 'texts' | 'tooLarge'> & {
+  examples?: Readonly<Record<string, string>>;
+  /** Each live example bundled with its stylesheets inlined, by its file (the motion check reads these first). */
+  bundled?: Readonly<Record<string, string>>;
+};
 
 /**
  * Every static finding of one system, capped per code and in total like a design's. `source` is the
@@ -234,6 +322,8 @@ export const systemFindings = (source: SystemStaticSource, detail: SystemDetail)
       }
     }
   }
+
+  out.push(...motionFindings(detail, { ...source.examples, ...source.bundled }));
 
   if (detail.unreadable === null) out.push(...depthFindings(detail, source.examples ?? {}));
 

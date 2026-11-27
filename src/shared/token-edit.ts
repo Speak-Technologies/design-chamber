@@ -11,7 +11,15 @@
 // validated and applied in `systems/edit-meta.ts` (§2.11).
 
 import type { TokenEdit } from './api.ts';
-import { SYSTEM_TOKEN_NAME_PATTERN, SYSTEM_TOKEN_VALUE_MAX, SYSTEM_UNDO_TEXT_MAX, TEXT_EDIT_MAX, TOKEN_PREVIEW_VALUE_PATTERN } from './limits.ts';
+import {
+  SYSTEM_MOTION_DURATION_MAX_MS,
+  SYSTEM_MOTION_STEPS_MAX,
+  SYSTEM_TOKEN_NAME_PATTERN,
+  SYSTEM_TOKEN_VALUE_MAX,
+  SYSTEM_UNDO_TEXT_MAX,
+  TEXT_EDIT_MAX,
+  TOKEN_PREVIEW_VALUE_PATTERN,
+} from './limits.ts';
 import { isBalancedQuotes, scanTokenBlocks, scanTokens, spliceTokens, type Declaration, type TokenBlock, type TokenContext } from './tokens-css.ts';
 import type { TokenSection } from './types.ts';
 
@@ -39,8 +47,7 @@ const SECTION_SHAPES: Readonly<Record<TokenSection, string>> = {
   shadows: 'Use a shadow, like 0 1px 2px rgb(0 0 0 / 0.2), or none.',
   layers: 'Use a whole number, like 10, or auto.',
   typography: PLAIN_SHAPE,
-  // system-builder-depth Phase 2 Wave 0 stub: T10a gives motion its time and easing shape.
-  motion: PLAIN_SHAPE,
+  motion: 'Use a time, like 200ms or 0.2s, or an easing, like ease-out, cubic-bezier(0.2, 0, 0, 1) or steps(4, end).',
   other: PLAIN_SHAPE,
 };
 
@@ -55,9 +62,14 @@ const FIELD_SHAPES: Readonly<Record<TypeField, string>> = {
 /** The functions a value may call: colours and formulas only (so no `url(`, `image-set(`, `expression(`, `attr(`, `element(`). */
 const ALLOWED_FUNCTIONS: ReadonlySet<string> = new Set(['rgb', 'rgba', 'hsl', 'hsla', 'hwb', 'lab', 'lch', 'oklab', 'oklch', 'color', 'color-mix', 'var', 'calc', 'min', 'max', 'clamp']);
 const FORMULA_PATTERN = /(?:^|[^A-Za-z0-9-])(?:var|calc|min|max|clamp|color-mix)\(/i;
+/** The easing functions a motion value may call besides those (system-builder-depth T10a); no other section takes them. */
+const MOTION_FUNCTIONS: ReadonlySet<string> = new Set(['cubic-bezier', 'steps']);
 
-/** Rule 1: length, the preview alphabet (no `; { } < > \ : *`, no control character), balanced quotes and brackets, known functions only. */
-const passesRuleOne = (text: string): boolean => {
+/**
+ * Rule 1: length, the preview alphabet (no `; { } < > \ : *`, no control character), balanced quotes and
+ * brackets, known functions only (`extra` adds a section's own, such as motion's easings).
+ */
+const passesRuleOne = (text: string, extra?: ReadonlySet<string>): boolean => {
   if (text.length < 1 || text.length > SYSTEM_TOKEN_VALUE_MAX || !TOKEN_PREVIEW_VALUE_PATTERN.test(text) || !isBalancedQuotes(text)) return false;
   let depth = 0;
   for (const char of text) {
@@ -71,7 +83,7 @@ const passesRuleOne = (text: string): boolean => {
   for (const match of text.matchAll(/([A-Za-z-][A-Za-z0-9-]*)?\(/g)) {
     const name = match[1];
     // A bare `(` (a group inside calc) calls nothing.
-    if (name !== undefined && !ALLOWED_FUNCTIONS.has(name.toLowerCase())) return false;
+    if (name !== undefined && !ALLOWED_FUNCTIONS.has(name.toLowerCase()) && extra?.has(name.toLowerCase()) !== true) return false;
   }
   return true;
 };
@@ -181,6 +193,47 @@ const isLayer = (text: string): boolean => {
   return value >= -2147483647 && value <= 2147483647;
 };
 
+// ---- motion (system-builder-depth T10a) ----
+
+const TIME = new RegExp(`^(${NUMBER})(ms|s)$`, 'i');
+const EASING_KEYWORDS: ReadonlySet<string> = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out']);
+const CUBIC_BEZIER = new RegExp(`^cubic-bezier\\(\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*,\\s*(${NUMBER})\\s*\\)$`, 'i');
+const STEPS = /^steps\(\s*(\d{1,4})\s*(?:,\s*(?:start|end)\s*)?\)$/i;
+
+/** A duration from 0 to `SYSTEM_MOTION_DURATION_MAX_MS`, in `ms` or `s`. */
+const isTime = (text: string): boolean => {
+  const match = TIME.exec(text);
+  if (match === null) return false;
+  const ms = Number(match[1]) * ((match[2] ?? '').toLowerCase() === 's' ? 1000 : 1);
+  return Number.isFinite(ms) && ms >= 0 && ms <= SYSTEM_MOTION_DURATION_MAX_MS;
+};
+
+/**
+ * A keyword easing, `cubic-bezier(x1, y1, x2, y2)` with both x from 0 to 1 (CSS refuses others) and
+ * finite y, or `steps(n[, start|end])` with n from 1 to `SYSTEM_MOTION_STEPS_MAX`.
+ */
+const isEasing = (text: string): boolean => {
+  if (EASING_KEYWORDS.has(text.toLowerCase())) return true;
+  const bezier = CUBIC_BEZIER.exec(text);
+  if (bezier !== null) {
+    const [x1, y1, x2, y2] = bezier.slice(1, 5).map(Number);
+    if (x1 === undefined || y1 === undefined || x2 === undefined || y2 === undefined) return false;
+    return [x1, y1, x2, y2].every(Number.isFinite) && x1 >= 0 && x1 <= 1 && x2 >= 0 && x2 <= 1;
+  }
+  const steps = STEPS.exec(text);
+  if (steps === null) return false;
+  const count = Number(steps[1]);
+  return count >= 1 && count <= SYSTEM_MOTION_STEPS_MAX;
+};
+
+const isMotionValue = (text: string): boolean => isTime(text) || isEasing(text);
+
+/** Whether a motion value is a time or an easing (the checklist counts one of each); null for anything else. */
+export const motionValueKind = (text: string): 'time' | 'easing' | null => (isTime(text) ? 'time' : isEasing(text) ? 'easing' : null);
+
+/** Names that are motion tokens (`--duration-*`, `--ease-*`, `--motion-*`). */
+const MOTION_NAME = /^--(?:duration|ease|motion)-/i;
+
 const FAMILY_NAME = /^(?:"[^"]+"|'[^']+'|[A-Za-z-][A-Za-z0-9-]*(?: +[A-Za-z-][A-Za-z0-9-]*)*)$/;
 
 const fieldValid = (field: TypeField, text: string): boolean => {
@@ -218,17 +271,17 @@ const sectionValid = (section: TokenSection, text: string): boolean => {
       return isShadow(text, false);
     case 'layers':
       return isLayer(text);
+    case 'motion':
+      return isMotionValue(text);
     case 'typography':
     case 'other':
-    // system-builder-depth Phase 2 Wave 0 stub: T10a validates a time or an easing here.
-    case 'motion':
       return true;
   }
 };
 
 export const validateTokenValue = (section: TokenSection, field: TypeField | null, text: string): ValueCheck => {
   const shape = field === null ? SECTION_SHAPES[section] : FIELD_SHAPES[field];
-  if (!passesRuleOne(text)) return { ok: false, sentence: shape };
+  if (!passesRuleOne(text, field === null && section === 'motion' ? MOTION_FUNCTIONS : undefined)) return { ok: false, sentence: shape };
   if (FORMULA_PATTERN.test(text)) return { ok: true, formula: true };
   const valid = field === null ? sectionValid(section, text) : fieldValid(field, text);
   return valid ? { ok: true, formula: false } : { ok: false, sentence: shape };
@@ -238,6 +291,8 @@ export const validateTokenValue = (section: TokenSection, field: TypeField | nul
 export const classifyToken = (name: string, value: string): TokenSection => {
   const text = value.trim();
   const lower = name.toLowerCase();
+  // A motion name holding a time, an easing, a formula or nothing yet; any other value falls through as before.
+  if (MOTION_NAME.test(name) && (text === '' || FORMULA_PATTERN.test(text) || isMotionValue(text))) return 'motion';
   if (isColour(text)) return 'colours';
   if (isShadow(text, true)) return 'shadows';
   if (/radius|rounded/.test(lower)) return 'radius';
@@ -247,6 +302,14 @@ export const classifyToken = (name: string, value: string): TokenSection => {
   if (/size|width|height|breakpoint|^--bp-|screen|container/.test(lower) && ANY_LENGTH.test(text)) return 'sizes';
   return 'other';
 };
+
+/**
+ * The section a token reads in: the one `system.json` records, else the classified one. A recorded
+ * `other` on a token that classifies as motion reads as motion: the Phase 1 rules told agents to leave
+ * `--duration-*` and `--ease-*` in `other` until the section existed (system-builder-depth T10a).
+ */
+export const resolveTokenSection = (recorded: TokenSection | null | undefined, classified: TokenSection): TokenSection =>
+  recorded === null || recorded === undefined || (recorded === 'other' && classified === 'motion') ? classified : recorded;
 
 // ---- contexts (§2.4) ----
 
@@ -415,7 +478,7 @@ const buildPlan = (css: string, edits: readonly TokenEdit[], options: TokenPlanO
   const inMode = (declaration: Declaration, mode: Mode): boolean =>
     mode === 'light' ? isLightContext(declaration.context, 'system') : isDarkContext(declaration.context, 'system');
   const ofName = (name: string, mode: Mode): Declaration[] => declarations.filter((one) => one.name === name && inMode(one, mode));
-  const sectionFor = (name: string, value: string): TokenSection => options.sectionOf?.(name) ?? classifyToken(name, value);
+  const sectionFor = (name: string, value: string): TokenSection => resolveTokenSection(options.sectionOf?.(name), classifyToken(name, value));
   const firstValueOf = (name: string): string | null => {
     const found = ofName(name, 'light').at(-1) ?? ofName(name, 'dark').at(-1);
     return found === undefined ? null : textOf(css, found);

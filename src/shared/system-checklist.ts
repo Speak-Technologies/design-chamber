@@ -5,6 +5,7 @@
 //
 // `rules/system-reference/board-and-check.md` copies the table below for the agent; the two say the same.
 
+import { motionValueKind } from './token-edit.ts';
 import type { SystemArea, SystemDepth, SystemDetail, SystemToken, SystemTopicId } from './types.ts';
 
 /** Every checklist topic id, the closed list `outOfScope` and the gap finding's detail draw from. */
@@ -69,6 +70,9 @@ const colours = (detail: SystemDetail): SystemToken[] => detail.tokens.filter((t
 const inGroup = (detail: SystemDetail, group: SystemToken['group']): number => colours(detail).filter((token) => (token.group ?? 'other') === group).length;
 const tokensIn = (detail: SystemDetail, section: SystemToken['section']): SystemToken[] => detail.tokens.filter((token) => token.section === section && hasValue(token));
 const named = (detail: SystemDetail, pattern: RegExp): boolean => detail.tokens.some((token) => hasValue(token) && pattern.test(token.name));
+/** A token in the motion section whose value is a time, or an easing (system-builder-depth T10a). */
+const motionOfKind = (detail: SystemDetail, kind: 'time' | 'easing'): boolean =>
+  tokensIn(detail, 'motion').some((token) => [token.light, token.dark].some((value) => value !== null && value.editable === 'ok' && motionValueKind(value.text) === kind));
 
 /** A chart or table component, or a data-display pattern: then data colours and data display are asked. */
 export const drawsData = (detail: SystemDetail): boolean =>
@@ -119,7 +123,8 @@ const hasTopic = (detail: SystemDetail, area: SystemArea, topic: SystemTopicId, 
     case 'layers':
       return tokensIn(detail, 'layers').length >= 1;
     case 'motion':
-      return named(detail, /^--duration-/) && named(detail, /^--ease-/);
+      // The Phase 1 name rule still counts, so no older system gains a gap; else one time and one easing in the section.
+      return (named(detail, /^--duration-/) && named(detail, /^--ease-/)) || (motionOfKind(detail, 'time') && motionOfKind(detail, 'easing'));
     case 'components':
       return detail.components.length >= 1;
     case 'examples':

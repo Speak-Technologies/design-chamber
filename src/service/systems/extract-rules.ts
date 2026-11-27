@@ -90,8 +90,8 @@ export type FileExtraction = {
 
 const emptyExtraction = (): FileExtraction => ({ tokens: [], refused: 0, composite: false, unreadable: false, faces: [] });
 
-/** Rule 1 of §2.4 only: what any section may hold. */
-const usableValue = (value: string): boolean => validateTokenValue('other', null, value).ok;
+/** Rule 1 of §2.4 only: what any section may hold, or a motion value (its easings call `cubic-bezier(` and `steps(`). */
+const usableValue = (value: string): boolean => validateTokenValue('other', null, value).ok || validateTokenValue('motion', null, value).ok;
 
 const lineAt = (text: string, index: number): number => {
   let line = 1;

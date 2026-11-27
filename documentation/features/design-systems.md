@@ -120,6 +120,19 @@ A system can say how complete it means to be and show more of itself on the boar
 
 Code: `src/shared/system-json.ts` (the reader and fingerprints), `src/shared/system-checklist.ts` (the topic ids), `src/shared/pair-contrast.ts` (pair ratios, shared with the panel), `src/service/systems/specimen-html.ts`, `board-html.ts`, `board-assemble.ts`, `living-html.ts`, `living-examples.ts`. Tests: `test/shared/system-json.test.ts` (the "builder depth contract" block, with the 0.7.0 detail of an old system in `test/shared/fixtures/`), `test/service/systems/builder-depth-board.test.ts`.
 
+## Motion
+Durations and easings have their own section, **Motion**, under Foundations after Shadows (spec: `documentation/specs/system-builder-depth.md` §4.6, T10a).
+
+- **Which tokens.** A token named `--duration-*`, `--ease-*` or `--motion-*` whose value is a time, an easing or a formula, or any token with `"section": "motion"` in `system.json`. A motion name holding something else (`--motion-distance: 8px`) is sorted as before.
+- **Older systems.** The Phase 1 rules told agents to leave these tokens in `other`, so a recorded `"section": "other"` on such a token now reads as Motion; nothing in the files changes, and its note stays with it. The tokens leave the Sizes section, so a system that had them shows Sizes as not reviewed once, and a Ready one shows "Changes to review" for Sizes. That is accepted (spec open question 8): one re-review instead of a second fingerprint rule.
+- **Values.** A time in `ms` or `s` from 0 to 10 000 ms, or an easing: `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `cubic-bezier(x1, y1, x2, y2)` with both x from 0 to 1, or `steps(n)` / `steps(n, start|end)` with n from 1 to 100. `cubic-bezier()` and `steps()` are accepted in this section only. Anything else is shown as unreadable with that shape, and a hand edit is refused with it. A project scan keeps these values too.
+- **Layouts.** Motion takes card, compact or table, like the other token sections.
+- **Reviews and Ready.** A system marked Ready before Motion existed has no Motion entry in its Ready record, so the new section alone never shows "Changes to review". Motion starts not reviewed like any section, so marking a draft Ready now lists the Motion section as unreviewed, even when it is empty.
+- **Checks.** The `motion` checklist topic is met by one time and one easing in the section, or (as before) by a `--duration-*` and an `--ease-*` token. `system-motion-no-reduced` warns when an example moves without a reduced-motion rule ([Design checks](design-checks.md)).
+- **Not yet.** The board, the living page and the panel don't draw Motion yet (T10b, T10c); its tokens are read, checked and reviewed.
+
+Code: `src/shared/token-edit.ts` (`classifyToken`, `validateTokenValue`, `resolveTokenSection`, `motionValueKind`), `src/shared/system-json.ts` (`TOKEN_SECTIONS`, `LAYOUTS_OF_SECTION`), `src/shared/system-checklist.ts`. Tests: `test/shared/system-motion.test.ts`.
+
 ## Using a system from a design
 A design shows its system as a chip in the viewer, with an update banner, a review sheet, Change… and Undo ([Viewer: a design's system](../pages/viewer.md)). Rows and cards in the designs list carry a **System updated** badge when the system has a newer revision than the design's copy, and a **chip** naming the system: one click opens it (Draft is marked, a deleted system reads "(deleted)" and says so when pressed). Defaults and project pins live in Settings, and the New design dialog preselects from them ([Settings: Design systems](../pages/settings.md)).
 

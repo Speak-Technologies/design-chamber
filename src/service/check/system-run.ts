@@ -30,6 +30,7 @@ import { resolvePlainTarget, writeFileAtomic } from '../paths.ts';
 import { createSelfWrites } from '../self-writes.ts';
 import { assembleBoardHtml, bundleExamples, overlaySource, readProposalBoardSource } from '../systems/board-assemble.ts';
 import { BOARD_ENTRY_FILE } from '../systems/board-html.ts';
+import { exampleFileOf, exampleKeyOf } from '../systems/specimen-html.ts';
 import { committedStateOf, readCommitted, readRecord } from '../systems/living-page.ts';
 import { readProposalProblem } from '../systems/proposal-record.ts';
 import { createSystemStore, repoLabelOf, type SystemStore } from '../systems/store.ts';
@@ -179,7 +180,15 @@ export const runSystemCheck = async (
   const examples = await readExampleTexts(liveSource, detail);
   // Each example bundled on its own, so its remote refs are known to the file checks too (KI-39); the reader leaves them empty.
   const bundled = await bundleExamples(detail, liveSource);
-  const staticFindings = [...systemFindings({ ...source, examples }, { ...detail, components: bundled.components, patterns: bundled.patterns, brand: bundled.brand }), ...s8Findings(source, detail, facts)].slice(0, CHECK_FINDINGS_MAX);
+  // The motion check reads each example with its stylesheets inlined, by its file.
+  const bundledByFile: Record<string, string> = {};
+  for (const [kind, entries] of [['component', detail.components], ['pattern', detail.patterns], ['brand', detail.brand]] as const) {
+    for (const entry of entries) {
+      const html = bundled.examples[exampleKeyOf(kind, entry.id)];
+      if (html !== undefined) bundledByFile[exampleFileOf(kind, entry.id)] = html;
+    }
+  }
+  const staticFindings = [...systemFindings({ ...source, examples, bundled: bundledByFile }, { ...detail, components: bundled.components, patterns: bundled.patterns, brand: bundled.brand }), ...s8Findings(source, detail, facts)].slice(0, CHECK_FINDINGS_MAX);
   const base = { id, findings: staticFindings, now: input.now, tool: input.tool };
   const staticRun: SystemCheckRun = { report: systemCheckReport(base), detail, reportPath: null, pngs: [] };
   const renderInput = input.render;
